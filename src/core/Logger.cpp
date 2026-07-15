@@ -71,14 +71,10 @@ std::mutex g_logger_mutex;
 std::shared_ptr<spdlog::logger> g_logger;
 std::shared_ptr<MemorySink> g_memory_sink;
 
-} // namespace
-
-void Logger::initialize(LoggerConfig config) {
-  std::lock_guard lock(g_logger_mutex);
-
+void initialize_locked(LoggerConfig config) {
   std::vector<spdlog::sink_ptr> sinks;
-  g_memory_sink = std::make_shared<MemorySink>(config.max_entries);
-  sinks.push_back(g_memory_sink);
+  auto memory_sink = std::make_shared<MemorySink>(config.max_entries);
+  sinks.push_back(memory_sink);
 
   try {
     sinks.push_back(std::make_shared<spdlog::sinks::basic_file_sink_mt>(
@@ -88,59 +84,64 @@ void Logger::initialize(LoggerConfig config) {
   }
 
 #ifdef _WIN32
-    sinks.push_back(std::make_shared<spdlog::sinks::msvc_sink_mt>());
+  sinks.push_back(std::make_shared<spdlog::sinks::msvc_sink_mt>());
 #endif
 
-    g_logger = std::make_shared<spdlog::logger>(config.name, sinks.begin(),
-                                                sinks.end());
-    g_logger->set_level(config.level);
-    g_logger->set_pattern("[%H:%M:%S.%e] [%^%l%$] %v");
-    g_logger->flush_on(spdlog::level::info);
-    spdlog::set_default_logger(g_logger);
+  auto logger = std::make_shared<spdlog::logger>(config.name, sinks.begin(),
+                                                 sinks.end());
+  logger->set_level(config.level);
+  logger->set_pattern("[%H:%M:%S.%e] [%^%l%$] %v");
+  logger->flush_on(spdlog::level::info);
+  g_memory_sink = std::move(memory_sink);
+  g_logger = std::move(logger);
+  spdlog::set_default_logger(g_logger);
+}
+
+std::shared_ptr<MemorySink> memory_sink_snapshot() {
+  std::lock_guard lock(g_logger_mutex);
+  if (!g_logger || !g_memory_sink) {
+    initialize_locked({});
+  }
+  return g_memory_sink;
+}
+
+} // namespace
+
+void Logger::initialize(LoggerConfig config) {
+  std::lock_guard lock(g_logger_mutex);
+  initialize_locked(std::move(config));
 }
 
 void Logger::shutdown() {
-  std::lock_guard lock(g_logger_mutex);
-  if (g_logger) {
-    g_logger->flush();
-  }
+  std::shared_ptr<spdlog::logger> logger;
+  std::shared_ptr<MemorySink> memory_sink;
+  {
+    std::lock_guard lock(g_logger_mutex);
+    logger = std::move(g_logger);
+    memory_sink = std::move(g_memory_sink);
     spdlog::drop_all();
-    g_logger.reset();
-    g_memory_sink.reset();
+  }
+  if (logger) {
+    logger->flush();
+  }
 }
 
 void Logger::clear_memory() {
-  ensure_initialized();
-  g_memory_sink->clear();
+  const std::shared_ptr<MemorySink> memory_sink = memory_sink_snapshot();
+  memory_sink->clear();
 }
 
 std::vector<LogEntry> Logger::entries_snapshot() {
-  ensure_initialized();
-  return g_memory_sink->snapshot();
+  const std::shared_ptr<MemorySink> memory_sink = memory_sink_snapshot();
+  return memory_sink->snapshot();
 }
 
 std::shared_ptr<spdlog::logger> Logger::instance() {
-  ensure_initialized();
-  return g_logger;
-}
-
-void Logger::ensure_initialized() {
   std::lock_guard lock(g_logger_mutex);
-  if (!g_logger) {
-    LoggerConfig config;
-    std::vector<spdlog::sink_ptr> sinks;
-    g_memory_sink = std::make_shared<MemorySink>(config.max_entries);
-    sinks.push_back(g_memory_sink);
-#ifdef _WIN32
-        sinks.push_back(std::make_shared<spdlog::sinks::msvc_sink_mt>());
-#endif
-        g_logger = std::make_shared<spdlog::logger>(config.name, sinks.begin(),
-                                                    sinks.end());
-        g_logger->set_level(config.level);
-        g_logger->set_pattern("[%H:%M:%S.%e] [%^%l%$] %v");
-        g_logger->flush_on(spdlog::level::info);
-        spdlog::set_default_logger(g_logger);
+  if (!g_logger || !g_memory_sink) {
+    initialize_locked({});
   }
+  return g_logger;
 }
 
 } // namespace quader

@@ -7,15 +7,19 @@
 #pragma once
 
 #include "core/command_result.hpp"
+#include "core/types.hpp"
 
+#include <string>
 #include <string_view>
 
 namespace quader {
 
 class EditorSelectionService;
 class LinearArrayToolService;
+class MaterialReference;
 class ModelingSessionService;
 class PivotToolService;
+class PrimitiveCreationToolService;
 class RadialArrayToolService;
 
 /**
@@ -26,18 +30,24 @@ public:
   NativeViewportToolCoordinator(PivotToolService &pivot,
                                 LinearArrayToolService &linear_array,
                                 RadialArrayToolService &radial_array,
+                                PrimitiveCreationToolService &primitives,
                                 EditorSelectionService &selection,
                                 ModelingSessionService &modeling);
 
   [[nodiscard]] bool handles(std::string_view tool_id) const;
   [[nodiscard]] bool can_activate(std::string_view tool_id) const;
   [[nodiscard]] bool has_pending_tool() const;
+  [[nodiscard]] bool blocks_modeling_content_mutation() const;
+  [[nodiscard]] bool blocks_document_mutation(EntityId entity) const;
   [[nodiscard]] std::string_view active_tool_id() const;
 
   CommandResult activate(std::string_view tool_id, double grid_world_size);
   CommandResult cancel_competing_state_for_tool_activation();
   CommandResult commit_active();
   CommandResult cancel_active();
+  CommandResult accept_active_primitive(std::string name,
+                                        MaterialReference material,
+                                        bool snap_enabled);
   void reset_transient_state();
 
 private:
@@ -46,6 +56,7 @@ private:
   PivotToolService &pivot_;
   LinearArrayToolService &linear_array_;
   RadialArrayToolService &radial_array_;
+  PrimitiveCreationToolService &primitives_;
   EditorSelectionService &selection_;
   ModelingSessionService &modeling_;
 };

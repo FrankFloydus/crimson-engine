@@ -1477,6 +1477,10 @@ bool QuaderModelingApi::can_cancel_active_tool_or_preview() const {
 
 QuaderApiVoidResult
 QuaderModelingApi::begin_transform_preview(bool duplicate_selected) {
+  if (!mutations_.can_mutate_modeling_content()) {
+    return mutations_.modeling_content_blocked_status(
+        "starting a transform preview.");
+  }
   return mutations_.run_modeling_result(
       scene_session(session_).modeling().begin_transform_preview(
           duplicate_selected),
@@ -1535,6 +1539,11 @@ QuaderApiResult<QuaderTransformDragPreview>
 QuaderModelingApi::begin_transform_drag(
     const QuaderTransformDragBeginRequest &request) {
   QDR_PROFILE_FUNCTION();
+  if (!mutations_.can_mutate_modeling_content()) {
+    return quader_api_result_from_status<QuaderTransformDragPreview>(
+        mutations_.modeling_content_blocked_status(
+            "starting a transform drag."));
+  }
   SceneSession &session = scene_session(session_);
   return result_from_transform_drag_preview(
       session, session.modeling().begin_transform_drag(
@@ -1623,6 +1632,9 @@ QuaderModelingApi::transform_selection(const QuaderTransform3 &transform,
 bool QuaderModelingApi::can_duplicate_selected_entity_hierarchy() const {
   QDR_PROFILE_FUNCTION();
   const SceneSession &session = scene_session(session_);
+  if (session.native_tools().blocks_modeling_content_mutation()) {
+    return false;
+  }
   const QuaderSelectionSummary selection = selection_summary();
   if (!selection.has_selection ||
       (selection.mode != QuaderSelectionMode::Object &&
@@ -1641,6 +1653,10 @@ bool QuaderModelingApi::can_duplicate_selected_entity_hierarchy() const {
 
 QuaderApiVoidResult QuaderModelingApi::duplicate_selected_entity_hierarchy() {
   QDR_PROFILE_FUNCTION();
+  if (!mutations_.can_mutate_modeling_content()) {
+    return mutations_.modeling_content_blocked_status(
+        "duplicating modeling content.");
+  }
   SceneSession &session = scene_session(session_);
   EditorTransaction transaction =
       mutations_.begin_transaction("Duplicate Selection");
@@ -1711,6 +1727,10 @@ QuaderApiVoidResult QuaderModelingApi::duplicate_selected_entity_hierarchy() {
 QuaderApiVoidResult
 QuaderModelingApi::duplicate_selected_hierarchy_for_group_drag() {
   QDR_PROFILE_FUNCTION();
+  if (!mutations_.can_mutate_modeling_content()) {
+    return mutations_.modeling_content_blocked_status(
+        "duplicating modeling content.");
+  }
   SceneSession &session = scene_session(session_);
   EditorTransaction transaction =
       mutations_.begin_transaction("Duplicate Group Selection");

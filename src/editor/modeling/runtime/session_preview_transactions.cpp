@@ -527,7 +527,11 @@ PreviewTransactionFinishResult EditorSession::cancel_preview_transaction(
     return {before, false};
   }
 
-  set_state(preview_transaction_.history_state);
+  if (before.changed) {
+    restore_history_state(preview_transaction_.history_state);
+  } else {
+    set_state(preview_transaction_.history_state);
+  }
   clear_preview_transaction();
   return {before, true};
 }

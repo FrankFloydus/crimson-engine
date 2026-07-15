@@ -8,6 +8,7 @@
 
 #include "editor/commands/document/document_command_scene_helpers.hpp"
 #include "editor/commands/document/scene_command.hpp"
+#include "scene/scene_transform.hpp"
 
 #include <string>
 #include <utility>
@@ -50,6 +51,10 @@ public:
         return document_command_invalid_request_result(
             "Parent entity does not exist");
       }
+      if (!scene_transform_is_finite(transform_)) {
+        return document_command_invalid_request_result(
+            "Light transform must be finite");
+      }
 
       before_selection_ = document_command_capture_selection(scene());
       entity_ = scene().create_entity_with_id(entity_, name_, EntityKind::Light,
@@ -75,8 +80,13 @@ public:
           return document_command_invalid_request_result(
               "Light cannot be reparented");
         }
-        scene().set_transform(entity_, transform_);
-        scene().set_light(entity_, light_);
+        if (!scene().set_transform(entity_, transform_) ||
+            !scene().set_light(entity_, light_)) {
+          scene().destroy_entity(entity_);
+          entity_ = kInvalidEntityId;
+          return document_command_invalid_request_result(
+              "Light components cannot be applied");
+        }
         if (select_created_) {
           document_command_select_only(scene(), {entity_});
         }

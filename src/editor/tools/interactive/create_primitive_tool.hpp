@@ -11,11 +11,14 @@
 namespace quader {
 
 /**
- * Implements Box Tool behavior for editor-owned viewport tool interactions.
+ * Implements the unified primitive creation viewport interaction. Primitive
+ * type remains session-owned settings; every type shares this volume gesture.
  */
-class BoxTool final : public TwoStageBoxTool {
+class CreatePrimitiveTool final : public TwoStageBoxTool {
 public:
-  BoxTool() : TwoStageBoxTool(viewport_tool_descriptor(ViewportToolId::Box)) {}
+  CreatePrimitiveTool()
+      : TwoStageBoxTool(
+            viewport_tool_descriptor(ViewportToolId::CreatePrimitive)) {}
 };
 
 } // namespace quader

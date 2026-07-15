@@ -71,6 +71,12 @@ bool same_transform(const TransformComponent &left,
          left.custom_pivot == right.custom_pivot;
 }
 
+bool same_modeling_object(const ModelingObjectComponent &left,
+                          const ModelingObjectComponent &right) {
+  return left.object_id == right.object_id &&
+         left.material_slot == right.material_slot;
+}
+
 bool is_supported_instance_member_subtree(const SceneDocument &scene,
                                           EntityId root) {
   for (const EntityId entity : scene.descendants(root, true)) {
@@ -345,6 +351,9 @@ bool SceneDocument::exists(EntityId id) const {
 
 bool SceneDocument::rename_entity(EntityId id, std::string name) {
   if (NameComponent *component = mutable_name(id)) {
+    if (component->name == name) {
+      return true;
+    }
     component->name = std::move(name);
     mark_dirty();
     return true;
@@ -441,6 +450,9 @@ bool SceneDocument::set_entity_kind(EntityId id, EntityKind kind) {
     return false;
   }
   if (EntityKindComponent *component = mutable_entity_kind(id)) {
+    if (component->kind == kind) {
+      return true;
+    }
     component->kind = kind;
     mark_dirty();
     return true;
@@ -476,6 +488,9 @@ bool SceneDocument::set_selectable(EntityId id, bool selectable) {
 
 bool SceneDocument::set_locked(EntityId id, bool locked) {
   if (LockComponent *component = mutable_lock(id)) {
+    if (component->locked == locked) {
+      return true;
+    }
     component->locked = locked;
     mark_dirty();
     return true;
@@ -635,22 +650,23 @@ bool SceneDocument::set_parent(EntityId child, EntityId new_parent,
   return true;
 }
 
-void SceneDocument::set_transform(EntityId id, TransformComponent transform) {
+bool SceneDocument::set_transform(EntityId id, TransformComponent transform) {
   if (!scene_transform_is_finite(transform)) {
-    return;
+    return false;
   }
   const entt::entity entity = require_entity(id);
   if (entity == entt::null) {
-    return;
+    return false;
   }
   if (const TransformComponent *current =
           registry_.try_get<TransformComponent>(entity);
       current != nullptr && same_transform(*current, transform)) {
-    return;
+    return true;
   }
   registry_.emplace_or_replace<TransformComponent>(entity, transform);
   ++transform_revision_;
   mark_dirty();
+  return true;
 }
 
 void SceneDocument::set_transforms(
@@ -679,15 +695,21 @@ void SceneDocument::set_transforms(
   }
 }
 
-void SceneDocument::set_modeling_object(EntityId id,
+bool SceneDocument::set_modeling_object(EntityId id,
                                         ModelingObjectComponent object) {
   const entt::entity entity = require_entity(id);
   if (entity == entt::null || instance_occurrence(id) != nullptr ||
       is_instance_definition_entity(id)) {
-    return;
+    return false;
+  }
+  if (const ModelingObjectComponent *current =
+          registry_.try_get<ModelingObjectComponent>(entity);
+      current != nullptr && same_modeling_object(*current, object)) {
+    return true;
   }
   registry_.emplace_or_replace<ModelingObjectComponent>(entity, object);
   mark_dirty();
+  return true;
 }
 
 bool SceneDocument::set_instance_definition(EntityId id) {
@@ -766,11 +788,16 @@ bool SceneDocument::clear_instance_occurrence(EntityId id) {
   return true;
 }
 
-void SceneDocument::set_mesh(EntityId id, MeshComponent mesh) {
+bool SceneDocument::set_mesh(EntityId id, MeshComponent mesh) {
   const entt::entity entity = require_entity(id);
   if (entity == entt::null || instance_occurrence(id) != nullptr ||
       is_instance_definition_entity(id)) {
-    return;
+    return false;
+  }
+  if (const MeshComponent *current = registry_.try_get<MeshComponent>(entity);
+      current != nullptr && *current == mesh &&
+      kind(id) == EntityKind::Mesh) {
+    return true;
   }
   registry_.emplace_or_replace<MeshComponent>(entity, mesh);
   registry_.emplace_or_replace<EntityKindComponent>(
@@ -778,17 +805,36 @@ void SceneDocument::set_mesh(EntityId id, MeshComponent mesh) {
   ++mesh_binding_revision_;
   ++render_component_revision_;
   mark_dirty();
+  return true;
 }
 
-void SceneDocument::set_material(EntityId id, MaterialComponent material) {
+bool SceneDocument::notify_mesh_payload_changed(EntityId id) {
+  const entt::entity entity = require_entity(id);
+  if (entity == entt::null ||
+      !registry_.all_of<MeshComponent>(entity)) {
+    return false;
+  }
+  ++mesh_binding_revision_;
+  ++render_component_revision_;
+  mark_dirty();
+  return true;
+}
+
+bool SceneDocument::set_material(EntityId id, MaterialComponent material) {
   const entt::entity entity = require_entity(id);
   if (entity == entt::null || instance_occurrence(id) != nullptr ||
       is_instance_definition_entity(id)) {
-    return;
+    return false;
+  }
+  if (const MaterialComponent *current =
+          registry_.try_get<MaterialComponent>(entity);
+      current != nullptr && *current == material) {
+    return true;
   }
   registry_.emplace_or_replace<MaterialComponent>(entity, material);
   ++render_component_revision_;
   mark_dirty();
+  return true;
 }
 
 bool SceneDocument::clear_material(EntityId id) {
@@ -802,18 +848,29 @@ bool SceneDocument::clear_material(EntityId id) {
   return true;
 }
 
-void SceneDocument::set_light(EntityId id, LightComponent light) {
+bool SceneDocument::set_light(EntityId id, LightComponent light) {
   const entt::entity entity = require_entity(id);
   if (entity == entt::null || instance_occurrence(id) != nullptr ||
       is_instance_definition_entity(id) ||
       is_instance_definition_member(id)) {
-    return;
+    return false;
   }
+  const LightComponent *current = registry_.try_get<LightComponent>(entity);
+  if (current != nullptr && *current == light &&
+      kind(id) == EntityKind::Light) {
+    return true;
+  }
+  const bool active_kind_changed =
+      current == nullptr && active_selection_ == id && is_selected(id);
   registry_.emplace_or_replace<LightComponent>(entity, light);
   registry_.emplace_or_replace<EntityKindComponent>(
       entity, EntityKindComponent{.kind = EntityKind::Light});
   ++render_component_revision_;
+  if (active_kind_changed) {
+    ++selection_revision_;
+  }
   mark_dirty();
+  return true;
 }
 
 bool SceneDocument::set_scene_settings(EntityId id,

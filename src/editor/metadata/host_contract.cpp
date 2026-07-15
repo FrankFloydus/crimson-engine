@@ -658,7 +658,7 @@ std::span<const HostToolGroupDescriptor> tool_group_descriptors()
       "scale",
   }};
   static constexpr std::array<std::string_view, 8> kModalModelingTools{{
-      "box",
+      "create_primitive",
       "insert_edge_loop",
       "knife",
       "cut",
@@ -734,7 +734,7 @@ shortcut(std::string_view id, HostShortcutContext context, std::string_view key,
 
 std::span<const HostShortcutDescriptor> shortcut_descriptors()
 {
-  static const std::array<HostShortcutDescriptor, 48> kDescriptors{{
+  static const std::array<HostShortcutDescriptor, 47> kDescriptors{{
       shortcut("undo", HostShortcutContext::Global, "Z", true, false, false,
                HostShortcutTargetKind::EditorAction, "undo"),
       shortcut("redo_shift_z", HostShortcutContext::Global, "Z", true, false,
@@ -797,8 +797,6 @@ std::span<const HostShortcutDescriptor> shortcut_descriptors()
       shortcut("insert_edge_loop_tool", HostShortcutContext::Viewport, "R",
                false, false, true, HostShortcutTargetKind::Action,
                "insert_edge_loop_tool"),
-      shortcut("cut_tool", HostShortcutContext::Viewport, "C", false, false,
-               true, HostShortcutTargetKind::Action, "cut_tool"),
       shortcut("mirror_axis_x", HostShortcutContext::Viewport, "X", false,
                false, true, HostShortcutTargetKind::ViewportAction,
                "mirror_axis_x"),
@@ -814,8 +812,9 @@ std::span<const HostShortcutDescriptor> shortcut_descriptors()
       shortcut("flip_vertical", HostShortcutContext::Viewport, "V", false,
                false, true, HostShortcutTargetKind::ViewportAction,
                "flip_vertical"),
-      shortcut("box_tool", HostShortcutContext::Viewport, "B", false, false,
-               false, HostShortcutTargetKind::Tool, "box"),
+      shortcut("create_primitive_tool", HostShortcutContext::Viewport, "B",
+               false, false, true, HostShortcutTargetKind::Tool,
+               "create_primitive"),
       shortcut("select_tool", HostShortcutContext::Viewport, "Q", false, false,
                false, HostShortcutTargetKind::Tool, "select"),
       shortcut("knife_tool", HostShortcutContext::Viewport, "C", false, false,
@@ -902,7 +901,7 @@ HostGestureDescriptor gesture(
 std::span<const HostGestureDescriptor> gesture_descriptors()
 {
   static constexpr std::array<std::string_view, 6> kModalTools{{
-      "box",
+      "create_primitive",
       "insert_edge_loop",
       "knife",
       "cut",
@@ -917,8 +916,8 @@ std::span<const HostGestureDescriptor> gesture_descriptors()
   static constexpr std::array<std::string_view, 1> kSelectionTool{{
       "select",
   }};
-  static constexpr std::array<std::string_view, 1> kBoxTool{{
-      "box",
+  static constexpr std::array<std::string_view, 1> kCreatePrimitiveTool{{
+      "create_primitive",
   }};
   static constexpr std::array<std::string_view, 1> kInsertEdgeLoopTool{{
       "insert_edge_loop",
@@ -1040,8 +1039,9 @@ std::span<const HostGestureDescriptor> gesture_descriptors()
               HostGestureTargetKind::InputPolicy,
               "active_modal_tool_precedence", 0, kModalTools, {}, {}, {}, true,
               false, false, false, true, true, false, false, false),
-      gesture("box_tool_gesture", "Box Tool Gesture",
-              HostGestureTargetKind::Tool, "box", 10, kBoxTool,
+      gesture("create_primitive_gesture", "Create Primitive Gesture",
+              HostGestureTargetKind::Tool, "create_primitive", 10,
+              kCreatePrimitiveTool,
               kHoverPrimaryDrag, kCancelEscape, {}, true, false, false, false,
               true, true, false, false, true),
       gesture("insert_edge_loop_gesture", "Insert Edge Loop Gesture",

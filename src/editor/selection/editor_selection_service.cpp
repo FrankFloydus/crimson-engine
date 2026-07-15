@@ -6,6 +6,8 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "editor/selection/editor_selection_service.hpp"
 
+#include "editor/selection/scene_selection_summary.hpp"
+
 #include "diagnostics/profile.hpp"
 #include "editor/commands/document_command_service.hpp"
 #include "editor/modeling/services/modeling_session_service.hpp"
@@ -124,6 +126,25 @@ void EditorSelectionService::set_scene_selection_scope_policy(
   scene_scope_filter_ = std::move(filter);
 }
 
+void EditorSelectionService::set_scene_selection_history_suppression_provider(
+    SceneSelectionHistorySuppressionProvider provider) {
+  scene_selection_history_suppression_provider_ = std::move(provider);
+}
+
+DocumentCommandResult EditorSelectionService::apply_scene_selection_state(
+    SceneSelectionState selection) {
+  if (scene_selection_history_suppression_provider_ &&
+      scene_selection_history_suppression_provider_()) {
+    return apply_scene_selection(scene_, selection,
+                                 SceneSelectionApplicationMode::RuntimeSync)
+               ? document_command_changed_result()
+               : document_command_unchanged_result();
+  }
+  return document_commands_.select_entities(
+      std::move(selection.selected), selection.active,
+      SceneSelectionApplicationMode::UndoableCommand);
+}
+
 DocumentCommandResult
 EditorSelectionService::set_scene_selection(std::span<const EntityId> entities,
                                             EntityId active) {
@@ -153,9 +174,8 @@ EditorSelectionService::set_scene_selection(std::span<const EntityId> entities,
   } else {
     selection = make_user_scene_selection(scene_, entities, active);
   }
-  DocumentCommandResult result = document_commands_.select_entities(
-      std::move(selection.selected), selection.active,
-      SceneSelectionApplicationMode::UndoableCommand);
+  DocumentCommandResult result =
+      apply_scene_selection_state(std::move(selection));
   if (result.ok && modeling_.selection_mode() != ModelingSelectionMode::Group) {
     modeling_.project_object_selection_from_scene(true);
   }
@@ -168,9 +188,8 @@ DocumentCommandResult EditorSelectionService::set_inspection_scene_selection(
   QDR_PROFILE_FUNCTION();
   const ModelingSelectionSummary before = modeling_.selection_summary();
   SceneSelectionState selection = make_scene_selection(scene_, entities, active);
-  DocumentCommandResult result = document_commands_.select_entities(
-      std::move(selection.selected), selection.active,
-      SceneSelectionApplicationMode::UndoableCommand);
+  DocumentCommandResult result =
+      apply_scene_selection_state(std::move(selection));
   if (result.ok && modeling_.selection_mode() != ModelingSelectionMode::Group) {
     modeling_.project_object_selection_from_scene(true);
   }
@@ -548,22 +567,8 @@ EntityId EditorSelectionService::nearest_group_ancestor(EntityId entity) const {
 
 ModelingSelectionSummary
 EditorSelectionService::scene_summary_for(ModelingSelectionMode mode) const {
-  const std::vector<EntityId> selected = scene_.selected_entities();
-  const EntityId active = scene_.primary_selection();
-  const bool active_is_light =
-      active != kInvalidEntityId && scene_.light(active) != nullptr;
-  return {
-      .mode = mode,
-      .has_selection = !selected.empty(),
-      .active_kind =
-          selected.empty()
-              ? ModelingActiveSelectionKind::None
-              : (active_is_light ? ModelingActiveSelectionKind::Light
-                                 : ModelingActiveSelectionKind::Object),
-      .selected_object_count = static_cast<std::uint32_t>(selected.size()),
-      .content_revision = modeling_.selection_summary().content_revision,
-      .selection_revision = scene_.revision(),
-  };
+  return make_scene_selection_summary(
+      scene_, mode, modeling_.selection_summary().content_revision);
 }
 
 } // namespace quader

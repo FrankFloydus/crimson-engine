@@ -79,13 +79,7 @@ inline bool document_command_same_transform(const TransformComponent &left,
 
 inline bool document_command_same_mesh_component(const MeshComponent &left,
                                                  const MeshComponent &right) {
-  return left.mesh == right.mesh && left.editor_only == right.editor_only &&
-         left.cast_shadows == right.cast_shadows &&
-         left.double_sided == right.double_sided &&
-         left.generate_collisions == right.generate_collisions &&
-         left.collision_type == right.collision_type &&
-         left.display_collision == right.display_collision &&
-         left.body_type == right.body_type;
+  return left == right;
 }
 
 inline bool document_command_same_light_component(const LightComponent &left,

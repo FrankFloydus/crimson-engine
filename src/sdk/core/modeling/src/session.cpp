@@ -9,8 +9,11 @@
 #include "polygon_document_native.hpp"
 
 #include <algorithm>
+#include <iterator>
+#include <limits>
 #include <mesh/polygon/document.hpp>
 #include <memory>
+#include <span>
 #include <string>
 #include <unordered_map>
 #include <utility>
@@ -38,7 +41,6 @@ struct SessionObject {
 struct SessionState {
   std::vector<SessionObject> objects;
   ObjectId active_object{};
-  std::uint32_t next_object_index = 1;
 };
 
 /**
@@ -53,7 +55,55 @@ struct PreviewTransaction {
   PolygonDocument preview_document;
   ToolPreviewPayload payload;
   DirtyFlags dirty;
+  std::uint64_t payload_revision = 0;
 };
+
+/**
+ * Stores the latest revision for every externally visible object change kind.
+ */
+struct SessionObjectChangeRecord {
+  ObjectId id{};
+  std::string name;
+  std::uint64_t revision = 0;
+  std::uint64_t topology_revision = 0;
+  std::uint64_t geometry_revision = 0;
+  std::uint64_t selection_revision = 0;
+  std::uint64_t materials_revision = 0;
+  std::uint64_t overlays_revision = 0;
+  bool deleted = false;
+};
+
+/**
+ * Carries one state-diff entry before it receives the shared session revision.
+ */
+struct PendingSessionObjectChange {
+  ObjectId id{};
+  std::string name;
+  DirtyFlags dirty;
+  bool deleted = false;
+};
+
+/**
+ * Preserves operation-owned dirty metadata for one direct state transition.
+ */
+struct SessionObjectDirtyOverride {
+  ObjectId id{};
+  DirtyFlags dirty;
+};
+
+[[nodiscard]] bool same_polygon_selection(const PolygonDocument &left,
+                                          const PolygonDocument &right) {
+  const PolygonSelectionSnapshot left_selection = left.selection();
+  const PolygonSelectionSnapshot right_selection = right.selection();
+  return left_selection.kind == right_selection.kind &&
+         left_selection.vertices == right_selection.vertices &&
+         left_selection.edges == right_selection.edges &&
+         left_selection.faces == right_selection.faces &&
+         left_selection.has_active == right_selection.has_active &&
+         left_selection.active_vertex == right_selection.active_vertex &&
+         left_selection.active_edge == right_selection.active_edge &&
+         left_selection.active_face == right_selection.active_face;
+}
 
 [[nodiscard]] OperationResult session_result(bool changed,
                                              std::string message) {
@@ -236,6 +286,188 @@ struct ModelingSessionImpl {
   PreviewTransaction preview;
   std::vector<SessionState> undo_stack;
   std::vector<SessionState> redo_stack;
+  std::vector<SessionObjectChangeRecord> object_changes;
+  std::uint64_t content_revision = 0;
+  std::uint64_t selection_revision = 0;
+  std::uint64_t preview_payload_revision = 0;
+
+  // Object identities belong to the session lifetime, not an undo snapshot.
+  // Rewinding this counter would let a stale handle alias a replacement object
+  // created after branching from undo history.
+  std::uint32_t next_object_index = 1;
+
+  [[nodiscard]] Result<ObjectId> allocate_object_id() {
+    if (next_object_index == 0U) {
+      return Result<ObjectId>::failure(make_error(
+          ErrorCode::InternalError, "The session exhausted object identities."));
+    }
+    return Result<ObjectId>::success(
+        make_id<ObjectTag>(next_object_index++));
+  }
+
+  [[nodiscard]] std::uint64_t advance_preview_payload_revision(
+      std::uint64_t document_revision) {
+    if (preview_payload_revision <
+        (std::numeric_limits<std::uint64_t>::max)()) {
+      ++preview_payload_revision;
+    }
+    preview_payload_revision =
+        std::max(preview_payload_revision, document_revision);
+    return preview_payload_revision;
+  }
+
+  void publish_state_transition(
+      const SessionState &before,
+      std::span<const SessionObjectDirtyOverride> dirty_overrides = {}) {
+    std::vector<PendingSessionObjectChange> pending;
+    pending.reserve(before.objects.size() + state.objects.size());
+
+    for (const SessionObject &previous : before.objects) {
+      const auto current = find_object(state, previous.id);
+      if (current == state.objects.end()) {
+        pending.push_back({
+            .id = previous.id,
+            .name = previous.name,
+            .dirty = {.topology = true,
+                      .geometry = true,
+                      .selection = true,
+                      .materials = true,
+                      .overlays = true},
+            .deleted = true,
+        });
+        continue;
+      }
+
+      const bool content_changed =
+          previous.document.content_identity() !=
+              current->document.content_identity() ||
+          previous.document.content_revision() !=
+              current->document.content_revision();
+      const bool selection_changed =
+          previous.selected != current->selected ||
+          previous.document.selection_revision() !=
+              current->document.selection_revision() ||
+          (content_changed &&
+           !same_polygon_selection(previous.document, current->document));
+      const auto dirty_override = std::ranges::find_if(
+          dirty_overrides,
+          [&](const SessionObjectDirtyOverride &candidate) {
+            return candidate.id == current->id;
+          });
+      if (!content_changed && !selection_changed &&
+          previous.name == current->name &&
+          dirty_override == dirty_overrides.end()) {
+        continue;
+      }
+
+      DirtyFlags dirty;
+      if (dirty_override != dirty_overrides.end()) {
+        dirty = dirty_override->dirty;
+      } else if (content_changed) {
+        // Undo, redo, and rollback currently retain state snapshots without the
+        // originating receipt. Conservatively invalidate every content domain
+        // rather than losing material-only changes.
+        dirty.topology = true;
+        dirty.geometry = true;
+        dirty.materials = true;
+        dirty.overlays = true;
+      }
+      if (selection_changed) {
+        dirty.selection = true;
+        dirty.overlays = true;
+      }
+
+      pending.push_back({
+          .id = current->id,
+          .name = current->name,
+          .dirty = dirty,
+      });
+    }
+
+    for (const SessionObject &current : state.objects) {
+      if (find_object(before, current.id) != before.objects.end()) {
+        continue;
+      }
+      pending.push_back({
+          .id = current.id,
+          .name = current.name,
+          .dirty = {.topology = true,
+                    .geometry = true,
+                    .selection = true,
+                    .materials = true,
+                    .overlays = true},
+      });
+    }
+
+    auto mark_active_change = [&](ObjectId object_id) {
+      if (!object_id.valid()) {
+        return;
+      }
+      auto change = std::ranges::find_if(
+          pending, [&](const PendingSessionObjectChange &candidate) {
+            return candidate.id == object_id;
+          });
+      if (change == pending.end()) {
+        const auto current = find_object(state, object_id);
+        if (current != state.objects.end()) {
+          pending.push_back({.id = current->id, .name = current->name});
+        } else {
+          const auto previous = find_object(before, object_id);
+          if (previous == before.objects.end()) {
+            return;
+          }
+          pending.push_back({
+              .id = previous->id,
+              .name = previous->name,
+              .deleted = true,
+          });
+        }
+        change = std::prev(pending.end());
+      }
+      change->dirty.selection = true;
+      change->dirty.overlays = true;
+    };
+    if (before.active_object != state.active_object) {
+      mark_active_change(before.active_object);
+      mark_active_change(state.active_object);
+    }
+
+    if (pending.empty()) {
+      return;
+    }
+
+    ++content_revision;
+    for (const PendingSessionObjectChange &change : pending) {
+      auto record = std::ranges::find_if(
+          object_changes, [&](const SessionObjectChangeRecord &candidate) {
+            return candidate.id == change.id;
+          });
+      if (record == object_changes.end()) {
+        object_changes.push_back({.id = change.id});
+        record = std::prev(object_changes.end());
+      }
+
+      record->name = change.name;
+      record->revision = content_revision;
+      record->deleted = change.deleted;
+      if (change.dirty.topology) {
+        record->topology_revision = content_revision;
+      }
+      if (change.dirty.geometry) {
+        record->geometry_revision = content_revision;
+      }
+      if (change.dirty.selection) {
+        record->selection_revision = content_revision;
+        selection_revision = content_revision;
+      }
+      if (change.dirty.materials) {
+        record->materials_revision = content_revision;
+      }
+      if (change.dirty.overlays) {
+        record->overlays_revision = content_revision;
+      }
+    }
+  }
 };
 
 ModelingSession::ModelingSession()
@@ -267,16 +499,22 @@ Result<ObjectId> ModelingSession::add_document(PolygonDocument document,
         "Commit or cancel the active preview before adding a document."));
   }
 
+  Result<ObjectId> allocated_id = impl_->allocate_object_id();
+  if (!allocated_id.ok()) {
+    return allocated_id;
+  }
+
   impl_->undo_stack.push_back(impl_->state);
   impl_->redo_stack.clear();
 
-  const ObjectId id = make_id<ObjectTag>(impl_->state.next_object_index++);
+  const ObjectId id = allocated_id.value();
   impl_->state.objects.push_back({
       .id = id,
       .name = std::move(name),
       .document = std::move(document),
       .selected = false,
   });
+  impl_->publish_state_transition(impl_->undo_stack.back());
   return Result<ObjectId>::success(id);
 }
 
@@ -323,10 +561,12 @@ Result<OperationResult> ModelingSession::apply_object_selection(
   } else if (edit == SelectionEdit::Replace && objects.empty()) {
     impl_->state.active_object = {};
   }
+  changed = changed || before.active_object != impl_->state.active_object;
 
   if (changed) {
     impl_->undo_stack.push_back(std::move(before));
     impl_->redo_stack.clear();
+    impl_->publish_state_transition(impl_->undo_stack.back());
   }
   return Result<OperationResult>::success(
       session_result(changed, "Object selection changed."));
@@ -353,6 +593,7 @@ Result<OperationResult> ModelingSession::rename_object(ObjectId object_id,
     impl_->undo_stack.push_back(impl_->state);
     impl_->redo_stack.clear();
     object->name = std::move(name);
+    impl_->publish_state_transition(impl_->undo_stack.back());
   }
   OperationResult result = session_result(changed, "Object renamed.");
   result.dirty.geometry = false;
@@ -378,6 +619,7 @@ Result<OperationResult> ModelingSession::remove_object(ObjectId object_id) {
                                      ? ObjectId{}
                                      : impl_->state.objects.front().id;
   }
+  impl_->publish_state_transition(impl_->undo_stack.back());
   OperationResult result = session_result(true, "Object removed.");
   result.dirty.topology = true;
   return Result<OperationResult>::success(std::move(result));
@@ -409,13 +651,17 @@ Result<ObjectId> ModelingSession::duplicate_object(ObjectId object_id,
     }
   }
 
+  Result<ObjectId> allocated_id = impl_->allocate_object_id();
+  if (!allocated_id.ok()) {
+    return allocated_id;
+  }
+
   impl_->undo_stack.push_back(impl_->state);
   impl_->redo_stack.clear();
   for (SessionObject &item : impl_->state.objects) {
     item.selected = false;
   }
-  const ObjectId duplicated =
-      make_id<ObjectTag>(impl_->state.next_object_index++);
+  const ObjectId duplicated = allocated_id.value();
   impl_->state.objects.push_back({
       .id = duplicated,
       .name = name.empty() ? object->name : std::move(name),
@@ -423,6 +669,7 @@ Result<ObjectId> ModelingSession::duplicate_object(ObjectId object_id,
       .selected = true,
   });
   impl_->state.active_object = duplicated;
+  impl_->publish_state_transition(impl_->undo_stack.back());
   return Result<ObjectId>::success(duplicated);
 }
 
@@ -524,6 +771,10 @@ ModelingSession::combine_objects(std::span<const ObjectId> object_ids,
   impl_->undo_stack.push_back(impl_->state);
   impl_->redo_stack.clear();
   impl_->state = std::move(candidate);
+  const SessionObjectDirtyOverride dirty_overrides[] = {
+      {.id = survivor_id, .dirty = result.dirty},
+  };
+  impl_->publish_state_transition(impl_->undo_stack.back(), dirty_overrides);
   return Result<OperationResult>::success(std::move(result));
 }
 
@@ -532,18 +783,28 @@ Result<OperationResult> ModelingSession::select_face(ObjectId object_id,
   if (impl_->preview.active) {
     return active_preview_error();
   }
-  for (SessionObject &object : impl_->state.objects) {
-    if (object.id != object_id) {
-      continue;
-    }
-    impl_->undo_stack.push_back(impl_->state);
-    impl_->redo_stack.clear();
-    impl_->state.active_object = object_id;
-    object.selected = true;
-    return object.document.select_face(face_id);
+  SessionState candidate = impl_->state;
+  auto object = find_object(candidate, object_id);
+  if (object == candidate.objects.end()) {
+    return Result<OperationResult>::failure(
+        make_error(ErrorCode::InvalidId, "Object ID is not live."));
   }
-  return Result<OperationResult>::failure(
-      make_error(ErrorCode::InvalidId, "Object ID is not live."));
+
+  Result<OperationResult> result = object->document.select_face(face_id);
+  if (!result.ok() || !result.value().success || !result.value().changed) {
+    return result;
+  }
+
+  candidate.active_object = object_id;
+  object->selected = true;
+  impl_->undo_stack.push_back(impl_->state);
+  impl_->redo_stack.clear();
+  impl_->state = std::move(candidate);
+  const SessionObjectDirtyOverride dirty_overrides[] = {
+      {.id = object_id, .dirty = result.value().dirty},
+  };
+  impl_->publish_state_transition(impl_->undo_stack.back(), dirty_overrides);
+  return result;
 }
 
 Result<OperationResult> ModelingSession::translate_selection(Vec3 delta) {
@@ -551,18 +812,30 @@ Result<OperationResult> ModelingSession::translate_selection(Vec3 delta) {
     return active_preview_error();
   }
 
-  auto found =
-      std::ranges::find_if(impl_->state.objects, [&](const auto &object) {
-        return object.id == impl_->state.active_object && object.selected;
+  SessionState candidate = impl_->state;
+  auto found = std::ranges::find_if(
+      candidate.objects, [&](const SessionObject &object) {
+        return object.id == candidate.active_object && object.selected;
       });
-  if (found == impl_->state.objects.end()) {
+  if (found == candidate.objects.end()) {
     return Result<OperationResult>::failure(
         make_error(ErrorCode::InvalidId, "No active selected object."));
   }
 
+  Result<OperationResult> result = found->document.translate_selection(delta);
+  if (!result.ok() || !result.value().success || !result.value().changed) {
+    return result;
+  }
+
+  const ObjectId object_id = found->id;
   impl_->undo_stack.push_back(impl_->state);
   impl_->redo_stack.clear();
-  return found->document.translate_selection(delta);
+  impl_->state = std::move(candidate);
+  const SessionObjectDirtyOverride dirty_overrides[] = {
+      {.id = object_id, .dirty = result.value().dirty},
+  };
+  impl_->publish_state_transition(impl_->undo_stack.back(), dirty_overrides);
+  return result;
 }
 
 Result<OperationResult>
@@ -588,6 +861,9 @@ ModelingSession::begin_translate_preview(ObjectId object_id, Vec3 delta) {
     return result;
   }
 
+  preview.payload_revision = impl_->advance_preview_payload_revision(
+      preview.preview_document.content_revision());
+  preview.payload.mesh.content_revision = preview.payload_revision;
   impl_->preview = std::move(preview);
   result.value().message = "Translate preview started.";
   return result;
@@ -606,6 +882,10 @@ Result<OperationResult> ModelingSession::update_translate_preview(Vec3 delta) {
   Result<OperationResult> result =
       apply_preview_delta(impl_->preview, impl_->preview.base_document, delta);
   if (result.ok()) {
+    impl_->preview.payload_revision = impl_->advance_preview_payload_revision(
+        impl_->preview.preview_document.content_revision());
+    impl_->preview.payload.mesh.content_revision =
+        impl_->preview.payload_revision;
     result.value().message = "Translate preview updated.";
   }
   return result;
@@ -625,14 +905,20 @@ Result<OperationResult> ModelingSession::commit_preview() {
 
   impl_->undo_stack.push_back(impl_->state);
   impl_->redo_stack.clear();
+  const ObjectId preview_object = object->id;
+  const DirtyFlags preview_dirty = impl_->preview.dirty;
   object->document = impl_->preview.preview_document;
   object->selected = true;
   impl_->state.active_object = object->id;
   impl_->preview = PreviewTransaction{};
+  const SessionObjectDirtyOverride dirty_overrides[] = {
+      {.id = preview_object, .dirty = preview_dirty},
+  };
+  impl_->publish_state_transition(impl_->undo_stack.back(), dirty_overrides);
 
   OperationResult result =
       session_result(true, "Preview committed.");
-  result.dirty.overlays = true;
+  result.dirty = preview_dirty;
   return Result<OperationResult>::success(std::move(result));
 }
 
@@ -660,6 +946,7 @@ Result<OperationResult> ModelingSession::undo() {
   impl_->redo_stack.push_back(impl_->state);
   impl_->state = std::move(impl_->undo_stack.back());
   impl_->undo_stack.pop_back();
+  impl_->publish_state_transition(impl_->redo_stack.back());
   return Result<OperationResult>::success(session_result(true, "Undo."));
 }
 
@@ -674,6 +961,7 @@ Result<OperationResult> ModelingSession::redo() {
   impl_->undo_stack.push_back(impl_->state);
   impl_->state = std::move(impl_->redo_stack.back());
   impl_->redo_stack.pop_back();
+  impl_->publish_state_transition(impl_->undo_stack.back());
   return Result<OperationResult>::success(session_result(true, "Redo."));
 }
 
@@ -703,11 +991,13 @@ bool ModelingSession::rollback_undo_since(std::size_t mark) {
   if (mark >= impl_->undo_stack.size()) {
     return false;
   }
+  SessionState before = impl_->state;
   impl_->state = impl_->undo_stack[mark];
   impl_->undo_stack.erase(impl_->undo_stack.begin() + mark,
                           impl_->undo_stack.end());
   impl_->redo_stack.clear();
   impl_->preview = PreviewTransaction{};
+  impl_->publish_state_transition(before);
   return true;
 }
 
@@ -728,6 +1018,45 @@ std::vector<SessionObjectSummary> ModelingSession::objects() const {
     });
   }
   return result;
+}
+
+std::uint64_t ModelingSession::content_revision() const {
+  return impl_->content_revision;
+}
+
+std::uint64_t ModelingSession::selection_revision() const {
+  return impl_->selection_revision;
+}
+
+SessionChangeSnapshot ModelingSession::changes_since(
+    std::uint64_t previous_content_revision) const {
+  SessionChangeSnapshot snapshot{
+      .content_revision = impl_->content_revision,
+      .selection_revision = impl_->selection_revision,
+  };
+  for (const SessionObjectChangeRecord &record : impl_->object_changes) {
+    if (record.revision <= previous_content_revision) {
+      continue;
+    }
+    snapshot.objects.push_back({
+        .id = record.id,
+        .name = record.name,
+        .dirty = {
+            .topology =
+                record.topology_revision > previous_content_revision,
+            .geometry =
+                record.geometry_revision > previous_content_revision,
+            .selection =
+                record.selection_revision > previous_content_revision,
+            .materials =
+                record.materials_revision > previous_content_revision,
+            .overlays =
+                record.overlays_revision > previous_content_revision,
+        },
+        .deleted = record.deleted,
+    });
+  }
+  return snapshot;
 }
 
 const PolygonDocument *ModelingSession::document(ObjectId object_id) const {
@@ -756,13 +1085,19 @@ ModelingSession::commit_document(ObjectId object_id, PolygonDocument document,
     return Result<OperationResult>::failure(
         make_error(ErrorCode::InvalidId, "Object ID is not live."));
   }
-  if (receipt.changed) {
-    impl_->undo_stack.push_back(impl_->state);
-    impl_->redo_stack.clear();
+  if (!receipt.success || !receipt.changed) {
+    return Result<OperationResult>::success(std::move(receipt));
   }
+
+  impl_->undo_stack.push_back(impl_->state);
+  impl_->redo_stack.clear();
   found->document = std::move(document);
   found->selected = true;
   impl_->state.active_object = found->id;
+  const SessionObjectDirtyOverride dirty_overrides[] = {
+      {.id = object_id, .dirty = receipt.dirty},
+  };
+  impl_->publish_state_transition(impl_->undo_stack.back(), dirty_overrides);
   return Result<OperationResult>::success(std::move(receipt));
 }
 
@@ -783,8 +1118,7 @@ PreviewTransactionSummary ModelingSession::preview_summary() const {
       .object_id = impl_->preview.object_id,
       .operation_id = impl_->preview.operation_id,
       .delta = impl_->preview.delta,
-      .content_revision =
-          impl_->preview.preview_document.content_revision(),
+      .content_revision = impl_->preview.payload_revision,
       .dirty = impl_->preview.dirty,
   };
 }

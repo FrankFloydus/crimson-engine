@@ -99,6 +99,18 @@ bool QuaderApiMutationRunner::belongs_to_active_scene(
       session_, scene_session_id);
 }
 
+bool QuaderApiMutationRunner::can_mutate_modeling_content() const {
+  return available() &&
+         !scene_session().native_tools().blocks_modeling_content_mutation();
+}
+
+QuaderApiVoidResult QuaderApiMutationRunner::modeling_content_blocked_status(
+    std::string_view label) const {
+  std::string message = "Apply or cancel the active tool before ";
+  message.append(label.empty() ? "editing modeling content." : label);
+  return quader_api_failure_status(scene_session(), std::move(message));
+}
+
 QuaderApiVoidResult QuaderApiMutationRunner::stale_scene_reference_status(
     std::string_view reference_kind) const {
   return quader_api_failure_status(
@@ -146,6 +158,9 @@ QuaderApiMutationRunner::capture_modeling_memento() const {
 
 QuaderApiVoidResult QuaderApiMutationRunner::restore_modeling_memento(
     const ModelingSessionMemento &memento, std::string_view label) {
+  if (!can_mutate_modeling_content()) {
+    return modeling_content_blocked_status(label);
+  }
   return status_from(scene_session().modeling().restore_history_memento(memento),
                      QuaderMutationKind::Modeling, label);
 }
@@ -279,6 +294,9 @@ QuaderApiVoidResult QuaderApiMutationRunner::run_modeling_command(
   if (!available()) {
     return quader_api_failure_status(scene_session(), "No scene is active.");
   }
+  if (!can_mutate_modeling_content()) {
+    return modeling_content_blocked_status(label);
+  }
   EditorCommandService commands = editor_commands();
   return status_from(commands.execute_modeling(std::move(command)),
                      QuaderMutationKind::Modeling, label);
@@ -297,6 +315,9 @@ QuaderApiVoidResult QuaderApiMutationRunner::run_modeling_undoable_command(
   if (!available()) {
     return quader_api_failure_status(scene_session(), "No scene is active.");
   }
+  if (!can_mutate_modeling_content()) {
+    return modeling_content_blocked_status(label);
+  }
   EditorCommandService commands = editor_commands();
   return status_from(commands.execute(std::move(command)),
                      QuaderMutationKind::Modeling, label);
@@ -308,6 +329,9 @@ bool QuaderApiMutationRunner::can_run_tracked_modeling_tool(
     return false;
   }
   SceneSession &session = scene_session();
+  if (session.native_tools().blocks_modeling_content_mutation()) {
+    return false;
+  }
   MaterialReference active_material;
   if (ProjectSession *project =
           QuaderApiSessionInternalAccess::project_session(session_)) {
@@ -328,6 +352,9 @@ QuaderApiMutationRunner::run_tracked_modeling_tool(std::string_view tool_id) {
   if (!available()) {
     return quader_api_failure_status(scene_session(), "No scene is active.");
   }
+  if (!can_mutate_modeling_content()) {
+    return modeling_content_blocked_status("editing modeling content.");
+  }
   SceneSession &session = scene_session();
   MaterialReference active_material;
   if (ProjectSession *project =
@@ -347,6 +374,9 @@ QuaderApiVoidResult QuaderApiMutationRunner::begin_tracked_modeling_preview(
     std::string_view action_id) {
   if (!available()) {
     return quader_api_failure_status(scene_session(), "No scene is active.");
+  }
+  if (!can_mutate_modeling_content()) {
+    return modeling_content_blocked_status("starting a modeling preview.");
   }
   SceneSession &session = scene_session();
   return status_from(
@@ -499,6 +529,9 @@ QuaderApiVoidResult QuaderApiMutationRunner::redo() {
 QuaderApiVoidResult QuaderApiMutationRunner::repeat_last_action() {
   if (!available()) {
     return quader_api_failure_status(scene_session(), "No scene is active.");
+  }
+  if (!can_mutate_modeling_content()) {
+    return modeling_content_blocked_status("repeating a modeling action.");
   }
   SceneSession &session = scene_session();
   EditorCommandService commands = editor_commands();

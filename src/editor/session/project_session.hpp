@@ -156,6 +156,8 @@ private:
       ProjectWorkspaceStorage &workspace, ProjectManifest manifest,
       std::vector<ProjectRelativePath> open_paths,
       std::optional<ProjectRelativePath> active_path);
+  [[nodiscard]] ProjectSessionResult persist_prepared_manifest(
+      ProjectWorkspaceStorage &workspace, ProjectManifest manifest);
   [[nodiscard]] bool cancel_transient_state(OpenSceneSession &scene);
   [[nodiscard]] bool path_is_open(const ProjectRelativePath &path,
                                   SceneSessionId *id = nullptr) const;

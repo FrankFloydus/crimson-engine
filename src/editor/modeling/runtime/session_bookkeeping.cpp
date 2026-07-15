@@ -7,9 +7,23 @@
 #include "session_internal.hpp"
 
 #include <algorithm>
+#include <limits>
 #include <utility>
 
 namespace quader_editor_core {
+
+std::uint64_t advance_session_revision(std::uint64_t revision) noexcept
+{
+	return revision == (std::numeric_limits<std::uint64_t>::max)()
+		? revision
+		: revision + 1U;
+}
+
+std::uint64_t restored_session_revision(std::uint64_t recorded,
+                                        std::uint64_t current) noexcept
+{
+	return std::max(recorded, advance_session_revision(current));
+}
 
 void EditorSession::normalize_active_object()
 {
@@ -19,7 +33,8 @@ void EditorSession::normalize_active_object()
 
 void EditorSession::note_selection_changed()
 {
-	++state_.selection_revision;
+	state_.selection_revision =
+		advance_session_revision(state_.selection_revision);
 }
 
 void EditorSession::note_content_result(const CommandResult& result)
@@ -28,14 +43,23 @@ void EditorSession::note_content_result(const CommandResult& result)
 		return;
 	}
 	state_.dirty = true;
-	++state_.content_revision;
+	state_.content_revision = advance_session_revision(state_.content_revision);
 }
 
-void EditorSession::restore_recorded_state(SessionState state)
+void EditorSession::restore_history_state(SessionState state)
 {
-	const SessionState current = state_;
-	state.content_revision = std::max(state.content_revision, current.content_revision + 1U);
-	state.selection_revision = std::max(state.selection_revision, current.selection_revision + 1U);
+	const int next_object_id = state_.next_object_id;
+	const int next_light_id = state_.next_light_id;
+	const std::uint64_t content_revision = state_.content_revision;
+	const std::uint64_t selection_revision = state_.selection_revision;
+	state.next_object_id = std::max(state.next_object_id, next_object_id);
+	state.next_light_id = std::max(state.next_light_id, next_light_id);
+	state.content_revision =
+		restored_session_revision(state.content_revision,
+		                          content_revision);
+	state.selection_revision =
+		restored_session_revision(state.selection_revision,
+		                          selection_revision);
 	set_state(std::move(state));
 }
 

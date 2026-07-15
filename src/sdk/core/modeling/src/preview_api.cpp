@@ -147,13 +147,20 @@ build_preview_document(const ModelingPreviewState &state,
   OperationReceipt receipt =
       receipt_from_result(operation, current_revisions(*state->context));
   receipt.dirty.overlays = true;
+  state->payload_revision =
+      advance_preview_payload_revision(*state->context);
   return receipt;
 }
 
 } // namespace
 
 PreviewHandle::PreviewHandle(std::shared_ptr<ModelingPreviewState> state)
-    : state_(std::move(state)) {}
+    : state_(std::move(state)) {
+  if (state_ && state_->context && state_->payload_revision == 0) {
+    state_->payload_revision =
+        advance_preview_payload_revision(*state_->context);
+  }
+}
 
 PreviewId PreviewHandle::id() const { return state_ ? state_->id : PreviewId{}; }
 bool PreviewHandle::active() const { return state_ && state_->active; }
@@ -166,7 +173,7 @@ PreviewTransactionSummary PreviewHandle::summary() const {
       .active = state_->active,
       .object_id = state_->selection.object,
       .operation_id = preview_operation_id(state_->kind),
-      .content_revision = current_revisions(*state_->context).content,
+      .content_revision = state_->payload_revision,
   };
 }
 
@@ -230,13 +237,13 @@ MeshPayload PreviewHandle::mesh_payload(PayloadRequest request) const {
         make_error(ErrorCode::InvalidArgument, "Preview handle is not active.")));
     return {};
   }
+  if (request.only_if_changed &&
+      state_->payload_revision <= request.previous_revision) {
+    return {};
+  }
   Result<PolygonDocument> document = build_preview_document(*state_);
   if (!document.ok()) {
     static_cast<void>(handle_failure(*state_->context, document.error()));
-    return {};
-  }
-  if (request.only_if_changed &&
-      document.value().content_revision() <= request.previous_revision) {
     return {};
   }
   Result<MeshPayload> payload = document.value().compile_mesh();
@@ -244,10 +251,13 @@ MeshPayload PreviewHandle::mesh_payload(PayloadRequest request) const {
     static_cast<void>(handle_failure(*state_->context, payload.error()));
     return {};
   }
-  return std::move(payload).value();
+  MeshPayload result = std::move(payload).value();
+  result.content_revision = state_->payload_revision;
+  return result;
 }
 
-SemanticOverlayPayload PreviewHandle::overlay_payload(PayloadRequest) const {
+SemanticOverlayPayload
+PreviewHandle::overlay_payload(PayloadRequest request) const {
   if (!state_) {
     return {};
   }
@@ -255,6 +265,10 @@ SemanticOverlayPayload PreviewHandle::overlay_payload(PayloadRequest) const {
     static_cast<void>(handle_failure(
         *state_->context,
         make_error(ErrorCode::InvalidArgument, "Preview handle is not active.")));
+    return {};
+  }
+  if (request.only_if_changed &&
+      state_->payload_revision <= request.previous_revision) {
     return {};
   }
   Result<PolygonDocument> document = build_preview_document(*state_);

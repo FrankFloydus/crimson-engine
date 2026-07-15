@@ -19,6 +19,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
+#include <limits>
 #include <mutex>
 #include <sstream>
 #include <string>
@@ -76,19 +77,42 @@ std::uint32_t current_thread_id() {
 }
 #endif
 
-std::wstring widen(const std::string &value) {
+std::wstring utf8_to_wide_fallback(std::string_view value) {
+  return std::wstring(value.begin(), value.end());
+}
+
+} // namespace
+
+std::wstring platform_utf8_to_wide(std::string_view value) {
   if (value.empty()) {
     return {};
   }
-  const int required =
-      MultiByteToWideChar(CP_UTF8, 0, value.c_str(), -1, nullptr, 0);
-  if (required <= 0) {
-    return std::wstring(value.begin(), value.end());
+#if defined(_WIN32)
+  if (value.size() > static_cast<std::size_t>(
+                         (std::numeric_limits<int>::max)())) {
+    return utf8_to_wide_fallback(value);
   }
-  std::wstring wide(static_cast<std::size_t>(required - 1), L'\0');
-  MultiByteToWideChar(CP_UTF8, 0, value.c_str(), -1, wide.data(), required);
+  const int source_size = static_cast<int>(value.size());
+  const int required =
+      MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, value.data(),
+                          source_size, nullptr, 0);
+  if (required <= 0) {
+    return utf8_to_wide_fallback(value);
+  }
+  std::wstring wide(static_cast<std::size_t>(required), L'\0');
+  const int converted = MultiByteToWideChar(
+      CP_UTF8, MB_ERR_INVALID_CHARS, value.data(), source_size, wide.data(),
+      required);
+  if (converted != required) {
+    return utf8_to_wide_fallback(value);
+  }
   return wide;
+#else
+  return utf8_to_wide_fallback(value);
+#endif
 }
+
+namespace {
 
 std::string timestamp_for_crash_file() {
   const auto now = std::chrono::system_clock::now();
@@ -181,7 +205,8 @@ void show_fatal_message_box(FatalErrorInfo info, const std::string &detail,
       (artifacts.dump_path.empty() ? artifacts.dump_status
                                    : artifacts.dump_path.string()) +
       "\n\nLog file:\n" + g_log_path.string();
-  MessageBoxW(nullptr, widen(message).c_str(), L"Quader Fatal Error",
+  MessageBoxW(nullptr, platform_utf8_to_wide(message).c_str(),
+              L"Quader Fatal Error",
               MB_OK | MB_ICONERROR | MB_TASKMODAL);
 }
 

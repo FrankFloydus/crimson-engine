@@ -16,14 +16,14 @@ TEST(QtCommandEventFilterTests,
       quader::qt_command_dispatch_tool_state(
           []() {
             return quader::ViewportToolState{
-                .active_tool = quader::ViewportToolId::Box,
+                .active_tool = quader::ViewportToolId::CreatePrimitive,
                 .selection_mode = quader::ViewportSelectionMode::Face,
                 .grid_preset = 2,
             };
           },
           9);
 
-  EXPECT_EQ(state.active_tool, quader::ViewportToolId::Box);
+  EXPECT_EQ(state.active_tool, quader::ViewportToolId::CreatePrimitive);
   EXPECT_EQ(state.selection_mode, quader::ViewportSelectionMode::Face);
   EXPECT_EQ(state.grid_preset, 9);
 }

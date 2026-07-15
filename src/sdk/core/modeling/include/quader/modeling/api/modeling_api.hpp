@@ -140,12 +140,45 @@ struct MeshSummary {
 };
 
 /**
- * Defines box creation bounds, name, and initial material.
+ * Defines box creation bounds, subdivisions, winding, name, and material.
  */
 struct BoxOptions {
   std::string name = "Mesh";
   Vec3 min{-1.0F, -1.0F, -1.0F};
   Vec3 max{1.0F, 1.0F, 1.0F};
+  MaterialId material{};
+  int x_subdivisions = 1;
+  int y_subdivisions = 1;
+  int z_subdivisions = 1;
+  bool flip_faces = false;
+};
+
+/**
+ * Defines origin-centered cylinder creation settings.
+ */
+struct CylinderOptions {
+  std::string name = "Mesh";
+  float width = 2.0F;
+  float height = 2.0F;
+  float depth = 2.0F;
+  int side_count = 32;
+  bool capped = true;
+  bool flip_faces = false;
+  MaterialId material{};
+};
+
+/**
+ * Defines origin-centered sphere or upper-hemisphere creation settings.
+ */
+struct SphereOptions {
+  std::string name = "Mesh";
+  float width = 2.0F;
+  float height = 2.0F;
+  float depth = 2.0F;
+  int radial_segments = 32;
+  int rings = 16;
+  bool hemisphere = false;
+  bool flip_faces = false;
   MaterialId material{};
 };
 
@@ -157,6 +190,10 @@ struct BoxToolOptions {
   Vec3 min{-1.0F, -1.0F, -1.0F};
   Vec3 max{1.0F, 1.0F, 1.0F};
   MaterialId material{};
+  int x_subdivisions = 1;
+  int y_subdivisions = 1;
+  int z_subdivisions = 1;
+  bool flip_faces = false;
 };
 
 /**
@@ -540,6 +577,9 @@ public:
   CheckedModelingApi() = default;
   [[nodiscard]] Result<MeshHandle> create_box(BoxOptions options = {});
   [[nodiscard]] Result<MeshHandle>
+  create_cylinder(CylinderOptions options = {});
+  [[nodiscard]] Result<MeshHandle> create_sphere(SphereOptions options = {});
+  [[nodiscard]] Result<MeshHandle>
   add_document(PolygonDocument document, std::string name = "Mesh");
   [[nodiscard]] CheckedIoApi io();
   [[nodiscard]] CheckedToolsApi tools();
@@ -566,6 +606,8 @@ public:
   void clear_error();
 
   [[nodiscard]] MeshHandle create_box(BoxOptions options = {});
+  [[nodiscard]] MeshHandle create_cylinder(CylinderOptions options = {});
+  [[nodiscard]] MeshHandle create_sphere(SphereOptions options = {});
   [[nodiscard]] MeshHandle add_document(PolygonDocument document,
                                         std::string name = "Mesh");
 

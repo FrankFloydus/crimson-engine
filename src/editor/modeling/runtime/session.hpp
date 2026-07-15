@@ -1292,6 +1292,10 @@ struct SessionState {
   std::uint64_t selection_revision = 0;
 };
 
+/** Advances a runtime revision without allowing unsigned wraparound. */
+[[nodiscard]] std::uint64_t
+advance_session_revision(std::uint64_t revision) noexcept;
+
 /**
  * Represents a History Entry value used by the modeling runtime domain.
  */
@@ -1896,6 +1900,11 @@ public:
   [[nodiscard]] const SessionState &state() const;
   [[nodiscard]] SessionState &state();
   void set_state(SessionState state);
+  /**
+   * Restores historical state while keeping revisions and allocation cursors
+   * monotonic for the lifetime of this editor session.
+   */
+  void restore_history_state(SessionState state);
   void reset_to_default_scene();
 
   [[nodiscard]] const std::vector<PolygonObject> &objects() const;
@@ -2118,6 +2127,8 @@ public:
   CommandResult create_object_from_document(quader_poly::Document document,
                                             std::string name = "Mesh",
                                             std::uint32_t material_id = 0);
+  CommandResult replace_object_document(int object_id,
+                                        quader_poly::Document document);
   CommandResult extract_selected_faces();
   CommandResult detach_selected_faces();
   CommandResult bridge_selected_faces(int steps = 1);
@@ -2215,7 +2226,6 @@ private:
   void normalize_active_object();
   void note_selection_changed();
   void note_content_result(const CommandResult &result);
-  void restore_recorded_state(SessionState state);
   void begin_preview_transaction(PreviewTransactionKind kind);
   [[nodiscard]] bool
   preview_transaction_active(PreviewTransactionKind kind) const;

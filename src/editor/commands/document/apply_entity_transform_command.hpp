@@ -62,7 +62,10 @@ private:
         if (!scene().exists(entity_)) {
           return document_command_missing_entity_result();
         }
-        scene().set_transform(entity_, transform);
+        if (!scene().set_transform(entity_, transform)) {
+          return document_command_invalid_request_result(
+              "Entity transform could not be applied");
+        }
         return document_command_changed_result();
     }
 

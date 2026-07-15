@@ -26,6 +26,7 @@ class LinearArrayToolService;
 class ModelingSessionService;
 class NativeViewportToolCoordinator;
 class PivotToolService;
+class PrimitiveCreationToolService;
 class RadialArrayToolService;
 class SceneInstanceService;
 class ViewportPointPlacementService;
@@ -103,6 +104,12 @@ public:
   const LinearArrayToolService &linear_array() const { return *linear_array_; }
   RadialArrayToolService &radial_array() { return *radial_array_; }
   const RadialArrayToolService &radial_array() const { return *radial_array_; }
+  PrimitiveCreationToolService &primitive_creation() {
+    return *primitive_creation_;
+  }
+  const PrimitiveCreationToolService &primitive_creation() const {
+    return *primitive_creation_;
+  }
   ViewportPointPlacementService &point_placement() {
     return *point_placement_;
   }
@@ -127,6 +134,7 @@ public:
   void set_document_replacement_finalizer(
       std::function<void(SceneSession &)> finalizer);
   void mark_clean();
+  void mark_clean_at(SceneContentRevisionStamp stamp) noexcept;
 
 private:
   /**
@@ -157,6 +165,7 @@ private:
   std::unique_ptr<PivotToolService> pivot_;
   std::unique_ptr<LinearArrayToolService> linear_array_;
   std::unique_ptr<RadialArrayToolService> radial_array_;
+  std::unique_ptr<PrimitiveCreationToolService> primitive_creation_;
   std::unique_ptr<ViewportPointPlacementService> point_placement_;
   std::unique_ptr<NativeViewportToolCoordinator> native_tools_;
   ViewportWorkspaceService viewport_workspace_{

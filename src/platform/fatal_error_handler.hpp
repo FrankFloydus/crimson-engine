@@ -7,6 +7,8 @@
 #pragma once
 
 #include <filesystem>
+#include <string>
+#include <string_view>
 
 namespace quader {
 
@@ -32,6 +34,9 @@ struct FatalErrorInfo {
 };
 
 FatalErrorInfo fatal_error_info(FatalErrorCode code);
+/** Converts UTF-8 text into the native wide string used by fatal presentation. */
+[[nodiscard]] std::wstring
+platform_utf8_to_wide(std::string_view value);
 void install_fatal_error_handler(std::filesystem::path log_path);
 [[noreturn]] void report_fatal_error_and_exit(FatalErrorCode code,
                                               const char *detail = nullptr,

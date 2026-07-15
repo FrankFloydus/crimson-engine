@@ -60,6 +60,13 @@ void assign_document_command_status(DocumentCommandResult &target,
   target.message = std::move(source.message);
 }
 
+DocumentCreateEntityResult invalid_create_result(std::string message) {
+  DocumentCreateEntityResult result;
+  assign_document_command_status(
+      result, document_command_invalid_request_result(std::move(message)));
+  return result;
+}
+
 bool document_command_entity_is_modeling_owned(const SceneDocument &scene,
                                                EntityId entity) {
   return scene.modeling_object(entity) != nullptr;
@@ -73,6 +80,11 @@ DocumentCommandResult document_command_modeling_owned_entity_result() {
 DocumentCommandResult document_command_scene_root_protected_result() {
   return document_command_invalid_request_result(
       "Scene root cannot be changed by this command");
+}
+
+DocumentCommandResult document_command_active_tool_entity_result() {
+  return document_command_invalid_request_result(
+      "Apply or cancel the active tool before editing its transient entity");
 }
 
 bool document_command_selection_includes_scene_root(
@@ -250,10 +262,31 @@ DocumentCommandService::DocumentCommandService(
     , history_(history)
     , assets_(assets) {}
 
+void DocumentCommandService::set_entity_mutation_blocker(
+    EntityMutationBlocker blocker) {
+  entity_mutation_blocker_ = std::move(blocker);
+}
+
+bool DocumentCommandService::mutation_blocked(EntityId entity) const {
+  return entity != kInvalidEntityId && entity_mutation_blocker_ &&
+         entity_mutation_blocker_(entity);
+}
+
+bool DocumentCommandService::selected_mutation_blocked() const {
+  const std::vector<EntityId> selected = scene_.selected_entities();
+  return std::any_of(selected.begin(), selected.end(),
+                     [this](EntityId entity) {
+                       return mutation_blocked(entity);
+                     });
+}
+
 DocumentCreateEntityResult
 DocumentCommandService::create_entity(std::string name, EntityKind kind,
                                       EntityId parent,
                                       TransformComponent transform) {
+  if (!scene_transform_is_finite(transform)) {
+    return invalid_create_result("Entity transform must be finite");
+  }
   parent = normalized_create_parent(scene_, parent);
   if (parent != kInvalidEntityId && !scene_.exists(parent)) {
     DocumentCreateEntityResult result;
@@ -261,6 +294,11 @@ DocumentCommandService::create_entity(std::string name, EntityKind kind,
                                    document_command_invalid_request_result(
                                        "Parent entity does not exist"));
     return result;
+  }
+  if (mutation_blocked(parent)) {
+    return invalid_create_result(
+        "Apply or cancel the active tool before parenting to its transient "
+        "entity");
   }
   auto command = std::make_unique<CreateEntityCommand>(scene_, std::move(name),
                                                        kind, parent, transform);
@@ -305,6 +343,9 @@ DocumentCommandService::reparent_entity(EntityId entity, EntityId parent,
   if (scene_.parent(entity) == parent) {
     return document_command_unchanged_result();
   }
+  if (mutation_blocked(entity) || mutation_blocked(parent)) {
+    return document_command_active_tool_entity_result();
+  }
   return execute_document_command(
       history_, std::make_unique<ReparentEntityCommand>(
                     scene_, entity, parent, preserve_world_transform));
@@ -313,6 +354,12 @@ DocumentCommandService::reparent_entity(EntityId entity, EntityId parent,
 DocumentGroupSelectionResult
 DocumentCommandService::group_selection(std::string group_name,
                                         TransformComponent group_transform) {
+  if (selected_mutation_blocked()) {
+    DocumentGroupSelectionResult result;
+    assign_document_command_status(
+        result, document_command_active_tool_entity_result());
+    return result;
+  }
   auto command = std::make_unique<GroupSelectionCommand>(
       scene_, std::move(group_name), group_transform);
   GroupSelectionCommand *group_command = command.get();
@@ -326,6 +373,9 @@ DocumentCommandService::group_selection(std::string group_name,
 }
 
 DocumentCommandResult DocumentCommandService::ungroup_selection() {
+  if (selected_mutation_blocked()) {
+    return document_command_active_tool_entity_result();
+  }
   return execute_document_command(
       history_, std::make_unique<UngroupSelectionCommand>(scene_));
 }
@@ -412,6 +462,14 @@ DocumentCommandService::duplicate_hierarchy_with_existing_clones(
     assign_document_command_status(result, document_command_unchanged_result());
     return result;
   }
+  if (std::any_of(roots.begin(), roots.end(), [this](EntityId entity) {
+        return mutation_blocked(entity);
+      })) {
+    DocumentDuplicateHierarchyResult result;
+    assign_document_command_status(
+        result, document_command_active_tool_entity_result());
+    return result;
+  }
 
   std::vector<DocumentEntitySnapshot> source_snapshots;
   source_snapshots.reserve(roots.size());
@@ -446,6 +504,9 @@ DocumentCommandService::duplicate_hierarchy_with_existing_clones(
 DocumentCreateEntityResult DocumentCommandService::create_point_light(
     std::string name, LightComponent light, EntityId parent,
     TransformComponent transform, bool select_created) {
+  if (!scene_transform_is_finite(transform)) {
+    return invalid_create_result("Light transform must be finite");
+  }
   light.type = LightType::Point;
   parent = normalized_create_parent(scene_, parent);
   if (parent != kInvalidEntityId && !scene_.exists(parent)) {
@@ -454,6 +515,11 @@ DocumentCreateEntityResult DocumentCommandService::create_point_light(
                                    document_command_invalid_request_result(
                                        "Parent entity does not exist"));
     return result;
+  }
+  if (mutation_blocked(parent)) {
+    return invalid_create_result(
+        "Apply or cancel the active tool before parenting to its transient "
+        "entity");
   }
   auto command = std::make_unique<CreateLightCommand>(
       scene_, "Create Point Light", std::move(name), light, parent, transform,
@@ -474,6 +540,9 @@ DocumentCreateEntityResult DocumentCommandService::create_point_light(
 DocumentCreateEntityResult DocumentCommandService::create_directional_light(
     std::string name, LightComponent light, EntityId parent,
     TransformComponent transform, bool select_created) {
+  if (!scene_transform_is_finite(transform)) {
+    return invalid_create_result("Light transform must be finite");
+  }
   light.type = LightType::Directional;
   parent = normalized_create_parent(scene_, parent);
   if (parent != kInvalidEntityId && !scene_.exists(parent)) {
@@ -482,6 +551,11 @@ DocumentCreateEntityResult DocumentCommandService::create_directional_light(
                                    document_command_invalid_request_result(
                                        "Parent entity does not exist"));
     return result;
+  }
+  if (mutation_blocked(parent)) {
+    return invalid_create_result(
+        "Apply or cancel the active tool before parenting to its transient "
+        "entity");
   }
   auto command = std::make_unique<CreateLightCommand>(
       scene_, "Create Directional Light", std::move(name), light, parent,
@@ -509,6 +583,9 @@ DocumentCommandService::select_entities(std::vector<EntityId> entities,
 DocumentCommandResult
 DocumentCommandService::apply_entity_transform(EntityId entity,
                                                TransformComponent transform) {
+  if (mutation_blocked(entity)) {
+    return document_command_active_tool_entity_result();
+  }
   const TransformComponent *current_transform = scene_.transform(entity);
   if (!current_transform) {
     return document_command_missing_entity_result();
@@ -524,6 +601,9 @@ DocumentCommandService::apply_entity_transform(EntityId entity,
 
 DocumentCommandResult DocumentCommandService::rename_entity(EntityId entity,
                                                             std::string name) {
+  if (mutation_blocked(entity)) {
+    return document_command_active_tool_entity_result();
+  }
   const NameComponent *current_name = scene_.name(entity);
   if (!current_name) {
     return document_command_missing_entity_result();
@@ -564,6 +644,11 @@ DocumentCommandResult DocumentCommandService::set_visibility(
   if (edits.empty()) {
     return document_command_unchanged_result();
   }
+  if (std::any_of(edits.begin(), edits.end(), [this](const auto &edit) {
+        return mutation_blocked(edit.entity);
+      })) {
+    return document_command_active_tool_entity_result();
+  }
 
   std::vector<std::unique_ptr<IUndoableCommand>> commands;
   commands.reserve(edits.size());
@@ -600,6 +685,11 @@ DocumentCommandService::set_locks(std::vector<DocumentLockEdit> edits) {
   if (edits.empty()) {
     return document_command_unchanged_result();
   }
+  if (std::any_of(edits.begin(), edits.end(), [this](const auto &edit) {
+        return mutation_blocked(edit.entity);
+      })) {
+    return document_command_active_tool_entity_result();
+  }
 
   std::vector<std::unique_ptr<IUndoableCommand>> commands;
   commands.reserve(edits.size() + 1u);
@@ -616,6 +706,9 @@ DocumentCommandService::set_locks(std::vector<DocumentLockEdit> edits) {
 
 DocumentCommandResult DocumentCommandService::set_material(EntityId entity,
                                                            AssetId material) {
+  if (mutation_blocked(entity)) {
+    return document_command_active_tool_entity_result();
+  }
   if (material == kInvalidAssetId) {
     return document_command_invalid_request_result("Material asset is invalid");
   }
@@ -647,6 +740,9 @@ DocumentCommandResult DocumentCommandService::set_material(EntityId entity,
 DocumentCommandResult
 DocumentCommandService::set_mesh_component(EntityId entity,
                                            MeshComponent mesh) {
+  if (mutation_blocked(entity)) {
+    return document_command_active_tool_entity_result();
+  }
   if (mesh.mesh == kInvalidAssetId) {
     return document_command_invalid_request_result("Mesh asset is invalid");
   }
@@ -672,6 +768,9 @@ DocumentCommandService::set_mesh_component(EntityId entity,
 
 DocumentCommandResult DocumentCommandService::set_light_component(
     EntityId entity, LightComponent light, UndoRedoExecuteOptions options) {
+  if (mutation_blocked(entity)) {
+    return document_command_active_tool_entity_result();
+  }
   const LightComponent *current_light = scene_.light(entity);
   if (!current_light) {
     if (!scene_.exists(entity)) {
@@ -694,6 +793,9 @@ DocumentCommandResult
 DocumentCommandService::set_scene_settings(EntityId entity,
                                            SceneSettingsComponent settings,
                                            UndoRedoExecuteOptions options) {
+  if (mutation_blocked(entity)) {
+    return document_command_active_tool_entity_result();
+  }
   const SceneSettingsComponent *current_settings =
       scene_.scene_settings(entity);
   if (!current_settings) {
@@ -753,6 +855,11 @@ DocumentCommandService::set_transforms(std::vector<DocumentTransformEdit> edits,
   if (edits.empty()) {
     return document_command_unchanged_result();
   }
+  if (std::any_of(edits.begin(), edits.end(), [this](const auto &edit) {
+        return mutation_blocked(edit.entity);
+      })) {
+    return document_command_active_tool_entity_result();
+  }
 
   std::vector<std::unique_ptr<IUndoableCommand>> commands;
   commands.reserve(edits.size());
@@ -770,6 +877,13 @@ DocumentCommandResult DocumentCommandService::apply_scene_batch(
     std::string label, std::vector<DocumentSceneBatchOperation> operations) {
   if (label.empty()) {
     label = "Scene Batch";
+  }
+  if (std::any_of(operations.begin(), operations.end(),
+                  [this](const auto &operation) {
+                    return mutation_blocked(operation.entity) ||
+                           mutation_blocked(operation.parent);
+                  })) {
+    return document_command_active_tool_entity_result();
   }
 
   std::vector<std::unique_ptr<IUndoableCommand>> commands;

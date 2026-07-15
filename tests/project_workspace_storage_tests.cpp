@@ -64,6 +64,16 @@ void write_text_file(const std::filesystem::path &path,
   ASSERT_TRUE(stream.good()) << path.string();
 }
 
+TEST(ProjectIoResultTests, VoidSuccessCarriesNonFatalWarning) {
+  ProjectIoResult<void> result =
+      ProjectIoResult<void>::success("obsolete backup remains");
+
+  EXPECT_TRUE(result.ok());
+  EXPECT_EQ(result.warning(), "obsolete backup remains");
+  EXPECT_EQ(result.take_warning(), "obsolete backup remains");
+  EXPECT_TRUE(result.warning().empty());
+}
+
 TEST(ProjectWorkspaceTypes, EnforcesUuidAndGenerationalIdentities) {
   const ProjectId project_id = ProjectId::generate();
   const SceneId scene_id = SceneId::generate();

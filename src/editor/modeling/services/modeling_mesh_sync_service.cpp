@@ -303,8 +303,15 @@ std::optional<std::vector<ProjectedMeshPlan>> build_projected_mesh_plans(
     const MeshComponent *bound_mesh =
         existing_entity != kInvalidEntityId ? scene.mesh(existing_entity)
                                             : nullptr;
+    const AssetId remembered_mesh =
+        identity.has_value() && identity->mesh.has_value()
+            ? identity->mesh->mesh
+            : kInvalidAssetId;
     const AssetId current_mesh =
-        bound_mesh != nullptr ? bound_mesh->mesh : kInvalidAssetId;
+        bound_mesh != nullptr
+            ? bound_mesh->mesh
+            : (assets.mesh(remembered_mesh) != nullptr ? remembered_mesh
+                                                       : kInvalidAssetId);
     if (current_mesh != kInvalidAssetId && assets.mesh(current_mesh) != nullptr &&
         scene_sync.projected_mesh_signature_matches(object.id,
                                                     plan.signature)) {
@@ -647,6 +654,8 @@ bool project_modeling_meshes_to_scene(
         object_registry.entity_for_modeling_object(object.id);
     if (plan == nullptr || !existing.has_value() ||
         !scene.exists(*existing) ||
+        scene.instance_occurrence(*existing) != nullptr ||
+        scene.is_instance_definition_entity(*existing) ||
         plan->installed_mesh == kInvalidAssetId ||
         assets.mesh(plan->installed_mesh) == nullptr) {
       return false;
@@ -669,22 +678,30 @@ bool project_modeling_meshes_to_scene(
     if (current_object == nullptr ||
         current_object->object_id != next_object.object_id ||
         current_object->material_slot != next_object.material_slot) {
-      scene.set_modeling_object(entity, next_object);
+      if (!scene.set_modeling_object(entity, next_object)) {
+        return false;
+      }
     }
     const MeshComponent *current_mesh = scene.mesh(entity);
-    if (current_mesh == nullptr ||
-        current_mesh->mesh != plan->installed_mesh ||
-        plan->install_kind == ProjectedMeshInstallKind::Replace) {
+    const bool binding_changed =
+        current_mesh == nullptr || current_mesh->mesh != plan->installed_mesh ||
+        scene.kind(entity) != EntityKind::Mesh;
+    if (binding_changed) {
       const std::optional<ModelingObjectSceneIdentity> identity =
           object_registry.scene_identity_for_modeling_object(object.id);
       MeshComponent next_mesh =
           current_mesh != nullptr
               ? *current_mesh
               : (identity.has_value() && identity->mesh.has_value()
-                     ? *identity->mesh
-                     : MeshComponent{});
+                      ? *identity->mesh
+                      : MeshComponent{});
       next_mesh.mesh = plan->installed_mesh;
-      scene.set_mesh(entity, next_mesh);
+      if (!scene.set_mesh(entity, next_mesh)) {
+        return false;
+      }
+    } else if (plan->install_kind == ProjectedMeshInstallKind::Replace &&
+               !scene.notify_mesh_payload_changed(entity)) {
+      return false;
     }
     object_registry.remember_scene_entity(object.id, scene, entity);
     scene_sync.remember_projected_mesh_signature(object.id, plan->signature);

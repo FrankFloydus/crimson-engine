@@ -49,6 +49,7 @@
 #include "editor/tools/native_viewport_tool_coordinator.hpp"
 #include "editor/tools/viewport_tool_descriptor_catalog.hpp"
 #include "editor/transform/scene_transform_drag_service.hpp"
+#include "platform/fatal_error_handler.hpp"
 #include "render/filament_material_library.hpp"
 #include "render/light_renderable_cache.hpp"
 #include "render/material_binding_service.hpp"
@@ -98,6 +99,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cctype>
 #include <chrono>
 #include <cmath>
@@ -112,6 +114,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <type_traits>
 #include <unordered_set>
 #include <utility>
@@ -820,6 +823,69 @@ TEST(LoggerTests, RoutesMessagesToMemorySink) {
   const auto entries = Logger::entries_snapshot();
   ASSERT_FALSE(entries.empty());
   EXPECT_NE(entries.back().message.find("hello quader"), std::string::npos);
+}
+
+TEST(LoggerTests, ConcurrentLifecycleAndSnapshotsKeepOwnedStateAlive) {
+  const LoggerConfig config{
+      .name = "logger-concurrency-test",
+      .file_path = "",
+      .max_entries = 64,
+  };
+  Logger::initialize(config);
+
+  std::atomic_bool start = false;
+  std::atomic_int acquisition_failures = 0;
+  std::vector<std::thread> workers;
+  workers.reserve(4u);
+  for (int worker = 0; worker < 4; ++worker) {
+    workers.emplace_back([worker, &start, &acquisition_failures]() {
+      while (!start.load(std::memory_order_acquire)) {
+        std::this_thread::yield();
+      }
+      for (int iteration = 0; iteration < 128; ++iteration) {
+        const std::shared_ptr<spdlog::logger> logger = Logger::instance();
+        if (!logger) {
+          acquisition_failures.fetch_add(1, std::memory_order_relaxed);
+          continue;
+        }
+        logger->info("worker {} iteration {}", worker, iteration);
+        (void)Logger::entries_snapshot();
+        if (iteration % 17 == 0) {
+          Logger::clear_memory();
+        }
+      }
+    });
+  }
+  std::thread lifecycle([&start, &config]() {
+    while (!start.load(std::memory_order_acquire)) {
+      std::this_thread::yield();
+    }
+    for (int iteration = 0; iteration < 32; ++iteration) {
+      Logger::shutdown();
+      Logger::initialize(config);
+    }
+  });
+
+  start.store(true, std::memory_order_release);
+  for (std::thread &worker : workers) {
+    worker.join();
+  }
+  lifecycle.join();
+
+  EXPECT_EQ(acquisition_failures.load(std::memory_order_relaxed), 0);
+  Logger::initialize(config);
+  Logger::clear_memory();
+  LOG_INFO("logger remains usable after concurrent lifecycle changes");
+  const std::vector<LogEntry> entries = Logger::entries_snapshot();
+  ASSERT_FALSE(entries.empty());
+  EXPECT_NE(entries.back().message.find("logger remains usable"),
+            std::string::npos);
+}
+
+TEST(FatalErrorHandlerTests, ConvertsEmptyAndNonAsciiUtf8WithoutTerminatorWrite) {
+  EXPECT_TRUE(platform_utf8_to_wide({}).empty());
+  EXPECT_EQ(platform_utf8_to_wide("Quader \xC3\xA8 stabile"),
+            std::wstring(L"Quader \u00E8 stabile"));
 }
 
 TEST(FatalErrorHandlerTests, MainInstallsReportableFatalErrorBoundary) {
@@ -5304,6 +5370,63 @@ TEST(SceneDocumentTests, TracksDomainRevisionsForOverlayCacheInvalidation) {
   EXPECT_GT(scene.selection_revision(), clear_selection_before);
 }
 
+TEST(SceneDocumentTests, IdempotentComponentWritesKeepAllRevisionsStable) {
+  SceneDocument scene;
+  const EntityId mesh_entity =
+      scene.create_entity("Stable Mesh", EntityKind::Mesh);
+  const EntityId light_entity =
+      scene.create_entity("Stable Light", EntityKind::Light);
+  const MeshComponent mesh{.mesh = 7u, .double_sided = true};
+  const ModelingObjectComponent modeling{.object_id = 42,
+                                         .material_slot = 3u};
+  const MaterialComponent material{.material = 11u};
+  const LightComponent light{.type = LightType::Point,
+                             .intensity = 2.0f};
+  TransformComponent transform;
+  transform.position = {1.0f, 2.0f, 3.0f};
+
+  ASSERT_TRUE(scene.rename_entity(mesh_entity, "Stable Mesh Renamed"));
+  ASSERT_TRUE(scene.set_entity_kind(mesh_entity, EntityKind::Mesh));
+  ASSERT_TRUE(scene.set_locked(mesh_entity, true));
+  ASSERT_TRUE(scene.set_transform(mesh_entity, transform));
+  ASSERT_TRUE(scene.set_mesh(mesh_entity, mesh));
+  ASSERT_TRUE(scene.set_modeling_object(mesh_entity, modeling));
+  ASSERT_TRUE(scene.set_material(mesh_entity, material));
+  ASSERT_TRUE(scene.set_light(light_entity, light));
+
+  const std::uint64_t revision = scene.revision();
+  const std::uint64_t content_revision = scene.content_revision();
+  const std::uint64_t selection_revision = scene.selection_revision();
+  const std::uint64_t visibility_revision = scene.visibility_revision();
+  const std::uint64_t transform_revision = scene.transform_revision();
+  const std::uint64_t mesh_binding_revision =
+      scene.mesh_binding_revision();
+  const std::uint64_t render_component_revision =
+      scene.render_component_revision();
+
+  EXPECT_TRUE(scene.rename_entity(mesh_entity, "Stable Mesh Renamed"));
+  EXPECT_TRUE(scene.set_entity_kind(mesh_entity, EntityKind::Mesh));
+  EXPECT_TRUE(scene.set_locked(mesh_entity, true));
+  EXPECT_TRUE(scene.set_transform(mesh_entity, transform));
+  EXPECT_TRUE(scene.set_mesh(mesh_entity, mesh));
+  EXPECT_TRUE(scene.set_modeling_object(mesh_entity, modeling));
+  EXPECT_TRUE(scene.set_material(mesh_entity, material));
+  EXPECT_TRUE(scene.set_light(light_entity, light));
+
+  EXPECT_EQ(scene.revision(), revision);
+  EXPECT_EQ(scene.content_revision(), content_revision);
+  EXPECT_EQ(scene.selection_revision(), selection_revision);
+  EXPECT_EQ(scene.visibility_revision(), visibility_revision);
+  EXPECT_EQ(scene.transform_revision(), transform_revision);
+  EXPECT_EQ(scene.mesh_binding_revision(), mesh_binding_revision);
+  EXPECT_EQ(scene.render_component_revision(), render_component_revision);
+
+  ASSERT_TRUE(scene.notify_mesh_payload_changed(mesh_entity));
+  EXPECT_GT(scene.revision(), revision);
+  EXPECT_GT(scene.mesh_binding_revision(), mesh_binding_revision);
+  EXPECT_GT(scene.render_component_revision(), render_component_revision);
+}
+
 TEST(SceneEntityNamingTests, MeshNamesStartAtBaseNameThenUseOneBasedSuffixes) {
   SceneDocument scene;
 
@@ -6782,13 +6905,15 @@ TEST(ViewportInputRouterTests, ImplementedToolHotkeysMatchViewportContract) {
   input.viewport_focused = true;
   input.viewport_size = {800.0f, 600.0f};
 
-  set_resolved_shortcut(input, test_tool_shortcut(ViewportTool::kBox));
+  set_resolved_shortcut(input,
+                        test_tool_shortcut(ViewportTool::kCreatePrimitive));
   auto result = router.handle_frame(input, camera);
   EXPECT_EQ(result.shortcut_handled,
-            viewport_tool_has_native_controller(ViewportTool::kBox));
+            viewport_tool_has_native_controller(
+                ViewportTool::kCreatePrimitive));
   EXPECT_EQ(router.state().active_tool,
-            viewport_tool_has_native_controller(ViewportTool::kBox)
-                ? ViewportTool::kBox
+            viewport_tool_has_native_controller(ViewportTool::kCreatePrimitive)
+                ? ViewportTool::kCreatePrimitive
                 : ViewportTool::kSelect);
 
   set_resolved_shortcut(input, test_tool_shortcut(ViewportTool::kSelect));
@@ -7232,8 +7357,9 @@ TEST(ViewportInputRouterTests, ToolActivationSupportTracksNativeControllers) {
   EXPECT_TRUE(viewport_tool_has_native_controller(ViewportTool::kMove));
   EXPECT_TRUE(viewport_tool_has_native_controller(ViewportTool::kRotate));
   EXPECT_TRUE(viewport_tool_has_native_controller(ViewportTool::kScale));
-  EXPECT_EQ(viewport_tool_has_native_controller(ViewportTool::kBox),
-            viewport_tool_has_host_contract(ViewportTool::kBox));
+  EXPECT_EQ(
+      viewport_tool_has_native_controller(ViewportTool::kCreatePrimitive),
+      viewport_tool_has_host_contract(ViewportTool::kCreatePrimitive));
   EXPECT_EQ(viewport_tool_has_native_controller(ViewportTool::kInsertEdgeLoop),
             viewport_tool_has_host_contract(ViewportTool::kInsertEdgeLoop));
   EXPECT_EQ(viewport_tool_has_native_controller(ViewportTool::kKnife),
@@ -7299,7 +7425,8 @@ TEST(ViewportInputRouterTests, FocusGateBlocksViewportToolHotkeys) {
   ViewportInputFrame input;
   input.viewport_focused = false;
   input.viewport_size = {800.0f, 600.0f};
-  set_resolved_shortcut(input, test_tool_shortcut(ViewportTool::kBox));
+  set_resolved_shortcut(input,
+                        test_tool_shortcut(ViewportTool::kCreatePrimitive));
 
   const auto result = router.handle_frame(input, camera);
 
@@ -11149,6 +11276,59 @@ TEST(DocumentCommandServiceTests,
   result = commands.set_material(entity, mesh_id + 2000u);
   EXPECT_FALSE(result.ok);
   EXPECT_EQ(result.message, "Material asset does not exist");
+}
+
+TEST(DocumentCommandServiceTests,
+     RejectedSceneComponentMutationDoesNotCreateHistory) {
+  SceneDocument scene;
+  const EntityId definition = scene.create_empty("Definition");
+  ASSERT_TRUE(scene.set_instance_definition(definition));
+  const EntityId occurrence =
+      scene.create_entity("Occurrence", EntityKind::Instance);
+  ASSERT_TRUE(scene.set_instance_occurrence(
+      occurrence, InstanceOccurrenceComponent{.definition = definition}));
+  EditorHistoryService history;
+  DocumentCommandService commands(scene, history);
+  const std::uint64_t revision = scene.revision();
+
+  const DocumentCommandResult rejected =
+      commands.set_material(occurrence, 99u);
+  EXPECT_FALSE(rejected.ok);
+  EXPECT_FALSE(rejected.changed);
+  EXPECT_EQ(scene.material(occurrence), nullptr);
+  EXPECT_EQ(scene.revision(), revision);
+  EXPECT_FALSE(history.can_undo());
+  EXPECT_FALSE(history.can_redo());
+}
+
+TEST(DocumentCommandServiceTests,
+     NonFiniteCreationTransformsDoNotCreateEntitiesOrHistory) {
+  SceneDocument scene;
+  EditorHistoryService history;
+  DocumentCommandService commands(scene, history);
+  TransformComponent invalid_transform;
+  invalid_transform.position.x =
+      (std::numeric_limits<float>::infinity)();
+  const std::size_t entity_count = scene.entities().size();
+  const std::uint64_t revision = scene.revision();
+
+  const DocumentCreateEntityResult entity = commands.create_entity(
+      "Invalid Entity", EntityKind::Generic, kInvalidEntityId,
+      invalid_transform);
+  EXPECT_FALSE(entity.ok);
+  EXPECT_FALSE(entity.changed);
+  EXPECT_EQ(entity.entity, kInvalidEntityId);
+
+  const DocumentCreateEntityResult light = commands.create_point_light(
+      "Invalid Light", LightComponent{}, kInvalidEntityId,
+      invalid_transform, true);
+  EXPECT_FALSE(light.ok);
+  EXPECT_FALSE(light.changed);
+  EXPECT_EQ(light.entity, kInvalidEntityId);
+  EXPECT_EQ(scene.entities().size(), entity_count);
+  EXPECT_EQ(scene.revision(), revision);
+  EXPECT_FALSE(history.can_undo());
+  EXPECT_FALSE(history.can_redo());
 }
 
 TEST(DocumentCommandServiceTests,

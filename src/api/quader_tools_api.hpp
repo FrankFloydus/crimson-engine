@@ -33,8 +33,17 @@ public:
     QuaderApiVoidResult set_setting(std::string_view tool_id,
                                     std::string_view name,
                                     std::string_view value);
+    QuaderApiVoidResult set_setting(std::string_view tool_id,
+                                    std::string_view name,
+                                    const char *value);
     QuaderApiVoidResult execute_action(std::string_view tool_id,
                                        std::string_view action_id);
+    QuaderApiVoidResult
+    accept_active_primitive(std::string name,
+                            AssetId default_material = kInvalidAssetId,
+                            bool snap_enabled = true);
+    [[nodiscard]] bool has_active_primitive_creation() const;
+    [[nodiscard]] std::string active_primitive_type() const;
     QuaderApiVoidResult commit_active_tool_preview();
     QuaderApiVoidResult cancel_active_tool_preview();
     QuaderApiVoidResult cancel_modal_tool();

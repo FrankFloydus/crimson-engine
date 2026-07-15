@@ -55,12 +55,10 @@ public:
             spdlog::level::level_enum level,
             spdlog::format_string_t<Args...> fmt,
             Args&&... args) {
-      ensure_initialized();
-      instance()->log(loc, level, fmt, std::forward<Args>(args)...);
+      if (std::shared_ptr<spdlog::logger> logger = instance()) {
+        logger->log(loc, level, fmt, std::forward<Args>(args)...);
+      }
     }
-
-private:
-  static void ensure_initialized();
 };
 
 } // namespace quader

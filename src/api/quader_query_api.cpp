@@ -15,6 +15,7 @@
 #include "editor/selection/editor_selection_service.hpp"
 #include "editor/session/scene_session.hpp"
 #include "editor/history/editor_history_service.hpp"
+#include "editor/modeling/services/primitive_creation_tool_service.hpp"
 #include "editor/modeling/services/modeling_session_service.hpp"
 #include "editor/pivot/pivot_tool_service.hpp"
 #include "scene/scene_bounds.hpp"
@@ -318,8 +319,13 @@ QuaderSelectionSummary QuaderQueryApi::selection() const {
 }
 
 QuaderToolStatus QuaderQueryApi::tool_status() const {
-  return to_api_tool_status(
-      read_scene_session(session_).modeling().tool_status());
+  const SceneSession &session = read_scene_session(session_);
+  QuaderToolStatus status = to_api_tool_status(session.modeling().tool_status());
+  if (session.primitive_creation().active()) {
+    status.active_tool = QuaderViewportTool::CreatePrimitive;
+    status.modal_tool_owns_viewport = true;
+  }
+  return status;
 }
 
 QuaderAssetSnapshot QuaderQueryApi::assets() const {

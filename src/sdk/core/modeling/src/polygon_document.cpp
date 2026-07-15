@@ -18,6 +18,7 @@
 #include <algorithm>
 #include <cmath>
 #include <memory>
+#include <numeric>
 #include <ranges>
 #include <span>
 #include <string>
@@ -70,6 +71,25 @@ namespace {
 
 [[nodiscard]] std::uint32_t native_material_slot(MaterialId id) {
   return id.valid() ? id.index - 1U : 0U;
+}
+
+[[nodiscard]] bool positive_finite(float value) {
+  return std::isfinite(value) && value > 0.0F;
+}
+
+[[nodiscard]] bool valid_subdivision_count(int value, int minimum) {
+  return value >= minimum && value <= 128;
+}
+
+void prepare_primitive_document(quader_poly::Document &document,
+                                quader::QVec3 translation,
+                                std::uint32_t material_slot) {
+  for (quader_poly::Vertex &vertex : document.vertices) {
+    vertex.position = vertex.position + translation;
+  }
+  for (quader_poly::Face &face : document.faces) {
+    face.material_slot = material_slot;
+  }
 }
 
 [[nodiscard]] bool stale_generation(VertexId id) {
@@ -393,18 +413,103 @@ PolygonDocument::operator=(PolygonDocument &&other) noexcept = default;
 PolygonDocument::~PolygonDocument() = default;
 
 Result<PolygonDocument> PolygonDocument::make_box(const BoxSpec &spec) {
-  if (spec.min.x >= spec.max.x || spec.min.y >= spec.max.y ||
-      spec.min.z >= spec.max.z) {
+  const Vec3 dimensions{
+      spec.max.x - spec.min.x,
+      spec.max.y - spec.min.y,
+      spec.max.z - spec.min.z,
+  };
+  if (!positive_finite(dimensions.x) || !positive_finite(dimensions.y) ||
+      !positive_finite(dimensions.z)) {
     return Result<PolygonDocument>::failure(
         make_error(ErrorCode::InvalidArgument,
                    "Box bounds must have positive width, height, and depth."));
   }
+  if (!valid_subdivision_count(spec.x_subdivisions, 1) ||
+      !valid_subdivision_count(spec.y_subdivisions, 1) ||
+      !valid_subdivision_count(spec.z_subdivisions, 1)) {
+    return Result<PolygonDocument>::failure(make_error(
+        ErrorCode::InvalidArgument,
+        "Box subdivision counts must be between 1 and 128."));
+  }
 
-  quader_poly::DocumentBuilder builder;
-  builder.cube(to_native(spec.min), to_native(spec.max),
-               native_material_slot(spec.material));
+  quader_poly::Document document = quader_poly::make_cube({
+      .width = dimensions.x,
+      .height = dimensions.y,
+      .depth = dimensions.z,
+      .width_segments = spec.x_subdivisions,
+      .height_segments = spec.y_subdivisions,
+      .depth_segments = spec.z_subdivisions,
+      .flip_faces = spec.flip_faces,
+  });
+  prepare_primitive_document(
+      document,
+      to_native(Vec3{
+          std::midpoint(spec.min.x, spec.max.x),
+          std::midpoint(spec.min.y, spec.max.y),
+          std::midpoint(spec.min.z, spec.max.z),
+      }),
+      native_material_slot(spec.material));
   return Result<PolygonDocument>::success(
-      PolygonDocumentNativeAccess::from_native(builder.take()));
+      PolygonDocumentNativeAccess::from_native(std::move(document)));
+}
+
+Result<PolygonDocument>
+PolygonDocument::make_cylinder(const CylinderSpec &spec) {
+  if (!positive_finite(spec.width) || !positive_finite(spec.height) ||
+      !positive_finite(spec.depth)) {
+    return Result<PolygonDocument>::failure(make_error(
+        ErrorCode::InvalidArgument,
+        "Cylinder dimensions must have positive width, height, and depth."));
+  }
+  if (!valid_subdivision_count(spec.side_count, 3)) {
+    return Result<PolygonDocument>::failure(make_error(
+        ErrorCode::InvalidArgument,
+        "Cylinder side count must be between 3 and 128."));
+  }
+
+  quader_poly::Document document = quader_poly::make_cylinder({
+      .width = spec.width,
+      .height = spec.height,
+      .depth = spec.depth,
+      .side_count = spec.side_count,
+      .capped = spec.capped,
+      .flip_faces = spec.flip_faces,
+  });
+  prepare_primitive_document(document, {}, native_material_slot(spec.material));
+  return Result<PolygonDocument>::success(
+      PolygonDocumentNativeAccess::from_native(std::move(document)));
+}
+
+Result<PolygonDocument> PolygonDocument::make_sphere(const SphereSpec &spec) {
+  if (!positive_finite(spec.width) || !positive_finite(spec.height) ||
+      !positive_finite(spec.depth)) {
+    return Result<PolygonDocument>::failure(make_error(
+        ErrorCode::InvalidArgument,
+        "Sphere dimensions must have positive width, height, and depth."));
+  }
+  if (!valid_subdivision_count(spec.radial_segments, 3)) {
+    return Result<PolygonDocument>::failure(make_error(
+        ErrorCode::InvalidArgument,
+        "Sphere radial segment count must be between 3 and 128."));
+  }
+  if (!valid_subdivision_count(spec.rings, 2)) {
+    return Result<PolygonDocument>::failure(
+        make_error(ErrorCode::InvalidArgument,
+                   "Sphere ring count must be between 2 and 128."));
+  }
+
+  quader_poly::Document document = quader_poly::make_sphere({
+      .width = spec.width,
+      .height = spec.height,
+      .depth = spec.depth,
+      .radial_segments = spec.radial_segments,
+      .rings = spec.rings,
+      .hemisphere = spec.hemisphere,
+      .flip_faces = spec.flip_faces,
+  });
+  prepare_primitive_document(document, {}, native_material_slot(spec.material));
+  return Result<PolygonDocument>::success(
+      PolygonDocumentNativeAccess::from_native(std::move(document)));
 }
 
 Result<PolygonDocument> PolygonDocument::make_face(std::span<const Vec3> points,

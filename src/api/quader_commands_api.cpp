@@ -710,6 +710,28 @@ void QuaderCommandsApi::Impl::register_commands() {
   register_command(quader_command::kModelingCancelActivePreview,
                    "Cancel Active Preview",
                    [this] { return api_.modeling().cancel_preview(); });
+  register_command(quader_command::kToolsApplyPrimitiveCreation,
+                   "Apply Primitive Creation",
+                   [this] {
+                     return tools_.has_active_primitive_creation()
+                                ? tools_.commit_active_tool_preview()
+                                : failure(
+                                      "No primitive creation session is active.");
+                   },
+                   {}, [this] {
+                     return tools_.has_active_primitive_creation();
+                   });
+  register_command(quader_command::kToolsCancelPrimitiveCreation,
+                   "Cancel Primitive Creation",
+                   [this] {
+                     return tools_.has_active_primitive_creation()
+                                ? tools_.cancel_active_tool_preview()
+                                : failure(
+                                      "No primitive creation session is active.");
+                   },
+                   {}, [this] {
+                     return tools_.has_active_primitive_creation();
+                   });
   register_command(
       quader_command::kProjectNew, "New Project",
       [this] { return project_.new_project(); });
@@ -905,6 +927,9 @@ void QuaderCommandsApi::Impl::register_viewport_default_keybindings() {
   constexpr std::string_view kOperationPreviewContext =
       "viewportFocus && !textInputActive && !navigation.active && "
       "operationPreview.active";
+  constexpr std::string_view kPrimitiveToolContext =
+      "viewportFocus && !textInputActive && !navigation.active && "
+      "activeTool.create_primitive";
 
   keybindings_.add_default_keybinding(
       std::string(quader_command::kModelingApplyActivePreview.string()),
@@ -912,6 +937,12 @@ void QuaderCommandsApi::Impl::register_viewport_default_keybindings() {
   keybindings_.add_default_keybinding(
       std::string(quader_command::kModelingCancelActivePreview.string()),
       "Escape", std::string(kOperationPreviewContext), 20);
+  keybindings_.add_default_keybinding(
+      std::string(quader_command::kToolsApplyPrimitiveCreation.string()),
+      "Enter", std::string(kPrimitiveToolContext), 50);
+  keybindings_.add_default_keybinding(
+      std::string(quader_command::kToolsCancelPrimitiveCreation.string()),
+      "Escape", std::string(kPrimitiveToolContext), 50);
 
   keybindings_.add_default_keybinding(
       viewport_input_action_target_id("cancel_active_tool"), "Escape",

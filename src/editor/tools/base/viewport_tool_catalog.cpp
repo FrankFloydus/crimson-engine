@@ -7,7 +7,7 @@
 #include "editor/tools/viewport_tool_catalog.hpp"
 
 #include "viewport/host_viewport_contract_adapter.hpp"
-#include "editor/tools/interactive/box_tool.hpp"
+#include "editor/tools/interactive/create_primitive_tool.hpp"
 #include "editor/tools/interactive/cut_tool.hpp"
 #include "editor/tools/interactive/extend_tool.hpp"
 #include "editor/tools/interactive/extrude_tool.hpp"
@@ -32,7 +32,7 @@ std::span<const ViewportTool *const> viewport_tool_catalog() {
   static const ExtrudeTool kExtrudeTool;
   static const RotateTool kRotateTool;
   static const ScaleTool kScaleTool;
-  static const BoxTool kBoxTool;
+  static const CreatePrimitiveTool kCreatePrimitiveTool;
   static const InsertEdgeLoopTool kInsertEdgeLoopTool;
   static const KnifeTool kNifeTool;
   static const CutTool kCutTool;
@@ -48,7 +48,7 @@ std::span<const ViewportTool *const> viewport_tool_catalog() {
       &kExtrudeTool,
       &kRotateTool,
       &kScaleTool,
-      &kBoxTool,
+      &kCreatePrimitiveTool,
       &kInsertEdgeLoopTool,
       &kNifeTool,
       &kCutTool,
@@ -134,6 +134,10 @@ ModelingViewportTool modeling_viewport_tool_for(ViewportToolId tool) {
 }
 
 ViewportToolId viewport_tool_for_modeling(ModelingViewportTool tool) {
+  if (tool == ModelingViewportTool::Cylinder ||
+      tool == ModelingViewportTool::Sphere) {
+    tool = ModelingViewportTool::Box;
+  }
   const std::span<const ViewportTool *const> tools = viewport_tool_catalog();
   const auto found =
       std::find_if(tools.begin(), tools.end(), [&](const Tool *item) {

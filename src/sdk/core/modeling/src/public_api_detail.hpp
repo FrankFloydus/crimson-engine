@@ -10,6 +10,7 @@
 
 #include <algorithm>
 #include <functional>
+#include <limits>
 #include <optional>
 #include <utility>
 
@@ -46,17 +47,31 @@ struct ModelingRepeatOperation {
 };
 
 /**
+ * Retains one owned compiled mesh across render snapshots while authored
+ * topology identity remains unchanged.
+ */
+struct ModelingRenderMeshCacheEntry {
+  ObjectId object{};
+  PolygonContentIdentity content_identity{};
+  std::uint64_t content_revision = 0;
+  MeshPayload mesh;
+};
+
+/**
  * Stores shared mutable state for public API facade handles.
  */
 struct ModelingApiContext {
   ModelingSession session;
   ModelingApiOptions options;
   std::optional<Error> last_error;
+  std::uint64_t error_epoch = 0;
   SelectionEdit default_edit = SelectionEdit::Replace;
   std::string active_tool = "select";
   std::vector<ModelingClipboardObject> clipboard;
   std::optional<ModelingRepeatOperation> repeat_operation;
   bool repeating_operation = false;
+  std::uint64_t preview_payload_revision = 0;
+  std::vector<ModelingRenderMeshCacheEntry> render_mesh_cache;
 };
 
 /**
@@ -73,10 +88,66 @@ struct ModelingPreviewState {
   SliceQuadOptions slice_quad;
   ThickenOptions thicken;
   TransformOptions transform;
+  std::uint64_t payload_revision = 0;
   bool active = true;
 };
 
 namespace detail {
+
+inline void record_error(ModelingApiContext &context, const Error &error) {
+  context.last_error = error;
+  ++context.error_epoch;
+}
+
+[[nodiscard]] inline std::uint64_t
+advance_preview_payload_revision(ModelingApiContext &context) {
+  constexpr std::uint64_t kMaximum =
+      (std::numeric_limits<std::uint64_t>::max)();
+  const std::uint64_t session_revision = context.session.content_revision();
+  const std::uint64_t session_floor =
+      session_revision == kMaximum ? kMaximum : session_revision + 1U;
+  if (context.preview_payload_revision < kMaximum) {
+    ++context.preview_payload_revision;
+  }
+  context.preview_payload_revision =
+      std::max(context.preview_payload_revision, session_floor);
+  return context.preview_payload_revision;
+}
+
+template <typename T, typename Operation>
+[[nodiscard]] Result<T>
+checked_direct_value(ModelingApiContext &context, Operation &&operation) {
+  const std::uint64_t error_epoch = context.error_epoch;
+  try {
+    T value = std::invoke(std::forward<Operation>(operation));
+    if (context.error_epoch != error_epoch) {
+      if (context.last_error.has_value()) {
+        return Result<T>::failure(*context.last_error);
+      }
+      return Result<T>::failure(make_error(
+          ErrorCode::InternalError,
+          "A direct SDK call recorded an error without diagnostics."));
+    }
+    return Result<T>::success(std::move(value));
+  } catch (const ModelingException &exception) {
+    return Result<T>::failure(exception.error());
+  }
+}
+
+template <typename T, typename Operation, typename Validator>
+[[nodiscard]] Result<T> checked_direct_value(
+    ModelingApiContext &context, Operation &&operation, Validator &&validator,
+    Error invalid_value_error) {
+  Result<T> result = checked_direct_value<T>(
+      context, std::forward<Operation>(operation));
+  if (!result.ok()) {
+    return result;
+  }
+  if (!std::invoke(std::forward<Validator>(validator), result.value())) {
+    return Result<T>::failure(std::move(invalid_value_error));
+  }
+  return result;
+}
 
 [[nodiscard]] inline Error unsupported_error(std::string message) {
   return make_error(ErrorCode::UnsupportedOperation, std::move(message));
@@ -137,17 +208,17 @@ polygon_selection_from_union(const SelectionUnion &selection) {
 
 [[nodiscard]] inline RevisionStamp current_revisions(
     const ModelingApiContext &context) {
-  RevisionStamp stamp;
-  for (const SessionObjectSummary &object : context.session.objects()) {
-    stamp.content = std::max(stamp.content, object.content_revision);
-    stamp.selection = std::max(stamp.selection, object.selection_revision);
-  }
-  return stamp;
+  const std::uint64_t content = context.session.content_revision();
+  return {
+      .content = content,
+      .selection = context.session.selection_revision(),
+      .scene = content,
+  };
 }
 
 [[nodiscard]] inline OperationReceipt handle_failure(ModelingApiContext &context,
                                                      Error error) {
-  context.last_error = error;
+  record_error(context, error);
   if (context.options.error_policy == ErrorPolicy::ThrowException) {
     throw ModelingException(std::move(error));
   }
@@ -170,7 +241,7 @@ inline void record_repeatable_operation(ModelingApiContext &context,
 template <typename T>
 [[nodiscard]] T handle_value_failure(ModelingApiContext &context, Error error,
                                      T fallback = {}) {
-  context.last_error = error;
+  record_error(context, error);
   if (context.options.error_policy == ErrorPolicy::ThrowException) {
     throw ModelingException(std::move(error));
   }

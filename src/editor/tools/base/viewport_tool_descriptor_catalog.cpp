@@ -80,14 +80,15 @@ constexpr std::array<ToolDescriptor, 15> kViewportToolDescriptors{{
         .supports_transform_gizmo = true,
     },
     {
-        .tool = ViewportToolId::Box,
+        .tool = ViewportToolId::CreatePrimitive,
         .modeling_tool = ModelingViewportTool::Box,
-        .id = "box",
-        .label = "Box",
-        .shortcut = "B",
+        .id = "create_primitive",
+        .label = "Create Primitive",
+        .shortcut = "Shift+B",
         .kind = ToolKind::Modal,
         .menu_group = ToolMenuGroup::Modeling,
         .owns_viewport = true,
+        .editor_owned_native_lifecycle = true,
     },
     {
         .tool = ViewportToolId::InsertEdgeLoop,
@@ -115,7 +116,6 @@ constexpr std::array<ToolDescriptor, 15> kViewportToolDescriptors{{
         .modeling_tool = ModelingViewportTool::Cut,
         .id = "cut",
         .label = "Cut",
-        .shortcut = "Shift+C",
         .kind = ToolKind::Modal,
         .menu_group = ToolMenuGroup::Modeling,
         .owns_viewport = true,
@@ -193,6 +193,10 @@ const ToolDescriptor *find_viewport_tool_descriptor(ViewportToolId tool) {
 }
 
 const ToolDescriptor *find_viewport_tool_descriptor(ModelingViewportTool tool) {
+  if (tool == ModelingViewportTool::Cylinder ||
+      tool == ModelingViewportTool::Sphere) {
+    tool = ModelingViewportTool::Box;
+  }
   const auto found = std::find_if(kViewportToolDescriptors.begin(),
                                   kViewportToolDescriptors.end(),
                                   [&](const ToolDescriptor &descriptor) {

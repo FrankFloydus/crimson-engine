@@ -112,6 +112,8 @@ ViewportToolResult PointSequenceTool::handle_event(
   case ModelingViewportTool::Rotate:
   case ModelingViewportTool::Scale:
   case ModelingViewportTool::Box:
+  case ModelingViewportTool::Cylinder:
+  case ModelingViewportTool::Sphere:
   case ModelingViewportTool::InsertEdgeLoop:
   case ModelingViewportTool::Cut:
   case ModelingViewportTool::Mirror:

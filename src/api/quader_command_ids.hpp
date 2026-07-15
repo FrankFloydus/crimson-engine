@@ -232,13 +232,18 @@ inline constexpr QuaderCommandId kModelingApplyActivePreview{
     "modeling.apply_active_preview"};
 inline constexpr QuaderCommandId kModelingCancelActivePreview{
     "modeling.cancel_active_preview"};
+inline constexpr QuaderCommandId kToolsApplyPrimitiveCreation{
+    "tools.primitive.apply"};
+inline constexpr QuaderCommandId kToolsCancelPrimitiveCreation{
+    "tools.primitive.cancel"};
 
 inline constexpr QuaderCommandId kToolsActivateSelect{"tools.activate.select"};
 inline constexpr QuaderCommandId kToolsActivateMove{"tools.activate.move"};
 inline constexpr QuaderCommandId kToolsActivateExtend{"tools.activate.extend"};
 inline constexpr QuaderCommandId kToolsActivateRotate{"tools.activate.rotate"};
 inline constexpr QuaderCommandId kToolsActivateScale{"tools.activate.scale"};
-inline constexpr QuaderCommandId kToolsActivateBox{"tools.activate.box"};
+inline constexpr QuaderCommandId kToolsActivateCreatePrimitive{
+    "tools.activate.create_primitive"};
 inline constexpr QuaderCommandId kToolsActivateExtrude{
     "tools.activate.extrude"};
 inline constexpr QuaderCommandId kToolsActivateInsertEdgeLoop{
@@ -369,12 +374,14 @@ inline constexpr QuaderCommandId kTypedCommandIds[] = {
     kModelingFlipVertical,
     kModelingApplyActivePreview,
     kModelingCancelActivePreview,
+    kToolsApplyPrimitiveCreation,
+    kToolsCancelPrimitiveCreation,
     kToolsActivateSelect,
     kToolsActivateMove,
     kToolsActivateExtend,
     kToolsActivateRotate,
     kToolsActivateScale,
-    kToolsActivateBox,
+    kToolsActivateCreatePrimitive,
     kToolsActivateExtrude,
     kToolsActivateInsertEdgeLoop,
     kToolsActivateKnife,

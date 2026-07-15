@@ -280,6 +280,36 @@ TEST(EditorApiTests, NativeModelingMeshHandleRoutesComponentPreviewWorkflow) {
   EXPECT_GT(after->vertices.size(), before->vertices.size());
 }
 
+TEST(EditorApiTests, NativeModelingMeshHandleCannotAliasAnUndoBranch) {
+  CommandTestHarness harness;
+  quader::QuaderEditorApi &editor = harness.editor;
+
+  const quader::QuaderApiResult<quader::QuaderMeshHandle> first_created =
+      editor.modeling().create_box_mesh(
+          quader::QuaderBounds{.min = {-1.0f, -1.0f, -1.0f},
+                               .max = {1.0f, 1.0f, 1.0f}},
+          "Retired Handle Box");
+  ASSERT_TRUE(first_created.ok()) << first_created.error_message();
+  quader::QuaderMeshHandle retired = first_created.value();
+  ASSERT_TRUE(retired.valid());
+  const quader::QuaderModelingObjectId retired_id = retired.id();
+
+  const quader::QuaderApiVoidResult undone = editor.history().undo();
+  ASSERT_TRUE(undone.ok()) << undone.error_message();
+  EXPECT_FALSE(retired.valid());
+
+  const quader::QuaderApiResult<quader::QuaderMeshHandle> branch_created =
+      editor.modeling().create_box_mesh(
+          quader::QuaderBounds{.min = {2.0f, 2.0f, 2.0f},
+                               .max = {3.0f, 3.0f, 3.0f}},
+          "Branch Handle Box");
+  ASSERT_TRUE(branch_created.ok()) << branch_created.error_message();
+  const quader::QuaderMeshHandle branch = branch_created.value();
+  EXPECT_TRUE(branch.valid());
+  EXPECT_NE(branch.id(), retired_id);
+  EXPECT_FALSE(retired.valid());
+}
+
 constexpr float kTestPositionEpsilon = 0.0001f;
 
 void expect_vec3_near(quader::QVec3 actual, quader::QVec3 expected) {
@@ -1190,6 +1220,35 @@ TEST(EditorApiTests,
   std::filesystem::remove(path, ignored);
 }
 
+TEST(EditorApiTests,
+     CancelingPrimitiveSessionDoesNotHideAnInterveningSceneEdit) {
+  const std::filesystem::path path =
+      project_test_path("cancel-primitive-concurrent-edit");
+  CommandTestHarness harness;
+  quader::QuaderEditorApi &editor = harness.editor;
+  ASSERT_TRUE(save_scene_as_native(editor, path).ok());
+  ASSERT_FALSE(editor.project().dirty());
+
+  ASSERT_TRUE(
+      editor.tools().activate(quader::ViewportToolId::CreatePrimitive).ok());
+  ASSERT_FALSE(editor.project().dirty());
+  quader::QuaderCreateEntityArgs args;
+  args.name = "Primitive Session Concurrent Edit";
+  const quader::QuaderApiResult<quader::QuaderEntityRef> created =
+      editor.scene().create_entity(args);
+  ASSERT_TRUE(created.ok()) << created.error_message();
+  ASSERT_TRUE(editor.project().dirty());
+
+  const quader::QuaderApiVoidResult canceled =
+      editor.tools().cancel_active_tool_preview();
+  ASSERT_TRUE(canceled.ok()) << canceled.error_message();
+  EXPECT_TRUE(editor.project().dirty());
+  EXPECT_TRUE(editor.query().entity(created.value().id).has_value());
+
+  std::error_code ignored;
+  std::filesystem::remove(path, ignored);
+}
+
 TEST(EditorApiTests, ProjectNewCommandOpensCleanUnsavedEmptyProject) {
   const std::filesystem::path path = project_test_path("new-command");
   CommandTestHarness harness;
@@ -1957,6 +2016,197 @@ TEST(EditorApiTests, GlobalCommandKeybindingsDoNotStealTextInputOrViewportOnlySh
             quader::ViewportShortcutKind::ActivateTool);
   EXPECT_EQ(pivot_with_viewport_focus.shortcut.tool,
             quader::ViewportToolId::Pivot);
+}
+
+TEST(EditorApiTests,
+     PrimitiveToolShortcutsResolveWithoutSameContextConflicts) {
+  const std::filesystem::path path =
+      keybinding_test_path("primitive-tool-shortcuts");
+  CommandTestHarness harness;
+  quader::QuaderEditorApi &editor = harness.editor;
+  ASSERT_TRUE(editor.commands().set_keybinding_storage_path(path).ok());
+
+  EXPECT_EQ(editor.commands().shortcut_for(
+                quader::quader_command::kToolsActivateCreatePrimitive),
+            "Shift+B");
+  const quader::QuaderViewportKeybindingDispatch dispatch =
+      editor.commands().dispatch_viewport_input_binding(
+          single_input_chord("Shift+B"), {}, true, false);
+  ASSERT_EQ(
+      dispatch.kind,
+      quader::QuaderViewportKeybindingDispatch::Kind::ViewportShortcut);
+  EXPECT_EQ(dispatch.shortcut.kind,
+            quader::ViewportShortcutKind::ActivateTool);
+  EXPECT_EQ(dispatch.shortcut.tool,
+            quader::ViewportToolId::CreatePrimitive);
+
+  EXPECT_EQ(editor.commands()
+                .dispatch_viewport_input_binding(
+                    single_input_chord("Shift+C"), {}, true, false)
+                .kind,
+            quader::QuaderViewportKeybindingDispatch::Kind::NoMatch);
+  EXPECT_EQ(editor.commands()
+                .dispatch_viewport_input_binding(
+                    single_input_chord("Shift+S"), {}, true, false)
+                .kind,
+            quader::QuaderViewportKeybindingDispatch::Kind::NoMatch);
+
+  EXPECT_TRUE(editor.commands()
+                  .shortcut_for(quader::quader_command::kToolsActivateCut)
+                  .empty());
+  const std::vector<quader::QuaderKeybindingConflict> cylinder_conflicts =
+      editor.commands().conflicts_for_shortcut(
+          "Shift+C",
+          "viewportFocus && !textInputActive && !navigation.active");
+  EXPECT_TRUE(cylinder_conflicts.empty());
+}
+
+TEST(EditorApiTests,
+     CreatePrimitiveExposesDynamicSettingsAndRemainsActiveUntilCancel) {
+  CommandTestHarness harness;
+  quader::QuaderEditorApi &editor = harness.editor;
+  const auto control = [](const quader::QuaderToolSettingsTarget &target,
+                          std::string_view id) {
+    return std::find_if(target.controls.begin(), target.controls.end(),
+                        [id](const auto &item) { return item.id == id; });
+  };
+
+  ASSERT_TRUE(
+      editor.tools().activate(quader::ViewportToolId::CreatePrimitive).ok());
+  EXPECT_EQ(editor.tools().active_tool(), "create_primitive");
+  const quader::ViewportToolState box_tool_state{
+      .active_tool = quader::ViewportToolId::CreatePrimitive,
+  };
+  const quader::QuaderViewportKeybindingDispatch enter_without_focus =
+      editor.commands().dispatch_viewport_input_binding(
+          single_input_chord("Enter"), box_tool_state, false, false);
+  EXPECT_EQ(enter_without_focus.kind,
+            quader::QuaderViewportKeybindingDispatch::Kind::NoMatch);
+  const quader::QuaderViewportKeybindingDispatch enter_dispatch =
+      editor.commands().dispatch_viewport_input_binding(
+          single_input_chord("Enter"), box_tool_state, true, false);
+  ASSERT_EQ(enter_dispatch.kind,
+            quader::QuaderViewportKeybindingDispatch::Kind::Command);
+  EXPECT_EQ(enter_dispatch.command_id,
+            quader::quader_command::kToolsApplyPrimitiveCreation.string());
+  const quader::QuaderViewportKeybindingDispatch escape_without_focus =
+      editor.commands().dispatch_viewport_input_binding(
+          single_input_chord("Escape"), box_tool_state, false, false);
+  EXPECT_EQ(escape_without_focus.kind,
+            quader::QuaderViewportKeybindingDispatch::Kind::NoMatch);
+  const quader::QuaderViewportKeybindingDispatch escape_dispatch =
+      editor.commands().dispatch_viewport_input_binding(
+          single_input_chord("Escape"), box_tool_state, true, false);
+  ASSERT_EQ(escape_dispatch.kind,
+            quader::QuaderViewportKeybindingDispatch::Kind::Command);
+  EXPECT_EQ(escape_dispatch.command_id,
+            quader::quader_command::kToolsCancelPrimitiveCreation.string());
+  quader::QuaderToolSettingsTarget settings = editor.tools().active_settings();
+  EXPECT_TRUE(settings.active);
+  EXPECT_TRUE(settings.apply_visible);
+  EXPECT_FALSE(settings.can_apply);
+  EXPECT_TRUE(settings.can_cancel);
+  ASSERT_NE(control(settings, "primitive.type"), settings.controls.end());
+  ASSERT_NE(control(settings, "primitive.box.subdivisions_x"),
+            settings.controls.end());
+  ASSERT_NE(control(settings, "primitive.box.subdivisions_y"),
+            settings.controls.end());
+  ASSERT_NE(control(settings, "primitive.box.subdivisions_z"),
+            settings.controls.end());
+  ASSERT_TRUE(editor.tools()
+                  .set_setting("create_primitive",
+                               "primitive.box.subdivisions_x", 4.0)
+                  .ok());
+  EXPECT_FALSE(editor.tools().commit_active_tool_preview().ok());
+  EXPECT_EQ(editor.tools().active_tool(), "create_primitive");
+
+  ASSERT_TRUE(editor.tools()
+                  .set_setting("create_primitive", "primitive.type",
+                               "cylinder")
+                  .ok());
+  EXPECT_EQ(editor.tools().active_tool(), "create_primitive");
+  EXPECT_EQ(editor.query().tool_status().active_tool,
+            quader::QuaderViewportTool::CreatePrimitive);
+  settings = editor.tools().active_settings();
+  ASSERT_NE(control(settings, "primitive.cylinder.side_count"),
+            settings.controls.end());
+  ASSERT_NE(control(settings, "primitive.cylinder.caps"),
+            settings.controls.end());
+  ASSERT_NE(control(settings, "primitive.flip_faces"),
+            settings.controls.end());
+  ASSERT_TRUE(editor.tools()
+                  .set_setting("create_primitive",
+                               "primitive.cylinder.side_count", 12.0)
+                  .ok());
+  ASSERT_TRUE(editor.tools()
+                  .set_setting("create_primitive",
+                               "primitive.cylinder.caps", false)
+                  .ok());
+
+  ASSERT_TRUE(editor.tools()
+                  .set_setting("create_primitive", "primitive.type", "sphere")
+                  .ok());
+  EXPECT_EQ(editor.tools().active_tool(), "create_primitive");
+  EXPECT_EQ(editor.query().tool_status().active_tool,
+            quader::QuaderViewportTool::CreatePrimitive);
+  settings = editor.tools().active_settings();
+  ASSERT_NE(control(settings, "primitive.sphere.radial_segments"),
+            settings.controls.end());
+  ASSERT_NE(control(settings, "primitive.sphere.rings"),
+            settings.controls.end());
+  ASSERT_NE(control(settings, "primitive.sphere.hemisphere"),
+            settings.controls.end());
+  ASSERT_NE(control(settings, "primitive.flip_faces"),
+            settings.controls.end());
+
+  const quader::QuaderApiVoidResult canceled =
+      editor.tools().cancel_active_tool_preview();
+  EXPECT_TRUE(canceled.ok()) << canceled.error_message();
+  EXPECT_EQ(editor.tools().active_tool(), "select");
+  EXPECT_FALSE(editor.tools().active_settings().active);
+}
+
+TEST(EditorApiTests,
+     PrimitiveCommandsDoNotFallThroughToOperationPreviews) {
+  constexpr std::array kPrimitiveCommands{
+      quader::quader_command::kToolsApplyPrimitiveCreation,
+      quader::quader_command::kToolsCancelPrimitiveCreation,
+  };
+
+  for (const quader::QuaderCommandId command : kPrimitiveCommands) {
+    SCOPED_TRACE(command.string());
+    CommandTestHarness harness;
+    quader::QuaderEditorApi &editor = harness.editor;
+    (void)create_selected_box(editor, "Primitive Command Isolation Box");
+    const quader::QuaderApiVoidResult preview = editor.commands().execute(
+        editor.commands().command_id_for_modeling_action("half_cut"));
+    ASSERT_TRUE(preview.ok()) << preview.error_message();
+
+    const quader::QuaderApiVoidResult isolated =
+        editor.commands().execute(command);
+    EXPECT_FALSE(isolated.ok());
+    const quader::QuaderApiVoidResult canceled =
+        editor.tools().cancel_active_tool_preview();
+    EXPECT_TRUE(canceled.ok()) << canceled.error_message();
+  }
+}
+
+TEST(EditorApiTests, GenericModalCancelRoutesThroughPrimitiveOwner) {
+  CommandTestHarness harness;
+  quader::QuaderEditorApi &editor = harness.editor;
+  ASSERT_TRUE(
+      editor.tools().activate(quader::ViewportToolId::CreatePrimitive).ok());
+  ASSERT_TRUE(editor.tools()
+                  .set_setting("create_primitive", "primitive.type", "sphere")
+                  .ok());
+  ASSERT_TRUE(editor.tools().has_active_primitive_creation());
+
+  const quader::QuaderApiVoidResult canceled =
+      editor.tools().cancel_modal_tool();
+
+  EXPECT_TRUE(canceled.ok()) << canceled.error_message();
+  EXPECT_FALSE(editor.tools().has_active_primitive_creation());
+  EXPECT_EQ(editor.tools().active_tool(), "select");
 }
 
 TEST(EditorApiTests, ViewportSelectionModeShortcutsResolveAsRouterIntents) {
@@ -3184,6 +3434,8 @@ TEST(EditorApiTests,
 
   run(quader::ViewportToolId::Pivot, "Undo Pivot Preview Box");
   run(quader::ViewportToolId::LinearArray, "Undo Array Preview Box");
+  run(quader::ViewportToolId::CreatePrimitive,
+      "Undo Primitive Preview Box");
 }
 
 TEST(EditorApiTests, HistoryUndoAfterSliceQuadFinalizeRestoresPreOperationMeshAndSelection) {
@@ -6473,7 +6725,8 @@ TEST(EditorApiTests,
   create_selected_box(editor, "Native Activation Modal Source");
   const quader::QuaderHistorySnapshot history_before = editor.query().history();
 
-  ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::Box).ok());
+  ASSERT_TRUE(
+      editor.tools().activate(quader::ViewportToolId::CreatePrimitive).ok());
   ASSERT_TRUE(editor.query().tool_status().modal_tool_owns_viewport);
   ASSERT_TRUE(
       editor.tools().activate(quader::ViewportToolId::LinearArray).ok());
@@ -7566,15 +7819,16 @@ TEST(EditorApiTests, QueryHistorySnapshotMatchesPublicHistoryApiSnapshot) {
     expect_snapshots_match();
 }
 
-TEST(EditorApiTests, HistoryUndoUsesDocumentHistoryWhenOnlyIdleModalToolIsActive) {
+TEST(EditorApiTests,
+     HistoryUndoUsesDocumentHistoryWhenOnlyIdleLegacyModalToolIsActive) {
     CommandTestHarness harness;
     quader::QuaderEditorApi& editor = harness.editor;
     create_selected_box(editor, "Idle Modal Undo Box");
     ASSERT_TRUE(editor.history().can_undo());
 
-    const quader::QuaderApiVoidResult activate_box =
-        editor.tools().activate(quader::ViewportToolId::Box);
-    ASSERT_TRUE(activate_box.ok()) << activate_box.error_message();
+    const quader::QuaderApiVoidResult activate_poly =
+        editor.tools().activate(quader::ViewportToolId::Poly);
+    ASSERT_TRUE(activate_poly.ok()) << activate_poly.error_message();
     EXPECT_TRUE(editor.modeling().can_cancel_active_tool_or_preview());
 
     const quader::QuaderApiVoidResult undo =

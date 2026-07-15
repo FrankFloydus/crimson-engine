@@ -264,6 +264,7 @@ add_library(quader_editor_services STATIC
     src/editor/commands/document_command_service.cpp
     src/editor/commands/modeling_command_execution_service.cpp
     src/editor/history/editor_history_service.cpp
+    src/editor/modeling/services/primitive_creation_tool_service.cpp
     src/editor/pivot/pivot_tool_service.cpp
     src/editor/placement/viewport_point_placement_service.cpp
     src/editor/selection/editor_selection_service.cpp
@@ -1061,6 +1062,7 @@ if(QUADER_BUILD_TESTS)
         tests/standard_material_documents_tests.cpp
         tests/project_workspace_storage_tests.cpp
         tests/project_session_workspace_tests.cpp
+        tests/primitive_creation_tool_service_tests.cpp
         tests/qdr_binary_container_tests.cpp
         tests/qdr_binary_scene_codec_tests.cpp
         tests/modeling_session_service_split_tests.cpp

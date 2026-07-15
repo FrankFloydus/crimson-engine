@@ -90,9 +90,10 @@ private:
 
 template <> class ProjectIoResult<void> final {
 public:
-  [[nodiscard]] static ProjectIoResult success() {
+  [[nodiscard]] static ProjectIoResult success(std::string warning = {}) {
     ProjectIoResult result;
     result.ok_ = true;
+    result.warning_ = std::move(warning);
     return result;
   }
 
@@ -111,10 +112,17 @@ public:
   [[nodiscard]] bool ok() const noexcept { return ok_; }
   [[nodiscard]] explicit operator bool() const noexcept { return ok(); }
   [[nodiscard]] const ProjectIoError &error() const noexcept { return error_; }
+  /** Returns a non-fatal persistence warning carried by a successful result. */
+  [[nodiscard]] const std::string &warning() const noexcept { return warning_; }
+  /** Moves the non-fatal persistence warning out of this successful result. */
+  [[nodiscard]] std::string take_warning() noexcept {
+    return std::move(warning_);
+  }
 
 private:
   bool ok_ = false;
   ProjectIoError error_;
+  std::string warning_;
 };
 
 /// Identifies one folder-backed Quader project persistently.

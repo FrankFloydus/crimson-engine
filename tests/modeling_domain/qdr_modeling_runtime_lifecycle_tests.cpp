@@ -93,6 +93,75 @@ void history_restore_bumps_revisions_and_preserves_redo()
 	require_test(session.state().selection_revision > undone_selection_revision, "redo restore should advance selection revision");
 }
 
+void history_restore_preserves_lifetime_allocation_cursors()
+{
+	quader_editor_core::EditorSession session;
+	const quader_editor_core::CommandResult object_created =
+		session.apply_history_command(
+			[](quader_editor_core::EditorSession& session) {
+				return session.create_box_from_bounds(
+					{ -1.0F, -1.0F, -1.0F }, { 1.0F, 1.0F, 1.0F });
+			});
+	require_test(object_created.ok && object_created.changed,
+		"object allocation fixture should create tracked content");
+	const quader_editor_core::CommandResult light_created =
+		session.apply_history_command(
+			[](quader_editor_core::EditorSession& session) {
+				return session.create_light(
+					quader_editor_core::LightType::Point,
+					{ 0.0F, 1.0F, 0.0F }, { 0.0F, -1.0F, 0.0F });
+			});
+	require_test(light_created.ok && light_created.changed,
+		"light allocation fixture should create tracked content");
+	require_test(session.objects().front().id == 1 &&
+		session.lights().front().id == 1 && session.next_object_id() == 2 &&
+		session.next_light_id() == 2,
+		"fixture should allocate the first object and light identities");
+
+	require_test(session.undo().applied && session.lights().empty(),
+		"first undo should remove the created light");
+	require_test(session.next_object_id() == 2 && session.next_light_id() == 2,
+		"undoing a light must preserve both allocation high-water marks");
+	require_test(session.undo().applied && session.objects().empty(),
+		"second undo should remove the created object");
+	require_test(session.next_object_id() == 2 && session.next_light_id() == 2,
+		"undoing an object must preserve both allocation high-water marks");
+
+	require_test(session.redo().applied && session.objects().front().id == 1,
+		"first redo should restore the original object identity");
+	require_test(session.next_object_id() == 2 && session.next_light_id() == 2,
+		"redoing an object must not rewind the light allocator");
+	require_test(session.redo().applied && session.lights().front().id == 1,
+		"second redo should restore the original light identity");
+	require_test(session.next_object_id() == 2 && session.next_light_id() == 2,
+		"redoing a light must preserve both allocation high-water marks");
+
+	require_test(session.undo().applied && session.undo().applied,
+		"fixture should return to its empty state before branching");
+	const quader_editor_core::CommandResult branch_object =
+		session.apply_history_command(
+			[](quader_editor_core::EditorSession& editor_session) {
+				return editor_session.create_box_from_bounds(
+					{ 2.0F, 2.0F, 2.0F }, { 3.0F, 3.0F, 3.0F });
+			});
+	const quader_editor_core::CommandResult branch_light =
+		session.apply_history_command(
+			[](quader_editor_core::EditorSession& editor_session) {
+				return editor_session.create_light(
+					quader_editor_core::LightType::Point,
+					{ 2.0F, 1.0F, 0.0F }, { 0.0F, -1.0F, 0.0F });
+			});
+	require_test(branch_object.ok && branch_object.changed &&
+		branch_light.ok && branch_light.changed,
+		"history branch should create replacement content");
+	require_test(session.objects().front().id == 2 &&
+		session.lights().front().id == 2 && session.next_object_id() == 3 &&
+		session.next_light_id() == 3,
+		"a history branch must allocate fresh object and light identities");
+	require_test(!session.history_status().can_redo,
+		"a changed history branch should clear redo state");
+}
+
 void set_objects_normalizes_next_id_and_active_selection()
 {
 	quader_editor_core::PolygonObject first;
@@ -259,6 +328,7 @@ TEST(QdrModelingRuntimeLifecycleTests, QdrEditorCoreRuntimeLifecycleTests) {
 	default_scene_reset_restores_stable_runtime_defaults();
 	mark_clean_tracks_content_changes_not_selection_only_changes();
 	history_restore_bumps_revisions_and_preserves_redo();
+	history_restore_preserves_lifetime_allocation_cursors();
 	set_objects_normalizes_next_id_and_active_selection();
 	light_entities_track_selection_content_and_history();
 	selecting_a_light_clears_mesh_selection();

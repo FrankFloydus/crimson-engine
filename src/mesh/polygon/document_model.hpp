@@ -96,11 +96,39 @@ struct CubePrimitiveSpec {
     int width_segments = 1;
     int height_segments = 1;
     int depth_segments = 1;
+    bool flip_faces = false;
+};
+
+/**
+ * Represents a Cylinder Primitive Spec value used by the polygon document and mesh editing core.
+ */
+struct CylinderPrimitiveSpec {
+    float width = 2.0F;
+    float height = 2.0F;
+    float depth = 2.0F;
+    int side_count = 32;
+    bool capped = true;
+    bool flip_faces = false;
+};
+
+/**
+ * Represents a Sphere Primitive Spec value used by the polygon document and mesh editing core.
+ */
+struct SpherePrimitiveSpec {
+    float width = 2.0F;
+    float height = 2.0F;
+    float depth = 2.0F;
+    int radial_segments = 32;
+    int rings = 16;
+    bool hemisphere = false;
+    bool flip_faces = false;
 };
 
 [[nodiscard]] Edge make_edge(ElementId a, ElementId b);
 
 [[nodiscard]] Document make_cube(const CubePrimitiveSpec& spec);
+[[nodiscard]] Document make_cylinder(const CylinderPrimitiveSpec& spec);
+[[nodiscard]] Document make_sphere(const SpherePrimitiveSpec& spec);
 [[nodiscard]] ElementId add_vertex(Document& document, quader::QVec3 position);
 [[nodiscard]] ElementId add_face(Document& document, std::span<const ElementId> vertices, std::uint32_t material_slot = 0);
 [[nodiscard]] const Vertex* find_vertex(const Document& document, ElementId id);

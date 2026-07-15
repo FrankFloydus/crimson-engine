@@ -587,9 +587,47 @@ TEST(ProjectSessionWorkspace,
   (void)expect_unchanged_after_manifest_failure([&]() {
     return project.save_as(unsaved->session_id, save_as_path);
   });
+  EXPECT_FALSE(
+      std::filesystem::exists(project.root() / save_as_path.native_path()));
   EXPECT_EQ(unsaved->scene_id, unsaved_id);
   EXPECT_FALSE(unsaved->path.has_value());
   EXPECT_EQ(project.manifest()->find_scene(save_as_path), nullptr);
+
+  const ProjectRelativePath occupied_save_as_path =
+      project_path("Scenes/ManifestFailureOccupied.qdr");
+  const std::filesystem::path occupied_destination =
+      project.root() / occupied_save_as_path.native_path();
+  const std::array<char, 12> original_bytes{
+      'n', 'o', 't', '-', 'a', '-', 'q', 'd', 'r', '\0', '\r', '\n'};
+  {
+    std::ofstream stream(occupied_destination,
+                         std::ios::binary | std::ios::trunc);
+    ASSERT_TRUE(stream.is_open());
+    stream.write(original_bytes.data(),
+                 static_cast<std::streamsize>(original_bytes.size()));
+    ASSERT_TRUE(stream.good());
+  }
+  const std::vector<char> occupied_before =
+      read_file_bytes(occupied_destination);
+  const std::filesystem::path occupied_alias =
+      project.root() / "Scenes" / "ManifestFailureOccupiedAlias.qdr";
+  std::error_code occupied_link_error;
+  std::filesystem::create_hard_link(occupied_destination, occupied_alias,
+                                    occupied_link_error);
+  (void)expect_unchanged_after_manifest_failure([&]() {
+    return project.save_as(unsaved->session_id, occupied_save_as_path);
+  });
+  EXPECT_EQ(read_file_bytes(occupied_destination), occupied_before);
+  if (!occupied_link_error) {
+    std::error_code equivalent_error;
+    EXPECT_TRUE(std::filesystem::equivalent(occupied_destination,
+                                            occupied_alias,
+                                            equivalent_error));
+    EXPECT_FALSE(equivalent_error) << equivalent_error.message();
+  }
+  EXPECT_EQ(unsaved->scene_id, unsaved_id);
+  EXPECT_FALSE(unsaved->path.has_value());
+  EXPECT_EQ(project.manifest()->find_scene(occupied_save_as_path), nullptr);
 }
 
 TEST(ProjectSessionWorkspace,

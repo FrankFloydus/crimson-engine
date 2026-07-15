@@ -2756,7 +2756,7 @@ TEST(ViewportHoverControllerTests,
   quader::ViewportCameraController camera;
   camera.set_viewport_size(800.0f, 600.0f);
   quader::ViewportHoverWorkRequest request{
-      .active_tool = quader::ViewportToolId::Box,
+      .active_tool = quader::ViewportToolId::CreatePrimitive,
       .grid_preset = 6,
       .grid_snap_enabled = true,
       .mouse_local = {320.0f, 240.0f},

@@ -6,6 +6,9 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "editor/modeling/services/modeling_session_services.hpp"
 
+#include "editor/modeling/modeling_viewport_camera_adapter.hpp"
+#include "editor/selection/scene_selection_summary.hpp"
+
 #include "assets/asset_registry.hpp"
 #include "editor/modeling/services/modeling_instant_operation_catalog.hpp"
 #include "editor/modeling/services/modeling_operation_settings.hpp"
@@ -343,27 +346,6 @@ void mix_overlay_signature_hash(std::uint64_t &hash, quader::QVec3 value) {
   mix_overlay_signature_hash(hash, static_cast<double>(value.x));
   mix_overlay_signature_hash(hash, static_cast<double>(value.y));
   mix_overlay_signature_hash(hash, static_cast<double>(value.z));
-}
-
-quader_editor_core::ViewportCameraState
-to_runtime_camera(const ModelingViewportCamera &value) {
-  quader_editor_core::ViewportCameraState camera;
-  camera.projection = value.orthographic
-                          ? quader_editor_core::CameraProjection::Orthographic
-                          : quader_editor_core::CameraProjection::Perspective;
-  camera.transform = {
-      .x_axis = value.x_axis,
-      .y_axis = value.y_axis,
-      .z_axis = value.z_axis,
-      .origin = value.origin,
-  };
-  camera.viewport_size = {
-      std::max(value.viewport_size.x, 1.0f),
-      std::max(value.viewport_size.y, 1.0f),
-  };
-  camera.orthographic_size = std::max(value.orthographic_size, 0.0001);
-  camera.fov_degrees = value.fov_degrees;
-  return camera;
 }
 
 QVec3 from_runtime(quader::QVec3 value) { return {value.x, value.y, value.z}; }
@@ -719,18 +701,8 @@ ModelingSelectionSummary ModelingSelectionService::selection_summary(
     const quader_editor_core::EditorSession &session,
     const SceneDocument &scene, ModelingSelectionMode app_selection_mode) const {
   if (app_selection_mode == ModelingSelectionMode::Group) {
-    const std::vector<EntityId> selected = scene.selected_entities();
-    const bool has_selection = !selected.empty();
-    return ModelingSelectionSummary{
-        .mode = ModelingSelectionMode::Group,
-        .has_selection = has_selection,
-        .active_kind = has_selection ? ModelingActiveSelectionKind::Object
-                                     : ModelingActiveSelectionKind::None,
-        .selected_object_count =
-            static_cast<std::uint32_t>(selected.size()),
-        .content_revision = session.state().content_revision,
-        .selection_revision = scene.revision(),
-    };
+    return make_scene_selection_summary(scene, ModelingSelectionMode::Group,
+                                        session.state().content_revision);
   }
 
   const quader_editor_core::ActiveSelection active =
@@ -1410,7 +1382,7 @@ ModelingSelectionService::rectangle_projected_hits_request(
     quader_editor_core::SelectionMode selection_mode,
     const ModelingBoxSelectRequest &request) const {
   const quader_editor_core::ViewportCameraState camera =
-      to_runtime_camera(request.camera);
+      modeling_runtime_camera(request.camera);
   quader_editor_core::RectangleProjectedHitsRequest hits_request;
   hits_request.mode = selection_mode;
   hits_request.match =
@@ -1786,7 +1758,8 @@ bool ModelingSelectionService::apply_rectangle_selection(
   quader_editor_core::normalize_active_object_id(state.objects,
                                                  state.active_object_id);
   state.dirty = true;
-  ++state.selection_revision;
+  state.selection_revision =
+      quader_editor_core::advance_session_revision(state.selection_revision);
   return true;
 }
 
@@ -2004,6 +1977,7 @@ bool SceneModelingSyncService::
         scene.modeling_object(*entity);
     const MeshComponent *mesh = scene.mesh(*entity);
     if (modeling_object == nullptr || mesh == nullptr ||
+        scene.kind(*entity) != EntityKind::Mesh ||
         modeling_object->object_id != object.id ||
         modeling_object->material_slot !=
             static_cast<std::uint32_t>(object.material_id) ||

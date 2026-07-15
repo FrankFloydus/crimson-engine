@@ -20,7 +20,7 @@ enum class ViewportToolId {
     Extrude,
     Rotate,
     Scale,
-    Box,
+    CreatePrimitive,
     InsertEdgeLoop,
     Knife,
     Cut,

@@ -125,6 +125,8 @@ enum class ModelingViewportTool {
   Rotate,
   Scale,
   Box,
+  Cylinder,
+  Sphere,
   InsertEdgeLoop,
   Knife,
   Cut,

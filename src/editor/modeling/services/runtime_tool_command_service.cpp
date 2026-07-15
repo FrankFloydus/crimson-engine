@@ -6,6 +6,8 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "editor/modeling/services/runtime_tool_command_service.hpp"
 
+#include "editor/modeling/modeling_viewport_camera_adapter.hpp"
+
 #include <algorithm>
 #include <utility>
 
@@ -25,27 +27,6 @@ quader_poly::Ray to_runtime(const ModelingRay &ray) {
   };
 }
 
-quader_editor_core::ViewportCameraState
-to_runtime(const ModelingViewportCamera &value) {
-  quader_editor_core::ViewportCameraState camera;
-  camera.projection = value.orthographic
-                          ? quader_editor_core::CameraProjection::Orthographic
-                          : quader_editor_core::CameraProjection::Perspective;
-  camera.transform = {
-      .x_axis = to_runtime(value.x_axis),
-      .y_axis = to_runtime(value.y_axis),
-      .z_axis = to_runtime(value.z_axis),
-      .origin = to_runtime(value.origin),
-  };
-  camera.viewport_size = {
-      std::max(value.viewport_size.x, 1.0f),
-      std::max(value.viewport_size.y, 1.0f),
-  };
-  camera.orthographic_size = std::max(value.orthographic_size, 0.0001);
-  camera.fov_degrees = value.fov_degrees;
-  return camera;
-}
-
 quader_editor_core::ViewportInteractionTool
 to_runtime(ModelingViewportTool tool) {
   switch (tool) {
@@ -60,6 +41,8 @@ to_runtime(ModelingViewportTool tool) {
   case ModelingViewportTool::Scale:
     return quader_editor_core::ViewportInteractionTool::Scale;
   case ModelingViewportTool::Box:
+  case ModelingViewportTool::Cylinder:
+  case ModelingViewportTool::Sphere:
     return quader_editor_core::ViewportInteractionTool::Box;
   case ModelingViewportTool::InsertEdgeLoop:
     return quader_editor_core::ViewportInteractionTool::InsertEdgeLoop;
@@ -122,7 +105,7 @@ insert_edge_loop_pick_settings(const ModelingToolRayEvent &event,
 quader_editor_core::CutRayRuntimeCommandSettings
 cut_ray_settings(const ModelingToolRayEvent &event, bool dragging) {
   quader_editor_core::CutRayRuntimeCommandSettings settings;
-  settings.camera = to_runtime(event.camera);
+  settings.camera = modeling_runtime_camera(event.camera);
   settings.ray = to_runtime(event.ray);
   settings.grid_size = event.grid_size;
   settings.dragging = dragging;
@@ -132,7 +115,7 @@ cut_ray_settings(const ModelingToolRayEvent &event, bool dragging) {
 quader_editor_core::MirrorRayRuntimeCommandSettings
 mirror_ray_settings(const ModelingToolRayEvent &event, bool dragging) {
   quader_editor_core::MirrorRayRuntimeCommandSettings settings;
-  settings.camera = to_runtime(event.camera);
+  settings.camera = modeling_runtime_camera(event.camera);
   settings.ray = to_runtime(event.ray);
   settings.grid_size = event.grid_size;
   settings.dragging = dragging;
@@ -157,7 +140,7 @@ box_height_settings(const ModelingBoxToolEvent &event) {
   settings.snap_enabled = event.snap_enabled;
   settings.has_camera = event.has_camera;
   if (event.has_camera) {
-    settings.camera = to_runtime(event.camera);
+    settings.camera = modeling_runtime_camera(event.camera);
   }
   return settings;
 }
@@ -336,7 +319,7 @@ quader_editor_core::EditorRuntimeCommand
 RuntimeToolCommandService::update_poly_hover(
     const ModelingToolRayEvent &event) {
   quader_editor_core::PolyHoverRuntimeCommandSettings settings;
-  settings.camera = to_runtime(event.camera);
+  settings.camera = modeling_runtime_camera(event.camera);
   settings.ray = to_runtime(event.ray);
   settings.grid_size = event.grid_size;
   settings.snap_enabled = event.snap_enabled;

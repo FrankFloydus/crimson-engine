@@ -6,6 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "ui/qt_command_event_filter.hpp"
 
+#include "api/quader_command_ids.hpp"
 #include "api/quader_editor_api.hpp"
 #include "core/logger.hpp"
 #include "ui/qt_input_adapter.hpp"
@@ -25,6 +26,7 @@
 #include <QWindow>
 
 #include <optional>
+#include <string>
 #include <utility>
 
 namespace quader {
@@ -49,6 +51,47 @@ bool is_viewport_surface_container(const QWidget *widget) {
     }
   }
   return false;
+}
+
+bool is_primitive_tool(ViewportToolId tool) {
+  return tool == ViewportToolId::CreatePrimitive;
+}
+
+bool belongs_to_tool_settings_window(const QWidget *widget) {
+  for (const QWidget *current = widget; current != nullptr;
+       current = current->parentWidget()) {
+    if (current->objectName() == QStringLiteral("floating.tool_settings")) {
+      return true;
+    }
+  }
+  return false;
+}
+
+QAbstractSpinBox *focused_spin_box(QWidget *widget) {
+  for (QWidget *current = widget; current != nullptr;
+       current = current->parentWidget()) {
+    if (auto *spin = dynamic_cast<QAbstractSpinBox *>(current)) {
+      return spin;
+    }
+  }
+  return nullptr;
+}
+
+QComboBox *focused_combo_box(QWidget *widget) {
+  for (QWidget *current = widget; current != nullptr;
+       current = current->parentWidget()) {
+    if (auto *combo = dynamic_cast<QComboBox *>(current)) {
+      return combo;
+    }
+  }
+  return nullptr;
+}
+
+bool is_primitive_finalize_command(const std::string &command_id) {
+  return command_id ==
+             quader_command::kToolsApplyPrimitiveCreation.string() ||
+         command_id ==
+             quader_command::kToolsCancelPrimitiveCreation.string();
 }
 
 } // namespace
@@ -115,9 +158,37 @@ bool QtCommandEventFilter::eventFilter(QObject *watched, QEvent *event) {
 
     const ViewportToolState state = qt_command_dispatch_tool_state(
         tool_state_provider_, editor_->viewports().grid_preset());
-    const QuaderViewportKeybindingDispatch dispatch =
+    QWidget *const focus_widget = QApplication::focusWidget();
+    const bool text_input_active = text_input_has_focus();
+    const bool primitive_tool_settings_editor_active =
+        is_primitive_tool(state.active_tool) &&
+        belongs_to_tool_settings_window(focus_widget) &&
+        (text_input_active || focused_combo_box(focus_widget) != nullptr);
+    QuaderViewportKeybindingDispatch dispatch =
         editor_->commands().dispatch_viewport_input_binding(
-            *chord, state, false, text_input_has_focus());
+            *chord, state, false, text_input_active);
+    if (dispatch.kind ==
+            QuaderViewportKeybindingDispatch::Kind::NoMatch &&
+        primitive_tool_settings_editor_active) {
+      QuaderViewportKeybindingDispatch tool_settings_dispatch =
+          editor_->commands().dispatch_viewport_input_binding(
+              *chord, state, true, false);
+      if (tool_settings_dispatch.kind ==
+              QuaderViewportKeybindingDispatch::Kind::Command &&
+          is_primitive_finalize_command(
+              tool_settings_dispatch.command_id)) {
+        if (QAbstractSpinBox *spin =
+                focused_spin_box(focus_widget)) {
+          // Commit the visible text before Apply consumes Enter so the live
+          // selected primitive and the persistent setting match the field.
+          spin->interpretText();
+        }
+        dispatch = std::move(tool_settings_dispatch);
+      } else if (tool_settings_dispatch.kind ==
+                 QuaderViewportKeybindingDispatch::Kind::PendingChord) {
+        editor_->commands().reset_pending_keybinding_chord();
+      }
+    }
     switch (dispatch.kind) {
     case QuaderViewportKeybindingDispatch::Kind::PendingChord:
       event->accept();

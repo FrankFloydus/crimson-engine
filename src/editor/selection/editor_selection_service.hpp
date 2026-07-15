@@ -80,6 +80,7 @@ class EditorSelectionService final {
 public:
   using SceneSelectionTargetResolver = std::function<EntityId(EntityId)>;
   using SceneSelectionScopeFilter = std::function<bool(EntityId)>;
+  using SceneSelectionHistorySuppressionProvider = std::function<bool()>;
 
   EditorSelectionService(SceneDocument &scene,
                          DocumentCommandService &document_commands,
@@ -93,6 +94,8 @@ public:
   void set_scene_selection_scope_policy(
       SceneSelectionTargetResolver resolver,
       SceneSelectionScopeFilter filter);
+  void set_scene_selection_history_suppression_provider(
+      SceneSelectionHistorySuppressionProvider provider);
 
   DocumentCommandResult set_scene_selection(std::span<const EntityId> entities,
                                             EntityId active = kInvalidEntityId);
@@ -147,12 +150,16 @@ private:
   [[nodiscard]] EntityId nearest_group_ancestor(EntityId entity) const;
   [[nodiscard]] ModelingSelectionSummary
   scene_summary_for(ModelingSelectionMode mode) const;
+  DocumentCommandResult
+  apply_scene_selection_state(SceneSelectionState selection);
 
   SceneDocument &scene_;
   DocumentCommandService &document_commands_;
   ModelingSessionService &modeling_;
   SceneSelectionTargetResolver scene_target_resolver_;
   SceneSelectionScopeFilter scene_scope_filter_;
+  SceneSelectionHistorySuppressionProvider
+      scene_selection_history_suppression_provider_;
 };
 
 } // namespace quader

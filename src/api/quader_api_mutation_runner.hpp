@@ -38,6 +38,9 @@ public:
   [[nodiscard]] SceneSessionId scene_session_id() const;
   [[nodiscard]] bool
   belongs_to_active_scene(SceneSessionId scene_session_id) const;
+  [[nodiscard]] bool can_mutate_modeling_content() const;
+  [[nodiscard]] QuaderApiVoidResult modeling_content_blocked_status(
+      std::string_view label) const;
   [[nodiscard]] QuaderApiVoidResult
   stale_scene_reference_status(std::string_view reference_kind) const;
 

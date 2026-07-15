@@ -16,6 +16,7 @@
 #include "editor/modeling/services/modeling_session_service.hpp"
 #include "editor/pivot/pivot_tool_service.hpp"
 #include "editor/tools/native_viewport_tool_coordinator.hpp"
+#include "editor/modeling/services/primitive_creation_tool_service.hpp"
 #include "editor/tools/viewport_tool_catalog.hpp"
 #include "scene/scene_document.hpp"
 
@@ -35,6 +36,17 @@ namespace {
 
 SceneSession &scene_session(QuaderApiSession session) {
   return QuaderApiSessionInternalAccess::scene_session(session);
+}
+
+MaterialReference active_project_material(QuaderApiSession session) {
+  ProjectSession *project =
+      QuaderApiSessionInternalAccess::project_session(session);
+  if (project == nullptr) {
+    return {};
+  }
+  const std::optional<ProjectAssetId> id = project->active_material_id();
+  return id.has_value() ? MaterialReference::project(*id)
+                        : MaterialReference{};
 }
 
 CommandResult runtime_tool_activation_preflight(
@@ -145,6 +157,54 @@ QuaderToolSettingControl choice_control(
   };
 }
 
+std::string_view primitive_kind_setting_id(PrimitiveCreationKind kind) {
+  switch (kind) {
+  case PrimitiveCreationKind::Box:
+    return "box";
+  case PrimitiveCreationKind::Cylinder:
+    return "cylinder";
+  case PrimitiveCreationKind::Sphere:
+    return "sphere";
+  }
+  return {};
+}
+
+double primitive_kind_setting_value(PrimitiveCreationKind kind) {
+  return static_cast<double>(static_cast<int>(kind));
+}
+
+std::optional<PrimitiveCreationKind>
+primitive_kind_from_setting_id(std::string_view value) {
+  if (value == "box") {
+    return PrimitiveCreationKind::Box;
+  }
+  if (value == "cylinder") {
+    return PrimitiveCreationKind::Cylinder;
+  }
+  if (value == "sphere") {
+    return PrimitiveCreationKind::Sphere;
+  }
+  return std::nullopt;
+}
+
+std::optional<PrimitiveCreationKind>
+primitive_kind_from_setting_value(double value) {
+  if (!std::isfinite(value)) {
+    return std::nullopt;
+  }
+  if (value == primitive_kind_setting_value(PrimitiveCreationKind::Box)) {
+    return PrimitiveCreationKind::Box;
+  }
+  if (value ==
+      primitive_kind_setting_value(PrimitiveCreationKind::Cylinder)) {
+    return PrimitiveCreationKind::Cylinder;
+  }
+  if (value == primitive_kind_setting_value(PrimitiveCreationKind::Sphere)) {
+    return PrimitiveCreationKind::Sphere;
+  }
+  return std::nullopt;
+}
+
 QuaderToolSettingControl action_control(std::string id, std::string label) {
   return {
       .kind = QuaderToolSettingControlKind::Action,
@@ -225,6 +285,94 @@ QuaderToolSettingsTarget radial_array_tool_settings_target(
       std::string(kRadialArrayRepeatSpacingSetting), "Repeat Spacing",
       radial_array.repeat_spacing(), kRadialArrayMinimumRepeatSpacing,
       kRadialArrayMaximumRepeatSpacing, 0.001));
+  return result;
+}
+
+QuaderToolSettingsTarget primitive_tool_settings_target(
+    const PrimitiveCreationToolService &primitive) {
+  const std::optional<PrimitiveCreationKind> kind = primitive.active_kind();
+  if (!kind.has_value()) {
+    return {};
+  }
+
+  QuaderToolSettingsTarget result{
+      .active = true,
+      .preview_active = primitive.shape_count() > 0U,
+      .tool_id = std::string(kCreatePrimitiveToolId),
+      .title = "Create Primitive",
+      .apply_visible = true,
+      .can_apply = primitive.can_apply(),
+      .can_cancel = true,
+  };
+  result.controls.push_back(choice_control(
+      std::string(kPrimitiveTypeSetting), "Primitive Type",
+      std::string(primitive_kind_setting_id(*kind)),
+      {
+          {.id = "box",
+           .label = "Box",
+           .value =
+               primitive_kind_setting_value(PrimitiveCreationKind::Box)},
+          {.id = "cylinder",
+           .label = "Cylinder",
+           .value = primitive_kind_setting_value(
+               PrimitiveCreationKind::Cylinder)},
+          {.id = "sphere",
+           .label = "Sphere",
+           .value =
+               primitive_kind_setting_value(PrimitiveCreationKind::Sphere)},
+      }));
+  switch (*kind) {
+  case PrimitiveCreationKind::Box: {
+    const BoxPrimitiveCreationSettings &settings = primitive.box_settings();
+    result.controls.push_back(number_control(
+        std::string(kBoxSubdivisionsXSetting), "X Subdivisions",
+        settings.subdivisions_x, kPrimitiveMinimumSubdivisionCount,
+        kPrimitiveMaximumSubdivisionCount, 1.0));
+    result.controls.push_back(number_control(
+        std::string(kBoxSubdivisionsYSetting), "Y Subdivisions",
+        settings.subdivisions_y, kPrimitiveMinimumSubdivisionCount,
+        kPrimitiveMaximumSubdivisionCount, 1.0));
+    result.controls.push_back(number_control(
+        std::string(kBoxSubdivisionsZSetting), "Z Subdivisions",
+        settings.subdivisions_z, kPrimitiveMinimumSubdivisionCount,
+        kPrimitiveMaximumSubdivisionCount, 1.0));
+    result.controls.push_back(toggle_control(
+        std::string(kPrimitiveFlipFacesSetting), "Flip Faces",
+        settings.flip_faces));
+    break;
+  }
+  case PrimitiveCreationKind::Cylinder: {
+    const CylinderPrimitiveCreationSettings &settings =
+        primitive.cylinder_settings();
+    result.controls.push_back(number_control(
+        std::string(kCylinderSideCountSetting), "Sides", settings.side_count,
+        kCylinderMinimumSideCount, kCylinderMaximumSideCount, 1.0));
+    result.controls.push_back(toggle_control(
+        std::string(kCylinderCapsSetting), "Caps", settings.caps));
+    result.controls.push_back(toggle_control(
+        std::string(kPrimitiveFlipFacesSetting), "Flip Faces",
+        settings.flip_faces));
+    break;
+  }
+  case PrimitiveCreationKind::Sphere: {
+    const SpherePrimitiveCreationSettings &settings =
+        primitive.sphere_settings();
+    result.controls.push_back(number_control(
+        std::string(kSphereRadialSegmentsSetting), "Radial Segments",
+        settings.radial_segments, kSphereMinimumRadialSegments,
+        kSphereMaximumRadialSegments, 1.0));
+    result.controls.push_back(number_control(
+        std::string(kSphereRingsSetting), "Rings", settings.rings,
+        kSphereMinimumRings, kSphereMaximumRings, 1.0));
+    result.controls.push_back(toggle_control(
+        std::string(kSphereHemisphereSetting), "Hemisphere",
+        settings.hemisphere));
+    result.controls.push_back(toggle_control(
+        std::string(kPrimitiveFlipFacesSetting), "Flip Faces",
+        settings.flip_faces));
+    break;
+  }
+  }
   return result;
 }
 
@@ -475,6 +623,9 @@ bool QuaderToolsApi::can_activate(ViewportToolId tool) const {
 
 QuaderToolSettingsTarget QuaderToolsApi::active_settings() const {
   const SceneSession &session = scene_session(session_);
+  if (session.primitive_creation().active()) {
+    return primitive_tool_settings_target(session.primitive_creation());
+  }
   if (session.radial_array().active()) {
     return radial_array_tool_settings_target(session.radial_array());
   }
@@ -493,6 +644,25 @@ QuaderApiVoidResult QuaderToolsApi::set_setting(std::string_view tool_id,
                                                  std::string_view name,
                                                  double value) {
   SceneSession &session = scene_session(session_);
+  if (session.primitive_creation().active()) {
+    if (!tool_id.empty() && tool_id != kCreatePrimitiveToolId) {
+      return quader_api_failure_status(
+          session, "Tool setting does not belong to the active primitive.");
+    }
+    if (name == kPrimitiveTypeSetting) {
+      const std::optional<PrimitiveCreationKind> kind =
+          primitive_kind_from_setting_value(value);
+      if (!kind.has_value()) {
+        return quader_api_failure_status(session, "Invalid primitive type.");
+      }
+      return api_status_from_command(
+          session, session.primitive_creation().set_kind(*kind),
+          QuaderMutationKind::Runtime, "Set Primitive Type");
+    }
+    return api_status_from_command(
+        session, session.primitive_creation().set_setting(name, value),
+        QuaderMutationKind::Runtime, "Set Primitive Tool Setting");
+  }
   const bool radial_array_tool =
       tool_id.empty() || tool_id == kRadialArrayToolId;
   if (radial_array_tool && name == kRadialArrayDegreesSetting) {
@@ -592,14 +762,38 @@ QuaderApiVoidResult QuaderToolsApi::set_setting(std::string_view tool_id,
 QuaderApiVoidResult QuaderToolsApi::set_setting(std::string_view tool_id,
                                                  std::string_view name,
                                                  std::string_view value) {
+  SceneSession &session = scene_session(session_);
+  if (session.primitive_creation().active() &&
+      name == kPrimitiveTypeSetting) {
+    if (!tool_id.empty() && tool_id != kCreatePrimitiveToolId) {
+      return quader_api_failure_status(
+          session, "Tool setting does not belong to Create Primitive.");
+    }
+    const std::optional<PrimitiveCreationKind> kind =
+        primitive_kind_from_setting_id(value);
+    if (!kind.has_value()) {
+      return quader_api_failure_status(session, "Invalid primitive type.");
+    }
+    return set_setting(tool_id, name, primitive_kind_setting_value(*kind));
+  }
+
   char *end = nullptr;
   const std::string text(value);
   const double numeric = std::strtod(text.c_str(), &end);
   if (end == text.c_str() || (end != nullptr && *end != '\0')) {
-    return quader_api_failure_status(scene_session(session_),
-                                     "Invalid tool setting value.");
+    return quader_api_failure_status(session, "Invalid tool setting value.");
   }
   return set_setting(tool_id, name, numeric);
+}
+
+QuaderApiVoidResult QuaderToolsApi::set_setting(std::string_view tool_id,
+                                                 std::string_view name,
+                                                 const char *value) {
+  if (value == nullptr) {
+    return quader_api_failure_status(scene_session(session_),
+                                     "Tool setting value is missing.");
+  }
+  return set_setting(tool_id, name, std::string_view(value));
 }
 
 QuaderApiVoidResult QuaderToolsApi::execute_action(std::string_view tool_id,
@@ -613,18 +807,57 @@ QuaderApiVoidResult QuaderToolsApi::execute_action(std::string_view tool_id,
   return quader_api_failure_status(session, "Unknown tool action.");
 }
 
+QuaderApiVoidResult QuaderToolsApi::accept_active_primitive(
+    std::string name, AssetId default_material, bool snap_enabled) {
+  SceneSession &session = scene_session(session_);
+  MaterialReference material = active_project_material(session_);
+  if (!material.valid() && default_material != kInvalidAssetId) {
+    material = MaterialReference(default_material);
+  }
+  return api_status_from_command(
+      session,
+      session.native_tools().accept_active_primitive(std::move(name),
+                                                      material,
+                                                      snap_enabled),
+      QuaderMutationKind::Modeling, "Create Primitive");
+}
+
+bool QuaderToolsApi::has_active_primitive_creation() const {
+  return scene_session(session_).primitive_creation().active();
+}
+
+std::string QuaderToolsApi::active_primitive_type() const {
+  const std::optional<PrimitiveCreationKind> kind =
+      scene_session(session_).primitive_creation().active_kind();
+  if (!kind.has_value()) {
+    return {};
+  }
+  switch (*kind) {
+  case PrimitiveCreationKind::Box:
+    return "box";
+  case PrimitiveCreationKind::Cylinder:
+    return "cylinder";
+  case PrimitiveCreationKind::Sphere:
+    return "sphere";
+  }
+  return {};
+}
+
 QuaderApiVoidResult QuaderToolsApi::commit_active_tool_preview() {
   SceneSession &session = scene_session(session_);
   if (session.native_tools().has_pending_tool()) {
     const bool linear_array = session.linear_array().has_session();
     const bool radial_array = session.radial_array().has_session();
-    const bool modeling_array = linear_array || radial_array;
+    const bool primitive = session.primitive_creation().active();
+    const bool modeling_tool = linear_array || radial_array || primitive;
     return api_status_from_command(
         session, session.native_tools().commit_active(),
-        modeling_array ? QuaderMutationKind::Modeling
-                       : QuaderMutationKind::Document,
+        modeling_tool ? QuaderMutationKind::Modeling
+                      : QuaderMutationKind::Document,
         radial_array ? "Apply Radial Array"
-                     : linear_array ? "Apply Linear Array" : "Apply Pivot");
+        : linear_array ? "Apply Linear Array"
+        : primitive    ? "Apply Primitive Tool"
+                       : "Apply Pivot");
   }
   if (hooks_.commit_active_tool_preview) {
     return hooks_.commit_active_tool_preview();
@@ -646,12 +879,17 @@ QuaderApiVoidResult QuaderToolsApi::cancel_active_tool_preview() {
 }
 
 QuaderApiVoidResult QuaderToolsApi::cancel_modal_tool() {
+  SceneSession &session = scene_session(session_);
+  if (session.native_tools().has_pending_tool()) {
+    return api_status_from_command(
+        session, session.native_tools().cancel_active(),
+        QuaderMutationKind::Runtime, "Cancel Native Tool");
+  }
   if (hooks_.cancel_modal_tool) {
     return hooks_.cancel_modal_tool();
   }
-  ModelingCommandResult result =
-      scene_session(session_).modeling().cancel_active_modal_tool();
-  return quader_api_void_status(scene_session(session_), result.ok,
+  ModelingCommandResult result = session.modeling().cancel_active_modal_tool();
+  return quader_api_void_status(session, result.ok,
                                 result.changed, std::move(result.message),
                                 QuaderMutationKind::Modeling,
                                 "Cancel Modal Tool");

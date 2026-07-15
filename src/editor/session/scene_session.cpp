@@ -16,6 +16,7 @@
 #include "editor/placement/viewport_point_placement_service.hpp"
 #include "editor/selection/editor_selection_service.hpp"
 #include "editor/tools/native_viewport_tool_coordinator.hpp"
+#include "editor/modeling/services/primitive_creation_tool_service.hpp"
 
 #include <utility>
 
@@ -88,9 +89,32 @@ void SceneSession::rebuild_services() {
   radial_array_ = std::make_unique<RadialArrayToolService>(
       document_.scene(), document_.assets(), *history_, *modeling_,
       *selection_, *instances_);
+  primitive_creation_ = std::make_unique<PrimitiveCreationToolService>(
+      *history_, *modeling_, ModelingOperationPreviewCheckpointHooks{
+                                  .begin = [this]() {
+                                    begin_modeling_preview_checkpoint();
+                                  },
+                                  .observe_before_projection = [this]() {
+                                    observe_before_modeling_preview_projection();
+                                  },
+                                  .record_after_projection = [this]() {
+                                    record_after_modeling_preview_projection();
+                                  },
+                                  .finish = [this](bool restored_by_cancel) {
+                                    finish_modeling_preview_checkpoint(
+                                        restored_by_cancel);
+                                  },
+                              });
+  selection_->set_scene_selection_history_suppression_provider([this]() {
+    return primitive_creation_ && primitive_creation_->active();
+  });
   point_placement_ = std::make_unique<ViewportPointPlacementService>();
   native_tools_ = std::make_unique<NativeViewportToolCoordinator>(
-      *pivot_, *linear_array_, *radial_array_, *selection_, *modeling_);
+      *pivot_, *linear_array_, *radial_array_, *primitive_creation_,
+      *selection_, *modeling_);
+  document_commands_->set_entity_mutation_blocker([this](EntityId entity) {
+    return native_tools_ && native_tools_->blocks_document_mutation(entity);
+  });
   // A SceneSession is the installed editor/runtime owner for its document.
   // Rebuild the portable modeling state and entity map immediately so a
   // document supplied by project/QDR loading is pickable on its first frame.
@@ -222,6 +246,11 @@ void SceneSession::set_document_replacement_finalizer(
 
 void SceneSession::mark_clean() {
   clean_stamp_ = content_revision_stamp();
+  preview_content_checkpoint_.reset();
+}
+
+void SceneSession::mark_clean_at(SceneContentRevisionStamp stamp) noexcept {
+  clean_stamp_ = stamp;
   preview_content_checkpoint_.reset();
 }
 

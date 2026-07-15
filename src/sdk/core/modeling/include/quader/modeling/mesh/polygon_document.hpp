@@ -48,11 +48,43 @@ struct PolygonContentIdentity final {
 };
 
 /**
- * Defines the bounds and material used to create a box document.
+ * Defines the bounds, surface subdivisions, winding, and material used to
+ * create a box document.
  */
 struct BoxSpec {
   Vec3 min{-1.0F, -1.0F, -1.0F};
   Vec3 max{1.0F, 1.0F, 1.0F};
+  MaterialId material{};
+  int x_subdivisions = 1;
+  int y_subdivisions = 1;
+  int z_subdivisions = 1;
+  bool flip_faces = false;
+};
+
+/**
+ * Defines an origin-centered cylinder document.
+ */
+struct CylinderSpec {
+  float width = 2.0F;
+  float height = 2.0F;
+  float depth = 2.0F;
+  int side_count = 32;
+  bool capped = true;
+  bool flip_faces = false;
+  MaterialId material{};
+};
+
+/**
+ * Defines an origin-centered sphere or upper hemisphere document.
+ */
+struct SphereSpec {
+  float width = 2.0F;
+  float height = 2.0F;
+  float depth = 2.0F;
+  int radial_segments = 32;
+  int rings = 16;
+  bool hemisphere = false;
+  bool flip_faces = false;
   MaterialId material{};
 };
 
@@ -94,6 +126,10 @@ public:
   ~PolygonDocument();
 
   [[nodiscard]] static Result<PolygonDocument> make_box(const BoxSpec &spec);
+  [[nodiscard]] static Result<PolygonDocument>
+  make_cylinder(const CylinderSpec &spec);
+  [[nodiscard]] static Result<PolygonDocument>
+  make_sphere(const SphereSpec &spec);
   [[nodiscard]] static Result<PolygonDocument>
   make_face(std::span<const Vec3> points, MaterialId material = {});
 

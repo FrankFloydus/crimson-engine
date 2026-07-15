@@ -98,23 +98,14 @@ void expect_objects_equal(const std::vector<qec::PolygonObject> &actual,
   }
 }
 
-void expect_session_contents_equal(const qec::SessionState &actual,
-                                   const qec::SessionState &expected) {
+void expect_session_semantics_equal(const qec::SessionState &actual,
+                                    const qec::SessionState &expected) {
   expect_objects_equal(actual.objects, expected.objects);
   EXPECT_EQ(actual.lights.size(), expected.lights.size());
-  EXPECT_EQ(actual.next_object_id, expected.next_object_id);
-  EXPECT_EQ(actual.next_light_id, expected.next_light_id);
   EXPECT_EQ(actual.active_object_id, expected.active_object_id);
   EXPECT_EQ(actual.active_light_id, expected.active_light_id);
   EXPECT_EQ(actual.selection_mode, expected.selection_mode);
   EXPECT_EQ(actual.dirty, expected.dirty);
-}
-
-void expect_session_state_equal(const qec::SessionState &actual,
-                                const qec::SessionState &expected) {
-  expect_session_contents_equal(actual, expected);
-  EXPECT_EQ(actual.content_revision, expected.content_revision);
-  EXPECT_EQ(actual.selection_revision, expected.selection_revision);
 }
 
 } // namespace
@@ -302,7 +293,7 @@ TEST(QdrModelingRuntimeOperationHalfCutTests,
 }
 
 TEST(QdrModelingRuntimeOperationHalfCutTests,
-     MultiMeshSeparatedPreviewCancelRestoresExactState) {
+     MultiMeshSeparatedPreviewCancelRestoresSemanticsAndRetiresIds) {
   qec::PolygonObject first =
       qdr_test::make_object(10, translated_cube({4.0F, 0.0F, 0.0F}));
   qec::PolygonObject second =
@@ -332,12 +323,18 @@ TEST(QdrModelingRuntimeOperationHalfCutTests,
                                        .fill_parts = true});
   ASSERT_TRUE(update.ok) << update.message;
   ASSERT_EQ(session.objects().size(), 4U);
+  const qec::SessionState preview = session.state();
 
   const qec::PreviewTransactionFinishResult cancel =
       session.cancel_preview_transaction(qec::PreviewTransactionKind::HalfCut);
   EXPECT_TRUE(cancel.before.active);
   EXPECT_TRUE(cancel.restored);
-  expect_session_state_equal(session.state(), before);
+  const qec::SessionState after = session.state();
+  expect_session_semantics_equal(after, before);
+  EXPECT_EQ(after.next_object_id, preview.next_object_id);
+  EXPECT_EQ(after.next_light_id, before.next_light_id);
+  EXPECT_GT(after.content_revision, preview.content_revision);
+  EXPECT_GT(after.selection_revision, preview.selection_revision);
   const qec::HistoryStatus history_after = session.history_status();
   EXPECT_EQ(history_after.can_undo, history_before.can_undo);
   EXPECT_EQ(history_after.can_redo, history_before.can_redo);
@@ -377,12 +374,22 @@ TEST(QdrModelingRuntimeOperationHalfCutTests,
   const qec::SessionState committed = session.state();
 
   EXPECT_TRUE(session.undo().applied);
-  expect_session_contents_equal(session.state(), before);
+  const qec::SessionState undone = session.state();
+  expect_session_semantics_equal(undone, before);
+  EXPECT_EQ(undone.next_object_id, committed.next_object_id);
+  EXPECT_EQ(undone.next_light_id, before.next_light_id);
+  EXPECT_GT(undone.content_revision, committed.content_revision);
+  EXPECT_GT(undone.selection_revision, committed.selection_revision);
   EXPECT_EQ(session.history_status().undo_count, 0U);
   EXPECT_EQ(session.history_status().redo_count, 1U);
 
   EXPECT_TRUE(session.redo().applied);
-  expect_session_contents_equal(session.state(), committed);
+  const qec::SessionState redone = session.state();
+  expect_session_semantics_equal(redone, committed);
+  EXPECT_EQ(redone.next_object_id, committed.next_object_id);
+  EXPECT_EQ(redone.next_light_id, committed.next_light_id);
+  EXPECT_GT(redone.content_revision, undone.content_revision);
+  EXPECT_GT(redone.selection_revision, undone.selection_revision);
   EXPECT_EQ(session.objects().size(), 4U);
   EXPECT_EQ(session.history_status().undo_count, 1U);
   EXPECT_EQ(session.history_status().redo_count, 0U);

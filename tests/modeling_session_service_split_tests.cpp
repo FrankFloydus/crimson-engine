@@ -12,6 +12,7 @@
 #include "editor/modeling/services/modeling_instant_operation_catalog.hpp"
 #include "editor/modeling/services/modeling_operation_settings.hpp"
 #include "editor/modeling/services/modeling_session_service.hpp"
+#include "editor/modeling/modeling_viewport_camera_adapter.hpp"
 #include "editor/modeling/services/modeling_session_services.hpp"
 #include "editor/selection/scene_selection_application.hpp"
 #include "editor/selection/selection_projection_service.hpp"
@@ -36,6 +37,30 @@
 
 namespace quader {
 namespace {
+
+TEST(ModelingViewportCameraAdapterTests,
+     PreservesAffineProjectionAndClampsDegenerateExtents) {
+  ModelingViewportCamera source;
+  source.orthographic = true;
+  source.affine_model_space = true;
+  source.viewport_size = {0.0f, -20.0f};
+  source.orthographic_size = 0.0;
+  source.fov_degrees = 67.0;
+  source.origin = {1.0f, 2.0f, 3.0f};
+
+  const quader_editor_core::ViewportCameraState runtime =
+      modeling_runtime_camera(source);
+  EXPECT_EQ(runtime.projection,
+            quader_editor_core::CameraProjection::Orthographic);
+  EXPECT_TRUE(runtime.affine_model_space);
+  EXPECT_FLOAT_EQ(runtime.viewport_size.x, 1.0f);
+  EXPECT_FLOAT_EQ(runtime.viewport_size.y, 1.0f);
+  EXPECT_DOUBLE_EQ(runtime.orthographic_size, 0.0001);
+  EXPECT_DOUBLE_EQ(runtime.fov_degrees, 67.0);
+  EXPECT_FLOAT_EQ(runtime.transform.origin.x, 1.0f);
+  EXPECT_FLOAT_EQ(runtime.transform.origin.y, 2.0f);
+  EXPECT_FLOAT_EQ(runtime.transform.origin.z, 3.0f);
+}
 
 using test::guardrail::read_source_file;
 using test::guardrail::source_root;
@@ -593,6 +618,15 @@ TEST(ModelingSessionServiceSplitTests,
 
   EXPECT_TRUE(scene_sync.scene_objects_synced_for_current_modeling_content(
       session, scene, assets));
+  ASSERT_TRUE(scene.set_entity_kind(*entity, EntityKind::Generic));
+  EXPECT_FALSE(scene_sync.scene_objects_synced_for_current_modeling_content(
+      session, scene, assets));
+  ASSERT_TRUE(mesh_sync.sync_scene_objects_from_modeling(
+      session, scene, assets, scene_sync, false));
+  EXPECT_EQ(scene.kind(*entity), EntityKind::Mesh);
+  EXPECT_TRUE(scene_sync.scene_objects_synced_for_current_modeling_content(
+      session, scene, assets));
+
   scene.set_modeling_object(
       *entity,
       ModelingObjectComponent{.object_id = object.id, .material_slot = 9});
@@ -651,6 +685,53 @@ TEST(ModelingSessionServiceSplitTests,
   EXPECT_FALSE(scene_sync.projected_mesh_signature_known(valid.id));
   EXPECT_FALSE(scene_sync.projected_mesh_signature_known(invalid.id));
   EXPECT_FALSE(scene_sync.scene_objects_sync_valid());
+}
+
+TEST(ModelingSessionServiceSplitTests,
+     MeshSyncPrevalidatesEveryBoundTargetBeforeRebindingSharedAssets) {
+  SceneDocument scene;
+  AssetRegistry assets;
+  ModelingObjectRuntimeMap object_map;
+  SceneModelingSyncService scene_sync(object_map);
+  ModelingMeshSyncService mesh_sync;
+
+  quader_editor_core::PolygonObject first;
+  first.id = 100;
+  first.document = quader_poly::make_cube({});
+  quader_editor_core::PolygonObject second;
+  second.id = 200;
+  second.document = quader_poly::make_cube({});
+  quader_editor_core::EditorSession session({first, second});
+  ASSERT_TRUE(mesh_sync.sync_scene_objects_from_modeling(
+      session, scene, assets, scene_sync, true));
+
+  const std::optional<EntityId> first_entity =
+      object_map.entity_for_modeling_object(first.id);
+  ASSERT_TRUE(first_entity.has_value());
+  ASSERT_NE(scene.mesh(*first_entity), nullptr);
+  const AssetId first_mesh = scene.mesh(*first_entity)->mesh;
+  ASSERT_NE(first_mesh, kInvalidAssetId);
+  const EntityId observer = scene.create_entity("Shared Observer");
+  ASSERT_TRUE(scene.set_mesh(observer, MeshComponent{.mesh = first_mesh}));
+
+  const EntityId invalid_target = scene.create_empty("Protected Definition");
+  ASSERT_TRUE(scene.set_instance_definition(invalid_target));
+  object_map.bind(second.id, invalid_target);
+
+  std::vector<quader_editor_core::PolygonObject> changed = session.objects();
+  ASSERT_EQ(changed.size(), 2U);
+  changed[0].document.edit().vertices.front().position.x += 1.0f;
+  changed[1].document.edit().vertices.front().position.y += 1.0f;
+  session.set_objects(std::move(changed));
+  const std::size_t mesh_count_before = assets.mesh_count();
+
+  EXPECT_FALSE(mesh_sync.sync_scene_objects_from_modeling(
+      session, scene, assets, scene_sync, true));
+  ASSERT_NE(scene.mesh(*first_entity), nullptr);
+  EXPECT_EQ(scene.mesh(*first_entity)->mesh, first_mesh);
+  EXPECT_EQ(scene.mesh(observer)->mesh, first_mesh);
+  EXPECT_NE(assets.mesh(first_mesh), nullptr);
+  EXPECT_EQ(assets.mesh_count(), mesh_count_before);
 }
 
 TEST(ModelingSessionServiceSplitTests,
@@ -791,6 +872,64 @@ TEST(ModelingSessionServiceSplitTests,
   EXPECT_FALSE(history.can_undo());
   EXPECT_FALSE(history.can_redo());
   expect_exact_state();
+}
+
+TEST(ModelingSessionServiceSplitTests,
+     MementoRestoreKeepsRevisionsAndObjectIdsSessionMonotonic) {
+  SceneDocument scene;
+  AssetRegistry assets;
+  ModelingSessionService service(scene, assets);
+
+  const ModelingCreateBoxResult baseline = service.create_box_from_bounds({
+      .bounds = {.min = {-1.0f, -1.0f, -1.0f},
+                 .max = {1.0f, 1.0f, 1.0f}},
+      .name = "Memento Baseline",
+  });
+  ASSERT_TRUE(baseline.ok) << baseline.message;
+  const EntityId baseline_entity = baseline.object.entity;
+  const ModelingSessionMemento before = service.capture_history_memento();
+  ASSERT_TRUE(before.valid());
+
+  const ModelingCreateBoxResult first_transient = service.create_box_from_bounds({
+      .bounds = {.min = {2.0f, 2.0f, 2.0f},
+                 .max = {3.0f, 3.0f, 3.0f}},
+      .name = "Canceled Primitive One",
+  });
+  ASSERT_TRUE(first_transient.ok) << first_transient.message;
+  const ModelingCreateBoxResult second_transient = service.create_box_from_bounds({
+      .bounds = {.min = {4.0f, 4.0f, 4.0f},
+                 .max = {5.0f, 5.0f, 5.0f}},
+      .name = "Canceled Primitive Two",
+  });
+  ASSERT_TRUE(second_transient.ok) << second_transient.message;
+  const ModelingSelectionSummary transient_summary =
+      service.selection_summary();
+
+  const ModelingCommandResult restored = service.restore_history_memento(before);
+  ASSERT_TRUE(restored.ok) << restored.message;
+  ASSERT_TRUE(restored.changed);
+  const std::vector<ModelingObjectRecord> restored_objects = service.objects();
+  ASSERT_EQ(restored_objects.size(), 1u);
+  EXPECT_EQ(restored_objects.front().modeling_object_id,
+            baseline.object.modeling_object_id);
+  EXPECT_EQ(restored_objects.front().entity, baseline_entity);
+  const ModelingSelectionSummary restored_summary =
+      service.selection_summary();
+  EXPECT_GT(restored_summary.content_revision,
+            transient_summary.content_revision);
+  EXPECT_GT(restored_summary.selection_revision,
+            transient_summary.selection_revision);
+
+  const ModelingCreateBoxResult replacement = service.create_box_from_bounds({
+      .bounds = {.min = {6.0f, 6.0f, 6.0f},
+                 .max = {7.0f, 7.0f, 7.0f}},
+      .name = "Replacement Primitive",
+  });
+  ASSERT_TRUE(replacement.ok) << replacement.message;
+  const int last_transient_id = std::max(
+      first_transient.object.modeling_object_id,
+      second_transient.object.modeling_object_id);
+  EXPECT_EQ(replacement.object.modeling_object_id, last_transient_id + 1);
 }
 
 TEST(ModelingSessionServiceSplitTests,
@@ -1072,6 +1211,53 @@ TEST(ModelingSessionServiceSplitTests,
   std::sort(selected_entities.begin(), selected_entities.end());
   EXPECT_EQ(selected_entities, (std::vector<EntityId>{group, first, second}));
   EXPECT_EQ(scene.primary_selection(), second);
+}
+
+TEST(ModelingSessionServiceSplitTests,
+     SceneOwnedSelectionRevisionIgnoresUnrelatedSceneMutations) {
+  SceneDocument scene;
+  AssetRegistry assets;
+  ModelingSessionService service(scene, assets);
+
+  const EntityId group = scene.create_empty("Revision Group");
+  ASSERT_NE(group, kInvalidEntityId);
+  ASSERT_TRUE(scene.set_selected(group, true));
+  ASSERT_TRUE(scene.set_active_selection(group));
+  ASSERT_TRUE(service.set_selection_mode(ModelingSelectionMode::Group).ok);
+
+  const ModelingSelectionSummary before = service.selection_summary();
+  ASSERT_EQ(before.mode, ModelingSelectionMode::Group);
+  ASSERT_TRUE(before.has_selection);
+  const std::uint64_t scene_revision_before = scene.revision();
+
+  TransformComponent moved;
+  moved.position = {3.0f, -2.0f, 7.0f};
+  ASSERT_TRUE(scene.set_transform(group, moved));
+  ASSERT_TRUE(scene.set_locked(group, true));
+  ASSERT_TRUE(scene.set_visible(group, false));
+  ASSERT_GT(scene.revision(), scene_revision_before);
+
+  const ModelingSelectionSummary after_content_edits =
+      service.selection_summary();
+  EXPECT_EQ(after_content_edits.selection_revision,
+            before.selection_revision);
+  EXPECT_EQ(after_content_edits.selected_object_count,
+            before.selected_object_count);
+
+  ASSERT_TRUE(scene.set_light(group, LightComponent{}));
+  const ModelingSelectionSummary after_active_kind_edit =
+      service.selection_summary();
+  EXPECT_EQ(after_active_kind_edit.active_kind,
+            ModelingActiveSelectionKind::Light);
+  EXPECT_GT(after_active_kind_edit.selection_revision,
+            after_content_edits.selection_revision);
+
+  scene.clear_selection();
+  const ModelingSelectionSummary after_selection_edit =
+      service.selection_summary();
+  EXPECT_GT(after_selection_edit.selection_revision,
+            before.selection_revision);
+  EXPECT_FALSE(after_selection_edit.has_selection);
 }
 
 TEST(ModelingSessionServiceSplitTests,

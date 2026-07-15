@@ -32,6 +32,25 @@ struct SessionObjectSummary {
 };
 
 /**
+ * Describes the latest externally visible change to one session object.
+ */
+struct SessionObjectChange {
+  ObjectId id{};
+  std::string name;
+  DirtyFlags dirty;
+  bool deleted = false;
+};
+
+/**
+ * Carries object changes after one session-global monotonic revision.
+ */
+struct SessionChangeSnapshot {
+  std::uint64_t content_revision = 0;
+  std::uint64_t selection_revision = 0;
+  std::vector<SessionObjectChange> objects;
+};
+
+/**
  * Summarizes the active headless SDK preview transaction.
  */
 struct PreviewTransactionSummary {
@@ -87,6 +106,10 @@ public:
   [[nodiscard]] bool rollback_undo_since(std::size_t mark);
   [[nodiscard]] bool preview_active() const;
   [[nodiscard]] std::vector<SessionObjectSummary> objects() const;
+  [[nodiscard]] std::uint64_t content_revision() const;
+  [[nodiscard]] std::uint64_t selection_revision() const;
+  [[nodiscard]] SessionChangeSnapshot
+  changes_since(std::uint64_t previous_content_revision) const;
   [[nodiscard]] const PolygonDocument *document(ObjectId object_id) const;
   [[nodiscard]] Result<PolygonDocument> document_copy(ObjectId object_id) const;
   [[nodiscard]] Result<OperationResult>

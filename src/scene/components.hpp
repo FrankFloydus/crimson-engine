@@ -179,6 +179,8 @@ struct MeshComponent {
   MeshCollisionType collision_type = MeshCollisionType::Box;
   bool display_collision = false;
   MeshPhysicsBodyType body_type = MeshPhysicsBodyType::StaticBody;
+
+  [[nodiscard]] bool operator==(const MeshComponent &) const = default;
 };
 
 /**

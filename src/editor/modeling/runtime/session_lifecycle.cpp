@@ -66,8 +66,9 @@ void EditorSession::set_objects(std::vector<PolygonObject> objects)
 	state_.next_object_id = next_polygon_object_id(state_.objects, state_.next_object_id);
 	normalize_active_object();
 	state_.dirty = true;
-	++state_.content_revision;
-	++state_.selection_revision;
+	state_.content_revision = advance_session_revision(state_.content_revision);
+	state_.selection_revision =
+		advance_session_revision(state_.selection_revision);
 }
 
 const std::vector<LightEntity>& EditorSession::lights() const

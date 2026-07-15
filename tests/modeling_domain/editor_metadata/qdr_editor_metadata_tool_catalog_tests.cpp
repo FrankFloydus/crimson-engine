@@ -39,9 +39,14 @@ TEST(QdrEditorMetadataToolCatalogTests, HostContractToolCatalogCoversEditorCoreT
 
 	for (const qec::EditorTool *tool : tools) {
 		EXPECT_TRUE(tool != nullptr);
-		const qhc::HostToolDescriptor& descriptor = require_tool(tool->id());
-		EXPECT_TRUE(same_text(descriptor.id, tool->id()));
-		EXPECT_TRUE(same_text(descriptor.label, tool->label()));
+		const bool primitive_footprint = same_text(tool->id(), "box");
+		const std::string_view host_id =
+			primitive_footprint ? "create_primitive" : tool->id();
+		const qhc::HostToolDescriptor& descriptor = require_tool(host_id);
+		EXPECT_TRUE(same_text(descriptor.id, host_id));
+		if (!primitive_footprint) {
+			EXPECT_TRUE(same_text(descriptor.label, tool->label()));
+		}
 	}
 }
 
@@ -50,10 +55,11 @@ TEST(QdrEditorMetadataToolCatalogTests, HostContractToolCatalogExposesHostGlueHi
 	EXPECT_TRUE(same_text(require_tool("move").primary_shortcut, "W"));
 	EXPECT_TRUE(same_text(require_tool("rotate").primary_shortcut, "R"));
 	EXPECT_TRUE(same_text(require_tool("scale").primary_shortcut, "S"));
-	EXPECT_TRUE(same_text(require_tool("box").primary_shortcut, "B"));
+	EXPECT_TRUE(same_text(
+		require_tool("create_primitive").primary_shortcut, "Shift+B"));
 	EXPECT_TRUE(same_text(require_tool("insert_edge_loop").primary_shortcut, "Shift+R"));
 	EXPECT_TRUE(same_text(require_tool("knife").primary_shortcut, "C"));
-	EXPECT_TRUE(same_text(require_tool("cut").primary_shortcut, "Shift+C"));
+	EXPECT_TRUE(same_text(require_tool("cut").primary_shortcut, ""));
 	EXPECT_TRUE(same_text(require_tool("mirror").primary_shortcut, ""));
 	EXPECT_TRUE(same_text(require_tool("poly").primary_shortcut, ""));
 
@@ -64,7 +70,7 @@ TEST(QdrEditorMetadataToolCatalogTests, HostContractToolCatalogExposesHostGlueHi
 	EXPECT_TRUE(require_tool("scale").transform_tool);
 	EXPECT_FALSE(require_tool("select").transform_tool);
 
-	EXPECT_TRUE(require_tool("box").modal_tool);
+	EXPECT_TRUE(require_tool("create_primitive").modal_tool);
 	EXPECT_TRUE(require_tool("insert_edge_loop").modal_tool);
 	EXPECT_TRUE(require_tool("knife").modal_tool);
 	EXPECT_TRUE(require_tool("cut").modal_tool);

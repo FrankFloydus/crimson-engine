@@ -333,7 +333,7 @@ enum class QuaderViewportTool {
     Extrude,
     Rotate,
     Scale,
-    Box,
+    CreatePrimitive,
     InsertEdgeLoop,
     Knife,
     Cut,

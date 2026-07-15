@@ -23,20 +23,13 @@ checked_receipt(const std::function<OperationReceipt()> &operation) {
   }
 }
 
-template <typename T>
-[[nodiscard]] Result<T> checked_value(const std::function<T()> &operation,
-                                      const Error &fallback_error) {
-  try {
-    T value = operation();
-    if constexpr (requires { value.valid(); }) {
-      if (!value.valid()) {
-        return Result<T>::failure(fallback_error);
-      }
-    }
-    return Result<T>::success(std::move(value));
-  } catch (const ModelingException &exception) {
-    return Result<T>::failure(exception.error());
-  }
+template <typename Operation>
+[[nodiscard]] Result<PreviewHandle>
+checked_preview(ModelingApiContext &context, Operation &&operation) {
+  return checked_direct_value<PreviewHandle>(
+      context, std::forward<Operation>(operation),
+      [](const PreviewHandle &preview) { return preview.active(); },
+      unsupported_error("No selected mesh."));
 }
 
 } // namespace
@@ -48,19 +41,36 @@ MeshSyncApi::MeshSyncApi(std::shared_ptr<ModelingApiContext> context)
 
 MeshSyncSnapshot
 MeshSyncApi::changes_since(std::uint64_t previous_content_revision) const {
-  MeshSyncSnapshot snapshot;
-  for (const SessionObjectSummary &summary : context_->session.objects()) {
-    snapshot.content_revision =
-        std::max(snapshot.content_revision, summary.content_revision);
-    if (summary.content_revision <= previous_content_revision) {
+  const SessionChangeSnapshot changes =
+      context_->session.changes_since(previous_content_revision);
+  MeshSyncSnapshot snapshot{
+      .content_revision = changes.content_revision,
+  };
+  for (const SessionObjectChange &change : changes.objects) {
+    if (change.deleted) {
+      snapshot.objects.push_back({
+          .object = change.id,
+          .name = change.name,
+          .dirty = change.dirty,
+          .deleted = true,
+      });
       continue;
     }
-    MeshHandle handle(context_, summary.id);
+    MeshHandle handle(context_, change.id);
+    if (!(change.dirty.topology || change.dirty.geometry ||
+          change.dirty.materials)) {
+      snapshot.objects.push_back({
+          .object = change.id,
+          .name = change.name,
+          .dirty = change.dirty,
+      });
+      continue;
+    }
     snapshot.objects.push_back({
-        .object = summary.id,
-        .name = summary.name,
+        .object = change.id,
+        .name = change.name,
         .mesh = handle.payloads().compile_mesh(),
-        .dirty = {.topology = true, .geometry = true},
+        .dirty = change.dirty,
     });
   }
   return snapshot;
@@ -167,32 +177,20 @@ CheckedIoApi::CheckedIoApi(std::shared_ptr<ModelingApiContext> context)
     : context_(std::move(context)) {}
 
 Result<std::vector<std::byte>> CheckedIoApi::serialize_qdr() const {
-  try {
-    return Result<std::vector<std::byte>>::success(
-        IoApi(context_).serialize_qdr());
-  } catch (const ModelingException &exception) {
-    return Result<std::vector<std::byte>>::failure(exception.error());
-  }
+  return checked_direct_value<std::vector<std::byte>>(
+      *context_, [&] { return IoApi(context_).serialize_qdr(); });
 }
 
 Result<std::vector<std::byte>>
 CheckedIoApi::serialize_qdr(ObjectId object) const {
-  try {
-    return Result<std::vector<std::byte>>::success(
-        IoApi(context_).serialize_qdr(object));
-  } catch (const ModelingException &exception) {
-    return Result<std::vector<std::byte>>::failure(exception.error());
-  }
+  return checked_direct_value<std::vector<std::byte>>(
+      *context_, [&] { return IoApi(context_).serialize_qdr(object); });
 }
 
 Result<std::vector<std::byte>>
 CheckedIoApi::serialize_qdr(std::span<const ObjectId> objects) const {
-  try {
-    return Result<std::vector<std::byte>>::success(
-        IoApi(context_).serialize_qdr(objects));
-  } catch (const ModelingException &exception) {
-    return Result<std::vector<std::byte>>::failure(exception.error());
-  }
+  return checked_direct_value<std::vector<std::byte>>(
+      *context_, [&] { return IoApi(context_).serialize_qdr(objects); });
 }
 
 Result<MeshHandle>
@@ -215,29 +213,19 @@ CheckedIoApi::deserialize_qdr_object(std::span<const std::byte> bytes,
 
 Result<std::vector<MeshHandle>>
 CheckedIoApi::deserialize_qdr_document(std::span<const std::byte> bytes) {
-  try {
-    return Result<std::vector<MeshHandle>>::success(
-        IoApi(context_).deserialize_qdr_document(bytes));
-  } catch (const ModelingException &exception) {
-    return Result<std::vector<MeshHandle>>::failure(exception.error());
-  }
+  return checked_direct_value<std::vector<MeshHandle>>(
+      *context_, [&] { return IoApi(context_).deserialize_qdr_document(bytes); });
 }
 
 Result<std::string> CheckedIoApi::serialize_obj(ObjectId object) const {
-  try {
-    return Result<std::string>::success(IoApi(context_).serialize_obj(object));
-  } catch (const ModelingException &exception) {
-    return Result<std::string>::failure(exception.error());
-  }
+  return checked_direct_value<std::string>(
+      *context_, [&] { return IoApi(context_).serialize_obj(object); });
 }
 
 Result<std::string>
 CheckedIoApi::serialize_obj(std::span<const ObjectId> objects) const {
-  try {
-    return Result<std::string>::success(IoApi(context_).serialize_obj(objects));
-  } catch (const ModelingException &exception) {
-    return Result<std::string>::failure(exception.error());
-  }
+  return checked_direct_value<std::string>(
+      *context_, [&] { return IoApi(context_).serialize_obj(objects); });
 }
 
 CheckedOperationsApi::CheckedOperationsApi(
@@ -265,8 +253,10 @@ Result<OperationReceipt> CheckedOperationsApi::repeat_last_action() {
 
 Result<MeshHandle>
 CheckedOperationsApi::duplicate_meshes(DuplicateOptions options) {
-  return checked_value<MeshHandle>(
+  return checked_direct_value<MeshHandle>(
+      *context_,
       [&] { return OperationsApi(context_).duplicate_meshes(options); },
+      [](const MeshHandle &mesh) { return mesh.valid(); },
       unsupported_error("No selected mesh."));
 }
 
@@ -336,8 +326,9 @@ Result<OperationReceipt> CheckedOperationsApi::shade_flat_mesh() {
 
 Result<PreviewHandle>
 CheckedOperationsApi::create_outer_hull(ThickenOptions options) {
-  return Result<PreviewHandle>::success(
-      OperationsApi(context_).create_outer_hull(options));
+  return checked_preview(
+      *context_,
+      [&] { return OperationsApi(context_).create_outer_hull(options); });
 }
 
 Result<OperationReceipt> CheckedOperationsApi::snap_vertices_to_active() {
@@ -357,8 +348,9 @@ Result<OperationReceipt> CheckedOperationsApi::merge_vertices_to_center() {
 
 Result<PreviewHandle>
 CheckedOperationsApi::merge_by_distance(MergeByDistanceOptions options) {
-  return Result<PreviewHandle>::success(
-      OperationsApi(context_).merge_by_distance(options));
+  return checked_preview(
+      *context_,
+      [&] { return OperationsApi(context_).merge_by_distance(options); });
 }
 
 Result<OperationReceipt>
@@ -412,8 +404,8 @@ Result<OperationReceipt> CheckedOperationsApi::soften_edge_normals() {
 
 Result<PreviewHandle>
 CheckedOperationsApi::bevel_edges(EdgeBevelOptions options) {
-  return Result<PreviewHandle>::success(
-      OperationsApi(context_).bevel_edges(options));
+  return checked_preview(
+      *context_, [&] { return OperationsApi(context_).bevel_edges(options); });
 }
 
 Result<OperationReceipt>
@@ -424,8 +416,9 @@ CheckedOperationsApi::bridge_edges(BridgeOptions options) {
 
 Result<PreviewHandle>
 CheckedOperationsApi::interpolated_bridge_edges(BridgeOptions options) {
-  return Result<PreviewHandle>::success(
-      OperationsApi(context_).interpolated_bridge_edges(options));
+  return checked_preview(*context_, [&] {
+    return OperationsApi(context_).interpolated_bridge_edges(options);
+  });
 }
 
 Result<OperationReceipt> CheckedOperationsApi::dissolve_edges() {
@@ -457,8 +450,9 @@ CheckedOperationsApi::bridge_faces(BridgeOptions options) {
 
 Result<PreviewHandle>
 CheckedOperationsApi::interpolated_bridge_faces(BridgeOptions options) {
-  return Result<PreviewHandle>::success(
-      OperationsApi(context_).interpolated_bridge_faces(options));
+  return checked_preview(*context_, [&] {
+    return OperationsApi(context_).interpolated_bridge_faces(options);
+  });
 }
 
 Result<OperationReceipt> CheckedOperationsApi::invert_faces() {
@@ -480,14 +474,14 @@ Result<OperationReceipt> CheckedOperationsApi::radial_align_faces() {
 
 Result<PreviewHandle>
 CheckedOperationsApi::slice_quad(SliceQuadOptions options) {
-  return Result<PreviewHandle>::success(
-      OperationsApi(context_).slice_quad(options));
+  return checked_preview(
+      *context_, [&] { return OperationsApi(context_).slice_quad(options); });
 }
 
 Result<PreviewHandle>
 CheckedOperationsApi::thicken_faces(ThickenOptions options) {
-  return Result<PreviewHandle>::success(
-      OperationsApi(context_).thicken_faces(options));
+  return checked_preview(
+      *context_, [&] { return OperationsApi(context_).thicken_faces(options); });
 }
 
 Result<OperationReceipt> CheckedOperationsApi::extract_faces() {
@@ -536,15 +530,58 @@ RenderApi::scene_snapshot(PayloadRequest request) const {
   RenderSnapshotPayload snapshot;
   snapshot.lifetime = request.lifetime;
   const RevisionStamp revisions = current_revisions(*context_);
-  snapshot.scene_revision = revisions.content;
-  if (request.only_if_changed && revisions.content <= request.previous_revision) {
+  snapshot.scene_revision = revisions.scene;
+  if (request.only_if_changed &&
+      revisions.scene <= request.previous_revision) {
     return snapshot;
   }
-  for (const SessionObjectSummary &summary : context_->session.objects()) {
-    MeshHandle handle(context_, summary.id);
-    snapshot.meshes.push_back(handle.payloads().compile_mesh({
-        .lifetime = request.lifetime,
-    }));
+  const std::vector<SessionObjectSummary> objects = context_->session.objects();
+  std::erase_if(context_->render_mesh_cache,
+                [&](const ModelingRenderMeshCacheEntry &entry) {
+                  return std::ranges::none_of(
+                      objects, [&](const SessionObjectSummary &object) {
+                        return object.id == entry.object;
+                      });
+                });
+  for (const SessionObjectSummary &summary : objects) {
+    const PolygonDocument *document = context_->session.document(summary.id);
+    if (document == nullptr) {
+      continue;
+    }
+    auto cached = std::ranges::find_if(
+        context_->render_mesh_cache,
+        [&](const ModelingRenderMeshCacheEntry &entry) {
+          return entry.object == summary.id;
+        });
+    const PolygonContentIdentity content_identity =
+        document->content_identity();
+    const bool cache_matches =
+        cached != context_->render_mesh_cache.end() &&
+        cached->content_identity == content_identity &&
+        cached->content_revision == document->content_revision();
+    if (!cache_matches) {
+      Result<MeshPayload> compiled = document->compile_mesh();
+      if (!compiled.ok()) {
+        static_cast<void>(handle_failure(*context_, compiled.error()));
+        snapshot.meshes.emplace_back();
+      } else if (cached == context_->render_mesh_cache.end()) {
+        context_->render_mesh_cache.push_back({
+            .object = summary.id,
+            .content_identity = content_identity,
+            .content_revision = document->content_revision(),
+            .mesh = std::move(compiled).value(),
+        });
+        cached = std::prev(context_->render_mesh_cache.end());
+        snapshot.meshes.push_back(cached->mesh);
+      } else {
+        cached->content_identity = content_identity;
+        cached->content_revision = document->content_revision();
+        cached->mesh = std::move(compiled).value();
+        snapshot.meshes.push_back(cached->mesh);
+      }
+    } else {
+      snapshot.meshes.push_back(cached->mesh);
+    }
     Result<SemanticOverlayPayload> overlay =
         context_->session.semantic_overlay(summary.id);
     if (overlay.ok()) {

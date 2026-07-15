@@ -61,8 +61,8 @@ TEST(QdrModelingRuntimeOperationTransformPreviewTests, TransformPreviewTransacti
 		EXPECT_FALSE(session.preview_transaction_status().active);
 		const quader_editor_core::Bounds3 canceled_bounds = session.document_bounds();
 		EXPECT_NEAR(canceled_bounds.min.x, original_bounds.min.x, 0.0001);
-		EXPECT_TRUE(session.state().content_revision == original_content_revision);
-		EXPECT_TRUE(session.state().selection_revision == original_selection_revision);
+		EXPECT_GT(session.state().content_revision, original_content_revision);
+		EXPECT_GT(session.state().selection_revision, original_selection_revision);
 		EXPECT_FALSE(session.history_status().can_undo);
 	}
 
@@ -134,6 +134,8 @@ TEST(QdrModelingRuntimeOperationTransformPreviewTests, TransformPreviewTransacti
 		EXPECT_TRUE(begin_duplicate.changed);
 		EXPECT_TRUE(session.objects().size() == original_object_count + 1U);
 		EXPECT_TRUE(session.preview_transaction_status().changed);
+		const int canceled_duplicate_id = session.objects().back().id;
+		const int allocation_floor = session.next_object_id();
 
                 const quader_editor_core::PreviewTransactionFinishResult
                     cancel = session.cancel_preview_transaction(
@@ -141,7 +143,13 @@ TEST(QdrModelingRuntimeOperationTransformPreviewTests, TransformPreviewTransacti
 
                 EXPECT_TRUE(cancel.restored);
 		EXPECT_TRUE(session.objects().size() == original_object_count);
+		EXPECT_EQ(session.next_object_id(), allocation_floor);
 		EXPECT_FALSE(session.history_status().can_undo);
+		ASSERT_TRUE(session
+			.create_box_from_bounds(
+				{ 2.0F, 2.0F, 2.0F }, { 3.0F, 3.0F, 3.0F })
+			.changed);
+		EXPECT_GT(session.objects().back().id, canceled_duplicate_id);
 	}
 
 	

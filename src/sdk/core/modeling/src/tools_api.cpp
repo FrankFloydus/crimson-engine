@@ -151,6 +151,10 @@ MeshHandle BoxTool::commit(std::string) {
       .min = options_.min,
       .max = options_.max,
       .material = options_.material,
+      .x_subdivisions = options_.x_subdivisions,
+      .y_subdivisions = options_.y_subdivisions,
+      .z_subdivisions = options_.z_subdivisions,
+      .flip_faces = options_.flip_faces,
   });
 }
 
@@ -457,17 +461,20 @@ CheckedToolsApi::CheckedToolsApi(std::shared_ptr<ModelingApiContext> context)
     : context_(std::move(context)) {}
 
 Result<BoxTool> CheckedToolsApi::activate_box_tool(BoxToolOptions options) {
-  return Result<BoxTool>::success(ToolsApi(context_).activate_box_tool(options));
+  return checked_direct_value<BoxTool>(
+      *context_, [&] { return ToolsApi(context_).activate_box_tool(options); });
 }
 
 Result<KnifeTool>
 CheckedToolsApi::activate_knife_tool(KnifeToolOptions options) {
-  return Result<KnifeTool>::success(
-      ToolsApi(context_).activate_knife_tool(options));
+  return checked_direct_value<KnifeTool>(*context_, [&] {
+    return ToolsApi(context_).activate_knife_tool(options);
+  });
 }
 
 Result<CutTool> CheckedToolsApi::activate_cut_tool(CutToolOptions options) {
-  return Result<CutTool>::success(ToolsApi(context_).activate_cut_tool(options));
+  return checked_direct_value<CutTool>(
+      *context_, [&] { return ToolsApi(context_).activate_cut_tool(options); });
 }
 
 } // namespace quader::modeling

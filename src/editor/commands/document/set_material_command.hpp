@@ -44,10 +44,16 @@ private:
           return document_command_missing_entity_result();
         }
         if (!material.has_value()) {
-          scene().clear_material(entity_);
+          if (!scene().clear_material(entity_)) {
+            return document_command_invalid_request_result(
+                "Material component could not be cleared");
+          }
           return document_command_changed_result();
         }
-        scene().set_material(entity_, *material);
+        if (!scene().set_material(entity_, *material)) {
+          return document_command_invalid_request_result(
+              "Material component could not be applied");
+        }
         return document_command_changed_result();
     }
 
@@ -55,7 +61,10 @@ private:
         if (!scene().exists(entity_)) {
           return document_command_missing_entity_result();
         }
-        scene().set_material(entity_, material);
+        if (!scene().set_material(entity_, material)) {
+          return document_command_invalid_request_result(
+              "Material component could not be applied");
+        }
         return document_command_changed_result();
     }
 

@@ -143,7 +143,7 @@ TEST(QdrEditorMetadataGestureCatalogTests, HostContractGestureCatalogPreservesVi
 	EXPECT_TRUE(active_tools.consumes_pointer_when_active);
 	EXPECT_TRUE(active_tools.suppresses_gizmo);
 	check_tool_order(active_tools, std::array<std::string_view, 6> {{
-		"box",
+		"create_primitive",
 		"insert_edge_loop",
 		"knife",
 		"cut",
@@ -153,22 +153,27 @@ TEST(QdrEditorMetadataGestureCatalogTests, HostContractGestureCatalogPreservesVi
 }
 
 TEST(QdrEditorMetadataGestureCatalogTests, HostContractGestureCatalogDescribesModalToolPointerPhasesAndLifecycleKeys) {
-	const qhc::HostGestureDescriptor& box = require_gesture("box_tool_gesture");
-	EXPECT_TRUE(box.requires_active_tool);
-	EXPECT_TRUE(box.consumes_pointer_when_active);
-	EXPECT_TRUE(box.suppresses_gizmo);
-	EXPECT_FALSE(box.returns_to_select_on_cancel);
-	EXPECT_FALSE(box.returns_to_select_on_success);
-	EXPECT_TRUE(box.rebuilds_mesh_on_success);
+	const qhc::HostGestureDescriptor& primitive =
+		require_gesture("create_primitive_gesture");
+	EXPECT_TRUE(primitive.requires_active_tool);
+	EXPECT_TRUE(primitive.consumes_pointer_when_active);
+	EXPECT_TRUE(primitive.suppresses_gizmo);
+	EXPECT_FALSE(primitive.returns_to_select_on_cancel);
+	EXPECT_FALSE(primitive.returns_to_select_on_success);
+	EXPECT_TRUE(primitive.rebuilds_mesh_on_success);
         EXPECT_TRUE(
-            has_pointer_input(box, qhc::HostPointerInputKind::MouseMove));
+            has_pointer_input(primitive, qhc::HostPointerInputKind::MouseMove));
         EXPECT_TRUE(
-            has_pointer_input(box, qhc::HostPointerInputKind::PrimaryDown));
+            has_pointer_input(primitive,
+                              qhc::HostPointerInputKind::PrimaryDown));
         EXPECT_TRUE(
-            has_pointer_input(box, qhc::HostPointerInputKind::PrimaryDrag));
+            has_pointer_input(primitive,
+                              qhc::HostPointerInputKind::PrimaryDrag));
         EXPECT_TRUE(
-            has_pointer_input(box, qhc::HostPointerInputKind::PrimaryUp));
-        EXPECT_TRUE(has_key_input(box, "Escape"));
+            has_pointer_input(primitive,
+                              qhc::HostPointerInputKind::PrimaryUp));
+	EXPECT_TRUE(has_key_input(primitive, "Escape"));
+	EXPECT_TRUE(has_tool(primitive, "create_primitive"));
 
 	const qhc::HostGestureDescriptor& insert_edge_loop = require_gesture("insert_edge_loop_gesture");
 	EXPECT_TRUE(insert_edge_loop.returns_to_select_on_cancel);

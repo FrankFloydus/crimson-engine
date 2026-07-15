@@ -8,6 +8,7 @@
 
 #include "editor/commands/document/document_command_scene_helpers.hpp"
 #include "editor/commands/document/scene_command.hpp"
+#include "scene/scene_transform.hpp"
 
 #include <string>
 #include <utility>
@@ -51,6 +52,10 @@ public:
         return document_command_invalid_request_result(
             "Parent entity does not exist");
       }
+      if (!scene_transform_is_finite(transform_)) {
+        return document_command_invalid_request_result(
+            "Entity transform must be finite");
+      }
 
       before_selection_ = document_command_capture_selection(scene());
       entity_ = scene().create_entity_with_id(entity_, name_, kind_,
@@ -72,10 +77,16 @@ public:
         if (parent_ != kInvalidEntityId &&
             !scene().set_parent(entity_, parent_, false)) {
           scene().destroy_entity(entity_);
+          entity_ = kInvalidEntityId;
           return document_command_invalid_request_result(
               "Entity cannot be reparented");
         }
-        scene().set_transform(entity_, transform_);
+        if (!scene().set_transform(entity_, transform_)) {
+          scene().destroy_entity(entity_);
+          entity_ = kInvalidEntityId;
+          return document_command_invalid_request_result(
+              "Entity transform cannot be applied");
+        }
         if (select_created_) {
           document_command_select_only(scene(), {entity_});
         }

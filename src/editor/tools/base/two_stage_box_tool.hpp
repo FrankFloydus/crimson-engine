@@ -21,6 +21,12 @@ public:
     has_active_preview(const ModelingBoxPreview &preview) const;
     void log_preview_failure(const char *action,
                              const ModelingBoxPreview &preview) const;
+    [[nodiscard]] bool accept_preview(ViewportBoxToolContext &box_context,
+                                      const std::string &name,
+                                      bool snap_enabled) const;
+    [[nodiscard]] bool rollback_failed_preview(
+        ViewportBoxToolContext &box_context, const char *action,
+        const ModelingBoxPreview &preview) const;
     [[nodiscard]] bool commit_preview(ViewportBoxToolContext &box_context,
                                       const std::string &name) const;
     [[nodiscard]] ViewportToolResult

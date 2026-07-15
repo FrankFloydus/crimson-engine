@@ -16,6 +16,7 @@
 #include <limits>
 #include <optional>
 #include <span>
+#include <stdexcept>
 #include <string>
 #include <type_traits>
 #include <utility>
@@ -81,6 +82,24 @@ void expect_vec3_near(Vec3 actual, Vec3 expected, float epsilon = 0.0001F) {
   EXPECT_NEAR(actual.x, expected.x, epsilon);
   EXPECT_NEAR(actual.y, expected.y, epsilon);
   EXPECT_NEAR(actual.z, expected.z, epsilon);
+}
+
+void expect_reversed_face_winding(const PolygonDocument &regular,
+                                  const PolygonDocument &flipped) {
+  Result<AuthoredPolygonPayload> regular_payload = regular.authored_payload();
+  ASSERT_TRUE(regular_payload.ok()) << regular_payload.error_message();
+  Result<AuthoredPolygonPayload> flipped_payload = flipped.authored_payload();
+  ASSERT_TRUE(flipped_payload.ok()) << flipped_payload.error_message();
+  ASSERT_EQ(regular_payload.value().faces.size(),
+            flipped_payload.value().faces.size());
+
+  for (std::size_t index = 0; index < regular_payload.value().faces.size();
+       ++index) {
+    const std::vector<VertexId> expected(
+        regular_payload.value().faces[index].vertices.rbegin(),
+        regular_payload.value().faces[index].vertices.rend());
+    EXPECT_EQ(flipped_payload.value().faces[index].vertices, expected);
+  }
 }
 
 [[nodiscard]] bool vec3_near(Vec3 actual, Vec3 expected,
@@ -486,6 +505,210 @@ TEST(ModelingSdkConsumerTests, GoldenBoxMeshFixtureStaysDeterministic) {
   EXPECT_EQ(round_trip.value().objects.front().document.face_count(), 6U);
 }
 
+TEST(ModelingSdkConsumerTests,
+     BoxAggregateInitializationRetainsThePreSubdivisionFieldOrder) {
+  const MaterialId material = make_id<MaterialTag>(11U);
+  const BoxSpec spec{{-1.0F, -2.0F, -3.0F},
+                     {1.0F, 2.0F, 3.0F}, material};
+  const BoxOptions options{"Legacy Box",
+                           {-1.0F, -2.0F, -3.0F},
+                           {1.0F, 2.0F, 3.0F}, material};
+
+  EXPECT_EQ(spec.material, material);
+  EXPECT_EQ(options.material, material);
+  EXPECT_EQ(spec.x_subdivisions, 1);
+  EXPECT_EQ(options.x_subdivisions, 1);
+}
+
+TEST(ModelingSdkConsumerTests,
+     PrimitiveFactoriesHonorDensityCapsHemisphereMaterialAndWinding) {
+  const MaterialId material = make_id<MaterialTag>(7U);
+
+  Result<PolygonDocument> box_result = PolygonDocument::make_box({
+      .min = {0.0F, 0.0F, 0.0F},
+      .max = {2.0F, 3.0F, 4.0F},
+      .material = material,
+      .x_subdivisions = 2,
+      .y_subdivisions = 3,
+      .z_subdivisions = 4,
+  });
+  ASSERT_TRUE(box_result.ok()) << box_result.error_message();
+  PolygonDocument box = std::move(box_result).value();
+  EXPECT_EQ(box.vertex_count(), 54U);
+  EXPECT_EQ(box.face_count(), 52U);
+  Result<MeshPayload> box_mesh = box.compile_mesh();
+  ASSERT_TRUE(box_mesh.ok()) << box_mesh.error_message();
+  const std::optional<SdkMeshBounds> box_bounds = mesh_bounds(box_mesh.value());
+  ASSERT_TRUE(box_bounds.has_value());
+  expect_vec3_near(box_bounds->min, {0.0F, 0.0F, 0.0F});
+  expect_vec3_near(box_bounds->max, {2.0F, 3.0F, 4.0F});
+
+  Result<AuthoredPolygonPayload> box_payload = box.authored_payload();
+  ASSERT_TRUE(box_payload.ok()) << box_payload.error_message();
+  EXPECT_TRUE(std::ranges::all_of(
+      box_payload.value().faces,
+      [material](const AuthoredPolygonFacePayload &face) {
+        return face.material == material;
+      }));
+
+  Result<PolygonDocument> flipped_box = PolygonDocument::make_box({
+      .min = {0.0F, 0.0F, 0.0F},
+      .max = {2.0F, 3.0F, 4.0F},
+      .material = material,
+      .x_subdivisions = 2,
+      .y_subdivisions = 3,
+      .z_subdivisions = 4,
+      .flip_faces = true,
+  });
+  ASSERT_TRUE(flipped_box.ok()) << flipped_box.error_message();
+  expect_reversed_face_winding(box, flipped_box.value());
+
+  Result<PolygonDocument> cylinder_result = PolygonDocument::make_cylinder({
+      .width = 4.0F,
+      .height = 6.0F,
+      .depth = 2.0F,
+      .side_count = 8,
+      .capped = true,
+      .material = material,
+  });
+  ASSERT_TRUE(cylinder_result.ok()) << cylinder_result.error_message();
+  PolygonDocument cylinder = std::move(cylinder_result).value();
+  EXPECT_EQ(cylinder.vertex_count(), 16U);
+  EXPECT_EQ(cylinder.face_count(), 10U);
+  Result<MeshPayload> cylinder_mesh = cylinder.compile_mesh();
+  ASSERT_TRUE(cylinder_mesh.ok()) << cylinder_mesh.error_message();
+  const std::optional<SdkMeshBounds> cylinder_bounds =
+      mesh_bounds(cylinder_mesh.value());
+  ASSERT_TRUE(cylinder_bounds.has_value());
+  expect_vec3_near(cylinder_bounds->min, {-2.0F, -3.0F, -1.0F});
+  expect_vec3_near(cylinder_bounds->max, {2.0F, 3.0F, 1.0F});
+
+  Result<PolygonDocument> open_cylinder = PolygonDocument::make_cylinder({
+      .width = 4.0F,
+      .height = 6.0F,
+      .depth = 2.0F,
+      .side_count = 8,
+      .capped = false,
+      .material = material,
+  });
+  ASSERT_TRUE(open_cylinder.ok()) << open_cylinder.error_message();
+  EXPECT_EQ(open_cylinder.value().face_count(), 8U);
+
+  Result<PolygonDocument> flipped_cylinder =
+      PolygonDocument::make_cylinder({
+          .width = 4.0F,
+          .height = 6.0F,
+          .depth = 2.0F,
+          .side_count = 8,
+          .capped = true,
+          .flip_faces = true,
+          .material = material,
+      });
+  ASSERT_TRUE(flipped_cylinder.ok()) << flipped_cylinder.error_message();
+  expect_reversed_face_winding(cylinder, flipped_cylinder.value());
+
+  Result<PolygonDocument> sphere_result = PolygonDocument::make_sphere({
+      .width = 4.0F,
+      .height = 6.0F,
+      .depth = 2.0F,
+      .radial_segments = 8,
+      .rings = 4,
+      .material = material,
+  });
+  ASSERT_TRUE(sphere_result.ok()) << sphere_result.error_message();
+  PolygonDocument sphere = std::move(sphere_result).value();
+  EXPECT_EQ(sphere.vertex_count(), 26U);
+  EXPECT_EQ(sphere.face_count(), 32U);
+  Result<MeshPayload> sphere_mesh = sphere.compile_mesh();
+  ASSERT_TRUE(sphere_mesh.ok()) << sphere_mesh.error_message();
+  const std::optional<SdkMeshBounds> sphere_bounds =
+      mesh_bounds(sphere_mesh.value());
+  ASSERT_TRUE(sphere_bounds.has_value());
+  expect_vec3_near(sphere_bounds->min, {-2.0F, -3.0F, -1.0F});
+  expect_vec3_near(sphere_bounds->max, {2.0F, 3.0F, 1.0F});
+
+  Result<PolygonDocument> hemisphere = PolygonDocument::make_sphere({
+      .width = 4.0F,
+      .height = 6.0F,
+      .depth = 2.0F,
+      .radial_segments = 8,
+      .rings = 4,
+      .hemisphere = true,
+      .material = material,
+  });
+  ASSERT_TRUE(hemisphere.ok()) << hemisphere.error_message();
+  EXPECT_EQ(hemisphere.value().vertex_count(), 33U);
+  EXPECT_EQ(hemisphere.value().face_count(), 33U);
+
+  Result<PolygonDocument> flipped_sphere = PolygonDocument::make_sphere({
+      .width = 4.0F,
+      .height = 6.0F,
+      .depth = 2.0F,
+      .radial_segments = 8,
+      .rings = 4,
+      .flip_faces = true,
+      .material = material,
+  });
+  ASSERT_TRUE(flipped_sphere.ok()) << flipped_sphere.error_message();
+  expect_reversed_face_winding(sphere, flipped_sphere.value());
+}
+
+TEST(ModelingSdkConsumerTests,
+     ModelingApiCreatesEveryPrimitiveAndRejectsInvalidSettingsAtomically) {
+  ModelingApi quader = ModelingApi::create();
+
+  MeshHandle box = quader.create_box({
+      .name = "Subdivided Box",
+      .x_subdivisions = 2,
+      .y_subdivisions = 3,
+      .z_subdivisions = 4,
+      .flip_faces = true,
+  });
+  MeshHandle cylinder = quader.create_cylinder({
+      .name = "Open Cylinder",
+      .width = 4.0F,
+      .height = 6.0F,
+      .depth = 2.0F,
+      .side_count = 8,
+      .capped = false,
+  });
+  MeshHandle sphere = quader.create_sphere({
+      .name = "Hemisphere",
+      .width = 4.0F,
+      .height = 6.0F,
+      .depth = 2.0F,
+      .radial_segments = 8,
+      .rings = 4,
+      .hemisphere = true,
+      .flip_faces = true,
+  });
+
+  ASSERT_TRUE(box.valid());
+  ASSERT_TRUE(cylinder.valid());
+  ASSERT_TRUE(sphere.valid());
+  EXPECT_EQ(box.summary().name, "Subdivided Box");
+  EXPECT_EQ(cylinder.summary().name, "Open Cylinder");
+  EXPECT_EQ(sphere.summary().name, "Hemisphere");
+  EXPECT_EQ(box.payloads().authored_polygon().faces.size(), 52U);
+  EXPECT_EQ(cylinder.payloads().authored_polygon().faces.size(), 8U);
+  EXPECT_EQ(sphere.payloads().authored_polygon().faces.size(), 33U);
+
+  const std::size_t before_invalid = quader.mesh_summaries().size();
+  Result<MeshHandle> invalid_cylinder =
+      quader.checked().create_cylinder({.side_count = 2});
+  ASSERT_FALSE(invalid_cylinder.ok());
+  EXPECT_EQ(invalid_cylinder.error().code, ErrorCode::InvalidArgument);
+  Result<MeshHandle> invalid_sphere =
+      quader.checked().create_sphere({.rings = 1});
+  ASSERT_FALSE(invalid_sphere.ok());
+  EXPECT_EQ(invalid_sphere.error().code, ErrorCode::InvalidArgument);
+  Result<MeshHandle> invalid_box =
+      quader.checked().create_box({.x_subdivisions = 0});
+  ASSERT_FALSE(invalid_box.ok());
+  EXPECT_EQ(invalid_box.error().code, ErrorCode::InvalidArgument);
+  EXPECT_EQ(quader.mesh_summaries().size(), before_invalid);
+}
+
 TEST(ModelingSdkConsumerTests, RejectsMalformedBoundsAndStaleIds) {
   Result<PolygonDocument> invalid_box =
       PolygonDocument::make_box({.min = {1.0F, 0.0F, 0.0F},
@@ -601,6 +824,204 @@ TEST(ModelingSdkConsumerTests, SessionSelectionUndoRedoUsesSdkTypesOnly) {
 
   Result<OperationResult> redo = session.redo();
   ASSERT_TRUE(redo.ok()) << redo.error_message();
+}
+
+TEST(ModelingSdkConsumerTests,
+     SessionFailedFaceSelectionPreservesHistoryAndChangeCursor) {
+  Result<PolygonDocument> document_result = PolygonDocument::make_box({});
+  ASSERT_TRUE(document_result.ok()) << document_result.error_message();
+
+  ModelingSession session;
+  Result<ObjectId> object =
+      session.add_document(std::move(document_result).value(), "Box");
+  ASSERT_TRUE(object.ok()) << object.error_message();
+  ASSERT_TRUE(session.rename_object(object.value(), "Renamed").ok());
+  ASSERT_TRUE(session.undo().ok());
+  ASSERT_TRUE(session.can_redo());
+
+  const std::size_t undo_depth = session.undo_depth();
+  const std::uint64_t content_revision = session.content_revision();
+  const std::uint64_t selection_revision = session.selection_revision();
+  Result<OperationResult> failed =
+      session.select_face(object.value(), make_id<FaceTag>(999999U));
+  ASSERT_FALSE(failed.ok());
+
+  EXPECT_EQ(session.undo_depth(), undo_depth);
+  EXPECT_TRUE(session.can_redo());
+  EXPECT_EQ(session.content_revision(), content_revision);
+  EXPECT_EQ(session.selection_revision(), selection_revision);
+  ASSERT_EQ(session.objects().size(), 1U);
+  EXPECT_FALSE(session.objects().front().selected);
+  EXPECT_TRUE(session.changes_since(content_revision).objects.empty());
+}
+
+TEST(ModelingSdkConsumerTests,
+     SessionUnchangedTranslatePreservesHistoryAndRedo) {
+  Result<PolygonDocument> document_result = PolygonDocument::make_box({});
+  ASSERT_TRUE(document_result.ok()) << document_result.error_message();
+
+  ModelingSession session;
+  Result<ObjectId> object =
+      session.add_document(std::move(document_result).value(), "Box");
+  ASSERT_TRUE(object.ok()) << object.error_message();
+  ASSERT_TRUE(session.select_object(object.value()).ok());
+  ASSERT_TRUE(session.rename_object(object.value(), "Renamed").ok());
+  ASSERT_TRUE(session.undo().ok());
+  ASSERT_TRUE(session.can_redo());
+
+  const std::size_t undo_depth = session.undo_depth();
+  const std::uint64_t content_revision = session.content_revision();
+  Result<OperationResult> unchanged =
+      session.translate_selection({1.0F, 0.0F, 0.0F});
+  ASSERT_TRUE(unchanged.ok()) << unchanged.error_message();
+  EXPECT_FALSE(unchanged.value().changed);
+  EXPECT_EQ(session.undo_depth(), undo_depth);
+  EXPECT_TRUE(session.can_redo());
+  EXPECT_EQ(session.content_revision(), content_revision);
+  EXPECT_TRUE(session.changes_since(content_revision).objects.empty());
+}
+
+TEST(ModelingSdkConsumerTests,
+     SessionUnchangedAndFailedCommitsDoNotSelectOrPublish) {
+  Result<PolygonDocument> document_result = PolygonDocument::make_box({});
+  ASSERT_TRUE(document_result.ok()) << document_result.error_message();
+
+  ModelingSession session;
+  Result<ObjectId> object =
+      session.add_document(std::move(document_result).value(), "Box");
+  ASSERT_TRUE(object.ok()) << object.error_message();
+  const std::size_t undo_depth = session.undo_depth();
+  const std::uint64_t content_revision = session.content_revision();
+
+  Result<PolygonDocument> unchanged_document =
+      session.document_copy(object.value());
+  ASSERT_TRUE(unchanged_document.ok()) << unchanged_document.error_message();
+  OperationResult unchanged_receipt;
+  Result<OperationResult> unchanged = session.commit_document(
+      object.value(), std::move(unchanged_document).value(),
+      unchanged_receipt);
+  ASSERT_TRUE(unchanged.ok()) << unchanged.error_message();
+  EXPECT_FALSE(unchanged.value().changed);
+
+  Result<PolygonDocument> failed_document = session.document_copy(object.value());
+  ASSERT_TRUE(failed_document.ok()) << failed_document.error_message();
+  OperationResult failed_receipt;
+  failed_receipt.success = false;
+  failed_receipt.changed = true;
+  failed_receipt.error_code = ErrorCode::ValidationFailed;
+  Result<OperationResult> failed = session.commit_document(
+      object.value(), std::move(failed_document).value(), failed_receipt);
+  ASSERT_TRUE(failed.ok()) << failed.error_message();
+  EXPECT_FALSE(failed.value().success);
+
+  EXPECT_EQ(session.undo_depth(), undo_depth);
+  EXPECT_EQ(session.content_revision(), content_revision);
+  ASSERT_EQ(session.objects().size(), 1U);
+  EXPECT_FALSE(session.objects().front().selected);
+  EXPECT_TRUE(session.changes_since(content_revision).objects.empty());
+}
+
+TEST(ModelingSdkConsumerTests,
+     SessionIndependentDocumentReplacementPublishesSelectionChange) {
+  Result<PolygonDocument> original_result = PolygonDocument::make_box({});
+  Result<PolygonDocument> replacement_result = PolygonDocument::make_box({});
+  ASSERT_TRUE(original_result.ok()) << original_result.error_message();
+  ASSERT_TRUE(replacement_result.ok()) << replacement_result.error_message();
+
+  PolygonDocument original = std::move(original_result).value();
+  PolygonDocument replacement = std::move(replacement_result).value();
+  const std::vector<FaceId> original_faces = original.face_ids();
+  const std::vector<FaceId> replacement_faces = replacement.face_ids();
+  ASSERT_GE(original_faces.size(), 2U);
+  ASSERT_GE(replacement_faces.size(), 2U);
+  ASSERT_TRUE(original.select_face(original_faces[0]).ok());
+  ASSERT_TRUE(replacement.select_face(replacement_faces[1]).ok());
+  ASSERT_EQ(original.selection_revision(), replacement.selection_revision());
+
+  ModelingSession session;
+  Result<ObjectId> object =
+      session.add_document(std::move(original), "Original");
+  ASSERT_TRUE(object.ok()) << object.error_message();
+  ASSERT_TRUE(session.select_object(object.value()).ok());
+  const PolygonDocument *before = session.document(object.value());
+  ASSERT_NE(before, nullptr);
+  ASSERT_EQ(before->selection_revision(), replacement.selection_revision());
+
+  const std::uint64_t content_revision = session.content_revision();
+  const std::uint64_t selection_revision = session.selection_revision();
+  OperationResult receipt;
+  receipt.changed = true;
+  receipt.dirty.geometry = true;
+  Result<OperationResult> committed = session.commit_document(
+      object.value(), std::move(replacement), receipt);
+  ASSERT_TRUE(committed.ok()) << committed.error_message();
+
+  const SessionChangeSnapshot changes =
+      session.changes_since(content_revision);
+  const auto change = std::ranges::find_if(
+      changes.objects, [&](const SessionObjectChange &candidate) {
+        return candidate.id == object.value();
+      });
+  ASSERT_NE(change, changes.objects.end());
+  EXPECT_TRUE(change->dirty.geometry);
+  EXPECT_TRUE(change->dirty.selection);
+  EXPECT_TRUE(change->dirty.overlays);
+  EXPECT_GT(session.selection_revision(), selection_revision);
+
+  const PolygonDocument *after = session.document(object.value());
+  ASSERT_NE(after, nullptr);
+  const PolygonSelectionSnapshot selected = after->selection();
+  ASSERT_EQ(selected.faces.size(), 1U);
+  EXPECT_EQ(selected.faces.front(), replacement_faces[1]);
+}
+
+TEST(ModelingSdkConsumerTests,
+     SessionActiveObjectOnlyChangeIsUndoableAndPublished) {
+  Result<PolygonDocument> first_document = PolygonDocument::make_box({});
+  Result<PolygonDocument> second_document = PolygonDocument::make_box({});
+  ASSERT_TRUE(first_document.ok()) << first_document.error_message();
+  ASSERT_TRUE(second_document.ok()) << second_document.error_message();
+
+  ModelingSession session;
+  Result<ObjectId> first =
+      session.add_document(std::move(first_document).value(), "First");
+  Result<ObjectId> second =
+      session.add_document(std::move(second_document).value(), "Second");
+  ASSERT_TRUE(first.ok()) << first.error_message();
+  ASSERT_TRUE(second.ok()) << second.error_message();
+  const std::array<ObjectId, 2> both{first.value(), second.value()};
+  ASSERT_TRUE(
+      session.apply_object_selection(both, SelectionEdit::Replace).ok());
+
+  const std::size_t undo_depth = session.undo_depth();
+  const std::uint64_t content_revision = session.content_revision();
+  const std::uint64_t selection_revision = session.selection_revision();
+  const std::array<ObjectId, 1> only_second{second.value()};
+  Result<OperationResult> changed =
+      session.apply_object_selection(only_second, SelectionEdit::Add);
+  ASSERT_TRUE(changed.ok()) << changed.error_message();
+  EXPECT_TRUE(changed.value().changed);
+  EXPECT_EQ(session.undo_depth(), undo_depth + 1U);
+  EXPECT_GT(session.content_revision(), content_revision);
+  EXPECT_GT(session.selection_revision(), selection_revision);
+
+  const SessionChangeSnapshot changes =
+      session.changes_since(content_revision);
+  const auto first_change = std::ranges::find_if(
+      changes.objects, [&](const SessionObjectChange &change) {
+        return change.id == first.value();
+      });
+  const auto second_change = std::ranges::find_if(
+      changes.objects, [&](const SessionObjectChange &change) {
+        return change.id == second.value();
+      });
+  ASSERT_NE(first_change, changes.objects.end());
+  ASSERT_NE(second_change, changes.objects.end());
+  EXPECT_TRUE(first_change->dirty.selection);
+  EXPECT_TRUE(first_change->dirty.overlays);
+  EXPECT_TRUE(second_change->dirty.selection);
+  EXPECT_TRUE(second_change->dirty.overlays);
+  EXPECT_TRUE(session.undo().ok());
 }
 
 TEST(ModelingSdkConsumerTests, SessionPreviewCommitAndCancelStayHeadless) {
@@ -736,6 +1157,106 @@ TEST(ModelingSdkConsumerTests, ModelingCheckedAndStoreLastErrorPoliciesWork) {
 }
 
 TEST(ModelingSdkConsumerTests,
+     CheckedIoReportsCurrentStoreLastErrorSerializationFailures) {
+  ModelingApi quader = ModelingApi::create({
+      .error_policy = ErrorPolicy::StoreLastError,
+  });
+  MeshHandle live = quader.create_box({.name = "Live"});
+  ASSERT_TRUE(live.valid());
+
+  const ObjectId invalid = make_id<ObjectTag>(999999U);
+  Result<std::vector<std::byte>> invalid_qdr =
+      quader.checked().io().serialize_qdr(invalid);
+  ASSERT_FALSE(invalid_qdr.ok());
+  EXPECT_EQ(invalid_qdr.error().code, ErrorCode::InvalidId);
+  ASSERT_NE(quader.last_error(), nullptr);
+  EXPECT_EQ(quader.last_error()->code, ErrorCode::InvalidId);
+
+  Result<std::vector<std::byte>> valid_qdr =
+      quader.checked().io().serialize_qdr(live.id());
+  ASSERT_TRUE(valid_qdr.ok()) << valid_qdr.error_message();
+  EXPECT_FALSE(valid_qdr.value().empty());
+  ASSERT_NE(quader.last_error(), nullptr);
+  EXPECT_EQ(quader.last_error()->code, ErrorCode::InvalidId);
+
+  MeshHandle stale = quader.create_box({.name = "Stale"});
+  ASSERT_TRUE(stale.valid());
+  const ObjectId stale_id = stale.id();
+  ASSERT_TRUE(stale.destroy().success);
+  Result<std::vector<std::byte>> stale_qdr =
+      quader.checked().io().serialize_qdr(stale_id);
+  ASSERT_FALSE(stale_qdr.ok());
+  EXPECT_EQ(stale_qdr.error().code, ErrorCode::InvalidId);
+
+  Result<std::string> stale_obj =
+      quader.checked().io().serialize_obj(stale_id);
+  ASSERT_FALSE(stale_obj.ok());
+  EXPECT_NE(stale_obj.error().code, ErrorCode::Ok);
+  ASSERT_NE(quader.last_error(), nullptr);
+  EXPECT_EQ(stale_obj.error().code, quader.last_error()->code);
+}
+
+TEST(ModelingSdkConsumerTests,
+     CheckedIoRejectsMalformedDocumentUnderStoreLastError) {
+  ModelingApi quader = ModelingApi::create({
+      .error_policy = ErrorPolicy::StoreLastError,
+  });
+  const std::array<std::byte, 4> malformed{
+      std::byte{0xff},
+      std::byte{0x00},
+      std::byte{0x7f},
+      std::byte{0x01},
+  };
+
+  Result<std::vector<MeshHandle>> imported =
+      quader.checked().io().deserialize_qdr_document(malformed);
+  ASSERT_FALSE(imported.ok());
+  EXPECT_NE(imported.error().code, ErrorCode::Ok);
+  ASSERT_NE(quader.last_error(), nullptr);
+  EXPECT_EQ(quader.last_error()->code, imported.error().code);
+}
+
+TEST(ModelingSdkConsumerTests,
+     CheckedPreviewOperationsReportNewErrorsAndIgnoreStaleErrors) {
+  ModelingApi empty = ModelingApi::create({
+      .error_policy = ErrorPolicy::StoreLastError,
+  });
+  Result<PreviewHandle> merge =
+      empty.checked().operations().merge_by_distance();
+  ASSERT_FALSE(merge.ok());
+  EXPECT_EQ(merge.error().code, ErrorCode::UnsupportedOperation);
+  Result<PreviewHandle> bevel = empty.checked().operations().bevel_edges();
+  ASSERT_FALSE(bevel.ok());
+  EXPECT_EQ(bevel.error().code, ErrorCode::UnsupportedOperation);
+  Result<PreviewHandle> thicken =
+      empty.checked().operations().thicken_faces();
+  ASSERT_FALSE(thicken.ok());
+  EXPECT_EQ(thicken.error().code, ErrorCode::UnsupportedOperation);
+
+  ModelingApi quader = ModelingApi::create({
+      .error_policy = ErrorPolicy::StoreLastError,
+  });
+  MeshHandle mesh = quader.create_box({.name = "Preview"});
+  ASSERT_TRUE(mesh.valid());
+  ASSERT_TRUE(mesh.select().replace().success);
+  ASSERT_TRUE(mesh.edges().all().replace().success);
+
+  Result<std::vector<std::byte>> prior_failure =
+      quader.checked().io().serialize_qdr(make_id<ObjectTag>(999999U));
+  ASSERT_FALSE(prior_failure.ok());
+  ASSERT_NE(quader.last_error(), nullptr);
+  const Error prior_error = *quader.last_error();
+
+  Result<PreviewHandle> valid_preview =
+      quader.checked().operations().bevel_edges();
+  ASSERT_TRUE(valid_preview.ok()) << valid_preview.error_message();
+  EXPECT_TRUE(valid_preview.value().active());
+  ASSERT_NE(quader.last_error(), nullptr);
+  EXPECT_EQ(quader.last_error()->code, prior_error.code);
+  EXPECT_EQ(quader.last_error()->message, prior_error.message);
+}
+
+TEST(ModelingSdkConsumerTests,
      ModelingApiObjectLifecycleUsesValueHandlesAndUndoRedo) {
   ModelingApi quader = ModelingApi::create();
   MeshHandle mesh = quader.create_box({.name = "Source"});
@@ -766,6 +1287,168 @@ TEST(ModelingSdkConsumerTests,
   ASSERT_TRUE(undone.success);
   EXPECT_TRUE(duplicate.valid());
   EXPECT_EQ(quader.mesh_summaries().size(), 2U);
+}
+
+TEST(ModelingSdkConsumerTests,
+     ModelingApiUndoBranchDoesNotRecycleObjectIdentity) {
+  ModelingApi quader = ModelingApi::create();
+  MeshHandle original = quader.create_box({.name = "Original"});
+  ASSERT_TRUE(original.valid());
+  const ObjectId original_id = original.id();
+
+  OperationReceipt undone = quader.undo();
+  ASSERT_TRUE(undone.success) << undone.error.message;
+  EXPECT_FALSE(original.valid());
+
+  MeshHandle replacement = quader.create_box({.name = "Replacement"});
+  ASSERT_TRUE(replacement.valid());
+  EXPECT_NE(replacement.id(), original_id);
+  EXPECT_FALSE(original.valid());
+}
+
+TEST(ModelingSdkConsumerTests,
+     ModelingApiRedoRestoresOriginalObjectIdentity) {
+  ModelingApi quader = ModelingApi::create();
+  MeshHandle original = quader.create_box({.name = "Original"});
+  ASSERT_TRUE(original.valid());
+  const ObjectId original_id = original.id();
+
+  OperationReceipt undone = quader.undo();
+  ASSERT_TRUE(undone.success) << undone.error.message;
+  EXPECT_FALSE(original.valid());
+  ASSERT_TRUE(quader.can_redo());
+
+  OperationReceipt redone = quader.redo();
+  ASSERT_TRUE(redone.success) << redone.error.message;
+  EXPECT_TRUE(original.valid());
+  const std::vector<MeshSummary> summaries = quader.mesh_summaries();
+  ASSERT_EQ(summaries.size(), 1U);
+  EXPECT_EQ(summaries.front().id, original_id);
+}
+
+TEST(ModelingSdkConsumerTests,
+     MeshSyncIncludesObjectsAddedAfterHighDocumentRevisions) {
+  ModelingApi quader = ModelingApi::create();
+  MeshHandle first = quader.create_box({.name = "First"});
+  ASSERT_TRUE(first.valid());
+
+  MeshSyncSnapshot initial = quader.mesh_sync().changes_since(0);
+  ASSERT_EQ(initial.objects.size(), 1U);
+  std::uint64_t cursor = initial.content_revision;
+
+  ASSERT_TRUE(first.faces().all().replace().success);
+  for (int edit = 0; edit < 5; ++edit) {
+    ASSERT_TRUE(first.transform().translate({0.1F, 0.0F, 0.0F}).success);
+  }
+  MeshSyncSnapshot edited = quader.mesh_sync().changes_since(cursor);
+  ASSERT_GT(edited.content_revision, cursor);
+  cursor = edited.content_revision;
+
+  MeshHandle late = quader.create_box({.name = "Late"});
+  ASSERT_TRUE(late.valid());
+  MeshSyncSnapshot added = quader.mesh_sync().changes_since(cursor);
+  EXPECT_GT(added.content_revision, cursor);
+  const auto late_change =
+      std::ranges::find_if(added.objects, [&](const ObjectMeshDelta &change) {
+        return change.object == late.id();
+      });
+  ASSERT_NE(late_change, added.objects.end());
+  EXPECT_FALSE(late_change->deleted);
+  EXPECT_FALSE(late_change->mesh.vertices.empty());
+}
+
+TEST(ModelingSdkConsumerTests,
+     MeshSyncDeletionEmitsTombstoneAndKeepsCursorMonotonic) {
+  ModelingApi quader = ModelingApi::create();
+  MeshHandle mesh = quader.create_box({.name = "Delete Me"});
+  ASSERT_TRUE(mesh.valid());
+
+  const MeshSyncSnapshot created = quader.mesh_sync().changes_since(0);
+  ASSERT_GT(created.content_revision, 0U);
+  ASSERT_TRUE(mesh.destroy().success);
+
+  const MeshSyncSnapshot deleted =
+      quader.mesh_sync().changes_since(created.content_revision);
+  EXPECT_GT(deleted.content_revision, created.content_revision);
+  const auto tombstone = std::ranges::find_if(
+      deleted.objects, [&](const ObjectMeshDelta &change) {
+        return change.object == mesh.id();
+      });
+  ASSERT_NE(tombstone, deleted.objects.end());
+  EXPECT_TRUE(tombstone->deleted);
+  EXPECT_TRUE(tombstone->mesh.vertices.empty());
+  EXPECT_EQ(quader.revisions().content, deleted.content_revision);
+
+  const MeshSyncSnapshot unchanged =
+      quader.mesh_sync().changes_since(deleted.content_revision);
+  EXPECT_EQ(unchanged.content_revision, deleted.content_revision);
+  EXPECT_TRUE(unchanged.objects.empty());
+}
+
+TEST(ModelingSdkConsumerTests,
+     MeshSyncAndRenderPublishUndoRedoTransitions) {
+  ModelingApi quader = ModelingApi::create();
+  MeshHandle mesh = quader.create_box({.name = "Undo Redo"});
+  ASSERT_TRUE(mesh.valid());
+  const ObjectId object_id = mesh.id();
+
+  const MeshSyncSnapshot created = quader.mesh_sync().changes_since(0);
+  const RenderSnapshotPayload initial = quader.render().scene_snapshot();
+  ASSERT_EQ(created.content_revision, initial.scene_revision);
+  ASSERT_TRUE(mesh.destroy().success);
+
+  const MeshSyncSnapshot removed =
+      quader.mesh_sync().changes_since(created.content_revision);
+  ASSERT_GT(removed.content_revision, created.content_revision);
+  ASSERT_EQ(removed.objects.size(), 1U);
+  EXPECT_EQ(removed.objects.front().object, object_id);
+  EXPECT_TRUE(removed.objects.front().deleted);
+
+  ASSERT_TRUE(quader.undo().success);
+  const MeshSyncSnapshot restored =
+      quader.mesh_sync().changes_since(removed.content_revision);
+  ASSERT_GT(restored.content_revision, removed.content_revision);
+  ASSERT_EQ(restored.objects.size(), 1U);
+  EXPECT_EQ(restored.objects.front().object, object_id);
+  EXPECT_FALSE(restored.objects.front().deleted);
+  EXPECT_FALSE(restored.objects.front().mesh.vertices.empty());
+
+  const RenderSnapshotPayload rendered_undo =
+      quader.render().scene_snapshot({
+          .only_if_changed = true,
+          .previous_revision = initial.scene_revision,
+      });
+  EXPECT_EQ(rendered_undo.scene_revision, restored.content_revision);
+  EXPECT_FALSE(rendered_undo.meshes.empty());
+
+  const RenderSnapshotPayload unchanged =
+      quader.render().scene_snapshot({
+          .only_if_changed = true,
+          .previous_revision = rendered_undo.scene_revision,
+      });
+  EXPECT_EQ(unchanged.scene_revision, rendered_undo.scene_revision);
+  EXPECT_TRUE(unchanged.meshes.empty());
+  EXPECT_TRUE(unchanged.materials.empty());
+  EXPECT_TRUE(unchanged.overlays.empty());
+
+  ASSERT_TRUE(quader.redo().success);
+  const MeshSyncSnapshot removed_again =
+      quader.mesh_sync().changes_since(restored.content_revision);
+  ASSERT_GT(removed_again.content_revision, restored.content_revision);
+  ASSERT_EQ(removed_again.objects.size(), 1U);
+  EXPECT_EQ(removed_again.objects.front().object, object_id);
+  EXPECT_TRUE(removed_again.objects.front().deleted);
+
+  const RenderSnapshotPayload rendered_redo =
+      quader.render().scene_snapshot({
+          .only_if_changed = true,
+          .previous_revision = rendered_undo.scene_revision,
+      });
+  EXPECT_EQ(rendered_redo.scene_revision,
+            removed_again.content_revision);
+  EXPECT_GT(rendered_redo.scene_revision, rendered_undo.scene_revision);
+  EXPECT_TRUE(rendered_redo.meshes.empty());
+  EXPECT_FALSE(rendered_redo.materials.empty());
 }
 
 TEST(ModelingSdkConsumerTests,
@@ -995,8 +1678,89 @@ TEST(ModelingSdkConsumerTests,
 
   EXPECT_FALSE(batch.success());
   EXPECT_EQ(batch.receipt.error.code, ErrorCode::InvalidId);
+  ASSERT_EQ(batch.step_receipts.size(), 2U);
+  EXPECT_TRUE(batch.step_receipts.front().success);
+  EXPECT_FALSE(batch.step_receipts.back().success);
+  EXPECT_EQ(batch.step_receipts.back().error.code, ErrorCode::InvalidId);
   EXPECT_TRUE(quader.mesh_summaries().empty());
   EXPECT_FALSE(quader.can_undo());
+}
+
+TEST(ModelingSdkConsumerTests,
+     ModelingBatchStoreLastErrorRollsBackFailedCallback) {
+  ModelingApi quader = ModelingApi::create({
+      .error_policy = ErrorPolicy::StoreLastError,
+  });
+
+  BatchResult batch = quader.batch("StoreLastError rollback")
+                          .create_box({.name = "Rollback Body"})
+                          .as("body")
+                          .with_mesh("body", [](MeshHandle mesh) {
+                            const std::array<EdgeKey, 1> invalid_edges{};
+                            static_cast<void>(
+                                mesh.edges().only(invalid_edges).replace());
+                          })
+                          .commit();
+
+  EXPECT_FALSE(batch.success());
+  EXPECT_EQ(batch.receipt.error.code, ErrorCode::InvalidId);
+  ASSERT_EQ(batch.step_receipts.size(), 2U);
+  EXPECT_TRUE(batch.step_receipts.front().success);
+  EXPECT_FALSE(batch.step_receipts.back().success);
+  EXPECT_EQ(batch.step_receipts.back().error.code, ErrorCode::InvalidId);
+  EXPECT_FALSE(batch.mesh("body").valid());
+  EXPECT_TRUE(quader.mesh_summaries().empty());
+  EXPECT_FALSE(quader.can_undo());
+  ASSERT_NE(quader.last_error(), nullptr);
+  EXPECT_EQ(quader.last_error()->code, ErrorCode::InvalidId);
+}
+
+TEST(ModelingSdkConsumerTests,
+     ModelingBatchInvalidCreateHasPolicyIndependentFailureReceipt) {
+  const BoxOptions invalid{
+      .name = "Invalid Box",
+      .min = {1.0F, 0.0F, 0.0F},
+      .max = {1.0F, 1.0F, 1.0F},
+  };
+
+  ModelingApi throwing = ModelingApi::create();
+  BatchResult throwing_batch = throwing.batch("Throwing invalid create")
+                                   .create_box(invalid)
+                                   .as("body")
+                                   .commit();
+
+  ModelingApi stored = ModelingApi::create({
+      .error_policy = ErrorPolicy::StoreLastError,
+  });
+  BatchResult stored_batch = stored.batch("Stored invalid create")
+                                 .create_box(invalid)
+                                 .as("body")
+                                 .commit();
+
+  EXPECT_FALSE(throwing_batch.success());
+  EXPECT_FALSE(stored_batch.success());
+  EXPECT_EQ(throwing_batch.receipt.error.code, ErrorCode::InvalidArgument);
+  EXPECT_EQ(stored_batch.receipt.error.code, ErrorCode::InvalidArgument);
+  EXPECT_EQ(stored_batch.receipt.error.message,
+            throwing_batch.receipt.error.message);
+
+  ASSERT_EQ(throwing_batch.step_receipts.size(), 1U);
+  ASSERT_EQ(stored_batch.step_receipts.size(), 1U);
+  EXPECT_FALSE(throwing_batch.step_receipts.front().success);
+  EXPECT_FALSE(stored_batch.step_receipts.front().success);
+  EXPECT_EQ(throwing_batch.step_receipts.front().error.code,
+            ErrorCode::InvalidArgument);
+  EXPECT_EQ(stored_batch.step_receipts.front().error.code,
+            ErrorCode::InvalidArgument);
+  EXPECT_EQ(stored_batch.step_receipts.front().error.message,
+            throwing_batch.step_receipts.front().error.message);
+
+  EXPECT_TRUE(throwing.mesh_summaries().empty());
+  EXPECT_TRUE(stored.mesh_summaries().empty());
+  EXPECT_FALSE(throwing.can_undo());
+  EXPECT_FALSE(stored.can_undo());
+  ASSERT_NE(stored.last_error(), nullptr);
+  EXPECT_EQ(stored.last_error()->code, ErrorCode::InvalidArgument);
 }
 
 TEST(ModelingSdkConsumerTests,
@@ -1265,6 +2029,199 @@ TEST(ModelingSdkConsumerTests,
   const bool flipped = vec3_near(*source_a, *active_b) &&
                        vec3_near(*source_b, *active_a);
   EXPECT_TRUE(direct || flipped);
+}
+
+TEST(ModelingSdkConsumerTests,
+     SessionChangeJournalPreservesDirectDirtyDomains) {
+  ModelingApi quader = ModelingApi::create();
+  MeshHandle mesh = quader.create_box({.name = "Dirty Domains"});
+  ASSERT_TRUE(mesh.valid());
+
+  const MeshSyncSnapshot created = quader.mesh_sync().changes_since(0);
+  ASSERT_GT(created.content_revision, 0U);
+  const RenderSnapshotPayload rendered = quader.render().scene_snapshot();
+  ASSERT_EQ(rendered.meshes.size(), 1U);
+  ASSERT_FALSE(rendered.meshes.front().vertices.empty());
+
+  OperationReceipt selected = mesh.faces().all().replace();
+  ASSERT_TRUE(selected.success) << selected.error.message;
+  ASSERT_TRUE(selected.changed);
+  const MeshSyncSnapshot selection_change =
+      quader.mesh_sync().changes_since(created.content_revision);
+  ASSERT_EQ(selection_change.objects.size(), 1U);
+  EXPECT_TRUE(selection_change.objects.front().dirty.selection);
+  EXPECT_FALSE(selection_change.objects.front().dirty.topology);
+  EXPECT_FALSE(selection_change.objects.front().dirty.geometry);
+  EXPECT_FALSE(selection_change.objects.front().dirty.materials);
+  EXPECT_TRUE(selection_change.objects.front().mesh.vertices.empty());
+  EXPECT_TRUE(selection_change.objects.front().mesh.indices.empty());
+
+  const RenderSnapshotPayload selection_render =
+      quader.render().scene_snapshot({
+          .only_if_changed = true,
+          .previous_revision = rendered.scene_revision,
+      });
+  EXPECT_GT(selection_render.scene_revision, rendered.scene_revision);
+  ASSERT_EQ(selection_render.meshes.size(), 1U);
+  EXPECT_EQ(selection_render.meshes.front().content_revision,
+            rendered.meshes.front().content_revision);
+  EXPECT_EQ(selection_render.meshes.front().vertices.size(),
+            rendered.meshes.front().vertices.size());
+  EXPECT_EQ(selection_render.meshes.front().indices.size(),
+            rendered.meshes.front().indices.size());
+
+  OperationReceipt assigned = mesh.materials().assign_slot(7U);
+  ASSERT_TRUE(assigned.success) << assigned.error.message;
+  ASSERT_TRUE(assigned.changed);
+  ASSERT_TRUE(assigned.dirty.materials);
+  EXPECT_FALSE(assigned.dirty.topology);
+  const MeshSyncSnapshot material_change =
+      quader.mesh_sync().changes_since(selection_change.content_revision);
+  ASSERT_EQ(material_change.objects.size(), 1U);
+  EXPECT_EQ(material_change.objects.front().dirty.topology,
+            assigned.dirty.topology);
+  EXPECT_EQ(material_change.objects.front().dirty.geometry,
+            assigned.dirty.geometry);
+  EXPECT_EQ(material_change.objects.front().dirty.selection,
+            assigned.dirty.selection);
+  EXPECT_TRUE(material_change.objects.front().dirty.materials);
+  EXPECT_FALSE(material_change.objects.front().mesh.vertices.empty());
+}
+
+TEST(ModelingSdkConsumerTests,
+     SessionPreviewCommitPublishesExactDirtyAndUndoIsConservative) {
+  Result<PolygonDocument> document = PolygonDocument::make_box({});
+  ASSERT_TRUE(document.ok()) << document.error_message();
+  ModelingSession session;
+  Result<ObjectId> object =
+      session.add_document(std::move(document).value(), "Preview Dirty");
+  ASSERT_TRUE(object.ok()) << object.error_message();
+  const PolygonDocument *live = session.document(object.value());
+  ASSERT_NE(live, nullptr);
+  const std::vector<FaceId> faces = live->face_ids();
+  ASSERT_FALSE(faces.empty());
+  ASSERT_TRUE(session.select_face(object.value(), faces.front()).ok());
+  const std::uint64_t cursor = session.content_revision();
+
+  Result<OperationResult> began =
+      session.begin_translate_preview(object.value(), {0.0F, 1.0F, 0.0F});
+  ASSERT_TRUE(began.ok()) << began.error_message();
+  const std::uint64_t first_preview_revision =
+      session.preview_summary().content_revision;
+  ASSERT_GT(first_preview_revision, 0U);
+  Result<OperationResult> updated =
+      session.update_translate_preview({0.0F, 2.0F, 0.0F});
+  ASSERT_TRUE(updated.ok()) << updated.error_message();
+  EXPECT_GT(session.preview_summary().content_revision,
+            first_preview_revision);
+
+  Result<OperationResult> committed = session.commit_preview();
+  ASSERT_TRUE(committed.ok()) << committed.error_message();
+  EXPECT_TRUE(committed.value().dirty.geometry);
+  EXPECT_FALSE(committed.value().dirty.topology);
+  EXPECT_FALSE(committed.value().dirty.materials);
+  const SessionChangeSnapshot committed_change = session.changes_since(cursor);
+  ASSERT_EQ(committed_change.objects.size(), 1U);
+  EXPECT_TRUE(committed_change.objects.front().dirty.geometry);
+  EXPECT_FALSE(committed_change.objects.front().dirty.topology);
+  EXPECT_FALSE(committed_change.objects.front().dirty.materials);
+
+  const std::uint64_t committed_cursor = session.content_revision();
+  ASSERT_TRUE(session.undo().ok());
+  const SessionChangeSnapshot undone = session.changes_since(committed_cursor);
+  ASSERT_EQ(undone.objects.size(), 1U);
+  EXPECT_TRUE(undone.objects.front().dirty.topology);
+  EXPECT_TRUE(undone.objects.front().dirty.geometry);
+  EXPECT_TRUE(undone.objects.front().dirty.materials);
+}
+
+TEST(ModelingSdkConsumerTests,
+     PreviewPayloadCursorIsMonotonicAndGatesMeshAndOverlayTogether) {
+  ModelingApi quader = ModelingApi::create();
+  MeshHandle mesh = quader.create_box({.name = "Preview Cursor"});
+  ASSERT_TRUE(mesh.valid());
+  ASSERT_TRUE(mesh.faces().all().replace().success);
+
+  PreviewHandle preview = mesh.transform().preview();
+  ASSERT_TRUE(preview.active());
+  const std::uint64_t first_revision = preview.summary().content_revision;
+  ASSERT_GT(first_revision, 0U);
+  const PayloadRequest initial_request{
+      .only_if_changed = true,
+      .previous_revision = first_revision - 1U,
+  };
+  const MeshPayload first_mesh = preview.mesh_payload(initial_request);
+  const SemanticOverlayPayload first_overlay =
+      preview.overlay_payload(initial_request);
+  EXPECT_EQ(first_mesh.content_revision, first_revision);
+  EXPECT_FALSE(first_mesh.vertices.empty());
+  EXPECT_FALSE(first_overlay.records.empty());
+
+  const PayloadRequest unchanged_request{
+      .only_if_changed = true,
+      .previous_revision = first_revision,
+  };
+  EXPECT_TRUE(preview.mesh_payload(unchanged_request).vertices.empty());
+  EXPECT_TRUE(preview.overlay_payload(unchanged_request).records.empty());
+
+  TransformOptions moved;
+  moved.transform.origin = {2.0F, 0.0F, 0.0F};
+  OperationReceipt updated = preview.update(moved);
+  ASSERT_TRUE(updated.success) << updated.error.message;
+  const std::uint64_t second_revision = preview.summary().content_revision;
+  EXPECT_GT(second_revision, first_revision);
+  const PayloadRequest updated_request{
+      .only_if_changed = true,
+      .previous_revision = first_revision,
+  };
+  const MeshPayload second_mesh = preview.mesh_payload(updated_request);
+  EXPECT_EQ(second_mesh.content_revision, second_revision);
+  EXPECT_FALSE(second_mesh.vertices.empty());
+  EXPECT_FALSE(preview.overlay_payload(updated_request).records.empty());
+
+  ASSERT_TRUE(preview.cancel().success);
+  PreviewHandle next_preview = mesh.transform().preview();
+  EXPECT_GT(next_preview.summary().content_revision, second_revision);
+  EXPECT_TRUE(next_preview.cancel().success);
+}
+
+TEST(ModelingSdkConsumerTests,
+     ModelingBatchRollsBackStandardAndUnknownCallbackExceptions) {
+  ModelingApi standard = ModelingApi::create();
+  BatchResult standard_failure =
+      standard.batch("Standard callback exception")
+          .create_box({.name = "Transient Standard"})
+          .as("body")
+          .with_mesh("body", [](MeshHandle mesh) {
+            static_cast<void>(mesh.faces().all().replace());
+            throw std::runtime_error("callback exploded");
+          })
+          .commit();
+  EXPECT_FALSE(standard_failure.success());
+  EXPECT_EQ(standard_failure.receipt.error.code, ErrorCode::InternalError);
+  EXPECT_NE(standard_failure.receipt.error.message.find("callback exploded"),
+            std::string::npos);
+  ASSERT_EQ(standard_failure.step_receipts.size(), 2U);
+  EXPECT_FALSE(standard_failure.step_receipts.back().success);
+  EXPECT_TRUE(standard.mesh_summaries().empty());
+  EXPECT_FALSE(standard.can_undo());
+
+  ModelingApi unknown = ModelingApi::create();
+  BatchResult unknown_failure =
+      unknown.batch("Unknown callback exception")
+          .create_box({.name = "Transient Unknown"})
+          .as("body")
+          .with_mesh("body", [](MeshHandle mesh) {
+            static_cast<void>(mesh.faces().all().replace());
+            throw 17;
+          })
+          .commit();
+  EXPECT_FALSE(unknown_failure.success());
+  EXPECT_EQ(unknown_failure.receipt.error.code, ErrorCode::InternalError);
+  EXPECT_NE(unknown_failure.receipt.error.message.find("unknown exception"),
+            std::string::npos);
+  EXPECT_TRUE(unknown.mesh_summaries().empty());
+  EXPECT_FALSE(unknown.can_undo());
 }
 
 } // namespace

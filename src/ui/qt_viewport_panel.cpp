@@ -2588,6 +2588,16 @@ void QtViewportPanel::process_viewport_input(
            modeling.modal_tool_owns_viewport();
   };
   auto cancel_active_modal_tool = [&](bool exit_tool) {
+    const ViewportToolId active_tool = input_router_.state().active_tool;
+    if (active_tool == ViewportToolId::CreatePrimitive) {
+      log_command_failure("Primitive tool cancel",
+                          editor.tools().cancel_active_tool_preview());
+      sync_active_tool_from_editor(editor);
+      interaction_controller_.reset(&editor);
+      hover_controller_.invalidate();
+      selection_overlay_cache_.mark_dirty();
+      return;
+    }
     if (input_router_.state().active_tool == ViewportToolId::LinearArray) {
       log_command_failure("Linear Array cancel",
                           editor.tools().cancel_active_tool_preview());
@@ -2663,6 +2673,8 @@ void QtViewportPanel::process_viewport_input(
           .external_pointer_event = external_pointer_event,
           .modal_tool_owns_viewport = modal_tool_owns_viewport(),
           .persistent_native_tool_active =
+              input_router_.state().active_tool ==
+                  ViewportToolId::CreatePrimitive ||
               input_router_.state().active_tool == ViewportToolId::LinearArray ||
               input_router_.state().active_tool == ViewportToolId::RadialArray ||
               input_router_.state().active_tool == ViewportToolId::Pivot,
@@ -3012,24 +3024,47 @@ void QtViewportPanel::process_viewport_input(
         viewport_grid_world_size_for_preset(input_router_.state().grid_preset),
         resolved_grid_snap_enabled);
   };
-  box_context.commit_preview = [&](std::string name, AssetId material) {
-    const QuaderApiResult<QuaderModelingObjectRef> result =
-        editor.modeling().commit_box_preview(std::move(name), material);
-    ModelingCreateBoxResult committed{
+  box_context.accept_preview = [&](std::string name, AssetId material,
+                                   bool snap_enabled) {
+    const QuaderApiVoidResult result =
+        editor.tools().accept_active_primitive(std::move(name), material,
+                                               snap_enabled);
+    return ModelingCommandResult{
         .ok = result.ok,
         .changed = result.changed,
         .message = result.message,
     };
-    if (result.ok && result.changed) {
-      committed.object = {.modeling_object_id = result.value.modeling_object_id,
-                          .entity = result.value.entity,
-                          .mesh = result.value.mesh};
-    }
-    return committed;
+  };
+  box_context.apply_session = [&]() {
+    const QuaderApiVoidResult result =
+        editor.tools().commit_active_tool_preview();
+    return ModelingCommandResult{
+        .ok = result.ok,
+        .changed = result.changed,
+        .message = result.message,
+    };
+  };
+  box_context.cancel_session = [&]() {
+    const QuaderApiVoidResult result =
+        editor.tools().cancel_active_tool_preview();
+    return ModelingCommandResult{
+        .ok = result.ok,
+        .changed = result.changed,
+        .message = result.message,
+    };
+  };
+  box_context.session_active = [&]() {
+    return editor.tools().has_active_primitive_creation();
   };
   box_context.next_mesh_name = [&]() {
-    return SceneEntityNaming::next_name_for_kind(document,
-                                                 SceneEntityKind::Mesh);
+    const std::string active_kind = editor.tools().active_primitive_type();
+    const std::string_view base_name =
+        active_kind == "cylinder"
+            ? std::string_view{"Cylinder"}
+        : active_kind == "sphere"
+            ? std::string_view{"Sphere"}
+            : std::string_view{"Box"};
+    return SceneEntityNaming::next_name(document, base_name);
   };
   ViewportPointToolContext point_context;
   point_context.make_event_at = make_tool_event_at;

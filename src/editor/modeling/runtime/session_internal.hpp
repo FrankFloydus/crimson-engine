@@ -25,6 +25,8 @@ CommandResult error_result(std::string message);
 bool state_revisions_differ(const SessionState& left, const SessionState& right);
 bool basis_is_identity(const quader_poly::Transform3& transform);
 std::uint32_t saturated_history_size(std::size_t size);
+std::uint64_t restored_session_revision(std::uint64_t recorded,
+                                        std::uint64_t current) noexcept;
 
 int object_index_by_id(const std::vector<PolygonObject>& objects, int object_id);
 Bounds3 document_bounds(const PolygonObject& object);

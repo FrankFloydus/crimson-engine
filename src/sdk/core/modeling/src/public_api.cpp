@@ -25,16 +25,49 @@ Result<MeshHandle> CheckedModelingApi::create_box(BoxOptions options) {
       .min = options.min,
       .max = options.max,
       .material = options.material,
+      .x_subdivisions = options.x_subdivisions,
+      .y_subdivisions = options.y_subdivisions,
+      .z_subdivisions = options.z_subdivisions,
+      .flip_faces = options.flip_faces,
   });
   if (!document.ok()) {
     return Result<MeshHandle>::failure(document.error());
   }
-  Result<ObjectId> object =
-      context_->session.add_document(std::move(document).value(), options.name);
-  if (!object.ok()) {
-    return Result<MeshHandle>::failure(object.error());
+  return add_document(std::move(document).value(), std::move(options.name));
+}
+
+Result<MeshHandle>
+CheckedModelingApi::create_cylinder(CylinderOptions options) {
+  Result<PolygonDocument> document = PolygonDocument::make_cylinder({
+      .width = options.width,
+      .height = options.height,
+      .depth = options.depth,
+      .side_count = options.side_count,
+      .capped = options.capped,
+      .flip_faces = options.flip_faces,
+      .material = options.material,
+  });
+  if (!document.ok()) {
+    return Result<MeshHandle>::failure(document.error());
   }
-  return Result<MeshHandle>::success(MeshHandle(context_, object.value()));
+  return add_document(std::move(document).value(), std::move(options.name));
+}
+
+Result<MeshHandle> CheckedModelingApi::create_sphere(SphereOptions options) {
+  Result<PolygonDocument> document = PolygonDocument::make_sphere({
+      .width = options.width,
+      .height = options.height,
+      .depth = options.depth,
+      .radial_segments = options.radial_segments,
+      .rings = options.rings,
+      .hemisphere = options.hemisphere,
+      .flip_faces = options.flip_faces,
+      .material = options.material,
+  });
+  if (!document.ok()) {
+    return Result<MeshHandle>::failure(document.error());
+  }
+  return add_document(std::move(document).value(), std::move(options.name));
 }
 
 Result<MeshHandle>
@@ -79,6 +112,24 @@ void ModelingApi::clear_error() { context_->last_error.reset(); }
 
 MeshHandle ModelingApi::create_box(BoxOptions options) {
   Result<MeshHandle> result = checked().create_box(std::move(options));
+  if (!result.ok()) {
+    return handle_value_failure(*context_, result.error(), MeshHandle{});
+  }
+  context_->last_error.reset();
+  return std::move(result).value();
+}
+
+MeshHandle ModelingApi::create_cylinder(CylinderOptions options) {
+  Result<MeshHandle> result = checked().create_cylinder(std::move(options));
+  if (!result.ok()) {
+    return handle_value_failure(*context_, result.error(), MeshHandle{});
+  }
+  context_->last_error.reset();
+  return std::move(result).value();
+}
+
+MeshHandle ModelingApi::create_sphere(SphereOptions options) {
+  Result<MeshHandle> result = checked().create_sphere(std::move(options));
   if (!result.ok()) {
     return handle_value_failure(*context_, result.error(), MeshHandle{});
   }

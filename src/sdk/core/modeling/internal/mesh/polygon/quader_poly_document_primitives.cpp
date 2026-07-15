@@ -12,6 +12,8 @@
 #include <array>
 #include <cmath>
 #include <map>
+#include <span>
+#include <vector>
 
 namespace quader_poly {
 namespace {
@@ -29,6 +31,68 @@ float clamp_primitive_dimension(float value)
 int clamp_primitive_count(int value, int min_value, int max_value)
 {
     return std::clamp(value, min_value, max_value);
+}
+
+void set_face_shading(Document& document, ElementId face_id, SurfaceShading shading)
+{
+    if (Face* face = find_face(document, face_id); face != nullptr) {
+        face->normal_shading = shading;
+    }
+}
+
+void add_shaded_face(
+    Document& document,
+    std::span<const ElementId> vertices,
+    SurfaceShading shading)
+{
+    set_face_shading(document, add_face(document, vertices), shading);
+}
+
+void reverse_all_faces(Document& document)
+{
+    for (Face& face : document.faces) {
+        std::ranges::reverse(face.vertices);
+        std::ranges::reverse(face.uvs);
+    }
+}
+
+std::vector<ElementId> add_radial_ring(
+    Document& document,
+    int radial_segments,
+    float half_width,
+    float y,
+    float half_depth,
+    float radial_scale)
+{
+    std::vector<ElementId> ring;
+    ring.reserve(static_cast<std::size_t>(radial_segments));
+    for (int segment = 0; segment < radial_segments; ++segment) {
+        const float angle = kTau * static_cast<float>(segment) / static_cast<float>(radial_segments);
+        ring.push_back(add_vertex(document, {
+            half_width * radial_scale * std::cos(angle),
+            y,
+            half_depth * radial_scale * std::sin(angle),
+        }));
+    }
+    return ring;
+}
+
+void add_radial_band(
+    Document& document,
+    std::span<const ElementId> lower_ring,
+    std::span<const ElementId> upper_ring)
+{
+    const std::size_t segment_count = lower_ring.size();
+    for (std::size_t segment = 0; segment < segment_count; ++segment) {
+        const std::size_t next = (segment + 1U) % segment_count;
+        const std::array face {
+            lower_ring[segment],
+            upper_ring[segment],
+            upper_ring[next],
+            lower_ring[next],
+        };
+        add_shaded_face(document, face, SurfaceShading::Smooth);
+    }
 }
 
 } // namespace
@@ -121,6 +185,123 @@ Document make_cube(const CubePrimitiveSpec& spec)
         }
     }
 
+    if (spec.flip_faces) {
+        reverse_all_faces(document);
+    }
+
+    return document;
+}
+
+Document make_cylinder(const CylinderPrimitiveSpec& spec)
+{
+    Document document;
+    const float width = clamp_primitive_dimension(spec.width);
+    const float height = clamp_primitive_dimension(spec.height);
+    const float depth = clamp_primitive_dimension(spec.depth);
+    const int side_count = clamp_primitive_count(spec.side_count, 3, 128);
+    const float half_width = width * 0.5F;
+    const float half_height = height * 0.5F;
+    const float half_depth = depth * 0.5F;
+
+    const std::vector<ElementId> bottom_ring =
+        add_radial_ring(document, side_count, half_width, -half_height, half_depth, 1.0F);
+    const std::vector<ElementId> top_ring =
+        add_radial_ring(document, side_count, half_width, half_height, half_depth, 1.0F);
+    add_radial_band(document, bottom_ring, top_ring);
+
+    if (spec.capped) {
+        add_shaded_face(document, bottom_ring, SurfaceShading::Flat);
+        const std::vector<ElementId> top_cap(top_ring.rbegin(), top_ring.rend());
+        add_shaded_face(document, top_cap, SurfaceShading::Flat);
+    }
+
+    if (spec.flip_faces) {
+        reverse_all_faces(document);
+    }
+    return document;
+}
+
+Document make_sphere(const SpherePrimitiveSpec& spec)
+{
+    Document document;
+    const float width = clamp_primitive_dimension(spec.width);
+    const float height = clamp_primitive_dimension(spec.height);
+    const float depth = clamp_primitive_dimension(spec.depth);
+    const int radial_segments = clamp_primitive_count(spec.radial_segments, 3, 128);
+    const int rings = clamp_primitive_count(spec.rings, 2, 128);
+    const float half_width = width * 0.5F;
+    const float half_height = height * 0.5F;
+    const float half_depth = depth * 0.5F;
+
+    if (spec.hemisphere) {
+        std::vector<std::vector<ElementId>> radial_rings;
+        radial_rings.reserve(static_cast<std::size_t>(rings));
+        for (int ring_index = 0; ring_index < rings; ++ring_index) {
+            const float latitude = (kPi * 0.5F) * static_cast<float>(ring_index) / static_cast<float>(rings);
+            radial_rings.push_back(add_radial_ring(
+                document,
+                radial_segments,
+                half_width,
+                -half_height + height * std::sin(latitude),
+                half_depth,
+                std::cos(latitude)));
+        }
+
+        for (std::size_t ring_index = 0; ring_index + 1U < radial_rings.size(); ++ring_index) {
+            add_radial_band(document, radial_rings[ring_index], radial_rings[ring_index + 1U]);
+        }
+
+        const ElementId top = add_vertex(document, { 0.0F, half_height, 0.0F });
+        const std::vector<ElementId>& last_ring = radial_rings.back();
+        for (int segment = 0; segment < radial_segments; ++segment) {
+            const std::size_t current = static_cast<std::size_t>(segment);
+            const std::size_t next = (current + 1U) % last_ring.size();
+            const std::array face { last_ring[current], top, last_ring[next] };
+            add_shaded_face(document, face, SurfaceShading::Smooth);
+        }
+
+        add_shaded_face(document, radial_rings.front(), SurfaceShading::Flat);
+    } else {
+        const ElementId bottom = add_vertex(document, { 0.0F, -half_height, 0.0F });
+        std::vector<std::vector<ElementId>> radial_rings;
+        radial_rings.reserve(static_cast<std::size_t>(rings - 1));
+        for (int ring_index = 1; ring_index < rings; ++ring_index) {
+            const float latitude =
+                -kPi * 0.5F + kPi * static_cast<float>(ring_index) / static_cast<float>(rings);
+            radial_rings.push_back(add_radial_ring(
+                document,
+                radial_segments,
+                half_width,
+                half_height * std::sin(latitude),
+                half_depth,
+                std::cos(latitude)));
+        }
+
+        const std::vector<ElementId>& first_ring = radial_rings.front();
+        for (int segment = 0; segment < radial_segments; ++segment) {
+            const std::size_t current = static_cast<std::size_t>(segment);
+            const std::size_t next = (current + 1U) % first_ring.size();
+            const std::array face { bottom, first_ring[current], first_ring[next] };
+            add_shaded_face(document, face, SurfaceShading::Smooth);
+        }
+
+        for (std::size_t ring_index = 0; ring_index + 1U < radial_rings.size(); ++ring_index) {
+            add_radial_band(document, radial_rings[ring_index], radial_rings[ring_index + 1U]);
+        }
+
+        const ElementId top = add_vertex(document, { 0.0F, half_height, 0.0F });
+        const std::vector<ElementId>& last_ring = radial_rings.back();
+        for (int segment = 0; segment < radial_segments; ++segment) {
+            const std::size_t current = static_cast<std::size_t>(segment);
+            const std::size_t next = (current + 1U) % last_ring.size();
+            const std::array face { last_ring[current], top, last_ring[next] };
+            add_shaded_face(document, face, SurfaceShading::Smooth);
+        }
+    }
+
+    if (spec.flip_faces) {
+        reverse_all_faces(document);
+    }
     return document;
 }
 

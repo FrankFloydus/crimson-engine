@@ -2432,7 +2432,8 @@ bool apply_picked_selection_to_session(
 	state.active_object_id = active_object_id;
 	normalize_active_object_id(state.objects, state.active_object_id);
 	state.dirty = true;
-	++state.selection_revision;
+	state.selection_revision =
+		advance_session_revision(state.selection_revision);
 	return true;
 }
 

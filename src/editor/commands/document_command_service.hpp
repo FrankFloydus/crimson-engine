@@ -13,6 +13,7 @@
 #include "editor/selection/scene_selection_application.hpp"
 #include "scene/components.hpp"
 
+#include <functional>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -27,7 +28,10 @@ class AssetRegistry;
  */
 class DocumentCommandService {
 public:
+    using EntityMutationBlocker = std::function<bool(EntityId)>;
+
     DocumentCommandService(SceneDocument& scene, EditorHistoryService& history, const AssetRegistry* assets = nullptr);
+    void set_entity_mutation_blocker(EntityMutationBlocker blocker);
 
     DocumentCreateEntityResult
     create_entity(std::string name, EntityKind kind = EntityKind::Generic,
@@ -87,9 +91,13 @@ public:
                       std::vector<DocumentSceneBatchOperation> operations);
 
   private:
+    [[nodiscard]] bool mutation_blocked(EntityId entity) const;
+    [[nodiscard]] bool selected_mutation_blocked() const;
+
     SceneDocument& scene_;
     EditorHistoryService& history_;
     const AssetRegistry* assets_ = nullptr;
+    EntityMutationBlocker entity_mutation_blocker_;
 };
 
 } // namespace quader

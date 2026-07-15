@@ -7,13 +7,20 @@
 #include <gtest/gtest.h>
 
 #include "api/quader_editor_api.hpp"
+#include "api/quader_api_session_internal_access.hpp"
+#include "editor/modeling/services/primitive_creation_tool_service.hpp"
+#include "editor/session/scene_session.hpp"
+#include "ui/qt_command_event_filter.hpp"
 #include "ui/qt_tool_settings_number_slider.hpp"
 #include "ui/qt_tool_settings_window.hpp"
 
 #include <QApplication>
 #include <QCoreApplication>
+#include <QComboBox>
 #include <QDoubleSpinBox>
 #include <QEventLoop>
+#include <QKeyEvent>
+#include <QLineEdit>
 #include <QMouseEvent>
 #include <QPointer>
 #include <QSignalBlocker>
@@ -35,6 +42,30 @@ void send_mouse_event(QWidget &target, QEvent::Type type, QPoint position,
   QMouseEvent event(type, QPointF(position), QPointF(global), button, buttons,
                     Qt::NoModifier);
   QCoreApplication::sendEvent(&target, &event);
+}
+
+void send_key_event(QWidget &target, int key) {
+  QKeyEvent event(QEvent::KeyPress, key, Qt::NoModifier);
+  QCoreApplication::sendEvent(&target, &event);
+}
+
+quader::ModelingBoxPreview tool_settings_primitive_preview() {
+  quader::ModelingBoxPreview preview;
+  preview.ok = true;
+  preview.valid = true;
+  preview.drag_state = quader::ModelingBoxDragState::Height;
+  preview.corners = {
+      quader::QVec3{-1.0f, 0.0f, -1.0f},
+      quader::QVec3{-1.0f, 0.0f, 1.0f},
+      quader::QVec3{1.0f, 0.0f, 1.0f},
+      quader::QVec3{1.0f, 0.0f, -1.0f},
+      quader::QVec3{-1.0f, 1.0f, -1.0f},
+      quader::QVec3{-1.0f, 1.0f, 1.0f},
+      quader::QVec3{1.0f, 1.0f, 1.0f},
+      quader::QVec3{1.0f, 1.0f, -1.0f},
+  };
+  preview.corner_count = preview.corners.size();
+  return preview;
 }
 
 QRect slider_groove(const QSlider &slider) {
@@ -360,6 +391,105 @@ TEST(QtToolSettingsNumberSliderTests,
   window.refresh();
   EXPECT_EQ(copies_spin->value(), 16);
 
+  window.unbind();
+  window.hide();
+}
+
+TEST(QtToolSettingsNumberSliderTests,
+     PrimitiveEnterAndEscapeRemainSemanticAcrossDynamicSettingsEditors) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char executable[] = "quader-primitive-tool-settings-key-tests";
+  char *argv[] = {executable, nullptr};
+  QApplication application(argc, argv);
+  QApplication::setStyle(QStringLiteral("Fusion"));
+
+  quader::SceneSession session;
+  quader::QuaderEditorApi editor(
+      quader::QuaderApiSessionInternalAccess::from_scene_session(session));
+  quader::ViewportToolId active_tool =
+      quader::ViewportToolId::CreatePrimitive;
+  quader::QtCommandEventFilter command_filter(
+      editor, [&active_tool]() {
+        return quader::ViewportToolState{.active_tool = active_tool};
+      });
+  application.installEventFilter(&command_filter);
+
+  ASSERT_TRUE(editor.tools().activate(active_tool).ok());
+  ASSERT_TRUE(session.primitive_creation()
+                  .accept_preview(tool_settings_primitive_preview(),
+                                  "Focused Settings Box")
+                  .ok);
+  quader::QtToolSettingsWindow window;
+  window.bind(editor);
+  window.show();
+  window.activateWindow();
+  QCoreApplication::processEvents();
+
+  auto *subdivisions = window.findChild<QSpinBox *>(QStringLiteral(
+      "tool_settings.control.primitive.box.subdivisions_x"));
+  ASSERT_NE(subdivisions, nullptr);
+  subdivisions->setFocus(Qt::OtherFocusReason);
+  QCoreApplication::processEvents();
+  QLineEdit *subdivision_editor = subdivisions->findChild<QLineEdit *>();
+  ASSERT_NE(subdivision_editor, nullptr);
+  subdivision_editor->setText(QStringLiteral("5"));
+  send_key_event(*subdivision_editor, Qt::Key_Return);
+
+  EXPECT_EQ(session.primitive_creation().box_settings().subdivisions_x, 5);
+  EXPECT_EQ(editor.tools().active_tool(), "select");
+  EXPECT_TRUE(editor.history().can_undo());
+
+  active_tool = quader::ViewportToolId::CreatePrimitive;
+  ASSERT_TRUE(editor.tools().activate(active_tool).ok());
+  window.refresh();
+  QCoreApplication::processEvents();
+  auto *primitive_type = window.findChild<QComboBox *>(
+      QStringLiteral("tool_settings.control.primitive.type"));
+  ASSERT_NE(primitive_type, nullptr);
+  ASSERT_EQ(primitive_type->count(), 3);
+  EXPECT_EQ(primitive_type->currentData().toString(), QStringLiteral("box"));
+  const int cylinder_index =
+      primitive_type->findData(QStringLiteral("cylinder"));
+  ASSERT_GE(cylinder_index, 0);
+  primitive_type->setCurrentIndex(cylinder_index);
+  QCoreApplication::processEvents();
+  EXPECT_EQ(editor.tools().active_primitive_type(), "cylinder");
+
+  auto *sides = window.findChild<QSpinBox *>(QStringLiteral(
+      "tool_settings.control.primitive.cylinder.side_count"));
+  ASSERT_NE(sides, nullptr);
+  ASSERT_TRUE(session.primitive_creation()
+                  .accept_preview(tool_settings_primitive_preview(),
+                                  "Focused Settings Cylinder")
+                  .ok);
+  primitive_type = window.findChild<QComboBox *>(
+      QStringLiteral("tool_settings.control.primitive.type"));
+  ASSERT_NE(primitive_type, nullptr);
+  primitive_type->setFocus(Qt::OtherFocusReason);
+  QCoreApplication::processEvents();
+  send_key_event(*primitive_type, Qt::Key_Return);
+
+  EXPECT_EQ(editor.tools().active_tool(), "select");
+  EXPECT_TRUE(editor.history().can_undo());
+
+  active_tool = quader::ViewportToolId::CreatePrimitive;
+  ASSERT_TRUE(editor.tools().activate(active_tool).ok());
+  window.refresh();
+  QCoreApplication::processEvents();
+  primitive_type = window.findChild<QComboBox *>(
+      QStringLiteral("tool_settings.control.primitive.type"));
+  ASSERT_NE(primitive_type, nullptr);
+  EXPECT_EQ(primitive_type->currentData().toString(),
+            QStringLiteral("cylinder"));
+  primitive_type->setFocus(Qt::OtherFocusReason);
+  QCoreApplication::processEvents();
+  send_key_event(*primitive_type, Qt::Key_Escape);
+
+  EXPECT_EQ(editor.tools().active_tool(), "select");
+  EXPECT_TRUE(editor.history().can_undo());
+
+  application.removeEventFilter(&command_filter);
   window.unbind();
   window.hide();
 }

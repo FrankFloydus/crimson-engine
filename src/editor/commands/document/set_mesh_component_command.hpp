@@ -38,7 +38,10 @@ private:
         if (!scene().exists(entity_)) {
           return document_command_missing_entity_result();
         }
-        scene().set_mesh(entity_, mesh);
+        if (!scene().set_mesh(entity_, mesh)) {
+          return document_command_invalid_request_result(
+              "Mesh component could not be applied");
+        }
         return document_command_changed_result();
     }
 

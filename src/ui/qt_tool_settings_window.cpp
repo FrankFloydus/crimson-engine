@@ -12,8 +12,10 @@
 #include "ui/qt_tool_settings_number_slider.hpp"
 
 #include <QApplication>
+#include <QByteArray>
 #include <QButtonGroup>
 #include <QCheckBox>
+#include <QComboBox>
 #include <QDoubleSpinBox>
 #include <QFrame>
 #include <QGroupBox>
@@ -48,6 +50,7 @@ namespace {
 // Keep visual controls immediate while limiting editor mutations to one batch
 // per display-scale interval; release always flushes the latest value.
 constexpr int kLiveNumberDispatchIntervalMs = 16;
+constexpr std::string_view kPrimitiveTypeSettingId = "primitive.type";
 
 QString qtext(std::string_view text) {
   return QString::fromUtf8(text.data(), static_cast<qsizetype>(text.size()));
@@ -241,6 +244,7 @@ struct QtToolSettingsWindow::Impl {
     QSpinBox *integer = nullptr;
     QDoubleSpinBox *floating = nullptr;
     QSlider *number_slider = nullptr;
+    QComboBox *dropdown = nullptr;
     QtToolSettingsNumberSliderMapping number_slider_mapping;
     QTimer *number_dispatch_timer = nullptr;
     std::optional<double> pending_number_value;
@@ -654,6 +658,52 @@ private:
       break;
     }
     case QuaderToolSettingControlKind::Choice: {
+      if (control.id == kPrimitiveTypeSettingId) {
+        auto *row = new QWidget(controls_container_);
+        row->setObjectName(object_name + QStringLiteral(".row"));
+        auto *row_layout = new QHBoxLayout(row);
+        auto *field_label = new QLabel(label, row);
+        field_label->setObjectName(object_name + QStringLiteral(".label"));
+        row_layout->addWidget(field_label);
+
+        auto *dropdown = new QComboBox(row);
+        dropdown->setObjectName(object_name);
+        dropdown->setAccessibleName(label);
+        for (const QuaderToolSettingChoiceOption &option : control.choices) {
+          std::string option_localization_key(control.id);
+          option_localization_key.push_back('.');
+          option_localization_key.append(option.id);
+          dropdown->addItem(localized_descriptor_label(
+                                localization_, option_localization_key,
+                                option.label),
+                            qtext(option.id));
+        }
+        field_label->setBuddy(dropdown);
+        row_layout->addWidget(dropdown, 1);
+        QObject::connect(
+            dropdown, &QComboBox::currentIndexChanged, &window_,
+            [this, dropdown, tool_id = target.tool_id,
+             control_id = control.id](int index) {
+              if (editor_ == nullptr || synchronizing_ || index < 0) {
+                return;
+              }
+              const QByteArray option_id =
+                  dropdown->itemData(index).toString().toUtf8();
+              const QuaderApiVoidResult result = editor_->tools().set_setting(
+                  tool_id, control_id,
+                  std::string_view(option_id.constData(),
+                                   static_cast<std::size_t>(option_id.size())));
+              log_failure("Tool settings update", result);
+              // The chosen primitive changes the descriptor itself. Refresh
+              // after signal delivery so the old control tree can be safely
+              // replaced with the fields for the newly selected kind.
+              schedule_refresh();
+            });
+        controls_layout_->addWidget(row);
+        binding.dropdown = dropdown;
+        break;
+      }
+
       auto *group = new QGroupBox(label, controls_container_);
       group->setObjectName(object_name);
       auto *choice_layout = new QVBoxLayout(group);
@@ -823,6 +873,19 @@ private:
         update_slider_steps(*binding.number_slider,
                             binding.number_slider_mapping,
                             current_number_value, logical_step);
+      }
+      if (binding.dropdown != nullptr) {
+        const QSignalBlocker blocker(binding.dropdown);
+        int selected_index = -1;
+        for (std::size_t option_index = 0;
+             option_index < control.choices.size(); ++option_index) {
+          if (choice_matches(control.choice_value,
+                             control.choices[option_index])) {
+            selected_index = static_cast<int>(option_index);
+            break;
+          }
+        }
+        binding.dropdown->setCurrentIndex(selected_index);
       }
       for (std::size_t option_index = 0;
            option_index < binding.choices.size() &&

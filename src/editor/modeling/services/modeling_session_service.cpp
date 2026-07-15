@@ -6,6 +6,8 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "editor/modeling/services/modeling_session_service.hpp"
 
+#include "editor/modeling/modeling_viewport_camera_adapter.hpp"
+
 #include "assets/asset_registry.hpp"
 #include "assets/mesh_asset_payload.hpp"
 #include "core/i_undoable_command.hpp"
@@ -88,28 +90,6 @@ quader_poly::Ray to_runtime(const ModelingRay &ray) {
   };
 }
 
-quader_editor_core::ViewportCameraState
-to_runtime(const ModelingViewportCamera &value) {
-  quader_editor_core::ViewportCameraState camera;
-  camera.projection = value.orthographic
-                          ? quader_editor_core::CameraProjection::Orthographic
-                          : quader_editor_core::CameraProjection::Perspective;
-  camera.affine_model_space = value.affine_model_space;
-  camera.transform = {
-      .x_axis = to_runtime(value.x_axis),
-      .y_axis = to_runtime(value.y_axis),
-      .z_axis = to_runtime(value.z_axis),
-      .origin = to_runtime(value.origin),
-  };
-  camera.viewport_size = {
-      std::max(value.viewport_size.x, 1.0f),
-      std::max(value.viewport_size.y, 1.0f),
-  };
-  camera.orthographic_size = std::max(value.orthographic_size, 0.0001);
-  camera.fov_degrees = value.fov_degrees;
-  return camera;
-}
-
 quader_poly::Transform3 to_runtime(const ModelingTransform3 &transform) {
   return {
       .x_axis = to_runtime(transform.x_axis),
@@ -133,6 +113,8 @@ to_runtime(ModelingViewportTool tool) {
   case ModelingViewportTool::Scale:
     return quader_editor_core::ViewportInteractionTool::Scale;
   case ModelingViewportTool::Box:
+  case ModelingViewportTool::Cylinder:
+  case ModelingViewportTool::Sphere:
     return quader_editor_core::ViewportInteractionTool::Box;
   case ModelingViewportTool::InsertEdgeLoop:
     return quader_editor_core::ViewportInteractionTool::InsertEdgeLoop;
@@ -518,7 +500,7 @@ ModelingCommandDescriptor make_create_box_descriptor() {
       .command = ModelingCommandId::CreateBoxFromBounds,
       .id = "create_box_from_bounds",
       .label = "Create Box From Bounds",
-      .shortcut = "B",
+      .shortcut = "",
       .viewport_scoped = true,
       .rebuilds_mesh_on_success = true,
   };
@@ -903,7 +885,8 @@ public:
   }
 
   [[nodiscard]] ModelingSessionMemento capture_history_memento_for_state(
-      const quader_editor_core::SessionState &state) const {
+      const quader_editor_core::SessionState &state,
+      std::span<const AssetId> excluded_mesh_asset_ids = {}) const {
     const std::unordered_set<int> live_ids =
         live_modeling_object_ids(state.objects);
     std::unordered_map<int, ModelingObjectSceneIdentity> scene_identities =
@@ -924,11 +907,15 @@ public:
       }
     }
     const std::vector<AssetId> live_mesh_asset_ids = assets_.mesh_ids();
+    std::unordered_set<AssetId> captured_mesh_asset_ids(
+        live_mesh_asset_ids.begin(), live_mesh_asset_ids.end());
+    for (const AssetId excluded : excluded_mesh_asset_ids) {
+      captured_mesh_asset_ids.erase(excluded);
+    }
     return ModelingSessionMemento(
         std::make_shared<ModelingSessionMemento::Impl>(
             state, std::move(scene_identities),
-            std::unordered_set<AssetId>(live_mesh_asset_ids.begin(),
-                                        live_mesh_asset_ids.end()),
+            std::move(captured_mesh_asset_ids),
             std::move(mesh_assets)));
   }
 
@@ -944,6 +931,78 @@ public:
 
   [[nodiscard]] ModelingSessionMemento capture_history_memento() const {
     return capture_history_memento_for_state(session_.state());
+  }
+
+  [[nodiscard]] ModelingSessionMemento capture_history_memento_without_objects(
+      const quader_editor_core::SessionState &selection_baseline,
+      std::span<const int> excluded_object_ids) const {
+    quader_editor_core::SessionState state = session_.state();
+    const std::unordered_set<int> excluded(excluded_object_ids.begin(),
+                                           excluded_object_ids.end());
+    const auto excluded_identities =
+        object_registry_.capture_scene_identities_for_modeling_objects(
+            scene_, excluded);
+    std::vector<AssetId> excluded_mesh_asset_ids;
+    excluded_mesh_asset_ids.reserve(excluded_identities.size());
+    for (const auto &[modeling_object_id, identity] : excluded_identities) {
+      (void)modeling_object_id;
+      if (identity.mesh.has_value() &&
+          identity.mesh->mesh != kInvalidAssetId) {
+        excluded_mesh_asset_ids.push_back(identity.mesh->mesh);
+      }
+    }
+    state.objects.erase(
+        std::remove_if(state.objects.begin(), state.objects.end(),
+                       [&excluded](const auto &object) {
+                         return excluded.contains(object.id);
+                       }),
+        state.objects.end());
+
+    // Primitive content is rebased onto the current document so concurrent
+    // scene edits survive, while selection returns to the session boundary.
+    // This keeps transient primitive identities out of later selection undo.
+    state.selection_mode = selection_baseline.selection_mode;
+    state.active_object_id = selection_baseline.active_object_id;
+    state.active_light_id = selection_baseline.active_light_id;
+    for (auto &object : state.objects) {
+      const auto baseline = std::find_if(
+          selection_baseline.objects.begin(), selection_baseline.objects.end(),
+          [&object](const auto &candidate) {
+            return candidate.id == object.id;
+          });
+      if (baseline != selection_baseline.objects.end()) {
+        object.selected = baseline->selected;
+        object.selection = baseline->selection;
+        object.component_edit_target = baseline->component_edit_target;
+      } else {
+        object.selected = false;
+        object.selection = {};
+        object.component_edit_target = false;
+      }
+    }
+    if (std::none_of(state.objects.begin(), state.objects.end(),
+                     [&state](const auto &object) {
+                       return object.id == state.active_object_id;
+                     })) {
+      state.active_object_id = -1;
+    }
+    for (auto &light : state.lights) {
+      const auto baseline = std::find_if(
+          selection_baseline.lights.begin(), selection_baseline.lights.end(),
+          [&light](const auto &candidate) {
+            return candidate.id == light.id;
+          });
+      light.selected = baseline != selection_baseline.lights.end() &&
+                       baseline->selected;
+    }
+    if (std::none_of(state.lights.begin(), state.lights.end(),
+                     [&state](const auto &light) {
+                       return light.id == state.active_light_id;
+                     })) {
+      state.active_light_id = -1;
+    }
+    return capture_history_memento_for_state(state,
+                                             excluded_mesh_asset_ids);
   }
 
   [[nodiscard]] ModelingSessionMemento
@@ -989,10 +1048,6 @@ public:
       };
     }
 
-    state.content_revision =
-        std::max(state.content_revision, current.content_revision + 1U);
-    state.selection_revision =
-        std::max(state.selection_revision, current.selection_revision + 1U);
     object_registry_.restore_scene_identities(memento.impl_->scene_identities);
     for (const auto &[modeling_object_id, identity] :
          memento.impl_->scene_identities) {
@@ -1004,7 +1059,7 @@ public:
       mesh_sync_service_.apply_scene_identity_to_entity(
           scene_, identity.entity, identity);
     }
-    session_.set_state(std::move(state));
+    session_.restore_history_state(std::move(state));
     session_.clear_history();
     sync_scene_objects_from_modeling(true);
     mesh_sync_service_.remove_unreferenced_history_mesh_assets(
@@ -3589,11 +3644,12 @@ public:
     }
     const bool changed = local_hit.has_value()
         ? runtime_.update_knife_preview_from_hit(
-              session_, *local_hit, to_runtime(local_event->camera),
+              session_, *local_hit, modeling_runtime_camera(local_event->camera),
               local_event->grid_size, false, false)
         : runtime_.update_knife_preview_from_pick(
               session_, to_runtime(local_event->ray),
-              to_runtime(local_event->camera), local_event->grid_size,
+              modeling_runtime_camera(local_event->camera),
+              local_event->grid_size,
               local_event->snap_enabled, local_event->constrain_axis, 0);
     invalidate_selection_overlay_caches();
     return {.ok = true, .changed = changed};
@@ -3612,7 +3668,8 @@ public:
               .message = "Knife target transform is not invertible."};
     }
     const bool changed = runtime_.accept_knife_current_point(
-        session_, to_runtime(local_event->camera), local_event->grid_size);
+        session_, modeling_runtime_camera(local_event->camera),
+        local_event->grid_size);
     if (changed) {
       invalidate_selection_overlay_caches();
     }
@@ -3765,10 +3822,11 @@ public:
   }
 
   ModelingCommandResult activate_box_tool() {
-    if (quader_host_contract::find_tool_descriptor("box") == nullptr) {
+    if (quader_host_contract::find_tool_descriptor("create_primitive") ==
+        nullptr) {
       return {.ok = false,
               .message =
-                  "Box tool is not present in the modeling host contract."};
+                  "Create Primitive is not present in the modeling host contract."};
     }
 
     return set_active_runtime_tool(
@@ -3982,6 +4040,82 @@ public:
                                              scene_, created.object.entity);
     }
     return created;
+  }
+
+  ModelingCommandResult replace_mesh_document(
+      int modeling_object_id, quader_poly::Document document) {
+    if (document.vertices.empty() || document.faces.empty()) {
+      return {
+          .ok = false,
+          .changed = false,
+          .message = "Document mesh must contain vertices and faces.",
+      };
+    }
+    const quader_editor_core::PolygonObject *source =
+        find_object(session_, modeling_object_id);
+    if (source == nullptr) {
+      return {
+          .ok = false,
+          .changed = false,
+          .message = "Modeling object does not exist.",
+      };
+    }
+
+    quader_editor_core::PolygonObject projection_candidate = *source;
+    projection_candidate.document = document;
+    const std::optional<MeshAsset> projected_mesh =
+        mesh_sync_service_.compile_object_mesh(projection_candidate);
+    if (!projected_mesh.has_value()) {
+      return {
+          .ok = false,
+          .changed = false,
+          .message = "Modeling mesh projection could not be compiled.",
+      };
+    }
+    const AssetRegistryValidationResult projection_validation =
+        assets_.validate_mesh(*projected_mesh);
+    if (!projection_validation.ok) {
+      return {
+          .ok = false,
+          .changed = false,
+          .message = projection_validation.message.empty()
+                         ? "Modeling mesh projection is invalid."
+                         : projection_validation.message,
+      };
+    }
+
+    CreationProjectionCheckpoint checkpoint =
+        capture_creation_projection_checkpoint();
+    const quader_editor_core::CommandResult replaced =
+        session_.replace_object_document(modeling_object_id,
+                                         std::move(document));
+    if (!replaced.ok || !replaced.changed) {
+      restore_creation_projection_checkpoint(std::move(checkpoint));
+      return {
+          .ok = replaced.ok,
+          .changed = false,
+          .message = replaced.message.empty()
+                         ? "Modeling mesh document could not be replaced."
+                         : replaced.message,
+      };
+    }
+    if (!try_sync_scene_objects_from_modeling(true)) {
+      restore_creation_projection_checkpoint(std::move(checkpoint));
+      const bool rollback_synced = try_sync_scene_objects_from_modeling(true);
+      return {
+          .ok = false,
+          .changed = false,
+          .message = rollback_synced
+                         ? "Updated primitive mesh could not be synchronized."
+                         : "Updated primitive mesh and its rollback could not be synchronized.",
+      };
+    }
+    invalidate_selection_overlay_caches();
+    return {
+        .ok = true,
+        .changed = true,
+        .message = replaced.message,
+    };
   }
 
   TransformedDuplicateBatchResult execute_transformed_duplicate_batch(
@@ -5236,6 +5370,17 @@ ModelingSessionMemento ModelingSessionService::capture_history_memento() const {
 }
 
 ModelingSessionMemento
+ModelingSessionService::capture_history_memento_without_objects(
+    const ModelingSessionMemento &selection_baseline,
+    std::span<const int> excluded_object_ids) const {
+  if (!selection_baseline.valid()) {
+    return {};
+  }
+  return impl_->capture_history_memento_without_objects(
+      selection_baseline.impl_->state, excluded_object_ids);
+}
+
+ModelingSessionMemento
 ModelingSessionService::capture_active_preview_history_memento() const {
   return impl_->capture_active_preview_history_memento();
 }
@@ -5715,6 +5860,12 @@ ModelingCommandResult ModelingSessionService::cancel_box() {
 ModelingCreateBoxResult
 ModelingSessionService::create_mesh(const ModelingCreateMeshRequest &request) {
   return impl_->create_mesh(request);
+}
+
+ModelingCommandResult ModelingSessionService::replace_mesh_document(
+    int modeling_object_id, quader_poly::Document document) {
+  return impl_->replace_mesh_document(modeling_object_id,
+                                      std::move(document));
 }
 
 ModelingLinearArrayResult ModelingSessionService::create_linear_array(

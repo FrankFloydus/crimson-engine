@@ -34,6 +34,16 @@ const qhc::HostShortcutDescriptor& require_shortcut(std::string_view id)
 	return *match;
 }
 
+bool has_shortcut(std::string_view id)
+{
+	for (const qhc::HostShortcutDescriptor& descriptor : qhc::shortcut_catalog()) {
+		if (descriptor.id == id) {
+			return true;
+		}
+	}
+	return false;
+}
+
 bool has_interaction_kind(std::string_view id, qhc::HostInteractionKind kind)
 {
 	const qhc::HostInteractionDescriptor *descriptor = qhc::find_interaction_descriptor(id);
@@ -86,7 +96,7 @@ TEST(QdrEditorMetadataShortcutCatalogTests, HostContractSelectionModeCatalogExpo
 
 TEST(QdrEditorMetadataShortcutCatalogTests, HostContractShortcutTargetsResolveToDescriptorOnlyCatalogs) {
 	const std::span<const qhc::HostShortcutDescriptor> shortcuts = qhc::shortcut_catalog();
-	EXPECT_TRUE(shortcuts.size() == 48U);
+	EXPECT_TRUE(shortcuts.size() == 47U);
 
 	for (const qhc::HostShortcutDescriptor& shortcut : shortcuts) {
 		EXPECT_FALSE(shortcut.id.empty());
@@ -277,13 +287,13 @@ TEST(QdrEditorMetadataShortcutCatalogTests, HostContractShortcutCatalogKeepsOver
                     qhc::HostShortcutTargetKind::Action);
         EXPECT_TRUE(same_text(insert_edge_loop.target_id, "insert_edge_loop_tool"));
 
-	const qhc::HostShortcutDescriptor& cut = require_shortcut("cut_tool");
-        EXPECT_TRUE(cut.context == qhc::HostShortcutContext::Viewport);
-        EXPECT_TRUE(same_text(cut.key, "C"));
-	EXPECT_FALSE(cut.primary_modifier);
-	EXPECT_TRUE(cut.shift);
-        EXPECT_TRUE(cut.target_kind == qhc::HostShortcutTargetKind::Action);
-        EXPECT_TRUE(same_text(cut.target_id, "cut_tool"));
+	const qhc::HostShortcutDescriptor& create_primitive =
+		require_shortcut("create_primitive_tool");
+	EXPECT_TRUE(same_text(create_primitive.key, "B"));
+	EXPECT_TRUE(create_primitive.shift);
+	EXPECT_TRUE(same_text(create_primitive.target_id, "create_primitive"));
+
+	EXPECT_FALSE(has_shortcut("cut_tool"));
 
 	const qhc::HostShortcutDescriptor& mirror_x = require_shortcut("mirror_axis_x");
 	EXPECT_TRUE(same_text(mirror_x.key, "X"));

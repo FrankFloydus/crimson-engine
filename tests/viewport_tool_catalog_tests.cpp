@@ -10,6 +10,7 @@
 #include "assets/asset_registry.hpp"
 #include "editor/interactions/tool_identity.hpp"
 #include "editor/modeling/services/modeling_session_service.hpp"
+#include "editor/modeling/services/primitive_creation_tool_service.hpp"
 #include "editor/metadata/host_contract.hpp"
 #include "scene/scene_document.hpp"
 #include "editor/session/scene_session.hpp"
@@ -33,6 +34,94 @@ namespace {
 using test::guardrail::read_source_file;
 using test::guardrail::source_root;
 using test::guardrail::source_slice;
+
+/// Injects deterministic Box preview failures into viewport-tool tests.
+class FailingBoxPreviewPorts final : public ViewportToolHoverPort,
+                                     public ViewportToolPreviewPort {
+public:
+  bool fail_query = false;
+  int hover_updates = 0;
+  int invalidations = 0;
+
+  bool claim(ModelingBoxDragState) override { return true; }
+  void invalidate() override { ++invalidations; }
+  ModelingBoxPreview update_box_hover(const ModelingBoxToolEvent &) override {
+    ++hover_updates;
+    return {.ok = false, .message = "Forced Box hover failure."};
+  }
+  ModelingCommandResult
+  update_insert_edge_loop_hover(const ModelingToolRayEvent &) override {
+    return {.ok = true};
+  }
+  ModelingCommandResult
+  update_knife_hover(const ModelingToolRayEvent &) override {
+    return {.ok = true};
+  }
+  ModelingCommandResult
+  update_poly_hover(const ModelingToolRayEvent &) override {
+    return {.ok = true};
+  }
+  ModelingCommandResult
+  update_drawn_plane_hover(ModelingViewportTool,
+                           const ModelingToolRayEvent &) override {
+    return {.ok = true};
+  }
+
+  ModelingToolStatus tool_status() const override { return {}; }
+  ModelingBoxPreview box_preview(bool) const override {
+    return fail_query
+               ? ModelingBoxPreview{
+                     .ok = false,
+                     .message = "Forced Box preview query failure.",
+                 }
+               : ModelingBoxPreview{
+                     .ok = true,
+                     .drag_state = ModelingBoxDragState::Idle,
+                 };
+  }
+  ModelingBoxPreview
+  begin_box_footprint(const ModelingBoxToolEvent &) override {
+    return {.ok = true};
+  }
+  ModelingBoxPreview
+  update_box_footprint(const ModelingBoxToolEvent &) override {
+    return {.ok = true};
+  }
+  ModelingBoxPreview begin_box_height(const ModelingBoxToolEvent &) override {
+    return {.ok = true};
+  }
+  ModelingCommandResult
+  begin_insert_edge_loop_drag(const ModelingToolRayEvent &) override {
+    return {.ok = true};
+  }
+  ModelingCommandResult
+  update_insert_edge_loop_drag(const ModelingToolRayEvent &) override {
+    return {.ok = true};
+  }
+  ModelingCommandResult
+  accept_knife_point(const ModelingToolRayEvent &) override {
+    return {.ok = true};
+  }
+  ModelingCommandResult accept_poly_point() override { return {.ok = true}; }
+  ModelingCommandResult begin_drawn_plane_point_drag(ModelingViewportTool,
+                                                       int) override {
+    return {.ok = true};
+  }
+  ModelingCommandResult
+  begin_drawn_plane_line_drag(ModelingViewportTool,
+                              const ModelingToolRayEvent &) override {
+    return {.ok = true};
+  }
+  ModelingCommandResult
+  click_drawn_plane_point(ModelingViewportTool,
+                          const ModelingToolRayEvent &) override {
+    return {.ok = true};
+  }
+  ModelingCommandResult end_drawn_plane_drag(ModelingViewportTool) override {
+    return {.ok = true};
+  }
+  ModelingCommandResult cycle_cut_mode() override { return {.ok = true}; }
+};
 
 void expect_point_tool_click_uses_queued_press_coordinate(
     ViewportToolId tool_id, bool expected_dragging) {
@@ -132,15 +221,22 @@ TEST(ViewportToolCatalogTests, CatalogContainsExpectedInteractiveToolContracts) 
 }
 
 TEST(ViewportToolCatalogTests, ExposesToolMetadataAndConversions) {
-  const Tool *box = find_viewport_tool("box");
-  ASSERT_NE(box, nullptr);
-  EXPECT_EQ(box->viewport_tool(), ViewportToolId::Box);
-  EXPECT_EQ(box->modeling_tool(), ModelingViewportTool::Box);
-  EXPECT_EQ(box->kind(), ToolKind::Modal);
-  EXPECT_EQ(box->label(), "Box");
-  EXPECT_EQ(box->shortcut(), "B");
-  EXPECT_TRUE(box->owns_viewport());
-  EXPECT_FALSE(box->blocks_viewport_focus_shortcuts());
+  const Tool *primitive = find_viewport_tool("create_primitive");
+  ASSERT_NE(primitive, nullptr);
+  EXPECT_EQ(primitive->viewport_tool(), ViewportToolId::CreatePrimitive);
+  EXPECT_EQ(primitive->modeling_tool(), ModelingViewportTool::Box);
+  EXPECT_EQ(primitive->kind(), ToolKind::Modal);
+  EXPECT_EQ(primitive->label(), "Create Primitive");
+  EXPECT_EQ(primitive->shortcut(), "Shift+B");
+  EXPECT_TRUE(primitive->owns_viewport());
+  EXPECT_FALSE(primitive->blocks_viewport_focus_shortcuts());
+  EXPECT_EQ(find_viewport_tool("box"), nullptr);
+  EXPECT_EQ(find_viewport_tool("cylinder"), nullptr);
+  EXPECT_EQ(find_viewport_tool("sphere"), nullptr);
+
+  const Tool *cut = find_viewport_tool("cut");
+  ASSERT_NE(cut, nullptr);
+  EXPECT_TRUE(cut->shortcut().empty());
 
   EXPECT_EQ(viewport_tool_transform_tool(ViewportToolId::Move),
             ModelingTransformTool::Move);
@@ -160,12 +256,18 @@ TEST(ViewportToolCatalogTests, ExposesToolMetadataAndConversions) {
             quader_editor_core::ViewportInteractionTool::Scale);
   EXPECT_EQ(modeling_viewport_tool_for(ViewportToolId::Cut),
             ModelingViewportTool::Cut);
+  EXPECT_EQ(modeling_viewport_tool_for(ViewportToolId::CreatePrimitive),
+            ModelingViewportTool::Box);
   EXPECT_EQ(viewport_tool_for_modeling(ModelingViewportTool::Extend),
             ViewportToolId::Extend);
   EXPECT_EQ(viewport_tool_for_modeling(ModelingViewportTool::Extrude),
             ViewportToolId::Extrude);
   EXPECT_EQ(viewport_tool_for_modeling(ModelingViewportTool::Mirror),
             ViewportToolId::Mirror);
+  EXPECT_EQ(viewport_tool_for_modeling(ModelingViewportTool::Cylinder),
+            ViewportToolId::CreatePrimitive);
+  EXPECT_EQ(viewport_tool_for_modeling(ModelingViewportTool::Sphere),
+            ViewportToolId::CreatePrimitive);
   EXPECT_TRUE(viewport_tool_blocks_focus_shortcuts(ViewportToolId::Cut));
   EXPECT_TRUE(viewport_tool_owns_viewport(ViewportToolId::InsertEdgeLoop));
   EXPECT_TRUE(viewport_tool_supports_transform_gizmo(ViewportToolId::Move));
@@ -532,7 +634,8 @@ TEST(ViewportToolRuntimeTests, BoxToolCommitUsesCommandOwnedTransaction) {
         });
     ASSERT_TRUE(material.ok) << material.message;
 
-    const ViewportTool *box_tool = find_viewport_tool(ViewportToolId::Box);
+    const ViewportTool *box_tool =
+        find_viewport_tool(ViewportToolId::CreatePrimitive);
     ASSERT_NE(box_tool, nullptr);
     ASSERT_TRUE(session.modeling().activate_box_tool().ok);
 
@@ -608,7 +711,7 @@ TEST(ViewportToolRuntimeTests, BoxToolCommitUsesCommandOwnedTransaction) {
       return box_tool->handle_event(context,
                                     ViewportToolEvent{
                                         .kind = ViewportToolEventKind::Frame,
-                                        .tool = ViewportToolId::Box,
+                                        .tool = ViewportToolId::CreatePrimitive,
                                         .pointer = pointer,
                                     });
     };
@@ -664,6 +767,203 @@ TEST(ViewportToolRuntimeTests, BoxToolCommitUsesCommandOwnedTransaction) {
     EXPECT_EQ(session.scene().material(committed_entity)->material,
               material.value.id);
     EXPECT_EQ(session.scene().primary_selection(), committed_entity);
+}
+
+TEST(ViewportToolRuntimeTests,
+     PersistentPrimitivePreservesSnapModeAndRollsBackAfterPreviewFailure) {
+  SceneSession session;
+  QuaderEditorApi editor(
+      QuaderApiSessionInternalAccess::from_scene_session(session));
+  ASSERT_TRUE(
+      editor.tools().activate(ViewportToolId::CreatePrimitive).ok());
+
+  ViewportToolState state{.active_tool = ViewportToolId::CreatePrimitive};
+  ViewportCameraController camera;
+  ViewportModalToolState modal_state;
+  const ViewportTool *box_tool =
+      find_viewport_tool(ViewportToolId::CreatePrimitive);
+  ASSERT_NE(box_tool, nullptr);
+
+  ModelingBoxToolEvent current_event{
+      .screen_position = {400.0f, 300.0f},
+      .ray = {.origin = {4.25f, 4.0f, 4.25f},
+              .direction = {0.0f, -1.0f, 0.0f}},
+      .grid_size = 1.0,
+      .snap_enabled = false,
+  };
+  bool accepted_snap_enabled = true;
+  ViewportBoxToolContext box_context;
+  box_context.make_event = [&]() { return current_event; };
+  box_context.accept_preview = [&](std::string name, AssetId material,
+                                   bool snap_enabled) {
+    accepted_snap_enabled = snap_enabled;
+    const QuaderApiVoidResult result = editor.tools().accept_active_primitive(
+        std::move(name), material, snap_enabled);
+    return ModelingCommandResult{
+        .ok = result.ok,
+        .changed = result.changed,
+        .message = result.message,
+    };
+  };
+  box_context.cancel_session = [&]() {
+    const QuaderApiVoidResult result =
+        editor.tools().cancel_active_tool_preview();
+    return ModelingCommandResult{
+        .ok = result.ok,
+        .changed = result.changed,
+        .message = result.message,
+    };
+  };
+  box_context.session_active = [&]() {
+    return session.primitive_creation().active();
+  };
+  box_context.next_mesh_name = [] { return std::string{"Persistent Box"}; };
+
+  ViewportModelingToolPortAdapter tool_ports(session.modeling());
+  ViewportToolContext context{
+      .state = state,
+      .camera = camera,
+      .ports = tool_ports.ports(),
+      .document = &session.scene(),
+      .modal_state = &modal_state,
+      .box = &box_context,
+  };
+  const auto dispatch_frame = [&](ViewportPointerToolEvent pointer) {
+    return box_tool->handle_event(
+        context, ViewportToolEvent{
+                     .kind = ViewportToolEventKind::Frame,
+                     .tool = ViewportToolId::CreatePrimitive,
+                     .pointer = pointer,
+                 });
+  };
+
+  ASSERT_TRUE(dispatch_frame({.hovered = true, .left_clicked = true}).handled);
+  current_event.ray.origin = {6.4f, 4.0f, 7.6f};
+  ASSERT_TRUE(dispatch_frame({.hovered = true, .left_released = true}).handled);
+  EXPECT_FALSE(accepted_snap_enabled);
+  EXPECT_TRUE(session.primitive_creation().active());
+  EXPECT_EQ(session.primitive_creation().shape_count(), 1U);
+  EXPECT_EQ(session.modeling().objects().size(), 1U);
+  // Public Undo remains available so it can cancel the pending native tool,
+  // even though the accepted live shape has not entered document history.
+  EXPECT_TRUE(editor.history().can_undo());
+
+  current_event.ray.direction = {};
+  const ViewportToolResult failed =
+      dispatch_frame({.hovered = true, .left_clicked = true});
+  EXPECT_TRUE(failed.active_tool_changed);
+  EXPECT_TRUE(failed.sync_active_tool_from_modeling);
+  EXPECT_FALSE(session.primitive_creation().active());
+  EXPECT_EQ(editor.tools().active_tool(), "select");
+  EXPECT_TRUE(session.modeling().objects().empty());
+  EXPECT_FALSE(editor.history().can_undo());
+}
+
+TEST(ViewportToolRuntimeTests,
+     PersistentPrimitiveRollsBackOnQueryAndHoverPreviewFailures) {
+  const ViewportTool *box_tool =
+      find_viewport_tool(ViewportToolId::CreatePrimitive);
+  ASSERT_NE(box_tool, nullptr);
+
+  for (const bool fail_query : {true, false}) {
+    SCOPED_TRACE(fail_query ? "query failure" : "hover failure");
+    FailingBoxPreviewPorts ports;
+    ports.fail_query = fail_query;
+    ViewportToolState state{
+        .active_tool = ViewportToolId::CreatePrimitive};
+    ViewportCameraController camera;
+    ViewportModalToolState modal_state;
+    int cancel_count = 0;
+    ViewportBoxToolContext box_context;
+    box_context.make_event = [] { return ModelingBoxToolEvent{}; };
+    box_context.accept_preview =
+        [](std::string, AssetId, bool) -> ModelingCommandResult {
+      return {.ok = true, .changed = true};
+    };
+    box_context.cancel_session = [&]() -> ModelingCommandResult {
+      ++cancel_count;
+      return {.ok = true, .changed = true};
+    };
+    ViewportToolContext context{
+        .state = state,
+        .camera = camera,
+        .ports = {.hover = &ports, .preview = &ports},
+        .modal_state = &modal_state,
+        .box = &box_context,
+    };
+
+    const ViewportToolResult result = box_tool->handle_event(
+        context,
+        ViewportToolEvent{
+            .kind = ViewportToolEventKind::Frame,
+            .tool = ViewportToolId::CreatePrimitive,
+            .pointer = {.hovered = true},
+        });
+
+    EXPECT_TRUE(result.handled);
+    EXPECT_TRUE(result.consumed);
+    EXPECT_TRUE(result.active_tool_changed);
+    EXPECT_TRUE(result.sync_active_tool_from_modeling);
+    EXPECT_EQ(cancel_count, 1);
+    EXPECT_EQ(ports.hover_updates, fail_query ? 0 : 1);
+    EXPECT_GT(ports.invalidations, 0);
+  }
+}
+
+TEST(ViewportToolRuntimeTests,
+     FailedPrimitiveFinalizeStillSynchronizesAfterSessionExit) {
+  const ViewportTool *box_tool =
+      find_viewport_tool(ViewportToolId::CreatePrimitive);
+  ASSERT_NE(box_tool, nullptr);
+
+  for (const bool apply : {true, false}) {
+    SCOPED_TRACE(apply ? "apply failure" : "cancel failure");
+    FailingBoxPreviewPorts ports;
+    ViewportToolState state{
+        .active_tool = ViewportToolId::CreatePrimitive};
+    ViewportCameraController camera;
+    ViewportModalToolState modal_state;
+    bool session_active = true;
+    ViewportBoxToolContext box_context;
+    box_context.make_event = [] { return ModelingBoxToolEvent{}; };
+    box_context.accept_preview =
+        [](std::string, AssetId, bool) -> ModelingCommandResult {
+      return {.ok = true, .changed = true};
+    };
+    box_context.apply_session = [&]() -> ModelingCommandResult {
+      session_active = false;
+      return {.ok = false, .message = "Forced primitive apply failure."};
+    };
+    box_context.cancel_session = [&]() -> ModelingCommandResult {
+      session_active = false;
+      return {.ok = false, .message = "Forced primitive cancel failure."};
+    };
+    box_context.session_active = [&]() { return session_active; };
+    ViewportToolContext context{
+        .state = state,
+        .camera = camera,
+        .ports = {.hover = &ports, .preview = &ports},
+        .modal_state = &modal_state,
+        .box = &box_context,
+    };
+
+    const ViewportToolResult result = box_tool->handle_event(
+        context, apply ? ViewportToolEvent{
+                             .kind = ViewportToolEventKind::Frame,
+                             .tool = ViewportToolId::CreatePrimitive,
+                             .pointer = {.finalize_pressed = true},
+                         }
+                       : ViewportToolEvent{
+                             .kind = ViewportToolEventKind::Cancel,
+                             .tool = ViewportToolId::CreatePrimitive,
+                             .exit_active_modal_tool = true,
+                         });
+
+    EXPECT_TRUE(result.handled);
+    EXPECT_TRUE(result.consumed);
+    EXPECT_TRUE(result.active_tool_changed);
+    EXPECT_TRUE(result.sync_active_tool_from_modeling);
+  }
 }
 
 TEST(ViewportToolGuardrailTests, RemovedLegacyViewportToolBase) {
@@ -937,7 +1237,7 @@ TEST(ViewportToolGuardrailTests, UiShellHasNoDirectModalToolBranches) {
   const std::filesystem::path root = source_root();
   const std::string ui_shell =
       read_source_file(root / "src" / "ui" / "ui_system.cpp");
-  EXPECT_EQ(ui_shell.find("active_tool == ViewportToolId::Box"),
+  EXPECT_EQ(ui_shell.find("active_tool == ViewportToolId::CreatePrimitive"),
             std::string::npos);
   EXPECT_EQ(ui_shell.find("active_tool == ViewportToolId::InsertEdgeLoop"),
             std::string::npos);

@@ -13,6 +13,7 @@
 #include "editor/tools/native_viewport_tool_coordinator.hpp"
 #include "assets/default_material_catalog.hpp"
 #include "io/project/project_material_provisioner.hpp"
+#include "io/qdr/qdr_atomic_write.hpp"
 #include "io/qdr/qdr_document_reader.hpp"
 #include "io/qdr/qdr_document_writer.hpp"
 
@@ -23,6 +24,7 @@
 #include <set>
 #include <string_view>
 #include <system_error>
+#include <type_traits>
 #include <utility>
 
 #if defined(_WIN32)
@@ -34,6 +36,13 @@
 
 namespace quader {
 namespace {
+
+static_assert(std::is_nothrow_move_assignable_v<SceneId>);
+static_assert(
+    std::is_nothrow_move_assignable_v<std::optional<ProjectRelativePath>>);
+static_assert(std::is_nothrow_move_assignable_v<ProjectManifest>);
+static_assert(std::is_nothrow_move_assignable_v<std::string>);
+static_assert(std::is_nothrow_move_constructible_v<ProjectSessionResult>);
 
 ProjectSessionResult failure(std::string message) {
   return {.ok = false, .changed = false, .message = std::move(message)};
@@ -653,7 +662,9 @@ ProjectSessionResult ProjectSession::save(SceneSessionId id) {
   if (!snapshot.ok) {
     return failure(snapshot.message);
   }
-  const QdrProjectWriteResult written =
+  ProjectSessionResult success_result = success(true, "Scene saved.", id);
+  success_result.warnings.reserve(1u);
+  QdrProjectWriteResult written =
       QdrDocumentWriter::write_project_document_atomic(
           absolute.value(), snapshot.snapshot, scene->scene_id.bytes());
   if (!written.ok) {
@@ -664,7 +675,10 @@ ProjectSessionResult ProjectSession::save(SceneSessionId id) {
     scene->session->mark_clean();
   }
   scene->identity_dirty = false;
-  return success(true, "Scene saved.", id);
+  if (!written.message.empty()) {
+    success_result.warnings.push_back(std::move(written.message));
+  }
+  return success_result;
 }
 
 ProjectSessionResult ProjectSession::save_as(SceneSessionId id,
@@ -692,26 +706,37 @@ ProjectSessionResult ProjectSession::save_as(SceneSessionId id,
     return failure("Commit or cancel the active preview before saving.");
   }
 
-  const SceneId new_scene_id = SceneId::generate();
+  SceneId new_scene_id = SceneId::generate();
   const SceneContentRevisionStamp stamp = scene->session->content_revision_stamp();
   SceneWriteSnapshotResult snapshot = scene_write_snapshot(
       scene->session->document(), material_catalog_);
   if (!snapshot.ok) {
     return failure(snapshot.message);
   }
-  const QdrProjectWriteResult written =
-      QdrDocumentWriter::write_project_document_atomic(
-          absolute.value(), snapshot.snapshot, new_scene_id.bytes());
-  if (!written.ok) {
-    return failure(written.message.empty() ? "Scene save failed."
-                                           : written.message);
-  }
   ProjectManifest candidate_manifest = workspace_->manifest;
+  ProjectManifest recovery_manifest = candidate_manifest;
+  PersistedWorkspaceState previous_workspace_state =
+      workspace_state_for(open_scenes_, active_scene_id_);
+  ProjectIoResult<void> recovery_workspace_set = recovery_manifest.set_workspace(
+      std::move(previous_workspace_state.open_paths),
+      std::move(previous_workspace_state.active_path));
+  if (!recovery_workspace_set.ok()) {
+    return failure(recovery_workspace_set.error().message);
+  }
   ProjectIoResult<void> registered = candidate_manifest.register_scene(
       {.id = new_scene_id, .path = path});
   if (!registered.ok()) {
     return failure(registered.error().message);
   }
+
+  SceneId installed_scene_id = new_scene_id;
+  std::optional<ProjectRelativePath> installed_path(path);
+  std::string installed_display_name = display_name_for_path(path);
+  ProjectSessionResult success_result =
+      success(true, "Scene saved as a new project file.", id);
+  success_result.warnings.reserve(4u);
+  success_result.warnings.emplace_back(
+      "Scene saved, but obsolete destination cleanup failed.");
 
   std::vector<ProjectRelativePath> open_paths;
   open_paths.reserve(open_scenes_.size());
@@ -732,21 +757,247 @@ ProjectSessionResult ProjectSession::save_as(SceneSessionId id,
       active_path = *prospective_path;
     }
   }
-  ProjectSessionResult persisted =
-      persist_manifest(*workspace_, std::move(candidate_manifest),
-                       std::move(open_paths), std::move(active_path));
+  ProjectIoResult<void> candidate_workspace_set =
+      candidate_manifest.set_workspace(std::move(open_paths),
+                                       std::move(active_path));
+  if (!candidate_workspace_set.ok()) {
+    return failure(candidate_workspace_set.error().message);
+  }
+
+  quader_io::QdrAtomicFileTransaction scene_file_transaction;
+  const quader_io::QdrAtomicWriteResult prepared =
+      scene_file_transaction.prepare(absolute.value());
+  if (!prepared.ok) {
+    return failure(prepared.message.empty()
+                       ? "Scene save transaction could not be prepared."
+                       : prepared.message);
+  }
+  QdrProjectWriteResult written =
+      QdrDocumentWriter::write_project_document_atomic(
+          scene_file_transaction.staging_path(), snapshot.snapshot,
+          new_scene_id.bytes());
+  if (!written.ok) {
+    const quader_io::QdrAtomicWriteResult rolled_back =
+        scene_file_transaction.rollback();
+    std::string message =
+        written.message.empty() ? "Scene save failed." : written.message;
+    if (!rolled_back.ok) {
+      message += "; rollback failed: " + rolled_back.message;
+    }
+    return failure(std::move(message));
+  }
+  if (!written.message.empty()) {
+    success_result.warnings.push_back(std::move(written.message));
+  }
+  const bool mark_clean_after_publish =
+      scene->session->content_revision_stamp() == stamp;
+
+  const quader_io::QdrAtomicWriteResult published =
+      scene_file_transaction.publish();
+  if (!published.ok) {
+    const quader_io::QdrAtomicWriteResult rolled_back =
+        scene_file_transaction.rollback();
+    std::string message = published.message.empty()
+                              ? "Scene publish failed."
+                              : published.message;
+    if (!rolled_back.ok) {
+      message += "; rollback failed: " + rolled_back.message;
+    }
+    return failure(std::move(message));
+  }
+  if (!published.message.empty()) {
+    success_result.warnings.push_back(published.message);
+  }
+
+  std::string preserved_scene_diagnostic =
+      "Published scene remains at '" +
+      scene_file_transaction.target_path().string() + "'.";
+  if (!scene_file_transaction.backup_path().empty()) {
+    preserved_scene_diagnostic += " Prior destination backup remains at '" +
+                                  scene_file_transaction.backup_path().string() +
+                                  "'.";
+  }
+
+  ProjectSessionResult persisted = persist_prepared_manifest(
+      *workspace_, std::move(candidate_manifest));
   if (!persisted.ok) {
+    const quader_io::QdrAtomicWriteResult rolled_back =
+        scene_file_transaction.rollback();
+    if (!rolled_back.ok) {
+      persisted.message += persisted.message.empty() ? "" : "; ";
+      persisted.message += "scene rollback failed: " + rolled_back.message;
+    }
     return persisted;
   }
 
-  scene->scene_id = new_scene_id;
-  scene->path = path;
-  scene->display_name = display_name_for_path(path);
-  if (scene->session->content_revision_stamp() == stamp) {
-    scene->session->mark_clean();
+  const auto preserve_candidate_for_recovery = [&]() noexcept {
+    if (!scene_file_transaction.preserve_published_for_recovery()) {
+      return false;
+    }
+    scene->scene_id = std::move(installed_scene_id);
+    scene->path = std::move(installed_path);
+    scene->display_name = std::move(installed_display_name);
+    scene->identity_dirty = true;
+    return true;
+  };
+
+  const auto attach_recovery_warnings =
+      [&](ProjectSessionResult &result,
+          ProjectSessionResult *manifest_restored = nullptr) {
+    result.warnings = std::move(persisted.warnings);
+    if (manifest_restored != nullptr) {
+      for (std::string &warning : manifest_restored->warnings) {
+        result.warnings.push_back(std::move(warning));
+      }
+    }
+  };
+
+  const auto recover_after_persisted_reference =
+      [&](std::string_view failure_prefix,
+          std::string_view failure_detail) -> ProjectSessionResult {
+    ProjectSessionResult manifest_restored;
+    try {
+      manifest_restored = persist_prepared_manifest(
+          *workspace_, std::move(recovery_manifest));
+    } catch (const std::exception &exception) {
+      const bool preserved = preserve_candidate_for_recovery();
+      std::string message(failure_prefix);
+      if (!failure_detail.empty()) {
+        message += ": ";
+        message += failure_detail;
+      }
+      message += "; previous manifest restoration threw: ";
+      message += exception.what();
+      message += "; " + preserved_scene_diagnostic;
+      if (!preserved) {
+        message += "; published transaction preservation failed.";
+      }
+      ProjectSessionResult result = failure(std::move(message));
+      attach_recovery_warnings(result);
+      return result;
+    } catch (...) {
+      const bool preserved = preserve_candidate_for_recovery();
+      std::string message(failure_prefix);
+      if (!failure_detail.empty()) {
+        message += ": ";
+        message += failure_detail;
+      }
+      message += "; previous manifest restoration threw an unknown exception; " +
+                 preserved_scene_diagnostic;
+      if (!preserved) {
+        message += "; published transaction preservation failed.";
+      }
+      ProjectSessionResult result = failure(std::move(message));
+      attach_recovery_warnings(result);
+      return result;
+    }
+
+    if (!manifest_restored.ok) {
+      const bool preserved = preserve_candidate_for_recovery();
+      std::string message(failure_prefix);
+      if (!failure_detail.empty()) {
+        message += ": ";
+        message += failure_detail;
+      }
+      message += "; previous manifest restoration failed: " +
+                 manifest_restored.message + "; " +
+                 preserved_scene_diagnostic;
+      if (!preserved) {
+        message += "; published transaction preservation failed.";
+      }
+      ProjectSessionResult result = failure(std::move(message));
+      attach_recovery_warnings(result, &manifest_restored);
+      return result;
+    }
+
+    quader_io::QdrAtomicWriteResult rolled_back;
+    try {
+      rolled_back = scene_file_transaction.rollback();
+    } catch (const std::exception &exception) {
+      std::string message(failure_prefix);
+      if (!failure_detail.empty()) {
+        message += ": ";
+        message += failure_detail;
+      }
+      message += "; scene rollback threw: ";
+      message += exception.what();
+      ProjectSessionResult result = failure(std::move(message));
+      attach_recovery_warnings(result, &manifest_restored);
+      return result;
+    } catch (...) {
+      std::string message(failure_prefix);
+      if (!failure_detail.empty()) {
+        message += ": ";
+        message += failure_detail;
+      }
+      message += "; scene rollback threw an unknown exception.";
+      ProjectSessionResult result = failure(std::move(message));
+      attach_recovery_warnings(result, &manifest_restored);
+      return result;
+    }
+
+    std::string message(failure_prefix);
+    if (!failure_detail.empty()) {
+      message += ": ";
+      message += failure_detail;
+    }
+    if (!rolled_back.ok) {
+      message += "; scene rollback failed: " + rolled_back.message;
+    }
+    ProjectSessionResult result = failure(std::move(message));
+    attach_recovery_warnings(result, &manifest_restored);
+    return result;
+  };
+
+  quader_io::QdrAtomicWriteResult verified;
+  try {
+    verified = scene_file_transaction.verify_published();
+  } catch (const std::exception &exception) {
+    return recover_after_persisted_reference(
+        "Scene verification threw after manifest persistence",
+        exception.what());
+  } catch (...) {
+    return recover_after_persisted_reference(
+        "Scene verification threw after manifest persistence",
+        "unknown exception");
+  }
+  if (!verified.ok) {
+    return recover_after_persisted_reference(
+        "Scene verification failed after manifest persistence",
+        verified.message);
+  }
+
+  quader_io::QdrAtomicWriteResult committed;
+  try {
+    committed = scene_file_transaction.commit();
+  } catch (const std::exception &exception) {
+    return recover_after_persisted_reference(
+        "Scene commit threw after manifest persistence", exception.what());
+  } catch (...) {
+    return recover_after_persisted_reference(
+        "Scene commit threw after manifest persistence", "unknown exception");
+  }
+  if (!committed.ok) {
+    return recover_after_persisted_reference(
+        "Scene commit verification failed", committed.message);
+  }
+  if (committed.message.empty()) {
+    success_result.warnings.erase(success_result.warnings.begin());
+  } else {
+    success_result.warnings.front() = std::move(committed.message);
+  }
+  for (std::string &warning : persisted.warnings) {
+    success_result.warnings.push_back(std::move(warning));
+  }
+
+  scene->scene_id = std::move(installed_scene_id);
+  scene->path = std::move(installed_path);
+  scene->display_name = std::move(installed_display_name);
+  if (mark_clean_after_publish) {
+    scene->session->mark_clean_at(stamp);
   }
   scene->identity_dirty = false;
-  return success(true, "Scene saved as a new project file.", id);
+  return success_result;
 }
 
 ProjectSessionResult ProjectSession::save_all() {
@@ -1123,13 +1374,23 @@ ProjectSessionResult ProjectSession::persist_manifest(
   if (!updated.ok()) {
     return failure(updated.error().message);
   }
+  return persist_prepared_manifest(workspace, std::move(manifest));
+}
+
+ProjectSessionResult ProjectSession::persist_prepared_manifest(
+    ProjectWorkspaceStorage &workspace, ProjectManifest manifest) {
+  ProjectSessionResult result = success(false, {});
+  result.warnings.reserve(1u);
   ProjectIoResult<void> saved = ProjectManifestStore::save_atomic(
       workspace.file_system, workspace.manifest_path, manifest);
   if (!saved.ok()) {
     return failure(saved.error().message);
   }
   workspace.manifest = std::move(manifest);
-  return success(false, {});
+  if (!saved.warning().empty()) {
+    result.warnings.push_back(saved.take_warning());
+  }
+  return result;
 }
 
 bool ProjectSession::cancel_transient_state(OpenSceneSession &scene) {

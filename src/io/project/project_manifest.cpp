@@ -483,14 +483,14 @@ ProjectIoResult<void> ProjectManifestStore::save_atomic(
     return validated;
   }
 
-  const quader_io::QdrAtomicWriteResult write_result =
+  quader_io::QdrAtomicWriteResult write_result =
       quader_io::write_qdr_text_atomic(manifest_path, serialize(manifest));
   if (!write_result.ok) {
     return ProjectIoResult<void>::failure(ProjectIoErrorCode::IoFailure,
                                           write_result.message,
                                           manifest_path);
   }
-  return ProjectIoResult<void>::success();
+  return ProjectIoResult<void>::success(std::move(write_result.message));
 }
 
 std::string ProjectManifestStore::serialize(const ProjectManifest &manifest) {

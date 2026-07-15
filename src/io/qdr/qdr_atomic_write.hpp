@@ -6,6 +6,8 @@
 ////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
+#include <array>
+#include <cstdint>
 #include <filesystem>
 #include <functional>
 #include <string>
@@ -19,6 +21,67 @@ namespace quader_io {
 struct QdrAtomicWriteResult {
     bool ok = false;
     std::string message;
+};
+
+/**
+ * Stages one native QDR file beside its final destination, reversibly publishes
+ * it before wider durable state may reference it, and preserves any prior
+ * destination entry until the wider transaction commits.
+ */
+class QdrAtomicFileTransaction final {
+public:
+  QdrAtomicFileTransaction() = default;
+  ~QdrAtomicFileTransaction();
+
+  QdrAtomicFileTransaction(const QdrAtomicFileTransaction &) = delete;
+  QdrAtomicFileTransaction &
+  operator=(const QdrAtomicFileTransaction &) = delete;
+  QdrAtomicFileTransaction(QdrAtomicFileTransaction &&) = delete;
+  QdrAtomicFileTransaction &
+  operator=(QdrAtomicFileTransaction &&) = delete;
+
+  [[nodiscard]] QdrAtomicWriteResult
+  prepare(const std::filesystem::path &target);
+  [[nodiscard]] QdrAtomicWriteResult publish();
+  [[nodiscard]] QdrAtomicWriteResult verify_published() const;
+  [[nodiscard]] QdrAtomicWriteResult rollback();
+  [[nodiscard]] QdrAtomicWriteResult commit();
+  /**
+   * Disarms automatic rollback while deliberately retaining the published
+   * target and recovery artifacts for a higher-level durable recovery path.
+   * Returns false without changing state unless publication is active.
+   */
+  [[nodiscard]] bool preserve_published_for_recovery() noexcept;
+
+  [[nodiscard]] bool active() const noexcept { return active_; }
+  [[nodiscard]] bool published() const noexcept { return published_; }
+  [[nodiscard]] const std::filesystem::path &target_path() const noexcept {
+    return target_;
+  }
+  [[nodiscard]] const std::filesystem::path &staging_path() const noexcept {
+    return staging_;
+  }
+  [[nodiscard]] const std::filesystem::path &backup_path() const noexcept {
+    return backup_;
+  }
+  [[nodiscard]] const std::filesystem::path &recovery_path() const noexcept {
+    return recovery_;
+  }
+
+private:
+  [[nodiscard]] QdrAtomicWriteResult verify_published_bytes() const;
+
+  std::filesystem::path target_;
+  std::filesystem::path staging_;
+  std::filesystem::path backup_;
+  std::filesystem::path recovery_;
+  std::array<std::uint64_t, 6> staged_file_seal_{};
+  std::string backup_cleanup_failure_message_;
+  void *published_guard_ = nullptr;
+  bool target_existed_ = false;
+  bool published_ = false;
+  bool cleanup_pending_ = false;
+  bool active_ = false;
 };
 
 using QdrAtomicWriteValidator =

@@ -91,18 +91,19 @@ public:
     bool set_parent(EntityId child, EntityId parent,
                     bool preserve_world_transform = true);
 
-    void set_transform(EntityId id, TransformComponent transform);
+    bool set_transform(EntityId id, TransformComponent transform);
     void set_transforms(std::span<const SceneTransformAssignment> transforms);
-    void set_modeling_object(EntityId id, ModelingObjectComponent object);
+    bool set_modeling_object(EntityId id, ModelingObjectComponent object);
     bool set_instance_definition(EntityId id);
     bool clear_instance_definition(EntityId id);
     bool set_instance_occurrence(EntityId id,
                                  InstanceOccurrenceComponent occurrence);
     bool clear_instance_occurrence(EntityId id);
-    void set_mesh(EntityId id, MeshComponent mesh);
-    void set_material(EntityId id, MaterialComponent material);
+    bool set_mesh(EntityId id, MeshComponent mesh);
+    bool notify_mesh_payload_changed(EntityId id);
+    bool set_material(EntityId id, MaterialComponent material);
     bool clear_material(EntityId id);
-    void set_light(EntityId id, LightComponent light);
+    bool set_light(EntityId id, LightComponent light);
     bool set_scene_settings(EntityId id, SceneSettingsComponent settings);
 
     const NameComponent* name(EntityId id) const;

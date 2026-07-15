@@ -94,6 +94,13 @@ struct ViewportToolResult {
 struct ViewportBoxToolContext {
   AssetId default_material = kInvalidAssetId;
   std::function<ModelingBoxToolEvent()> make_event;
+  std::function<ModelingCommandResult(std::string, AssetId, bool)>
+      accept_preview;
+  std::function<ModelingCommandResult()> apply_session;
+  std::function<ModelingCommandResult()> cancel_session;
+  std::function<bool()> session_active;
+  // Transitional fallback for callers that still exercise the legacy
+  // one-shape Box command directly. The native app uses accept_preview.
   std::function<ModelingCreateBoxResult(std::string, AssetId)> commit_preview;
   std::function<std::string()> next_mesh_name;
 };
@@ -169,7 +176,8 @@ public:
   static constexpr ViewportToolId kExtrude = ViewportToolId::Extrude;
   static constexpr ViewportToolId kRotate = ViewportToolId::Rotate;
   static constexpr ViewportToolId kScale = ViewportToolId::Scale;
-  static constexpr ViewportToolId kBox = ViewportToolId::Box;
+  static constexpr ViewportToolId kCreatePrimitive =
+      ViewportToolId::CreatePrimitive;
   static constexpr ViewportToolId kInsertEdgeLoop =
       ViewportToolId::InsertEdgeLoop;
   static constexpr ViewportToolId kKnife = ViewportToolId::Knife;

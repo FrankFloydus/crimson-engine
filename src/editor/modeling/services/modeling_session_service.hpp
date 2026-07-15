@@ -116,6 +116,9 @@ public:
   rectangle_selection_resolution_build_count() const;
   [[nodiscard]] std::uint64_t local_face_geometry_build_count() const;
   [[nodiscard]] ModelingSessionMemento capture_history_memento() const;
+  [[nodiscard]] ModelingSessionMemento capture_history_memento_without_objects(
+      const ModelingSessionMemento &selection_baseline,
+      std::span<const int> excluded_object_ids) const;
   [[nodiscard]] ModelingSessionMemento
   capture_active_preview_history_memento() const;
   ModelingCommandResult
@@ -255,6 +258,8 @@ public:
   ModelingCreateBoxResult commit_box(std::string name);
   ModelingCommandResult cancel_box();
   ModelingCreateBoxResult create_mesh(const ModelingCreateMeshRequest &request);
+  ModelingCommandResult replace_mesh_document(
+      int modeling_object_id, quader_poly::Document document);
   ModelingLinearArrayResult
   create_linear_array(const ModelingLinearArrayRequest &request);
   ModelingRadialArrayResult

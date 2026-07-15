@@ -49,7 +49,7 @@ HistoryRestoreResult EditorSession::undo()
 
 	HistoryEntry entry = std::move(undo_stack_.back());
 	undo_stack_.pop_back();
-	restore_recorded_state(entry.before);
+	restore_history_state(entry.before);
 	redo_stack_.push_back(std::move(entry));
 	return { true, history_status() };
 }
@@ -62,7 +62,7 @@ HistoryRestoreResult EditorSession::redo()
 
 	HistoryEntry entry = std::move(redo_stack_.back());
 	redo_stack_.pop_back();
-	restore_recorded_state(entry.after);
+	restore_history_state(entry.after);
 	undo_stack_.push_back(std::move(entry));
 	return { true, history_status() };
 }

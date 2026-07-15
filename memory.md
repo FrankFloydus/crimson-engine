@@ -4507,3 +4507,142 @@ Verification:
   hidden startup window on the active desktop and captured black pixels, so visual confirmation of
   environment/background output and native title-bar double-click behavior remains a manual smoke
   item rather than claimed automated proof.
+
+## 2026-07-15 - Primitive Creation Is One Persistent Multi-Shape Transaction
+
+Invariant:
+
+- `Create Primitive` is the sole primitive viewport tool and activates with Shift+B. Its first
+  Tool Settings control is the `primitive.type` dropdown; selecting Box, Cylinder, or Sphere
+  rebuilds the remaining controls from that type's settings descriptor. The chosen type persists
+  across tool sessions just like each type's numeric and toggle settings.
+- Each released footprint creates a shape and keeps that newest shape live-editable while it
+  remains the sole active object at the same selection revision. Numeric, toggle, and primitive
+  type changes rebuild that object in place, preserving its modeling/entity identity and
+  footprint. Creating another shape or any other selection transition permanently freezes the
+  prior live shape; later setting changes then affect only future shapes.
+- Accepted shapes do not create editor-history entries independently. Apply or Enter finalizes all
+  shapes as one before/after modeling memento, while Cancel, Escape, any footprint-preview failure,
+  or any per-shape creation failure restores the session-start memento and exits the tool.
+- Primitive Apply/Cancel rebases the session boundary onto the current non-primitive document so
+  unrelated scene edits made while the tool is active survive in their original history order.
+  Public selection changes remain transient during the session, modeling-content mutations are
+  rejected, and document commands may not target a session-created entity until Apply commits it.
+- Historical mesh projection must reuse a modeling object's remembered mesh asset when its scene
+  entity needs recreation. Restore cleanup removes only assets displaced by the restored state;
+  never sweep every asset stored in a memento, because an unreferenced snapshot can still be owned
+  by a deeper document-history entry.
+- The scene preview checkpoint begins and finishes exactly once per primitive session. Rollback
+  first observes the current scene revision, then finishes it as restored-by-cancel so unrelated
+  intervening scene edits remain dirty and no stale post-failure projection can be published.
+- Restoring the session-start memento must retain the native session's object/light allocation
+  high-water marks. A shape created after cancel must receive an ID above every transient primitive
+  accepted and then retired by that session, preserving stale public-handle invalidation.
+- The shared two-stage footprint interaction must preserve the draw-time snap mode and reactivate
+  after each accepted shape. Settings cannot mutate while a footprint is in progress.
+- Primitive completion uses dedicated semantic Apply/Cancel commands so Enter and Escape remain
+  available from Tool Settings numeric fields without enabling unrelated global shortcuts during
+  text input. Those commands are owner-only while a primitive session is active and must never
+  fall through to generic modeling-operation previews. Their viewport-scoped bindings retain the
+  explicit Tool Settings text-input exception.
+- Generic modal cancel routes through the native viewport-tool owner before generic operation
+  previews. Public tool status preserves the exact Box/Cylinder/Sphere kind, and every terminal
+  failure requests active-tool synchronization after the primitive owner exits.
+
+Owners:
+
+- `src/editor/modeling/services/primitive_creation_tool_service.*` owns dynamic primitive kind,
+  persistent settings, the selection-revision-gated live shape, the session memento, rollback,
+  and the single Apply history transaction. `ModelingSessionService::replace_mesh_document` and
+  `EditorSession::replace_object_document` perform validated in-place topology replacement without
+  changing selection or object identity.
+- `src/editor/selection/editor_selection_service.*`,
+  `src/editor/commands/document_command_service.*`, and the public modeling mutation runner enforce
+  the modal transaction boundary. `modeling_mesh_sync_service.cpp` preserves remembered historical
+  mesh identities and limits cleanup to genuinely displaced assets.
+- `src/editor/tools/base/two_stage_box_tool.*` owns the reusable footprint gesture;
+  `src/editor/tools/native_viewport_tool_coordinator.*` and `src/api/quader_tools_api.*` adapt
+  editor intent; `src/ui/qt_viewport_panel.cpp` and `src/ui/qt_command_event_filter.cpp` present
+  settings and route semantic completion.
+- `src/sdk/core/modeling/internal/mesh/polygon/quader_poly_document_primitives.cpp` owns canonical
+  subdivided box, cylinder, full-sphere, hemisphere, cap, material, and flipped-face geometry.
+
+Verification:
+
+- Geometry, SDK consumer, metadata, public API, persistent lifecycle, rollback, snap-mode, and Qt
+  focused regressions pass, including dirty-checkpoint preservation, owner-only command routing,
+  generic modal cancel, exact tool-status projection, allocator high-water retention, and failed
+  finalize synchronization. The SDK consumer suite passes 55/55 and the guardrail suite passes
+  195/195. The complete `vs2026-debug` CTest preset passes 6/6, including native app, modeling
+  domain, SDK consumer, SDK parity, SDK-only configure/build, and guardrails.
+- The final unified-tool, dynamic-settings, modal-boundary, history-order, allocator, asset-lifetime,
+  Qt Enter/Escape, metadata, and routing regressions pass. The complete `vs2026-debug` CTest preset
+  passes 6/6, including the native app, modeling domain, SDK consumer, SDK parity, SDK-only
+  configure/build, and guardrail targets.
+
+## 2026-07-15 - Cross-Domain Stability And Transaction Boundaries
+
+Invariant:
+
+- SDK object identities belong to the lifetime of `ModelingSession`, not an undo snapshot. Undo may
+  restore an old identity, but branching after undo never reuses it. Session content, selection,
+  and preview-payload cursors are monotonic outside undo state; mesh sync emits coalesced exact
+  dirty records and deletion tombstones for every add/edit/remove/undo/redo transition without
+  recompiling meshes for selection-, name-, or overlay-only changes.
+- Failed or unchanged SDK document/selection operations do not mutate selection, history, redo, or
+  revision state. Checked facades use a per-context error epoch so `StoreLastError` fallbacks cannot
+  be wrapped as successful `Result` values and stale prior errors cannot poison a later success.
+  Batch callbacks roll back for reported failures and thrown standard or unknown exceptions.
+- Native `EditorSession` history and service-memento restores preserve the session-lifetime
+  high-water marks for object and light IDs while advancing content/selection revisions without
+  unsigned wraparound. Undo branches and canceled multi-shape sessions therefore cannot recycle an
+  ID into a stale public mesh handle. A changed terminal preview cancel uses this same restore
+  contract; exact provisional preview replay continues to use `set_state` while the preview is
+  active.
+- Project Save As writes and validates a private same-directory QDR staging file, atomically
+  publishes it while retaining any prior destination as a rollback backup, and only then persists
+  the prepared candidate manifest. Windows holds a read handle that denies write/delete across the
+  manifest window; POSIX has exact seal verification and parent-directory flushes but no equivalent
+  cross-process guard. Manifest failure restores the prior scene. A post-manifest failure first
+  restores the prior manifest and then rolls back the scene; if prior-manifest recovery itself
+  fails, the published scene/backup pair is deliberately preserved, its paths are reported, and
+  the candidate live identity/path is installed as dirty for repair. Initially absent targets use
+  atomic no-replace publication, and successful cleanup failures remain warnings.
+  Windows `ReplaceFileW` provides process-visible atomic replacement and recovery, but its
+  write-through flag is unsupported and there is no supported parent-directory fsync here; do not
+  claim scene-before-manifest power-loss durability on Windows.
+- Scene component writes return acceptance truth, reject protected targets, and keep revisions
+  stable for identical values. Creation commands reject non-finite transforms before creating an
+  entity or history entry. In-place mesh payload replacement has one explicit notification path,
+  and mesh synchronization prevalidates all targets before mutating bindings. The scene-owned
+  selection revision also advances when the active selection changes Object/Light classification.
+- Native modeling camera conversion and scene-owned selection summary projection each have one
+  adapter. Logger consumers hold synchronized shared-ownership snapshots across shutdown, and fatal
+  UTF-8 conversion sizes its wide buffer without a terminator overrun.
+
+Owners:
+
+- `src/sdk/core/modeling/src/session.cpp`, `public_api_detail.hpp`, and
+  `mesh_sync_io_api.cpp` own session identity, monotonic change publication, preview cursors,
+  checked-facade diagnostics, and renderer-neutral delta materialization.
+- `src/io/qdr/qdr_atomic_write.*` owns private staging, reversible publication, exact verification,
+  rollback, and cleanup warnings; `src/editor/session/project_session.cpp` owns the
+  QDR/manifest/live-session transaction and recovery order.
+- `src/scene/scene_document.*`, `src/editor/commands/document/`, and
+  `src/editor/selection/scene_selection_summary.hpp` own truthful scene mutation, selection-summary
+  revision semantics, and explicit render invalidation. `modeling_mesh_sync_service.cpp` owns the
+  all-target prevalidation and binding projection boundary.
+- `src/editor/modeling/modeling_viewport_camera_adapter.hpp` owns native-to-runtime camera
+  conversion; call sites must not recreate local converters.
+- `src/editor/modeling/runtime/session_bookkeeping.cpp` owns native historical restoration,
+  allocator high-water marks, and saturating revisions. `ModelingSessionService` delegates memento
+  replay to that owner instead of rewriting revision rules.
+- `src/core/logger.*` and `src/platform/fatal_error_handler.*` own the bounded native safety fixes.
+
+Verification:
+
+- The SDK consumer suite passes 52/52 identity, change-cursor, tombstone, checked-facade, batch,
+  preview, and render-cache regressions. The focused QDR/ProjectSession/ProjectIo/manifest suites
+  pass 40/40, and architecture guardrails pass 195/195. Native runtime, service-memento, terminal
+  preview-cancel, and stale-public-handle allocation regressions also pass. Preset-wide CTest and
+  the final native app build are recorded in the task handoff.

@@ -5,6 +5,7 @@
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
 #include "assets/material_document.hpp"
+#include "io/qdr/qdr_atomic_write.hpp"
 #include "io/qdr/qdr_document_reader.hpp"
 #include "io/qdr/qdr_document_writer.hpp"
 #include "io/qdr/qdr_project_write_snapshot.hpp"
@@ -22,11 +23,19 @@
 #include <fstream>
 #include <memory>
 #include <optional>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <system_error>
 #include <utility>
 #include <vector>
+
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
 
 using namespace quader;
 
@@ -130,7 +139,11 @@ void write_text_file(const std::filesystem::path &path,
 contains_temp_qdr_files(const std::filesystem::path &directory) {
   for (const std::filesystem::directory_entry &entry :
        std::filesystem::directory_iterator(directory)) {
-    if (entry.path().filename().string().find(".tmp") != std::string::npos) {
+    const std::string name = entry.path().filename().string();
+    if (name.find(".tmp") != std::string::npos ||
+        name.find(".stage") != std::string::npos ||
+        name.find(".rollback") != std::string::npos ||
+        name.find(".quarantine") != std::string::npos) {
       return true;
     }
   }
@@ -249,6 +262,269 @@ TEST(QdrDocumentIoTests,
   EXPECT_FALSE(write.ok);
   EXPECT_EQ(read_file(path), kOriginal);
   EXPECT_FALSE(contains_temp_qdr_files(directory.path()));
+}
+
+TEST(QdrDocumentIoTests, AtomicWriteCatchesThrowingValidatorAndRemovesTemp) {
+  ScopedTempDirectory directory("throwing-atomic-validator");
+  const std::filesystem::path target = directory.path() / "scene.qdr";
+  write_text_file(target, "original scene");
+
+  const quader_io::QdrAtomicWriteResult written =
+      quader_io::write_qdr_text_atomic(
+          target, "candidate bytes", [](const std::filesystem::path &) {
+            throw std::runtime_error("validator failure");
+            return quader_io::QdrAtomicWriteResult{true, {}};
+          });
+
+  EXPECT_FALSE(written.ok);
+  EXPECT_NE(written.message.find("validator failure"), std::string::npos);
+  EXPECT_EQ(read_file(target), "original scene");
+  EXPECT_FALSE(contains_temp_qdr_files(directory.path()));
+}
+
+TEST(QdrAtomicFileTransactionTests,
+     RollbackPreservesExistingDestinationIdentityAndHardLinks) {
+  ScopedTempDirectory directory("staged-rollback-hard-link");
+  const std::filesystem::path target = directory.path() / "scene.qdr";
+  const std::filesystem::path alias = directory.path() / "scene-alias.qdr";
+  constexpr std::string_view kOriginal = "original scene bytes";
+  write_text_file(target, kOriginal);
+
+  std::error_code hard_link_error;
+  std::filesystem::create_hard_link(target, alias, hard_link_error);
+  if (hard_link_error) {
+    GTEST_SKIP() << "Hard links unavailable: " << hard_link_error.message();
+  }
+
+  quader_io::QdrAtomicFileTransaction transaction;
+  const quader_io::QdrAtomicWriteResult prepared = transaction.prepare(target);
+  ASSERT_TRUE(prepared.ok) << prepared.message;
+  const std::filesystem::path staging = transaction.staging_path();
+  ASSERT_TRUE(std::filesystem::equivalent(target, alias));
+
+  const quader_io::QdrAtomicWriteResult staged =
+      quader_io::write_qdr_text_atomic(staging, "replacement scene bytes");
+  ASSERT_TRUE(staged.ok) << staged.message;
+  EXPECT_EQ(read_file(target), kOriginal);
+
+  const quader_io::QdrAtomicWriteResult published = transaction.publish();
+  ASSERT_TRUE(published.ok) << published.message;
+  EXPECT_EQ(read_file(target), "replacement scene bytes");
+  EXPECT_EQ(read_file(alias), kOriginal);
+  EXPECT_FALSE(std::filesystem::equivalent(target, alias));
+
+  const quader_io::QdrAtomicWriteResult rolled_back = transaction.rollback();
+  ASSERT_TRUE(rolled_back.ok) << rolled_back.message;
+  EXPECT_FALSE(std::filesystem::exists(staging));
+  EXPECT_EQ(read_file(target), kOriginal);
+  EXPECT_TRUE(std::filesystem::equivalent(target, alias));
+}
+
+TEST(QdrAtomicFileTransactionTests,
+     PublishNeverReplacesAConcurrentCreatorForAnInitiallyAbsentTarget) {
+  ScopedTempDirectory directory("staged-publish-conflict");
+  const std::filesystem::path target = directory.path() / "scene.qdr";
+
+  quader_io::QdrAtomicFileTransaction transaction;
+  const quader_io::QdrAtomicWriteResult prepared = transaction.prepare(target);
+  ASSERT_TRUE(prepared.ok) << prepared.message;
+  const std::filesystem::path staging = transaction.staging_path();
+  const quader_io::QdrAtomicWriteResult staged =
+      quader_io::write_qdr_text_atomic(staging, "our staged scene");
+  ASSERT_TRUE(staged.ok) << staged.message;
+
+  constexpr std::string_view kConflict = "another writer's scene";
+  write_text_file(target, kConflict);
+  const quader_io::QdrAtomicWriteResult published = transaction.publish();
+  EXPECT_FALSE(published.ok);
+  EXPECT_EQ(read_file(target), kConflict);
+
+  const quader_io::QdrAtomicWriteResult rolled_back = transaction.rollback();
+  ASSERT_TRUE(rolled_back.ok) << rolled_back.message;
+
+  EXPECT_FALSE(std::filesystem::exists(staging));
+  EXPECT_EQ(read_file(target), kConflict);
+}
+
+TEST(QdrAtomicFileTransactionTests,
+     PublishedSceneExistsBeforeAManifestCanReferenceIt) {
+  ScopedTempDirectory directory("publish-before-manifest");
+  const std::filesystem::path target = directory.path() / "scene.qdr";
+
+  quader_io::QdrAtomicFileTransaction transaction;
+  const quader_io::QdrAtomicWriteResult prepared = transaction.prepare(target);
+  ASSERT_TRUE(prepared.ok) << prepared.message;
+  const std::filesystem::path staging = transaction.staging_path();
+  const quader_io::QdrAtomicWriteResult staged =
+      quader_io::write_qdr_text_atomic(staging, "durable scene bytes");
+  ASSERT_TRUE(staged.ok) << staged.message;
+
+  const quader_io::QdrAtomicWriteResult published = transaction.publish();
+  ASSERT_TRUE(published.ok) << published.message;
+  EXPECT_TRUE(transaction.published());
+  EXPECT_FALSE(std::filesystem::exists(staging));
+  EXPECT_EQ(read_file(target), "durable scene bytes");
+
+  const quader_io::QdrAtomicWriteResult rolled_back = transaction.rollback();
+  ASSERT_TRUE(rolled_back.ok) << rolled_back.message;
+  EXPECT_FALSE(std::filesystem::exists(target));
+}
+
+#ifdef _WIN32
+TEST(QdrAtomicFileTransactionTests,
+     PublishedGuardRejectsReplacementAcrossTheManifestWindow) {
+  ScopedTempDirectory directory("published-replacement-guard");
+  const std::filesystem::path target = directory.path() / "scene.qdr";
+
+  quader_io::QdrAtomicFileTransaction transaction;
+  ASSERT_TRUE(transaction.prepare(target).ok);
+  ASSERT_TRUE(quader_io::write_qdr_text_atomic(transaction.staging_path(),
+                                                 "our scene")
+                  .ok);
+  ASSERT_TRUE(transaction.publish().ok);
+  const quader_io::QdrAtomicWriteResult conflicting =
+      quader_io::write_qdr_text_atomic(target, "conflicting scene");
+  EXPECT_FALSE(conflicting.ok);
+  EXPECT_TRUE(transaction.verify_published().ok);
+  EXPECT_EQ(read_file(target), "our scene");
+
+  const quader_io::QdrAtomicWriteResult rolled_back = transaction.rollback();
+  ASSERT_TRUE(rolled_back.ok) << rolled_back.message;
+  EXPECT_FALSE(std::filesystem::exists(target));
+}
+
+TEST(QdrAtomicFileTransactionTests,
+     GuardAcquisitionFailureStillAllowsExactRollback) {
+  ScopedTempDirectory directory("published-guard-acquisition-failure");
+  const std::filesystem::path target = directory.path() / "scene.qdr";
+
+  quader_io::QdrAtomicFileTransaction transaction;
+  ASSERT_TRUE(transaction.prepare(target).ok);
+  ASSERT_TRUE(quader_io::write_qdr_text_atomic(transaction.staging_path(),
+                                                "our scene")
+                  .ok);
+  const HANDLE staging_writer = ::CreateFileW(
+      transaction.staging_path().c_str(), GENERIC_WRITE,
+      FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
+      OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+  ASSERT_NE(staging_writer, INVALID_HANDLE_VALUE);
+
+  const quader_io::QdrAtomicWriteResult published = transaction.publish();
+  EXPECT_FALSE(published.ok);
+  EXPECT_TRUE(transaction.active());
+  EXPECT_TRUE(transaction.published());
+  EXPECT_FALSE(transaction.verify_published().ok);
+  EXPECT_EQ(read_file(target), "our scene");
+
+  ASSERT_NE(::CloseHandle(staging_writer), 0);
+  const quader_io::QdrAtomicWriteResult rolled_back = transaction.rollback();
+  ASSERT_TRUE(rolled_back.ok) << rolled_back.message;
+  EXPECT_FALSE(std::filesystem::exists(target));
+}
+
+TEST(QdrAtomicFileTransactionTests,
+     RestoreFailureRetainsStateAndSecondRollbackSucceeds) {
+  ScopedTempDirectory directory("rollback-restore-retry");
+  const std::filesystem::path target = directory.path() / "scene.qdr";
+  write_text_file(target, "original scene");
+
+  quader_io::QdrAtomicFileTransaction transaction;
+  ASSERT_TRUE(transaction.prepare(target).ok);
+  ASSERT_TRUE(quader_io::write_qdr_text_atomic(transaction.staging_path(),
+                                                "replacement scene")
+                  .ok);
+  ASSERT_TRUE(transaction.publish().ok);
+  const std::filesystem::path backup = transaction.backup_path();
+  ASSERT_FALSE(backup.empty());
+  const HANDLE backup_guard =
+      ::CreateFileW(backup.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr,
+                    OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+  ASSERT_NE(backup_guard, INVALID_HANDLE_VALUE);
+
+  const quader_io::QdrAtomicWriteResult first_rollback = transaction.rollback();
+  EXPECT_FALSE(first_rollback.ok);
+  EXPECT_TRUE(transaction.active());
+  EXPECT_TRUE(transaction.published());
+  EXPECT_EQ(transaction.backup_path(), backup);
+  EXPECT_EQ(read_file(target), "replacement scene");
+
+  ASSERT_NE(::CloseHandle(backup_guard), 0);
+  const quader_io::QdrAtomicWriteResult second_rollback =
+      transaction.rollback();
+  ASSERT_TRUE(second_rollback.ok) << second_rollback.message;
+  EXPECT_FALSE(transaction.active());
+  EXPECT_EQ(read_file(target), "original scene");
+  EXPECT_FALSE(std::filesystem::exists(backup));
+}
+
+TEST(QdrAtomicFileTransactionTests,
+     CommitCleanupFailureRetainsBackupForDestructorRetry) {
+  ScopedTempDirectory directory("commit-cleanup-retry");
+  const std::filesystem::path target = directory.path() / "scene.qdr";
+  write_text_file(target, "original scene");
+
+  quader_io::QdrAtomicFileTransaction transaction;
+  ASSERT_TRUE(transaction.prepare(target).ok);
+  ASSERT_TRUE(quader_io::write_qdr_text_atomic(transaction.staging_path(),
+                                                "committed scene")
+                  .ok);
+  ASSERT_TRUE(transaction.publish().ok);
+  const std::filesystem::path backup = transaction.backup_path();
+  ASSERT_FALSE(backup.empty());
+
+  const HANDLE backup_guard =
+      ::CreateFileW(backup.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr,
+                    OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+  ASSERT_NE(backup_guard, INVALID_HANDLE_VALUE);
+
+  const quader_io::QdrAtomicWriteResult committed = transaction.commit();
+  EXPECT_TRUE(committed.ok);
+  EXPECT_TRUE(transaction.active());
+  EXPECT_FALSE(transaction.published());
+  EXPECT_EQ(transaction.backup_path(), backup);
+  EXPECT_NE(committed.message.find(backup.string()), std::string::npos);
+  EXPECT_EQ(read_file(target), "committed scene");
+  EXPECT_FALSE(
+      quader_io::write_qdr_text_atomic(target, "conflicting scene").ok);
+  EXPECT_EQ(read_file(target), "committed scene");
+
+  ASSERT_NE(::CloseHandle(backup_guard), 0);
+  const quader_io::QdrAtomicWriteResult cleanup = transaction.rollback();
+  ASSERT_TRUE(cleanup.ok) << cleanup.message;
+  EXPECT_FALSE(transaction.active());
+  EXPECT_FALSE(std::filesystem::exists(backup));
+  EXPECT_EQ(read_file(target), "committed scene");
+}
+#endif
+
+TEST(QdrAtomicFileTransactionTests,
+     ExplicitRecoveryPreservationDisarmsDestructorRollback) {
+  ScopedTempDirectory directory("explicit-recovery-preservation");
+  const std::filesystem::path target = directory.path() / "scene.qdr";
+  write_text_file(target, "original scene");
+  std::filesystem::path backup;
+
+  {
+    quader_io::QdrAtomicFileTransaction transaction;
+    ASSERT_TRUE(transaction.prepare(target).ok);
+    EXPECT_FALSE(transaction.preserve_published_for_recovery());
+    EXPECT_TRUE(transaction.active());
+    ASSERT_TRUE(quader_io::write_qdr_text_atomic(transaction.staging_path(),
+                                                  "published scene")
+                    .ok);
+    ASSERT_TRUE(transaction.publish().ok);
+    backup = transaction.backup_path();
+    ASSERT_FALSE(backup.empty());
+
+    ASSERT_TRUE(transaction.preserve_published_for_recovery());
+    EXPECT_FALSE(transaction.active());
+  }
+
+  EXPECT_EQ(read_file(target), "published scene");
+  EXPECT_EQ(read_file(backup), "original scene");
+  std::error_code cleanup_error;
+  EXPECT_TRUE(std::filesystem::remove(backup, cleanup_error));
+  EXPECT_FALSE(cleanup_error) << cleanup_error.message();
 }
 
 TEST(QdrDocumentIoTests, SceneWriteSnapshotOwnsImmutableCopies) {

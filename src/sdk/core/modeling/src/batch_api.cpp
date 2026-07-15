@@ -7,6 +7,7 @@
 #include "public_api_detail.hpp"
 
 #include <algorithm>
+#include <exception>
 #include <map>
 #include <set>
 #include <utility>
@@ -74,8 +75,30 @@ find_alias(const std::vector<std::pair<std::string, ObjectId>> &aliases,
                                              Error error,
                                              std::size_t undo_mark) {
   static_cast<void>(context.session.rollback_undo_since(undo_mark));
-  context.last_error = error;
+  detail::record_error(context, error);
   return detail::failed_receipt(error, detail::current_revisions(context));
+}
+
+void record_batch_step_failure(BatchResult &result,
+                               ModelingApiContext &context, Error error,
+                               std::size_t undo_mark) {
+  result.receipt = batch_failure(context, error, undo_mark);
+  result.step_receipts.push_back(
+      detail::failed_receipt(error, result.receipt.revisions));
+}
+
+[[nodiscard]] Error unexpected_batch_exception(
+    std::string_view operation, const std::exception *exception = nullptr) {
+  std::string message = "Batch ";
+  message += operation;
+  message += " threw ";
+  if (exception != nullptr) {
+    message += "an unexpected exception: ";
+    message += exception->what();
+  } else {
+    message += "an unknown exception.";
+  }
+  return make_error(ErrorCode::InternalError, std::move(message));
 }
 
 [[nodiscard]] std::optional<Error>
@@ -205,16 +228,34 @@ BatchResult ModelingBatch::commit() {
   for (BatchStep &step : state_->steps) {
     if (step.kind == BatchStep::Kind::CreateBox) {
       MeshHandle mesh;
+      const std::uint64_t error_epoch = state_->context->error_epoch;
       try {
         mesh = api.create_box(step.box);
       } catch (const ModelingException &exception) {
-        result.receipt =
-            batch_failure(*state_->context, exception.error(), undo_mark);
+        record_batch_step_failure(result, *state_->context,
+                                  exception.error(), undo_mark);
+        return result;
+      } catch (const std::exception &exception) {
+        record_batch_step_failure(
+            result, *state_->context,
+            unexpected_batch_exception("create_box", &exception), undo_mark);
+        return result;
+      } catch (...) {
+        record_batch_step_failure(
+            result, *state_->context,
+            unexpected_batch_exception("create_box"), undo_mark);
+        return result;
+      }
+      if (state_->context->error_epoch != error_epoch) {
+        const Error error = state_->context->last_error.value_or(make_error(
+            ErrorCode::InternalError,
+            "Batch create_box recorded an error without diagnostics."));
+        record_batch_step_failure(result, *state_->context, error, undo_mark);
         return result;
       }
       if (!mesh.valid()) {
-        result.receipt = batch_failure(
-            *state_->context,
+        record_batch_step_failure(
+            result, *state_->context,
             make_error(ErrorCode::InternalError,
                        "Batch create_box did not create a mesh."),
             undo_mark);
@@ -241,8 +282,16 @@ BatchResult ModelingBatch::commit() {
       return result;
     }
 
+    const std::uint64_t error_epoch = state_->context->error_epoch;
     try {
       step.mesh_operation(MeshHandle(state_->context, *object));
+      if (state_->context->error_epoch != error_epoch) {
+        const Error error = state_->context->last_error.value_or(make_error(
+            ErrorCode::InternalError,
+            "Batch mesh operation recorded an error without diagnostics."));
+        record_batch_step_failure(result, *state_->context, error, undo_mark);
+        return result;
+      }
       OperationReceipt receipt;
       receipt.changed = true;
       receipt.revisions = api.revisions();
@@ -250,8 +299,18 @@ BatchResult ModelingBatch::commit() {
       receipt.dirty.geometry = true;
       result.step_receipts.push_back(std::move(receipt));
     } catch (const ModelingException &exception) {
-      result.receipt =
-          batch_failure(*state_->context, exception.error(), undo_mark);
+      record_batch_step_failure(result, *state_->context,
+                                exception.error(), undo_mark);
+      return result;
+    } catch (const std::exception &exception) {
+      record_batch_step_failure(
+          result, *state_->context,
+          unexpected_batch_exception("mesh callback", &exception), undo_mark);
+      return result;
+    } catch (...) {
+      record_batch_step_failure(
+          result, *state_->context,
+          unexpected_batch_exception("mesh callback"), undo_mark);
       return result;
     }
   }

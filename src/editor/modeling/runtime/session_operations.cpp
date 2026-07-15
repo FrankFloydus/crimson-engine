@@ -734,6 +734,27 @@ EditorSession::create_object_from_document(quader_poly::Document document,
   return result;
 }
 
+CommandResult
+EditorSession::replace_object_document(int object_id,
+                                       quader_poly::Document document) {
+  if (document.vertices.empty() || document.faces.empty()) {
+    return error_result("Document mesh must contain vertices and faces.");
+  }
+  const auto object = std::find_if(
+      state_.objects.begin(), state_.objects.end(),
+      [object_id](const PolygonObject &candidate) {
+        return candidate.id == object_id;
+      });
+  if (object == state_.objects.end()) {
+    return error_result("Modeling object does not exist.");
+  }
+
+  object->document = std::move(document);
+  const CommandResult result = ok_result(true);
+  note_content_result(result);
+  return result;
+}
+
 CommandResult EditorSession::extract_selected_faces() {
   state_.next_object_id =
       next_polygon_object_id(state_.objects, state_.next_object_id);

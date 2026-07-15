@@ -6,6 +6,8 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "editor/modeling/services/modeling_transform_drag_service.hpp"
 
+#include "editor/modeling/modeling_viewport_camera_adapter.hpp"
+
 #include "core/i_undoable_command.hpp"
 #include "diagnostics/profile.hpp"
 #include "editor/commands/document_command_service.hpp"
@@ -55,27 +57,6 @@ quader_poly::Ray to_runtime(const ModelingRay &ray) {
       .origin = to_runtime(ray.origin),
       .direction = to_runtime(normalize(ray.direction)),
   };
-}
-
-quader_editor_core::ViewportCameraState
-to_runtime(const ModelingViewportCamera &value) {
-  quader_editor_core::ViewportCameraState camera;
-  camera.projection = value.orthographic
-                          ? quader_editor_core::CameraProjection::Orthographic
-                          : quader_editor_core::CameraProjection::Perspective;
-  camera.transform = {
-      .x_axis = to_runtime(value.x_axis),
-      .y_axis = to_runtime(value.y_axis),
-      .z_axis = to_runtime(value.z_axis),
-      .origin = to_runtime(value.origin),
-  };
-  camera.viewport_size = {
-      std::max(value.viewport_size.x, 1.0f),
-      std::max(value.viewport_size.y, 1.0f),
-  };
-  camera.orthographic_size = std::max(value.orthographic_size, 0.0001);
-  camera.fov_degrees = value.fov_degrees;
-  return camera;
 }
 
 QMat4 matrix_from_runtime_transform(const quader_poly::Transform3 &transform) {
@@ -559,7 +540,7 @@ ModelingTransformDragService::begin_transform_drag(
   }
 
   const quader_editor_core::ViewportCameraState camera =
-      to_runtime(request.camera);
+      modeling_runtime_camera(request.camera);
   const quader::QVec2 screen_position = to_runtime(request.screen_position);
   const quader::QVec2 screen_pivot = to_runtime(request.screen_pivot);
   const quader::QVec2 screen_tip = to_runtime(request.screen_tip);
@@ -987,7 +968,7 @@ ModelingTransformDragService::apply_transform_drag_preview(
   const quader_editor_core::TransformDragState drag_before_update =
       context.runtime.transform_drag_state();
   quader_editor_core::TransformDragPreviewInput input;
-  input.camera = to_runtime(request.camera);
+  input.camera = modeling_runtime_camera(request.camera);
   input.screen_position = to_runtime(request.screen_position);
   input.ray = to_runtime(request.ray);
   input.grid_size = request.grid_size;

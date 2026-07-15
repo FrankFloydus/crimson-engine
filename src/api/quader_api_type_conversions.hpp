@@ -841,7 +841,11 @@ inline QuaderViewportTool to_api_viewport_tool(ModelingViewportTool tool) {
   case ModelingViewportTool::Scale:
     return QuaderViewportTool::Scale;
   case ModelingViewportTool::Box:
-    return QuaderViewportTool::Box;
+    return QuaderViewportTool::CreatePrimitive;
+  case ModelingViewportTool::Cylinder:
+    return QuaderViewportTool::CreatePrimitive;
+  case ModelingViewportTool::Sphere:
+    return QuaderViewportTool::CreatePrimitive;
   case ModelingViewportTool::InsertEdgeLoop:
     return QuaderViewportTool::InsertEdgeLoop;
   case ModelingViewportTool::Knife:
