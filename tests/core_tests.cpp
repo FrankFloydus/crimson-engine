@@ -1509,7 +1509,16 @@ TEST(QuaderMeshMaterialTests, UsesLitTextureTransformTimesColorAndPbrFactors) {
       read_source_file("resources/materials/quader_mesh_lit.mat");
 
   EXPECT_NE(shaded_source.find("shadingModel : unlit"), std::string::npos);
-  EXPECT_NE(shaded_source.find("vec2 uv = vec2(getUV0().x, 1.0 - getUV0().y)"),
+  EXPECT_NE(shaded_source.find("vec2 uv = applyTextureTransform("),
+            std::string::npos);
+  EXPECT_NE(shaded_source.find(
+                "(uv - materialParams.textureTransformCenter)"),
+            std::string::npos);
+  EXPECT_NE(shaded_source.find(
+                "* materialParams.textureTransformScale"),
+            std::string::npos);
+  EXPECT_NE(shaded_source.find(
+                "+ materialParams.textureTransformOffset"),
             std::string::npos);
   EXPECT_NE(shaded_source.find("texture(materialParams_baseColorTexture, uv)"),
             std::string::npos);
@@ -1521,7 +1530,11 @@ TEST(QuaderMeshMaterialTests, UsesLitTextureTransformTimesColorAndPbrFactors) {
   EXPECT_EQ(shaded_source.find("editor_unlit"), std::string::npos);
   EXPECT_NE(source.find("shadingModel : lit"), std::string::npos);
   EXPECT_EQ(source.find("doubleSided : true"), std::string::npos);
-  EXPECT_NE(source.find("vec2 uv = vec2(getUV0().x, 1.0 - getUV0().y)"),
+  EXPECT_NE(source.find("vec2 uv = applyTextureTransform("),
+            std::string::npos);
+  EXPECT_NE(source.find("cos(materialParams.textureTransformRotationRadians)"),
+            std::string::npos);
+  EXPECT_NE(source.find("sin(materialParams.textureTransformRotationRadians)"),
             std::string::npos);
   EXPECT_NE(source.find("texture(materialParams_baseColorTexture, uv)"),
             std::string::npos);
@@ -1546,7 +1559,7 @@ TEST(QuaderMeshMaterialTests, UsesLitTextureTransformTimesColorAndPbrFactors) {
   EXPECT_NE(source.find("normalSample.y *= materialParams.normalYSign"),
             std::string::npos);
   EXPECT_NE(source.find("normalSample.xy *= "
-                        "max(materialParams.normalStrength, 0.0)"),
+                        "clamp(materialParams.normalStrength, -16.0, 16.0)"),
             std::string::npos);
   EXPECT_NE(source.find("material.metallic = clamp(metallicSample * "
                         "materialParams.metallicFactor"),

@@ -6,6 +6,8 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "viewport/material_preview_state.hpp"
 
+#include "core/scene_environment_catalog.hpp"
+
 #include <algorithm>
 #include <cmath>
 #include <limits>
@@ -53,9 +55,15 @@ bool valid(MaterialPreviewShadingMode shading_mode) noexcept {
 
 } // namespace
 
+MaterialPreviewState::MaterialPreviewState()
+    : environment_id_(kDefaultSceneEnvironmentId) {}
+
 QQuat MaterialPreviewState::object_rotation() const noexcept {
-  return quat_from_euler_radians(
-      {pitch_radians_, yaw_radians_, 0.0f});
+  const QQuat pitch_rotation =
+      quat_from_euler_radians({pitch_radians_, 0.0f, 0.0f});
+  const QQuat yaw_rotation =
+      quat_from_euler_radians({0.0f, yaw_radians_, 0.0f});
+  return normalize(pitch_rotation * yaw_rotation);
 }
 
 bool MaterialPreviewState::set_mesh_kind(
@@ -78,14 +86,39 @@ bool MaterialPreviewState::set_shading_mode(
   return true;
 }
 
+bool MaterialPreviewState::set_environment(
+    std::string_view environment_id) {
+  if (scene_environment_descriptor(environment_id) == nullptr ||
+      environment_id_ == environment_id) {
+    return false;
+  }
+  environment_id_.assign(environment_id);
+  mark_changed();
+  return true;
+}
+
+bool MaterialPreviewState::set_show_environment_background(
+    bool visible) noexcept {
+  if (show_environment_background_ == visible) {
+    return false;
+  }
+  show_environment_background_ = visible;
+  mark_changed();
+  return true;
+}
+
 bool MaterialPreviewState::reset_view() noexcept {
   if (yaw_radians_ == 0.0f && pitch_radians_ == 0.0f &&
-      camera_distance_ == kDefaultCameraDistance) {
+      pan_offset_.x == 0.0f && pan_offset_.y == 0.0f &&
+      camera_distance_ == kDefaultCameraDistance &&
+      environment_rotation_radians_ == 0.0f) {
     return false;
   }
   yaw_radians_ = 0.0f;
   pitch_radians_ = 0.0f;
+  pan_offset_ = {};
   camera_distance_ = kDefaultCameraDistance;
+  environment_rotation_radians_ = 0.0f;
   mark_changed();
   return true;
 }
@@ -101,6 +134,30 @@ bool MaterialPreviewState::tumble(QVec2 delta_pixels) noexcept {
   pitch_radians_ = std::clamp(
       pitch_radians_ + delta_pixels.y * kTumbleRadiansPerPixel,
       -kMaximumPitchRadians, kMaximumPitchRadians);
+  mark_changed();
+  return true;
+}
+
+bool MaterialPreviewState::pan(QVec2 delta_pixels) noexcept {
+  if (!finite(delta_pixels) ||
+      (delta_pixels.x == 0.0f && delta_pixels.y == 0.0f)) {
+    return false;
+  }
+  const float world_units_per_pixel =
+      camera_distance_ * kPanWorldUnitsPerPixelAtUnitDistance;
+  pan_offset_.x -= delta_pixels.x * world_units_per_pixel;
+  pan_offset_.y += delta_pixels.y * world_units_per_pixel;
+  mark_changed();
+  return true;
+}
+
+bool MaterialPreviewState::rotate_environment(float delta_pixels) noexcept {
+  if (!std::isfinite(delta_pixels) || delta_pixels == 0.0f) {
+    return false;
+  }
+  environment_rotation_radians_ = wrapped_angle(
+      environment_rotation_radians_ +
+      delta_pixels * kEnvironmentRadiansPerPixel);
   mark_changed();
   return true;
 }
@@ -137,8 +194,16 @@ MaterialPreviewInteractionResult MaterialPreviewInputRouter::route(
   if (input.tumble_active) {
     result.tumbled = state.tumble(input.tumble_delta_pixels);
   }
+  if (input.pan_active) {
+    result.panned = state.pan(input.pan_delta_pixels);
+  }
+  if (input.environment_rotation_active) {
+    result.environment_rotated = state.rotate_environment(
+        input.environment_rotation_delta_pixels);
+  }
   result.zoomed = state.zoom(input.zoom_wheel_steps);
-  result.changed = result.reset || result.tumbled || result.zoomed;
+  result.changed = result.reset || result.tumbled || result.panned ||
+                   result.environment_rotated || result.zoomed;
   return result;
 }
 

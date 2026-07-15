@@ -62,6 +62,13 @@ QtAuxiliaryWindowState::load(const std::filesystem::path &path) {
       settings.value(QStringLiteral("previewMesh"), 0).toInt();
   state.standard_material_preview_shading =
       settings.value(QStringLiteral("previewShading"), 2).toInt();
+  state.standard_material_preview_environment =
+      settings
+          .value(QStringLiteral("previewEnvironment"),
+                 QStringLiteral("lightroom_14b"))
+          .toString();
+  state.standard_material_preview_background =
+      settings.value(QStringLiteral("previewBackground"), false).toBool();
   settings.endGroup();
   return state;
 }
@@ -97,6 +104,10 @@ bool QtAuxiliaryWindowState::save(const std::filesystem::path &path) const {
                     standard_material_preview_mesh);
   settings.setValue(QStringLiteral("previewShading"),
                     standard_material_preview_shading);
+  settings.setValue(QStringLiteral("previewEnvironment"),
+                    standard_material_preview_environment);
+  settings.setValue(QStringLiteral("previewBackground"),
+                    standard_material_preview_background);
   settings.endGroup();
   settings.sync();
   return settings.status() == QSettings::NoError;

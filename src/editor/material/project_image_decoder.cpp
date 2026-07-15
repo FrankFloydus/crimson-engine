@@ -97,7 +97,7 @@ ProjectIoResult<ProjectDecodedImage> decode_reader(QImageReader &reader) {
       .width = static_cast<std::uint32_t>(image.width()),
       .height = static_cast<std::uint32_t>(image.height()),
       .rgba8 = std::vector<std::byte>(static_cast<std::size_t>(total_bytes)),
-      .detected_format = reader.format().toLower().toStdString(),
+      .detected_format = source_format.toStdString(),
   };
   for (int row = 0; row < image.height(); ++row) {
     std::memcpy(decoded.rgba8.data() +

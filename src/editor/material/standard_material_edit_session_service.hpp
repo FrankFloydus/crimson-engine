@@ -47,6 +47,8 @@ struct StandardMaterialTexturePreview final {
   std::shared_ptr<const std::vector<std::byte>> rgba8;
   std::uint32_t width = 0u;
   std::uint32_t height = 0u;
+  std::string detected_format;
+  std::uintmax_t encoded_byte_size = 0u;
 };
 
 /// Owns one reusable Standard Material draft independently of saved catalog state.
@@ -73,6 +75,8 @@ public:
   [[nodiscard]] StandardMaterialEditResult set_normal_strength(float value);
   [[nodiscard]] StandardMaterialEditResult
   set_normal_convention(NormalMapConvention convention);
+  [[nodiscard]] StandardMaterialEditResult set_texture_transform(
+      StandardMaterialTextureTransform transform);
   [[nodiscard]] StandardMaterialEditResult
   import_texture(StandardMaterialTextureSlot slot,
                  const std::filesystem::path &source_path);

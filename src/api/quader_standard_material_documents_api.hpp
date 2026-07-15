@@ -39,6 +39,18 @@ enum class QuaderNormalMapConvention : std::uint8_t {
   DirectX,
 };
 
+/// Shared texture-coordinate transform exposed by the material documents API.
+struct QuaderStandardMaterialTextureTransform final {
+  std::array<float, 2> center{0.5f, 0.5f};
+  std::array<float, 2> scale{1.0f, 1.0f};
+  std::array<float, 2> offset{0.0f, 0.0f};
+  float rotation_degrees = 0.0f;
+
+  friend bool operator==(
+      const QuaderStandardMaterialTextureTransform &,
+      const QuaderStandardMaterialTextureTransform &) = default;
+};
+
 /// Declares how decoded project texture values are interpreted by rendering.
 enum class QuaderProjectTextureColorSpace : std::uint8_t {
   Srgb,
@@ -61,6 +73,7 @@ struct QuaderStandardMaterialDefinition final {
   float normal_strength = 1.0f;
   QuaderNormalMapConvention normal_convention =
       QuaderNormalMapConvention::OpenGL;
+  QuaderStandardMaterialTextureTransform texture_transform;
   std::optional<QuaderStandardMaterialTextureReference> base_color_texture;
   std::optional<QuaderStandardMaterialTextureReference> roughness_texture;
   std::optional<QuaderStandardMaterialTextureReference> metallic_texture;
@@ -105,6 +118,8 @@ struct QuaderStandardMaterialPreviewTexture {
   std::shared_ptr<const std::vector<std::byte>> rgba8;
   std::uint32_t width = 0u;
   std::uint32_t height = 0u;
+  std::string detected_format;
+  std::uintmax_t encoded_byte_size = 0u;
 };
 
 /// Complete public evaluation snapshot for the current Standard Material draft.
@@ -140,6 +155,8 @@ public:
   QuaderApiVoidResult set_normal_strength(float value);
   QuaderApiVoidResult
   set_normal_convention(QuaderNormalMapConvention convention);
+  QuaderApiVoidResult set_texture_transform(
+      QuaderStandardMaterialTextureTransform transform);
   QuaderApiVoidResult import_texture(QuaderStandardMaterialTextureSlot slot,
                                      const std::filesystem::path &source_path);
   QuaderApiVoidResult clear_texture(QuaderStandardMaterialTextureSlot slot);

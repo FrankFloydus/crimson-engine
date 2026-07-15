@@ -18,6 +18,21 @@
       "normalStrength": 1.0,
       "normalConvention": "opengl"
     },
+    "textureTransform": {
+      "center": [
+        0.5,
+        0.5
+      ],
+      "scale": [
+        1.0,
+        1.0
+      ],
+      "offset": [
+        0.0,
+        0.0
+      ],
+      "rotationDegrees": 0.0
+    },
     "textureSlots": {
       "baseColorTexture": {
         "id": "c27c1daf-a1d0-41b6-b205-39bf3cb5ee87",

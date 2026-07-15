@@ -8,6 +8,7 @@
 
 #include "api/quader_editor_api.hpp"
 #include "core/logger.hpp"
+#include "core/scene_environment_catalog.hpp"
 #include "editor/array/linear_array_tool_service.hpp"
 #include "editor/array/radial_array_tool_service.hpp"
 #include "editor/modeling/services/modeling_session_service.hpp"
@@ -40,6 +41,7 @@
 #include <QColor>
 #include <QDockWidget>
 #include <QIcon>
+#include <QImage>
 #include <QLabel>
 #include <QLayout>
 #include <QMainWindow>
@@ -58,6 +60,7 @@
 #include <cmath>
 #include <cstdint>
 #include <filesystem>
+#include <limits>
 #include <fstream>
 #include <functional>
 #include <iterator>
@@ -67,6 +70,7 @@
 #include <string_view>
 #include <system_error>
 #include <utility>
+#include <vector>
 
 namespace quader {
 namespace {
@@ -395,6 +399,11 @@ bool UISystem::initialize(RenderSystem &render_system,
              QtStandardMaterialTextureAction action) {
         handle_standard_material_texture(slot, action);
       });
+  standard_material_editor_window_->set_texture_transform_edited_callback(
+      [this](QtStandardMaterialTextureTransformComponent component,
+             double value) {
+        handle_standard_material_texture_transform(component, value);
+      });
   standard_material_editor_window_
       ->set_presentation_state_changed_callback(
           [this]() {
@@ -405,6 +414,13 @@ bool UISystem::initialize(RenderSystem &render_system,
               (void)material_preview_surface_->set_preview_shading(
                   preview_shading_mode(
                       standard_material_editor_window_->preview_shading()));
+              (void)material_preview_surface_->set_preview_environment(
+                  standard_material_editor_window_->preview_environment()
+                      .toStdString());
+              (void)material_preview_surface_
+                  ->set_show_environment_background(
+                      standard_material_editor_window_
+                          ->preview_environment_background_visible());
             }
             save_auxiliary_window_state();
           });
@@ -1262,7 +1278,9 @@ void UISystem::restore_window_state() {
         auxiliary_window_state_.standard_material_preview_shading, 0, 2);
     standard_material_editor_window_->restore_presentation_state(
         static_cast<QtStandardMaterialPreviewMesh>(preview_mesh),
-        static_cast<QtStandardMaterialPreviewShading>(preview_shading));
+        static_cast<QtStandardMaterialPreviewShading>(preview_shading),
+        auxiliary_window_state_.standard_material_preview_environment,
+        auxiliary_window_state_.standard_material_preview_background);
     if (material_preview_surface_ != nullptr) {
       (void)material_preview_surface_->set_preview_mesh(
           preview_mesh_kind(
@@ -1270,6 +1288,12 @@ void UISystem::restore_window_state() {
       (void)material_preview_surface_->set_preview_shading(
           preview_shading_mode(
               standard_material_editor_window_->preview_shading()));
+      (void)material_preview_surface_->set_preview_environment(
+          standard_material_editor_window_->preview_environment()
+              .toStdString());
+      (void)material_preview_surface_->set_show_environment_background(
+          standard_material_editor_window_
+              ->preview_environment_background_visible());
     }
   }
 }
@@ -1460,6 +1484,11 @@ void UISystem::save_auxiliary_window_state() {
     auxiliary_window_state_.standard_material_preview_shading =
         static_cast<int>(
             standard_material_editor_window_->preview_shading());
+    auxiliary_window_state_.standard_material_preview_environment =
+        standard_material_editor_window_->preview_environment();
+    auxiliary_window_state_.standard_material_preview_background =
+        standard_material_editor_window_
+            ->preview_environment_background_visible();
   }
   (void)auxiliary_window_state_.save(
       settings_paths_.qt_auxiliary_window_state_file);
@@ -1545,6 +1574,7 @@ void UISystem::refresh_standard_material_editor() {
     return;
   }
   if (editor_ == nullptr || !editor_->project().has_project()) {
+    standard_material_preview_image_cache_.clear();
     standard_material_editor_window_->clear_document();
     standard_material_editor_window_->hide();
     return;
@@ -1553,6 +1583,7 @@ void UISystem::refresh_standard_material_editor() {
   const QuaderApiResult<QuaderStandardMaterialDocumentInfo> current =
       editor_->standard_material_documents().current();
   if (!current.ok) {
+    standard_material_preview_image_cache_.clear();
     if (standard_material_editor_window_->has_document()) {
       standard_material_editor_window_->clear_document();
       standard_material_editor_window_->hide();
@@ -1576,6 +1607,17 @@ void UISystem::refresh_standard_material_editor() {
       .normal_strength = source.material.normal_strength,
       .direct_x_normal = source.material.normal_convention ==
                          QuaderNormalMapConvention::DirectX,
+      .texture_transform =
+          QtStandardMaterialTextureTransform{
+              .center_u = source.material.texture_transform.center[0],
+              .center_v = source.material.texture_transform.center[1],
+              .scale_u = source.material.texture_transform.scale[0],
+              .scale_v = source.material.texture_transform.scale[1],
+              .offset_u = source.material.texture_transform.offset[0],
+              .offset_v = source.material.texture_transform.offset[1],
+              .rotation_degrees =
+                  source.material.texture_transform.rotation_degrees,
+          },
       .dirty = source.dirty,
   };
 
@@ -1604,10 +1646,12 @@ void UISystem::refresh_standard_material_editor() {
           QString::fromStdString((*saved)->project_relative_path);
     }
   }
+  const QuaderApiResult<QuaderStandardMaterialPreviewInfo> preview =
+      editor_->standard_material_documents().preview();
+  std::optional<StandardMaterialPreviewSnapshot> render_snapshot;
+  RenderStandardMaterialEvaluationSnapshot *render_standard = nullptr;
   if (material_preview_surface_ != nullptr) {
-    const QuaderApiResult<QuaderStandardMaterialPreviewInfo> preview =
-        editor_->standard_material_documents().preview();
-    StandardMaterialPreviewSnapshot snapshot{
+    render_snapshot.emplace(StandardMaterialPreviewSnapshot{
         .project_material_id = source.id,
         .kind = RenderMaterialEvaluationKind::Standard,
         .identity_revision =
@@ -1624,31 +1668,81 @@ void UISystem::refresh_standard_material_editor() {
             .normal_strength = source.material.normal_strength,
             .directx_normal = source.material.normal_convention ==
                               QuaderNormalMapConvention::DirectX,
+            .texture_transform =
+                RenderStandardMaterialTextureTransformSnapshot{
+                    .center =
+                        {source.material.texture_transform.center[0],
+                         source.material.texture_transform.center[1]},
+                    .scale =
+                        {source.material.texture_transform.scale[0],
+                         source.material.texture_transform.scale[1]},
+                    .offset =
+                        {source.material.texture_transform.offset[0],
+                         source.material.texture_transform.offset[1]},
+                    .rotation_degrees =
+                        source.material.texture_transform.rotation_degrees,
+                },
         },
-    };
-    RenderStandardMaterialEvaluationSnapshot *preview_standard =
-        snapshot.standard_material();
-    if (preview_standard != nullptr && preview.ok()) {
-      for (std::size_t index = 0u; index < preview.value().textures.size();
-           ++index) {
-        if (!preview.value().texture_diagnostics[index].empty()) {
-          if (!document.status_message.isEmpty()) {
-            document.status_message += QStringLiteral("; ");
-          }
-          document.status_message += QString::fromStdString(
-              preview.value().texture_diagnostics[index]);
+    });
+    render_standard = render_snapshot->standard_material();
+  }
+
+  if (!preview.ok()) {
+    standard_material_preview_image_cache_.clear();
+  } else {
+    const std::string material_identity(source.id.str());
+    for (std::size_t index = 0u; index < preview.value().textures.size();
+         ++index) {
+      if (!preview.value().texture_diagnostics[index].empty()) {
+        if (!document.status_message.isEmpty()) {
+          document.status_message += QStringLiteral("; ");
         }
-        if (!preview.value().textures[index].has_value()) {
-          continue;
-        }
-        const QuaderStandardMaterialPreviewTexture &texture =
-            *preview.value().textures[index];
-        preview_standard->textures[index] = MaterialPreviewTextureSnapshot{
+        document.status_message += QString::fromStdString(
+            preview.value().texture_diagnostics[index]);
+      }
+      if (!preview.value().textures[index].has_value()) {
+        standard_material_preview_image_cache_.clear_slot(index);
+        continue;
+      }
+      const QuaderStandardMaterialPreviewTexture &texture =
+          *preview.value().textures[index];
+      QtStandardMaterialTexturePresentation &presentation =
+          document.textures[index];
+      presentation.content_revision = texture.content_revision;
+      if (texture.width <=
+              static_cast<std::uint32_t>(std::numeric_limits<int>::max()) &&
+          texture.height <=
+              static_cast<std::uint32_t>(std::numeric_limits<int>::max())) {
+        presentation.pixel_size =
+            QSize(static_cast<int>(texture.width),
+                  static_cast<int>(texture.height));
+      }
+      const std::uintmax_t maximum_qint64 =
+          static_cast<std::uintmax_t>(std::numeric_limits<qint64>::max());
+      presentation.encoded_byte_size = static_cast<qint64>(
+          std::min(texture.encoded_byte_size, maximum_qint64));
+      presentation.format =
+          QString::fromStdString(texture.detected_format).toUpper();
+      if (!presentation.format.isEmpty()) {
+        presentation.format += QStringLiteral(" / ");
+      }
+      presentation.format += QStringLiteral("RGBA8");
+      presentation.color_space =
+          texture.color_space == QuaderProjectTextureColorSpace::Srgb
+              ? QStringLiteral("sRGB")
+              : QStringLiteral("Linear");
+      presentation.preview_image = standard_material_preview_image_cache_.image(
+          index, material_identity, source.session_id.generation(),
+          texture.content_revision, texture.rgba8, texture.width,
+          texture.height);
+
+      if (render_standard != nullptr) {
+        render_standard->textures[index] = MaterialPreviewTextureSnapshot{
             .project_texture_id = texture.id.value_or(ProjectAssetId{}),
             .identity_revision =
                 texture.id.has_value()
                     ? render_project_asset_identity_revision(*texture.id)
-                    : snapshot.identity_revision ^
+                    : render_snapshot->identity_revision ^
                           (0x9e3779b97f4a7c15ull + index),
             .content_revision = texture.content_revision,
             .color_space = texture.color_space ==
@@ -1661,7 +1755,9 @@ void UISystem::refresh_standard_material_editor() {
         };
       }
     }
-    material_preview_surface_->set_material(std::move(snapshot));
+  }
+  if (material_preview_surface_ != nullptr && render_snapshot.has_value()) {
+    material_preview_surface_->set_material(std::move(*render_snapshot));
   }
   standard_material_editor_window_->set_document(std::move(document));
 }
@@ -1982,6 +2078,48 @@ void UISystem::handle_standard_material_texture(
   refresh_standard_material_editor();
 }
 
+void UISystem::handle_standard_material_texture_transform(
+    QtStandardMaterialTextureTransformComponent component, double value) {
+  if (editor_ == nullptr || !std::isfinite(value)) {
+    return;
+  }
+  const QuaderApiResult<QuaderStandardMaterialDocumentInfo> current =
+      editor_->standard_material_documents().current();
+  if (!current.ok) {
+    present_lifecycle_result(current);
+    return;
+  }
+  QuaderStandardMaterialTextureTransform transform =
+      current.value().material.texture_transform;
+  switch (component) {
+  case QtStandardMaterialTextureTransformComponent::CenterU:
+    transform.center[0] = static_cast<float>(value);
+    break;
+  case QtStandardMaterialTextureTransformComponent::CenterV:
+    transform.center[1] = static_cast<float>(value);
+    break;
+  case QtStandardMaterialTextureTransformComponent::ScaleU:
+    transform.scale[0] = static_cast<float>(value);
+    break;
+  case QtStandardMaterialTextureTransformComponent::ScaleV:
+    transform.scale[1] = static_cast<float>(value);
+    break;
+  case QtStandardMaterialTextureTransformComponent::OffsetU:
+    transform.offset[0] = static_cast<float>(value);
+    break;
+  case QtStandardMaterialTextureTransformComponent::OffsetV:
+    transform.offset[1] = static_cast<float>(value);
+    break;
+  case QtStandardMaterialTextureTransformComponent::RotationDegrees:
+    transform.rotation_degrees = static_cast<float>(value);
+    break;
+  }
+  const QuaderApiVoidResult result =
+      editor_->standard_material_documents().set_texture_transform(transform);
+  present_lifecycle_result(result);
+  refresh_standard_material_editor();
+}
+
 void UISystem::refresh_localized_chrome() {
   const auto text = [this](std::string_view key, std::string_view fallback) {
     return QString::fromStdString(localization_.text(key, fallback));
@@ -2074,6 +2212,11 @@ void UISystem::refresh_localized_chrome() {
             .reset_preview = text(
                 "ui.standard_material_editor.view.reset_preview",
                 "Reset Preview"),
+            .environment_menu = text(
+                "ui.standard_material_editor.environment", "Environment"),
+            .show_environment_background = text(
+                "ui.standard_material_editor.environment.show_background",
+                "Show Background"),
             .sphere = text("ui.standard_material_editor.mesh.sphere",
                            "Sphere"),
             .box = text("ui.standard_material_editor.mesh.box", "Box"),
@@ -2095,6 +2238,9 @@ void UISystem::refresh_localized_chrome() {
             .preview_unavailable = text(
                 "ui.standard_material_editor.preview_unavailable",
                 "Material preview is unavailable"),
+            .preview_navigation = text(
+                "ui.standard_material_editor.preview_navigation",
+                "MMB Tumble - Shift+MMB Pan - Ctrl+MMB Environment - Wheel Zoom"),
             .properties_group = text(
                 "ui.standard_material_editor.properties", "Material"),
             .name = text("ui.standard_material_editor.name", "Name"),
@@ -2124,7 +2270,7 @@ void UISystem::refresh_localized_chrome() {
                 "Normal Texture"),
             .direct_x_normal = text(
                 "ui.standard_material_editor.directx_normal",
-                "DirectX normal map (invert green channel)"),
+                "DirectX"),
             .choose_color = text(
                 "ui.standard_material_editor.choose_color",
                 "Choose Color..."),
@@ -2142,7 +2288,42 @@ void UISystem::refresh_localized_chrome() {
                 "Untitled Material"),
             .unsaved =
                 text("ui.standard_material_editor.unsaved", "Unsaved"),
+            .inspect_texture = text(
+                "ui.standard_material_editor.texture.inspect",
+                "Inspect texture"),
+            .texture_transform = text(
+                "ui.standard_material_editor.texture_transform",
+                "Texture Transform"),
+            .texture_center = text(
+                "ui.standard_material_editor.texture_transform.center",
+                "Center"),
+            .texture_scale = text(
+                "ui.standard_material_editor.texture_transform.scale",
+                "Scale"),
+            .texture_offset = text(
+                "ui.standard_material_editor.texture_transform.offset",
+                "Offset"),
+            .texture_rotation = text(
+                "ui.standard_material_editor.texture_transform.rotation",
+                "Rotation"),
+            .texture_inspector = text(
+                "ui.standard_material_editor.texture_inspector",
+                "Texture Inspector"),
         });
+    std::vector<QtStandardMaterialPreviewEnvironment> environments;
+    environments.reserve(scene_environment_catalog().size());
+    for (const SceneEnvironmentDescriptor &environment :
+         scene_environment_catalog()) {
+      environments.push_back(QtStandardMaterialPreviewEnvironment{
+          .stable_id = QString::fromUtf8(environment.id.data(),
+                                         static_cast<qsizetype>(
+                                             environment.id.size())),
+          .display_name =
+              text(environment.label_key, environment.fallback_label),
+      });
+    }
+    standard_material_editor_window_->set_preview_environments(
+        std::move(environments));
   }
 }
 

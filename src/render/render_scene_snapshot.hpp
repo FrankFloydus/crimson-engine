@@ -59,6 +59,7 @@ struct RenderMaterialAssetSnapshot {
   MaterialDocument document;
   float normal_strength = 1.0f;
   bool directx_normal = false;
+  RenderStandardMaterialTextureTransformSnapshot texture_transform;
   std::uint64_t revision = 0;
   bool present = false;
   std::vector<RenderTextureAssetSnapshot> textures;

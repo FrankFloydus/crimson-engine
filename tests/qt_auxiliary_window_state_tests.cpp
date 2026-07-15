@@ -37,6 +37,9 @@ TEST(QtAuxiliaryWindowStateTests,
   EXPECT_TRUE(state.standard_material_editor_geometry.isEmpty());
   EXPECT_EQ(state.standard_material_preview_mesh, 0);
   EXPECT_EQ(state.standard_material_preview_shading, 2);
+  EXPECT_EQ(state.standard_material_preview_environment,
+            QStringLiteral("lightroom_14b"));
+  EXPECT_FALSE(state.standard_material_preview_background);
 }
 
 TEST(QtAuxiliaryWindowStateTests, RoundTripsGeometryAndLogicalVisibility) {
@@ -55,6 +58,9 @@ TEST(QtAuxiliaryWindowStateTests, RoundTripsGeometryAndLogicalVisibility) {
       QByteArray("standard-material-editor-geometry");
   state.standard_material_preview_mesh = 2;
   state.standard_material_preview_shading = 1;
+  state.standard_material_preview_environment =
+      QStringLiteral("pillars_2k");
+  state.standard_material_preview_background = true;
   ASSERT_TRUE(state.save(path));
 
   const quader::QtAuxiliaryWindowState loaded =
@@ -71,6 +77,9 @@ TEST(QtAuxiliaryWindowStateTests, RoundTripsGeometryAndLogicalVisibility) {
             state.standard_material_editor_geometry);
   EXPECT_EQ(loaded.standard_material_preview_mesh, 2);
   EXPECT_EQ(loaded.standard_material_preview_shading, 1);
+  EXPECT_EQ(loaded.standard_material_preview_environment,
+            QStringLiteral("pillars_2k"));
+  EXPECT_TRUE(loaded.standard_material_preview_background);
 
   std::filesystem::remove(path);
 }

@@ -7,6 +7,7 @@
 #pragma once
 
 #include <QByteArray>
+#include <QString>
 
 #include <filesystem>
 
@@ -28,6 +29,9 @@ struct QtAuxiliaryWindowState {
   QByteArray standard_material_editor_geometry;
   int standard_material_preview_mesh = 0;
   int standard_material_preview_shading = 2;
+  QString standard_material_preview_environment =
+      QStringLiteral("lightroom_14b");
+  bool standard_material_preview_background = false;
 
   [[nodiscard]] static QtAuxiliaryWindowState
   load(const std::filesystem::path &path);

@@ -40,6 +40,7 @@ TEST(QtMaterialBrowserWindowTests,
   window->setAttribute(Qt::WA_DontShowOnScreen, true);
   EXPECT_EQ(window->windowType(), Qt::Tool);
   EXPECT_FALSE(window->testAttribute(Qt::WA_DeleteOnClose));
+  EXPECT_FALSE(window->windowFlags().testFlag(Qt::WindowMaximizeButtonHint));
 
   window->set_labels(QtMaterialBrowserLabels{
       .window_title = QStringLiteral("Materials"),

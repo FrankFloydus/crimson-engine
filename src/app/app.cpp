@@ -100,6 +100,20 @@ public:
                     .directx_normal =
                         standard->normal_convention ==
                         NormalMapConvention::DirectX,
+                    .texture_transform =
+                        RenderStandardMaterialTextureTransformSnapshot{
+                            .center =
+                                {standard->texture_transform.center[0],
+                                 standard->texture_transform.center[1]},
+                            .scale =
+                                {standard->texture_transform.scale[0],
+                                 standard->texture_transform.scale[1]},
+                            .offset =
+                                {standard->texture_transform.offset[0],
+                                 standard->texture_transform.offset[1]},
+                            .rotation_degrees = standard->texture_transform
+                                                    .rotation_degrees,
+                        },
                 },
             },
         .catalog_revision = revision(),

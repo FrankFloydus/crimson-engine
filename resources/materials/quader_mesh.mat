@@ -15,6 +15,22 @@ material {
             name : baseColorFactor
         },
         {
+            type : float2,
+            name : textureTransformCenter
+        },
+        {
+            type : float2,
+            name : textureTransformScale
+        },
+        {
+            type : float2,
+            name : textureTransformOffset
+        },
+        {
+            type : float,
+            name : textureTransformRotationRadians
+        },
+        {
             type : float4,
             name : surfaceGridMinorColor
         },
@@ -132,10 +148,23 @@ fragment {
         return mix(baseColor, gridColor, alpha);
     }
 
+    vec2 applyTextureTransform(vec2 uv) {
+        vec2 local = (uv - materialParams.textureTransformCenter)
+                * materialParams.textureTransformScale;
+        float cosine = cos(materialParams.textureTransformRotationRadians);
+        float sine = sin(materialParams.textureTransformRotationRadians);
+        vec2 rotated = vec2(
+                cosine * local.x - sine * local.y,
+                sine * local.x + cosine * local.y);
+        return materialParams.textureTransformCenter + rotated
+                + materialParams.textureTransformOffset;
+    }
+
     void material(inout MaterialInputs material) {
         prepareMaterial(material);
 
-        vec2 uv = vec2(getUV0().x, 1.0 - getUV0().y);
+        vec2 uv = applyTextureTransform(
+                vec2(getUV0().x, 1.0 - getUV0().y));
         vec4 baseSample = texture(materialParams_baseColorTexture, uv);
         vec3 baseColor = baseSample.rgb * materialParams.baseColorFactor.rgb;
         baseColor = applySurfaceGrid(baseColor);

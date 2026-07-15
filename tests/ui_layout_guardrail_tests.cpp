@@ -164,6 +164,22 @@ TEST(UiLayoutGuardrailTests,
 }
 
 TEST(UiLayoutGuardrailTests,
+     QtApplicationInstallsProcessWideDotDecimalLocaleBeforeWidgets) {
+  const std::string main_source = read_source_file("src/main.cpp");
+  constexpr std::string_view kLocalePolicy =
+      "QLocale::setDefault(QLocale::c())";
+  constexpr std::string_view kApplicationConstruction =
+      "QApplication qt_application(argc, argv)";
+
+  expect_contains(main_source, "#include <QLocale>");
+  expect_contains(main_source, kLocalePolicy);
+  EXPECT_EQ(count_occurrences(main_source, kLocalePolicy), 1u);
+  ASSERT_NE(main_source.find(kApplicationConstruction), std::string::npos);
+  EXPECT_LT(main_source.find(kLocalePolicy),
+            main_source.find(kApplicationConstruction));
+}
+
+TEST(UiLayoutGuardrailTests,
      MainWindowOwnsCentralViewportAndStandardDockPanels) {
   const std::string ui_header = read_source_file("src/ui/ui_system.hpp");
   const std::string ui_source = read_source_file("src/ui/ui_system.cpp");

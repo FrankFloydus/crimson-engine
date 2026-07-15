@@ -13,6 +13,7 @@
 
 #include <QApplication>
 #include <QIcon>
+#include <QLocale>
 #include <QSize>
 #include <QStyle>
 #include <QStyleFactory>
@@ -121,6 +122,10 @@ bool sentry_debug_enabled() {
 } // namespace
 
 int main(int argc, char** argv) {
+  // Quader's numeric editing contract is locale-independent. Installing the
+  // C locale before QApplication construction makes every current and future
+  // Qt decimal control use '.' without affecting translated UI catalogs.
+  QLocale::setDefault(QLocale::c());
   QApplication qt_application(argc, argv);
   qt_application.setApplicationName(QStringLiteral("Quader"));
   qt_application.setOrganizationName(QStringLiteral("Quader"));

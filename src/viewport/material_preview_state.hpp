@@ -9,6 +9,8 @@
 #include "math/types.hpp"
 
 #include <cstdint>
+#include <string>
+#include <string_view>
 
 namespace quader {
 
@@ -41,13 +43,17 @@ enum class MaterialPreviewProjection : std::uint8_t {
 
 /**
  * Carries already-routed semantic input for one material-preview update.
- * UI backends are responsible for mapping their primary-button drag to the
- * tumble action before constructing this frame.
+ * UI backends map physical gestures into independent mesh tumble, view pan,
+ * and environment rotation actions before constructing this frame.
  */
 struct MaterialPreviewInteractionFrame {
   QVec2 tumble_delta_pixels;
+  QVec2 pan_delta_pixels;
+  float environment_rotation_delta_pixels = 0.0f;
   float zoom_wheel_steps = 0.0f;
   bool tumble_active = false;
+  bool pan_active = false;
+  bool environment_rotation_active = false;
   bool reset_requested = false;
 };
 
@@ -57,6 +63,8 @@ struct MaterialPreviewInteractionFrame {
 struct MaterialPreviewInteractionResult {
   bool changed = false;
   bool tumbled = false;
+  bool panned = false;
+  bool environment_rotated = false;
   bool zoomed = false;
   bool reset = false;
 };
@@ -66,10 +74,14 @@ struct MaterialPreviewInteractionResult {
  */
 class MaterialPreviewState final {
 public:
+  MaterialPreviewState();
+
   static constexpr float kDefaultCameraDistance = 3.2f;
   static constexpr float kMinimumCameraDistance = 1.5f;
   static constexpr float kMaximumCameraDistance = 8.0f;
   static constexpr float kTumbleRadiansPerPixel = 0.008f;
+  static constexpr float kEnvironmentRadiansPerPixel = 0.008f;
+  static constexpr float kPanWorldUnitsPerPixelAtUnitDistance = 0.0015f;
   static constexpr float kMaximumPitchRadians = 1.56079632679f;
 
   [[nodiscard]] MaterialPreviewMeshKind mesh_kind() const noexcept {
@@ -89,17 +101,31 @@ public:
   [[nodiscard]] float camera_distance() const noexcept {
     return camera_distance_;
   }
+  [[nodiscard]] QVec2 pan_offset() const noexcept { return pan_offset_; }
+  [[nodiscard]] std::string_view environment_id() const noexcept {
+    return environment_id_;
+  }
+  [[nodiscard]] bool show_environment_background() const noexcept {
+    return show_environment_background_;
+  }
+  [[nodiscard]] float environment_rotation_radians() const noexcept {
+    return environment_rotation_radians_;
+  }
   [[nodiscard]] QQuat object_rotation() const noexcept;
   [[nodiscard]] std::uint64_t revision() const noexcept { return revision_; }
 
   bool set_mesh_kind(MaterialPreviewMeshKind mesh_kind) noexcept;
   bool set_shading_mode(MaterialPreviewShadingMode shading_mode) noexcept;
+  bool set_environment(std::string_view environment_id);
+  bool set_show_environment_background(bool visible) noexcept;
   bool reset_view() noexcept;
 
 private:
   friend class MaterialPreviewInputRouter;
 
   bool tumble(QVec2 delta_pixels) noexcept;
+  bool pan(QVec2 delta_pixels) noexcept;
+  bool rotate_environment(float delta_pixels) noexcept;
   bool zoom(float wheel_steps) noexcept;
   void mark_changed() noexcept;
 
@@ -108,12 +134,16 @@ private:
       MaterialPreviewShadingMode::Rendered;
   float yaw_radians_ = 0.0f;
   float pitch_radians_ = 0.0f;
+  QVec2 pan_offset_;
   float camera_distance_ = kDefaultCameraDistance;
+  std::string environment_id_;
+  bool show_environment_background_ = false;
+  float environment_rotation_radians_ = 0.0f;
   std::uint64_t revision_ = 1u;
 };
 
 /**
- * Routes semantic tumble, zoom, and reset input into preview-owned state.
+ * Routes semantic preview navigation input into preview-owned state.
  */
 class MaterialPreviewInputRouter final {
 public:

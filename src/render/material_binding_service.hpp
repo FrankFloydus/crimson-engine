@@ -8,6 +8,7 @@
 
 #include "assets/asset_registry.hpp"
 #include "assets/material_document.hpp"
+#include "render/material_evaluation_snapshot.hpp"
 #include "render/scene_render_extraction.hpp"
 #include "scene/components.hpp"
 
@@ -20,6 +21,11 @@ namespace quader {
 
 class TextureBindingService;
 class ViewportSettings;
+
+/** Binds the shared Standard Material UV transform to a Filament instance. */
+void bind_standard_material_texture_transform(
+    filament::MaterialInstance &material_instance,
+    const RenderStandardMaterialTextureTransformSnapshot &transform);
 
 /**
  * Builds the narrow signature used to avoid rewriting unchanged mesh-surface

@@ -70,6 +70,26 @@ std::optional<QuaderStandardMaterialTextureReference> to_public_texture(
   };
 }
 
+QuaderStandardMaterialTextureTransform to_public_texture_transform(
+    const StandardMaterialTextureTransform &transform) {
+  return {
+      .center = transform.center,
+      .scale = transform.scale,
+      .offset = transform.offset,
+      .rotation_degrees = transform.rotation_degrees,
+  };
+}
+
+StandardMaterialTextureTransform to_internal_texture_transform(
+    const QuaderStandardMaterialTextureTransform &transform) {
+  return {
+      .center = transform.center,
+      .scale = transform.scale,
+      .offset = transform.offset,
+      .rotation_degrees = transform.rotation_degrees,
+  };
+}
+
 QuaderStandardMaterialDefinition to_public_material(
     const ProjectStandardMaterialDefinition &material) {
   return {
@@ -79,6 +99,8 @@ QuaderStandardMaterialDefinition to_public_material(
       .normal_strength = material.normal_strength,
       .normal_convention =
           to_public_normal_convention(material.normal_convention),
+      .texture_transform =
+          to_public_texture_transform(material.texture_transform),
       .base_color_texture = to_public_texture(material.base_color_texture),
       .roughness_texture = to_public_texture(material.roughness_texture),
       .metallic_texture = to_public_texture(material.metallic_texture),
@@ -180,6 +202,8 @@ QuaderStandardMaterialDocumentsApi::preview() const {
         .rgba8 = texture.rgba8,
         .width = texture.width,
         .height = texture.height,
+        .detected_format = texture.detected_format,
+        .encoded_byte_size = texture.encoded_byte_size,
     };
   }
   return quader_api_result_from_status(status(session_, true, false),
@@ -315,6 +339,13 @@ QuaderStandardMaterialDocumentsApi::set_normal_convention(
   }
   QUADER_STANDARD_MATERIAL_MUTATION(
       editor->set_normal_convention(*internal));
+}
+
+QuaderApiVoidResult
+QuaderStandardMaterialDocumentsApi::set_texture_transform(
+    QuaderStandardMaterialTextureTransform transform) {
+  QUADER_STANDARD_MATERIAL_MUTATION(editor->set_texture_transform(
+      to_internal_texture_transform(transform)));
 }
 
 QuaderApiVoidResult QuaderStandardMaterialDocumentsApi::import_texture(

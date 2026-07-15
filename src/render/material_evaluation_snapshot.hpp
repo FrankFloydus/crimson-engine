@@ -84,6 +84,25 @@ struct RenderMaterialTextureEvaluationSnapshot final {
       const RenderMaterialTextureEvaluationSnapshot &) = default;
 };
 
+/// Renderer-neutral UV transform shared by all Standard Material samplers.
+struct RenderStandardMaterialTextureTransformSnapshot final {
+  QVec2 center = {0.5f, 0.5f};
+  QVec2 scale = {1.0f, 1.0f};
+  QVec2 offset = {0.0f, 0.0f};
+  float rotation_degrees = 0.0f;
+
+  friend bool operator==(
+      const RenderStandardMaterialTextureTransformSnapshot &left,
+      const RenderStandardMaterialTextureTransformSnapshot &right) {
+    return left.center.x == right.center.x &&
+           left.center.y == right.center.y &&
+           left.scale.x == right.scale.x && left.scale.y == right.scale.y &&
+           left.offset.x == right.offset.x &&
+           left.offset.y == right.offset.y &&
+           left.rotation_degrees == right.rotation_degrees;
+  }
+};
+
 /// Typed metallic-roughness evaluation consumed by preview and scene renderers.
 struct RenderStandardMaterialEvaluationSnapshot final {
   QVec3 base_color = {1.0f, 1.0f, 1.0f};
@@ -91,6 +110,7 @@ struct RenderStandardMaterialEvaluationSnapshot final {
   float metallic = 0.0f;
   float normal_strength = 1.0f;
   bool directx_normal = false;
+  RenderStandardMaterialTextureTransformSnapshot texture_transform;
   std::array<RenderMaterialTextureEvaluationSnapshot, 4> textures;
 
   [[nodiscard]] const RenderMaterialTextureEvaluationSnapshot &
@@ -110,6 +130,7 @@ struct RenderStandardMaterialEvaluationSnapshot final {
            left.metallic == right.metallic &&
            left.normal_strength == right.normal_strength &&
            left.directx_normal == right.directx_normal &&
+           left.texture_transform == right.texture_transform &&
            left.textures == right.textures;
   }
 };

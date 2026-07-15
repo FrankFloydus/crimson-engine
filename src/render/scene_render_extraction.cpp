@@ -508,6 +508,7 @@ RenderMaterialAssetSnapshot build_render_project_material_asset_snapshot(
   snapshot.document.metallic = standard->metallic;
   snapshot.normal_strength = standard->normal_strength;
   snapshot.directx_normal = standard->directx_normal;
+  snapshot.texture_transform = standard->texture_transform;
   snapshot.revision = resolved->evaluation.content_revision;
   snapshot.project_catalog_revision = resolved->catalog_revision;
   snapshot.present = true;

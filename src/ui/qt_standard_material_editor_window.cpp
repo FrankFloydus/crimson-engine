@@ -15,24 +15,39 @@
 #include <QColorDialog>
 #include <QComboBox>
 #include <QDoubleSpinBox>
+#include <QFileInfo>
 #include <QFormLayout>
+#include <QFrame>
 #include <QGroupBox>
 #include <QHBoxLayout>
+#include <QIcon>
+#include <QImage>
 #include <QKeySequence>
 #include <QLabel>
 #include <QLineEdit>
+#include <QLocale>
 #include <QMenu>
 #include <QMenuBar>
+#include <QMouseEvent>
+#include <QPainter>
+#include <QPixmap>
 #include <QPushButton>
+#include <QResizeEvent>
 #include <QScrollArea>
 #include <QSignalBlocker>
+#include <QSlider>
 #include <QSplitter>
 #include <QStatusBar>
+#include <QStringList>
 #include <QStyle>
+#include <QToolButton>
 #include <QVBoxLayout>
+#include <QWheelEvent>
 #include <QWidget>
 
+#include <algorithm>
 #include <array>
+#include <cmath>
 #include <utility>
 
 namespace quader {
@@ -44,6 +59,219 @@ constexpr int kPreviewStretch = 3;
 constexpr int kPropertiesStretch = 2;
 constexpr int kScalarDecimals = 3;
 constexpr double kScalarStep = 0.01;
+constexpr int kScalarSliderScale = 100;
+constexpr int kTexturePreviewExtent = 64;
+constexpr int kTexturePreviewIconExtent = 56;
+constexpr int kTextureInspectorWidth = 720;
+constexpr int kTextureInspectorHeight = 620;
+constexpr double kMinimumTextureZoom = 0.1;
+constexpr double kMaximumTextureZoom = 64.0;
+
+/// Preserves the filename end while fitting a project texture path in its row.
+class ElidedPathLabel final : public QLabel {
+public:
+  explicit ElidedPathLabel(QWidget *parent = nullptr) : QLabel(parent) {
+    setFrameStyle(QFrame::StyledPanel | QFrame::Sunken);
+    setMargin(3);
+    setMinimumWidth(48);
+    setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
+  }
+
+  void set_full_text(QString full_text, QString placeholder) {
+    full_text_ = std::move(full_text);
+    placeholder_ = std::move(placeholder);
+    setProperty("fullText", full_text_);
+    refresh_elision();
+  }
+
+protected:
+  void resizeEvent(QResizeEvent *event) override {
+    QLabel::resizeEvent(event);
+    refresh_elision();
+  }
+
+private:
+  void refresh_elision() {
+    const QString source = full_text_.isEmpty() ? placeholder_ : full_text_;
+    const int available_width = std::max(0, width() - 2 * margin());
+    QLabel::setText(
+        fontMetrics().elidedText(source, Qt::ElideLeft, available_width));
+  }
+
+  QString full_text_;
+  QString placeholder_;
+};
+
+/// Paints one decoded texture with retained zoom and pan inspection state.
+class TextureInspectorCanvas final : public QWidget {
+public:
+  explicit TextureInspectorCanvas(QWidget *parent = nullptr) : QWidget(parent) {
+    setObjectName(
+        QStringLiteral("standardMaterialEditor.textureInspector.canvas"));
+    setFocusPolicy(Qt::StrongFocus);
+    setMinimumSize(240, 180);
+    refresh_properties();
+  }
+
+  void set_image(QImage image) {
+    image_ = std::move(image);
+    reset_view();
+  }
+
+  void reset_view() {
+    zoom_ = 1.0;
+    pan_ = {};
+    refresh_properties();
+    update();
+  }
+
+protected:
+  void paintEvent(QPaintEvent *) override {
+    QPainter painter(this);
+    painter.fillRect(rect(), palette().brush(backgroundRole()));
+    if (image_.isNull()) {
+      return;
+    }
+    painter.setRenderHint(QPainter::SmoothPixmapTransform, true);
+    painter.translate(rect().center() + pan_);
+    painter.scale(zoom_, zoom_);
+    painter.drawImage(QPointF(-0.5 * image_.width(), -0.5 * image_.height()),
+                      image_);
+  }
+
+  void mousePressEvent(QMouseEvent *event) override {
+    if (event->button() == Qt::LeftButton ||
+        event->button() == Qt::MiddleButton) {
+      panning_ = true;
+      previous_pointer_position_ = event->position();
+      event->accept();
+      return;
+    }
+    QWidget::mousePressEvent(event);
+  }
+
+  void mouseMoveEvent(QMouseEvent *event) override {
+    if (!panning_) {
+      QWidget::mouseMoveEvent(event);
+      return;
+    }
+    pan_ += event->position() - previous_pointer_position_;
+    previous_pointer_position_ = event->position();
+    refresh_properties();
+    update();
+    event->accept();
+  }
+
+  void mouseReleaseEvent(QMouseEvent *event) override {
+    if ((event->button() == Qt::LeftButton ||
+         event->button() == Qt::MiddleButton) &&
+        panning_) {
+      panning_ = false;
+      event->accept();
+      return;
+    }
+    QWidget::mouseReleaseEvent(event);
+  }
+
+  void mouseDoubleClickEvent(QMouseEvent *event) override {
+    if (event->button() == Qt::LeftButton ||
+        event->button() == Qt::MiddleButton) {
+      reset_view();
+      event->accept();
+      return;
+    }
+    QWidget::mouseDoubleClickEvent(event);
+  }
+
+  void wheelEvent(QWheelEvent *event) override {
+    const double zoom_factor = std::pow(1.0015, event->angleDelta().y());
+    zoom_ = std::clamp(zoom_ * zoom_factor, kMinimumTextureZoom,
+                       kMaximumTextureZoom);
+    refresh_properties();
+    update();
+    event->accept();
+  }
+
+private:
+  void refresh_properties() {
+    setProperty("zoom", zoom_);
+    setProperty("panX", pan_.x());
+    setProperty("panY", pan_.y());
+  }
+
+  QImage image_;
+  QPointF pan_;
+  QPointF previous_pointer_position_;
+  double zoom_ = 1.0;
+  bool panning_ = false;
+};
+
+/// Hosts the retained texture canvas and immutable file/format information.
+class TextureInspectorWindow final : public QMainWindow {
+public:
+  explicit TextureInspectorWindow(QWidget *parent)
+      : QMainWindow(parent, Qt::Tool),
+        canvas_(new TextureInspectorCanvas(this)),
+        information_(new QLabel(this)) {
+    setObjectName(QStringLiteral("standardMaterialEditor.textureInspector"));
+    setAttribute(Qt::WA_DeleteOnClose, false);
+    setWindowFlag(Qt::WindowMaximizeButtonHint, false);
+    resize(kTextureInspectorWidth, kTextureInspectorHeight);
+    setCentralWidget(canvas_);
+    information_->setObjectName(
+        QStringLiteral("standardMaterialEditor.textureInspector.info"));
+    information_->setAlignment(Qt::AlignCenter);
+    statusBar()->addPermanentWidget(information_, 1);
+  }
+
+  void present(const QtStandardMaterialTexturePresentation &texture,
+               const QString &window_title) {
+    setWindowTitle(window_title);
+    canvas_->set_image(texture.preview_image);
+    const QFileInfo path_info(texture.project_relative_path);
+    const QString file_name = path_info.fileName().isEmpty()
+                                  ? texture.project_relative_path
+                                  : path_info.fileName();
+    const QString format = texture.format.isEmpty()
+                               ? path_info.suffix().toUpper()
+                               : texture.format;
+    const QSize pixel_size = texture.pixel_size.isValid()
+                                 ? texture.pixel_size
+                                 : texture.preview_image.size();
+    qint64 byte_size = texture.encoded_byte_size;
+    if (byte_size <= 0 && pixel_size.isValid()) {
+      byte_size = static_cast<qint64>(pixel_size.width()) *
+                  static_cast<qint64>(pixel_size.height()) * 4;
+    }
+    QStringList parts;
+    if (!file_name.isEmpty()) {
+      parts.push_back(file_name);
+    }
+    QString interpretation = format;
+    if (!texture.color_space.isEmpty()) {
+      interpretation += interpretation.isEmpty()
+                            ? texture.color_space
+                            : QStringLiteral(" • ") + texture.color_space;
+    }
+    if (!interpretation.isEmpty()) {
+      parts.push_back(interpretation);
+    }
+    if (pixel_size.isValid()) {
+      parts.push_back(QStringLiteral("%1 × %2")
+                          .arg(pixel_size.width())
+                          .arg(pixel_size.height()));
+    }
+    if (byte_size > 0) {
+      parts.push_back(QLocale().formattedDataSize(byte_size, 1,
+                                                  QLocale::DataSizeIecFormat));
+    }
+    information_->setText(parts.join(QStringLiteral("  |  ")));
+  }
+
+private:
+  TextureInspectorCanvas *canvas_ = nullptr;
+  QLabel *information_ = nullptr;
+};
 
 constexpr std::size_t texture_index(QtStandardMaterialTextureSlot slot) {
   return static_cast<std::size_t>(slot);
@@ -74,29 +302,25 @@ QtStandardMaterialEditorWindow::QtStandardMaterialEditorWindow(QWidget *parent)
     : QMainWindow(parent, Qt::Tool) {
   setObjectName(QStringLiteral("standardMaterialEditor.window"));
   setAttribute(Qt::WA_DeleteOnClose, false);
+  setWindowFlag(Qt::WindowMaximizeButtonHint, false);
   resize(kDefaultWidth, kDefaultHeight);
 
   QMenu *file_menu = menuBar()->addMenu(QString());
   file_menu->setObjectName(QStringLiteral("standardMaterialEditor.fileMenu"));
-  new_action_ = file_menu->addAction(style()->standardIcon(QStyle::SP_FileIcon),
-                                     QString());
+  new_action_ = file_menu->addAction(QString());
   new_action_->setObjectName(QStringLiteral("standardMaterialEditor.file.new"));
-  open_action_ = file_menu->addAction(
-      style()->standardIcon(QStyle::SP_DialogOpenButton), QString());
+  open_action_ = file_menu->addAction(QString());
   open_action_->setObjectName(
       QStringLiteral("standardMaterialEditor.file.open"));
   file_menu->addSeparator();
-  save_action_ = file_menu->addAction(
-      style()->standardIcon(QStyle::SP_DialogSaveButton), QString());
+  save_action_ = file_menu->addAction(QString());
   save_action_->setObjectName(
       QStringLiteral("standardMaterialEditor.file.save"));
-  save_as_action_ = file_menu->addAction(
-      style()->standardIcon(QStyle::SP_DialogSaveButton), QString());
+  save_as_action_ = file_menu->addAction(QString());
   save_as_action_->setObjectName(
       QStringLiteral("standardMaterialEditor.file.saveAs"));
   file_menu->addSeparator();
-  close_action_ = file_menu->addAction(
-      style()->standardIcon(QStyle::SP_DialogCloseButton), QString());
+  close_action_ = file_menu->addAction(QString());
   close_action_->setObjectName(
       QStringLiteral("standardMaterialEditor.file.close"));
 
@@ -144,6 +368,11 @@ QtStandardMaterialEditorWindow::QtStandardMaterialEditorWindow(QWidget *parent)
   reset_preview_action_->setObjectName(
       QStringLiteral("standardMaterialEditor.preview.reset"));
 
+  environment_menu_ = menuBar()->addMenu(QString());
+  environment_menu_->setObjectName(
+      QStringLiteral("standardMaterialEditor.environmentMenu"));
+  rebuild_environment_menu();
+
   auto *splitter = new QSplitter(Qt::Horizontal, this);
   splitter->setObjectName(QStringLiteral("standardMaterialEditor.splitter"));
 
@@ -190,13 +419,6 @@ QtStandardMaterialEditorWindow::QtStandardMaterialEditorWindow(QWidget *parent)
   name_label_->setBuddy(name_edit_);
   form->addRow(name_label_, name_edit_);
 
-  type_label_ = new QLabel(properties_group_);
-  type_edit_ = new QLineEdit(properties_group_);
-  type_edit_->setObjectName(QStringLiteral("standardMaterialEditor.type"));
-  type_edit_->setReadOnly(true);
-  type_label_->setBuddy(type_edit_);
-  form->addRow(type_label_, type_edit_);
-
   albedo_label_ = new QLabel(properties_group_);
   albedo_button_ = new QtColorSwatchButton(properties_group_);
   albedo_button_->setObjectName(
@@ -204,37 +426,52 @@ QtStandardMaterialEditorWindow::QtStandardMaterialEditorWindow(QWidget *parent)
   albedo_label_->setBuddy(albedo_button_);
   form->addRow(albedo_label_, albedo_button_);
 
-  const auto create_texture_controls = [this, form](
-                                           QtStandardMaterialTextureSlot slot,
-                                           const QString &stable_name) {
+  const QIcon texture_browse_icon =
+      style()->standardIcon(QStyle::SP_DialogOpenButton);
+  const QIcon texture_clear_icon =
+      style()->standardIcon(QStyle::SP_DialogCancelButton);
+  const auto create_texture_controls =
+      [this, form, texture_browse_icon, texture_clear_icon](
+          QtStandardMaterialTextureSlot slot, const QString &stable_name) {
     TextureControls &controls = texture_controls_[texture_index(slot)];
     controls.label = new QLabel(properties_group_);
     auto *row = new QWidget(properties_group_);
     auto *row_layout = new QHBoxLayout(row);
     row_layout->setContentsMargins(0, 0, 0, 0);
-    controls.path = new QLineEdit(row);
+    controls.preview = new QToolButton(row);
+    controls.preview->setObjectName(
+        QStringLiteral("standardMaterialEditor.%1.preview").arg(stable_name));
+    controls.preview->setFixedSize(kTexturePreviewExtent,
+                                   kTexturePreviewExtent);
+    controls.preview->setIconSize(
+        QSize(kTexturePreviewIconExtent, kTexturePreviewIconExtent));
+    controls.path = new ElidedPathLabel(row);
     controls.path->setObjectName(
         QStringLiteral("standardMaterialEditor.%1.path").arg(stable_name));
-    controls.path->setReadOnly(true);
-    controls.browse = new QPushButton(row);
+    controls.browse = new QToolButton(row);
     controls.browse->setObjectName(
         QStringLiteral("standardMaterialEditor.%1.browse").arg(stable_name));
-    controls.clear = new QPushButton(row);
+    controls.browse->setIcon(texture_browse_icon);
+    controls.clear = new QToolButton(row);
     controls.clear->setObjectName(
         QStringLiteral("standardMaterialEditor.%1.clear").arg(stable_name));
+    controls.clear->setIcon(texture_clear_icon);
+    row_layout->addWidget(controls.preview);
     row_layout->addWidget(controls.path, 1);
     row_layout->addWidget(controls.browse);
     row_layout->addWidget(controls.clear);
     controls.label->setBuddy(controls.path);
     form->addRow(controls.label, row);
     QObject::connect(
-        controls.browse, &QPushButton::clicked, this, [this, slot]() {
+        controls.browse, &QToolButton::clicked, this, [this, slot]() {
           emit_texture_action(slot, QtStandardMaterialTextureAction::Browse);
         });
     QObject::connect(
-        controls.clear, &QPushButton::clicked, this, [this, slot]() {
+        controls.clear, &QToolButton::clicked, this, [this, slot]() {
           emit_texture_action(slot, QtStandardMaterialTextureAction::Clear);
         });
+    QObject::connect(controls.preview, &QToolButton::clicked, this,
+                     [this, slot]() { show_texture_inspector(slot); });
   };
   create_texture_controls(QtStandardMaterialTextureSlot::Albedo,
                           QStringLiteral("albedoTexture"));
@@ -247,8 +484,18 @@ QtStandardMaterialEditorWindow::QtStandardMaterialEditorWindow(QWidget *parent)
   roughness_spin_->setDecimals(kScalarDecimals);
   roughness_spin_->setSingleStep(kScalarStep);
   roughness_spin_->setAccelerated(true);
-  roughness_label_->setBuddy(roughness_spin_);
-  form->addRow(roughness_label_, roughness_spin_);
+  roughness_slider_ = new QSlider(Qt::Horizontal, properties_group_);
+  roughness_slider_->setObjectName(
+      QStringLiteral("standardMaterialEditor.roughness.slider"));
+  roughness_slider_->setRange(0, kScalarSliderScale);
+  roughness_slider_->setSingleStep(1);
+  auto *roughness_row = new QWidget(properties_group_);
+  auto *roughness_layout = new QHBoxLayout(roughness_row);
+  roughness_layout->setContentsMargins(0, 0, 0, 0);
+  roughness_layout->addWidget(roughness_slider_, 1);
+  roughness_layout->addWidget(roughness_spin_);
+  roughness_label_->setBuddy(roughness_slider_);
+  form->addRow(roughness_label_, roughness_row);
   create_texture_controls(QtStandardMaterialTextureSlot::Roughness,
                           QStringLiteral("roughnessTexture"));
 
@@ -260,8 +507,18 @@ QtStandardMaterialEditorWindow::QtStandardMaterialEditorWindow(QWidget *parent)
   metallic_spin_->setDecimals(kScalarDecimals);
   metallic_spin_->setSingleStep(kScalarStep);
   metallic_spin_->setAccelerated(true);
-  metallic_label_->setBuddy(metallic_spin_);
-  form->addRow(metallic_label_, metallic_spin_);
+  metallic_slider_ = new QSlider(Qt::Horizontal, properties_group_);
+  metallic_slider_->setObjectName(
+      QStringLiteral("standardMaterialEditor.metallic.slider"));
+  metallic_slider_->setRange(0, kScalarSliderScale);
+  metallic_slider_->setSingleStep(1);
+  auto *metallic_row = new QWidget(properties_group_);
+  auto *metallic_layout = new QHBoxLayout(metallic_row);
+  metallic_layout->setContentsMargins(0, 0, 0, 0);
+  metallic_layout->addWidget(metallic_slider_, 1);
+  metallic_layout->addWidget(metallic_spin_);
+  metallic_label_->setBuddy(metallic_slider_);
+  form->addRow(metallic_label_, metallic_row);
   create_texture_controls(QtStandardMaterialTextureSlot::Metallic,
                           QStringLiteral("metallicTexture"));
 
@@ -269,12 +526,23 @@ QtStandardMaterialEditorWindow::QtStandardMaterialEditorWindow(QWidget *parent)
   normal_strength_spin_ = new QDoubleSpinBox(properties_group_);
   normal_strength_spin_->setObjectName(
       QStringLiteral("standardMaterialEditor.normalStrength"));
-  normal_strength_spin_->setRange(0.0, 2.0);
+  normal_strength_spin_->setRange(-16.0, 16.0);
   normal_strength_spin_->setDecimals(kScalarDecimals);
   normal_strength_spin_->setSingleStep(kScalarStep);
   normal_strength_spin_->setAccelerated(true);
-  normal_strength_label_->setBuddy(normal_strength_spin_);
-  form->addRow(normal_strength_label_, normal_strength_spin_);
+  normal_strength_slider_ = new QSlider(Qt::Horizontal, properties_group_);
+  normal_strength_slider_->setObjectName(
+      QStringLiteral("standardMaterialEditor.normalStrength.slider"));
+  normal_strength_slider_->setRange(-16 * kScalarSliderScale,
+                                    16 * kScalarSliderScale);
+  normal_strength_slider_->setSingleStep(1);
+  auto *normal_strength_row = new QWidget(properties_group_);
+  auto *normal_strength_layout = new QHBoxLayout(normal_strength_row);
+  normal_strength_layout->setContentsMargins(0, 0, 0, 0);
+  normal_strength_layout->addWidget(normal_strength_slider_, 1);
+  normal_strength_layout->addWidget(normal_strength_spin_);
+  normal_strength_label_->setBuddy(normal_strength_slider_);
+  form->addRow(normal_strength_label_, normal_strength_row);
   create_texture_controls(QtStandardMaterialTextureSlot::Normal,
                           QStringLiteral("normalTexture"));
 
@@ -283,6 +551,88 @@ QtStandardMaterialEditorWindow::QtStandardMaterialEditorWindow(QWidget *parent)
       QStringLiteral("standardMaterialEditor.directXNormal"));
   form->addRow(direct_x_normal_);
   properties_layout->addWidget(properties_group_);
+
+  texture_transform_group_ = new QGroupBox(properties_content);
+  texture_transform_group_->setObjectName(
+      QStringLiteral("standardMaterialEditor.textureTransform"));
+  auto *transform_form = new QFormLayout(texture_transform_group_);
+  const auto create_transform_controls =
+      [this, transform_form](
+          QtStandardMaterialTextureTransformComponent component,
+          const QString &stable_name, double minimum, double maximum) {
+        const std::size_t index = static_cast<std::size_t>(component);
+        TextureTransformControls &controls = texture_transform_controls_[index];
+        controls.label = new QLabel(texture_transform_group_);
+        controls.spin = new QDoubleSpinBox(texture_transform_group_);
+        controls.spin->setObjectName(
+            QStringLiteral("standardMaterialEditor.textureTransform.%1")
+                .arg(stable_name));
+        controls.spin->setRange(minimum, maximum);
+        controls.spin->setDecimals(kScalarDecimals);
+        controls.spin->setSingleStep(kScalarStep);
+        controls.spin->setAccelerated(true);
+        controls.slider = new QSlider(Qt::Horizontal, texture_transform_group_);
+        controls.slider->setObjectName(
+            QStringLiteral("standardMaterialEditor.textureTransform.%1.slider")
+                .arg(stable_name));
+        controls.slider->setRange(
+            static_cast<int>(std::lround(minimum * kScalarSliderScale)),
+            static_cast<int>(std::lround(maximum * kScalarSliderScale)));
+        controls.slider->setSingleStep(1);
+        auto *row = new QWidget(texture_transform_group_);
+        auto *layout = new QHBoxLayout(row);
+        layout->setContentsMargins(0, 0, 0, 0);
+        layout->addWidget(controls.slider, 1);
+        layout->addWidget(controls.spin);
+        controls.label->setBuddy(controls.slider);
+        transform_form->addRow(controls.label, row);
+
+        QObject::connect(
+            controls.spin, &QDoubleSpinBox::valueChanged, this,
+            [this, component, slider = controls.slider](double value) {
+              {
+                const QSignalBlocker blocker(slider);
+                slider->setValue(
+                    static_cast<int>(std::lround(value * kScalarSliderScale)));
+              }
+              if (!refreshing_ && texture_transform_edited_) {
+                texture_transform_edited_(component, value);
+              }
+            });
+        QObject::connect(
+            controls.slider, &QSlider::valueChanged, this,
+            [this, component, spin = controls.spin](int slider_value) {
+              const double value =
+                  static_cast<double>(slider_value) / kScalarSliderScale;
+              {
+                const QSignalBlocker blocker(spin);
+                spin->setValue(value);
+              }
+              if (!refreshing_ && texture_transform_edited_) {
+                texture_transform_edited_(component, value);
+              }
+            });
+      };
+  create_transform_controls(
+      QtStandardMaterialTextureTransformComponent::CenterU,
+      QStringLiteral("centerU"), 0.0, 1.0);
+  create_transform_controls(
+      QtStandardMaterialTextureTransformComponent::CenterV,
+      QStringLiteral("centerV"), 0.0, 1.0);
+  create_transform_controls(QtStandardMaterialTextureTransformComponent::ScaleU,
+                            QStringLiteral("scaleU"), -16.0, 16.0);
+  create_transform_controls(QtStandardMaterialTextureTransformComponent::ScaleV,
+                            QStringLiteral("scaleV"), -16.0, 16.0);
+  create_transform_controls(
+      QtStandardMaterialTextureTransformComponent::OffsetU,
+      QStringLiteral("offsetU"), -16.0, 16.0);
+  create_transform_controls(
+      QtStandardMaterialTextureTransformComponent::OffsetV,
+      QStringLiteral("offsetV"), -16.0, 16.0);
+  create_transform_controls(
+      QtStandardMaterialTextureTransformComponent::RotationDegrees,
+      QStringLiteral("rotation"), -360.0, 360.0);
+  properties_layout->addWidget(texture_transform_group_);
   properties_layout->addStretch(1);
   properties_scroll->setWidget(properties_content);
   splitter->addWidget(properties_scroll);
@@ -330,22 +680,75 @@ QtStandardMaterialEditorWindow::QtStandardMaterialEditorWindow(QWidget *parent)
   });
   QObject::connect(albedo_button_, &QPushButton::clicked, this,
                    [this]() { choose_albedo_color(); });
-  QObject::connect(roughness_spin_, &QDoubleSpinBox::valueChanged, this,
-                   [this](double value) {
+  QObject::connect(
+      roughness_spin_, &QDoubleSpinBox::valueChanged, this,
+      [this](double value) {
+        {
+          const QSignalBlocker blocker(roughness_slider_);
+          roughness_slider_->setValue(
+              static_cast<int>(std::lround(value * kScalarSliderScale)));
+        }
+        if (!refreshing_ && scalar_edited_) {
+          scalar_edited_(QtStandardMaterialScalar::Roughness, value);
+        }
+      });
+  QObject::connect(roughness_slider_, &QSlider::valueChanged, this,
+                   [this](int slider_value) {
+                     const double value =
+                         static_cast<double>(slider_value) / kScalarSliderScale;
+                     {
+                       const QSignalBlocker blocker(roughness_spin_);
+                       roughness_spin_->setValue(value);
+                     }
                      if (!refreshing_ && scalar_edited_) {
                        scalar_edited_(QtStandardMaterialScalar::Roughness,
                                       value);
                      }
                    });
-  QObject::connect(metallic_spin_, &QDoubleSpinBox::valueChanged, this,
-                   [this](double value) {
-                     if (!refreshing_ && scalar_edited_) {
-                       scalar_edited_(QtStandardMaterialScalar::Metallic,
-                                      value);
+  QObject::connect(
+      metallic_spin_, &QDoubleSpinBox::valueChanged, this,
+      [this](double value) {
+        {
+          const QSignalBlocker blocker(metallic_slider_);
+          metallic_slider_->setValue(
+              static_cast<int>(std::lround(value * kScalarSliderScale)));
+        }
+        if (!refreshing_ && scalar_edited_) {
+          scalar_edited_(QtStandardMaterialScalar::Metallic, value);
+        }
+      });
+  QObject::connect(
+      metallic_slider_, &QSlider::valueChanged, this, [this](int slider_value) {
+        const double value =
+            static_cast<double>(slider_value) / kScalarSliderScale;
+        {
+          const QSignalBlocker blocker(metallic_spin_);
+          metallic_spin_->setValue(value);
+        }
+        if (!refreshing_ && scalar_edited_) {
+          scalar_edited_(QtStandardMaterialScalar::Metallic, value);
+        }
+      });
+  QObject::connect(
+      normal_strength_spin_, &QDoubleSpinBox::valueChanged, this,
+      [this](double value) {
+        {
+          const QSignalBlocker blocker(normal_strength_slider_);
+          normal_strength_slider_->setValue(
+              static_cast<int>(std::lround(value * kScalarSliderScale)));
+        }
+        if (!refreshing_ && scalar_edited_) {
+          scalar_edited_(QtStandardMaterialScalar::NormalStrength, value);
+        }
+      });
+  QObject::connect(normal_strength_slider_, &QSlider::valueChanged, this,
+                   [this](int slider_value) {
+                     const double value =
+                         static_cast<double>(slider_value) / kScalarSliderScale;
+                     {
+                       const QSignalBlocker blocker(normal_strength_spin_);
+                       normal_strength_spin_->setValue(value);
                      }
-                   });
-  QObject::connect(normal_strength_spin_, &QDoubleSpinBox::valueChanged, this,
-                   [this](double value) {
                      if (!refreshing_ && scalar_edited_) {
                        scalar_edited_(QtStandardMaterialScalar::NormalStrength,
                                       value);
@@ -377,14 +780,36 @@ void QtStandardMaterialEditorWindow::set_document(
   if (has_document_ && document_ == document) {
     return;
   }
+  const bool changed_document =
+      has_document_ && document_.stable_id != document.stable_id;
+  bool inspected_texture_changed = false;
+  if (has_document_ && !changed_document &&
+      inspected_texture_slot_.has_value()) {
+    const std::size_t index = texture_index(*inspected_texture_slot_);
+    inspected_texture_changed =
+        index >= document_.textures.size() ||
+        index >= document.textures.size() ||
+        !(document_.textures[index] == document.textures[index]);
+  }
   document_ = std::move(document);
   has_document_ = true;
+  if (changed_document && texture_inspector_window_ != nullptr) {
+    texture_inspector_window_->hide();
+    inspected_texture_slot_.reset();
+  }
   refresh_document_controls();
+  if (!changed_document && inspected_texture_changed) {
+    refresh_texture_inspector();
+  }
 }
 
 void QtStandardMaterialEditorWindow::clear_document() {
   document_ = {};
   has_document_ = false;
+  if (texture_inspector_window_ != nullptr) {
+    texture_inspector_window_->hide();
+  }
+  inspected_texture_slot_.reset();
   refresh_document_controls();
 }
 
@@ -418,6 +843,27 @@ void QtStandardMaterialEditorWindow::set_texture_action_callback(
   texture_action_ = std::move(callback);
 }
 
+void QtStandardMaterialEditorWindow::set_texture_transform_edited_callback(
+    TextureTransformEditedCallback callback) {
+  texture_transform_edited_ = std::move(callback);
+}
+
+void QtStandardMaterialEditorWindow::set_preview_environments(
+    std::vector<QtStandardMaterialPreviewEnvironment> environments) {
+  if (preview_environments_ == environments) {
+    return;
+  }
+  preview_environments_ = std::move(environments);
+  if (!preview_environments_.empty() &&
+      std::ranges::none_of(
+          preview_environments_, [this](const auto &environment) {
+            return environment.stable_id == preview_environment_;
+          })) {
+    preview_environment_ = preview_environments_.front().stable_id;
+  }
+  rebuild_environment_menu();
+}
+
 void QtStandardMaterialEditorWindow::set_preview_reset_callback(
     PreviewResetCallback callback) {
   preview_reset_ = std::move(callback);
@@ -435,9 +881,12 @@ void QtStandardMaterialEditorWindow::set_close_request_handler(
 
 void QtStandardMaterialEditorWindow::restore_presentation_state(
     QtStandardMaterialPreviewMesh mesh,
-    QtStandardMaterialPreviewShading shading) {
+    QtStandardMaterialPreviewShading shading, QString environment_id,
+    bool show_environment_background) {
   set_preview_mesh(mesh, false);
   set_preview_shading(shading, false);
+  set_preview_environment(std::move(environment_id), false);
+  set_preview_environment_background(show_environment_background, false);
 }
 
 void QtStandardMaterialEditorWindow::install_preview_widget(QWidget *widget) {
@@ -455,6 +904,8 @@ void QtStandardMaterialEditorWindow::install_preview_widget(QWidget *widget) {
     return;
   }
   preview_widget_->setParent(preview_surface_host_);
+  preview_widget_->setToolTip(labels_.preview_navigation);
+  preview_widget_->setAccessibleDescription(labels_.preview_navigation);
   preview_surface_layout_->addWidget(preview_widget_, 1);
   preview_placeholder_->hide();
   preview_widget_->show();
@@ -465,6 +916,10 @@ void QtStandardMaterialEditorWindow::closeEvent(QCloseEvent *event) {
     event->ignore();
     return;
   }
+  if (texture_inspector_window_ != nullptr) {
+    texture_inspector_window_->hide();
+  }
+  inspected_texture_slot_.reset();
   QMainWindow::closeEvent(event);
 }
 
@@ -475,7 +930,6 @@ void QtStandardMaterialEditorWindow::set_preview_mesh(
   const std::size_t index = mesh_index(mesh);
   if (index < preview_mesh_actions_.size() &&
       preview_mesh_actions_[index] != nullptr) {
-    const QSignalBlocker blocker(preview_mesh_actions_[index]);
     preview_mesh_actions_[index]->setChecked(true);
   }
   if (notify && changed && presentation_state_changed_) {
@@ -496,35 +950,179 @@ void QtStandardMaterialEditorWindow::set_preview_shading(
   }
 }
 
+void QtStandardMaterialEditorWindow::set_preview_environment(
+    QString environment_id, bool notify) {
+  const auto found = std::ranges::find_if(
+      preview_environments_, [&environment_id](const auto &environment) {
+        return environment.stable_id == environment_id;
+      });
+  if (!preview_environments_.empty() && found == preview_environments_.end()) {
+    return;
+  }
+  const bool changed = preview_environment_ != environment_id;
+  preview_environment_ = std::move(environment_id);
+  for (QAction *action : environment_actions_) {
+    if (action != nullptr) {
+      action->setChecked(action->data().toString() == preview_environment_);
+    }
+  }
+  if (notify && changed && presentation_state_changed_) {
+    presentation_state_changed_();
+  }
+}
+
+void QtStandardMaterialEditorWindow::set_preview_environment_background(
+    bool visible, bool notify) {
+  const bool changed =
+      preview_environment_background_visible_ != visible;
+  preview_environment_background_visible_ = visible;
+  if (show_environment_background_action_ != nullptr) {
+    const QSignalBlocker blocker(show_environment_background_action_);
+    show_environment_background_action_->setChecked(visible);
+  }
+  if (notify && changed && presentation_state_changed_) {
+    presentation_state_changed_();
+  }
+}
+
+void QtStandardMaterialEditorWindow::rebuild_environment_menu() {
+  if (environment_menu_ == nullptr) {
+    return;
+  }
+  environment_menu_->clear();
+  if (environment_action_group_ != nullptr) {
+    delete environment_action_group_;
+  }
+  environment_action_group_ = new QActionGroup(environment_menu_);
+  environment_action_group_->setExclusive(true);
+  environment_actions_.clear();
+  environment_actions_.reserve(preview_environments_.size());
+  for (const QtStandardMaterialPreviewEnvironment &environment :
+       preview_environments_) {
+    QAction *action = environment_menu_->addAction(environment.display_name);
+    action->setObjectName(
+        QStringLiteral("standardMaterialEditor.environment.%1")
+            .arg(environment.stable_id));
+    action->setData(environment.stable_id);
+    action->setCheckable(true);
+    action->setChecked(environment.stable_id == preview_environment_);
+    environment_action_group_->addAction(action);
+    environment_actions_.push_back(action);
+    QObject::connect(action, &QAction::triggered, this,
+                     [this, stable_id = environment.stable_id]() {
+                       set_preview_environment(stable_id, true);
+                     });
+  }
+  if (!preview_environments_.empty()) {
+    environment_menu_->addSeparator();
+  }
+  show_environment_background_action_ = environment_menu_->addAction(
+      labels_.show_environment_background);
+  show_environment_background_action_->setObjectName(
+      QStringLiteral("standardMaterialEditor.environment.showBackground"));
+  show_environment_background_action_->setCheckable(true);
+  show_environment_background_action_->setChecked(
+      preview_environment_background_visible_);
+  QObject::connect(
+      show_environment_background_action_, &QAction::toggled, this,
+      [this](bool visible) {
+        set_preview_environment_background(visible, true);
+      });
+}
+
 void QtStandardMaterialEditorWindow::refresh_document_controls() {
   refreshing_ = true;
   properties_group_->setEnabled(has_document_);
+  texture_transform_group_->setEnabled(has_document_);
   save_action_->setEnabled(has_document_);
   save_as_action_->setEnabled(has_document_);
 
   const QSignalBlocker name_blocker(name_edit_);
   const QSignalBlocker roughness_blocker(roughness_spin_);
+  const QSignalBlocker roughness_slider_blocker(roughness_slider_);
   const QSignalBlocker metallic_blocker(metallic_spin_);
+  const QSignalBlocker metallic_slider_blocker(metallic_slider_);
   const QSignalBlocker normal_strength_blocker(normal_strength_spin_);
+  const QSignalBlocker normal_strength_slider_blocker(normal_strength_slider_);
   const QSignalBlocker convention_blocker(direct_x_normal_);
   name_edit_->setText(has_document_ ? document_.name : QString());
   albedo_button_->set_swatch_color(has_document_ ? document_.albedo
                                                  : QColor(Qt::white));
   roughness_spin_->setValue(has_document_ ? document_.roughness : 1.0);
+  roughness_slider_->setValue(static_cast<int>(std::lround(
+      (has_document_ ? document_.roughness : 1.0) * kScalarSliderScale)));
   metallic_spin_->setValue(has_document_ ? document_.metallic : 0.0);
+  metallic_slider_->setValue(static_cast<int>(std::lround(
+      (has_document_ ? document_.metallic : 0.0) * kScalarSliderScale)));
   normal_strength_spin_->setValue(has_document_ ? document_.normal_strength
                                                 : 1.0);
+  normal_strength_slider_->setValue(static_cast<int>(std::lround(
+      (has_document_ ? document_.normal_strength : 1.0) * kScalarSliderScale)));
   direct_x_normal_->setChecked(has_document_ && document_.direct_x_normal);
   for (std::size_t index = 0; index < kTextureSlotCount; ++index) {
     TextureControls &controls = texture_controls_[index];
     const QtStandardMaterialTexturePresentation presentation =
         has_document_ ? document_.textures[index]
                       : QtStandardMaterialTexturePresentation{};
-    controls.path->setText(presentation.project_relative_path);
-    controls.path->setToolTip(presentation.diagnostic);
+    static_cast<ElidedPathLabel *>(controls.path)
+        ->set_full_text(presentation.project_relative_path, labels_.no_texture);
+    QString path_tooltip = presentation.project_relative_path;
+    if (!presentation.diagnostic.isEmpty()) {
+      if (!path_tooltip.isEmpty()) {
+        path_tooltip += QStringLiteral("\n");
+      }
+      path_tooltip += presentation.diagnostic;
+    }
+    controls.path->setToolTip(path_tooltip);
     controls.path->setAccessibleDescription(presentation.diagnostic);
+    const bool has_preview_image = !presentation.preview_image.isNull();
+    const bool preview_icon_changed =
+        !controls.preview_icon_initialized ||
+        controls.preview_icon_document_id != document_.stable_id ||
+        controls.preview_icon_pixel_size != presentation.pixel_size ||
+        controls.preview_icon_content_revision !=
+            presentation.content_revision ||
+        controls.preview_icon_has_image != has_preview_image;
+    if (preview_icon_changed) {
+      controls.preview->setIcon(
+          has_preview_image
+              ? QIcon(QPixmap::fromImage(presentation.preview_image.scaled(
+                    kTexturePreviewIconExtent, kTexturePreviewIconExtent,
+                    Qt::KeepAspectRatio, Qt::SmoothTransformation)))
+              : style()->standardIcon(QStyle::SP_FileIcon));
+      controls.preview_icon_document_id = document_.stable_id;
+      controls.preview_icon_pixel_size = presentation.pixel_size;
+      controls.preview_icon_content_revision = presentation.content_revision;
+      controls.preview_icon_has_image = has_preview_image;
+      controls.preview_icon_initialized = true;
+    }
+    controls.preview->setEnabled(has_document_ &&
+                                 !presentation.preview_image.isNull());
+    QString preview_tooltip = labels_.inspect_texture;
+    if (!presentation.project_relative_path.isEmpty()) {
+      preview_tooltip +=
+          QStringLiteral("\n") + presentation.project_relative_path;
+    }
+    controls.preview->setToolTip(preview_tooltip);
     controls.clear->setEnabled(has_document_ &&
                                !presentation.project_relative_path.isEmpty());
+    controls.browse->setEnabled(has_document_);
+  }
+
+  const QtStandardMaterialTextureTransform transform =
+      has_document_ ? document_.texture_transform
+                    : QtStandardMaterialTextureTransform{};
+  const std::array<double, 7> transform_values{
+      transform.center_u,        transform.center_v, transform.scale_u,
+      transform.scale_v,         transform.offset_u, transform.offset_v,
+      transform.rotation_degrees};
+  for (std::size_t index = 0; index < transform_values.size(); ++index) {
+    TextureTransformControls &controls = texture_transform_controls_[index];
+    const QSignalBlocker spin_blocker(controls.spin);
+    const QSignalBlocker slider_blocker(controls.slider);
+    controls.spin->setValue(transform_values[index]);
+    controls.slider->setValue(static_cast<int>(
+        std::lround(transform_values[index] * kScalarSliderScale)));
   }
   refreshing_ = false;
   refresh_title_and_status();
@@ -543,6 +1141,9 @@ void QtStandardMaterialEditorWindow::refresh_labels() {
   if (view_menu != nullptr) {
     view_menu->setTitle(labels_.view_menu);
   }
+  if (environment_menu_ != nullptr) {
+    environment_menu_->setTitle(labels_.environment_menu);
+  }
   if (preview_mesh_menu != nullptr) {
     preview_mesh_menu->setTitle(labels_.preview_mesh_menu);
   }
@@ -552,6 +1153,10 @@ void QtStandardMaterialEditorWindow::refresh_labels() {
   save_as_action_->setText(labels_.save_material_as);
   close_action_->setText(labels_.close_window);
   reset_preview_action_->setText(labels_.reset_preview);
+  if (show_environment_background_action_ != nullptr) {
+    show_environment_background_action_->setText(
+        labels_.show_environment_background);
+  }
   const std::array<QString, kPreviewMeshCount> mesh_labels{
       labels_.sphere, labels_.box, labels_.rounded_box, labels_.cylinder,
       labels_.plane};
@@ -568,11 +1173,15 @@ void QtStandardMaterialEditorWindow::refresh_labels() {
   }
   shading_combo_->setToolTip(labels_.view_menu);
   shading_combo_->setAccessibleName(labels_.view_menu);
+  preview_surface_host_->setToolTip(labels_.preview_navigation);
+  preview_surface_host_->setAccessibleDescription(labels_.preview_navigation);
+  if (preview_widget_ != nullptr) {
+    preview_widget_->setToolTip(labels_.preview_navigation);
+    preview_widget_->setAccessibleDescription(labels_.preview_navigation);
+  }
   preview_placeholder_->setText(labels_.preview_unavailable);
   properties_group_->setTitle(labels_.properties_group);
   name_label_->setText(labels_.name);
-  type_label_->setText(labels_.type);
-  type_edit_->setText(labels_.standard_material);
   albedo_label_->setText(labels_.albedo);
   albedo_button_->setText(labels_.choose_color);
   roughness_label_->setText(labels_.roughness);
@@ -585,10 +1194,26 @@ void QtStandardMaterialEditorWindow::refresh_labels() {
   for (std::size_t index = 0; index < kTextureSlotCount; ++index) {
     TextureControls &controls = texture_controls_[index];
     controls.label->setText(texture_labels[index]);
-    controls.path->setPlaceholderText(labels_.no_texture);
-    controls.browse->setText(labels_.browse_texture);
-    controls.clear->setText(labels_.clear_texture);
+    controls.preview->setAccessibleName(labels_.inspect_texture);
+    controls.browse->setToolTip(labels_.browse_texture);
+    controls.browse->setAccessibleName(labels_.browse_texture);
+    controls.clear->setToolTip(labels_.clear_texture);
+    controls.clear->setAccessibleName(labels_.clear_texture);
   }
+  texture_transform_group_->setTitle(labels_.texture_transform);
+  const std::array<QString, 7> transform_labels{
+      labels_.texture_center + QStringLiteral(" U"),
+      labels_.texture_center + QStringLiteral(" V"),
+      labels_.texture_scale + QStringLiteral(" U"),
+      labels_.texture_scale + QStringLiteral(" V"),
+      labels_.texture_offset + QStringLiteral(" U"),
+      labels_.texture_offset + QStringLiteral(" V"),
+      labels_.texture_rotation};
+  for (std::size_t index = 0; index < transform_labels.size(); ++index) {
+    texture_transform_controls_[index].label->setText(transform_labels[index]);
+  }
+  refresh_document_controls();
+  refresh_texture_inspector();
   refresh_title_and_status();
 }
 
@@ -643,6 +1268,43 @@ void QtStandardMaterialEditorWindow::emit_texture_action(
   if (has_document_ && texture_action_) {
     texture_action_(slot, action);
   }
+}
+
+void QtStandardMaterialEditorWindow::show_texture_inspector(
+    QtStandardMaterialTextureSlot slot) {
+  if (!has_document_) {
+    return;
+  }
+  const std::size_t index = texture_index(slot);
+  if (index >= document_.textures.size() ||
+      document_.textures[index].preview_image.isNull()) {
+    return;
+  }
+  if (texture_inspector_window_ == nullptr) {
+    texture_inspector_window_ = new TextureInspectorWindow(this);
+  }
+  inspected_texture_slot_ = slot;
+  static_cast<TextureInspectorWindow *>(texture_inspector_window_)
+      ->present(document_.textures[index], labels_.texture_inspector);
+  texture_inspector_window_->show();
+  texture_inspector_window_->raise();
+  texture_inspector_window_->activateWindow();
+}
+
+void QtStandardMaterialEditorWindow::refresh_texture_inspector() {
+  if (texture_inspector_window_ == nullptr ||
+      !inspected_texture_slot_.has_value()) {
+    return;
+  }
+  const std::size_t index = texture_index(*inspected_texture_slot_);
+  if (!has_document_ || index >= document_.textures.size() ||
+      document_.textures[index].preview_image.isNull()) {
+    texture_inspector_window_->hide();
+    inspected_texture_slot_.reset();
+    return;
+  }
+  static_cast<TextureInspectorWindow *>(texture_inspector_window_)
+      ->present(document_.textures[index], labels_.texture_inspector);
 }
 
 } // namespace quader

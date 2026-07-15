@@ -241,6 +241,7 @@ QtMaterialBrowserWindow::QtMaterialBrowserWindow(QWidget *parent)
     : QWidget(parent, Qt::Tool) {
   setObjectName(QStringLiteral("materialBrowser.window"));
   setAttribute(Qt::WA_DeleteOnClose, false);
+  setWindowFlag(Qt::WindowMaximizeButtonHint, false);
   resize(760, 520);
 
   auto *root_layout = new QVBoxLayout(this);

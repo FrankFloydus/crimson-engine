@@ -637,6 +637,13 @@ TEST(RenderSceneSnapshotTests,
                   .base_color = {0.25f, 0.5f, 0.75f},
                   .roughness = 0.35f,
                   .metallic = 0.65f,
+                  .texture_transform =
+                      RenderStandardMaterialTextureTransformSnapshot{
+                          .center = {0.25f, 0.75f},
+                          .scale = {2.0f, 0.5f},
+                          .offset = {-0.1f, 0.2f},
+                          .rotation_degrees = 45.0f,
+                      },
                   .textures = {RenderMaterialTextureEvaluationSnapshot{
                       .project_texture_id = texture_id,
                       .identity_revision = 27u,
@@ -667,6 +674,17 @@ TEST(RenderSceneSnapshotTests,
   EXPECT_FLOAT_EQ(binding.primary_material.document.base_color.z, 0.75f);
   EXPECT_FLOAT_EQ(binding.primary_material.document.roughness, 0.35f);
   EXPECT_FLOAT_EQ(binding.primary_material.document.metallic, 0.65f);
+  EXPECT_FLOAT_EQ(binding.primary_material.texture_transform.center.x,
+                  0.25f);
+  EXPECT_FLOAT_EQ(binding.primary_material.texture_transform.center.y,
+                  0.75f);
+  EXPECT_FLOAT_EQ(binding.primary_material.texture_transform.scale.x, 2.0f);
+  EXPECT_FLOAT_EQ(binding.primary_material.texture_transform.scale.y, 0.5f);
+  EXPECT_FLOAT_EQ(binding.primary_material.texture_transform.offset.x,
+                  -0.1f);
+  EXPECT_FLOAT_EQ(binding.primary_material.texture_transform.offset.y, 0.2f);
+  EXPECT_FLOAT_EQ(
+      binding.primary_material.texture_transform.rotation_degrees, 45.0f);
 
   const RenderTextureAssetSnapshot *texture =
       binding.primary_material.texture_for_slot(

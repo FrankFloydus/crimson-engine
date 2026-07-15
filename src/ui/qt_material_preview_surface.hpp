@@ -15,6 +15,7 @@
 
 #include <cstdint>
 #include <functional>
+#include <string_view>
 #include <utility>
 
 class QExposeEvent;
@@ -50,6 +51,8 @@ public:
   }
   bool set_preview_mesh(MaterialPreviewMeshKind mesh);
   bool set_preview_shading(MaterialPreviewShadingMode shading);
+  bool set_preview_environment(std::string_view environment_id);
+  bool set_show_environment_background(bool visible);
   bool reset_preview();
 
   void set_surface_changed_callback(std::function<void()> callback) {
@@ -67,6 +70,14 @@ protected:
   void wheelEvent(QWheelEvent *event) override;
 
 private:
+  /// Selects the semantic preview action captured for one active MMB drag.
+  enum class DragMode : std::uint8_t {
+    None,
+    Tumble,
+    Pan,
+    RotateEnvironment,
+  };
+
   void apply_interaction(const MaterialPreviewInteractionFrame &input);
   void publish_state_change();
   void recreate_swap_chain();
@@ -78,10 +89,10 @@ private:
   MaterialPreviewState preview_state_;
   MaterialPreviewInputRouter input_router_;
   std::function<void()> surface_changed_callback_;
-  QPointF last_tumble_position_;
+  QPointF last_drag_position_;
   bool initialized_ = false;
   bool native_surface_available_ = false;
-  bool tumble_active_ = false;
+  DragMode drag_mode_ = DragMode::None;
   std::uintptr_t swap_chain_native_id_ = 0u;
 };
 

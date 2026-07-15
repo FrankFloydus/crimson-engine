@@ -26,6 +26,19 @@ struct QQuat {
         : x(x_value), y(y_value), z(z_value), w(w_value) {}
 };
 
+inline constexpr QQuat operator*(QQuat left, QQuat right) noexcept {
+  return {
+      left.w * right.x + left.x * right.w + left.y * right.z -
+          left.z * right.y,
+      left.w * right.y - left.x * right.z + left.y * right.w +
+          left.z * right.x,
+      left.w * right.z + left.x * right.y - left.y * right.x +
+          left.z * right.w,
+      left.w * right.w - left.x * right.x - left.y * right.y -
+          left.z * right.z,
+  };
+}
+
 inline QQuat normalize(QQuat value) {
   const float length_squared = value.x * value.x + value.y * value.y +
                                value.z * value.z + value.w * value.w;

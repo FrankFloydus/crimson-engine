@@ -694,6 +694,7 @@ add_library(quader_ui STATIC
     src/ui/qt_main_menu.cpp
     src/ui/qt_material_browser_window.cpp
     src/ui/qt_material_preview_surface.cpp
+    src/ui/qt_standard_material_preview_image_cache.cpp
     src/ui/qt_standard_material_editor_window.cpp
     src/ui/qt_navigation_gizmo.cpp
     src/ui/qt_project_home_page.cpp
@@ -1027,6 +1028,7 @@ if(QUADER_BUILD_TESTS)
         tests/qt_input_adapter_tests.cpp
         tests/qt_material_browser_window_tests.cpp
         tests/qt_material_preview_surface_tests.cpp
+        tests/qt_standard_material_preview_image_cache_tests.cpp
         tests/qt_standard_material_editor_window_tests.cpp
         tests/qt_navigation_gizmo_tests.cpp
         tests/qt_project_workspace_tests.cpp

@@ -7,15 +7,20 @@
 #pragma once
 
 #include <QColor>
+#include <QImage>
 #include <QMainWindow>
+#include <QSize>
 #include <QString>
 
 #include <array>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <optional>
+#include <vector>
 
 class QAction;
+class QActionGroup;
 class QCheckBox;
 class QCloseEvent;
 class QComboBox;
@@ -23,7 +28,10 @@ class QDoubleSpinBox;
 class QGroupBox;
 class QLabel;
 class QLineEdit;
+class QMenu;
 class QPushButton;
+class QSlider;
+class QToolButton;
 class QVBoxLayout;
 class QWidget;
 
@@ -76,13 +84,59 @@ enum class QtStandardMaterialTextureAction : std::uint8_t {
   Clear,
 };
 
+/// Identifies one editable component of the shared texture transform.
+enum class QtStandardMaterialTextureTransformComponent : std::uint8_t {
+  CenterU,
+  CenterV,
+  ScaleU,
+  ScaleV,
+  OffsetU,
+  OffsetV,
+  RotationDegrees,
+};
+
+/// Presentation values for the Standard Material texture-coordinate transform.
+struct QtStandardMaterialTextureTransform final {
+  double center_u = 0.5;
+  double center_v = 0.5;
+  double scale_u = 1.0;
+  double scale_v = 1.0;
+  double offset_u = 0.0;
+  double offset_v = 0.0;
+  double rotation_degrees = 0.0;
+
+  bool operator==(const QtStandardMaterialTextureTransform &) const = default;
+};
+
+/// One localized packaged environment offered by the preview menu.
+struct QtStandardMaterialPreviewEnvironment final {
+  QString stable_id;
+  QString display_name;
+
+  bool operator==(const QtStandardMaterialPreviewEnvironment &) const =
+      default;
+};
+
 /// Presents one saved, staged, or invalid texture dependency in the form.
 struct QtStandardMaterialTexturePresentation final {
   QString project_relative_path;
   QString diagnostic;
+  QImage preview_image;
+  QString format;
+  QString color_space;
+  QSize pixel_size;
+  qint64 encoded_byte_size = 0;
+  std::uint64_t content_revision = 0;
 
-  bool
-  operator==(const QtStandardMaterialTexturePresentation &) const = default;
+  bool operator==(
+      const QtStandardMaterialTexturePresentation &other) const noexcept {
+    return project_relative_path == other.project_relative_path &&
+           diagnostic == other.diagnostic && format == other.format &&
+           color_space == other.color_space && pixel_size == other.pixel_size &&
+           encoded_byte_size == other.encoded_byte_size &&
+           content_revision == other.content_revision &&
+           preview_image.isNull() == other.preview_image.isNull();
+  }
 };
 
 /// Immutable Standard Material draft presentation supplied by editor APIs.
@@ -96,6 +150,7 @@ struct QtStandardMaterialEditorDocument final {
   double normal_strength = 1.0;
   bool direct_x_normal = false;
   std::array<QtStandardMaterialTexturePresentation, 4> textures;
+  QtStandardMaterialTextureTransform texture_transform;
   bool dirty = false;
   QString status_message;
 
@@ -114,6 +169,8 @@ struct QtStandardMaterialEditorLabels final {
   QString view_menu = QStringLiteral("View");
   QString preview_mesh_menu = QStringLiteral("Preview Mesh");
   QString reset_preview = QStringLiteral("Reset Preview");
+  QString environment_menu = QStringLiteral("Environment");
+  QString show_environment_background = QStringLiteral("Show Background");
   QString sphere = QStringLiteral("Sphere");
   QString box = QStringLiteral("Box");
   QString rounded_box = QStringLiteral("Rounded Box");
@@ -124,6 +181,8 @@ struct QtStandardMaterialEditorLabels final {
   QString rendered = QStringLiteral("Rendered");
   QString preview_unavailable =
       QStringLiteral("Material preview is unavailable");
+  QString preview_navigation = QStringLiteral(
+      "MMB Tumble - Shift+MMB Pan - Ctrl+MMB Environment - Wheel Zoom");
   QString properties_group = QStringLiteral("Material");
   QString name = QStringLiteral("Name");
   QString type = QStringLiteral("Type");
@@ -136,8 +195,7 @@ struct QtStandardMaterialEditorLabels final {
   QString metallic_texture = QStringLiteral("Metallic Texture");
   QString normal_strength = QStringLiteral("Normal Strength");
   QString normal_texture = QStringLiteral("Normal Texture");
-  QString direct_x_normal =
-      QStringLiteral("DirectX normal map (invert green channel)");
+  QString direct_x_normal = QStringLiteral("DirectX");
   QString choose_color = QStringLiteral("Choose Color...");
   QString choose_albedo_title = QStringLiteral("Choose Albedo Color");
   QString browse_texture = QStringLiteral("Browse...");
@@ -145,6 +203,13 @@ struct QtStandardMaterialEditorLabels final {
   QString no_texture = QStringLiteral("No texture");
   QString untitled_material = QStringLiteral("Untitled Material");
   QString unsaved = QStringLiteral("Unsaved");
+  QString inspect_texture = QStringLiteral("Inspect texture");
+  QString texture_transform = QStringLiteral("Texture Transform");
+  QString texture_center = QStringLiteral("Center");
+  QString texture_scale = QStringLiteral("Scale");
+  QString texture_offset = QStringLiteral("Offset");
+  QString texture_rotation = QStringLiteral("Rotation");
+  QString texture_inspector = QStringLiteral("Texture Inspector");
 };
 
 /**
@@ -162,6 +227,8 @@ public:
   using NormalConventionEditedCallback = std::function<void(bool)>;
   using TextureActionCallback = std::function<void(
       QtStandardMaterialTextureSlot, QtStandardMaterialTextureAction)>;
+  using TextureTransformEditedCallback =
+      std::function<void(QtStandardMaterialTextureTransformComponent, double)>;
   using PreviewResetCallback = std::function<void()>;
   using PresentationStateChangedCallback = std::function<void()>;
   using CloseRequestHandler = std::function<bool()>;
@@ -186,18 +253,31 @@ public:
   void set_normal_convention_edited_callback(
       NormalConventionEditedCallback callback);
   void set_texture_action_callback(TextureActionCallback callback);
+  void set_texture_transform_edited_callback(
+      TextureTransformEditedCallback callback);
   void set_preview_reset_callback(PreviewResetCallback callback);
   void set_presentation_state_changed_callback(
       PresentationStateChangedCallback callback);
   void set_close_request_handler(CloseRequestHandler handler);
 
-  void restore_presentation_state(QtStandardMaterialPreviewMesh mesh,
-                                  QtStandardMaterialPreviewShading shading);
+  void set_preview_environments(
+      std::vector<QtStandardMaterialPreviewEnvironment> environments);
+  void restore_presentation_state(
+      QtStandardMaterialPreviewMesh mesh,
+      QtStandardMaterialPreviewShading shading,
+      QString environment_id = QStringLiteral("lightroom_14b"),
+      bool show_environment_background = false);
   [[nodiscard]] QtStandardMaterialPreviewMesh preview_mesh() const {
     return preview_mesh_;
   }
   [[nodiscard]] QtStandardMaterialPreviewShading preview_shading() const {
     return preview_shading_;
+  }
+  [[nodiscard]] const QString &preview_environment() const {
+    return preview_environment_;
+  }
+  [[nodiscard]] bool preview_environment_background_visible() const {
+    return preview_environment_background_visible_;
   }
 
   /// Transfers ownership of one native-surface container or placeholder.
@@ -216,14 +296,30 @@ private:
   /// Groups the stock Qt controls belonging to one texture slot row.
   struct TextureControls final {
     QLabel *label = nullptr;
-    QLineEdit *path = nullptr;
-    QPushButton *browse = nullptr;
-    QPushButton *clear = nullptr;
+    QToolButton *preview = nullptr;
+    QLabel *path = nullptr;
+    QToolButton *browse = nullptr;
+    QToolButton *clear = nullptr;
+    QString preview_icon_document_id;
+    QSize preview_icon_pixel_size;
+    std::uint64_t preview_icon_content_revision = 0u;
+    bool preview_icon_has_image = false;
+    bool preview_icon_initialized = false;
+  };
+
+  /// Groups the numeric and sliding controls for one transform component.
+  struct TextureTransformControls final {
+    QLabel *label = nullptr;
+    QDoubleSpinBox *spin = nullptr;
+    QSlider *slider = nullptr;
   };
 
   void set_preview_mesh(QtStandardMaterialPreviewMesh mesh, bool notify);
   void set_preview_shading(QtStandardMaterialPreviewShading shading,
                            bool notify);
+  void set_preview_environment(QString environment_id, bool notify);
+  void set_preview_environment_background(bool visible, bool notify);
+  void rebuild_environment_menu();
   void refresh_document_controls();
   void refresh_labels();
   void refresh_title_and_status();
@@ -231,6 +327,8 @@ private:
   void emit_file_action(QtStandardMaterialEditorFileAction action);
   void emit_texture_action(QtStandardMaterialTextureSlot slot,
                            QtStandardMaterialTextureAction action);
+  void show_texture_inspector(QtStandardMaterialTextureSlot slot);
+  void refresh_texture_inspector();
 
   QtStandardMaterialEditorLabels labels_;
   QtStandardMaterialEditorDocument document_;
@@ -240,6 +338,9 @@ private:
       QtStandardMaterialPreviewMesh::Sphere;
   QtStandardMaterialPreviewShading preview_shading_ =
       QtStandardMaterialPreviewShading::Rendered;
+  QString preview_environment_ = QStringLiteral("lightroom_14b");
+  bool preview_environment_background_visible_ = false;
+  std::vector<QtStandardMaterialPreviewEnvironment> preview_environments_;
 
   QAction *new_action_ = nullptr;
   QAction *open_action_ = nullptr;
@@ -247,6 +348,10 @@ private:
   QAction *save_as_action_ = nullptr;
   QAction *close_action_ = nullptr;
   QAction *reset_preview_action_ = nullptr;
+  QMenu *environment_menu_ = nullptr;
+  QActionGroup *environment_action_group_ = nullptr;
+  QAction *show_environment_background_action_ = nullptr;
+  std::vector<QAction *> environment_actions_;
   std::array<QAction *, kPreviewMeshCount> preview_mesh_actions_{};
   QComboBox *shading_combo_ = nullptr;
   QWidget *preview_surface_host_ = nullptr;
@@ -256,18 +361,23 @@ private:
   QGroupBox *properties_group_ = nullptr;
   QLabel *name_label_ = nullptr;
   QLineEdit *name_edit_ = nullptr;
-  QLabel *type_label_ = nullptr;
-  QLineEdit *type_edit_ = nullptr;
   QLabel *albedo_label_ = nullptr;
   QtColorSwatchButton *albedo_button_ = nullptr;
   QLabel *roughness_label_ = nullptr;
   QDoubleSpinBox *roughness_spin_ = nullptr;
+  QSlider *roughness_slider_ = nullptr;
   QLabel *metallic_label_ = nullptr;
   QDoubleSpinBox *metallic_spin_ = nullptr;
+  QSlider *metallic_slider_ = nullptr;
   QLabel *normal_strength_label_ = nullptr;
   QDoubleSpinBox *normal_strength_spin_ = nullptr;
+  QSlider *normal_strength_slider_ = nullptr;
   QCheckBox *direct_x_normal_ = nullptr;
   std::array<TextureControls, kTextureSlotCount> texture_controls_{};
+  QGroupBox *texture_transform_group_ = nullptr;
+  std::array<TextureTransformControls, 7> texture_transform_controls_{};
+  QMainWindow *texture_inspector_window_ = nullptr;
+  std::optional<QtStandardMaterialTextureSlot> inspected_texture_slot_;
 
   FileActionCallback file_action_;
   NameEditedCallback name_edited_;
@@ -275,6 +385,7 @@ private:
   ScalarEditedCallback scalar_edited_;
   NormalConventionEditedCallback normal_convention_edited_;
   TextureActionCallback texture_action_;
+  TextureTransformEditedCallback texture_transform_edited_;
   PreviewResetCallback preview_reset_;
   PresentationStateChangedCallback presentation_state_changed_;
   CloseRequestHandler close_request_handler_;

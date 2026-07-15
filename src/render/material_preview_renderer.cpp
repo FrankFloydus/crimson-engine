@@ -10,6 +10,7 @@
 #include "math/glm_bridge.hpp"
 #include "render/filament_buffer_descriptor_factory.hpp"
 #include "render/filament_environment_library.hpp"
+#include "render/material_binding_service.hpp"
 #include "render/material_preview_mesh_library.hpp"
 #include "render/png_texture_loader.hpp"
 #include "render/render_layers.hpp"
@@ -47,6 +48,7 @@
 #include <limits>
 #include <set>
 #include <span>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -111,10 +113,21 @@ filament::math::float4 packed_tangent_frame(
   return {packed.x, packed.y, packed.z, packed.w};
 }
 
-filament::math::mat4f filament_transform(const QQuat &rotation) {
-  const glm::mat4 source = to_glm(compose_transform(QTransform{
-      .rotation = rotation,
-  }));
+glm::mat4 environment_rig_rotation(float rotation_radians) {
+  return glm::mat4_cast(to_glm(quat_from_euler_radians(
+      {0.0f, -rotation_radians, 0.0f})));
+}
+
+filament::math::mat4f filament_transform(
+    const QQuat &rotation, float environment_rotation_radians) {
+  // Filament's stock Skybox has no rotation API. Counter-rotating the camera
+  // and test mesh preserves the inspected mesh pose while rotating both the
+  // visible skybox and the IBL/key-light frame relative to the mesh.
+  const glm::mat4 source =
+      environment_rig_rotation(environment_rotation_radians) *
+      to_glm(compose_transform(QTransform{
+          .rotation = rotation,
+      }));
   filament::math::mat4f result;
   for (int column = 0; column < 4; ++column) {
     for (int row = 0; row < 4; ++row) {
@@ -252,9 +265,7 @@ struct MaterialPreviewRenderer::Impl final {
     camera->setExposure(16.0f, 1.0f / 125.0f, 100.0f);
 
     environment.initialize(*engine, *scene, resource_root);
-    SceneEnvironmentSettings environment_settings;
-    environment_settings.show_background = false;
-    environment.apply(environment_settings);
+    apply_environment();
     create_key_light();
 
     for (MaterialPreviewMeshKind kind :
@@ -484,8 +495,15 @@ struct MaterialPreviewRenderer::Impl final {
     if (camera == nullptr) {
       return;
     }
-    camera->lookAt({0.0f, 0.0f, state.camera_distance()},
-                   {0.0f, 0.0f, 0.0f}, {0.0f, 1.0f, 0.0f});
+    const QVec2 pan = state.pan_offset();
+    const glm::mat4 rig = environment_rig_rotation(
+        state.environment_rotation_radians());
+    const glm::vec3 target = glm::vec3(rig * glm::vec4{
+        pan.x, pan.y, 0.0f, 1.0f});
+    const glm::vec3 eye = target + glm::vec3(rig * glm::vec4{
+        0.0f, 0.0f, state.camera_distance(), 0.0f});
+    camera->lookAt({eye.x, eye.y, eye.z},
+                   {target.x, target.y, target.z}, {0.0f, 1.0f, 0.0f});
     const double aspect = static_cast<double>(width) /
                           static_cast<double>(std::max(1u, height));
     camera->setProjection(kPreviewFovDegrees, aspect, kPreviewNearPlane,
@@ -497,8 +515,10 @@ struct MaterialPreviewRenderer::Impl final {
       return;
     }
     update_camera();
+    apply_environment();
     const filament::math::mat4f transform =
-        filament_transform(state.object_rotation());
+        filament_transform(state.object_rotation(),
+                           state.environment_rotation_radians());
     for (PreviewGpuMesh &mesh : meshes) {
       set_transform(mesh.fill_entity, transform);
       set_transform(mesh.wire_entity, transform);
@@ -524,6 +544,16 @@ struct MaterialPreviewRenderer::Impl final {
                              MaterialPreviewShadingMode::Wireframe
                          ? active.wire_entity
                          : active.fill_entity);
+  }
+
+  void apply_environment() {
+    SceneEnvironmentSettings settings;
+    settings.environment_id = std::string(state.environment_id());
+    settings.show_background = state.show_environment_background();
+    // The camera/test-mesh counter-rig supplies the effective IBL rotation and
+    // is also able to rotate Filament's otherwise fixed stock skybox.
+    settings.rotation_y = 0.0f;
+    environment.apply(settings);
   }
 
   void set_transform(utils::Entity entity,
@@ -570,11 +600,15 @@ struct MaterialPreviewRenderer::Impl final {
 
     shaded_instance->setParameter("baseColorTexture", texture(0u), sampler);
     shaded_instance->setParameter("baseColorFactor", base_factor);
+    bind_standard_material_texture_transform(
+        *shaded_instance, standard.texture_transform);
     rendered_instance->setParameter("baseColorTexture", texture(0u), sampler);
     rendered_instance->setParameter("roughnessTexture", texture(1u), sampler);
     rendered_instance->setParameter("metallicTexture", texture(2u), sampler);
     rendered_instance->setParameter("normalTexture", texture(3u), sampler);
     rendered_instance->setParameter("baseColorFactor", base_factor);
+    bind_standard_material_texture_transform(
+        *rendered_instance, standard.texture_transform);
     rendered_instance->setParameter(
         "roughnessFactor",
         std::isfinite(standard.roughness)
@@ -588,7 +622,7 @@ struct MaterialPreviewRenderer::Impl final {
     rendered_instance->setParameter(
         "normalStrength",
         std::isfinite(standard.normal_strength)
-            ? std::clamp(standard.normal_strength, 0.0f, 2.0f)
+            ? std::clamp(standard.normal_strength, -16.0f, 16.0f)
             : 1.0f);
     rendered_instance->setParameter("normalYSign",
                                     standard.directx_normal ? -1.0f : 1.0f);
@@ -597,6 +631,8 @@ struct MaterialPreviewRenderer::Impl final {
     wire_instance->setParameter(
         "baseColorFactor",
         filament::math::float4{0.82f, 0.82f, 0.82f, 1.0f});
+    bind_standard_material_texture_transform(
+        *wire_instance, RenderStandardMaterialTextureTransformSnapshot{});
   }
 
   void update_textures() {

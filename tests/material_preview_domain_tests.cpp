@@ -4,6 +4,7 @@
 // No permission is granted to use, copy, modify, distribute, or sublicense this
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
+#include "math/glm_bridge.hpp"
 #include "render/material_preview_mesh_library.hpp"
 #include "render/material_preview_renderer.hpp"
 #include "viewport/material_preview_state.hpp"
@@ -180,6 +181,11 @@ TEST(MaterialPreviewDomainTests,
   EXPECT_FLOAT_EQ(state.pitch_radians(), 0.0f);
   EXPECT_FLOAT_EQ(state.camera_distance(),
                   MaterialPreviewState::kDefaultCameraDistance);
+  EXPECT_FLOAT_EQ(state.pan_offset().x, 0.0f);
+  EXPECT_FLOAT_EQ(state.pan_offset().y, 0.0f);
+  EXPECT_EQ(state.environment_id(), "lightroom_14b");
+  EXPECT_FALSE(state.show_environment_background());
+  EXPECT_FLOAT_EQ(state.environment_rotation_radians(), 0.0f);
   EXPECT_EQ(state.revision(), 1u);
 }
 
@@ -224,6 +230,66 @@ TEST(MaterialPreviewDomainTests,
   EXPECT_FLOAT_EQ(state.yaw_radians(), yaw_before_invalid_input);
 }
 
+TEST(MaterialPreviewDomainTests,
+     UpwardTumbleDragMovesCameraFacingSurfaceUpward) {
+  MaterialPreviewState state;
+  const MaterialPreviewInputRouter router;
+
+  const MaterialPreviewInteractionResult result = router.route(
+      state, MaterialPreviewInteractionFrame{
+                 .tumble_delta_pixels = {0.0f, -20.0f},
+                 .tumble_active = true,
+             });
+
+  EXPECT_TRUE(result.tumbled);
+  EXPECT_NEAR(state.pitch_radians(),
+              -20.0f * MaterialPreviewState::kTumbleRadiansPerPixel,
+              0.00001f);
+  const QVec3 transformed_front = transform_vector(
+      compose_transform(QTransform{.rotation = state.object_rotation()}),
+      {0.0f, 0.0f, 1.0f});
+  EXPECT_GT(transformed_front.y, 0.0f)
+      << "the renderer-facing mesh surface must follow an upward MMB drag";
+}
+
+TEST(MaterialPreviewDomainTests,
+     HorizontalTumblePreservesDisplayedUpAxisAfterPitch) {
+  MaterialPreviewState state;
+  const MaterialPreviewInputRouter router;
+  (void)router.route(state, MaterialPreviewInteractionFrame{
+                                .tumble_delta_pixels = {0.0f, -30.0f},
+                                .tumble_active = true,
+                            });
+  const QVec3 up_before = transform_vector(
+      compose_transform(QTransform{.rotation = state.object_rotation()}),
+      {0.0f, 1.0f, 0.0f});
+  const QVec3 front_before = transform_vector(
+      compose_transform(QTransform{.rotation = state.object_rotation()}),
+      {0.0f, 0.0f, 1.0f});
+  const float pitch_before = state.pitch_radians();
+
+  const MaterialPreviewInteractionResult result = router.route(
+      state, MaterialPreviewInteractionFrame{
+                 .tumble_delta_pixels = {40.0f, 0.0f},
+                 .tumble_active = true,
+             });
+  const QVec3 up_after = transform_vector(
+      compose_transform(QTransform{.rotation = state.object_rotation()}),
+      {0.0f, 1.0f, 0.0f});
+  const QVec3 front_after = transform_vector(
+      compose_transform(QTransform{.rotation = state.object_rotation()}),
+      {0.0f, 0.0f, 1.0f});
+
+  EXPECT_TRUE(result.tumbled);
+  EXPECT_FLOAT_EQ(state.pitch_radians(), pitch_before);
+  EXPECT_NEAR(up_after.x, up_before.x, 0.00001f);
+  EXPECT_NEAR(up_after.y, up_before.y, 0.00001f);
+  EXPECT_NEAR(up_after.z, up_before.z, 0.00001f);
+  EXPECT_NEAR(up_after.x, 0.0f, 0.00001f);
+  EXPECT_NE(front_after.x, front_before.x);
+  EXPECT_NEAR(dot(up_after, front_after), 0.0f, 0.00001f);
+}
+
 TEST(MaterialPreviewDomainTests, RouterZoomsWithinFiniteDistanceClamps) {
   MaterialPreviewState state;
   const MaterialPreviewInputRouter router;
@@ -258,6 +324,90 @@ TEST(MaterialPreviewDomainTests, RouterZoomsWithinFiniteDistanceClamps) {
 }
 
 TEST(MaterialPreviewDomainTests,
+     RouterSeparatesMeshTumblePanAndEnvironmentRotation) {
+  MaterialPreviewState state;
+  const MaterialPreviewInputRouter router;
+
+  MaterialPreviewInteractionResult result = router.route(
+      state, MaterialPreviewInteractionFrame{
+                 .tumble_delta_pixels = {20.0f, -10.0f},
+                 .pan_delta_pixels = {40.0f, 25.0f},
+                 .environment_rotation_delta_pixels = 30.0f,
+                 .tumble_active = true,
+             });
+  EXPECT_TRUE(result.tumbled);
+  EXPECT_FALSE(result.panned);
+  EXPECT_FALSE(result.environment_rotated);
+  EXPECT_FLOAT_EQ(state.pan_offset().x, 0.0f);
+  EXPECT_FLOAT_EQ(state.pan_offset().y, 0.0f);
+  EXPECT_FLOAT_EQ(state.environment_rotation_radians(), 0.0f);
+
+  const float yaw_after_tumble = state.yaw_radians();
+  const float pitch_after_tumble = state.pitch_radians();
+  result = router.route(
+      state, MaterialPreviewInteractionFrame{
+                 .pan_delta_pixels = {40.0f, 25.0f},
+                 .pan_active = true,
+             });
+  EXPECT_FALSE(result.tumbled);
+  EXPECT_TRUE(result.panned);
+  EXPECT_FALSE(result.environment_rotated);
+  EXPECT_FLOAT_EQ(state.yaw_radians(), yaw_after_tumble);
+  EXPECT_FLOAT_EQ(state.pitch_radians(), pitch_after_tumble);
+  EXPECT_LT(state.pan_offset().x, 0.0f);
+  EXPECT_GT(state.pan_offset().y, 0.0f);
+
+  const QVec2 pan_after_pan = state.pan_offset();
+  result = router.route(
+      state, MaterialPreviewInteractionFrame{
+                 .environment_rotation_delta_pixels = 30.0f,
+                 .environment_rotation_active = true,
+             });
+  EXPECT_FALSE(result.tumbled);
+  EXPECT_FALSE(result.panned);
+  EXPECT_TRUE(result.environment_rotated);
+  EXPECT_FLOAT_EQ(state.yaw_radians(), yaw_after_tumble);
+  EXPECT_FLOAT_EQ(state.pitch_radians(), pitch_after_tumble);
+  EXPECT_FLOAT_EQ(state.pan_offset().x, pan_after_pan.x);
+  EXPECT_FLOAT_EQ(state.pan_offset().y, pan_after_pan.y);
+  EXPECT_NEAR(state.environment_rotation_radians(),
+              30.0f *
+                  MaterialPreviewState::kEnvironmentRadiansPerPixel,
+              0.00001f);
+
+  const MaterialPreviewInteractionResult invalid = router.route(
+      state,
+      MaterialPreviewInteractionFrame{
+          .pan_delta_pixels = {
+              std::numeric_limits<float>::infinity(), 1.0f},
+          .environment_rotation_delta_pixels =
+              std::numeric_limits<float>::quiet_NaN(),
+          .pan_active = true,
+          .environment_rotation_active = true,
+      });
+  EXPECT_FALSE(invalid.changed);
+}
+
+TEST(MaterialPreviewDomainTests,
+     EnvironmentSelectionAndBackgroundUsePackagedCatalog) {
+  MaterialPreviewState state;
+  const std::uint64_t initial_revision = state.revision();
+
+  EXPECT_TRUE(state.set_environment("pillars_2k"));
+  EXPECT_EQ(state.environment_id(), "pillars_2k");
+  EXPECT_EQ(state.revision(), initial_revision + 1u);
+  EXPECT_FALSE(state.set_environment("pillars_2k"));
+  EXPECT_FALSE(state.set_environment("not_packaged"));
+  EXPECT_EQ(state.environment_id(), "pillars_2k");
+
+  EXPECT_TRUE(state.set_show_environment_background(true));
+  EXPECT_TRUE(state.show_environment_background());
+  EXPECT_FALSE(state.set_show_environment_background(true));
+  EXPECT_TRUE(state.set_show_environment_background(false));
+  EXPECT_FALSE(state.show_environment_background());
+}
+
+TEST(MaterialPreviewDomainTests,
      MeshChangesPreserveAndExplicitResetRestoresTheInspectionView) {
   MaterialPreviewState state;
   const MaterialPreviewInputRouter router;
@@ -280,8 +430,12 @@ TEST(MaterialPreviewDomainTests,
 
   (void)router.route(state, MaterialPreviewInteractionFrame{
                                 .tumble_delta_pixels = {5.0f, 5.0f},
+                                .pan_delta_pixels = {7.0f, -4.0f},
+                                .environment_rotation_delta_pixels = 9.0f,
                                 .zoom_wheel_steps = -2.0f,
                                 .tumble_active = true,
+                                .pan_active = true,
+                                .environment_rotation_active = true,
                             });
   const MaterialPreviewInteractionResult result = router.route(
       state, MaterialPreviewInteractionFrame{.reset_requested = true});
@@ -289,8 +443,11 @@ TEST(MaterialPreviewDomainTests,
   EXPECT_TRUE(result.reset);
   EXPECT_FLOAT_EQ(state.yaw_radians(), 0.0f);
   EXPECT_FLOAT_EQ(state.pitch_radians(), 0.0f);
+  EXPECT_FLOAT_EQ(state.pan_offset().x, 0.0f);
+  EXPECT_FLOAT_EQ(state.pan_offset().y, 0.0f);
   EXPECT_FLOAT_EQ(state.camera_distance(),
                   MaterialPreviewState::kDefaultCameraDistance);
+  EXPECT_FLOAT_EQ(state.environment_rotation_radians(), 0.0f);
 }
 
 TEST(MaterialPreviewDomainTests, ShadingChangesHaveIndependentRevision) {
@@ -345,6 +502,9 @@ TEST(MaterialPreviewDomainTests,
   second.standard_material()->normal_strength = 1.5f;
   EXPECT_NE(first, second);
   first.standard_material()->normal_strength = 1.5f;
+  second.standard_material()->texture_transform.offset = {0.25f, -0.5f};
+  EXPECT_NE(first, second);
+  first.standard_material()->texture_transform.offset = {0.25f, -0.5f};
   second.standard_material()
       ->textures[static_cast<std::size_t>(
           MaterialPreviewTextureSlot::Normal)]

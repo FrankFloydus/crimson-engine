@@ -182,6 +182,12 @@ TEST(QmatCodecTests, RoundTripsDeterministicallyAndValidatesInput) {
   };
   standard.normal_strength = 1.5f;
   standard.normal_convention = NormalMapConvention::DirectX;
+  standard.texture_transform = {
+      .center = {0.25f, 0.75f},
+      .scale = {2.0f, -3.0f},
+      .offset = {-0.5f, 1.25f},
+      .rotation_degrees = 45.0f,
+  };
   ProjectIoResult<std::string> first = QmatCodec::encode(material);
   ASSERT_TRUE(first.ok()) << first.error().message;
   ProjectIoResult<ProjectMaterialDocument> decoded =
@@ -204,6 +210,10 @@ TEST(QmatCodecTests, RoundTripsDeterministicallyAndValidatesInput) {
                   first.value(), "\"colorSpace\": \"srgb\"",
                   "\"futureTextureField\": 7,\n      \"colorSpace\": \"srgb\""))
                   .ok());
+  EXPECT_FALSE(QmatCodec::decode(replace_once(
+                   first.value(), "\"rotationDegrees\": 45.0",
+                   "\"rotationDegrees\": \"bad\""))
+                   .ok());
 
   std::string unsupported_slot = first.value();
   const std::size_t slot_position =
@@ -255,6 +265,8 @@ TEST(QmatCodecTests, ReadsV1AsStandardAndWritesTypedV2) {
                   1.0f);
   EXPECT_EQ(decoded.value().standard_material()->normal_convention,
             NormalMapConvention::OpenGL);
+  EXPECT_EQ(decoded.value().standard_material()->texture_transform,
+            StandardMaterialTextureTransform{});
   EXPECT_FALSE(
       decoded.value().standard_material()->metallic_texture.has_value());
   EXPECT_FALSE(
@@ -279,6 +291,8 @@ TEST(QmatCodecTests, ReadsV1AsStandardAndWritesTypedV2) {
   EXPECT_NE(upgraded.value().find("\"materialType\": \"standard\""),
             std::string::npos);
   EXPECT_NE(upgraded.value().find("\"normalConvention\": \"opengl\""),
+            std::string::npos);
+  EXPECT_NE(upgraded.value().find("\"textureTransform\""),
             std::string::npos);
 }
 
@@ -335,7 +349,29 @@ TEST(QmatCodecTests, RejectsUnsupportedUnsafeAndUnboundedValues) {
       oversized_path.value().portable_string();
   EXPECT_FALSE(QmatCodec::encode(invalid).ok());
   invalid = material;
-  standard_material(invalid).normal_strength = 2.01f;
+  standard_material(invalid).normal_strength = 16.01f;
+  EXPECT_FALSE(QmatCodec::encode(invalid).ok());
+  invalid = material;
+  standard_material(invalid).normal_strength = -16.0f;
+  EXPECT_TRUE(QmatCodec::encode(invalid).ok());
+  invalid = material;
+  standard_material(invalid).normal_strength = -16.01f;
+  EXPECT_FALSE(QmatCodec::encode(invalid).ok());
+  invalid = material;
+  standard_material(invalid).texture_transform.center[0] = 1.01f;
+  EXPECT_FALSE(QmatCodec::encode(invalid).ok());
+  invalid = material;
+  standard_material(invalid).texture_transform.scale[1] = 16.01f;
+  EXPECT_FALSE(QmatCodec::encode(invalid).ok());
+  invalid = material;
+  standard_material(invalid).texture_transform.offset[0] = -16.01f;
+  EXPECT_FALSE(QmatCodec::encode(invalid).ok());
+  invalid = material;
+  standard_material(invalid).texture_transform.rotation_degrees = 360.01f;
+  EXPECT_FALSE(QmatCodec::encode(invalid).ok());
+  invalid = material;
+  standard_material(invalid).texture_transform.center[0] =
+      std::numeric_limits<float>::quiet_NaN();
   EXPECT_FALSE(QmatCodec::encode(invalid).ok());
   invalid = material;
   standard_material(invalid).normal_convention =
@@ -695,6 +731,9 @@ TEST(ProjectMaterialWorkspaceTests,
             ProjectAssetId::parse(kDefaultProjectAlbedoTextureId));
   EXPECT_FALSE(standard_material(default_qmat.value().material)
                    .roughness_texture.has_value());
+  EXPECT_EQ(standard_material(default_qmat.value().material)
+                .texture_transform,
+            StandardMaterialTextureTransform{});
 }
 
 TEST(ProjectMaterialWorkspaceTests,

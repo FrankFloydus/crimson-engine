@@ -86,6 +86,7 @@ TEST_F(ProjectImageDecoderTests, DecodesRgba8AndHonorsTheEightKBoundary) {
   ASSERT_TRUE(decoded.ok()) << decoded.error().message;
   EXPECT_EQ(decoded.value().width, kMaximumProjectTextureDimension);
   EXPECT_EQ(decoded.value().height, 1u);
+  EXPECT_EQ(decoded.value().detected_format, "png");
   EXPECT_EQ(decoded.value().rgba8.size(),
             static_cast<std::size_t>(kMaximumProjectTextureDimension) * 4u);
 

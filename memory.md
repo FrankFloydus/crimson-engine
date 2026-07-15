@@ -4367,10 +4367,42 @@ Invariant:
   swapchain, and SurfaceCreated/expose/render paths retry swapchain creation. Scene viewports and the
   visible preview submit within one presentation accounting cycle; minimized or unexposed previews
   do not request high-refresh continuous frames.
-- Preview navigation is semantic and isolated: left drag tumbles the test object, wheel zooms within
-  clamps, double-click resets, and scene selection/tools never enter the preview. Changing the edited
-  material resets its inspection pose; changing preview mesh or shading does not rebuild material
-  draft state.
+- Preview navigation is semantic and isolated: MMB tumbles the test object, Shift+MMB pans,
+  Ctrl+MMB rotates the environment rig, the wheel zooms within clamps, and MMB double-click resets
+  pose/pan/zoom/environment rotation. Scene selection/tools never enter the preview. Environment
+  selection and background visibility are retained per-user presentation state, defaulting to the
+  packaged Lightroom environment with its background hidden.
+- Preview tumble rotates the inspected object rather than the camera, so its transform must be the
+  inverse of the main viewport camera orbit: both object yaw and pitch add their screen-space
+  deltas. An upward drag has negative Y, producing negative object X rotation and moving the
+  camera-facing `+Z` surface upward. Tests must assert that transformed surface direction rather
+  than inferring visible motion from the pitch scalar alone.
+- The inspection rig composes object rotation as `qPitch * qYaw`, with screen-X pitch outside the
+  inner vertical-axis yaw. This keeps the sphere's displayed local-up axis invariant during a
+  horizontal-only MMB drag after pitching; the generic Euler helper uses the opposite order and
+  must not be used for this preview pose.
+- One Standard Material texture transform is shared by all four samplers. QMAT v2 stores its
+  optional center/scale/offset/rotation fields additively, older files default to identity, public
+  APIs mutate the complete typed value, and both unlit/lit render paths evaluate
+  `center + rotate((uv - center) * scale) + offset`. Normal strength is a signed `[-16, 16]`
+  control throughout validation, draft editing, preview, and scene rendering.
+- The retained stock-Qt editor uses compact sliders, left-elided paths, stock icon actions, and
+  square decoded texture previews. Clicking a valid preview opens one retained tool inspector with
+  zoom/pan/reset and filename, detected container/RGBA8 interpretation, color space, dimensions,
+  and encoded byte size. The browser, editor, and inspector tool windows omit maximize behavior.
+- Every Standard Material slider is integer-backed at 100 steps per unit with an explicit single
+  step of one, so scalar and texture-transform dragging can emit only exact `0.01` increments.
+- Standard Material File actions are text-only like the main app menu. Every texture Browse button
+  copies one cached Fusion `SP_DialogOpenButton` icon, and every Clear button copies one cached
+  `SP_DialogCancelButton` red-X icon; do not substitute directory or window-close pixmaps.
+- Quader installs `QLocale::c()` before constructing `QApplication`. This is the process-wide
+  numeric-input contract: every current and future Qt decimal control and default `QLocale()`
+  formatter uses `.` regardless of the Windows regional locale, while translated UI catalogs
+  remain independently selectable.
+- `QtStandardMaterialPreviewImageCache` performs the required RGBA8-to-`QImage` ownership copy once
+  per material/edit-session/slot content revision. Scalar and transform refreshes reuse that image
+  and its scaled icon; replacing or clearing the inspected texture updates or hides the retained
+  inspector without resetting its zoom/pan for unrelated material edits.
 - Project image ingestion preserves exact encoded source bytes, converts readable still images
   (including the packaged 16-bit SDR PNG) to immutable RGBA8 for rendering, and rejects animation,
   HDR/EXR or floating-point images, malformed data, inputs over 64 MiB, and dimensions over 8K.
@@ -4389,7 +4421,11 @@ Owners:
 
 Verification:
 
-- Focused Standard Material document, QMAT, image-decoder, preview-domain, Qt editor/surface, render
-  extraction, event, transaction rollback, and architecture/API/UI guardrail suites pass. The native
-  GPU smoke must confirm the rebuilt executable displays preview pixels rather than the retained
-  unavailable placeholder before this entry is considered fully verified.
+- Version `0.0.115` passes the affected UI/guardrail workflow (39 guardrails and 280 focused native
+  tests), the complete six-target CTest preset, the 532-file C++ style gate, and the final native
+  `quader` build. A native launch log confirms Fusion, Vulkan, Filament materials, the scene bridge,
+  and an additional native swapchain initialized without warnings/errors; Windows accessibility
+  also exposes the Home surface and `v0.0.115`. The Windows control helper could not activate the
+  hidden startup window on the active desktop and captured black pixels, so visual confirmation of
+  environment/background output and native title-bar double-click behavior remains a manual smoke
+  item rather than claimed automated proof.

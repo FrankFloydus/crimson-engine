@@ -61,7 +61,7 @@ void QtMaterialPreviewSurface::shutdown() {
   if (!initialized_) {
     return;
   }
-  tumble_active_ = false;
+  drag_mode_ = DragMode::None;
   swap_chain_.reset();
   swap_chain_native_id_ = 0u;
   renderer_.shutdown();
@@ -130,6 +130,23 @@ bool QtMaterialPreviewSurface::set_preview_shading(
   return true;
 }
 
+bool QtMaterialPreviewSurface::set_preview_environment(
+    std::string_view environment_id) {
+  if (!preview_state_.set_environment(environment_id)) {
+    return false;
+  }
+  publish_state_change();
+  return true;
+}
+
+bool QtMaterialPreviewSurface::set_show_environment_background(bool visible) {
+  if (!preview_state_.set_show_environment_background(visible)) {
+    return false;
+  }
+  publish_state_change();
+  return true;
+}
+
 bool QtMaterialPreviewSurface::reset_preview() {
   if (!preview_state_.reset_view()) {
     return false;
@@ -185,10 +202,22 @@ void QtMaterialPreviewSurface::resizeEvent(QResizeEvent *event) {
 }
 
 void QtMaterialPreviewSurface::mousePressEvent(QMouseEvent *event) {
-  if (event != nullptr && event->button() == Qt::LeftButton) {
+  const std::optional<QuaderInputChord> chord =
+      event == nullptr
+          ? std::nullopt
+          : quader_mouse_input_chord_from_qt_event(
+                *event, QuaderInputGesture::Drag);
+  if (chord.has_value() &&
+      chord->mouse_button == QuaderMouseButton::Middle) {
     requestActivate();
-    tumble_active_ = true;
-    last_tumble_position_ = event->position();
+    if (chord->primary) {
+      drag_mode_ = DragMode::RotateEnvironment;
+    } else if (chord->shift) {
+      drag_mode_ = DragMode::Pan;
+    } else {
+      drag_mode_ = DragMode::Tumble;
+    }
+    last_drag_position_ = event->position();
     event->accept();
     return;
   }
@@ -196,8 +225,8 @@ void QtMaterialPreviewSurface::mousePressEvent(QMouseEvent *event) {
 }
 
 void QtMaterialPreviewSurface::mouseReleaseEvent(QMouseEvent *event) {
-  if (event != nullptr && event->button() == Qt::LeftButton) {
-    tumble_active_ = false;
+  if (event != nullptr && event->button() == Qt::MiddleButton) {
+    drag_mode_ = DragMode::None;
     event->accept();
     return;
   }
@@ -205,8 +234,8 @@ void QtMaterialPreviewSurface::mouseReleaseEvent(QMouseEvent *event) {
 }
 
 void QtMaterialPreviewSurface::mouseDoubleClickEvent(QMouseEvent *event) {
-  if (event != nullptr && event->button() == Qt::LeftButton) {
-    tumble_active_ = false;
+  if (event != nullptr && event->button() == Qt::MiddleButton) {
+    drag_mode_ = DragMode::None;
     apply_interaction(
         MaterialPreviewInteractionFrame{.reset_requested = true});
     event->accept();
@@ -216,24 +245,39 @@ void QtMaterialPreviewSurface::mouseDoubleClickEvent(QMouseEvent *event) {
 }
 
 void QtMaterialPreviewSurface::mouseMoveEvent(QMouseEvent *event) {
-  if (event == nullptr || !tumble_active_ ||
-      !event->buttons().testFlag(Qt::LeftButton)) {
-    if (event != nullptr && !event->buttons().testFlag(Qt::LeftButton)) {
-      tumble_active_ = false;
+  if (event == nullptr || drag_mode_ == DragMode::None ||
+      !event->buttons().testFlag(Qt::MiddleButton)) {
+    if (event != nullptr && !event->buttons().testFlag(Qt::MiddleButton)) {
+      drag_mode_ = DragMode::None;
     }
     QWindow::mouseMoveEvent(event);
     return;
   }
-  const QPointF delta = event->position() - last_tumble_position_;
-  last_tumble_position_ = event->position();
+  const QPointF delta = event->position() - last_drag_position_;
+  last_drag_position_ = event->position();
   const float scale = static_cast<float>(devicePixelRatio());
-  apply_interaction(MaterialPreviewInteractionFrame{
-      .tumble_delta_pixels = {
-          static_cast<float>(delta.x()) * scale,
-          static_cast<float>(delta.y()) * scale,
-      },
-      .tumble_active = true,
-  });
+  const QVec2 delta_pixels{
+      static_cast<float>(delta.x()) * scale,
+      static_cast<float>(delta.y()) * scale,
+  };
+  MaterialPreviewInteractionFrame interaction;
+  switch (drag_mode_) {
+  case DragMode::Tumble:
+    interaction.tumble_delta_pixels = delta_pixels;
+    interaction.tumble_active = true;
+    break;
+  case DragMode::Pan:
+    interaction.pan_delta_pixels = delta_pixels;
+    interaction.pan_active = true;
+    break;
+  case DragMode::RotateEnvironment:
+    interaction.environment_rotation_delta_pixels = delta_pixels.x;
+    interaction.environment_rotation_active = true;
+    break;
+  case DragMode::None:
+    break;
+  }
+  apply_interaction(interaction);
   event->accept();
 }
 

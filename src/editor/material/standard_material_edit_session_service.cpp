@@ -333,9 +333,10 @@ StandardMaterialEditSessionService::set_metallic(float value) {
 StandardMaterialEditResult
 StandardMaterialEditSessionService::set_normal_strength(float value) {
   ProjectStandardMaterialDefinition *material = standard();
-  if (material == nullptr || !std::isfinite(value) || value < 0.0f ||
-      value > 2.0f) {
-    return failure("Normal strength must be a finite value from 0 to 2.");
+  if (material == nullptr ||
+      !is_valid_standard_material_normal_strength(value)) {
+    return failure(
+        "Normal strength must be a finite value from -16 to 16.");
   }
   if (material->normal_strength == value) {
     return success(false);
@@ -355,6 +356,21 @@ StandardMaterialEditSessionService::set_normal_convention(
     return success(false);
   }
   material->normal_convention = convention;
+  return mark_changed();
+}
+
+StandardMaterialEditResult
+StandardMaterialEditSessionService::set_texture_transform(
+    StandardMaterialTextureTransform transform) {
+  ProjectStandardMaterialDefinition *material = standard();
+  if (material == nullptr ||
+      !is_valid_standard_material_texture_transform(transform)) {
+    return failure("Texture transform values are outside their finite ranges.");
+  }
+  if (material->texture_transform == transform) {
+    return success(false);
+  }
+  material->texture_transform = transform;
   return mark_changed();
 }
 
@@ -381,6 +397,8 @@ StandardMaterialEditResult StandardMaterialEditSessionService::import_texture(
               value.decoded.rgba8),
           .width = value.decoded.width,
           .height = value.decoded.height,
+          .detected_format = value.decoded.detected_format,
+          .encoded_byte_size = value.encoded_bytes.size(),
       };
   current_->preview_errors[slot_index(slot)].reset();
   current_->pending[slot_index(slot)] = std::move(value);
@@ -473,6 +491,8 @@ StandardMaterialEditSessionService::texture_preview(
           decoded.value().rgba8),
       .width = decoded.value().width,
       .height = decoded.value().height,
+      .detected_format = decoded.value().detected_format,
+      .encoded_byte_size = texture.value().encoded_bytes.size(),
   };
   return ProjectIoResult<
       std::optional<StandardMaterialTexturePreview>>::success(

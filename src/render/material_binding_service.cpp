@@ -12,9 +12,12 @@
 #include "viewport/viewport_settings.hpp"
 
 #include <filament/TextureSampler.h>
+#include <math/vec2.h>
 #include <math/vec4.h>
 
 #include <algorithm>
+#include <cmath>
+#include <numbers>
 
 namespace quader {
 namespace {
@@ -41,6 +44,34 @@ void bind_default_mesh_surface_grid(const MaterialBindingService &binding,
 }
 
 } // namespace
+
+void bind_standard_material_texture_transform(
+    filament::MaterialInstance &material_instance,
+    const RenderStandardMaterialTextureTransformSnapshot &transform) {
+  static const RenderStandardMaterialTextureTransformSnapshot kDefault;
+  const auto finite_pair = [](QVec2 value) {
+    return std::isfinite(value.x) && std::isfinite(value.y);
+  };
+  const QVec2 center = finite_pair(transform.center) ? transform.center
+                                                     : kDefault.center;
+  const QVec2 scale = finite_pair(transform.scale) ? transform.scale
+                                                   : kDefault.scale;
+  const QVec2 offset = finite_pair(transform.offset) ? transform.offset
+                                                     : kDefault.offset;
+  const float rotation_degrees = std::isfinite(transform.rotation_degrees)
+                                     ? transform.rotation_degrees
+                                     : kDefault.rotation_degrees;
+  material_instance.setParameter(
+      "textureTransformCenter",
+      filament::math::float2{center.x, center.y});
+  material_instance.setParameter(
+      "textureTransformScale", filament::math::float2{scale.x, scale.y});
+  material_instance.setParameter(
+      "textureTransformOffset", filament::math::float2{offset.x, offset.y});
+  material_instance.setParameter(
+      "textureTransformRotationRadians",
+      rotation_degrees * std::numbers::pi_v<float> / 180.0f);
+}
 
 std::uint64_t mesh_surface_grid_signature(
     float grid_world_spacing, const ViewportSettings &settings) {
@@ -129,6 +160,8 @@ MaterialBindingService::create_mesh_material_instance(
   material_instance->setParameter(
       "baseColorFactor",
       filament::math::float4{base_color.x, base_color.y, base_color.z, 1.0f});
+  bind_standard_material_texture_transform(
+      *material_instance, RenderStandardMaterialTextureTransformSnapshot{});
   bind_default_mesh_surface_grid(*this, material_instance);
   if (!editor_unlit) {
     material_instance->setParameter(
@@ -192,6 +225,11 @@ MaterialBindingService::create_mesh_material_instance(
   material_instance->setParameter(
       "baseColorFactor",
       filament::math::float4{base_color.x, base_color.y, base_color.z, 1.0f});
+  bind_standard_material_texture_transform(
+      *material_instance,
+      material && material->present
+          ? material->texture_transform
+          : RenderStandardMaterialTextureTransformSnapshot{});
   bind_default_mesh_surface_grid(*this, material_instance);
   if (!editor_unlit) {
     material_instance->setParameter(

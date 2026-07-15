@@ -90,6 +90,19 @@ TEST(MathTypesTests, QuaternionFromEulerMatchesExpectedAxisRotations) {
                      {0.0f, 1.0f, 0.0f});
 }
 
+TEST(MathTypesTests, QuaternionProductAppliesRightRotationBeforeLeftRotation) {
+  constexpr float kHalfPi = 1.57079632679489661923f;
+  const QQuat pitch = quat_from_euler_radians({kHalfPi, 0.0f, 0.0f});
+  const QQuat yaw = quat_from_euler_radians({0.0f, kHalfPi, 0.0f});
+  const QMat4 composed =
+      compose_transform(QTransform{.rotation = normalize(pitch * yaw)});
+
+  expect_q_vec3_near(transform_vector(composed, {0.0f, 1.0f, 0.0f}),
+                     {0.0f, 0.0f, 1.0f});
+  expect_q_vec3_near(transform_vector(composed, {0.0f, 0.0f, 1.0f}),
+                     {1.0f, 0.0f, 0.0f});
+}
+
 TEST(MathTypesTests, GlmBridgePreservesColumnMajorMat4Storage) {
   const QMat4 transform = compose_transform(QTransform{
       .position = {3.0f, 4.0f, 5.0f},

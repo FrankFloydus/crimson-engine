@@ -128,12 +128,22 @@ TEST(StandardMaterialDocumentsTests,
                   .ok());
   ASSERT_TRUE(harness.editor()
                   .standard_material_documents()
-                  .set_normal_strength(1.5f)
+                  .set_normal_strength(-8.0f)
                   .ok());
   ASSERT_TRUE(harness.editor()
                   .standard_material_documents()
                   .set_normal_convention(
                       QuaderNormalMapConvention::DirectX)
+                  .ok());
+  const QuaderStandardMaterialTextureTransform texture_transform{
+      .center = {0.25f, 0.75f},
+      .scale = {2.0f, -3.0f},
+      .offset = {-0.5f, 1.25f},
+      .rotation_degrees = 45.0f,
+  };
+  ASSERT_TRUE(harness.editor()
+                  .standard_material_documents()
+                  .set_texture_transform(texture_transform)
                   .ok());
   EXPECT_TRUE(harness.project().has_dirty_material());
   EXPECT_FALSE(harness.project().has_dirty_scenes());
@@ -153,9 +163,10 @@ TEST(StandardMaterialDocumentsTests,
             kDefaultProjectMaterialPath);
   EXPECT_EQ(current.value().name, "Edited Default");
   EXPECT_FLOAT_EQ(current.value().material.metallic, 0.65f);
-  EXPECT_FLOAT_EQ(current.value().material.normal_strength, 1.5f);
+  EXPECT_FLOAT_EQ(current.value().material.normal_strength, -8.0f);
   EXPECT_EQ(current.value().material.normal_convention,
             QuaderNormalMapConvention::DirectX);
+  EXPECT_EQ(current.value().material.texture_transform, texture_transform);
 
   const std::string encoded = [&]() {
     std::ifstream stream(harness.root() / kDefaultProjectMaterialPath,
@@ -166,6 +177,7 @@ TEST(StandardMaterialDocumentsTests,
   EXPECT_NE(encoded.find("\"version\": 2"), std::string::npos);
   EXPECT_NE(encoded.find("\"materialType\": \"standard\""),
             std::string::npos);
+  EXPECT_NE(encoded.find("\"textureTransform\""), std::string::npos);
 }
 
 TEST(StandardMaterialDocumentsTests,
@@ -251,6 +263,8 @@ TEST(StandardMaterialDocumentsTests,
     EXPECT_NE(texture->rgba8, nullptr);
     EXPECT_GT(texture->width, 0u);
     EXPECT_GT(texture->height, 0u);
+    EXPECT_EQ(texture->detected_format, "png");
+    EXPECT_EQ(texture->encoded_byte_size, original.size());
   }
   ASSERT_TRUE(harness.editor()
                   .standard_material_documents()
@@ -541,12 +555,24 @@ TEST(StandardMaterialDocumentsTests,
                    .import_texture(invalid_slot,
                                    harness.root() / "does-not-exist.png")
                    .ok());
+  EXPECT_FALSE(harness.editor()
+                   .standard_material_documents()
+                   .set_normal_strength(16.01f)
+                   .ok());
+  QuaderStandardMaterialTextureTransform invalid_transform;
+  invalid_transform.rotation_degrees = 360.01f;
+  EXPECT_FALSE(harness.editor()
+                   .standard_material_documents()
+                   .set_texture_transform(invalid_transform)
+                   .ok());
 
   const auto after = harness.editor().standard_material_documents().current();
   ASSERT_TRUE(after.ok());
   EXPECT_EQ(after.value().draft_revision, before.value().draft_revision);
   EXPECT_EQ(after.value().material.normal_convention,
             before.value().material.normal_convention);
+  EXPECT_EQ(after.value().material.texture_transform,
+            before.value().material.texture_transform);
   EXPECT_FALSE(after.value().dirty);
 }
 

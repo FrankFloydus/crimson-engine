@@ -12,6 +12,7 @@
 #include "render/render_performance_stats.hpp"
 #include "ui/qt_auxiliary_window_state.hpp"
 #include "ui/qt_main_menu.hpp"
+#include "ui/qt_standard_material_preview_image_cache.hpp"
 #include "ui/qt_startup_presentation.hpp"
 #include "ui/ui_panel_manager.hpp"
 #include "ui/ui_settings.hpp"
@@ -58,6 +59,7 @@ enum class QtStandardMaterialEditorFileAction : std::uint8_t;
 enum class QtStandardMaterialScalar : std::uint8_t;
 enum class QtStandardMaterialTextureAction : std::uint8_t;
 enum class QtStandardMaterialTextureSlot : std::uint8_t;
+enum class QtStandardMaterialTextureTransformComponent : std::uint8_t;
 class QuaderEditorApi;
 struct QuaderApiStatus;
 class RenderOverlaySnapshotCache;
@@ -157,6 +159,8 @@ private:
   void handle_standard_material_texture(
       QtStandardMaterialTextureSlot slot,
       QtStandardMaterialTextureAction action);
+  void handle_standard_material_texture_transform(
+      QtStandardMaterialTextureTransformComponent component, double value);
   void handle_settings_dialog_change(QtSettingsChangeKind kind);
   void synchronize_settings_surfaces(bool refresh_dialog);
   void show_settings_dialog();
@@ -213,6 +217,8 @@ private:
   std::uint64_t inspector_modeling_selection_revision_ = 0;
   std::uint64_t material_browser_catalog_signature_ = 0;
   std::string material_browser_active_id_;
+  QtStandardMaterialPreviewImageCache
+      standard_material_preview_image_cache_;
   std::string outliner_locale_;
   std::string inspector_locale_;
   bool outliner_refresh_valid_ = false;

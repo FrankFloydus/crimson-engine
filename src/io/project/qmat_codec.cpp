@@ -169,8 +169,10 @@ ProjectIoResult<void> validate_standard_material(
     const ProjectStandardMaterialDefinition &material) {
   if (!std::ranges::all_of(material.base_color, finite_unit) ||
       !finite_unit(material.roughness) || !finite_unit(material.metallic) ||
-      !std::isfinite(material.normal_strength) ||
-      material.normal_strength < 0.0f || material.normal_strength > 2.0f) {
+      !is_valid_standard_material_normal_strength(
+          material.normal_strength) ||
+      !is_valid_standard_material_texture_transform(
+          material.texture_transform)) {
     return ProjectIoResult<void>::failure(
         ProjectIoErrorCode::MaterialMalformed,
         "Standard Material parameters are outside their finite ranges.");
@@ -286,6 +288,39 @@ ProjectIoResult<ProjectMaterialDocument> decode_standard(
       return malformed("QMAT normal-map convention is unsupported.");
     }
     standard.normal_convention = *convention;
+
+    if (payload.contains("textureTransform")) {
+      const Json &transform = payload["textureTransform"];
+      if (!transform.is_object() || !transform.contains("center") ||
+          !transform["center"].is_array() ||
+          transform["center"].size() != 2u ||
+          !transform.contains("scale") ||
+          !transform["scale"].is_array() ||
+          transform["scale"].size() != 2u ||
+          !transform.contains("offset") ||
+          !transform["offset"].is_array() ||
+          transform["offset"].size() != 2u ||
+          !transform.contains("rotationDegrees") ||
+          !transform["rotationDegrees"].is_number()) {
+        return malformed("QMAT Standard texture transform is malformed.");
+      }
+      for (std::size_t index = 0u; index < 2u; ++index) {
+        if (!transform["center"][index].is_number() ||
+            !transform["scale"][index].is_number() ||
+            !transform["offset"][index].is_number()) {
+          return malformed(
+              "QMAT Standard texture transform vectors must contain numbers.");
+        }
+        standard.texture_transform.center[index] =
+            transform["center"][index].get<float>();
+        standard.texture_transform.scale[index] =
+            transform["scale"][index].get<float>();
+        standard.texture_transform.offset[index] =
+            transform["offset"][index].get<float>();
+      }
+      standard.texture_transform.rotation_degrees =
+          transform["rotationDegrees"].get<float>();
+    }
   }
 
   if (payload.contains("textureSlots")) {
@@ -494,6 +529,14 @@ QmatCodec::encode(const ProjectMaterialDocument &material) {
                 {"normalConvention",
                  std::string(normal_convention_name(
                      standard.normal_convention))},
+            }},
+           {"textureTransform",
+            Json{
+                {"center", standard.texture_transform.center},
+                {"scale", standard.texture_transform.scale},
+                {"offset", standard.texture_transform.offset},
+                {"rotationDegrees",
+                 standard.texture_transform.rotation_degrees},
             }},
            {"textureSlots", std::move(texture_slots)},
        }},
