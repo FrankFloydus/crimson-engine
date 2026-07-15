@@ -176,6 +176,52 @@ TEST(QdrModelingRuntimeToolMoveTests, MoveDragSnapsSelectedAnchorToVertexTargetO
                             SnapTargetVertex));
 }
 
+TEST(QdrModelingRuntimeToolMoveTests,
+     MoveDragUsesWorldTransformedSnapParticipantsInsteadOfSessionObjects) {
+  quader_editor_core::PolygonObject moving = cube_object(1, {}, true);
+  quader_editor_core::PolygonObject local_target =
+      cube_object(2, {20.0F, 0.0F, 0.0F}, false);
+  quader_editor_core::EditorSession session({moving, local_target});
+  session.set_selected_object_ids({1}, 1);
+
+  quader_editor_core::PolygonObject world_target = local_target;
+  world_target.id = 202;
+  for (quader_poly::Vertex &vertex : world_target.document.edit().vertices) {
+    vertex.position.x -= 20.0F;
+    vertex.position.y += 4.0F;
+  }
+  std::vector<quader_editor_core::PolygonObject> world_snap_participants{
+      moving, world_target};
+
+  quader_editor_core::TransformDragState drag;
+  drag.active = true;
+  drag.tool = quader_editor_core::ViewportInteractionTool::Move;
+  drag.operation = quader_editor_core::TransformDragOperation::Transform;
+  drag.axis = quader_editor_core::TransformAxis::Y;
+  drag.scene_transform_preview_eligible = true;
+  drag.move = begin_axis_move(quader_editor_core::TransformAxis::Y, {});
+
+  quader_editor_core::TransformDragPreviewInput input;
+  input.camera = front_camera();
+  input.screen_position = {100.0F, 100.0F};
+  input.ray = {{1.0F, 5.0F, 6.0F}, {0.0F, 0.0F, -1.0F}};
+  input.vertex_snap_enabled = true;
+  input.vertex_snap_radius = 0.2;
+  input.snap_objects = &world_snap_participants;
+
+  const quader_editor_core::CommandResult result =
+      quader_editor_core::apply_transform_drag_preview(session, drag, input);
+
+  EXPECT_TRUE(result.ok);
+  EXPECT_TRUE(result.changed);
+  EXPECT_TRUE(drag.snap_target.kind ==
+              quader_editor_core::TransformSnapLandmarkKind::Vertex);
+  EXPECT_EQ(drag.snap_target.object_id, 202);
+  EXPECT_NEAR(drag.snap_target.position.x, 1.0F, 0.0001);
+  EXPECT_NEAR(drag.snap_target.position.y, 5.0F, 0.0001);
+  EXPECT_NEAR(drag.move.preview_delta.y, 5.0F, 0.0001);
+}
+
 TEST(QdrModelingRuntimeToolMoveTests, MoveDragIgnoresVertexSnapWhenNoTargetIsInsideSnapRadius) {
 	quader_editor_core::EditorSession session({ cube_object(1, {}, true) });
 	session.set_selected_object_ids({ 1 }, 1);

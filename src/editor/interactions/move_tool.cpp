@@ -208,8 +208,11 @@ std::optional<TransformSnapTarget> resolve_transform_vertex_snap_target(
 	quader_poly::PickOptions options =
 		selection_pick_options_from_radii(input.vertex_snap_radius, input.vertex_snap_radius);
         options.mode = quader_poly::SelectionMode::Vertex;
+	const std::vector<PolygonObject>& snap_objects = input.snap_objects == nullptr
+		? session.objects()
+		: *input.snap_objects;
         const std::vector<PickHitRecord> hits = pick_all(
-		session.objects(),
+		snap_objects,
 		{ input.ray, options },
 		input.snap_object_bounds,
 		input.snap_face_geometry);
@@ -219,7 +222,7 @@ std::optional<TransformSnapTarget> resolve_transform_vertex_snap_target(
               hit.vertex_id == quader_poly::kInvalidElementId) {
             continue;
           }
-                const PolygonObject* object = object_for_hit(session.objects(), hit);
+				const PolygonObject* object = object_for_hit(snap_objects, hit);
 		if (object != nullptr && moving_selection_contains_vertex(*object, selection_mode, hit.vertex_id)) {
 			continue;
 		}

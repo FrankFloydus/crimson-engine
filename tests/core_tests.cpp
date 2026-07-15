@@ -6802,6 +6802,65 @@ TEST(ViewportCameraTests, OrbitFromUnlockedOrthographicPreservesZoomLevel) {
   EXPECT_NEAR(visible_height, orthographic_size, 0.001f);
 }
 
+TEST(ViewportCameraTests,
+     OffCenterCursorZoomAndPanKeepOrbitOnTheVisibleTarget) {
+  ViewportCameraController camera;
+  camera.set_viewport_size(800.0f, 600.0f);
+  camera.focus_origin(20.0f);
+  camera.set_view_direction({0.0f, 0.0f, -1.0f});
+
+  camera.scroll_to_cursor(2.0f, {760.0f, 30.0f});
+  camera.begin_drag({100.0f, 100.0f}, ViewportDragMode::Pan);
+  camera.update_drag({240.0f, 180.0f});
+  camera.end_drag();
+
+  const QVec3 visible_target = camera.state().target;
+  const ViewportCameraPose before_orbit = camera.pose();
+  camera.begin_drag({300.0f, 240.0f}, ViewportDragMode::Orbit);
+  camera.update_drag({345.0f, 265.0f});
+  camera.end_drag();
+
+  const ViewportCameraPose after_orbit = camera.pose();
+  EXPECT_GT(length(after_orbit.eye - before_orbit.eye), 0.1f);
+  expect_vec3_near(camera.state().target, visible_target);
+}
+
+TEST(ViewportCameraTests,
+     FlyLookPanAndOrbitSnapKeepTheNextOrbitOnTheVisibleTarget) {
+  ViewportCameraController camera;
+  camera.set_viewport_size(800.0f, 600.0f);
+  camera.focus_origin(120.0f);
+
+  constexpr float kFlyLookPixels = 15.0f;
+  const float starting_yaw =
+      static_cast<float>(viewport_host_defaults().fly_look_radians_per_pixel) *
+      kFlyLookPixels;
+  camera.set_view_direction(
+      {std::sin(starting_yaw), 0.0f, -std::cos(starting_yaw)});
+  camera.begin_drag({100.0f, 100.0f}, ViewportDragMode::Fly);
+  camera.update_drag({100.0f + kFlyLookPixels, 100.0f});
+  camera.end_drag();
+
+  camera.begin_drag({180.0f, 140.0f}, ViewportDragMode::Pan);
+  camera.update_drag({250.0f, 185.0f});
+  camera.end_drag();
+
+  camera.begin_drag({300.0f, 220.0f}, ViewportDragMode::OrbitSnap);
+  camera.update_drag({300.0f, 220.0f});
+  camera.end_drag();
+  ASSERT_EQ(camera.state().projection, ViewportProjection::Orthographic);
+
+  const QVec3 snapped_visible_target = camera.state().target;
+  const float snapped_distance = camera.state().distance;
+  camera.begin_drag({320.0f, 240.0f}, ViewportDragMode::Orbit);
+  camera.update_drag({370.0f, 265.0f});
+  camera.end_drag();
+
+  EXPECT_EQ(camera.state().projection, ViewportProjection::Perspective);
+  expect_vec3_near(camera.state().target, snapped_visible_target);
+  EXPECT_NEAR(camera.state().distance, snapped_distance, 0.001f);
+}
+
 TEST(ViewportCameraTests, OrbitSnapUsesBlenderDiagonalAxisTargets) {
   ViewportCameraController camera;
   camera.focus_origin(8.0f);

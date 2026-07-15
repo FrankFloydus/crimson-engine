@@ -5094,7 +5094,7 @@ private:
   }
 
   [[nodiscard]] const std::vector<quader_editor_core::PolygonObject> &
-  cached_scene_transformed_objects_for_picking() const {
+  cached_scene_transformed_objects_for_picking() const override {
     QDR_PROFILE_FUNCTION();
     return selection_service_.cached_scene_transformed_objects_for_picking(
         session_, scene_, object_registry_);

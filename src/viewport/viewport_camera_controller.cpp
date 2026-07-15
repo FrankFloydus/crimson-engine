@@ -23,6 +23,7 @@ constexpr float kNavigationZoomStepFactor = 1.18f;
 constexpr float kFlyMaxDeltaSeconds = 0.25f;
 constexpr float kFlySpeedWheelStep = 1.0f;
 constexpr float kMinCameraDistance = 0.05f;
+constexpr float kMaxCameraDistance = 500.0f;
 
 float vertical_fov_radians(float fov_degrees) {
   return fov_degrees * std::numbers::pi_v<float> / 180.0f;
@@ -58,8 +59,10 @@ float current_visible_height(const ViewportCameraState &state) {
 void sync_perspective_distance_from_orthographic_zoom(
     ViewportCameraState &state) {
   if (state.projection == ViewportProjection::Orthographic) {
-    state.distance = perspective_distance_for_visible_height(
-        state.orthographic_size, state.fov_degrees);
+    state.distance =
+        clamp(perspective_distance_for_visible_height(
+                  state.orthographic_size, state.fov_degrees),
+              kMinCameraDistance, kMaxCameraDistance);
   }
 }
 
@@ -234,12 +237,17 @@ void apply_runtime_transform(
                preserved_view_distance.value_or(distance_along_forward_to_pivot(
                    origin, basis.forward, pivot)));
   const float clamped_view_distance =
-      clamp(view_distance, kMinCameraDistance, 500.0f);
+      clamp(view_distance, kMinCameraDistance, kMaxCameraDistance);
 
   camera_forward = basis.forward;
   camera_up = basis.up;
   state.target = origin + camera_forward * clamped_view_distance;
   state.distance = clamped_view_distance;
+  // ViewportCameraState::target is the visible center of the camera and is
+  // the controller's canonical navigation pivot. Runtime operations may
+  // return an off-axis cursor target or retain the pre-fly-look pivot; never
+  // let either become a second, hidden center of rotation.
+  pivot = state.target;
   if (result.has_camera_size) {
     state.orthographic_size =
         static_cast<float>(std::max(0.0001, result.camera_size));
@@ -277,6 +285,12 @@ void ViewportCameraController::set_viewport_size(float width, float height) {
 }
 
 void ViewportCameraController::begin_drag(QVec2 mouse, ViewportDragMode mode) {
+  // Every pointer-navigation gesture starts from the point currently centered
+  // by the camera. Cursor zoom and fly look can otherwise leave the runtime
+  // pivot off-axis while state_.target continues to describe the visible
+  // view. Reusing that hidden pivot makes pan scale against the wrong depth
+  // and makes the next orbit jump around a point outside the view.
+  pivot_ = state_.target;
   drag_mode_ = mode;
   last_mouse_ = mouse;
   clear_orbit_snap_source();
@@ -376,6 +390,9 @@ void ViewportCameraController::update_drag_delta(QVec2 delta) {
 
 void ViewportCameraController::end_drag() {
   drag_mode_ = ViewportDragMode::None;
+  // Fly look changes the visible target without rotating its runtime pivot.
+  // Make the completed camera pose the sole source for the next gesture.
+  pivot_ = state_.target;
   clear_orbit_snap_source();
 }
 
@@ -412,7 +429,8 @@ void ViewportCameraController::focus_origin(float distance) {
   clear_orbit_snap_source();
   pivot_ = {};
   state_.target = {};
-  state_.distance = clamp(distance, kMinCameraDistance, 500.0f);
+  state_.distance =
+      clamp(distance, kMinCameraDistance, kMaxCameraDistance);
   if (state_.projection == ViewportProjection::Orthographic) {
     state_.orthographic_size = std::max(0.0001f, state_.distance);
   }
@@ -434,6 +452,7 @@ void ViewportCameraController::focus_bounds(QVec3 min_bounds, QVec3 max_bounds,
 void ViewportCameraController::view_axis(ViewportViewAxis axis, int sign,
                                          ViewportAxisLock lock) {
   clear_orbit_snap_source();
+  pivot_ = state_.target;
   const quader_editor_core::ViewportCameraState camera =
       make_runtime_camera(pose(), state_, viewport_width_, viewport_height_);
   apply_runtime_transform(
@@ -548,7 +567,8 @@ ViewportCameraController::project_world_point(QVec3 world_point) const {
 
 float ViewportCameraController::zoomed_distance(float wheel_delta) const {
   const float zoom_factor = std::pow(kNavigationZoomStepFactor, wheel_delta);
-  return clamp(state_.distance / zoom_factor, kMinCameraDistance, 500.0f);
+  return clamp(state_.distance / zoom_factor, kMinCameraDistance,
+               kMaxCameraDistance);
 }
 
 QVec3 ViewportCameraController::forward() const { return camera_forward_; }

@@ -263,6 +263,7 @@ struct TransformDragPreviewInput {
         bool defer_session_update = false;
         bool vertex_snap_enabled = false;
 	double vertex_snap_radius = 0.0;
+	const std::vector<PolygonObject>* snap_objects = nullptr;
 	std::span<const PickObjectBounds> snap_object_bounds;
 	std::span<const PickObjectFaceGeometry> snap_face_geometry;
 };

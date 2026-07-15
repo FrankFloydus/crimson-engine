@@ -4665,3 +4665,34 @@ Verification:
   pass 40/40, and architecture guardrails pass 195/195. Native runtime, service-memento, terminal
   preview-cancel, and stale-public-handle allocation regressions also pass. Preset-wide CTest and
   the final native app build are recorded in the task handoff.
+
+## 2026-07-16 - Transform Snap, Camera Pivot, And Knife Face Locality
+
+Invariant:
+
+- Transform vertex snapping must test the same scene-transformed, visibility-filtered, and
+  instance-aware object projection used by viewport picking. World-space bounds and face caches
+  must never be paired with raw authored/local object documents.
+- `ViewportCameraState::target` is the canonical navigation pivot after every runtime camera
+  operation. Cursor zoom, fly look, pan, orbit snap, axis views, and orthographic-to-perspective
+  transitions may not retain a second off-axis pivot; perspective distance is capped before a
+  pose is reconstructed.
+- A Knife stroke seeded from an existing edge is restricted to the at-most-two faces incident to
+  that edge. Hover targets, stored target face IDs, and automatically inserted screen-crossing
+  points must all resolve inside that same face region so shared boundary edges cannot route a cut
+  into an unrelated adjacent face.
+
+Owners:
+
+- `src/editor/interactions/move_tool.cpp` and
+  `src/editor/modeling/services/modeling_transform_drag_service.*` own the scene-aware transform
+  snap participant seam.
+- `src/viewport/viewport_camera_controller.cpp` owns the single visible camera pivot.
+- `src/editor/interactions/knife_tool.cpp` owns seed-edge face-region interaction policy; the
+  polygon operation core remains topology-only.
+
+Verification:
+
+- Focused camera, Knife, and Move suites pass 26/26, 5/5, and 8/8. The affected workflow passes,
+  including 291 runtime tests. The complete `vs2026-debug` CTest preset passes 6/6 and the
+  538-file C++ style gate passes before the v0.1.5 native build and branch merge.

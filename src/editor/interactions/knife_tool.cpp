@@ -15,6 +15,7 @@
 #include <mesh/geometry/geometry.hpp>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <optional>
@@ -100,6 +101,130 @@ const PolygonObject *object_by_id(const std::vector<PolygonObject>& objects, int
 {
 	const int object_index = object_index_by_id(objects, object_id);
 	return object_index < 0 ? nullptr : &objects[object_index];
+}
+
+/**
+ * Represents the face region a knife stroke inherits from its seed edge.
+ */
+struct KnifeSeedFaceRegion {
+	bool restricted = false;
+	std::array<const quader_poly::Face*, 2U> faces {};
+	std::size_t face_count = 0U;
+};
+
+KnifeSeedFaceRegion knife_edge_face_region(
+		const EditorSession& session,
+		int object_id,
+		quader_poly::Edge edge)
+{
+	KnifeSeedFaceRegion region;
+	region.restricted = true;
+	const PolygonObject *object = object_by_id(
+		session.objects(), object_id);
+	if (object == nullptr) {
+		return region;
+	}
+
+	for (const quader_poly::Face& face : object->document.faces) {
+		if (face_contains_edge(face, edge) &&
+			region.face_count < region.faces.size()) {
+			region.faces[region.face_count++] = &face;
+		}
+	}
+	return region;
+}
+
+KnifeSeedFaceRegion knife_seed_face_region(
+		const EditorSession& session,
+		const KnifeToolState& state)
+{
+	if (!state.has_active_stroke ||
+		state.active_stroke_start >= state.points.size()) {
+		return {};
+	}
+
+	const quader_poly::KnifePointTarget& seed =
+		state.points[state.active_stroke_start];
+	if (seed.kind != quader_poly::KnifePointTargetKind::ExistingEdge) {
+		return {};
+	}
+	return knife_edge_face_region(
+		session, state.target_object_id, seed.edge);
+}
+
+bool knife_seed_face_region_contains_face(
+		const KnifeSeedFaceRegion& region,
+		quader_poly::ElementId face_id)
+{
+	if (!region.restricted) {
+		return true;
+	}
+	for (std::size_t index = 0U; index < region.face_count; ++index) {
+		const quader_poly::Face *face = region.faces[index];
+		if (face != nullptr && face->id == face_id) {
+			return true;
+		}
+	}
+	return false;
+}
+
+bool knife_seed_face_region_contains_edge(
+		const KnifeSeedFaceRegion& region,
+		quader_poly::Edge edge)
+{
+	if (!region.restricted) {
+		return true;
+	}
+	for (std::size_t index = 0U; index < region.face_count; ++index) {
+		const quader_poly::Face *face = region.faces[index];
+		if (face != nullptr && face_contains_edge(*face, edge)) {
+			return true;
+		}
+	}
+	return false;
+}
+
+bool knife_face_contains_target(
+		const quader_poly::Face& face,
+		const quader_poly::KnifePointTarget& target)
+{
+	switch (target.kind) {
+	case quader_poly::KnifePointTargetKind::ExistingVertex:
+	case quader_poly::KnifePointTargetKind::InsertedVertex:
+		return std::find(face.vertices.begin(), face.vertices.end(),
+			target.vertex_id) != face.vertices.end();
+	case quader_poly::KnifePointTargetKind::ExistingEdge:
+		return face_contains_edge(face, target.edge);
+	case quader_poly::KnifePointTargetKind::FacePoint:
+		return face.id == target.face_id;
+	}
+	return false;
+}
+
+bool normalize_knife_target_to_seed_face_region(
+		const KnifeSeedFaceRegion& region,
+		quader_poly::KnifePointTarget& target)
+{
+	if (!region.restricted) {
+		return true;
+	}
+
+	const quader_poly::Face *fallback_face = nullptr;
+	for (std::size_t index = 0U; index < region.face_count; ++index) {
+		const quader_poly::Face *face = region.faces[index];
+		if (face == nullptr || !knife_face_contains_target(*face, target)) {
+			continue;
+		}
+		if (face->id == target.face_id) {
+			return true;
+		}
+		fallback_face = fallback_face != nullptr ? fallback_face : face;
+	}
+	if (fallback_face == nullptr) {
+		return false;
+	}
+	target.face_id = fallback_face->id;
+	return true;
 }
 
 } // namespace
@@ -254,7 +379,6 @@ struct KnifeResolvedPoint {
 	bool has_point = false;
 	bool target_valid = false;
 	int object_id = -1;
-        quader_poly::ElementId face_id = quader_poly::kInvalidElementId;
         quader::QVec3 point;
 	quader::QVec3 normal { 0.0F, 1.0F, 0.0F };
 	quader_poly::KnifePointTarget target;
@@ -280,7 +404,6 @@ bool fill_knife_vertex_hit(
 	out_point.has_point = true;
 	out_point.target_valid = true;
 	out_point.object_id = hit.object_id;
-	out_point.face_id = hit.face_id;
 	out_point.point = vertex->position;
 	out_point.normal = vec3_normalize_or(
 		hit.local_normal, {0.0F, 1.0F, 0.0F}, kTransformPointEpsilon);
@@ -337,7 +460,6 @@ bool fill_knife_edge_hit(
 	out_point.has_point = true;
 	out_point.target_valid = true;
 	out_point.object_id = hit.object_id;
-	out_point.face_id = hit.face_id;
 	out_point.point = *point;
 	out_point.normal = vec3_normalize_or(
 		hit.local_normal, {0.0F, 1.0F, 0.0F}, kTransformPointEpsilon);
@@ -401,7 +523,6 @@ bool fill_knife_face_hit(
 	out_point.has_point = true;
 	out_point.target_valid = true;
 	out_point.object_id = surface_hit.object_id;
-	out_point.face_id = surface_hit.face_id;
 	out_point.point = point;
 	out_point.normal = vec3_normalize_or(
 		surface_hit.local_normal, {0.0F, 1.0F, 0.0F},
@@ -702,6 +823,8 @@ std::vector<KnifeScreenEdgeHit> collect_knife_screen_edge_hits(
 	if (object == nullptr) {
 		return hits;
 	}
+	const KnifeSeedFaceRegion seed_face_region =
+		knife_seed_face_region(session, state);
 
 	quader::QVec2 line_start;
 	quader::QVec2 line_end;
@@ -717,6 +840,7 @@ std::vector<KnifeScreenEdgeHit> collect_knife_screen_edge_hits(
 		edge = quader_poly::make_edge(edge.a, edge.b);
                 if (edge.a == quader_poly::kInvalidElementId ||
                     edge.b == quader_poly::kInvalidElementId ||
+			!knife_seed_face_region_contains_edge(seed_face_region, edge) ||
                     knife_target_is_on_edge(previous_target, edge) ||
                     knife_target_is_on_edge(current_target, edge)) {
                   continue;
@@ -749,7 +873,9 @@ std::vector<KnifeScreenEdgeHit> collect_knife_screen_edge_hits(
 		};
 		const std::optional<quader_poly::ElementId> visible_face_id =
 			knife_screen_edge_hit_face(session, state.target_object_id, camera, edge, screen_hit);
-		if (!visible_face_id.has_value()) {
+		if (!visible_face_id.has_value() ||
+			!knife_seed_face_region_contains_face(
+				seed_face_region, *visible_face_id)) {
 			continue;
 		}
 
@@ -934,33 +1060,44 @@ bool update_knife_preview_from_resolved_point(
 		return false;
 	}
 
-	const bool target_valid = point.target_valid;
+	const KnifeSeedFaceRegion seed_face_region =
+		state.has_active_stroke
+			? knife_seed_face_region(session, state)
+			: point.target.kind ==
+					quader_poly::KnifePointTargetKind::ExistingEdge
+				? knife_edge_face_region(
+					session, point.object_id, point.target.edge)
+				: KnifeSeedFaceRegion {};
+	quader_poly::KnifePointTarget normalized_target = point.target;
+	const bool target_valid = point.target_valid &&
+		normalize_knife_target_to_seed_face_region(
+			seed_face_region, normalized_target);
 	state.has_current = true;
 	state.current_target_valid = target_valid;
 	state.target_object_id = state.target_object_id > 0 ? state.target_object_id : point.object_id;
 	state.current_point = point.point;
-	state.current_target = point.target;
+	state.current_target = normalized_target;
 	state.face_normal = point.normal;
         state.status = target_valid ? KnifeToolStatus::Preview
                                     : KnifeToolStatus::InvalidTarget;
         hover = {};
         hover.vertex_id = quader_poly::kInvalidElementId;
         hover.edge = {};
-        if (point.target_valid &&
-            point.target.kind ==
+        if (target_valid &&
+            normalized_target.kind ==
                 quader_poly::KnifePointTargetKind::ExistingVertex) {
           hover.object_id = point.object_id;
           hover.kind = SelectionHoverKind::Vertex;
-          hover.vertex_id = point.target.vertex_id;
-          hover.face_id = point.face_id;
+          hover.vertex_id = normalized_target.vertex_id;
+          hover.face_id = normalized_target.face_id;
           hover.candidate_object_id = point.object_id;
-        } else if (point.target_valid &&
-                   point.target.kind ==
+        } else if (target_valid &&
+                   normalized_target.kind ==
                        quader_poly::KnifePointTargetKind::ExistingEdge) {
           hover.object_id = point.object_id;
           hover.kind = SelectionHoverKind::Edge;
-          hover.edge = point.target.edge;
-          hover.face_id = point.face_id;
+          hover.edge = normalized_target.edge;
+          hover.face_id = normalized_target.face_id;
           hover.candidate_object_id = point.object_id;
         }
         hover.selected_modifier_pressed = false;

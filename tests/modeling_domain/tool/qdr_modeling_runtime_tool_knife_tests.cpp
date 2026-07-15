@@ -216,3 +216,112 @@ TEST(QdrModelingRuntimeToolKnifeTests, KnifeSnappedFacePointsStayProjectedOntoTi
 	EXPECT_FALSE(qdr_test::nearly_equal(state.current_point.y, 2.0F, 0.0001));
 	EXPECT_NEAR(state.current_target.position.y, state.current_point.y, 0.0001);
 }
+
+TEST(QdrModelingRuntimeToolKnifeTests, EdgeSeedRestrictsKnifeTargetsToItsTwoIncidentFaces) {
+	quader_poly::Document document;
+	const quader_poly::ElementId seed_a =
+		quader_poly::add_vertex(document, { 0.0F, 0.0F, 0.0F });
+	const quader_poly::ElementId seed_b =
+		quader_poly::add_vertex(document, { 1.0F, 0.0F, 0.0F });
+	const quader_poly::ElementId first_far_b =
+		quader_poly::add_vertex(document, { 1.0F, 1.0F, 0.0F });
+	const quader_poly::ElementId first_far_a =
+		quader_poly::add_vertex(document, { 0.0F, 1.0F, 0.0F });
+	const quader_poly::ElementId second_far_a =
+		quader_poly::add_vertex(document, { 0.0F, 0.0F, 1.0F });
+	const quader_poly::ElementId second_far_b =
+		quader_poly::add_vertex(document, { 1.0F, 0.0F, 1.0F });
+	const quader_poly::ElementId outside_far_b =
+		quader_poly::add_vertex(document, { 1.0F, 2.0F, 0.0F });
+	const quader_poly::ElementId outside_far_a =
+		quader_poly::add_vertex(document, { 0.0F, 2.0F, 0.0F });
+
+	const quader_poly::ElementId first_face = quader_poly::add_face(
+		document,
+		std::array<quader_poly::ElementId, 4> {
+			seed_a, seed_b, first_far_b, first_far_a,
+		});
+	const quader_poly::ElementId second_face = quader_poly::add_face(
+		document,
+		std::array<quader_poly::ElementId, 4> {
+			seed_b, seed_a, second_far_a, second_far_b,
+		});
+	const quader_poly::ElementId outside_face = quader_poly::add_face(
+		document,
+		std::array<quader_poly::ElementId, 4> {
+			first_far_a, first_far_b, outside_far_b, outside_far_a,
+		});
+	ASSERT_TRUE(first_face != quader_poly::kInvalidElementId);
+	ASSERT_TRUE(second_face != quader_poly::kInvalidElementId);
+	ASSERT_TRUE(outside_face != quader_poly::kInvalidElementId);
+
+	quader_editor_core::PolygonObject object;
+	object.id = 7;
+	object.document = document;
+	quader_editor_core::EditorSession session({ object });
+	quader_editor_core::KnifeToolState state;
+	quader_editor_core::SelectionHoverState hover;
+	quader_editor_core::ViewportCameraState camera;
+	camera.projection = quader_editor_core::CameraProjection::Perspective;
+
+	quader_editor_core::PickHitRecord seed_hit;
+	seed_hit.hit = true;
+	seed_hit.object_id = object.id;
+	seed_hit.kind = quader_poly::ElementKind::Edge;
+	seed_hit.edge = quader_poly::make_edge(seed_a, seed_b);
+	seed_hit.face_id = first_face;
+	seed_hit.local_position = { 0.5F, 0.0F, 0.0F };
+	seed_hit.local_normal = { 0.0F, 0.0F, 1.0F };
+	ASSERT_TRUE(quader_editor_core::update_knife_preview_from_hit(
+		session, state, hover, seed_hit, camera, 1.0, false, false));
+	ASSERT_TRUE(quader_editor_core::accept_knife_current_point(
+		session, state, camera, 1.0));
+	ASSERT_TRUE(state.has_active_stroke);
+	ASSERT_TRUE(state.points.size() == 1U);
+	EXPECT_TRUE(state.points.front().face_id == first_face);
+
+	quader_editor_core::PickHitRecord face_hit;
+	face_hit.hit = true;
+	face_hit.object_id = object.id;
+	face_hit.kind = quader_poly::ElementKind::Face;
+	face_hit.face_id = first_face;
+	face_hit.local_position = { 0.5F, 0.5F, 0.0F };
+	face_hit.local_normal = { 0.0F, 0.0F, 1.0F };
+	EXPECT_TRUE(quader_editor_core::update_knife_preview_from_hit(
+		session, state, hover, face_hit, camera, 1.0, false, false));
+	EXPECT_TRUE(state.current_target_valid);
+	EXPECT_TRUE(state.current_target.face_id == first_face);
+
+	face_hit.face_id = second_face;
+	face_hit.local_position = { 0.5F, 0.0F, 0.5F };
+	face_hit.local_normal = { 0.0F, 1.0F, 0.0F };
+	EXPECT_TRUE(quader_editor_core::update_knife_preview_from_hit(
+		session, state, hover, face_hit, camera, 1.0, false, false));
+	EXPECT_TRUE(state.current_target_valid);
+	EXPECT_TRUE(state.current_target.face_id == second_face);
+
+	quader_editor_core::PickHitRecord boundary_hit;
+	boundary_hit.hit = true;
+	boundary_hit.object_id = object.id;
+	boundary_hit.kind = quader_poly::ElementKind::Edge;
+	boundary_hit.edge = quader_poly::make_edge(first_far_a, first_far_b);
+	boundary_hit.face_id = outside_face;
+	boundary_hit.local_position = { 0.5F, 1.0F, 0.0F };
+	boundary_hit.local_normal = { 0.0F, 0.0F, 1.0F };
+	EXPECT_TRUE(quader_editor_core::update_knife_preview_from_hit(
+		session, state, hover, boundary_hit, camera, 1.0, false, false));
+	EXPECT_TRUE(state.current_target_valid);
+	EXPECT_TRUE(state.current_target.face_id == first_face);
+	EXPECT_TRUE(hover.face_id == first_face);
+
+	quader_editor_core::PickHitRecord outside_hit = boundary_hit;
+	outside_hit.edge = quader_poly::make_edge(outside_far_a, outside_far_b);
+	outside_hit.local_position = { 0.5F, 2.0F, 0.0F };
+	EXPECT_FALSE(quader_editor_core::update_knife_preview_from_hit(
+		session, state, hover, outside_hit, camera, 1.0, false, false));
+	EXPECT_FALSE(state.current_target_valid);
+	EXPECT_TRUE(state.status ==
+		quader_editor_core::KnifeToolStatus::InvalidTarget);
+	EXPECT_TRUE(hover.kind == quader_editor_core::SelectionHoverKind::None);
+	EXPECT_TRUE(hover.object_id < 0);
+}

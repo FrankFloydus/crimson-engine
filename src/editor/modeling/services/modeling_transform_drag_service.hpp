@@ -55,6 +55,9 @@ public:
   restore_history_memento(const ModelingSessionMemento &memento) = 0;
   [[nodiscard]] virtual std::optional<QMat4>
   modeling_object_world_transform(int modeling_object_id) const = 0;
+  [[nodiscard]] virtual const std::vector<
+      quader_editor_core::PolygonObject> &
+  cached_scene_transformed_objects_for_picking() const = 0;
   [[nodiscard]] virtual const std::vector<quader_editor_core::PickObjectBounds>
       &cached_pick_object_bounds() const = 0;
   [[nodiscard]] virtual const std::vector<
