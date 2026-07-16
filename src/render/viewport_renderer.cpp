@@ -122,6 +122,8 @@ void ViewportRenderer::initialize(filament::Engine &engine,
   view_->setPostProcessingEnabled(false);
   view_->setShadowingEnabled(true);
   view_->setShadowType(filament::ShadowType::PCF);
+  view_->setMaterialGlobal(
+      0u, filament::math::float4{0.0f, 0.0f, 0.0f, 1.0f});
   overlay_view_ = engine_->createView();
   overlay_view_->setName("Main Viewport Overlays");
   overlay_view_->setScene(scene_);
@@ -188,6 +190,7 @@ void ViewportRenderer::shutdown() {
     }
 
     engine_ = nullptr;
+    material_debug_mode_ = ViewportMaterialDebugMode::None;
     scene_ = nullptr;
     texture_registry_ = nullptr;
 }
@@ -415,6 +418,19 @@ void ViewportRenderer::set_shadowing_enabled(bool enabled) {
   }
   if (overlay_view_) {
     overlay_view_->setShadowingEnabled(false);
+  }
+}
+
+void ViewportRenderer::set_material_debug_mode(
+    ViewportMaterialDebugMode mode) {
+  if (material_debug_mode_ == mode) {
+    return;
+  }
+  material_debug_mode_ = mode;
+  if (view_) {
+    view_->setMaterialGlobal(
+        0u, filament::math::float4{static_cast<float>(mode), 0.0f, 0.0f,
+                                  1.0f});
   }
 }
 

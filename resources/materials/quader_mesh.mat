@@ -34,6 +34,38 @@ material {
             name : textureTransformRotationRadians
         },
         {
+            type : float,
+            name : shadedLightingEnabled
+        },
+        {
+            type : float,
+            name : shadedKeyDirectionX
+        },
+        {
+            type : float,
+            name : shadedKeyDirectionY
+        },
+        {
+            type : float,
+            name : shadedKeyDirectionZ
+        },
+        {
+            type : float,
+            name : shadedKeyIntensity
+        },
+        {
+            type : float,
+            name : shadedDiffuseWrap
+        },
+        {
+            type : float,
+            name : shadedGroundFill
+        },
+        {
+            type : float,
+            name : shadedSkyFill
+        },
+        {
             type : float4,
             name : surfaceGridMinorColor
         },
@@ -183,6 +215,38 @@ fragment {
                     mix(sourceAlpha, contextAlpha, amount));
     }
 
+    float shadedModelingLighting() {
+        vec3 normalWorld = normalize(getWorldNormalVector());
+        vec3 normalView = normalize(
+                (getViewFromWorldMatrix() * vec4(normalWorld, 0.0)).xyz);
+        vec3 keyDirectionInput = clamp(
+                vec3(materialParams.shadedKeyDirectionX,
+                     materialParams.shadedKeyDirectionY,
+                     materialParams.shadedKeyDirectionZ),
+                vec3(-1.0), vec3(1.0));
+        float keyDirectionLengthSquared = dot(
+                keyDirectionInput, keyDirectionInput);
+        vec3 keyDirectionView = keyDirectionLengthSquared > 0.000001
+                ? keyDirectionInput * inversesqrt(keyDirectionLengthSquared)
+                : normalize(vec3(-0.09, 0.47, 0.88));
+        vec3 worldUp = vec3(0.0, 1.0, 0.0);
+
+        float keyIntensity = max(materialParams.shadedKeyIntensity, 0.0);
+        float diffuseWrap = clamp(materialParams.shadedDiffuseWrap, 0.0, 0.8);
+        float groundFill = clamp(materialParams.shadedGroundFill, 0.0, 1.0);
+        float skyFill = clamp(materialParams.shadedSkyFill, 0.0, 1.0);
+
+        float wrappedDiffuse = clamp(
+                (dot(normalView, keyDirectionView) + diffuseWrap)
+                        / (1.0 + diffuseWrap),
+                0.0, 1.0);
+        float hemisphereT = clamp(
+                dot(normalWorld, worldUp) * 0.5 + 0.5,
+                0.0, 1.0);
+        float ambient = mix(groundFill, skyFill, hemisphereT);
+        return min(ambient + keyIntensity * wrappedDiffuse, 1.0);
+    }
+
     void material(inout MaterialInputs material) {
         prepareMaterial(material);
 
@@ -193,6 +257,11 @@ fragment {
         baseColor = applySurfaceGrid(baseColor);
         vec4 edited = applyInstanceEditDim(
                 baseColor, baseSample.a * materialParams.baseColorFactor.a);
-        material.baseColor = vec4(edited.rgb * edited.a, edited.a);
+        float lighting = mix(
+                1.0,
+                shadedModelingLighting(),
+                clamp(materialParams.shadedLightingEnabled, 0.0, 1.0));
+        vec3 finalRgb = edited.rgb * lighting;
+        material.baseColor = vec4(finalRgb * edited.a, edited.a);
     }
 }

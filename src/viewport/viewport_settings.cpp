@@ -17,6 +17,7 @@
 #include <cstdlib>
 #include <fstream>
 #include <iomanip>
+#include <limits>
 #include <optional>
 #include <sstream>
 #include <string>
@@ -61,6 +62,7 @@ constexpr std::string_view key(std::string_view suffix) {
 
 const std::array<ViewportSettingsSectionDescriptor, kViewportSettingsSectionCount> kSections{{
         {ViewportSettingsSectionId::Grid, "Grid", false},
+        {ViewportSettingsSectionId::Shading, "Shading", false},
         {ViewportSettingsSectionId::Selection, "Selection", false},
         {ViewportSettingsSectionId::InstanceEditing, "Instance Editing", false},
         {ViewportSettingsSectionId::Overlay, "Overlay", false},
@@ -98,6 +100,13 @@ const std::array<ViewportFloatSettingDescriptor, kViewportFloatSettingCount> kFl
         {ViewportFloatSettingId::GridMinorLineSize, ViewportSettingsSectionId::Grid, "Minor Line", key("GridMinorLineSize"), kMinLineSize, kMaxLineSize, kDefaultViewportGridMinorLineSize},
         {ViewportFloatSettingId::GridMajorLineSize, ViewportSettingsSectionId::Grid, "Major Line", key("GridMajorLineSize"), kMinLineSize, kMaxLineSize, kDefaultViewportGridMajorLineSize},
         {ViewportFloatSettingId::GridAxisLineSize, ViewportSettingsSectionId::Grid, "QAxis Line", key("GridAxisLineSize"), kMinLineSize, kMaxLineSize, kDefaultViewportGridAxisLineSize},
+        {ViewportFloatSettingId::ShadedKeyDirectionX, ViewportSettingsSectionId::Shading, "Key Direction X", key("ShadedKeyDirectionX"), -1.0f, 1.0f, kDefaultViewportShadedKeyDirectionX},
+        {ViewportFloatSettingId::ShadedKeyDirectionY, ViewportSettingsSectionId::Shading, "Key Direction Y", key("ShadedKeyDirectionY"), -1.0f, 1.0f, kDefaultViewportShadedKeyDirectionY},
+        {ViewportFloatSettingId::ShadedKeyDirectionZ, ViewportSettingsSectionId::Shading, "Key Direction Z", key("ShadedKeyDirectionZ"), -1.0f, 1.0f, kDefaultViewportShadedKeyDirectionZ},
+        {ViewportFloatSettingId::ShadedKeyIntensity, ViewportSettingsSectionId::Shading, "Key Intensity", key("ShadedKeyIntensity"), 0.0f, std::numeric_limits<float>::max(), kDefaultViewportShadedKeyIntensity},
+        {ViewportFloatSettingId::ShadedDiffuseWrap, ViewportSettingsSectionId::Shading, "Diffuse Wrap", key("ShadedDiffuseWrap"), 0.0f, 0.8f, kDefaultViewportShadedDiffuseWrap},
+        {ViewportFloatSettingId::ShadedGroundFill, ViewportSettingsSectionId::Shading, "Ground Fill", key("ShadedGroundFill"), 0.0f, 1.0f, kDefaultViewportShadedGroundFill},
+        {ViewportFloatSettingId::ShadedSkyFill, ViewportSettingsSectionId::Shading, "Sky Fill", key("ShadedSkyFill"), 0.0f, 1.0f, kDefaultViewportShadedSkyFill},
         {ViewportFloatSettingId::SourceWireLineSize, ViewportSettingsSectionId::Overlay, "Source Wire Size", key("SourceWireLineSize"), kMinLineSize, kMaxLineSize, kOverlaySourceWireLineWidthPixels},
         {ViewportFloatSettingId::SelectionFaceWireLineSize, ViewportSettingsSectionId::Selection, "Face Wire Size", key("SelectionFaceWireLineSize"), kMinLineSize, kMaxLineSize, kOverlaySelectionWireLineWidthPixels},
         {ViewportFloatSettingId::SelectionEdgeLineSize, ViewportSettingsSectionId::Selection, "Edge Line Size", key("SelectionEdgeLineSize"), kMinLineSize, kMaxLineSize, kOverlaySelectionWireLineWidthPixels},
@@ -306,6 +315,7 @@ ViewportSettings ViewportSettings::load(const std::filesystem::path& path) {
         return settings;
     }
 
+    std::array<bool, kViewportFloatSettingCount> loaded_float_keys{};
     std::string line;
     while (std::getline(file, line)) {
       line = QStr::trim_ascii_whitespace(line);
@@ -339,6 +349,7 @@ ViewportSettings ViewportSettings::load(const std::filesystem::path& path) {
             settings.floats_[index(descriptor.id)] =
                 parse_float(value, descriptor.default_value, descriptor.minimum,
                             descriptor.maximum);
+            loaded_float_keys[index(descriptor.id)] = true;
           }
         }
         for (const ViewportBoolSettingDescriptor& descriptor : kBoolSettings) {
@@ -347,6 +358,47 @@ ViewportSettings ViewportSettings::load(const std::filesystem::path& path) {
                 parse_bool(value, descriptor.default_value);
           }
         }
+    }
+
+    const auto loaded = [&](ViewportFloatSettingId id) {
+      return loaded_float_keys[index(id)];
+    };
+    const auto approximately = [&](ViewportFloatSettingId id, float value) {
+      return std::fabs(settings.float_value(id) - value) <= 0.0001f;
+    };
+    const bool legacy_scalars =
+        loaded(ViewportFloatSettingId::ShadedKeyIntensity) &&
+        loaded(ViewportFloatSettingId::ShadedDiffuseWrap) &&
+        loaded(ViewportFloatSettingId::ShadedGroundFill) &&
+        loaded(ViewportFloatSettingId::ShadedSkyFill) &&
+        approximately(ViewportFloatSettingId::ShadedKeyIntensity, 0.42f) &&
+        approximately(ViewportFloatSettingId::ShadedDiffuseWrap, 0.25f) &&
+        approximately(ViewportFloatSettingId::ShadedGroundFill, 0.45f) &&
+        approximately(ViewportFloatSettingId::ShadedSkyFill, 0.62f);
+    const bool direction_not_stored =
+        !loaded(ViewportFloatSettingId::ShadedKeyDirectionX) &&
+        !loaded(ViewportFloatSettingId::ShadedKeyDirectionY) &&
+        !loaded(ViewportFloatSettingId::ShadedKeyDirectionZ);
+    const bool legacy_direction =
+        loaded(ViewportFloatSettingId::ShadedKeyDirectionX) &&
+        loaded(ViewportFloatSettingId::ShadedKeyDirectionY) &&
+        loaded(ViewportFloatSettingId::ShadedKeyDirectionZ) &&
+        approximately(ViewportFloatSettingId::ShadedKeyDirectionX, -0.35f) &&
+        approximately(ViewportFloatSettingId::ShadedKeyDirectionY, 0.55f) &&
+        approximately(ViewportFloatSettingId::ShadedKeyDirectionZ, 0.75f);
+    if (legacy_scalars && (direction_not_stored || legacy_direction)) {
+      constexpr std::array kShadedSettings{
+          ViewportFloatSettingId::ShadedKeyDirectionX,
+          ViewportFloatSettingId::ShadedKeyDirectionY,
+          ViewportFloatSettingId::ShadedKeyDirectionZ,
+          ViewportFloatSettingId::ShadedKeyIntensity,
+          ViewportFloatSettingId::ShadedDiffuseWrap,
+          ViewportFloatSettingId::ShadedGroundFill,
+          ViewportFloatSettingId::ShadedSkyFill,
+      };
+      for (const ViewportFloatSettingId id : kShadedSettings) {
+        settings.floats_[index(id)] = float_descriptor(id).default_value;
+      }
     }
 
     return settings;

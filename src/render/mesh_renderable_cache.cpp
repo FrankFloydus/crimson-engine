@@ -55,6 +55,15 @@ void update_surface_grid_proxy_map(
   }
 }
 
+void update_shaded_lighting_proxy_map(
+    MeshRenderableFactory &factory,
+    const std::unordered_map<EntityId, MeshRenderableProxy> &proxies,
+    const ViewportSettings &settings) {
+  for (const auto &entry : proxies) {
+    factory.update_shaded_lighting(entry.second, settings);
+  }
+}
+
 } // namespace
 
 MeshRenderableCache::~MeshRenderableCache() {
@@ -155,6 +164,7 @@ void MeshRenderableCache::update_surface_grid(
                                 grid_world_spacing, settings);
   update_surface_grid_proxy_map(*factory_, shaded_mesh_proxies_,
                                 grid_world_spacing, settings);
+  update_shaded_lighting_proxy_map(*factory_, shaded_mesh_proxies_, settings);
   surface_grid_signature_ = signature;
   surface_grid_dirty_ = false;
 }

@@ -236,6 +236,9 @@ struct MaterialPreviewRenderer::Impl final {
     disable_surface_grid(*shaded_instance);
     disable_surface_grid(*rendered_instance);
     disable_surface_grid(*wire_instance);
+    bind_default_shaded_lighting(*shaded_instance);
+    bind_default_shaded_lighting(*wire_instance);
+    wire_instance->setParameter("shadedLightingEnabled", 0.0f);
 
     fallback_textures[0] = create_solid_texture(
         *engine, {255u, 255u, 255u, 255u}, TextureColorSpace::Srgb);

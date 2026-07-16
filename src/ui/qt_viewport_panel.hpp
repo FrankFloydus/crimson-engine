@@ -30,11 +30,13 @@
 #include <cstdint>
 #include <vector>
 
-class QComboBox;
+class QAction;
 class QFrame;
 class QFocusFrame;
 class QLabel;
+class QMenu;
 class QMouseEvent;
+class QPushButton;
 
 namespace quader {
 
@@ -124,8 +126,13 @@ private:
     ViewportPaneId id = ViewportPaneId::Perspective;
     QFrame *frame = nullptr;
     QWidget *toolbar = nullptr;
-    QComboBox *view_combo = nullptr;
-    QComboBox *shading_combo = nullptr;
+    QPushButton *display_button = nullptr;
+    QMenu *display_menu = nullptr;
+    QMenu *camera_menu = nullptr;
+    QMenu *debug_view_menu = nullptr;
+    std::array<QAction *, 3> shading_actions = {};
+    std::array<QAction *, 7> camera_actions = {};
+    std::array<QAction *, 6> debug_view_actions = {};
     QLabel *info_overlay = nullptr;
     QtNavigationGizmo *navigation_gizmo = nullptr;
     QtViewportFlyNavigationHud *fly_navigation_hud = nullptr;

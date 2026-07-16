@@ -37,59 +37,44 @@ QVec3 expected_forward(quader_editor_core::ViewAxis axis, int sign) {
 } // namespace
 
 TEST(QtViewportChromeLayoutTests,
-     KeepsShadingReachableAndTheToolbarInsideEveryPaneWidth) {
-  constexpr int kViewWidth = 120;
-  constexpr int kShadingWidth = 96;
+     KeepsUnifiedDisplayMenuAndToolbarInsideEveryPaneWidth) {
+  constexpr int kMenuWidth = 110;
   constexpr int kInset = 6;
-  constexpr int kGap = 6;
 
   for (int pane_width = 0; pane_width <= 400; ++pane_width) {
     const quader::QtViewportChromeLayout layout =
-        quader::qt_viewport_chrome_layout(
-            pane_width, kViewWidth, kShadingWidth, kInset, kGap);
+        quader::qt_viewport_chrome_layout(pane_width, kMenuWidth, kInset);
     EXPECT_GE(layout.toolbar_x, 0) << pane_width;
     EXPECT_GE(layout.toolbar_width, 0) << pane_width;
     EXPECT_LE(layout.toolbar_x + layout.toolbar_width, pane_width)
         << pane_width;
     if (pane_width > 0) {
-      EXPECT_GT(layout.shading_width, 0) << pane_width;
+      EXPECT_GT(layout.menu_width, 0) << pane_width;
     }
   }
 }
 
 TEST(QtViewportChromeLayoutTests,
-     HidesTheViewBelowTheLegacyMinimumAndRestoresItAtTheThreshold) {
-  constexpr int kViewWidth = 120;
-  constexpr int kShadingWidth = 96;
+     UsesReferenceMinimumDisplayMenuWidthWhenThePaneCanAccommodateIt) {
+  constexpr int kMenuWidth = 110;
   constexpr int kInset = 6;
-  constexpr int kGap = 6;
-  constexpr int kThresholdPaneWidth =
-      kInset * 2 + kShadingWidth + kGap +
-      quader::kQtViewportChromeMinimumViewWidth;
-
-  const quader::QtViewportChromeLayout below =
-      quader::qt_viewport_chrome_layout(kThresholdPaneWidth - 1, kViewWidth,
-                                        kShadingWidth, kInset, kGap);
-  EXPECT_FALSE(below.view_visible);
-  EXPECT_EQ(below.view_width, 0);
-  EXPECT_EQ(below.control_gap, 0);
-  EXPECT_EQ(below.shading_width, kShadingWidth);
-
-  const quader::QtViewportChromeLayout threshold =
-      quader::qt_viewport_chrome_layout(kThresholdPaneWidth, kViewWidth,
-                                        kShadingWidth, kInset, kGap);
-  EXPECT_TRUE(threshold.view_visible);
-  EXPECT_EQ(threshold.view_width,
-            quader::kQtViewportChromeMinimumViewWidth);
-  EXPECT_EQ(threshold.control_gap, kGap);
-  EXPECT_EQ(threshold.shading_width, kShadingWidth);
 
   const quader::QtViewportChromeLayout wide =
-      quader::qt_viewport_chrome_layout(400, kViewWidth, kShadingWidth, kInset,
-                                        kGap);
-  EXPECT_TRUE(wide.view_visible);
-  EXPECT_EQ(wide.view_width, kViewWidth);
-  EXPECT_EQ(wide.shading_width, kShadingWidth);
+      quader::qt_viewport_chrome_layout(400, kMenuWidth, kInset);
+  EXPECT_EQ(wide.menu_width, quader::kQtViewportDisplayMenuMinimumWidth);
+  EXPECT_EQ(wide.toolbar_width, quader::kQtViewportDisplayMenuMinimumWidth);
+  EXPECT_EQ(wide.toolbar_x,
+            400 - kInset - quader::kQtViewportDisplayMenuMinimumWidth);
+
+  const quader::QtViewportChromeLayout long_label =
+      quader::qt_viewport_chrome_layout(400, 180, kInset);
+  EXPECT_EQ(long_label.menu_width, 180);
+
+  const quader::QtViewportChromeLayout narrow =
+      quader::qt_viewport_chrome_layout(40, kMenuWidth, kInset);
+  EXPECT_EQ(narrow.menu_width, 28);
+  EXPECT_EQ(narrow.toolbar_width, 28);
+  EXPECT_EQ(narrow.toolbar_x, kInset);
 }
 
 TEST(QtNavigationGizmoUpdatePolicyTests,

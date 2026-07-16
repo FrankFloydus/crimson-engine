@@ -25,7 +25,67 @@ enum class ViewportShadingMode {
     Wireframe,
     Shaded,
     Rendered,
+    DiffuseOnly,
+    SpecularOnly,
+    Albedo,
+    Roughness,
+    Metalness,
+    Normal,
 };
+
+[[nodiscard]] constexpr bool
+viewport_shading_mode_is_valid(ViewportShadingMode mode) {
+  switch (mode) {
+  case ViewportShadingMode::Wireframe:
+  case ViewportShadingMode::Shaded:
+  case ViewportShadingMode::Rendered:
+  case ViewportShadingMode::DiffuseOnly:
+  case ViewportShadingMode::SpecularOnly:
+  case ViewportShadingMode::Albedo:
+  case ViewportShadingMode::Roughness:
+  case ViewportShadingMode::Metalness:
+  case ViewportShadingMode::Normal:
+    return true;
+  }
+  return false;
+}
+
+[[nodiscard]] constexpr bool
+viewport_shading_is_debug_view(ViewportShadingMode mode) {
+  switch (mode) {
+  case ViewportShadingMode::DiffuseOnly:
+  case ViewportShadingMode::SpecularOnly:
+  case ViewportShadingMode::Albedo:
+  case ViewportShadingMode::Roughness:
+  case ViewportShadingMode::Metalness:
+  case ViewportShadingMode::Normal:
+    return true;
+  case ViewportShadingMode::Wireframe:
+  case ViewportShadingMode::Shaded:
+  case ViewportShadingMode::Rendered:
+    return false;
+  }
+  return false;
+}
+
+[[nodiscard]] constexpr bool
+viewport_shading_uses_rendered_materials(ViewportShadingMode mode) {
+  return mode == ViewportShadingMode::Rendered ||
+         viewport_shading_is_debug_view(mode);
+}
+
+[[nodiscard]] constexpr bool
+viewport_shading_uses_scene_lighting(ViewportShadingMode mode) {
+  return mode == ViewportShadingMode::Rendered ||
+         mode == ViewportShadingMode::DiffuseOnly ||
+         mode == ViewportShadingMode::SpecularOnly;
+}
+
+[[nodiscard]] constexpr bool
+viewport_shading_shows_light_gizmos(ViewportShadingMode mode) {
+  return mode == ViewportShadingMode::Shaded ||
+         mode == ViewportShadingMode::Rendered;
+}
 
 /**
  * Enumerates Viewport Workspace Layout Policy values used by the viewport layer.

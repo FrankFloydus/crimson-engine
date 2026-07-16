@@ -21,6 +21,18 @@ quader_api_to_viewport_shading_mode(QuaderShadingMode mode) {
   case QuaderShadingMode::Solid:
   case QuaderShadingMode::XRay:
     return ViewportShadingMode::Shaded;
+  case QuaderShadingMode::DiffuseOnly:
+    return ViewportShadingMode::DiffuseOnly;
+  case QuaderShadingMode::SpecularOnly:
+    return ViewportShadingMode::SpecularOnly;
+  case QuaderShadingMode::Albedo:
+    return ViewportShadingMode::Albedo;
+  case QuaderShadingMode::Roughness:
+    return ViewportShadingMode::Roughness;
+  case QuaderShadingMode::Metalness:
+    return ViewportShadingMode::Metalness;
+  case QuaderShadingMode::Normal:
+    return ViewportShadingMode::Normal;
   }
   return ViewportShadingMode::Shaded;
 }
@@ -34,6 +46,18 @@ quader_api_from_viewport_shading_mode(ViewportShadingMode mode) {
     return QuaderShadingMode::Material;
   case ViewportShadingMode::Shaded:
     return QuaderShadingMode::Solid;
+  case ViewportShadingMode::DiffuseOnly:
+    return QuaderShadingMode::DiffuseOnly;
+  case ViewportShadingMode::SpecularOnly:
+    return QuaderShadingMode::SpecularOnly;
+  case ViewportShadingMode::Albedo:
+    return QuaderShadingMode::Albedo;
+  case ViewportShadingMode::Roughness:
+    return QuaderShadingMode::Roughness;
+  case ViewportShadingMode::Metalness:
+    return QuaderShadingMode::Metalness;
+  case ViewportShadingMode::Normal:
+    return QuaderShadingMode::Normal;
   }
   return QuaderShadingMode::Solid;
 }

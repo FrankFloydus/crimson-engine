@@ -254,8 +254,15 @@ void InstanceRenderableCache::update_surface_grid(
   if (factory_ == nullptr) {
     return;
   }
-  for (const MeshRenderableProxy &proxy : proxies_) {
+  for (std::size_t index = 0u; index < proxies_.size(); ++index) {
+    const MeshRenderableProxy &proxy = proxies_[index];
     factory_->update_surface_grid(proxy, grid_world_spacing, settings);
+    if (index < plan_.chunks.size() &&
+        plan_.chunks[index].key.layer_mask ==
+            kViewportShadedSceneLayerMask &&
+        plan_.chunks[index].key.editor_unlit) {
+      factory_->update_shaded_lighting(proxy, settings);
+    }
   }
 }
 

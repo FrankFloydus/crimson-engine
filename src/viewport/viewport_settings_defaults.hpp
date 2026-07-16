@@ -32,5 +32,12 @@ inline constexpr ViewportSettingColor kDefaultViewportInstanceEditContextColor =
 inline constexpr float kDefaultViewportGridMinorLineSize = 0.325f;
 inline constexpr float kDefaultViewportGridMajorLineSize = 0.250f;
 inline constexpr float kDefaultViewportGridAxisLineSize = 1.0f;
+inline constexpr float kDefaultViewportShadedKeyDirectionX = -0.09f;
+inline constexpr float kDefaultViewportShadedKeyDirectionY = 0.47f;
+inline constexpr float kDefaultViewportShadedKeyDirectionZ = 0.88f;
+inline constexpr float kDefaultViewportShadedKeyIntensity = 0.60f;
+inline constexpr float kDefaultViewportShadedDiffuseWrap = 0.0f;
+inline constexpr float kDefaultViewportShadedGroundFill = 0.08f;
+inline constexpr float kDefaultViewportShadedSkyFill = 0.21f;
 
 } // namespace quader

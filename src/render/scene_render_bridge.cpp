@@ -181,6 +181,7 @@ void SceneRenderBridge::update_mesh_surface_grid(
   }
   mesh_cache_.update_surface_grid(grid_world_spacing, settings);
   instance_cache_.update_surface_grid(grid_world_spacing, settings);
+  tool_preview_cache_.update_shaded_lighting(settings);
 }
 
 SceneRenderResourceDiagnostics SceneRenderBridge::diagnostics() const {

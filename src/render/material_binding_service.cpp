@@ -43,6 +43,46 @@ void bind_default_mesh_surface_grid(const MaterialBindingService &binding,
   binding.apply_mesh_surface_grid(*instance, 1.0f, default_settings);
 }
 
+void bind_shaded_lighting_parameters(
+    filament::MaterialInstance &material_instance,
+    const ViewportSettings &settings) {
+  material_instance.setParameter("shadedLightingEnabled", 1.0f);
+  material_instance.setParameter(
+      "shadedKeyDirectionX",
+      std::clamp(settings.float_value(
+                     ViewportFloatSettingId::ShadedKeyDirectionX),
+                 -1.0f, 1.0f));
+  material_instance.setParameter(
+      "shadedKeyDirectionY",
+      std::clamp(settings.float_value(
+                     ViewportFloatSettingId::ShadedKeyDirectionY),
+                 -1.0f, 1.0f));
+  material_instance.setParameter(
+      "shadedKeyDirectionZ",
+      std::clamp(settings.float_value(
+                     ViewportFloatSettingId::ShadedKeyDirectionZ),
+                 -1.0f, 1.0f));
+  material_instance.setParameter(
+      "shadedKeyIntensity",
+      std::max(settings.float_value(
+                   ViewportFloatSettingId::ShadedKeyIntensity),
+               0.0f));
+  material_instance.setParameter(
+      "shadedDiffuseWrap",
+      std::clamp(settings.float_value(
+                     ViewportFloatSettingId::ShadedDiffuseWrap),
+                 0.0f, 0.8f));
+  material_instance.setParameter(
+      "shadedGroundFill",
+      std::clamp(settings.float_value(
+                     ViewportFloatSettingId::ShadedGroundFill),
+                 0.0f, 1.0f));
+  material_instance.setParameter(
+      "shadedSkyFill",
+      std::clamp(settings.float_value(ViewportFloatSettingId::ShadedSkyFill),
+                 0.0f, 1.0f));
+}
+
 } // namespace
 
 void bind_standard_material_texture_transform(
@@ -73,6 +113,12 @@ void bind_standard_material_texture_transform(
       rotation_degrees * std::numbers::pi_v<float> / 180.0f);
 }
 
+void bind_default_shaded_lighting(
+    filament::MaterialInstance &material_instance) {
+  bind_shaded_lighting_parameters(material_instance,
+                                   ViewportSettings::defaults());
+}
+
 std::uint64_t mesh_surface_grid_signature(
     float grid_world_spacing, const ViewportSettings &settings) {
   const ViewportSettingColor minor =
@@ -99,6 +145,20 @@ std::uint64_t mesh_surface_grid_signature(
           settings.float_value(ViewportFloatSettingId::GridMinorLineSize))
       .add_float(
           settings.float_value(ViewportFloatSettingId::GridMajorLineSize))
+      .add_float(
+          settings.float_value(ViewportFloatSettingId::ShadedKeyDirectionX))
+      .add_float(
+          settings.float_value(ViewportFloatSettingId::ShadedKeyDirectionY))
+      .add_float(
+          settings.float_value(ViewportFloatSettingId::ShadedKeyDirectionZ))
+      .add_float(
+          settings.float_value(ViewportFloatSettingId::ShadedKeyIntensity))
+      .add_float(
+          settings.float_value(ViewportFloatSettingId::ShadedDiffuseWrap))
+      .add_float(
+          settings.float_value(ViewportFloatSettingId::ShadedGroundFill))
+      .add_float(
+          settings.float_value(ViewportFloatSettingId::ShadedSkyFill))
       .add_bool(settings.bool_value(ViewportBoolSettingId::ShowMeshGrid));
   return signature.value();
 }
@@ -169,6 +229,9 @@ MaterialBindingService::create_mesh_material_instance(
   bind_standard_material_texture_transform(
       *material_instance, RenderStandardMaterialTextureTransformSnapshot{});
   bind_default_mesh_surface_grid(*this, material_instance);
+  if (editor_unlit) {
+    bind_default_shaded_lighting(*material_instance);
+  }
   apply_instance_edit_dim(*material_instance, false);
   if (!editor_unlit) {
     material_instance->setParameter(
@@ -238,6 +301,9 @@ MaterialBindingService::create_mesh_material_instance(
           ? material->texture_transform
           : RenderStandardMaterialTextureTransformSnapshot{});
   bind_default_mesh_surface_grid(*this, material_instance);
+  if (editor_unlit) {
+    bind_default_shaded_lighting(*material_instance);
+  }
   apply_instance_edit_dim(*material_instance, false);
   if (!editor_unlit) {
     material_instance->setParameter(
@@ -302,6 +368,12 @@ void MaterialBindingService::apply_mesh_surface_grid(
       "instanceEditContextColor",
       setting_color(
           settings.color(ViewportColorSettingId::InstanceEditContext)));
+}
+
+void MaterialBindingService::apply_shaded_lighting(
+    filament::MaterialInstance &material_instance,
+    const ViewportSettings &settings) const {
+  bind_shaded_lighting_parameters(material_instance, settings);
 }
 
 void MaterialBindingService::apply_instance_edit_dim(

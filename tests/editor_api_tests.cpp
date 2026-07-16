@@ -4193,11 +4193,25 @@ TEST(EditorApiTests, ViewportHandlesUseWorkspaceWithoutRuntimeHooks) {
     EXPECT_EQ(
         editor.viewports().shading_mode(quader::ViewportPaneId::Perspective),
         quader::QuaderShadingMode::Solid);
+    constexpr std::array<quader::QuaderShadingMode, 6> kDebugModes{
+        quader::QuaderShadingMode::DiffuseOnly,
+        quader::QuaderShadingMode::SpecularOnly,
+        quader::QuaderShadingMode::Albedo,
+        quader::QuaderShadingMode::Roughness,
+        quader::QuaderShadingMode::Metalness,
+        quader::QuaderShadingMode::Normal,
+    };
+    for (quader::QuaderShadingMode mode : kDebugModes) {
+      EXPECT_TRUE(viewport.set_shading_mode(mode).ok());
+      EXPECT_EQ(editor.viewports().shading_mode(
+                    quader::ViewportPaneId::Perspective),
+                mode);
+    }
     EXPECT_FALSE(
         viewport.set_shading_mode(quader::QuaderShadingMode::XRay).ok());
     EXPECT_EQ(
         editor.viewports().shading_mode(quader::ViewportPaneId::Perspective),
-        quader::QuaderShadingMode::Solid);
+        quader::QuaderShadingMode::Normal);
 
     EXPECT_TRUE(viewport.set_view(quader::ViewportView::Top).ok());
     EXPECT_EQ(editor.viewports().view(quader::ViewportPaneId::Perspective), quader::ViewportView::Top);

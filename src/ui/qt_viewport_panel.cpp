@@ -47,16 +47,18 @@
 #include "viewport/viewport_layout.hpp"
 
 #include <QApplication>
-#include <QComboBox>
+#include <QAction>
+#include <QActionGroup>
 #include <QFrame>
 #include <QFocusFrame>
 #include <QGuiApplication>
 #include <QHBoxLayout>
 #include <QLabel>
+#include <QMenu>
 #include <QMouseEvent>
 #include <QPoint>
+#include <QPushButton>
 #include <QResizeEvent>
-#include <QSignalBlocker>
 #include <QSizePolicy>
 #include <QVBoxLayout>
 #include <QWindow>
@@ -141,6 +143,12 @@ constexpr std::array<ViewportShadingMode, 3> kShadingModes{
     ViewportShadingMode::Rendered,
 };
 
+constexpr std::array<ViewportShadingMode, 6> kDebugViewModes{
+    ViewportShadingMode::DiffuseOnly, ViewportShadingMode::SpecularOnly,
+    ViewportShadingMode::Albedo,      ViewportShadingMode::Roughness,
+    ViewportShadingMode::Metalness,   ViewportShadingMode::Normal,
+};
+
 QString localized_view_label(const LocalizationService *localization,
                              ViewportView view) {
   std::string key = "viewport.view.";
@@ -158,6 +166,18 @@ std::string_view shading_stable_id(ViewportShadingMode shading) {
     return "shaded";
   case ViewportShadingMode::Rendered:
     return "rendered";
+  case ViewportShadingMode::DiffuseOnly:
+    return "diffuse_only";
+  case ViewportShadingMode::SpecularOnly:
+    return "specular_only";
+  case ViewportShadingMode::Albedo:
+    return "albedo";
+  case ViewportShadingMode::Roughness:
+    return "roughness";
+  case ViewportShadingMode::Metalness:
+    return "metalness";
+  case ViewportShadingMode::Normal:
+    return "normal";
   }
   return "shaded";
 }
@@ -170,17 +190,63 @@ std::string_view shading_label(ViewportShadingMode shading) {
     return "Shaded";
   case ViewportShadingMode::Rendered:
     return "Rendered";
+  case ViewportShadingMode::DiffuseOnly:
+    return "Diffuse Only";
+  case ViewportShadingMode::SpecularOnly:
+    return "Specular Only";
+  case ViewportShadingMode::Albedo:
+    return "Albedo";
+  case ViewportShadingMode::Roughness:
+    return "Roughness";
+  case ViewportShadingMode::Metalness:
+    return "Metalness";
+  case ViewportShadingMode::Normal:
+    return "Normal";
   }
   return "Shaded";
 }
 
 QString localized_shading_label(const LocalizationService *localization,
                                 ViewportShadingMode shading) {
-  std::string key = "viewport.shading.";
+  std::string key = viewport_shading_is_debug_view(shading)
+                        ? "viewport.debug_view."
+                        : "viewport.shading.";
   key.append(shading_stable_id(shading));
   const std::string fallback(shading_label(shading));
   return QString::fromStdString(
       localization != nullptr ? localization->text(key, fallback) : fallback);
+}
+
+QString localized_display_menu_label(const LocalizationService *localization,
+                                     std::string_view key,
+                                     std::string_view fallback) {
+  return QString::fromStdString(
+      localization != nullptr
+          ? localization->text(std::string(key), std::string(fallback))
+          : std::string(fallback));
+}
+
+ViewportMaterialDebugMode
+viewport_material_debug_mode(ViewportShadingMode shading) {
+  switch (shading) {
+  case ViewportShadingMode::DiffuseOnly:
+    return ViewportMaterialDebugMode::DiffuseOnly;
+  case ViewportShadingMode::SpecularOnly:
+    return ViewportMaterialDebugMode::SpecularOnly;
+  case ViewportShadingMode::Albedo:
+    return ViewportMaterialDebugMode::Albedo;
+  case ViewportShadingMode::Roughness:
+    return ViewportMaterialDebugMode::Roughness;
+  case ViewportShadingMode::Metalness:
+    return ViewportMaterialDebugMode::Metalness;
+  case ViewportShadingMode::Normal:
+    return ViewportMaterialDebugMode::Normal;
+  case ViewportShadingMode::Wireframe:
+  case ViewportShadingMode::Shaded:
+  case ViewportShadingMode::Rendered:
+    return ViewportMaterialDebugMode::None;
+  }
+  return ViewportMaterialDebugMode::None;
 }
 
 QString localized_viewport_info_label(const LocalizationService *localization,
@@ -222,22 +288,6 @@ bool same_viewport_info_camera(const ViewportOverlayCamera &left,
          left.fov_degrees == right.fov_degrees &&
          left.near_plane == right.near_plane &&
          left.far_plane == right.far_plane;
-}
-
-int view_combo_index(ViewportView view) {
-  const auto found =
-      std::find(kViewportViews.begin(), kViewportViews.end(), view);
-  return found == kViewportViews.end()
-             ? 0
-             : static_cast<int>(std::distance(kViewportViews.begin(), found));
-}
-
-int shading_combo_index(ViewportShadingMode shading) {
-  const auto found =
-      std::find(kShadingModes.begin(), kShadingModes.end(), shading);
-  return found == kShadingModes.end()
-             ? 1
-             : static_cast<int>(std::distance(kShadingModes.begin(), found));
 }
 
 void mark_navigation_pressed(ViewportNavigationInput &navigation,
@@ -1295,9 +1345,7 @@ void QtViewportPanel::prepare_viewports(
     const ViewportShadingMode shading =
         workspace_->shading_mode(placement.pane_id);
     const bool point_light_gizmos_visible =
-        gizmos_visible &&
-        (shading == ViewportShadingMode::Shaded ||
-         shading == ViewportShadingMode::Rendered);
+        gizmos_visible && viewport_shading_shows_light_gizmos(shading);
     scene_overlay_requests[viewport_pane_index(placement.pane_id)] =
         (overlays_visible && selection_overlay_cache_.valid()) ||
         point_light_gizmos_visible;
@@ -1326,30 +1374,32 @@ void QtViewportPanel::prepare_viewports(
     workspace_->set_pane_render_size(pane_state.id, render_size);
     ViewportWorkspacePaneState &pane_workspace =
         workspace_->pane(pane_state.id);
-    pane_state.surface->renderer().set_instance_edit_context_active(
+    ViewportRenderer &renderer = pane_state.surface->renderer();
+    renderer.set_instance_edit_context_active(
         instance_edit_context_active,
         settings.color(ViewportColorSettingId::InstanceEditBackground));
+    renderer.set_material_debug_mode(
+        viewport_material_debug_mode(pane_workspace.shading));
 
     if (const EntityId root = document.scene_root(); root != kInvalidEntityId) {
       if (const SceneSettingsComponent *scene_settings =
               document.scene_settings(root)) {
         pane_workspace.camera.set_clip_planes(scene_settings->camera.near_plane,
                                               scene_settings->camera.far_plane);
-        pane_state.surface->renderer().apply_scene_settings(
+        renderer.apply_scene_settings(
             *scene_settings,
-            pane_workspace.shading == ViewportShadingMode::Rendered);
+            viewport_shading_uses_scene_lighting(pane_workspace.shading));
       }
     }
-    ViewportRenderer &renderer = pane_state.surface->renderer();
     renderer.update_camera(pane_workspace.camera);
     renderer.update_ground_grid(pane_workspace.camera, grid_world_size,
                                 settings, grid_visible);
-    renderer.set_scene_layer_mask(pane_workspace.shading ==
-                                          ViewportShadingMode::Rendered
+    renderer.set_scene_layer_mask(
+        viewport_shading_uses_rendered_materials(pane_workspace.shading)
                                       ? kViewportRenderedSceneLayerMask
                                       : kViewportShadedSceneLayerMask);
-    renderer.set_shadowing_enabled(pane_workspace.shading ==
-                                   ViewportShadingMode::Rendered);
+    renderer.set_shadowing_enabled(
+        viewport_shading_uses_scene_lighting(pane_workspace.shading));
     renderer.set_scene_visible(pane_workspace.shading !=
                                ViewportShadingMode::Wireframe);
     const bool tool_overlay_visible =
@@ -1382,8 +1432,7 @@ void QtViewportPanel::prepare_viewports(
             : ViewportOverlayFrame{};
     const bool point_light_gizmos_visible =
         gizmos_visible &&
-        (pane_workspace.shading == ViewportShadingMode::Shaded ||
-         pane_workspace.shading == ViewportShadingMode::Rendered);
+        viewport_shading_shows_light_gizmos(pane_workspace.shading);
     if (scene_overlay_requests[viewport_pane_index(pane_state.id)]) {
       overlay_frame = QuaderRenderApiRuntimeAccess::build_scene_overlay_frame(
           render_bridge, std::move(overlay_frame), *scene_overlay_snapshot,
@@ -1734,18 +1783,72 @@ void QtViewportPanel::create_pane(Pane &pane_state) {
   auto *toolbar_layout = new QHBoxLayout(pane_state.toolbar);
   toolbar_layout->setContentsMargins(0, 0, 0, 0);
 
-  pane_state.view_combo = new QComboBox(pane_state.toolbar);
-  pane_state.view_combo->setObjectName(
-      QStringLiteral("viewportView_%1")
-          .arg(QString::fromUtf8(
-              viewport_pane_stable_id(pane_state.id).data())));
-  pane_state.shading_combo = new QComboBox(pane_state.toolbar);
-  pane_state.shading_combo->setObjectName(
+  pane_state.display_button = new QPushButton(pane_state.toolbar);
+  pane_state.display_button->setObjectName(
       QStringLiteral("viewportShading_%1")
           .arg(QString::fromUtf8(
               viewport_pane_stable_id(pane_state.id).data())));
-  toolbar_layout->addWidget(pane_state.view_combo);
-  toolbar_layout->addWidget(pane_state.shading_combo);
+  pane_state.display_menu = new QMenu(pane_state.display_button);
+  pane_state.display_button->setMenu(pane_state.display_menu);
+
+  auto *display_group = new QActionGroup(pane_state.display_menu);
+  display_group->setExclusive(true);
+  for (std::size_t index = 0; index < kShadingModes.size(); ++index) {
+    QAction *action = pane_state.display_menu->addAction(QString());
+    action->setCheckable(true);
+    display_group->addAction(action);
+    pane_state.shading_actions[index] = action;
+    const ViewportShadingMode shading = kShadingModes[index];
+    connect(action, &QAction::triggered, this,
+            [this, &pane_state, shading]() {
+              if (workspace_ != nullptr) {
+                (void)workspace_->focus_pane(pane_state.id);
+                update_focused_pane_indicator();
+              }
+              set_pane_shading(pane_state, shading);
+            });
+  }
+
+  pane_state.display_menu->addSeparator();
+  pane_state.camera_menu = new QMenu(pane_state.display_menu);
+  pane_state.display_menu->addMenu(pane_state.camera_menu);
+  auto *camera_group = new QActionGroup(pane_state.camera_menu);
+  camera_group->setExclusive(true);
+  for (std::size_t index = 0; index < kViewportViews.size(); ++index) {
+    QAction *action = pane_state.camera_menu->addAction(QString());
+    action->setCheckable(true);
+    camera_group->addAction(action);
+    pane_state.camera_actions[index] = action;
+    const ViewportView view = kViewportViews[index];
+    connect(action, &QAction::triggered, this,
+            [this, &pane_state, view]() {
+              if (workspace_ != nullptr) {
+                (void)workspace_->focus_pane(pane_state.id);
+                update_focused_pane_indicator();
+              }
+              set_pane_view(pane_state, view);
+            });
+  }
+
+  pane_state.debug_view_menu = new QMenu(pane_state.display_menu);
+  pane_state.display_menu->addMenu(pane_state.debug_view_menu);
+  for (std::size_t index = 0; index < kDebugViewModes.size(); ++index) {
+    QAction *action = pane_state.debug_view_menu->addAction(QString());
+    action->setCheckable(true);
+    display_group->addAction(action);
+    pane_state.debug_view_actions[index] = action;
+    const ViewportShadingMode shading = kDebugViewModes[index];
+    connect(action, &QAction::triggered, this,
+            [this, &pane_state, shading]() {
+              if (workspace_ != nullptr) {
+                (void)workspace_->focus_pane(pane_state.id);
+                update_focused_pane_indicator();
+              }
+              set_pane_shading(pane_state, shading);
+            });
+  }
+
+  toolbar_layout->addWidget(pane_state.display_button);
   pane_state.toolbar->adjustSize();
 
   pane_state.info_overlay = new QLabel(pane_state.frame);
@@ -1777,42 +1880,25 @@ void QtViewportPanel::create_pane(Pane &pane_state) {
   update_pane_overlay_geometry(pane_state);
   pane_state.toolbar->raise();
 
-  connect(pane_state.view_combo, &QComboBox::currentIndexChanged, this,
-          [this, &pane_state](int index) {
-            if (index >= 0 && index < static_cast<int>(kViewportViews.size())) {
-              if (workspace_ != nullptr) {
-                (void)workspace_->focus_pane(pane_state.id);
-                update_focused_pane_indicator();
-              }
-              set_pane_view(pane_state,
-                            kViewportViews[static_cast<std::size_t>(index)]);
-            }
-          });
-  connect(pane_state.shading_combo, &QComboBox::currentIndexChanged, this,
-          [this, &pane_state](int index) {
-            if (index >= 0 && index < static_cast<int>(kShadingModes.size())) {
-              if (workspace_ != nullptr) {
-                (void)workspace_->focus_pane(pane_state.id);
-                update_focused_pane_indicator();
-              }
-              set_pane_shading(pane_state,
-                               kShadingModes[static_cast<std::size_t>(index)]);
-            }
-          });
   refresh_pane_controls(pane_state);
 }
 
 void QtViewportPanel::refresh_pane_controls(Pane &pane_state) {
-  const QSignalBlocker view_blocker(pane_state.view_combo);
-  const QSignalBlocker shading_blocker(pane_state.shading_combo);
-  pane_state.view_combo->clear();
-  for (ViewportView view : kViewportViews) {
-    pane_state.view_combo->addItem(localized_view_label(localization_, view));
+  for (std::size_t index = 0; index < kShadingModes.size(); ++index) {
+    pane_state.shading_actions[index]->setText(
+        localized_shading_label(localization_, kShadingModes[index]));
   }
-  pane_state.shading_combo->clear();
-  for (ViewportShadingMode shading : kShadingModes) {
-    pane_state.shading_combo->addItem(
-        localized_shading_label(localization_, shading));
+  pane_state.camera_menu->setTitle(localized_display_menu_label(
+      localization_, "viewport.display.camera", "Camera"));
+  for (std::size_t index = 0; index < kViewportViews.size(); ++index) {
+    pane_state.camera_actions[index]->setText(
+        localized_view_label(localization_, kViewportViews[index]));
+  }
+  pane_state.debug_view_menu->setTitle(localized_display_menu_label(
+      localization_, "viewport.display.debug_view", "Debug View"));
+  for (std::size_t index = 0; index < kDebugViewModes.size(); ++index) {
+    pane_state.debug_view_actions[index]->setText(
+        localized_shading_label(localization_, kDebugViewModes[index]));
   }
   sync_pane_control_selection(pane_state);
   pane_state.toolbar->adjustSize();
@@ -1823,16 +1909,25 @@ void QtViewportPanel::sync_pane_control_selection(Pane &pane_state) {
   if (workspace_ == nullptr) {
     return;
   }
-  const QSignalBlocker view_blocker(pane_state.view_combo);
-  const QSignalBlocker shading_blocker(pane_state.shading_combo);
-  const int view_index = view_combo_index(workspace_->view(pane_state.id));
-  const int shading_index =
-      shading_combo_index(workspace_->shading_mode(pane_state.id));
-  if (pane_state.view_combo->currentIndex() != view_index) {
-    pane_state.view_combo->setCurrentIndex(view_index);
+  const ViewportView view = workspace_->view(pane_state.id);
+  const ViewportShadingMode shading =
+      workspace_->shading_mode(pane_state.id);
+  for (std::size_t index = 0; index < kViewportViews.size(); ++index) {
+    pane_state.camera_actions[index]->setChecked(kViewportViews[index] == view);
   }
-  if (pane_state.shading_combo->currentIndex() != shading_index) {
-    pane_state.shading_combo->setCurrentIndex(shading_index);
+  for (std::size_t index = 0; index < kShadingModes.size(); ++index) {
+    pane_state.shading_actions[index]->setChecked(
+        kShadingModes[index] == shading);
+  }
+  for (std::size_t index = 0; index < kDebugViewModes.size(); ++index) {
+    pane_state.debug_view_actions[index]->setChecked(
+        kDebugViewModes[index] == shading);
+  }
+  const QString display_label = localized_shading_label(localization_, shading);
+  if (pane_state.display_button->text() != display_label) {
+    pane_state.display_button->setText(display_label);
+    pane_state.toolbar->adjustSize();
+    update_pane_overlay_geometry(pane_state);
   }
 }
 
@@ -1877,29 +1972,22 @@ void QtViewportPanel::update_pane_geometry() {
 
 void QtViewportPanel::update_pane_overlay_geometry(Pane &pane_state) {
   if (pane_state.frame == nullptr || pane_state.surface_container == nullptr ||
-      pane_state.toolbar == nullptr || pane_state.info_overlay == nullptr ||
+      pane_state.toolbar == nullptr || pane_state.display_button == nullptr ||
+      pane_state.info_overlay == nullptr ||
       pane_state.navigation_gizmo == nullptr ||
       pane_state.fly_navigation_hud == nullptr) {
     return;
   }
   pane_state.surface_container->setGeometry(pane_state.frame->rect());
   constexpr int kOverlayInset = 6;
-  constexpr int kOverlayControlGap = 6;
-  pane_state.view_combo->setMinimumWidth(0);
-  pane_state.view_combo->setMaximumWidth(QWIDGETSIZE_MAX);
-  pane_state.shading_combo->setMinimumWidth(0);
-  pane_state.shading_combo->setMaximumWidth(QWIDGETSIZE_MAX);
-  const QSize view_size = pane_state.view_combo->sizeHint();
-  const QSize shading_size = pane_state.shading_combo->sizeHint();
+  pane_state.display_button->setMinimumWidth(0);
+  pane_state.display_button->setMaximumWidth(QWIDGETSIZE_MAX);
+  const QSize display_size = pane_state.display_button->sizeHint();
   const QtViewportChromeLayout chrome = qt_viewport_chrome_layout(
-      pane_state.frame->width(), view_size.width(), shading_size.width(),
-      kOverlayInset, kOverlayControlGap);
-  pane_state.view_combo->setVisible(chrome.view_visible);
-  pane_state.view_combo->setFixedWidth(chrome.view_width);
-  pane_state.shading_combo->setFixedWidth(chrome.shading_width);
-  pane_state.toolbar->layout()->setSpacing(chrome.control_gap);
-  const int toolbar_height =
-      std::max({1, view_size.height(), shading_size.height()});
+      pane_state.frame->width(), display_size.width(), kOverlayInset);
+  pane_state.display_button->setFixedWidth(chrome.menu_width);
+  pane_state.display_menu->setMinimumWidth(chrome.menu_width);
+  const int toolbar_height = std::max(1, display_size.height());
   pane_state.toolbar->setGeometry(
       chrome.toolbar_x, kOverlayInset, chrome.toolbar_width, toolbar_height);
   pane_state.toolbar->raise();
@@ -2048,8 +2136,8 @@ bool QtViewportPanel::is_viewport_internal_event_target(
     return true;
   }
 
-  // A QComboBox popup has its own QWidgetWindow. Associate both the popup
-  // widget and that native window with the pane-owned combo that created it.
+  // A QMenu popup has its own QWidgetWindow. Associate both the popup widget
+  // and that native window with the pane-owned display menu that created it.
   const QWidget *popup = QApplication::activePopupWidget();
   return popup != nullptr && pane_owns_object(popup) &&
          (target == popup || target == popup->windowHandle());
@@ -2570,7 +2658,8 @@ void QtViewportPanel::process_viewport_input(
   const bool point_lights_pickable =
       active_viewport_settings().bool_value(
           ViewportBoolSettingId::ShowGizmos) &&
-      workspace_->shading_mode(*input_pane) != ViewportShadingMode::Wireframe;
+      viewport_shading_shows_light_gizmos(
+          workspace_->shading_mode(*input_pane));
   const std::vector<ViewportSceneBillboardPickCandidate> billboards =
       point_lights_pickable
           ? point_light_pick_candidates(document)
@@ -3272,6 +3361,7 @@ const ViewportSettings &QtViewportPanel::active_viewport_settings() const {
 void QtViewportPanel::set_pane_view(Pane &pane_state, ViewportView view) {
   if (workspace_ != nullptr) {
     (void)workspace_->set_view(pane_state.id, view);
+    sync_pane_control_selection(pane_state);
   }
 }
 
@@ -3279,6 +3369,7 @@ void QtViewportPanel::set_pane_shading(Pane &pane_state,
                                        ViewportShadingMode shading) {
   if (workspace_ != nullptr) {
     (void)workspace_->set_shading_mode(pane_state.id, shading);
+    sync_pane_control_selection(pane_state);
   }
 }
 

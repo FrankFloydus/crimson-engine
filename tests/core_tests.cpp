@@ -1214,15 +1214,16 @@ TEST(WindowPlacementTests, PreservesMinimumSizeWithoutConnectedWorkAreas) {
 TEST(ViewportSettingsTests, DefaultsMatchNativeViewportSettingsState) {
   const ViewportSettings settings = ViewportSettings::defaults();
 
-  ASSERT_EQ(viewport_settings_sections().size(), 7u);
+  ASSERT_EQ(viewport_settings_sections().size(), 8u);
   EXPECT_EQ(viewport_settings_sections()[0].label, "Grid");
   EXPECT_FALSE(viewport_settings_sections()[0].default_expanded);
-  EXPECT_EQ(viewport_settings_sections()[1].label, "Selection");
-  EXPECT_EQ(viewport_settings_sections()[2].label, "Instance Editing");
-  EXPECT_EQ(viewport_settings_sections()[3].label, "Overlay");
-  EXPECT_EQ(viewport_settings_sections()[4].label, "Vertices");
-  EXPECT_EQ(viewport_settings_sections()[5].label, "Picking");
-  EXPECT_EQ(viewport_settings_sections()[6].label, "Gizmo");
+  EXPECT_EQ(viewport_settings_sections()[1].label, "Shading");
+  EXPECT_EQ(viewport_settings_sections()[2].label, "Selection");
+  EXPECT_EQ(viewport_settings_sections()[3].label, "Instance Editing");
+  EXPECT_EQ(viewport_settings_sections()[4].label, "Overlay");
+  EXPECT_EQ(viewport_settings_sections()[5].label, "Vertices");
+  EXPECT_EQ(viewport_settings_sections()[6].label, "Picking");
+  EXPECT_EQ(viewport_settings_sections()[7].label, "Gizmo");
 
   expect_color_near(settings.color(ViewportColorSettingId::SelectionWire),
                     overlay_policy_setting_color(kOverlaySelectionWireColor));
@@ -1251,6 +1252,24 @@ TEST(ViewportSettingsTests, DefaultsMatchNativeViewportSettingsState) {
       settings.float_value(ViewportFloatSettingId::GridMajorLineSize), 0.250f);
   EXPECT_FLOAT_EQ(
       settings.float_value(ViewportFloatSettingId::GridAxisLineSize), 1.0f);
+  EXPECT_FLOAT_EQ(
+      settings.float_value(ViewportFloatSettingId::ShadedKeyDirectionX),
+      -0.09f);
+  EXPECT_FLOAT_EQ(
+      settings.float_value(ViewportFloatSettingId::ShadedKeyDirectionY),
+      0.47f);
+  EXPECT_FLOAT_EQ(
+      settings.float_value(ViewportFloatSettingId::ShadedKeyDirectionZ),
+      0.88f);
+  EXPECT_FLOAT_EQ(
+      settings.float_value(ViewportFloatSettingId::ShadedKeyIntensity),
+      0.60f);
+  EXPECT_FLOAT_EQ(
+      settings.float_value(ViewportFloatSettingId::ShadedDiffuseWrap), 0.0f);
+  EXPECT_FLOAT_EQ(
+      settings.float_value(ViewportFloatSettingId::ShadedGroundFill), 0.08f);
+  EXPECT_FLOAT_EQ(
+      settings.float_value(ViewportFloatSettingId::ShadedSkyFill), 0.21f);
   EXPECT_FLOAT_EQ(
       settings.float_value(ViewportFloatSettingId::SelectionEdgeLineSize),
       2.5f);
@@ -1439,6 +1458,67 @@ TEST(ViewportSettingsTests, SavesLoadsAndClampsViewportPreferenceKeys) {
   std::filesystem::remove(path);
 }
 
+TEST(ViewportSettingsTests,
+     MigratesOnlyTheExactPreviousShadedLightingDefaults) {
+  const std::filesystem::path path = std::filesystem::temp_directory_path() /
+                                     "quader_shaded_defaults_migration.ini";
+  const auto write_legacy_preset = [&](bool include_direction,
+                                       float key_intensity) {
+    std::ofstream file(path, std::ios::trunc);
+    ASSERT_TRUE(file.is_open()) << path.string();
+    file << "[Viewport]\n";
+    if (include_direction) {
+      file << "QVertexWorks.Quader.Viewport.ShadedKeyDirectionX=-0.35\n"
+              "QVertexWorks.Quader.Viewport.ShadedKeyDirectionY=0.55\n"
+              "QVertexWorks.Quader.Viewport.ShadedKeyDirectionZ=0.75\n";
+    }
+    file << "QVertexWorks.Quader.Viewport.ShadedKeyIntensity="
+         << key_intensity
+         << "\nQVertexWorks.Quader.Viewport.ShadedDiffuseWrap=0.25\n"
+            "QVertexWorks.Quader.Viewport.ShadedGroundFill=0.45\n"
+            "QVertexWorks.Quader.Viewport.ShadedSkyFill=0.62\n";
+  };
+
+  write_legacy_preset(true, 0.42f);
+  ViewportSettings loaded = ViewportSettings::load(path);
+  EXPECT_FLOAT_EQ(
+      loaded.float_value(ViewportFloatSettingId::ShadedKeyDirectionX),
+      -0.09f);
+  EXPECT_FLOAT_EQ(
+      loaded.float_value(ViewportFloatSettingId::ShadedKeyDirectionY), 0.47f);
+  EXPECT_FLOAT_EQ(
+      loaded.float_value(ViewportFloatSettingId::ShadedKeyDirectionZ), 0.88f);
+  EXPECT_FLOAT_EQ(
+      loaded.float_value(ViewportFloatSettingId::ShadedKeyIntensity), 0.60f);
+  EXPECT_FLOAT_EQ(
+      loaded.float_value(ViewportFloatSettingId::ShadedDiffuseWrap), 0.0f);
+  EXPECT_FLOAT_EQ(loaded.float_value(ViewportFloatSettingId::ShadedGroundFill),
+                  0.08f);
+  EXPECT_FLOAT_EQ(loaded.float_value(ViewportFloatSettingId::ShadedSkyFill),
+                  0.21f);
+
+  write_legacy_preset(false, 0.42f);
+  loaded = ViewportSettings::load(path);
+  EXPECT_FLOAT_EQ(
+      loaded.float_value(ViewportFloatSettingId::ShadedKeyIntensity), 0.60f);
+
+  write_legacy_preset(true, 0.43f);
+  loaded = ViewportSettings::load(path);
+  EXPECT_FLOAT_EQ(
+      loaded.float_value(ViewportFloatSettingId::ShadedKeyDirectionX),
+      -0.35f);
+  EXPECT_FLOAT_EQ(
+      loaded.float_value(ViewportFloatSettingId::ShadedKeyIntensity), 0.43f);
+  EXPECT_FLOAT_EQ(
+      loaded.float_value(ViewportFloatSettingId::ShadedDiffuseWrap), 0.25f);
+  EXPECT_FLOAT_EQ(loaded.float_value(ViewportFloatSettingId::ShadedGroundFill),
+                  0.45f);
+  EXPECT_FLOAT_EQ(loaded.float_value(ViewportFloatSettingId::ShadedSkyFill),
+                  0.62f);
+
+  std::filesystem::remove(path);
+}
+
 TEST(ViewportSettingsTests, EveryDescriptorHasARuntimeConsumer) {
   const std::string consumers =
       read_source_file("src/render/viewport_grid_renderer.cpp") +
@@ -1483,6 +1563,13 @@ TEST(ViewportSettingsTests, EveryDescriptorHasARuntimeConsumer) {
           "ViewportFloatSettingId::GridMinorLineSize",
           "ViewportFloatSettingId::GridMajorLineSize",
           "ViewportFloatSettingId::GridAxisLineSize",
+          "ViewportFloatSettingId::ShadedKeyDirectionX",
+          "ViewportFloatSettingId::ShadedKeyDirectionY",
+          "ViewportFloatSettingId::ShadedKeyDirectionZ",
+          "ViewportFloatSettingId::ShadedKeyIntensity",
+          "ViewportFloatSettingId::ShadedDiffuseWrap",
+          "ViewportFloatSettingId::ShadedGroundFill",
+          "ViewportFloatSettingId::ShadedSkyFill",
           "ViewportFloatSettingId::SourceWireLineSize",
           "ViewportFloatSettingId::SelectionFaceWireLineSize",
           "ViewportFloatSettingId::SelectionEdgeLineSize",
@@ -1629,9 +1716,34 @@ TEST(QuaderMeshMaterialTests, UsesLitTextureTransformTimesColorAndPbrFactors) {
                 "baseColor, baseSample.a * materialParams.baseColorFactor.a"),
             std::string::npos);
   EXPECT_NE(shaded_source.find(
-                "material.baseColor = vec4(edited.rgb * edited.a, edited.a)"),
+                "material.baseColor = vec4(finalRgb * edited.a, edited.a)"),
+            std::string::npos);
+  EXPECT_NE(shaded_source.find("normalize(vec3(-0.09, 0.47, 0.88))"),
+            std::string::npos);
+  EXPECT_NE(shaded_source.find(
+                "(dot(normalView, keyDirectionView) + diffuseWrap)"),
+            std::string::npos);
+  EXPECT_NE(shaded_source.find(
+                "dot(normalWorld, worldUp) * 0.5 + 0.5"),
+            std::string::npos);
+  EXPECT_NE(shaded_source.find(
+                "min(ambient + keyIntensity * wrappedDiffuse, 1.0)"),
+            std::string::npos);
+  EXPECT_NE(shaded_source.find("name : shadedKeyDirectionX"),
+            std::string::npos);
+  EXPECT_NE(shaded_source.find("name : shadedKeyDirectionY"),
+            std::string::npos);
+  EXPECT_NE(shaded_source.find("name : shadedKeyDirectionZ"),
+            std::string::npos);
+  EXPECT_NE(shaded_source.find(
+                "vec3 finalRgb = edited.rgb * lighting"),
             std::string::npos);
   EXPECT_EQ(shaded_source.find("roughnessTexture"), std::string::npos);
+  EXPECT_EQ(shaded_source.find("metallicTexture"), std::string::npos);
+  EXPECT_EQ(shaded_source.find("normalTexture"), std::string::npos);
+  EXPECT_EQ(shaded_source.find("shadedModelingSpecular"), std::string::npos);
+  EXPECT_EQ(shaded_source.find("getWorldViewVector"), std::string::npos);
+  EXPECT_EQ(shaded_source.find("reflect("), std::string::npos);
   EXPECT_EQ(shaded_source.find("editor_unlit"), std::string::npos);
   EXPECT_NE(source.find("shadingModel : lit"), std::string::npos);
   EXPECT_EQ(source.find("doubleSided : true"), std::string::npos);
@@ -1648,13 +1760,13 @@ TEST(QuaderMeshMaterialTests, UsesLitTextureTransformTimesColorAndPbrFactors) {
   EXPECT_NE(source.find("baseSample.rgb * materialParams.baseColorFactor.rgb"),
             std::string::npos);
   EXPECT_NE(source.find(
-                "baseColor, baseSample.a * materialParams.baseColorFactor.a"),
+                "float sourceAlpha = baseSample.a * "
+                "materialParams.baseColorFactor.a"),
             std::string::npos);
   EXPECT_NE(source.find(
                 "material.baseColor = vec4(edited.rgb * edited.a, edited.a)"),
             std::string::npos);
-  EXPECT_NE(source.find("material.roughness = clamp(roughnessSample * "
-                        "materialParams.roughnessFactor"),
+  EXPECT_NE(source.find("roughnessSample * materialParams.roughnessFactor"),
             std::string::npos);
   EXPECT_NE(source.find("name : metallicTexture"), std::string::npos);
   EXPECT_NE(source.find("name : normalTexture"), std::string::npos);
@@ -1669,11 +1781,50 @@ TEST(QuaderMeshMaterialTests, UsesLitTextureTransformTimesColorAndPbrFactors) {
   EXPECT_NE(source.find("normalSample.xy *= "
                         "clamp(materialParams.normalStrength, -16.0, 16.0)"),
             std::string::npos);
-  EXPECT_NE(source.find("material.metallic = clamp(metallicSample * "
-                        "materialParams.metallicFactor"),
+  EXPECT_NE(source.find("metallicSample * materialParams.metallicFactor"),
             std::string::npos);
   EXPECT_NE(source.find("material.normal = normalSample"), std::string::npos);
   EXPECT_EQ(source.find("editor_unlit"), std::string::npos);
+}
+
+TEST(QuaderMeshMaterialTests,
+     RenderedMaterialSupportsPerViewportPbrDebugViews) {
+  const std::string source =
+      read_source_file("resources/materials/quader_mesh_lit.mat");
+  const std::string renderer =
+      read_source_file("src/render/viewport_renderer.cpp");
+
+  EXPECT_NE(source.find("postLightingBlending : opaque"), std::string::npos);
+  EXPECT_NE(source.find("getMaterialGlobal0().x"), std::string::npos);
+  EXPECT_NE(source.find("material.postLightingColor"), std::string::npos);
+  EXPECT_NE(source.find("material.postLightingMixFactor"),
+            std::string::npos);
+  EXPECT_NE(source.find("material.reflectance = 0.0"), std::string::npos);
+  EXPECT_NE(source.find("mix(vec3(0.04), albedo, metallic)"),
+            std::string::npos);
+  EXPECT_NE(source.find("getWorldTangentFrame() * normalSample"),
+            std::string::npos);
+  EXPECT_NE(source.find("debugColor * sourceAlpha, sourceAlpha"),
+            std::string::npos);
+  EXPECT_NE(renderer.find("view_->setMaterialGlobal("), std::string::npos);
+  EXPECT_NE(renderer.find("ViewportMaterialDebugMode mode"),
+            std::string::npos);
+}
+
+TEST(QuaderMeshMaterialTests, ShadedPreviewBindsOnlyTheBaseColorSurfaceInput) {
+  const std::string source =
+      read_source_file("src/render/material_preview_renderer.cpp");
+
+  EXPECT_EQ(source.find("const auto bind_surface_parameters"),
+            std::string::npos);
+  EXPECT_NE(source.find(
+                "shaded_instance->setParameter(\"baseColorTexture\""),
+            std::string::npos);
+  EXPECT_NE(source.find(
+                "rendered_instance->setParameter(\"roughnessTexture\""),
+            std::string::npos);
+  EXPECT_EQ(source.find("wire_instance->setParameter(\"normalTexture\""),
+            std::string::npos);
 }
 
 TEST(QuaderMeshMaterialTests, SupportsOptionalWorldSpaceSurfaceGrid) {
@@ -4297,6 +4448,12 @@ TEST(SceneRenderBridgeTests, UsesExplicitTextureColorSpaceForMaterialUploads) {
           "editor_unlit ? *shaded_mesh_material_ : *rendered_mesh_material_"),
       std::string::npos);
   EXPECT_NE(material_source.find("if (!editor_unlit)"), std::string::npos);
+  EXPECT_NE(material_source.find("material_texture_slot::kRoughness"),
+            std::string::npos);
+  EXPECT_NE(material_source.find("material_texture_slot::kMetallic"),
+            std::string::npos);
+  EXPECT_NE(material_source.find("material_texture_slot::kNormal"),
+            std::string::npos);
   EXPECT_NE(material_source.find("apply_mesh_surface_grid"), std::string::npos);
   EXPECT_NE(material_source.find("surfaceGridMinorColor"), std::string::npos);
   EXPECT_NE(material_source.find("surfaceGridMajorSize"), std::string::npos);
@@ -4690,8 +4847,8 @@ TEST(SceneRenderBridgeTests,
             std::string::npos);
   EXPECT_TRUE(source_contains_compact(
       viewport_panel,
-      "renderer.set_shadowing_enabled(pane_workspace.shading == "
-      "ViewportShadingMode::Rendered)"));
+      "renderer.set_shadowing_enabled("
+      "viewport_shading_uses_scene_lighting(pane_workspace.shading))"));
 }
 
 TEST(ViewportRendererTests, OverlayPassUsesNeutralExposureCamera) {
@@ -5034,8 +5191,7 @@ TEST(ViewportRendererTests,
       viewport_panel_source, "pane_workspace.camera.set_clip_planes( "
                              "scene_settings->camera.near_plane, "
                              "scene_settings->camera.far_plane); "
-                             "pane_state.surface->renderer().apply_scene_"
-                             "settings("));
+                             "renderer.apply_scene_settings("));
   EXPECT_NE(
       viewport_panel_source.find("renderer.set_scene_layer_mask"),
       std::string::npos);
@@ -5087,17 +5243,13 @@ TEST(ViewportRendererTests,
   EXPECT_NE(viewport_panel_source.find(
                 ".tool_overlay_visible = tool_overlay_visible"),
             std::string::npos);
-  EXPECT_NE(
-      viewport_panel_source.find("shading == ViewportShadingMode::Shaded ||"),
-      std::string::npos);
-  EXPECT_NE(
-      viewport_panel_source.find("shading == ViewportShadingMode::Rendered"),
-      std::string::npos);
+  EXPECT_NE(viewport_panel_source.find(
+                "viewport_shading_shows_light_gizmos(shading)"),
+            std::string::npos);
   EXPECT_TRUE(source_contains_compact(
       viewport_panel_source,
       "const bool point_light_gizmos_visible = gizmos_visible && "
-      "(pane_workspace.shading == ViewportShadingMode::Shaded || "
-      "pane_workspace.shading == ViewportShadingMode::Rendered)"));
+      "viewport_shading_shows_light_gizmos(pane_workspace.shading)"));
   EXPECT_TRUE(source_contains_compact(
       viewport_panel_source,
       "scene_overlay_requests[viewport_pane_index(placement.pane_id)] = "
@@ -6460,6 +6612,38 @@ TEST(ViewportWorkspaceServiceTests, PaneStateDoesNotStoreDuplicateView) {
 
   EXPECT_EQ(header.find("ViewportView view ="), std::string::npos);
   EXPECT_EQ(source.find("pane_state.view"), std::string::npos);
+}
+
+TEST(ViewportWorkspaceServiceTests,
+     DebugShadingModesAreOwnedIndependentlyPerPane) {
+  constexpr std::array<ViewportShadingMode, 6> kDebugModes{
+      ViewportShadingMode::DiffuseOnly, ViewportShadingMode::SpecularOnly,
+      ViewportShadingMode::Albedo,      ViewportShadingMode::Roughness,
+      ViewportShadingMode::Metalness,   ViewportShadingMode::Normal,
+  };
+  ViewportWorkspaceService workspace;
+
+  for (ViewportShadingMode mode : kDebugModes) {
+    EXPECT_TRUE(viewport_shading_is_debug_view(mode));
+    EXPECT_TRUE(viewport_shading_uses_rendered_materials(mode));
+    EXPECT_TRUE(workspace.set_shading_mode(ViewportPaneId::Perspective, mode));
+    EXPECT_EQ(workspace.shading_mode(ViewportPaneId::Perspective), mode);
+    EXPECT_EQ(workspace.shading_mode(ViewportPaneId::Top),
+              ViewportShadingMode::Shaded);
+    EXPECT_FALSE(
+        workspace.set_shading_mode(ViewportPaneId::Perspective, mode));
+  }
+
+  EXPECT_TRUE(viewport_shading_uses_scene_lighting(
+      ViewportShadingMode::DiffuseOnly));
+  EXPECT_TRUE(viewport_shading_uses_scene_lighting(
+      ViewportShadingMode::SpecularOnly));
+  EXPECT_FALSE(
+      viewport_shading_uses_scene_lighting(ViewportShadingMode::Albedo));
+  EXPECT_FALSE(workspace.set_shading_mode(
+      ViewportPaneId::Perspective, static_cast<ViewportShadingMode>(999)));
+  EXPECT_EQ(workspace.shading_mode(ViewportPaneId::Perspective),
+            ViewportShadingMode::Normal);
 }
 
 TEST(ViewportCameraTests, OrbitPanAndZoomChangePose) {

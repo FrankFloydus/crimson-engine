@@ -1165,9 +1165,15 @@ TEST(UiLayoutGuardrailTests,
                          "placements)");
   expect_contains(panel, "if (geometry_changed)");
   expect_contains(panel, "sync_pane_control_selection(pane_state)");
-  EXPECT_EQ(count_occurrences(panel, "pane_state.view_combo->clear()"), 1u);
-  EXPECT_EQ(count_occurrences(panel, "pane_state.shading_combo->clear()"),
-            1u);
+  expect_contains(panel_header, "QPushButton *display_button = nullptr");
+  expect_contains(panel_header, "QMenu *camera_menu = nullptr");
+  expect_contains(panel_header, "QMenu *debug_view_menu = nullptr");
+  expect_contains(panel, "new QPushButton(pane_state.toolbar)");
+  expect_contains(panel,
+                  "pane_state.display_menu->setMinimumWidth(chrome.menu_width)");
+  expect_contains(panel, "pane_state.display_menu->addMenu(");
+  expect_missing(panel, "new QComboBox(pane_state.toolbar)");
+  expect_missing(panel, "viewportView_%1");
 
   // Detailed cadence probes remain available for regression diagnosis, but
   // production frames must not pay their clock/logging cost.

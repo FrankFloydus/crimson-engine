@@ -841,6 +841,21 @@ void MeshRenderableFactory::update_surface_grid(
   }
 }
 
+void MeshRenderableFactory::update_shaded_lighting(
+    const MeshRenderableProxy &proxy, const ViewportSettings &settings) {
+  QDR_PROFILE_FUNCTION();
+  if (!material_binding_) {
+    return;
+  }
+
+  for (filament::MaterialInstance *material_instance :
+       proxy.material_instances) {
+    if (material_instance) {
+      material_binding_->apply_shaded_lighting(*material_instance, settings);
+    }
+  }
+}
+
 void MeshRenderableFactory::remove_from_scene(
     const MeshRenderableProxy &proxy) {
   if (!scene_ || !proxy.entity) {

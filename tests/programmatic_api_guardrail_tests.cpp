@@ -1329,6 +1329,12 @@ TEST(ProgrammaticApiGuardrailTests, ViewportShadingConversionUsesSharedApiHelper
             std::string::npos);
   EXPECT_NE(conversion_helper.find("quader_api_from_viewport_shading_mode"),
             std::string::npos);
+  for (std::string_view debug_mode : {
+           "DiffuseOnly", "SpecularOnly", "Albedo", "Roughness",
+           "Metalness", "Normal"}) {
+    EXPECT_NE(conversion_helper.find(debug_mode), std::string::npos)
+        << debug_mode;
+  }
   EXPECT_EQ(viewport_api.find("ViewportShadingMode toViewportShadingMode"),
             std::string::npos);
   EXPECT_EQ(viewport_api.find("QuaderShadingMode toQuaderShadingMode"),

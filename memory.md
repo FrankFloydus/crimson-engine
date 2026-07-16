@@ -4756,3 +4756,58 @@ Verification:
   the rendered far interior edge/face of a flipped closed box while rejecting its culled near shell;
   the user also confirmed outside hover and navigation recovery in the native viewport. Final CTest
   passes 6/6, including SDK-only, SDK consumer/parity, guardrail, app, and modeling-domain targets.
+
+## 2026-07-16 - Shaded Mode Uses Shadow-Free Modeling Lighting
+
+Invariant:
+
+- Shaded mode remains a separate unlit Filament material/proxy layer and never consumes the scene
+  IBL, scene light entities, or shadows. Rendered mode remains the PBR/IBL/scene-light owner.
+- The Shaded material evaluates a view-space directional key at normalized `(-0.35, 0.55, 0.75)`
+  with wrapped Lambert diffuse plus a world-up hemispheric fill. It multiplies linear albedo by the
+  resulting lighting scalar and preserves the source alpha/premultiplication path. Shaded does not
+  evaluate specular, reflection, roughness, metallic, or normal-map inputs.
+- Viewport Shading settings temporarily expose Key Direction X/Y/Z, Key Intensity, Diffuse Wrap,
+  Ground Fill, and Sky Fill. The white-material Source reference is matched with defaults
+  `(-0.09, 0.47, 0.88)`, `0.60`, `0.0`, `0.08`, and `0.21`; storage, binding, and shader evaluation
+  clamp them to safe domains. Ordinary meshes, explicit instances, modeling tool previews, and the
+  isolated Shaded material preview use the same parameters. Wireframe preview remains unlit. Load
+  migrates only the exact prior preset (including the older form without direction keys), preserving
+  user-customized values.
+- Do not apply the requested `0.18` AO strength until Shaded has a usable AO source. Current
+  Filament SSAO is a Rendered post-processing input and the unlit modeling material has no AO
+  texture or neutral AO payload, so reusing it would create a false or mode-coupled signal.
+
+Owners: `resources/materials/quader_mesh.mat`, `ViewportSettings`,
+`MaterialBindingService`, mesh/instance/tool-preview render caches, and
+`MaterialPreviewRenderer`.
+
+Verification: the original implementation used explicit fast iteration mode and native `quader`
+v0.1.12 built successfully. A rejected reflective experiment was removed completely. The restored
+diffuse-only material with temporary direction controls compiles and passes its focused
+Shaded/render/settings contracts. The white-material tuning follow-up adds exact-preset migration;
+final affected/CTest/native v0.1.15 results are recorded in the task handoff.
+
+## 2026-07-16 - Unified Viewport Display Menu And PBR Debug Views
+
+Invariant:
+
+- Each embedded viewport has one top-right display menu. Wireframe, Shaded, and Rendered remain
+  top-level mutually exclusive modes; Camera is a checked submenu for the pane's view; Debug View
+  is a mutually exclusive submenu containing Diffuse Only, Specular Only, Albedo, Roughness,
+  Metalness, and Normal. Camera selection does not change the active shading/debug mode.
+- Debug selection is owned independently by each `ViewportWorkspacePaneState` and exposed through
+  `QuaderViewportApi`. Every debug mode consumes the Rendered material proxy layer. Diffuse Only
+  and Specular Only retain Rendered scene/IBL lighting and shadows while removing the opposite PBR
+  lobe. Albedo, Roughness, Metalness, and world-space Normal replace post-lighting output and bypass
+  scene post processing.
+- `ViewportRenderer` owns Filament material-global slot 0 for the per-view debug mode. Shared
+  material instances must not be mutated to select a pass. The lit material preserves source alpha
+  in every debug output and excludes editor surface-grid/context dimming from diagnostic data.
+
+Owners: `ViewportWorkspaceService`, `QuaderViewportApi`, `QtViewportPanel`, `ViewportRenderer`, and
+`resources/materials/quader_mesh_lit.mat`.
+
+Verification: Filament `matc` accepts the diagnostic material; focused material, renderer,
+workspace, editor API, viewport chrome, and UI/API guardrail tests pass. Final affected and native
+v0.1.16 build results are recorded in the task handoff.

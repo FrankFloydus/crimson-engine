@@ -162,6 +162,9 @@ ViewportWorkspaceService::shading_mode(ViewportPaneId pane_id) const {
 
 bool ViewportWorkspaceService::set_shading_mode(ViewportPaneId pane_id,
                                                 ViewportShadingMode mode) {
+  if (!viewport_shading_mode_is_valid(mode)) {
+    return false;
+  }
   ViewportWorkspacePaneState &pane_state = pane(pane_id);
   if (pane_state.shading == mode) {
     return false;

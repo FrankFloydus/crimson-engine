@@ -30,6 +30,7 @@ struct ViewportSettingColor {
  */
 enum class ViewportSettingsSectionId {
     Grid,
+    Shading,
     Selection,
     InstanceEditing,
     Overlay,
@@ -75,6 +76,13 @@ enum class ViewportFloatSettingId {
     GridMinorLineSize,
     GridMajorLineSize,
     GridAxisLineSize,
+    ShadedKeyDirectionX,
+    ShadedKeyDirectionY,
+    ShadedKeyDirectionZ,
+    ShadedKeyIntensity,
+    ShadedDiffuseWrap,
+    ShadedGroundFill,
+    ShadedSkyFill,
     SourceWireLineSize,
     SelectionFaceWireLineSize,
     SelectionEdgeLineSize,

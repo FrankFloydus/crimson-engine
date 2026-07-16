@@ -35,6 +35,19 @@ enum class ViewportRenderSurface {
 };
 
 /**
+ * Selects a renderer-owned material diagnostic for one Filament view.
+ */
+enum class ViewportMaterialDebugMode : std::uint8_t {
+    None = 0,
+    DiffuseOnly = 1,
+    SpecularOnly = 2,
+    Albedo = 3,
+    Roughness = 4,
+    Metalness = 5,
+    Normal = 6,
+};
+
+/**
  * Owns Viewport Renderer behavior within the render extraction and Filament resource layer.
  */
 class ViewportRenderer {
@@ -68,6 +81,7 @@ public:
     void set_scene_visible(bool visible);
     void set_scene_layer_mask(std::uint8_t layer_mask);
     void set_shadowing_enabled(bool enabled);
+    void set_material_debug_mode(ViewportMaterialDebugMode mode);
     void render(filament::Renderer& renderer);
 
     RenderTextureHandle texture_handle() const {
@@ -108,6 +122,8 @@ public:
     SceneToneMapping color_grading_tone_mapping_ = SceneToneMapping::Aces;
     bool has_color_grading_tone_mapping_ = false;
     bool instance_edit_context_active_ = false;
+    ViewportMaterialDebugMode material_debug_mode_ =
+        ViewportMaterialDebugMode::None;
     ViewportSettingColor instance_edit_background_;
 };
 

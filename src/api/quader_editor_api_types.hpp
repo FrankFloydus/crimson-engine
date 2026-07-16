@@ -27,6 +27,12 @@ enum class QuaderShadingMode {
     Solid,
     Wireframe,
     XRay,
+    DiffuseOnly,
+    SpecularOnly,
+    Albedo,
+    Roughness,
+    Metalness,
+    Normal,
 };
 
 /**

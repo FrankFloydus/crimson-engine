@@ -81,6 +81,8 @@ public:
     void update_surface_grid(const MeshRenderableProxy &proxy,
                              float grid_world_spacing,
                              const ViewportSettings &settings);
+    void update_shaded_lighting(const MeshRenderableProxy &proxy,
+                                const ViewportSettings &settings);
     void remove_from_scene(const MeshRenderableProxy &proxy);
     void destroy(MeshRenderableProxy& proxy);
     void destroy_detached(MeshRenderableProxy &proxy);

@@ -18,6 +18,7 @@
 namespace quader {
 
 class MaterialBindingService;
+class ViewportSettings;
 
 /**
  * Caches Tool Preview Renderable Cache derived state for the render extraction and Filament resource layer.
@@ -40,6 +41,7 @@ public:
     }
 
     bool set_meshes(const std::vector<RenderToolPreviewMeshRecord> &meshes);
+    void update_shaded_lighting(const ViewportSettings &settings);
     void clear();
 
     std::uint64_t signature() const { return mesh_signature_; }

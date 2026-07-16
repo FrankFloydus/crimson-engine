@@ -113,6 +113,16 @@ bool ToolPreviewRenderableCache::set_meshes(
   return true;
 }
 
+void ToolPreviewRenderableCache::update_shaded_lighting(
+    const ViewportSettings &settings) {
+  if (!factory_) {
+    return;
+  }
+  for (const PreviewGroup &group : preview_groups_) {
+    factory_->update_shaded_lighting(group.prototype, settings);
+  }
+}
+
 void ToolPreviewRenderableCache::clear() {
     if (factory_) {
       for (PreviewGroup &group : preview_groups_) {

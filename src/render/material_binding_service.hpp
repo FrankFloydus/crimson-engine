@@ -27,9 +27,13 @@ void bind_standard_material_texture_transform(
     filament::MaterialInstance &material_instance,
     const RenderStandardMaterialTextureTransformSnapshot &transform);
 
+/** Binds the default shadow-free modeling light used by Shaded mode. */
+void bind_default_shaded_lighting(
+    filament::MaterialInstance &material_instance);
+
 /**
- * Builds the narrow signature used to avoid rewriting unchanged mesh-surface
- * grid uniforms on every presentation frame.
+ * Builds the narrow signature used to avoid rewriting unchanged viewport mesh
+ * uniforms on every presentation frame.
  */
 [[nodiscard]] std::uint64_t
 mesh_surface_grid_signature(float grid_world_spacing,
@@ -71,6 +75,9 @@ public:
     void apply_mesh_surface_grid(filament::MaterialInstance &material_instance,
                                  float grid_world_spacing,
                                  const ViewportSettings &settings) const;
+    void apply_shaded_lighting(
+        filament::MaterialInstance &material_instance,
+        const ViewportSettings &settings) const;
     void apply_instance_edit_dim(
         filament::MaterialInstance &material_instance, bool dimmed) const;
 
