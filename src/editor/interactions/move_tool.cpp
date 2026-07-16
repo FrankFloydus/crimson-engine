@@ -553,7 +553,7 @@ public:
                   const RotatePreviewResult preview =
                       preview_rotate_from_screen_position(
                           state.rotate, input.screen_position,
-                          input.grid_enabled ? input.rotate_snap_degrees : 0.0);
+                          input.rotation_snap_degrees);
                   if (!preview.ok) {
                     return {false, false,
                             preview.message.empty() ? "Rotate preview failed."

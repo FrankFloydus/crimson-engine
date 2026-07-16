@@ -34,8 +34,18 @@ public:
     QuaderApiVoidResult remove_shortcut(QuaderCommandId command_id);
     QuaderApiVoidResult reset_shortcut(std::string_view command_id);
     QuaderApiVoidResult reset_shortcut(QuaderCommandId command_id);
+    QuaderApiVoidResult set_snapping_enabled(bool enabled);
+    [[nodiscard]] bool snapping_enabled() const;
+    QuaderApiVoidResult set_grid_visible(bool visible);
+    [[nodiscard]] bool grid_visible() const;
     QuaderApiVoidResult set_grid_snap_enabled(bool enabled);
     [[nodiscard]] bool grid_snap_enabled() const;
+    QuaderApiVoidResult set_vertex_snap_enabled(bool enabled);
+    [[nodiscard]] bool vertex_snap_enabled() const;
+    QuaderApiVoidResult set_rotation_snap_enabled(bool enabled);
+    [[nodiscard]] bool rotation_snap_enabled() const;
+    QuaderApiVoidResult set_rotation_snap_degrees(double degrees);
+    [[nodiscard]] double rotation_snap_degrees() const;
     QuaderApiVoidResult set_navigation_gizmo_visible(bool visible);
     [[nodiscard]] bool navigation_gizmo_visible() const;
     QuaderApiVoidResult save();

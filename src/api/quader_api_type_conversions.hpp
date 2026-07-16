@@ -783,6 +783,7 @@ to_modeling_transform_drag_begin_request(
       .grid_size = request.grid_size,
       .vertex_snap_radius = request.vertex_snap_radius,
       .grid_snap_enabled = request.grid_snap_enabled,
+      .rotation_snap_degrees = request.rotation_snap_degrees,
       .precision = request.precision,
       .duplicate_selected = request.duplicate_selected,
   };
@@ -798,6 +799,7 @@ to_modeling_transform_drag_update_request(
       .grid_size = request.grid_size,
       .vertex_snap_radius = request.vertex_snap_radius,
       .grid_snap_enabled = request.grid_snap_enabled,
+      .rotation_snap_degrees = request.rotation_snap_degrees,
       .precision = request.precision,
   };
 }

@@ -561,6 +561,7 @@ struct QuaderTransformDragBeginRequest {
     double grid_size = 1.0;
     double vertex_snap_radius = 0.3;
     bool grid_snap_enabled = true;
+    double rotation_snap_degrees = 15.0;
     bool precision = false;
     bool duplicate_selected = false;
 };
@@ -575,6 +576,7 @@ struct QuaderTransformDragUpdateRequest {
   double grid_size = 1.0;
   double vertex_snap_radius = 0.3;
   bool grid_snap_enabled = true;
+  double rotation_snap_degrees = 15.0;
   bool precision = false;
 };
 

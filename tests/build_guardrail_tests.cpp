@@ -1969,6 +1969,25 @@ TEST(BuildGuardrailTests, ToolToolbarIconsAreEmbeddedQtResources) {
   }
 }
 
+TEST(BuildGuardrailTests, SnappingToolbarIconsAreEmbeddedQtResources) {
+  const std::string root_c_make = read_source_file("CMakeLists.txt");
+
+  expect_contains(root_c_make,
+                  "qt_add_resources(quader \"quader_snapping_toolbar_icons\"");
+  expect_contains(root_c_make, "PREFIX \"/quader/icons\"");
+  for (const std::string_view icon :
+       {"master", "grid_visible", "grid", "vertex", "rotation"}) {
+    const std::string relative_path =
+        std::string{"resources/icons/snapping_"} + std::string{icon} +
+        ".png";
+    ASSERT_TRUE(std::filesystem::exists(source_path(relative_path)))
+        << relative_path;
+    EXPECT_GT(std::filesystem::file_size(source_path(relative_path)), 512u)
+        << relative_path;
+    expect_contains(root_c_make, relative_path);
+  }
+}
+
 TEST(BuildGuardrailTests, SentryNativeRuntimeIsPackagedWithCrashpad) {
   const std::string root_c_make = read_source_file("CMakeLists.txt");
   const std::string options =

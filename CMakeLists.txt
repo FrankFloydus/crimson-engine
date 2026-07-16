@@ -707,6 +707,7 @@ add_library(quader_ui STATIC
     src/ui/qt_relative_pointer_input.cpp
     src/ui/qt_scene_workspace.cpp
     src/ui/qt_selection_toolbar.cpp
+    src/ui/qt_snapping_toolbar.cpp
     src/ui/qt_tool_toolbar.cpp
     src/ui/qt_toolbar_button_presentation.cpp
     src/ui/qt_semantic_axis_colors.hpp
@@ -848,6 +849,13 @@ set(QUADER_TOOL_TOOLBAR_ICON_FILES
     "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/tool_linear_array.png"
     "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/tool_radial_array.png")
 
+set(QUADER_SNAPPING_TOOLBAR_ICON_FILES
+    "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/snapping_master.png"
+    "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/snapping_grid_visible.png"
+    "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/snapping_grid.png"
+    "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/snapping_vertex.png"
+    "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/snapping_rotation.png")
+
 set(QUADER_NATIVE_APPLICATION_RESOURCES)
 if(WIN32)
     enable_language(RC)
@@ -872,6 +880,10 @@ qt_add_resources(quader "quader_tool_toolbar_icons"
     PREFIX "/quader/icons"
     BASE "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons"
     FILES ${QUADER_TOOL_TOOLBAR_ICON_FILES})
+qt_add_resources(quader "quader_snapping_toolbar_icons"
+    PREFIX "/quader/icons"
+    BASE "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons"
+    FILES ${QUADER_SNAPPING_TOOLBAR_ICON_FILES})
 target_link_libraries(quader PRIVATE quader_runtime)
 add_dependencies(quader
     ${QUADER_FILAMENT_MATERIAL_TARGETS})

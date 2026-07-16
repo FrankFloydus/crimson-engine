@@ -838,6 +838,14 @@ TEST(EditorApiTests, AggregatesDocumentApisAndCommandRouting) {
                   editor.commands().keybinding_target_id_for_selection_mode(
                       quader::QuaderSelectionMode::Group)),
               "Keypad5");
+    for (int preset = 1; preset <= 10; ++preset) {
+      const std::string target =
+          editor.commands().keybinding_target_id_for_grid_preset(preset);
+      EXPECT_EQ(target,
+                quader::quader_viewport_grid_preset_target_id(preset));
+      EXPECT_EQ(editor.commands().shortcut_for(target),
+                "F" + std::to_string(preset));
+    }
     EXPECT_FALSE(editor.commands().last_status().has_value());
     const quader::QuaderApiVoidResult missing_command =
         editor.commands().execute("__missing_command__");
@@ -1546,6 +1554,91 @@ TEST(EditorApiTests, PreferencesPersistAndResolveCustomCommandShortcuts) {
                   .ok());
   EXPECT_EQ(reloaded.commands().shortcut_for(quader::quader_command::kEditUndo),
             "Ctrl+Z");
+}
+
+TEST(EditorApiTests, SnappingPreferencesDelegateToRuntimeHooks) {
+  CommandTestHarness harness;
+  quader::QuaderEditorApi &editor = harness.editor;
+  bool snapping_enabled = true;
+  bool grid_visible = true;
+  bool grid_snap_enabled = true;
+  bool vertex_snap_enabled = true;
+  bool rotation_snap_enabled = true;
+  double rotation_snap_degrees = 15.0;
+  const auto runtime_result = [](bool changed) {
+    return quader::QuaderApiVoidResult{
+        .ok = true,
+        .changed = changed,
+        .message = {},
+        .mutation_kind = quader::QuaderMutationKind::Runtime,
+    };
+  };
+  editor.preferences().set_runtime_hooks(quader::QuaderPreferencesRuntimeHooks{
+      .snapping_enabled = [&]() { return snapping_enabled; },
+      .set_snapping_enabled =
+          [&](bool enabled) {
+            const bool changed = snapping_enabled != enabled;
+            snapping_enabled = enabled;
+            return runtime_result(changed);
+          },
+      .grid_visible = [&]() { return grid_visible; },
+      .set_grid_visible =
+          [&](bool visible) {
+            const bool changed = grid_visible != visible;
+            grid_visible = visible;
+            return runtime_result(changed);
+          },
+      .grid_snap_enabled = [&]() { return grid_snap_enabled; },
+      .set_grid_snap_enabled =
+          [&](bool enabled) {
+            const bool changed = grid_snap_enabled != enabled;
+            grid_snap_enabled = enabled;
+            return runtime_result(changed);
+          },
+      .vertex_snap_enabled = [&]() { return vertex_snap_enabled; },
+      .set_vertex_snap_enabled =
+          [&](bool enabled) {
+            const bool changed = vertex_snap_enabled != enabled;
+            vertex_snap_enabled = enabled;
+            return runtime_result(changed);
+          },
+      .rotation_snap_enabled = [&]() { return rotation_snap_enabled; },
+      .set_rotation_snap_enabled =
+          [&](bool enabled) {
+            const bool changed = rotation_snap_enabled != enabled;
+            rotation_snap_enabled = enabled;
+            return runtime_result(changed);
+          },
+      .rotation_snap_degrees = [&]() { return rotation_snap_degrees; },
+      .set_rotation_snap_degrees =
+          [&](double degrees) {
+            const bool changed = rotation_snap_degrees != degrees;
+            rotation_snap_degrees = degrees;
+            return runtime_result(changed);
+          },
+  });
+
+  EXPECT_TRUE(editor.preferences().snapping_enabled());
+  EXPECT_TRUE(editor.preferences().grid_visible());
+  EXPECT_TRUE(editor.preferences().grid_snap_enabled());
+  EXPECT_TRUE(editor.preferences().vertex_snap_enabled());
+  EXPECT_TRUE(editor.preferences().rotation_snap_enabled());
+  EXPECT_DOUBLE_EQ(editor.preferences().rotation_snap_degrees(), 15.0);
+
+  EXPECT_TRUE(editor.preferences().set_snapping_enabled(false).changed());
+  EXPECT_TRUE(editor.preferences().set_grid_visible(false).changed());
+  EXPECT_TRUE(editor.preferences().set_grid_snap_enabled(false).changed());
+  EXPECT_TRUE(editor.preferences().set_vertex_snap_enabled(false).changed());
+  EXPECT_TRUE(editor.preferences().set_rotation_snap_enabled(false).changed());
+  EXPECT_TRUE(
+      editor.preferences().set_rotation_snap_degrees(22.5).changed());
+  EXPECT_FALSE(editor.preferences().snapping_enabled());
+  EXPECT_FALSE(editor.preferences().grid_visible());
+  EXPECT_FALSE(editor.preferences().grid_snap_enabled());
+  EXPECT_FALSE(editor.preferences().vertex_snap_enabled());
+  EXPECT_FALSE(editor.preferences().rotation_snap_enabled());
+  EXPECT_DOUBLE_EQ(editor.preferences().rotation_snap_degrees(), 22.5);
+  EXPECT_FALSE(editor.preferences().set_rotation_snap_degrees(22.5).changed());
 }
 
 TEST(EditorApiTests, KeybindingConflictsAndRemovalSupportRebindingUi) {

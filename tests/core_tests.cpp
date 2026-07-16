@@ -1276,32 +1276,106 @@ TEST(ViewportSettingsTests, DefaultsMatchNativeViewportSettingsState) {
   EXPECT_FLOAT_EQ(
       settings.float_value(ViewportFloatSettingId::PickVertexRadius), 0.3f);
   EXPECT_FLOAT_EQ(settings.float_value(ViewportFloatSettingId::GizmoSize),
-                  1.0f);
-  ASSERT_EQ(viewport_bool_settings().size(), 7u);
+                   1.0f);
+  EXPECT_FLOAT_EQ(
+      settings.float_value(ViewportFloatSettingId::RotationSnapDegrees),
+      15.0f);
+  ASSERT_EQ(viewport_float_settings().size(), 24u);
+  ASSERT_EQ(viewport_bool_settings().size(), 9u);
   EXPECT_TRUE(settings.bool_value(ViewportBoolSettingId::ShowGrid));
   EXPECT_FALSE(settings.bool_value(ViewportBoolSettingId::ShowMeshGrid));
   EXPECT_TRUE(settings.bool_value(ViewportBoolSettingId::ShowGizmos));
   EXPECT_TRUE(settings.bool_value(ViewportBoolSettingId::ShowOverlays));
   EXPECT_FALSE(settings.bool_value(ViewportBoolSettingId::ShowInfo));
+  EXPECT_TRUE(settings.bool_value(ViewportBoolSettingId::SnappingEnabled));
   EXPECT_TRUE(settings.bool_value(ViewportBoolSettingId::GridSnap));
   EXPECT_TRUE(settings.bool_value(ViewportBoolSettingId::VertexSnap));
+  EXPECT_TRUE(settings.bool_value(ViewportBoolSettingId::RotationSnap));
 }
 
 TEST(ViewportSettingsTests,
-     SnapSettingsOwnTemporaryGridToggleAndGlobalVertexSnap) {
+     MasterGatesIndependentGridVertexAndRotationSnapSettings) {
   ViewportSettings settings = ViewportSettings::defaults();
 
+  EXPECT_TRUE(viewport_snapping_active(settings));
   EXPECT_TRUE(viewport_grid_snap_active(settings, false));
   EXPECT_FALSE(viewport_grid_snap_active(settings, true));
   EXPECT_FLOAT_EQ(viewport_vertex_snap_radius(settings), 0.3f);
+  EXPECT_TRUE(viewport_rotation_snap_active(settings, false));
+  EXPECT_FALSE(viewport_rotation_snap_active(settings, true));
 
   EXPECT_TRUE(settings.set_bool_value(ViewportBoolSettingId::GridSnap, false));
   EXPECT_FALSE(viewport_grid_snap_active(settings, false));
   EXPECT_TRUE(viewport_grid_snap_active(settings, true));
+  EXPECT_FLOAT_EQ(viewport_vertex_snap_radius(settings), 0.3f);
+  EXPECT_TRUE(viewport_rotation_snap_active(settings, false));
 
   EXPECT_TRUE(
       settings.set_bool_value(ViewportBoolSettingId::VertexSnap, false));
   EXPECT_FLOAT_EQ(viewport_vertex_snap_radius(settings), 0.0f);
+  EXPECT_FALSE(viewport_grid_snap_active(settings, false));
+  EXPECT_TRUE(viewport_rotation_snap_active(settings, false));
+
+  EXPECT_TRUE(
+      settings.set_bool_value(ViewportBoolSettingId::RotationSnap, false));
+  EXPECT_FALSE(viewport_rotation_snap_active(settings, false));
+  EXPECT_TRUE(viewport_rotation_snap_active(settings, true));
+  EXPECT_FALSE(viewport_grid_snap_active(settings, false));
+
+  EXPECT_TRUE(settings.set_bool_value(ViewportBoolSettingId::GridSnap, true));
+  EXPECT_TRUE(
+      settings.set_bool_value(ViewportBoolSettingId::VertexSnap, true));
+  EXPECT_TRUE(
+      settings.set_bool_value(ViewportBoolSettingId::RotationSnap, true));
+  EXPECT_TRUE(settings.set_bool_value(ViewportBoolSettingId::SnappingEnabled,
+                                      false));
+  EXPECT_FALSE(viewport_snapping_active(settings));
+  EXPECT_FALSE(viewport_grid_snap_active(settings, false));
+  EXPECT_FALSE(viewport_grid_snap_active(settings, true));
+  EXPECT_FLOAT_EQ(viewport_vertex_snap_radius(settings), 0.0f);
+  EXPECT_FALSE(viewport_rotation_snap_active(settings, false));
+  EXPECT_FALSE(viewport_rotation_snap_active(settings, true));
+  EXPECT_TRUE(settings.bool_value(ViewportBoolSettingId::GridSnap));
+  EXPECT_TRUE(settings.bool_value(ViewportBoolSettingId::VertexSnap));
+  EXPECT_TRUE(settings.bool_value(ViewportBoolSettingId::RotationSnap));
+}
+
+TEST(ViewportSettingsTests,
+     RotationSnapDegreesUseExactCatalogAndNearestCanonicalValue) {
+  constexpr std::array<double, kViewportRotationSnapAngleCount> kExpected{{
+      0.25, 0.5, 1.0, 5.0, 5.625, 11.25, 15.0, 22.5, 30.0, 45.0, 90.0,
+  }};
+  EXPECT_EQ(viewport_rotation_snap_degrees_catalog(), kExpected);
+  EXPECT_DOUBLE_EQ(viewport_canonical_rotation_snap_degrees(0.1), 0.25);
+  EXPECT_DOUBLE_EQ(viewport_canonical_rotation_snap_degrees(0.75), 0.5);
+  EXPECT_DOUBLE_EQ(viewport_canonical_rotation_snap_degrees(6.0), 5.625);
+  EXPECT_DOUBLE_EQ(viewport_canonical_rotation_snap_degrees(12.0), 11.25);
+  EXPECT_DOUBLE_EQ(viewport_canonical_rotation_snap_degrees(44.0), 45.0);
+  EXPECT_DOUBLE_EQ(viewport_canonical_rotation_snap_degrees(100.0), 90.0);
+  EXPECT_DOUBLE_EQ(viewport_canonical_rotation_snap_degrees(
+                       std::numeric_limits<double>::quiet_NaN()),
+                   15.0);
+
+  ViewportSettings settings = ViewportSettings::defaults();
+  ASSERT_TRUE(settings.set_float_value(
+      ViewportFloatSettingId::RotationSnapDegrees, 12.0f));
+  EXPECT_FLOAT_EQ(
+      settings.float_value(ViewportFloatSettingId::RotationSnapDegrees),
+      11.25f);
+
+  const std::filesystem::path path =
+      std::filesystem::temp_directory_path() /
+      "quader_rotation_snap_degrees_canonical_load.ini";
+  std::filesystem::remove(path);
+  {
+    std::ofstream file(path, std::ios::trunc);
+    ASSERT_TRUE(file.is_open());
+    file << "QVertexWorks.Quader.Viewport.RotationSnapDegrees=6.0\n";
+  }
+  const ViewportSettings loaded = ViewportSettings::load(path);
+  EXPECT_FLOAT_EQ(
+      loaded.float_value(ViewportFloatSettingId::RotationSnapDegrees), 5.625f);
+  std::filesystem::remove(path);
 }
 
 TEST(ViewportSettingsTests, OverlayDefaultsComeFromRenderOverlayPolicy) {
@@ -1402,9 +1476,15 @@ TEST(ViewportSettingsTests, SavesLoadsAndClampsViewportPreferenceKeys) {
   EXPECT_TRUE(
       settings.set_bool_value(ViewportBoolSettingId::ShowMeshGrid, true));
   EXPECT_TRUE(settings.set_bool_value(ViewportBoolSettingId::ShowInfo, true));
+  EXPECT_TRUE(
+      settings.set_bool_value(ViewportBoolSettingId::SnappingEnabled, false));
   EXPECT_TRUE(settings.set_bool_value(ViewportBoolSettingId::GridSnap, false));
   EXPECT_TRUE(
       settings.set_bool_value(ViewportBoolSettingId::VertexSnap, false));
+  EXPECT_TRUE(
+      settings.set_bool_value(ViewportBoolSettingId::RotationSnap, false));
+  EXPECT_TRUE(settings.set_float_value(
+      ViewportFloatSettingId::RotationSnapDegrees, 12.0f));
   ASSERT_TRUE(settings.save(path));
 
   const ViewportSettings loaded = ViewportSettings::load(path);
@@ -1420,8 +1500,13 @@ TEST(ViewportSettingsTests, SavesLoadsAndClampsViewportPreferenceKeys) {
   EXPECT_FALSE(loaded.bool_value(ViewportBoolSettingId::ShowGrid));
   EXPECT_TRUE(loaded.bool_value(ViewportBoolSettingId::ShowMeshGrid));
   EXPECT_TRUE(loaded.bool_value(ViewportBoolSettingId::ShowInfo));
+  EXPECT_FALSE(loaded.bool_value(ViewportBoolSettingId::SnappingEnabled));
   EXPECT_FALSE(loaded.bool_value(ViewportBoolSettingId::GridSnap));
   EXPECT_FALSE(loaded.bool_value(ViewportBoolSettingId::VertexSnap));
+  EXPECT_FALSE(loaded.bool_value(ViewportBoolSettingId::RotationSnap));
+  EXPECT_FLOAT_EQ(
+      loaded.float_value(ViewportFloatSettingId::RotationSnapDegrees),
+      11.25f);
 
   {
     std::ifstream source_file(path);
@@ -1532,7 +1617,7 @@ TEST(ViewportSettingsTests, EveryDescriptorHasARuntimeConsumer) {
       read_source_file("src/editor/viewport/transform_gizmo_interaction.cpp") +
       quader::test::guardrail::source_slice(
           read_source_file("src/viewport/viewport_settings.cpp"),
-          "bool viewport_grid_snap_active(",
+          "bool viewport_snapping_active(",
           "ViewportSettings::ViewportSettings()");
 
   constexpr std::array<std::string_view, kViewportColorSettingCount>
@@ -1583,6 +1668,7 @@ TEST(ViewportSettingsTests, EveryDescriptorHasARuntimeConsumer) {
           "ViewportFloatSettingId::PickVertexRadius",
           "ViewportFloatSettingId::PickEdgeRadius",
           "ViewportFloatSettingId::GizmoSize",
+          "ViewportFloatSettingId::RotationSnapDegrees",
       }};
   constexpr std::array<std::string_view, kViewportBoolSettingCount>
       kBoolConsumers{{
@@ -1591,8 +1677,10 @@ TEST(ViewportSettingsTests, EveryDescriptorHasARuntimeConsumer) {
           "ViewportBoolSettingId::ShowGizmos",
           "ViewportBoolSettingId::ShowOverlays",
           "ViewportBoolSettingId::ShowInfo",
+          "ViewportBoolSettingId::SnappingEnabled",
           "ViewportBoolSettingId::GridSnap",
           "ViewportBoolSettingId::VertexSnap",
+          "ViewportBoolSettingId::RotationSnap",
       }};
 
   const auto expect_consumed = [&](const auto &tokens) {

@@ -73,6 +73,27 @@ QuaderPreferencesApi::reset_shortcut(QuaderCommandId command_id) {
 }
 
 QuaderApiVoidResult
+QuaderPreferencesApi::set_snapping_enabled(bool enabled) {
+  return hooks_.set_snapping_enabled
+             ? hooks_.set_snapping_enabled(enabled)
+             : unavailable("Preferences runtime is not attached.");
+}
+
+bool QuaderPreferencesApi::snapping_enabled() const {
+  return hooks_.snapping_enabled ? hooks_.snapping_enabled() : false;
+}
+
+QuaderApiVoidResult QuaderPreferencesApi::set_grid_visible(bool visible) {
+  return hooks_.set_grid_visible
+             ? hooks_.set_grid_visible(visible)
+             : unavailable("Preferences runtime is not attached.");
+}
+
+bool QuaderPreferencesApi::grid_visible() const {
+  return hooks_.grid_visible ? hooks_.grid_visible() : false;
+}
+
+QuaderApiVoidResult
 QuaderPreferencesApi::set_grid_snap_enabled(bool enabled) {
   return hooks_.set_grid_snap_enabled
              ? hooks_.set_grid_snap_enabled(enabled)
@@ -81,6 +102,39 @@ QuaderPreferencesApi::set_grid_snap_enabled(bool enabled) {
 
 bool QuaderPreferencesApi::grid_snap_enabled() const {
   return hooks_.grid_snap_enabled ? hooks_.grid_snap_enabled() : false;
+}
+
+QuaderApiVoidResult
+QuaderPreferencesApi::set_vertex_snap_enabled(bool enabled) {
+  return hooks_.set_vertex_snap_enabled
+             ? hooks_.set_vertex_snap_enabled(enabled)
+             : unavailable("Preferences runtime is not attached.");
+}
+
+bool QuaderPreferencesApi::vertex_snap_enabled() const {
+  return hooks_.vertex_snap_enabled ? hooks_.vertex_snap_enabled() : false;
+}
+
+QuaderApiVoidResult
+QuaderPreferencesApi::set_rotation_snap_enabled(bool enabled) {
+  return hooks_.set_rotation_snap_enabled
+             ? hooks_.set_rotation_snap_enabled(enabled)
+             : unavailable("Preferences runtime is not attached.");
+}
+
+bool QuaderPreferencesApi::rotation_snap_enabled() const {
+  return hooks_.rotation_snap_enabled ? hooks_.rotation_snap_enabled() : false;
+}
+
+QuaderApiVoidResult
+QuaderPreferencesApi::set_rotation_snap_degrees(double degrees) {
+  return hooks_.set_rotation_snap_degrees
+             ? hooks_.set_rotation_snap_degrees(degrees)
+             : unavailable("Preferences runtime is not attached.");
+}
+
+double QuaderPreferencesApi::rotation_snap_degrees() const {
+  return hooks_.rotation_snap_degrees ? hooks_.rotation_snap_degrees() : 15.0;
 }
 
 QuaderApiVoidResult

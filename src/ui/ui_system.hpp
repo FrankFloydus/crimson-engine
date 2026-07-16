@@ -55,6 +55,7 @@ class QtViewportPanel;
 class QtProjectHomePage;
 class QtSceneWorkspace;
 class QtSelectionToolbar;
+class QtSnappingToolbar;
 class QtToolToolbar;
 enum class QtSettingsChangeKind;
 enum class QtStandardMaterialEditorFileAction : std::uint8_t;
@@ -179,6 +180,7 @@ private:
   QtProjectHomePage *project_home_page_ = nullptr;
   QtSceneWorkspace *scene_workspace_ = nullptr;
   QtSelectionToolbar *selection_toolbar_ = nullptr;
+  QtSnappingToolbar *snapping_toolbar_ = nullptr;
   QtToolToolbar *tool_toolbar_ = nullptr;
   QtViewportPanel *viewport_panel_ = nullptr;
   OutlinerPanel *outliner_panel_ = nullptr;
@@ -231,6 +233,7 @@ private:
   bool home_visible_ = false;
   bool viewport_initialized_ = false;
   bool selection_toolbar_workspace_visible_ = true;
+  bool snapping_toolbar_workspace_visible_ = true;
   bool tool_toolbar_workspace_visible_ = true;
   std::string workspace_window_state_;
 };

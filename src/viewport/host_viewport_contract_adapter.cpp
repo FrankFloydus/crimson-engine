@@ -427,6 +427,21 @@ viewport_grid_shortcut_binding_catalog() {
   return bindings;
 }
 
+std::vector<ViewportGridPresetDescriptor> viewport_grid_preset_catalog() {
+  const auto presets = quader_host_contract::grid_preset_catalog();
+  std::vector<ViewportGridPresetDescriptor> catalog;
+  catalog.reserve(presets.size());
+  for (std::size_t index = 0u; index < presets.size(); ++index) {
+    catalog.push_back({
+        .preset = static_cast<int>(index + 1u),
+        .map_units = presets[index].map_units,
+        .world_units = presets[index].world_units,
+        .is_default = presets[index].default_preset,
+    });
+  }
+  return catalog;
+}
+
 std::optional<ViewportView>
 viewport_view_for_command_target_id(std::string_view target_id) {
   if (target_id == quader_command::kViewportViewPerspective.string()) {

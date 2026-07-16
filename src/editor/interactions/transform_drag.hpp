@@ -254,7 +254,7 @@ struct TransformDragPreviewInput {
 	double grid_size = 1.0;
 	bool grid_enabled = true;
 	bool precision = false;
-	double rotate_snap_degrees = 15.0;
+	double rotation_snap_degrees = 15.0;
         double epsilon = kToolEpsilon;
         // Host adapters that must convert the world-space drag into an
         // object-local component transform can ask the runtime to update only

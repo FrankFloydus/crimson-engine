@@ -38,6 +38,21 @@ constexpr float kMaxVertexGrowth = 12.0f;
 constexpr float kMinPickRadius = 0.001f;
 constexpr float kMaxPickRadius = 2.0f;
 
+constexpr std::array<double, kViewportRotationSnapAngleCount>
+    kRotationSnapAngles{{
+        0.25,
+        0.5,
+        1.0,
+        5.0,
+        5.625,
+        11.25,
+        15.0,
+        22.5,
+        30.0,
+        45.0,
+        90.0,
+    }};
+
 constexpr ViewportSettingColor rgba8(std::uint32_t rgba) {
     return {
             static_cast<float>((rgba >> 24) & 0xffu) / 255.0f,
@@ -120,6 +135,7 @@ const std::array<ViewportFloatSettingDescriptor, kViewportFloatSettingCount> kFl
         {ViewportFloatSettingId::PickVertexRadius, ViewportSettingsSectionId::Picking, "Vertex Radius", key("PickVertexRadius"), kMinPickRadius, kMaxPickRadius, 0.3f},
         {ViewportFloatSettingId::PickEdgeRadius, ViewportSettingsSectionId::Picking, "Edge Radius", key("PickEdgeRadius"), kMinPickRadius, kMaxPickRadius, 0.2f},
         {ViewportFloatSettingId::GizmoSize, ViewportSettingsSectionId::Gizmo, "Size", key("GizmoSize"), kMinGizmoSize, kMaxGizmoSize, 1.0f},
+        {ViewportFloatSettingId::RotationSnapDegrees, ViewportSettingsSectionId::Grid, "Rotation Snap Angle", key("RotationSnapDegrees"), 0.25f, 90.0f, 15.0f},
 }};
 
 const std::array<ViewportBoolSettingDescriptor, kViewportBoolSettingCount> kBoolSettings{{
@@ -128,8 +144,10 @@ const std::array<ViewportBoolSettingDescriptor, kViewportBoolSettingCount> kBool
         {ViewportBoolSettingId::ShowGizmos, ViewportSettingsSectionId::Gizmo, "Show Gizmos", key("ShowGizmos"), true},
         {ViewportBoolSettingId::ShowOverlays, ViewportSettingsSectionId::Overlay, "Show Overlays", key("ShowOverlays"), true},
         {ViewportBoolSettingId::ShowInfo, ViewportSettingsSectionId::Overlay, "Show Info", key("ShowInfo"), false},
+        {ViewportBoolSettingId::SnappingEnabled, ViewportSettingsSectionId::Grid, "Snapping", key("SnappingEnabled"), true},
         {ViewportBoolSettingId::GridSnap, ViewportSettingsSectionId::Grid, "Grid Snap", key("GridSnap"), true},
         {ViewportBoolSettingId::VertexSnap, ViewportSettingsSectionId::Picking, "Vertex Snap", key("VertexSnap"), true},
+        {ViewportBoolSettingId::RotationSnap, ViewportSettingsSectionId::Grid, "Rotation Snap", key("RotationSnap"), true},
 }};
 
 std::string full_key(std::string_view suffix) {
@@ -258,6 +276,19 @@ const ViewportBoolSettingDescriptor &bool_descriptor(ViewportBoolSettingId id) {
   return kBoolSettings[index(id)];
 }
 
+float sanitize_float_setting(ViewportFloatSettingId id, float value) {
+  const ViewportFloatSettingDescriptor &descriptor = float_descriptor(id);
+  const float clamped =
+      std::isfinite(value)
+          ? std::clamp(value, descriptor.minimum, descriptor.maximum)
+          : descriptor.default_value;
+  if (id == ViewportFloatSettingId::RotationSnapDegrees) {
+    return static_cast<float>(
+        viewport_canonical_rotation_snap_degrees(clamped));
+  }
+  return clamped;
+}
+
 } // namespace
 
 const std::array<ViewportSettingsSectionDescriptor,
@@ -281,6 +312,23 @@ viewport_bool_settings() {
   return kBoolSettings;
 }
 
+const std::array<double, kViewportRotationSnapAngleCount> &
+viewport_rotation_snap_degrees_catalog() {
+  return kRotationSnapAngles;
+}
+
+double viewport_canonical_rotation_snap_degrees(double degrees) {
+  if (!std::isfinite(degrees)) {
+    return 15.0;
+  }
+  const auto closest = std::min_element(
+      kRotationSnapAngles.begin(), kRotationSnapAngles.end(),
+      [degrees](double left, double right) {
+        return std::abs(left - degrees) < std::abs(right - degrees);
+      });
+  return closest != kRotationSnapAngles.end() ? *closest : 15.0;
+}
+
 bool viewport_setting_colors_approximately(ViewportSettingColor left,
                                            ViewportSettingColor right) {
   return std::fabs(left.r - right.r) <= 0.001f &&
@@ -289,16 +337,29 @@ bool viewport_setting_colors_approximately(ViewportSettingColor left,
          std::fabs(left.a - right.a) <= 0.001f;
 }
 
+bool viewport_snapping_active(const ViewportSettings &settings) {
+  return settings.bool_value(ViewportBoolSettingId::SnappingEnabled);
+}
+
 bool viewport_grid_snap_active(const ViewportSettings &settings,
                                bool temporary_toggle_pressed) {
-  return settings.bool_value(ViewportBoolSettingId::GridSnap) !=
-         temporary_toggle_pressed;
+  return viewport_snapping_active(settings) &&
+         (settings.bool_value(ViewportBoolSettingId::GridSnap) !=
+          temporary_toggle_pressed);
 }
 
 float viewport_vertex_snap_radius(const ViewportSettings &settings) {
-  return settings.bool_value(ViewportBoolSettingId::VertexSnap)
+  return (viewport_snapping_active(settings) &&
+          settings.bool_value(ViewportBoolSettingId::VertexSnap))
              ? settings.float_value(ViewportFloatSettingId::PickVertexRadius)
              : 0.0f;
+}
+
+bool viewport_rotation_snap_active(const ViewportSettings &settings,
+                                   bool temporary_toggle_pressed) {
+  return viewport_snapping_active(settings) &&
+         (settings.bool_value(ViewportBoolSettingId::RotationSnap) !=
+          temporary_toggle_pressed);
 }
 
 ViewportSettings::ViewportSettings() { (void)reset_to_defaults(); }
@@ -346,9 +407,10 @@ ViewportSettings ViewportSettings::load(const std::filesystem::path& path) {
         }
         for (const ViewportFloatSettingDescriptor& descriptor : kFloatSettings) {
           if (key == full_key(descriptor.key)) {
-            settings.floats_[index(descriptor.id)] =
-                parse_float(value, descriptor.default_value, descriptor.minimum,
-                            descriptor.maximum);
+            settings.floats_[index(descriptor.id)] = sanitize_float_setting(
+                descriptor.id,
+                parse_float(value, descriptor.default_value,
+                            descriptor.minimum, descriptor.maximum));
             loaded_float_keys[index(descriptor.id)] = true;
           }
         }
@@ -488,15 +550,11 @@ float ViewportSettings::float_value(ViewportFloatSettingId id) const {
 }
 
 bool ViewportSettings::set_float_value(ViewportFloatSettingId id, float value) {
-  const ViewportFloatSettingDescriptor &descriptor = float_descriptor(id);
-  const float clamped =
-      std::isfinite(value)
-          ? std::clamp(value, descriptor.minimum, descriptor.maximum)
-          : descriptor.default_value;
-  if (std::fabs(floats_[index(id)] - clamped) <= 0.0001f) {
+  const float sanitized = sanitize_float_setting(id, value);
+  if (std::fabs(floats_[index(id)] - sanitized) <= 0.0001f) {
     return false;
   }
-  floats_[index(id)] = clamped;
+  floats_[index(id)] = sanitized;
   return true;
 }
 

@@ -390,6 +390,12 @@ TransformGizmoInteraction::handle_frame(QuaderEditorApi &editor,
                   .vertex_snap_radius = 0.0,
                   .grid_snap_enabled = viewport_grid_snap_active(
                       frame.settings, frame.input.modifiers.primary),
+                  .rotation_snap_degrees =
+                      viewport_rotation_snap_active(
+                          frame.settings, frame.input.modifiers.primary)
+                          ? frame.settings.float_value(
+                                ViewportFloatSettingId::RotationSnapDegrees)
+                          : 0.0,
                   .precision = frame.input.modifiers.primary,
                   .duplicate_selected = duplicate_selected,
               },
@@ -437,15 +443,21 @@ TransformGizmoInteraction::handle_frame(QuaderEditorApi &editor,
     // the previous sample's transform.
     const ViewportRay drag_ray =
         frame.camera.ray_from_viewport_point(frame.input.mouse_local);
-    const bool snap_active = viewport_grid_snap_active(
+    const bool grid_snap_active = viewport_grid_snap_active(
         frame.settings, frame.input.modifiers.primary);
+    const double rotation_snap_degrees =
+        viewport_rotation_snap_active(frame.settings,
+                                      frame.input.modifiers.primary)
+            ? frame.settings.float_value(
+                  ViewportFloatSettingId::RotationSnapDegrees)
+            : 0.0;
     const DragUpdateSignature update_signature{
         .screen_position = frame.input.mouse_local,
         .viewport_size = frame.input.viewport_size,
         .grid_preset = frame.input.grid_preset,
-        .vertex_snap_radius =
-            snap_active ? viewport_vertex_snap_radius(frame.settings) : 0.0f,
-        .grid_snap_enabled = snap_active,
+        .vertex_snap_radius = viewport_vertex_snap_radius(frame.settings),
+        .grid_snap_enabled = grid_snap_active,
+        .rotation_snap_degrees = rotation_snap_degrees,
         .precision = frame.input.modifiers.primary,
     };
     if (!matches_last_drag_update(update_signature)) {
@@ -464,7 +476,8 @@ TransformGizmoInteraction::handle_frame(QuaderEditorApi &editor,
             .grid_size =
                 viewport_grid_world_size_for_preset(frame.input.grid_preset),
             .vertex_snap_radius = update_signature.vertex_snap_radius,
-            .grid_snap_enabled = snap_active,
+            .grid_snap_enabled = grid_snap_active,
+            .rotation_snap_degrees = rotation_snap_degrees,
             .precision = frame.input.modifiers.primary,
         });
       }();
@@ -530,6 +543,7 @@ bool TransformGizmoInteraction::matches_last_drag_update(
          last.grid_preset == signature.grid_preset &&
          last.vertex_snap_radius == signature.vertex_snap_radius &&
          last.grid_snap_enabled == signature.grid_snap_enabled &&
+         last.rotation_snap_degrees == signature.rotation_snap_degrees &&
          last.precision == signature.precision;
 }
 

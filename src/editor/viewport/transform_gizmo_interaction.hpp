@@ -62,6 +62,7 @@ private:
       int grid_preset = 0;
       float vertex_snap_radius = 0.0f;
       bool grid_snap_enabled = false;
+      double rotation_snap_degrees = 0.0;
       bool precision = false;
     };
 

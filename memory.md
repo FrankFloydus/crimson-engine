@@ -39,6 +39,31 @@ Verification:
 - Full CTest: 6/6 targets passed.
 - Vulkan/Fusion boot smoke confirmed the project-only Home presentation.
 
+## 2026-07-16 - Snapping Toolbar Is Presentation-Only And Master-Gated
+
+Task/context: the top workspace needed retained grid/angle controls and five snapping buttons,
+including a global snapping master, without creating another UI-owned settings source or restoring
+the per-frame toolbar performance regression.
+
+Invariant:
+
+- `ViewportSettings` owns the persisted global, grid, vertex, and rotation snap toggles plus the
+  rotation increment. The master gates every snap mode without overwriting the individual choices.
+- Rotation increments come from the exact canonical catalog `0.25, 0.5, 1, 5, 5.625, 11.25, 15,
+  22.5, 30, 45, 90`; grid sizes come through the viewport host-contract adapter. Qt never reaches
+  into editor metadata directly.
+- `QtSnappingToolbar` dispatches grid preset and preference intent through `QuaderEditorApi`. Its
+  retained snapshot returns before shortcut lookup, formatting, or Qt property setters when owner
+  state is unchanged; it never enumerates the command catalog during frame refresh.
+- The toolbar is ordinary movable/floatable Fusion chrome. It participates in workspace window
+  state, localization, readiness geometry, and the Panels menu, and remains hidden on Home.
+
+Owners: `ViewportSettings`, `host_viewport_contract_adapter.*`, `QuaderPreferencesApi`,
+`QtSnappingToolbar`, and `UISystem`.
+
+Verification: focused toolbar/API/settings/guardrail coverage passes, full CTest passes 6/6, the
+native v0.1.29 target builds, and boot smoke confirms the project-only Home presentation.
+
 ## 2026-07-13 - Pivot Apply And Cross-App State Ownership Audit
 
 Task/context: the native Pivot tool visually moved its preview but Apply left the transform gizmo

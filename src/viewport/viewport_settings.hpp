@@ -96,6 +96,7 @@ enum class ViewportFloatSettingId {
     PickVertexRadius,
     PickEdgeRadius,
     GizmoSize,
+    RotationSnapDegrees,
     Count,
 };
 
@@ -108,8 +109,10 @@ enum class ViewportBoolSettingId {
     ShowGizmos,
     ShowOverlays,
     ShowInfo,
+    SnappingEnabled,
     GridSnap,
     VertexSnap,
+    RotationSnap,
     Count,
 };
 
@@ -121,6 +124,7 @@ inline constexpr std::size_t kViewportFloatSettingCount =
         static_cast<std::size_t>(ViewportFloatSettingId::Count);
 inline constexpr std::size_t kViewportBoolSettingCount =
         static_cast<std::size_t>(ViewportBoolSettingId::Count);
+inline constexpr std::size_t kViewportRotationSnapAngleCount = 11;
 
 /**
  * Stores the Viewport Settings Section Descriptor data contract used by the viewport input, layout, and camera layer.
@@ -176,9 +180,15 @@ viewport_float_settings();
 const std::array<ViewportBoolSettingDescriptor, kViewportBoolSettingCount> &
 viewport_bool_settings();
 
+const std::array<double, kViewportRotationSnapAngleCount> &
+viewport_rotation_snap_degrees_catalog();
+double viewport_canonical_rotation_snap_degrees(double degrees);
+bool viewport_snapping_active(const ViewportSettings &settings);
 bool viewport_grid_snap_active(const ViewportSettings &settings,
                                bool temporary_toggle_pressed);
 float viewport_vertex_snap_radius(const ViewportSettings &settings);
+bool viewport_rotation_snap_active(const ViewportSettings &settings,
+                                   bool temporary_toggle_pressed);
 bool viewport_setting_colors_approximately(ViewportSettingColor left,
                                            ViewportSettingColor right);
 

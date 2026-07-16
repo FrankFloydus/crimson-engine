@@ -6,15 +6,26 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include <gtest/gtest.h>
 
+#include "api/quader_api_session_internal_access.hpp"
+#include "api/quader_editor_api.hpp"
+#include "core/localization_service.hpp"
+#include "editor/session/scene_session.hpp"
 #include "ui/qt_project_home_page.hpp"
 #include "ui/qt_scene_workspace.hpp"
 #include "ui/qt_selection_toolbar.hpp"
+#include "ui/qt_snapping_toolbar.hpp"
 #include "ui/qt_tool_toolbar.hpp"
+#include "viewport/host_viewport_contract_adapter.hpp"
+#include "viewport/viewport_settings.hpp"
 
 #include <QAction>
+#include <QAbstractItemView>
 #include <QApplication>
+#include <QComboBox>
 #include <QCoreApplication>
+#include <QGuiApplication>
 #include <QKeyEvent>
+#include <QMainWindow>
 #include <QMetaObject>
 #include <QModelIndex>
 #include <QItemSelectionModel>
@@ -23,13 +34,17 @@
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPushButton>
+#include <QScreen>
 #include <QStackedWidget>
 #include <QStyleOption>
 #include <QTableView>
 #include <QToolBar>
 #include <QToolButton>
 
+#include <array>
+#include <filesystem>
 #include <optional>
+#include <string>
 #include <vector>
 
 namespace {
@@ -148,6 +163,274 @@ TEST(QtProjectWorkspaceTests,
   action->setToolTip(QStringLiteral("Selection Tool [Q]"));
   EXPECT_EQ(button->accessibleDescription(),
             QStringLiteral("Selection Tool [Q]"));
+}
+
+TEST(QtProjectWorkspaceTests,
+     SnappingToolbarUsesCanonicalControlsAndDispatchesOnlyUserIntent) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader_snapping_toolbar_test";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+  ASSERT_NE(QApplication::setStyle(QStringLiteral("Fusion")), nullptr);
+
+  QMainWindow host;
+  quader::QtSnappingToolbar toolbar;
+  quader::LocalizationService localization;
+  toolbar.set_localization(localization);
+
+  EXPECT_EQ(toolbar.objectName(), QStringLiteral("snappingToolbar"));
+  EXPECT_EQ(toolbar.windowTitle(), QStringLiteral("Snapping"));
+  EXPECT_TRUE(toolbar.isMovable());
+  EXPECT_TRUE(toolbar.isFloatable());
+  EXPECT_EQ(toolbar.allowedAreas(), Qt::AllToolBarAreas);
+  EXPECT_TRUE(toolbar.isAreaAllowed(Qt::TopToolBarArea));
+  EXPECT_TRUE(toolbar.isAreaAllowed(Qt::LeftToolBarArea));
+  EXPECT_TRUE(toolbar.isAreaAllowed(Qt::RightToolBarArea));
+  EXPECT_TRUE(toolbar.isAreaAllowed(Qt::BottomToolBarArea));
+  EXPECT_EQ(toolbar.iconSize(), QSize(32, 32));
+  EXPECT_EQ(toolbar.toolButtonStyle(), Qt::ToolButtonIconOnly);
+  EXPECT_EQ(expect_persistent_button_faces(toolbar, 30), 5);
+
+  host.addToolBar(Qt::TopToolBarArea, &toolbar);
+  EXPECT_EQ(host.toolBarArea(&toolbar), Qt::TopToolBarArea);
+  host.removeToolBar(&toolbar);
+  host.addToolBar(Qt::LeftToolBarArea, &toolbar);
+  EXPECT_EQ(host.toolBarArea(&toolbar), Qt::LeftToolBarArea);
+
+  const QList<QComboBox *> combos = toolbar.findChildren<QComboBox *>();
+  ASSERT_EQ(combos.size(), 2);
+  auto *grid_combo = toolbar.findChild<QComboBox *>(
+      QStringLiteral("snappingGridSizeCombo"));
+  auto *angle_combo = toolbar.findChild<QComboBox *>(
+      QStringLiteral("snappingAngleCombo"));
+  ASSERT_NE(grid_combo, nullptr);
+  ASSERT_NE(angle_combo, nullptr);
+  EXPECT_EQ(grid_combo->minimumHeight(), 30);
+  EXPECT_EQ(grid_combo->maximumHeight(), 30);
+  EXPECT_EQ(angle_combo->minimumHeight(), 30);
+  EXPECT_EQ(angle_combo->maximumHeight(), 30);
+
+  const auto grid_catalog = quader::viewport_grid_preset_catalog();
+  ASSERT_EQ(grid_combo->count(), static_cast<int>(grid_catalog.size()));
+  int default_grid_preset = 0;
+  for (std::size_t index = 0; index < grid_catalog.size(); ++index) {
+    const auto &preset = grid_catalog[index];
+    EXPECT_EQ(grid_combo->itemText(static_cast<int>(index)),
+              QString::number(preset.map_units, 'g', 15));
+    EXPECT_EQ(grid_combo->itemData(static_cast<int>(index)).toInt(),
+              preset.preset);
+    if (preset.is_default) {
+      ASSERT_EQ(default_grid_preset, 0)
+          << "the canonical grid catalog must have one default";
+      default_grid_preset = preset.preset;
+    }
+  }
+  EXPECT_EQ(default_grid_preset, 6);
+
+  constexpr std::array<double, 11> kExpectedAngles{
+      0.25, 0.5, 1.0, 5.0, 5.625, 11.25,
+      15.0, 22.5, 30.0, 45.0, 90.0,
+  };
+  const auto &angle_catalog =
+      quader::viewport_rotation_snap_degrees_catalog();
+  ASSERT_EQ(angle_catalog.size(), kExpectedAngles.size());
+  ASSERT_EQ(angle_combo->count(), static_cast<int>(kExpectedAngles.size()));
+  for (std::size_t index = 0; index < kExpectedAngles.size(); ++index) {
+    EXPECT_DOUBLE_EQ(angle_catalog[index], kExpectedAngles[index]);
+    EXPECT_DOUBLE_EQ(
+        angle_combo->itemData(static_cast<int>(index)).toDouble(),
+        kExpectedAngles[index]);
+    EXPECT_EQ(angle_combo->itemText(static_cast<int>(index)),
+              QStringLiteral("%1\u00B0").arg(
+                  QString::number(kExpectedAngles[index], 'g', 15)));
+  }
+
+  std::vector<QAction *> toggle_actions;
+  for (QAction *action : toolbar.actions()) {
+    if (action->isCheckable()) {
+      toggle_actions.push_back(action);
+    }
+  }
+  ASSERT_EQ(toggle_actions.size(), 5u);
+  const std::array<QString, 5> expected_action_names{
+      QStringLiteral("snappingEnabled"),
+      QStringLiteral("gridVisible"),
+      QStringLiteral("gridSnapping"),
+      QStringLiteral("vertexSnapping"),
+      QStringLiteral("rotationSnapping"),
+  };
+  const std::array<QString, 5> expected_action_labels{
+      QStringLiteral("Toggle Snapping"),
+      QStringLiteral("Enable Grid"),
+      QStringLiteral("Grid Snapping"),
+      QStringLiteral("Vertex Snapping"),
+      QStringLiteral("Rotation Snapping"),
+  };
+  for (std::size_t index = 0; index < toggle_actions.size(); ++index) {
+    EXPECT_EQ(toggle_actions[index]->objectName(),
+              expected_action_names[index]);
+    EXPECT_EQ(toggle_actions[index]->text(), expected_action_labels[index]);
+    EXPECT_EQ(toggle_actions[index]->toolTip(),
+              expected_action_labels[index]);
+  }
+  EXPECT_EQ(toggle_actions.front()->objectName(),
+            QStringLiteral("snappingEnabled"))
+      << "the global snapping master must be the first icon action";
+
+  quader::SceneSession session;
+  quader::QuaderEditorApi editor(
+      quader::QuaderApiSessionInternalAccess::from_scene_session(session));
+  ASSERT_TRUE(editor.commands()
+                  .set_keybinding_storage_path(std::filesystem::path{})
+                  .ok());
+  toolbar.synchronize(editor, true);
+
+  EXPECT_EQ(editor.viewports().grid_preset(), default_grid_preset);
+  EXPECT_EQ(grid_combo->currentData().toInt(), default_grid_preset);
+  EXPECT_DOUBLE_EQ(editor.preferences().rotation_snap_degrees(), 15.0);
+  EXPECT_DOUBLE_EQ(angle_combo->currentData().toDouble(), 15.0);
+  EXPECT_EQ(editor.commands().shortcut_for(
+                editor.commands().keybinding_target_id_for_grid_preset(
+                    default_grid_preset)),
+            "F6");
+  EXPECT_EQ(grid_combo->toolTip(), QStringLiteral("Grid Size [F6]"));
+  EXPECT_EQ(grid_combo->accessibleDescription(),
+            QStringLiteral("Grid Size [F6]"));
+  EXPECT_EQ(angle_combo->toolTip(),
+            QStringLiteral("Rotation Snap Angle"));
+  EXPECT_EQ(angle_combo->accessibleDescription(),
+            QStringLiteral("Rotation Snap Angle"));
+
+  host.removeToolBar(&toolbar);
+  host.addToolBar(Qt::TopToolBarArea, &toolbar);
+  host.resize(800, 600);
+  host.move(40, 40);
+  host.show();
+  application.processEvents();
+  ASSERT_EQ(angle_combo->height(), 30);
+  const QPoint popup_anchor =
+      angle_combo->mapToGlobal(QPoint(0, angle_combo->height()));
+  angle_combo->showPopup();
+  application.processEvents();
+  QWidget *angle_popup = angle_combo->view()->window();
+  ASSERT_NE(angle_popup, nullptr);
+  ASSERT_TRUE(angle_popup->isVisible());
+  QScreen *popup_screen = QGuiApplication::screenAt(popup_anchor);
+  ASSERT_NE(popup_screen, nullptr);
+  ASSERT_LE(popup_anchor.y() + angle_popup->height() - 1,
+            popup_screen->availableGeometry().bottom());
+  EXPECT_EQ(angle_popup->geometry().top(), popup_anchor.y());
+  angle_combo->hidePopup();
+
+  int grid_requests = 0;
+  int requested_grid_preset = 0;
+  int angle_requests = 0;
+  double requested_angle = 0.0;
+  std::array<int, 5> toggle_requests{};
+  std::array<bool, 5> requested_toggles{};
+  toolbar.set_grid_preset_requested_callback(
+      [&](int preset) {
+        ++grid_requests;
+        requested_grid_preset = preset;
+      });
+  toolbar.set_rotation_snap_degrees_requested_callback(
+      [&](double degrees) {
+        ++angle_requests;
+        requested_angle = degrees;
+      });
+  toolbar.set_snapping_enabled_requested_callback([&](bool enabled) {
+    ++toggle_requests[0];
+    requested_toggles[0] = enabled;
+  });
+  toolbar.set_grid_visible_requested_callback([&](bool enabled) {
+    ++toggle_requests[1];
+    requested_toggles[1] = enabled;
+  });
+  toolbar.set_grid_snap_enabled_requested_callback([&](bool enabled) {
+    ++toggle_requests[2];
+    requested_toggles[2] = enabled;
+  });
+  toolbar.set_vertex_snap_enabled_requested_callback([&](bool enabled) {
+    ++toggle_requests[3];
+    requested_toggles[3] = enabled;
+  });
+  toolbar.set_rotation_snap_enabled_requested_callback([&](bool enabled) {
+    ++toggle_requests[4];
+    requested_toggles[4] = enabled;
+  });
+
+  ASSERT_TRUE(QMetaObject::invokeMethod(
+      grid_combo, "activated", Qt::DirectConnection, Q_ARG(int, 2)));
+  EXPECT_EQ(grid_requests, 1);
+  EXPECT_EQ(requested_grid_preset, 3);
+  ASSERT_TRUE(QMetaObject::invokeMethod(
+      angle_combo, "activated", Qt::DirectConnection, Q_ARG(int, 8)));
+  EXPECT_EQ(angle_requests, 1);
+  EXPECT_DOUBLE_EQ(requested_angle, 30.0);
+  for (std::size_t index = 0; index < toggle_actions.size(); ++index) {
+    ASSERT_FALSE(toggle_actions[index]->isChecked());
+    toggle_actions[index]->trigger();
+    EXPECT_TRUE(toggle_actions[index]->isChecked());
+    EXPECT_EQ(toggle_requests[index], 1);
+    EXPECT_TRUE(requested_toggles[index]);
+  }
+
+  const std::array<bool, 5> owner_toggles{
+      false, true, false, true, false,
+  };
+  const double owner_angle = 90.0;
+  editor.preferences().set_runtime_hooks(
+      quader::QuaderPreferencesRuntimeHooks{
+          .snapping_enabled = [&] { return owner_toggles[0]; },
+          .grid_visible = [&] { return owner_toggles[1]; },
+          .grid_snap_enabled = [&] { return owner_toggles[2]; },
+          .vertex_snap_enabled = [&] { return owner_toggles[3]; },
+          .rotation_snap_enabled = [&] { return owner_toggles[4]; },
+          .rotation_snap_degrees = [&] { return owner_angle; },
+      });
+  const quader::QuaderApiVoidResult grid_result =
+      editor.viewports().set_grid_preset(10);
+  ASSERT_TRUE(grid_result.ok()) << grid_result.error_message();
+
+  int grid_index_change_signals = 0;
+  int angle_index_change_signals = 0;
+  std::array<int, 5> toggle_change_signals{};
+  QObject::connect(
+      grid_combo, qOverload<int>(&QComboBox::currentIndexChanged), &toolbar,
+      [&](int) { ++grid_index_change_signals; });
+  QObject::connect(
+      angle_combo, qOverload<int>(&QComboBox::currentIndexChanged), &toolbar,
+      [&](int) { ++angle_index_change_signals; });
+  for (std::size_t index = 0; index < toggle_actions.size(); ++index) {
+    QObject::connect(toggle_actions[index], &QAction::toggled, &toolbar,
+                     [&, index](bool) {
+                       ++toggle_change_signals[index];
+                     });
+  }
+
+  toolbar.synchronize(editor, true);
+  EXPECT_EQ(grid_combo->currentData().toInt(), 10);
+  EXPECT_DOUBLE_EQ(angle_combo->currentData().toDouble(), owner_angle);
+  EXPECT_EQ(grid_combo->toolTip(), QStringLiteral("Grid Size [F10]"));
+  EXPECT_EQ(grid_index_change_signals, 0);
+  EXPECT_EQ(angle_index_change_signals, 0);
+  EXPECT_EQ(toggle_change_signals, (std::array<int, 5>{}));
+  EXPECT_EQ(grid_requests, 1);
+  EXPECT_EQ(angle_requests, 1);
+  EXPECT_EQ(toggle_requests, (std::array<int, 5>{1, 1, 1, 1, 1}));
+  for (std::size_t index = 0; index < toggle_actions.size(); ++index) {
+    EXPECT_EQ(toggle_actions[index]->isChecked(), owner_toggles[index]);
+  }
+
+  toolbar.synchronize(editor);
+  EXPECT_EQ(grid_index_change_signals, 0);
+  EXPECT_EQ(angle_index_change_signals, 0);
+  EXPECT_EQ(toggle_change_signals, (std::array<int, 5>{}));
+  EXPECT_EQ(grid_requests, 1);
+  EXPECT_EQ(angle_requests, 1);
+  EXPECT_EQ(toggle_requests, (std::array<int, 5>{1, 1, 1, 1, 1}));
 }
 
 TEST(QtProjectWorkspaceTests,

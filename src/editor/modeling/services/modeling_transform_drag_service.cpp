@@ -646,6 +646,8 @@ ModelingTransformDragService::begin_transform_drag(
                      .grid_size = request.grid_size,
                      .vertex_snap_radius = request.vertex_snap_radius,
                      .grid_snap_enabled = request.grid_snap_enabled,
+                     .rotation_snap_degrees =
+                         request.rotation_snap_degrees,
                      .precision = request.precision,
                  });
   }
@@ -973,6 +975,7 @@ ModelingTransformDragService::apply_transform_drag_preview(
   input.ray = to_runtime(request.ray);
   input.grid_size = request.grid_size;
   input.grid_enabled = request.grid_snap_enabled;
+  input.rotation_snap_degrees = request.rotation_snap_degrees;
   input.precision = request.precision;
   const bool component_modeling_preview =
       transform_drag_uses_component_modeling_preview(context, controller_);

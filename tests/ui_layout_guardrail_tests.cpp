@@ -72,6 +72,8 @@ const std::vector<std::string_view> &qt_shell_source_paths() {
       "src/ui/qt_main_menu.cpp",
       "src/ui/qt_selection_toolbar.hpp",
       "src/ui/qt_selection_toolbar.cpp",
+      "src/ui/qt_snapping_toolbar.hpp",
+      "src/ui/qt_snapping_toolbar.cpp",
       "src/ui/qt_tool_toolbar.hpp",
       "src/ui/qt_tool_toolbar.cpp",
       "src/ui/qt_input_adapter.hpp",
@@ -1040,6 +1042,108 @@ TEST(UiLayoutGuardrailTests,
 }
 
 TEST(UiLayoutGuardrailTests,
+     SnappingToolbarUsesNativeMovableChromeAndRetainedOwnerState) {
+  const std::string toolbar_header =
+      read_source_file("src/ui/qt_snapping_toolbar.hpp");
+  const std::string toolbar =
+      read_source_file("src/ui/qt_snapping_toolbar.cpp");
+  const std::string menu_header =
+      read_source_file("src/ui/qt_main_menu.hpp");
+  const std::string menu = read_source_file("src/ui/qt_main_menu.cpp");
+  const std::string ui_header = read_source_file("src/ui/ui_system.hpp");
+  const std::string ui_system = read_source_file("src/ui/ui_system.cpp");
+
+  expect_contains(toolbar_header,
+                  "class QtSnappingToolbar final : public QToolBar");
+  expect_contains(toolbar, "setAllowedAreas(Qt::AllToolBarAreas)");
+  expect_contains(toolbar, "setMovable(true)");
+  expect_contains(toolbar, "setFloatable(true)");
+  expect_contains(toolbar, "setIconSize(QSize(32, 32))");
+  expect_contains(toolbar, "Qt::ToolButtonIconOnly");
+  expect_contains(toolbar, "static_assert(ToggleCount == 5)");
+  expect_contains(toolbar_header, "std::array<ToggleAction, 5>");
+
+  for (std::string_view action_name :
+       {"snappingEnabled", "gridVisible", "gridSnapping",
+        "vertexSnapping", "rotationSnapping"}) {
+    expect_contains(toolbar, action_name);
+  }
+  for (std::string_view icon :
+       {"snapping_master.png", "snapping_grid_visible.png",
+        "snapping_grid.png", "snapping_vertex.png",
+        "snapping_rotation.png"}) {
+    expect_contains(toolbar, icon);
+  }
+  EXPECT_EQ(count_occurrences(toolbar,
+                              "new QtDownwardPopupComboBox(this)"),
+            2u);
+  expect_contains(toolbar,
+                  "class QtDownwardPopupComboBox final : public QComboBox");
+  expect_contains(toolbar, "void showPopup() override");
+  expect_contains(toolbar,
+                  "grid_size_combo_->setFixedHeight("
+                  "kTopToolbarButtonHeight)");
+  expect_contains(toolbar,
+                  "angle_combo_->setFixedHeight(kTopToolbarButtonHeight)");
+  expect_contains(toolbar, "snappingGridSizeCombo");
+  expect_contains(toolbar, "snappingAngleCombo");
+  expect_contains(toolbar, "viewport_grid_preset_catalog()");
+  expect_contains(toolbar, "viewport_rotation_snap_degrees_catalog()");
+
+  expect_contains(toolbar,
+                  "install_native_toolbar_button_presentation(*this)");
+  expect_contains(toolbar,
+                  "configure_native_toolbar_button_face(*this, *entry.action,");
+  expect_missing(toolbar, "setStyleSheet(");
+  expect_missing(toolbar, "setPalette(");
+  expect_missing(toolbar, "QPainter");
+  expect_missing(toolbar, "QProxyStyle");
+  expect_missing(toolbar, "setStyle(");
+
+  expect_contains(toolbar,
+                  "if (!force && presented_state_.has_value() &&");
+  expect_contains(toolbar, "*presented_state_ == state");
+  expect_missing(toolbar, "editor.commands().available()");
+  const std::size_t unchanged_state_gate =
+      toolbar.find("if (!force && presented_state_.has_value() &&");
+  const std::size_t shortcut_lookup =
+      toolbar.find("editor.commands().shortcut_for(target_id)");
+  ASSERT_NE(unchanged_state_gate, std::string::npos);
+  ASSERT_NE(shortcut_lookup, std::string::npos);
+  EXPECT_LT(unchanged_state_gate, shortcut_lookup);
+  expect_contains(toolbar,
+                  "grid_size_combo_->currentIndex() != selected_index");
+  expect_contains(toolbar, "grid_size_combo_->toolTip() != tooltip");
+  expect_contains(toolbar,
+                  "grid_size_combo_->accessibleDescription() != tooltip");
+  expect_contains(toolbar,
+                  "toggle_actions_[index].action->isChecked() ==");
+
+  expect_contains(ui_header, "QtSnappingToolbar *snapping_toolbar_");
+  expect_contains(ui_system,
+                  "addToolBar(Qt::TopToolBarArea, snapping_toolbar_)");
+  expect_contains(ui_system, "snapping_toolbar_->synchronize(*editor_");
+  expect_contains(ui_header,
+                  "bool snapping_toolbar_workspace_visible_ = true");
+  expect_contains(ui_system,
+                  "snapping_toolbar_workspace_visible_ =");
+  expect_contains(ui_system,
+                  "snapping_toolbar_->setVisible("
+                  "snapping_toolbar_workspace_visible_)");
+  expect_contains(ui_system,
+                  "static_cast<const QToolBar *>(snapping_toolbar_)");
+  expect_contains(ui_system, "mix_toolbar(snapping_toolbar_)");
+  expect_contains(ui_system,
+                  "main_window_->saveState(kQtWindowStateVersion)");
+  expect_contains(ui_system,
+                  "main_window_->restoreState(state, kQtWindowStateVersion)");
+
+  expect_contains(menu_header, "snapping_toolbar_visible");
+  expect_contains(menu_header, "set_snapping_toolbar_visible");
+  expect_contains(menu, "QStringLiteral(\"toolbar_snapping\")");
+}
+
+TEST(UiLayoutGuardrailTests,
      HomePresentationContainsOnlyProjectEntryChrome) {
   const std::string ui_header = read_source_file("src/ui/ui_system.hpp");
   const std::string ui_source = read_source_file("src/ui/ui_system.cpp");
@@ -1051,11 +1155,13 @@ TEST(UiLayoutGuardrailTests,
   expect_contains(ui_source, "main_window_->menuBar()->hide()");
   expect_contains(ui_source, "main_window_->statusBar()->hide()");
   expect_contains(ui_source, "selection_toolbar_->hide()");
+  expect_contains(ui_source, "snapping_toolbar_->hide()");
   expect_contains(ui_source, "tool_toolbar_->hide()");
   expect_contains(ui_source, "main_window_->menuBar()->show()");
   expect_contains(ui_source, "main_window_->statusBar()->show()");
   expect_contains(ui_source,
                   "selection_toolbar_workspace_visible_");
+  expect_contains(ui_source, "snapping_toolbar_workspace_visible_");
   expect_contains(ui_source, "tool_toolbar_workspace_visible_");
   expect_contains(ui_header, "workspace_window_state_");
   expect_contains(ui_source, "capture_workspace_window_state()");

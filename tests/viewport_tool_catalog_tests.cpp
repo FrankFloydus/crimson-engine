@@ -1143,6 +1143,11 @@ TEST(ViewportToolGuardrailTests, ViewportPanelProvidesPointToolContextToModalToo
       read_source_file(root / "src" / "ui" / "qt_viewport_panel.cpp");
   const std::string transform_gizmo = read_source_file(
       root / "src" / "editor" / "viewport" / "transform_gizmo_interaction.cpp");
+  const std::string transform_drag_service = read_source_file(
+      root / "src" / "editor" / "modeling" / "services" /
+      "modeling_transform_drag_service.cpp");
+  const std::string move_tool = read_source_file(
+      root / "src" / "editor" / "interactions" / "move_tool.cpp");
 
   EXPECT_NE(viewport_panel.find("ViewportPointToolContext point_context"),
             std::string::npos);
@@ -1168,16 +1173,31 @@ TEST(ViewportToolGuardrailTests, ViewportPanelProvidesPointToolContextToModalToo
                 "!frame.settings.bool_value(ViewportBoolSettingId::ShowGizmos)"),
             std::string::npos);
   EXPECT_NE(transform_gizmo.find(
-                "const bool snap_active = viewport_grid_snap_active("),
+                "const bool grid_snap_active = viewport_grid_snap_active("),
             std::string::npos);
   EXPECT_NE(transform_gizmo.find(
                 "frame.settings, frame.input.modifiers.primary)"),
             std::string::npos);
   EXPECT_NE(transform_gizmo.find(".vertex_snap_radius ="), std::string::npos);
   EXPECT_NE(transform_gizmo.find(
-                "snap_active ? viewport_vertex_snap_radius(frame.settings) : 0.0"),
+                ".vertex_snap_radius = viewport_vertex_snap_radius(frame.settings)"),
             std::string::npos);
-  EXPECT_NE(transform_gizmo.find(".grid_snap_enabled = snap_active"),
+  EXPECT_NE(transform_gizmo.find(".grid_snap_enabled = grid_snap_active"),
+            std::string::npos);
+  EXPECT_NE(transform_gizmo.find("viewport_rotation_snap_active("),
+            std::string::npos);
+  EXPECT_NE(transform_gizmo.find(
+                "ViewportFloatSettingId::RotationSnapDegrees"),
+            std::string::npos);
+  EXPECT_NE(transform_gizmo.find(
+                ".rotation_snap_degrees = rotation_snap_degrees"),
+            std::string::npos);
+  EXPECT_NE(transform_drag_service.find(
+                "input.rotation_snap_degrees = request.rotation_snap_degrees"),
+            std::string::npos);
+  EXPECT_NE(move_tool.find("input.rotation_snap_degrees"), std::string::npos);
+  EXPECT_EQ(move_tool.find(
+                "input.grid_enabled ? input.rotation_snap_degrees : 0.0"),
             std::string::npos);
   EXPECT_NE(transform_gizmo.find(".precision = frame.input.modifiers.primary"),
             std::string::npos);

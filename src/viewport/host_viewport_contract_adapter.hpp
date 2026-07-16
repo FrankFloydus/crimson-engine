@@ -50,6 +50,16 @@ struct ViewportGridShortcutBindingDescriptor {
 };
 
 /**
+ * Projects one canonical host grid-size preset into viewport-owned terms.
+ */
+struct ViewportGridPresetDescriptor {
+  int preset = 0;
+  double map_units = 1.0;
+  double world_units = 1.0 / 32.0;
+  bool is_default = false;
+};
+
+/**
  * Represents one semantic viewport input action binding target.
  */
 struct ViewportInputActionBindingDescriptor {
@@ -83,6 +93,7 @@ std::vector<ViewportShortcutBindingDescriptor>
 viewport_shortcut_binding_catalog();
 std::vector<ViewportGridShortcutBindingDescriptor>
 viewport_grid_shortcut_binding_catalog();
+std::vector<ViewportGridPresetDescriptor> viewport_grid_preset_catalog();
 std::optional<std::string>
 viewport_command_target_id_for_contract_target(std::string_view target_id);
 std::optional<ViewportView>

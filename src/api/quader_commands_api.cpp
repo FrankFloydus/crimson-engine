@@ -78,6 +78,10 @@ keybinding_target_id_for_selection_mode(QuaderSelectionMode mode) {
   return quader_viewport_selection_mode_target_id(selection_mode_id(mode));
 }
 
+std::string keybinding_target_id_for_grid_preset(int preset) {
+  return viewport_grid_preset_target_id(preset);
+}
+
 std::filesystem::path default_keybindings_path() {
   if (const char *local_app_data = std::getenv("LOCALAPPDATA")) {
     return std::filesystem::path(local_app_data) / "Quader" /
@@ -256,6 +260,8 @@ public:
     command_id_for_tool_activation(std::string_view tool_id) const;
     [[nodiscard]] std::string
     keybinding_target_id_for_selection_mode(QuaderSelectionMode mode) const;
+    [[nodiscard]] std::string
+    keybinding_target_id_for_grid_preset(int preset) const;
     [[nodiscard]] std::string shortcut_for(std::string_view command_id) const;
     [[nodiscard]] std::string shortcut_for(QuaderCommandId command_id) const;
     [[nodiscard]] std::vector<QuaderKeybindingRule> keybindings() const;
@@ -417,6 +423,11 @@ std::string QuaderCommandsApi::Impl::command_id_for_tool_activation(
 std::string QuaderCommandsApi::Impl::keybinding_target_id_for_selection_mode(
     QuaderSelectionMode mode) const {
   return quader::keybinding_target_id_for_selection_mode(mode);
+}
+
+std::string QuaderCommandsApi::Impl::keybinding_target_id_for_grid_preset(
+    int preset) const {
+  return quader::keybinding_target_id_for_grid_preset(preset);
 }
 
 std::string
@@ -1144,6 +1155,11 @@ std::string QuaderCommandsApi::command_id_for_tool_activation(
 std::string QuaderCommandsApi::keybinding_target_id_for_selection_mode(
     QuaderSelectionMode mode) const {
   return impl_->keybinding_target_id_for_selection_mode(mode);
+}
+
+std::string QuaderCommandsApi::keybinding_target_id_for_grid_preset(
+    int preset) const {
+  return impl_->keybinding_target_id_for_grid_preset(preset);
 }
 
 std::string QuaderCommandsApi::shortcut_for(std::string_view command_id) const {
