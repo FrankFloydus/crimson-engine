@@ -1789,6 +1789,20 @@ TEST(BuildGuardrailTests, LocalizationResourcesArePackagedWithRuntime) {
 }
 
 TEST(BuildGuardrailTests,
+     RootGuidanceForbidsPerFrameUiCatalogEnumeration) {
+  const std::string root_agents = read_source_file("AGENTS.md");
+
+  expect_contains(root_agents, "## UI Frame-Loop Performance Rule");
+  expect_contains(root_agents,
+                  "never enumerate `commands().available()` from a frame callback");
+  expect_contains(root_agents,
+                  "Put the unchanged-state/revision check before descriptor allocation");
+  expect_contains(root_agents, "`commands().descriptor(id)`");
+  expect_contains(root_agents,
+                  "same-build, same-scene before/after frame-time or FPS measurement");
+}
+
+TEST(BuildGuardrailTests,
      RuntimeResourceDeploymentIsDependencyTrackedAndSynchronizesOwnedDirs) {
   const std::string root_c_make = read_source_file("CMakeLists.txt");
 
@@ -1914,6 +1928,45 @@ TEST(BuildGuardrailTests, ApplicationIconIsEmbeddedForWindowsAndQt) {
                   "qt_application.setWindowIcon(application_icon)");
   expect_contains(ui_system_source,
                   "main_window_->setWindowIcon(QApplication::windowIcon())");
+}
+
+TEST(BuildGuardrailTests, SelectionToolbarIconsAreEmbeddedQtResources) {
+  const std::string root_c_make = read_source_file("CMakeLists.txt");
+
+  expect_contains(root_c_make,
+                  "qt_add_resources(quader \"quader_selection_toolbar_icons\"");
+  expect_contains(root_c_make, "PREFIX \"/quader/icons\"");
+  for (const std::string_view mode :
+       {"vertex", "edge", "face", "mesh", "group"}) {
+    const std::string relative_path =
+        std::string{"resources/icons/selection_"} + std::string{mode} +
+        ".png";
+    ASSERT_TRUE(std::filesystem::exists(source_path(relative_path)))
+        << relative_path;
+    EXPECT_GT(std::filesystem::file_size(source_path(relative_path)), 512u)
+        << relative_path;
+    expect_contains(root_c_make, relative_path);
+  }
+}
+
+TEST(BuildGuardrailTests, ToolToolbarIconsAreEmbeddedQtResources) {
+  const std::string root_c_make = read_source_file("CMakeLists.txt");
+
+  expect_contains(root_c_make,
+                  "qt_add_resources(quader \"quader_tool_toolbar_icons\"");
+  expect_contains(root_c_make, "PREFIX \"/quader/icons\"");
+  for (const std::string_view tool :
+       {"select", "move", "rotate", "scale", "pivot",
+        "create_primitive", "knife", "cut", "poly", "mirror",
+        "linear_array", "radial_array"}) {
+    const std::string relative_path =
+        std::string{"resources/icons/tool_"} + std::string{tool} + ".png";
+    ASSERT_TRUE(std::filesystem::exists(source_path(relative_path)))
+        << relative_path;
+    EXPECT_GT(std::filesystem::file_size(source_path(relative_path)), 512u)
+        << relative_path;
+    expect_contains(root_c_make, relative_path);
+  }
 }
 
 TEST(BuildGuardrailTests, SentryNativeRuntimeIsPackagedWithCrashpad) {
@@ -2324,7 +2377,7 @@ TEST(BuildGuardrailTests,
   }
 }
 
-TEST(BuildGuardrailTests, RuntimeUiUsesQtWidgetsFusionOnly) {
+TEST(BuildGuardrailTests, RuntimeUiUsesQtWidgetsWithFusionBaseline) {
   const std::string root_c_make = read_source_file("CMakeLists.txt");
   const std::string vcpkg_manifest = read_source_file("vcpkg.json");
   const std::string third_party_manifest =
@@ -2461,20 +2514,6 @@ TEST(BuildGuardrailTests, RuntimeUiUsesQtWidgetsFusionOnly) {
                               "QApplication::setPalette("),
             1u);
   EXPECT_EQ(count_occurrences(app_ui_source_text, "standardPalette()"), 1u);
-  for (const std::string &forbidden_customization : {
-            "setStyleSheet(",
-            ".qss",
-            "QProxyStyle",
-           "QFontDatabase",
-           "setFont(",
-           "Qt::FramelessWindowHint",
-           "Qt::CustomizeWindowHint",
-           "Qt::WA_TranslucentBackground",
-       }) {
-    EXPECT_EQ(app_ui_source_text.find(forbidden_customization),
-              std::string::npos)
-        << forbidden_customization;
-  }
   for (const std::string &retired_ui_token :
        {"#include <SDL", "SDL_", "#include <imgui", "ImGui::",
         "ImGui_Impl"}) {

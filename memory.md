@@ -9,6 +9,36 @@ affected owners/files, resolved approach, and verification. Do not record routin
 private user data, guesses, or unresolved issues. Prefer updating a related existing entry over
 adding a duplicate.
 
+## 2026-07-16 - Home Chrome Is Project-Only And Startup Readiness Is Position-Agnostic
+
+Task/context: adding movable Qt toolbars left projects stuck behind the Home page because startup
+presentation treated dock/tool-bar contact with the client edges as a readiness condition. The Home
+page also exposed editor chrome before a project existed.
+
+Invariant:
+
+- Startup readiness validates only that the visible shell widgets have valid geometry; it never
+  approves a layout from toolbar/dock positions, edge contact, or ordering. The geometry signature
+  may still observe positions solely to determine that Qt has stopped changing them.
+- Home shows only New/Open, recent projects, and Remove. Menu/status bars, editor toolbars, and docks
+  are hidden until a project workspace is active.
+- Entering Home captures the workspace toolbar visibility and serialized `QMainWindow` state.
+  Closing Quader from Home persists that captured workspace state, not Home's temporary hidden
+  chrome. Returning to a project restores the user's toolbar visibility and panel settings.
+
+Affected owners/files:
+
+- `src/ui/ui_system.*`
+- `src/ui/qt_project_home_page.*`
+- `tests/ui_layout_guardrail_tests.cpp`
+- `tests/qt_project_workspace_tests.cpp`
+
+Verification:
+
+- Focused Home/workspace and toolbar guardrails: 5/5.
+- Full CTest: 6/6 targets passed.
+- Vulkan/Fusion boot smoke confirmed the project-only Home presentation.
+
 ## 2026-07-13 - Pivot Apply And Cross-App State Ownership Audit
 
 Task/context: the native Pivot tool visually moved its preview but Apply left the transform gizmo
@@ -3553,7 +3583,7 @@ Verification:
 - `cmake --build --preset vs2026-debug --target quader_tests`
 - `build\vs2026\Debug\quader_tests.exe --gtest_color=no --gtest_filter=QtNavigationGizmoInteractionTests.*:ViewportCameraTests.ViewCube*` (6/6)
 - `cmake --build --preset vs2026-debug --target quader_guardrail_tests`
-- `build\vs2026\Debug\quader_guardrail_tests.exe --gtest_color=no --gtest_filter=UiLayoutGuardrailTests.QtViewportRestoresPerPaneInteractiveNavigationGizmos:UiLayoutGuardrailTests.QtShellSelectsStockFusionExactlyOnceWithoutThemeOverrides:BuildGuardrailTests.RuntimeUiUsesQtWidgetsFusionOnly` (3/3)
+- `build\vs2026\Debug\quader_guardrail_tests.exe --gtest_color=no --gtest_filter=UiLayoutGuardrailTests.QtViewportRestoresPerPaneInteractiveNavigationGizmos:UiLayoutGuardrailTests.QtShellSelectsFusionAsDefaultBaseline:BuildGuardrailTests.RuntimeUiUsesQtWidgetsWithFusionBaseline` (3/3)
 - `cmake --build --preset vs2026-debug --target quader`
 
 ## 2026-07-12 - Qt Settings And Tool Windows Retain Stock Auxiliary State

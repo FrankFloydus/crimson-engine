@@ -167,6 +167,8 @@ struct QtMainMenu::Impl {
     align_menu = nullptr;
     navigation_gizmo_action = nullptr;
     material_browser_action = nullptr;
+    selection_toolbar_action = nullptr;
+    tool_toolbar_action = nullptr;
   }
 
   void prepare_rebuild() {
@@ -189,6 +191,8 @@ struct QtMainMenu::Impl {
   QMenu *align_menu = nullptr;
   QAction *navigation_gizmo_action = nullptr;
   QAction *material_browser_action = nullptr;
+  QAction *selection_toolbar_action = nullptr;
+  QAction *tool_toolbar_action = nullptr;
   std::vector<CommandAction> command_actions;
   std::vector<BoolSettingAction> bool_setting_actions;
   std::vector<LayoutAction> layout_actions;
@@ -523,6 +527,28 @@ struct QtMainMenu::Impl {
     QMenu *panels = menu->addMenu(
         qtext(context.localization, "ui.menu.view.toolbars", "Toolbars"));
     panels->setObjectName(QStringLiteral("menu_panels"));
+    selection_toolbar_action = panels->addAction(qtext(
+        context.localization, "ui.toolbar.selection.title", "Selection"));
+    selection_toolbar_action->setObjectName(
+        QStringLiteral("toolbar_selection"));
+    selection_toolbar_action->setCheckable(true);
+    QObject::connect(selection_toolbar_action, &QAction::toggled,
+                     connection_context.get(), [this](bool visible) {
+                       if (context.set_selection_toolbar_visible) {
+                         context.set_selection_toolbar_visible(visible);
+                       }
+                     });
+    tool_toolbar_action = panels->addAction(qtext(
+        context.localization, "ui.toolbar.tools.title", "Tools"));
+    tool_toolbar_action->setObjectName(QStringLiteral("toolbar_tools"));
+    tool_toolbar_action->setCheckable(true);
+    QObject::connect(tool_toolbar_action, &QAction::toggled,
+                     connection_context.get(), [this](bool visible) {
+                       if (context.set_tool_toolbar_visible) {
+                         context.set_tool_toolbar_visible(visible);
+                       }
+                     });
+    panels->addSeparator();
     for (UIPanelId id :
          {UIPanelId::Outliner, UIPanelId::Inspector, UIPanelId::Console}) {
       QAction *action = panels->addAction(qtext(
@@ -630,6 +656,25 @@ void QtMainMenu::refresh() {
     entry.action->setChecked(impl_->context.panel_visible
                                  ? impl_->context.panel_visible(entry.panel)
                                  : false);
+  }
+  if (impl_->selection_toolbar_action != nullptr) {
+    const QSignalBlocker blocker(impl_->selection_toolbar_action);
+    impl_->selection_toolbar_action->setText(qtext(
+        impl_->context.localization, "ui.toolbar.selection.title",
+        "Selection"));
+    impl_->selection_toolbar_action->setChecked(
+        impl_->context.selection_toolbar_visible
+            ? impl_->context.selection_toolbar_visible()
+            : false);
+  }
+  if (impl_->tool_toolbar_action != nullptr) {
+    const QSignalBlocker blocker(impl_->tool_toolbar_action);
+    impl_->tool_toolbar_action->setText(qtext(
+        impl_->context.localization, "ui.toolbar.tools.title", "Tools"));
+    impl_->tool_toolbar_action->setChecked(
+        impl_->context.tool_toolbar_visible
+            ? impl_->context.tool_toolbar_visible()
+            : false);
   }
   const std::string active_tool =
       impl_->context.editor.tools().active_tool();

@@ -70,6 +70,10 @@ const std::vector<std::string_view> &qt_shell_source_paths() {
       "src/ui/qt_main_window.hpp",
       "src/ui/qt_main_menu.hpp",
       "src/ui/qt_main_menu.cpp",
+      "src/ui/qt_selection_toolbar.hpp",
+      "src/ui/qt_selection_toolbar.cpp",
+      "src/ui/qt_tool_toolbar.hpp",
+      "src/ui/qt_tool_toolbar.cpp",
       "src/ui/qt_input_adapter.hpp",
       "src/ui/qt_input_adapter.cpp",
   };
@@ -126,8 +130,7 @@ TEST(UiLayoutGuardrailTests, RetiredImGuiPresentationFilesStayRemoved) {
   }
 }
 
-TEST(UiLayoutGuardrailTests,
-     QtShellSelectsStockFusionExactlyOnceWithoutThemeOverrides) {
+TEST(UiLayoutGuardrailTests, QtShellSelectsFusionAsDefaultBaseline) {
   const std::string main_source = read_source_file("src/main.cpp");
   const std::string shell_sources = joined_sources(qt_shell_source_paths());
 
@@ -143,24 +146,9 @@ TEST(UiLayoutGuardrailTests,
   EXPECT_EQ(count_occurrences(shell_sources, "QApplication::setStyle("), 1u);
   EXPECT_EQ(count_occurrences(shell_sources, "standardPalette()"), 1u);
 
-  expect_sources_missing(
-      qt_shell_source_paths(),
-      {"setStyleSheet(", ".qss", "QProxyStyle", "QFontDatabase", "setFont(",
-       "Qt::FramelessWindowHint", "Qt::CustomizeWindowHint",
-       "Qt::WA_TranslucentBackground", "ImGui::", "#include <imgui",
-       "#include <SDL", "SDL_"});
-
-  for (const std::string_view path : qt_shell_source_paths()) {
-    if (path == "src/main.cpp" ||
-        path == "src/ui/qt_color_swatch_button.cpp" ||
-        path == "src/ui/qt_color_swatch_button.hpp" ||
-        path == "src/ui/qt_semantic_axis_colors.hpp") {
-      continue;
-    }
-    const std::string source = read_source_file(path);
-    expect_missing(source, "QPalette");
-    expect_missing(source, "setPalette(");
-  }
+  expect_sources_missing(qt_shell_source_paths(),
+                         {"ImGui::", "#include <imgui", "#include <SDL",
+                          "SDL_"});
 }
 
 TEST(UiLayoutGuardrailTests,
@@ -898,6 +886,165 @@ TEST(UiLayoutGuardrailTests,
   expect_contains(menu, "QStringLiteral(\"panel_%1\")");
   expect_contains(menu, "QStringLiteral(\"layout_%1\")");
   expect_contains(menu, "viewport_layout_stable_id(option.id)");
+}
+
+TEST(UiLayoutGuardrailTests,
+     SelectionToolbarUsesNativeMovableChromeAndPublicSelectionIntent) {
+  const std::string toolbar_header =
+      read_source_file("src/ui/qt_selection_toolbar.hpp");
+  const std::string toolbar =
+      read_source_file("src/ui/qt_selection_toolbar.cpp");
+  const std::string button_presentation =
+      read_source_file("src/ui/qt_toolbar_button_presentation.cpp");
+  const std::string menu_header =
+      read_source_file("src/ui/qt_main_menu.hpp");
+  const std::string menu = read_source_file("src/ui/qt_main_menu.cpp");
+  const std::string ui_system = read_source_file("src/ui/ui_system.cpp");
+
+  expect_contains(toolbar_header,
+                  "class QtSelectionToolbar final : public QToolBar");
+  expect_contains(toolbar, "setAllowedAreas(Qt::AllToolBarAreas)");
+  expect_contains(toolbar, "setMovable(true)");
+  expect_contains(toolbar, "setFloatable(true)");
+  expect_contains(toolbar, "setIconSize(QSize(32, 32))");
+  expect_contains(toolbar, "kSelectionModeButtonHeight = 36");
+  expect_contains(toolbar,
+                  "button->setFixedHeight(kSelectionModeButtonHeight)");
+  expect_contains(toolbar, "Qt::ToolButtonTextBesideIcon");
+  expect_contains(toolbar, "action_group->setExclusive(true)");
+  for (std::string_view mode :
+       {"QuaderSelectionMode::Vertex", "QuaderSelectionMode::Edge",
+        "QuaderSelectionMode::Face", "QuaderSelectionMode::Object",
+        "QuaderSelectionMode::Group"}) {
+    expect_contains(toolbar, mode);
+  }
+  for (std::string_view icon :
+       {"selection_vertex.png", "selection_edge.png", "selection_face.png",
+        "selection_mesh.png", "selection_group.png"}) {
+    expect_contains(toolbar, icon);
+  }
+  expect_contains(ui_system,
+                  "addToolBar(Qt::TopToolBarArea, selection_toolbar_)");
+  expect_contains(ui_system, "editor_->selection().set_mode(mode)");
+  expect_contains(ui_system,
+                  "selection_toolbar_->set_selection_mode(selection.mode)");
+  expect_contains(toolbar,
+                  "configure_native_toolbar_button_face(*this, *entry.action,");
+  expect_contains(button_presentation, "button->setAutoRaise(false)");
+  expect_contains(button_presentation,
+                  "button->setAttribute(Qt::WA_Hover, true)");
+  expect_contains(button_presentation, "kToolbarAccentRgb = 0xFFF68F18");
+  expect_contains(button_presentation, "face.state.setFlag(State_On, false)");
+  expect_contains(button_presentation, "button->setMinimumSize(40, 40)");
+  expect_contains(button_presentation, "button->setFocusPolicy(Qt::StrongFocus)");
+  expect_contains(button_presentation, "setAccessibleDescription");
+  expect_missing(button_presentation, "setDown(");
+  expect_contains(menu_header, "selection_toolbar_visible");
+  expect_contains(menu_header, "set_selection_toolbar_visible");
+  expect_contains(menu, "QStringLiteral(\"toolbar_selection\")");
+  expect_missing(toolbar, "setStyleSheet(");
+  expect_missing(toolbar, "setPalette(");
+}
+
+TEST(UiLayoutGuardrailTests,
+     ToolToolbarUsesNativeMovableChromeAndCanonicalToolCommands) {
+  const std::string toolbar_header =
+      read_source_file("src/ui/qt_tool_toolbar.hpp");
+  const std::string toolbar = read_source_file("src/ui/qt_tool_toolbar.cpp");
+  const std::string button_presentation =
+      read_source_file("src/ui/qt_toolbar_button_presentation.cpp");
+  const std::string menu_header =
+      read_source_file("src/ui/qt_main_menu.hpp");
+  const std::string menu = read_source_file("src/ui/qt_main_menu.cpp");
+  const std::string ui_system = read_source_file("src/ui/ui_system.cpp");
+
+  expect_contains(toolbar_header, "class QtToolToolbar final : public QToolBar");
+  expect_contains(toolbar, "setAllowedAreas(Qt::AllToolBarAreas)");
+  expect_contains(toolbar, "setMovable(true)");
+  expect_contains(toolbar, "setFloatable(true)");
+  expect_contains(toolbar, "setIconSize(QSize(32, 32))");
+  expect_contains(toolbar, "Qt::ToolButtonIconOnly");
+  expect_contains(toolbar, "action_group->setExclusive(true)");
+  expect_contains(toolbar, "if (spec.separator_before)");
+  expect_contains(toolbar, "addSeparator()");
+  expect_contains(toolbar, "{ViewportToolId::CreatePrimitive,");
+  expect_contains(toolbar, "tool_create_primitive.png\", true");
+
+  std::size_t previous_icon = 0;
+  for (std::string_view icon :
+       {"tool_select.png", "tool_move.png", "tool_rotate.png",
+        "tool_scale.png", "tool_pivot.png", "tool_create_primitive.png",
+        "tool_knife.png", "tool_cut.png", "tool_poly.png",
+        "tool_mirror.png", "tool_linear_array.png",
+        "tool_radial_array.png"}) {
+    const std::size_t icon_position = toolbar.find(icon, previous_icon);
+    EXPECT_NE(icon_position, std::string::npos) << icon;
+    previous_icon = icon_position + icon.size();
+  }
+
+  expect_contains(ui_system,
+                  "addToolBar(Qt::LeftToolBarArea, tool_toolbar_)");
+  expect_contains(ui_system, "widget->geometry().isValid()");
+  expect_contains(ui_system, "mix_toolbar(selection_toolbar_)");
+  expect_contains(ui_system, "mix_toolbar(tool_toolbar_)");
+  expect_missing(ui_system, "body_left <= expected_left");
+  expect_missing(ui_system, "body_right >= expected_right");
+  expect_contains(ui_system,
+                  "command_id_for_tool_activation(tool_id)");
+  expect_contains(ui_system, "commands().execute(command_id)");
+  expect_contains(toolbar, "editor.tools().active_tool()");
+  expect_contains(toolbar,
+                  "command_id_for_tool_activation(entry.tool_id)");
+  expect_contains(toolbar,
+                  "configure_native_toolbar_button_face(*this, *entry.action,");
+  expect_contains(button_presentation, "button->setAutoRaise(false)");
+  expect_contains(button_presentation, "kHoverHighlightMix = 0.22");
+  expect_contains(button_presentation, "QPen outline(accent, 1.0)");
+  expect_missing(button_presentation, "marker_rect");
+  expect_missing(button_presentation, "setDown(");
+  expect_contains(toolbar, "if (!force && synchronization_valid_");
+  expect_contains(toolbar, "editor.commands().descriptor(command_id)");
+  expect_missing(toolbar, "editor.commands().available()");
+  const std::size_t unchanged_state_gate =
+      toolbar.find("if (!force && synchronization_valid_");
+  const std::size_t command_lookup =
+      toolbar.find("editor.commands().descriptor(command_id)");
+  ASSERT_NE(unchanged_state_gate, std::string::npos);
+  ASSERT_NE(command_lookup, std::string::npos);
+  EXPECT_LT(unchanged_state_gate, command_lookup);
+  expect_contains(toolbar, "QStringLiteral(\" [%1]\")");
+  expect_contains(menu_header, "tool_toolbar_visible");
+  expect_contains(menu_header, "set_tool_toolbar_visible");
+  expect_contains(menu, "QStringLiteral(\"toolbar_tools\")");
+  expect_missing(toolbar, "setStyleSheet(");
+  expect_missing(toolbar, "setPalette(");
+  expect_missing(toolbar, "QPainter");
+}
+
+TEST(UiLayoutGuardrailTests,
+     HomePresentationContainsOnlyProjectEntryChrome) {
+  const std::string ui_header = read_source_file("src/ui/ui_system.hpp");
+  const std::string ui_source = read_source_file("src/ui/ui_system.cpp");
+  const std::string home_header =
+      read_source_file("src/ui/qt_project_home_page.hpp");
+  const std::string home_source =
+      read_source_file("src/ui/qt_project_home_page.cpp");
+
+  expect_contains(ui_source, "main_window_->menuBar()->hide()");
+  expect_contains(ui_source, "main_window_->statusBar()->hide()");
+  expect_contains(ui_source, "selection_toolbar_->hide()");
+  expect_contains(ui_source, "tool_toolbar_->hide()");
+  expect_contains(ui_source, "main_window_->menuBar()->show()");
+  expect_contains(ui_source, "main_window_->statusBar()->show()");
+  expect_contains(ui_source,
+                  "selection_toolbar_workspace_visible_");
+  expect_contains(ui_source, "tool_toolbar_workspace_visible_");
+  expect_contains(ui_header, "workspace_window_state_");
+  expect_contains(ui_source, "capture_workspace_window_state()");
+  expect_contains(ui_source, "std::string state_bytes = workspace_window_state_");
+  expect_missing(home_header, "QLabel *title_label_");
+  expect_missing(home_source, "projectHome.title");
+  expect_missing(home_source, "projectHome.separator");
 }
 
 TEST(UiLayoutGuardrailTests,

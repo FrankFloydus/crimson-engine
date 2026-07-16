@@ -54,6 +54,8 @@ class QtToolSettingsWindow;
 class QtViewportPanel;
 class QtProjectHomePage;
 class QtSceneWorkspace;
+class QtSelectionToolbar;
+class QtToolToolbar;
 enum class QtSettingsChangeKind;
 enum class QtStandardMaterialEditorFileAction : std::uint8_t;
 enum class QtStandardMaterialScalar : std::uint8_t;
@@ -132,6 +134,7 @@ private:
   QDockWidget &create_dock(UIPanelId id, QWidget &content,
                            int default_area);
   void restore_window_state();
+  void capture_workspace_window_state();
   void prepare_startup_presentation();
   void advance_startup_presentation();
   void finish_startup_presentation(bool forced_fallback);
@@ -175,6 +178,8 @@ private:
   QStackedWidget *central_stack_ = nullptr;
   QtProjectHomePage *project_home_page_ = nullptr;
   QtSceneWorkspace *scene_workspace_ = nullptr;
+  QtSelectionToolbar *selection_toolbar_ = nullptr;
+  QtToolToolbar *tool_toolbar_ = nullptr;
   QtViewportPanel *viewport_panel_ = nullptr;
   OutlinerPanel *outliner_panel_ = nullptr;
   InspectorPanel *inspector_panel_ = nullptr;
@@ -223,8 +228,11 @@ private:
   std::string inspector_locale_;
   bool outliner_refresh_valid_ = false;
   bool inspector_refresh_valid_ = false;
-  bool home_visible_ = true;
+  bool home_visible_ = false;
   bool viewport_initialized_ = false;
+  bool selection_toolbar_workspace_visible_ = true;
+  bool tool_toolbar_workspace_visible_ = true;
+  std::string workspace_window_state_;
 };
 
 } // namespace quader

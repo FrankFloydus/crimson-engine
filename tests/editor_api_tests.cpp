@@ -167,16 +167,7 @@ available_command_ids(const quader::QuaderEditorApi &editor) {
 std::optional<quader::QuaderCommandDescriptor>
 command_descriptor(const quader::QuaderEditorApi &editor,
                    quader::QuaderCommandId command_id) {
-  const std::vector<quader::QuaderCommandDescriptor> commands =
-      editor.commands().available();
-  const auto found =
-      std::find_if(commands.begin(), commands.end(),
-                   [&](const quader::QuaderCommandDescriptor &command) {
-                     return command.id == command_id.string();
-                   });
-  return found == commands.end()
-             ? std::nullopt
-             : std::optional<quader::QuaderCommandDescriptor>{*found};
+  return editor.commands().descriptor(command_id);
 }
 
 std::unordered_set<std::string> typed_command_ids() {

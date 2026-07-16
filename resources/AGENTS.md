@@ -14,8 +14,10 @@ before changing resources.
 ## Resource Rules
 
 - User-facing UI text belongs in `resources/locales/*.lang`.
-- The Qt Widgets shell uses the stock `Fusion` style and standard Qt controls. Do not add UI theme
-  stylesheets, palette files, custom fonts, or theme-specific icon packs under `resources`.
+- The Qt Widgets shell currently starts from `Fusion` and standard Qt controls. Theme resources,
+  custom fonts, palettes, stylesheets, and icon sets may be added or changed when the user's
+  current request explicitly directs that styling work; keep ownership, packaging, and licensing
+  evidence explicit.
 - Runtime presentation resources are limited to localization plus assets with non-theme purposes,
   such as the application logo and renderer-owned overlay icons. After changing them, rebuild
   `quader`; tests alone do not refresh `build/vs2026/Debug`.

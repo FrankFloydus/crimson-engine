@@ -12,6 +12,23 @@
 #include <utility>
 
 namespace quader {
+namespace {
+
+QuaderCommandDescriptor
+make_descriptor(const EditorCommandRegistration &command) {
+  return {
+      .id = command.id,
+      .label = command.label,
+      .shortcut = command.shortcut,
+      .enabled = [&]() {
+        QDR_PROFILE_SCOPE("Editor command availability predicate");
+        QDR_PROFILE_NAME(command.id.data(), command.id.size());
+        return command.enabled ? command.enabled() : true;
+      }(),
+  };
+}
+
+} // namespace
 
 void EditorCommandRegistry::register_command(
     EditorCommandRegistration command) {
@@ -53,6 +70,16 @@ EditorCommandRegistry::execute(std::string_view command_id) const {
   return std::nullopt;
 }
 
+std::optional<QuaderCommandDescriptor>
+EditorCommandRegistry::descriptor(std::string_view command_id) const {
+  QDR_PROFILE_FUNCTION();
+  QDR_PROFILE_NAME(command_id.data(), command_id.size());
+  const EditorCommandRegistration *command = find(command_id);
+  return command != nullptr && command->visible
+             ? std::optional<QuaderCommandDescriptor>{make_descriptor(*command)}
+             : std::nullopt;
+}
+
 std::vector<QuaderCommandDescriptor> EditorCommandRegistry::available() const {
     QDR_PROFILE_FUNCTION();
     std::vector<QuaderCommandDescriptor> result;
@@ -61,16 +88,7 @@ std::vector<QuaderCommandDescriptor> EditorCommandRegistry::available() const {
         if (!command.visible) {
             continue;
         }
-        result.push_back(QuaderCommandDescriptor{
-                .id = command.id,
-                .label = command.label,
-                .shortcut = command.shortcut,
-                .enabled = [&]() {
-                    QDR_PROFILE_SCOPE("Editor command availability predicate");
-                    QDR_PROFILE_NAME(command.id.data(), command.id.size());
-                    return command.enabled ? command.enabled() : true;
-                }(),
-        });
+        result.push_back(make_descriptor(command));
     }
     return result;
 }

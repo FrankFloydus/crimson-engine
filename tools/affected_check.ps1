@@ -660,7 +660,7 @@ function Add-PathPlan {
         Add-BuildTarget "quader_runtime" "UI source changed"
         Add-BuildTarget "quader_guardrail_tests" "UI source changed"
         Add-BuildTarget "quader_tests" "UI source changed"
-        Add-GuardrailTestsFilter "BuildGuardrailTests.QtWidgetsRuntimeAndLicenseEvidenceAreConfigured:BuildGuardrailTests.ActiveAppAndUiUseQtWithoutSdlAdapters:BuildGuardrailTests.RuntimeUiUsesQtWidgetsFusionOnly:UiLayoutGuardrailTests.*" "UI source-policy guardrails"
+        Add-GuardrailTestsFilter "BuildGuardrailTests.QtWidgetsRuntimeAndLicenseEvidenceAreConfigured:BuildGuardrailTests.ActiveAppAndUiUseQtWithoutSdlAdapters:BuildGuardrailTests.RuntimeUiUsesQtWidgetsWithFusionBaseline:UiLayoutGuardrailTests.*" "UI source-policy guardrails"
         Add-QuaderTestsFilter "UI*:Ui*:Console*:Localization*:QtInputAdapterTests.*:Viewport*" "UI shell and viewport tests"
         return
     }
@@ -678,7 +678,7 @@ function Add-PathPlan {
         Add-BuildTarget "quader_runtime" "app/platform source changed"
         Add-BuildTarget "quader_guardrail_tests" "app/platform source changed"
         Add-BuildTarget "quader_tests" "app/platform source changed"
-        Add-GuardrailTestsFilter "BuildGuardrailTests.AppLoopRunsOnQApplicationEvents:BuildGuardrailTests.QtShellUsesMainWindowDocksAndStableNames:BuildGuardrailTests.RuntimeUiUsesQtWidgetsFusionOnly:WindowGuardrailTests.WindowPlacementPersistenceAndResizeRecoveryStayOwned" "app/platform source-policy guardrails"
+        Add-GuardrailTestsFilter "BuildGuardrailTests.AppLoopRunsOnQApplicationEvents:BuildGuardrailTests.QtShellUsesMainWindowDocksAndStableNames:BuildGuardrailTests.RuntimeUiUsesQtWidgetsWithFusionBaseline:WindowGuardrailTests.WindowPlacementPersistenceAndResizeRecoveryStayOwned" "app/platform source-policy guardrails"
         Add-QuaderTestsFilter "AppFrameClockTests.*:AppStartupTests.*:FatalErrorHandlerTests.*:QtInputAdapterTests.*" "app/platform behavior tests"
         return
     }

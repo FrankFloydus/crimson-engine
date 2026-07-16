@@ -38,6 +38,8 @@ public:
   [[nodiscard]] bool contains(std::string_view command_id) const;
   [[nodiscard]] std::optional<QuaderApiVoidResult>
   execute(std::string_view command_id) const;
+  [[nodiscard]] std::optional<QuaderCommandDescriptor>
+  descriptor(std::string_view command_id) const;
   [[nodiscard]] std::vector<QuaderCommandDescriptor> available() const;
   [[nodiscard]] std::string shortcut_for(std::string_view command_id) const;
 

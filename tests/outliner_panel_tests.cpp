@@ -8,7 +8,30 @@
 
 #include "ui/outliner_panel.hpp"
 
+#include <QApplication>
+#include <QCoreApplication>
+#include <QLayout>
+#include <QTreeView>
+
 using quader::OutlinerPropertyState;
+
+TEST(OutlinerPanelTests, TreeFillsThePanelContentsRect) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-outliner-layout-tests";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  QApplication::setStyle(QStringLiteral("Fusion"));
+
+  quader::OutlinerPanel panel;
+  panel.resize(320, 480);
+  ASSERT_NE(panel.layout(), nullptr);
+  ASSERT_TRUE(panel.layout()->activate());
+
+  auto *tree = panel.findChild<QTreeView *>(QStringLiteral("outliner.tree"));
+  ASSERT_NE(tree, nullptr);
+  EXPECT_EQ(tree->geometry(), panel.contentsRect());
+}
 
 TEST(OutlinerPanelTests, PropertyStatesDistinguishLocalAndInheritedValues) {
   EXPECT_EQ(quader::outliner_visibility_property_state(false, false),

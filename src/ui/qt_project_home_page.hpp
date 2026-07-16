@@ -38,7 +38,6 @@ struct QtRecentProjectItem {
  * User-facing Home page text supplied by the shell's localization boundary.
  */
 struct QtProjectHomeLabels {
-  QString title;
   QString new_project;
   QString open_project;
   QString recent_projects;
@@ -133,7 +132,6 @@ private:
   void refresh_recent_projects_page();
 
   QtProjectHomeLabels labels_ = QtProjectHomeLabels::defaults();
-  QLabel *title_label_ = nullptr;
   QPushButton *new_project_button_ = nullptr;
   QPushButton *open_project_button_ = nullptr;
   QLabel *recent_projects_label_ = nullptr;

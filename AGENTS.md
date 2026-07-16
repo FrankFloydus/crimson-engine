@@ -201,16 +201,58 @@ files add local ownership and verification notes only.
   service, or SDK owner exists.
 - Keep Qt Widgets and raw Qt events at the UI boundary. Convert raw events through the Qt input
   adapter into canonical Quader input and semantic viewport frames before lower layers see them.
-- The native shell uses `QApplication`, `QMainWindow`, `QDockWidget`, and the stock Qt `Fusion`
-  style together with `fusion_style->standardPalette()`. Do not add QSS, app-authored global
-  palettes, custom UI fonts, custom title-bar chrome, or other theme overrides. A local
-  `QPalette::Button` role is allowed only for semantic color-swatch buttons, and semantic X/Y/Z
-  labels may set only their local `QPalette::WindowText` role through the shared Qt axis-color
-  helper; Fusion still draws every complete native control state.
+- The native shell currently initializes Qt `Fusion` with `fusion_style->standardPalette()` as its
+  default baseline. This baseline is not a prohibition on styling. Apply style, palette, font,
+  icon, or window-chrome changes when the user's current request explicitly directs them; keep
+  scoped changes local where practical and verify accessibility plus default, hover, selected,
+  pressed, focused, and disabled states in proportion to the change.
 - The viewport workspace is one central Qt panel with one to four embedded panes. Each pane hosts a
   native child `QWindow` Filament surface; `ViewportWorkspaceService` remains the state owner.
 - Text, buttons, icons, and settings controls must remain scannable, localized, and consistent with
   the existing native editor shell.
+
+## UI Frame-Loop Performance Rule
+
+UI additions must not turn catalogs, command predicates, snapshots, or widget presentation into
+per-frame work. Native Qt controls and toolbars are cheap to paint; a large FPS collapse after UI
+work almost always means synchronization code was placed in `UISystem::refresh`, a viewport frame
+callback, or another continuously called path without an unchanged-state gate.
+
+The recurring failure pattern is:
+
+- calling broad APIs such as `commands().available()`, catalog enumeration, full snapshots, or
+  repeated selection summaries every rendered frame;
+- allocating descriptor vectors and strings, resolving every shortcut, and executing every
+  command availability predicate just to update a few retained controls;
+- calling `setText`, `setToolTip`, `setEnabled`, `setChecked`, visibility, geometry, or model-reset
+  methods with unchanged values, which can schedule Qt change, layout, accessibility, and paint
+  work;
+- duplicating an expensive query in several widgets instead of computing one owner snapshot and
+  sharing or caching the result.
+
+Required resolution:
+
+- Build static controls once. Synchronize retained controls only on the narrow event or owner
+  revision that can change them: project/scene replacement, selection revision, active-tool change,
+  command execution, keybinding change, localization change, or explicit settings commit.
+- Put the unchanged-state/revision check before descriptor allocation, command availability
+  predicates, shortcut lookup, string formatting, and Qt setters.
+- When a widget needs one or a small fixed set of commands, use narrow lookup such as
+  `commands().descriptor(id)`; never enumerate `commands().available()` from a frame callback.
+- Cache the values currently presented and do not call Qt setters when the effective value is
+  unchanged. Invalidate the cache explicitly for localization, keybinding, project, and other
+  non-revision transitions.
+- If polling is unavoidable, query the cheapest owner state once per frame and share it. Do not
+  compensate for UI polling by lowering the render cadence, skipping renderer work, or weakening
+  input responsiveness.
+
+Verification for UI work that touches a frame callback or runtime synchronization must include:
+
+- a source or behavior regression test proving the expensive work is behind an unchanged-state or
+  revision gate and broad catalog enumeration is absent from the hot path;
+- a same-build, same-scene before/after frame-time or FPS measurement when a regression is reported;
+- the normal focused UI tests and native app build. A visually correct toolbar is not complete if it
+  reduces steady-state viewport performance.
 
 ## Viewport And Input Rules
 

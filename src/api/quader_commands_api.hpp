@@ -98,6 +98,10 @@ public:
     QuaderApiVoidResult execute(std::string_view command_id);
     QuaderApiVoidResult execute(QuaderCommandId command_id);
     [[nodiscard]] std::optional<QuaderApiStatus> last_status() const;
+    [[nodiscard]] std::optional<QuaderCommandDescriptor>
+    descriptor(std::string_view command_id) const;
+    [[nodiscard]] std::optional<QuaderCommandDescriptor>
+    descriptor(QuaderCommandId command_id) const;
     [[nodiscard]] std::vector<QuaderCommandDescriptor> available() const;
     [[nodiscard]] std::string
     command_id_for_modeling_action(std::string_view action_id) const;

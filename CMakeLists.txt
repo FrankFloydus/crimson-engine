@@ -706,6 +706,9 @@ add_library(quader_ui STATIC
     src/ui/qt_project_home_page.cpp
     src/ui/qt_relative_pointer_input.cpp
     src/ui/qt_scene_workspace.cpp
+    src/ui/qt_selection_toolbar.cpp
+    src/ui/qt_tool_toolbar.cpp
+    src/ui/qt_toolbar_button_presentation.cpp
     src/ui/qt_semantic_axis_colors.hpp
     src/ui/qt_auxiliary_window_state.cpp
     src/ui/qt_settings_dialog.cpp
@@ -824,6 +827,27 @@ set(QUADER_APPLICATION_ICON_FILES
     "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/quader_64.png"
     "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/quader_256.png")
 
+set(QUADER_SELECTION_TOOLBAR_ICON_FILES
+    "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/selection_vertex.png"
+    "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/selection_edge.png"
+    "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/selection_face.png"
+    "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/selection_mesh.png"
+    "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/selection_group.png")
+
+set(QUADER_TOOL_TOOLBAR_ICON_FILES
+    "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/tool_select.png"
+    "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/tool_move.png"
+    "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/tool_rotate.png"
+    "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/tool_scale.png"
+    "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/tool_pivot.png"
+    "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/tool_create_primitive.png"
+    "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/tool_knife.png"
+    "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/tool_cut.png"
+    "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/tool_poly.png"
+    "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/tool_mirror.png"
+    "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/tool_linear_array.png"
+    "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/tool_radial_array.png")
+
 set(QUADER_NATIVE_APPLICATION_RESOURCES)
 if(WIN32)
     enable_language(RC)
@@ -840,6 +864,14 @@ qt_add_resources(quader "quader_application_icons"
     PREFIX "/quader/icons"
     BASE "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons"
     FILES ${QUADER_APPLICATION_ICON_FILES})
+qt_add_resources(quader "quader_selection_toolbar_icons"
+    PREFIX "/quader/icons"
+    BASE "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons"
+    FILES ${QUADER_SELECTION_TOOLBAR_ICON_FILES})
+qt_add_resources(quader "quader_tool_toolbar_icons"
+    PREFIX "/quader/icons"
+    BASE "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons"
+    FILES ${QUADER_TOOL_TOOLBAR_ICON_FILES})
 target_link_libraries(quader PRIVATE quader_runtime)
 add_dependencies(quader
     ${QUADER_FILAMENT_MATERIAL_TARGETS})

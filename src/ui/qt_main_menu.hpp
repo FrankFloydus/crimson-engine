@@ -34,6 +34,10 @@ struct QtMainMenuContext {
   std::function<void()> show_settings;
   std::function<bool(UIPanelId)> panel_visible;
   std::function<void(UIPanelId, bool)> set_panel_visible;
+  std::function<bool()> selection_toolbar_visible;
+  std::function<void(bool)> set_selection_toolbar_visible;
+  std::function<bool()> tool_toolbar_visible;
+  std::function<void(bool)> set_tool_toolbar_visible;
   std::function<void()> viewport_settings_changed;
   std::function<void()> show_material_browser;
   std::function<bool()> material_browser_available;

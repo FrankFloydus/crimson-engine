@@ -8,7 +8,10 @@
 
 #include "ui/qt_project_home_page.hpp"
 #include "ui/qt_scene_workspace.hpp"
+#include "ui/qt_selection_toolbar.hpp"
+#include "ui/qt_tool_toolbar.hpp"
 
+#include <QAction>
 #include <QApplication>
 #include <QCoreApplication>
 #include <QKeyEvent>
@@ -16,10 +19,14 @@
 #include <QModelIndex>
 #include <QItemSelectionModel>
 #include <QLabel>
+#include <QImage>
 #include <QMouseEvent>
+#include <QPainter>
 #include <QPushButton>
 #include <QStackedWidget>
+#include <QStyleOption>
 #include <QTableView>
+#include <QToolBar>
 #include <QToolButton>
 
 #include <optional>
@@ -49,7 +56,99 @@ void send_key(QWidget &target, int key) {
   QCoreApplication::sendEvent(&target, &release);
 }
 
+int expect_persistent_button_faces(QToolBar &toolbar,
+                                   int expected_minimum_height) {
+  int action_button_count = 0;
+  for (QToolButton *button : toolbar.findChildren<QToolButton *>()) {
+    QAction *action = button->defaultAction();
+    if (action == nullptr || !action->isCheckable()) {
+      continue;
+    }
+    ++action_button_count;
+    EXPECT_FALSE(button->autoRaise());
+    EXPECT_TRUE(button->testAttribute(Qt::WA_Hover));
+    EXPECT_TRUE(button->hasMouseTracking());
+    EXPECT_EQ(button->focusPolicy(), Qt::StrongFocus);
+    EXPECT_GE(button->minimumWidth(), 40);
+    EXPECT_EQ(button->minimumHeight(), expected_minimum_height);
+    EXPECT_FALSE(button->isDown());
+    EXPECT_EQ(button->accessibleName(), action->text());
+  }
+  return action_button_count;
+}
+
+QImage render_toolbar_button_face(QToolButton &button,
+                                  QStyle::State state) {
+  QImage image(QSize(32, 32), QImage::Format_ARGB32_Premultiplied);
+  image.fill(Qt::transparent);
+  QPainter painter(&image);
+  QStyleOption option;
+  option.rect = image.rect();
+  option.palette = button.palette();
+  option.state = state;
+  button.style()->drawPrimitive(QStyle::PE_PanelButtonCommand, &option,
+                                &painter, &button);
+  return image;
+}
+
 } // namespace
+
+TEST(QtProjectWorkspaceTests,
+     EditorToolbarsKeepNativeButtonFacesVisibleAtRest) {
+  int argc = 1;
+  char application_name[] = "quader_toolbar_test";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+
+  quader::QtSelectionToolbar selection_toolbar;
+  quader::QtToolToolbar tool_toolbar;
+
+  EXPECT_EQ(selection_toolbar.iconSize(), QSize(32, 32));
+  EXPECT_EQ(tool_toolbar.iconSize(), QSize(32, 32));
+  EXPECT_EQ(expect_persistent_button_faces(selection_toolbar, 36), 5);
+  EXPECT_EQ(expect_persistent_button_faces(tool_toolbar, 40), 12);
+  for (QToolButton *button :
+       selection_toolbar.findChildren<QToolButton *>()) {
+    if (button->defaultAction() != nullptr &&
+        button->defaultAction()->isCheckable()) {
+      EXPECT_EQ(button->maximumHeight(), 36);
+    }
+  }
+
+  QToolButton *button = nullptr;
+  for (QToolButton *candidate : tool_toolbar.findChildren<QToolButton *>()) {
+    if (candidate->defaultAction() != nullptr &&
+        candidate->defaultAction()->isCheckable()) {
+      button = candidate;
+      break;
+    }
+  }
+  ASSERT_NE(button, nullptr);
+  const QStyle::State default_state =
+      QStyle::State_Active | QStyle::State_Enabled | QStyle::State_Raised;
+  const QImage default_face =
+      render_toolbar_button_face(*button, default_state);
+  const QImage hover_face = render_toolbar_button_face(
+      *button, default_state | QStyle::State_MouseOver);
+  const QImage selected_face = render_toolbar_button_face(
+      *button, default_state | QStyle::State_On);
+  const QImage pressed_face = render_toolbar_button_face(
+      *button, QStyle::State_Active | QStyle::State_Enabled |
+                   QStyle::State_Sunken);
+
+  EXPECT_NE(default_face, hover_face);
+  EXPECT_NE(default_face, selected_face);
+  EXPECT_NE(hover_face, selected_face);
+  EXPECT_NE(default_face, pressed_face);
+
+  QAction *action = button->defaultAction();
+  action->setChecked(true);
+  EXPECT_TRUE(action->isChecked());
+  EXPECT_FALSE(button->isDown());
+  action->setToolTip(QStringLiteral("Selection Tool [Q]"));
+  EXPECT_EQ(button->accessibleDescription(),
+            QStringLiteral("Selection Tool [Q]"));
+}
 
 TEST(QtProjectWorkspaceTests,
      SceneLabelsUseShortestUniqueParentsAndDirtyAsterisk) {
@@ -125,6 +224,12 @@ TEST(QtProjectWorkspaceTests,
   home.resize(900, 600);
   home.show();
   QCoreApplication::processEvents();
+
+  EXPECT_EQ(home.findChild<QLabel *>(QStringLiteral("projectHome.title")),
+            nullptr);
+  EXPECT_NE(home.findChild<QLabel *>(
+                QStringLiteral("projectHome.recentProjects.label")),
+            nullptr);
 
   home.findChild<QPushButton *>(
           QStringLiteral("projectHome.newProject"))

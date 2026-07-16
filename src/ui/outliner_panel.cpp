@@ -331,6 +331,8 @@ struct OutlinerPanel::Impl {
         QString::fromLatin1(ui_panel_key(UIPanelId::Outliner)));
 
     auto *layout = new QVBoxLayout(&panel_);
+    layout->setObjectName(QStringLiteral("outliner.layout"));
+    layout->setContentsMargins(0, 0, 0, 0);
     tree_ = new OutlinerTreeView(&panel_);
     tree_->setObjectName(QStringLiteral("outliner.tree"));
     tree_->setHeaderHidden(false);

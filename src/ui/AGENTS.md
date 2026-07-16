@@ -14,10 +14,10 @@ Also follow root `AGENTS.md` UI, localization, API, viewport/input, and testing 
 
 - The retained Qt Widgets shell uses `UISystem` to compose `QMainWindow`, native menu/status bars,
   `QDockWidget` panels, settings/tool windows, and the central `QtViewportPanel`.
-- `main.cpp` selects stock `Fusion` with its `standardPalette()`. Do not add QSS, global palettes,
-  custom fonts/chrome, or app theme colors. Color swatches may set only local `QPalette::Button`;
-  semantic X/Y/Z labels may set only local `QPalette::WindowText` via
-  `qt_semantic_axis_colors.hpp`. Fusion draws all complete control states.
+- `main.cpp` selects `Fusion` with its `standardPalette()` as the current default baseline, not an
+  immutable style restriction. Make style, palette, font, icon, or chrome changes when explicitly
+  directed by the user's current request. Prefer narrowly scoped presentation owners and verify
+  accessibility plus every affected native control state.
 - `UISystem` owns composition, dock registration, window-state persistence, localization, and
   top-level presentation actions, never editor/domain behavior.
 - `QtViewportPanel` hosts one to four panes. Each embeds a native child `QWindow` through

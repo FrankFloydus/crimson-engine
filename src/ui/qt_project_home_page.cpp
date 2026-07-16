@@ -7,7 +7,6 @@
 #include "ui/qt_project_home_page.hpp"
 
 #include <QAbstractItemView>
-#include <QFrame>
 #include <QHeaderView>
 #include <QHBoxLayout>
 #include <QItemSelectionModel>
@@ -27,7 +26,6 @@ namespace quader {
 
 QtProjectHomeLabels QtProjectHomeLabels::defaults() {
   return {
-      .title = QStringLiteral("Welcome to Quader"),
       .new_project = QStringLiteral("New Quader Project"),
       .open_project = QStringLiteral("Open Project"),
       .recent_projects = QStringLiteral("Recent Projects"),
@@ -148,16 +146,6 @@ QtProjectHomePage::QtProjectHomePage(QWidget *parent) : QWidget(parent) {
   auto *root_layout = new QVBoxLayout(this);
   root_layout->setContentsMargins(32, 32, 32, 32);
   root_layout->setSpacing(16);
-
-  title_label_ = new QLabel(this);
-  title_label_->setObjectName(QStringLiteral("projectHome.title"));
-  root_layout->addWidget(title_label_);
-
-  auto *separator = new QFrame(this);
-  separator->setObjectName(QStringLiteral("projectHome.separator"));
-  separator->setFrameShape(QFrame::HLine);
-  separator->setFrameShadow(QFrame::Sunken);
-  root_layout->addWidget(separator);
 
   auto *project_actions = new QHBoxLayout();
   project_actions->setSpacing(8);
@@ -314,7 +302,6 @@ void QtProjectHomePage::refresh_remove_recent_button() {
 }
 
 void QtProjectHomePage::refresh_labels() {
-  title_label_->setText(labels_.title);
   new_project_button_->setText(labels_.new_project);
   new_project_button_->setAccessibleName(labels_.new_project);
   open_project_button_->setText(labels_.open_project);

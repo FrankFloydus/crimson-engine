@@ -28,8 +28,10 @@
 #include "ui/qt_material_preview_surface.hpp"
 #include "ui/qt_project_home_page.hpp"
 #include "ui/qt_scene_workspace.hpp"
+#include "ui/qt_selection_toolbar.hpp"
 #include "ui/qt_settings_dialog.hpp"
 #include "ui/qt_standard_material_editor_window.hpp"
+#include "ui/qt_tool_toolbar.hpp"
 #include "ui/qt_tool_settings_window.hpp"
 #include "ui/qt_viewport_panel.hpp"
 #include "ui/ui_context.hpp"
@@ -227,6 +229,16 @@ bool UISystem::initialize(RenderSystem &render_system,
   main_window_->setDockOptions(QMainWindow::AllowNestedDocks |
                                QMainWindow::AllowTabbedDocks |
                                QMainWindow::AnimatedDocks);
+
+  selection_toolbar_ = new QtSelectionToolbar(main_window_.get());
+  selection_toolbar_->set_localization(localization_);
+  selection_toolbar_->setEnabled(false);
+  main_window_->addToolBar(Qt::TopToolBarArea, selection_toolbar_);
+
+  tool_toolbar_ = new QtToolToolbar(main_window_.get());
+  tool_toolbar_->set_localization(localization_);
+  tool_toolbar_->setEnabled(false);
+  main_window_->addToolBar(Qt::LeftToolBarArea, tool_toolbar_);
 
   central_stack_ = new QStackedWidget(main_window_.get());
   central_stack_->setObjectName(QStringLiteral("mainCentralStack"));
@@ -482,6 +494,29 @@ void UISystem::install_runtime_hooks(
   outliner_refresh_valid_ = false;
   inspector_refresh_valid_ = false;
 
+  selection_toolbar_->set_mode_requested_callback(
+      [this](QuaderSelectionMode mode) {
+        if (editor_ == nullptr) {
+          return;
+        }
+        present_lifecycle_result(editor_->selection().set_mode(mode));
+        const QuaderSelectionSummary selection =
+            editor_->selection().summary();
+        selection_toolbar_->set_selection_mode(selection.mode);
+        tool_toolbar_->synchronize(*editor_, selection, true);
+      });
+  tool_toolbar_->set_tool_requested_callback(
+      [this](std::string_view tool_id) {
+        if (editor_ == nullptr) {
+          return;
+        }
+        const std::string command_id =
+            editor_->commands().command_id_for_tool_activation(tool_id);
+        present_lifecycle_result(editor_->commands().execute(command_id));
+        tool_toolbar_->synchronize(*editor_, editor_->selection().summary(),
+                                   true);
+      });
+
   ViewportWorkspaceService &workspace =
       QuaderViewportApiRuntimeAccess::workspace(editor.viewports());
   viewport_panel_->attach_workspace(workspace);
@@ -506,6 +541,27 @@ void UISystem::install_runtime_hooks(
           .set_panel_visible =
               [this](UIPanelId id, bool visible) {
                 set_panel_visible(id, visible);
+              },
+          .selection_toolbar_visible =
+              [this]() {
+                return selection_toolbar_ != nullptr &&
+                       selection_toolbar_->isVisible();
+              },
+          .set_selection_toolbar_visible =
+              [this](bool visible) {
+                if (selection_toolbar_ != nullptr) {
+                  selection_toolbar_->setVisible(visible);
+                }
+              },
+          .tool_toolbar_visible =
+              [this]() {
+                return tool_toolbar_ != nullptr && tool_toolbar_->isVisible();
+              },
+          .set_tool_toolbar_visible =
+              [this](bool visible) {
+                if (tool_toolbar_ != nullptr) {
+                  tool_toolbar_->setVisible(visible);
+                }
               },
           .viewport_settings_changed =
               [this]() {
@@ -817,6 +873,9 @@ void UISystem::refresh_project_workspace() {
 
 void UISystem::show_home() {
   const bool presentation_changed = !home_visible_;
+  if (presentation_changed) {
+    capture_workspace_window_state();
+  }
   home_visible_ = true;
   if (presentation_changed && material_browser_window_ != nullptr) {
     material_browser_window_->hide();
@@ -830,6 +889,18 @@ void UISystem::show_home() {
   }
   if (central_stack_ != nullptr && project_home_page_ != nullptr) {
     central_stack_->setCurrentWidget(project_home_page_);
+  }
+  if (main_window_ != nullptr) {
+    main_window_->menuBar()->hide();
+    main_window_->statusBar()->hide();
+  }
+  if (selection_toolbar_ != nullptr) {
+    selection_toolbar_->setEnabled(false);
+    selection_toolbar_->hide();
+  }
+  if (tool_toolbar_ != nullptr) {
+    tool_toolbar_->setEnabled(false);
+    tool_toolbar_->hide();
   }
   for (UIPanelId id :
        {UIPanelId::Outliner, UIPanelId::Inspector, UIPanelId::Console}) {
@@ -858,6 +929,24 @@ void UISystem::show_workspace() {
   home_visible_ = false;
   if (central_stack_ != nullptr && scene_workspace_ != nullptr) {
     central_stack_->setCurrentWidget(scene_workspace_);
+  }
+  if (main_window_ != nullptr) {
+    main_window_->menuBar()->show();
+    main_window_->statusBar()->show();
+  }
+  if (selection_toolbar_ != nullptr) {
+    selection_toolbar_->setEnabled(true);
+    selection_toolbar_->setVisible(selection_toolbar_workspace_visible_);
+  }
+  if (tool_toolbar_ != nullptr) {
+    tool_toolbar_->setEnabled(true);
+    tool_toolbar_->setVisible(tool_toolbar_workspace_visible_);
+  }
+  if (presentation_changed && editor_ != nullptr &&
+      selection_toolbar_ != nullptr && tool_toolbar_ != nullptr) {
+    const QuaderSelectionSummary selection = editor_->selection().summary();
+    selection_toolbar_->set_selection_mode(selection.mode);
+    tool_toolbar_->synchronize(*editor_, selection, true);
   }
   panels_.apply_settings(settings_);
   if (presentation_changed && main_menu_ != nullptr) {
@@ -999,6 +1088,9 @@ void UISystem::shutdown() {
   central_stack_ = nullptr;
   project_home_page_ = nullptr;
   scene_workspace_ = nullptr;
+  selection_toolbar_ = nullptr;
+  tool_toolbar_ = nullptr;
+  workspace_window_state_.clear();
   outliner_panel_ = nullptr;
   inspector_panel_ = nullptr;
   console_panel_ = nullptr;
@@ -1028,6 +1120,12 @@ void UISystem::refresh(const FrameTiming &frame_timing,
   frame_timing_ = frame_timing;
   render_performance_ = render_performance;
   refresh_project_workspace();
+  if (selection_toolbar_ != nullptr && tool_toolbar_ != nullptr &&
+      editor_ != nullptr) {
+    const QuaderSelectionSummary selection = editor_->selection().summary();
+    selection_toolbar_->set_selection_mode(selection.mode);
+    tool_toolbar_->synchronize(*editor_, selection);
+  }
   if (viewport_panel_ != nullptr) {
     viewport_panel_->set_render_performance_stats(render_performance_);
   }
@@ -1205,10 +1303,31 @@ bool UISystem::save_viewport_settings() {
 void UISystem::save_window_state() {
   if (main_window_ != nullptr &&
       !settings_paths_.qt_window_state_file.empty()) {
-    (void)write_binary_file(settings_paths_.qt_window_state_file,
-                            main_window_->saveState(kQtWindowStateVersion));
+    std::string state_bytes = workspace_window_state_;
+    if (!home_visible_ || state_bytes.empty()) {
+      const QByteArray state = main_window_->saveState(kQtWindowStateVersion);
+      state_bytes.assign(state.constData(),
+                         static_cast<std::size_t>(state.size()));
+    }
+    (void)write_binary_file(
+        settings_paths_.qt_window_state_file,
+        QByteArray(state_bytes.data(),
+                   static_cast<qsizetype>(state_bytes.size())));
   }
   save_auxiliary_window_state();
+}
+
+void UISystem::capture_workspace_window_state() {
+  if (main_window_ == nullptr) {
+    return;
+  }
+  const QByteArray state = main_window_->saveState(kQtWindowStateVersion);
+  workspace_window_state_.assign(
+      state.constData(), static_cast<std::size_t>(state.size()));
+  selection_toolbar_workspace_visible_ =
+      selection_toolbar_ != nullptr && !selection_toolbar_->isHidden();
+  tool_toolbar_workspace_visible_ =
+      tool_toolbar_ != nullptr && !tool_toolbar_->isHidden();
 }
 
 void UISystem::create_docks() {
@@ -1403,36 +1522,32 @@ bool UISystem::startup_layout_ready() const {
       main_window_->statusBar() == nullptr) {
     return false;
   }
-  const QRect client = main_window_->contentsRect();
-  const int expected_left = client.x();
-  const int expected_right = client.x() + client.width();
-  const auto left_edge = [](const QWidget *widget) {
-    return widget->geometry().x();
+  const auto geometry_ready = [](const QWidget *widget) {
+    return widget != nullptr && widget->geometry().isValid();
   };
-  const auto right_edge = [](const QWidget *widget) {
-    return widget->geometry().x() + widget->geometry().width();
-  };
-
-  int body_left = left_edge(main_window_->centralWidget());
-  int body_right = right_edge(main_window_->centralWidget());
-  for (UIPanelId id : {UIPanelId::Outliner, UIPanelId::Inspector}) {
-    if (!panels_.is_visible(id)) {
-      continue;
-    }
-    if (const QDockWidget *dock = panels_.dock(id);
-        dock != nullptr && !dock->isFloating()) {
-      body_left = std::min(body_left, left_edge(dock));
-      body_right = std::max(body_right, right_edge(dock));
-    }
+  if (!main_window_->contentsRect().isValid() ||
+      !geometry_ready(main_window_->centralWidget()) ||
+      !geometry_ready(main_window_->menuBar()) ||
+      !geometry_ready(main_window_->statusBar())) {
+    return false;
   }
 
-  constexpr int kLayoutTolerance = 2;
-  return body_left <= expected_left + kLayoutTolerance &&
-         body_right >= expected_right - kLayoutTolerance &&
-         right_edge(main_window_->menuBar()) >=
-             expected_right - kLayoutTolerance &&
-         right_edge(main_window_->statusBar()) >=
-             expected_right - kLayoutTolerance;
+  for (UIPanelId id : {UIPanelId::Outliner, UIPanelId::Inspector,
+                       UIPanelId::Console}) {
+    const QDockWidget *dock = panels_.dock(id);
+    if (dock != nullptr && dock->isVisible() && !geometry_ready(dock)) {
+      return false;
+    }
+  }
+  for (const QToolBar *toolbar :
+       {static_cast<const QToolBar *>(selection_toolbar_),
+        static_cast<const QToolBar *>(tool_toolbar_)}) {
+    if (toolbar != nullptr && toolbar->isVisible() &&
+        !geometry_ready(toolbar)) {
+      return false;
+    }
+  }
+  return true;
 }
 
 std::uint64_t UISystem::startup_layout_geometry_signature(
@@ -1472,6 +1587,15 @@ std::uint64_t UISystem::startup_layout_geometry_signature(
       mix_rect(dock->geometry());
     }
   }
+  const auto mix_toolbar = [&mix, &mix_rect](const QToolBar *toolbar) {
+    mix(toolbar != nullptr && toolbar->isVisible() ? 1 : 0);
+    if (toolbar != nullptr) {
+      mix(toolbar->isFloating() ? 1 : 0);
+      mix_rect(toolbar->geometry());
+    }
+  };
+  mix_toolbar(selection_toolbar_);
+  mix_toolbar(tool_toolbar_);
   return signature;
 }
 
@@ -2145,9 +2269,14 @@ void UISystem::refresh_localized_chrome() {
   update_title(UIPanelId::Outliner);
   update_title(UIPanelId::Inspector);
   update_title(UIPanelId::Console);
+  if (selection_toolbar_ != nullptr) {
+    selection_toolbar_->set_localization(localization_);
+  }
+  if (tool_toolbar_ != nullptr) {
+    tool_toolbar_->set_localization(localization_);
+  }
   if (project_home_page_ != nullptr) {
     project_home_page_->set_labels(QtProjectHomeLabels{
-        .title = text("ui.home.title", "Welcome to Quader"),
         .new_project =
             text("ui.home.new_project", "New Quader Project"),
         .open_project = text("ui.home.open_project", "Open Project"),

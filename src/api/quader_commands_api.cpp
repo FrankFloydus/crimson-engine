@@ -226,6 +226,8 @@ public:
     QuaderApiVoidResult execute(std::string_view command_id);
     QuaderApiVoidResult execute(QuaderCommandId command_id);
     [[nodiscard]] std::optional<QuaderApiStatus> last_status() const;
+    [[nodiscard]] std::optional<QuaderCommandDescriptor>
+    descriptor(std::string_view command_id) const;
     [[nodiscard]] std::vector<QuaderCommandDescriptor> available() const;
     [[nodiscard]] std::string
     command_id_for_modeling_action(std::string_view action_id) const;
@@ -359,6 +361,16 @@ QuaderCommandsApi::Impl::execute(std::string_view command_id) {
 std::optional<QuaderApiStatus>
 QuaderCommandsApi::Impl::last_status() const {
   return last_status_;
+}
+
+std::optional<QuaderCommandDescriptor>
+QuaderCommandsApi::Impl::descriptor(std::string_view command_id) const {
+  std::optional<QuaderCommandDescriptor> command =
+      registry_.descriptor(command_id);
+  if (command.has_value()) {
+    command->shortcut = keybindings_.shortcut_for(command->id);
+  }
+  return command;
 }
 
 std::vector<QuaderCommandDescriptor> QuaderCommandsApi::Impl::available() const {
@@ -1074,7 +1086,17 @@ QuaderApiVoidResult QuaderCommandsApi::execute(std::string_view command_id) {
 }
 
 std::optional<QuaderApiStatus> QuaderCommandsApi::last_status() const {
-  return impl_->last_status();
+    return impl_->last_status();
+}
+
+std::optional<QuaderCommandDescriptor>
+QuaderCommandsApi::descriptor(std::string_view command_id) const {
+  return impl_->descriptor(command_id);
+}
+
+std::optional<QuaderCommandDescriptor>
+QuaderCommandsApi::descriptor(QuaderCommandId command_id) const {
+  return impl_->descriptor(command_id.string());
 }
 
 std::vector<QuaderCommandDescriptor> QuaderCommandsApi::available() const {
