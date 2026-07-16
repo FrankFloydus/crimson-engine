@@ -12,6 +12,7 @@
 namespace quader {
 
 class QuaderEditorApi;
+class ViewportToolHoverPort;
 struct ViewportToolResult;
 
 /**
@@ -25,7 +26,8 @@ public:
   void handle_after_active_tool(
       QuaderEditorApi &editor, const ViewportInteractionFrame &frame,
       const ViewportToolResult &tool_result,
-      const ViewportBeforeToolInteractionResult &before_tool);
+      const ViewportBeforeToolInteractionResult &before_tool,
+      ViewportToolHoverPort *tool_hover = nullptr);
   [[nodiscard]] QuaderSelectionSummary
   pick_context_menu_target(QuaderEditorApi &editor,
                            const ViewportInteractionFrame &frame);

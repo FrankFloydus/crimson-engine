@@ -106,6 +106,11 @@ bool viewport_frame_diagnostics_enabled() {
   return kEnabled;
 }
 
+double viewport_component_pick_radius_pixels(double preference_radius) {
+  constexpr double kPixelsPerPreferenceUnit = 40.0;
+  return std::clamp(preference_radius * kPixelsPerPreferenceUnit, 2.0, 32.0);
+}
+
 bool same_pane_placements(const std::vector<ViewportPanePlacement> &left,
                           const std::vector<ViewportPanePlacement> &right) {
   if (left.size() != right.size()) {
@@ -2381,6 +2386,16 @@ void QtViewportPanel::process_viewport_input(
                       suppressed_keybinding_chords_,
                       linear_array_wheel_remainder_,
                       radial_array_wheel_remainder_);
+  if (sync_active_tool_from_editor(editor)) {
+    input.modal_tool_active =
+        input_router_.has_active_modal_preview(
+            *preview_ports.preview, resolved_grid_snap_enabled) ||
+        modeling.modal_tool_owns_viewport();
+    input.active_tool_owns_viewport =
+        input_router_.active_tool_owns_viewport();
+    modal_tool_owns_viewport_snapshot_ =
+        input.active_tool_owns_viewport || input.modal_tool_active;
+  }
 
   ViewportCameraController &camera = workspace_->camera(*input_pane);
   const ViewportInputResult result = input_router_.handle_frame(input, camera);
@@ -2959,6 +2974,10 @@ void QtViewportPanel::process_viewport_input(
   };
   auto make_tool_event_at = [&](QVec2 mouse_local, bool dragging = false) {
     const ViewportSettings &settings = active_viewport_settings();
+    const double vertex_radius =
+        settings.float_value(ViewportFloatSettingId::PickVertexRadius);
+    const double edge_radius =
+        settings.float_value(ViewportFloatSettingId::PickEdgeRadius);
     const ViewportRay ray = camera.ray_from_viewport_point(mouse_local);
     return ModelingToolRayEvent{
         .screen_position = mouse_local,
@@ -2969,10 +2988,12 @@ void QtViewportPanel::process_viewport_input(
             std::max(static_cast<double>(viewport_grid_world_size_for_preset(
                          input_router_.state().grid_preset)),
                      0.0001),
-        .vertex_radius =
-            settings.float_value(ViewportFloatSettingId::PickVertexRadius),
-        .edge_radius =
-            settings.float_value(ViewportFloatSettingId::PickEdgeRadius),
+        .vertex_radius = vertex_radius,
+        .edge_radius = edge_radius,
+        .vertex_screen_radius =
+            viewport_component_pick_radius_pixels(vertex_radius),
+        .edge_screen_radius =
+            viewport_component_pick_radius_pixels(edge_radius),
         .snap_enabled = resolved_grid_snap_enabled,
         .constrain_axis = input.modifiers.shift,
         .dragging = dragging,
@@ -3010,6 +3031,11 @@ void QtViewportPanel::process_viewport_input(
                     command.message.empty() ? "Command failed."
                                             : command.message);
         }
+        // The claimed hover key also throttles deterministic failures. Retrying
+        // an unchanged failed query every frame only floods the log and can
+        // leave stale presentation oscillating. A changed result invalidates
+        // naturally; a failed key becomes eligible again when pointer, camera,
+        // tool, or document state changes.
         if (command.changed) {
           hover_controller_.invalidate();
           selection_overlay_cache_.mark_dirty();
@@ -3126,7 +3152,8 @@ void QtViewportPanel::process_viewport_input(
   active_box_preview_ = input_router_.box_preview(
       *preview_ports.preview, resolved_grid_snap_enabled);
   interaction_controller_.handle_after_active_tool(
-      editor, interaction_frame, active_tool_result, before_tool);
+      editor, interaction_frame, active_tool_result, before_tool,
+      tool_context.ports.hover);
 
   bool show_context_menu = false;
   QPoint context_menu_global_point;
@@ -3207,17 +3234,25 @@ void QtViewportPanel::process_viewport_input(
   modal_tool_owns_viewport_snapshot_ = modal_tool_owns_viewport();
 }
 
-void QtViewportPanel::sync_active_tool_from_editor(QuaderEditorApi &editor) {
+bool QtViewportPanel::sync_active_tool_from_editor(QuaderEditorApi &editor) {
   const ViewportTool *editor_tool =
       find_viewport_tool(editor.tools().active_tool());
   const ViewportToolId active_tool = editor_tool != nullptr
                                          ? editor_tool->viewport_tool()
                                          : ViewportToolId::Select;
-  if (input_router_.state().active_tool != active_tool) {
+  const bool changed = input_router_.state().active_tool != active_tool;
+  if (changed) {
     linear_array_wheel_remainder_ = 0.0;
     radial_array_wheel_remainder_ = 0.0;
     input_router_.set_active_tool(active_tool);
     input_router_.clear_modal_tool_state();
+    const QuaderApiVoidResult cleared_hover = editor.selection().clear_hover();
+    if (!cleared_hover.ok()) {
+      LOG_ERROR("Viewport tool activation hover clear failed: {}",
+                cleared_hover.error_message().empty()
+                    ? "Hover clear failed."
+                    : cleared_hover.error_message());
+    }
     interaction_controller_.reset(&editor);
     hover_controller_.invalidate();
     active_box_preview_ = {};
@@ -3226,6 +3261,7 @@ void QtViewportPanel::sync_active_tool_from_editor(QuaderEditorApi &editor) {
   input_router_.set_selection_mode(app_selection_mode_to_viewport(
       to_modeling_selection_mode(editor.selection().summary().mode)));
   input_router_.sync_grid_preset_snapshot(workspace_->grid_preset());
+  return changed;
 }
 
 const ViewportSettings &QtViewportPanel::active_viewport_settings() const {

@@ -4692,9 +4692,32 @@ Invariant:
   that constrained topology. Grid snap quantizes only the scalar distance along the chosen Shift
   direction, while an edge intersection remains the exact topology boundary. It never lets a
   lower-priority pick bypass the constraint.
-- Activating Knife (`C`) changes both app and runtime selection to Edge. Each new stroke must begin
-  inside an existing edge rather than on a face, vertex, or ambiguous edge endpoint. Later grid
-  snaps that land on endpoints or face boundaries become canonical vertex/edge targets immediately.
+- Activating Knife (`C`) changes both app and runtime selection to Edge. A new stroke may begin on
+  an existing edge or an existing topology vertex, including a high-valence junction, but never in
+  a face interior. A vertex seed keeps every incident face available until the next target resolves
+  the segment's shared face. Grid snaps that land on endpoints or face boundaries become exact
+  canonical vertex/edge targets immediately; they never retain a 1% endpoint offset.
+- Knife picking is two-sided and nearest-surface driven. Reversed face winding must not disable
+  outside picking, and an edge shared by multiple faces takes its context from the nearest incident
+  surface under the ray before using orientation as a silhouette fallback. When authored-facing
+  preference is disabled, equal screen-distance components resolve by ray depth.
+- Interactive Knife component tolerances are physical screen-space radii, so perspective distance
+  and orthographic zoom do not change the usable hover width. The projected edge factor is converted
+  back to its perspective-correct topology factor, and visibility is resolved with a ray through the
+  candidate itself rather than the offset cursor ray. Headless/API callers with zero screen radius
+  retain the legacy world-radius path.
+- Knife surface occlusion follows the default single-sided renderer: it prefers authored-front
+  surfaces but retains backfaces as a fallback. On an inside-out closed mesh viewed from outside,
+  the culled near backface must not hide the farther interior topology that Filament actually draws.
+- Hovering before the first accepted Knife point never locks an object; the first accepted topology
+  seed establishes the stroke owner. Knife current points are explicit tool overlays drawn on top,
+  are excluded from generic selection-point projection, and participate with target topology in the
+  overlay signature. A hover command's `changed` flag describes a state transition, not whether the
+  current target is valid.
+- Activating a modal tool clears stale Select hover, synchronizes the viewport tool before the same
+  input frame is dispatched, and an eligible Knife frame alone may preserve its authored component
+  hover. Suppressed/error/miss frames clear stale presentation. Failed stationary hover keys remain
+  cached until pointer, camera, tool, or document state changes, preventing retry/log loops.
 - The polygon Knife Stroke operation rejects a segment whose endpoints do not share one face, so
   non-interactive callers cannot bypass the per-segment topology invariant.
 
@@ -4722,3 +4745,14 @@ Verification:
   successfully for manual viewport verification.
 - The grid-correction follow-up passes 9/9 focused runtime Knife tests, 10/10 scene/service Knife
   tests, the complete affected workflow and CTest 6/6. Native `quader` v0.1.8 builds successfully.
+- The vertex/backface follow-up passes 12/12 runtime Knife tests, 11/11 scene/service Knife tests,
+  and the focused polygon picking characterization. It covers valence-4 vertex seeds, exact initial
+  endpoint canonicalization, two-sided reversed-winding picks, and nearest incident surface
+  attribution; broad verification and the native v0.1.9 build are recorded in the task handoff.
+- The screen-space/lifecycle follow-up passes the complete native app and modeling-domain suites.
+  Focused coverage exercises near/far perspective and orthographic zoom, flipped meshes,
+  high-valence vertex seeds, screen-space grid snapping, marker removal/restoration, and suppressed
+  hover clearing. The v0.1.11 renderer-aligned regression specifically selects and continues from
+  the rendered far interior edge/face of a flipped closed box while rejecting its culled near shell;
+  the user also confirmed outside hover and navigation recovery in the native viewport. Final CTest
+  passes 6/6, including SDK-only, SDK consumer/parity, guardrail, app, and modeling-domain targets.

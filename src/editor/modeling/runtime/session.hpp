@@ -487,6 +487,7 @@ struct KnifeToolState {
   bool has_active_stroke = false;
   bool has_current = false;
   bool current_target_valid = false;
+  int current_object_id = -1;
   int target_object_id = -1;
   quader_poly::KnifePointTarget current_target;
   quader::QVec3 current_point;
@@ -1818,6 +1819,7 @@ bool update_insert_edge_loop_locked_seed(
     bool snap_enabled, bool dragging);
 KnifeToolPreview knife_tool_preview(const KnifeToolState &state);
 void reset_knife_tool(KnifeToolState &state);
+void clear_knife_hover(KnifeToolState &state, SelectionHoverState &hover);
 void rebuild_knife_overlay(KnifeToolState &state);
 bool update_knife_preview_from_pick(
     EditorSession &session, KnifeToolState &state, SelectionHoverState &hover,

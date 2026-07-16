@@ -57,6 +57,7 @@ public:
   update_knife_hover(const ModelingToolRayEvent &) override {
     return {.ok = true};
   }
+  ModelingCommandResult clear_knife_hover() override { return {.ok = true}; }
   ModelingCommandResult
   update_poly_hover(const ModelingToolRayEvent &) override {
     return {.ok = true};

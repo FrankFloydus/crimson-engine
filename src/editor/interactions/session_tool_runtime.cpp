@@ -1049,6 +1049,11 @@ void EditorRuntime::set_knife_active(bool active)
 	set_editor_runtime_knife_active(state_, active);
 }
 
+void EditorRuntime::clear_knife_hover()
+{
+	quader_editor_core::clear_knife_hover(state_.knife, state_.hover);
+}
+
 bool EditorRuntime::update_knife_preview_from_pick(
 		EditorSession& session,
 		const quader_poly::Ray& ray,

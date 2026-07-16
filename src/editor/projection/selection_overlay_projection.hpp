@@ -36,6 +36,13 @@ public:
       const SceneDocument &scene, ViewportOverlayLayer layer,
       ViewportOverlayStyleRole style_role, ViewportOverlaySource source,
       ModelingInstanceEditScope instance_edit_scope = {});
+  static void append_projected_overlay_points(
+      ViewportOverlayFrame &frame,
+      const std::vector<quader_editor_core::SelectionOverlayPoint> &points,
+      const ModelingObjectRuntimeMap &object_registry,
+      const SceneDocument &scene, ViewportOverlayLayer layer,
+      ViewportOverlayStyleRole style_role, ViewportOverlaySource source,
+      ModelingInstanceEditScope instance_edit_scope = {});
   static void append_world_space_overlay_points(
       ViewportOverlayFrame &frame,
       const std::vector<quader_editor_core::SelectionOverlayPoint> &points);

@@ -296,6 +296,8 @@ struct ModelingToolRayEvent {
   double grid_size = 1.0;
   double vertex_radius = 0.3;
   double edge_radius = 0.2;
+  double vertex_screen_radius = 0.0;
+  double edge_screen_radius = 0.0;
   bool snap_enabled = true;
   bool constrain_axis = false;
   bool dragging = false;

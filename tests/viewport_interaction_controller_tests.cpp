@@ -7,9 +7,11 @@
 #include "api/quader_editor_api.hpp"
 #include "api/quader_command_ids.hpp"
 #include "api/quader_api_session_internal_access.hpp"
+#include "editor/modeling/services/modeling_session_service.hpp"
 #include "editor/interactions/transform_gizmo.hpp"
 #include "editor/pivot/pivot_tool_service.hpp"
 #include "editor/tools/viewport_tool.hpp"
+#include "editor/tools/viewport_tool_ports.hpp"
 #include "editor/viewport/viewport_interaction_controller.hpp"
 #include "render/viewport_overlay_policy.hpp"
 #include "render/overlay/viewport_box_overlay_builder.hpp"
@@ -123,6 +125,28 @@ create_box_at(ViewportInteractionHarness &harness, quader::QVec3 center) {
           "Viewport Interaction Box");
   EXPECT_TRUE(box.ok) << box.message;
   return box.value();
+}
+
+quader::ModelingToolRayEvent
+knife_event_at(ViewportInteractionHarness &harness,
+               quader::QVec3 world_position) {
+  const quader::ViewportScreenPoint screen =
+      harness.camera.project_world_point(world_position);
+  EXPECT_TRUE(screen.visible);
+  const quader::ViewportRay ray =
+      harness.camera.ray_from_viewport_point(screen.position);
+  return {
+      .screen_position = screen.position,
+      .ray = {.origin = ray.origin, .direction = ray.direction},
+      .camera = quader::ViewportCameraAdapter::modeling_camera(
+          harness.camera, harness.input.viewport_size),
+      .grid_size = 1.0,
+      .vertex_radius = 0.1,
+      .edge_radius = 0.1,
+      .vertex_screen_radius = 12.0,
+      .edge_screen_radius = 12.0,
+      .snap_enabled = false,
+  };
 }
 
 const quader_editor_core::TransformGizmoAxisPrimitive *
@@ -1819,6 +1843,146 @@ TEST(ViewportInteractionControllerTests, HoverSurvivesNavigationSuppressionAndCl
         quader::ViewportBeforeToolInteractionResult{});
     EXPECT_EQ(harness.editor.selection().hover_summary().target.kind,
               quader::QuaderActiveSelectionKind::None);
+}
+
+TEST(ViewportInteractionControllerTests,
+     HandledOwningKnifeFramePreservesToolHoverUntilPointerLeaves) {
+    ViewportInteractionHarness harness;
+    const quader::QuaderModelingObjectRef box = create_unit_box(harness);
+
+    ASSERT_TRUE(harness.editor.selection()
+                    .set_mode(quader::QuaderSelectionMode::Edge)
+                    .ok());
+    harness.router.set_selection_mode(quader::ViewportSelectionMode::Edge);
+    harness.router.set_active_tool(quader::ViewportToolId::Knife);
+
+    const quader::QuaderApiResult<quader::QuaderHoverSummary> hover =
+        harness.editor.selection().hover_edge(box, 1, 2);
+    ASSERT_TRUE(hover.ok) << hover.message;
+    ASSERT_EQ(harness.editor.selection().hover_summary().target.kind,
+              quader::QuaderActiveSelectionKind::Edge);
+
+    harness.input.modal_tool_active = true;
+    harness.input.active_tool_owns_viewport = true;
+    const quader::ViewportToolResult tool_result{.handled = true};
+    harness.controller.handle_after_active_tool(
+        harness.editor, harness.frame(), tool_result,
+        quader::ViewportBeforeToolInteractionResult{});
+    EXPECT_EQ(harness.editor.selection().hover_summary().target.kind,
+              quader::QuaderActiveSelectionKind::Edge);
+
+    harness.input.viewport_hovered = false;
+    harness.controller.handle_after_active_tool(
+        harness.editor, harness.frame(), tool_result,
+        quader::ViewportBeforeToolInteractionResult{});
+    EXPECT_EQ(harness.editor.selection().hover_summary().target.kind,
+              quader::QuaderActiveSelectionKind::None);
+}
+
+TEST(ViewportInteractionControllerTests,
+     HandledOwningNonKnifeFrameClearsSelectionHover) {
+    ViewportInteractionHarness harness;
+    const quader::QuaderModelingObjectRef box = create_unit_box(harness);
+
+    ASSERT_TRUE(harness.editor.selection()
+                    .set_mode(quader::QuaderSelectionMode::Edge)
+                    .ok());
+    harness.router.set_selection_mode(quader::ViewportSelectionMode::Edge);
+    harness.router.set_active_tool(quader::ViewportToolId::Poly);
+
+    const quader::QuaderApiResult<quader::QuaderHoverSummary> hover =
+        harness.editor.selection().hover_edge(box, 1, 2);
+    ASSERT_TRUE(hover.ok) << hover.message;
+
+    harness.input.modal_tool_active = true;
+    harness.input.active_tool_owns_viewport = true;
+    harness.controller.handle_after_active_tool(
+        harness.editor, harness.frame(),
+        quader::ViewportToolResult{.handled = true},
+        quader::ViewportBeforeToolInteractionResult{});
+    EXPECT_EQ(harness.editor.selection().hover_summary().target.kind,
+              quader::QuaderActiveSelectionKind::None);
+}
+
+TEST(ViewportInteractionControllerTests,
+     SuppressedKnifeFrameClearsHoverAndNextEligibleFrameRearmsLeaveClear) {
+    ViewportInteractionHarness harness;
+    (void)create_unit_box(harness);
+
+    ASSERT_TRUE(harness.editor.selection()
+                    .set_mode(quader::QuaderSelectionMode::Edge)
+                    .ok());
+    harness.router.set_selection_mode(quader::ViewportSelectionMode::Edge);
+    harness.router.set_active_tool(quader::ViewportToolId::Knife);
+    harness.input.modal_tool_active = true;
+    harness.input.active_tool_owns_viewport = true;
+    const quader::ViewportToolResult tool_result{.handled = true};
+    quader::ModelingSessionService &modeling = harness.session.modeling();
+    ASSERT_TRUE(modeling
+                    .activate_viewport_tool(quader::ModelingViewportTool::Knife)
+                    .ok);
+    int hover_invalidations = 0;
+    quader::ViewportModelingToolPortCallbacks callbacks;
+    callbacks.invalidate_hover = [&]() { ++hover_invalidations; };
+    quader::ViewportModelingToolPortAdapter tool_ports(modeling, callbacks);
+    const quader::ModelingToolRayEvent event =
+        knife_event_at(harness, {0.0f, -1.0f, 1.0f});
+    const auto has_knife_handle = [&]() {
+      const quader::ViewportOverlayFrame overlay =
+          modeling.selection_overlay_frame();
+      return std::any_of(
+          overlay.points.begin(), overlay.points.end(),
+          [](const quader::ViewportOverlayPoint &point) {
+            return point.layer == quader::ViewportOverlayLayer::ToolHandle;
+          });
+    };
+    const auto author_knife_hover = [&]() {
+      const quader::ModelingCommandResult update =
+          modeling.update_knife_hover(event);
+      ASSERT_TRUE(update.ok) << update.message;
+      ASSERT_TRUE(modeling.tool_status().knife_has_current);
+      ASSERT_TRUE(has_knife_handle());
+      harness.controller.handle_after_active_tool(
+          harness.editor, harness.frame(), tool_result,
+          quader::ViewportBeforeToolInteractionResult{}, &tool_ports);
+      EXPECT_TRUE(modeling.tool_status().knife_has_current);
+    };
+
+    author_knife_hover();
+    harness.input_result.navigation_active = true;
+    harness.controller.handle_after_active_tool(
+        harness.editor, harness.frame(), tool_result,
+        quader::ViewportBeforeToolInteractionResult{}, &tool_ports);
+    EXPECT_EQ(harness.editor.selection().hover_summary().target.kind,
+              quader::QuaderActiveSelectionKind::None);
+    EXPECT_FALSE(modeling.tool_status().knife_has_current);
+    EXPECT_FALSE(has_knife_handle());
+    EXPECT_EQ(hover_invalidations, 1);
+
+    harness.input_result.navigation_active = false;
+    author_knife_hover();
+    EXPECT_EQ(harness.editor.selection().hover_summary().target.kind,
+              quader::QuaderActiveSelectionKind::Edge);
+
+    harness.input.viewport_hovered = false;
+    harness.controller.handle_after_active_tool(
+        harness.editor, harness.frame(), tool_result,
+        quader::ViewportBeforeToolInteractionResult{}, &tool_ports);
+    EXPECT_EQ(harness.editor.selection().hover_summary().target.kind,
+              quader::QuaderActiveSelectionKind::None);
+    EXPECT_FALSE(modeling.tool_status().knife_has_current);
+    EXPECT_FALSE(has_knife_handle());
+    EXPECT_EQ(hover_invalidations, 2);
+
+    harness.input.viewport_hovered = true;
+    author_knife_hover();
+    harness.input.text_input_active = true;
+    harness.controller.handle_after_active_tool(
+        harness.editor, harness.frame(), tool_result,
+        quader::ViewportBeforeToolInteractionResult{}, &tool_ports);
+    EXPECT_FALSE(modeling.tool_status().knife_has_current);
+    EXPECT_FALSE(has_knife_handle());
+    EXPECT_EQ(hover_invalidations, 3);
 }
 
 TEST(ViewportInteractionControllerTests, MoveRotateAndScaleGizmosDragSelectedObjectThroughViewportFrames) {

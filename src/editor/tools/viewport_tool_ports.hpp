@@ -31,6 +31,7 @@ public:
   update_insert_edge_loop_hover(const ModelingToolRayEvent &event) = 0;
   [[nodiscard]] virtual ModelingCommandResult
   update_knife_hover(const ModelingToolRayEvent &event) = 0;
+  [[nodiscard]] virtual ModelingCommandResult clear_knife_hover() = 0;
   [[nodiscard]] virtual ModelingCommandResult
   update_poly_hover(const ModelingToolRayEvent &event) = 0;
   [[nodiscard]] virtual ModelingCommandResult
@@ -175,6 +176,7 @@ public:
   update_insert_edge_loop_hover(const ModelingToolRayEvent &event) override;
   [[nodiscard]] ModelingCommandResult
   update_knife_hover(const ModelingToolRayEvent &event) override;
+  [[nodiscard]] ModelingCommandResult clear_knife_hover() override;
   [[nodiscard]] ModelingCommandResult
   update_poly_hover(const ModelingToolRayEvent &event) override;
   [[nodiscard]] ModelingCommandResult

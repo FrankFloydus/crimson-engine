@@ -37,6 +37,7 @@
 #include <cmath>
 #include <cstdint>
 #include <iterator>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <span>
@@ -60,6 +61,7 @@
 #include <editor/modeling/runtime/repeat_last_action.hpp>
 #include <editor/modeling/runtime/runtime_command.hpp>
 #include <editor/modeling/runtime/session.hpp>
+#include <mesh/geometry/geometry.hpp>
 #include <mesh/polygon/document.hpp>
 
 namespace quader {
@@ -98,6 +100,348 @@ quader_poly::Transform3 to_runtime(const ModelingTransform3 &transform) {
       .z_axis = to_runtime(transform.z_axis),
       .origin = to_runtime(transform.origin),
   };
+}
+
+bool knife_pick_face_contains_edge(const quader_poly::Face &face,
+                                   quader_poly::Edge edge) {
+  const quader_poly::Edge normalized =
+      quader_poly::make_edge(edge.a, edge.b);
+  for (std::size_t index = 0; index < face.vertices.size(); ++index) {
+    const quader_poly::ElementId a = face.vertices[index];
+    const quader_poly::ElementId b =
+        face.vertices[(index + 1U) % face.vertices.size()];
+    if (quader_poly::make_edge(a, b) == normalized) {
+      return true;
+    }
+  }
+  return false;
+}
+
+bool knife_pick_face_contains_component(
+    const quader_poly::Face &face, quader_poly::SelectionMode mode,
+    quader_poly::ElementId vertex_id, quader_poly::Edge edge) {
+  if (mode == quader_poly::SelectionMode::Vertex) {
+    return std::find(face.vertices.begin(), face.vertices.end(), vertex_id) !=
+           face.vertices.end();
+  }
+  return mode == quader_poly::SelectionMode::Edge &&
+         knife_pick_face_contains_edge(face, edge);
+}
+
+quader_poly::ElementId knife_pick_context_face_id(
+    const quader_poly::Document &document, quader_poly::SelectionMode mode,
+    quader_poly::ElementId vertex_id, quader_poly::Edge edge,
+    const quader_poly::Ray &ray,
+    const std::optional<quader_editor_core::PickHitRecord> &surface_hit,
+    int object_id) {
+  if (surface_hit.has_value() && surface_hit->object_id == object_id) {
+    const quader_poly::Face *surface_face =
+        quader_poly::find_face(document, surface_hit->face_id);
+    if (surface_face != nullptr && knife_pick_face_contains_component(
+                                       *surface_face, mode, vertex_id, edge)) {
+      return surface_face->id;
+    }
+  }
+
+  quader_poly::ElementId best_face_id = quader_poly::kInvalidElementId;
+  float best_facing_score = -std::numeric_limits<float>::infinity();
+  for (const quader_poly::Face &face : document.faces) {
+    if (!knife_pick_face_contains_component(face, mode, vertex_id, edge)) {
+      continue;
+    }
+    const float facing_score =
+        -quader::dot(quader_poly::face_normal(document, face), ray.direction);
+    if (best_face_id == quader_poly::kInvalidElementId ||
+        facing_score > best_facing_score) {
+      best_face_id = face.id;
+      best_facing_score = facing_score;
+    }
+  }
+  return best_face_id;
+}
+
+/**
+ * Carries the nearest cursor projection onto one screen-space Knife edge.
+ */
+struct KnifeScreenSegmentProjection {
+  QVec2 closest;
+  float factor = 0.0F;
+  float distance_squared = std::numeric_limits<float>::max();
+};
+
+KnifeScreenSegmentProjection knife_pick_screen_segment_projection(
+    QVec2 point, QVec2 a, QVec2 b) {
+  const QVec2 ab = b - a;
+  const float length_squared = ab.x * ab.x + ab.y * ab.y;
+  const float factor = length_squared > 0.000001F
+                           ? std::clamp(((point.x - a.x) * ab.x +
+                                         (point.y - a.y) * ab.y) /
+                                            length_squared,
+                                        0.0F, 1.0F)
+                           : 0.0F;
+  const QVec2 closest = a + ab * factor;
+  const float dx = point.x - closest.x;
+  const float dy = point.y - closest.y;
+  return {
+      .closest = closest,
+      .factor = factor,
+      .distance_squared = dx * dx + dy * dy,
+  };
+}
+
+float knife_world_segment_factor_from_screen_projection(
+    const quader_editor_core::ViewportCameraState &camera, QVec3 a, QVec3 b,
+    float screen_factor) {
+  if (camera.projection ==
+      quader_editor_core::CameraProjection::Orthographic) {
+    return screen_factor;
+  }
+
+  QVec3 forward = camera.transform.z_axis * -1.0F;
+  if (length_squared(forward) <= 0.000001F) {
+    forward = {0.0F, 0.0F, -1.0F};
+  } else if (!camera.affine_model_space) {
+    forward = normalize(forward);
+  }
+  const float depth_a = dot(a - camera.transform.origin, forward);
+  const float depth_b = dot(b - camera.transform.origin, forward);
+  const float denominator =
+      (1.0F - screen_factor) * depth_b + screen_factor * depth_a;
+  if (!std::isfinite(denominator) || std::abs(denominator) <= 0.000001F) {
+    return screen_factor;
+  }
+
+  // Screen interpolation is perspective-divided; recover the matching
+  // parameter on the authored 3D edge instead of mixing the two metrics.
+  return std::clamp(screen_factor * depth_a / denominator, 0.0F, 1.0F);
+}
+
+bool knife_screen_component_is_occluded(
+    const std::vector<quader_editor_core::PolygonObject> &objects,
+    int object_index, quader_poly::SelectionMode mode,
+    quader_poly::ElementId vertex_id, quader_poly::Edge edge,
+    float ray_distance,
+    const std::optional<quader_editor_core::PickHitRecord> &surface_hit) {
+  if (!surface_hit.has_value() ||
+      ray_distance <= surface_hit->ray_distance + 0.001F) {
+    return false;
+  }
+  if (surface_hit->object_index != object_index || object_index < 0 ||
+      object_index >= static_cast<int>(objects.size())) {
+    return true;
+  }
+  const quader_poly::Face *surface_face = quader_poly::find_face(
+      objects[static_cast<std::size_t>(object_index)].document,
+      surface_hit->face_id);
+  return surface_face == nullptr || !knife_pick_face_contains_component(
+                                        *surface_face, mode, vertex_id, edge);
+}
+
+/**
+ * Couples one topology hit with its screen-space ranking distance.
+ */
+struct KnifeScreenPickCandidate {
+  quader_editor_core::PickHitRecord hit;
+  float screen_distance_squared = std::numeric_limits<float>::max();
+};
+
+bool knife_screen_pick_candidate_is_better(
+    const KnifeScreenPickCandidate &candidate,
+    const std::optional<KnifeScreenPickCandidate> &best) {
+  constexpr float kComparisonEpsilon = 0.0001F;
+  if (!best.has_value()) {
+    return true;
+  }
+  if (std::abs(candidate.screen_distance_squared -
+               best->screen_distance_squared) > kComparisonEpsilon) {
+    return candidate.screen_distance_squared < best->screen_distance_squared;
+  }
+  if (std::abs(candidate.hit.ray_distance - best->hit.ray_distance) >
+      kComparisonEpsilon) {
+    return candidate.hit.ray_distance < best->hit.ray_distance;
+  }
+  return candidate.hit.object_id < best->hit.object_id;
+}
+
+std::optional<quader_editor_core::PickHitRecord>
+knife_screen_space_component_pick(
+    const std::vector<quader_editor_core::PolygonObject> &objects,
+    const ModelingToolRayEvent &event, quader_poly::SelectionMode mode,
+    double radius_pixels, int target_object_id,
+    quader_poly::PickOptions face_options,
+    std::span<const quader_editor_core::PickObjectBounds> object_bounds,
+    std::span<const quader_editor_core::PickObjectFaceGeometry>
+        face_geometry) {
+  if ((mode != quader_poly::SelectionMode::Vertex &&
+       mode != quader_poly::SelectionMode::Edge) ||
+      !std::isfinite(radius_pixels) || radius_pixels <= 0.0) {
+    return std::nullopt;
+  }
+
+  const quader_editor_core::ViewportCameraState camera =
+      modeling_runtime_camera(event.camera);
+  const float maximum_distance_squared =
+      static_cast<float>(radius_pixels * radius_pixels);
+  std::optional<KnifeScreenPickCandidate> best;
+
+  for (int object_index = 0; object_index < static_cast<int>(objects.size());
+       ++object_index) {
+    const quader_editor_core::PolygonObject &object =
+        objects[static_cast<std::size_t>(object_index)];
+    if (target_object_id > 0 && object.id != target_object_id) {
+      continue;
+    }
+
+    if (mode == quader_poly::SelectionMode::Vertex) {
+      for (const quader_poly::Vertex &vertex : object.document.vertices) {
+        QVec2 screen;
+        if (!quader_editor_core::project_viewport_point(
+                camera, vertex.position, screen)) {
+          continue;
+        }
+        const float dx = event.screen_position.x - screen.x;
+        const float dy = event.screen_position.y - screen.y;
+        const float screen_distance_squared = dx * dx + dy * dy;
+        if (screen_distance_squared > maximum_distance_squared) {
+          continue;
+        }
+
+        // Occlusion must be measured along the candidate's own projected ray;
+        // the cursor may be several pixels away while still inside tolerance.
+        const quader_poly::Ray candidate_ray =
+            quader_editor_core::ray_from_viewport_screen_point(camera, screen);
+        const float ray_distance =
+            quader::dot(vertex.position - candidate_ray.origin,
+                        candidate_ray.direction);
+        const std::optional<quader_editor_core::PickHitRecord>
+            candidate_surface_hit = quader_editor_core::pick_nearest(
+                objects,
+                {.ray = candidate_ray,
+                 .options = face_options,
+                 .target_object_id = target_object_id},
+                object_bounds, face_geometry);
+        if (ray_distance < 0.0F || knife_screen_component_is_occluded(
+                                      objects, object_index, mode, vertex.id,
+                                      {}, ray_distance,
+                                      candidate_surface_hit)) {
+          continue;
+        }
+        const quader::QVec3 closest =
+            candidate_ray.origin + candidate_ray.direction * ray_distance;
+        const quader_poly::ElementId face_id = knife_pick_context_face_id(
+            object.document, mode, vertex.id, {}, candidate_ray,
+            candidate_surface_hit, object.id);
+        const quader_poly::Face *face =
+            quader_poly::find_face(object.document, face_id);
+        KnifeScreenPickCandidate candidate;
+        candidate.hit = {
+            .hit = true,
+            .object_id = object.id,
+            .object_index = object_index,
+            .material_id = object.material_id,
+            .kind = quader_poly::ElementKind::Vertex,
+            .vertex_id = vertex.id,
+            .face_id = face_id,
+            .local_position = vertex.position,
+            .local_normal = face != nullptr
+                                ? quader_poly::face_normal(object.document,
+                                                           *face)
+                                : QVec3{0.0F, 1.0F, 0.0F},
+            .ray_distance = ray_distance,
+            .pick_distance = quader::length(vertex.position - closest),
+        };
+        candidate.hit.signature =
+            quader_editor_core::pick_hit_signature(candidate.hit);
+        candidate.screen_distance_squared = screen_distance_squared;
+        if (knife_screen_pick_candidate_is_better(candidate, best)) {
+          best = std::move(candidate);
+        }
+      }
+      continue;
+    }
+
+    for (const quader_poly::Edge edge :
+         quader_poly::document_edges(object.document)) {
+      const quader_poly::Vertex *a =
+          quader_poly::find_vertex(object.document, edge.a);
+      const quader_poly::Vertex *b =
+          quader_poly::find_vertex(object.document, edge.b);
+      if (a == nullptr || b == nullptr) {
+        continue;
+      }
+      QVec2 screen_a;
+      QVec2 screen_b;
+      if (!quader_editor_core::project_viewport_point(camera, a->position,
+                                                      screen_a) ||
+          !quader_editor_core::project_viewport_point(camera, b->position,
+                                                      screen_b)) {
+        continue;
+      }
+      const KnifeScreenSegmentProjection screen_projection =
+          knife_pick_screen_segment_projection(event.screen_position, screen_a,
+                                               screen_b);
+      if (screen_projection.distance_squared > maximum_distance_squared) {
+        continue;
+      }
+
+      const float world_factor =
+          knife_world_segment_factor_from_screen_projection(
+              camera, a->position, b->position, screen_projection.factor);
+      const QVec3 world_position =
+          a->position + (b->position - a->position) * world_factor;
+      const quader_poly::Ray candidate_ray =
+          quader_editor_core::ray_from_viewport_screen_point(
+              camera, screen_projection.closest);
+      const float ray_distance =
+          dot(world_position - candidate_ray.origin, candidate_ray.direction);
+      const QVec3 closest =
+          candidate_ray.origin + candidate_ray.direction * ray_distance;
+      const std::optional<quader_editor_core::PickHitRecord>
+          candidate_surface_hit = quader_editor_core::pick_nearest(
+              objects,
+              {.ray = candidate_ray,
+               .options = face_options,
+               .target_object_id = target_object_id},
+              object_bounds, face_geometry);
+      if (ray_distance < 0.0F ||
+          knife_screen_component_is_occluded(
+              objects, object_index, mode, quader_poly::kInvalidElementId,
+              edge, ray_distance, candidate_surface_hit)) {
+        continue;
+      }
+      const quader_poly::ElementId face_id = knife_pick_context_face_id(
+          object.document, mode, quader_poly::kInvalidElementId, edge,
+          candidate_ray, candidate_surface_hit, object.id);
+      const quader_poly::Face *face =
+          quader_poly::find_face(object.document, face_id);
+      KnifeScreenPickCandidate candidate;
+      candidate.hit = {
+          .hit = true,
+          .object_id = object.id,
+          .object_index = object_index,
+          .material_id = object.material_id,
+          .kind = quader_poly::ElementKind::Edge,
+          .edge = quader_poly::make_edge(edge.a, edge.b),
+          .face_id = face_id,
+          .local_position = world_position,
+          .local_normal = face != nullptr
+                              ? quader_poly::face_normal(object.document, *face)
+                              : QVec3{0.0F, 1.0F, 0.0F},
+          .ray_distance = ray_distance,
+          .pick_distance = length(world_position - closest),
+      };
+      candidate.hit.signature =
+          quader_editor_core::pick_hit_signature(candidate.hit);
+      candidate.screen_distance_squared = screen_projection.distance_squared;
+      if (knife_screen_pick_candidate_is_better(candidate, best)) {
+        best = std::move(candidate);
+      }
+    }
+  }
+
+  return best.has_value()
+             ? std::optional<quader_editor_core::PickHitRecord>(best->hit)
+             : std::nullopt;
 }
 
 quader_editor_core::ViewportInteractionTool
@@ -3353,6 +3697,13 @@ public:
     quader_poly::PickOptions options =
         quader_editor_core::selection_pick_options_from_radii(
             event.vertex_radius, event.edge_radius);
+    // Filament renders ordinary meshes with back-face culling. On an
+    // inside-out closed mesh the near shell is therefore invisible and the
+    // user sees the farther, authored-front interior surface. Prefer that
+    // rendered surface for Knife occlusion/context while retaining backfaces
+    // as a fallback for isolated reversed or open faces.
+    options.pick_backfaces = true;
+    options.prefer_front_facing_faces = true;
     quader_poly::PickOptions face_options = options;
     face_options.mode = quader_poly::SelectionMode::Face;
     const std::vector<quader_editor_core::PolygonObject> &objects =
@@ -3363,10 +3714,32 @@ public:
         &face_geometry = cached_pick_face_geometry(face_options);
     std::array<std::optional<quader_editor_core::PickHitRecord>, kModes.size()>
         hits;
-    const bool requires_edge_seed =
+    const std::optional<quader_editor_core::PickHitRecord> surface_hit =
+        quader_editor_core::pick_nearest(
+            objects,
+            {.ray = to_runtime(event.ray),
+             .options = face_options,
+             .target_object_id = target_object_id},
+            bounds, face_geometry);
+    const bool requires_topology_seed =
         !runtime_.knife_state().has_active_stroke;
     for (std::size_t index = 0U; index < kModes.size(); ++index) {
-      if (requires_edge_seed && kModes[index] != quader_poly::SelectionMode::Edge) {
+      if (requires_topology_seed &&
+          kModes[index] == quader_poly::SelectionMode::Face) {
+        continue;
+      }
+      if (kModes[index] == quader_poly::SelectionMode::Face) {
+        hits[index] = surface_hit;
+        continue;
+      }
+      const double screen_radius =
+          kModes[index] == quader_poly::SelectionMode::Vertex
+              ? event.vertex_screen_radius
+              : event.edge_screen_radius;
+      if (screen_radius > 0.0) {
+        hits[index] = knife_screen_space_component_pick(
+            objects, event, kModes[index], screen_radius, target_object_id,
+            face_options, bounds, face_geometry);
         continue;
       }
       options.mode = kModes[index];
@@ -3735,7 +4108,8 @@ public:
     quader_poly::ElementId resolved_face_id = world_hit.face_id;
     quader_poly::ElementKind resolved_kind = world_hit.kind;
     quader_poly::ElementId resolved_vertex_id = world_hit.vertex_id;
-    quader_poly::Edge resolved_edge = world_hit.edge;
+    quader_poly::Edge resolved_edge = quader_poly::make_edge(
+        world_hit.edge.a, world_hit.edge.b);
     if (world_hit.kind == quader_poly::ElementKind::Edge) {
       if (event.constrain_axis) {
         const std::optional<KnifeStraightConstraint> constraint =
@@ -3757,7 +4131,7 @@ public:
       } else {
         const std::optional<QVec3> snapped =
             quader_editor_core::snap_knife_point_to_edge_grid(
-                object->document, world_hit.edge, resolved_world_position,
+                object->document, resolved_edge, resolved_world_position,
                 event.grid_size, event.snap_enabled);
         if (!snapped.has_value()) {
           return std::nullopt;
@@ -3765,21 +4139,18 @@ public:
         resolved_world_position = *snapped;
       }
       const std::optional<float> factor = quader_poly::edge_factor_from_position(
-          object->document, world_hit.edge, resolved_world_position);
+          object->document, resolved_edge, resolved_world_position);
       const quader_poly::Vertex *a = quader_poly::find_vertex(
-          object->document, world_hit.edge.a);
+          object->document, resolved_edge.a);
       const quader_poly::Vertex *b = quader_poly::find_vertex(
-          object->document, world_hit.edge.b);
+          object->document, resolved_edge.b);
       if (!factor.has_value() || a == nullptr || b == nullptr) {
         return std::nullopt;
       }
       if (*factor <= 0.01F || *factor >= 0.99F) {
-        if (!runtime_.knife_state().has_active_stroke) {
-          return std::nullopt;
-        }
         resolved_kind = quader_poly::ElementKind::Vertex;
-        resolved_vertex_id = *factor <= 0.01F ? world_hit.edge.a
-                                              : world_hit.edge.b;
+        resolved_vertex_id =
+            *factor <= 0.01F ? resolved_edge.a : resolved_edge.b;
         const quader_poly::Vertex *endpoint =
             quader_poly::find_vertex(object->document, resolved_vertex_id);
         if (endpoint == nullptr) {
@@ -4026,7 +4397,35 @@ public:
         RuntimeToolCommandService::commit_insert_edge_loop_drag(), true);
   }
 
+  ModelingCommandResult clear_knife_hover() {
+    const std::uint64_t overlay_signature_before =
+        overlay_service_.selection_overlay_signature(runtime_);
+    runtime_.clear_knife_hover();
+    const bool changed =
+        overlay_signature_before !=
+        overlay_service_.selection_overlay_signature(runtime_);
+    if (changed) {
+      invalidate_selection_overlay_caches();
+    }
+    return {.ok = true, .changed = changed};
+  }
+
   ModelingCommandResult update_knife_hover(const ModelingToolRayEvent &event) {
+    const std::uint64_t overlay_signature_before =
+        overlay_service_.selection_overlay_signature(runtime_);
+    auto finish = [&](bool ok, std::string message) {
+      const bool changed =
+          overlay_signature_before !=
+          overlay_service_.selection_overlay_signature(runtime_);
+      if (changed) {
+        invalidate_selection_overlay_caches();
+      }
+      return ModelingCommandResult{
+          .ok = ok,
+          .changed = changed,
+          .message = std::move(message),
+      };
+    };
     const int locked_object_id = runtime_.knife_state().target_object_id;
     const auto world_hits = knife_pick_targets(
         event, locked_object_id > 0 ? locked_object_id : -1);
@@ -4041,40 +4440,29 @@ public:
       local_events[index] =
           tool_event_in_object_space(event, world_hits[index]->object_id);
       if (!local_events[index].has_value()) {
-        return {.ok = false,
-                .message = "Knife target transform is not invertible."};
+        runtime_.clear_knife_hover();
+        return finish(false, "Knife target transform is not invertible.");
       }
       local_hits[index] =
           knife_hit_with_topology_safe_resolution(*world_hits[index], event);
     }
 
-    bool changed = false;
+    bool target_valid = false;
     for (std::size_t index = 0U; index < local_hits.size(); ++index) {
       if (!local_hits[index].has_value()) {
         continue;
       }
-      changed = runtime_.update_knife_preview_from_hit(
+      target_valid = runtime_.update_knife_preview_from_hit(
           session_, *local_hits[index], local_events[index]->grid_size, false,
           false);
-      if (changed) {
+      if (target_valid) {
         break;
       }
     }
-    if (!changed) {
-      const std::optional<ModelingToolRayEvent> miss_event =
-          tool_event_in_object_space(event, std::max(locked_object_id, 0));
-      if (!miss_event.has_value()) {
-        return {.ok = false,
-                .message = "Knife target transform is not invertible."};
-      }
-      quader_editor_core::PickHitRecord miss;
-      miss.object_id = -1;
-      miss.kind = quader_poly::ElementKind::Face;
-      (void)runtime_.update_knife_preview_from_hit(
-          session_, miss, miss_event->grid_size, false, false);
+    if (!target_valid) {
+      runtime_.clear_knife_hover();
     }
-    invalidate_selection_overlay_caches();
-    return {.ok = true, .changed = changed};
+    return finish(true, {});
   }
 
   ModelingCommandResult accept_knife_point(const ModelingToolRayEvent &event) {
@@ -4082,7 +4470,7 @@ public:
     if (!resolved.ok) {
       return resolved;
     }
-    const int target_object_id = runtime_.knife_state().target_object_id;
+    const int target_object_id = runtime_.knife_state().current_object_id;
     const std::optional<ModelingToolRayEvent> local_event =
         tool_event_in_object_space(event, target_object_id);
     if (!local_event.has_value()) {
@@ -6139,6 +6527,10 @@ ModelingCommandResult ModelingSessionService::commit_insert_edge_loop_drag() {
 ModelingCommandResult
 ModelingSessionService::update_knife_hover(const ModelingToolRayEvent &event) {
   return impl_->update_knife_hover(event);
+}
+
+ModelingCommandResult ModelingSessionService::clear_knife_hover() {
+  return impl_->clear_knife_hover();
 }
 
 ModelingCommandResult

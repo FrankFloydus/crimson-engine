@@ -37,6 +37,7 @@
 #include "editor/history/scene_transform_preview_transaction.hpp"
 #include "editor/metadata/host_contract.hpp"
 #include "editor/modeling/runtime/modeling_object_runtime_map.hpp"
+#include "editor/modeling/modeling_viewport_camera_adapter.hpp"
 #include "editor/modeling/radial_array_layout.hpp"
 #include "editor/modeling/services/modeling_session_service.hpp"
 #include "editor/placement/viewport_point_placement_service.hpp"
@@ -96,6 +97,7 @@
 #include <gtest/gtest.h>
 
 #include <editor/interactions/viewport_navigation.hpp>
+#include <editor/interactions/viewport_projection.hpp>
 
 #include <algorithm>
 #include <array>
@@ -660,6 +662,31 @@ ModelingViewportCamera test_orthographic_viewport_camera() {
       .viewport_size = {100.0f, 100.0f},
       .orthographic_size = 100.0,
       .fov_degrees = 60.0,
+  };
+}
+
+ModelingToolRayEvent test_knife_screen_event(
+    ModelingViewportCamera camera, QVec3 world_target,
+    float vertical_screen_offset, double edge_radius_pixels = 8.0) {
+  const quader_editor_core::ViewportCameraState runtime_camera =
+      modeling_runtime_camera(camera);
+  QVec2 screen_position;
+  EXPECT_TRUE(quader_editor_core::project_viewport_point(
+      runtime_camera, world_target, screen_position));
+  screen_position.y += vertical_screen_offset;
+  const quader_poly::Ray ray =
+      quader_editor_core::ray_from_viewport_screen_point(runtime_camera,
+                                                         screen_position);
+  return {
+      .screen_position = screen_position,
+      .ray = {.origin = ray.origin, .direction = ray.direction},
+      .camera = camera,
+      .grid_size = 0.5,
+      .vertex_radius = 0.001,
+      .edge_radius = 0.001,
+      .vertex_screen_radius = 2.0,
+      .edge_screen_radius = edge_radius_pixels,
+      .snap_enabled = false,
   };
 }
 
@@ -2694,13 +2721,21 @@ TEST(ModelingSessionServiceOverlayTests, MapsRuntimeOverlayLayersExplicitly) {
   EXPECT_NE(source.find("ViewportOverlayStyleRole::SelectedSourceWire"),
             std::string::npos);
   EXPECT_NE(source.find("append_projected_overlay_lines"), std::string::npos);
+  EXPECT_NE(source.find("append_projected_overlay_points"),
+            std::string::npos);
   EXPECT_EQ(modeling_service.find("runtime_.knife_state().preview_lines"),
             std::string::npos);
   EXPECT_NE(overlay_service.find("runtime.knife_state().preview_lines"),
             std::string::npos);
   EXPECT_NE(overlay_service.find("ViewportOverlayLayer::ToolPreviewLine"),
             std::string::npos);
+  EXPECT_NE(overlay_service.find("ViewportOverlayLayer::ToolHandle"),
+            std::string::npos);
+  EXPECT_NE(overlay_service.find("ViewportOverlayStyleRole::ExplicitColor"),
+            std::string::npos);
   EXPECT_EQ(overlay_service.find("knife.preview_lines.begin()"),
+            std::string::npos);
+  EXPECT_EQ(overlay_service.find("knife.preview_points.begin()"),
             std::string::npos);
 }
 
@@ -13431,13 +13466,11 @@ TEST(ModelingSessionServiceTests,
 
   const QVec3 raw_world =
       transform_point(world_from_object, {-0.32f, 1.0f, 1.0f});
-  ModelingToolRayEvent event;
-  event.ray = {
-      .origin = raw_world + QVec3{0.0f, 0.0f, 5.0f},
-      .direction = {0.0f, 0.0f, -1.0f},
-  };
-  event.camera = test_orthographic_viewport_camera();
-  event.camera.origin = event.ray.origin;
+  ModelingViewportCamera camera = test_orthographic_viewport_camera();
+  camera.viewport_size = {800.0f, 600.0f};
+  camera.orthographic_size = 4.0;
+  ModelingToolRayEvent event =
+      test_knife_screen_event(camera, raw_world, 4.0f);
   event.grid_size = 0.5;
   event.vertex_radius = 0.001;
   event.edge_radius = 0.12;
@@ -13591,7 +13624,7 @@ TEST(ModelingSessionServiceTests,
 }
 
 TEST(ModelingSessionServiceTests,
-     KnifeGridEndpointCannotBecomeAnOffsetInitialEdgeSeed) {
+     KnifeGridEndpointCanonicalizesToExactInitialVertexSeed) {
   SceneDocument scene;
   AssetRegistry assets;
   ModelingSessionService service(scene, assets);
@@ -13623,14 +13656,23 @@ TEST(ModelingSessionServiceTests,
   command = service.update_knife_hover(event);
 
   ASSERT_TRUE(command.ok) << command.message;
-  EXPECT_FALSE(command.changed);
-  EXPECT_FALSE(service.tool_status().knife_has_current);
+  ASSERT_TRUE(command.changed);
+  ASSERT_TRUE(service.tool_status().knife_has_current);
   const ViewportOverlayFrame frame = service.selection_overlay_frame();
-  EXPECT_FALSE(std::ranges::any_of(
-      frame.points, [](const ViewportOverlayPoint &point) {
-        return length_squared(point.position - QVec3{0.98f, 1.0f, 1.0f}) <
-               0.0001f;
-      }));
+  const auto has_point_near = [&frame](QVec3 expected) {
+    return std::ranges::any_of(
+        frame.points, [expected](const ViewportOverlayPoint &point) {
+          return length_squared(point.position - expected) < 0.000001f;
+        });
+  };
+  EXPECT_TRUE(has_point_near({1.0f, 1.0f, 1.0f}));
+  EXPECT_FALSE(has_point_near({0.98f, 1.0f, 1.0f}));
+
+  command = service.accept_knife_point(event);
+  ASSERT_TRUE(command.ok) << command.message;
+  ASSERT_TRUE(command.changed);
+  EXPECT_TRUE(service.tool_status().knife_active);
+  EXPECT_FALSE(service.tool_status().knife_has_current);
 }
 
 TEST(ModelingSessionServiceTests,
@@ -13692,6 +13734,382 @@ TEST(ModelingSessionServiceTests,
   };
   EXPECT_TRUE(has_point_near({1.0f, 1.0f, 1.0f}));
   EXPECT_FALSE(has_point_near({0.98f, 1.0f, 1.0f}));
+}
+
+TEST(ModelingSessionServiceTests,
+     KnifeEdgeHoverUsesConstantScreenToleranceAcrossCameraDistanceAndZoom) {
+  SceneDocument scene;
+  AssetRegistry assets;
+  ModelingSessionService service(scene, assets);
+
+  const ModelingCreateBoxResult box = service.create_box_from_bounds({
+      .bounds = {.min = {-1.0f, -1.0f, -1.0f},
+                 .max = {1.0f, 1.0f, 1.0f}},
+      .name = "Knife Screen Radius Source",
+  });
+  ASSERT_TRUE(box.ok) << box.message;
+  ModelingCommandResult command =
+      service.activate_viewport_tool(ModelingViewportTool::Knife);
+  ASSERT_TRUE(command.ok) << command.message;
+
+  ModelingViewportCamera near_perspective = test_orthographic_viewport_camera();
+  near_perspective.orthographic = false;
+  near_perspective.origin = {0.0f, 0.0f, 5.0f};
+  near_perspective.viewport_size = {800.0f, 600.0f};
+  near_perspective.fov_degrees = 60.0;
+  ModelingViewportCamera far_perspective = near_perspective;
+  far_perspective.origin.z = 20.0f;
+  ModelingViewportCamera near_orthographic = near_perspective;
+  near_orthographic.orthographic = true;
+  near_orthographic.orthographic_size = 4.0;
+  ModelingViewportCamera far_orthographic = near_orthographic;
+  far_orthographic.orthographic_size = 16.0;
+
+  const std::array cameras{near_perspective, far_perspective,
+                           near_orthographic, far_orthographic};
+  const auto has_tool_marker = [&service]() {
+    const ViewportOverlayFrame frame = service.selection_overlay_frame();
+    return std::ranges::any_of(
+        frame.points, [](const ViewportOverlayPoint &point) {
+          return point.layer == ViewportOverlayLayer::ToolHandle &&
+                 point.source == ViewportOverlaySource::Tool;
+        });
+  };
+  for (const ModelingViewportCamera &camera : cameras) {
+    SCOPED_TRACE(camera.orthographic
+                     ? std::string("orthographic size=") +
+                           std::to_string(camera.orthographic_size)
+                     : std::string("perspective z=") +
+                           std::to_string(camera.origin.z));
+    const ModelingToolRayEvent valid_event = test_knife_screen_event(
+        camera, {0.0f, -1.0f, 1.0f}, 6.0f);
+    command = service.update_knife_hover(valid_event);
+    ASSERT_TRUE(command.ok) << command.message;
+    EXPECT_TRUE(command.changed);
+    EXPECT_TRUE(service.tool_status().knife_has_current);
+    EXPECT_TRUE(has_tool_marker());
+
+    command = service.update_knife_hover(valid_event);
+    ASSERT_TRUE(command.ok) << command.message;
+    EXPECT_FALSE(command.changed);
+    EXPECT_TRUE(service.tool_status().knife_has_current);
+    EXPECT_TRUE(has_tool_marker());
+
+    const ModelingToolRayEvent miss_event = test_knife_screen_event(
+        camera, {0.0f, -1.0f, 1.0f}, 10.0f);
+    command = service.update_knife_hover(miss_event);
+    ASSERT_TRUE(command.ok) << command.message;
+    EXPECT_TRUE(command.changed);
+    EXPECT_FALSE(service.tool_status().knife_has_current);
+    EXPECT_FALSE(has_tool_marker());
+
+    command = service.update_knife_hover(miss_event);
+    ASSERT_TRUE(command.ok) << command.message;
+    EXPECT_FALSE(command.changed);
+    EXPECT_FALSE(service.tool_status().knife_has_current);
+    EXPECT_FALSE(has_tool_marker());
+  }
+
+  const ModelingToolRayEvent valid_again = test_knife_screen_event(
+      near_perspective, {0.0f, -1.0f, 1.0f}, 6.0f);
+  command = service.update_knife_hover(valid_again);
+  ASSERT_TRUE(command.ok) << command.message;
+  EXPECT_TRUE(command.changed);
+  EXPECT_TRUE(service.tool_status().knife_has_current);
+  EXPECT_TRUE(has_tool_marker());
+
+  command = service.update_knife_hover(valid_again);
+  ASSERT_TRUE(command.ok) << command.message;
+  EXPECT_FALSE(command.changed);
+  EXPECT_TRUE(service.tool_status().knife_has_current);
+  EXPECT_TRUE(has_tool_marker());
+}
+
+TEST(ModelingSessionServiceTests,
+     KnifeScreenPickerRemainsTwoSidedAcrossCameraDistanceAndZoom) {
+  SceneDocument scene;
+  AssetRegistry assets;
+  ModelingSessionService service(scene, assets);
+
+  const ModelingCreateBoxResult box = service.create_box_from_bounds({
+      .bounds = {.min = {-1.0f, -1.0f, -1.0f},
+                 .max = {1.0f, 1.0f, 1.0f}},
+      .name = "Flipped Knife Screen Radius Source",
+  });
+  ASSERT_TRUE(box.ok) << box.message;
+  ModelingCommandResult command = service.execute_instant_operation(
+      ModelingInstantOperationId::FlipFaceNormals);
+  ASSERT_TRUE(command.ok) << command.message;
+  ASSERT_TRUE(command.changed);
+  command = service.activate_viewport_tool(ModelingViewportTool::Knife);
+  ASSERT_TRUE(command.ok) << command.message;
+
+  ModelingViewportCamera near_perspective = test_orthographic_viewport_camera();
+  near_perspective.orthographic = false;
+  near_perspective.origin = {0.0f, 0.0f, 5.0f};
+  near_perspective.viewport_size = {800.0f, 600.0f};
+  near_perspective.fov_degrees = 60.0;
+  ModelingViewportCamera far_perspective = near_perspective;
+  far_perspective.origin.z = 20.0f;
+  ModelingViewportCamera near_orthographic = near_perspective;
+  near_orthographic.orthographic = true;
+  near_orthographic.orthographic_size = 4.0;
+  ModelingViewportCamera far_orthographic = near_orthographic;
+  far_orthographic.orthographic_size = 16.0;
+
+  for (const ModelingViewportCamera &camera :
+       std::array{near_perspective, far_perspective, near_orthographic,
+                  far_orthographic}) {
+    SCOPED_TRACE(camera.orthographic
+                     ? std::string("orthographic size=") +
+                           std::to_string(camera.orthographic_size)
+                     : std::string("perspective z=") +
+                           std::to_string(camera.origin.z));
+    const ModelingToolRayEvent valid_event = test_knife_screen_event(
+        camera, {0.0f, -1.0f, 1.0f}, 6.0f);
+    command = service.update_knife_hover(valid_event);
+    ASSERT_TRUE(command.ok) << command.message;
+    EXPECT_TRUE(command.changed);
+    EXPECT_TRUE(service.tool_status().knife_has_current);
+    EXPECT_TRUE(std::ranges::any_of(
+        service.selection_overlay_frame().points,
+        [](const ViewportOverlayPoint &point) {
+          return point.layer == ViewportOverlayLayer::ToolHandle &&
+                 point.source == ViewportOverlaySource::Tool &&
+                 viewport_overlay_depth_mode(point) ==
+                     ViewportOverlayDepthMode::DrawOnTop;
+        }));
+
+    const ModelingToolRayEvent miss_event = test_knife_screen_event(
+        camera, {0.0f, -1.0f, 1.0f}, 10.0f);
+    command = service.update_knife_hover(miss_event);
+    ASSERT_TRUE(command.ok) << command.message;
+    EXPECT_TRUE(command.changed);
+    EXPECT_FALSE(service.tool_status().knife_has_current);
+  }
+}
+
+TEST(ModelingSessionServiceTests,
+     KnifeOutsideFlippedClosedBoxTargetsRenderedFarInteriorSurface) {
+  SceneDocument scene;
+  AssetRegistry assets;
+  ModelingSessionService service(scene, assets);
+
+  const ModelingCreateBoxResult box = service.create_box_from_bounds({
+      .bounds = {.min = {-1.0f, -1.0f, -1.0f},
+                 .max = {1.0f, 1.0f, 1.0f}},
+      .name = "Flipped Knife Far Surface Source",
+  });
+  ASSERT_TRUE(box.ok) << box.message;
+  ModelingCommandResult command = service.execute_instant_operation(
+      ModelingInstantOperationId::FlipFaceNormals);
+  ASSERT_TRUE(command.ok) << command.message;
+  ASSERT_TRUE(command.changed);
+  command = service.activate_viewport_tool(ModelingViewportTool::Knife);
+  ASSERT_TRUE(command.ok) << command.message;
+
+  ModelingViewportCamera camera = test_orthographic_viewport_camera();
+  camera.orthographic = false;
+  camera.origin = {0.0f, 0.0f, 5.0f};
+  camera.viewport_size = {800.0f, 600.0f};
+  camera.fov_degrees = 60.0;
+
+  const QVec3 far_interior_edge{0.0f, -1.0f, -1.0f};
+  ModelingToolRayEvent edge_event =
+      test_knife_screen_event(camera, far_interior_edge, 3.0f);
+  ASSERT_GT(edge_event.vertex_screen_radius, 0.0);
+  ASSERT_GT(edge_event.edge_screen_radius, 0.0);
+
+  command = service.update_knife_hover(edge_event);
+  ASSERT_TRUE(command.ok) << command.message;
+  ASSERT_TRUE(command.changed);
+  ASSERT_TRUE(service.tool_status().knife_has_current);
+  const auto has_tool_point_near = [&service](QVec3 expected) {
+    return std::ranges::any_of(
+        service.selection_overlay_frame().points,
+        [expected](const ViewportOverlayPoint &point) {
+          return point.layer == ViewportOverlayLayer::ToolHandle &&
+                 point.source == ViewportOverlaySource::Tool &&
+                 length_squared(point.position - expected) < 0.0001f;
+        });
+  };
+  EXPECT_TRUE(has_tool_point_near(far_interior_edge));
+  EXPECT_FALSE(has_tool_point_near({0.0f, -1.0f, 1.0f}));
+
+  command = service.accept_knife_point(edge_event);
+  ASSERT_TRUE(command.ok) << command.message;
+  ASSERT_TRUE(command.changed);
+  ASSERT_TRUE(service.tool_status().knife_active);
+  EXPECT_FALSE(service.tool_status().knife_has_current);
+
+  const QVec3 far_interior_face{0.0f, 0.0f, -1.0f};
+  ModelingToolRayEvent face_event =
+      test_knife_screen_event(camera, far_interior_face, 0.0f);
+  command = service.update_knife_hover(face_event);
+  ASSERT_TRUE(command.ok) << command.message;
+  ASSERT_TRUE(command.changed);
+  ASSERT_TRUE(service.tool_status().knife_has_current);
+  EXPECT_TRUE(has_tool_point_near(far_interior_face));
+  EXPECT_FALSE(has_tool_point_near({0.0f, 0.0f, 1.0f}));
+
+  command = service.accept_knife_point(face_event);
+  ASSERT_TRUE(command.ok) << command.message;
+  EXPECT_TRUE(command.changed);
+  EXPECT_TRUE(service.tool_status().knife_active);
+  EXPECT_FALSE(service.tool_status().knife_has_current);
+}
+
+TEST(ModelingSessionServiceTests,
+     KnifeScreenPickerCanSeedAtAHighValenceVertex) {
+  SceneDocument scene;
+  AssetRegistry assets;
+  ModelingSessionService service(scene, assets);
+
+  const ModelingCreateBoxResult mesh = service.create_box_from_bounds({
+      .bounds = {.min = {-1.0f, -1.0f, -0.1f},
+                 .max = {1.0f, 1.0f, 0.1f}},
+      .name = "Knife High Valence Screen Source",
+  });
+  ASSERT_TRUE(mesh.ok) << mesh.message;
+
+  quader_poly::Document document;
+  const quader_poly::ElementId center =
+      quader_poly::add_vertex(document, {0.0f, 0.0f, 0.0f});
+  const quader_poly::ElementId east =
+      quader_poly::add_vertex(document, {1.0f, 0.0f, 0.0f});
+  const quader_poly::ElementId north =
+      quader_poly::add_vertex(document, {0.0f, 1.0f, 0.0f});
+  const quader_poly::ElementId west =
+      quader_poly::add_vertex(document, {-1.0f, 0.0f, 0.0f});
+  const quader_poly::ElementId south =
+      quader_poly::add_vertex(document, {0.0f, -1.0f, 0.0f});
+  ASSERT_NE(quader_poly::add_face(document, std::array{center, east, north}),
+            quader_poly::kInvalidElementId);
+  ASSERT_NE(quader_poly::add_face(document, std::array{center, north, west}),
+            quader_poly::kInvalidElementId);
+  ASSERT_NE(quader_poly::add_face(document, std::array{center, west, south}),
+            quader_poly::kInvalidElementId);
+  ASSERT_NE(quader_poly::add_face(document, std::array{center, south, east}),
+            quader_poly::kInvalidElementId);
+  ModelingCommandResult command = service.replace_mesh_document(
+      mesh.object.modeling_object_id, std::move(document));
+  ASSERT_TRUE(command.ok) << command.message;
+  command = service.activate_viewport_tool(ModelingViewportTool::Knife);
+  ASSERT_TRUE(command.ok) << command.message;
+
+  ModelingViewportCamera camera = test_orthographic_viewport_camera();
+  camera.viewport_size = {800.0f, 600.0f};
+  camera.orthographic_size = 4.0;
+  ModelingToolRayEvent event =
+      test_knife_screen_event(camera, {0.0f, 0.0f, 0.0f}, 3.0f);
+  event.screen_position.x += 4.0f;
+  const quader_editor_core::ViewportCameraState runtime_camera =
+      modeling_runtime_camera(camera);
+  const quader_poly::Ray ray =
+      quader_editor_core::ray_from_viewport_screen_point(
+          runtime_camera, event.screen_position);
+  event.ray = {.origin = ray.origin, .direction = ray.direction};
+  event.vertex_screen_radius = 8.0;
+  event.edge_screen_radius = 1.0;
+
+  command = service.update_knife_hover(event);
+  ASSERT_TRUE(command.ok) << command.message;
+  ASSERT_TRUE(command.changed);
+  ASSERT_TRUE(service.tool_status().knife_has_current);
+  const ViewportOverlayFrame hover_frame = service.selection_overlay_frame();
+  EXPECT_TRUE(std::ranges::any_of(
+      hover_frame.points, [](const ViewportOverlayPoint &point) {
+        return point.layer == ViewportOverlayLayer::ToolHandle &&
+               point.source == ViewportOverlaySource::Tool &&
+               length_squared(point.position) < 0.000001f;
+      }));
+
+  command = service.accept_knife_point(event);
+  ASSERT_TRUE(command.ok) << command.message;
+  EXPECT_TRUE(command.changed);
+  EXPECT_TRUE(service.tool_status().knife_active);
+  EXPECT_FALSE(service.tool_status().knife_has_current);
+}
+
+TEST(ModelingSessionServiceTests,
+     KnifeOutsideFlippedMeshUsesTwoSidedTopologyPicking) {
+  SceneDocument scene;
+  AssetRegistry assets;
+  ModelingSessionService service(scene, assets);
+
+  const ModelingCreateBoxResult box = service.create_box_from_bounds({
+      .bounds = {.min = {-1.0f, -1.0f, -1.0f},
+                 .max = {1.0f, 1.0f, 1.0f}},
+      .name = "Flipped Knife Source",
+  });
+  ASSERT_TRUE(box.ok) << box.message;
+
+  ModelingCommandResult command = service.execute_instant_operation(
+      ModelingInstantOperationId::FlipFaceNormals);
+  ASSERT_TRUE(command.ok) << command.message;
+  ASSERT_TRUE(command.changed);
+
+  command = service.activate_viewport_tool(ModelingViewportTool::Knife);
+  ASSERT_TRUE(command.ok) << command.message;
+
+  ModelingToolRayEvent seed_event;
+  seed_event.ray = {
+      .origin = {0.0f, -1.0f, 5.0f},
+      .direction = {0.0f, 0.0f, -1.0f},
+  };
+  seed_event.camera = test_orthographic_viewport_camera();
+  seed_event.camera.origin = seed_event.ray.origin;
+  seed_event.grid_size = 0.5;
+  seed_event.vertex_radius = 0.001;
+  seed_event.edge_radius = 0.12;
+  seed_event.snap_enabled = false;
+
+  command = service.update_knife_hover(seed_event);
+  ASSERT_TRUE(command.ok) << command.message;
+  ASSERT_TRUE(service.tool_status().knife_has_current);
+  const ViewportOverlayFrame seed_frame = service.selection_overlay_frame();
+  const auto seed_point = std::ranges::find_if(
+      seed_frame.points, [](const ViewportOverlayPoint &point) {
+        return point.layer == ViewportOverlayLayer::ToolHandle &&
+               point.source == ViewportOverlaySource::Tool;
+      });
+  ASSERT_NE(seed_point, seed_frame.points.end());
+  EXPECT_EQ(seed_point->style_role, ViewportOverlayStyleRole::ExplicitColor);
+  EXPECT_EQ(seed_point->color, 0xff56ff8fU);
+  EXPECT_EQ(viewport_overlay_depth_mode(*seed_point),
+            ViewportOverlayDepthMode::DrawOnTop);
+
+  command = service.accept_knife_point(seed_event);
+  ASSERT_TRUE(command.ok) << command.message;
+  ASSERT_TRUE(command.changed);
+  ASSERT_TRUE(service.tool_status().knife_active);
+
+  ModelingToolRayEvent face_event = seed_event;
+  face_event.ray.origin = {0.0f, 0.0f, 5.0f};
+  face_event.camera.origin = face_event.ray.origin;
+  face_event.edge_radius = 0.001;
+
+  command = service.update_knife_hover(face_event);
+  ASSERT_TRUE(command.ok) << command.message;
+  ASSERT_TRUE(command.changed);
+  EXPECT_TRUE(service.tool_status().knife_has_current);
+  const ViewportOverlayFrame face_frame = service.selection_overlay_frame();
+  EXPECT_TRUE(std::ranges::any_of(
+      face_frame.points, [](const ViewportOverlayPoint &point) {
+        return point.layer == ViewportOverlayLayer::ToolHandle &&
+               point.style_role ==
+                   ViewportOverlayStyleRole::ExplicitColor &&
+               point.source == ViewportOverlaySource::Tool &&
+               viewport_overlay_depth_mode(point) ==
+                   ViewportOverlayDepthMode::DrawOnTop;
+      }));
+  EXPECT_TRUE(std::ranges::any_of(
+      face_frame.lines, [](const ViewportOverlayLine &line) {
+        return line.layer == ViewportOverlayLayer::ToolPreviewLine &&
+               line.source == ViewportOverlaySource::Tool &&
+               viewport_overlay_depth_mode(line) ==
+                   ViewportOverlayDepthMode::DrawOnTop;
+      }));
 }
 
 TEST(ModelingSessionServiceTests,
@@ -13819,7 +14237,7 @@ TEST(ModelingSessionServiceTests,
 }
 
 TEST(ModelingSessionServiceTests,
-     KnifeHoverMissDoesNotRepickWithDifferentRuntimeRadii) {
+     KnifeHoverMissReportsOneSemanticTransitionThenSettles) {
   SceneDocument scene;
   AssetRegistry assets;
   ModelingSessionService service(scene, assets);
@@ -13847,6 +14265,11 @@ TEST(ModelingSessionServiceTests,
 
   command = service.update_knife_hover(event);
 
+  ASSERT_TRUE(command.ok) << command.message;
+  EXPECT_TRUE(command.changed);
+  EXPECT_FALSE(service.tool_status().knife_has_current);
+
+  command = service.update_knife_hover(event);
   ASSERT_TRUE(command.ok) << command.message;
   EXPECT_FALSE(command.changed);
   EXPECT_FALSE(service.tool_status().knife_has_current);

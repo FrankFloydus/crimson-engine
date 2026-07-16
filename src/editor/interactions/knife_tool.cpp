@@ -147,6 +147,14 @@ bool knife_face_contains_target(
 	return false;
 }
 
+bool knife_target_can_seed_stroke(
+		const quader_poly::KnifePointTarget& target)
+{
+	return target.kind ==
+			quader_poly::KnifePointTargetKind::ExistingVertex ||
+		target.kind == quader_poly::KnifePointTargetKind::ExistingEdge;
+}
+
 bool normalize_knife_target_to_segment_face_region(
 		const KnifeSegmentFaceRegion& region,
 		quader_poly::KnifePointTarget& target)
@@ -204,6 +212,16 @@ void reset_knife_tool(KnifeToolState& state)
 	state = {};
 }
 
+void clear_knife_hover(KnifeToolState& state, SelectionHoverState& hover)
+{
+	state.has_current = false;
+	state.current_target_valid = false;
+	state.current_object_id = -1;
+	state.status = KnifeToolStatus::HoverMiss;
+	hover = {};
+	rebuild_knife_overlay(state);
+}
+
 void rebuild_knife_overlay(KnifeToolState& state)
 {
 	state.preview_lines.clear();
@@ -236,12 +254,15 @@ void rebuild_knife_overlay(KnifeToolState& state)
                 });
         }
 	if (state.has_current) {
+          const int current_object_id = state.target_object_id > 0
+              ? state.target_object_id
+              : state.current_object_id;
           state.preview_points.push_back({
               SelectionOverlayLayer::HoverVertex,
               state.current_point,
               state.current_target_valid ? 0xff56ff8fU : 0xff4f7dffU,
               8.0F,
-              state.target_object_id,
+              current_object_id,
           });
         }
 	if (state.has_active_stroke && state.has_current && state.previous_point_index < state.point_positions.size()) {
@@ -324,6 +345,19 @@ struct KnifeResolvedPoint {
 	quader_poly::KnifePointTarget target;
 };
 
+quader_poly::PickOptions knife_pick_options(
+		quader_poly::SelectionMode mode)
+{
+	quader_poly::PickOptions options;
+	options.mode = mode;
+	options.pick_backfaces = true;
+	// Match the default single-sided renderer: select the visible authored
+	// front surface first, but keep reversed/open backfaces available when no
+	// front-facing surface exists.
+	options.prefer_front_facing_faces = true;
+	return options;
+}
+
 bool fill_knife_vertex_hit(
 		EditorSession& session,
 		KnifeToolState& state,
@@ -361,8 +395,8 @@ bool fill_knife_vertex_target(
 		int target_object_id,
 		KnifeResolvedPoint& out_point)
 {
-	quader_poly::PickOptions options;
-        options.mode = quader_poly::SelectionMode::Vertex;
+	const quader_poly::PickOptions options =
+		knife_pick_options(quader_poly::SelectionMode::Vertex);
         const std::optional<PickHitRecord> hit =
             session.pick_nearest({ray, options, target_object_id});
 	return hit.has_value() &&
@@ -404,9 +438,6 @@ bool fill_knife_edge_hit(
 		return false;
 	}
 	if (*factor <= 0.01F || *factor >= 0.99F) {
-		if (!state.has_active_stroke) {
-			return false;
-		}
 		const quader_poly::Edge edge =
 			quader_poly::make_edge(hit.edge.a, hit.edge.b);
 		PickHitRecord endpoint_hit = hit;
@@ -437,8 +468,8 @@ bool fill_knife_edge_target(
 		int target_object_id,
 		KnifeResolvedPoint& out_point)
 {
-	quader_poly::PickOptions options;
-        options.mode = quader_poly::SelectionMode::Edge;
+	const quader_poly::PickOptions options =
+		knife_pick_options(quader_poly::SelectionMode::Edge);
         const std::optional<PickHitRecord> hit =
             session.pick_nearest({ray, options, target_object_id});
 	return hit.has_value() && fill_knife_edge_hit(
@@ -506,8 +537,8 @@ bool fill_knife_face_point(
 		int target_object_id,
 		KnifeResolvedPoint& out_point)
 {
-	quader_poly::PickOptions options;
-        options.mode = quader_poly::SelectionMode::Face;
+	const quader_poly::PickOptions options =
+		knife_pick_options(quader_poly::SelectionMode::Face);
         const std::optional<PickHitRecord> hit =
             session.pick_nearest({ray, options, target_object_id});
 	return hit.has_value() && fill_knife_face_hit(
@@ -593,28 +624,25 @@ bool update_knife_preview_from_resolved_point(
 {
 	state.active = active;
 	if (!point.has_point) {
-		state.has_current = false;
-		state.current_target_valid = false;
-                state.status = KnifeToolStatus::HoverMiss;
-                hover = {};
-		rebuild_knife_overlay(state);
+		clear_knife_hover(state, hover);
 		return false;
 	}
 	if (state.target_object_id > 0 && point.object_id != state.target_object_id) {
 		state.has_current = false;
 		state.current_target_valid = false;
+                state.current_object_id = -1;
                 state.status = KnifeToolStatus::InvalidTarget;
                 hover = {};
 		rebuild_knife_overlay(state);
 		return false;
 	}
 	if (!state.has_active_stroke &&
-		point.target.kind !=
-			quader_poly::KnifePointTargetKind::ExistingEdge) {
+		!knife_target_can_seed_stroke(point.target)) {
 		state.has_current = false;
 		state.current_target_valid = false;
 		state.current_target = {};
 		state.current_point = {};
+		state.current_object_id = -1;
 		state.status = KnifeToolStatus::InvalidTarget;
 		hover = {};
 		rebuild_knife_overlay(state);
@@ -624,8 +652,7 @@ bool update_knife_preview_from_resolved_point(
 	const KnifeSegmentFaceRegion segment_face_region =
 		state.has_active_stroke
 			? knife_active_segment_face_region(session, state)
-			: point.target.kind ==
-					quader_poly::KnifePointTargetKind::ExistingEdge
+			: knife_target_can_seed_stroke(point.target)
 				? knife_target_face_region(
 					session, point.object_id, point.target)
 				: KnifeSegmentFaceRegion {};
@@ -639,6 +666,7 @@ bool update_knife_preview_from_resolved_point(
 		state.current_target_valid = false;
 		state.current_target = {};
 		state.current_point = {};
+		state.current_object_id = -1;
 		state.status = KnifeToolStatus::InvalidTarget;
 		hover = {};
 		rebuild_knife_overlay(state);
@@ -647,7 +675,7 @@ bool update_knife_preview_from_resolved_point(
 	const bool target_valid = point.target_valid && target_in_segment_face;
 	state.has_current = true;
 	state.current_target_valid = target_valid;
-	state.target_object_id = state.target_object_id > 0 ? state.target_object_id : point.object_id;
+	state.current_object_id = point.object_id;
 	state.current_point = point.point;
 	state.current_target = normalized_target;
 	state.face_normal = point.normal;
@@ -717,14 +745,16 @@ bool accept_knife_current_point(KnifeToolState& state, double grid_size)
 	}
 
 	if (!state.has_active_stroke) {
-		if (state.current_target.kind !=
-				quader_poly::KnifePointTargetKind::ExistingEdge) {
+		if (state.current_object_id <= 0 ||
+			!knife_target_can_seed_stroke(state.current_target)) {
 			state.status = KnifeToolStatus::InvalidTarget;
 			state.has_current = false;
 			state.current_target_valid = false;
+			state.current_object_id = -1;
 			rebuild_knife_overlay(state);
 			return false;
 		}
+		state.target_object_id = state.current_object_id;
 		const std::uint32_t point_index = append_knife_point(state);
 		state.active_stroke_start = point_index;
 		state.previous_point_index = point_index;
@@ -732,6 +762,7 @@ bool accept_knife_current_point(KnifeToolState& state, double grid_size)
                 state.status = KnifeToolStatus::PreviousSet;
                 state.has_current = false;
 		state.current_target_valid = false;
+		state.current_object_id = -1;
 		rebuild_knife_overlay(state);
 		return true;
 	}
@@ -759,6 +790,7 @@ bool accept_knife_current_point(KnifeToolState& state, double grid_size)
 
 	state.has_current = false;
 	state.current_target_valid = false;
+	state.current_object_id = -1;
 	rebuild_knife_overlay(state);
 	return true;
 }

@@ -367,6 +367,47 @@ void backface_enabled_face_picking_can_prefer_nearest_surface()
         "cached nearest-surface face picking should match uncached face picking");
 }
 
+void two_sided_edge_context_uses_nearest_incident_surface()
+{
+    Document document;
+    const ElementId shared_bottom = add_vertex(document, { 0.0F, -1.0F, 0.0F });
+    const ElementId shared_top = add_vertex(document, { 0.0F, 1.0F, 0.0F });
+    const ElementId surface_top = add_vertex(document, { 1.0F, 1.0F, 0.0F });
+    const ElementId surface_bottom = add_vertex(document, { 1.0F, -1.0F, 0.0F });
+    const ElementId fold_bottom = add_vertex(document, { -1.0F, -1.0F, 1.0F });
+    const ElementId fold_top = add_vertex(document, { -1.0F, 1.0F, 1.0F });
+    const ElementId nearest_surface = add_face(document, std::array<ElementId, 4> {
+        shared_bottom,
+        shared_top,
+        surface_top,
+        surface_bottom,
+    });
+    const ElementId orientation_ranked_face = add_face(document, std::array<ElementId, 4> {
+        shared_top,
+        shared_bottom,
+        fold_bottom,
+        fold_top,
+    });
+    require_test(nearest_surface != kInvalidElementId &&
+                     orientation_ranked_face != kInvalidElementId,
+                 "folded edge-context fixture should create both incident faces");
+
+    PickOptions options;
+    options.mode = SelectionMode::Edge;
+    options.edge_radius = 0.06F;
+    options.pick_backfaces = true;
+    options.prefer_front_facing_faces = false;
+    const PickResult pick = pick_element(
+        document,
+        { { 0.05F, 0.0F, 2.0F }, { 0.0F, 0.0F, -1.0F } },
+        options);
+
+    require_test(pick.hit && pick.edge == make_edge(shared_bottom, shared_top),
+                 "two-sided edge picking should hit the shared edge beside the visible surface");
+    require_test(pick.face_id == nearest_surface,
+                 "edge context should use the actual nearest incident surface instead of an orientation-ranked adjacent face");
+}
+
 void backface_enabled_component_picking_prefers_front_facing_incident_side_on_overlap()
 {
     const BackfacePreferenceFixture fixture = make_backface_preference_fixture();
@@ -392,6 +433,36 @@ void backface_enabled_component_picking_prefers_front_facing_incident_side_on_ov
         vertex_options);
     require_test(vertex_pick.hit && vertex_pick.vertex_id == fixture.far_frontfacing_vertex,
         "overlapping vertex picking should prefer the vertex incident to a front-facing authored face");
+}
+
+void nearest_surface_component_picking_uses_ray_depth_on_overlap()
+{
+    const BackfacePreferenceFixture fixture = make_backface_preference_fixture();
+
+    PickOptions edge_options;
+    edge_options.mode = SelectionMode::Edge;
+    edge_options.edge_radius = 0.1F;
+    edge_options.pick_backfaces = true;
+    edge_options.prefer_front_facing_faces = false;
+    const PickResult edge_pick = pick_element(
+        fixture.document,
+        { { 1.0F, 0.0F, -2.0F }, { 0.0F, 0.0F, 1.0F } },
+        edge_options);
+    require_test(edge_pick.hit && edge_pick.edge == fixture.near_backfacing_edge,
+                 "nearest-surface edge picking should resolve equal screen distance by ray depth");
+
+    PickOptions vertex_options;
+    vertex_options.mode = SelectionMode::Vertex;
+    vertex_options.vertex_radius = 0.1F;
+    vertex_options.pick_backfaces = true;
+    vertex_options.prefer_front_facing_faces = false;
+    const PickResult vertex_pick = pick_element(
+        fixture.document,
+        { { 1.0F, 1.0F, -2.0F }, { 0.0F, 0.0F, 1.0F } },
+        vertex_options);
+    require_test(vertex_pick.hit &&
+                     vertex_pick.vertex_id == fixture.near_backfacing_vertex,
+                 "nearest-surface vertex picking should resolve equal screen distance by ray depth");
 }
 
 void characterizes_concave_ngon_renderability()
@@ -561,7 +632,9 @@ TEST(QdrPolyGeometryCharacterizationTests, QdrPolyGeometryCharacterizationTests)
     characterizes_component_occlusion_by_front_face();
     backface_enabled_face_picking_prefers_front_facing_authored_side();
     backface_enabled_face_picking_can_prefer_nearest_surface();
+    two_sided_edge_context_uses_nearest_incident_surface();
     backface_enabled_component_picking_prefers_front_facing_incident_side_on_overlap();
+    nearest_surface_component_picking_uses_ray_depth_on_overlap();
     characterizes_concave_ngon_renderability();
     characterizes_edge_factor_from_ray();
     characterizes_convex_hull_rebuild_and_normal_recalculation();

@@ -560,6 +560,36 @@ void SelectionOverlayProjection::append_projected_overlay_lines(
   }
 }
 
+void SelectionOverlayProjection::append_projected_overlay_points(
+    ViewportOverlayFrame &frame,
+    const std::vector<quader_editor_core::SelectionOverlayPoint> &points,
+    const ModelingObjectRuntimeMap &object_registry, const SceneDocument &scene,
+    ViewportOverlayLayer layer, ViewportOverlayStyleRole style_role,
+    ViewportOverlaySource source,
+    ModelingInstanceEditScope instance_edit_scope) {
+  QDR_PROFILE_FUNCTION();
+  frame.points.reserve(frame.points.size() + points.size());
+  ProjectionObjectStateCache object_state_cache(instance_edit_scope);
+  for (const quader_editor_core::SelectionOverlayPoint &point : points) {
+    const ProjectionObjectState &object_state =
+        object_state_cache.state_for(point.object_id, object_registry, scene);
+    if (!object_state.visible) {
+      continue;
+    }
+    frame.points.push_back(ViewportOverlayPoint{
+        .layer = layer,
+        .position = transform_object_point(object_state,
+                                           from_runtime(point.position)),
+        .color = point.color_abgr,
+        .size_pixels = point.size_pixels,
+        .style_role = style_role,
+        .source = source,
+        .element = runtime_element_ref(point.object_id, point.vertex_id, {},
+                                       quader_poly::kInvalidElementId),
+    });
+  }
+}
+
 void SelectionOverlayProjection::append_world_space_overlay_points(
     ViewportOverlayFrame &frame,
     const std::vector<quader_editor_core::SelectionOverlayPoint> &points) {

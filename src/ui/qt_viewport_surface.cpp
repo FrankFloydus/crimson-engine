@@ -13,6 +13,7 @@
 #include "viewport/viewport_layout.hpp"
 
 #include <QCursor>
+#include <QEnterEvent>
 #include <QEvent>
 #include <QExposeEvent>
 #include <QFocusEvent>
@@ -447,7 +448,20 @@ bool QtViewportSurface::event(QEvent *event) {
     }
     synchronize_render_size();
   } else if (event != nullptr && event->type() == QEvent::Enter) {
+    const auto *enter_event = static_cast<QEnterEvent *>(event);
+    const qreal scale = devicePixelRatio();
+    input_->mouse_local = {
+        static_cast<float>(enter_event->position().x() * scale),
+        static_cast<float>(enter_event->position().y() * scale),
+    };
+    input_->mouse_screen = {
+        static_cast<float>(enter_event->globalPosition().x() * scale),
+        static_cast<float>(enter_event->globalPosition().y() * scale),
+    };
+    input_->has_mouse_position = true;
     input_->hovered = true;
+    input_->modifiers =
+        viewport_modifiers(QGuiApplication::keyboardModifiers());
     if (focus_request_callback_) {
       focus_request_callback_(pane_id_, ViewportPaneFocusTrigger::Hover);
     }

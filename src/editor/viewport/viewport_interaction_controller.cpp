@@ -21,9 +21,10 @@ ViewportInteractionController::handle_before_active_tool(
 void ViewportInteractionController::handle_after_active_tool(
     QuaderEditorApi &editor, const ViewportInteractionFrame &frame,
     const ViewportToolResult &tool_result,
-    const ViewportBeforeToolInteractionResult &before_tool) {
+    const ViewportBeforeToolInteractionResult &before_tool,
+    ViewportToolHoverPort *tool_hover) {
   QDR_PROFILE_FUNCTION();
-  selection_.handle_frame(editor, frame, tool_result, before_tool);
+  selection_.handle_frame(editor, frame, tool_result, before_tool, tool_hover);
 }
 
 QuaderSelectionSummary ViewportInteractionController::pick_context_menu_target(

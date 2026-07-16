@@ -13,6 +13,7 @@
 #include "editor/modeling/services/selection_mode_adapter.hpp"
 #include "editor/selection/box_selection_rules.hpp"
 #include "editor/tools/viewport_tool.hpp"
+#include "editor/tools/viewport_tool_ports.hpp"
 #include "viewport/viewport_camera_adapter.hpp"
 #include "viewport/viewport_camera_controller.hpp"
 
@@ -326,7 +327,8 @@ ViewportSelectionMarquee ViewportSelectionInteraction::marquee() const {
 void ViewportSelectionInteraction::handle_frame(
     QuaderEditorApi &editor, const ViewportInteractionFrame &frame,
     const ViewportToolResult &tool_result,
-    const ViewportBeforeToolInteractionResult &before_tool) {
+    const ViewportBeforeToolInteractionResult &before_tool,
+    ViewportToolHoverPort *tool_hover) {
   QDR_PROFILE_FUNCTION();
   committed_marquee_.reset();
   const bool gizmo_consumed = before_tool.gizmo_consumed;
@@ -554,12 +556,37 @@ void ViewportSelectionInteraction::handle_frame(
     return;
   }
 
+  const bool knife_authored_hover_this_frame =
+      tool_result.handled &&
+      frame.input_router.state().active_tool == ViewportToolId::Knife &&
+      frame.input.viewport_hovered && !frame.input.text_input_active &&
+      !frame.input_result.navigation_active &&
+      !frame.input_result.camera_changed && !gizmo_consumed;
+  if (knife_authored_hover_this_frame) {
+    // Knife owns component hover while its point resolver is eligible to run.
+    // Re-arm clearing so a later suppressed frame or pointer leave cannot retain
+    // the last Knife target.
+    hover_clear_issued_ = false;
+    return;
+  }
+
   const bool should_clear_hover =
       !frame.input.viewport_hovered || !selection_fallback_active ||
       frame.input.text_input_active || frame.input.modal_tool_active ||
-      frame.input.active_tool_owns_viewport;
+      frame.input.active_tool_owns_viewport || tool_result.handled;
   if (!hover_clear_issued_ && should_clear_hover) {
     hover_suppressed_target_.reset();
+    if (tool_hover != nullptr &&
+        frame.input_router.state().active_tool == ViewportToolId::Knife) {
+      const ModelingCommandResult clear_knife = tool_hover->clear_knife_hover();
+      if (!clear_knife.ok) {
+        LOG_ERROR("Knife hover clear failed: {}",
+                  clear_knife.message.empty() ? "Knife hover clear failed."
+                                              : clear_knife.message);
+      } else if (clear_knife.changed) {
+        tool_hover->invalidate();
+      }
+    }
     clear_hover();
   }
 }

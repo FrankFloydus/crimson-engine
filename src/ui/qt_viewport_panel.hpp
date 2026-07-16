@@ -166,7 +166,7 @@ private:
   void refresh_cached_selection_overlay_frame(ModelingSessionService &modeling,
                                               const SceneDocument &document,
                                               const AssetRegistry &assets);
-  void sync_active_tool_from_editor(QuaderEditorApi &editor);
+  bool sync_active_tool_from_editor(QuaderEditorApi &editor);
   [[nodiscard]] const ViewportSettings &active_viewport_settings() const;
   [[nodiscard]] Pane &pane(ViewportPaneId pane_id);
   [[nodiscard]] const Pane &pane(ViewportPaneId pane_id) const;

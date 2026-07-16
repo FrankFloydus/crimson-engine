@@ -225,6 +225,7 @@ public:
   update_insert_edge_loop_drag(const ModelingToolRayEvent &event);
   ModelingCommandResult commit_insert_edge_loop_drag();
   ModelingCommandResult update_knife_hover(const ModelingToolRayEvent &event);
+  ModelingCommandResult clear_knife_hover();
   ModelingCommandResult accept_knife_point(const ModelingToolRayEvent &event);
   ModelingCommandResult commit_knife_tool();
   ModelingCommandResult update_cut_hover(const ModelingToolRayEvent &event);

@@ -328,6 +328,7 @@ public:
 	void reset_knife_state(bool keep_active_when_current_tool_is_knife = false);
 	void set_knife_state(KnifeToolState state);
 	void set_knife_active(bool active);
+	void clear_knife_hover();
 	[[nodiscard]] bool update_knife_preview_from_pick(
 			EditorSession& session,
 			const quader_poly::Ray& ray,

@@ -348,6 +348,17 @@ void mix_overlay_signature_hash(std::uint64_t &hash, quader::QVec3 value) {
   mix_overlay_signature_hash(hash, static_cast<double>(value.z));
 }
 
+void mix_knife_target_signature_hash(
+    std::uint64_t &hash, const quader_poly::KnifePointTarget &target) {
+  mix_overlay_signature_hash(hash, static_cast<int>(target.kind));
+  mix_overlay_signature_hash(hash, static_cast<int>(target.vertex_id));
+  mix_overlay_signature_hash(hash, static_cast<int>(target.edge.a));
+  mix_overlay_signature_hash(hash, static_cast<int>(target.edge.b));
+  mix_overlay_signature_hash(hash, static_cast<double>(target.edge_factor));
+  mix_overlay_signature_hash(hash, static_cast<int>(target.face_id));
+  mix_overlay_signature_hash(hash, target.position);
+}
+
 QVec3 from_runtime(quader::QVec3 value) { return {value.x, value.y, value.z}; }
 
 ModelingCutMode modeling_cut_mode_from_runtime(
@@ -2111,6 +2122,65 @@ std::uint64_t ModelingOverlayService::selection_overlay_signature(
   mix_overlay_signature_hash(hash, hover.face_plane_hover);
   mix_overlay_signature_hash(hash, hover.candidate_object_id);
 
+  const quader_editor_core::KnifeToolState &knife = runtime.knife_state();
+  mix_overlay_signature_hash(hash, knife.active);
+  mix_overlay_signature_hash(hash, knife.has_active_stroke);
+  mix_overlay_signature_hash(hash, knife.has_current);
+  mix_overlay_signature_hash(hash, knife.current_target_valid);
+  mix_overlay_signature_hash(hash, knife.current_object_id);
+  mix_overlay_signature_hash(hash, knife.target_object_id);
+  mix_knife_target_signature_hash(hash, knife.current_target);
+  mix_overlay_signature_hash(hash, knife.current_point);
+  mix_overlay_signature_hash(hash, knife.face_normal);
+  mix_overlay_signature_hash(
+      hash, static_cast<std::uint64_t>(knife.active_stroke_start));
+  mix_overlay_signature_hash(
+      hash, static_cast<std::uint64_t>(knife.previous_point_index));
+  mix_overlay_signature_hash(hash, static_cast<int>(knife.points.size()));
+  for (const quader_poly::KnifePointTarget &point : knife.points) {
+    mix_knife_target_signature_hash(hash, point);
+  }
+  mix_overlay_signature_hash(hash,
+                             static_cast<int>(knife.point_positions.size()));
+  for (const quader::QVec3 &position : knife.point_positions) {
+    mix_overlay_signature_hash(hash, position);
+  }
+  mix_overlay_signature_hash(hash, static_cast<int>(knife.segments.size()));
+  for (const quader_poly::KnifeStrokeSegment &segment : knife.segments) {
+    mix_overlay_signature_hash(
+        hash, static_cast<std::uint64_t>(segment.first_point));
+    mix_overlay_signature_hash(
+        hash, static_cast<std::uint64_t>(segment.second_point));
+  }
+  mix_overlay_signature_hash(hash, static_cast<int>(knife.status));
+  mix_overlay_signature_hash(hash,
+                             static_cast<int>(knife.preview_points.size()));
+  for (const quader_editor_core::SelectionOverlayPoint &point :
+       knife.preview_points) {
+    mix_overlay_signature_hash(hash, static_cast<int>(point.layer));
+    mix_overlay_signature_hash(hash, point.position);
+    mix_overlay_signature_hash(hash,
+                               static_cast<std::uint64_t>(point.color_abgr));
+    mix_overlay_signature_hash(hash, static_cast<double>(point.size_pixels));
+    mix_overlay_signature_hash(hash, point.object_id);
+    mix_overlay_signature_hash(hash, static_cast<int>(point.vertex_id));
+  }
+  mix_overlay_signature_hash(hash,
+                             static_cast<int>(knife.preview_lines.size()));
+  for (const quader_editor_core::SelectionOverlayLine &line :
+       knife.preview_lines) {
+    mix_overlay_signature_hash(hash, static_cast<int>(line.layer));
+    mix_overlay_signature_hash(hash, line.start);
+    mix_overlay_signature_hash(hash, line.end);
+    mix_overlay_signature_hash(hash,
+                               static_cast<std::uint64_t>(line.color_abgr));
+    mix_overlay_signature_hash(hash, static_cast<double>(line.width_pixels));
+    mix_overlay_signature_hash(hash, line.object_id);
+    mix_overlay_signature_hash(hash, static_cast<int>(line.face_id));
+    mix_overlay_signature_hash(hash, static_cast<int>(line.edge.a));
+    mix_overlay_signature_hash(hash, static_cast<int>(line.edge.b));
+  }
+
   const quader_editor_core::TransformDragState &drag =
       runtime.transform_drag_state();
   mix_overlay_signature_hash(hash, drag.active);
@@ -2394,9 +2464,6 @@ ModelingOverlayService::selection_overlay_current_frame(
         frame.lines.insert(frame.lines.end(), insert_loop.preview_lines.begin(),
                            insert_loop.preview_lines.end());
 
-        const quader_editor_core::KnifeToolState& knife = runtime.knife_state();
-        frame.points.insert(frame.points.end(), knife.preview_points.begin(), knife.preview_points.end());
-
         const quader_editor_core::PolyToolState& poly = runtime.poly_state();
         frame.lines.insert(frame.lines.end(), poly.preview_lines.begin(), poly.preview_lines.end());
         frame.points.insert(frame.points.end(), poly.preview_points.begin(), poly.preview_points.end());
@@ -2449,6 +2516,11 @@ ViewportOverlayFrame ModelingOverlayService::selection_overlay_frame(
       SelectionOverlayProjection::project_selection_overlay_frame(
           current_frame, object_registry, scene, selection_mode,
           selection_service.overlay_instance_edit_scope());
+  SelectionOverlayProjection::append_projected_overlay_points(
+      frame, runtime.knife_state().preview_points, object_registry, scene,
+      ViewportOverlayLayer::ToolHandle,
+      ViewportOverlayStyleRole::ExplicitColor, ViewportOverlaySource::Tool,
+      selection_service.overlay_instance_edit_scope());
   SelectionOverlayProjection::append_projected_overlay_lines(
       frame, runtime.knife_state().preview_lines, object_registry, scene,
       ViewportOverlayLayer::ToolPreviewLine,

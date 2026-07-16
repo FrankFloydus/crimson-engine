@@ -66,6 +66,10 @@ ModelingCommandResult ViewportModelingToolPortAdapter::update_knife_hover(
   return modeling_.update_knife_hover(event);
 }
 
+ModelingCommandResult ViewportModelingToolPortAdapter::clear_knife_hover() {
+  return modeling_.clear_knife_hover();
+}
+
 ModelingCommandResult ViewportModelingToolPortAdapter::update_poly_hover(
     const ModelingToolRayEvent &event) {
   return modeling_.update_poly_hover(event);

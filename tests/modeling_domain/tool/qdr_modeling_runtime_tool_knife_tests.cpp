@@ -6,6 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "test_support.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <optional>
@@ -124,13 +125,15 @@ TEST(QdrModelingRuntimeToolKnifeTests, KnifeSnappingAndAcceptFlowStayInEditorCor
 	EXPECT_TRUE(state.active);
 	EXPECT_TRUE(state.has_current);
 	EXPECT_TRUE(state.current_target_valid);
-	EXPECT_TRUE(state.target_object_id == 7);
+	EXPECT_TRUE(state.current_object_id == 7);
+	EXPECT_TRUE(state.target_object_id < 0);
         EXPECT_TRUE(state.status ==
                     quader_editor_core::KnifeToolStatus::Preview);
         EXPECT_NEAR(state.current_point.y, 1.0F, 0.0001);
 
 	EXPECT_TRUE(quader_editor_core::accept_knife_current_point(state, 0.5));
 	EXPECT_TRUE(state.has_active_stroke);
+	EXPECT_TRUE(state.target_object_id == 7);
 	EXPECT_TRUE(state.points.size() == 1U);
 	EXPECT_FALSE(state.has_current);
         EXPECT_TRUE(state.status ==
@@ -370,6 +373,20 @@ struct KnifeIncidentFaceMesh {
 	quader_poly::ElementId outside_face = quader_poly::kInvalidElementId;
 };
 
+/**
+ * Stores a four-face fan whose center vertex exercises vertex-seeded Knife
+ * locality independently of one pick-attributed face.
+ */
+struct KnifeVertexFanMesh {
+	quader_poly::Document document;
+	quader_poly::ElementId center = quader_poly::kInvalidElementId;
+	quader_poly::ElementId east = quader_poly::kInvalidElementId;
+	quader_poly::ElementId north = quader_poly::kInvalidElementId;
+	quader_poly::ElementId west = quader_poly::kInvalidElementId;
+	quader_poly::ElementId south = quader_poly::kInvalidElementId;
+	std::array<quader_poly::ElementId, 4U> faces {};
+};
+
 KnifeIncidentFaceMesh make_knife_incident_face_mesh()
 {
 	KnifeIncidentFaceMesh mesh;
@@ -399,6 +416,27 @@ KnifeIncidentFaceMesh make_knife_incident_face_mesh()
 			mesh.outside_far_b,
 			mesh.outside_far_a,
 		});
+	return mesh;
+}
+
+KnifeVertexFanMesh make_knife_vertex_fan_mesh()
+{
+	KnifeVertexFanMesh mesh;
+	mesh.center = quader_poly::add_vertex(mesh.document, { 0.0F, 0.0F, 0.0F });
+	mesh.east = quader_poly::add_vertex(mesh.document, { 1.0F, 0.0F, 0.0F });
+	mesh.north = quader_poly::add_vertex(mesh.document, { 0.0F, 1.0F, 0.0F });
+	mesh.west = quader_poly::add_vertex(mesh.document, { -1.0F, 0.0F, 0.0F });
+	mesh.south = quader_poly::add_vertex(mesh.document, { 0.0F, -1.0F, 0.0F });
+	mesh.faces = {
+		quader_poly::add_face(mesh.document,
+			std::array { mesh.center, mesh.east, mesh.north }),
+		quader_poly::add_face(mesh.document,
+			std::array { mesh.center, mesh.north, mesh.west }),
+		quader_poly::add_face(mesh.document,
+			std::array { mesh.center, mesh.west, mesh.south }),
+		quader_poly::add_face(mesh.document,
+			std::array { mesh.center, mesh.south, mesh.east }),
+	};
 	return mesh;
 }
 
@@ -434,6 +472,23 @@ quader_editor_core::PickHitRecord make_knife_face_hit(
 	return hit;
 }
 
+quader_editor_core::PickHitRecord make_knife_vertex_hit(
+		int object_id,
+		quader_poly::ElementId vertex_id,
+		quader_poly::ElementId face_id,
+		quader::QVec3 position)
+{
+	quader_editor_core::PickHitRecord hit;
+	hit.hit = true;
+	hit.object_id = object_id;
+	hit.kind = quader_poly::ElementKind::Vertex;
+	hit.vertex_id = vertex_id;
+	hit.face_id = face_id;
+	hit.local_position = position;
+	hit.local_normal = { 0.0F, 0.0F, 1.0F };
+	return hit;
+}
+
 bool knife_points_nearly_equal(quader::QVec3 left, quader::QVec3 right)
 {
 	return qdr_test::nearly_equal(left.x, right.x) &&
@@ -462,6 +517,48 @@ bool seed_knife_from_shared_edge(
 }
 
 } // namespace
+
+TEST(QdrModelingRuntimeToolKnifeTests,
+	HoverDoesNotLockTargetObjectUntilTheFirstPointIsAccepted) {
+	const KnifeIncidentFaceMesh mesh = make_knife_incident_face_mesh();
+	quader_editor_core::PolygonObject first;
+	first.id = 7;
+	first.document = mesh.document;
+	quader_editor_core::PolygonObject second = first;
+	second.id = 9;
+	quader_editor_core::EditorSession session({first, second});
+	quader_editor_core::KnifeToolState state;
+	quader_editor_core::SelectionHoverState hover;
+	const quader_poly::Edge seed_edge =
+		quader_poly::make_edge(mesh.seed_a, mesh.seed_b);
+
+	ASSERT_TRUE(quader_editor_core::update_knife_preview_from_hit(
+		session, state, hover,
+		make_knife_edge_hit(first.id, seed_edge, mesh.first_face,
+			{0.25F, 0.0F, 0.0F}),
+		0.25, false, false));
+	EXPECT_EQ(state.current_object_id, first.id);
+	EXPECT_LT(state.target_object_id, 0);
+
+	ASSERT_TRUE(quader_editor_core::update_knife_preview_from_hit(
+		session, state, hover,
+		make_knife_edge_hit(second.id, seed_edge, mesh.first_face,
+			{0.75F, 0.0F, 0.0F}),
+		0.25, false, false));
+	EXPECT_EQ(state.current_object_id, second.id);
+	EXPECT_LT(state.target_object_id, 0);
+	ASSERT_TRUE(quader_editor_core::accept_knife_current_point(state, 0.25));
+	EXPECT_EQ(state.target_object_id, second.id);
+	EXPECT_LT(state.current_object_id, 0);
+
+	EXPECT_FALSE(quader_editor_core::update_knife_preview_from_hit(
+		session, state, hover,
+		make_knife_edge_hit(first.id, seed_edge, mesh.first_face,
+			{0.5F, 0.0F, 0.0F}),
+		0.25, false, false));
+	EXPECT_EQ(state.target_object_id, second.id);
+	EXPECT_FALSE(state.has_current);
+}
 
 TEST(QdrModelingRuntimeToolKnifeTests, SameIncidentEdgeEndpointIsStableAcrossVisibleAndBehindFaceAttribution) {
 	const KnifeIncidentFaceMesh mesh = make_knife_incident_face_mesh();
@@ -587,4 +684,145 @@ TEST(QdrModelingRuntimeToolKnifeTests, AcceptedEdgePointAdvancesKnifeRestriction
 	EXPECT_TRUE(state.segments[0].second_point == 1U);
 	EXPECT_TRUE(state.segments[1].first_point == 1U);
 	EXPECT_TRUE(state.segments[1].second_point == 2U);
+}
+
+TEST(QdrModelingRuntimeToolKnifeTests,
+	HighValenceVertexSeedCanContinueOntoAnyIncidentFaceOrEdge) {
+	const KnifeVertexFanMesh mesh = make_knife_vertex_fan_mesh();
+	ASSERT_TRUE(std::ranges::all_of(mesh.faces, [](quader_poly::ElementId face_id) {
+		return face_id != quader_poly::kInvalidElementId;
+	}));
+	quader_editor_core::PolygonObject object;
+	object.id = 7;
+	object.document = mesh.document;
+	quader_editor_core::EditorSession session({ object });
+	const quader_editor_core::PickHitRecord seed_hit = make_knife_vertex_hit(
+		object.id, mesh.center, quader_poly::kInvalidElementId,
+		{ 0.0F, 0.0F, 0.0F });
+
+	quader_editor_core::KnifeToolState face_state;
+	quader_editor_core::SelectionHoverState face_hover;
+	ASSERT_TRUE(quader_editor_core::update_knife_preview_from_hit(
+		session, face_state, face_hover, seed_hit, 0.25, false, false));
+	ASSERT_TRUE(face_state.current_target.kind ==
+		quader_poly::KnifePointTargetKind::ExistingVertex);
+	ASSERT_TRUE(quader_editor_core::accept_knife_current_point(
+		face_state, 0.25));
+	ASSERT_TRUE(face_state.has_active_stroke);
+	ASSERT_TRUE(face_state.points.size() == 1U);
+	EXPECT_TRUE(face_state.points.front().vertex_id == mesh.center);
+
+	const quader_editor_core::PickHitRecord incident_face_hit =
+		make_knife_face_hit(object.id, mesh.faces[2],
+			{ -0.25F, -0.25F, 0.0F });
+	ASSERT_TRUE(quader_editor_core::update_knife_preview_from_hit(
+		session, face_state, face_hover, incident_face_hit,
+		0.25, false, false));
+	EXPECT_TRUE(face_state.current_target.kind ==
+		quader_poly::KnifePointTargetKind::FacePoint);
+	EXPECT_TRUE(face_state.current_target.face_id == mesh.faces[2]);
+	ASSERT_TRUE(quader_editor_core::accept_knife_current_point(
+		face_state, 0.25));
+	ASSERT_TRUE(face_state.segments.size() == 1U);
+	EXPECT_TRUE(face_state.segments.front().first_point == 0U);
+	EXPECT_TRUE(face_state.segments.front().second_point == 1U);
+
+	quader_editor_core::KnifeToolState edge_state;
+	quader_editor_core::SelectionHoverState edge_hover;
+	ASSERT_TRUE(quader_editor_core::update_knife_preview_from_hit(
+		session, edge_state, edge_hover, seed_hit, 0.25, false, false));
+	ASSERT_TRUE(quader_editor_core::accept_knife_current_point(
+		edge_state, 0.25));
+	const quader_editor_core::PickHitRecord incident_edge_hit =
+		make_knife_edge_hit(
+			object.id, quader_poly::make_edge(mesh.north, mesh.west),
+			mesh.faces[1], { -0.5F, 0.5F, 0.0F });
+	ASSERT_TRUE(quader_editor_core::update_knife_preview_from_hit(
+		session, edge_state, edge_hover, incident_edge_hit,
+		0.25, false, false));
+	EXPECT_TRUE(edge_state.current_target.kind ==
+		quader_poly::KnifePointTargetKind::ExistingEdge);
+	EXPECT_TRUE(edge_state.current_target.edge == incident_edge_hit.edge);
+	EXPECT_TRUE(edge_state.current_target.face_id == mesh.faces[1]);
+	ASSERT_TRUE(quader_editor_core::accept_knife_current_point(
+		edge_state, 0.25));
+	ASSERT_TRUE(edge_state.segments.size() == 1U);
+}
+
+TEST(QdrModelingRuntimeToolKnifeTests,
+	FaceInteriorCannotSeedKnifeStroke) {
+	const KnifeVertexFanMesh mesh = make_knife_vertex_fan_mesh();
+	quader_editor_core::PolygonObject object;
+	object.id = 7;
+	object.document = mesh.document;
+	quader_editor_core::EditorSession session({ object });
+	quader_editor_core::KnifeToolState state;
+	quader_editor_core::SelectionHoverState hover;
+
+	const quader_editor_core::PickHitRecord face_hit = make_knife_face_hit(
+		object.id, mesh.faces[0], { 0.25F, 0.25F, 0.0F });
+	EXPECT_FALSE(quader_editor_core::update_knife_preview_from_hit(
+		session, state, hover, face_hit, 0.25, false, false));
+	EXPECT_FALSE(state.has_current);
+	EXPECT_FALSE(state.current_target_valid);
+	EXPECT_TRUE(state.status ==
+		quader_editor_core::KnifeToolStatus::InvalidTarget);
+	EXPECT_FALSE(quader_editor_core::accept_knife_current_point(
+		state, 0.25));
+	EXPECT_FALSE(state.has_active_stroke);
+	EXPECT_TRUE(state.points.empty());
+	EXPECT_TRUE(state.segments.empty());
+}
+
+TEST(QdrModelingRuntimeToolKnifeTests,
+	ReversedWindingStillAllowsVisibleVertexAndEdgeSeedsFromOutside) {
+	quader_poly::Document document;
+	const quader_poly::ElementId bottom_left =
+		quader_poly::add_vertex(document, { -1.0F, -1.0F, 0.0F });
+	const quader_poly::ElementId top_left =
+		quader_poly::add_vertex(document, { -1.0F, 1.0F, 0.0F });
+	const quader_poly::ElementId top_right =
+		quader_poly::add_vertex(document, { 1.0F, 1.0F, 0.0F });
+	const quader_poly::ElementId bottom_right =
+		quader_poly::add_vertex(document, { 1.0F, -1.0F, 0.0F });
+	const quader_poly::ElementId reversed_face = quader_poly::add_face(
+		document,
+		std::array { bottom_left, top_left, top_right, bottom_right });
+	ASSERT_TRUE(reversed_face != quader_poly::kInvalidElementId);
+	const quader_poly::Face *face =
+		quader_poly::find_face(document, reversed_face);
+	ASSERT_TRUE(face != nullptr);
+	ASSERT_TRUE(quader_poly::face_normal(document, *face).z < 0.0F);
+
+	quader_editor_core::PolygonObject object;
+	object.id = 7;
+	object.document = document;
+	quader_editor_core::EditorSession session({ object });
+
+	quader_editor_core::KnifeToolState vertex_state;
+	quader_editor_core::SelectionHoverState vertex_hover;
+	ASSERT_TRUE(quader_editor_core::update_knife_preview_from_pick(
+		session, vertex_state, vertex_hover,
+		{{ -1.0F, -1.0F, 2.0F }, { 0.0F, 0.0F, -1.0F }},
+		0.25, false, false));
+	ASSERT_TRUE(vertex_state.current_target.kind ==
+		quader_poly::KnifePointTargetKind::ExistingVertex);
+	EXPECT_TRUE(vertex_state.current_target.vertex_id == bottom_left);
+	ASSERT_TRUE(quader_editor_core::accept_knife_current_point(
+		vertex_state, 0.25));
+	EXPECT_TRUE(vertex_state.has_active_stroke);
+
+	quader_editor_core::KnifeToolState edge_state;
+	quader_editor_core::SelectionHoverState edge_hover;
+	ASSERT_TRUE(quader_editor_core::update_knife_preview_from_pick(
+		session, edge_state, edge_hover,
+		{{ 0.0F, -1.0F, 2.0F }, { 0.0F, 0.0F, -1.0F }},
+		0.25, false, false));
+	ASSERT_TRUE(edge_state.current_target.kind ==
+		quader_poly::KnifePointTargetKind::ExistingEdge);
+	EXPECT_TRUE(edge_state.current_target.edge ==
+		quader_poly::make_edge(bottom_left, bottom_right));
+	ASSERT_TRUE(quader_editor_core::accept_knife_current_point(
+		edge_state, 0.25));
+	EXPECT_TRUE(edge_state.has_active_stroke);
 }
