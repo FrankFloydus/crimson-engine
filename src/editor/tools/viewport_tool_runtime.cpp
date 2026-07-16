@@ -182,6 +182,12 @@ bool ViewportToolRuntime::handle_shortcut(const ViewportShortcut &shortcut,
     if (!set_active_tool(state, shortcut.tool, &result)) {
       return false;
     }
+    if (shortcut.tool == ViewportToolId::Knife) {
+      result.selection_mode_changed =
+          result.selection_mode_changed ||
+          state.selection_mode != ViewportSelectionMode::Edge;
+      state.selection_mode = ViewportSelectionMode::Edge;
+    }
     result.tool_activation_requested = true;
     return true;
   case ViewportShortcutKind::SetSelectionMode:

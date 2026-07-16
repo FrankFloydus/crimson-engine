@@ -331,7 +331,6 @@ public:
 	[[nodiscard]] bool update_knife_preview_from_pick(
 			EditorSession& session,
 			const quader_poly::Ray& ray,
-			const ViewportCameraState& camera,
 			double grid_size,
 			bool snap_enabled,
 			bool constrain_axis,
@@ -339,15 +338,10 @@ public:
 	[[nodiscard]] bool update_knife_preview_from_hit(
 			EditorSession& session,
 			const PickHitRecord& hit,
-			const ViewportCameraState& camera,
 			double grid_size,
 			bool snap_enabled,
 			bool constrain_axis);
-	void refresh_knife_intersection_preview(EditorSession& session, const ViewportCameraState& camera);
-	[[nodiscard]] bool accept_knife_current_point(
-			EditorSession& session,
-			const ViewportCameraState& camera,
-			double grid_size);
+	[[nodiscard]] bool accept_knife_current_point(double grid_size);
 	[[nodiscard]] CommandResult commit_knife_tool(EditorSession& session);
 	void reset_cut_state(bool keep_active_when_current_tool_is_cut = false);
 	void set_cut_state(CutToolState state);

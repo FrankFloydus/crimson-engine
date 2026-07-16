@@ -13379,7 +13379,7 @@ TEST(ModelingSessionServiceTests,
   ModelingCommandResult command =
       service.activate_viewport_tool(ModelingViewportTool::Knife);
   ASSERT_TRUE(command.ok) << command.message;
-  const QVec3 stale_local{-0.25f, 0.0f, 1.0f};
+  const QVec3 stale_local{-0.25f, -1.0f, 1.0f};
   command = service.update_knife_hover(event_at_local_surface(stale_local));
   ASSERT_TRUE(command.ok) << command.message;
   ASSERT_TRUE(service.tool_status().knife_has_current);
@@ -13404,6 +13404,516 @@ TEST(ModelingSessionServiceTests,
   };
   EXPECT_TRUE(has_point_near(expected_world));
   EXPECT_FALSE(has_point_near(stale_world));
+}
+
+TEST(ModelingSessionServiceTests,
+     KnifeEdgeGridSnapUsesTopologyDistanceInsteadOfWorldAxes) {
+  SceneDocument scene;
+  AssetRegistry assets;
+  ModelingSessionService service(scene, assets);
+
+  const ModelingCreateBoxResult box = service.create_box_from_bounds({
+      .bounds = {.min = {-1.0f, -1.0f, -1.0f},
+                 .max = {1.0f, 1.0f, 1.0f}},
+      .name = "Knife Topology Grid Source",
+  });
+  ASSERT_TRUE(box.ok) << box.message;
+
+  TransformComponent transform;
+  transform.position = {0.3f, 0.0f, 0.0f};
+  ASSERT_TRUE(scene.set_transform(box.object.entity, transform));
+  const QMat4 world_from_object =
+      scene.world_transform_matrix(box.object.entity);
+
+  ModelingCommandResult command =
+      service.activate_viewport_tool(ModelingViewportTool::Knife);
+  ASSERT_TRUE(command.ok) << command.message;
+
+  const QVec3 raw_world =
+      transform_point(world_from_object, {-0.32f, 1.0f, 1.0f});
+  ModelingToolRayEvent event;
+  event.ray = {
+      .origin = raw_world + QVec3{0.0f, 0.0f, 5.0f},
+      .direction = {0.0f, 0.0f, -1.0f},
+  };
+  event.camera = test_orthographic_viewport_camera();
+  event.camera.origin = event.ray.origin;
+  event.grid_size = 0.5;
+  event.vertex_radius = 0.001;
+  event.edge_radius = 0.12;
+  event.snap_enabled = true;
+  event.constrain_axis = false;
+
+  command = service.update_knife_hover(event);
+
+  ASSERT_TRUE(command.ok) << command.message;
+  ASSERT_TRUE(command.changed);
+  ASSERT_TRUE(service.tool_status().knife_has_current);
+  const ViewportOverlayFrame frame = service.selection_overlay_frame();
+  const auto has_point_near = [&frame](QVec3 expected) {
+    return std::ranges::any_of(
+        frame.points, [expected](const ViewportOverlayPoint &point) {
+          return length_squared(point.position - expected) < 0.0001f;
+        });
+  };
+  const QVec3 expected =
+      transform_point(world_from_object, {-0.5f, 1.0f, 1.0f});
+  EXPECT_TRUE(has_point_near(expected));
+  EXPECT_FALSE(has_point_near(raw_world));
+  EXPECT_FALSE(has_point_near({0.0f, 1.0f, 1.0f}));
+}
+
+TEST(ModelingSessionServiceTests,
+     KnifeEdgeGridSnapStaysOnTransformedSlantedEdgeAtGridStep) {
+  SceneDocument scene;
+  AssetRegistry assets;
+  ModelingSessionService service(scene, assets);
+
+  const ModelingCreateBoxResult box = service.create_box_from_bounds({
+      .bounds = {.min = {-1.0f, -1.0f, -1.0f},
+                 .max = {1.0f, 1.0f, 1.0f}},
+      .name = "Knife Slanted Grid Source",
+  });
+  ASSERT_TRUE(box.ok) << box.message;
+
+  TransformComponent transform;
+  transform.position = {2.3f, -1.4f, 0.6f};
+  transform.rotation_euler = {0.0f, 0.0f, 0.78539816339f};
+  transform.scale = {2.0f, 1.0f, 1.0f};
+  ASSERT_TRUE(scene.set_transform(box.object.entity, transform));
+  const QMat4 world_from_object =
+      scene.world_transform_matrix(box.object.entity);
+
+  ModelingCommandResult command =
+      service.activate_viewport_tool(ModelingViewportTool::Knife);
+  ASSERT_TRUE(command.ok) << command.message;
+
+  const QVec3 raw_world =
+      transform_point(world_from_object, {-0.63f, 1.0f, 1.0f});
+  ModelingToolRayEvent event;
+  event.ray = {
+      .origin = raw_world + QVec3{0.0f, 0.0f, 5.0f},
+      .direction = {0.0f, 0.0f, -1.0f},
+  };
+  event.camera = test_orthographic_viewport_camera();
+  event.camera.origin = event.ray.origin;
+  event.grid_size = 0.5;
+  event.vertex_radius = 0.001;
+  event.edge_radius = 0.12;
+  event.snap_enabled = true;
+  event.constrain_axis = false;
+
+  command = service.update_knife_hover(event);
+
+  ASSERT_TRUE(command.ok) << command.message;
+  ASSERT_TRUE(command.changed);
+  ASSERT_TRUE(service.tool_status().knife_has_current);
+  const ViewportOverlayFrame frame = service.selection_overlay_frame();
+  const auto has_point_near = [&frame](QVec3 expected) {
+    return std::ranges::any_of(
+        frame.points, [expected](const ViewportOverlayPoint &point) {
+          return length_squared(point.position - expected) < 0.0001f;
+        });
+  };
+  const QVec3 expected =
+      transform_point(world_from_object, {-0.75f, 1.0f, 1.0f});
+  const QVec3 edge_origin =
+      transform_point(world_from_object, {-1.0f, 1.0f, 1.0f});
+  EXPECT_TRUE(has_point_near(expected));
+  EXPECT_FALSE(has_point_near(raw_world));
+  EXPECT_NEAR(length(expected - edge_origin), 0.5f, 0.0001f);
+}
+
+TEST(ModelingSessionServiceTests,
+     KnifeFaceGridSnapUsesContainedWorldPlaneLatticePoint) {
+  SceneDocument scene;
+  AssetRegistry assets;
+  ModelingSessionService service(scene, assets);
+
+  const ModelingCreateBoxResult box = service.create_box_from_bounds({
+      .bounds = {.min = {-1.0f, -1.0f, -1.0f},
+                 .max = {1.0f, 1.0f, 1.0f}},
+      .name = "Knife Face Topology Grid Source",
+  });
+  ASSERT_TRUE(box.ok) << box.message;
+
+  TransformComponent transform;
+  transform.position = {0.6f, 0.0f, 0.0f};
+  ASSERT_TRUE(scene.set_transform(box.object.entity, transform));
+
+  ModelingCommandResult command =
+      service.activate_viewport_tool(ModelingViewportTool::Knife);
+  ASSERT_TRUE(command.ok) << command.message;
+
+  ModelingToolRayEvent seed_event;
+  seed_event.ray = {
+      .origin = {0.6f, 1.0f, 5.0f},
+      .direction = {0.0f, 0.0f, -1.0f},
+  };
+  seed_event.camera = test_orthographic_viewport_camera();
+  seed_event.camera.origin = seed_event.ray.origin;
+  seed_event.grid_size = 0.5;
+  seed_event.vertex_radius = 0.001;
+  seed_event.edge_radius = 0.12;
+  seed_event.snap_enabled = false;
+  command = service.accept_knife_point(seed_event);
+  ASSERT_TRUE(command.ok) << command.message;
+  ASSERT_TRUE(command.changed);
+
+  ModelingToolRayEvent face_event;
+  face_event.ray = {
+      .origin = {0.93f, 0.24f, 5.0f},
+      .direction = {0.0f, 0.0f, -1.0f},
+  };
+  face_event.camera = test_orthographic_viewport_camera();
+  face_event.camera.origin = face_event.ray.origin;
+  face_event.grid_size = 0.5;
+  face_event.vertex_radius = 0.001;
+  face_event.edge_radius = 0.001;
+  face_event.snap_enabled = true;
+  face_event.constrain_axis = false;
+
+  command = service.update_knife_hover(face_event);
+
+  ASSERT_TRUE(command.ok) << command.message;
+  ASSERT_TRUE(command.changed);
+  ASSERT_TRUE(service.tool_status().knife_has_current);
+  const ViewportOverlayFrame frame = service.selection_overlay_frame();
+  const auto has_point_near = [&frame](QVec3 expected) {
+    return std::ranges::any_of(
+        frame.points, [expected](const ViewportOverlayPoint &point) {
+          return length_squared(point.position - expected) < 0.0001f;
+        });
+  };
+  EXPECT_TRUE(has_point_near({1.0f, 0.0f, 1.0f}));
+  EXPECT_FALSE(has_point_near({1.1f, 0.0f, 1.0f}));
+  EXPECT_FALSE(has_point_near({0.93f, 0.24f, 1.0f}));
+}
+
+TEST(ModelingSessionServiceTests,
+     KnifeGridEndpointCannotBecomeAnOffsetInitialEdgeSeed) {
+  SceneDocument scene;
+  AssetRegistry assets;
+  ModelingSessionService service(scene, assets);
+
+  const ModelingCreateBoxResult box = service.create_box_from_bounds({
+      .bounds = {.min = {-1.0f, -1.0f, -1.0f},
+                 .max = {1.0f, 1.0f, 1.0f}},
+      .name = "Knife Endpoint Seed Source",
+  });
+  ASSERT_TRUE(box.ok) << box.message;
+
+  ModelingCommandResult command =
+      service.activate_viewport_tool(ModelingViewportTool::Knife);
+  ASSERT_TRUE(command.ok) << command.message;
+
+  ModelingToolRayEvent event;
+  event.ray = {
+      .origin = {0.9f, 1.0f, 5.0f},
+      .direction = {0.0f, 0.0f, -1.0f},
+  };
+  event.camera = test_orthographic_viewport_camera();
+  event.camera.origin = event.ray.origin;
+  event.grid_size = 0.5;
+  event.vertex_radius = 0.001;
+  event.edge_radius = 0.12;
+  event.snap_enabled = true;
+  event.constrain_axis = false;
+
+  command = service.update_knife_hover(event);
+
+  ASSERT_TRUE(command.ok) << command.message;
+  EXPECT_FALSE(command.changed);
+  EXPECT_FALSE(service.tool_status().knife_has_current);
+  const ViewportOverlayFrame frame = service.selection_overlay_frame();
+  EXPECT_FALSE(std::ranges::any_of(
+      frame.points, [](const ViewportOverlayPoint &point) {
+        return length_squared(point.position - QVec3{0.98f, 1.0f, 1.0f}) <
+               0.0001f;
+      }));
+}
+
+TEST(ModelingSessionServiceTests,
+     KnifeGridEndpointCanonicalizesToVertexDuringActiveStroke) {
+  SceneDocument scene;
+  AssetRegistry assets;
+  ModelingSessionService service(scene, assets);
+
+  const ModelingCreateBoxResult box = service.create_box_from_bounds({
+      .bounds = {.min = {-1.0f, -1.0f, -1.0f},
+                 .max = {1.0f, 1.0f, 1.0f}},
+      .name = "Knife Endpoint Continuation Source",
+  });
+  ASSERT_TRUE(box.ok) << box.message;
+
+  ModelingCommandResult command =
+      service.activate_viewport_tool(ModelingViewportTool::Knife);
+  ASSERT_TRUE(command.ok) << command.message;
+
+  ModelingToolRayEvent seed_event;
+  seed_event.ray = {
+      .origin = {0.0f, -1.0f, 5.0f},
+      .direction = {0.0f, 0.0f, -1.0f},
+  };
+  seed_event.camera = test_orthographic_viewport_camera();
+  seed_event.camera.origin = seed_event.ray.origin;
+  seed_event.grid_size = 0.5;
+  seed_event.vertex_radius = 0.001;
+  seed_event.edge_radius = 0.12;
+  seed_event.snap_enabled = false;
+  command = service.accept_knife_point(seed_event);
+  ASSERT_TRUE(command.ok) << command.message;
+  ASSERT_TRUE(command.changed);
+
+  ModelingToolRayEvent endpoint_event;
+  endpoint_event.ray = {
+      .origin = {0.9f, 1.0f, 5.0f},
+      .direction = {0.0f, 0.0f, -1.0f},
+  };
+  endpoint_event.camera = test_orthographic_viewport_camera();
+  endpoint_event.camera.origin = endpoint_event.ray.origin;
+  endpoint_event.grid_size = 0.5;
+  endpoint_event.vertex_radius = 0.001;
+  endpoint_event.edge_radius = 0.12;
+  endpoint_event.snap_enabled = true;
+  endpoint_event.constrain_axis = false;
+
+  command = service.update_knife_hover(endpoint_event);
+
+  ASSERT_TRUE(command.ok) << command.message;
+  ASSERT_TRUE(command.changed);
+  ASSERT_TRUE(service.tool_status().knife_has_current);
+  const ViewportOverlayFrame frame = service.selection_overlay_frame();
+  const auto has_point_near = [&frame](QVec3 expected) {
+    return std::ranges::any_of(
+        frame.points, [expected](const ViewportOverlayPoint &point) {
+          return length_squared(point.position - expected) < 0.000001f;
+        });
+  };
+  EXPECT_TRUE(has_point_near({1.0f, 1.0f, 1.0f}));
+  EXPECT_FALSE(has_point_near({0.98f, 1.0f, 1.0f}));
+}
+
+TEST(ModelingSessionServiceTests,
+     KnifeShiftFaceConstraintSnapsOnlyDistanceAlongTopologyDirection) {
+  SceneDocument scene;
+  AssetRegistry assets;
+  ModelingSessionService service(scene, assets);
+
+  const ModelingCreateBoxResult box = service.create_box_from_bounds({
+      .bounds = {.min = {-1.0f, -1.0f, -1.0f},
+                 .max = {1.0f, 1.0f, 1.0f}},
+      .name = "Knife Shift Face Grid Source",
+  });
+  ASSERT_TRUE(box.ok) << box.message;
+
+  ModelingCommandResult command =
+      service.activate_viewport_tool(ModelingViewportTool::Knife);
+  ASSERT_TRUE(command.ok) << command.message;
+
+  ModelingToolRayEvent seed_event;
+  seed_event.ray = {
+      .origin = {-0.47f, -1.0f, 5.0f},
+      .direction = {0.0f, 0.0f, -1.0f},
+  };
+  seed_event.camera = test_orthographic_viewport_camera();
+  seed_event.camera.origin = seed_event.ray.origin;
+  seed_event.grid_size = 0.5;
+  seed_event.vertex_radius = 0.001;
+  seed_event.edge_radius = 0.12;
+  seed_event.snap_enabled = false;
+  command = service.accept_knife_point(seed_event);
+  ASSERT_TRUE(command.ok) << command.message;
+  ASSERT_TRUE(command.changed);
+
+  ModelingToolRayEvent shift_event;
+  shift_event.ray = {
+      .origin = {-0.4f, 0.38f, 5.0f},
+      .direction = {0.0f, 0.0f, -1.0f},
+  };
+  shift_event.camera = test_orthographic_viewport_camera();
+  shift_event.camera.origin = shift_event.ray.origin;
+  shift_event.grid_size = 0.5;
+  shift_event.vertex_radius = 0.001;
+  shift_event.edge_radius = 0.001;
+  shift_event.snap_enabled = true;
+  shift_event.constrain_axis = true;
+
+  command = service.update_knife_hover(shift_event);
+
+  ASSERT_TRUE(command.ok) << command.message;
+  ASSERT_TRUE(command.changed);
+  ASSERT_TRUE(service.tool_status().knife_has_current);
+  const ViewportOverlayFrame frame = service.selection_overlay_frame();
+  const auto has_point_near = [&frame](QVec3 expected) {
+    return std::ranges::any_of(
+        frame.points, [expected](const ViewportOverlayPoint &point) {
+          return length_squared(point.position - expected) < 0.000001f;
+        });
+  };
+  EXPECT_TRUE(has_point_near({-0.47f, 0.5f, 1.0f}));
+  EXPECT_FALSE(has_point_near({-0.47f, 0.38f, 1.0f}));
+  EXPECT_FALSE(has_point_near({-0.5f, 0.5f, 1.0f}));
+}
+
+TEST(ModelingSessionServiceTests,
+     KnifeShiftConstraintIntersectsTargetEdgeExactlyWithoutGridDrift) {
+  SceneDocument scene;
+  AssetRegistry assets;
+  ModelingSessionService service(scene, assets);
+
+  const ModelingCreateBoxResult box = service.create_box_from_bounds({
+      .bounds = {.min = {-1.0f, -1.0f, -1.0f},
+                 .max = {1.0f, 1.0f, 1.0f}},
+      .name = "Knife Shift Constraint Source",
+  });
+  ASSERT_TRUE(box.ok) << box.message;
+
+  ModelingCommandResult command =
+      service.activate_viewport_tool(ModelingViewportTool::Knife);
+  ASSERT_TRUE(command.ok) << command.message;
+
+  ModelingToolRayEvent seed_event;
+  seed_event.ray = {
+      .origin = {-0.47f, -1.0f, 5.0f},
+      .direction = {0.0f, 0.0f, -1.0f},
+  };
+  seed_event.camera = test_orthographic_viewport_camera();
+  seed_event.camera.origin = seed_event.ray.origin;
+  seed_event.grid_size = 0.3;
+  seed_event.vertex_radius = 0.001;
+  seed_event.edge_radius = 0.12;
+  seed_event.snap_enabled = false;
+  command = service.accept_knife_point(seed_event);
+  ASSERT_TRUE(command.ok) << command.message;
+  ASSERT_TRUE(command.changed);
+
+  ModelingToolRayEvent shift_event;
+  shift_event.ray = {
+      .origin = {0.2f, 1.0f, 5.0f},
+      .direction = {0.0f, 0.0f, -1.0f},
+  };
+  shift_event.camera = test_orthographic_viewport_camera();
+  shift_event.camera.origin = shift_event.ray.origin;
+  shift_event.grid_size = 0.3;
+  shift_event.vertex_radius = 0.001;
+  shift_event.edge_radius = 0.12;
+  shift_event.snap_enabled = true;
+  shift_event.constrain_axis = true;
+
+  command = service.update_knife_hover(shift_event);
+
+  ASSERT_TRUE(command.ok) << command.message;
+  ASSERT_TRUE(command.changed);
+  ASSERT_TRUE(service.tool_status().knife_has_current);
+  const ViewportOverlayFrame frame = service.selection_overlay_frame();
+  const auto has_point_near = [&frame](QVec3 expected) {
+    return std::ranges::any_of(
+        frame.points, [expected](const ViewportOverlayPoint &point) {
+          return length_squared(point.position - expected) < 0.000001f;
+        });
+  };
+  EXPECT_TRUE(has_point_near({-0.47f, 1.0f, 1.0f}));
+  EXPECT_FALSE(has_point_near({-0.5f, 1.0f, 1.0f}));
+  EXPECT_FALSE(has_point_near({0.2f, 1.0f, 1.0f}));
+}
+
+TEST(ModelingSessionServiceTests,
+     KnifeHoverMissDoesNotRepickWithDifferentRuntimeRadii) {
+  SceneDocument scene;
+  AssetRegistry assets;
+  ModelingSessionService service(scene, assets);
+
+  const ModelingCreateBoxResult box = service.create_box_from_bounds({
+      .bounds = {.min = {-1.0f, -1.0f, -1.0f},
+                 .max = {1.0f, 1.0f, 1.0f}},
+      .name = "Knife Pick Radius Source",
+  });
+  ASSERT_TRUE(box.ok) << box.message;
+
+  ModelingCommandResult command =
+      service.activate_viewport_tool(ModelingViewportTool::Knife);
+  ASSERT_TRUE(command.ok) << command.message;
+
+  ModelingToolRayEvent event;
+  event.ray = {
+      .origin = {1.08f, 0.0f, 5.0f},
+      .direction = {0.0f, 0.0f, -1.0f},
+  };
+  event.camera = test_orthographic_viewport_camera();
+  event.camera.origin = event.ray.origin;
+  event.vertex_radius = 0.001;
+  event.edge_radius = 0.001;
+
+  command = service.update_knife_hover(event);
+
+  ASSERT_TRUE(command.ok) << command.message;
+  EXPECT_FALSE(command.changed);
+  EXPECT_FALSE(service.tool_status().knife_has_current);
+}
+
+TEST(ModelingSessionServiceTests,
+     KnifeFaceGridSnapCannotMoveTheTargetOutsideThePickedFace) {
+  SceneDocument scene;
+  AssetRegistry assets;
+  ModelingSessionService service(scene, assets);
+
+  const ModelingCreateBoxResult box = service.create_box_from_bounds({
+      .bounds = {.min = {-1.0f, -1.0f, -1.0f},
+                 .max = {1.0f, 1.0f, 1.0f}},
+      .name = "Knife Face Snap Source",
+  });
+  ASSERT_TRUE(box.ok) << box.message;
+
+  TransformComponent transform;
+  transform.position = {0.6f, 0.0f, 0.0f};
+  ASSERT_TRUE(scene.set_transform(box.object.entity, transform));
+
+  ModelingCommandResult command =
+      service.activate_viewport_tool(ModelingViewportTool::Knife);
+  ASSERT_TRUE(command.ok) << command.message;
+
+  ModelingToolRayEvent seed_event;
+  seed_event.ray = {
+      .origin = {0.6f, 1.0f, 5.0f},
+      .direction = {0.0f, 0.0f, -1.0f},
+  };
+  seed_event.camera = test_orthographic_viewport_camera();
+  seed_event.camera.origin = seed_event.ray.origin;
+  seed_event.grid_size = 0.5;
+  seed_event.vertex_radius = 0.001;
+  seed_event.edge_radius = 0.12;
+  seed_event.snap_enabled = false;
+  command = service.accept_knife_point(seed_event);
+  ASSERT_TRUE(command.ok) << command.message;
+  ASSERT_TRUE(command.changed);
+
+  ModelingToolRayEvent event;
+  event.ray = {
+      .origin = {1.5f, 0.0f, 5.0f},
+      .direction = {0.0f, 0.0f, -1.0f},
+  };
+  event.camera = test_orthographic_viewport_camera();
+  event.camera.origin = event.ray.origin;
+  event.grid_size = 3.0;
+  event.vertex_radius = 0.001;
+  event.edge_radius = 0.001;
+  event.snap_enabled = true;
+
+  command = service.update_knife_hover(event);
+
+  ASSERT_TRUE(command.ok) << command.message;
+  ASSERT_TRUE(command.changed);
+  ASSERT_TRUE(service.tool_status().knife_has_current);
+  const ViewportOverlayFrame frame = service.selection_overlay_frame();
+  const auto has_point_near = [&frame](QVec3 expected) {
+    return std::ranges::any_of(
+        frame.points, [expected](const ViewportOverlayPoint &point) {
+          return length_squared(point.position - expected) < 0.0001f;
+        });
+  };
+  EXPECT_TRUE(has_point_near({1.5f, 0.0f, 1.0f}));
+  EXPECT_FALSE(has_point_near({3.0f, 0.0f, 1.0f}));
 }
 
 TEST(ModelingSessionServiceTests,

@@ -100,7 +100,7 @@ TEST(QdrDocumentOperationKnifeStrokeTests, KnifeStrokeSupportsTwoSplitPointsOnTh
 	EXPECT_TRUE(qdr_test::every_face_compiles_to_triangles(fixture.document));
 }
 
-TEST(QdrDocumentOperationKnifeStrokeTests, KnifeStrokeRoutesAdjacentFaceCutsThroughTheSharedBoundary) {
+TEST(QdrDocumentOperationKnifeStrokeTests, KnifeStrokeRejectsAOneClickCutAcrossAdjacentFaces) {
 	Document document;
 	const ElementId bottom_left = add_vertex(document, { -1.0F, -1.0F, 0.0F });
 	const ElementId bottom_center = add_vertex(document, { 0.0F, -1.0F, 0.0F });
@@ -133,24 +133,16 @@ TEST(QdrDocumentOperationKnifeStrokeTests, KnifeStrokeRoutesAdjacentFaceCutsThro
         };
         const std::vector<KnifeStrokeSegment> segments { { 0U, 1U } };
 	Selection selection;
+	const std::size_t vertex_count_before = document.vertices.size();
+	const std::size_t face_count_before = document.faces.size();
 
 	const OperationResult result = knife_stroke(document, selection, points, segments);
 
-	EXPECT_TRUE(result.changed);
-
-	qdr_test::expect_valid_polygon_document_after_success(document, result);
-        EXPECT_TRUE(selection.mode == SelectionMode::Vertex);
-        EXPECT_TRUE(selection.vertices.size() == 2U);
-	const auto boundary = std::find_if(document.vertices.begin(), document.vertices.end(), [](const Vertex& vertex) {
-		return qdr_test::vec_nearly_equal(vertex.position, { 0.0F, 0.0F, 0.0F });
-	});
-        const ElementId boundary_vertex = boundary != document.vertices.end()
-                                              ? boundary->id
-                                              : kInvalidElementId;
-        EXPECT_TRUE(boundary_vertex != kInvalidElementId);
-        EXPECT_TRUE(qdr_test::document_has_edge(document, make_edge(selection.vertices[0], boundary_vertex)));
-	EXPECT_TRUE(qdr_test::document_has_edge(document, make_edge(boundary_vertex, selection.vertices[1])));
-	EXPECT_TRUE(qdr_test::every_face_compiles_to_triangles(document));
+	EXPECT_FALSE(result.changed);
+	EXPECT_TRUE(result.message.find("one face") != std::string::npos);
+	EXPECT_TRUE(document.vertices.size() == vertex_count_before);
+	EXPECT_TRUE(document.faces.size() == face_count_before);
+	EXPECT_TRUE(selection.vertices.empty());
 }
 
 TEST(QdrDocumentOperationKnifeStrokeTests, KnifeStrokeRejectsIncompleteStrokesWithoutMutation) {

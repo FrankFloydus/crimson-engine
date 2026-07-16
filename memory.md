@@ -4677,10 +4677,26 @@ Invariant:
   operation. Cursor zoom, fly look, pan, orbit snap, axis views, and orthographic-to-perspective
   transitions may not retain a second off-axis pivot; perspective distance is capped before a
   pose is reconstructed.
-- A Knife stroke seeded from an existing edge is restricted to the at-most-two faces incident to
-  that edge. Hover targets, stored target face IDs, and automatically inserted screen-crossing
-  points must all resolve inside that same face region so shared boundary edges cannot route a cut
-  into an unrelated adjacent face.
+- Every accepted Knife segment must resolve both topology targets on one existing shared face.
+  The allowed region is rebased from the last explicitly accepted point, so a boundary-edge point
+  opens its incident faces for the next segment; a single click never auto-inserts a crossing point
+  or routes across an intermediate edge. Non-shared topology clears the current hover and preview
+  instead of drawing a red invalid line.
+- Scene-aware vertex/edge/face candidates are authoritative for Knife hover. A viewport miss must
+  not trigger a second runtime pick with different radii. With grid snap active, edge points
+  quantize world distance along the transformed edge and face points use the stable projected
+  world-plane lattice; neither path rounds world XYZ and reprojects a displaced point back onto
+  topology. Out-of-face grid points fall back to the raw face hit.
+- Shift straightening derives its axes from the one active shared face, intersects constrained
+  lines with hovered edges exactly, and rejects vertices, edges, or face points that do not lie on
+  that constrained topology. Grid snap quantizes only the scalar distance along the chosen Shift
+  direction, while an edge intersection remains the exact topology boundary. It never lets a
+  lower-priority pick bypass the constraint.
+- Activating Knife (`C`) changes both app and runtime selection to Edge. Each new stroke must begin
+  inside an existing edge rather than on a face, vertex, or ambiguous edge endpoint. Later grid
+  snaps that land on endpoints or face boundaries become canonical vertex/edge targets immediately.
+- The polygon Knife Stroke operation rejects a segment whose endpoints do not share one face, so
+  non-interactive callers cannot bypass the per-segment topology invariant.
 
 Owners:
 
@@ -4688,11 +4704,21 @@ Owners:
   `src/editor/modeling/services/modeling_transform_drag_service.*` own the scene-aware transform
   snap participant seam.
 - `src/viewport/viewport_camera_controller.cpp` owns the single visible camera pivot.
-- `src/editor/interactions/knife_tool.cpp` owns seed-edge face-region interaction policy; the
-  polygon operation core remains topology-only.
+- `src/editor/interactions/knife_tool.cpp` owns segment-local shared-face interaction policy;
+  shared tool snapping owns edge-distance and face-lattice quantization; `ModelingSessionService`
+  owns authoritative scene-aware candidate ordering, world-space resolution, and topology-derived
+  straight constraints; tool activation policy owns the persistent Edge-mode transition; the
+  polygon Knife Stroke operation enforces the same one-face boundary.
 
 Verification:
 
-- Focused camera, Knife, and Move suites pass 26/26, 5/5, and 8/8. The affected workflow passes,
-  including 291 runtime tests. The complete `vs2026-debug` CTest preset passes 6/6 and the
-  538-file C++ style gate passes before the v0.1.5 native build and branch merge.
+- Focused camera and Move suites pass 26/26 and 8/8. The topology-only Knife pass adds 8/8
+  interaction, 4/4 polygon-operation, and 2/2 host-picking regressions; the affected workflow
+  passes, including 294 runtime tests.
+- The complete `vs2026-debug` CTest preset passes 6/6, all six previously exposed architecture
+  guardrails pass, and the native `quader` v0.1.6 target builds successfully.
+- The subsequent edge-only seed and topology-derived Shift-constraint follow-up used explicit fast
+  iteration mode: automated tests were intentionally skipped and native `quader` v0.1.7 builds
+  successfully for manual viewport verification.
+- The grid-correction follow-up passes 9/9 focused runtime Knife tests, 10/10 scene/service Knife
+  tests, the complete affected workflow and CTest 6/6. Native `quader` v0.1.8 builds successfully.

@@ -79,10 +79,6 @@ std::vector<ElementId> knife_uncovered_required_vertices( std::span<const std::v
 std::vector<std::vector<ElementId>> knife_partition_face_loops( const Document& document, const Face& face, std::span<const Edge> cut_edges, int dropped_axis);
 std::vector<std::vector<ElementId>> knife_partition_face_loops_with_repairs( Document& document, const Face& face, std::vector<Edge>& cut_edges, int dropped_axis, std::string& message);
 std::optional<ElementId> knife_segment_face_id( const Document& document, const std::vector<KnifeResolvedStrokePoint>& points, const KnifeStrokeSegment& segment);
-std::vector<Edge> knife_shared_face_edges(const Face& first, const Face& second);
-bool knife_vertex_is_on_shared_face_boundary(const Face& first, const Face& second, ElementId vertex_id);
-float knife_edge_factor_nearest_segment( const Document& document, Edge edge, quader::QVec3 segment_start, quader::QVec3 segment_end);
-float knife_distance_squared_to_segment(quader::QVec3 point, quader::QVec3 segment_start, quader::QVec3 segment_end);
 bool knife_add_face_graph_edge( KnifeStrokeCandidate& build, std::map<ElementId, KnifeFaceGraph>& face_graphs, ElementId face_id, Edge edge);
 bool knife_face_graph_uses_vertex(const KnifeFaceGraph& graph, ElementId vertex_id);
 bool knife_any_face_graph_uses_vertex(const std::map<ElementId, KnifeFaceGraph>& face_graphs, ElementId vertex_id);

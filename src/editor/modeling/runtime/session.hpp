@@ -496,7 +496,6 @@ struct KnifeToolState {
   std::vector<quader_poly::KnifePointTarget> points;
   std::vector<quader::QVec3> point_positions;
   std::vector<quader_poly::KnifeStrokeSegment> segments;
-  std::vector<quader::QVec3> intersection_preview_points;
   KnifeToolStatus status = KnifeToolStatus::Idle;
   std::vector<SelectionOverlayLine> preview_lines;
   std::vector<SelectionOverlayPoint> preview_points;
@@ -1822,19 +1821,14 @@ void reset_knife_tool(KnifeToolState &state);
 void rebuild_knife_overlay(KnifeToolState &state);
 bool update_knife_preview_from_pick(
     EditorSession &session, KnifeToolState &state, SelectionHoverState &hover,
-    const quader_poly::Ray &ray, const ViewportCameraState &camera,
-    double grid_size, bool snap_enabled, bool constrain_axis,
+    const quader_poly::Ray &ray, double grid_size, bool snap_enabled,
+    bool constrain_axis,
     int target_object_id = -1);
 bool update_knife_preview_from_hit(
     EditorSession &session, KnifeToolState &state, SelectionHoverState &hover,
-    const PickHitRecord &hit, const ViewportCameraState &camera,
-    double grid_size, bool snap_enabled, bool constrain_axis);
-void refresh_knife_intersection_preview(EditorSession &session,
-                                        KnifeToolState &state,
-                                        const ViewportCameraState &camera);
-bool accept_knife_current_point(EditorSession &session, KnifeToolState &state,
-                                const ViewportCameraState &camera,
-                                double grid_size);
+    const PickHitRecord &hit, double grid_size, bool snap_enabled,
+    bool constrain_axis);
+bool accept_knife_current_point(KnifeToolState &state, double grid_size);
 CommandResult knife_segment(std::vector<PolygonObject> &objects, int object_id,
                             const quader_poly::KnifePointTarget &previous,
                             const quader_poly::KnifePointTarget &current,

@@ -155,6 +155,7 @@ inline ViewportToolActivationPlan plan_viewport_tool_activation(const ViewportTo
           plan.poly_tool_active = true;
           plan.reset_poly_tool = plan.active_tool_changed;
         } else if (plan.active_tool == ViewportInteractionTool::Knife) {
+          plan.selection_mode = SelectionMode::Edge;
           plan.knife_tool_active = true;
           plan.reset_knife_tool = plan.active_tool_changed;
         }

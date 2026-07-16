@@ -98,6 +98,83 @@ quader::QVec3 snap_knife_point_to_grid(quader::QVec3 point, double grid_size, bo
 	};
 }
 
+std::optional<quader::QVec3> snap_knife_point_to_edge_grid(
+		const quader_poly::Document& document,
+		quader_poly::Edge edge,
+		quader::QVec3 point,
+		double grid_size,
+		bool snap_enabled)
+{
+	edge = quader_poly::make_edge(edge.a, edge.b);
+	const quader_poly::Vertex *first = quader_poly::find_vertex(document, edge.a);
+	const quader_poly::Vertex *second = quader_poly::find_vertex(document, edge.b);
+	const std::optional<float> factor = quader_poly::edge_factor_from_position(
+		document, edge, point);
+	if (first == nullptr || second == nullptr || !factor.has_value()) {
+		return std::nullopt;
+	}
+
+	const quader::QVec3 edge_delta = second->position - first->position;
+	const double edge_length = static_cast<double>(quader::length(edge_delta));
+	if (!std::isfinite(edge_length) || edge_length <= 0.0001) {
+		return std::nullopt;
+	}
+	const double raw_distance = static_cast<double>(*factor) * edge_length;
+	const double resolved_distance =
+		snap_enabled && std::isfinite(grid_size) && grid_size > 0.0001
+			? snap_world_value(raw_distance, grid_size)
+			: raw_distance;
+	const float resolved_factor = static_cast<float>(
+		std::clamp(resolved_distance / edge_length, 0.0, 1.0));
+	return first->position + edge_delta * resolved_factor;
+}
+
+std::optional<quader::QVec3> snap_knife_point_to_face_grid(
+		const quader_poly::Document& document,
+		quader_poly::ElementId face_id,
+		quader::QVec3 point,
+		double grid_size,
+		bool snap_enabled)
+{
+	if (!snap_enabled || !std::isfinite(grid_size) || grid_size <= 0.0001) {
+		return point;
+	}
+	const quader_poly::Face *face = quader_poly::find_face(document, face_id);
+	if (face == nullptr || face->vertices.size() < 3U) {
+		return std::nullopt;
+	}
+	const quader_poly::Vertex *face_point =
+		quader_poly::find_vertex(document, face->vertices.front());
+	if (face_point == nullptr) {
+		return std::nullopt;
+	}
+	const quader::QVec3 normal = vec3_normalize_or(
+		quader_poly::face_normal(document, *face), {});
+	quader::QVec3 preferred_axis { 1.0F, 0.0F, 0.0F };
+	if (std::abs(quader::dot(normal, preferred_axis)) > 0.9F) {
+		preferred_axis = { 0.0F, 0.0F, 1.0F };
+	}
+	const quader::QVec3 u_axis = vec3_normalize_or(
+		preferred_axis - normal * quader::dot(preferred_axis, normal), {});
+	const quader::QVec3 v_axis = vec3_normalize_or(
+		quader::cross(normal, u_axis), {});
+	if (quader::length_squared(normal) <= kToolEpsilon ||
+		quader::length_squared(u_axis) <= kToolEpsilon ||
+		quader::length_squared(v_axis) <= kToolEpsilon) {
+		return std::nullopt;
+	}
+
+	const quader::QVec3 origin =
+		normal * quader::dot(face_point->position, normal);
+	const quader::QVec3 from_origin = point - origin;
+	const double u = snap_world_value(
+		static_cast<double>(quader::dot(from_origin, u_axis)), grid_size);
+	const double v = snap_world_value(
+		static_cast<double>(quader::dot(from_origin, v_axis)), grid_size);
+	return origin + u_axis * static_cast<float>(u) +
+		v_axis * static_cast<float>(v);
+}
+
 quader::QVec3 constrain_knife_point_to_axis(
 		quader::QVec3 previous,
 		quader::QVec3 point,
@@ -142,6 +219,50 @@ quader::QVec3 constrain_knife_point_to_axis(
 		distance = snap_world_value(distance, grid_size);
 	}
 	return previous + best_axis * static_cast<float>(distance);
+}
+
+std::optional<quader::QVec3> constrain_knife_point_to_face_directions(
+		quader::QVec3 previous,
+		quader::QVec3 point,
+		std::span<const quader::QVec3> face_directions,
+		double grid_size,
+		bool snap_enabled)
+{
+	const quader::QVec3 delta = point - previous;
+	if (quader::length_squared(delta) <= kToolEpsilon) {
+		return previous;
+	}
+
+	const quader::QVec3 intended_direction = vec3_normalize_or(
+		delta, { 1.0F, 0.0F, 0.0F });
+	std::optional<quader::QVec3> best_direction;
+	float best_score = -1.0F;
+	for (const quader::QVec3 candidate : face_directions) {
+		if (quader::length_squared(candidate) <= kToolEpsilon) {
+			continue;
+		}
+		quader::QVec3 direction = vec3_normalize_or(
+			candidate, { 1.0F, 0.0F, 0.0F });
+		const float alignment = quader::dot(direction, intended_direction);
+		const float score = std::abs(alignment);
+		if (score <= best_score) {
+			continue;
+		}
+		if (alignment < 0.0F) {
+			direction = direction * -1.0F;
+		}
+		best_direction = direction;
+		best_score = score;
+	}
+	if (!best_direction.has_value()) {
+		return std::nullopt;
+	}
+
+	double distance = static_cast<double>(quader::dot(delta, *best_direction));
+	if (snap_enabled && std::isfinite(grid_size) && grid_size > 0.0001) {
+		distance = snap_world_value(distance, grid_size);
+	}
+	return previous + *best_direction * static_cast<float>(distance);
 }
 
 } // namespace quader_editor_core

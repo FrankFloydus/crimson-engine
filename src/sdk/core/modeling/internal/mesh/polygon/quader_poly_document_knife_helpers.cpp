@@ -1448,58 +1448,6 @@ std::optional<ElementId> knife_segment_face_id(
     return matching_faces.front();
 }
 
-std::vector<Edge> knife_shared_face_edges(const Face& first, const Face& second)
-{
-    std::vector<Edge> shared_edges;
-    for (const Edge& edge : face_edges(first)) {
-        if (face_uses_edge(second, edge)) {
-            add_unique_edge(shared_edges, edge);
-        }
-    }
-    return shared_edges;
-}
-
-bool knife_vertex_is_on_shared_face_boundary(const Face& first, const Face& second, ElementId vertex_id)
-{
-    return knife_vertex_is_on_face_boundary(first, vertex_id) && knife_vertex_is_on_face_boundary(second, vertex_id);
-}
-
-float knife_edge_factor_nearest_segment(
-    const Document& document,
-    Edge edge,
-    quader::QVec3 segment_start,
-    quader::QVec3 segment_end)
-{
-    edge = make_edge(edge.a, edge.b);
-    const Vertex* edge_start = find_vertex(document, edge.a);
-    const Vertex* edge_end = find_vertex(document, edge.b);
-    if (edge_start == nullptr || edge_end == nullptr) {
-        return 0.5F;
-    }
-
-    quader_geometry::QSegmentSegmentFactorOptions<float> options;
-    options.length_squared_epsilon = kEpsilon;
-    options.closest_epsilon = kEpsilon;
-    options.parameter_epsilon = kEpsilon;
-    options.min_factor = 0.01F;
-    options.max_factor = 0.99F;
-
-    const quader_geometry::QSegmentFactorClosestPoint3<float> closest =
-        quader_geometry::closest_factor_on_segment_to_segment<float>(
-            { geometry_vec3(edge_start->position), geometry_vec3(edge_end->position) },
-            { geometry_vec3(segment_start), geometry_vec3(segment_end) },
-            options);
-    return closest.valid ? closest.segment_factor : 0.5F;
-}
-
-float knife_distance_squared_to_segment(quader::QVec3 point, quader::QVec3 segment_start, quader::QVec3 segment_end)
-{
-  return quader_geometry::point_segment_distance_squared<float>(
-      geometry_vec3(point),
-      {geometry_vec3(segment_start), geometry_vec3(segment_end)},
-      std::sqrt(kEpsilon));
-}
-
 bool knife_add_face_graph_edge(
     KnifeStrokeCandidate& build,
     std::map<ElementId, KnifeFaceGraph>& face_graphs,
@@ -1736,75 +1684,17 @@ KnifeStrokeCandidate build_knife_stroke_candidate(
         const std::optional<ElementId> face_id = knife_segment_face_id(build.document, build.points, segment);
         const KnifeResolvedStrokePoint& first_point = build.points[segment.first_point];
         const KnifeResolvedStrokePoint& second_point = build.points[segment.second_point];
-        if (face_id.has_value()) {
-            if (knife_add_face_graph_edge(
-                    build,
-                    face_graphs,
-                    *face_id,
-                    make_edge(first_point.vertex_id, second_point.vertex_id))) {
-                build.segments.push_back({ segment.first_point, segment.second_point, *face_id });
-            }
-            continue;
+        if (!face_id.has_value()) {
+            build.message =
+                "Knife stroke segments must stay on one face; place a point on each crossed edge.";
+            return build;
         }
-
-        const Face *first_face =
-            first_point.face_id != kInvalidElementId
-                ? find_face(build.document, first_point.face_id)
-                : nullptr;
-        const Face *second_face =
-            second_point.face_id != kInvalidElementId
-                ? find_face(build.document, second_point.face_id)
-                : nullptr;
-        if (first_face == nullptr || second_face == nullptr || first_face->id == second_face->id) {
-            continue;
-        }
-
-        const std::vector<Edge> shared_edges = knife_shared_face_edges(*first_face, *second_face);
-        if (shared_edges.empty()) {
-            continue;
-        }
-
-        ElementId boundary_vertex = kInvalidElementId;
-        if (knife_vertex_is_on_shared_face_boundary(*first_face, *second_face, first_point.vertex_id)) {
-            boundary_vertex = first_point.vertex_id;
-        } else if (knife_vertex_is_on_shared_face_boundary(*first_face, *second_face, second_point.vertex_id)) {
-            boundary_vertex = second_point.vertex_id;
-        } else {
-            float best_distance_squared = std::numeric_limits<float>::infinity();
-            Edge best_edge {};
-            float best_factor = 0.5F;
-            for (const Edge& shared_edge : shared_edges) {
-                const float factor = knife_edge_factor_nearest_segment(
-                    build.document,
-                    shared_edge,
-                    first_point.position,
-                    second_point.position);
-                const std::optional<quader::QVec3> edge_position = split_edge_position(build.document, shared_edge, factor);
-                if (!edge_position.has_value()) {
-                    continue;
-                }
-                const float distance_squared =
-                    knife_distance_squared_to_segment(*edge_position, first_point.position, second_point.position);
-                if (distance_squared < best_distance_squared) {
-                    best_distance_squared = distance_squared;
-                    best_edge = shared_edge;
-                    best_factor = factor;
-                }
-            }
-            if (best_distance_squared < std::numeric_limits<float>::infinity()) {
-                boundary_vertex = split_vertex_for_knife_edge(build.document, split_vertices, best_edge, best_factor);
-            }
-        }
-        if (boundary_vertex == kInvalidElementId ||
-            find_vertex(build.document, boundary_vertex) == nullptr) {
-          continue;
-        }
-
-        bool routed = false;
-        routed = knife_add_face_graph_edge(build, face_graphs, first_face->id, make_edge(first_point.vertex_id, boundary_vertex)) || routed;
-        routed = knife_add_face_graph_edge(build, face_graphs, second_face->id, make_edge(boundary_vertex, second_point.vertex_id)) || routed;
-        if (routed) {
-            build.segments.push_back({ segment.first_point, segment.second_point, first_face->id });
+        if (knife_add_face_graph_edge(
+                build,
+                face_graphs,
+                *face_id,
+                make_edge(first_point.vertex_id, second_point.vertex_id))) {
+            build.segments.push_back({ segment.first_point, segment.second_point, *face_id });
         }
     }
 

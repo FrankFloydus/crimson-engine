@@ -1052,7 +1052,6 @@ void EditorRuntime::set_knife_active(bool active)
 bool EditorRuntime::update_knife_preview_from_pick(
 		EditorSession& session,
 		const quader_poly::Ray& ray,
-		const ViewportCameraState& camera,
 		double grid_size,
 		bool snap_enabled,
 		bool constrain_axis,
@@ -1064,7 +1063,6 @@ bool EditorRuntime::update_knife_preview_from_pick(
 		state_.knife,
 		state_.hover,
 		ray,
-		camera,
 		grid_size,
 		snap_enabled,
 		constrain_axis,
@@ -1091,14 +1089,13 @@ bool EditorRuntime::update_insert_edge_loop_drag_factor_from_world(
 bool EditorRuntime::update_knife_preview_from_hit(
 		EditorSession& session,
 		const PickHitRecord& hit,
-		const ViewportCameraState& camera,
 		double grid_size,
 		bool snap_enabled,
 		bool constrain_axis)
 {
 	QDR_PROFILE_SCOPE("qdr_editor_core.EditorRuntime.update_knife_preview_from_hit");
 	return quader_editor_core::update_knife_preview_from_hit(
-		session, state_.knife, state_.hover, hit, camera, grid_size,
+		session, state_.knife, state_.hover, hit, grid_size,
 		snap_enabled, constrain_axis);
 }
 
@@ -1112,19 +1109,10 @@ bool EditorRuntime::set_insert_edge_loop_preview_from_hit(
 		state_.insert_edge_loop, state_.hover, hit, resolved_factor, dragging);
 }
 
-void EditorRuntime::refresh_knife_intersection_preview(EditorSession& session, const ViewportCameraState& camera)
-{
-	QDR_PROFILE_SCOPE("qdr_editor_core.EditorRuntime.refresh_knife_intersection_preview");
-	quader_editor_core::refresh_knife_intersection_preview(session, state_.knife, camera);
-}
-
-bool EditorRuntime::accept_knife_current_point(
-		EditorSession& session,
-		const ViewportCameraState& camera,
-		double grid_size)
+bool EditorRuntime::accept_knife_current_point(double grid_size)
 {
 	QDR_PROFILE_SCOPE("qdr_editor_core.EditorRuntime.accept_knife_current_point");
-	return quader_editor_core::accept_knife_current_point(session, state_.knife, camera, grid_size);
+	return quader_editor_core::accept_knife_current_point(state_.knife, grid_size);
 }
 
 CommandResult EditorRuntime::commit_knife_tool(EditorSession& session)

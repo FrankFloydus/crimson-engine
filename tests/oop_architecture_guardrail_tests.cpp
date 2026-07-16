@@ -664,8 +664,9 @@ TEST(OopArchitectureGuardrailTests, InteractionToolMathStaysInSharedOwner) {
   EXPECT_NE(extrude.find("normalized_axis("), std::string::npos);
   EXPECT_NE(extrude.find("safe_grid_size("), std::string::npos);
   EXPECT_NE(knife.find("vec3_normalize_or"), std::string::npos);
-  EXPECT_NE(knife.find("tool_geometry_vec2"), std::string::npos);
-  EXPECT_NE(knife.find("tool_geometry_vec3"), std::string::npos);
+  EXPECT_EQ(knife.find("mesh/geometry/geometry.hpp"), std::string::npos);
+  EXPECT_EQ(knife.find("tool_geometry_vec2"), std::string::npos);
+  EXPECT_EQ(knife.find("tool_geometry_vec3"), std::string::npos);
   EXPECT_NE(snapping.find("vec3_normalize_or"), std::string::npos);
 
   for (const std::string &source : {extrude, knife, snapping}) {

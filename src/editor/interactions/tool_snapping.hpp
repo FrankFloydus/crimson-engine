@@ -9,6 +9,7 @@
 #include <mesh/polygon/document.hpp>
 
 #include <optional>
+#include <span>
 
 namespace quader_editor_core {
 
@@ -27,10 +28,28 @@ std::optional<float> snap_insert_edge_loop_preview_factor(
 	double grid_size,
 	bool snap_enabled);
 quader::QVec3 snap_knife_point_to_grid(quader::QVec3 point, double grid_size, bool snap_enabled);
+std::optional<quader::QVec3> snap_knife_point_to_edge_grid(
+	const quader_poly::Document& document,
+	quader_poly::Edge edge,
+	quader::QVec3 point,
+	double grid_size,
+	bool snap_enabled);
+std::optional<quader::QVec3> snap_knife_point_to_face_grid(
+	const quader_poly::Document& document,
+	quader_poly::ElementId face_id,
+	quader::QVec3 point,
+	double grid_size,
+	bool snap_enabled);
 quader::QVec3 constrain_knife_point_to_axis(
 	quader::QVec3 previous,
 	quader::QVec3 point,
 	quader::QVec3 face_normal,
+	double grid_size,
+	bool snap_enabled);
+std::optional<quader::QVec3> constrain_knife_point_to_face_directions(
+	quader::QVec3 previous,
+	quader::QVec3 point,
+	std::span<const quader::QVec3> face_directions,
 	double grid_size,
 	bool snap_enabled);
 

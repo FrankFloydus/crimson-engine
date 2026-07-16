@@ -49,6 +49,7 @@
 #include <editor/interactions/box_tool.hpp>
 #include <editor/interactions/cut_tool.hpp>
 #include <editor/interactions/mirror_tool.hpp>
+#include <editor/interactions/tool_math_internal.hpp>
 #include <editor/interactions/tool_transform_math.hpp>
 #include <editor/interactions/selection_box.hpp>
 #include <editor/interactions/selection_edit.hpp>
@@ -3213,6 +3214,18 @@ public:
   }
 
   ModelingCommandResult activate_viewport_tool(ModelingViewportTool tool) {
+    bool selection_mode_changed = false;
+    std::string selection_mode_message;
+    if (tool == ModelingViewportTool::Knife &&
+        app_selection_mode_ != ModelingSelectionMode::Edge) {
+      const ModelingCommandResult mode_result =
+          set_selection_mode(ModelingSelectionMode::Edge);
+      if (!mode_result.ok) {
+        return mode_result;
+      }
+      selection_mode_changed = mode_result.changed;
+      selection_mode_message = mode_result.message;
+    }
     const bool preserve_group_selection =
         app_selection_mode_ == ModelingSelectionMode::Group;
     const bool preserve_scene_transform_selection =
@@ -3233,6 +3246,10 @@ public:
           app_selection_mode_ = ModelingSelectionMode::Group;
         }
         invalidate_selection_overlay_caches();
+      }
+      result.changed = result.changed || selection_mode_changed;
+      if (result.message.empty()) {
+        result.message = selection_mode_message;
       }
       return result;
     };
@@ -3324,22 +3341,43 @@ public:
                                                object_registry_, event.ray);
   }
 
-  [[nodiscard]] std::optional<quader_editor_core::PickHitRecord>
-  knife_pick_target(const ModelingToolRayEvent &event,
-                    int target_object_id = -1) const {
+  [[nodiscard]] std::array<
+      std::optional<quader_editor_core::PickHitRecord>, 3U>
+  knife_pick_targets(const ModelingToolRayEvent &event,
+                     int target_object_id = -1) const {
     constexpr std::array kModes{
         quader_poly::SelectionMode::Vertex,
         quader_poly::SelectionMode::Edge,
         quader_poly::SelectionMode::Face,
     };
-    for (const quader_poly::SelectionMode mode : kModes) {
-      const std::optional<quader_editor_core::PickHitRecord> hit =
-          pick_tool_target(event, mode, target_object_id);
-      if (hit.has_value()) {
-        return hit;
+    quader_poly::PickOptions options =
+        quader_editor_core::selection_pick_options_from_radii(
+            event.vertex_radius, event.edge_radius);
+    quader_poly::PickOptions face_options = options;
+    face_options.mode = quader_poly::SelectionMode::Face;
+    const std::vector<quader_editor_core::PolygonObject> &objects =
+        cached_scene_transformed_objects_for_picking();
+    const std::vector<quader_editor_core::PickObjectBounds> &bounds =
+        cached_pick_object_bounds();
+    const std::vector<quader_editor_core::PickObjectFaceGeometry>
+        &face_geometry = cached_pick_face_geometry(face_options);
+    std::array<std::optional<quader_editor_core::PickHitRecord>, kModes.size()>
+        hits;
+    const bool requires_edge_seed =
+        !runtime_.knife_state().has_active_stroke;
+    for (std::size_t index = 0U; index < kModes.size(); ++index) {
+      if (requires_edge_seed && kModes[index] != quader_poly::SelectionMode::Edge) {
+        continue;
       }
+      options.mode = kModes[index];
+      hits[index] = quader_editor_core::pick_nearest(
+          objects,
+          {.ray = to_runtime(event.ray),
+           .options = options,
+           .target_object_id = target_object_id},
+          bounds, face_geometry);
     }
-    return std::nullopt;
+    return hits;
   }
 
   [[nodiscard]] std::optional<quader_editor_core::PickHitRecord>
@@ -3410,6 +3448,265 @@ public:
         event.grid_size, event.snap_enabled);
   }
 
+  /**
+   * Stores one topology-derived straight constraint for the active knife
+   * segment in world space.
+   */
+  struct KnifeStraightConstraint {
+    QVec3 previous;
+    QVec3 direction;
+    QVec3 point;
+    quader_poly::ElementId face_id = quader_poly::kInvalidElementId;
+  };
+
+  [[nodiscard]] static bool
+  knife_face_contains_edge(const quader_poly::Face &face,
+                           quader_poly::Edge edge) {
+    edge = quader_poly::make_edge(edge.a, edge.b);
+    for (std::size_t index = 0U; index < face.vertices.size(); ++index) {
+      if (quader_poly::make_edge(
+              face.vertices[index],
+              face.vertices[(index + 1U) % face.vertices.size()]) == edge) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  [[nodiscard]] static bool knife_face_contains_target(
+      const quader_poly::Face &face,
+      const quader_poly::KnifePointTarget &target) {
+    switch (target.kind) {
+    case quader_poly::KnifePointTargetKind::ExistingVertex:
+    case quader_poly::KnifePointTargetKind::InsertedVertex:
+      return std::ranges::find(face.vertices, target.vertex_id) !=
+             face.vertices.end();
+    case quader_poly::KnifePointTargetKind::ExistingEdge:
+      return knife_face_contains_edge(face, target.edge);
+    case quader_poly::KnifePointTargetKind::FacePoint:
+      return face.id == target.face_id;
+    }
+    return false;
+  }
+
+  [[nodiscard]] static bool
+  knife_face_contains_hit(const quader_poly::Face &face,
+                          const quader_editor_core::PickHitRecord &hit) {
+    switch (hit.kind) {
+    case quader_poly::ElementKind::Vertex:
+      return std::ranges::find(face.vertices, hit.vertex_id) !=
+             face.vertices.end();
+    case quader_poly::ElementKind::Edge:
+      return knife_face_contains_edge(face, hit.edge);
+    case quader_poly::ElementKind::Face:
+      return face.id == hit.face_id;
+    }
+    return false;
+  }
+
+  [[nodiscard]] const quader_poly::Face *knife_active_constraint_face(
+      const quader_poly::Document &document,
+      const quader_editor_core::PickHitRecord &hit) const {
+    const quader_editor_core::KnifeToolState &knife = runtime_.knife_state();
+    if (!knife.has_active_stroke ||
+        knife.previous_point_index >= knife.points.size()) {
+      return nullptr;
+    }
+
+    const quader_poly::KnifePointTarget &previous =
+        knife.points[knife.previous_point_index];
+    const quader_poly::Face *fallback = nullptr;
+    for (const quader_poly::Face &face : document.faces) {
+      if (!knife_face_contains_target(face, previous) ||
+          !knife_face_contains_hit(face, hit)) {
+        continue;
+      }
+      if (face.id == hit.face_id) {
+        return &face;
+      }
+      fallback = fallback != nullptr ? fallback : &face;
+    }
+    return fallback;
+  }
+
+  [[nodiscard]] static std::vector<QVec3> knife_face_directions(
+      const quader_poly::Document &document, const quader_poly::Face &face) {
+    std::vector<QVec3> directions;
+    directions.reserve(face.vertices.size());
+    for (std::size_t index = 0U; index < face.vertices.size(); ++index) {
+      const quader_poly::Vertex *first =
+          quader_poly::find_vertex(document, face.vertices[index]);
+      const quader_poly::Vertex *second = quader_poly::find_vertex(
+          document, face.vertices[(index + 1U) % face.vertices.size()]);
+      if (first == nullptr || second == nullptr) {
+        continue;
+      }
+      const QVec3 direction = normalize(second->position - first->position);
+      if (length_squared(direction) <= 0.000001F ||
+          std::ranges::any_of(directions, [&direction](QVec3 existing) {
+            return std::abs(dot(existing, direction)) >= 0.9999F;
+          })) {
+        continue;
+      }
+      directions.push_back(direction);
+    }
+    return directions;
+  }
+
+  [[nodiscard]] std::optional<KnifeStraightConstraint>
+  knife_straight_constraint(
+      const quader_editor_core::PolygonObject &object,
+      const quader_editor_core::PickHitRecord &hit,
+      QVec3 raw_world_position, double grid_size, bool snap_enabled) const {
+    const quader_editor_core::KnifeToolState &knife = runtime_.knife_state();
+    if (!knife.has_active_stroke ||
+        knife.previous_point_index >= knife.point_positions.size()) {
+      return std::nullopt;
+    }
+    const quader_poly::Face *face =
+        knife_active_constraint_face(object.document, hit);
+    if (face == nullptr) {
+      return std::nullopt;
+    }
+
+    const std::optional<QMat4> world_from_object =
+        modeling_object_world_transform(hit.object_id);
+    if (!world_from_object.has_value()) {
+      return std::nullopt;
+    }
+    const QVec3 previous = transform_point(
+        *world_from_object, knife.point_positions[knife.previous_point_index]);
+    const std::vector<QVec3> directions =
+        knife_face_directions(object.document, *face);
+    const std::optional<QVec3> constrained =
+        quader_editor_core::constrain_knife_point_to_face_directions(
+            previous, raw_world_position, directions, grid_size,
+            snap_enabled);
+    if (!constrained.has_value()) {
+      return std::nullopt;
+    }
+    const QVec3 direction = normalize(*constrained - previous);
+    if (length_squared(direction) <= 0.000001F) {
+      return std::nullopt;
+    }
+    return KnifeStraightConstraint{
+        .previous = previous,
+        .direction = direction,
+        .point = *constrained,
+        .face_id = face->id,
+    };
+  }
+
+  [[nodiscard]] static std::optional<QVec3>
+  knife_straight_edge_intersection(
+      const quader_poly::Document &document, quader_poly::Edge edge,
+      QVec3 raw_world_position, const KnifeStraightConstraint &constraint) {
+    const quader_poly::Vertex *first =
+        quader_poly::find_vertex(document, edge.a);
+    const quader_poly::Vertex *second =
+        quader_poly::find_vertex(document, edge.b);
+    if (first == nullptr || second == nullptr) {
+      return std::nullopt;
+    }
+
+    const QVec3 edge_direction = second->position - first->position;
+    const float edge_length = std::sqrt(length_squared(edge_direction));
+    if (edge_length <= 0.000001F) {
+      return std::nullopt;
+    }
+    const float tolerance = std::max(0.0001F, edge_length * 0.00001F);
+    const float parallel_measure = length_squared(
+        cross(constraint.direction, edge_direction / edge_length));
+    if (parallel_measure <= 0.000001F) {
+      const QVec3 from_line = raw_world_position - constraint.previous;
+      const QVec3 projected =
+          constraint.previous +
+          constraint.direction * dot(from_line, constraint.direction);
+      if (length_squared(projected - raw_world_position) >
+          tolerance * tolerance) {
+        return std::nullopt;
+      }
+      return raw_world_position;
+    }
+
+    const quader_geometry::QLineLineClosestPoints<float> intersection =
+        quader_geometry::closest_points_line_line<float>(
+            {quader_editor_core::tool_geometry_vec3(constraint.previous),
+             quader_editor_core::tool_geometry_vec3(constraint.direction)},
+            {quader_editor_core::tool_geometry_vec3(first->position),
+             quader_editor_core::tool_geometry_vec3(edge_direction)},
+            tolerance);
+    if (!intersection.valid ||
+        intersection.distance_squared > tolerance * tolerance ||
+        intersection.second_parameter <= 0.01F ||
+        intersection.second_parameter >= 0.99F) {
+      return std::nullopt;
+    }
+    return QVec3{intersection.midpoint.x, intersection.midpoint.y,
+                 intersection.midpoint.z};
+  }
+
+  [[nodiscard]] std::optional<quader_editor_core::PickHitRecord>
+  knife_hit_with_topology_safe_resolution(
+      const quader_editor_core::PickHitRecord &world_hit,
+      const ModelingToolRayEvent &event) const {
+    const std::optional<quader_editor_core::PickHitRecord> local_hit =
+        knife_hit_in_object_space(world_hit, event);
+    if (!local_hit.has_value() ||
+        world_hit.kind != quader_poly::ElementKind::Face ||
+        (!event.constrain_axis && !event.snap_enabled)) {
+      return local_hit;
+    }
+
+    quader_poly::PickOptions face_options =
+        quader_editor_core::selection_pick_options_from_radii(
+            event.vertex_radius, event.edge_radius);
+    face_options.mode = quader_poly::SelectionMode::Face;
+    const auto &geometry = cached_pick_face_geometry(face_options);
+    const auto object = std::find_if(
+        geometry.begin(), geometry.end(),
+        [&world_hit](const quader_editor_core::PickObjectFaceGeometry &entry) {
+          return entry.object_id == world_hit.object_id;
+        });
+    if (object == geometry.end()) {
+      return std::nullopt;
+    }
+
+    const std::optional<QMat4> world_from_object =
+        modeling_object_world_transform(world_hit.object_id);
+    if (!world_from_object.has_value()) {
+      return std::nullopt;
+    }
+    const QVec3 resolved_world_position =
+        transform_point(*world_from_object, local_hit->local_position);
+    const bool stays_on_face =
+        std::ranges::any_of(object->triangle_span(),
+                            [&local_hit, resolved_world_position](
+                                const quader_poly::PickFaceTriangle &triangle) {
+                              return triangle.face_id == local_hit->face_id &&
+                                     quader_geometry::point_in_triangle(
+                                         quader_editor_core::tool_geometry_vec3(
+                                             resolved_world_position),
+                                         quader_geometry::QTriangle3<float>{
+                                             quader_editor_core::tool_geometry_vec3(
+                                                 triangle.a),
+                                             quader_editor_core::tool_geometry_vec3(
+                                                 triangle.b),
+                                             quader_editor_core::tool_geometry_vec3(
+                                                 triangle.c)},
+                                         0.0001F, 0.001F);
+                            });
+    if (stays_on_face) {
+      return local_hit;
+    }
+    if (event.constrain_axis) {
+      return std::nullopt;
+    }
+    ModelingToolRayEvent unsnapped_event = event;
+    unsnapped_event.snap_enabled = false;
+    return knife_hit_in_object_space(world_hit, unsnapped_event);
+  }
+
   [[nodiscard]] std::optional<quader_editor_core::PickHitRecord>
   knife_hit_in_object_space(
       const quader_editor_core::PickHitRecord &world_hit,
@@ -3435,13 +3732,40 @@ public:
     }
 
     QVec3 resolved_world_position = world_hit.local_position;
+    quader_poly::ElementId resolved_face_id = world_hit.face_id;
+    quader_poly::ElementKind resolved_kind = world_hit.kind;
+    quader_poly::ElementId resolved_vertex_id = world_hit.vertex_id;
+    quader_poly::Edge resolved_edge = world_hit.edge;
     if (world_hit.kind == quader_poly::ElementKind::Edge) {
-      const QVec3 snapped_world_position =
-          quader_editor_core::snap_knife_point_to_grid(
-              resolved_world_position, event.grid_size, event.snap_enabled);
-      const std::optional<float> factor =
-          quader_poly::edge_factor_from_position(
-              object->document, world_hit.edge, snapped_world_position);
+      if (event.constrain_axis) {
+        const std::optional<KnifeStraightConstraint> constraint =
+            knife_straight_constraint(*object, world_hit,
+                                      resolved_world_position,
+                                      event.grid_size, event.snap_enabled);
+        if (!constraint.has_value()) {
+          return std::nullopt;
+        }
+        const std::optional<QVec3> intersection =
+            knife_straight_edge_intersection(
+                object->document, world_hit.edge, resolved_world_position,
+                *constraint);
+        if (!intersection.has_value()) {
+          return std::nullopt;
+        }
+        resolved_world_position = *intersection;
+        resolved_face_id = constraint->face_id;
+      } else {
+        const std::optional<QVec3> snapped =
+            quader_editor_core::snap_knife_point_to_edge_grid(
+                object->document, world_hit.edge, resolved_world_position,
+                event.grid_size, event.snap_enabled);
+        if (!snapped.has_value()) {
+          return std::nullopt;
+        }
+        resolved_world_position = *snapped;
+      }
+      const std::optional<float> factor = quader_poly::edge_factor_from_position(
+          object->document, world_hit.edge, resolved_world_position);
       const quader_poly::Vertex *a = quader_poly::find_vertex(
           object->document, world_hit.edge.a);
       const quader_poly::Vertex *b = quader_poly::find_vertex(
@@ -3449,11 +3773,65 @@ public:
       if (!factor.has_value() || a == nullptr || b == nullptr) {
         return std::nullopt;
       }
-      resolved_world_position =
-          a->position + ((b->position - a->position) * *factor);
+      if (*factor <= 0.01F || *factor >= 0.99F) {
+        if (!runtime_.knife_state().has_active_stroke) {
+          return std::nullopt;
+        }
+        resolved_kind = quader_poly::ElementKind::Vertex;
+        resolved_vertex_id = *factor <= 0.01F ? world_hit.edge.a
+                                              : world_hit.edge.b;
+        const quader_poly::Vertex *endpoint =
+            quader_poly::find_vertex(object->document, resolved_vertex_id);
+        if (endpoint == nullptr) {
+          return std::nullopt;
+        }
+        resolved_world_position = endpoint->position;
+      } else {
+        resolved_world_position =
+            a->position + ((b->position - a->position) * *factor);
+      }
+    } else if (world_hit.kind == quader_poly::ElementKind::Vertex &&
+               event.constrain_axis) {
+      const std::optional<KnifeStraightConstraint> constraint =
+          knife_straight_constraint(*object, world_hit,
+                                    resolved_world_position,
+                                    event.grid_size, event.snap_enabled);
+      if (!constraint.has_value()) {
+        return std::nullopt;
+      }
+      const float tolerance = std::max(
+          0.0001F,
+          std::sqrt(length_squared(resolved_world_position -
+                                   constraint->previous)) *
+              0.00001F);
+      if (length_squared(constraint->point - resolved_world_position) >
+          tolerance * tolerance) {
+        return std::nullopt;
+      }
+      resolved_face_id = constraint->face_id;
     } else if (world_hit.kind == quader_poly::ElementKind::Face) {
+      if (event.constrain_axis) {
+        const std::optional<KnifeStraightConstraint> constraint =
+            knife_straight_constraint(*object, world_hit,
+                                      resolved_world_position,
+                                      event.grid_size, event.snap_enabled);
+        if (!constraint.has_value()) {
+          return std::nullopt;
+        }
+        resolved_world_position = constraint->point;
+        resolved_face_id = constraint->face_id;
+      } else {
+        const std::optional<QVec3> snapped =
+            quader_editor_core::snap_knife_point_to_face_grid(
+                object->document, resolved_face_id, resolved_world_position,
+                event.grid_size, event.snap_enabled);
+        if (!snapped.has_value()) {
+          return std::nullopt;
+        }
+        resolved_world_position = *snapped;
+      }
       const quader_poly::Face *face =
-          quader_poly::find_face(object->document, world_hit.face_id);
+          quader_poly::find_face(object->document, resolved_face_id);
       if (face == nullptr || face->vertices.empty()) {
         return std::nullopt;
       }
@@ -3463,38 +3841,59 @@ public:
       if (origin == nullptr || length_squared(normal) <= 0.000001F) {
         return std::nullopt;
       }
-      const quader_editor_core::KnifeToolState &knife =
-          runtime_.knife_state();
-      if (knife.has_active_stroke && event.constrain_axis &&
-          knife.previous_point_index < knife.point_positions.size()) {
-        const QMat4 world_space_normal =
-            from_glm(glm::transpose(to_glm(*object_from_world)));
-        const QVec3 previous_face_normal = normalize(
-            transform_vector(world_space_normal, knife.face_normal));
-        resolved_world_position =
-            quader_editor_core::constrain_knife_point_to_axis(
-                transform_point(*world_from_object,
-                                knife.point_positions[knife.previous_point_index]),
-                resolved_world_position,
-                length_squared(previous_face_normal) > 0.000001F
-                    ? previous_face_normal
-                    : normal,
-                event.grid_size,
-                event.snap_enabled);
-      } else {
-        resolved_world_position =
-            quader_editor_core::snap_knife_point_to_grid(
-                resolved_world_position, event.grid_size,
-                event.snap_enabled);
-      }
       const float normal_length_squared = length_squared(normal);
       resolved_world_position =
           resolved_world_position -
           normal * (dot(resolved_world_position - origin->position, normal) /
                     normal_length_squared);
+
+      constexpr float kBoundaryToleranceSquared = 0.00000001F;
+      for (const quader_poly::ElementId vertex_id : face->vertices) {
+        const quader_poly::Vertex *vertex =
+            quader_poly::find_vertex(object->document, vertex_id);
+        if (vertex != nullptr &&
+            length_squared(vertex->position - resolved_world_position) <=
+                kBoundaryToleranceSquared) {
+          resolved_kind = quader_poly::ElementKind::Vertex;
+          resolved_vertex_id = vertex_id;
+          resolved_world_position = vertex->position;
+          break;
+        }
+      }
+      if (resolved_kind == quader_poly::ElementKind::Face) {
+        for (std::size_t index = 0U; index < face->vertices.size(); ++index) {
+          const quader_poly::Edge edge = quader_poly::make_edge(
+              face->vertices[index],
+              face->vertices[(index + 1U) % face->vertices.size()]);
+          const quader_poly::Vertex *first =
+              quader_poly::find_vertex(object->document, edge.a);
+          const quader_poly::Vertex *second =
+              quader_poly::find_vertex(object->document, edge.b);
+          const std::optional<float> factor =
+              quader_poly::edge_factor_from_position(
+                  object->document, edge, resolved_world_position);
+          if (first == nullptr || second == nullptr || !factor.has_value()) {
+            continue;
+          }
+          const QVec3 edge_point =
+              first->position + (second->position - first->position) * *factor;
+          if (length_squared(edge_point - resolved_world_position) >
+              kBoundaryToleranceSquared) {
+            continue;
+          }
+          resolved_kind = quader_poly::ElementKind::Edge;
+          resolved_edge = edge;
+          resolved_world_position = edge_point;
+          break;
+        }
+      }
     }
 
     quader_editor_core::PickHitRecord local_hit = world_hit;
+    local_hit.kind = resolved_kind;
+    local_hit.vertex_id = resolved_vertex_id;
+    local_hit.edge = resolved_edge;
+    local_hit.face_id = resolved_face_id;
     local_hit.local_position =
         transform_point(*object_from_world, resolved_world_position);
     const QMat4 object_space_normal =
@@ -3629,34 +4028,51 @@ public:
 
   ModelingCommandResult update_knife_hover(const ModelingToolRayEvent &event) {
     const int locked_object_id = runtime_.knife_state().target_object_id;
-    const std::optional<quader_editor_core::PickHitRecord> world_hit =
-        knife_pick_target(event,
-                          locked_object_id > 0 ? locked_object_id : -1);
-    const int coordinate_object_id =
-        world_hit.has_value() ? world_hit->object_id
-                              : std::max(locked_object_id, 0);
-    const std::optional<ModelingToolRayEvent> local_event =
-        tool_event_in_object_space(event, coordinate_object_id);
-    if (!local_event.has_value()) {
-      return {.ok = false,
-              .message = "Knife target transform is not invertible."};
+    const auto world_hits = knife_pick_targets(
+        event, locked_object_id > 0 ? locked_object_id : -1);
+    std::array<std::optional<quader_editor_core::PickHitRecord>, 3U>
+        local_hits;
+    std::array<std::optional<ModelingToolRayEvent>, 3U>
+        local_events;
+    for (std::size_t index = 0U; index < world_hits.size(); ++index) {
+      if (!world_hits[index].has_value()) {
+        continue;
+      }
+      local_events[index] =
+          tool_event_in_object_space(event, world_hits[index]->object_id);
+      if (!local_events[index].has_value()) {
+        return {.ok = false,
+                .message = "Knife target transform is not invertible."};
+      }
+      local_hits[index] =
+          knife_hit_with_topology_safe_resolution(*world_hits[index], event);
     }
-    const std::optional<quader_editor_core::PickHitRecord> local_hit =
-        world_hit.has_value() ? knife_hit_in_object_space(*world_hit, event)
-                              : std::nullopt;
-    if (world_hit.has_value() && !local_hit.has_value()) {
-      return {.ok = false,
-              .message = "Knife target transform is not invertible."};
+
+    bool changed = false;
+    for (std::size_t index = 0U; index < local_hits.size(); ++index) {
+      if (!local_hits[index].has_value()) {
+        continue;
+      }
+      changed = runtime_.update_knife_preview_from_hit(
+          session_, *local_hits[index], local_events[index]->grid_size, false,
+          false);
+      if (changed) {
+        break;
+      }
     }
-    const bool changed = local_hit.has_value()
-        ? runtime_.update_knife_preview_from_hit(
-              session_, *local_hit, modeling_runtime_camera(local_event->camera),
-              local_event->grid_size, false, false)
-        : runtime_.update_knife_preview_from_pick(
-              session_, to_runtime(local_event->ray),
-              modeling_runtime_camera(local_event->camera),
-              local_event->grid_size,
-              local_event->snap_enabled, local_event->constrain_axis, 0);
+    if (!changed) {
+      const std::optional<ModelingToolRayEvent> miss_event =
+          tool_event_in_object_space(event, std::max(locked_object_id, 0));
+      if (!miss_event.has_value()) {
+        return {.ok = false,
+                .message = "Knife target transform is not invertible."};
+      }
+      quader_editor_core::PickHitRecord miss;
+      miss.object_id = -1;
+      miss.kind = quader_poly::ElementKind::Face;
+      (void)runtime_.update_knife_preview_from_hit(
+          session_, miss, miss_event->grid_size, false, false);
+    }
     invalidate_selection_overlay_caches();
     return {.ok = true, .changed = changed};
   }
@@ -3673,9 +4089,8 @@ public:
       return {.ok = false,
               .message = "Knife target transform is not invertible."};
     }
-    const bool changed = runtime_.accept_knife_current_point(
-        session_, modeling_runtime_camera(local_event->camera),
-        local_event->grid_size);
+    const bool changed =
+        runtime_.accept_knife_current_point(local_event->grid_size);
     if (changed) {
       invalidate_selection_overlay_caches();
     }
