@@ -105,13 +105,13 @@ TEST(QtProjectWorkspaceTests,
 
   EXPECT_EQ(selection_toolbar.iconSize(), QSize(32, 32));
   EXPECT_EQ(tool_toolbar.iconSize(), QSize(32, 32));
-  EXPECT_EQ(expect_persistent_button_faces(selection_toolbar, 36), 5);
+  EXPECT_EQ(expect_persistent_button_faces(selection_toolbar, 30), 5);
   EXPECT_EQ(expect_persistent_button_faces(tool_toolbar, 40), 12);
   for (QToolButton *button :
        selection_toolbar.findChildren<QToolButton *>()) {
     if (button->defaultAction() != nullptr &&
         button->defaultAction()->isCheckable()) {
-      EXPECT_EQ(button->maximumHeight(), 36);
+      EXPECT_EQ(button->maximumHeight(), 30);
     }
   }
 

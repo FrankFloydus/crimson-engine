@@ -2027,9 +2027,16 @@ TEST(ProgrammaticApiGuardrailTests, PublicCommandTargetsUseSharedPrefixOwner) {
             std::string::npos);
   EXPECT_NE(command_targets.find("kQuaderToolActivationCommandTargetPrefix"),
             std::string::npos);
+  EXPECT_NE(
+      command_targets.find("kQuaderViewportSelectionModeTargetPrefix"),
+      std::string::npos);
   EXPECT_NE(commands_api.find("quader_modeling_command_target_id"),
             std::string::npos);
   EXPECT_NE(commands_api.find("quader_tool_activation_command_target_id"),
+            std::string::npos);
+  EXPECT_NE(commands_api.find("keybinding_target_id_for_selection_mode"),
+            std::string::npos);
+  EXPECT_NE(commands_api.find("quader_viewport_selection_mode_target_id"),
             std::string::npos);
   EXPECT_NE(command_tool.find("quader_modeling_command_target_id"),
             std::string::npos);

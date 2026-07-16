@@ -57,6 +57,27 @@ std::string command_id_for_tool_activation(std::string_view tool_id) {
   return quader_tool_activation_command_target_id(tool_id);
 }
 
+std::string_view selection_mode_id(QuaderSelectionMode mode) {
+  switch (mode) {
+  case QuaderSelectionMode::Vertex:
+    return "vertex";
+  case QuaderSelectionMode::Edge:
+    return "edge";
+  case QuaderSelectionMode::Face:
+    return "face";
+  case QuaderSelectionMode::Object:
+    return "object";
+  case QuaderSelectionMode::Group:
+    return "group";
+  }
+  return "object";
+}
+
+std::string
+keybinding_target_id_for_selection_mode(QuaderSelectionMode mode) {
+  return quader_viewport_selection_mode_target_id(selection_mode_id(mode));
+}
+
 std::filesystem::path default_keybindings_path() {
   if (const char *local_app_data = std::getenv("LOCALAPPDATA")) {
     return std::filesystem::path(local_app_data) / "Quader" /
@@ -233,6 +254,8 @@ public:
     command_id_for_modeling_action(std::string_view action_id) const;
     [[nodiscard]] std::string
     command_id_for_tool_activation(std::string_view tool_id) const;
+    [[nodiscard]] std::string
+    keybinding_target_id_for_selection_mode(QuaderSelectionMode mode) const;
     [[nodiscard]] std::string shortcut_for(std::string_view command_id) const;
     [[nodiscard]] std::string shortcut_for(QuaderCommandId command_id) const;
     [[nodiscard]] std::vector<QuaderKeybindingRule> keybindings() const;
@@ -389,6 +412,11 @@ std::string QuaderCommandsApi::Impl::command_id_for_modeling_action(
 std::string QuaderCommandsApi::Impl::command_id_for_tool_activation(
     std::string_view tool_id) const {
   return quader::command_id_for_tool_activation(tool_id);
+}
+
+std::string QuaderCommandsApi::Impl::keybinding_target_id_for_selection_mode(
+    QuaderSelectionMode mode) const {
+  return quader::keybinding_target_id_for_selection_mode(mode);
 }
 
 std::string
@@ -1111,6 +1139,11 @@ std::string QuaderCommandsApi::command_id_for_modeling_action(
 std::string QuaderCommandsApi::command_id_for_tool_activation(
     std::string_view tool_id) const {
   return impl_->command_id_for_tool_activation(tool_id);
+}
+
+std::string QuaderCommandsApi::keybinding_target_id_for_selection_mode(
+    QuaderSelectionMode mode) const {
+  return impl_->keybinding_target_id_for_selection_mode(mode);
 }
 
 std::string QuaderCommandsApi::shortcut_for(std::string_view command_id) const {

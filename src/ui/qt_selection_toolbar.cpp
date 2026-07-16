@@ -6,6 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "ui/qt_selection_toolbar.hpp"
 
+#include "api/quader_editor_api.hpp"
 #include "ui/qt_toolbar_button_presentation.hpp"
 
 #include "core/localization_service.hpp"
@@ -21,12 +22,13 @@
 
 #include <array>
 #include <cstddef>
+#include <string>
 #include <utility>
 
 namespace quader {
 namespace {
 
-constexpr int kSelectionModeButtonHeight = 36;
+constexpr int kSelectionModeButtonHeight = 30;
 
 /// Describes one stable selection toolbar action and its localized resources.
 struct SelectionModeSpec {
@@ -118,13 +120,35 @@ void QtSelectionToolbar::set_localization(
     entry.action->setText(text);
     entry.action->setToolTip(text);
   }
+  synchronization_valid_ = false;
+}
+
+void QtSelectionToolbar::synchronize(const QuaderEditorApi &editor,
+                                     QuaderSelectionMode mode, bool force) {
+  if (!force && synchronization_valid_ && presented_mode_ == mode) {
+    return;
+  }
+
+  set_selection_mode(mode);
+  for (const ModeAction &entry : mode_actions_) {
+    const std::string target_id =
+        editor.commands().keybinding_target_id_for_selection_mode(entry.mode);
+    const std::string shortcut = editor.commands().shortcut_for(target_id);
+    QString tooltip = entry.action->text();
+    if (!shortcut.empty()) {
+      tooltip.append(
+          QStringLiteral(" [%1]").arg(QString::fromStdString(shortcut)));
+    }
+    if (entry.action->toolTip() != tooltip) {
+      entry.action->setToolTip(tooltip);
+    }
+  }
+  synchronization_valid_ = true;
 }
 
 void QtSelectionToolbar::set_selection_mode(QuaderSelectionMode mode) {
-  if (presented_mode_ == mode) {
-    return;
-  }
   presented_mode_ = mode;
+  synchronization_valid_ = false;
   for (const ModeAction &entry : mode_actions_) {
     const QSignalBlocker blocker(entry.action);
     entry.action->setChecked(entry.mode == mode);

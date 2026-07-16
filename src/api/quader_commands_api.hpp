@@ -21,6 +21,7 @@
 namespace quader {
 
 class QuaderApi;
+enum class QuaderSelectionMode;
 #ifndef NDEBUG
 class QuaderDevToolsApi;
 #endif
@@ -107,6 +108,8 @@ public:
     command_id_for_modeling_action(std::string_view action_id) const;
     [[nodiscard]] std::string
     command_id_for_tool_activation(std::string_view tool_id) const;
+    [[nodiscard]] std::string
+    keybinding_target_id_for_selection_mode(QuaderSelectionMode mode) const;
     [[nodiscard]] std::string shortcut_for(std::string_view command_id) const;
     [[nodiscard]] std::string shortcut_for(QuaderCommandId command_id) const;
     [[nodiscard]] std::vector<QuaderKeybindingRule> keybindings() const;

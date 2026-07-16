@@ -907,7 +907,7 @@ TEST(UiLayoutGuardrailTests,
   expect_contains(toolbar, "setMovable(true)");
   expect_contains(toolbar, "setFloatable(true)");
   expect_contains(toolbar, "setIconSize(QSize(32, 32))");
-  expect_contains(toolbar, "kSelectionModeButtonHeight = 36");
+  expect_contains(toolbar, "kSelectionModeButtonHeight = 30");
   expect_contains(toolbar,
                   "button->setFixedHeight(kSelectionModeButtonHeight)");
   expect_contains(toolbar, "Qt::ToolButtonTextBesideIcon");
@@ -927,7 +927,25 @@ TEST(UiLayoutGuardrailTests,
                   "addToolBar(Qt::TopToolBarArea, selection_toolbar_)");
   expect_contains(ui_system, "editor_->selection().set_mode(mode)");
   expect_contains(ui_system,
-                  "selection_toolbar_->set_selection_mode(selection.mode)");
+                  "selection_toolbar_->synchronize(*editor_, selection.mode)");
+  expect_contains(toolbar_header,
+                  "void synchronize(const QuaderEditorApi &editor");
+  expect_contains(
+      ui_system,
+      "selection_toolbar_->synchronize(*editor_, selection.mode, true)");
+  expect_contains(toolbar, "if (!force && synchronization_valid_");
+  expect_contains(toolbar,
+                  "keybinding_target_id_for_selection_mode(entry.mode)");
+  expect_contains(toolbar, "editor.commands().shortcut_for(target_id)");
+  expect_missing(toolbar, "editor.commands().available()");
+  const std::size_t unchanged_state_gate =
+      toolbar.find("if (!force && synchronization_valid_");
+  const std::size_t shortcut_lookup =
+      toolbar.find("editor.commands().shortcut_for(target_id)");
+  ASSERT_NE(unchanged_state_gate, std::string::npos);
+  ASSERT_NE(shortcut_lookup, std::string::npos);
+  EXPECT_LT(unchanged_state_gate, shortcut_lookup);
+  expect_contains(toolbar, "QStringLiteral(\" [%1]\")");
   expect_contains(toolbar,
                   "configure_native_toolbar_button_face(*this, *entry.action,");
   expect_contains(button_presentation, "button->setAutoRaise(false)");

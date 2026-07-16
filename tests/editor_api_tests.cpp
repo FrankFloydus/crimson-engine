@@ -803,6 +803,41 @@ TEST(EditorApiTests, AggregatesDocumentApisAndCommandRouting) {
               quader::quader_modeling_command_target_id("bridge_edges"));
     EXPECT_EQ(editor.commands().command_id_for_tool_activation("knife"),
               quader::quader_tool_activation_command_target_id("knife"));
+    EXPECT_EQ(editor.commands().keybinding_target_id_for_selection_mode(
+                  quader::QuaderSelectionMode::Vertex),
+              quader::quader_viewport_selection_mode_target_id("vertex"));
+    EXPECT_EQ(editor.commands().keybinding_target_id_for_selection_mode(
+                  quader::QuaderSelectionMode::Edge),
+              quader::quader_viewport_selection_mode_target_id("edge"));
+    EXPECT_EQ(editor.commands().keybinding_target_id_for_selection_mode(
+                  quader::QuaderSelectionMode::Face),
+              quader::quader_viewport_selection_mode_target_id("face"));
+    EXPECT_EQ(editor.commands().keybinding_target_id_for_selection_mode(
+                  quader::QuaderSelectionMode::Object),
+              quader::quader_viewport_selection_mode_target_id("object"));
+    EXPECT_EQ(editor.commands().keybinding_target_id_for_selection_mode(
+                  quader::QuaderSelectionMode::Group),
+              quader::quader_viewport_selection_mode_target_id("group"));
+    EXPECT_EQ(editor.commands().shortcut_for(
+                  editor.commands().keybinding_target_id_for_selection_mode(
+                      quader::QuaderSelectionMode::Vertex)),
+              "Keypad1");
+    EXPECT_EQ(editor.commands().shortcut_for(
+                  editor.commands().keybinding_target_id_for_selection_mode(
+                      quader::QuaderSelectionMode::Edge)),
+              "Keypad2");
+    EXPECT_EQ(editor.commands().shortcut_for(
+                  editor.commands().keybinding_target_id_for_selection_mode(
+                      quader::QuaderSelectionMode::Face)),
+              "Keypad3");
+    EXPECT_EQ(editor.commands().shortcut_for(
+                  editor.commands().keybinding_target_id_for_selection_mode(
+                      quader::QuaderSelectionMode::Object)),
+              "Keypad4");
+    EXPECT_EQ(editor.commands().shortcut_for(
+                  editor.commands().keybinding_target_id_for_selection_mode(
+                      quader::QuaderSelectionMode::Group)),
+              "Keypad5");
     EXPECT_FALSE(editor.commands().last_status().has_value());
     const quader::QuaderApiVoidResult missing_command =
         editor.commands().execute("__missing_command__");
@@ -1664,7 +1699,10 @@ TEST(EditorApiTests, ViewportKeybindingsResolveContextAndUserOverrides) {
   quader::ViewportToolState state;
   quader::ViewportShortcut shortcut;
   const std::string face_selection_target =
-      quader::quader_viewport_selection_mode_target_id("face");
+      editor.commands().keybinding_target_id_for_selection_mode(
+          quader::QuaderSelectionMode::Face);
+  EXPECT_EQ(face_selection_target,
+            quader::quader_viewport_selection_mode_target_id("face"));
   EXPECT_EQ(editor.commands().shortcut_for(face_selection_target), "Keypad3");
   ASSERT_TRUE(editor.commands().resolve_viewport_shortcut(
       quader::ViewportKey::Number3, {}, state, true, false, shortcut));

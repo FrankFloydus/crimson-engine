@@ -502,7 +502,7 @@ void UISystem::install_runtime_hooks(
         present_lifecycle_result(editor_->selection().set_mode(mode));
         const QuaderSelectionSummary selection =
             editor_->selection().summary();
-        selection_toolbar_->set_selection_mode(selection.mode);
+        selection_toolbar_->synchronize(*editor_, selection.mode, true);
         tool_toolbar_->synchronize(*editor_, selection, true);
       });
   tool_toolbar_->set_tool_requested_callback(
@@ -945,7 +945,7 @@ void UISystem::show_workspace() {
   if (presentation_changed && editor_ != nullptr &&
       selection_toolbar_ != nullptr && tool_toolbar_ != nullptr) {
     const QuaderSelectionSummary selection = editor_->selection().summary();
-    selection_toolbar_->set_selection_mode(selection.mode);
+    selection_toolbar_->synchronize(*editor_, selection.mode, true);
     tool_toolbar_->synchronize(*editor_, selection, true);
   }
   panels_.apply_settings(settings_);
@@ -1123,7 +1123,7 @@ void UISystem::refresh(const FrameTiming &frame_timing,
   if (selection_toolbar_ != nullptr && tool_toolbar_ != nullptr &&
       editor_ != nullptr) {
     const QuaderSelectionSummary selection = editor_->selection().summary();
-    selection_toolbar_->set_selection_mode(selection.mode);
+    selection_toolbar_->synchronize(*editor_, selection.mode);
     tool_toolbar_->synchronize(*editor_, selection);
   }
   if (viewport_panel_ != nullptr) {

@@ -22,6 +22,7 @@ class QWidget;
 namespace quader {
 
 class LocalizationService;
+class QuaderEditorApi;
 
 /**
  * Presents Quader's selection modes as one movable native Qt toolbar.
@@ -32,6 +33,8 @@ public:
   explicit QtSelectionToolbar(QWidget *parent = nullptr);
 
   void set_localization(const LocalizationService &localization);
+  void synchronize(const QuaderEditorApi &editor, QuaderSelectionMode mode,
+                   bool force = false);
   void set_selection_mode(QuaderSelectionMode mode);
   void set_mode_requested_callback(
       std::function<void(QuaderSelectionMode)> callback);
@@ -47,6 +50,7 @@ private:
 
   QLabel *selection_label_ = nullptr;
   std::array<ModeAction, 5> mode_actions_{};
+  bool synchronization_valid_ = false;
   std::optional<QuaderSelectionMode> presented_mode_;
   std::function<void(QuaderSelectionMode)> mode_requested_;
 };
