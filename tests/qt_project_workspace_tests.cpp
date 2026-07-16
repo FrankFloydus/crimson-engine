@@ -19,6 +19,7 @@
 #include "viewport/viewport_settings.hpp"
 
 #include <QAction>
+#include <QAbstractItemModel>
 #include <QAbstractItemView>
 #include <QApplication>
 #include <QComboBox>
@@ -104,6 +105,47 @@ QImage render_toolbar_button_face(QToolButton &button,
   button.style()->drawPrimitive(QStyle::PE_PanelButtonCommand, &option,
                                 &painter, &button);
   return image;
+}
+
+void expect_popup_restores_committed_combo_item(QComboBox &combo,
+                                                QApplication &application) {
+  ASSERT_GE(combo.currentIndex(), 0);
+  ASSERT_GT(combo.count(), 1);
+
+  for (int index = 0; index < combo.count(); ++index) {
+    EXPECT_FALSE(combo.itemData(index, Qt::CheckStateRole).isValid())
+        << "native combo rows must not render checkboxes: " << index;
+  }
+
+  const QModelIndex committed_index = combo.model()->index(
+      combo.currentIndex(), combo.modelColumn(), combo.rootModelIndex());
+  ASSERT_TRUE(committed_index.isValid());
+  const int hovered_row = combo.currentIndex() == 0 ? 1 : 0;
+  const QModelIndex hovered_index = combo.model()->index(
+      hovered_row, combo.modelColumn(), combo.rootModelIndex());
+  ASSERT_TRUE(hovered_index.isValid());
+
+  combo.showPopup();
+  application.processEvents();
+  EXPECT_EQ(combo.view()->currentIndex(), committed_index);
+  ASSERT_NE(combo.view()->selectionModel(), nullptr);
+  EXPECT_TRUE(combo.view()->selectionModel()->isSelected(committed_index));
+  EXPECT_TRUE(combo.view()->visualRect(committed_index).intersects(
+      combo.view()->viewport()->rect()));
+
+  combo.view()->selectionModel()->setCurrentIndex(
+      hovered_index,
+      QItemSelectionModel::ClearAndSelect | QItemSelectionModel::Rows);
+  EXPECT_EQ(combo.currentIndex(), committed_index.row());
+
+  combo.hidePopup();
+  combo.showPopup();
+  application.processEvents();
+  EXPECT_EQ(combo.view()->currentIndex(), committed_index);
+  EXPECT_TRUE(combo.view()->selectionModel()->isSelected(committed_index));
+  EXPECT_TRUE(combo.view()->visualRect(committed_index).intersects(
+      combo.view()->viewport()->rect()));
+  combo.hidePopup();
 }
 
 } // namespace
@@ -309,6 +351,8 @@ TEST(QtProjectWorkspaceTests,
   host.move(40, 40);
   host.show();
   application.processEvents();
+  expect_popup_restores_committed_combo_item(*grid_combo, application);
+  expect_popup_restores_committed_combo_item(*angle_combo, application);
   ASSERT_EQ(angle_combo->height(), 30);
   const QPoint popup_anchor =
       angle_combo->mapToGlobal(QPoint(0, angle_combo->height()));
@@ -420,6 +464,8 @@ TEST(QtProjectWorkspaceTests,
   EXPECT_EQ(grid_requests, 1);
   EXPECT_EQ(angle_requests, 1);
   EXPECT_EQ(toggle_requests, (std::array<int, 5>{1, 1, 1, 1, 1}));
+  expect_popup_restores_committed_combo_item(*grid_combo, application);
+  expect_popup_restores_committed_combo_item(*angle_combo, application);
   for (std::size_t index = 0; index < toggle_actions.size(); ++index) {
     EXPECT_EQ(toggle_actions[index]->isChecked(), owner_toggles[index]);
   }

@@ -1185,7 +1185,6 @@ Stable tool IDs:
 ```text
 select
 move
-extend
 extrude
 rotate
 scale
@@ -1209,7 +1208,6 @@ public:
 
   SelectTool activate_select_tool();
   TransformTool activate_move_tool();
-  TransformTool activate_extend_tool();
   TransformTool activate_extrude_tool();
   TransformTool activate_rotate_tool();
   TransformTool activate_scale_tool();
@@ -1276,8 +1274,8 @@ public:
 };
 ```
 
-`TransformTool::begin/update(Vec3)` uses the active tool to interpret the value: `move` and
-`extend` use translation delta, `extrude` uses face offset, `rotate` uses Euler radians, and
+`TransformTool::begin/update(Vec3)` uses the active tool to interpret the value: `move` uses a
+translation delta, `extrude` uses face offset, `rotate` uses Euler radians, and
 `scale` uses scale factors.
 
 ## Viewport Input

@@ -340,14 +340,24 @@ void append_selected_mesh_bounds_cages(ViewportOverlayFrame &frame,
                                        const RenderOverlaySelectionSnapshot
                                            &snapshot,
                                        ModelingSelectionMode selection_mode) {
-  if (!selection_mode_uses_selected_mesh_bounds(selection_mode)) {
+  if (!selection_mode_uses_selected_mesh_bounds(selection_mode) ||
+      snapshot.selected_mesh_bounds.empty()) {
     return;
   }
 
-  for (const RenderOverlayBoundsSnapshot &bounds :
-       snapshot.selected_mesh_bounds) {
-    append_bounds_cage(frame, bounds);
+  RenderOverlayBoundsSnapshot combined = snapshot.selected_mesh_bounds.front();
+  for (std::size_t index = 1u; index < snapshot.selected_mesh_bounds.size();
+       ++index) {
+    const RenderOverlayBoundsSnapshot &bounds =
+        snapshot.selected_mesh_bounds[index];
+    combined.min.x = std::min(combined.min.x, bounds.min.x);
+    combined.min.y = std::min(combined.min.y, bounds.min.y);
+    combined.min.z = std::min(combined.min.z, bounds.min.z);
+    combined.max.x = std::max(combined.max.x, bounds.max.x);
+    combined.max.y = std::max(combined.max.y, bounds.max.y);
+    combined.max.z = std::max(combined.max.z, bounds.max.z);
   }
+  append_bounds_cage(frame, combined);
 }
 
 void append_selected_light_markers(ViewportOverlayFrame &frame,
@@ -505,6 +515,11 @@ ViewportOverlayFrame ViewportSceneOverlayBuilder::build_selection_frame(
     bool point_light_gizmos_visible,
     ModelingSelectionMode selection_mode) {
   QDR_PROFILE_FUNCTION();
+  if (selection_mode == ModelingSelectionMode::Object &&
+      snapshot.selected_mesh_bounds.size() > 1u) {
+    base_frame = strip_persistent_object_selection(std::move(base_frame),
+                                                   selection_mode);
+  }
   append_hierarchy_selection_wires(base_frame, snapshot);
   append_group_selection_cages(base_frame, snapshot);
   append_selected_mesh_bounds_cages(base_frame, snapshot, selection_mode);

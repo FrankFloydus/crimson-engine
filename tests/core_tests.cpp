@@ -2337,10 +2337,8 @@ TEST(ViewportOverlayPolicyTests,
      PersistentObjectSelectionCacheOwnsFaceFillsOnly) {
   EXPECT_FALSE(selected_object_face_fills_enabled_for_selection_count(0u));
   EXPECT_TRUE(selected_object_face_fills_enabled_for_selection_count(1u));
-  EXPECT_TRUE(selected_object_face_fills_enabled_for_selection_count(
-      kSelectedObjectFaceFillSelectionLimit));
-  EXPECT_FALSE(selected_object_face_fills_enabled_for_selection_count(
-      kSelectedObjectFaceFillSelectionLimit + 1u));
+  EXPECT_FALSE(selected_object_face_fills_enabled_for_selection_count(2u));
+  EXPECT_FALSE(selected_object_face_fills_enabled_for_selection_count(64u));
 
   const std::string cache_source =
       read_source_file("src/render/overlay/selected_object_overlay_cache.cpp");

@@ -449,8 +449,6 @@ to_runtime(ModelingViewportTool tool) {
   switch (tool) {
   case ModelingViewportTool::Move:
     return quader_editor_core::ViewportInteractionTool::Move;
-  case ModelingViewportTool::Extend:
-    return quader_editor_core::ViewportInteractionTool::Extend;
   case ModelingViewportTool::Extrude:
     return quader_editor_core::ViewportInteractionTool::Extrude;
   case ModelingViewportTool::Rotate:
@@ -482,8 +480,6 @@ from_runtime_viewport_tool(quader_editor_core::ViewportInteractionTool tool) {
   switch (tool) {
   case quader_editor_core::ViewportInteractionTool::Move:
     return ModelingViewportTool::Move;
-  case quader_editor_core::ViewportInteractionTool::Extend:
-    return ModelingViewportTool::Extend;
   case quader_editor_core::ViewportInteractionTool::Extrude:
     return ModelingViewportTool::Extrude;
   case quader_editor_core::ViewportInteractionTool::Rotate:
@@ -3653,7 +3649,6 @@ public:
           quader_editor_core::ViewportInteractionTool::Select);
     case quader_editor_core::ViewportInteractionTool::Select:
     case quader_editor_core::ViewportInteractionTool::Move:
-    case quader_editor_core::ViewportInteractionTool::Extend:
     case quader_editor_core::ViewportInteractionTool::Extrude:
     case quader_editor_core::ViewportInteractionTool::Rotate:
     case quader_editor_core::ViewportInteractionTool::Scale:

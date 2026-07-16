@@ -33,7 +33,7 @@ ToolsApi::ToolsApi(std::shared_ptr<ModelingApiContext> context)
     : context_(std::move(context)) {}
 
 std::vector<ToolDescriptor> ToolsApi::catalog() const {
-  return {{"select", "Select"}, {"move", "Move"}, {"extend", "Extend"},
+  return {{"select", "Select"}, {"move", "Move"},
           {"extrude", "Extrude"}, {"rotate", "Rotate"}, {"scale", "Scale"},
           {"box", "Box"}, {"insert_edge_loop", "Insert Edge Loop"},
           {"knife", "Knife"}, {"cut", "Cut"}, {"poly", "Poly"},
@@ -57,11 +57,6 @@ SelectTool ToolsApi::activate_select_tool() {
 TransformTool ToolsApi::activate_move_tool() {
   context_->active_tool = "move";
   return TransformTool(context_, "move");
-}
-
-TransformTool ToolsApi::activate_extend_tool() {
-  context_->active_tool = "extend";
-  return TransformTool(context_, "extend");
 }
 
 TransformTool ToolsApi::activate_extrude_tool() {
@@ -181,7 +176,7 @@ namespace {
 
 [[nodiscard]] bool transform_tool_uses_translate_preview(
     std::string_view operation_id) {
-  return operation_id == "move" || operation_id == "extend";
+  return operation_id == "move";
 }
 
 [[nodiscard]] Vec3 normalized_transform_tool_value(

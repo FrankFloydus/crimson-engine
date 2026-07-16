@@ -329,7 +329,6 @@ struct QuaderMeshArrangementOptions {
 enum class QuaderViewportTool {
     Select,
     Move,
-    Extend,
     Extrude,
     Rotate,
     Scale,

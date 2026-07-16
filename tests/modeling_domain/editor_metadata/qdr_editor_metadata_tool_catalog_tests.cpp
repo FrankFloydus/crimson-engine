@@ -64,7 +64,6 @@ TEST(QdrEditorMetadataToolCatalogTests, HostContractToolCatalogExposesHostGlueHi
 	EXPECT_TRUE(same_text(require_tool("poly").primary_shortcut, ""));
 
 	EXPECT_TRUE(require_tool("move").transform_tool);
-	EXPECT_TRUE(require_tool("extend").transform_tool);
 	EXPECT_TRUE(require_tool("extrude").transform_tool);
 	EXPECT_TRUE(require_tool("rotate").transform_tool);
 	EXPECT_TRUE(require_tool("scale").transform_tool);

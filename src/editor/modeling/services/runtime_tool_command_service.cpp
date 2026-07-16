@@ -32,8 +32,6 @@ to_runtime(ModelingViewportTool tool) {
   switch (tool) {
   case ModelingViewportTool::Move:
     return quader_editor_core::ViewportInteractionTool::Move;
-  case ModelingViewportTool::Extend:
-    return quader_editor_core::ViewportInteractionTool::Extend;
   case ModelingViewportTool::Extrude:
     return quader_editor_core::ViewportInteractionTool::Extrude;
   case ModelingViewportTool::Rotate:

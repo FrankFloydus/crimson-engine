@@ -1489,6 +1489,12 @@ TEST(ModelingSdkConsumerTests,
       .error_policy = ErrorPolicy::StoreLastError,
   });
   EXPECT_EQ(quader.tools().active_tool(), "select");
+  const std::vector<ToolDescriptor> tool_catalog = quader.tools().catalog();
+  EXPECT_EQ(std::count_if(tool_catalog.begin(), tool_catalog.end(),
+                          [](const ToolDescriptor &tool) {
+                            return tool.id == "extend";
+                          }),
+            0);
 
   BoxTool box = quader.tools().activate_box_tool({.name = "Tool Box"});
   MeshHandle mesh = box.commit();

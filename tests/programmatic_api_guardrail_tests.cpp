@@ -15,6 +15,7 @@
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -2213,4 +2214,57 @@ TEST(ProgrammaticApiGuardrailTests,
             std::string::npos);
   EXPECT_EQ(editor_window.find("ProjectSession"), std::string::npos);
   EXPECT_EQ(editor_window.find("ProjectMaterialCatalog"), std::string::npos);
+}
+
+TEST(ProgrammaticApiGuardrailTests,
+     RemovedExtendToolSurfaceCannotBeReintroduced) {
+  const std::filesystem::path root = source_root();
+  for (const std::filesystem::path &removed_path : {
+           root / "src/editor/interactions/extend_tool.cpp",
+           root / "src/editor/interactions/extend_tool.hpp",
+           root / "src/editor/tools/interactive/extend_tool.hpp",
+       }) {
+    EXPECT_FALSE(std::filesystem::exists(removed_path))
+        << removed_path.string();
+  }
+
+  for (const std::pair<std::filesystem::path, std::string_view> &surface : {
+           std::pair{root / "src/api/quader_viewport_input_types.hpp",
+                     std::string_view{"enum class ViewportToolId"}},
+           std::pair{root / "src/api/quader_api_types.hpp",
+                     std::string_view{"enum class QuaderViewportTool"}},
+           std::pair{root / "src/editor/modeling/modeling_types.hpp",
+                     std::string_view{"enum class ModelingViewportTool"}},
+           std::pair{root / "src/editor/interactions/tool_identity.hpp",
+                     std::string_view{"enum class ViewportInteractionTool"}},
+       }) {
+    const std::string source = read_file(surface.first);
+    const std::string enum_surface =
+        source_slice(source, surface.second, "};");
+    ASSERT_FALSE(enum_surface.empty()) << surface.first.string();
+    EXPECT_EQ(enum_surface.find("Extend"), std::string::npos)
+        << surface.first.string();
+  }
+
+  const std::string command_ids =
+      read_file(root / "src/api/quader_command_ids.hpp");
+  const std::string sdk_header = read_file(
+      root / "src/sdk/core/modeling/include/quader/modeling/api/modeling_api.hpp");
+  const std::string sdk_tools =
+      read_file(root / "src/sdk/core/modeling/src/tools_api.cpp");
+  const std::string modeling_cmake =
+      read_file(root / "cmake/QuaderModeling.cmake");
+  const std::string english_locale =
+      read_file(root / "resources/locales/en-US.lang");
+  const std::string italian_locale =
+      read_file(root / "resources/locales/it-IT.lang");
+
+  EXPECT_EQ(command_ids.find("tools.activate.extend"), std::string::npos);
+  EXPECT_EQ(sdk_header.find("activate_extend_tool"), std::string::npos);
+  EXPECT_EQ(sdk_tools.find("\"extend\""), std::string::npos);
+  EXPECT_EQ(modeling_cmake.find("extend_tool"), std::string::npos);
+  EXPECT_EQ(english_locale.find("viewport.tool.extend.label"),
+            std::string::npos);
+  EXPECT_EQ(italian_locale.find("viewport.tool.extend.label"),
+            std::string::npos);
 }

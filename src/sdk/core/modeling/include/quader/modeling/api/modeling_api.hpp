@@ -1392,7 +1392,6 @@ public:
   [[nodiscard]] ToolStatus status() const;
   [[nodiscard]] SelectTool activate_select_tool();
   [[nodiscard]] TransformTool activate_move_tool();
-  [[nodiscard]] TransformTool activate_extend_tool();
   [[nodiscard]] TransformTool activate_extrude_tool();
   [[nodiscard]] TransformTool activate_rotate_tool();
   [[nodiscard]] TransformTool activate_scale_tool();

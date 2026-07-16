@@ -730,8 +730,8 @@ public:
 
 	[[nodiscard]] ViewportToolIntent default_viewport_tool_for_selection_mode(SelectionMode mode) const
 	{
-          return mode == SelectionMode::Face ? ViewportToolIntent::Extend
-                                             : ViewportToolIntent::Move;
+          (void)mode;
+          return ViewportToolIntent::Move;
         }
 
 	[[nodiscard]] bool selection_has_move_tool_target(const RectangleSelectionState& selection) const

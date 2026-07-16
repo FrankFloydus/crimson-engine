@@ -132,9 +132,6 @@ ViewportInteractionTool viewport_interaction_tool_from_id(std::string_view tool_
 	if (tool_id == "move") {
           return ViewportInteractionTool::Move;
         }
-	if (tool_id == "extend") {
-          return ViewportInteractionTool::Extend;
-        }
 	if (tool_id == "extrude") {
           return ViewportInteractionTool::Extrude;
         }
@@ -172,8 +169,6 @@ std::string_view viewport_interaction_tool_id(ViewportInteractionTool tool)
           return "select";
         case ViewportInteractionTool::Move:
           return "move";
-        case ViewportInteractionTool::Extend:
-          return "extend";
         case ViewportInteractionTool::Extrude:
           return "extrude";
         case ViewportInteractionTool::Rotate:

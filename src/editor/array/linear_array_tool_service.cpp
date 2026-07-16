@@ -18,6 +18,7 @@
 #include "scene/scene_bounds.hpp"
 #include "scene/scene_document.hpp"
 #include "scene/scene_transform.hpp"
+#include "scene/scene_transform_pivot.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -42,6 +43,10 @@ bool near_same_point(QVec3 left, QVec3 right) {
 
 bool same_matrix(const QMat4 &left, const QMat4 &right) {
   return left.values == right.values;
+}
+
+bool same_point(QVec3 left, QVec3 right) {
+  return left.x == right.x && left.y == right.y && left.z == right.z;
 }
 
 MaterialReference entity_material(const SceneDocument &scene,
@@ -200,6 +205,49 @@ bool LinearArrayToolService::can_activate() const {
   return valid_source_selection(sources, primary, instance_occurrences);
 }
 
+std::optional<QVec3>
+LinearArrayToolService::source_visible_pivot(EntityId entity) const {
+  const std::optional<QVec3> scene_pivot =
+      resolve_entity_transform_visible_pivot(scene_, assets_, entity);
+  const std::optional<QMat4> effective_world =
+      instances_.effective_member_world_transform(entity);
+  if (!effective_world.has_value()) {
+    return scene_pivot;
+  }
+  if (scene_pivot.has_value()) {
+    const std::optional<QMat4> scene_world_inverse =
+        try_scene_matrix_inverse(scene_.world_transform_matrix(entity));
+    if (scene_world_inverse.has_value()) {
+      const QVec3 effective_pivot = transform_point(
+          *effective_world, transform_point(*scene_world_inverse, *scene_pivot));
+      if (finite_vector(effective_pivot)) {
+        return effective_pivot;
+      }
+    }
+  }
+  const TransformComponent *transform = scene_.transform(entity);
+  if (transform != nullptr && transform->custom_pivot) {
+    const QVec3 effective_origin = transform_point(*effective_world, {});
+    return finite_vector(effective_origin) ? std::optional<QVec3>{effective_origin}
+                                           : std::nullopt;
+  }
+  const MeshComponent *component = scene_.mesh(entity);
+  const MeshAsset *mesh =
+      component != nullptr ? assets_.mesh(component->mesh) : nullptr;
+  if (mesh == nullptr) {
+    return std::nullopt;
+  }
+  const std::optional<SceneBounds> bounds =
+      world_bounds_from_local_mesh_bounds(*effective_world,
+                                          local_mesh_bounds(*mesh));
+  const QVec3 effective_pivot =
+      bounds.has_value() ? bounds_center(*bounds)
+                         : transform_point(*effective_world, {});
+  return finite_vector(effective_pivot)
+             ? std::optional<QVec3>{effective_pivot}
+             : std::nullopt;
+}
+
 bool LinearArrayToolService::session_sources_are_valid(
     const Session &session) const {
   const std::uint64_t scene_revision = scene_.revision();
@@ -253,6 +301,12 @@ bool LinearArrayToolService::compute_session_sources_are_valid(
         (!active_definition_member &&
          !scene_.is_effectively_visible(source.entity)) ||
         scene_.is_effectively_locked(source.entity)) {
+      return false;
+    }
+    const std::optional<QVec3> visible_pivot =
+        source_visible_pivot(source.entity);
+    if (!visible_pivot.has_value() ||
+        !same_point(*visible_pivot, source.visible_pivot_world)) {
       return false;
     }
     if (session.instance_occurrences) {
@@ -339,6 +393,11 @@ CommandResult LinearArrayToolService::activate(double fallback_grid_size) {
                         maximum_count_for(ordered_sources.size()));
   next.sources.reserve(ordered_sources.size());
   for (const EntityId entity : ordered_sources) {
+    const std::optional<QVec3> visible_pivot = source_visible_pivot(entity);
+    if (!visible_pivot.has_value()) {
+      return command_invalid_result(
+          "Linear Array source has no valid visible pivot.");
+    }
     if (instance_occurrences) {
       EntityId definition = kInvalidEntityId;
       std::vector<InstanceArrayPreviewMeshSnapshot> instance_meshes;
@@ -353,6 +412,7 @@ CommandResult LinearArrayToolService::activate(double fallback_grid_size) {
           .uuid = scene_.uuid(entity),
           .parent = scene_.parent(entity),
           .world_transform = scene_.world_transform_matrix(entity),
+          .visible_pivot_world = *visible_pivot,
           .instance_definition = definition,
           .instance_meshes = std::move(instance_meshes),
       });
@@ -379,10 +439,11 @@ CommandResult LinearArrayToolService::activate(double fallback_grid_size) {
         .world_transform =
             instances_.effective_member_world_transform(entity).value_or(
                 scene_.world_transform_matrix(entity)),
+        .visible_pivot_world = *visible_pivot,
     });
   }
 
-  next.anchor_world = transform_point(next.sources.back().world_transform, {});
+  next.anchor_world = next.sources.back().visible_pivot_world;
   float adjacent_step = 0.0f;
   if (const std::optional<SceneBounds> bounds = modeling_.selection_bounds()) {
     adjacent_step = bounds->max.x - bounds->min.x;

@@ -157,8 +157,6 @@ inline constexpr float kOverlayVertexSizePixels = 7.0f;
 inline constexpr float kOverlaySelectedVertexGrowthPixels = 0.5f;
 inline constexpr float kOverlayHoverVertexGrowthPixels = 0.5f;
 inline constexpr float kOverlayVertexOutlineSizePixels = 1.0f;
-inline constexpr std::size_t kSelectedObjectFaceFillSelectionLimit = 64u;
-
 int viewport_overlay_draw_order(ViewportOverlayLayer layer);
 bool viewport_overlay_layer_uses_depth_stamped_face_fill(
     ViewportOverlayLayer layer);

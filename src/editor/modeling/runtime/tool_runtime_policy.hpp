@@ -69,7 +69,6 @@ inline bool viewport_tool_uses_transform_drag(ViewportInteractionTool tool)
   return tool == ViewportInteractionTool::Move ||
          tool == ViewportInteractionTool::Rotate ||
          tool == ViewportInteractionTool::Scale ||
-         tool == ViewportInteractionTool::Extend ||
          tool == ViewportInteractionTool::Extrude;
 }
 

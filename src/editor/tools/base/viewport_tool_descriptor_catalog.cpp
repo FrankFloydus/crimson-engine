@@ -12,7 +12,7 @@
 namespace quader {
 namespace {
 
-constexpr std::array<ToolDescriptor, 15> kViewportToolDescriptors{{
+constexpr std::array<ToolDescriptor, 14> kViewportToolDescriptors{{
     {
         .tool = ViewportToolId::Select,
         .modeling_tool = ModelingViewportTool::Select,
@@ -34,16 +34,6 @@ constexpr std::array<ToolDescriptor, 15> kViewportToolDescriptors{{
         .transform_tool = ModelingTransformTool::Move,
         .allows_selection_fallback = true,
         .supports_transform_gizmo = true,
-    },
-    {
-        .tool = ViewportToolId::Extend,
-        .modeling_tool = ModelingViewportTool::Extend,
-        .id = "extend",
-        .label = "Extend",
-        .kind = ToolKind::Transform,
-        .menu_group = ToolMenuGroup::Modeling,
-        .transform_tool = ModelingTransformTool::Move,
-        .allows_selection_fallback = true,
     },
     {
         .tool = ViewportToolId::Extrude,

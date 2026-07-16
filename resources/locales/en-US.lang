@@ -403,7 +403,6 @@ viewport.layout.four_quad.label=Four-View Quad
 
 viewport.tool.select.label=Select
 viewport.tool.move.label=Move
-viewport.tool.extend.label=Extend
 viewport.tool.extrude.label=Extrude
 viewport.tool.rotate.label=Rotate
 viewport.tool.scale.label=Scale

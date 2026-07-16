@@ -160,7 +160,6 @@ set(QUADER_MODELING_RUNTIME_SOURCES
     src/editor/interactions/box_tool.cpp
     src/editor/interactions/cut_tool.cpp
     src/editor/interactions/drawn_plane_tool.cpp
-    src/editor/interactions/extend_tool.cpp
     src/editor/interactions/extrude_tool.cpp
     src/editor/interactions/insert_edge_loop_tool.cpp
     src/editor/interactions/knife_tool.cpp
@@ -541,7 +540,6 @@ if(QUADER_BUILD_TESTS)
         tests/modeling_domain/tool/qdr_modeling_runtime_tool_activation_tests.cpp
         tests/modeling_domain/tool/qdr_modeling_runtime_tool_box_tests.cpp
         tests/modeling_domain/tool/qdr_modeling_runtime_tool_cut_tests.cpp
-        tests/modeling_domain/tool/qdr_modeling_runtime_tool_extend_tests.cpp
         tests/modeling_domain/tool/qdr_modeling_runtime_tool_extrude_tests.cpp
         tests/modeling_domain/tool/qdr_modeling_runtime_tool_insert_edge_loop_tests.cpp
         tests/modeling_domain/tool/qdr_modeling_runtime_tool_knife_tests.cpp

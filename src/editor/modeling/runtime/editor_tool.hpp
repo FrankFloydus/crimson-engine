@@ -27,7 +27,6 @@ public:
 
 [[nodiscard]] const EditorTool& select_tool();
 [[nodiscard]] const EditorTool& move_tool();
-[[nodiscard]] const EditorTool& extend_tool();
 [[nodiscard]] const EditorTool& extrude_tool();
 [[nodiscard]] const EditorTool& rotate_tool();
 [[nodiscard]] const EditorTool& scale_tool();

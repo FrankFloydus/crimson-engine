@@ -107,7 +107,6 @@ ViewportToolResult PointSequenceTool::handle_event(
     };
   case ModelingViewportTool::Select:
   case ModelingViewportTool::Move:
-  case ModelingViewportTool::Extend:
   case ModelingViewportTool::Extrude:
   case ModelingViewportTool::Rotate:
   case ModelingViewportTool::Scale:

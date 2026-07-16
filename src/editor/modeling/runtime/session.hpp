@@ -1061,7 +1061,6 @@ enum class ElementHandlePickKind {
  */
 enum class ViewportToolIntent {
   Move = 0,
-  Extend = 1,
 };
 
 /**

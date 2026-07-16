@@ -303,18 +303,6 @@ TEST(QdrModelingRuntimeToolMoveTests, ModalMovePlannerRoutesDuplicatePreviewsAnd
 
         update = quader_editor_core::plan_modal_move_drag_update({
             true,
-            quader_editor_core::ModalMoveDragTool::Extend,
-            false,
-            {},
-            {0.0F, 1.0F, 0.0F},
-            quader_editor_core::kToolEpsilon,
-        });
-        EXPECT_TRUE(
-            update.route ==
-            quader_editor_core::ModalMovePreviewRoute::ExtendPatchPreview);
-
-        update = quader_editor_core::plan_modal_move_drag_update({
-            true,
             quader_editor_core::ModalMoveDragTool::Extrude,
             false,
             {},

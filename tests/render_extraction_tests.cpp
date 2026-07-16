@@ -2325,6 +2325,74 @@ TEST(ViewportSceneOverlayBuilderTests,
 }
 
 TEST(ViewportSceneOverlayBuilderTests,
+     MultipleSelectedMeshesUseOneAggregateBoundsCageWithoutObjectDetail) {
+    SceneDocument document;
+    AssetRegistry assets;
+    const AssetId mesh = assets.add_mesh(make_authored_quad_mesh());
+    const EntityId first =
+        document.create_entity("First Selected Mesh", EntityKind::Mesh);
+    const EntityId second =
+        document.create_entity("Second Selected Mesh", EntityKind::Mesh);
+    document.set_mesh(first, MeshComponent{.mesh = mesh});
+    document.set_mesh(second, MeshComponent{.mesh = mesh});
+    document.set_transform(
+        first, TransformComponent{.position = {-3.0f, 1.0f, 2.0f}});
+    document.set_transform(
+        second, TransformComponent{.position = {4.0f, -2.0f, -1.0f}});
+    ASSERT_TRUE(document.set_selected(first, true));
+    ASSERT_TRUE(document.set_selected(second, true));
+
+    const std::optional<SceneBounds> expected =
+        selected_world_bounds(document, assets);
+    ASSERT_TRUE(expected.has_value());
+    const RenderOverlaySelectionSnapshot snapshot =
+        build_render_overlay_selection_snapshot(document, assets);
+    ASSERT_EQ(snapshot.selected_mesh_bounds.size(), 2u)
+        << "the transform cache retains one bounds record per selected mesh";
+
+    ViewportOverlayFrame base_frame;
+    base_frame.lines.push_back({
+        .layer = ViewportOverlayLayer::SelectedEdge,
+        .start = {-3.0f, 1.0f, 2.0f},
+        .end = {-2.0f, 1.0f, 2.0f},
+        .source = ViewportOverlaySource::Selection,
+        .element = {.object_id = 1},
+    });
+    base_frame.triangles.push_back({
+        .layer = ViewportOverlayLayer::SelectedVisibleFace,
+        .a = {-3.0f, 1.0f, 2.0f},
+        .b = {-2.0f, 1.0f, 2.0f},
+        .c = {-3.0f, 1.0f, 3.0f},
+        .source = ViewportOverlaySource::Selection,
+        .element = {.object_id = 1},
+    });
+    base_frame.lines.push_back({
+        .layer = ViewportOverlayLayer::HoverEdge,
+        .start = {4.0f, -2.0f, -1.0f},
+        .end = {5.0f, -2.0f, -1.0f},
+        .source = ViewportOverlaySource::Hover,
+        .element = {.object_id = 2},
+    });
+
+    const ViewportOverlayFrame frame =
+        ViewportSceneOverlayBuilder::build_selection_frame(
+            std::move(base_frame), snapshot, false,
+            ModelingSelectionMode::Object);
+
+    EXPECT_EQ(line_count_for(frame, ViewportOverlayLayer::SelectedEdge), 0u);
+    EXPECT_EQ(
+        triangle_count_for(frame, ViewportOverlayLayer::SelectedVisibleFace),
+        0u);
+    EXPECT_EQ(line_count_for(frame, ViewportOverlayLayer::HoverEdge), 1u)
+        << "multi-selection detail suppression must preserve hover feedback";
+    EXPECT_EQ(line_count_for(frame, ViewportOverlayLayer::GroupBounds), 12u);
+    const std::optional<SceneBounds> cage =
+        line_bounds_for(frame, ViewportOverlayLayer::GroupBounds);
+    ASSERT_TRUE(cage.has_value());
+    expect_scene_bounds_near(*cage, *expected);
+}
+
+TEST(ViewportSceneOverlayBuilderTests,
      AddsSelectedDirectionalLightMarkerAndRetiresPointLightCross) {
     SceneDocument document;
     AssetRegistry assets;

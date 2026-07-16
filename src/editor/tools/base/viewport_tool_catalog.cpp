@@ -9,7 +9,6 @@
 #include "viewport/host_viewport_contract_adapter.hpp"
 #include "editor/tools/interactive/create_primitive_tool.hpp"
 #include "editor/tools/interactive/cut_tool.hpp"
-#include "editor/tools/interactive/extend_tool.hpp"
 #include "editor/tools/interactive/extrude_tool.hpp"
 #include "editor/tools/interactive/insert_edge_loop_tool.hpp"
 #include "editor/tools/interactive/knife_tool.hpp"
@@ -28,7 +27,6 @@ namespace quader {
 std::span<const ViewportTool *const> viewport_tool_catalog() {
   static const SelectTool kSelectTool;
   static const MoveTool kMoveTool;
-  static const ExtendTool kExtendTool;
   static const ExtrudeTool kExtrudeTool;
   static const RotateTool kRotateTool;
   static const ScaleTool kScaleTool;
@@ -41,10 +39,9 @@ std::span<const ViewportTool *const> viewport_tool_catalog() {
   static const ViewportTool kPivotTool(ViewportToolId::Pivot);
   static const ViewportTool kLinearArrayTool(ViewportToolId::LinearArray);
   static const ViewportTool kRadialArrayTool(ViewportToolId::RadialArray);
-  static const std::array<const ViewportTool *, 15> kTools{{
+  static const std::array<const ViewportTool *, 14> kTools{{
       &kSelectTool,
       &kMoveTool,
-      &kExtendTool,
       &kExtrudeTool,
       &kRotateTool,
       &kScaleTool,

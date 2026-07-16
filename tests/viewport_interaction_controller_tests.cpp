@@ -1777,8 +1777,8 @@ TEST(ViewportInteractionControllerTests,
         harness.editor.tools().commit_active_tool_preview();
     ASSERT_TRUE(applied.ok) << applied.message;
     ASSERT_TRUE(applied.changed);
+    EXPECT_EQ(harness.editor.tools().active_tool(), "move");
 
-    ASSERT_TRUE(harness.editor.tools().activate(quader::ViewportToolId::Move).ok);
     harness.router.set_active_tool(quader::ViewportToolId::Move);
     (void)harness.controller.handle_before_active_tool(harness.editor,
                                                        harness.frame());

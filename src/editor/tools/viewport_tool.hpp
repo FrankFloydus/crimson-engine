@@ -172,7 +172,6 @@ class ViewportTool : public Tool {
 public:
   static constexpr ViewportToolId kSelect = ViewportToolId::Select;
   static constexpr ViewportToolId kMove = ViewportToolId::Move;
-  static constexpr ViewportToolId kExtend = ViewportToolId::Extend;
   static constexpr ViewportToolId kExtrude = ViewportToolId::Extrude;
   static constexpr ViewportToolId kRotate = ViewportToolId::Rotate;
   static constexpr ViewportToolId kScale = ViewportToolId::Scale;

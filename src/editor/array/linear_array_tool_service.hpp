@@ -126,6 +126,7 @@ private:
     MeshAssetRevision mesh_revision;
     MaterialAssetRevision material_revision;
     QMat4 world_transform;
+    QVec3 visible_pivot_world = {};
     EntityId instance_definition = kInvalidEntityId;
     std::vector<InstanceArrayPreviewMeshSnapshot> instance_meshes;
   };
@@ -154,6 +155,8 @@ private:
   compute_session_sources_are_valid(const Session &session) const;
   [[nodiscard]] static std::uint32_t
   maximum_count_for(std::size_t source_count);
+  [[nodiscard]] std::optional<QVec3>
+  source_visible_pivot(EntityId entity) const;
   [[nodiscard]] std::uint64_t issue_revision();
   void clear_preview_cache();
 

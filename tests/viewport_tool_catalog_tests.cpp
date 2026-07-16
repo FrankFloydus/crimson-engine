@@ -241,8 +241,6 @@ TEST(ViewportToolCatalogTests, ExposesToolMetadataAndConversions) {
 
   EXPECT_EQ(viewport_tool_transform_tool(ViewportToolId::Move),
             ModelingTransformTool::Move);
-  EXPECT_EQ(modeling_viewport_tool_for(ViewportToolId::Extend),
-            ModelingViewportTool::Extend);
   EXPECT_EQ(modeling_viewport_tool_for(ViewportToolId::Extrude),
             ModelingViewportTool::Extrude);
   EXPECT_EQ(viewport_tool_transform_tool(ViewportToolId::Rotate),
@@ -259,8 +257,6 @@ TEST(ViewportToolCatalogTests, ExposesToolMetadataAndConversions) {
             ModelingViewportTool::Cut);
   EXPECT_EQ(modeling_viewport_tool_for(ViewportToolId::CreatePrimitive),
             ModelingViewportTool::Box);
-  EXPECT_EQ(viewport_tool_for_modeling(ModelingViewportTool::Extend),
-            ViewportToolId::Extend);
   EXPECT_EQ(viewport_tool_for_modeling(ModelingViewportTool::Extrude),
             ViewportToolId::Extrude);
   EXPECT_EQ(viewport_tool_for_modeling(ModelingViewportTool::Mirror),
@@ -274,9 +270,15 @@ TEST(ViewportToolCatalogTests, ExposesToolMetadataAndConversions) {
   EXPECT_TRUE(viewport_tool_supports_transform_gizmo(ViewportToolId::Move));
   EXPECT_TRUE(viewport_tool_supports_transform_gizmo(ViewportToolId::Rotate));
   EXPECT_TRUE(viewport_tool_supports_transform_gizmo(ViewportToolId::Scale));
-  EXPECT_FALSE(viewport_tool_supports_transform_gizmo(ViewportToolId::Extend));
   EXPECT_FALSE(viewport_tool_supports_transform_gizmo(ViewportToolId::Extrude));
   EXPECT_FALSE(viewport_tool_supports_transform_gizmo(ViewportToolId::Mirror));
+}
+
+TEST(ViewportToolCatalogTests, RemovedExtendToolIdIsRejected) {
+  EXPECT_EQ(find_viewport_tool("extend"), nullptr);
+  EXPECT_EQ(find_viewport_tool_descriptor("extend"), nullptr);
+  EXPECT_EQ(quader_editor_core::viewport_interaction_tool_from_id("extend"),
+            quader_editor_core::ViewportInteractionTool::Unknown);
 }
 
 TEST(ViewportToolCatalogTests, HostToolMetadataDerivesFromViewportToolCatalog) {

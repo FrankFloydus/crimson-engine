@@ -13,10 +13,12 @@
 #include "viewport/viewport_settings.hpp"
 
 #include <QAction>
+#include <QAbstractItemModel>
 #include <QAbstractItemView>
 #include <QComboBox>
 #include <QGuiApplication>
 #include <QIcon>
+#include <QItemSelectionModel>
 #include <QLabel>
 #include <QScreen>
 #include <QSignalBlocker>
@@ -46,6 +48,21 @@ public:
     QComboBox::showPopup();
 
     QAbstractItemView *item_view = view();
+    if (item_view != nullptr && currentIndex() >= 0) {
+      const QModelIndex committed_index = model()->index(
+          currentIndex(), modelColumn(), rootModelIndex());
+      if (committed_index.isValid()) {
+        item_view->setCurrentIndex(committed_index);
+        if (QItemSelectionModel *selection = item_view->selectionModel()) {
+          selection->select(
+              committed_index,
+              QItemSelectionModel::ClearAndSelect | QItemSelectionModel::Rows);
+        }
+        item_view->scrollTo(committed_index,
+                            QAbstractItemView::PositionAtCenter);
+      }
+    }
+
     QWidget *popup = item_view != nullptr ? item_view->window() : nullptr;
     if (popup == nullptr || popup == window() || !popup->isVisible() ||
         popup->windowType() != Qt::Popup) {

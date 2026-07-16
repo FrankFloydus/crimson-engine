@@ -23,7 +23,6 @@ namespace quader_editor_core {
  */
 enum class ModalMoveDragTool {
   Move,
-  Extend,
   Extrude,
 };
 
@@ -35,7 +34,6 @@ enum class ModalMovePreviewRoute {
   ClearPreview,
   MoveTransformPreview,
   MovePatchPreview,
-  ExtendPatchPreview,
   ExtrudePatchPreview,
 };
 
@@ -45,7 +43,6 @@ enum class ModalMovePreviewRoute {
 enum class ModalMoveCommitRoute {
   None,
   MovePatch,
-  ExtendPatch,
   ExtrudePatch,
 };
 

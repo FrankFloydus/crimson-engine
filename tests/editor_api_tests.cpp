@@ -7437,6 +7437,7 @@ TEST(EditorApiTests, PivotToolAppliesMeshOriginRebaseWithoutMovingWorldBounds) {
       editor.tools().commit_active_tool_preview();
   ASSERT_TRUE(applied.ok()) << applied.error_message();
   EXPECT_TRUE(applied.changed());
+  EXPECT_EQ(editor.tools().active_tool(), "move");
   EXPECT_EQ(editor.query().history().undo_label, "Set Pivot");
 
   const std::optional<quader::QuaderEntitySnapshot> after =

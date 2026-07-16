@@ -434,5 +434,5 @@ TEST(QdrModelingRuntimeToolSelectTests, ElementHandlePickingAndOwnershipPolicyAr
         EXPECT_TRUE(
             quader_editor_core::default_viewport_tool_for_selection_mode(
                 quader_editor_core::SelectionMode::Face) ==
-            quader_editor_core::ViewportToolIntent::Extend);
+            quader_editor_core::ViewportToolIntent::Move);
 }

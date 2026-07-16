@@ -834,8 +834,6 @@ inline QuaderViewportTool to_api_viewport_tool(ModelingViewportTool tool) {
     return QuaderViewportTool::Select;
   case ModelingViewportTool::Move:
     return QuaderViewportTool::Move;
-  case ModelingViewportTool::Extend:
-    return QuaderViewportTool::Extend;
   case ModelingViewportTool::Extrude:
     return QuaderViewportTool::Extrude;
   case ModelingViewportTool::Rotate:

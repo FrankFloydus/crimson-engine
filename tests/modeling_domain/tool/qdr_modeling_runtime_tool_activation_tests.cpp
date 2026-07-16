@@ -22,9 +22,6 @@ TEST(QdrModelingRuntimeToolActivationTests, ViewportToolIdsAreStableHostContract
                   quader_editor_core::ViewportInteractionTool::Move)) ==
               "move");
   EXPECT_TRUE(std::string(quader_editor_core::viewport_interaction_tool_id(
-                  quader_editor_core::ViewportInteractionTool::Extend)) ==
-              "extend");
-  EXPECT_TRUE(std::string(quader_editor_core::viewport_interaction_tool_id(
                   quader_editor_core::ViewportInteractionTool::Extrude)) ==
               "extrude");
   EXPECT_TRUE(std::string(quader_editor_core::viewport_interaction_tool_id(
@@ -49,8 +46,9 @@ TEST(QdrModelingRuntimeToolActivationTests, ViewportToolIdsAreStableHostContract
               quader_editor_core::ViewportInteractionTool::Select);
   EXPECT_TRUE(quader_editor_core::viewport_interaction_tool_from_id("move") ==
               quader_editor_core::ViewportInteractionTool::Move);
-  EXPECT_TRUE(quader_editor_core::viewport_interaction_tool_from_id("extend") ==
-              quader_editor_core::ViewportInteractionTool::Extend);
+  EXPECT_TRUE(
+      quader_editor_core::viewport_interaction_tool_from_id("extend") ==
+      quader_editor_core::ViewportInteractionTool::Unknown);
   EXPECT_TRUE(
       quader_editor_core::viewport_interaction_tool_from_id("extrude") ==
       quader_editor_core::ViewportInteractionTool::Extrude);

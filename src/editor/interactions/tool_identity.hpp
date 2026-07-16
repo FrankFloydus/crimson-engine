@@ -30,7 +30,6 @@ enum class TransformAxis {
 enum class ViewportInteractionTool {
   Select,
   Move,
-  Extend,
   Extrude,
   Rotate,
   Scale,

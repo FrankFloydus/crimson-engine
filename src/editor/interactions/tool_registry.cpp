@@ -21,10 +21,9 @@ struct ToolRegistryRecord {
 
 std::span<const ToolRegistryRecord> tool_registry_records()
 {
-  static const std::array<ToolRegistryRecord, 12> kRecords{{
+  static const std::array<ToolRegistryRecord, 11> kRecords{{
       {"select", &select_tool()},
       {"move", &move_tool()},
-      {"extend", &extend_tool()},
       {"extrude", &extrude_tool()},
       {"rotate", &rotate_tool()},
       {"scale", &scale_tool()},
@@ -40,10 +39,10 @@ std::span<const ToolRegistryRecord> tool_registry_records()
 
 std::span<const EditorTool* const> tool_entries()
 {
-  static const std::array<const EditorTool *, 12> kTools{
-      &select_tool(), &move_tool(),  &extend_tool(), &extrude_tool(),
-      &rotate_tool(), &scale_tool(), &box_tool(),    &insert_edge_loop_tool(),
-      &knife_tool(),  &cut_tool(),   &mirror_tool(), &poly_tool(),
+  static const std::array<const EditorTool *, 11> kTools{
+      &select_tool(), &move_tool(),   &extrude_tool(), &rotate_tool(),
+      &scale_tool(),  &box_tool(),    &insert_edge_loop_tool(),
+      &knife_tool(),  &cut_tool(),    &mirror_tool(),  &poly_tool(),
   };
   return kTools;
 }

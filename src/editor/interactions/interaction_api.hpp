@@ -10,7 +10,6 @@
 #include <editor/interactions/box_tool.hpp>
 #include <editor/interactions/cut_tool.hpp>
 #include <editor/interactions/drawn_plane_tool.hpp>
-#include <editor/interactions/extend_tool.hpp>
 #include <editor/interactions/extrude_tool.hpp>
 #include <editor/interactions/insert_edge_loop_tool.hpp>
 #include <editor/interactions/knife_tool.hpp>

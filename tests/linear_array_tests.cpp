@@ -16,6 +16,7 @@
 #include "render/scene_render_bridge.hpp"
 #include "scene/scene_document.hpp"
 #include "scene/scene_transform.hpp"
+#include "scene/scene_transform_pivot.hpp"
 
 #include <gtest/gtest.h>
 
@@ -76,6 +77,93 @@ TEST(LinearArrayLayoutTests, PreservesOrientationAndIncludesSharedEndpoint) {
       transform_vector(layout.generated_world_transforms[1],
                        {1.0f, 0.0f, 0.0f}),
       transform_vector(source_world, {1.0f, 0.0f, 0.0f}));
+}
+
+TEST(LinearArrayToolServiceTests,
+     HandleAnchorsToExplicitPrimaryVisiblePivotForOffOriginGeometry) {
+  SceneSession session;
+  QuaderEditorApi editor(
+      QuaderApiSessionInternalAccess::from_scene_session(session));
+  const QuaderApiResult<QuaderModelingObjectRef> primary =
+      editor.modeling().create_box(
+          QuaderBounds{.min = {40.0f, 1.0f, -5.0f},
+                       .max = {44.0f, 5.0f, -1.0f}},
+          "Linear Off-Origin Primary");
+  const QuaderApiResult<QuaderModelingObjectRef> second =
+      editor.modeling().create_box(
+          QuaderBounds{.min = {-1.0f, -1.0f, -1.0f},
+                       .max = {1.0f, 1.0f, 1.0f}},
+          "Linear Secondary");
+  ASSERT_TRUE(primary.ok()) << primary.error_message();
+  ASSERT_TRUE(second.ok()) << second.error_message();
+  ASSERT_TRUE(editor.scene()
+                  .set_transform(primary.value().entity,
+                                 {.position = {100.0f, 20.0f, -30.0f}})
+                  .ok());
+  ASSERT_TRUE(editor.selection()
+                  .select_objects(
+                      {second.value().entity, primary.value().entity},
+                      primary.value().entity)
+                  .ok());
+
+  const std::optional<QVec3> expected =
+      resolve_entity_transform_visible_pivot(
+          session.scene(), session.assets(), primary.value().entity);
+  ASSERT_TRUE(expected.has_value());
+  expect_vec3_near(*expected, {142.0f, 23.0f, -33.0f});
+  const QVec3 raw_origin = transform_point(
+      session.scene().world_transform_matrix(primary.value().entity), {});
+  EXPECT_GT(length_squared(*expected - raw_origin), 1.0f);
+
+  ASSERT_TRUE(editor.tools().activate(ViewportToolId::LinearArray).ok());
+  const LinearArrayHandleState handle = session.linear_array().handle_state();
+  ASSERT_TRUE(handle.visible);
+  expect_vec3_near(handle.source_world, *expected);
+  const LinearArrayPreviewState &preview =
+      session.linear_array().preview_state();
+  ASSERT_EQ(preview.sources.size(), 2u);
+  EXPECT_EQ(preview.sources.front().source_entity, second.value().entity);
+  EXPECT_EQ(preview.sources.back().source_entity, primary.value().entity);
+}
+
+TEST(LinearArrayToolServiceTests,
+     HierarchyVisiblePivotChangeInvalidatesTheCapturedPreview) {
+  SceneSession session;
+  QuaderEditorApi editor(
+      QuaderApiSessionInternalAccess::from_scene_session(session));
+  const QuaderApiResult<QuaderModelingObjectRef> source =
+      editor.modeling().create_box(
+          QuaderBounds{.min = {-1.0f, -1.0f, -1.0f},
+                       .max = {1.0f, 1.0f, 1.0f}},
+          "Linear Hierarchy Source");
+  const QuaderApiResult<QuaderModelingObjectRef> child =
+      editor.modeling().create_box(
+          QuaderBounds{.min = {-1.0f, -1.0f, -1.0f},
+                       .max = {1.0f, 1.0f, 1.0f}},
+          "Linear Hierarchy Child");
+  ASSERT_TRUE(source.ok()) << source.error_message();
+  ASSERT_TRUE(child.ok()) << child.error_message();
+  ASSERT_TRUE(editor.scene()
+                  .reparent(child.value().entity, source.value().entity, false)
+                  .ok());
+  ASSERT_TRUE(editor.scene()
+                  .set_transform(child.value().entity,
+                                 {.position = {10.0f, 0.0f, 0.0f}})
+                  .ok());
+  ASSERT_TRUE(editor.selection().select_object(source.value()).ok());
+  ASSERT_TRUE(editor.tools().activate(ViewportToolId::LinearArray).ok());
+  expect_vec3_near(session.linear_array().handle_state().source_world,
+                   {5.0f, 0.0f, 0.0f});
+
+  ASSERT_TRUE(editor.scene()
+                  .set_transform(child.value().entity,
+                                 {.position = {20.0f, 0.0f, 0.0f}})
+                  .ok());
+  const CommandResult refreshed = session.linear_array().refresh();
+  EXPECT_TRUE(refreshed.ok);
+  EXPECT_TRUE(refreshed.changed);
+  EXPECT_FALSE(session.linear_array().has_session());
+  EXPECT_FALSE(session.linear_array().preview_state().active);
 }
 
 TEST(LinearArrayToolServiceTests,

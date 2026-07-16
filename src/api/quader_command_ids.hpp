@@ -239,7 +239,6 @@ inline constexpr QuaderCommandId kToolsCancelPrimitiveCreation{
 
 inline constexpr QuaderCommandId kToolsActivateSelect{"tools.activate.select"};
 inline constexpr QuaderCommandId kToolsActivateMove{"tools.activate.move"};
-inline constexpr QuaderCommandId kToolsActivateExtend{"tools.activate.extend"};
 inline constexpr QuaderCommandId kToolsActivateRotate{"tools.activate.rotate"};
 inline constexpr QuaderCommandId kToolsActivateScale{"tools.activate.scale"};
 inline constexpr QuaderCommandId kToolsActivateCreatePrimitive{
@@ -378,7 +377,6 @@ inline constexpr QuaderCommandId kTypedCommandIds[] = {
     kToolsCancelPrimitiveCreation,
     kToolsActivateSelect,
     kToolsActivateMove,
-    kToolsActivateExtend,
     kToolsActivateRotate,
     kToolsActivateScale,
     kToolsActivateCreatePrimitive,

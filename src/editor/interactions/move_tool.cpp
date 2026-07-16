@@ -738,9 +738,6 @@ std::vector<SelectionOverlayPoint> transform_drag_snap_overlay_points(
 
 ModalMoveDragTool modal_move_drag_tool_from_id(std::string_view tool_id)
 {
-	if (tool_id == "extend") {
-          return ModalMoveDragTool::Extend;
-        }
 	if (tool_id == "extrude") {
           return ModalMoveDragTool::Extrude;
         }
@@ -749,9 +746,6 @@ ModalMoveDragTool modal_move_drag_tool_from_id(std::string_view tool_id)
 
 std::string modal_move_drag_tool_id(ModalMoveDragTool tool)
 {
-  if (tool == ModalMoveDragTool::Extend) {
-    return "extend";
-  }
   if (tool == ModalMoveDragTool::Extrude) {
     return "extrude";
   }
@@ -784,11 +778,9 @@ ModalMoveUpdatePlan plan_modal_move_drag_update(const ModalMoveUpdateInput& inpu
           return plan;
 	}
 	plan.preview_active = true;
-        if (input.tool == ModalMoveDragTool::Extend) {
-          plan.route = ModalMovePreviewRoute::ExtendPatchPreview;
-        } else if (input.tool == ModalMoveDragTool::Extrude) {
-          plan.route = ModalMovePreviewRoute::ExtrudePatchPreview;
-        } else if (input.preview_uses_transform) {
+	if (input.tool == ModalMoveDragTool::Extrude) {
+	  plan.route = ModalMovePreviewRoute::ExtrudePatchPreview;
+	} else if (input.preview_uses_transform) {
           plan.route = ModalMovePreviewRoute::MoveTransformPreview;
         } else {
           plan.route = ModalMovePreviewRoute::MovePatchPreview;
@@ -810,12 +802,9 @@ ModalMoveCommitPlan plan_modal_move_drag_commit(const ModalMoveCommitInput& inpu
 		return plan;
 	}
 	plan.model_changed = true;
-        if (input.tool == ModalMoveDragTool::Extend) {
-          plan.route = ModalMoveCommitRoute::ExtendPatch;
-          plan.undo_action = "Quader Extend Face";
-        } else if (input.tool == ModalMoveDragTool::Extrude) {
-          plan.route = ModalMoveCommitRoute::ExtrudePatch;
-          plan.undo_action = "Quader Extrude Face";
+	if (input.tool == ModalMoveDragTool::Extrude) {
+	  plan.route = ModalMoveCommitRoute::ExtrudePatch;
+	  plan.undo_action = "Quader Extrude Face";
         } else {
           plan.route = ModalMoveCommitRoute::MovePatch;
           plan.undo_action = "Quader Move Selection";

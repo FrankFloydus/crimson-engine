@@ -4866,3 +4866,44 @@ Owners: `ViewportWorkspaceService`, `QuaderViewportApi`, `QtViewportPanel`, `Vie
 Verification: Filament `matc` accepts the diagnostic material; focused material, renderer,
 workspace, editor API, viewport chrome, and UI/API guardrail tests pass. Final affected and native
 v0.1.16 build results are recorded in the task handoff.
+
+## 2026-07-16 - Reliable Array Pivots, Aggregate Selection, And Tool Cleanup
+
+Invariant:
+
+- Linear Array captures each source's canonical visible world pivot and anchors its shared handle
+  to the explicit primary source. A scene origin is not a valid substitute for baked off-origin
+  geometry. The captured pivots are revalidated with the rest of the session snapshot before any
+  refresh or apply, including hierarchy bounds and effective instance-occurrence transforms.
+- A successful persistent Pivot Apply immediately activates Move so the rebased transform origin
+  is visible. A failed Pivot Apply must leave the active tool unchanged.
+- Object-mode selection of more than one mesh suppresses per-object selected faces and edges and
+  presents one union world-AABB cage. Render extraction retains one bounds record per mesh for
+  transform-only cache refresh, and hover/tool overlays remain intact.
+- Grid and Angle combo popups retain the native Fusion row presentation: never set
+  `Qt::CheckStateRole`, because Fusion renders it as a checkbox column. On open, reset only the
+  popup view's current/selected row to the combo's owner-committed index and scroll that row into
+  view; transient popup row movement must not change the committed combo value.
+- Extend is not a Quader tool. Its public/internal enums, command ID, runtime implementation,
+  catalogs, SDK activation API, CMake entries, localization keys, docs, and dedicated tests remain
+  deleted. The former `extend` tool ID resolves to Unknown. The unrelated
+  `shift:extend_selection` selection modifier remains valid.
+
+Owners:
+
+- `LinearArrayToolService` and `scene_transform_pivot.*` own array source-pivot capture and
+  validation; `NativeViewportToolCoordinator` owns the Pivot-to-Move handoff.
+- `ViewportSceneOverlayBuilder` owns aggregate selection composition while
+  `RenderOverlaySelectionSnapshot` keeps per-entity bounds; viewport overlay policy admits
+  persistent object face fills only for a single selected mesh.
+- `QtSnappingToolbar` owns native popup selection restoration. Viewport tool catalogs/runtime identities and
+  the portable modeling SDK jointly enforce the absence of Extend, backed by a programmatic API
+  source guardrail.
+
+Verification:
+
+- Focused Linear Array, Pivot, selection-overlay, snapping toolbar, runtime catalog/selection, SDK
+  tool, and permanent-removal guardrail regressions pass. The complete `vs2026-debug` CTest preset
+  passes 6/6, including SDK-only, SDK consumer/parity, guardrail, native app, and modeling-domain
+  targets. The native-style popup follow-up passes its focused Windows UI regression; the final
+  native `quader` v0.1.32 build is recorded in the task handoff.

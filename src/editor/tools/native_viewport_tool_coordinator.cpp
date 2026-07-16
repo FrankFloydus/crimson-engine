@@ -164,7 +164,18 @@ CommandResult NativeViewportToolCoordinator::commit_active() {
     return radial_array_.apply();
   }
   if (pivot_.persistent_active()) {
-    return pivot_.apply_persistent();
+    CommandResult applied = pivot_.apply_persistent();
+    if (!applied.ok) {
+      return applied;
+    }
+
+    ModelingCommandResult activated =
+        modeling_.activate_viewport_tool(ModelingViewportTool::Move);
+    return {
+        .ok = activated.ok,
+        .changed = applied.changed || activated.changed,
+        .message = std::move(activated.message),
+    };
   }
   return command_invalid_result("No active native tool preview.");
 }

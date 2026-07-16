@@ -16,7 +16,6 @@ namespace quader {
 enum class ViewportToolId {
     Select,
     Move,
-    Extend,
     Extrude,
     Rotate,
     Scale,
