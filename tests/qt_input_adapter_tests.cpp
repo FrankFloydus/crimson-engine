@@ -6,14 +6,23 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include <gtest/gtest.h>
 
+#include "editor/input/quader_input_binding.hpp"
+#include "api/quader_api_session_internal_access.hpp"
+#include "api/quader_editor_api.hpp"
+#include "editor/session/scene_session.hpp"
 #include "ui/qt_input_adapter.hpp"
+#include "ui/qt_viewport_panel.hpp"
+#include "ui/qt_viewport_surface.hpp"
 
+#include <QApplication>
+#include <QCoreApplication>
 #include <QKeyEvent>
 #include <QMouseEvent>
 #include <QPoint>
 #include <QPointF>
 #include <QWheelEvent>
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <optional>
@@ -27,6 +36,8 @@ using quader::QuaderInputGesture;
 using quader::QuaderKeyCode;
 using quader::QuaderMouseButton;
 using quader::quader_input_chord_from_qt_key;
+using quader::quader_input_format_chord;
+using quader::quader_input_parse_chord;
 using quader::quader_key_code_from_qt_key;
 using quader::quader_mouse_button_from_qt_button;
 using quader::quader_mouse_input_chord_from_qt_event;
@@ -263,7 +274,7 @@ TEST(QtInputAdapterTests, MapsEveryCanonicalMouseButton) {
 }
 
 TEST(QtInputAdapterTests,
-     MouseEventsMapPressDoubleClickAndDragWithEventTimeModifiers) {
+     MouseEventsMapPressClickDoubleClickAndDragWithEventTimeModifiers) {
   const Qt::KeyboardModifiers press_modifiers =
       Qt::MetaModifier | Qt::AltModifier;
   const QMouseEvent press =
@@ -288,6 +299,17 @@ TEST(QtInputAdapterTests,
   EXPECT_EQ(drag_chord->primary, press_chord->primary);
   EXPECT_EQ(drag_chord->shift, press_chord->shift);
   EXPECT_EQ(drag_chord->alt, press_chord->alt);
+
+  const QMouseEvent release = mouse_event(
+      QEvent::MouseButtonRelease, Qt::MiddleButton, press_modifiers);
+  const std::optional<QuaderInputChord> click_chord =
+      quader_mouse_input_chord_from_qt_event(release,
+                                             QuaderInputGesture::Click);
+  ASSERT_TRUE(click_chord.has_value());
+  expect_mouse_chord(*click_chord, QuaderMouseButton::Middle,
+                     QuaderInputGesture::Click);
+  EXPECT_TRUE(click_chord->primary);
+  EXPECT_TRUE(click_chord->alt);
 
   const QMouseEvent double_click = mouse_event(
       QEvent::MouseButtonDblClick, Qt::LeftButton, Qt::ShiftModifier);
@@ -318,8 +340,155 @@ TEST(QtInputAdapterTests, RejectsMismatchedMouseEventTypesAndWheelGestures) {
                    release, QuaderInputGesture::Drag)
                    .has_value());
   EXPECT_FALSE(quader_mouse_input_chord_from_qt_event(
+                   press, QuaderInputGesture::Click)
+                   .has_value());
+  EXPECT_FALSE(quader_mouse_input_chord_from_qt_event(
+                   double_click, QuaderInputGesture::Click)
+                   .has_value());
+  EXPECT_FALSE(quader_mouse_input_chord_from_qt_event(
                    press, QuaderInputGesture::Wheel)
                    .has_value());
+}
+
+TEST(QtInputAdapterTests, CanonicalMouseClickParsesAndFormatsRoundTrip) {
+  const std::optional<QuaderInputChord> chord =
+      quader_input_parse_chord("Alt+MiddleMouseClick");
+  ASSERT_TRUE(chord.has_value());
+  expect_mouse_chord(*chord, QuaderMouseButton::Middle,
+                     QuaderInputGesture::Click);
+  EXPECT_TRUE(chord->alt);
+  EXPECT_EQ(quader_input_format_chord(*chord), "Alt+MiddleMouseClick");
+}
+
+TEST(QtViewportSurfaceInputTests,
+     StationaryReleaseEmitsClickButPointerDragDoesNot) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-viewport-click-tests";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+
+  quader::QtViewportSurface surface(quader::ViewportPaneId::Perspective);
+  const QPointF press_local{24.0, 32.0};
+  const QPointF press_global{124.0, 232.0};
+  const Qt::KeyboardModifiers modifiers = Qt::AltModifier;
+
+  QMouseEvent stationary_press(
+      QEvent::MouseButtonPress, press_local, press_global,
+      Qt::MiddleButton, Qt::MiddleButton, modifiers);
+  QApplication::sendEvent(&surface, &stationary_press);
+  const quader::QtViewportInputFrame press_frame =
+      surface.take_input_frame(0.0f, false);
+  EXPECT_TRUE(std::any_of(
+      press_frame.input.pressed_input_chords.begin(),
+      press_frame.input.pressed_input_chords.end(),
+      [](const QuaderInputChord &chord) {
+        return chord.mouse_button == QuaderMouseButton::Middle &&
+               chord.gesture == QuaderInputGesture::Drag;
+      }));
+
+  QMouseEvent stationary_release(
+      QEvent::MouseButtonRelease, press_local, press_global,
+      Qt::MiddleButton, Qt::NoButton, modifiers);
+  QApplication::sendEvent(&surface, &stationary_release);
+  const quader::QtViewportInputFrame click_frame =
+      surface.take_input_frame(0.0f, false);
+  EXPECT_TRUE(std::any_of(
+      click_frame.input.pressed_input_chords.begin(),
+      click_frame.input.pressed_input_chords.end(),
+      [](const QuaderInputChord &chord) {
+        return chord.alt &&
+               chord.mouse_button == QuaderMouseButton::Middle &&
+               chord.gesture == QuaderInputGesture::Click;
+      }));
+
+  QMouseEvent drag_press(QEvent::MouseButtonPress, press_local, press_global,
+                         Qt::MiddleButton, Qt::MiddleButton, modifiers);
+  QApplication::sendEvent(&surface, &drag_press);
+  (void)surface.take_input_frame(0.0f, false);
+
+  const qreal drag_distance =
+      static_cast<qreal>(QApplication::startDragDistance() + 2);
+  const QPointF drag_local = press_local + QPointF{drag_distance, 0.0};
+  const QPointF drag_global = press_global + QPointF{drag_distance, 0.0};
+  QMouseEvent drag_move(QEvent::MouseMove, drag_local, drag_global,
+                        Qt::NoButton, Qt::MiddleButton, modifiers);
+  QApplication::sendEvent(&surface, &drag_move);
+  (void)surface.take_input_frame(0.0f, false);
+
+  QMouseEvent drag_release(QEvent::MouseButtonRelease, drag_local, drag_global,
+                           Qt::MiddleButton, Qt::NoButton, modifiers);
+  QApplication::sendEvent(&surface, &drag_release);
+  const quader::QtViewportInputFrame drag_release_frame =
+      surface.take_input_frame(0.0f, false);
+  EXPECT_FALSE(std::any_of(
+      drag_release_frame.input.pressed_input_chords.begin(),
+      drag_release_frame.input.pressed_input_chords.end(),
+      [](const QuaderInputChord &chord) {
+        return chord.mouse_button == QuaderMouseButton::Middle &&
+               chord.gesture == QuaderInputGesture::Click;
+      }));
+}
+
+TEST(QtViewportSurfaceInputTests,
+     PhysicalGridGesturesReachTheWorkspaceThroughTheProductionPanelPath) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-viewport-grid-input-tests";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+
+  quader::SceneSession session;
+  quader::QuaderEditorApi editor(
+      quader::QuaderApiSessionInternalAccess::from_scene_session(session));
+  ASSERT_TRUE(editor.commands().set_keybinding_storage_path({}).ok());
+
+  quader::QtViewportPanel panel;
+  panel.attach_workspace(session.viewport_workspace());
+  quader::QtViewportSurface *surface =
+      panel.surface(quader::ViewportPaneId::Perspective);
+  ASSERT_NE(surface, nullptr);
+
+  const auto process_input = [&]() {
+    panel.process_input(
+        editor, session.scene(), session.assets(), session.modeling(), {},
+        &session.pivot(), &session.linear_array(), &session.radial_array(),
+        &session.point_placement(), 1.0 / 60.0);
+  };
+  const QPointF local{24.0, 32.0};
+  const QPointF global{124.0, 232.0};
+  const int default_preset = session.viewport_workspace().grid_preset();
+
+  // Qt's Windows QPA converts Alt+vertical-wheel into a horizontal angle
+  // delta. Exercise the exact native representation seen by Quader rather
+  // than the idealized vertical delta used by adapter-only tests.
+  QWheelEvent wheel_up(local, global, {}, QPoint{120, 0}, Qt::NoButton,
+                       Qt::AltModifier, Qt::NoScrollPhase, false);
+  QApplication::sendEvent(surface, &wheel_up);
+  process_input();
+  EXPECT_EQ(session.viewport_workspace().grid_preset(), default_preset + 1);
+
+  QWheelEvent wheel_down(local, global, {}, QPoint{-120, 0}, Qt::NoButton,
+                         Qt::AltModifier, Qt::NoScrollPhase, false);
+  QApplication::sendEvent(surface, &wheel_down);
+  process_input();
+  EXPECT_EQ(session.viewport_workspace().grid_preset(), default_preset);
+
+  ASSERT_TRUE(session.viewport_workspace().set_grid_preset(2));
+  QMouseEvent middle_press(QEvent::MouseButtonPress, local, global,
+                           Qt::MiddleButton, Qt::MiddleButton,
+                           Qt::AltModifier);
+  QApplication::sendEvent(surface, &middle_press);
+  process_input();
+
+  QMouseEvent middle_release(QEvent::MouseButtonRelease, local, global,
+                             Qt::MiddleButton, Qt::NoButton,
+                             Qt::AltModifier);
+  QApplication::sendEvent(surface, &middle_release);
+  process_input();
+  EXPECT_EQ(session.viewport_workspace().grid_preset(), default_preset);
 }
 
 TEST(QtInputAdapterTests, MapsWheelDirectionsAndSmoothPixelFallback) {
@@ -352,6 +521,35 @@ TEST(QtInputAdapterTests, MapsWheelDirectionsAndSmoothPixelFallback) {
                      QuaderInputGesture::WheelDown);
   EXPECT_TRUE(smooth_chord->shift);
   EXPECT_TRUE(smooth_chord->alt);
+}
+
+TEST(QtInputAdapterTests,
+     RestoresWindowsAltVerticalWheelFromQtHorizontalRepresentation) {
+  const QWheelEvent up =
+      wheel_event({}, QPoint{120, 0}, Qt::AltModifier);
+  const quader::QtWheelInputTranslation up_translation =
+      quader_wheel_input_from_qt_event(up);
+  ASSERT_EQ(up_translation.wheel_input_edges.size(), 2u);
+  EXPECT_EQ(up_translation.wheel_input_edges[0].chord.gesture,
+            QuaderInputGesture::Wheel);
+  EXPECT_EQ(up_translation.wheel_input_edges[1].chord.gesture,
+            QuaderInputGesture::WheelUp);
+  EXPECT_TRUE(up_translation.wheel_input_edges[1].chord.alt);
+  EXPECT_FLOAT_EQ(up_translation.mouse_wheel, 1.0f);
+  EXPECT_DOUBLE_EQ(up_translation.wheel_input_edges[1].step_delta, 1.0);
+
+  const QWheelEvent down =
+      wheel_event({}, QPoint{-120, 0}, Qt::AltModifier);
+  const quader::QtWheelInputTranslation down_translation =
+      quader_wheel_input_from_qt_event(down);
+  ASSERT_EQ(down_translation.wheel_input_edges.size(), 2u);
+  EXPECT_EQ(down_translation.wheel_input_edges[0].chord.gesture,
+            QuaderInputGesture::Wheel);
+  EXPECT_EQ(down_translation.wheel_input_edges[1].chord.gesture,
+            QuaderInputGesture::WheelDown);
+  EXPECT_TRUE(down_translation.wheel_input_edges[1].chord.alt);
+  EXPECT_FLOAT_EQ(down_translation.mouse_wheel, -1.0f);
+  EXPECT_DOUBLE_EQ(down_translation.wheel_input_edges[1].step_delta, -1.0);
 }
 
 TEST(QtInputAdapterTests, RejectsWheelEventsWithoutMotion) {

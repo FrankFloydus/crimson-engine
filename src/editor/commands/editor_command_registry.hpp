@@ -36,6 +36,7 @@ public:
   void register_command(EditorCommandRegistration command);
 
   [[nodiscard]] bool contains(std::string_view command_id) const;
+  [[nodiscard]] bool enabled(std::string_view command_id) const;
   [[nodiscard]] std::optional<QuaderApiVoidResult>
   execute(std::string_view command_id) const;
   [[nodiscard]] std::optional<QuaderCommandDescriptor>

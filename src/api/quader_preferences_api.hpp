@@ -8,6 +8,7 @@
 
 #include "api/quader_command_ids.hpp"
 #include "api/quader_editor_api_types.hpp"
+#include "api/quader_keybinding_types.hpp"
 
 namespace quader {
 
@@ -34,6 +35,18 @@ public:
     QuaderApiVoidResult remove_shortcut(QuaderCommandId command_id);
     QuaderApiVoidResult reset_shortcut(std::string_view command_id);
     QuaderApiVoidResult reset_shortcut(QuaderCommandId command_id);
+    QuaderApiVoidResult set_action_shortcut(
+        const QuaderKeybindingActionKey &action,
+        std::string shortcut,
+        QuaderKeybindingConflictPolicy policy =
+            QuaderKeybindingConflictPolicy::Reject);
+    QuaderApiVoidResult remove_action_shortcut(
+        const QuaderKeybindingActionKey &action);
+    QuaderApiVoidResult reset_action_shortcut(
+        const QuaderKeybindingActionKey &action,
+        QuaderKeybindingConflictPolicy policy =
+            QuaderKeybindingConflictPolicy::Reject);
+    QuaderApiVoidResult reset_all_shortcuts();
     QuaderApiVoidResult set_snapping_enabled(bool enabled);
     [[nodiscard]] bool snapping_enabled() const;
     QuaderApiVoidResult set_grid_visible(bool visible);

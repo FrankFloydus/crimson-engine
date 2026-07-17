@@ -123,6 +123,9 @@ public:
     [[nodiscard]] std::vector<QuaderKeybindingConflict>
     conflicts_for_shortcut(std::string_view shortcut,
                            std::string_view when = {}) const;
+    [[nodiscard]] QuaderKeybindingAssignmentAnalysis
+    analyze_shortcut_assignment(const QuaderKeybindingActionKey &action,
+                                std::string_view shortcut) const;
     [[nodiscard]] bool resolve_viewport_shortcut(
         ViewportKey key, ViewportModifiers modifiers,
         const ViewportToolState &state, bool viewport_focused,
@@ -158,6 +161,18 @@ public:
     QuaderApiVoidResult remove_shortcut(QuaderCommandId command_id);
     QuaderApiVoidResult reset_shortcut(std::string_view command_id);
     QuaderApiVoidResult reset_shortcut(QuaderCommandId command_id);
+    QuaderApiVoidResult set_action_shortcut(
+        const QuaderKeybindingActionKey &action,
+        std::string shortcut,
+        QuaderKeybindingConflictPolicy policy =
+            QuaderKeybindingConflictPolicy::Reject);
+    QuaderApiVoidResult remove_action_shortcut(
+        const QuaderKeybindingActionKey &action);
+    QuaderApiVoidResult reset_action_shortcut(
+        const QuaderKeybindingActionKey &action,
+        QuaderKeybindingConflictPolicy policy =
+            QuaderKeybindingConflictPolicy::Reject);
+    QuaderApiVoidResult reset_all_shortcuts();
     QuaderApiVoidResult set_keybinding_storage_path(std::filesystem::path path);
 
   private:

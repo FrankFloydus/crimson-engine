@@ -206,6 +206,32 @@ TEST(QtProjectWorkspaceTests,
   action->setToolTip(QStringLiteral("Selection Tool [Q]"));
   EXPECT_EQ(button->accessibleDescription(),
             QStringLiteral("Selection Tool [Q]"));
+
+  quader::SceneSession session;
+  quader::QuaderEditorApi editor(
+      quader::QuaderApiSessionInternalAccess::from_scene_session(session));
+  const std::filesystem::path keybindings =
+      std::filesystem::temp_directory_path() /
+      "quader-tool-toolbar-effective-shortcut.json";
+  std::filesystem::remove(keybindings);
+  ASSERT_TRUE(editor.commands().set_keybinding_storage_path(keybindings).ok());
+  quader::LocalizationService localization;
+  tool_toolbar.set_localization(localization);
+  const quader::QuaderSelectionSummary selection =
+      editor.selection().summary();
+  tool_toolbar.synchronize(editor, selection, true);
+  auto *move = tool_toolbar.findChild<QAction *>(QStringLiteral("tool_move"));
+  ASSERT_NE(move, nullptr);
+  EXPECT_TRUE(move->toolTip().contains(QStringLiteral("[W]")));
+
+  ASSERT_TRUE(editor.preferences()
+                  .set_shortcut(quader::quader_command::kToolsActivateMove,
+                                "Ctrl+Alt+W")
+                  .ok());
+  tool_toolbar.synchronize(editor, selection, true);
+  EXPECT_TRUE(move->toolTip().contains(QStringLiteral("[Ctrl+Alt+W]")));
+  EXPECT_FALSE(move->toolTip().contains(QStringLiteral("[W]")));
+  std::filesystem::remove(keybindings);
 }
 
 TEST(QtProjectWorkspaceTests,
@@ -335,10 +361,10 @@ TEST(QtProjectWorkspaceTests,
   EXPECT_EQ(editor.commands().shortcut_for(
                 editor.commands().keybinding_target_id_for_grid_preset(
                     default_grid_preset)),
-            "F6");
-  EXPECT_EQ(grid_combo->toolTip(), QStringLiteral("Grid Size [F6]"));
+            "");
+  EXPECT_EQ(grid_combo->toolTip(), QStringLiteral("Grid Size"));
   EXPECT_EQ(grid_combo->accessibleDescription(),
-            QStringLiteral("Grid Size [F6]"));
+            QStringLiteral("Grid Size"));
   EXPECT_EQ(angle_combo->toolTip(),
             QStringLiteral("Rotation Snap Angle"));
   EXPECT_EQ(angle_combo->accessibleDescription(),
@@ -451,7 +477,7 @@ TEST(QtProjectWorkspaceTests,
   toolbar.synchronize(editor, true);
   EXPECT_EQ(grid_combo->currentData().toInt(), 10);
   EXPECT_DOUBLE_EQ(angle_combo->currentData().toDouble(), owner_angle);
-  EXPECT_EQ(grid_combo->toolTip(), QStringLiteral("Grid Size [F10]"));
+  EXPECT_EQ(grid_combo->toolTip(), QStringLiteral("Grid Size"));
   EXPECT_EQ(grid_index_change_signals, 0);
   EXPECT_EQ(angle_index_change_signals, 0);
   EXPECT_EQ(toggle_change_signals, (std::array<int, 4>{}));
@@ -520,6 +546,11 @@ TEST(QtProjectWorkspaceTests,
   quader::SceneSession session;
   quader::QuaderEditorApi editor(
       quader::QuaderApiSessionInternalAccess::from_scene_session(session));
+  const std::filesystem::path keybindings =
+      std::filesystem::temp_directory_path() /
+      "quader-viewport-display-effective-shortcut.json";
+  std::filesystem::remove(keybindings);
+  ASSERT_TRUE(editor.commands().set_keybinding_storage_path(keybindings).ok());
   std::array<bool, 4> owner_state{};
   const auto runtime_result = [](bool changed) {
     return quader::QuaderApiVoidResult{
@@ -547,6 +578,13 @@ TEST(QtProjectWorkspaceTests,
               [&](bool value) { return set_state(3, value); },
       });
   toolbar.synchronize(editor, true);
+  ASSERT_TRUE(editor.preferences()
+                  .set_shortcut(quader::quader_command::kViewportToggleGrid,
+                                "Ctrl+Alt+F12")
+                  .ok());
+  toolbar.synchronize(editor, true);
+  EXPECT_TRUE(
+      actions[0]->toolTip().contains(QStringLiteral("[Ctrl+Alt+F12]")));
 
   const std::array<quader::QuaderCommandId, 4> expected_commands{
       quader::quader_command::kViewportToggleGrid,
@@ -574,6 +612,7 @@ TEST(QtProjectWorkspaceTests,
   for (std::size_t index = 0; index < expected_commands.size(); ++index) {
     EXPECT_EQ(requested_commands[index], expected_commands[index].string());
   }
+  std::filesystem::remove(keybindings);
 }
 
 TEST(QtProjectWorkspaceTests,

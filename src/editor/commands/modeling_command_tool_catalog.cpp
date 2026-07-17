@@ -213,11 +213,14 @@ modeling_service_instant_command_tools() {
   static const RepeatLastActionTool kRepeatLastAction;
   static const AssignMaterialTool kAssignMaterial;
   static const MirrorSelectionTool kMirrorX{ModelingMirrorAxis::X,
-                                            "mirror_selection_x", "Mirror X"};
+                                            "mirror_selection_x",
+                                            "Mirror Selection Across X Axis"};
   static const MirrorSelectionTool kMirrorY{ModelingMirrorAxis::Y,
-                                            "mirror_selection_y", "Mirror Y"};
+                                            "mirror_selection_y",
+                                            "Mirror Selection Across Y Axis"};
   static const MirrorSelectionTool kMirrorZ{ModelingMirrorAxis::Z,
-                                            "mirror_selection_z", "Mirror Z"};
+                                            "mirror_selection_z",
+                                            "Mirror Selection Across Z Axis"};
   static const FlipHorizontalTool kFlipHorizontal;
   static const FlipVerticalTool kFlipVertical;
 

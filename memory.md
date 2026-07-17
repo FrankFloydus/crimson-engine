@@ -5010,32 +5010,76 @@ Verification: focused dock-title presentation and resource-packaging guardrails 
 native test targets build, and the complete `vs2026-debug` CTest preset passes 6/6. Final native
 v0.1.38 build result is recorded in the task handoff.
 
-## 2026-07-17 - Public Read-Only Keybinding Catalog
+## 2026-07-17 - Scoped Singular Editable Keybindings
 
 Invariant:
 
 - `QuaderCommandsApi::keybinding_catalog()` is the complete public presentation source for every
-  command and semantic viewport target that the resolver can map. Target metadata is registered
-  with its owner, while the catalog groups resolver aliases and alternate shortcuts into one row
-  per real action and context. The resolver target IDs and individual shortcuts remain available
-  in entry vectors for completeness, filtering, and diagnostics. A removed or otherwise unmapped
-  action remains present with its original context and an empty shortcut.
-- Catalog contexts describe where the user action is valid, not which internal command path owns
-  it. Modeling and arrangement actions are Viewport actions; primitive and modal commit/cancel
-  aliases are the shared Finalize Tool and Cancel Tool actions in Modal Tool context. Only actions
-  that are behaviorally distinct or valid in genuinely different contexts receive separate rows.
-- Settings consumes only that public catalog. Its retained, striped `QTableView` is read-only and
-  refreshes only during explicit dialog setup, show, localization, or keybinding refresh paths;
-  equality gates precede model resets. Do not enumerate `commands().available()`, evaluate command
-  predicates, or rebuild the catalog from the UI frame loop.
-- Name and pressed-shortcut filters operate only on the retained localized rows. Shortcut capture
-  routes Qt events through the canonical input adapter and public command formatter. All columns
-  remain interactively resizable and two-way sortable, with Command Name ascending as the default;
-  the compact fixed row height does not change catalog or Settings persistence state.
+  command and semantic viewport target that the resolver can map. A stable
+  `action_id + scope_id` identifies one user-facing row without exposing resolver aliases. Scope is
+  semantic editor state, not the coarse display category: modeling availability metadata derives
+  scopes such as `viewport.selection.vertex`, `viewport.selection.edge`, and
+  `viewport.selection.component`, while app-owned read-only `when` expressions remain the dispatch
+  authority. This permits `M` to mean Merge Vertices in vertex mode and Merge Edges in edge mode
+  without reporting a hard conflict.
+- Each action/scope owns zero or one physical mapping, although that mapping may be a multi-chord
+  sequence. Compiled defaults and user edits are normalized across every alias in the row. Legacy
+  target-level JSON remains loadable; the latest legacy entry in a group wins and its stored `when`
+  is rebound to the current app-owned predicate. Persistence elides default-equivalent groups,
+  represents intentional unassignment with target removals, and writes an empty override set for
+  Reset All. Candidate JSON is published through the shared atomic-write owner before resolver
+  activation; a late flush/replace failure preserves both the live resolver and last-good disk
+  file.
+- Assignment analysis classifies mutually exclusive reuse, exact overlap, and prefix overlap.
+  Public mutations default to `Reject`; Settings offers only Replace or Cancel for a hard conflict.
+  Replace unassigns the complete colliding action while leaving unrelated actions untouched.
+  Resolver dispatch checks command availability in precedence order and falls through to the next
+  context-compatible target instead of allowing a disabled alias to swallow input.
+- Settings consumes only public APIs. Double-clicking a mapping or pressing Enter opens the single
+  rebind dialog; there is no separate Add/Replace/Remove list. Capture supports keyboard,
+  multi-chord sequences, wheel direction, stationary Click, press-and-hold Press, DoubleClick, and
+  thresholded Drag through canonical Qt translation. The conflict prompt names only the clashing
+  action and has no Keep Both choice. Successful edits save immediately and emit
+  `KeybindingsCommit`, refreshing retained menus/tooltips outside `UISystem::refresh`; Settings
+  Apply/Cancel continues to govern only interface and viewport drafts.
+- The retained Keybindings page is intentionally table-first: it has no save-immediately banner,
+  rebind instruction banner, or selected-row default/current/`when` details block. Those internal
+  diagnostics stay in the public catalog but are not repeated in the view. Its visible columns are
+  Command, Context, and Input Mapping only; Source remains catalog metadata and is not presented.
+  Every visible column uses case-insensitive natural numeric ordering, so labels such as grid sizes
+  sort `1, 2, 4, 8, 16, 32, 64, 128, 256, 512` rather than lexically. Keybinding-facing localization
+  uses complete action names, separate from terse menu leaves; every rendered EN/IT command label
+  is unique, and generic rows such as `Center`, `X`, or `Move` are forbidden by regression
+  coverage.
+- A canonical mouse Click is emitted on release only when motion remained below Qt's drag
+  threshold. Existing immediate Drag edges remain unchanged, which keeps orbit/fly navigation
+  responsive while allowing `Alt+MiddleMouseClick` to be a real binding. Capture keeps a quick
+  click pending for the double-click interval, disables acceptance while unresolved, and flushes
+  it before any later key/click so sequence order cannot change or lose an input.
+- Qt's Windows QPA rewrites `Alt` plus a physical vertical wheel into a horizontal-only
+  `QWheelEvent::angleDelta`. Canonical Qt translation reverses that representation before choosing
+  WheelUp/WheelDown and calculating the signed step. Tests must inject the real X-axis event through
+  the production surface -> panel -> resolver/router -> workspace route; a synthetic Y-axis event
+  would reproduce neither the native bug nor its fix. Genuine Alt-modified horizontal hardware
+  wheel input is indistinguishable at this boundary and is intentionally claimed by the vertical
+  grid gesture on Windows.
+- Compiled defaults are singular: Redo is `Ctrl+Shift+Z`; alternate Ctrl+Y, Backspace delete,
+  keypad selection-mode, and Enter finalize mappings are removed. Grid preset rows no longer own
+  `F1`-`F10`. `H`/`Alt+H` hide/unhide scene objects in the object/group scope; Quader does not claim
+  persistent vertex/edge/face hide support. `F1`-`F4` select Top/Side/Front/Perspective,
+  `F5`-`F7` select Wireframe/Shaded/Rendered, `Ctrl+1`-`Ctrl+4` select the requested viewport layouts,
+  `Alt+WheelUp/Down` changes grid preset, and `Alt+MiddleMouseClick` restores the 32-unit default.
+  These three mouse/wheel mappings project to semantic `SetGridPreset` viewport shortcuts using
+  the synchronized current preset; they must not bypass the runtime viewport router as immediate
+  commands. Unassigned grid rows name their actual sizes (`Set Grid Size to 1` ... `512`) rather
+  than opaque preset indices.
 
-Owners: command and semantic viewport registration metadata, `QuaderCommandsApi`, and
+Owners: command and semantic viewport registration metadata, `QuaderCommandsApi`,
+`QuaderKeybindingService`, canonical Qt input translation/surface accumulation, and
 `QtSettingsDialog` presentation/localization.
 
-Verification: focused catalog completeness, semantic alias/context, override/removal, Settings
-interaction, localization, and UI frame-loop guardrail tests pass. Full CTest and final native
-v0.1.40 build results are recorded in the task handoff.
+Verification: focused scoped-dispatch, grouped-alias, singular-mapping, conflict, persistence,
+rollback, mouse/capture, Settings, localization, retained-UI guardrails, and the Windows-shaped
+surface-to-workspace grid-input regression pass. The complete CTest preset passes 6/6; the final
+native v0.1.42 build succeeds, and a native Settings smoke check confirms three visible columns and
+grid rows ordered `1, 2, 4, 8, 16, 32, 64, 128, 256, 512` under the production C locale.

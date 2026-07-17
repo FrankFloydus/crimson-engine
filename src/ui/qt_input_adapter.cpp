@@ -53,6 +53,8 @@ bool mouse_event_matches_gesture(QEvent::Type type,
   case QuaderInputGesture::Press:
   case QuaderInputGesture::Drag:
     return type == QEvent::MouseButtonPress;
+  case QuaderInputGesture::Click:
+    return type == QEvent::MouseButtonRelease;
   case QuaderInputGesture::DoubleClick:
     return type == QEvent::MouseButtonDblClick;
   case QuaderInputGesture::Wheel:
@@ -83,7 +85,19 @@ std::optional<QuaderInputGesture> directional_wheel_gesture(QPoint delta) {
 
 QPoint wheel_delta(const QWheelEvent &event) {
   const QPoint angle = event.angleDelta();
-  return angle.isNull() ? event.pixelDelta() : angle;
+  QPoint delta = angle.isNull() ? event.pixelDelta() : angle;
+#ifdef _WIN32
+  // Qt's Windows pointer handler represents a vertical wheel as horizontal
+  // whenever Alt is held. Restore the physical direction before canonical
+  // gesture classification so Alt+WheelUp/Down remains bindable. A genuine
+  // horizontal wheel cannot be distinguished after that QPA rewrite, and the
+  // Alt-modified vertical binding deliberately owns this representation.
+  if (event.modifiers().testFlag(Qt::AltModifier) && delta.y() == 0 &&
+      delta.x() != 0) {
+    delta = {0, delta.x()};
+  }
+#endif
+  return delta;
 }
 
 } // namespace

@@ -16,6 +16,7 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <filesystem>
 #include <fstream>
@@ -221,10 +222,12 @@ TEST(LocalizationResourceTests, ShipsEnglishAndItalianCatalogs) {
     EXPECT_EQ(localization.current_locale(), "it-IT");
     EXPECT_EQ(localization.text("ui.menu.edit", "Edit"), "Modifica");
     EXPECT_EQ(localization.text("viewport.tool.move.label", "Move"), "Sposta");
-    EXPECT_EQ(localization.text("modeling.action.bridge_faces.label", "Bridge Faces"), "Bridge facce");
+    EXPECT_EQ(localization.text("modeling.action.bridge_faces.label",
+                                "Bridge Selected Faces"),
+              "Crea bridge tra facce selezionate");
     EXPECT_EQ(localization.text("modeling.action.copy_pivot_from_active.label",
                                 "Copy Pivot From Active"),
-              "Copia pivot dall'elemento attivo");
+              "Copia pivot dall'oggetto attivo");
     EXPECT_EQ(localization.text(
                   "modeling.action.disabled.copy_pivot_from_active_selection",
                   "Select an active mesh and at least one other editable mesh."),
@@ -255,7 +258,7 @@ TEST(LocalizationResourceTests, ShipsEnglishAndItalianCatalogs) {
     EXPECT_EQ(localization.text("ui.menu.edit", "Edit"), "Edit");
     EXPECT_EQ(localization.text("modeling.action.copy_pivot_from_active.label",
                                 "Copy Pivot From Active"),
-              "Copy Pivot From Active");
+              "Copy Pivot from Active Object");
     EXPECT_EQ(localization.text(
                   "modeling.action.disabled.copy_pivot_from_active_selection",
                   "Select an active mesh and at least one other editable mesh."),
@@ -430,10 +433,159 @@ TEST(LocalizationResourceTests,
   ASSERT_GE(catalogs.size(), 2u);
   for (const QuaderKeybindingCatalogEntry &entry : entries) {
     ASSERT_FALSE(entry.localization_key.empty()) << entry.target_id;
+    ASSERT_FALSE(entry.scope_localization_key.empty()) << entry.target_id;
     for (const auto &[locale, catalog] : catalogs) {
       EXPECT_NE(catalog.find(entry.localization_key), catalog.end())
           << locale << " missing keybinding label " << entry.localization_key
           << " for " << entry.target_id;
+      EXPECT_NE(catalog.find(entry.scope_localization_key), catalog.end())
+          << locale << " missing keybinding scope "
+          << entry.scope_localization_key << " for " << entry.target_id;
+    }
+  }
+  std::filesystem::remove(keybindings, ignored);
+}
+
+TEST(LocalizationResourceTests,
+     KeybindingCatalogLabelsAreRecognizableAndUniqueInEveryLocale) {
+  SceneSession session;
+  QuaderEditorApi editor(
+      QuaderApiSessionInternalAccess::from_scene_session(session));
+  const std::filesystem::path keybindings =
+      std::filesystem::temp_directory_path() /
+      "quader-localization-recognizable-keybindings.json";
+  std::error_code ignored;
+  std::filesystem::remove(keybindings, ignored);
+  ASSERT_TRUE(editor.commands().set_keybinding_storage_path(keybindings).ok());
+
+  const std::vector<QuaderKeybindingCatalogEntry> entries =
+      editor.commands().keybinding_catalog();
+  const auto catalogs = load_resource_locale_catalogs();
+  const std::set<std::string> obscure_english_labels{
+      "Back",     "Bridge",  "Center",   "Collapse", "Connect",
+      "Copy",     "Cut",     "Delete",   "Dissolve", "Duplicate",
+      "Front",    "Knife",   "Left",     "Max",      "Merge",
+      "Min",      "Mirror",  "Move",     "Paste",    "Poly",
+      "Radial Align",         "Rendered", "Right",    "Rotate",
+      "Scale",    "Select",  "Shaded",   "Top",      "Wireframe",
+      "X",        "Y",       "Z",
+  };
+
+  for (const auto &[locale, catalog] : catalogs) {
+    std::set<std::string> visible_labels;
+    for (const QuaderKeybindingCatalogEntry &entry : entries) {
+      const auto localized = catalog.find(entry.localization_key);
+      ASSERT_NE(localized, catalog.end()) << locale << " missing "
+                                           << entry.localization_key;
+      EXPECT_TRUE(visible_labels.insert(localized->second).second)
+          << locale << " duplicates visible command label \""
+          << localized->second << "\" for " << entry.action_id;
+      if (locale == LocalizationService::kDefaultLocale) {
+        EXPECT_FALSE(obscure_english_labels.contains(localized->second))
+            << entry.action_id << " still renders as the generic label \""
+            << localized->second << "\"";
+      }
+    }
+  }
+  std::filesystem::remove(keybindings, ignored);
+}
+
+TEST(LocalizationResourceTests,
+     MeshArrangementKeybindingLabelsAreFullAndUniqueInEveryLocale) {
+  SceneSession session;
+  QuaderEditorApi editor(
+      QuaderApiSessionInternalAccess::from_scene_session(session));
+  const std::filesystem::path keybindings =
+      std::filesystem::temp_directory_path() /
+      "quader-localization-arrangement-keybindings.json";
+  std::error_code ignored;
+  std::filesystem::remove(keybindings, ignored);
+  ASSERT_TRUE(editor.commands().set_keybinding_storage_path(keybindings).ok());
+
+  const std::vector<QuaderKeybindingCatalogEntry> entries =
+      editor.commands().keybinding_catalog();
+  const auto catalogs = load_resource_locale_catalogs();
+  /// Describes the expected keybinding labels for one resource locale.
+  struct LocaleExpectation {
+    std::string_view locale;
+    std::array<std::string_view, 15> labels;
+  };
+  const std::array<LocaleExpectation, 2> expectations{{
+      {
+          "en-US",
+          {
+              "Align X Minimum",
+              "Align X Center",
+              "Align X Maximum",
+              "Align Y Minimum",
+              "Align Y Center",
+              "Align Y Maximum",
+              "Align Z Minimum",
+              "Align Z Center",
+              "Align Z Maximum",
+              "Distribute Centers Along X",
+              "Distribute Centers Along Y",
+              "Distribute Centers Along Z",
+              "Distribute Gaps Along X",
+              "Distribute Gaps Along Y",
+              "Distribute Gaps Along Z",
+          },
+      },
+      {
+          "it-IT",
+          {
+              "Allinea X al minimo",
+              "Allinea X al centro",
+              "Allinea X al massimo",
+              "Allinea Y al minimo",
+              "Allinea Y al centro",
+              "Allinea Y al massimo",
+              "Allinea Z al minimo",
+              "Allinea Z al centro",
+              "Allinea Z al massimo",
+              "Distribuisci centri lungo X",
+              "Distribuisci centri lungo Y",
+              "Distribuisci centri lungo Z",
+              "Distribuisci spazi lungo X",
+              "Distribuisci spazi lungo Y",
+              "Distribuisci spazi lungo Z",
+          },
+      },
+  }};
+
+  const auto arrangements = quader_mesh_arrangement_catalog();
+  ASSERT_EQ(arrangements.size(), expectations.front().labels.size());
+  for (const LocaleExpectation &expectation : expectations) {
+    const auto locale = std::find_if(
+        catalogs.begin(), catalogs.end(), [&](const auto &candidate) {
+          return candidate.first == expectation.locale;
+        });
+    ASSERT_NE(locale, catalogs.end()) << expectation.locale;
+
+    std::set<std::string> localized_labels;
+    std::set<std::string> fallback_labels;
+    for (std::size_t index = 0; index < arrangements.size(); ++index) {
+      const QuaderMeshArrangementDescriptor &arrangement = arrangements[index];
+      const auto entry = std::find_if(
+          entries.begin(), entries.end(), [&](const auto &candidate) {
+            return std::find(candidate.target_ids.begin(),
+                             candidate.target_ids.end(),
+                             arrangement.command_id.string()) !=
+                   candidate.target_ids.end();
+          });
+      ASSERT_NE(entry, entries.end()) << arrangement.command_id.string();
+      EXPECT_EQ(entry->localization_key,
+                arrangement.keybinding_localization_key);
+      if (expectation.locale == "en-US") {
+        EXPECT_EQ(entry->label, expectation.labels[index]);
+      }
+      EXPECT_TRUE(fallback_labels.insert(entry->label).second) << entry->label;
+
+      const auto localized = locale->second.find(entry->localization_key);
+      ASSERT_NE(localized, locale->second.end()) << entry->localization_key;
+      EXPECT_EQ(localized->second, expectation.labels[index]);
+      EXPECT_TRUE(localized_labels.insert(localized->second).second)
+          << expectation.locale << " duplicates " << localized->second;
     }
   }
   std::filesystem::remove(keybindings, ignored);

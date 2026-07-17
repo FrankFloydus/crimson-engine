@@ -96,7 +96,7 @@ TEST(QdrEditorMetadataShortcutCatalogTests, HostContractSelectionModeCatalogExpo
 
 TEST(QdrEditorMetadataShortcutCatalogTests, HostContractShortcutTargetsResolveToDescriptorOnlyCatalogs) {
 	const std::span<const qhc::HostShortcutDescriptor> shortcuts = qhc::shortcut_catalog();
-	EXPECT_TRUE(shortcuts.size() == 47U);
+	EXPECT_TRUE(shortcuts.size() == 39U);
 
 	for (const qhc::HostShortcutDescriptor& shortcut : shortcuts) {
 		EXPECT_FALSE(shortcut.id.empty());
@@ -171,6 +171,7 @@ TEST(QdrEditorMetadataShortcutCatalogTests, HostContractShortcutCatalogPreserves
 	EXPECT_TRUE(redo_shift_z.primary_modifier);
 	EXPECT_TRUE(redo_shift_z.shift);
 	EXPECT_TRUE(same_text(redo_shift_z.target_id, "redo"));
+	EXPECT_FALSE(has_shortcut("redo_y"));
 
 	const qhc::HostShortcutDescriptor& new_scene = require_shortcut("new_scene");
         EXPECT_TRUE(new_scene.context == qhc::HostShortcutContext::Global);
@@ -229,10 +230,7 @@ TEST(QdrEditorMetadataShortcutCatalogTests, HostContractShortcutCatalogPreserves
 	EXPECT_FALSE(delete_key.primary_modifier);
 	EXPECT_TRUE(same_text(delete_key.target_id, "delete"));
 
-	const qhc::HostShortcutDescriptor& delete_backspace = require_shortcut("delete_backspace");
-	EXPECT_TRUE(same_text(delete_backspace.key, "Backspace"));
-	EXPECT_FALSE(delete_backspace.primary_modifier);
-	EXPECT_TRUE(same_text(delete_backspace.target_id, "delete"));
+	EXPECT_FALSE(has_shortcut("delete_backspace"));
 
 	const qhc::HostShortcutDescriptor& merge = require_shortcut("merge_vertices");
         EXPECT_TRUE(merge.context == qhc::HostShortcutContext::Viewport);
@@ -304,33 +302,28 @@ TEST(QdrEditorMetadataShortcutCatalogTests, HostContractShortcutCatalogKeepsOver
 
 	EXPECT_TRUE(same_text(require_shortcut("mirror_axis_y").key, "Y"));
 	EXPECT_TRUE(same_text(require_shortcut("mirror_axis_z").key, "Z"));
-	EXPECT_TRUE(same_text(require_shortcut("flip_horizontal").key, "H"));
+	EXPECT_FALSE(has_shortcut("flip_horizontal"));
 	EXPECT_TRUE(same_text(require_shortcut("flip_vertical").key, "V"));
 }
 
 TEST(QdrEditorMetadataShortcutCatalogTests, HostContractShortcutCatalogIncludesViewportSelectionModeKeys) {
 	EXPECT_TRUE(same_text(require_shortcut("vertex_selection").key, "1"));
 	EXPECT_TRUE(same_text(require_shortcut("vertex_selection").target_id, "vertex"));
-	EXPECT_TRUE(same_text(require_shortcut("vertex_selection_keypad").key, "Keypad1"));
-	EXPECT_TRUE(same_text(require_shortcut("vertex_selection_keypad").target_id, "vertex"));
+	EXPECT_FALSE(has_shortcut("vertex_selection_keypad"));
 
 	EXPECT_TRUE(same_text(require_shortcut("edge_selection").key, "2"));
 	EXPECT_TRUE(same_text(require_shortcut("edge_selection").target_id, "edge"));
-	EXPECT_TRUE(same_text(require_shortcut("edge_selection_keypad").key, "Keypad2"));
-	EXPECT_TRUE(same_text(require_shortcut("edge_selection_keypad").target_id, "edge"));
+	EXPECT_FALSE(has_shortcut("edge_selection_keypad"));
 
 	EXPECT_TRUE(same_text(require_shortcut("face_selection").key, "3"));
 	EXPECT_TRUE(same_text(require_shortcut("face_selection").target_id, "face"));
-	EXPECT_TRUE(same_text(require_shortcut("face_selection_keypad").key, "Keypad3"));
-	EXPECT_TRUE(same_text(require_shortcut("face_selection_keypad").target_id, "face"));
+	EXPECT_FALSE(has_shortcut("face_selection_keypad"));
 
 	EXPECT_TRUE(same_text(require_shortcut("object_selection").key, "4"));
 	EXPECT_TRUE(same_text(require_shortcut("object_selection").target_id, "object"));
-	EXPECT_TRUE(same_text(require_shortcut("object_selection_keypad").key, "Keypad4"));
-	EXPECT_TRUE(same_text(require_shortcut("object_selection_keypad").target_id, "object"));
+	EXPECT_FALSE(has_shortcut("object_selection_keypad"));
 
 	EXPECT_TRUE(same_text(require_shortcut("group_selection").key, "5"));
 	EXPECT_TRUE(same_text(require_shortcut("group_selection").target_id, "group"));
-	EXPECT_TRUE(same_text(require_shortcut("group_selection_keypad").key, "Keypad5"));
-	EXPECT_TRUE(same_text(require_shortcut("group_selection_keypad").target_id, "group"));
+	EXPECT_FALSE(has_shortcut("group_selection_keypad"));
 }

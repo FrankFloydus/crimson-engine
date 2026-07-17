@@ -64,7 +64,7 @@ enum class ModelingActionPreviewKind {
 enum class ModelingActionSelectionRequirement {
     AnySelection,
     SelectionMode,
-    NonObjectSelection,
+    ComponentSelection,
     ObjectOrFaceSelection,
     EdgeOrFaceSelection,
 };
@@ -160,6 +160,8 @@ public:
   [[nodiscard]] static bool
   action_available(const ModelingSelectionSummary &summary,
                    std::string_view action_id);
+  [[nodiscard]] static std::vector<ModelingSelectionMode>
+  selection_modes_for_action(std::string_view action_id);
   [[nodiscard]] static ModelingActionAvailabilityResult
   evaluate_availability(const ModelingSelectionSummary &summary,
                         const ModelingActionAvailabilityRule &rule);

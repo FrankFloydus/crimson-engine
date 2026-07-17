@@ -140,5 +140,8 @@ viewport_operation_preview_command_target_id_for_router_shortcut(
     const ViewportShortcut &shortcut);
 bool viewport_router_shortcut_for_target_id(std::string_view target_id,
                                             ViewportShortcut &shortcut);
+bool viewport_router_shortcut_for_target_id(std::string_view target_id,
+                                            int current_grid_preset,
+                                            ViewportShortcut &shortcut);
 
 } // namespace quader

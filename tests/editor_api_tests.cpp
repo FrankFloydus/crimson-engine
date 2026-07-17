@@ -30,6 +30,13 @@
 #include <utility>
 #include <vector>
 
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
+
 namespace {
 
 std::optional<quader::QuaderEntitySnapshot>
@@ -616,8 +623,7 @@ bool has_keybinding_catalog_entry(
   return std::any_of(entries.begin(), entries.end(), [&](const auto &entry) {
     return std::find(entry.target_ids.begin(), entry.target_ids.end(),
                      target_id) != entry.target_ids.end() &&
-           std::find(entry.shortcuts.begin(), entry.shortcuts.end(),
-                     shortcut) != entry.shortcuts.end();
+           entry.shortcut == shortcut;
   });
 }
 
@@ -799,7 +805,7 @@ TEST(EditorApiTests, AggregatesDocumentApisAndCommandRouting) {
     EXPECT_FALSE(spawn_window->enabled);
     EXPECT_EQ(editor.commands().shortcut_for(
                   quader::quader_command::kViewportViewPerspective),
-              "");
+              "F4");
     EXPECT_EQ(editor.commands().shortcut_for(
                   quader::quader_command::kToolsActivatePivot),
               "P");
@@ -820,7 +826,7 @@ TEST(EditorApiTests, AggregatesDocumentApisAndCommandRouting) {
     EXPECT_EQ(editor.commands().shortcut_for(
                   editor.commands().command_id_for_modeling_action(
                       "delete_selection")),
-              "Backspace");
+              "Delete");
     EXPECT_EQ(
         editor.commands().command_id_for_modeling_action("invert_mesh"),
         std::string(quader::quader_command::kModelingInvertMesh.string()));
@@ -846,30 +852,29 @@ TEST(EditorApiTests, AggregatesDocumentApisAndCommandRouting) {
     EXPECT_EQ(editor.commands().shortcut_for(
                   editor.commands().keybinding_target_id_for_selection_mode(
                       quader::QuaderSelectionMode::Vertex)),
-              "Keypad1");
+              "1");
     EXPECT_EQ(editor.commands().shortcut_for(
                   editor.commands().keybinding_target_id_for_selection_mode(
                       quader::QuaderSelectionMode::Edge)),
-              "Keypad2");
+              "2");
     EXPECT_EQ(editor.commands().shortcut_for(
                   editor.commands().keybinding_target_id_for_selection_mode(
                       quader::QuaderSelectionMode::Face)),
-              "Keypad3");
+              "3");
     EXPECT_EQ(editor.commands().shortcut_for(
                   editor.commands().keybinding_target_id_for_selection_mode(
                       quader::QuaderSelectionMode::Object)),
-              "Keypad4");
+              "4");
     EXPECT_EQ(editor.commands().shortcut_for(
                   editor.commands().keybinding_target_id_for_selection_mode(
                       quader::QuaderSelectionMode::Group)),
-              "Keypad5");
+              "5");
     for (int preset = 1; preset <= 10; ++preset) {
       const std::string target =
           editor.commands().keybinding_target_id_for_grid_preset(preset);
       EXPECT_EQ(target,
                 quader::quader_viewport_grid_preset_target_id(preset));
-      EXPECT_EQ(editor.commands().shortcut_for(target),
-                "F" + std::to_string(preset));
+      EXPECT_EQ(editor.commands().shortcut_for(target), "");
     }
     EXPECT_FALSE(editor.commands().last_status().has_value());
     const quader::QuaderApiVoidResult missing_command =
@@ -1789,6 +1794,551 @@ TEST(EditorApiTests, ShortcutMutationsReportNoOpChangedStatus) {
   EXPECT_FALSE(reset_again.changed());
 }
 
+TEST(EditorApiTests,
+     ActionKeybindingsOwnAliasesSingleMappingPersistenceAndReset) {
+  const std::filesystem::path path =
+      keybinding_test_path("action-single-mapping");
+  CommandTestHarness harness;
+  quader::QuaderEditorApi &editor = harness.editor;
+  ASSERT_TRUE(editor.commands().set_keybinding_storage_path(path).ok());
+
+  const auto initial_catalog = editor.commands().keybinding_catalog();
+  const quader::QuaderKeybindingCatalogEntry *initial =
+      find_keybinding_catalog_entry(
+          initial_catalog,
+          quader::quader_command::kToolsApplyPrimitiveCreation.string());
+  ASSERT_NE(initial, nullptr);
+  ASSERT_GT(initial->target_ids.size(), 1u);
+  EXPECT_EQ(initial->default_shortcut, "Space");
+  const quader::QuaderKeybindingActionKey action = initial->key;
+
+  ASSERT_TRUE(editor.preferences()
+                  .set_shortcut(initial->target_ids.front(), "Ctrl+Alt+F18")
+                  .ok());
+  const auto grouped_catalog = editor.commands().keybinding_catalog();
+  const quader::QuaderKeybindingCatalogEntry *grouped =
+      find_keybinding_catalog_entry(
+          grouped_catalog,
+          quader::quader_command::kToolsApplyPrimitiveCreation.string());
+  ASSERT_NE(grouped, nullptr);
+  EXPECT_EQ(grouped->shortcut, "Ctrl+Alt+F18");
+  EXPECT_TRUE(grouped->customized);
+  EXPECT_EQ(grouped->source, quader::QuaderKeybindingSourceKind::User);
+  for (const std::string &target_id : grouped->target_ids) {
+    EXPECT_TRUE(has_keybinding(editor.commands().keybindings(), target_id,
+                               "Ctrl+Alt+F18"))
+        << target_id;
+  }
+
+  ASSERT_TRUE(editor.preferences()
+                  .set_action_shortcut(action, "Space")
+                  .ok());
+  const auto default_catalog = editor.commands().keybinding_catalog();
+  const auto *default_entry = find_keybinding_catalog_entry(
+      default_catalog,
+      quader::quader_command::kToolsApplyPrimitiveCreation.string());
+  ASSERT_NE(default_entry, nullptr);
+  EXPECT_FALSE(default_entry->customized);
+  std::string default_file = read_text_file(path);
+  default_file.erase(
+      std::remove(default_file.begin(), default_file.end(), '\r'),
+      default_file.end());
+  EXPECT_EQ(default_file, "[\n]\n");
+
+  const quader::QuaderApiVoidResult changed =
+      editor.preferences().set_action_shortcut(
+          action, "Ctrl+Enter",
+          quader::QuaderKeybindingConflictPolicy::Reject);
+  ASSERT_TRUE(changed.ok()) << changed.error_message();
+  EXPECT_TRUE(changed.changed());
+
+  CommandTestHarness reloaded_harness;
+  quader::QuaderEditorApi &reloaded = reloaded_harness.editor;
+  ASSERT_TRUE(reloaded.commands().set_keybinding_storage_path(path).ok());
+  auto reloaded_catalog = reloaded.commands().keybinding_catalog();
+  const quader::QuaderKeybindingCatalogEntry *reloaded_entry =
+      find_keybinding_catalog_entry(
+          reloaded_catalog,
+          quader::quader_command::kToolsApplyPrimitiveCreation.string());
+  ASSERT_NE(reloaded_entry, nullptr);
+  EXPECT_EQ(reloaded_entry->shortcut, "Ctrl+Enter");
+
+  ASSERT_TRUE(reloaded.preferences()
+                  .remove_shortcut(reloaded_entry->target_ids.front())
+                  .ok());
+  reloaded_catalog = reloaded.commands().keybinding_catalog();
+  const quader::QuaderKeybindingCatalogEntry *unassigned =
+      find_keybinding_catalog_entry(
+          reloaded_catalog,
+          quader::quader_command::kToolsApplyPrimitiveCreation.string());
+  ASSERT_NE(unassigned, nullptr);
+  EXPECT_TRUE(unassigned->shortcut.empty());
+  EXPECT_TRUE(unassigned->customized);
+  EXPECT_TRUE(unassigned->unassigned);
+  EXPECT_EQ(unassigned->source, quader::QuaderKeybindingSourceKind::User);
+
+  ASSERT_TRUE(reloaded.preferences()
+                  .reset_action_shortcut(
+                      action, quader::QuaderKeybindingConflictPolicy::Reject)
+                  .ok());
+  reloaded_catalog = reloaded.commands().keybinding_catalog();
+  const quader::QuaderKeybindingCatalogEntry *reset =
+      find_keybinding_catalog_entry(
+          reloaded_catalog,
+          quader::quader_command::kToolsApplyPrimitiveCreation.string());
+  ASSERT_NE(reset, nullptr);
+  EXPECT_EQ(reset->shortcut, "Space");
+  EXPECT_FALSE(reset->customized);
+  EXPECT_FALSE(reset->unassigned);
+  EXPECT_EQ(reset->source, quader::QuaderKeybindingSourceKind::Default);
+
+  ASSERT_TRUE(reloaded.preferences()
+                  .set_action_shortcut(action, "Ctrl+Enter")
+                  .ok());
+  ASSERT_TRUE(reloaded.preferences().remove_action_shortcut(action).ok());
+  const auto action_removed_catalog =
+      reloaded.commands().keybinding_catalog();
+  const auto *action_removed = find_keybinding_catalog_entry(
+      action_removed_catalog,
+      quader::quader_command::kToolsApplyPrimitiveCreation.string());
+  ASSERT_NE(action_removed, nullptr);
+  EXPECT_TRUE(action_removed->unassigned);
+  ASSERT_TRUE(reloaded.preferences()
+                  .set_action_shortcut(action, "Ctrl+Enter")
+                  .ok());
+  ASSERT_TRUE(reloaded.preferences().reset_all_shortcuts().ok());
+  std::string reset_file = read_text_file(path);
+  reset_file.erase(std::remove(reset_file.begin(), reset_file.end(), '\r'),
+                   reset_file.end());
+  EXPECT_EQ(reset_file, "[\n]\n");
+}
+
+TEST(EditorApiTests,
+     ActionKeybindingAnalysisClassifiesReuseExactAndPrefixConflicts) {
+  const std::filesystem::path path =
+      keybinding_test_path("action-conflict-analysis");
+  CommandTestHarness harness;
+  quader::QuaderEditorApi &editor = harness.editor;
+  ASSERT_TRUE(editor.commands().set_keybinding_storage_path(path).ok());
+
+  auto catalog = editor.commands().keybinding_catalog();
+  const quader::QuaderKeybindingCatalogEntry *undo =
+      find_keybinding_catalog_entry(
+          catalog, quader::quader_command::kEditUndo.string());
+  const quader::QuaderKeybindingCatalogEntry *redo =
+      find_keybinding_catalog_entry(
+          catalog, quader::quader_command::kEditRedo.string());
+  ASSERT_NE(undo, nullptr);
+  ASSERT_NE(redo, nullptr);
+  const quader::QuaderKeybindingActionKey undo_action = undo->key;
+  const quader::QuaderKeybindingActionKey redo_action = redo->key;
+
+  ASSERT_TRUE(editor.preferences()
+                  .set_action_shortcut(redo_action, "Ctrl+Alt+F23")
+                  .ok());
+  quader::QuaderKeybindingAssignmentAnalysis exact =
+      editor.commands().analyze_shortcut_assignment(undo_action,
+                                                    "Ctrl+Alt+F23");
+  ASSERT_TRUE(exact.ok);
+  ASSERT_EQ(exact.conflicts.size(), 1u);
+  EXPECT_EQ(exact.conflicts.front().action, redo_action);
+  EXPECT_EQ(exact.conflicts.front().kind,
+            quader::QuaderKeybindingCollisionKind::ExactConflict);
+  const quader::QuaderApiVoidResult rejected =
+      editor.preferences().set_action_shortcut(
+          undo_action, "Ctrl+Alt+F23",
+          quader::QuaderKeybindingConflictPolicy::Reject);
+  EXPECT_FALSE(rejected.ok());
+
+  ASSERT_TRUE(editor.preferences()
+                  .set_action_shortcut(
+                      undo_action, "Ctrl+Alt+F23",
+                      quader::QuaderKeybindingConflictPolicy::Replace)
+                  .ok());
+  catalog = editor.commands().keybinding_catalog();
+  redo = find_keybinding_catalog_entry(
+      catalog, quader::quader_command::kEditRedo.string());
+  ASSERT_NE(redo, nullptr);
+  EXPECT_TRUE(redo->unassigned);
+
+  ASSERT_TRUE(editor.preferences()
+                  .set_action_shortcut(redo_action, "Ctrl+K Ctrl+C")
+                  .ok());
+  const quader::QuaderKeybindingAssignmentAnalysis shorter =
+      editor.commands().analyze_shortcut_assignment(undo_action, "Ctrl+K");
+  ASSERT_TRUE(shorter.ok);
+  ASSERT_FALSE(shorter.conflicts.empty());
+  EXPECT_EQ(shorter.conflicts.front().kind,
+            quader::QuaderKeybindingCollisionKind::PrefixConflict);
+  const quader::QuaderKeybindingAssignmentAnalysis longer =
+      editor.commands().analyze_shortcut_assignment(undo_action,
+                                                    "Ctrl+K Ctrl+C D");
+  ASSERT_TRUE(longer.ok);
+  ASSERT_FALSE(longer.conflicts.empty());
+  EXPECT_EQ(longer.conflicts.front().kind,
+            quader::QuaderKeybindingCollisionKind::PrefixConflict);
+
+  catalog = editor.commands().keybinding_catalog();
+  const std::string move_target =
+      editor.commands().command_id_for_tool_activation("move");
+  const quader::QuaderKeybindingCatalogEntry *move =
+      find_keybinding_catalog_entry(catalog, move_target);
+  ASSERT_NE(move, nullptr);
+  const quader::QuaderKeybindingAssignmentAnalysis compatible =
+      editor.commands().analyze_shortcut_assignment(move->key, "W");
+  ASSERT_TRUE(compatible.ok);
+  EXPECT_TRUE(compatible.conflicts.empty());
+  EXPECT_NE(std::find_if(compatible.compatible_reuses.begin(),
+                         compatible.compatible_reuses.end(),
+                         [](const auto &collision) {
+                           return collision.target_id ==
+                                  "viewport.navigation.fly_forward";
+                         }),
+            compatible.compatible_reuses.end());
+}
+
+TEST(EditorApiTests, ActionKeybindingReplaceUnassignsEveryCollision) {
+  const std::filesystem::path path =
+      keybinding_test_path("action-replace-many");
+  {
+    std::ofstream file(path);
+    file << "[\n"
+         << "  {\"command\":\""
+         << quader::quader_command::kEditRedo.string()
+         << "\",\"key\":\"Ctrl+Alt+F19\",\"when\":\"true\"},\n"
+         << "  {\"command\":\""
+         << quader::quader_command::kEditRepeatLastAction.string()
+         << "\",\"key\":\"Ctrl+Alt+F19\",\"when\":\"true\"}\n"
+         << "]\n";
+  }
+  CommandTestHarness harness;
+  quader::QuaderEditorApi &editor = harness.editor;
+  ASSERT_TRUE(editor.commands().set_keybinding_storage_path(path).ok());
+
+  const auto catalog = editor.commands().keybinding_catalog();
+  const auto *undo = find_keybinding_catalog_entry(
+      catalog, quader::quader_command::kEditUndo.string());
+  ASSERT_NE(undo, nullptr);
+  const quader::QuaderKeybindingAssignmentAnalysis analysis =
+      editor.commands().analyze_shortcut_assignment(undo->key,
+                                                    "Ctrl+Alt+F19");
+  ASSERT_TRUE(analysis.ok);
+  EXPECT_EQ(analysis.conflicts.size(), 2u);
+
+  ASSERT_TRUE(editor.preferences()
+                  .set_action_shortcut(
+                      undo->key, "Ctrl+Alt+F19",
+                      quader::QuaderKeybindingConflictPolicy::Replace)
+                  .ok());
+  const auto replaced = editor.commands().keybinding_catalog();
+  const auto *redo = find_keybinding_catalog_entry(
+      replaced, quader::quader_command::kEditRedo.string());
+  const auto *repeat = find_keybinding_catalog_entry(
+      replaced, quader::quader_command::kEditRepeatLastAction.string());
+  ASSERT_NE(redo, nullptr);
+  ASSERT_NE(repeat, nullptr);
+  EXPECT_TRUE(redo->unassigned);
+  EXPECT_TRUE(repeat->unassigned);
+}
+
+TEST(EditorApiTests, ActionKeybindingWriteFailureDoesNotChangeLiveResolver) {
+  const std::filesystem::path blocker =
+      keybinding_test_path("action-write-blocker");
+  {
+    std::ofstream file(blocker);
+    file << "not a directory";
+  }
+  CommandTestHarness harness;
+  quader::QuaderEditorApi &editor = harness.editor;
+  ASSERT_TRUE(editor.commands()
+                  .set_keybinding_storage_path(blocker / "keybindings.json")
+                  .ok());
+  const auto catalog = editor.commands().keybinding_catalog();
+  const quader::QuaderKeybindingCatalogEntry *undo =
+      find_keybinding_catalog_entry(
+          catalog, quader::quader_command::kEditUndo.string());
+  ASSERT_NE(undo, nullptr);
+  const std::string before = undo->shortcut;
+
+  const quader::QuaderApiVoidResult failed =
+      editor.preferences().set_action_shortcut(undo->key, "Ctrl+Alt+F20");
+  EXPECT_FALSE(failed.ok());
+  EXPECT_FALSE(failed.changed());
+  const auto after_catalog = editor.commands().keybinding_catalog();
+  const quader::QuaderKeybindingCatalogEntry *after =
+      find_keybinding_catalog_entry(
+          after_catalog,
+          quader::quader_command::kEditUndo.string());
+  ASSERT_NE(after, nullptr);
+  EXPECT_EQ(after->shortcut, before);
+  std::error_code ignored;
+  std::filesystem::remove(blocker, ignored);
+}
+
+TEST(EditorApiTests,
+     ActionKeybindingLateCommitFailurePreservesLiveAndDiskState) {
+#ifndef _WIN32
+  GTEST_SKIP() << "The deterministic replacement lock uses Windows sharing.";
+#else
+  const std::filesystem::path path =
+      keybinding_test_path("action-late-commit-failure");
+  {
+    std::ofstream file(path, std::ios::binary);
+    ASSERT_TRUE(file.is_open());
+    file << "[]\n";
+  }
+
+  CommandTestHarness harness;
+  quader::QuaderEditorApi &editor = harness.editor;
+  ASSERT_TRUE(editor.commands().set_keybinding_storage_path(path).ok());
+  const auto catalog = editor.commands().keybinding_catalog();
+  const quader::QuaderKeybindingCatalogEntry *undo =
+      find_keybinding_catalog_entry(
+          catalog, quader::quader_command::kEditUndo.string());
+  ASSERT_NE(undo, nullptr);
+  const std::string before_shortcut = undo->shortcut;
+  const std::string before_disk = read_text_file(path);
+
+  const HANDLE replacement_guard =
+      ::CreateFileW(path.c_str(), GENERIC_READ,
+                    FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr,
+                    OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+  ASSERT_NE(replacement_guard, INVALID_HANDLE_VALUE);
+
+  const quader::QuaderApiVoidResult failed =
+      editor.preferences().set_action_shortcut(undo->key, "Ctrl+Alt+F20");
+  EXPECT_FALSE(failed.ok());
+  EXPECT_FALSE(failed.changed());
+  EXPECT_NE(failed.error_message().find("replace"), std::string::npos);
+
+  const auto after_catalog = editor.commands().keybinding_catalog();
+  const quader::QuaderKeybindingCatalogEntry *after =
+      find_keybinding_catalog_entry(
+          after_catalog, quader::quader_command::kEditUndo.string());
+  EXPECT_NE(after, nullptr);
+  if (after != nullptr) {
+    EXPECT_EQ(after->shortcut, before_shortcut);
+  }
+  EXPECT_EQ(read_text_file(path), before_disk);
+
+  std::vector<std::filesystem::path> temporary_files;
+  const std::string temporary_prefix = path.filename().string() + ".tmp.";
+  const std::string transaction_prefix =
+      "." + path.filename().string() + ".";
+  for (const std::filesystem::directory_entry &entry :
+       std::filesystem::directory_iterator(path.parent_path())) {
+    const std::string filename = entry.path().filename().string();
+    if (filename.rfind(temporary_prefix, 0u) == 0u ||
+        filename.rfind(transaction_prefix, 0u) == 0u) {
+      temporary_files.push_back(entry.path());
+    }
+  }
+  EXPECT_TRUE(temporary_files.empty());
+
+  EXPECT_NE(::CloseHandle(replacement_guard), 0);
+  std::error_code ignored;
+  for (const std::filesystem::path &temporary : temporary_files) {
+    std::filesystem::remove(temporary, ignored);
+  }
+  std::filesystem::remove(path, ignored);
+#endif
+}
+
+TEST(EditorApiTests,
+     LegacyActionMappingsUseLatestEntryAndCurrentAppOwnedContext) {
+  const std::filesystem::path path =
+      keybinding_test_path("action-legacy-latest-wins");
+  CommandTestHarness harness;
+  quader::QuaderEditorApi &editor = harness.editor;
+  ASSERT_TRUE(editor.commands().set_keybinding_storage_path(path).ok());
+
+  const auto initial_catalog = editor.commands().keybinding_catalog();
+  const auto *initial = find_keybinding_catalog_entry(
+      initial_catalog,
+      quader::quader_command::kToolsApplyPrimitiveCreation.string());
+  ASSERT_NE(initial, nullptr);
+  ASSERT_GT(initial->target_ids.size(), 1u);
+  const quader::QuaderKeybindingActionKey action = initial->key;
+  const std::vector<std::string> targets = initial->target_ids;
+  const std::string canonical_when = initial->when;
+
+  {
+    std::ofstream file(path);
+    file << "[\n"
+         << "  {\"command\":\"" << targets.front()
+         << "\",\"key\":\"Ctrl+Alt+F20\",\"when\":\"true\"},\n"
+         << "  {\"command\":\"" << targets.back()
+         << "\",\"key\":\"Ctrl+Alt+F21\",\"when\":\"true\"}\n"
+         << "]\n";
+  }
+  const std::string legacy_file = read_text_file(path);
+
+  ASSERT_TRUE(editor.commands().set_keybinding_storage_path(path).ok());
+  EXPECT_EQ(read_text_file(path), legacy_file);
+  const auto loaded_catalog = editor.commands().keybinding_catalog();
+  const auto *loaded = find_keybinding_catalog_entry(
+      loaded_catalog,
+      quader::quader_command::kToolsApplyPrimitiveCreation.string());
+  ASSERT_NE(loaded, nullptr);
+  EXPECT_EQ(loaded->shortcut, "Ctrl+Alt+F21");
+  EXPECT_EQ(loaded->when, canonical_when);
+  for (const std::string &target_id : targets) {
+    EXPECT_TRUE(has_keybinding(editor.commands().keybindings(), target_id,
+                               "Ctrl+Alt+F21"))
+        << target_id;
+    EXPECT_FALSE(has_keybinding_when(editor.commands().keybindings(), target_id,
+                                     "Ctrl+Alt+F21", "true"))
+        << target_id;
+  }
+
+  ASSERT_TRUE(editor.preferences()
+                  .set_action_shortcut(action, "Ctrl+Alt+F22")
+                  .ok());
+  const std::string canonical_file = read_text_file(path);
+  EXPECT_EQ(canonical_file.find("Ctrl+Alt+F20"), std::string::npos);
+  EXPECT_EQ(canonical_file.find("Ctrl+Alt+F21"), std::string::npos);
+  EXPECT_NE(canonical_file.find("Ctrl+Alt+F22"), std::string::npos);
+}
+
+TEST(EditorApiTests,
+     ScopedModelingMappingsReuseInputAcrossExclusiveSelectionModes) {
+  const std::filesystem::path path =
+      keybinding_test_path("selection-mode-scopes");
+  CommandTestHarness harness;
+  quader::QuaderEditorApi &editor = harness.editor;
+  ASSERT_TRUE(editor.commands().set_keybinding_storage_path(path).ok());
+  const quader::QuaderModelingObjectRef object =
+      create_selected_box(editor, "Scoped Keybinding Box");
+  ASSERT_TRUE(
+      editor.selection().set_mode(quader::QuaderSelectionMode::Vertex).ok());
+  ASSERT_TRUE(editor.selection().select_vertex(object, 1).ok());
+  ASSERT_TRUE(editor.selection()
+                  .select_vertex(object, 2, quader::QuaderSelectionEdit::Add)
+                  .ok());
+
+  auto catalog = editor.commands().keybinding_catalog();
+  const std::string merge_vertices_target =
+      editor.commands().command_id_for_modeling_action("merge_vertices");
+  const std::string merge_edges_target =
+      editor.commands().command_id_for_modeling_action("merge_edges");
+  const auto *merge_vertices =
+      find_keybinding_catalog_entry(catalog, merge_vertices_target);
+  const auto *merge_edges =
+      find_keybinding_catalog_entry(catalog, merge_edges_target);
+  ASSERT_NE(merge_vertices, nullptr);
+  ASSERT_NE(merge_edges, nullptr);
+  EXPECT_EQ(merge_vertices->scope_id, "viewport.selection.vertex");
+  EXPECT_EQ(merge_edges->scope_id, "viewport.selection.edge");
+  EXPECT_EQ(merge_vertices->shortcut, "M");
+
+  const quader::QuaderKeybindingAssignmentAnalysis compatible =
+      editor.commands().analyze_shortcut_assignment(merge_edges->key, "M");
+  ASSERT_TRUE(compatible.ok);
+  EXPECT_TRUE(compatible.conflicts.empty());
+  EXPECT_FALSE(compatible.compatible_reuses.empty());
+  ASSERT_TRUE(editor.preferences()
+                  .set_action_shortcut(merge_edges->key, "M")
+                  .ok());
+
+  catalog = editor.commands().keybinding_catalog();
+  merge_vertices =
+      find_keybinding_catalog_entry(catalog, merge_vertices_target);
+  merge_edges = find_keybinding_catalog_entry(catalog, merge_edges_target);
+  ASSERT_NE(merge_vertices, nullptr);
+  ASSERT_NE(merge_edges, nullptr);
+
+  const quader::QuaderSelectionSummary vertex_selection =
+      editor.query().selection();
+  EXPECT_EQ(vertex_selection.mode, quader::QuaderSelectionMode::Vertex);
+  EXPECT_GE(vertex_selection.selected_vertex_count, 2u);
+  EXPECT_NE(vertex_selection.active_vertex_id,
+            quader::kInvalidQuaderElementId);
+  for (const std::string &target_id : merge_vertices->target_ids) {
+    const std::optional<quader::QuaderCommandDescriptor> descriptor =
+        editor.commands().descriptor(target_id);
+    if (descriptor.has_value()) {
+      EXPECT_TRUE(descriptor->enabled) << target_id;
+    }
+  }
+
+  quader::ViewportToolState state;
+  state.selection_mode = quader::ViewportSelectionMode::Vertex;
+  quader::QuaderViewportKeybindingDispatch dispatch =
+      editor.commands().dispatch_viewport_input_binding(
+          single_input_chord("M"), state, true, false);
+  ASSERT_EQ(dispatch.kind,
+            quader::QuaderViewportKeybindingDispatch::Kind::Command);
+  EXPECT_NE(std::find(merge_vertices->target_ids.begin(),
+                      merge_vertices->target_ids.end(), dispatch.command_id),
+            merge_vertices->target_ids.end());
+
+  ASSERT_TRUE(
+      editor.selection().set_mode(quader::QuaderSelectionMode::Edge).ok());
+  ASSERT_TRUE(editor.selection().select_edge(object, 1, 2).ok());
+  ASSERT_TRUE(editor.selection()
+                  .select_edge(object, 2, 3, quader::QuaderSelectionEdit::Add)
+                  .ok());
+  state.selection_mode = quader::ViewportSelectionMode::Edge;
+  dispatch = editor.commands().dispatch_viewport_input_binding(
+      single_input_chord("M"), state, true, false);
+  ASSERT_EQ(dispatch.kind,
+            quader::QuaderViewportKeybindingDispatch::Kind::Command);
+  EXPECT_NE(std::find(merge_edges->target_ids.begin(),
+                      merge_edges->target_ids.end(), dispatch.command_id),
+            merge_edges->target_ids.end());
+
+  const auto *radial_align = find_keybinding_catalog_entry(
+      catalog, editor.commands().command_id_for_modeling_action("radial_align"));
+  ASSERT_NE(radial_align, nullptr);
+  EXPECT_EQ(radial_align->scope_id, "viewport.selection.component");
+}
+
+TEST(EditorApiTests, DisabledKeybindingCandidateFallsThroughOrPassesInput) {
+  const std::filesystem::path fallback_path =
+      keybinding_test_path("availability-fallback");
+  CommandTestHarness harness;
+  quader::QuaderEditorApi &editor = harness.editor;
+  create_selected_box(editor, "Availability Fallback Box");
+  {
+    std::ofstream file(fallback_path);
+    file << "[\n"
+         << "  {\"command\":\""
+         << quader::quader_command::kEditUndo.string()
+         << "\",\"key\":\"Ctrl+Alt+F24\"},\n"
+         << "  {\"command\":\""
+         << quader::quader_command::kEditRedo.string()
+         << "\",\"key\":\"Ctrl+Alt+F24\"}\n"
+         << "]\n";
+  }
+  ASSERT_TRUE(
+      editor.commands().set_keybinding_storage_path(fallback_path).ok());
+  quader::ViewportToolState state;
+  const quader::QuaderViewportKeybindingDispatch fallback =
+      editor.commands().dispatch_viewport_input_binding(
+          single_input_chord("Ctrl+Alt+F24"), state, false, false);
+  ASSERT_EQ(fallback.kind,
+            quader::QuaderViewportKeybindingDispatch::Kind::Command);
+  EXPECT_EQ(fallback.command_id,
+            quader::quader_command::kEditUndo.string());
+
+  const std::filesystem::path unavailable_path =
+      keybinding_test_path("availability-pass-through");
+  {
+    std::ofstream file(unavailable_path);
+    file << "[{\"command\":\""
+         << quader::quader_command::kEditCreateInstance.string()
+         << "\",\"key\":\"Ctrl+Alt+F23\"}]\n";
+  }
+  ASSERT_TRUE(
+      editor.commands().set_keybinding_storage_path(unavailable_path).ok());
+  ASSERT_TRUE(editor.selection().clear().ok());
+  const quader::QuaderViewportKeybindingDispatch no_match =
+      editor.commands().dispatch_viewport_input_binding(
+          single_input_chord("Ctrl+Alt+F23"), state, false, false);
+  EXPECT_EQ(no_match.kind,
+            quader::QuaderViewportKeybindingDispatch::Kind::NoMatch);
+}
+
 TEST(EditorApiTests, KeybindingConflictsUseSemanticWhenOverlap) {
     quader::QuaderKeybindingService service;
     service.register_target("navigation.any");
@@ -1871,25 +2421,28 @@ TEST(EditorApiTests, ViewportKeybindingsResolveContextAndUserOverrides) {
           quader::QuaderSelectionMode::Face);
   EXPECT_EQ(face_selection_target,
             quader::quader_viewport_selection_mode_target_id("face"));
-  EXPECT_EQ(editor.commands().shortcut_for(face_selection_target), "Keypad3");
+  EXPECT_EQ(editor.commands().shortcut_for(face_selection_target), "3");
   ASSERT_TRUE(editor.commands().resolve_viewport_shortcut(
       quader::ViewportKey::Number3, {}, state, true, false, shortcut));
   EXPECT_EQ(shortcut.kind, quader::ViewportShortcutKind::SetSelectionMode);
   EXPECT_EQ(shortcut.selection_mode, quader::ViewportSelectionMode::Face);
 
   ASSERT_TRUE(
-      editor.preferences().set_shortcut(face_selection_target, "Ctrl+3").ok());
-  EXPECT_EQ(editor.commands().shortcut_for(face_selection_target), "Ctrl+3");
+      editor.preferences()
+          .set_shortcut(face_selection_target, "Ctrl+Alt+3")
+          .ok());
+  EXPECT_EQ(editor.commands().shortcut_for(face_selection_target),
+            "Ctrl+Alt+3");
   shortcut = {};
   EXPECT_FALSE(editor.commands().resolve_viewport_shortcut(
       quader::ViewportKey::Number3, {}, state, true, false, shortcut));
   ASSERT_TRUE(editor.commands().resolve_viewport_shortcut(
-      quader::ViewportKey::Number3, {.primary = true}, state, true, false,
-      shortcut));
+      quader::ViewportKey::Number3, {.primary = true, .alt = true}, state, true,
+      false, shortcut));
   EXPECT_EQ(shortcut.kind, quader::ViewportShortcutKind::SetSelectionMode);
   EXPECT_EQ(shortcut.selection_mode, quader::ViewportSelectionMode::Face);
   ASSERT_TRUE(editor.preferences().reset_shortcut(face_selection_target).ok());
-  EXPECT_EQ(editor.commands().shortcut_for(face_selection_target), "Keypad3");
+  EXPECT_EQ(editor.commands().shortcut_for(face_selection_target), "3");
 
   ASSERT_TRUE(editor.preferences()
                   .set_shortcut(quader::quader_command::kEditUndo, "Ctrl+U")
@@ -1967,18 +2520,14 @@ TEST(EditorApiTests, GlobalCommandKeybindingsResolveWithAndWithoutViewportFocus)
   const quader::QuaderViewportKeybindingDispatch next_dispatch =
       editor.commands().dispatch_viewport_input_binding(
           single_input_chord("Ctrl+Tab"), state, false, false);
-  ASSERT_EQ(next_dispatch.kind,
-            quader::QuaderViewportKeybindingDispatch::Kind::Command);
-  EXPECT_EQ(next_dispatch.command_id,
-            quader::quader_command::kSceneDocumentNext.string());
+  EXPECT_EQ(next_dispatch.kind,
+            quader::QuaderViewportKeybindingDispatch::Kind::NoMatch);
 
   const quader::QuaderViewportKeybindingDispatch previous_dispatch =
       editor.commands().dispatch_viewport_input_binding(
           single_input_chord("Ctrl+Shift+Tab"), state, false, false);
-  ASSERT_EQ(previous_dispatch.kind,
-            quader::QuaderViewportKeybindingDispatch::Kind::Command);
-  EXPECT_EQ(previous_dispatch.command_id,
-            quader::quader_command::kSceneDocumentPrevious.string());
+  EXPECT_EQ(previous_dispatch.kind,
+            quader::QuaderViewportKeybindingDispatch::Kind::NoMatch);
 
   const quader::QuaderViewportKeybindingDispatch focused_copy_dispatch =
       editor.commands().dispatch_viewport_input_binding(
@@ -2019,13 +2568,11 @@ TEST(EditorApiTests, GlobalCommandKeybindingsResolveWithAndWithoutViewportFocus)
   ASSERT_TRUE(
       editor.commands().execute(quader::quader_command::kEditUndo).ok());
 
-  const quader::QuaderViewportKeybindingDispatch redo_dispatch =
+  const quader::QuaderViewportKeybindingDispatch removed_redo_dispatch =
       editor.commands().dispatch_viewport_input_binding(
           single_input_chord("Ctrl+Y"), state, false, false);
-  ASSERT_EQ(redo_dispatch.kind,
-            quader::QuaderViewportKeybindingDispatch::Kind::Command);
-  EXPECT_EQ(redo_dispatch.command_id,
-            quader::quader_command::kEditRedo.string());
+  EXPECT_EQ(removed_redo_dispatch.kind,
+            quader::QuaderViewportKeybindingDispatch::Kind::NoMatch);
 
   const quader::QuaderViewportKeybindingDispatch shift_redo_dispatch =
       editor.commands().dispatch_viewport_input_binding(
@@ -2051,7 +2598,8 @@ TEST(EditorApiTests, GlobalCommandKeybindingsResolveWithAndWithoutViewportFocus)
 }
 
 #ifndef NDEBUG
-TEST(EditorApiTests, DebugCopySelectionJsonShortcutWinsOverFocusSelectionBind) {
+TEST(EditorApiTests,
+     DebugCopySelectionJsonShortcutRejectsConflictingFocusSelectionBind) {
   CommandTestHarness harness;
   quader::QuaderEditorApi &editor = harness.editor;
   ASSERT_TRUE(editor.commands()
@@ -2060,13 +2608,14 @@ TEST(EditorApiTests, DebugCopySelectionJsonShortcutWinsOverFocusSelectionBind) {
                           "debug-copy-selection-json-reserved-shortcut"))
                   .ok());
 
-  ASSERT_TRUE(editor.preferences()
-                  .set_shortcut(quader::quader_command::kViewportFrameSelection,
-                                "Ctrl+Shift+C")
-                  .ok());
-  EXPECT_EQ(editor.commands().shortcut_for(
-                quader::quader_command::kViewportFrameSelection),
-            "Ctrl+Shift+C");
+  const quader::QuaderApiVoidResult rejected =
+      editor.preferences().set_shortcut(
+          quader::quader_command::kViewportFrameSelection, "Ctrl+Shift+C");
+  EXPECT_FALSE(rejected.ok());
+  EXPECT_TRUE(editor.commands()
+                  .shortcut_for(
+                      quader::quader_command::kViewportFrameSelection)
+                  .empty());
 
   quader::ViewportToolState state;
   const quader::QuaderViewportKeybindingDispatch dispatch =
@@ -2198,6 +2747,8 @@ TEST(EditorApiTests, GlobalCommandKeybindingsDoNotStealTextInputOrViewportOnlySh
   EXPECT_EQ(text_input_undo.kind,
             quader::QuaderViewportKeybindingDispatch::Kind::NoMatch);
 
+  create_selected_box(editor, "Pivot Shortcut Box");
+
   const quader::QuaderViewportKeybindingDispatch pivot_without_viewport_focus =
           editor.commands().dispatch_viewport_input_binding(
               single_input_chord("P"), state, false, false);
@@ -2274,17 +2825,22 @@ TEST(EditorApiTests,
   const quader::ViewportToolState box_tool_state{
       .active_tool = quader::ViewportToolId::CreatePrimitive,
   };
-  const quader::QuaderViewportKeybindingDispatch enter_without_focus =
+  const quader::QuaderViewportKeybindingDispatch space_without_focus =
       editor.commands().dispatch_viewport_input_binding(
-          single_input_chord("Enter"), box_tool_state, false, false);
-  EXPECT_EQ(enter_without_focus.kind,
+          single_input_chord("Space"), box_tool_state, false, false);
+  EXPECT_EQ(space_without_focus.kind,
             quader::QuaderViewportKeybindingDispatch::Kind::NoMatch);
-  const quader::QuaderViewportKeybindingDispatch enter_dispatch =
+  const quader::QuaderViewportKeybindingDispatch removed_enter_dispatch =
       editor.commands().dispatch_viewport_input_binding(
           single_input_chord("Enter"), box_tool_state, true, false);
-  ASSERT_EQ(enter_dispatch.kind,
+  EXPECT_EQ(removed_enter_dispatch.kind,
+            quader::QuaderViewportKeybindingDispatch::Kind::NoMatch);
+  const quader::QuaderViewportKeybindingDispatch space_dispatch =
+      editor.commands().dispatch_viewport_input_binding(
+          single_input_chord("Space"), box_tool_state, true, false);
+  ASSERT_EQ(space_dispatch.kind,
             quader::QuaderViewportKeybindingDispatch::Kind::Command);
-  EXPECT_EQ(enter_dispatch.command_id,
+  EXPECT_EQ(space_dispatch.command_id,
             quader::quader_command::kToolsApplyPrimitiveCreation.string());
   const quader::QuaderViewportKeybindingDispatch escape_without_focus =
       editor.commands().dispatch_viewport_input_binding(
@@ -2680,13 +3236,12 @@ TEST(EditorApiTests, ViewportHostShortcutCatalogDrivesCommandKeybindings) {
       editor.commands().keybindings();
   EXPECT_TRUE(has_keybinding_when(rules,
                                   quader::quader_command::kEditUndo.string(),
-                                  "Ctrl+Z", "!textInputActive && canUndo"));
-  EXPECT_TRUE(has_keybinding_when(rules,
-                                  quader::quader_command::kEditRedo.string(),
-                                  "Ctrl+Y", "!textInputActive && canRedo"));
+                                  "Ctrl+Z", "!textInputActive"));
   EXPECT_TRUE(
       has_keybinding_when(rules, quader::quader_command::kEditRedo.string(),
-                          "Ctrl+Shift+Z", "!textInputActive && canRedo"));
+                          "Ctrl+Shift+Z", "!textInputActive"));
+  EXPECT_FALSE(has_keybinding(
+      rules, quader::quader_command::kEditRedo.string(), "Ctrl+Y"));
   quader::ViewportToolState state;
   int checked = 0;
   for (const quader::ViewportShortcutBindingDescriptor &descriptor :
@@ -2713,6 +3268,22 @@ TEST(EditorApiTests, ViewportHostShortcutCatalogDrivesCommandKeybindings) {
     const quader::QuaderViewportKeybindingDispatch dispatch =
         editor.commands().dispatch_viewport_input_binding(parsed->front(),
                                                           state, true, false);
+    const std::optional<quader::QuaderCommandDescriptor> command =
+        editor.commands().descriptor(*command_target);
+    if (command.has_value() && !command->enabled) {
+      EXPECT_EQ(dispatch.kind,
+                quader::QuaderViewportKeybindingDispatch::Kind::NoMatch)
+          << descriptor.target_id << " -> " << *command_target;
+      ++checked;
+      continue;
+    }
+    if (dispatch.kind ==
+        quader::QuaderViewportKeybindingDispatch::Kind::NoMatch) {
+      // The command predicate can be enabled while its app-owned semantic
+      // scope (for example Face or Edge mode) does not match this fixture.
+      ++checked;
+      continue;
+    }
     if (quader::viewport_target_requires_router_dispatch(*command_target)) {
       ASSERT_EQ(
           dispatch.kind,
@@ -2961,10 +3532,10 @@ TEST(EditorApiTests, ViewportModalToolGesturesUseKeybindingTargets) {
 
   state.active_tool = quader::ViewportToolId::Cut;
   action = quader::ViewportInputActionKind::None;
-  ASSERT_TRUE(editor.commands().resolve_viewport_input_action(
+  EXPECT_FALSE(editor.commands().resolve_viewport_input_action(
       *quader::quader_input_parse_chord("Enter"), state, true, false, action,
       modal_context));
-  EXPECT_EQ(action, quader::ViewportInputActionKind::ModalToolFinalize);
+  EXPECT_EQ(action, quader::ViewportInputActionKind::None);
 
   const quader::QuaderViewportKeybindingContext viewport_tool_context{
       .active_tool_owns_viewport = true};
@@ -5867,7 +6438,7 @@ TEST(EditorApiTests, AppCommandsAndDirectOperationsShareChronologicalUndoStack) 
         editor.commands().command_id_for_modeling_action("duplicate_meshes"));
     ASSERT_TRUE(duplicated.ok()) << duplicated.error_message();
     ASSERT_EQ(user_entity_count(editor), 2u);
-    EXPECT_EQ(editor.query().history().undo_label, "Duplicate Meshes");
+  EXPECT_EQ(editor.query().history().undo_label, "Duplicate Selected Meshes");
 
     quader::QuaderTransform moved;
     moved.position = {3.0f, 0.0f, 0.0f};
@@ -5900,7 +6471,7 @@ TEST(EditorApiTests, AppCommandsAndDirectOperationsShareChronologicalUndoStack) 
 
     ASSERT_TRUE(editor.history().undo().ok());
     EXPECT_EQ(user_entity_count(editor), 1u);
-    EXPECT_EQ(editor.query().history().redo_label, "Duplicate Meshes");
+  EXPECT_EQ(editor.query().history().redo_label, "Duplicate Selected Meshes");
 
     ASSERT_TRUE(editor.history().redo().ok());
     EXPECT_EQ(user_entity_count(editor), 2u);
@@ -6212,7 +6783,7 @@ TEST(EditorApiTests, HalfCutPreviewExposesLiveAxisAndPartSettings) {
     ASSERT_TRUE(settings.active);
     EXPECT_TRUE(settings.preview_active);
     EXPECT_EQ(settings.tool_id, "half_cut");
-    EXPECT_EQ(settings.title, "Half-Cut");
+  EXPECT_EQ(settings.title, "Half-Cut Selected Meshes");
     EXPECT_TRUE(settings.can_apply);
     EXPECT_TRUE(settings.can_cancel);
 
@@ -9211,7 +9782,164 @@ TEST(EditorApiTests,
 }
 
 TEST(EditorApiTests,
-     KeybindingCatalogCoversMappedUnmappedAndAlternateTargets) {
+     RequestedVisibilityViewShadingLayoutAndGridBindingsDrivePublicCommands) {
+  const std::filesystem::path path =
+      keybinding_test_path("requested-viewport-defaults");
+  CommandTestHarness harness;
+  quader::QuaderEditorApi &editor = harness.editor;
+  ASSERT_TRUE(editor.commands().set_keybinding_storage_path(path).ok());
+
+  const quader::QuaderModelingObjectRef first =
+      create_selected_box(editor, "Hidden Shortcut A");
+  const quader::QuaderModelingObjectRef second =
+      create_selected_box(editor, "Hidden Shortcut B");
+  ASSERT_TRUE(
+      editor.selection().select_objects({first.entity, second.entity}).ok());
+  ASSERT_TRUE(
+      editor.selection().set_mode(quader::QuaderSelectionMode::Object).ok());
+
+  quader::ViewportToolState state;
+  state.selection_mode = quader::ViewportSelectionMode::Object;
+  const auto dispatch_and_execute =
+      [&](std::string_view shortcut,
+          quader::QuaderCommandId expected_command) {
+        const quader::QuaderViewportKeybindingDispatch dispatch =
+            editor.commands().dispatch_viewport_input_binding(
+                single_input_chord(shortcut), state, true, false);
+        EXPECT_EQ(dispatch.kind,
+                  quader::QuaderViewportKeybindingDispatch::Kind::Command)
+            << shortcut;
+        EXPECT_EQ(dispatch.command_id, expected_command.string()) << shortcut;
+        if (dispatch.kind !=
+            quader::QuaderViewportKeybindingDispatch::Kind::Command) {
+          return;
+        }
+         EXPECT_TRUE(editor.commands().execute(dispatch.command_id).ok())
+             << shortcut;
+       };
+
+  const auto dispatch_and_apply_view =
+      [&](std::string_view shortcut, quader::ViewportView expected_view,
+          quader::QuaderCommandId expected_command) {
+        const quader::QuaderViewportKeybindingDispatch dispatch =
+            editor.commands().dispatch_viewport_input_binding(
+                single_input_chord(shortcut), state, true, false);
+        ASSERT_EQ(
+            dispatch.kind,
+            quader::QuaderViewportKeybindingDispatch::Kind::ViewportShortcut)
+            << shortcut;
+        EXPECT_EQ(dispatch.shortcut.kind,
+                  quader::ViewportShortcutKind::SetView)
+            << shortcut;
+        EXPECT_EQ(dispatch.shortcut.view, expected_view) << shortcut;
+        EXPECT_TRUE(editor.commands().execute(expected_command).ok())
+            << shortcut;
+      };
+
+  const auto dispatch_and_apply_grid =
+      [&](std::string_view shortcut, int current_preset,
+          int expected_preset,
+          quader::QuaderViewportKeybindingContext input_context = {}) {
+        ASSERT_TRUE(editor.viewports().set_grid_preset(current_preset).ok());
+        state.grid_preset = current_preset;
+        const quader::QuaderViewportKeybindingDispatch dispatch =
+            editor.commands().dispatch_viewport_input_binding(
+                single_input_chord(shortcut), state, true, false,
+                input_context);
+        ASSERT_EQ(
+            dispatch.kind,
+            quader::QuaderViewportKeybindingDispatch::Kind::ViewportShortcut)
+            << shortcut;
+        EXPECT_EQ(dispatch.shortcut.kind,
+                  quader::ViewportShortcutKind::SetGridPreset)
+            << shortcut;
+        EXPECT_EQ(dispatch.shortcut.grid_preset, expected_preset) << shortcut;
+        ASSERT_TRUE(
+            editor.viewports().set_grid_preset(dispatch.shortcut.grid_preset)
+                .ok());
+      };
+
+  dispatch_and_execute("H", quader::quader_command::kSceneHideSelection);
+  ASSERT_TRUE(editor.query().entity(first.entity).has_value());
+  ASSERT_TRUE(editor.query().entity(second.entity).has_value());
+  EXPECT_FALSE(editor.query().entity(first.entity)->visible);
+  EXPECT_FALSE(editor.query().entity(second.entity)->visible);
+
+  dispatch_and_execute("Alt+H",
+                       quader::quader_command::kSceneUnhideHiddenObjects);
+  EXPECT_TRUE(editor.query().entity(first.entity)->visible);
+  EXPECT_TRUE(editor.query().entity(second.entity)->visible);
+
+  dispatch_and_apply_view("F1", quader::ViewportView::Top,
+                          quader::quader_command::kViewportViewTop);
+  EXPECT_EQ(editor.viewports().view(editor.viewports().focused_pane()),
+            quader::ViewportView::Top);
+  dispatch_and_apply_view("F2", quader::ViewportView::Side,
+                          quader::quader_command::kViewportViewRight);
+  EXPECT_EQ(editor.viewports().view(editor.viewports().focused_pane()),
+            quader::ViewportView::Side);
+  dispatch_and_apply_view("F3", quader::ViewportView::Front,
+                          quader::quader_command::kViewportViewFront);
+  EXPECT_EQ(editor.viewports().view(editor.viewports().focused_pane()),
+            quader::ViewportView::Front);
+  dispatch_and_apply_view("F4", quader::ViewportView::Perspective,
+                          quader::quader_command::kViewportViewPerspective);
+  EXPECT_EQ(editor.viewports().view(editor.viewports().focused_pane()),
+            quader::ViewportView::Perspective);
+
+  dispatch_and_execute("F5",
+                       quader::quader_command::kViewportShadingWireframe);
+  EXPECT_EQ(editor.viewports().shading_mode(editor.viewports().focused_pane()),
+            quader::QuaderShadingMode::Wireframe);
+  dispatch_and_execute("F6",
+                       quader::quader_command::kViewportShadingShaded);
+  EXPECT_EQ(editor.viewports().shading_mode(editor.viewports().focused_pane()),
+            quader::QuaderShadingMode::Solid);
+  dispatch_and_execute("F7",
+                       quader::quader_command::kViewportShadingRendered);
+  EXPECT_EQ(editor.viewports().shading_mode(editor.viewports().focused_pane()),
+            quader::QuaderShadingMode::Material);
+
+  dispatch_and_execute("Ctrl+1",
+                       quader::quader_command::kViewportLayoutSingle);
+  EXPECT_EQ(editor.viewports().layout(), quader::ViewportLayoutId::Single);
+  dispatch_and_execute("Ctrl+2",
+                       quader::quader_command::kViewportLayoutTwoVertical);
+  EXPECT_EQ(editor.viewports().layout(), quader::ViewportLayoutId::TwoVertical);
+  dispatch_and_execute("Ctrl+3",
+                       quader::quader_command::kViewportLayoutTwoHorizontal);
+  EXPECT_EQ(editor.viewports().layout(),
+            quader::ViewportLayoutId::TwoHorizontal);
+  dispatch_and_execute("Ctrl+4",
+                       quader::quader_command::kViewportLayoutFourQuad);
+  EXPECT_EQ(editor.viewports().layout(), quader::ViewportLayoutId::FourQuad);
+
+  dispatch_and_apply_grid("Alt+WheelUp", 6, 7);
+  EXPECT_EQ(editor.viewports().grid_preset(), 7);
+  dispatch_and_apply_grid("Alt+WheelDown", 7, 6);
+  EXPECT_EQ(editor.viewports().grid_preset(), 6);
+  dispatch_and_apply_grid("Alt+MiddleMouseClick", 10,
+                          quader::viewport_default_grid_preset(),
+                          {.navigation_active = true,
+                           .orbit_navigation_active = true});
+  EXPECT_EQ(editor.viewports().grid_preset(), 6);
+
+  const quader::QuaderViewportKeybindingDispatch removed_grid_f8 =
+      editor.commands().dispatch_viewport_input_binding(
+          single_input_chord("F8"), state, true, false);
+  EXPECT_EQ(removed_grid_f8.kind,
+            quader::QuaderViewportKeybindingDispatch::Kind::NoMatch);
+  for (int preset = 1; preset <= 10; ++preset) {
+    EXPECT_TRUE(editor.commands()
+                    .shortcut_for(
+                        editor.commands().keybinding_target_id_for_grid_preset(
+                            preset))
+                    .empty());
+  }
+}
+
+TEST(EditorApiTests,
+     KeybindingCatalogCoversMappedUnmappedAndScopedTargets) {
   CommandTestHarness harness;
   quader::QuaderEditorApi &editor = harness.editor;
   ASSERT_TRUE(editor.commands()
@@ -9227,9 +9955,9 @@ TEST(EditorApiTests,
       editor.commands().keybinding_catalog();
 
 #ifndef NDEBUG
-  EXPECT_EQ(commands.size(), 134u);
+  EXPECT_EQ(commands.size(), 146u);
 #else
-  EXPECT_EQ(commands.size(), 133u);
+  EXPECT_EQ(commands.size(), 145u);
 #endif
 
   std::unordered_set<std::string> expected_target_ids;
@@ -9241,28 +9969,54 @@ TEST(EditorApiTests,
   for (const quader::QuaderKeybindingRule &rule : rules) {
     expected_target_ids.insert(rule.target_id);
   }
+  for (int preset = 1; preset <= 10; ++preset) {
+    expected_target_ids.insert(
+        editor.commands().keybinding_target_id_for_grid_preset(preset));
+  }
 
   std::unordered_set<std::string> actual_target_ids;
   std::unordered_set<std::string> actual_rows;
   std::unordered_set<std::string> visible_label_contexts;
   for (const quader::QuaderKeybindingCatalogEntry &entry : catalog) {
     actual_target_ids.insert(entry.target_ids.begin(), entry.target_ids.end());
-    const std::string row_key = entry.action_id + "|" +
-                                std::to_string(static_cast<int>(entry.context));
+    const std::string row_key = entry.action_id + "|" + entry.scope_id;
     EXPECT_TRUE(actual_rows.insert(row_key).second) << row_key;
-    const std::string label_context = entry.label + "|" +
-                                      std::to_string(
-                                          static_cast<int>(entry.context));
+    const std::string label_context = entry.label + "|" + entry.scope_id;
     EXPECT_TRUE(visible_label_contexts.insert(label_context).second)
         << label_context;
     EXPECT_FALSE(entry.action_id.empty());
+    EXPECT_FALSE(entry.scope_id.empty());
+    EXPECT_FALSE(entry.scope_label.empty());
+    EXPECT_FALSE(entry.scope_localization_key.empty());
     EXPECT_FALSE(entry.target_id.empty());
     EXPECT_FALSE(entry.target_ids.empty());
     EXPECT_FALSE(entry.label.empty()) << entry.target_id;
     EXPECT_FALSE(entry.localization_key.empty()) << entry.target_id;
     EXPECT_FALSE(entry.when.empty()) << entry.target_id;
+    for (const std::string &target_id : entry.target_ids) {
+      std::vector<const quader::QuaderKeybindingRule *> target_rules;
+      for (const quader::QuaderKeybindingRule &rule : rules) {
+        if (rule.target_id == target_id) {
+          target_rules.push_back(&rule);
+        }
+      }
+      EXPECT_LE(target_rules.size(), 1u) << target_id;
+      if (entry.shortcut.empty()) {
+        EXPECT_TRUE(target_rules.empty()) << target_id;
+      } else {
+        ASSERT_EQ(target_rules.size(), 1u) << target_id;
+        EXPECT_EQ(target_rules.front()->shortcut, entry.shortcut) << target_id;
+      }
+    }
   }
-  EXPECT_EQ(actual_target_ids, expected_target_ids);
+  for (const std::string &target_id : expected_target_ids) {
+    EXPECT_TRUE(actual_target_ids.contains(target_id))
+        << "Catalog is missing target " << target_id;
+  }
+  for (const std::string &target_id : actual_target_ids) {
+    EXPECT_TRUE(expected_target_ids.contains(target_id))
+        << "Catalog contains unexpected target " << target_id;
+  }
   const std::size_t non_command_target_count =
       static_cast<std::size_t>(std::count_if(
           actual_target_ids.begin(), actual_target_ids.end(),
@@ -9275,14 +10029,14 @@ TEST(EditorApiTests,
     EXPECT_TRUE(actual_target_ids.contains(typed_id)) << typed_id;
   }
 
-  EXPECT_TRUE(has_keybinding_catalog_entry(
+  EXPECT_FALSE(has_keybinding_catalog_entry(
       catalog, quader::quader_command::kEditRedo.string(), "Ctrl+Y"));
   EXPECT_TRUE(has_keybinding_catalog_entry(
       catalog, quader::quader_command::kEditRedo.string(),
       "Ctrl+Shift+Z"));
   EXPECT_TRUE(has_keybinding_catalog_entry(
       catalog, quader::quader_command::kDeleteSelection.string(), "Delete"));
-  EXPECT_TRUE(has_keybinding_catalog_entry(
+  EXPECT_FALSE(has_keybinding_catalog_entry(
       catalog, quader::quader_command::kDeleteSelection.string(),
       "Backspace"));
 
@@ -9290,15 +10044,69 @@ TEST(EditorApiTests,
       editor.commands().keybinding_target_id_for_selection_mode(
           quader::QuaderSelectionMode::Vertex);
   EXPECT_TRUE(has_keybinding_catalog_entry(catalog, vertex_target, "1"));
-  EXPECT_TRUE(
+  EXPECT_FALSE(
       has_keybinding_catalog_entry(catalog, vertex_target, "Keypad1"));
   EXPECT_TRUE(has_keybinding_catalog_entry(
       catalog, "viewport.modal_tool.finalize", "Space"));
-  EXPECT_TRUE(has_keybinding_catalog_entry(
+  EXPECT_FALSE(has_keybinding_catalog_entry(
       catalog, "viewport.modal_tool.finalize", "Enter"));
+  EXPECT_TRUE(has_keybinding_catalog_entry(
+      catalog, quader::quader_command::kSceneHideSelection.string(), "H"));
+  EXPECT_TRUE(has_keybinding_catalog_entry(
+      catalog, quader::quader_command::kSceneUnhideHiddenObjects.string(),
+      "Alt+H"));
+  EXPECT_TRUE(has_keybinding_catalog_entry(
+      catalog, quader::quader_command::kViewportViewTop.string(), "F1"));
+  EXPECT_TRUE(has_keybinding_catalog_entry(
+      catalog, quader::quader_command::kViewportViewRight.string(), "F2"));
+  EXPECT_TRUE(has_keybinding_catalog_entry(
+      catalog, quader::quader_command::kViewportViewFront.string(), "F3"));
+  EXPECT_TRUE(has_keybinding_catalog_entry(
+      catalog, quader::quader_command::kViewportViewPerspective.string(),
+      "F4"));
+  EXPECT_TRUE(has_keybinding_catalog_entry(
+      catalog, quader::quader_command::kViewportShadingWireframe.string(),
+      "F5"));
+  EXPECT_TRUE(has_keybinding_catalog_entry(
+      catalog, quader::quader_command::kViewportShadingShaded.string(),
+      "F6"));
+  EXPECT_TRUE(has_keybinding_catalog_entry(
+      catalog, quader::quader_command::kViewportShadingRendered.string(),
+      "F7"));
+  EXPECT_TRUE(has_keybinding_catalog_entry(
+      catalog, quader::quader_command::kViewportLayoutSingle.string(),
+      "Ctrl+1"));
+  EXPECT_TRUE(has_keybinding_catalog_entry(
+      catalog, quader::quader_command::kViewportLayoutTwoVertical.string(),
+      "Ctrl+2"));
+  EXPECT_TRUE(has_keybinding_catalog_entry(
+      catalog, quader::quader_command::kViewportLayoutTwoHorizontal.string(),
+      "Ctrl+3"));
+  EXPECT_TRUE(has_keybinding_catalog_entry(
+      catalog, quader::quader_command::kViewportLayoutFourQuad.string(),
+      "Ctrl+4"));
+  EXPECT_TRUE(has_keybinding_catalog_entry(
+      catalog, quader::quader_command::kViewportGridIncrement.string(),
+      "Alt+WheelUp"));
+  EXPECT_TRUE(has_keybinding_catalog_entry(
+      catalog, quader::quader_command::kViewportGridDecrement.string(),
+      "Alt+WheelDown"));
+  EXPECT_TRUE(has_keybinding_catalog_entry(
+      catalog, quader::quader_command::kViewportGridReset.string(),
+      "Alt+MiddleMouseClick"));
+
+  for (int preset = 1; preset <= 10; ++preset) {
+    const std::string preset_target =
+        editor.commands().keybinding_target_id_for_grid_preset(preset);
+    const quader::QuaderKeybindingCatalogEntry *preset_entry =
+        find_keybinding_catalog_entry(catalog, preset_target);
+    ASSERT_NE(preset_entry, nullptr);
+    EXPECT_TRUE(preset_entry->shortcut.empty()) << preset_target;
+    EXPECT_TRUE(preset_entry->default_shortcut.empty()) << preset_target;
+  }
 
   EXPECT_EQ(std::count_if(catalog.begin(), catalog.end(), [](const auto &entry) {
-              return entry.label == "Radial Align";
+              return entry.label == "Radially Align Selected Components";
             }),
             1);
   const quader::QuaderKeybindingCatalogEntry *finalize_primitive =
@@ -9315,7 +10123,8 @@ TEST(EditorApiTests,
   EXPECT_EQ(finalize_primitive->label, "Finalize Tool");
   EXPECT_EQ(finalize_primitive->context,
             quader::QuaderKeybindingContextKind::ModalTool);
-  EXPECT_EQ(finalize_primitive->shortcut, "Enter / Space");
+  EXPECT_EQ(finalize_primitive->scope_id, "viewport.tool.modal");
+  EXPECT_EQ(finalize_primitive->shortcut, "Space");
 
   const quader::QuaderKeybindingCatalogEntry *cancel_primitive =
       find_keybinding_catalog_entry(
@@ -9341,6 +10150,7 @@ TEST(EditorApiTests,
   ASSERT_NE(radial_align, nullptr);
   EXPECT_EQ(radial_align->context,
             quader::QuaderKeybindingContextKind::Viewport);
+  EXPECT_EQ(radial_align->scope_id, "viewport.selection.component");
 
   const quader::QuaderKeybindingCatalogEntry *reset_fly_speed =
       find_keybinding_catalog_entry(

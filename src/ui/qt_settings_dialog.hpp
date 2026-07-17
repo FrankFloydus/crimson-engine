@@ -26,8 +26,8 @@ class ViewportSettings;
  * Qt Widgets presentation of Quader's interface, keybinding, and viewport
  * preferences.
  * Controls edit a per-field draft. Apply merges and persists the draft without
- * closing, OK applies and closes, and every reject path discards it. The
- * keybinding catalog is a read-only presentation of the public command API.
+ * closing, OK applies and closes, and every reject path discards it.
+ * Keybinding edits are public-API mutations that persist immediately.
  */
 class QtSettingsDialog final : public QDialog {
 public:
@@ -39,7 +39,7 @@ public:
 
   void set_context(UISettings &ui_settings, ViewportSettings &viewport_settings,
                    LocalizationService &localization,
-                   const QuaderCommandsApi &commands,
+                   QuaderCommandsApi &commands,
                    std::function<void(QtSettingsChangeKind)> settings_changed);
   void refresh();
   void accept() override;

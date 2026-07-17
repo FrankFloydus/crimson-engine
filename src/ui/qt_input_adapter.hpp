@@ -57,9 +57,10 @@ quader_pressed_input_chord_from_qt_event(const QKeyEvent &event);
 quader_mouse_button_from_qt_button(Qt::MouseButton button);
 
 /**
- * Builds a canonical Press, DoubleClick, or Drag chord from a matching Qt
- * mouse event. A Drag chord is intentionally built from the button-press
- * event so callers can retain its event-time modifiers for the whole drag.
+ * Builds a canonical Press, Click, DoubleClick, or Drag chord from a matching
+ * Qt mouse event. Click consumes a button-release event. A Drag chord is
+ * intentionally built from the button-press event so callers can retain its
+ * event-time modifiers for the whole drag.
  */
 [[nodiscard]] std::optional<QuaderInputChord>
 quader_mouse_input_chord_from_qt_event(const QMouseEvent &event,

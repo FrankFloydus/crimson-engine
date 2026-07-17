@@ -8,7 +8,7 @@ file except through prior written authorization from Francesco Di Blasi.
 -->
 # Input, Keybindings, And Contexts
 
-This guide is the source-of-truth map for Quader input, shortcut, and future user keybinding work.
+This guide is the source-of-truth map for Quader input, shortcuts, and user keybinding work.
 Read it before changing keyboard input, mouse input, viewport navigation, command shortcuts,
 rebinding UI, or keybinding persistence.
 
@@ -74,6 +74,12 @@ Existing important keys include:
 - `canUndo`
 - `canRedo`
 
+Stable editor modes such as `selectionMode.*`, navigation capture, operation previews, and active
+modal tools belong in keybinding `when` expressions. Transient command availability such as undo
+history, selected-element counts, required active elements, or clipboard contents does not. The
+command dispatcher checks that availability after context matching and falls through to the next
+eligible binding when a higher-precedence target is currently disabled.
+
 Future context keys should be added by the system that owns the state. For example, viewport
 navigation state belongs in `ViewportInputRouter` / `ViewportHost`, panel focus belongs in the UI
 shell, and selection state belongs in editor/modeling selection owners.
@@ -93,9 +99,19 @@ shortcuts as the only customizable input.
 Canonical input supports:
 
 - keyboard keys and modifiers;
-- mouse buttons such as `LeftMouse`, `MiddleMouse`, `RightMouse`, `Mouse4`, `Mouse5`;
+- mouse-button presses such as `LeftMouse`, `MiddleMouse`, `RightMouse`, `Mouse4`, and `Mouse5`;
+- stationary clicks such as `MiddleMouseClick` and double-clicks such as
+  `MiddleMouseDoubleClick`;
 - drag gestures such as `MiddleMouseDrag` and `RightMouseDrag`;
 - wheel gestures such as `Wheel`, `WheelUp`, and `WheelDown`.
+
+Press, Click, and Drag are distinct physical mappings. The viewport emits a Click on button release
+only when pointer movement stayed below Qt's drag threshold; it continues to emit the existing Drag
+edge on press so navigation begins without latency. Settings capture records a quick stationary
+release as Click, thresholded movement as Drag, a native double-click as DoubleClick, and a
+press-and-hold beyond Qt's double-click interval as Press. A quick click remains pending during
+the double-click interval: acceptance stays disabled until it resolves, and a later unrelated
+input flushes the click first so multi-chord ordering stays stable.
 
 For active mouse drags, keep the drag-start chord stable. Do not recompute drag modifiers every
 frame. Example: `RightMouseDrag` fly navigation must continue if the user presses Shift after the
@@ -157,18 +173,76 @@ Current user overrides are stored at:
 That file should contain only user overrides/removals. Defaults are compiled into the app. Deleting
 the file resets all custom keybindings to defaults.
 
-Future UI for user customization should be built on these API concepts:
+Settings -> Keybindings is a live editor built on these API concepts:
 
-- list commands/actions from the command API and keybinding service;
-- display default shortcut, current effective shortcut, source, and `when` context;
-- capture input into `QuaderInputChord` using the canonical parser/formatter;
-- show conflicts for the same shortcut and overlapping contexts;
-- support reset one command, remove one shortcut, and reset all user overrides;
-- write only user overrides/removals to `keybindings.json`;
-- never duplicate key parsing, formatting, conflict detection, or command id canonicalization in UI.
+- User-facing rows have a stable `action_id + scope_id` key and may represent several resolver
+  targets. The scope is app-owned semantic state such as `viewport.selection.vertex`,
+  `viewport.selection.edge`, `viewport.navigation.fly`, or `viewport.tool.modal`; an edit applies
+  to every alias represented by that action row.
+- A user-facing action/scope has zero or one physical mapping. One mapping may still be an ordered
+  multi-chord sequence such as `Ctrl+K Ctrl+C`.
+- The public catalog exposes the singular current/default mapping, source (`Default` or `User`),
+  customized/unassigned state, localized scope metadata, target diagnostics, and the exact
+  read-only `when` expression.
+- Capture produces complete keyboard, mouse, drag, double-click, and wheel sequences through the
+  canonical Qt input adapter and formatter. Pure modifiers and key auto-repeat are ignored.
+- Assignment analysis distinguishes compatible cross-context reuse, exact conflicts, and prefix
+  conflicts. `Reject` and `Replace` are the public policies. Replace unassigns each colliding
+  action before assigning the proposed mapping; compatible reuse needs no confirmation.
+- Unassign intentionally leaves an action without a mapping. Reset Action restores its singular
+  compiled default, and Reset All persists an empty override set.
+- Keybinding edits save and activate immediately. Settings Apply/Cancel still governs only staged
+  interface and viewport settings.
+- Each edit builds one complete candidate user-rule set, saves it before activation, and emits a
+  `KeybindingsCommit` event after success so retained menus and tooltips refresh off the frame loop.
+- Candidate JSON uses the shared atomic text writer. A late flush or replacement failure must
+  preserve the previous file and leave the live resolver/catalog unchanged.
+- Persistence writes only action groups whose effective mappings differ from defaults while the
+  existing target-level JSON assignment/removal schema remains loadable. Legacy groups containing
+  several assignments are normalized in memory with the latest entry winning, and stored `when`
+  text is rebound to the current app-owned scope predicate rather than becoming user-editable
+  context state.
+
+The coarse display category (`Global`, `Viewport`, navigation, preview, or tool) is not action
+identity. Modeling scopes are derived from the existing host-action and instant-operation
+availability metadata. Different semantic actions may reuse the same mapping when their supported
+mode sets are mutually exclusive; for example, `M` may map to Merge Vertices in
+`viewport.selection.vertex` and Merge Edges in `viewport.selection.edge`. Conceptually shared
+operations aggregate their supported modes into one scope and one row; Radial Align spans the
+component modes instead of becoming three unrelated bindings.
 
 The UI should not store private UI-only shortcut state. It should call public/editor API methods that
-route to `QuaderKeybindingService`.
+route to `QuaderKeybindingService`, and must never duplicate parsing, formatting, conflict
+detection, or target canonicalization.
+
+Keybinding labels are complete action names, not reused menu leaves. Keep labels unique in each
+locale and include the subject, operation, axis, or mode needed to recognize the command (for
+example, `Align X Center`, `Activate Move Tool`, and `Bridge Selected Edges`).
+
+Current compiled defaults added with the scoped editor are:
+
+- `H` hides selected visible objects/groups and `Alt+H` unhides hidden objects while an object/group
+  selection scope is active. Quader does not yet own persistent component-hide state, so these do
+  not pretend to hide individual vertices, edges, or faces.
+- `F1`, `F2`, `F3`, and `F4` select Top, Side, Front, and Perspective views.
+- `F5`, `F6`, and `F7` select Wireframe, Shaded, and Rendered presentation.
+- `Ctrl+1`, `Ctrl+2`, `Ctrl+3`, and `Ctrl+4` select Single, Two Vertical, Two Horizontal, and Four
+  Quad viewport layouts.
+- `Alt+WheelUp` and `Alt+WheelDown` increase and decrease the grid preset;
+  `Alt+MiddleMouseClick` restores the default 32-unit preset.
+
+The three relative/reset grid gestures dispatch as semantic `SetGridPreset` viewport shortcuts
+using the synchronized current preset. Do not route them only as immediate commands: actual wheel
+and mouse input is consumed by the viewport semantic router.
+
+On Windows, Qt rewrites an `Alt`-modified vertical wheel into a horizontal-only `angleDelta` before
+the event reaches Quader. `src/ui/qt_input_adapter.*` must reverse that platform representation
+before canonical wheel-direction and step classification. Production-path regression coverage must
+send the Windows-shaped X delta through `QtViewportSurface` and `QtViewportPanel`; an idealized Y
+delta alone does not cover the native failure.
+
+Grid preset rows no longer own any `F1`-`F10` shortcut. Redo has one compiled mapping,
+`Ctrl+Shift+Z`.
 
 ## Testing Requirements
 

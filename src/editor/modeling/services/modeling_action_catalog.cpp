@@ -82,7 +82,7 @@ void append_edit_actions(std::vector<ModelingActionItem> &actions,
                          const ModelingActionQuery &query) {
   append_if_visible(
       actions,
-      edit_action("delete_selection", "delete_selection", "Delete",
+      edit_action("delete_selection", "delete_selection", "Delete Selection",
                   summary.has_selection ? ModelingActionVisibility::Enabled
                                         : ModelingActionVisibility::Disabled,
                   summary.has_selection
@@ -93,7 +93,8 @@ void append_edit_actions(std::vector<ModelingActionItem> &actions,
   const bool object_mode = summary.mode == ModelingSelectionMode::Object;
   append_if_visible(
       actions,
-      edit_action("duplicate_meshes", "duplicate_meshes", "Duplicate",
+      edit_action("duplicate_meshes", "duplicate_meshes",
+                  "Duplicate Selected Meshes",
                   object_mode ? (summary.selected_object_count > 0U
                                      ? ModelingActionVisibility::Enabled
                                      : ModelingActionVisibility::Disabled)
@@ -149,9 +150,11 @@ bool selection_requirement_satisfied(
     return summary.has_selection;
   case ModelingActionSelectionRequirement::SelectionMode:
     return summary.mode == rule.mode;
-  case ModelingActionSelectionRequirement::NonObjectSelection:
+  case ModelingActionSelectionRequirement::ComponentSelection:
     return summary.has_selection &&
-           summary.mode != ModelingSelectionMode::Object;
+           (summary.mode == ModelingSelectionMode::Vertex ||
+            summary.mode == ModelingSelectionMode::Edge ||
+            summary.mode == ModelingSelectionMode::Face);
   case ModelingActionSelectionRequirement::ObjectOrFaceSelection:
     return (summary.mode == ModelingSelectionMode::Object &&
             summary.has_selection) ||
@@ -400,6 +403,24 @@ bool ModelingActionCatalog::action_available(
       action_for(summary, action_id);
   return action.has_value() &&
          action->visibility == ModelingActionVisibility::Enabled;
+}
+
+std::vector<ModelingSelectionMode>
+ModelingActionCatalog::selection_modes_for_action(std::string_view action_id) {
+  std::vector<ModelingSelectionMode> modes;
+  for (const quader_host_contract::HostActionDescriptor &descriptor :
+       quader_host_contract::action_catalog()) {
+    if (descriptor.id != action_id && descriptor.operation_id != action_id &&
+        descriptor.tool_id != action_id) {
+      continue;
+    }
+    const ModelingSelectionMode mode =
+        host_selection_mode_to_app(descriptor.availability.selection_mode);
+    if (std::find(modes.begin(), modes.end(), mode) == modes.end()) {
+      modes.push_back(mode);
+    }
+  }
+  return modes;
 }
 
 ModelingActionAvailabilityResult ModelingActionCatalog::evaluate_availability(

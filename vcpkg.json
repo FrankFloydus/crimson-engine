@@ -1,6 +1,6 @@
 {
   "name": "quader-app",
-  "version-string": "0.1.40",
+  "version-string": "0.1.42",
   "builtin-baseline": "d0c191d142b7bc048141ddfb618aa9ae5dba0233",
   "dependencies": [],
   "default-features": [

@@ -134,7 +134,7 @@ TEST(QdrEditorMetadataActionCatalogTests, HostContractActionCatalogDescribesSele
         EXPECT_TRUE(mirror_tool.availability.minimum_selected_objects == 1U);
 
 	const qhc::HostActionDescriptor& invert_mesh = require_action("invert_mesh");
-	EXPECT_TRUE(same_text(invert_mesh.label, "Flip Mesh Normals"));
+	EXPECT_TRUE(same_text(invert_mesh.label, "Flip Selected Mesh Normals"));
 	EXPECT_TRUE(same_text(invert_mesh.operation_id, "flip_face_normals"));
 }
 
@@ -143,9 +143,12 @@ TEST(QdrEditorMetadataActionCatalogTests, HostContractActionIdsDisambiguateShare
 	const qhc::HostActionDescriptor& radial_edges = require_action("radial_align_edges");
 	const qhc::HostActionDescriptor& radial_faces = require_action("radial_align_faces");
 
-	EXPECT_TRUE(same_text(radial_vertices.label, "Radial Align"));
-	EXPECT_TRUE(same_text(radial_edges.label, "Radial Align"));
-	EXPECT_TRUE(same_text(radial_faces.label, "Radial Align"));
+	EXPECT_TRUE(same_text(radial_vertices.label,
+                            "Radially Align Selected Vertices"));
+	EXPECT_TRUE(same_text(radial_edges.label,
+                            "Radially Align Selected Edges"));
+	EXPECT_TRUE(same_text(radial_faces.label,
+                            "Radially Align Selected Faces"));
         EXPECT_TRUE(radial_vertices.availability.selection_mode ==
                     qhc::HostSelectionMode::Vertex);
         EXPECT_TRUE(radial_edges.availability.selection_mode ==

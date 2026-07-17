@@ -144,9 +144,11 @@ void QtToolToolbar::synchronize(const QuaderEditorApi &editor,
         editor.commands().descriptor(command_id);
     entry.action->setEnabled(command.has_value() && command->enabled);
     QString tooltip = entry.action->text();
-    if (command.has_value() && !command->shortcut.empty()) {
+    const std::string shortcut =
+        editor.commands().shortcut_for(command_id);
+    if (!shortcut.empty()) {
       tooltip.append(QStringLiteral(" [%1]")
-                         .arg(QString::fromStdString(command->shortcut)));
+                         .arg(QString::fromStdString(shortcut)));
     }
     entry.action->setToolTip(tooltip);
   }

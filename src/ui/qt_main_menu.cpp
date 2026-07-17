@@ -25,6 +25,7 @@
 #include <array>
 #include <cstddef>
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <tuple>
@@ -80,6 +81,26 @@ std::string layout_localization_key(ViewportLayoutId layout) {
   return key;
 }
 
+std::optional<QuaderCommandId>
+layout_command_id(ViewportLayoutId layout) {
+  switch (layout) {
+  case ViewportLayoutId::Single:
+    return quader_command::kViewportLayoutSingle;
+  case ViewportLayoutId::TwoHorizontal:
+    return quader_command::kViewportLayoutTwoHorizontal;
+  case ViewportLayoutId::TwoVertical:
+    return quader_command::kViewportLayoutTwoVertical;
+  case ViewportLayoutId::FourQuad:
+    return quader_command::kViewportLayoutFourQuad;
+  case ViewportLayoutId::ThreePrimaryRight:
+  case ViewportLayoutId::ThreePrimaryLeft:
+  case ViewportLayoutId::ThreePrimaryBottom:
+  case ViewportLayoutId::ThreePrimaryTop:
+    return std::nullopt;
+  }
+  return std::nullopt;
+}
+
 std::string tool_localization_key(const Tool &tool) {
   std::string key = "viewport.tool.";
   key.append(tool.id());
@@ -126,6 +147,7 @@ struct QtMainMenu::Impl {
   struct LayoutAction {
     QAction *action = nullptr;
     ViewportLayoutId layout = ViewportLayoutId::Single;
+    std::optional<QuaderCommandId> command_id;
   };
 
   /// Associates a QAction with a stable dock-panel identifier.
@@ -610,11 +632,18 @@ struct QtMainMenu::Impl {
               .arg(QString::fromUtf8(viewport_layout_stable_id(option.id).data())));
       action->setCheckable(true);
       group->addAction(action);
+      const std::optional<QuaderCommandId> command_id =
+          layout_command_id(option.id);
       QObject::connect(action, &QAction::triggered, connection_context.get(),
-                       [this, layout = option.id]() {
-                         (void)context.editor.viewports().set_layout(layout);
+                       [this, layout = option.id, command_id]() {
+                         if (command_id.has_value()) {
+                           (void)context.editor.commands().execute(
+                               *command_id);
+                         } else {
+                           (void)context.editor.viewports().set_layout(layout);
+                         }
                        });
-      layout_actions.push_back({action, option.id});
+      layout_actions.push_back({action, option.id, command_id});
     }
   }
 };
@@ -660,9 +689,8 @@ void QtMainMenu::refresh() {
   for (Impl::CommandAction &entry : impl_->command_actions) {
     const QuaderCommandDescriptor *command =
         find_command(commands, entry.command_id.string());
-    const std::string_view shortcut =
-        command != nullptr ? std::string_view(command->shortcut)
-                           : std::string_view{};
+    const std::string shortcut =
+        impl_->context.editor.commands().shortcut_for(entry.command_id);
     entry.action->setText(action_text(impl_->context.localization,
                                       entry.localization_key, entry.fallback,
                                       shortcut));
@@ -676,6 +704,13 @@ void QtMainMenu::refresh() {
   }
   for (const Impl::LayoutAction &entry : impl_->layout_actions) {
     const QSignalBlocker blocker(entry.action);
+    const std::string shortcut =
+        entry.command_id.has_value()
+            ? impl_->context.editor.commands().shortcut_for(*entry.command_id)
+            : std::string{};
+    entry.action->setText(action_text(
+        impl_->context.localization, layout_localization_key(entry.layout),
+        viewport_layout_label(entry.layout), shortcut));
     entry.action->setChecked(impl_->context.editor.viewports().layout() ==
                              entry.layout);
   }
@@ -732,9 +767,8 @@ void QtMainMenu::refresh() {
         impl_->context.editor.commands().command_id_for_tool_activation(
             entry.tool_id);
     const QuaderCommandDescriptor *command = find_command(commands, command_id);
-    const std::string_view shortcut =
-        command != nullptr ? std::string_view(command->shortcut)
-                           : std::string_view{};
+    const std::string shortcut =
+        impl_->context.editor.commands().shortcut_for(command_id);
     entry.action->setText(action_text(impl_->context.localization,
                                       entry.localization_key, entry.fallback,
                                       shortcut));

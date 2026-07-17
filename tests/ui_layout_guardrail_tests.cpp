@@ -862,7 +862,7 @@ TEST(UiLayoutGuardrailTests,
   const std::string ui_system = read_source_file("src/ui/ui_system.cpp");
 
   expect_contains(dialog_header, "class QuaderCommandsApi;");
-  expect_contains(dialog_header, "const QuaderCommandsApi &commands");
+  expect_contains(dialog_header, "QuaderCommandsApi &commands");
   expect_contains(dialog,
                   "#include \"api/quader_commands_api.hpp\"");
   expect_contains(dialog, "QStringLiteral(\"keybindings\")");
@@ -872,7 +872,7 @@ TEST(UiLayoutGuardrailTests,
       dialog, "QStringLiteral(\"settingsKeybindingsShortcutFilter\")");
   expect_contains(
       dialog, "QStringLiteral(\"settingsKeybindingsShortcutClear\")");
-  expect_contains(dialog, "new QTableView(page)");
+  expect_contains(dialog, "new QtKeybindingTableView(page)");
   expect_contains(dialog, "setAlternatingRowColors(true)");
   expect_contains(dialog,
                   "setEditTriggers(QAbstractItemView::NoEditTriggers)");
@@ -890,11 +890,45 @@ TEST(UiLayoutGuardrailTests,
   expect_contains(dialog, "quader_pressed_input_chord_from_qt_event");
   expect_contains(dialog, "commands->format_input_mapping(chord)");
   expect_contains(dialog, "commands->keybinding_catalog()");
+  expect_contains(dialog, "commands->analyze_shortcut_assignment(");
+  expect_contains(dialog, "commands->set_action_shortcut(");
+  expect_contains(dialog, "commands->remove_action_shortcut(");
+  expect_contains(dialog, "commands->reset_action_shortcut(");
+  expect_contains(dialog, "commands->reset_all_shortcuts()");
+  expect_missing(dialog,
+                 "QStringLiteral(\"settingsKeybindingsSaveHint\")");
+  expect_missing(dialog,
+                 "QStringLiteral(\"settingsKeybindingsRebindHint\")");
+  expect_missing(dialog,
+                 "QStringLiteral(\"settingsKeybindingsSelectedAction\")");
+  expect_missing(dialog,
+                 "QStringLiteral(\"settingsKeybindingsDefaultValue\")");
+  expect_missing(dialog,
+                 "QStringLiteral(\"settingsKeybindingsCurrentValue\")");
+  expect_missing(dialog,
+                 "QStringLiteral(\"settingsKeybindingsWhenValue\")");
+  expect_contains(dialog,
+                  "QStringLiteral(\"settingsKeybindingCaptureDialog\")");
+  expect_contains(dialog,
+                  "QStringLiteral(\"settingsKeybindingConflictDialog\")");
+  expect_contains(dialog,
+                  "QtSettingsChangeKind::KeybindingsCommit");
   expect_contains(dialog, "entry.localization_key");
+  expect_contains(dialog, "entry.scope_localization_key");
   expect_contains(dialog, "entry.shortcut");
   expect_contains(dialog, "std::stable_sort(");
   expect_contains(dialog, "column_text(left, column)");
-  expect_contains(dialog, "Qt::CaseInsensitive");
+  expect_contains(dialog, "natural_numeric_compare(");
+  expect_contains(dialog, ".digitValue()");
+  expect_missing(dialog, "QCollator");
+  expect_missing(dialog, "SourceColumn");
+  expect_missing(dialog,
+                 "QStringLiteral(\"settingsKeybindingsCurrentMappings\")");
+  expect_missing(dialog, "QStringLiteral(\"settingsKeybindingsAdd\")");
+  expect_missing(dialog, "QStringLiteral(\"settingsKeybindingsReplace\")");
+  expect_missing(dialog, "QStringLiteral(\"settingsKeybindingsRemove\")");
+  expect_missing(dialog, "settingsKeybindingConflictKeepBoth");
+  expect_missing(dialog, "QuaderKeybindingConflictPolicy::KeepBoth");
 
   for (std::string_view forbidden : {
            "editor/input/quader_keybinding_service.hpp",
@@ -951,6 +985,17 @@ TEST(UiLayoutGuardrailTests,
   expect_contains(ui_system, "QtSettingsChangeKind::ViewportPreview");
   expect_contains(ui_system, "QtSettingsChangeKind::ViewportCommit");
   expect_contains(ui_system, "QtSettingsChangeKind::InterfaceCommit");
+  expect_contains(ui_system, "QtSettingsChangeKind::KeybindingsCommit");
+  expect_contains(ui_system,
+                  "selection_toolbar_->synchronize(*editor_, selection.mode, true)");
+  expect_contains(ui_system,
+                  "tool_toolbar_->synchronize(*editor_, selection, true)");
+  expect_contains(ui_system,
+                  "snapping_toolbar_->synchronize(*editor_, true)");
+  expect_contains(ui_system,
+                  "viewport_display_toolbar_->synchronize(*editor_, true)");
+  expect_contains(ui_system,
+                  "viewport_panel_->refresh_keybinding_presentation(*editor_)");
   expect_contains(ui_system, "synchronize_settings_surfaces(true)");
   expect_contains(ui_system, "settings_dialog_->isVisible()");
   expect_contains(ui_system, "settings_dialog_->refresh()");
@@ -1174,14 +1219,19 @@ TEST(UiLayoutGuardrailTests,
   expect_missing(button_presentation, "setDown(");
   expect_contains(toolbar, "if (!force && synchronization_valid_");
   expect_contains(toolbar, "editor.commands().descriptor(command_id)");
+  expect_contains(toolbar, "editor.commands().shortcut_for(command_id)");
   expect_missing(toolbar, "editor.commands().available()");
   const std::size_t unchanged_state_gate =
       toolbar.find("if (!force && synchronization_valid_");
   const std::size_t command_lookup =
       toolbar.find("editor.commands().descriptor(command_id)");
+  const std::size_t shortcut_lookup =
+      toolbar.find("editor.commands().shortcut_for(command_id)");
   ASSERT_NE(unchanged_state_gate, std::string::npos);
   ASSERT_NE(command_lookup, std::string::npos);
+  ASSERT_NE(shortcut_lookup, std::string::npos);
   EXPECT_LT(unchanged_state_gate, command_lookup);
+  EXPECT_LT(unchanged_state_gate, shortcut_lookup);
   expect_contains(toolbar, "QStringLiteral(\" [%1]\")");
   expect_contains(menu_header, "tool_toolbar_visible");
   expect_contains(menu_header, "set_tool_toolbar_visible");
@@ -1334,14 +1384,19 @@ TEST(UiLayoutGuardrailTests,
   expect_contains(toolbar,
                   "if (!force && presented_state_.has_value() &&");
   expect_contains(toolbar, "editor.commands().descriptor(");
+  expect_contains(toolbar, "editor.commands().shortcut_for(entry.command_id)");
   expect_missing(toolbar, "editor.commands().available()");
   const std::size_t unchanged_state_gate =
       toolbar.find("if (!force && presented_state_.has_value() &&");
   const std::size_t command_lookup =
       toolbar.find("editor.commands().descriptor(");
+  const std::size_t shortcut_lookup = toolbar.find(
+      "editor.commands().shortcut_for(entry.command_id)");
   ASSERT_NE(unchanged_state_gate, std::string::npos);
   ASSERT_NE(command_lookup, std::string::npos);
+  ASSERT_NE(shortcut_lookup, std::string::npos);
   EXPECT_LT(unchanged_state_gate, command_lookup);
+  EXPECT_LT(unchanged_state_gate, shortcut_lookup);
 
   expect_contains(ui_header,
                   "QtViewportDisplayToolbar *viewport_display_toolbar_");
@@ -1470,6 +1525,14 @@ TEST(UiLayoutGuardrailTests, QtViewportSupportsOneThroughFourPaneLayouts) {
   expect_contains(panel, "visible && !startup_presentation_blocked_");
   expect_contains(panel, "active[index] = true");
   expect_contains(menu, "viewport_layout_options()");
+  for (std::string_view command : {
+           "kViewportLayoutSingle", "kViewportLayoutTwoVertical",
+           "kViewportLayoutTwoHorizontal", "kViewportLayoutFourQuad"}) {
+    expect_contains(menu, command);
+  }
+  expect_contains(menu, "context.editor.commands().execute(");
+  expect_contains(menu,
+                  "context.editor.commands().shortcut_for(*entry.command_id)");
   expect_contains(menu, "editor.viewports().set_layout(layout)");
 }
 
@@ -1688,12 +1751,30 @@ TEST(UiLayoutGuardrailTests,
   expect_contains(panel_header, "QPushButton *display_button = nullptr");
   expect_contains(panel_header, "QMenu *camera_menu = nullptr");
   expect_contains(panel_header, "QMenu *debug_view_menu = nullptr");
+  expect_contains(panel_header,
+                  "void refresh_keybinding_presentation(QuaderEditorApi &editor)");
   expect_contains(panel, "new QPushButton(pane_state.toolbar)");
   expect_contains(panel,
                   "pane_state.display_menu->setMinimumWidth(chrome.menu_width)");
   expect_contains(panel, "pane_state.display_menu->addMenu(");
   expect_missing(panel, "new QComboBox(pane_state.toolbar)");
   expect_missing(panel, "viewportView_%1");
+  for (std::string_view command : {
+           "kViewportShadingWireframe", "kViewportShadingShaded",
+           "kViewportShadingRendered"}) {
+    expect_contains(panel, command);
+  }
+  expect_contains(panel,
+                  "interaction_editor_->commands().execute(*command_id)");
+  expect_contains(panel,
+                  "interaction_editor_->commands().shortcut_for(*command_id)");
+  const std::size_t editor_gate =
+      panel.find("if (interaction_editor_ != &editor)");
+  const std::size_t keybinding_refresh =
+      panel.find("refresh_keybinding_presentation(editor)", editor_gate);
+  ASSERT_NE(editor_gate, std::string::npos);
+  ASSERT_NE(keybinding_refresh, std::string::npos);
+  EXPECT_LT(editor_gate, keybinding_refresh);
 
   // Detailed cadence probes remain available for regression diagnosis, but
   // production frames must not pay their clock/logging cost.
@@ -1840,7 +1921,11 @@ TEST(UiLayoutGuardrailTests,
                   "Keyboard dispatch remains owned by QuaderKeybindingService");
   expect_contains(menu, "editor.commands().execute(command_id)");
   expect_contains(menu, "editor.commands().available()");
-  expect_contains(menu, "command->shortcut");
+  expect_contains(menu,
+                  "context.editor.commands().shortcut_for(entry.command_id)");
+  expect_contains(menu,
+                  "context.editor.commands().shortcut_for(command_id)");
+  expect_missing(menu, "command->shortcut");
   expect_contains(menu, "command_id_for_tool_activation(");
   expect_contains(menu, "context.editor.commands().execute(command_id)");
   expect_missing(menu, "context.editor.tools().activate(tool_id)");
@@ -1862,8 +1947,11 @@ TEST(UiLayoutGuardrailTests,
   }
 
   expect_contains(commands, "QuaderKeybindingService keybindings_");
-  expect_contains(commands, "keybindings_.dispatch(chord, context)");
-  expect_contains(commands, "keybindings_.resolve_sequence({chord}, context)");
+  expect_contains(
+      commands,
+      "keybindings_.dispatch(chord, context, target_available)");
+  expect_contains(commands, "keybindings_.resolve_sequence(");
+  expect_contains(commands, "{chord}, context, [](");
   expect_contains(commands, "dispatch_viewport_input_binding(");
   expect_contains(commands,
                   "return api_.modeling().can_execute_tool(tool_id)");

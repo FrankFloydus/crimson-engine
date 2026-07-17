@@ -2335,6 +2335,30 @@ TEST(ModelingSessionServiceSplitTests,
 }
 
 TEST(ModelingSessionServiceSplitTests,
+     RadialAlignAvailabilityExcludesObjectAndGroupSelectionModes) {
+  const ModelingInstantOperationCatalogEntry *radial_align =
+      find_modeling_instant_operation_catalog_entry(
+          ModelingInstantOperationId::RadialAlign);
+  ASSERT_NE(radial_align, nullptr);
+
+  ModelingSelectionSummary summary{
+      .mode = ModelingSelectionMode::Group,
+      .has_selection = true,
+      .active_kind = ModelingActiveSelectionKind::Object,
+      .selected_object_count = 1,
+  };
+  EXPECT_FALSE(modeling_instant_operation_enabled(*radial_align, summary));
+
+  summary.mode = ModelingSelectionMode::Object;
+  EXPECT_FALSE(modeling_instant_operation_enabled(*radial_align, summary));
+
+  summary.mode = ModelingSelectionMode::Vertex;
+  summary.active_kind = ModelingActiveSelectionKind::Vertex;
+  summary.selected_vertex_count = 3;
+  EXPECT_TRUE(modeling_instant_operation_enabled(*radial_align, summary));
+}
+
+TEST(ModelingSessionServiceSplitTests,
      InstantOperationAvailabilityUsesActionCatalogEvaluator) {
   const std::string instant_header = read_source_file(
       "src/editor/modeling/services/modeling_instant_operation_catalog.hpp");

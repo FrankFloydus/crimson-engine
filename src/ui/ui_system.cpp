@@ -2822,6 +2822,26 @@ void UISystem::handle_settings_dialog_change(QtSettingsChangeKind kind) {
   case QtSettingsChangeKind::InterfaceCommit:
     (void)save_settings();
     break;
+  case QtSettingsChangeKind::KeybindingsCommit:
+    if (editor_ != nullptr) {
+      const QuaderSelectionSummary selection = editor_->selection().summary();
+      if (selection_toolbar_ != nullptr) {
+        selection_toolbar_->synchronize(*editor_, selection.mode, true);
+      }
+      if (tool_toolbar_ != nullptr) {
+        tool_toolbar_->synchronize(*editor_, selection, true);
+      }
+      if (snapping_toolbar_ != nullptr) {
+        snapping_toolbar_->synchronize(*editor_, true);
+      }
+      if (viewport_display_toolbar_ != nullptr) {
+        viewport_display_toolbar_->synchronize(*editor_, true);
+      }
+      if (viewport_panel_ != nullptr) {
+        viewport_panel_->refresh_keybinding_presentation(*editor_);
+      }
+    }
+    break;
   }
   if (main_menu_ != nullptr) {
     main_menu_->refresh();

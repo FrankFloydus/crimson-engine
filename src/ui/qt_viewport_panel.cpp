@@ -7,6 +7,7 @@
 #include "ui/qt_viewport_panel.hpp"
 
 #include "api/quader_api_type_conversions.hpp"
+#include "api/quader_command_ids.hpp"
 #include "api/quader_editor_api.hpp"
 #include "assets/asset_registry.hpp"
 #include "core/localization_service.hpp"
@@ -142,6 +143,26 @@ constexpr std::array<ViewportShadingMode, 3> kShadingModes{
     ViewportShadingMode::Shaded,
     ViewportShadingMode::Rendered,
 };
+
+std::optional<QuaderCommandId>
+shading_command_id(ViewportShadingMode shading) {
+  switch (shading) {
+  case ViewportShadingMode::Wireframe:
+    return quader_command::kViewportShadingWireframe;
+  case ViewportShadingMode::Shaded:
+    return quader_command::kViewportShadingShaded;
+  case ViewportShadingMode::Rendered:
+    return quader_command::kViewportShadingRendered;
+  case ViewportShadingMode::DiffuseOnly:
+  case ViewportShadingMode::SpecularOnly:
+  case ViewportShadingMode::Albedo:
+  case ViewportShadingMode::Roughness:
+  case ViewportShadingMode::Metalness:
+  case ViewportShadingMode::Normal:
+    return std::nullopt;
+  }
+  return std::nullopt;
+}
 
 constexpr std::array<ViewportShadingMode, 6> kDebugViewModes{
     ViewportShadingMode::DiffuseOnly, ViewportShadingMode::SpecularOnly,
@@ -1806,7 +1827,14 @@ void QtViewportPanel::create_pane(Pane &pane_state) {
                 (void)workspace_->focus_pane(pane_state.id);
                 update_focused_pane_indicator();
               }
-              set_pane_shading(pane_state, shading);
+              const std::optional<QuaderCommandId> command_id =
+                  shading_command_id(shading);
+              if (interaction_editor_ != nullptr && command_id.has_value()) {
+                (void)interaction_editor_->commands().execute(*command_id);
+                sync_pane_control_selection(pane_state);
+              } else {
+                set_pane_shading(pane_state, shading);
+              }
             });
   }
 
@@ -1884,10 +1912,31 @@ void QtViewportPanel::create_pane(Pane &pane_state) {
   refresh_pane_controls(pane_state);
 }
 
+void QtViewportPanel::refresh_keybinding_presentation(
+    QuaderEditorApi &editor) {
+  interaction_editor_ = &editor;
+  for (Pane &pane_state : panes_) {
+    refresh_pane_controls(pane_state);
+  }
+}
+
 void QtViewportPanel::refresh_pane_controls(Pane &pane_state) {
   for (std::size_t index = 0; index < kShadingModes.size(); ++index) {
-    pane_state.shading_actions[index]->setText(
-        localized_shading_label(localization_, kShadingModes[index]));
+    const ViewportShadingMode shading = kShadingModes[index];
+    QString text = localized_shading_label(localization_, shading);
+    if (interaction_editor_ != nullptr) {
+      const std::optional<QuaderCommandId> command_id =
+          shading_command_id(shading);
+      if (command_id.has_value()) {
+        const std::string shortcut =
+            interaction_editor_->commands().shortcut_for(*command_id);
+        if (!shortcut.empty()) {
+          text.append(QLatin1Char('\t'));
+          text.append(QString::fromStdString(shortcut));
+        }
+      }
+    }
+    pane_state.shading_actions[index]->setText(text);
   }
   pane_state.camera_menu->setTitle(localized_display_menu_label(
       localization_, "viewport.display.camera", "Camera"));
@@ -2304,7 +2353,9 @@ void QtViewportPanel::process_viewport_input(
   if (workspace_ == nullptr) {
     return;
   }
-  interaction_editor_ = &editor;
+  if (interaction_editor_ != &editor) {
+    refresh_keybinding_presentation(editor);
+  }
   if (linear_array != nullptr) {
     const CommandResult refresh = linear_array->refresh();
     if (refresh.changed) {

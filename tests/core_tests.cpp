@@ -5,6 +5,7 @@
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
 #include "api/quader_api_session_internal_access.hpp"
+#include "api/quader_command_ids.hpp"
 #include "api/quader_editor_api.hpp"
 #include "app/app_window_settings.hpp"
 #include "assets/asset_registry.hpp"
@@ -7692,6 +7693,33 @@ TEST(ViewportInputRouterTests, GridPresetWorldSizesMatchMapUnitContract) {
   EXPECT_NEAR(viewport_grid_world_size_for_preset(99), 16.0f, 0.0001f);
 }
 
+TEST(ViewportInputRouterTests,
+     GridAdjustmentCommandsProjectToRelativeRouterShortcuts) {
+  ViewportShortcut shortcut;
+
+  EXPECT_TRUE(viewport_router_shortcut_for_target_id(
+      quader_command::kViewportGridIncrement.string(), 6, shortcut));
+  EXPECT_EQ(shortcut.kind, ViewportShortcutKind::SetGridPreset);
+  EXPECT_EQ(shortcut.grid_preset, 7);
+
+  EXPECT_TRUE(viewport_router_shortcut_for_target_id(
+      quader_command::kViewportGridDecrement.string(), 6, shortcut));
+  EXPECT_EQ(shortcut.kind, ViewportShortcutKind::SetGridPreset);
+  EXPECT_EQ(shortcut.grid_preset, 5);
+
+  EXPECT_TRUE(viewport_router_shortcut_for_target_id(
+      quader_command::kViewportGridReset.string(), 10, shortcut));
+  EXPECT_EQ(shortcut.kind, ViewportShortcutKind::SetGridPreset);
+  EXPECT_EQ(shortcut.grid_preset, viewport_default_grid_preset());
+
+  EXPECT_TRUE(viewport_router_shortcut_for_target_id(
+      quader_command::kViewportGridIncrement.string(), 10, shortcut));
+  EXPECT_EQ(shortcut.grid_preset, 10);
+  EXPECT_TRUE(viewport_router_shortcut_for_target_id(
+      quader_command::kViewportGridDecrement.string(), 1, shortcut));
+  EXPECT_EQ(shortcut.grid_preset, 1);
+}
+
 TEST(ViewportInputRouterTests, GridPresetShortcutReportsOnlyActualChanges) {
   ViewportInputRouter router;
   ViewportCameraController camera;
@@ -12452,7 +12480,7 @@ TEST(ModelingSessionServiceTests,
   const ModelingActionItem *invert =
       find_action_item(*object_panel, "invert_mesh");
   ASSERT_NE(invert, nullptr);
-  EXPECT_EQ(invert->label, "Flip Mesh Normals");
+  EXPECT_EQ(invert->label, "Flip Selected Mesh Normals");
   EXPECT_EQ(invert->operation_id, "flip_face_normals");
   EXPECT_EQ(invert->visibility, ModelingActionVisibility::Enabled);
 
@@ -12562,7 +12590,7 @@ TEST(ModelingSessionServiceTests,
   EXPECT_EQ(target.kind, ModelingToolSettingsTargetKind::EdgeBevel);
   EXPECT_EQ(target.action_id, "bevel_edges");
   EXPECT_EQ(target.operation_id, "edge_bevel");
-  EXPECT_EQ(target.label, "Bevel Edges");
+  EXPECT_EQ(target.label, "Bevel Selected Edges");
 
   const std::optional<MeshAsset> preview_before =
       service.compile_object_mesh(box.object.modeling_object_id);
