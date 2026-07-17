@@ -1556,11 +1556,14 @@ TEST(EditorApiTests, PreferencesPersistAndResolveCustomCommandShortcuts) {
             "Ctrl+Z");
 }
 
-TEST(EditorApiTests, SnappingPreferencesDelegateToRuntimeHooks) {
+TEST(EditorApiTests, ViewportDisplayAndSnappingPreferencesUseRuntimeHooks) {
   CommandTestHarness harness;
   quader::QuaderEditorApi &editor = harness.editor;
   bool snapping_enabled = true;
   bool grid_visible = true;
+  bool gizmos_visible = true;
+  bool mesh_grid_visible = true;
+  bool overlays_visible = true;
   bool grid_snap_enabled = true;
   bool vertex_snap_enabled = true;
   bool rotation_snap_enabled = true;
@@ -1586,6 +1589,27 @@ TEST(EditorApiTests, SnappingPreferencesDelegateToRuntimeHooks) {
           [&](bool visible) {
             const bool changed = grid_visible != visible;
             grid_visible = visible;
+            return runtime_result(changed);
+          },
+      .gizmos_visible = [&]() { return gizmos_visible; },
+      .set_gizmos_visible =
+          [&](bool visible) {
+            const bool changed = gizmos_visible != visible;
+            gizmos_visible = visible;
+            return runtime_result(changed);
+          },
+      .mesh_grid_visible = [&]() { return mesh_grid_visible; },
+      .set_mesh_grid_visible =
+          [&](bool visible) {
+            const bool changed = mesh_grid_visible != visible;
+            mesh_grid_visible = visible;
+            return runtime_result(changed);
+          },
+      .overlays_visible = [&]() { return overlays_visible; },
+      .set_overlays_visible =
+          [&](bool visible) {
+            const bool changed = overlays_visible != visible;
+            overlays_visible = visible;
             return runtime_result(changed);
           },
       .grid_snap_enabled = [&]() { return grid_snap_enabled; },
@@ -1620,6 +1644,9 @@ TEST(EditorApiTests, SnappingPreferencesDelegateToRuntimeHooks) {
 
   EXPECT_TRUE(editor.preferences().snapping_enabled());
   EXPECT_TRUE(editor.preferences().grid_visible());
+  EXPECT_TRUE(editor.preferences().gizmos_visible());
+  EXPECT_TRUE(editor.preferences().mesh_grid_visible());
+  EXPECT_TRUE(editor.preferences().overlays_visible());
   EXPECT_TRUE(editor.preferences().grid_snap_enabled());
   EXPECT_TRUE(editor.preferences().vertex_snap_enabled());
   EXPECT_TRUE(editor.preferences().rotation_snap_enabled());
@@ -1627,6 +1654,9 @@ TEST(EditorApiTests, SnappingPreferencesDelegateToRuntimeHooks) {
 
   EXPECT_TRUE(editor.preferences().set_snapping_enabled(false).changed());
   EXPECT_TRUE(editor.preferences().set_grid_visible(false).changed());
+  EXPECT_TRUE(editor.preferences().set_gizmos_visible(false).changed());
+  EXPECT_TRUE(editor.preferences().set_mesh_grid_visible(false).changed());
+  EXPECT_TRUE(editor.preferences().set_overlays_visible(false).changed());
   EXPECT_TRUE(editor.preferences().set_grid_snap_enabled(false).changed());
   EXPECT_TRUE(editor.preferences().set_vertex_snap_enabled(false).changed());
   EXPECT_TRUE(editor.preferences().set_rotation_snap_enabled(false).changed());
@@ -1634,11 +1664,31 @@ TEST(EditorApiTests, SnappingPreferencesDelegateToRuntimeHooks) {
       editor.preferences().set_rotation_snap_degrees(22.5).changed());
   EXPECT_FALSE(editor.preferences().snapping_enabled());
   EXPECT_FALSE(editor.preferences().grid_visible());
+  EXPECT_FALSE(editor.preferences().gizmos_visible());
+  EXPECT_FALSE(editor.preferences().mesh_grid_visible());
+  EXPECT_FALSE(editor.preferences().overlays_visible());
   EXPECT_FALSE(editor.preferences().grid_snap_enabled());
   EXPECT_FALSE(editor.preferences().vertex_snap_enabled());
   EXPECT_FALSE(editor.preferences().rotation_snap_enabled());
   EXPECT_DOUBLE_EQ(editor.preferences().rotation_snap_degrees(), 22.5);
   EXPECT_FALSE(editor.preferences().set_rotation_snap_degrees(22.5).changed());
+
+  EXPECT_TRUE(editor.commands()
+                  .execute(quader::quader_command::kViewportToggleGrid)
+                  .changed());
+  EXPECT_TRUE(editor.commands()
+                  .execute(quader::quader_command::kViewportToggleGizmos)
+                  .changed());
+  EXPECT_TRUE(editor.commands()
+                  .execute(quader::quader_command::kViewportToggleMeshGrid)
+                  .changed());
+  EXPECT_TRUE(editor.commands()
+                  .execute(quader::quader_command::kViewportToggleOverlays)
+                  .changed());
+  EXPECT_TRUE(editor.preferences().grid_visible());
+  EXPECT_TRUE(editor.preferences().gizmos_visible());
+  EXPECT_TRUE(editor.preferences().mesh_grid_visible());
+  EXPECT_TRUE(editor.preferences().overlays_visible());
 }
 
 TEST(EditorApiTests, KeybindingConflictsAndRemovalSupportRebindingUi) {

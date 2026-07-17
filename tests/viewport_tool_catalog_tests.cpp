@@ -103,7 +103,10 @@ public:
   accept_knife_point(const ModelingToolRayEvent &) override {
     return {.ok = true};
   }
-  ModelingCommandResult accept_poly_point() override { return {.ok = true}; }
+  ModelingCommandResult
+  accept_poly_point(const ModelingToolRayEvent &) override {
+    return {.ok = true};
+  }
   ModelingCommandResult begin_drawn_plane_point_drag(ModelingViewportTool,
                                                        int) override {
     return {.ok = true};
@@ -440,6 +443,12 @@ TEST(ViewportToolRuntimeTests, RuntimeRoutesToolEventsToActiveTool) {
 TEST(ViewportToolRuntimeTests,
      KnifeClickUsesQueuedPhysicalPressCoordinateWhenMouseMoveSharesFrame) {
   expect_point_tool_click_uses_queued_press_coordinate(ViewportToolId::Knife,
+                                                       false);
+}
+
+TEST(ViewportToolRuntimeTests,
+     PolyClickUsesQueuedPhysicalPressCoordinateWhenMouseMoveSharesFrame) {
+  expect_point_tool_click_uses_queued_press_coordinate(ViewportToolId::Poly,
                                                        false);
 }
 

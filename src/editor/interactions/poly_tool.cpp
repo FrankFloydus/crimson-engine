@@ -14,6 +14,7 @@
 
 #include <cstdint>
 #include <limits>
+#include <optional>
 #include <vector>
 
 namespace quader_editor_core {
@@ -185,8 +186,20 @@ public:
 			rebuild_overlay(state);
 			return { true, false };
 		}
-		const quader::QVec3 safe_normal = vec3_is_tiny(plane_normal) ? quader::QVec3 { 0.0F, 1.0F, 0.0F } : normalized_axis(plane_normal);
-		quader::QVec3 next_position = snap_knife_point_to_grid(position, grid_size, snap_enabled);
+		const quader::QVec3 requested_normal =
+			state.points.empty() ? plane_normal : state.face_normal;
+		const quader::QVec3 safe_normal = vec3_is_tiny(requested_normal) ?
+			quader::QVec3 { 0.0F, 1.0F, 0.0F } :
+			normalized_axis(requested_normal);
+		const quader::QVec3 plane_point =
+			state.points.empty() ? position : state.points.front();
+		const std::optional<quader::QVec3> snapped_position =
+			snap_point_to_plane_grid(
+				position, plane_point, safe_normal, grid_size, snap_enabled);
+		if (!snapped_position.has_value()) {
+			return { false, false, "Poly needs a valid construction plane." };
+		}
+		quader::QVec3 next_position = *snapped_position;
 		if (constrain_axis && !state.points.empty()) {
 			next_position = constrain_knife_point_to_axis(state.points.back(), next_position, safe_normal, grid_size, snap_enabled);
 		}

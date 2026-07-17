@@ -38,6 +38,12 @@ public:
     [[nodiscard]] bool snapping_enabled() const;
     QuaderApiVoidResult set_grid_visible(bool visible);
     [[nodiscard]] bool grid_visible() const;
+    QuaderApiVoidResult set_gizmos_visible(bool visible);
+    [[nodiscard]] bool gizmos_visible() const;
+    QuaderApiVoidResult set_mesh_grid_visible(bool visible);
+    [[nodiscard]] bool mesh_grid_visible() const;
+    QuaderApiVoidResult set_overlays_visible(bool visible);
+    [[nodiscard]] bool overlays_visible() const;
     QuaderApiVoidResult set_grid_snap_enabled(bool enabled);
     [[nodiscard]] bool grid_snap_enabled() const;
     QuaderApiVoidResult set_vertex_snap_enabled(bool enabled);

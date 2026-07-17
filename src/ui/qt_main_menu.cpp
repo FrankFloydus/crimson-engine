@@ -169,6 +169,7 @@ struct QtMainMenu::Impl {
     material_browser_action = nullptr;
     selection_toolbar_action = nullptr;
     snapping_toolbar_action = nullptr;
+    viewport_display_toolbar_action = nullptr;
     tool_toolbar_action = nullptr;
   }
 
@@ -194,6 +195,7 @@ struct QtMainMenu::Impl {
   QAction *material_browser_action = nullptr;
   QAction *selection_toolbar_action = nullptr;
   QAction *snapping_toolbar_action = nullptr;
+  QAction *viewport_display_toolbar_action = nullptr;
   QAction *tool_toolbar_action = nullptr;
   std::vector<CommandAction> command_actions;
   std::vector<BoolSettingAction> bool_setting_actions;
@@ -551,6 +553,18 @@ struct QtMainMenu::Impl {
                          context.set_snapping_toolbar_visible(visible);
                        }
                      });
+    viewport_display_toolbar_action = panels->addAction(qtext(
+        context.localization, "ui.toolbar.viewport_display.title",
+        "Viewport Display"));
+    viewport_display_toolbar_action->setObjectName(
+        QStringLiteral("toolbar_viewport_display"));
+    viewport_display_toolbar_action->setCheckable(true);
+    QObject::connect(viewport_display_toolbar_action, &QAction::toggled,
+                     connection_context.get(), [this](bool visible) {
+                       if (context.set_viewport_display_toolbar_visible) {
+                         context.set_viewport_display_toolbar_visible(visible);
+                       }
+                     });
     tool_toolbar_action = panels->addAction(qtext(
         context.localization, "ui.toolbar.tools.title", "Tools"));
     tool_toolbar_action->setObjectName(QStringLiteral("toolbar_tools"));
@@ -697,6 +711,16 @@ void QtMainMenu::refresh() {
     impl_->snapping_toolbar_action->setChecked(
         impl_->context.snapping_toolbar_visible
             ? impl_->context.snapping_toolbar_visible()
+            : false);
+  }
+  if (impl_->viewport_display_toolbar_action != nullptr) {
+    const QSignalBlocker blocker(impl_->viewport_display_toolbar_action);
+    impl_->viewport_display_toolbar_action->setText(qtext(
+        impl_->context.localization, "ui.toolbar.viewport_display.title",
+        "Viewport Display"));
+    impl_->viewport_display_toolbar_action->setChecked(
+        impl_->context.viewport_display_toolbar_visible
+            ? impl_->context.viewport_display_toolbar_visible()
             : false);
   }
   const std::string active_tool =

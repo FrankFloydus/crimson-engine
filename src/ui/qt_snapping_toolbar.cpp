@@ -90,17 +90,16 @@ public:
   }
 };
 
-/// Provides stable indexes for the five retained snapping toggle actions.
+/// Provides stable indexes for the four retained snapping toggle actions.
 enum ToggleIndex : std::size_t {
   SnappingEnabled = 0,
-  GridVisible,
   GridSnapping,
   VertexSnapping,
   RotationSnapping,
   ToggleCount,
 };
 
-static_assert(ToggleCount == 5);
+static_assert(ToggleCount == 4);
 
 /// Describes one stable snapping toolbar action and its localized resources.
 struct ToggleSpec {
@@ -113,8 +112,6 @@ struct ToggleSpec {
 constexpr std::array<ToggleSpec, ToggleCount> kToggleSpecs{{
     {":/quader/icons/snapping_master.png", "snappingEnabled",
      "ui.toolbar.snapping.enabled", "Toggle Snapping"},
-    {":/quader/icons/snapping_grid_visible.png", "gridVisible",
-     "ui.toolbar.snapping.grid_visible", "Enable Grid"},
     {":/quader/icons/snapping_grid.png", "gridSnapping",
      "ui.toolbar.snapping.grid_snap", "Grid Snapping"},
     {":/quader/icons/snapping_vertex.png", "vertexSnapping",
@@ -275,7 +272,6 @@ void QtSnappingToolbar::synchronize(const QuaderEditorApi &editor,
       .toggles =
           {
               preferences.snapping_enabled(),
-              preferences.grid_visible(),
               preferences.grid_snap_enabled(),
               preferences.vertex_snap_enabled(),
               preferences.rotation_snap_enabled(),
@@ -356,11 +352,6 @@ void QtSnappingToolbar::set_rotation_snap_degrees_requested_callback(
 void QtSnappingToolbar::set_snapping_enabled_requested_callback(
     std::function<void(bool)> callback) {
   toggle_requested_[SnappingEnabled] = std::move(callback);
-}
-
-void QtSnappingToolbar::set_grid_visible_requested_callback(
-    std::function<void(bool)> callback) {
-  toggle_requested_[GridVisible] = std::move(callback);
 }
 
 void QtSnappingToolbar::set_grid_snap_enabled_requested_callback(

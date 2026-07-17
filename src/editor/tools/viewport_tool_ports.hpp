@@ -61,7 +61,8 @@ public:
   update_insert_edge_loop_drag(const ModelingToolRayEvent &event) = 0;
   [[nodiscard]] virtual ModelingCommandResult
   accept_knife_point(const ModelingToolRayEvent &event) = 0;
-  [[nodiscard]] virtual ModelingCommandResult accept_poly_point() = 0;
+  [[nodiscard]] virtual ModelingCommandResult
+  accept_poly_point(const ModelingToolRayEvent &event) = 0;
   [[nodiscard]] virtual ModelingCommandResult
   begin_drawn_plane_point_drag(ModelingViewportTool tool, int point_index) = 0;
   [[nodiscard]] virtual ModelingCommandResult
@@ -198,7 +199,8 @@ public:
   update_insert_edge_loop_drag(const ModelingToolRayEvent &event) override;
   [[nodiscard]] ModelingCommandResult
   accept_knife_point(const ModelingToolRayEvent &event) override;
-  [[nodiscard]] ModelingCommandResult accept_poly_point() override;
+  [[nodiscard]] ModelingCommandResult
+  accept_poly_point(const ModelingToolRayEvent &event) override;
   [[nodiscard]] ModelingCommandResult
   begin_drawn_plane_point_drag(ModelingViewportTool tool,
                                int point_index) override;

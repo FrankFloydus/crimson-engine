@@ -57,6 +57,7 @@ class QtSceneWorkspace;
 class QtSelectionToolbar;
 class QtSnappingToolbar;
 class QtToolToolbar;
+class QtViewportDisplayToolbar;
 enum class QtSettingsChangeKind;
 enum class QtStandardMaterialEditorFileAction : std::uint8_t;
 enum class QtStandardMaterialScalar : std::uint8_t;
@@ -181,6 +182,7 @@ private:
   QtSceneWorkspace *scene_workspace_ = nullptr;
   QtSelectionToolbar *selection_toolbar_ = nullptr;
   QtSnappingToolbar *snapping_toolbar_ = nullptr;
+  QtViewportDisplayToolbar *viewport_display_toolbar_ = nullptr;
   QtToolToolbar *tool_toolbar_ = nullptr;
   QtViewportPanel *viewport_panel_ = nullptr;
   OutlinerPanel *outliner_panel_ = nullptr;
@@ -222,6 +224,11 @@ private:
   std::uint64_t inspector_scene_revision_ = 0;
   std::uint64_t inspector_modeling_content_revision_ = 0;
   std::uint64_t inspector_modeling_selection_revision_ = 0;
+  std::uint64_t toolbar_scene_revision_ = 0;
+  std::uint64_t toolbar_scene_selection_revision_ = 0;
+  std::uint64_t toolbar_modeling_content_revision_ = 0;
+  std::uint64_t toolbar_modeling_selection_revision_ = 0;
+  std::string toolbar_active_tool_;
   std::uint64_t material_browser_catalog_signature_ = 0;
   std::string material_browser_active_id_;
   QtStandardMaterialPreviewImageCache
@@ -230,10 +237,12 @@ private:
   std::string inspector_locale_;
   bool outliner_refresh_valid_ = false;
   bool inspector_refresh_valid_ = false;
+  bool toolbar_refresh_valid_ = false;
   bool home_visible_ = false;
   bool viewport_initialized_ = false;
   bool selection_toolbar_workspace_visible_ = true;
   bool snapping_toolbar_workspace_visible_ = true;
+  bool viewport_display_toolbar_workspace_visible_ = true;
   bool tool_toolbar_workspace_visible_ = true;
   std::string workspace_window_state_;
 };

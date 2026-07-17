@@ -169,6 +169,10 @@ struct MirrorPointDragRuntimeCommandSettings {
 struct PolyHoverRuntimeCommandSettings {
 	ViewportCameraState camera;
 	quader_poly::Ray ray;
+	// Authoritative only when surface_hit_resolved is true; an empty value then
+	// represents a host-resolved miss and must retain the viewport-grid fallback.
+	std::optional<PickHitRecord> resolved_surface_hit;
+	bool surface_hit_resolved = false;
 	double grid_size = 1.0;
 	bool snap_enabled = true;
 	bool constrain_axis = false;

@@ -104,6 +104,13 @@ inline constexpr QuaderCommandId kViewportViewLeft{"viewport.view.left"};
 inline constexpr QuaderCommandId kViewportViewRight{"viewport.view.right"};
 inline constexpr QuaderCommandId kViewportViewFront{"viewport.view.front"};
 inline constexpr QuaderCommandId kViewportViewBack{"viewport.view.back"};
+inline constexpr QuaderCommandId kViewportToggleGrid{"viewport.toggle_grid"};
+inline constexpr QuaderCommandId kViewportToggleGizmos{
+    "viewport.toggle_gizmos"};
+inline constexpr QuaderCommandId kViewportToggleMeshGrid{
+    "viewport.toggle_mesh_grid"};
+inline constexpr QuaderCommandId kViewportToggleOverlays{
+    "viewport.toggle_overlays"};
 
 /// Deprecated compatibility spelling. Use kDeleteSelection for new C++ callers.
 inline constexpr QuaderCommandId kModelingDeleteSelection{"edit.delete"};
@@ -302,6 +309,10 @@ inline constexpr QuaderCommandId kTypedCommandIds[] = {
     kViewportViewRight,
     kViewportViewFront,
     kViewportViewBack,
+    kViewportToggleGrid,
+    kViewportToggleGizmos,
+    kViewportToggleMeshGrid,
+    kViewportToggleOverlays,
     kModelingDuplicateMeshes,
     kModelingBridge,
     kModelingExtractFaces,

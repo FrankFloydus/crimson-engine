@@ -28,6 +28,12 @@ std::optional<float> snap_insert_edge_loop_preview_factor(
 	double grid_size,
 	bool snap_enabled);
 quader::QVec3 snap_knife_point_to_grid(quader::QVec3 point, double grid_size, bool snap_enabled);
+std::optional<quader::QVec3> snap_point_to_plane_grid(
+	quader::QVec3 point,
+	quader::QVec3 plane_point,
+	quader::QVec3 plane_normal,
+	double grid_size,
+	bool snap_enabled);
 std::optional<quader::QVec3> snap_knife_point_to_edge_grid(
 	const quader_poly::Document& document,
 	quader_poly::Edge edge,

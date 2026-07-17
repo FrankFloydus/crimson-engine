@@ -34,6 +34,7 @@
 #include "ui/qt_standard_material_editor_window.hpp"
 #include "ui/qt_tool_toolbar.hpp"
 #include "ui/qt_tool_settings_window.hpp"
+#include "ui/qt_viewport_display_toolbar.hpp"
 #include "ui/qt_viewport_panel.hpp"
 #include "ui/ui_context.hpp"
 
@@ -240,6 +241,12 @@ bool UISystem::initialize(RenderSystem &render_system,
   snapping_toolbar_->set_localization(localization_);
   snapping_toolbar_->setEnabled(false);
   main_window_->addToolBar(Qt::TopToolBarArea, snapping_toolbar_);
+
+  viewport_display_toolbar_ =
+      new QtViewportDisplayToolbar(main_window_.get());
+  viewport_display_toolbar_->set_localization(localization_);
+  viewport_display_toolbar_->setEnabled(false);
+  main_window_->addToolBar(Qt::TopToolBarArea, viewport_display_toolbar_);
 
   tool_toolbar_ = new QtToolToolbar(main_window_.get());
   tool_toolbar_->set_localization(localization_);
@@ -499,6 +506,7 @@ void UISystem::install_runtime_hooks(
   default_material_ = default_material;
   outliner_refresh_valid_ = false;
   inspector_refresh_valid_ = false;
+  toolbar_refresh_valid_ = false;
 
   selection_toolbar_->set_mode_requested_callback(
       [this](QuaderSelectionMode mode) {
@@ -538,6 +546,14 @@ void UISystem::install_runtime_hooks(
         present_lifecycle_result(
             editor_->preferences().set_rotation_snap_degrees(degrees));
       });
+  viewport_display_toolbar_->set_command_requested_callback(
+      [this](QuaderCommandId command_id) {
+        if (editor_ == nullptr) {
+          return;
+        }
+        present_lifecycle_result(editor_->commands().execute(command_id));
+        viewport_display_toolbar_->synchronize(*editor_, true);
+      });
   snapping_toolbar_->set_snapping_enabled_requested_callback(
       [this](bool enabled) {
         if (editor_ == nullptr) {
@@ -545,14 +561,6 @@ void UISystem::install_runtime_hooks(
         }
         present_lifecycle_result(
             editor_->preferences().set_snapping_enabled(enabled));
-      });
-  snapping_toolbar_->set_grid_visible_requested_callback(
-      [this](bool visible) {
-        if (editor_ == nullptr) {
-          return;
-        }
-        present_lifecycle_result(
-            editor_->preferences().set_grid_visible(visible));
       });
   snapping_toolbar_->set_grid_snap_enabled_requested_callback(
       [this](bool enabled) {
@@ -624,6 +632,17 @@ void UISystem::install_runtime_hooks(
               [this](bool visible) {
                 if (snapping_toolbar_ != nullptr) {
                   snapping_toolbar_->setVisible(visible);
+                }
+              },
+          .viewport_display_toolbar_visible =
+              [this]() {
+                return viewport_display_toolbar_ != nullptr &&
+                       viewport_display_toolbar_->isVisible();
+              },
+          .set_viewport_display_toolbar_visible =
+              [this](bool visible) {
+                if (viewport_display_toolbar_ != nullptr) {
+                  viewport_display_toolbar_->setVisible(visible);
                 }
               },
           .tool_toolbar_visible =
@@ -774,6 +793,48 @@ void UISystem::install_runtime_hooks(
           [this](bool visible) {
             const bool changed = viewport_settings_.set_bool_value(
                 ViewportBoolSettingId::ShowGrid, visible);
+            if (changed) {
+              (void)save_viewport_settings();
+              synchronize_settings_surfaces(true);
+            }
+            return runtime_status(changed);
+          },
+      .gizmos_visible = [this]() {
+        return viewport_settings_.bool_value(
+            ViewportBoolSettingId::ShowGizmos);
+      },
+      .set_gizmos_visible =
+          [this](bool visible) {
+            const bool changed = viewport_settings_.set_bool_value(
+                ViewportBoolSettingId::ShowGizmos, visible);
+            if (changed) {
+              (void)save_viewport_settings();
+              synchronize_settings_surfaces(true);
+            }
+            return runtime_status(changed);
+          },
+      .mesh_grid_visible = [this]() {
+        return viewport_settings_.bool_value(
+            ViewportBoolSettingId::ShowMeshGrid);
+      },
+      .set_mesh_grid_visible =
+          [this](bool visible) {
+            const bool changed = viewport_settings_.set_bool_value(
+                ViewportBoolSettingId::ShowMeshGrid, visible);
+            if (changed) {
+              (void)save_viewport_settings();
+              synchronize_settings_surfaces(true);
+            }
+            return runtime_status(changed);
+          },
+      .overlays_visible = [this]() {
+        return viewport_settings_.bool_value(
+            ViewportBoolSettingId::ShowOverlays);
+      },
+      .set_overlays_visible =
+          [this](bool visible) {
+            const bool changed = viewport_settings_.set_bool_value(
+                ViewportBoolSettingId::ShowOverlays, visible);
             if (changed) {
               (void)save_viewport_settings();
               synchronize_settings_surfaces(true);
@@ -1045,6 +1106,10 @@ void UISystem::show_home() {
     snapping_toolbar_->setEnabled(false);
     snapping_toolbar_->hide();
   }
+  if (viewport_display_toolbar_ != nullptr) {
+    viewport_display_toolbar_->setEnabled(false);
+    viewport_display_toolbar_->hide();
+  }
   if (tool_toolbar_ != nullptr) {
     tool_toolbar_->setEnabled(false);
     tool_toolbar_->hide();
@@ -1089,6 +1154,11 @@ void UISystem::show_workspace() {
     snapping_toolbar_->setEnabled(true);
     snapping_toolbar_->setVisible(snapping_toolbar_workspace_visible_);
   }
+  if (viewport_display_toolbar_ != nullptr) {
+    viewport_display_toolbar_->setEnabled(true);
+    viewport_display_toolbar_->setVisible(
+        viewport_display_toolbar_workspace_visible_);
+  }
   if (tool_toolbar_ != nullptr) {
     tool_toolbar_->setEnabled(true);
     tool_toolbar_->setVisible(tool_toolbar_workspace_visible_);
@@ -1100,6 +1170,9 @@ void UISystem::show_workspace() {
     }
     if (snapping_toolbar_ != nullptr) {
       snapping_toolbar_->synchronize(*editor_, true);
+    }
+    if (viewport_display_toolbar_ != nullptr) {
+      viewport_display_toolbar_->synchronize(*editor_, true);
     }
     if (tool_toolbar_ != nullptr) {
       tool_toolbar_->synchronize(*editor_, selection, true);
@@ -1247,6 +1320,7 @@ void UISystem::shutdown() {
   scene_workspace_ = nullptr;
   selection_toolbar_ = nullptr;
   snapping_toolbar_ = nullptr;
+  viewport_display_toolbar_ = nullptr;
   tool_toolbar_ = nullptr;
   workspace_window_state_.clear();
   outliner_panel_ = nullptr;
@@ -1279,15 +1353,39 @@ void UISystem::refresh(const FrameTiming &frame_timing,
   render_performance_ = render_performance;
   refresh_project_workspace();
   if (editor_ != nullptr) {
-    const QuaderSelectionSummary selection = editor_->selection().summary();
-    if (selection_toolbar_ != nullptr) {
-      selection_toolbar_->synchronize(*editor_, selection.mode);
+    const std::string active_tool = editor_->tools().active_tool();
+    const bool owner_state_changed =
+        !toolbar_refresh_valid_ || document_ == nullptr || modeling_ == nullptr ||
+        toolbar_scene_revision_ != document_->revision() ||
+        toolbar_scene_selection_revision_ != document_->selection_revision() ||
+        toolbar_modeling_content_revision_ != modeling_->content_revision() ||
+        toolbar_modeling_selection_revision_ !=
+            modeling_->selection_revision();
+    const bool active_tool_changed =
+        !toolbar_refresh_valid_ || toolbar_active_tool_ != active_tool;
+    if (owner_state_changed || active_tool_changed) {
+      const QuaderSelectionSummary selection = editor_->selection().summary();
+      if (selection_toolbar_ != nullptr && owner_state_changed) {
+        selection_toolbar_->synchronize(*editor_, selection.mode);
+      }
+      if (tool_toolbar_ != nullptr) {
+        tool_toolbar_->synchronize(*editor_, selection);
+      }
+      if (document_ != nullptr && modeling_ != nullptr) {
+        toolbar_scene_revision_ = document_->revision();
+        toolbar_scene_selection_revision_ = document_->selection_revision();
+        toolbar_modeling_content_revision_ = modeling_->content_revision();
+        toolbar_modeling_selection_revision_ =
+            modeling_->selection_revision();
+        toolbar_active_tool_ = active_tool;
+        toolbar_refresh_valid_ = true;
+      }
     }
     if (snapping_toolbar_ != nullptr) {
       snapping_toolbar_->synchronize(*editor_);
     }
-    if (tool_toolbar_ != nullptr) {
-      tool_toolbar_->synchronize(*editor_, selection);
+    if (viewport_display_toolbar_ != nullptr) {
+      viewport_display_toolbar_->synchronize(*editor_);
     }
   }
   if (viewport_panel_ != nullptr) {
@@ -1373,7 +1471,8 @@ void UISystem::process_viewport_input() {
   }
   viewport_panel_->process_input(*editor_, *document_, *assets_, *modeling_,
                                  default_material_, pivot_, linear_array_,
-                                 radial_array_, point_placement_);
+                                 radial_array_, point_placement_,
+                                 frame_timing_.delta_seconds);
 }
 
 void UISystem::prepare_viewports(
@@ -1492,6 +1591,9 @@ void UISystem::capture_workspace_window_state() {
       selection_toolbar_ != nullptr && !selection_toolbar_->isHidden();
   snapping_toolbar_workspace_visible_ =
       snapping_toolbar_ != nullptr && !snapping_toolbar_->isHidden();
+  viewport_display_toolbar_workspace_visible_ =
+      viewport_display_toolbar_ != nullptr &&
+      !viewport_display_toolbar_->isHidden();
   tool_toolbar_workspace_visible_ =
       tool_toolbar_ != nullptr && !tool_toolbar_->isHidden();
 }
@@ -1708,6 +1810,7 @@ bool UISystem::startup_layout_ready() const {
   for (const QToolBar *toolbar :
        {static_cast<const QToolBar *>(selection_toolbar_),
         static_cast<const QToolBar *>(snapping_toolbar_),
+        static_cast<const QToolBar *>(viewport_display_toolbar_),
         static_cast<const QToolBar *>(tool_toolbar_)}) {
     if (toolbar != nullptr && toolbar->isVisible() &&
         !geometry_ready(toolbar)) {
@@ -1763,6 +1866,7 @@ std::uint64_t UISystem::startup_layout_geometry_signature(
   };
   mix_toolbar(selection_toolbar_);
   mix_toolbar(snapping_toolbar_);
+  mix_toolbar(viewport_display_toolbar_);
   mix_toolbar(tool_toolbar_);
   return signature;
 }
@@ -2425,6 +2529,7 @@ void UISystem::handle_standard_material_texture_transform(
 }
 
 void UISystem::refresh_localized_chrome() {
+  toolbar_refresh_valid_ = false;
   const auto text = [this](std::string_view key, std::string_view fallback) {
     return QString::fromStdString(localization_.text(key, fallback));
   };
@@ -2442,6 +2547,9 @@ void UISystem::refresh_localized_chrome() {
   }
   if (snapping_toolbar_ != nullptr) {
     snapping_toolbar_->set_localization(localization_);
+  }
+  if (viewport_display_toolbar_ != nullptr) {
+    viewport_display_toolbar_->set_localization(localization_);
   }
   if (tool_toolbar_ != nullptr) {
     tool_toolbar_->set_localization(localization_);
@@ -2657,8 +2765,12 @@ void UISystem::handle_settings_dialog_change(QtSettingsChangeKind kind) {
 }
 
 void UISystem::synchronize_settings_surfaces(bool refresh_dialog) {
+  toolbar_refresh_valid_ = false;
   if (snapping_toolbar_ != nullptr && editor_ != nullptr) {
     snapping_toolbar_->synchronize(*editor_, true);
+  }
+  if (viewport_display_toolbar_ != nullptr && editor_ != nullptr) {
+    viewport_display_toolbar_->synchronize(*editor_, true);
   }
   if (main_menu_ != nullptr) {
     main_menu_->refresh();

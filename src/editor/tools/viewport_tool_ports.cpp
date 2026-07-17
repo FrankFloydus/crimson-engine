@@ -128,8 +128,9 @@ ModelingCommandResult ViewportModelingToolPortAdapter::accept_knife_point(
   return modeling_.accept_knife_point(event);
 }
 
-ModelingCommandResult ViewportModelingToolPortAdapter::accept_poly_point() {
-  return modeling_.accept_poly_point();
+ModelingCommandResult ViewportModelingToolPortAdapter::accept_poly_point(
+    const ModelingToolRayEvent &event) {
+  return modeling_.accept_poly_point(event);
 }
 
 ModelingCommandResult

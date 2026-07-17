@@ -889,6 +889,26 @@ void QuaderCommandsApi::Impl::register_commands() {
                                  "Front View", ViewportView::Front);
   register_viewport_view_command(quader_command::kViewportViewBack, "Back View",
                                  ViewportView::Back);
+  register_command(quader_command::kViewportToggleGrid, "Toggle Grid",
+                   [this] {
+                     return preferences_.set_grid_visible(
+                         !preferences_.grid_visible());
+                   });
+  register_command(quader_command::kViewportToggleGizmos, "Toggle Gizmos",
+                   [this] {
+                     return preferences_.set_gizmos_visible(
+                         !preferences_.gizmos_visible());
+                   });
+  register_command(quader_command::kViewportToggleMeshGrid,
+                   "Toggle Mesh Grid", [this] {
+                     return preferences_.set_mesh_grid_visible(
+                         !preferences_.mesh_grid_visible());
+                   });
+  register_command(quader_command::kViewportToggleOverlays,
+                   "Toggle Overlays", [this] {
+                     return preferences_.set_overlays_visible(
+                         !preferences_.overlays_visible());
+                   });
 
   for (const QuaderMeshArrangementDescriptor &descriptor :
        quader_mesh_arrangement_catalog()) {

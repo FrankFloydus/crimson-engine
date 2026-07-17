@@ -76,6 +76,8 @@ const std::vector<std::string_view> &qt_shell_source_paths() {
       "src/ui/qt_snapping_toolbar.cpp",
       "src/ui/qt_tool_toolbar.hpp",
       "src/ui/qt_tool_toolbar.cpp",
+      "src/ui/qt_viewport_display_toolbar.hpp",
+      "src/ui/qt_viewport_display_toolbar.cpp",
       "src/ui/qt_input_adapter.hpp",
       "src/ui/qt_input_adapter.cpp",
   };
@@ -994,9 +996,9 @@ TEST(UiLayoutGuardrailTests,
   for (std::string_view icon :
        {"tool_select.png", "tool_move.png", "tool_rotate.png",
         "tool_scale.png", "tool_pivot.png", "tool_create_primitive.png",
-        "tool_knife.png", "tool_cut.png", "tool_poly.png",
-        "tool_mirror.png", "tool_linear_array.png",
-        "tool_radial_array.png"}) {
+        "tool_extrude.png", "tool_insert_edge_loop.png", "tool_knife.png",
+        "tool_cut.png", "tool_poly.png", "tool_mirror.png",
+        "tool_linear_array.png", "tool_radial_array.png"}) {
     const std::size_t icon_position = toolbar.find(icon, previous_icon);
     EXPECT_NE(icon_position, std::string::npos) << icon;
     previous_icon = icon_position + icon.size();
@@ -1060,17 +1062,16 @@ TEST(UiLayoutGuardrailTests,
   expect_contains(toolbar, "setFloatable(true)");
   expect_contains(toolbar, "setIconSize(QSize(32, 32))");
   expect_contains(toolbar, "Qt::ToolButtonIconOnly");
-  expect_contains(toolbar, "static_assert(ToggleCount == 5)");
-  expect_contains(toolbar_header, "std::array<ToggleAction, 5>");
+  expect_contains(toolbar, "static_assert(ToggleCount == 4)");
+  expect_contains(toolbar_header, "std::array<ToggleAction, 4>");
 
   for (std::string_view action_name :
-       {"snappingEnabled", "gridVisible", "gridSnapping",
-        "vertexSnapping", "rotationSnapping"}) {
+       {"snappingEnabled", "gridSnapping", "vertexSnapping",
+        "rotationSnapping"}) {
     expect_contains(toolbar, action_name);
   }
   for (std::string_view icon :
-       {"snapping_master.png", "snapping_grid_visible.png",
-        "snapping_grid.png", "snapping_vertex.png",
+       {"snapping_master.png", "snapping_grid.png", "snapping_vertex.png",
         "snapping_rotation.png"}) {
     expect_contains(toolbar, icon);
   }
@@ -1144,6 +1145,103 @@ TEST(UiLayoutGuardrailTests,
 }
 
 TEST(UiLayoutGuardrailTests,
+     ViewportDisplayToolbarUsesTypedCommandsAndRetainedOwnerState) {
+  const std::string toolbar_header =
+      read_source_file("src/ui/qt_viewport_display_toolbar.hpp");
+  const std::string toolbar =
+      read_source_file("src/ui/qt_viewport_display_toolbar.cpp");
+  const std::string menu_header =
+      read_source_file("src/ui/qt_main_menu.hpp");
+  const std::string menu = read_source_file("src/ui/qt_main_menu.cpp");
+  const std::string ui_header = read_source_file("src/ui/ui_system.hpp");
+  const std::string ui_system = read_source_file("src/ui/ui_system.cpp");
+  const std::string commands =
+      read_source_file("src/api/quader_commands_api.cpp");
+
+  expect_contains(
+      toolbar_header,
+      "class QtViewportDisplayToolbar final : public QToolBar");
+  expect_contains(toolbar, "setObjectName(QStringLiteral(\"viewportDisplayToolbar\"))");
+  expect_contains(toolbar, "setAllowedAreas(Qt::AllToolBarAreas)");
+  expect_contains(toolbar, "setMovable(true)");
+  expect_contains(toolbar, "setFloatable(true)");
+  expect_contains(toolbar, "setIconSize(QSize(32, 32))");
+  expect_contains(toolbar, "Qt::ToolButtonIconOnly");
+  for (std::string_view action_name :
+       {"viewportGrid", "viewportGizmos", "viewportMeshGrid",
+        "viewportOverlays"}) {
+    expect_contains(toolbar, action_name);
+  }
+  for (std::string_view icon :
+       {"viewport_grid.png", "viewport_gizmos.png",
+        "viewport_mesh_grid.png", "viewport_overlays.png"}) {
+    expect_contains(toolbar, icon);
+  }
+  for (std::string_view command :
+       {"kViewportToggleGrid", "kViewportToggleGizmos",
+        "kViewportToggleMeshGrid", "kViewportToggleOverlays"}) {
+    expect_contains(toolbar, command);
+    expect_contains(commands, command);
+  }
+  expect_contains(toolbar,
+                  "if (!force && presented_state_.has_value() &&");
+  expect_contains(toolbar, "editor.commands().descriptor(");
+  expect_missing(toolbar, "editor.commands().available()");
+  const std::size_t unchanged_state_gate =
+      toolbar.find("if (!force && presented_state_.has_value() &&");
+  const std::size_t command_lookup =
+      toolbar.find("editor.commands().descriptor(");
+  ASSERT_NE(unchanged_state_gate, std::string::npos);
+  ASSERT_NE(command_lookup, std::string::npos);
+  EXPECT_LT(unchanged_state_gate, command_lookup);
+
+  expect_contains(ui_header,
+                  "QtViewportDisplayToolbar *viewport_display_toolbar_");
+  expect_contains(
+      ui_system,
+      "addToolBar(Qt::TopToolBarArea, viewport_display_toolbar_)");
+  const std::size_t snapping_add = ui_system.find(
+      "addToolBar(Qt::TopToolBarArea, snapping_toolbar_)");
+  const std::size_t display_add = ui_system.find(
+      "addToolBar(Qt::TopToolBarArea, viewport_display_toolbar_)");
+  ASSERT_NE(snapping_add, std::string::npos);
+  ASSERT_NE(display_add, std::string::npos);
+  EXPECT_LT(snapping_add, display_add)
+      << "the viewport display toolbar belongs immediately right of snapping";
+  expect_contains(ui_system,
+                  "editor_->commands().execute(command_id)");
+  expect_contains(ui_system, "mix_toolbar(viewport_display_toolbar_)");
+  expect_contains(menu_header, "viewport_display_toolbar_visible");
+  expect_contains(menu_header, "set_viewport_display_toolbar_visible");
+  expect_contains(menu,
+                  "QStringLiteral(\"toolbar_viewport_display\")");
+}
+
+TEST(UiLayoutGuardrailTests,
+     ToolbarSynchronizationGatesSelectionSummaryBeforeFrameWork) {
+  const std::string ui_system = read_source_file("src/ui/ui_system.cpp");
+  const std::size_t refresh_begin =
+      ui_system.find("void UISystem::refresh(const FrameTiming &frame_timing,");
+  const std::size_t refresh_end =
+      ui_system.find("void UISystem::process_viewport_input()", refresh_begin);
+  ASSERT_NE(refresh_begin, std::string::npos);
+  ASSERT_NE(refresh_end, std::string::npos);
+  const std::string refresh =
+      ui_system.substr(refresh_begin, refresh_end - refresh_begin);
+
+  const std::size_t revision_gate =
+      refresh.find("if (owner_state_changed || active_tool_changed)");
+  const std::size_t selection_summary =
+      refresh.find("editor_->selection().summary()");
+  ASSERT_NE(revision_gate, std::string::npos);
+  ASSERT_NE(selection_summary, std::string::npos);
+  EXPECT_LT(revision_gate, selection_summary);
+  expect_contains(refresh, "modeling_->content_revision()");
+  expect_contains(refresh, "modeling_->selection_revision()");
+  expect_missing(refresh, "commands().available()");
+}
+
+TEST(UiLayoutGuardrailTests,
      HomePresentationContainsOnlyProjectEntryChrome) {
   const std::string ui_header = read_source_file("src/ui/ui_system.hpp");
   const std::string ui_source = read_source_file("src/ui/ui_system.cpp");
@@ -1156,12 +1254,15 @@ TEST(UiLayoutGuardrailTests,
   expect_contains(ui_source, "main_window_->statusBar()->hide()");
   expect_contains(ui_source, "selection_toolbar_->hide()");
   expect_contains(ui_source, "snapping_toolbar_->hide()");
+  expect_contains(ui_source, "viewport_display_toolbar_->hide()");
   expect_contains(ui_source, "tool_toolbar_->hide()");
   expect_contains(ui_source, "main_window_->menuBar()->show()");
   expect_contains(ui_source, "main_window_->statusBar()->show()");
   expect_contains(ui_source,
                   "selection_toolbar_workspace_visible_");
   expect_contains(ui_source, "snapping_toolbar_workspace_visible_");
+  expect_contains(ui_source,
+                  "viewport_display_toolbar_workspace_visible_");
   expect_contains(ui_source, "tool_toolbar_workspace_visible_");
   expect_contains(ui_header, "workspace_window_state_");
   expect_contains(ui_source, "capture_workspace_window_state()");
@@ -1467,6 +1568,11 @@ TEST(UiLayoutGuardrailTests,
   expect_contains(ui_header, "void process_viewport_input()");
   expect_contains(ui, "viewport_panel_->process_input(");
   expect_contains(panel_header, "void process_input(QuaderEditorApi &editor");
+  expect_contains(ui, "frame_timing_.delta_seconds");
+  expect_contains(panel, "std::clamp(frame_delta_seconds, 0.0, 0.1)");
+  expect_missing(panel_header, "QElapsedTimer");
+  expect_missing(panel, "input_clock_");
+  expect_missing(panel, "elapsed_ms");
 
   const std::size_t render_frame = app.find("bool App::render_frame(");
   const std::size_t refresh = app.find("ui_.refresh(", render_frame);

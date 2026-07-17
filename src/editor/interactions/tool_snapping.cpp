@@ -98,6 +98,43 @@ quader::QVec3 snap_knife_point_to_grid(quader::QVec3 point, double grid_size, bo
 	};
 }
 
+std::optional<quader::QVec3> snap_point_to_plane_grid(
+		quader::QVec3 point,
+		quader::QVec3 plane_point,
+		quader::QVec3 plane_normal,
+		double grid_size,
+		bool snap_enabled)
+{
+	const quader::QVec3 normal = vec3_normalize_or(plane_normal, {});
+	quader::QVec3 preferred_axis { 1.0F, 0.0F, 0.0F };
+	if (std::abs(quader::dot(normal, preferred_axis)) > 0.9F) {
+		preferred_axis = { 0.0F, 0.0F, 1.0F };
+	}
+	const quader::QVec3 u_axis = vec3_normalize_or(
+		preferred_axis - normal * quader::dot(preferred_axis, normal), {});
+	const quader::QVec3 v_axis = vec3_normalize_or(
+		quader::cross(normal, u_axis), {});
+	if (quader::length_squared(normal) <= kToolEpsilon ||
+		quader::length_squared(u_axis) <= kToolEpsilon ||
+		quader::length_squared(v_axis) <= kToolEpsilon) {
+		return std::nullopt;
+	}
+
+	// Projecting the world origin onto the construction plane gives every
+	// coplanar point one stable lattice, including offset and tilted surfaces.
+	const quader::QVec3 origin =
+		normal * quader::dot(plane_point, normal);
+	const quader::QVec3 from_origin = point - origin;
+	double u = static_cast<double>(quader::dot(from_origin, u_axis));
+	double v = static_cast<double>(quader::dot(from_origin, v_axis));
+	if (snap_enabled && std::isfinite(grid_size) && grid_size > 0.0001) {
+		u = snap_world_value(u, grid_size);
+		v = snap_world_value(v, grid_size);
+	}
+	return origin + u_axis * static_cast<float>(u) +
+		v_axis * static_cast<float>(v);
+}
+
 std::optional<quader::QVec3> snap_knife_point_to_edge_grid(
 		const quader_poly::Document& document,
 		quader_poly::Edge edge,
@@ -150,29 +187,8 @@ std::optional<quader::QVec3> snap_knife_point_to_face_grid(
 	}
 	const quader::QVec3 normal = vec3_normalize_or(
 		quader_poly::face_normal(document, *face), {});
-	quader::QVec3 preferred_axis { 1.0F, 0.0F, 0.0F };
-	if (std::abs(quader::dot(normal, preferred_axis)) > 0.9F) {
-		preferred_axis = { 0.0F, 0.0F, 1.0F };
-	}
-	const quader::QVec3 u_axis = vec3_normalize_or(
-		preferred_axis - normal * quader::dot(preferred_axis, normal), {});
-	const quader::QVec3 v_axis = vec3_normalize_or(
-		quader::cross(normal, u_axis), {});
-	if (quader::length_squared(normal) <= kToolEpsilon ||
-		quader::length_squared(u_axis) <= kToolEpsilon ||
-		quader::length_squared(v_axis) <= kToolEpsilon) {
-		return std::nullopt;
-	}
-
-	const quader::QVec3 origin =
-		normal * quader::dot(face_point->position, normal);
-	const quader::QVec3 from_origin = point - origin;
-	const double u = snap_world_value(
-		static_cast<double>(quader::dot(from_origin, u_axis)), grid_size);
-	const double v = snap_world_value(
-		static_cast<double>(quader::dot(from_origin, v_axis)), grid_size);
-	return origin + u_axis * static_cast<float>(u) +
-		v_axis * static_cast<float>(v);
+	return snap_point_to_plane_grid(
+		point, face_point->position, normal, grid_size, snap_enabled);
 }
 
 quader::QVec3 constrain_knife_point_to_axis(

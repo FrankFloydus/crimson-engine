@@ -1123,6 +1123,14 @@ public:
                                                 app_selection_mode_);
   }
 
+  [[nodiscard]] std::uint64_t content_revision() const {
+    return session_.state().content_revision;
+  }
+
+  [[nodiscard]] std::uint64_t selection_revision() const {
+    return session_.state().selection_revision;
+  }
+
   [[nodiscard]] ModelingSelectionExport export_selection() const {
     ModelingSelectionExport exported;
     exported.summary = selection_summary();
@@ -3675,9 +3683,9 @@ public:
   }
 
   [[nodiscard]] std::optional<quader_editor_core::PickHitRecord>
-  pick_box_surface(const ModelingBoxToolEvent &event) const {
+  pick_scene_surface(const ModelingRay &ray) const {
     return selection_service_.pick_surface_hit(session_, scene_,
-                                               object_registry_, event.ray);
+                                               object_registry_, ray);
   }
 
   [[nodiscard]] std::array<
@@ -4576,13 +4584,25 @@ public:
   }
 
   ModelingCommandResult update_poly_hover(const ModelingToolRayEvent &event) {
+    const std::optional<quader_editor_core::PickHitRecord> surface_hit =
+        runtime_.poly_state().points.empty()
+            ? pick_scene_surface(event.ray)
+            : std::nullopt;
     return execute_runtime_command(
-        RuntimeToolCommandService::update_poly_hover(event), false);
+        RuntimeToolCommandService::update_poly_hover(
+            event, surface_hit),
+        false);
   }
 
-  ModelingCommandResult accept_poly_point() {
-    return execute_runtime_command(
+  ModelingCommandResult accept_poly_point(const ModelingToolRayEvent &event) {
+    const ModelingCommandResult resolved = update_poly_hover(event);
+    if (!resolved.ok) {
+      return resolved;
+    }
+    ModelingCommandResult accepted = execute_runtime_command(
         RuntimeToolCommandService::accept_poly_point(), false);
+    accepted.changed = accepted.changed || resolved.changed;
+    return accepted;
   }
 
   ModelingCommandResult commit_poly_tool(MaterialReference material = {}) {
@@ -4689,14 +4709,14 @@ public:
 
   ModelingBoxPreview update_box_hover(const ModelingBoxToolEvent &event) {
     return execute_box_preview_command(RuntimeToolCommandService::update_box_hover(
-                                           event, pick_box_surface(event)),
+                                           event, pick_scene_surface(event.ray)),
                                        event.snap_enabled);
   }
 
   ModelingBoxPreview begin_box_footprint(const ModelingBoxToolEvent &event) {
     ModelingBoxPreview preview = execute_box_preview_command(
         RuntimeToolCommandService::begin_box_footprint(
-            event, pick_box_surface(event)),
+            event, pick_scene_surface(event.ray)),
         event.snap_enabled);
     if (preview.ok) {
       selection_projection_service_.restore_scene_selection(
@@ -6128,6 +6148,14 @@ ModelingSelectionSummary ModelingSessionService::selection_summary() const {
   return impl_->selection_summary();
 }
 
+std::uint64_t ModelingSessionService::content_revision() const {
+  return impl_->content_revision();
+}
+
+std::uint64_t ModelingSessionService::selection_revision() const {
+  return impl_->selection_revision();
+}
+
 ModelingSelectionExport ModelingSessionService::export_selection() const {
   return impl_->export_selection();
 }
@@ -6607,8 +6635,9 @@ ModelingSessionService::update_poly_hover(const ModelingToolRayEvent &event) {
   return impl_->update_poly_hover(event);
 }
 
-ModelingCommandResult ModelingSessionService::accept_poly_point() {
-  return impl_->accept_poly_point();
+ModelingCommandResult ModelingSessionService::accept_poly_point(
+    const ModelingToolRayEvent &event) {
+  return impl_->accept_poly_point(event);
 }
 
 ModelingCommandResult ModelingSessionService::commit_poly_tool() {

@@ -66,6 +66,33 @@ TEST(QdrModelingRuntimeToolPolyTests, PolyToolPreviewsPlacedVerticesStraightened
 	EXPECT_TRUE(preview.line_count == 3U);
 }
 
+TEST(QdrModelingRuntimeToolPolyTests,
+		PolyToolLocksItsFirstOffsetSurfacePlaneAndSnapsWithinThatPlane) {
+	quader_editor_core::PolyToolState state;
+	state.active = true;
+
+	const quader_editor_core::PolyToolResult first =
+		quader_editor_core::update_poly_hover(
+			state, { 2.3F, 0.26F, 0.74F }, { 1.0F, 0.0F, 0.0F },
+			false, 0.5, true);
+	ASSERT_TRUE(first.ok) << first.message;
+	EXPECT_NEAR(state.current_point.x, 2.3F, 0.0001F);
+	EXPECT_NEAR(state.current_point.y, 0.5F, 0.0001F);
+	EXPECT_NEAR(state.current_point.z, 0.5F, 0.0001F);
+	ASSERT_TRUE(quader_editor_core::accept_poly_current_point(state).ok);
+
+	const quader_editor_core::PolyToolResult next =
+		quader_editor_core::update_poly_hover(
+			state, { 9.0F, 0.76F, 1.24F }, { 0.0F, 1.0F, 0.0F },
+			false, 0.5, true);
+	ASSERT_TRUE(next.ok) << next.message;
+	EXPECT_NEAR(state.current_point.x, 2.3F, 0.0001F);
+	EXPECT_NEAR(state.current_point.y, 1.0F, 0.0001F);
+	EXPECT_NEAR(state.current_point.z, 1.0F, 0.0001F);
+	EXPECT_NEAR(state.face_normal.x, 1.0F, 0.0001F);
+	EXPECT_NEAR(state.face_normal.y, 0.0F, 0.0001F);
+}
+
 TEST(QdrModelingRuntimeToolPolyTests, PolyToolCommitsAPolygonObjectThroughEditorHistory) {
 	quader_editor_core::EditorSession session;
 	session.set_objects({});
@@ -88,6 +115,16 @@ TEST(QdrModelingRuntimeToolPolyTests, PolyToolCommitsAPolygonObjectThroughEditor
 	EXPECT_TRUE(session.objects()[0].document.vertices.size() == 4U);
 	EXPECT_TRUE(session.objects()[0].document.faces.size() == 1U);
 	EXPECT_FALSE(state.active);
+	EXPECT_TRUE(session.history_status().can_undo);
+	const quader_editor_core::HistoryRestoreResult undo = session.undo();
+	EXPECT_TRUE(undo.applied);
+	EXPECT_TRUE(session.objects().empty());
+	EXPECT_FALSE(session.has_selection());
+	const quader_editor_core::HistoryRestoreResult redo = session.redo();
+	EXPECT_TRUE(redo.applied);
+	ASSERT_EQ(session.objects().size(), 1U);
+	EXPECT_TRUE(session.objects()[0].selected);
+	EXPECT_EQ(session.selection_mode(), quader_editor_core::SelectionMode::Object);
 
 	quader_editor_core::PolyToolState short_state;
 	short_state.active = true;

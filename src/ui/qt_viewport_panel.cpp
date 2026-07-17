@@ -1100,7 +1100,6 @@ bool QtViewportPanel::initialize(RenderSystem &render_system) {
         success;
   }
   initialized_ = success;
-  input_clock_.start();
   refresh_workspace_layout();
   return success;
 }
@@ -1221,13 +1220,14 @@ void QtViewportPanel::process_input(
     ModelingSessionService &modeling, AssetId default_material,
     PivotToolService *pivot, LinearArrayToolService *linear_array,
     RadialArrayToolService *radial_array,
-    ViewportPointPlacementService *point_placement) {
+    ViewportPointPlacementService *point_placement, double delta_seconds) {
   const bool diagnostics_enabled = viewport_frame_diagnostics_enabled();
   const ViewportProbeClock::time_point input_start =
       diagnostics_enabled ? ViewportProbeClock::now()
                           : ViewportProbeClock::time_point{};
   process_viewport_input(editor, document, assets, modeling, default_material,
-                         pivot, linear_array, radial_array, point_placement);
+                         pivot, linear_array, radial_array, point_placement,
+                         delta_seconds);
   if (diagnostics_enabled) {
     g_viewport_probe.input_ms +=
         elapsed_milliseconds(input_start, ViewportProbeClock::now());
@@ -2298,7 +2298,8 @@ void QtViewportPanel::process_viewport_input(
     ModelingSessionService &modeling, AssetId default_material,
     PivotToolService *pivot, LinearArrayToolService *linear_array,
     RadialArrayToolService *radial_array,
-    ViewportPointPlacementService *point_placement) {
+    ViewportPointPlacementService *point_placement,
+    double frame_delta_seconds) {
   if (workspace_ == nullptr) {
     return;
   }
@@ -2319,16 +2320,8 @@ void QtViewportPanel::process_viewport_input(
   }
   sync_active_tool_from_editor(editor);
 
-  float delta_seconds = 1.0f / 60.0f;
-  if (input_clock_.isValid()) {
-    const qint64 elapsed_ms = input_clock_.restart();
-    if (elapsed_ms > 0) {
-      delta_seconds =
-          std::clamp(static_cast<float>(elapsed_ms) / 1000.0f, 0.0f, 0.1f);
-    }
-  } else {
-    input_clock_.start();
-  }
+  const float delta_seconds = static_cast<float>(
+      std::clamp(frame_delta_seconds, 0.0, 0.1));
 
   std::array<bool, kViewportPaneCount> active{};
   for (const ViewportPanePlacement &placement :

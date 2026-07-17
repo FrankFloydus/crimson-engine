@@ -38,6 +38,8 @@ struct QtMainMenuContext {
   std::function<void(bool)> set_selection_toolbar_visible;
   std::function<bool()> snapping_toolbar_visible;
   std::function<void(bool)> set_snapping_toolbar_visible;
+  std::function<bool()> viewport_display_toolbar_visible;
+  std::function<void(bool)> set_viewport_display_toolbar_visible;
   std::function<bool()> tool_toolbar_visible;
   std::function<void(bool)> set_tool_toolbar_visible;
   std::function<void()> viewport_settings_changed;

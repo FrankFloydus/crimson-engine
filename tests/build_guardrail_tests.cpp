@@ -1957,8 +1957,8 @@ TEST(BuildGuardrailTests, ToolToolbarIconsAreEmbeddedQtResources) {
   expect_contains(root_c_make, "PREFIX \"/quader/icons\"");
   for (const std::string_view tool :
        {"select", "move", "rotate", "scale", "pivot",
-        "create_primitive", "knife", "cut", "poly", "mirror",
-        "linear_array", "radial_array"}) {
+        "create_primitive", "extrude", "insert_edge_loop", "knife", "cut",
+        "poly", "mirror", "linear_array", "radial_array"}) {
     const std::string relative_path =
         std::string{"resources/icons/tool_"} + std::string{tool} + ".png";
     ASSERT_TRUE(std::filesystem::exists(source_path(relative_path)))
@@ -1976,10 +1976,30 @@ TEST(BuildGuardrailTests, SnappingToolbarIconsAreEmbeddedQtResources) {
                   "qt_add_resources(quader \"quader_snapping_toolbar_icons\"");
   expect_contains(root_c_make, "PREFIX \"/quader/icons\"");
   for (const std::string_view icon :
-       {"master", "grid_visible", "grid", "vertex", "rotation"}) {
+       {"master", "grid", "vertex", "rotation"}) {
     const std::string relative_path =
         std::string{"resources/icons/snapping_"} + std::string{icon} +
         ".png";
+    ASSERT_TRUE(std::filesystem::exists(source_path(relative_path)))
+        << relative_path;
+    EXPECT_GT(std::filesystem::file_size(source_path(relative_path)), 512u)
+        << relative_path;
+    expect_contains(root_c_make, relative_path);
+  }
+}
+
+TEST(BuildGuardrailTests,
+     ViewportDisplayToolbarIconsAreEmbeddedQtResources) {
+  const std::string root_c_make = read_source_file("CMakeLists.txt");
+
+  expect_contains(
+      root_c_make,
+      "qt_add_resources(quader \"quader_viewport_display_toolbar_icons\"");
+  expect_contains(root_c_make, "PREFIX \"/quader/icons\"");
+  for (const std::string_view icon :
+       {"grid", "gizmos", "mesh_grid", "overlays"}) {
+    const std::string relative_path =
+        std::string{"resources/icons/viewport_"} + std::string{icon} + ".png";
     ASSERT_TRUE(std::filesystem::exists(source_path(relative_path)))
         << relative_path;
     EXPECT_GT(std::filesystem::file_size(source_path(relative_path)), 512u)

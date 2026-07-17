@@ -321,10 +321,13 @@ RuntimeToolCommandService::cancel_mirror() {
 
 quader_editor_core::EditorRuntimeCommand
 RuntimeToolCommandService::update_poly_hover(
-    const ModelingToolRayEvent &event) {
+    const ModelingToolRayEvent &event,
+    std::optional<quader_editor_core::PickHitRecord> resolved_surface_hit) {
   quader_editor_core::PolyHoverRuntimeCommandSettings settings;
   settings.camera = modeling_runtime_camera(event.camera);
   settings.ray = to_runtime(event.ray);
+  settings.resolved_surface_hit = std::move(resolved_surface_hit);
+  settings.surface_hit_resolved = true;
   settings.grid_size = event.grid_size;
   settings.snap_enabled = event.snap_enabled;
   settings.constrain_axis = event.constrain_axis;

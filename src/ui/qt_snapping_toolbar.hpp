@@ -40,7 +40,6 @@ public:
       std::function<void(double)> callback);
   void set_snapping_enabled_requested_callback(
       std::function<void(bool)> callback);
-  void set_grid_visible_requested_callback(std::function<void(bool)> callback);
   void set_grid_snap_enabled_requested_callback(
       std::function<void(bool)> callback);
   void set_vertex_snap_enabled_requested_callback(
@@ -60,7 +59,7 @@ private:
   struct PresentedState {
     int grid_preset = 0;
     double rotation_snap_degrees = 0.0;
-    std::array<bool, 5> toggles{};
+    std::array<bool, 4> toggles{};
 
     bool operator==(const PresentedState &) const = default;
   };
@@ -69,8 +68,8 @@ private:
   QComboBox *grid_size_combo_ = nullptr;
   QLabel *angle_label_ = nullptr;
   QComboBox *angle_combo_ = nullptr;
-  std::array<ToggleAction, 5> toggle_actions_{};
-  std::array<std::function<void(bool)>, 5> toggle_requested_{};
+  std::array<ToggleAction, 4> toggle_actions_{};
+  std::array<std::function<void(bool)>, 4> toggle_requested_{};
   std::optional<PresentedState> presented_state_;
   QString grid_tooltip_base_;
   QString angle_tooltip_base_;

@@ -101,6 +101,8 @@ public:
   [[nodiscard]] std::optional<SceneBounds> selection_bounds() const;
   [[nodiscard]] ModelingSelectionMode selection_mode() const;
   [[nodiscard]] ModelingSelectionSummary selection_summary() const;
+  [[nodiscard]] std::uint64_t content_revision() const;
+  [[nodiscard]] std::uint64_t selection_revision() const;
   [[nodiscard]] ModelingSelectionExport export_selection() const;
   [[nodiscard]] std::uint64_t selection_overlay_signature(
       ModelingSelectionOverlayOptions options = {}) const;
@@ -244,7 +246,7 @@ public:
   ModelingCommandResult end_mirror_drag();
   ModelingCommandResult finalize_mirror_tool();
   ModelingCommandResult update_poly_hover(const ModelingToolRayEvent &event);
-  ModelingCommandResult accept_poly_point();
+  ModelingCommandResult accept_poly_point(const ModelingToolRayEvent &event);
   ModelingCommandResult commit_poly_tool();
   ModelingCommandResult commit_poly_tool(MaterialReference material);
   ModelingCommandResult activate_box_tool();

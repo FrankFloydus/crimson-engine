@@ -15,6 +15,7 @@
 #include "ui/qt_selection_toolbar.hpp"
 #include "ui/qt_snapping_toolbar.hpp"
 #include "ui/qt_tool_toolbar.hpp"
+#include "ui/qt_viewport_display_toolbar.hpp"
 #include "viewport/host_viewport_contract_adapter.hpp"
 #include "viewport/viewport_settings.hpp"
 
@@ -163,7 +164,7 @@ TEST(QtProjectWorkspaceTests,
   EXPECT_EQ(selection_toolbar.iconSize(), QSize(32, 32));
   EXPECT_EQ(tool_toolbar.iconSize(), QSize(32, 32));
   EXPECT_EQ(expect_persistent_button_faces(selection_toolbar, 30), 5);
-  EXPECT_EQ(expect_persistent_button_faces(tool_toolbar, 40), 12);
+  EXPECT_EQ(expect_persistent_button_faces(tool_toolbar, 40), 14);
   for (QToolButton *button :
        selection_toolbar.findChildren<QToolButton *>()) {
     if (button->defaultAction() != nullptr &&
@@ -233,7 +234,7 @@ TEST(QtProjectWorkspaceTests,
   EXPECT_TRUE(toolbar.isAreaAllowed(Qt::BottomToolBarArea));
   EXPECT_EQ(toolbar.iconSize(), QSize(32, 32));
   EXPECT_EQ(toolbar.toolButtonStyle(), Qt::ToolButtonIconOnly);
-  EXPECT_EQ(expect_persistent_button_faces(toolbar, 30), 5);
+  EXPECT_EQ(expect_persistent_button_faces(toolbar, 30), 4);
 
   host.addToolBar(Qt::TopToolBarArea, &toolbar);
   EXPECT_EQ(host.toolBarArea(&toolbar), Qt::TopToolBarArea);
@@ -295,17 +296,15 @@ TEST(QtProjectWorkspaceTests,
       toggle_actions.push_back(action);
     }
   }
-  ASSERT_EQ(toggle_actions.size(), 5u);
-  const std::array<QString, 5> expected_action_names{
+  ASSERT_EQ(toggle_actions.size(), 4u);
+  const std::array<QString, 4> expected_action_names{
       QStringLiteral("snappingEnabled"),
-      QStringLiteral("gridVisible"),
       QStringLiteral("gridSnapping"),
       QStringLiteral("vertexSnapping"),
       QStringLiteral("rotationSnapping"),
   };
-  const std::array<QString, 5> expected_action_labels{
+  const std::array<QString, 4> expected_action_labels{
       QStringLiteral("Toggle Snapping"),
-      QStringLiteral("Enable Grid"),
       QStringLiteral("Grid Snapping"),
       QStringLiteral("Vertex Snapping"),
       QStringLiteral("Rotation Snapping"),
@@ -372,8 +371,8 @@ TEST(QtProjectWorkspaceTests,
   int requested_grid_preset = 0;
   int angle_requests = 0;
   double requested_angle = 0.0;
-  std::array<int, 5> toggle_requests{};
-  std::array<bool, 5> requested_toggles{};
+  std::array<int, 4> toggle_requests{};
+  std::array<bool, 4> requested_toggles{};
   toolbar.set_grid_preset_requested_callback(
       [&](int preset) {
         ++grid_requests;
@@ -388,21 +387,17 @@ TEST(QtProjectWorkspaceTests,
     ++toggle_requests[0];
     requested_toggles[0] = enabled;
   });
-  toolbar.set_grid_visible_requested_callback([&](bool enabled) {
+  toolbar.set_grid_snap_enabled_requested_callback([&](bool enabled) {
     ++toggle_requests[1];
     requested_toggles[1] = enabled;
   });
-  toolbar.set_grid_snap_enabled_requested_callback([&](bool enabled) {
+  toolbar.set_vertex_snap_enabled_requested_callback([&](bool enabled) {
     ++toggle_requests[2];
     requested_toggles[2] = enabled;
   });
-  toolbar.set_vertex_snap_enabled_requested_callback([&](bool enabled) {
+  toolbar.set_rotation_snap_enabled_requested_callback([&](bool enabled) {
     ++toggle_requests[3];
     requested_toggles[3] = enabled;
-  });
-  toolbar.set_rotation_snap_enabled_requested_callback([&](bool enabled) {
-    ++toggle_requests[4];
-    requested_toggles[4] = enabled;
   });
 
   ASSERT_TRUE(QMetaObject::invokeMethod(
@@ -421,17 +416,16 @@ TEST(QtProjectWorkspaceTests,
     EXPECT_TRUE(requested_toggles[index]);
   }
 
-  const std::array<bool, 5> owner_toggles{
-      false, true, false, true, false,
+  const std::array<bool, 4> owner_toggles{
+      false, true, false, true,
   };
   const double owner_angle = 90.0;
   editor.preferences().set_runtime_hooks(
       quader::QuaderPreferencesRuntimeHooks{
           .snapping_enabled = [&] { return owner_toggles[0]; },
-          .grid_visible = [&] { return owner_toggles[1]; },
-          .grid_snap_enabled = [&] { return owner_toggles[2]; },
-          .vertex_snap_enabled = [&] { return owner_toggles[3]; },
-          .rotation_snap_enabled = [&] { return owner_toggles[4]; },
+          .grid_snap_enabled = [&] { return owner_toggles[1]; },
+          .vertex_snap_enabled = [&] { return owner_toggles[2]; },
+          .rotation_snap_enabled = [&] { return owner_toggles[3]; },
           .rotation_snap_degrees = [&] { return owner_angle; },
       });
   const quader::QuaderApiVoidResult grid_result =
@@ -440,7 +434,7 @@ TEST(QtProjectWorkspaceTests,
 
   int grid_index_change_signals = 0;
   int angle_index_change_signals = 0;
-  std::array<int, 5> toggle_change_signals{};
+  std::array<int, 4> toggle_change_signals{};
   QObject::connect(
       grid_combo, qOverload<int>(&QComboBox::currentIndexChanged), &toolbar,
       [&](int) { ++grid_index_change_signals; });
@@ -460,10 +454,10 @@ TEST(QtProjectWorkspaceTests,
   EXPECT_EQ(grid_combo->toolTip(), QStringLiteral("Grid Size [F10]"));
   EXPECT_EQ(grid_index_change_signals, 0);
   EXPECT_EQ(angle_index_change_signals, 0);
-  EXPECT_EQ(toggle_change_signals, (std::array<int, 5>{}));
+  EXPECT_EQ(toggle_change_signals, (std::array<int, 4>{}));
   EXPECT_EQ(grid_requests, 1);
   EXPECT_EQ(angle_requests, 1);
-  EXPECT_EQ(toggle_requests, (std::array<int, 5>{1, 1, 1, 1, 1}));
+  EXPECT_EQ(toggle_requests, (std::array<int, 4>{1, 1, 1, 1}));
   expect_popup_restores_committed_combo_item(*grid_combo, application);
   expect_popup_restores_committed_combo_item(*angle_combo, application);
   for (std::size_t index = 0; index < toggle_actions.size(); ++index) {
@@ -473,10 +467,113 @@ TEST(QtProjectWorkspaceTests,
   toolbar.synchronize(editor);
   EXPECT_EQ(grid_index_change_signals, 0);
   EXPECT_EQ(angle_index_change_signals, 0);
-  EXPECT_EQ(toggle_change_signals, (std::array<int, 5>{}));
+  EXPECT_EQ(toggle_change_signals, (std::array<int, 4>{}));
   EXPECT_EQ(grid_requests, 1);
   EXPECT_EQ(angle_requests, 1);
-  EXPECT_EQ(toggle_requests, (std::array<int, 5>{1, 1, 1, 1, 1}));
+  EXPECT_EQ(toggle_requests, (std::array<int, 4>{1, 1, 1, 1}));
+}
+
+TEST(QtProjectWorkspaceTests,
+     ViewportDisplayToolbarDispatchesTypedCommandsAndReflectsOwnerState) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader_viewport_display_toolbar_test";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+  ASSERT_NE(QApplication::setStyle(QStringLiteral("Fusion")), nullptr);
+
+  quader::QtViewportDisplayToolbar toolbar;
+  quader::LocalizationService localization;
+  toolbar.set_localization(localization);
+  EXPECT_EQ(toolbar.objectName(), QStringLiteral("viewportDisplayToolbar"));
+  EXPECT_EQ(toolbar.windowTitle(), QStringLiteral("Viewport Display"));
+  EXPECT_TRUE(toolbar.isMovable());
+  EXPECT_TRUE(toolbar.isFloatable());
+  EXPECT_EQ(toolbar.iconSize(), QSize(32, 32));
+  EXPECT_EQ(expect_persistent_button_faces(toolbar, 30), 4);
+
+  std::vector<QAction *> actions;
+  for (QAction *action : toolbar.actions()) {
+    if (action->isCheckable()) {
+      actions.push_back(action);
+    }
+  }
+  ASSERT_EQ(actions.size(), 4u);
+  const std::array<QString, 4> expected_names{
+      QStringLiteral("viewportGrid"),
+      QStringLiteral("viewportGizmos"),
+      QStringLiteral("viewportMeshGrid"),
+      QStringLiteral("viewportOverlays"),
+  };
+  const std::array<QString, 4> expected_labels{
+      QStringLiteral("Toggle Grid"),
+      QStringLiteral("Toggle Gizmos"),
+      QStringLiteral("Toggle Mesh Grid"),
+      QStringLiteral("Toggle Overlays"),
+  };
+  for (std::size_t index = 0; index < actions.size(); ++index) {
+    EXPECT_EQ(actions[index]->objectName(), expected_names[index]);
+    EXPECT_EQ(actions[index]->text(), expected_labels[index]);
+  }
+
+  quader::SceneSession session;
+  quader::QuaderEditorApi editor(
+      quader::QuaderApiSessionInternalAccess::from_scene_session(session));
+  std::array<bool, 4> owner_state{};
+  const auto runtime_result = [](bool changed) {
+    return quader::QuaderApiVoidResult{
+        .ok = true,
+        .changed = changed,
+        .mutation_kind = quader::QuaderMutationKind::Runtime,
+    };
+  };
+  const auto set_state = [&](std::size_t index, bool visible) {
+    const bool changed = owner_state[index] != visible;
+    owner_state[index] = visible;
+    return runtime_result(changed);
+  };
+  editor.preferences().set_runtime_hooks(
+      quader::QuaderPreferencesRuntimeHooks{
+          .grid_visible = [&] { return owner_state[0]; },
+          .set_grid_visible = [&](bool value) { return set_state(0, value); },
+          .gizmos_visible = [&] { return owner_state[1]; },
+          .set_gizmos_visible = [&](bool value) { return set_state(1, value); },
+          .mesh_grid_visible = [&] { return owner_state[2]; },
+          .set_mesh_grid_visible =
+              [&](bool value) { return set_state(2, value); },
+          .overlays_visible = [&] { return owner_state[3]; },
+          .set_overlays_visible =
+              [&](bool value) { return set_state(3, value); },
+      });
+  toolbar.synchronize(editor, true);
+
+  const std::array<quader::QuaderCommandId, 4> expected_commands{
+      quader::quader_command::kViewportToggleGrid,
+      quader::quader_command::kViewportToggleGizmos,
+      quader::quader_command::kViewportToggleMeshGrid,
+      quader::quader_command::kViewportToggleOverlays,
+  };
+  std::vector<std::string> requested_commands;
+  toolbar.set_command_requested_callback(
+      [&](quader::QuaderCommandId command_id) {
+        requested_commands.emplace_back(command_id.string());
+        const quader::QuaderApiVoidResult result =
+            editor.commands().execute(command_id);
+        EXPECT_TRUE(result.ok()) << result.error_message();
+      });
+
+  for (std::size_t index = 0; index < actions.size(); ++index) {
+    EXPECT_FALSE(actions[index]->isChecked());
+    actions[index]->trigger();
+    toolbar.synchronize(editor, true);
+    EXPECT_TRUE(actions[index]->isChecked());
+    EXPECT_TRUE(owner_state[index]);
+  }
+  ASSERT_EQ(requested_commands.size(), expected_commands.size());
+  for (std::size_t index = 0; index < expected_commands.size(); ++index) {
+    EXPECT_EQ(requested_commands[index], expected_commands[index].string());
+  }
 }
 
 TEST(QtProjectWorkspaceTests,

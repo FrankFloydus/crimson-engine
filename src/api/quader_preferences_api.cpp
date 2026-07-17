@@ -93,6 +93,37 @@ bool QuaderPreferencesApi::grid_visible() const {
   return hooks_.grid_visible ? hooks_.grid_visible() : false;
 }
 
+QuaderApiVoidResult QuaderPreferencesApi::set_gizmos_visible(bool visible) {
+  return hooks_.set_gizmos_visible
+             ? hooks_.set_gizmos_visible(visible)
+             : unavailable("Preferences runtime is not attached.");
+}
+
+bool QuaderPreferencesApi::gizmos_visible() const {
+  return hooks_.gizmos_visible ? hooks_.gizmos_visible() : false;
+}
+
+QuaderApiVoidResult
+QuaderPreferencesApi::set_mesh_grid_visible(bool visible) {
+  return hooks_.set_mesh_grid_visible
+             ? hooks_.set_mesh_grid_visible(visible)
+             : unavailable("Preferences runtime is not attached.");
+}
+
+bool QuaderPreferencesApi::mesh_grid_visible() const {
+  return hooks_.mesh_grid_visible ? hooks_.mesh_grid_visible() : false;
+}
+
+QuaderApiVoidResult QuaderPreferencesApi::set_overlays_visible(bool visible) {
+  return hooks_.set_overlays_visible
+             ? hooks_.set_overlays_visible(visible)
+             : unavailable("Preferences runtime is not attached.");
+}
+
+bool QuaderPreferencesApi::overlays_visible() const {
+  return hooks_.overlays_visible ? hooks_.overlays_visible() : false;
+}
+
 QuaderApiVoidResult
 QuaderPreferencesApi::set_grid_snap_enabled(bool enabled) {
   return hooks_.set_grid_snap_enabled

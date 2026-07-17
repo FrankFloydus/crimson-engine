@@ -13712,6 +13712,63 @@ TEST(ModelingSessionServiceTests,
 }
 
 TEST(ModelingSessionServiceTests,
+     PolyAcceptUsesClickRayOnATransformedVerticalMeshSurface) {
+  SceneDocument scene;
+  AssetRegistry assets;
+  ModelingSessionService service(scene, assets);
+
+  const ModelingCreateBoxResult box = service.create_box_from_bounds({
+      .bounds = {.min = {-1.0f, -1.0f, -1.0f},
+                 .max = {1.0f, 1.0f, 1.0f}},
+      .name = "Transformed Poly Surface",
+  });
+  ASSERT_TRUE(box.ok) << box.message;
+  ASSERT_TRUE(scene.set_transform(
+      box.object.entity,
+      TransformComponent{.position = {4.0f, 2.0f, 3.0f}}));
+
+  const auto event_at_front_surface = [](QVec3 surface_point) {
+    ModelingToolRayEvent event;
+    event.ray = {
+        .origin = surface_point + QVec3{0.0f, 0.0f, 5.0f},
+        .direction = {0.0f, 0.0f, -1.0f},
+    };
+    event.camera = test_orthographic_viewport_camera();
+    event.camera.origin = event.ray.origin;
+    event.grid_size = 0.5;
+    event.snap_enabled = false;
+    return event;
+  };
+
+  ModelingCommandResult command =
+      service.activate_viewport_tool(ModelingViewportTool::Poly);
+  ASSERT_TRUE(command.ok) << command.message;
+  const QVec3 stale_world{3.5f, 1.5f, 4.0f};
+  command = service.update_poly_hover(event_at_front_surface(stale_world));
+  ASSERT_TRUE(command.ok) << command.message;
+  ASSERT_TRUE(service.tool_status().poly_has_current);
+
+  const QVec3 click_world{4.5f, 2.5f, 4.0f};
+  command = service.accept_poly_point(event_at_front_surface(click_world));
+  ASSERT_TRUE(command.ok) << command.message;
+  EXPECT_TRUE(command.changed);
+  EXPECT_EQ(service.tool_status().poly_point_count, 1);
+  EXPECT_FALSE(service.tool_status().poly_has_current);
+  EXPECT_EQ(service.objects().size(), 1U);
+  EXPECT_EQ(scene.primary_selection(), box.object.entity);
+
+  const ViewportOverlayFrame frame = service.selection_overlay_frame();
+  const auto has_point_near = [&frame](QVec3 expected) {
+    return std::ranges::any_of(
+        frame.points, [expected](const ViewportOverlayPoint &point) {
+          return length_squared(point.position - expected) < 0.0001f;
+        });
+  };
+  EXPECT_TRUE(has_point_near(click_world));
+  EXPECT_FALSE(has_point_near(stale_world));
+}
+
+TEST(ModelingSessionServiceTests,
      KnifeEdgeGridSnapUsesTopologyDistanceInsteadOfWorldAxes) {
   SceneDocument scene;
   AssetRegistry assets;

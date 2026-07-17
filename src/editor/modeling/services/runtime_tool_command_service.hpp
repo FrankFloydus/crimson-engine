@@ -83,7 +83,9 @@ public:
   cancel_mirror();
 
   [[nodiscard]] static quader_editor_core::EditorRuntimeCommand
-  update_poly_hover(const ModelingToolRayEvent &event);
+  update_poly_hover(
+      const ModelingToolRayEvent &event,
+      std::optional<quader_editor_core::PickHitRecord> resolved_surface_hit);
   [[nodiscard]] static quader_editor_core::EditorRuntimeCommand
   accept_poly_point();
   [[nodiscard]] static quader_editor_core::EditorRuntimeCommand

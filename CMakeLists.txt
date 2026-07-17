@@ -709,6 +709,7 @@ add_library(quader_ui STATIC
     src/ui/qt_selection_toolbar.cpp
     src/ui/qt_snapping_toolbar.cpp
     src/ui/qt_tool_toolbar.cpp
+    src/ui/qt_viewport_display_toolbar.cpp
     src/ui/qt_toolbar_button_presentation.cpp
     src/ui/qt_semantic_axis_colors.hpp
     src/ui/qt_auxiliary_window_state.cpp
@@ -842,6 +843,8 @@ set(QUADER_TOOL_TOOLBAR_ICON_FILES
     "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/tool_scale.png"
     "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/tool_pivot.png"
     "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/tool_create_primitive.png"
+    "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/tool_extrude.png"
+    "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/tool_insert_edge_loop.png"
     "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/tool_knife.png"
     "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/tool_cut.png"
     "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/tool_poly.png"
@@ -851,10 +854,15 @@ set(QUADER_TOOL_TOOLBAR_ICON_FILES
 
 set(QUADER_SNAPPING_TOOLBAR_ICON_FILES
     "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/snapping_master.png"
-    "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/snapping_grid_visible.png"
     "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/snapping_grid.png"
     "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/snapping_vertex.png"
     "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/snapping_rotation.png")
+
+set(QUADER_VIEWPORT_DISPLAY_TOOLBAR_ICON_FILES
+    "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/viewport_grid.png"
+    "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/viewport_gizmos.png"
+    "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/viewport_mesh_grid.png"
+    "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/viewport_overlays.png")
 
 set(QUADER_NATIVE_APPLICATION_RESOURCES)
 if(WIN32)
@@ -884,6 +892,10 @@ qt_add_resources(quader "quader_snapping_toolbar_icons"
     PREFIX "/quader/icons"
     BASE "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons"
     FILES ${QUADER_SNAPPING_TOOLBAR_ICON_FILES})
+qt_add_resources(quader "quader_viewport_display_toolbar_icons"
+    PREFIX "/quader/icons"
+    BASE "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons"
+    FILES ${QUADER_VIEWPORT_DISPLAY_TOOLBAR_ICON_FILES})
 target_link_libraries(quader PRIVATE quader_runtime)
 add_dependencies(quader
     ${QUADER_FILAMENT_MATERIAL_TARGETS})

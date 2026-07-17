@@ -132,7 +132,7 @@ TEST(ModelingSessionServiceSplitTests,
   EXPECT_EQ(mirror_settings->point_index, 2);
 
   const quader_editor_core::EditorRuntimeCommand poly_hover =
-      RuntimeToolCommandService::update_poly_hover(ray_event);
+      RuntimeToolCommandService::update_poly_hover(ray_event, std::nullopt);
   EXPECT_EQ(poly_hover.command_id,
             quader_editor_core::EditorRuntimeCommandId::UpdatePolyHover);
   const auto *poly_settings =
@@ -142,6 +142,8 @@ TEST(ModelingSessionServiceSplitTests,
   EXPECT_TRUE(poly_settings->constrain_axis);
   EXPECT_FALSE(poly_settings->snap_enabled);
   EXPECT_EQ(poly_settings->grid_size, ray_event.grid_size);
+  EXPECT_TRUE(poly_settings->surface_hit_resolved);
+  EXPECT_FALSE(poly_settings->resolved_surface_hit.has_value());
 
   ModelingBoxToolEvent box_event;
   box_event.screen_position = {320.0f, 240.0f};

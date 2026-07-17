@@ -86,9 +86,12 @@ ViewportToolResult PointSequenceTool::handle_event(
               point_context->make_event_at(pointer.mouse_local, false)));
     }
     if (pointer.can_interact && pointer.left_clicked &&
+        point_context != nullptr && point_context->make_event_at &&
         preview_port != nullptr) {
-      handle_result(context, "Poly point",
-                    preview_port->accept_poly_point());
+      handle_result(
+          context, "Poly point",
+          preview_port->accept_poly_point(
+              point_context->make_event_at(pointer.left_click_local, false)));
     }
     if (pointer.finalize_pressed && commit_port != nullptr) {
       const ModelingCommandResult command = commit_port->commit_poly_tool();

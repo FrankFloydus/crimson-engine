@@ -23,7 +23,6 @@
 #include "viewport/viewport_settings.hpp"
 #include "viewport/viewport_workspace_service.hpp"
 
-#include <QElapsedTimer>
 #include <QWidget>
 
 #include <array>
@@ -90,7 +89,8 @@ public:
                      AssetId default_material, PivotToolService *pivot,
                      LinearArrayToolService *linear_array,
                      RadialArrayToolService *radial_array,
-                     ViewportPointPlacementService *point_placement);
+                     ViewportPointPlacementService *point_placement,
+                     double delta_seconds);
   void prepare_viewports(QuaderEditorApi &editor,
                          SceneRenderBridge &render_bridge,
                          RenderOverlaySnapshotCache &snapshot_cache,
@@ -169,7 +169,8 @@ private:
                               AssetId default_material, PivotToolService *pivot,
                               LinearArrayToolService *linear_array,
                               RadialArrayToolService *radial_array,
-                              ViewportPointPlacementService *point_placement);
+                              ViewportPointPlacementService *point_placement,
+                              double delta_seconds);
   void refresh_cached_selection_overlay_frame(ModelingSessionService &modeling,
                                               const SceneDocument &document,
                                               const AssetRegistry &assets);
@@ -207,7 +208,6 @@ private:
   QVec2 context_menu_right_press_local_ = {};
   QVec2 context_menu_right_drag_delta_ = {};
   bool context_menu_right_press_active_ = false;
-  QElapsedTimer input_clock_;
   std::array<SplitHandleHost, 2> split_handles_;
   ViewportSplitHandleId active_split_handle_ =
       ViewportSplitHandleId::TwoHorizontal;

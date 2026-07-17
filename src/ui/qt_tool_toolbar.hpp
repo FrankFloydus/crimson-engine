@@ -48,7 +48,7 @@ private:
     std::string_view tool_id;
   };
 
-  std::array<ToolAction, 12> tool_actions_{};
+  std::array<ToolAction, 14> tool_actions_{};
   bool synchronization_valid_ = false;
   std::string synchronized_active_tool_;
   QuaderSelectionMode synchronized_selection_mode_ =

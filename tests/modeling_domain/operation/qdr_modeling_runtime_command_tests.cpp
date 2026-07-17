@@ -1234,6 +1234,87 @@ TEST(QdrModelingRuntimeCommandTests,
 	EXPECT_NEAR(preview.normal.z, 0.0F, 0.0001F);
 }
 
+TEST(QdrModelingRuntimeCommandTests,
+     ResolvedPolySurfaceHitLocksAPlaneAndUsesPlaneLocalGridSnapping) {
+	qec::EditorSession session;
+	qec::EditorRuntime runtime;
+
+	qec::PolyHoverRuntimeCommandSettings first_settings;
+	first_settings.camera.projection = qec::CameraProjection::Perspective;
+	first_settings.ray = { { 5.0F, 0.26F, 0.74F }, { -1.0F, 0.0F, 0.0F } };
+	first_settings.resolved_surface_hit = qec::PickHitRecord {
+		.hit = true,
+		.local_position = { 2.3F, 0.26F, 0.74F },
+		.local_normal = { 1.0F, 0.0F, 0.0F },
+	};
+	first_settings.surface_hit_resolved = true;
+	first_settings.grid_size = 0.5;
+	first_settings.snap_enabled = true;
+	qec::EditorRuntimeCommand first_hover;
+	first_hover.command_id = qec::EditorRuntimeCommandId::UpdatePolyHover;
+	first_hover.settings = first_settings;
+
+	const qec::EditorRuntimeCommandResult first_result =
+		qec::execute_runtime_command(session, runtime, first_hover);
+	ASSERT_TRUE(first_result.command.ok) << first_result.command.message;
+	EXPECT_NEAR(runtime.poly_state().current_point.x, 2.3F, 0.0001F);
+	EXPECT_NEAR(runtime.poly_state().current_point.y, 0.5F, 0.0001F);
+	EXPECT_NEAR(runtime.poly_state().current_point.z, 0.5F, 0.0001F);
+	EXPECT_NEAR(runtime.poly_state().face_normal.x, 1.0F, 0.0001F);
+
+	const qec::EditorRuntimeCommandResult accepted =
+		qec::execute_runtime_command(
+			session, runtime,
+			no_settings_command(qec::EditorRuntimeCommandId::AcceptPolyPoint));
+	ASSERT_TRUE(accepted.command.ok) << accepted.command.message;
+	ASSERT_EQ(runtime.poly_state().points.size(), 1U);
+
+	qec::PolyHoverRuntimeCommandSettings next_settings = first_settings;
+	next_settings.ray = { { 5.0F, 0.76F, 1.24F }, { -1.0F, 0.0F, 0.0F } };
+	next_settings.resolved_surface_hit = qec::PickHitRecord {
+		.hit = true,
+		.local_position = { 5.0F, 0.0F, 0.0F },
+		.local_normal = { 0.0F, 1.0F, 0.0F },
+	};
+	qec::EditorRuntimeCommand next_hover;
+	next_hover.command_id = qec::EditorRuntimeCommandId::UpdatePolyHover;
+	next_hover.settings = next_settings;
+
+	const qec::EditorRuntimeCommandResult next_result =
+		qec::execute_runtime_command(session, runtime, next_hover);
+	ASSERT_TRUE(next_result.command.ok) << next_result.command.message;
+	EXPECT_NEAR(runtime.poly_state().current_point.x, 2.3F, 0.0001F);
+	EXPECT_NEAR(runtime.poly_state().current_point.y, 1.0F, 0.0001F);
+	EXPECT_NEAR(runtime.poly_state().current_point.z, 1.0F, 0.0001F);
+	EXPECT_NEAR(runtime.poly_state().face_normal.x, 1.0F, 0.0001F);
+	EXPECT_NEAR(runtime.poly_state().face_normal.y, 0.0F, 0.0001F);
+}
+
+TEST(QdrModelingRuntimeCommandTests,
+     ResolvedPolySurfaceMissDoesNotFallBackToRawSessionGeometry) {
+	qec::EditorSession session;
+	ASSERT_TRUE(session.create_box_from_bounds(
+		{ -1.0F, -1.0F, -1.0F }, { 1.0F, 1.0F, 1.0F }).changed);
+	qec::EditorRuntime runtime;
+	qec::PolyHoverRuntimeCommandSettings settings;
+	settings.camera.projection = qec::CameraProjection::Perspective;
+	settings.ray = { { 0.0F, 2.0F, 5.0F }, { 0.0F, -1.5F, -4.0F } };
+	settings.surface_hit_resolved = true;
+	settings.resolved_surface_hit.reset();
+	settings.snap_enabled = false;
+	qec::EditorRuntimeCommand command;
+	command.command_id = qec::EditorRuntimeCommandId::UpdatePolyHover;
+	command.settings = settings;
+
+	const qec::EditorRuntimeCommandResult result =
+		qec::execute_runtime_command(session, runtime, command);
+	ASSERT_TRUE(result.command.ok) << result.command.message;
+	EXPECT_NEAR(runtime.poly_state().current_point.y, 0.0F, 0.0001F);
+	EXPECT_NEAR(runtime.poly_state().face_normal.x, 0.0F, 0.0001F);
+	EXPECT_NEAR(runtime.poly_state().face_normal.y, 1.0F, 0.0001F);
+	EXPECT_NEAR(runtime.poly_state().face_normal.z, 0.0F, 0.0001F);
+}
+
 TEST(QdrModelingRuntimeCommandTests, EditorRuntimeCommandFacadeCreatesABoxFromBoundsThroughHistory) {
 	qec::EditorSession session;
 	qec::EditorRuntime runtime;

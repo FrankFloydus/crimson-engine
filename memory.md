@@ -4907,3 +4907,29 @@ Verification:
   passes 6/6, including SDK-only, SDK consumer/parity, guardrail, native app, and modeling-domain
   targets. The native-style popup follow-up passes its focused Windows UI regression; the final
   native `quader` v0.1.32 build is recorded in the task handoff.
+
+## 2026-07-17 - Surface-Aware Poly Placement And Precise Fly Timing
+
+Invariant:
+
+- Poly resolves its first viewport ray against the same visible/selectable, scene-transformed
+  surface-picking owner used by native modeling placement. A hit captures a world-space
+  construction plane; every later point intersects and snaps within that locked plane so vertical,
+  tilted, and offset support meshes remain coplanar. An authoritative host miss retains the active
+  viewport-grid fallback and never silently re-picks untransformed runtime geometry.
+- Poly acceptance always re-resolves the queued physical click ray before accepting a point. A
+  same-frame mouse move cannot commit a stale hover sample. Preview placement remains transient;
+  commit still creates one independently selected polygon object and remains one undoable action.
+- Viewport navigation consumes `FrameTiming::delta_seconds` from the app frame. Do not restore a
+  per-panel whole-millisecond `QElapsedTimer`: at high refresh rates, alternating integer movement
+  steps are visible as fly-navigation micro-stutter.
+- Retained toolbar synchronization checks cheap scene/modeling revisions before building a public
+  selection summary. Descriptor lookup, shortcut formatting, and Qt setters remain behind each
+  toolbar's unchanged-state gate.
+
+Owners: `ModelingSelectionService`, `ModelingSessionService`, Poly runtime/tool interaction,
+`PointSequenceTool`, `UISystem`, and `QtViewportPanel`.
+
+Verification: focused transformed-surface, plane-local snapping, queued-click, Poly history,
+viewport-display toolbar, public preference-command, UI hot-path, and precise-delta regressions
+pass. Final full CTest and native v0.1.33 build results are recorded in the task handoff.

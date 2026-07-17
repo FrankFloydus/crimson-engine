@@ -4,9 +4,10 @@
 // No permission is granted to use, copy, modify, distribute, or sublicense this
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
-#include <editor/modeling/runtime/runtime_command.hpp>
+#include <editor/interactions/box_tool.hpp>
 #include <editor/interactions/selection_edit.hpp>
 #include <editor/interactions/viewport_projection.hpp>
+#include <editor/modeling/runtime/runtime_command.hpp>
 #include <editor/modeling/runtime/tool_runtime_policy.hpp>
 
 #include <cmath>
@@ -193,16 +194,18 @@ bool box_runtime_status_changed(const EditorRuntimeStatus& before, const EditorR
 		before.hover_active != after.hover_active;
 }
 
-std::optional<PickHitRecord> box_surface_hit(
+std::optional<PickHitRecord> resolved_or_runtime_surface_hit(
 		EditorSession& session,
-		const BoxRayRuntimeCommandSettings& settings)
+		const quader_poly::Ray& ray,
+		const std::optional<PickHitRecord>& resolved_surface_hit,
+		bool surface_hit_resolved)
 {
-	if (settings.surface_hit_resolved) {
-		return settings.resolved_surface_hit;
+	if (surface_hit_resolved) {
+		return resolved_surface_hit;
 	}
 	quader_poly::PickOptions options;
 	options.mode = quader_poly::SelectionMode::Face;
-	return session.pick_nearest({ settings.ray, options });
+	return session.pick_nearest({ ray, options });
 }
 
 BoxToolStateResult set_box_construction_plane_from_ray(
@@ -210,7 +213,9 @@ BoxToolStateResult set_box_construction_plane_from_ray(
 		EditorRuntime& runtime,
 		const BoxRayRuntimeCommandSettings& settings)
 {
-	const std::optional<PickHitRecord> hit = box_surface_hit(session, settings);
+	const std::optional<PickHitRecord> hit = resolved_or_runtime_surface_hit(
+		session, settings.ray, settings.resolved_surface_hit,
+		settings.surface_hit_resolved);
 	if (hit.has_value() && quader::length_squared(hit->local_normal) > 0.000001F) {
 		return runtime.set_box_construction_plane(hit->local_position, hit->local_normal);
 	}
@@ -1130,16 +1135,46 @@ CommandResult finalize_mirror(EditorSession& session, EditorRuntime& runtime)
 }
 
 CommandResult update_poly_hover(
-    EditorRuntime &runtime, PolyHoverRuntimeCommandSettings settings) {
-  const CutGridPointResult grid_point = viewport_grid_point_from_ray(
-      settings.camera, settings.ray, settings.grid_size,
-      settings.snap_enabled);
-  if (!grid_point.ok) {
-    return {true, false, grid_point.message};
+    EditorSession &session, EditorRuntime &runtime,
+    PolyHoverRuntimeCommandSettings settings) {
+  quader::QVec3 position;
+  quader::QVec3 plane_normal;
+  const PolyToolState &state = runtime.poly_state();
+  if (state.closed) {
+    return {true, false, ""};
+  }
+  if (!state.points.empty()) {
+    const BoxConstructionPlane plane = normalize_box_construction_plane(
+        state.points.front(), state.face_normal);
+    const BoxConstructionPointResult point =
+        box_construction_point_from_ray(plane, settings.ray);
+    if (!point.ok) {
+      return {true, false, point.message};
+    }
+    position = point.position;
+    plane_normal = plane.normal;
+  } else {
+    const std::optional<PickHitRecord> surface_hit =
+        resolved_or_runtime_surface_hit(
+            session, settings.ray, settings.resolved_surface_hit,
+            settings.surface_hit_resolved);
+    if (surface_hit.has_value() &&
+        quader::length_squared(surface_hit->local_normal) > 0.000001F) {
+      position = surface_hit->local_position;
+      plane_normal = surface_hit->local_normal;
+    } else {
+      const CutGridPointResult grid_point = viewport_grid_point_from_ray(
+          settings.camera, settings.ray, settings.grid_size, false);
+      if (!grid_point.ok) {
+        return {true, false, grid_point.message};
+      }
+      position = grid_point.position;
+      plane_normal = grid_point.plane_normal;
+    }
   }
   const PolyToolResult result = runtime.update_poly_hover(
-      grid_point.position, grid_point.plane_normal, settings.constrain_axis,
-      settings.grid_size, settings.snap_enabled);
+      position, plane_normal, settings.constrain_axis, settings.grid_size,
+      settings.snap_enabled);
   return {result.ok, result.changed, result.message};
 }
 
@@ -1563,8 +1598,8 @@ EditorRuntimeCommandResult execute_runtime_command(
           if (settings == nullptr) {
             return runtime_command_result(runtime, settings_mismatch_result());
           }
-          return runtime_command_result(runtime,
-                                        update_poly_hover(runtime, *settings));
+          return runtime_command_result(
+              runtime, update_poly_hover(session, runtime, *settings));
         }
         case EditorRuntimeCommandId::AcceptPolyPoint:
           if (!std::holds_alternative<std::monostate>(command.settings)) {
