@@ -24,7 +24,9 @@
 
 #include <array>
 #include <cstddef>
+#include <functional>
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <tuple>
@@ -80,6 +82,26 @@ std::string layout_localization_key(ViewportLayoutId layout) {
   return key;
 }
 
+std::optional<QuaderCommandId>
+layout_command_id(ViewportLayoutId layout) {
+  switch (layout) {
+  case ViewportLayoutId::Single:
+    return quader_command::kViewportLayoutSingle;
+  case ViewportLayoutId::TwoHorizontal:
+    return quader_command::kViewportLayoutTwoHorizontal;
+  case ViewportLayoutId::TwoVertical:
+    return quader_command::kViewportLayoutTwoVertical;
+  case ViewportLayoutId::FourQuad:
+    return quader_command::kViewportLayoutFourQuad;
+  case ViewportLayoutId::ThreePrimaryRight:
+  case ViewportLayoutId::ThreePrimaryLeft:
+  case ViewportLayoutId::ThreePrimaryBottom:
+  case ViewportLayoutId::ThreePrimaryTop:
+    return std::nullopt;
+  }
+  return std::nullopt;
+}
+
 std::string tool_localization_key(const Tool &tool) {
   std::string key = "viewport.tool.";
   key.append(tool.id());
@@ -114,6 +136,7 @@ struct QtMainMenu::Impl {
     QuaderCommandId command_id;
     std::string localization_key;
     std::string fallback;
+    std::function<bool()> checked;
   };
 
   /// Associates a checkable QAction with one viewport boolean setting.
@@ -126,6 +149,7 @@ struct QtMainMenu::Impl {
   struct LayoutAction {
     QAction *action = nullptr;
     ViewportLayoutId layout = ViewportLayoutId::Single;
+    std::optional<QuaderCommandId> command_id;
   };
 
   /// Associates a QAction with a stable dock-panel identifier.
@@ -205,21 +229,34 @@ struct QtMainMenu::Impl {
 
   QAction *add_command_action(QMenu &menu, QuaderCommandId command_id,
                               std::string localization_key,
-                              std::string fallback) {
+                              std::string fallback,
+                              std::function<bool()> checked = {}) {
     QAction *action = menu.addAction(QString::fromStdString(fallback));
     action->setObjectName(
         QStringLiteral("command_%1")
             .arg(QString::fromStdString(
                 stable_object_suffix(command_id.string()))));
+    action->setCheckable(static_cast<bool>(checked));
     QObject::connect(action, &QAction::triggered, connection_context.get(),
-                     [this, command_id]() {
+                     [this, action, command_id, checked]() {
                        (void)context.editor.commands().execute(command_id);
+                       if (checked) {
+                         const QSignalBlocker blocker(action);
+                         action->setChecked(checked());
+                         const std::optional<QuaderCommandDescriptor>
+                             descriptor =
+                                 context.editor.commands().descriptor(
+                                     command_id);
+                         action->setEnabled(descriptor.has_value() &&
+                                            descriptor->enabled);
+                       }
                      });
     command_actions.push_back(CommandAction{
         .action = action,
         .command_id = command_id,
         .localization_key = std::move(localization_key),
         .fallback = std::move(fallback),
+        .checked = std::move(checked),
     });
     return action;
   }
@@ -498,6 +535,13 @@ struct QtMainMenu::Impl {
     add_bool_setting_action(*menu, ViewportBoolSettingId::ShowInfo,
                             "ui.menu.view.show_info", "Show Info");
     menu->addSeparator();
+    add_command_action(
+        *menu, quader_command::kViewportToggleLocalVisibility,
+        "ui.menu.view.toggle_local_visibility", "Toggle Local Visibility",
+        [this]() {
+          return context.editor.viewports().local_visibility_active();
+        });
+    menu->addSeparator();
     add_command_action(*menu, quader_command::kViewportFocusAll,
                        "ui.menu.view.focus_all", "Focus All");
     add_command_action(*menu, quader_command::kViewportFrameSelection,
@@ -577,7 +621,8 @@ struct QtMainMenu::Impl {
                      });
     panels->addSeparator();
     for (UIPanelId id :
-         {UIPanelId::Outliner, UIPanelId::Inspector, UIPanelId::Console}) {
+         {UIPanelId::Outliner, UIPanelId::Inspector, UIPanelId::Layers,
+          UIPanelId::Console}) {
       QAction *action = panels->addAction(qtext(
           context.localization, ui_panel_localization_key(id),
           ui_panel_key(id)));
@@ -609,11 +654,18 @@ struct QtMainMenu::Impl {
               .arg(QString::fromUtf8(viewport_layout_stable_id(option.id).data())));
       action->setCheckable(true);
       group->addAction(action);
+      const std::optional<QuaderCommandId> command_id =
+          layout_command_id(option.id);
       QObject::connect(action, &QAction::triggered, connection_context.get(),
-                       [this, layout = option.id]() {
-                         (void)context.editor.viewports().set_layout(layout);
+                       [this, layout = option.id, command_id]() {
+                         if (command_id.has_value()) {
+                           (void)context.editor.commands().execute(
+                               *command_id);
+                         } else {
+                           (void)context.editor.viewports().set_layout(layout);
+                         }
                        });
-      layout_actions.push_back({action, option.id});
+      layout_actions.push_back({action, option.id, command_id});
     }
   }
 };
@@ -659,13 +711,16 @@ void QtMainMenu::refresh() {
   for (Impl::CommandAction &entry : impl_->command_actions) {
     const QuaderCommandDescriptor *command =
         find_command(commands, entry.command_id.string());
-    const std::string_view shortcut =
-        command != nullptr ? std::string_view(command->shortcut)
-                           : std::string_view{};
+    const std::string shortcut =
+        impl_->context.editor.commands().shortcut_for(entry.command_id);
     entry.action->setText(action_text(impl_->context.localization,
                                       entry.localization_key, entry.fallback,
                                       shortcut));
     entry.action->setEnabled(command != nullptr && command->enabled);
+    if (entry.checked) {
+      const QSignalBlocker blocker(entry.action);
+      entry.action->setChecked(entry.checked());
+    }
   }
   for (const Impl::BoolSettingAction &entry :
        impl_->bool_setting_actions) {
@@ -675,6 +730,13 @@ void QtMainMenu::refresh() {
   }
   for (const Impl::LayoutAction &entry : impl_->layout_actions) {
     const QSignalBlocker blocker(entry.action);
+    const std::string shortcut =
+        entry.command_id.has_value()
+            ? impl_->context.editor.commands().shortcut_for(*entry.command_id)
+            : std::string{};
+    entry.action->setText(action_text(
+        impl_->context.localization, layout_localization_key(entry.layout),
+        viewport_layout_label(entry.layout), shortcut));
     entry.action->setChecked(impl_->context.editor.viewports().layout() ==
                              entry.layout);
   }
@@ -731,9 +793,8 @@ void QtMainMenu::refresh() {
         impl_->context.editor.commands().command_id_for_tool_activation(
             entry.tool_id);
     const QuaderCommandDescriptor *command = find_command(commands, command_id);
-    const std::string_view shortcut =
-        command != nullptr ? std::string_view(command->shortcut)
-                           : std::string_view{};
+    const std::string shortcut =
+        impl_->context.editor.commands().shortcut_for(command_id);
     entry.action->setText(action_text(impl_->context.localization,
                                       entry.localization_key, entry.fallback,
                                       shortcut));

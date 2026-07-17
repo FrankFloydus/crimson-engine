@@ -185,6 +185,18 @@ bool QtCommandEventFilter::eventFilter(QObject *watched, QEvent *event) {
         }
         dispatch = std::move(tool_settings_dispatch);
       } else if (tool_settings_dispatch.kind ==
+                     QuaderViewportKeybindingDispatch::Kind::ViewportShortcut &&
+                 tool_settings_dispatch.shortcut.kind ==
+                     ViewportShortcutKind::CancelActiveTool) {
+        // The grouped Cancel Tool action uses the viewport alias on viewport
+        // surfaces. Inside primitive settings, route that same configurable
+        // mapping through the primitive command so the retained editor closes.
+        dispatch = {
+            .kind = QuaderViewportKeybindingDispatch::Kind::Command,
+            .command_id = std::string(
+                quader_command::kToolsCancelPrimitiveCreation.string()),
+        };
+      } else if (tool_settings_dispatch.kind ==
                  QuaderViewportKeybindingDispatch::Kind::PendingChord) {
         editor_->commands().reset_pending_keybinding_chord();
       }

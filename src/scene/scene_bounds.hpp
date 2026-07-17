@@ -11,6 +11,7 @@
 #include "scene/scene_document.hpp"
 
 #include <optional>
+#include <functional>
 
 namespace quader {
 
@@ -39,6 +40,9 @@ entity_hierarchy_world_bounds(const SceneDocument &document,
                               const AssetRegistry &assets, EntityId entity);
 std::optional<SceneBounds> document_world_bounds(const SceneDocument &document,
                                                  const AssetRegistry &assets);
+std::optional<SceneBounds> document_world_bounds(
+    const SceneDocument &document, const AssetRegistry &assets,
+    const std::function<bool(EntityId)> &entity_visible);
 std::optional<SceneBounds> selected_world_bounds(const SceneDocument &document,
                                                  const AssetRegistry &assets);
 std::optional<SceneBounds>

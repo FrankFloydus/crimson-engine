@@ -10,9 +10,10 @@
 #include "diagnostics/profile.hpp"
 #include "render/material_binding_service.hpp"
 #include "render/render_signature_builder.hpp"
-#include "scene/scene_transform.hpp"
-#include "scene/scene_document.hpp"
 #include "render/tool_preview_renderable_cache.hpp"
+#include "scene/scene_document.hpp"
+#include "scene/scene_hierarchy_visibility.hpp"
+#include "scene/scene_transform.hpp"
 
 #include <algorithm>
 #include <cstdint>
@@ -23,6 +24,17 @@
 
 namespace quader {
 namespace {
+
+bool local_visibility_allows(
+    const ViewportLocalVisibilitySnapshot *local_visibility,
+    EntityId entity) {
+  return local_visibility == nullptr || local_visibility->allows(entity);
+}
+
+std::uint64_t local_visibility_revision(
+    const ViewportLocalVisibilitySnapshot *local_visibility) {
+  return local_visibility != nullptr ? local_visibility->revision() : 0u;
+}
 
 RenderMaterialAssetSnapshot build_render_material_asset_snapshot(
     const AssetRegistry &assets, MaterialReference reference,
@@ -127,6 +139,8 @@ RenderSceneSnapshotDirtyState scene_snapshot_dirty_state(
           previous->selection_revision != snapshot.selection_revision,
       .visibility_changed =
           previous->visibility_revision != snapshot.visibility_revision,
+      .local_visibility_changed = previous->local_visibility_revision !=
+                                  snapshot.local_visibility_revision,
       .transforms_changed =
           previous->transform_revision != snapshot.transform_revision,
       .mesh_bindings_changed =
@@ -200,6 +214,8 @@ void mark_light_dirty(RenderSceneLightRecord &record,
          previous->scene_revision == snapshot.scene_revision &&
          previous->selection_revision == snapshot.selection_revision &&
          previous->visibility_revision == snapshot.visibility_revision &&
+         previous->local_visibility_revision ==
+             snapshot.local_visibility_revision &&
          previous->transform_revision == snapshot.transform_revision &&
          previous->mesh_binding_revision == snapshot.mesh_binding_revision &&
          previous->render_component_revision ==
@@ -389,9 +405,6 @@ std::uint64_t instance_occurrence_token(EntityId definition,
                                         EntityId member,
                                         EntityId occurrence);
 bool selected(const SceneDocument &document, EntityId entity);
-bool definition_member_is_visible(const SceneDocument &document,
-                                  EntityId member,
-                                  EntityId definition);
 void append_instance_primitive_records(
     RenderSceneSnapshot &snapshot, const RenderSceneMeshRecord &source,
     EntityId definition, EntityId member, const QMat4 &member_from_definition,
@@ -412,6 +425,8 @@ RenderSceneSnapshot build_render_scene_snapshot(
   snapshot.scene_revision = document.revision();
   snapshot.selection_revision = document.selection_revision();
   snapshot.visibility_revision = document.visibility_revision();
+  snapshot.local_visibility_revision =
+      local_visibility_revision(options.local_visibility);
   snapshot.transform_revision = document.transform_revision();
   snapshot.mesh_binding_revision = document.mesh_binding_revision();
   snapshot.render_component_revision = document.render_component_revision();
@@ -437,7 +452,8 @@ RenderSceneSnapshot build_render_scene_snapshot(
   std::vector<RenderSceneMeshRecord> ordinary_meshes;
   for (const EntityId entity_id : document.entities()) {
     QDR_PROFILE_SCOPE("Scene render extract entity");
-    if (!document.is_effectively_visible(entity_id)) {
+    if (!document.is_effectively_visible(entity_id) ||
+        !local_visibility_allows(options.local_visibility, entity_id)) {
       continue;
     }
 
@@ -533,7 +549,8 @@ RenderSceneSnapshot build_render_scene_snapshot(
     std::vector<EntityId> visible_occurrences;
     for (const EntityId occurrence :
          document.instance_occurrences_for_definition(definition)) {
-      if (document.is_effectively_visible(occurrence)) {
+      if (document.is_effectively_visible(occurrence) &&
+          local_visibility_allows(options.local_visibility, occurrence)) {
         visible_occurrences.push_back(occurrence);
       }
     }
@@ -542,7 +559,7 @@ RenderSceneSnapshot build_render_scene_snapshot(
     }
     for (const EntityId member : document.descendants(definition, false)) {
       if (document.containing_instance_definition(member) != definition ||
-          !definition_member_is_visible(document, member, definition)) {
+          !scene_hierarchy_segment_is_visible(document, member, definition)) {
         continue;
       }
       const MeshComponent *component = document.mesh(member);
@@ -685,21 +702,6 @@ std::uint64_t instance_occurrence_token(EntityId definition,
 bool selected(const SceneDocument &document, EntityId entity) {
   const SelectionComponent *selection = document.selection(entity);
   return selection != nullptr && selection->selected;
-}
-
-bool definition_member_is_visible(const SceneDocument &document,
-                                  EntityId member,
-                                  EntityId definition) {
-  EntityId current = member;
-  std::size_t guard = document.entities().size() + 1u;
-  while (current != kInvalidEntityId && current != definition && guard-- > 0u) {
-    if (const VisibilityComponent *visibility = document.visibility(current);
-        visibility != nullptr && !visibility->visible) {
-      return false;
-    }
-    current = document.parent(current);
-  }
-  return current == definition;
 }
 
 void append_instance_primitive_records(
@@ -860,11 +862,14 @@ bool try_refresh_render_scene_snapshot_transforms(
     const AssetRegistry &assets, std::uint64_t frame_index,
     RenderSceneBindingKey scene_binding,
     std::uint64_t project_material_revision,
-    RenderInstanceEditScope instance_edit_scope) {
+    RenderInstanceEditScope instance_edit_scope,
+    const ViewportLocalVisibilitySnapshot *local_visibility) {
   QDR_PROFILE_FUNCTION();
   if (snapshot.scene_binding != scene_binding ||
       snapshot.asset_revision != assets.revision() ||
       snapshot.project_material_revision != project_material_revision ||
+      snapshot.local_visibility_revision !=
+          local_visibility_revision(local_visibility) ||
       snapshot.instance_edit_scope != instance_edit_scope ||
       snapshot.selection_revision != document.selection_revision() ||
       snapshot.visibility_revision != document.visibility_revision() ||
@@ -894,6 +899,8 @@ bool try_refresh_render_scene_snapshot_transforms(
   snapshot.scene_revision = document.revision();
   snapshot.selection_revision = document.selection_revision();
   snapshot.visibility_revision = document.visibility_revision();
+  snapshot.local_visibility_revision =
+      local_visibility_revision(local_visibility);
   snapshot.transform_revision = document.transform_revision();
   snapshot.mesh_binding_revision = document.mesh_binding_revision();
   snapshot.render_component_revision = document.render_component_revision();
@@ -906,6 +913,7 @@ bool try_refresh_render_scene_snapshot_transforms(
           previous_selection_revision != snapshot.selection_revision,
       .visibility_changed =
           previous_visibility_revision != snapshot.visibility_revision,
+      .local_visibility_changed = false,
       .transforms_changed =
           previous_transform_revision != snapshot.transform_revision,
       .mesh_bindings_changed =
@@ -972,11 +980,14 @@ bool render_scene_snapshot_matches_sources(
     const RenderSceneSnapshot &snapshot, const SceneDocument &document,
     const AssetRegistry &assets, RenderSceneBindingKey scene_binding,
     std::uint64_t project_material_revision,
-    RenderInstanceEditScope instance_edit_scope) {
+    RenderInstanceEditScope instance_edit_scope,
+    const ViewportLocalVisibilitySnapshot *local_visibility) {
   return snapshot.scene_binding == scene_binding &&
          snapshot.scene_revision == document.revision() &&
          snapshot.selection_revision == document.selection_revision() &&
          snapshot.visibility_revision == document.visibility_revision() &&
+         snapshot.local_visibility_revision ==
+             local_visibility_revision(local_visibility) &&
          snapshot.transform_revision == document.transform_revision() &&
          snapshot.mesh_binding_revision == document.mesh_binding_revision() &&
          snapshot.render_component_revision ==
@@ -992,10 +1003,18 @@ SceneRenderExtractionPlan build_scene_render_extraction_plan(
 }
 
 std::vector<RenderToolPreviewMeshRecord> build_render_tool_preview_snapshot(
-    const std::vector<ToolPreviewMesh> &meshes, const AssetRegistry &assets) {
+    const std::vector<ToolPreviewMesh> &meshes, const AssetRegistry &assets,
+    const ViewportLocalVisibilitySnapshot *local_visibility) {
   std::vector<RenderToolPreviewMeshRecord> records;
   records.reserve(meshes.size());
   for (const ToolPreviewMesh &mesh : meshes) {
+    const EntityId visibility_entity =
+        mesh.visibility_entity == kInvalidEntityId ? mesh.source_entity
+                                                    : mesh.visibility_entity;
+    if (mesh.source_entity != kInvalidEntityId &&
+        !local_visibility_allows(local_visibility, visibility_entity)) {
+      continue;
+    }
     const MaterialComponent material{.material = mesh.material};
     RenderMaterialBindingSnapshot material_snapshot =
         build_render_material_binding_snapshot(assets, &material);

@@ -20,6 +20,7 @@
 #include "viewport/viewport_settings.hpp"
 
 #include <QApplication>
+#include <QAbstractItemView>
 #include <QAction>
 #include <QCheckBox>
 #include <QColor>
@@ -30,20 +31,32 @@
 #include <QDoubleSpinBox>
 #include <QEventLoop>
 #include <QFocusEvent>
+#include <QHeaderView>
 #include <QKeyEvent>
+#include <QLabel>
 #include <QLineEdit>
 #include <QListWidget>
+#include <QLocale>
 #include <QMenu>
 #include <QMenuBar>
+#include <QMessageBox>
+#include <QMouseEvent>
 #include <QPointer>
 #include <QPushButton>
+#include <QStringList>
+#include <QTableView>
 #include <QTimer>
+#include <QWheelEvent>
 
 #include <algorithm>
 #include <filesystem>
+#include <fstream>
 #include <functional>
+#include <memory>
 #include <optional>
+#include <set>
 #include <span>
+#include <sstream>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -54,6 +67,81 @@
 
 namespace quader {
 namespace {
+
+/// Restores Qt's process-default locale after a production-locale test.
+class ScopedDefaultLocale final {
+public:
+  explicit ScopedDefaultLocale(const QLocale &locale) : previous_(QLocale()) {
+    QLocale::setDefault(locale);
+  }
+
+  ~ScopedDefaultLocale() { QLocale::setDefault(previous_); }
+
+  ScopedDefaultLocale(const ScopedDefaultLocale &) = delete;
+  ScopedDefaultLocale &operator=(const ScopedDefaultLocale &) = delete;
+
+private:
+  QLocale previous_;
+};
+
+int expected_natural_numeric_compare(const QString &left,
+                                     const QString &right) {
+  qsizetype left_index = 0;
+  qsizetype right_index = 0;
+  while (left_index < left.size() && right_index < right.size()) {
+    if (left.at(left_index).isDigit() && right.at(right_index).isDigit()) {
+      const qsizetype left_start = left_index;
+      const qsizetype right_start = right_index;
+      while (left_index < left.size() && left.at(left_index).isDigit()) {
+        ++left_index;
+      }
+      while (right_index < right.size() && right.at(right_index).isDigit()) {
+        ++right_index;
+      }
+      qsizetype left_number = left_start;
+      qsizetype right_number = right_start;
+      while (left_number < left_index &&
+             left.at(left_number).digitValue() == 0) {
+        ++left_number;
+      }
+      while (right_number < right_index &&
+             right.at(right_number).digitValue() == 0) {
+        ++right_number;
+      }
+      const qsizetype left_length = left_index - left_number;
+      const qsizetype right_length = right_index - right_number;
+      if (left_length != right_length) {
+        return left_length < right_length ? -1 : 1;
+      }
+      for (qsizetype offset = 0; offset < left_length; ++offset) {
+        const int left_digit = left.at(left_number + offset).digitValue();
+        const int right_digit = right.at(right_number + offset).digitValue();
+        if (left_digit != right_digit) {
+          return left_digit < right_digit ? -1 : 1;
+        }
+      }
+      const qsizetype left_run_length = left_index - left_start;
+      const qsizetype right_run_length = right_index - right_start;
+      if (left_run_length != right_run_length) {
+        return left_run_length < right_run_length ? -1 : 1;
+      }
+      continue;
+    }
+
+    const ushort left_character = left.at(left_index).toCaseFolded().unicode();
+    const ushort right_character =
+        right.at(right_index).toCaseFolded().unicode();
+    if (left_character != right_character) {
+      return left_character < right_character ? -1 : 1;
+    }
+    ++left_index;
+    ++right_index;
+  }
+  if (left_index == left.size() && right_index == right.size()) {
+    return 0;
+  }
+  return left_index == left.size() ? -1 : 1;
+}
 
 LocalizationService loaded_localization(std::string_view locale = "en-US") {
   LocalizationService localization;
@@ -82,6 +170,24 @@ std::size_t count_changes(const std::vector<QtSettingsChangeKind> &changes,
                           QtSettingsChangeKind kind) {
   return static_cast<std::size_t>(
       std::count(changes.begin(), changes.end(), kind));
+}
+
+std::string read_text_file(const std::filesystem::path &path) {
+  std::ifstream file(path, std::ios::binary);
+  std::ostringstream stream;
+  stream << file.rdbuf();
+  return stream.str();
+}
+
+const QuaderKeybindingCatalogEntry *find_keybinding_catalog_entry(
+    const std::vector<QuaderKeybindingCatalogEntry> &entries,
+    std::string_view target) {
+  const auto found = std::find_if(
+      entries.begin(), entries.end(), [&](const auto &entry) {
+        return std::find(entry.target_ids.begin(), entry.target_ids.end(),
+                         target) != entry.target_ids.end();
+      });
+  return found != entries.end() ? &*found : nullptr;
 }
 
 ViewportSettingColor setting_color(const QColor &color) {
@@ -141,6 +247,118 @@ bool reject_color_picker(QWidget &owner, QPushButton &swatch,
   return opened;
 }
 
+bool capture_keybinding_and_choose_conflict(
+    QWidget &owner, QTableView &table, QString choice_object_name,
+    QString conflicting_action, bool returns_to_capture) {
+  /// Tracks whether both nested dialogs were observed during the click.
+  struct Outcome {
+    bool capture_opened = false;
+    bool conflict_opened = false;
+  };
+  const auto outcome = std::make_shared<Outcome>();
+  QTimer::singleShot(
+      0, &owner,
+      [&owner, outcome, choice_object_name, conflicting_action,
+       returns_to_capture]() {
+        QWidget *modal = QApplication::activeModalWidget();
+        if (modal == nullptr) {
+          ADD_FAILURE() << "Expected the keybinding capture dialog to open.";
+          return;
+        }
+        outcome->capture_opened = true;
+        auto *recorder = modal->findChild<QLineEdit *>(
+            QStringLiteral("settingsKeybindingCaptureRecorder"));
+        auto *use = modal->findChild<QPushButton *>(
+            QStringLiteral("settingsKeybindingCaptureUse"));
+        if (recorder == nullptr || use == nullptr) {
+          ADD_FAILURE() << "Expected capture controls.";
+          modal->close();
+          return;
+        }
+        send_key(*recorder, Qt::Key_W);
+        QTimer::singleShot(
+            0, &owner,
+            [outcome, choice_object_name, conflicting_action,
+             returns_to_capture]() {
+                         QWidget *conflict =
+                             QApplication::activeModalWidget();
+                         auto *box = qobject_cast<QMessageBox *>(conflict);
+                         if (box == nullptr) {
+                           ADD_FAILURE()
+                               << "Expected the keybinding conflict dialog.";
+                           return;
+                         }
+                         outcome->conflict_opened = true;
+                         EXPECT_EQ(
+                             box->text(),
+                             QStringLiteral(
+                                 "This input mapping clashes with “%1”.")
+                                 .arg(conflicting_action));
+                         EXPECT_EQ(box->findChild<QPushButton *>(
+                                       QStringLiteral(
+                                           "settingsKeybindingConflictKeepBoth")),
+                                   nullptr);
+                         ASSERT_NE(box->defaultButton(), nullptr);
+                         EXPECT_EQ(
+                             box->defaultButton()->objectName(),
+                             QStringLiteral(
+                                 "settingsKeybindingConflictCancel"));
+                         auto *choice = box->findChild<QPushButton *>(
+                             choice_object_name);
+                         if (choice == nullptr) {
+                           ADD_FAILURE() << "Expected conflict choice button.";
+                           box->reject();
+                           return;
+                         }
+                         if (returns_to_capture) {
+                           QTimer::singleShot(0, [outcome]() {
+                             QWidget *capture =
+                                 QApplication::activeModalWidget();
+                             ASSERT_NE(capture, nullptr);
+                             EXPECT_EQ(capture->objectName(),
+                                       QStringLiteral(
+                                           "settingsKeybindingCaptureDialog"));
+                             auto *recorder = capture->findChild<QLineEdit *>(
+                                 QStringLiteral(
+                                     "settingsKeybindingCaptureRecorder"));
+                             ASSERT_NE(recorder, nullptr);
+                             EXPECT_EQ(recorder->text(), QStringLiteral("W"));
+                             qobject_cast<QDialog *>(capture)->reject();
+                           });
+                         }
+                         choice->click();
+            });
+        use->click();
+      });
+  const QModelIndex mapping =
+      table.model()->index(table.currentIndex().row(), 2);
+  QMetaObject::invokeMethod(&table, "doubleClicked", Qt::DirectConnection,
+                            Q_ARG(QModelIndex, mapping));
+  return outcome->capture_opened && outcome->conflict_opened;
+}
+
+bool choose_reset_all_confirmation(QWidget &owner, QPushButton &reset_all,
+                                   QString choice_object_name) {
+  bool opened = false;
+  QTimer::singleShot(0, &owner, [&]() {
+    auto *confirmation = qobject_cast<QMessageBox *>(
+        QApplication::activeModalWidget());
+    if (confirmation == nullptr) {
+      ADD_FAILURE() << "Expected the Reset All confirmation dialog.";
+      return;
+    }
+    opened = true;
+    EXPECT_EQ(confirmation->objectName(),
+              QStringLiteral("settingsKeybindingResetAllDialog"));
+    auto *button =
+        confirmation->findChild<QPushButton *>(choice_object_name);
+    ASSERT_NE(button, nullptr);
+    button->click();
+  });
+  reset_all.click();
+  return opened;
+}
+
 TEST(QtSettingsDialogTests,
      ApplyOkAndCancelOwnOneStagedSettingsTransaction) {
   ASSERT_EQ(QCoreApplication::instance(), nullptr);
@@ -159,8 +377,11 @@ TEST(QtSettingsDialogTests,
   std::vector<QtSettingsChangeKind> changes;
   QtSettingsDialog dialog;
   dialog.setAttribute(Qt::WA_DontShowOnScreen, true);
+  SceneSession settings_session;
+  QuaderEditorApi settings_editor(
+      QuaderApiSessionInternalAccess::from_scene_session(settings_session));
   dialog.set_context(
-      ui_settings, viewport_settings, localization,
+      ui_settings, viewport_settings, localization, settings_editor.commands(),
       [&](QtSettingsChangeKind kind) { changes.push_back(kind); });
 
   auto *category_list =
@@ -395,6 +616,757 @@ TEST(QtSettingsDialogTests,
   QCoreApplication::processEvents();
   EXPECT_FALSE(dialog.isVisible());
   EXPECT_EQ(changes.size(), commits_before_clean_ok);
+}
+
+TEST(QtSettingsDialogTests,
+     KeybindingEditorListsEveryCatalogRowByContext) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-settings-keybindings-tests";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+  const ScopedDefaultLocale force_c_locale(QLocale::c());
+
+  SceneSession session;
+  QuaderEditorApi editor(
+      QuaderApiSessionInternalAccess::from_scene_session(session));
+  const std::filesystem::path keybindings =
+      std::filesystem::temp_directory_path() /
+      "quader-settings-keybindings-showcase.json";
+  std::error_code ignored;
+  std::filesystem::remove(keybindings, ignored);
+  ASSERT_TRUE(editor.commands().set_keybinding_storage_path(keybindings).ok());
+  ASSERT_TRUE(editor.preferences()
+                  .set_shortcut(quader_command::kEditUndo, "Ctrl+Alt+Z")
+                  .ok());
+
+  UISettings ui_settings = UISettings::defaults();
+  ViewportSettings viewport_settings = ViewportSettings::defaults();
+  LocalizationService localization = loaded_localization();
+  std::vector<QtSettingsChangeKind> changes;
+  QtSettingsDialog dialog;
+  dialog.setAttribute(Qt::WA_DontShowOnScreen, true);
+  dialog.set_context(
+      ui_settings, viewport_settings, localization, editor.commands(),
+      [&](QtSettingsChangeKind kind) { changes.push_back(kind); });
+
+  auto *category_list =
+      dialog.findChild<QListWidget *>(QStringLiteral("settingsCategories"));
+  auto *table = dialog.findChild<QTableView *>(
+      QStringLiteral("settingsKeybindingsTable"));
+  auto *search = dialog.findChild<QLineEdit *>(
+      QStringLiteral("settingsKeybindingsSearch"));
+  auto *shortcut_filter = dialog.findChild<QLineEdit *>(
+      QStringLiteral("settingsKeybindingsShortcutFilter"));
+  auto *shortcut_clear = dialog.findChild<QPushButton *>(
+      QStringLiteral("settingsKeybindingsShortcutClear"));
+  auto *apply_button =
+      dialog.findChild<QPushButton *>(QStringLiteral("settingsApply"));
+  auto *locale_combo =
+      dialog.findChild<QComboBox *>(QStringLiteral("settingsLocale"));
+  auto *reset_action = dialog.findChild<QPushButton *>(
+      QStringLiteral("settingsKeybindingsResetAction"));
+  auto *reset_all = dialog.findChild<QPushButton *>(
+      QStringLiteral("settingsKeybindingsResetAll"));
+  ASSERT_NE(category_list, nullptr);
+  ASSERT_NE(table, nullptr);
+  ASSERT_NE(search, nullptr);
+  ASSERT_NE(shortcut_filter, nullptr);
+  ASSERT_NE(shortcut_clear, nullptr);
+  ASSERT_NE(table->model(), nullptr);
+  ASSERT_NE(apply_button, nullptr);
+  ASSERT_NE(locale_combo, nullptr);
+  EXPECT_EQ(dialog.findChild<QLabel *>(
+                QStringLiteral("settingsKeybindingsSaveHint")),
+            nullptr);
+  EXPECT_EQ(dialog.findChild<QLabel *>(
+                QStringLiteral("settingsKeybindingsRebindHint")),
+            nullptr);
+  EXPECT_EQ(dialog.findChild<QLabel *>(
+                QStringLiteral("settingsKeybindingsSelectedAction")),
+            nullptr);
+  EXPECT_EQ(dialog.findChild<QLabel *>(
+                QStringLiteral("settingsKeybindingsDefaultValue")),
+            nullptr);
+  EXPECT_EQ(dialog.findChild<QLabel *>(
+                QStringLiteral("settingsKeybindingsCurrentValue")),
+            nullptr);
+  EXPECT_EQ(dialog.findChild<QLabel *>(
+                QStringLiteral("settingsKeybindingsWhenValue")),
+            nullptr);
+  EXPECT_EQ(dialog.findChild<QListWidget *>(
+                QStringLiteral("settingsKeybindingsCurrentMappings")),
+            nullptr);
+  EXPECT_EQ(dialog.findChild<QPushButton *>(
+                QStringLiteral("settingsKeybindingsAdd")),
+            nullptr);
+  EXPECT_EQ(dialog.findChild<QPushButton *>(
+                QStringLiteral("settingsKeybindingsReplace")),
+            nullptr);
+  EXPECT_EQ(dialog.findChild<QPushButton *>(
+                QStringLiteral("settingsKeybindingsRemove")),
+            nullptr);
+  ASSERT_NE(reset_action, nullptr);
+  ASSERT_NE(reset_all, nullptr);
+
+  QListWidgetItem *keybindings_category = nullptr;
+  for (int row = 0; row < category_list->count(); ++row) {
+    if (category_list->item(row)->data(Qt::UserRole).toString() ==
+        QStringLiteral("keybindings")) {
+      keybindings_category = category_list->item(row);
+      category_list->setCurrentRow(row);
+      break;
+    }
+  }
+  ASSERT_NE(keybindings_category, nullptr);
+  EXPECT_EQ(keybindings_category->text(), QStringLiteral("Keybindings"));
+  EXPECT_TRUE(table->alternatingRowColors());
+  EXPECT_EQ(table->editTriggers(), QAbstractItemView::NoEditTriggers);
+  EXPECT_EQ(table->selectionBehavior(), QAbstractItemView::SelectRows);
+  EXPECT_EQ(table->selectionMode(), QAbstractItemView::SingleSelection);
+  EXPECT_LE(table->verticalHeader()->defaultSectionSize(), 20);
+  EXPECT_EQ(table->horizontalHeader()->sectionResizeMode(0),
+            QHeaderView::Interactive);
+  EXPECT_EQ(table->horizontalHeader()->sectionResizeMode(1),
+            QHeaderView::Interactive);
+  EXPECT_EQ(table->horizontalHeader()->sectionResizeMode(2),
+            QHeaderView::Interactive);
+  EXPECT_TRUE(table->horizontalHeader()->stretchLastSection());
+  EXPECT_EQ(table->horizontalHeader()->sortIndicatorSection(), 0);
+  EXPECT_EQ(table->horizontalHeader()->sortIndicatorOrder(),
+            Qt::AscendingOrder);
+  EXPECT_TRUE(shortcut_filter->isReadOnly());
+
+  QAbstractItemModel *model = table->model();
+  ASSERT_EQ(model->columnCount(), 3);
+  EXPECT_EQ(model->headerData(0, Qt::Horizontal).toString(),
+            QStringLiteral("Command Name"));
+  EXPECT_EQ(model->headerData(1, Qt::Horizontal).toString(),
+            QStringLiteral("Context"));
+  EXPECT_EQ(model->headerData(2, Qt::Horizontal).toString(),
+            QStringLiteral("Input Mapping"));
+
+  const std::vector<QuaderKeybindingCatalogEntry> catalog =
+      editor.commands().keybinding_catalog();
+  ASSERT_EQ(model->rowCount(), static_cast<int>(catalog.size()));
+  std::multiset<std::string> expected_rows;
+  for (const QuaderKeybindingCatalogEntry &entry : catalog) {
+    expected_rows.insert(entry.action_id + "|" +
+                         (entry.shortcut.empty() ? "Unassigned"
+                                                 : entry.shortcut));
+  }
+  std::multiset<std::string> actual_rows;
+  for (int row = 0; row < model->rowCount(); ++row) {
+    const QModelIndex command_index = model->index(row, 0);
+    const QModelIndex context_index = model->index(row, 1);
+    const QModelIndex mapping_index = model->index(row, 2);
+    const std::string action_id =
+        model->data(command_index, Qt::UserRole).toString().toStdString();
+    const std::string mapping =
+        model->data(mapping_index, Qt::DisplayRole).toString().toStdString();
+    actual_rows.insert(action_id + "|" + mapping);
+    EXPECT_FALSE(model->data(command_index).toString().isEmpty()) << action_id;
+    EXPECT_FALSE(model->data(context_index).toString().isEmpty()) << action_id;
+    EXPECT_FALSE(model->data(context_index, Qt::ToolTipRole).isValid())
+        << action_id;
+    EXPECT_EQ(model->data(context_index, Qt::UserRole).toString(),
+              QString::fromStdString(action_id));
+    EXPECT_EQ(model->data(mapping_index, Qt::UserRole).toString(),
+              QString::fromStdString(action_id));
+  }
+  EXPECT_EQ(actual_rows, expected_rows);
+
+  const auto expect_column_order = [&](int column, Qt::SortOrder order) {
+    for (int row = 1; row < model->rowCount(); ++row) {
+      const QString previous = model->data(model->index(row - 1, column)).toString();
+      const QString current = model->data(model->index(row, column)).toString();
+      const int compared =
+          expected_natural_numeric_compare(previous, current);
+      if (order == Qt::AscendingOrder) {
+        EXPECT_LE(compared, 0) << column << ":" << row;
+      } else {
+        EXPECT_GE(compared, 0) << column << ":" << row;
+      }
+    }
+  };
+  expect_column_order(0, Qt::AscendingOrder);
+  for (int column = 0; column < model->columnCount(); ++column) {
+    table->sortByColumn(column, Qt::DescendingOrder);
+    expect_column_order(column, Qt::DescendingOrder);
+    table->sortByColumn(column, Qt::AscendingOrder);
+    expect_column_order(column, Qt::AscendingOrder);
+  }
+  table->sortByColumn(0, Qt::AscendingOrder);
+
+  QStringList grid_size_labels;
+  for (int row = 0; row < model->rowCount(); ++row) {
+    const QString label = model->data(model->index(row, 0)).toString();
+    if (label.startsWith(QStringLiteral("Set Grid Size to "))) {
+      grid_size_labels.push_back(label);
+    }
+  }
+  EXPECT_EQ(grid_size_labels,
+            QStringList({QStringLiteral("Set Grid Size to 1"),
+                         QStringLiteral("Set Grid Size to 2"),
+                         QStringLiteral("Set Grid Size to 4"),
+                         QStringLiteral("Set Grid Size to 8"),
+                         QStringLiteral("Set Grid Size to 16"),
+                         QStringLiteral("Set Grid Size to 32 (Default)"),
+                         QStringLiteral("Set Grid Size to 64"),
+                         QStringLiteral("Set Grid Size to 128"),
+                         QStringLiteral("Set Grid Size to 256"),
+                         QStringLiteral("Set Grid Size to 512")}));
+
+  const auto find_row = [&](std::string_view target_id,
+                            std::string_view shortcut) {
+    for (int row = 0; row < model->rowCount(); ++row) {
+      if (model->data(model->index(row, 0), Qt::UserRole).toString() ==
+              QString::fromUtf8(target_id.data(),
+                                static_cast<qsizetype>(target_id.size())) &&
+          model->data(model->index(row, 2)).toString() ==
+              QString::fromUtf8(shortcut.data(),
+                                static_cast<qsizetype>(shortcut.size()))) {
+        return row;
+      }
+    }
+    return -1;
+  };
+  EXPECT_GE(find_row(quader_command::kEditUndo.string(), "Ctrl+Alt+Z"), 0);
+  EXPECT_GE(
+      find_row(quader_command::kEditRedo.string(), "Ctrl+Shift+Z"), 0);
+  EXPECT_GE(find_row(quader_command::kDeleteSelection.string(), "Delete"),
+            0);
+  EXPECT_GE(find_row("viewport.navigation.orbit", "MiddleMouseDrag"), 0);
+  EXPECT_GE(
+      find_row(editor.commands().keybinding_target_id_for_selection_mode(
+                   QuaderSelectionMode::Vertex),
+               "1"),
+      0);
+  EXPECT_GE(find_row("tools.finalize", "Space"), 0);
+  EXPECT_GE(find_row(quader_command::kEditCreateInstance.string(),
+                     "Unassigned"),
+            0);
+
+  const int finalize_row = find_row("tools.finalize", "Space");
+  ASSERT_GE(finalize_row, 0);
+  EXPECT_EQ(model->data(model->index(finalize_row, 0)).toString(),
+            QStringLiteral("Finalize Tool"));
+  EXPECT_EQ(model->data(model->index(finalize_row, 1)).toString(),
+            QStringLiteral("Viewport › Modal Tool"));
+
+  search->setText(QStringLiteral("Redo"));
+  QCoreApplication::processEvents();
+  ASSERT_EQ(model->rowCount(), 1);
+  for (int row = 0; row < model->rowCount(); ++row) {
+    EXPECT_TRUE(model->data(model->index(row, 0)).toString().contains(
+        QStringLiteral("Redo"), Qt::CaseInsensitive));
+  }
+  EXPECT_FALSE(apply_button->isEnabled());
+  EXPECT_TRUE(changes.empty());
+
+  search->clear();
+  QKeyEvent shortcut_event(QEvent::KeyPress, Qt::Key_Z,
+                           Qt::ControlModifier | Qt::ShiftModifier);
+  QApplication::sendEvent(shortcut_filter, &shortcut_event);
+  QCoreApplication::processEvents();
+  EXPECT_EQ(shortcut_filter->text(), QStringLiteral("Ctrl+Shift+Z"));
+  ASSERT_EQ(model->rowCount(), 1);
+  EXPECT_TRUE(model->data(model->index(0, 2)).toString().contains(
+      QStringLiteral("Ctrl+Shift+Z")));
+  EXPECT_FALSE(apply_button->isEnabled());
+  EXPECT_TRUE(changes.empty());
+
+  shortcut_clear->click();
+  QCoreApplication::processEvents();
+  EXPECT_TRUE(shortcut_filter->text().isEmpty());
+  EXPECT_EQ(model->rowCount(), static_cast<int>(catalog.size()));
+
+  dialog.show();
+  QCoreApplication::processEvents();
+  table->selectRow(0);
+  QCoreApplication::processEvents();
+  EXPECT_TRUE(reset_action->isEnabled());
+  EXPECT_TRUE(reset_all->isEnabled());
+  EXPECT_FALSE(apply_button->isEnabled());
+  EXPECT_TRUE(changes.empty());
+
+  const int italian_index = locale_combo->findData(QStringLiteral("it-IT"));
+  ASSERT_GE(italian_index, 0);
+  locale_combo->setCurrentIndex(italian_index);
+  ASSERT_TRUE(apply_button->isEnabled());
+  apply_button->click();
+  QCoreApplication::processEvents();
+  EXPECT_EQ(keybindings_category->text(),
+            QStringLiteral("Associazioni tasti"));
+  EXPECT_EQ(model->headerData(0, Qt::Horizontal).toString(),
+            QStringLiteral("Nome comando"));
+  EXPECT_EQ(model->headerData(1, Qt::Horizontal).toString(),
+            QStringLiteral("Contesto"));
+  EXPECT_EQ(model->headerData(2, Qt::Horizontal).toString(),
+            QStringLiteral("Mappatura input"));
+  const int italian_finalize_row = find_row("tools.finalize", "Space");
+  ASSERT_GE(italian_finalize_row, 0);
+  EXPECT_EQ(model->data(model->index(italian_finalize_row, 1)).toString(),
+            QStringLiteral("Viewport › Strumento modale"));
+  std::filesystem::remove(keybindings, ignored);
+}
+
+TEST(QtSettingsDialogTests,
+     KeybindingEditorCapturesMixedSequenceAndPersistsImmediately) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-settings-keybinding-edit-tests";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+
+  SceneSession session;
+  QuaderEditorApi editor(
+      QuaderApiSessionInternalAccess::from_scene_session(session));
+  const std::filesystem::path keybindings =
+      std::filesystem::temp_directory_path() /
+      "quader-settings-keybinding-editor.json";
+  std::error_code ignored;
+  std::filesystem::remove(keybindings, ignored);
+  ASSERT_TRUE(editor.commands().set_keybinding_storage_path(keybindings).ok());
+
+  UISettings ui_settings = UISettings::defaults();
+  ViewportSettings viewport_settings = ViewportSettings::defaults();
+  LocalizationService localization = loaded_localization();
+  std::vector<QtSettingsChangeKind> changes;
+  QtSettingsDialog dialog;
+  dialog.setAttribute(Qt::WA_DontShowOnScreen, true);
+  dialog.set_context(
+      ui_settings, viewport_settings, localization, editor.commands(),
+      [&](QtSettingsChangeKind kind) { changes.push_back(kind); });
+  dialog.show();
+  QCoreApplication::processEvents();
+
+  auto *table = dialog.findChild<QTableView *>(
+      QStringLiteral("settingsKeybindingsTable"));
+  auto *reset_action = dialog.findChild<QPushButton *>(
+      QStringLiteral("settingsKeybindingsResetAction"));
+  auto *apply =
+      dialog.findChild<QPushButton *>(QStringLiteral("settingsApply"));
+  ASSERT_NE(table, nullptr);
+  ASSERT_NE(table->model(), nullptr);
+  ASSERT_NE(reset_action, nullptr);
+  ASSERT_NE(apply, nullptr);
+
+  int undo_row = -1;
+  for (int row = 0; row < table->model()->rowCount(); ++row) {
+    if (table->model()
+            ->data(table->model()->index(row, 0), Qt::UserRole)
+            .toString() ==
+        QString::fromUtf8(quader_command::kEditUndo.string().data(),
+                          static_cast<qsizetype>(
+                              quader_command::kEditUndo.string().size()))) {
+      undo_row = row;
+      break;
+    }
+  }
+  ASSERT_GE(undo_row, 0);
+  table->selectRow(undo_row);
+  QCoreApplication::processEvents();
+
+  QTimer::singleShot(0, &dialog, []() {
+    QWidget *modal = QApplication::activeModalWidget();
+    ASSERT_NE(modal, nullptr);
+    auto *recorder = modal->findChild<QLineEdit *>(
+        QStringLiteral("settingsKeybindingCaptureRecorder"));
+    auto *use = modal->findChild<QPushButton *>(
+        QStringLiteral("settingsKeybindingCaptureUse"));
+    auto *clear = modal->findChild<QPushButton *>(
+        QStringLiteral("settingsKeybindingCaptureClear"));
+    auto *unassign = modal->findChild<QPushButton *>(
+        QStringLiteral("settingsKeybindingCaptureUnassign"));
+    ASSERT_NE(recorder, nullptr);
+    ASSERT_NE(use, nullptr);
+    ASSERT_NE(clear, nullptr);
+    ASSERT_NE(unassign, nullptr);
+    EXPECT_EQ(clear->text(), QStringLiteral("Clear Capture"));
+    EXPECT_TRUE(unassign->isEnabled());
+
+    send_key(*recorder, Qt::Key_K, Qt::ControlModifier);
+    EXPECT_TRUE(clear->isEnabled());
+    clear->click();
+    EXPECT_TRUE(recorder->text().isEmpty());
+    EXPECT_FALSE(use->isEnabled());
+    send_key(*recorder, Qt::Key_K, Qt::ControlModifier);
+    send_key(*recorder, Qt::Key_Escape);
+    send_key(*recorder, Qt::Key_Return);
+    send_key(*recorder, Qt::Key_Tab);
+    send_key(*recorder, Qt::Key_Backspace);
+    send_key(*recorder, Qt::Key_Delete);
+    QWheelEvent wheel(QPointF{12.0, 12.0}, QPointF{112.0, 112.0},
+                      QPoint{}, QPoint{0, 120}, Qt::NoButton,
+                      Qt::NoModifier, Qt::NoScrollPhase, false);
+    QCoreApplication::sendEvent(recorder, &wheel);
+
+    QMouseEvent double_click(
+        QEvent::MouseButtonDblClick, QPointF{12.0, 12.0},
+        QPointF{112.0, 112.0}, Qt::ExtraButton4, Qt::ExtraButton4,
+        Qt::NoModifier);
+    QCoreApplication::sendEvent(recorder, &double_click);
+
+    QMouseEvent press(QEvent::MouseButtonPress, QPointF{8.0, 8.0},
+                      QPointF{108.0, 108.0}, Qt::ExtraButton3,
+                      Qt::ExtraButton3, Qt::NoModifier);
+    QMouseEvent move(QEvent::MouseMove, QPointF{80.0, 8.0},
+                     QPointF{180.0, 108.0}, Qt::NoButton,
+                     Qt::ExtraButton3, Qt::NoModifier);
+    QMouseEvent release(QEvent::MouseButtonRelease, QPointF{80.0, 8.0},
+                        QPointF{180.0, 108.0}, Qt::ExtraButton3,
+                        Qt::NoButton, Qt::NoModifier);
+    QCoreApplication::sendEvent(recorder, &press);
+    QCoreApplication::sendEvent(recorder, &move);
+    QCoreApplication::sendEvent(recorder, &release);
+
+    QMouseEvent click_press(QEvent::MouseButtonPress, QPointF{16.0, 16.0},
+                            QPointF{116.0, 116.0}, Qt::MiddleButton,
+                            Qt::MiddleButton, Qt::AltModifier);
+    QMouseEvent click_release(QEvent::MouseButtonRelease,
+                              QPointF{16.0, 16.0}, QPointF{116.0, 116.0},
+                              Qt::MiddleButton, Qt::NoButton,
+                              Qt::AltModifier);
+    QCoreApplication::sendEvent(recorder, &click_press);
+    QCoreApplication::sendEvent(recorder, &click_release);
+    EXPECT_FALSE(use->isEnabled());
+    send_key(*recorder, Qt::Key_L);
+    EXPECT_TRUE(use->isEnabled());
+    EXPECT_TRUE(recorder->text().contains(
+        QStringLiteral("Alt+MiddleMouseClick L")));
+
+    QMouseEvent left_click_press(
+        QEvent::MouseButtonPress, QPointF{17.0, 17.0},
+        QPointF{117.0, 117.0}, Qt::LeftButton, Qt::LeftButton,
+        Qt::NoModifier);
+    QMouseEvent left_click_release(
+        QEvent::MouseButtonRelease, QPointF{17.0, 17.0},
+        QPointF{117.0, 117.0}, Qt::LeftButton, Qt::NoButton,
+        Qt::NoModifier);
+    QMouseEvent right_click_press(
+        QEvent::MouseButtonPress, QPointF{18.0, 18.0},
+        QPointF{118.0, 118.0}, Qt::RightButton, Qt::RightButton,
+        Qt::NoModifier);
+    QMouseEvent right_click_release(
+        QEvent::MouseButtonRelease, QPointF{18.0, 18.0},
+        QPointF{118.0, 118.0}, Qt::RightButton, Qt::NoButton,
+        Qt::NoModifier);
+    QCoreApplication::sendEvent(recorder, &left_click_press);
+    QCoreApplication::sendEvent(recorder, &left_click_release);
+    QCoreApplication::sendEvent(recorder, &right_click_press);
+    QCoreApplication::sendEvent(recorder, &right_click_release);
+    EXPECT_FALSE(use->isEnabled());
+    QTimer::singleShot(
+        QApplication::doubleClickInterval() + 50, use, [recorder, use]() {
+          EXPECT_TRUE(recorder->text().contains(
+              QStringLiteral("LeftMouseClick RightMouseClick")));
+          EXPECT_TRUE(use->isEnabled());
+          QMouseEvent held_press(
+              QEvent::MouseButtonPress, QPointF{20.0, 20.0},
+              QPointF{120.0, 120.0}, Qt::RightButton, Qt::RightButton,
+              Qt::ShiftModifier);
+          QCoreApplication::sendEvent(recorder, &held_press);
+          QTimer::singleShot(
+              QApplication::doubleClickInterval() + 50, use,
+              [recorder, use]() {
+                QMouseEvent held_release(
+                    QEvent::MouseButtonRelease, QPointF{20.0, 20.0},
+                    QPointF{120.0, 120.0}, Qt::RightButton, Qt::NoButton,
+                    Qt::ShiftModifier);
+                QCoreApplication::sendEvent(recorder, &held_release);
+                EXPECT_TRUE(recorder->text().contains(
+                    QStringLiteral("Shift+RightMouse")));
+                use->click();
+              });
+        });
+  });
+  send_key(*table, Qt::Key_Return);
+  QCoreApplication::processEvents();
+
+  constexpr std::string_view kCaptured =
+      "Ctrl+K Escape Enter Tab Backspace Delete WheelUp Mouse7DoubleClick "
+      "Mouse6Drag Alt+MiddleMouseClick L LeftMouseClick RightMouseClick "
+      "Shift+RightMouse";
+  const auto catalog = editor.commands().keybinding_catalog();
+  const QuaderKeybindingCatalogEntry *undo = find_keybinding_catalog_entry(
+      catalog, quader_command::kEditUndo.string());
+  ASSERT_NE(undo, nullptr);
+  EXPECT_EQ(undo->shortcut, std::string(kCaptured));
+  EXPECT_TRUE(undo->customized);
+  EXPECT_EQ(count_changes(changes, QtSettingsChangeKind::KeybindingsCommit),
+            1u);
+  EXPECT_FALSE(apply->isEnabled());
+  EXPECT_NE(read_text_file(keybindings).find(std::string(kCaptured)),
+            std::string::npos);
+
+  QTimer::singleShot(0, &dialog, []() {
+    QWidget *capture = QApplication::activeModalWidget();
+    ASSERT_NE(capture, nullptr);
+    auto *unassign = capture->findChild<QPushButton *>(
+        QStringLiteral("settingsKeybindingCaptureUnassign"));
+    ASSERT_NE(unassign, nullptr);
+    EXPECT_TRUE(unassign->isEnabled());
+    unassign->click();
+  });
+  send_key(*table, Qt::Key_Return);
+  QCoreApplication::processEvents();
+  const auto reset_catalog = editor.commands().keybinding_catalog();
+  undo = find_keybinding_catalog_entry(reset_catalog,
+                                       quader_command::kEditUndo.string());
+  ASSERT_NE(undo, nullptr);
+  EXPECT_TRUE(undo->shortcut.empty());
+  EXPECT_TRUE(undo->customized);
+  EXPECT_TRUE(undo->unassigned);
+  EXPECT_EQ(count_changes(changes, QtSettingsChangeKind::KeybindingsCommit),
+            2u);
+
+  QTimer::singleShot(0, &dialog, []() {
+    QWidget *capture = QApplication::activeModalWidget();
+    ASSERT_NE(capture, nullptr);
+    auto *unassign = capture->findChild<QPushButton *>(
+        QStringLiteral("settingsKeybindingCaptureUnassign"));
+    ASSERT_NE(unassign, nullptr);
+    EXPECT_FALSE(unassign->isEnabled());
+    qobject_cast<QDialog *>(capture)->reject();
+  });
+  send_key(*table, Qt::Key_Return);
+
+  reset_action->click();
+  QCoreApplication::processEvents();
+  const auto restored_catalog = editor.commands().keybinding_catalog();
+  undo = find_keybinding_catalog_entry(restored_catalog,
+                                       quader_command::kEditUndo.string());
+  ASSERT_NE(undo, nullptr);
+  EXPECT_EQ(undo->shortcut, undo->default_shortcut);
+  EXPECT_FALSE(undo->customized);
+  EXPECT_EQ(count_changes(changes, QtSettingsChangeKind::KeybindingsCommit),
+            3u);
+
+  dialog.reject();
+  std::filesystem::remove(keybindings, ignored);
+}
+
+TEST(QtSettingsDialogTests,
+     KeybindingConflictCancelReturnsToCaptureAndReplaceIsImmediate) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-settings-keybinding-conflict-tests";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+
+  SceneSession session;
+  QuaderEditorApi editor(
+      QuaderApiSessionInternalAccess::from_scene_session(session));
+  const std::filesystem::path keybindings =
+      std::filesystem::temp_directory_path() /
+      "quader-settings-keybinding-conflicts.json";
+  std::error_code ignored;
+  std::filesystem::remove(keybindings, ignored);
+  ASSERT_TRUE(editor.commands().set_keybinding_storage_path(keybindings).ok());
+
+  UISettings ui_settings = UISettings::defaults();
+  ViewportSettings viewport_settings = ViewportSettings::defaults();
+  LocalizationService localization = loaded_localization();
+  std::vector<QtSettingsChangeKind> changes;
+  QtSettingsDialog dialog;
+  dialog.setAttribute(Qt::WA_DontShowOnScreen, true);
+  dialog.set_context(
+      ui_settings, viewport_settings, localization, editor.commands(),
+      [&](QtSettingsChangeKind kind) { changes.push_back(kind); });
+  dialog.show();
+  QCoreApplication::processEvents();
+
+  auto *table = dialog.findChild<QTableView *>(
+      QStringLiteral("settingsKeybindingsTable"));
+  auto *reset_all = dialog.findChild<QPushButton *>(
+      QStringLiteral("settingsKeybindingsResetAll"));
+  ASSERT_NE(table, nullptr);
+  ASSERT_NE(table->model(), nullptr);
+  ASSERT_NE(reset_all, nullptr);
+
+  const std::string delete_target =
+      std::string(quader_command::kDeleteSelection.string());
+  const std::string move_target =
+      editor.commands().command_id_for_tool_activation("move");
+  int delete_row = -1;
+  for (int row = 0; row < table->model()->rowCount(); ++row) {
+    if (table->model()
+            ->data(table->model()->index(row, 0), Qt::UserRole)
+            .toString() == QString::fromStdString(delete_target)) {
+      delete_row = row;
+      break;
+    }
+  }
+  ASSERT_GE(delete_row, 0);
+  table->selectRow(delete_row);
+  QCoreApplication::processEvents();
+
+  EXPECT_TRUE(capture_keybinding_and_choose_conflict(
+      dialog, *table, QStringLiteral("settingsKeybindingConflictCancel"),
+      QStringLiteral("Activate Move Tool"), true));
+  auto catalog = editor.commands().keybinding_catalog();
+  const QuaderKeybindingCatalogEntry *deleted =
+      find_keybinding_catalog_entry(catalog, delete_target);
+  ASSERT_NE(deleted, nullptr);
+  EXPECT_NE(deleted->shortcut, "W");
+  EXPECT_EQ(count_changes(changes, QtSettingsChangeKind::KeybindingsCommit),
+            0u);
+
+  EXPECT_TRUE(capture_keybinding_and_choose_conflict(
+      dialog, *table, QStringLiteral("settingsKeybindingConflictReplace"),
+      QStringLiteral("Activate Move Tool"), false));
+  catalog = editor.commands().keybinding_catalog();
+  deleted = find_keybinding_catalog_entry(catalog, delete_target);
+  const QuaderKeybindingCatalogEntry *move =
+      find_keybinding_catalog_entry(catalog, move_target);
+  ASSERT_NE(deleted, nullptr);
+  ASSERT_NE(move, nullptr);
+  EXPECT_EQ(deleted->shortcut, "W");
+  EXPECT_TRUE(move->shortcut.empty());
+  EXPECT_TRUE(move->customized);
+  EXPECT_TRUE(move->unassigned);
+  EXPECT_EQ(count_changes(changes, QtSettingsChangeKind::KeybindingsCommit),
+            1u);
+
+  EXPECT_TRUE(choose_reset_all_confirmation(dialog, *reset_all,
+      QStringLiteral("settingsKeybindingResetAllCancel")));
+  EXPECT_EQ(count_changes(changes, QtSettingsChangeKind::KeybindingsCommit),
+            1u);
+  catalog = editor.commands().keybinding_catalog();
+  deleted = find_keybinding_catalog_entry(catalog, delete_target);
+  ASSERT_NE(deleted, nullptr);
+  EXPECT_EQ(deleted->shortcut, "W");
+
+  EXPECT_TRUE(choose_reset_all_confirmation(dialog, *reset_all,
+      QStringLiteral("settingsKeybindingResetAllConfirm")));
+  EXPECT_EQ(count_changes(changes, QtSettingsChangeKind::KeybindingsCommit),
+            2u);
+  catalog = editor.commands().keybinding_catalog();
+  deleted = find_keybinding_catalog_entry(catalog, delete_target);
+  move = find_keybinding_catalog_entry(catalog, move_target);
+  ASSERT_NE(deleted, nullptr);
+  ASSERT_NE(move, nullptr);
+  EXPECT_EQ(deleted->shortcut, deleted->default_shortcut);
+  EXPECT_EQ(move->shortcut, move->default_shortcut);
+
+  dialog.reject();
+  std::filesystem::remove(keybindings, ignored);
+}
+
+TEST(QtSettingsDialogTests,
+     KeybindingWriteFailureRetainsSelectionAndCapturedSequence) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-settings-keybinding-failure-tests";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+
+  const std::filesystem::path blocker =
+      std::filesystem::temp_directory_path() /
+      "quader-settings-keybinding-write-blocker";
+  std::error_code ignored;
+  std::filesystem::remove_all(blocker, ignored);
+  {
+    std::ofstream file(blocker);
+    file << "not a directory";
+  }
+
+  SceneSession session;
+  QuaderEditorApi editor(
+      QuaderApiSessionInternalAccess::from_scene_session(session));
+  ASSERT_TRUE(editor.commands()
+                  .set_keybinding_storage_path(blocker / "keybindings.json")
+                  .ok());
+  UISettings ui_settings = UISettings::defaults();
+  ViewportSettings viewport_settings = ViewportSettings::defaults();
+  LocalizationService localization = loaded_localization();
+  std::vector<QtSettingsChangeKind> changes;
+  QtSettingsDialog dialog;
+  dialog.setAttribute(Qt::WA_DontShowOnScreen, true);
+  dialog.set_context(
+      ui_settings, viewport_settings, localization, editor.commands(),
+      [&](QtSettingsChangeKind kind) { changes.push_back(kind); });
+  dialog.show();
+  QCoreApplication::processEvents();
+
+  auto *table = dialog.findChild<QTableView *>(
+      QStringLiteral("settingsKeybindingsTable"));
+  ASSERT_NE(table, nullptr);
+  ASSERT_NE(table->model(), nullptr);
+  int undo_row = -1;
+  for (int row = 0; row < table->model()->rowCount(); ++row) {
+    if (table->model()
+            ->data(table->model()->index(row, 0), Qt::UserRole)
+            .toString() ==
+        QString::fromUtf8(quader_command::kEditUndo.string().data(),
+                          static_cast<qsizetype>(
+                              quader_command::kEditUndo.string().size()))) {
+      undo_row = row;
+      break;
+    }
+  }
+  ASSERT_GE(undo_row, 0);
+  table->selectRow(undo_row);
+  QCoreApplication::processEvents();
+
+  bool error_shown = false;
+  bool capture_preserved = false;
+  QTimer::singleShot(0, &dialog, [&]() {
+    QWidget *capture = QApplication::activeModalWidget();
+    ASSERT_NE(capture, nullptr);
+    auto *recorder = capture->findChild<QLineEdit *>(
+        QStringLiteral("settingsKeybindingCaptureRecorder"));
+    auto *use = capture->findChild<QPushButton *>(
+        QStringLiteral("settingsKeybindingCaptureUse"));
+    ASSERT_NE(recorder, nullptr);
+    ASSERT_NE(use, nullptr);
+    send_key(*recorder, Qt::Key_U,
+             Qt::ControlModifier | Qt::AltModifier);
+    QTimer::singleShot(0, &dialog, [&]() {
+      auto *error = qobject_cast<QMessageBox *>(
+          QApplication::activeModalWidget());
+      ASSERT_NE(error, nullptr);
+      EXPECT_EQ(error->objectName(),
+                QStringLiteral("settingsKeybindingErrorDialog"));
+      EXPECT_TRUE(error->text().startsWith(
+          QStringLiteral("Unable to save the keybinding change.")));
+      error_shown = true;
+      QTimer::singleShot(0, &dialog, [&]() {
+        QWidget *reopened = QApplication::activeModalWidget();
+        ASSERT_NE(reopened, nullptr);
+        EXPECT_EQ(reopened->objectName(),
+                  QStringLiteral("settingsKeybindingCaptureDialog"));
+        auto *preserved = reopened->findChild<QLineEdit *>(
+            QStringLiteral("settingsKeybindingCaptureRecorder"));
+        ASSERT_NE(preserved, nullptr);
+        EXPECT_EQ(preserved->text(), QStringLiteral("Ctrl+Alt+U"));
+        capture_preserved = true;
+        qobject_cast<QDialog *>(reopened)->reject();
+      });
+      error->accept();
+    });
+    use->click();
+  });
+  send_key(*table, Qt::Key_Return);
+
+  EXPECT_TRUE(error_shown);
+  EXPECT_TRUE(capture_preserved);
+  EXPECT_TRUE(table->selectionModel()->hasSelection());
+  EXPECT_EQ(count_changes(changes, QtSettingsChangeKind::KeybindingsCommit),
+            0u);
+  const auto catalog = editor.commands().keybinding_catalog();
+  const QuaderKeybindingCatalogEntry *undo = find_keybinding_catalog_entry(
+      catalog, quader_command::kEditUndo.string());
+  ASSERT_NE(undo, nullptr);
+  EXPECT_NE(undo->shortcut, "Ctrl+Alt+U");
+
+  dialog.reject();
+  std::filesystem::remove(blocker, ignored);
 }
 
 TEST(InspectorPanelTests,
@@ -641,6 +1613,12 @@ TEST(QtMainMenuTests, ToolActionsUseEffectiveKeybindingsAndCommandRouting) {
                        .max = {1.0f, 1.0f, 1.0f}},
           "Menu Pivot Box");
   ASSERT_TRUE(box.ok()) << box.error_message();
+  const QuaderApiResult<QuaderModelingObjectRef> baseline_box =
+      editor.modeling().create_box(
+          QuaderBounds{.min = {3.0f, -1.0f, -1.0f},
+                       .max = {5.0f, 1.0f, 1.0f}},
+          "Menu Local Visibility Baseline");
+  ASSERT_TRUE(baseline_box.ok()) << baseline_box.error_message();
   ASSERT_TRUE(editor.selection().select_object(box.value()).ok());
 
   ViewportSettings viewport_settings = ViewportSettings::defaults();
@@ -668,6 +1646,19 @@ TEST(QtMainMenuTests, ToolActionsUseEffectiveKeybindingsAndCommandRouting) {
       menu_bar.findChild<QAction *>(QStringLiteral("tool_pivot"));
   ASSERT_NE(pivot_action, nullptr);
   EXPECT_TRUE(pivot_action->text().contains(QStringLiteral("\tP")));
+  auto *two_vertical = menu_bar.findChild<QAction *>(
+      QStringLiteral("layout_two_vertical"));
+  ASSERT_NE(two_vertical, nullptr);
+  EXPECT_TRUE(two_vertical->text().contains(QStringLiteral("\tCtrl+2")));
+  auto *local_visibility_action = menu_bar.findChild<QAction *>(
+      QStringLiteral("command_viewport_toggle_local_visibility"));
+  ASSERT_NE(local_visibility_action, nullptr);
+  EXPECT_TRUE(local_visibility_action->isCheckable());
+  EXPECT_FALSE(local_visibility_action->isChecked());
+  EXPECT_TRUE(local_visibility_action->isEnabled());
+  EXPECT_TRUE(local_visibility_action->shortcut().isEmpty());
+  EXPECT_EQ(local_visibility_action->text(),
+            QStringLiteral("Toggle Local Visibility\tBackslash"));
   auto *material_browser_action = menu_bar.findChild<QAction *>(
       QStringLiteral("action_material_browser"));
   ASSERT_NE(material_browser_action, nullptr);
@@ -695,15 +1686,48 @@ TEST(QtMainMenuTests, ToolActionsUseEffectiveKeybindingsAndCommandRouting) {
                   .set_shortcut(quader_command::kToolsActivatePivot,
                                 "Ctrl+Alt+P")
                   .ok());
+  ASSERT_TRUE(editor.preferences()
+                  .set_shortcut(quader_command::kViewportLayoutTwoVertical,
+                                "Ctrl+Alt+2")
+                  .ok());
   menu.refresh();
   EXPECT_TRUE(
       pivot_action->text().contains(QStringLiteral("\tCtrl+Alt+P")));
+  EXPECT_TRUE(
+      two_vertical->text().contains(QStringLiteral("\tCtrl+Alt+2")));
   EXPECT_FALSE(editor.commands().last_status().has_value());
 
   pivot_action->trigger();
   ASSERT_TRUE(editor.commands().last_status().has_value());
   EXPECT_TRUE(editor.commands().last_status()->ok());
   EXPECT_EQ(editor.tools().active_tool(), "pivot");
+
+  two_vertical->trigger();
+  EXPECT_EQ(editor.viewports().layout(), ViewportLayoutId::TwoVertical);
+
+  ASSERT_TRUE(editor.tools().activate("select").ok());
+  local_visibility_action->trigger();
+  EXPECT_TRUE(editor.viewports().local_visibility_active());
+  EXPECT_TRUE(local_visibility_action->isChecked());
+  local_visibility_action->trigger();
+  EXPECT_FALSE(editor.viewports().local_visibility_active());
+  EXPECT_FALSE(local_visibility_action->isChecked());
+
+  ASSERT_TRUE(editor.commands()
+                  .execute(
+                      quader_command::kViewportToggleLocalVisibility)
+                  .ok());
+  EXPECT_TRUE(editor.viewports().local_visibility_active());
+  EXPECT_FALSE(local_visibility_action->isChecked());
+  auto *view_menu =
+      menu_bar.findChild<QMenu *>(QStringLiteral("menu_view"));
+  ASSERT_NE(view_menu, nullptr);
+  ASSERT_TRUE(QMetaObject::invokeMethod(view_menu, "aboutToShow",
+                                        Qt::DirectConnection));
+  EXPECT_TRUE(local_visibility_action->isChecked());
+  local_visibility_action->trigger();
+  EXPECT_FALSE(editor.viewports().local_visibility_active());
+  EXPECT_FALSE(local_visibility_action->isChecked());
 
   std::filesystem::remove(keybindings);
 }

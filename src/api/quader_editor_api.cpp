@@ -156,6 +156,8 @@ public:
                             activation_generation);
       QuaderViewportApiRuntimeAccess::bind_scene_workspace(
           viewports, scene.viewport_workspace());
+      QuaderViewportApiRuntimeAccess::bind_scene_local_visibility(
+          viewports, scene.viewport_local_visibility());
       if (host_scene_binding_changed) {
         host_scene_binding_changed(session);
       }
@@ -250,7 +252,13 @@ QuaderSceneApi& QuaderEditorApi::scene() {
 }
 
 const QuaderSceneApi& QuaderEditorApi::scene() const {
-    return impl_->api.scene();
+  return impl_->api.scene();
+}
+
+QuaderLayersApi &QuaderEditorApi::layers() { return impl_->api.layers(); }
+
+const QuaderLayersApi &QuaderEditorApi::layers() const {
+  return impl_->api.layers();
 }
 
 QuaderModelingApi& QuaderEditorApi::modeling() {

@@ -8,6 +8,7 @@
 
 #include "core/types.hpp"
 #include "render/viewport_overlay_frame.hpp"
+#include "viewport/viewport_local_visibility.hpp"
 
 #include <cstdint>
 
@@ -28,6 +29,8 @@ struct ViewportInfoSceneStats {
 ViewportInfoSceneStats
 collect_viewport_info_scene_stats(const SceneDocument &document,
                                   const AssetRegistry &assets,
-                                  const ViewportOverlayCamera &camera);
+                                  const ViewportOverlayCamera &camera,
+                                  const ViewportLocalVisibilitySnapshot *
+                                      local_visibility = nullptr);
 
 } // namespace quader

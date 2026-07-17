@@ -198,23 +198,28 @@ void append_wire_edge(
 
 void emit_wireframe_edges(ViewportOverlayFrame &frame,
                           const std::unordered_map<WireEdgeKey, WireEdgeRecord,
-                                                   WireEdgeKeyHash> &edges) {
+                                                   WireEdgeKeyHash> &edges,
+                          ViewportOverlayLayer layer, std::uint32_t color,
+                          float width_pixels,
+                          ViewportOverlayStyleRole style_role) {
   for (const auto &[key, edge] : edges) {
     (void)key;
     frame.lines.push_back(ViewportOverlayLine{
-        .layer = ViewportOverlayLayer::WireframeXray,
+        .layer = layer,
         .start = edge.start,
         .end = edge.end,
-        .color = kOverlayWireframeXrayColor,
-        .width_pixels = 0.0f,
-        .style_role = ViewportOverlayStyleRole::WireframeBase,
+        .color = color,
+        .width_pixels = width_pixels,
+        .style_role = style_role,
         .source = ViewportOverlaySource::SceneWireframe,
     });
   }
 }
 
 bool append_authored_polygon_wireframe(
-    ViewportOverlayFrame &frame, const RenderOverlayMeshSnapshot &mesh) {
+    ViewportOverlayFrame &frame, const RenderOverlayMeshSnapshot &mesh,
+    ViewportOverlayLayer layer, std::uint32_t color, float width_pixels,
+    ViewportOverlayStyleRole style_role) {
   if (!mesh.has_authored_polygon_geometry()) {
     return false;
   }
@@ -247,12 +252,15 @@ bool append_authored_polygon_wireframe(
     return false;
   }
 
-  emit_wireframe_edges(frame, edges);
+  emit_wireframe_edges(frame, edges, layer, color, width_pixels, style_role);
   return true;
 }
 
 void append_triangle_mesh_wireframe(ViewportOverlayFrame &frame,
-                                    const RenderOverlayMeshSnapshot &mesh) {
+                                    const RenderOverlayMeshSnapshot &mesh,
+                                    ViewportOverlayLayer layer,
+                                    std::uint32_t color, float width_pixels,
+                                    ViewportOverlayStyleRole style_role) {
   std::unordered_map<WireEdgeKey, WireEdgeRecord, WireEdgeKeyHash> edges;
   edges.reserve(mesh.indices.size());
   auto append_triangle_edge = [&](std::uint32_t a, std::uint32_t b) {
@@ -269,7 +277,7 @@ void append_triangle_mesh_wireframe(ViewportOverlayFrame &frame,
     append_triangle_edge(mesh.indices[index + 1u], mesh.indices[index + 2u]);
     append_triangle_edge(mesh.indices[index + 2u], mesh.indices[index]);
   }
-  emit_wireframe_edges(frame, edges);
+  emit_wireframe_edges(frame, edges, layer, color, width_pixels, style_role);
 }
 
 void append_hierarchy_selection_wires(ViewportOverlayFrame &frame,
@@ -454,8 +462,21 @@ void append_scene_wireframe_overlay(ViewportOverlayFrame &frame,
   QDR_PROFILE_FUNCTION();
   for (const RenderOverlayMeshSnapshot &mesh : snapshot.meshes) {
     QDR_PROFILE_SCOPE("Viewport scene wireframe entity");
-    if (!append_authored_polygon_wireframe(frame, mesh)) {
-      append_triangle_mesh_wireframe(frame, mesh);
+    const ViewportOverlayLayer layer =
+        mesh.selected ? ViewportOverlayLayer::SelectedEdge
+                      : ViewportOverlayLayer::WireframeXray;
+    const std::uint32_t color =
+        mesh.selected ? snapshot.style.selection_wire_color
+                      : mesh.wireframe_color;
+    const float width_pixels =
+        mesh.selected ? snapshot.style.selection_edge_line_width_pixels : 0.0f;
+    const ViewportOverlayStyleRole style_role =
+        mesh.selected ? ViewportOverlayStyleRole::SelectionWire
+                      : ViewportOverlayStyleRole::WireframeBase;
+    if (!append_authored_polygon_wireframe(frame, mesh, layer, color,
+                                           width_pixels, style_role)) {
+      append_triangle_mesh_wireframe(frame, mesh, layer, color, width_pixels,
+                                     style_role);
     }
   }
 }
@@ -472,7 +493,7 @@ bool wireframe_suppresses_triangle_layer(ViewportOverlayLayer layer) {
          layer == ViewportOverlayLayer::HoverFace;
 }
 
-bool persistent_object_selection_triangle(
+bool persistent_object_selection_fill_triangle(
     const ViewportOverlayTriangle &triangle) {
   if (triangle.source != ViewportOverlaySource::Selection ||
       triangle.element.object_id < 0) {
@@ -481,15 +502,6 @@ bool persistent_object_selection_triangle(
   return triangle.layer == ViewportOverlayLayer::SelectedVisibleFace ||
          triangle.layer == ViewportOverlayLayer::SelectedXrayFace ||
          triangle.layer == ViewportOverlayLayer::SelectedFaceMask;
-}
-
-bool persistent_object_selection_line(const ViewportOverlayLine &line) {
-  if (line.source != ViewportOverlaySource::Selection ||
-      line.element.object_id < 0) {
-    return false;
-  }
-  return line.layer == ViewportOverlayLayer::SelectedFaceEdge ||
-         line.layer == ViewportOverlayLayer::SelectedEdge;
 }
 
 void strip_wireframe_object_face_fills(ViewportOverlayFrame &frame,
@@ -517,8 +529,8 @@ ViewportOverlayFrame ViewportSceneOverlayBuilder::build_selection_frame(
   QDR_PROFILE_FUNCTION();
   if (selection_mode == ModelingSelectionMode::Object &&
       snapshot.selected_mesh_bounds.size() > 1u) {
-    base_frame = strip_persistent_object_selection(std::move(base_frame),
-                                                   selection_mode);
+    base_frame = strip_persistent_object_selection_fills(
+        std::move(base_frame), selection_mode);
   }
   append_hierarchy_selection_wires(base_frame, snapshot);
   append_group_selection_cages(base_frame, snapshot);
@@ -546,19 +558,16 @@ ViewportOverlayFrame ViewportSceneOverlayBuilder::build_selection_frame(
 }
 
 ViewportOverlayFrame
-ViewportSceneOverlayBuilder::strip_persistent_object_selection(
+ViewportSceneOverlayBuilder::strip_persistent_object_selection_fills(
     ViewportOverlayFrame frame, ModelingSelectionMode selection_mode) {
   if (selection_mode != ModelingSelectionMode::Object) {
     return frame;
   }
 
-  frame.triangles.erase(std::remove_if(frame.triangles.begin(),
-                                       frame.triangles.end(),
-                                       persistent_object_selection_triangle),
-                        frame.triangles.end());
-  frame.lines.erase(std::remove_if(frame.lines.begin(), frame.lines.end(),
-                                   persistent_object_selection_line),
-                    frame.lines.end());
+  frame.triangles.erase(
+      std::remove_if(frame.triangles.begin(), frame.triangles.end(),
+                     persistent_object_selection_fill_triangle),
+      frame.triangles.end());
   return frame;
 }
 

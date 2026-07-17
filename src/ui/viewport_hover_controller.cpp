@@ -45,6 +45,7 @@ bool ViewportHoverWorkKey::matches(const ViewportHoverWorkKey& other) const {
          edge_radius == other.edge_radius &&
          scene_revision == other.scene_revision &&
          asset_revision == other.asset_revision &&
+         local_visibility_revision == other.local_visibility_revision &&
          content_revision == other.content_revision &&
          selection_revision == other.selection_revision;
 }
@@ -81,6 +82,7 @@ ViewportHoverWorkKey ViewportHoverController::make_key(
       .edge_radius = request.edge_radius,
       .scene_revision = request.scene_revision,
       .asset_revision = request.asset_revision,
+      .local_visibility_revision = request.local_visibility_revision,
       .content_revision = request.content_revision,
       .selection_revision = request.selection_revision,
   };

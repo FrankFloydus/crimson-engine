@@ -284,6 +284,15 @@ table Entity {
   scene_settings:SceneSettingsComponent;
   instance_definition:InstanceDefinitionComponent;
   instance_occurrence:InstanceOccurrenceComponent;
+  layer_id:ulong;
+}
+
+table SceneLayer {
+  id:ulong;
+  name:string;
+  visible:bool = true;
+  wireframe_color:Vec3;
+  locked:bool = false;
 }
 
 table ObjectRecord {
@@ -313,6 +322,7 @@ table ScenePayload {
   entities:[Entity];
   objects:[ObjectRecord];
   project_asset_dependencies:[ProjectAssetDependency];
+  layers:[SceneLayer];
 }
 
 root_type ScenePayload;

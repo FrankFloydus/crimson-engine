@@ -5,6 +5,7 @@
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
 #include "api/quader_api_session_internal_access.hpp"
+#include "api/quader_command_ids.hpp"
 #include "api/quader_editor_api.hpp"
 #include "app/app_window_settings.hpp"
 #include "assets/asset_registry.hpp"
@@ -496,6 +497,30 @@ void expect_vec3_near(QVec3 actual, QVec3 expected) {
   EXPECT_NEAR(actual.x, expected.x, 0.001f);
   EXPECT_NEAR(actual.y, expected.y, 0.001f);
   EXPECT_NEAR(actual.z, expected.z, 0.001f);
+}
+
+void expect_viewport_camera_near(const ViewportCameraController &actual,
+                                 const ViewportCameraController &expected) {
+  const ViewportCameraState &actual_state = actual.state();
+  const ViewportCameraState &expected_state = expected.state();
+  expect_vec3_near(actual_state.target, expected_state.target);
+  EXPECT_NEAR(actual_state.yaw_radians, expected_state.yaw_radians, 0.001f);
+  EXPECT_NEAR(actual_state.pitch_radians, expected_state.pitch_radians,
+              0.001f);
+  EXPECT_NEAR(actual_state.distance, expected_state.distance, 0.001f);
+  EXPECT_EQ(actual_state.projection, expected_state.projection);
+  EXPECT_NEAR(actual_state.orthographic_size,
+              expected_state.orthographic_size, 0.001f);
+  EXPECT_NEAR(actual_state.fov_degrees, expected_state.fov_degrees, 0.001f);
+  EXPECT_NEAR(actual_state.near_plane, expected_state.near_plane, 0.001f);
+  EXPECT_NEAR(actual_state.far_plane, expected_state.far_plane, 0.001f);
+  expect_vec3_near(actual.pose().eye, expected.pose().eye);
+  expect_vec3_near(actual.pose().target, expected.pose().target);
+  expect_vec3_near(actual.pose().up, expected.pose().up);
+  EXPECT_NEAR(actual.fly_speed(), expected.fly_speed(), 0.001f);
+  EXPECT_EQ(actual.is_dragging(), expected.is_dragging());
+  EXPECT_EQ(actual.orthographic_view_locked(),
+            expected.orthographic_view_locked());
 }
 
 double mesh_position_fingerprint(const MeshAsset &mesh) {
@@ -1067,6 +1092,7 @@ TEST(UISettingsTests, DefaultsKeepPanelVisibilityLocaleAndNavigationGizmo) {
   EXPECT_TRUE(settings.is_panel_visible(UIPanelId::Viewport));
   EXPECT_TRUE(settings.is_panel_visible(UIPanelId::Outliner));
   EXPECT_TRUE(settings.is_panel_visible(UIPanelId::Inspector));
+  EXPECT_TRUE(settings.is_panel_visible(UIPanelId::Layers));
   EXPECT_FALSE(settings.is_panel_visible(UIPanelId::Console));
   EXPECT_TRUE(settings.navigation_gizmo_visible());
 }
@@ -1080,6 +1106,7 @@ TEST(UISettingsTests, RoundTripsPanelVisibilityLocaleAndNavigationGizmo) {
   settings.set_locale(" it-IT ");
   settings.set_panel_visible(UIPanelId::Outliner, false);
   settings.set_panel_visible(UIPanelId::Inspector, false);
+  settings.set_panel_visible(UIPanelId::Layers, false);
   settings.set_panel_visible(UIPanelId::Console, true);
   settings.set_navigation_gizmo_visible(false);
 
@@ -1090,9 +1117,11 @@ TEST(UISettingsTests, RoundTripsPanelVisibilityLocaleAndNavigationGizmo) {
                                std::istreambuf_iterator<char>()};
   EXPECT_NE(saved_text.find("outliner=false"), std::string::npos);
   EXPECT_NE(saved_text.find("inspector=false"), std::string::npos);
+  EXPECT_NE(saved_text.find("layers=false"), std::string::npos);
   EXPECT_NE(saved_text.find("console=true"), std::string::npos);
   EXPECT_EQ(saved_text.find("Outliner="), std::string::npos);
   EXPECT_EQ(saved_text.find("Inspector="), std::string::npos);
+  EXPECT_EQ(saved_text.find("Layers="), std::string::npos);
   EXPECT_EQ(saved_text.find("Console="), std::string::npos);
   saved.close();
 
@@ -1101,6 +1130,7 @@ TEST(UISettingsTests, RoundTripsPanelVisibilityLocaleAndNavigationGizmo) {
   EXPECT_EQ(loaded.locale(), "it-IT");
   EXPECT_FALSE(loaded.is_panel_visible(UIPanelId::Outliner));
   EXPECT_FALSE(loaded.is_panel_visible(UIPanelId::Inspector));
+  EXPECT_FALSE(loaded.is_panel_visible(UIPanelId::Layers));
   EXPECT_TRUE(loaded.is_panel_visible(UIPanelId::Console));
   EXPECT_FALSE(loaded.navigation_gizmo_visible());
 
@@ -1118,12 +1148,14 @@ TEST(UISettingsTests, LoadsLegacyDisplayPanelKeysAndSavesStableKeys) {
     file << "[Panels]\n";
     file << "Outliner=false\n";
     file << "Inspector=false\n";
+    file << "Layers=false\n";
     file << "Console=true\n";
   }
 
   UISettings loaded = UISettings::load(path);
   EXPECT_FALSE(loaded.is_panel_visible(UIPanelId::Outliner));
   EXPECT_FALSE(loaded.is_panel_visible(UIPanelId::Inspector));
+  EXPECT_FALSE(loaded.is_panel_visible(UIPanelId::Layers));
   EXPECT_TRUE(loaded.is_panel_visible(UIPanelId::Console));
 
   ASSERT_TRUE(loaded.save(path));
@@ -1133,9 +1165,11 @@ TEST(UISettingsTests, LoadsLegacyDisplayPanelKeysAndSavesStableKeys) {
                                std::istreambuf_iterator<char>()};
   EXPECT_NE(saved_text.find("outliner=false"), std::string::npos);
   EXPECT_NE(saved_text.find("inspector=false"), std::string::npos);
+  EXPECT_NE(saved_text.find("layers=false"), std::string::npos);
   EXPECT_NE(saved_text.find("console=true"), std::string::npos);
   EXPECT_EQ(saved_text.find("Outliner="), std::string::npos);
   EXPECT_EQ(saved_text.find("Inspector="), std::string::npos);
+  EXPECT_EQ(saved_text.find("Layers="), std::string::npos);
   EXPECT_EQ(saved_text.find("Console="), std::string::npos);
   saved.close();
 
@@ -1153,6 +1187,7 @@ TEST(UISettingsTests, IgnoresMalformedPanelVisibilityAndEmptyLocale) {
     file << "[Panels]\n";
     file << "Outliner=maybe\n";
     file << "Inspector=0\n";
+    file << "Layers=maybe\n";
     file << "Console=yes\n";
     file << "[Show]\n";
     file << "NavigationGizmo=no\n";
@@ -1165,6 +1200,7 @@ TEST(UISettingsTests, IgnoresMalformedPanelVisibilityAndEmptyLocale) {
   EXPECT_EQ(loaded.locale(), "en-US");
   EXPECT_TRUE(loaded.is_panel_visible(UIPanelId::Outliner));
   EXPECT_FALSE(loaded.is_panel_visible(UIPanelId::Inspector));
+  EXPECT_TRUE(loaded.is_panel_visible(UIPanelId::Layers));
   EXPECT_TRUE(loaded.is_panel_visible(UIPanelId::Console));
   EXPECT_FALSE(loaded.navigation_gizmo_visible());
 
@@ -2487,7 +2523,7 @@ TEST(ViewportOverlayPolicyTests,
                                       "ViewportOverlayLayer::WireframeXray"));
   EXPECT_TRUE(source_contains_compact(
       cache_source, "return mesh.selected ? style.selection_wire_color : "
-                    "kOverlayWireframeXrayColor;"));
+                    "mesh.wireframe_color;"));
   EXPECT_NE(cache_source.find("style.selection_edge_line_width_pixels"),
             std::string::npos);
 }
@@ -3267,6 +3303,71 @@ TEST(ViewportPointPlacementServiceTests,
 }
 
 TEST(ViewportPointPlacementServiceTests,
+     LocalVisibilityRevisionFiltersAndGatesCachedGeometry) {
+  AssetRegistry assets;
+  SceneDocument scene;
+  MeshAsset mesh;
+  mesh.name = "Local Placement Surface";
+  MeshGeometryPayload &geometry = mesh.edit_geometry();
+  geometry.vertices = {
+      MeshVertex{.position = {-10.0f, -8.0f, 0.0f}},
+      MeshVertex{.position = {9.0f, -7.0f, 0.0f}},
+      MeshVertex{.position = {2.0f, 10.0f, 0.0f}},
+  };
+  geometry.indices = {0u, 1u, 2u};
+  const AssetId mesh_id = assets.add_mesh(std::move(mesh));
+  ASSERT_NE(mesh_id, kInvalidAssetId);
+  const EntityId entity =
+      scene.create_entity("Local Placement Surface", EntityKind::Mesh);
+  scene.set_mesh(entity, MeshComponent{.mesh = mesh_id});
+
+  bool local_member = true;
+  std::uint64_t local_revision = 1u;
+  int filter_calls = 0;
+  ViewportPointPlacementService placement;
+  placement.set_viewport_visibility_filter(
+      [&](EntityId candidate) {
+        ++filter_calls;
+        return candidate == entity && local_member;
+      },
+      [&]() { return local_revision; });
+
+  ViewportCameraController camera;
+  camera.set_viewport_size(800.0f, 600.0f);
+  camera.view_axis(ViewportViewAxis::Z, 1);
+  const ViewportPointPlacementRequest request{
+      .mouse_local = {400.0f, 300.0f},
+      .active_grid = viewport_active_grid_placement_plane(camera),
+      .grid_size = 1.0f,
+      .policy = ViewportPointPlacementPolicy::radial_array(),
+  };
+
+  const ViewportPointPlacementResult visible =
+      placement.resolve(scene, assets, camera, request);
+  ASSERT_TRUE(visible.valid);
+  EXPECT_EQ(visible.snap_kind, ViewportPointSnapKind::Surface);
+  EXPECT_EQ(visible.entity, entity);
+  const int calls_after_first_build = filter_calls;
+  EXPECT_GT(calls_after_first_build, 0);
+
+  (void)placement.resolve(scene, assets, camera, request);
+  EXPECT_EQ(filter_calls, calls_after_first_build);
+
+  local_member = false;
+  ++local_revision;
+  const ViewportPointPlacementResult isolated =
+      placement.resolve(scene, assets, camera, request);
+  ASSERT_TRUE(isolated.valid);
+  EXPECT_EQ(isolated.snap_kind, ViewportPointSnapKind::Grid);
+  EXPECT_EQ(isolated.entity, kInvalidEntityId);
+  const int calls_after_revision = filter_calls;
+  EXPECT_GT(calls_after_revision, calls_after_first_build);
+
+  (void)placement.resolve(scene, assets, camera, request);
+  EXPECT_EQ(filter_calls, calls_after_revision);
+}
+
+TEST(ViewportPointPlacementServiceTests,
      PivotParallelFreeDragPreservesTheProvidedCurrentPosition) {
   AssetRegistry assets;
   SceneDocument scene;
@@ -3905,14 +4006,15 @@ TEST(SceneRenderBridgeTests, UsesRenderSceneSnapshotsForIncrementalMeshSync) {
 }
 
 TEST(ViewportPaneOverlayCacheTests,
-     SceneAndAssetRevisionsInvalidateSelectionOverlayFrame) {
+     SceneAssetAndLocalVisibilityRevisionsInvalidateSelectionOverlayFrame) {
   ViewportPaneOverlayCache cache;
   const ViewportPaneOverlayCacheKey key{
       .content_revision = 1u,
       .selection_revision = 2u,
       .scene_revision = 3u,
       .asset_revision = 4u,
-      .overlay_signature = 5u,
+      .local_visibility_revision = 5u,
+      .overlay_signature = 6u,
       .selection_mode = ModelingSelectionMode::Object,
   };
   cache.update({}, key);
@@ -3929,6 +4031,15 @@ TEST(ViewportPaneOverlayCacheTests,
   asset_changed.asset_revision = key.asset_revision + 1u;
   EXPECT_EQ(cache.refresh_reason(asset_changed),
             ViewportPaneOverlayCacheRefreshReason::AssetRevision);
+
+  ViewportPaneOverlayCacheKey local_visibility_changed = key;
+  ++local_visibility_changed.local_visibility_revision;
+  EXPECT_EQ(
+      cache.refresh_reason(local_visibility_changed),
+      ViewportPaneOverlayCacheRefreshReason::LocalVisibilityRevision);
+  EXPECT_TRUE(cache.needs_refresh(local_visibility_changed));
+  cache.update({}, local_visibility_changed);
+  EXPECT_FALSE(cache.needs_refresh(local_visibility_changed));
 }
 
 TEST(SceneRenderBridgeTests, UsesAnisotropicSamplingForMeshTextures) {
@@ -4273,26 +4384,29 @@ TEST(ViewportContextMenuPolicyTests,
 }
 
 TEST(ViewportContextMenuPolicyTests,
-     InstanceOnlyCreateOrFlattenActionKeepsRightClickMenuAvailable) {
+     NonModelingActionsKeepRightClickMenuAvailable) {
   const auto opens_with = [](bool has_modeling_actions,
                              bool can_create_instance,
-                             bool can_flatten_instance) {
+                             bool can_flatten_instance,
+                             bool can_remove_selection_from_layers) {
     return should_open_viewport_context_menu({
         .right_press_tracked = true,
         .right_released = true,
         .release_inside_viewport = true,
         .target_hit = true,
         .has_actions = viewport_context_menu_has_available_actions(
-            has_modeling_actions, can_create_instance, can_flatten_instance),
+            has_modeling_actions, can_create_instance, can_flatten_instance,
+            can_remove_selection_from_layers),
         .press_screen = {200.0f, 180.0f},
         .release_screen = {201.0f, 181.0f},
     });
   };
 
-  EXPECT_FALSE(opens_with(false, false, false));
-  EXPECT_TRUE(opens_with(false, true, false));
-  EXPECT_TRUE(opens_with(false, false, true));
-  EXPECT_TRUE(opens_with(true, false, false));
+  EXPECT_FALSE(opens_with(false, false, false, false));
+  EXPECT_TRUE(opens_with(false, true, false, false));
+  EXPECT_TRUE(opens_with(false, false, true, false));
+  EXPECT_TRUE(opens_with(false, false, false, true));
+  EXPECT_TRUE(opens_with(true, false, false, false));
 }
 
 TEST(ViewportContextMenuPolicyTests, BlocksModalToolsMissingActionsAndDrags) {
@@ -5116,19 +5230,23 @@ TEST(ViewportRendererTests,
             std::string::npos);
   EXPECT_NE(viewport_panel_header.find("viewport_info_cached_asset_revision_"),
             std::string::npos);
+  EXPECT_NE(viewport_panel_header.find(
+                "viewport_info_cached_local_visibility_revision_"),
+            std::string::npos);
   EXPECT_NE(viewport_panel_header.find("viewport_info_cached_camera_"),
             std::string::npos);
   EXPECT_NE(viewport_panel_source.find("same_viewport_info_camera"),
             std::string::npos);
-  EXPECT_NE(viewport_panel_source.find(
-                "collect_viewport_info_scene_stats(document, assets, camera)"),
-            std::string::npos);
+  EXPECT_TRUE(source_contains_compact(
+      viewport_panel_source,
+      "collect_viewport_info_scene_stats(document,assets,camera,"
+      "&local_visibility)"));
   EXPECT_NE(viewport_info_stats_source.find(
                 "document.is_effectively_visible(entity_id)"),
             std::string::npos);
-  EXPECT_NE(
-      viewport_info_stats_source.find("coalesced_mesh_primitive_spans(*mesh)"),
-      std::string::npos);
+  EXPECT_NE(viewport_info_stats_source.find(
+                "coalesced_mesh_primitive_spans(mesh)"),
+            std::string::npos);
   EXPECT_TRUE(source_contains_compact(
       viewport_panel_source,
       "const bool cache_hit = viewport_info_scene_stats_valid_"));
@@ -6111,6 +6229,48 @@ TEST(SceneBoundsTests, CentersBottomOriginMeshOnItsSelectedWorldBounds) {
   EXPECT_NEAR(center.z, 0.0f, 0.001f);
 }
 
+TEST(SceneBoundsTests, IncludesInstanceOccurrenceDescendantsInHierarchyBounds) {
+  AssetRegistry assets;
+  MeshAsset cube;
+  cube.edit_geometry().vertices = {
+      {.position = {-1.0f, -1.0f, -1.0f}},
+      {.position = {1.0f, 1.0f, 1.0f}},
+  };
+  const AssetId cube_mesh = assets.add_mesh(std::move(cube));
+
+  SceneDocument scene;
+  const EntityId definition = scene.create_empty("Definition");
+  ASSERT_TRUE(scene.set_instance_definition(definition));
+  const EntityId member = scene.create_entity("Member", EntityKind::Mesh);
+  scene.set_mesh(member, MeshComponent{.mesh = cube_mesh});
+  scene.set_modeling_object(
+      member, ModelingObjectComponent{.object_id = 1u, .material_slot = 0u});
+  scene.set_transform(
+      member, TransformComponent{.position = {2.0f, 0.0f, 0.0f}});
+  ASSERT_TRUE(scene.set_parent(member, definition, false));
+
+  const EntityId group = scene.create_empty("Group");
+  scene.set_transform(
+      group, TransformComponent{.position = {100.0f, 0.0f, 0.0f}});
+  const EntityId occurrence =
+      scene.create_entity("Occurrence", EntityKind::Instance);
+  ASSERT_TRUE(scene.set_instance_occurrence(
+      occurrence, InstanceOccurrenceComponent{.definition = definition}));
+  scene.set_transform(
+      occurrence, TransformComponent{.position = {10.0f, 5.0f, 0.0f}});
+  ASSERT_TRUE(scene.set_parent(occurrence, group, false));
+
+  const std::optional<SceneBounds> bounds =
+      entity_hierarchy_world_bounds(scene, assets, group);
+  ASSERT_TRUE(bounds.has_value());
+  EXPECT_NEAR(bounds->min.x, 111.0f, 0.001f);
+  EXPECT_NEAR(bounds->min.y, 4.0f, 0.001f);
+  EXPECT_NEAR(bounds->min.z, -1.0f, 0.001f);
+  EXPECT_NEAR(bounds->max.x, 113.0f, 0.001f);
+  EXPECT_NEAR(bounds->max.y, 6.0f, 0.001f);
+  EXPECT_NEAR(bounds->max.z, 1.0f, 0.001f);
+}
+
 TEST(TransformPivotTests, KeepsNonOriginVisualPivotFixedDuringRotation) {
   TransformComponent transform;
   const QVec3 world_pivot{0.0f, 1.0f, 0.0f};
@@ -6688,6 +6848,212 @@ TEST(ViewportWorkspaceServiceTests,
   EXPECT_TRUE(workspace.remove_auxiliary_viewport("viewport-2"));
   EXPECT_EQ(workspace.auxiliary_viewport_count(), 0u);
   EXPECT_FALSE(workspace.remove_auxiliary_viewport("viewport-2"));
+}
+
+TEST(ViewportWorkspaceServiceTests,
+     LocalVisibilitySnapshotIsImmutableAndRevisionedByEffectiveChanges) {
+  ViewportWorkspaceService workspace;
+  const ViewportLocalVisibilitySnapshot initial =
+      workspace.local_visibility_snapshot();
+  EXPECT_FALSE(initial.active());
+  EXPECT_EQ(initial.revision(), 0u);
+  EXPECT_TRUE(initial.baseline_entities().empty());
+  EXPECT_TRUE(initial.members().empty());
+  EXPECT_TRUE(initial.allows(500u));
+  EXPECT_FALSE(workspace.exit_local_visibility());
+  EXPECT_FALSE(workspace.reset_local_visibility());
+
+  constexpr std::array<ViewportLocalVisibilityEntityId, 5> kBaseline{
+      3u, 1u, 2u, 2u, kInvalidViewportLocalVisibilityEntityId};
+  constexpr std::array<ViewportLocalVisibilityEntityId, 3> kMembers{
+      2u, 2u, kInvalidViewportLocalVisibilityEntityId};
+  constexpr std::array<ViewportLocalVisibilityEntityId, 1> kNoMembers{
+      kInvalidViewportLocalVisibilityEntityId};
+  EXPECT_FALSE(workspace.enter_local_visibility(kBaseline, kNoMembers));
+  EXPECT_EQ(workspace.local_visibility_revision(), 0u);
+
+  ASSERT_TRUE(workspace.enter_local_visibility(kBaseline, kMembers));
+  EXPECT_TRUE(workspace.local_visibility_active());
+  EXPECT_EQ(workspace.local_visibility_revision(), 1u);
+  const ViewportLocalVisibilitySnapshot entered =
+      workspace.local_visibility_snapshot();
+  EXPECT_EQ(std::vector<ViewportLocalVisibilityEntityId>(
+                entered.baseline_entities().begin(),
+                entered.baseline_entities().end()),
+            (std::vector<ViewportLocalVisibilityEntityId>{1u, 2u, 3u}));
+  EXPECT_EQ(std::vector<ViewportLocalVisibilityEntityId>(
+                entered.members().begin(), entered.members().end()),
+            (std::vector<ViewportLocalVisibilityEntityId>{2u}));
+  EXPECT_FALSE(entered.allows(1u));
+  EXPECT_TRUE(entered.allows(2u));
+  EXPECT_FALSE(entered.allows(3u));
+
+  constexpr std::array<ViewportLocalVisibilityEntityId, 3> kNewMembers{
+      4u, 2u, kInvalidViewportLocalVisibilityEntityId};
+  ASSERT_TRUE(workspace.add_local_visibility_members(kNewMembers));
+  EXPECT_EQ(workspace.local_visibility_revision(), 2u);
+  const ViewportLocalVisibilitySnapshot expanded =
+      workspace.local_visibility_snapshot();
+  EXPECT_TRUE(expanded.allows(4u));
+  EXPECT_EQ(std::vector<ViewportLocalVisibilityEntityId>(
+                expanded.baseline_entities().begin(),
+                expanded.baseline_entities().end()),
+            (std::vector<ViewportLocalVisibilityEntityId>{1u, 2u, 3u}));
+  EXPECT_FALSE(entered.allows(4u));
+  EXPECT_EQ(entered.revision(), 1u);
+  EXPECT_FALSE(workspace.add_local_visibility_members(kNewMembers));
+  EXPECT_EQ(workspace.local_visibility_revision(), 2u);
+
+  ASSERT_TRUE(workspace.exit_local_visibility());
+  EXPECT_FALSE(workspace.local_visibility_active());
+  EXPECT_EQ(workspace.local_visibility_revision(), 3u);
+  EXPECT_TRUE(workspace.local_visibility_snapshot().allows(1u));
+  EXPECT_FALSE(workspace.exit_local_visibility());
+  EXPECT_EQ(workspace.local_visibility_revision(), 3u);
+
+  ASSERT_TRUE(workspace.enter_local_visibility(kBaseline, kMembers));
+  EXPECT_EQ(workspace.local_visibility_revision(), 4u);
+  ASSERT_TRUE(workspace.reset_local_visibility());
+  EXPECT_EQ(workspace.local_visibility_revision(), 5u);
+  EXPECT_FALSE(workspace.reset_local_visibility());
+  EXPECT_EQ(workspace.local_visibility_revision(), 5u);
+}
+
+TEST(ViewportWorkspaceServiceTests,
+     LocalVisibilityFramesVisibleWorkspaceAndRestoresExistingCameras) {
+  ViewportWorkspaceService workspace;
+  ASSERT_TRUE(workspace.set_layout(ViewportLayoutId::FourQuad));
+  workspace.clear_pane_visibility();
+  workspace.set_pane_visible(ViewportPaneId::Perspective, true);
+  workspace.set_pane_visible(ViewportPaneId::Top, true);
+
+  constexpr std::array<ViewportPaneId, kViewportPaneCount> kPanes{
+      ViewportPaneId::Perspective, ViewportPaneId::Top,
+      ViewportPaneId::Front, ViewportPaneId::Side};
+  std::array<ViewportCameraController, kViewportPaneCount> pane_cameras_before;
+  for (std::size_t index = 0u; index < kPanes.size(); ++index) {
+    ASSERT_TRUE(workspace.set_pane_render_size(
+        kPanes[index], {640.0f + static_cast<float>(index) * 10.0f,
+                        360.0f + static_cast<float>(index) * 10.0f}));
+    workspace.camera(kPanes[index])
+        .focus_bounds({static_cast<float>(index), -2.0f, -4.0f},
+                      {static_cast<float>(index) + 3.0f, 6.0f, 8.0f});
+    pane_cameras_before[index] = workspace.camera(kPanes[index]);
+  }
+
+  ViewportWorkspaceAuxiliaryViewportState &visible_aux =
+      workspace.ensure_auxiliary_viewport("visible-aux", 1u);
+  ASSERT_TRUE(workspace.set_auxiliary_viewport_render_size("visible-aux",
+                                                           {500.0f, 300.0f}));
+  visible_aux.camera.focus_bounds({-8.0f, -2.0f, -1.0f},
+                                  {-4.0f, 2.0f, 5.0f});
+  workspace.set_auxiliary_viewport_visible("visible-aux", true);
+  const ViewportCameraController visible_aux_camera_before =
+      visible_aux.camera;
+
+  ViewportWorkspaceAuxiliaryViewportState &hidden_aux =
+      workspace.ensure_auxiliary_viewport("hidden-aux", 2u);
+  ASSERT_TRUE(workspace.set_auxiliary_viewport_render_size("hidden-aux",
+                                                           {420.0f, 240.0f}));
+  hidden_aux.camera.focus_bounds({9.0f, 1.0f, 2.0f}, {13.0f, 7.0f, 10.0f});
+  const ViewportCameraController hidden_aux_camera_before = hidden_aux.camera;
+
+  ViewportWorkspaceAuxiliaryViewportState &removed_aux =
+      workspace.ensure_auxiliary_viewport("removed-aux", 3u);
+  removed_aux.camera.focus_bounds({-2.0f, -2.0f, -2.0f},
+                                  {2.0f, 2.0f, 2.0f});
+
+  constexpr std::array<ViewportLocalVisibilityEntityId, 3> kBaseline{
+      11u, 12u, 13u};
+  constexpr std::array<ViewportLocalVisibilityEntityId, 1> kMembers{12u};
+  EXPECT_FALSE(workspace.focus_local_visibility_bounds({1.0f, 2.0f, 3.0f},
+                                                        {5.0f, 6.0f, 7.0f}));
+  ASSERT_TRUE(workspace.enter_local_visibility(kBaseline, kMembers));
+
+  const ViewportCameraController hidden_pane_before_focus =
+      workspace.camera(ViewportPaneId::Front);
+  ASSERT_TRUE(workspace.focus_local_visibility_bounds(
+      {1.0f, 2.0f, 3.0f}, {5.0f, 6.0f, 7.0f}));
+  expect_vec3_near(workspace.camera(ViewportPaneId::Perspective).state().target,
+                   {3.0f, 4.0f, 5.0f});
+  expect_vec3_near(workspace.camera(ViewportPaneId::Top).state().target,
+                   {3.0f, 4.0f, 5.0f});
+  expect_viewport_camera_near(workspace.camera(ViewportPaneId::Front),
+                              hidden_pane_before_focus);
+  ASSERT_NE(workspace.auxiliary_viewport("visible-aux"), nullptr);
+  expect_vec3_near(
+      workspace.auxiliary_viewport("visible-aux")->camera.state().target,
+      {3.0f, 4.0f, 5.0f});
+  ASSERT_NE(workspace.auxiliary_viewport("hidden-aux"), nullptr);
+  expect_viewport_camera_near(
+      workspace.auxiliary_viewport("hidden-aux")->camera,
+      hidden_aux_camera_before);
+
+  for (std::size_t index = 0u; index < kPanes.size(); ++index) {
+    workspace.camera(kPanes[index]).focus_origin(90.0f +
+                                                 static_cast<float>(index));
+    ASSERT_TRUE(workspace.set_pane_render_size(
+        kPanes[index], {1000.0f + static_cast<float>(index) * 10.0f,
+                        700.0f + static_cast<float>(index) * 10.0f}));
+  }
+  workspace.auxiliary_viewport("visible-aux")->camera.focus_origin(120.0f);
+  ASSERT_TRUE(workspace.set_auxiliary_viewport_render_size("visible-aux",
+                                                           {800.0f, 450.0f}));
+  workspace.auxiliary_viewport("hidden-aux")->camera.focus_origin(130.0f);
+  ASSERT_TRUE(workspace.set_auxiliary_viewport_render_size("hidden-aux",
+                                                           {700.0f, 400.0f}));
+
+  ViewportWorkspaceAuxiliaryViewportState &late_aux =
+      workspace.ensure_auxiliary_viewport("late-aux", 4u);
+  ASSERT_TRUE(workspace.set_auxiliary_viewport_render_size("late-aux",
+                                                           {610.0f, 340.0f}));
+  late_aux.camera.focus_bounds({20.0f, 21.0f, 22.0f},
+                               {24.0f, 27.0f, 30.0f});
+  const ViewportCameraController late_aux_camera_before_exit = late_aux.camera;
+
+  ASSERT_TRUE(workspace.remove_auxiliary_viewport("removed-aux"));
+  ViewportWorkspaceAuxiliaryViewportState &replacement_aux =
+      workspace.ensure_auxiliary_viewport("removed-aux", 5u);
+  ASSERT_TRUE(workspace.set_auxiliary_viewport_render_size("removed-aux",
+                                                           {333.0f, 222.0f}));
+  replacement_aux.camera.focus_bounds({30.0f, 31.0f, 32.0f},
+                                      {35.0f, 37.0f, 39.0f});
+  const ViewportCameraController replacement_camera_before_exit =
+      replacement_aux.camera;
+
+  ASSERT_TRUE(workspace.exit_local_visibility());
+  for (std::size_t index = 0u; index < kPanes.size(); ++index) {
+    expect_viewport_camera_near(workspace.camera(kPanes[index]),
+                                pane_cameras_before[index]);
+    expect_vec3_near(
+        {workspace.camera(kPanes[index]).viewport_size().x,
+         workspace.camera(kPanes[index]).viewport_size().y, 0.0f},
+        {1000.0f + static_cast<float>(index) * 10.0f,
+         700.0f + static_cast<float>(index) * 10.0f, 0.0f});
+  }
+  expect_viewport_camera_near(
+      workspace.auxiliary_viewport("visible-aux")->camera,
+      visible_aux_camera_before);
+  EXPECT_FLOAT_EQ(
+      workspace.auxiliary_viewport("visible-aux")->camera.viewport_size().x,
+      800.0f);
+  EXPECT_FLOAT_EQ(
+      workspace.auxiliary_viewport("visible-aux")->camera.viewport_size().y,
+      450.0f);
+  expect_viewport_camera_near(
+      workspace.auxiliary_viewport("hidden-aux")->camera,
+      hidden_aux_camera_before);
+  EXPECT_FLOAT_EQ(
+      workspace.auxiliary_viewport("hidden-aux")->camera.viewport_size().x,
+      700.0f);
+  EXPECT_FLOAT_EQ(
+      workspace.auxiliary_viewport("hidden-aux")->camera.viewport_size().y,
+      400.0f);
+  expect_viewport_camera_near(workspace.auxiliary_viewport("late-aux")->camera,
+                              late_aux_camera_before_exit);
+  expect_viewport_camera_near(
+      workspace.auxiliary_viewport("removed-aux")->camera,
+      replacement_camera_before_exit);
 }
 
 TEST(ViewportWorkspaceServiceTests, PaneStateDoesNotStoreDuplicateView) {
@@ -7676,6 +8042,33 @@ TEST(ViewportInputRouterTests, GridPresetWorldSizesMatchMapUnitContract) {
   EXPECT_NEAR(viewport_grid_world_size_for_preset(10), 16.0f, 0.0001f);
   EXPECT_NEAR(viewport_grid_world_size_for_preset(-4), 1.0f / 32.0f, 0.0001f);
   EXPECT_NEAR(viewport_grid_world_size_for_preset(99), 16.0f, 0.0001f);
+}
+
+TEST(ViewportInputRouterTests,
+     GridAdjustmentCommandsProjectToRelativeRouterShortcuts) {
+  ViewportShortcut shortcut;
+
+  EXPECT_TRUE(viewport_router_shortcut_for_target_id(
+      quader_command::kViewportGridIncrement.string(), 6, shortcut));
+  EXPECT_EQ(shortcut.kind, ViewportShortcutKind::SetGridPreset);
+  EXPECT_EQ(shortcut.grid_preset, 7);
+
+  EXPECT_TRUE(viewport_router_shortcut_for_target_id(
+      quader_command::kViewportGridDecrement.string(), 6, shortcut));
+  EXPECT_EQ(shortcut.kind, ViewportShortcutKind::SetGridPreset);
+  EXPECT_EQ(shortcut.grid_preset, 5);
+
+  EXPECT_TRUE(viewport_router_shortcut_for_target_id(
+      quader_command::kViewportGridReset.string(), 10, shortcut));
+  EXPECT_EQ(shortcut.kind, ViewportShortcutKind::SetGridPreset);
+  EXPECT_EQ(shortcut.grid_preset, viewport_default_grid_preset());
+
+  EXPECT_TRUE(viewport_router_shortcut_for_target_id(
+      quader_command::kViewportGridIncrement.string(), 10, shortcut));
+  EXPECT_EQ(shortcut.grid_preset, 10);
+  EXPECT_TRUE(viewport_router_shortcut_for_target_id(
+      quader_command::kViewportGridDecrement.string(), 1, shortcut));
+  EXPECT_EQ(shortcut.grid_preset, 1);
 }
 
 TEST(ViewportInputRouterTests, GridPresetShortcutReportsOnlyActualChanges) {
@@ -12438,7 +12831,7 @@ TEST(ModelingSessionServiceTests,
   const ModelingActionItem *invert =
       find_action_item(*object_panel, "invert_mesh");
   ASSERT_NE(invert, nullptr);
-  EXPECT_EQ(invert->label, "Flip Mesh Normals");
+  EXPECT_EQ(invert->label, "Flip Selected Mesh Normals");
   EXPECT_EQ(invert->operation_id, "flip_face_normals");
   EXPECT_EQ(invert->visibility, ModelingActionVisibility::Enabled);
 
@@ -12548,7 +12941,7 @@ TEST(ModelingSessionServiceTests,
   EXPECT_EQ(target.kind, ModelingToolSettingsTargetKind::EdgeBevel);
   EXPECT_EQ(target.action_id, "bevel_edges");
   EXPECT_EQ(target.operation_id, "edge_bevel");
-  EXPECT_EQ(target.label, "Bevel Edges");
+  EXPECT_EQ(target.label, "Bevel Selected Edges");
 
   const std::optional<MeshAsset> preview_before =
       service.compile_object_mesh(box.object.modeling_object_id);
@@ -13105,6 +13498,70 @@ TEST(ModelingSessionServiceTests,
             rectangle_builds_after_first + 2u);
   EXPECT_EQ(service.rectangle_selection_resolution_build_count(),
             resolutions_after_first + 2u);
+}
+
+TEST(ModelingSessionServiceTests,
+     LayerLockRevisionInvalidatesWarmPointAndRectanglePickingCaches) {
+  SceneDocument scene;
+  AssetRegistry assets;
+  ModelingSessionService service(scene, assets);
+
+  const ModelingCreateBoxResult mesh = service.create_box_from_bounds({
+      .bounds = {.min = {-1.0f, -1.0f, -1.0f},
+                 .max = {1.0f, 1.0f, 1.0f}},
+      .name = "Layer Lock Picking Box",
+  });
+  ASSERT_TRUE(mesh.ok) << mesh.message;
+  const SceneLayerId layer = scene.create_layer("Picking Layer");
+  ASSERT_NE(layer, kInvalidSceneLayerId);
+  ASSERT_TRUE(scene.set_entity_layer(mesh.object.entity, layer));
+
+  const ModelingPickSelectRequest point_request{
+      .ray = {.origin = {0.0f, 0.0f, 5.0f},
+              .direction = {0.0f, 0.0f, -1.0f}},
+  };
+  const ModelingBoxSelectRequest rectangle_request{
+      .camera = test_orthographic_viewport_camera(),
+      .start = {35.0f, 35.0f},
+      .end = {65.0f, 65.0f},
+      .edit = ModelingSelectionEdit::Replace,
+      .rule = ModelingBoxSelectionRule::Contain,
+  };
+
+  const std::optional<EntityId> warm_point =
+      service.pick_object_entity(point_request);
+  ASSERT_TRUE(warm_point.has_value());
+  EXPECT_EQ(*warm_point, mesh.object.entity);
+  const ModelingSelectionSummary warm_rectangle =
+      service.box_select(rectangle_request);
+  ASSERT_EQ(warm_rectangle.selected_object_count, 1u);
+  const std::uint64_t point_builds =
+      service.transformed_picking_projection_build_count();
+  const std::uint64_t rectangle_builds =
+      service.rectangle_picking_projection_build_count();
+
+  ASSERT_TRUE(scene.set_layer_locked(layer, true));
+  EXPECT_FALSE(service.pick_object_entity(point_request).has_value());
+  EXPECT_EQ(service.transformed_picking_projection_build_count(),
+            point_builds + 1u);
+  const ModelingSelectionSummary locked_rectangle =
+      service.box_select(rectangle_request);
+  EXPECT_EQ(locked_rectangle.selected_object_count, 0u);
+  EXPECT_EQ(service.rectangle_picking_projection_build_count(),
+            rectangle_builds + 1u);
+
+  ASSERT_TRUE(scene.set_layer_locked(layer, false));
+  const std::optional<EntityId> unlocked_point =
+      service.pick_object_entity(point_request);
+  ASSERT_TRUE(unlocked_point.has_value());
+  EXPECT_EQ(*unlocked_point, mesh.object.entity);
+  EXPECT_EQ(service.transformed_picking_projection_build_count(),
+            point_builds + 2u);
+  const ModelingSelectionSummary unlocked_rectangle =
+      service.box_select(rectangle_request);
+  EXPECT_EQ(unlocked_rectangle.selected_object_count, 1u);
+  EXPECT_EQ(service.rectangle_picking_projection_build_count(),
+            rectangle_builds + 2u);
 }
 
 TEST(ModelingSessionServiceTests,
@@ -18242,4 +18699,206 @@ TEST(BakeServiceTests, ValidatesDescriptors) {
       .height = 1024,
   });
   EXPECT_TRUE(valid.valid);
+}
+
+TEST(SceneLayerTests,
+     OwnsUniqueNamesExactMembershipAndLayerAwareVisibility) {
+  SceneDocument scene;
+  const EntityId root = scene.create_empty("Scene");
+  ASSERT_TRUE(scene.set_scene_settings(root, SceneSettingsComponent{}));
+  const EntityId group = scene.create_empty("Group");
+  const EntityId child = scene.create_entity("Child", EntityKind::Mesh);
+  ASSERT_TRUE(scene.set_parent(group, root, false));
+  ASSERT_TRUE(scene.set_parent(child, group, false));
+
+  const SceneLayerId first = scene.create_layer();
+  const SceneLayerId second = scene.create_layer();
+  ASSERT_NE(first, kInvalidSceneLayerId);
+  ASSERT_NE(second, kInvalidSceneLayerId);
+  ASSERT_NE(scene.layer(first), nullptr);
+  ASSERT_NE(scene.layer(second), nullptr);
+  EXPECT_EQ(scene.layer(first)->name, "Layer");
+  EXPECT_EQ(scene.layer(second)->name, "Layer_1");
+  EXPECT_EQ(scene.create_layer_with_id(90u, "Layer"),
+            kInvalidSceneLayerId);
+
+  std::string valid_unicode_name;
+  for (int index = 0; index < 127; ++index) {
+    valid_unicode_name.append("\xc3\xa9");
+  }
+  ASSERT_TRUE(scene.rename_layer(first, valid_unicode_name));
+  const std::uint64_t revision_before_invalid_name = scene.layer_revision();
+  valid_unicode_name.append("\xc3\xa9");
+  EXPECT_FALSE(scene.rename_layer(first, valid_unicode_name));
+  EXPECT_EQ(scene.layer_revision(), revision_before_invalid_name);
+
+  ASSERT_TRUE(scene.set_entity_layer(group, first));
+  ASSERT_TRUE(scene.set_entity_layer(child, first));
+  EXPECT_EQ(scene.entity_layer(group), first);
+  EXPECT_EQ(scene.entity_layer(child), first);
+  ASSERT_TRUE(scene.set_entity_layer(child, second));
+  EXPECT_EQ(scene.entity_layer(child), second);
+  EXPECT_EQ(scene.layer_members(first), std::vector<EntityId>({group}));
+
+  ASSERT_TRUE(scene.set_selected(child, true));
+  ASSERT_TRUE(scene.set_layer_visible(second, false));
+  EXPECT_FALSE(scene.is_effectively_visible(child));
+  EXPECT_TRUE(scene.selection(child)->selected);
+  ASSERT_TRUE(scene.set_layer_visible(second, true));
+  EXPECT_TRUE(scene.is_effectively_visible(child));
+  ASSERT_TRUE(scene.set_visible(child, false));
+  ASSERT_TRUE(scene.set_layer_visible(second, false));
+  ASSERT_TRUE(scene.set_layer_visible(second, true));
+  EXPECT_FALSE(scene.is_effectively_visible(child));
+}
+
+TEST(SceneLayerTests,
+     LayerLockIsAnUndoableEffectiveMaskThatPreservesLocalLocks) {
+  SceneDocument scene;
+  const EntityId root = scene.create_empty("Scene");
+  ASSERT_TRUE(scene.set_scene_settings(root, SceneSettingsComponent{}));
+  const EntityId group = scene.create_empty("Group");
+  const EntityId child = scene.create_entity("Child", EntityKind::Mesh);
+  ASSERT_TRUE(scene.set_parent(group, root, false));
+  ASSERT_TRUE(scene.set_parent(child, group, false));
+
+  const SceneLayerId layer = scene.create_layer("Locked Layer");
+  ASSERT_NE(layer, kInvalidSceneLayerId);
+  ASSERT_TRUE(scene.set_entity_layer(group, layer));
+  ASSERT_TRUE(scene.set_selected(child, true));
+  ASSERT_NE(scene.lock(group), nullptr);
+  ASSERT_NE(scene.lock(child), nullptr);
+  EXPECT_FALSE(scene.lock(group)->locked);
+  EXPECT_FALSE(scene.lock(child)->locked);
+
+  EditorHistoryService history;
+  DocumentCommandService commands(scene, history);
+  const std::uint64_t revision_before = scene.layer_revision();
+  const DocumentCommandResult locked =
+      commands.set_layer_locked(layer, true);
+  ASSERT_TRUE(locked.ok);
+  ASSERT_TRUE(locked.changed);
+  ASSERT_NE(scene.layer(layer), nullptr);
+  EXPECT_TRUE(scene.layer(layer)->locked);
+  EXPECT_TRUE(scene.is_effectively_locked(group));
+  EXPECT_TRUE(scene.is_effectively_locked(child));
+  EXPECT_FALSE(scene.lock(group)->locked);
+  EXPECT_FALSE(scene.lock(child)->locked);
+  EXPECT_FALSE(scene.selection(child)->selected);
+  EXPECT_EQ(scene.layer_revision(), revision_before + 1u);
+  ASSERT_NE(history.undo_label(), nullptr);
+  EXPECT_EQ(*history.undo_label(), "Set Layer Lock");
+
+  const std::uint64_t stable_revision = scene.layer_revision();
+  const DocumentCommandResult unchanged =
+      commands.set_layer_locked(layer, true);
+  ASSERT_TRUE(unchanged.ok);
+  EXPECT_FALSE(unchanged.changed);
+  EXPECT_EQ(scene.layer_revision(), stable_revision);
+
+  ASSERT_TRUE(history.undo().ok);
+  EXPECT_FALSE(scene.layer(layer)->locked);
+  EXPECT_FALSE(scene.is_effectively_locked(group));
+  EXPECT_FALSE(scene.is_effectively_locked(child));
+  EXPECT_TRUE(scene.selection(child)->selected)
+      << "undo must restore selection removed by the layer lock";
+  ASSERT_TRUE(history.redo().ok);
+  EXPECT_TRUE(scene.layer(layer)->locked);
+  EXPECT_FALSE(scene.selection(child)->selected);
+
+  ASSERT_TRUE(scene.set_locked(child, true));
+  const DocumentCommandResult unlocked =
+      commands.set_layer_locked(layer, false);
+  ASSERT_TRUE(unlocked.ok);
+  ASSERT_TRUE(unlocked.changed);
+  EXPECT_FALSE(scene.layer(layer)->locked);
+  EXPECT_TRUE(scene.lock(child)->locked)
+      << "layer unlock must not rewrite object-local lock state";
+  EXPECT_TRUE(scene.is_effectively_locked(child));
+}
+
+TEST(SceneLayerTests,
+     CommandsExpandGroupsExcludeInternalDefinitionsAndPreserveUndoState) {
+  SceneDocument scene;
+  const EntityId root = scene.create_empty("Scene");
+  ASSERT_TRUE(scene.set_scene_settings(root, SceneSettingsComponent{}));
+  const EntityId group = scene.create_empty("Group");
+  const EntityId child = scene.create_entity("Child", EntityKind::Mesh);
+  ASSERT_TRUE(scene.set_mesh(child, MeshComponent{.mesh = 1u}));
+  const EntityId definition = scene.create_empty("Definition");
+  const EntityId definition_member = scene.create_empty("Definition Member");
+  ASSERT_TRUE(scene.set_parent(group, root, false));
+  ASSERT_TRUE(scene.set_parent(child, group, false));
+  ASSERT_TRUE(scene.set_parent(definition, group, false));
+  ASSERT_TRUE(scene.set_instance_definition(definition));
+  ASSERT_TRUE(scene.set_parent(definition_member, definition, false));
+  ASSERT_TRUE(scene.set_selected(group, true));
+
+  EditorHistoryService history;
+  DocumentCommandService commands(scene, history);
+  const DocumentCreateLayerResult created = commands.create_layer(
+      {}, kDefaultSceneLayerWireframeColor, true);
+  ASSERT_TRUE(created.ok);
+  ASSERT_TRUE(created.changed);
+  ASSERT_NE(created.layer_id, kInvalidSceneLayerId);
+  EXPECT_EQ(scene.entity_layer(group), created.layer_id);
+  EXPECT_EQ(scene.entity_layer(child), created.layer_id);
+  EXPECT_EQ(scene.entity_layer(definition), kInvalidSceneLayerId);
+  EXPECT_EQ(scene.entity_layer(definition_member), kInvalidSceneLayerId);
+
+  history.clear();
+  const std::uint64_t stable_revision = scene.layer_revision();
+  const DocumentCommandResult unchanged =
+      commands.add_selection_to_layer(created.layer_id);
+  EXPECT_TRUE(unchanged.ok);
+  EXPECT_FALSE(unchanged.changed);
+  EXPECT_FALSE(history.can_undo());
+  EXPECT_EQ(scene.layer_revision(), stable_revision);
+
+  const std::uint64_t before_public_reparent = scene.layer_revision();
+  const DocumentCommandResult public_reparent =
+      commands.reparent_entity(child, root, false);
+  ASSERT_TRUE(public_reparent.ok);
+  ASSERT_TRUE(public_reparent.changed);
+  EXPECT_EQ(scene.entity_layer(child), created.layer_id);
+  EXPECT_EQ(scene.layer_revision(), before_public_reparent);
+  ASSERT_TRUE(history.undo().ok);
+  EXPECT_EQ(scene.parent(child), group);
+  EXPECT_EQ(scene.entity_layer(child), created.layer_id);
+  EXPECT_EQ(scene.layer_revision(), before_public_reparent);
+
+  const std::uint64_t before_definition_reparent = scene.layer_revision();
+  const DocumentCommandResult definition_reparent =
+      commands.reparent_entity(child, definition, false);
+  ASSERT_TRUE(definition_reparent.ok);
+  ASSERT_TRUE(definition_reparent.changed);
+  EXPECT_EQ(scene.entity_layer(child), kInvalidSceneLayerId);
+  EXPECT_EQ(scene.layer_revision(), before_definition_reparent + 1u);
+  ASSERT_TRUE(history.undo().ok);
+  EXPECT_EQ(scene.parent(child), group);
+  EXPECT_EQ(scene.entity_layer(child), created.layer_id);
+  EXPECT_EQ(scene.layer_revision(), before_definition_reparent + 2u);
+
+  const DocumentDuplicateEntityResult duplicated =
+      commands.duplicate_entity(child);
+  ASSERT_TRUE(duplicated.ok);
+  ASSERT_TRUE(duplicated.changed);
+  ASSERT_NE(duplicated.duplicate_entity, kInvalidEntityId);
+  EXPECT_EQ(scene.entity_layer(duplicated.duplicate_entity), created.layer_id);
+  ASSERT_TRUE(commands.destroy_entity(duplicated.duplicate_entity).ok);
+  EXPECT_FALSE(scene.exists(duplicated.duplicate_entity));
+  ASSERT_TRUE(history.undo().ok);
+  ASSERT_TRUE(scene.exists(duplicated.duplicate_entity));
+  EXPECT_EQ(scene.entity_layer(duplicated.duplicate_entity), created.layer_id);
+
+  history.clear();
+  const DocumentCreateLayerResult undone_layer = commands.create_layer(
+      {}, kDefaultSceneLayerWireframeColor, false);
+  ASSERT_TRUE(undone_layer.ok);
+  ASSERT_TRUE(history.undo().ok);
+  EXPECT_EQ(scene.layer(undone_layer.layer_id), nullptr);
+  const DocumentCreateLayerResult branch_layer = commands.create_layer(
+      {}, kDefaultSceneLayerWireframeColor, false);
+  ASSERT_TRUE(branch_layer.ok);
+  EXPECT_GT(branch_layer.layer_id, undone_layer.layer_id);
 }

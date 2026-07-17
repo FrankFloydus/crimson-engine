@@ -33,12 +33,14 @@ public:
     [[nodiscard]] bool
     matches(std::uint64_t content_revision, std::uint64_t selection_revision,
             std::uint64_t scene_revision,
+            std::uint64_t local_visibility_revision,
             quader_editor_core::SelectionMode selection_mode,
             std::uint64_t overlay_signature,
             const quader_editor_core::SelectionHoverState &hover) const;
     [[nodiscard]] const ViewportOverlayFrame& frame() const;
     void store(ViewportOverlayFrame frame, std::uint64_t content_revision,
                std::uint64_t selection_revision, std::uint64_t scene_revision,
+               std::uint64_t local_visibility_revision,
                quader_editor_core::SelectionMode selection_mode,
                std::uint64_t overlay_signature,
                const quader_editor_core::SelectionHoverState &hover) const;
@@ -51,6 +53,7 @@ public:
     mutable std::uint64_t content_revision_ = 0;
     mutable std::uint64_t selection_revision_ = 0;
     mutable std::uint64_t scene_revision_ = 0;
+    mutable std::uint64_t local_visibility_revision_ = 0;
     mutable quader_editor_core::SelectionMode selection_mode_ =
         quader_editor_core::SelectionMode::Object;
     mutable std::uint64_t overlay_signature_ = 0;
@@ -75,6 +78,7 @@ public:
   [[nodiscard]] bool selection_frame_matches(
       std::uint64_t content_revision, std::uint64_t selection_revision,
       std::uint64_t scene_revision,
+      std::uint64_t local_visibility_revision,
       quader_editor_core::SelectionMode selection_mode,
       std::uint64_t overlay_signature,
       const quader_editor_core::SelectionHoverState &hover) const;
@@ -82,6 +86,7 @@ public:
   void store_selection_frame(
       ViewportOverlayFrame frame, std::uint64_t content_revision,
       std::uint64_t selection_revision, std::uint64_t scene_revision,
+      std::uint64_t local_visibility_revision,
       quader_editor_core::SelectionMode selection_mode,
       std::uint64_t overlay_signature,
       const quader_editor_core::SelectionHoverState &hover) const;

@@ -19,7 +19,7 @@ public:
       return {
           .id = "flip_vertical",
           .operation_id = "flip_vertical",
-          .label = "Flip Vertical",
+          .label = "Flip Selection Vertically",
           .kind = CommandToolKind::Instant,
           .preview_kind = ModelingActionPreviewKind::None,
           .rebuilds_mesh_on_success = true,

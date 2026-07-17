@@ -63,6 +63,9 @@ UISettings UISettings::load(const std::filesystem::path& path) {
       } else if (panel_settings_key_matches(UIPanelId::Console, key)) {
         settings.console_visible_ =
             parse_bool(value, settings.console_visible_);
+      } else if (panel_settings_key_matches(UIPanelId::Layers, key)) {
+        settings.layers_visible_ =
+            parse_bool(value, settings.layers_visible_);
       } else if (key == "NavigationGizmo") {
         settings.navigation_gizmo_visible_ =
             parse_bool(value, settings.navigation_gizmo_visible_);
@@ -102,6 +105,8 @@ bool UISettings::save(const std::filesystem::path& path) const {
          << (inspector_visible_ ? "true" : "false") << '\n';
     file << ui_panel_stable_id(UIPanelId::Console) << '='
          << (console_visible_ ? "true" : "false") << '\n';
+    file << ui_panel_stable_id(UIPanelId::Layers) << '='
+         << (layers_visible_ ? "true" : "false") << '\n';
     file << "\n[Show]\n";
     file << "NavigationGizmo=" << (navigation_gizmo_visible_ ? "true" : "false")
          << '\n';
@@ -121,6 +126,8 @@ bool UISettings::is_panel_visible(UIPanelId id) const {
     return inspector_visible_;
   case UIPanelId::Console:
     return console_visible_;
+  case UIPanelId::Layers:
+    return layers_visible_;
   }
   return true;
 }
@@ -137,6 +144,9 @@ void UISettings::set_panel_visible(UIPanelId id, bool visible) {
     break;
   case UIPanelId::Console:
     console_visible_ = visible;
+    break;
+  case UIPanelId::Layers:
+    layers_visible_ = visible;
     break;
   }
 }

@@ -40,11 +40,24 @@ struct QuaderEntitySnapshot {
   bool is_instance_definition = false;
   bool has_instance_occurrence = false;
   EntityId instance_definition = kInvalidEntityId;
+  QuaderLayerId layer_id = kInvalidQuaderLayerId;
   AssetId mesh = kInvalidAssetId;
   AssetId material = kInvalidAssetId;
   QuaderLightComponent light;
   QuaderSceneSettings scene_settings;
   QuaderModelingObjectId modeling_object_id = kInvalidQuaderModelingObjectId;
+};
+
+/**
+ * Stores one scene display-layer projection for public callers.
+ */
+struct QuaderLayerSnapshot {
+  QuaderLayerId id = kInvalidQuaderLayerId;
+  std::string name;
+  bool visible = true;
+  QVec3 wireframe_color = kDefaultQuaderLayerWireframeColor;
+  bool locked = false;
+  std::vector<EntityId> members;
 };
 
 /**
@@ -87,6 +100,7 @@ struct QuaderHistorySnapshot {
 struct QuaderApiSnapshot {
     QuaderRevisionStamp revisions;
     std::vector<QuaderEntitySnapshot> entities;
+    std::vector<QuaderLayerSnapshot> layers;
     std::vector<QuaderModelingObjectRecord> modeling_objects;
     QuaderSelectionSummary selection;
     QuaderToolStatus tool_status;

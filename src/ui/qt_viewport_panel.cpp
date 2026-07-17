@@ -7,6 +7,7 @@
 #include "ui/qt_viewport_panel.hpp"
 
 #include "api/quader_api_type_conversions.hpp"
+#include "api/quader_command_ids.hpp"
 #include "api/quader_editor_api.hpp"
 #include "assets/asset_registry.hpp"
 #include "core/localization_service.hpp"
@@ -142,6 +143,26 @@ constexpr std::array<ViewportShadingMode, 3> kShadingModes{
     ViewportShadingMode::Shaded,
     ViewportShadingMode::Rendered,
 };
+
+std::optional<QuaderCommandId>
+shading_command_id(ViewportShadingMode shading) {
+  switch (shading) {
+  case ViewportShadingMode::Wireframe:
+    return quader_command::kViewportShadingWireframe;
+  case ViewportShadingMode::Shaded:
+    return quader_command::kViewportShadingShaded;
+  case ViewportShadingMode::Rendered:
+    return quader_command::kViewportShadingRendered;
+  case ViewportShadingMode::DiffuseOnly:
+  case ViewportShadingMode::SpecularOnly:
+  case ViewportShadingMode::Albedo:
+  case ViewportShadingMode::Roughness:
+  case ViewportShadingMode::Metalness:
+  case ViewportShadingMode::Normal:
+    return std::nullopt;
+  }
+  return std::nullopt;
+}
 
 constexpr std::array<ViewportShadingMode, 6> kDebugViewModes{
     ViewportShadingMode::DiffuseOnly, ViewportShadingMode::SpecularOnly,
@@ -474,6 +495,7 @@ keybinding_context(const ViewportInputFrame &input) {
       .pan_navigation_active = input.pan_navigation_active,
       .modal_tool_active = input.modal_tool_active,
       .active_tool_owns_viewport = input.active_tool_owns_viewport,
+      .active_transform_drag = input.active_transform_drag,
       .operation_preview_active = input.operation_preview_active,
   };
 }
@@ -709,12 +731,16 @@ overlay_selection_context(ModelingSelectionMode mode) {
 }
 
 std::vector<ViewportSceneBillboardPickCandidate>
-point_light_pick_candidates(const SceneDocument &document) {
+point_light_pick_candidates(
+    const SceneDocument &document,
+    const ViewportLocalVisibilitySnapshot &local_visibility) {
   std::vector<ViewportSceneBillboardPickCandidate> candidates;
   for (const EntityId entity : document.entities()) {
     const LightComponent *light = document.light(entity);
     if (light == nullptr || light->type != LightType::Point ||
-        !document.is_effectively_visible(entity)) {
+        !document.is_effectively_visible(entity) ||
+        !local_visibility.allows(
+            static_cast<ViewportLocalVisibilityEntityId>(entity))) {
       continue;
     }
     candidates.push_back({
@@ -1493,11 +1519,15 @@ void QtViewportPanel::refresh_cached_selection_overlay_frame(
       .suppress_persistent_object_selection =
           overlay_summary.mode == ModelingSelectionMode::Object,
   };
+  const ViewportLocalVisibilitySnapshot local_visibility =
+      workspace_ != nullptr ? workspace_->local_visibility_snapshot()
+                            : ViewportLocalVisibilitySnapshot{};
   const ViewportPaneOverlayCacheKey key{
       .content_revision = overlay_summary.content_revision,
       .selection_revision = overlay_summary.selection_revision,
       .scene_revision = document.revision(),
       .asset_revision = assets.revision(),
+      .local_visibility_revision = local_visibility.revision(),
       .overlay_signature =
           modeling.selection_overlay_signature(overlay_options),
       .selection_mode = overlay_summary.mode,
@@ -1602,8 +1632,15 @@ QuaderApiVoidResult QtViewportPanel::frame_all(const SceneDocument &document,
             .message = "Viewport workspace is not attached."};
   }
   ViewportCameraController &camera = workspace_->camera(pane_id);
+  const ViewportLocalVisibilitySnapshot local_visibility =
+      workspace_->local_visibility_snapshot();
   if (const std::optional<SceneBounds> bounds =
-          document_world_bounds(document, assets)) {
+          document_world_bounds(
+              document, assets,
+              [&local_visibility](EntityId entity) {
+                return local_visibility.allows(
+                    static_cast<ViewportLocalVisibilityEntityId>(entity));
+              })) {
     camera.focus_bounds(bounds->min, bounds->max);
   } else {
     camera.focus_origin();
@@ -1805,7 +1842,14 @@ void QtViewportPanel::create_pane(Pane &pane_state) {
                 (void)workspace_->focus_pane(pane_state.id);
                 update_focused_pane_indicator();
               }
-              set_pane_shading(pane_state, shading);
+              const std::optional<QuaderCommandId> command_id =
+                  shading_command_id(shading);
+              if (interaction_editor_ != nullptr && command_id.has_value()) {
+                (void)interaction_editor_->commands().execute(*command_id);
+                sync_pane_control_selection(pane_state);
+              } else {
+                set_pane_shading(pane_state, shading);
+              }
             });
   }
 
@@ -1883,10 +1927,31 @@ void QtViewportPanel::create_pane(Pane &pane_state) {
   refresh_pane_controls(pane_state);
 }
 
+void QtViewportPanel::refresh_keybinding_presentation(
+    QuaderEditorApi &editor) {
+  interaction_editor_ = &editor;
+  for (Pane &pane_state : panes_) {
+    refresh_pane_controls(pane_state);
+  }
+}
+
 void QtViewportPanel::refresh_pane_controls(Pane &pane_state) {
   for (std::size_t index = 0; index < kShadingModes.size(); ++index) {
-    pane_state.shading_actions[index]->setText(
-        localized_shading_label(localization_, kShadingModes[index]));
+    const ViewportShadingMode shading = kShadingModes[index];
+    QString text = localized_shading_label(localization_, shading);
+    if (interaction_editor_ != nullptr) {
+      const std::optional<QuaderCommandId> command_id =
+          shading_command_id(shading);
+      if (command_id.has_value()) {
+        const std::string shortcut =
+            interaction_editor_->commands().shortcut_for(*command_id);
+        if (!shortcut.empty()) {
+          text.append(QLatin1Char('\t'));
+          text.append(QString::fromStdString(shortcut));
+        }
+      }
+    }
+    pane_state.shading_actions[index]->setText(text);
   }
   pane_state.camera_menu->setTitle(localized_display_menu_label(
       localization_, "viewport.display.camera", "Camera"));
@@ -2181,12 +2246,19 @@ void QtViewportPanel::draw_viewport_info_overlay(
     const AssetRegistry &assets, ViewportOverlayCamera camera) {
   const std::uint64_t scene_revision = document.revision();
   const std::uint64_t asset_revision = assets.revision();
+  const ViewportLocalVisibilitySnapshot local_visibility =
+      workspace_ != nullptr ? workspace_->local_visibility_snapshot()
+                            : ViewportLocalVisibilitySnapshot{};
+  const std::uint64_t local_visibility_revision =
+      local_visibility.revision();
   const bool cache_hit =
       viewport_info_scene_stats_valid_ &&
       viewport_info_cached_document_ == &document &&
       viewport_info_cached_assets_ == &assets &&
       viewport_info_cached_scene_revision_ == scene_revision &&
       viewport_info_cached_asset_revision_ == asset_revision &&
+      viewport_info_cached_local_visibility_revision_ ==
+          local_visibility_revision &&
       same_viewport_info_camera(viewport_info_cached_camera_, camera);
   ViewportInfoSceneStats scene_stats;
   if (cache_hit) {
@@ -2195,11 +2267,14 @@ void QtViewportPanel::draw_viewport_info_overlay(
     scene_stats.draw_calls = viewport_info_cached_draw_calls_;
   } else {
     QDR_PROFILE_SCOPE("Viewport info collect scene stats");
-    scene_stats = collect_viewport_info_scene_stats(document, assets, camera);
+    scene_stats = collect_viewport_info_scene_stats(
+        document, assets, camera, &local_visibility);
     viewport_info_cached_document_ = &document;
     viewport_info_cached_assets_ = &assets;
     viewport_info_cached_scene_revision_ = scene_revision;
     viewport_info_cached_asset_revision_ = asset_revision;
+    viewport_info_cached_local_visibility_revision_ =
+        local_visibility_revision;
     viewport_info_cached_camera_ = camera;
     viewport_info_cached_objects_ = scene_stats.objects;
     viewport_info_cached_primitives_ = scene_stats.primitives;
@@ -2303,7 +2378,9 @@ void QtViewportPanel::process_viewport_input(
   if (workspace_ == nullptr) {
     return;
   }
-  interaction_editor_ = &editor;
+  if (interaction_editor_ != &editor) {
+    refresh_keybinding_presentation(editor);
+  }
   if (linear_array != nullptr) {
     const CommandResult refresh = linear_array->refresh();
     if (refresh.changed) {
@@ -2459,6 +2536,7 @@ void QtViewportPanel::process_viewport_input(
           *preview_ports.preview, resolved_grid_snap_enabled) ||
       modeling.modal_tool_owns_viewport();
   input.active_tool_owns_viewport = input_router_.active_tool_owns_viewport();
+  input.active_transform_drag = interaction_controller_.dragging();
   modal_tool_owns_viewport_snapshot_ =
       input.active_tool_owns_viewport || input.modal_tool_active;
   input.operation_preview_active = tool_settings.operation_preview_active;
@@ -2500,8 +2578,15 @@ void QtViewportPanel::process_viewport_input(
     (void)workspace_->set_view(*input_pane, result.requested_view);
   }
   if (result.focus_document_requested) {
+    const ViewportLocalVisibilitySnapshot local_visibility =
+        workspace_->local_visibility_snapshot();
     if (const std::optional<SceneBounds> bounds =
-            document_world_bounds(document, assets)) {
+            document_world_bounds(
+                document, assets,
+                [&local_visibility](EntityId entity) {
+                  return local_visibility.allows(
+                      static_cast<ViewportLocalVisibilityEntityId>(entity));
+                })) {
       camera.focus_bounds(bounds->min, bounds->max);
     } else {
       camera.focus_origin();
@@ -2653,9 +2738,11 @@ void QtViewportPanel::process_viewport_input(
           ViewportBoolSettingId::ShowGizmos) &&
       viewport_shading_shows_light_gizmos(
           workspace_->shading_mode(*input_pane));
+  const ViewportLocalVisibilitySnapshot local_visibility =
+      workspace_->local_visibility_snapshot();
   const std::vector<ViewportSceneBillboardPickCandidate> billboards =
       point_lights_pickable
-          ? point_light_pick_candidates(document)
+          ? point_light_pick_candidates(document, local_visibility)
           : std::vector<ViewportSceneBillboardPickCandidate>{};
   ViewportInteractionFrame interaction_frame{
       .input_router = input_router_,
@@ -3050,6 +3137,7 @@ void QtViewportPanel::process_viewport_input(
                 settings.float_value(ViewportFloatSettingId::PickEdgeRadius),
             .scene_revision = document.revision(),
             .asset_revision = assets.revision(),
+            .local_visibility_revision = local_visibility.revision(),
             .content_revision = hover_selection.content_revision,
             .selection_revision = hover_selection.selection_revision,
         });
@@ -3270,7 +3358,9 @@ void QtViewportPanel::process_viewport_input(
         summary.has_selection && viewport_context_menu_has_available_actions(
                                      !actions.empty(),
                                      editor.modeling().can_create_instance(),
-                                     editor.modeling().can_flatten_instance());
+                                     editor.modeling().can_flatten_instance(),
+                                     editor.layers()
+                                         .can_remove_selection_from_all_layers());
     show_context_menu =
         should_open_viewport_context_menu(pending_context_menu_request) &&
         localization_ != nullptr;

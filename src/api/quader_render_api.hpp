@@ -54,6 +54,7 @@ public:
     std::uint64_t native_array_preview_bridge_submission_revision_ = 0;
     std::uint64_t native_array_preview_revision_ = 0;
     std::uint64_t native_array_preview_asset_revision_ = 0;
+    std::uint64_t native_array_preview_local_visibility_revision_ = 0;
     std::uint8_t native_array_preview_kind_ = 0;
     std::uint64_t scene_session_id_ = 1u;
     std::uint64_t activation_generation_ = 1u;

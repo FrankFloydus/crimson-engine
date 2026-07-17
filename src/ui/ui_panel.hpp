@@ -18,6 +18,7 @@ enum class UIPanelId {
     Outliner,
     Inspector,
     Console,
+    Layers,
 };
 
 inline const char *ui_panel_key(UIPanelId id) {
@@ -30,6 +31,8 @@ inline const char *ui_panel_key(UIPanelId id) {
     return "Inspector";
   case UIPanelId::Console:
     return "Console";
+  case UIPanelId::Layers:
+    return "Layers";
   }
   return "Unknown";
 }
@@ -44,6 +47,8 @@ inline const char *ui_panel_stable_id(UIPanelId id) {
     return "inspector";
   case UIPanelId::Console:
     return "console";
+  case UIPanelId::Layers:
+    return "layers";
   }
   return "unknown";
 }
@@ -53,6 +58,7 @@ inline bool ui_panel_default_visible(UIPanelId id) {
   case UIPanelId::Viewport:
   case UIPanelId::Outliner:
   case UIPanelId::Inspector:
+  case UIPanelId::Layers:
     return true;
   case UIPanelId::Console:
     return false;
@@ -70,6 +76,8 @@ inline const char *ui_panel_localization_key(UIPanelId id) {
     return "ui.panel.inspector";
   case UIPanelId::Console:
     return "ui.panel.console";
+  case UIPanelId::Layers:
+    return "ui.panel.layers";
   }
   return "ui.panel.unknown";
 }

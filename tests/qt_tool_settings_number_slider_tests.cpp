@@ -396,7 +396,7 @@ TEST(QtToolSettingsNumberSliderTests,
 }
 
 TEST(QtToolSettingsNumberSliderTests,
-     PrimitiveEnterAndEscapeRemainSemanticAcrossDynamicSettingsEditors) {
+     PrimitiveEnterEditsAndEscapeRemainsSemanticAcrossDynamicSettingsEditors) {
   ASSERT_EQ(QCoreApplication::instance(), nullptr);
   int argc = 1;
   char executable[] = "quader-primitive-tool-settings-key-tests";
@@ -437,6 +437,8 @@ TEST(QtToolSettingsNumberSliderTests,
   send_key_event(*subdivision_editor, Qt::Key_Return);
 
   EXPECT_EQ(session.primitive_creation().box_settings().subdivisions_x, 5);
+  EXPECT_EQ(editor.tools().active_tool(), "create_primitive");
+  send_key_event(*subdivision_editor, Qt::Key_Space);
   EXPECT_EQ(editor.tools().active_tool(), "select");
   EXPECT_TRUE(editor.history().can_undo());
 
@@ -470,7 +472,7 @@ TEST(QtToolSettingsNumberSliderTests,
   QCoreApplication::processEvents();
   send_key_event(*primitive_type, Qt::Key_Return);
 
-  EXPECT_EQ(editor.tools().active_tool(), "select");
+  EXPECT_EQ(editor.tools().active_tool(), "create_primitive");
   EXPECT_TRUE(editor.history().can_undo());
 
   active_tool = quader::ViewportToolId::CreatePrimitive;

@@ -59,11 +59,26 @@ struct ViewportGridPresetDescriptor {
   bool is_default = false;
 };
 
+/// Classifies the semantic viewport state that owns an input action.
+enum class ViewportInputBindingContext {
+  Viewport,
+  Navigation,
+  FlyNavigation,
+  ModalTool,
+  LinearArrayTool,
+  RadialArrayTool,
+};
+
 /**
  * Represents one semantic viewport input action binding target.
  */
 struct ViewportInputActionBindingDescriptor {
   std::string target_id;
+  std::string_view action_id;
+  std::string_view label;
+  std::string_view localization_key;
+  ViewportInputBindingContext context =
+      ViewportInputBindingContext::Navigation;
   std::string shortcut;
   std::string_view when;
   int weight = 20;
@@ -124,6 +139,9 @@ std::optional<std::string>
 viewport_operation_preview_command_target_id_for_router_shortcut(
     const ViewportShortcut &shortcut);
 bool viewport_router_shortcut_for_target_id(std::string_view target_id,
+                                            ViewportShortcut &shortcut);
+bool viewport_router_shortcut_for_target_id(std::string_view target_id,
+                                            int current_grid_preset,
                                             ViewportShortcut &shortcut);
 
 } // namespace quader

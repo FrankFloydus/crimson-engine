@@ -38,14 +38,16 @@ void UIPanelManager::set_visibility_changed_callback(
 
 void UIPanelManager::apply_settings(const UISettings &settings) {
   for (UIPanelId id :
-       {UIPanelId::Outliner, UIPanelId::Inspector, UIPanelId::Console}) {
+       {UIPanelId::Outliner, UIPanelId::Inspector, UIPanelId::Layers,
+        UIPanelId::Console}) {
     (void)set_visible(id, settings.is_panel_visible(id));
   }
 }
 
 void UIPanelManager::write_settings(UISettings &settings) const {
   for (UIPanelId id :
-       {UIPanelId::Outliner, UIPanelId::Inspector, UIPanelId::Console}) {
+       {UIPanelId::Outliner, UIPanelId::Inspector, UIPanelId::Layers,
+        UIPanelId::Console}) {
     settings.set_panel_visible(id, is_visible(id));
   }
 }
@@ -98,7 +100,8 @@ QDockWidget *UIPanelManager::dock(UIPanelId id) const {
 bool UIPanelManager::eventFilter(QObject *watched, QEvent *event) {
   if (event != nullptr && event->type() == QEvent::Close) {
     for (UIPanelId id :
-         {UIPanelId::Outliner, UIPanelId::Inspector, UIPanelId::Console}) {
+         {UIPanelId::Outliner, UIPanelId::Inspector, UIPanelId::Layers,
+          UIPanelId::Console}) {
       if (dock(id) == watched) {
         (void)record_explicit_visibility(id, false);
         break;

@@ -226,6 +226,14 @@ EditorSelectionService::set_object_selection(std::span<const EntityId> entities,
 
 ModelingCommandResult EditorSelectionService::set_component_selection(
     const ModelingComponentSelectionRequest &request) {
+  const std::optional<EntityId> entity =
+      modeling_.entity_for_modeling_object(request.modeling_object_id);
+  if (!entity.has_value() || !scene_target_selectable(*entity)) {
+    return {.ok = false,
+            .changed = false,
+            .message = "The component owner is not visible in the current "
+                       "viewport scope."};
+  }
   return modeling_.set_component_selection(request);
 }
 
@@ -245,18 +253,14 @@ bool EditorSelectionService::scene_target_selectable(EntityId entity) const {
 
 std::vector<EntityId>
 EditorSelectionService::scene_bulk_candidates(ModelingSelectionMode mode) const {
-  if (!scene_scope_filter_ || mode != ModelingSelectionMode::Object) {
-    return user_selectable_scene_entities_for_mode(
-        scene_, scene_selection_bulk_mode(mode));
+  std::vector<EntityId> candidates = user_selectable_scene_entities_for_mode(
+      scene_, scene_selection_bulk_mode(mode));
+  if (!scene_scope_filter_) {
+    return candidates;
   }
-
-  std::vector<EntityId> candidates;
-  for (const EntityId entity : scene_.entities()) {
-    if (scene_.is_scene_root(entity) || !scene_scope_filter_(entity)) {
-      continue;
-    }
-    candidates.push_back(entity);
-  }
+  std::erase_if(candidates, [this](EntityId entity) {
+    return !scene_scope_filter_(entity);
+  });
   return candidates;
 }
 

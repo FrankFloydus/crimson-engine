@@ -132,6 +132,7 @@ void expect_same_revisions(const quader::QuaderRevisionStamp &actual,
                            const quader::QuaderRevisionStamp &expected) {
   EXPECT_EQ(actual.project_revision, expected.project_revision);
   EXPECT_EQ(actual.scene_revision, expected.scene_revision);
+  EXPECT_EQ(actual.scene_layer_revision, expected.scene_layer_revision);
   EXPECT_EQ(actual.asset_revision, expected.asset_revision);
   EXPECT_EQ(actual.modeling_content_revision,
             expected.modeling_content_revision);

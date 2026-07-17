@@ -129,6 +129,7 @@ private:
   RenderSceneBindingKey synced_scene_binding_;
   std::uint64_t synced_scene_revision_ = 0u;
   std::uint64_t synced_asset_revision_ = 0u;
+  std::uint64_t synced_local_visibility_revision_ = 0u;
   std::uint64_t synced_wire_style_signature_ = 0u;
   ViewportCameraClipPlanes synced_clip_planes_;
   std::uint8_t layer_mask_ = 0u;

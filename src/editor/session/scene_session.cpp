@@ -16,6 +16,7 @@
 #include "editor/placement/viewport_point_placement_service.hpp"
 #include "editor/selection/editor_selection_service.hpp"
 #include "editor/tools/native_viewport_tool_coordinator.hpp"
+#include "editor/session/viewport_local_visibility_service.hpp"
 #include "editor/modeling/services/primitive_creation_tool_service.hpp"
 
 #include <utility>
@@ -79,7 +80,9 @@ void SceneSession::rebuild_services() {
         return instances_->resolve_selection_target(entity);
       },
       [this](EntityId entity) {
-        return instances_->is_selectable_in_current_scope(entity);
+        return instances_->is_selectable_in_current_scope(entity) &&
+               (!viewport_local_visibility_ ||
+                viewport_local_visibility_->allows_selection_entity(entity));
       });
   pivot_ = std::make_unique<PivotToolService>(
       document_.scene(), document_.assets(), *history_, *modeling_);
@@ -112,6 +115,26 @@ void SceneSession::rebuild_services() {
   native_tools_ = std::make_unique<NativeViewportToolCoordinator>(
       *pivot_, *linear_array_, *radial_array_, *primitive_creation_,
       *selection_, *modeling_);
+  viewport_local_visibility_ =
+      std::make_unique<ViewportLocalVisibilityService>(
+          document_.scene(), document_.assets(), *modeling_, *instances_,
+          *native_tools_, viewport_workspace_);
+  history_->set_change_observer([this]() {
+    if (viewport_local_visibility_) {
+      viewport_local_visibility_->synchronize_scene_lifecycle();
+    }
+  });
+  modeling_->set_viewport_visibility_filter(
+      [this](EntityId entity) {
+        return viewport_local_visibility_->allows_selection_entity(entity);
+      },
+      [this]() { return viewport_local_visibility_->revision(); },
+      [this]() { return viewport_local_visibility_->active(); });
+  point_placement_->set_viewport_visibility_filter(
+      [this](EntityId entity) {
+        return viewport_local_visibility_->allows_selection_entity(entity);
+      },
+      [this]() { return viewport_local_visibility_->revision(); });
   document_commands_->set_entity_mutation_blocker([this](EntityId entity) {
     return native_tools_ && native_tools_->blocks_document_mutation(entity);
   });
@@ -203,6 +226,7 @@ void SceneSession::replace_document(SceneContentDocument document) {
   QDR_PROFILE_FUNCTION();
   const std::uint64_t previous_scene_revision = document_.scene().revision();
   const std::uint64_t previous_asset_revision = document_.assets().revision();
+  viewport_local_visibility_->reset_for_document_replacement();
   modeling_->clear_transient_state_for_document_replacement();
   native_tools_->reset_transient_state();
   instance_edit_context_.clear();

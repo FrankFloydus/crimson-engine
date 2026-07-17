@@ -42,6 +42,11 @@ bool EditorCommandRegistry::contains(std::string_view command_id) const {
   return find(command_id) != nullptr;
 }
 
+bool EditorCommandRegistry::enabled(std::string_view command_id) const {
+  const EditorCommandRegistration *command = find(command_id);
+  return command != nullptr && (!command->enabled || command->enabled());
+}
+
 std::optional<QuaderApiVoidResult>
 EditorCommandRegistry::execute(std::string_view command_id) const {
   QDR_PROFILE_FUNCTION();

@@ -11,6 +11,7 @@
 #include "math/types.hpp"
 
 #include <cstdint>
+#include <functional>
 #include <optional>
 #include <vector>
 
@@ -107,6 +108,10 @@ viewport_active_grid_placement_plane(const ViewportCameraController &camera);
  */
 class ViewportPointPlacementService {
 public:
+  void set_viewport_visibility_filter(
+      std::function<bool(EntityId)> filter,
+      std::function<std::uint64_t()> revision_provider);
+
   [[nodiscard]] ViewportPointPlacementResult
   resolve(const SceneDocument &document, const AssetRegistry &assets,
           const ViewportCameraController &camera,
@@ -148,12 +153,15 @@ private:
   const AssetRegistry *cached_assets_ = nullptr;
   std::uint64_t cached_scene_revision_ = 0;
   std::uint64_t cached_asset_revision_ = 0;
+  std::uint64_t cached_viewport_visibility_revision_ = 0;
   bool cache_valid_ = false;
   std::vector<CachedLandmark> landmarks_;
   std::vector<CachedTriangle> triangles_;
   const ViewportCameraController *cached_projection_camera_ = nullptr;
   std::uint64_t cached_projection_signature_ = 0;
   std::vector<CachedProjection> projected_landmarks_;
+  std::function<bool(EntityId)> viewport_visibility_filter_;
+  std::function<std::uint64_t()> viewport_visibility_revision_provider_;
 };
 
 } // namespace quader

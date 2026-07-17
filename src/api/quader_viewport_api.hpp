@@ -47,6 +47,11 @@ public:
     [[nodiscard]] ViewportView view(ViewportPaneId pane) const;
     QuaderApiVoidResult set_view(ViewportPaneId pane, ViewportView view);
 
+    [[nodiscard]] bool local_visibility_active() const;
+    [[nodiscard]] bool can_enter_local_visibility() const;
+    [[nodiscard]] bool can_toggle_local_visibility() const;
+    QuaderApiVoidResult toggle_local_visibility();
+
     QuaderApiVoidResult
     frame_all(ViewportPaneId pane = ViewportPaneId::Perspective);
     QuaderApiVoidResult

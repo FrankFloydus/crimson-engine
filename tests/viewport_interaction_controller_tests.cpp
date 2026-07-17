@@ -2925,6 +2925,7 @@ TEST(ViewportHoverControllerTests,
       .grid_snap_enabled = true,
       .mouse_local = {320.0f, 240.0f},
       .viewport_size = {800.0f, 600.0f},
+      .local_visibility_revision = 11u,
   };
 
   const quader::ViewportHoverWorkKey snapped =
@@ -2937,6 +2938,13 @@ TEST(ViewportHoverControllerTests,
       controller.make_key(camera, request);
   EXPECT_FALSE(snapped.matches(unsnapped));
   EXPECT_TRUE(controller.claim(unsnapped));
+
+  request.local_visibility_revision = 12u;
+  const quader::ViewportHoverWorkKey local_visibility_changed =
+      controller.make_key(camera, request);
+  EXPECT_FALSE(unsnapped.matches(local_visibility_changed));
+  EXPECT_TRUE(controller.claim(local_visibility_changed));
+  EXPECT_FALSE(controller.claim(local_visibility_changed));
 }
 
 TEST(ViewportHostInteractionPolicyTests,

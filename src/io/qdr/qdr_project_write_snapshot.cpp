@@ -36,6 +36,7 @@ entity_write_snapshot(const SceneDocument &scene, EntityId entity) {
       .name = scene.name(entity) ? scene.name(entity)->name : std::string{},
       .kind = scene.kind(entity),
       .parent = scene.parent(entity),
+      .layer_id = scene.entity_layer(entity),
   };
   if (const TransformComponent *transform = scene.transform(entity)) {
     snapshot.transform = *transform;
@@ -119,6 +120,18 @@ qdr_project_write_snapshot_from_document(const SceneContentDocument &document) {
   snapshot.entities.reserve(entity_ids.size());
   for (const EntityId entity : entity_ids) {
     snapshot.entities.push_back(entity_write_snapshot(scene, entity));
+  }
+
+  const std::vector<SceneLayerRecord> layers = scene.layers();
+  snapshot.layers.reserve(layers.size());
+  for (const SceneLayerRecord &layer : layers) {
+    snapshot.layers.push_back(QdrProjectSceneLayerWriteSnapshot{
+        .id = layer.id,
+        .name = layer.name,
+        .visible = layer.visible,
+        .wireframe_color = layer.wireframe_color,
+        .locked = layer.locked,
+    });
   }
 
   snapshot.object_records = document.object_records();

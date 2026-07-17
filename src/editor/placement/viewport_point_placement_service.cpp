@@ -370,6 +370,7 @@ void ViewportPointPlacementService::invalidate() {
   cached_assets_ = nullptr;
   cached_scene_revision_ = 0;
   cached_asset_revision_ = 0;
+  cached_viewport_visibility_revision_ = 0;
   cache_valid_ = false;
   landmarks_.clear();
   triangles_.clear();
@@ -378,12 +379,26 @@ void ViewportPointPlacementService::invalidate() {
   projected_landmarks_.clear();
 }
 
+void ViewportPointPlacementService::set_viewport_visibility_filter(
+    std::function<bool(EntityId)> filter,
+    std::function<std::uint64_t()> revision_provider) {
+  viewport_visibility_filter_ = std::move(filter);
+  viewport_visibility_revision_provider_ = std::move(revision_provider);
+  invalidate();
+}
+
 void ViewportPointPlacementService::refresh_cache(
     const SceneDocument &document, const AssetRegistry &assets) {
+  const std::uint64_t viewport_visibility_revision =
+      viewport_visibility_revision_provider_
+          ? viewport_visibility_revision_provider_()
+          : 0u;
   if (cache_valid_ && cached_document_ == &document &&
       cached_assets_ == &assets &&
       cached_scene_revision_ == document.revision() &&
-      cached_asset_revision_ == assets.revision()) {
+      cached_asset_revision_ == assets.revision() &&
+      cached_viewport_visibility_revision_ ==
+          viewport_visibility_revision) {
     return;
   }
 
@@ -394,7 +409,9 @@ void ViewportPointPlacementService::refresh_cache(
   projected_landmarks_.clear();
 
   for (const EntityId entity : document.entities()) {
-    if (!document.is_effectively_visible(entity)) {
+    if (!document.is_effectively_visible(entity) ||
+        (viewport_visibility_filter_ &&
+         !viewport_visibility_filter_(entity))) {
       continue;
     }
     const VisibilityComponent *visibility = document.visibility(entity);
@@ -509,6 +526,7 @@ void ViewportPointPlacementService::refresh_cache(
   cached_assets_ = &assets;
   cached_scene_revision_ = document.revision();
   cached_asset_revision_ = assets.revision();
+  cached_viewport_visibility_revision_ = viewport_visibility_revision;
   cache_valid_ = true;
 }
 

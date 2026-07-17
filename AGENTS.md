@@ -259,6 +259,14 @@ Verification for UI work that touches a frame callback or runtime synchronizatio
 - `QuaderKeybindingService`, command IDs, command registry, viewport shortcut descriptors,
   `src/ui/qt_input_adapter.*`, and `ViewportInputRouter` are the source-of-truth map for Quader
   input.
+- Treat command lifecycle and default-keybinding lifecycle as one change. Whenever a command is
+  added, renamed, or removed, or the user requests a default keybinding change, reconcile the
+  command registry and IDs, compiled default mapping, context/scope and conflict behavior,
+  Settings catalog and labels, menus/tooltips, persistence compatibility, localization, and tests
+  in the same pass. Every new command must deliberately receive a default or be explicitly tested
+  and documented as unassigned; a removed or renamed command must leave no stale default, alias,
+  catalog row, localization entry, menu shortcut, or user-override target; a changed default must
+  preserve existing user overrides unless the request explicitly requires migration.
 - Do not bypass these owners with ad hoc key checks in UI panels or tools.
 - Viewport navigation and tools consume semantic input frames, not raw Qt events.
 - Shortcut contexts remain explicit. Global commands, viewport commands, tool activation, text

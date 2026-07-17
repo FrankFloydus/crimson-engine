@@ -148,9 +148,11 @@ void QtViewportDisplayToolbar::synchronize(const QuaderEditorApi &editor,
       entry.action->setEnabled(enabled);
     }
     QString tooltip = entry.action->text();
-    if (command.has_value() && !command->shortcut.empty()) {
+    const std::string shortcut =
+        editor.commands().shortcut_for(entry.command_id);
+    if (!shortcut.empty()) {
       tooltip.append(QStringLiteral(" [%1]")
-                         .arg(QString::fromStdString(command->shortcut)));
+                         .arg(QString::fromStdString(shortcut)));
     }
     if (entry.action->toolTip() != tooltip) {
       entry.action->setToolTip(tooltip);

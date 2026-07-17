@@ -10,6 +10,7 @@
 #include "editor/modeling/runtime/modeling_object_runtime_map.hpp"
 #include "math/glm_bridge.hpp"
 #include "scene/scene_document.hpp"
+#include "scene/scene_hierarchy_visibility.hpp"
 #include "scene/scene_transform.hpp"
 
 #include <algorithm>
@@ -69,26 +70,6 @@ void include_pick_bounds_point(quader_editor_core::PickObjectBounds &bounds,
   bounds.max.z = std::max(bounds.max.z, point.z);
 }
 
-bool hierarchy_flag_allows_member(const SceneDocument &scene, EntityId member,
-                                  EntityId definition, bool selectable) {
-  EntityId current = member;
-  while (current != kInvalidEntityId && current != definition) {
-    if (const VisibilityComponent *visibility = scene.visibility(current);
-        visibility != nullptr &&
-        (!visibility->visible || (selectable && !visibility->selectable))) {
-      return false;
-    }
-    if (selectable) {
-      if (const LockComponent *lock = scene.lock(current);
-          lock != nullptr && lock->locked) {
-        return false;
-      }
-    }
-    current = scene.parent(current);
-  }
-  return current == definition;
-}
-
 bool occurrence_is_pickable(const SceneDocument &scene, EntityId occurrence) {
   if (!scene.exists(occurrence) || !scene.is_effectively_visible(occurrence) ||
       scene.is_effectively_locked(occurrence)) {
@@ -143,7 +124,8 @@ PickingCacheProjection::scene_transformed_objects_for_picking(
     const SceneDocument &scene, const ModelingObjectRuntimeMap &object_map,
     ModelingInstanceEditScope instance_edit_scope,
     ModelingSelectionMode app_selection_mode,
-    const std::function<int(EntityId)> &instance_participant_id) {
+    const std::function<int(EntityId)> &instance_participant_id,
+    const std::function<bool(EntityId)> &entity_visible) {
   QDR_PROFILE_FUNCTION();
   ModelingPickingProjection projection;
   projection.objects.reserve(objects.size());
@@ -151,6 +133,7 @@ PickingCacheProjection::scene_transformed_objects_for_picking(
 
   const bool edit_scope_valid =
       instance_edit_scope.active() &&
+      (!entity_visible || entity_visible(instance_edit_scope.occurrence)) &&
       scene.is_instance_definition_entity(instance_edit_scope.definition) &&
       occurrence_is_pickable(scene, instance_edit_scope.occurrence) &&
       scene.instance_occurrence(instance_edit_scope.occurrence) != nullptr &&
@@ -172,7 +155,9 @@ PickingCacheProjection::scene_transformed_objects_for_picking(
     if (instance_edit_scope.active()) {
       if (!edit_scope_valid || !definition_member ||
           definition != instance_edit_scope.definition ||
-          !hierarchy_flag_allows_member(scene, *entity, definition, true)) {
+          (entity_visible && !entity_visible(*entity)) ||
+          !scene_hierarchy_segment_is_selectable(scene, *entity,
+                                                 definition)) {
         continue;
       }
       const std::optional<QMat4> world_from_object =
@@ -192,14 +177,15 @@ PickingCacheProjection::scene_transformed_objects_for_picking(
       // modes must not expose their canonical member topology outside edit.
       if (app_selection_mode != ModelingSelectionMode::Object ||
           !instance_participant_id ||
-          !hierarchy_flag_allows_member(scene, *entity, definition, false)) {
+          !scene_hierarchy_segment_is_visible(scene, *entity, definition)) {
         continue;
       }
       std::vector<EntityId> occurrences =
           scene.instance_occurrences_for_definition(definition);
       std::sort(occurrences.begin(), occurrences.end());
       for (const EntityId occurrence : occurrences) {
-        if (!occurrence_is_pickable(scene, occurrence)) {
+        if (!occurrence_is_pickable(scene, occurrence) ||
+            (entity_visible && !entity_visible(occurrence))) {
           continue;
         }
         const std::optional<QMat4> world_from_object =
@@ -229,6 +215,8 @@ PickingCacheProjection::scene_transformed_objects_for_picking(
 
     const VisibilityComponent *visibility = scene.visibility(*entity);
     if (!scene.is_effectively_visible(*entity) ||
+        (entity_visible && !entity_visible(*entity)) ||
+        scene.is_effectively_locked(*entity) ||
         (visibility != nullptr && !visibility->selectable)) {
       continue;
     }

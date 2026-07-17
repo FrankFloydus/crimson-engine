@@ -13,6 +13,7 @@
 #include "core/types.hpp"
 #include "math/types.hpp"
 #include "scene/scene_document.hpp"
+#include "scene/scene_hierarchy_visibility.hpp"
 #include "scene/scene_transform.hpp"
 
 #include <cstddef>
@@ -30,20 +31,6 @@ struct InstanceArrayPreviewMeshSnapshot final {
   MaterialAssetRevision material_revision;
   QMat4 member_from_definition;
 };
-
-inline bool instance_array_definition_member_visible(
-    const SceneDocument &scene, EntityId member, EntityId definition) {
-  EntityId current = member;
-  std::size_t guard = scene.entities().size() + 1u;
-  while (current != kInvalidEntityId && current != definition && guard-- > 0u) {
-    const VisibilityComponent *visibility = scene.visibility(current);
-    if (visibility != nullptr && !visibility->visible) {
-      return false;
-    }
-    current = scene.parent(current);
-  }
-  return current == definition;
-}
 
 inline MaterialReference instance_array_entity_material(
     const SceneDocument &scene, EntityId entity) {
@@ -74,8 +61,7 @@ inline bool capture_instance_array_preview_meshes(
   definition = component->definition;
   for (const EntityId member : scene.descendants(definition, false)) {
     if (scene.containing_instance_definition(member) != definition ||
-        !instance_array_definition_member_visible(scene, member,
-                                                  definition)) {
+        !scene_hierarchy_segment_is_visible(scene, member, definition)) {
       continue;
     }
     const MeshComponent *mesh = scene.mesh(member);

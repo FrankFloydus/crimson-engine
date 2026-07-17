@@ -68,6 +68,7 @@ void SceneRenderSyncService::shutdown() {
 
     light_cache_.shutdown();
     synced_revision_ = 0;
+    synced_local_visibility_revision_ = 0;
     synced_asset_revision_ = 0;
     synced_project_material_revision_ = 0;
     synced_instance_edit_scope_ = {};
@@ -103,6 +104,7 @@ void SceneRenderSyncService::bind_scene(
   material_binding_->bind_scene(scene_binding);
   synced_scene_binding_ = scene_binding;
   synced_revision_ = 0;
+  synced_local_visibility_revision_ = 0;
   synced_asset_revision_ = 0;
   synced_project_material_revision_ = 0;
   synced_instance_edit_scope_ = {};
@@ -126,6 +128,8 @@ bool SceneRenderSyncService::sync(const RenderSceneSnapshot &snapshot) {
     const bool document_unchanged =
         has_synced_ && synced_scene_binding_ == snapshot.scene_binding &&
         synced_revision_ == snapshot.scene_revision &&
+        synced_local_visibility_revision_ ==
+            snapshot.local_visibility_revision &&
         synced_instance_edit_scope_ == snapshot.instance_edit_scope;
     const bool assets_unchanged =
         has_synced_ && synced_scene_binding_ == snapshot.scene_binding &&
@@ -147,6 +151,7 @@ bool SceneRenderSyncService::sync(const RenderSceneSnapshot &snapshot) {
         rebuild(snapshot);
     }
     synced_revision_ = snapshot.scene_revision;
+    synced_local_visibility_revision_ = snapshot.local_visibility_revision;
     synced_asset_revision_ = snapshot.asset_revision;
     synced_project_material_revision_ = snapshot.project_material_revision;
     synced_instance_edit_scope_ = snapshot.instance_edit_scope;
@@ -181,6 +186,7 @@ bool SceneRenderSyncService::can_sync_transforms_only(
   if (!has_synced_ || synced_scene_binding_ != snapshot.scene_binding ||
       !snapshot.dirty.transforms_changed ||
       snapshot.dirty.visibility_changed ||
+      snapshot.dirty.local_visibility_changed ||
       snapshot.dirty.mesh_bindings_changed ||
       snapshot.dirty.render_components_changed ||
       snapshot.dirty.assets_changed ||

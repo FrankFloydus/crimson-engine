@@ -38,6 +38,7 @@ class AssetRegistry;
 class ConsolePanel;
 class EditorSelectionService;
 class InspectorPanel;
+class LayerPanel;
 class LinearArrayToolService;
 class ModelingSessionService;
 class OutlinerPanel;
@@ -187,6 +188,7 @@ private:
   QtViewportPanel *viewport_panel_ = nullptr;
   OutlinerPanel *outliner_panel_ = nullptr;
   InspectorPanel *inspector_panel_ = nullptr;
+  LayerPanel *layer_panel_ = nullptr;
   ConsolePanel *console_panel_ = nullptr;
   QtSettingsDialog *settings_dialog_ = nullptr;
   QtMaterialBrowserWindow *material_browser_window_ = nullptr;
@@ -221,6 +223,8 @@ private:
   bool ui_settings_changed_ = false;
   std::string localized_locale_;
   std::uint64_t outliner_scene_revision_ = 0;
+  std::uint64_t layers_scene_revision_ = 0;
+  std::uint64_t layers_scene_selection_revision_ = 0;
   std::uint64_t inspector_scene_revision_ = 0;
   std::uint64_t inspector_modeling_content_revision_ = 0;
   std::uint64_t inspector_modeling_selection_revision_ = 0;
@@ -234,8 +238,10 @@ private:
   QtStandardMaterialPreviewImageCache
       standard_material_preview_image_cache_;
   std::string outliner_locale_;
+  std::string layers_locale_;
   std::string inspector_locale_;
   bool outliner_refresh_valid_ = false;
+  bool layers_refresh_valid_ = false;
   bool inspector_refresh_valid_ = false;
   bool toolbar_refresh_valid_ = false;
   bool home_visible_ = false;

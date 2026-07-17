@@ -10,6 +10,7 @@
 #include "editor/modeling/modeling_types.hpp"
 #include "render/viewport_overlay_frame.hpp"
 
+#include <functional>
 #include <vector>
 
 #include <editor/modeling/runtime/session.hpp>
@@ -28,21 +29,24 @@ public:
       const quader_editor_core::SelectionOverlayFrame &frame,
       const ModelingObjectRuntimeMap &object_registry,
       const SceneDocument &scene, quader_editor_core::SelectionMode mode,
-      ModelingInstanceEditScope instance_edit_scope = {});
+      ModelingInstanceEditScope instance_edit_scope = {},
+      const std::function<bool(EntityId)> &entity_visible = {});
   static void append_projected_overlay_lines(
       ViewportOverlayFrame &frame,
       const std::vector<quader_editor_core::SelectionOverlayLine> &lines,
       const ModelingObjectRuntimeMap &object_registry,
       const SceneDocument &scene, ViewportOverlayLayer layer,
       ViewportOverlayStyleRole style_role, ViewportOverlaySource source,
-      ModelingInstanceEditScope instance_edit_scope = {});
+      ModelingInstanceEditScope instance_edit_scope = {},
+      const std::function<bool(EntityId)> &entity_visible = {});
   static void append_projected_overlay_points(
       ViewportOverlayFrame &frame,
       const std::vector<quader_editor_core::SelectionOverlayPoint> &points,
       const ModelingObjectRuntimeMap &object_registry,
       const SceneDocument &scene, ViewportOverlayLayer layer,
       ViewportOverlayStyleRole style_role, ViewportOverlaySource source,
-      ModelingInstanceEditScope instance_edit_scope = {});
+      ModelingInstanceEditScope instance_edit_scope = {},
+      const std::function<bool(EntityId)> &entity_visible = {});
   static void append_world_space_overlay_points(
       ViewportOverlayFrame &frame,
       const std::vector<quader_editor_core::SelectionOverlayPoint> &points);

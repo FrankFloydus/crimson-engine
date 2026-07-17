@@ -67,6 +67,8 @@ public:
     [[nodiscard]] const QuaderSceneDocumentsApi &scene_documents() const;
     [[nodiscard]] QuaderSceneApi& scene();
     [[nodiscard]] const QuaderSceneApi& scene() const;
+    [[nodiscard]] QuaderLayersApi &layers();
+    [[nodiscard]] const QuaderLayersApi &layers() const;
     [[nodiscard]] QuaderModelingApi& modeling();
     [[nodiscard]] const QuaderModelingApi& modeling() const;
     [[nodiscard]] QuaderSelectionApi& selection();

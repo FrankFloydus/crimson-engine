@@ -146,6 +146,7 @@ enum class QuaderMouseButton {
  */
 enum class QuaderInputGesture {
     Press,
+    Click,
     DoubleClick,
     Drag,
     Wheel,

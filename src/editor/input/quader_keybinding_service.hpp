@@ -14,6 +14,7 @@
 #include <cstddef>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <optional>
 #include <sstream>
 #include <string>
@@ -382,10 +383,11 @@ inline std::vector<std::string> when_identifiers(std::string_view expression) {
 }
 
 inline bool at_most_one_prefix_true(const QuaderKeybindingContext &context,
-                                    std::string_view prefix) {
+                                    std::string_view prefix,
+                                    std::string_view excluded_key = {}) {
   bool found = false;
   for (const auto &[key, value] : context.values) {
-    if (!value || key.find(prefix) != 0u) {
+    if (!value || key.find(prefix) != 0u || key == excluded_key) {
       continue;
     }
     if (found) {
@@ -398,7 +400,8 @@ inline bool at_most_one_prefix_true(const QuaderKeybindingContext &context,
 
 inline bool
 valid_semantic_when_context(const QuaderKeybindingContext &context) {
-  if (!at_most_one_prefix_true(context, "activeTool.")) {
+  if (!at_most_one_prefix_true(context, "activeTool.",
+                               "activeTool.ownsViewport")) {
     return false;
   }
   if (!at_most_one_prefix_true(context, "selectionMode.")) {
@@ -744,6 +747,15 @@ inline std::string json_escape(std::string_view value) {
  */
 class QuaderKeybindingService final {
 public:
+  using EligibilityPredicate = std::function<bool(std::string_view)>;
+  using AtomicTextWriter =
+      std::function<std::optional<std::string>(
+          const std::filesystem::path &, std::string_view)>;
+
+  void set_atomic_text_writer(AtomicTextWriter writer) {
+    atomic_text_writer_ = std::move(writer);
+  }
+
   void set_storage_path(std::filesystem::path path) {
     storage_path_ = std::move(path);
   }
@@ -781,6 +793,105 @@ public:
                     std::move(when), "default", weight, false);
   }
 
+  /** Replaces the compiled mapping for one internal target. */
+  bool set_default_keybinding(std::string target_id, std::string shortcut,
+                              std::string when = {}, int weight = 0) {
+    if (target_id.empty()) {
+      return false;
+    }
+    erase_rules_for(default_rules_, target_id);
+    if (shortcut.empty()) {
+      register_target(std::move(target_id));
+      return true;
+    }
+    return add_default_keybinding(std::move(target_id), std::move(shortcut),
+                                  std::move(when), weight);
+  }
+
+  [[nodiscard]] std::vector<QuaderKeybindingRule>
+  default_keybindings() const {
+    return default_rules_;
+  }
+
+  [[nodiscard]] std::vector<QuaderKeybindingRule> user_keybindings() const {
+    return user_rules_;
+  }
+
+  /**
+   * Validates and persists one complete user-rule candidate before making it
+   * visible to dispatch. Vector order remains the user-rule precedence order.
+   */
+  [[nodiscard]] QuaderKeybindingMutationResult
+  replace_user_keybindings(std::vector<QuaderKeybindingRule> candidate) {
+    return replace_user_keybindings_impl(std::move(candidate), true);
+  }
+
+  /**
+   * Installs a canonicalized representation of rules that were already read
+   * from disk. This is intentionally non-persisting so startup migration does
+   * not rewrite a hand-authored legacy file merely by opening Quader.
+   */
+  [[nodiscard]] QuaderKeybindingMutationResult
+  adopt_loaded_user_keybindings(
+      std::vector<QuaderKeybindingRule> candidate) {
+    return replace_user_keybindings_impl(std::move(candidate), false);
+  }
+
+  [[nodiscard]] QuaderKeybindingMutationResult
+  replace_user_keybindings_impl(std::vector<QuaderKeybindingRule> candidate,
+                                bool persist) {
+    std::vector<QuaderKeybindingRule> normalized;
+    normalized.reserve(candidate.size());
+    std::size_t candidate_order = next_order_;
+    for (QuaderKeybindingRule &rule : candidate) {
+      if (rule.target_id.empty()) {
+        return {.ok = false, .message = "Command id is required."};
+      }
+      if (!has_target(rule.target_id)) {
+        return {.ok = false, .message = "Unknown command id."};
+      }
+
+      rule.source = "user";
+      rule.weight = kUserWeight;
+      rule.order = candidate_order++;
+      if (rule.removal) {
+        rule.sequence.clear();
+        rule.shortcut.clear();
+      } else {
+        const auto parsed = keybinding_detail::parse_shortcut(rule.shortcut);
+        if (!parsed || parsed->empty()) {
+          return {.ok = false, .message = "Shortcut is invalid."};
+        }
+        rule.sequence = *parsed;
+        rule.shortcut = keybinding_detail::format_shortcut(rule.sequence);
+      }
+
+      // One physical mapping is authoritative for each internal target. A
+      // legacy file may contain several entries; declaration order makes the
+      // latest entry win.
+      erase_rules_for(normalized, rule.target_id);
+      normalized.push_back(std::move(rule));
+    }
+
+    if (same_user_rules(user_rules_, normalized)) {
+      pending_sequence_.clear();
+      return {.ok = true,
+              .changed = false,
+              .message = "Keybindings unchanged."};
+    }
+
+    if (persist) {
+      if (const std::optional<std::string> error =
+              save_if_configured(normalized)) {
+        return {.ok = false, .changed = false, .message = *error};
+      }
+    }
+    user_rules_ = std::move(normalized);
+    next_order_ = candidate_order;
+    pending_sequence_.clear();
+    return {.ok = true, .changed = true, .message = "Keybindings updated."};
+  }
+
   [[nodiscard]] QuaderKeybindingMutationResult
   set_user_shortcut(std::string target_id, std::string shortcut,
                     std::string when = {}) {
@@ -814,14 +925,15 @@ public:
       return {.ok = true, .changed = false, .message = "Shortcut unchanged."};
     }
 
-    erase_user_rules_for(target_id);
-    requested.order = next_order_++;
-    user_rules_.push_back(std::move(requested));
-    pending_sequence_.clear();
-    if (const std::optional<std::string> error = save_if_configured()) {
-      return {.ok = false, .changed = true, .message = *error};
+    std::vector<QuaderKeybindingRule> candidate = user_rules_;
+    erase_rules_for(candidate, target_id);
+    candidate.push_back(std::move(requested));
+    QuaderKeybindingMutationResult result =
+        replace_user_keybindings(std::move(candidate));
+    if (result.ok && result.changed) {
+      result.message = "Shortcut updated.";
     }
-    return {.ok = true, .changed = true, .message = "Shortcut updated."};
+    return result;
   }
 
   [[nodiscard]] QuaderKeybindingMutationResult
@@ -839,19 +951,20 @@ public:
           .ok = true, .changed = false, .message = "Shortcut already removed."};
     }
 
-    erase_user_rules_for(target_id);
+    std::vector<QuaderKeybindingRule> candidate = user_rules_;
+    erase_rules_for(candidate, target_id);
     QuaderKeybindingRule rule;
     rule.target_id = std::move(target_id);
     rule.source = "user";
     rule.weight = kUserWeight;
     rule.removal = true;
-    rule.order = next_order_++;
-    user_rules_.push_back(std::move(rule));
-    pending_sequence_.clear();
-    if (const std::optional<std::string> error = save_if_configured()) {
-      return {.ok = false, .changed = true, .message = *error};
+    candidate.push_back(std::move(rule));
+    QuaderKeybindingMutationResult result =
+        replace_user_keybindings(std::move(candidate));
+    if (result.ok && result.changed) {
+      result.message = "Shortcut removed.";
     }
-    return {.ok = true, .changed = true, .message = "Shortcut removed."};
+    return result;
   }
 
   [[nodiscard]] QuaderKeybindingMutationResult
@@ -869,12 +982,14 @@ public:
               .message = "Shortcut already at default."};
     }
 
-    erase_user_rules_for(target_id);
-    pending_sequence_.clear();
-    if (const std::optional<std::string> error = save_if_configured()) {
-      return {.ok = false, .changed = true, .message = *error};
+    std::vector<QuaderKeybindingRule> candidate = user_rules_;
+    erase_rules_for(candidate, target_id);
+    QuaderKeybindingMutationResult result =
+        replace_user_keybindings(std::move(candidate));
+    if (result.ok && result.changed) {
+      result.message = "Shortcut reset.";
     }
-    return {.ok = true, .changed = true, .message = "Shortcut reset."};
+    return result;
   }
 
   [[nodiscard]] std::string shortcut_for(std::string_view target_id) const {
@@ -922,7 +1037,8 @@ public:
 
     [[nodiscard]] QuaderKeybindingDispatch
     resolve_sequence(const std::vector<QuaderInputChord> &sequence,
-                     const QuaderKeybindingContext &context) const {
+                     const QuaderKeybindingContext &context,
+                     EligibilityPredicate eligible = {}) const {
       if (sequence.empty()) {
         return {};
       }
@@ -944,25 +1060,30 @@ public:
         }
       }
 
-      if (!exact_matches.empty()) {
-        const QuaderKeybindingRule *best = exact_matches.front();
-        for (const QuaderKeybindingRule *candidate : exact_matches) {
-          if (rule_precedes(*best, *candidate)) {
-            best = candidate;
-          }
+      std::stable_sort(
+          exact_matches.begin(), exact_matches.end(),
+          [](const QuaderKeybindingRule *left,
+             const QuaderKeybindingRule *right) {
+            return rule_precedes(*right, *left);
+          });
+      for (const QuaderKeybindingRule *candidate : exact_matches) {
+        if (eligible && !eligible(candidate->target_id)) {
+          continue;
         }
         return {
             .kind = QuaderKeybindingDispatch::Kind::ExactMatch,
-            .target_id = best->target_id,
-            .shortcut = best->shortcut,
+            .target_id = candidate->target_id,
+            .shortcut = candidate->shortcut,
         };
       }
 
-      if (!prefix_matches.empty()) {
-        return {
-            .kind = QuaderKeybindingDispatch::Kind::PendingChord,
-            .shortcut = keybinding_detail::format_shortcut(sequence),
-        };
+      for (const QuaderKeybindingRule *candidate : prefix_matches) {
+        if (!eligible || eligible(candidate->target_id)) {
+          return {
+              .kind = QuaderKeybindingDispatch::Kind::PendingChord,
+              .shortcut = keybinding_detail::format_shortcut(sequence),
+          };
+        }
       }
 
       return {};
@@ -970,7 +1091,8 @@ public:
 
     [[nodiscard]] QuaderKeybindingDispatch dispatch(
             const QuaderInputChord& chord,
-            const QuaderKeybindingContext& context) {
+            const QuaderKeybindingContext& context,
+            EligibilityPredicate eligible = {}) {
         if (chord.empty()) {
           pending_sequence_.clear();
           return {};
@@ -978,7 +1100,8 @@ public:
 
         std::vector<QuaderInputChord> sequence = pending_sequence_;
         sequence.push_back(chord);
-        QuaderKeybindingDispatch result = resolve_sequence(sequence, context);
+        QuaderKeybindingDispatch result =
+            resolve_sequence(sequence, context, std::move(eligible));
         if (result.kind == QuaderKeybindingDispatch::Kind::PendingChord) {
           pending_sequence_ = std::move(sequence);
           return result;
@@ -1051,6 +1174,7 @@ public:
           rule.sequence = *parsed;
           rule.shortcut = keybinding_detail::format_shortcut(rule.sequence);
         }
+        erase_rules_for(loaded, target_id);
         loaded.push_back(std::move(rule));
       }
 
@@ -1068,6 +1192,12 @@ public:
 
     [[nodiscard]] std::optional<std::string>
     save_user_keybindings(const std::filesystem::path &path) const {
+      return save_user_keybindings(path, user_rules_);
+    }
+
+    [[nodiscard]] std::optional<std::string> save_user_keybindings(
+        const std::filesystem::path &path,
+        const std::vector<QuaderKeybindingRule> &rules) const {
       std::error_code error;
       if (path.has_parent_path()) {
         std::filesystem::create_directories(path.parent_path(), error);
@@ -1078,9 +1208,9 @@ public:
 
       std::ostringstream json;
       json << "[\n";
-      for (const QuaderKeybindingRule &rule : user_rules_) {
+      for (const QuaderKeybindingRule &rule : rules) {
         const std::size_t index =
-            static_cast<std::size_t>(&rule - user_rules_.data());
+            static_cast<std::size_t>(&rule - rules.data());
         json << "  {\n";
         json << "    \"command\": \""
              << keybinding_detail::json_escape(
@@ -1098,19 +1228,17 @@ public:
         }
         json << "\n";
         json << "  }";
-        if (index + 1u < user_rules_.size()) {
+        if (index + 1u < rules.size()) {
           json << ",";
         }
         json << "\n";
       }
       json << "]\n";
 
-      std::ofstream file(path);
-      if (!file) {
-        return "Unable to write keybindings file.";
+      if (!atomic_text_writer_) {
+        return "Atomic keybinding persistence is not configured.";
       }
-      file << json.str();
-      return std::nullopt;
+      return atomic_text_writer_(path, json.str());
     }
 
 private:
@@ -1180,17 +1308,43 @@ private:
                              : std::optional<QuaderKeybindingRule>{*best};
     }
 
-    void erase_user_rules_for(std::string_view target_id) {
-      user_rules_.erase(std::remove_if(user_rules_.begin(), user_rules_.end(),
-                                       [&](const QuaderKeybindingRule &rule) {
-                                         return rule.target_id == target_id;
-                                       }),
-                        user_rules_.end());
+    static void erase_rules_for(std::vector<QuaderKeybindingRule> &rules,
+                                std::string_view target_id) {
+      rules.erase(std::remove_if(rules.begin(), rules.end(),
+                                 [&](const QuaderKeybindingRule &rule) {
+                                   return rule.target_id == target_id;
+                                 }),
+                  rules.end());
     }
 
     [[nodiscard]] std::optional<std::string> save_if_configured() const {
       return storage_path_.empty() ? std::nullopt
                                    : save_user_keybindings(storage_path_);
+    }
+
+    [[nodiscard]] std::optional<std::string> save_if_configured(
+        const std::vector<QuaderKeybindingRule> &rules) const {
+      return storage_path_.empty()
+                 ? std::nullopt
+                 : save_user_keybindings(storage_path_, rules);
+    }
+
+    [[nodiscard]] static bool same_user_rules(
+        const std::vector<QuaderKeybindingRule> &left,
+        const std::vector<QuaderKeybindingRule> &right) {
+      if (left.size() != right.size()) {
+        return false;
+      }
+      for (std::size_t index = 0u; index < left.size(); ++index) {
+        if (left[index].target_id != right[index].target_id ||
+            left[index].when != right[index].when ||
+            left[index].removal != right[index].removal ||
+            !keybinding_detail::same_shortcut(left[index].sequence,
+                                              right[index].sequence)) {
+          return false;
+        }
+      }
+      return true;
     }
 
     [[nodiscard]] std::vector<QuaderKeybindingRule> effective_rules() const {
@@ -1223,6 +1377,7 @@ private:
     }
 
     std::filesystem::path storage_path_;
+    AtomicTextWriter atomic_text_writer_;
     std::unordered_set<std::string> known_targets_;
     std::vector<QuaderKeybindingRule> default_rules_;
     std::vector<QuaderKeybindingRule> user_rules_;

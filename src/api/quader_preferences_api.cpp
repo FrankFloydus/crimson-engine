@@ -72,6 +72,37 @@ QuaderPreferencesApi::reset_shortcut(QuaderCommandId command_id) {
   return reset_shortcut(command_id.string());
 }
 
+QuaderApiVoidResult QuaderPreferencesApi::set_action_shortcut(
+    const QuaderKeybindingActionKey &action,
+    std::string shortcut,
+    QuaderKeybindingConflictPolicy policy) {
+  return commands_ != nullptr
+             ? commands_->set_action_shortcut(action, std::move(shortcut),
+                                               policy)
+             : unavailable("Command runtime is not attached.");
+}
+
+QuaderApiVoidResult QuaderPreferencesApi::remove_action_shortcut(
+    const QuaderKeybindingActionKey &action) {
+  return commands_ != nullptr
+             ? commands_->remove_action_shortcut(action)
+             : unavailable("Command runtime is not attached.");
+}
+
+QuaderApiVoidResult QuaderPreferencesApi::reset_action_shortcut(
+    const QuaderKeybindingActionKey &action,
+    QuaderKeybindingConflictPolicy policy) {
+  return commands_ != nullptr
+             ? commands_->reset_action_shortcut(action, policy)
+             : unavailable("Command runtime is not attached.");
+}
+
+QuaderApiVoidResult QuaderPreferencesApi::reset_all_shortcuts() {
+  return commands_ != nullptr
+             ? commands_->reset_all_shortcuts()
+             : unavailable("Command runtime is not attached.");
+}
+
 QuaderApiVoidResult
 QuaderPreferencesApi::set_snapping_enabled(bool enabled) {
   return hooks_.set_snapping_enabled

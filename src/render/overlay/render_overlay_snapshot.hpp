@@ -14,6 +14,7 @@
 #include "render/overlay/viewport_persistent_overlay_style.hpp"
 #include "scene/components.hpp"
 #include "viewport/viewport_camera_clip_planes.hpp"
+#include "viewport/viewport_local_visibility.hpp"
 
 #include <cstdint>
 #include <memory>
@@ -47,6 +48,8 @@ struct RenderOverlayMeshSnapshot {
   std::shared_ptr<const quader_poly::Document> authored_topology_payload;
   QMat4 world_transform;
   bool selected = false;
+  /** Resolved unselected wireframe color in packed sRGB RGBA order. */
+  std::uint32_t wireframe_color = kOverlayWireframeXrayColor;
   std::span<const MeshVertex> vertices;
   std::span<const std::uint32_t> indices;
   std::span<const quader_poly::Vertex> authored_vertices;
@@ -145,6 +148,7 @@ struct RenderOverlaySelectedObjectSnapshot {
   std::uint64_t asset_revision = 0;
   std::uint64_t selection_revision = 0;
   std::uint64_t visibility_revision = 0;
+  std::uint64_t local_visibility_revision = 0;
   std::uint64_t transform_revision = 0;
   std::uint64_t mesh_binding_revision = 0;
   ViewportPersistentOverlayStyleSnapshot style;
@@ -165,6 +169,7 @@ struct RenderOverlaySceneWireframeSnapshot {
   RenderSceneBindingKey scene_binding;
   std::uint64_t scene_revision = 0;
   std::uint64_t asset_revision = 0;
+  std::uint64_t local_visibility_revision = 0;
   ViewportPersistentOverlayStyleSnapshot style;
   ViewportCameraClipPlanes clip_planes;
   std::uint8_t layer_mask = 0u;
@@ -181,6 +186,7 @@ struct RenderOverlaySelectionSnapshot {
   std::uint64_t asset_revision = 0;
   std::uint64_t selection_revision = 0;
   std::uint64_t visibility_revision = 0;
+  std::uint64_t local_visibility_revision = 0;
   std::uint64_t transform_revision = 0;
   std::uint64_t mesh_binding_revision = 0;
   std::uint64_t render_component_revision = 0;
@@ -235,10 +241,12 @@ public:
       bool selected_object_overlay_visible,
       std::uint8_t scene_wireframe_layer_mask,
       ViewportPersistentOverlayStyleSnapshot style,
-      RenderSceneBindingKey scene_binding = {});
+      RenderSceneBindingKey scene_binding = {},
+      const ViewportLocalVisibilitySnapshot *local_visibility = nullptr);
   [[nodiscard]] const RenderOverlaySelectionSnapshot &selection_snapshot(
       const SceneDocument &document, const AssetRegistry &assets,
-      RenderSceneBindingKey scene_binding = {});
+      RenderSceneBindingKey scene_binding = {},
+      const ViewportLocalVisibilitySnapshot *local_visibility = nullptr);
 
   void reset();
 
@@ -301,29 +309,36 @@ build_render_overlay_selected_object_snapshot(const SceneDocument &document,
                                               const AssetRegistry &assets,
                                               bool visible,
                                               RenderSceneBindingKey
-                                                  scene_binding = {});
+                                                  scene_binding = {},
+                                              const ViewportLocalVisibilitySnapshot *
+                                                  local_visibility = nullptr);
 [[nodiscard]] RenderOverlaySelectedObjectSnapshot
 build_render_overlay_selected_object_snapshot(
     const SceneDocument &document, const AssetRegistry &assets, bool visible,
     ViewportPersistentOverlayStyleSnapshot style,
-    RenderSceneBindingKey scene_binding = {});
+    RenderSceneBindingKey scene_binding = {},
+    const ViewportLocalVisibilitySnapshot *local_visibility = nullptr);
 
 [[nodiscard]] RenderOverlaySceneWireframeSnapshot
 build_render_overlay_scene_wireframe_snapshot(const SceneDocument &document,
                                               const AssetRegistry &assets,
                                               std::uint8_t layer_mask,
                                               RenderSceneBindingKey
-                                                  scene_binding = {});
+                                                  scene_binding = {},
+                                              const ViewportLocalVisibilitySnapshot *
+                                                  local_visibility = nullptr);
 [[nodiscard]] RenderOverlaySceneWireframeSnapshot
 build_render_overlay_scene_wireframe_snapshot(
     const SceneDocument &document, const AssetRegistry &assets,
     std::uint8_t layer_mask, ViewportPersistentOverlayStyleSnapshot style,
-    RenderSceneBindingKey scene_binding = {});
+    RenderSceneBindingKey scene_binding = {},
+    const ViewportLocalVisibilitySnapshot *local_visibility = nullptr);
 
 [[nodiscard]] RenderOverlaySelectionSnapshot
 build_render_overlay_selection_snapshot(
     const SceneDocument &document, const AssetRegistry &assets,
     ViewportOverlayFrame tool_overlays = {},
-    RenderSceneBindingKey scene_binding = {});
+    RenderSceneBindingKey scene_binding = {},
+    const ViewportLocalVisibilitySnapshot *local_visibility = nullptr);
 
 } // namespace quader

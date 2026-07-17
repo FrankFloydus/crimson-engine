@@ -21,6 +21,7 @@ enum class QtSettingsChangeKind {
   ViewportPreview,
   ViewportCommit,
   InterfaceCommit,
+  KeybindingsCommit,
 };
 
 /**

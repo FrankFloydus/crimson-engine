@@ -48,6 +48,7 @@ struct ViewportHoverWorkKey {
     double edge_radius = 0.2;
     std::uint64_t scene_revision = 0;
     std::uint64_t asset_revision = 0;
+    std::uint64_t local_visibility_revision = 0;
     std::uint64_t content_revision = 0;
     std::uint64_t selection_revision = 0;
 
@@ -72,6 +73,7 @@ struct ViewportHoverWorkRequest {
   double edge_radius = 0.2;
   std::uint64_t scene_revision = 0;
   std::uint64_t asset_revision = 0;
+  std::uint64_t local_visibility_revision = 0;
   std::uint64_t content_revision = 0;
   std::uint64_t selection_revision = 0;
 };

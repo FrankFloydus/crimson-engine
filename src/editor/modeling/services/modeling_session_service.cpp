@@ -1527,6 +1527,15 @@ public:
     selection_service_.set_instance_edit_scope_provider(std::move(provider));
   }
 
+  void set_viewport_visibility_filter(
+      std::function<bool(EntityId)> filter,
+      std::function<std::uint64_t()> revision_provider,
+      std::function<bool()> active_provider) {
+    selection_service_.set_viewport_visibility_filter(
+        std::move(filter), std::move(revision_provider),
+        std::move(active_provider));
+  }
+
   void sync_object_selection_from_scene(bool force_object_mode = false) {
     QDR_PROFILE_FUNCTION();
     if (!selection_projection_service_
@@ -1858,7 +1867,7 @@ public:
 
   ModelingCommandResult select_all() {
     if (const std::optional<ModelingCommandResult> scoped =
-            selection_service_.select_all_in_instance_edit_scope(
+            selection_service_.select_all_in_viewport_scope(
                 session_, scene_, object_registry_, false)) {
       if (scoped->changed) {
         sync_scene_selection_from_modeling();
@@ -1872,7 +1881,7 @@ public:
 
   ModelingCommandResult invert_selection() {
     if (const std::optional<ModelingCommandResult> scoped =
-            selection_service_.select_all_in_instance_edit_scope(
+            selection_service_.select_all_in_viewport_scope(
                 session_, scene_, object_registry_, true)) {
       if (scoped->changed) {
         sync_scene_selection_from_modeling();
@@ -6550,6 +6559,15 @@ ModelingCommandResult ModelingSessionService::commit_insert_edge_loop_drag() {
 ModelingCommandResult
 ModelingSessionService::update_knife_hover(const ModelingToolRayEvent &event) {
   return impl_->update_knife_hover(event);
+}
+
+void ModelingSessionService::set_viewport_visibility_filter(
+    std::function<bool(EntityId)> filter,
+    std::function<std::uint64_t()> revision_provider,
+    std::function<bool()> active_provider) {
+  impl_->set_viewport_visibility_filter(std::move(filter),
+                                        std::move(revision_provider),
+                                        std::move(active_provider));
 }
 
 ModelingCommandResult ModelingSessionService::clear_knife_hover() {

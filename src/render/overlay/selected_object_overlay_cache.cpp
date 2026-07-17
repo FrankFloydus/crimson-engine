@@ -282,6 +282,7 @@ void SelectedObjectOverlayCache::shutdown() {
     synced_asset_revision_ = 0;
     synced_selection_revision_ = 0;
     synced_visibility_revision_ = 0;
+    synced_local_visibility_revision_ = 0;
     synced_transform_revision_ = 0;
     synced_mesh_binding_revision_ = 0;
     synced_face_style_signature_ = 0;
@@ -308,6 +309,7 @@ void SelectedObjectOverlayCache::sync(
       synced_asset_revision_ = 0;
       synced_selection_revision_ = 0;
       synced_visibility_revision_ = 0;
+      synced_local_visibility_revision_ = 0;
       synced_transform_revision_ = 0;
       synced_mesh_binding_revision_ = 0;
       synced_face_style_signature_ = 0;
@@ -326,6 +328,8 @@ void SelectedObjectOverlayCache::sync(
         synced_asset_revision_ == snapshot.asset_revision &&
         synced_selection_revision_ == snapshot.selection_revision &&
         synced_visibility_revision_ == snapshot.visibility_revision &&
+        synced_local_visibility_revision_ ==
+            snapshot.local_visibility_revision &&
         synced_mesh_binding_revision_ == snapshot.mesh_binding_revision &&
         !face_style_changed) {
       if (synced_transform_revision_ != snapshot.transform_revision) {
@@ -357,6 +361,8 @@ void SelectedObjectOverlayCache::sync(
       synced_asset_revision_ = snapshot.asset_revision;
       synced_selection_revision_ = snapshot.selection_revision;
       synced_visibility_revision_ = snapshot.visibility_revision;
+      synced_local_visibility_revision_ =
+          snapshot.local_visibility_revision;
       synced_transform_revision_ = snapshot.transform_revision;
       synced_mesh_binding_revision_ = snapshot.mesh_binding_revision;
       synced_face_style_signature_ = snapshot.style.face_signature;
@@ -405,6 +411,7 @@ void SelectedObjectOverlayCache::sync(
     synced_asset_revision_ = snapshot.asset_revision;
     synced_selection_revision_ = snapshot.selection_revision;
     synced_visibility_revision_ = snapshot.visibility_revision;
+    synced_local_visibility_revision_ = snapshot.local_visibility_revision;
     synced_transform_revision_ = snapshot.transform_revision;
     synced_mesh_binding_revision_ = snapshot.mesh_binding_revision;
     synced_face_style_signature_ = snapshot.style.face_signature;

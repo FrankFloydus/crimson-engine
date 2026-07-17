@@ -384,6 +384,7 @@ void InstanceSelectionOverlayCache::shutdown() {
   line_material_ = nullptr;
   max_instances_per_chunk_ = 1u;
   clip_planes_ = {};
+  synced_local_visibility_revision_ = 0u;
   stats_ = {};
 }
 
@@ -435,7 +436,11 @@ bool InstanceSelectionOverlayCache::sync(
                             snapshot.instance_selection_wires.empty())) {
     const bool changed = !fill_proxies_.empty() || !wire_proxies_.empty();
     clear();
-    return changed;
+    const bool local_visibility_changed =
+        synced_local_visibility_revision_ !=
+        snapshot.local_visibility_revision;
+    synced_local_visibility_revision_ = snapshot.local_visibility_revision;
+    return changed || local_visibility_changed;
   }
 
   const PreparedPlans prepared = prepare(snapshot);
@@ -444,12 +449,15 @@ bool InstanceSelectionOverlayCache::sync(
   const RenderInstanceBatchUpdateKind wire_update =
       classify_instance_batch_update(wire_plan_, prepared.plans.wires);
   const bool clip_changed = clip_planes_ != snapshot.clip_planes;
+  const bool local_visibility_changed =
+      synced_local_visibility_revision_ != snapshot.local_visibility_revision;
   if (fill_update == RenderInstanceBatchUpdateKind::Unchanged &&
       wire_update == RenderInstanceBatchUpdateKind::Unchanged) {
     if (clip_changed) {
       update_wire_clip_planes(snapshot.clip_planes);
     }
-    return clip_changed;
+    synced_local_visibility_revision_ = snapshot.local_visibility_revision;
+    return clip_changed || local_visibility_changed;
   }
   if (fill_update != RenderInstanceBatchUpdateKind::Rebuild &&
       wire_update != RenderInstanceBatchUpdateKind::Rebuild &&
@@ -460,6 +468,7 @@ bool InstanceSelectionOverlayCache::sync(
     if (clip_changed) {
       update_wire_clip_planes(snapshot.clip_planes);
     }
+    synced_local_visibility_revision_ = snapshot.local_visibility_revision;
     return true;
   }
   return rebuild(prepared, snapshot);
@@ -537,6 +546,7 @@ bool InstanceSelectionOverlayCache::rebuild(
   fill_plan_ = prepared.plans.fills;
   wire_plan_ = prepared.plans.wires;
   clip_planes_ = snapshot.clip_planes;
+  synced_local_visibility_revision_ = snapshot.local_visibility_revision;
   ++stats_.rebuild_count;
   stats_.fill_chunk_count = fill_proxies_.size();
   stats_.wire_chunk_count = wire_proxies_.size();

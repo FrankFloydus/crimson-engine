@@ -46,6 +46,7 @@ struct EntityRecord {
   bool has_modeling_object = false;
   bool is_instance_definition = false;
   bool has_instance_occurrence = false;
+  SceneLayerId layer_id = kInvalidSceneLayerId;
 };
 
 /**
@@ -106,6 +107,25 @@ public:
     bool set_light(EntityId id, LightComponent light);
     bool set_scene_settings(EntityId id, SceneSettingsComponent settings);
 
+    SceneLayerId create_layer(
+        std::string name = {},
+        QVec3 wireframe_color = kDefaultSceneLayerWireframeColor);
+    SceneLayerId create_layer_with_id(
+        SceneLayerId id, std::string name, bool visible = true,
+        QVec3 wireframe_color = kDefaultSceneLayerWireframeColor,
+        bool locked = false);
+    bool rename_layer(SceneLayerId id, std::string name);
+    bool set_layer_visible(SceneLayerId id, bool visible);
+    bool set_layer_wireframe_color(SceneLayerId id, QVec3 color);
+    bool set_layer_locked(SceneLayerId id, bool locked);
+    bool empty_layer(SceneLayerId id);
+    bool delete_layer(SceneLayerId id);
+    bool delete_layers(std::span<const SceneLayerId> ids);
+    /** Sets one exact membership without recursively assigning descendants. */
+    bool set_entity_layer(EntityId entity, SceneLayerId layer_id);
+    /** Atomically replaces exact layer records and memberships. */
+    bool replace_layer_state(SceneLayerState state);
+
     const NameComponent* name(EntityId id) const;
     const EntityUuidComponent *entity_uuid(EntityId id) const;
     const EditorObjectIdentityComponent *
@@ -123,6 +143,19 @@ public:
     const MaterialComponent* material(EntityId id) const;
     const LightComponent* light(EntityId id) const;
     const SceneSettingsComponent *scene_settings(EntityId id) const;
+    const SceneLayerMembershipComponent *layer_membership(EntityId id) const;
+
+    [[nodiscard]] const SceneLayerRecord *layer(SceneLayerId id) const;
+    [[nodiscard]] std::vector<SceneLayerRecord> layers() const;
+    [[nodiscard]] std::vector<EntityId> layer_members(SceneLayerId id) const;
+    [[nodiscard]] SceneLayerId entity_layer(EntityId entity) const;
+    [[nodiscard]] SceneLayerState layer_state() const;
+    [[nodiscard]] SceneLayerId next_layer_id() const { return next_layer_id_; }
+    [[nodiscard]] std::string next_layer_name() const;
+    [[nodiscard]] bool is_layer_eligible(EntityId entity) const;
+    /** Expands selected hierarchy roots and retains public layer-eligible nodes. */
+    [[nodiscard]] std::vector<EntityId>
+    layer_eligible_entities(std::span<const EntityId> roots) const;
 
     std::vector<EntityId> entities() const;
     EntityId scene_root() const;
@@ -173,6 +206,7 @@ public:
     std::uint64_t render_component_revision() const {
       return render_component_revision_;
     }
+    std::uint64_t layer_revision() const { return layer_revision_; }
 
 private:
   NameComponent *mutable_name(EntityId id);
@@ -197,6 +231,7 @@ private:
 
   EntityId next_id_ = 1;
   EditorObjectId next_editor_object_id_ = 1;
+  SceneLayerId next_layer_id_ = 1;
   EntityId active_selection_ = kInvalidEntityId;
   std::uint64_t revision_ = 0;
   std::uint64_t content_revision_ = 0;
@@ -205,12 +240,14 @@ private:
   std::uint64_t transform_revision_ = 0;
   std::uint64_t mesh_binding_revision_ = 0;
   std::uint64_t render_component_revision_ = 0;
+  std::uint64_t layer_revision_ = 0;
   EditorObjectIdAllocator editor_object_id_allocator_;
   entt::registry registry_;
   std::unordered_map<EntityId, entt::entity> entities_;
   std::unordered_map<std::uint32_t, EntityId> ids_by_entity_;
   std::unordered_map<std::string, EntityId> entity_by_uuid_;
   std::unordered_map<EditorObjectId, EntityId> entity_by_editor_object_id_;
+  std::unordered_map<SceneLayerId, SceneLayerRecord> layers_;
 };
 
 } // namespace quader

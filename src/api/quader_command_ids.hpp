@@ -72,6 +72,12 @@ inline constexpr QuaderCommandId kSceneCreatePointLight{
     "scene.create_point_light"};
 inline constexpr QuaderCommandId kSceneCreateDirectionalLight{
     "scene.create_directional_light"};
+inline constexpr QuaderCommandId kSceneLayersRemoveSelection{
+    "scene.layers.remove_selection"};
+inline constexpr QuaderCommandId kSceneHideSelection{
+    "scene.hide_selection"};
+inline constexpr QuaderCommandId kSceneUnhideHiddenObjects{
+    "scene.unhide_hidden_objects"};
 
 /// Deprecated compatibility spelling. Use kEditUndo for new C++ callers.
 inline constexpr QuaderCommandId kHistoryUndo{"edit.undo"};
@@ -96,6 +102,8 @@ inline constexpr QuaderCommandId kViewportFrameSelection{
 inline constexpr QuaderCommandId kViewportFocusAll{"viewport.focus_all"};
 inline constexpr QuaderCommandId kViewportFocusOrigin{"viewport.focus_origin"};
 inline constexpr QuaderCommandId kViewportSpawnWindow{"viewport.spawn_window"};
+inline constexpr QuaderCommandId kViewportToggleLocalVisibility{
+    "viewport.toggle_local_visibility"};
 inline constexpr QuaderCommandId kViewportViewPerspective{
     "viewport.view.perspective"};
 inline constexpr QuaderCommandId kViewportViewTop{"viewport.view.top"};
@@ -111,6 +119,26 @@ inline constexpr QuaderCommandId kViewportToggleMeshGrid{
     "viewport.toggle_mesh_grid"};
 inline constexpr QuaderCommandId kViewportToggleOverlays{
     "viewport.toggle_overlays"};
+inline constexpr QuaderCommandId kViewportShadingWireframe{
+    "viewport.shading.wireframe"};
+inline constexpr QuaderCommandId kViewportShadingShaded{
+    "viewport.shading.shaded"};
+inline constexpr QuaderCommandId kViewportShadingRendered{
+    "viewport.shading.rendered"};
+inline constexpr QuaderCommandId kViewportLayoutSingle{
+    "viewport.layout.single"};
+inline constexpr QuaderCommandId kViewportLayoutTwoVertical{
+    "viewport.layout.two_vertical"};
+inline constexpr QuaderCommandId kViewportLayoutTwoHorizontal{
+    "viewport.layout.two_horizontal"};
+inline constexpr QuaderCommandId kViewportLayoutFourQuad{
+    "viewport.layout.four_quad"};
+inline constexpr QuaderCommandId kViewportGridIncrement{
+    "viewport.grid.increment"};
+inline constexpr QuaderCommandId kViewportGridDecrement{
+    "viewport.grid.decrement"};
+inline constexpr QuaderCommandId kViewportGridReset{
+    "viewport.grid.reset"};
 
 /// Deprecated compatibility spelling. Use kDeleteSelection for new C++ callers.
 inline constexpr QuaderCommandId kModelingDeleteSelection{"edit.delete"};
@@ -298,10 +326,14 @@ inline constexpr QuaderCommandId kTypedCommandIds[] = {
     kSceneDocumentPrevious,
     kSceneCreatePointLight,
     kSceneCreateDirectionalLight,
+    kSceneLayersRemoveSelection,
+    kSceneHideSelection,
+    kSceneUnhideHiddenObjects,
     kViewportFrameSelection,
     kViewportFocusAll,
     kViewportFocusOrigin,
     kViewportSpawnWindow,
+    kViewportToggleLocalVisibility,
     kViewportViewPerspective,
     kViewportViewTop,
     kViewportViewBottom,
@@ -313,6 +345,16 @@ inline constexpr QuaderCommandId kTypedCommandIds[] = {
     kViewportToggleGizmos,
     kViewportToggleMeshGrid,
     kViewportToggleOverlays,
+    kViewportShadingWireframe,
+    kViewportShadingShaded,
+    kViewportShadingRendered,
+    kViewportLayoutSingle,
+    kViewportLayoutTwoVertical,
+    kViewportLayoutTwoHorizontal,
+    kViewportLayoutFourQuad,
+    kViewportGridIncrement,
+    kViewportGridDecrement,
+    kViewportGridReset,
     kModelingDuplicateMeshes,
     kModelingBridge,
     kModelingExtractFaces,

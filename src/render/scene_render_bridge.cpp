@@ -122,7 +122,9 @@ void SceneRenderBridge::sync(const SceneDocument &document,
                              const AssetRegistry &assets,
                              std::uint64_t frame_index,
                              RenderSceneBindingKey scene_binding,
-                             RenderInstanceEditScope instance_edit_scope) {
+                             RenderInstanceEditScope instance_edit_scope,
+                             const ViewportLocalVisibilitySnapshot *
+                                 local_visibility) {
   QDR_PROFILE_FUNCTION();
   if (!engine_ || !scene_ || !sync_service_.initialized()) {
     return;
@@ -136,7 +138,8 @@ void SceneRenderBridge::sync(const SceneDocument &document,
                                           previous_scene_snapshot_, document,
                                           assets, scene_binding,
                                           project_material_revision,
-                                          instance_edit_scope)) {
+                                          instance_edit_scope,
+                                          local_visibility)) {
     // Keep draining retired GPU proxies while making unchanged camera-only
     // frames O(1) at the scene-extraction boundary.
     (void)sync_service_.sync(previous_scene_snapshot_);
@@ -146,7 +149,7 @@ void SceneRenderBridge::sync(const SceneDocument &document,
       try_refresh_render_scene_snapshot_transforms(
           previous_scene_snapshot_, document, assets, frame_index,
           scene_binding, project_material_revision,
-          instance_edit_scope)) {
+          instance_edit_scope, local_visibility)) {
     (void)sync_service_.sync(previous_scene_snapshot_);
     return;
   }
@@ -158,7 +161,8 @@ void SceneRenderBridge::sync(const SceneDocument &document,
        .scene_binding = scene_binding,
        .project_material_resolver = project_material_resolver_,
        .project_material_revision = project_material_revision,
-       .instance_edit_scope = instance_edit_scope});
+       .instance_edit_scope = instance_edit_scope,
+       .local_visibility = local_visibility});
   sync(std::move(snapshot));
 }
 

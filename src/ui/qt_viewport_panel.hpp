@@ -79,6 +79,7 @@ public:
   void set_viewport_settings(const ViewportSettings &settings);
   void set_render_performance_stats(RenderFramePerformanceStats stats);
   void set_localization(LocalizationService &localization);
+  void refresh_keybinding_presentation(QuaderEditorApi &editor);
   void set_startup_presentation_blocked(bool blocked);
   [[nodiscard]] bool startup_presentation_blocked() const {
     return startup_presentation_blocked_;
@@ -229,6 +230,7 @@ private:
   const AssetRegistry *viewport_info_cached_assets_ = nullptr;
   std::uint64_t viewport_info_cached_scene_revision_ = 0;
   std::uint64_t viewport_info_cached_asset_revision_ = 0;
+  std::uint64_t viewport_info_cached_local_visibility_revision_ = 0;
   ViewportOverlayCamera viewport_info_cached_camera_ = {};
   std::uint64_t viewport_info_cached_objects_ = 0;
   std::uint64_t viewport_info_cached_primitives_ = 0;

@@ -8,6 +8,7 @@
 #include "api/quader_api_session_internal_access.hpp"
 
 #include "api/quader_history_api.hpp"
+#include "api/quader_layers_api.hpp"
 #include "api/quader_api_mutation_runner.hpp"
 #include "api/quader_api_status_internal.hpp"
 #include "api/quader_api_type_conversions.hpp"
@@ -82,6 +83,7 @@ QuaderEntitySnapshot entity_snapshot_for(const SceneSession &session,
   snapshot.kind = to_api_entity_kind(scene.kind(entity));
   snapshot.parent = scene.parent(entity);
   snapshot.active = scene.primary_selection() == entity;
+  snapshot.layer_id = scene.entity_layer(entity);
 
   if (const NameComponent *name = scene.name(entity)) {
     snapshot.name = name->name;
@@ -355,6 +357,7 @@ QuaderApiSnapshot QuaderQueryApi::snapshot() const {
   return {
       .revisions = revisions(),
       .entities = entity_tree(),
+      .layers = QuaderLayersApi(session_, mutations_).all(),
       .modeling_objects = modeling_objects(),
       .selection = selection(),
       .tool_status = tool_status(),

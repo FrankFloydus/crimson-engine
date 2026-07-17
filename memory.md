@@ -4933,3 +4933,192 @@ Owners: `ModelingSelectionService`, `ModelingSessionService`, Poly runtime/tool 
 Verification: focused transformed-surface, plane-local snapping, queued-click, Poly history,
 viewport-display toolbar, public preference-command, UI hot-path, and precise-delta regressions
 pass. Final full CTest and native v0.1.33 build results are recorded in the task handoff.
+
+## 2026-07-17 - Persistent Maya-Style Scene Layers
+
+Invariant:
+
+- `SceneDocument` owns persistent layer records and one exclusive membership per eligible public
+  entity. Layer IDs are monotonic across undo branches; group assignment includes only the current
+  eligible descendants, instance-definition internals are forbidden, and empty/delete operations
+  unassign members without deleting scene objects. Document and modeling reconstruction paths must
+  preserve membership through duplicate, destroy, undo, redo, and mesh synchronization.
+- Layer visibility is an independent effective-visibility mask and never rewrites an entity's
+  local `VisibilityComponent`. The shared hierarchy policy gates rendering, lights, bounds,
+  overlays, picking, placement, and instance expansion. Layer RGB affects only unselected
+  Wireframe geometry; selection style wins, and cache/batch identities include resolved color.
+- Native scene QDR schema 4 persists deterministic layer records and entity memberships, validates
+  IDs, names, colors, and eligibility, loads schemas 1-3 as unassigned, and rejects newer schemas.
+  The portable modeling QDR and project manifest remain unchanged.
+- `LayerPanel` is a retained Qt view routed through `QuaderLayersApi` and document history. Its
+  allocation and widget synchronization paths are gated by layer, selection, and localization
+  revisions; it remains a default-visible right-side dock below Inspector.
+
+Owners: `SceneDocument`, document commands, `QuaderLayersApi`, native QDR scene metadata,
+scene/render visibility extraction, wireframe overlay caches, and `LayerPanel`/`UISystem`.
+
+Verification: focused domain/API/history, QDR, rendering, instance, visibility, UI interaction,
+localization, and hot-path guardrail tests pass. The complete `vs2026-debug` CTest preset passes
+6/6, including SDK-only, SDK consumer/parity, guardrail, native app, and modeling-domain targets.
+Final native v0.1.36 and boot-smoke results are recorded in the task handoff.
+
+## 2026-07-17 - Layer Lock And Panel Interaction Follow-Up
+
+Invariant:
+
+- Layer lock is an independent effective-interaction mask. It never rewrites an entity-local
+  `LockComponent`, applies through ancestors and instance occurrences, blocks document batches and
+  picking, and projects any selection removal into the runtime modeling selection. Point and
+  rectangle picking caches include `scene_layer_revision` so a warm cache cannot retain locked
+  participants or omit newly unlocked participants.
+- `QuaderLayersApi` must reject every mutation before resolving document commands when no scene is
+  active; the inert fallback scene, its layer revision, and its history must remain unchanged.
+- `LayerPanel` columns are Color, Name, Visible, and Locked. Only name-column clicks select rows;
+  color, visibility, lock, and empty-area clicks clear the highlight. Visibility and lock are
+  focusable native buttons with keyboard activation and localized accessibility text.
+- Runtime eye/lock artwork comes from Google Material Icons pinned at commit
+  `abd7f5c0e179c83f068c770650bd14ebac5d5a09`, with Apache-2.0 provenance. The standalone layer-add
+  icon is a generated Quader-style beveled plus and does not replace existing icon artwork.
+
+Owners: `SceneDocument`, document commands, `QuaderLayersApi`, modeling picking caches,
+`LayerPanel`, packaged icon resources, and third-party provenance.
+
+Verification: focused layer UI/API/history/runtime-selection/cache tests pass, all native test
+targets build, and the complete `vs2026-debug` CTest preset passes 6/6. Final native v0.1.37 and
+boot-smoke results are recorded in the task handoff.
+
+## 2026-07-17 - High-Contrast Dock Title Controls
+
+Invariant:
+
+- A Qt stylesheet `color` declaration does not recolor Fusion's fixed dock-title raster glyphs.
+  Fusion also shrinks a framed dock button's 16 px small-icon metric to 5/8, producing the
+  unreadable 10 px default seen against Quader's dark dock title bars.
+- Dock title contrast is owned explicitly by app-authored, near-white close/float PNGs embedded
+  under `/quader/icons`. The scoped dock stylesheet uses Qt's `titlebar-close-icon` and
+  `titlebar-normal-icon` properties plus `icon-size: 24px`, yielding an approximately 15 px glyph
+  inside an 18 px control while preserving Qt's built-in drag, float, close, and accessibility
+  behavior.
+- Default and active title colors remain distinct. Hover keeps the background transparent and
+  adds a high-contrast outline; pressed uses a darker fill and brighter outline so neither state
+  muddies the glyph.
+
+Owners: `UISystem::create_dock`, scoped dock-title QSS, embedded dock-chrome resources, and UI/build
+guardrails.
+
+Verification: focused dock-title presentation and resource-packaging guardrails pass, all affected
+native test targets build, and the complete `vs2026-debug` CTest preset passes 6/6. Final native
+v0.1.38 build result is recorded in the task handoff.
+
+## 2026-07-17 - Scoped Singular Editable Keybindings
+
+Invariant:
+
+- `QuaderCommandsApi::keybinding_catalog()` is the complete public presentation source for every
+  command and semantic viewport target that the resolver can map. A stable
+  `action_id + scope_id` identifies one user-facing row without exposing resolver aliases. Scope is
+  semantic editor state, not the coarse display category: modeling availability metadata derives
+  scopes such as `viewport.selection.vertex`, `viewport.selection.edge`, and
+  `viewport.selection.component`, while app-owned read-only `when` expressions remain the dispatch
+  authority. This permits `M` to mean Merge Vertices in vertex mode and Merge Edges in edge mode
+  without reporting a hard conflict.
+- Each action/scope owns zero or one physical mapping, although that mapping may be a multi-chord
+  sequence. Compiled defaults and user edits are normalized across every alias in the row. Legacy
+  target-level JSON remains loadable; the latest legacy entry in a group wins and its stored `when`
+  is rebound to the current app-owned predicate. Persistence elides default-equivalent groups,
+  represents intentional unassignment with target removals, and writes an empty override set for
+  Reset All. Candidate JSON is published through the shared atomic-write owner before resolver
+  activation; a late flush/replace failure preserves both the live resolver and last-good disk
+  file.
+- Assignment analysis classifies mutually exclusive reuse, exact overlap, and prefix overlap.
+  Public mutations default to `Reject`; Settings offers only Replace or Cancel for a hard conflict.
+  Replace unassigns the complete colliding action while leaving unrelated actions untouched.
+  Resolver dispatch checks command availability in precedence order and falls through to the next
+  context-compatible target instead of allowing a disabled alias to swallow input.
+- Settings consumes only public APIs. Double-clicking a mapping or pressing Enter opens the single
+  rebind dialog; there is no separate Add/Replace/Remove list. Capture supports keyboard,
+  multi-chord sequences, wheel direction, stationary Click, press-and-hold Press, DoubleClick, and
+  thresholded Drag through canonical Qt translation. The conflict prompt names only the clashing
+  action and has no Keep Both choice. Successful edits save immediately and emit
+  `KeybindingsCommit`, refreshing retained menus/tooltips outside `UISystem::refresh`; Settings
+  Apply/Cancel continues to govern only interface and viewport drafts.
+- The retained Keybindings page is intentionally table-first: it has no save-immediately banner,
+  rebind instruction banner, or selected-row default/current/`when` details block. Those internal
+  diagnostics stay in the public catalog but are not repeated in the view. Its visible columns are
+  Command, Context, and Input Mapping only; Source remains catalog metadata and is not presented.
+  Every visible column uses case-insensitive natural numeric ordering, so labels such as grid sizes
+  sort `1, 2, 4, 8, 16, 32, 64, 128, 256, 512` rather than lexically. Keybinding-facing localization
+  uses complete action names, separate from terse menu leaves; every rendered EN/IT command label
+  is unique, and generic rows such as `Center`, `X`, or `Move` are forbidden by regression
+  coverage.
+- A canonical mouse Click is emitted on release only when motion remained below Qt's drag
+  threshold. Existing immediate Drag edges remain unchanged, which keeps orbit/fly navigation
+  responsive while allowing `Alt+MiddleMouseClick` to be a real binding. Capture keeps a quick
+  click pending for the double-click interval, disables acceptance while unresolved, and flushes
+  it before any later key/click so sequence order cannot change or lose an input.
+- Qt's Windows QPA rewrites `Alt` plus a physical vertical wheel into a horizontal-only
+  `QWheelEvent::angleDelta`. Canonical Qt translation reverses that representation before choosing
+  WheelUp/WheelDown and calculating the signed step. Tests must inject the real X-axis event through
+  the production surface -> panel -> resolver/router -> workspace route; a synthetic Y-axis event
+  would reproduce neither the native bug nor its fix. Genuine Alt-modified horizontal hardware
+  wheel input is indistinguishable at this boundary and is intentionally claimed by the vertical
+  grid gesture on Windows.
+- Compiled defaults are singular: Redo is `Ctrl+Shift+Z`; alternate Ctrl+Y, Backspace delete,
+  keypad selection-mode, and Enter finalize mappings are removed. Grid preset rows no longer own
+  `F1`-`F10`. `H`/`Alt+H` hide/unhide scene objects in the object/group scope; Quader does not claim
+  persistent vertex/edge/face hide support. `F1`-`F4` select Top/Side/Front/Perspective,
+  `F5`-`F7` select Wireframe/Shaded/Rendered, `Ctrl+1`-`Ctrl+4` select the requested viewport layouts,
+  `Alt+WheelUp/Down` changes grid preset, and `Alt+MiddleMouseClick` restores the 32-unit default.
+  These three mouse/wheel mappings project to semantic `SetGridPreset` viewport shortcuts using
+  the synchronized current preset; they must not bypass the runtime viewport router as immediate
+  commands. Unassigned grid rows name their actual sizes (`Set Grid Size to 1` ... `512`) rather
+  than opaque preset indices.
+
+Owners: command and semantic viewport registration metadata, `QuaderCommandsApi`,
+`QuaderKeybindingService`, canonical Qt input translation/surface accumulation, and
+`QtSettingsDialog` presentation/localization.
+
+Verification: focused scoped-dispatch, grouped-alias, singular-mapping, conflict, persistence,
+rollback, mouse/capture, Settings, localization, retained-UI guardrails, and the Windows-shaped
+surface-to-workspace grid-input regression pass. The complete CTest preset passes 6/6; the final
+native v0.1.42 build succeeds, and a native Settings smoke check confirms three visible columns and
+grid rows ordered `1, 2, 4, 8, 16, 32, 64, 128, 256, 512` under the production C locale.
+
+## 2026-07-17 - Transient Local Visibility
+
+Invariant:
+
+- Local Visibility is scene-session runtime state, never `SceneDocument`, QDR, dirty-state, or
+  undo/redo state. `ViewportWorkspaceService` owns the immutable membership snapshot, monotonic
+  revision, and pre-entry cameras; `ViewportLocalVisibilityService` maps object, group, component,
+  and formal-instance selection into public scene entities and reconciles scene lifecycle changes.
+- Persistent object, ancestor, and layer visibility always remains authoritative. The local
+  snapshot is only an additional allow-filter, so entering never unhides an already-hidden entity
+  and exiting reveals exactly the persistently visible scene. Entities created during the mode
+  join it; deletion of the last live member exits synchronously and restores the saved cameras.
+- Every viewport-facing render, overlay, picking, hover, bulk-selection, placement, statistics,
+  and frame-all cache includes the Local Visibility revision in its unchanged-state gate. Formal
+  instance content is filtered by its public occurrence; tool previews retain canonical source
+  identity while using that occurrence as their local-visibility owner.
+
+Owners: `ViewportWorkspaceService`, `ViewportLocalVisibilityService`, `SceneSession`, public
+viewport commands/API, render/overlay extraction, modeling selection/picking, and retained Qt
+viewport caches.
+
+## 2026-07-17 - Multi-Mesh Selection Keeps Per-Mesh Outlines
+
+Invariant:
+
+- Object-mode selection of multiple meshes draws one world-AABB cage around the complete
+  selection and retains the normal selected topology outline for every participating mesh.
+- The aggregate cage may replace per-mesh bounds cages, but it never replaces selected mesh
+  outlines. Multi-selection may still suppress persistent selected face fills, and hover feedback
+  remains intact.
+- `ViewportSceneOverlayBuilder` owns this composition policy. The modeling overlay cache continues
+  to provide cached per-object outline lines without adding per-frame mesh extraction.
+
+Owners: `viewport_scene_overlay_builder.*`, modeling selection overlay caching, and render
+extraction tests.
+
+Verification: 7/7 focused scene-overlay builder tests, 378/378 affected render/viewport tests,
+the affected render guardrail, and the final native v0.1.45 build pass.

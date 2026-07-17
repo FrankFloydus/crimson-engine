@@ -404,6 +404,21 @@ mouse_chord_from_token(std::string_view token) {
     }
   }
 
+  constexpr std::string_view kClickSuffix = "click";
+  if (lower.size() > kClickSuffix.size() &&
+      lower.substr(lower.size() - kClickSuffix.size()) == kClickSuffix) {
+    const std::string base =
+        lower.substr(0u, lower.size() - kClickSuffix.size());
+    if (const std::optional<QuaderMouseButton> button =
+            mouse_button_from_token(base)) {
+      return QuaderInputChord{
+          .device = QuaderInputDevice::Mouse,
+          .mouse_button = *button,
+          .gesture = QuaderInputGesture::Click,
+      };
+    }
+  }
+
   if (const std::optional<QuaderMouseButton> button =
           mouse_button_from_token(lower)) {
     return QuaderInputChord{
@@ -666,6 +681,9 @@ inline std::string mouse_chord_display_name(const QuaderInputChord &chord) {
   case QuaderInputGesture::DoubleClick:
     return std::string(mouse_button_display_name(chord.mouse_button)) +
            "DoubleClick";
+  case QuaderInputGesture::Click:
+    return std::string(mouse_button_display_name(chord.mouse_button)) +
+           "Click";
   case QuaderInputGesture::Drag:
     return std::string(mouse_button_display_name(chord.mouse_button)) + "Drag";
   case QuaderInputGesture::Press:

@@ -24,6 +24,63 @@ inline constexpr ModelingObjectId kInvalidModelingObjectId = -1;
 using EditorObjectId = std::uint64_t;
 inline constexpr EditorObjectId kInvalidEditorObjectId = 0;
 
+using SceneLayerId = std::uint64_t;
+inline constexpr SceneLayerId kInvalidSceneLayerId = 0;
+inline constexpr QVec3 kDefaultSceneLayerWireframeColor = {
+    238.0f / 255.0f,
+    242.0f / 255.0f,
+    247.0f / 255.0f,
+};
+
+/**
+ * Stores one scene-owned display layer.
+ */
+struct SceneLayerRecord {
+  SceneLayerId id = kInvalidSceneLayerId;
+  std::string name;
+  bool visible = true;
+  QVec3 wireframe_color = kDefaultSceneLayerWireframeColor;
+  bool locked = false;
+
+  [[nodiscard]] bool operator==(const SceneLayerRecord &other) const {
+    return id == other.id && name == other.name && visible == other.visible &&
+           wireframe_color.x == other.wireframe_color.x &&
+           wireframe_color.y == other.wireframe_color.y &&
+           wireframe_color.z == other.wireframe_color.z &&
+           locked == other.locked;
+  }
+};
+
+/**
+ * Assigns one public scene entity to at most one display layer.
+ */
+struct SceneLayerMembershipComponent {
+  SceneLayerId layer_id = kInvalidSceneLayerId;
+
+  [[nodiscard]] bool
+  operator==(const SceneLayerMembershipComponent &) const = default;
+};
+
+/**
+ * Stores one exact entity-to-layer assignment in a scene-layer state.
+ */
+struct SceneLayerAssignment {
+  EntityId entity = kInvalidEntityId;
+  SceneLayerId layer_id = kInvalidSceneLayerId;
+
+  [[nodiscard]] bool operator==(const SceneLayerAssignment &) const = default;
+};
+
+/**
+ * Captures the complete scene-layer state used by persistence and undo/redo.
+ */
+struct SceneLayerState {
+  std::vector<SceneLayerRecord> layers;
+  std::vector<SceneLayerAssignment> assignments;
+
+  [[nodiscard]] bool operator==(const SceneLayerState &) const = default;
+};
+
 /**
  * Represents an Entity Identity Component value used by the scene graph document layer.
  */

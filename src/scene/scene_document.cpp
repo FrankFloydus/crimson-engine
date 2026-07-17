@@ -12,8 +12,11 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <functional>
+#include <limits>
 #include <random>
+#include <unordered_map>
 #include <unordered_set>
 #include <string_view>
 #include <utility>
@@ -75,6 +78,73 @@ bool same_modeling_object(const ModelingObjectComponent &left,
                           const ModelingObjectComponent &right) {
   return left.object_id == right.object_id &&
          left.material_slot == right.material_slot;
+}
+
+bool valid_layer_color(QVec3 color) {
+  return std::isfinite(color.x) && std::isfinite(color.y) &&
+         std::isfinite(color.z) && color.x >= 0.0f && color.x <= 1.0f &&
+         color.y >= 0.0f && color.y <= 1.0f && color.z >= 0.0f &&
+         color.z <= 1.0f;
+}
+
+bool valid_layer_name(std::string_view name) {
+  if (name.empty()) {
+    return false;
+  }
+  std::size_t code_points = 0u;
+  for (std::size_t index = 0u; index < name.size();) {
+    const auto lead = static_cast<unsigned char>(name[index]);
+    std::size_t length = 0u;
+    std::uint32_t value = 0u;
+    if (lead <= 0x7fu) {
+      length = 1u;
+      value = lead;
+    } else if (lead >= 0xc2u && lead <= 0xdfu) {
+      length = 2u;
+      value = lead & 0x1fu;
+    } else if (lead >= 0xe0u && lead <= 0xefu) {
+      length = 3u;
+      value = lead & 0x0fu;
+    } else if (lead >= 0xf0u && lead <= 0xf4u) {
+      length = 4u;
+      value = lead & 0x07u;
+    } else {
+      return false;
+    }
+    if (index + length > name.size()) {
+      return false;
+    }
+    for (std::size_t offset = 1u; offset < length; ++offset) {
+      const auto continuation =
+          static_cast<unsigned char>(name[index + offset]);
+      if ((continuation & 0xc0u) != 0x80u) {
+        return false;
+      }
+      value = (value << 6u) | (continuation & 0x3fu);
+    }
+    if ((length == 3u && value < 0x800u) ||
+        (length == 4u && value < 0x10000u) ||
+        (value >= 0xd800u && value <= 0xdfffu) || value > 0x10ffffu) {
+      return false;
+    }
+    index += length;
+    if (++code_points > 127u) {
+      return false;
+    }
+  }
+  return true;
+}
+
+void normalize_layer_state(SceneLayerState &state) {
+  std::sort(state.layers.begin(), state.layers.end(),
+            [](const SceneLayerRecord &left, const SceneLayerRecord &right) {
+              return left.id < right.id;
+            });
+  std::sort(state.assignments.begin(), state.assignments.end(),
+            [](const SceneLayerAssignment &left,
+               const SceneLayerAssignment &right) {
+              return left.entity < right.entity;
+            });
 }
 
 bool is_supported_instance_member_subtree(const SceneDocument &scene,
@@ -243,6 +313,11 @@ bool SceneDocument::destroy_entity(EntityId id) {
   const bool active_destroyed =
       std::find(to_destroy.begin(), to_destroy.end(), active_selection_) !=
       to_destroy.end();
+  const bool layer_membership_destroyed =
+      std::any_of(to_destroy.begin(), to_destroy.end(),
+                  [this](EntityId entity) {
+                    return entity_layer(entity) != kInvalidSceneLayerId;
+                  });
   for (auto it = to_destroy.rbegin(); it != to_destroy.rend(); ++it) {
     const EntityId entity_id = *it;
     const entt::entity entity = require_entity(entity_id);
@@ -275,6 +350,9 @@ bool SceneDocument::destroy_entity(EntityId id) {
   ++transform_revision_;
   ++mesh_binding_revision_;
   ++render_component_revision_;
+  if (layer_membership_destroyed) {
+    ++layer_revision_;
+  }
   mark_dirty();
   return true;
 }
@@ -309,6 +387,11 @@ bool SceneDocument::destroy_entities(std::span<const EntityId> ids) {
   }
 
   const bool active_destroyed = destroy_set.contains(active_selection_);
+  const bool layer_membership_destroyed =
+      std::any_of(to_destroy.begin(), to_destroy.end(),
+                  [this](EntityId entity) {
+                    return entity_layer(entity) != kInvalidSceneLayerId;
+                  });
   for (auto it = to_destroy.rbegin(); it != to_destroy.rend(); ++it) {
     const EntityId entity_id = *it;
     const entt::entity entity = require_entity(entity_id);
@@ -341,6 +424,9 @@ bool SceneDocument::destroy_entities(std::span<const EntityId> ids) {
   ++transform_revision_;
   ++mesh_binding_revision_;
   ++render_component_revision_;
+  if (layer_membership_destroyed) {
+    ++layer_revision_;
+  }
   mark_dirty();
   return true;
 }
@@ -644,8 +730,24 @@ bool SceneDocument::set_parent(EntityId child, EntityId new_parent,
     }
   }
 
+  bool layer_membership_removed = false;
+  if (new_definition != kInvalidEntityId && new_definition != child &&
+      old_definition != new_definition) {
+    for (const EntityId entity : descendants(child, true)) {
+      const entt::entity handle = require_entity(entity);
+      if (handle != entt::null &&
+          registry_.remove<SceneLayerMembershipComponent>(handle) > 0u) {
+        layer_membership_removed = true;
+      }
+    }
+  }
+
   ++visibility_revision_;
   ++transform_revision_;
+  if (layer_membership_removed) {
+    ++layer_revision_;
+    ++render_component_revision_;
+  }
   mark_dirty();
   return true;
 }
@@ -730,6 +832,18 @@ bool SceneDocument::set_instance_definition(EntityId id) {
     return true;
   }
   registry_.emplace<InstanceDefinitionComponent>(entity);
+  bool layer_membership_removed = false;
+  for (const EntityId member : descendants(id, true)) {
+    const entt::entity handle = require_entity(member);
+    if (handle != entt::null &&
+        registry_.remove<SceneLayerMembershipComponent>(handle) > 0u) {
+      layer_membership_removed = true;
+    }
+  }
+  if (layer_membership_removed) {
+    ++layer_revision_;
+    ++visibility_revision_;
+  }
   ++render_component_revision_;
   mark_dirty();
   return true;
@@ -895,6 +1009,325 @@ bool SceneDocument::set_scene_settings(EntityId id,
   return true;
 }
 
+SceneLayerId SceneDocument::create_layer(std::string name,
+                                         QVec3 wireframe_color) {
+  if (name.empty()) {
+    name = next_layer_name();
+  }
+  return create_layer_with_id(next_layer_id_, std::move(name), true,
+                              wireframe_color);
+}
+
+SceneLayerId SceneDocument::create_layer_with_id(SceneLayerId id,
+                                                 std::string name,
+                                                 bool visible,
+                                                 QVec3 wireframe_color,
+                                                 bool locked) {
+  if (id == kInvalidSceneLayerId ||
+      id == std::numeric_limits<SceneLayerId>::max() ||
+      !valid_layer_name(name) ||
+      layers_.contains(id) || !valid_layer_color(wireframe_color)) {
+    return kInvalidSceneLayerId;
+  }
+  SceneLayerState state = layer_state();
+  state.layers.push_back(SceneLayerRecord{
+      .id = id,
+      .name = std::move(name),
+      .visible = visible,
+      .wireframe_color = wireframe_color,
+      .locked = locked,
+  });
+  return replace_layer_state(std::move(state)) ? id : kInvalidSceneLayerId;
+}
+
+bool SceneDocument::rename_layer(SceneLayerId id, std::string name) {
+  if (!valid_layer_name(name) || layer(id) == nullptr) {
+    return false;
+  }
+  SceneLayerState state = layer_state();
+  for (SceneLayerRecord &record : state.layers) {
+    if (record.id == id) {
+      record.name = std::move(name);
+      return replace_layer_state(std::move(state));
+    }
+  }
+  return false;
+}
+
+bool SceneDocument::set_layer_visible(SceneLayerId id, bool visible) {
+  if (layer(id) == nullptr) {
+    return false;
+  }
+  SceneLayerState state = layer_state();
+  for (SceneLayerRecord &record : state.layers) {
+    if (record.id == id) {
+      record.visible = visible;
+      return replace_layer_state(std::move(state));
+    }
+  }
+  return false;
+}
+
+bool SceneDocument::set_layer_wireframe_color(SceneLayerId id, QVec3 color) {
+  if (layer(id) == nullptr || !valid_layer_color(color)) {
+    return false;
+  }
+  SceneLayerState state = layer_state();
+  for (SceneLayerRecord &record : state.layers) {
+    if (record.id == id) {
+      record.wireframe_color = color;
+      return replace_layer_state(std::move(state));
+    }
+  }
+  return false;
+}
+
+bool SceneDocument::set_layer_locked(SceneLayerId id, bool locked) {
+  if (layer(id) == nullptr) {
+    return false;
+  }
+  SceneLayerState state = layer_state();
+  for (SceneLayerRecord &record : state.layers) {
+    if (record.id == id) {
+      record.locked = locked;
+      return replace_layer_state(std::move(state));
+    }
+  }
+  return false;
+}
+
+bool SceneDocument::empty_layer(SceneLayerId id) {
+  if (layer(id) == nullptr) {
+    return false;
+  }
+  SceneLayerState state = layer_state();
+  std::erase_if(state.assignments, [id](const SceneLayerAssignment &entry) {
+    return entry.layer_id == id;
+  });
+  return replace_layer_state(std::move(state));
+}
+
+bool SceneDocument::delete_layer(SceneLayerId id) {
+  return delete_layers(std::span<const SceneLayerId>(&id, 1u));
+}
+
+bool SceneDocument::delete_layers(std::span<const SceneLayerId> ids) {
+  std::unordered_set<SceneLayerId> removed;
+  for (const SceneLayerId id : ids) {
+    if (id == kInvalidSceneLayerId || layer(id) == nullptr) {
+      return false;
+    }
+    removed.insert(id);
+  }
+  if (removed.empty()) {
+    return true;
+  }
+  SceneLayerState state = layer_state();
+  std::erase_if(state.layers, [&removed](const SceneLayerRecord &record) {
+    return removed.contains(record.id);
+  });
+  std::erase_if(state.assignments,
+                [&removed](const SceneLayerAssignment &entry) {
+                  return removed.contains(entry.layer_id);
+                });
+  return replace_layer_state(std::move(state));
+}
+
+bool SceneDocument::set_entity_layer(EntityId entity,
+                                     SceneLayerId layer_id) {
+  if (!exists(entity) ||
+      (layer_id != kInvalidSceneLayerId &&
+       (!is_layer_eligible(entity) || layer(layer_id) == nullptr))) {
+    return false;
+  }
+  SceneLayerState state = layer_state();
+  std::erase_if(state.assignments,
+                [entity](const SceneLayerAssignment &entry) {
+                  return entry.entity == entity;
+                });
+  if (layer_id != kInvalidSceneLayerId) {
+    state.assignments.push_back(
+        SceneLayerAssignment{.entity = entity, .layer_id = layer_id});
+  }
+  return replace_layer_state(std::move(state));
+}
+
+bool SceneDocument::replace_layer_state(SceneLayerState state) {
+  normalize_layer_state(state);
+
+  std::unordered_set<SceneLayerId> layer_ids;
+  std::unordered_set<std::string> layer_names;
+  layer_ids.reserve(state.layers.size());
+  layer_names.reserve(state.layers.size());
+  for (const SceneLayerRecord &record : state.layers) {
+    if (record.id == kInvalidSceneLayerId ||
+        record.id == std::numeric_limits<SceneLayerId>::max() ||
+        !valid_layer_name(record.name) ||
+        !valid_layer_color(record.wireframe_color) ||
+        !layer_ids.insert(record.id).second ||
+        !layer_names.insert(record.name).second) {
+      return false;
+    }
+  }
+
+  std::unordered_set<EntityId> assigned_entities;
+  assigned_entities.reserve(state.assignments.size());
+  for (const SceneLayerAssignment &assignment : state.assignments) {
+    if (!is_layer_eligible(assignment.entity) ||
+        !layer_ids.contains(assignment.layer_id) ||
+        !assigned_entities.insert(assignment.entity).second) {
+      return false;
+    }
+  }
+
+  const SceneLayerState before = layer_state();
+  if (before == state) {
+    return true;
+  }
+
+  const std::vector<EntityId> scene_entities = entities();
+  std::vector<bool> visible_before;
+  visible_before.reserve(scene_entities.size());
+  for (const EntityId entity : scene_entities) {
+    visible_before.push_back(is_effectively_visible(entity));
+  }
+
+  layers_.clear();
+  for (SceneLayerRecord &record : state.layers) {
+    next_layer_id_ = std::max(next_layer_id_, record.id + 1u);
+    layers_.emplace(record.id, std::move(record));
+  }
+
+  std::unordered_map<EntityId, SceneLayerId> assignment_by_entity;
+  assignment_by_entity.reserve(state.assignments.size());
+  for (const SceneLayerAssignment &assignment : state.assignments) {
+    assignment_by_entity.emplace(assignment.entity, assignment.layer_id);
+  }
+  for (const EntityId entity : scene_entities) {
+    const entt::entity handle = require_entity(entity);
+    const auto assigned = assignment_by_entity.find(entity);
+    if (assigned == assignment_by_entity.end()) {
+      registry_.remove<SceneLayerMembershipComponent>(handle);
+      continue;
+    }
+    registry_.emplace_or_replace<SceneLayerMembershipComponent>(
+        handle, SceneLayerMembershipComponent{.layer_id = assigned->second});
+  }
+
+  bool visibility_changed = false;
+  for (std::size_t index = 0; index < scene_entities.size(); ++index) {
+    if (visible_before[index] !=
+        is_effectively_visible(scene_entities[index])) {
+      visibility_changed = true;
+      break;
+    }
+  }
+  if (visibility_changed) {
+    ++visibility_revision_;
+  }
+  ++layer_revision_;
+  ++render_component_revision_;
+  mark_dirty();
+  return true;
+}
+
+const SceneLayerRecord *SceneDocument::layer(SceneLayerId id) const {
+  const auto found = layers_.find(id);
+  return found == layers_.end() ? nullptr : &found->second;
+}
+
+std::vector<SceneLayerRecord> SceneDocument::layers() const {
+  std::vector<SceneLayerRecord> records;
+  records.reserve(layers_.size());
+  for (const auto &[id, record] : layers_) {
+    (void)id;
+    records.push_back(record);
+  }
+  std::sort(records.begin(), records.end(),
+            [](const SceneLayerRecord &left, const SceneLayerRecord &right) {
+              return left.id < right.id;
+            });
+  return records;
+}
+
+std::vector<EntityId> SceneDocument::layer_members(SceneLayerId id) const {
+  std::vector<EntityId> members;
+  if (layer(id) == nullptr) {
+    return members;
+  }
+  for (const EntityId entity : entities()) {
+    if (entity_layer(entity) == id) {
+      members.push_back(entity);
+    }
+  }
+  return members;
+}
+
+SceneLayerId SceneDocument::entity_layer(EntityId entity) const {
+  const SceneLayerMembershipComponent *membership = layer_membership(entity);
+  return membership == nullptr ? kInvalidSceneLayerId : membership->layer_id;
+}
+
+SceneLayerState SceneDocument::layer_state() const {
+  SceneLayerState state;
+  state.layers = layers();
+  for (const EntityId entity : entities()) {
+    const SceneLayerId layer_id = entity_layer(entity);
+    if (layer_id != kInvalidSceneLayerId) {
+      state.assignments.push_back(
+          SceneLayerAssignment{.entity = entity, .layer_id = layer_id});
+    }
+  }
+  return state;
+}
+
+std::string SceneDocument::next_layer_name() const {
+  std::unordered_set<std::string> names;
+  names.reserve(layers_.size());
+  for (const auto &[id, record] : layers_) {
+    (void)id;
+    names.insert(record.name);
+  }
+  if (!names.contains("Layer")) {
+    return "Layer";
+  }
+  for (std::uint64_t suffix = 1u;; ++suffix) {
+    std::string candidate = "Layer_" + std::to_string(suffix);
+    if (!names.contains(candidate)) {
+      return candidate;
+    }
+  }
+}
+
+bool SceneDocument::is_layer_eligible(EntityId entity) const {
+  return entity != kInvalidEntityId && exists(entity) &&
+         !is_scene_root(entity) && !is_instance_definition_entity(entity) &&
+         !is_instance_definition_member(entity);
+}
+
+std::vector<EntityId> SceneDocument::layer_eligible_entities(
+    std::span<const EntityId> roots) const {
+  std::unordered_set<EntityId> candidates;
+  for (const EntityId root : roots) {
+    if (!exists(root)) {
+      continue;
+    }
+    for (const EntityId entity : descendants(root, true)) {
+      if (is_layer_eligible(entity)) {
+        candidates.insert(entity);
+      }
+    }
+  }
+  std::vector<EntityId> eligible;
+  eligible.reserve(candidates.size());
+  for (const EntityId entity : entity_tree_order()) {
+    if (candidates.contains(entity)) {
+      eligible.push_back(entity);
+    }
+  }
+  return eligible;
+}
+
 NameComponent *SceneDocument::mutable_name(EntityId id) {
   const entt::entity entity = require_entity(id);
   return entity == entt::null ? nullptr
@@ -1040,6 +1473,14 @@ const SceneSettingsComponent *SceneDocument::scene_settings(EntityId id) const {
   return entity == entt::null
              ? nullptr
              : registry_.try_get<SceneSettingsComponent>(entity);
+}
+
+const SceneLayerMembershipComponent *
+SceneDocument::layer_membership(EntityId id) const {
+  const entt::entity entity = require_entity(id);
+  return entity == entt::null
+             ? nullptr
+             : registry_.try_get<SceneLayerMembershipComponent>(entity);
 }
 
 std::vector<EntityId> SceneDocument::entities() const {
@@ -1310,6 +1751,13 @@ bool SceneDocument::is_effectively_visible(EntityId id) const {
         return false;
       }
     }
+    const SceneLayerId layer_id = entity_layer(current);
+    if (layer_id != kInvalidSceneLayerId) {
+      const SceneLayerRecord *record = layer(layer_id);
+      if (record == nullptr || !record->visible) {
+        return false;
+      }
+    }
     current = parent(current);
   }
   return true;
@@ -1324,6 +1772,13 @@ bool SceneDocument::is_effectively_locked(EntityId id) const {
   while (current != kInvalidEntityId && guard-- > 0u) {
     if (const LockComponent *component = lock(current)) {
       if (component->locked) {
+        return true;
+      }
+    }
+    const SceneLayerId layer_id = entity_layer(current);
+    if (layer_id != kInvalidSceneLayerId) {
+      const SceneLayerRecord *record = layer(layer_id);
+      if (record == nullptr || record->locked) {
         return true;
       }
     }
@@ -1373,6 +1828,7 @@ void SceneDocument::advance_revision_for_replacement(
   mesh_binding_revision_ = std::max(mesh_binding_revision_ + 1u, revision_);
   render_component_revision_ =
       std::max(render_component_revision_ + 1u, revision_);
+  layer_revision_ = std::max(layer_revision_ + 1u, revision_);
 }
 
 entt::entity SceneDocument::entt_entity(EntityId id) const {
@@ -1485,6 +1941,7 @@ EntityRecord SceneDocument::make_entity_record(EntityId id, int depth,
   record.has_modeling_object = modeling_object(id) != nullptr;
   record.is_instance_definition = is_instance_definition_entity(id);
   record.has_instance_occurrence = instance_occurrence(id) != nullptr;
+  record.layer_id = entity_layer(id);
   return record;
 }
 

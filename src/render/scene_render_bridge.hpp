@@ -99,7 +99,9 @@ public:
     void sync(const SceneDocument &document, const AssetRegistry &assets,
               std::uint64_t frame_index = 0,
               RenderSceneBindingKey scene_binding = {},
-              RenderInstanceEditScope instance_edit_scope = {});
+              RenderInstanceEditScope instance_edit_scope = {},
+              const ViewportLocalVisibilitySnapshot *local_visibility =
+                  nullptr);
     void sync(RenderSceneSnapshot snapshot);
     void update_mesh_surface_grid(float grid_world_spacing,
                                   const ViewportSettings &settings);

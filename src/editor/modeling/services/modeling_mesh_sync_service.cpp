@@ -459,6 +459,10 @@ void apply_durable_scene_identity_to_entity(
     QDR_PROFILE_SCOPE("Modeling mesh sync apply identity lock");
     scene.set_locked(entity, identity.lock.locked);
   }
+  {
+    QDR_PROFILE_SCOPE("Modeling mesh sync apply identity layer");
+    (void)scene.set_entity_layer(entity, identity.layer_id);
+  }
 }
 
 void apply_complete_scene_identity_to_entity(

@@ -442,6 +442,8 @@ third_party_license_expectations() {
       {"", "nlohmann/json", "licenses/nlohmann-json-MIT.txt", false},
       {"flatbuffers", "FlatBuffers", "licenses/flatbuffers-Apache-2.0.txt",
        true},
+      {"", "Google Material Icons",
+       "licenses/google-material-icons-Apache-2.0.txt", false},
       {"zstd", "Zstandard",
        "licenses/zstd-BSD-3-Clause-OR-GPL-2.0-only.txt", true},
       {"entt", "EnTT", "licenses/entt-MIT.txt", true},
@@ -2008,6 +2010,23 @@ TEST(BuildGuardrailTests,
   }
 }
 
+TEST(BuildGuardrailTests, DockChromeIconsAreEmbeddedQtResources) {
+  const std::string root_c_make = read_source_file("CMakeLists.txt");
+
+  expect_contains(root_c_make,
+                  "qt_add_resources(quader \"quader_dock_chrome_icons\"");
+  expect_contains(root_c_make, "PREFIX \"/quader/icons\"");
+  for (const std::string_view icon : {"close", "float"}) {
+    const std::string relative_path =
+        std::string{"resources/icons/dock_"} + std::string{icon} + ".png";
+    ASSERT_TRUE(std::filesystem::exists(source_path(relative_path)))
+        << relative_path;
+    EXPECT_GT(std::filesystem::file_size(source_path(relative_path)), 512u)
+        << relative_path;
+    expect_contains(root_c_make, relative_path);
+  }
+}
+
 TEST(BuildGuardrailTests, SentryNativeRuntimeIsPackagedWithCrashpad) {
   const std::string root_c_make = read_source_file("CMakeLists.txt");
   const std::string options =
@@ -2235,6 +2254,9 @@ TEST(BuildGuardrailTests, QtShellUsesMainWindowDocksAndStableNames) {
                   "UIPanelId::Inspector, *inspector_panel_, "
                   "Qt::RightDockWidgetArea");
   expect_contains(ui_system_source,
+                  "UIPanelId::Layers, *layer_panel_, "
+                  "Qt::RightDockWidgetArea");
+  expect_contains(ui_system_source,
                   "UIPanelId::Console, *console_panel_, "
                   "Qt::BottomDockWidgetArea");
   expect_contains(ui_system_source, "new QDockWidget(");
@@ -2251,8 +2273,9 @@ TEST(BuildGuardrailTests, QtShellUsesMainWindowDocksAndStableNames) {
   expect_contains(panel_header, "return \"outliner\"");
   expect_contains(panel_header, "return \"inspector\"");
   expect_contains(panel_header, "return \"console\"");
+  expect_contains(panel_header, "return \"layers\"");
   expect_contains(panel_manager_header,
-                  "std::array<QDockWidget *, 4> docks_");
+                  "std::array<QDockWidget *, 5> docks_");
   expect_contains(panel_manager_source, "void UIPanelManager::add(");
   expect_contains(panel_manager_source, "QDockWidget *UIPanelManager::dock(");
 
@@ -2278,11 +2301,17 @@ TEST(BuildGuardrailTests, QtFrameRefreshKeepsExpensiveChromeEventDriven) {
       "} // namespace quader");
 
   expect_contains(frame_refresh, "outliner_panel_->refresh(context)");
+  expect_contains(frame_refresh, "layer_panel_->refresh(context)");
   expect_contains(frame_refresh, "inspector_panel_->refresh(context)");
   expect_contains(frame_refresh, "console_panel_->refresh(context)");
   expect_contains(frame_refresh, "modeling_->transform_drag_active()");
   expect_contains(frame_refresh,
                   "!transform_drag_active && panel_visible(UIPanelId::Outliner)");
+  expect_contains(frame_refresh,
+                  "!transform_drag_active && panel_visible(UIPanelId::Layers)");
+  expect_contains(frame_refresh,
+                  "layers_scene_revision_ != document_->layer_revision()");
+  expect_missing(frame_refresh, "editor_->revisions()");
   expect_contains(frame_refresh,
                   "!transform_drag_active && panel_visible(UIPanelId::Inspector)");
   expect_missing(frame_refresh, "settings_dialog_->refresh()");

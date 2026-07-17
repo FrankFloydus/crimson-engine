@@ -19,7 +19,8 @@ class QuaderApi::Impl final {
 public:
   explicit Impl(QuaderApiSession api_session)
       : session(api_session), mutations(api_session),
-        scene(api_session, mutations), modeling(api_session, mutations),
+        scene(api_session, mutations), layers(api_session, mutations),
+        modeling(api_session, mutations),
         selection(api_session, mutations), assets(api_session, mutations),
         history_api(api_session, mutations), query(api_session, mutations) {}
 
@@ -27,6 +28,7 @@ public:
   std::function<void(bool)> dirty_changed_callback;
   QuaderApiMutationRunner mutations;
   QuaderSceneApi scene;
+  QuaderLayersApi layers;
   QuaderModelingApi modeling;
   QuaderSelectionApi selection;
   QuaderAssetApi assets;
@@ -123,6 +125,10 @@ QuaderObjectHandle QuaderApi::object(QuaderModelingObjectRef ref) {
 QuaderApiSession QuaderApi::session() const {
     return impl_->session;
 }
+
+QuaderLayersApi &QuaderApi::layers() { return impl_->layers; }
+
+const QuaderLayersApi &QuaderApi::layers() const { return impl_->layers; }
 
 std::uint64_t QuaderApi::scene_binding_identity() const {
   return QuaderApiSessionInternalAccess::scene_session_id(impl_->session)

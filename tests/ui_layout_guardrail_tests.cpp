@@ -17,6 +17,7 @@ namespace {
 
 using quader::test::guardrail::read_source_file;
 using quader::test::guardrail::source_path;
+using quader::test::guardrail::source_slice;
 
 void expect_contains(std::string_view source, std::string_view needle) {
   EXPECT_NE(source.find(needle), std::string_view::npos) << needle;
@@ -48,6 +49,8 @@ const std::vector<std::string_view> &qt_shell_source_paths() {
       "src/ui/outliner_panel.cpp",
       "src/ui/inspector_panel.hpp",
       "src/ui/inspector_panel.cpp",
+      "src/ui/layer_panel.hpp",
+      "src/ui/layer_panel.cpp",
       "src/ui/console_panel.hpp",
       "src/ui/console_panel.cpp",
       "src/ui/qt_color_swatch_button.hpp",
@@ -212,9 +215,9 @@ TEST(UiLayoutGuardrailTests,
   expect_contains(ui_source, "saveState(kQtWindowStateVersion)");
   expect_contains(ui_source, "restoreState(state, kQtWindowStateVersion)");
   expect_contains(panel_manager_header,
-                  "std::array<QDockWidget *, 4> docks_");
+                  "std::array<QDockWidget *, 5> docks_");
   expect_contains(panel_manager_header,
-                  "std::array<bool, 4> explicit_visibility_");
+                  "std::array<bool, 5> explicit_visibility_");
   expect_contains(panel_manager_source, "UIPanelManager::add(");
   expect_contains(panel_manager_source, "UIPanelManager::set_visible(");
   expect_contains(panel_manager_source, "UIPanelManager::dock(");
@@ -223,6 +226,42 @@ TEST(UiLayoutGuardrailTests,
   expect_contains(panel_manager_source, "explicit_visibility_[slot]");
   expect_missing(panel_manager_source, "panel->isVisible()");
   expect_missing(ui_source, "&QDockWidget::visibilityChanged");
+}
+
+TEST(UiLayoutGuardrailTests,
+     DockPanelTitleBarsUseScopedDarkAccessibleChrome) {
+  const std::string ui_source = read_source_file("src/ui/ui_system.cpp");
+  const std::string create_dock = source_slice(
+      ui_source, "QDockWidget &UISystem::create_dock(",
+      "void UISystem::restore_window_state()");
+  const std::string frame_refresh = source_slice(
+      ui_source, "void UISystem::refresh(",
+      "void UISystem::process_viewport_input()");
+
+  expect_contains(ui_source,
+                  "void apply_dark_dock_title_presentation(QDockWidget &dock)");
+  expect_contains(ui_source,
+                  "titlebar-close-icon: url(:/quader/icons/dock_close.png)");
+  expect_contains(ui_source,
+                  "titlebar-normal-icon: url(:/quader/icons/dock_float.png)");
+  expect_contains(ui_source, "QDockWidget::title");
+  expect_contains(ui_source, "QDockWidget::title:active");
+  expect_contains(ui_source, "background-color: #181818");
+  expect_contains(ui_source, "color: #eeeeee");
+  expect_contains(ui_source, "width: 18px");
+  expect_contains(ui_source, "height: 18px");
+  expect_contains(ui_source, "icon-size: 24px");
+  expect_contains(ui_source, "QDockWidget::close-button:hover");
+  expect_contains(ui_source, "QDockWidget::float-button:hover");
+  expect_contains(ui_source, "border-color: #8a8a8a");
+  expect_contains(ui_source, "QDockWidget::close-button:pressed");
+  expect_contains(ui_source, "QDockWidget::float-button:pressed");
+  expect_contains(ui_source, "background-color: #0f0f0f");
+  expect_contains(ui_source, "border-color: #b5b5b5");
+  expect_contains(create_dock,
+                  "apply_dark_dock_title_presentation(*dock)");
+  expect_missing(frame_refresh, "apply_dark_dock_title_presentation");
+  expect_missing(frame_refresh, "setStyleSheet(");
 }
 
 TEST(UiLayoutGuardrailTests,
@@ -264,7 +303,7 @@ TEST(UiLayoutGuardrailTests,
       ui_source.data() + create_docks_owner,
       create_dock_factory - create_docks_owner);
   for (std::string_view panel : {"UIPanelId::Outliner", "UIPanelId::Inspector",
-                                 "UIPanelId::Console"}) {
+                                 "UIPanelId::Layers", "UIPanelId::Console"}) {
     EXPECT_EQ(count_occurrences(create_docks_body, panel), 1u) << panel;
   }
 
@@ -403,7 +442,7 @@ TEST(UiLayoutGuardrailTests,
 }
 
 TEST(UiLayoutGuardrailTests,
-     OutlinerInspectorAndConsoleUseStockWidgetsAndStableNames) {
+     DockPanelsUseStockWidgetsAndStableNames) {
   const std::string outliner_header =
       read_source_file("src/ui/outliner_panel.hpp");
   const std::string outliner = read_source_file("src/ui/outliner_panel.cpp");
@@ -411,6 +450,9 @@ TEST(UiLayoutGuardrailTests,
       read_source_file("src/ui/inspector_panel.hpp");
   const std::string inspector =
       read_source_file("src/ui/inspector_panel.cpp");
+  const std::string layer_header =
+      read_source_file("src/ui/layer_panel.hpp");
+  const std::string layer = read_source_file("src/ui/layer_panel.cpp");
   const std::string console_header =
       read_source_file("src/ui/console_panel.hpp");
   const std::string console = read_source_file("src/ui/console_panel.cpp");
@@ -463,6 +505,39 @@ TEST(UiLayoutGuardrailTests,
                  "changed({static_cast<float>(initial.redF())");
   expect_missing(inspector, "document_->set_scene_settings(");
   expect_missing(inspector, "document_->set_light(");
+
+  expect_contains(layer_header,
+                  "class LayerPanel final : public QWidget");
+  expect_contains(layer, "public QTreeView");
+  expect_contains(layer, "new QStandardItemModel");
+  expect_contains(layer, "ui_panel_stable_id(UIPanelId::Layers)");
+  expect_contains(layer, "QStringLiteral(\"layers.tree\")");
+  expect_contains(layer, "QStringLiteral(\"layers.model\")");
+  expect_contains(layer, "QStringLiteral(\"layers.context_menu\")");
+  expect_contains(layer, "QAbstractItemView::ExtendedSelection");
+  expect_contains(layer,
+                  "QAbstractItemView::DoubleClicked |\n"
+                  "                           QAbstractItemView::EditKeyPressed");
+  expect_contains(layer, "new QtColorSwatchButton");
+  expect_contains(layer, "Color = 0");
+  expect_contains(layer, "Name = 1");
+  expect_contains(layer, "Visible = 2");
+  expect_contains(layer, "Locked = 3");
+  expect_contains(layer, "material_visibility.png");
+  expect_contains(layer, "material_visibility_off.png");
+  expect_contains(layer, "material_lock.png");
+  expect_contains(layer, "material_lock_open.png");
+  expect_contains(layer, "layer_add.png");
+  expect_contains(layer, "clear_layer_selection()");
+  expect_contains(layer, "editor_->layers().all()");
+  expect_contains(layer, "editor_->layers().set_locked(");
+  expect_contains(layer, "editor_->layers().remove_selection(id)");
+  expect_contains(layer, "editor_->layers().revision()");
+  expect_contains(layer, "QItemSelectionModel::NoUpdate");
+  expect_missing(layer, "commands().available()");
+  expect_missing(layer, "document_->set_");
+  expect_contains(layer, "QPainter::CompositionMode_SourceIn");
+  expect_missing(layer, "QPainterPath");
 
   expect_contains(console_header,
                   "class ConsolePanel final : public QWidget");
@@ -779,6 +854,113 @@ TEST(UiLayoutGuardrailTests,
 }
 
 TEST(UiLayoutGuardrailTests,
+     SettingsKeybindingShowcaseUsesPublicCatalogOffTheFrameLoop) {
+  const std::string dialog_header =
+      read_source_file("src/ui/qt_settings_dialog.hpp");
+  const std::string dialog =
+      read_source_file("src/ui/qt_settings_dialog.cpp");
+  const std::string ui_system = read_source_file("src/ui/ui_system.cpp");
+
+  expect_contains(dialog_header, "class QuaderCommandsApi;");
+  expect_contains(dialog_header, "QuaderCommandsApi &commands");
+  expect_contains(dialog,
+                  "#include \"api/quader_commands_api.hpp\"");
+  expect_contains(dialog, "QStringLiteral(\"keybindings\")");
+  expect_contains(dialog, "QStringLiteral(\"settingsKeybindingsTable\")");
+  expect_contains(dialog, "QStringLiteral(\"settingsKeybindingsSearch\")");
+  expect_contains(
+      dialog, "QStringLiteral(\"settingsKeybindingsShortcutFilter\")");
+  expect_contains(
+      dialog, "QStringLiteral(\"settingsKeybindingsShortcutClear\")");
+  expect_contains(dialog, "new QtKeybindingTableView(page)");
+  expect_contains(dialog, "setAlternatingRowColors(true)");
+  expect_contains(dialog,
+                  "setEditTriggers(QAbstractItemView::NoEditTriggers)");
+  expect_contains(dialog,
+                  "setSelectionBehavior(QAbstractItemView::SelectRows)");
+  expect_contains(dialog,
+                  "setSelectionMode(QAbstractItemView::SingleSelection)");
+  expect_contains(dialog, "setDefaultSectionSize(20)");
+  expect_contains(dialog,
+                  "header->setSectionResizeMode(QHeaderView::Interactive)");
+  expect_contains(dialog, "header->setStretchLastSection(true)");
+  expect_contains(dialog, "keybindings_table->setSortingEnabled(true)");
+  expect_contains(dialog, "Qt::AscendingOrder");
+  expect_contains(dialog, "apply_keybinding_filters()");
+  expect_contains(dialog, "quader_pressed_input_chord_from_qt_event");
+  expect_contains(dialog, "commands->format_input_mapping(chord)");
+  expect_contains(dialog, "commands->keybinding_catalog()");
+  expect_contains(dialog, "commands->analyze_shortcut_assignment(");
+  expect_contains(dialog, "commands->set_action_shortcut(");
+  expect_contains(dialog, "commands->remove_action_shortcut(");
+  expect_contains(dialog, "commands->reset_action_shortcut(");
+  expect_contains(dialog, "commands->reset_all_shortcuts()");
+  expect_missing(dialog,
+                 "QStringLiteral(\"settingsKeybindingsSaveHint\")");
+  expect_missing(dialog,
+                 "QStringLiteral(\"settingsKeybindingsRebindHint\")");
+  expect_missing(dialog,
+                 "QStringLiteral(\"settingsKeybindingsSelectedAction\")");
+  expect_missing(dialog,
+                 "QStringLiteral(\"settingsKeybindingsDefaultValue\")");
+  expect_missing(dialog,
+                 "QStringLiteral(\"settingsKeybindingsCurrentValue\")");
+  expect_missing(dialog,
+                 "QStringLiteral(\"settingsKeybindingsWhenValue\")");
+  expect_contains(dialog,
+                  "QStringLiteral(\"settingsKeybindingCaptureDialog\")");
+  expect_contains(dialog,
+                  "QStringLiteral(\"settingsKeybindingConflictDialog\")");
+  expect_contains(dialog,
+                  "QtSettingsChangeKind::KeybindingsCommit");
+  expect_contains(dialog, "entry.localization_key");
+  expect_contains(dialog, "entry.scope_localization_key");
+  expect_contains(dialog, "entry.shortcut");
+  expect_contains(dialog, "std::stable_sort(");
+  expect_contains(dialog, "column_text(left, column)");
+  expect_contains(dialog, "natural_numeric_compare(");
+  expect_contains(dialog, ".digitValue()");
+  expect_missing(dialog, "QCollator");
+  expect_missing(dialog, "SourceColumn");
+  expect_missing(dialog,
+                 "QStringLiteral(\"settingsKeybindingsCurrentMappings\")");
+  expect_missing(dialog, "QStringLiteral(\"settingsKeybindingsAdd\")");
+  expect_missing(dialog, "QStringLiteral(\"settingsKeybindingsReplace\")");
+  expect_missing(dialog, "QStringLiteral(\"settingsKeybindingsRemove\")");
+  expect_missing(dialog, "settingsKeybindingConflictKeepBoth");
+  expect_missing(dialog, "QuaderKeybindingConflictPolicy::KeepBoth");
+
+  for (std::string_view forbidden : {
+           "editor/input/quader_keybinding_service.hpp",
+           "editor/metadata/host_contract.hpp",
+           "viewport/host_viewport_contract_adapter.hpp",
+           "QShortcut",
+           "QKeySequence",
+           "commands().available()",
+           "commands().keybindings()",
+           "set_shortcut(",
+           "remove_shortcut(",
+           "reset_shortcut(",
+       }) {
+    expect_missing(dialog, forbidden);
+    expect_missing(dialog_header, forbidden);
+  }
+
+  const std::size_t frame_refresh =
+      ui_system.find("void UISystem::refresh(");
+  const std::size_t frame_refresh_end = ui_system.find(
+      "void UISystem::process_viewport_input(", frame_refresh);
+  ASSERT_NE(frame_refresh, std::string::npos);
+  ASSERT_NE(frame_refresh_end, std::string::npos);
+  const std::string frame_body =
+      ui_system.substr(frame_refresh, frame_refresh_end - frame_refresh);
+  expect_missing(frame_body, "keybinding_catalog()");
+  expect_missing(frame_body, "commands().available()");
+  expect_missing(frame_body, "commands().keybindings()");
+  expect_missing(frame_body, "settings_dialog_->refresh()");
+}
+
+TEST(UiLayoutGuardrailTests,
      SettingsPersistenceAndRetainedSynchronizationAreEventDriven) {
   const std::string dialog_header =
       read_source_file("src/ui/qt_settings_dialog.hpp");
@@ -803,6 +985,17 @@ TEST(UiLayoutGuardrailTests,
   expect_contains(ui_system, "QtSettingsChangeKind::ViewportPreview");
   expect_contains(ui_system, "QtSettingsChangeKind::ViewportCommit");
   expect_contains(ui_system, "QtSettingsChangeKind::InterfaceCommit");
+  expect_contains(ui_system, "QtSettingsChangeKind::KeybindingsCommit");
+  expect_contains(ui_system,
+                  "selection_toolbar_->synchronize(*editor_, selection.mode, true)");
+  expect_contains(ui_system,
+                  "tool_toolbar_->synchronize(*editor_, selection, true)");
+  expect_contains(ui_system,
+                  "snapping_toolbar_->synchronize(*editor_, true)");
+  expect_contains(ui_system,
+                  "viewport_display_toolbar_->synchronize(*editor_, true)");
+  expect_contains(ui_system,
+                  "viewport_panel_->refresh_keybinding_presentation(*editor_)");
   expect_contains(ui_system, "synchronize_settings_surfaces(true)");
   expect_contains(ui_system, "settings_dialog_->isVisible()");
   expect_contains(ui_system, "settings_dialog_->refresh()");
@@ -1026,14 +1219,19 @@ TEST(UiLayoutGuardrailTests,
   expect_missing(button_presentation, "setDown(");
   expect_contains(toolbar, "if (!force && synchronization_valid_");
   expect_contains(toolbar, "editor.commands().descriptor(command_id)");
+  expect_contains(toolbar, "editor.commands().shortcut_for(command_id)");
   expect_missing(toolbar, "editor.commands().available()");
   const std::size_t unchanged_state_gate =
       toolbar.find("if (!force && synchronization_valid_");
   const std::size_t command_lookup =
       toolbar.find("editor.commands().descriptor(command_id)");
+  const std::size_t shortcut_lookup =
+      toolbar.find("editor.commands().shortcut_for(command_id)");
   ASSERT_NE(unchanged_state_gate, std::string::npos);
   ASSERT_NE(command_lookup, std::string::npos);
+  ASSERT_NE(shortcut_lookup, std::string::npos);
   EXPECT_LT(unchanged_state_gate, command_lookup);
+  EXPECT_LT(unchanged_state_gate, shortcut_lookup);
   expect_contains(toolbar, "QStringLiteral(\" [%1]\")");
   expect_contains(menu_header, "tool_toolbar_visible");
   expect_contains(menu_header, "set_tool_toolbar_visible");
@@ -1186,14 +1384,19 @@ TEST(UiLayoutGuardrailTests,
   expect_contains(toolbar,
                   "if (!force && presented_state_.has_value() &&");
   expect_contains(toolbar, "editor.commands().descriptor(");
+  expect_contains(toolbar, "editor.commands().shortcut_for(entry.command_id)");
   expect_missing(toolbar, "editor.commands().available()");
   const std::size_t unchanged_state_gate =
       toolbar.find("if (!force && presented_state_.has_value() &&");
   const std::size_t command_lookup =
       toolbar.find("editor.commands().descriptor(");
+  const std::size_t shortcut_lookup = toolbar.find(
+      "editor.commands().shortcut_for(entry.command_id)");
   ASSERT_NE(unchanged_state_gate, std::string::npos);
   ASSERT_NE(command_lookup, std::string::npos);
+  ASSERT_NE(shortcut_lookup, std::string::npos);
   EXPECT_LT(unchanged_state_gate, command_lookup);
+  EXPECT_LT(unchanged_state_gate, shortcut_lookup);
 
   expect_contains(ui_header,
                   "QtViewportDisplayToolbar *viewport_display_toolbar_");
@@ -1322,6 +1525,14 @@ TEST(UiLayoutGuardrailTests, QtViewportSupportsOneThroughFourPaneLayouts) {
   expect_contains(panel, "visible && !startup_presentation_blocked_");
   expect_contains(panel, "active[index] = true");
   expect_contains(menu, "viewport_layout_options()");
+  for (std::string_view command : {
+           "kViewportLayoutSingle", "kViewportLayoutTwoVertical",
+           "kViewportLayoutTwoHorizontal", "kViewportLayoutFourQuad"}) {
+    expect_contains(menu, command);
+  }
+  expect_contains(menu, "context.editor.commands().execute(");
+  expect_contains(menu,
+                  "context.editor.commands().shortcut_for(*entry.command_id)");
   expect_contains(menu, "editor.viewports().set_layout(layout)");
 }
 
@@ -1540,12 +1751,30 @@ TEST(UiLayoutGuardrailTests,
   expect_contains(panel_header, "QPushButton *display_button = nullptr");
   expect_contains(panel_header, "QMenu *camera_menu = nullptr");
   expect_contains(panel_header, "QMenu *debug_view_menu = nullptr");
+  expect_contains(panel_header,
+                  "void refresh_keybinding_presentation(QuaderEditorApi &editor)");
   expect_contains(panel, "new QPushButton(pane_state.toolbar)");
   expect_contains(panel,
                   "pane_state.display_menu->setMinimumWidth(chrome.menu_width)");
   expect_contains(panel, "pane_state.display_menu->addMenu(");
   expect_missing(panel, "new QComboBox(pane_state.toolbar)");
   expect_missing(panel, "viewportView_%1");
+  for (std::string_view command : {
+           "kViewportShadingWireframe", "kViewportShadingShaded",
+           "kViewportShadingRendered"}) {
+    expect_contains(panel, command);
+  }
+  expect_contains(panel,
+                  "interaction_editor_->commands().execute(*command_id)");
+  expect_contains(panel,
+                  "interaction_editor_->commands().shortcut_for(*command_id)");
+  const std::size_t editor_gate =
+      panel.find("if (interaction_editor_ != &editor)");
+  const std::size_t keybinding_refresh =
+      panel.find("refresh_keybinding_presentation(editor)", editor_gate);
+  ASSERT_NE(editor_gate, std::string::npos);
+  ASSERT_NE(keybinding_refresh, std::string::npos);
+  EXPECT_LT(editor_gate, keybinding_refresh);
 
   // Detailed cadence probes remain available for regression diagnosis, but
   // production frames must not pay their clock/logging cost.
@@ -1662,6 +1891,14 @@ TEST(UiLayoutGuardrailTests,
   expect_contains(presenter,
                   "editor.commands().command_id_for_modeling_action(");
   expect_contains(presenter, "editor.commands().execute(command_id)");
+  expect_contains(panel, "editor.layers()");
+  expect_contains(panel, ".can_remove_selection_from_all_layers()");
+  expect_contains(presenter,
+                  "editor.layers().can_remove_selection_from_all_layers()");
+  expect_contains(presenter,
+                  "quader_command::kSceneLayersRemoveSelection");
+  expect_contains(presenter,
+                  "QStringLiteral(\"scene.layers.remove_selection\")");
   expect_contains(presenter, "input_router.set_selection_mode(");
   expect_contains(presenter, "is_generic_context_action(action.action_id)");
   expect_contains(presenter, "menu.addSeparator()");
@@ -1684,7 +1921,11 @@ TEST(UiLayoutGuardrailTests,
                   "Keyboard dispatch remains owned by QuaderKeybindingService");
   expect_contains(menu, "editor.commands().execute(command_id)");
   expect_contains(menu, "editor.commands().available()");
-  expect_contains(menu, "command->shortcut");
+  expect_contains(menu,
+                  "context.editor.commands().shortcut_for(entry.command_id)");
+  expect_contains(menu,
+                  "context.editor.commands().shortcut_for(command_id)");
+  expect_missing(menu, "command->shortcut");
   expect_contains(menu, "command_id_for_tool_activation(");
   expect_contains(menu, "context.editor.commands().execute(command_id)");
   expect_missing(menu, "context.editor.tools().activate(tool_id)");
@@ -1706,8 +1947,11 @@ TEST(UiLayoutGuardrailTests,
   }
 
   expect_contains(commands, "QuaderKeybindingService keybindings_");
-  expect_contains(commands, "keybindings_.dispatch(chord, context)");
-  expect_contains(commands, "keybindings_.resolve_sequence({chord}, context)");
+  expect_contains(
+      commands,
+      "keybindings_.dispatch(chord, context, target_available)");
+  expect_contains(commands, "keybindings_.resolve_sequence(");
+  expect_contains(commands, "{chord}, context, [](");
   expect_contains(commands, "dispatch_viewport_input_binding(");
   expect_contains(commands,
                   "return api_.modeling().can_execute_tool(tool_id)");

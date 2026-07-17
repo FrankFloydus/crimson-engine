@@ -10,6 +10,8 @@
 #include <editor/metadata/host_contract.hpp>
 #include <viewport/viewport_layout.hpp>
 
+#include <array>
+#include <cstddef>
 #include <string_view>
 
 namespace qhc = quader_host_contract;
@@ -31,18 +33,6 @@ const qhc::HostViewportViewDescriptor& require_view(std::string_view id)
 	}
 	ADD_FAILURE() << "Missing host viewport view descriptor";
         static const qhc::HostViewportViewDescriptor kMissingDescriptor{};
-        return kMissingDescriptor;
-}
-
-const qhc::HostGridPresetDescriptor& require_grid(std::string_view shortcut)
-{
-	for (const qhc::HostGridPresetDescriptor& descriptor : qhc::grid_preset_catalog()) {
-		if (descriptor.shortcut == shortcut) {
-			return descriptor;
-		}
-	}
-	ADD_FAILURE() << "Missing host grid preset descriptor";
-        static const qhc::HostGridPresetDescriptor kMissingDescriptor{};
         return kMissingDescriptor;
 }
 
@@ -74,14 +64,15 @@ TEST(QdrEditorMetadataViewportCatalogTests, HostContractGridPresetCatalogIsExpli
 	const std::span<const qhc::HostGridPresetDescriptor> presets = qhc::grid_preset_catalog();
 	EXPECT_TRUE(presets.size() == 10U);
 
-	EXPECT_TRUE(same_text(presets.front().shortcut, "F1"));
-	EXPECT_TRUE(same_text(presets.back().shortcut, "F10"));
-	EXPECT_TRUE(require_grid("F1").map_units == 1.0);
-	EXPECT_TRUE(require_grid("F6").map_units == 32.0);
-	EXPECT_TRUE(require_grid("F10").map_units == 512.0);
-	EXPECT_TRUE(require_grid("F6").default_preset);
-	EXPECT_FALSE(require_grid("F5").default_preset);
-        EXPECT_TRUE(require_grid("F6").world_units ==
+        constexpr std::array<double, 10> kExpectedMapUnits{
+            1.0, 2.0, 4.0, 8.0, 16.0, 32.0, 64.0, 128.0, 256.0,
+            512.0};
+        for (std::size_t index = 0; index < presets.size(); ++index) {
+          EXPECT_TRUE(presets[index].shortcut.empty());
+          EXPECT_TRUE(presets[index].map_units == kExpectedMapUnits[index]);
+          EXPECT_EQ(presets[index].default_preset, index == 5U);
+        }
+        EXPECT_TRUE(presets[5].world_units ==
                     32.0 / qec::kDefaultMapUnitsPerWorldUnit);
 }
 

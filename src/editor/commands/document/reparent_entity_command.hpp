@@ -9,6 +9,10 @@
 #include "editor/commands/document/document_command_edits.hpp"
 #include "editor/commands/document/scene_command.hpp"
 
+#include <algorithm>
+#include <unordered_set>
+#include <vector>
+
 namespace quader {
 
 /**
@@ -25,6 +29,13 @@ public:
       before_transform_ = *transform;
       after_transform_ = *transform;
     }
+    capture_layer_assignments(scene, before_layer_assignments_);
+    after_layer_assignments_ = before_layer_assignments_;
+    if (scene.containing_instance_definition(parent) != kInvalidEntityId &&
+        scene.containing_instance_definition(entity) !=
+            scene.containing_instance_definition(parent)) {
+      after_layer_assignments_.clear();
+    }
   }
 
   ReparentEntityCommand(SceneDocument &scene, EntityId entity,
@@ -34,7 +45,16 @@ public:
       : SceneCommand(scene, "Reparent Entity"), entity_(entity),
         before_parent_(before_parent), after_parent_(after_parent),
         before_transform_(before_transform), after_transform_(after_transform),
-        captured_after_transform_(true) {}
+        captured_after_transform_(true) {
+    capture_layer_assignments(scene, before_layer_assignments_);
+    after_layer_assignments_ = before_layer_assignments_;
+    if (scene.containing_instance_definition(after_parent) !=
+            kInvalidEntityId &&
+        scene.containing_instance_definition(entity) !=
+            scene.containing_instance_definition(after_parent)) {
+      after_layer_assignments_.clear();
+    }
+  }
 
   DocumentCommandResult undo() override {
     return apply(before_parent_, before_transform_);
@@ -64,10 +84,53 @@ public:
           after_transform_ = *transform;
           captured_after_transform_ = true;
         }
+        if (!apply_layer_assignments(after_layer_assignments_)) {
+          return document_command_invalid_request_result(
+              "Entity layer membership could not be updated");
+        }
         return document_command_changed_result();
     }
 
 private:
+    void capture_layer_assignments(
+        const SceneDocument &scene,
+        std::vector<SceneLayerAssignment> &assignments) const {
+      for (const EntityId descendant : scene.descendants(entity_, true)) {
+        const SceneLayerId layer_id = scene.entity_layer(descendant);
+        if (layer_id != kInvalidSceneLayerId) {
+          assignments.push_back(
+              SceneLayerAssignment{.entity = descendant, .layer_id = layer_id});
+        }
+      }
+      std::sort(assignments.begin(), assignments.end(),
+                [](const SceneLayerAssignment &left,
+                   const SceneLayerAssignment &right) {
+                  return left.entity < right.entity;
+                });
+    }
+
+    bool apply_layer_assignments(
+        const std::vector<SceneLayerAssignment> &assignments) {
+      std::vector<SceneLayerAssignment> current;
+      capture_layer_assignments(scene(), current);
+      if (current == assignments) {
+        return true;
+      }
+
+      const std::vector<EntityId> descendants =
+          scene().descendants(entity_, true);
+      const std::unordered_set<EntityId> subtree(descendants.begin(),
+                                                 descendants.end());
+      SceneLayerState state = scene().layer_state();
+      std::erase_if(state.assignments,
+                    [&subtree](const SceneLayerAssignment &assignment) {
+                      return subtree.contains(assignment.entity);
+                    });
+      state.assignments.insert(state.assignments.end(), assignments.begin(),
+                               assignments.end());
+      return scene().replace_layer_state(std::move(state));
+    }
+
     DocumentCommandResult apply(EntityId parent, const TransformComponent& transform) {
         if (!scene().exists(entity_)) {
           return document_command_missing_entity_result();
@@ -81,6 +144,12 @@ private:
               "Entity cannot be reparented");
         }
         scene().set_transform(entity_, transform);
+        const bool use_before = parent == before_parent_;
+        if (!apply_layer_assignments(use_before ? before_layer_assignments_
+                                                : after_layer_assignments_)) {
+          return document_command_invalid_request_result(
+              "Entity layer membership could not be restored");
+        }
         return document_command_changed_result();
     }
 
@@ -91,6 +160,8 @@ private:
     TransformComponent after_transform_;
     bool preserve_world_transform_ = true;
     bool captured_after_transform_ = false;
+    std::vector<SceneLayerAssignment> before_layer_assignments_;
+    std::vector<SceneLayerAssignment> after_layer_assignments_;
 };
 
 } // namespace quader

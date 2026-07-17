@@ -39,6 +39,7 @@ ModelingObjectSceneIdentity capture_scene_identity(const SceneDocument &scene,
   if (const MaterialComponent *material = scene.material(entity)) {
     identity.material = *material;
   }
+  identity.layer_id = scene.entity_layer(entity);
   return identity;
 }
 

@@ -8,6 +8,7 @@
 
 #include "api/quader_asset_api.hpp"
 #include "api/quader_history_api.hpp"
+#include "api/quader_layers_api.hpp"
 #include "api/quader_modeling_api.hpp"
 #include "api/quader_query_api.hpp"
 #include "api/quader_scene_api.hpp"
@@ -49,6 +50,8 @@ public:
 
     [[nodiscard]] QuaderSceneApi& scene();
     [[nodiscard]] const QuaderSceneApi& scene() const;
+    [[nodiscard]] QuaderLayersApi &layers();
+    [[nodiscard]] const QuaderLayersApi &layers() const;
     [[nodiscard]] QuaderModelingApi& modeling();
     [[nodiscard]] const QuaderModelingApi& modeling() const;
     [[nodiscard]] QuaderSelectionApi& selection();

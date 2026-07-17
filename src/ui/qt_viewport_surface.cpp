@@ -22,7 +22,9 @@
 #include <QMetaObject>
 #include <QMouseEvent>
 #include <QPlatformSurfaceEvent>
+#include <QPointF>
 #include <QResizeEvent>
+#include <QStyleHints>
 #include <QWheelEvent>
 
 #include <algorithm>
@@ -80,6 +82,16 @@ bool viewport_surface_diagnostics_enabled() {
 
 /// Collects transient Qt input state until the panel consumes one frame.
 struct QtViewportSurface::InputAccumulator {
+  /// Retains one physical press until release proves it was a click rather
+  /// than pointer motion. The chord deliberately keeps press-time modifiers.
+  struct ClickCandidate {
+    QuaderInputChord chord;
+    QPointF press_local;
+    QPointF last_local;
+    qreal captured_distance = 0.0;
+    bool eligible = true;
+  };
+
   bool hovered = false;
   bool focused = false;
   bool suppress_warp_event = false;
@@ -112,6 +124,7 @@ struct QtViewportSurface::InputAccumulator {
   std::unordered_map<int, QuaderInputChord> active_keys;
   std::optional<QuaderInputChord> middle_drag;
   std::optional<QuaderInputChord> right_drag;
+  std::unordered_map<int, ClickCandidate> click_candidates;
 };
 
 QtViewportSurface::QtViewportSurface(ViewportPaneId pane_id)
@@ -626,6 +639,7 @@ void QtViewportSurface::record_focus_out() {
   }
   input_->middle_drag.reset();
   input_->right_drag.reset();
+  input_->click_candidates.clear();
   input_->left_released = input_->left_released || input_->left_down;
   input_->middle_released = input_->middle_released || input_->middle_down;
   input_->right_released =
@@ -680,6 +694,7 @@ void QtViewportSurface::record_mouse_press(QMouseEvent &event,
   }
 
   if (double_click) {
+    input_->click_candidates.erase(static_cast<int>(*button));
     if (const std::optional<QuaderInputChord> chord =
             quader_mouse_input_chord_from_qt_event(
                 event, QuaderInputGesture::DoubleClick)) {
@@ -690,6 +705,15 @@ void QtViewportSurface::record_mouse_press(QMouseEvent &event,
             quader_mouse_input_chord_from_qt_event(
                 event, QuaderInputGesture::Press)) {
       input_->pressed.push_back(*chord);
+      QuaderInputChord click = *chord;
+      click.gesture = QuaderInputGesture::Click;
+      input_->click_candidates.insert_or_assign(
+          static_cast<int>(*button),
+          InputAccumulator::ClickCandidate{
+              .chord = click,
+              .press_local = event.position(),
+              .last_local = event.position(),
+          });
     }
   }
 
@@ -734,6 +758,14 @@ void QtViewportSurface::record_mouse_release(QMouseEvent &event) {
       quader_mouse_button_from_qt_button(event.button());
   if (!button.has_value()) {
     return;
+  }
+  const auto click =
+      input_->click_candidates.find(static_cast<int>(*button));
+  if (click != input_->click_candidates.end()) {
+    if (click->second.eligible) {
+      input_->pressed.push_back(click->second.chord);
+    }
+    input_->click_candidates.erase(click);
   }
   switch (*button) {
   case QuaderMouseButton::Left:
@@ -788,6 +820,10 @@ void QtViewportSurface::record_mouse_move(QMouseEvent &event) {
                            event_local.y() < height());
       }
       input_->modifiers = viewport_modifiers(event.modifiers());
+      for (auto &[button, candidate] : input_->click_candidates) {
+        (void)button;
+        candidate.last_local = event.position();
+      }
       input_->suppress_warp_event = false;
       input_->warp_motion_overtook_target = false;
       return;
@@ -797,6 +833,29 @@ void QtViewportSurface::record_mouse_move(QMouseEvent &event) {
     // against the last physical baseline; otherwise the later warp becomes a
     // cursor-sized fallback delta.
     input_->warp_motion_overtook_target = true;
+  }
+  const int start_drag_distance =
+      QGuiApplication::styleHints() != nullptr
+          ? QGuiApplication::styleHints()->startDragDistance()
+          : 10;
+  for (auto &[button, candidate] : input_->click_candidates) {
+    (void)button;
+    if (candidate.eligible) {
+      qreal displacement = 0.0;
+      if (pointer_captured()) {
+        const QPointF delta = event.position() - candidate.last_local;
+        candidate.captured_distance +=
+            std::abs(delta.x()) + std::abs(delta.y());
+        displacement = candidate.captured_distance;
+      } else {
+        const QPointF delta = event.position() - candidate.press_local;
+        displacement = std::abs(delta.x()) + std::abs(delta.y());
+      }
+      if (displacement >= static_cast<qreal>(start_drag_distance)) {
+        candidate.eligible = false;
+      }
+    }
+    candidate.last_local = event.position();
   }
   if (input_->has_mouse_position) {
     const QVec2 absolute_delta = local - input_->mouse_local;
@@ -831,6 +890,7 @@ void QtViewportSurface::record_native_pointer_capture_lost() {
   // and must not synthesize a click that can open the viewport context menu.
   if (capture_was_stolen) {
     input_->right_down = false;
+    input_->click_candidates.clear();
   }
 }
 

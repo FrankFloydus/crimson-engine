@@ -1375,6 +1375,8 @@ TEST(ProgrammaticApiGuardrailTests, UiPanelRoutingUsesStableIdsAndNoDeadShowMenu
   EXPECT_EQ(settings_source.find("file << ui_panel_key"), std::string::npos);
   EXPECT_NE(settings_source.find("ui_panel_stable_id(UIPanelId::Outliner)"),
             std::string::npos);
+  EXPECT_NE(settings_source.find("ui_panel_stable_id(UIPanelId::Layers)"),
+            std::string::npos);
 }
 
 TEST(ProgrammaticApiGuardrailTests,

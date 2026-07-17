@@ -19,6 +19,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <limits>
 #include <ranges>
 #include <span>
 #include <string>
@@ -149,6 +150,59 @@ TEST(QdrBinarySceneCodecTests, RoundTripPreservesExplicitUuidAndSceneData) {
 }
 
 TEST(QdrBinarySceneCodecTests,
+     SchemaFourRoundTripPreservesLayersMembershipVisibilityColorAndLock) {
+  SceneContentDocument document = simple_scene();
+  SceneDocument &scene = document.scene();
+  const SceneLayerId layer = scene.create_layer_with_id(
+      17u, "Characters", false, {0.2f, 0.4f, 0.8f}, true);
+  ASSERT_EQ(layer, 17u);
+  ASSERT_TRUE(scene.set_entity_layer(100u, layer));
+
+  const QdrProjectReadResult read =
+      QdrDocumentReader::deserialize_project_document(
+          QdrDocumentWriter::serialize_project_document_bytes(
+              qdr_project_write_snapshot_from_document(document),
+              test_uuid()));
+
+  ASSERT_TRUE(read.ok) << read.message;
+  const SceneLayerRecord *decoded = read.document.scene().layer(layer);
+  ASSERT_NE(decoded, nullptr);
+  EXPECT_EQ(decoded->name, "Characters");
+  EXPECT_FALSE(decoded->visible);
+  EXPECT_FLOAT_EQ(decoded->wireframe_color.x, 0.2f);
+  EXPECT_FLOAT_EQ(decoded->wireframe_color.y, 0.4f);
+  EXPECT_FLOAT_EQ(decoded->wireframe_color.z, 0.8f);
+  EXPECT_TRUE(decoded->locked);
+  EXPECT_EQ(read.document.scene().entity_layer(100u), layer);
+  EXPECT_FALSE(read.document.scene().is_effectively_visible(100u));
+  ASSERT_NE(read.document.scene().lock(100u), nullptr);
+  EXPECT_FALSE(read.document.scene().lock(100u)->locked);
+  EXPECT_TRUE(read.document.scene().is_effectively_locked(100u));
+}
+
+TEST(QdrBinarySceneCodecTests, LayerEncodingIsDeterministicByLayerId) {
+  QdrProjectWriteSnapshot ordered =
+      qdr_project_write_snapshot_from_document(simple_scene());
+  ordered.layers = {
+      {.id = 2u,
+       .name = "Second",
+       .visible = true,
+       .wireframe_color = {0.8f, 0.4f, 0.2f},
+       .locked = true},
+      {.id = 1u,
+       .name = "First",
+       .visible = false,
+       .wireframe_color = {0.1f, 0.2f, 0.3f},
+       .locked = false},
+  };
+  QdrProjectWriteSnapshot reversed = ordered;
+  std::reverse(reversed.layers.begin(), reversed.layers.end());
+
+  EXPECT_EQ(encode_qdr_scene_binary(ordered, test_uuid()).bytes,
+            encode_qdr_scene_binary(reversed, test_uuid()).bytes);
+}
+
+TEST(QdrBinarySceneCodecTests,
      RoundTripPreservesSceneLocalInstanceDefinitionAndOccurrence) {
   SceneContentDocument document = simple_scene();
   SceneDocument &scene = document.scene();
@@ -192,11 +246,11 @@ TEST(QdrBinarySceneCodecTests,
       read.document.scene().transform(occurrence)->position.x, 3.0f);
 }
 
-TEST(QdrBinarySceneCodecTests, ReadsSchemaOneAndTwoScenesWithoutInstances) {
+TEST(QdrBinarySceneCodecTests, ReadsSchemasOneThroughThreeWithoutLayers) {
   const quader_io::QdrBinaryContainerReadResult parsed =
       parse_written_scene(simple_scene());
   ASSERT_TRUE(parsed.ok) << parsed.message;
-  for (const std::uint16_t schema_version : {1u, 2u}) {
+  for (const std::uint16_t schema_version : {1u, 2u, 3u}) {
     std::vector<quader_io::QdrBinaryChunkInput> chunks = copy_chunks(parsed);
     const auto metadata = std::ranges::find_if(
         chunks, [](const quader_io::QdrBinaryChunkInput &chunk) {
@@ -212,6 +266,120 @@ TEST(QdrBinarySceneCodecTests, ReadsSchemaOneAndTwoScenesWithoutInstances) {
                          << read.message;
     EXPECT_EQ(read.document.assets().mesh_count(), 1u);
   }
+}
+
+TEST(QdrBinarySceneCodecTests,
+     SchemaThreeIgnoresAppendedLayerDataAndLeavesObjectsUnassigned) {
+  SceneContentDocument document = simple_scene();
+  ASSERT_EQ(document.scene().create_layer_with_id(
+                8u, "Legacy Hidden", false, {0.3f, 0.5f, 0.7f}),
+            8u);
+  ASSERT_TRUE(document.scene().set_entity_layer(100u, 8u));
+  const quader_io::QdrBinaryContainerReadResult parsed =
+      parse_written_scene(document);
+  ASSERT_TRUE(parsed.ok) << parsed.message;
+  std::vector<quader_io::QdrBinaryChunkInput> chunks = copy_chunks(parsed);
+  const auto metadata = std::ranges::find_if(
+      chunks, [](const quader_io::QdrBinaryChunkInput &chunk) {
+        return chunk.type == quader_io::QdrBinaryChunkType::SceneMetadata;
+      });
+  ASSERT_NE(metadata, chunks.end());
+  metadata->schema_version = 3u;
+
+  const QdrProjectReadResult read =
+      QdrDocumentReader::deserialize_project_document(
+          quader_io::build_qdr_binary_container(test_uuid(),
+                                                std::move(chunks)));
+  ASSERT_TRUE(read.ok) << read.message;
+  EXPECT_TRUE(read.document.scene().layers().empty());
+  EXPECT_EQ(read.document.scene().entity_layer(100u),
+            kInvalidSceneLayerId);
+  EXPECT_TRUE(read.document.scene().is_effectively_visible(100u));
+}
+
+TEST(QdrBinarySceneCodecTests, RejectsInvalidSceneLayerRecords) {
+  for (const QdrProjectSceneLayerWriteSnapshot invalid_layer : {
+           QdrProjectSceneLayerWriteSnapshot{
+               .id = 0u, .name = "Zero", .wireframe_color = {0.1f, 0.2f, 0.3f}},
+           QdrProjectSceneLayerWriteSnapshot{
+               .id = 4u, .name = "", .wireframe_color = {0.1f, 0.2f, 0.3f}},
+           QdrProjectSceneLayerWriteSnapshot{
+               .id = 5u,
+               .name = "Bad Color",
+               .wireframe_color = {
+                   std::numeric_limits<float>::quiet_NaN(), 0.2f, 0.3f}},
+       }) {
+    QdrProjectWriteSnapshot snapshot =
+        qdr_project_write_snapshot_from_document(simple_scene());
+    snapshot.layers = {invalid_layer};
+    const QdrProjectReadResult read =
+        QdrDocumentReader::deserialize_project_document(
+            QdrDocumentWriter::serialize_project_document_bytes(
+                snapshot, test_uuid()));
+    EXPECT_FALSE(read.ok);
+    EXPECT_NE(read.message.find("invalid or duplicate scene layer"),
+              std::string::npos);
+  }
+
+  QdrProjectWriteSnapshot duplicate =
+      qdr_project_write_snapshot_from_document(simple_scene());
+  duplicate.layers = {
+      {.id = 3u, .name = "Duplicate"},
+      {.id = 3u, .name = "Duplicate Id"},
+  };
+  const QdrProjectReadResult read =
+      QdrDocumentReader::deserialize_project_document(
+          QdrDocumentWriter::serialize_project_document_bytes(duplicate,
+                                                               test_uuid()));
+  EXPECT_FALSE(read.ok);
+  EXPECT_NE(read.message.find("invalid or duplicate scene layer"),
+            std::string::npos);
+
+  duplicate.layers = {
+      {.id = 3u, .name = "Same Name"},
+      {.id = 4u, .name = "Same Name"},
+  };
+  const QdrProjectReadResult duplicate_name_read =
+      QdrDocumentReader::deserialize_project_document(
+          QdrDocumentWriter::serialize_project_document_bytes(duplicate,
+                                                               test_uuid()));
+  EXPECT_FALSE(duplicate_name_read.ok);
+  EXPECT_NE(duplicate_name_read.message.find(
+                "invalid or duplicate scene layer"),
+            std::string::npos);
+}
+
+TEST(QdrBinarySceneCodecTests,
+     RejectsDanglingAndForbiddenSceneLayerMemberships) {
+  QdrProjectWriteSnapshot dangling =
+      qdr_project_write_snapshot_from_document(simple_scene());
+  const auto member = std::ranges::find_if(
+      dangling.entities, [](const QdrProjectEntityWriteSnapshot &entity) {
+        return entity.id == 100u;
+      });
+  ASSERT_NE(member, dangling.entities.end());
+  member->layer_id = 404u;
+  QdrProjectReadResult read =
+      QdrDocumentReader::deserialize_project_document(
+          QdrDocumentWriter::serialize_project_document_bytes(dangling,
+                                                               test_uuid()));
+  EXPECT_FALSE(read.ok);
+  EXPECT_NE(read.message.find("layer memberships"), std::string::npos);
+
+  QdrProjectWriteSnapshot forbidden =
+      qdr_project_write_snapshot_from_document(simple_scene());
+  forbidden.layers = {{.id = 7u, .name = "Forbidden"}};
+  const auto root = std::ranges::find_if(
+      forbidden.entities, [](const QdrProjectEntityWriteSnapshot &entity) {
+        return entity.scene_root;
+      });
+  ASSERT_NE(root, forbidden.entities.end());
+  root->layer_id = 7u;
+  read = QdrDocumentReader::deserialize_project_document(
+      QdrDocumentWriter::serialize_project_document_bytes(forbidden,
+                                                           test_uuid()));
+  EXPECT_FALSE(read.ok);
+  EXPECT_NE(read.message.find("layer memberships"), std::string::npos);
 }
 
 TEST(QdrBinarySceneCodecTests, RejectsOccurrenceWithMissingDefinition) {
@@ -559,7 +727,7 @@ TEST(QdrBinarySceneCodecTests, RejectsUnsupportedMetadataSchema) {
   ASSERT_TRUE(parsed.ok) << parsed.message;
   std::vector<quader_io::QdrBinaryChunkInput> chunks = copy_chunks(parsed);
   ASSERT_FALSE(chunks.empty());
-  chunks.front().schema_version = 4u;
+  chunks.front().schema_version = 5u;
 
   const QdrProjectReadResult read =
       QdrDocumentReader::deserialize_project_document(

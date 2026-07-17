@@ -45,6 +45,7 @@ struct DocumentEntitySnapshot {
   std::optional<MeshComponent> mesh;
   std::optional<MaterialComponent> material;
   std::optional<LightComponent> light;
+  SceneLayerId layer_id = kInvalidSceneLayerId;
   std::vector<DocumentEntitySnapshot> children;
 };
 
@@ -55,6 +56,7 @@ struct DocumentEntityPlacement {
   EntityId entity = kInvalidEntityId;
   EntityId parent = kInvalidEntityId;
   TransformComponent transform;
+  SceneLayerId layer_id = kInvalidSceneLayerId;
 };
 
 inline std::vector<EntityId>
@@ -169,6 +171,7 @@ document_command_capture_entity_snapshot(const SceneDocument &scene,
   if (const LightComponent *component = scene.light(entity)) {
     snapshot.light = *component;
   }
+  snapshot.layer_id = scene.entity_layer(entity);
 
   const std::vector<EntityId> children = scene.children(entity);
   snapshot.children.reserve(children.size());
@@ -207,6 +210,7 @@ inline void document_command_apply_entity_snapshot_components(
     scene.set_modeling_object(entity, *snapshot.modeling_object);
   }
   scene.set_entity_kind(entity, snapshot.kind);
+  (void)scene.set_entity_layer(entity, snapshot.layer_id);
 }
 
 inline void document_command_apply_entity_snapshot_common_state(
@@ -218,6 +222,7 @@ inline void document_command_apply_entity_snapshot_common_state(
   scene.set_selectable(entity, snapshot.visibility.selectable);
   scene.set_locked(entity, snapshot.lock.locked);
   scene.set_entity_kind(entity, snapshot.kind);
+  (void)scene.set_entity_layer(entity, snapshot.layer_id);
 }
 
 inline EntityId document_command_create_entity_from_snapshot(
@@ -460,6 +465,7 @@ document_command_capture_placements(const SceneDocument &scene,
         .entity = entity,
         .parent = scene.parent(entity),
         .transform = transform == nullptr ? TransformComponent{} : *transform,
+        .layer_id = scene.entity_layer(entity),
     });
   }
   return placements;
@@ -480,6 +486,10 @@ document_command_apply_placement(SceneDocument &scene,
         "Entity cannot be reparented");
   }
   scene.set_transform(placement.entity, placement.transform);
+  if (!scene.set_entity_layer(placement.entity, placement.layer_id)) {
+    return document_command_invalid_request_result(
+        "Entity layer membership could not be restored");
+  }
   return document_command_changed_result();
 }
 

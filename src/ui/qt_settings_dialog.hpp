@@ -18,13 +18,16 @@ class QShowEvent;
 namespace quader {
 
 class LocalizationService;
+class QuaderCommandsApi;
 class UISettings;
 class ViewportSettings;
 
 /**
- * Qt Widgets presentation of Quader's interface and viewport preferences.
+ * Qt Widgets presentation of Quader's interface, keybinding, and viewport
+ * preferences.
  * Controls edit a per-field draft. Apply merges and persists the draft without
  * closing, OK applies and closes, and every reject path discards it.
+ * Keybinding edits are public-API mutations that persist immediately.
  */
 class QtSettingsDialog final : public QDialog {
 public:
@@ -36,6 +39,7 @@ public:
 
   void set_context(UISettings &ui_settings, ViewportSettings &viewport_settings,
                    LocalizationService &localization,
+                   QuaderCommandsApi &commands,
                    std::function<void(QtSettingsChangeKind)> settings_changed);
   void refresh();
   void accept() override;
