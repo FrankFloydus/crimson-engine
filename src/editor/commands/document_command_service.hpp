@@ -14,6 +14,7 @@
 #include "scene/components.hpp"
 
 #include <functional>
+#include <span>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -86,6 +87,23 @@ public:
     DocumentCommandResult
     set_transforms(std::vector<DocumentTransformEdit> edits,
                    std::string label = "Set Transform");
+    DocumentCreateLayerResult
+    create_layer(std::string name, QVec3 wireframe_color,
+                 bool add_selection = false);
+    DocumentCommandResult rename_layer(SceneLayerId layer_id,
+                                       std::string name);
+    DocumentCommandResult set_layer_visible(SceneLayerId layer_id,
+                                            bool visible);
+    DocumentCommandResult set_layer_wireframe_color(SceneLayerId layer_id,
+                                                    QVec3 color);
+    DocumentCommandResult set_layer_locked(SceneLayerId layer_id,
+                                           bool locked);
+    DocumentCommandResult add_selection_to_layer(SceneLayerId layer_id);
+    DocumentCommandResult
+    remove_selection_from_layer(SceneLayerId layer_id);
+    DocumentCommandResult remove_selection_from_all_layers();
+    DocumentCommandResult empty_layer(SceneLayerId layer_id);
+    DocumentCommandResult delete_layers(std::vector<SceneLayerId> layer_ids);
     DocumentCommandResult
     apply_scene_batch(std::string label,
                       std::vector<DocumentSceneBatchOperation> operations);
@@ -93,6 +111,8 @@ public:
   private:
     [[nodiscard]] bool mutation_blocked(EntityId entity) const;
     [[nodiscard]] bool selected_mutation_blocked() const;
+    [[nodiscard]] bool
+    entities_mutation_blocked(std::span<const EntityId> entities) const;
 
     SceneDocument& scene_;
     EditorHistoryService& history_;

@@ -52,6 +52,18 @@ struct QdrProjectTextureAssetWriteSnapshot final {
 };
 
 /**
+ * Captures one native scene layer for deterministic QDR scene export.
+ */
+struct QdrProjectSceneLayerWriteSnapshot final {
+  std::uint64_t id = 0;
+  std::string name;
+  bool visible = true;
+  QVec3 wireframe_color = {238.0f / 255.0f, 242.0f / 255.0f,
+                           247.0f / 255.0f};
+  bool locked = false;
+};
+
+/**
  * Captures one scene entity for QDR project export.
  */
 struct QdrProjectEntityWriteSnapshot final {
@@ -72,6 +84,7 @@ struct QdrProjectEntityWriteSnapshot final {
   std::optional<SceneSettingsComponent> scene_settings;
   std::optional<InstanceDefinitionComponent> instance_definition;
   std::optional<InstanceOccurrenceComponent> instance_occurrence;
+  std::uint64_t layer_id = 0;
 };
 
 /**
@@ -87,6 +100,7 @@ struct QdrProjectWriteSnapshot final {
   std::vector<QdrProjectEntityWriteSnapshot> entities;
   std::vector<ProjectObjectRecord> object_records;
   std::vector<ProjectAssetReference> project_asset_dependencies;
+  std::vector<QdrProjectSceneLayerWriteSnapshot> layers;
 };
 
 [[nodiscard]] QdrProjectWriteSnapshot

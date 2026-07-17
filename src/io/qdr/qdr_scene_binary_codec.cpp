@@ -23,6 +23,7 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <exception>
@@ -47,7 +48,7 @@ namespace {
 namespace fb = ::quader::qdr::fb;
 
 constexpr std::uint16_t kMinimumSceneChunkSchemaVersion = 1u;
-constexpr std::uint16_t kSceneChunkSchemaVersion = 3u;
+constexpr std::uint16_t kSceneChunkSchemaVersion = 4u;
 constexpr std::uint16_t kGeometryChunkSchemaVersion = 1u;
 
 [[nodiscard]] fb::Vec2 to_fb(QVec2 value) {
@@ -772,7 +773,7 @@ encode_scene_settings(flatbuffers::FlatBufferBuilder &builder,
         entity.editor_object_id, builder.CreateString(entity.name),
         to_fb(entity.kind), entity.parent, transform, visibility, lock,
         modeling_object, mesh, material, light, entity.scene_root, settings,
-        instance_definition, instance_occurrence));
+        instance_definition, instance_occurrence, entity.layer_id));
   }
 
   std::vector<flatbuffers::Offset<fb::ObjectRecord>> objects;
@@ -814,11 +815,28 @@ encode_scene_settings(flatbuffers::FlatBufferBuilder &builder,
         to_fb(dependency.kind)));
   }
 
+  std::vector<QdrProjectSceneLayerWriteSnapshot> sorted_layers =
+      snapshot.layers;
+  std::sort(sorted_layers.begin(), sorted_layers.end(),
+            [](const QdrProjectSceneLayerWriteSnapshot &left,
+               const QdrProjectSceneLayerWriteSnapshot &right) {
+              return left.id < right.id;
+            });
+  std::vector<flatbuffers::Offset<fb::SceneLayer>> layers;
+  layers.reserve(sorted_layers.size());
+  for (const QdrProjectSceneLayerWriteSnapshot &layer : sorted_layers) {
+    const fb::Vec3 color = to_fb(layer.wireframe_color);
+    layers.push_back(fb::CreateSceneLayer(
+        builder, layer.id, builder.CreateString(layer.name), layer.visible,
+        &color, layer.locked));
+  }
+
   const auto root = fb::CreateScenePayload(
       builder, snapshot.project_id, builder.CreateString(snapshot.project_name),
       builder.CreateVector(meshes), builder.CreateVector(materials),
       builder.CreateVector(textures), builder.CreateVector(entities),
-      builder.CreateVector(objects), builder.CreateVector(dependencies));
+      builder.CreateVector(objects), builder.CreateVector(dependencies),
+      builder.CreateVector(layers));
   fb::FinishScenePayloadBuffer(builder, root);
   return flatbuffer_bytes(builder);
 }
@@ -1468,11 +1486,54 @@ void decode_assets(
   }
 }
 
+void decode_scene_layers(SceneContentDocument &document,
+                         const fb::ScenePayload &payload,
+                         std::uint16_t schema_version) {
+  if (schema_version < 4u) {
+    return;
+  }
+
+  SceneLayerState state;
+  std::set<SceneLayerId> ids;
+  std::set<std::string> names;
+  if (const auto *layers = payload.layers()) {
+    state.layers.reserve(layers->size());
+    for (std::size_t index = 0u; index < layers->size(); ++index) {
+      const fb::SceneLayer *stored = layers->Get(index);
+      const SceneLayerId id = stored->id();
+      const std::string name = string_from_fb(stored->name());
+      const fb::Vec3 *stored_color = stored->wireframe_color();
+      const QVec3 color = from_fb(stored_color);
+      if (id == kInvalidSceneLayerId || name.empty() ||
+          stored_color == nullptr || !std::isfinite(color.x) ||
+          !std::isfinite(color.y) || !std::isfinite(color.z) ||
+          color.x < 0.0f || color.x > 1.0f || color.y < 0.0f ||
+          color.y > 1.0f || color.z < 0.0f || color.z > 1.0f ||
+          !ids.insert(id).second || !names.insert(name).second) {
+        throw std::runtime_error(
+            "QDR scene contains an invalid or duplicate scene layer.");
+      }
+      state.layers.push_back(SceneLayerRecord{
+          .id = id,
+          .name = name,
+          .visible = stored->visible(),
+          .wireframe_color = color,
+          .locked = stored->locked(),
+      });
+    }
+  }
+  if (!document.scene().replace_layer_state(std::move(state))) {
+    throw std::runtime_error("QDR scene layers could not be restored.");
+  }
+}
+
 void decode_entities(SceneContentDocument &document,
-                     const fb::ScenePayload &payload) {
+                     const fb::ScenePayload &payload,
+                     std::uint16_t schema_version) {
   std::vector<std::pair<EntityId, EntityId>> parent_links;
   std::vector<EntityId> instance_definitions;
   std::vector<std::pair<EntityId, EntityId>> instance_occurrences;
+  std::vector<SceneLayerAssignment> layer_assignments;
   std::set<EntityId> explicit_object_id_entities;
   if (const auto *entities = payload.entities()) {
     parent_links.reserve(entities->size());
@@ -1494,6 +1555,13 @@ void decode_entities(SceneContentDocument &document,
       }
       if (has_editor_object_id) {
         explicit_object_id_entities.insert(entity);
+      }
+      if (schema_version >= 4u &&
+          stored->layer_id() != kInvalidSceneLayerId) {
+        layer_assignments.push_back(SceneLayerAssignment{
+            .entity = entity,
+            .layer_id = stored->layer_id(),
+        });
       }
       if (const fb::TransformComponent *value = stored->transform()) {
         document.scene().set_transform(
@@ -1616,6 +1684,15 @@ void decode_entities(SceneContentDocument &document,
             entity, InstanceOccurrenceComponent{.definition = definition})) {
       throw std::runtime_error(
           "QDR scene contains an invalid instance occurrence.");
+    }
+  }
+
+  if (schema_version >= 4u && !layer_assignments.empty()) {
+    SceneLayerState layer_state = document.scene().layer_state();
+    layer_state.assignments = std::move(layer_assignments);
+    if (!document.scene().replace_layer_state(std::move(layer_state))) {
+      throw std::runtime_error(
+          "QDR scene contains dangling or forbidden layer memberships.");
     }
   }
 
@@ -1773,8 +1850,9 @@ QdrSceneBinaryDecodeResult decode_qdr_scene_binary_with_stats(
       SceneContentDocumentRootPolicy::DeferSceneRoot);
   std::vector<ProjectAssetReference> project_asset_dependencies =
       decode_project_asset_dependencies(*payload);
+  decode_scene_layers(document, *payload, metadata.schema_version);
   decode_assets(document, *payload, geometry_chunks, stats);
-  decode_entities(document, *payload);
+  decode_entities(document, *payload, metadata.schema_version);
 
   const SceneContentDocumentAssetReferenceReport references =
       document.validate_asset_references();

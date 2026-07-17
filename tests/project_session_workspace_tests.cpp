@@ -1196,6 +1196,37 @@ TEST(ProjectSessionWorkspace, ActiveSceneApisReportUnavailableWithZeroTabs) {
   const QuaderApiVoidResult undo = editor.history().undo();
   EXPECT_FALSE(undo.ok());
   EXPECT_EQ(undo.error_message(), "No scene is active.");
+
+  SceneSession &fallback = project.fallback_scene();
+  const std::uint64_t fallback_layer_revision =
+      fallback.scene().layer_revision();
+  const bool fallback_can_undo = fallback.history().can_undo();
+  const QuaderLayerId missing_layer = 1u;
+  const std::array<QuaderLayerId, 2> missing_layers = {1u, 2u};
+  auto expect_layer_unavailable = [](const QuaderApiStatus &status) {
+    EXPECT_FALSE(status.ok());
+    EXPECT_FALSE(status.changed());
+    EXPECT_EQ(status.error_message(), "No scene is active.");
+  };
+
+  expect_layer_unavailable(editor.layers().create());
+  expect_layer_unavailable(editor.layers().create_from_selection());
+  expect_layer_unavailable(
+      editor.layers().rename(missing_layer, "Unavailable"));
+  expect_layer_unavailable(editor.layers().set_visible(missing_layer, false));
+  expect_layer_unavailable(
+      editor.layers().set_wireframe_color(missing_layer, {1.0f, 0.0f, 0.0f}));
+  expect_layer_unavailable(editor.layers().set_locked(missing_layer, true));
+  expect_layer_unavailable(editor.layers().add_selection(missing_layer));
+  expect_layer_unavailable(editor.layers().remove_selection(missing_layer));
+  expect_layer_unavailable(editor.layers().remove_selection_from_all_layers());
+  expect_layer_unavailable(editor.layers().empty(missing_layer));
+  expect_layer_unavailable(editor.layers().destroy(missing_layer));
+  expect_layer_unavailable(editor.layers().destroy(missing_layers));
+
+  EXPECT_TRUE(fallback.scene().layers().empty());
+  EXPECT_EQ(fallback.scene().layer_revision(), fallback_layer_revision);
+  EXPECT_EQ(fallback.history().can_undo(), fallback_can_undo);
 }
 
 TEST(ProjectSessionWorkspace,

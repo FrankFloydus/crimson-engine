@@ -47,6 +47,8 @@ struct RenderOverlayMeshSnapshot {
   std::shared_ptr<const quader_poly::Document> authored_topology_payload;
   QMat4 world_transform;
   bool selected = false;
+  /** Resolved unselected wireframe color in packed sRGB RGBA order. */
+  std::uint32_t wireframe_color = kOverlayWireframeXrayColor;
   std::span<const MeshVertex> vertices;
   std::span<const std::uint32_t> indices;
   std::span<const quader_poly::Vertex> authored_vertices;

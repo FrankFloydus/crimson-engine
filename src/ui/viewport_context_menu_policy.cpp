@@ -26,8 +26,9 @@ bool is_viewport_context_menu_click_gesture(
 
 bool viewport_context_menu_has_available_actions(
     bool has_modeling_actions, bool can_create_instance,
-    bool can_flatten_instance) {
-  return has_modeling_actions || can_create_instance || can_flatten_instance;
+    bool can_flatten_instance, bool can_remove_selection_from_layers) {
+  return has_modeling_actions || can_create_instance || can_flatten_instance ||
+         can_remove_selection_from_layers;
 }
 
 bool should_open_viewport_context_menu(

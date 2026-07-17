@@ -427,6 +427,7 @@ add_library(quader_api STATIC
     src/api/quader_dev_tools_api.cpp
     src/api/quader_events_api.cpp
     src/api/quader_history_api.cpp
+    src/api/quader_layers_api.cpp
     src/api/quader_modeling_api.cpp
     src/api/quader_object_handle.cpp
     src/api/quader_preferences_api.cpp
@@ -693,6 +694,7 @@ add_library(quader_ui STATIC
     src/editor/transform/scene_transform_drag_service.cpp
     src/ui/console_panel.cpp
     src/ui/inspector_panel.cpp
+    src/ui/layer_panel.cpp
     src/ui/outliner_panel.cpp
     src/ui/qt_command_event_filter.cpp
     src/ui/qt_color_swatch_button.cpp
@@ -864,6 +866,18 @@ set(QUADER_VIEWPORT_DISPLAY_TOOLBAR_ICON_FILES
     "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/viewport_mesh_grid.png"
     "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/viewport_overlays.png")
 
+set(QUADER_DOCK_CHROME_ICON_FILES
+    "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/dock_close.png"
+    "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/dock_float.png")
+
+set(QUADER_LAYER_PANEL_ICON_FILES
+    "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/layer_add.png"
+    "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/layer_create_from_selection.png"
+    "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/material_visibility.png"
+    "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/material_visibility_off.png"
+    "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/material_lock.png"
+    "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/material_lock_open.png")
+
 set(QUADER_NATIVE_APPLICATION_RESOURCES)
 if(WIN32)
     enable_language(RC)
@@ -896,6 +910,14 @@ qt_add_resources(quader "quader_viewport_display_toolbar_icons"
     PREFIX "/quader/icons"
     BASE "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons"
     FILES ${QUADER_VIEWPORT_DISPLAY_TOOLBAR_ICON_FILES})
+qt_add_resources(quader "quader_dock_chrome_icons"
+    PREFIX "/quader/icons"
+    BASE "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons"
+    FILES ${QUADER_DOCK_CHROME_ICON_FILES})
+qt_add_resources(quader "quader_layer_panel_icons"
+    PREFIX "/quader/icons"
+    BASE "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons"
+    FILES ${QUADER_LAYER_PANEL_ICON_FILES})
 target_link_libraries(quader PRIVATE quader_runtime)
 add_dependencies(quader
     ${QUADER_FILAMENT_MATERIAL_TARGETS})
@@ -1083,6 +1105,7 @@ if(QUADER_BUILD_TESTS)
         tests/mesh_arrangement_tests.cpp
         tests/copy_pivot_from_active_tests.cpp
         tests/obj_export_tests.cpp
+        tests/layer_panel_tests.cpp
         tests/outliner_panel_tests.cpp
         tests/ui_panel_manager_tests.cpp
         tests/qt_auxiliary_window_state_tests.cpp

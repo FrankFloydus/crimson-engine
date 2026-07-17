@@ -859,6 +859,7 @@ ModelingSelectionService::cached_local_picking_objects(
   const std::uint64_t scene_selection_revision = scene.selection_revision();
   const std::uint64_t scene_transform_revision = scene.transform_revision();
   const std::uint64_t scene_visibility_revision = scene.visibility_revision();
+  const std::uint64_t scene_layer_revision = scene.layer_revision();
   const std::uint64_t scene_mesh_binding_revision =
       scene.mesh_binding_revision();
   const std::uint64_t object_map_revision = object_registry.revision();
@@ -871,6 +872,7 @@ ModelingSelectionService::cached_local_picking_objects(
   const bool local_participants_changed =
       content_changed ||
       picking_cache_.scene_visibility_revision != scene_visibility_revision ||
+      picking_cache_.scene_layer_revision != scene_layer_revision ||
       picking_cache_.scene_mesh_binding_revision !=
           scene_mesh_binding_revision ||
       picking_cache_.object_map_revision != object_map_revision ||
@@ -880,6 +882,7 @@ ModelingSelectionService::cached_local_picking_objects(
       content_changed ||
       picking_cache_.scene_transform_revision != scene_transform_revision ||
       picking_cache_.scene_visibility_revision != scene_visibility_revision ||
+      picking_cache_.scene_layer_revision != scene_layer_revision ||
       picking_cache_.scene_mesh_binding_revision !=
           scene_mesh_binding_revision ||
       picking_cache_.object_map_revision != object_map_revision ||
@@ -945,6 +948,7 @@ ModelingSelectionService::cached_local_picking_objects(
   picking_cache_.scene_selection_revision = scene_selection_revision;
   picking_cache_.scene_transform_revision = scene_transform_revision;
   picking_cache_.scene_visibility_revision = scene_visibility_revision;
+  picking_cache_.scene_layer_revision = scene_layer_revision;
   picking_cache_.scene_mesh_binding_revision = scene_mesh_binding_revision;
   picking_cache_.object_map_revision = object_map_revision;
   picking_cache_.instance_edit_scope = edit_scope;
@@ -1360,6 +1364,7 @@ ModelingSelectionService::rectangle_selection_universe(
     const ModelingObjectRuntimeMap &object_map) const {
   const std::uint64_t content_revision = session.state().content_revision;
   const std::uint64_t scene_revision = scene.revision();
+  const std::uint64_t scene_layer_revision = scene.layer_revision();
   const std::uint64_t object_map_revision = object_map.revision();
   const ModelingInstanceEditScope edit_scope = instance_edit_scope();
   const ModelingSelectionMode current_app_selection_mode =
@@ -1367,6 +1372,7 @@ ModelingSelectionService::rectangle_selection_universe(
   if (rectangle_universe_cache_.valid &&
       rectangle_universe_cache_.content_revision == content_revision &&
       rectangle_universe_cache_.scene_revision == scene_revision &&
+      rectangle_universe_cache_.scene_layer_revision == scene_layer_revision &&
       rectangle_universe_cache_.object_map_revision == object_map_revision &&
       rectangle_universe_cache_.instance_edit_scope == edit_scope &&
       rectangle_universe_cache_.app_selection_mode ==
@@ -1400,6 +1406,7 @@ ModelingSelectionService::rectangle_selection_universe(
   rectangle_universe_cache_.valid = true;
   rectangle_universe_cache_.content_revision = content_revision;
   rectangle_universe_cache_.scene_revision = scene_revision;
+  rectangle_universe_cache_.scene_layer_revision = scene_layer_revision;
   rectangle_universe_cache_.object_map_revision = object_map_revision;
   rectangle_universe_cache_.instance_edit_scope = edit_scope;
   rectangle_universe_cache_.app_selection_mode = current_app_selection_mode;
@@ -1592,6 +1599,7 @@ ModelingSelectionService::cached_rectangle_projected_hits_request(
   const std::uint64_t content_revision = session.state().content_revision;
   const std::uint64_t scene_transform_revision = scene.transform_revision();
   const std::uint64_t scene_visibility_revision = scene.visibility_revision();
+  const std::uint64_t scene_layer_revision = scene.layer_revision();
   const std::uint64_t scene_mesh_binding_revision =
       scene.mesh_binding_revision();
   const std::uint64_t object_map_revision = object_map.revision();
@@ -1605,6 +1613,8 @@ ModelingSelectionService::cached_rectangle_projected_hits_request(
           scene_transform_revision ||
       rectangle_projection_cache_.scene_visibility_revision !=
           scene_visibility_revision ||
+      rectangle_projection_cache_.scene_layer_revision !=
+          scene_layer_revision ||
       rectangle_projection_cache_.scene_mesh_binding_revision !=
           scene_mesh_binding_revision ||
       rectangle_projection_cache_.object_map_revision != object_map_revision ||
@@ -1627,6 +1637,7 @@ ModelingSelectionService::cached_rectangle_projected_hits_request(
         scene_transform_revision;
     rectangle_projection_cache_.scene_visibility_revision =
         scene_visibility_revision;
+    rectangle_projection_cache_.scene_layer_revision = scene_layer_revision;
     rectangle_projection_cache_.scene_mesh_binding_revision =
         scene_mesh_binding_revision;
     rectangle_projection_cache_.object_map_revision = object_map_revision;

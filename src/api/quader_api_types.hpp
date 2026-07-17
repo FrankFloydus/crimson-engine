@@ -28,6 +28,13 @@ using QuaderModelingObjectId = std::int32_t;
 inline constexpr QuaderModelingObjectId kInvalidQuaderModelingObjectId = -1;
 using QuaderEditorObjectId = std::uint64_t;
 inline constexpr QuaderEditorObjectId kInvalidQuaderEditorObjectId = 0;
+using QuaderLayerId = std::uint64_t;
+inline constexpr QuaderLayerId kInvalidQuaderLayerId = 0;
+inline constexpr QVec3 kDefaultQuaderLayerWireframeColor = {
+    238.0f / 255.0f,
+    242.0f / 255.0f,
+    247.0f / 255.0f,
+};
 
 struct QuaderPolygonDocumentStorage;
 
@@ -148,6 +155,7 @@ enum class QuaderMutationKind {
 struct QuaderRevisionStamp {
   std::uint64_t project_revision = 0;
   std::uint64_t scene_revision = 0;
+  std::uint64_t scene_layer_revision = 0;
   std::uint64_t asset_revision = 0;
   std::uint64_t modeling_content_revision = 0;
   std::uint64_t modeling_selection_revision = 0;

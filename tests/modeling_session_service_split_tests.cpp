@@ -289,6 +289,9 @@ TEST(ModelingSessionServiceSplitTests,
   ASSERT_TRUE(scene.set_parent(entity, parent, false));
   scene.set_visible(entity, false);
   scene.set_locked(entity, true);
+  const SceneLayerId layer = scene.create_layer("Redo Layer");
+  ASSERT_NE(layer, kInvalidSceneLayerId);
+  ASSERT_TRUE(scene.set_entity_layer(entity, layer));
   const EditorObjectId editor_object_id = scene.editor_object_id(entity);
 
   ModelingObjectRuntimeMap object_map;
@@ -309,6 +312,7 @@ TEST(ModelingSessionServiceSplitTests,
   EXPECT_EQ(identity->mesh->mesh, 99);
   ASSERT_TRUE(identity->material.has_value());
   EXPECT_EQ(identity->material->material.embedded_asset(), AssetId{42u});
+  EXPECT_EQ(identity->layer_id, layer);
 
   ASSERT_TRUE(scene.destroy_entity(entity));
   object_map.unbind_object(300);
@@ -370,6 +374,9 @@ TEST(ModelingSessionServiceSplitTests,
                              .body_type = MeshPhysicsBodyType::RigidBody,
                          });
   scene.set_material(source, MaterialComponent{.material = 44});
+  const SceneLayerId layer = scene.create_layer("Duplicate Layer");
+  ASSERT_NE(layer, kInvalidSceneLayerId);
+  ASSERT_TRUE(scene.set_entity_layer(source, layer));
   scene.set_mesh(duplicate, MeshComponent{.mesh = 99});
   scene.set_material(duplicate, MaterialComponent{.material = 55});
 
@@ -406,6 +413,7 @@ TEST(ModelingSessionServiceSplitTests,
   ASSERT_NE(scene.material(duplicate), nullptr);
   EXPECT_EQ(scene.material(duplicate)->material.embedded_asset(),
             AssetId{44u});
+  EXPECT_EQ(scene.entity_layer(duplicate), layer);
 }
 
 TEST(ModelingSessionServiceSplitTests,

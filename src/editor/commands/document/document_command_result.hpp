@@ -8,6 +8,7 @@
 
 #include "core/command_result.hpp"
 #include "core/types.hpp"
+#include "scene/components.hpp"
 
 #include <string>
 #include <utility>
@@ -22,6 +23,13 @@ using DocumentCommandResult = CommandResult;
  */
 struct DocumentCreateEntityResult : DocumentCommandResult {
   EntityId entity = kInvalidEntityId;
+};
+
+/**
+ * Stores Create Layer Command payload data for document command callers.
+ */
+struct DocumentCreateLayerResult : DocumentCommandResult {
+  SceneLayerId layer_id = kInvalidSceneLayerId;
 };
 
 /**

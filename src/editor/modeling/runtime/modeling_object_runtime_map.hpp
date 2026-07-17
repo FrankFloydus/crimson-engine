@@ -37,6 +37,7 @@ struct ModelingObjectSceneIdentity {
   LockComponent lock;
   std::optional<MeshComponent> mesh;
   std::optional<MaterialComponent> material;
+  SceneLayerId layer_id = kInvalidSceneLayerId;
 };
 
 /**

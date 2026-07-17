@@ -21,6 +21,7 @@
 #include "scene/scene_document.hpp"
 #include "ui/console_panel.hpp"
 #include "ui/inspector_panel.hpp"
+#include "ui/layer_panel.hpp"
 #include "ui/outliner_panel.hpp"
 #include "ui/qt_command_event_filter.hpp"
 #include "ui/qt_main_window.hpp"
@@ -81,6 +82,47 @@ namespace {
 
 constexpr int kQtWindowStateVersion = 1;
 
+/// Keeps dock chrome distinct from panel content while preserving Fusion's
+/// native dock layout, dragging, double-click, and accessibility behavior.
+void apply_dark_dock_title_presentation(QDockWidget &dock) {
+  dock.setStyleSheet(QStringLiteral(R"QUADER(
+QDockWidget {
+  titlebar-close-icon: url(:/quader/icons/dock_close.png);
+  titlebar-normal-icon: url(:/quader/icons/dock_float.png);
+}
+QDockWidget::title {
+  background-color: #202020;
+  color: #d0d0d0;
+  border-bottom: 1px solid #3a3a3a;
+  padding: 0 4px;
+  text-align: left;
+}
+QDockWidget::title:active {
+  background-color: #181818;
+  color: #eeeeee;
+}
+QDockWidget::close-button,
+QDockWidget::float-button {
+  background-color: transparent;
+  border: 1px solid transparent;
+  padding: 0;
+  width: 18px;
+  height: 18px;
+  icon-size: 24px;
+}
+QDockWidget::close-button:hover,
+QDockWidget::float-button:hover {
+  background-color: transparent;
+  border-color: #8a8a8a;
+}
+QDockWidget::close-button:pressed,
+QDockWidget::float-button:pressed {
+  background-color: #0f0f0f;
+  border-color: #b5b5b5;
+}
+)QUADER"));
+}
+
 constexpr std::array<QuaderStandardMaterialTextureSlot, 4>
     kMaterialTextureSlots{
         QuaderStandardMaterialTextureSlot::Albedo,
@@ -139,7 +181,8 @@ QuaderApiVoidResult runtime_failure(std::string message) {
 
 std::optional<UIPanelId> panel_id_from_name(std::string_view name) {
   for (UIPanelId id : {UIPanelId::Viewport, UIPanelId::Outliner,
-                       UIPanelId::Inspector, UIPanelId::Console}) {
+                       UIPanelId::Inspector, UIPanelId::Console,
+                       UIPanelId::Layers}) {
     if (name == ui_panel_stable_id(id) || name == ui_panel_key(id)) {
       return id;
     }
@@ -505,6 +548,7 @@ void UISystem::install_runtime_hooks(
   point_placement_ = &point_placement;
   default_material_ = default_material;
   outliner_refresh_valid_ = false;
+  layers_refresh_valid_ = false;
   inspector_refresh_valid_ = false;
   toolbar_refresh_valid_ = false;
 
@@ -1115,7 +1159,8 @@ void UISystem::show_home() {
     tool_toolbar_->hide();
   }
   for (UIPanelId id :
-       {UIPanelId::Outliner, UIPanelId::Inspector, UIPanelId::Console}) {
+       {UIPanelId::Outliner, UIPanelId::Inspector, UIPanelId::Layers,
+        UIPanelId::Console}) {
     if (QDockWidget *dock = panels_.dock(id)) {
       dock->hide();
     }
@@ -1325,6 +1370,7 @@ void UISystem::shutdown() {
   workspace_window_state_.clear();
   outliner_panel_ = nullptr;
   inspector_panel_ = nullptr;
+  layer_panel_ = nullptr;
   console_panel_ = nullptr;
   settings_dialog_ = nullptr;
   material_browser_window_ = nullptr;
@@ -1427,6 +1473,17 @@ void UISystem::refresh(const FrameTiming &frame_timing,
     outliner_scene_revision_ = document_->revision();
     outliner_locale_ = current_locale;
     outliner_refresh_valid_ = true;
+  }
+  if (!transform_drag_active && panel_visible(UIPanelId::Layers) &&
+      (!layers_refresh_valid_ ||
+       layers_scene_revision_ != document_->layer_revision() ||
+       layers_scene_selection_revision_ != document_->selection_revision() ||
+       layers_locale_ != current_locale)) {
+    layer_panel_->refresh(context);
+    layers_scene_revision_ = document_->layer_revision();
+    layers_scene_selection_revision_ = document_->selection_revision();
+    layers_locale_ = current_locale;
+    layers_refresh_valid_ = true;
   }
   if (!transform_drag_active && panel_visible(UIPanelId::Inspector)) {
     const ModelingSelectionSummary summary = modeling_->selection_summary();
@@ -1607,15 +1664,20 @@ void UISystem::create_docks() {
   });
   outliner_panel_ = new OutlinerPanel(main_window_.get());
   inspector_panel_ = new InspectorPanel(main_window_.get());
+  layer_panel_ = new LayerPanel(main_window_.get());
   console_panel_ = new ConsolePanel(main_window_.get());
   QDockWidget &outliner = create_dock(
       UIPanelId::Outliner, *outliner_panel_, Qt::LeftDockWidgetArea);
   QDockWidget &inspector = create_dock(
       UIPanelId::Inspector, *inspector_panel_, Qt::RightDockWidgetArea);
+  QDockWidget &layers = create_dock(
+      UIPanelId::Layers, *layer_panel_, Qt::RightDockWidgetArea);
   QDockWidget &console = create_dock(
       UIPanelId::Console, *console_panel_, Qt::BottomDockWidgetArea);
+  main_window_->splitDockWidget(&inspector, &layers, Qt::Vertical);
   main_window_->resizeDocks({&outliner, &inspector}, {340, 340},
                             Qt::Horizontal);
+  main_window_->resizeDocks({&inspector, &layers}, {420, 260}, Qt::Vertical);
   main_window_->resizeDocks({&console}, {220}, Qt::Vertical);
 }
 
@@ -1629,6 +1691,7 @@ QDockWidget &UISystem::create_dock(UIPanelId id, QWidget &content,
   dock->setFeatures(QDockWidget::DockWidgetClosable |
                     QDockWidget::DockWidgetMovable |
                     QDockWidget::DockWidgetFloatable);
+  apply_dark_dock_title_presentation(*dock);
   dock->setMinimumWidth(220);
   dock->setWidget(&content);
   main_window_->addDockWidget(static_cast<Qt::DockWidgetArea>(default_area),
@@ -1801,7 +1864,7 @@ bool UISystem::startup_layout_ready() const {
   }
 
   for (UIPanelId id : {UIPanelId::Outliner, UIPanelId::Inspector,
-                       UIPanelId::Console}) {
+                       UIPanelId::Layers, UIPanelId::Console}) {
     const QDockWidget *dock = panels_.dock(id);
     if (dock != nullptr && dock->isVisible() && !geometry_ready(dock)) {
       return false;
@@ -1850,7 +1913,7 @@ std::uint64_t UISystem::startup_layout_geometry_signature(
   mix_rect(main_window_->menuBar()->geometry());
   mix_rect(main_window_->statusBar()->geometry());
   for (UIPanelId id : {UIPanelId::Outliner, UIPanelId::Inspector,
-                       UIPanelId::Console}) {
+                       UIPanelId::Layers, UIPanelId::Console}) {
     mix(panels_.is_visible(id) ? 1 : 0);
     if (const QDockWidget *dock = panels_.dock(id)) {
       mix(dock->isFloating() ? 1 : 0);
@@ -2541,6 +2604,7 @@ void UISystem::refresh_localized_chrome() {
   };
   update_title(UIPanelId::Outliner);
   update_title(UIPanelId::Inspector);
+  update_title(UIPanelId::Layers);
   update_title(UIPanelId::Console);
   if (selection_toolbar_ != nullptr) {
     selection_toolbar_->set_localization(localization_);

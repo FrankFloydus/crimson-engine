@@ -3270,7 +3270,9 @@ void QtViewportPanel::process_viewport_input(
         summary.has_selection && viewport_context_menu_has_available_actions(
                                      !actions.empty(),
                                      editor.modeling().can_create_instance(),
-                                     editor.modeling().can_flatten_instance());
+                                     editor.modeling().can_flatten_instance(),
+                                     editor.layers()
+                                         .can_remove_selection_from_all_layers());
     show_context_menu =
         should_open_viewport_context_menu(pending_context_menu_request) &&
         localization_ != nullptr;

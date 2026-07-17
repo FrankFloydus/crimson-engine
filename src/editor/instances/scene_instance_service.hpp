@@ -846,11 +846,13 @@ private:
               .entity = entity,
               .parent = common_parent,
               .transform = *transform,
+              .layer_id = scene_.entity_layer(entity),
           },
           .after = DocumentEntityPlacement{
               .entity = entity,
               .parent = kInvalidEntityId,
               .transform = *definition_local,
+              .layer_id = kInvalidSceneLayerId,
           },
       });
     }

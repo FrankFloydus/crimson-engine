@@ -72,6 +72,8 @@ inline constexpr QuaderCommandId kSceneCreatePointLight{
     "scene.create_point_light"};
 inline constexpr QuaderCommandId kSceneCreateDirectionalLight{
     "scene.create_directional_light"};
+inline constexpr QuaderCommandId kSceneLayersRemoveSelection{
+    "scene.layers.remove_selection"};
 
 /// Deprecated compatibility spelling. Use kEditUndo for new C++ callers.
 inline constexpr QuaderCommandId kHistoryUndo{"edit.undo"};
@@ -298,6 +300,7 @@ inline constexpr QuaderCommandId kTypedCommandIds[] = {
     kSceneDocumentPrevious,
     kSceneCreatePointLight,
     kSceneCreateDirectionalLight,
+    kSceneLayersRemoveSelection,
     kViewportFrameSelection,
     kViewportFocusAll,
     kViewportFocusOrigin,

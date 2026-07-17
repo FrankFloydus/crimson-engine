@@ -7,6 +7,7 @@
 #include "scene/scene_bounds.hpp"
 
 #include "math/glm_bridge.hpp"
+#include "scene/scene_hierarchy_visibility.hpp"
 #include "scene/scene_transform.hpp"
 
 #include <algorithm>
@@ -62,20 +63,6 @@ std::optional<SceneBounds> transformed_local_bounds(
   return SceneBounds{.min = world_position, .max = world_position};
 }
 
-bool instance_member_visible(const SceneDocument &document, EntityId member,
-                             EntityId definition) {
-  EntityId current = member;
-  std::size_t guard = document.entities().size() + 1u;
-  while (current != kInvalidEntityId && current != definition && guard-- > 0u) {
-    const VisibilityComponent *visibility = document.visibility(current);
-    if (visibility != nullptr && !visibility->visible) {
-      return false;
-    }
-    current = document.parent(current);
-  }
-  return current == definition;
-}
-
 std::optional<SceneBounds> instance_occurrence_world_bounds(
     const SceneDocument &document, const AssetRegistry &assets,
     EntityId occurrence, EntityId definition) {
@@ -89,7 +76,7 @@ std::optional<SceneBounds> instance_occurrence_world_bounds(
   std::optional<SceneBounds> result;
   for (const EntityId member : document.descendants(definition, false)) {
     if (document.containing_instance_definition(member) != definition ||
-        !instance_member_visible(document, member, definition)) {
+        !scene_hierarchy_segment_is_visible(document, member, definition)) {
       continue;
     }
     const MeshComponent *component = document.mesh(member);

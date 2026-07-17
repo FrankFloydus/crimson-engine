@@ -4933,3 +4933,79 @@ Owners: `ModelingSelectionService`, `ModelingSessionService`, Poly runtime/tool 
 Verification: focused transformed-surface, plane-local snapping, queued-click, Poly history,
 viewport-display toolbar, public preference-command, UI hot-path, and precise-delta regressions
 pass. Final full CTest and native v0.1.33 build results are recorded in the task handoff.
+
+## 2026-07-17 - Persistent Maya-Style Scene Layers
+
+Invariant:
+
+- `SceneDocument` owns persistent layer records and one exclusive membership per eligible public
+  entity. Layer IDs are monotonic across undo branches; group assignment includes only the current
+  eligible descendants, instance-definition internals are forbidden, and empty/delete operations
+  unassign members without deleting scene objects. Document and modeling reconstruction paths must
+  preserve membership through duplicate, destroy, undo, redo, and mesh synchronization.
+- Layer visibility is an independent effective-visibility mask and never rewrites an entity's
+  local `VisibilityComponent`. The shared hierarchy policy gates rendering, lights, bounds,
+  overlays, picking, placement, and instance expansion. Layer RGB affects only unselected
+  Wireframe geometry; selection style wins, and cache/batch identities include resolved color.
+- Native scene QDR schema 4 persists deterministic layer records and entity memberships, validates
+  IDs, names, colors, and eligibility, loads schemas 1-3 as unassigned, and rejects newer schemas.
+  The portable modeling QDR and project manifest remain unchanged.
+- `LayerPanel` is a retained Qt view routed through `QuaderLayersApi` and document history. Its
+  allocation and widget synchronization paths are gated by layer, selection, and localization
+  revisions; it remains a default-visible right-side dock below Inspector.
+
+Owners: `SceneDocument`, document commands, `QuaderLayersApi`, native QDR scene metadata,
+scene/render visibility extraction, wireframe overlay caches, and `LayerPanel`/`UISystem`.
+
+Verification: focused domain/API/history, QDR, rendering, instance, visibility, UI interaction,
+localization, and hot-path guardrail tests pass. The complete `vs2026-debug` CTest preset passes
+6/6, including SDK-only, SDK consumer/parity, guardrail, native app, and modeling-domain targets.
+Final native v0.1.36 and boot-smoke results are recorded in the task handoff.
+
+## 2026-07-17 - Layer Lock And Panel Interaction Follow-Up
+
+Invariant:
+
+- Layer lock is an independent effective-interaction mask. It never rewrites an entity-local
+  `LockComponent`, applies through ancestors and instance occurrences, blocks document batches and
+  picking, and projects any selection removal into the runtime modeling selection. Point and
+  rectangle picking caches include `scene_layer_revision` so a warm cache cannot retain locked
+  participants or omit newly unlocked participants.
+- `QuaderLayersApi` must reject every mutation before resolving document commands when no scene is
+  active; the inert fallback scene, its layer revision, and its history must remain unchanged.
+- `LayerPanel` columns are Color, Name, Visible, and Locked. Only name-column clicks select rows;
+  color, visibility, lock, and empty-area clicks clear the highlight. Visibility and lock are
+  focusable native buttons with keyboard activation and localized accessibility text.
+- Runtime eye/lock artwork comes from Google Material Icons pinned at commit
+  `abd7f5c0e179c83f068c770650bd14ebac5d5a09`, with Apache-2.0 provenance. The standalone layer-add
+  icon is a generated Quader-style beveled plus and does not replace existing icon artwork.
+
+Owners: `SceneDocument`, document commands, `QuaderLayersApi`, modeling picking caches,
+`LayerPanel`, packaged icon resources, and third-party provenance.
+
+Verification: focused layer UI/API/history/runtime-selection/cache tests pass, all native test
+targets build, and the complete `vs2026-debug` CTest preset passes 6/6. Final native v0.1.37 and
+boot-smoke results are recorded in the task handoff.
+
+## 2026-07-17 - High-Contrast Dock Title Controls
+
+Invariant:
+
+- A Qt stylesheet `color` declaration does not recolor Fusion's fixed dock-title raster glyphs.
+  Fusion also shrinks a framed dock button's 16 px small-icon metric to 5/8, producing the
+  unreadable 10 px default seen against Quader's dark dock title bars.
+- Dock title contrast is owned explicitly by app-authored, near-white close/float PNGs embedded
+  under `/quader/icons`. The scoped dock stylesheet uses Qt's `titlebar-close-icon` and
+  `titlebar-normal-icon` properties plus `icon-size: 24px`, yielding an approximately 15 px glyph
+  inside an 18 px control while preserving Qt's built-in drag, float, close, and accessibility
+  behavior.
+- Default and active title colors remain distinct. Hover keeps the background transparent and
+  adds a high-contrast outline; pressed uses a darker fill and brighter outline so neither state
+  muddies the glyph.
+
+Owners: `UISystem::create_dock`, scoped dock-title QSS, embedded dock-chrome resources, and UI/build
+guardrails.
+
+Verification: focused dock-title presentation and resource-packaging guardrails pass, all affected
+native test targets build, and the complete `vs2026-debug` CTest preset passes 6/6. Final native
+v0.1.38 build result is recorded in the task handoff.

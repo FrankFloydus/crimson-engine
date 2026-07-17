@@ -11,6 +11,7 @@
 #include "math/glm_bridge.hpp"
 #include "render/viewport_overlay_policy.hpp"
 #include "scene/scene_document.hpp"
+#include "scene/scene_hierarchy_visibility.hpp"
 #include "scene/scene_transform.hpp"
 
 #include <optional>
@@ -324,20 +325,6 @@ struct ProjectionObjectState {
     QMat4 world_transform;
 };
 
-bool instance_edit_member_visible(const SceneDocument &scene, EntityId member,
-                                  EntityId definition) {
-  EntityId current = member;
-  std::size_t guard = scene.entities().size() + 1u;
-  while (current != kInvalidEntityId && current != definition && guard-- > 0u) {
-    if (const VisibilityComponent *visibility = scene.visibility(current);
-        visibility != nullptr && !visibility->visible) {
-      return false;
-    }
-    current = scene.parent(current);
-  }
-  return current == definition;
-}
-
 std::optional<QMat4> instance_edit_member_world_transform(
     const SceneDocument &scene, ModelingInstanceEditScope scope,
     EntityId member) {
@@ -394,7 +381,7 @@ public:
         if (active_member) {
           state.visible =
               scene.is_effectively_visible(instance_edit_scope_.occurrence) &&
-              instance_edit_member_visible(
+              scene_hierarchy_segment_is_visible(
                   scene, *entity, instance_edit_scope_.definition);
           if (state.visible) {
             const std::optional<QMat4> world =

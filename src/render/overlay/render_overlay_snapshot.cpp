@@ -7,6 +7,7 @@
 #include "render/overlay/render_overlay_snapshot.hpp"
 
 #include "assets/asset_registry.hpp"
+#include "core/color_space.hpp"
 #include "diagnostics/profile.hpp"
 #include "mesh/polygon/document_model.hpp"
 #include "render/overlay/viewport_overlay_style_resolver.hpp"
@@ -14,6 +15,7 @@
 #include "render/viewport_overlay_policy.hpp"
 #include "scene/scene_bounds.hpp"
 #include "scene/scene_document.hpp"
+#include "scene/scene_hierarchy_visibility.hpp"
 #include "scene/scene_transform.hpp"
 
 #include <optional>
@@ -28,6 +30,20 @@ default_persistent_overlay_style() {
       ViewportOverlayStyleResolver::persistent_style_snapshot(
           ViewportSettings::defaults());
   return kStyle;
+}
+
+std::uint32_t resolved_scene_wireframe_color(
+    const SceneDocument &document, EntityId entity) {
+  const SceneLayerRecord *layer = document.layer(document.entity_layer(entity));
+  if (layer == nullptr) {
+    return kOverlayWireframeXrayColor;
+  }
+  constexpr std::uint8_t kWireframeAlpha = static_cast<std::uint8_t>(
+      (kOverlayWireframeXrayColor >> 24u) & 0xffu);
+  return rgba8(normalized_to_byte(layer->wireframe_color.x),
+               normalized_to_byte(layer->wireframe_color.y),
+               normalized_to_byte(layer->wireframe_color.z),
+               kWireframeAlpha);
 }
 
 std::span<const MeshVertex> mesh_vertices(const MeshAsset &mesh) {
@@ -86,6 +102,7 @@ mesh_snapshot_for_entity(const SceneDocument &document,
       .authored_topology_payload = asset->authored_polygon_document,
       .world_transform = document.world_transform_matrix(entity),
       .selected = selection != nullptr && selection->selected,
+      .wireframe_color = resolved_scene_wireframe_color(document, entity),
       .vertices = mesh_vertices(*asset),
       .indices = mesh_indices(*asset),
       .authored_vertices = authored_vertices(*asset),
@@ -139,21 +156,6 @@ QVec3 affine_translation_delta(const QMat4 &current, const QMat4 &previous) {
   };
 }
 
-bool instance_definition_member_visible(const SceneDocument &document,
-                                        EntityId member,
-                                        EntityId definition) {
-  EntityId current = member;
-  std::size_t guard = document.entities().size() + 1u;
-  while (current != kInvalidEntityId && current != definition && guard-- > 0u) {
-    if (const VisibilityComponent *visibility = document.visibility(current);
-        visibility != nullptr && !visibility->visible) {
-      return false;
-    }
-    current = document.parent(current);
-  }
-  return current == definition;
-}
-
 std::uint64_t instance_overlay_participant_token(EntityId occurrence,
                                                  EntityId member) {
   return RenderSignatureBuilder{}
@@ -181,11 +183,13 @@ void append_instance_wireframe_meshes(
   const QMat4 occurrence_world = document.world_transform_matrix(occurrence);
   const SelectionComponent *selection = document.selection(occurrence);
   const bool selected = selection != nullptr && selection->selected;
+  const std::uint32_t wireframe_color =
+      resolved_scene_wireframe_color(document, occurrence);
   for (const EntityId member :
        document.descendants(instance->definition, false)) {
     if (document.containing_instance_definition(member) !=
             instance->definition ||
-        !instance_definition_member_visible(document, member,
+        !scene_hierarchy_segment_is_visible(document, member,
                                             instance->definition)) {
       continue;
     }
@@ -214,6 +218,7 @@ void append_instance_wireframe_meshes(
         .world_transform = scene_transform_multiply(occurrence_world,
                                                     member_from_definition),
         .selected = selected,
+        .wireframe_color = wireframe_color,
         .vertices = mesh_vertices(*mesh),
         .indices = mesh_indices(*mesh),
         .authored_vertices = authored_vertices(*mesh),
@@ -243,7 +248,7 @@ void append_instance_selection_fills(
        document.descendants(instance->definition, false)) {
     if (document.containing_instance_definition(member) !=
             instance->definition ||
-        !instance_definition_member_visible(document, member,
+        !scene_hierarchy_segment_is_visible(document, member,
                                             instance->definition)) {
       continue;
     }

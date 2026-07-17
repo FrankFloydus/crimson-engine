@@ -56,6 +56,7 @@ struct ModelingPickingCache {
   std::uint64_t scene_selection_revision = 0;
   std::uint64_t scene_transform_revision = 0;
   std::uint64_t scene_visibility_revision = 0;
+  std::uint64_t scene_layer_revision = 0;
   std::uint64_t scene_mesh_binding_revision = 0;
   std::uint64_t object_map_revision = 0;
   ModelingInstanceEditScope instance_edit_scope;

@@ -10,9 +10,10 @@
 #include "diagnostics/profile.hpp"
 #include "render/material_binding_service.hpp"
 #include "render/render_signature_builder.hpp"
-#include "scene/scene_transform.hpp"
-#include "scene/scene_document.hpp"
 #include "render/tool_preview_renderable_cache.hpp"
+#include "scene/scene_document.hpp"
+#include "scene/scene_hierarchy_visibility.hpp"
+#include "scene/scene_transform.hpp"
 
 #include <algorithm>
 #include <cstdint>
@@ -389,9 +390,6 @@ std::uint64_t instance_occurrence_token(EntityId definition,
                                         EntityId member,
                                         EntityId occurrence);
 bool selected(const SceneDocument &document, EntityId entity);
-bool definition_member_is_visible(const SceneDocument &document,
-                                  EntityId member,
-                                  EntityId definition);
 void append_instance_primitive_records(
     RenderSceneSnapshot &snapshot, const RenderSceneMeshRecord &source,
     EntityId definition, EntityId member, const QMat4 &member_from_definition,
@@ -542,7 +540,7 @@ RenderSceneSnapshot build_render_scene_snapshot(
     }
     for (const EntityId member : document.descendants(definition, false)) {
       if (document.containing_instance_definition(member) != definition ||
-          !definition_member_is_visible(document, member, definition)) {
+          !scene_hierarchy_segment_is_visible(document, member, definition)) {
         continue;
       }
       const MeshComponent *component = document.mesh(member);
@@ -685,21 +683,6 @@ std::uint64_t instance_occurrence_token(EntityId definition,
 bool selected(const SceneDocument &document, EntityId entity) {
   const SelectionComponent *selection = document.selection(entity);
   return selection != nullptr && selection->selected;
-}
-
-bool definition_member_is_visible(const SceneDocument &document,
-                                  EntityId member,
-                                  EntityId definition) {
-  EntityId current = member;
-  std::size_t guard = document.entities().size() + 1u;
-  while (current != kInvalidEntityId && current != definition && guard-- > 0u) {
-    if (const VisibilityComponent *visibility = document.visibility(current);
-        visibility != nullptr && !visibility->visible) {
-      return false;
-    }
-    current = document.parent(current);
-  }
-  return current == definition;
 }
 
 void append_instance_primitive_records(

@@ -860,6 +860,13 @@ void QuaderCommandsApi::Impl::register_commands() {
                      return quader_api_status_from_result(result);
                    });
   register_command(
+      quader_command::kSceneLayersRemoveSelection,
+      "Remove Objects From Layer",
+      [this] { return api_.layers().remove_selection_from_all_layers(); }, {},
+      [this] {
+        return api_.layers().can_remove_selection_from_all_layers();
+      });
+  register_command(
       quader_command::kViewportFrameSelection, "Focus Selection",
       [this] { return viewports_.frame_selection(viewports_.focused_pane()); });
   register_command(quader_command::kViewportFocusAll, "Focus All",

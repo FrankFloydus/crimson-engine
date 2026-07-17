@@ -472,7 +472,23 @@ chunk_codec_name(quader_io::QdrBinaryChunkCodec codec) {
     value["sceneRoot"] = entity.scene_root;
     value["sceneSettings"] = scene_settings_json(*entity.scene_settings);
   }
+  if (entity.layer_id != 0u) {
+    value["layerId"] = entity.layer_id;
+  }
   return value;
+}
+
+[[nodiscard]] Json
+layer_json(const QdrProjectSceneLayerWriteSnapshot &layer) {
+  return {
+      {"id", layer.id},
+      {"name", layer.name},
+      {"visible", layer.visible},
+      {"wireframeColor",
+       {layer.wireframe_color.x, layer.wireframe_color.y,
+        layer.wireframe_color.z}},
+      {"locked", layer.locked},
+  };
 }
 
 [[nodiscard]] Json object_json(const ProjectObjectRecord &object) {
@@ -546,6 +562,10 @@ std::string qdr_scene_debug_json(
   for (const ProjectObjectRecord &object : snapshot.object_records) {
     objects.push_back(object_json(object));
   }
+  Json layers = Json::array();
+  for (const QdrProjectSceneLayerWriteSnapshot &layer : snapshot.layers) {
+    layers.push_back(layer_json(layer));
+  }
 
   return Json{
       {"format", "quader.qdr.debug"},
@@ -567,6 +587,7 @@ std::string qdr_scene_debug_json(
        }},
       {"entities", std::move(entities)},
       {"objects", std::move(objects)},
+      {"layers", std::move(layers)},
   }.dump(2);
 }
 

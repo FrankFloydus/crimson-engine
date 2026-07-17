@@ -17,6 +17,7 @@ namespace {
 
 using quader::test::guardrail::read_source_file;
 using quader::test::guardrail::source_path;
+using quader::test::guardrail::source_slice;
 
 void expect_contains(std::string_view source, std::string_view needle) {
   EXPECT_NE(source.find(needle), std::string_view::npos) << needle;
@@ -48,6 +49,8 @@ const std::vector<std::string_view> &qt_shell_source_paths() {
       "src/ui/outliner_panel.cpp",
       "src/ui/inspector_panel.hpp",
       "src/ui/inspector_panel.cpp",
+      "src/ui/layer_panel.hpp",
+      "src/ui/layer_panel.cpp",
       "src/ui/console_panel.hpp",
       "src/ui/console_panel.cpp",
       "src/ui/qt_color_swatch_button.hpp",
@@ -212,9 +215,9 @@ TEST(UiLayoutGuardrailTests,
   expect_contains(ui_source, "saveState(kQtWindowStateVersion)");
   expect_contains(ui_source, "restoreState(state, kQtWindowStateVersion)");
   expect_contains(panel_manager_header,
-                  "std::array<QDockWidget *, 4> docks_");
+                  "std::array<QDockWidget *, 5> docks_");
   expect_contains(panel_manager_header,
-                  "std::array<bool, 4> explicit_visibility_");
+                  "std::array<bool, 5> explicit_visibility_");
   expect_contains(panel_manager_source, "UIPanelManager::add(");
   expect_contains(panel_manager_source, "UIPanelManager::set_visible(");
   expect_contains(panel_manager_source, "UIPanelManager::dock(");
@@ -223,6 +226,42 @@ TEST(UiLayoutGuardrailTests,
   expect_contains(panel_manager_source, "explicit_visibility_[slot]");
   expect_missing(panel_manager_source, "panel->isVisible()");
   expect_missing(ui_source, "&QDockWidget::visibilityChanged");
+}
+
+TEST(UiLayoutGuardrailTests,
+     DockPanelTitleBarsUseScopedDarkAccessibleChrome) {
+  const std::string ui_source = read_source_file("src/ui/ui_system.cpp");
+  const std::string create_dock = source_slice(
+      ui_source, "QDockWidget &UISystem::create_dock(",
+      "void UISystem::restore_window_state()");
+  const std::string frame_refresh = source_slice(
+      ui_source, "void UISystem::refresh(",
+      "void UISystem::process_viewport_input()");
+
+  expect_contains(ui_source,
+                  "void apply_dark_dock_title_presentation(QDockWidget &dock)");
+  expect_contains(ui_source,
+                  "titlebar-close-icon: url(:/quader/icons/dock_close.png)");
+  expect_contains(ui_source,
+                  "titlebar-normal-icon: url(:/quader/icons/dock_float.png)");
+  expect_contains(ui_source, "QDockWidget::title");
+  expect_contains(ui_source, "QDockWidget::title:active");
+  expect_contains(ui_source, "background-color: #181818");
+  expect_contains(ui_source, "color: #eeeeee");
+  expect_contains(ui_source, "width: 18px");
+  expect_contains(ui_source, "height: 18px");
+  expect_contains(ui_source, "icon-size: 24px");
+  expect_contains(ui_source, "QDockWidget::close-button:hover");
+  expect_contains(ui_source, "QDockWidget::float-button:hover");
+  expect_contains(ui_source, "border-color: #8a8a8a");
+  expect_contains(ui_source, "QDockWidget::close-button:pressed");
+  expect_contains(ui_source, "QDockWidget::float-button:pressed");
+  expect_contains(ui_source, "background-color: #0f0f0f");
+  expect_contains(ui_source, "border-color: #b5b5b5");
+  expect_contains(create_dock,
+                  "apply_dark_dock_title_presentation(*dock)");
+  expect_missing(frame_refresh, "apply_dark_dock_title_presentation");
+  expect_missing(frame_refresh, "setStyleSheet(");
 }
 
 TEST(UiLayoutGuardrailTests,
@@ -264,7 +303,7 @@ TEST(UiLayoutGuardrailTests,
       ui_source.data() + create_docks_owner,
       create_dock_factory - create_docks_owner);
   for (std::string_view panel : {"UIPanelId::Outliner", "UIPanelId::Inspector",
-                                 "UIPanelId::Console"}) {
+                                 "UIPanelId::Layers", "UIPanelId::Console"}) {
     EXPECT_EQ(count_occurrences(create_docks_body, panel), 1u) << panel;
   }
 
@@ -403,7 +442,7 @@ TEST(UiLayoutGuardrailTests,
 }
 
 TEST(UiLayoutGuardrailTests,
-     OutlinerInspectorAndConsoleUseStockWidgetsAndStableNames) {
+     DockPanelsUseStockWidgetsAndStableNames) {
   const std::string outliner_header =
       read_source_file("src/ui/outliner_panel.hpp");
   const std::string outliner = read_source_file("src/ui/outliner_panel.cpp");
@@ -411,6 +450,9 @@ TEST(UiLayoutGuardrailTests,
       read_source_file("src/ui/inspector_panel.hpp");
   const std::string inspector =
       read_source_file("src/ui/inspector_panel.cpp");
+  const std::string layer_header =
+      read_source_file("src/ui/layer_panel.hpp");
+  const std::string layer = read_source_file("src/ui/layer_panel.cpp");
   const std::string console_header =
       read_source_file("src/ui/console_panel.hpp");
   const std::string console = read_source_file("src/ui/console_panel.cpp");
@@ -463,6 +505,39 @@ TEST(UiLayoutGuardrailTests,
                  "changed({static_cast<float>(initial.redF())");
   expect_missing(inspector, "document_->set_scene_settings(");
   expect_missing(inspector, "document_->set_light(");
+
+  expect_contains(layer_header,
+                  "class LayerPanel final : public QWidget");
+  expect_contains(layer, "public QTreeView");
+  expect_contains(layer, "new QStandardItemModel");
+  expect_contains(layer, "ui_panel_stable_id(UIPanelId::Layers)");
+  expect_contains(layer, "QStringLiteral(\"layers.tree\")");
+  expect_contains(layer, "QStringLiteral(\"layers.model\")");
+  expect_contains(layer, "QStringLiteral(\"layers.context_menu\")");
+  expect_contains(layer, "QAbstractItemView::ExtendedSelection");
+  expect_contains(layer,
+                  "QAbstractItemView::DoubleClicked |\n"
+                  "                           QAbstractItemView::EditKeyPressed");
+  expect_contains(layer, "new QtColorSwatchButton");
+  expect_contains(layer, "Color = 0");
+  expect_contains(layer, "Name = 1");
+  expect_contains(layer, "Visible = 2");
+  expect_contains(layer, "Locked = 3");
+  expect_contains(layer, "material_visibility.png");
+  expect_contains(layer, "material_visibility_off.png");
+  expect_contains(layer, "material_lock.png");
+  expect_contains(layer, "material_lock_open.png");
+  expect_contains(layer, "layer_add.png");
+  expect_contains(layer, "clear_layer_selection()");
+  expect_contains(layer, "editor_->layers().all()");
+  expect_contains(layer, "editor_->layers().set_locked(");
+  expect_contains(layer, "editor_->layers().remove_selection(id)");
+  expect_contains(layer, "editor_->layers().revision()");
+  expect_contains(layer, "QItemSelectionModel::NoUpdate");
+  expect_missing(layer, "commands().available()");
+  expect_missing(layer, "document_->set_");
+  expect_contains(layer, "QPainter::CompositionMode_SourceIn");
+  expect_missing(layer, "QPainterPath");
 
   expect_contains(console_header,
                   "class ConsolePanel final : public QWidget");
@@ -1662,6 +1737,14 @@ TEST(UiLayoutGuardrailTests,
   expect_contains(presenter,
                   "editor.commands().command_id_for_modeling_action(");
   expect_contains(presenter, "editor.commands().execute(command_id)");
+  expect_contains(panel, "editor.layers()");
+  expect_contains(panel, ".can_remove_selection_from_all_layers()");
+  expect_contains(presenter,
+                  "editor.layers().can_remove_selection_from_all_layers()");
+  expect_contains(presenter,
+                  "quader_command::kSceneLayersRemoveSelection");
+  expect_contains(presenter,
+                  "QStringLiteral(\"scene.layers.remove_selection\")");
   expect_contains(presenter, "input_router.set_selection_mode(");
   expect_contains(presenter, "is_generic_context_action(action.action_id)");
   expect_contains(presenter, "menu.addSeparator()");

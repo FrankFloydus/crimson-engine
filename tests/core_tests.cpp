@@ -1067,6 +1067,7 @@ TEST(UISettingsTests, DefaultsKeepPanelVisibilityLocaleAndNavigationGizmo) {
   EXPECT_TRUE(settings.is_panel_visible(UIPanelId::Viewport));
   EXPECT_TRUE(settings.is_panel_visible(UIPanelId::Outliner));
   EXPECT_TRUE(settings.is_panel_visible(UIPanelId::Inspector));
+  EXPECT_TRUE(settings.is_panel_visible(UIPanelId::Layers));
   EXPECT_FALSE(settings.is_panel_visible(UIPanelId::Console));
   EXPECT_TRUE(settings.navigation_gizmo_visible());
 }
@@ -1080,6 +1081,7 @@ TEST(UISettingsTests, RoundTripsPanelVisibilityLocaleAndNavigationGizmo) {
   settings.set_locale(" it-IT ");
   settings.set_panel_visible(UIPanelId::Outliner, false);
   settings.set_panel_visible(UIPanelId::Inspector, false);
+  settings.set_panel_visible(UIPanelId::Layers, false);
   settings.set_panel_visible(UIPanelId::Console, true);
   settings.set_navigation_gizmo_visible(false);
 
@@ -1090,9 +1092,11 @@ TEST(UISettingsTests, RoundTripsPanelVisibilityLocaleAndNavigationGizmo) {
                                std::istreambuf_iterator<char>()};
   EXPECT_NE(saved_text.find("outliner=false"), std::string::npos);
   EXPECT_NE(saved_text.find("inspector=false"), std::string::npos);
+  EXPECT_NE(saved_text.find("layers=false"), std::string::npos);
   EXPECT_NE(saved_text.find("console=true"), std::string::npos);
   EXPECT_EQ(saved_text.find("Outliner="), std::string::npos);
   EXPECT_EQ(saved_text.find("Inspector="), std::string::npos);
+  EXPECT_EQ(saved_text.find("Layers="), std::string::npos);
   EXPECT_EQ(saved_text.find("Console="), std::string::npos);
   saved.close();
 
@@ -1101,6 +1105,7 @@ TEST(UISettingsTests, RoundTripsPanelVisibilityLocaleAndNavigationGizmo) {
   EXPECT_EQ(loaded.locale(), "it-IT");
   EXPECT_FALSE(loaded.is_panel_visible(UIPanelId::Outliner));
   EXPECT_FALSE(loaded.is_panel_visible(UIPanelId::Inspector));
+  EXPECT_FALSE(loaded.is_panel_visible(UIPanelId::Layers));
   EXPECT_TRUE(loaded.is_panel_visible(UIPanelId::Console));
   EXPECT_FALSE(loaded.navigation_gizmo_visible());
 
@@ -1118,12 +1123,14 @@ TEST(UISettingsTests, LoadsLegacyDisplayPanelKeysAndSavesStableKeys) {
     file << "[Panels]\n";
     file << "Outliner=false\n";
     file << "Inspector=false\n";
+    file << "Layers=false\n";
     file << "Console=true\n";
   }
 
   UISettings loaded = UISettings::load(path);
   EXPECT_FALSE(loaded.is_panel_visible(UIPanelId::Outliner));
   EXPECT_FALSE(loaded.is_panel_visible(UIPanelId::Inspector));
+  EXPECT_FALSE(loaded.is_panel_visible(UIPanelId::Layers));
   EXPECT_TRUE(loaded.is_panel_visible(UIPanelId::Console));
 
   ASSERT_TRUE(loaded.save(path));
@@ -1133,9 +1140,11 @@ TEST(UISettingsTests, LoadsLegacyDisplayPanelKeysAndSavesStableKeys) {
                                std::istreambuf_iterator<char>()};
   EXPECT_NE(saved_text.find("outliner=false"), std::string::npos);
   EXPECT_NE(saved_text.find("inspector=false"), std::string::npos);
+  EXPECT_NE(saved_text.find("layers=false"), std::string::npos);
   EXPECT_NE(saved_text.find("console=true"), std::string::npos);
   EXPECT_EQ(saved_text.find("Outliner="), std::string::npos);
   EXPECT_EQ(saved_text.find("Inspector="), std::string::npos);
+  EXPECT_EQ(saved_text.find("Layers="), std::string::npos);
   EXPECT_EQ(saved_text.find("Console="), std::string::npos);
   saved.close();
 
@@ -1153,6 +1162,7 @@ TEST(UISettingsTests, IgnoresMalformedPanelVisibilityAndEmptyLocale) {
     file << "[Panels]\n";
     file << "Outliner=maybe\n";
     file << "Inspector=0\n";
+    file << "Layers=maybe\n";
     file << "Console=yes\n";
     file << "[Show]\n";
     file << "NavigationGizmo=no\n";
@@ -1165,6 +1175,7 @@ TEST(UISettingsTests, IgnoresMalformedPanelVisibilityAndEmptyLocale) {
   EXPECT_EQ(loaded.locale(), "en-US");
   EXPECT_TRUE(loaded.is_panel_visible(UIPanelId::Outliner));
   EXPECT_FALSE(loaded.is_panel_visible(UIPanelId::Inspector));
+  EXPECT_TRUE(loaded.is_panel_visible(UIPanelId::Layers));
   EXPECT_TRUE(loaded.is_panel_visible(UIPanelId::Console));
   EXPECT_FALSE(loaded.navigation_gizmo_visible());
 
@@ -2487,7 +2498,7 @@ TEST(ViewportOverlayPolicyTests,
                                       "ViewportOverlayLayer::WireframeXray"));
   EXPECT_TRUE(source_contains_compact(
       cache_source, "return mesh.selected ? style.selection_wire_color : "
-                    "kOverlayWireframeXrayColor;"));
+                    "mesh.wireframe_color;"));
   EXPECT_NE(cache_source.find("style.selection_edge_line_width_pixels"),
             std::string::npos);
 }
@@ -4273,26 +4284,29 @@ TEST(ViewportContextMenuPolicyTests,
 }
 
 TEST(ViewportContextMenuPolicyTests,
-     InstanceOnlyCreateOrFlattenActionKeepsRightClickMenuAvailable) {
+     NonModelingActionsKeepRightClickMenuAvailable) {
   const auto opens_with = [](bool has_modeling_actions,
                              bool can_create_instance,
-                             bool can_flatten_instance) {
+                             bool can_flatten_instance,
+                             bool can_remove_selection_from_layers) {
     return should_open_viewport_context_menu({
         .right_press_tracked = true,
         .right_released = true,
         .release_inside_viewport = true,
         .target_hit = true,
         .has_actions = viewport_context_menu_has_available_actions(
-            has_modeling_actions, can_create_instance, can_flatten_instance),
+            has_modeling_actions, can_create_instance, can_flatten_instance,
+            can_remove_selection_from_layers),
         .press_screen = {200.0f, 180.0f},
         .release_screen = {201.0f, 181.0f},
     });
   };
 
-  EXPECT_FALSE(opens_with(false, false, false));
-  EXPECT_TRUE(opens_with(false, true, false));
-  EXPECT_TRUE(opens_with(false, false, true));
-  EXPECT_TRUE(opens_with(true, false, false));
+  EXPECT_FALSE(opens_with(false, false, false, false));
+  EXPECT_TRUE(opens_with(false, true, false, false));
+  EXPECT_TRUE(opens_with(false, false, true, false));
+  EXPECT_TRUE(opens_with(false, false, false, true));
+  EXPECT_TRUE(opens_with(true, false, false, false));
 }
 
 TEST(ViewportContextMenuPolicyTests, BlocksModalToolsMissingActionsAndDrags) {
@@ -13108,6 +13122,70 @@ TEST(ModelingSessionServiceTests,
 }
 
 TEST(ModelingSessionServiceTests,
+     LayerLockRevisionInvalidatesWarmPointAndRectanglePickingCaches) {
+  SceneDocument scene;
+  AssetRegistry assets;
+  ModelingSessionService service(scene, assets);
+
+  const ModelingCreateBoxResult mesh = service.create_box_from_bounds({
+      .bounds = {.min = {-1.0f, -1.0f, -1.0f},
+                 .max = {1.0f, 1.0f, 1.0f}},
+      .name = "Layer Lock Picking Box",
+  });
+  ASSERT_TRUE(mesh.ok) << mesh.message;
+  const SceneLayerId layer = scene.create_layer("Picking Layer");
+  ASSERT_NE(layer, kInvalidSceneLayerId);
+  ASSERT_TRUE(scene.set_entity_layer(mesh.object.entity, layer));
+
+  const ModelingPickSelectRequest point_request{
+      .ray = {.origin = {0.0f, 0.0f, 5.0f},
+              .direction = {0.0f, 0.0f, -1.0f}},
+  };
+  const ModelingBoxSelectRequest rectangle_request{
+      .camera = test_orthographic_viewport_camera(),
+      .start = {35.0f, 35.0f},
+      .end = {65.0f, 65.0f},
+      .edit = ModelingSelectionEdit::Replace,
+      .rule = ModelingBoxSelectionRule::Contain,
+  };
+
+  const std::optional<EntityId> warm_point =
+      service.pick_object_entity(point_request);
+  ASSERT_TRUE(warm_point.has_value());
+  EXPECT_EQ(*warm_point, mesh.object.entity);
+  const ModelingSelectionSummary warm_rectangle =
+      service.box_select(rectangle_request);
+  ASSERT_EQ(warm_rectangle.selected_object_count, 1u);
+  const std::uint64_t point_builds =
+      service.transformed_picking_projection_build_count();
+  const std::uint64_t rectangle_builds =
+      service.rectangle_picking_projection_build_count();
+
+  ASSERT_TRUE(scene.set_layer_locked(layer, true));
+  EXPECT_FALSE(service.pick_object_entity(point_request).has_value());
+  EXPECT_EQ(service.transformed_picking_projection_build_count(),
+            point_builds + 1u);
+  const ModelingSelectionSummary locked_rectangle =
+      service.box_select(rectangle_request);
+  EXPECT_EQ(locked_rectangle.selected_object_count, 0u);
+  EXPECT_EQ(service.rectangle_picking_projection_build_count(),
+            rectangle_builds + 1u);
+
+  ASSERT_TRUE(scene.set_layer_locked(layer, false));
+  const std::optional<EntityId> unlocked_point =
+      service.pick_object_entity(point_request);
+  ASSERT_TRUE(unlocked_point.has_value());
+  EXPECT_EQ(*unlocked_point, mesh.object.entity);
+  EXPECT_EQ(service.transformed_picking_projection_build_count(),
+            point_builds + 2u);
+  const ModelingSelectionSummary unlocked_rectangle =
+      service.box_select(rectangle_request);
+  EXPECT_EQ(unlocked_rectangle.selected_object_count, 1u);
+  EXPECT_EQ(service.rectangle_picking_projection_build_count(),
+            rectangle_builds + 2u);
+}
+
+TEST(ModelingSessionServiceTests,
      TwoHundredSharedDuplicatesBuildOneLocalPickingGeometryAndTransformWithoutRebuild) {
   SceneDocument scene;
   AssetRegistry assets;
@@ -18242,4 +18320,206 @@ TEST(BakeServiceTests, ValidatesDescriptors) {
       .height = 1024,
   });
   EXPECT_TRUE(valid.valid);
+}
+
+TEST(SceneLayerTests,
+     OwnsUniqueNamesExactMembershipAndLayerAwareVisibility) {
+  SceneDocument scene;
+  const EntityId root = scene.create_empty("Scene");
+  ASSERT_TRUE(scene.set_scene_settings(root, SceneSettingsComponent{}));
+  const EntityId group = scene.create_empty("Group");
+  const EntityId child = scene.create_entity("Child", EntityKind::Mesh);
+  ASSERT_TRUE(scene.set_parent(group, root, false));
+  ASSERT_TRUE(scene.set_parent(child, group, false));
+
+  const SceneLayerId first = scene.create_layer();
+  const SceneLayerId second = scene.create_layer();
+  ASSERT_NE(first, kInvalidSceneLayerId);
+  ASSERT_NE(second, kInvalidSceneLayerId);
+  ASSERT_NE(scene.layer(first), nullptr);
+  ASSERT_NE(scene.layer(second), nullptr);
+  EXPECT_EQ(scene.layer(first)->name, "Layer");
+  EXPECT_EQ(scene.layer(second)->name, "Layer_1");
+  EXPECT_EQ(scene.create_layer_with_id(90u, "Layer"),
+            kInvalidSceneLayerId);
+
+  std::string valid_unicode_name;
+  for (int index = 0; index < 127; ++index) {
+    valid_unicode_name.append("\xc3\xa9");
+  }
+  ASSERT_TRUE(scene.rename_layer(first, valid_unicode_name));
+  const std::uint64_t revision_before_invalid_name = scene.layer_revision();
+  valid_unicode_name.append("\xc3\xa9");
+  EXPECT_FALSE(scene.rename_layer(first, valid_unicode_name));
+  EXPECT_EQ(scene.layer_revision(), revision_before_invalid_name);
+
+  ASSERT_TRUE(scene.set_entity_layer(group, first));
+  ASSERT_TRUE(scene.set_entity_layer(child, first));
+  EXPECT_EQ(scene.entity_layer(group), first);
+  EXPECT_EQ(scene.entity_layer(child), first);
+  ASSERT_TRUE(scene.set_entity_layer(child, second));
+  EXPECT_EQ(scene.entity_layer(child), second);
+  EXPECT_EQ(scene.layer_members(first), std::vector<EntityId>({group}));
+
+  ASSERT_TRUE(scene.set_selected(child, true));
+  ASSERT_TRUE(scene.set_layer_visible(second, false));
+  EXPECT_FALSE(scene.is_effectively_visible(child));
+  EXPECT_TRUE(scene.selection(child)->selected);
+  ASSERT_TRUE(scene.set_layer_visible(second, true));
+  EXPECT_TRUE(scene.is_effectively_visible(child));
+  ASSERT_TRUE(scene.set_visible(child, false));
+  ASSERT_TRUE(scene.set_layer_visible(second, false));
+  ASSERT_TRUE(scene.set_layer_visible(second, true));
+  EXPECT_FALSE(scene.is_effectively_visible(child));
+}
+
+TEST(SceneLayerTests,
+     LayerLockIsAnUndoableEffectiveMaskThatPreservesLocalLocks) {
+  SceneDocument scene;
+  const EntityId root = scene.create_empty("Scene");
+  ASSERT_TRUE(scene.set_scene_settings(root, SceneSettingsComponent{}));
+  const EntityId group = scene.create_empty("Group");
+  const EntityId child = scene.create_entity("Child", EntityKind::Mesh);
+  ASSERT_TRUE(scene.set_parent(group, root, false));
+  ASSERT_TRUE(scene.set_parent(child, group, false));
+
+  const SceneLayerId layer = scene.create_layer("Locked Layer");
+  ASSERT_NE(layer, kInvalidSceneLayerId);
+  ASSERT_TRUE(scene.set_entity_layer(group, layer));
+  ASSERT_TRUE(scene.set_selected(child, true));
+  ASSERT_NE(scene.lock(group), nullptr);
+  ASSERT_NE(scene.lock(child), nullptr);
+  EXPECT_FALSE(scene.lock(group)->locked);
+  EXPECT_FALSE(scene.lock(child)->locked);
+
+  EditorHistoryService history;
+  DocumentCommandService commands(scene, history);
+  const std::uint64_t revision_before = scene.layer_revision();
+  const DocumentCommandResult locked =
+      commands.set_layer_locked(layer, true);
+  ASSERT_TRUE(locked.ok);
+  ASSERT_TRUE(locked.changed);
+  ASSERT_NE(scene.layer(layer), nullptr);
+  EXPECT_TRUE(scene.layer(layer)->locked);
+  EXPECT_TRUE(scene.is_effectively_locked(group));
+  EXPECT_TRUE(scene.is_effectively_locked(child));
+  EXPECT_FALSE(scene.lock(group)->locked);
+  EXPECT_FALSE(scene.lock(child)->locked);
+  EXPECT_FALSE(scene.selection(child)->selected);
+  EXPECT_EQ(scene.layer_revision(), revision_before + 1u);
+  ASSERT_NE(history.undo_label(), nullptr);
+  EXPECT_EQ(*history.undo_label(), "Set Layer Lock");
+
+  const std::uint64_t stable_revision = scene.layer_revision();
+  const DocumentCommandResult unchanged =
+      commands.set_layer_locked(layer, true);
+  ASSERT_TRUE(unchanged.ok);
+  EXPECT_FALSE(unchanged.changed);
+  EXPECT_EQ(scene.layer_revision(), stable_revision);
+
+  ASSERT_TRUE(history.undo().ok);
+  EXPECT_FALSE(scene.layer(layer)->locked);
+  EXPECT_FALSE(scene.is_effectively_locked(group));
+  EXPECT_FALSE(scene.is_effectively_locked(child));
+  EXPECT_TRUE(scene.selection(child)->selected)
+      << "undo must restore selection removed by the layer lock";
+  ASSERT_TRUE(history.redo().ok);
+  EXPECT_TRUE(scene.layer(layer)->locked);
+  EXPECT_FALSE(scene.selection(child)->selected);
+
+  ASSERT_TRUE(scene.set_locked(child, true));
+  const DocumentCommandResult unlocked =
+      commands.set_layer_locked(layer, false);
+  ASSERT_TRUE(unlocked.ok);
+  ASSERT_TRUE(unlocked.changed);
+  EXPECT_FALSE(scene.layer(layer)->locked);
+  EXPECT_TRUE(scene.lock(child)->locked)
+      << "layer unlock must not rewrite object-local lock state";
+  EXPECT_TRUE(scene.is_effectively_locked(child));
+}
+
+TEST(SceneLayerTests,
+     CommandsExpandGroupsExcludeInternalDefinitionsAndPreserveUndoState) {
+  SceneDocument scene;
+  const EntityId root = scene.create_empty("Scene");
+  ASSERT_TRUE(scene.set_scene_settings(root, SceneSettingsComponent{}));
+  const EntityId group = scene.create_empty("Group");
+  const EntityId child = scene.create_entity("Child", EntityKind::Mesh);
+  ASSERT_TRUE(scene.set_mesh(child, MeshComponent{.mesh = 1u}));
+  const EntityId definition = scene.create_empty("Definition");
+  const EntityId definition_member = scene.create_empty("Definition Member");
+  ASSERT_TRUE(scene.set_parent(group, root, false));
+  ASSERT_TRUE(scene.set_parent(child, group, false));
+  ASSERT_TRUE(scene.set_parent(definition, group, false));
+  ASSERT_TRUE(scene.set_instance_definition(definition));
+  ASSERT_TRUE(scene.set_parent(definition_member, definition, false));
+  ASSERT_TRUE(scene.set_selected(group, true));
+
+  EditorHistoryService history;
+  DocumentCommandService commands(scene, history);
+  const DocumentCreateLayerResult created = commands.create_layer(
+      {}, kDefaultSceneLayerWireframeColor, true);
+  ASSERT_TRUE(created.ok);
+  ASSERT_TRUE(created.changed);
+  ASSERT_NE(created.layer_id, kInvalidSceneLayerId);
+  EXPECT_EQ(scene.entity_layer(group), created.layer_id);
+  EXPECT_EQ(scene.entity_layer(child), created.layer_id);
+  EXPECT_EQ(scene.entity_layer(definition), kInvalidSceneLayerId);
+  EXPECT_EQ(scene.entity_layer(definition_member), kInvalidSceneLayerId);
+
+  history.clear();
+  const std::uint64_t stable_revision = scene.layer_revision();
+  const DocumentCommandResult unchanged =
+      commands.add_selection_to_layer(created.layer_id);
+  EXPECT_TRUE(unchanged.ok);
+  EXPECT_FALSE(unchanged.changed);
+  EXPECT_FALSE(history.can_undo());
+  EXPECT_EQ(scene.layer_revision(), stable_revision);
+
+  const std::uint64_t before_public_reparent = scene.layer_revision();
+  const DocumentCommandResult public_reparent =
+      commands.reparent_entity(child, root, false);
+  ASSERT_TRUE(public_reparent.ok);
+  ASSERT_TRUE(public_reparent.changed);
+  EXPECT_EQ(scene.entity_layer(child), created.layer_id);
+  EXPECT_EQ(scene.layer_revision(), before_public_reparent);
+  ASSERT_TRUE(history.undo().ok);
+  EXPECT_EQ(scene.parent(child), group);
+  EXPECT_EQ(scene.entity_layer(child), created.layer_id);
+  EXPECT_EQ(scene.layer_revision(), before_public_reparent);
+
+  const std::uint64_t before_definition_reparent = scene.layer_revision();
+  const DocumentCommandResult definition_reparent =
+      commands.reparent_entity(child, definition, false);
+  ASSERT_TRUE(definition_reparent.ok);
+  ASSERT_TRUE(definition_reparent.changed);
+  EXPECT_EQ(scene.entity_layer(child), kInvalidSceneLayerId);
+  EXPECT_EQ(scene.layer_revision(), before_definition_reparent + 1u);
+  ASSERT_TRUE(history.undo().ok);
+  EXPECT_EQ(scene.parent(child), group);
+  EXPECT_EQ(scene.entity_layer(child), created.layer_id);
+  EXPECT_EQ(scene.layer_revision(), before_definition_reparent + 2u);
+
+  const DocumentDuplicateEntityResult duplicated =
+      commands.duplicate_entity(child);
+  ASSERT_TRUE(duplicated.ok);
+  ASSERT_TRUE(duplicated.changed);
+  ASSERT_NE(duplicated.duplicate_entity, kInvalidEntityId);
+  EXPECT_EQ(scene.entity_layer(duplicated.duplicate_entity), created.layer_id);
+  ASSERT_TRUE(commands.destroy_entity(duplicated.duplicate_entity).ok);
+  EXPECT_FALSE(scene.exists(duplicated.duplicate_entity));
+  ASSERT_TRUE(history.undo().ok);
+  ASSERT_TRUE(scene.exists(duplicated.duplicate_entity));
+  EXPECT_EQ(scene.entity_layer(duplicated.duplicate_entity), created.layer_id);
+
+  history.clear();
+  const DocumentCreateLayerResult undone_layer = commands.create_layer(
+      {}, kDefaultSceneLayerWireframeColor, false);
+  ASSERT_TRUE(undone_layer.ok);
+  ASSERT_TRUE(history.undo().ok);
+  EXPECT_EQ(scene.layer(undone_layer.layer_id), nullptr);
+  const DocumentCreateLayerResult branch_layer = commands.create_layer(
+      {}, kDefaultSceneLayerWireframeColor, false);
+  ASSERT_TRUE(branch_layer.ok);
+  EXPECT_GT(branch_layer.layer_id, undone_layer.layer_id);
 }

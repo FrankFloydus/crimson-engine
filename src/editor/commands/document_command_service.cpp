@@ -21,6 +21,7 @@
 #include "editor/commands/document/select_entities_command.hpp"
 #include "editor/commands/document/set_lock_command.hpp"
 #include "editor/commands/document/set_light_component_command.hpp"
+#include "editor/commands/document/set_scene_layer_state_command.hpp"
 #include "editor/commands/document/set_material_command.hpp"
 #include "editor/commands/document/set_mesh_component_command.hpp"
 #include "editor/commands/document/set_scene_settings_command.hpp"
@@ -275,6 +276,14 @@ bool DocumentCommandService::mutation_blocked(EntityId entity) const {
 bool DocumentCommandService::selected_mutation_blocked() const {
   const std::vector<EntityId> selected = scene_.selected_entities();
   return std::any_of(selected.begin(), selected.end(),
+                     [this](EntityId entity) {
+                       return mutation_blocked(entity);
+                     });
+}
+
+bool DocumentCommandService::entities_mutation_blocked(
+    std::span<const EntityId> entities) const {
+  return std::any_of(entities.begin(), entities.end(),
                      [this](EntityId entity) {
                        return mutation_blocked(entity);
                      });
@@ -873,6 +882,315 @@ DocumentCommandService::set_transforms(std::vector<DocumentTransformEdit> edits,
                                                        std::move(commands)));
 }
 
+DocumentCreateLayerResult DocumentCommandService::create_layer(
+    std::string name, QVec3 wireframe_color, bool add_selection) {
+  DocumentCreateLayerResult result;
+  const std::vector<EntityId> eligible = add_selection
+      ? scene_.layer_eligible_entities(scene_.selected_entities())
+      : std::vector<EntityId>{};
+  if (add_selection && eligible.empty()) {
+    assign_document_command_status(
+        result, document_command_invalid_request_result(
+                    "No layer-eligible scene entities are selected"));
+    return result;
+  }
+  if (entities_mutation_blocked(eligible)) {
+    assign_document_command_status(result,
+                                   document_command_active_tool_entity_result());
+    return result;
+  }
+  if (name.empty()) {
+    name = scene_.next_layer_name();
+  }
+
+  const SceneLayerId layer_id = scene_.next_layer_id();
+  SceneLayerState before = scene_.layer_state();
+  SceneLayerState after = before;
+  after.layers.push_back(SceneLayerRecord{
+      .id = layer_id,
+      .name = std::move(name),
+      .visible = true,
+      .wireframe_color = wireframe_color,
+      .locked = false,
+  });
+  if (add_selection) {
+    const std::unordered_set<EntityId> assigned(eligible.begin(),
+                                                eligible.end());
+    std::erase_if(after.assignments,
+                  [&assigned](const SceneLayerAssignment &entry) {
+                    return assigned.contains(entry.entity);
+                  });
+    for (const EntityId entity : eligible) {
+      after.assignments.push_back(
+          SceneLayerAssignment{.entity = entity, .layer_id = layer_id});
+    }
+  }
+
+  assign_document_command_status(
+      result, execute_document_command(
+                  history_, std::make_unique<SetSceneLayerStateCommand>(
+                                scene_, add_selection
+                                            ? "Create Layer From Selection"
+                                            : "Create Layer",
+                                std::move(before), std::move(after))));
+  if (result.ok && result.changed) {
+    result.layer_id = layer_id;
+  }
+  return result;
+}
+
+DocumentCommandResult DocumentCommandService::rename_layer(
+    SceneLayerId layer_id, std::string name) {
+  const SceneLayerRecord *current = scene_.layer(layer_id);
+  if (current == nullptr) {
+    return document_command_invalid_request_result("Layer does not exist");
+  }
+  if (current->name == name) {
+    return document_command_unchanged_result();
+  }
+  SceneLayerState before = scene_.layer_state();
+  SceneLayerState after = before;
+  for (SceneLayerRecord &record : after.layers) {
+    if (record.id == layer_id) {
+      record.name = std::move(name);
+      break;
+    }
+  }
+  return execute_document_command(
+      history_, std::make_unique<SetSceneLayerStateCommand>(
+                    scene_, "Rename Layer", std::move(before),
+                    std::move(after)));
+}
+
+DocumentCommandResult DocumentCommandService::set_layer_visible(
+    SceneLayerId layer_id, bool visible) {
+  const SceneLayerRecord *current = scene_.layer(layer_id);
+  if (current == nullptr) {
+    return document_command_invalid_request_result("Layer does not exist");
+  }
+  if (current->visible == visible) {
+    return document_command_unchanged_result();
+  }
+  const std::vector<EntityId> members = scene_.layer_members(layer_id);
+  if (entities_mutation_blocked(members)) {
+    return document_command_active_tool_entity_result();
+  }
+  SceneLayerState before = scene_.layer_state();
+  SceneLayerState after = before;
+  for (SceneLayerRecord &record : after.layers) {
+    if (record.id == layer_id) {
+      record.visible = visible;
+      break;
+    }
+  }
+  return execute_document_command(
+      history_, std::make_unique<SetSceneLayerStateCommand>(
+                    scene_, "Set Layer Visibility", std::move(before),
+                    std::move(after)));
+}
+
+DocumentCommandResult DocumentCommandService::set_layer_wireframe_color(
+    SceneLayerId layer_id, QVec3 color) {
+  const SceneLayerRecord *current = scene_.layer(layer_id);
+  if (current == nullptr) {
+    return document_command_invalid_request_result("Layer does not exist");
+  }
+  if (current->wireframe_color.x == color.x &&
+      current->wireframe_color.y == color.y &&
+      current->wireframe_color.z == color.z) {
+    return document_command_unchanged_result();
+  }
+  const std::vector<EntityId> members = scene_.layer_members(layer_id);
+  if (entities_mutation_blocked(members)) {
+    return document_command_active_tool_entity_result();
+  }
+  SceneLayerState before = scene_.layer_state();
+  SceneLayerState after = before;
+  for (SceneLayerRecord &record : after.layers) {
+    if (record.id == layer_id) {
+      record.wireframe_color = color;
+      break;
+    }
+  }
+  return execute_document_command(
+      history_, std::make_unique<SetSceneLayerStateCommand>(
+                    scene_, "Set Layer Color", std::move(before),
+                    std::move(after)));
+}
+
+DocumentCommandResult DocumentCommandService::set_layer_locked(
+    SceneLayerId layer_id, bool locked) {
+  const SceneLayerRecord *current = scene_.layer(layer_id);
+  if (current == nullptr) {
+    return document_command_invalid_request_result("Layer does not exist");
+  }
+  if (current->locked == locked) {
+    return document_command_unchanged_result();
+  }
+  const std::vector<EntityId> members = scene_.layer_members(layer_id);
+  if (entities_mutation_blocked(members)) {
+    return document_command_active_tool_entity_result();
+  }
+  SceneLayerState before = scene_.layer_state();
+  SceneLayerState after = before;
+  for (SceneLayerRecord &record : after.layers) {
+    if (record.id == layer_id) {
+      record.locked = locked;
+      break;
+    }
+  }
+  return execute_document_command(
+      history_, std::make_unique<SetSceneLayerStateCommand>(
+                    scene_, "Set Layer Lock", std::move(before),
+                    std::move(after)));
+}
+
+DocumentCommandResult DocumentCommandService::add_selection_to_layer(
+    SceneLayerId layer_id) {
+  if (scene_.layer(layer_id) == nullptr) {
+    return document_command_invalid_request_result("Layer does not exist");
+  }
+  const std::vector<EntityId> eligible =
+      scene_.layer_eligible_entities(scene_.selected_entities());
+  if (eligible.empty()) {
+    return document_command_invalid_request_result(
+        "No layer-eligible scene entities are selected");
+  }
+  if (entities_mutation_blocked(eligible)) {
+    return document_command_active_tool_entity_result();
+  }
+  SceneLayerState before = scene_.layer_state();
+  SceneLayerState after = before;
+  const std::unordered_set<EntityId> assigned(eligible.begin(), eligible.end());
+  std::erase_if(after.assignments,
+                [&assigned](const SceneLayerAssignment &entry) {
+                  return assigned.contains(entry.entity);
+                });
+  for (const EntityId entity : eligible) {
+    after.assignments.push_back(
+        SceneLayerAssignment{.entity = entity, .layer_id = layer_id});
+  }
+  if (before == after) {
+    return document_command_unchanged_result();
+  }
+  return execute_document_command(
+      history_, std::make_unique<SetSceneLayerStateCommand>(
+                    scene_, "Add Selection to Layer", std::move(before),
+                    std::move(after)));
+}
+
+DocumentCommandResult DocumentCommandService::remove_selection_from_layer(
+    SceneLayerId layer_id) {
+  if (scene_.layer(layer_id) == nullptr) {
+    return document_command_invalid_request_result("Layer does not exist");
+  }
+  const std::vector<EntityId> eligible =
+      scene_.layer_eligible_entities(scene_.selected_entities());
+  if (entities_mutation_blocked(eligible)) {
+    return document_command_active_tool_entity_result();
+  }
+  const std::unordered_set<EntityId> removed(eligible.begin(), eligible.end());
+  SceneLayerState before = scene_.layer_state();
+  SceneLayerState after = before;
+  std::erase_if(after.assignments,
+                [&removed, layer_id](const SceneLayerAssignment &entry) {
+                  return entry.layer_id == layer_id &&
+                         removed.contains(entry.entity);
+                });
+  if (before == after) {
+    return document_command_unchanged_result();
+  }
+  return execute_document_command(
+      history_, std::make_unique<SetSceneLayerStateCommand>(
+                    scene_, "Remove Selection From Layer", std::move(before),
+                    std::move(after)));
+}
+
+DocumentCommandResult
+DocumentCommandService::remove_selection_from_all_layers() {
+  const std::vector<EntityId> eligible =
+      scene_.layer_eligible_entities(scene_.selected_entities());
+  if (entities_mutation_blocked(eligible)) {
+    return document_command_active_tool_entity_result();
+  }
+  const std::unordered_set<EntityId> removed(eligible.begin(), eligible.end());
+  SceneLayerState before = scene_.layer_state();
+  SceneLayerState after = before;
+  std::erase_if(after.assignments,
+                [&removed](const SceneLayerAssignment &entry) {
+                  return removed.contains(entry.entity);
+                });
+  if (before == after) {
+    return document_command_unchanged_result();
+  }
+  return execute_document_command(
+      history_, std::make_unique<SetSceneLayerStateCommand>(
+                    scene_, "Remove Selection From Layers",
+                    std::move(before), std::move(after)));
+}
+
+DocumentCommandResult
+DocumentCommandService::empty_layer(SceneLayerId layer_id) {
+  if (scene_.layer(layer_id) == nullptr) {
+    return document_command_invalid_request_result("Layer does not exist");
+  }
+  const std::vector<EntityId> members = scene_.layer_members(layer_id);
+  if (entities_mutation_blocked(members)) {
+    return document_command_active_tool_entity_result();
+  }
+  SceneLayerState before = scene_.layer_state();
+  SceneLayerState after = before;
+  std::erase_if(after.assignments,
+                [layer_id](const SceneLayerAssignment &entry) {
+                  return entry.layer_id == layer_id;
+                });
+  if (before == after) {
+    return document_command_unchanged_result();
+  }
+  return execute_document_command(
+      history_, std::make_unique<SetSceneLayerStateCommand>(
+                    scene_, "Empty Layer", std::move(before),
+                    std::move(after)));
+}
+
+DocumentCommandResult
+DocumentCommandService::delete_layers(std::vector<SceneLayerId> layer_ids) {
+  std::sort(layer_ids.begin(), layer_ids.end());
+  layer_ids.erase(std::unique(layer_ids.begin(), layer_ids.end()),
+                  layer_ids.end());
+  if (layer_ids.empty()) {
+    return document_command_unchanged_result();
+  }
+  std::unordered_set<SceneLayerId> removed;
+  removed.reserve(layer_ids.size());
+  std::vector<EntityId> affected;
+  for (const SceneLayerId layer_id : layer_ids) {
+    if (scene_.layer(layer_id) == nullptr) {
+      return document_command_invalid_request_result("Layer does not exist");
+    }
+    removed.insert(layer_id);
+    const std::vector<EntityId> members = scene_.layer_members(layer_id);
+    affected.insert(affected.end(), members.begin(), members.end());
+  }
+  if (entities_mutation_blocked(affected)) {
+    return document_command_active_tool_entity_result();
+  }
+  SceneLayerState before = scene_.layer_state();
+  SceneLayerState after = before;
+  std::erase_if(after.layers, [&removed](const SceneLayerRecord &record) {
+    return removed.contains(record.id);
+  });
+  std::erase_if(after.assignments,
+                [&removed](const SceneLayerAssignment &entry) {
+                  return removed.contains(entry.layer_id);
+                });
+  return execute_document_command(
+      history_, std::make_unique<SetSceneLayerStateCommand>(
+                    scene_, layer_ids.size() == 1u ? "Delete Layer"
+                                                  : "Delete Layers",
+                    std::move(before), std::move(after)));
+}
+
 DocumentCommandResult DocumentCommandService::apply_scene_batch(
     std::string label, std::vector<DocumentSceneBatchOperation> operations) {
   if (label.empty()) {
@@ -945,6 +1263,13 @@ DocumentCommandResult DocumentCommandService::apply_scene_batch(
       }
       if (simulated_locked(entity)) {
         return true;
+      }
+      const SceneLayerId layer_id = scene_.entity_layer(entity);
+      if (layer_id != kInvalidSceneLayerId) {
+        const SceneLayerRecord *layer = scene_.layer(layer_id);
+        if (layer == nullptr || layer->locked) {
+          return true;
+        }
       }
       entity = simulated_parent(entity);
     }

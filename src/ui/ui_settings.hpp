@@ -50,6 +50,7 @@ public:
     bool outliner_visible_ = ui_panel_default_visible(UIPanelId::Outliner);
     bool inspector_visible_ = ui_panel_default_visible(UIPanelId::Inspector);
     bool console_visible_ = ui_panel_default_visible(UIPanelId::Console);
+    bool layers_visible_ = ui_panel_default_visible(UIPanelId::Layers);
     bool navigation_gizmo_visible_ = true;
 };
 

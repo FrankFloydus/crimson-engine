@@ -85,6 +85,13 @@ void QtViewportContextMenuPresenter::show(
   flatten_instance_action->setObjectName(QStringLiteral("flatten_instance"));
   flatten_instance_action->setEnabled(
       editor.modeling().can_flatten_instance());
+  QAction *remove_from_layer_action = menu.addAction(QString::fromStdString(
+      localization.text("ui.layers.remove_selection",
+                        "Remove Object from Layer")));
+  remove_from_layer_action->setObjectName(
+      QStringLiteral("scene.layers.remove_selection"));
+  remove_from_layer_action->setEnabled(
+      editor.layers().can_remove_selection_from_all_layers());
   menu.addSeparator();
 
   std::vector<std::pair<QAction *, const QuaderActionItem *>> menu_actions;
@@ -117,6 +124,19 @@ void QtViewportContextMenuPresenter::show(
 
   QAction *selected_action = menu.exec(global_point);
   if (selected_action == nullptr) {
+    return;
+  }
+  if (selected_action == remove_from_layer_action) {
+    const QuaderApiVoidResult result = editor.commands().execute(
+        quader_command::kSceneLayersRemoveSelection);
+    if (!result.ok()) {
+      LOG_ERROR("Layer command '{}' failed: {}",
+                quader_command::kSceneLayersRemoveSelection.string(),
+                result.error_message().empty() ? "Operation failed."
+                                               : result.error_message());
+    }
+    input_router.set_selection_mode(app_selection_mode_to_viewport(
+        to_modeling_selection_mode(editor.selection().summary().mode)));
     return;
   }
   if (selected_action == create_instance_action ||

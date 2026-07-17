@@ -618,6 +618,8 @@ void expect_same_api_status(const quader::QuaderApiVoidResult &actual,
   EXPECT_EQ(actual.revisions.project_revision,
             expected.revisions.project_revision);
   EXPECT_EQ(actual.revisions.scene_revision, expected.revisions.scene_revision);
+  EXPECT_EQ(actual.revisions.scene_layer_revision,
+            expected.revisions.scene_layer_revision);
   EXPECT_EQ(actual.revisions.asset_revision, expected.revisions.asset_revision);
   EXPECT_EQ(actual.revisions.modeling_content_revision,
             expected.revisions.modeling_content_revision);
@@ -9169,4 +9171,331 @@ TEST(EditorApiTests,
   ASSERT_TRUE(material_after.has_value());
   EXPECT_TRUE(material_after->has_material);
   EXPECT_EQ(material_after->material, material_before->material);
+}
+
+TEST(EditorApiLayerTests,
+     PublicFacetSnapshotsHistoryAndShortcutFreeRemovalCommandStayCoherent) {
+  CommandTestHarness harness;
+  quader::QuaderEditorApi &editor = harness.editor;
+  const auto group = editor.scene().create_entity(
+      quader::QuaderCreateEntityArgs{
+          .name = "Layer Group",
+          .kind = quader::QuaderEntityKind::Empty,
+      });
+  ASSERT_TRUE(group.ok()) << group.error_message();
+  const auto child = editor.scene().create_entity(
+      quader::QuaderCreateEntityArgs{
+          .name = "Layer Child",
+          .kind = quader::QuaderEntityKind::Mesh,
+          .parent = group.value.id,
+      });
+  ASSERT_TRUE(child.ok()) << child.error_message();
+  ASSERT_TRUE(editor.scene().select(group.value.id).ok());
+
+  const std::uint64_t initial_layer_revision =
+      editor.revisions().scene_layer_revision;
+  const auto first = editor.layers().create_from_selection();
+  ASSERT_TRUE(first.ok()) << first.error_message();
+  ASSERT_TRUE(first.changed());
+  EXPECT_GT(first.revisions.scene_layer_revision, initial_layer_revision);
+  EXPECT_EQ(first.value.name, "Layer");
+  EXPECT_EQ(first.value.members,
+            std::vector<quader::EntityId>(
+                {group.value.id, child.value.id}));
+  EXPECT_GT(editor.revisions().scene_layer_revision,
+            initial_layer_revision);
+  EXPECT_GT(editor.snapshot().revisions.scene_layer_revision,
+            initial_layer_revision);
+  EXPECT_EQ(editor.layers().revision(),
+            editor.revisions().scene_layer_revision);
+  ASSERT_EQ(editor.snapshot().layers.size(), 1u);
+  ASSERT_EQ(editor.api().layers().all().size(), 1u);
+  ASSERT_TRUE(editor.query().entity(child.value.id).has_value());
+  EXPECT_EQ(editor.query().entity(child.value.id)->layer_id,
+            first.value.id);
+
+  const auto second = editor.layers().create();
+  ASSERT_TRUE(second.ok()) << second.error_message();
+  EXPECT_EQ(second.value.name, "Layer_1");
+  ASSERT_TRUE(editor.layers().add_selection(second.value.id).ok());
+  EXPECT_EQ(editor.query().entity(group.value.id)->layer_id,
+            second.value.id);
+  EXPECT_EQ(editor.query().entity(child.value.id)->layer_id,
+            second.value.id);
+
+  const std::uint64_t stable_revision =
+      editor.revisions().scene_layer_revision;
+  const std::string stable_undo_label = editor.query().history().undo_label;
+  const bool stable_dirty = editor.project().dirty();
+  const quader::QuaderApiVoidResult unchanged =
+      editor.layers().add_selection(second.value.id);
+  EXPECT_TRUE(unchanged.ok());
+  EXPECT_FALSE(unchanged.changed());
+  EXPECT_EQ(editor.revisions().scene_layer_revision, stable_revision);
+  EXPECT_EQ(editor.query().history().undo_label, stable_undo_label);
+  EXPECT_EQ(editor.project().dirty(), stable_dirty);
+
+  const quader::QuaderApiVoidResult wrong_layer_removal =
+      editor.layers().remove_selection(first.value.id);
+  EXPECT_TRUE(wrong_layer_removal.ok());
+  EXPECT_FALSE(wrong_layer_removal.changed());
+  const quader::QuaderApiVoidResult layer_removal =
+      editor.layers().remove_selection(second.value.id);
+  ASSERT_TRUE(layer_removal.ok());
+  ASSERT_TRUE(layer_removal.changed());
+  EXPECT_EQ(editor.query().entity(group.value.id)->layer_id,
+            quader::kInvalidQuaderLayerId);
+  ASSERT_TRUE(editor.history().undo().ok());
+  EXPECT_EQ(editor.query().entity(group.value.id)->layer_id,
+            second.value.id);
+
+  const quader::QuaderApiVoidResult emptied =
+      editor.layers().empty(second.value.id);
+  ASSERT_TRUE(emptied.ok());
+  ASSERT_TRUE(emptied.changed());
+  EXPECT_TRUE(editor.query().entity(group.value.id).has_value());
+  EXPECT_TRUE(editor.query().entity(child.value.id).has_value());
+  EXPECT_EQ(editor.query().entity(group.value.id)->layer_id,
+            quader::kInvalidQuaderLayerId);
+  ASSERT_TRUE(editor.history().undo().ok());
+  EXPECT_EQ(editor.query().entity(group.value.id)->layer_id,
+            second.value.id);
+
+  const auto descriptor = editor.commands().descriptor(
+      quader::quader_command::kSceneLayersRemoveSelection);
+  ASSERT_TRUE(descriptor.has_value());
+  EXPECT_TRUE(descriptor->enabled);
+  EXPECT_TRUE(descriptor->shortcut.empty());
+  const quader::QuaderApiVoidResult removed = editor.commands().execute(
+      quader::quader_command::kSceneLayersRemoveSelection);
+  ASSERT_TRUE(removed.ok()) << removed.error_message();
+  ASSERT_TRUE(removed.changed());
+  EXPECT_EQ(editor.query().entity(group.value.id)->layer_id,
+            quader::kInvalidQuaderLayerId);
+  EXPECT_EQ(editor.query().entity(child.value.id)->layer_id,
+            quader::kInvalidQuaderLayerId);
+  ASSERT_TRUE(editor.history().undo().ok());
+  EXPECT_EQ(editor.query().entity(group.value.id)->layer_id,
+            second.value.id);
+
+  const std::array<quader::QuaderLayerId, 2> deleted = {
+      first.value.id,
+      second.value.id,
+  };
+  const quader::QuaderApiVoidResult destroyed =
+      editor.layers().destroy(deleted);
+  ASSERT_TRUE(destroyed.ok()) << destroyed.error_message();
+  ASSERT_TRUE(destroyed.changed());
+  EXPECT_TRUE(editor.layers().all().empty());
+  EXPECT_EQ(editor.query().history().undo_label, "Delete Layers");
+  ASSERT_TRUE(editor.history().undo().ok());
+  ASSERT_EQ(editor.layers().all().size(), 2u);
+  EXPECT_EQ(editor.query().entity(group.value.id)->layer_id,
+            second.value.id);
+  ASSERT_TRUE(editor.history().redo().ok());
+  EXPECT_TRUE(editor.layers().all().empty());
+  EXPECT_TRUE(editor.query().entity(group.value.id).has_value());
+  EXPECT_TRUE(editor.query().entity(child.value.id).has_value());
+}
+
+TEST(EditorApiLayerTests,
+     LayerMutationMarksCleanProjectDirtyAndUndoRestoresLayerState) {
+  CommandTestHarness harness;
+  quader::QuaderEditorApi &editor = harness.editor;
+  ASSERT_FALSE(editor.project().dirty());
+
+  const quader::QuaderApiResult<quader::QuaderLayerSnapshot> created =
+      editor.layers().create();
+  ASSERT_TRUE(created.ok()) << created.error_message();
+  ASSERT_TRUE(created.changed());
+  EXPECT_TRUE(editor.project().dirty());
+  ASSERT_TRUE(editor.history().undo().ok());
+  EXPECT_TRUE(editor.project().dirty());
+  EXPECT_TRUE(editor.layers().all().empty());
+}
+
+TEST(EditorApiLayerTests,
+     LayerLockSnapshotAndHistoryPreserveObjectLocalLockAndSelection) {
+  CommandTestHarness harness;
+  quader::QuaderEditorApi &editor = harness.editor;
+  const auto entity = editor.scene().create_entity(
+      quader::QuaderCreateEntityArgs{
+          .name = "Layer Lock Member",
+          .kind = quader::QuaderEntityKind::Mesh,
+      });
+  ASSERT_TRUE(entity.ok()) << entity.error_message();
+  ASSERT_TRUE(editor.scene().select(entity.value.id).ok());
+  const auto created = editor.layers().create_from_selection();
+  ASSERT_TRUE(created.ok()) << created.error_message();
+  ASSERT_TRUE(created.changed());
+  EXPECT_FALSE(created.value.locked);
+
+  const std::uint64_t revision_before = editor.layers().revision();
+  const quader::QuaderApiVoidResult locked =
+      editor.layers().set_locked(created.value.id, true);
+  ASSERT_TRUE(locked.ok()) << locked.error_message();
+  ASSERT_TRUE(locked.changed());
+  ASSERT_TRUE(editor.layers().layer(created.value.id).has_value());
+  EXPECT_TRUE(editor.layers().layer(created.value.id)->locked);
+  EXPECT_EQ(editor.layers().revision(), revision_before + 1u);
+  ASSERT_TRUE(editor.query().entity(entity.value.id).has_value());
+  EXPECT_FALSE(editor.query().entity(entity.value.id)->locked)
+      << "the layer mask must not rewrite the entity-local lock";
+  EXPECT_TRUE(selected_entities(editor).empty());
+  EXPECT_EQ(editor.query().history().undo_label, "Set Layer Lock");
+
+  const std::uint64_t stable_revision = editor.layers().revision();
+  const quader::QuaderApiVoidResult unchanged =
+      editor.layers().set_locked(created.value.id, true);
+  ASSERT_TRUE(unchanged.ok()) << unchanged.error_message();
+  EXPECT_FALSE(unchanged.changed());
+  EXPECT_EQ(editor.layers().revision(), stable_revision);
+  EXPECT_EQ(editor.query().history().undo_label, "Set Layer Lock");
+
+  ASSERT_TRUE(editor.history().undo().ok());
+  ASSERT_TRUE(editor.layers().layer(created.value.id).has_value());
+  EXPECT_FALSE(editor.layers().layer(created.value.id)->locked);
+  EXPECT_EQ(selected_entities(editor),
+            std::vector<quader::EntityId>{entity.value.id});
+  ASSERT_TRUE(editor.history().redo().ok());
+  EXPECT_TRUE(editor.layers().layer(created.value.id)->locked);
+  EXPECT_TRUE(selected_entities(editor).empty());
+
+  quader::QuaderTransform blocked_transform;
+  blocked_transform.position = {8.0f, 0.0f, 0.0f};
+  const quader::QuaderApiVoidResult batch_move =
+      editor.scene()
+          .batch("Move Layer-Locked Entity")
+          .set_transform(entity.value.id, blocked_transform)
+          .commit();
+  ASSERT_TRUE(batch_move.ok()) << batch_move.error_message();
+  EXPECT_FALSE(batch_move.changed());
+  ASSERT_TRUE(editor.query().entity(entity.value.id).has_value());
+  EXPECT_FLOAT_EQ(editor.query().entity(entity.value.id)->transform.position.x,
+                  0.0f);
+}
+
+TEST(EditorApiLayerTests,
+     LayerLockAndLockedAssignmentProjectRuntimeObjectSelection) {
+  CommandTestHarness harness;
+  quader::QuaderEditorApi &editor = harness.editor;
+  const quader::QuaderModelingObjectRef first =
+      create_selected_box(editor, "Layer-Locked Runtime Selection");
+  const auto layer = editor.layers().create_from_selection();
+  ASSERT_TRUE(layer.ok()) << layer.error_message();
+  ASSERT_TRUE(editor.modeling().selection_summary().has_selection);
+
+  const quader::QuaderApiVoidResult locked =
+      editor.layers().set_locked(layer.value().id, true);
+  ASSERT_TRUE(locked.ok()) << locked.error_message();
+  ASSERT_TRUE(locked.changed());
+  EXPECT_TRUE(selected_entities(editor).empty());
+  EXPECT_FALSE(editor.modeling().selection_summary().has_selection);
+
+  ASSERT_TRUE(editor.history().undo().ok());
+  quader::QuaderSelectionSummary summary =
+      editor.modeling().selection_summary();
+  EXPECT_TRUE(summary.has_selection);
+  EXPECT_EQ(summary.mode, quader::QuaderSelectionMode::Object);
+  EXPECT_EQ(summary.active_object_id, first.modeling_object_id);
+  ASSERT_TRUE(editor.history().redo().ok());
+  EXPECT_TRUE(selected_entities(editor).empty());
+  EXPECT_FALSE(editor.modeling().selection_summary().has_selection);
+
+  const quader::QuaderModelingObjectRef second =
+      create_selected_box(editor, "Assign Runtime Selection To Locked Layer");
+  ASSERT_TRUE(editor.modeling().selection_summary().has_selection);
+  const quader::QuaderApiVoidResult assigned =
+      editor.layers().add_selection(layer.value().id);
+  ASSERT_TRUE(assigned.ok()) << assigned.error_message();
+  ASSERT_TRUE(assigned.changed());
+  EXPECT_TRUE(selected_entities(editor).empty());
+  EXPECT_FALSE(editor.modeling().selection_summary().has_selection);
+
+  ASSERT_TRUE(editor.history().undo().ok());
+  summary = editor.modeling().selection_summary();
+  EXPECT_TRUE(summary.has_selection);
+  EXPECT_EQ(summary.mode, quader::QuaderSelectionMode::Object);
+  EXPECT_EQ(summary.active_object_id, second.modeling_object_id);
+  ASSERT_TRUE(editor.history().redo().ok());
+  EXPECT_TRUE(selected_entities(editor).empty());
+  EXPECT_FALSE(editor.modeling().selection_summary().has_selection);
+}
+
+TEST(EditorApiLayerTests,
+     ModelingDuplicateAndDeleteUndoPreserveLayerMembership) {
+  CommandTestHarness harness;
+  quader::QuaderEditorApi &editor = harness.editor;
+  const quader::QuaderModelingObjectRef source =
+      create_selected_box(editor, "Layered Modeling Source");
+  const auto layer = editor.layers().create_from_selection();
+  ASSERT_TRUE(layer.ok()) << layer.error_message();
+  ASSERT_EQ(editor.query().entity(source.entity)->layer_id, layer.value().id);
+
+  const quader::QuaderApiVoidResult duplicated = editor.commands().execute(
+      quader::quader_command::kDuplicateSelection);
+  ASSERT_TRUE(duplicated.ok()) << duplicated.error_message();
+  ASSERT_TRUE(duplicated.changed());
+  const std::vector<quader::EntityId> duplicate_selection =
+      selected_entities(editor);
+  ASSERT_EQ(duplicate_selection.size(), 1u);
+  const quader::EntityId duplicate = duplicate_selection.front();
+  ASSERT_NE(duplicate, source.entity);
+  ASSERT_TRUE(editor.query().entity(duplicate).has_value());
+  EXPECT_EQ(editor.query().entity(duplicate)->layer_id, layer.value().id);
+
+  const quader::QuaderApiVoidResult deleted = editor.commands().execute(
+      quader::quader_command::kDeleteSelection);
+  ASSERT_TRUE(deleted.ok()) << deleted.error_message();
+  ASSERT_TRUE(deleted.changed());
+  EXPECT_FALSE(editor.query().entity(duplicate).has_value());
+
+  ASSERT_TRUE(editor.history().undo().ok());
+  ASSERT_TRUE(editor.query().entity(duplicate).has_value());
+  EXPECT_EQ(editor.query().entity(duplicate)->layer_id, layer.value().id);
+  ASSERT_TRUE(editor.history().undo().ok());
+  EXPECT_FALSE(editor.query().entity(duplicate).has_value());
+  ASSERT_TRUE(editor.history().redo().ok());
+  ASSERT_TRUE(editor.query().entity(duplicate).has_value());
+  EXPECT_EQ(editor.query().entity(duplicate)->layer_id, layer.value().id);
+}
+
+TEST(EditorApiLayerTests,
+     LayerLockedAncestorBlocksBatchTransformForFutureUnassignedChild) {
+  CommandTestHarness harness;
+  quader::QuaderEditorApi &editor = harness.editor;
+  const auto group = editor.scene().create_entity(
+      quader::QuaderCreateEntityArgs{
+          .name = "Layer-Locked Group",
+          .kind = quader::QuaderEntityKind::Empty,
+      });
+  ASSERT_TRUE(group.ok()) << group.error_message();
+  ASSERT_TRUE(editor.scene().select(group.value.id).ok());
+  const auto layer = editor.layers().create_from_selection();
+  ASSERT_TRUE(layer.ok()) << layer.error_message();
+
+  const auto child = editor.scene().create_entity(
+      quader::QuaderCreateEntityArgs{
+          .name = "Future Unassigned Child",
+          .kind = quader::QuaderEntityKind::Mesh,
+          .parent = group.value.id,
+      });
+  ASSERT_TRUE(child.ok()) << child.error_message();
+  ASSERT_TRUE(editor.query().entity(child.value.id).has_value());
+  EXPECT_EQ(editor.query().entity(child.value.id)->layer_id,
+            quader::kInvalidQuaderLayerId);
+  ASSERT_TRUE(editor.layers().set_locked(layer.value.id, true).ok());
+
+  quader::QuaderTransform blocked_transform;
+  blocked_transform.position = {9.0f, 0.0f, 0.0f};
+  const quader::QuaderApiVoidResult batch_move =
+      editor.scene()
+          .batch("Move Child of Layer-Locked Group")
+          .set_transform(child.value.id, blocked_transform)
+          .commit();
+  ASSERT_TRUE(batch_move.ok()) << batch_move.error_message();
+  EXPECT_FALSE(batch_move.changed());
+  ASSERT_TRUE(editor.query().entity(child.value.id).has_value());
+  EXPECT_FLOAT_EQ(editor.query().entity(child.value.id)->transform.position.x,
+                  0.0f);
 }

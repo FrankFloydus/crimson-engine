@@ -250,7 +250,13 @@ QuaderSceneApi& QuaderEditorApi::scene() {
 }
 
 const QuaderSceneApi& QuaderEditorApi::scene() const {
-    return impl_->api.scene();
+  return impl_->api.scene();
+}
+
+QuaderLayersApi &QuaderEditorApi::layers() { return impl_->api.layers(); }
+
+const QuaderLayersApi &QuaderEditorApi::layers() const {
+  return impl_->api.layers();
 }
 
 QuaderModelingApi& QuaderEditorApi::modeling() {

@@ -229,6 +229,15 @@ TEST(LocalizationResourceTests, ShipsEnglishAndItalianCatalogs) {
     EXPECT_EQ(localization.text("ui.viewport.delete_popup.window_title", "Delete"), "Elimina");
     EXPECT_EQ(localization.text("ui.panel.tool_settings", "Tool Settings"),
               "Impostazioni strumento");
+    EXPECT_EQ(localization.text("ui.panel.layers", "Layers"), "Livelli");
+    EXPECT_EQ(localization.text("ui.layers.add_selection",
+                                "Add Selection to Layer"),
+              "Aggiungi selezione al livello");
+    EXPECT_EQ(localization.text("ui.layers.locked", "Locked"),
+              "Bloccato");
+    EXPECT_EQ(localization.text("ui.layers.lock_state_unlocked",
+                                "Layer unlocked"),
+              "Livello sbloccato");
     EXPECT_EQ(localization.text("viewport.tool.radial_array.label",
                                 "Radial Array"),
               "Serie radiale");

@@ -9,6 +9,7 @@
 #include "assets/texture_asset.hpp"
 #include "core/color_space.hpp"
 #include "editor/modeling/runtime/modeling_object_runtime_map.hpp"
+#include "editor/projection/picking_cache_projection.hpp"
 #include "editor/projection/selection_overlay_projection.hpp"
 #include "render/light_renderable_cache.hpp"
 #include "render/instance_batch_planner.hpp"
@@ -1137,7 +1138,186 @@ TEST(RenderOverlaySnapshotTests,
   const ViewportOverlayFrame frame =
       ViewportSceneOverlayBuilder::build_wireframe_frame(
           {}, ModelingSelectionMode::Object, wireframe_snapshot);
-  EXPECT_EQ(line_count_for(frame, ViewportOverlayLayer::WireframeXray), 7u);
+  EXPECT_EQ(line_count_for(frame, ViewportOverlayLayer::SelectedEdge), 3u);
+  EXPECT_EQ(line_count_for(frame, ViewportOverlayLayer::WireframeXray), 4u);
+  EXPECT_TRUE(std::all_of(
+      frame.lines.begin(), frame.lines.end(),
+      [&persistent_style](const ViewportOverlayLine &line) {
+        return line.layer != ViewportOverlayLayer::SelectedEdge ||
+               (line.color == persistent_style.selection_wire_color &&
+                line.width_pixels ==
+                    persistent_style.selection_edge_line_width_pixels &&
+                line.style_role ==
+                    ViewportOverlayStyleRole::SelectionWire);
+      }));
+}
+
+TEST(RenderOverlaySnapshotTests,
+     LayerVisibilityAndWireColorFlowThroughSceneExtraction) {
+  SceneDocument document;
+  AssetRegistry assets;
+  const AssetId mesh = assets.add_mesh(make_overlay_triangle_mesh());
+  const EntityId entity =
+      document.create_entity("Layered Mesh", EntityKind::Mesh);
+  ASSERT_TRUE(document.set_mesh(entity, MeshComponent{.mesh = mesh}));
+  const SceneLayerId layer =
+      document.create_layer("Orange", {1.0f, 0.25f, 0.0f});
+  ASSERT_NE(layer, kInvalidSceneLayerId);
+  ASSERT_TRUE(document.set_entity_layer(entity, layer));
+  const EntityId point_light =
+      document.create_entity("Layered Point Light", EntityKind::Light);
+  ASSERT_TRUE(document.set_light(
+      point_light, LightComponent{.type = LightType::Point}));
+  ASSERT_TRUE(document.set_entity_layer(point_light, layer));
+
+  constexpr int kModelingObjectId = 71;
+  ModelingObjectRuntimeMap object_map;
+  object_map.bind(kModelingObjectId, entity);
+  const std::vector<quader_editor_core::PolygonObject> modeling_objects{
+      quader_editor_core::PolygonObject{.id = kModelingObjectId},
+  };
+
+  constexpr std::uint32_t kLayerWireColor = rgba8(255, 64, 0, 230);
+  const ViewportPersistentOverlayStyleSnapshot style{
+      .selection_wire_color = rgba8(12, 34, 56, 255),
+      .selection_edge_line_width_pixels = 3.25f,
+      .wire_signature = 91u,
+  };
+  const RenderOverlaySceneWireframeSnapshot unselected_snapshot =
+      build_render_overlay_scene_wireframe_snapshot(document, assets, 1u,
+                                                    style);
+  ASSERT_EQ(unselected_snapshot.meshes.size(), 1u);
+  EXPECT_EQ(unselected_snapshot.meshes.front().wireframe_color,
+            kLayerWireColor);
+  const ViewportOverlayFrame unselected_frame =
+      ViewportSceneOverlayBuilder::build_wireframe_frame(
+          {}, ModelingSelectionMode::Object, unselected_snapshot);
+  EXPECT_EQ(line_count_for(unselected_frame,
+                           ViewportOverlayLayer::WireframeXray),
+            3u);
+  EXPECT_TRUE(std::all_of(
+      unselected_frame.lines.begin(), unselected_frame.lines.end(),
+      [](const ViewportOverlayLine &line) {
+        return line.layer != ViewportOverlayLayer::WireframeXray ||
+               line.color == kLayerWireColor;
+      }));
+
+  const RenderSceneSnapshot visible_scene =
+      build_render_scene_snapshot(document, assets);
+  EXPECT_TRUE(visible_scene.live_mesh_entities.contains(entity));
+  EXPECT_TRUE(visible_scene.live_light_entities.contains(point_light));
+  EXPECT_TRUE(entity_world_bounds(document, assets, entity).has_value());
+  EXPECT_EQ(build_render_overlay_selection_snapshot(document, assets)
+                .point_light_gizmos.size(),
+            1u);
+  const ModelingPickingProjection visible_picking =
+      PickingCacheProjection::scene_transformed_objects_for_picking(
+          modeling_objects, document, object_map, {},
+          ModelingSelectionMode::Object, {});
+  EXPECT_EQ(visible_picking.objects.size(), 1u);
+  ASSERT_TRUE(document.set_selected(entity, true));
+  const RenderOverlaySceneWireframeSnapshot selected_wire_snapshot =
+      build_render_overlay_scene_wireframe_snapshot(document, assets, 1u,
+                                                    style);
+  ASSERT_EQ(selected_wire_snapshot.meshes.size(), 1u);
+  EXPECT_TRUE(selected_wire_snapshot.meshes.front().selected);
+  EXPECT_EQ(selected_wire_snapshot.meshes.front().wireframe_color,
+            kLayerWireColor);
+  const ViewportOverlayFrame selected_wire_frame =
+      ViewportSceneOverlayBuilder::build_wireframe_frame(
+          {}, ModelingSelectionMode::Object, selected_wire_snapshot);
+  EXPECT_EQ(line_count_for(selected_wire_frame,
+                           ViewportOverlayLayer::SelectedEdge),
+            3u);
+  EXPECT_EQ(line_count_for(selected_wire_frame,
+                           ViewportOverlayLayer::WireframeXray),
+            0u);
+  EXPECT_TRUE(std::all_of(
+      selected_wire_frame.lines.begin(), selected_wire_frame.lines.end(),
+      [&style](const ViewportOverlayLine &line) {
+        return line.layer != ViewportOverlayLayer::SelectedEdge ||
+               (line.color == style.selection_wire_color &&
+                line.width_pixels ==
+                    style.selection_edge_line_width_pixels);
+      }));
+
+  const std::uint64_t visible_revision = document.visibility_revision();
+  ASSERT_TRUE(document.set_layer_visible(layer, false));
+  EXPECT_EQ(document.visibility_revision(), visible_revision + 1u);
+  ASSERT_NE(document.visibility(entity), nullptr);
+  EXPECT_TRUE(document.visibility(entity)->visible)
+      << "layer visibility must not overwrite object-local visibility";
+  EXPECT_FALSE(document.is_effectively_visible(entity));
+  ASSERT_NE(document.selection(entity), nullptr);
+  EXPECT_TRUE(document.selection(entity)->selected);
+  const RenderSceneSnapshot hidden_scene =
+      build_render_scene_snapshot(document, assets);
+  EXPECT_FALSE(hidden_scene.live_mesh_entities.contains(entity));
+  EXPECT_TRUE(hidden_scene.meshes.empty());
+  EXPECT_TRUE(hidden_scene.instance_primitives.empty());
+  EXPECT_TRUE(hidden_scene.lights.empty());
+  EXPECT_FALSE(hidden_scene.live_light_entities.contains(point_light));
+  EXPECT_FALSE(entity_world_bounds(document, assets, entity).has_value());
+  const RenderOverlaySelectionSnapshot hidden_selection_snapshot =
+      build_render_overlay_selection_snapshot(document, assets);
+  EXPECT_TRUE(hidden_selection_snapshot.selected_mesh_bounds.empty());
+  EXPECT_TRUE(hidden_selection_snapshot.point_light_gizmos.empty());
+  const ModelingPickingProjection hidden_picking =
+      PickingCacheProjection::scene_transformed_objects_for_picking(
+          modeling_objects, document, object_map, {},
+          ModelingSelectionMode::Object, {});
+  EXPECT_TRUE(hidden_picking.objects.empty());
+  EXPECT_TRUE(build_render_overlay_scene_wireframe_snapshot(document, assets,
+                                                            1u)
+                  .meshes.empty());
+  EXPECT_TRUE(build_render_overlay_selected_object_snapshot(document, assets,
+                                                            true)
+                  .meshes.empty());
+
+  ASSERT_TRUE(document.set_layer_visible(layer, true));
+  EXPECT_TRUE(document.is_effectively_visible(entity));
+  EXPECT_TRUE(document.visibility(entity)->visible);
+  const RenderSceneSnapshot restored_scene =
+      build_render_scene_snapshot(document, assets);
+  EXPECT_TRUE(restored_scene.live_mesh_entities.contains(entity));
+  EXPECT_TRUE(restored_scene.live_light_entities.contains(point_light));
+  EXPECT_TRUE(entity_world_bounds(document, assets, entity).has_value());
+  EXPECT_EQ(build_render_overlay_selection_snapshot(document, assets)
+                .selected_mesh_bounds.size(),
+            1u);
+  EXPECT_EQ(PickingCacheProjection::scene_transformed_objects_for_picking(
+                modeling_objects, document, object_map, {},
+                ModelingSelectionMode::Object, {})
+                .objects.size(),
+            1u);
+  const RenderOverlaySceneWireframeSnapshot restored_wire_snapshot =
+      build_render_overlay_scene_wireframe_snapshot(document, assets, 1u);
+  ASSERT_EQ(restored_wire_snapshot.meshes.size(), 1u);
+  EXPECT_EQ(restored_wire_snapshot.meshes.front().wireframe_color,
+            kLayerWireColor);
+
+  const std::uint64_t layer_revision = document.layer_revision();
+  ASSERT_TRUE(document.set_layer_locked(layer, true));
+  EXPECT_EQ(document.layer_revision(), layer_revision + 1u);
+  ASSERT_NE(document.lock(entity), nullptr);
+  EXPECT_FALSE(document.lock(entity)->locked)
+      << "layer locking must not rewrite the local lock component";
+  EXPECT_TRUE(document.is_effectively_locked(entity));
+  EXPECT_TRUE(build_render_scene_snapshot(document, assets)
+                  .live_mesh_entities.contains(entity))
+      << "locking affects interaction, not rendering";
+  EXPECT_TRUE(PickingCacheProjection::scene_transformed_objects_for_picking(
+                  modeling_objects, document, object_map, {},
+                  ModelingSelectionMode::Object, {})
+                  .objects.empty());
+
+  ASSERT_TRUE(document.set_layer_locked(layer, false));
+  EXPECT_FALSE(document.is_effectively_locked(entity));
+  EXPECT_EQ(PickingCacheProjection::scene_transformed_objects_for_picking(
+                modeling_objects, document, object_map, {},
+                ModelingSelectionMode::Object, {})
+                .objects.size(),
+            1u);
 }
 
 TEST(RenderOverlaySnapshotTests,
@@ -1214,6 +1394,49 @@ TEST(RenderOverlaySnapshotCacheTests,
   EXPECT_EQ(cache.stats().scene_wireframe_build_count, 2u);
   EXPECT_EQ(cache.stats().selection_build_count, 1u);
   EXPECT_EQ(cache.stats().selection_transform_refresh_count, 1u);
+}
+
+TEST(RenderOverlaySnapshotCacheTests,
+     LayerColorChangeRebuildsOnlyWireframeAndEquivalentColorIsStable) {
+  SceneDocument document;
+  AssetRegistry assets;
+  const AssetId mesh = assets.add_mesh(make_overlay_triangle_mesh());
+  const EntityId entity =
+      document.create_entity("Layer Color Cache Mesh", EntityKind::Mesh);
+  ASSERT_TRUE(document.set_mesh(entity, MeshComponent{.mesh = mesh}));
+  const SceneLayerId layer = document.create_layer("Cache Layer");
+  ASSERT_NE(layer, kInvalidSceneLayerId);
+  ASSERT_TRUE(document.set_entity_layer(entity, layer));
+
+  RenderOverlaySnapshotCache cache;
+  const RenderOverlayPersistentSnapshotUpdate initial =
+      cache.update_persistent(document, assets, true, 1u, {});
+  ASSERT_TRUE(initial.selected_object_changed);
+  ASSERT_TRUE(initial.scene_wireframe_changed);
+  EXPECT_EQ(cache.stats().selected_object_build_count, 1u);
+  EXPECT_EQ(cache.stats().scene_wireframe_build_count, 1u);
+
+  const QVec3 changed_color{0.125f, 0.5f, 1.0f};
+  ASSERT_TRUE(document.set_layer_wireframe_color(layer, changed_color));
+  const RenderOverlayPersistentSnapshotUpdate changed =
+      cache.update_persistent(document, assets, true, 1u, {});
+  EXPECT_FALSE(changed.selected_object_changed);
+  ASSERT_TRUE(changed.scene_wireframe_changed);
+  ASSERT_NE(changed.scene_wireframe, nullptr);
+  ASSERT_EQ(changed.scene_wireframe->meshes.size(), 1u);
+  EXPECT_EQ(changed.scene_wireframe->meshes.front().wireframe_color,
+            rgba8(32, 128, 255, 230));
+  EXPECT_EQ(cache.stats().selected_object_build_count, 1u);
+  EXPECT_EQ(cache.stats().scene_wireframe_build_count, 2u);
+
+  const std::uint64_t revision = document.revision();
+  ASSERT_TRUE(document.set_layer_wireframe_color(layer, changed_color));
+  EXPECT_EQ(document.revision(), revision);
+  const RenderOverlayPersistentSnapshotUpdate stable =
+      cache.update_persistent(document, assets, true, 1u, {});
+  EXPECT_FALSE(stable.changed());
+  EXPECT_EQ(cache.stats().selected_object_build_count, 1u);
+  EXPECT_EQ(cache.stats().scene_wireframe_build_count, 2u);
 }
 
 TEST(RenderOverlaySnapshotCacheTests,
@@ -3959,15 +4182,18 @@ TEST(RenderSceneWireframeBatchPlannerTests,
         .geometry_payload = payload,
         .geometry_content_id = mesh->geometry_content_id(),
         .selected = index == 0u,
+        .wireframe_color =
+            index >= 100u ? rgba8(255, 128, 0, 230)
+                          : kOverlayWireframeXrayColor,
         .vertices = payload->vertices,
         .indices = payload->indices,
     });
   }
   const SceneWireframeOverlayBatchPlan split =
       plan_scene_wireframe_overlay_batches(styled, 64u);
-  EXPECT_EQ(split.unique_geometry_style_count, 2u);
+  EXPECT_EQ(split.unique_geometry_style_count, 3u);
   EXPECT_EQ(split.batches.chunks.size(), 5u)
-      << "one selected style chunk plus four unselected chunks";
+      << "one selected chunk plus two chunks for each layer color";
 }
 
 TEST(RenderSceneWireframeBatchPlannerTests,
@@ -3991,6 +4217,10 @@ TEST(RenderSceneWireframeBatchPlannerTests,
       occurrence, InstanceOccurrenceComponent{.definition = definition}));
   document.set_transform(
       occurrence, TransformComponent{.position = {10.0f, 0.0f, 0.0f}});
+  const SceneLayerId layer =
+      document.create_layer("Instance Layer", {0.25f, 0.5f, 0.75f});
+  ASSERT_NE(layer, kInvalidSceneLayerId);
+  ASSERT_TRUE(document.set_entity_layer(occurrence, layer));
 
   const RenderOverlaySceneWireframeSnapshot snapshot =
       build_render_overlay_scene_wireframe_snapshot(document, assets, 1u);
@@ -3998,11 +4228,21 @@ TEST(RenderSceneWireframeBatchPlannerTests,
   EXPECT_EQ(snapshot.meshes.front().entity, occurrence);
   EXPECT_NE(snapshot.meshes.front().participant_token, 0u);
   EXPECT_FLOAT_EQ(snapshot.meshes.front().world_transform.values[12], 12.0f);
+  EXPECT_EQ(snapshot.meshes.front().wireframe_color,
+            rgba8(64, 128, 191, 230));
   const SceneWireframeOverlayBatchPlan plan =
       plan_scene_wireframe_overlay_batches(snapshot, 64u);
   EXPECT_EQ(plan.participant_count, 1u);
   EXPECT_EQ(plan.unique_geometry_style_count, 1u);
   ASSERT_EQ(plan.batches.chunks.size(), 1u);
+
+  ASSERT_TRUE(document.set_layer_visible(layer, false));
+  EXPECT_TRUE(build_render_overlay_scene_wireframe_snapshot(document, assets,
+                                                            1u)
+                  .meshes.empty());
+  EXPECT_TRUE(build_render_scene_snapshot(document, assets)
+                  .instance_primitives.empty());
+  EXPECT_FALSE(entity_world_bounds(document, assets, occurrence).has_value());
 }
 
 TEST(RenderSceneWireframeBatchPlannerTests,

@@ -10,6 +10,7 @@
 #include "editor/modeling/runtime/modeling_object_runtime_map.hpp"
 #include "math/glm_bridge.hpp"
 #include "scene/scene_document.hpp"
+#include "scene/scene_hierarchy_visibility.hpp"
 #include "scene/scene_transform.hpp"
 
 #include <algorithm>
@@ -67,26 +68,6 @@ void include_pick_bounds_point(quader_editor_core::PickObjectBounds &bounds,
   bounds.max.x = std::max(bounds.max.x, point.x);
   bounds.max.y = std::max(bounds.max.y, point.y);
   bounds.max.z = std::max(bounds.max.z, point.z);
-}
-
-bool hierarchy_flag_allows_member(const SceneDocument &scene, EntityId member,
-                                  EntityId definition, bool selectable) {
-  EntityId current = member;
-  while (current != kInvalidEntityId && current != definition) {
-    if (const VisibilityComponent *visibility = scene.visibility(current);
-        visibility != nullptr &&
-        (!visibility->visible || (selectable && !visibility->selectable))) {
-      return false;
-    }
-    if (selectable) {
-      if (const LockComponent *lock = scene.lock(current);
-          lock != nullptr && lock->locked) {
-        return false;
-      }
-    }
-    current = scene.parent(current);
-  }
-  return current == definition;
 }
 
 bool occurrence_is_pickable(const SceneDocument &scene, EntityId occurrence) {
@@ -172,7 +153,8 @@ PickingCacheProjection::scene_transformed_objects_for_picking(
     if (instance_edit_scope.active()) {
       if (!edit_scope_valid || !definition_member ||
           definition != instance_edit_scope.definition ||
-          !hierarchy_flag_allows_member(scene, *entity, definition, true)) {
+          !scene_hierarchy_segment_is_selectable(scene, *entity,
+                                                 definition)) {
         continue;
       }
       const std::optional<QMat4> world_from_object =
@@ -192,7 +174,7 @@ PickingCacheProjection::scene_transformed_objects_for_picking(
       // modes must not expose their canonical member topology outside edit.
       if (app_selection_mode != ModelingSelectionMode::Object ||
           !instance_participant_id ||
-          !hierarchy_flag_allows_member(scene, *entity, definition, false)) {
+          !scene_hierarchy_segment_is_visible(scene, *entity, definition)) {
         continue;
       }
       std::vector<EntityId> occurrences =
@@ -229,6 +211,7 @@ PickingCacheProjection::scene_transformed_objects_for_picking(
 
     const VisibilityComponent *visibility = scene.visibility(*entity);
     if (!scene.is_effectively_visible(*entity) ||
+        scene.is_effectively_locked(*entity) ||
         (visibility != nullptr && !visibility->selectable)) {
       continue;
     }

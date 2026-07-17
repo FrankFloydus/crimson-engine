@@ -133,7 +133,7 @@ std::uint32_t wire_color(
     const RenderOverlayMeshSnapshot &mesh,
     const ViewportPersistentOverlayStyleSnapshot &style) {
   return mesh.selected ? style.selection_wire_color
-                       : kOverlayWireframeXrayColor;
+                       : mesh.wireframe_color;
 }
 
 ViewportOverlayLayer wire_layer(const RenderOverlayMeshSnapshot &mesh) {
