@@ -636,7 +636,7 @@ void UISystem::install_runtime_hooks(
   viewport_panel_->attach_workspace(workspace);
   tool_settings_window_->bind(editor);
   settings_dialog_->set_context(
-      settings_, viewport_settings_, localization_,
+      settings_, viewport_settings_, localization_, editor.commands(),
       [this](QtSettingsChangeKind kind) {
         handle_settings_dialog_change(kind);
       });

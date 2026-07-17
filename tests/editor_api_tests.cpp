@@ -598,6 +598,29 @@ bool has_keybinding_when(const std::vector<quader::QuaderKeybindingRule> &rules,
                      });
 }
 
+const quader::QuaderKeybindingCatalogEntry *
+find_keybinding_catalog_entry(
+    const std::vector<quader::QuaderKeybindingCatalogEntry> &entries,
+    std::string_view target_id) {
+  const auto found =
+      std::find_if(entries.begin(), entries.end(), [&](const auto &entry) {
+        return std::find(entry.target_ids.begin(), entry.target_ids.end(),
+                         target_id) != entry.target_ids.end();
+      });
+  return found == entries.end() ? nullptr : &(*found);
+}
+
+bool has_keybinding_catalog_entry(
+    const std::vector<quader::QuaderKeybindingCatalogEntry> &entries,
+    std::string_view target_id, std::string_view shortcut) {
+  return std::any_of(entries.begin(), entries.end(), [&](const auto &entry) {
+    return std::find(entry.target_ids.begin(), entry.target_ids.end(),
+                     target_id) != entry.target_ids.end() &&
+           std::find(entry.shortcuts.begin(), entry.shortcuts.end(),
+                     shortcut) != entry.shortcuts.end();
+  });
+}
+
 quader::QuaderInputChord single_input_chord(std::string_view shortcut) {
   const std::optional<std::vector<quader::QuaderInputChord>> parsed =
       quader::quader_input_parse_shortcut(shortcut);
@@ -2583,7 +2606,10 @@ TEST(EditorApiTests, ViewportNavigationActionsUseMouseInputBindings) {
   action = quader::ViewportInputActionKind::None;
   ASSERT_TRUE(editor.commands().resolve_viewport_input_action(
       *quader::quader_input_parse_chord("MiddleMouse"), state, true, false,
-      action));
+      action, quader::QuaderViewportKeybindingContext{
+                  .navigation_active = true,
+                  .fly_navigation_active = true,
+              }));
   EXPECT_EQ(action, quader::ViewportInputActionKind::ResetFlySpeed);
 
   action = quader::ViewportInputActionKind::None;
@@ -2758,9 +2784,16 @@ TEST(EditorApiTests, ViewportHostShortcutCatalogDrivesCommandKeybindings) {
     const quader::QuaderViewportKeybindingDispatch escape_without_preview =
         editor.commands().dispatch_viewport_input_binding(escape->front(),
                                                           state, true, false);
-    ASSERT_EQ(escape_without_preview.kind,
+    EXPECT_EQ(escape_without_preview.kind,
+              quader::QuaderViewportKeybindingDispatch::Kind::NoMatch);
+    const quader::QuaderViewportKeybindingDispatch escape_with_drag =
+        editor.commands().dispatch_viewport_input_binding(
+            escape->front(), state, true, false,
+            quader::QuaderViewportKeybindingContext{
+                .active_transform_drag = true});
+    ASSERT_EQ(escape_with_drag.kind,
               quader::QuaderViewportKeybindingDispatch::Kind::ViewportShortcut);
-    EXPECT_EQ(escape_without_preview.shortcut.kind,
+    EXPECT_EQ(escape_with_drag.shortcut.kind,
               quader::ViewportShortcutKind::CancelActiveTool);
     const quader::QuaderViewportKeybindingDispatch escape_with_preview =
         editor.commands().dispatch_viewport_input_binding(
@@ -2805,6 +2838,9 @@ TEST(EditorApiTests, ViewportNavigationActionCatalogDrivesDefaultsAndResolution)
     if (descriptor.when.find("activeTool.radial_array") !=
         std::string_view::npos) {
       state.active_tool = quader::ViewportToolId::RadialArray;
+    }
+    if (descriptor.when.find("activeTool.cut") != std::string_view::npos) {
+      state.active_tool = quader::ViewportToolId::Cut;
     }
     EXPECT_TRUE(
         has_keybinding(rules, descriptor.target_id, descriptor.shortcut))
@@ -2923,6 +2959,7 @@ TEST(EditorApiTests, ViewportModalToolGesturesUseKeybindingTargets) {
       modal_context));
   EXPECT_EQ(action, quader::ViewportInputActionKind::ModalToolFinalize);
 
+  state.active_tool = quader::ViewportToolId::Cut;
   action = quader::ViewportInputActionKind::None;
   ASSERT_TRUE(editor.commands().resolve_viewport_input_action(
       *quader::quader_input_parse_chord("Enter"), state, true, false, action,
@@ -9171,6 +9208,286 @@ TEST(EditorApiTests,
   ASSERT_TRUE(material_after.has_value());
   EXPECT_TRUE(material_after->has_material);
   EXPECT_EQ(material_after->material, material_before->material);
+}
+
+TEST(EditorApiTests,
+     KeybindingCatalogCoversMappedUnmappedAndAlternateTargets) {
+  CommandTestHarness harness;
+  quader::QuaderEditorApi &editor = harness.editor;
+  ASSERT_TRUE(editor.commands()
+                  .set_keybinding_storage_path(
+                      keybinding_test_path("showcase-catalog"))
+                  .ok());
+
+  const std::vector<quader::QuaderCommandDescriptor> commands =
+      editor.commands().available();
+  const std::vector<quader::QuaderKeybindingRule> rules =
+      editor.commands().keybindings();
+  const std::vector<quader::QuaderKeybindingCatalogEntry> catalog =
+      editor.commands().keybinding_catalog();
+
+#ifndef NDEBUG
+  EXPECT_EQ(commands.size(), 134u);
+#else
+  EXPECT_EQ(commands.size(), 133u);
+#endif
+
+  std::unordered_set<std::string> expected_target_ids;
+  std::unordered_set<std::string> command_ids;
+  for (const quader::QuaderCommandDescriptor &command : commands) {
+    expected_target_ids.insert(command.id);
+    command_ids.insert(command.id);
+  }
+  for (const quader::QuaderKeybindingRule &rule : rules) {
+    expected_target_ids.insert(rule.target_id);
+  }
+
+  std::unordered_set<std::string> actual_target_ids;
+  std::unordered_set<std::string> actual_rows;
+  std::unordered_set<std::string> visible_label_contexts;
+  for (const quader::QuaderKeybindingCatalogEntry &entry : catalog) {
+    actual_target_ids.insert(entry.target_ids.begin(), entry.target_ids.end());
+    const std::string row_key = entry.action_id + "|" +
+                                std::to_string(static_cast<int>(entry.context));
+    EXPECT_TRUE(actual_rows.insert(row_key).second) << row_key;
+    const std::string label_context = entry.label + "|" +
+                                      std::to_string(
+                                          static_cast<int>(entry.context));
+    EXPECT_TRUE(visible_label_contexts.insert(label_context).second)
+        << label_context;
+    EXPECT_FALSE(entry.action_id.empty());
+    EXPECT_FALSE(entry.target_id.empty());
+    EXPECT_FALSE(entry.target_ids.empty());
+    EXPECT_FALSE(entry.label.empty()) << entry.target_id;
+    EXPECT_FALSE(entry.localization_key.empty()) << entry.target_id;
+    EXPECT_FALSE(entry.when.empty()) << entry.target_id;
+  }
+  EXPECT_EQ(actual_target_ids, expected_target_ids);
+  const std::size_t non_command_target_count =
+      static_cast<std::size_t>(std::count_if(
+          actual_target_ids.begin(), actual_target_ids.end(),
+          [&](const std::string &target_id) {
+            return !command_ids.contains(target_id);
+          }));
+  EXPECT_EQ(non_command_target_count, 40u);
+
+  for (const std::string &typed_id : typed_command_ids()) {
+    EXPECT_TRUE(actual_target_ids.contains(typed_id)) << typed_id;
+  }
+
+  EXPECT_TRUE(has_keybinding_catalog_entry(
+      catalog, quader::quader_command::kEditRedo.string(), "Ctrl+Y"));
+  EXPECT_TRUE(has_keybinding_catalog_entry(
+      catalog, quader::quader_command::kEditRedo.string(),
+      "Ctrl+Shift+Z"));
+  EXPECT_TRUE(has_keybinding_catalog_entry(
+      catalog, quader::quader_command::kDeleteSelection.string(), "Delete"));
+  EXPECT_TRUE(has_keybinding_catalog_entry(
+      catalog, quader::quader_command::kDeleteSelection.string(),
+      "Backspace"));
+
+  const std::string vertex_target =
+      editor.commands().keybinding_target_id_for_selection_mode(
+          quader::QuaderSelectionMode::Vertex);
+  EXPECT_TRUE(has_keybinding_catalog_entry(catalog, vertex_target, "1"));
+  EXPECT_TRUE(
+      has_keybinding_catalog_entry(catalog, vertex_target, "Keypad1"));
+  EXPECT_TRUE(has_keybinding_catalog_entry(
+      catalog, "viewport.modal_tool.finalize", "Space"));
+  EXPECT_TRUE(has_keybinding_catalog_entry(
+      catalog, "viewport.modal_tool.finalize", "Enter"));
+
+  EXPECT_EQ(std::count_if(catalog.begin(), catalog.end(), [](const auto &entry) {
+              return entry.label == "Radial Align";
+            }),
+            1);
+  const quader::QuaderKeybindingCatalogEntry *finalize_primitive =
+      find_keybinding_catalog_entry(
+          catalog,
+          quader::quader_command::kToolsApplyPrimitiveCreation.string());
+  const quader::QuaderKeybindingCatalogEntry *finalize_modal =
+      find_keybinding_catalog_entry(catalog,
+                                    "viewport.modal_tool.finalize");
+  ASSERT_NE(finalize_primitive, nullptr);
+  ASSERT_NE(finalize_modal, nullptr);
+  EXPECT_EQ(finalize_primitive, finalize_modal);
+  EXPECT_EQ(finalize_primitive->action_id, "tools.finalize");
+  EXPECT_EQ(finalize_primitive->label, "Finalize Tool");
+  EXPECT_EQ(finalize_primitive->context,
+            quader::QuaderKeybindingContextKind::ModalTool);
+  EXPECT_EQ(finalize_primitive->shortcut, "Enter / Space");
+
+  const quader::QuaderKeybindingCatalogEntry *cancel_primitive =
+      find_keybinding_catalog_entry(
+          catalog,
+          quader::quader_command::kToolsCancelPrimitiveCreation.string());
+  const quader::QuaderKeybindingCatalogEntry *cancel_active =
+      find_keybinding_catalog_entry(catalog, "viewport.cancel_active_tool");
+  ASSERT_NE(cancel_primitive, nullptr);
+  ASSERT_NE(cancel_active, nullptr);
+  EXPECT_EQ(cancel_primitive, cancel_active);
+  EXPECT_EQ(cancel_primitive->action_id, "tools.cancel");
+  EXPECT_EQ(cancel_primitive->label, "Cancel Tool");
+  EXPECT_EQ(cancel_primitive->context,
+            quader::QuaderKeybindingContextKind::ModalTool);
+  EXPECT_EQ(cancel_primitive->shortcut, "Escape");
+  EXPECT_NE(cancel_primitive->when.find("transformDrag.active"),
+            std::string::npos);
+
+  const quader::QuaderKeybindingCatalogEntry *radial_align =
+      find_keybinding_catalog_entry(
+          catalog,
+          editor.commands().command_id_for_modeling_action("radial_align"));
+  ASSERT_NE(radial_align, nullptr);
+  EXPECT_EQ(radial_align->context,
+            quader::QuaderKeybindingContextKind::Viewport);
+
+  const quader::QuaderKeybindingCatalogEntry *reset_fly_speed =
+      find_keybinding_catalog_entry(
+          catalog, "viewport.navigation.reset_fly_speed");
+  ASSERT_NE(reset_fly_speed, nullptr);
+  EXPECT_EQ(reset_fly_speed->context,
+            quader::QuaderKeybindingContextKind::FlyNavigation);
+  EXPECT_NE(reset_fly_speed->when.find("navigation.flyActive"),
+            std::string::npos);
+
+  const quader::QuaderKeybindingCatalogEntry *cycle_cut_keep_mode =
+      find_keybinding_catalog_entry(catalog,
+                                    "viewport.modal_tool.mode_cycle");
+  ASSERT_NE(cycle_cut_keep_mode, nullptr);
+  EXPECT_EQ(cycle_cut_keep_mode->label, "Cycle Cut Keep Mode");
+  EXPECT_EQ(cycle_cut_keep_mode->context,
+            quader::QuaderKeybindingContextKind::ModalTool);
+  EXPECT_NE(cycle_cut_keep_mode->when.find("activeTool.cut"),
+            std::string::npos);
+
+  const quader::QuaderKeybindingCatalogEntry *interpolated_bridge_edges =
+      find_keybinding_catalog_entry(
+          catalog,
+          editor.commands().command_id_for_modeling_action(
+              "interpolated_bridge_edges"));
+  const quader::QuaderKeybindingCatalogEntry *interpolated_bridge_faces =
+      find_keybinding_catalog_entry(
+          catalog,
+          editor.commands().command_id_for_modeling_action(
+              "interpolated_bridge_faces"));
+  ASSERT_NE(interpolated_bridge_edges, nullptr);
+  ASSERT_NE(interpolated_bridge_faces, nullptr);
+  EXPECT_EQ(interpolated_bridge_edges, interpolated_bridge_faces);
+  EXPECT_EQ(interpolated_bridge_edges->action_id,
+            "modeling.preview.interpolated_bridge");
+
+  const quader::QuaderKeybindingCatalogEntry *spawn_viewport_window =
+      find_keybinding_catalog_entry(
+          catalog, quader::quader_command::kViewportSpawnWindow.string());
+  ASSERT_NE(spawn_viewport_window, nullptr);
+  EXPECT_EQ(spawn_viewport_window->context,
+            quader::QuaderKeybindingContextKind::Global);
+
+  const quader::QuaderKeybindingCatalogEntry *fly =
+      find_keybinding_catalog_entry(catalog, "viewport.navigation.fly");
+  const quader::QuaderKeybindingCatalogEntry *zoom =
+      find_keybinding_catalog_entry(catalog, "viewport.navigation.zoom");
+  const quader::QuaderKeybindingCatalogEntry *zoom_to_cursor =
+      find_keybinding_catalog_entry(
+          catalog, "viewport.navigation.zoom_to_cursor");
+  ASSERT_NE(fly, nullptr);
+  ASSERT_NE(zoom, nullptr);
+  ASSERT_NE(zoom_to_cursor, nullptr);
+  EXPECT_EQ(fly->label, "Fly / Orthographic Pan");
+  EXPECT_EQ(zoom->label, "Zoom / Adjust Fly Speed");
+  EXPECT_EQ(zoom_to_cursor->label,
+            "Zoom to Cursor / Adjust Fly Speed");
+
+  const quader::QuaderKeybindingCatalogEntry *orbit =
+      find_keybinding_catalog_entry(catalog, "viewport.navigation.orbit");
+  ASSERT_NE(orbit, nullptr);
+  EXPECT_EQ(orbit->shortcut, "MiddleMouseDrag");
+
+  const quader::QuaderKeybindingCatalogEntry *create_instance =
+      find_keybinding_catalog_entry(
+          catalog, quader::quader_command::kEditCreateInstance.string());
+  ASSERT_NE(create_instance, nullptr);
+  EXPECT_TRUE(create_instance->shortcut.empty());
+  EXPECT_EQ(create_instance->when, "!textInputActive");
+  const auto create_instance_command =
+      std::find_if(commands.begin(), commands.end(), [](const auto &command) {
+        return command.id ==
+               quader::quader_command::kEditCreateInstance.string();
+      });
+  ASSERT_NE(create_instance_command, commands.end());
+  EXPECT_FALSE(create_instance_command->enabled);
+}
+
+TEST(EditorApiTests,
+     KeybindingCatalogKeepsContextForRemovedTargetsAndShowsOverrides) {
+  CommandTestHarness harness;
+  quader::QuaderEditorApi &editor = harness.editor;
+  ASSERT_TRUE(editor.commands()
+                  .set_keybinding_storage_path(
+                      keybinding_test_path("showcase-effective"))
+                  .ok());
+
+  const std::vector<quader::QuaderKeybindingCatalogEntry> before =
+      editor.commands().keybinding_catalog();
+  const quader::QuaderKeybindingCatalogEntry *before_undo =
+      find_keybinding_catalog_entry(
+          before, quader::quader_command::kEditUndo.string());
+  const quader::QuaderKeybindingCatalogEntry *before_orbit =
+      find_keybinding_catalog_entry(before, "viewport.navigation.orbit");
+  ASSERT_NE(before_undo, nullptr);
+  ASSERT_NE(before_orbit, nullptr);
+  const auto undo_context = before_undo->context;
+  const auto orbit_context = before_orbit->context;
+  const std::string undo_when = before_undo->when;
+  const std::string orbit_when = before_orbit->when;
+
+  ASSERT_TRUE(editor.preferences()
+                  .remove_shortcut(quader::quader_command::kEditUndo)
+                  .ok());
+  ASSERT_TRUE(editor.preferences()
+                  .remove_shortcut("viewport.navigation.orbit")
+                  .ok());
+  const std::vector<quader::QuaderKeybindingCatalogEntry> removed =
+      editor.commands().keybinding_catalog();
+  const quader::QuaderKeybindingCatalogEntry *removed_undo =
+      find_keybinding_catalog_entry(
+          removed, quader::quader_command::kEditUndo.string());
+  const quader::QuaderKeybindingCatalogEntry *removed_orbit =
+      find_keybinding_catalog_entry(removed, "viewport.navigation.orbit");
+  ASSERT_NE(removed_undo, nullptr);
+  ASSERT_NE(removed_orbit, nullptr);
+  EXPECT_TRUE(removed_undo->shortcut.empty());
+  EXPECT_TRUE(removed_orbit->shortcut.empty());
+  EXPECT_EQ(removed_undo->context, undo_context);
+  EXPECT_EQ(removed_orbit->context, orbit_context);
+  EXPECT_EQ(removed_undo->when, undo_when);
+  EXPECT_EQ(removed_orbit->when, orbit_when);
+
+  ASSERT_TRUE(editor.preferences()
+                  .set_shortcut(quader::quader_command::kEditUndo,
+                                "Ctrl+Alt+Z")
+                  .ok());
+  ASSERT_TRUE(editor.preferences()
+                  .set_shortcut("viewport.navigation.orbit",
+                                "Alt+LeftMouseDrag")
+                  .ok());
+  const std::vector<quader::QuaderKeybindingCatalogEntry> overridden =
+      editor.commands().keybinding_catalog();
+  const quader::QuaderKeybindingCatalogEntry *overridden_undo =
+      find_keybinding_catalog_entry(
+          overridden, quader::quader_command::kEditUndo.string());
+  const quader::QuaderKeybindingCatalogEntry *overridden_orbit =
+      find_keybinding_catalog_entry(overridden,
+                                    "viewport.navigation.orbit");
+  ASSERT_NE(overridden_undo, nullptr);
+  ASSERT_NE(overridden_orbit, nullptr);
+  EXPECT_EQ(overridden_undo->shortcut, "Ctrl+Alt+Z");
+  EXPECT_EQ(overridden_orbit->shortcut, "Alt+LeftMouseDrag");
+  EXPECT_EQ(overridden_undo->context, undo_context);
+  EXPECT_EQ(overridden_orbit->context, orbit_context);
+  EXPECT_EQ(overridden_undo->when, undo_when);
+  EXPECT_EQ(overridden_orbit->when, orbit_when);
 }
 
 TEST(EditorApiLayerTests,

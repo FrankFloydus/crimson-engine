@@ -336,6 +336,14 @@ const CommandTool *find_modeling_command_tool(std::string_view id) {
   return found == tools.end() ? nullptr : *found;
 }
 
+std::string modeling_command_tool_localization_key(std::string_view id) {
+  if (quader_host_contract::find_action_descriptor(id) != nullptr ||
+      id == "copy_pivot_from_active" || id == "duplicate_meshes") {
+    return "modeling.action." + std::string(id) + ".label";
+  }
+  return {};
+}
+
 const InstantCommandTool *
 find_modeling_instant_command_tool(ModelingInstantOperationId operation) {
   const std::span<const InstantCommandTool *const> tools =

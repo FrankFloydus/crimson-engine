@@ -854,6 +854,79 @@ TEST(UiLayoutGuardrailTests,
 }
 
 TEST(UiLayoutGuardrailTests,
+     SettingsKeybindingShowcaseUsesPublicCatalogOffTheFrameLoop) {
+  const std::string dialog_header =
+      read_source_file("src/ui/qt_settings_dialog.hpp");
+  const std::string dialog =
+      read_source_file("src/ui/qt_settings_dialog.cpp");
+  const std::string ui_system = read_source_file("src/ui/ui_system.cpp");
+
+  expect_contains(dialog_header, "class QuaderCommandsApi;");
+  expect_contains(dialog_header, "const QuaderCommandsApi &commands");
+  expect_contains(dialog,
+                  "#include \"api/quader_commands_api.hpp\"");
+  expect_contains(dialog, "QStringLiteral(\"keybindings\")");
+  expect_contains(dialog, "QStringLiteral(\"settingsKeybindingsTable\")");
+  expect_contains(dialog, "QStringLiteral(\"settingsKeybindingsSearch\")");
+  expect_contains(
+      dialog, "QStringLiteral(\"settingsKeybindingsShortcutFilter\")");
+  expect_contains(
+      dialog, "QStringLiteral(\"settingsKeybindingsShortcutClear\")");
+  expect_contains(dialog, "new QTableView(page)");
+  expect_contains(dialog, "setAlternatingRowColors(true)");
+  expect_contains(dialog,
+                  "setEditTriggers(QAbstractItemView::NoEditTriggers)");
+  expect_contains(dialog,
+                  "setSelectionBehavior(QAbstractItemView::SelectRows)");
+  expect_contains(dialog,
+                  "setSelectionMode(QAbstractItemView::SingleSelection)");
+  expect_contains(dialog, "setDefaultSectionSize(20)");
+  expect_contains(dialog,
+                  "header->setSectionResizeMode(QHeaderView::Interactive)");
+  expect_contains(dialog, "header->setStretchLastSection(true)");
+  expect_contains(dialog, "keybindings_table->setSortingEnabled(true)");
+  expect_contains(dialog, "Qt::AscendingOrder");
+  expect_contains(dialog, "apply_keybinding_filters()");
+  expect_contains(dialog, "quader_pressed_input_chord_from_qt_event");
+  expect_contains(dialog, "commands->format_input_mapping(chord)");
+  expect_contains(dialog, "commands->keybinding_catalog()");
+  expect_contains(dialog, "entry.localization_key");
+  expect_contains(dialog, "entry.shortcut");
+  expect_contains(dialog, "std::stable_sort(");
+  expect_contains(dialog, "column_text(left, column)");
+  expect_contains(dialog, "Qt::CaseInsensitive");
+
+  for (std::string_view forbidden : {
+           "editor/input/quader_keybinding_service.hpp",
+           "editor/metadata/host_contract.hpp",
+           "viewport/host_viewport_contract_adapter.hpp",
+           "QShortcut",
+           "QKeySequence",
+           "commands().available()",
+           "commands().keybindings()",
+           "set_shortcut(",
+           "remove_shortcut(",
+           "reset_shortcut(",
+       }) {
+    expect_missing(dialog, forbidden);
+    expect_missing(dialog_header, forbidden);
+  }
+
+  const std::size_t frame_refresh =
+      ui_system.find("void UISystem::refresh(");
+  const std::size_t frame_refresh_end = ui_system.find(
+      "void UISystem::process_viewport_input(", frame_refresh);
+  ASSERT_NE(frame_refresh, std::string::npos);
+  ASSERT_NE(frame_refresh_end, std::string::npos);
+  const std::string frame_body =
+      ui_system.substr(frame_refresh, frame_refresh_end - frame_refresh);
+  expect_missing(frame_body, "keybinding_catalog()");
+  expect_missing(frame_body, "commands().available()");
+  expect_missing(frame_body, "commands().keybindings()");
+  expect_missing(frame_body, "settings_dialog_->refresh()");
+}
+
+TEST(UiLayoutGuardrailTests,
      SettingsPersistenceAndRetainedSynchronizationAreEventDriven) {
   const std::string dialog_header =
       read_source_file("src/ui/qt_settings_dialog.hpp");

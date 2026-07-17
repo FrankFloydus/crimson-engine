@@ -53,6 +53,7 @@ struct ViewportInputFrame {
   bool pan_navigation_active = false;
   bool modal_tool_active = false;
   bool active_tool_owns_viewport = false;
+  bool active_transform_drag = false;
   bool operation_preview_active = false;
   bool modal_tool_finalize_pressed = false;
   bool modal_tool_mode_cycle_pressed = false;

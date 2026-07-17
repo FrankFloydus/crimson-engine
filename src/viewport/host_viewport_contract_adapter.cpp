@@ -215,32 +215,52 @@ viewport_input_action_binding_catalog() {
   return {
       {
           .target_id = viewport_input_action_target_id("navigation.orbit"),
+          .label = "Orbit View",
+          .localization_key =
+              "keybindings.target.viewport.navigation.orbit.label",
           .shortcut = "MiddleMouseDrag",
           .action = ViewportInputActionKind::Orbit,
       },
       {
           .target_id = viewport_input_action_target_id("navigation.orbit_snap"),
+          .label = "Orbit View with Snap",
+          .localization_key =
+              "keybindings.target.viewport.navigation.orbit_snap.label",
           .shortcut = "Alt+MiddleMouseDrag",
           .action = ViewportInputActionKind::OrbitSnap,
       },
       {
           .target_id = viewport_input_action_target_id("navigation.pan"),
+          .label = "Pan View",
+          .localization_key =
+              "keybindings.target.viewport.navigation.pan.label",
           .shortcut = "Shift+MiddleMouseDrag",
           .action = ViewportInputActionKind::Pan,
       },
       {
           .target_id = viewport_input_action_target_id("navigation.fly"),
+          .label = "Fly / Orthographic Pan",
+          .localization_key =
+              "keybindings.target.viewport.navigation.fly.label",
           .shortcut = "RightMouseDrag",
           .action = ViewportInputActionKind::Fly,
       },
       {
           .target_id =
               viewport_input_action_target_id("navigation.reset_fly_speed"),
+          .label = "Reset Fly Speed",
+          .localization_key =
+              "keybindings.target.viewport.navigation.reset_fly_speed.label",
+          .context = ViewportInputBindingContext::FlyNavigation,
           .shortcut = "MiddleMouse",
+          .when = "viewportFocus && !textInputActive && navigation.flyActive",
           .action = ViewportInputActionKind::ResetFlySpeed,
       },
       {
           .target_id = viewport_input_action_target_id("navigation.cancel"),
+          .label = "Cancel Navigation",
+          .localization_key =
+              "keybindings.target.viewport.navigation.cancel.label",
           .shortcut = "Escape",
           .when = "viewportFocus && !textInputActive && navigation.active",
           .weight = 30,
@@ -248,18 +268,28 @@ viewport_input_action_binding_catalog() {
       },
       {
           .target_id = viewport_input_action_target_id("navigation.zoom"),
+          .label = "Zoom / Adjust Fly Speed",
+          .localization_key =
+              "keybindings.target.viewport.navigation.zoom.label",
           .shortcut = "Wheel",
           .action = ViewportInputActionKind::Zoom,
       },
       {
           .target_id =
               viewport_input_action_target_id("navigation.zoom_to_cursor"),
+          .label = "Zoom to Cursor / Adjust Fly Speed",
+          .localization_key =
+              "keybindings.target.viewport.navigation.zoom_to_cursor.label",
           .shortcut = "Ctrl+Wheel",
           .action = ViewportInputActionKind::ZoomToCursor,
       },
       {
           .target_id =
               viewport_input_action_target_id("navigation.fly_forward"),
+          .label = "Fly Forward",
+          .localization_key =
+              "keybindings.target.viewport.navigation.fly_forward.label",
+          .context = ViewportInputBindingContext::FlyNavigation,
           .shortcut = "W",
           .when = "viewportFocus && !textInputActive && navigation.flyActive",
           .action = ViewportInputActionKind::FlyForward,
@@ -267,24 +297,41 @@ viewport_input_action_binding_catalog() {
       {
           .target_id =
               viewport_input_action_target_id("navigation.fly_backward"),
+          .label = "Fly Backward",
+          .localization_key =
+              "keybindings.target.viewport.navigation.fly_backward.label",
+          .context = ViewportInputBindingContext::FlyNavigation,
           .shortcut = "S",
           .when = "viewportFocus && !textInputActive && navigation.flyActive",
           .action = ViewportInputActionKind::FlyBackward,
       },
       {
           .target_id = viewport_input_action_target_id("navigation.fly_right"),
+          .label = "Fly Right",
+          .localization_key =
+              "keybindings.target.viewport.navigation.fly_right.label",
+          .context = ViewportInputBindingContext::FlyNavigation,
           .shortcut = "D",
           .when = "viewportFocus && !textInputActive && navigation.flyActive",
           .action = ViewportInputActionKind::FlyRight,
       },
       {
           .target_id = viewport_input_action_target_id("navigation.fly_left"),
+          .label = "Fly Left",
+          .localization_key =
+              "keybindings.target.viewport.navigation.fly_left.label",
+          .context = ViewportInputBindingContext::FlyNavigation,
           .shortcut = "A",
           .when = "viewportFocus && !textInputActive && navigation.flyActive",
           .action = ViewportInputActionKind::FlyLeft,
       },
       {
           .target_id = viewport_input_action_target_id("modal_tool.finalize"),
+          .action_id = "tools.finalize",
+          .label = "Finalize Tool",
+          .localization_key =
+              "keybindings.action.tools.finalize.label",
+          .context = ViewportInputBindingContext::ModalTool,
           .shortcut = "Space",
           .when = "viewportFocus && !textInputActive && "
                   "(modalTool.active || activeTool.ownsViewport) && "
@@ -294,6 +341,11 @@ viewport_input_action_binding_catalog() {
       },
       {
           .target_id = viewport_input_action_target_id("modal_tool.finalize"),
+          .action_id = "tools.finalize",
+          .label = "Finalize Tool",
+          .localization_key =
+              "keybindings.action.tools.finalize.label",
+          .context = ViewportInputBindingContext::ModalTool,
           .shortcut = "Enter",
           .when = "viewportFocus && !textInputActive && "
                   "(modalTool.active || activeTool.ownsViewport) && "
@@ -303,14 +355,22 @@ viewport_input_action_binding_catalog() {
       },
       {
           .target_id = viewport_input_action_target_id("modal_tool.mode_cycle"),
+          .label = "Cycle Cut Keep Mode",
+          .localization_key =
+              "keybindings.target.viewport.modal_tool.mode_cycle.label",
+          .context = ViewportInputBindingContext::ModalTool,
           .shortcut = "F",
-          .when = "viewportFocus && !textInputActive && modalTool.active && "
+          .when = "viewportFocus && !textInputActive && activeTool.cut && "
                   "!navigation.active",
           .weight = 30,
           .action = ViewportInputActionKind::ModalToolModeCycle,
       },
       {
           .target_id = viewport_input_action_target_id("quick_pivot"),
+          .label = "Quick Pivot",
+          .localization_key =
+              "keybindings.target.viewport.quick_pivot.label",
+          .context = ViewportInputBindingContext::Viewport,
           .shortcut = "D",
           .when = "viewportFocus && !textInputActive && !navigation.active && "
                   "!modalTool.active && !activeTool.ownsViewport",
@@ -320,6 +380,10 @@ viewport_input_action_binding_catalog() {
       {
           .target_id =
               viewport_input_action_target_id("linear_array.constraint_x"),
+          .label = "Linear Array X Constraint",
+          .localization_key =
+              "keybindings.target.viewport.linear_array.constraint_x.label",
+          .context = ViewportInputBindingContext::LinearArrayTool,
           .shortcut = "X",
           .when = "viewportFocus && !textInputActive && !navigation.active && "
                   "activeTool.linear_array",
@@ -329,6 +393,10 @@ viewport_input_action_binding_catalog() {
       {
           .target_id =
               viewport_input_action_target_id("linear_array.constraint_y"),
+          .label = "Linear Array Y Constraint",
+          .localization_key =
+              "keybindings.target.viewport.linear_array.constraint_y.label",
+          .context = ViewportInputBindingContext::LinearArrayTool,
           .shortcut = "Y",
           .when = "viewportFocus && !textInputActive && !navigation.active && "
                   "activeTool.linear_array",
@@ -338,6 +406,10 @@ viewport_input_action_binding_catalog() {
       {
           .target_id =
               viewport_input_action_target_id("linear_array.constraint_z"),
+          .label = "Linear Array Z Constraint",
+          .localization_key =
+              "keybindings.target.viewport.linear_array.constraint_z.label",
+          .context = ViewportInputBindingContext::LinearArrayTool,
           .shortcut = "Z",
           .when = "viewportFocus && !textInputActive && !navigation.active && "
                   "activeTool.linear_array",
@@ -347,6 +419,10 @@ viewport_input_action_binding_catalog() {
       {
           .target_id = viewport_input_action_target_id(
               "linear_array.increase_copies"),
+          .label = "Increase Linear Array Copies",
+          .localization_key = "keybindings.target.viewport.linear_array."
+                              "increase_copies.label",
+          .context = ViewportInputBindingContext::LinearArrayTool,
           .shortcut = "Shift+WheelUp",
           .when = "viewportFocus && !textInputActive && !navigation.active && "
                   "activeTool.linear_array",
@@ -356,6 +432,10 @@ viewport_input_action_binding_catalog() {
       {
           .target_id = viewport_input_action_target_id(
               "linear_array.decrease_copies"),
+          .label = "Decrease Linear Array Copies",
+          .localization_key = "keybindings.target.viewport.linear_array."
+                              "decrease_copies.label",
+          .context = ViewportInputBindingContext::LinearArrayTool,
           .shortcut = "Shift+WheelDown",
           .when = "viewportFocus && !textInputActive && !navigation.active && "
                   "activeTool.linear_array",
@@ -365,6 +445,10 @@ viewport_input_action_binding_catalog() {
       {
           .target_id = viewport_input_action_target_id(
               "radial_array.increase_copies"),
+          .label = "Increase Radial Array Copies",
+          .localization_key = "keybindings.target.viewport.radial_array."
+                              "increase_copies.label",
+          .context = ViewportInputBindingContext::RadialArrayTool,
           .shortcut = "Shift+WheelUp",
           .when = "viewportFocus && !textInputActive && !navigation.active && "
                   "activeTool.radial_array",
@@ -374,6 +458,10 @@ viewport_input_action_binding_catalog() {
       {
           .target_id = viewport_input_action_target_id(
               "radial_array.decrease_copies"),
+          .label = "Decrease Radial Array Copies",
+          .localization_key = "keybindings.target.viewport.radial_array."
+                              "decrease_copies.label",
+          .context = ViewportInputBindingContext::RadialArrayTool,
           .shortcut = "Shift+WheelDown",
           .when = "viewportFocus && !textInputActive && !navigation.active && "
                   "activeTool.radial_array",

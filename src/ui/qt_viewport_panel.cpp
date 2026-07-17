@@ -474,6 +474,7 @@ keybinding_context(const ViewportInputFrame &input) {
       .pan_navigation_active = input.pan_navigation_active,
       .modal_tool_active = input.modal_tool_active,
       .active_tool_owns_viewport = input.active_tool_owns_viewport,
+      .active_transform_drag = input.active_transform_drag,
       .operation_preview_active = input.operation_preview_active,
   };
 }
@@ -2459,6 +2460,7 @@ void QtViewportPanel::process_viewport_input(
           *preview_ports.preview, resolved_grid_snap_enabled) ||
       modeling.modal_tool_owns_viewport();
   input.active_tool_owns_viewport = input_router_.active_tool_owns_viewport();
+  input.active_transform_drag = interaction_controller_.dragging();
   modal_tool_owns_viewport_snapshot_ =
       input.active_tool_owns_viewport || input.modal_tool_active;
   input.operation_preview_active = tool_settings.operation_preview_active;

@@ -5009,3 +5009,33 @@ guardrails.
 Verification: focused dock-title presentation and resource-packaging guardrails pass, all affected
 native test targets build, and the complete `vs2026-debug` CTest preset passes 6/6. Final native
 v0.1.38 build result is recorded in the task handoff.
+
+## 2026-07-17 - Public Read-Only Keybinding Catalog
+
+Invariant:
+
+- `QuaderCommandsApi::keybinding_catalog()` is the complete public presentation source for every
+  command and semantic viewport target that the resolver can map. Target metadata is registered
+  with its owner, while the catalog groups resolver aliases and alternate shortcuts into one row
+  per real action and context. The resolver target IDs and individual shortcuts remain available
+  in entry vectors for completeness, filtering, and diagnostics. A removed or otherwise unmapped
+  action remains present with its original context and an empty shortcut.
+- Catalog contexts describe where the user action is valid, not which internal command path owns
+  it. Modeling and arrangement actions are Viewport actions; primitive and modal commit/cancel
+  aliases are the shared Finalize Tool and Cancel Tool actions in Modal Tool context. Only actions
+  that are behaviorally distinct or valid in genuinely different contexts receive separate rows.
+- Settings consumes only that public catalog. Its retained, striped `QTableView` is read-only and
+  refreshes only during explicit dialog setup, show, localization, or keybinding refresh paths;
+  equality gates precede model resets. Do not enumerate `commands().available()`, evaluate command
+  predicates, or rebuild the catalog from the UI frame loop.
+- Name and pressed-shortcut filters operate only on the retained localized rows. Shortcut capture
+  routes Qt events through the canonical input adapter and public command formatter. All columns
+  remain interactively resizable and two-way sortable, with Command Name ascending as the default;
+  the compact fixed row height does not change catalog or Settings persistence state.
+
+Owners: command and semantic viewport registration metadata, `QuaderCommandsApi`, and
+`QtSettingsDialog` presentation/localization.
+
+Verification: focused catalog completeness, semantic alias/context, override/removal, Settings
+interaction, localization, and UI frame-loop guardrail tests pass. Full CTest and final native
+v0.1.40 build results are recorded in the task handoff.

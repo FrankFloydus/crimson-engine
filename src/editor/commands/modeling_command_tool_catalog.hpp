@@ -11,6 +11,7 @@
 #include "editor/commands/preview_command_tool.hpp"
 
 #include <span>
+#include <string>
 #include <string_view>
 
 namespace quader {
@@ -29,6 +30,12 @@ modeling_preview_command_tools();
 
 [[nodiscard]] const CommandTool *
 find_modeling_command_tool(std::string_view id);
+/**
+ * Returns the existing localized label key for a command-tool action, or an
+ * empty string when that action uses catalog-specific presentation metadata.
+ */
+[[nodiscard]] std::string
+modeling_command_tool_localization_key(std::string_view id);
 [[nodiscard]] const InstantCommandTool *
 find_modeling_instant_command_tool(ModelingInstantOperationId operation);
 [[nodiscard]] const ContextActionTool *

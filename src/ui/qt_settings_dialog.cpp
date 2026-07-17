@@ -6,12 +6,15 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "ui/qt_settings_dialog.hpp"
 
+#include "api/quader_commands_api.hpp"
 #include "core/localization_service.hpp"
 #include "ui/qt_color_swatch_button.hpp"
+#include "ui/qt_input_adapter.hpp"
 #include "ui/qt_settings_controller.hpp"
 #include "ui/ui_settings.hpp"
 #include "viewport/viewport_settings.hpp"
 
+#include <QAbstractTableModel>
 #include <QCheckBox>
 #include <QColor>
 #include <QColorDialog>
@@ -19,8 +22,11 @@
 #include <QDialogButtonBox>
 #include <QDoubleSpinBox>
 #include <QFormLayout>
+#include <QHeaderView>
 #include <QHBoxLayout>
+#include <QKeyEvent>
 #include <QLabel>
+#include <QLineEdit>
 #include <QListWidget>
 #include <QPointer>
 #include <QPushButton>
@@ -29,6 +35,7 @@
 #include <QSignalBlocker>
 #include <QShowEvent>
 #include <QStackedWidget>
+#include <QTableView>
 #include <QVBoxLayout>
 #include <QVariant>
 #include <QWidget>
@@ -37,6 +44,7 @@
 #include <array>
 #include <cmath>
 #include <cstddef>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -134,6 +142,224 @@ void set_color_button_presentation(
   button.setAccessibleDescription(details);
 }
 
+QString keybinding_context_text(const LocalizationService *localization,
+                                QuaderKeybindingContextKind context) {
+  switch (context) {
+  case QuaderKeybindingContextKind::Global:
+    return qtext(localization, "ui.settings.keybindings.context.global",
+                 "Global");
+  case QuaderKeybindingContextKind::Viewport:
+    return qtext(localization, "ui.settings.keybindings.context.viewport",
+                 "Viewport");
+  case QuaderKeybindingContextKind::ViewportNavigation:
+    return qtext(
+        localization, "ui.settings.keybindings.context.viewport_navigation",
+        "Viewport Navigation");
+  case QuaderKeybindingContextKind::FlyNavigation:
+    return qtext(localization,
+                 "ui.settings.keybindings.context.fly_navigation",
+                 "Fly Navigation");
+  case QuaderKeybindingContextKind::OperationPreview:
+    return qtext(localization,
+                 "ui.settings.keybindings.context.operation_preview",
+                 "Operation Preview");
+  case QuaderKeybindingContextKind::ModalTool:
+    return qtext(localization, "ui.settings.keybindings.context.modal_tool",
+                 "Modal Tool");
+  case QuaderKeybindingContextKind::LinearArrayTool:
+    return qtext(localization,
+                 "ui.settings.keybindings.context.linear_array_tool",
+                 "Linear Array Tool");
+  case QuaderKeybindingContextKind::RadialArrayTool:
+    return qtext(localization,
+                 "ui.settings.keybindings.context.radial_array_tool",
+                 "Radial Array Tool");
+  case QuaderKeybindingContextKind::Custom:
+    return qtext(localization, "ui.settings.keybindings.context.custom",
+                 "Custom");
+  }
+  return qtext(localization, "ui.settings.keybindings.context.custom",
+               "Custom");
+}
+
+/// Stores one fully localized row before retained filtering and sorting.
+struct KeybindingTableRow {
+  QString target_id;
+  QString command_name;
+  QString context;
+  QString input_mapping;
+  std::vector<QString> input_mappings;
+  std::size_t mapping_order = 0u;
+
+  bool operator==(const KeybindingTableRow &other) const {
+    return target_id == other.target_id && command_name == other.command_name &&
+           context == other.context && input_mapping == other.input_mapping &&
+           input_mappings == other.input_mappings &&
+           mapping_order == other.mapping_order;
+  }
+};
+
+/// Retained read-only model with lexical sorting for all visible columns.
+class QtKeybindingTableModel final : public QAbstractTableModel {
+public:
+  /// Identifies the three fixed presentation columns.
+  enum Column {
+    CommandNameColumn = 0,
+    ContextColumn,
+    InputMappingColumn,
+    ColumnCount,
+  };
+
+  explicit QtKeybindingTableModel(QObject *parent = nullptr)
+      : QAbstractTableModel(parent) {}
+
+  int rowCount(const QModelIndex &parent = {}) const override {
+    return parent.isValid() ? 0 : static_cast<int>(rows_.size());
+  }
+
+  int columnCount(const QModelIndex &parent = {}) const override {
+    return parent.isValid() ? 0 : ColumnCount;
+  }
+
+  QVariant data(const QModelIndex &index, int role) const override {
+    if (!index.isValid() || index.row() < 0 ||
+        index.row() >= static_cast<int>(rows_.size()) || index.column() < 0 ||
+        index.column() >= ColumnCount) {
+      return {};
+    }
+
+    const KeybindingTableRow &row =
+        rows_[static_cast<std::size_t>(index.row())];
+    if (role == Qt::UserRole) {
+      return row.target_id;
+    }
+    if (role != Qt::DisplayRole && role != Qt::AccessibleTextRole) {
+      return {};
+    }
+
+    switch (index.column()) {
+    case CommandNameColumn:
+      return row.command_name;
+    case ContextColumn:
+      return row.context;
+    case InputMappingColumn:
+      return row.input_mapping;
+    default:
+      return {};
+    }
+  }
+
+  QVariant headerData(int section, Qt::Orientation orientation,
+                      int role) const override {
+    if (orientation != Qt::Horizontal || role != Qt::DisplayRole ||
+        section < 0 || section >= ColumnCount) {
+      return {};
+    }
+    return headers_[static_cast<std::size_t>(section)];
+  }
+
+  void set_headers(std::array<QString, ColumnCount> headers) {
+    if (headers_ == headers) {
+      return;
+    }
+    headers_ = std::move(headers);
+    emit headerDataChanged(Qt::Horizontal, CommandNameColumn,
+                           InputMappingColumn);
+  }
+
+  void set_rows(std::vector<KeybindingTableRow> rows) {
+    sort_rows(rows, sort_column_, sort_order_);
+    if (rows_ == rows) {
+      return;
+    }
+    beginResetModel();
+    rows_ = std::move(rows);
+    endResetModel();
+  }
+
+  void sort(int column, Qt::SortOrder order) override {
+    if (column < CommandNameColumn || column >= ColumnCount) {
+      return;
+    }
+    sort_column_ = column;
+    sort_order_ = order;
+    std::vector<KeybindingTableRow> rows = rows_;
+    sort_rows(rows, sort_column_, sort_order_);
+    if (rows == rows_) {
+      return;
+    }
+    beginResetModel();
+    rows_ = std::move(rows);
+    endResetModel();
+  }
+
+private:
+  static const QString &column_text(const KeybindingTableRow &row,
+                                    int column) {
+    switch (column) {
+    case ContextColumn:
+      return row.context;
+    case InputMappingColumn:
+      return row.input_mapping;
+    case CommandNameColumn:
+    default:
+      return row.command_name;
+    }
+  }
+
+  static void sort_rows(std::vector<KeybindingTableRow> &rows, int column,
+                        Qt::SortOrder order) {
+    std::stable_sort(
+        rows.begin(), rows.end(),
+        [column, order](const KeybindingTableRow &left,
+                        const KeybindingTableRow &right) {
+          const int compared =
+              QString::compare(column_text(left, column),
+                               column_text(right, column), Qt::CaseInsensitive);
+          if (compared != 0) {
+            return order == Qt::AscendingOrder ? compared < 0 : compared > 0;
+          }
+          return left.mapping_order < right.mapping_order;
+        });
+  }
+
+  std::array<QString, ColumnCount> headers_{};
+  std::vector<KeybindingTableRow> rows_;
+  int sort_column_ = CommandNameColumn;
+  Qt::SortOrder sort_order_ = Qt::AscendingOrder;
+};
+
+/// Read-only field that translates pressed Qt keys into canonical chords.
+class QtKeybindingCaptureEdit final : public QLineEdit {
+public:
+  explicit QtKeybindingCaptureEdit(QWidget *parent = nullptr)
+      : QLineEdit(parent) {
+    setReadOnly(true);
+  }
+
+  void set_chord_handler(
+      std::function<void(const QuaderInputChord &)> handler) {
+    chord_handler_ = std::move(handler);
+  }
+
+protected:
+  void keyPressEvent(QKeyEvent *event) override {
+    if (event != nullptr) {
+      const std::optional<QuaderInputChord> chord =
+          quader_pressed_input_chord_from_qt_event(*event);
+      if (chord.has_value() && chord_handler_) {
+        chord_handler_(*chord);
+        event->accept();
+        return;
+      }
+    }
+    QLineEdit::keyPressEvent(event);
+  }
+
+private:
+  std::function<void(const QuaderInputChord &)> chord_handler_;
+};
+
 } // namespace
 
 /// Owns the retained settings controls and descriptor-to-widget bindings.
@@ -182,6 +408,7 @@ struct QtSettingsDialog::Impl {
   UISettings *ui_settings = nullptr;
   ViewportSettings *viewport_settings = nullptr;
   LocalizationService *localization = nullptr;
+  const QuaderCommandsApi *commands = nullptr;
   QtSettingsController controller;
   std::function<void(QtSettingsChangeKind)> settings_changed;
   std::array<bool, kViewportColorSettingCount> dirty_colors{};
@@ -194,8 +421,16 @@ struct QtSettingsDialog::Impl {
   QListWidget *category_list = nullptr;
   QStackedWidget *page_stack = nullptr;
   QListWidgetItem *interface_category_item = nullptr;
+  QListWidgetItem *keybindings_category_item = nullptr;
   QLabel *locale_label = nullptr;
   QComboBox *locale_combo = nullptr;
+  QLabel *keybindings_search_label = nullptr;
+  QLineEdit *keybindings_search = nullptr;
+  QLabel *keybindings_shortcut_label = nullptr;
+  QtKeybindingCaptureEdit *keybindings_shortcut_filter = nullptr;
+  QPushButton *keybindings_shortcut_clear = nullptr;
+  QTableView *keybindings_table = nullptr;
+  QtKeybindingTableModel *keybindings_model = nullptr;
   QDialogButtonBox *button_box = nullptr;
   QPushButton *apply_button = nullptr;
   QPushButton *ok_button = nullptr;
@@ -204,10 +439,13 @@ struct QtSettingsDialog::Impl {
   std::vector<ColorWidgets> color_controls;
   std::vector<FloatWidgets> float_controls;
   std::vector<BoolWidgets> bool_controls;
+  std::vector<KeybindingTableRow> keybinding_rows;
+  QString keybinding_shortcut_text;
 
   [[nodiscard]] bool has_context() const {
     return target_ui_settings != nullptr &&
-           target_viewport_settings != nullptr && localization != nullptr;
+           target_viewport_settings != nullptr && localization != nullptr &&
+           commands != nullptr;
   }
 
   void clear_dirty() {
@@ -472,6 +710,7 @@ struct QtSettingsDialog::Impl {
                      [this]() { owner.reject(); });
 
     create_interface_page();
+    create_keybindings_page();
 
     std::array<QFormLayout *, kViewportSettingsSectionCount> section_forms{};
     sections.reserve(kViewportSettingsSectionCount);
@@ -589,6 +828,93 @@ struct QtSettingsDialog::Impl {
                      [this](int index) { select_locale(index); });
   }
 
+  void create_keybindings_page() {
+    keybindings_category_item = new QListWidgetItem(category_list);
+    keybindings_category_item->setData(Qt::UserRole,
+                                       QStringLiteral("keybindings"));
+
+    auto *page = new QWidget(page_stack);
+    page->setObjectName(QStringLiteral("settingsPage_keybindings"));
+    auto *layout = new QVBoxLayout(page);
+
+    auto *filters = new QFormLayout();
+    keybindings_search_label = new QLabel(page);
+    keybindings_search = new QLineEdit(page);
+    keybindings_search->setObjectName(
+        QStringLiteral("settingsKeybindingsSearch"));
+    keybindings_search_label->setBuddy(keybindings_search);
+    filters->addRow(keybindings_search_label, keybindings_search);
+
+    keybindings_shortcut_label = new QLabel(page);
+    auto *shortcut_row = new QWidget(page);
+    auto *shortcut_layout = new QHBoxLayout(shortcut_row);
+    shortcut_layout->setContentsMargins(0, 0, 0, 0);
+    keybindings_shortcut_filter = new QtKeybindingCaptureEdit(shortcut_row);
+    keybindings_shortcut_filter->setObjectName(
+        QStringLiteral("settingsKeybindingsShortcutFilter"));
+    keybindings_shortcut_clear = new QPushButton(shortcut_row);
+    keybindings_shortcut_clear->setObjectName(
+        QStringLiteral("settingsKeybindingsShortcutClear"));
+    keybindings_shortcut_label->setBuddy(keybindings_shortcut_filter);
+    shortcut_layout->addWidget(keybindings_shortcut_filter, 1);
+    shortcut_layout->addWidget(keybindings_shortcut_clear);
+    filters->addRow(keybindings_shortcut_label, shortcut_row);
+    layout->addLayout(filters);
+
+    keybindings_table = new QTableView(page);
+    keybindings_table->setObjectName(
+        QStringLiteral("settingsKeybindingsTable"));
+    keybindings_table->setAlternatingRowColors(true);
+    keybindings_table->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    keybindings_table->setSelectionBehavior(QAbstractItemView::SelectRows);
+    keybindings_table->setSelectionMode(QAbstractItemView::SingleSelection);
+    keybindings_table->setShowGrid(false);
+    keybindings_table->setWordWrap(false);
+    QHeaderView *vertical_header = keybindings_table->verticalHeader();
+    vertical_header->hide();
+    vertical_header->setSectionResizeMode(QHeaderView::Fixed);
+    vertical_header->setMinimumSectionSize(18);
+    vertical_header->setDefaultSectionSize(20);
+
+    keybindings_model = new QtKeybindingTableModel(keybindings_table);
+    keybindings_table->setModel(keybindings_model);
+
+    QHeaderView *header = keybindings_table->horizontalHeader();
+    header->setSectionsMovable(false);
+    header->setSectionsClickable(true);
+    header->setStretchLastSection(true);
+    header->setMinimumSectionSize(80);
+    header->setSectionResizeMode(QHeaderView::Interactive);
+    keybindings_table->setSortingEnabled(true);
+    keybindings_table->sortByColumn(QtKeybindingTableModel::CommandNameColumn,
+                                    Qt::AscendingOrder);
+    header->resizeSection(QtKeybindingTableModel::CommandNameColumn, 320);
+    header->resizeSection(QtKeybindingTableModel::ContextColumn, 180);
+    header->resizeSection(QtKeybindingTableModel::InputMappingColumn, 180);
+
+    QObject::connect(keybindings_search, &QLineEdit::textChanged, &owner,
+                     [this]() { apply_keybinding_filters(); });
+    keybindings_shortcut_filter->set_chord_handler(
+        [this](const QuaderInputChord &chord) {
+          if (commands == nullptr) {
+            return;
+          }
+          keybinding_shortcut_text = QString::fromStdString(
+              commands->format_input_mapping(chord));
+          keybindings_shortcut_filter->setText(keybinding_shortcut_text);
+          apply_keybinding_filters();
+        });
+    QObject::connect(keybindings_shortcut_clear, &QPushButton::clicked,
+                     &owner, [this]() {
+                       keybinding_shortcut_text.clear();
+                       keybindings_shortcut_filter->clear();
+                       apply_keybinding_filters();
+                     });
+
+    layout->addWidget(keybindings_table, 1);
+    page_stack->addWidget(page);
+  }
+
   SectionWidgets
   create_viewport_section(const ViewportSettingsSectionDescriptor &descriptor) {
     const std::string_view stable_id = section_stable_id(descriptor.id);
@@ -604,6 +930,7 @@ struct QtSettingsDialog::Impl {
   void set_context(UISettings &new_ui_settings,
                    ViewportSettings &new_viewport_settings,
                    LocalizationService &new_localization,
+                   const QuaderCommandsApi &new_commands,
                    std::function<void(QtSettingsChangeKind)>
                        new_settings_changed) {
     target_ui_settings = &new_ui_settings;
@@ -611,6 +938,7 @@ struct QtSettingsDialog::Impl {
     ui_settings = &draft_ui_settings;
     viewport_settings = &draft_viewport_settings;
     localization = &new_localization;
+    commands = &new_commands;
     settings_changed = std::move(new_settings_changed);
     controller.bind(draft_ui_settings, draft_viewport_settings,
                     new_localization, [](QtSettingsChangeKind) {});
@@ -628,6 +956,24 @@ struct QtSettingsDialog::Impl {
     owner.setWindowTitle(qtext(localization, "ui.panel.settings", "Settings"));
     interface_category_item->setText(
         qtext(localization, "ui.settings.interface", "Interface"));
+    const QString keybindings_text =
+        qtext(localization, "ui.settings.keybindings", "Keybindings");
+    keybindings_category_item->setText(keybindings_text);
+    keybindings_table->setAccessibleName(keybindings_text);
+    keybindings_search_label->setText(qtext(
+        localization, "ui.settings.keybindings.search.label", "Search"));
+    keybindings_search->setPlaceholderText(qtext(
+        localization, "ui.settings.keybindings.search.placeholder",
+        "Search commands"));
+    keybindings_shortcut_label->setText(qtext(
+        localization, "ui.settings.keybindings.shortcut_filter.label",
+        "Input Mapping"));
+    keybindings_shortcut_filter->setPlaceholderText(qtext(
+        localization, "ui.settings.keybindings.shortcut_filter.placeholder",
+        "Press a shortcut"));
+    keybindings_shortcut_clear->setText(qtext(
+        localization, "ui.settings.keybindings.shortcut_filter.clear",
+        "Clear"));
     locale_label->setText(
         qtext(localization, "ui.settings.locale", "Language"));
     apply_button->setText(qtext(localization, "ui.action.apply", "Apply"));
@@ -636,6 +982,7 @@ struct QtSettingsDialog::Impl {
         qtext(localization, "ui.action.cancel", "Cancel"));
 
     refresh_locale_combo();
+    refresh_keybindings();
 
     for (const SectionWidgets &section : sections) {
       const std::string key = section_localization_key(section.descriptor->id);
@@ -688,6 +1035,67 @@ struct QtSettingsDialog::Impl {
     ok_button->setEnabled(has_context());
     cancel_button->setEnabled(has_context());
     refresh_action_state();
+  }
+
+  void refresh_keybindings() {
+    keybindings_model->set_headers({
+        qtext(localization,
+              "ui.settings.keybindings.column.command_name", "Command Name"),
+        qtext(localization, "ui.settings.keybindings.column.context",
+              "Context"),
+        qtext(localization,
+              "ui.settings.keybindings.column.input_mapping",
+              "Input Mapping"),
+    });
+
+    std::vector<KeybindingTableRow> rows;
+    if (commands != nullptr) {
+      const std::vector<QuaderKeybindingCatalogEntry> catalog =
+          commands->keybinding_catalog();
+      rows.reserve(catalog.size());
+      for (std::size_t index = 0u; index < catalog.size(); ++index) {
+        const QuaderKeybindingCatalogEntry &entry = catalog[index];
+        std::vector<QString> input_mappings;
+        input_mappings.reserve(entry.shortcuts.size());
+        for (const std::string &shortcut : entry.shortcuts) {
+          input_mappings.push_back(QString::fromStdString(shortcut));
+        }
+        rows.push_back({
+            .target_id = QString::fromStdString(entry.action_id),
+            .command_name = qtext(localization, entry.localization_key,
+                                  entry.label),
+            .context = keybinding_context_text(localization, entry.context),
+            .input_mapping = QString::fromStdString(entry.shortcut),
+            .input_mappings = std::move(input_mappings),
+            .mapping_order = index,
+        });
+      }
+    }
+    keybinding_rows = std::move(rows);
+    apply_keybinding_filters();
+  }
+
+  void apply_keybinding_filters() {
+    const QString command_filter = keybindings_search->text().trimmed();
+    std::vector<KeybindingTableRow> filtered;
+    filtered.reserve(keybinding_rows.size());
+    for (const KeybindingTableRow &row : keybinding_rows) {
+      if (!command_filter.isEmpty() &&
+          !row.command_name.contains(command_filter, Qt::CaseInsensitive)) {
+        continue;
+      }
+      if (!keybinding_shortcut_text.isEmpty() &&
+          std::none_of(row.input_mappings.begin(), row.input_mappings.end(),
+                       [&](const QString &mapping) {
+                         return QString::compare(
+                                    mapping, keybinding_shortcut_text,
+                                    Qt::CaseInsensitive) == 0;
+                       })) {
+        continue;
+      }
+      filtered.push_back(row);
+    }
+    keybindings_model->set_rows(std::move(filtered));
   }
 
   void refresh_locale_combo() {
@@ -803,9 +1211,10 @@ QtSettingsDialog::~QtSettingsDialog() = default;
 void QtSettingsDialog::set_context(UISettings &ui_settings,
                                    ViewportSettings &viewport_settings,
                                    LocalizationService &localization,
+                                   const QuaderCommandsApi &commands,
                                    std::function<void(QtSettingsChangeKind)>
                                        settings_changed) {
-  impl_->set_context(ui_settings, viewport_settings, localization,
+  impl_->set_context(ui_settings, viewport_settings, localization, commands,
                      std::move(settings_changed));
 }
 

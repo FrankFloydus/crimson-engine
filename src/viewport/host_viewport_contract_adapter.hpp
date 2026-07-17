@@ -59,11 +59,26 @@ struct ViewportGridPresetDescriptor {
   bool is_default = false;
 };
 
+/// Classifies the semantic viewport state that owns an input action.
+enum class ViewportInputBindingContext {
+  Viewport,
+  Navigation,
+  FlyNavigation,
+  ModalTool,
+  LinearArrayTool,
+  RadialArrayTool,
+};
+
 /**
  * Represents one semantic viewport input action binding target.
  */
 struct ViewportInputActionBindingDescriptor {
   std::string target_id;
+  std::string_view action_id;
+  std::string_view label;
+  std::string_view localization_key;
+  ViewportInputBindingContext context =
+      ViewportInputBindingContext::Navigation;
   std::string shortcut;
   std::string_view when;
   int weight = 20;

@@ -4,9 +4,12 @@
 // No permission is granted to use, copy, modify, distribute, or sublicense this
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
+#include "api/quader_api_session_internal_access.hpp"
+#include "api/quader_editor_api.hpp"
 #include "api/quader_mesh_arrangement_catalog.hpp"
 #include "core/localization_service.hpp"
 #include "editor/metadata/host_contract.hpp"
+#include "editor/session/scene_session.hpp"
 #include "editor/tools/viewport_tool_descriptor_catalog.hpp"
 #include "support/guardrail_file_scan.hpp"
 
@@ -406,6 +409,34 @@ TEST(LocalizationResourceTests, ResourceLocaleCatalogsExposeTheSameKeys) {
             EXPECT_NE(reference.find(key), reference.end()) << locale << " adds unmatched key " << key;
         }
     }
+}
+
+TEST(LocalizationResourceTests,
+     KeybindingCatalogLabelsExistInEveryLocale) {
+  SceneSession session;
+  QuaderEditorApi editor(
+      QuaderApiSessionInternalAccess::from_scene_session(session));
+  const std::filesystem::path keybindings =
+      std::filesystem::temp_directory_path() /
+      "quader-localization-keybinding-catalog.json";
+  std::error_code ignored;
+  std::filesystem::remove(keybindings, ignored);
+  ASSERT_TRUE(editor.commands().set_keybinding_storage_path(keybindings).ok());
+
+  const std::vector<QuaderKeybindingCatalogEntry> entries =
+      editor.commands().keybinding_catalog();
+  const auto catalogs = load_resource_locale_catalogs();
+  ASSERT_FALSE(entries.empty());
+  ASSERT_GE(catalogs.size(), 2u);
+  for (const QuaderKeybindingCatalogEntry &entry : entries) {
+    ASSERT_FALSE(entry.localization_key.empty()) << entry.target_id;
+    for (const auto &[locale, catalog] : catalogs) {
+      EXPECT_NE(catalog.find(entry.localization_key), catalog.end())
+          << locale << " missing keybinding label " << entry.localization_key
+          << " for " << entry.target_id;
+    }
+  }
+  std::filesystem::remove(keybindings, ignored);
 }
 
 TEST(LocalizationResourceTests, ResourceLocaleCatalogsKeepPlaceholderSetsInSync) {

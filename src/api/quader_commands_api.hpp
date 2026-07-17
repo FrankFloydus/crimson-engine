@@ -61,6 +61,7 @@ struct QuaderViewportKeybindingContext {
   bool pan_navigation_active = false;
   bool modal_tool_active = false;
   bool active_tool_owns_viewport = false;
+  bool active_transform_drag = false;
   bool operation_preview_active = false;
 };
 
@@ -115,6 +116,10 @@ public:
     [[nodiscard]] std::string shortcut_for(std::string_view command_id) const;
     [[nodiscard]] std::string shortcut_for(QuaderCommandId command_id) const;
     [[nodiscard]] std::vector<QuaderKeybindingRule> keybindings() const;
+    [[nodiscard]] std::vector<QuaderKeybindingCatalogEntry>
+    keybinding_catalog() const;
+    [[nodiscard]] std::string
+    format_input_mapping(const QuaderInputChord &chord) const;
     [[nodiscard]] std::vector<QuaderKeybindingConflict>
     conflicts_for_shortcut(std::string_view shortcut,
                            std::string_view when = {}) const;

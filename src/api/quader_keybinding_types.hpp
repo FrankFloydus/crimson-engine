@@ -15,6 +15,38 @@
 namespace quader {
 
 /**
+ * Classifies the editor state in which a keybinding target is active.
+ */
+enum class QuaderKeybindingContextKind {
+  Global,
+  Viewport,
+  ViewportNavigation,
+  FlyNavigation,
+  OperationPreview,
+  ModalTool,
+  LinearArrayTool,
+  RadialArrayTool,
+  Custom,
+};
+
+/**
+ * Describes one semantic action/context row in the public keybinding catalog.
+ * Resolver aliases and alternate shortcuts are retained in their vectors;
+ * fully unmapped actions remain represented by one entry with no shortcuts.
+ */
+struct QuaderKeybindingCatalogEntry {
+  std::string action_id;
+  std::string target_id;
+  std::vector<std::string> target_ids;
+  std::string label;
+  std::string localization_key;
+  QuaderKeybindingContextKind context = QuaderKeybindingContextKind::Global;
+  std::string when;
+  std::string shortcut;
+  std::vector<std::string> shortcuts;
+};
+
+/**
  * Stores a keybinding rule exposed by the public command API.
  */
 struct QuaderKeybindingRule {
