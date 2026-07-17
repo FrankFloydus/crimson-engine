@@ -131,6 +131,10 @@ public:
   void reset_from_scene();
   void set_instance_edit_scope_provider(
       std::function<ModelingInstanceEditScope()> provider);
+  void set_viewport_visibility_filter(
+      std::function<bool(EntityId)> filter,
+      std::function<std::uint64_t()> revision_provider,
+      std::function<bool()> active_provider);
 
   ModelingCommandResult duplicate_selected_hierarchy_for_group_drag(
       DocumentCommandService &document_commands);

@@ -499,6 +499,30 @@ void expect_vec3_near(QVec3 actual, QVec3 expected) {
   EXPECT_NEAR(actual.z, expected.z, 0.001f);
 }
 
+void expect_viewport_camera_near(const ViewportCameraController &actual,
+                                 const ViewportCameraController &expected) {
+  const ViewportCameraState &actual_state = actual.state();
+  const ViewportCameraState &expected_state = expected.state();
+  expect_vec3_near(actual_state.target, expected_state.target);
+  EXPECT_NEAR(actual_state.yaw_radians, expected_state.yaw_radians, 0.001f);
+  EXPECT_NEAR(actual_state.pitch_radians, expected_state.pitch_radians,
+              0.001f);
+  EXPECT_NEAR(actual_state.distance, expected_state.distance, 0.001f);
+  EXPECT_EQ(actual_state.projection, expected_state.projection);
+  EXPECT_NEAR(actual_state.orthographic_size,
+              expected_state.orthographic_size, 0.001f);
+  EXPECT_NEAR(actual_state.fov_degrees, expected_state.fov_degrees, 0.001f);
+  EXPECT_NEAR(actual_state.near_plane, expected_state.near_plane, 0.001f);
+  EXPECT_NEAR(actual_state.far_plane, expected_state.far_plane, 0.001f);
+  expect_vec3_near(actual.pose().eye, expected.pose().eye);
+  expect_vec3_near(actual.pose().target, expected.pose().target);
+  expect_vec3_near(actual.pose().up, expected.pose().up);
+  EXPECT_NEAR(actual.fly_speed(), expected.fly_speed(), 0.001f);
+  EXPECT_EQ(actual.is_dragging(), expected.is_dragging());
+  EXPECT_EQ(actual.orthographic_view_locked(),
+            expected.orthographic_view_locked());
+}
+
 double mesh_position_fingerprint(const MeshAsset &mesh) {
   double value = 0.0;
   const std::vector<MeshVertex> &vertices = mesh.geometry().vertices;
@@ -3279,6 +3303,71 @@ TEST(ViewportPointPlacementServiceTests,
 }
 
 TEST(ViewportPointPlacementServiceTests,
+     LocalVisibilityRevisionFiltersAndGatesCachedGeometry) {
+  AssetRegistry assets;
+  SceneDocument scene;
+  MeshAsset mesh;
+  mesh.name = "Local Placement Surface";
+  MeshGeometryPayload &geometry = mesh.edit_geometry();
+  geometry.vertices = {
+      MeshVertex{.position = {-10.0f, -8.0f, 0.0f}},
+      MeshVertex{.position = {9.0f, -7.0f, 0.0f}},
+      MeshVertex{.position = {2.0f, 10.0f, 0.0f}},
+  };
+  geometry.indices = {0u, 1u, 2u};
+  const AssetId mesh_id = assets.add_mesh(std::move(mesh));
+  ASSERT_NE(mesh_id, kInvalidAssetId);
+  const EntityId entity =
+      scene.create_entity("Local Placement Surface", EntityKind::Mesh);
+  scene.set_mesh(entity, MeshComponent{.mesh = mesh_id});
+
+  bool local_member = true;
+  std::uint64_t local_revision = 1u;
+  int filter_calls = 0;
+  ViewportPointPlacementService placement;
+  placement.set_viewport_visibility_filter(
+      [&](EntityId candidate) {
+        ++filter_calls;
+        return candidate == entity && local_member;
+      },
+      [&]() { return local_revision; });
+
+  ViewportCameraController camera;
+  camera.set_viewport_size(800.0f, 600.0f);
+  camera.view_axis(ViewportViewAxis::Z, 1);
+  const ViewportPointPlacementRequest request{
+      .mouse_local = {400.0f, 300.0f},
+      .active_grid = viewport_active_grid_placement_plane(camera),
+      .grid_size = 1.0f,
+      .policy = ViewportPointPlacementPolicy::radial_array(),
+  };
+
+  const ViewportPointPlacementResult visible =
+      placement.resolve(scene, assets, camera, request);
+  ASSERT_TRUE(visible.valid);
+  EXPECT_EQ(visible.snap_kind, ViewportPointSnapKind::Surface);
+  EXPECT_EQ(visible.entity, entity);
+  const int calls_after_first_build = filter_calls;
+  EXPECT_GT(calls_after_first_build, 0);
+
+  (void)placement.resolve(scene, assets, camera, request);
+  EXPECT_EQ(filter_calls, calls_after_first_build);
+
+  local_member = false;
+  ++local_revision;
+  const ViewportPointPlacementResult isolated =
+      placement.resolve(scene, assets, camera, request);
+  ASSERT_TRUE(isolated.valid);
+  EXPECT_EQ(isolated.snap_kind, ViewportPointSnapKind::Grid);
+  EXPECT_EQ(isolated.entity, kInvalidEntityId);
+  const int calls_after_revision = filter_calls;
+  EXPECT_GT(calls_after_revision, calls_after_first_build);
+
+  (void)placement.resolve(scene, assets, camera, request);
+  EXPECT_EQ(filter_calls, calls_after_revision);
+}
+
+TEST(ViewportPointPlacementServiceTests,
      PivotParallelFreeDragPreservesTheProvidedCurrentPosition) {
   AssetRegistry assets;
   SceneDocument scene;
@@ -3917,14 +4006,15 @@ TEST(SceneRenderBridgeTests, UsesRenderSceneSnapshotsForIncrementalMeshSync) {
 }
 
 TEST(ViewportPaneOverlayCacheTests,
-     SceneAndAssetRevisionsInvalidateSelectionOverlayFrame) {
+     SceneAssetAndLocalVisibilityRevisionsInvalidateSelectionOverlayFrame) {
   ViewportPaneOverlayCache cache;
   const ViewportPaneOverlayCacheKey key{
       .content_revision = 1u,
       .selection_revision = 2u,
       .scene_revision = 3u,
       .asset_revision = 4u,
-      .overlay_signature = 5u,
+      .local_visibility_revision = 5u,
+      .overlay_signature = 6u,
       .selection_mode = ModelingSelectionMode::Object,
   };
   cache.update({}, key);
@@ -3941,6 +4031,15 @@ TEST(ViewportPaneOverlayCacheTests,
   asset_changed.asset_revision = key.asset_revision + 1u;
   EXPECT_EQ(cache.refresh_reason(asset_changed),
             ViewportPaneOverlayCacheRefreshReason::AssetRevision);
+
+  ViewportPaneOverlayCacheKey local_visibility_changed = key;
+  ++local_visibility_changed.local_visibility_revision;
+  EXPECT_EQ(
+      cache.refresh_reason(local_visibility_changed),
+      ViewportPaneOverlayCacheRefreshReason::LocalVisibilityRevision);
+  EXPECT_TRUE(cache.needs_refresh(local_visibility_changed));
+  cache.update({}, local_visibility_changed);
+  EXPECT_FALSE(cache.needs_refresh(local_visibility_changed));
 }
 
 TEST(SceneRenderBridgeTests, UsesAnisotropicSamplingForMeshTextures) {
@@ -5131,19 +5230,23 @@ TEST(ViewportRendererTests,
             std::string::npos);
   EXPECT_NE(viewport_panel_header.find("viewport_info_cached_asset_revision_"),
             std::string::npos);
+  EXPECT_NE(viewport_panel_header.find(
+                "viewport_info_cached_local_visibility_revision_"),
+            std::string::npos);
   EXPECT_NE(viewport_panel_header.find("viewport_info_cached_camera_"),
             std::string::npos);
   EXPECT_NE(viewport_panel_source.find("same_viewport_info_camera"),
             std::string::npos);
-  EXPECT_NE(viewport_panel_source.find(
-                "collect_viewport_info_scene_stats(document, assets, camera)"),
-            std::string::npos);
+  EXPECT_TRUE(source_contains_compact(
+      viewport_panel_source,
+      "collect_viewport_info_scene_stats(document,assets,camera,"
+      "&local_visibility)"));
   EXPECT_NE(viewport_info_stats_source.find(
                 "document.is_effectively_visible(entity_id)"),
             std::string::npos);
-  EXPECT_NE(
-      viewport_info_stats_source.find("coalesced_mesh_primitive_spans(*mesh)"),
-      std::string::npos);
+  EXPECT_NE(viewport_info_stats_source.find(
+                "coalesced_mesh_primitive_spans(mesh)"),
+            std::string::npos);
   EXPECT_TRUE(source_contains_compact(
       viewport_panel_source,
       "const bool cache_hit = viewport_info_scene_stats_valid_"));
@@ -6126,6 +6229,48 @@ TEST(SceneBoundsTests, CentersBottomOriginMeshOnItsSelectedWorldBounds) {
   EXPECT_NEAR(center.z, 0.0f, 0.001f);
 }
 
+TEST(SceneBoundsTests, IncludesInstanceOccurrenceDescendantsInHierarchyBounds) {
+  AssetRegistry assets;
+  MeshAsset cube;
+  cube.edit_geometry().vertices = {
+      {.position = {-1.0f, -1.0f, -1.0f}},
+      {.position = {1.0f, 1.0f, 1.0f}},
+  };
+  const AssetId cube_mesh = assets.add_mesh(std::move(cube));
+
+  SceneDocument scene;
+  const EntityId definition = scene.create_empty("Definition");
+  ASSERT_TRUE(scene.set_instance_definition(definition));
+  const EntityId member = scene.create_entity("Member", EntityKind::Mesh);
+  scene.set_mesh(member, MeshComponent{.mesh = cube_mesh});
+  scene.set_modeling_object(
+      member, ModelingObjectComponent{.object_id = 1u, .material_slot = 0u});
+  scene.set_transform(
+      member, TransformComponent{.position = {2.0f, 0.0f, 0.0f}});
+  ASSERT_TRUE(scene.set_parent(member, definition, false));
+
+  const EntityId group = scene.create_empty("Group");
+  scene.set_transform(
+      group, TransformComponent{.position = {100.0f, 0.0f, 0.0f}});
+  const EntityId occurrence =
+      scene.create_entity("Occurrence", EntityKind::Instance);
+  ASSERT_TRUE(scene.set_instance_occurrence(
+      occurrence, InstanceOccurrenceComponent{.definition = definition}));
+  scene.set_transform(
+      occurrence, TransformComponent{.position = {10.0f, 5.0f, 0.0f}});
+  ASSERT_TRUE(scene.set_parent(occurrence, group, false));
+
+  const std::optional<SceneBounds> bounds =
+      entity_hierarchy_world_bounds(scene, assets, group);
+  ASSERT_TRUE(bounds.has_value());
+  EXPECT_NEAR(bounds->min.x, 111.0f, 0.001f);
+  EXPECT_NEAR(bounds->min.y, 4.0f, 0.001f);
+  EXPECT_NEAR(bounds->min.z, -1.0f, 0.001f);
+  EXPECT_NEAR(bounds->max.x, 113.0f, 0.001f);
+  EXPECT_NEAR(bounds->max.y, 6.0f, 0.001f);
+  EXPECT_NEAR(bounds->max.z, 1.0f, 0.001f);
+}
+
 TEST(TransformPivotTests, KeepsNonOriginVisualPivotFixedDuringRotation) {
   TransformComponent transform;
   const QVec3 world_pivot{0.0f, 1.0f, 0.0f};
@@ -6703,6 +6848,212 @@ TEST(ViewportWorkspaceServiceTests,
   EXPECT_TRUE(workspace.remove_auxiliary_viewport("viewport-2"));
   EXPECT_EQ(workspace.auxiliary_viewport_count(), 0u);
   EXPECT_FALSE(workspace.remove_auxiliary_viewport("viewport-2"));
+}
+
+TEST(ViewportWorkspaceServiceTests,
+     LocalVisibilitySnapshotIsImmutableAndRevisionedByEffectiveChanges) {
+  ViewportWorkspaceService workspace;
+  const ViewportLocalVisibilitySnapshot initial =
+      workspace.local_visibility_snapshot();
+  EXPECT_FALSE(initial.active());
+  EXPECT_EQ(initial.revision(), 0u);
+  EXPECT_TRUE(initial.baseline_entities().empty());
+  EXPECT_TRUE(initial.members().empty());
+  EXPECT_TRUE(initial.allows(500u));
+  EXPECT_FALSE(workspace.exit_local_visibility());
+  EXPECT_FALSE(workspace.reset_local_visibility());
+
+  constexpr std::array<ViewportLocalVisibilityEntityId, 5> kBaseline{
+      3u, 1u, 2u, 2u, kInvalidViewportLocalVisibilityEntityId};
+  constexpr std::array<ViewportLocalVisibilityEntityId, 3> kMembers{
+      2u, 2u, kInvalidViewportLocalVisibilityEntityId};
+  constexpr std::array<ViewportLocalVisibilityEntityId, 1> kNoMembers{
+      kInvalidViewportLocalVisibilityEntityId};
+  EXPECT_FALSE(workspace.enter_local_visibility(kBaseline, kNoMembers));
+  EXPECT_EQ(workspace.local_visibility_revision(), 0u);
+
+  ASSERT_TRUE(workspace.enter_local_visibility(kBaseline, kMembers));
+  EXPECT_TRUE(workspace.local_visibility_active());
+  EXPECT_EQ(workspace.local_visibility_revision(), 1u);
+  const ViewportLocalVisibilitySnapshot entered =
+      workspace.local_visibility_snapshot();
+  EXPECT_EQ(std::vector<ViewportLocalVisibilityEntityId>(
+                entered.baseline_entities().begin(),
+                entered.baseline_entities().end()),
+            (std::vector<ViewportLocalVisibilityEntityId>{1u, 2u, 3u}));
+  EXPECT_EQ(std::vector<ViewportLocalVisibilityEntityId>(
+                entered.members().begin(), entered.members().end()),
+            (std::vector<ViewportLocalVisibilityEntityId>{2u}));
+  EXPECT_FALSE(entered.allows(1u));
+  EXPECT_TRUE(entered.allows(2u));
+  EXPECT_FALSE(entered.allows(3u));
+
+  constexpr std::array<ViewportLocalVisibilityEntityId, 3> kNewMembers{
+      4u, 2u, kInvalidViewportLocalVisibilityEntityId};
+  ASSERT_TRUE(workspace.add_local_visibility_members(kNewMembers));
+  EXPECT_EQ(workspace.local_visibility_revision(), 2u);
+  const ViewportLocalVisibilitySnapshot expanded =
+      workspace.local_visibility_snapshot();
+  EXPECT_TRUE(expanded.allows(4u));
+  EXPECT_EQ(std::vector<ViewportLocalVisibilityEntityId>(
+                expanded.baseline_entities().begin(),
+                expanded.baseline_entities().end()),
+            (std::vector<ViewportLocalVisibilityEntityId>{1u, 2u, 3u}));
+  EXPECT_FALSE(entered.allows(4u));
+  EXPECT_EQ(entered.revision(), 1u);
+  EXPECT_FALSE(workspace.add_local_visibility_members(kNewMembers));
+  EXPECT_EQ(workspace.local_visibility_revision(), 2u);
+
+  ASSERT_TRUE(workspace.exit_local_visibility());
+  EXPECT_FALSE(workspace.local_visibility_active());
+  EXPECT_EQ(workspace.local_visibility_revision(), 3u);
+  EXPECT_TRUE(workspace.local_visibility_snapshot().allows(1u));
+  EXPECT_FALSE(workspace.exit_local_visibility());
+  EXPECT_EQ(workspace.local_visibility_revision(), 3u);
+
+  ASSERT_TRUE(workspace.enter_local_visibility(kBaseline, kMembers));
+  EXPECT_EQ(workspace.local_visibility_revision(), 4u);
+  ASSERT_TRUE(workspace.reset_local_visibility());
+  EXPECT_EQ(workspace.local_visibility_revision(), 5u);
+  EXPECT_FALSE(workspace.reset_local_visibility());
+  EXPECT_EQ(workspace.local_visibility_revision(), 5u);
+}
+
+TEST(ViewportWorkspaceServiceTests,
+     LocalVisibilityFramesVisibleWorkspaceAndRestoresExistingCameras) {
+  ViewportWorkspaceService workspace;
+  ASSERT_TRUE(workspace.set_layout(ViewportLayoutId::FourQuad));
+  workspace.clear_pane_visibility();
+  workspace.set_pane_visible(ViewportPaneId::Perspective, true);
+  workspace.set_pane_visible(ViewportPaneId::Top, true);
+
+  constexpr std::array<ViewportPaneId, kViewportPaneCount> kPanes{
+      ViewportPaneId::Perspective, ViewportPaneId::Top,
+      ViewportPaneId::Front, ViewportPaneId::Side};
+  std::array<ViewportCameraController, kViewportPaneCount> pane_cameras_before;
+  for (std::size_t index = 0u; index < kPanes.size(); ++index) {
+    ASSERT_TRUE(workspace.set_pane_render_size(
+        kPanes[index], {640.0f + static_cast<float>(index) * 10.0f,
+                        360.0f + static_cast<float>(index) * 10.0f}));
+    workspace.camera(kPanes[index])
+        .focus_bounds({static_cast<float>(index), -2.0f, -4.0f},
+                      {static_cast<float>(index) + 3.0f, 6.0f, 8.0f});
+    pane_cameras_before[index] = workspace.camera(kPanes[index]);
+  }
+
+  ViewportWorkspaceAuxiliaryViewportState &visible_aux =
+      workspace.ensure_auxiliary_viewport("visible-aux", 1u);
+  ASSERT_TRUE(workspace.set_auxiliary_viewport_render_size("visible-aux",
+                                                           {500.0f, 300.0f}));
+  visible_aux.camera.focus_bounds({-8.0f, -2.0f, -1.0f},
+                                  {-4.0f, 2.0f, 5.0f});
+  workspace.set_auxiliary_viewport_visible("visible-aux", true);
+  const ViewportCameraController visible_aux_camera_before =
+      visible_aux.camera;
+
+  ViewportWorkspaceAuxiliaryViewportState &hidden_aux =
+      workspace.ensure_auxiliary_viewport("hidden-aux", 2u);
+  ASSERT_TRUE(workspace.set_auxiliary_viewport_render_size("hidden-aux",
+                                                           {420.0f, 240.0f}));
+  hidden_aux.camera.focus_bounds({9.0f, 1.0f, 2.0f}, {13.0f, 7.0f, 10.0f});
+  const ViewportCameraController hidden_aux_camera_before = hidden_aux.camera;
+
+  ViewportWorkspaceAuxiliaryViewportState &removed_aux =
+      workspace.ensure_auxiliary_viewport("removed-aux", 3u);
+  removed_aux.camera.focus_bounds({-2.0f, -2.0f, -2.0f},
+                                  {2.0f, 2.0f, 2.0f});
+
+  constexpr std::array<ViewportLocalVisibilityEntityId, 3> kBaseline{
+      11u, 12u, 13u};
+  constexpr std::array<ViewportLocalVisibilityEntityId, 1> kMembers{12u};
+  EXPECT_FALSE(workspace.focus_local_visibility_bounds({1.0f, 2.0f, 3.0f},
+                                                        {5.0f, 6.0f, 7.0f}));
+  ASSERT_TRUE(workspace.enter_local_visibility(kBaseline, kMembers));
+
+  const ViewportCameraController hidden_pane_before_focus =
+      workspace.camera(ViewportPaneId::Front);
+  ASSERT_TRUE(workspace.focus_local_visibility_bounds(
+      {1.0f, 2.0f, 3.0f}, {5.0f, 6.0f, 7.0f}));
+  expect_vec3_near(workspace.camera(ViewportPaneId::Perspective).state().target,
+                   {3.0f, 4.0f, 5.0f});
+  expect_vec3_near(workspace.camera(ViewportPaneId::Top).state().target,
+                   {3.0f, 4.0f, 5.0f});
+  expect_viewport_camera_near(workspace.camera(ViewportPaneId::Front),
+                              hidden_pane_before_focus);
+  ASSERT_NE(workspace.auxiliary_viewport("visible-aux"), nullptr);
+  expect_vec3_near(
+      workspace.auxiliary_viewport("visible-aux")->camera.state().target,
+      {3.0f, 4.0f, 5.0f});
+  ASSERT_NE(workspace.auxiliary_viewport("hidden-aux"), nullptr);
+  expect_viewport_camera_near(
+      workspace.auxiliary_viewport("hidden-aux")->camera,
+      hidden_aux_camera_before);
+
+  for (std::size_t index = 0u; index < kPanes.size(); ++index) {
+    workspace.camera(kPanes[index]).focus_origin(90.0f +
+                                                 static_cast<float>(index));
+    ASSERT_TRUE(workspace.set_pane_render_size(
+        kPanes[index], {1000.0f + static_cast<float>(index) * 10.0f,
+                        700.0f + static_cast<float>(index) * 10.0f}));
+  }
+  workspace.auxiliary_viewport("visible-aux")->camera.focus_origin(120.0f);
+  ASSERT_TRUE(workspace.set_auxiliary_viewport_render_size("visible-aux",
+                                                           {800.0f, 450.0f}));
+  workspace.auxiliary_viewport("hidden-aux")->camera.focus_origin(130.0f);
+  ASSERT_TRUE(workspace.set_auxiliary_viewport_render_size("hidden-aux",
+                                                           {700.0f, 400.0f}));
+
+  ViewportWorkspaceAuxiliaryViewportState &late_aux =
+      workspace.ensure_auxiliary_viewport("late-aux", 4u);
+  ASSERT_TRUE(workspace.set_auxiliary_viewport_render_size("late-aux",
+                                                           {610.0f, 340.0f}));
+  late_aux.camera.focus_bounds({20.0f, 21.0f, 22.0f},
+                               {24.0f, 27.0f, 30.0f});
+  const ViewportCameraController late_aux_camera_before_exit = late_aux.camera;
+
+  ASSERT_TRUE(workspace.remove_auxiliary_viewport("removed-aux"));
+  ViewportWorkspaceAuxiliaryViewportState &replacement_aux =
+      workspace.ensure_auxiliary_viewport("removed-aux", 5u);
+  ASSERT_TRUE(workspace.set_auxiliary_viewport_render_size("removed-aux",
+                                                           {333.0f, 222.0f}));
+  replacement_aux.camera.focus_bounds({30.0f, 31.0f, 32.0f},
+                                      {35.0f, 37.0f, 39.0f});
+  const ViewportCameraController replacement_camera_before_exit =
+      replacement_aux.camera;
+
+  ASSERT_TRUE(workspace.exit_local_visibility());
+  for (std::size_t index = 0u; index < kPanes.size(); ++index) {
+    expect_viewport_camera_near(workspace.camera(kPanes[index]),
+                                pane_cameras_before[index]);
+    expect_vec3_near(
+        {workspace.camera(kPanes[index]).viewport_size().x,
+         workspace.camera(kPanes[index]).viewport_size().y, 0.0f},
+        {1000.0f + static_cast<float>(index) * 10.0f,
+         700.0f + static_cast<float>(index) * 10.0f, 0.0f});
+  }
+  expect_viewport_camera_near(
+      workspace.auxiliary_viewport("visible-aux")->camera,
+      visible_aux_camera_before);
+  EXPECT_FLOAT_EQ(
+      workspace.auxiliary_viewport("visible-aux")->camera.viewport_size().x,
+      800.0f);
+  EXPECT_FLOAT_EQ(
+      workspace.auxiliary_viewport("visible-aux")->camera.viewport_size().y,
+      450.0f);
+  expect_viewport_camera_near(
+      workspace.auxiliary_viewport("hidden-aux")->camera,
+      hidden_aux_camera_before);
+  EXPECT_FLOAT_EQ(
+      workspace.auxiliary_viewport("hidden-aux")->camera.viewport_size().x,
+      700.0f);
+  EXPECT_FLOAT_EQ(
+      workspace.auxiliary_viewport("hidden-aux")->camera.viewport_size().y,
+      400.0f);
+  expect_viewport_camera_near(workspace.auxiliary_viewport("late-aux")->camera,
+                              late_aux_camera_before_exit);
+  expect_viewport_camera_near(
+      workspace.auxiliary_viewport("removed-aux")->camera,
+      replacement_camera_before_exit);
 }
 
 TEST(ViewportWorkspaceServiceTests, PaneStateDoesNotStoreDuplicateView) {

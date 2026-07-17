@@ -5083,3 +5083,24 @@ rollback, mouse/capture, Settings, localization, retained-UI guardrails, and the
 surface-to-workspace grid-input regression pass. The complete CTest preset passes 6/6; the final
 native v0.1.42 build succeeds, and a native Settings smoke check confirms three visible columns and
 grid rows ordered `1, 2, 4, 8, 16, 32, 64, 128, 256, 512` under the production C locale.
+
+## 2026-07-17 - Transient Local Visibility
+
+Invariant:
+
+- Local Visibility is scene-session runtime state, never `SceneDocument`, QDR, dirty-state, or
+  undo/redo state. `ViewportWorkspaceService` owns the immutable membership snapshot, monotonic
+  revision, and pre-entry cameras; `ViewportLocalVisibilityService` maps object, group, component,
+  and formal-instance selection into public scene entities and reconciles scene lifecycle changes.
+- Persistent object, ancestor, and layer visibility always remains authoritative. The local
+  snapshot is only an additional allow-filter, so entering never unhides an already-hidden entity
+  and exiting reveals exactly the persistently visible scene. Entities created during the mode
+  join it; deletion of the last live member exits synchronously and restores the saved cameras.
+- Every viewport-facing render, overlay, picking, hover, bulk-selection, placement, statistics,
+  and frame-all cache includes the Local Visibility revision in its unchanged-state gate. Formal
+  instance content is filtered by its public occurrence; tool previews retain canonical source
+  identity while using that occurrence as their local-visibility owner.
+
+Owners: `ViewportWorkspaceService`, `ViewportLocalVisibilityService`, `SceneSession`, public
+viewport commands/API, render/overlay extraction, modeling selection/picking, and retained Qt
+viewport caches.

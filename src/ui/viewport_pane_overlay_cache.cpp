@@ -35,6 +35,9 @@ ViewportPaneOverlayCacheRefreshReason ViewportPaneOverlayCache::refresh_reason(
   if (key_.asset_revision != key.asset_revision) {
     return ViewportPaneOverlayCacheRefreshReason::AssetRevision;
   }
+  if (key_.local_visibility_revision != key.local_visibility_revision) {
+    return ViewportPaneOverlayCacheRefreshReason::LocalVisibilityRevision;
+  }
   if (key_.overlay_signature != key.overlay_signature) {
     return ViewportPaneOverlayCacheRefreshReason::OverlaySignature;
   }

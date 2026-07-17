@@ -25,6 +25,9 @@ class SceneDocument;
  */
 struct ToolPreviewMesh {
   EntityId source_entity = kInvalidEntityId;
+  // Local Visibility can be owned by a public instance occurrence while the
+  // preview source remains a canonical definition member.
+  EntityId visibility_entity = kInvalidEntityId;
   AssetId material = kInvalidAssetId;
   MeshAsset mesh;
   QMat4 transform;
@@ -57,16 +60,20 @@ build_render_scene_snapshot(const SceneDocument &document,
     const AssetRegistry &assets, std::uint64_t frame_index = 0,
     RenderSceneBindingKey scene_binding = {},
     std::uint64_t project_material_revision = 0u,
-    RenderInstanceEditScope instance_edit_scope = {});
+    RenderInstanceEditScope instance_edit_scope = {},
+    const ViewportLocalVisibilitySnapshot *local_visibility = nullptr);
 [[nodiscard]] bool render_scene_snapshot_matches_sources(
     const RenderSceneSnapshot &snapshot, const SceneDocument &document,
     const AssetRegistry &assets, RenderSceneBindingKey scene_binding = {},
     std::uint64_t project_material_revision = 0u,
-    RenderInstanceEditScope instance_edit_scope = {});
+    RenderInstanceEditScope instance_edit_scope = {},
+    const ViewportLocalVisibilitySnapshot *local_visibility = nullptr);
 [[nodiscard]] SceneRenderExtractionPlan build_scene_render_extraction_plan(
     const SceneDocument &document, const AssetRegistry &assets);
 [[nodiscard]] std::vector<RenderToolPreviewMeshRecord>
 build_render_tool_preview_snapshot(const std::vector<ToolPreviewMesh> &meshes,
-                                   const AssetRegistry &assets);
+                                   const AssetRegistry &assets,
+                                   const ViewportLocalVisibilitySnapshot *
+                                       local_visibility = nullptr);
 
 } // namespace quader

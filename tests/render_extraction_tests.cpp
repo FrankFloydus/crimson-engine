@@ -34,6 +34,7 @@
 #include "scene/scene_bounds.hpp"
 #include "support/guardrail_file_scan.hpp"
 #include "viewport/viewport_settings.hpp"
+#include "viewport/viewport_workspace_service.hpp"
 
 #include <mesh/polygon/document.hpp>
 
@@ -592,6 +593,80 @@ TEST(RenderSceneSnapshotTests, BuildsVisibleMeshLightAndMaterialRecords) {
   EXPECT_TRUE(snapshot.live_light_entities.contains(light));
 }
 
+TEST(RenderSceneSnapshotTests,
+     LocalVisibilityFiltersMeshesLightsAndInvalidatesRecordReuse) {
+  SceneDocument document;
+  AssetRegistry assets;
+  const AssetId mesh = assets.add_mesh(make_overlay_triangle_mesh());
+
+  const EntityId isolated_mesh =
+      document.create_entity("Local Mesh", EntityKind::Mesh);
+  ASSERT_TRUE(document.set_mesh(isolated_mesh, MeshComponent{.mesh = mesh}));
+  const EntityId other_mesh =
+      document.create_entity("Other Mesh", EntityKind::Mesh);
+  ASSERT_TRUE(document.set_mesh(
+      other_mesh, MeshComponent{.mesh = mesh, .double_sided = true}));
+  const EntityId persistently_hidden_mesh =
+      document.create_entity("Persistently Hidden Local Mesh",
+                             EntityKind::Mesh);
+  ASSERT_TRUE(document.set_mesh(persistently_hidden_mesh,
+                                MeshComponent{.mesh = mesh}));
+  ASSERT_TRUE(document.set_visible(persistently_hidden_mesh, false));
+
+  const EntityId isolated_light =
+      document.create_entity("Local Light", EntityKind::Light);
+  ASSERT_TRUE(document.set_light(
+      isolated_light, LightComponent{.type = LightType::Point}));
+  const EntityId other_light =
+      document.create_entity("Other Light", EntityKind::Light);
+  ASSERT_TRUE(document.set_light(
+      other_light, LightComponent{.type = LightType::Directional}));
+
+  ViewportWorkspaceService workspace;
+  const std::array<ViewportLocalVisibilityEntityId, 5> baseline{
+      isolated_mesh, other_mesh, persistently_hidden_mesh, isolated_light,
+      other_light};
+  const std::array<ViewportLocalVisibilityEntityId, 3> members{
+      isolated_mesh, persistently_hidden_mesh, isolated_light};
+  ASSERT_TRUE(workspace.enter_local_visibility(baseline, members));
+  const ViewportLocalVisibilitySnapshot entered =
+      workspace.local_visibility_snapshot();
+
+  const RenderSceneSnapshot isolated = build_render_scene_snapshot(
+      document, assets, {.local_visibility = &entered});
+  EXPECT_EQ(isolated.local_visibility_revision, entered.revision());
+  ASSERT_EQ(isolated.meshes.size(), 1u);
+  EXPECT_EQ(isolated.meshes.front().entity_id, isolated_mesh);
+  ASSERT_EQ(isolated.lights.size(), 1u);
+  EXPECT_EQ(isolated.lights.front().entity_id, isolated_light);
+  EXPECT_FALSE(isolated.live_mesh_entities.contains(other_mesh));
+  EXPECT_FALSE(isolated.live_mesh_entities.contains(persistently_hidden_mesh));
+  EXPECT_FALSE(isolated.live_light_entities.contains(other_light));
+  EXPECT_TRUE(render_scene_snapshot_matches_sources(
+      isolated, document, assets, {}, 0u, {}, &entered));
+
+  const RenderSceneSnapshot stable = build_render_scene_snapshot(
+      document, assets,
+      {.previous = &isolated, .local_visibility = &entered});
+  EXPECT_TRUE(stable.reused_previous_records);
+  EXPECT_FALSE(stable.dirty.any_dirty());
+
+  ASSERT_TRUE(workspace.exit_local_visibility());
+  const ViewportLocalVisibilitySnapshot exited =
+      workspace.local_visibility_snapshot();
+  EXPECT_FALSE(render_scene_snapshot_matches_sources(
+      stable, document, assets, {}, 0u, {}, &exited));
+  const RenderSceneSnapshot restored = build_render_scene_snapshot(
+      document, assets,
+      {.previous = &stable, .local_visibility = &exited});
+  EXPECT_FALSE(restored.reused_previous_records);
+  EXPECT_TRUE(restored.dirty.local_visibility_changed);
+  EXPECT_EQ(restored.local_visibility_revision, exited.revision());
+  EXPECT_EQ(restored.meshes.size(), 2u);
+  EXPECT_EQ(restored.lights.size(), 2u);
+  EXPECT_FALSE(restored.live_mesh_entities.contains(persistently_hidden_mesh));
+}
+
 TEST(RenderHotPathTests, SceneSnapshotSourceMatchTracksOwnerRevisions) {
   SceneDocument document;
   AssetRegistry assets;
@@ -815,6 +890,67 @@ TEST(RenderSceneSnapshotTests,
             records.front().material.revision);
 }
 
+TEST(RenderSceneSnapshotTests,
+     LocalVisibilityFiltersOwnedToolPreviewsButKeepsCreationPreviews) {
+  AssetRegistry assets;
+  const AssetId material =
+      assets.add_material(make_default_quader_material("Local Preview"));
+  ViewportWorkspaceService workspace;
+  constexpr std::array<ViewportLocalVisibilityEntityId, 2> kBaseline{7u,
+                                                                    8u};
+  constexpr std::array<ViewportLocalVisibilityEntityId, 1> kMembers{7u};
+  ASSERT_TRUE(workspace.enter_local_visibility(kBaseline, kMembers));
+  const ViewportLocalVisibilitySnapshot local =
+      workspace.local_visibility_snapshot();
+
+  const std::vector<RenderToolPreviewMeshRecord> records =
+      build_render_tool_preview_snapshot(
+          {
+              ToolPreviewMesh{.source_entity = 7u,
+                              .material = material,
+                              .mesh = make_overlay_triangle_mesh()},
+              ToolPreviewMesh{.source_entity = 8u,
+                              .material = material,
+                              .mesh = make_overlay_triangle_mesh()},
+              ToolPreviewMesh{.source_entity = kInvalidEntityId,
+                              .material = material,
+                              .mesh = make_overlay_triangle_mesh()},
+          },
+          assets, &local);
+
+  ASSERT_EQ(records.size(), 2u);
+  EXPECT_EQ(records[0].source_entity, 7u);
+  EXPECT_EQ(records[1].source_entity, kInvalidEntityId);
+}
+
+TEST(RenderSceneSnapshotTests,
+     LocalVisibilityFiltersInstanceEditPreviewsByPublicOccurrence) {
+  AssetRegistry assets;
+  const AssetId material =
+      assets.add_material(make_default_quader_material("Instance Preview"));
+  ViewportWorkspaceService workspace;
+  constexpr EntityId kOccurrence = 7u;
+  constexpr EntityId kCanonicalMember = 8u;
+  constexpr std::array<ViewportLocalVisibilityEntityId, 2> kBaseline{
+      kOccurrence, kCanonicalMember};
+  constexpr std::array<ViewportLocalVisibilityEntityId, 1> kMembers{
+      kOccurrence};
+  ASSERT_TRUE(workspace.enter_local_visibility(kBaseline, kMembers));
+  const ViewportLocalVisibilitySnapshot local =
+      workspace.local_visibility_snapshot();
+
+  const std::vector<RenderToolPreviewMeshRecord> records =
+      build_render_tool_preview_snapshot(
+          {ToolPreviewMesh{.source_entity = kCanonicalMember,
+                           .visibility_entity = kOccurrence,
+                           .material = material,
+                           .mesh = make_overlay_triangle_mesh()}},
+          assets, &local);
+
+  ASSERT_EQ(records.size(), 1u);
+  EXPECT_EQ(records.front().source_entity, kCanonicalMember);
+}
+
 TEST(RenderHotPathTests, MeshSurfaceGridSignatureIsNarrowAndStable) {
   ViewportSettings settings = ViewportSettings::defaults();
   const std::uint64_t initial = mesh_surface_grid_signature(1.0f, settings);
@@ -897,6 +1033,66 @@ TEST(ViewportInfoStatsTests, CountsOnlyCameraVisibleRenderableMeshes) {
   EXPECT_EQ(empty_view_stats.objects, 0u);
   EXPECT_EQ(empty_view_stats.primitives, 0u);
   EXPECT_EQ(empty_view_stats.draw_calls, 0u);
+}
+
+TEST(ViewportInfoStatsTests,
+     LocalVisibilityCountsFormalInstancesByPublicOccurrence) {
+  SceneDocument document;
+  AssetRegistry assets;
+  const AssetId mesh = assets.add_mesh(make_overlay_triangle_mesh());
+  const EntityId definition =
+      document.create_entity("Stats Definition", EntityKind::Empty);
+  ASSERT_TRUE(document.set_instance_definition(definition));
+  ASSERT_TRUE(document.set_visible(definition, false));
+  const EntityId member =
+      document.create_entity("Stats Definition Member", EntityKind::Mesh);
+  ASSERT_TRUE(document.set_mesh(member, MeshComponent{.mesh = mesh}));
+  ASSERT_TRUE(document.set_parent(member, definition, false));
+
+  const EntityId isolated =
+      document.create_entity("Stats Local Occurrence", EntityKind::Instance);
+  const EntityId other =
+      document.create_entity("Stats Other Occurrence", EntityKind::Instance);
+  ASSERT_TRUE(document.set_instance_occurrence(
+      isolated, InstanceOccurrenceComponent{.definition = definition}));
+  ASSERT_TRUE(document.set_instance_occurrence(
+      other, InstanceOccurrenceComponent{.definition = definition}));
+  ASSERT_TRUE(document.set_transform(
+      isolated, TransformComponent{.position = {0.0f, 0.0f, -3.0f}}));
+  ASSERT_TRUE(document.set_transform(
+      other, TransformComponent{.position = {0.5f, 0.0f, -3.0f}}));
+
+  ViewportWorkspaceService workspace;
+  const std::array<ViewportLocalVisibilityEntityId, 2> baseline{isolated,
+                                                               other};
+  const std::array<ViewportLocalVisibilityEntityId, 1> members{isolated};
+  ASSERT_TRUE(workspace.enter_local_visibility(baseline, members));
+  const ViewportLocalVisibilitySnapshot local =
+      workspace.local_visibility_snapshot();
+  const ViewportOverlayCamera camera = test_perspective_overlay_camera();
+
+  const ViewportInfoSceneStats isolated_stats =
+      collect_viewport_info_scene_stats(document, assets, camera, &local);
+  EXPECT_EQ(isolated_stats.objects, 1u);
+  EXPECT_EQ(isolated_stats.primitives, 1u);
+  EXPECT_EQ(isolated_stats.draw_calls, 1u);
+
+  ASSERT_TRUE(document.set_visible(isolated, false));
+  EXPECT_EQ(collect_viewport_info_scene_stats(document, assets, camera, &local)
+                .objects,
+            0u);
+  ASSERT_TRUE(document.set_visible(isolated, true));
+  ASSERT_TRUE(document.set_visible(member, false));
+  EXPECT_EQ(collect_viewport_info_scene_stats(document, assets, camera, &local)
+                .objects,
+            0u);
+  ASSERT_TRUE(document.set_visible(member, true));
+
+  const ViewportInfoSceneStats all_occurrences =
+      collect_viewport_info_scene_stats(document, assets, camera);
+  EXPECT_EQ(all_occurrences.objects, 2u);
+  EXPECT_EQ(all_occurrences.primitives, 2u);
+  EXPECT_EQ(all_occurrences.draw_calls, 2u);
 }
 
 TEST(RenderSceneSnapshotTests, MeshAndLightRecordsAreValueSnapshotInputs) {
@@ -1394,6 +1590,90 @@ TEST(RenderOverlaySnapshotCacheTests,
   EXPECT_EQ(cache.stats().scene_wireframe_build_count, 2u);
   EXPECT_EQ(cache.stats().selection_build_count, 1u);
   EXPECT_EQ(cache.stats().selection_transform_refresh_count, 1u);
+}
+
+TEST(RenderOverlaySnapshotCacheTests,
+     LocalVisibilityRevisionFiltersEveryBranchAndGatesStableFrames) {
+  SceneDocument document;
+  AssetRegistry assets;
+  const AssetId mesh = assets.add_mesh(make_overlay_triangle_mesh());
+  const EntityId isolated_mesh =
+      document.create_entity("Local Overlay Mesh", EntityKind::Mesh);
+  const EntityId other_mesh =
+      document.create_entity("Other Overlay Mesh", EntityKind::Mesh);
+  ASSERT_TRUE(document.set_mesh(isolated_mesh, MeshComponent{.mesh = mesh}));
+  ASSERT_TRUE(document.set_mesh(other_mesh, MeshComponent{.mesh = mesh}));
+  ASSERT_TRUE(document.set_selected(isolated_mesh, true));
+
+  const EntityId isolated_light =
+      document.create_entity("Local Overlay Light", EntityKind::Light);
+  const EntityId other_light =
+      document.create_entity("Other Overlay Light", EntityKind::Light);
+  ASSERT_TRUE(document.set_light(
+      isolated_light, LightComponent{.type = LightType::Point}));
+  ASSERT_TRUE(document.set_light(
+      other_light, LightComponent{.type = LightType::Point}));
+
+  RenderOverlaySnapshotCache cache;
+  const RenderOverlayPersistentSnapshotUpdate unfiltered =
+      cache.update_persistent(document, assets, true, 1u, {});
+  ASSERT_NE(unfiltered.scene_wireframe, nullptr);
+  EXPECT_EQ(unfiltered.scene_wireframe->meshes.size(), 2u);
+  EXPECT_EQ(cache.selection_snapshot(document, assets)
+                .point_light_gizmos.size(),
+            2u);
+
+  ViewportWorkspaceService workspace;
+  const std::array<ViewportLocalVisibilityEntityId, 4> baseline{
+      isolated_mesh, other_mesh, isolated_light, other_light};
+  const std::array<ViewportLocalVisibilityEntityId, 2> members{
+      isolated_mesh, isolated_light};
+  ASSERT_TRUE(workspace.enter_local_visibility(baseline, members));
+  const ViewportLocalVisibilitySnapshot entered =
+      workspace.local_visibility_snapshot();
+  const RenderOverlayPersistentSnapshotUpdate isolated =
+      cache.update_persistent(document, assets, true, 1u, {}, {}, &entered);
+  EXPECT_TRUE(isolated.selected_object_changed);
+  EXPECT_TRUE(isolated.scene_wireframe_changed);
+  ASSERT_NE(isolated.selected_object, nullptr);
+  ASSERT_NE(isolated.scene_wireframe, nullptr);
+  EXPECT_EQ(isolated.selected_object->local_visibility_revision,
+            entered.revision());
+  EXPECT_EQ(isolated.selected_object->meshes.size(), 1u);
+  EXPECT_EQ(isolated.scene_wireframe->meshes.size(), 1u);
+  const RenderOverlaySelectionSnapshot &isolated_selection =
+      cache.selection_snapshot(document, assets, {}, &entered);
+  EXPECT_EQ(isolated_selection.local_visibility_revision,
+            entered.revision());
+  ASSERT_EQ(isolated_selection.point_light_gizmos.size(), 1u);
+  EXPECT_EQ(isolated_selection.point_light_gizmos.front().entity,
+            isolated_light);
+  EXPECT_EQ(cache.stats().selected_object_build_count, 2u);
+  EXPECT_EQ(cache.stats().scene_wireframe_build_count, 2u);
+  EXPECT_EQ(cache.stats().selection_build_count, 2u);
+
+  const RenderOverlayPersistentSnapshotUpdate stable =
+      cache.update_persistent(document, assets, true, 1u, {}, {}, &entered);
+  EXPECT_FALSE(stable.changed());
+  (void)cache.selection_snapshot(document, assets, {}, &entered);
+  EXPECT_EQ(cache.stats().selected_object_build_count, 2u);
+  EXPECT_EQ(cache.stats().scene_wireframe_build_count, 2u);
+  EXPECT_EQ(cache.stats().selection_build_count, 2u);
+
+  ASSERT_TRUE(workspace.exit_local_visibility());
+  const ViewportLocalVisibilitySnapshot exited =
+      workspace.local_visibility_snapshot();
+  const RenderOverlayPersistentSnapshotUpdate restored =
+      cache.update_persistent(document, assets, true, 1u, {}, {}, &exited);
+  EXPECT_TRUE(restored.changed());
+  ASSERT_NE(restored.scene_wireframe, nullptr);
+  EXPECT_EQ(restored.scene_wireframe->meshes.size(), 2u);
+  EXPECT_EQ(cache.selection_snapshot(document, assets, {}, &exited)
+                .point_light_gizmos.size(),
+            2u);
+  EXPECT_EQ(cache.stats().selected_object_build_count, 3u);
+  EXPECT_EQ(cache.stats().scene_wireframe_build_count, 3u);
+  EXPECT_EQ(cache.stats().selection_build_count, 3u);
 }
 
 TEST(RenderOverlaySnapshotCacheTests,
@@ -4243,6 +4523,61 @@ TEST(RenderSceneWireframeBatchPlannerTests,
   EXPECT_TRUE(build_render_scene_snapshot(document, assets)
                   .instance_primitives.empty());
   EXPECT_FALSE(entity_world_bounds(document, assets, occurrence).has_value());
+}
+
+TEST(RenderSceneWireframeBatchPlannerTests,
+     LocalVisibilityFiltersFormalInstancesByPublicOccurrence) {
+  SceneDocument document;
+  AssetRegistry assets;
+  const AssetId mesh = assets.add_mesh(make_overlay_triangle_mesh());
+  const EntityId definition =
+      document.create_entity("Local Definition", EntityKind::Empty);
+  ASSERT_TRUE(document.set_instance_definition(definition));
+  ASSERT_TRUE(document.set_visible(definition, false));
+  const EntityId member =
+      document.create_entity("Local Definition Member", EntityKind::Mesh);
+  ASSERT_TRUE(document.set_mesh(member, MeshComponent{.mesh = mesh}));
+  ASSERT_TRUE(document.set_parent(member, definition, false));
+
+  const EntityId isolated =
+      document.create_entity("Local Occurrence", EntityKind::Instance);
+  const EntityId other =
+      document.create_entity("Other Occurrence", EntityKind::Instance);
+  ASSERT_TRUE(document.set_instance_occurrence(
+      isolated, InstanceOccurrenceComponent{.definition = definition}));
+  ASSERT_TRUE(document.set_instance_occurrence(
+      other, InstanceOccurrenceComponent{.definition = definition}));
+  ASSERT_TRUE(document.set_selected(isolated, true));
+  ASSERT_TRUE(document.set_selected(other, true));
+
+  ViewportWorkspaceService workspace;
+  const std::array<ViewportLocalVisibilityEntityId, 2> baseline{isolated,
+                                                               other};
+  const std::array<ViewportLocalVisibilityEntityId, 1> members{isolated};
+  ASSERT_TRUE(workspace.enter_local_visibility(baseline, members));
+  const ViewportLocalVisibilitySnapshot local =
+      workspace.local_visibility_snapshot();
+
+  const RenderSceneSnapshot scene = build_render_scene_snapshot(
+      document, assets, {.local_visibility = &local});
+  ASSERT_EQ(scene.instance_primitives.size(), 1u);
+  ASSERT_EQ(scene.instance_primitives.front().occurrences.size(), 1u);
+  EXPECT_EQ(scene.instance_primitives.front().occurrences.front().entity_id,
+            isolated);
+
+  const RenderOverlaySceneWireframeSnapshot wireframe =
+      build_render_overlay_scene_wireframe_snapshot(document, assets, 1u, {},
+                                                    &local);
+  ASSERT_EQ(wireframe.meshes.size(), 1u);
+  EXPECT_EQ(wireframe.meshes.front().entity, isolated);
+
+  const RenderOverlaySelectedObjectSnapshot selection =
+      build_render_overlay_selected_object_snapshot(document, assets, true,
+                                                    {}, &local);
+  ASSERT_EQ(selection.instance_selection_fills.size(), 1u);
+  EXPECT_EQ(selection.instance_selection_fills.front().occurrence, isolated);
+  ASSERT_EQ(selection.instance_selection_wires.size(), 1u);
+  EXPECT_EQ(selection.instance_selection_wires.front().occurrence, isolated);
 }
 
 TEST(RenderSceneWireframeBatchPlannerTests,

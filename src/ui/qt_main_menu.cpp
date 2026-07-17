@@ -24,6 +24,7 @@
 
 #include <array>
 #include <cstddef>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
@@ -135,6 +136,7 @@ struct QtMainMenu::Impl {
     QuaderCommandId command_id;
     std::string localization_key;
     std::string fallback;
+    std::function<bool()> checked;
   };
 
   /// Associates a checkable QAction with one viewport boolean setting.
@@ -227,21 +229,34 @@ struct QtMainMenu::Impl {
 
   QAction *add_command_action(QMenu &menu, QuaderCommandId command_id,
                               std::string localization_key,
-                              std::string fallback) {
+                              std::string fallback,
+                              std::function<bool()> checked = {}) {
     QAction *action = menu.addAction(QString::fromStdString(fallback));
     action->setObjectName(
         QStringLiteral("command_%1")
             .arg(QString::fromStdString(
                 stable_object_suffix(command_id.string()))));
+    action->setCheckable(static_cast<bool>(checked));
     QObject::connect(action, &QAction::triggered, connection_context.get(),
-                     [this, command_id]() {
+                     [this, action, command_id, checked]() {
                        (void)context.editor.commands().execute(command_id);
+                       if (checked) {
+                         const QSignalBlocker blocker(action);
+                         action->setChecked(checked());
+                         const std::optional<QuaderCommandDescriptor>
+                             descriptor =
+                                 context.editor.commands().descriptor(
+                                     command_id);
+                         action->setEnabled(descriptor.has_value() &&
+                                            descriptor->enabled);
+                       }
                      });
     command_actions.push_back(CommandAction{
         .action = action,
         .command_id = command_id,
         .localization_key = std::move(localization_key),
         .fallback = std::move(fallback),
+        .checked = std::move(checked),
     });
     return action;
   }
@@ -520,6 +535,13 @@ struct QtMainMenu::Impl {
     add_bool_setting_action(*menu, ViewportBoolSettingId::ShowInfo,
                             "ui.menu.view.show_info", "Show Info");
     menu->addSeparator();
+    add_command_action(
+        *menu, quader_command::kViewportToggleLocalVisibility,
+        "ui.menu.view.toggle_local_visibility", "Toggle Local Visibility",
+        [this]() {
+          return context.editor.viewports().local_visibility_active();
+        });
+    menu->addSeparator();
     add_command_action(*menu, quader_command::kViewportFocusAll,
                        "ui.menu.view.focus_all", "Focus All");
     add_command_action(*menu, quader_command::kViewportFrameSelection,
@@ -695,6 +717,10 @@ void QtMainMenu::refresh() {
                                       entry.localization_key, entry.fallback,
                                       shortcut));
     entry.action->setEnabled(command != nullptr && command->enabled);
+    if (entry.checked) {
+      const QSignalBlocker blocker(entry.action);
+      entry.action->setChecked(entry.checked());
+    }
   }
   for (const Impl::BoolSettingAction &entry :
        impl_->bool_setting_actions) {

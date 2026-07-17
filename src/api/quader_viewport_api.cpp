@@ -7,6 +7,7 @@
 #include "api/quader_viewport_api.hpp"
 
 #include "editor/viewport/quader_viewport_api_runtime_access.hpp"
+#include "editor/session/viewport_local_visibility_service.hpp"
 #include "viewport/viewport_shading_mode_conversions.hpp"
 #include "viewport/viewport_workspace_service.hpp"
 
@@ -22,6 +23,7 @@ public:
     ViewportWorkspaceService owned_workspace{
         ViewportWorkspaceLayoutPolicy::MultiPane};
     ViewportWorkspaceService *workspace = &owned_workspace;
+    ViewportLocalVisibilityService *local_visibility = nullptr;
     QuaderViewportRuntimeHooks hooks;
 };
 
@@ -36,6 +38,11 @@ const ViewportWorkspaceService& QuaderViewportApiRuntimeAccess::workspace(const 
 void QuaderViewportApiRuntimeAccess::bind_scene_workspace(
     QuaderViewportApi &api, ViewportWorkspaceService &next) {
   api.impl_->workspace = &next;
+}
+
+void QuaderViewportApiRuntimeAccess::bind_scene_local_visibility(
+    QuaderViewportApi &api, ViewportLocalVisibilityService &service) {
+  api.impl_->local_visibility = &service;
 }
 
 QuaderViewportApi::QuaderViewportApi()
@@ -103,7 +110,38 @@ QuaderApiVoidResult QuaderViewportApi::set_view(ViewportPaneId pane,
   return runtime_status(impl_->workspace->set_view(pane, view));
 }
 
+bool QuaderViewportApi::local_visibility_active() const {
+  return impl_->local_visibility != nullptr
+             ? impl_->local_visibility->active()
+             : impl_->workspace->local_visibility_active();
+}
+
+bool QuaderViewportApi::can_enter_local_visibility() const {
+  return impl_->local_visibility != nullptr &&
+         impl_->local_visibility->can_enter();
+}
+
+bool QuaderViewportApi::can_toggle_local_visibility() const {
+  return impl_->local_visibility != nullptr &&
+         impl_->local_visibility->can_toggle();
+}
+
+QuaderApiVoidResult QuaderViewportApi::toggle_local_visibility() {
+  if (impl_->local_visibility == nullptr) {
+    return unavailable("Viewport Local Visibility runtime is not attached.");
+  }
+  ViewportLocalVisibilityMutation result =
+      impl_->local_visibility->toggle();
+  if (!result.ok) {
+    return unavailable(std::move(result.message));
+  }
+  return runtime_status(result.changed, std::move(result.message));
+}
+
 QuaderApiVoidResult QuaderViewportApi::frame_all(ViewportPaneId pane) {
+  if (impl_->local_visibility != nullptr) {
+    (void)impl_->local_visibility->snapshot();
+  }
   return impl_->hooks.frame_all
              ? impl_->hooks.frame_all(pane)
              : unavailable("Viewport camera runtime is not attached.");

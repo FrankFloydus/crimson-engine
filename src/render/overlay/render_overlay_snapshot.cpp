@@ -24,6 +24,17 @@
 namespace quader {
 namespace {
 
+bool local_visibility_allows(
+    const ViewportLocalVisibilitySnapshot *local_visibility,
+    EntityId entity) {
+  return local_visibility == nullptr || local_visibility->allows(entity);
+}
+
+std::uint64_t local_visibility_revision(
+    const ViewportLocalVisibilitySnapshot *local_visibility) {
+  return local_visibility != nullptr ? local_visibility->revision() : 0u;
+}
+
 const ViewportPersistentOverlayStyleSnapshot &
 default_persistent_overlay_style() {
   static const ViewportPersistentOverlayStyleSnapshot kStyle =
@@ -75,8 +86,11 @@ std::span<const quader_poly::Face> authored_faces(const MeshAsset &mesh) {
 
 std::optional<RenderOverlayMeshSnapshot>
 mesh_snapshot_for_entity(const SceneDocument &document,
-                         const AssetRegistry &assets, EntityId entity) {
-  if (!document.is_effectively_visible(entity)) {
+                         const AssetRegistry &assets, EntityId entity,
+                         const ViewportLocalVisibilitySnapshot *
+                             local_visibility) {
+  if (!document.is_effectively_visible(entity) ||
+      !local_visibility_allows(local_visibility, entity)) {
     return std::nullopt;
   }
   const MeshComponent *scene_mesh = document.mesh(entity);
@@ -168,10 +182,12 @@ std::uint64_t instance_overlay_participant_token(EntityId occurrence,
 void append_instance_wireframe_meshes(
     RenderOverlaySceneWireframeSnapshot &snapshot,
     const SceneDocument &document, const AssetRegistry &assets,
-    EntityId occurrence) {
+    EntityId occurrence,
+    const ViewportLocalVisibilitySnapshot *local_visibility) {
   const InstanceOccurrenceComponent *instance =
       document.instance_occurrence(occurrence);
   if (instance == nullptr || !document.is_effectively_visible(occurrence) ||
+      !local_visibility_allows(local_visibility, occurrence) ||
       !document.is_instance_definition_entity(instance->definition)) {
     return;
   }
@@ -230,10 +246,12 @@ void append_instance_wireframe_meshes(
 void append_instance_selection_fills(
     RenderOverlaySelectedObjectSnapshot &snapshot,
     const SceneDocument &document, const AssetRegistry &assets,
-    EntityId occurrence) {
+    EntityId occurrence,
+    const ViewportLocalVisibilitySnapshot *local_visibility) {
   const InstanceOccurrenceComponent *instance =
       document.instance_occurrence(occurrence);
   if (instance == nullptr || !document.is_effectively_visible(occurrence) ||
+      !local_visibility_allows(local_visibility, occurrence) ||
       !document.is_instance_definition_entity(instance->definition)) {
     return;
   }
@@ -327,17 +345,20 @@ build_render_overlay_selected_object_snapshot(const SceneDocument &document,
                                               const AssetRegistry &assets,
                                               bool visible,
                                               RenderSceneBindingKey
-                                                  scene_binding) {
+                                                  scene_binding,
+                                              const ViewportLocalVisibilitySnapshot *
+                                                  local_visibility) {
   return build_render_overlay_selected_object_snapshot(
       document, assets, visible, default_persistent_overlay_style(),
-      scene_binding);
+      scene_binding, local_visibility);
 }
 
 RenderOverlaySelectedObjectSnapshot
 build_render_overlay_selected_object_snapshot(
     const SceneDocument &document, const AssetRegistry &assets, bool visible,
     ViewportPersistentOverlayStyleSnapshot style,
-    RenderSceneBindingKey scene_binding) {
+    RenderSceneBindingKey scene_binding,
+    const ViewportLocalVisibilitySnapshot *local_visibility) {
   QDR_PROFILE_FUNCTION();
   RenderOverlaySelectedObjectSnapshot snapshot{
       .scene_binding = scene_binding,
@@ -345,6 +366,8 @@ build_render_overlay_selected_object_snapshot(
       .asset_revision = assets.revision(),
       .selection_revision = document.selection_revision(),
       .visibility_revision = document.visibility_revision(),
+      .local_visibility_revision =
+          local_visibility_revision(local_visibility),
       .transform_revision = document.transform_revision(),
       .mesh_binding_revision = document.mesh_binding_revision(),
       .style = style,
@@ -358,11 +381,13 @@ build_render_overlay_selected_object_snapshot(
   snapshot.meshes.reserve(selected.size());
   for (const EntityId entity : selected) {
     if (document.instance_occurrence(entity) != nullptr) {
-      append_instance_selection_fills(snapshot, document, assets, entity);
+      append_instance_selection_fills(snapshot, document, assets, entity,
+                                      local_visibility);
       continue;
     }
     if (std::optional<RenderOverlayMeshSnapshot> mesh =
-            mesh_snapshot_for_entity(document, assets, entity)) {
+            mesh_snapshot_for_entity(document, assets, entity,
+                                     local_visibility)) {
       snapshot.meshes.push_back(*mesh);
     }
   }
@@ -374,22 +399,27 @@ build_render_overlay_scene_wireframe_snapshot(const SceneDocument &document,
                                               const AssetRegistry &assets,
                                               std::uint8_t layer_mask,
                                               RenderSceneBindingKey
-                                                  scene_binding) {
+                                                  scene_binding,
+                                              const ViewportLocalVisibilitySnapshot *
+                                                  local_visibility) {
   return build_render_overlay_scene_wireframe_snapshot(
       document, assets, layer_mask, default_persistent_overlay_style(),
-      scene_binding);
+      scene_binding, local_visibility);
 }
 
 RenderOverlaySceneWireframeSnapshot
 build_render_overlay_scene_wireframe_snapshot(
     const SceneDocument &document, const AssetRegistry &assets,
     std::uint8_t layer_mask, ViewportPersistentOverlayStyleSnapshot style,
-    RenderSceneBindingKey scene_binding) {
+    RenderSceneBindingKey scene_binding,
+    const ViewportLocalVisibilitySnapshot *local_visibility) {
   QDR_PROFILE_FUNCTION();
   RenderOverlaySceneWireframeSnapshot snapshot{
       .scene_binding = scene_binding,
       .scene_revision = document.revision(),
       .asset_revision = assets.revision(),
+      .local_visibility_revision =
+          local_visibility_revision(local_visibility),
       .style = style,
       .clip_planes = scene_camera_clip_planes(document),
       .layer_mask = layer_mask,
@@ -401,11 +431,13 @@ build_render_overlay_scene_wireframe_snapshot(
   snapshot.meshes.reserve(entities.size());
   for (const EntityId entity : entities) {
     if (document.instance_occurrence(entity) != nullptr) {
-      append_instance_wireframe_meshes(snapshot, document, assets, entity);
+      append_instance_wireframe_meshes(snapshot, document, assets, entity,
+                                       local_visibility);
       continue;
     }
     if (std::optional<RenderOverlayMeshSnapshot> mesh =
-            mesh_snapshot_for_entity(document, assets, entity)) {
+            mesh_snapshot_for_entity(document, assets, entity,
+                                     local_visibility)) {
       snapshot.meshes.push_back(*mesh);
     }
   }
@@ -418,6 +450,7 @@ template <typename SelectedMeshBoundsResolver>
 RenderOverlaySelectionSnapshot build_render_overlay_selection_snapshot_impl(
     const SceneDocument &document, const AssetRegistry &assets,
     ViewportOverlayFrame tool_overlays, RenderSceneBindingKey scene_binding,
+    const ViewportLocalVisibilitySnapshot *local_visibility,
     SelectedMeshBoundsResolver &&selected_mesh_bounds,
     std::vector<EntityId> *selected_mesh_entities = nullptr,
     std::vector<EntityId> *group_entities = nullptr) {
@@ -428,6 +461,8 @@ RenderOverlaySelectionSnapshot build_render_overlay_selection_snapshot_impl(
       .asset_revision = assets.revision(),
       .selection_revision = document.selection_revision(),
       .visibility_revision = document.visibility_revision(),
+      .local_visibility_revision =
+          local_visibility_revision(local_visibility),
       .transform_revision = document.transform_revision(),
       .mesh_binding_revision = document.mesh_binding_revision(),
       .render_component_revision = document.render_component_revision(),
@@ -451,7 +486,8 @@ RenderOverlaySelectionSnapshot build_render_overlay_selection_snapshot_impl(
   for (const EntityId entity : entities) {
     const LightComponent *scene_light = document.light(entity);
     if (scene_light == nullptr || scene_light->type != LightType::Point ||
-        !document.is_effectively_visible(entity)) {
+        !document.is_effectively_visible(entity) ||
+        !local_visibility_allows(local_visibility, entity)) {
       continue;
     }
     snapshot.point_light_gizmos.push_back(RenderOverlayLightMarkerSnapshot{
@@ -462,6 +498,9 @@ RenderOverlaySelectionSnapshot build_render_overlay_selection_snapshot_impl(
   }
 
   for (const EntityId entity : selected) {
+    if (!local_visibility_allows(local_visibility, entity)) {
+      continue;
+    }
     if (document.mesh(entity) != nullptr) {
       if (const std::optional<RenderOverlayBoundsSnapshot> bounds =
               selected_mesh_bounds(entity)) {
@@ -479,7 +518,8 @@ RenderOverlaySelectionSnapshot build_render_overlay_selection_snapshot_impl(
           continue;
         }
         if (std::optional<RenderOverlayMeshSnapshot> mesh =
-                mesh_snapshot_for_entity(document, assets, descendant)) {
+                mesh_snapshot_for_entity(document, assets, descendant,
+                                         local_visibility)) {
           snapshot.hierarchy_selection_wires.push_back(*mesh);
         }
       }
@@ -515,9 +555,11 @@ RenderOverlaySelectionSnapshot build_render_overlay_selection_snapshot_impl(
 RenderOverlaySelectionSnapshot build_render_overlay_selection_snapshot(
     const SceneDocument &document, const AssetRegistry &assets,
     ViewportOverlayFrame tool_overlays,
-    RenderSceneBindingKey scene_binding) {
+    RenderSceneBindingKey scene_binding,
+    const ViewportLocalVisibilitySnapshot *local_visibility) {
   return build_render_overlay_selection_snapshot_impl(
       document, assets, std::move(tool_overlays), scene_binding,
+      local_visibility,
       [&](EntityId entity) -> std::optional<RenderOverlayBoundsSnapshot> {
         if (const std::optional<SceneBounds> bounds =
                 entity_world_bounds(document, assets, entity)) {
@@ -533,9 +575,12 @@ RenderOverlaySnapshotCache::update_persistent(
     bool selected_object_overlay_visible,
     std::uint8_t scene_wireframe_layer_mask,
     ViewportPersistentOverlayStyleSnapshot style,
-    RenderSceneBindingKey scene_binding) {
+    RenderSceneBindingKey scene_binding,
+    const ViewportLocalVisibilitySnapshot *local_visibility) {
   QDR_PROFILE_FUNCTION();
   bind_sources(document, assets, scene_binding);
+  const std::uint64_t current_local_visibility_revision =
+      local_visibility_revision(local_visibility);
 
   const bool selected_transform_is_relevant =
       has_selected_object_snapshot_ && selected_object_snapshot_.visible &&
@@ -554,6 +599,8 @@ RenderOverlaySnapshotCache::update_persistent(
           document.selection_revision() &&
       selected_object_snapshot_.visibility_revision ==
           document.visibility_revision() &&
+      selected_object_snapshot_.local_visibility_revision ==
+          current_local_visibility_revision &&
       selected_transform_matches &&
       selected_object_snapshot_.mesh_binding_revision ==
           document.mesh_binding_revision() &&
@@ -564,7 +611,7 @@ RenderOverlaySnapshotCache::update_persistent(
   if (selected_object_changed) {
     selected_object_snapshot_ = build_render_overlay_selected_object_snapshot(
         document, assets, selected_object_overlay_visible, style,
-        scene_binding);
+        scene_binding, local_visibility);
     has_selected_object_snapshot_ = true;
     ++stats_.selected_object_build_count;
   } else {
@@ -579,6 +626,8 @@ RenderOverlaySnapshotCache::update_persistent(
   const bool wireframe_snapshot_matches =
       has_scene_wireframe_snapshot_ &&
       scene_wireframe_snapshot_.layer_mask == scene_wireframe_layer_mask &&
+      scene_wireframe_snapshot_.local_visibility_revision ==
+          current_local_visibility_revision &&
       (!wireframe_sources_are_relevant ||
        (scene_wireframe_snapshot_.scene_revision == document.revision() &&
         scene_wireframe_snapshot_.asset_revision == assets.revision() &&
@@ -587,7 +636,8 @@ RenderOverlaySnapshotCache::update_persistent(
   const bool scene_wireframe_changed = !wireframe_snapshot_matches;
   if (scene_wireframe_changed) {
     scene_wireframe_snapshot_ = build_render_overlay_scene_wireframe_snapshot(
-        document, assets, scene_wireframe_layer_mask, style, scene_binding);
+        document, assets, scene_wireframe_layer_mask, style, scene_binding,
+        local_visibility);
     has_scene_wireframe_snapshot_ = true;
     ++stats_.scene_wireframe_build_count;
   } else if (!wireframe_sources_are_relevant) {
@@ -609,18 +659,25 @@ RenderOverlaySnapshotCache::update_persistent(
 const RenderOverlaySelectionSnapshot &
 RenderOverlaySnapshotCache::selection_snapshot(
     const SceneDocument &document, const AssetRegistry &assets,
-    RenderSceneBindingKey scene_binding) {
+    RenderSceneBindingKey scene_binding,
+    const ViewportLocalVisibilitySnapshot *local_visibility) {
   QDR_PROFILE_FUNCTION();
   bind_sources(document, assets, scene_binding);
+  const std::uint64_t current_local_visibility_revision =
+      local_visibility_revision(local_visibility);
   const bool snapshot_matches =
       has_selection_snapshot_ &&
       selection_snapshot_.scene_revision == document.revision() &&
-      selection_snapshot_.asset_revision == assets.revision();
+      selection_snapshot_.asset_revision == assets.revision() &&
+      selection_snapshot_.local_visibility_revision ==
+          current_local_visibility_revision;
   if (!snapshot_matches &&
-      (!can_refresh_selection_transforms(document, assets) ||
+      (selection_snapshot_.local_visibility_revision !=
+           current_local_visibility_revision ||
+       !can_refresh_selection_transforms(document, assets) ||
        !refresh_selection_transforms(document, assets))) {
     selection_snapshot_ = build_render_overlay_selection_snapshot_impl(
-        document, assets, {}, scene_binding,
+        document, assets, {}, scene_binding, local_visibility,
         [&](EntityId entity) {
           return selected_mesh_world_bounds(document, assets, entity);
         },

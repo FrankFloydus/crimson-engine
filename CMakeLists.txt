@@ -270,6 +270,7 @@ add_library(quader_editor_services STATIC
     src/editor/selection/editor_selection_service.cpp
     src/editor/session/project_asset_bootstrap_service.cpp
     src/editor/session/scene_session.cpp
+    src/editor/session/viewport_local_visibility_service.cpp
     src/editor/tools/native_viewport_tool_coordinator.cpp
 )
 
@@ -1100,6 +1101,7 @@ if(QUADER_BUILD_TESTS)
         tests/core_tests.cpp
         tests/linear_array_tests.cpp
         tests/local_stress_tests.cpp
+        tests/local_visibility_tests.cpp
         tests/localization_tests.cpp
         tests/math_types_tests.cpp
         tests/mesh_arrangement_tests.cpp

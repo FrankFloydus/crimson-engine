@@ -230,6 +230,7 @@ private:
   const AssetRegistry *viewport_info_cached_assets_ = nullptr;
   std::uint64_t viewport_info_cached_scene_revision_ = 0;
   std::uint64_t viewport_info_cached_asset_revision_ = 0;
+  std::uint64_t viewport_info_cached_local_visibility_revision_ = 0;
   ViewportOverlayCamera viewport_info_cached_camera_ = {};
   std::uint64_t viewport_info_cached_objects_ = 0;
   std::uint64_t viewport_info_cached_primitives_ = 0;

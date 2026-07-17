@@ -21,6 +21,7 @@ struct ViewportPaneOverlayCacheKey {
   std::uint64_t selection_revision = 0;
   std::uint64_t scene_revision = 0;
   std::uint64_t asset_revision = 0;
+  std::uint64_t local_visibility_revision = 0;
   std::uint64_t overlay_signature = 0;
   ModelingSelectionMode selection_mode = ModelingSelectionMode::Object;
 };
@@ -36,6 +37,7 @@ enum class ViewportPaneOverlayCacheRefreshReason {
     SelectionRevision,
     SceneRevision,
     AssetRevision,
+    LocalVisibilityRevision,
     OverlaySignature,
     SelectionMode,
 };

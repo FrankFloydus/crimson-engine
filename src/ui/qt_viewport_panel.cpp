@@ -731,12 +731,16 @@ overlay_selection_context(ModelingSelectionMode mode) {
 }
 
 std::vector<ViewportSceneBillboardPickCandidate>
-point_light_pick_candidates(const SceneDocument &document) {
+point_light_pick_candidates(
+    const SceneDocument &document,
+    const ViewportLocalVisibilitySnapshot &local_visibility) {
   std::vector<ViewportSceneBillboardPickCandidate> candidates;
   for (const EntityId entity : document.entities()) {
     const LightComponent *light = document.light(entity);
     if (light == nullptr || light->type != LightType::Point ||
-        !document.is_effectively_visible(entity)) {
+        !document.is_effectively_visible(entity) ||
+        !local_visibility.allows(
+            static_cast<ViewportLocalVisibilityEntityId>(entity))) {
       continue;
     }
     candidates.push_back({
@@ -1515,11 +1519,15 @@ void QtViewportPanel::refresh_cached_selection_overlay_frame(
       .suppress_persistent_object_selection =
           overlay_summary.mode == ModelingSelectionMode::Object,
   };
+  const ViewportLocalVisibilitySnapshot local_visibility =
+      workspace_ != nullptr ? workspace_->local_visibility_snapshot()
+                            : ViewportLocalVisibilitySnapshot{};
   const ViewportPaneOverlayCacheKey key{
       .content_revision = overlay_summary.content_revision,
       .selection_revision = overlay_summary.selection_revision,
       .scene_revision = document.revision(),
       .asset_revision = assets.revision(),
+      .local_visibility_revision = local_visibility.revision(),
       .overlay_signature =
           modeling.selection_overlay_signature(overlay_options),
       .selection_mode = overlay_summary.mode,
@@ -1624,8 +1632,15 @@ QuaderApiVoidResult QtViewportPanel::frame_all(const SceneDocument &document,
             .message = "Viewport workspace is not attached."};
   }
   ViewportCameraController &camera = workspace_->camera(pane_id);
+  const ViewportLocalVisibilitySnapshot local_visibility =
+      workspace_->local_visibility_snapshot();
   if (const std::optional<SceneBounds> bounds =
-          document_world_bounds(document, assets)) {
+          document_world_bounds(
+              document, assets,
+              [&local_visibility](EntityId entity) {
+                return local_visibility.allows(
+                    static_cast<ViewportLocalVisibilityEntityId>(entity));
+              })) {
     camera.focus_bounds(bounds->min, bounds->max);
   } else {
     camera.focus_origin();
@@ -2231,12 +2246,19 @@ void QtViewportPanel::draw_viewport_info_overlay(
     const AssetRegistry &assets, ViewportOverlayCamera camera) {
   const std::uint64_t scene_revision = document.revision();
   const std::uint64_t asset_revision = assets.revision();
+  const ViewportLocalVisibilitySnapshot local_visibility =
+      workspace_ != nullptr ? workspace_->local_visibility_snapshot()
+                            : ViewportLocalVisibilitySnapshot{};
+  const std::uint64_t local_visibility_revision =
+      local_visibility.revision();
   const bool cache_hit =
       viewport_info_scene_stats_valid_ &&
       viewport_info_cached_document_ == &document &&
       viewport_info_cached_assets_ == &assets &&
       viewport_info_cached_scene_revision_ == scene_revision &&
       viewport_info_cached_asset_revision_ == asset_revision &&
+      viewport_info_cached_local_visibility_revision_ ==
+          local_visibility_revision &&
       same_viewport_info_camera(viewport_info_cached_camera_, camera);
   ViewportInfoSceneStats scene_stats;
   if (cache_hit) {
@@ -2245,11 +2267,14 @@ void QtViewportPanel::draw_viewport_info_overlay(
     scene_stats.draw_calls = viewport_info_cached_draw_calls_;
   } else {
     QDR_PROFILE_SCOPE("Viewport info collect scene stats");
-    scene_stats = collect_viewport_info_scene_stats(document, assets, camera);
+    scene_stats = collect_viewport_info_scene_stats(
+        document, assets, camera, &local_visibility);
     viewport_info_cached_document_ = &document;
     viewport_info_cached_assets_ = &assets;
     viewport_info_cached_scene_revision_ = scene_revision;
     viewport_info_cached_asset_revision_ = asset_revision;
+    viewport_info_cached_local_visibility_revision_ =
+        local_visibility_revision;
     viewport_info_cached_camera_ = camera;
     viewport_info_cached_objects_ = scene_stats.objects;
     viewport_info_cached_primitives_ = scene_stats.primitives;
@@ -2553,8 +2578,15 @@ void QtViewportPanel::process_viewport_input(
     (void)workspace_->set_view(*input_pane, result.requested_view);
   }
   if (result.focus_document_requested) {
+    const ViewportLocalVisibilitySnapshot local_visibility =
+        workspace_->local_visibility_snapshot();
     if (const std::optional<SceneBounds> bounds =
-            document_world_bounds(document, assets)) {
+            document_world_bounds(
+                document, assets,
+                [&local_visibility](EntityId entity) {
+                  return local_visibility.allows(
+                      static_cast<ViewportLocalVisibilityEntityId>(entity));
+                })) {
       camera.focus_bounds(bounds->min, bounds->max);
     } else {
       camera.focus_origin();
@@ -2706,9 +2738,11 @@ void QtViewportPanel::process_viewport_input(
           ViewportBoolSettingId::ShowGizmos) &&
       viewport_shading_shows_light_gizmos(
           workspace_->shading_mode(*input_pane));
+  const ViewportLocalVisibilitySnapshot local_visibility =
+      workspace_->local_visibility_snapshot();
   const std::vector<ViewportSceneBillboardPickCandidate> billboards =
       point_lights_pickable
-          ? point_light_pick_candidates(document)
+          ? point_light_pick_candidates(document, local_visibility)
           : std::vector<ViewportSceneBillboardPickCandidate>{};
   ViewportInteractionFrame interaction_frame{
       .input_router = input_router_,
@@ -3103,6 +3137,7 @@ void QtViewportPanel::process_viewport_input(
                 settings.float_value(ViewportFloatSettingId::PickEdgeRadius),
             .scene_revision = document.revision(),
             .asset_revision = assets.revision(),
+            .local_visibility_revision = local_visibility.revision(),
             .content_revision = hover_selection.content_revision,
             .selection_revision = hover_selection.selection_revision,
         });

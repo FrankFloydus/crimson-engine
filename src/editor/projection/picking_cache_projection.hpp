@@ -45,7 +45,8 @@ public:
       const SceneDocument &scene, const ModelingObjectRuntimeMap &object_map,
       ModelingInstanceEditScope instance_edit_scope,
       ModelingSelectionMode app_selection_mode,
-      const std::function<int(EntityId)> &instance_participant_id);
+      const std::function<int(EntityId)> &instance_participant_id,
+      const std::function<bool(EntityId)> &entity_visible = {});
   [[nodiscard]] static quader_editor_core::PickObjectBounds
   build_object_pick_bounds(const quader_editor_core::PolygonObject &object);
   [[nodiscard]] static quader_editor_core::PickObjectBounds

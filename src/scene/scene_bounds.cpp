@@ -190,8 +190,8 @@ entity_hierarchy_world_bounds(const SceneDocument &document,
     if (descendant != entity && !document.is_effectively_visible(descendant)) {
       continue;
     }
-    if (const MeshComponent *mesh = document.mesh(descendant)) {
-      (void)mesh;
+    if (document.mesh(descendant) != nullptr ||
+        document.instance_occurrence(descendant) != nullptr) {
       if (const std::optional<SceneBounds> bounds =
               entity_world_bounds(document, assets, descendant)) {
         include_bounds(result, *bounds);
@@ -207,8 +207,17 @@ entity_hierarchy_world_bounds(const SceneDocument &document,
 
 std::optional<SceneBounds> document_world_bounds(const SceneDocument &document,
                                                  const AssetRegistry &assets) {
+  return document_world_bounds(document, assets, {});
+}
+
+std::optional<SceneBounds> document_world_bounds(
+    const SceneDocument &document, const AssetRegistry &assets,
+    const std::function<bool(EntityId)> &entity_visible) {
   std::optional<SceneBounds> result;
   for (const EntityId entity : document.entities()) {
+    if (entity_visible && !entity_visible(entity)) {
+      continue;
+    }
     if (const std::optional<SceneBounds> bounds =
             entity_world_bounds(document, assets, entity)) {
       include_bounds(result, *bounds);

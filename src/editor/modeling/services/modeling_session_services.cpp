@@ -765,6 +765,21 @@ void ModelingSelectionService::set_app_selection_mode_provider(
   invalidate_picking_cache();
 }
 
+void ModelingSelectionService::set_viewport_visibility_filter(
+    std::function<bool(EntityId)> filter,
+    std::function<std::uint64_t()> revision_provider,
+    std::function<bool()> active_provider) {
+  viewport_visibility_filter_ = std::move(filter);
+  viewport_visibility_revision_provider_ = std::move(revision_provider);
+  viewport_visibility_active_provider_ = std::move(active_provider);
+  invalidate_picking_cache();
+}
+
+bool ModelingSelectionService::viewport_entity_visible(
+    EntityId entity) const {
+  return !viewport_visibility_filter_ || viewport_visibility_filter_(entity);
+}
+
 ModelingInstanceEditScope
 ModelingSelectionService::instance_edit_scope() const {
   return instance_edit_scope_provider_ ? instance_edit_scope_provider_()
@@ -774,6 +789,18 @@ ModelingSelectionService::instance_edit_scope() const {
 ModelingSelectionMode ModelingSelectionService::app_selection_mode() const {
   return app_selection_mode_provider_ ? app_selection_mode_provider_()
                                       : ModelingSelectionMode::Object;
+}
+
+std::uint64_t
+ModelingSelectionService::viewport_visibility_revision() const {
+  return viewport_visibility_revision_provider_
+             ? viewport_visibility_revision_provider_()
+             : 0u;
+}
+
+bool ModelingSelectionService::viewport_visibility_active() const {
+  return viewport_visibility_active_provider_ &&
+         viewport_visibility_active_provider_();
 }
 
 int ModelingSelectionService::instance_participant_id(
@@ -863,6 +890,8 @@ ModelingSelectionService::cached_local_picking_objects(
   const std::uint64_t scene_mesh_binding_revision =
       scene.mesh_binding_revision();
   const std::uint64_t object_map_revision = object_registry.revision();
+  const std::uint64_t local_visibility_revision =
+      viewport_visibility_revision();
   const ModelingInstanceEditScope edit_scope = instance_edit_scope();
   const ModelingSelectionMode current_app_selection_mode =
       app_selection_mode();
@@ -875,6 +904,8 @@ ModelingSelectionService::cached_local_picking_objects(
       picking_cache_.scene_layer_revision != scene_layer_revision ||
       picking_cache_.scene_mesh_binding_revision !=
           scene_mesh_binding_revision ||
+      picking_cache_.viewport_visibility_revision !=
+          local_visibility_revision ||
       picking_cache_.object_map_revision != object_map_revision ||
       picking_cache_.instance_edit_scope != edit_scope ||
       picking_cache_.app_selection_mode != current_app_selection_mode;
@@ -885,6 +916,8 @@ ModelingSelectionService::cached_local_picking_objects(
       picking_cache_.scene_layer_revision != scene_layer_revision ||
       picking_cache_.scene_mesh_binding_revision !=
           scene_mesh_binding_revision ||
+      picking_cache_.viewport_visibility_revision !=
+          local_visibility_revision ||
       picking_cache_.object_map_revision != object_map_revision ||
       picking_cache_.instance_edit_scope != edit_scope ||
       picking_cache_.app_selection_mode != current_app_selection_mode;
@@ -910,7 +943,8 @@ ModelingSelectionService::cached_local_picking_objects(
             current_app_selection_mode,
             [&](EntityId occurrence) {
               return instance_participant_id(occurrence, session);
-            });
+            },
+            viewport_visibility_filter_);
     picking_cache_.objects = std::move(projection.objects);
     picking_cache_.object_transforms =
         std::move(projection.object_transforms);
@@ -950,6 +984,7 @@ ModelingSelectionService::cached_local_picking_objects(
   picking_cache_.scene_visibility_revision = scene_visibility_revision;
   picking_cache_.scene_layer_revision = scene_layer_revision;
   picking_cache_.scene_mesh_binding_revision = scene_mesh_binding_revision;
+  picking_cache_.viewport_visibility_revision = local_visibility_revision;
   picking_cache_.object_map_revision = object_map_revision;
   picking_cache_.instance_edit_scope = edit_scope;
   picking_cache_.app_selection_mode = current_app_selection_mode;
@@ -1319,10 +1354,11 @@ ModelingSelectionService::rectangle_selection_state(
 }
 
 std::optional<ModelingCommandResult>
-ModelingSelectionService::select_all_in_instance_edit_scope(
+ModelingSelectionService::select_all_in_viewport_scope(
     quader_editor_core::EditorSession &session, const SceneDocument &scene,
     const ModelingObjectRuntimeMap &object_map, bool invert) const {
-  if (!instance_edit_scope().active() ||
+  const bool instance_scope_active = instance_edit_scope().active();
+  if ((!instance_scope_active && !viewport_visibility_active()) ||
       session.selection_mode() == quader_editor_core::SelectionMode::Object ||
       app_selection_mode() == ModelingSelectionMode::Group) {
     return std::nullopt;
@@ -1351,8 +1387,8 @@ ModelingSelectionService::select_all_in_instance_edit_scope(
   return ModelingCommandResult{
       .ok = true,
       .changed = changed,
-      .message = changed ? (invert ? "Selection inverted in instance."
-                                   : "Instance members selected.")
+      .message = changed ? (invert ? "Visible selection inverted."
+                                   : "Visible components selected.")
                          : "Selection unchanged.",
   };
 }
@@ -1366,6 +1402,8 @@ ModelingSelectionService::rectangle_selection_universe(
   const std::uint64_t scene_revision = scene.revision();
   const std::uint64_t scene_layer_revision = scene.layer_revision();
   const std::uint64_t object_map_revision = object_map.revision();
+  const std::uint64_t local_visibility_revision =
+      viewport_visibility_revision();
   const ModelingInstanceEditScope edit_scope = instance_edit_scope();
   const ModelingSelectionMode current_app_selection_mode =
       app_selection_mode();
@@ -1374,6 +1412,8 @@ ModelingSelectionService::rectangle_selection_universe(
       rectangle_universe_cache_.scene_revision == scene_revision &&
       rectangle_universe_cache_.scene_layer_revision == scene_layer_revision &&
       rectangle_universe_cache_.object_map_revision == object_map_revision &&
+      rectangle_universe_cache_.viewport_visibility_revision ==
+          local_visibility_revision &&
       rectangle_universe_cache_.instance_edit_scope == edit_scope &&
       rectangle_universe_cache_.app_selection_mode ==
           current_app_selection_mode) {
@@ -1408,6 +1448,8 @@ ModelingSelectionService::rectangle_selection_universe(
   rectangle_universe_cache_.scene_revision = scene_revision;
   rectangle_universe_cache_.scene_layer_revision = scene_layer_revision;
   rectangle_universe_cache_.object_map_revision = object_map_revision;
+  rectangle_universe_cache_.viewport_visibility_revision =
+      local_visibility_revision;
   rectangle_universe_cache_.instance_edit_scope = edit_scope;
   rectangle_universe_cache_.app_selection_mode = current_app_selection_mode;
   rectangle_universe_cache_.universe = std::move(universe);
@@ -1603,6 +1645,8 @@ ModelingSelectionService::cached_rectangle_projected_hits_request(
   const std::uint64_t scene_mesh_binding_revision =
       scene.mesh_binding_revision();
   const std::uint64_t object_map_revision = object_map.revision();
+  const std::uint64_t local_visibility_revision =
+      viewport_visibility_revision();
   const ModelingInstanceEditScope edit_scope = instance_edit_scope();
   const ModelingSelectionMode current_app_selection_mode =
       app_selection_mode();
@@ -1618,6 +1662,8 @@ ModelingSelectionService::cached_rectangle_projected_hits_request(
       rectangle_projection_cache_.scene_mesh_binding_revision !=
           scene_mesh_binding_revision ||
       rectangle_projection_cache_.object_map_revision != object_map_revision ||
+      rectangle_projection_cache_.viewport_visibility_revision !=
+          local_visibility_revision ||
       rectangle_projection_cache_.instance_edit_scope != edit_scope ||
       rectangle_projection_cache_.app_selection_mode !=
           current_app_selection_mode ||
@@ -1641,6 +1687,8 @@ ModelingSelectionService::cached_rectangle_projected_hits_request(
     rectangle_projection_cache_.scene_mesh_binding_revision =
         scene_mesh_binding_revision;
     rectangle_projection_cache_.object_map_revision = object_map_revision;
+    rectangle_projection_cache_.viewport_visibility_revision =
+        local_visibility_revision;
     rectangle_projection_cache_.instance_edit_scope = edit_scope;
     rectangle_projection_cache_.app_selection_mode =
         current_app_selection_mode;
@@ -2283,12 +2331,14 @@ void SelectionOverlayCache::invalidate() const {
 bool SelectionOverlayCache::matches(
     std::uint64_t content_revision, std::uint64_t selection_revision,
     std::uint64_t scene_revision,
+    std::uint64_t local_visibility_revision,
     quader_editor_core::SelectionMode selection_mode,
     std::uint64_t overlay_signature,
     const quader_editor_core::SelectionHoverState &hover) const {
   return valid_ && content_revision_ == content_revision &&
          selection_revision_ == selection_revision &&
          scene_revision_ == scene_revision &&
+         local_visibility_revision_ == local_visibility_revision &&
          selection_mode_ == selection_mode &&
          overlay_signature_ == overlay_signature &&
          hover_matches(hover_, hover);
@@ -2301,6 +2351,7 @@ const ViewportOverlayFrame& SelectionOverlayCache::frame() const {
 void SelectionOverlayCache::store(
     ViewportOverlayFrame frame, std::uint64_t content_revision,
     std::uint64_t selection_revision, std::uint64_t scene_revision,
+    std::uint64_t local_visibility_revision,
     quader_editor_core::SelectionMode selection_mode,
     std::uint64_t overlay_signature,
     const quader_editor_core::SelectionHoverState &hover) const {
@@ -2308,6 +2359,7 @@ void SelectionOverlayCache::store(
   content_revision_ = content_revision;
   selection_revision_ = selection_revision;
   scene_revision_ = scene_revision;
+  local_visibility_revision_ = local_visibility_revision;
   selection_mode_ = selection_mode;
   overlay_signature_ = overlay_signature;
   hover_ = hover;
@@ -2328,11 +2380,14 @@ bool SelectionOverlayCache::hover_matches(
 bool ModelingOverlayService::selection_frame_matches(
     std::uint64_t content_revision, std::uint64_t selection_revision,
     std::uint64_t scene_revision,
+    std::uint64_t local_visibility_revision,
     quader_editor_core::SelectionMode selection_mode,
     std::uint64_t overlay_signature,
     const quader_editor_core::SelectionHoverState &hover) const {
   return selection_overlay_cache_.matches(content_revision, selection_revision,
-                                          scene_revision, selection_mode,
+                                          scene_revision,
+                                          local_visibility_revision,
+                                          selection_mode,
                                           overlay_signature, hover);
 }
 
@@ -2343,11 +2398,13 @@ const ViewportOverlayFrame &ModelingOverlayService::selection_frame() const {
 void ModelingOverlayService::store_selection_frame(
     ViewportOverlayFrame frame, std::uint64_t content_revision,
     std::uint64_t selection_revision, std::uint64_t scene_revision,
+    std::uint64_t local_visibility_revision,
     quader_editor_core::SelectionMode selection_mode,
     std::uint64_t overlay_signature,
     const quader_editor_core::SelectionHoverState &hover) const {
   selection_overlay_cache_.store(std::move(frame), content_revision,
                                  selection_revision, scene_revision,
+                                 local_visibility_revision,
                                  selection_mode, overlay_signature, hover);
 }
 
@@ -2511,32 +2568,38 @@ ViewportOverlayFrame ModelingOverlayService::selection_overlay_frame(
   const std::uint64_t content_revision = session.state().content_revision;
   const std::uint64_t selection_revision = session.state().selection_revision;
   const std::uint64_t scene_revision = scene.revision();
+  const std::uint64_t local_visibility_revision =
+      selection_service.viewport_visibility_revision();
   const quader_editor_core::SelectionMode selection_mode =
       session.selection_mode();
   const std::uint64_t overlay_signature =
       selection_overlay_signature(runtime, options);
   if (selection_frame_matches(content_revision, selection_revision,
-                              scene_revision, selection_mode, overlay_signature,
-                              hover)) {
+                              scene_revision, local_visibility_revision,
+                              selection_mode, overlay_signature, hover)) {
     return selection_frame();
   }
 
   const quader_editor_core::SelectionOverlayFrame current_frame =
       selection_overlay_current_frame(session, runtime, hover, options);
+  const std::function<bool(EntityId)> entity_visible =
+      [&selection_service](EntityId entity) {
+        return selection_service.viewport_entity_visible(entity);
+      };
   ViewportOverlayFrame frame =
       SelectionOverlayProjection::project_selection_overlay_frame(
           current_frame, object_registry, scene, selection_mode,
-          selection_service.overlay_instance_edit_scope());
+          selection_service.overlay_instance_edit_scope(), entity_visible);
   SelectionOverlayProjection::append_projected_overlay_points(
       frame, runtime.knife_state().preview_points, object_registry, scene,
       ViewportOverlayLayer::ToolHandle,
       ViewportOverlayStyleRole::ExplicitColor, ViewportOverlaySource::Tool,
-      selection_service.overlay_instance_edit_scope());
+      selection_service.overlay_instance_edit_scope(), entity_visible);
   SelectionOverlayProjection::append_projected_overlay_lines(
       frame, runtime.knife_state().preview_lines, object_registry, scene,
       ViewportOverlayLayer::ToolPreviewLine,
       ViewportOverlayStyleRole::ToolPreviewLine, ViewportOverlaySource::Tool,
-      selection_service.overlay_instance_edit_scope());
+      selection_service.overlay_instance_edit_scope(), entity_visible);
   if (runtime.transform_drag_active()) {
     SelectionOverlayProjection::append_world_space_overlay_points(
         frame, quader_editor_core::transform_drag_snap_overlay_points(
@@ -2604,8 +2667,8 @@ ViewportOverlayFrame ModelingOverlayService::selection_overlay_frame(
         mirror_points.size() >= 2U);
   }
   store_selection_frame(std::move(frame), content_revision, selection_revision,
-                        scene_revision, selection_mode, overlay_signature,
-                        hover);
+                        scene_revision, local_visibility_revision,
+                        selection_mode, overlay_signature, hover);
   return selection_frame();
 }
 

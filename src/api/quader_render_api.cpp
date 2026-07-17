@@ -15,6 +15,7 @@
 #include "editor/instances/scene_instance_service.hpp"
 #include "editor/render/quader_render_api_runtime_access.hpp"
 #include "editor/modeling/services/modeling_session_service.hpp"
+#include "editor/session/viewport_local_visibility_service.hpp"
 #include "render/overlay/render_overlay_snapshot.hpp"
 #include "render/scene_render_extraction.hpp"
 #include "render/scene_render_bridge.hpp"
@@ -91,6 +92,21 @@ void append_radial_array_preview(
   }
 }
 
+EntityId preview_visibility_entity(const SceneSession &session,
+                                   EntityId source_entity) {
+  if (source_entity == kInvalidEntityId) {
+    return kInvalidEntityId;
+  }
+  const SceneInstanceEditState edit_state =
+      session.instances().instance_edit_state();
+  if (edit_state.active &&
+      session.scene().containing_instance_definition(source_entity) ==
+          edit_state.definition) {
+    return edit_state.occurrence;
+  }
+  return source_entity;
+}
+
 } // namespace
 
 QuaderRenderApi::QuaderRenderApi(QuaderApiSession session, QuaderApi& api)
@@ -108,6 +124,7 @@ void QuaderRenderApi::rebind_session(QuaderApiSession session,
   native_array_preview_bridge_submission_revision_ = 0;
   native_array_preview_revision_ = 0;
   native_array_preview_asset_revision_ = 0;
+  native_array_preview_local_visibility_revision_ = 0;
   native_array_preview_kind_ = 0;
 }
 
@@ -127,9 +144,12 @@ QuaderRenderApiRuntimeAccess::sync_scene(QuaderRenderApi &api,
   const SceneSessionReadView session = scene_session.read_view();
   const SceneInstanceEditState edit_state =
       scene_session.instances().instance_edit_state();
+  const ViewportLocalVisibilitySnapshot local_visibility =
+      scene_session.viewport_local_visibility().snapshot();
   bridge.sync(session.scene, session.assets, 0, scene_binding(api),
               {.occurrence = edit_state.occurrence,
-               .definition = edit_state.definition});
+               .definition = edit_state.definition},
+              &local_visibility);
   return api.runtime_status("Render scene synchronized.");
 }
 
@@ -138,6 +158,9 @@ QuaderRenderApiRuntimeAccess::sync_tool_previews(QuaderRenderApi &api,
                                                  SceneRenderBridge &bridge) {
   bridge.bind_scene(scene_binding(api));
   const SceneSession &project = read_scene_session(api.session_);
+  const ViewportLocalVisibilitySnapshot local_visibility =
+      project.viewport_local_visibility().snapshot();
+  const std::uint64_t local_visibility_revision = local_visibility.revision();
   const LinearArrayPreviewState &linear_preview =
       project.linear_array().preview_state();
   const RadialArrayPreviewState &radial_preview =
@@ -159,7 +182,9 @@ QuaderRenderApiRuntimeAccess::sync_tool_previews(QuaderRenderApi &api,
       api.native_array_preview_kind_ == native_array_kind &&
       api.native_array_preview_revision_ == native_array_revision &&
       api.native_array_preview_asset_revision_ ==
-          native_array_asset_revision) {
+          native_array_asset_revision &&
+      api.native_array_preview_local_visibility_revision_ ==
+          local_visibility_revision) {
     return api.runtime_status("Render tool previews unchanged.");
   }
 
@@ -175,6 +200,8 @@ QuaderRenderApiRuntimeAccess::sync_tool_previews(QuaderRenderApi &api,
   for (ModelingToolPreviewMesh &preview_mesh : modeling_preview_meshes) {
     render_preview_meshes.push_back(ToolPreviewMesh{
         .source_entity = preview_mesh.source_entity,
+        .visibility_entity =
+            preview_visibility_entity(project, preview_mesh.source_entity),
         .material = preview_mesh.material,
         .mesh = std::move(preview_mesh.mesh),
         .transform = preview_mesh.transform,
@@ -185,19 +212,23 @@ QuaderRenderApiRuntimeAccess::sync_tool_previews(QuaderRenderApi &api,
 
   bridge.set_tool_preview_meshes(
       build_render_tool_preview_snapshot(render_preview_meshes,
-                                         session.assets));
+                                         session.assets,
+                                         &local_visibility));
   if (native_array_kind != 0u) {
     api.native_array_preview_sync_bridge_ = &bridge;
     api.native_array_preview_bridge_submission_revision_ =
         bridge.tool_preview_submission_revision();
     api.native_array_preview_revision_ = native_array_revision;
     api.native_array_preview_asset_revision_ = native_array_asset_revision;
+    api.native_array_preview_local_visibility_revision_ =
+        local_visibility_revision;
     api.native_array_preview_kind_ = native_array_kind;
   } else {
     api.native_array_preview_sync_bridge_ = nullptr;
     api.native_array_preview_bridge_submission_revision_ = 0;
     api.native_array_preview_revision_ = 0;
     api.native_array_preview_asset_revision_ = 0;
+    api.native_array_preview_local_visibility_revision_ = 0;
     api.native_array_preview_kind_ = 0;
   }
   return api.runtime_status("Render tool previews synchronized.");
@@ -207,15 +238,18 @@ QuaderApiVoidResult QuaderRenderApiRuntimeAccess::sync_scene_asset_overlays(
     QuaderRenderApi &api, SceneRenderBridge &bridge,
     RenderOverlaySnapshotCache &snapshot_cache,
     const QuaderRenderSceneOverlaySyncRequest &request) {
-  const SceneSessionReadView session =
-      read_scene_session(api.session_).read_view();
+  const SceneSession &scene_session = read_scene_session(api.session_);
+  const SceneSessionReadView session = scene_session.read_view();
+  const ViewportLocalVisibilitySnapshot local_visibility =
+      scene_session.viewport_local_visibility().snapshot();
   const RenderSceneBindingKey binding = scene_binding(api);
   bridge.bind_scene(binding);
   const RenderOverlayPersistentSnapshotUpdate update =
       snapshot_cache.update_persistent(
           session.scene, session.assets,
           request.selected_object_overlay_visible,
-          request.scene_wireframe_layer_mask, request.style, binding);
+          request.scene_wireframe_layer_mask, request.style, binding,
+          &local_visibility);
   if (update.changed()) {
     bridge.sync_scene_asset_overlays(*update.selected_object,
                                      *update.scene_wireframe);
@@ -226,10 +260,13 @@ QuaderApiVoidResult QuaderRenderApiRuntimeAccess::sync_scene_asset_overlays(
 const RenderOverlaySelectionSnapshot &
 QuaderRenderApiRuntimeAccess::build_scene_overlay_snapshot(
     QuaderRenderApi &api, RenderOverlaySnapshotCache &snapshot_cache) {
-  const SceneSessionReadView session =
-      read_scene_session(api.session_).read_view();
+  const SceneSession &scene_session = read_scene_session(api.session_);
+  const SceneSessionReadView session = scene_session.read_view();
+  const ViewportLocalVisibilitySnapshot local_visibility =
+      scene_session.viewport_local_visibility().snapshot();
   return snapshot_cache.selection_snapshot(session.scene, session.assets,
-                                           scene_binding(api));
+                                           scene_binding(api),
+                                           &local_visibility);
 }
 
 ViewportOverlayFrame QuaderRenderApiRuntimeAccess::build_scene_overlay_frame(
@@ -285,6 +322,11 @@ QuaderRenderApi::tool_preview_meshes() const {
   std::vector<QuaderToolPreviewMesh> result;
   result.reserve(previews.size());
   for (const ModelingToolPreviewMesh &preview : previews) {
+    if (preview.source_entity != kInvalidEntityId &&
+        !session.viewport_local_visibility().allows_selection_entity(
+            preview.source_entity)) {
+      continue;
+    }
     result.push_back(to_api_tool_preview_mesh(preview));
   }
   return result;

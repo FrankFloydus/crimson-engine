@@ -1613,6 +1613,12 @@ TEST(QtMainMenuTests, ToolActionsUseEffectiveKeybindingsAndCommandRouting) {
                        .max = {1.0f, 1.0f, 1.0f}},
           "Menu Pivot Box");
   ASSERT_TRUE(box.ok()) << box.error_message();
+  const QuaderApiResult<QuaderModelingObjectRef> baseline_box =
+      editor.modeling().create_box(
+          QuaderBounds{.min = {3.0f, -1.0f, -1.0f},
+                       .max = {5.0f, 1.0f, 1.0f}},
+          "Menu Local Visibility Baseline");
+  ASSERT_TRUE(baseline_box.ok()) << baseline_box.error_message();
   ASSERT_TRUE(editor.selection().select_object(box.value()).ok());
 
   ViewportSettings viewport_settings = ViewportSettings::defaults();
@@ -1644,6 +1650,15 @@ TEST(QtMainMenuTests, ToolActionsUseEffectiveKeybindingsAndCommandRouting) {
       QStringLiteral("layout_two_vertical"));
   ASSERT_NE(two_vertical, nullptr);
   EXPECT_TRUE(two_vertical->text().contains(QStringLiteral("\tCtrl+2")));
+  auto *local_visibility_action = menu_bar.findChild<QAction *>(
+      QStringLiteral("command_viewport_toggle_local_visibility"));
+  ASSERT_NE(local_visibility_action, nullptr);
+  EXPECT_TRUE(local_visibility_action->isCheckable());
+  EXPECT_FALSE(local_visibility_action->isChecked());
+  EXPECT_TRUE(local_visibility_action->isEnabled());
+  EXPECT_TRUE(local_visibility_action->shortcut().isEmpty());
+  EXPECT_EQ(local_visibility_action->text(),
+            QStringLiteral("Toggle Local Visibility\tBackslash"));
   auto *material_browser_action = menu_bar.findChild<QAction *>(
       QStringLiteral("action_material_browser"));
   ASSERT_NE(material_browser_action, nullptr);
@@ -1689,6 +1704,30 @@ TEST(QtMainMenuTests, ToolActionsUseEffectiveKeybindingsAndCommandRouting) {
 
   two_vertical->trigger();
   EXPECT_EQ(editor.viewports().layout(), ViewportLayoutId::TwoVertical);
+
+  ASSERT_TRUE(editor.tools().activate("select").ok());
+  local_visibility_action->trigger();
+  EXPECT_TRUE(editor.viewports().local_visibility_active());
+  EXPECT_TRUE(local_visibility_action->isChecked());
+  local_visibility_action->trigger();
+  EXPECT_FALSE(editor.viewports().local_visibility_active());
+  EXPECT_FALSE(local_visibility_action->isChecked());
+
+  ASSERT_TRUE(editor.commands()
+                  .execute(
+                      quader_command::kViewportToggleLocalVisibility)
+                  .ok());
+  EXPECT_TRUE(editor.viewports().local_visibility_active());
+  EXPECT_FALSE(local_visibility_action->isChecked());
+  auto *view_menu =
+      menu_bar.findChild<QMenu *>(QStringLiteral("menu_view"));
+  ASSERT_NE(view_menu, nullptr);
+  ASSERT_TRUE(QMetaObject::invokeMethod(view_menu, "aboutToShow",
+                                        Qt::DirectConnection));
+  EXPECT_TRUE(local_visibility_action->isChecked());
+  local_visibility_action->trigger();
+  EXPECT_FALSE(editor.viewports().local_visibility_active());
+  EXPECT_FALSE(local_visibility_action->isChecked());
 
   std::filesystem::remove(keybindings);
 }

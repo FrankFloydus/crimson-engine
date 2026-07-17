@@ -64,6 +64,7 @@ public:
     InstanceRenderableCache *instance_cache_ = nullptr;
     MaterialBindingService *material_binding_ = nullptr;
     std::uint64_t synced_revision_ = 0;
+    std::uint64_t synced_local_visibility_revision_ = 0;
     std::uint64_t synced_asset_revision_ = 0;
     std::uint64_t synced_project_material_revision_ = 0;
     RenderInstanceEditScope synced_instance_edit_scope_;

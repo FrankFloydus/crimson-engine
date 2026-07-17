@@ -798,6 +798,9 @@ TEST(EditorApiTests, AggregatesDocumentApisAndCommandRouting) {
     EXPECT_EQ(editor.commands().shortcut_for(
                   quader::quader_command::kViewportSpawnWindow),
               "");
+    EXPECT_EQ(editor.commands().shortcut_for(
+                  quader::quader_command::kViewportToggleLocalVisibility),
+              "Backslash");
     const std::optional<quader::QuaderCommandDescriptor> spawn_window =
         command_descriptor(editor,
                            quader::quader_command::kViewportSpawnWindow);
@@ -9793,6 +9796,8 @@ TEST(EditorApiTests,
       create_selected_box(editor, "Hidden Shortcut A");
   const quader::QuaderModelingObjectRef second =
       create_selected_box(editor, "Hidden Shortcut B");
+  const quader::QuaderModelingObjectRef third =
+      create_selected_box(editor, "Local Visibility Baseline");
   ASSERT_TRUE(
       editor.selection().select_objects({first.entity, second.entity}).ok());
   ASSERT_TRUE(
@@ -9858,6 +9863,56 @@ TEST(EditorApiTests,
             editor.viewports().set_grid_preset(dispatch.shortcut.grid_preset)
                 .ok());
       };
+
+  EXPECT_EQ(editor.commands().shortcut_for(
+                quader::quader_command::kViewportToggleLocalVisibility),
+            "Backslash");
+  dispatch_and_execute(
+      "Backslash",
+      quader::quader_command::kViewportToggleLocalVisibility);
+  EXPECT_TRUE(editor.viewports().local_visibility_active());
+  dispatch_and_execute(
+      "Backslash",
+      quader::quader_command::kViewportToggleLocalVisibility);
+  EXPECT_FALSE(editor.viewports().local_visibility_active());
+  EXPECT_EQ(editor.commands()
+                .dispatch_viewport_input_binding(single_input_chord("Slash"),
+                                                 state, true, false)
+                .kind,
+            quader::QuaderViewportKeybindingDispatch::Kind::NoMatch);
+  EXPECT_EQ(editor.commands()
+                .dispatch_viewport_input_binding(
+                    single_input_chord("KeypadDivide"), state, true, false)
+                .kind,
+            quader::QuaderViewportKeybindingDispatch::Kind::NoMatch);
+  EXPECT_EQ(editor.commands()
+                .dispatch_viewport_input_binding(
+                    single_input_chord("Backslash"), state, false, false)
+                .kind,
+            quader::QuaderViewportKeybindingDispatch::Kind::NoMatch);
+  EXPECT_EQ(editor.commands()
+                .dispatch_viewport_input_binding(
+                    single_input_chord("Backslash"), state, true, true)
+                .kind,
+            quader::QuaderViewportKeybindingDispatch::Kind::NoMatch);
+  for (const quader::QuaderViewportKeybindingContext blocked_context : {
+           quader::QuaderViewportKeybindingContext{.navigation_active = true},
+           quader::QuaderViewportKeybindingContext{.modal_tool_active = true},
+           quader::QuaderViewportKeybindingContext{
+               .active_tool_owns_viewport = true},
+           quader::QuaderViewportKeybindingContext{
+               .active_transform_drag = true},
+           quader::QuaderViewportKeybindingContext{
+               .operation_preview_active = true},
+       }) {
+    EXPECT_EQ(editor.commands()
+                  .dispatch_viewport_input_binding(
+                      single_input_chord("Backslash"), state, true, false,
+                      blocked_context)
+                  .kind,
+              quader::QuaderViewportKeybindingDispatch::Kind::NoMatch);
+  }
+  EXPECT_TRUE(editor.query().entity(third.entity).has_value());
 
   dispatch_and_execute("H", quader::quader_command::kSceneHideSelection);
   ASSERT_TRUE(editor.query().entity(first.entity).has_value());
@@ -9955,9 +10010,9 @@ TEST(EditorApiTests,
       editor.commands().keybinding_catalog();
 
 #ifndef NDEBUG
-  EXPECT_EQ(commands.size(), 146u);
+  EXPECT_EQ(commands.size(), 147u);
 #else
-  EXPECT_EQ(commands.size(), 145u);
+  EXPECT_EQ(commands.size(), 146u);
 #endif
 
   std::unordered_set<std::string> expected_target_ids;
@@ -10064,6 +10119,10 @@ TEST(EditorApiTests,
   EXPECT_TRUE(has_keybinding_catalog_entry(
       catalog, quader::quader_command::kViewportViewPerspective.string(),
       "F4"));
+  EXPECT_TRUE(has_keybinding_catalog_entry(
+      catalog,
+      quader::quader_command::kViewportToggleLocalVisibility.string(),
+      "Backslash"));
   EXPECT_TRUE(has_keybinding_catalog_entry(
       catalog, quader::quader_command::kViewportShadingWireframe.string(),
       "F5"));

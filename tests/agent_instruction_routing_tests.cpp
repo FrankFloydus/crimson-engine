@@ -127,12 +127,22 @@ TEST(AgentInstructionRoutingTests, PublicApiPolicyIsFirstClassInstruction) {
 }
 
 TEST(AgentInstructionRoutingTests, InputKeybindingGuidanceIsFirstClassInstruction) {
+  const std::string root = read_source_file("AGENTS.md");
   const std::string input = read_source_file("INPUT_KEYBINDINGS.md");
 
   EXPECT_TRUE(contains(input, "source-of-truth map for Quader input"));
   EXPECT_TRUE(contains(input, "QuaderKeybindingService"));
   EXPECT_TRUE(contains(input, "context keys"));
   EXPECT_TRUE(contains(input, "Do not bypass these owners"));
+  EXPECT_TRUE(contains(
+      root,
+      "Treat command lifecycle and default-keybinding lifecycle as one change"));
+  EXPECT_TRUE(contains(
+      root, "Every new command must deliberately receive a default"));
+  EXPECT_TRUE(contains(
+      root, "removed or renamed command must leave no stale default"));
+  EXPECT_TRUE(contains(root, "a changed default must"));
+  EXPECT_TRUE(contains(root, "preserve existing user overrides"));
 }
 
 TEST(AgentInstructionRoutingTests, StaleOopSourceOfTruthIsNotReferenced) {

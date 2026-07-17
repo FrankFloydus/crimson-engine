@@ -139,6 +139,7 @@ private:
                      std::vector<std::unique_ptr<WireGeometryResource>>>
       wire_resources_;
   ViewportCameraClipPlanes clip_planes_;
+  std::uint64_t synced_local_visibility_revision_ = 0u;
   InstanceSelectionOverlayCacheStats stats_;
 };
 

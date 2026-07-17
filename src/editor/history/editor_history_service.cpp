@@ -248,6 +248,7 @@ CommandResult EditorTransaction::cancel() {
     if (history_ == nullptr) {
       return command_invalid_result("Editor transaction is not active");
     }
+    EditorHistoryService *history = history_;
 
     failed_cancel_restored_applied_state_ = false;
     bool changed = false;
@@ -289,11 +290,14 @@ CommandResult EditorTransaction::cancel() {
     }
 
     commands_.clear();
-    if (history_->active_transaction_ == this) {
-      history_->active_transaction_ = nullptr;
+    if (history->active_transaction_ == this) {
+      history->active_transaction_ = nullptr;
     }
     history_ = nullptr;
     failed_cancel_restored_applied_state_ = false;
+    if (changed && history->change_observer_) {
+      history->change_observer_();
+    }
     return changed ? command_changed_result() : command_unchanged_result();
 }
 
@@ -349,18 +353,31 @@ CommandResult EditorHistoryService::execute(std::unique_ptr<IUndoableCommand> co
 }
 
 CommandResult EditorHistoryService::execute(std::unique_ptr<IUndoableCommand> command, UndoRedoExecuteOptions options) {
+  CommandResult result;
   if (active_transaction_ != nullptr) {
-    return active_transaction_->execute(std::move(command), std::move(options));
+    result =
+        active_transaction_->execute(std::move(command), std::move(options));
+  } else {
+    result = undo_redo_->execute(std::move(command), std::move(options));
   }
-  return undo_redo_->execute(std::move(command), std::move(options));
+  if (result.ok && result.changed && change_observer_) {
+    change_observer_();
+  }
+  return result;
 }
 
 CommandResult EditorHistoryService::record_executed(
     std::unique_ptr<IUndoableCommand> command) {
+  CommandResult result;
   if (active_transaction_ != nullptr) {
-    return active_transaction_->record_executed(std::move(command));
+    result = active_transaction_->record_executed(std::move(command));
+  } else {
+    result = undo_redo_->record_executed(std::move(command));
   }
-  return undo_redo_->record_executed(std::move(command));
+  if (result.ok && result.changed && change_observer_) {
+    change_observer_();
+  }
+  return result;
 }
 
 CommandResult EditorHistoryService::undo() {
@@ -368,7 +385,11 @@ CommandResult EditorHistoryService::undo() {
     return command_invalid_result(
         "Cannot undo while an editor transaction is active");
   }
-  return undo_redo_->undo();
+  CommandResult result = undo_redo_->undo();
+  if (result.ok && result.changed && change_observer_) {
+    change_observer_();
+  }
+  return result;
 }
 
 CommandResult EditorHistoryService::redo() {
@@ -376,7 +397,11 @@ CommandResult EditorHistoryService::redo() {
     return command_invalid_result(
         "Cannot redo while an editor transaction is active");
   }
-  return undo_redo_->redo();
+  CommandResult result = undo_redo_->redo();
+  if (result.ok && result.changed && change_observer_) {
+    change_observer_();
+  }
+  return result;
 }
 
 bool EditorHistoryService::can_undo() const {
@@ -396,6 +421,11 @@ const std::string *EditorHistoryService::redo_label() const {
 }
 
 void EditorHistoryService::clear() { undo_redo_->clear(); }
+
+void EditorHistoryService::set_change_observer(
+    std::function<void()> observer) {
+  change_observer_ = std::move(observer);
+}
 
 EditorTransaction EditorHistoryService::begin_transaction(std::string label) {
   return EditorTransaction(*this, std::move(label));

@@ -53,10 +53,17 @@ public:
       std::function<ModelingInstanceEditScope()> provider);
   void set_app_selection_mode_provider(
       std::function<ModelingSelectionMode()> provider);
+  void set_viewport_visibility_filter(
+      std::function<bool(EntityId)> filter,
+      std::function<std::uint64_t()> revision_provider,
+      std::function<bool()> active_provider);
+  [[nodiscard]] bool viewport_entity_visible(EntityId entity) const;
+  [[nodiscard]] std::uint64_t viewport_visibility_revision() const;
+  [[nodiscard]] bool viewport_visibility_active() const;
   [[nodiscard]] std::optional<EntityId>
   scene_target_for_picking_participant(int participant_id) const;
   [[nodiscard]] std::optional<ModelingCommandResult>
-  select_all_in_instance_edit_scope(
+  select_all_in_viewport_scope(
       quader_editor_core::EditorSession &session, const SceneDocument &scene,
       const ModelingObjectRuntimeMap &object_map, bool invert) const;
 
@@ -162,6 +169,7 @@ private:
     std::uint64_t scene_visibility_revision = 0;
     std::uint64_t scene_layer_revision = 0;
     std::uint64_t scene_mesh_binding_revision = 0;
+    std::uint64_t viewport_visibility_revision = 0;
     std::uint64_t object_map_revision = 0;
     ModelingInstanceEditScope instance_edit_scope;
     ModelingSelectionMode app_selection_mode = ModelingSelectionMode::Object;
@@ -180,6 +188,7 @@ private:
     std::uint64_t scene_revision = 0;
     std::uint64_t scene_layer_revision = 0;
     std::uint64_t object_map_revision = 0;
+    std::uint64_t viewport_visibility_revision = 0;
     ModelingInstanceEditScope instance_edit_scope;
     ModelingSelectionMode app_selection_mode = ModelingSelectionMode::Object;
     quader_editor_core::RectangleSelectionUniverse universe;
@@ -245,6 +254,9 @@ private:
   mutable std::uint64_t local_face_geometry_build_count_ = 0;
   std::function<ModelingInstanceEditScope()> instance_edit_scope_provider_;
   std::function<ModelingSelectionMode()> app_selection_mode_provider_;
+  std::function<bool(EntityId)> viewport_visibility_filter_;
+  std::function<std::uint64_t()> viewport_visibility_revision_provider_;
+  std::function<bool()> viewport_visibility_active_provider_;
   mutable std::unordered_map<EntityId, int>
       instance_participant_id_by_occurrence_;
   mutable std::unordered_map<int, EntityId>

@@ -132,6 +132,7 @@ private:
     std::uint64_t synced_asset_revision_ = 0;
     std::uint64_t synced_selection_revision_ = 0;
     std::uint64_t synced_visibility_revision_ = 0;
+    std::uint64_t synced_local_visibility_revision_ = 0;
     std::uint64_t synced_transform_revision_ = 0;
     std::uint64_t synced_mesh_binding_revision_ = 0;
     std::uint64_t synced_face_style_signature_ = 0;

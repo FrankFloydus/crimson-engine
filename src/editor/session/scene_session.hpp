@@ -29,6 +29,7 @@ class PivotToolService;
 class PrimitiveCreationToolService;
 class RadialArrayToolService;
 class SceneInstanceService;
+class ViewportLocalVisibilityService;
 class ViewportPointPlacementService;
 
 /**
@@ -124,6 +125,12 @@ public:
   const ViewportWorkspaceService &viewport_workspace() const {
     return viewport_workspace_;
   }
+  ViewportLocalVisibilityService &viewport_local_visibility() {
+    return *viewport_local_visibility_;
+  }
+  const ViewportLocalVisibilityService &viewport_local_visibility() const {
+    return *viewport_local_visibility_;
+  }
 
   [[nodiscard]] SceneSessionReadView read_view() const;
   [[nodiscard]] SceneContentRevisionStamp content_revision_stamp() const;
@@ -170,6 +177,7 @@ private:
   std::unique_ptr<NativeViewportToolCoordinator> native_tools_;
   ViewportWorkspaceService viewport_workspace_{
       ViewportWorkspaceLayoutPolicy::MultiPane};
+  std::unique_ptr<ViewportLocalVisibilityService> viewport_local_visibility_;
   std::function<void(SceneSession &)> document_replacement_finalizer_;
 };
 

@@ -360,6 +360,32 @@ TEST(QtInputAdapterTests, CanonicalMouseClickParsesAndFormatsRoundTrip) {
   EXPECT_EQ(quader_input_format_chord(*chord), "Alt+MiddleMouseClick");
 }
 
+TEST(QtInputAdapterTests,
+     DistinguishesBackslashSlashAndKeypadDivideBindings) {
+  const std::optional<QuaderInputChord> backslash_symbol =
+      quader_input_parse_chord("\\");
+  const std::optional<QuaderInputChord> backslash_named =
+      quader_input_parse_chord("Backslash");
+  const std::optional<QuaderInputChord> slash =
+      quader_input_parse_chord("/");
+  const std::optional<QuaderInputChord> keypad_divide =
+      quader_input_parse_chord("KeypadDivide");
+
+  ASSERT_TRUE(backslash_symbol.has_value());
+  ASSERT_TRUE(backslash_named.has_value());
+  ASSERT_TRUE(slash.has_value());
+  ASSERT_TRUE(keypad_divide.has_value());
+  EXPECT_EQ(backslash_symbol->key, QuaderKeyCode::Backslash);
+  EXPECT_EQ(backslash_named->key, QuaderKeyCode::Backslash);
+  EXPECT_EQ(slash->key, QuaderKeyCode::Slash);
+  EXPECT_EQ(keypad_divide->key, QuaderKeyCode::NumpadDivide);
+  EXPECT_EQ(quader_input_format_chord(*backslash_symbol), "Backslash");
+  EXPECT_EQ(quader_input_format_chord(*slash), "Slash");
+  EXPECT_EQ(quader_input_format_chord(*keypad_divide), "KeypadDivide");
+  EXPECT_NE(backslash_symbol->key, slash->key);
+  EXPECT_NE(backslash_symbol->key, keypad_divide->key);
+}
+
 TEST(QtViewportSurfaceInputTests,
      StationaryReleaseEmitsClickButPointerDragDoesNot) {
   ASSERT_EQ(QCoreApplication::instance(), nullptr);

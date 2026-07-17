@@ -11,6 +11,8 @@
 
 namespace quader {
 
+class ViewportLocalVisibilityService;
+
 /**
  * Provides runtime-only access to viewport internals without exposing them on the public API.
  */
@@ -20,6 +22,8 @@ public:
     [[nodiscard]] static const ViewportWorkspaceService& workspace(const QuaderViewportApi& api);
     static void bind_scene_workspace(QuaderViewportApi &api,
                                      ViewportWorkspaceService &workspace);
+    static void bind_scene_local_visibility(
+        QuaderViewportApi &api, ViewportLocalVisibilityService &service);
 };
 
 } // namespace quader

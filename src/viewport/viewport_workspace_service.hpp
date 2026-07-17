@@ -9,9 +9,11 @@
 #include "math/types.hpp"
 #include "viewport/viewport_camera_controller.hpp"
 #include "viewport/viewport_layout.hpp"
+#include "viewport/viewport_local_visibility.hpp"
 
 #include <array>
 #include <cstdint>
+#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -161,6 +163,8 @@ public:
   [[nodiscard]] const ViewportCameraController &
   camera(ViewportPaneId pane) const;
   bool focus_origin(ViewportPaneId pane, float distance = 64.0f);
+  bool focus_local_visibility_bounds(QVec3 min_bounds, QVec3 max_bounds,
+                                     float margin = 1.25f);
 
   [[nodiscard]] ViewportWorkspacePaneState &pane(ViewportPaneId pane);
   [[nodiscard]] const ViewportWorkspacePaneState &
@@ -198,7 +202,33 @@ public:
   bool set_auxiliary_viewport_render_size(std::string_view stable_id,
                                           QVec2 size);
 
+  [[nodiscard]] bool local_visibility_active() const {
+    return local_visibility_snapshot_.active();
+  }
+  [[nodiscard]] std::uint64_t local_visibility_revision() const {
+    return local_visibility_snapshot_.revision();
+  }
+  [[nodiscard]] ViewportLocalVisibilitySnapshot
+  local_visibility_snapshot() const {
+    return local_visibility_snapshot_;
+  }
+  bool enter_local_visibility(
+      std::span<const ViewportLocalVisibilityEntityId> baseline_entities,
+      std::span<const ViewportLocalVisibilityEntityId> members);
+  bool add_local_visibility_members(
+      std::span<const ViewportLocalVisibilityEntityId> members);
+  bool exit_local_visibility();
+  bool reset_local_visibility();
+
 private:
+  /// Captures one pre-entry auxiliary viewport camera by stable identity.
+  struct AuxiliaryViewportCameraBackup {
+    std::string stable_id;
+    ViewportCameraController camera;
+  };
+
+  void restore_local_visibility_cameras();
+  [[nodiscard]] std::uint64_t next_local_visibility_revision();
   [[nodiscard]] bool focused_pane_is_visible() const;
   [[nodiscard]] std::vector<ViewportPanePlacement>
   layout_pane_placements() const;
@@ -212,6 +242,11 @@ private:
   bool focused_pane_maximized_ = false;
   int grid_preset_ = 0;
   std::vector<ViewportWorkspaceAuxiliaryViewportState> auxiliary_viewports_;
+  ViewportLocalVisibilitySnapshot local_visibility_snapshot_;
+  std::array<ViewportCameraController, kViewportPaneCount>
+      local_visibility_pane_camera_backups_;
+  std::vector<AuxiliaryViewportCameraBackup>
+      local_visibility_auxiliary_camera_backups_;
 };
 
 } // namespace quader

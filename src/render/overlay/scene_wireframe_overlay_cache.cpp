@@ -427,6 +427,7 @@ void SceneWireframeOverlayCache::shutdown() {
   synced_scene_binding_ = {};
   synced_scene_revision_ = 0u;
   synced_asset_revision_ = 0u;
+  synced_local_visibility_revision_ = 0u;
   synced_wire_style_signature_ = 0u;
   synced_clip_planes_ = {};
   layer_mask_ = 0u;
@@ -480,7 +481,10 @@ void SceneWireframeOverlayCache::sync(
       has_synced_, synced_wire_style_signature_, snapshot.style);
   if (has_synced_ && synced_scene_binding_ == snapshot.scene_binding &&
       synced_scene_revision_ == snapshot.scene_revision &&
-      synced_asset_revision_ == snapshot.asset_revision && !clip_changed &&
+      synced_asset_revision_ == snapshot.asset_revision &&
+      synced_local_visibility_revision_ ==
+          snapshot.local_visibility_revision &&
+      !clip_changed &&
       !style_changed) {
     return;
   }
@@ -512,6 +516,7 @@ void SceneWireframeOverlayCache::sync(
   synced_scene_binding_ = snapshot.scene_binding;
   synced_scene_revision_ = snapshot.scene_revision;
   synced_asset_revision_ = snapshot.asset_revision;
+  synced_local_visibility_revision_ = snapshot.local_visibility_revision;
   synced_wire_style_signature_ = snapshot.style.wire_signature;
   synced_clip_planes_ = snapshot.clip_planes;
   has_synced_ = true;

@@ -124,7 +124,8 @@ PickingCacheProjection::scene_transformed_objects_for_picking(
     const SceneDocument &scene, const ModelingObjectRuntimeMap &object_map,
     ModelingInstanceEditScope instance_edit_scope,
     ModelingSelectionMode app_selection_mode,
-    const std::function<int(EntityId)> &instance_participant_id) {
+    const std::function<int(EntityId)> &instance_participant_id,
+    const std::function<bool(EntityId)> &entity_visible) {
   QDR_PROFILE_FUNCTION();
   ModelingPickingProjection projection;
   projection.objects.reserve(objects.size());
@@ -132,6 +133,7 @@ PickingCacheProjection::scene_transformed_objects_for_picking(
 
   const bool edit_scope_valid =
       instance_edit_scope.active() &&
+      (!entity_visible || entity_visible(instance_edit_scope.occurrence)) &&
       scene.is_instance_definition_entity(instance_edit_scope.definition) &&
       occurrence_is_pickable(scene, instance_edit_scope.occurrence) &&
       scene.instance_occurrence(instance_edit_scope.occurrence) != nullptr &&
@@ -153,6 +155,7 @@ PickingCacheProjection::scene_transformed_objects_for_picking(
     if (instance_edit_scope.active()) {
       if (!edit_scope_valid || !definition_member ||
           definition != instance_edit_scope.definition ||
+          (entity_visible && !entity_visible(*entity)) ||
           !scene_hierarchy_segment_is_selectable(scene, *entity,
                                                  definition)) {
         continue;
@@ -181,7 +184,8 @@ PickingCacheProjection::scene_transformed_objects_for_picking(
           scene.instance_occurrences_for_definition(definition);
       std::sort(occurrences.begin(), occurrences.end());
       for (const EntityId occurrence : occurrences) {
-        if (!occurrence_is_pickable(scene, occurrence)) {
+        if (!occurrence_is_pickable(scene, occurrence) ||
+            (entity_visible && !entity_visible(occurrence))) {
           continue;
         }
         const std::optional<QMat4> world_from_object =
@@ -211,6 +215,7 @@ PickingCacheProjection::scene_transformed_objects_for_picking(
 
     const VisibilityComponent *visibility = scene.visibility(*entity);
     if (!scene.is_effectively_visible(*entity) ||
+        (entity_visible && !entity_visible(*entity)) ||
         scene.is_effectively_locked(*entity) ||
         (visibility != nullptr && !visibility->selectable)) {
       continue;

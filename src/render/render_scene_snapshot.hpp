@@ -16,6 +16,7 @@
 #include "render/instance_batch_planner.hpp"
 #include "render/render_scene_binding.hpp"
 #include "scene/components.hpp"
+#include "viewport/viewport_local_visibility.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -192,6 +193,7 @@ struct RenderSceneSnapshotDirtyState {
   bool scene_changed = true;
   bool selection_changed = true;
   bool visibility_changed = true;
+  bool local_visibility_changed = true;
   bool transforms_changed = true;
   bool mesh_bindings_changed = true;
   bool render_components_changed = true;
@@ -200,7 +202,8 @@ struct RenderSceneSnapshotDirtyState {
 
   [[nodiscard]] bool any_dirty() const {
     return scene_changed || selection_changed || visibility_changed ||
-           transforms_changed || mesh_bindings_changed ||
+           local_visibility_changed || transforms_changed ||
+           mesh_bindings_changed ||
            render_components_changed || assets_changed ||
            project_materials_changed;
   }
@@ -227,6 +230,7 @@ struct RenderSceneSnapshot {
   std::uint64_t scene_revision = 0;
   std::uint64_t selection_revision = 0;
   std::uint64_t visibility_revision = 0;
+  std::uint64_t local_visibility_revision = 0;
   std::uint64_t transform_revision = 0;
   std::uint64_t mesh_binding_revision = 0;
   std::uint64_t render_component_revision = 0;
@@ -252,6 +256,7 @@ struct RenderSceneSnapshotBuildOptions {
   const RenderProjectMaterialResolver *project_material_resolver = nullptr;
   std::uint64_t project_material_revision = 0u;
   RenderInstanceEditScope instance_edit_scope;
+  const ViewportLocalVisibilitySnapshot *local_visibility = nullptr;
 };
 
 /**

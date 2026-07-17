@@ -10,6 +10,7 @@
 #include "core/i_undoable_command.hpp"
 #include "core/undo_redo_execute_options.hpp"
 
+#include <functional>
 #include <memory>
 #include <string>
 #include <vector>
@@ -86,6 +87,7 @@ public:
     [[nodiscard]] const std::string *redo_label() const;
 
     void clear();
+    void set_change_observer(std::function<void()> observer);
 
     [[nodiscard]] EditorTransaction begin_transaction(std::string label);
 
@@ -98,6 +100,7 @@ public:
 
     std::unique_ptr<UndoRedoManager> undo_redo_;
     EditorTransaction *active_transaction_ = nullptr;
+    std::function<void()> change_observer_;
 };
 
 } // namespace quader
