@@ -493,7 +493,7 @@ bool wireframe_suppresses_triangle_layer(ViewportOverlayLayer layer) {
          layer == ViewportOverlayLayer::HoverFace;
 }
 
-bool persistent_object_selection_triangle(
+bool persistent_object_selection_fill_triangle(
     const ViewportOverlayTriangle &triangle) {
   if (triangle.source != ViewportOverlaySource::Selection ||
       triangle.element.object_id < 0) {
@@ -502,15 +502,6 @@ bool persistent_object_selection_triangle(
   return triangle.layer == ViewportOverlayLayer::SelectedVisibleFace ||
          triangle.layer == ViewportOverlayLayer::SelectedXrayFace ||
          triangle.layer == ViewportOverlayLayer::SelectedFaceMask;
-}
-
-bool persistent_object_selection_line(const ViewportOverlayLine &line) {
-  if (line.source != ViewportOverlaySource::Selection ||
-      line.element.object_id < 0) {
-    return false;
-  }
-  return line.layer == ViewportOverlayLayer::SelectedFaceEdge ||
-         line.layer == ViewportOverlayLayer::SelectedEdge;
 }
 
 void strip_wireframe_object_face_fills(ViewportOverlayFrame &frame,
@@ -538,8 +529,8 @@ ViewportOverlayFrame ViewportSceneOverlayBuilder::build_selection_frame(
   QDR_PROFILE_FUNCTION();
   if (selection_mode == ModelingSelectionMode::Object &&
       snapshot.selected_mesh_bounds.size() > 1u) {
-    base_frame = strip_persistent_object_selection(std::move(base_frame),
-                                                   selection_mode);
+    base_frame = strip_persistent_object_selection_fills(
+        std::move(base_frame), selection_mode);
   }
   append_hierarchy_selection_wires(base_frame, snapshot);
   append_group_selection_cages(base_frame, snapshot);
@@ -567,19 +558,16 @@ ViewportOverlayFrame ViewportSceneOverlayBuilder::build_selection_frame(
 }
 
 ViewportOverlayFrame
-ViewportSceneOverlayBuilder::strip_persistent_object_selection(
+ViewportSceneOverlayBuilder::strip_persistent_object_selection_fills(
     ViewportOverlayFrame frame, ModelingSelectionMode selection_mode) {
   if (selection_mode != ModelingSelectionMode::Object) {
     return frame;
   }
 
-  frame.triangles.erase(std::remove_if(frame.triangles.begin(),
-                                       frame.triangles.end(),
-                                       persistent_object_selection_triangle),
-                        frame.triangles.end());
-  frame.lines.erase(std::remove_if(frame.lines.begin(), frame.lines.end(),
-                                   persistent_object_selection_line),
-                    frame.lines.end());
+  frame.triangles.erase(
+      std::remove_if(frame.triangles.begin(), frame.triangles.end(),
+                     persistent_object_selection_fill_triangle),
+      frame.triangles.end());
   return frame;
 }
 

@@ -27,8 +27,8 @@ public:
       ViewportOverlayFrame base_frame, ModelingSelectionMode selection_mode,
       const RenderOverlaySceneWireframeSnapshot &snapshot);
   [[nodiscard]] static ViewportOverlayFrame
-  strip_persistent_object_selection(ViewportOverlayFrame frame,
-                                    ModelingSelectionMode selection_mode);
+  strip_persistent_object_selection_fills(
+      ViewportOverlayFrame frame, ModelingSelectionMode selection_mode);
   [[nodiscard]] static ViewportOverlayFrame
   strip_wireframe_selection_fills(ViewportOverlayFrame frame,
                                   ModelingSelectionMode selection_mode);

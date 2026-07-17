@@ -5104,3 +5104,21 @@ Invariant:
 Owners: `ViewportWorkspaceService`, `ViewportLocalVisibilityService`, `SceneSession`, public
 viewport commands/API, render/overlay extraction, modeling selection/picking, and retained Qt
 viewport caches.
+
+## 2026-07-17 - Multi-Mesh Selection Keeps Per-Mesh Outlines
+
+Invariant:
+
+- Object-mode selection of multiple meshes draws one world-AABB cage around the complete
+  selection and retains the normal selected topology outline for every participating mesh.
+- The aggregate cage may replace per-mesh bounds cages, but it never replaces selected mesh
+  outlines. Multi-selection may still suppress persistent selected face fills, and hover feedback
+  remains intact.
+- `ViewportSceneOverlayBuilder` owns this composition policy. The modeling overlay cache continues
+  to provide cached per-object outline lines without adding per-frame mesh extraction.
+
+Owners: `viewport_scene_overlay_builder.*`, modeling selection overlay caching, and render
+extraction tests.
+
+Verification: 7/7 focused scene-overlay builder tests, 378/378 affected render/viewport tests,
+the affected render guardrail, and the final native v0.1.45 build pass.

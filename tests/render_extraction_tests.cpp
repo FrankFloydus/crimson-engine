@@ -2828,7 +2828,7 @@ TEST(ViewportSceneOverlayBuilderTests,
 }
 
 TEST(ViewportSceneOverlayBuilderTests,
-     MultipleSelectedMeshesUseOneAggregateBoundsCageWithoutObjectDetail) {
+     MultipleSelectedMeshesKeepIndividualOutlinesWithAggregateBoundsCage) {
     SceneDocument document;
     AssetRegistry assets;
     const AssetId mesh = assets.add_mesh(make_authored_quad_mesh());
@@ -2861,6 +2861,13 @@ TEST(ViewportSceneOverlayBuilderTests,
         .source = ViewportOverlaySource::Selection,
         .element = {.object_id = 1},
     });
+    base_frame.lines.push_back({
+        .layer = ViewportOverlayLayer::SelectedEdge,
+        .start = {4.0f, -2.0f, -1.0f},
+        .end = {5.0f, -2.0f, -1.0f},
+        .source = ViewportOverlaySource::Selection,
+        .element = {.object_id = 2},
+    });
     base_frame.triangles.push_back({
         .layer = ViewportOverlayLayer::SelectedVisibleFace,
         .a = {-3.0f, 1.0f, 2.0f},
@@ -2882,12 +2889,13 @@ TEST(ViewportSceneOverlayBuilderTests,
             std::move(base_frame), snapshot, false,
             ModelingSelectionMode::Object);
 
-    EXPECT_EQ(line_count_for(frame, ViewportOverlayLayer::SelectedEdge), 0u);
+    EXPECT_EQ(line_count_for(frame, ViewportOverlayLayer::SelectedEdge), 2u)
+        << "the aggregate cage must not replace each selected mesh outline";
     EXPECT_EQ(
         triangle_count_for(frame, ViewportOverlayLayer::SelectedVisibleFace),
         0u);
     EXPECT_EQ(line_count_for(frame, ViewportOverlayLayer::HoverEdge), 1u)
-        << "multi-selection detail suppression must preserve hover feedback";
+        << "multi-selection fill suppression must preserve hover feedback";
     EXPECT_EQ(line_count_for(frame, ViewportOverlayLayer::GroupBounds), 12u);
     const std::optional<SceneBounds> cage =
         line_bounds_for(frame, ViewportOverlayLayer::GroupBounds);
