@@ -3241,14 +3241,21 @@ TEST(BuildGuardrailTests, AppVersionMetadataUsesRootVersionSource) {
                   "kQuaderAppVersionDisplay = \"v@QUADER_APP_VERSION@\"");
 
   expect_contains(agents, "## Versioning Rule");
-  expect_contains(agents, "follow the app version bump rule");
   expect_contains(agents,
                   "Root `VERSION` is the app version source of truth");
   expect_contains(agents,
                   "`vcpkg.json` `version-string` must mirror it");
+  expect_contains(agents, "Preserve the current app version by default");
+  expect_contains(agents,
+                  "Do not infer a version bump from project-file changes");
+  expect_contains(agents,
+                  "explicitly asks for a version bump");
+  expect_contains(agents,
+                  "otherwise leave both `VERSION` and `vcpkg.json` unchanged");
+  expect_contains(agents, "When a bump is explicitly requested");
   expect_contains(agents, "major/minor fixed at `0.1`");
   expect_contains(agents, "within `0..9999`");
-  expect_contains(agents, "before the final handoff `quader` build");
+  expect_contains(agents, "once before the final handoff");
   expect_contains(agents, "Do not");
   expect_contains(agents, "planning, review, inspection-only, failed/no-change,");
   expect_contains(agents, "or explanation-only turns");

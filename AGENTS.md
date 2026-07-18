@@ -335,16 +335,16 @@ user explicitly names the files, changes, or scope to include or exclude.
 Root `VERSION` is the app version source of truth, and `vcpkg.json` `version-string` must mirror it.
 Use unpadded `x.y.z` numeric format; the app displays it as `vX.Y.Z`.
 
-Before final handoff builds after project-file changes, follow the app version bump rule in this
-section.
+Preserve the current app version by default. Do not infer a version bump from project-file changes,
+final handoff, a build, commit, or push. Change the version only when the user's current request
+explicitly asks for a version bump; otherwise leave both `VERSION` and `vcpkg.json` unchanged.
 
-Starting from the explicit `0.1.0` baseline, keep major/minor fixed at `0.1` and bump only the
-patch/build component. Patch must stay within `0..9999`; if it is already `9999`, stop and ask
-before rolling minor or major.
+When a bump is explicitly requested, update both version sources once before the final handoff
+`quader` build. Starting from the explicit `0.1.0` baseline, keep major/minor fixed at `0.1` and
+bump only the patch/build component unless the user requests a different version. Patch must stay
+within `0..9999`; if it is already `9999`, stop and ask before rolling minor or major.
 
-Agents must bump both `VERSION` and `vcpkg.json` once before the final handoff `quader` build when
-a task changes project files. Do not bump for planning, review, inspection-only, failed/no-change,
-or explanation-only turns.
+Do not bump for planning, review, inspection-only, failed/no-change, or explanation-only turns.
 
 ## Fast Iteration Mode
 

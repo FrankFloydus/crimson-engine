@@ -47,6 +47,7 @@ public:
                             bool snap_enabled = true);
     [[nodiscard]] bool has_active_primitive_creation() const;
     [[nodiscard]] std::string active_primitive_type() const;
+    [[nodiscard]] std::string active_primitive_default_name() const;
     QuaderApiVoidResult commit_active_tool_preview();
     QuaderApiVoidResult cancel_active_tool_preview();
     QuaderApiVoidResult cancel_modal_tool();

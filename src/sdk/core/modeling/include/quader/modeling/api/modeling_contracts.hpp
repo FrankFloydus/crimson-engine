@@ -174,6 +174,20 @@ struct CylinderOptions {
 };
 
 /**
+ * Defines origin-centered cone creation settings.
+ */
+struct ConeOptions {
+  std::string name = "Mesh";
+  float width = 2.0F;
+  float height = 2.0F;
+  float depth = 2.0F;
+  int side_count = 32;
+  bool capped = true;
+  bool flip_faces = false;
+  MaterialId material{};
+};
+
+/**
  * Defines origin-centered sphere or upper-hemisphere creation settings.
  */
 struct SphereOptions {
@@ -184,6 +198,23 @@ struct SphereOptions {
   int radial_segments = 32;
   int rings = 16;
   bool hemisphere = false;
+  bool flip_faces = false;
+  MaterialId material{};
+};
+
+/**
+ * Defines origin-centered torus creation settings. Width, height, and depth
+ * are the outer dimensions; tube_radius_ratio is relative to the outer X/Z
+ * radii and must remain below one half.
+ */
+struct TorusOptions {
+  std::string name = "Mesh";
+  float width = 2.0F;
+  float height = 0.4F;
+  float depth = 2.0F;
+  int major_segments = 32;
+  int minor_segments = 12;
+  float tube_radius_ratio = 0.2F;
   bool flip_faces = false;
   MaterialId material{};
 };

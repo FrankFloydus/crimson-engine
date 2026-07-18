@@ -23,7 +23,9 @@ public:
   [[nodiscard]] Result<MeshHandle> create_box(BoxOptions options = {});
   [[nodiscard]] Result<MeshHandle>
   create_cylinder(CylinderOptions options = {});
+  [[nodiscard]] Result<MeshHandle> create_cone(ConeOptions options = {});
   [[nodiscard]] Result<MeshHandle> create_sphere(SphereOptions options = {});
+  [[nodiscard]] Result<MeshHandle> create_torus(TorusOptions options = {});
   [[nodiscard]] Result<MeshHandle>
   add_document(PolygonDocument document, std::string name = "Mesh");
   [[nodiscard]] CheckedIoApi io();
@@ -53,7 +55,9 @@ public:
 
   [[nodiscard]] MeshHandle create_box(BoxOptions options = {});
   [[nodiscard]] MeshHandle create_cylinder(CylinderOptions options = {});
+  [[nodiscard]] MeshHandle create_cone(ConeOptions options = {});
   [[nodiscard]] MeshHandle create_sphere(SphereOptions options = {});
+  [[nodiscard]] MeshHandle create_torus(TorusOptions options = {});
   [[nodiscard]] MeshHandle add_document(PolygonDocument document,
                                         std::string name = "Mesh");
 

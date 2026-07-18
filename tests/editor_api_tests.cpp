@@ -2867,7 +2867,20 @@ TEST(EditorApiTests,
   EXPECT_TRUE(settings.apply_visible);
   EXPECT_FALSE(settings.can_apply);
   EXPECT_TRUE(settings.can_cancel);
-  ASSERT_NE(control(settings, "primitive.type"), settings.controls.end());
+  const auto primitive_type = control(settings, "primitive.type");
+  ASSERT_NE(primitive_type, settings.controls.end());
+  ASSERT_EQ(primitive_type->choices.size(), 5U);
+  EXPECT_EQ(primitive_type->choices[0].id, "box");
+  EXPECT_EQ(primitive_type->choices[1].id, "cylinder");
+  EXPECT_EQ(primitive_type->choices[2].id, "sphere");
+  EXPECT_EQ(primitive_type->choices[3].id, "cone");
+  EXPECT_EQ(primitive_type->choices[4].id, "torus");
+  EXPECT_DOUBLE_EQ(primitive_type->choices[0].value, 0.0);
+  EXPECT_DOUBLE_EQ(primitive_type->choices[1].value, 1.0);
+  EXPECT_DOUBLE_EQ(primitive_type->choices[2].value, 2.0);
+  EXPECT_DOUBLE_EQ(primitive_type->choices[3].value, 3.0);
+  EXPECT_DOUBLE_EQ(primitive_type->choices[4].value, 4.0);
+  EXPECT_EQ(editor.tools().active_primitive_default_name(), "Box");
   ASSERT_NE(control(settings, "primitive.box.subdivisions_x"),
             settings.controls.end());
   ASSERT_NE(control(settings, "primitive.box.subdivisions_y"),
@@ -2920,10 +2933,62 @@ TEST(EditorApiTests,
   ASSERT_NE(control(settings, "primitive.flip_faces"),
             settings.controls.end());
 
+  ASSERT_TRUE(editor.tools()
+                  .set_setting("create_primitive", "primitive.type", "cone")
+                  .ok());
+  EXPECT_EQ(editor.tools().active_primitive_type(), "cone");
+  EXPECT_EQ(editor.tools().active_primitive_default_name(), "Cone");
+  settings = editor.tools().active_settings();
+  ASSERT_NE(control(settings, "primitive.cone.side_count"),
+            settings.controls.end());
+  ASSERT_NE(control(settings, "primitive.cone.caps"),
+            settings.controls.end());
+  ASSERT_NE(control(settings, "primitive.flip_faces"),
+            settings.controls.end());
+  ASSERT_TRUE(editor.tools()
+                  .set_setting("create_primitive",
+                               "primitive.cone.side_count", 7.0)
+                  .ok());
+  ASSERT_TRUE(editor.tools()
+                  .set_setting("create_primitive", "primitive.cone.caps",
+                               false)
+                  .ok());
+
+  ASSERT_TRUE(editor.tools()
+                  .set_setting("create_primitive", "primitive.type", "torus")
+                  .ok());
+  EXPECT_EQ(editor.tools().active_primitive_type(), "torus");
+  EXPECT_EQ(editor.tools().active_primitive_default_name(), "Torus");
+  settings = editor.tools().active_settings();
+  ASSERT_NE(control(settings, "primitive.torus.major_segments"),
+            settings.controls.end());
+  ASSERT_NE(control(settings, "primitive.torus.minor_segments"),
+            settings.controls.end());
+  const auto tube_ratio =
+      control(settings, "primitive.torus.tube_radius_ratio");
+  ASSERT_NE(tube_ratio, settings.controls.end());
+  EXPECT_DOUBLE_EQ(tube_ratio->number_value, 0.2);
+  EXPECT_DOUBLE_EQ(tube_ratio->min_value, 0.01);
+  EXPECT_DOUBLE_EQ(tube_ratio->max_value, 0.49);
+  EXPECT_DOUBLE_EQ(tube_ratio->step, 0.01);
+  ASSERT_TRUE(editor.tools()
+                  .set_setting("create_primitive",
+                               "primitive.torus.major_segments", 24.0)
+                  .ok());
+  ASSERT_TRUE(editor.tools()
+                  .set_setting("create_primitive",
+                               "primitive.torus.minor_segments", 10.0)
+                  .ok());
+  ASSERT_TRUE(editor.tools()
+                  .set_setting("create_primitive",
+                               "primitive.torus.tube_radius_ratio", 0.3)
+                  .ok());
+
   const quader::QuaderApiVoidResult canceled =
       editor.tools().cancel_active_tool_preview();
   EXPECT_TRUE(canceled.ok()) << canceled.error_message();
   EXPECT_EQ(editor.tools().active_tool(), "select");
+  EXPECT_TRUE(editor.tools().active_primitive_default_name().empty());
   EXPECT_FALSE(editor.tools().active_settings().active);
 }
 

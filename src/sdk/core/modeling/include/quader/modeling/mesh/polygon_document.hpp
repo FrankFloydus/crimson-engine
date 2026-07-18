@@ -75,6 +75,19 @@ struct CylinderSpec {
 };
 
 /**
+ * Defines an origin-centered cone document.
+ */
+struct ConeSpec {
+  float width = 2.0F;
+  float height = 2.0F;
+  float depth = 2.0F;
+  int side_count = 32;
+  bool capped = true;
+  bool flip_faces = false;
+  MaterialId material{};
+};
+
+/**
  * Defines an origin-centered sphere or upper hemisphere document.
  */
 struct SphereSpec {
@@ -84,6 +97,21 @@ struct SphereSpec {
   int radial_segments = 32;
   int rings = 16;
   bool hemisphere = false;
+  bool flip_faces = false;
+  MaterialId material{};
+};
+
+/**
+ * Defines an origin-centered torus document whose dimensions are its outer
+ * bounds. The tube radius ratio is measured against the outer X/Z radii.
+ */
+struct TorusSpec {
+  float width = 2.0F;
+  float height = 0.4F;
+  float depth = 2.0F;
+  int major_segments = 32;
+  int minor_segments = 12;
+  float tube_radius_ratio = 0.2F;
   bool flip_faces = false;
   MaterialId material{};
 };
@@ -141,7 +169,11 @@ public:
   [[nodiscard]] static Result<PolygonDocument>
   make_cylinder(const CylinderSpec &spec);
   [[nodiscard]] static Result<PolygonDocument>
+  make_cone(const ConeSpec &spec);
+  [[nodiscard]] static Result<PolygonDocument>
   make_sphere(const SphereSpec &spec);
+  [[nodiscard]] static Result<PolygonDocument>
+  make_torus(const TorusSpec &spec);
   [[nodiscard]] static Result<PolygonDocument>
   make_face(std::span<const Vec3> points, MaterialId material = {});
   [[nodiscard]] static Result<PolygonDocument>

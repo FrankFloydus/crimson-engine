@@ -57,6 +57,22 @@ CheckedModelingApi::create_cylinder(CylinderOptions options) {
   return add_document(std::move(document).value(), std::move(options.name));
 }
 
+Result<MeshHandle> CheckedModelingApi::create_cone(ConeOptions options) {
+  Result<PolygonDocument> document = PolygonDocument::make_cone({
+      .width = options.width,
+      .height = options.height,
+      .depth = options.depth,
+      .side_count = options.side_count,
+      .capped = options.capped,
+      .flip_faces = options.flip_faces,
+      .material = options.material,
+  });
+  if (!document.ok()) {
+    return Result<MeshHandle>::failure(document.error());
+  }
+  return add_document(std::move(document).value(), std::move(options.name));
+}
+
 Result<MeshHandle> CheckedModelingApi::create_sphere(SphereOptions options) {
   Result<PolygonDocument> document = PolygonDocument::make_sphere({
       .width = options.width,
@@ -65,6 +81,23 @@ Result<MeshHandle> CheckedModelingApi::create_sphere(SphereOptions options) {
       .radial_segments = options.radial_segments,
       .rings = options.rings,
       .hemisphere = options.hemisphere,
+      .flip_faces = options.flip_faces,
+      .material = options.material,
+  });
+  if (!document.ok()) {
+    return Result<MeshHandle>::failure(document.error());
+  }
+  return add_document(std::move(document).value(), std::move(options.name));
+}
+
+Result<MeshHandle> CheckedModelingApi::create_torus(TorusOptions options) {
+  Result<PolygonDocument> document = PolygonDocument::make_torus({
+      .width = options.width,
+      .height = options.height,
+      .depth = options.depth,
+      .major_segments = options.major_segments,
+      .minor_segments = options.minor_segments,
+      .tube_radius_ratio = options.tube_radius_ratio,
       .flip_faces = options.flip_faces,
       .material = options.material,
   });
@@ -139,8 +172,26 @@ MeshHandle ModelingApi::create_cylinder(CylinderOptions options) {
   return std::move(result).value();
 }
 
+MeshHandle ModelingApi::create_cone(ConeOptions options) {
+  Result<MeshHandle> result = checked().create_cone(std::move(options));
+  if (!result.ok()) {
+    return handle_value_failure(*context_, result.error(), MeshHandle{});
+  }
+  context_->last_error.reset();
+  return std::move(result).value();
+}
+
 MeshHandle ModelingApi::create_sphere(SphereOptions options) {
   Result<MeshHandle> result = checked().create_sphere(std::move(options));
+  if (!result.ok()) {
+    return handle_value_failure(*context_, result.error(), MeshHandle{});
+  }
+  context_->last_error.reset();
+  return std::move(result).value();
+}
+
+MeshHandle ModelingApi::create_torus(TorusOptions options) {
+  Result<MeshHandle> result = checked().create_torus(std::move(options));
   if (!result.ok()) {
     return handle_value_failure(*context_, result.error(), MeshHandle{});
   }

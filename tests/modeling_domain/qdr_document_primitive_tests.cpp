@@ -148,6 +148,21 @@ Bounds document_bounds(const Document& document)
         "generated primitive should not produce validation diagnostics");
 }
 
+int edge_face_incidence(const Document& document, Edge edge)
+{
+    int result = 0;
+    for (const Face& face : document.faces) {
+        for (std::size_t index = 0; index < face.vertices.size(); ++index) {
+            const ElementId a = face.vertices[index];
+            const ElementId b = face.vertices[(index + 1U) % face.vertices.size()];
+            if (make_edge(a, b) == edge) {
+                ++result;
+            }
+        }
+    }
+    return result;
+}
+
 ::testing::AssertionResult require_faces_reversed(
     const Document& outward,
     const Document& flipped)
@@ -297,6 +312,46 @@ void cylinder_factory_honors_side_caps_dimensions_and_shading()
     ASSERT_TRUE(require_document_compiles(open, "open cylinder"));
 }
 
+void cone_factory_honors_side_cap_dimensions_and_shading()
+{
+    ConePrimitiveSpec spec;
+    spec.width = 4.0F;
+    spec.height = 6.0F;
+    spec.depth = 2.0F;
+    spec.side_count = 8;
+    const Document capped = make_cone(spec);
+
+    ASSERT_TRUE(require_test(capped.vertices.size() == 9U, "cone should share one apex across all sides"));
+    ASSERT_TRUE(require_test(capped.faces.size() == 9U, "capped cone should create one face per side and one cap"));
+    ASSERT_TRUE(require_test(std::ranges::all_of(capped.faces.begin(), capped.faces.begin() + 8, [](const Face& face) {
+        return face.normal_shading == SurfaceShading::Smooth;
+    }), "cone side faces should use smooth authored shading"));
+    ASSERT_TRUE(require_test(capped.faces.back().normal_shading == SurfaceShading::Flat, "cone base cap should be flat"));
+    ASSERT_TRUE(require_test(std::ranges::all_of(capped.faces, [](const Face& face) {
+        return face.uvs.empty();
+    }), "cone should preserve the primitive authored-UV contract"));
+    ASSERT_TRUE(require_bounds(capped, spec.width, spec.height, spec.depth));
+    quader::QVec3 side_normal;
+    ASSERT_TRUE(authored_face_normal(capped, capped.faces.front(), side_normal));
+    quader::QVec3 side_centroid;
+    ASSERT_TRUE(face_centroid(capped, capped.faces.front(), side_centroid));
+    ASSERT_TRUE(require_test(
+        quader::dot(side_normal, side_centroid) > 0.0F,
+        "cone side should wind outward"));
+    quader::QVec3 base_normal;
+    ASSERT_TRUE(authored_face_normal(capped, capped.faces.back(), base_normal));
+    ASSERT_TRUE(require_test(base_normal.y < 0.0F, "cone base cap should wind outward"));
+    ASSERT_TRUE(require_document_compiles(capped, "capped cone"));
+    ASSERT_TRUE(require_valid_document(capped));
+
+    spec.capped = false;
+    const Document open = make_cone(spec);
+    ASSERT_TRUE(require_test(open.vertices.size() == 9U, "open cone should preserve its side vertices"));
+    ASSERT_TRUE(require_test(open.faces.size() == 8U, "open cone should omit its base cap"));
+    ASSERT_TRUE(require_document_compiles(open, "open cone"));
+    ASSERT_TRUE(require_valid_document(open));
+}
+
 void sphere_factory_honors_radial_ring_and_hemisphere_settings()
 {
     SpherePrimitiveSpec spec;
@@ -343,6 +398,43 @@ void sphere_factory_honors_radial_ring_and_hemisphere_settings()
     ASSERT_TRUE(require_valid_document(hemisphere));
 }
 
+void torus_factory_honors_segment_ratio_dimension_and_shading_settings()
+{
+    TorusPrimitiveSpec spec;
+    spec.width = 4.0F;
+    spec.height = 1.5F;
+    spec.depth = 2.0F;
+    spec.major_segments = 8;
+    spec.minor_segments = 4;
+    spec.tube_radius_ratio = 0.25F;
+    const Document torus = make_torus(spec);
+
+    ASSERT_TRUE(require_test(torus.vertices.size() == 32U, "torus should create one vertex per major/minor segment pair"));
+    ASSERT_TRUE(require_test(torus.faces.size() == 32U, "torus should create one quad per major/minor segment pair"));
+    ASSERT_TRUE(require_test(std::ranges::all_of(torus.faces, [](const Face& face) {
+        return face.vertices.size() == 4U && face.normal_shading == SurfaceShading::Smooth;
+    }), "torus faces should be smooth quads"));
+    ASSERT_TRUE(require_test(std::ranges::all_of(torus.faces, [](const Face& face) {
+        return face.uvs.empty();
+    }), "torus should preserve the primitive authored-UV contract"));
+    const std::vector<Edge> edges = document_edges(torus);
+    ASSERT_TRUE(require_test(edges.size() == 64U, "closed torus should have two edges per quad"));
+    ASSERT_TRUE(require_test(std::ranges::all_of(edges, [&torus](Edge edge) {
+        return edge_face_incidence(torus, edge) == 2;
+    }), "every torus edge should have exactly two incident faces"));
+    ASSERT_TRUE(require_bounds(torus, spec.width, spec.height, spec.depth));
+    ASSERT_TRUE(require_test(std::ranges::any_of(torus.vertices, [](const Vertex& vertex) {
+        return nearly_equal(vertex.position.x, 1.0F) &&
+            nearly_equal(vertex.position.y, 0.0F) &&
+            nearly_equal(vertex.position.z, 0.0F);
+    }), "torus tube ratio should preserve the expected center hole"));
+    quader::QVec3 outer_normal;
+    ASSERT_TRUE(authored_face_normal(torus, torus.faces.front(), outer_normal));
+    ASSERT_TRUE(require_test(outer_normal.x > 0.0F, "torus outer tube should wind outward"));
+    ASSERT_TRUE(require_document_compiles(torus, "torus"));
+    ASSERT_TRUE(require_valid_document(torus));
+}
+
 void radial_primitive_factories_clamp_counts_and_dimensions()
 {
     CylinderPrimitiveSpec cylinder_spec;
@@ -381,6 +473,44 @@ void radial_primitive_factories_clamp_counts_and_dimensions()
     sphere_spec.rings = 1000;
     const Document maximum_ring_sphere = make_sphere(sphere_spec);
     ASSERT_TRUE(require_test(maximum_ring_sphere.faces.size() == 384U, "sphere rings should clamp to 128"));
+
+    ConePrimitiveSpec cone_spec;
+    cone_spec.width = std::numeric_limits<float>::quiet_NaN();
+    cone_spec.height = std::numeric_limits<float>::infinity();
+    cone_spec.depth = -42.0F;
+    cone_spec.side_count = -10;
+    const Document cone = make_cone(cone_spec);
+    ASSERT_TRUE(require_test(cone.vertices.size() == 4U, "cone side count should clamp to three"));
+    ASSERT_TRUE(require_test(cone.faces.size() == 4U, "clamped cone should remain capped"));
+    ASSERT_TRUE(require_finite_vertices(cone));
+    ASSERT_TRUE(require_document_compiles(cone, "sanitized cone"));
+
+    cone_spec.side_count = 1000;
+    const Document maximum_cone = make_cone(cone_spec);
+    ASSERT_TRUE(require_test(maximum_cone.vertices.size() == 129U, "cone side count should clamp to 128"));
+
+    TorusPrimitiveSpec torus_spec;
+    torus_spec.width = std::numeric_limits<float>::quiet_NaN();
+    torus_spec.height = std::numeric_limits<float>::infinity();
+    torus_spec.depth = -42.0F;
+    torus_spec.major_segments = -10;
+    torus_spec.minor_segments = -10;
+    torus_spec.tube_radius_ratio = std::numeric_limits<float>::quiet_NaN();
+    const Document torus = make_torus(torus_spec);
+    ASSERT_TRUE(require_test(torus.vertices.size() == 9U, "torus segment counts should clamp to three"));
+    ASSERT_TRUE(require_test(torus.faces.size() == 9U, "clamped torus should retain a closed surface"));
+    ASSERT_TRUE(require_finite_vertices(torus));
+    ASSERT_TRUE(require_document_compiles(torus, "sanitized torus"));
+
+    torus_spec.major_segments = 1000;
+    torus_spec.minor_segments = 3;
+    const Document maximum_major_torus = make_torus(torus_spec);
+    ASSERT_TRUE(require_test(maximum_major_torus.vertices.size() == 384U, "torus major segments should clamp to 128"));
+
+    torus_spec.major_segments = 3;
+    torus_spec.minor_segments = 1000;
+    const Document maximum_minor_torus = make_torus(torus_spec);
+    ASSERT_TRUE(require_test(maximum_minor_torus.vertices.size() == 384U, "torus minor segments should clamp to 128"));
 }
 
 void primitive_flip_faces_reverses_all_winding()
@@ -429,6 +559,23 @@ void primitive_flip_faces_reverses_all_winding()
     const Document flipped_sphere = make_sphere(sphere_spec);
     ASSERT_TRUE(require_faces_reversed(sphere, flipped_sphere));
     ASSERT_TRUE(require_document_compiles(flipped_sphere, "flipped sphere"));
+
+    ConePrimitiveSpec cone_spec;
+    cone_spec.side_count = 8;
+    const Document cone = make_cone(cone_spec);
+    cone_spec.flip_faces = true;
+    const Document flipped_cone = make_cone(cone_spec);
+    ASSERT_TRUE(require_faces_reversed(cone, flipped_cone));
+    ASSERT_TRUE(require_document_compiles(flipped_cone, "flipped cone"));
+
+    TorusPrimitiveSpec torus_spec;
+    torus_spec.major_segments = 8;
+    torus_spec.minor_segments = 4;
+    const Document torus = make_torus(torus_spec);
+    torus_spec.flip_faces = true;
+    const Document flipped_torus = make_torus(torus_spec);
+    ASSERT_TRUE(require_faces_reversed(torus, flipped_torus));
+    ASSERT_TRUE(require_document_compiles(flipped_torus, "flipped torus"));
 }
 
 } // namespace
@@ -451,6 +598,16 @@ TEST(QdrDocumentPrimitiveTests, CylinderSettingsProduceExpectedTopology)
 TEST(QdrDocumentPrimitiveTests, SphereSettingsProduceExpectedTopology)
 {
     sphere_factory_honors_radial_ring_and_hemisphere_settings();
+}
+
+TEST(QdrDocumentPrimitiveTests, ConeSettingsProduceExpectedTopology)
+{
+    cone_factory_honors_side_cap_dimensions_and_shading();
+}
+
+TEST(QdrDocumentPrimitiveTests, TorusSettingsProduceExpectedTopology)
+{
+    torus_factory_honors_segment_ratio_dimension_and_shading_settings();
 }
 
 TEST(QdrDocumentPrimitiveTests, RadialSettingsClampToSupportedRanges)

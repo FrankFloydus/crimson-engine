@@ -114,6 +114,18 @@ struct CylinderPrimitiveSpec {
 };
 
 /**
+ * Represents a Cone Primitive Spec value used by the polygon document and mesh editing core.
+ */
+struct ConePrimitiveSpec {
+    float width = 2.0F;
+    float height = 2.0F;
+    float depth = 2.0F;
+    int side_count = 32;
+    bool capped = true;
+    bool flip_faces = false;
+};
+
+/**
  * Represents a Sphere Primitive Spec value used by the polygon document and mesh editing core.
  */
 struct SpherePrimitiveSpec {
@@ -126,11 +138,29 @@ struct SpherePrimitiveSpec {
     bool flip_faces = false;
 };
 
+/**
+ * Represents a Torus Primitive Spec value used by the polygon document and mesh editing core.
+ *
+ * The width, height, and depth define the outer bounds. tube_radius_ratio is the tube radius as a
+ * fraction of the outer X/Z radii and must remain below one half to preserve the center hole.
+ */
+struct TorusPrimitiveSpec {
+    float width = 2.0F;
+    float height = 0.4F;
+    float depth = 2.0F;
+    int major_segments = 32;
+    int minor_segments = 12;
+    float tube_radius_ratio = 0.2F;
+    bool flip_faces = false;
+};
+
 [[nodiscard]] Edge make_edge(ElementId a, ElementId b);
 
 [[nodiscard]] Document make_cube(const CubePrimitiveSpec& spec);
 [[nodiscard]] Document make_cylinder(const CylinderPrimitiveSpec& spec);
+[[nodiscard]] Document make_cone(const ConePrimitiveSpec& spec);
 [[nodiscard]] Document make_sphere(const SpherePrimitiveSpec& spec);
+[[nodiscard]] Document make_torus(const TorusPrimitiveSpec& spec);
 [[nodiscard]] ElementId add_vertex(Document& document, quader::QVec3 position);
 [[nodiscard]] ElementId add_face(Document& document, std::span<const ElementId> vertices, std::uint32_t material_slot = 0);
 [[nodiscard]] const Vertex* find_vertex(const Document& document, ElementId id);

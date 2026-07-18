@@ -5009,9 +5009,16 @@ Verification:
 Invariant:
 
 - `Create Primitive` is the sole primitive viewport tool and activates with Shift+B. Its first
-  Tool Settings control is the `primitive.type` dropdown; selecting Box, Cylinder, or Sphere
-  rebuilds the remaining controls from that type's settings descriptor. The chosen type persists
-  across tool sessions just like each type's numeric and toggle settings.
+  Tool Settings control is the `primitive.type` dropdown; selecting Box, Cylinder, Sphere, Cone,
+  or Torus rebuilds the remaining controls from that type's settings descriptor. The chosen type
+  persists across tool sessions just like each type's numeric and toggle settings.
+- Cone exposes Sides (`3..128`), Base Cap, and Flip Faces. Torus exposes Major Segments and Minor
+  Segments (`3..128`), Tube Radius Ratio (`0.01..0.49`, default `0.2`), and Flip Faces. The
+  footprint supplies the torus's oriented outer X/Y/Z envelope; the ratio controls tube thickness
+  relative to the outer X/Z radii, and its upper bound preserves a positive center hole.
+- Stable primitive values remain Box `0`, Cylinder `1`, and Sphere `2`; Cone `3` and Torus `4` are
+  append-only additions. `primitive_creation_default_name` is the one scene-name source used by
+  the service, public tools API, and viewport naming path.
 - Each released footprint creates a shape and keeps that newest shape live-editable while it
   remains the sole active object at the same selection revision. Numeric, toggle, and primitive
   type changes rebuild that object in place, preserving its modeling/entity identity and
@@ -5042,8 +5049,8 @@ Invariant:
   fall through to generic modeling-operation previews. Their viewport-scoped bindings retain the
   explicit Tool Settings text-input exception.
 - Generic modal cancel routes through the native viewport-tool owner before generic operation
-  previews. Public tool status preserves the exact Box/Cylinder/Sphere kind, and every terminal
-  failure requests active-tool synchronization after the primitive owner exits.
+  previews. Public tool status preserves the exact Box/Cylinder/Sphere/Cone/Torus kind, and every
+  terminal failure requests active-tool synchronization after the primitive owner exits.
 
 Owners:
 
@@ -5061,20 +5068,16 @@ Owners:
   editor intent; `src/ui/qt_viewport_panel.cpp` and `src/ui/qt_command_event_filter.cpp` present
   settings and route semantic completion.
 - `src/sdk/core/modeling/internal/mesh/polygon/quader_poly_document_primitives.cpp` owns canonical
-  subdivided box, cylinder, full-sphere, hemisphere, cap, material, and flipped-face geometry.
+  subdivided box, cylinder, cone, full-sphere, hemisphere, torus, cap, material, and flipped-face
+  geometry.
 
 Verification:
 
-- Geometry, SDK consumer, metadata, public API, persistent lifecycle, rollback, snap-mode, and Qt
-  focused regressions pass, including dirty-checkpoint preservation, owner-only command routing,
-  generic modal cancel, exact tool-status projection, allocator high-water retention, and failed
-  finalize synchronization. The SDK consumer suite passes 55/55 and the guardrail suite passes
-  195/195. The complete `vs2026-debug` CTest preset passes 6/6, including native app, modeling
-  domain, SDK consumer, SDK parity, SDK-only configure/build, and guardrails.
-- The final unified-tool, dynamic-settings, modal-boundary, history-order, allocator, asset-lifetime,
-  Qt Enter/Escape, metadata, and routing regressions pass. The complete `vs2026-debug` CTest preset
-  passes 6/6, including the native app, modeling domain, SDK consumer, SDK parity, SDK-only
-  configure/build, and guardrail targets.
+- Cone/Torus topology, bounds, winding, cap, validation, material, SDK/API, persistent lifecycle,
+  live morphing, one-entry history, dynamic Qt settings, stable values, and canonical naming
+  regressions pass. The SDK consumer suite passes 66/66, the focused primitive/API/Qt suite passes
+  15/15, and the complete `vs2026-debug` CTest preset passes 6/6, including native app, modeling
+  domain, SDK consumer, SDK parity, SDK-only configure/build, and 350 guardrails.
 
 ## 2026-07-15 - Primitive Placement Uses Scene-Aware Surface Hits
 

@@ -19,16 +19,8 @@
 #include <utility>
 
 namespace quader {
-namespace {
 
-constexpr float kPrimitivePlacementEpsilon = 0.00001f;
-
-bool finite_vector(QVec3 value) {
-  return std::isfinite(value.x) && std::isfinite(value.y) &&
-         std::isfinite(value.z);
-}
-
-std::string_view primitive_default_name(PrimitiveCreationKind kind) {
+std::string_view primitive_creation_default_name(PrimitiveCreationKind kind) {
   switch (kind) {
   case PrimitiveCreationKind::Box:
     return "Box";
@@ -36,8 +28,21 @@ std::string_view primitive_default_name(PrimitiveCreationKind kind) {
     return "Cylinder";
   case PrimitiveCreationKind::Sphere:
     return "Sphere";
+  case PrimitiveCreationKind::Cone:
+    return "Cone";
+  case PrimitiveCreationKind::Torus:
+    return "Torus";
   }
   return "Mesh";
+}
+
+namespace {
+
+constexpr float kPrimitivePlacementEpsilon = 0.00001f;
+
+bool finite_vector(QVec3 value) {
+  return std::isfinite(value.x) && std::isfinite(value.y) &&
+         std::isfinite(value.z);
 }
 
 bool integer_setting_value(double value, int minimum, int maximum,
@@ -117,7 +122,9 @@ quader_poly::Document build_primitive_document(
     PrimitiveCreationKind kind, const PrimitivePlacementFrame &frame,
     const BoxPrimitiveCreationSettings &box,
     const CylinderPrimitiveCreationSettings &cylinder,
-    const SpherePrimitiveCreationSettings &sphere) {
+    const ConePrimitiveCreationSettings &cone,
+    const SpherePrimitiveCreationSettings &sphere,
+    const TorusPrimitiveCreationSettings &torus) {
   quader_poly::Document document;
   switch (kind) {
   case PrimitiveCreationKind::Box:
@@ -141,6 +148,16 @@ quader_poly::Document build_primitive_document(
         .flip_faces = cylinder.flip_faces,
     });
     break;
+  case PrimitiveCreationKind::Cone:
+    document = quader_poly::make_cone({
+        .width = frame.width,
+        .height = frame.height,
+        .depth = frame.depth,
+        .side_count = cone.side_count,
+        .capped = cone.caps,
+        .flip_faces = cone.flip_faces,
+    });
+    break;
   case PrimitiveCreationKind::Sphere:
     document = quader_poly::make_sphere({
         .width = frame.width,
@@ -150,6 +167,17 @@ quader_poly::Document build_primitive_document(
         .rings = sphere.rings,
         .hemisphere = sphere.hemisphere,
         .flip_faces = sphere.flip_faces,
+    });
+    break;
+  case PrimitiveCreationKind::Torus:
+    document = quader_poly::make_torus({
+        .width = frame.width,
+        .height = frame.height,
+        .depth = frame.depth,
+        .major_segments = torus.major_segments,
+        .minor_segments = torus.minor_segments,
+        .tube_radius_ratio = static_cast<float>(torus.tube_radius_ratio),
+        .flip_faces = torus.flip_faces,
     });
     break;
   }
@@ -284,14 +312,14 @@ CommandResult PrimitiveCreationToolService::accept_preview(
   live_primitive_.reset();
 
   quader_poly::Document document = build_primitive_document(
-      session_->kind, *frame, box_settings_, cylinder_settings_,
-      sphere_settings_);
+      session_->kind, *frame, box_settings_, cylinder_settings_, cone_settings_,
+      sphere_settings_, torus_settings_);
   if (document.vertices.empty() || document.faces.empty()) {
     return rollback_and_exit("Primitive geometry could not be generated.",
                              true);
   }
   if (name.empty()) {
-    name = std::string(primitive_default_name(session_->kind));
+    name = std::string(primitive_creation_default_name(session_->kind));
   }
 
   if (checkpoint_hooks_.observe_before_projection) {
@@ -474,6 +502,35 @@ CommandResult PrimitiveCreationToolService::set_setting(std::string_view name,
     ++tool_settings_revision_;
     return update_live_primitive();
   }
+  case PrimitiveCreationKind::Cone: {
+    if (name == kConeSideCountSetting) {
+      int count = 0;
+      if (!integer_setting_value(value, kConeMinimumSideCount,
+                                 kConeMaximumSideCount, count)) {
+        return command_invalid_result("Invalid Cone side count.");
+      }
+      if (cone_settings_.side_count == count) {
+        return command_unchanged_result();
+      }
+      cone_settings_.side_count = count;
+      ++tool_settings_revision_;
+      return update_live_primitive();
+    }
+    bool *setting = nullptr;
+    if (name == kConeCapsSetting) {
+      setting = &cone_settings_.caps;
+    } else if (name == kPrimitiveFlipFacesSetting) {
+      setting = &cone_settings_.flip_faces;
+    } else {
+      return command_invalid_result("Unknown Cone primitive setting.");
+    }
+    if (*setting == toggle) {
+      return command_unchanged_result();
+    }
+    *setting = toggle;
+    ++tool_settings_revision_;
+    return update_live_primitive();
+  }
   case PrimitiveCreationKind::Sphere: {
     int count = 0;
     if (name == kSphereRadialSegmentsSetting) {
@@ -512,6 +569,54 @@ CommandResult PrimitiveCreationToolService::set_setting(std::string_view name,
       return command_unchanged_result();
     }
     *setting = toggle;
+    ++tool_settings_revision_;
+    return update_live_primitive();
+  }
+  case PrimitiveCreationKind::Torus: {
+    int count = 0;
+    if (name == kTorusMajorSegmentsSetting) {
+      if (!integer_setting_value(value, kTorusMinimumMajorSegments,
+                                 kTorusMaximumMajorSegments, count)) {
+        return command_invalid_result("Invalid Torus major segment count.");
+      }
+      if (torus_settings_.major_segments == count) {
+        return command_unchanged_result();
+      }
+      torus_settings_.major_segments = count;
+      ++tool_settings_revision_;
+      return update_live_primitive();
+    }
+    if (name == kTorusMinorSegmentsSetting) {
+      if (!integer_setting_value(value, kTorusMinimumMinorSegments,
+                                 kTorusMaximumMinorSegments, count)) {
+        return command_invalid_result("Invalid Torus minor segment count.");
+      }
+      if (torus_settings_.minor_segments == count) {
+        return command_unchanged_result();
+      }
+      torus_settings_.minor_segments = count;
+      ++tool_settings_revision_;
+      return update_live_primitive();
+    }
+    if (name == kTorusTubeRadiusRatioSetting) {
+      if (!std::isfinite(value) || value < kTorusMinimumTubeRadiusRatio ||
+          value > kTorusMaximumTubeRadiusRatio) {
+        return command_invalid_result("Invalid Torus tube radius ratio.");
+      }
+      if (torus_settings_.tube_radius_ratio == value) {
+        return command_unchanged_result();
+      }
+      torus_settings_.tube_radius_ratio = value;
+      ++tool_settings_revision_;
+      return update_live_primitive();
+    }
+    if (name != kPrimitiveFlipFacesSetting) {
+      return command_invalid_result("Unknown Torus primitive setting.");
+    }
+    if (torus_settings_.flip_faces == toggle) {
+      return command_unchanged_result();
+    }
+    torus_settings_.flip_faces = toggle;
     ++tool_settings_revision_;
     return update_live_primitive();
   }
@@ -554,8 +659,8 @@ CommandResult PrimitiveCreationToolService::update_live_primitive() {
         "Live primitive no longer has a valid placement volume.", true);
   }
   quader_poly::Document document = build_primitive_document(
-      session_->kind, *frame, box_settings_, cylinder_settings_,
-      sphere_settings_);
+      session_->kind, *frame, box_settings_, cylinder_settings_, cone_settings_,
+      sphere_settings_, torus_settings_);
   if (document.vertices.empty() || document.faces.empty()) {
     return rollback_and_exit("Live primitive geometry could not be generated.",
                              true);

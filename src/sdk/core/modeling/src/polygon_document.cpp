@@ -588,6 +588,32 @@ PolygonDocument::make_cylinder(const CylinderSpec &spec) {
       PolygonDocumentNativeAccess::from_native(std::move(document)));
 }
 
+Result<PolygonDocument> PolygonDocument::make_cone(const ConeSpec &spec) {
+  if (!positive_finite(spec.width) || !positive_finite(spec.height) ||
+      !positive_finite(spec.depth)) {
+    return Result<PolygonDocument>::failure(make_error(
+        ErrorCode::InvalidArgument,
+        "Cone dimensions must have positive width, height, and depth."));
+  }
+  if (!valid_subdivision_count(spec.side_count, 3)) {
+    return Result<PolygonDocument>::failure(make_error(
+        ErrorCode::InvalidArgument,
+        "Cone side count must be between 3 and 128."));
+  }
+
+  quader_poly::Document document = quader_poly::make_cone({
+      .width = spec.width,
+      .height = spec.height,
+      .depth = spec.depth,
+      .side_count = spec.side_count,
+      .capped = spec.capped,
+      .flip_faces = spec.flip_faces,
+  });
+  prepare_primitive_document(document, {}, native_material_slot(spec.material));
+  return Result<PolygonDocument>::success(
+      PolygonDocumentNativeAccess::from_native(std::move(document)));
+}
+
 Result<PolygonDocument> PolygonDocument::make_sphere(const SphereSpec &spec) {
   if (!positive_finite(spec.width) || !positive_finite(spec.height) ||
       !positive_finite(spec.depth)) {
@@ -613,6 +639,44 @@ Result<PolygonDocument> PolygonDocument::make_sphere(const SphereSpec &spec) {
       .radial_segments = spec.radial_segments,
       .rings = spec.rings,
       .hemisphere = spec.hemisphere,
+      .flip_faces = spec.flip_faces,
+  });
+  prepare_primitive_document(document, {}, native_material_slot(spec.material));
+  return Result<PolygonDocument>::success(
+      PolygonDocumentNativeAccess::from_native(std::move(document)));
+}
+
+Result<PolygonDocument> PolygonDocument::make_torus(const TorusSpec &spec) {
+  if (!positive_finite(spec.width) || !positive_finite(spec.height) ||
+      !positive_finite(spec.depth)) {
+    return Result<PolygonDocument>::failure(make_error(
+        ErrorCode::InvalidArgument,
+        "Torus dimensions must have positive width, height, and depth."));
+  }
+  if (!valid_subdivision_count(spec.major_segments, 3)) {
+    return Result<PolygonDocument>::failure(make_error(
+        ErrorCode::InvalidArgument,
+        "Torus major segment count must be between 3 and 128."));
+  }
+  if (!valid_subdivision_count(spec.minor_segments, 3)) {
+    return Result<PolygonDocument>::failure(make_error(
+        ErrorCode::InvalidArgument,
+        "Torus minor segment count must be between 3 and 128."));
+  }
+  if (!std::isfinite(spec.tube_radius_ratio) ||
+      spec.tube_radius_ratio < 0.01F || spec.tube_radius_ratio > 0.49F) {
+    return Result<PolygonDocument>::failure(make_error(
+        ErrorCode::InvalidArgument,
+        "Torus tube radius ratio must be between 0.01 and 0.49."));
+  }
+
+  quader_poly::Document document = quader_poly::make_torus({
+      .width = spec.width,
+      .height = spec.height,
+      .depth = spec.depth,
+      .major_segments = spec.major_segments,
+      .minor_segments = spec.minor_segments,
+      .tube_radius_ratio = spec.tube_radius_ratio,
       .flip_faces = spec.flip_faces,
   });
   prepare_primitive_document(document, {}, native_material_slot(spec.material));

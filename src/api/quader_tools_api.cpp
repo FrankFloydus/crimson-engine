@@ -224,6 +224,10 @@ std::string_view primitive_kind_setting_id(PrimitiveCreationKind kind) {
     return "cylinder";
   case PrimitiveCreationKind::Sphere:
     return "sphere";
+  case PrimitiveCreationKind::Cone:
+    return "cone";
+  case PrimitiveCreationKind::Torus:
+    return "torus";
   }
   return {};
 }
@@ -243,6 +247,12 @@ primitive_kind_from_setting_id(std::string_view value) {
   if (value == "sphere") {
     return PrimitiveCreationKind::Sphere;
   }
+  if (value == "cone") {
+    return PrimitiveCreationKind::Cone;
+  }
+  if (value == "torus") {
+    return PrimitiveCreationKind::Torus;
+  }
   return std::nullopt;
 }
 
@@ -260,6 +270,12 @@ primitive_kind_from_setting_value(double value) {
   }
   if (value == primitive_kind_setting_value(PrimitiveCreationKind::Sphere)) {
     return PrimitiveCreationKind::Sphere;
+  }
+  if (value == primitive_kind_setting_value(PrimitiveCreationKind::Cone)) {
+    return PrimitiveCreationKind::Cone;
+  }
+  if (value == primitive_kind_setting_value(PrimitiveCreationKind::Torus)) {
+    return PrimitiveCreationKind::Torus;
   }
   return std::nullopt;
 }
@@ -379,6 +395,14 @@ QuaderToolSettingsTarget primitive_tool_settings_target(
            .label = "Sphere",
            .value =
                primitive_kind_setting_value(PrimitiveCreationKind::Sphere)},
+          {.id = "cone",
+           .label = "Cone",
+           .value =
+               primitive_kind_setting_value(PrimitiveCreationKind::Cone)},
+          {.id = "torus",
+           .label = "Torus",
+           .value =
+               primitive_kind_setting_value(PrimitiveCreationKind::Torus)},
       }));
   switch (*kind) {
   case PrimitiveCreationKind::Box: {
@@ -413,6 +437,18 @@ QuaderToolSettingsTarget primitive_tool_settings_target(
         settings.flip_faces));
     break;
   }
+  case PrimitiveCreationKind::Cone: {
+    const ConePrimitiveCreationSettings &settings = primitive.cone_settings();
+    result.controls.push_back(number_control(
+        std::string(kConeSideCountSetting), "Sides", settings.side_count,
+        kConeMinimumSideCount, kConeMaximumSideCount, 1.0));
+    result.controls.push_back(toggle_control(
+        std::string(kConeCapsSetting), "Base Cap", settings.caps));
+    result.controls.push_back(toggle_control(
+        std::string(kPrimitiveFlipFacesSetting), "Flip Faces",
+        settings.flip_faces));
+    break;
+  }
   case PrimitiveCreationKind::Sphere: {
     const SpherePrimitiveCreationSettings &settings =
         primitive.sphere_settings();
@@ -426,6 +462,25 @@ QuaderToolSettingsTarget primitive_tool_settings_target(
     result.controls.push_back(toggle_control(
         std::string(kSphereHemisphereSetting), "Hemisphere",
         settings.hemisphere));
+    result.controls.push_back(toggle_control(
+        std::string(kPrimitiveFlipFacesSetting), "Flip Faces",
+        settings.flip_faces));
+    break;
+  }
+  case PrimitiveCreationKind::Torus: {
+    const TorusPrimitiveCreationSettings &settings = primitive.torus_settings();
+    result.controls.push_back(number_control(
+        std::string(kTorusMajorSegmentsSetting), "Major Segments",
+        settings.major_segments, kTorusMinimumMajorSegments,
+        kTorusMaximumMajorSegments, 1.0));
+    result.controls.push_back(number_control(
+        std::string(kTorusMinorSegmentsSetting), "Minor Segments",
+        settings.minor_segments, kTorusMinimumMinorSegments,
+        kTorusMaximumMinorSegments, 1.0));
+    result.controls.push_back(number_control(
+        std::string(kTorusTubeRadiusRatioSetting), "Tube Radius Ratio",
+        settings.tube_radius_ratio, kTorusMinimumTubeRadiusRatio,
+        kTorusMaximumTubeRadiusRatio, 0.01));
     result.controls.push_back(toggle_control(
         std::string(kPrimitiveFlipFacesSetting), "Flip Faces",
         settings.flip_faces));
@@ -920,8 +975,20 @@ std::string QuaderToolsApi::active_primitive_type() const {
     return "cylinder";
   case PrimitiveCreationKind::Sphere:
     return "sphere";
+  case PrimitiveCreationKind::Cone:
+    return "cone";
+  case PrimitiveCreationKind::Torus:
+    return "torus";
   }
   return {};
+}
+
+std::string QuaderToolsApi::active_primitive_default_name() const {
+  const std::optional<PrimitiveCreationKind> kind =
+      scene_session(session_).primitive_creation().active_kind();
+  return kind.has_value()
+             ? std::string(primitive_creation_default_name(*kind))
+             : std::string{};
 }
 
 QuaderApiVoidResult QuaderToolsApi::commit_active_tool_preview() {

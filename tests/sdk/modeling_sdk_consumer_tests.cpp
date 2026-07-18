@@ -660,6 +660,49 @@ TEST(ModelingSdkConsumerTests,
   ASSERT_TRUE(flipped_cylinder.ok()) << flipped_cylinder.error_message();
   expect_reversed_face_winding(cylinder, flipped_cylinder.value());
 
+  Result<PolygonDocument> cone_result = PolygonDocument::make_cone({
+      .width = 4.0F,
+      .height = 6.0F,
+      .depth = 2.0F,
+      .side_count = 8,
+      .capped = true,
+      .material = material,
+  });
+  ASSERT_TRUE(cone_result.ok()) << cone_result.error_message();
+  PolygonDocument cone = std::move(cone_result).value();
+  EXPECT_EQ(cone.vertex_count(), 9U);
+  EXPECT_EQ(cone.face_count(), 9U);
+  Result<MeshPayload> cone_mesh = cone.compile_mesh();
+  ASSERT_TRUE(cone_mesh.ok()) << cone_mesh.error_message();
+  const std::optional<SdkMeshBounds> cone_bounds =
+      mesh_bounds(cone_mesh.value());
+  ASSERT_TRUE(cone_bounds.has_value());
+  expect_vec3_near(cone_bounds->min, {-2.0F, -3.0F, -1.0F});
+  expect_vec3_near(cone_bounds->max, {2.0F, 3.0F, 1.0F});
+
+  Result<PolygonDocument> open_cone = PolygonDocument::make_cone({
+      .width = 4.0F,
+      .height = 6.0F,
+      .depth = 2.0F,
+      .side_count = 8,
+      .capped = false,
+      .material = material,
+  });
+  ASSERT_TRUE(open_cone.ok()) << open_cone.error_message();
+  EXPECT_EQ(open_cone.value().face_count(), 8U);
+
+  Result<PolygonDocument> flipped_cone = PolygonDocument::make_cone({
+      .width = 4.0F,
+      .height = 6.0F,
+      .depth = 2.0F,
+      .side_count = 8,
+      .capped = true,
+      .flip_faces = true,
+      .material = material,
+  });
+  ASSERT_TRUE(flipped_cone.ok()) << flipped_cone.error_message();
+  expect_reversed_face_winding(cone, flipped_cone.value());
+
   Result<PolygonDocument> sphere_result = PolygonDocument::make_sphere({
       .width = 4.0F,
       .height = 6.0F,
@@ -704,6 +747,47 @@ TEST(ModelingSdkConsumerTests,
   });
   ASSERT_TRUE(flipped_sphere.ok()) << flipped_sphere.error_message();
   expect_reversed_face_winding(sphere, flipped_sphere.value());
+
+  Result<PolygonDocument> torus_result = PolygonDocument::make_torus({
+      .width = 4.0F,
+      .height = 1.5F,
+      .depth = 2.0F,
+      .major_segments = 8,
+      .minor_segments = 4,
+      .tube_radius_ratio = 0.25F,
+      .material = material,
+  });
+  ASSERT_TRUE(torus_result.ok()) << torus_result.error_message();
+  PolygonDocument torus = std::move(torus_result).value();
+  EXPECT_EQ(torus.vertex_count(), 32U);
+  EXPECT_EQ(torus.face_count(), 32U);
+  Result<MeshPayload> torus_mesh = torus.compile_mesh();
+  ASSERT_TRUE(torus_mesh.ok()) << torus_mesh.error_message();
+  const std::optional<SdkMeshBounds> torus_bounds =
+      mesh_bounds(torus_mesh.value());
+  ASSERT_TRUE(torus_bounds.has_value());
+  expect_vec3_near(torus_bounds->min, {-2.0F, -0.75F, -1.0F});
+  expect_vec3_near(torus_bounds->max, {2.0F, 0.75F, 1.0F});
+  Result<AuthoredPolygonPayload> torus_payload = torus.authored_payload();
+  ASSERT_TRUE(torus_payload.ok()) << torus_payload.error_message();
+  EXPECT_TRUE(std::ranges::all_of(
+      torus_payload.value().faces,
+      [material](const AuthoredPolygonFacePayload &face) {
+        return face.material == material;
+      }));
+
+  Result<PolygonDocument> flipped_torus = PolygonDocument::make_torus({
+      .width = 4.0F,
+      .height = 1.5F,
+      .depth = 2.0F,
+      .major_segments = 8,
+      .minor_segments = 4,
+      .tube_radius_ratio = 0.25F,
+      .flip_faces = true,
+      .material = material,
+  });
+  ASSERT_TRUE(flipped_torus.ok()) << flipped_torus.error_message();
+  expect_reversed_face_winding(torus, flipped_torus.value());
 }
 
 TEST(ModelingSdkConsumerTests,
@@ -735,16 +819,33 @@ TEST(ModelingSdkConsumerTests,
       .hemisphere = true,
       .flip_faces = true,
   });
+  MeshHandle cone = quader.create_cone({
+      .name = "Open Cone",
+      .side_count = 8,
+      .capped = false,
+  });
+  MeshHandle torus = quader.create_torus({
+      .name = "Detailed Torus",
+      .major_segments = 8,
+      .minor_segments = 4,
+      .tube_radius_ratio = 0.25F,
+  });
 
   ASSERT_TRUE(box.valid());
   ASSERT_TRUE(cylinder.valid());
   ASSERT_TRUE(sphere.valid());
+  ASSERT_TRUE(cone.valid());
+  ASSERT_TRUE(torus.valid());
   EXPECT_EQ(box.summary().name, "Subdivided Box");
   EXPECT_EQ(cylinder.summary().name, "Open Cylinder");
   EXPECT_EQ(sphere.summary().name, "Hemisphere");
+  EXPECT_EQ(cone.summary().name, "Open Cone");
+  EXPECT_EQ(torus.summary().name, "Detailed Torus");
   EXPECT_EQ(box.payloads().authored_polygon().faces.size(), 52U);
   EXPECT_EQ(cylinder.payloads().authored_polygon().faces.size(), 8U);
   EXPECT_EQ(sphere.payloads().authored_polygon().faces.size(), 33U);
+  EXPECT_EQ(cone.payloads().authored_polygon().faces.size(), 8U);
+  EXPECT_EQ(torus.payloads().authored_polygon().faces.size(), 32U);
 
   const std::size_t before_invalid = quader.mesh_summaries().size();
   Result<MeshHandle> invalid_cylinder =
@@ -759,6 +860,18 @@ TEST(ModelingSdkConsumerTests,
       quader.checked().create_box({.x_subdivisions = 0});
   ASSERT_FALSE(invalid_box.ok());
   EXPECT_EQ(invalid_box.error().code, ErrorCode::InvalidArgument);
+  Result<MeshHandle> invalid_cone =
+      quader.checked().create_cone({.side_count = 2});
+  ASSERT_FALSE(invalid_cone.ok());
+  EXPECT_EQ(invalid_cone.error().code, ErrorCode::InvalidArgument);
+  Result<MeshHandle> invalid_torus_segments =
+      quader.checked().create_torus({.minor_segments = 2});
+  ASSERT_FALSE(invalid_torus_segments.ok());
+  EXPECT_EQ(invalid_torus_segments.error().code, ErrorCode::InvalidArgument);
+  Result<MeshHandle> invalid_torus_ratio =
+      quader.checked().create_torus({.tube_radius_ratio = 0.5F});
+  ASSERT_FALSE(invalid_torus_ratio.ok());
+  EXPECT_EQ(invalid_torus_ratio.error().code, ErrorCode::InvalidArgument);
   EXPECT_EQ(quader.mesh_summaries().size(), before_invalid);
 }
 

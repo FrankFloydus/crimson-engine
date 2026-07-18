@@ -2358,13 +2358,10 @@ void QtViewportPanel::process_viewport_input(
     return editor.tools().has_active_primitive_creation();
   };
   box_context.next_mesh_name = [&]() {
-    const std::string active_kind = editor.tools().active_primitive_type();
+    const std::string active_name =
+        editor.tools().active_primitive_default_name();
     const std::string_view base_name =
-        active_kind == "cylinder"
-            ? std::string_view{"Cylinder"}
-        : active_kind == "sphere"
-            ? std::string_view{"Sphere"}
-            : std::string_view{"Box"};
+        active_name.empty() ? std::string_view{"Mesh"} : active_name;
     return SceneEntityNaming::next_name(document, base_name);
   };
   ViewportPointToolContext point_context;

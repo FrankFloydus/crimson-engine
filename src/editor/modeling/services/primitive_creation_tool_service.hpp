@@ -37,28 +37,51 @@ inline constexpr std::string_view kCylinderSideCountSetting =
     "primitive.cylinder.side_count";
 inline constexpr std::string_view kCylinderCapsSetting =
     "primitive.cylinder.caps";
+inline constexpr std::string_view kConeSideCountSetting =
+    "primitive.cone.side_count";
+inline constexpr std::string_view kConeCapsSetting = "primitive.cone.caps";
 inline constexpr std::string_view kSphereRadialSegmentsSetting =
     "primitive.sphere.radial_segments";
 inline constexpr std::string_view kSphereRingsSetting =
     "primitive.sphere.rings";
 inline constexpr std::string_view kSphereHemisphereSetting =
     "primitive.sphere.hemisphere";
+inline constexpr std::string_view kTorusMajorSegmentsSetting =
+    "primitive.torus.major_segments";
+inline constexpr std::string_view kTorusMinorSegmentsSetting =
+    "primitive.torus.minor_segments";
+inline constexpr std::string_view kTorusTubeRadiusRatioSetting =
+    "primitive.torus.tube_radius_ratio";
 
 inline constexpr int kPrimitiveMinimumSubdivisionCount = 1;
 inline constexpr int kPrimitiveMaximumSubdivisionCount = 128;
 inline constexpr int kCylinderMinimumSideCount = 3;
 inline constexpr int kCylinderMaximumSideCount = 128;
+inline constexpr int kConeMinimumSideCount = 3;
+inline constexpr int kConeMaximumSideCount = 128;
 inline constexpr int kSphereMinimumRadialSegments = 3;
 inline constexpr int kSphereMaximumRadialSegments = 128;
 inline constexpr int kSphereMinimumRings = 2;
 inline constexpr int kSphereMaximumRings = 128;
+inline constexpr int kTorusMinimumMajorSegments = 3;
+inline constexpr int kTorusMaximumMajorSegments = 128;
+inline constexpr int kTorusMinimumMinorSegments = 3;
+inline constexpr int kTorusMaximumMinorSegments = 128;
+inline constexpr double kTorusMinimumTubeRadiusRatio = 0.01;
+inline constexpr double kTorusMaximumTubeRadiusRatio = 0.49;
 
 /// Identifies the authored primitive generated from one footprint.
 enum class PrimitiveCreationKind {
-  Box,
-  Cylinder,
-  Sphere,
+  Box = 0,
+  Cylinder = 1,
+  Sphere = 2,
+  Cone = 3,
+  Torus = 4,
 };
+
+/// Returns the canonical scene-name stem for a generated primitive kind.
+[[nodiscard]] std::string_view
+primitive_creation_default_name(PrimitiveCreationKind kind);
 
 /// Stores persistent Box settings used by new and still-live Box primitives.
 struct BoxPrimitiveCreationSettings {
@@ -75,11 +98,26 @@ struct CylinderPrimitiveCreationSettings {
   bool flip_faces = false;
 };
 
+/// Stores persistent Cone settings used by new and still-live Cones.
+struct ConePrimitiveCreationSettings {
+  int side_count = 32;
+  bool caps = true;
+  bool flip_faces = false;
+};
+
 /// Stores persistent Sphere settings used by new and still-live Spheres.
 struct SpherePrimitiveCreationSettings {
   int radial_segments = 32;
   int rings = 16;
   bool hemisphere = false;
+  bool flip_faces = false;
+};
+
+/// Stores persistent Torus settings used by new and still-live Tori.
+struct TorusPrimitiveCreationSettings {
+  int major_segments = 32;
+  int minor_segments = 12;
+  double tube_radius_ratio = 0.2;
   bool flip_faces = false;
 };
 
@@ -115,8 +153,14 @@ public:
   cylinder_settings() const {
     return cylinder_settings_;
   }
+  [[nodiscard]] const ConePrimitiveCreationSettings &cone_settings() const {
+    return cone_settings_;
+  }
   [[nodiscard]] const SpherePrimitiveCreationSettings &sphere_settings() const {
     return sphere_settings_;
+  }
+  [[nodiscard]] const TorusPrimitiveCreationSettings &torus_settings() const {
+    return torus_settings_;
   }
 
   CommandResult activate();
@@ -158,7 +202,9 @@ private:
   ModelingOperationPreviewCheckpointHooks checkpoint_hooks_;
   BoxPrimitiveCreationSettings box_settings_;
   CylinderPrimitiveCreationSettings cylinder_settings_;
+  ConePrimitiveCreationSettings cone_settings_;
   SpherePrimitiveCreationSettings sphere_settings_;
+  TorusPrimitiveCreationSettings torus_settings_;
   PrimitiveCreationKind preferred_kind_ = PrimitiveCreationKind::Box;
   std::optional<Session> session_;
   std::optional<LivePrimitive> live_primitive_;

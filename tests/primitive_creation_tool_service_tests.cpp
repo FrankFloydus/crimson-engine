@@ -19,6 +19,8 @@
 #include <array>
 #include <cmath>
 #include <cstddef>
+#include <cstdint>
+#include <limits>
 #include <optional>
 #include <string_view>
 #include <vector>
@@ -78,6 +80,23 @@ std::size_t compiled_index_count(const ModelingSessionService &modeling,
     return 0U;
   }
   return mesh->geometry().indices.size();
+}
+
+std::uint64_t compiled_content_id(const ModelingSessionService &modeling,
+                                  std::string_view name) {
+  const std::vector<ModelingObjectRecord> objects = modeling.objects();
+  const ModelingObjectRecord *const object = find_object(objects, name);
+  if (object == nullptr) {
+    ADD_FAILURE() << "Missing modeling object named " << name;
+    return 0U;
+  }
+  const std::optional<MeshAsset> mesh =
+      modeling.compile_object_mesh(object->modeling_object_id);
+  if (!mesh.has_value()) {
+    ADD_FAILURE() << "Could not compile modeling object named " << name;
+    return 0U;
+  }
+  return mesh->geometry_content_id().value;
 }
 
 TEST(PrimitiveCreationToolServiceTests,
@@ -296,6 +315,76 @@ TEST(PrimitiveCreationToolServiceTests,
   ASSERT_TRUE(harness.tool.active_kind().has_value());
   EXPECT_EQ(*harness.tool.active_kind(), PrimitiveCreationKind::Cylinder);
   EXPECT_EQ(harness.tool.cylinder_settings().side_count, 8);
+  EXPECT_TRUE(harness.tool.cancel().ok);
+}
+
+TEST(PrimitiveCreationToolServiceTests,
+     ConeAndTorusSettingsUseTheSharedLivePrimitiveTransaction) {
+  PrimitiveCreationHarness harness;
+  ASSERT_TRUE(harness.tool.activate(PrimitiveCreationKind::Cone).ok);
+  ASSERT_TRUE(harness.tool.set_setting(kConeSideCountSetting, 3.0).ok);
+  ASSERT_TRUE(harness.tool.set_setting(kConeCapsSetting, 0.0).ok);
+
+  const CommandResult cone_created =
+      harness.tool.accept_preview(valid_primitive_preview(), {});
+  ASSERT_TRUE(cone_created.ok) << cone_created.message;
+  EXPECT_EQ(compiled_index_count(harness.modeling, "Cone"), 9U);
+
+  ASSERT_TRUE(harness.tool.set_setting(kConeSideCountSetting, 8.0).ok);
+  ASSERT_TRUE(harness.tool.set_setting(kConeCapsSetting, 1.0).ok);
+  EXPECT_EQ(compiled_index_count(harness.modeling, "Cone"), 42U);
+  EXPECT_EQ(harness.tool.cone_settings().side_count, 8);
+  EXPECT_TRUE(harness.tool.cone_settings().caps);
+
+  ASSERT_TRUE(harness.tool.set_kind(PrimitiveCreationKind::Torus).ok);
+  ASSERT_TRUE(harness.tool.set_setting(kTorusMajorSegmentsSetting, 8.0).ok);
+  ASSERT_TRUE(harness.tool.set_setting(kTorusMinorSegmentsSetting, 4.0).ok);
+  ASSERT_TRUE(
+      harness.tool.set_setting(kTorusTubeRadiusRatioSetting, 0.25).ok);
+  EXPECT_EQ(compiled_index_count(harness.modeling, "Cone"), 192U);
+  const std::uint64_t frozen_cone_content =
+      compiled_content_id(harness.modeling, "Cone");
+
+  const CommandResult torus_created =
+      harness.tool.accept_preview(valid_primitive_preview(4.0f), {});
+  ASSERT_TRUE(torus_created.ok) << torus_created.message;
+  EXPECT_EQ(compiled_index_count(harness.modeling, "Torus"), 192U);
+  const std::uint64_t initial_torus_content =
+      compiled_content_id(harness.modeling, "Torus");
+  ASSERT_NE(initial_torus_content, 0U);
+
+  ASSERT_TRUE(
+      harness.tool.set_setting(kTorusTubeRadiusRatioSetting, 0.3).ok);
+  EXPECT_EQ(compiled_content_id(harness.modeling, "Cone"),
+            frozen_cone_content);
+  const std::uint64_t updated_torus_content =
+      compiled_content_id(harness.modeling, "Torus");
+  EXPECT_NE(updated_torus_content, initial_torus_content);
+  EXPECT_DOUBLE_EQ(harness.tool.torus_settings().tube_radius_ratio, 0.3);
+
+  const std::uint64_t settings_revision =
+      harness.tool.tool_settings_revision();
+  const CommandResult rejected_nan = harness.tool.set_setting(
+      kTorusTubeRadiusRatioSetting,
+      std::numeric_limits<double>::quiet_NaN());
+  EXPECT_FALSE(rejected_nan.ok);
+  EXPECT_EQ(harness.tool.tool_settings_revision(), settings_revision);
+  EXPECT_DOUBLE_EQ(harness.tool.torus_settings().tube_radius_ratio, 0.3);
+  EXPECT_EQ(compiled_content_id(harness.modeling, "Torus"),
+            updated_torus_content);
+
+  const CommandResult applied = harness.tool.apply();
+  ASSERT_TRUE(applied.ok) << applied.message;
+  ASSERT_TRUE(harness.history.can_undo());
+  ASSERT_TRUE(harness.history.undo().ok);
+  EXPECT_TRUE(harness.modeling.objects().empty());
+
+  ASSERT_TRUE(harness.tool.activate().ok);
+  ASSERT_TRUE(harness.tool.active_kind().has_value());
+  EXPECT_EQ(*harness.tool.active_kind(), PrimitiveCreationKind::Torus);
+  EXPECT_EQ(harness.tool.torus_settings().major_segments, 8);
+  EXPECT_EQ(harness.tool.torus_settings().minor_segments, 4);
+  EXPECT_DOUBLE_EQ(harness.tool.torus_settings().tube_radius_ratio, 0.3);
   EXPECT_TRUE(harness.tool.cancel().ok);
 }
 

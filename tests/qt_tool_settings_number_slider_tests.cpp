@@ -449,8 +449,38 @@ TEST(QtToolSettingsNumberSliderTests,
   auto *primitive_type = window.findChild<QComboBox *>(
       QStringLiteral("tool_settings.control.primitive.type"));
   ASSERT_NE(primitive_type, nullptr);
-  ASSERT_EQ(primitive_type->count(), 3);
+  ASSERT_EQ(primitive_type->count(), 5);
   EXPECT_EQ(primitive_type->currentData().toString(), QStringLiteral("box"));
+  const int cone_index = primitive_type->findData(QStringLiteral("cone"));
+  ASSERT_GE(cone_index, 0);
+  primitive_type->setCurrentIndex(cone_index);
+  QCoreApplication::processEvents();
+  EXPECT_EQ(editor.tools().active_primitive_type(), "cone");
+  ASSERT_NE(window.findChild<QSpinBox *>(QStringLiteral(
+                "tool_settings.control.primitive.cone.side_count")),
+            nullptr);
+
+  primitive_type = window.findChild<QComboBox *>(
+      QStringLiteral("tool_settings.control.primitive.type"));
+  ASSERT_NE(primitive_type, nullptr);
+  const int torus_index = primitive_type->findData(QStringLiteral("torus"));
+  ASSERT_GE(torus_index, 0);
+  primitive_type->setCurrentIndex(torus_index);
+  QCoreApplication::processEvents();
+  EXPECT_EQ(editor.tools().active_primitive_type(), "torus");
+  ASSERT_NE(window.findChild<QSpinBox *>(QStringLiteral(
+                "tool_settings.control.primitive.torus.major_segments")),
+            nullptr);
+  ASSERT_NE(window.findChild<QSpinBox *>(QStringLiteral(
+                "tool_settings.control.primitive.torus.minor_segments")),
+            nullptr);
+  ASSERT_NE(window.findChild<QDoubleSpinBox *>(QStringLiteral(
+                "tool_settings.control.primitive.torus.tube_radius_ratio")),
+            nullptr);
+
+  primitive_type = window.findChild<QComboBox *>(
+      QStringLiteral("tool_settings.control.primitive.type"));
+  ASSERT_NE(primitive_type, nullptr);
   const int cylinder_index =
       primitive_type->findData(QStringLiteral("cylinder"));
   ASSERT_GE(cylinder_index, 0);
