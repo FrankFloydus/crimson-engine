@@ -23,7 +23,20 @@ struct SceneBounds {
     QVec3 max;
 };
 
+/// Carries tight local and transformed AABBs computed in one vertex pass.
+struct MeshLocalWorldBounds final {
+  SceneBounds local;
+  SceneBounds world;
+};
+
 std::optional<SceneBounds> local_mesh_bounds(const MeshAsset &mesh);
+/// Computes tight extents from transformed geometry, not transformed AABB
+/// corners.
+std::optional<MeshLocalWorldBounds> mesh_local_world_bounds(
+    const MeshAsset &mesh, const QMat4 &world_from_local);
+/// Computes the tight world AABB of the actual transformed mesh vertices.
+std::optional<SceneBounds> mesh_world_bounds(
+    const MeshAsset &mesh, const QMat4 &world_from_local);
 std::optional<SceneBounds> world_bounds_from_local_mesh_bounds(
     const QMat4 &world_from_local,
     const std::optional<SceneBounds> &local_bounds);

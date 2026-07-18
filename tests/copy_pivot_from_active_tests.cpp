@@ -261,7 +261,13 @@ quader::QVec3 hybrid_center(const CopyPivotHarness &harness,
       harness.session.scene().world_transform_matrix(entity);
   const quader::QVec3 mean_world =
       quader::transform_point(world, local_mean(*mesh));
-  return (quader::bounds_center(bounds(harness, entity)) + mean_world) * 0.5f;
+  const std::optional<quader::SceneBounds> world_bounds =
+      quader::world_bounds_from_local_mesh_bounds(
+          world, quader::local_mesh_bounds(*mesh));
+  EXPECT_TRUE(world_bounds.has_value());
+  return world_bounds.has_value()
+             ? (quader::bounds_center(*world_bounds) + mean_world) * 0.5f
+             : quader::QVec3{};
 }
 
 quader::QMat4 rotation_only(const quader::TransformComponent &transform) {

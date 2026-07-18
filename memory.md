@@ -9,6 +9,34 @@ affected owners/files, resolved approach, and verification. Do not record routin
 private user data, guesses, or unresolved issues. Prefer updating a related existing entry over
 adding a duplicate.
 
+## 2026-07-18 - Selection Bounds Use Tight Geometry Extents And Include Instances
+
+Task/context: selected irregular meshes showed oversized cages after rotation, while formal
+instances and instance-backed linear/radial array results showed selected fills and wires but no
+bounds cage.
+
+Invariant:
+
+- Scene-owned mesh bounds are the world AABB of transformed geometry vertices,
+  `AABB(world * vertices)`, not the conservative `AABB(world * local AABB)`. Formal occurrence
+  bounds union every visible mesh member through its definition-relative and occurrence transforms.
+- Selection extraction enrolls both direct meshes and formal occurrences. Mixed selections keep
+  one aggregate cage, while linked arrays contribute every selected occurrence.
+- Bounds caches retain exact translation reuse. Rotation/scale recomputes vertex extrema with one
+  matrix conversion per mesh, definition dependency signatures are shared across occurrences in
+  one refresh, and member transform/visibility/mesh revision changes invalidate occurrence bounds.
+- Copy Pivot intentionally keeps its reference add-on transformed-local-AABB dual-center formula;
+  its test oracle must not be coupled to the scene/render extent implementation.
+
+Affected owners/files: `src/scene/scene_bounds.*`,
+`src/render/overlay/render_overlay_snapshot.*`, Copy Pivot compatibility, and render/array behavior
+tests.
+
+Verification: exact rotated asymmetric geometry, multi-member instances, mixed selections, local
+visibility, linked linear arrays, and non-axis-aligned radial arrays passed 29/29 focused tests.
+The policy-selected affected workflow passed all native guardrail/behavior/modeling-domain suites,
+SDK consumer/parity suites, and all six CTest entries. Final handoff version is `0.1.64`.
+
 ## 2026-07-18 - The Modeling Refactor Ends With One Portable Owner And No Mirror Tree
 
 Task/context: Phase 6 removed migration debt and closed the Phase 0-6 architecture refactor at

@@ -183,6 +183,7 @@ struct RenderOverlaySelectionSnapshot {
   std::uint64_t render_component_revision = 0;
   std::vector<RenderOverlayMeshSnapshot> hierarchy_selection_wires;
   std::vector<RenderOverlayBoundsSnapshot> group_bounds;
+  /// One tight world bound for each selected direct mesh or formal occurrence.
   std::vector<RenderOverlayBoundsSnapshot> selected_mesh_bounds;
   std::vector<RenderOverlayLightMarkerSnapshot> selected_lights;
   std::vector<RenderOverlayLightMarkerSnapshot> point_light_gizmos;
@@ -217,6 +218,7 @@ struct RenderOverlaySnapshotCacheStats {
   std::uint64_t selection_local_bounds_reuse_count = 0;
   std::uint64_t selection_world_bounds_build_count = 0;
   std::uint64_t selection_world_bounds_translation_reuse_count = 0;
+  std::uint64_t selection_instance_dependency_signature_build_count = 0;
   std::uint64_t selection_transform_refresh_count = 0;
 };
 
@@ -258,6 +260,8 @@ private:
     AssetId mesh_id = kInvalidAssetId;
     std::uint64_t mesh_revision = 0;
     bool has_mesh_asset = false;
+    bool is_instance_occurrence = false;
+    std::uint64_t instance_dependency_signature = 0;
     QMat4 world_transform;
     RenderOverlayBoundsSnapshot bounds;
   };
@@ -271,7 +275,12 @@ private:
                              const AssetRegistry &assets, EntityId entity);
   [[nodiscard]] std::optional<RenderOverlayBoundsSnapshot>
   refresh_selected_mesh_world_bounds(const SceneDocument &document,
+                                     const AssetRegistry &assets,
                                      EntityId entity);
+  [[nodiscard]] std::optional<std::uint64_t>
+  selected_instance_bounds_dependency_signature(
+      const SceneDocument &document, const AssetRegistry &assets,
+      EntityId occurrence);
   [[nodiscard]] bool can_refresh_selection_transforms(
       const SceneDocument &document, const AssetRegistry &assets) const;
   [[nodiscard]] bool refresh_selection_transforms(
@@ -290,6 +299,8 @@ private:
       selection_local_mesh_bounds_;
   std::unordered_map<EntityId, CachedWorldMeshBounds>
       selection_world_mesh_bounds_;
+  std::unordered_map<EntityId, std::optional<std::uint64_t>>
+      selection_instance_dependency_signatures_;
   std::vector<EntityId> selection_selected_mesh_entities_;
   std::vector<EntityId> selection_group_entities_;
   RenderOverlaySnapshotCacheStats stats_;

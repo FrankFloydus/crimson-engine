@@ -63,6 +63,36 @@ std::optional<SceneBounds> transformed_local_bounds(
   return SceneBounds{.min = world_position, .max = world_position};
 }
 
+std::optional<SceneBounds> transformed_mesh_geometry_bounds(
+    const MeshAsset &mesh, const QMat4 &world_from_local,
+    SceneBounds *local_bounds) {
+  const MeshGeometryPayload &geometry = mesh.geometry();
+  if (geometry.vertices.empty()) {
+    return std::nullopt;
+  }
+
+  const glm::mat4 world_matrix = to_glm(world_from_local);
+  const auto world_point = [&world_matrix](QVec3 local_point) {
+    const glm::vec4 transformed =
+        world_matrix * glm::vec4{to_glm(local_point), 1.0f};
+    return from_glm(glm::vec3{transformed} / transformed.w);
+  };
+  const QVec3 first_local = geometry.vertices.front().position;
+  const QVec3 first_world = world_point(first_local);
+  if (local_bounds != nullptr) {
+    *local_bounds = SceneBounds{.min = first_local, .max = first_local};
+  }
+  SceneBounds world_bounds{.min = first_world, .max = first_world};
+  for (std::size_t index = 1u; index < geometry.vertices.size(); ++index) {
+    const MeshVertex &vertex = geometry.vertices[index];
+    if (local_bounds != nullptr) {
+      include_point(*local_bounds, vertex.position);
+    }
+    include_point(world_bounds, world_point(vertex.position));
+  }
+  return world_bounds;
+}
+
 std::optional<SceneBounds> instance_occurrence_world_bounds(
     const SceneDocument &document, const AssetRegistry &assets,
     EntityId occurrence, EntityId definition) {
@@ -87,9 +117,9 @@ std::optional<SceneBounds> instance_occurrence_world_bounds(
     }
     const QMat4 member_from_definition = scene_transform_multiply(
         *definition_from_world, document.world_transform_matrix(member));
-    const std::optional<SceneBounds> member_bounds = transformed_local_bounds(
-        scene_transform_multiply(occurrence_world, member_from_definition),
-        local_mesh_bounds(*mesh));
+    const std::optional<SceneBounds> member_bounds = mesh_world_bounds(
+        *mesh,
+        scene_transform_multiply(occurrence_world, member_from_definition));
     if (member_bounds.has_value()) {
       include_bounds(result, *member_bounds);
     }
@@ -113,6 +143,24 @@ std::optional<SceneBounds> local_mesh_bounds(const MeshAsset &mesh) {
     include_point(bounds, vertex.position);
   }
   return bounds;
+}
+
+std::optional<SceneBounds> mesh_world_bounds(
+    const MeshAsset &mesh, const QMat4 &world_from_local) {
+  return transformed_mesh_geometry_bounds(mesh, world_from_local, nullptr);
+}
+
+std::optional<MeshLocalWorldBounds> mesh_local_world_bounds(
+    const MeshAsset &mesh, const QMat4 &world_from_local) {
+  SceneBounds local_bounds;
+  const std::optional<SceneBounds> world_bounds =
+      transformed_mesh_geometry_bounds(mesh, world_from_local,
+                                       &local_bounds);
+  if (!world_bounds) {
+    return std::nullopt;
+  }
+  return MeshLocalWorldBounds{.local = local_bounds,
+                              .world = *world_bounds};
 }
 
 std::optional<SceneBounds> world_bounds_from_local_mesh_bounds(
@@ -155,16 +203,19 @@ std::optional<SceneBounds> entity_world_bounds(const SceneDocument &document,
     }
   }
 
-  std::optional<SceneBounds> local_bounds;
   const MeshComponent *mesh_component = document.mesh(entity);
   if (mesh_component) {
     if (const MeshAsset *mesh = assets.mesh(mesh_component->mesh)) {
-      local_bounds = local_mesh_bounds(*mesh);
+      if (const std::optional<SceneBounds> bounds = mesh_world_bounds(
+              *mesh, document.world_transform_matrix(entity))) {
+        return bounds;
+      }
     }
   }
 
-  return world_bounds_from_local_mesh_bounds(
-      document.world_transform_matrix(entity), local_bounds);
+  const QVec3 world_position =
+      transform_point(document.world_transform_matrix(entity), {});
+  return SceneBounds{.min = world_position, .max = world_position};
 }
 
 std::optional<SceneBounds> entity_world_bounds_from_local_mesh_bounds(

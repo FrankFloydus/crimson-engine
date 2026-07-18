@@ -11,6 +11,7 @@
 #include "editor/modeling/runtime/modeling_object_runtime_map.hpp"
 #include "editor/projection/picking_cache_projection.hpp"
 #include "editor/projection/selection_overlay_projection.hpp"
+#include "math/glm_bridge.hpp"
 #include "render/light_renderable_cache.hpp"
 #include "render/instance_batch_planner.hpp"
 #include "render/material_binding_service.hpp"
@@ -214,6 +215,23 @@ void expect_bounds_snapshot_near(const RenderOverlayBoundsSnapshot &actual,
   EXPECT_NEAR(actual.max.x, expected.max.x, kTolerance);
   EXPECT_NEAR(actual.max.y, expected.max.y, kTolerance);
   EXPECT_NEAR(actual.max.z, expected.max.z, kTolerance);
+}
+
+SceneBounds exact_transformed_geometry_bounds(const MeshAsset &mesh,
+                                              const QMat4 &world_transform) {
+  const std::vector<MeshVertex> &vertices = mesh.geometry().vertices;
+  EXPECT_FALSE(vertices.empty());
+  if (vertices.empty()) {
+    return {};
+  }
+
+  const QVec3 first = transform_point(world_transform,
+                                      vertices.front().position);
+  SceneBounds bounds{.min = first, .max = first};
+  for (const MeshVertex &vertex : vertices) {
+    include_point(bounds, transform_point(world_transform, vertex.position));
+  }
+  return bounds;
 }
 
 std::size_t triangle_count_for(const ViewportOverlayFrame &frame,
@@ -2575,6 +2593,148 @@ TEST(ViewportSceneOverlayBuilderTests,
 }
 
 TEST(ViewportSceneOverlayBuilderTests,
+     SelectedCageUsesExactTransformedGeometryExtents) {
+  SceneDocument document;
+  AssetRegistry assets;
+  const AssetId mesh = assets.add_mesh(make_overlay_triangle_mesh());
+  const EntityId selected_mesh =
+      document.create_entity("Rotated Asymmetric Mesh", EntityKind::Mesh);
+  ASSERT_TRUE(document.set_mesh(selected_mesh, MeshComponent{.mesh = mesh}));
+  document.set_transform(
+      selected_mesh,
+      TransformComponent{
+          .position = {3.0f, 0.5f, -2.0f},
+          .rotation_euler = {0.0f, 0.78539816339f, 0.0f},
+      });
+  ASSERT_TRUE(document.set_selected(selected_mesh, true));
+
+  const MeshAsset *asset = assets.mesh(mesh);
+  ASSERT_NE(asset, nullptr);
+  const QMat4 world_transform =
+      document.world_transform_matrix(selected_mesh);
+  const SceneBounds expected =
+      exact_transformed_geometry_bounds(*asset, world_transform);
+  const std::optional<SceneBounds> conservative_local_box =
+      world_bounds_from_local_mesh_bounds(world_transform,
+                                          local_mesh_bounds(*asset));
+  ASSERT_TRUE(conservative_local_box.has_value());
+  EXPECT_GT(conservative_local_box->max.x, expected.max.x + 0.1f)
+      << "rotating imaginary local-AABB corners overstates the mesh extent";
+
+  RenderOverlaySnapshotCache cache;
+  const RenderOverlaySelectionSnapshot &snapshot =
+      cache.selection_snapshot(document, assets);
+  ASSERT_EQ(snapshot.selected_mesh_bounds.size(), 1u);
+  expect_bounds_snapshot_near(snapshot.selected_mesh_bounds.front(), expected);
+
+  const ViewportOverlayFrame frame =
+      ViewportSceneOverlayBuilder::build_selection_frame(
+          {}, snapshot, false, RenderOverlaySelectionMode::Object);
+  const std::optional<SceneBounds> cage =
+      line_bounds_for(frame, ViewportOverlayLayer::GroupBounds);
+  ASSERT_TRUE(cage.has_value());
+  expect_scene_bounds_near(*cage, expected);
+}
+
+TEST(ViewportSceneOverlayBuilderTests,
+     SelectedMultiMeshInstanceAndOrdinaryMeshShareOneExtentCage) {
+  SceneDocument document;
+  AssetRegistry assets;
+  const AssetId mesh = assets.add_mesh(make_overlay_triangle_mesh());
+
+  const EntityId definition =
+      document.create_entity("Bounds Definition", EntityKind::Empty);
+  ASSERT_TRUE(document.set_instance_definition(definition));
+  ASSERT_TRUE(document.set_visible(definition, false));
+  const EntityId first_member =
+      document.create_entity("First Instance Member", EntityKind::Mesh);
+  const EntityId second_member =
+      document.create_entity("Second Instance Member", EntityKind::Mesh);
+  ASSERT_TRUE(document.set_mesh(first_member, MeshComponent{.mesh = mesh}));
+  ASSERT_TRUE(document.set_mesh(second_member, MeshComponent{.mesh = mesh}));
+  document.set_transform(
+      first_member, TransformComponent{.position = {-2.0f, 0.0f, 0.0f}});
+  document.set_transform(
+      second_member, TransformComponent{.position = {4.0f, 0.0f, 0.0f}});
+  ASSERT_TRUE(document.set_parent(first_member, definition, false));
+  ASSERT_TRUE(document.set_parent(second_member, definition, false));
+
+  const EntityId occurrence =
+      document.create_entity("Selected Occurrence", EntityKind::Instance);
+  ASSERT_TRUE(document.set_instance_occurrence(
+      occurrence, InstanceOccurrenceComponent{.definition = definition}));
+  document.set_transform(
+      occurrence, TransformComponent{.position = {10.0f, 1.0f, -3.0f}});
+  ASSERT_TRUE(document.set_selected(occurrence, true));
+
+  RenderOverlaySnapshotCache cache;
+  const RenderOverlaySelectionSnapshot &instance_snapshot =
+      cache.selection_snapshot(document, assets);
+  ASSERT_EQ(instance_snapshot.selected_mesh_bounds.size(), 1u);
+  expect_bounds_snapshot_near(
+      instance_snapshot.selected_mesh_bounds.front(),
+      SceneBounds{.min = {7.5f, 1.0f, -3.0f},
+                  .max = {14.5f, 1.0f, -2.0f}});
+  EXPECT_EQ(cache.stats().selection_world_bounds_build_count, 1u);
+  EXPECT_EQ(cache.stats().selection_world_bounds_translation_reuse_count, 0u);
+  const ViewportOverlayFrame instance_frame =
+      ViewportSceneOverlayBuilder::build_selection_frame(
+          {}, instance_snapshot, false, RenderOverlaySelectionMode::Object);
+  EXPECT_EQ(line_count_for(instance_frame, ViewportOverlayLayer::GroupBounds),
+            12u);
+
+  document.set_transform(
+      occurrence, TransformComponent{.position = {20.0f, 2.0f, 5.0f}});
+  const RenderOverlaySelectionSnapshot &moved_snapshot =
+      cache.selection_snapshot(document, assets);
+  ASSERT_EQ(moved_snapshot.selected_mesh_bounds.size(), 1u);
+  expect_bounds_snapshot_near(
+      moved_snapshot.selected_mesh_bounds.front(),
+      SceneBounds{.min = {17.5f, 2.0f, 5.0f},
+                  .max = {24.5f, 2.0f, 6.0f}});
+  EXPECT_EQ(cache.stats().selection_build_count, 1u);
+  EXPECT_EQ(cache.stats().selection_transform_refresh_count, 1u);
+  EXPECT_EQ(cache.stats().selection_world_bounds_build_count, 1u);
+  EXPECT_EQ(cache.stats().selection_world_bounds_translation_reuse_count, 1u);
+
+  document.set_transform(
+      second_member, TransformComponent{.position = {8.0f, 0.0f, 0.0f}});
+  const RenderOverlaySelectionSnapshot &member_moved_snapshot =
+      cache.selection_snapshot(document, assets);
+  ASSERT_EQ(member_moved_snapshot.selected_mesh_bounds.size(), 1u);
+  expect_bounds_snapshot_near(
+      member_moved_snapshot.selected_mesh_bounds.front(),
+      SceneBounds{.min = {17.5f, 2.0f, 5.0f},
+                  .max = {28.5f, 2.0f, 6.0f}});
+  EXPECT_EQ(cache.stats().selection_build_count, 1u);
+  EXPECT_EQ(cache.stats().selection_transform_refresh_count, 2u);
+  EXPECT_EQ(cache.stats().selection_world_bounds_build_count, 2u);
+  EXPECT_EQ(cache.stats().selection_world_bounds_translation_reuse_count, 1u);
+
+  const EntityId ordinary =
+      document.create_entity("Selected Ordinary Mesh", EntityKind::Mesh);
+  ASSERT_TRUE(document.set_mesh(ordinary, MeshComponent{.mesh = mesh}));
+  document.set_transform(
+      ordinary, TransformComponent{.position = {-10.0f, -4.0f, 2.0f}});
+  ASSERT_TRUE(document.set_selected(ordinary, true));
+  const RenderOverlaySelectionSnapshot &mixed_snapshot =
+      cache.selection_snapshot(document, assets);
+  ASSERT_EQ(mixed_snapshot.selected_mesh_bounds.size(), 2u);
+  const ViewportOverlayFrame mixed_frame =
+      ViewportSceneOverlayBuilder::build_selection_frame(
+          {}, mixed_snapshot, false, RenderOverlaySelectionMode::Object);
+  EXPECT_EQ(line_count_for(mixed_frame, ViewportOverlayLayer::GroupBounds),
+            12u);
+  const std::optional<SceneBounds> mixed_cage =
+      line_bounds_for(mixed_frame, ViewportOverlayLayer::GroupBounds);
+  ASSERT_TRUE(mixed_cage.has_value());
+  expect_scene_bounds_near(
+      *mixed_cage,
+      SceneBounds{.min = {-10.5f, -4.0f, 2.0f},
+                  .max = {28.5f, 2.0f, 6.0f}});
+}
+
+TEST(ViewportSceneOverlayBuilderTests,
      MultipleSelectedMeshesKeepIndividualOutlinesWithAggregateBoundsCage) {
     SceneDocument document;
     AssetRegistry assets;
@@ -4302,6 +4462,16 @@ TEST(RenderSceneWireframeBatchPlannerTests,
   EXPECT_EQ(selection.instance_selection_fills.front().occurrence, isolated);
   ASSERT_EQ(selection.instance_selection_wires.size(), 1u);
   EXPECT_EQ(selection.instance_selection_wires.front().occurrence, isolated);
+
+  const RenderOverlaySelectionSnapshot bounds =
+      build_render_overlay_selection_snapshot(document, assets, {}, {},
+                                              &local);
+  ASSERT_EQ(bounds.selected_mesh_bounds.size(), 1u);
+  const std::optional<SceneBounds> isolated_bounds =
+      entity_world_bounds(document, assets, isolated);
+  ASSERT_TRUE(isolated_bounds.has_value());
+  expect_bounds_snapshot_near(bounds.selected_mesh_bounds.front(),
+                              *isolated_bounds);
 }
 
 TEST(RenderInstanceEditPresentationTests,

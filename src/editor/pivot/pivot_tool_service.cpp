@@ -708,6 +708,9 @@ pivot_geometry_frame(const SceneDocument &scene, const AssetRegistry &assets,
   }
   const std::optional<glm::mat3> rotation =
       pure_world_rotation(world_matrix);
+  // Copy Pivot deliberately retains the reference add-on's transformed
+  // object-local AABB center. Scene and selection bounds use tight transformed
+  // vertex extents, but changing this dual-center rule changes pivot transfer.
   const std::optional<SceneBounds> world_bounds =
       world_bounds_from_local_mesh_bounds(world_matrix, local_bounds);
   if (!rotation.has_value() || !world_bounds.has_value() ||

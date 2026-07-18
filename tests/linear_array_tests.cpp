@@ -6,6 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "api/quader_api_session_internal_access.hpp"
 #include "api/quader_editor_api.hpp"
+#include "api/quader_polygon_document_internal_access.hpp"
 #include "assets/texture_asset.hpp"
 #include "editor/array/linear_array_tool_service.hpp"
 #include "editor/array/radial_array_tool_service.hpp"
@@ -13,7 +14,11 @@
 #include "editor/render/quader_render_api_runtime_access.hpp"
 #include "editor/session/scene_session.hpp"
 #include "math/glm_bridge.hpp"
+#include "quader/modeling/neutral/polygon/document_model.hpp"
+#include "render/overlay/render_overlay_snapshot.hpp"
+#include "render/overlay/viewport_scene_overlay_builder.hpp"
 #include "render/scene_render_bridge.hpp"
+#include "scene/scene_bounds.hpp"
 #include "scene/scene_document.hpp"
 #include "scene/scene_transform.hpp"
 #include "scene/scene_transform_pivot.hpp"
@@ -21,7 +26,10 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <array>
 #include <cstddef>
+#include <optional>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -55,6 +63,54 @@ QMat4 effective_instance_member_world(const SceneDocument &scene,
       scene.world_transform_matrix(occurrence),
       scene_transform_multiply(*definition_inverse,
                                scene.world_transform_matrix(member)));
+}
+
+quader_poly::Document asymmetric_array_document() {
+  quader_poly::Document document;
+  const quader_poly::ElementId origin =
+      quader_poly::add_vertex(document, {});
+  const quader_poly::ElementId x =
+      quader_poly::add_vertex(document, {4.0f, 0.0f, 0.0f});
+  const quader_poly::ElementId y =
+      quader_poly::add_vertex(document, {0.0f, 2.0f, 0.0f});
+  const quader_poly::ElementId z =
+      quader_poly::add_vertex(document, {0.0f, 0.0f, 3.0f});
+  const std::array first_face{origin, x, y};
+  const std::array second_face{origin, z, x};
+  EXPECT_NE(quader_poly::add_face(document, first_face),
+            quader_poly::kInvalidElementId);
+  EXPECT_NE(quader_poly::add_face(document, second_face),
+            quader_poly::kInvalidElementId);
+  return document;
+}
+
+QuaderModelingObjectRef create_asymmetric_array_mesh(
+    QuaderEditorApi &editor, std::string name) {
+  const QuaderApiResult<QuaderModelingObjectRef> created =
+      editor.modeling().create_mesh(
+          QuaderPolygonDocumentInternalAccess::from_backend(
+              asymmetric_array_document()),
+          {.name = std::move(name)});
+  EXPECT_TRUE(created.ok()) << created.error_message();
+  return created.value();
+}
+
+SceneBounds exact_transformed_geometry_bounds(const MeshAsset &mesh,
+                                              const QMat4 &world_transform) {
+  const std::vector<MeshVertex> &vertices = mesh.geometry().vertices;
+  EXPECT_FALSE(vertices.empty());
+  if (vertices.empty()) {
+    return {};
+  }
+  const QVec3 first = transform_point(world_transform,
+                                     vertices.front().position);
+  SceneBounds bounds{.min = first, .max = first};
+  for (std::size_t index = 1u; index < vertices.size(); ++index) {
+    include_point(bounds,
+                  transform_point(world_transform,
+                                  vertices[index].position));
+  }
+  return bounds;
 }
 
 TEST(LinearArrayLayoutTests, PreservesOrientationAndIncludesSharedEndpoint) {
@@ -459,6 +515,28 @@ TEST(LinearArrayToolServiceTests,
 
   const std::vector<EntityId> selected = session.scene().selected_entities();
   ASSERT_EQ(selected.size(), 3u);
+  RenderOverlaySnapshotCache bounds_cache;
+  const RenderOverlaySelectionSnapshot &selection_bounds =
+      bounds_cache.selection_snapshot(session.scene(), session.assets());
+  ASSERT_EQ(selection_bounds.selected_mesh_bounds.size(), selected.size());
+  for (std::size_t index = 0; index < selected.size(); ++index) {
+    const std::optional<SceneBounds> expected = entity_world_bounds(
+        session.scene(), session.assets(), selected[index]);
+    ASSERT_TRUE(expected.has_value());
+    expect_vec3_near(selection_bounds.selected_mesh_bounds[index].min,
+                     expected->min);
+    expect_vec3_near(selection_bounds.selected_mesh_bounds[index].max,
+                     expected->max);
+  }
+  const ViewportOverlayFrame bounds_frame =
+      ViewportSceneOverlayBuilder::build_selection_frame(
+          {}, selection_bounds, false, RenderOverlaySelectionMode::Object);
+  EXPECT_EQ(std::ranges::count_if(
+                bounds_frame.lines,
+                [](const ViewportOverlayLine &line) {
+                  return line.layer == ViewportOverlayLayer::GroupBounds;
+                }),
+            12);
   std::vector<EntityId> copies;
   for (const EntityId entity : selected) {
     if (entity != occurrence) {
@@ -502,11 +580,19 @@ TEST(LinearArrayToolServiceTests,
   ASSERT_TRUE(session.history().undo().ok);
   EXPECT_EQ(session.scene().selected_entities(),
             std::vector<EntityId>{occurrence});
+  EXPECT_EQ(bounds_cache
+                .selection_snapshot(session.scene(), session.assets())
+                .selected_mesh_bounds.size(),
+            1u);
   for (const EntityId copy : copies) {
     EXPECT_FALSE(session.scene().exists(copy));
   }
   ASSERT_TRUE(session.history().redo().ok);
   EXPECT_EQ(session.scene().selected_entities().size(), 3u);
+  EXPECT_EQ(bounds_cache
+                .selection_snapshot(session.scene(), session.assets())
+                .selected_mesh_bounds.size(),
+            3u);
   for (const EntityId copy : copies) {
     ASSERT_TRUE(session.scene().exists(copy));
     ASSERT_NE(session.scene().instance_occurrence(copy), nullptr);
@@ -520,12 +606,9 @@ TEST(RadialArrayToolServiceTests,
   SceneSession session;
   QuaderEditorApi editor(
       QuaderApiSessionInternalAccess::from_scene_session(session));
-  const QuaderApiResult<QuaderModelingObjectRef> member =
-      editor.modeling().create_box(
-          QuaderBounds{.min = {-1.0f, -1.0f, -1.0f},
-                       .max = {1.0f, 1.0f, 1.0f}},
-          "Radial Instance Member");
-  ASSERT_TRUE(member.ok()) << member.error_message();
+  const QuaderModelingObjectRef member =
+      create_asymmetric_array_mesh(editor, "Radial Instance Member");
+  ASSERT_NE(member.entity, kInvalidEntityId);
   ASSERT_TRUE(editor.modeling().create_instance().ok());
 
   ASSERT_EQ(session.scene().selected_entities().size(), 1u);
@@ -547,7 +630,7 @@ TEST(RadialArrayToolServiceTests,
   ASSERT_TRUE(editor.tools().activate(ViewportToolId::RadialArray).ok());
   RadialArrayToolService &tool = session.radial_array();
   ASSERT_TRUE(tool.update_center_candidate({}, {0.0f, 1.0f, 0.0f}, 1.0).ok);
-  ASSERT_TRUE(tool.set_degrees(180.0).ok);
+  ASSERT_TRUE(tool.set_degrees(150.0).ok);
   ASSERT_TRUE(tool.set_copies(3u).ok);
   ASSERT_TRUE(tool.lock_center().ok);
   const RadialArrayPreviewState preview = tool.preview_state();
@@ -564,6 +647,51 @@ TEST(RadialArrayToolServiceTests,
 
   const std::vector<EntityId> selected = session.scene().selected_entities();
   ASSERT_EQ(selected.size(), 3u);
+  RenderOverlaySnapshotCache bounds_cache;
+  const RenderOverlaySelectionSnapshot &selection_bounds =
+      bounds_cache.selection_snapshot(session.scene(), session.assets());
+  ASSERT_EQ(selection_bounds.selected_mesh_bounds.size(), selected.size());
+  EXPECT_EQ(
+      bounds_cache.stats()
+          .selection_instance_dependency_signature_build_count,
+      1u);
+  const MeshComponent *member_component =
+      session.scene().mesh(members.front());
+  ASSERT_NE(member_component, nullptr);
+  const MeshAsset *member_mesh =
+      session.assets().mesh(member_component->mesh);
+  ASSERT_NE(member_mesh, nullptr);
+  bool found_rotated_extent_tighter_than_local_box = false;
+  for (std::size_t index = 0; index < selected.size(); ++index) {
+    const QMat4 member_world = effective_instance_member_world(
+        session.scene(), selected[index], definition, members.front());
+    const SceneBounds expected = exact_transformed_geometry_bounds(
+        *member_mesh, member_world);
+    expect_vec3_near(selection_bounds.selected_mesh_bounds[index].min,
+                     expected.min);
+    expect_vec3_near(selection_bounds.selected_mesh_bounds[index].max,
+                     expected.max);
+    const std::optional<SceneBounds> conservative =
+        world_bounds_from_local_mesh_bounds(
+            member_world, local_mesh_bounds(*member_mesh));
+    ASSERT_TRUE(conservative.has_value());
+    found_rotated_extent_tighter_than_local_box =
+        found_rotated_extent_tighter_than_local_box ||
+        conservative->min.x < expected.min.x - 0.01f ||
+        conservative->min.z < expected.min.z - 0.01f ||
+        conservative->max.x > expected.max.x + 0.01f ||
+        conservative->max.z > expected.max.z + 0.01f;
+  }
+  EXPECT_TRUE(found_rotated_extent_tighter_than_local_box);
+  const ViewportOverlayFrame bounds_frame =
+      ViewportSceneOverlayBuilder::build_selection_frame(
+          {}, selection_bounds, false, RenderOverlaySelectionMode::Object);
+  EXPECT_EQ(std::ranges::count_if(
+                bounds_frame.lines,
+                [](const ViewportOverlayLine &line) {
+                  return line.layer == ViewportOverlayLayer::GroupBounds;
+                }),
+            12);
   std::vector<EntityId> copies;
   for (const EntityId entity : selected) {
     if (entity != occurrence) {
@@ -585,11 +713,19 @@ TEST(RadialArrayToolServiceTests,
   ASSERT_TRUE(session.history().undo().ok);
   EXPECT_EQ(session.scene().selected_entities(),
             std::vector<EntityId>{occurrence});
+  EXPECT_EQ(bounds_cache
+                .selection_snapshot(session.scene(), session.assets())
+                .selected_mesh_bounds.size(),
+            1u);
   for (const EntityId copy : copies) {
     EXPECT_FALSE(session.scene().exists(copy));
   }
   ASSERT_TRUE(session.history().redo().ok);
   EXPECT_EQ(session.scene().selected_entities().size(), 3u);
+  EXPECT_EQ(bounds_cache
+                .selection_snapshot(session.scene(), session.assets())
+                .selected_mesh_bounds.size(),
+            3u);
   for (const EntityId copy : copies) {
     ASSERT_TRUE(session.scene().exists(copy));
     ASSERT_NE(session.scene().instance_occurrence(copy), nullptr);

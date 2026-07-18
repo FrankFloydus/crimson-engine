@@ -163,6 +163,45 @@ std::uint64_t instance_overlay_participant_token(EntityId occurrence,
       .value();
 }
 
+std::optional<std::uint64_t> build_instance_bounds_dependency_signature(
+    const SceneDocument &document, const AssetRegistry &assets,
+    EntityId definition) {
+  if (!document.is_instance_definition_entity(definition)) {
+    return std::nullopt;
+  }
+  const std::optional<QMat4> definition_inverse = try_scene_matrix_inverse(
+      document.world_transform_matrix(definition));
+  if (!definition_inverse) {
+    return std::nullopt;
+  }
+
+  RenderSignatureBuilder signature;
+  signature.add_value(0x626f756e64696e73ULL)
+      .add_value(definition);
+  std::size_t mesh_count = 0u;
+  for (const EntityId member : document.descendants(definition, false)) {
+    if (document.containing_instance_definition(member) != definition ||
+        !scene_hierarchy_segment_is_visible(document, member, definition)) {
+      continue;
+    }
+    const MeshComponent *mesh_component = document.mesh(member);
+    const MeshAsset *mesh = mesh_component != nullptr
+                                ? assets.mesh(mesh_component->mesh)
+                                : nullptr;
+    if (mesh == nullptr) {
+      continue;
+    }
+    signature.add_value(member)
+        .add_value(mesh_component->mesh)
+        .add_value(mesh->revision.value)
+        .add_mat4(scene_transform_multiply(
+            *definition_inverse, document.world_transform_matrix(member)));
+    ++mesh_count;
+  }
+  signature.add_size(mesh_count);
+  return signature.value();
+}
+
 void append_instance_wireframe_meshes(
     RenderOverlaySceneWireframeSnapshot &snapshot,
     const SceneDocument &document, const AssetRegistry &assets,
@@ -471,7 +510,8 @@ RenderOverlaySelectionSnapshot build_render_overlay_selection_snapshot_impl(
     if (!local_visibility_allows(local_visibility, entity)) {
       continue;
     }
-    if (document.mesh(entity) != nullptr) {
+    if (document.mesh(entity) != nullptr ||
+        document.instance_occurrence(entity) != nullptr) {
       if (const std::optional<RenderOverlayBoundsSnapshot> bounds =
               selected_mesh_bounds(entity)) {
         snapshot.selected_mesh_bounds.push_back(*bounds);
@@ -641,6 +681,9 @@ RenderOverlaySnapshotCache::selection_snapshot(
       selection_snapshot_.asset_revision == assets.revision() &&
       selection_snapshot_.local_visibility_revision ==
           current_local_visibility_revision;
+  if (!snapshot_matches) {
+    selection_instance_dependency_signatures_.clear();
+  }
   if (!snapshot_matches &&
       (selection_snapshot_.local_visibility_revision !=
            current_local_visibility_revision ||
@@ -688,6 +731,7 @@ void RenderOverlaySnapshotCache::invalidate_snapshots() {
   has_selection_snapshot_ = false;
   selection_local_mesh_bounds_.clear();
   selection_world_mesh_bounds_.clear();
+  selection_instance_dependency_signatures_.clear();
   selection_selected_mesh_entities_.clear();
   selection_group_entities_.clear();
 }
@@ -699,6 +743,44 @@ RenderOverlaySnapshotCache::selected_mesh_world_bounds(
   if (!document.is_effectively_visible(entity) ||
       document.transform(entity) == nullptr) {
     return std::nullopt;
+  }
+
+  if (document.instance_occurrence(entity) != nullptr) {
+    const QMat4 world_transform = document.world_transform_matrix(entity);
+    const std::optional<std::uint64_t> dependency_signature =
+        selected_instance_bounds_dependency_signature(document, assets,
+                                                       entity);
+    auto cached = selection_world_mesh_bounds_.find(entity);
+    if (dependency_signature &&
+        cached != selection_world_mesh_bounds_.end() &&
+        cached->second.is_instance_occurrence &&
+        cached->second.instance_dependency_signature ==
+            *dependency_signature &&
+        affine_matrices_differ_only_by_translation(
+            world_transform, cached->second.world_transform)) {
+      ++stats_.selection_world_bounds_translation_reuse_count;
+      return translated_bounds(
+          cached->second.bounds,
+          affine_translation_delta(world_transform,
+                                   cached->second.world_transform));
+    }
+    const std::optional<SceneBounds> bounds =
+        entity_world_bounds(document, assets, entity);
+    if (!bounds) {
+      return std::nullopt;
+    }
+    const RenderOverlayBoundsSnapshot snapshot = bounds_snapshot(*bounds);
+    selection_world_mesh_bounds_.insert_or_assign(
+        entity,
+        CachedWorldMeshBounds{
+            .is_instance_occurrence = true,
+            .instance_dependency_signature =
+                dependency_signature.value_or(0u),
+            .world_transform = world_transform,
+            .bounds = snapshot,
+        });
+    ++stats_.selection_world_bounds_build_count;
+    return snapshot;
   }
 
   const MeshComponent *mesh_component = document.mesh(entity);
@@ -724,17 +806,22 @@ RenderOverlaySnapshotCache::selected_mesh_world_bounds(
   }
 
   std::optional<SceneBounds> local_bounds;
+  std::optional<SceneBounds> world_bounds;
   if (mesh != nullptr) {
     auto cached = selection_local_mesh_bounds_.find(mesh_component->mesh);
     if (cached == selection_local_mesh_bounds_.end() ||
         cached->second.mesh_revision != mesh_revision) {
-      const std::optional<SceneBounds> built_bounds = local_mesh_bounds(*mesh);
+      const std::optional<MeshLocalWorldBounds> built_bounds =
+          mesh_local_world_bounds(*mesh, world_transform);
       CachedLocalMeshBounds replacement{
           .mesh_revision = mesh_revision,
           .has_bounds = built_bounds.has_value(),
-          .bounds = built_bounds ? bounds_snapshot(*built_bounds)
+          .bounds = built_bounds ? bounds_snapshot(built_bounds->local)
                                  : RenderOverlayBoundsSnapshot{},
       };
+      if (built_bounds) {
+        world_bounds = built_bounds->world;
+      }
       cached = selection_local_mesh_bounds_
                    .insert_or_assign(mesh_component->mesh,
                                      std::move(replacement))
@@ -751,8 +838,13 @@ RenderOverlaySnapshotCache::selected_mesh_world_bounds(
     }
   }
 
-  const std::optional<SceneBounds> world_bounds =
-      world_bounds_from_local_mesh_bounds(world_transform, local_bounds);
+  if (!world_bounds && mesh != nullptr) {
+    world_bounds = mesh_world_bounds(*mesh, world_transform);
+  }
+  if (!world_bounds) {
+    world_bounds =
+        world_bounds_from_local_mesh_bounds(world_transform, local_bounds);
+  }
   if (!world_bounds) {
     return std::nullopt;
   }
@@ -772,7 +864,42 @@ RenderOverlaySnapshotCache::selected_mesh_world_bounds(
 
 std::optional<RenderOverlayBoundsSnapshot>
 RenderOverlaySnapshotCache::refresh_selected_mesh_world_bounds(
-    const SceneDocument &document, EntityId entity) {
+    const SceneDocument &document, const AssetRegistry &assets,
+    EntityId entity) {
+  if (document.instance_occurrence(entity) != nullptr) {
+    auto cached = selection_world_mesh_bounds_.find(entity);
+    if (cached == selection_world_mesh_bounds_.end() ||
+        !cached->second.is_instance_occurrence) {
+      return std::nullopt;
+    }
+    const QMat4 world_transform = document.world_transform_matrix(entity);
+    const std::optional<std::uint64_t> dependency_signature =
+        selected_instance_bounds_dependency_signature(document, assets,
+                                                       entity);
+    if (dependency_signature &&
+        cached->second.instance_dependency_signature ==
+            *dependency_signature &&
+        affine_matrices_differ_only_by_translation(
+            world_transform, cached->second.world_transform)) {
+      ++stats_.selection_world_bounds_translation_reuse_count;
+      return translated_bounds(
+          cached->second.bounds,
+          affine_translation_delta(world_transform,
+                                   cached->second.world_transform));
+    }
+    const std::optional<SceneBounds> bounds =
+        entity_world_bounds(document, assets, entity);
+    if (!bounds) {
+      return std::nullopt;
+    }
+    cached->second.instance_dependency_signature =
+        dependency_signature.value_or(0u);
+    cached->second.world_transform = world_transform;
+    cached->second.bounds = bounds_snapshot(*bounds);
+    ++stats_.selection_world_bounds_build_count;
+    return cached->second.bounds;
+  }
+
   auto world_cached = selection_world_mesh_bounds_.find(entity);
   if (world_cached == selection_world_mesh_bounds_.end()) {
     return std::nullopt;
@@ -809,8 +936,22 @@ RenderOverlaySnapshotCache::refresh_selected_mesh_world_bounds(
     }
   }
 
-  const std::optional<SceneBounds> world_bounds =
-      world_bounds_from_local_mesh_bounds(world_transform, local_bounds);
+  const MeshAsset *mesh = world_cached->second.has_mesh_asset
+                              ? assets.mesh(world_cached->second.mesh_id)
+                              : nullptr;
+  if (world_cached->second.has_mesh_asset &&
+      (mesh == nullptr ||
+       mesh->revision.value != world_cached->second.mesh_revision)) {
+    return std::nullopt;
+  }
+  std::optional<SceneBounds> world_bounds;
+  if (mesh != nullptr) {
+    world_bounds = mesh_world_bounds(*mesh, world_transform);
+  }
+  if (!world_bounds) {
+    world_bounds =
+        world_bounds_from_local_mesh_bounds(world_transform, local_bounds);
+  }
   if (!world_bounds) {
     return std::nullopt;
   }
@@ -819,6 +960,30 @@ RenderOverlaySnapshotCache::refresh_selected_mesh_world_bounds(
   world_cached->second.bounds = snapshot;
   ++stats_.selection_world_bounds_build_count;
   return snapshot;
+}
+
+std::optional<std::uint64_t>
+RenderOverlaySnapshotCache::selected_instance_bounds_dependency_signature(
+    const SceneDocument &document, const AssetRegistry &assets,
+    EntityId occurrence) {
+  const InstanceOccurrenceComponent *instance =
+      document.instance_occurrence(occurrence);
+  if (instance == nullptr) {
+    return std::nullopt;
+  }
+  const auto cached =
+      selection_instance_dependency_signatures_.find(instance->definition);
+  if (cached != selection_instance_dependency_signatures_.end()) {
+    return cached->second;
+  }
+
+  const std::optional<std::uint64_t> signature =
+      build_instance_bounds_dependency_signature(document, assets,
+                                                  instance->definition);
+  selection_instance_dependency_signatures_.insert_or_assign(
+      instance->definition, signature);
+  ++stats_.selection_instance_dependency_signature_build_count;
+  return signature;
 }
 
 bool RenderOverlaySnapshotCache::can_refresh_selection_transforms(
@@ -859,7 +1024,7 @@ bool RenderOverlaySnapshotCache::refresh_selection_transforms(
   selected_mesh_bounds.reserve(selection_selected_mesh_entities_.size());
   for (const EntityId entity : selection_selected_mesh_entities_) {
     const std::optional<RenderOverlayBoundsSnapshot> bounds =
-        refresh_selected_mesh_world_bounds(document, entity);
+        refresh_selected_mesh_world_bounds(document, assets, entity);
     if (!bounds) {
       return false;
     }
