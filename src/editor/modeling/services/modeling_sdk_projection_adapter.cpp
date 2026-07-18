@@ -136,6 +136,22 @@ sdk_operation_id(quader_editor_core::EditorOperationId operation) {
   return SelectionKind::Vertex;
 }
 
+[[nodiscard]] bool component_selection_participates_in_mode(
+    const PolygonSelectionSnapshot &selection, ModelingSelectionMode mode) {
+  switch (mode) {
+  case ModelingSelectionMode::Vertex:
+    return !selection.vertices.empty();
+  case ModelingSelectionMode::Edge:
+    return !selection.edges.empty();
+  case ModelingSelectionMode::Face:
+    return !selection.faces.empty();
+  case ModelingSelectionMode::Object:
+  case ModelingSelectionMode::Group:
+    return false;
+  }
+  return false;
+}
+
 [[nodiscard]] ModelingSelectionMode from_native_selection_mode(
     quader_editor_core::SelectionMode mode) {
   switch (mode) {
@@ -219,6 +235,30 @@ private:
       std::function<Result<OperationResult>(PolygonDocument &)>;
   using DocumentMutationByObject =
       std::function<Result<OperationResult>(ObjectId, PolygonDocument &)>;
+
+  [[nodiscard]] static Result<OperationResult>
+  apply_with_whole_object_face_selection(
+      ModelingSelectionMode mode, PolygonDocument &document,
+      const DocumentMutation &operation) {
+    if (mode != ModelingSelectionMode::Object &&
+        mode != ModelingSelectionMode::Group) {
+      return operation(document);
+    }
+    Result<OperationResult> selected = document.select_all_faces();
+    if (!selected.ok()) {
+      return selected;
+    }
+    Result<OperationResult> operated = operation(document);
+    if (!operated.ok()) {
+      return operated;
+    }
+    Result<OperationResult> cleared = document.clear_selection();
+    if (!cleared.ok()) {
+      return cleared;
+    }
+    operated.value().dirty.selection = false;
+    return operated;
+  }
 
   /// Retains enough portable operation state to rebuild a preview after a
   /// selection edit is applied to its committed base document.
@@ -603,6 +643,8 @@ public:
     }
 
     quader_editor_core::EditorSession projected(std::move(objects));
+    projected.state().content_revision = content_revision();
+    projected.state().selection_revision = selection_revision();
     projected.state().active_object_id = active_native_object_id_;
     switch (selection_mode_) {
     case ModelingSelectionMode::Object:
@@ -1149,24 +1191,8 @@ public:
     const auto whole_object_faces = [mode_before](
                                         PolygonDocument &document,
                                         const DocumentMutation &operation_fn) {
-      if (mode_before != ModelingSelectionMode::Object &&
-          mode_before != ModelingSelectionMode::Group) {
-        return operation_fn(document);
-      }
-      Result<OperationResult> selected = document.select_all_faces();
-      if (!selected.ok()) {
-        return selected;
-      }
-      Result<OperationResult> operated = operation_fn(document);
-      if (!operated.ok()) {
-        return operated;
-      }
-      Result<OperationResult> cleared = document.clear_selection();
-      if (!cleared.ok()) {
-        return cleared;
-      }
-      operated.value().dirty.selection = false;
-      return operated;
+      return apply_with_whole_object_face_selection(
+          mode_before, document, operation_fn);
     };
 
     DocumentMutation mutation;
@@ -1840,6 +1866,55 @@ public:
     return set_component_selections(requests);
   }
 
+  [[nodiscard]] ModelingCommandResult
+  select_mesh_ngons(std::span<const int> modeling_object_ids) {
+    if (selection_mode_ != ModelingSelectionMode::Object) {
+      return failure("Select N-Gons is available only in Mesh mode.");
+    }
+
+    std::vector<ModelingComponentSelectionRequest> requests;
+    requests.reserve(modeling_object_ids.size());
+    std::unordered_set<int> visited;
+    for (const int native_id : modeling_object_ids) {
+      if (!visited.insert(native_id).second) {
+        continue;
+      }
+      const std::optional<ObjectId> object = sdk_object(native_id);
+      if (!object.has_value()) {
+        return failure("SDK modeling object ID is not live.");
+      }
+      Result<PolygonDocument> copied = session_.document_copy(*object);
+      if (!copied.ok()) {
+        return failure(copied.error_message());
+      }
+      Result<AuthoredTopology> topology = copied.value().authored_topology();
+      if (!topology.ok()) {
+        return failure(topology.error_message());
+      }
+
+      ModelingComponentSelectionRequest request;
+      request.modeling_object_id = native_id;
+      request.mode = ModelingSelectionMode::Face;
+      request.edit = ModelingSelectionEdit::Replace;
+      for (const auto &face : topology.value().faces) {
+        if (face.vertices.size() > 4U) {
+          request.faces.push_back(static_cast<int>(face.id.index));
+        }
+      }
+      if (!request.faces.empty()) {
+        request.active_kind = ModelingActiveSelectionKind::Face;
+        request.active_face = request.faces.back();
+      }
+      requests.push_back(std::move(request));
+    }
+    if (requests.empty()) {
+      return {.ok = true,
+              .changed = false,
+              .message = "No directly editable mesh is selected."};
+    }
+    return set_component_selections(requests);
+  }
+
   [[nodiscard]] ModelingCommandResult set_component_selections(
       std::span<const ModelingComponentSelectionRequest> requests) {
     const PreviewSelectionEditState preview_edit =
@@ -2047,8 +2122,15 @@ public:
     std::vector<int> targets;
     targets.reserve(object_ids_.size());
     for (const auto &[native_id, object_id] : object_ids_) {
-      (void)object_id;
-      targets.push_back(native_id);
+      Result<PolygonDocument> copied = session_.document_copy(object_id);
+      if (!copied.ok()) {
+        return failure(copied.error_message());
+      }
+      const PolygonSelectionSnapshot selection = copied.value().selection();
+      if (component_selection_participates_in_mode(selection,
+                                                   selection_mode_)) {
+        targets.push_back(native_id);
+      }
     }
     const auto active =
         std::find(targets.begin(), targets.end(), active_native_object_id_);
@@ -2056,7 +2138,7 @@ public:
       std::rotate(active, std::next(active), targets.end());
     }
     if (targets.empty()) {
-      return failure("No active SDK modeling object for Select All.");
+      return {.ok = true, .changed = false, .message = "Selection unchanged."};
     }
     std::vector<ModelingComponentSelectionRequest> requests;
     requests.reserve(targets.size());
@@ -2137,8 +2219,15 @@ public:
     std::vector<int> targets;
     targets.reserve(object_ids_.size());
     for (const auto &[native_id, object_id] : object_ids_) {
-      (void)object_id;
-      targets.push_back(native_id);
+      Result<PolygonDocument> copied = session_.document_copy(object_id);
+      if (!copied.ok()) {
+        return failure(copied.error_message());
+      }
+      const PolygonSelectionSnapshot selection = copied.value().selection();
+      if (component_selection_participates_in_mode(selection,
+                                                   selection_mode_)) {
+        targets.push_back(native_id);
+      }
     }
     const auto active =
         std::find(targets.begin(), targets.end(), active_native_object_id_);
@@ -2146,7 +2235,7 @@ public:
       std::rotate(active, std::next(active), targets.end());
     }
     if (targets.empty()) {
-      return failure("No active SDK modeling object for Invert Selection.");
+      return {.ok = true, .changed = false, .message = "Selection unchanged."};
     }
     std::vector<ModelingComponentSelectionRequest> requests;
     requests.reserve(targets.size());
@@ -5419,9 +5508,15 @@ private:
           quader_editor_core::normalize_thicken_operation_settings(
               value != nullptr ? *value
                                : quader_editor_core::ThickenOperationSettings{});
-      return [normalized](PolygonDocument &document) {
-        return document.thicken_selected_faces(
-            static_cast<float>(normalized.thickness), normalized.from_center);
+      const ModelingSelectionMode mode = selection_mode_;
+      return [normalized, mode](PolygonDocument &document) {
+        return apply_with_whole_object_face_selection(
+            mode, document,
+            [normalized](PolygonDocument &selected_document) {
+              return selected_document.thicken_selected_faces(
+                  static_cast<float>(normalized.thickness),
+                  normalized.from_center);
+            });
       };
     }
     case Id::SliceQuad: {
@@ -5859,6 +5954,11 @@ ModelingCommandResult ModelingSdkProjectionAdapter::set_selection_mode(
 ModelingCommandResult ModelingSdkProjectionAdapter::set_component_selection(
     const ModelingComponentSelectionRequest &request) {
   return impl_->set_component_selection(request);
+}
+
+ModelingCommandResult ModelingSdkProjectionAdapter::select_mesh_ngons(
+    std::span<const int> modeling_object_ids) {
+  return impl_->select_mesh_ngons(modeling_object_ids);
 }
 
 ModelingCommandResult ModelingSdkProjectionAdapter::select_all() {

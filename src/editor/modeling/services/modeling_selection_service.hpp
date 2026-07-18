@@ -70,6 +70,11 @@ public:
   select_all_in_viewport_scope(
       quader_editor_core::EditorSession &session, const SceneDocument &scene,
       const ModelingObjectRuntimeMap &object_map, bool invert) const;
+  [[nodiscard]] ModelingSelectionApplyResult
+  apply_component_selection_command(
+      quader_editor_core::EditorSession &session, const SceneDocument &scene,
+      const ModelingObjectRuntimeMap &object_map,
+      ModelingComponentSelectionCommand command) const;
 
   /// Returns the active occurrence scope used to project modeling overlays.
   [[nodiscard]] ModelingInstanceEditScope overlay_instance_edit_scope() const {

@@ -418,9 +418,6 @@ TEST(ProgrammaticApiGuardrailTests, PublicTypedCommandCatalogStaysCanonicalAndUn
            std::string_view{"kHistoryUndo"},
            std::string_view{"kHistoryRedo"},
            std::string_view{"kHistoryRepeatLastAction"},
-           std::string_view{"kSelectionClear"},
-           std::string_view{"kSelectionSelectAll"},
-           std::string_view{"kSelectionInvert"},
            std::string_view{"kModelingDeleteSelection"},
            std::string_view{"kModelingApplyActiveMaterial"},
        }) {
@@ -458,9 +455,6 @@ TEST(ProgrammaticApiGuardrailTests,
       {"edit.repeat_last_action",
        "kEditRepeatLastAction",
        {"kHistoryRepeatLastAction"}},
-      {"edit.clear_selection", "kEditClearSelection", {"kSelectionClear"}},
-      {"edit.select_all", "kEditSelectAll", {"kSelectionSelectAll"}},
-      {"edit.invert_selection", "kEditInvertSelection", {"kSelectionInvert"}},
       {"edit.delete", "kDeleteSelection", {"kModelingDeleteSelection"}},
       {"edit.apply_material",
        "kApplyMaterial",
@@ -495,6 +489,25 @@ TEST(ProgrammaticApiGuardrailTests,
         << "new duplicate command constant for " << id
         << " must be removed or explicitly deprecated by this guardrail";
   }
+}
+
+TEST(ProgrammaticApiGuardrailTests,
+     SelectionCommandsUseOnlyTheCanonicalSelectionFamily) {
+  const std::string command_header =
+      read_file(source_root() / "src/api/quader_command_ids.hpp");
+  const std::unordered_map<std::string, std::string> ids =
+      quader_command_ids_by_constant_name(command_header);
+
+  EXPECT_EQ(ids.at("kSelectAll"), "select.all");
+  EXPECT_EQ(ids.at("kSelectInverse"), "select.inverse");
+  EXPECT_EQ(command_header.find("edit.select_all"), std::string::npos);
+  EXPECT_EQ(command_header.find("edit.invert_selection"), std::string::npos);
+  EXPECT_EQ(command_header.find("selection.select_all"), std::string::npos);
+  EXPECT_EQ(command_header.find("selection.invert"), std::string::npos);
+  EXPECT_EQ(command_header.find("kEditSelectAll"), std::string::npos);
+  EXPECT_EQ(command_header.find("kEditInvertSelection"), std::string::npos);
+  EXPECT_EQ(command_header.find("kSelectionSelectAll"), std::string::npos);
+  EXPECT_EQ(command_header.find("kSelectionInvert"), std::string::npos);
 }
 
 TEST(ProgrammaticApiGuardrailTests, PublicApiHeadersAvoidInternalOwnerContracts) {

@@ -40,5 +40,7 @@ struct FacePerimeterInfo {
 [[nodiscard]] std::optional<float> edge_factor_from_ray(const Document& document, Edge edge, const Ray& ray);
 [[nodiscard]] std::vector<Edge> edge_loop_edges(const Document& document, Edge seed_edge);
 [[nodiscard]] std::vector<Edge> edge_loop_edges(const Document& document, Edge seed_edge, ElementId face_id);
+[[nodiscard]] std::vector<Edge> edge_ring_edges(const Document& document, Edge seed_edge);
+[[nodiscard]] bool has_same_geometry(const Document& left, const Document& right);
 
 } // namespace quader_poly

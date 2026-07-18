@@ -7,6 +7,7 @@
 #include "operation_validation_test_helpers.hpp"
 
 #include <algorithm>
+#include <cmath>
 
 using namespace quader_poly;
 
@@ -88,6 +89,30 @@ std::size_t face_count_on_plane_x(const Document &document, float x) {
                      qdr_test::nearly_equal(vertex->position.x, x);
             });
       }));
+}
+
+float compiled_primitive_area(const CompiledMesh &mesh,
+                              std::size_t primitive_index) {
+  if (primitive_index >= mesh.primitives.size()) {
+    return 0.0F;
+  }
+  const CompiledPrimitive &primitive = mesh.primitives[primitive_index];
+  float area = 0.0F;
+  for (std::uint32_t offset = 0; offset + 2U < primitive.index_count;
+       offset += 3U) {
+    const std::uint32_t first_index =
+        mesh.indices[primitive.index_offset + offset];
+    const std::uint32_t second_index =
+        mesh.indices[primitive.index_offset + offset + 1U];
+    const std::uint32_t third_index =
+        mesh.indices[primitive.index_offset + offset + 2U];
+    const quader::QVec3 first = mesh.vertices[first_index].position;
+    const quader::QVec3 second = mesh.vertices[second_index].position;
+    const quader::QVec3 third = mesh.vertices[third_index].position;
+    const quader::QVec3 cross_product = cross(second - first, third - first);
+    area += 0.5F * std::sqrt(length_squared(cross_product));
+  }
+  return area;
 }
 
 } // namespace
@@ -281,5 +306,125 @@ TEST(QdrDocumentOperationMergeVerticesByDistanceTests,
   EXPECT_TRUE(result.message.empty());
   EXPECT_TRUE(document.vertices.size() == 8U);
   EXPECT_TRUE(qdr_test::edge_incidence_count(document, make_edge(a1, b1)) == 3);
+  EXPECT_TRUE(qdr_test::every_face_compiles_to_triangles(document));
+}
+
+TEST(QdrDocumentOperationMergeVerticesByDistanceTests,
+     MergeVerticesByDistancePreservesIncidentFaceAcrossCoincidentBridgeVertices) {
+  Document document;
+  const ElementId top_left = add_vertex(document, {8.0F, 1.0F, -2.0F});
+  const ElementId bridge_left = add_vertex(document, {8.0F, 0.5F, -2.0F});
+  const ElementId back_left = add_vertex(document, {8.0F, 0.5F, 0.0F});
+  const ElementId top_back_left = add_vertex(document, {8.0F, 1.0F, 0.0F});
+  const ElementId disconnected_back_left =
+      add_vertex(document, {8.0F, 0.5F, 0.0F});
+  const ElementId back_right = add_vertex(document, {10.0F, 0.5F, 0.0F});
+  const ElementId bridge_right = add_vertex(document, {10.0F, 0.5F, -2.0F});
+  const ElementId top_right = add_vertex(document, {10.0F, 1.0F, -2.0F});
+  const ElementId disconnected_bridge_right =
+      add_vertex(document, {10.0F, 0.5F, -2.0F});
+  const ElementId disconnected_bridge_left =
+      add_vertex(document, {8.0F, 0.5F, -2.0F});
+
+  const ElementId left_face =
+      add_face(document, std::array<ElementId, 4>{
+                             top_left, top_back_left, back_left, bridge_left});
+  const ElementId right_face =
+      add_face(document, std::array<ElementId, 4>{
+                             top_right, top_left, disconnected_bridge_left,
+                             disconnected_bridge_right});
+  const ElementId back_face =
+      add_face(document, std::array<ElementId, 3>{
+                             disconnected_back_left, back_right,
+                             bridge_right});
+  const ElementId bridged_face = add_face(
+      document,
+      std::array<ElementId, 10>{
+          top_left, bridge_left, back_left, top_back_left,
+          disconnected_back_left, back_right, bridge_right, top_right,
+          disconnected_bridge_right, disconnected_bridge_left});
+  ASSERT_NE(left_face, kInvalidElementId);
+  ASSERT_NE(right_face, kInvalidElementId);
+  ASSERT_NE(back_face, kInvalidElementId);
+  ASSERT_NE(bridged_face, kInvalidElementId);
+  ASSERT_TRUE(qdr_test::every_face_compiles_to_triangles(document));
+  const std::size_t face_count_before = document.faces.size();
+  const float bridged_face_area_before =
+      compiled_primitive_area(compile_document(document),
+                              face_count_before - 1U);
+
+  Selection selection = qdr_test::vertex_selection(
+      {bridge_left, disconnected_bridge_left});
+  const OperationResult result =
+      merge_selected_vertices_by_distance(document, selection, 0.125F);
+
+  ASSERT_TRUE(result.changed) << result.message;
+  qdr_test::expect_valid_polygon_document_after_success(document, result);
+  EXPECT_EQ(document.faces.size(), face_count_before);
+  EXPECT_NE(find_face(document, bridged_face), nullptr);
+  EXPECT_EQ(find_vertex(document, disconnected_bridge_left), nullptr);
+  EXPECT_NE(find_vertex(document, bridge_left), nullptr);
+  ASSERT_EQ(selection.vertices.size(), 1U);
+  EXPECT_EQ(selection.vertices.front(), bridge_left);
+  EXPECT_TRUE(qdr_test::every_face_compiles_to_triangles(document));
+  const auto repaired_face = std::ranges::find_if(
+      document.faces,
+      [bridged_face](const Face &face) { return face.id == bridged_face; });
+  ASSERT_NE(repaired_face, document.faces.end());
+  EXPECT_EQ(repaired_face->vertices,
+            (std::vector<ElementId>{
+                bridge_left, back_left, top_back_left,
+                disconnected_back_left, back_right, bridge_right, top_right,
+                disconnected_bridge_right}));
+  EXPECT_EQ(qdr_test::edge_incidence_count(
+                document,
+                make_edge(top_left, disconnected_bridge_right)),
+            0U);
+  EXPECT_EQ(qdr_test::edge_incidence_count(
+                document,
+                make_edge(bridge_left, disconnected_bridge_right)),
+            2U);
+  const float bridged_face_area_after = compiled_primitive_area(
+      compile_document(document),
+      static_cast<std::size_t>(
+          std::distance(document.faces.begin(), repaired_face)));
+  EXPECT_NEAR(bridged_face_area_after, bridged_face_area_before, 0.0001F);
+}
+
+TEST(QdrDocumentOperationMergeVerticesByDistanceTests,
+     MergeVerticesByDistanceKeepsBothValidBoundaryArcsWhenWeldingAcrossAFace) {
+  Document document;
+  const ElementId survivor = add_vertex(document, {0.0F, 0.0F, 0.0F});
+  const ElementId first_left = add_vertex(document, {-2.0F, 0.0F, 0.0F});
+  const ElementId first_right = add_vertex(document, {-1.0F, 1.0F, 0.0F});
+  const ElementId removed = add_vertex(document, {0.0F, 0.0F, 0.0F});
+  const ElementId second_left = add_vertex(document, {1.0F, 1.0F, 0.0F});
+  const ElementId second_right = add_vertex(document, {2.0F, 0.0F, 0.0F});
+  const ElementId source_face = add_face(
+      document, std::array<ElementId, 6>{
+                    survivor, first_left, first_right, removed, second_left,
+                    second_right});
+  ASSERT_NE(source_face, kInvalidElementId);
+
+  Selection selection = qdr_test::vertex_selection({survivor, removed});
+  const OperationResult result =
+      merge_selected_vertices_by_distance(document, selection, 0.001F);
+
+  ASSERT_TRUE(result.changed) << result.message;
+  qdr_test::expect_valid_polygon_document_after_success(document, result);
+  ASSERT_EQ(document.faces.size(), 2U);
+  EXPECT_EQ(find_vertex(document, removed), nullptr);
+  EXPECT_EQ(selection.vertices, (std::vector<ElementId>{survivor}));
+  EXPECT_EQ(document.faces[0].id, source_face);
+  EXPECT_EQ(document.faces[0].vertices,
+            (std::vector<ElementId>{survivor, second_left, second_right}));
+  EXPECT_EQ(document.faces[1].vertices,
+            (std::vector<ElementId>{survivor, first_left, first_right}));
+  EXPECT_EQ(qdr_test::edge_incidence_count(
+                document, make_edge(first_right, second_left)),
+            0U);
+  EXPECT_EQ(qdr_test::edge_incidence_count(
+                document, make_edge(second_right, first_left)),
+            0U);
   EXPECT_TRUE(qdr_test::every_face_compiles_to_triangles(document));
 }

@@ -296,9 +296,67 @@ QuaderApiVoidResult QuaderSelectionApi::select_all() {
       scene_session(session_).selection().select_all(), "Select All");
 }
 
-QuaderApiVoidResult QuaderSelectionApi::invert() {
+QuaderApiVoidResult QuaderSelectionApi::select_inverse() {
   return mutations_.run_modeling_result(
-      scene_session(session_).selection().invert(), "Invert Selection");
+      scene_session(session_).selection().invert(), "Select Inverse");
+}
+
+QuaderApiVoidResult QuaderSelectionApi::select_edge_direction() {
+  return mutations_.run_modeling_result(
+      scene_session(session_).selection().select_edge_direction(),
+      "Select Direction");
+}
+
+QuaderApiVoidResult QuaderSelectionApi::select_edge_loops() {
+  return mutations_.run_modeling_result(
+      scene_session(session_).selection().select_edge_loops(),
+      "Select Edge Loops");
+}
+
+QuaderApiVoidResult QuaderSelectionApi::select_edge_ring() {
+  return mutations_.run_modeling_result(
+      scene_session(session_).selection().select_edge_ring(),
+      "Select Edge Ring");
+}
+
+QuaderApiVoidResult QuaderSelectionApi::select_faces_with_same_material() {
+  return mutations_.run_modeling_result(
+      scene_session(session_).selection().select_faces_with_same_material(),
+      "Select Faces With Same Material");
+}
+
+QuaderApiVoidResult QuaderSelectionApi::select_coplanar_faces() {
+  return mutations_.run_modeling_result(
+      scene_session(session_).selection().select_coplanar_faces(),
+      "Select Co-planar Faces");
+}
+
+QuaderApiVoidResult QuaderSelectionApi::select_face_normal() {
+  return mutations_.run_modeling_result(
+      scene_session(session_).selection().select_face_normal(),
+      "Select Normal");
+}
+
+QuaderApiVoidResult QuaderSelectionApi::select_mesh_ngons() {
+  return mutations_.run_modeling_result(
+      scene_session(session_).selection().select_mesh_ngons(),
+      "Select N-Gons");
+}
+
+QuaderApiVoidResult QuaderSelectionApi::select_similar_meshes() {
+  return mutations_.run_modeling_result(
+      scene_session(session_).selection().select_similar_meshes(),
+      "Select Similar Meshes");
+}
+
+QuaderApiVoidResult QuaderSelectionApi::grow() {
+  return mutations_.run_modeling_result(
+      scene_session(session_).selection().grow(), "Grow Selection");
+}
+
+QuaderApiVoidResult QuaderSelectionApi::shrink() {
+  return mutations_.run_modeling_result(
+      scene_session(session_).selection().shrink(), "Shrink Selection");
 }
 
 QuaderApiVoidResult QuaderSelectionApi::set_mode(QuaderSelectionMode mode) {

@@ -28,6 +28,7 @@ struct ViewportSceneOverlayFrameRequest;
 struct QuaderRenderSceneOverlaySyncRequest {
   bool selected_object_overlay_visible = false;
   std::uint8_t scene_wireframe_layer_mask = 0u;
+  bool selected_scene_wire_visible = true;
   ViewportPersistentOverlayStyleSnapshot style;
 };
 

@@ -1131,6 +1131,7 @@ if(QUADER_BUILD_TESTS)
         tests/native_source_policy_guardrail_tests.cpp
         tests/oop_architecture_guardrail_tests.cpp
         tests/programmatic_api_guardrail_tests.cpp
+        tests/regression_gate_guardrail_tests.cpp
         tests/render_source_policy_guardrail_tests.cpp
         tests/ui_layout_guardrail_tests.cpp
         tests/support/guardrail_file_scan.cpp
@@ -1147,6 +1148,7 @@ if(QUADER_BUILD_TESTS)
     add_executable(quader_tests
         tests/quader_tests_main.cpp
         tests/app_frame_clock_tests.cpp
+        tests/command_behavior_contract_tests.cpp
         tests/core_tests.cpp
         tests/fatal_error_handler_behavior_tests.cpp
         tests/linear_array_tests.cpp
@@ -1204,6 +1206,9 @@ if(QUADER_BUILD_TESTS)
         tests/viewport_tool_catalog_tests.cpp
         tests/support/behavior_expect.cpp
         tests/support/behavior_scenario.cpp
+        tests/support/command_behavior_contract.cpp
+        tests/support/command_behavior_fixture.cpp
+        tests/support/command_observable_state.cpp
         tests/support/guardrail_file_scan.cpp
         tests/support/modeling_test_events.cpp
     )

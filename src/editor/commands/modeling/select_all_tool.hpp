@@ -23,7 +23,7 @@ public:
           .kind = CommandToolKind::Instant,
           .preview_kind = ModelingActionPreviewKind::None,
           .rebuilds_mesh_on_success = false,
-          .public_command_id = "edit.select_all",
+          .public_command_id = "select.all",
           .registers_public_command = false,
       };
     }

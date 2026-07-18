@@ -44,6 +44,7 @@
 #include <editor/interactions/viewport_projection.hpp>
 #include <editor/modeling/runtime/runtime_command.hpp>
 #include <quader/modeling/neutral/polygon/document.hpp>
+#include <quader/modeling/neutral/polygon/document_selection.hpp>
 
 namespace quader {
 namespace {
@@ -66,6 +67,16 @@ bool same_vector(QVec2 left, QVec2 right) {
 
 bool same_vector(QVec3 left, QVec3 right) {
   return left.x == right.x && left.y == right.y && left.z == right.z;
+}
+
+quader_poly::Transform3 polygon_transform_from_matrix(const QMat4 &matrix) {
+  const auto &m = matrix.values;
+  return {
+      .x_axis = {m[0], m[1], m[2]},
+      .y_axis = {m[4], m[5], m[6]},
+      .z_axis = {m[8], m[9], m[10]},
+      .origin = {m[12], m[13], m[14]},
+  };
 }
 
 bool same_viewport_camera(const ModelingViewportCamera &left,
@@ -1383,14 +1394,15 @@ ModelingSelectionService::select_all_in_viewport_scope(
   std::vector<std::size_t> target_indices;
   target_indices.reserve(scoped_objects.size());
   for (std::size_t index = 0; index < scoped_objects.size(); ++index) {
-    if (scoped_objects[index].selected) {
+    if (quader_editor_core::component_selection_has_mode_components(
+            scoped_objects[index].selection, session.selection_mode())) {
       target_indices.push_back(index);
     }
   }
   if (target_indices.empty()) {
-    for (std::size_t index = 0; index < scoped_objects.size(); ++index) {
-      target_indices.push_back(index);
-    }
+    return ModelingCommandResult{.ok = true,
+                                 .changed = false,
+                                 .message = "Selection unchanged."};
   }
 
   for (const std::size_t index : target_indices) {
@@ -1462,6 +1474,278 @@ ModelingSelectionService::select_all_in_viewport_scope(
                                    : "Visible components selected.")
                          : "Selection unchanged.",
   };
+}
+
+ModelingSelectionApplyResult
+ModelingSelectionService::apply_component_selection_command(
+    quader_editor_core::EditorSession &session, const SceneDocument &scene,
+    const ModelingObjectRuntimeMap &object_map,
+    ModelingComponentSelectionCommand command) const {
+  using NativeMode = quader_editor_core::SelectionMode;
+  const NativeMode mode = session.selection_mode();
+  const bool edge_command =
+      command == ModelingComponentSelectionCommand::SelectEdgeDirection ||
+      command == ModelingComponentSelectionCommand::SelectEdgeLoops ||
+      command == ModelingComponentSelectionCommand::SelectEdgeRing;
+  const bool face_command =
+      command ==
+          ModelingComponentSelectionCommand::SelectFacesWithSameMaterial ||
+      command == ModelingComponentSelectionCommand::SelectCoplanarFaces ||
+      command == ModelingComponentSelectionCommand::SelectFaceNormal;
+  if ((edge_command && mode != NativeMode::Edge) ||
+      (face_command && mode != NativeMode::Face) ||
+      mode == NativeMode::Object) {
+    return {.applied = false, .changed = false};
+  }
+
+  const bool comparison_space_command =
+      command == ModelingComponentSelectionCommand::SelectEdgeDirection;
+  const bool plane_command =
+      command == ModelingComponentSelectionCommand::SelectCoplanarFaces;
+  const bool normal_command =
+      command == ModelingComponentSelectionCommand::SelectFaceNormal;
+  std::vector<quader_editor_core::PolygonObject> scoped_objects =
+      comparison_space_command
+          ? scene_transformed_objects_for_picking(session, scene, object_map)
+          : cached_local_picking_objects(session, scene, object_map);
+  const std::span<const quader_editor_core::PickObjectTransform>
+      object_transforms = (plane_command || normal_command)
+                              ? cached_local_picking_transforms(
+                                    session, scene, object_map)
+                              : std::span<const quader_editor_core::
+                                                PickObjectTransform>{};
+  const auto comparison_transform_for =
+      [&](std::size_t index,
+          const quader_editor_core::PolygonObject &object) {
+        if (index < object_transforms.size() &&
+            object_transforms[index].object_id == object.id) {
+          return polygon_transform_from_matrix(
+              object_transforms[index].world_from_object);
+        }
+        const auto found = std::ranges::find(
+            object_transforms, object.id,
+            &quader_editor_core::PickObjectTransform::object_id);
+        return found == object_transforms.end()
+                   ? quader_poly::Transform3{}
+                   : polygon_transform_from_matrix(found->world_from_object);
+      };
+  const auto entity_for_object = [&](int object_id) {
+    std::optional<EntityId> entity =
+        scene_target_for_picking_participant(object_id);
+    if (!entity.has_value()) {
+      entity = object_map.entity_for_modeling_object(object_id);
+    }
+    return entity;
+  };
+  std::vector<std::size_t> target_indices;
+  target_indices.reserve(scoped_objects.size());
+  for (std::size_t index = 0; index < scoped_objects.size(); ++index) {
+    const quader_editor_core::PolygonObject &object = scoped_objects[index];
+    const std::optional<EntityId> entity = entity_for_object(object.id);
+    const SelectionComponent *scene_selection =
+        entity.has_value() ? scene.selection(*entity) : nullptr;
+    if ((scene_selection != nullptr && scene_selection->selected) ||
+        object.selected || object.component_edit_target ||
+        !object.selection.empty()) {
+      target_indices.push_back(index);
+    }
+  }
+  if (target_indices.empty()) {
+    return {.applied = true, .changed = false};
+  }
+
+  quader_poly::SelectionMode portable_mode =
+      quader_poly::SelectionMode::Vertex;
+  if (mode == NativeMode::Edge) {
+    portable_mode = quader_poly::SelectionMode::Edge;
+  } else if (mode == NativeMode::Face) {
+    portable_mode = quader_poly::SelectionMode::Face;
+  }
+  for (const std::size_t index : target_indices) {
+    quader_poly::Selection &selection = scoped_objects[index].selection;
+    if (selection.mode != portable_mode) {
+      quader_poly::set_selection_mode(selection, portable_mode);
+    }
+  }
+
+  const quader_poly::Transform3 identity;
+  bool selection_changed = false;
+  if (command == ModelingComponentSelectionCommand::SelectEdgeDirection) {
+    std::vector<QVec3> seed_directions;
+    for (const std::size_t index : target_indices) {
+      std::vector<QVec3> directions =
+          quader_poly::selected_edge_directions_in_comparison_space(
+              scoped_objects[index].document,
+              scoped_objects[index].selection, identity);
+      seed_directions.insert(seed_directions.end(), directions.begin(),
+                             directions.end());
+    }
+    for (const std::size_t index : target_indices) {
+      selection_changed =
+          quader_poly::add_edges_matching_directions(
+              scoped_objects[index].document,
+              scoped_objects[index].selection, identity, seed_directions) ||
+          selection_changed;
+    }
+  } else if (command ==
+             ModelingComponentSelectionCommand::SelectCoplanarFaces) {
+    std::vector<quader_poly::SelectionComparisonPlane> seed_planes;
+    for (const std::size_t index : target_indices) {
+      std::vector<quader_poly::SelectionComparisonPlane> planes =
+          quader_poly::selected_face_planes_in_comparison_space(
+              scoped_objects[index].document,
+              scoped_objects[index].selection,
+              comparison_transform_for(index, scoped_objects[index]));
+      seed_planes.insert(seed_planes.end(), planes.begin(), planes.end());
+    }
+    for (const std::size_t index : target_indices) {
+      selection_changed =
+          quader_poly::add_faces_coplanar_with_planes(
+              scoped_objects[index].document,
+              scoped_objects[index].selection,
+              comparison_transform_for(index, scoped_objects[index]),
+              seed_planes) ||
+          selection_changed;
+    }
+  } else if (command ==
+             ModelingComponentSelectionCommand::SelectFaceNormal) {
+    std::vector<QVec3> seed_normals;
+    for (const std::size_t index : target_indices) {
+      const quader_poly::Transform3 comparison_from_document =
+          comparison_transform_for(index, scoped_objects[index]);
+      std::vector<QVec3> normals =
+          quader_poly::selected_face_normals_in_comparison_space(
+              scoped_objects[index].document,
+              scoped_objects[index].selection,
+              comparison_from_document);
+      seed_normals.insert(seed_normals.end(), normals.begin(), normals.end());
+    }
+    for (const std::size_t index : target_indices) {
+      const quader_poly::Transform3 comparison_from_document =
+          comparison_transform_for(index, scoped_objects[index]);
+      selection_changed =
+          quader_poly::add_faces_matching_normals(
+              scoped_objects[index].document,
+              scoped_objects[index].selection,
+              comparison_from_document, seed_normals) ||
+          selection_changed;
+    }
+  } else if (command ==
+             ModelingComponentSelectionCommand::SelectFacesWithSameMaterial) {
+    std::vector<MaterialReference> seed_materials;
+    for (const std::size_t index : target_indices) {
+      const quader_editor_core::PolygonObject &object = scoped_objects[index];
+      const std::optional<EntityId> entity = entity_for_object(object.id);
+      const MaterialComponent *material =
+          entity.has_value() ? scene.material(*entity) : nullptr;
+      if (material == nullptr) {
+        continue;
+      }
+      for (const quader_poly::ElementId face_id : object.selection.faces) {
+        const quader_poly::Face *face =
+            quader_poly::find_face(object.document, face_id);
+        if (face == nullptr) {
+          continue;
+        }
+        const MaterialReference reference =
+            material->material_for_slot(face->material_slot);
+        if (reference.valid() &&
+            std::find(seed_materials.begin(), seed_materials.end(),
+                      reference) == seed_materials.end()) {
+          seed_materials.push_back(reference);
+        }
+      }
+    }
+    for (const std::size_t index : target_indices) {
+      quader_editor_core::PolygonObject &object = scoped_objects[index];
+      const std::optional<EntityId> entity = entity_for_object(object.id);
+      const MaterialComponent *material =
+          entity.has_value() ? scene.material(*entity) : nullptr;
+      if (material == nullptr) {
+        continue;
+      }
+      std::vector<std::uint32_t> matching_slots;
+      for (const quader_poly::Face &face : object.document.faces) {
+        const MaterialReference reference =
+            material->material_for_slot(face.material_slot);
+        if (reference.valid() &&
+            std::find(seed_materials.begin(), seed_materials.end(),
+                      reference) != seed_materials.end() &&
+            std::find(matching_slots.begin(), matching_slots.end(),
+                      face.material_slot) == matching_slots.end()) {
+          matching_slots.push_back(face.material_slot);
+        }
+      }
+      selection_changed =
+          quader_poly::add_faces_with_material_slots(
+              object.document, object.selection, matching_slots) ||
+          selection_changed;
+    }
+  } else {
+    quader_poly::ComponentSelectionCommand portable_command =
+        quader_poly::ComponentSelectionCommand::Grow;
+    switch (command) {
+    case ModelingComponentSelectionCommand::SelectEdgeLoops:
+      portable_command = quader_poly::ComponentSelectionCommand::SelectLoops;
+      break;
+    case ModelingComponentSelectionCommand::SelectEdgeRing:
+      portable_command =
+          quader_poly::ComponentSelectionCommand::SelectEdgeRing;
+      break;
+    case ModelingComponentSelectionCommand::Grow:
+      portable_command = quader_poly::ComponentSelectionCommand::Grow;
+      break;
+    case ModelingComponentSelectionCommand::Shrink:
+      portable_command = quader_poly::ComponentSelectionCommand::Shrink;
+      break;
+    case ModelingComponentSelectionCommand::SelectEdgeDirection:
+    case ModelingComponentSelectionCommand::SelectFacesWithSameMaterial:
+    case ModelingComponentSelectionCommand::SelectCoplanarFaces:
+    case ModelingComponentSelectionCommand::SelectFaceNormal:
+      break;
+    }
+    for (const std::size_t index : target_indices) {
+      selection_changed =
+          quader_poly::apply_component_selection_command(
+              scoped_objects[index].document,
+              scoped_objects[index].selection, portable_command) ||
+          selection_changed;
+    }
+  }
+
+  if (!selection_changed) {
+    return {.applied = true, .changed = false};
+  }
+
+  std::unordered_map<int, const quader_editor_core::PolygonObject *>
+      changed_objects;
+  changed_objects.reserve(target_indices.size());
+  for (const std::size_t index : target_indices) {
+    changed_objects.emplace(scoped_objects[index].id, &scoped_objects[index]);
+  }
+
+  bool projection_changed = false;
+  for (quader_editor_core::PolygonObject &object : session.state().objects) {
+    const auto found = changed_objects.find(object.id);
+    if (found == changed_objects.end()) {
+      continue;
+    }
+    const quader_poly::Selection &next_selection = found->second->selection;
+    const bool next_selected = !next_selection.empty();
+    projection_changed = projection_changed ||
+                         object.selected != next_selected ||
+                         object.component_edit_target != next_selected ||
+                         !selection_matches(object.selection, next_selection);
+    object.selection = next_selection;
+    object.selected = next_selected;
+    object.component_edit_target = next_selected;
+  }
+  const int active_before = session.state().active_object_id;
+  quader_editor_core::normalize_active_object_id(
+      session.state().objects, session.state().active_object_id);
+  projection_changed = projection_changed ||
+                       session.state().active_object_id != active_before;
+  return {.applied = true, .changed = projection_changed};
 }
 
 const quader_editor_core::RectangleSelectionUniverse &

@@ -23,7 +23,7 @@ public:
           .kind = CommandToolKind::Instant,
           .preview_kind = ModelingActionPreviewKind::None,
           .rebuilds_mesh_on_success = false,
-          .public_command_id = "edit.invert_selection",
+          .public_command_id = "select.inverse",
           .registers_public_command = false,
       };
     }

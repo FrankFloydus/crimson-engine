@@ -1447,6 +1447,78 @@ void selected_plane_overlay_marks_open_edges()
             "selected open plane edges should expose open-edge overlay lines"));
 }
 
+void face_selection_with_coincident_disconnected_topology_never_emits_edge_selection()
+{
+  quader_editor_core::PolygonObject object;
+  object.id = 17;
+  object.selected = true;
+  object.component_edit_target = true;
+  quader_poly::Document &document = object.document.edit();
+
+  const std::array selected_vertices{
+      quader_poly::add_vertex(document, {0.0F, 0.0F, 0.0F}),
+      quader_poly::add_vertex(document, {2.0F, 0.0F, 0.0F}),
+      quader_poly::add_vertex(document, {0.0F, 2.0F, 0.0F}),
+  };
+  const quader_poly::ElementId selected_face =
+      quader_poly::add_face(document, selected_vertices);
+
+  const std::array disconnected_vertices{
+      quader_poly::add_vertex(document, {0.0F, 0.0F, 0.0F}),
+      quader_poly::add_vertex(document, {2.0F, 0.0F, 0.0F}),
+      quader_poly::add_vertex(document, {0.0F, 2.0F, 0.0F}),
+  };
+  const quader_poly::ElementId disconnected_face =
+      quader_poly::add_face(document, disconnected_vertices);
+  ASSERT_TRUE(require_test(
+      selected_face != quader_poly::kInvalidElementId &&
+          disconnected_face != quader_poly::kInvalidElementId,
+      "disconnected-topology fixture should create both coincident faces"));
+
+  object.selection.mode = quader_poly::SelectionMode::Face;
+  object.selection.faces = {selected_face};
+  object.selection.has_active = true;
+  object.selection.active_kind = quader_poly::ElementKind::Face;
+  object.selection.active_face = selected_face;
+
+  const quader_editor_core::SelectionOverlayFrame frame =
+      quader_editor_core::build_selection_overlay_frame(
+          {object}, quader_editor_core::SelectionMode::Face, object.id, {});
+
+  ASSERT_TRUE(require_test(
+      object.selection.edges.empty() && object.selection.faces.size() == 1U &&
+          object.selection.faces.front() == selected_face,
+      "face selection should remain semantic face-only state"));
+  ASSERT_TRUE(require_test(
+      line_count_for_layer(
+          frame,
+          quader_editor_core::SelectionOverlayLayer::SelectedFaceEdge) == 3U,
+      "selected face should emit only its three face-boundary lines"));
+  ASSERT_TRUE(require_test(
+      line_count_for_layer(
+          frame, quader_editor_core::SelectionOverlayLayer::SelectedEdge) ==
+          0U,
+      "face mode should never reinterpret face boundaries as selected edges"));
+  const auto is_selected_vertex = [&selected_vertices](
+                                      quader_poly::ElementId vertex_id) {
+    return std::find(selected_vertices.begin(), selected_vertices.end(),
+                     vertex_id) != selected_vertices.end();
+  };
+  ASSERT_TRUE(require_test(
+      std::all_of(
+          frame.lines.begin(), frame.lines.end(),
+          [selected_face, &is_selected_vertex](
+              const quader_editor_core::SelectionOverlayLine &line) {
+            return line.layer != quader_editor_core::SelectionOverlayLayer::
+                                     SelectedFaceEdge ||
+                   (line.face_id == selected_face &&
+                    is_selected_vertex(line.edge.a) &&
+                    is_selected_vertex(line.edge.b));
+          }),
+      "face-boundary overlays should retain the selected face identity and "
+      "never target coincident disconnected topology"));
+}
+
 void top_loop_bevel_overlay_emits_selected_strip_topology()
 {
 	quader_poly::CubePrimitiveSpec cube_spec;
@@ -1478,19 +1550,19 @@ void top_loop_bevel_overlay_emits_selected_strip_topology()
         const quader_editor_core::SelectionOverlayFrame frame =
             quader_editor_core::build_selection_overlay_frame(
                 {object}, quader_editor_core::SelectionMode::Face, {});
-        const std::size_t selected_edge_count = line_count_for_layer(
-            frame, quader_editor_core::SelectionOverlayLayer::SelectedEdge);
-        const std::size_t selected_face_edge_count = line_count_for_layer(
-            frame, quader_editor_core::SelectionOverlayLayer::SelectedFaceEdge);
-        ASSERT_TRUE(require_test(selected_edge_count >= 40U && selected_face_edge_count >= 40U,
-		"top-loop bevel overlay should emit selected cyan wire for the generated strip topology"));
+  const std::size_t selected_edge_count = line_count_for_layer(
+      frame, quader_editor_core::SelectionOverlayLayer::SelectedEdge);
+  const std::size_t selected_face_edge_count = line_count_for_layer(
+      frame, quader_editor_core::SelectionOverlayLayer::SelectedFaceEdge);
+  ASSERT_TRUE(require_test(
+      selected_edge_count == 0U && selected_face_edge_count >= 40U,
+      "face-mode bevel overlay should emit only selected face-boundary wire "
+      "for the generated strip topology"));
 	for (const quader_editor_core::SelectionOverlayLine& line : frame.lines) {
-          if (line.layer !=
-                  quader_editor_core::SelectionOverlayLayer::SelectedEdge &&
-              line.layer !=
-                  quader_editor_core::SelectionOverlayLayer::SelectedFaceEdge) {
-            continue;
-          }
+    if (line.layer !=
+        quader_editor_core::SelectionOverlayLayer::SelectedFaceEdge) {
+      continue;
+    }
                 ASSERT_TRUE(require_test(document_has_vertex_at(cube, line.start) && document_has_vertex_at(cube, line.end),
 			"top-loop bevel overlay line endpoints should come from the current bevel document vertices"));
 	}
@@ -1697,6 +1769,11 @@ TEST(QdrModelingRuntimeOverlayTests,
 
 TEST(QdrModelingRuntimeOverlayTests, SelectedPlaneOverlayMarksOpenEdges) {
 	selected_plane_overlay_marks_open_edges();
+}
+
+TEST(QdrModelingRuntimeOverlayTests,
+	FaceSelectionWithCoincidentDisconnectedTopologyNeverEmitsEdgeSelection) {
+	face_selection_with_coincident_disconnected_topology_never_emits_edge_selection();
 }
 
 TEST(QdrModelingRuntimeOverlayTests,

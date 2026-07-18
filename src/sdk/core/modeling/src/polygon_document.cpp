@@ -818,6 +818,13 @@ bool PolygonDocument::shares_topology_with(
   return impl_ && other.impl_ && impl_->document == other.impl_->document;
 }
 
+bool PolygonDocument::has_same_geometry(
+    const PolygonDocument &other) const {
+  return impl_ && other.impl_ &&
+         quader_poly::has_same_geometry(*impl_->document,
+                                        *other.impl_->document);
+}
+
 std::vector<VertexId> PolygonDocument::vertex_ids() const {
   std::vector<VertexId> ids;
   ids.reserve(impl_->document->vertices.size());

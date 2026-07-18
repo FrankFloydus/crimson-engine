@@ -1663,6 +1663,37 @@ TEST(RenderOverlaySnapshotCacheTests,
 }
 
 TEST(RenderOverlaySnapshotCacheTests,
+     ComponentPresentationDoesNotPromoteTheWholeSceneWireToSelected) {
+  SceneDocument document;
+  AssetRegistry assets;
+  const AssetId mesh = assets.add_mesh(make_overlay_triangle_mesh());
+  const EntityId entity =
+      document.create_entity("Component Wire Mesh", EntityKind::Mesh);
+  ASSERT_TRUE(document.set_mesh(entity, MeshComponent{.mesh = mesh}));
+  ASSERT_TRUE(document.set_selected(entity, true));
+
+  RenderOverlaySnapshotCache cache;
+  const RenderOverlayPersistentSnapshotUpdate component =
+      cache.update_persistent(document, assets, false, 0x01u, {}, {}, nullptr,
+                              false);
+  ASSERT_TRUE(component.scene_wireframe_changed);
+  ASSERT_NE(component.scene_wireframe, nullptr);
+  ASSERT_EQ(component.scene_wireframe->meshes.size(), 1u);
+  EXPECT_FALSE(component.scene_wireframe->selected_mesh_wire_visible);
+  EXPECT_FALSE(component.scene_wireframe->meshes.front().selected)
+      << "Component overlays own selected face/edge/vertex highlighting; the "
+         "persistent scene wire must remain the ordinary source color.";
+
+  const RenderOverlayPersistentSnapshotUpdate object =
+      cache.update_persistent(document, assets, true, 0x01u, {});
+  EXPECT_TRUE(object.scene_wireframe_changed);
+  ASSERT_NE(object.scene_wireframe, nullptr);
+  ASSERT_EQ(object.scene_wireframe->meshes.size(), 1u);
+  EXPECT_TRUE(object.scene_wireframe->selected_mesh_wire_visible);
+  EXPECT_TRUE(object.scene_wireframe->meshes.front().selected);
+}
+
+TEST(RenderOverlaySnapshotCacheTests,
      LocalVisibilityRevisionFiltersEveryBranchAndGatesStableFrames) {
   SceneDocument document;
   AssetRegistry assets;

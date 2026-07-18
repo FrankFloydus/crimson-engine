@@ -164,6 +164,8 @@ struct RenderOverlaySceneWireframeSnapshot {
   ViewportPersistentOverlayStyleSnapshot style;
   ViewportCameraClipPlanes clip_planes;
   std::uint8_t layer_mask = 0u;
+  /** Whole-mesh selected wire is an Object-mode presentation only. */
+  bool selected_mesh_wire_visible = true;
   std::vector<RenderOverlayMeshSnapshot> meshes;
 };
 
@@ -235,7 +237,8 @@ public:
       std::uint8_t scene_wireframe_layer_mask,
       ViewportPersistentOverlayStyleSnapshot style,
       RenderSceneBindingKey scene_binding = {},
-      const ViewportLocalVisibilitySnapshot *local_visibility = nullptr);
+      const ViewportLocalVisibilitySnapshot *local_visibility = nullptr,
+      bool selected_mesh_wire_visible = true);
   [[nodiscard]] const RenderOverlaySelectionSnapshot &selection_snapshot(
       const SceneDocument &document, const AssetRegistry &assets,
       RenderSceneBindingKey scene_binding = {},
@@ -334,7 +337,8 @@ build_render_overlay_scene_wireframe_snapshot(
     const SceneDocument &document, const AssetRegistry &assets,
     std::uint8_t layer_mask, ViewportPersistentOverlayStyleSnapshot style,
     RenderSceneBindingKey scene_binding = {},
-    const ViewportLocalVisibilitySnapshot *local_visibility = nullptr);
+    const ViewportLocalVisibilitySnapshot *local_visibility = nullptr,
+    bool selected_mesh_wire_visible = true);
 
 [[nodiscard]] RenderOverlaySelectionSnapshot
 build_render_overlay_selection_snapshot(

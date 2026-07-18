@@ -187,6 +187,9 @@ public:
   /** Returns whether two facades currently reference the same immutable topology. */
   [[nodiscard]] bool
   shares_topology_with(const PolygonDocument &other) const noexcept;
+  /** Returns whether local vertex positions and polygon topology match exactly. */
+  [[nodiscard]] bool
+  has_same_geometry(const PolygonDocument &other) const;
   [[nodiscard]] std::vector<VertexId> vertex_ids() const;
   [[nodiscard]] std::vector<EdgeKey> edge_ids() const;
   [[nodiscard]] std::vector<FaceId> face_ids() const;

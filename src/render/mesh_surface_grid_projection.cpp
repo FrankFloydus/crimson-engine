@@ -16,6 +16,7 @@ namespace {
 constexpr float kNormalEpsilonSquared = 0.000000000001f;
 constexpr float kFlatNormalAlignment = 0.9999f;
 
+/// Stores one primitive's validated vertices and projection orientation.
 struct PrimitiveProjectionCandidate final {
   std::vector<std::uint32_t> vertices;
   QVec3 local_normal;

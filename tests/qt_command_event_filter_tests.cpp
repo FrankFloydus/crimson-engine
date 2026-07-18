@@ -96,7 +96,7 @@ TEST(QtCommandEventFilterTests,
   ASSERT_EQ(editor.selection().summary().selected_object_count, 1u);
   ASSERT_EQ(editor.query().modeling_objects().size(), 2u);
   ASSERT_TRUE(editor.commands()
-                  .remove_shortcut(quader::quader_command::kEditSelectAll)
+                  .remove_shortcut(quader::quader_command::kSelectAll)
                   .ok());
   ASSERT_TRUE(editor.commands()
                   .set_shortcut(quader::quader_command::kEditUndo,
@@ -245,7 +245,7 @@ TEST(QtCommandEventFilterTests,
   ASSERT_TRUE(editor.selection().select_object(first.value()).ok());
   ASSERT_EQ(editor.query().modeling_objects().size(), 2u);
   ASSERT_TRUE(editor.commands()
-                  .remove_shortcut(quader::quader_command::kEditSelectAll)
+                  .remove_shortcut(quader::quader_command::kSelectAll)
                   .ok());
   ASSERT_TRUE(editor.commands()
                   .set_shortcut(quader::quader_command::kEditUndo,

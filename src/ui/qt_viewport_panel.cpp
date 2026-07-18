@@ -661,6 +661,10 @@ void QtViewportPanel::prepare_viewports(
               overlays_visible &&
               cached_overlay_mode == ModelingSelectionMode::Object,
           .scene_wireframe_layer_mask = wireframe_layer_mask,
+          .selected_scene_wire_visible =
+              overlays_visible &&
+              (cached_overlay_mode == ModelingSelectionMode::Object ||
+               cached_overlay_mode == ModelingSelectionMode::Group),
           .style = persistent_overlay_style,
       });
 

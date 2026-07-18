@@ -55,6 +55,7 @@
 #include <filesystem>
 #include <fstream>
 #include <functional>
+#include <initializer_list>
 #include <memory>
 #include <optional>
 #include <set>
@@ -1864,6 +1865,128 @@ TEST(InspectorPanelTests,
   EXPECT_TRUE(session.dirty());
   EXPECT_EQ(history_label(session.history().undo_label()),
             std::optional<std::string>("Set Scene Settings"));
+}
+
+TEST(QtMainMenuTests, SelectMenuTracksSelectionModeAndOwnsSelectionCommands) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-select-menu-tests";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+
+  SceneSession session;
+  QuaderEditorApi editor(
+      QuaderApiSessionInternalAccess::from_scene_session(session));
+  const QuaderApiResult<QuaderModelingObjectRef> box =
+      editor.modeling().create_box(
+          QuaderBounds{.min = {-1.0f, -1.0f, -1.0f},
+                       .max = {1.0f, 1.0f, 1.0f}},
+          "Select Menu Box");
+  ASSERT_TRUE(box.ok()) << box.error_message();
+  ASSERT_TRUE(editor.selection().select_object(box.value()).ok());
+
+  ViewportSettings viewport_settings = ViewportSettings::defaults();
+  LocalizationService localization = loaded_localization();
+  QMenuBar menu_bar;
+  QtMainMenu menu;
+  menu.initialize(menu_bar,
+                  QtMainMenuContext{
+                      .editor = editor,
+                      .modeling = session.modeling(),
+                      .viewport_settings = viewport_settings,
+                      .localization = localization,
+                  });
+
+  auto *edit_menu =
+      menu_bar.findChild<QMenu *>(QStringLiteral("menu_edit"));
+  auto *select_menu =
+      menu_bar.findChild<QMenu *>(QStringLiteral("menu_select"));
+  auto *align_menu =
+      menu_bar.findChild<QMenu *>(QStringLiteral("menu_align"));
+  ASSERT_NE(edit_menu, nullptr);
+  ASSERT_NE(select_menu, nullptr);
+  ASSERT_NE(align_menu, nullptr);
+
+  const QList<QAction *> top_level_actions = menu_bar.actions();
+  EXPECT_EQ(top_level_actions.indexOf(select_menu->menuAction()),
+            top_level_actions.indexOf(edit_menu->menuAction()) + 1);
+  EXPECT_EQ(top_level_actions.indexOf(align_menu->menuAction()),
+            top_level_actions.indexOf(select_menu->menuAction()) + 1);
+
+  auto *select_all = menu_bar.findChild<QAction *>(
+      QStringLiteral("command_select_all"));
+  auto *select_inverse = menu_bar.findChild<QAction *>(
+      QStringLiteral("command_select_inverse"));
+  auto *select_direction = menu_bar.findChild<QAction *>(
+      QStringLiteral("command_select_edge_direction"));
+  auto *select_loops = menu_bar.findChild<QAction *>(
+      QStringLiteral("command_select_edge_loops"));
+  auto *select_ring = menu_bar.findChild<QAction *>(
+      QStringLiteral("command_select_edge_ring"));
+  auto *select_same_material = menu_bar.findChild<QAction *>(
+      QStringLiteral("command_select_face_same_material"));
+  auto *select_coplanar = menu_bar.findChild<QAction *>(
+      QStringLiteral("command_select_face_coplanar"));
+  auto *select_normal = menu_bar.findChild<QAction *>(
+      QStringLiteral("command_select_face_normal"));
+  auto *select_ngons = menu_bar.findChild<QAction *>(
+      QStringLiteral("command_select_mesh_ngons"));
+  auto *select_similar = menu_bar.findChild<QAction *>(
+      QStringLiteral("command_select_mesh_similar"));
+  auto *grow = menu_bar.findChild<QAction *>(
+      QStringLiteral("command_select_grow"));
+  auto *shrink = menu_bar.findChild<QAction *>(
+      QStringLiteral("command_select_shrink"));
+  auto *clear_selection = menu_bar.findChild<QAction *>(
+      QStringLiteral("command_edit_clear_selection"));
+
+  const std::array<QAction *, 12> select_actions{
+      select_all,           select_inverse,  select_direction,
+      select_loops,         select_ring,     select_same_material,
+      select_coplanar,      select_normal,   select_ngons,
+      select_similar,
+      grow,                 shrink,
+  };
+  for (QAction *action : select_actions) {
+    ASSERT_NE(action, nullptr);
+    EXPECT_TRUE(select_menu->actions().contains(action));
+    EXPECT_FALSE(edit_menu->actions().contains(action));
+  }
+  ASSERT_NE(clear_selection, nullptr);
+  EXPECT_TRUE(edit_menu->actions().contains(clear_selection));
+  EXPECT_FALSE(select_menu->actions().contains(clear_selection));
+
+  const std::array<QAction *, 10> mode_specific_actions{
+      select_direction, select_loops,         select_ring,
+      select_same_material, select_coplanar,  select_normal,
+      select_ngons,     select_similar,       grow,
+      shrink,
+  };
+  const auto expect_visible_for_mode =
+      [&](QuaderSelectionMode mode,
+          std::initializer_list<QAction *> expected_visible) {
+        ASSERT_TRUE(editor.selection().set_mode(mode).ok());
+        ASSERT_TRUE(QMetaObject::invokeMethod(select_menu, "aboutToShow",
+                                              Qt::DirectConnection));
+        const std::set<QAction *> visible(expected_visible);
+        EXPECT_TRUE(select_all->isVisible());
+        EXPECT_TRUE(select_inverse->isVisible());
+        for (QAction *action : mode_specific_actions) {
+          EXPECT_EQ(action->isVisible(), visible.contains(action));
+        }
+      };
+
+  expect_visible_for_mode(QuaderSelectionMode::Object,
+                          {select_ngons, select_similar});
+  expect_visible_for_mode(
+      QuaderSelectionMode::Edge,
+      {select_direction, select_loops, select_ring, grow, shrink});
+  expect_visible_for_mode(
+      QuaderSelectionMode::Face,
+      {select_same_material, select_coplanar, select_normal, grow, shrink});
+  expect_visible_for_mode(QuaderSelectionMode::Vertex, {grow, shrink});
+  expect_visible_for_mode(QuaderSelectionMode::Group, {});
 }
 
 TEST(QtMainMenuTests, ToolActionsUseEffectiveKeybindingsAndCommandRouting) {

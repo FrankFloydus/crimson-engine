@@ -1074,6 +1074,16 @@ TEST(ModelingSessionServiceSplitTests,
   const std::size_t original_mesh_count = assets.mesh_count();
 
   ASSERT_TRUE(service.set_selection_mode(ModelingSelectionMode::Vertex).ok);
+  ASSERT_TRUE(service
+                  .set_component_selection({
+                      .modeling_object_id = box.object.modeling_object_id,
+                      .mode = ModelingSelectionMode::Vertex,
+                      .vertices = {1},
+                      .edit = ModelingSelectionEdit::Add,
+                      .active_kind = ModelingActiveSelectionKind::Vertex,
+                      .active_vertex = 1,
+                  })
+                  .ok);
   ASSERT_TRUE(service.select_all().ok);
   EditorHistoryService history;
   const CommandResult moved = history.execute(

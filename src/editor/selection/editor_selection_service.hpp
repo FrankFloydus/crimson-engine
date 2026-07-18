@@ -116,6 +116,16 @@ public:
   ModelingCommandResult select_all();
   ModelingCommandResult invert();
   ModelingCommandResult clear();
+  ModelingCommandResult select_edge_direction();
+  ModelingCommandResult select_edge_loops();
+  ModelingCommandResult select_edge_ring();
+  ModelingCommandResult select_faces_with_same_material();
+  ModelingCommandResult select_coplanar_faces();
+  ModelingCommandResult select_face_normal();
+  ModelingCommandResult select_mesh_ngons();
+  ModelingCommandResult select_similar_meshes();
+  ModelingCommandResult grow();
+  ModelingCommandResult shrink();
 
   [[nodiscard]] EditorSelectionBoxBaseline
   capture_box_selection_baseline() const;
@@ -153,6 +163,9 @@ private:
   scene_summary_for(ModelingSelectionMode mode) const;
   DocumentCommandResult
   apply_scene_selection_state(SceneSelectionState selection);
+  ModelingCommandResult apply_component_selection_command(
+      ModelingComponentSelectionCommand command,
+      std::span<const ModelingSelectionMode> allowed_modes);
 
   SceneDocument &scene_;
   DocumentCommandService &document_commands_;

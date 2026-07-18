@@ -231,6 +231,21 @@ enum class ModelingSelectionMode {
 };
 
 /**
+ * Identifies topology-aware component selection commands exposed by the
+ * modeling application service.
+ */
+enum class ModelingComponentSelectionCommand {
+  SelectEdgeDirection,
+  SelectEdgeLoops,
+  SelectEdgeRing,
+  SelectFacesWithSameMaterial,
+  SelectCoplanarFaces,
+  SelectFaceNormal,
+  Grow,
+  Shrink,
+};
+
+/**
  * Enumerates ModelingActiveSelectionKind values used by the modeling layer.
  */
 enum class ModelingActiveSelectionKind {

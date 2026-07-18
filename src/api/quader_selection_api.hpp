@@ -91,7 +91,17 @@ public:
                  QuaderSelectionEdit edit = QuaderSelectionEdit::Replace);
     QuaderApiVoidResult clear();
     QuaderApiVoidResult select_all();
-    QuaderApiVoidResult invert();
+    QuaderApiVoidResult select_inverse();
+    QuaderApiVoidResult select_edge_direction();
+    QuaderApiVoidResult select_edge_loops();
+    QuaderApiVoidResult select_edge_ring();
+    QuaderApiVoidResult select_faces_with_same_material();
+    QuaderApiVoidResult select_coplanar_faces();
+    QuaderApiVoidResult select_face_normal();
+    QuaderApiVoidResult select_mesh_ngons();
+    QuaderApiVoidResult select_similar_meshes();
+    QuaderApiVoidResult grow();
+    QuaderApiVoidResult shrink();
     QuaderApiVoidResult set_mode(QuaderSelectionMode mode);
 
     QuaderApiResult<QuaderSelectionSummary>

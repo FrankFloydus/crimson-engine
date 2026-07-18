@@ -154,6 +154,13 @@ public:
   ModelingCommandResult select_all();
   ModelingCommandResult invert_selection();
   ModelingCommandResult clear_selection();
+  ModelingCommandResult apply_component_selection_command(
+      ModelingComponentSelectionCommand command);
+  ModelingCommandResult
+  select_mesh_ngons(std::span<const int> modeling_object_ids);
+  [[nodiscard]] std::vector<EntityId> matching_geometry_entities(
+      std::span<const EntityId> candidates,
+      std::span<const EntityId> references) const;
   std::unique_ptr<IUndoableCommand> create_delete_selection_command();
   [[nodiscard]] bool has_selected_scene_aware_delete_root() const;
   ModelingCommandResult delete_component_selection();

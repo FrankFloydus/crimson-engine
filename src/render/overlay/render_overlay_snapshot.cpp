@@ -421,7 +421,8 @@ build_render_overlay_scene_wireframe_snapshot(
     const SceneDocument &document, const AssetRegistry &assets,
     std::uint8_t layer_mask, ViewportPersistentOverlayStyleSnapshot style,
     RenderSceneBindingKey scene_binding,
-    const ViewportLocalVisibilitySnapshot *local_visibility) {
+    const ViewportLocalVisibilitySnapshot *local_visibility,
+    bool selected_mesh_wire_visible) {
   QDR_PROFILE_FUNCTION();
   RenderOverlaySceneWireframeSnapshot snapshot{
       .scene_binding = scene_binding,
@@ -432,6 +433,7 @@ build_render_overlay_scene_wireframe_snapshot(
       .style = style,
       .clip_planes = scene_camera_clip_planes(document),
       .layer_mask = layer_mask,
+      .selected_mesh_wire_visible = selected_mesh_wire_visible,
   };
   if (layer_mask == 0u) {
     return snapshot;
@@ -448,6 +450,11 @@ build_render_overlay_scene_wireframe_snapshot(
             mesh_snapshot_for_entity(document, assets, entity,
                                      local_visibility)) {
       snapshot.meshes.push_back(*mesh);
+    }
+  }
+  if (!selected_mesh_wire_visible) {
+    for (RenderOverlayMeshSnapshot &mesh : snapshot.meshes) {
+      mesh.selected = false;
     }
   }
   return snapshot;
@@ -586,7 +593,8 @@ RenderOverlaySnapshotCache::update_persistent(
     std::uint8_t scene_wireframe_layer_mask,
     ViewportPersistentOverlayStyleSnapshot style,
     RenderSceneBindingKey scene_binding,
-    const ViewportLocalVisibilitySnapshot *local_visibility) {
+    const ViewportLocalVisibilitySnapshot *local_visibility,
+    bool selected_mesh_wire_visible) {
   QDR_PROFILE_FUNCTION();
   bind_sources(document, assets, scene_binding);
   const std::uint64_t current_local_visibility_revision =
@@ -636,6 +644,8 @@ RenderOverlaySnapshotCache::update_persistent(
   const bool wireframe_snapshot_matches =
       has_scene_wireframe_snapshot_ &&
       scene_wireframe_snapshot_.layer_mask == scene_wireframe_layer_mask &&
+      scene_wireframe_snapshot_.selected_mesh_wire_visible ==
+          selected_mesh_wire_visible &&
       scene_wireframe_snapshot_.local_visibility_revision ==
           current_local_visibility_revision &&
       (!wireframe_sources_are_relevant ||
@@ -647,7 +657,7 @@ RenderOverlaySnapshotCache::update_persistent(
   if (scene_wireframe_changed) {
     scene_wireframe_snapshot_ = build_render_overlay_scene_wireframe_snapshot(
         document, assets, scene_wireframe_layer_mask, style, scene_binding,
-        local_visibility);
+        local_visibility, selected_mesh_wire_visible);
     has_scene_wireframe_snapshot_ = true;
     ++stats_.scene_wireframe_build_count;
   } else if (!wireframe_sources_are_relevant) {

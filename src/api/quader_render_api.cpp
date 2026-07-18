@@ -249,7 +249,7 @@ QuaderApiVoidResult QuaderRenderApiRuntimeAccess::sync_scene_asset_overlays(
           session.scene, session.assets,
           request.selected_object_overlay_visible,
           request.scene_wireframe_layer_mask, request.style, binding,
-          &local_visibility);
+          &local_visibility, request.selected_scene_wire_visible);
   if (update.changed()) {
     bridge.sync_scene_asset_overlays(*update.selected_object,
                                      *update.scene_wireframe);

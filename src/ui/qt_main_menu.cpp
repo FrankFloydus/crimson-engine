@@ -24,6 +24,7 @@
 
 #include <array>
 #include <cstddef>
+#include <cstdint>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -126,6 +127,29 @@ const QuaderMeshArrangementDescriptor *arrangement_descriptor(
   return nullptr;
 }
 
+using SelectionModeMask = std::uint8_t;
+
+constexpr SelectionModeMask
+selection_mode_bit(ModelingSelectionMode mode) noexcept {
+  return static_cast<SelectionModeMask>(
+      SelectionModeMask{1} << static_cast<unsigned>(mode));
+}
+
+constexpr SelectionModeMask kVertexSelectionMode =
+    selection_mode_bit(ModelingSelectionMode::Vertex);
+constexpr SelectionModeMask kEdgeSelectionMode =
+    selection_mode_bit(ModelingSelectionMode::Edge);
+constexpr SelectionModeMask kFaceSelectionMode =
+    selection_mode_bit(ModelingSelectionMode::Face);
+constexpr SelectionModeMask kObjectSelectionMode =
+    selection_mode_bit(ModelingSelectionMode::Object);
+constexpr SelectionModeMask kComponentSelectionModes =
+    kVertexSelectionMode | kEdgeSelectionMode | kFaceSelectionMode;
+constexpr SelectionModeMask kNonGroupSelectionModes =
+    kComponentSelectionModes | kObjectSelectionMode;
+constexpr SelectionModeMask kEdgeOrFaceSelectionModes =
+    kEdgeSelectionMode | kFaceSelectionMode;
+
 } // namespace
 
 /// Owns the retained menu hierarchy and its editor-action bindings.
@@ -167,6 +191,12 @@ struct QtMainMenu::Impl {
     std::string fallback;
   };
 
+  /// Associates a Select-menu action or separator with the modes that show it.
+  struct SelectionModeAction {
+    QAction *action = nullptr;
+    SelectionModeMask modes = 0;
+  };
+
   explicit Impl(QtMainMenuContext value) : context(std::move(value)) {}
 
   ~Impl() { release_menu_hierarchy(); }
@@ -188,6 +218,7 @@ struct QtMainMenu::Impl {
     layout_actions.clear();
     panel_actions.clear();
     tool_actions.clear();
+    selection_mode_actions.clear();
     align_menu = nullptr;
     navigation_gizmo_action = nullptr;
     material_browser_action = nullptr;
@@ -226,6 +257,7 @@ struct QtMainMenu::Impl {
   std::vector<LayoutAction> layout_actions;
   std::vector<PanelAction> panel_actions;
   std::vector<ToolAction> tool_actions;
+  std::vector<SelectionModeAction> selection_mode_actions;
 
   QAction *add_command_action(QMenu &menu, QuaderCommandId command_id,
                               std::string localization_key,
@@ -259,6 +291,25 @@ struct QtMainMenu::Impl {
         .checked = std::move(checked),
     });
     return action;
+  }
+
+  QAction *add_selection_mode_action(QMenu &menu,
+                                     QuaderCommandId command_id,
+                                     std::string localization_key,
+                                     std::string fallback,
+                                     SelectionModeMask modes) {
+    QAction *action = add_command_action(menu, command_id,
+                                         std::move(localization_key),
+                                         std::move(fallback));
+    selection_mode_actions.push_back({action, modes});
+    return action;
+  }
+
+  QAction *add_selection_mode_separator(QMenu &menu,
+                                        SelectionModeMask modes) {
+    QAction *separator = menu.addSeparator();
+    selection_mode_actions.push_back({separator, modes});
+    return separator;
   }
 
   QAction *add_bool_setting_action(QMenu &menu,
@@ -368,12 +419,8 @@ struct QtMainMenu::Impl {
     add_command_action(*menu, quader_command::kModelingFlipVertical,
                        "ui.menu.edit.flip_vertical", "Flip Vertical");
     menu->addSeparator();
-    add_command_action(*menu, quader_command::kEditSelectAll,
-                       "ui.menu.edit.select_all", "Select All");
     add_command_action(*menu, quader_command::kEditClearSelection,
                        "ui.menu.edit.clear_selection", "Clear Selection");
-    add_command_action(*menu, quader_command::kEditInvertSelection,
-                       "ui.menu.edit.invert_selection", "Invert Selection");
     menu->addSeparator();
     add_command_action(*menu, quader_command::kDeleteSelection,
                        "ui.menu.edit.delete", "Delete");
@@ -400,6 +447,54 @@ struct QtMainMenu::Impl {
         context.show_settings();
       }
     });
+  }
+
+  void build_select_menu() {
+    QMenu *menu = add_top_level_menu("ui.menu.select", "&Select");
+    menu->setObjectName(QStringLiteral("menu_select"));
+    add_command_action(*menu, quader_command::kSelectAll,
+                       "ui.menu.select.all", "Select All");
+    add_command_action(*menu, quader_command::kSelectInverse,
+                       "ui.menu.select.inverse", "Select Inverse");
+    add_selection_mode_separator(*menu, kNonGroupSelectionModes);
+    add_selection_mode_action(
+        *menu, quader_command::kSelectEdgeDirection,
+        "ui.menu.select.edge.direction", "Select Direction",
+        kEdgeSelectionMode);
+    add_selection_mode_action(
+        *menu, quader_command::kSelectEdgeLoops,
+        "ui.menu.select.edge.loops", "Select Edge Loops",
+        kEdgeSelectionMode);
+    add_selection_mode_action(
+        *menu, quader_command::kSelectEdgeRing,
+        "ui.menu.select.edge.ring", "Select Edge Ring",
+        kEdgeSelectionMode);
+    add_selection_mode_action(
+        *menu, quader_command::kSelectFacesWithSameMaterial,
+        "ui.menu.select.face.same_material",
+        "Select Faces With Same Material", kFaceSelectionMode);
+    add_selection_mode_action(
+        *menu, quader_command::kSelectCoplanarFaces,
+        "ui.menu.select.face.coplanar", "Select Co-planar Faces",
+        kFaceSelectionMode);
+    add_selection_mode_action(
+        *menu, quader_command::kSelectFaceNormal,
+        "ui.menu.select.face.normal", "Select Normal", kFaceSelectionMode);
+    add_selection_mode_action(
+        *menu, quader_command::kSelectMeshNGons,
+        "ui.menu.select.mesh.ngons", "Select N-Gons",
+        kObjectSelectionMode);
+    add_selection_mode_action(
+        *menu, quader_command::kSelectSimilarMeshes,
+        "ui.menu.select.mesh.similar", "Select Similar",
+        kObjectSelectionMode);
+    add_selection_mode_separator(*menu, kEdgeOrFaceSelectionModes);
+    add_selection_mode_action(*menu, quader_command::kSelectGrow,
+                              "ui.menu.select.grow", "Grow Selection",
+                              kComponentSelectionModes);
+    add_selection_mode_action(*menu, quader_command::kSelectShrink,
+                              "ui.menu.select.shrink", "Shrink Selection",
+                              kComponentSelectionModes);
   }
 
   void build_align_menu() {
@@ -686,6 +781,7 @@ void QtMainMenu::rebuild() {
   impl_->prepare_rebuild();
   impl_->build_file_menu();
   impl_->build_edit_menu();
+  impl_->build_select_menu();
   impl_->build_align_menu();
   impl_->build_cleanup_menu();
   impl_->build_tools_menu();
@@ -706,6 +802,8 @@ void QtMainMenu::refresh() {
   if (!impl_ || impl_->menu_bar == nullptr) {
     return;
   }
+  const ModelingSelectionMode selection_mode =
+      impl_->context.modeling.selection_summary().mode;
   const std::vector<QuaderCommandDescriptor> commands =
       impl_->context.editor.commands().available();
   for (Impl::CommandAction &entry : impl_->command_actions) {
@@ -720,6 +818,14 @@ void QtMainMenu::refresh() {
     if (entry.checked) {
       const QSignalBlocker blocker(entry.action);
       entry.action->setChecked(entry.checked());
+    }
+  }
+  for (const Impl::SelectionModeAction &entry :
+       impl_->selection_mode_actions) {
+    const bool visible =
+        (entry.modes & selection_mode_bit(selection_mode)) != 0;
+    if (entry.action->isVisible() != visible) {
+      entry.action->setVisible(visible);
     }
   }
   for (const Impl::BoolSettingAction &entry :
@@ -817,8 +923,7 @@ void QtMainMenu::refresh() {
   }
   if (impl_->align_menu != nullptr) {
     impl_->align_menu->menuAction()->setVisible(
-        impl_->context.modeling.selection_summary().mode ==
-        ModelingSelectionMode::Object);
+        selection_mode == ModelingSelectionMode::Object);
   }
 }
 

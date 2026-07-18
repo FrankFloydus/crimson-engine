@@ -310,6 +310,144 @@ ModelingCommandResult EditorSelectionService::clear() {
       set_scene_selection(std::span<const EntityId>{}, kInvalidEntityId));
 }
 
+ModelingCommandResult EditorSelectionService::apply_component_selection_command(
+    ModelingComponentSelectionCommand command,
+    std::span<const ModelingSelectionMode> allowed_modes) {
+  const ModelingSelectionMode current_mode = modeling_.selection_mode();
+  if (std::find(allowed_modes.begin(), allowed_modes.end(), current_mode) ==
+      allowed_modes.end()) {
+    return {
+        .ok = false,
+        .changed = false,
+        .message = "The selection command is unavailable in the current mode.",
+    };
+  }
+  return modeling_.apply_component_selection_command(command);
+}
+
+ModelingCommandResult EditorSelectionService::select_edge_direction() {
+  constexpr std::array kModes{ModelingSelectionMode::Edge};
+  return apply_component_selection_command(
+      ModelingComponentSelectionCommand::SelectEdgeDirection, kModes);
+}
+
+ModelingCommandResult EditorSelectionService::select_edge_loops() {
+  constexpr std::array kModes{ModelingSelectionMode::Edge};
+  return apply_component_selection_command(
+      ModelingComponentSelectionCommand::SelectEdgeLoops, kModes);
+}
+
+ModelingCommandResult EditorSelectionService::select_edge_ring() {
+  constexpr std::array kModes{ModelingSelectionMode::Edge};
+  return apply_component_selection_command(
+      ModelingComponentSelectionCommand::SelectEdgeRing, kModes);
+}
+
+ModelingCommandResult
+EditorSelectionService::select_faces_with_same_material() {
+  constexpr std::array kModes{ModelingSelectionMode::Face};
+  return apply_component_selection_command(
+      ModelingComponentSelectionCommand::SelectFacesWithSameMaterial, kModes);
+}
+
+ModelingCommandResult EditorSelectionService::select_coplanar_faces() {
+  constexpr std::array kModes{ModelingSelectionMode::Face};
+  return apply_component_selection_command(
+      ModelingComponentSelectionCommand::SelectCoplanarFaces, kModes);
+}
+
+ModelingCommandResult EditorSelectionService::select_face_normal() {
+  constexpr std::array kModes{ModelingSelectionMode::Face};
+  return apply_component_selection_command(
+      ModelingComponentSelectionCommand::SelectFaceNormal, kModes);
+}
+
+ModelingCommandResult EditorSelectionService::select_mesh_ngons() {
+  if (modeling_.selection_mode() != ModelingSelectionMode::Object) {
+    return {
+        .ok = false,
+        .changed = false,
+        .message = "Select N-Gons is available only in Mesh mode.",
+    };
+  }
+
+  std::vector<int> targets;
+  std::optional<int> active_target;
+  for (const EntityId entity : scene_.selected_entities()) {
+    const std::optional<int> modeling_object =
+        modeling_.modeling_object_for_entity(entity);
+    if (!modeling_object.has_value()) {
+      continue;
+    }
+    targets.push_back(*modeling_object);
+    if (entity == scene_.primary_selection()) {
+      active_target = *modeling_object;
+    }
+  }
+  if (active_target.has_value()) {
+    const auto active =
+        std::find(targets.begin(), targets.end(), *active_target);
+    if (active != targets.end()) {
+      std::rotate(active, std::next(active), targets.end());
+    }
+  }
+  if (targets.empty()) {
+    return {
+        .ok = true,
+        .changed = false,
+        .message = "No directly editable mesh is selected.",
+    };
+  }
+  return modeling_.select_mesh_ngons(targets);
+}
+
+ModelingCommandResult EditorSelectionService::select_similar_meshes() {
+  if (modeling_.selection_mode() != ModelingSelectionMode::Object) {
+    return {
+        .ok = false,
+        .changed = false,
+        .message = "Select Similar Meshes is available only in Mesh mode.",
+    };
+  }
+
+  const std::vector<EntityId> current = scene_.selected_entities();
+  const std::vector<EntityId> candidates =
+      scene_bulk_candidates(ModelingSelectionMode::Object);
+  const std::vector<EntityId> matches =
+      modeling_.matching_geometry_entities(candidates, current);
+  std::vector<EntityId> selected = current;
+  selected.reserve(current.size() + matches.size());
+  for (const EntityId entity : matches) {
+    if (std::find(selected.begin(), selected.end(), entity) == selected.end()) {
+      selected.push_back(entity);
+    }
+  }
+  const EntityId current_active = scene_.primary_selection();
+  const EntityId active =
+      std::find(selected.begin(), selected.end(), current_active) !=
+              selected.end()
+          ? current_active
+          : (selected.empty() ? kInvalidEntityId : selected.back());
+  return modeling_command_result_from_document(
+      set_scene_selection(selected, active));
+}
+
+ModelingCommandResult EditorSelectionService::grow() {
+  constexpr std::array kModes{ModelingSelectionMode::Vertex,
+                              ModelingSelectionMode::Edge,
+                              ModelingSelectionMode::Face};
+  return apply_component_selection_command(
+      ModelingComponentSelectionCommand::Grow, kModes);
+}
+
+ModelingCommandResult EditorSelectionService::shrink() {
+  constexpr std::array kModes{ModelingSelectionMode::Vertex,
+                              ModelingSelectionMode::Edge,
+                              ModelingSelectionMode::Face};
+  return apply_component_selection_command(
+      ModelingComponentSelectionCommand::Shrink, kModes);
+}
+
 EditorSelectionBoxBaseline
 EditorSelectionService::capture_box_selection_baseline() const {
   EditorSelectionBoxBaseline baseline;

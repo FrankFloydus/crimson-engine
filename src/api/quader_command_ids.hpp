@@ -31,8 +31,6 @@ inline constexpr QuaderCommandId kEditRedo{"edit.redo"};
 inline constexpr QuaderCommandId kEditRepeatLastAction{
     "edit.repeat_last_action"};
 inline constexpr QuaderCommandId kEditClearSelection{"edit.clear_selection"};
-inline constexpr QuaderCommandId kEditSelectAll{"edit.select_all"};
-inline constexpr QuaderCommandId kEditInvertSelection{"edit.invert_selection"};
 inline constexpr QuaderCommandId kDeleteSelection{"edit.delete"};
 inline constexpr QuaderCommandId kCopySelection{"edit.copy"};
 inline constexpr QuaderCommandId kPasteSelection{"edit.paste"};
@@ -79,6 +77,22 @@ inline constexpr QuaderCommandId kSceneHideSelection{
 inline constexpr QuaderCommandId kSceneUnhideHiddenObjects{
     "scene.unhide_hidden_objects"};
 
+inline constexpr QuaderCommandId kSelectAll{"select.all"};
+inline constexpr QuaderCommandId kSelectInverse{"select.inverse"};
+inline constexpr QuaderCommandId kSelectEdgeDirection{
+    "select.edge.direction"};
+inline constexpr QuaderCommandId kSelectEdgeLoops{"select.edge.loops"};
+inline constexpr QuaderCommandId kSelectEdgeRing{"select.edge.ring"};
+inline constexpr QuaderCommandId kSelectFacesWithSameMaterial{
+    "select.face.same_material"};
+inline constexpr QuaderCommandId kSelectCoplanarFaces{
+    "select.face.coplanar"};
+inline constexpr QuaderCommandId kSelectFaceNormal{"select.face.normal"};
+inline constexpr QuaderCommandId kSelectMeshNGons{"select.mesh.ngons"};
+inline constexpr QuaderCommandId kSelectSimilarMeshes{"select.mesh.similar"};
+inline constexpr QuaderCommandId kSelectGrow{"select.grow"};
+inline constexpr QuaderCommandId kSelectShrink{"select.shrink"};
+
 /// Deprecated compatibility spelling. Use kEditUndo for new C++ callers.
 inline constexpr QuaderCommandId kHistoryUndo{"edit.undo"};
 /// Deprecated compatibility spelling. Use kEditRedo for new C++ callers.
@@ -87,15 +101,6 @@ inline constexpr QuaderCommandId kHistoryRedo{"edit.redo"};
 /// callers.
 inline constexpr QuaderCommandId kHistoryRepeatLastAction{
     "edit.repeat_last_action"};
-
-/// Deprecated compatibility spelling. Use kEditClearSelection for new C++
-/// callers.
-inline constexpr QuaderCommandId kSelectionClear{"edit.clear_selection"};
-/// Deprecated compatibility spelling. Use kEditSelectAll for new C++ callers.
-inline constexpr QuaderCommandId kSelectionSelectAll{"edit.select_all"};
-/// Deprecated compatibility spelling. Use kEditInvertSelection for new C++
-/// callers.
-inline constexpr QuaderCommandId kSelectionInvert{"edit.invert_selection"};
 
 inline constexpr QuaderCommandId kViewportFrameSelection{
     "viewport.frame_selection"};
@@ -297,8 +302,18 @@ inline constexpr QuaderCommandId kTypedCommandIds[] = {
     kEditRedo,
     kEditRepeatLastAction,
     kEditClearSelection,
-    kEditSelectAll,
-    kEditInvertSelection,
+    kSelectAll,
+    kSelectInverse,
+    kSelectEdgeDirection,
+    kSelectEdgeLoops,
+    kSelectEdgeRing,
+    kSelectFacesWithSameMaterial,
+    kSelectCoplanarFaces,
+    kSelectFaceNormal,
+    kSelectMeshNGons,
+    kSelectSimilarMeshes,
+    kSelectGrow,
+    kSelectShrink,
     kDeleteSelection,
     kCopySelection,
     kPasteSelection,

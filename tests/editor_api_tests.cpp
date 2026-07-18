@@ -5,6 +5,7 @@
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
 #include "api/quader_editor_api.hpp"
+#include "api/quader_polygon_document_internal_access.hpp"
 #include "core/public_command_targets.hpp"
 #include "editor/input/quader_keybinding_service.hpp"
 #include "editor/input/viewport_input_binding_adapter.hpp"
@@ -13,6 +14,8 @@
 #include "ui/viewport_shortcut_controller.hpp"
 #include "viewport/host_viewport_contract_adapter.hpp"
 
+#include <quader/modeling/neutral/polygon/document.hpp>
+
 #include <gtest/gtest.h>
 #ifndef NDEBUG
 #include <nlohmann/json.hpp>
@@ -20,9 +23,11 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <filesystem>
 #include <fstream>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <type_traits>
@@ -239,6 +244,30 @@ create_selected_box(quader::QuaderEditorApi &editor,
           std::move(name));
   EXPECT_TRUE(created.ok()) << created.error_message();
   EXPECT_TRUE(editor.selection().select_object(created.value()).ok());
+  return created.value();
+}
+
+quader::QuaderModelingObjectRef
+create_polygon_mesh(quader::QuaderEditorApi &editor, std::size_t side_count,
+                    std::string name) {
+  quader_poly::Document document;
+  std::vector<quader_poly::ElementId> vertices;
+  vertices.reserve(side_count);
+  for (std::size_t index = 0; index < side_count; ++index) {
+    const float angle =
+        6.2831853071795864769F * static_cast<float>(index) /
+        static_cast<float>(side_count);
+    vertices.push_back(quader_poly::add_vertex(
+        document, {std::cos(angle), std::sin(angle), 0.0F}));
+  }
+  EXPECT_NE(quader_poly::add_face(document, vertices),
+            quader_poly::kInvalidElementId);
+  const quader::QuaderApiResult<quader::QuaderModelingObjectRef> created =
+      editor.modeling().create_mesh(
+          quader::QuaderPolygonDocumentInternalAccess::from_backend(
+              std::move(document)),
+          quader::QuaderCreateMeshArgs{.name = std::move(name)});
+  EXPECT_TRUE(created.ok()) << created.error_message();
   return created.value();
 }
 
@@ -507,14 +536,14 @@ void setup_selection_for_mode(quader::QuaderEditorApi &editor,
   if (mode == quader::QuaderSelectionMode::Object) {
     return;
   }
-  ASSERT_TRUE(editor.selection().select_all().ok());
   if (mode == quader::QuaderSelectionMode::Face) {
     ASSERT_TRUE(editor.selection().select_face(object, 0).ok());
   } else if (mode == quader::QuaderSelectionMode::Edge) {
-    ASSERT_TRUE(editor.selection().select_all().ok());
+    ASSERT_TRUE(editor.selection().select_edge(object, 1, 2).ok());
   } else if (mode == quader::QuaderSelectionMode::Vertex) {
-    ASSERT_TRUE(editor.selection().select_all().ok());
+    ASSERT_TRUE(editor.selection().select_vertex(object, 1).ok());
   }
+  ASSERT_TRUE(editor.selection().select_all().ok());
 }
 
 bool known_non_success_command_message(std::string_view message) {
@@ -3838,8 +3867,21 @@ TEST(EditorApiTests, RetiredModelingActionCommandAliasesDoNotRouteThroughCommand
              std::string_view{"history.redo"},
              std::string_view{"history.repeat_last_action"},
              std::string_view{"selection.clear"},
+             std::string_view{"edit.select_all"},
+             std::string_view{"edit.invert_selection"},
              std::string_view{"selection.select_all"},
+             std::string_view{"selection.select_inverse"},
              std::string_view{"selection.invert"},
+             std::string_view{"selection.select_edge_direction"},
+             std::string_view{"selection.select_edge_loops"},
+             std::string_view{"selection.select_edge_ring"},
+             std::string_view{"selection.select_faces_with_same_material"},
+             std::string_view{"selection.select_coplanar_faces"},
+             std::string_view{"selection.select_ngons"},
+             std::string_view{"select.face.ngons"},
+             std::string_view{"selection.select_similar_meshes"},
+             std::string_view{"selection.grow"},
+             std::string_view{"selection.shrink"},
              std::string_view{"scene.group_selection"},
              std::string_view{"scene.ungroup_selection"},
          }) {
@@ -3847,6 +3889,179 @@ TEST(EditorApiTests, RetiredModelingActionCommandAliasesDoNotRouteThroughCommand
                 "Unknown command id.")
           << retired_command_id;
     }
+}
+
+TEST(EditorApiTests,
+     SelectionCommandsUseCanonicalIdsModeScopesAndDeliberateKeybindings) {
+  CommandTestHarness harness;
+  quader::QuaderEditorApi &editor = harness.editor;
+  ASSERT_TRUE(editor.commands()
+                  .set_keybinding_storage_path(
+                      keybinding_test_path("selection-commands"))
+                  .ok());
+
+  constexpr std::array kCanonicalCommands{
+      quader::quader_command::kSelectAll,
+      quader::quader_command::kSelectInverse,
+      quader::quader_command::kSelectEdgeDirection,
+      quader::quader_command::kSelectEdgeLoops,
+      quader::quader_command::kSelectEdgeRing,
+      quader::quader_command::kSelectFacesWithSameMaterial,
+      quader::quader_command::kSelectCoplanarFaces,
+      quader::quader_command::kSelectFaceNormal,
+      quader::quader_command::kSelectMeshNGons,
+      quader::quader_command::kSelectSimilarMeshes,
+      quader::quader_command::kSelectGrow,
+      quader::quader_command::kSelectShrink,
+  };
+  const std::unordered_set<std::string> registered =
+      available_command_ids(editor);
+  const std::unordered_set<std::string> typed = typed_command_ids();
+  for (const quader::QuaderCommandId command : kCanonicalCommands) {
+    EXPECT_TRUE(registered.contains(std::string(command.string())))
+        << command.string();
+    EXPECT_TRUE(typed.contains(std::string(command.string())))
+        << command.string();
+    EXPECT_TRUE(command_descriptor(editor, command).has_value())
+        << command.string();
+  }
+  for (const std::string_view retired : {
+           std::string_view{"edit.select_all"},
+           std::string_view{"edit.invert_selection"},
+       }) {
+    EXPECT_FALSE(registered.contains(std::string(retired))) << retired;
+    EXPECT_FALSE(typed.contains(std::string(retired))) << retired;
+    EXPECT_FALSE(command_descriptor(editor, quader::QuaderCommandId{retired})
+                     .has_value())
+        << retired;
+    EXPECT_EQ(editor.commands().execute(retired).error_message(),
+              "Unknown command id.")
+        << retired;
+  }
+
+  const std::vector<quader::QuaderKeybindingCatalogEntry> catalog =
+      editor.commands().keybinding_catalog();
+  /// Stores the expected shortcut scope for one canonical Select command.
+  struct ScopeExpectation {
+    quader::QuaderCommandId command;
+    std::string_view scope;
+    bool deliberately_unassigned = true;
+  };
+  constexpr std::array kScopeExpectations{
+      ScopeExpectation{quader::quader_command::kSelectAll,
+                       "viewport.selection.any", false},
+      ScopeExpectation{quader::quader_command::kSelectInverse,
+                       "viewport.selection.any", false},
+      ScopeExpectation{
+          quader::quader_command::kSelectEdgeDirection,
+          "viewport.selection.edge"},
+      ScopeExpectation{quader::quader_command::kSelectEdgeLoops,
+                       "viewport.selection.edge"},
+      ScopeExpectation{quader::quader_command::kSelectEdgeRing,
+                       "viewport.selection.edge"},
+      ScopeExpectation{
+          quader::quader_command::kSelectFacesWithSameMaterial,
+          "viewport.selection.face"},
+      ScopeExpectation{quader::quader_command::kSelectCoplanarFaces,
+                       "viewport.selection.face"},
+      ScopeExpectation{quader::quader_command::kSelectFaceNormal,
+                       "viewport.selection.face"},
+      ScopeExpectation{quader::quader_command::kSelectMeshNGons,
+                       "viewport.selection.object"},
+      ScopeExpectation{quader::quader_command::kSelectSimilarMeshes,
+                       "viewport.selection.object"},
+      ScopeExpectation{quader::quader_command::kSelectGrow,
+                       "viewport.selection.component"},
+      ScopeExpectation{quader::quader_command::kSelectShrink,
+                       "viewport.selection.component"},
+  };
+  for (const ScopeExpectation &expected : kScopeExpectations) {
+    const quader::QuaderKeybindingCatalogEntry *entry =
+        find_keybinding_catalog_entry(catalog, expected.command.string());
+    ASSERT_NE(entry, nullptr) << expected.command.string();
+    EXPECT_EQ(entry->scope_id, expected.scope) << expected.command.string();
+    if (expected.deliberately_unassigned) {
+      EXPECT_TRUE(entry->shortcut.empty()) << expected.command.string();
+      EXPECT_TRUE(entry->default_shortcut.empty())
+          << expected.command.string();
+      EXPECT_TRUE(entry->unassigned) << expected.command.string();
+      EXPECT_TRUE(editor.commands().shortcut_for(expected.command).empty())
+          << expected.command.string();
+    }
+  }
+  EXPECT_EQ(editor.commands().shortcut_for(
+                quader::quader_command::kSelectAll),
+            "Ctrl+A");
+  EXPECT_EQ(editor.commands().shortcut_for(
+                quader::quader_command::kSelectInverse),
+            "Ctrl+I");
+
+  const auto expect_enabled = [&](quader::QuaderCommandId command,
+                                  bool expected) {
+    const std::optional<quader::QuaderCommandDescriptor> descriptor =
+        command_descriptor(editor, command);
+    ASSERT_TRUE(descriptor.has_value()) << command.string();
+    EXPECT_EQ(descriptor->enabled, expected) << command.string();
+  };
+  const auto expect_specialized_disabled = [&] {
+    for (const quader::QuaderCommandId command :
+         std::span{kCanonicalCommands}.subspan(2U)) {
+      expect_enabled(command, false);
+    }
+  };
+
+  expect_enabled(quader::quader_command::kSelectAll, true);
+  expect_enabled(quader::quader_command::kSelectInverse, true);
+  expect_specialized_disabled();
+
+  const quader::QuaderModelingObjectRef box =
+      create_selected_box(editor, "Selection Command Modes");
+  ASSERT_TRUE(
+      editor.selection().set_mode(quader::QuaderSelectionMode::Object).ok());
+  expect_enabled(quader::quader_command::kSelectSimilarMeshes, true);
+  expect_enabled(quader::quader_command::kSelectMeshNGons, true);
+  expect_enabled(quader::quader_command::kSelectEdgeDirection, false);
+  expect_enabled(quader::quader_command::kSelectFacesWithSameMaterial,
+                 false);
+  expect_enabled(quader::quader_command::kSelectGrow, false);
+  expect_enabled(quader::quader_command::kSelectShrink, false);
+
+  ASSERT_TRUE(
+      editor.selection().set_mode(quader::QuaderSelectionMode::Edge).ok());
+  ASSERT_TRUE(editor.selection().select_edge(box, 1, 2).ok());
+  expect_enabled(quader::quader_command::kSelectEdgeDirection, true);
+  expect_enabled(quader::quader_command::kSelectEdgeLoops, true);
+  expect_enabled(quader::quader_command::kSelectEdgeRing, true);
+  expect_enabled(quader::quader_command::kSelectSimilarMeshes, false);
+  expect_enabled(quader::quader_command::kSelectGrow, true);
+  expect_enabled(quader::quader_command::kSelectShrink, true);
+
+  ASSERT_TRUE(
+      editor.selection().set_mode(quader::QuaderSelectionMode::Face).ok());
+  ASSERT_TRUE(editor.selection().select_face(box, 1).ok());
+  expect_enabled(quader::quader_command::kSelectEdgeDirection, false);
+  expect_enabled(quader::quader_command::kSelectFacesWithSameMaterial,
+                 true);
+  expect_enabled(quader::quader_command::kSelectCoplanarFaces, true);
+  expect_enabled(quader::quader_command::kSelectFaceNormal, true);
+  expect_enabled(quader::quader_command::kSelectMeshNGons, false);
+  expect_enabled(quader::quader_command::kSelectGrow, true);
+  expect_enabled(quader::quader_command::kSelectShrink, true);
+
+  ASSERT_TRUE(
+      editor.selection().set_mode(quader::QuaderSelectionMode::Vertex).ok());
+  ASSERT_TRUE(editor.selection().select_vertex(box, 1).ok());
+  expect_enabled(quader::quader_command::kSelectCoplanarFaces, false);
+  expect_enabled(quader::quader_command::kSelectFaceNormal, false);
+  expect_enabled(quader::quader_command::kSelectMeshNGons, false);
+  expect_enabled(quader::quader_command::kSelectGrow, true);
+  expect_enabled(quader::quader_command::kSelectShrink, true);
+
+  ASSERT_TRUE(
+      editor.selection().set_mode(quader::QuaderSelectionMode::Group).ok());
+  expect_enabled(quader::quader_command::kSelectAll, true);
+  expect_enabled(quader::quader_command::kSelectInverse, true);
+  expect_specialized_disabled();
 }
 
 TEST(EditorApiTests, CommandRegistryCoversEveryAppOperationAndViewportTool) {
@@ -4117,6 +4332,7 @@ TEST(EditorApiTests, HistoryUndoCancelsActiveBevelPreviewBeforeDocumentHistory) 
         create_selected_box(editor, "Undo Bevel Preview Box");
     ASSERT_TRUE(
         editor.selection().set_mode(quader::QuaderSelectionMode::Edge).ok());
+    ASSERT_TRUE(editor.selection().select_edge(box, 1, 2).ok());
     ASSERT_TRUE(editor.selection().select_all().ok());
     ASSERT_GT(editor.selection().summary().selected_edge_count, 0u);
 
@@ -4158,9 +4374,11 @@ TEST(EditorApiTests, ProjectSaveRejectsUncommittedModelingAndNativePreviews) {
     const std::filesystem::path path = project_test_path("preview-save");
     CommandTestHarness harness;
     quader::QuaderEditorApi &editor = harness.editor;
-    create_selected_box(editor, "Unsaved Preview Box");
+    const quader::QuaderModelingObjectRef box =
+        create_selected_box(editor, "Unsaved Preview Box");
     ASSERT_TRUE(
         editor.selection().set_mode(quader::QuaderSelectionMode::Edge).ok());
+    ASSERT_TRUE(editor.selection().select_edge(box, 1, 2).ok());
     ASSERT_TRUE(editor.selection().select_all().ok());
     ASSERT_TRUE(editor.commands()
                     .execute(editor.commands().command_id_for_modeling_action(
@@ -4196,6 +4414,7 @@ TEST(EditorApiTests,
   const quader::QuaderModelingObjectRef box =
       create_selected_box(editor, "Preview Mode Change Box");
   ASSERT_TRUE(editor.selection().set_mode(quader::QuaderSelectionMode::Edge).ok());
+  ASSERT_TRUE(editor.selection().select_edge(box, 1, 2).ok());
   ASSERT_TRUE(editor.selection().select_all().ok());
   const std::optional<quader::QuaderMeshSnapshot> before =
       editor.query().mesh(box.mesh);
@@ -4237,6 +4456,7 @@ TEST(EditorApiTests, HistoryRedoIsUnavailableWhileActivePreviewCanBeCanceled) {
     ASSERT_TRUE(editor.selection().select_object(preview_box).ok());
     ASSERT_TRUE(
         editor.selection().set_mode(quader::QuaderSelectionMode::Edge).ok());
+    ASSERT_TRUE(editor.selection().select_edge(preview_box, 1, 2).ok());
     ASSERT_TRUE(editor.selection().select_all().ok());
     ASSERT_GT(editor.selection().summary().selected_edge_count, 0u);
 
@@ -4392,6 +4612,7 @@ TEST(EditorApiTests, MixedUndoRedoPreviewStackPreservesTexturedMaterial) {
 
     ASSERT_TRUE(
         editor.selection().set_mode(quader::QuaderSelectionMode::Edge).ok());
+    ASSERT_TRUE(editor.selection().select_edge(box, 1, 2).ok());
     ASSERT_TRUE(editor.selection().select_all().ok());
     const quader::QuaderApiVoidResult bevel_preview = editor.commands().execute(
         editor.commands().command_id_for_modeling_action("bevel_edges"));
@@ -6127,19 +6348,623 @@ TEST(EditorApiTests, ObjectSelectAllAndInvertUseSceneEntitiesAndExcludeLockedAnd
               after_select_all.end());
 
     const quader::QuaderApiVoidResult inverted_all =
-        editor.selection().invert();
+        editor.selection().select_inverse();
     ASSERT_TRUE(inverted_all.ok()) << inverted_all.error_message();
     EXPECT_TRUE(inverted_all.changed());
     EXPECT_TRUE(selected_entities(editor).empty());
 
     ASSERT_TRUE(editor.selection().select_object(loose_light.value().id).ok());
     const quader::QuaderApiVoidResult inverted_one =
-        editor.selection().invert();
+        editor.selection().select_inverse();
     ASSERT_TRUE(inverted_one.ok()) << inverted_one.error_message();
     expected.erase(
         std::remove(expected.begin(), expected.end(), loose_light.value().id),
         expected.end());
     EXPECT_EQ(selected_entities(editor), expected);
+}
+
+TEST(EditorApiTests,
+     ComponentSelectAllAndInverseOnlyAffectMeshesWithSelectedComponents) {
+  const auto create_three_boxes = [](quader::QuaderEditorApi &editor) {
+    std::array<quader::QuaderModelingObjectRef, 3> boxes;
+    boxes[0] = create_selected_box(editor, "Component Scope A");
+    for (std::size_t index = 1; index < boxes.size(); ++index) {
+      const quader::QuaderApiResult<quader::QuaderModelingObjectRef> created =
+          editor.modeling().create_box(
+              quader::QuaderBounds{
+                  .min = {static_cast<float>(index * 4) - 1.0f, -1.0f, -1.0f},
+                  .max = {static_cast<float>(index * 4) + 1.0f, 1.0f, 1.0f},
+              },
+              "Component Scope Mesh");
+      EXPECT_TRUE(created.ok()) << created.error_message();
+      if (created.ok()) {
+        boxes[index] = created.value();
+      }
+    }
+    return boxes;
+  };
+
+  const auto seed_two_meshes = [](
+                                   quader::QuaderEditorApi &editor,
+                                   const std::array<
+                                       quader::QuaderModelingObjectRef, 3>
+                                       &boxes) {
+    ASSERT_TRUE(editor.selection()
+                    .select_objects(
+                        {boxes[0].entity, boxes[1].entity, boxes[2].entity},
+                        boxes[2].entity)
+                    .ok());
+    ASSERT_TRUE(editor.selection()
+                    .set_mode(quader::QuaderSelectionMode::Vertex)
+                    .ok());
+    ASSERT_TRUE(editor.selection()
+                    .select_vertex(boxes[0], 1,
+                                   quader::QuaderSelectionEdit::Add)
+                    .ok());
+    ASSERT_TRUE(editor.selection()
+                    .select_vertex(boxes[1], 1,
+                                   quader::QuaderSelectionEdit::Add)
+                    .ok());
+    ASSERT_EQ(editor.selection().summary().selected_vertex_count, 2u);
+    EXPECT_EQ(selected_entities(editor),
+              (std::vector<quader::EntityId>{boxes[0].entity,
+                                             boxes[1].entity,
+                                             boxes[2].entity}));
+  };
+
+  {
+    CommandTestHarness harness;
+    const auto boxes = create_three_boxes(harness.editor);
+    seed_two_meshes(harness.editor, boxes);
+
+    const quader::QuaderApiVoidResult selected_all =
+        harness.editor.selection().select_all();
+    ASSERT_TRUE(selected_all.ok()) << selected_all.error_message();
+    EXPECT_TRUE(selected_all.changed());
+    EXPECT_EQ(harness.editor.selection().summary().selected_vertex_count, 16u);
+    EXPECT_EQ(selected_entities(harness.editor),
+              (std::vector<quader::EntityId>{boxes[0].entity,
+                                             boxes[1].entity}));
+  }
+
+  {
+    CommandTestHarness harness;
+    const auto boxes = create_three_boxes(harness.editor);
+    seed_two_meshes(harness.editor, boxes);
+
+    const quader::QuaderApiVoidResult inverted =
+        harness.editor.selection().select_inverse();
+    ASSERT_TRUE(inverted.ok()) << inverted.error_message();
+    EXPECT_TRUE(inverted.changed());
+    EXPECT_EQ(harness.editor.selection().summary().selected_vertex_count, 14u);
+    EXPECT_EQ(selected_entities(harness.editor),
+              (std::vector<quader::EntityId>{boxes[0].entity,
+                                             boxes[1].entity}));
+  }
+}
+
+TEST(EditorApiTests,
+     SelectSimilarMeshesUsesExactLocalGeometryAcrossIndependentObjects) {
+  CommandTestHarness harness;
+  quader::QuaderEditorApi &editor = harness.editor;
+  const quader::QuaderBounds matching_bounds{
+      .min = {-1.0f, -1.0f, -1.0f},
+      .max = {1.0f, 1.0f, 1.0f},
+  };
+  const quader::QuaderModelingObjectRef source =
+      create_selected_box(editor, "Similar Geometry Source");
+  const quader::QuaderApiResult<quader::QuaderModelingObjectRef>
+      independent_match =
+          editor.modeling().create_box(matching_bounds,
+                                       "Similar Geometry Independent Match");
+  ASSERT_TRUE(independent_match.ok()) << independent_match.error_message();
+  const quader::QuaderApiResult<quader::QuaderModelingObjectRef> mismatch =
+      editor.modeling().create_box(
+          quader::QuaderBounds{
+              .min = {-1.0f, -1.0f, -1.0f},
+              .max = {2.0f, 1.0f, 1.0f},
+          },
+          "Similar Geometry Different Width");
+  ASSERT_TRUE(mismatch.ok()) << mismatch.error_message();
+
+  ASSERT_TRUE(
+      editor.scene()
+          .set_transform(independent_match.value().entity,
+                         quader::QuaderTransform{
+                             .position = {8.0f, -3.0f, 5.0f},
+                             .rotation_euler = {0.25f, 0.5f, 1.0f},
+                             .scale = {2.0f, 3.0f, 4.0f},
+                         })
+          .ok());
+  const quader::QuaderApiResult<quader::QuaderAssetRef> source_material =
+      editor.assets().add_material(
+          quader::QuaderMaterialArgs{.name = "Similar Source Material"});
+  const quader::QuaderApiResult<quader::QuaderAssetRef> match_material =
+      editor.assets().add_material(
+          quader::QuaderMaterialArgs{.name = "Similar Match Material"});
+  ASSERT_TRUE(source_material.ok()) << source_material.error_message();
+  ASSERT_TRUE(match_material.ok()) << match_material.error_message();
+  ASSERT_TRUE(editor.assets()
+                  .assign_material_to_entity(source.entity,
+                                             source_material.value().id)
+                  .ok());
+  ASSERT_TRUE(editor.assets()
+                  .assign_material_to_entity(independent_match.value().entity,
+                                             match_material.value().id)
+                  .ok());
+
+  ASSERT_TRUE(
+      editor.selection().set_mode(quader::QuaderSelectionMode::Object).ok());
+  ASSERT_TRUE(editor.selection().select_object(source).ok());
+  ASSERT_EQ(selected_entities(editor),
+            std::vector<quader::EntityId>{source.entity});
+  const quader::QuaderOverlayFrame warm_overlay =
+      editor.render().selection_overlay_frame();
+  EXPECT_TRUE(std::any_of(
+      warm_overlay.lines.begin(), warm_overlay.lines.end(),
+      [&](const quader::QuaderOverlayLine &line) {
+        return line.layer == quader::QuaderOverlayLayer::SelectedEdge &&
+               line.element.object_id == source.modeling_object_id;
+      }));
+  const quader::QuaderApiVoidResult selected_similar =
+      editor.selection().select_similar_meshes();
+  ASSERT_TRUE(selected_similar.ok()) << selected_similar.error_message();
+  EXPECT_TRUE(selected_similar.changed());
+
+  std::vector<quader::EntityId> expected_selection{
+      source.entity,
+      independent_match.value().entity,
+  };
+  std::sort(expected_selection.begin(), expected_selection.end());
+  EXPECT_EQ(selected_entities(editor), expected_selection);
+  const std::optional<quader::QuaderEntitySnapshot> source_after =
+      entity_by_id(editor, source.entity);
+  const std::optional<quader::QuaderEntitySnapshot> mismatch_after =
+      entity_by_id(editor, mismatch.value().entity);
+  ASSERT_TRUE(source_after.has_value());
+  ASSERT_TRUE(mismatch_after.has_value());
+  EXPECT_TRUE(source_after->active);
+  EXPECT_FALSE(mismatch_after->selected);
+
+  const quader::QuaderOverlayFrame expanded_overlay =
+      editor.render().selection_overlay_frame();
+  for (const int modeling_object_id : {
+           source.modeling_object_id,
+           independent_match.value().modeling_object_id,
+       }) {
+    EXPECT_TRUE(std::any_of(
+        expanded_overlay.lines.begin(), expanded_overlay.lines.end(),
+        [&](const quader::QuaderOverlayLine &line) {
+          return line.layer == quader::QuaderOverlayLayer::SelectedEdge &&
+                 line.element.object_id == modeling_object_id;
+        }))
+        << "Every selected mesh must receive its own selected topology wire "
+           "after the cached selection expands.";
+  }
+
+  const std::uint64_t stable_selection_revision =
+      editor.selection().summary().selection_revision;
+  const quader::QuaderApiVoidResult already_complete =
+      editor.selection().select_similar_meshes();
+  ASSERT_TRUE(already_complete.ok()) << already_complete.error_message();
+  EXPECT_FALSE(already_complete.changed());
+  EXPECT_EQ(editor.selection().summary().selection_revision,
+            stable_selection_revision);
+}
+
+TEST(EditorApiTests,
+     SelectSimilarMeshesMatchesDirectAndOneMemberInstanceTargetsAtomically) {
+  CommandTestHarness harness;
+  quader::QuaderEditorApi &editor = harness.editor;
+  const quader::QuaderModelingObjectRef direct =
+      create_selected_box(editor, "Similar Direct Mesh");
+
+  const quader::QuaderModelingObjectRef linked_member =
+      create_selected_box(editor, "Similar Linked Member");
+  ASSERT_TRUE(editor.scene()
+                  .set_transform(linked_member.entity,
+                                 quader::QuaderTransform{
+                                     .position = {7.0f, -3.0f, 2.0f},
+                                     .rotation_euler = {0.2f, 0.4f, 0.6f},
+                                     .scale = {2.0f, 3.0f, 4.0f},
+                                 })
+                  .ok());
+  ASSERT_TRUE(editor.selection().select_object(linked_member).ok());
+  const auto linked_created =
+      editor.modeling().create_instance_from_selection();
+  ASSERT_TRUE(linked_created.ok()) << linked_created.error_message();
+  const quader::EntityId first_linked =
+      linked_created.value().occurrence.root.id;
+  ASSERT_TRUE(editor.commands()
+                  .execute(quader::quader_command::kDuplicateSelection)
+                  .ok());
+  ASSERT_EQ(selected_entities(editor).size(), 1u);
+  const quader::EntityId second_linked = selected_entities(editor).front();
+
+  const quader::QuaderModelingObjectRef independent_member =
+      create_selected_box(editor, "Similar Independent Member");
+  ASSERT_TRUE(editor.scene()
+                  .set_transform(independent_member.entity,
+                                 quader::QuaderTransform{
+                                     .position = {-11.0f, 5.0f, 9.0f},
+                                     .rotation_euler = {0.9f, 0.1f, 0.3f},
+                                     .scale = {0.5f, 1.5f, 2.5f},
+                                 })
+                  .ok());
+  ASSERT_TRUE(editor.selection().select_object(independent_member).ok());
+  const auto independent_created =
+      editor.modeling().create_instance_from_selection();
+  ASSERT_TRUE(independent_created.ok())
+      << independent_created.error_message();
+  const quader::EntityId independent =
+      independent_created.value().occurrence.root.id;
+
+  const quader::QuaderApiResult<quader::QuaderModelingObjectRef>
+      mismatch_member = editor.modeling().create_box(
+          quader::QuaderBounds{
+              .min = {-1.0f, -1.0f, -1.0f},
+              .max = {2.0f, 1.0f, 1.0f},
+          },
+          "Similar Instance Geometry Mismatch");
+  ASSERT_TRUE(mismatch_member.ok()) << mismatch_member.error_message();
+  ASSERT_TRUE(editor.selection().select_object(mismatch_member.value()).ok());
+  const auto mismatch_created =
+      editor.modeling().create_instance_from_selection();
+  ASSERT_TRUE(mismatch_created.ok()) << mismatch_created.error_message();
+  const quader::EntityId mismatch =
+      mismatch_created.value().occurrence.root.id;
+
+  const quader::QuaderModelingObjectRef visible_member =
+      create_selected_box(editor, "Similar Visible Instance Member");
+  const quader::QuaderApiResult<quader::QuaderModelingObjectRef> hidden_extra =
+      editor.modeling().create_box(
+          quader::QuaderBounds{
+              .min = {-1.0f, -1.0f, -1.0f},
+              .max = {2.0f, 1.0f, 1.0f},
+          },
+          "Similar Hidden Instance Member");
+  ASSERT_TRUE(hidden_extra.ok()) << hidden_extra.error_message();
+  ASSERT_TRUE(editor.selection()
+                  .select_objects(
+                      {visible_member.entity, hidden_extra.value().entity},
+                      visible_member.entity)
+                  .ok());
+  const auto visible_only_created =
+      editor.modeling().create_instance_from_selection();
+  ASSERT_TRUE(visible_only_created.ok())
+      << visible_only_created.error_message();
+  const quader::EntityId visible_only_occurrence =
+      visible_only_created.value().occurrence.root.id;
+  ASSERT_TRUE(
+      editor.scene().set_visible(hidden_extra.value().entity, false).ok());
+
+  ASSERT_TRUE(
+      editor.selection().set_mode(quader::QuaderSelectionMode::Object).ok());
+  ASSERT_TRUE(editor.selection().select_object(direct).ok());
+  const quader::QuaderApiVoidResult selected_from_direct =
+      editor.selection().select_similar_meshes();
+  ASSERT_TRUE(selected_from_direct.ok())
+      << selected_from_direct.error_message();
+  ASSERT_TRUE(selected_from_direct.changed());
+
+  std::vector<quader::EntityId> expected{
+      direct.entity,
+      first_linked,
+      second_linked,
+      independent,
+      visible_only_occurrence,
+  };
+  std::sort(expected.begin(), expected.end());
+  EXPECT_EQ(selected_entities(editor), expected);
+  ASSERT_TRUE(editor.query().entity(direct.entity).has_value());
+  EXPECT_TRUE(editor.query().entity(direct.entity)->active);
+  EXPECT_FALSE(editor.query().entity(mismatch)->selected);
+
+  ASSERT_TRUE(editor.selection().select_object(first_linked).ok());
+  const quader::QuaderApiVoidResult selected_from_occurrence =
+      editor.selection().select_similar_meshes();
+  ASSERT_TRUE(selected_from_occurrence.ok())
+      << selected_from_occurrence.error_message();
+  EXPECT_EQ(selected_entities(editor), expected);
+  ASSERT_TRUE(editor.query().entity(first_linked).has_value());
+  EXPECT_TRUE(editor.query().entity(first_linked)->active);
+}
+
+TEST(EditorApiTests,
+     SelectSimilarMeshesComparesWholeInstanceArrangementAtomically) {
+  CommandTestHarness harness;
+  quader::QuaderEditorApi &editor = harness.editor;
+  const auto create_pair_occurrence =
+      [&](float center, float half_spacing, std::string_view name,
+          bool wide_second = false) -> quader::EntityId {
+    const quader::QuaderModelingObjectRef first =
+        create_selected_box(editor, std::string(name) + " First");
+    const quader::QuaderApiResult<quader::QuaderModelingObjectRef> second =
+        wide_second
+            ? editor.modeling().create_box(
+                  quader::QuaderBounds{
+                      .min = {-1.0f, -1.0f, -1.0f},
+                      .max = {2.0f, 1.0f, 1.0f},
+                  },
+                  std::string(name) + " Wide Second")
+            : editor.modeling().create_box(
+                  quader::QuaderBounds{
+                      .min = {-1.0f, -1.0f, -1.0f},
+                      .max = {1.0f, 1.0f, 1.0f},
+                  },
+                  std::string(name) + " Second");
+    if (!second.ok()) {
+      ADD_FAILURE() << second.error_message();
+      return quader::kInvalidEntityId;
+    }
+    if (!editor.scene()
+             .set_transform(first.entity,
+                            quader::QuaderTransform{
+                                .position = {center - half_spacing, 0.0f,
+                                             0.0f}})
+             .ok() ||
+        !editor.scene()
+             .set_transform(second.value().entity,
+                            quader::QuaderTransform{
+                                .position = {center + half_spacing, 0.0f,
+                                             0.0f}})
+             .ok() ||
+        !editor.selection()
+             .select_objects({first.entity, second.value().entity},
+                             first.entity)
+             .ok()) {
+      ADD_FAILURE() << "Could not prepare the instance member arrangement.";
+      return quader::kInvalidEntityId;
+    }
+    const auto created = editor.modeling().create_instance_from_selection();
+    if (!created.ok()) {
+      ADD_FAILURE() << created.error_message();
+      return quader::kInvalidEntityId;
+    }
+    return created.value().occurrence.root.id;
+  };
+
+  const quader::EntityId source =
+      create_pair_occurrence(0.0f, 2.0f, "Similar Pair Source");
+  ASSERT_NE(source, quader::kInvalidEntityId);
+  ASSERT_TRUE(editor.commands()
+                  .execute(quader::quader_command::kDuplicateSelection)
+                  .ok());
+  ASSERT_EQ(selected_entities(editor).size(), 1u);
+  const quader::EntityId linked = selected_entities(editor).front();
+  const quader::EntityId independent =
+      create_pair_occurrence(10.0f, 2.0f, "Similar Pair Independent");
+  const quader::EntityId arrangement_mismatch =
+      create_pair_occurrence(20.0f, 3.0f,
+                             "Similar Pair Arrangement Mismatch");
+  const quader::EntityId geometry_mismatch =
+      create_pair_occurrence(30.0f, 2.0f,
+                             "Similar Pair Geometry Mismatch", true);
+  ASSERT_NE(independent, quader::kInvalidEntityId);
+  ASSERT_NE(arrangement_mismatch, quader::kInvalidEntityId);
+  ASSERT_NE(geometry_mismatch, quader::kInvalidEntityId);
+
+  ASSERT_TRUE(editor.selection().select_object(source).ok());
+  const quader::QuaderApiVoidResult selected =
+      editor.selection().select_similar_meshes();
+  ASSERT_TRUE(selected.ok()) << selected.error_message();
+  ASSERT_TRUE(selected.changed());
+
+  std::vector<quader::EntityId> expected{source, linked, independent};
+  std::sort(expected.begin(), expected.end());
+  EXPECT_EQ(selected_entities(editor), expected);
+  EXPECT_TRUE(editor.query().entity(source)->active);
+  EXPECT_FALSE(editor.query().entity(arrangement_mismatch)->selected);
+  EXPECT_FALSE(editor.query().entity(geometry_mismatch)->selected);
+  for (const quader::EntityId selected_entity : selected_entities(editor)) {
+    const std::optional<quader::QuaderEntitySnapshot> snapshot =
+        editor.query().entity(selected_entity);
+    ASSERT_TRUE(snapshot.has_value());
+    EXPECT_TRUE(snapshot->has_instance_occurrence);
+  }
+}
+
+TEST(EditorApiTests,
+     SelectMeshNGonsCapturesDirectMeshesThenEntersFaceMode) {
+  CommandTestHarness harness;
+  quader::QuaderEditorApi &editor = harness.editor;
+  const quader::QuaderModelingObjectRef first =
+      create_polygon_mesh(editor, 5U, "First N-Gon Mesh");
+  const quader::QuaderModelingObjectRef second =
+      create_polygon_mesh(editor, 6U, "Second N-Gon Mesh");
+  const quader::QuaderModelingObjectRef quad =
+      create_polygon_mesh(editor, 4U, "Quad Mesh");
+  ASSERT_TRUE(editor.selection()
+                  .select_objects({first, quad, second})
+                  .ok());
+  ASSERT_TRUE(
+      editor.selection().set_mode(quader::QuaderSelectionMode::Object).ok());
+
+  const quader::QuaderApiVoidResult selected =
+      editor.selection().select_mesh_ngons();
+  ASSERT_TRUE(selected.ok()) << selected.error_message();
+  EXPECT_TRUE(selected.changed());
+  const quader::QuaderSelectionSummary summary =
+      editor.selection().summary();
+  EXPECT_EQ(summary.mode, quader::QuaderSelectionMode::Face);
+  EXPECT_EQ(summary.selected_face_count, 2U);
+  EXPECT_EQ(summary.active_object_id, second.modeling_object_id);
+  EXPECT_EQ(selected_entities(editor),
+            (std::vector<quader::EntityId>{first.entity, second.entity}));
+
+  CommandTestHarness instance_harness;
+  quader::QuaderEditorApi &instance_editor = instance_harness.editor;
+  const quader::QuaderModelingObjectRef instanced =
+      create_polygon_mesh(instance_editor, 5U, "Instanced N-Gon Mesh");
+  ASSERT_TRUE(instance_editor.selection().select_object(instanced).ok());
+  ASSERT_TRUE(instance_editor.modeling().create_instance().ok());
+  ASSERT_EQ(instance_editor.selection().summary().mode,
+            quader::QuaderSelectionMode::Object);
+  const quader::QuaderApiVoidResult ignored_occurrence =
+      instance_editor.selection().select_mesh_ngons();
+  ASSERT_TRUE(ignored_occurrence.ok())
+      << ignored_occurrence.error_message();
+  EXPECT_FALSE(ignored_occurrence.changed());
+  EXPECT_EQ(instance_editor.selection().summary().mode,
+            quader::QuaderSelectionMode::Object);
+}
+
+TEST(EditorApiTests,
+     SelectFaceNormalUsesWorldFacingAndInverseTransposeForMirrors) {
+  CommandTestHarness harness;
+  quader::QuaderEditorApi &editor = harness.editor;
+  const quader::QuaderModelingObjectRef first =
+      create_selected_box(editor, "Normal Seed Box");
+  const quader::QuaderApiResult<quader::QuaderModelingObjectRef> mirrored =
+      editor.modeling().create_box(
+          quader::QuaderBounds{
+              .min = {-1.0F, -1.0F, -1.0F},
+              .max = {1.0F, 1.0F, 1.0F},
+          },
+          "Normal Mirrored Box");
+  ASSERT_TRUE(mirrored.ok()) << mirrored.error_message();
+  const quader::QuaderApiResult<quader::QuaderModelingObjectRef> tilted =
+      editor.modeling().create_box(
+          quader::QuaderBounds{
+              .min = {-1.0F, -1.0F, -1.0F},
+              .max = {1.0F, 1.0F, 1.0F},
+          },
+          "Normal Tilted Box");
+  ASSERT_TRUE(tilted.ok()) << tilted.error_message();
+  ASSERT_TRUE(
+      editor.scene()
+          .set_transform(mirrored.value().entity,
+                         quader::QuaderTransform{
+                             .position = {6.0F, 0.0F, 0.0F},
+                             .rotation_euler = {0.0F, 0.0F, 0.75F},
+                             .scale = {-2.0F, 3.0F, 0.5F},
+                         })
+          .ok());
+  ASSERT_TRUE(
+      editor.scene()
+          .set_transform(tilted.value().entity,
+                         quader::QuaderTransform{
+                             .position = {12.0F, 0.0F, 0.0F},
+                             .rotation_euler = {0.00001F, 0.0F, 0.0F},
+                         })
+          .ok());
+
+  ASSERT_TRUE(editor.selection()
+                  .select_objects({first, mirrored.value(), tilted.value()})
+                  .ok());
+  ASSERT_TRUE(
+      editor.selection().set_mode(quader::QuaderSelectionMode::Face).ok());
+  ASSERT_TRUE(editor.selection()
+                  .select_face(first, 1,
+                               quader::QuaderSelectionEdit::Add)
+                  .ok());
+  ASSERT_EQ(editor.selection().summary().selected_face_count, 1U);
+  ASSERT_EQ(selected_entities(editor).size(), 3U);
+
+  const quader::QuaderApiVoidResult selected_normal =
+      editor.selection().select_face_normal();
+  ASSERT_TRUE(selected_normal.ok()) << selected_normal.error_message();
+  EXPECT_TRUE(selected_normal.changed());
+  EXPECT_EQ(editor.selection().summary().selected_face_count, 2U);
+  EXPECT_EQ(selected_entities(editor),
+            (std::vector<quader::EntityId>{first.entity,
+                                           mirrored.value().entity}));
+}
+
+TEST(EditorApiTests,
+     SelectEdgeDirectionMatchesAcrossObjectsInWorldSpace) {
+  CommandTestHarness harness;
+  quader::QuaderEditorApi &editor = harness.editor;
+  const quader::QuaderModelingObjectRef first =
+      create_selected_box(editor, "Direction Seed Box");
+  const quader::QuaderApiResult<quader::QuaderModelingObjectRef> second =
+      editor.modeling().create_box(
+          quader::QuaderBounds{
+              .min = {-1.0f, -1.0f, -1.0f},
+              .max = {1.0f, 1.0f, 1.0f},
+          },
+          "Direction Rotated Box");
+  ASSERT_TRUE(second.ok()) << second.error_message();
+  const quader::QuaderApiResult<quader::QuaderModelingObjectRef> third =
+      editor.modeling().create_box(
+          quader::QuaderBounds{
+              .min = {-1.0f, -1.0f, -1.0f},
+              .max = {1.0f, 1.0f, 1.0f},
+          },
+          "Direction Non-Matching Rotated Box");
+  ASSERT_TRUE(third.ok()) << third.error_message();
+  ASSERT_TRUE(
+      editor.scene()
+          .set_transform(second.value().entity,
+                         quader::QuaderTransform{
+                             .position = {6.0f, 0.0f, 0.0f},
+                             .rotation_euler = {0.0f, 0.0f, 1.5707963f},
+                         })
+          .ok());
+  ASSERT_TRUE(
+      editor.scene()
+          .set_transform(third.value().entity,
+                         quader::QuaderTransform{
+                             .position = {12.0f, 0.0f, 0.0f},
+                             .rotation_euler = {0.0f, 0.0f, 0.7853982f},
+                         })
+          .ok());
+
+  ASSERT_TRUE(editor.selection()
+                  .select_objects({first, second.value(), third.value()})
+                  .ok());
+  ASSERT_TRUE(
+      editor.selection().set_mode(quader::QuaderSelectionMode::Edge).ok());
+  ASSERT_TRUE(editor.selection()
+                  .select_edge(first, 1, 2,
+                               quader::QuaderSelectionEdit::Add)
+                  .ok());
+  ASSERT_EQ(editor.selection().summary().selected_edge_count, 1u);
+  ASSERT_EQ(selected_entities(editor).size(), 3u);
+
+  const quader::QuaderApiVoidResult selected_direction =
+      editor.selection().select_edge_direction();
+  ASSERT_TRUE(selected_direction.ok()) << selected_direction.error_message();
+  EXPECT_TRUE(selected_direction.changed());
+  EXPECT_EQ(editor.selection().summary().selected_edge_count, 8u);
+  EXPECT_EQ(selected_entities(editor).size(), 2u);
+  const std::optional<quader::QuaderEntitySnapshot> non_matching_after =
+      entity_by_id(editor, third.value().entity);
+  ASSERT_TRUE(non_matching_after.has_value());
+  EXPECT_FALSE(non_matching_after->selected)
+      << "A 45-degree rotation must not be compared as an unchanged local "
+         "edge direction.";
+
+#ifndef NDEBUG
+  const nlohmann::json selection = nlohmann::json::parse(
+      editor.dev_tools().current_selection_json())["selection"];
+  const auto object = std::find_if(
+      selection["objects"].begin(), selection["objects"].end(),
+      [&](const nlohmann::json &candidate) {
+        return candidate["modelingObjectId"].get<int>() ==
+               second.value().modeling_object_id;
+      });
+  ASSERT_NE(object, selection["objects"].end());
+  std::vector<std::pair<int, int>> rotated_box_edges;
+  for (const nlohmann::json &edge : (*object)["selection"]["edges"]) {
+    int a = edge["a"].get<int>();
+    int b = edge["b"].get<int>();
+    if (b < a) {
+      std::swap(a, b);
+    }
+    rotated_box_edges.emplace_back(a, b);
+  }
+  std::sort(rotated_box_edges.begin(), rotated_box_edges.end());
+  EXPECT_EQ(rotated_box_edges,
+            (std::vector<std::pair<int, int>>{
+                {1, 4},
+                {2, 3},
+                {5, 6},
+                {7, 8},
+            }))
+      << "The rotated mesh must match its local Y edges to the seed's world X "
+         "direction.";
+#endif
 }
 
 TEST(EditorApiTests, MixedEntitySelectionGroupsMeshAndLightThroughSceneHierarchy) {
@@ -7217,9 +8042,11 @@ TEST(EditorApiTests,
 TEST(EditorApiTests, EdgeBevelToolSettingsUseOperationSchemaWidthLimits) {
   CommandTestHarness harness;
   quader::QuaderEditorApi &editor = harness.editor;
-  (void)create_selected_box(editor, "Edge Bevel Schema Settings Source");
+  const quader::QuaderModelingObjectRef box =
+      create_selected_box(editor, "Edge Bevel Schema Settings Source");
   ASSERT_TRUE(
       editor.selection().set_mode(quader::QuaderSelectionMode::Edge).ok());
+  ASSERT_TRUE(editor.selection().select_edge(box, 1, 2).ok());
   ASSERT_TRUE(editor.selection().select_all().ok());
   ASSERT_TRUE(editor.commands()
                   .execute(editor.commands().command_id_for_modeling_action(
@@ -7664,6 +8491,7 @@ TEST(EditorApiTests,
     ASSERT_TRUE(before.has_value());
     ASSERT_TRUE(
         editor.selection().set_mode(quader::QuaderSelectionMode::Edge).ok());
+    ASSERT_TRUE(editor.selection().select_edge(box, 1, 2).ok());
     ASSERT_TRUE(editor.selection().select_all().ok());
     ASSERT_TRUE(editor.commands()
                     .execute(editor.commands().command_id_for_modeling_action(
@@ -9398,7 +10226,7 @@ TEST(EditorApiTests,
   // definition universe instead of leaking to the context mesh.
   ASSERT_TRUE(editor.selection().select_all().ok());
   EXPECT_EQ(editor.selection().summary().selected_face_count, 6u);
-  ASSERT_TRUE(editor.selection().invert().ok());
+  ASSERT_TRUE(editor.selection().select_inverse().ok());
   EXPECT_EQ(editor.selection().summary().selected_face_count, 0u);
 
   quader::QuaderBoxSelectRequest active_box;
@@ -10137,9 +10965,9 @@ TEST(EditorApiTests,
       editor.commands().keybinding_catalog();
 
 #ifndef NDEBUG
-  EXPECT_EQ(commands.size(), 147u);
+  EXPECT_EQ(commands.size(), 157u);
 #else
-  EXPECT_EQ(commands.size(), 146u);
+  EXPECT_EQ(commands.size(), 156u);
 #endif
 
   std::unordered_set<std::string> expected_target_ids;

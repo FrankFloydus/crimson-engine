@@ -5649,3 +5649,95 @@ both Quader mesh materials, render extraction tests, and render source-policy gu
 Verification: both Filament mesh materials compile, 4 focused projection/cache tests pass, 46
 affected render guardrails pass, 320 affected render/viewport tests pass, and the native v0.1.66
 executable builds successfully. Final pixel comparison remains a manual GPU smoke check.
+
+## 2026-07-18 - Selection Commands Use Explicit Component Scope And Atomic Mesh Targets
+
+Invariant:
+
+- The canonical command family is `select.*`; removed `edit.select_all`, `edit.invert_selection`,
+  and `selection.*` spellings have no aliases, typed constants, registry routes, keybinding rows, or
+  menu entries. The retained Qt Select menu changes its specialized rows by Object, Vertex, Edge,
+  and Face mode while Select All/Inverse remain common actions.
+- In component modes, Select All and Select Inverse operate only on meshes that currently contain
+  at least one selected component in that same mode. Scene selection alone is not participation.
+  Once inversion empties a mesh, a later inverse has no implicit whole-scene scope to rediscover.
+  Local Visibility and instance-edit projections apply the identical rule.
+- Cross-mesh component commands normalize every selected target's empty portable selection to the
+  active component mode before comparison. This lets world-space Direction, Coplanar, and Normal
+  include secondary meshes without manufacturing seed components. Grow/Shrink keep Blender's
+  default one-face-step behavior (`use_face_step=true`) and never cascade through newly added
+  elements in the same invocation.
+- Transient SDK-to-native selection projections carry the real content and selection revisions
+  before entering cached picking/overlay owners. A selection expansion therefore rebuilds the
+  per-object topology wire for every newly selected mesh. Persistent whole-mesh selected scene wire
+  is an Object/Group presentation only; component modes use semantic face/edge/vertex overlays, so
+  disconnected scene-wire edges cannot appear selected merely because their mesh is selected.
+- Select Similar compares exact local vertex positions and face incidence, including coincident or
+  unwelded vertices. Direct meshes and formal instance occurrences are atomic targets: one-member
+  occurrences can match direct geometry, multi-member occurrences compare each visible definition
+  member plus its exact definition-relative arrangement, outer occurrence transforms are ignored,
+  and synthetic definition members never enter public scene selection.
+- Select Normal is same-facing and has no user threshold; it uses inverse-transpose world normals,
+  rejects degenerate faces, and permits only machine-roundoff equality. Mesh-mode Select N-Gons
+  captures the selected directly editable meshes, enters Face mode, and replaces their component
+  selections with faces having more than four sides; occurrence-only targets remain atomic and are
+  excluded outside instance edit.
+
+Owners: canonical command IDs/registry and keybindings, `EditorSelectionService`,
+`ModelingSessionService`/`ModelingSelectionService`, the SDK projection adapter, portable polygon
+selection and exact-geometry helpers, Qt Select-menu presentation, and render overlay snapshot
+policy.
+
+Verification: the 9-test portable selection suite and focused native command/scope/Direction/
+Normal/N-Gon/Similar/overlay regressions pass. The complete `vs2026-debug` CTest preset passes 6/6;
+the final native build result is recorded in the task handoff.
+
+## 2026-07-18 - Every Visible Command Has An Executable Behavior Contract
+
+Invariant:
+
+- Every visible registry command has exactly one explicit `CommandBehaviorContract`; new, removed,
+  or renamed commands fail the catalog equality test until their fixture, permitted observable
+  domains, outcome, undo/redo, repeat, and preview policies are deliberately declared. Successful
+  fixtures are the default. Only commands whose result depends on an external runtime integration
+  may be contractually allowed to reject.
+- `CommandObservableState` is the deterministic whole-editor observation boundary. Its canonical
+  payload covers documents, scene, geometry, selection, overlays, assets, history, tools,
+  viewports, preferences, and revisions. Non-scene domains use semantic entity labels so a pure
+  hierarchy mutation cannot masquerade as unrelated geometry or selection changes.
+- The command sweep enforces allowed-domain mutation, result/change/revision consistency,
+  undo/redo exact restoration, repeat determinism, preview cancel restoration, and preview commit
+  equivalence. A checked-in per-command fingerprint baseline catches approved behavior drift, while
+  seeded command sequences catch cross-command state leaks.
+- Normal verification is read-only: `tools/regression_gate.ps1` refuses every baseline-update
+  environment variable, builds every registered test owner, runs complete CTest, and builds the
+  native executable. Baseline changes use the separate reason-required updater; it refuses to write
+  after any law failure and replaces the baseline atomically before presenting the diff for review.
+- Project-material behavior fingerprints use decoded public material properties, never QMAT byte
+  size or its raw-byte content hash. Git LF/CRLF conversion changes both storage values without any
+  editor-visible material change, so including them makes a clean native build invalidate an
+  otherwise identical behavior baseline.
+- Vertex welds follow Blender's split-before-weld topology rule. If a removed source corner and its
+  survivor are non-adjacent corners of one face, recursively split that face into the two source
+  boundary arcs before remapping IDs. After remapping, keep each valid three-or-more-corner arc and
+  discard only degenerate arcs. Never remove one repeated survivor occurrence and close the
+  remaining loop: that joins unrelated neighbors and manufactures a diagonal. In the `one.qdr`
+  bridge case, face 27 becomes the exact eight-corner surviving arc, its zero-area hairpin is
+  discarded, and the nonexistent 25-30 diagonal remains absent.
+- Face mode emits selected face fill and `SelectedFaceEdge` boundary records, never the generic
+  `SelectedEdge` layer. A disconnected or coincident vertex/edge elsewhere in the mesh therefore
+  cannot inherit a highlight from face selection.
+- Object/Group Create Outer Hull preview temporarily supplies the operation with the whole object's
+  faces and clears the temporary selection afterward. Preview cancel restores geometry and
+  selection exactly; an empty component selection must not turn the operation into a no-op.
+
+Owners: command behavior contract/fixture/observable-state support, command behavior and regression
+gate tests, regression gate/updater scripts, polygon hull-plane merge repair, modeling selection
+overlay extraction, and the SDK projection adapter's whole-object face-selection helper.
+
+Verification: the explicit Debug catalog contains 157 commands (Release contains 156); the full
+fingerprint sweep passes twice consecutively after a clean native resource deployment, four seeded
+160-step sequences pass, and both the exact `one.qdr` merge-distance case and the two-valid-arcs
+weld case pass. The face-overlay suite, outer-hull preview regression, and regression-gate
+guardrails pass. The complete read-only gate passes 6/6 registered CTest owners, including the
+SDK-only configure/build check, and the native v0.1.66 `quader` executable builds successfully.

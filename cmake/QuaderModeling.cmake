@@ -487,6 +487,7 @@ if(QUADER_BUILD_TESTS AND QUADER_BUILD_NATIVE_APP)
         tests/modeling_domain/operation/qdr_document_operation_radial_align_selection_tests.cpp
         tests/modeling_domain/operation/qdr_document_operation_recalculate_normals_tests.cpp
         tests/modeling_domain/operation/qdr_document_operation_registry_tests.cpp
+        tests/modeling_domain/operation/qdr_document_operation_selection_commands_tests.cpp
         tests/modeling_domain/operation/qdr_document_operation_slice_quad_tests.cpp
         tests/modeling_domain/operation/qdr_document_operation_snap_vertices_to_active_tests.cpp
         tests/modeling_domain/operation/qdr_document_operation_split_edges_tests.cpp

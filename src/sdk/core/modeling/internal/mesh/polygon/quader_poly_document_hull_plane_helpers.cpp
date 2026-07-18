@@ -609,6 +609,66 @@ bool face_loop_is_valid_after_merge(const Document& document, std::span<const El
            !triangulate_face_local_indices(document, face).empty();
 }
 
+std::vector<ElementId> cyclic_face_path(
+        std::span<const ElementId> vertices,
+        std::size_t first_index,
+        std::size_t last_index)
+{
+    std::vector<ElementId> path;
+    path.reserve(vertices.size());
+    std::size_t index = first_index;
+    while (true) {
+        path.push_back(vertices[index]);
+        if (index == last_index) {
+            break;
+        }
+        index = (index + 1U) % vertices.size();
+    }
+    return path;
+}
+
+std::optional<std::pair<std::vector<ElementId>, std::vector<ElementId>>>
+split_source_face_at_nonadjacent_merge_pair(
+        const Face& source_face,
+        const std::set<ElementId>& merge_vertex_ids,
+        ElementId survivor_vertex_id)
+{
+    if (source_face.vertices.size() < 4U) {
+        return std::nullopt;
+    }
+
+    const auto survivor = std::ranges::find(
+            source_face.vertices, survivor_vertex_id);
+    if (survivor == source_face.vertices.end()) {
+        return std::nullopt;
+    }
+    const std::size_t survivor_index = static_cast<std::size_t>(
+            std::distance(source_face.vertices.begin(), survivor));
+
+    for (std::size_t merge_index = 0;
+         merge_index < source_face.vertices.size(); ++merge_index) {
+        if (!merge_vertex_ids.contains(source_face.vertices[merge_index])) {
+            continue;
+        }
+        const bool adjacent =
+                (merge_index + 1U) % source_face.vertices.size() ==
+                        survivor_index ||
+                (survivor_index + 1U) % source_face.vertices.size() ==
+                        merge_index;
+        if (adjacent) {
+            continue;
+        }
+
+        return std::pair{
+                cyclic_face_path(source_face.vertices, merge_index,
+                                 survivor_index),
+                cyclic_face_path(source_face.vertices, survivor_index,
+                                 merge_index)};
+    }
+
+    return std::nullopt;
+}
+
 Face make_repaired_merge_face(const Face& source_face, std::vector<ElementId> vertices)
 {
     Face repaired;
@@ -702,51 +762,35 @@ std::vector<Face> repaired_faces_for_vertex_merge(
     if (face_loop_is_valid_after_merge(candidate_document, compact_vertices)) {
         return { make_repaired_merge_face(source_face, std::move(compact_vertices)) };
     }
+
+    // Blender's weld operator splits a face between a source corner and its
+    // non-adjacent target before replacing either vertex. After the weld, the
+    // temporary split edge collapses to zero length. Keeping the two boundary
+    // paths separate prevents unrelated neighbors from being joined by a new
+    // diagonal when the survivor would otherwise occur twice in one loop.
+    const auto split_paths = split_source_face_at_nonadjacent_merge_pair(
+            source_face, merge_vertex_ids, active_vertex_id);
+    if (split_paths.has_value()) {
+        std::vector<Face> repaired_faces;
+        const auto append_split_path = [&](const std::vector<ElementId>& path) {
+            Face split_source = source_face;
+            split_source.vertices = path;
+            split_source.uvs.clear();
+            std::vector<Face> split_repair = repaired_faces_for_vertex_merge(
+                    source_document, candidate_document, split_source,
+                    merge_vertex_ids, active_vertex_id);
+            repaired_faces.insert(
+                    repaired_faces.end(),
+                    std::make_move_iterator(split_repair.begin()),
+                    std::make_move_iterator(split_repair.end()));
+        };
+        append_split_path(split_paths->first);
+        append_split_path(split_paths->second);
+        return repaired_faces;
+    }
+
     if (has_repeated_vertex(compact_vertices)) {
         return {};
-    }
-
-    std::vector<std::size_t> active_occurrences;
-    active_occurrences.reserve(compact_vertices.size());
-    for (std::size_t index = 0; index < compact_vertices.size(); ++index) {
-        if (compact_vertices[index] == active_vertex_id) {
-            active_occurrences.push_back(index);
-        }
-    }
-
-    std::vector<ElementId> best_vertices;
-    float best_area_score = 0.0F;
-    if (active_occurrences.size() > 1) {
-        for (const std::size_t kept_active_index : active_occurrences) {
-            std::vector<ElementId> candidate_vertices;
-            candidate_vertices.reserve(compact_vertices.size());
-            for (std::size_t index = 0; index < compact_vertices.size(); ++index) {
-                if (compact_vertices[index] == active_vertex_id && index != kept_active_index) {
-                    continue;
-                }
-                if (!candidate_vertices.empty() && candidate_vertices.back() == compact_vertices[index]) {
-                    continue;
-                }
-                candidate_vertices.push_back(compact_vertices[index]);
-            }
-
-            if (candidate_vertices.size() > 1 && candidate_vertices.front() == candidate_vertices.back()) {
-                candidate_vertices.pop_back();
-            }
-            if (!face_loop_is_valid_after_merge(candidate_document, candidate_vertices)) {
-                continue;
-            }
-
-            const float area_score = face_loop_area_score(candidate_document, candidate_vertices);
-            if (best_vertices.empty() || area_score > best_area_score) {
-                best_vertices = std::move(candidate_vertices);
-                best_area_score = area_score;
-            }
-        }
-    }
-
-    if (!best_vertices.empty()) {
-        return { make_repaired_merge_face(source_face, std::move(best_vertices)) };
     }
 
     std::vector<Face> repaired_faces;

@@ -30,11 +30,13 @@
 #include "scene/scene_bounds.hpp"
 #include "scene/scene_document.hpp"
 #include "scene/scene_entity_naming.hpp"
+#include "scene/scene_hierarchy_visibility.hpp"
 #include "scene/scene_transform.hpp"
 #include "scene/scene_transform_pivot.hpp"
 
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <cmath>
 #include <cstdint>
 #include <iterator>
@@ -64,6 +66,7 @@
 #include <editor/modeling/runtime/session.hpp>
 #include <quader/modeling/neutral/geometry/geometry.hpp>
 #include <quader/modeling/neutral/polygon/document.hpp>
+#include <quader/modeling/neutral/polygon/document_selection.hpp>
 
 namespace quader {
 namespace {
@@ -942,6 +945,182 @@ public:
     return object_registry_.modeling_object_for_entity(entity);
   }
 
+  [[nodiscard]] std::vector<EntityId> matching_geometry_entities(
+      std::span<const EntityId> candidates,
+      std::span<const EntityId> references) const {
+    const quader_editor_core::EditorSession projection =
+        sdk_projection_adapter_.native_selection_projection();
+    std::unordered_map<int, const quader_editor_core::PolygonObject *>
+        objects_by_id;
+    objects_by_id.reserve(projection.objects().size());
+    for (const quader_editor_core::PolygonObject &object :
+         projection.objects()) {
+      objects_by_id.emplace(object.id, &object);
+    }
+
+    /// Describes one visible geometry member inside an atomic selection target.
+    struct GeometryMemberDescriptor final {
+      const quader_editor_core::PolygonObject *object = nullptr;
+      QMat4 definition_relative_transform;
+    };
+    using GeometryTargetDescriptor =
+        std::vector<GeometryMemberDescriptor>;
+
+    const auto descriptor_for_entity =
+        [&](EntityId entity) -> std::optional<GeometryTargetDescriptor> {
+      if (!scene_.exists(entity) ||
+          scene_.is_instance_definition_member(entity) ||
+          scene_.is_instance_definition_entity(entity)) {
+        return std::nullopt;
+      }
+
+      GeometryTargetDescriptor descriptor;
+      if (const InstanceOccurrenceComponent *occurrence =
+              scene_.instance_occurrence(entity)) {
+        if (!scene_.is_instance_definition_entity(occurrence->definition)) {
+          return std::nullopt;
+        }
+        const std::optional<QMat4> inverse_definition =
+            try_scene_matrix_inverse(
+                scene_.world_transform_matrix(occurrence->definition));
+        if (!inverse_definition.has_value()) {
+          return std::nullopt;
+        }
+        for (const EntityId member :
+             scene_.descendants(occurrence->definition, false)) {
+          // Match the occurrence's actual rendered geometry universe: only
+          // members owned by this definition whose complete local hierarchy
+          // segment is visible. This also prevents a nested definition, if a
+          // future scene schema permits one, from being expanded twice.
+          if (scene_.containing_instance_definition(member) !=
+                  occurrence->definition ||
+              !scene_hierarchy_segment_is_visible(
+                  scene_, member, occurrence->definition) ||
+              scene_.kind(member) != EntityKind::Mesh) {
+            continue;
+          }
+          const std::optional<int> object_id =
+              object_registry_.modeling_object_for_entity(member);
+          if (!object_id.has_value()) {
+            return std::nullopt;
+          }
+          const auto object = objects_by_id.find(*object_id);
+          if (object == objects_by_id.end()) {
+            return std::nullopt;
+          }
+          descriptor.push_back({
+              .object = object->second,
+              .definition_relative_transform = scene_transform_multiply(
+                  *inverse_definition, scene_.world_transform_matrix(member)),
+          });
+        }
+      } else {
+        const std::optional<int> object_id =
+            object_registry_.modeling_object_for_entity(entity);
+        if (!object_id.has_value()) {
+          return std::nullopt;
+        }
+        const auto object = objects_by_id.find(*object_id);
+        if (object == objects_by_id.end()) {
+          return std::nullopt;
+        }
+        descriptor.push_back({.object = object->second});
+      }
+
+      if (descriptor.empty()) {
+        return std::nullopt;
+      }
+      if (descriptor.size() == 1U) {
+        // A one-mesh target has no internal arrangement. Its scene or
+        // definition placement is the target's outer transform and Select
+        // Similar deliberately compares local geometry independently of it.
+        descriptor.front().definition_relative_transform = QMat4{};
+      }
+      return descriptor;
+    };
+
+    const auto transforms_match = [](const QMat4 &left, const QMat4 &right) {
+      const auto exact_value_key = [](float value) {
+        // Equivalent definitions can acquire opposite signed zeroes while
+        // composing/inverting their independently created transforms.
+        return value == 0.0F ? 0U : std::bit_cast<std::uint32_t>(value);
+      };
+      for (std::size_t index = 0U; index < left.values.size(); ++index) {
+        if (exact_value_key(left.values[index]) !=
+            exact_value_key(right.values[index])) {
+          return false;
+        }
+      }
+      return true;
+    };
+    const auto descriptors_match =
+        [&](const GeometryTargetDescriptor &left,
+            const GeometryTargetDescriptor &right) {
+      if (left.size() != right.size()) {
+        return false;
+      }
+      std::vector<bool> right_matched(right.size(), false);
+      const auto match_members = [&](const auto &self,
+                                     std::size_t left_index) -> bool {
+        if (left_index == left.size()) {
+          return true;
+        }
+        for (std::size_t right_index = 0U; right_index < right.size();
+             ++right_index) {
+          if (right_matched[right_index] ||
+              !transforms_match(
+                  left[left_index].definition_relative_transform,
+                  right[right_index].definition_relative_transform) ||
+              !quader_poly::has_same_geometry(
+                  left[left_index].object->document,
+                  right[right_index].object->document)) {
+            continue;
+          }
+          right_matched[right_index] = true;
+          if (self(self, left_index + 1U)) {
+            return true;
+          }
+          right_matched[right_index] = false;
+        }
+        return false;
+      };
+      return match_members(match_members, 0U);
+    };
+
+    std::vector<GeometryTargetDescriptor> reference_descriptors;
+    reference_descriptors.reserve(references.size());
+    for (const EntityId entity : references) {
+      std::optional<GeometryTargetDescriptor> descriptor =
+          descriptor_for_entity(entity);
+      if (descriptor.has_value()) {
+        reference_descriptors.push_back(std::move(*descriptor));
+      }
+    }
+    if (reference_descriptors.empty()) {
+      return {};
+    }
+
+    std::vector<EntityId> matches;
+    matches.reserve(candidates.size());
+    for (const EntityId entity : candidates) {
+      const std::optional<GeometryTargetDescriptor> candidate =
+          descriptor_for_entity(entity);
+      if (!candidate.has_value()) {
+        continue;
+      }
+      const bool matches_reference =
+          std::any_of(reference_descriptors.begin(),
+                      reference_descriptors.end(),
+                      [&](const GeometryTargetDescriptor &reference) {
+                        return descriptors_match(*candidate, reference);
+                      });
+      if (matches_reference) {
+        matches.push_back(entity);
+      }
+    }
+    return matches;
+  }
+
   [[nodiscard]] std::uint64_t modeling_object_map_revision() const {
     return object_registry_.revision();
   }
@@ -1697,6 +1876,44 @@ public:
   ModelingCommandResult clear_selection() {
     ModelingCommandResult result = sdk_projection_adapter_.clear_selection();
     if (result.ok && result.changed) {
+      invalidate_selection_overlay_caches();
+    }
+    return result;
+  }
+
+  ModelingCommandResult apply_component_selection_command(
+      ModelingComponentSelectionCommand command) {
+    quader_editor_core::EditorSession projection =
+        sdk_projection_adapter_.native_selection_projection();
+    const ModelingSelectionApplyResult applied =
+        selection_service_.apply_component_selection_command(
+            projection, scene_, object_registry_, command);
+    if (!applied.applied) {
+      return {
+          .ok = false,
+          .changed = false,
+          .message = "The component selection command could not be applied.",
+      };
+    }
+    if (applied.changed) {
+      (void)sdk_projection_adapter_.apply_native_selection_projection(
+          projection);
+      invalidate_selection_overlay_caches();
+    }
+    return {
+        .ok = true,
+        .changed = applied.changed,
+        .message = applied.changed ? "Selection updated."
+                                   : "Selection unchanged.",
+    };
+  }
+
+  ModelingCommandResult
+  select_mesh_ngons(std::span<const int> modeling_object_ids) {
+    ModelingCommandResult result =
+        sdk_projection_adapter_.select_mesh_ngons(modeling_object_ids);
+    if (result.ok) {
+      app_selection_mode_ = ModelingSelectionMode::Face;
       invalidate_selection_overlay_caches();
     }
     return result;
@@ -5484,6 +5701,12 @@ ModelingSessionService::modeling_object_for_entity(EntityId entity) const {
   return impl_->modeling_object_for_entity(entity);
 }
 
+std::vector<EntityId> ModelingSessionService::matching_geometry_entities(
+    std::span<const EntityId> candidates,
+    std::span<const EntityId> references) const {
+  return impl_->matching_geometry_entities(candidates, references);
+}
+
 std::uint64_t ModelingSessionService::modeling_object_map_revision() const {
   return impl_->modeling_object_map_revision();
 }
@@ -5671,6 +5894,16 @@ ModelingCommandResult ModelingSessionService::invert_selection() {
 
 ModelingCommandResult ModelingSessionService::clear_selection() {
   return impl_->clear_selection();
+}
+
+ModelingCommandResult ModelingSessionService::apply_component_selection_command(
+    ModelingComponentSelectionCommand command) {
+  return impl_->apply_component_selection_command(command);
+}
+
+ModelingCommandResult ModelingSessionService::select_mesh_ngons(
+    std::span<const int> modeling_object_ids) {
+  return impl_->select_mesh_ngons(modeling_object_ids);
 }
 
 std::unique_ptr<IUndoableCommand>

@@ -345,10 +345,14 @@ TEST(LocalVisibilityTests,
 
     ASSERT_TRUE(editor.selection().select_all().ok());
     EXPECT_EQ(editor.selection().summary().selected_vertex_count, 8u);
-    ASSERT_TRUE(editor.selection().invert().ok());
+    ASSERT_TRUE(editor.selection().select_inverse().ok());
     EXPECT_EQ(editor.selection().summary().selected_vertex_count, 0u);
-    ASSERT_TRUE(editor.selection().invert().ok());
-    EXPECT_EQ(editor.selection().summary().selected_vertex_count, 8u);
+    const quader::QuaderApiVoidResult inverse_without_component_scope =
+        editor.selection().select_inverse();
+    ASSERT_TRUE(inverse_without_component_scope.ok())
+        << inverse_without_component_scope.error_message();
+    EXPECT_FALSE(inverse_without_component_scope.changed());
+    EXPECT_EQ(editor.selection().summary().selected_vertex_count, 0u);
   }
 
   {
@@ -378,9 +382,9 @@ TEST(LocalVisibilityTests,
     ASSERT_TRUE(editor.selection().select_all().ok());
     EXPECT_EQ(selected_entities(editor),
               std::vector<quader::EntityId>{local_group.value().id});
-    ASSERT_TRUE(editor.selection().invert().ok());
+    ASSERT_TRUE(editor.selection().select_inverse().ok());
     EXPECT_TRUE(selected_entities(editor).empty());
-    ASSERT_TRUE(editor.selection().invert().ok());
+    ASSERT_TRUE(editor.selection().select_inverse().ok());
     EXPECT_EQ(selected_entities(editor),
               std::vector<quader::EntityId>{local_group.value().id});
     EXPECT_NE(local_group.value().id, outside_group.value().id);

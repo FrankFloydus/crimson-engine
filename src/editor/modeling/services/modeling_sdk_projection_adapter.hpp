@@ -267,6 +267,8 @@ public:
   set_selection_mode(ModelingSelectionMode mode);
   [[nodiscard]] ModelingCommandResult set_component_selection(
       const ModelingComponentSelectionRequest &request);
+  [[nodiscard]] ModelingCommandResult
+  select_mesh_ngons(std::span<const int> modeling_object_ids);
   [[nodiscard]] ModelingCommandResult select_all();
   [[nodiscard]] ModelingCommandResult invert_selection();
   [[nodiscard]] ModelingCommandResult clear_selection();

@@ -348,6 +348,40 @@ select_through_editor(EditorSelectionService &selection,
       resolved_active);
 }
 
+ModelingCommandResult seed_component_bulk_selection_scope(
+    ModelingSessionService &service, int modeling_object_id,
+    ModelingSelectionMode mode,
+    ModelingSelectionEdit edit = ModelingSelectionEdit::Add) {
+  ModelingComponentSelectionRequest request{
+      .modeling_object_id = modeling_object_id,
+      .mode = mode,
+      .edit = edit,
+  };
+  switch (mode) {
+  case ModelingSelectionMode::Vertex:
+    request.vertices = {1};
+    request.active_kind = ModelingActiveSelectionKind::Vertex;
+    request.active_vertex = 1;
+    break;
+  case ModelingSelectionMode::Edge:
+    request.edges = {{1, 2}};
+    request.active_kind = ModelingActiveSelectionKind::Edge;
+    request.active_edge = {1, 2};
+    break;
+  case ModelingSelectionMode::Face:
+    request.faces = {1};
+    request.active_kind = ModelingActiveSelectionKind::Face;
+    request.active_face = 1;
+    break;
+  case ModelingSelectionMode::Object:
+  case ModelingSelectionMode::Group:
+    return {.ok = false,
+            .changed = false,
+            .message = "A component mode is required."};
+  }
+  return service.set_component_selection(request);
+}
+
 static_assert(std::is_base_of_v<IUndoableCommand, ModelingMementoCommand>);
 static_assert(
     std::is_base_of_v<ModelingMementoCommand, DuplicateMeshesHistoryCommand>);
@@ -10516,6 +10550,10 @@ TEST(ModelingSessionServiceTests,
   });
   ASSERT_TRUE(box.ok) << box.message;
   ASSERT_TRUE(service.set_selection_mode(ModelingSelectionMode::Edge).ok);
+  ASSERT_TRUE(seed_component_bulk_selection_scope(
+                  service, box.object.modeling_object_id,
+                  ModelingSelectionMode::Edge)
+                  .ok);
   ASSERT_TRUE(service.select_all().ok);
 
   const ModelingCommandResult begin =
@@ -13355,6 +13393,14 @@ TEST(ModelingSessionServiceTests,
   EXPECT_NEAR(center->z, 1.0f, 0.001f);
 
   ASSERT_TRUE(service.clear_selection().ok);
+  ASSERT_TRUE(seed_component_bulk_selection_scope(
+                  service, first.object.modeling_object_id,
+                  ModelingSelectionMode::Face)
+                  .ok);
+  ASSERT_TRUE(seed_component_bulk_selection_scope(
+                  service, second.object.modeling_object_id,
+                  ModelingSelectionMode::Face)
+                  .ok);
   ASSERT_TRUE(service.select_all().ok);
   summary = service.selection_summary();
   EXPECT_EQ(summary.mode, ModelingSelectionMode::Face);
@@ -14107,6 +14153,10 @@ TEST(ModelingSessionServiceTests,
   });
   ASSERT_TRUE(box.ok) << box.message;
   ASSERT_TRUE(service.set_selection_mode(ModelingSelectionMode::Vertex).ok);
+  ASSERT_TRUE(seed_component_bulk_selection_scope(
+                  service, box.object.modeling_object_id,
+                  ModelingSelectionMode::Vertex)
+                  .ok);
 
   const ModelingCommandResult select_all = service.select_all();
   ASSERT_TRUE(select_all.ok) << select_all.message;
@@ -14421,6 +14471,10 @@ TEST(ModelingSessionServiceTests,
   });
   ASSERT_TRUE(box.ok) << box.message;
   ASSERT_TRUE(service.set_selection_mode(ModelingSelectionMode::Vertex).ok);
+  ASSERT_TRUE(seed_component_bulk_selection_scope(
+                  service, box.object.modeling_object_id,
+                  ModelingSelectionMode::Vertex)
+                  .ok);
   const ModelingCommandResult select_all = service.select_all();
   ASSERT_TRUE(select_all.ok) << select_all.message;
   ASSERT_GT(service.selection_summary().selected_vertex_count, 0u);
@@ -14473,6 +14527,10 @@ TEST(ModelingSessionServiceTests,
   });
   ASSERT_TRUE(box.ok) << box.message;
   ASSERT_TRUE(service.set_selection_mode(ModelingSelectionMode::Edge).ok);
+  ASSERT_TRUE(seed_component_bulk_selection_scope(
+                  service, box.object.modeling_object_id,
+                  ModelingSelectionMode::Edge)
+                  .ok);
   const ModelingCommandResult select_all = service.select_all();
   ASSERT_TRUE(select_all.ok) << select_all.message;
   ASSERT_GT(service.selection_summary().selected_edge_count, 0u);
@@ -14527,6 +14585,10 @@ TEST(ModelingSessionServiceTests,
   });
   ASSERT_TRUE(box.ok) << box.message;
   ASSERT_TRUE(service.set_selection_mode(ModelingSelectionMode::Vertex).ok);
+  ASSERT_TRUE(seed_component_bulk_selection_scope(
+                  service, box.object.modeling_object_id,
+                  ModelingSelectionMode::Vertex)
+                  .ok);
   ASSERT_TRUE(service.select_all().ok);
 
   ASSERT_TRUE(service.begin_transform_preview(false).ok);
@@ -14575,6 +14637,10 @@ TEST(ModelingSessionServiceTests,
   });
   ASSERT_TRUE(box.ok) << box.message;
   ASSERT_TRUE(service.set_selection_mode(ModelingSelectionMode::Vertex).ok);
+  ASSERT_TRUE(seed_component_bulk_selection_scope(
+                  service, box.object.modeling_object_id,
+                  ModelingSelectionMode::Vertex)
+                  .ok);
   ASSERT_TRUE(service.select_all().ok);
 
   ASSERT_TRUE(service.begin_transform_preview(false).ok);
@@ -14620,6 +14686,10 @@ TEST(ModelingSessionServiceTests,
   });
   ASSERT_TRUE(box.ok) << box.message;
   ASSERT_TRUE(service.set_selection_mode(ModelingSelectionMode::Vertex).ok);
+  ASSERT_TRUE(seed_component_bulk_selection_scope(
+                  service, box.object.modeling_object_id,
+                  ModelingSelectionMode::Vertex)
+                  .ok);
   ASSERT_TRUE(service.select_all().ok);
 
   ModelingTransformDragPreview begin =
@@ -14682,6 +14752,10 @@ TEST(ModelingSessionServiceTests,
   });
   ASSERT_TRUE(box.ok) << box.message;
   ASSERT_TRUE(service.set_selection_mode(ModelingSelectionMode::Vertex).ok);
+  ASSERT_TRUE(seed_component_bulk_selection_scope(
+                  service, box.object.modeling_object_id,
+                  ModelingSelectionMode::Vertex)
+                  .ok);
   ASSERT_TRUE(service.select_all().ok);
 
   ModelingTransformDragPreview begin =
@@ -14862,6 +14936,10 @@ TEST(ModelingSessionServiceTests,
   });
   ASSERT_TRUE(box.ok) << box.message;
   ASSERT_TRUE(service.set_selection_mode(ModelingSelectionMode::Vertex).ok);
+  ASSERT_TRUE(seed_component_bulk_selection_scope(
+                  service, box.object.modeling_object_id,
+                  ModelingSelectionMode::Vertex)
+                  .ok);
   ASSERT_TRUE(service.select_all().ok);
 
   const ModelingTransformDragPreview begin =
@@ -15298,6 +15376,10 @@ TEST(ModelingSessionServiceTests,
   });
   ASSERT_TRUE(box.ok) << box.message;
   ASSERT_TRUE(service.set_selection_mode(ModelingSelectionMode::Vertex).ok);
+  ASSERT_TRUE(seed_component_bulk_selection_scope(
+                  service, box.object.modeling_object_id,
+                  ModelingSelectionMode::Vertex)
+                  .ok);
   ASSERT_TRUE(service.select_all().ok);
 
   ModelingTransformDragPreview begin =

@@ -280,10 +280,10 @@ TEST(LocalizationResourceTests, ShipsEnglishAndItalianCatalogs) {
 }
 
 TEST(LocalizationResourceTests, TopLevelMenusExposeUniqueQtMnemonics) {
-  constexpr std::array<std::string_view, 8> kTopLevelMenuKeys = {
-      "ui.menu.file",   "ui.menu.edit",  "ui.menu.align",
-      "ui.menu.cleanup", "ui.menu.tools", "ui.menu.create",
-      "ui.menu.view",   "ui.menu.layout",
+  constexpr std::array<std::string_view, 9> kTopLevelMenuKeys = {
+      "ui.menu.file",    "ui.menu.edit",   "ui.menu.select",
+      "ui.menu.align",   "ui.menu.cleanup", "ui.menu.tools",
+      "ui.menu.create",  "ui.menu.view",   "ui.menu.layout",
   };
 
   for (const auto &[locale, catalog] : load_resource_locale_catalogs()) {

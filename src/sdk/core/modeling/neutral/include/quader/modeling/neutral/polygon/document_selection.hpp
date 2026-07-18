@@ -11,7 +11,9 @@
 #include <quader/modeling/neutral/polygon/document_model.hpp>
 
 #include <cstdint>
+#include <numbers>
 #include <optional>
+#include <span>
 #include <vector>
 
 namespace quader_poly {
@@ -34,6 +36,37 @@ enum class SelectionMode {
   Vertex,
   Edge,
   Face,
+};
+
+/**
+ * Enumerates selection-only component commands owned by the portable polygon
+ * document.
+ */
+enum class ComponentSelectionCommand {
+  SelectAll,
+  SelectInverse,
+  SelectDirection,
+  SelectLoops,
+  SelectEdgeRing,
+  SelectFacesWithSameMaterial,
+  SelectCoplanarFaces,
+  SelectFaceNormal,
+  SelectNGons,
+  Grow,
+  Shrink,
+};
+
+inline constexpr float kDefaultSelectionDirectionToleranceRadians =
+    0.01F * std::numbers::pi_v<float>;
+
+/**
+ * Stores an exact comparison-space plane. The normal need not be normalized;
+ * opposite normal orientation represents the same plane.
+ */
+struct SelectionComparisonPlane {
+  quader::QVec3 point;
+  quader::QVec3 normal;
+  double offset = 0.0;
 };
 
 /**
@@ -118,6 +151,67 @@ void convert_selection_mode(const Document& document, Selection& selection, Sele
     const PolygonDocumentLiveness& liveness,
     const Selection& selection);
 void select_edge_loop(const Document& document, Selection& selection, Edge seed_edge, bool toggle = false);
+[[nodiscard]] std::vector<quader::QVec3>
+selected_edge_directions_in_comparison_space(
+    const Document& document,
+    const Selection& selection,
+    const Transform3& comparison_from_document);
+[[nodiscard]] std::vector<SelectionComparisonPlane>
+selected_face_planes_in_comparison_space(
+    const Document& document,
+    const Selection& selection,
+    const Transform3& comparison_from_document);
+[[nodiscard]] std::vector<quader::QVec3>
+selected_face_normals_in_comparison_space(
+    const Document& document,
+    const Selection& selection,
+    const Transform3& comparison_from_document);
+[[nodiscard]] bool add_edges_matching_directions(
+    const Document& document,
+    Selection& selection,
+    const Transform3& comparison_from_document,
+    std::span<const quader::QVec3> comparison_directions,
+    float angle_tolerance_radians =
+        kDefaultSelectionDirectionToleranceRadians);
+[[nodiscard]] bool add_selected_edge_loops(
+    const Document& document,
+    Selection& selection);
+[[nodiscard]] bool add_selected_edge_rings(
+    const Document& document,
+    Selection& selection);
+[[nodiscard]] bool add_faces_with_selected_material_slots(
+    const Document& document,
+    Selection& selection);
+[[nodiscard]] bool add_faces_with_material_slots(
+    const Document& document,
+    Selection& selection,
+    std::span<const std::uint32_t> material_slots);
+[[nodiscard]] bool add_faces_coplanar_with_planes(
+    const Document& document,
+    Selection& selection,
+    const Transform3& comparison_from_document,
+    std::span<const SelectionComparisonPlane> comparison_planes);
+[[nodiscard]] bool add_faces_matching_normals(
+    const Document& document,
+    Selection& selection,
+    const Transform3& comparison_from_document,
+    std::span<const quader::QVec3> comparison_normals);
+[[nodiscard]] bool replace_selection_with_ngons(
+    const Document& document,
+    Selection& selection);
+[[nodiscard]] bool grow_selection(
+    const Document& document,
+    Selection& selection);
+[[nodiscard]] bool shrink_selection(
+    const Document& document,
+    Selection& selection);
+[[nodiscard]] bool apply_component_selection_command(
+    const Document& document,
+    Selection& selection,
+    ComponentSelectionCommand command,
+    const Transform3& comparison_from_document = {},
+    float direction_angle_tolerance_radians =
+        kDefaultSelectionDirectionToleranceRadians);
 [[nodiscard]] std::optional<quader::QVec3> selection_center(const Document& document, const Selection& selection);
 
 } // namespace quader_poly

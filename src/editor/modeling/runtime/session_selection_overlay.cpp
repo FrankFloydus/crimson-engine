@@ -850,11 +850,6 @@ SelectionOverlayFrame build_selection_overlay_frame(
                   SelectionOverlayLayer::SelectedFaceMask,
                   SelectionOverlayLayer::SelectedFaceEdge, &frame.triangles,
                   nullptr, nullptr, hidden_triangle_faces);
-              append_face_selection(object.id, object.document,
-                                    lookup, object.selection,
-                                    SelectionOverlayLayer::SelectedVisibleFace,
-                                    SelectionOverlayLayer::SelectedEdge,
-                                    nullptr, &frame.lines, hidden_line_edges);
             } else if (mode == SelectionMode::Edge) {
               const SelectionOverlayDocumentLookup& lookup =
                   document_lookup(object.document);

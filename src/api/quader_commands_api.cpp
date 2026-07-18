@@ -137,10 +137,9 @@ bool command_semantically_requires_viewport(std::string_view command_id) {
     return false;
   }
   return command_id.starts_with("modeling.") ||
+         command_id.starts_with("select.") ||
          command_id.starts_with("viewport.") ||
          command_id == quader_command::kEditClearSelection.string() ||
-         command_id == quader_command::kEditSelectAll.string() ||
-         command_id == quader_command::kEditInvertSelection.string() ||
          command_id == quader_command::kDeleteSelection.string() ||
          command_id == quader_command::kCopySelection.string() ||
          command_id == quader_command::kPasteSelection.string() ||
@@ -456,14 +455,13 @@ std::string command_keybinding_localization_key(std::string_view command_id) {
   if (command_id == quader_command::kEditFlattenInstance.string()) {
     return "ui.menu.edit.flatten_instance";
   }
-  if (command_id == quader_command::kEditSelectAll.string()) {
-    return "ui.menu.edit.select_all";
-  }
   if (command_id == quader_command::kEditClearSelection.string()) {
     return "ui.menu.edit.clear_selection";
   }
-  if (command_id == quader_command::kEditInvertSelection.string()) {
-    return "ui.menu.edit.invert_selection";
+  if (command_id.starts_with("select.")) {
+    std::string key("ui.menu.");
+    key.append(command_id);
+    return key;
   }
   if (command_id == quader_command::kDeleteSelection.string()) {
     return stable();
@@ -1647,11 +1645,121 @@ void QuaderCommandsApi::Impl::register_commands() {
   register_command(quader_command::kEditClearSelection, "Clear Selection",
                    [this] { return api_.selection().clear(); });
   register_command(
-      quader_command::kEditSelectAll, "Select All",
+      quader_command::kSelectAll, "Select All",
       [this] { return api_.selection().select_all(); }, "Ctrl+A");
+  set_keybinding_selection_modes(quader_command::kSelectAll.string(),
+                                 kSelectionModeAny);
   register_command(
-      quader_command::kEditInvertSelection, "Invert Selection",
-      [this] { return api_.selection().invert(); }, "Ctrl+I");
+      quader_command::kSelectInverse, "Select Inverse",
+      [this] { return api_.selection().select_inverse(); }, "Ctrl+I");
+  set_keybinding_selection_modes(quader_command::kSelectInverse.string(),
+                                 kSelectionModeAny);
+  register_command(
+      quader_command::kSelectEdgeDirection, "Select Direction",
+      [this] { return api_.selection().select_edge_direction(); }, {},
+      [this] {
+        const QuaderSelectionSummary summary = api_.selection().summary();
+        return summary.mode == QuaderSelectionMode::Edge &&
+               summary.selected_edge_count > 0u;
+      });
+  set_keybinding_selection_modes(
+      quader_command::kSelectEdgeDirection.string(),
+      kSelectionModeEdge);
+  register_command(
+      quader_command::kSelectEdgeLoops, "Select Edge Loops",
+      [this] { return api_.selection().select_edge_loops(); }, {},
+      [this] {
+        const QuaderSelectionSummary summary = api_.selection().summary();
+        return summary.mode == QuaderSelectionMode::Edge &&
+               summary.selected_edge_count > 0u;
+      });
+  set_keybinding_selection_modes(
+      quader_command::kSelectEdgeLoops.string(), kSelectionModeEdge);
+  register_command(
+      quader_command::kSelectEdgeRing, "Select Edge Ring",
+      [this] { return api_.selection().select_edge_ring(); }, {},
+      [this] {
+        const QuaderSelectionSummary summary = api_.selection().summary();
+        return summary.mode == QuaderSelectionMode::Edge &&
+               summary.selected_edge_count > 0u;
+      });
+  set_keybinding_selection_modes(
+      quader_command::kSelectEdgeRing.string(), kSelectionModeEdge);
+  register_command(
+      quader_command::kSelectFacesWithSameMaterial,
+      "Select Faces With Same Material",
+      [this] { return api_.selection().select_faces_with_same_material(); },
+      {}, [this] {
+        const QuaderSelectionSummary summary = api_.selection().summary();
+        return summary.mode == QuaderSelectionMode::Face &&
+               summary.selected_face_count > 0u;
+      });
+  set_keybinding_selection_modes(
+      quader_command::kSelectFacesWithSameMaterial.string(),
+      kSelectionModeFace);
+  register_command(
+      quader_command::kSelectCoplanarFaces,
+      "Select Co-planar Faces",
+      [this] { return api_.selection().select_coplanar_faces(); }, {},
+      [this] {
+        const QuaderSelectionSummary summary = api_.selection().summary();
+        return summary.mode == QuaderSelectionMode::Face &&
+               summary.selected_face_count > 0u;
+      });
+  set_keybinding_selection_modes(
+      quader_command::kSelectCoplanarFaces.string(),
+      kSelectionModeFace);
+  register_command(
+      quader_command::kSelectFaceNormal, "Select Normal",
+      [this] { return api_.selection().select_face_normal(); }, {}, [this] {
+        const QuaderSelectionSummary summary = api_.selection().summary();
+        return summary.mode == QuaderSelectionMode::Face &&
+               summary.selected_face_count > 0u;
+      });
+  set_keybinding_selection_modes(
+      quader_command::kSelectFaceNormal.string(), kSelectionModeFace);
+  register_command(
+      quader_command::kSelectMeshNGons, "Select N-Gons",
+      [this] { return api_.selection().select_mesh_ngons(); }, {}, [this] {
+        const QuaderSelectionSummary summary = api_.selection().summary();
+        return summary.mode == QuaderSelectionMode::Object &&
+               summary.selected_object_count > 0u;
+      });
+  set_keybinding_selection_modes(
+      quader_command::kSelectMeshNGons.string(), kSelectionModeObject);
+  register_command(
+      quader_command::kSelectSimilarMeshes, "Select Similar Meshes",
+      [this] { return api_.selection().select_similar_meshes(); }, {},
+      [this] {
+        const QuaderSelectionSummary summary = api_.selection().summary();
+        return summary.mode == QuaderSelectionMode::Object &&
+               summary.selected_object_count > 0u;
+      });
+  set_keybinding_selection_modes(
+      quader_command::kSelectSimilarMeshes.string(),
+      kSelectionModeObject);
+  register_command(
+      quader_command::kSelectGrow, "Grow Selection",
+      [this] { return api_.selection().grow(); }, {}, [this] {
+        const QuaderSelectionSummary summary = api_.selection().summary();
+        return (summary.mode == QuaderSelectionMode::Vertex ||
+                summary.mode == QuaderSelectionMode::Edge ||
+                summary.mode == QuaderSelectionMode::Face) &&
+               summary.has_selection;
+      });
+  set_keybinding_selection_modes(quader_command::kSelectGrow.string(),
+                                 kSelectionModeComponent);
+  register_command(
+      quader_command::kSelectShrink, "Shrink Selection",
+      [this] { return api_.selection().shrink(); }, {}, [this] {
+        const QuaderSelectionSummary summary = api_.selection().summary();
+        return (summary.mode == QuaderSelectionMode::Vertex ||
+                summary.mode == QuaderSelectionMode::Edge ||
+                summary.mode == QuaderSelectionMode::Face) &&
+               summary.has_selection;
+      });
+  set_keybinding_selection_modes(quader_command::kSelectShrink.string(),
+                                 kSelectionModeComponent);
   register_modeling_tool_public_command(quader_command::kDeleteSelection,
                                         "delete_selection", "Delete Selection");
   register_modeling_tool_public_command(quader_command::kCopySelection,

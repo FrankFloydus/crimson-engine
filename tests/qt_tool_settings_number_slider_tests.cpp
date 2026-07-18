@@ -547,6 +547,7 @@ TEST(QtToolSettingsNumberSliderTests,
   ASSERT_TRUE(editor.selection().select_object(source.value()).ok());
   ASSERT_TRUE(
       editor.selection().set_mode(quader::QuaderSelectionMode::Edge).ok());
+  ASSERT_TRUE(editor.selection().select_edge(source.value(), 1, 2).ok());
   ASSERT_TRUE(editor.selection().select_all().ok());
   ASSERT_TRUE(editor.commands()
                   .execute(editor.commands().command_id_for_modeling_action(

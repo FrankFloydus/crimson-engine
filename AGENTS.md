@@ -355,6 +355,25 @@ untested behavior as verified. This exception applies only to the request that n
 the user does not explicitly request it, follow the normal testing and verification workflow in
 this guide.
 
+## Command Behavior Regression Lock
+
+- Every visible registered command must have exactly one explicit test-owned record in
+  `tests/support/command_behavior_contract.cpp`. A new or renamed command is incomplete until its
+  canonical fixture, allowed observable domains, outcome policy, and undo/repeat/preview policy are
+  declared; do not infer a fallback contract from its prefix.
+- Command contract tests execute the complete registry through public editor APIs and fingerprint
+  document/scene state, exact modeling geometry, selection, semantic overlay, assets, history,
+  tools, viewports, preferences, and revisions. Failed and `changed=false` commands must preserve
+  observable state, successful commands may change only their declared domains, and undo/redo must
+  replay the semantic state exactly.
+- Approved fingerprints live in `tests/baselines/command_behavior.json`. Normal tests and the
+  regression gate are read-only. Update the file only for an intentional behavior change with
+  `tools/update_command_behavior_baseline.ps1 -Reason "<why the behavior changed>"`, then review the
+  complete diff; never regenerate it merely to make a failing test pass.
+- `tools/regression_gate.ps1` is the mandatory final verification for command, selection, history,
+  instance, overlay, viewport, preference, project, scene-document, or cross-owner behavior work.
+  It has no skip-tests or baseline-update path.
+
 ## Expected Commands
 
 When launching build or test commands through Codex tools, set timeouts to at least 10 minutes
