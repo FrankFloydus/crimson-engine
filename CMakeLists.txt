@@ -635,6 +635,7 @@ add_library(quader_render STATIC
     src/render/material_compiler_service.cpp
     src/render/mesh_renderable_cache.cpp
     src/render/mesh_renderable_factory.cpp
+    src/render/mesh_surface_grid_projection.cpp
     src/render/png_texture_loader.cpp
     src/render/overlay/overlay_camera_projector.cpp
     src/render/overlay/overlay_face_fill_builder.cpp

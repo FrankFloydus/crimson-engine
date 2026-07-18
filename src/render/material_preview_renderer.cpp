@@ -69,6 +69,7 @@ struct PreviewGpuVertex final {
   filament::math::float3 position;
   filament::math::float4 tangent_frame;
   filament::math::float2 uv;
+  filament::math::float4 surface_grid_projection;
 };
 
 /// Retains the fill and wire resources for one generated preview mesh.
@@ -355,6 +356,8 @@ struct MaterialPreviewRenderer::Impl final {
                        vertex.position.z},
           .tangent_frame = packed_tangent_frame(vertex),
           .uv = {vertex.uv.x, vertex.uv.y},
+          .surface_grid_projection = {vertex.normal.x, vertex.normal.y,
+                                      vertex.normal.z, 0.0f},
       });
     }
     const std::vector<std::uint32_t> lines = wire_indices(source);
@@ -374,6 +377,11 @@ struct MaterialPreviewRenderer::Impl final {
             .attribute(filament::VertexAttribute::UV0, 0u,
                        AttributeType::FLOAT2, offsetof(PreviewGpuVertex, uv),
                        sizeof(PreviewGpuVertex))
+            .attribute(
+                filament::VertexAttribute::CUSTOM0, 0u,
+                AttributeType::FLOAT4,
+                offsetof(PreviewGpuVertex, surface_grid_projection),
+                sizeof(PreviewGpuVertex))
             .build(*engine);
     mesh.triangles =
         filament::IndexBuffer::Builder()

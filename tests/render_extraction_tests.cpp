@@ -16,6 +16,7 @@
 #include "render/instance_batch_planner.hpp"
 #include "render/material_binding_service.hpp"
 #include "render/mesh_renderable_factory.hpp"
+#include "render/mesh_surface_grid_projection.hpp"
 #include "render/render_signature_builder.hpp"
 #include "render/scene_render_extraction.hpp"
 #include "render/render_layers.hpp"
@@ -494,6 +495,143 @@ TEST(MeshAssetTests, CoalescesContiguousPrimitiveSpansByMaterialSlotForRenderSub
     EXPECT_EQ(spans[2].index_offset, 12u);
     EXPECT_EQ(spans[2].index_count, 3u);
     EXPECT_EQ(spans[2].material_slot, 0u);
+}
+
+TEST(MeshSurfaceGridProjectionTests,
+     FaceProjectsOneUnsharedTriangleWithAConstantAreaNormal) {
+  const std::vector<MeshVertex> vertices{
+      {.position = {0.0f, 0.0f, 0.0f}, .normal = {1.0f, 0.0f, 0.0f}},
+      {.position = {1.0f, 0.0f, 0.0f}, .normal = {0.0f, 1.0f, 0.0f}},
+      {.position = {0.0f, 1.0f, 1.0f}, .normal = {0.0f, 0.0f, 1.0f}},
+  };
+  const std::vector<std::uint32_t> indices{0u, 1u, 2u};
+  const std::vector<MeshPrimitiveSpan> primitives{{
+      .index_offset = 0u,
+      .index_count = 3u,
+  }};
+
+  const std::vector<MeshSurfaceGridVertexProjection> projections =
+      build_mesh_surface_grid_vertex_projections(vertices, indices,
+                                                 primitives);
+
+  ASSERT_EQ(projections.size(), 3u);
+  for (const MeshSurfaceGridVertexProjection &projection : projections) {
+    EXPECT_TRUE(projection.face_projected);
+    EXPECT_NEAR(projection.local_normal.x, 0.0f, 0.000001f);
+    EXPECT_NEAR(projection.local_normal.y, -0.70710677f, 0.000001f);
+    EXPECT_NEAR(projection.local_normal.z, 0.70710677f, 0.000001f);
+  }
+}
+
+TEST(MeshSurfaceGridProjectionTests,
+     SmoothQuadKeepsInterpolatedProjectionButFlatQuadUsesItsFaceNormal) {
+  std::vector<MeshVertex> vertices{
+      {.position = {-1.0f, -1.0f, 0.0f}, .normal = {0.0f, 0.0f, 1.0f}},
+      {.position = {1.0f, -1.0f, 0.0f}, .normal = {0.6f, 0.0f, 0.8f}},
+      {.position = {1.0f, 1.0f, 0.0f}, .normal = {0.0f, 0.6f, 0.8f}},
+      {.position = {-1.0f, 1.0f, 0.0f}, .normal = {-0.6f, 0.0f, 0.8f}},
+  };
+  const std::vector<std::uint32_t> indices{0u, 1u, 2u, 0u, 2u, 3u};
+  const std::vector<MeshPrimitiveSpan> primitives{{
+      .index_offset = 0u,
+      .index_count = 6u,
+  }};
+
+  const std::vector<MeshSurfaceGridVertexProjection> smooth =
+      build_mesh_surface_grid_vertex_projections(vertices, indices,
+                                                 primitives);
+  ASSERT_EQ(smooth.size(), 4u);
+  EXPECT_TRUE(std::ranges::none_of(
+      smooth, [](const MeshSurfaceGridVertexProjection &projection) {
+        return projection.face_projected;
+      }));
+
+  for (MeshVertex &vertex : vertices) {
+    vertex.normal = {0.0f, 0.0f, 1.0f};
+  }
+  const std::vector<MeshSurfaceGridVertexProjection> flat =
+      build_mesh_surface_grid_vertex_projections(vertices, indices,
+                                                 primitives);
+  ASSERT_EQ(flat.size(), 4u);
+  for (const MeshSurfaceGridVertexProjection &projection : flat) {
+    EXPECT_TRUE(projection.face_projected);
+    EXPECT_NEAR(projection.local_normal.x, 0.0f, 0.000001f);
+    EXPECT_NEAR(projection.local_normal.y, 0.0f, 0.000001f);
+    EXPECT_NEAR(projection.local_normal.z, 1.0f, 0.000001f);
+  }
+}
+
+TEST(MeshSurfaceGridProjectionTests,
+     SharedVerticesRejectPerFaceProjectionThatCannotStayConstant) {
+  const std::vector<MeshVertex> vertices{
+      {.position = {-1.0f, -1.0f, 0.0f}, .normal = {0.0f, 0.0f, 1.0f}},
+      {.position = {1.0f, -1.0f, 0.0f}, .normal = {0.0f, 0.0f, 1.0f}},
+      {.position = {1.0f, 1.0f, 0.0f}, .normal = {0.0f, 0.0f, 1.0f}},
+      {.position = {-1.0f, 1.0f, 0.0f}, .normal = {0.0f, 0.0f, 1.0f}},
+  };
+  const std::vector<std::uint32_t> indices{0u, 1u, 2u, 0u, 2u, 3u};
+  const std::vector<MeshPrimitiveSpan> primitives{
+      {.index_offset = 0u, .index_count = 3u},
+      {.index_offset = 3u, .index_count = 3u},
+  };
+
+  const std::vector<MeshSurfaceGridVertexProjection> projections =
+      build_mesh_surface_grid_vertex_projections(vertices, indices,
+                                                 primitives);
+
+  ASSERT_EQ(projections.size(), 4u);
+  EXPECT_TRUE(std::ranges::none_of(
+      projections, [](const MeshSurfaceGridVertexProjection &projection) {
+        return projection.face_projected;
+      }));
+}
+
+TEST(MeshSurfaceGridProjectionTests,
+     PrimitivePartitionChangesProjectionAndGeometryCacheIdentity) {
+  MeshAsset smooth_mesh;
+  MeshGeometryPayload &smooth_geometry = smooth_mesh.edit_geometry();
+  smooth_geometry.vertices = {
+      {.position = {0.0f, 0.0f, 0.0f}, .normal = {1.0f, 0.0f, 0.0f}},
+      {.position = {1.0f, 0.0f, 0.0f}, .normal = {0.0f, 1.0f, 0.0f}},
+      {.position = {0.0f, 1.0f, 0.0f}, .normal = {0.0f, 0.0f, 1.0f}},
+      {.position = {2.0f, 0.0f, 0.0f}, .normal = {1.0f, 0.0f, 0.0f}},
+      {.position = {3.0f, 0.0f, 0.0f}, .normal = {0.0f, 1.0f, 0.0f}},
+      {.position = {2.0f, 1.0f, 0.0f}, .normal = {0.0f, 0.0f, 1.0f}},
+  };
+  smooth_geometry.indices = {0u, 1u, 2u, 3u, 4u, 5u};
+  smooth_geometry.primitives = {{
+      .index_offset = 0u,
+      .index_count = 6u,
+  }};
+
+  MeshAsset face_mesh = smooth_mesh;
+  face_mesh.edit_geometry().primitives = {
+      {.index_offset = 0u, .index_count = 3u},
+      {.index_offset = 3u, .index_count = 3u},
+  };
+
+  const std::vector<MeshSurfaceGridVertexProjection> smooth =
+      build_mesh_surface_grid_vertex_projections(
+          smooth_mesh.geometry().vertices, smooth_mesh.geometry().indices,
+          smooth_mesh.geometry().primitives);
+  const std::vector<MeshSurfaceGridVertexProjection> face_projected =
+      build_mesh_surface_grid_vertex_projections(
+          face_mesh.geometry().vertices, face_mesh.geometry().indices,
+          face_mesh.geometry().primitives);
+
+  EXPECT_TRUE(std::ranges::none_of(
+      smooth, [](const MeshSurfaceGridVertexProjection &projection) {
+        return projection.face_projected;
+      }));
+  EXPECT_TRUE(std::ranges::all_of(
+      face_projected,
+      [](const MeshSurfaceGridVertexProjection &projection) {
+        return projection.face_projected;
+      }));
+  EXPECT_NE(smooth_mesh.geometry_content_id(),
+            face_mesh.geometry_content_id());
+  EXPECT_NE(MeshRenderableFactory::mesh_asset_signature(0u, smooth_mesh),
+            MeshRenderableFactory::mesh_asset_signature(0u, face_mesh));
 }
 
 TEST(RenderSceneSnapshotTests, BuildsVisibleMeshLightAndMaterialRecords) {

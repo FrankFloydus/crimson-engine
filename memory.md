@@ -5616,3 +5616,36 @@ Owners: `OutlinerPanel`, `LayerPanel`, Qt settings/home/material/inspector/conso
 
 Verification: focused native Qt interaction tests, the complete affected guardrail/application/
 modeling-domain workflow, full CTest, and the final native v0.1.66 build.
+
+## 2026-07-18 - Surface Grid Projection Is Stable Per Discrete Face
+
+Invariant:
+
+- The mesh surface grid is procedural API-level world-space coverage, independent of material UVs.
+  Filament's `getWorldGeometricNormalVector()` is the interpolated authored vertex normal in this
+  pipeline, not a constant raster-triangle or polygon-face normal. It is safe for blended smooth-
+  surface projection but must never directly drive a hard dominant-axis branch inside a smooth-
+  shaded discrete face. Derivative-reconstructed normals are also forbidden for that branch because
+  symmetric axis ties can fluctuate per fragment and become stippled noise.
+- `build_mesh_surface_grid_vertex_projections` consumes original, uncoalesced primitive spans.
+  Unshared triangle faces and unshared flat-normal faces receive one area-weighted local face normal
+  and `FaceProjected`; smooth multi-vertex surfaces, malformed spans, uncovered vertices, and shared
+  vertex conflicts retain `SmoothSurface`. This keeps pyramids on a stable two-coordinate face grid
+  while smooth multi-vertex patches such as torus and cylinder sides use coverage-blended
+  triplanar projection.
+- `CUSTOM0` carries `{local projection normal.xyz, face-projected flag}`. Both mesh materials
+  transform the normal through Filament's world-from-model normal matrix in the vertex stage and
+  pass it through a custom varying. Face projection mirrors TrenchBroom after Z-up to Y-up
+  conversion: strict dominant-axis ties resolve Y, then Z, then X. Smooth projection blends plane
+  coverages, never coordinates, and the grid LOD uses the effective four-pixel footprint.
+- Every vertex-buffer producer used with the mesh materials must bind `CUSTOM0`; material previews
+  bind a smooth-fallback value even though their grid is disabled. Geometry identity must include
+  original primitive partitioning because that partition affects projection mode; render code must
+  not derive the hint from coalesced submission spans.
+
+Owners: `mesh_surface_grid_projection.*`, `MeshRenderableFactory`, material preview GPU vertices,
+both Quader mesh materials, render extraction tests, and render source-policy guardrails.
+
+Verification: both Filament mesh materials compile, 4 focused projection/cache tests pass, 46
+affected render guardrails pass, 320 affected render/viewport tests pass, and the native v0.1.66
+executable builds successfully. Final pixel comparison remains a manual GPU smoke check.

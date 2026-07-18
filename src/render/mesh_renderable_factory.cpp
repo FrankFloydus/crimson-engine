@@ -12,6 +12,7 @@
 #include "render/filament_buffer_descriptor_factory.hpp"
 #include "render/filament_utils.hpp"
 #include "render/material_binding_service.hpp"
+#include "render/mesh_surface_grid_projection.hpp"
 #include "render/render_signature_builder.hpp"
 
 #include <backend/DriverEnums.h>
@@ -43,6 +44,7 @@ struct RenderVertex {
     filament::math::float3 position;
     filament::math::float4 tangent_frame;
     filament::math::float2 uv;
+    filament::math::float4 surface_grid_projection;
     std::uint32_t color;
 };
 
@@ -187,14 +189,22 @@ std::vector<RenderVertex>
 build_render_vertices(const RenderMeshAssetSnapshot &mesh) {
   const std::vector<filament::math::float4> tangent_frames =
       mesh_tangent_frames(mesh);
+  const std::vector<MeshSurfaceGridVertexProjection> grid_projections =
+      build_mesh_surface_grid_vertex_projections(
+          mesh.vertices, mesh.indices, mesh.primitives);
   std::vector<RenderVertex> vertices;
   vertices.reserve(mesh.vertices.size());
   for (std::size_t index = 0u; index < mesh.vertices.size(); ++index) {
     const MeshVertex &vertex = mesh.vertices[index];
+    const MeshSurfaceGridVertexProjection &grid_projection =
+        grid_projections[index];
     vertices.push_back({
         to_filament(vertex.position),
         tangent_frames[index],
         {vertex.uv.x, vertex.uv.y},
+        {grid_projection.local_normal.x, grid_projection.local_normal.y,
+         grid_projection.local_normal.z,
+         grid_projection.face_projected ? 1.0f : 0.0f},
         vertex.rgba,
     });
   }
@@ -257,6 +267,12 @@ std::uint64_t geometry_payload_signature(
   for (const std::uint32_t index : mesh.indices) {
     signature.add_value(index);
   }
+  signature.add_size(mesh.primitives.size());
+  for (const MeshPrimitiveSpan primitive : mesh.primitives) {
+    signature.add_value(primitive.index_offset)
+        .add_value(primitive.index_count)
+        .add_value(primitive.material_slot);
+  }
   return signature.value();
 }
 
@@ -312,6 +328,7 @@ struct MeshRenderableFactory::GeometryCacheState final {
     std::shared_ptr<const MeshGeometryPayload> payload;
     std::vector<MeshVertex> vertices;
     std::vector<std::uint32_t> indices;
+    std::vector<MeshPrimitiveSpan> primitives;
     filament::VertexBuffer *vertex_buffer = nullptr;
     filament::IndexBuffer *index_buffer = nullptr;
     std::size_t reference_count = 0u;
@@ -372,23 +389,30 @@ bool MeshRenderableFactory::acquire_geometry(
       const GeometryCacheState::Resource &candidate = *resource->second;
       const bool same_pinned_payload =
           candidate.payload != nullptr && mesh.geometry_payload != nullptr &&
-          (candidate.payload == mesh.geometry_payload ||
+           (candidate.payload == mesh.geometry_payload ||
            (candidate.payload->vertices.size() == mesh.vertices.size() &&
             candidate.payload->indices.size() == mesh.indices.size() &&
+            candidate.payload->primitives.size() == mesh.primitives.size() &&
             std::equal(candidate.payload->vertices.begin(),
                        candidate.payload->vertices.end(),
                        mesh.vertices.begin(), same_vertex) &&
             std::equal(candidate.payload->indices.begin(),
                        candidate.payload->indices.end(),
-                       mesh.indices.begin())));
+                       mesh.indices.begin()) &&
+            std::equal(candidate.payload->primitives.begin(),
+                       candidate.payload->primitives.end(),
+                       mesh.primitives.begin())));
       const bool same_fallback_payload =
           candidate.payload == nullptr && mesh.geometry_payload == nullptr &&
           candidate.vertices.size() == mesh.vertices.size() &&
           candidate.indices.size() == mesh.indices.size() &&
+          candidate.primitives.size() == mesh.primitives.size() &&
           std::equal(candidate.vertices.begin(), candidate.vertices.end(),
                      mesh.vertices.begin(), same_vertex) &&
           std::equal(candidate.indices.begin(), candidate.indices.end(),
-                     mesh.indices.begin());
+                     mesh.indices.begin()) &&
+          std::equal(candidate.primitives.begin(), candidate.primitives.end(),
+                     mesh.primitives.begin());
       if (!same_pinned_payload && !same_fallback_payload) {
         continue;
       }
@@ -410,6 +434,8 @@ bool MeshRenderableFactory::acquire_geometry(
   if (resource->payload == nullptr) {
     resource->vertices.assign(mesh.vertices.begin(), mesh.vertices.end());
     resource->indices.assign(mesh.indices.begin(), mesh.indices.end());
+    resource->primitives.assign(mesh.primitives.begin(),
+                                mesh.primitives.end());
   }
   resource->reference_count = 1u;
   resource->vertex_buffer =
@@ -425,6 +451,10 @@ bool MeshRenderableFactory::acquire_geometry(
                      sizeof(RenderVertex))
           .attribute(filament::VertexAttribute::UV0, 0, AttributeType::FLOAT2,
                      offsetof(RenderVertex, uv), sizeof(RenderVertex))
+          .attribute(filament::VertexAttribute::CUSTOM0, 0,
+                     AttributeType::FLOAT4,
+                     offsetof(RenderVertex, surface_grid_projection),
+                     sizeof(RenderVertex))
           .attribute(filament::VertexAttribute::COLOR, 0,
                      AttributeType::UBYTE4, offsetof(RenderVertex, color),
                      sizeof(RenderVertex))

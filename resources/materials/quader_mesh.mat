@@ -6,7 +6,11 @@ material {
     shadingModel : unlit,
     requires : [
         uv0,
-        tangents
+        tangents,
+        custom0
+    ],
+    variables : [
+        surfaceGridProjection
     ],
     parameters : [
         {
@@ -104,6 +108,19 @@ material {
     ]
 }
 
+vertex {
+    void materialVertex(inout MaterialVertexInputs material) {
+        vec4 projection = getCustom0();
+        vec3 worldNormal = getWorldFromModelNormalMatrix() * projection.xyz;
+        float normalLengthSquared = dot(worldNormal, worldNormal);
+        material.surfaceGridProjection = vec4(
+                normalLengthSquared > 0.000001
+                        ? worldNormal * inversesqrt(normalLengthSquared)
+                        : vec3(0.0, 1.0, 0.0),
+                projection.w);
+    }
+}
+
 fragment {
     float surfaceGridFloor(float spacing) {
         return exp2(floor(log2(max(spacing, 0.0001))));
@@ -122,7 +139,7 @@ fragment {
 
     float surfaceGridLine(float coord, float spacing, float thicknessValue, float worldPixelWidth) {
         float safeSpacing = max(spacing, 0.0001);
-        float minRenderableSpacing = max(worldPixelWidth, 0.0) * 2.0;
+        float minRenderableSpacing = max(worldPixelWidth, 0.0) * 4.0;
         float lodSpacing = max(surfaceGridFloor(max(minRenderableSpacing, safeSpacing)), safeSpacing);
         float nextSpacing = max(lodSpacing * 2.0, lodSpacing + 0.0001);
         float blend = smoothstep(lodSpacing, nextSpacing, minRenderableSpacing);
@@ -134,7 +151,7 @@ fragment {
     float surfaceGridLineSlotCoverage(
             float coord, float spacing, float thicknessValue, float worldPixelWidth) {
         float safeSpacing = max(spacing, 0.0001);
-        float minRenderableSpacing = max(worldPixelWidth, 0.0) * 2.0;
+        float minRenderableSpacing = max(worldPixelWidth, 0.0) * 4.0;
         float lodSpacing = max(surfaceGridFloor(max(minRenderableSpacing, safeSpacing)), safeSpacing);
         float nextSpacing = max(lodSpacing * 2.0, lodSpacing + 0.0001);
         float currentCoverage = surfaceGridLineCoverage(coord, lodSpacing, thicknessValue);
@@ -142,15 +159,60 @@ fragment {
         return max(currentCoverage, nextCoverage);
     }
 
-    vec2 surfaceGridCoordinates(vec3 worldPosition, vec3 normal) {
+    vec3 surfaceGridProjectionWeights(vec3 normal) {
+        // Blend line coverage instead of coordinates so curved smooth meshes
+        // transition between world projection planes without seams or stubs.
+        vec3 weights = abs(normal);
+        weights *= weights;
+        weights *= weights;
+        float weightSum = weights.x + weights.y + weights.z;
+        if (weightSum <= 0.000001) {
+            return vec3(0.0, 0.0, 1.0);
+        }
+        return weights / weightSum;
+    }
+
+    vec3 surfaceGridFaceProjectionWeights(vec3 normal) {
+        // TrenchBroom is Z-up. After conversion to Quader's Y-up coordinates,
+        // strict dominant-axis ties resolve Y, then Z, then X.
         vec3 dominant = abs(normal);
-        if (dominant.x >= dominant.y && dominant.x >= dominant.z) {
-            return worldPosition.yz;
+        if (dominant.x > dominant.y && dominant.x > dominant.z) {
+            return vec3(1.0, 0.0, 0.0);
         }
-        if (dominant.y >= dominant.z) {
-            return worldPosition.xz;
+        if (dominant.z > dominant.y) {
+            return vec3(0.0, 0.0, 1.0);
         }
-        return worldPosition.xy;
+        return vec3(0.0, 1.0, 0.0);
+    }
+
+    vec3 surfaceGridPlaneLineCoverages(
+            highp vec3 worldPosition,
+            float spacing,
+            float thicknessValue,
+            float worldPixelWidth) {
+        vec3 axisCoverages = vec3(
+                surfaceGridLine(worldPosition.x, spacing, thicknessValue, worldPixelWidth),
+                surfaceGridLine(worldPosition.y, spacing, thicknessValue, worldPixelWidth),
+                surfaceGridLine(worldPosition.z, spacing, thicknessValue, worldPixelWidth));
+        return vec3(
+                max(axisCoverages.y, axisCoverages.z),
+                max(axisCoverages.x, axisCoverages.z),
+                max(axisCoverages.x, axisCoverages.y));
+    }
+
+    vec3 surfaceGridPlaneSlotCoverages(
+            highp vec3 worldPosition,
+            float spacing,
+            float thicknessValue,
+            float worldPixelWidth) {
+        vec3 axisCoverages = vec3(
+                surfaceGridLineSlotCoverage(worldPosition.x, spacing, thicknessValue, worldPixelWidth),
+                surfaceGridLineSlotCoverage(worldPosition.y, spacing, thicknessValue, worldPixelWidth),
+                surfaceGridLineSlotCoverage(worldPosition.z, spacing, thicknessValue, worldPixelWidth));
+        return vec3(
+                max(axisCoverages.y, axisCoverages.z),
+                max(axisCoverages.x, axisCoverages.z),
+                max(axisCoverages.x, axisCoverages.y));
     }
 
     vec3 applySurfaceGrid(vec3 baseColor) {
@@ -158,30 +220,42 @@ fragment {
             return baseColor;
         }
 
-        vec3 worldPosition = getUserWorldPosition().xyz;
-        vec2 coords = surfaceGridCoordinates(
-                worldPosition, getWorldGeometricNormalVector());
-        float worldPixelWidth = max(length(dFdx(worldPosition)), length(dFdy(worldPosition)));
+        highp vec3 worldPosition = getUserWorldPosition().xyz;
+        highp vec3 rasterWorldPosition = getWorldPosition();
+        float worldPixelWidth = max(
+                length(dFdx(rasterWorldPosition)),
+                length(dFdy(rasterWorldPosition)));
         float baseSpacing = max(materialParams.surfaceGridSize, 0.0001);
         float majorSpacing = max(materialParams.surfaceGridMajorSize, baseSpacing);
-        float minorLine = max(
-                surfaceGridLine(coords.x, baseSpacing, materialParams.surfaceGridMinorLineThickness, worldPixelWidth),
-                surfaceGridLine(coords.y, baseSpacing, materialParams.surfaceGridMinorLineThickness, worldPixelWidth));
-        float majorLine = max(
-                surfaceGridLine(coords.x, majorSpacing, materialParams.surfaceGridMajorLineThickness, worldPixelWidth),
-                surfaceGridLine(coords.y, majorSpacing, materialParams.surfaceGridMajorLineThickness, worldPixelWidth));
+        vec4 faceProjection = variable_surfaceGridProjection;
+        vec3 projectionWeights = faceProjection.w > 0.5
+                ? surfaceGridFaceProjectionWeights(faceProjection.xyz)
+                : surfaceGridProjectionWeights(
+                        getWorldGeometricNormalVector());
+        vec3 minorPlaneCoverages = surfaceGridPlaneLineCoverages(
+                worldPosition, baseSpacing,
+                materialParams.surfaceGridMinorLineThickness,
+                worldPixelWidth);
+        vec3 majorPlaneCoverages = surfaceGridPlaneLineCoverages(
+                worldPosition, majorSpacing,
+                materialParams.surfaceGridMajorLineThickness,
+                worldPixelWidth);
 
         float majorSlotThickness = max(
                 materialParams.surfaceGridMinorLineThickness,
                 materialParams.surfaceGridMajorLineThickness);
-        float majorSlotCoverage = max(
-                surfaceGridLineSlotCoverage(coords.x, majorSpacing, majorSlotThickness, worldPixelWidth),
-                surfaceGridLineSlotCoverage(coords.y, majorSpacing, majorSlotThickness, worldPixelWidth));
-        float majorSlotMask = step(0.000001, majorSlotCoverage);
+        vec3 majorSlotCoverages = surfaceGridPlaneSlotCoverages(
+                worldPosition, majorSpacing, majorSlotThickness,
+                worldPixelWidth);
+        vec3 majorSlotMask = step(vec3(0.000001), majorSlotCoverages);
+        float minorLine = dot(
+                minorPlaneCoverages * (vec3(1.0) - majorSlotMask),
+                projectionWeights);
+        float majorLine = dot(majorPlaneCoverages, projectionWeights);
 
         float majorCoverage = majorLine * materialParams.surfaceGridMajorColor.a;
-        float minorCoverage = minorLine * materialParams.surfaceGridMinorColor.a
-                * (1.0 - majorSlotMask);
+        float minorCoverage =
+                minorLine * materialParams.surfaceGridMinorColor.a;
         float alpha = clamp(minorCoverage + majorCoverage, 0.0, 1.0);
         if (alpha <= 0.000001) {
             return baseColor;
@@ -254,14 +328,14 @@ fragment {
                 vec2(getUV0().x, 1.0 - getUV0().y));
         vec4 baseSample = texture(materialParams_baseColorTexture, uv);
         vec3 baseColor = baseSample.rgb * materialParams.baseColorFactor.rgb;
-        baseColor = applySurfaceGrid(baseColor);
-        vec4 edited = applyInstanceEditDim(
-                baseColor, baseSample.a * materialParams.baseColorFactor.a);
         float lighting = mix(
                 1.0,
                 shadedModelingLighting(),
                 clamp(materialParams.shadedLightingEnabled, 0.0, 1.0));
-        vec3 finalRgb = edited.rgb * lighting;
-        material.baseColor = vec4(finalRgb * edited.a, edited.a);
+        baseColor *= lighting;
+        baseColor = applySurfaceGrid(baseColor);
+        vec4 edited = applyInstanceEditDim(
+                baseColor, baseSample.a * materialParams.baseColorFactor.a);
+        material.baseColor = vec4(edited.rgb * edited.a, edited.a);
     }
 }

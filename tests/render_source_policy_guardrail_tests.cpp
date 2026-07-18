@@ -161,7 +161,7 @@ TEST(QuaderMeshMaterialTests, UsesLitTextureTransformTimesColorAndPbrFactors) {
                 "baseColor, baseSample.a * materialParams.baseColorFactor.a"),
             std::string::npos);
   EXPECT_NE(shaded_source.find(
-                "material.baseColor = vec4(finalRgb * edited.a, edited.a)"),
+                "material.baseColor = vec4(edited.rgb * edited.a, edited.a)"),
             std::string::npos);
   EXPECT_NE(shaded_source.find("normalize(vec3(-0.09, 0.47, 0.88))"),
             std::string::npos);
@@ -180,9 +180,7 @@ TEST(QuaderMeshMaterialTests, UsesLitTextureTransformTimesColorAndPbrFactors) {
             std::string::npos);
   EXPECT_NE(shaded_source.find("name : shadedKeyDirectionZ"),
             std::string::npos);
-  EXPECT_NE(shaded_source.find(
-                "vec3 finalRgb = edited.rgb * lighting"),
-            std::string::npos);
+  EXPECT_NE(shaded_source.find("baseColor *= lighting"), std::string::npos);
   EXPECT_EQ(shaded_source.find("roughnessTexture"), std::string::npos);
   EXPECT_EQ(shaded_source.find("metallicTexture"), std::string::npos);
   EXPECT_EQ(shaded_source.find("normalTexture"), std::string::npos);
@@ -283,16 +281,69 @@ TEST(QuaderMeshMaterialTests, SupportsOptionalWorldSpaceSurfaceGrid) {
     EXPECT_NE(source.find("surfaceGridMajorColor"), std::string::npos);
     EXPECT_NE(source.find("surfaceGridEnabled"), std::string::npos);
     EXPECT_NE(source.find("tangents"), std::string::npos);
-    EXPECT_NE(source.find("getUserWorldPosition()"), std::string::npos);
-    EXPECT_NE(source.find("getWorldGeometricNormalVector()"),
+    EXPECT_NE(source.find("custom0"), std::string::npos);
+    EXPECT_NE(source.find("surfaceGridProjection"), std::string::npos);
+    EXPECT_NE(source.find("getCustom0()"), std::string::npos);
+    EXPECT_NE(source.find("getWorldFromModelNormalMatrix()"),
               std::string::npos);
-    EXPECT_NE(source.find("surfaceGridCoordinates("), std::string::npos);
+    EXPECT_NE(source.find("variable_surfaceGridProjection"),
+              std::string::npos);
+    EXPECT_NE(source.find("getUserWorldPosition()"), std::string::npos);
+    EXPECT_NE(source.find("getWorldPosition()"), std::string::npos);
+    EXPECT_NE(source.find(
+                  "vec3 surfaceGridProjectionWeights(vec3 normal)"),
+              std::string::npos);
+    EXPECT_EQ(count_occurrences(source, "weights *= weights;"), 2u);
+    EXPECT_NE(source.find("return weights / weightSum"), std::string::npos);
+    EXPECT_NE(source.find(
+                  "vec3 surfaceGridFaceProjectionWeights(vec3 normal)"),
+              std::string::npos);
+    EXPECT_NE(source.find(
+                  "dominant.x > dominant.y && dominant.x > dominant.z"),
+              std::string::npos);
+    EXPECT_NE(source.find("dominant.z > dominant.y"), std::string::npos);
+    EXPECT_NE(source.find("return vec3(0.0, 1.0, 0.0)"),
+              std::string::npos);
+    EXPECT_NE(source.find(
+                  "vec3 surfaceGridPlaneLineCoverages("),
+              std::string::npos);
+    EXPECT_NE(source.find(
+                  "vec3 surfaceGridPlaneSlotCoverages("),
+              std::string::npos);
+    EXPECT_EQ(count_occurrences(
+                  source, "max(axisCoverages.y, axisCoverages.z)"),
+              2u);
+    EXPECT_EQ(count_occurrences(
+                  source, "max(axisCoverages.x, axisCoverages.z)"),
+              2u);
+    EXPECT_EQ(count_occurrences(
+                  source, "max(axisCoverages.x, axisCoverages.y)"),
+              2u);
+    EXPECT_TRUE(source_contains_compact(
+        source, "vec3 projectionWeights = faceProjection.w > 0.5 ? "
+                "surfaceGridFaceProjectionWeights(faceProjection.xyz) : "
+                "surfaceGridProjectionWeights("
+                "getWorldGeometricNormalVector())"));
+    EXPECT_NE(source.find(
+                  "float minorLine = dot("),
+              std::string::npos);
+    EXPECT_NE(source.find(
+                  "float majorLine = dot(majorPlaneCoverages, "
+                  "projectionWeights)"),
+              std::string::npos);
+    EXPECT_EQ(source.find("surfaceGridCoordinates("), std::string::npos);
+    EXPECT_EQ(source.find("surfaceGridFaceNormal("), std::string::npos);
+    EXPECT_EQ(source.find("cross(dFdx("), std::string::npos);
+    EXPECT_EQ(source.find("axisTieEpsilon"), std::string::npos);
+    EXPECT_NE(source.find("vec3 dominant = abs(normal)"), std::string::npos);
+    EXPECT_EQ(source.find("dominant.x >= dominant.y"), std::string::npos);
+    EXPECT_EQ(source.find("dominant.y >= dominant.z"), std::string::npos);
     EXPECT_NE(source.find("surfaceGridFloor("), std::string::npos);
     EXPECT_NE(source.find("surfaceGridLineCoverage("), std::string::npos);
-    EXPECT_NE(
-        source.find("float worldPixelWidth = max(length(dFdx(worldPosition)), "
-                    "length(dFdy(worldPosition)))"),
-        std::string::npos);
+    EXPECT_TRUE(source_contains_compact(
+        source, "float worldPixelWidth = max("
+                "length(dFdx(rasterWorldPosition)),"
+                "length(dFdy(rasterWorldPosition)))"));
     EXPECT_NE(source.find("surfaceGridMinorLineThickness"), std::string::npos);
     EXPECT_NE(source.find("surfaceGridMajorLineThickness"), std::string::npos);
     EXPECT_NE(source.find("baseColor = applySurfaceGrid(baseColor)"),
@@ -306,8 +357,11 @@ TEST(QuaderMeshMaterialTests, SupportsOptionalWorldSpaceSurfaceGrid) {
     EXPECT_EQ(source.find("surfaceGridVisibility("), std::string::npos);
     EXPECT_EQ(source.find("coverage * surfaceGridVisibility"),
               std::string::npos);
-    EXPECT_EQ(source.find("cross(dFdx(worldPosition), dFdy(worldPosition))"),
-              std::string::npos);
+    EXPECT_EQ(count_occurrences(
+                  source,
+                  "float minRenderableSpacing = max(worldPixelWidth, 0.0) * "
+                  "4.0;"),
+              2u);
     EXPECT_EQ(source.find("Strip test"), std::string::npos);
     EXPECT_EQ(source.find("vec2 coords = worldPosition.xz;"),
               std::string::npos);
@@ -315,6 +369,19 @@ TEST(QuaderMeshMaterialTests, SupportsOptionalWorldSpaceSurfaceGrid) {
     EXPECT_EQ(source.find("return coverage * min(thickness, 1.0)"),
               std::string::npos);
   }
+
+  const std::string &shaded_source = sources.front();
+  const std::size_t lighting_start =
+      shaded_source.find("baseColor *= lighting;");
+  const std::size_t grid_start =
+      shaded_source.find("baseColor = applySurfaceGrid(baseColor);");
+  const std::size_t context_dim_start =
+      shaded_source.find("vec4 edited = applyInstanceEditDim(");
+  ASSERT_NE(lighting_start, std::string::npos);
+  ASSERT_NE(grid_start, std::string::npos);
+  ASSERT_NE(context_dim_start, std::string::npos);
+  EXPECT_LT(lighting_start, grid_start);
+  EXPECT_LT(grid_start, context_dim_start);
 }
 
 TEST(QuaderMeshMaterialTests,
@@ -327,13 +394,13 @@ TEST(QuaderMeshMaterialTests,
   for (const std::string &source : sources) {
     const std::size_t slot_function_start =
         source.find("float surfaceGridLineSlotCoverage(");
-    const std::size_t coordinates_function_start =
-        source.find("vec2 surfaceGridCoordinates(");
+    const std::size_t projection_function_start =
+        source.find("vec3 surfaceGridProjectionWeights(");
     ASSERT_NE(slot_function_start, std::string::npos);
-    ASSERT_NE(coordinates_function_start, std::string::npos);
-    ASSERT_LT(slot_function_start, coordinates_function_start);
+    ASSERT_NE(projection_function_start, std::string::npos);
+    ASSERT_LT(slot_function_start, projection_function_start);
     const std::string slot_function = source.substr(
-        slot_function_start, coordinates_function_start - slot_function_start);
+        slot_function_start, projection_function_start - slot_function_start);
 
     EXPECT_NE(slot_function.find("return max(currentCoverage, nextCoverage)"),
               std::string::npos);
@@ -341,20 +408,65 @@ TEST(QuaderMeshMaterialTests,
         source, "float majorSlotThickness = max("
                 "materialParams.surfaceGridMinorLineThickness, "
                 "materialParams.surfaceGridMajorLineThickness)"));
-    EXPECT_NE(source.find("float majorSlotMask = step(0.000001, "
-                          "majorSlotCoverage)"),
+    EXPECT_NE(source.find("vec3 majorSlotMask = step(vec3(0.000001), "
+                          "majorSlotCoverages)"),
               std::string::npos);
+    EXPECT_TRUE(source_contains_compact(
+        source, "minorPlaneCoverages * (vec3(1.0) - majorSlotMask)"));
     EXPECT_NE(source.find("float majorCoverage = majorLine * "
                           "materialParams.surfaceGridMajorColor.a"),
               std::string::npos);
     EXPECT_TRUE(source_contains_compact(
         source, "float minorCoverage = minorLine * "
-                "materialParams.surfaceGridMinorColor.a * "
-                "(1.0 - majorSlotMask)"));
+                "materialParams.surfaceGridMinorColor.a"));
     EXPECT_EQ(source.find("1.0 - clamp(majorCoverage"), std::string::npos);
     EXPECT_EQ(source.find("float majorMask = clamp(majorLine"),
               std::string::npos);
   }
+}
+
+TEST(QuaderMeshMaterialTests,
+     SurfaceGridProjectionAttributeKeepsFaceNormalsStableAndPreviewCompatible) {
+  const std::string factory_source =
+      read_source_file("src/render/mesh_renderable_factory.cpp");
+  const std::string projection_source =
+      read_source_file("src/render/mesh_surface_grid_projection.cpp");
+  const std::string preview_source =
+      read_source_file("src/render/material_preview_renderer.cpp");
+
+  EXPECT_NE(factory_source.find(
+                "build_mesh_surface_grid_vertex_projections("),
+            std::string::npos);
+  EXPECT_TRUE(source_contains_compact(
+      factory_source, "mesh.vertices, mesh.indices, mesh.primitives"));
+  EXPECT_NE(factory_source.find("surface_grid_projection"),
+            std::string::npos);
+  EXPECT_NE(factory_source.find("filament::VertexAttribute::CUSTOM0"),
+            std::string::npos);
+  EXPECT_NE(factory_source.find("AttributeType::FLOAT4"),
+            std::string::npos);
+
+  EXPECT_NE(projection_source.find("primitive_reference_counts"),
+            std::string::npos);
+  EXPECT_NE(projection_source.find("candidate.vertices.size() != 3u && "
+                                   "!candidate.flat"),
+            std::string::npos);
+  EXPECT_TRUE(source_contains_compact(
+      projection_source,
+      "primitive_reference_counts[vertex_index] == 1u"));
+  EXPECT_NE(projection_source.find("candidate.local_normal = "
+                                   "normalize(area_normal)"),
+            std::string::npos);
+  EXPECT_EQ(projection_source.find(
+                "coalesced_render_mesh_primitive_spans"),
+            std::string::npos);
+
+  EXPECT_NE(preview_source.find("surface_grid_projection"),
+            std::string::npos);
+  EXPECT_NE(preview_source.find("filament::VertexAttribute::CUSTOM0"),
+            std::string::npos);
+  EXPECT_TRUE(source_contains_compact(
+      preview_source, "vertex.normal.z, 0.0f"));
 }
 
 TEST(OverlayMaterialTests, PremultipliesVertexAlphaForTransparentFaceFill) {
