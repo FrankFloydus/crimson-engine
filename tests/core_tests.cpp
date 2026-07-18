@@ -10863,7 +10863,7 @@ TEST(ModelingSessionServiceTests,
 }
 
 TEST(ModelingSessionServiceTests,
-     RepeatedLiveBoxSelectionDoesNotReprojectStableMeshGeometry) {
+     RepeatedBoxSelectionDoesNotReprojectStableMeshGeometry) {
   SceneDocument scene;
   AssetRegistry assets;
   ModelingSessionService service(scene, assets);
@@ -10877,7 +10877,7 @@ TEST(ModelingSessionServiceTests,
   dense_cube.depth_segments = 24;
   const ModelingCreateBoxResult mesh = service.create_mesh({
       .document = quader_poly::make_cube(dense_cube),
-      .name = "Live Box Selection Dense Cube",
+      .name = "Repeated Box Selection Dense Cube",
   });
   ASSERT_TRUE(mesh.ok) << mesh.message;
   ASSERT_TRUE(service.set_selection_mode(ModelingSelectionMode::Face).ok);

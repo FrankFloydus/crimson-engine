@@ -729,4 +729,13 @@ TEST(QdrPolyGeometryCharacterizationTests, PolyOverlayEmitsSelectedFacePrimitive
     EXPECT_TRUE(overlay.triangles.size() == 2U);
     EXPECT_TRUE(overlay.lines.size() >= 8U);
     EXPECT_TRUE(overlay.points.empty());
+
+    const OverlayData triangles_only = build_overlay(
+        document, selection, {},
+        {.include_lines = false,
+         .include_triangles = true,
+         .include_points = false});
+    EXPECT_EQ(triangles_only.triangles.size(), overlay.triangles.size());
+    EXPECT_TRUE(triangles_only.lines.empty());
+    EXPECT_TRUE(triangles_only.points.empty());
 }

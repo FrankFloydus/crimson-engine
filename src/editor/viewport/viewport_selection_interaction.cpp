@@ -59,20 +59,6 @@ ViewportSelectionMarquee box_marquee(QVec2 start, QVec2 end) {
   };
 }
 
-bool same_marquee(const ViewportSelectionMarquee &left,
-                  const ViewportSelectionMarquee &right) {
-  return left.active == right.active && left.rule == right.rule &&
-         left.start.x == right.start.x && left.start.y == right.start.y &&
-         left.end.x == right.end.x && left.end.y == right.end.y;
-}
-
-bool live_box_selection_allowed(QuaderSelectionEdit edit,
-                                QuaderSelectionMode mode) {
-  (void)edit;
-  (void)mode;
-  return true;
-}
-
 bool hover_target_valid(const QuaderHoverTarget &target) {
   return target.kind != QuaderActiveSelectionKind::None && target.object_id > 0;
 }
@@ -312,7 +298,6 @@ void ViewportSelectionInteraction::reset() {
   box_hovered_before_selection_.reset();
   box_baseline_.reset();
   committed_marquee_.reset();
-  live_box_selection_.reset();
   hover_suppressed_target_.reset();
   paint_selection_active_ = false;
 }
@@ -420,7 +405,6 @@ void ViewportSelectionInteraction::handle_frame(
     box_edit_ = selection_edit_from_modifiers(frame.input.modifiers);
     box_hovered_before_selection_ = editor.selection().hover_summary().target;
     box_baseline_ = editor.selection().capture_box_selection_baseline();
-    live_box_selection_.reset();
     quader_editor_core::begin_selection_box(box_state_, frame.left_click_local,
                                             selection_box_operation(box_edit_));
   }
@@ -430,18 +414,12 @@ void ViewportSelectionInteraction::handle_frame(
     quader_editor_core::update_selection_box(box_state_,
                                              frame.input.mouse_local);
     if (box_state_.dragging) {
-      const ViewportSelectionMarquee live_marquee =
-          box_marquee(box_state_.start, box_state_.end);
-      if (live_box_selection_allowed(box_edit_,
-                                     editor.selection().summary().mode) &&
-          (!live_box_selection_.has_value() ||
-           !same_marquee(*live_box_selection_, live_marquee))) {
-        (void)box_selection(editor, frame.input_router, frame,
-                            live_marquee.start, live_marquee.end, box_edit_,
-                            box_baseline_ ? &*box_baseline_ : nullptr);
-        live_box_selection_ = live_marquee;
+      // Mouse motion only presents the marquee. Resolving and publishing a
+      // selection here would synchronously rebuild SDK, scene, UI, and overlay
+      // state for every changing hit set; the final rectangle commits below.
+      if (!hover_clear_issued_) {
+        clear_hover();
       }
-      clear_hover();
     }
   }
 
@@ -456,12 +434,9 @@ void ViewportSelectionInteraction::handle_frame(
             editor.selection().hover_summary().target);
     if (commit.dragged) {
       committed_marquee_ = box_marquee(commit.start, commit.end);
-      if (!live_box_selection_.has_value() ||
-          !same_marquee(*live_box_selection_, *committed_marquee_)) {
-        (void)box_selection(editor, frame.input_router, frame, commit.start,
-                            commit.end, box_edit_,
-                            box_baseline_ ? &*box_baseline_ : nullptr);
-      }
+      (void)box_selection(editor, frame.input_router, frame, commit.start,
+                          commit.end, box_edit_,
+                          box_baseline_ ? &*box_baseline_ : nullptr);
       suppress_hover_after_selection(commit.end, hovered_before_selection);
     } else if (can_pick) {
       const QuaderSelectionSummary summary = pick_selection(
@@ -488,7 +463,6 @@ void ViewportSelectionInteraction::handle_frame(
     box_edit_ = QuaderSelectionEdit::Replace;
     box_hovered_before_selection_.reset();
     box_baseline_.reset();
-    live_box_selection_.reset();
   }
 
   if (frame.left_released || !frame.left_down) {

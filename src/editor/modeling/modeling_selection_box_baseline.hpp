@@ -13,7 +13,8 @@ namespace quader {
 class ModelingSessionService;
 
 /**
- * Stores an opaque modeling selection baseline for live viewport box-selection drags.
+ * Stores an opaque modeling selection baseline for one deferred viewport
+ * box-selection commit.
  */
 class ModelingSelectionBoxBaseline final {
 public:

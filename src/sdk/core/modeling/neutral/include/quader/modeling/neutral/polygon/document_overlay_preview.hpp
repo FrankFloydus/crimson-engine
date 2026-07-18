@@ -78,6 +78,15 @@ struct OverlayData {
 };
 
 /**
+ * Selects which primitive payloads a polygon overlay build materializes.
+ */
+struct OverlayBuildOptions {
+    bool include_lines = true;
+    bool include_triangles = true;
+    bool include_points = true;
+};
+
+/**
  * Represents a Knife Segment Preview value used by the polygon document and mesh editing core.
  */
 struct KnifeSegmentPreview {
@@ -101,6 +110,7 @@ struct KnifeSegmentPreview {
 [[nodiscard]] OverlayData build_overlay(
     const Document& document,
     const Selection& selection,
-    const OverlayStyle& style = {});
+    const OverlayStyle& style = {},
+    OverlayBuildOptions options = {});
 
 } // namespace quader_poly

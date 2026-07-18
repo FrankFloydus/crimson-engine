@@ -23,6 +23,11 @@ namespace {
 
 constexpr double kDiagnosticEdgeEpsilon = 0.00001;
 constexpr double kDiagnosticEdgeFactorEpsilon = 0.00001;
+constexpr quader_poly::OverlayBuildOptions kTriangleOnlyOverlayBuildOptions{
+	.include_lines = false,
+	.include_triangles = true,
+	.include_points = false,
+};
 
 /**
  * Represents a Diagnostic Edge Ref value used by the modeling runtime domain.
@@ -157,12 +162,48 @@ struct OpenEdgeOverlayRef {
 	bool has_face = false;
 };
 
-quader::QVec3 overlay_face_centroid(const quader_poly::Document& document, const quader_poly::Face& face)
+/**
+ * Indexes polygon element IDs for repeated lookups within one overlay build.
+ */
+class SelectionOverlayDocumentLookup {
+public:
+	explicit SelectionOverlayDocumentLookup(const quader_poly::Document& document)
+	{
+		vertices_by_id_.reserve(document.vertices.size());
+		for (const quader_poly::Vertex& vertex : document.vertices) {
+			vertices_by_id_.try_emplace(vertex.id, &vertex);
+		}
+		faces_by_id_.reserve(document.faces.size());
+		for (const quader_poly::Face& face : document.faces) {
+			faces_by_id_.try_emplace(face.id, &face);
+		}
+	}
+
+	[[nodiscard]] const quader_poly::Vertex* vertex(quader_poly::ElementId id) const
+	{
+		const auto found = vertices_by_id_.find(id);
+		return found == vertices_by_id_.end() ? nullptr : found->second;
+	}
+
+	[[nodiscard]] const quader_poly::Face* face(quader_poly::ElementId id) const
+	{
+		const auto found = faces_by_id_.find(id);
+		return found == faces_by_id_.end() ? nullptr : found->second;
+	}
+
+private:
+	std::unordered_map<quader_poly::ElementId, const quader_poly::Vertex*> vertices_by_id_;
+	std::unordered_map<quader_poly::ElementId, const quader_poly::Face*> faces_by_id_;
+};
+
+quader::QVec3 overlay_face_centroid(
+		const SelectionOverlayDocumentLookup& lookup,
+		const quader_poly::Face& face)
 {
 	quader::QVec3 centroid;
 	int count = 0;
 	for (const quader_poly::ElementId vertex_id : face.vertices) {
-		const quader_poly::Vertex* vertex = quader_poly::find_vertex(document, vertex_id);
+		const quader_poly::Vertex* vertex = lookup.vertex(vertex_id);
 		if (vertex == nullptr) {
 			continue;
 		}
@@ -173,11 +214,11 @@ quader::QVec3 overlay_face_centroid(const quader_poly::Document& document, const
 }
 
 void overlay_append_face_edges_to_set(
-		const quader_poly::Document& document,
+		const SelectionOverlayDocumentLookup& lookup,
 		quader_poly::ElementId face_id,
 		std::unordered_set<std::uint64_t>& edges)
 {
-	const quader_poly::Face* face = quader_poly::find_face(document, face_id);
+	const quader_poly::Face* face = lookup.face(face_id);
 	if (face == nullptr || face->vertices.size() < 2) {
 		return;
 	}
@@ -213,7 +254,8 @@ void append_source_wire_depth_stamp(
 	if (selection.faces.empty()) {
 		return;
 	}
-	const quader_poly::OverlayData overlay = quader_poly::build_overlay(object.document, selection);
+	const quader_poly::OverlayData overlay = quader_poly::build_overlay(
+		object.document, selection, {}, kTriangleOnlyOverlayBuildOptions);
 	for (const quader_poly::OverlayTriangle& triangle : overlay.triangles) {
           frame.triangles.push_back({
               SelectionOverlayLayer::SourceWireDepthStamp,
@@ -252,6 +294,7 @@ void append_source_wire_line(
 void append_source_wire_face_edges(
 		SelectionOverlayFrame& frame,
 		const PolygonObject& object,
+		const SelectionOverlayDocumentLookup& lookup,
 		const SelectionOverlayStyle& style)
 {
 	for (const quader_poly::Face& face : object.document.faces) {
@@ -261,8 +304,8 @@ void append_source_wire_face_edges(
 		for (std::size_t index = 0; index < face.vertices.size(); ++index) {
 			const quader_poly::ElementId a_id = face.vertices[index];
 			const quader_poly::ElementId b_id = face.vertices[(index + 1U) % face.vertices.size()];
-			const quader_poly::Vertex* a = quader_poly::find_vertex(object.document, a_id);
-			const quader_poly::Vertex* b = quader_poly::find_vertex(object.document, b_id);
+			const quader_poly::Vertex* a = lookup.vertex(a_id);
+			const quader_poly::Vertex* b = lookup.vertex(b_id);
 			if (a == nullptr || b == nullptr) {
 				continue;
 			}
@@ -277,6 +320,7 @@ void append_source_wire_face_edges(
 void append_hover_source_wire(
 		SelectionOverlayFrame& frame,
 		const PolygonObject& object,
+		const SelectionOverlayDocumentLookup& lookup,
 		const SelectionOverlayStyle& style,
 		bool stamp_depth = false)
 {
@@ -284,8 +328,8 @@ void append_hover_source_wire(
 		append_source_wire_depth_stamp(frame, object, style);
 	}
 	for (const quader_poly::Edge edge : quader_poly::document_edges(object.document)) {
-		const quader_poly::Vertex* a = quader_poly::find_vertex(object.document, edge.a);
-		const quader_poly::Vertex* b = quader_poly::find_vertex(object.document, edge.b);
+		const quader_poly::Vertex* a = lookup.vertex(edge.a);
+		const quader_poly::Vertex* b = lookup.vertex(edge.b);
 		if (a == nullptr || b == nullptr) {
 			continue;
 		}
@@ -299,6 +343,7 @@ void append_hover_face_overlay(
 		SelectionOverlayFrame& frame,
 		int object_id,
 		const quader_poly::Document& document,
+		const SelectionOverlayDocumentLookup& lookup,
 		quader_poly::ElementId face_id,
 		bool selected_hover_target,
                 bool face_plane_hover,
@@ -307,7 +352,8 @@ void append_hover_face_overlay(
 	quader_poly::Selection hover_selection;
         hover_selection.mode = quader_poly::SelectionMode::Face;
         hover_selection.faces.push_back(face_id);
-	const quader_poly::OverlayData overlay = quader_poly::build_overlay(document, hover_selection);
+	const quader_poly::OverlayData overlay = quader_poly::build_overlay(
+		document, hover_selection, {}, kTriangleOnlyOverlayBuildOptions);
         const std::uint32_t triangle_color =
             face_plane_hover
                 ? style.face_plane_hover_face_color_abgr
@@ -325,7 +371,7 @@ void append_hover_face_overlay(
           });
         }
 
-	const quader_poly::Face* face = quader_poly::find_face(document, face_id);
+	const quader_poly::Face* face = lookup.face(face_id);
 	if (face == nullptr || face->vertices.size() < 2) {
 		return;
 	}
@@ -335,8 +381,8 @@ void append_hover_face_overlay(
                 : (selected_hover_target ? style.hover_selected_line_color_abgr
                                          : style.hover_face_edge_color_abgr);
 	for (std::size_t index = 0; index < face->vertices.size(); ++index) {
-		const quader_poly::Vertex* a = quader_poly::find_vertex(document, face->vertices[index]);
-		const quader_poly::Vertex* b = quader_poly::find_vertex(document, face->vertices[(index + 1U) % face->vertices.size()]);
+		const quader_poly::Vertex* a = lookup.vertex(face->vertices[index]);
+		const quader_poly::Vertex* b = lookup.vertex(face->vertices[(index + 1U) % face->vertices.size()]);
 		if (a == nullptr || b == nullptr) {
 			continue;
 		}
@@ -358,13 +404,13 @@ void append_hover_face_overlay(
 void append_hover_edge_overlay(
 		SelectionOverlayFrame& frame,
 		int object_id,
-		const quader_poly::Document& document,
+		const SelectionOverlayDocumentLookup& lookup,
 		quader_poly::Edge edge,
 		bool selected_hover_target,
 		const SelectionOverlayStyle& style)
 {
-	const quader_poly::Vertex* a = quader_poly::find_vertex(document, edge.a);
-	const quader_poly::Vertex* b = quader_poly::find_vertex(document, edge.b);
+	const quader_poly::Vertex* a = lookup.vertex(edge.a);
+	const quader_poly::Vertex* b = lookup.vertex(edge.b);
 	if (a == nullptr || b == nullptr) {
 		return;
 	}
@@ -384,12 +430,12 @@ void append_hover_edge_overlay(
 void append_hover_vertex_overlay(
 		SelectionOverlayFrame& frame,
 		int object_id,
-		const quader_poly::Document& document,
+		const SelectionOverlayDocumentLookup& lookup,
 		quader_poly::ElementId vertex_id,
 		bool selected_hover_target,
 		const SelectionOverlayStyle& style)
 {
-	const quader_poly::Vertex* vertex = quader_poly::find_vertex(document, vertex_id);
+	const quader_poly::Vertex* vertex = lookup.vertex(vertex_id);
 	if (vertex == nullptr) {
 		return;
 	}
@@ -482,6 +528,15 @@ SelectionOverlayFrame build_selection_overlay_frame(
 	frame.hover_target_selected = hover.selected_modifier_pressed && selected_hover_target;
         const bool face_plane_hover =
             hover.face_plane_hover && hover.kind == SelectionHoverKind::Face;
+	std::unordered_map<const quader_poly::Document*, SelectionOverlayDocumentLookup>
+		document_lookups;
+	document_lookups.reserve(objects.size());
+	const auto document_lookup = [&document_lookups](
+			const quader_poly::Document& document) -> const SelectionOverlayDocumentLookup& {
+		const auto [lookup, inserted] = document_lookups.try_emplace(&document, document);
+		(void)inserted;
+		return lookup->second;
+	};
 
         auto append_line =
             [&](SelectionOverlayLayer layer, const quader::QVec3 &a,
@@ -502,7 +557,9 @@ SelectionOverlayFrame build_selection_overlay_frame(
                   {layer, position, color, size, object_id, vertex_id});
             };
 
-        auto append_open_edge_overlay = [&](int object_id, const quader_poly::Document& document, const std::vector<quader_poly::Edge>& selected_edges) {
+        auto append_open_edge_overlay = [&](int object_id, const quader_poly::Document& document,
+			const SelectionOverlayDocumentLookup& lookup,
+			const std::vector<quader_poly::Edge>& selected_edges) {
 		if (selected_edges.empty()) {
 			return;
 		}
@@ -518,7 +575,7 @@ SelectionOverlayFrame build_selection_overlay_frame(
 			if (face.vertices.size() < 2) {
 				continue;
 			}
-			const quader::QVec3 centroid = overlay_face_centroid(document, face);
+			const quader::QVec3 centroid = overlay_face_centroid(lookup, face);
 			const quader::QVec3 normal = quader_poly::face_normal(document, face);
 			for (std::size_t index = 0; index < face.vertices.size(); ++index) {
 				const quader_poly::ElementId a_id = face.vertices[index];
@@ -551,8 +608,8 @@ SelectionOverlayFrame build_selection_overlay_frame(
 				continue;
 			}
 			const OpenEdgeOverlayRef& edge_ref = ref_it->second;
-			const quader_poly::Vertex* a = quader_poly::find_vertex(document, edge_ref.edge.a);
-			const quader_poly::Vertex* b = quader_poly::find_vertex(document, edge_ref.edge.b);
+			const quader_poly::Vertex* a = lookup.vertex(edge_ref.edge.a);
+			const quader_poly::Vertex* b = lookup.vertex(edge_ref.edge.b);
 			if (a == nullptr || b == nullptr) {
 				continue;
 			}
@@ -602,6 +659,7 @@ SelectionOverlayFrame build_selection_overlay_frame(
 
 	auto append_face_selection = [&](int object_id,
 									 const quader_poly::Document& document,
+									 const SelectionOverlayDocumentLookup& lookup,
 									 const quader_poly::Selection& selection,
 									 SelectionOverlayLayer triangle_layer,
 									 SelectionOverlayLayer line_layer,
@@ -621,7 +679,9 @@ SelectionOverlayFrame build_selection_overlay_frame(
 					}
 				}
 			}
-			const quader_poly::OverlayData overlay = quader_poly::build_overlay(document, triangle_selection);
+			const quader_poly::OverlayData overlay = quader_poly::build_overlay(
+				document, triangle_selection, {},
+				kTriangleOnlyOverlayBuildOptions);
 			for (const quader_poly::OverlayTriangle& triangle : overlay.triangles) {
                           triangles->push_back({
                               triangle_layer,
@@ -647,7 +707,7 @@ SelectionOverlayFrame build_selection_overlay_frame(
 		std::unordered_set<std::uint64_t> emitted_edges;
 		emitted_edges.reserve(selection.faces.size() * 4U);
 		for (const quader_poly::ElementId face_id : selection.faces) {
-			const quader_poly::Face* face = quader_poly::find_face(document, face_id);
+			const quader_poly::Face* face = lookup.face(face_id);
 			if (face == nullptr || face->vertices.size() < 2) {
 				continue;
 			}
@@ -661,8 +721,8 @@ SelectionOverlayFrame build_selection_overlay_frame(
 				if (!emitted_edges.insert(edge_key).second) {
 					continue;
 				}
-				const quader_poly::Vertex* a = quader_poly::find_vertex(document, a_id);
-				const quader_poly::Vertex* b = quader_poly::find_vertex(document, b_id);
+				const quader_poly::Vertex* a = lookup.vertex(a_id);
+				const quader_poly::Vertex* b = lookup.vertex(b_id);
 				if (a == nullptr || b == nullptr) {
 					continue;
 				}
@@ -708,13 +768,14 @@ SelectionOverlayFrame build_selection_overlay_frame(
 		if (!object_draws_source_wire(object)) {
 			continue;
 		}
+		const SelectionOverlayDocumentLookup& lookup = document_lookup(object.document);
                 if (mode != SelectionMode::Object) {
-                  append_hover_source_wire(frame, object, style, true);
+                  append_hover_source_wire(frame, object, lookup, style, true);
                   continue;
                 }
                 for (const quader_poly::Edge edge : quader_poly::document_edges(object.document)) {
-			const quader_poly::Vertex* a = quader_poly::find_vertex(object.document, edge.a);
-			const quader_poly::Vertex* b = quader_poly::find_vertex(object.document, edge.b);
+			const quader_poly::Vertex* a = lookup.vertex(edge.a);
+			const quader_poly::Vertex* b = lookup.vertex(edge.b);
 			if (a != nullptr && b != nullptr) {
                           if (mode == SelectionMode::Object &&
                               object.selected) {
@@ -748,15 +809,19 @@ SelectionOverlayFrame build_selection_overlay_frame(
             if (mode == SelectionMode::Object) {
               quader_poly::Selection selection =
                   overlay_all_face_selection(object.document);
-              append_face_selection(object.id, object.document, selection,
+              const SelectionOverlayDocumentLookup& lookup =
+                  document_lookup(object.document);
+              append_face_selection(object.id, object.document, lookup, selection,
                                     SelectionOverlayLayer::SelectedXrayFace,
                                     SelectionOverlayLayer::SelectedFaceEdge,
                                     &frame.triangles, nullptr);
-              append_face_selection(object.id, object.document, selection,
+              append_face_selection(object.id, object.document, lookup, selection,
                                     SelectionOverlayLayer::SelectedFaceMask,
                                     SelectionOverlayLayer::SelectedFaceEdge,
                                     &frame.triangles, nullptr);
             } else if (mode == SelectionMode::Face) {
+              const SelectionOverlayDocumentLookup& lookup =
+                  document_lookup(object.document);
               std::unordered_set<std::uint64_t> hidden_hover_line_edges;
               std::unordered_set<quader_poly::ElementId>
                   hidden_hover_mask_faces;
@@ -765,7 +830,7 @@ SelectionOverlayFrame build_selection_overlay_frame(
                   quader_poly::selection_contains_face(object.selection,
                                                        hover.face_id)) {
                 hidden_hover_mask_faces.insert(hover.face_id);
-                overlay_append_face_edges_to_set(object.document, hover.face_id,
+                overlay_append_face_edges_to_set(lookup, hover.face_id,
                                                  hidden_hover_line_edges);
               }
               const std::unordered_set<std::uint64_t> *hidden_line_edges =
@@ -776,22 +841,25 @@ SelectionOverlayFrame build_selection_overlay_frame(
                                                ? nullptr
                                                : &hidden_hover_mask_faces;
               append_face_selection(
-                  object.id, object.document, object.selection,
+                  object.id, object.document, lookup, object.selection,
                   SelectionOverlayLayer::SelectedVisibleFace,
                   SelectionOverlayLayer::SelectedFaceEdge, &frame.triangles,
                   &frame.lines, hidden_line_edges, hidden_triangle_faces);
               append_face_selection(
-                  object.id, object.document, object.selection,
+                  object.id, object.document, lookup, object.selection,
                   SelectionOverlayLayer::SelectedFaceMask,
                   SelectionOverlayLayer::SelectedFaceEdge, &frame.triangles,
                   nullptr, nullptr, hidden_triangle_faces);
               append_face_selection(object.id, object.document,
-                                    object.selection,
+                                    lookup, object.selection,
                                     SelectionOverlayLayer::SelectedVisibleFace,
                                     SelectionOverlayLayer::SelectedEdge,
                                     nullptr, &frame.lines, hidden_line_edges);
             } else if (mode == SelectionMode::Edge) {
+              const SelectionOverlayDocumentLookup& lookup =
+                  document_lookup(object.document);
               append_open_edge_overlay(object.id, object.document,
+                                       lookup,
                                        object.selection.edges);
               for (const quader_poly::Edge edge : object.selection.edges) {
                 if (frame.hover_target_selected &&
@@ -803,9 +871,9 @@ SelectionOverlayFrame build_selection_overlay_frame(
                   continue;
                 }
                 const quader_poly::Vertex *a =
-                    quader_poly::find_vertex(object.document, edge.a);
+                    lookup.vertex(edge.a);
                 const quader_poly::Vertex *b =
-                    quader_poly::find_vertex(object.document, edge.b);
+                    lookup.vertex(edge.b);
                 if (a != nullptr && b != nullptr) {
                   append_line(SelectionOverlayLayer::SelectedEdge, a->position,
                               b->position, style.selected_edge_color_abgr,
@@ -851,19 +919,24 @@ SelectionOverlayFrame build_selection_overlay_frame(
                   continue;
                 }
                 if (hover.kind == SelectionHoverKind::Face) {
+                  const SelectionOverlayDocumentLookup& lookup =
+                      document_lookup(object.document);
                   quader_poly::Selection hover_selection;
                   hover_selection.mode = quader_poly::SelectionMode::Face;
                   hover_selection.faces.push_back(hover.face_id);
                   append_face_selection(object.id, object.document,
+                                        lookup,
                                         hover_selection,
                                         SelectionOverlayLayer::HoverFace,
                                         SelectionOverlayLayer::HoverFaceEdge,
                                         &frame.triangles, &frame.lines);
                 } else if (hover.kind == SelectionHoverKind::Edge) {
+                  const SelectionOverlayDocumentLookup& lookup =
+                      document_lookup(object.document);
                   const quader_poly::Vertex *a =
-                      quader_poly::find_vertex(object.document, hover.edge.a);
+                      lookup.vertex(hover.edge.a);
                   const quader_poly::Vertex *b =
-                      quader_poly::find_vertex(object.document, hover.edge.b);
+                      lookup.vertex(hover.edge.b);
                   if (a != nullptr && b != nullptr) {
                     append_line(SelectionOverlayLayer::HoverEdge, a->position,
                                 b->position,
@@ -874,8 +947,10 @@ SelectionOverlayFrame build_selection_overlay_frame(
                                 quader_poly::kInvalidElementId, hover.edge);
                   }
                 } else if (hover.kind == SelectionHoverKind::Vertex) {
-                  const quader_poly::Vertex *vertex = quader_poly::find_vertex(
-                      object.document, hover.vertex_id);
+                  const SelectionOverlayDocumentLookup& lookup =
+                      document_lookup(object.document);
+                  const quader_poly::Vertex *vertex =
+                      lookup.vertex(hover.vertex_id);
                   if (vertex != nullptr) {
                     append_point(SelectionOverlayLayer::HoverVertex,
                                  vertex->position,
@@ -934,6 +1009,15 @@ SelectionOverlayFrame build_selection_hover_overlay_frame(
 	frame.hover_target_selected = hover.selected_modifier_pressed && selected_hover_target;
         const bool face_plane_hover =
             hover.face_plane_hover && hover.kind == SelectionHoverKind::Face;
+	std::unordered_map<const quader_poly::Document*, SelectionOverlayDocumentLookup>
+		document_lookups;
+	document_lookups.reserve(objects.size());
+	const auto document_lookup = [&document_lookups](
+			const quader_poly::Document& document) -> const SelectionOverlayDocumentLookup& {
+		const auto [lookup, inserted] = document_lookups.try_emplace(&document, document);
+		(void)inserted;
+		return lookup->second;
+	};
 
 	for (const PolygonObject& object : objects) {
           const bool component_candidate =
@@ -941,7 +1025,9 @@ SelectionOverlayFrame build_selection_hover_overlay_frame(
               object.id == hover.candidate_object_id;
           if (component_candidate &&
               !object_has_sticky_component_source_wire(object, mode)) {
-            append_hover_source_wire(frame, object, style, component_candidate);
+            append_hover_source_wire(
+                frame, object, document_lookup(object.document), style,
+                component_candidate);
           }
           if (component_candidate && mode == SelectionMode::Vertex &&
               object.selection.vertices.empty()) {
@@ -965,16 +1051,19 @@ SelectionOverlayFrame build_selection_hover_overlay_frame(
 
                 if (hover.kind == SelectionHoverKind::Face) {
                   append_hover_face_overlay(frame, object.id, object.document,
+                                            document_lookup(object.document),
                                             hover.face_id,
                                             frame.hover_target_selected,
                                             face_plane_hover, style);
                 } else if (hover.kind == SelectionHoverKind::Edge) {
-                  append_hover_edge_overlay(frame, object.id, object.document,
+                  append_hover_edge_overlay(frame, object.id,
+                                            document_lookup(object.document),
                                             hover.edge,
                                             frame.hover_target_selected, style);
                 } else if (hover.kind == SelectionHoverKind::Vertex) {
                   append_hover_vertex_overlay(
-                      frame, object.id, object.document, hover.vertex_id,
+                      frame, object.id, document_lookup(object.document),
+                      hover.vertex_id,
                       frame.hover_target_selected, style);
                 }
         }

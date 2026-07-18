@@ -64,7 +64,8 @@ struct EditorSelectionState {
 };
 
 /**
- * Stores the selection baseline used to recompute live box-selection edits during one drag.
+ * Stores the press-time selection baseline used by one deferred box-selection
+ * commit.
  */
 struct EditorSelectionBoxBaseline {
     ModelingSelectionMode mode = ModelingSelectionMode::Object;

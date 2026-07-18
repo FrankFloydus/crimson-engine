@@ -53,7 +53,6 @@ private:
   std::optional<QuaderHoverTarget> box_hovered_before_selection_;
   std::optional<QuaderSelectionBoxBaseline> box_baseline_;
   std::optional<ViewportSelectionMarquee> committed_marquee_;
-  std::optional<ViewportSelectionMarquee> live_box_selection_;
   std::optional<QuaderHoverTarget> hover_suppressed_target_;
   bool paint_selection_active_ = false;
 };

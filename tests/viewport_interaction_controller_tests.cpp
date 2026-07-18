@@ -1128,7 +1128,8 @@ TEST(ViewportInteractionControllerTests, ShiftClickRebuildsSliceQuadPreviewThrou
               one_face_preview->primitive_count);
 }
 
-TEST(ViewportInteractionControllerTests, DragFrameBoxSelectsThroughViewportFallback) {
+TEST(ViewportInteractionControllerTests,
+     BoxDragDefersViewportFallbackSelectionUntilRelease) {
     ViewportInteractionHarness harness;
     (void)create_unit_box(harness);
 
@@ -1160,7 +1161,7 @@ TEST(ViewportInteractionControllerTests, DragFrameBoxSelectsThroughViewportFallb
         harness.controller.selection_marquee();
     ASSERT_TRUE(marquee.active);
     EXPECT_EQ(marquee.rule, quader::ModelingBoxSelectionRule::Contain);
-    EXPECT_EQ(harness.editor.selection().summary().selected_object_count, 1u);
+    EXPECT_EQ(harness.editor.selection().summary().selected_object_count, 0u);
 
     harness.controller.handle_after_active_tool(
         harness.editor, harness.frame(false, false, true, start),
@@ -1180,7 +1181,116 @@ TEST(ViewportInteractionControllerTests, DragFrameBoxSelectsThroughViewportFallb
     EXPECT_FALSE(harness.controller.selection_marquee().active);
 }
 
-TEST(ViewportInteractionControllerTests, ShiftBoxDragAddsSelectionBeforeRelease) {
+TEST(ViewportInteractionControllerTests,
+     DenseComponentBoxDragDefersSelectionWorkUntilRelease) {
+    ViewportInteractionHarness harness;
+
+    quader_poly::CubePrimitiveSpec dense_cube;
+    dense_cube.width = 2.0f;
+    dense_cube.height = 2.0f;
+    dense_cube.depth = 2.0f;
+    dense_cube.width_segments = 24;
+    dense_cube.height_segments = 24;
+    dense_cube.depth_segments = 24;
+    const quader::ModelingCreateBoxResult mesh =
+        harness.session.modeling().create_mesh({
+            .document = quader_poly::make_cube(dense_cube),
+            .name = "Viewport Dense Box Selection Cube",
+        });
+    ASSERT_TRUE(mesh.ok) << mesh.message;
+
+    ASSERT_TRUE(harness.editor.selection()
+                    .set_mode(quader::QuaderSelectionMode::Face)
+                    .ok);
+    ASSERT_TRUE(harness.editor.selection().clear().ok);
+    harness.router.set_selection_mode(quader::ViewportSelectionMode::Face);
+
+    const quader::ViewportScreenPoint first_corner =
+        harness.camera.project_world_point({-1.0f, -1.0f, 1.0f});
+    const quader::ViewportScreenPoint second_corner =
+        harness.camera.project_world_point({1.0f, 1.0f, 1.0f});
+    ASSERT_TRUE(first_corner.visible);
+    ASSERT_TRUE(second_corner.visible);
+    const float left =
+        std::min(first_corner.position.x, second_corner.position.x);
+    const float right =
+        std::max(first_corner.position.x, second_corner.position.x);
+    const float top =
+        std::min(first_corner.position.y, second_corner.position.y);
+    const float bottom =
+        std::max(first_corner.position.y, second_corner.position.y);
+    const quader::QVec2 start{left - 2.0f, top - 2.0f};
+    quader::QVec2 end{left, bottom + 2.0f};
+
+    harness.input.mouse_local = start;
+    harness.input.mouse_screen = start;
+    const quader::ViewportBeforeToolInteractionResult before_tool =
+        harness.controller.handle_before_active_tool(
+            harness.editor, harness.frame(true, true, false, start));
+    EXPECT_FALSE(before_tool.gizmo_consumed);
+    harness.controller.handle_after_active_tool(
+        harness.editor, harness.frame(true, true, false, start),
+        quader::ViewportToolResult{}, before_tool);
+
+    const std::uint64_t selection_revision_before_drag =
+        harness.editor.selection().summary().selection_revision;
+    const std::uint64_t rectangle_projections_before_drag =
+        harness.session.modeling().rectangle_picking_projection_build_count();
+    const std::uint64_t rectangle_resolutions_before_drag =
+        harness.session.modeling().rectangle_selection_resolution_build_count();
+    std::uint64_t observed_selection_revision = selection_revision_before_drag;
+    int selection_changes_during_drag = 0;
+    constexpr int kDragSamples = 24;
+    for (int sample = 1; sample <= kDragSamples; ++sample) {
+      end.x = left + (right - left + 2.0f) *
+                         static_cast<float>(sample) /
+                         static_cast<float>(kDragSamples);
+      harness.input.mouse_local = end;
+      harness.input.mouse_screen = end;
+      harness.controller.handle_after_active_tool(
+          harness.editor, harness.frame(false, true, false, start),
+          quader::ViewportToolResult{},
+          quader::ViewportBeforeToolInteractionResult{});
+
+      const quader::QuaderSelectionSummary during_drag =
+          harness.editor.selection().summary();
+      if (during_drag.selection_revision != observed_selection_revision) {
+        ++selection_changes_during_drag;
+        observed_selection_revision = during_drag.selection_revision;
+        (void)harness.editor.query().selection_overlay();
+      }
+    }
+
+    const quader::QuaderSelectionSummary before_release =
+        harness.editor.selection().summary();
+    EXPECT_EQ(selection_changes_during_drag, 0);
+    EXPECT_EQ(before_release.selection_revision, selection_revision_before_drag);
+    EXPECT_EQ(before_release.selected_face_count, 0u);
+    EXPECT_EQ(
+        harness.session.modeling().rectangle_picking_projection_build_count(),
+        rectangle_projections_before_drag);
+    EXPECT_EQ(
+        harness.session.modeling().rectangle_selection_resolution_build_count(),
+        rectangle_resolutions_before_drag);
+
+    harness.controller.handle_after_active_tool(
+        harness.editor, harness.frame(false, false, true, start),
+        quader::ViewportToolResult{},
+        quader::ViewportBeforeToolInteractionResult{});
+    const quader::QuaderSelectionSummary after_release =
+        harness.editor.selection().summary();
+    EXPECT_GT(after_release.selection_revision, selection_revision_before_drag);
+    EXPECT_GT(after_release.selected_face_count, 0u);
+    EXPECT_EQ(
+        harness.session.modeling().rectangle_picking_projection_build_count(),
+        rectangle_projections_before_drag + 1u);
+    EXPECT_EQ(
+        harness.session.modeling().rectangle_selection_resolution_build_count(),
+        rectangle_resolutions_before_drag + 1u);
+    (void)harness.editor.query().selection_overlay();
+}
+
+TEST(ViewportInteractionControllerTests, ShiftBoxDragAddsSelectionOnRelease) {
     ViewportInteractionHarness harness;
     const quader::QuaderModelingObjectRef left =
         create_box_at(harness, {-3.0f, 0.0f, 0.0f});
@@ -1219,13 +1329,19 @@ TEST(ViewportInteractionControllerTests, ShiftBoxDragAddsSelectionBeforeRelease)
         quader::ViewportToolResult{},
         quader::ViewportBeforeToolInteractionResult{});
 
+    EXPECT_EQ(harness.editor.selection().summary().selected_object_count, 1u);
+    harness.controller.handle_after_active_tool(
+        harness.editor, harness.frame(false, false, true, start),
+        quader::ViewportToolResult{},
+        quader::ViewportBeforeToolInteractionResult{});
+
     EXPECT_EQ(harness.editor.selection().summary().selected_object_count, 2u);
     const std::vector<quader::EntityId> selected = selected_entities(harness);
     EXPECT_NE(std::find(selected.begin(), selected.end(), left.entity), selected.end());
     EXPECT_NE(std::find(selected.begin(), selected.end(), right.entity), selected.end());
 }
 
-TEST(ViewportInteractionControllerTests, PrimaryBoxDragRemovesSelectionBeforeRelease) {
+TEST(ViewportInteractionControllerTests, PrimaryBoxDragRemovesSelectionOnRelease) {
     ViewportInteractionHarness harness;
     const quader::QuaderModelingObjectRef left =
         create_box_at(harness, {-3.0f, 0.0f, 0.0f});
@@ -1261,6 +1377,12 @@ TEST(ViewportInteractionControllerTests, PrimaryBoxDragRemovesSelectionBeforeRel
     harness.input.mouse_screen = end;
     harness.controller.handle_after_active_tool(
         harness.editor, harness.frame(false, true, false, start),
+        quader::ViewportToolResult{},
+        quader::ViewportBeforeToolInteractionResult{});
+
+    EXPECT_EQ(harness.editor.selection().summary().selected_object_count, 2u);
+    harness.controller.handle_after_active_tool(
+        harness.editor, harness.frame(false, false, true, start),
         quader::ViewportToolResult{},
         quader::ViewportBeforeToolInteractionResult{});
 

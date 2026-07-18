@@ -1201,7 +1201,7 @@ TEST(ModelingContractHeaderGuardrailTests,
     std::string_view path;
     std::string_view declaration;
   };
-  constexpr std::array<HeaderContract, 4> contracts{{
+  constexpr std::array<HeaderContract, 4> kContracts{{
       {"src/sdk/core/modeling/include/quader/modeling/api/mesh_handle.hpp",
        "class MeshHandle"},
       {"src/sdk/core/modeling/include/quader/modeling/api/selection.hpp",
@@ -1212,7 +1212,7 @@ TEST(ModelingContractHeaderGuardrailTests,
        "class ToolsApi"},
   }};
 
-  for (const HeaderContract &contract : contracts) {
+  for (const HeaderContract &contract : kContracts) {
     SCOPED_TRACE(contract.path);
     const std::string header = read_source_file(contract.path);
     EXPECT_NE(header.find(contract.declaration), std::string::npos);
@@ -1280,7 +1280,7 @@ TEST(CommandAndKeybindingOwnershipGuardrailTests,
 
 TEST(ConversionMappingGuardrailTests,
      NativeAsciiNormalizationUsesQStrOwner) {
-  constexpr std::array<std::string_view, 7> consumers{{
+  constexpr std::array<std::string_view, 7> kConsumers{{
       "src/io/project/project_manifest.cpp",
       "src/io/project/project_material_catalog.cpp",
       "src/io/project/qmat_codec.cpp",
@@ -1290,7 +1290,7 @@ TEST(ConversionMappingGuardrailTests,
       "src/editor/session/project_session.cpp",
   }};
 
-  for (const std::string_view path : consumers) {
+  for (const std::string_view path : kConsumers) {
     SCOPED_TRACE(path);
     const std::string source = read_source_file(path);
     EXPECT_NE(source.find("QStr::to_ascii_lower("), std::string::npos);

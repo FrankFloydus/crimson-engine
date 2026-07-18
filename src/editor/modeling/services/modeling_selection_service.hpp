@@ -195,7 +195,7 @@ private:
   };
 
   /**
-   * Caches the last resolved live marquee hit set and its baseline.
+   * Caches the last resolved rectangle hit set and its baseline.
    */
   struct RectangleResolutionCache {
     bool valid = false;

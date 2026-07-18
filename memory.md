@@ -4483,12 +4483,25 @@ signal loop or per-frame control reconstruction: each raw slider sample synchron
 topology preview, while every marquee sample rebuilt screen-space mesh candidates and repeatedly
 resolved an unchanged component selection.
 
+Correction (2026-07-18): the earlier box-selection regression and timing covered repeated direct
+`box_select` calls whose hit set stayed effectively unchanged; it did not model a real viewport
+drag accumulating new component hits. The viewport now follows a commit-on-release gesture:
+mouse-motion samples update only the marquee and suppress hover, while release resolves the final
+rectangle once against the press-time baseline. The direct selection-service caches remain useful
+for API callers, but their counters are not evidence that viewport drag motion is cheap.
+This cadence matches Blender's box gesture: mouse movement updates/redraws only the rectangle, and
+the 3D-view selection operator executes once when the modal gesture commits.
+
 Invariant:
 
 - Slider visuals remain immediate, but continuous numeric drags publish only their latest value at
   a 16 ms presentation interval. Release synchronously flushes the exact final value. Spin-box and
   keyboard edits remain immediate, and a retained active editor is not overwritten by frame
   synchronization.
+- A viewport box-selection drag is presentation-only until release. Motion must not project
+  rectangle candidates, resolve hits, mutate SDK or scene selection, advance selection revisions,
+  rebuild selection overlays, or refresh selection-dependent Qt panels. Release performs one
+  selection transaction using the baseline captured at press time.
 - Picking geometry is keyed only by modeling content, object-map identity, world transforms,
   visibility/selectability, mesh binding, and camera state. Selection-only and broad scene
   revisions never retransform unchanged mesh vertices.
@@ -4499,6 +4512,9 @@ Invariant:
   and current selection revision does not reconstruct selection state, resynchronize the scene, or
   invalidate overlay caches. Camera/content/transform/visibility/selectability/object-map changes
   invalidate the appropriate cache immediately.
+- Selection-overlay construction indexes document vertices/faces and selected element membership
+  once per build. Triangle-only consumers do not construct full source-wire and face-border
+  payloads that they immediately discard.
 - `SceneDocument::visibility_revision()` includes selectability changes and remains stable for
   no-op assignments, so visibility-sensitive caches neither miss real changes nor churn on repeats.
 
@@ -4506,8 +4522,12 @@ Owners:
 
 - `src/ui/qt_tool_settings_window.cpp` owns latest-value scheduling and final-value flushing for all
   descriptor-driven numeric tool controls.
+- `src/editor/viewport/viewport_selection_interaction.*` owns the commit-on-release box gesture and
+  marquee-only motion path.
 - `src/editor/modeling/services/modeling_selection_service.*` owns transformed geometry,
   screen-space rectangle candidate, universe, and hit-resolution caches.
+- `src/editor/modeling/runtime/session_selection_overlay.cpp` and portable polygon
+  `build_overlay` own per-build ID/membership indexes and requested overlay payload filtering.
 - `src/editor/modeling/runtime/modeling_object_runtime_map.*` and `src/scene/scene_document.*`
   publish the narrow identity and visibility revision gates used by picking.
 - `src/editor/interactions/select_tool.cpp` owns exact containment/crossing semantics after the
@@ -4518,9 +4538,18 @@ Verification:
 - In Debug, one raw Edge Bevel width move fell from 6.6-7.3 ms to 0.47-0.51 ms; three segment moves
   fell from 8.2-8.6 ms each to 0.15-0.21 ms each. The single final preview flush remains explicit
   and measured at 6.4-6.7 ms on the simple cube fixture.
-- On a 24x24x24 segmented cube, 32 stable face-marquee updates fell from 2,324 ms to 121 ms, a
-  19.2x reduction. Regression counters require exactly one transformed projection, one projected
-  candidate build, and one selection resolution until camera or geometry state changes.
+- On a 24x24x24 segmented cube, the earlier direct-service benchmark reported 32 stable
+  face-marquee calls falling from 2,324 ms to 121 ms, a 19.2x reduction. This characterizes cache
+  reuse for repeated API calls, not the current viewport gesture.
+- The corrected viewport regression expands across the same dense cube for 24 distinct motion
+  samples and materializes the overlay after every selection revision. Before the correction it
+  took 58,620 ms in Debug, committed all 24 samples, and selected 3,456 faces before release.
+  Commit-on-release plus linear-time overlay lookup/payload construction takes 2,969 ms end to end
+  (19.7x faster); all motion samples perform zero rectangle projections, hit resolutions, or
+  selection revisions, and release performs exactly one of each.
+- On the fixed 100,344-triangle Release benchmark, object overlay construction fell from
+  3,893.111 ms to 1,512.289 ms and all-face overlay construction fell from 6,386.490 ms to
+  2,352.326 ms. These are one-shot CPU construction costs, not per-motion work.
 - All 8 native Qt numeric-slider tests, 7 focused scene/box/preview tests, and all 287 runtime
   modeling tests pass. Full CTest passes 6/6 executables, and native `quader` v0.0.109 builds and
   reaches the Qt/Fusion/Vulkan event loop with four swapchains and no logged errors. The automated

@@ -48,11 +48,11 @@ undo/redo for modeling workflows, dirty flags, and renderer-neutral snapshots. H
 Qt Widgets, Filament, Win32, native file dialogs, project sessions, app scene entities, material
 assets, command palette routing, viewport panels, and platform windows.
 
-Use `architecture-review.md` for the fixed architecture direction and completed ownership
-decisions. The linked root `REFACTORING_PLAN.md` is the sole execution record for the completed
-Phase 0-6 refactor; new implementation work requires an explicitly approved follow-up task or
-successor plan. Do not treat historical phase numbers or closed audit ledgers as current task
-authority.
+Use `architecture-review.md` for the fixed migration direction and completed ownership decisions.
+The linked root `REFACTORING_PLAN.md` is the only executable refactoring tracker and sole execution
+record for the completed Phase 0-6 refactor; new implementation work requires an explicitly
+approved follow-up task or successor plan. Do not treat historical phase numbers or closed audit
+ledgers as current task authority.
 
 ## Domain Ownership
 

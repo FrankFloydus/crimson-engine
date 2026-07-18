@@ -17,6 +17,8 @@
 #include <cmath>
 #include <limits>
 #include <optional>
+#include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace quader_poly {
@@ -590,76 +592,127 @@ KnifeSegmentPreview build_knife_segment_preview(
     return preview;
 }
 
-OverlayData build_overlay(const Document& document, const Selection& selection, const OverlayStyle& style)
+OverlayData build_overlay(
+    const Document& document,
+    const Selection& selection,
+    const OverlayStyle& style,
+    OverlayBuildOptions options)
 {
     QDR_PROFILE_SCOPE("qdr_document.build_overlay");
     OverlayData overlay;
-    for (const Edge& edge : document_edges(document)) {
-        const Vertex* a = find_vertex(document, edge.a);
-        const Vertex* b = find_vertex(document, edge.b);
-        if (a == nullptr || b == nullptr) {
-            continue;
-        }
+    std::unordered_map<ElementId, const Vertex*> vertices_by_id;
+    vertices_by_id.reserve(document.vertices.size());
+    for (const Vertex& vertex : document.vertices) {
+        vertices_by_id.try_emplace(vertex.id, &vertex);
+    }
+    const auto overlay_vertex = [&vertices_by_id](ElementId id) -> const Vertex* {
+        const auto vertex = vertices_by_id.find(id);
+        return vertex == vertices_by_id.end() ? nullptr : vertex->second;
+    };
 
-        const bool selected = selection_contains(selection, edge);
-        overlay.lines.push_back({
-            a->position,
-            b->position,
-            selected ? style.selected_edge_color : style.edge_color,
-            selected ? style.selected_edge_width_pixels : style.edge_width_pixels,
-            edge,
-        });
+    std::unordered_set<ElementId> selected_vertex_ids;
+    if (options.include_points) {
+        selected_vertex_ids.reserve(selection.vertices.size());
+        selected_vertex_ids.insert(selection.vertices.begin(), selection.vertices.end());
+    }
+    std::unordered_set<ElementId> selected_face_ids;
+    if (options.include_lines || options.include_triangles) {
+        selected_face_ids.reserve(selection.faces.size());
+        selected_face_ids.insert(selection.faces.begin(), selection.faces.end());
+    }
+    const auto edge_key = [](Edge edge) {
+        return (static_cast<std::uint64_t>(edge.a) << 32U) |
+            static_cast<std::uint64_t>(edge.b);
+    };
+    std::unordered_set<std::uint64_t> selected_edge_keys;
+    if (options.include_lines) {
+        selected_edge_keys.reserve(selection.edges.size());
+        for (const Edge edge : selection.edges) {
+            selected_edge_keys.insert(edge_key(make_edge(edge.a, edge.b)));
+        }
     }
 
-    for (const Face& face : document.faces) {
-        if (!selection_contains_face(selection, face.id) || face.vertices.size() < 2) {
-            continue;
-        }
-
-        const std::vector<Triangle> triangles = triangulate_face_local_indices(document, face);
-        for (const Triangle& triangle : triangles) {
-            const Vertex* a = find_vertex(document, face.vertices[triangle.a]);
-            const Vertex* b = find_vertex(document, face.vertices[triangle.b]);
-            const Vertex* c = find_vertex(document, face.vertices[triangle.c]);
-            if (a == nullptr || b == nullptr || c == nullptr) {
+    if (options.include_lines) {
+        for (const Edge& edge : document_edges(document)) {
+            const Vertex* a = overlay_vertex(edge.a);
+            const Vertex* b = overlay_vertex(edge.b);
+            if (a == nullptr || b == nullptr) {
                 continue;
             }
 
-            overlay.triangles.push_back({
+            const Edge normalized_edge = make_edge(edge.a, edge.b);
+            const bool selected =
+                selected_edge_keys.find(edge_key(normalized_edge)) !=
+                selected_edge_keys.end();
+            overlay.lines.push_back({
                 a->position,
                 b->position,
-                c->position,
-                style.face_fill_color,
-                face.id,
+                selected ? style.selected_edge_color : style.edge_color,
+                selected ? style.selected_edge_width_pixels : style.edge_width_pixels,
+                edge,
             });
         }
+    }
 
-        for (std::size_t index = 0; index < face.vertices.size(); ++index) {
-            const Vertex* a = find_vertex(document, face.vertices[index]);
-            const Vertex* b = find_vertex(document, face.vertices[(index + 1) % face.vertices.size()]);
-            if (a != nullptr && b != nullptr) {
-                overlay.lines.push_back({
-                    a->position,
-                    b->position,
-                    style.face_border_color,
-                    style.face_border_width_pixels,
-                    make_edge(face.vertices[index], face.vertices[(index + 1) % face.vertices.size()]),
-                    face.id,
-                });
+    if (options.include_lines || options.include_triangles) {
+        for (const Face& face : document.faces) {
+            if (selected_face_ids.find(face.id) == selected_face_ids.end() ||
+                face.vertices.size() < 2) {
+                continue;
+            }
+
+            if (options.include_triangles) {
+                const std::vector<Triangle> triangles =
+                    triangulate_face_local_indices(document, face);
+                for (const Triangle& triangle : triangles) {
+                    const Vertex* a = overlay_vertex(face.vertices[triangle.a]);
+                    const Vertex* b = overlay_vertex(face.vertices[triangle.b]);
+                    const Vertex* c = overlay_vertex(face.vertices[triangle.c]);
+                    if (a == nullptr || b == nullptr || c == nullptr) {
+                        continue;
+                    }
+
+                    overlay.triangles.push_back({
+                        a->position,
+                        b->position,
+                        c->position,
+                        style.face_fill_color,
+                        face.id,
+                    });
+                }
+            }
+
+            if (options.include_lines) {
+                for (std::size_t index = 0; index < face.vertices.size(); ++index) {
+                    const Vertex* a = overlay_vertex(face.vertices[index]);
+                    const Vertex* b = overlay_vertex(
+                        face.vertices[(index + 1) % face.vertices.size()]);
+                    if (a != nullptr && b != nullptr) {
+                        overlay.lines.push_back({
+                            a->position,
+                            b->position,
+                            style.face_border_color,
+                            style.face_border_width_pixels,
+                            make_edge(
+                                face.vertices[index],
+                                face.vertices[(index + 1) % face.vertices.size()]),
+                            face.id,
+                        });
+                    }
+                }
             }
         }
     }
 
-    if (selection.mode == SelectionMode::Vertex) {
+    if (options.include_points && selection.mode == SelectionMode::Vertex) {
       for (const Vertex &vertex : document.vertices) {
+        const bool selected = selected_vertex_ids.find(vertex.id) !=
+            selected_vertex_ids.end();
         overlay.points.push_back({
             vertex.position,
-            selection_contains(selection, vertex.id)
-                ? style.selected_vertex_color
-                : style.vertex_color,
-            selection_contains(selection, vertex.id)
-                ? style.selected_vertex_size_pixels
-                : style.vertex_size_pixels,
+            selected ? style.selected_vertex_color : style.vertex_color,
+            selected ? style.selected_vertex_size_pixels
+                     : style.vertex_size_pixels,
             vertex.id,
         });
       }

@@ -20,7 +20,8 @@ namespace quader {
 class QuaderApiMutationRunner;
 
 /**
- * Stores an opaque selection baseline for live viewport box-selection drags.
+ * Stores an opaque selection baseline for one deferred viewport box-selection
+ * commit.
  */
 class QuaderSelectionBoxBaseline final {
 public:
