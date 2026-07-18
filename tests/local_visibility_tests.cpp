@@ -339,7 +339,8 @@ TEST(LocalVisibilityTests,
     quader::QuaderEditorApi &editor = standalone.editor();
     const quader::QuaderModelingObjectRef local =
         create_box(editor, "Bulk Component Local");
-    (void)create_box(editor, "Bulk Component Outside");
+    const quader::QuaderModelingObjectRef outside =
+        create_box(editor, "Bulk Component Outside");
     ASSERT_TRUE(editor.selection().select_vertex(local, 1).ok());
     ASSERT_TRUE(editor.viewports().toggle_local_visibility().ok());
 
@@ -353,6 +354,22 @@ TEST(LocalVisibilityTests,
         << inverse_without_component_scope.error_message();
     EXPECT_FALSE(inverse_without_component_scope.changed());
     EXPECT_EQ(editor.selection().summary().selected_vertex_count, 0u);
+
+    ASSERT_TRUE(editor.selection().hover_vertex(outside, 1).ok());
+    const quader::QuaderApiVoidResult outside_sticky_select_all =
+        editor.selection().select_all();
+    ASSERT_TRUE(outside_sticky_select_all.ok())
+        << outside_sticky_select_all.error_message();
+    EXPECT_FALSE(outside_sticky_select_all.changed());
+    EXPECT_EQ(editor.selection().summary().selected_vertex_count, 0u);
+
+    ASSERT_TRUE(editor.selection().hover_vertex(local, 1).ok());
+    const quader::QuaderApiVoidResult local_sticky_select_all =
+        editor.selection().select_all();
+    ASSERT_TRUE(local_sticky_select_all.ok())
+        << local_sticky_select_all.error_message();
+    EXPECT_TRUE(local_sticky_select_all.changed());
+    EXPECT_EQ(editor.selection().summary().selected_vertex_count, 8u);
   }
 
   {

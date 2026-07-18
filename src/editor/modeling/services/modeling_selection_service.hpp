@@ -67,9 +67,10 @@ public:
   [[nodiscard]] std::optional<EntityId>
   scene_target_for_picking_participant(int participant_id) const;
   [[nodiscard]] std::optional<ModelingCommandResult>
-  select_all_in_viewport_scope(
+  select_all_in_constrained_component_scope(
       quader_editor_core::EditorSession &session, const SceneDocument &scene,
-      const ModelingObjectRuntimeMap &object_map, bool invert) const;
+      const ModelingObjectRuntimeMap &object_map, bool invert,
+      int sticky_component_object_id) const;
   [[nodiscard]] ModelingSelectionApplyResult
   apply_component_selection_command(
       quader_editor_core::EditorSession &session, const SceneDocument &scene,

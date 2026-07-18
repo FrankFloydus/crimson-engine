@@ -6444,6 +6444,173 @@ TEST(EditorApiTests,
 }
 
 TEST(EditorApiTests,
+     ComponentSelectAllUsesAStickyHoveredMeshWithoutASeedSelection) {
+  /// Describes one component-mode variant of the sticky Select All contract.
+  struct ModeCase final {
+    quader::QuaderSelectionMode mode;
+    quader::QuaderActiveSelectionKind hover_kind;
+    std::size_t expected_count;
+  };
+  constexpr std::array<ModeCase, 3> cases{
+      ModeCase{quader::QuaderSelectionMode::Vertex,
+               quader::QuaderActiveSelectionKind::Vertex, 8u},
+      ModeCase{quader::QuaderSelectionMode::Edge,
+               quader::QuaderActiveSelectionKind::Edge, 12u},
+      ModeCase{quader::QuaderSelectionMode::Face,
+               quader::QuaderActiveSelectionKind::Face, 6u},
+  };
+
+  for (const ModeCase &mode_case : cases) {
+    SCOPED_TRACE(static_cast<int>(mode_case.mode));
+    CommandTestHarness harness;
+    quader::QuaderEditorApi &editor = harness.editor;
+    const quader::QuaderModelingObjectRef box =
+        create_selected_box(editor, "Sticky Select All Scope");
+    ASSERT_TRUE(editor.selection().clear().ok());
+    ASSERT_TRUE(editor.selection().set_mode(mode_case.mode).ok());
+    ASSERT_TRUE(selected_entities(editor).empty());
+    ASSERT_EQ(editor.selection().summary().selected_vertex_count, 0u);
+    ASSERT_EQ(editor.selection().summary().selected_edge_count, 0u);
+    ASSERT_EQ(editor.selection().summary().selected_face_count, 0u);
+
+    const quader::QuaderApiResult<quader::QuaderHoverSummary> hovered = [&]() {
+      switch (mode_case.mode) {
+      case quader::QuaderSelectionMode::Vertex:
+        return editor.selection().hover_vertex(box, 1);
+      case quader::QuaderSelectionMode::Edge:
+        return editor.selection().hover_edge(box, 1, 2);
+      case quader::QuaderSelectionMode::Face:
+        return editor.selection().hover_face(box, 1);
+      case quader::QuaderSelectionMode::Object:
+      case quader::QuaderSelectionMode::Group:
+        break;
+      }
+      return editor.selection().hover_face(box, 1);
+    }();
+    ASSERT_TRUE(hovered.ok()) << hovered.error_message();
+    EXPECT_EQ(hovered.value().target.object_id, box.modeling_object_id);
+    EXPECT_EQ(hovered.value().target.kind, mode_case.hover_kind);
+
+    quader::QuaderHoverRequest miss;
+    miss.ray = {
+        .origin = {100.0f, 100.0f, 5.0f},
+        .direction = {0.0f, 0.0f, -1.0f},
+    };
+    const quader::QuaderApiResult<quader::QuaderHoverSummary> missed =
+        editor.selection().hover(miss);
+    ASSERT_TRUE(missed.ok()) << missed.error_message();
+    EXPECT_LT(missed.value().target.object_id, 0);
+    EXPECT_EQ(missed.value().target.kind,
+              quader::QuaderActiveSelectionKind::None);
+
+    const quader::QuaderApiVoidResult inverted =
+        editor.selection().select_inverse();
+    ASSERT_TRUE(inverted.ok()) << inverted.error_message();
+    EXPECT_FALSE(inverted.changed());
+    EXPECT_EQ(editor.selection().summary().selected_vertex_count, 0u);
+    EXPECT_EQ(editor.selection().summary().selected_edge_count, 0u);
+    EXPECT_EQ(editor.selection().summary().selected_face_count, 0u);
+    EXPECT_TRUE(selected_entities(editor).empty());
+
+    const quader::QuaderApiVoidResult selected_all =
+        editor.selection().select_all();
+    ASSERT_TRUE(selected_all.ok()) << selected_all.error_message();
+    EXPECT_TRUE(selected_all.changed());
+    const quader::QuaderSelectionSummary selected = editor.selection().summary();
+    switch (mode_case.mode) {
+    case quader::QuaderSelectionMode::Vertex:
+      EXPECT_EQ(selected.selected_vertex_count, mode_case.expected_count);
+      break;
+    case quader::QuaderSelectionMode::Edge:
+      EXPECT_EQ(selected.selected_edge_count, mode_case.expected_count);
+      break;
+    case quader::QuaderSelectionMode::Face:
+      EXPECT_EQ(selected.selected_face_count, mode_case.expected_count);
+      break;
+    case quader::QuaderSelectionMode::Object:
+    case quader::QuaderSelectionMode::Group:
+      break;
+    }
+    EXPECT_EQ(selected_entities(editor),
+              (std::vector<quader::EntityId>{box.entity}));
+  }
+}
+
+TEST(EditorApiTests,
+     ComponentSelectAllUnionsStickyHoverWithComponentSelectedMeshes) {
+  CommandTestHarness harness;
+  quader::QuaderEditorApi &editor = harness.editor;
+  const quader::QuaderModelingObjectRef selected_box =
+      create_selected_box(editor, "Selected Component Scope");
+  const quader::QuaderApiResult<quader::QuaderModelingObjectRef> sticky_box =
+      editor.modeling().create_box(
+          quader::QuaderBounds{
+              .min = {3.0f, -1.0f, -1.0f},
+              .max = {5.0f, 1.0f, 1.0f},
+          },
+          "Sticky Component Scope");
+  ASSERT_TRUE(sticky_box.ok()) << sticky_box.error_message();
+  const quader::QuaderApiResult<quader::QuaderModelingObjectRef> untouched_box =
+      editor.modeling().create_box(
+          quader::QuaderBounds{
+              .min = {7.0f, -1.0f, -1.0f},
+              .max = {9.0f, 1.0f, 1.0f},
+          },
+          "Untouched Component Scope");
+  ASSERT_TRUE(untouched_box.ok()) << untouched_box.error_message();
+
+  ASSERT_TRUE(editor.selection().set_mode(quader::QuaderSelectionMode::Face)
+                  .ok());
+  ASSERT_TRUE(editor.selection().select_face(selected_box, 1).ok());
+  ASSERT_EQ(editor.selection().summary().selected_face_count, 1u);
+  ASSERT_TRUE(editor.selection().hover_face(sticky_box.value(), 1).ok());
+
+  quader::QuaderHoverRequest miss;
+  miss.ray = {
+      .origin = {100.0f, 100.0f, 5.0f},
+      .direction = {0.0f, 0.0f, -1.0f},
+  };
+  ASSERT_TRUE(editor.selection().hover(miss).ok());
+
+  const quader::QuaderApiVoidResult selected_all =
+      editor.selection().select_all();
+  ASSERT_TRUE(selected_all.ok()) << selected_all.error_message();
+  EXPECT_TRUE(selected_all.changed());
+  EXPECT_EQ(editor.selection().summary().selected_face_count, 12u);
+  EXPECT_EQ(selected_entities(editor),
+            (std::vector<quader::EntityId>{selected_box.entity,
+                                           sticky_box.value().entity}));
+  const std::optional<quader::QuaderEntitySnapshot> untouched =
+      editor.query().entity(untouched_box.value().entity);
+  ASSERT_TRUE(untouched.has_value());
+  EXPECT_FALSE(untouched->selected);
+}
+
+TEST(EditorApiTests,
+     ComponentSelectAllIgnoresAStaleStickyCandidate) {
+  CommandTestHarness harness;
+  quader::QuaderEditorApi &editor = harness.editor;
+  const quader::QuaderModelingObjectRef selected_box =
+      create_selected_box(editor, "Live Component Scope");
+
+  ASSERT_TRUE(editor.selection().set_mode(quader::QuaderSelectionMode::Face)
+                  .ok());
+  ASSERT_TRUE(editor.selection().select_face(selected_box, 1).ok());
+  quader::QuaderModelingObjectRef stale_reference = selected_box;
+  stale_reference.modeling_object_id = 123456789;
+  ASSERT_TRUE(editor.selection().hover_face(stale_reference, 1).ok());
+  ASSERT_EQ(editor.selection().summary().selected_face_count, 1u);
+
+  const quader::QuaderApiVoidResult selected_all =
+      editor.selection().select_all();
+  ASSERT_TRUE(selected_all.ok()) << selected_all.error_message();
+  EXPECT_TRUE(selected_all.changed());
+  EXPECT_EQ(editor.selection().summary().selected_face_count, 6u);
+  EXPECT_EQ(selected_entities(editor),
+            (std::vector<quader::EntityId>{selected_box.entity}));
+}
+
+TEST(EditorApiTests,
      SelectSimilarMeshesUsesExactLocalGeometryAcrossIndependentObjects) {
   CommandTestHarness harness;
   quader::QuaderEditorApi &editor = harness.editor;
@@ -10228,6 +10395,19 @@ TEST(EditorApiTests,
   EXPECT_EQ(editor.selection().summary().selected_face_count, 6u);
   ASSERT_TRUE(editor.selection().select_inverse().ok());
   EXPECT_EQ(editor.selection().summary().selected_face_count, 0u);
+
+  ASSERT_TRUE(editor.selection().hover_face(member, 1).ok());
+  quader::QuaderHoverRequest sticky_miss;
+  sticky_miss.ray = {
+      .origin = {100.0f, 100.0f, 5.0f},
+      .direction = {0.0f, 0.0f, -1.0f},
+  };
+  ASSERT_TRUE(editor.selection().hover(sticky_miss).ok());
+  const quader::QuaderApiVoidResult sticky_select_all =
+      editor.selection().select_all();
+  ASSERT_TRUE(sticky_select_all.ok()) << sticky_select_all.error_message();
+  EXPECT_TRUE(sticky_select_all.changed());
+  EXPECT_EQ(editor.selection().summary().selected_face_count, 6u);
 
   quader::QuaderBoxSelectRequest active_box;
   active_box.camera = api_orthographic_camera();

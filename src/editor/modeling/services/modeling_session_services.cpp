@@ -1378,24 +1378,54 @@ ModelingSelectionService::rectangle_selection_state(
 }
 
 std::optional<ModelingCommandResult>
-ModelingSelectionService::select_all_in_viewport_scope(
+ModelingSelectionService::select_all_in_constrained_component_scope(
     quader_editor_core::EditorSession &session, const SceneDocument &scene,
-    const ModelingObjectRuntimeMap &object_map, bool invert) const {
+    const ModelingObjectRuntimeMap &object_map, bool invert,
+    int sticky_component_object_id) const {
   const bool instance_scope_active = instance_edit_scope().active();
-  if ((!instance_scope_active && !viewport_visibility_active()) ||
-      session.selection_mode() == quader_editor_core::SelectionMode::Object ||
+  const bool viewport_scope_active = viewport_visibility_active();
+  if (session.selection_mode() == quader_editor_core::SelectionMode::Object ||
       app_selection_mode() == ModelingSelectionMode::Group) {
     return std::nullopt;
   }
+  const bool sticky_scope_requested =
+      !invert && sticky_component_object_id > 0;
+  if (!instance_scope_active && !viewport_scope_active &&
+      !sticky_scope_requested) {
+    return std::nullopt;
+  }
 
-  std::vector<quader_editor_core::PolygonObject> scoped_objects =
+  const std::vector<quader_editor_core::PolygonObject> &picking_objects =
       cached_local_picking_objects(session, scene, object_map);
+  const bool sticky_scope_active =
+      sticky_scope_requested &&
+      std::ranges::any_of(
+          picking_objects,
+          [sticky_component_object_id](
+              const quader_editor_core::PolygonObject &object) {
+            return object.id == sticky_component_object_id;
+          });
+  if (!instance_scope_active && !viewport_scope_active &&
+      !sticky_scope_active) {
+    return std::nullopt;
+  }
+
+  // Local visibility and instance edit deliberately restrict the whole
+  // component universe. Ordinary sticky selection only validates its added
+  // target through the pickable universe; existing component-selected meshes
+  // keep the same full-session scope used by the SDK fallback.
+  std::vector<quader_editor_core::PolygonObject> scoped_objects =
+      instance_scope_active || viewport_scope_active
+          ? picking_objects
+          : session.objects();
   int active_object_id = session.active_object_id();
   std::vector<std::size_t> target_indices;
   target_indices.reserve(scoped_objects.size());
   for (std::size_t index = 0; index < scoped_objects.size(); ++index) {
     if (quader_editor_core::component_selection_has_mode_components(
-            scoped_objects[index].selection, session.selection_mode())) {
+            scoped_objects[index].selection, session.selection_mode()) ||
+        (sticky_scope_active &&
+         scoped_objects[index].id == sticky_component_object_id)) {
       target_indices.push_back(index);
     }
   }
@@ -1471,7 +1501,7 @@ ModelingSelectionService::select_all_in_viewport_scope(
       .ok = true,
       .changed = changed,
       .message = changed ? (invert ? "Visible selection inverted."
-                                   : "Visible components selected.")
+                                   : "Components selected.")
                          : "Selection unchanged.",
   };
 }

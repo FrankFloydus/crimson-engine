@@ -1831,8 +1831,9 @@ public:
     quader_editor_core::EditorSession projection =
         sdk_projection_adapter_.native_selection_projection();
     if (const std::optional<ModelingCommandResult> scoped =
-            selection_service_.select_all_in_viewport_scope(
-                projection, scene_, object_registry_, false)) {
+            selection_service_.select_all_in_constrained_component_scope(
+                projection, scene_, object_registry_, false,
+                runtime_.hover().candidate_object_id)) {
       if (!scoped->ok) {
         return *scoped;
       }
@@ -1854,8 +1855,9 @@ public:
     quader_editor_core::EditorSession projection =
         sdk_projection_adapter_.native_selection_projection();
     if (const std::optional<ModelingCommandResult> scoped =
-            selection_service_.select_all_in_viewport_scope(
-                projection, scene_, object_registry_, true)) {
+            selection_service_.select_all_in_constrained_component_scope(
+                projection, scene_, object_registry_, true,
+                kInvalidModelingObjectId)) {
       if (!scoped->ok) {
         return *scoped;
       }

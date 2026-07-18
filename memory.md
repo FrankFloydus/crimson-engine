@@ -5658,10 +5658,12 @@ Invariant:
   and `selection.*` spellings have no aliases, typed constants, registry routes, keybinding rows, or
   menu entries. The retained Qt Select menu changes its specialized rows by Object, Vertex, Edge,
   and Face mode while Select All/Inverse remain common actions.
-- In component modes, Select All and Select Inverse operate only on meshes that currently contain
-  at least one selected component in that same mode. Scene selection alone is not participation.
-  Once inversion empties a mesh, a later inverse has no implicit whole-scene scope to rediscover.
-  Local Visibility and instance-edit projections apply the identical rule.
+- In component modes, Select All operates on meshes that currently contain at least one selected
+  component in that mode plus the current live sticky source-wire candidate. The sticky candidate
+  is additive, survives an empty immediate hover, and must still belong to the pickable
+  local-visibility/instance-edit universe; stale IDs never force a different scope. Select Inverse
+  remains limited to meshes with selected current-mode components, so once inversion empties a
+  mesh, a later inverse cannot rediscover it through scene selection or sticky hover.
 - Cross-mesh component commands normalize every selected target's empty portable selection to the
   active component mode before comparison. This lets world-space Direction, Coplanar, and Normal
   include secondary meshes without manufacturing seed components. Grow/Shrink keep Blender's
@@ -5689,8 +5691,10 @@ selection and exact-geometry helpers, Qt Select-menu presentation, and render ov
 policy.
 
 Verification: the 9-test portable selection suite and focused native command/scope/Direction/
-Normal/N-Gon/Similar/overlay regressions pass. The complete `vs2026-debug` CTest preset passes 6/6;
-the final native build result is recorded in the task handoff.
+Normal/N-Gon/Similar/overlay regressions pass. Sticky Select All regressions cover Vertex, Edge,
+and Face modes without a seed selection, additive multi-mesh scope, unchanged inverse semantics,
+stale candidates, Local Visibility, and instance-edit isolation. The complete `vs2026-debug` CTest
+preset passes 6/6; the final native build result is recorded in the task handoff.
 
 ## 2026-07-18 - Every Visible Command Has An Executable Behavior Contract
 
