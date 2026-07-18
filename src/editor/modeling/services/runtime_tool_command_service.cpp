@@ -201,12 +201,6 @@ RuntimeToolCommandService::update_insert_edge_loop_drag(
 }
 
 quader_editor_core::EditorRuntimeCommand
-RuntimeToolCommandService::commit_insert_edge_loop_drag() {
-  return no_settings(
-      quader_editor_core::EditorRuntimeCommandId::CommitInsertEdgeLoopDrag);
-}
-
-quader_editor_core::EditorRuntimeCommand
 RuntimeToolCommandService::cancel_insert_edge_loop() {
   return no_settings(
       quader_editor_core::EditorRuntimeCommandId::CancelInsertEdgeLoop);
@@ -258,11 +252,6 @@ RuntimeToolCommandService::set_cut_mode(ModelingCutMode mode) {
                       settings);
 }
 
-quader_editor_core::EditorRuntimeCommand
-RuntimeToolCommandService::finalize_cut() {
-  return no_settings(quader_editor_core::EditorRuntimeCommandId::FinalizeCut);
-}
-
 quader_editor_core::EditorRuntimeCommand RuntimeToolCommandService::cancel_cut() {
   return no_settings(quader_editor_core::EditorRuntimeCommandId::CancelCut);
 }
@@ -310,11 +299,6 @@ RuntimeToolCommandService::end_mirror_drag() {
 }
 
 quader_editor_core::EditorRuntimeCommand
-RuntimeToolCommandService::finalize_mirror() {
-  return no_settings(quader_editor_core::EditorRuntimeCommandId::FinalizeMirror);
-}
-
-quader_editor_core::EditorRuntimeCommand
 RuntimeToolCommandService::cancel_mirror() {
   return no_settings(quader_editor_core::EditorRuntimeCommandId::CancelMirror);
 }
@@ -338,10 +322,6 @@ RuntimeToolCommandService::update_poly_hover(
 quader_editor_core::EditorRuntimeCommand
 RuntimeToolCommandService::accept_poly_point() {
   return no_settings(quader_editor_core::EditorRuntimeCommandId::AcceptPolyPoint);
-}
-
-quader_editor_core::EditorRuntimeCommand RuntimeToolCommandService::commit_poly() {
-  return no_settings(quader_editor_core::EditorRuntimeCommandId::CommitPoly);
 }
 
 quader_editor_core::EditorRuntimeCommand RuntimeToolCommandService::cancel_poly() {
@@ -387,23 +367,8 @@ RuntimeToolCommandService::update_box_height(const ModelingBoxToolEvent &event) 
       box_height_settings(event));
 }
 
-quader_editor_core::EditorRuntimeCommand RuntimeToolCommandService::commit_box() {
-  return no_settings(quader_editor_core::EditorRuntimeCommandId::CommitBox);
-}
-
 quader_editor_core::EditorRuntimeCommand RuntimeToolCommandService::cancel_box() {
   return no_settings(quader_editor_core::EditorRuntimeCommandId::CancelBox);
-}
-
-quader_editor_core::EditorRuntimeCommand
-RuntimeToolCommandService::create_box_from_bounds(
-    const ModelingCreateBoxRequest &request) {
-  quader_editor_core::CreateBoxFromBoundsRuntimeCommandSettings settings;
-  settings.min_bounds = to_runtime(request.bounds.min);
-  settings.max_bounds = to_runtime(request.bounds.max);
-  return make_command(
-      quader_editor_core::EditorRuntimeCommandId::CreateBoxFromBounds,
-      settings);
 }
 
 } // namespace quader

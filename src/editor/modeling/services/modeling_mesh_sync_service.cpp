@@ -609,10 +609,11 @@ void finalize_reconciled_modeling_object_scene_nodes(
   for (const auto &[modelingObjectId, entity] :
        object_map.object_entity_bindings_by_modeling_object()) {
     QDR_PROFILE_SCOPE("Modeling mesh sync detect stale object node");
-    if (!live_objects.contains(modelingObjectId)) {
+    const ModelingObjectComponent *component = scene.modeling_object(entity);
+    if (!live_objects.contains(modelingObjectId) &&
+        (component == nullptr || !component->sdk_owned)) {
       stale_objects.push_back(modelingObjectId);
     }
-    (void)entity;
   }
 
   for (const int modeling_object_id : stale_objects) {
@@ -708,7 +709,8 @@ bool project_modeling_meshes_to_scene(
       return false;
     }
     object_registry.remember_scene_entity(object.id, scene, entity);
-    scene_sync.remember_projected_mesh_signature(object.id, plan->signature);
+    scene_sync.remember_projected_mesh_signature(
+        object.id, plan->signature, object.document.storage_token());
   }
   return true;
 }
@@ -723,6 +725,95 @@ bool ModelingMeshSyncService::should_force_refresh(bool preview_active,
 std::optional<MeshAsset> ModelingMeshSyncService::compile_object_mesh(
     const quader_editor_core::PolygonObject &object) const {
   return MeshProjectionService::compile_object_mesh(object);
+}
+
+AssetId ModelingMeshSyncService::install_projected_mesh(
+    AssetRegistry &assets, MeshAsset mesh) const {
+  return assets.add_mesh(std::move(mesh));
+}
+
+bool ModelingMeshSyncService::replace_projected_mesh(
+    AssetRegistry &assets, AssetId mesh_id, MeshAsset mesh) const {
+  return assets.replace_mesh(mesh_id, std::move(mesh));
+}
+
+EntityId ModelingMeshSyncService::create_projected_mesh_entity(
+    SceneDocument &scene, const std::string &name) const {
+  return scene.create_entity(name, EntityKind::Mesh);
+}
+
+EntityId ModelingMeshSyncService::restore_projected_mesh_entity(
+    SceneDocument &scene, const ModelingObjectSceneIdentity &identity) const {
+  if (scene.exists(identity.entity)) {
+    return identity.entity;
+  }
+  const EntityId restored = scene.create_entity_with_id(
+      identity.entity, identity.name, EntityKind::Mesh,
+      identity.editor_object_id);
+  if (restored == kInvalidEntityId) {
+    return kInvalidEntityId;
+  }
+  if (!identity.uuid.empty() &&
+      !scene.set_entity_uuid(restored, identity.uuid)) {
+    (void)scene.destroy_entity(restored);
+    return kInvalidEntityId;
+  }
+  return restored;
+}
+
+bool ModelingMeshSyncService::destroy_projected_entity(
+    SceneDocument &scene, EntityId entity) const {
+  return scene.destroy_entity(entity);
+}
+
+bool ModelingMeshSyncService::parent_projected_entity(
+    SceneDocument &scene, EntityId entity, EntityId parent) const {
+  return scene.set_parent(entity, parent, false);
+}
+
+bool ModelingMeshSyncService::bind_projected_object(
+    SceneDocument &scene, EntityId entity, int modeling_object_id,
+    std::uint32_t material_slot, bool sdk_owned, AssetId mesh_id) const {
+  MeshComponent mesh = scene.mesh(entity) != nullptr
+                           ? *scene.mesh(entity)
+                           : MeshComponent{};
+  mesh.mesh = mesh_id;
+  return scene.set_modeling_object(
+             entity, {.object_id = modeling_object_id,
+                      .material_slot = material_slot,
+                      .sdk_owned = sdk_owned}) &&
+         scene.set_mesh(entity, mesh);
+}
+
+bool ModelingMeshSyncService::mark_projected_object_sdk_owned(
+    SceneDocument &scene, EntityId entity) const {
+  const ModelingObjectComponent *component = scene.modeling_object(entity);
+  if (component == nullptr) {
+    return false;
+  }
+  if (component->sdk_owned) {
+    return true;
+  }
+  ModelingObjectComponent sdk_component = *component;
+  sdk_component.sdk_owned = true;
+  return scene.set_modeling_object(entity, sdk_component);
+}
+
+bool ModelingMeshSyncService::set_projected_mesh_binding(
+    SceneDocument &scene, EntityId entity, AssetId mesh_id) const {
+  return scene.set_mesh(entity, {.mesh = mesh_id});
+}
+
+bool ModelingMeshSyncService::set_projected_material(
+    SceneDocument &scene, EntityId entity,
+    const MaterialComponent *material) const {
+  return material != nullptr ? scene.set_material(entity, *material)
+                             : scene.clear_material(entity);
+}
+
+bool ModelingMeshSyncService::notify_projected_mesh_changed(
+    SceneDocument &scene, EntityId entity) const {
+  return scene.notify_mesh_payload_changed(entity);
 }
 
 void ModelingMeshSyncService::apply_scene_identity_to_entity(
@@ -867,7 +958,8 @@ void ModelingMeshSyncService::establish_loaded_scene_sync_baseline(
   scene_sync.invalidate_scene_objects();
   for (const quader_editor_core::PolygonObject &object : session.objects()) {
     scene_sync.remember_projected_mesh_signature(
-        object.id, projected_mesh_signature(object));
+        object.id, projected_mesh_signature(object),
+        object.document.storage_token());
   }
   scene_sync.mark_scene_objects_synced(session.state().content_revision);
 }
@@ -1022,7 +1114,8 @@ ModelingMeshSyncService::create_scene_object_from_latest(
 
   scene_sync.object_map().bind(object.id, entity);
   scene_sync.remember_projected_mesh_signature(
-      object.id, projected_mesh_signature(object));
+      object.id, projected_mesh_signature(object),
+      object.document.storage_token());
   scene_sync.mark_scene_objects_synced(session.state().content_revision);
 
   return {

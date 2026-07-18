@@ -7,7 +7,7 @@
 #pragma once
 
 #include <editor/interactions/tool_identity.hpp>
-#include <mesh/polygon/document.hpp>
+#include <quader/modeling/neutral/polygon/document.hpp>
 
 namespace quader_editor_core {
 

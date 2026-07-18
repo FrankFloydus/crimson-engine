@@ -58,6 +58,38 @@ struct SceneTransformAssignment {
 };
 
 /**
+ * Stores the exact scene counters and selection visible before one staged
+ * modeling projection.
+ *
+ * Component edits on pre-existing entities must be compensated by their
+ * owning adapter before restore. The scene owner removes newly published
+ * entities and restores allocation/revision/selection state exactly.
+ */
+class SceneProjectionCheckpoint final {
+public:
+  SceneProjectionCheckpoint() = default;
+  [[nodiscard]] bool valid() const noexcept { return valid_; }
+
+private:
+  friend class SceneDocument;
+
+  bool valid_ = false;
+  EntityId next_id_ = 1;
+  EditorObjectId next_editor_object_id_ = 1;
+  SceneLayerId next_layer_id_ = 1;
+  EntityId active_selection_ = kInvalidEntityId;
+  std::vector<EntityId> selected_entities_;
+  std::uint64_t revision_ = 0;
+  std::uint64_t content_revision_ = 0;
+  std::uint64_t selection_revision_ = 0;
+  std::uint64_t visibility_revision_ = 0;
+  std::uint64_t transform_revision_ = 0;
+  std::uint64_t mesh_binding_revision_ = 0;
+  std::uint64_t render_component_revision_ = 0;
+  std::uint64_t layer_revision_ = 0;
+};
+
+/**
  * Owns Scene Document behavior within the scene graph document layer.
  */
 class SceneDocument {
@@ -207,6 +239,17 @@ public:
       return render_component_revision_;
     }
     std::uint64_t layer_revision() const { return layer_revision_; }
+
+    /** Captures scene state needed to roll back one staged host projection. */
+    [[nodiscard]] SceneProjectionCheckpoint
+    capture_projection_checkpoint() const;
+    /**
+     * Removes entities created by a failed projection and restores the exact
+     * allocation, selection, and revision state captured before it.
+     */
+    [[nodiscard]] bool restore_projection_checkpoint(
+        const SceneProjectionCheckpoint &checkpoint,
+        std::span<const EntityId> created_entities = {});
 
 private:
   NameComponent *mutable_name(EntityId id);

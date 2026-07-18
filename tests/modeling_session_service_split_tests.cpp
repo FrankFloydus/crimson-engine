@@ -18,13 +18,11 @@
 #include "editor/selection/selection_projection_service.hpp"
 #include "editor/tools/viewport_tool_descriptor_catalog.hpp"
 #include "scene/scene_document.hpp"
-#include "support/guardrail_file_scan.hpp"
 
 #include <gtest/gtest.h>
 
 #include <algorithm>
 #include <array>
-#include <filesystem>
 #include <limits>
 #include <memory>
 #include <optional>
@@ -61,9 +59,6 @@ TEST(ModelingViewportCameraAdapterTests,
   EXPECT_FLOAT_EQ(runtime.transform.origin.y, 2.0f);
   EXPECT_FLOAT_EQ(runtime.transform.origin.z, 3.0f);
 }
-
-using test::guardrail::read_source_file;
-using test::guardrail::source_root;
 
 void expect_vec3_eq(QVec3 actual, QVec3 expected) {
   EXPECT_FLOAT_EQ(actual.x, expected.x);
@@ -165,63 +160,8 @@ TEST(ModelingSessionServiceSplitTests,
   EXPECT_TRUE(box_height_settings->has_camera);
   EXPECT_FALSE(box_height_settings->snap_enabled);
 
-  ModelingCreateBoxRequest box_request;
-  box_request.bounds.min = {-2.0f, -1.0f, -3.0f};
-  box_request.bounds.max = {2.0f, 1.0f, 3.0f};
-  const quader_editor_core::EditorRuntimeCommand create_box =
-      RuntimeToolCommandService::create_box_from_bounds(box_request);
-  EXPECT_EQ(create_box.command_id,
-            quader_editor_core::EditorRuntimeCommandId::CreateBoxFromBounds);
-  const auto *create_box_settings = std::get_if<
-      quader_editor_core::CreateBoxFromBoundsRuntimeCommandSettings>(
-      &create_box.settings);
-  ASSERT_NE(create_box_settings, nullptr);
-  EXPECT_NEAR(create_box_settings->min_bounds.x, -2.0, 0.0001);
-  EXPECT_NEAR(create_box_settings->max_bounds.z, 3.0, 0.0001);
 }
 
-TEST(ModelingSessionServiceSplitTests,
-     RuntimeToolCommandConstructionLivesOutsideFacade) {
-  const std::string facade = read_source_file(
-      "src/editor/modeling/services/modeling_session_service.cpp");
-  const std::string command_service = read_source_file(
-      "src/editor/modeling/services/runtime_tool_command_service.cpp");
-
-  const std::array<std::string, 10> settings_types = {
-      "InsertEdgeLoopPickRuntimeCommandSettings",
-      "CutRayRuntimeCommandSettings",
-      "CutPointDragRuntimeCommandSettings",
-      "SetCutModeRuntimeCommandSettings",
-      "MirrorRayRuntimeCommandSettings",
-      "MirrorPointDragRuntimeCommandSettings",
-      "PolyHoverRuntimeCommandSettings",
-      "BoxRayRuntimeCommandSettings",
-      "BoxHeightRuntimeCommandSettings",
-      "CreateBoxFromBoundsRuntimeCommandSettings",
-  };
-  for (const std::string &settings_type : settings_types) {
-    EXPECT_EQ(facade.find(settings_type), std::string::npos) << settings_type;
-    EXPECT_NE(command_service.find(settings_type), std::string::npos)
-        << settings_type;
-  }
-
-  EXPECT_NE(
-      facade.find("RuntimeToolCommandService::update_insert_edge_loop_hover"),
-      std::string::npos);
-  EXPECT_NE(facade.find("RuntimeToolCommandService::update_cut_hover"),
-            std::string::npos);
-  EXPECT_NE(facade.find("RuntimeToolCommandService::update_mirror_hover"),
-            std::string::npos);
-  EXPECT_NE(facade.find("RuntimeToolCommandService::update_poly_hover"),
-            std::string::npos);
-  EXPECT_NE(facade.find("RuntimeToolCommandService::update_box_hover"),
-            std::string::npos);
-  EXPECT_EQ(facade.find("viewport_grid_point_from_ray("), std::string::npos);
-  EXPECT_EQ(facade.find("runtime_.update_poly_hover"), std::string::npos);
-  EXPECT_EQ(facade.find("runtime_.accept_poly_current_point"),
-            std::string::npos);
-  EXPECT_EQ(facade.find("runtime_.commit_poly_tool"), std::string::npos);
-}
 
 TEST(ModelingSessionServiceSplitTests,
      ObjectRuntimeMapOwnsModelingSceneMappingsAndBuildsRecords) {
@@ -530,7 +470,7 @@ TEST(ModelingSessionServiceSplitTests,
 
   objects = session.objects();
   objects.front().document.edit().vertices.front().position.x += 0.25f;
-  session.set_objects(std::move(objects));
+  session.objects() = std::move(objects);
   ASSERT_TRUE(mesh_sync.sync_scene_objects_from_modeling(
       session, scene, assets, scene_sync, true));
   const ModelingMeshSyncStats edited = mesh_sync.last_sync_stats();
@@ -586,7 +526,7 @@ TEST(ModelingSessionServiceSplitTests,
   quader_editor_core::PolygonObject changed = object;
   ASSERT_FALSE(changed.document.vertices.empty());
   changed.document.edit().vertices.front().position.x += 3.0f;
-  session.set_objects({std::move(changed)});
+  session.objects() = {std::move(changed)};
   ASSERT_TRUE(mesh_sync.sync_scene_objects_from_modeling(
       session, scene, assets, scene_sync, false));
 
@@ -732,7 +672,7 @@ TEST(ModelingSessionServiceSplitTests,
   ASSERT_EQ(changed.size(), 2U);
   changed[0].document.edit().vertices.front().position.x += 1.0f;
   changed[1].document.edit().vertices.front().position.y += 1.0f;
-  session.set_objects(std::move(changed));
+  session.objects() = std::move(changed);
   const std::size_t mesh_count_before = assets.mesh_count();
 
   EXPECT_FALSE(mesh_sync.sync_scene_objects_from_modeling(
@@ -1465,530 +1405,464 @@ TEST(ModelingSessionServiceSplitTests,
 }
 
 TEST(ModelingSessionServiceSplitTests,
-     ObjectRuntimeMapStaysOutOfServiceBucket) {
-  const std::string cmake = read_source_file("CMakeLists.txt");
-  const std::string services = read_source_file(
-      "src/editor/modeling/services/modeling_session_services.cpp");
-  const std::string service_aggregate = read_source_file(
-      "src/editor/modeling/services/modeling_session_services.hpp");
+     EachWorkspaceOwnsOneIndependentSdkProjectionSession) {
+  SceneDocument first_scene;
+  SceneDocument second_scene;
+  AssetRegistry first_assets;
+  AssetRegistry second_assets;
+  ModelingSessionService first(first_scene, first_assets);
+  ModelingSessionService second(second_scene, second_assets);
 
-  EXPECT_NE(
-      cmake.find("src/editor/modeling/runtime/modeling_object_runtime_map.cpp"),
-      std::string::npos);
-  EXPECT_NE(service_aggregate.find(
-                "editor/modeling/runtime/modeling_object_runtime_map.hpp"),
-            std::string::npos);
-  EXPECT_EQ(cmake.find("src/editor/modeling/services/ModelingObjectRegistry"),
-            std::string::npos);
-  EXPECT_EQ(service_aggregate.find("ModelingObjectRegistry"),
-            std::string::npos);
-  EXPECT_EQ(services.find("ModelingObjectRuntimeMap::"), std::string::npos);
-  const std::string runtime_map_header = read_source_file(
-      "src/editor/modeling/runtime/modeling_object_runtime_map.hpp");
-  const std::string projection_source = read_source_file(
-      "src/editor/projection/selection_overlay_projection.cpp");
-  const std::string picking_projection_source =
-      read_source_file("src/editor/projection/picking_cache_projection.cpp");
-  const std::string mesh_sync_source = read_source_file(
-      "src/editor/modeling/services/modeling_mesh_sync_service.cpp");
-  EXPECT_EQ(runtime_map_header.find("entities_by_object()"), std::string::npos);
-  EXPECT_EQ(runtime_map_header.find("objectsByEntity()"), std::string::npos);
-  EXPECT_EQ(services.find("entities_by_object()"), std::string::npos);
-  EXPECT_EQ(services.find("objectsByEntity()"), std::string::npos);
-  EXPECT_EQ(projection_source.find("entities_by_object()"), std::string::npos);
-  EXPECT_EQ(picking_projection_source.find("entities_by_object()"),
-            std::string::npos);
-  EXPECT_EQ(mesh_sync_source.find("entities_by_object()"), std::string::npos);
-  EXPECT_NE(
-      runtime_map_header.find("object_entity_bindings_by_modeling_object()"),
-      std::string::npos);
-  EXPECT_NE(runtime_map_header.find(
-                "entity_for_modeling_object(int modeling_object_id)"),
-            std::string::npos);
-  EXPECT_NE(
-      runtime_map_header.find("modeling_object_for_entity(EntityId entity)"),
-      std::string::npos);
-  EXPECT_NE(runtime_map_header.find(
-                "void bind(int modeling_object_id, EntityId entity)"),
-            std::string::npos);
-  EXPECT_NE(
-      runtime_map_header.find("void unbind_object(int modeling_object_id)"),
-      std::string::npos);
+  EXPECT_NE(first.modeling_sdk_session_identity_for_tests(),
+            second.modeling_sdk_session_identity_for_tests());
+  EXPECT_EQ(first.modeling_sdk_object_count_for_tests(), 0u);
+  EXPECT_EQ(second.modeling_sdk_object_count_for_tests(), 0u);
+
+  const ModelingCreateBoxResult created = first.create_box_from_bounds({
+      .bounds = {.min = {-1.0f, -1.0f, -1.0f},
+                 .max = {1.0f, 1.0f, 1.0f}},
+      .name = "Workspace SDK Box",
+  });
+  ASSERT_TRUE(created.ok) << created.message;
+  EXPECT_EQ(first.modeling_sdk_object_count_for_tests(), 1u);
+  EXPECT_EQ(second.modeling_sdk_object_count_for_tests(), 0u);
+  const ModelingObjectComponent *component =
+      first_scene.modeling_object(created.object.entity);
+  ASSERT_NE(component, nullptr);
+  EXPECT_TRUE(component->sdk_owned);
+  EXPECT_TRUE(second_scene.entities().empty());
 }
 
 TEST(ModelingSessionServiceSplitTests,
-     ObjectSelectionMappingLivesInSelectionProjectionService) {
-  const std::string facade = read_source_file(
-      "src/editor/modeling/services/modeling_session_service.cpp");
-  const std::string projection =
-      read_source_file("src/editor/selection/selection_projection_service.cpp");
-  const std::string selection_owner =
-      read_source_file("src/editor/selection/scene_selection_application.cpp");
+     SdkBoxHistoryRestoresTheSameHostMappingAndOwnership) {
+  SceneDocument scene;
+  AssetRegistry assets;
+  ModelingSessionService service(scene, assets);
+  EditorHistoryService history;
+  const CommandResult created = history.execute(
+      std::make_unique<CreateBoxFromBoundsHistoryCommand>(
+          service,
+          ModelingCreateBoxRequest{
+              .bounds = {.min = {-1.0f, -1.0f, -1.0f},
+                         .max = {1.0f, 1.0f, 1.0f}},
+              .name = "SDK History Box",
+          }));
+  ASSERT_TRUE(created.ok) << created.message;
+  ASSERT_TRUE(created.changed);
+  ASSERT_EQ(service.objects().size(), 1u);
+  const ModelingObjectRecord original = service.objects().front();
+  ASSERT_NE(scene.modeling_object(original.entity), nullptr);
+  EXPECT_TRUE(scene.modeling_object(original.entity)->sdk_owned);
+  EXPECT_EQ(service.modeling_sdk_object_count_for_tests(), 1u);
 
-  EXPECT_NE(facade.find("project_object_selection_for_scene_entities("),
-            std::string::npos);
-  EXPECT_EQ(facade.find("const auto object = "
-                        "object_registry_.modeling_object_for_entity(entity);"),
-            std::string::npos);
-  EXPECT_EQ(facade.find("const auto object = "
-                        "object_registry_.modeling_object_for_entity(active);"),
-            std::string::npos);
-  EXPECT_NE(projection.find("project_object_selection_for_scene_entities("),
-            std::string::npos);
-  EXPECT_NE(projection.find("runtime_object_selection_for_scene_entities("),
-            std::string::npos);
-  EXPECT_NE(projection.find("resolve_projected_active_selection("),
-            std::string::npos);
-  EXPECT_NE(projection.find("apply_runtime_object_selection("),
-            std::string::npos);
-  EXPECT_EQ(projection.find("apply_exact_scene_selection("), std::string::npos);
-  EXPECT_NE(projection.find("SceneSelectionApplicationMode::RuntimeSync"),
-            std::string::npos);
-  EXPECT_NE(selection_owner.find("apply_runtime_sync_scene_selection("),
-            std::string::npos);
-  EXPECT_EQ(projection.find("ordered_selected.front()"), std::string::npos);
+  const CommandResult undone = history.undo();
+  ASSERT_TRUE(undone.ok) << undone.message;
+  EXPECT_TRUE(service.objects().empty());
+  EXPECT_EQ(service.modeling_sdk_object_count_for_tests(), 0u);
+  EXPECT_FALSE(scene.exists(original.entity));
+
+  const CommandResult redone = history.redo();
+  ASSERT_TRUE(redone.ok) << redone.message;
+  ASSERT_EQ(service.objects().size(), 1u);
+  EXPECT_EQ(service.objects().front().modeling_object_id,
+            original.modeling_object_id);
+  EXPECT_EQ(service.objects().front().entity, original.entity);
+  ASSERT_NE(scene.modeling_object(original.entity), nullptr);
+  EXPECT_TRUE(scene.modeling_object(original.entity)->sdk_owned);
+  EXPECT_EQ(service.modeling_sdk_object_count_for_tests(), 1u);
 }
 
 TEST(ModelingSessionServiceSplitTests,
-     ClickPickSelectionUsesSelectionServiceCachedInputs) {
-  const std::string facade = read_source_file(
-      "src/editor/modeling/services/modeling_session_service.cpp");
-  const std::string selection_service = read_source_file(
-      "src/editor/modeling/services/modeling_session_services.cpp");
-  const std::string runtime_picking =
-      read_source_file("src/editor/modeling/runtime/session_picking.cpp");
-  const std::string runtime_header =
-      read_source_file("src/editor/modeling/runtime/session.hpp");
+     SdkBoxProjectionFailureBoundariesRestoreHostStateExactly) {
+  constexpr std::array<ModelingSdkProjectionFailurePoint, 6> kFailures = {
+      ModelingSdkProjectionFailurePoint::AfterSdkMutation,
+      ModelingSdkProjectionFailurePoint::AfterAssetInstall,
+      ModelingSdkProjectionFailurePoint::AfterEntityCreate,
+      ModelingSdkProjectionFailurePoint::AfterSceneBinding,
+      ModelingSdkProjectionFailurePoint::AfterSelection,
+      ModelingSdkProjectionFailurePoint::BeforeCommit,
+  };
 
-  EXPECT_NE(facade.find("selection_service_.apply_pick_selection("),
-            std::string::npos);
-  EXPECT_NE(facade.find("session_,"), std::string::npos);
-  EXPECT_NE(facade.find("scene_, object_registry_, effective_request)"),
-            std::string::npos);
-  EXPECT_EQ(facade.find("quader_editor_core::pick_select_all_faces(\n          "
-                        "          picking_objects"),
-            std::string::npos);
-  EXPECT_EQ(facade.find("quader_editor_core::pick_select_edge_loop(\n          "
-                        "          picking_objects"),
-            std::string::npos);
-  EXPECT_EQ(facade.find("quader_editor_core::pick_select_all_vertices(\n       "
-                        "             picking_objects"),
-            std::string::npos);
-  EXPECT_NE(
-      selection_service.find("ModelingSelectionService::apply_pick_selection("),
-      std::string::npos);
-  EXPECT_NE(selection_service.find(
-                "cached_pick_object_bounds(session, scene, object_registry)"),
-            std::string::npos);
-  EXPECT_NE(selection_service.find("cached_local_pick_face_geometry("),
-            std::string::npos);
-  EXPECT_NE(selection_service.find("object_registry, pick_options)"),
-            std::string::npos);
-  EXPECT_NE(selection_service.find("cached_local_picking_transforms("),
-            std::string::npos);
-  EXPECT_NE(selection_service.find(".object_bounds = pick_bounds"),
-            std::string::npos);
-  EXPECT_NE(selection_service.find(".face_geometry = pick_face_geometry"),
-            std::string::npos);
-  EXPECT_NE(selection_service.find(".object_transforms = object_transforms"),
-            std::string::npos);
-  EXPECT_NE(selection_service.find("quader_editor_core::apply_pick_selection("),
-            std::string::npos);
-  EXPECT_EQ(selection_service.find("applyPickedSelectionToSession"),
-            std::string::npos);
-  EXPECT_EQ(selection_service.find("sessionHasComponentSelection"),
-            std::string::npos);
-  EXPECT_EQ(selection_service.find("pickSelectRequestHitsTarget"),
-            std::string::npos);
-  EXPECT_EQ(
-      selection_service.find("quader_editor_core::pick_select_all_faces("),
-      std::string::npos);
-  EXPECT_EQ(
-      selection_service.find("quader_editor_core::pick_select_edge_loop("),
-      std::string::npos);
-  EXPECT_EQ(
-      selection_service.find("quader_editor_core::pick_select_all_vertices("),
-      std::string::npos);
-  EXPECT_NE(runtime_header.find("struct ApplyPickSelectionRequest"),
-            std::string::npos);
-  EXPECT_NE(runtime_header.find("apply_pick_selection(EditorSession &session"),
-            std::string::npos);
-  EXPECT_NE(
-      runtime_picking.find("ApplyPickSelectionResult apply_pick_selection("),
-      std::string::npos);
-  EXPECT_NE(runtime_picking.find("apply_picked_selection_to_session("),
-            std::string::npos);
-  EXPECT_NE(
-      runtime_header.find("std::span<const PickObjectBounds> object_bounds"),
-      std::string::npos);
-  EXPECT_NE(runtime_header.find(
-                "std::span<const PickObjectTransform> object_transforms"),
-            std::string::npos);
-  EXPECT_NE(runtime_picking.find("request.object_bounds"), std::string::npos);
-  EXPECT_NE(runtime_picking.find("request.face_geometry"), std::string::npos);
-  EXPECT_NE(runtime_picking.find("request.object_transforms"),
-            std::string::npos);
+  for (const ModelingSdkProjectionFailurePoint failure_point : kFailures) {
+    SCOPED_TRACE(static_cast<int>(failure_point));
+    SceneDocument scene;
+    AssetRegistry assets;
+    ModelingSessionService service(scene, assets);
+    const EntityId sentinel =
+        scene.create_entity("Projection Sentinel", EntityKind::Empty);
+    ASSERT_NE(sentinel, kInvalidEntityId);
+    ASSERT_TRUE(scene.set_selected(sentinel, true));
+
+    const std::vector<EntityId> entities_before = scene.entities();
+    const std::vector<EntityId> selected_before = scene.selected_entities();
+    const std::vector<AssetId> meshes_before = assets.mesh_ids();
+    const std::uint64_t scene_revision_before = scene.revision();
+    const std::uint64_t scene_selection_revision_before =
+        scene.selection_revision();
+    const std::uint64_t asset_revision_before = assets.revision();
+    const std::uint64_t content_revision_before = service.content_revision();
+    const std::uint64_t selection_revision_before =
+        service.selection_revision();
+
+    service.set_modeling_sdk_projection_failure_for_tests(failure_point);
+    const ModelingCreateBoxResult failed = service.create_box_from_bounds({
+        .bounds = {.min = {-1.0f, -1.0f, -1.0f},
+                   .max = {1.0f, 1.0f, 1.0f}},
+        .name = "Must Roll Back",
+    });
+    EXPECT_FALSE(failed.ok);
+    EXPECT_FALSE(failed.changed);
+    EXPECT_EQ(service.modeling_sdk_object_count_for_tests(), 0u);
+    EXPECT_EQ(scene.entities(), entities_before);
+    EXPECT_EQ(scene.selected_entities(), selected_before);
+    EXPECT_EQ(scene.primary_selection(), sentinel);
+    EXPECT_EQ(scene.revision(), scene_revision_before);
+    EXPECT_EQ(scene.selection_revision(), scene_selection_revision_before);
+    EXPECT_EQ(assets.mesh_ids(), meshes_before);
+    EXPECT_EQ(assets.revision(), asset_revision_before);
+    EXPECT_EQ(service.content_revision(), content_revision_before);
+    EXPECT_EQ(service.selection_revision(), selection_revision_before);
+
+    service.set_modeling_sdk_projection_failure_for_tests(
+        ModelingSdkProjectionFailurePoint::None);
+    const ModelingCreateBoxResult retried = service.create_box_from_bounds({
+        .bounds = {.min = {-1.0f, -1.0f, -1.0f},
+                   .max = {1.0f, 1.0f, 1.0f}},
+        .name = "Retry Succeeds",
+    });
+    ASSERT_TRUE(retried.ok) << retried.message;
+    EXPECT_EQ(service.modeling_sdk_object_count_for_tests(), 1u);
+    EXPECT_EQ(retried.object.modeling_object_id, 1);
+  }
 }
 
 TEST(ModelingSessionServiceSplitTests,
-     SelectionApplicationLivesInModelingSelectionService) {
-  const std::string facade = read_source_file(
-      "src/editor/modeling/services/modeling_session_service.cpp");
-  const std::string selection_header = read_source_file(
-      "src/editor/modeling/services/modeling_selection_service.hpp");
-  const std::string selection_service = read_source_file(
-      "src/editor/modeling/services/modeling_session_services.cpp");
+     SdkSelectionTranslationPreviewAndCountersStayEventDriven) {
+  SceneDocument scene;
+  AssetRegistry assets;
+  ModelingSessionService service(scene, assets);
+  const ModelingCreateBoxResult created = service.create_box_from_bounds({
+      .bounds = {.min = {-1.0f, -1.0f, -1.0f},
+                 .max = {1.0f, 1.0f, 1.0f}},
+      .name = "SDK Interaction Box",
+  });
+  ASSERT_TRUE(created.ok) << created.message;
+  ASSERT_TRUE(service.set_selection_mode(ModelingSelectionMode::Face).ok);
+  ASSERT_TRUE(service
+                  .set_component_selection({
+                      .modeling_object_id = created.object.modeling_object_id,
+                      .mode = ModelingSelectionMode::Face,
+                      .faces = {1},
+                      .edit = ModelingSelectionEdit::Replace,
+                      .active_kind = ModelingActiveSelectionKind::Face,
+                      .active_face = 1,
+                  })
+                  .ok);
+  EXPECT_EQ(service.selection_summary().selected_face_count, 1u);
 
-  EXPECT_NE(selection_header.find("struct ModelingSelectionApplyResult"),
-            std::string::npos);
-  EXPECT_NE(selection_header.find("selection_summary("), std::string::npos);
-  EXPECT_NE(selection_header.find("set_component_selection("),
-            std::string::npos);
-  EXPECT_NE(selection_header.find("set_group_selection_mode("),
-            std::string::npos);
+  const ModelingSdkProjectionStats before_move =
+      service.modeling_sdk_projection_stats_for_tests();
+  ASSERT_TRUE(service.move_selection({1.0f, 0.0f, 0.0f}).ok);
+  const ModelingSdkProjectionStats after_move =
+      service.modeling_sdk_projection_stats_for_tests();
+  EXPECT_EQ(after_move.mesh_compile_count,
+            before_move.mesh_compile_count + 1u);
+  EXPECT_EQ(after_move.asset_publication_count,
+            before_move.asset_publication_count + 1u);
+  EXPECT_EQ(after_move.scene_publication_count,
+            before_move.scene_publication_count + 1u);
 
-  EXPECT_NE(
-      selection_service.find("ModelingSelectionService::selection_summary("),
-      std::string::npos);
-  EXPECT_NE(selection_service.find(
-                "ModelingSelectionService::set_component_selection("),
-            std::string::npos);
-  EXPECT_NE(selection_service.find("validated_component_selection_edit("),
-            std::string::npos);
-  EXPECT_NE(selection_service.find(
-                "ModelingSelectionService::apply_rectangle_selection("),
-            std::string::npos);
-  EXPECT_NE(selection_service.find("to_runtime_selection_edit(request.edit)"),
-            std::string::npos);
+  const MeshComponent *binding = scene.mesh(created.object.entity);
+  ASSERT_NE(binding, nullptr);
+  const MeshAsset *committed = assets.mesh(binding->mesh);
+  ASSERT_NE(committed, nullptr);
+  const MeshGeometryPayload committed_geometry = committed->geometry();
 
-  EXPECT_NE(facade.find("selection_service_.selection_summary("),
-            std::string::npos);
-  EXPECT_NE(facade.find("selection_service_.set_component_selection("),
-            std::string::npos);
-  EXPECT_NE(facade.find("selection_service_.apply_rectangle_selection("),
-            std::string::npos);
-  EXPECT_NE(
-      facade.find("selection_projection_service_.restore_scene_selection("),
-      std::string::npos);
-  EXPECT_EQ(facade.find("validated_component_selection_edit("),
-            std::string::npos);
-  EXPECT_EQ(facade.find("ComponentSelectionEditResult"), std::string::npos);
-  EXPECT_EQ(facade.find("quader_editor_core::apply_rectangle_selection("
-                        "rectangle_request)"),
-            std::string::npos);
-  EXPECT_EQ(facade.find("scene_.clear_selection()"), std::string::npos);
+  ASSERT_TRUE(service.begin_transform_preview(false).ok);
+  ASSERT_TRUE(service.update_transform_translate_preview({0.0f, 2.0f, 0.0f})
+                  .ok);
+  EXPECT_TRUE(service.can_cancel_active_preview_for_undo());
+  const ModelingSdkProjectionStats after_preview =
+      service.modeling_sdk_projection_stats_for_tests();
+  EXPECT_EQ(after_preview.preview_publication_count,
+            after_move.preview_publication_count + 1u);
+  ASSERT_TRUE(service.cancel_transform_preview().ok);
+  EXPECT_FALSE(service.can_cancel_active_preview_for_undo());
+  ASSERT_NE(assets.mesh(scene.mesh(created.object.entity)->mesh), nullptr);
+  EXPECT_EQ(assets.mesh(scene.mesh(created.object.entity)->mesh)
+                ->geometry()
+                .content_id(),
+            committed_geometry.content_id());
+
+  const ModelingSdkProjectionStats before_queries =
+      service.modeling_sdk_projection_stats_for_tests();
+  for (int index = 0; index < 16; ++index) {
+    (void)service.selection_summary();
+    (void)service.export_selection();
+    (void)service.objects();
+  }
+  const ModelingSdkProjectionStats after_queries =
+      service.modeling_sdk_projection_stats_for_tests();
+  EXPECT_EQ(after_queries.mesh_compile_count,
+            before_queries.mesh_compile_count);
+  EXPECT_EQ(after_queries.asset_publication_count,
+            before_queries.asset_publication_count);
+  EXPECT_EQ(after_queries.scene_publication_count,
+            before_queries.scene_publication_count);
+  EXPECT_EQ(after_queries.preview_publication_count,
+            before_queries.preview_publication_count);
 }
 
 TEST(ModelingSessionServiceSplitTests,
-     SelectionCenterWorldProjectionLivesInSelectionProjectionService) {
-  const std::string facade = read_source_file(
-      "src/editor/modeling/services/modeling_session_service.cpp");
-  const std::string projection_header =
-      read_source_file("src/editor/selection/selection_projection_service.hpp");
-  const std::string projection =
-      read_source_file("src/editor/selection/selection_projection_service.cpp");
+     SdkPreviewPublicationFailuresRemainRetryableAndAtomic) {
+  constexpr std::array<ModelingSdkProjectionFailurePoint, 2> kFailures = {
+      ModelingSdkProjectionFailurePoint::PreviewAssetReplace,
+      ModelingSdkProjectionFailurePoint::PreviewSceneNotify,
+  };
+  for (const ModelingSdkProjectionFailurePoint failure_point : kFailures) {
+    SCOPED_TRACE(static_cast<int>(failure_point));
+    SceneDocument scene;
+    AssetRegistry assets;
+    ModelingSessionService service(scene, assets);
+    const ModelingCreateBoxResult created = service.create_box_from_bounds({
+        .bounds = {.min = {-1.0f, -1.0f, -1.0f},
+                   .max = {1.0f, 1.0f, 1.0f}},
+        .name = "Preview Failure Box",
+    });
+    ASSERT_TRUE(created.ok) << created.message;
+    ASSERT_TRUE(service.set_selection_mode(ModelingSelectionMode::Face).ok);
+    ASSERT_TRUE(service
+                    .set_component_selection({
+                        .modeling_object_id = created.object.modeling_object_id,
+                        .mode = ModelingSelectionMode::Face,
+                        .faces = {1},
+                        .edit = ModelingSelectionEdit::Replace,
+                        .active_kind = ModelingActiveSelectionKind::Face,
+                        .active_face = 1,
+                    })
+                    .ok);
+    ASSERT_TRUE(service.begin_transform_preview(false).ok);
+    const AssetId mesh = scene.mesh(created.object.entity)->mesh;
+    const MeshGeometryContentId content_before =
+        assets.mesh(mesh)->geometry().content_id();
+    const std::uint64_t asset_revision_before = assets.revision();
+    const std::uint64_t scene_revision_before = scene.revision();
 
-  EXPECT_EQ(
-      facade.find("selection_projection_service_.world_selection_center("),
-      std::string::npos);
-  EXPECT_NE(
-      facade.find("selection_projection_service_.world_selection_bounds("),
-      std::string::npos);
-  EXPECT_NE(facade.find("session_, scene_, assets_, object_registry_)"),
-            std::string::npos);
-  EXPECT_EQ(facade.find("selected_world_bounds(scene_, assets_)"),
-            std::string::npos);
-  EXPECT_EQ(facade.find("quader_poly::selected_vertex_ids(object.document, "
-                        "object.selection)"),
-            std::string::npos);
-  EXPECT_EQ(facade.find("transform_object_point("), std::string::npos);
-  EXPECT_NE(projection_header.find("world_selection_center("),
-            std::string::npos);
-  EXPECT_NE(
-      projection.find("SelectionProjectionService::world_selection_center("),
-      std::string::npos);
-  EXPECT_NE(projection.find("selected_world_bounds(scene, assets)"),
-            std::string::npos);
-  EXPECT_NE(projection.find("world_point_for_modeling_object("),
-            std::string::npos);
-  EXPECT_NE(projection.find("quader_poly::selected_vertex_ids(object.document, "
-                            "object.selection)"),
-            std::string::npos);
+    service.set_modeling_sdk_projection_failure_for_tests(failure_point);
+    const ModelingCommandResult failed =
+        service.update_transform_translate_preview({0.0f, 2.0f, 0.0f});
+    EXPECT_FALSE(failed.ok);
+    EXPECT_FALSE(failed.changed);
+    EXPECT_TRUE(service.can_cancel_active_preview_for_undo());
+    EXPECT_EQ(assets.revision(), asset_revision_before);
+    EXPECT_EQ(scene.revision(), scene_revision_before);
+    EXPECT_EQ(assets.mesh(mesh)->geometry().content_id(), content_before);
+
+    service.set_modeling_sdk_projection_failure_for_tests(
+        ModelingSdkProjectionFailurePoint::None);
+    ASSERT_TRUE(
+        service.update_transform_translate_preview({0.0f, 2.0f, 0.0f}).ok);
+    ASSERT_TRUE(service.cancel_transform_preview().ok);
+    EXPECT_FALSE(service.can_cancel_active_preview_for_undo());
+    EXPECT_EQ(assets.mesh(mesh)->geometry().content_id(), content_before);
+  }
 }
 
 TEST(ModelingSessionServiceSplitTests,
-     DuplicateSceneIdentityLivesInRuntimeMapAndMeshSync) {
-  const std::string facade = read_source_file(
-      "src/editor/modeling/services/modeling_session_service.cpp");
-  const std::string runtime_map = read_source_file(
-      "src/editor/modeling/runtime/modeling_object_runtime_map.cpp");
-  const std::string mesh_sync = read_source_file(
-      "src/editor/modeling/services/modeling_mesh_sync_service.cpp");
+     SdkSharedMeshPublicationFailureRestoresTheOriginalBinding) {
+  SceneDocument scene;
+  AssetRegistry assets;
+  ModelingSessionService service(scene, assets);
+  const ModelingCreateBoxResult created = service.create_box_from_bounds({
+      .bounds = {.min = {-1.0f, -1.0f, -1.0f},
+                 .max = {1.0f, 1.0f, 1.0f}},
+      .name = "Shared SDK Mesh",
+  });
+  ASSERT_TRUE(created.ok) << created.message;
+  ASSERT_TRUE(service.set_selection_mode(ModelingSelectionMode::Face).ok);
+  ASSERT_TRUE(service
+                  .set_component_selection({
+                      .modeling_object_id = created.object.modeling_object_id,
+                      .mode = ModelingSelectionMode::Face,
+                      .faces = {1},
+                      .edit = ModelingSelectionEdit::Replace,
+                      .active_kind = ModelingActiveSelectionKind::Face,
+                      .active_face = 1,
+                  })
+                  .ok);
 
-  EXPECT_EQ(facade.find("DuplicateSceneState"), std::string::npos);
-  EXPECT_EQ(facade.find("scene_.set_transform(*duplicate"), std::string::npos);
-  EXPECT_EQ(facade.find("scene_.set_material(*duplicate"), std::string::npos);
-  EXPECT_NE(facade.find("capture_selected_duplicate_scene_identities()"),
-            std::string::npos);
-  EXPECT_NE(facade.find(
-                "mesh_sync_service_.apply_scene_identity_to_duplicate_entity("),
-            std::string::npos);
-  EXPECT_NE(runtime_map.find("capture_scene_identities_for_modeling_objects("),
-            std::string::npos);
-  EXPECT_NE(runtime_map.find("object_entity_bindings_by_modeling_object("),
-            std::string::npos);
-  EXPECT_NE(runtime_map.find("std::sort("), std::string::npos);
-  EXPECT_NE(runtime_map.find("bindings.begin(), bindings.end()"),
-            std::string::npos);
-  EXPECT_NE(mesh_sync.find("apply_scene_identity_to_duplicate_entity("),
-            std::string::npos);
-  EXPECT_NE(mesh_sync.find("object_entity_bindings_by_modeling_object()"),
-            std::string::npos);
-  EXPECT_EQ(
-      mesh_sync.find(
-          "std::sort(entities_by_object.begin(), entities_by_object.end()"),
-      std::string::npos);
-  const std::size_t existing_material_check =
-      mesh_sync.find("existing_material != nullptr");
-  ASSERT_NE(existing_material_check, std::string::npos);
-  EXPECT_NE(mesh_sync.find("existing_material->material.valid()",
-                           existing_material_check),
-            std::string::npos);
-  EXPECT_LT(existing_material_check,
-            mesh_sync.find("material_by_slot.find(material_slot)"));
+  const MeshComponent *original_binding = scene.mesh(created.object.entity);
+  ASSERT_NE(original_binding, nullptr);
+  const AssetId original_mesh = original_binding->mesh;
+  const EntityId shared_entity =
+      scene.create_entity("Shared Mesh Consumer", EntityKind::Mesh);
+  ASSERT_NE(shared_entity, kInvalidEntityId);
+  ASSERT_TRUE(scene.set_mesh(shared_entity, {.mesh = original_mesh}));
+  const std::vector<AssetId> mesh_ids_before = assets.mesh_ids();
+  const std::uint64_t scene_revision_before = scene.revision();
+  const std::uint64_t asset_revision_before = assets.revision();
+
+  service.set_modeling_sdk_projection_failure_for_tests(
+      ModelingSdkProjectionFailurePoint::CommittedSceneNotify);
+  const ModelingCommandResult failed =
+      service.move_selection({1.0f, 0.0f, 0.0f});
+  EXPECT_FALSE(failed.ok);
+  EXPECT_FALSE(failed.changed);
+  ASSERT_NE(scene.mesh(created.object.entity), nullptr);
+  ASSERT_NE(scene.mesh(shared_entity), nullptr);
+  EXPECT_EQ(scene.mesh(created.object.entity)->mesh, original_mesh);
+  EXPECT_EQ(scene.mesh(shared_entity)->mesh, original_mesh);
+  EXPECT_EQ(assets.mesh_ids(), mesh_ids_before);
+  EXPECT_EQ(scene.revision(), scene_revision_before);
+  EXPECT_EQ(assets.revision(), asset_revision_before);
 }
 
 TEST(ModelingSessionServiceSplitTests,
-     TransformDragPreviewRoutingLivesInController) {
-  const std::string facade = read_source_file(
-      "src/editor/modeling/services/modeling_session_service.cpp");
-  const std::string service = read_source_file(
-      "src/editor/modeling/services/modeling_transform_drag_service.cpp");
-  const std::string controller = read_source_file(
-      "src/editor/modeling/runtime_state/transform_drag_controller.cpp");
+     SdkProjectionRejectsMissingHostEntityOrAssetWithoutSdkDrift) {
+  for (const bool remove_entity : {false, true}) {
+    SCOPED_TRACE(remove_entity ? "missing entity" : "missing asset");
+    SceneDocument scene;
+    AssetRegistry assets;
+    ModelingSessionService service(scene, assets);
+    const ModelingCreateBoxResult created = service.create_box_from_bounds({
+        .bounds = {.min = {-1.0f, -1.0f, -1.0f},
+                   .max = {1.0f, 1.0f, 1.0f}},
+        .name = "Broken Host Projection",
+    });
+    ASSERT_TRUE(created.ok) << created.message;
+    ASSERT_TRUE(service.set_selection_mode(ModelingSelectionMode::Face).ok);
+    ASSERT_TRUE(service
+                    .set_component_selection({
+                        .modeling_object_id =
+                            created.object.modeling_object_id,
+                        .mode = ModelingSelectionMode::Face,
+                        .faces = {1},
+                        .edit = ModelingSelectionEdit::Replace,
+                        .active_kind = ModelingActiveSelectionKind::Face,
+                        .active_face = 1,
+                    })
+                    .ok);
+    const ModelingSelectionSummary before = service.selection_summary();
+    if (remove_entity) {
+      ASSERT_TRUE(scene.destroy_entity(created.object.entity));
+    } else {
+      ASSERT_TRUE(assets.remove_mesh(created.object.mesh));
+    }
 
-  EXPECT_EQ(facade.find("TransformDragController::preview_routing("),
-            std::string::npos);
-  EXPECT_NE(service.find("TransformDragController::preview_routing("),
-            std::string::npos);
-  EXPECT_EQ(facade.find("duplicate_scene_transform_preview"),
-            std::string::npos);
-  EXPECT_EQ(facade.find("needs_runtime_preview_transaction ="),
-            std::string::npos);
-  EXPECT_NE(controller.find("TransformDragController::preview_routing("),
-            std::string::npos);
-  EXPECT_NE(controller.find("scene_transform_preview_eligible"),
-            std::string::npos);
-  EXPECT_FALSE(std::filesystem::exists(
-      source_root() /
-      "src/editor/modeling/services/transform_drag_controller.hpp"));
-  EXPECT_FALSE(std::filesystem::exists(
-      source_root() /
-      "src/editor/modeling/services/transform_preview_service.hpp"));
-  EXPECT_FALSE(std::filesystem::exists(
-      source_root() / "src/editor/modeling/services/modal_tool_runtime.hpp"));
+    const ModelingCommandResult failed =
+        service.move_selection({1.0f, 0.0f, 0.0f});
+    EXPECT_FALSE(failed.ok);
+    EXPECT_FALSE(failed.changed);
+    EXPECT_EQ(service.modeling_sdk_object_count_for_tests(), 1u);
+    EXPECT_EQ(service.selection_summary().content_revision,
+              before.content_revision);
+    EXPECT_EQ(service.selection_summary().selection_revision,
+              before.selection_revision);
+  }
 }
 
 TEST(ModelingSessionServiceSplitTests,
-     TransformDragLifecycleLivesInFocusedService) {
-  const std::string facade = read_source_file(
-      "src/editor/modeling/services/modeling_session_service.cpp");
-  const std::string service = read_source_file(
-      "src/editor/modeling/services/modeling_transform_drag_service.cpp");
-  const std::string service_header = read_source_file(
-      "src/editor/modeling/services/modeling_transform_drag_service.hpp");
-  const std::string transform_tool =
-      read_source_file("src/editor/tools/base/transform_viewport_tool.hpp");
+     SdkSelectionAndCommittedMoveFailuresRestoreExactObservableState) {
+  {
+    SceneDocument scene;
+    AssetRegistry assets;
+    ModelingSessionService service(scene, assets);
+    const ModelingCreateBoxResult created = service.create_box_from_bounds({
+        .bounds = {.min = {-1.0f, -1.0f, -1.0f},
+                   .max = {1.0f, 1.0f, 1.0f}},
+        .name = "Selection Rollback Box",
+    });
+    ASSERT_TRUE(created.ok) << created.message;
+    const ModelingSelectionSummary before = service.selection_summary();
+    const std::uint64_t scene_revision_before = scene.revision();
+    const std::uint64_t scene_selection_revision_before =
+        scene.selection_revision();
+    service.set_modeling_sdk_projection_failure_for_tests(
+        ModelingSdkProjectionFailurePoint::SelectionScenePublication);
+    const ModelingCommandResult failed =
+        service.set_selection_mode(ModelingSelectionMode::Face);
+    EXPECT_FALSE(failed.ok);
+    EXPECT_FALSE(failed.changed);
+    EXPECT_EQ(service.selection_mode(), ModelingSelectionMode::Object);
+    EXPECT_EQ(service.selection_summary().content_revision,
+              before.content_revision);
+    EXPECT_EQ(service.selection_summary().selection_revision,
+              before.selection_revision);
+    EXPECT_EQ(scene.revision(), scene_revision_before);
+    EXPECT_EQ(scene.selection_revision(), scene_selection_revision_before);
+    service.set_modeling_sdk_projection_failure_for_tests(
+        ModelingSdkProjectionFailurePoint::None);
+    EXPECT_TRUE(service.set_selection_mode(ModelingSelectionMode::Face).ok);
+  }
 
-  EXPECT_NE(facade.find("transform_drag_service_.begin_transform_drag("),
-            std::string::npos);
-  EXPECT_NE(facade.find("transform_drag_service_.update_transform_drag("),
-            std::string::npos);
-  EXPECT_NE(facade.find("transform_drag_service_.commit_transform_drag("),
-            std::string::npos);
-  EXPECT_NE(facade.find("transform_drag_service_.cancel_transform_drag("),
-            std::string::npos);
-  EXPECT_EQ(facade.find("quader_editor_core::begin_move_drag("),
-            std::string::npos);
-  const std::size_t delegated_begin =
-      facade.find("return transform_drag_service_.begin_transform_drag(");
-  const std::size_t delegated_cancel =
-      facade.find("return transform_drag_service_.cancel_transform_drag(",
-                  delegated_begin);
-  ASSERT_NE(delegated_begin, std::string::npos);
-  ASSERT_NE(delegated_cancel, std::string::npos);
-  EXPECT_EQ(facade.substr(delegated_begin,
-                          delegated_cancel - delegated_begin)
-                .find("SceneTransformDragService"),
-            std::string::npos);
-  EXPECT_NE(service.find("quader_editor_core::begin_move_drag("),
-            std::string::npos);
-  EXPECT_NE(service.find("quader_editor_core::begin_rotate_drag("),
-            std::string::npos);
-  EXPECT_NE(service.find("quader_editor_core::begin_scale_drag("),
-            std::string::npos);
-  EXPECT_NE(service_header.find("SceneTransformDragService"),
-            std::string::npos);
-  EXPECT_NE(transform_tool.find("TransformGizmoInteraction owns"),
-            std::string::npos);
+  constexpr std::array<ModelingSdkProjectionFailurePoint, 3> kMoveFailures = {
+      ModelingSdkProjectionFailurePoint::AfterSdkMutation,
+      ModelingSdkProjectionFailurePoint::CommittedAssetReplace,
+      ModelingSdkProjectionFailurePoint::CommittedSceneNotify,
+  };
+  for (const ModelingSdkProjectionFailurePoint failure_point : kMoveFailures) {
+    SCOPED_TRACE(static_cast<int>(failure_point));
+    SceneDocument scene;
+    AssetRegistry assets;
+    ModelingSessionService service(scene, assets);
+    const ModelingCreateBoxResult created = service.create_box_from_bounds({
+        .bounds = {.min = {-1.0f, -1.0f, -1.0f},
+                   .max = {1.0f, 1.0f, 1.0f}},
+        .name = "Move Rollback Box",
+    });
+    ASSERT_TRUE(created.ok) << created.message;
+    ASSERT_TRUE(service.set_selection_mode(ModelingSelectionMode::Face).ok);
+    ASSERT_TRUE(service
+                    .set_component_selection({
+                        .modeling_object_id =
+                            created.object.modeling_object_id,
+                        .mode = ModelingSelectionMode::Face,
+                        .faces = {1},
+                        .edit = ModelingSelectionEdit::Replace,
+                        .active_kind = ModelingActiveSelectionKind::Face,
+                        .active_face = 1,
+                    })
+                    .ok);
+    const AssetId mesh = scene.mesh(created.object.entity)->mesh;
+    const MeshGeometryContentId content_before =
+        assets.mesh(mesh)->geometry().content_id();
+    const ModelingSelectionSummary selection_before =
+        service.selection_summary();
+    const std::uint64_t scene_revision_before = scene.revision();
+    const std::uint64_t asset_revision_before = assets.revision();
+
+    service.set_modeling_sdk_projection_failure_for_tests(failure_point);
+    const ModelingCommandResult failed =
+        service.move_selection({1.0f, 0.0f, 0.0f});
+    EXPECT_FALSE(failed.ok);
+    EXPECT_FALSE(failed.changed);
+    EXPECT_EQ(service.selection_summary().content_revision,
+              selection_before.content_revision);
+    EXPECT_EQ(service.selection_summary().selection_revision,
+              selection_before.selection_revision);
+    EXPECT_EQ(scene.revision(), scene_revision_before);
+    EXPECT_EQ(assets.revision(), asset_revision_before);
+    ASSERT_NE(assets.mesh(mesh), nullptr);
+    EXPECT_EQ(assets.mesh(mesh)->geometry().content_id(), content_before);
+
+    service.set_modeling_sdk_projection_failure_for_tests(
+        ModelingSdkProjectionFailurePoint::None);
+    EXPECT_TRUE(service.move_selection({1.0f, 0.0f, 0.0f}).ok);
+  }
 }
 
-TEST(ModelingSessionServiceSplitTests,
-     PickingAndOverlayProjectionHelpersStayOutOfFacade) {
-  const std::string facade = read_source_file(
-      "src/editor/modeling/services/modeling_session_service.cpp");
-  const std::string services = read_source_file(
-      "src/editor/modeling/services/modeling_session_services.cpp");
-  const std::string picking_projection =
-      read_source_file("src/editor/projection/picking_cache_projection.cpp");
 
-  EXPECT_EQ(facade.find("objectPickFaceGeometrySignature("), std::string::npos);
-  EXPECT_EQ(facade.find("mix_pick_geometry_hash("), std::string::npos);
-  EXPECT_EQ(facade.find("build_object_pick_bounds("), std::string::npos);
-  EXPECT_EQ(facade.find("include_pick_bounds_point("), std::string::npos);
-  EXPECT_EQ(facade.find("append_selected_hover_filtered_base_frame("),
-            std::string::npos);
-  EXPECT_EQ(facade.find("hover_frame_suppresses_triangle("), std::string::npos);
-  EXPECT_EQ(facade.find("hover_frame_suppresses_line("), std::string::npos);
-  EXPECT_EQ(facade.find("hover_frame_suppresses_point("), std::string::npos);
-  EXPECT_EQ(facade.find("append_overlay_frame("), std::string::npos);
 
-  EXPECT_NE(services.find("append_selected_hover_filtered_base_frame("),
-            std::string::npos);
-  EXPECT_NE(services.find("append_overlay_frame("), std::string::npos);
-  EXPECT_NE(services.find("PickingCacheProjection::build_object_pick_bounds("),
-            std::string::npos);
-  EXPECT_NE(
-      services.find("PickingCacheProjection::object_face_geometry_signature("),
-      std::string::npos);
-  EXPECT_NE(picking_projection.find("object_face_geometry_signature("),
-            std::string::npos);
-  EXPECT_NE(picking_projection.find("build_object_pick_bounds("),
-            std::string::npos);
-}
 
-TEST(ModelingSessionServiceSplitTests,
-     ToolStatusProjectionLivesInOverlayService) {
-  const std::string facade = read_source_file(
-      "src/editor/modeling/services/modeling_session_service.cpp");
-  const std::string services = read_source_file(
-      "src/editor/modeling/services/modeling_session_services.cpp");
-  const std::string overlay_header = read_source_file(
-      "src/editor/modeling/services/modeling_overlay_service.hpp");
 
-  EXPECT_NE(overlay_header.find("ModelingToolStatus tool_status("),
-            std::string::npos);
-  EXPECT_NE(services.find("ModelingOverlayService::tool_status("),
-            std::string::npos);
-  EXPECT_NE(facade.find("return overlay_service_.tool_status("
-                        "runtime_, modal_tool_owns_viewport());"),
-            std::string::npos);
-  EXPECT_EQ(facade.find("runtime_.cut_state()"), std::string::npos);
-  EXPECT_EQ(facade.find("runtime_.mirror_state()"), std::string::npos);
-  EXPECT_EQ(facade.find("quader_editor_core::cut_overlay_points("),
-            std::string::npos);
-  EXPECT_EQ(facade.find("quader_editor_core::mirror_overlay_points("),
-            std::string::npos);
-  EXPECT_EQ(facade.find("quader_editor_core::cut_is_dragging("),
-            std::string::npos);
-  EXPECT_EQ(facade.find("quader_editor_core::mirror_is_dragging("),
-            std::string::npos);
-  EXPECT_NE(services.find("quader_editor_core::cut_overlay_points("),
-            std::string::npos);
-  EXPECT_NE(services.find("quader_editor_core::mirror_overlay_points("),
-            std::string::npos);
-}
 
-TEST(ModelingSessionServiceSplitTests,
-     GroupDragHierarchyDuplicatePolicyLivesInFocusedService) {
-  const std::string facade = read_source_file(
-      "src/editor/modeling/services/modeling_session_service.cpp");
-  const std::string service = read_source_file(
-      "src/editor/modeling/services/modeling_hierarchy_duplicate_service.cpp");
-  const std::string document_helpers = read_source_file(
-      "src/editor/commands/document/document_command_scene_helpers.hpp");
-  const std::string duplicate_command = read_source_file(
-      "src/editor/commands/document/duplicate_selected_hierarchy_command.hpp");
-  const std::string naming_header =
-      read_source_file("src/scene/scene_entity_naming.hpp");
-  const std::string cmake = read_source_file("CMakeLists.txt");
 
-  EXPECT_NE(cmake.find("src/editor/modeling/services/"
-                       "modeling_hierarchy_duplicate_service.cpp"),
-            std::string::npos);
-  EXPECT_NE(
-      facade.find(
-          "hierarchy_duplicate_service_.duplicate_selected_entity_hierarchy("),
-      std::string::npos);
-  EXPECT_NE(facade.find("duplicate_selected_hierarchy_for_group_drag("),
-            std::string::npos);
-  EXPECT_EQ(
-      facade.find("std::unordered_map<EntityId, EntityId> clone_by_source"),
-      std::string::npos);
-  EXPECT_EQ(facade.find("auto copyCommonEntityState"), std::string::npos);
-  EXPECT_NE(service.find("pair_duplicate_meshes("), std::string::npos);
-  EXPECT_NE(service.find("duplicate_hierarchy_with_existing_clones("),
-            std::string::npos);
-  EXPECT_EQ(service.find("copyCommonEntityState("), std::string::npos);
-  EXPECT_EQ(service.find("cloneHierarchyEntity("), std::string::npos);
-  EXPECT_NE(
-      document_helpers.find("document_command_duplicate_entity_snapshot_tree("),
-      std::string::npos);
-  EXPECT_NE(document_helpers.find("SceneEntityNameAllocator *name_allocator"),
-            std::string::npos);
-  EXPECT_NE(duplicate_command.find(
-                "SceneEntityNameAllocator name_allocator(scene())"),
-            std::string::npos);
-  EXPECT_NE(duplicate_command.find("&name_allocator"), std::string::npos);
-  EXPECT_NE(naming_header.find("next_index_by_base_"), std::string::npos);
-}
 
-TEST(ModelingSessionServiceSplitTests,
-     SceneAwareDeletePolicyLivesInFocusedCommand) {
-  const std::string facade = read_source_file(
-      "src/editor/modeling/services/modeling_session_service.cpp");
-  const std::string command = read_source_file(
-      "src/editor/commands/modeling/scene_aware_delete_selection_command.cpp");
-  const std::string command_header = read_source_file(
-      "src/editor/commands/modeling/scene_aware_delete_selection_command.hpp");
-  const std::string cmake = read_source_file("CMakeLists.txt");
 
-  EXPECT_NE(cmake.find("src/editor/commands/modeling/"
-                       "scene_aware_delete_selection_command.cpp"),
-            std::string::npos);
-  EXPECT_NE(facade.find("create_scene_aware_delete_selection_command("),
-            std::string::npos);
-  EXPECT_NE(facade.find("SceneAwareDeleteRuntime{"), std::string::npos);
-  EXPECT_NE(facade.find(".entity_for_modeling_object ="), std::string::npos);
-  EXPECT_EQ(facade.find("struct SceneAwareDeleteState"), std::string::npos);
-  EXPECT_EQ(facade.find("class SceneAwareDeleteSelectionCommand"),
-            std::string::npos);
-  EXPECT_EQ(facade.find("capture_scene_aware_delete_state"), std::string::npos);
-  EXPECT_EQ(facade.find("redo_scene_aware_delete"), std::string::npos);
-  EXPECT_EQ(facade.find("undo_scene_aware_delete"), std::string::npos);
-  EXPECT_NE(command_header.find("entity_for_modeling_object"),
-            std::string::npos);
-  EXPECT_EQ(command.find("for (const EntityId entity : scene.entities())"),
-            std::string::npos);
-  EXPECT_NE(command.find(
-                "std::vector<EntityId> destroyed = state_.current_roots"),
-            std::string::npos);
-  EXPECT_NE(command.find("state_.current_definition_roots"),
-            std::string::npos);
-  EXPECT_NE(command.find("scene_.destroy_entities(destroyed)"),
-            std::string::npos);
-  EXPECT_EQ(command.find("scene_.destroy_entity(root)"), std::string::npos);
-  EXPECT_NE(command.find("runtime.entity_for_modeling_object(snapshot.modeling_"
-                         "object->object_id)"),
-            std::string::npos);
-  EXPECT_NE(command.find("struct SceneAwareDeleteState"), std::string::npos);
-  EXPECT_NE(command.find("class SceneAwareDeleteSelectionCommand"),
-            std::string::npos);
-  EXPECT_NE(command.find("capture_scene_aware_delete_state"),
-            std::string::npos);
-  EXPECT_NE(command.find("redo_scene_aware_delete"), std::string::npos);
-  EXPECT_NE(command.find("undo_scene_aware_delete"), std::string::npos);
-}
+
+
+
+
 
 TEST(ModelingSessionServiceSplitTests,
      SceneAwareDeleteRestoreUsesRuntimeMapInsteadOfStaleDuplicateSceneScan) {
@@ -2115,11 +1989,9 @@ TEST(ModelingSessionServiceSplitTests, ServicesOwnIndependentModelingState) {
           ModelingToolSettingsTargetKind::Thicken, "Thicken", "thicken");
   EXPECT_EQ(fallback.label, "Thicken");
   EXPECT_EQ(fallback.operation_id, "thicken");
-  quader_editor_core::PreviewTransactionStatus preview;
-  preview.active = true;
-  preview.kind = quader_editor_core::PreviewTransactionKind::EdgeBevel;
   const ModelingToolSettingsTarget preview_target =
-      tool_settings.active_preview_target(preview);
+      tool_settings.active_preview_target(
+          quader_editor_core::PreviewTransactionKind::EdgeBevel);
   EXPECT_TRUE(preview_target.active);
   EXPECT_TRUE(preview_target.operation_preview_active);
   EXPECT_EQ(preview_target.kind, ModelingToolSettingsTargetKind::EdgeBevel);
@@ -2222,20 +2094,6 @@ TEST(ModelingSessionServiceSplitTests, PolicyServicesExposeDirectBehavior) {
   EXPECT_TRUE(ModelingMeshSyncService::should_force_refresh(true, false));
   EXPECT_TRUE(ModelingMeshSyncService::should_force_refresh(false, true));
   EXPECT_FALSE(ModelingMeshSyncService::should_force_refresh(false, false));
-  const quader_editor_core::EditorRuntimeCommand copy =
-      ModelingClipboardService::make_copy_command();
-  EXPECT_EQ(copy.command_id, ModelingClipboardService::copy_command());
-  EXPECT_TRUE(std::holds_alternative<std::monostate>(copy.settings));
-  const quader_editor_core::EditorRuntimeCommand paste =
-      ModelingClipboardService::make_paste_command();
-  EXPECT_EQ(paste.command_id, ModelingClipboardService::paste_command());
-  EXPECT_TRUE(std::holds_alternative<
-              quader_editor_core::PasteCopiedMeshesRuntimeCommandSettings>(
-      paste.settings));
-  EXPECT_TRUE(TransformPreviewService::is_transform(
-      ModelingTransformOperation::Transform));
-  EXPECT_FALSE(TransformPreviewService::is_transform(
-      ModelingTransformOperation::Extrude));
   EXPECT_FALSE(ModelingCommandExecutor::runtime_unavailable().ok);
   EXPECT_STREQ(
       fallback_tool_settings_label(ModelingToolSettingsTargetKind::EdgeBevel),
@@ -2358,41 +2216,18 @@ TEST(ModelingSessionServiceSplitTests,
   EXPECT_TRUE(modeling_instant_operation_enabled(*radial_align, summary));
 }
 
-TEST(ModelingSessionServiceSplitTests,
-     InstantOperationAvailabilityUsesActionCatalogEvaluator) {
-  const std::string instant_header = read_source_file(
-      "src/editor/modeling/services/modeling_instant_operation_catalog.hpp");
-  const std::string instant_catalog = read_source_file(
-      "src/editor/modeling/services/modeling_instant_operation_catalog.cpp");
-  const std::string action_catalog = read_source_file(
-      "src/editor/modeling/services/modeling_action_catalog.cpp");
-
-  EXPECT_EQ(instant_header.find("ModelingInstantOperationEnablement"),
-            std::string::npos);
-  EXPECT_EQ(instant_catalog.find("switch (entry"), std::string::npos);
-  EXPECT_EQ(instant_catalog.find("HostActionDescriptor"), std::string::npos);
-  EXPECT_NE(instant_catalog.find(
-                "ModelingActionCatalog::evaluate_operation_availability("),
-            std::string::npos);
-  EXPECT_NE(action_catalog.find("evaluate_host_operation_availability("),
-            std::string::npos);
-  EXPECT_NE(action_catalog.find("descriptor.availability.selection_mode"),
-            std::string::npos);
-  EXPECT_NE(action_catalog.find("evaluate_availability_rule("),
-            std::string::npos);
-}
 
 TEST(ModelingSessionServiceSplitTests,
      InstantOperationSettingsComeFromSharedOperationSettingsOwnerExceptNormalBridge) {
-  RuntimeOperationExecutor executor;
   ModelingInteractionSettings interaction_settings;
   interaction_settings.bridge_steps = 4;
 
-  const std::optional<RuntimeOperationExecutor::OperationCommand> bridge =
-      executor.operation_for_instant_command(ModelingInstantOperationId::Bridge,
-                                             interaction_settings);
+  const std::optional<quader_editor_core::EditorOperationCommand> bridge =
+      modeling_instant_operation_command(ModelingInstantOperationId::Bridge,
+                                         interaction_settings);
   ASSERT_TRUE(bridge.has_value());
-  EXPECT_EQ(bridge->operation, quader_editor_core::EditorOperationId::Bridge);
+  EXPECT_EQ(bridge->operation_id,
+            quader_editor_core::EditorOperationId::Bridge);
   const auto &bridge_settings =
       std::get<quader_editor_core::BridgeOperationSettings>(bridge->settings);
   const auto interpolated_bridge =
@@ -2402,16 +2237,16 @@ TEST(ModelingSessionServiceSplitTests,
   EXPECT_EQ(interpolated_bridge.steps, 4);
   EXPECT_EQ(bridge_settings.steps, 1);
 
-  const std::optional<RuntimeOperationExecutor::OperationCommand> bevel =
-      executor.operation_for_instant_command(
+  const std::optional<quader_editor_core::EditorOperationCommand> bevel =
+      modeling_instant_operation_command(
           ModelingInstantOperationId::BevelVertices, interaction_settings);
   ASSERT_TRUE(bevel.has_value());
   EXPECT_TRUE(
       std::holds_alternative<
           quader_editor_core::BevelVerticesOperationSettings>(bevel->settings));
 
-  const std::optional<RuntimeOperationExecutor::OperationCommand> recalculate =
-      executor.operation_for_instant_command(
+  const std::optional<quader_editor_core::EditorOperationCommand> recalculate =
+      modeling_instant_operation_command(
           ModelingInstantOperationId::RecalculateFaceNormals,
           interaction_settings);
   ASSERT_TRUE(recalculate.has_value());
@@ -2469,82 +2304,7 @@ TEST(ModelingSessionServiceSplitTests,
                                                   "__missing__", 1.0));
 }
 
-TEST(ModelingSessionServiceSplitTests,
-     InstantOperationSettingsMappingHasSingleOwner) {
-  const std::string catalog_header = read_source_file(
-      "src/editor/modeling/services/modeling_instant_operation_catalog.hpp");
-  const std::string catalog = read_source_file(
-      "src/editor/modeling/services/modeling_instant_operation_catalog.cpp");
-  const std::string services = read_source_file(
-      "src/editor/modeling/services/modeling_session_services.cpp");
-  const std::string operation_settings = read_source_file(
-      "src/editor/modeling/services/modeling_operation_settings.cpp");
-  const std::string tools_api =
-      read_source_file("src/api/quader_tools_api.cpp");
 
-  EXPECT_EQ(catalog_header.find("RuntimeOperationSettingsKind"),
-            std::string::npos);
-  EXPECT_EQ(catalog.find("RuntimeOperationSettingsKind"), std::string::npos);
-  EXPECT_EQ(catalog.find("settingsKind"), std::string::npos);
-  EXPECT_EQ(services.find("settingsKind"), std::string::npos);
-  EXPECT_NE(services.find("settings_for_operation(*entry->runtime_operation, "
-                          "interaction_settings)"),
-            std::string::npos);
-  EXPECT_NE(operation_settings.find("command_schema_for_operation(operation)"),
-            std::string::npos);
-  EXPECT_NE(
-      operation_settings.find("operation_option_for_setting(tool_id, name)"),
-      std::string::npos);
-  EXPECT_NE(operation_settings.find("schema->settings_kind"),
-            std::string::npos);
-  EXPECT_EQ(operation_settings.find("bridge_operation_schema()"),
-            std::string::npos);
-  EXPECT_EQ(operation_settings.find("edge_bevel_operation_schema()"),
-            std::string::npos);
-  EXPECT_EQ(operation_settings.find("matchesAny("), std::string::npos);
-  EXPECT_EQ(operation_settings.find("\"edge_bevel_width\""), std::string::npos);
-  EXPECT_EQ(operation_settings.find("\"distance\""), std::string::npos);
-  EXPECT_EQ(operation_settings.find(
-                "case quader_editor_core::EditorOperationId::ConnectVertices"),
-            std::string::npos);
-  EXPECT_EQ(operation_settings.find(
-                "case quader_editor_core::EditorOperationId::DeleteSelection"),
-            std::string::npos);
-  EXPECT_NE(
-      tools_api.find(
-          "apply_modeling_interaction_setting(settings, tool_id, name, value)"),
-      std::string::npos);
-  EXPECT_EQ(tools_api.find("edge_bevel_width = value"), std::string::npos);
-  EXPECT_EQ(tools_api.find("merge_by_distance_tolerance = value"),
-            std::string::npos);
-}
-
-TEST(ModelingSessionServiceSplitTests,
-     HostOperationMetadataUsesSchemaOptionDescriptorCatalog) {
-  const std::string operation_schema =
-      read_source_file("src/editor/modeling/operations/operation_schema.hpp");
-  const std::string host_contract =
-      read_source_file("src/editor/metadata/host_contract.cpp");
-
-  EXPECT_NE(operation_schema.find("struct EditorOperationOptionDescriptor"),
-            std::string::npos);
-  EXPECT_NE(operation_schema.find("operation_option_descriptor_catalog()"),
-            std::string::npos);
-  EXPECT_NE(operation_schema.find("operation_option_for_setting("),
-            std::string::npos);
-  EXPECT_NE(operation_schema.find("\"edge_bevel_width\""), std::string::npos);
-  EXPECT_NE(operation_schema.find("\"distance\""), std::string::npos);
-  EXPECT_NE(host_contract.find("operation_option_descriptor_catalog()"),
-            std::string::npos);
-  EXPECT_NE(host_contract.find("operation_preference("), std::string::npos);
-  EXPECT_EQ(host_contract.find("static const std::array<HostOptionDescriptor"),
-            std::string::npos);
-  EXPECT_EQ(host_contract.find("operation_int_preference("), std::string::npos);
-  EXPECT_EQ(host_contract.find("operation_float_preference("),
-            std::string::npos);
-  EXPECT_EQ(host_contract.find("operation_bool_preference("),
-            std::string::npos);
-}
 
 TEST(ModelingSessionServiceSplitTests,
      FacadeDelegatesToSplitServicesThroughPublicApi) {

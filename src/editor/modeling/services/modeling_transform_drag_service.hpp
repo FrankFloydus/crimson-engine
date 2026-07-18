@@ -9,7 +9,6 @@
 #include "editor/modeling/modeling_types.hpp"
 #include "editor/modeling/runtime/modeling_object_runtime_map.hpp"
 #include "editor/modeling/runtime_state/transform_drag_controller.hpp"
-#include "editor/modeling/services/modeling_history_bridge.hpp"
 #include "editor/history/editor_history_service.hpp"
 #include "editor/transform/scene_transform_drag_service.hpp"
 #include "math/types.hpp"
@@ -18,7 +17,12 @@
 #include <vector>
 
 #include <editor/modeling/runtime/session.hpp>
-#include <mesh/polygon/document.hpp>
+#include <quader/modeling/neutral/polygon/document.hpp>
+
+namespace quader_editor_core {
+class EditorRuntime;
+struct TransformDragState;
+} // namespace quader_editor_core
 
 namespace quader {
 
@@ -28,25 +32,36 @@ class ModelingSessionMemento;
 class SceneDocument;
 
 /**
- * Port used by the transform drag owner for session-level sync, history, and cache hooks that
- * still live behind ModelingSessionService while the broad facade is being split.
+ * Port used by the transform drag owner for portable modeling previews and
+ * host scene/history projection.
  */
 class ModelingTransformDragPort {
 public:
   virtual ~ModelingTransformDragPort() = default;
 
   [[nodiscard]] virtual bool has_scene_transform_selection() const = 0;
+  [[nodiscard]] virtual bool has_portable_modeling_selection() const = 0;
+  [[nodiscard]] virtual ModelingSelectionMode
+  portable_modeling_selection_mode() const = 0;
+  [[nodiscard]] virtual bool portable_modeling_preview_active() const = 0;
+  virtual ModelingCommandResult
+  begin_portable_transform_preview(bool duplicate_selected) = 0;
+  virtual ModelingCommandResult update_portable_transform_preview(
+      const quader_editor_core::TransformDragState &drag,
+      double grid_size) = 0;
+  virtual ModelingCommandResult commit_portable_translate_preview() = 0;
+  virtual ModelingCommandResult cancel_portable_translate_preview() = 0;
+  virtual void record_portable_transform(
+      const quader_editor_core::TransformDragState &drag,
+      bool duplicate_selected) = 0;
+  [[nodiscard]] virtual std::uint64_t modeling_content_revision() const = 0;
+  [[nodiscard]] virtual std::uint64_t modeling_selection_revision() const = 0;
   [[nodiscard]] virtual QMat4
   scene_selection_display_from_scene() const = 0;
   [[nodiscard]] virtual quader_editor_core::Bounds3
   transform_drag_bounds() const = 0;
   virtual void invalidate_selection_overlay_caches() const = 0;
-  virtual void sync_scene_objects_from_modeling(bool force) = 0;
   virtual void sync_scene_selection_from_modeling() = 0;
-  [[nodiscard]] virtual std::vector<ModelingObjectSceneIdentity>
-  capture_selected_duplicate_scene_identities() const = 0;
-  virtual void apply_scene_identities_to_selected_duplicates(
-      const std::vector<ModelingObjectSceneIdentity> &source_identities) = 0;
   [[nodiscard]] virtual ModelingSessionMemento
   capture_active_preview_history_memento() const = 0;
   [[nodiscard]] virtual ModelingSessionMemento
@@ -72,9 +87,9 @@ public:
 struct ModelingTransformDragServiceContext {
   SceneDocument &scene;
   AssetRegistry &assets;
-  quader_editor_core::EditorSession &session;
+  /// Short-lived SDK projection used only by retained native input helpers.
+  quader_editor_core::EditorSession session;
   quader_editor_core::EditorRuntime &runtime;
-  ModelingHistoryBridge &history_bridge;
   ModelingTransformDragPort &port;
   DocumentCommandService *document_commands = nullptr;
   EditorHistoryService *history = nullptr;
@@ -115,6 +130,7 @@ private:
   TransformDragController controller_;
   SceneTransformDragService scene_transform_drag_service_;
   std::optional<EditorTransaction> scene_duplicate_transaction_;
+  bool portable_scene_duplicate_active_ = false;
 };
 
 } // namespace quader

@@ -15,7 +15,7 @@
 #include "editor/selection/editor_selection_service.hpp"
 #include "editor/selection/scene_selection_application.hpp"
 #include "math/glm_bridge.hpp"
-#include "mesh/polygon/document_model.hpp"
+#include "quader/modeling/neutral/polygon/document_model.hpp"
 #include "scene/scene_bounds.hpp"
 #include "scene/scene_document.hpp"
 #include "scene/scene_transform_pivot.hpp"

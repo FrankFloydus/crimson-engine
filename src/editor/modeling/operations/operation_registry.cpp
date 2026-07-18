@@ -6,84 +6,64 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include <editor/modeling/operations/operation_registry.hpp>
 
+#include <editor/modeling/operations/portable_operation_mapping.hpp>
+
 #include <array>
 
 namespace quader_editor_core {
 
 namespace {
 
-EditorOperationRegistryEntry operation_entry(const EditorOperation &operation,
-                                             std::string_view class_name) {
-  return {
-      operation.operation_id(),
-      operation.id(),
-      class_name,
-      &operation,
-  };
+constexpr std::size_t kOperationCount =
+    detail::kPortableOperationMappings.size();
+
+std::span<const EditorOperation> operation_values() {
+  static constexpr std::array<EditorOperation, kOperationCount> kOperations =
+      [] {
+        std::array<EditorOperation, kOperationCount> result{};
+        for (std::size_t index = 0; index < result.size(); ++index) {
+          const PortableOperationMapping &mapping =
+              detail::kPortableOperationMappings[index];
+          result[index] = EditorOperation(
+              mapping.native_id,
+              quader::modeling::operation_descriptor(mapping.portable_kind),
+              mapping.native_label);
+        }
+        return result;
+      }();
+  return kOperations;
 }
 
 std::span<const EditorOperationRegistryEntry> operation_registry_entries() {
-  static const std::array<EditorOperationRegistryEntry, 35> kEntries{{
-      operation_entry(bridge_operation(), "BridgeOperation"),
-      operation_entry(edge_bevel_operation(), "EdgeBevelOperation"),
-      operation_entry(thicken_operation(), "ThickenOperation"),
-      operation_entry(slice_quad_operation(), "SliceQuadOperation"),
-      operation_entry(merge_by_distance_operation(),
-                      "MergeByDistanceOperation"),
-      operation_entry(remove_doubles_operation(), "RemoveDoublesOperation"),
-      operation_entry(bevel_vertices_operation(), "BevelVerticesOperation"),
-      operation_entry(duplicate_meshes_operation(), "DuplicateMeshesOperation"),
-      operation_entry(half_cut_operation(), "HalfCutOperation"),
-      operation_entry(connect_vertices_operation(), "ConnectVerticesOperation"),
-      operation_entry(dissolve_vertices_operation(),
-                      "DissolveVerticesOperation"),
-      operation_entry(connect_edges_operation(), "ConnectEdgesOperation"),
-      operation_entry(split_edges_operation(), "SplitEdgesOperation"),
-      operation_entry(dissolve_edges_operation(), "DissolveEdgesOperation"),
-      operation_entry(merge_edges_operation(), "MergeEdgesOperation"),
-      operation_entry(collapse_edges_operation(), "CollapseEdgesOperation"),
-      operation_entry(fill_hole_operation(), "FillHoleOperation"),
-      operation_entry(combine_faces_operation(), "CombineFacesOperation"),
-      operation_entry(collapse_faces_operation(), "CollapseFacesOperation"),
-      operation_entry(radial_align_operation(), "RadialAlignOperation"),
-      operation_entry(flip_face_normals_operation(),
-                      "FlipFaceNormalsOperation"),
-      operation_entry(shade_faces_smooth_operation(),
-                      "ShadeFacesSmoothOperation"),
-      operation_entry(shade_faces_flat_operation(), "ShadeFacesFlatOperation"),
-      operation_entry(harden_edge_normals_operation(),
-                      "HardenEdgeNormalsOperation"),
-      operation_entry(soften_edge_normals_operation(),
-                      "SoftenEdgeNormalsOperation"),
-      operation_entry(combine_meshes_operation(), "CombineMeshesOperation"),
-      operation_entry(extract_faces_operation(), "ExtractFacesOperation"),
-      operation_entry(detach_faces_operation(), "DetachFacesOperation"),
-      operation_entry(snap_vertices_to_active_operation(),
-                      "SnapVerticesToActiveOperation"),
-      operation_entry(snap_edges_to_active_operation(),
-                      "SnapEdgesToActiveOperation"),
-      operation_entry(merge_vertices_to_active_operation(),
-                      "MergeVerticesToActiveOperation"),
-      operation_entry(merge_vertices_to_center_operation(),
-                      "MergeVerticesToCenterOperation"),
-      operation_entry(recalculate_face_normals_operation(),
-                      "RecalculateFaceNormalsOperation"),
-      operation_entry(assign_material_operation(), "AssignMaterialOperation"),
-      operation_entry(delete_selection_operation(), "DeleteSelectionOperation"),
-  }};
+  static const std::array<EditorOperationRegistryEntry, kOperationCount>
+      kEntries = [] {
+        std::array<EditorOperationRegistryEntry, kOperationCount> result{};
+        const std::span<const EditorOperation> operations = operation_values();
+        for (std::size_t index = 0; index < result.size(); ++index) {
+          const EditorOperation &operation = operations[index];
+          result[index] = {
+              operation.operation_id(),
+              operation.id(),
+              "PortableOperationDescriptor",
+              &operation,
+          };
+        }
+        return result;
+      }();
   return kEntries;
 }
 
 std::span<const EditorOperation *const> operation_entries() {
-  static const std::array<const EditorOperation *, 35> kOperations = [] {
-    std::array<const EditorOperation *, 35> result{};
-    const std::span<const EditorOperationRegistryEntry> entries =
-        operation_registry_entries();
-    for (std::size_t index = 0; index < entries.size(); ++index) {
-      result[index] = entries[index].operation;
-    }
-    return result;
-  }();
+  static const std::array<const EditorOperation *, kOperationCount>
+      kOperations = [] {
+        std::array<const EditorOperation *, kOperationCount> result{};
+        const std::span<const EditorOperationRegistryEntry> entries =
+            operation_registry_entries();
+        for (std::size_t index = 0; index < entries.size(); ++index) {
+          result[index] = entries[index].operation;
+        }
+        return result;
+      }();
   return kOperations;
 }
 

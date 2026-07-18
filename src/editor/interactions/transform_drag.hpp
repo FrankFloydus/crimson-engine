@@ -257,7 +257,6 @@ struct TransformDragPreviewInput {
         // object-local component transform can ask the runtime to update only
         // the drag state. The host then applies the preview exactly once in
         // the correct local space.
-        bool defer_session_update = false;
         bool vertex_snap_enabled = false;
 	double vertex_snap_radius = 0.0;
 	const std::vector<PolygonObject>* snap_objects = nullptr;
@@ -283,7 +282,7 @@ TransformDragOperation sanitize_transform_drag_operation(
 		SelectionMode selection_mode);
 void reset_transform_drag(TransformDragState& state);
 CommandResult apply_transform_drag_preview(
-		EditorSession& session,
+		const EditorSession& session,
 		TransformDragState& state,
 		const TransformDragPreviewInput& input);
 std::vector<SelectionOverlayPoint> transform_drag_snap_overlay_points(

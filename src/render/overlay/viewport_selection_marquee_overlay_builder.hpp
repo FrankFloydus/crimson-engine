@@ -10,7 +10,13 @@
 
 namespace quader {
 
-struct ViewportSelectionMarquee;
+/// Renderer-neutral marquee state projected by the selection owner.
+struct RenderSelectionMarqueeRecord final {
+  bool active = false;
+  bool crossing = false;
+  QVec2 start;
+  QVec2 end;
+};
 
 /**
  * Converts viewport selection marquee state into overlay primitives.
@@ -18,8 +24,8 @@ struct ViewportSelectionMarquee;
 class ViewportSelectionMarqueeOverlayBuilder {
 public:
   static void append(ViewportOverlayFrame &overlay_frame,
-                     const ViewportOverlayCamera &camera,
-                     const ViewportSelectionMarquee &marquee);
+                      const ViewportOverlayCamera &camera,
+                      const RenderSelectionMarqueeRecord &marquee);
 };
 
 } // namespace quader

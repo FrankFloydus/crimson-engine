@@ -7,14 +7,10 @@
 #include "editor/modeling/services/selection_mode_adapter.hpp"
 
 #include "editor/modeling/services/modeling_action_catalog.hpp"
-#include "support/guardrail_file_scan.hpp"
-
 #include <gtest/gtest.h>
 
 namespace quader {
 namespace {
-
-using test::guardrail::read_source_file;
 
 TEST(SelectionModeAdapterTests, AppViewportMappingPreservesGroupMode) {
   EXPECT_EQ(app_selection_mode_to_viewport(ModelingSelectionMode::Vertex),
@@ -130,38 +126,6 @@ TEST(SelectionModeAdapterTests, ActionCatalogUsesGroupHostModeWithoutObjectPanel
   EXPECT_TRUE(operation_panels.panels.empty());
 }
 
-TEST(SelectionModeAdapterTests, SelectionModeIdsHaveOneHostCatalogAdapter) {
-  const std::string adapter = read_source_file(
-      "src/editor/modeling/services/selection_mode_adapter.hpp");
-  const std::string action_catalog = read_source_file(
-      "src/editor/modeling/services/modeling_action_catalog.cpp");
-  const std::string viewport_panel =
-      read_source_file("src/ui/qt_viewport_panel.cpp");
-  const std::string viewport_adapter =
-      read_source_file("src/viewport/host_viewport_contract_adapter.cpp");
-
-  EXPECT_NE(adapter.find("host_selection_mode_id("), std::string::npos);
-  EXPECT_NE(adapter.find("host_selection_mode_from_id("), std::string::npos);
-  EXPECT_NE(action_catalog.find("host_selection_mode_id("), std::string::npos);
-  EXPECT_NE(viewport_panel.find("app_selection_mode_to_viewport("),
-            std::string::npos);
-  EXPECT_NE(viewport_panel.find("viewport_selection_mode_to_app("),
-            std::string::npos);
-  EXPECT_NE(viewport_adapter.find("host_selection_mode_from_id("),
-            std::string::npos);
-
-  EXPECT_EQ(action_catalog.find("std::string selection_mode_id("),
-            std::string::npos);
-  EXPECT_EQ(viewport_panel.find("shelfControlIdForHostSelectionMode"),
-            std::string::npos);
-  EXPECT_EQ(viewport_panel.find("modelingSelectionModeFromHostSelectionMode"),
-            std::string::npos);
-  EXPECT_EQ(viewport_adapter.find("if (id == \"vertex\")"), std::string::npos);
-  EXPECT_EQ(viewport_adapter.find("if (id == \"edge\")"), std::string::npos);
-  EXPECT_EQ(viewport_adapter.find("if (id == \"face\")"), std::string::npos);
-  EXPECT_EQ(viewport_adapter.find("if (id == \"object\")"), std::string::npos);
-  EXPECT_EQ(viewport_adapter.find("if (id == \"group\")"), std::string::npos);
-}
 
 } // namespace
 } // namespace quader

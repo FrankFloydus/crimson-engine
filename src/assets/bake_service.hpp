@@ -47,15 +47,6 @@ struct BakeValidationResult {
 };
 
 /**
- * Owns Bake Backend behavior within the asset document and registry layer.
- */
-class BakeBackend {
-public:
-    virtual ~BakeBackend() = default;
-    virtual const char* name() const = 0;
-};
-
-/**
  * Coordinates Bake Service responsibilities for the asset document and registry layer.
  */
 class BakeService {

@@ -8,6 +8,10 @@
 
 #include <editor/modeling/runtime/editor_runtime.hpp>
 #include <editor/interactions/interaction_api.hpp>
+#include <quader/modeling/modeling.hpp>
+
+#include <array>
+#include <vector>
 
 TEST(QdrModelingRuntimeToolPolyTests, ViewportGridPointPlacementCanSnapOrPreserveRawPositions) {
 	quader_editor_core::ViewportCameraState camera;
@@ -93,9 +97,7 @@ TEST(QdrModelingRuntimeToolPolyTests,
 	EXPECT_NEAR(state.face_normal.y, 0.0F, 0.0001F);
 }
 
-TEST(QdrModelingRuntimeToolPolyTests, PolyToolCommitsAPolygonObjectThroughEditorHistory) {
-	quader_editor_core::EditorSession session;
-	session.set_objects({});
+TEST(QdrModelingRuntimeToolPolyTests, PolyToolFinalizationRoutesGeometryToTheSdkOwner) {
 	quader_editor_core::PolyToolState state;
 	state.active = true;
 	state.face_normal = { 0.0F, 1.0F, 0.0F };
@@ -107,32 +109,22 @@ TEST(QdrModelingRuntimeToolPolyTests, PolyToolCommitsAPolygonObjectThroughEditor
 	};
 	quader_editor_core::rebuild_poly_overlay(state);
 
-	const quader_editor_core::CommandResult result = session.commit_poly_tool(state);
-	EXPECT_TRUE(result.ok);
-	EXPECT_TRUE(result.changed);
-	EXPECT_TRUE(session.objects().size() == 1U);
-	EXPECT_TRUE(session.objects()[0].selected);
-	EXPECT_TRUE(session.objects()[0].document.vertices.size() == 4U);
-	EXPECT_TRUE(session.objects()[0].document.faces.size() == 1U);
+	std::vector<quader::modeling::Vec3> sdk_points;
+	sdk_points.reserve(state.points.size());
+	for (const quader::QVec3 point : state.points) {
+		sdk_points.push_back({ point.x, point.y, point.z });
+	}
+	quader::modeling::Result<quader::modeling::PolygonDocument> document =
+		quader::modeling::PolygonDocument::make_face(sdk_points);
+	ASSERT_TRUE(document.ok()) << document.error_message();
+	EXPECT_EQ(document.value().vertex_count(), 4U);
+	EXPECT_EQ(document.value().face_count(), 1U);
+	quader_editor_core::reset_poly(state);
 	EXPECT_FALSE(state.active);
-	EXPECT_TRUE(session.history_status().can_undo);
-	const quader_editor_core::HistoryRestoreResult undo = session.undo();
-	EXPECT_TRUE(undo.applied);
-	EXPECT_TRUE(session.objects().empty());
-	EXPECT_FALSE(session.has_selection());
-	const quader_editor_core::HistoryRestoreResult redo = session.redo();
-	EXPECT_TRUE(redo.applied);
-	ASSERT_EQ(session.objects().size(), 1U);
-	EXPECT_TRUE(session.objects()[0].selected);
-	EXPECT_EQ(session.selection_mode(), quader_editor_core::SelectionMode::Object);
 
-	quader_editor_core::PolyToolState short_state;
-	short_state.active = true;
-	short_state.points = {
+	const std::array<quader::modeling::Vec3, 2> short_points{{
 		{ 0.0F, 0.0F, 0.0F },
 		{ 1.0F, 0.0F, 0.0F },
-	};
-	const quader_editor_core::CommandResult short_result = session.commit_poly_tool(short_state);
-	EXPECT_FALSE(short_result.ok);
-	EXPECT_TRUE(short_state.points.size() == 2U);
+	}};
+	EXPECT_FALSE(quader::modeling::PolygonDocument::make_face(short_points).ok());
 }

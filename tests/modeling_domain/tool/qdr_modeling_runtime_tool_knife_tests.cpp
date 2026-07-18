@@ -11,13 +11,14 @@
 #include <cmath>
 #include <optional>
 #include <string>
+#include <utility>
 
 #include <editor/modeling/runtime/editor_runtime.hpp>
 #include <editor/interactions/knife_tool.hpp>
 #include <editor/interactions/tool_snapping.hpp>
 #include <editor/modeling/runtime/tool_registry.hpp>
 #include <editor/interactions/interaction_api.hpp>
-#include <mesh/polygon/document.hpp>
+#include <quader/modeling/neutral/polygon/document.hpp>
 
 TEST(QdrModelingRuntimeToolKnifeTests, KnifeToolExposesStableRegistryContractAndResetOwnership) {
 	const quader_editor_core::EditorTool& tool = quader_editor_core::knife_tool();
@@ -105,11 +106,10 @@ TEST(QdrModelingRuntimeToolKnifeTests, KnifeSnappingAndAcceptFlowStayInEditorCor
 	EXPECT_NEAR(constrained.y, 0.0F, 0.0001);
 	EXPECT_NEAR(constrained.z, 0.0F, 0.0001);
 
-	quader_editor_core::EditorSession session;
 	quader_editor_core::PolygonObject object;
 	object.id = 7;
 	object.document = quader_poly::make_cube({});
-	session.set_objects({ object });
+	quader_editor_core::EditorSession session({ std::move(object) });
 
 	quader_editor_core::KnifeToolState state;
 	quader_editor_core::SelectionHoverState hover;

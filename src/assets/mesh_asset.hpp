@@ -25,6 +25,8 @@ struct Document;
 
 namespace quader {
 
+struct MeshWireGeometryPayload;
+
 /**
  * Represents a Mesh Vertex value used by the asset document and registry layer.
  */
@@ -77,6 +79,7 @@ struct MeshGeometryPayload final {
     vertices = other.vertices;
     indices = other.indices;
     primitives = other.primitives;
+    wire_geometry_payload_.reset();
     content_id_.store(other.content_id_.load(std::memory_order_relaxed),
                       std::memory_order_relaxed);
     return *this;
@@ -89,6 +92,7 @@ struct MeshGeometryPayload final {
     vertices = std::move(other.vertices);
     indices = std::move(other.indices);
     primitives = std::move(other.primitives);
+    wire_geometry_payload_.reset();
     content_id_.store(other.content_id_.load(std::memory_order_relaxed),
                       std::memory_order_relaxed);
     return *this;
@@ -169,10 +173,15 @@ struct MeshGeometryPayload final {
   }
 
   void invalidate_content_id() noexcept {
+    wire_geometry_payload_.reset();
     content_id_.store(0, std::memory_order_release);
   }
 
 private:
+  friend struct MeshAsset;
+
+  mutable std::shared_ptr<const MeshWireGeometryPayload>
+      wire_geometry_payload_;
   mutable std::atomic<std::uint64_t> content_id_{0};
 };
 
@@ -212,12 +221,17 @@ struct MeshAsset final : AssetDocumentBase<MeshAssetRevision> {
     return geometry_->content_id();
   }
 
+  /** Returns cached renderer-neutral authored/compiled boundary segments. */
+  [[nodiscard]] std::shared_ptr<const MeshWireGeometryPayload>
+  wire_geometry_payload() const;
+
   /** Detaches shared geometry before a caller mutates the returned payload. */
   MeshGeometryPayload &edit_geometry() {
     if (geometry_.use_count() == 1) {
       if (std::shared_ptr<MeshGeometryPayload> editable =
               editable_geometry_.lock()) {
         editable->invalidate_content_id();
+        invalidate_wire_geometry_payload();
         return *editable;
       }
     }
@@ -225,6 +239,7 @@ struct MeshAsset final : AssetDocumentBase<MeshAssetRevision> {
     editable->invalidate_content_id();
     geometry_ = editable;
     editable_geometry_ = editable;
+    invalidate_wire_geometry_payload();
     return *editable;
   }
 
@@ -234,17 +249,20 @@ struct MeshAsset final : AssetDocumentBase<MeshAssetRevision> {
     replacement->invalidate_content_id();
     geometry_ = replacement;
     editable_geometry_ = replacement;
+    invalidate_wire_geometry_payload();
   }
 
   void share_geometry(std::shared_ptr<const MeshGeometryPayload> geometry) {
     if (geometry) {
       geometry_ = std::move(geometry);
       editable_geometry_.reset();
+      invalidate_wire_geometry_payload();
       return;
     }
     auto replacement = std::make_shared<MeshGeometryPayload>();
     geometry_ = replacement;
     editable_geometry_ = replacement;
+    invalidate_wire_geometry_payload();
   }
 
   bool has_stable_cpu_topology = true;
@@ -258,11 +276,24 @@ struct MeshAsset final : AssetDocumentBase<MeshAssetRevision> {
     authored_polygon_document = std::move(document);
     has_authored_polygon_document =
         static_cast<bool>(authored_polygon_document);
+    invalidate_wire_geometry_payload();
   }
 
 private:
+  void invalidate_wire_geometry_payload() const noexcept {
+    wire_geometry_payload_.reset();
+    wire_geometry_source_ = nullptr;
+    wire_geometry_authored_source_ = nullptr;
+    wire_geometry_authored_enabled_ = false;
+  }
+
   std::shared_ptr<const MeshGeometryPayload> geometry_;
   mutable std::weak_ptr<MeshGeometryPayload> editable_geometry_;
+  mutable std::shared_ptr<const MeshWireGeometryPayload>
+      wire_geometry_payload_;
+  mutable const MeshGeometryPayload *wire_geometry_source_ = nullptr;
+  mutable const quader_poly::Document *wire_geometry_authored_source_ = nullptr;
+  mutable bool wire_geometry_authored_enabled_ = false;
 };
 
 inline std::vector<MeshPrimitiveSpan>

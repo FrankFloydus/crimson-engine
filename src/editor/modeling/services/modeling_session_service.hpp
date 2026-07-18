@@ -9,6 +9,7 @@
 #include "editor/modeling/modeling_selection_box_baseline.hpp"
 #include "editor/modeling/modeling_types.hpp"
 #include "editor/modeling/services/modeling_action_catalog.hpp"
+#include "editor/modeling/services/modeling_sdk_projection_adapter.hpp"
 #include "render/viewport_overlay_frame.hpp"
 #include "scene/scene_bounds.hpp"
 
@@ -117,6 +118,12 @@ public:
   [[nodiscard]] std::uint64_t
   rectangle_selection_resolution_build_count() const;
   [[nodiscard]] std::uint64_t local_face_geometry_build_count() const;
+  [[nodiscard]] const void *modeling_sdk_session_identity_for_tests() const;
+  [[nodiscard]] std::size_t modeling_sdk_object_count_for_tests() const;
+  void set_modeling_sdk_projection_failure_for_tests(
+      ModelingSdkProjectionFailurePoint point);
+  [[nodiscard]] ModelingSdkProjectionStats
+  modeling_sdk_projection_stats_for_tests() const;
   [[nodiscard]] ModelingSessionMemento capture_history_memento() const;
   [[nodiscard]] ModelingSessionMemento capture_history_memento_without_objects(
       const ModelingSessionMemento &selection_baseline,
@@ -139,6 +146,9 @@ public:
   ModelingCommandResult duplicate_selected_hierarchy_for_group_drag(
       DocumentCommandService &document_commands);
   ModelingCommandResult duplicate_selected_entity_hierarchy(
+      DocumentCommandService &document_commands);
+  ModelingCommandResult
+  duplicate_selected_entity_hierarchy_with_independent_meshes(
       DocumentCommandService &document_commands);
   ModelingCommandResult set_selection_mode(ModelingSelectionMode mode);
   ModelingCommandResult select_all();

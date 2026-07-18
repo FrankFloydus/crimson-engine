@@ -333,7 +333,7 @@ void ViewportSelectionInteraction::handle_frame(
   committed_marquee_.reset();
   const bool gizmo_consumed = before_tool.gizmo_consumed;
   const bool selection_fallback_active =
-      frame.input_router.active_tool_allows_selection_fallback();
+      frame.active_tool_allows_selection_fallback;
   const bool suppress_hover_work =
       frame.input_result.navigation_active ||
       frame.input_result.camera_changed || frame.input.text_input_active ||

@@ -295,7 +295,6 @@ RenderMeshAssetSnapshot render_mesh_asset_snapshot(AssetId mesh_id,
   snapshot.primitives = geometry->primitives;
   snapshot.present = true;
   snapshot.has_stable_cpu_topology = asset.has_stable_cpu_topology;
-  snapshot.has_authored_polygon_document = asset.has_authored_polygon_document;
   return snapshot;
 }
 

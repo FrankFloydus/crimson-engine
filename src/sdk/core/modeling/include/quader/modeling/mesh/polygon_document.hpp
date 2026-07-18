@@ -112,6 +112,15 @@ struct EdgeBevelSpec {
 };
 
 struct ExtractedPolygonDocument;
+struct SplitPolygonDocuments;
+
+/// Defines a portable polygon split plane and optional generated caps.
+struct PlaneSplitSpec {
+  Vec3 a{};
+  Vec3 b{};
+  Vec3 c{};
+  bool cap = true;
+};
 
 /**
  * Owns an SDK polygon document facade over portable polygon operations.
@@ -127,11 +136,16 @@ public:
 
   [[nodiscard]] static Result<PolygonDocument> make_box(const BoxSpec &spec);
   [[nodiscard]] static Result<PolygonDocument>
+  make_box_from_corners(std::span<const Vec3> corners,
+                        MaterialId material = {});
+  [[nodiscard]] static Result<PolygonDocument>
   make_cylinder(const CylinderSpec &spec);
   [[nodiscard]] static Result<PolygonDocument>
   make_sphere(const SphereSpec &spec);
   [[nodiscard]] static Result<PolygonDocument>
   make_face(std::span<const Vec3> points, MaterialId material = {});
+  [[nodiscard]] static Result<PolygonDocument>
+  from_authored_topology(const AuthoredTopology &topology);
 
   [[nodiscard]] std::size_t vertex_count() const;
   [[nodiscard]] std::size_t face_count() const;
@@ -152,6 +166,7 @@ public:
   face_ids_by_normal(Vec3 direction, float tolerance = 0.01F) const;
   [[nodiscard]] PolygonSelectionSnapshot selection() const;
   [[nodiscard]] Result<AuthoredPolygonPayload> authored_payload() const;
+  [[nodiscard]] Result<AuthoredTopology> authored_topology() const;
   [[nodiscard]] Result<MeshPayload> compile_mesh() const;
   [[nodiscard]] Result<OperationResult> validate() const;
 
@@ -178,6 +193,8 @@ public:
   [[nodiscard]] Result<OperationResult> translate_selection(Vec3 delta);
   [[nodiscard]] Result<OperationResult>
   transform_selection(Transform3 transform);
+  [[nodiscard]] Result<OperationResult>
+  reflect_across_plane(Vec3 origin, Vec3 normal);
   [[nodiscard]] Result<OperationResult>
   assign_selected_face_material_slot(std::uint32_t material_slot);
   [[nodiscard]] Result<OperationResult>
@@ -226,6 +243,8 @@ public:
   extrude_selected_elements(Vec3 offset,
                             float closed_edge_ledge_size = 0.0F);
   [[nodiscard]] Result<OperationResult>
+  transform_extrude_selected_elements(Transform3 transform, Vec3 pivot = {});
+  [[nodiscard]] Result<OperationResult>
   inset_selected_elements(Transform3 transform, Vec3 pivot);
   [[nodiscard]] Result<OperationResult>
   inset_selected_faces(float amount = 0.18F);
@@ -233,6 +252,10 @@ public:
   extrude_selected_faces(float distance = 0.45F);
   [[nodiscard]] Result<OperationResult> detach_selected_faces();
   [[nodiscard]] Result<ExtractedPolygonDocument> extract_selected_faces();
+  [[nodiscard]] Result<SplitPolygonDocuments>
+  split_by_plane(const PlaneSplitSpec &spec) const;
+  [[nodiscard]] Result<OperationResult>
+  cut_surface_by_plane(const PlaneSplitSpec &spec);
   [[nodiscard]] Result<OperationResult>
   bridge_selected_faces(int steps = 1);
   [[nodiscard]] Result<OperationResult>
@@ -253,6 +276,15 @@ private:
 struct ExtractedPolygonDocument {
   OperationResult receipt;
   PolygonDocument document;
+};
+
+/// Carries both portable documents produced by a plane split.
+struct SplitPolygonDocuments {
+  OperationResult receipt;
+  PolygonDocument front;
+  PolygonDocument back;
+  int split_count = 0;
+  int removed_count = 0;
 };
 
 } // namespace quader::modeling

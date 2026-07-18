@@ -22,6 +22,65 @@
 #include <utility>
 
 namespace quader {
+
+SceneProjectionCheckpoint SceneDocument::capture_projection_checkpoint() const {
+  SceneProjectionCheckpoint checkpoint;
+  checkpoint.valid_ = true;
+  checkpoint.next_id_ = next_id_;
+  checkpoint.next_editor_object_id_ = next_editor_object_id_;
+  checkpoint.next_layer_id_ = next_layer_id_;
+  checkpoint.active_selection_ = active_selection_;
+  checkpoint.selected_entities_ = selected_entities();
+  checkpoint.revision_ = revision_;
+  checkpoint.content_revision_ = content_revision_;
+  checkpoint.selection_revision_ = selection_revision_;
+  checkpoint.visibility_revision_ = visibility_revision_;
+  checkpoint.transform_revision_ = transform_revision_;
+  checkpoint.mesh_binding_revision_ = mesh_binding_revision_;
+  checkpoint.render_component_revision_ = render_component_revision_;
+  checkpoint.layer_revision_ = layer_revision_;
+  return checkpoint;
+}
+
+bool SceneDocument::restore_projection_checkpoint(
+    const SceneProjectionCheckpoint &checkpoint,
+    std::span<const EntityId> created_entities) {
+  if (!checkpoint.valid()) {
+    return false;
+  }
+
+  for (auto entity = created_entities.rbegin();
+       entity != created_entities.rend(); ++entity) {
+    if (exists(*entity)) {
+      (void)destroy_entity(*entity);
+    }
+  }
+
+  clear_selection();
+  for (const EntityId entity : checkpoint.selected_entities_) {
+    if (exists(entity)) {
+      (void)set_selected(entity, true);
+    }
+  }
+  if (checkpoint.active_selection_ != kInvalidEntityId &&
+      exists(checkpoint.active_selection_)) {
+    (void)set_active_selection(checkpoint.active_selection_);
+  }
+
+  next_id_ = checkpoint.next_id_;
+  next_editor_object_id_ = checkpoint.next_editor_object_id_;
+  next_layer_id_ = checkpoint.next_layer_id_;
+  active_selection_ = checkpoint.active_selection_;
+  revision_ = checkpoint.revision_;
+  content_revision_ = checkpoint.content_revision_;
+  selection_revision_ = checkpoint.selection_revision_;
+  visibility_revision_ = checkpoint.visibility_revision_;
+  transform_revision_ = checkpoint.transform_revision_;
+  mesh_binding_revision_ = checkpoint.mesh_binding_revision_;
+  render_component_revision_ = checkpoint.render_component_revision_;
+  layer_revision_ = checkpoint.layer_revision_;
+  return true;
+}
 namespace {
 
 std::uint32_t entity_key(entt::entity entity) {
@@ -77,7 +136,8 @@ bool same_transform(const TransformComponent &left,
 bool same_modeling_object(const ModelingObjectComponent &left,
                           const ModelingObjectComponent &right) {
   return left.object_id == right.object_id &&
-         left.material_slot == right.material_slot;
+         left.material_slot == right.material_slot &&
+         left.sdk_owned == right.sdk_owned;
 }
 
 bool valid_layer_color(QVec3 color) {

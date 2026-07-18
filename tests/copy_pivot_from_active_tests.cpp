@@ -11,7 +11,7 @@
 #include "editor/pivot/pivot_tool_service.hpp"
 #include "editor/session/scene_session.hpp"
 #include "math/glm_bridge.hpp"
-#include "mesh/polygon/document_model.hpp"
+#include "quader/modeling/neutral/polygon/document_model.hpp"
 #include "scene/scene_bounds.hpp"
 
 #include <gtest/gtest.h>

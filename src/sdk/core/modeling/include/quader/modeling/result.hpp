@@ -9,6 +9,7 @@
 #include <stdexcept>
 #include <string>
 #include <utility>
+#include <variant>
 #include <vector>
 
 namespace quader::modeling {
@@ -60,57 +61,102 @@ struct Error {
  */
 template <typename T> class Result {
 public:
-  Result() = default;
+  Result()
+      : storage_(ErrorArm{Error{
+            .code = ErrorCode::InternalError,
+            .message = "Result was not initialized.",
+        }}) {}
 
   [[nodiscard]] static Result success(T value) {
-    Result result;
-    result.ok_ = true;
-    result.value_ = std::move(value);
-    return result;
+    return Result(ValueArm{std::move(value)});
   }
 
   [[nodiscard]] static Result failure(Error error) {
-    Result result;
-    result.ok_ = false;
-    result.error_ = std::move(error);
-    return result;
+    if (error.code == ErrorCode::Ok) {
+      error.code = ErrorCode::InternalError;
+    }
+    return Result(ErrorArm{std::move(error)});
   }
 
-  [[nodiscard]] bool ok() const noexcept { return ok_; }
-  [[nodiscard]] explicit operator bool() const noexcept { return ok_; }
-  [[nodiscard]] const T &value() const & { return value_; }
-  [[nodiscard]] T &value() & { return value_; }
-  [[nodiscard]] T &&value() && { return std::move(value_); }
+  [[nodiscard]] bool ok() const noexcept {
+    return std::holds_alternative<ValueArm>(storage_);
+  }
+  [[nodiscard]] explicit operator bool() const noexcept { return ok(); }
+  [[nodiscard]] const T &value() const & {
+    require_value();
+    return std::get<ValueArm>(storage_).value;
+  }
+  [[nodiscard]] T &value() & {
+    require_value();
+    return std::get<ValueArm>(storage_).value;
+  }
+  [[nodiscard]] T &&value() && {
+    require_value();
+    return std::move(std::get<ValueArm>(storage_).value);
+  }
   [[nodiscard]] const T &or_throw() const & {
-    if (!ok_) {
-      throw std::runtime_error(error_.message);
+    if (!ok()) {
+      throw std::runtime_error(std::get<ErrorArm>(storage_).error.message);
     }
-    return value_;
+    return std::get<ValueArm>(storage_).value;
   }
   [[nodiscard]] T &or_throw() & {
-    if (!ok_) {
-      throw std::runtime_error(error_.message);
+    if (!ok()) {
+      throw std::runtime_error(std::get<ErrorArm>(storage_).error.message);
     }
-    return value_;
+    return std::get<ValueArm>(storage_).value;
   }
   [[nodiscard]] T &&or_throw() && {
-    if (!ok_) {
-      throw std::runtime_error(error_.message);
+    if (!ok()) {
+      throw std::runtime_error(std::get<ErrorArm>(storage_).error.message);
     }
-    return std::move(value_);
+    return std::move(std::get<ValueArm>(storage_).value);
   }
   [[nodiscard]] T value_or(T fallback) const {
-    return ok_ ? value_ : std::move(fallback);
+    return ok() ? std::get<ValueArm>(storage_).value : std::move(fallback);
   }
-  [[nodiscard]] const Error &error() const noexcept { return error_; }
-  [[nodiscard]] const std::string &error_message() const noexcept {
-    return error_.message;
+  [[nodiscard]] const Error &error() const & {
+    require_error();
+    return std::get<ErrorArm>(storage_).error;
+  }
+  [[nodiscard]] Error &&error() && {
+    require_error();
+    return std::move(std::get<ErrorArm>(storage_).error);
+  }
+  [[nodiscard]] const std::string &error_message() const {
+    return error().message;
   }
 
 private:
-  bool ok_ = false;
-  T value_{};
-  Error error_{};
+  /**
+   * Distinguishes a successful payload from the failure alternative.
+   */
+  struct ValueArm {
+    T value;
+  };
+  /**
+   * Distinguishes a structured failure from the success alternative.
+   */
+  struct ErrorArm {
+    Error error;
+  };
+
+  explicit Result(ValueArm value) : storage_(std::move(value)) {}
+  explicit Result(ErrorArm error) : storage_(std::move(error)) {}
+
+  void require_value() const {
+    if (!ok()) {
+      throw std::logic_error("Attempted to access the value arm of a failed Result.");
+    }
+  }
+
+  void require_error() const {
+    if (ok()) {
+      throw std::logic_error("Attempted to access the error arm of a successful Result.");
+    }
+  }
+
+  std::variant<ValueArm, ErrorArm> storage_;
 };
 
 [[nodiscard]] inline Error make_error(ErrorCode code, std::string message) {

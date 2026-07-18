@@ -110,20 +110,128 @@ SceneContentDocument::upsert_object_record(ProjectObjectRecord record) {
 
 std::vector<EditorObjectId> SceneContentDocument::upsert_object_records(
     std::vector<ProjectObjectRecord> records) {
-  const bool records_synced = sync_object_records_with_scene();
+  std::unordered_map<EditorObjectId, ProjectObjectRecord> staged_objects;
+  std::unordered_map<EntityId, EditorObjectId> staged_object_by_entity;
+  for (ProjectObjectRecord record : object_records()) {
+    if (record.id == kInvalidEditorObjectId) {
+      continue;
+    }
+    if (record.scene_entity != kInvalidEntityId) {
+      staged_object_by_entity[record.scene_entity] = record.id;
+    }
+    staged_objects[record.id] = std::move(record);
+  }
+
+  const bool records_synced =
+      staged_objects != objects_ || staged_object_by_entity != object_by_entity_;
+  EditorObjectId staged_next_object_id =
+      next_object_id_ ? *next_object_id_ : EditorObjectId{1};
+  std::unordered_map<EditorObjectId, EntityId> staged_scene_owner;
+  std::unordered_map<EntityId, EditorObjectId> staged_scene_object_id;
+  for (const EntityId entity : scene_.entities()) {
+    const EditorObjectId object_id = scene_.editor_object_id(entity);
+    if (object_id == kInvalidEditorObjectId) {
+      return {};
+    }
+    staged_scene_owner[object_id] = entity;
+    staged_scene_object_id[entity] = object_id;
+  }
+
+  const auto reserve_object_id =
+      [&](EditorObjectId requested) -> EditorObjectId {
+    if (requested != kInvalidEditorObjectId) {
+      staged_next_object_id =
+          std::max(staged_next_object_id, requested + 1u);
+      return requested;
+    }
+    while (staged_objects.contains(staged_next_object_id) ||
+           staged_scene_owner.contains(staged_next_object_id)) {
+      ++staged_next_object_id;
+    }
+    return staged_next_object_id++;
+  };
+
+  std::vector<std::pair<EntityId, EditorObjectId>> scene_assignments;
+  scene_assignments.reserve(records.size());
   std::vector<EditorObjectId> object_ids;
   object_ids.reserve(records.size());
   for (ProjectObjectRecord &record : records) {
-    const EditorObjectId object_id =
-        upsert_object_record_after_sync(std::move(record));
-    if (object_id == kInvalidEditorObjectId) {
-      if (records_synced || !object_ids.empty()) {
-        mark_dirty();
+    if (record.scene_entity != kInvalidEntityId &&
+        scene_.exists(record.scene_entity)) {
+      EditorObjectId object_id = record.id;
+      if (object_id == kInvalidEditorObjectId) {
+        object_id = staged_scene_object_id[record.scene_entity];
       }
-      return {};
+      object_id = reserve_object_id(object_id);
+      if (object_id == kInvalidEditorObjectId) {
+        return {};
+      }
+
+      if (const auto owner = staged_scene_owner.find(object_id);
+          owner != staged_scene_owner.end() &&
+          owner->second != record.scene_entity) {
+        return {};
+      }
+      if (const auto existing = staged_objects.find(object_id);
+          existing != staged_objects.end() &&
+          existing->second.scene_entity != record.scene_entity) {
+        return {};
+      }
+
+      const EditorObjectId previous_scene_object_id =
+          staged_scene_object_id[record.scene_entity];
+      if (previous_scene_object_id != object_id) {
+        staged_scene_owner.erase(previous_scene_object_id);
+        staged_scene_owner[object_id] = record.scene_entity;
+        staged_scene_object_id[record.scene_entity] = object_id;
+        scene_assignments.emplace_back(record.scene_entity, object_id);
+      }
+      record.id = object_id;
+      if (const auto previous =
+              staged_object_by_entity.find(record.scene_entity);
+          previous != staged_object_by_entity.end() &&
+          previous->second != object_id) {
+        staged_objects.erase(previous->second);
+        staged_object_by_entity.erase(previous);
+      }
+    } else {
+      if (record.id != kInvalidEditorObjectId &&
+          staged_scene_owner.contains(record.id)) {
+        return {};
+      }
+      record.id = reserve_object_id(record.id);
+      if (record.id == kInvalidEditorObjectId) {
+        return {};
+      }
     }
+
+    const EditorObjectId object_id = record.id;
+    if (auto existing = staged_objects.find(object_id);
+        existing != staged_objects.end() &&
+        existing->second.scene_entity != kInvalidEntityId) {
+      staged_object_by_entity.erase(existing->second.scene_entity);
+    }
+    hydrate_record_from_scene(record);
+    if (record.scene_entity != kInvalidEntityId) {
+      staged_object_by_entity[record.scene_entity] = object_id;
+    }
+    staged_objects[object_id] = std::move(record);
     object_ids.push_back(object_id);
   }
+
+  for (const auto &[entity, object_id] : scene_assignments) {
+    if (!scene_.set_editor_object_id(entity, object_id)) {
+      return {};
+    }
+  }
+  if (!next_object_id_) {
+    next_object_id_ = std::make_shared<EditorObjectId>(staged_next_object_id);
+    bind_scene_object_identity_allocator();
+  } else {
+    *next_object_id_ = staged_next_object_id;
+  }
+  objects_ = std::move(staged_objects);
+  object_by_entity_ = std::move(staged_object_by_entity);
   if (records_synced || !object_ids.empty()) {
     mark_dirty();
   }

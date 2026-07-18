@@ -6,7 +6,9 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include <editor/modeling/runtime/session.hpp>
 #include <editor/interactions/interaction_api.hpp>
-#include <mesh/polygon/document.hpp>
+#include <editor/projection/mesh_projection_service.hpp>
+#include <quader/modeling/modeling.hpp>
+#include <quader/modeling/neutral/polygon/document.hpp>
 
 #include <algorithm>
 #include <array>
@@ -19,6 +21,7 @@
 #include <iostream>
 #include <limits>
 #include <optional>
+#include <span>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -398,6 +401,45 @@ quader_editor_core::ViewportCameraState benchmark_camera()
 
 std::vector<BenchmarkResult> run_benchmarks(const BenchmarkOptions& options, const BenchmarkScene& scene)
 {
+	std::vector<quader::modeling::PolygonDocument> sdk_documents;
+	sdk_documents.reserve(scene.objects.size());
+	for (const quader_editor_core::PolygonObject& object : scene.objects) {
+		quader::modeling::Result<quader::modeling::PolygonDocument> converted =
+			quader::MeshProjectionService::sdk_document_from_polygon_document(object.document.read());
+		if (!converted.ok()) {
+			throw std::runtime_error("SDK benchmark document conversion failed: " + converted.error().message);
+		}
+		quader::modeling::PolygonDocument document = std::move(converted).value();
+		const quader::modeling::Result<quader::modeling::OperationResult> selected = document.select_all_faces();
+		if (!selected.ok() || !selected.value().success) {
+			throw std::runtime_error(selected.ok() ? selected.value().message : selected.error().message);
+		}
+		sdk_documents.push_back(std::move(document));
+	}
+
+	quader::modeling::ModelingSession transform_session;
+	std::vector<quader::modeling::ObjectId> transform_object_ids;
+	transform_object_ids.reserve(sdk_documents.size());
+	for (const quader::modeling::PolygonDocument& document : sdk_documents) {
+		quader::modeling::Result<quader::modeling::ObjectId> added =
+			transform_session.add_document(document, "Benchmark Mesh");
+		if (!added.ok()) {
+			throw std::runtime_error("SDK benchmark session setup failed: " + added.error().message);
+		}
+		transform_object_ids.push_back(added.value());
+	}
+	if (transform_object_ids.empty()) {
+		throw std::runtime_error("SDK benchmark requires at least one modeling object.");
+	}
+	const quader::modeling::Result<quader::modeling::OperationResult> transform_selected =
+		transform_session.apply_object_selection(
+			std::span<const quader::modeling::ObjectId>(transform_object_ids),
+			quader::modeling::SelectionEdit::Replace);
+	if (!transform_selected.ok() || !transform_selected.value().success) {
+		throw std::runtime_error(
+			transform_selected.ok() ? transform_selected.value().message : transform_selected.error().message);
+	}
+
 	std::vector<BenchmarkResult> results;
 	results.reserve(8);
 
@@ -498,20 +540,28 @@ std::vector<BenchmarkResult> run_benchmarks(const BenchmarkOptions& options, con
 		1,
 		static_cast<std::uint64_t>(options.transform_iterations),
 		[&](int) {
-			quader_editor_core::EditorSession session(scene.objects);
-			session.set_selection_mode(quader_editor_core::SelectionMode::Object);
-			const quader_editor_core::CommandResult begin = session.begin_transform_preview(false);
-			std::uint64_t checksum = begin.ok ? 1ULL : 0ULL;
+			const quader::modeling::Result<quader::modeling::OperationResult> begin =
+				transform_session.begin_translate_preview(transform_object_ids.front(), {});
+			if (!begin.ok() || !begin.value().success) {
+				throw std::runtime_error(begin.ok() ? begin.value().message : begin.error().message);
+			}
+			std::uint64_t checksum = 1ULL;
 			for (int iteration = 0; iteration < options.transform_iterations; ++iteration) {
 				const float amount = 0.05F * static_cast<float>(iteration + 1);
-				const quader_editor_core::CommandResult update =
-					session.update_transform_translate_preview({ amount, 0.0F, amount * 0.5F });
-				checksum += update.changed ? 17ULL : 3ULL;
-				checksum += session.objects().size();
+				const quader::modeling::Result<quader::modeling::OperationResult> update =
+					transform_session.update_translate_preview({ amount, 0.0F, amount * 0.5F });
+				if (!update.ok() || !update.value().success) {
+					throw std::runtime_error(update.ok() ? update.value().message : update.error().message);
+				}
+				checksum += update.value().changed ? 17ULL : 3ULL;
+				checksum += transform_session.objects().size();
 			}
-			const quader_editor_core::PreviewTransactionFinishResult cancel =
-				session.cancel_preview_transaction(quader_editor_core::PreviewTransactionKind::Transform);
-			return checksum + (cancel.restored ? 1ULL : 0ULL);
+			const quader::modeling::Result<quader::modeling::OperationResult> cancel =
+				transform_session.cancel_preview();
+			if (!cancel.ok() || !cancel.value().success) {
+				throw std::runtime_error(cancel.ok() ? cancel.value().message : cancel.error().message);
+			}
+			return checksum + 1ULL;
 		}));
 
 	results.push_back(measure(

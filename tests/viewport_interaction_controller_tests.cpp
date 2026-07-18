@@ -10,17 +10,15 @@
 #include "editor/modeling/services/modeling_session_service.hpp"
 #include "editor/interactions/transform_gizmo.hpp"
 #include "editor/pivot/pivot_tool_service.hpp"
+#include "editor/viewport/viewport_tool_overlay_projection.hpp"
 #include "editor/tools/viewport_tool.hpp"
 #include "editor/tools/viewport_tool_ports.hpp"
 #include "editor/viewport/viewport_interaction_controller.hpp"
 #include "render/viewport_overlay_policy.hpp"
-#include "render/overlay/viewport_box_overlay_builder.hpp"
-#include "render/overlay/viewport_selection_marquee_overlay_builder.hpp"
-#include "render/overlay/viewport_transform_gizmo_overlay_builder.hpp"
 #include "editor/session/scene_session.hpp"
 #include "scene/scene_bounds.hpp"
 #include "ui/viewport_hover_controller.hpp"
-#include "ui/viewport_host_interaction_policy.hpp"
+#include "viewport/viewport_host_interaction_policy.hpp"
 #include "viewport/viewport_camera_adapter.hpp"
 #include "viewport/viewport_camera_controller.hpp"
 #include "viewport/viewport_input_router.hpp"
@@ -87,6 +85,9 @@ struct ViewportInteractionHarness {
           .right_pressed = right_pressed,
           .right_down = right_down,
           .right_released = right_released,
+          .active_tool_allows_selection_fallback =
+              controller.active_tool_allows_selection_fallback(
+                  router.state().active_tool),
           .scene_billboard_pick_candidates = billboard_pick_candidates,
           .selection_state =
               {
@@ -213,10 +214,11 @@ quader::ViewportOverlayFrame
 build_gizmo_overlay(const quader_editor_core::TransformGizmoFrame &frame,
                     const ViewportInteractionHarness &harness) {
   quader::ViewportOverlayFrame overlay;
-  quader::ViewportTransformGizmoOverlayBuilder::append(
-      overlay, frame,
+  quader::ViewportToolOverlayProjection::append_transform_gizmo(
+      overlay,
       quader::ViewportCameraAdapter::overlay_camera(
-          harness.camera, harness.input.viewport_size));
+          harness.camera, harness.input.viewport_size),
+      frame);
   return overlay;
 }
 
@@ -2013,10 +2015,11 @@ TEST(ViewportInteractionControllerTests, MoveRotateAndScaleGizmosDragSelectedObj
       ASSERT_NE(frame, nullptr);
 
       quader::ViewportOverlayFrame overlay;
-      quader::ViewportTransformGizmoOverlayBuilder::append(
-          overlay, *frame,
+      quader::ViewportToolOverlayProjection::append_transform_gizmo(
+          overlay,
           quader::ViewportCameraAdapter::overlay_camera(
-              harness.camera, harness.input.viewport_size));
+              harness.camera, harness.input.viewport_size),
+          *frame);
       EXPECT_FALSE(overlay.lines.empty());
 
       quader::QVec2 start{};
@@ -2523,8 +2526,8 @@ TEST(ViewportBoxOverlayBuilderTests, EmitsDashedFootprintOutlineWithoutFill) {
     }};
 
     quader::ViewportOverlayFrame footprint_overlay;
-    quader::ViewportBoxOverlayBuilder::append(footprint_overlay, camera,
-                                              footprint);
+    quader::ViewportToolOverlayProjection::append_box(footprint_overlay, camera,
+                                                      footprint);
     ASSERT_GT(footprint_overlay.lines.size(), 4u);
     EXPECT_TRUE(footprint_overlay.triangles.empty());
     for (const quader::ViewportOverlayLine &line : footprint_overlay.lines) {
@@ -2550,7 +2553,7 @@ TEST(ViewportBoxOverlayBuilderTests, EmitsDashedFootprintOutlineWithoutFill) {
     }};
 
     quader::ViewportOverlayFrame box_overlay;
-    quader::ViewportBoxOverlayBuilder::append(box_overlay, camera, box);
+    quader::ViewportToolOverlayProjection::append_box(box_overlay, camera, box);
     EXPECT_EQ(box_overlay.lines.size(), footprint_overlay.lines.size());
     EXPECT_TRUE(box_overlay.triangles.empty());
 }
@@ -2567,8 +2570,8 @@ TEST(ViewportSelectionMarqueeOverlayBuilderTests, EmitsFillAndRuleSpecificEdges)
 
     quader::ViewportOverlayFrame inactive_overlay;
     quader::ViewportSelectionMarquee inactive;
-    quader::ViewportSelectionMarqueeOverlayBuilder::append(inactive_overlay,
-                                                           camera, inactive);
+    quader::ViewportToolOverlayProjection::append_selection_marquee(
+        inactive_overlay, camera, inactive);
     EXPECT_TRUE(inactive_overlay.lines.empty());
     EXPECT_TRUE(inactive_overlay.triangles.empty());
 
@@ -2579,8 +2582,8 @@ TEST(ViewportSelectionMarqueeOverlayBuilderTests, EmitsFillAndRuleSpecificEdges)
     contain.rule = quader::ModelingBoxSelectionRule::Contain;
 
     quader::ViewportOverlayFrame contain_overlay;
-    quader::ViewportSelectionMarqueeOverlayBuilder::append(contain_overlay,
-                                                           camera, contain);
+    quader::ViewportToolOverlayProjection::append_selection_marquee(
+        contain_overlay, camera, contain);
     ASSERT_EQ(contain_overlay.triangles.size(), 2u);
     ASSERT_EQ(contain_overlay.lines.size(), 4u);
     for (const quader::ViewportOverlayTriangle &triangle :
@@ -2603,8 +2606,8 @@ TEST(ViewportSelectionMarqueeOverlayBuilderTests, EmitsFillAndRuleSpecificEdges)
     quader::ViewportSelectionMarquee crossing = contain;
     crossing.rule = quader::ModelingBoxSelectionRule::Crossing;
     quader::ViewportOverlayFrame crossing_overlay;
-    quader::ViewportSelectionMarqueeOverlayBuilder::append(crossing_overlay,
-                                                           camera, crossing);
+    quader::ViewportToolOverlayProjection::append_selection_marquee(
+        crossing_overlay, camera, crossing);
     EXPECT_EQ(crossing_overlay.triangles.size(), 2u);
     EXPECT_GT(crossing_overlay.lines.size(), contain_overlay.lines.size());
 }
@@ -2997,4 +3000,85 @@ TEST(ViewportHostInteractionPolicyTests,
               1u)
         << "pane_count=" << pane_count;
   }
+}
+
+TEST(Phase4ViewportPrecedenceTests,
+     P4V01NavigationConsumesFrameBeforeViewportShortcutDispatch) {
+  quader::ViewportInputRouter router;
+  quader::ViewportCameraController camera;
+  quader::ViewportInputFrame input;
+  input.viewport_hovered = true;
+  input.viewport_focused = true;
+  input.viewport_size = {800.0f, 600.0f};
+  input.navigation_bindings.orbit_pressed = true;
+  input.navigation_bindings.orbit_down = true;
+  input.resolved_shortcuts.push_back({
+      .kind = quader::ViewportShortcutKind::SetView,
+      .view = quader::ViewportView::Top,
+  });
+
+  const quader::ViewportInputResult result = router.handle_frame(input, camera);
+  EXPECT_TRUE(result.navigation_active);
+  EXPECT_TRUE(result.consumed);
+  EXPECT_FALSE(result.shortcut_handled);
+  EXPECT_FALSE(result.view_changed);
+}
+
+TEST(Phase4ViewportPrecedenceTests,
+     P4V02PaneResolutionOrdersLockActivityHoverFocusAndWorkspaceFocus) {
+  using quader::ViewportPaneId;
+  std::array<quader::ViewportPaneInputCandidate, 4> panes{{
+      {.pane_id = ViewportPaneId::Perspective},
+      {.pane_id = ViewportPaneId::Top, .has_input_activity = true},
+      {.pane_id = ViewportPaneId::Front, .hovered = true},
+      {.pane_id = ViewportPaneId::Side, .focused = true},
+  }};
+  quader::ViewportPaneInputResolutionRequest request{
+      .active_panes = panes,
+      .focused_pane = ViewportPaneId::Perspective,
+  };
+
+  EXPECT_EQ(quader::resolve_viewport_input_pane(request), ViewportPaneId::Top);
+  panes[1].has_input_activity = false;
+  EXPECT_EQ(quader::resolve_viewport_input_pane(request),
+            ViewportPaneId::Front);
+  panes[2].hovered = false;
+  EXPECT_EQ(quader::resolve_viewport_input_pane(request), ViewportPaneId::Side);
+  panes[3].focused = false;
+  EXPECT_EQ(quader::resolve_viewport_input_pane(request),
+            ViewportPaneId::Perspective);
+
+  request.interaction_locked = true;
+  request.interaction_owner = ViewportPaneId::Side;
+  panes[1].has_input_activity = true;
+  EXPECT_EQ(quader::resolve_viewport_input_pane(request), ViewportPaneId::Side);
+}
+
+TEST(Phase4ViewportPrecedenceTests,
+     P4V09CameraFramingUsesBoundsThenExplicitEmptyPolicy) {
+  quader::ViewportCameraController camera;
+  camera.set_viewport_size(800.0f, 600.0f);
+  camera.focus_origin(12.0f);
+  const quader::ViewportCameraState before = camera.state();
+
+  EXPECT_FALSE(camera.focus_optional_bounds(
+      std::nullopt, quader::ViewportEmptyFocusBehavior::KeepCamera));
+  EXPECT_FLOAT_EQ(camera.state().target.x, before.target.x);
+  EXPECT_FLOAT_EQ(camera.state().target.y, before.target.y);
+  EXPECT_FLOAT_EQ(camera.state().target.z, before.target.z);
+  EXPECT_FLOAT_EQ(camera.state().distance, before.distance);
+
+  EXPECT_TRUE(camera.focus_optional_bounds(quader::ViewportFocusBounds{
+      .min = {-2.0f, -1.0f, -3.0f},
+      .max = {4.0f, 5.0f, 3.0f},
+  }));
+  EXPECT_FLOAT_EQ(camera.state().target.x, 1.0f);
+  EXPECT_FLOAT_EQ(camera.state().target.y, 2.0f);
+  EXPECT_FLOAT_EQ(camera.state().target.z, 0.0f);
+
+  EXPECT_TRUE(camera.focus_optional_bounds(
+      std::nullopt, quader::ViewportEmptyFocusBehavior::FocusOrigin));
+  EXPECT_FLOAT_EQ(camera.state().target.x, 0.0f);
+  EXPECT_FLOAT_EQ(camera.state().target.y, 0.0f);
+  EXPECT_FLOAT_EQ(camera.state().target.z, 0.0f);
 }

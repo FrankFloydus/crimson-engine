@@ -6,7 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "test_support.hpp"
 
-#include <mesh/polygon/document_builder.hpp>
+#include <quader/modeling/neutral/polygon/document_builder.hpp>
 
 #include <algorithm>
 #include <array>

@@ -19,6 +19,10 @@ if(_quader_binary_dir STREQUAL "" OR
     message(FATAL_ERROR "Refusing to recreate unsafe SDK-only build directory: ${QUADER_BINARY_DIR}")
 endif()
 file(REMOVE_RECURSE "${QUADER_BINARY_DIR}")
+set(_quader_file_api_query_dir
+    "${_quader_binary_dir}/.cmake/api/v1/query")
+file(MAKE_DIRECTORY "${_quader_file_api_query_dir}")
+file(WRITE "${_quader_file_api_query_dir}/codemodel-v2" "")
 
 set(_quader_configure_command
     "${CMAKE_COMMAND}"
@@ -26,6 +30,9 @@ set(_quader_configure_command
     -B "${QUADER_BINARY_DIR}"
     -DQUADER_BUILD_NATIVE_APP=OFF
     -DQUADER_BUILD_TESTS=ON
+    -DQUADER_USE_OPENMESH_TOPOLOGY=OFF
+    -DQUADER_ALLOW_EXTERNAL_OPENMESH_FETCH=OFF
+    -DQUADER_OPENMESH_SOURCE_DIR=
     -DVCPKG_MANIFEST_NO_DEFAULT_FEATURES=ON
     -DVCPKG_MANIFEST_FEATURES=tests)
 
@@ -35,22 +42,157 @@ endif()
 if(DEFINED QUADER_CMAKE_GENERATOR_PLATFORM AND NOT "${QUADER_CMAKE_GENERATOR_PLATFORM}" STREQUAL "")
     list(APPEND _quader_configure_command -A "${QUADER_CMAKE_GENERATOR_PLATFORM}")
 endif()
+if(DEFINED QUADER_CXX_COMPILER AND NOT "${QUADER_CXX_COMPILER}" STREQUAL "")
+    list(APPEND _quader_configure_command
+        "-DCMAKE_CXX_COMPILER=${QUADER_CXX_COMPILER}")
+endif()
 if(DEFINED QUADER_CMAKE_TOOLCHAIN_FILE AND NOT "${QUADER_CMAKE_TOOLCHAIN_FILE}" STREQUAL "")
     list(APPEND _quader_configure_command "-DCMAKE_TOOLCHAIN_FILE=${QUADER_CMAKE_TOOLCHAIN_FILE}")
 endif()
 if(DEFINED QUADER_VCPKG_TARGET_TRIPLET AND NOT "${QUADER_VCPKG_TARGET_TRIPLET}" STREQUAL "")
     list(APPEND _quader_configure_command "-DVCPKG_TARGET_TRIPLET=${QUADER_VCPKG_TARGET_TRIPLET}")
 endif()
-if(DEFINED QUADER_OPENMESH_SOURCE_DIR AND NOT "${QUADER_OPENMESH_SOURCE_DIR}" STREQUAL "")
-    list(APPEND _quader_configure_command "-DQUADER_OPENMESH_SOURCE_DIR=${QUADER_OPENMESH_SOURCE_DIR}")
-endif()
-
 execute_process(
     COMMAND ${_quader_configure_command}
     RESULT_VARIABLE _quader_configure_result)
 if(NOT _quader_configure_result EQUAL 0)
     message(FATAL_ERROR "SDK-only configure failed.")
 endif()
+
+set(_quader_file_api_reply_dir
+    "${_quader_binary_dir}/.cmake/api/v1/reply")
+file(GLOB _quader_file_api_index_files
+    "${_quader_file_api_reply_dir}/index-*.json")
+list(LENGTH _quader_file_api_index_files _quader_file_api_index_count)
+if(NOT _quader_file_api_index_count EQUAL 1)
+    message(FATAL_ERROR
+        "SDK-only configure produced an unexpected CMake file-api index count: "
+        "${_quader_file_api_index_count}")
+endif()
+list(GET _quader_file_api_index_files 0 _quader_file_api_index_file)
+file(READ "${_quader_file_api_index_file}" _quader_file_api_index_json)
+string(JSON _quader_codemodel_reply_file GET
+    "${_quader_file_api_index_json}" reply "codemodel-v2" jsonFile)
+file(READ
+    "${_quader_file_api_reply_dir}/${_quader_codemodel_reply_file}"
+    _quader_codemodel_json)
+
+set(_quader_sdk_only_targets)
+string(JSON _quader_configuration_count LENGTH
+    "${_quader_codemodel_json}" configurations)
+if(_quader_configuration_count EQUAL 0)
+    message(FATAL_ERROR "SDK-only configure produced no CMake configurations.")
+endif()
+math(EXPR _quader_last_configuration_index
+    "${_quader_configuration_count} - 1")
+foreach(_quader_configuration_index RANGE 0 ${_quader_last_configuration_index})
+    string(JSON _quader_target_count LENGTH
+        "${_quader_codemodel_json}"
+        configurations ${_quader_configuration_index} targets)
+    if(_quader_target_count EQUAL 0)
+        continue()
+    endif()
+    math(EXPR _quader_last_target_index "${_quader_target_count} - 1")
+    foreach(_quader_target_index RANGE 0 ${_quader_last_target_index})
+        string(JSON _quader_target_name GET
+            "${_quader_codemodel_json}"
+            configurations ${_quader_configuration_index}
+            targets ${_quader_target_index} name)
+        list(APPEND _quader_sdk_only_targets "${_quader_target_name}")
+    endforeach()
+endforeach()
+list(REMOVE_DUPLICATES _quader_sdk_only_targets)
+list(SORT _quader_sdk_only_targets)
+
+foreach(_quader_required_sdk_only_target IN ITEMS
+        quader_guardrail_tests
+        quader_modeling_sdk_consumer_tests
+        quader_modeling_sdk_geometry
+        quader_modeling_sdk_polygon
+        quader_modeling_sdk_qdr_document
+        quader_modeling_sdk_runtime
+        quader_sdk_example_mesh_operation
+        quader_sdk_example_qdr_roundtrip
+        quader_sdk_example_session_preview)
+    list(FIND _quader_sdk_only_targets
+        "${_quader_required_sdk_only_target}"
+        _quader_required_sdk_only_target_index)
+    if(_quader_required_sdk_only_target_index EQUAL -1)
+        message(FATAL_ERROR
+            "SDK-only configure omitted required target: "
+            "${_quader_required_sdk_only_target}")
+    endif()
+endforeach()
+
+foreach(_quader_sdk_only_target IN LISTS _quader_sdk_only_targets)
+    if(_quader_sdk_only_target MATCHES "^OpenMesh" OR
+            _quader_sdk_only_target MATCHES "^quader_modeling_domain_" OR
+            _quader_sdk_only_target STREQUAL "qdr_performance_baseline" OR
+            _quader_sdk_only_target STREQUAL "quader" OR
+            _quader_sdk_only_target STREQUAL "quader_editor_metadata" OR
+            _quader_sdk_only_target STREQUAL "quader_geometry" OR
+            _quader_sdk_only_target STREQUAL "quader_modeling" OR
+            _quader_sdk_only_target STREQUAL "quader_modeling_profile" OR
+            _quader_sdk_only_target STREQUAL "quader_modeling_polygon" OR
+            _quader_sdk_only_target STREQUAL "quader_modeling_runtime")
+        message(FATAL_ERROR
+            "SDK-only configure exposed native modeling target: "
+            "${_quader_sdk_only_target}")
+    endif()
+endforeach()
+
+string(REPLACE ";" "\n" _quader_sdk_only_target_manifest
+    "${_quader_sdk_only_targets}")
+file(WRITE "${_quader_binary_dir}/sdk-only-targets.txt"
+    "${_quader_sdk_only_target_manifest}\n")
+list(JOIN _quader_sdk_only_targets ", " _quader_sdk_only_target_summary)
+message(STATUS
+    "SDK-only configured targets: ${_quader_sdk_only_target_summary}")
+
+set(_quader_list_tests_command
+    "${CMAKE_CTEST_COMMAND}"
+    --test-dir "${QUADER_BINARY_DIR}"
+    -N)
+if(DEFINED QUADER_BUILD_CONFIG AND NOT "${QUADER_BUILD_CONFIG}" STREQUAL "")
+    list(APPEND _quader_list_tests_command -C "${QUADER_BUILD_CONFIG}")
+endif()
+execute_process(
+    COMMAND ${_quader_list_tests_command}
+    RESULT_VARIABLE _quader_list_tests_result
+    OUTPUT_VARIABLE _quader_list_tests_output
+    ERROR_VARIABLE _quader_list_tests_error)
+if(NOT _quader_list_tests_result EQUAL 0)
+    message(FATAL_ERROR
+        "SDK-only CTest inventory failed:\n"
+        "${_quader_list_tests_output}${_quader_list_tests_error}")
+endif()
+foreach(_quader_required_sdk_only_test IN ITEMS
+        quader_guardrail_tests
+        quader_modeling_sdk_consumer_tests
+        quader_modeling_sdk_only_configure_build)
+    string(FIND "${_quader_list_tests_output}"
+        "${_quader_required_sdk_only_test}"
+        _quader_required_sdk_only_test_index)
+    if(_quader_required_sdk_only_test_index EQUAL -1)
+        message(FATAL_ERROR
+            "SDK-only configure omitted required CTest entry: "
+            "${_quader_required_sdk_only_test}")
+    endif()
+endforeach()
+foreach(_quader_forbidden_sdk_only_test IN ITEMS
+        quader_modeling_domain_tests
+        quader_modeling_sdk_parity_tests
+        quader_tests)
+    string(FIND "${_quader_list_tests_output}"
+        "${_quader_forbidden_sdk_only_test}"
+        _quader_forbidden_sdk_only_test_index)
+    if(NOT _quader_forbidden_sdk_only_test_index EQUAL -1)
+        message(FATAL_ERROR
+            "SDK-only configure exposed native CTest entry: "
+            "${_quader_forbidden_sdk_only_test}")
+    endif()
+endforeach()
+message(STATUS "SDK-only registered tests:\n${_quader_list_tests_output}")
 
 set(_quader_sdk_only_vcpkg_share_dir
     "${_quader_binary_dir}/vcpkg_installed")
@@ -62,7 +204,6 @@ foreach(_quader_native_only_package IN ITEMS
         sentry-native
         spdlog
         stduuid
-        taskflow
         zlib)
     file(GLOB _quader_native_only_package_dirs
         "${_quader_sdk_only_vcpkg_share_dir}/*/share/${_quader_native_only_package}")
@@ -77,6 +218,7 @@ set(_quader_build_command
     "${CMAKE_COMMAND}"
     --build "${QUADER_BINARY_DIR}"
     --target
+        quader_guardrail_tests
         quader_modeling_sdk_consumer_tests
         quader_sdk_example_mesh_operation
         quader_sdk_example_qdr_roundtrip
@@ -96,7 +238,7 @@ set(_quader_test_command
     "${CMAKE_CTEST_COMMAND}"
     --test-dir "${QUADER_BINARY_DIR}"
     --output-on-failure
-    -R "^quader_modeling_sdk_consumer_tests$")
+    -R "^(quader_guardrail_tests|quader_modeling_sdk_consumer_tests)$")
 if(DEFINED QUADER_BUILD_CONFIG AND NOT "${QUADER_BUILD_CONFIG}" STREQUAL "")
     list(APPEND _quader_test_command -C "${QUADER_BUILD_CONFIG}")
 endif()
@@ -138,6 +280,10 @@ endif()
 if(DEFINED QUADER_CMAKE_GENERATOR_PLATFORM AND NOT "${QUADER_CMAKE_GENERATOR_PLATFORM}" STREQUAL "")
     list(APPEND _quader_external_consumer_configure_command
         -A "${QUADER_CMAKE_GENERATOR_PLATFORM}")
+endif()
+if(DEFINED QUADER_CXX_COMPILER AND NOT "${QUADER_CXX_COMPILER}" STREQUAL "")
+    list(APPEND _quader_external_consumer_configure_command
+        "-DCMAKE_CXX_COMPILER=${QUADER_CXX_COMPILER}")
 endif()
 if(DEFINED QUADER_CMAKE_TOOLCHAIN_FILE AND NOT "${QUADER_CMAKE_TOOLCHAIN_FILE}" STREQUAL "")
     list(APPEND _quader_external_consumer_configure_command

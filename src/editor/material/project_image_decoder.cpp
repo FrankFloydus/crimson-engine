@@ -6,6 +6,8 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "editor/material/project_image_decoder.hpp"
 
+#include "core/qstr.hpp"
+
 #include <QBuffer>
 #include <QByteArray>
 #include <QImage>
@@ -108,14 +110,6 @@ ProjectIoResult<ProjectDecodedImage> decode_reader(QImageReader &reader) {
   return ProjectIoResult<ProjectDecodedImage>::success(std::move(decoded));
 }
 
-std::string lowercase_ascii(std::string value) {
-  std::transform(value.begin(), value.end(), value.begin(),
-                 [](unsigned char character) {
-                   return static_cast<char>(std::tolower(character));
-                 });
-  return value;
-}
-
 } // namespace
 
 ProjectIoResult<ProjectDecodedImage>
@@ -181,7 +175,8 @@ ProjectImageDecoder::read_import(const std::filesystem::path &source_path) {
     return ProjectIoResult<ProjectImportedImage>::failure(
         decoded.error().code, decoded.error().message, source_path);
   }
-  std::string extension = lowercase_ascii(source_path.extension().string());
+  std::string extension =
+      QStr::to_ascii_lower(source_path.extension().string());
   if (extension.empty()) {
     extension = "." + decoded.value().detected_format;
   }

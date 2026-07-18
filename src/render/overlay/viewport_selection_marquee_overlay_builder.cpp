@@ -6,7 +6,6 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "render/overlay/viewport_selection_marquee_overlay_builder.hpp"
 
-#include "editor/viewport/viewport_selection_interaction.hpp"
 #include "render/overlay/viewport_overlay_dash.hpp"
 #include "render/overlay/viewport_overlay_geometry.hpp"
 #include "render/viewport_overlay_policy.hpp"
@@ -70,12 +69,12 @@ void append_segment(ViewportOverlayFrame &frame,
 
 void ViewportSelectionMarqueeOverlayBuilder::append(
     ViewportOverlayFrame &overlay_frame, const ViewportOverlayCamera &camera,
-    const ViewportSelectionMarquee &marquee) {
+    const RenderSelectionMarqueeRecord &marquee) {
   if (!marquee.active) {
     return;
   }
 
-  const bool dashed = marquee.rule == ModelingBoxSelectionRule::Crossing;
+  const bool dashed = marquee.crossing;
   const QVec2 min{
       std::min(marquee.start.x, marquee.end.x),
       std::min(marquee.start.y, marquee.end.y),

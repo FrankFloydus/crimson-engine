@@ -17,23 +17,11 @@ namespace quader_editor_core {
  * Enumerates EditorRuntimeCommandId values used by the modeling layer.
  */
 enum class EditorRuntimeCommandId {
-  CopySelectedMeshes,
-  PasteCopiedMeshes,
-  ClearSelection,
-  SelectAll,
-  InvertSelection,
-  DeleteSelection,
-  MarkClean,
-  Undo,
-  Redo,
   ClearHover,
-  SetSelectionMode,
   SetActiveTool,
-  PickSelect,
   UpdateInsertEdgeLoopHover,
   BeginInsertEdgeLoopDrag,
   UpdateInsertEdgeLoopDrag,
-  CommitInsertEdgeLoopDrag,
   CancelInsertEdgeLoop,
   ActivateCut,
   UpdateCutPreview,
@@ -44,7 +32,6 @@ enum class EditorRuntimeCommandId {
   BeginCutPointDrag,
   BeginCutLineDrag,
   EndCutDrag,
-  FinalizeCut,
   ActivateMirror,
   UpdateMirrorPreview,
   CancelMirror,
@@ -53,35 +40,15 @@ enum class EditorRuntimeCommandId {
   BeginMirrorPointDrag,
   BeginMirrorLineDrag,
   EndMirrorDrag,
-  FinalizeMirror,
   UpdatePolyHover,
   AcceptPolyPoint,
-  CommitPoly,
   CancelPoly,
-  MirrorAxis,
-  FlipView,
-  CreateBoxFromBounds,
   UpdateBoxHover,
   BeginBoxFootprint,
   UpdateBoxFootprint,
   BeginBoxHeight,
   UpdateBoxHeight,
-  CommitBox,
   CancelBox,
-};
-
-/**
- * Represents a Paste Copied Meshes Runtime Command Settings value used by the modeling runtime domain.
- */
-struct PasteCopiedMeshesRuntimeCommandSettings {
-	CommandVec3Fact target_center;
-};
-
-/**
- * Represents a Set Selection Mode Runtime Command Settings value used by the modeling runtime domain.
- */
-struct SetSelectionModeRuntimeCommandSettings {
-	int selection_mode = 0;
 };
 
 /**
@@ -89,22 +56,6 @@ struct SetSelectionModeRuntimeCommandSettings {
  */
 struct SetActiveToolRuntimeCommandSettings {
   ViewportInteractionTool tool = ViewportInteractionTool::Select;
-};
-
-/**
- * Represents a Pick Select Runtime Command Settings value used by the modeling runtime domain.
- */
-struct PickSelectRuntimeCommandSettings {
-	quader_poly::Ray ray;
-	int click_count = 1;
-	bool control_pressed = false;
-	bool shift_pressed = false;
-	bool command_pressed = false;
-	bool alt_pressed = false;
-	double vertex_radius = 0.0;
-	double edge_radius = 0.0;
-	bool has_hidden_material_slot = false;
-	std::uint32_t hidden_material_slot = 0;
 };
 
 /**
@@ -179,20 +130,6 @@ struct PolyHoverRuntimeCommandSettings {
 };
 
 /**
- * Represents a Mirror QAxis Runtime Command Settings value used by the modeling runtime domain.
- */
-struct MirrorAxisRuntimeCommandSettings {
-  TransformAxis axis = TransformAxis::None;
-};
-
-/**
- * Represents a View Flip Runtime Command Settings value used by the modeling runtime domain.
- */
-struct ViewFlipRuntimeCommandSettings {
-  ViewportFlipOrientation orientation = ViewportFlipOrientation::Horizontal;
-};
-
-/**
  * Represents a Box Ray Runtime Command Settings value used by the modeling runtime domain.
  */
 struct BoxRayRuntimeCommandSettings {
@@ -217,20 +154,9 @@ struct BoxHeightRuntimeCommandSettings {
 	ViewportCameraState camera;
 };
 
-/**
- * Represents a Create Box From Bounds Runtime Command Settings value used by the modeling runtime domain.
- */
-struct CreateBoxFromBoundsRuntimeCommandSettings {
-	quader::QVec3 min_bounds;
-	quader::QVec3 max_bounds;
-};
-
 using EditorRuntimeCommandSettings = std::variant<
 		std::monostate,
-		PasteCopiedMeshesRuntimeCommandSettings,
-		SetSelectionModeRuntimeCommandSettings,
 		SetActiveToolRuntimeCommandSettings,
-		PickSelectRuntimeCommandSettings,
 		InsertEdgeLoopPickRuntimeCommandSettings,
 		SetCutModeRuntimeCommandSettings,
 		CutRayRuntimeCommandSettings,
@@ -238,18 +164,15 @@ using EditorRuntimeCommandSettings = std::variant<
 		MirrorRayRuntimeCommandSettings,
 		MirrorPointDragRuntimeCommandSettings,
 		PolyHoverRuntimeCommandSettings,
-		MirrorAxisRuntimeCommandSettings,
-		ViewFlipRuntimeCommandSettings,
 		BoxRayRuntimeCommandSettings,
-		BoxHeightRuntimeCommandSettings,
-		CreateBoxFromBoundsRuntimeCommandSettings>;
+		BoxHeightRuntimeCommandSettings>;
 
 /**
  * Represents an Editor Runtime Command value used by the modeling runtime domain.
  */
 struct EditorRuntimeCommand {
   EditorRuntimeCommandId command_id =
-      EditorRuntimeCommandId::CopySelectedMeshes;
+      EditorRuntimeCommandId::ClearHover;
   EditorRuntimeCommandSettings settings = std::monostate{};
 };
 

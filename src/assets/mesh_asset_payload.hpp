@@ -14,7 +14,7 @@
 #include <memory>
 #include <vector>
 
-#include <mesh/polygon/document_model.hpp>
+#include <quader/modeling/neutral/polygon/document_model.hpp>
 
 namespace quader {
 namespace mesh_asset_payload_detail {

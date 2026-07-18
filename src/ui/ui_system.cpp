@@ -136,6 +136,43 @@ QuaderStandardMaterialTextureSlot domain_texture_slot(
   return kMaterialTextureSlots[static_cast<std::size_t>(slot)];
 }
 
+QuaderStandardMaterialScalar domain_material_scalar(
+    QtStandardMaterialScalar scalar) {
+  switch (scalar) {
+  case QtStandardMaterialScalar::Roughness:
+    return QuaderStandardMaterialScalar::Roughness;
+  case QtStandardMaterialScalar::Metallic:
+    return QuaderStandardMaterialScalar::Metallic;
+  case QtStandardMaterialScalar::NormalStrength:
+    return QuaderStandardMaterialScalar::NormalStrength;
+  }
+  return QuaderStandardMaterialScalar::Roughness;
+}
+
+QuaderStandardMaterialTextureTransformComponent
+domain_texture_transform_component(
+    QtStandardMaterialTextureTransformComponent component) {
+  using Source = QtStandardMaterialTextureTransformComponent;
+  using Target = QuaderStandardMaterialTextureTransformComponent;
+  switch (component) {
+  case Source::CenterU:
+    return Target::CenterU;
+  case Source::CenterV:
+    return Target::CenterV;
+  case Source::ScaleU:
+    return Target::ScaleU;
+  case Source::ScaleV:
+    return Target::ScaleV;
+  case Source::OffsetU:
+    return Target::OffsetU;
+  case Source::OffsetV:
+    return Target::OffsetV;
+  case Source::RotationDegrees:
+    return Target::RotationDegrees;
+  }
+  return Target::CenterU;
+}
+
 MaterialPreviewMeshKind preview_mesh_kind(
     QtStandardMaterialPreviewMesh mesh) {
   return static_cast<MaterialPreviewMeshKind>(mesh);
@@ -2053,23 +2090,63 @@ void UISystem::refresh_standard_material_editor() {
     return;
   }
   if (editor_ == nullptr || !editor_->project().has_project()) {
+    if (standard_material_editor_refresh_valid_ &&
+        !standard_material_editor_has_document_) {
+      return;
+    }
     standard_material_preview_image_cache_.clear();
     standard_material_editor_window_->clear_document();
     standard_material_editor_window_->hide();
+    standard_material_editor_refresh_valid_ = true;
+    standard_material_editor_has_document_ = false;
+    standard_material_editor_session_id_ = {};
+    standard_material_editor_asset_id_ = {};
+    standard_material_editor_draft_revision_ = 0u;
+    standard_material_editor_clean_revision_ = 0u;
+    standard_material_editor_dirty_ = false;
     return;
   }
 
-  const QuaderApiResult<QuaderStandardMaterialDocumentInfo> current =
-      editor_->standard_material_documents().current();
-  if (!current.ok) {
+  const QuaderApiResult<QuaderStandardMaterialDocumentRevision> revision =
+      editor_->standard_material_documents().current_revision();
+  if (!revision.ok) {
+    if (standard_material_editor_refresh_valid_ &&
+        !standard_material_editor_has_document_) {
+      return;
+    }
     standard_material_preview_image_cache_.clear();
     if (standard_material_editor_window_->has_document()) {
       standard_material_editor_window_->clear_document();
       standard_material_editor_window_->hide();
     }
+    standard_material_editor_refresh_valid_ = true;
+    standard_material_editor_has_document_ = false;
+    standard_material_editor_session_id_ = {};
+    standard_material_editor_asset_id_ = {};
+    standard_material_editor_draft_revision_ = 0u;
+    standard_material_editor_clean_revision_ = 0u;
+    standard_material_editor_dirty_ = false;
     return;
   }
 
+  const QuaderStandardMaterialDocumentRevision &source_revision =
+      revision.value();
+  if (standard_material_editor_refresh_valid_ &&
+      standard_material_editor_has_document_ &&
+      standard_material_editor_session_id_ == source_revision.session_id &&
+      standard_material_editor_asset_id_ == source_revision.id &&
+      standard_material_editor_draft_revision_ ==
+          source_revision.draft_revision &&
+      standard_material_editor_clean_revision_ ==
+          source_revision.clean_revision &&
+      standard_material_editor_dirty_ == source_revision.dirty) {
+    return;
+  }
+  const QuaderApiResult<QuaderStandardMaterialDocumentInfo> current =
+      editor_->standard_material_documents().current();
+  if (!current.ok) {
+    return;
+  }
   const QuaderStandardMaterialDocumentInfo &source = current.value();
   QtStandardMaterialEditorDocument document{
       .stable_id = QString::fromStdString(std::string(source.id.str())),
@@ -2231,6 +2308,13 @@ void UISystem::refresh_standard_material_editor() {
     material_preview_surface_->set_material(std::move(*render_snapshot));
   }
   standard_material_editor_window_->set_document(std::move(document));
+  standard_material_editor_refresh_valid_ = true;
+  standard_material_editor_has_document_ = true;
+  standard_material_editor_session_id_ = source.session_id;
+  standard_material_editor_asset_id_ = source.id;
+  standard_material_editor_draft_revision_ = source.draft_revision;
+  standard_material_editor_clean_revision_ = source.clean_revision;
+  standard_material_editor_dirty_ = source.dirty;
 }
 
 void UISystem::open_standard_material(std::string_view stable_id) {
@@ -2504,21 +2588,9 @@ void UISystem::handle_standard_material_scalar(
   if (editor_ == nullptr) {
     return;
   }
-  QuaderApiVoidResult result;
-  switch (scalar) {
-  case QtStandardMaterialScalar::Roughness:
-    result = editor_->standard_material_documents().set_roughness(
-        static_cast<float>(value));
-    break;
-  case QtStandardMaterialScalar::Metallic:
-    result = editor_->standard_material_documents().set_metallic(
-        static_cast<float>(value));
-    break;
-  case QtStandardMaterialScalar::NormalStrength:
-    result = editor_->standard_material_documents().set_normal_strength(
-        static_cast<float>(value));
-    break;
-  }
+  const QuaderApiVoidResult result =
+      editor_->standard_material_documents().set_scalar(
+          domain_material_scalar(scalar), static_cast<float>(value));
   present_lifecycle_result(result);
   refresh_standard_material_editor();
 }
@@ -2554,39 +2626,10 @@ void UISystem::handle_standard_material_texture_transform(
   if (editor_ == nullptr || !std::isfinite(value)) {
     return;
   }
-  const QuaderApiResult<QuaderStandardMaterialDocumentInfo> current =
-      editor_->standard_material_documents().current();
-  if (!current.ok) {
-    present_lifecycle_result(current);
-    return;
-  }
-  QuaderStandardMaterialTextureTransform transform =
-      current.value().material.texture_transform;
-  switch (component) {
-  case QtStandardMaterialTextureTransformComponent::CenterU:
-    transform.center[0] = static_cast<float>(value);
-    break;
-  case QtStandardMaterialTextureTransformComponent::CenterV:
-    transform.center[1] = static_cast<float>(value);
-    break;
-  case QtStandardMaterialTextureTransformComponent::ScaleU:
-    transform.scale[0] = static_cast<float>(value);
-    break;
-  case QtStandardMaterialTextureTransformComponent::ScaleV:
-    transform.scale[1] = static_cast<float>(value);
-    break;
-  case QtStandardMaterialTextureTransformComponent::OffsetU:
-    transform.offset[0] = static_cast<float>(value);
-    break;
-  case QtStandardMaterialTextureTransformComponent::OffsetV:
-    transform.offset[1] = static_cast<float>(value);
-    break;
-  case QtStandardMaterialTextureTransformComponent::RotationDegrees:
-    transform.rotation_degrees = static_cast<float>(value);
-    break;
-  }
   const QuaderApiVoidResult result =
-      editor_->standard_material_documents().set_texture_transform(transform);
+      editor_->standard_material_documents().set_texture_transform_component(
+          domain_texture_transform_component(component),
+          static_cast<float>(value));
   present_lifecycle_result(result);
   refresh_standard_material_editor();
 }

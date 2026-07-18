@@ -4,8 +4,8 @@
 // No permission is granted to use, copy, modify, distribute, or sublicense this
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
-#include <mesh/polygon/document.hpp>
-#include <mesh/polygon/poly_operation_descriptor.hpp>
+#include <quader/modeling/neutral/polygon/document.hpp>
+#include <quader/modeling/neutral/polygon/poly_operation_descriptor.hpp>
 
 #include <diagnostics/profile.hpp>
 

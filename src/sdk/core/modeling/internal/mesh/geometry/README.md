@@ -30,6 +30,6 @@ Geometry algorithms are Quader-owned. Public headers expose only Quader-owned ty
 - Boundary guards should stay consistent across float and double paths. Degenerate rays/segments,
   invalid AABBs, degenerate triangles, and mismatched broad-phase spans are permanent boundary
   cases for package tests.
-- Adapter-local conversion helpers in `src/mesh/polygon` and `src/editor/modeling` are acceptable
-  as thin type boundaries, but reusable predicates, spatial broad-phase, or projection math should
-  be added here first and consumed upward.
+- Adapter-local conversion helpers in native editor/modeling owners are acceptable as thin type
+  boundaries, but reusable predicates, spatial broad-phase, or projection math should be added
+  here first and consumed upward through the neutral header surface.

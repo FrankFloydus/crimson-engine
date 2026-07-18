@@ -75,7 +75,7 @@ TEST(QdrModelingRuntimeToolMirrorTests, MirrorToolUsesTwoSnappedWorldGridPoints)
 	EXPECT_TRUE(plane_points[2].y > plane_points[0].y);
 }
 
-TEST(QdrModelingRuntimeToolMirrorTests, MirrorPreviewPolicyEvaluatesTargetMeshesOutsideNativeTransport) {
+TEST(QdrModelingRuntimeToolMirrorTests, MirrorPreviewPolicyRetainsOnlyHostPlaneAndTargetState) {
 	quader_editor_core::PolygonObject object;
 	object.id = 7;
 	object.document = quader_poly::make_cube({});
@@ -98,11 +98,6 @@ TEST(QdrModelingRuntimeToolMirrorTests, MirrorPreviewPolicyEvaluatesTargetMeshes
 	EXPECT_TRUE(metadata.preview_valid);
 	EXPECT_TRUE(metadata.target_count == 1);
 	EXPECT_TRUE(metadata.mirrored_count == 1);
-
-	const std::vector<quader_poly::Document> documents =
-		quader_editor_core::mirror_preview_documents(state, objects);
-	EXPECT_TRUE(documents.size() == 1U);
-	EXPECT_FALSE(quader_poly::compile_document(documents.front()).vertices.empty());
 }
 
 TEST(QdrModelingRuntimeToolMirrorTests, MirrorPreviewValidatesOnTheFirstDragAfterTheFirstPoint) {
@@ -150,10 +145,6 @@ TEST(QdrModelingRuntimeToolMirrorTests, MirrorPreviewValidatesOnTheFirstDragAfte
 	EXPECT_TRUE(metadata.preview_valid);
 	EXPECT_TRUE(metadata.target_count == 1);
 
-	const std::vector<quader_poly::Document> documents =
-		runtime.mirror_preview_documents(objects);
-	EXPECT_TRUE(documents.size() == 1U);
-	EXPECT_FALSE(quader_poly::compile_document(documents.front()).vertices.empty());
 }
 
 TEST(QdrModelingRuntimeToolMirrorTests, MirrorLineDragMovesTheWholePlacedPlane) {

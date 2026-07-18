@@ -6,6 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
+#include <cstdint>
 #include <filesystem>
 #include <string>
 #include <string_view>
@@ -16,24 +17,68 @@ namespace quader {
  * Enumerates FatalErrorCode values used by the platform layer.
  */
 enum class FatalErrorCode {
-    UnknownFatal,
-    RuntimeAbort,
-    UnhandledCppException,
-    UnhandledNonStandardException,
-    InvalidRuntimeParameter,
-    WindowsUnhandledException,
-    ManualFatalReport,
+  UnknownFatal,
+  RuntimeAbort,
+  UnhandledCppException,
+  UnhandledNonStandardException,
+  InvalidRuntimeParameter,
+  WindowsUnhandledException,
+  ManualFatalReport,
 };
 
 /**
- * Stores the Fatal Error Info data contract used by the platform integration layer.
+ * Stores the fatal error data contract used by the platform integration layer.
  */
 struct FatalErrorInfo {
-    const char* code;
-    const char *quick_message;
+  const char *code;
+  const char *quick_message;
+};
+
+/**
+ * Stores deterministic report and optional dump paths for one fatal event.
+ */
+struct FatalArtifactPaths {
+  std::filesystem::path report_path;
+  std::filesystem::path dump_path;
+};
+
+/**
+ * Stores platform-neutral data used to format the durable fatal report.
+ */
+struct FatalReportData {
+  std::string generated_at;
+  std::uint32_t process_id = 0;
+  std::uint32_t thread_id = 0;
+  std::string error_code;
+  std::string quick_message;
+  std::string detail;
+  std::filesystem::path log_path;
+  std::filesystem::path report_path;
+  std::filesystem::path dump_path;
+  std::string dump_status;
+  std::string exception_record;
+  std::string stack_trace;
+};
+
+/**
+ * Reports which path accepted a fatal report write.
+ */
+struct FatalReportWriteResult {
+  std::filesystem::path path;
+  bool written = false;
+  bool used_fallback = false;
 };
 
 FatalErrorInfo fatal_error_info(FatalErrorCode code);
+[[nodiscard]] FatalArtifactPaths make_fatal_artifact_paths(
+    const std::filesystem::path &directory, std::string_view timestamp,
+    std::uint32_t process_id, std::uint32_t thread_id,
+    bool include_dump = true);
+[[nodiscard]] std::string
+format_fatal_error_report(const FatalReportData &data);
+[[nodiscard]] FatalReportWriteResult write_fatal_error_report(
+    const std::filesystem::path &preferred_path,
+    const std::filesystem::path &fallback_path, std::string_view text);
 /** Converts UTF-8 text into the native wide string used by fatal presentation. */
 [[nodiscard]] std::wstring
 platform_utf8_to_wide(std::string_view value);

@@ -19,7 +19,11 @@
 
 #include <editor/interactions/selection_box.hpp>
 #include <editor/modeling/runtime/session.hpp>
-#include <mesh/polygon/document.hpp>
+#include <quader/modeling/neutral/polygon/document.hpp>
+
+namespace quader_editor_core {
+class EditorRuntime;
+}
 
 namespace quader {
 
@@ -147,10 +151,6 @@ public:
   ModelingCommandResult
   set_group_selection_mode(quader_editor_core::EditorSession &session,
                            ModelingSelectionMode &app_selection_mode) const;
-  ModelingCommandResult
-  set_runtime_selection_mode(quader_editor_core::EditorSession &session,
-                             quader_editor_core::EditorRuntime &runtime,
-                             ModelingSelectionMode mode) const;
   ModelingCommandResult set_component_selection(
       quader_editor_core::EditorSession &session,
       const ModelingComponentSelectionRequest &request) const;
@@ -201,7 +201,6 @@ private:
     bool valid = false;
     std::uint64_t projected_candidates_revision = 0;
     std::uint64_t content_revision = 0;
-    std::uint64_t selection_revision = 0;
     quader_editor_core::SelectionEditOperation operation =
         quader_editor_core::SelectionEditOperation::Replace;
     quader_editor_core::RectangleSelectionState baseline;

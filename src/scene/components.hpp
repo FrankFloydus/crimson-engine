@@ -181,6 +181,9 @@ struct SelectionComponent {
 struct ModelingObjectComponent {
   ModelingObjectId object_id = kInvalidModelingObjectId;
   std::uint32_t material_slot = 0;
+  // True when authored topology and interactive modeling state are owned by
+  // the portable SDK session rather than the legacy native runtime.
+  bool sdk_owned = false;
 };
 
 /**

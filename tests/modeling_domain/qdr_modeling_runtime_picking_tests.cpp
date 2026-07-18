@@ -7,7 +7,7 @@
 #include "test_support.hpp"
 
 #include <editor/modeling/runtime/session.hpp>
-#include <mesh/polygon/document.hpp>
+#include <quader/modeling/neutral/polygon/document.hpp>
 
 #include <algorithm>
 #include <array>
@@ -16,6 +16,7 @@
 #include <iostream>
 #include <limits>
 #include <optional>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -230,16 +231,16 @@ void hover_tracks_face_candidates_and_selected_feedback()
                 objects, quader_editor_core::SelectionMode::Face, {},
                 front_center_ray(), true);
 
-        require_test(hover_result.changed, "face hover should report a changed target for a fresh hit");
-	require_test(hover_result.hover.object_id == 7 && hover_result.hover.candidate_object_id == 7,
-		"face hover should update both the active object and candidate object");
-        require_test(hover_result.hover.kind ==
+        ASSERT_TRUE(require_test(hover_result.changed, "face hover should report a changed target for a fresh hit"));
+	ASSERT_TRUE(require_test(hover_result.hover.object_id == 7 && hover_result.hover.candidate_object_id == 7,
+		"face hover should update both the active object and candidate object"));
+        ASSERT_TRUE(require_test(hover_result.hover.kind ==
                              quader_editor_core::SelectionHoverKind::Face &&
                          hover_result.hover.face_id !=
                              quader_poly::kInvalidElementId,
-                     "face hover should keep the picked face id");
-        require_test(hover_result.hover.selected_modifier_pressed,
-		"face hover should remember the selected-target modifier when hovering a component");
+                     "face hover should keep the picked face id"));
+        ASSERT_TRUE(require_test(hover_result.hover.selected_modifier_pressed,
+		"face hover should remember the selected-target modifier when hovering a component"));
 
 	objects[0].selected = true;
         objects[0].selection.mode = quader_poly::SelectionMode::Face;
@@ -248,22 +249,22 @@ void hover_tracks_face_candidates_and_selected_feedback()
         objects[0].selection.active_kind = quader_poly::ElementKind::Face;
         objects[0].selection.active_face = hover_result.hover.face_id;
 
-        require_test(
+        ASSERT_TRUE(require_test(
             quader_editor_core::selection_hover_target_matches_selection(
                 objects, quader_editor_core::SelectionMode::Face,
                 hover_result.hover),
             "hover feedback should recognize when the hovered face is already "
-            "selected");
-        require_test(quader_editor_core::selection_hover_target_is_selected(
+            "selected"));
+        ASSERT_TRUE(require_test(quader_editor_core::selection_hover_target_is_selected(
                          objects, quader_editor_core::SelectionMode::Face,
                          hover_result.hover),
-                     "selected-target hover should require the modifier flag");
+                     "selected-target hover should require the modifier flag"));
 
         const quader_editor_core::SelectionOverlayFrame frame =
             quader_editor_core::build_selection_overlay_frame(
                 objects, quader_editor_core::SelectionMode::Face,
                 hover_result.hover);
-        require_test(frame.hover_target_selected, "selection overlay frame should receive selected-hover feedback");
+        ASSERT_TRUE(require_test(frame.hover_target_selected, "selection overlay frame should receive selected-hover feedback"));
 }
 
 void component_hover_preserves_candidate_on_miss()
@@ -276,20 +277,20 @@ void component_hover_preserves_candidate_on_miss()
             quader_editor_core::update_selection_hover(
                 objects, quader_editor_core::SelectionMode::Edge, current_hover,
                 miss_ray(), false);
-        require_test(!edge_miss.changed && edge_miss.hover.candidate_object_id == 7,
-		"component hover misses should keep the previous candidate object");
-        require_test(
+        ASSERT_TRUE(require_test(!edge_miss.changed && edge_miss.hover.candidate_object_id == 7,
+		"component hover misses should keep the previous candidate object"));
+        ASSERT_TRUE(require_test(
             edge_miss.hover.object_id == -1 &&
                 edge_miss.hover.kind ==
                     quader_editor_core::SelectionHoverKind::None,
-            "component hover misses should clear the immediate hover target");
+            "component hover misses should clear the immediate hover target"));
 
         const quader_editor_core::SelectionHoverUpdateResult object_miss =
             quader_editor_core::update_selection_hover(
                 objects, quader_editor_core::SelectionMode::Object,
                 current_hover, miss_ray(), false);
-        require_test(!object_miss.changed && object_miss.hover.candidate_object_id == 7,
-		"object hover misses should keep the previous mesh source-wire candidate");
+        ASSERT_TRUE(require_test(!object_miss.changed && object_miss.hover.candidate_object_id == 7,
+		"object hover misses should keep the previous mesh source-wire candidate"));
 }
 
 void component_hover_rejects_single_mesh_occluded_source_edges()
@@ -307,12 +308,12 @@ void component_hover_rejects_single_mesh_occluded_source_edges()
                 objects, quader_editor_core::SelectionMode::Edge, current_hover,
                 {{0.0F, -0.05F, 5.0F}, {0.0F, 0.0F, -1.0F}}, false, options);
 
-        require_test(hover.hover.candidate_object_id == 7,
-		"occluded source-edge hover should keep the sticky component candidate");
-        require_test(hover.hover.kind ==
+        ASSERT_TRUE(require_test(hover.hover.candidate_object_id == 7,
+		"occluded source-edge hover should keep the sticky component candidate"));
+        ASSERT_TRUE(require_test(hover.hover.kind ==
                          quader_editor_core::SelectionHoverKind::None,
                      "occluded source-edge hover should not expose an edge "
-                     "hidden behind the same mesh surface");
+                     "hidden behind the same mesh surface"));
 }
 
 void flipped_surface_picking_uses_nearest_face_not_farthest_frontface()
@@ -326,27 +327,27 @@ void flipped_surface_picking_uses_nearest_face_not_farthest_frontface()
 
 	const std::optional<quader_editor_core::PickHitRecord> outside_hit =
 		quader_editor_core::pick_nearest(objects, { fixture.outside_ray, options });
-        require_test(outside_hit.has_value() &&
+        ASSERT_TRUE(require_test(outside_hit.has_value() &&
                          outside_hit->kind == quader_poly::ElementKind::Face &&
                          outside_hit->face_id == fixture.near_face,
                      "outside flipped face picking should hit the nearest "
-                     "exterior/back-facing surface");
+                     "exterior/back-facing surface"));
 
         const std::optional<quader_editor_core::PickHitRecord> inside_hit =
 		quader_editor_core::pick_nearest(objects, { fixture.inside_ray, options });
-        require_test(inside_hit.has_value() &&
+        ASSERT_TRUE(require_test(inside_hit.has_value() &&
                          inside_hit->kind == quader_poly::ElementKind::Face &&
                          inside_hit->face_id == fixture.interior_face,
                      "inside flipped face picking should hit the visible "
-                     "interior surface");
+                     "interior surface"));
 
         std::vector<quader_editor_core::PickObjectFaceGeometry> geometry =
 		quader_editor_core::build_pick_face_geometry(objects, options);
 	const std::vector<quader_editor_core::PickObjectBounds> bounds { pick_bounds_for_object(objects.front()) };
 	const std::optional<quader_editor_core::PickHitRecord> cached_outside_hit =
 		quader_editor_core::pick_nearest(objects, { fixture.outside_ray, options }, bounds, geometry);
-	require_test(cached_outside_hit.has_value() && cached_outside_hit->face_id == fixture.near_face,
-		"cached outside flipped face picking should use the nearest exterior/back-facing surface");
+	ASSERT_TRUE(require_test(cached_outside_hit.has_value() && cached_outside_hit->face_id == fixture.near_face,
+		"cached outside flipped face picking should use the nearest exterior/back-facing surface"));
 }
 
 void flipped_source_wire_hover_rejects_occluded_interior_handles_from_outside()
@@ -364,20 +365,20 @@ void flipped_source_wire_hover_rejects_occluded_interior_handles_from_outside()
             outside_edge_hover = quader_editor_core::update_selection_hover(
                 objects, quader_editor_core::SelectionMode::Edge, current_hover,
                 fixture.outside_ray, false, edge_options);
-        require_test(outside_edge_hover.hover.kind ==
+        ASSERT_TRUE(require_test(outside_edge_hover.hover.kind ==
                          quader_editor_core::SelectionHoverKind::None,
                      "outside source-wire hover should not pick an interior "
-                     "edge occluded by a flipped surface");
+                     "edge occluded by a flipped surface"));
 
         const quader_editor_core::SelectionHoverUpdateResult inside_edge_hover =
             quader_editor_core::update_selection_hover(
                 objects, quader_editor_core::SelectionMode::Edge, current_hover,
                 fixture.inside_ray, false, edge_options);
-        require_test(
+        ASSERT_TRUE(require_test(
             inside_edge_hover.hover.kind ==
                     quader_editor_core::SelectionHoverKind::Edge &&
                 inside_edge_hover.hover.edge == fixture.interior_edge,
-            "inside source-wire hover should pick the visible interior edge");
+            "inside source-wire hover should pick the visible interior edge"));
 
         quader_poly::PickOptions vertex_options;
         vertex_options.mode = quader_poly::SelectionMode::Vertex;
@@ -388,21 +389,21 @@ void flipped_source_wire_hover_rejects_occluded_interior_handles_from_outside()
                 objects, quader_editor_core::SelectionMode::Vertex,
                 current_hover, {{-0.5F, -0.05F, 5.0F}, {0.0F, 0.0F, -1.0F}},
                 false, vertex_options);
-        require_test(outside_vertex_hover.hover.kind ==
+        ASSERT_TRUE(require_test(outside_vertex_hover.hover.kind ==
                          quader_editor_core::SelectionHoverKind::None,
                      "outside source-wire hover should not pick an interior "
-                     "vertex occluded by a flipped surface");
+                     "vertex occluded by a flipped surface"));
 
         const quader_editor_core::SelectionHoverUpdateResult
             inside_vertex_hover = quader_editor_core::update_selection_hover(
                 objects, quader_editor_core::SelectionMode::Vertex,
                 current_hover, {{-0.5F, -0.05F, 0.1F}, {0.0F, 0.0F, -1.0F}},
                 false, vertex_options);
-        require_test(
+        ASSERT_TRUE(require_test(
             inside_vertex_hover.hover.kind ==
                     quader_editor_core::SelectionHoverKind::Vertex &&
                 inside_vertex_hover.hover.vertex_id == fixture.interior_vertex,
-            "inside source-wire hover should pick the visible interior vertex");
+            "inside source-wire hover should pick the visible interior vertex"));
 }
 
 void hover_can_use_precomputed_object_bounds()
@@ -419,11 +420,11 @@ void hover_can_use_precomputed_object_bounds()
                 objects, quader_editor_core::SelectionMode::Face, {},
                 front_center_ray(), false, {}, bounds);
 
-        require_test(cached.changed == uncached.changed &&
+        ASSERT_TRUE(require_test(cached.changed == uncached.changed &&
 			cached.hover.object_id == uncached.hover.object_id &&
 			cached.hover.kind == uncached.hover.kind &&
 			cached.hover.face_id == uncached.hover.face_id,
-		"precomputed object bounds should preserve hover picking results");
+		"precomputed object bounds should preserve hover picking results"));
 
 	std::vector<quader_editor_core::PickObjectBounds> miss_bounds = bounds;
 	miss_bounds[0].min = { 40.0F, 40.0F, 40.0F };
@@ -432,11 +433,11 @@ void hover_can_use_precomputed_object_bounds()
             quader_editor_core::update_selection_hover(
                 objects, quader_editor_core::SelectionMode::Face, {},
                 front_center_ray(), false, {}, miss_bounds);
-        require_test(!missed.changed &&
+        ASSERT_TRUE(require_test(!missed.changed &&
                          missed.hover.kind ==
                              quader_editor_core::SelectionHoverKind::None,
                      "precomputed object bounds should be used as the hover "
-                     "broadphase filter");
+                     "broadphase filter"));
 }
 
 void hover_can_use_precomputed_face_geometry()
@@ -445,8 +446,8 @@ void hover_can_use_precomputed_face_geometry()
 	const std::vector<quader_editor_core::PickObjectBounds> bounds { pick_bounds_for_object(objects[0]) };
 	std::vector<quader_editor_core::PickObjectFaceGeometry> geometry =
 		quader_editor_core::build_pick_face_geometry(objects);
-	require_test(!geometry.empty() && geometry[0].object_id == 7 && !geometry[0].triangles.empty(),
-		"face pick geometry cache should build triangles for the object");
+	ASSERT_TRUE(require_test(!geometry.empty() && geometry[0].object_id == 7 && !geometry[0].triangles.empty(),
+		"face pick geometry cache should build triangles for the object"));
 
         const quader_editor_core::SelectionHoverUpdateResult uncached =
             quader_editor_core::update_selection_hover(
@@ -457,22 +458,22 @@ void hover_can_use_precomputed_face_geometry()
                 objects, quader_editor_core::SelectionMode::Face, {},
                 front_center_ray(), false, {}, bounds, geometry);
 
-        require_test(cached.changed == uncached.changed &&
+        ASSERT_TRUE(require_test(cached.changed == uncached.changed &&
 			cached.hover.object_id == uncached.hover.object_id &&
 			cached.hover.kind == uncached.hover.kind &&
 			cached.hover.face_id == uncached.hover.face_id,
-		"precomputed face geometry should preserve hover picking results");
+		"precomputed face geometry should preserve hover picking results"));
 
 	geometry[0].triangles.clear();
         const quader_editor_core::SelectionHoverUpdateResult missed =
             quader_editor_core::update_selection_hover(
                 objects, quader_editor_core::SelectionMode::Face, {},
                 front_center_ray(), false, {}, bounds, geometry);
-        require_test(!missed.changed &&
+        ASSERT_TRUE(require_test(!missed.changed &&
                          missed.hover.kind ==
                              quader_editor_core::SelectionHoverKind::None,
                      "cached face geometry should be used instead of "
-                     "retriangulating the document on hover");
+                     "retriangulating the document on hover"));
 }
 
 void open_mesh_hover_picks_visible_back_sides()
@@ -486,28 +487,28 @@ void open_mesh_hover_picks_visible_back_sides()
 
 	const std::optional<quader_editor_core::PickHitRecord> uncached_hit =
 		quader_editor_core::pick_nearest(objects, { inside_to_side_ray, options });
-        require_test(uncached_hit.has_value() &&
+        ASSERT_TRUE(require_test(uncached_hit.has_value() &&
                          uncached_hit->kind == quader_poly::ElementKind::Face,
                      "uncached face picking should hit a visible back side in "
-                     "an open mesh");
+                     "an open mesh"));
 
         std::vector<quader_editor_core::PickObjectFaceGeometry> geometry =
 		quader_editor_core::build_pick_face_geometry(objects, options);
 	const std::optional<quader_editor_core::PickHitRecord> cached_hit =
 		quader_editor_core::pick_nearest(objects, { inside_to_side_ray, options }, bounds, geometry);
-	require_test(cached_hit.has_value() && cached_hit->face_id == uncached_hit->face_id,
-		"cached face picking should also hit the visible back side");
+	ASSERT_TRUE(require_test(cached_hit.has_value() && cached_hit->face_id == uncached_hit->face_id,
+		"cached face picking should also hit the visible back side"));
 
         const quader_editor_core::SelectionHoverUpdateResult hover =
             quader_editor_core::update_selection_hover(
                 objects, quader_editor_core::SelectionMode::Face, {},
                 inside_to_side_ray, false, options, bounds, geometry);
-        require_test(hover.changed && hover.hover.object_id == 7 &&
+        ASSERT_TRUE(require_test(hover.changed && hover.hover.object_id == 7 &&
                          hover.hover.kind ==
                              quader_editor_core::SelectionHoverKind::Face &&
                          hover.hover.face_id == cached_hit->face_id,
                      "face hover should produce hover wires for a visible back "
-                     "side in an open mesh");
+                     "side in an open mesh"));
 }
 
 void session_pick_selects_faces_through_shared_picking()
@@ -521,20 +522,20 @@ void session_pick_selects_faces_through_shared_picking()
             objects, mode, quader_editor_core::SelectionEditOperation::Replace,
             front_center_ray(), active_object_id);
 
-        require_test(selected &&
+        ASSERT_TRUE(require_test(selected &&
                          mode == quader_editor_core::SelectionMode::Face,
-                     "pick-select-face should switch to face selection mode");
-        require_test(active_object_id == 7 && objects[0].selected && !objects[0].selection.faces.empty(),
-		"pick-select-face should select a face on the hit object and make it active");
+                     "pick-select-face should switch to face selection mode"));
+        ASSERT_TRUE(require_test(active_object_id == 7 && objects[0].selected && !objects[0].selection.faces.empty(),
+		"pick-select-face should select a face on the hit object and make it active"));
 
 	quader_poly::PickOptions options;
         options.mode = quader_poly::SelectionMode::Face;
         const std::optional<quader_editor_core::PickHitRecord> hit =
 		quader_editor_core::pick_nearest(objects, { front_center_ray(), options });
-        require_test(hit.has_value() && hit->object_id == 7 &&
+        ASSERT_TRUE(require_test(hit.has_value() && hit->object_id == 7 &&
                          hit->kind == quader_poly::ElementKind::Face,
                      "pick_nearest should expose the same face hit through "
-                     "editor-core records");
+                     "editor-core records"));
 }
 
 void hidden_material_slot_filter_rebuilds_cached_face_geometry()
@@ -549,8 +550,8 @@ void hidden_material_slot_filter_rebuilds_cached_face_geometry()
             filtered_geometry = quader_editor_core::build_pick_face_geometry(
                 objects,
                 hidden_slot_pick_options(quader_poly::SelectionMode::Face));
-        require_test(unfiltered_geometry[0].triangles.size() > filtered_geometry[0].triangles.size(),
-		"hidden-slot face geometry should exclude hidden triangles");
+        ASSERT_TRUE(require_test(unfiltered_geometry[0].triangles.size() > filtered_geometry[0].triangles.size(),
+		"hidden-slot face geometry should exclude hidden triangles"));
 
 	const std::optional<quader_editor_core::PickHitRecord> unfiltered_hit =
 		quader_editor_core::pick_nearest(objects, { front_center_ray(), face_options }, bounds, unfiltered_geometry);
@@ -560,10 +561,10 @@ void hidden_material_slot_filter_rebuilds_cached_face_geometry()
                 {front_center_ray(),
                  hidden_slot_pick_options(quader_poly::SelectionMode::Face)},
                 bounds, filtered_geometry);
-        require_test(unfiltered_hit.has_value() && filtered_hit.has_value(),
-		"cached picking should hit with and without hidden-slot filtering");
-	require_test(unfiltered_hit->face_id != filtered_hit->face_id,
-		"filtered cached picking should not reuse the unfiltered hidden face");
+        ASSERT_TRUE(require_test(unfiltered_hit.has_value() && filtered_hit.has_value(),
+		"cached picking should hit with and without hidden-slot filtering"));
+	ASSERT_TRUE(require_test(unfiltered_hit->face_id != filtered_hit->face_id,
+		"filtered cached picking should not reuse the unfiltered hidden face"));
 }
 
 void hidden_material_slot_filter_limits_all_face_selection()
@@ -576,11 +577,11 @@ void hidden_material_slot_filter_limits_all_face_selection()
             objects, mode, quader_editor_core::SelectionEditOperation::Replace,
             {{-0.5F, 0.0F, 5.0F}, {0.0F, 0.0F, -1.0F}}, active_object_id,
             hidden_slot_pick_options(quader_poly::SelectionMode::Face));
-        require_test(selected && objects[0].selection.faces.size() == 1U,
-		"all-face selection should select only pickable visible faces");
+        ASSERT_TRUE(require_test(selected && objects[0].selection.faces.size() == 1U,
+		"all-face selection should select only pickable visible faces"));
 	const quader_poly::Face* selected_face = quader_poly::find_face(objects[0].document, objects[0].selection.faces.front());
-	require_test(selected_face != nullptr && selected_face->material_slot == 0U,
-		"all-face selection should not include hidden material-slot faces");
+	ASSERT_TRUE(require_test(selected_face != nullptr && selected_face->material_slot == 0U,
+		"all-face selection should not include hidden material-slot faces"));
 }
 
 void hidden_material_slot_filter_limits_all_vertex_selection()
@@ -593,42 +594,42 @@ void hidden_material_slot_filter_limits_all_vertex_selection()
             objects, mode, quader_editor_core::SelectionEditOperation::Replace,
             {{0.0F, 1.0F, 5.0F}, {0.0F, 0.0F, -1.0F}}, active_object_id,
             hidden_slot_pick_options(quader_poly::SelectionMode::Vertex));
-        require_test(selected && objects[0].selection.vertices.size() == 4U,
-		"all-vertex selection should select only vertices incident to visible faces");
+        ASSERT_TRUE(require_test(selected && objects[0].selection.vertices.size() == 4U,
+		"all-vertex selection should select only vertices incident to visible faces"));
 
 	const quader_poly::ElementId hidden_only_vertex = objects[0].document.faces.back().vertices[1];
-	require_test(!quader_poly::selection_contains(objects[0].selection, hidden_only_vertex),
-		"all-vertex selection should not include hidden-only vertices");
+	ASSERT_TRUE(require_test(!quader_poly::selection_contains(objects[0].selection, hidden_only_vertex),
+		"all-vertex selection should not include hidden-only vertices"));
 }
 
 void editor_session_pick_select_reports_only_material_selection_changes()
 {
-	quader_editor_core::EditorSession session;
-	require_test(session.create_box_from_bounds({ -1.0F, -1.0F, -1.0F }, { 1.0F, 1.0F, 1.0F }).changed,
-		"pick-select revision fixture should create a box");
+        quader_editor_core::PolygonObject object = cube_object(1);
+        object.selected = true;
+	quader_editor_core::EditorSession session({std::move(object)});
         session.set_selection_mode(quader_editor_core::SelectionMode::Face);
 
-        require_test(session.pick_select_face(
+        ASSERT_TRUE(require_test(session.pick_select_face(
                          quader_editor_core::SelectionEditOperation::Replace,
                          front_center_ray()),
-                     "first face pick should report a changed selection");
+                     "first face pick should report a changed selection"));
         const std::uint64_t selected_revision = session.state().selection_revision;
 
-        require_test(!session.pick_select_face(
+        ASSERT_TRUE(require_test(!session.pick_select_face(
                          quader_editor_core::SelectionEditOperation::Add,
                          front_center_ray()),
                      "adding an already selected face should not report a "
-                     "selection change");
-        require_test(session.state().selection_revision == selected_revision,
-		"adding an already selected face should not bump selection revision");
+                     "selection change"));
+        ASSERT_TRUE(require_test(session.state().selection_revision == selected_revision,
+		"adding an already selected face should not bump selection revision"));
 
-        require_test(
+        ASSERT_TRUE(require_test(
             session.pick_select_face(
                 quader_editor_core::SelectionEditOperation::Remove,
                 front_center_ray()),
-            "removing the selected face should report a changed selection");
-        require_test(session.state().selection_revision > selected_revision,
-		"removing the selected face should bump selection revision");
+            "removing the selected face should report a changed selection"));
+        ASSERT_TRUE(require_test(session.state().selection_revision > selected_revision,
+		"removing the selected face should bump selection revision"));
 }
 
 void default_component_picking_has_editor_leeway()
@@ -641,9 +642,9 @@ void default_component_picking_has_editor_leeway()
 		document,
 		{ { 0.0F, 1.09F, 5.0F }, { 0.0F, 0.0F, -1.0F } },
 		edge_options);
-        require_test(
+        ASSERT_TRUE(require_test(
             near_edge.hit && near_edge.kind == quader_poly::ElementKind::Edge,
-            "default edge picking should allow a small near-edge screen miss");
+            "default edge picking should allow a small near-edge screen miss"));
 
         quader_poly::PickOptions vertex_options;
         vertex_options.mode = quader_poly::SelectionMode::Vertex;
@@ -651,10 +652,10 @@ void default_component_picking_has_editor_leeway()
 		document,
 		{ { 1.078F, 1.078F, 5.0F }, { 0.0F, 0.0F, -1.0F } },
 		vertex_options);
-        require_test(near_vertex.hit &&
+        ASSERT_TRUE(require_test(near_vertex.hit &&
                          near_vertex.kind == quader_poly::ElementKind::Vertex,
                      "default vertex picking should allow a small near-vertex "
-                     "screen miss");
+                     "screen miss"));
 }
 
 void selection_pick_options_normalize_host_radius_inputs()
@@ -663,24 +664,24 @@ void selection_pick_options_normalize_host_radius_inputs()
 		quader_editor_core::selection_pick_options_from_radii(
 			std::numeric_limits<double>::quiet_NaN(),
 			std::numeric_limits<double>::infinity());
-	require_test(nearly_equal(defaulted.vertex_radius, 0.12F),
-		"selection pick options should default non-finite vertex radii");
-	require_test(nearly_equal(defaulted.edge_radius, 0.10F),
-		"selection pick options should default non-finite edge radii");
+	ASSERT_TRUE(require_test(nearly_equal(defaulted.vertex_radius, 0.12F),
+		"selection pick options should default non-finite vertex radii"));
+	ASSERT_TRUE(require_test(nearly_equal(defaulted.edge_radius, 0.10F),
+		"selection pick options should default non-finite edge radii"));
 
 	const quader_poly::PickOptions clamped =
 		quader_editor_core::selection_pick_options_from_radii(-4.0, 50.0);
-	require_test(nearly_equal(clamped.vertex_radius, 0.001F),
-		"selection pick options should clamp vertex radius to the editor minimum");
-	require_test(nearly_equal(clamped.edge_radius, 2.0F),
-		"selection pick options should clamp edge radius to the editor maximum");
+	ASSERT_TRUE(require_test(nearly_equal(clamped.vertex_radius, 0.001F),
+		"selection pick options should clamp vertex radius to the editor minimum"));
+	ASSERT_TRUE(require_test(nearly_equal(clamped.edge_radius, 2.0F),
+		"selection pick options should clamp edge radius to the editor maximum"));
 
 	const quader_poly::PickOptions preserved =
 		quader_editor_core::selection_pick_options_from_radii(0.25, 0.75);
-	require_test(nearly_equal(preserved.vertex_radius, 0.25F),
-		"selection pick options should preserve finite in-range vertex radii");
-	require_test(nearly_equal(preserved.edge_radius, 0.75F),
-		"selection pick options should preserve finite in-range edge radii");
+	ASSERT_TRUE(require_test(nearly_equal(preserved.vertex_radius, 0.25F),
+		"selection pick options should preserve finite in-range vertex radii"));
+	ASSERT_TRUE(require_test(nearly_equal(preserved.edge_radius, 0.75F),
+		"selection pick options should preserve finite in-range edge radii"));
 }
 
 void component_pick_distance_uses_geometry_ray_distance()
@@ -697,13 +698,13 @@ void component_pick_distance_uses_geometry_ray_distance()
 	const std::optional<quader_editor_core::PickHitRecord> hit =
 		quader_editor_core::pick_nearest(objects, { ray, options });
 
-        require_test(hit.has_value() &&
+        ASSERT_TRUE(require_test(hit.has_value() &&
                          hit->kind == quader_poly::ElementKind::Vertex,
-                     "vertex picking should hit through non-unit rays");
-        require_test(std::abs(hit->pick_distance - 0.05F) <= 0.0001F,
-		"component pick distance should be perpendicular distance to the geometry ray");
-	require_test(std::abs(hit->ray_distance - 4.0F) <= 0.0001F,
-		"component ray distance should preserve document picking's normalized ray distance");
+                     "vertex picking should hit through non-unit rays"));
+        ASSERT_TRUE(require_test(std::abs(hit->pick_distance - 0.05F) <= 0.0001F,
+		"component pick distance should be perpendicular distance to the geometry ray"));
+	ASSERT_TRUE(require_test(std::abs(hit->ray_distance - 4.0F) <= 0.0001F,
+		"component ray distance should preserve document picking's normalized ray distance"));
 }
 
 void click_and_drag_pick_plans_stay_in_editor_core()
@@ -720,16 +721,16 @@ void click_and_drag_pick_plans_stay_in_editor_core()
 
 	quader_editor_core::ClickPickPlan click_plan =
 		quader_editor_core::plan_click_pick(cycle, object_selection, {}, surface_hits, click_request);
-        require_test(
+        ASSERT_TRUE(require_test(
             click_plan.has_target &&
                 click_plan.hit_set == quader_editor_core::PickHitSet::Surface &&
                 click_plan.hit_index == 0 && click_plan.used_pick_cycle,
             "replace click planning should choose the front surface hit "
-            "through the pick cycle");
+            "through the pick cycle"));
 
         click_plan = quader_editor_core::plan_click_pick(cycle, object_selection, {}, surface_hits, click_request);
-	require_test(click_plan.has_target && click_plan.hit_index == 1 && click_plan.cycle.cycled,
-		"repeat replace clicks at the same screen position should cycle to the next object hit");
+	ASSERT_TRUE(require_test(click_plan.has_target && click_plan.hit_index == 1 && click_plan.cycle.cycled,
+		"repeat replace clicks at the same screen position should cycle to the next object hit"));
 
 	const quader_poly::Edge selected_edge = quader_poly::make_edge(3, 4);
 	const std::vector<quader_editor_core::PickHitRecord> handle_hits {
@@ -737,12 +738,12 @@ void click_and_drag_pick_plans_stay_in_editor_core()
 	};
 	click_request.handles_enabled = true;
 	click_plan = quader_editor_core::plan_click_pick(cycle, object_selection, handle_hits, surface_hits, click_request);
-        require_test(click_plan.has_target &&
+        ASSERT_TRUE(require_test(click_plan.has_target &&
                          click_plan.hit_set ==
                              quader_editor_core::PickHitSet::Handle &&
                          click_plan.hit_index == 0,
                      "click planning should prefer enabled handle hits before "
-                     "surface hits");
+                     "surface hits"));
 
         quader_editor_core::PickSelectionState edge_selection;
         edge_selection.mode = quader_editor_core::SelectionMode::Edge;
@@ -756,33 +757,93 @@ void click_and_drag_pick_plans_stay_in_editor_core()
 	drag_request.preserve_selected_additive_target = true;
 	const quader_editor_core::DragSeedPickPlan drag_plan =
 		quader_editor_core::plan_drag_seed_pick(edge_selection, handle_hits, surface_hits, drag_request);
-        require_test(drag_plan.has_target &&
+        ASSERT_TRUE(require_test(drag_plan.has_target &&
                          drag_plan.hit_set ==
                              quader_editor_core::PickHitSet::Handle &&
                          drag_plan.keep_existing_selection &&
                          drag_plan.preferred_object_id == 2,
                      "drag seed planning should preserve selected additive "
-                     "handle targets when requested");
+                     "handle targets when requested"));
 }
 
 } // namespace
 
-TEST(QdrModelingRuntimePickingTests, QdrEditorCorePickingTests) {
+TEST(QdrModelingRuntimePickingTests,
+	HoverTracksFaceCandidatesAndSelectedFeedback) {
 	hover_tracks_face_candidates_and_selected_feedback();
+}
+
+TEST(QdrModelingRuntimePickingTests, ComponentHoverPreservesCandidateOnMiss) {
 	component_hover_preserves_candidate_on_miss();
+}
+
+TEST(QdrModelingRuntimePickingTests,
+	ComponentHoverRejectsSingleMeshOccludedSourceEdges) {
 	component_hover_rejects_single_mesh_occluded_source_edges();
+}
+
+TEST(QdrModelingRuntimePickingTests,
+	FlippedSurfacePickingUsesNearestFaceNotFarthestFrontface) {
 	flipped_surface_picking_uses_nearest_face_not_farthest_frontface();
+}
+
+TEST(QdrModelingRuntimePickingTests,
+	FlippedSourceWireHoverRejectsOccludedInteriorHandlesFromOutside) {
 	flipped_source_wire_hover_rejects_occluded_interior_handles_from_outside();
+}
+
+TEST(QdrModelingRuntimePickingTests, HoverCanUsePrecomputedObjectBounds) {
 	hover_can_use_precomputed_object_bounds();
+}
+
+TEST(QdrModelingRuntimePickingTests, HoverCanUsePrecomputedFaceGeometry) {
 	hover_can_use_precomputed_face_geometry();
+}
+
+TEST(QdrModelingRuntimePickingTests, OpenMeshHoverPicksVisibleBackSides) {
 	open_mesh_hover_picks_visible_back_sides();
+}
+
+TEST(QdrModelingRuntimePickingTests,
+	SessionPickSelectsFacesThroughSharedPicking) {
 	session_pick_selects_faces_through_shared_picking();
+}
+
+TEST(QdrModelingRuntimePickingTests,
+	HiddenMaterialSlotFilterRebuildsCachedFaceGeometry) {
 	hidden_material_slot_filter_rebuilds_cached_face_geometry();
+}
+
+TEST(QdrModelingRuntimePickingTests,
+	HiddenMaterialSlotFilterLimitsAllFaceSelection) {
 	hidden_material_slot_filter_limits_all_face_selection();
+}
+
+TEST(QdrModelingRuntimePickingTests,
+	HiddenMaterialSlotFilterLimitsAllVertexSelection) {
 	hidden_material_slot_filter_limits_all_vertex_selection();
+}
+
+TEST(QdrModelingRuntimePickingTests,
+	EditorSessionPickSelectReportsOnlyMaterialSelectionChanges) {
 	editor_session_pick_select_reports_only_material_selection_changes();
+}
+
+TEST(QdrModelingRuntimePickingTests, DefaultComponentPickingHasEditorLeeway) {
 	default_component_picking_has_editor_leeway();
+}
+
+TEST(QdrModelingRuntimePickingTests,
+	SelectionPickOptionsNormalizeHostRadiusInputs) {
 	selection_pick_options_normalize_host_radius_inputs();
+}
+
+TEST(QdrModelingRuntimePickingTests,
+	ComponentPickDistanceUsesGeometryRayDistance) {
 	component_pick_distance_uses_geometry_ray_distance();
+}
+
+TEST(QdrModelingRuntimePickingTests,
+	ClickAndDragPickPlansStayInEditorCore) {
 	click_and_drag_pick_plans_stay_in_editor_core();
 }

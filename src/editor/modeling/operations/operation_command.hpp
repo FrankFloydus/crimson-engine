@@ -59,26 +59,9 @@ struct EditorOperationCommand {
   EditorOperationSettings settings = BridgeOperationSettings{};
 };
 
-/**
- * Stores the Editor Operation Command Result data contract used by the modeling runtime domain.
- */
-struct EditorOperationCommandResult {
-	CommandResult command;
-	std::optional<PreviewTransactionFinishResult> preview_finish;
-};
-
 [[nodiscard]] std::optional<EditorOperationCommandSchema> command_schema_for_operation(EditorOperationId operation_id);
 [[nodiscard]] bool command_settings_match_operation(EditorOperationId operation_id, const EditorOperationSettings& settings);
 [[nodiscard]] std::optional<PreviewTransactionKind> preview_transaction_kind_for_operation(EditorOperationId operation_id);
 [[nodiscard]] std::optional<EditorOperationId> operation_for_preview_transaction_kind(PreviewTransactionKind kind);
-[[nodiscard]] EditorOperationCommandResult execute_command(
-		EditorSession& session,
-		const EditorOperationCommand& command);
-[[nodiscard]] EditorOperationCommandResult execute_command_with_history_state(
-    EditorSession &session, const EditorOperationCommand &command,
-    SessionState history_state);
-[[nodiscard]] EditorOperationCommandResult dispatch_editor_operation_command(
-		EditorSession& session,
-		const EditorOperationCommand& command);
 
 } // namespace quader_editor_core

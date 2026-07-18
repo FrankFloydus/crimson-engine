@@ -12,16 +12,54 @@
 #include "assets/typed_asset_store.hpp"
 #include "core/types.hpp"
 
+#include <cstddef>
 #include <cstdint>
 #include <functional>
 #include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <unordered_map>
 #include <vector>
 
 namespace quader {
+
+class AssetRegistry;
+
+/**
+ * Owns an exact AssetRegistry restore point for one staged host projection.
+ *
+ * The checkpoint is intentionally owner-specific: editor adapters may use it
+ * to make a cross-owner publication atomic, but they cannot inspect or mutate
+ * registry internals through it.
+ */
+class AssetRegistryProjectionCheckpoint final {
+public:
+  AssetRegistryProjectionCheckpoint() = default;
+  ~AssetRegistryProjectionCheckpoint() = default;
+  AssetRegistryProjectionCheckpoint(
+      const AssetRegistryProjectionCheckpoint &) noexcept = default;
+  AssetRegistryProjectionCheckpoint &
+  operator=(const AssetRegistryProjectionCheckpoint &) noexcept = default;
+  AssetRegistryProjectionCheckpoint(
+      AssetRegistryProjectionCheckpoint &&) noexcept = default;
+  AssetRegistryProjectionCheckpoint &
+  operator=(AssetRegistryProjectionCheckpoint &&) noexcept = default;
+
+  [[nodiscard]] bool valid() const noexcept {
+    return static_cast<bool>(snapshot_);
+  }
+
+private:
+  friend class AssetRegistry;
+
+  explicit AssetRegistryProjectionCheckpoint(
+      std::shared_ptr<const AssetRegistry> snapshot)
+      : snapshot_(std::move(snapshot)) {}
+
+  std::shared_ptr<const AssetRegistry> snapshot_;
+};
 
 using MeshAssetStore = TypedAssetStore<MeshAsset, MeshAssetRevision>;
 using MaterialAssetStore = TypedAssetStore<MaterialDocument, MaterialAssetRevision>;
@@ -58,16 +96,42 @@ struct MeshAssetDescriptor final {
 };
 
 /**
+ * Pins either materialized mesh payloads or preserved encoded geometry for a
+ * background writer. It is extracted on the registry owner thread.
+ */
+struct MeshAssetWriteSource final {
+  MeshAssetDescriptor descriptor;
+  std::shared_ptr<const MeshGeometryPayload> geometry;
+  std::shared_ptr<const quader_poly::Document> authored_polygon_document;
+  std::shared_ptr<const std::vector<std::byte>> encoded_geometry;
+};
+
+/// Reports an explicit failure instead of allowing save to omit an asset.
+struct MeshAssetWriteSourceResult final {
+  bool ok = false;
+  MeshAssetWriteSource source;
+  std::string message;
+};
+
+/**
  * Owns Asset Registry lookup and registration for the asset document and registry layer.
  */
 class AssetRegistry {
 public:
+  AssetRegistry();
+  AssetRegistry(const AssetRegistry &other);
+  AssetRegistry &operator=(const AssetRegistry &other);
+  AssetRegistry(AssetRegistry &&other) noexcept;
+  AssetRegistry &operator=(AssetRegistry &&other) noexcept;
+
   AssetId add_mesh(MeshAsset mesh);
   AssetId add_mesh(AssetId id, MeshAsset mesh);
   AssetId add_deferred_mesh(AssetId id, std::string name,
                             bool has_stable_cpu_topology,
                             bool has_authored_polygon_document,
-                            std::function<MeshAsset()> loader);
+                            std::function<MeshAsset()> loader,
+                            std::function<std::shared_ptr<const std::vector<
+                                std::byte>>()> encoded_geometry_loader = {});
   AssetId add_material(MaterialDocument material);
   AssetId add_material(AssetId id, MaterialDocument material);
   AssetId add_texture(TextureAsset texture);
@@ -96,6 +160,8 @@ public:
   [[nodiscard]] bool mesh_materialized(AssetId id) const;
   [[nodiscard]] std::optional<MeshAssetDescriptor>
   mesh_descriptor(AssetId id) const;
+  [[nodiscard]] MeshAssetWriteSourceResult
+  mesh_write_source(AssetId id) const;
   const MaterialDocument *material(AssetId id) const;
   const TextureAsset *texture(AssetId id) const;
   MeshAssetRevision mesh_revision(AssetId id) const;
@@ -111,6 +177,15 @@ public:
   std::uint64_t revision() const { return revision_; }
   void advance_revision_for_replacement(std::uint64_t previous_revision);
 
+  /** Captures all asset state before one staged editor projection. */
+  [[nodiscard]] AssetRegistryProjectionCheckpoint
+  capture_projection_checkpoint() const;
+  /** Restores a staged editor projection without leaving revision or ID gaps. */
+  [[nodiscard]] bool restore_projection_checkpoint(
+      const AssetRegistryProjectionCheckpoint &checkpoint);
+  /** Asset mutation/materialization is confined to this owning thread. */
+  [[nodiscard]] bool on_owner_thread() const noexcept;
+
 private:
   /**
    * Owns the immutable metadata and one-shot loader for a mesh whose geometry
@@ -120,8 +195,11 @@ private:
     bool has_stable_cpu_topology = true;
     bool has_authored_polygon_document = false;
     std::function<MeshAsset()> loader;
+    std::function<std::shared_ptr<const std::vector<std::byte>>()>
+        encoded_geometry_loader;
   };
 
+  void assert_owner_thread() const;
   void intern_mesh_payload(MeshAsset &mesh) const;
   void mark_dirty();
 
@@ -139,6 +217,7 @@ private:
       authored_topology_pool_;
   MaterialAssetStore materials_;
   TextureAssetStore textures_;
+  std::thread::id owner_thread_;
 };
 
 } // namespace quader

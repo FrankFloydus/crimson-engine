@@ -10,7 +10,20 @@
 #include "api/quader_api_session_internal_access.hpp"
 #include "api/quader_object_handle.hpp"
 
+#include <stdexcept>
+
 namespace quader {
+namespace {
+
+[[nodiscard]] QuaderApiSession require_bound_session(
+    QuaderApiSession session) {
+  if (!session.valid()) {
+    throw std::invalid_argument("QuaderApi requires a bound editor session.");
+  }
+  return session;
+}
+
+} // namespace
 
 /**
  * Owns Impl behavior within the public Quader API surface.
@@ -37,7 +50,7 @@ public:
 };
 
 QuaderApi::QuaderApi(QuaderApiSession session)
-    : impl_(std::make_unique<Impl>(session)) {}
+    : impl_(std::make_unique<Impl>(require_bound_session(session))) {}
 
 QuaderApi::~QuaderApi() = default;
 

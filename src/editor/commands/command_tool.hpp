@@ -7,8 +7,9 @@
 #pragma once
 
 #include "core/public_command_targets.hpp"
-#include "editor/modeling/modeling_types.hpp"
+#include "assets/material_reference.hpp"
 #include "editor/commands/command_tool_descriptor.hpp"
+#include "editor/modeling/modeling_result_types.hpp"
 
 #include <string>
 #include <string_view>

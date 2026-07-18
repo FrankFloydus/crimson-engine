@@ -16,11 +16,22 @@
 #include "editor/viewport/quader_viewport_api_runtime_access.hpp"
 #include "viewport/host_viewport_contract_adapter.hpp"
 
+#include <stdexcept>
+
 namespace quader {
 namespace {
 
 QuaderApiSession project_api_session(ProjectSession &project_session) {
   return QuaderApiSessionInternalAccess::from_project_session(project_session);
+}
+
+[[nodiscard]] QuaderApiSession require_bound_editor_session(
+    QuaderApiSession session) {
+  if (!session.valid()) {
+    throw std::invalid_argument(
+        "QuaderEditorApi requires a bound editor session.");
+  }
+  return session;
 }
 
 } // namespace
@@ -186,7 +197,7 @@ public:
 };
 
 QuaderEditorApi::QuaderEditorApi(QuaderApiSession session)
-    : impl_(std::make_unique<Impl>(session)) {}
+    : impl_(std::make_unique<Impl>(require_bound_editor_session(session))) {}
 
 QuaderEditorApi::QuaderEditorApi(ProjectSession &project_session)
     : impl_(std::make_unique<Impl>(project_session)) {}

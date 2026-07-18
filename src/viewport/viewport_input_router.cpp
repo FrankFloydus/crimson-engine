@@ -8,8 +8,6 @@
 
 #include "diagnostics/profile.hpp"
 #include "viewport/host_viewport_contract_adapter.hpp"
-#include "editor/tools/viewport_tool_catalog.hpp"
-#include "editor/tools/viewport_tool_runtime.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -92,13 +90,9 @@ navigation_mode_for_action(ViewportInputActionKind action,
 
 } // namespace
 
-ViewportInputRouter::ViewportInputRouter()
-    : tool_runtime_(std::make_unique<ViewportToolRuntime>()) {
+ViewportInputRouter::ViewportInputRouter() {
   sync_grid_preset_snapshot(viewport_default_grid_preset());
-  tool_runtime_->sync_active_tool(state_.active_tool);
 }
-
-ViewportInputRouter::~ViewportInputRouter() = default;
 
 ViewportInputResult
 ViewportInputRouter::handle_frame(const ViewportInputFrame &input,
@@ -246,7 +240,8 @@ ViewportInputRouter::handle_frame(const ViewportInputFrame &input,
       if (shortcut.kind == ViewportShortcutKind::None) {
         continue;
       }
-      if (handle_shortcut(shortcut, camera, result)) {
+      if (handle_shortcut(shortcut, camera, result,
+                          input.active_tool_blocks_focus_shortcuts)) {
         result.consumed = true;
         result.shortcut_handled = true;
         result.shortcut = shortcut;
@@ -270,7 +265,7 @@ void ViewportInputRouter::reset() {
 }
 
 void ViewportInputRouter::set_active_tool(ViewportToolId tool) {
-  (void)tool_runtime_->set_active_tool(state_, tool);
+  state_.active_tool = tool;
 }
 
 void ViewportInputRouter::set_selection_mode(ViewportSelectionMode mode) {
@@ -281,68 +276,119 @@ void ViewportInputRouter::sync_grid_preset_snapshot(int preset) {
   state_.grid_preset = viewport_clamp_grid_preset(preset);
 }
 
-bool ViewportInputRouter::active_tool_owns_viewport() const {
-  return tool_runtime_ != nullptr && tool_runtime_->active_tool_owns_viewport();
-}
-
-bool ViewportInputRouter::active_tool_blocks_viewport_focus_shortcuts() const {
-  return tool_runtime_ != nullptr &&
-         tool_runtime_->active_tool_blocks_viewport_focus_shortcuts();
-}
-
-bool ViewportInputRouter::active_tool_allows_selection_fallback() const {
-  return tool_runtime_ != nullptr &&
-         tool_runtime_->tool_allows_selection_fallback(state_.active_tool);
-}
-
-bool ViewportInputRouter::has_active_modal_preview(
-    const ViewportToolPreviewPort &preview, bool snap_enabled) const {
-  return tool_runtime_ != nullptr &&
-         tool_runtime_->has_active_modal_preview(preview, snap_enabled);
-}
-
-ModelingBoxPreview
-ViewportInputRouter::box_preview(const ViewportToolPreviewPort &preview,
-                                 bool snap_enabled) const {
-  return tool_runtime_ != nullptr ? tool_runtime_->box_preview(preview,
-                                                               snap_enabled)
-                                  : ModelingBoxPreview{};
-}
-
-void ViewportInputRouter::clear_modal_tool_state() {
-  if (tool_runtime_ != nullptr) {
-    tool_runtime_->clear_modal_tool_state();
-  }
-}
-
-void ViewportInputRouter::clear_modal_drag_state() {
-  if (tool_runtime_ != nullptr) {
-    tool_runtime_->clear_modal_drag_state();
-  }
-}
-
-const ViewportTool *ViewportInputRouter::active_tool() const {
-  return tool_runtime_ != nullptr ? tool_runtime_->active_tool()
-                                  : find_viewport_tool(state_.active_tool);
-}
-
 bool ViewportInputRouter::handle_shortcut(const ViewportShortcut &shortcut,
                                           ViewportCameraController &camera,
-                                          ViewportInputResult &result) {
-  return tool_runtime_ != nullptr &&
-         tool_runtime_->handle_shortcut(shortcut, state_, camera, result);
-}
-
-ViewportToolResult
-ViewportInputRouter::handle_active_tool_event(ViewportToolContext &context,
-                                              const ViewportToolEvent &event) {
-  return tool_runtime_ != nullptr
-             ? tool_runtime_->handle_active_tool_event(state_, context, event)
-             : ViewportToolResult{};
+                                          ViewportInputResult &result,
+                                          bool active_tool_blocks_focus_shortcuts) {
+  switch (shortcut.kind) {
+  case ViewportShortcutKind::ActivateTool:
+    result.tool_changed = result.tool_changed ||
+                          state_.active_tool != shortcut.tool;
+    state_.active_tool = shortcut.tool;
+    if (shortcut.tool == ViewportToolId::Knife) {
+      result.selection_mode_changed =
+          result.selection_mode_changed ||
+          state_.selection_mode != ViewportSelectionMode::Edge;
+      state_.selection_mode = ViewportSelectionMode::Edge;
+    }
+    result.tool_activation_requested = true;
+    return true;
+  case ViewportShortcutKind::SetSelectionMode:
+    result.selection_mode_changed =
+        result.selection_mode_changed ||
+        state_.selection_mode != shortcut.selection_mode;
+    state_.selection_mode = shortcut.selection_mode;
+    return true;
+  case ViewportShortcutKind::FocusDocument:
+    if (active_tool_blocks_focus_shortcuts) {
+      return false;
+    }
+    result.focus_document_requested = true;
+    result.camera_changed = true;
+    return true;
+  case ViewportShortcutKind::FocusOrigin:
+    camera.focus_origin();
+    result.camera_changed = true;
+    return true;
+  case ViewportShortcutKind::ToggleMaximized:
+    if (active_tool_blocks_focus_shortcuts) {
+      return false;
+    }
+    result.maximized_toggle_requested = true;
+    return true;
+  case ViewportShortcutKind::SetGridPreset:
+    result.requested_grid_preset =
+        viewport_clamp_grid_preset(shortcut.grid_preset);
+    result.grid_preset_changed =
+        state_.grid_preset != result.requested_grid_preset;
+    return true;
+  case ViewportShortcutKind::SetView:
+    result.requested_view = shortcut.view;
+    result.view_changed = true;
+    return true;
+  case ViewportShortcutKind::CancelActiveTool:
+    result.cancel_requested = true;
+    return true;
+  case ViewportShortcutKind::DeletePopup:
+    return !active_tool_blocks_focus_shortcuts;
+  case ViewportShortcutKind::FlipMeshNormals:
+    return !active_tool_blocks_focus_shortcuts &&
+           state_.selection_mode == ViewportSelectionMode::Object;
+  case ViewportShortcutKind::FlipHorizontal:
+  case ViewportShortcutKind::FlipVertical:
+    return state_.selection_mode == ViewportSelectionMode::Object;
+  case ViewportShortcutKind::DeleteSelection:
+  case ViewportShortcutKind::SelectAll:
+  case ViewportShortcutKind::InvertSelection:
+  case ViewportShortcutKind::Copy:
+  case ViewportShortcutKind::Paste:
+  case ViewportShortcutKind::Duplicate:
+  case ViewportShortcutKind::Undo:
+  case ViewportShortcutKind::Redo:
+  case ViewportShortcutKind::RepeatLastAction:
+  case ViewportShortcutKind::MergeActive:
+  case ViewportShortcutKind::MergeCenter:
+  case ViewportShortcutKind::MirrorAxis:
+  case ViewportShortcutKind::ApplyMaterial:
+    return true;
+  case ViewportShortcutKind::None:
+    return false;
+  }
+  return false;
 }
 
 const char *viewport_tool_id(ViewportToolId tool) {
-  return viewport_tool_catalog_id(tool).data();
+  switch (tool) {
+  case ViewportToolId::Select:
+    return "select";
+  case ViewportToolId::Move:
+    return "move";
+  case ViewportToolId::Extrude:
+    return "extrude";
+  case ViewportToolId::Rotate:
+    return "rotate";
+  case ViewportToolId::Scale:
+    return "scale";
+  case ViewportToolId::CreatePrimitive:
+    return "create_primitive";
+  case ViewportToolId::InsertEdgeLoop:
+    return "insert_edge_loop";
+  case ViewportToolId::Knife:
+    return "knife";
+  case ViewportToolId::Cut:
+    return "cut";
+  case ViewportToolId::Poly:
+    return "poly";
+  case ViewportToolId::Mirror:
+    return "mirror";
+  case ViewportToolId::Pivot:
+    return "pivot";
+  case ViewportToolId::LinearArray:
+    return "linear_array";
+  case ViewportToolId::RadialArray:
+    return "radial_array";
+  }
+  return "unknown";
 }
 
 const char *viewport_selection_mode_id(ViewportSelectionMode mode) {

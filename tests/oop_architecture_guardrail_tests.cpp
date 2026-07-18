@@ -41,12 +41,6 @@ std::string cmake_source_truth() {
 
 bool covered_by_allowed_c_make_glob(std::string_view relative,
                                     const std::string &cmake) {
-  if (starts_with(relative, "src/mesh/polygon/operations/")) {
-    return cmake.find("src/mesh/polygon/operations/*.cpp") != std::string::npos;
-  }
-  if (starts_with(relative, "src/mesh/polygon/")) {
-    return cmake.find("src/mesh/polygon/*.cpp") != std::string::npos;
-  }
   if (starts_with(relative,
                   "src/sdk/core/modeling/internal/mesh/polygon/operations/")) {
     return cmake.find("mesh/polygon/operations/*.cpp") != std::string::npos;
@@ -664,7 +658,8 @@ TEST(OopArchitectureGuardrailTests, InteractionToolMathStaysInSharedOwner) {
   EXPECT_NE(extrude.find("normalized_axis("), std::string::npos);
   EXPECT_NE(extrude.find("safe_grid_size("), std::string::npos);
   EXPECT_NE(knife.find("vec3_normalize_or"), std::string::npos);
-  EXPECT_EQ(knife.find("mesh/geometry/geometry.hpp"), std::string::npos);
+  EXPECT_EQ(knife.find("quader/modeling/neutral/geometry/geometry.hpp"),
+            std::string::npos);
   EXPECT_EQ(knife.find("tool_geometry_vec2"), std::string::npos);
   EXPECT_EQ(knife.find("tool_geometry_vec3"), std::string::npos);
   EXPECT_NE(snapping.find("vec3_normalize_or"), std::string::npos);
@@ -1047,40 +1042,85 @@ TEST(OopArchitectureGuardrailTests, SceneTransformDragServiceOwnsTransformPrevie
             std::string::npos);
 }
 
-TEST(OopArchitectureGuardrailTests, EditorSessionOwnsSharedPreviewTransactionLifecycle) {
+TEST(OopArchitectureGuardrailTests, ModelingSdkOwnsSharedPreviewTransactionLifecycle) {
   const std::string session_header =
       read_file(source_root() / "src/editor/modeling/runtime/session.hpp");
-  const std::string preview_source =
-      read_file(source_root() /
-                "src/editor/modeling/runtime/session_preview_transactions.cpp");
-  const std::string bridge_source = read_file(
-      source_root() / "src/editor/modeling/operations/bridge_operation.cpp");
-  const std::string combined = preview_source + "\n" + bridge_source;
+  const std::string sdk_header = read_file(
+      source_root() /
+      "src/sdk/core/modeling/include/quader/modeling/session/modeling_session.hpp");
+  const std::string sdk_preview = read_file(
+      source_root() / "src/sdk/core/modeling/src/preview_api.cpp");
+  const std::string adapter = read_file(
+      source_root() /
+      "src/editor/modeling/services/modeling_sdk_projection_adapter.cpp");
 
-  EXPECT_NE(session_header.find(
-                "begin_preview_transaction(PreviewTransactionKind kind)"),
+  EXPECT_EQ(session_header.find("begin_preview_transaction("),
             std::string::npos);
-  EXPECT_NE(session_header.find("finish_preview_update_from_base("),
+  EXPECT_EQ(session_header.find("finish_preview_update_from_base("),
             std::string::npos);
-  EXPECT_NE(preview_source.find("EditorSession::begin_preview_transaction("),
+  EXPECT_FALSE(std::filesystem::exists(
+      source_root() /
+      "src/editor/modeling/runtime/session_preview_transactions.cpp"));
+  EXPECT_FALSE(std::filesystem::exists(
+      source_root() / "src/editor/modeling/operations/bridge_operation.cpp"));
+  EXPECT_NE(sdk_header.find("begin_document_preview("), std::string::npos);
+  EXPECT_NE(sdk_header.find("commit_preview("), std::string::npos);
+  EXPECT_NE(sdk_header.find("cancel_preview("), std::string::npos);
+  EXPECT_NE(sdk_preview.find("session.commit_preview("), std::string::npos);
+  EXPECT_NE(sdk_preview.find("session.cancel_preview("), std::string::npos);
+  EXPECT_NE(adapter.find("session_.begin_document_preview("),
             std::string::npos);
-  EXPECT_NE(
-      preview_source.find("EditorSession::finish_preview_update_from_base("),
-      std::string::npos);
-  EXPECT_NE(bridge_source.find(
-                "begin_preview_transaction(PreviewTransactionKind::Bridge)"),
+  EXPECT_NE(adapter.find("session_.commit_preview("), std::string::npos);
+  EXPECT_NE(adapter.find("session_.cancel_preview("), std::string::npos);
+}
+
+TEST(OopArchitectureGuardrailTests,
+     ModelingServiceDoesNotRetainRetiredNativeModelingTruth) {
+  const std::string service = read_file(
+      source_root() /
+      "src/editor/modeling/services/modeling_session_service.cpp");
+  const std::string adapter = read_file(
+      source_root() /
+      "src/editor/modeling/services/modeling_sdk_projection_adapter.cpp");
+
+  EXPECT_EQ(service.find("RuntimeOperationExecutor"), std::string::npos);
+  EXPECT_EQ(service.find("EditorSession session_"), std::string::npos);
+  EXPECT_EQ(service.find("EditorSession modeling_session_"),
+            std::string::npos);
+  EXPECT_FALSE(std::filesystem::exists(
+      source_root() /
+      "src/editor/modeling/services/runtime_operation_executor.hpp"));
+  EXPECT_NE(adapter.find("quader::modeling::ModelingSession session_"),
             std::string::npos);
 
-  EXPECT_EQ(
-      combined.find("preview_transaction_.kind = PreviewTransactionKind::"),
-      std::string::npos);
-  EXPECT_EQ(count_occurrences(combined, "preview_transaction_.active = true"),
-            1U);
-  EXPECT_EQ(count_occurrences(combined, "preview_transaction_.history_state = "
-                                        "preview_transaction_.base_state"),
-            1U);
-  EXPECT_EQ(combined.find("if (!result.ok || !result.changed)"),
-            std::string::npos);
+  for (const std::filesystem::path &retired : {
+           "src/editor/modeling/runtime/session_face_operations.cpp",
+           "src/editor/modeling/runtime/session_history.cpp",
+           "src/editor/modeling/runtime/session_lighting.cpp",
+           "src/editor/modeling/runtime/session_preview_transactions.cpp",
+           "src/editor/modeling/preview/transform_preview_service.cpp",
+           "src/editor/modeling/preview/transform_preview_service.hpp",
+       }) {
+    EXPECT_FALSE(std::filesystem::exists(source_root() / retired)) << retired;
+  }
+
+  for (const std::filesystem::path &retired_operation : {
+           "assign_material_operation.cpp",
+           "bevel_vertices_operation.cpp",
+           "bridge_operation.cpp",
+           "duplicate_meshes_operation.cpp",
+           "edge_bevel_operation.cpp",
+           "half_cut_operation.cpp",
+           "merge_by_distance_operation.cpp",
+           "selection_operations.cpp",
+           "slice_quad_operation.cpp",
+           "thicken_operation.cpp",
+       }) {
+    EXPECT_FALSE(std::filesystem::exists(
+        source_root() / "src/editor/modeling/operations" /
+        retired_operation))
+        << retired_operation;
+  }
 }
 
 TEST(OopArchitectureGuardrailTests, RenderFacadeDoesNotOwnOverlayProxyInternals) {

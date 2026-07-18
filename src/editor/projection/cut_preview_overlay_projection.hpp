@@ -6,13 +6,12 @@
 ////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
+#include "editor/modeling/modeling_preview_types.hpp"
 #include "math/types.hpp"
 #include "render/viewport_overlay_frame.hpp"
 
 #include <cstdint>
 #include <vector>
-
-#include <mesh/polygon/document.hpp>
 
 namespace quader {
 
@@ -34,7 +33,7 @@ public:
     };
 
     [[nodiscard]] static PreviewTriangleMesh
-    mesh_from_documents(const std::vector<quader_poly::Document> &documents);
+    mesh_from_previews(const std::vector<ModelingToolPreviewMesh> &previews);
     static void append_mesh_fill(ViewportOverlayFrame &frame,
                                  const PreviewTriangleMesh &mesh,
                                  std::uint32_t color,

@@ -15,7 +15,7 @@
 #include "editor/session/scene_session.hpp"
 #include "scene/components.hpp"
 
-#include <mesh/polygon/document.hpp>
+#include <quader/modeling/neutral/polygon/document.hpp>
 
 #include <initializer_list>
 #include <string>

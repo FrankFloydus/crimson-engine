@@ -102,14 +102,6 @@ struct CutHoverState {
 };
 
 /**
- * Enumerates CutPreviewMeshSide values used by the modeling layer.
- */
-enum class CutPreviewMeshSide {
-  Keep,
-  Discard,
-};
-
-/**
  * Represents a Cut Ray Update Input value used by the modal modeling interaction layer.
  */
 struct CutRayUpdateInput {
@@ -123,9 +115,6 @@ CutMode cut_mode_from_id(int id);
 int cut_mode_id(CutMode mode);
 std::string_view cut_mode_label(CutMode mode);
 CutMode next_cut_mode(CutMode mode);
-
-quader_poly::PlaneCutMode plane_cut_mode_from_cut_mode(CutMode mode);
-quader_poly::PlaneCutRequest plane_cut_request_from_cut_state(const CutToolState& state);
 
 std::vector<int> cut_target_object_ids_for_selection(const RectangleSelectionState& selection);
 CutToolResult set_cut_targets_from_selection(CutToolState& state, const RectangleSelectionState& selection);
@@ -162,11 +151,6 @@ CutToolResult refresh_cut_preview_from_selection(
 	CutToolState& state,
 	const RectangleSelectionState& selection,
 	std::span<const PolygonObject> objects);
-
-std::vector<quader_poly::Document> cut_preview_documents(
-	const CutToolState& state,
-	std::span<const PolygonObject> objects,
-	CutPreviewMeshSide side);
 
 CutToolResult update_cut_hover_from_ray(
 	EditorRuntimeState& runtime,

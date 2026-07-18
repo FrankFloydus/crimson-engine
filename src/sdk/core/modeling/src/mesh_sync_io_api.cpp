@@ -528,7 +528,11 @@ RenderApi::RenderApi(std::shared_ptr<ModelingApiContext> context)
 RenderSnapshotPayload
 RenderApi::scene_snapshot(PayloadRequest request) const {
   RenderSnapshotPayload snapshot;
-  snapshot.lifetime = request.lifetime;
+  snapshot.lifetime = SnapshotLifetime::Owned;
+  if (!require_owned_snapshot_lifetime(*context_, request.lifetime,
+                                       "Scene snapshot")) {
+    return snapshot;
+  }
   const RevisionStamp revisions = current_revisions(*context_);
   snapshot.scene_revision = revisions.scene;
   if (request.only_if_changed &&
@@ -544,10 +548,13 @@ RenderApi::scene_snapshot(PayloadRequest request) const {
                       });
                 });
   for (const SessionObjectSummary &summary : objects) {
-    const PolygonDocument *document = context_->session.document(summary.id);
-    if (document == nullptr) {
+    Result<std::shared_ptr<const PolygonDocument>> document_result =
+        context_->session.document_snapshot(summary.id);
+    if (!document_result.ok()) {
       continue;
     }
+    const std::shared_ptr<const PolygonDocument> document =
+        std::move(document_result).value();
     auto cached = std::ranges::find_if(
         context_->render_mesh_cache,
         [&](const ModelingRenderMeshCacheEntry &entry) {

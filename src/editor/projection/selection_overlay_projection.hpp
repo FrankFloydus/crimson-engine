@@ -13,7 +13,7 @@
 #include <functional>
 #include <vector>
 
-#include <editor/modeling/runtime/session.hpp>
+#include <editor/modeling/runtime/selection_types.hpp>
 
 namespace quader {
 

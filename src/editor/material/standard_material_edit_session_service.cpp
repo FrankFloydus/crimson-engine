@@ -6,6 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "editor/material/standard_material_edit_session_service.hpp"
 
+#include "core/qstr.hpp"
 #include "editor/session/project_session.hpp"
 #include "io/qdr/qdr_atomic_write.hpp"
 
@@ -37,22 +38,15 @@ bool finite_unit(float value) {
   return std::isfinite(value) && value >= 0.0f && value <= 1.0f;
 }
 
-std::string lowercase_ascii(std::string value) {
-  std::transform(value.begin(), value.end(), value.begin(),
-                 [](unsigned char character) {
-                   return static_cast<char>(std::tolower(character));
-                 });
-  return value;
-}
-
 bool valid_material_path(const ProjectRelativePath &path) {
-  if (!path.valid() || lowercase_ascii(path.native_path().extension().string()) !=
-                           ".qmat") {
+  if (!path.valid() ||
+      QStr::to_ascii_lower(path.native_path().extension().string()) !=
+          ".qmat") {
     return false;
   }
   const auto first = path.native_path().begin();
   return first != path.native_path().end() &&
-         lowercase_ascii(first->string()) == "materials";
+         QStr::to_ascii_lower(first->string()) == "materials";
 }
 
 std::string sanitized_stem(std::string_view source) {
@@ -345,6 +339,19 @@ StandardMaterialEditSessionService::set_normal_strength(float value) {
   return mark_changed();
 }
 
+StandardMaterialEditResult StandardMaterialEditSessionService::set_scalar(
+    StandardMaterialScalar scalar, float value) {
+  switch (scalar) {
+  case StandardMaterialScalar::Roughness:
+    return set_roughness(value);
+  case StandardMaterialScalar::Metallic:
+    return set_metallic(value);
+  case StandardMaterialScalar::NormalStrength:
+    return set_normal_strength(value);
+  }
+  return failure("The Standard Material scalar is invalid.");
+}
+
 StandardMaterialEditResult
 StandardMaterialEditSessionService::set_normal_convention(
     NormalMapConvention convention) {
@@ -372,6 +379,40 @@ StandardMaterialEditSessionService::set_texture_transform(
   }
   material->texture_transform = transform;
   return mark_changed();
+}
+
+StandardMaterialEditResult
+StandardMaterialEditSessionService::set_texture_transform_component(
+    StandardMaterialTextureTransformComponent component, float value) {
+  ProjectStandardMaterialDefinition *material = standard();
+  if (material == nullptr) {
+    return failure("No Standard Material is open.");
+  }
+  StandardMaterialTextureTransform transform = material->texture_transform;
+  switch (component) {
+  case StandardMaterialTextureTransformComponent::CenterU:
+    transform.center[0] = value;
+    break;
+  case StandardMaterialTextureTransformComponent::CenterV:
+    transform.center[1] = value;
+    break;
+  case StandardMaterialTextureTransformComponent::ScaleU:
+    transform.scale[0] = value;
+    break;
+  case StandardMaterialTextureTransformComponent::ScaleV:
+    transform.scale[1] = value;
+    break;
+  case StandardMaterialTextureTransformComponent::OffsetU:
+    transform.offset[0] = value;
+    break;
+  case StandardMaterialTextureTransformComponent::OffsetV:
+    transform.offset[1] = value;
+    break;
+  case StandardMaterialTextureTransformComponent::RotationDegrees:
+    transform.rotation_degrees = value;
+    break;
+  }
+  return set_texture_transform(transform);
 }
 
 StandardMaterialEditResult StandardMaterialEditSessionService::import_texture(

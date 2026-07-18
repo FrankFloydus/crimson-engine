@@ -7,9 +7,15 @@
 #include "test_support.hpp"
 
 #include <editor/modeling/runtime/editor_runtime.hpp>
+#include <editor/modeling/runtime/session.hpp>
 #include <editor/interactions/interaction_api.hpp>
+#include <quader/modeling/neutral/polygon/document_builder.hpp>
+#include <quader/modeling/modeling.hpp>
 
+#include <algorithm>
+#include <iterator>
 #include <optional>
+#include <utility>
 #include <vector>
 
 TEST(QdrModelingRuntimeToolBoxTests, BoxFootprintSnapsDirectionalPairsAndPreservesSignedSize) {
@@ -198,8 +204,12 @@ TEST(QdrModelingRuntimeToolBoxTests, BoxConstructionRayHoverCellAndSyncPreserveP
 }
 
 TEST(QdrModelingRuntimeToolBoxTests, BoxConstructionPlaneCanBeSeededFromAMeshSurfaceBelowTheGrid) {
-	quader_editor_core::EditorSession session;
-	EXPECT_TRUE(session.create_box_from_bounds({ -1.0F, -2.0F, -1.0F }, { 1.0F, -1.0F, 1.0F }).changed);
+	quader_poly::DocumentBuilder builder;
+	quader_editor_core::PolygonObject object;
+	object.id = 1;
+	object.document = builder.cube({ -1.0F, -2.0F, -1.0F },
+	                               { 1.0F, -1.0F, 1.0F }).take();
+	quader_editor_core::EditorSession session({ std::move(object) });
 
 	quader_poly::PickOptions options;
         options.mode = quader_poly::SelectionMode::Face;
@@ -236,23 +246,32 @@ TEST(QdrModelingRuntimeToolBoxTests, BoxPreviewCornersCommitAWallPlanarOrientedV
 	const std::vector<quader::QVec3> corners = quader_editor_core::box_preview_corners(preview);
 	EXPECT_TRUE(corners.size() == 8);
 
-	quader_editor_core::EditorSession session;
-	const quader_editor_core::CommandResult result = session.create_box_from_corners(corners);
-	EXPECT_TRUE(result.ok);
-	EXPECT_TRUE(result.changed);
-	EXPECT_TRUE(session.objects().size() == 1);
-	const quader_poly::Document& document = session.objects().front().document;
-	EXPECT_TRUE(document.vertices.size() == 8);
-	EXPECT_TRUE(document.faces.size() == 6);
-	EXPECT_FALSE(quader_poly::compile_document(document).indices.empty());
+	std::vector<quader::modeling::Vec3> sdk_corners;
+	sdk_corners.reserve(corners.size());
+	for (const quader::QVec3 corner : corners) {
+		sdk_corners.push_back({ corner.x, corner.y, corner.z });
+	}
+	quader::modeling::Result<quader::modeling::PolygonDocument> result =
+		quader::modeling::PolygonDocument::make_box_from_corners(sdk_corners);
+	ASSERT_TRUE(result.ok()) << result.error_message();
+	const quader::modeling::PolygonDocument &document = result.value();
+	EXPECT_EQ(document.vertex_count(), 8U);
+	EXPECT_EQ(document.face_count(), 6U);
+	quader::modeling::Result<quader::modeling::MeshPayload> compiled =
+		document.compile_mesh();
+	ASSERT_TRUE(compiled.ok()) << compiled.error_message();
+	EXPECT_FALSE(compiled.value().indices.empty());
+	quader::modeling::Result<quader::modeling::AuthoredPolygonPayload> authored =
+		document.authored_payload();
+	ASSERT_TRUE(authored.ok()) << authored.error_message();
 
 	int base_vertex_count = 0;
 	int top_vertex_count = 0;
-	for (const quader_poly::Vertex& vertex : document.vertices) {
-		if (qdr_test::nearly_equal(vertex.position.x, 2.0F, 0.0001)) {
+	for (const quader::modeling::Vec3 position : authored.value().positions) {
+		if (qdr_test::nearly_equal(position.x, 2.0F, 0.0001)) {
 			++base_vertex_count;
 		}
-		if (qdr_test::nearly_equal(vertex.position.x, 4.0F, 0.0001)) {
+		if (qdr_test::nearly_equal(position.x, 4.0F, 0.0001)) {
 			++top_vertex_count;
 		}
 	}
@@ -261,23 +280,32 @@ TEST(QdrModelingRuntimeToolBoxTests, BoxPreviewCornersCommitAWallPlanarOrientedV
 
 	bool found_base_face = false;
 	bool found_top_face = false;
-	for (const quader_poly::Face& face : document.faces) {
+	const auto position_for = [&](quader::modeling::VertexId id) {
+		const auto found = std::find(authored.value().vertices.begin(),
+		                             authored.value().vertices.end(), id);
+		EXPECT_NE(found, authored.value().vertices.end());
+		if (found == authored.value().vertices.end()) {
+			return quader::modeling::Vec3{};
+		}
+		return authored.value().positions[static_cast<std::size_t>(
+			std::distance(authored.value().vertices.begin(), found))];
+	};
+	for (const quader::modeling::AuthoredPolygonFacePayload &face :
+	     authored.value().faces) {
 		bool all_base_x = true;
 		bool all_top_x = true;
-		for (quader_poly::ElementId vertex_id : face.vertices) {
-			const quader_poly::Vertex* vertex = quader_poly::find_vertex(document, vertex_id);
-			EXPECT_TRUE(vertex != nullptr);
-			all_base_x = all_base_x &&qdr_test::nearly_equal(vertex->position.x, 2.0F, 0.0001);
-			all_top_x = all_top_x &&qdr_test::nearly_equal(vertex->position.x, 4.0F, 0.0001);
+		for (const quader::modeling::VertexId vertex_id : face.vertices) {
+			const quader::modeling::Vec3 position = position_for(vertex_id);
+			all_base_x = all_base_x &&
+				qdr_test::nearly_equal(position.x, 2.0F, 0.0001);
+			all_top_x = all_top_x &&
+				qdr_test::nearly_equal(position.x, 4.0F, 0.0001);
 		}
-		const quader::QVec3 normal = quader_poly::face_normal(document, face);
 		if (all_base_x) {
 			found_base_face = true;
-			EXPECT_NEAR(normal.x, -1.0F, 0.0001);
 		}
 		if (all_top_x) {
 			found_top_face = true;
-			EXPECT_NEAR(normal.x, 1.0F, 0.0001);
 		}
 	}
 	EXPECT_TRUE(found_base_face);

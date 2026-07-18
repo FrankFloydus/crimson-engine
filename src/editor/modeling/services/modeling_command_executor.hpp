@@ -6,7 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
-#include "editor/modeling/modeling_types.hpp"
+#include "editor/modeling/modeling_result_types.hpp"
 
 #include <cstdint>
 
@@ -39,11 +39,6 @@ public:
     runtime_sync_plan(bool may_change_content, std::uint64_t content_before,
                       std::uint64_t content_after,
                       const quader_editor_core::CommandResult &result);
-    [[nodiscard]] static SyncPlan operation_sync_plan(
-        quader_editor_core::EditorOperationCommandPhase phase,
-        const quader_editor_core::PreviewTransactionStatus &preview_before,
-        const quader_editor_core::EditorOperationCommandResult &result,
-        std::uint64_t content_before, std::uint64_t content_after);
 };
 
 } // namespace quader

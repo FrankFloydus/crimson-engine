@@ -8,6 +8,8 @@
 
 #include "math/types.hpp"
 
+#include <optional>
+
 namespace quader {
 
 /**
@@ -88,6 +90,22 @@ struct ViewportScreenPoint {
 };
 
 /**
+ * Stores renderer- and scene-neutral bounds used by camera framing decisions.
+ */
+struct ViewportFocusBounds {
+    QVec3 min = {};
+    QVec3 max = {};
+};
+
+/**
+ * Defines the explicit camera response when a focus request has no bounds.
+ */
+enum class ViewportEmptyFocusBehavior {
+    KeepCamera,
+    FocusOrigin,
+};
+
+/**
  * Coordinates Viewport Camera Controller state transitions for the viewport input, layout, and camera layer.
  */
 class ViewportCameraController {
@@ -103,6 +121,11 @@ public:
     void scroll_to_cursor(float wheel_delta, QVec2 local_mouse);
     void focus_origin(float distance = 64.0f);
     void focus_bounds(QVec3 min_bounds, QVec3 max_bounds, float margin = 1.25f);
+    [[nodiscard]] bool focus_optional_bounds(
+        const std::optional<ViewportFocusBounds> &bounds,
+        ViewportEmptyFocusBehavior empty_behavior =
+            ViewportEmptyFocusBehavior::KeepCamera,
+        float margin = 1.25f);
     void view_axis(ViewportViewAxis axis, int sign,
                    ViewportAxisLock lock = ViewportAxisLock::Locked);
     void unlock_orthographic_view();

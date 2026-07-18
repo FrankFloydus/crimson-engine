@@ -13,16 +13,19 @@
 #include "scene/document/scene_content_document.hpp"
 
 #include <gtest/gtest.h>
-#include <mesh/polygon/document.hpp>
+#include <quader/modeling/neutral/polygon/document.hpp>
 
 #include <array>
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <limits>
 #include <ranges>
 #include <span>
+#include <stdexcept>
 #include <string>
+#include <thread>
 #include <unordered_set>
 #include <utility>
 #include <vector>
@@ -95,6 +98,16 @@ namespace {
   return document;
 }
 
+[[nodiscard]] QdrProjectWriteSnapshot
+required_write_snapshot(const SceneContentDocument &document) {
+  QdrProjectWriteSnapshotResult result =
+      qdr_project_write_snapshot_from_document(document);
+  if (!result.ok()) {
+    throw std::runtime_error(result.error().message);
+  }
+  return result.take_value();
+}
+
 [[nodiscard]] std::vector<quader_io::QdrBinaryChunkInput>
 copy_chunks(const quader_io::QdrBinaryContainerReadResult &container) {
   std::vector<quader_io::QdrBinaryChunkInput> chunks;
@@ -117,7 +130,7 @@ copy_chunks(const quader_io::QdrBinaryContainerReadResult &container) {
 parse_written_scene(const SceneContentDocument &document) {
   std::vector<std::byte> bytes =
       QdrDocumentWriter::serialize_project_document_bytes(
-          qdr_project_write_snapshot_from_document(document), test_uuid());
+          required_write_snapshot(document), test_uuid());
   return quader_io::read_qdr_binary_container(std::move(bytes));
 }
 
@@ -129,7 +142,7 @@ TEST(QdrBinarySceneCodecTests, RoundTripPreservesExplicitUuidAndSceneData) {
 
   const std::vector<std::byte> bytes =
       QdrDocumentWriter::serialize_project_document_bytes(
-          qdr_project_write_snapshot_from_document(document), test_uuid());
+          required_write_snapshot(document), test_uuid());
   QdrProjectReadResult read =
       QdrDocumentReader::deserialize_project_document(bytes);
 
@@ -161,7 +174,7 @@ TEST(QdrBinarySceneCodecTests,
   const QdrProjectReadResult read =
       QdrDocumentReader::deserialize_project_document(
           QdrDocumentWriter::serialize_project_document_bytes(
-              qdr_project_write_snapshot_from_document(document),
+              required_write_snapshot(document),
               test_uuid()));
 
   ASSERT_TRUE(read.ok) << read.message;
@@ -182,7 +195,7 @@ TEST(QdrBinarySceneCodecTests,
 
 TEST(QdrBinarySceneCodecTests, LayerEncodingIsDeterministicByLayerId) {
   QdrProjectWriteSnapshot ordered =
-      qdr_project_write_snapshot_from_document(simple_scene());
+      required_write_snapshot(simple_scene());
   ordered.layers = {
       {.id = 2u,
        .name = "Second",
@@ -230,7 +243,7 @@ TEST(QdrBinarySceneCodecTests,
   const QdrProjectReadResult read =
       QdrDocumentReader::deserialize_project_document(
           QdrDocumentWriter::serialize_project_document_bytes(
-              qdr_project_write_snapshot_from_document(document),
+              required_write_snapshot(document),
               test_uuid()));
   ASSERT_TRUE(read.ok) << read.message;
   EXPECT_TRUE(
@@ -310,7 +323,7 @@ TEST(QdrBinarySceneCodecTests, RejectsInvalidSceneLayerRecords) {
                    std::numeric_limits<float>::quiet_NaN(), 0.2f, 0.3f}},
        }) {
     QdrProjectWriteSnapshot snapshot =
-        qdr_project_write_snapshot_from_document(simple_scene());
+        required_write_snapshot(simple_scene());
     snapshot.layers = {invalid_layer};
     const QdrProjectReadResult read =
         QdrDocumentReader::deserialize_project_document(
@@ -322,7 +335,7 @@ TEST(QdrBinarySceneCodecTests, RejectsInvalidSceneLayerRecords) {
   }
 
   QdrProjectWriteSnapshot duplicate =
-      qdr_project_write_snapshot_from_document(simple_scene());
+      required_write_snapshot(simple_scene());
   duplicate.layers = {
       {.id = 3u, .name = "Duplicate"},
       {.id = 3u, .name = "Duplicate Id"},
@@ -352,7 +365,7 @@ TEST(QdrBinarySceneCodecTests, RejectsInvalidSceneLayerRecords) {
 TEST(QdrBinarySceneCodecTests,
      RejectsDanglingAndForbiddenSceneLayerMemberships) {
   QdrProjectWriteSnapshot dangling =
-      qdr_project_write_snapshot_from_document(simple_scene());
+      required_write_snapshot(simple_scene());
   const auto member = std::ranges::find_if(
       dangling.entities, [](const QdrProjectEntityWriteSnapshot &entity) {
         return entity.id == 100u;
@@ -367,7 +380,7 @@ TEST(QdrBinarySceneCodecTests,
   EXPECT_NE(read.message.find("layer memberships"), std::string::npos);
 
   QdrProjectWriteSnapshot forbidden =
-      qdr_project_write_snapshot_from_document(simple_scene());
+      required_write_snapshot(simple_scene());
   forbidden.layers = {{.id = 7u, .name = "Forbidden"}};
   const auto root = std::ranges::find_if(
       forbidden.entities, [](const QdrProjectEntityWriteSnapshot &entity) {
@@ -384,7 +397,7 @@ TEST(QdrBinarySceneCodecTests,
 
 TEST(QdrBinarySceneCodecTests, RejectsOccurrenceWithMissingDefinition) {
   QdrProjectWriteSnapshot snapshot =
-      qdr_project_write_snapshot_from_document(simple_scene());
+      required_write_snapshot(simple_scene());
   snapshot.entities.push_back(QdrProjectEntityWriteSnapshot{
       .id = 300u,
       .name = "Broken Occurrence",
@@ -403,7 +416,7 @@ TEST(QdrBinarySceneCodecTests, RejectsOccurrenceWithMissingDefinition) {
 
 TEST(QdrBinarySceneCodecTests, RejectsEmptyInstanceDefinition) {
   QdrProjectWriteSnapshot snapshot =
-      qdr_project_write_snapshot_from_document(simple_scene());
+      required_write_snapshot(simple_scene());
   snapshot.entities.push_back(QdrProjectEntityWriteSnapshot{
       .id = 301u,
       .name = "Empty Definition",
@@ -423,7 +436,7 @@ TEST(QdrBinarySceneCodecTests,
      RejectsDualInstanceMarkersAndOccurrenceWithNonInstanceKind) {
   {
     QdrProjectWriteSnapshot snapshot =
-        qdr_project_write_snapshot_from_document(simple_scene());
+        required_write_snapshot(simple_scene());
     snapshot.entities.push_back(QdrProjectEntityWriteSnapshot{
         .id = 302u,
         .name = "Dual Instance Marker",
@@ -443,7 +456,7 @@ TEST(QdrBinarySceneCodecTests,
 
   {
     QdrProjectWriteSnapshot snapshot =
-        qdr_project_write_snapshot_from_document(simple_scene());
+        required_write_snapshot(simple_scene());
     snapshot.entities.push_back(QdrProjectEntityWriteSnapshot{
         .id = 303u,
         .name = "Wrong Kind Occurrence",
@@ -465,7 +478,7 @@ TEST(QdrBinarySceneCodecTests,
      RejectsNestedDefinitionsAndOccurrenceRootsWithChildren) {
   {
     QdrProjectWriteSnapshot snapshot =
-        qdr_project_write_snapshot_from_document(simple_scene());
+        required_write_snapshot(simple_scene());
     snapshot.entities.push_back(QdrProjectEntityWriteSnapshot{
         .id = 310u,
         .name = "Outer Definition",
@@ -497,7 +510,7 @@ TEST(QdrBinarySceneCodecTests,
 
   {
     QdrProjectWriteSnapshot snapshot =
-        qdr_project_write_snapshot_from_document(simple_scene());
+        required_write_snapshot(simple_scene());
     snapshot.entities.push_back(QdrProjectEntityWriteSnapshot{
         .id = 320u,
         .name = "Leaf Definition",
@@ -540,7 +553,7 @@ TEST(QdrBinarySceneCodecTests,
       ProjectRelativePath::parse_portable("Materials/wood.qmat");
   ASSERT_TRUE(path.ok()) << path.error().message;
   QdrProjectWriteSnapshot snapshot =
-      qdr_project_write_snapshot_from_document(simple_scene());
+      required_write_snapshot(simple_scene());
   const std::optional<ProjectAssetId> dependency_id =
       ProjectAssetId::parse(
           "85fdfec9-795e-4afe-bf74-13555ee79cb4");
@@ -688,7 +701,7 @@ TEST(QdrBinarySceneCodecTests,
   const QdrProjectReadResult read =
       QdrDocumentReader::deserialize_project_document(
           QdrDocumentWriter::serialize_project_document_bytes(
-              qdr_project_write_snapshot_from_document(document),
+              required_write_snapshot(document),
               test_uuid()));
   ASSERT_TRUE(read.ok) << read.message;
   EXPECT_EQ(read.stats.logical_geometry_count, 2u);
@@ -707,6 +720,29 @@ TEST(QdrBinarySceneCodecTests,
   const MeshAssetRevision mesh_revision =
       read.document.assets().mesh_revision(20u);
 
+  QdrProjectWriteSnapshotResult deferred_snapshot =
+      qdr_project_write_snapshot_from_document(read.document);
+  ASSERT_TRUE(deferred_snapshot.ok()) << deferred_snapshot.error().message;
+  EXPECT_FALSE(read.document.assets().mesh_materialized(20u));
+  ASSERT_EQ(deferred_snapshot.value().meshes.size(), 2u);
+  const auto deferred_write = std::ranges::find_if(
+      deferred_snapshot.value().meshes,
+      [](const QdrProjectMeshAssetWriteSnapshot &mesh) {
+        return mesh.id == 20u;
+      });
+  ASSERT_NE(deferred_write, deferred_snapshot.value().meshes.end());
+  EXPECT_TRUE(deferred_write->encoded_geometry);
+  EXPECT_FALSE(deferred_write->geometry);
+
+  const QdrProjectReadResult resaved =
+      QdrDocumentReader::deserialize_project_document(
+          QdrDocumentWriter::serialize_project_document_bytes(
+              deferred_snapshot.value(), test_uuid()));
+  ASSERT_TRUE(resaved.ok) << resaved.message;
+  EXPECT_EQ(resaved.document.assets().mesh_count(), 2u);
+  EXPECT_TRUE(resaved.document.assets().has_mesh(20u));
+  EXPECT_FALSE(resaved.document.assets().mesh_materialized(20u));
+
   const MeshAsset *deferred = read.document.assets().mesh(20u);
   ASSERT_NE(deferred, nullptr);
   EXPECT_TRUE(deferred->has_authored_polygon_document);
@@ -718,6 +754,51 @@ TEST(QdrBinarySceneCodecTests,
   EXPECT_TRUE(read.document.assets().mesh_materialized(20u));
   EXPECT_EQ(read.document.assets().revision(), registry_revision);
   EXPECT_EQ(read.document.assets().mesh_revision(20u), mesh_revision);
+}
+
+TEST(QdrBinarySceneCodecTests,
+     FailedDeferredEncodedReadFailsSnapshotWithoutOmittingOrHydratingAsset) {
+  SceneContentDocument document(
+      SceneContentDocumentRecord{.id = 85u, .name = "Broken Deferred"});
+  std::atomic_int materialize_calls = 0;
+  std::atomic_int encoded_calls = 0;
+  ASSERT_EQ(
+      document.assets().add_deferred_mesh(
+          91u, "Broken", true, false,
+          [&materialize_calls]() {
+            ++materialize_calls;
+            return triangle_mesh("Should not hydrate");
+          },
+          [&encoded_calls]() {
+            ++encoded_calls;
+            return std::make_shared<const std::vector<std::byte>>();
+          }),
+      91u);
+
+  const QdrProjectWriteSnapshotResult snapshot =
+      qdr_project_write_snapshot_from_document(document);
+
+  EXPECT_FALSE(snapshot.ok());
+  EXPECT_NE(snapshot.error().message.find("encoded geometry is empty"),
+            std::string::npos);
+  EXPECT_EQ(encoded_calls.load(), 1);
+  EXPECT_EQ(materialize_calls.load(), 0);
+  EXPECT_TRUE(document.assets().has_mesh(91u));
+  EXPECT_FALSE(document.assets().mesh_materialized(91u));
+}
+
+TEST(QdrBinarySceneCodecTests, AssetRegistryDeclaresOneOwnerThread) {
+  AssetRegistry registry;
+  EXPECT_TRUE(registry.on_owner_thread());
+
+  std::atomic_bool worker_is_owner = true;
+  std::thread worker([&registry, &worker_is_owner]() {
+    worker_is_owner.store(registry.on_owner_thread());
+  });
+  worker.join();
+
+  EXPECT_FALSE(worker_is_owner.load());
+  EXPECT_TRUE(registry.on_owner_thread());
 }
 
 TEST(QdrBinarySceneCodecTests, RejectsUnsupportedMetadataSchema) {
@@ -772,7 +853,7 @@ TEST(QdrBinarySceneCodecTests, DeduplicatesEquivalentGeometryPayloads) {
   document.scene().set_mesh(first, MeshComponent{.mesh = 10u});
   document.scene().set_mesh(second, MeshComponent{.mesh = 11u});
   const QdrSceneBinaryEncodeResult encoded = encode_qdr_scene_binary(
-      qdr_project_write_snapshot_from_document(document), test_uuid());
+      required_write_snapshot(document), test_uuid());
 
   EXPECT_EQ(encoded.logical_geometry_count, 2u);
   EXPECT_EQ(encoded.geometry_encode_count, 1u);
@@ -806,7 +887,7 @@ TEST(QdrBinarySceneCodecTests,
   }
 
   const QdrSceneBinaryEncodeResult encoded = encode_qdr_scene_binary(
-      qdr_project_write_snapshot_from_document(document), test_uuid());
+      required_write_snapshot(document), test_uuid());
   ASSERT_EQ(encoded.logical_geometry_count, 200u);
   EXPECT_EQ(encoded.geometry_encode_count, 1u);
   EXPECT_EQ(encoded.unique_geometry_count, 1u);
@@ -851,7 +932,7 @@ TEST(QdrBinarySceneCodecTests,
 TEST(QdrBinarySceneCodecTests, ProducesDeterministicSameBuildBytes) {
   const SceneContentDocument document = simple_scene();
   const QdrProjectWriteSnapshot snapshot =
-      qdr_project_write_snapshot_from_document(document);
+      required_write_snapshot(document);
 
   const std::vector<std::byte> first =
       QdrDocumentWriter::serialize_project_document_bytes(snapshot,
@@ -869,14 +950,14 @@ TEST(QdrBinarySceneCodecTests,
   (void)document.assets().add_mesh(10u, triangle_mesh("First"));
   (void)document.assets().add_mesh(11u, triangle_mesh("Second"));
   const QdrSceneBinaryEncodeResult deduplicated = encode_qdr_scene_binary(
-      qdr_project_write_snapshot_from_document(document), test_uuid());
+      required_write_snapshot(document), test_uuid());
   ASSERT_EQ(deduplicated.unique_geometry_count, 1u);
 
   ASSERT_TRUE(document.assets().update_mesh(11u, [](MeshAsset &mesh) {
     mesh.edit_geometry().vertices.front().position.x = 3.0f;
   }));
   const QdrSceneBinaryEncodeResult split = encode_qdr_scene_binary(
-      qdr_project_write_snapshot_from_document(document), test_uuid());
+      required_write_snapshot(document), test_uuid());
   EXPECT_EQ(split.unique_geometry_count, 2u);
 
   const QdrProjectReadResult read =
@@ -907,7 +988,7 @@ TEST(QdrBinarySceneCodecTests, CompressesLargeRepetitiveGeometryAdaptively) {
   (void)document.assets().add_mesh(20u, std::move(mesh));
 
   const QdrSceneBinaryEncodeResult encoded = encode_qdr_scene_binary(
-      qdr_project_write_snapshot_from_document(document), test_uuid());
+      required_write_snapshot(document), test_uuid());
   EXPECT_EQ(encoded.logical_geometry_count, 1u);
   EXPECT_EQ(encoded.unique_geometry_count, 1u);
   EXPECT_EQ(encoded.compressed_geometry_count, 1u);

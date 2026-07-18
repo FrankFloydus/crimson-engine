@@ -19,6 +19,7 @@ namespace quader {
 
 class AssetRegistry;
 struct MaterialComponent;
+struct MeshComponent;
 struct ModelingObjectSceneIdentity;
 class SceneDocument;
 struct SceneTransformAssignment;
@@ -55,6 +56,34 @@ public:
 
   [[nodiscard]] std::optional<MeshAsset>
   compile_object_mesh(const quader_editor_core::PolygonObject &object) const;
+  [[nodiscard]] AssetId install_projected_mesh(AssetRegistry &assets,
+                                               MeshAsset mesh) const;
+  [[nodiscard]] bool replace_projected_mesh(AssetRegistry &assets,
+                                            AssetId mesh_id,
+                                            MeshAsset mesh) const;
+  [[nodiscard]] EntityId create_projected_mesh_entity(
+      SceneDocument &scene, const std::string &name) const;
+  [[nodiscard]] EntityId restore_projected_mesh_entity(
+      SceneDocument &scene,
+      const ModelingObjectSceneIdentity &identity) const;
+  [[nodiscard]] bool destroy_projected_entity(SceneDocument &scene,
+                                              EntityId entity) const;
+  [[nodiscard]] bool parent_projected_entity(SceneDocument &scene,
+                                             EntityId entity,
+                                             EntityId parent) const;
+  [[nodiscard]] bool bind_projected_object(
+      SceneDocument &scene, EntityId entity, int modeling_object_id,
+      std::uint32_t material_slot, bool sdk_owned, AssetId mesh_id) const;
+  [[nodiscard]] bool mark_projected_object_sdk_owned(
+      SceneDocument &scene, EntityId entity) const;
+  [[nodiscard]] bool set_projected_mesh_binding(SceneDocument &scene,
+                                                EntityId entity,
+                                                AssetId mesh_id) const;
+  [[nodiscard]] bool set_projected_material(
+      SceneDocument &scene, EntityId entity,
+      const MaterialComponent *material) const;
+  [[nodiscard]] bool notify_projected_mesh_changed(SceneDocument &scene,
+                                                   EntityId entity) const;
   void apply_scene_identity_to_entity(
       SceneDocument &scene, EntityId entity,
       const ModelingObjectSceneIdentity &identity) const;

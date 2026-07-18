@@ -4,10 +4,10 @@
 // No permission is granted to use, copy, modify, distribute, or sublicense this
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
-#include <mesh/polygon/document_validation.hpp>
+#include <quader/modeling/neutral/polygon/document_validation.hpp>
 
-#include <mesh/polygon/internal/quader_poly_document_constants.hpp>
-#include <mesh/polygon/internal/quader_poly_document_mesh_internal.hpp>
+#include <quader/modeling/neutral/polygon/internal/quader_poly_document_constants.hpp>
+#include <quader/modeling/neutral/polygon/internal/quader_poly_document_mesh_internal.hpp>
 
 #include <algorithm>
 #include <cstddef>

@@ -9,6 +9,7 @@
 #include "api/quader_editor_api.hpp"
 #include "editor/modeling/services/modeling_session_service.hpp"
 #include "io/qdr/qdr_document_reader.hpp"
+#include "io/qdr/qdr_document_writer.hpp"
 #include "editor/session/scene_session.hpp"
 
 #include <gtest/gtest.h>
@@ -21,6 +22,7 @@
 #include <fstream>
 #include <iostream>
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <system_error>
@@ -28,13 +30,12 @@
 
 namespace {
 
-std::filesystem::path stress_project_path() {
+std::optional<std::filesystem::path> stress_project_path() {
   if (const char *override_path = std::getenv("QUADER_STRESS_QDR");
       override_path != nullptr && override_path[0] != '\0') {
     return std::filesystem::path(override_path);
   }
-  return std::filesystem::path(
-      LR"(C:\Users\Drako\Desktop\my_first_project.qdr)");
+  return std::nullopt;
 }
 
 bool stress_input_is_legacy_json(const std::filesystem::path &path) {
@@ -57,6 +58,44 @@ void expect_legacy_json_unsupported(
             "qdr.binary.unsupported_format");
   EXPECT_NE(read.message.find("Legacy JSON"), std::string::npos);
   std::cout << "[local-stress] legacy_json_policy=unsupported\n";
+}
+
+/// Classifies the explicit local stress fixture before running heavy work.
+enum class StressFixtureStatus {
+  Missing,
+  LegacyJson,
+  Malformed,
+  Valid,
+};
+
+/// Carries stress-fixture classification and an optional parsed document.
+struct StressFixtureReadResult {
+  StressFixtureStatus status = StressFixtureStatus::Missing;
+  std::optional<quader::QdrProjectReadResult> read;
+};
+
+StressFixtureReadResult
+read_stress_fixture(const std::filesystem::path &path) {
+  if (!std::filesystem::is_regular_file(path)) {
+    return {};
+  }
+  quader::QdrProjectReadResult read =
+      quader::QdrDocumentReader::read_project_document(path);
+  if (stress_input_is_legacy_json(path)) {
+    return {.status = StressFixtureStatus::LegacyJson,
+            .read = std::move(read)};
+  }
+  return {
+      .status = read.ok ? StressFixtureStatus::Valid
+                        : StressFixtureStatus::Malformed,
+      .read = std::move(read),
+  };
+}
+
+std::filesystem::path stress_fixture_test_directory() {
+  const auto nonce = std::chrono::steady_clock::now().time_since_epoch().count();
+  return std::filesystem::temp_directory_path() /
+         ("quader-stress-fixture-" + std::to_string(nonce));
 }
 
 template <typename Step>
@@ -133,21 +172,66 @@ stress_x_move_drag_update_request(float screen_x) {
 
 } // namespace
 
-TEST(LocalStressTests, MyFirstProjectLargeWorkflow) {
-  const std::filesystem::path project_path = stress_project_path();
-  if (!std::filesystem::exists(project_path)) {
-    GTEST_SKIP() << "Local stress project is missing: "
-                 << project_path.string();
+TEST(LocalStressFixtureTests, RequiresExplicitOptInInsteadOfPersonalPath) {
+  const char *configured = std::getenv("QUADER_STRESS_QDR");
+  if (configured == nullptr || configured[0] == '\0') {
+    EXPECT_FALSE(stress_project_path().has_value());
   }
+  const std::filesystem::path missing_path =
+      stress_fixture_test_directory() / "missing.qdr";
+  EXPECT_EQ(read_stress_fixture(missing_path).status,
+            StressFixtureStatus::Missing);
+}
 
-    quader::QdrProjectReadResult read;
+TEST(LocalStressFixtureTests, ClassifiesValidAndMalformedExplicitFixtures) {
+  const std::filesystem::path directory = stress_fixture_test_directory();
+  const std::filesystem::path valid_path = directory / "valid.qdr";
+  const std::filesystem::path malformed_path = directory / "malformed.qdr";
+  std::error_code error;
+  std::filesystem::create_directories(directory, error);
+  ASSERT_FALSE(error);
+
+  quader::SceneContentDocument document(
+      quader::SceneContentDocumentRecord{.id = 1U,
+                                         .name = "Stress Fixture"});
+  const quader::QdrProjectWriteResult written =
+      quader::QdrDocumentWriter::write_project_document_atomic(valid_path,
+                                                                document);
+  ASSERT_TRUE(written.ok) << written.message;
+  EXPECT_EQ(read_stress_fixture(valid_path).status, StressFixtureStatus::Valid);
+
+  {
+    std::ofstream malformed(malformed_path, std::ios::binary);
+    malformed << "not a QDR document";
+  }
+  EXPECT_EQ(read_stress_fixture(malformed_path).status,
+            StressFixtureStatus::Malformed);
+  std::filesystem::remove_all(directory, error);
+}
+
+TEST(LocalStressTests, MyFirstProjectLargeWorkflow) {
+  const std::optional<std::filesystem::path> configured_path =
+      stress_project_path();
+  if (!configured_path.has_value()) {
+    GTEST_SKIP() << "Set QUADER_STRESS_QDR to an explicit licensed binary QDR "
+                    "fixture to run the local large-workflow stress test.";
+  }
+  const std::filesystem::path &project_path = *configured_path;
+
+    StressFixtureReadResult fixture;
     timed_stress_step("qdr_read", [&] {
-      read = quader::QdrDocumentReader::read_project_document(project_path);
+      fixture = read_stress_fixture(project_path);
     });
-    if (stress_input_is_legacy_json(project_path)) {
-      expect_legacy_json_unsupported(read);
+    if (fixture.status == StressFixtureStatus::Missing) {
+      GTEST_SKIP() << "Configured QUADER_STRESS_QDR is not a regular file: "
+                   << project_path.string();
+    }
+    ASSERT_TRUE(fixture.read.has_value());
+    if (fixture.status == StressFixtureStatus::LegacyJson) {
+      expect_legacy_json_unsupported(*fixture.read);
       return;
     }
+    quader::QdrProjectReadResult read = std::move(*fixture.read);
     ASSERT_TRUE(read.ok) << read.message;
 
     quader::SceneSessionService sessions;
@@ -257,18 +341,25 @@ TEST(LocalStressTests, MyFirstProjectLargeWorkflow) {
 
 TEST(LocalStressTests, MyFirstProjectRepeatedAllSelectionDragSamples) {
   constexpr std::size_t kSampleCount = 32u;
-  const std::filesystem::path project_path = stress_project_path();
-  if (!std::filesystem::exists(project_path)) {
-    GTEST_SKIP() << "Local stress project is missing: "
+  const std::optional<std::filesystem::path> configured_path =
+      stress_project_path();
+  if (!configured_path.has_value()) {
+    GTEST_SKIP() << "Set QUADER_STRESS_QDR to an explicit licensed binary QDR "
+                    "fixture to run the repeated-drag stress test.";
+  }
+  const std::filesystem::path &project_path = *configured_path;
+  StressFixtureReadResult fixture = read_stress_fixture(project_path);
+  if (fixture.status == StressFixtureStatus::Missing) {
+    GTEST_SKIP() << "Configured QUADER_STRESS_QDR is not a regular file: "
                  << project_path.string();
   }
 
-  quader::QdrProjectReadResult read =
-      quader::QdrDocumentReader::read_project_document(project_path);
-  if (stress_input_is_legacy_json(project_path)) {
-    expect_legacy_json_unsupported(read);
+  ASSERT_TRUE(fixture.read.has_value());
+  if (fixture.status == StressFixtureStatus::LegacyJson) {
+    expect_legacy_json_unsupported(*fixture.read);
     return;
   }
+  quader::QdrProjectReadResult read = std::move(*fixture.read);
   ASSERT_TRUE(read.ok) << read.message;
 
   quader::SceneSessionService sessions;

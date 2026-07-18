@@ -236,14 +236,6 @@ std::optional<TransformSnapTarget> resolve_transform_vertex_snap_target(
 	return std::nullopt;
 }
 
-CommandResult mark_snap_change(CommandResult result, bool snap_changed)
-{
-	if (result.ok && snap_changed) {
-		result.changed = true;
-	}
-	return result;
-}
-
 /**
  * Implements Move Tool behavior for the modal modeling interaction layer.
  */
@@ -477,7 +469,7 @@ public:
 	}
 
 	[[nodiscard]] CommandResult apply_transform_drag_preview(
-			EditorSession& session,
+			const EditorSession& session,
 			TransformDragState& state,
 			const TransformDragPreviewInput& input) const
 	{
@@ -526,25 +518,7 @@ public:
                           epsilon * epsilon) {
                     return {true, false, {}};
                   }
-                  if (state.scene_transform_preview_eligible &&
-                      state.operation == TransformDragOperation::Transform) {
-                    return {true, non_zero_preview || snap_changed, {}};
-                  }
-                  if (input.defer_session_update) {
-                    return {true, non_zero_preview || snap_changed, {}};
-                  }
-                  if (state.operation == TransformDragOperation::Extrude) {
-                    return mark_snap_change(
-                        session.update_transform_extrude_preview(
-                            preview.preview_delta,
-                            static_cast<float>(
-                                std::max(input.grid_size, 0.0001))),
-                        snap_changed);
-                  }
-                  return mark_snap_change(
-                      session.update_transform_translate_preview(
-                          preview.preview_delta, false),
-                      snap_changed);
+                  return {true, non_zero_preview || snap_changed, {}};
                 }
 
                 if (state.tool == ViewportInteractionTool::Rotate) {
@@ -559,28 +533,10 @@ public:
                             preview.message.empty() ? "Rotate preview failed."
                                                     : preview.message};
                   }
-                  if (state.scene_transform_preview_eligible) {
-                    return {true,
-                            std::abs(preview.preview_angle_degrees -
-                                     previous_angle_degrees) > epsilon,
-                            {}};
-                  }
-                  if (input.defer_session_update) {
-                    return {true,
-                            std::abs(preview.preview_angle_degrees -
-                                     previous_angle_degrees) > epsilon,
-                            {}};
-                  }
-                  if (std::abs(preview.preview_angle_degrees) <= epsilon) {
-                    return session.update_transform_matrix_preview(
-                        {}, state.pivot, false, false);
-                  }
-                  if (state.operation == TransformDragOperation::Extrude) {
-                    return session.update_transform_extrude_preview(
-                        preview.transform, state.pivot);
-                  }
-                  return session.update_transform_matrix_preview(
-                      preview.transform, state.pivot, false, false);
+                  return {true,
+                          std::abs(preview.preview_angle_degrees -
+                                   previous_angle_degrees) > epsilon,
+                          {}};
                 }
 
                 if (state.tool == ViewportInteractionTool::Scale) {
@@ -595,30 +551,11 @@ public:
                             preview.message.empty() ? "Scale preview failed."
                                                     : preview.message};
                   }
-                  if (state.scene_transform_preview_eligible) {
-                    const double preview_change =
-                        std::abs(preview.preview_scale.x - previous_scale.x) +
-                        std::abs(preview.preview_scale.y - previous_scale.y) +
-                        std::abs(preview.preview_scale.z - previous_scale.z);
-                    return {true, preview_change > epsilon, {}};
-                  }
-                  if (input.defer_session_update) {
-                    const double preview_change =
-                        std::abs(preview.preview_scale.x - previous_scale.x) +
-                        std::abs(preview.preview_scale.y - previous_scale.y) +
-                        std::abs(preview.preview_scale.z - previous_scale.z);
-                    return {true, preview_change > epsilon, {}};
-                  }
-                  if (scale_delta(preview.preview_scale) <= epsilon) {
-                    return session.update_transform_matrix_preview(
-                        {}, state.pivot, false, false);
-                  }
-                  if (state.operation == TransformDragOperation::Inset) {
-                    return session.update_transform_inset_preview(
-                        preview.transform, state.pivot);
-                  }
-                  return session.update_transform_matrix_preview(
-                      preview.transform, state.pivot, false, false);
+                  const double preview_change =
+                      std::abs(preview.preview_scale.x - previous_scale.x) +
+                      std::abs(preview.preview_scale.y - previous_scale.y) +
+                      std::abs(preview.preview_scale.z - previous_scale.z);
+                  return {true, preview_change > epsilon, {}};
                 }
 
                 return { false, false, "Unknown transform drag tool." };
@@ -701,7 +638,7 @@ void reset_transform_drag(TransformDragState& state)
 	move_tool_impl().reset_transform_drag(state);
 }
 
-CommandResult apply_transform_drag_preview(EditorSession& session, TransformDragState& state, const TransformDragPreviewInput& input)
+CommandResult apply_transform_drag_preview(const EditorSession& session, TransformDragState& state, const TransformDragPreviewInput& input)
 {
 	QDR_PROFILE_SCOPE("qdr_editor_core.apply_transform_drag_preview");
 	return move_tool_impl().apply_transform_drag_preview(session, state, input);

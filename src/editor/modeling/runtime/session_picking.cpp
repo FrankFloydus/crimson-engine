@@ -9,7 +9,7 @@
 #include <diagnostics/profile.hpp>
 #include <editor/modeling/runtime/session.hpp>
 
-#include <mesh/geometry/geometry.hpp>
+#include <quader/modeling/neutral/geometry/geometry.hpp>
 
 #include <algorithm>
 #include <cmath>
@@ -2431,7 +2431,6 @@ bool apply_picked_selection_to_session(
 	state.selection_mode = mode;
 	state.active_object_id = active_object_id;
 	normalize_active_object_id(state.objects, state.active_object_id);
-	state.dirty = true;
 	state.selection_revision =
 		advance_session_revision(state.selection_revision);
 	return true;

@@ -6,6 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
+#include "api/quader_standard_material_documents_api.hpp"
 #include "core/frame_timing.hpp"
 #include "core/localization_service.hpp"
 #include "core/types.hpp"
@@ -43,7 +44,6 @@ class LinearArrayToolService;
 class ModelingSessionService;
 class OutlinerPanel;
 class PivotToolService;
-class ProjectAssetId;
 class RadialArrayToolService;
 class ViewportPointPlacementService;
 class QtSettingsDialog;
@@ -237,6 +237,13 @@ private:
   std::string material_browser_active_id_;
   QtStandardMaterialPreviewImageCache
       standard_material_preview_image_cache_;
+  MaterialEditSessionId standard_material_editor_session_id_;
+  ProjectAssetId standard_material_editor_asset_id_;
+  std::uint64_t standard_material_editor_draft_revision_ = 0u;
+  std::uint64_t standard_material_editor_clean_revision_ = 0u;
+  bool standard_material_editor_dirty_ = false;
+  bool standard_material_editor_refresh_valid_ = false;
+  bool standard_material_editor_has_document_ = false;
   std::string outliner_locale_;
   std::string layers_locale_;
   std::string inspector_locale_;

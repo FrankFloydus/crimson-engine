@@ -21,13 +21,10 @@
 #include "editor/commands/modeling/select_all_tool.hpp"
 #include "editor/modeling/services/modeling_action_catalog.hpp"
 #include "editor/modeling/services/modeling_instant_operation_catalog.hpp"
-#include "support/guardrail_file_scan.hpp"
-
 #include <editor/metadata/host_contract.hpp>
 
 #include <gtest/gtest.h>
 
-#include <filesystem>
 #include <span>
 #include <string>
 #include <string_view>
@@ -36,9 +33,6 @@
 
 namespace quader {
 namespace {
-
-using test::guardrail::read_source_file;
-using test::guardrail::source_root;
 
 bool instant_operation_catalog_owns_action_id(std::string_view action_id) {
   for (const ModelingInstantOperationCatalogEntry &entry :
@@ -266,33 +260,6 @@ TEST(ModelingToolCatalogTests, DispatcherUsesCatalogAndHistoryPolicy) {
               ModelingCommandHistoryMode::None);
 }
 
-TEST(ModelingToolCatalogTests, HostActionCommandToolsAreDerivedFromActionCatalog) {
-  const std::filesystem::path root = source_root();
-  const std::string source =
-      read_source_file(root / "src" / "editor" / "commands" /
-                       "modeling_command_tool_catalog.cpp");
-  const std::string host_preview_switch_case =
-      std::string("case quader_host_contract::") + "HostPreviewKind::";
-
-  EXPECT_NE(source.find("quader_host_contract::action_catalog()"),
-            std::string::npos);
-  EXPECT_NE(source.find("instant_operation_catalog_owns_action_id("),
-            std::string::npos);
-  EXPECT_NE(source.find("ModelingActionCatalog::preview_kind_from_host("),
-            std::string::npos);
-  EXPECT_EQ(source.find("context_descriptor_from_host_action(\""),
-            std::string::npos);
-  EXPECT_EQ(source.find("previewDescriptorFromHostAction("), std::string::npos);
-  EXPECT_EQ(source.find(host_preview_switch_case), std::string::npos);
-  EXPECT_EQ(source.find("static const std::array<const ContextActionTool*"),
-            std::string::npos);
-  EXPECT_EQ(source.find("static const std::array<const PreviewCommandTool*"),
-            std::string::npos);
-
-  const std::string test_source =
-      read_source_file(root / "tests" / "modeling_tool_catalog_tests.cpp");
-  EXPECT_EQ(test_source.find(host_preview_switch_case), std::string::npos);
-}
 
 } // namespace
 } // namespace quader

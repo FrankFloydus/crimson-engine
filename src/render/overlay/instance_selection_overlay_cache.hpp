@@ -38,15 +38,14 @@ struct InstanceSelectionOverlayBatchPlans final {
   RenderInstanceBatchPlan wires;
 };
 
-/// Stores one visible polygon-boundary segment for an instance selection wire.
+/// Stores one renderer-neutral segment for an instance selection wire.
 struct InstanceSelectionWireEdge final {
   QVec3 start;
   QVec3 end;
 };
 
 /**
- * Extracts authored polygon boundaries for the selection wire. Compiled
- * triangle edges are used only when no authored topology exists.
+ * Copies the asset-owned semantic wire projection for cache upload.
  */
 [[nodiscard]] std::vector<InstanceSelectionWireEdge>
 instance_selection_wire_edges(

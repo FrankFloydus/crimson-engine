@@ -9,7 +9,6 @@
 #include "core/color_space.hpp"
 #include "diagnostics/profile.hpp"
 #include "math/glm_bridge.hpp"
-#include "mesh/polygon/document_model.hpp"
 #include "render/filament_buffer_descriptor_factory.hpp"
 #include "render/overlay/overlay_mesh_types.hpp"
 #include "render/overlay/overlay_renderable_builder.hpp"
@@ -43,7 +42,7 @@ namespace {
 
 using AttributeType = filament::backend::ElementType;
 
-/// Stores one shader-expanded authored edge-ribbon vertex for scene wires.
+/// Stores one shader-expanded semantic edge-ribbon vertex for scene wires.
 struct SceneWireframeLineVertex final {
   OverlayFloat4 position;
   OverlayFloat4 start;
@@ -123,17 +122,17 @@ void configure_overlay_material(filament::MaterialInstance &material,
                             state.polygon_offset_constant);
 }
 
-std::uint64_t edge_key(std::uint32_t a, std::uint32_t b) {
-  const std::uint32_t low = std::min(a, b);
-  const std::uint32_t high = std::max(a, b);
-  return (static_cast<std::uint64_t>(low) << 32u) | high;
-}
-
 std::uint32_t wire_color(
     const RenderOverlayMeshSnapshot &mesh,
     const ViewportPersistentOverlayStyleSnapshot &style) {
-  return mesh.selected ? style.selection_wire_color
-                       : mesh.wireframe_color;
+  if (mesh.selected) {
+    return style.selection_wire_color;
+  }
+  constexpr std::uint8_t kWireframeAlpha = static_cast<std::uint8_t>(
+      (kOverlayWireframeXrayColor >> 24u) & 0xffu);
+  return rgba8(normalized_to_byte(mesh.wireframe_tint.x),
+               normalized_to_byte(mesh.wireframe_tint.y),
+               normalized_to_byte(mesh.wireframe_tint.z), kWireframeAlpha);
 }
 
 ViewportOverlayLayer wire_layer(const RenderOverlayMeshSnapshot &mesh) {
@@ -148,25 +147,10 @@ float wire_width(const RenderOverlayMeshSnapshot &mesh,
              : viewport_overlay_line_width_pixels(wire_layer(mesh), 0.0f);
 }
 
-std::uint64_t topology_token(const RenderOverlayMeshSnapshot &mesh) {
-  if (mesh.authored_topology_payload != nullptr) {
-    return static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(
-        mesh.authored_topology_payload.get()));
-  }
-  if (!mesh.authored_vertices.empty() || !mesh.authored_faces.empty()) {
-    return static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(
-        mesh.authored_vertices.data()));
-  }
-  return 0u;
-}
-
-std::uint64_t geometry_identity(const RenderOverlayMeshSnapshot &mesh) {
-  if (mesh.geometry_payload != nullptr) {
-    return static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(
-        mesh.geometry_payload.get()));
-  }
-  if (mesh.geometry_content_id.value != 0u) {
-    return mesh.geometry_content_id.value;
+std::uint64_t wire_geometry_identity(const RenderOverlayMeshSnapshot &mesh) {
+  if (mesh.wire_geometry_payload != nullptr &&
+      mesh.wire_geometry_payload->content_id != 0u) {
+    return mesh.wire_geometry_payload->content_id;
   }
   return RenderSignatureBuilder{}
       .add_value(mesh.mesh_id)
@@ -178,9 +162,7 @@ std::uint64_t wire_geometry_signature(
     const RenderOverlayMeshSnapshot &mesh,
     const ViewportPersistentOverlayStyleSnapshot &style) {
   return RenderSignatureBuilder{}
-      .add_value(geometry_identity(mesh))
-      .add_value(mesh.geometry_content_id.value)
-      .add_value(topology_token(mesh))
+      .add_value(wire_geometry_identity(mesh))
       .add_value(wire_color(mesh, style))
       .value();
 }
@@ -192,8 +174,8 @@ RenderInstancePrimitiveKey wire_key(
       // These exact runtime tokens deliberately avoid grouping on a content
       // hash. The remaining exact style fields distinguish the derived VB and
       // its per-batch material state without scene or AssetId identity.
-      .geometry_payload = geometry_identity(mesh),
-      .material_payload = topology_token(mesh),
+      .geometry_payload = wire_geometry_identity(mesh),
+      .material_payload = wire_geometry_identity(mesh),
       .index_offset = wire_color(mesh, style),
       .index_count = std::bit_cast<std::uint32_t>(wire_width(mesh, style)),
       .layer_mask = static_cast<std::uint8_t>(wire_layer(mesh)),
@@ -232,7 +214,7 @@ std::vector<RenderInstancePrimitiveOccurrence> wire_occurrences(
   std::vector<RenderInstancePrimitiveOccurrence> occurrences;
   occurrences.reserve(snapshot.meshes.size());
   for (const RenderOverlayMeshSnapshot &mesh : snapshot.meshes) {
-    if (!mesh.has_triangle_geometry() ||
+    if (!mesh.has_wire_geometry() ||
         participant_token(mesh) == 0u) {
       continue;
     }
@@ -251,7 +233,7 @@ const RenderOverlayMeshSnapshot *record_for_chunk(
     const RenderInstanceBatchChunk &chunk) {
   const auto found = std::ranges::find_if(
       snapshot.meshes, [&](const RenderOverlayMeshSnapshot &mesh) {
-        return mesh.has_triangle_geometry() &&
+        return mesh.has_wire_geometry() &&
                wire_key(mesh, snapshot.style) == chunk.key;
       });
   return found == snapshot.meshes.end() ? nullptr : &*found;
@@ -273,69 +255,22 @@ void append_line_quad(std::vector<SceneWireframeLineVertex> &vertices,
                                  offset + 2u, offset + 3u});
 }
 
-bool append_authored_edges(const RenderOverlayMeshSnapshot &mesh,
-                           std::uint32_t color,
-                           std::vector<SceneWireframeLineVertex> &vertices,
-                           std::vector<std::uint32_t> &indices) {
-  if (!mesh.has_authored_polygon_geometry()) {
-    return false;
-  }
-  std::unordered_map<quader_poly::ElementId, QVec3> positions;
-  positions.reserve(mesh.authored_vertices.size());
-  for (const quader_poly::Vertex &vertex : mesh.authored_vertices) {
-    positions.emplace(vertex.id, vertex.position);
-  }
-  std::unordered_set<std::uint64_t> emitted;
-  for (const quader_poly::Face &face : mesh.authored_faces) {
-    for (std::size_t index = 0u; index < face.vertices.size(); ++index) {
-      if (face.vertices.size() < 2u) {
-        break;
-      }
-      const quader_poly::ElementId a_id = face.vertices[index];
-      const quader_poly::ElementId b_id =
-          face.vertices[(index + 1u) % face.vertices.size()];
-      if (!emitted.insert(edge_key(a_id, b_id)).second) {
-        continue;
-      }
-      const auto a = positions.find(a_id);
-      const auto b = positions.find(b_id);
-      if (a != positions.end() && b != positions.end()) {
-        append_line_quad(vertices, indices, a->second, b->second, color);
-      }
-    }
-  }
-  return !emitted.empty();
-}
-
-void append_triangle_edges(const RenderOverlayMeshSnapshot &mesh,
-                           std::uint32_t color,
-                           std::vector<SceneWireframeLineVertex> &vertices,
-                           std::vector<std::uint32_t> &indices) {
-  std::unordered_set<std::uint64_t> emitted;
-  emitted.reserve(mesh.indices.size());
-  const auto append_edge = [&](std::uint32_t a, std::uint32_t b) {
-    if (a >= mesh.vertices.size() || b >= mesh.vertices.size() || a == b ||
-        !emitted.insert(edge_key(a, b)).second) {
-      return;
-    }
-    append_line_quad(vertices, indices, mesh.vertices[a].position,
-                     mesh.vertices[b].position, color);
-  };
-  for (std::size_t index = 0u; index + 2u < mesh.indices.size(); index += 3u) {
-    append_edge(mesh.indices[index], mesh.indices[index + 1u]);
-    append_edge(mesh.indices[index + 1u], mesh.indices[index + 2u]);
-    append_edge(mesh.indices[index + 2u], mesh.indices[index]);
+void append_wire_segments(const RenderOverlayMeshSnapshot &mesh,
+                          std::uint32_t color,
+                          std::vector<SceneWireframeLineVertex> &vertices,
+                          std::vector<std::uint32_t> &indices) {
+  for (const MeshWireSegment &segment : mesh.wire_segments) {
+    append_line_quad(vertices, indices, segment.start, segment.end, color);
   }
 }
 
 bool same_geometry_resource(
     const RenderOverlayMeshSnapshot &mesh,
     const ViewportPersistentOverlayStyleSnapshot &style,
-    const std::shared_ptr<const MeshGeometryPayload> &payload,
-    const std::shared_ptr<const quader_poly::Document> &authored,
+    const std::shared_ptr<const MeshWireGeometryPayload> &wire_geometry,
     std::uint32_t color) {
-  return payload.get() == mesh.geometry_payload.get() &&
-         authored.get() == mesh.authored_topology_payload.get() &&
+  return wire_geometry != nullptr && mesh.wire_geometry_payload != nullptr &&
+         wire_geometry->content_id == mesh.wire_geometry_payload->content_id &&
          color == wire_color(mesh, style);
 }
 
@@ -350,8 +285,7 @@ struct SceneWireframeOverlayCache::PreparedPlan final {
 /// Owns one derived local edge-ribbon resource for a topology/style pair.
 struct SceneWireframeOverlayCache::WireGeometryResource final {
   std::uint64_t signature = 0u;
-  std::shared_ptr<const MeshGeometryPayload> payload;
-  std::shared_ptr<const quader_poly::Document> authored_topology;
+  std::shared_ptr<const MeshWireGeometryPayload> wire_geometry;
   std::uint32_t color = 0u;
   filament::VertexBuffer *vertex_buffer = nullptr;
   filament::IndexBuffer *index_buffer = nullptr;
@@ -586,8 +520,7 @@ SceneWireframeOverlayCache::acquire_geometry(
   auto &bucket = geometry_resources_[signature];
   const std::uint32_t color = wire_color(mesh, style);
   for (const std::unique_ptr<WireGeometryResource> &resource : bucket) {
-    if (same_geometry_resource(mesh, style, resource->payload,
-                               resource->authored_topology,
+    if (same_geometry_resource(mesh, style, resource->wire_geometry,
                                resource->color)) {
       ++stats_.geometry_reuse_count;
       return resource.get();
@@ -596,17 +529,14 @@ SceneWireframeOverlayCache::acquire_geometry(
 
   std::vector<SceneWireframeLineVertex> vertices;
   std::vector<std::uint32_t> indices;
-  if (!append_authored_edges(mesh, color, vertices, indices)) {
-    append_triangle_edges(mesh, color, vertices, indices);
-  }
+  append_wire_segments(mesh, color, vertices, indices);
   if (vertices.empty() || indices.empty()) {
     return nullptr;
   }
 
   auto resource = std::make_unique<WireGeometryResource>();
   resource->signature = signature;
-  resource->payload = mesh.geometry_payload;
-  resource->authored_topology = mesh.authored_topology_payload;
+  resource->wire_geometry = mesh.wire_geometry_payload;
   resource->color = color;
   resource->index_count = static_cast<std::uint32_t>(indices.size());
   resource->vertex_bytes =

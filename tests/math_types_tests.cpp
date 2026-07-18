@@ -6,17 +6,12 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "math/glm_bridge.hpp"
 #include "math/types.hpp"
-#include "support/guardrail_file_scan.hpp"
 
 #include <gtest/gtest.h>
-
-#include <string>
 
 using namespace quader;
 
 namespace {
-
-using quader::test::guardrail::read_source_file;
 
 void expect_q_vec3_near(QVec3 actual, QVec3 expected) {
   EXPECT_NEAR(actual.x, expected.x, 0.001f);
@@ -25,50 +20,6 @@ void expect_q_vec3_near(QVec3 actual, QVec3 expected) {
 }
 
 } // namespace
-
-TEST(MathTypesTests, ValueHeadersDoNotIncludeGlmBridge) {
-  EXPECT_EQ(read_source_file("src/math/types.hpp").find("glm"),
-            std::string::npos);
-  EXPECT_EQ(read_source_file("src/math/types.hpp").find("glm"),
-            std::string::npos);
-  EXPECT_EQ(read_source_file("src/math/types/qvec2.hpp").find("glm"),
-            std::string::npos);
-  EXPECT_EQ(read_source_file("src/math/types/qvec3.hpp").find("glm"),
-            std::string::npos);
-  EXPECT_EQ(read_source_file("src/math/types/qquat.hpp").find("glm"),
-            std::string::npos);
-  EXPECT_EQ(read_source_file("src/math/types/qmat4.hpp").find("glm"),
-            std::string::npos);
-  EXPECT_EQ(read_source_file("src/math/types/qtransform.hpp").find("glm"),
-            std::string::npos);
-  EXPECT_NE(read_source_file("src/math/glm_bridge.hpp").find("glm"),
-            std::string::npos);
-}
-
-TEST(MathTypesTests, QUmbrellaOnlyIncludesSplitVectorHeaders) {
-  const std::string vec_umbrella = read_source_file("src/math/types.hpp");
-
-  EXPECT_NE(vec_umbrella.find("#include \"math/types/qvec2.hpp\""),
-            std::string::npos);
-  EXPECT_NE(vec_umbrella.find("#include \"math/types/qvec3.hpp\""),
-            std::string::npos);
-  EXPECT_EQ(vec_umbrella.find("struct QVec2"), std::string::npos);
-  EXPECT_EQ(vec_umbrella.find("struct QVec3"), std::string::npos);
-}
-
-TEST(MathTypesTests, PolygonDocumentUsesSharedVectorTypes) {
-  const std::string polygon_document =
-      read_source_file("src/mesh/polygon/document_model.hpp");
-  const std::string polygon_umbrella =
-      read_source_file("src/mesh/polygon/document.hpp");
-
-  EXPECT_NE(polygon_document.find("quader::QVec2"), std::string::npos);
-  EXPECT_NE(polygon_document.find("quader::QVec3"), std::string::npos);
-  EXPECT_EQ(polygon_document.find("struct QVec2"), std::string::npos);
-  EXPECT_EQ(polygon_document.find("struct QVec3"), std::string::npos);
-  EXPECT_NE(polygon_umbrella.find("#include <mesh/polygon/document_model.hpp>"),
-            std::string::npos);
-}
 
 TEST(MathTypesTests, QuaternionFromEulerMatchesExpectedAxisRotations) {
   constexpr float kHalfPi = 1.57079632679489661923f;

@@ -12,7 +12,7 @@ Quader native app dependencies must remain compatible with proprietary/non-free 
 | Zstandard | https://github.com/facebook/zstd | vcpkg `1.5.7` | BSD-3-Clause OR GPL-2.0-only; Quader uses the BSD-3-Clause option, see `licenses/zstd-BSD-3-Clause-OR-GPL-2.0-only.txt` | Adaptive level-1 compression for sufficiently large binary `.qdr` geometry chunks. |
 | EnTT | https://github.com/skypjack/entt | vcpkg `3.16.0` | MIT, see `licenses/entt-MIT.txt` | Entity-component storage for scene/runtime data. |
 | OpenGL Mathematics (GLM) | https://glm.g-truc.net | vcpkg `1.0.3` | MIT or Happy Bunny License (Modified MIT), see `licenses/glm-MIT.txt` | Vector, matrix, and transform math. |
-| Filament SDK and bundled IBL assets | https://github.com/google/filament | `v1.71.6` local SDK | Apache-2.0, see `licenses/filament-Apache-2.0.txt` | Vulkan renderer, materials, KTX IBL loading, and default `lightroom_14b` viewport environment. |
+| Filament SDK and bundled IBL assets | https://github.com/google/filament | `filament-v1.71.6-windows.tgz`, SHA-256 `f56b7b2717eda5094179748687e57fa20c2f245a3203fdf1fe274dba37e21180` | Apache-2.0, see `licenses/filament-Apache-2.0.txt` | Vulkan renderer, materials, KTX IBL loading, default `lightroom_14b` viewport environment, and checksum-pinned native CI. |
 | Qt Base | https://code.qt.io/cgit/qt/qtbase.git | vcpkg `6.10.3` | LGPL-3.0-only for the dynamically linked distribution path, see `licenses/qtbase-LGPL-3.0-only.txt` | Qt Core, GUI, and Widgets support for the retained-mode editor shell. |
 | GoogleTest | https://github.com/google/googletest | vcpkg `1.17.0` | BSD 3-Clause, see `licenses/gtest-BSD-3-Clause.txt` | Native C++ tests. |
 | lodepng | https://github.com/lvandeve/lodepng | vcpkg `2021-12-04` | zlib license, see `licenses/lodepng-Zlib.txt` | PNG image loading support. |
@@ -21,7 +21,6 @@ Quader native app dependencies must remain compatible with proprietary/non-free 
 | spdlog | https://github.com/gabime/spdlog | vcpkg `1.17.0` | MIT, see `licenses/spdlog-MIT.txt` | Runtime logging. |
 | {fmt} | https://github.com/fmtlib/fmt | vcpkg `12.1.0` | MIT, see `licenses/fmt-MIT.txt` | spdlog default formatting backend. |
 | stduuid | https://github.com/mariusbancila/stduuid | vcpkg `1.2.3` | MIT, see `licenses/stduuid-MIT.txt` | Stable UUID generation and parsing for scene entity identity. |
-| Taskflow | https://github.com/taskflow/taskflow | vcpkg `4.0.0#1` | MIT, see `licenses/taskflow-MIT.txt` | Parallel QDR mesh decode/encode precompute for project load/save. |
 | Tracy Profiler | https://github.com/wolfpld/tracy | external checkout when `QUADER_ENABLE_TRACY=ON` | BSD 3-Clause, see `licenses/tracy-BSD-3-Clause.txt` | Optional diagnostic instrumentation for local performance captures. |
 
 ## OpenMesh Source Policy
@@ -39,6 +38,15 @@ cmake --preset vs2026 -DQUADER_ALLOW_EXTERNAL_OPENMESH_FETCH=ON
 ```
 
 If a local source snapshot is checked into a release workspace, place it at `thirdparty/openmesh/openmesh-5f016723f9f183770cffe5787a6f9f628e2914d8` or pass `QUADER_OPENMESH_SOURCE_DIR`.
+
+## Filament Artifact Policy
+
+Filament is not vendored. Local and release builds provide a binary SDK with
+`FILAMENT_SDK_ROOT`. Clean native CI downloads the official v1.71.6 Windows release archive and
+verifies its SHA-256 before extraction or configure. Updating Filament requires one atomic change
+to the CMake default version, this manifest row, the workflow URL/digest/cache key, license evidence
+when applicable, and the configure-time SDK layout checks. An unversioned URL or a checksum bypass
+is not a supported fallback.
 
 ## Tracy Source Policy
 

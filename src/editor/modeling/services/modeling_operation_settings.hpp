@@ -12,7 +12,6 @@
 #include <string_view>
 
 #include <editor/modeling/operations/operation_command.hpp>
-#include <editor/modeling/runtime/session.hpp>
 
 namespace quader {
 

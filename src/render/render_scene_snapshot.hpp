@@ -112,7 +112,6 @@ struct RenderMeshAssetSnapshot {
   std::span<const MeshPrimitiveSpan> primitives;
   bool present = false;
   bool has_stable_cpu_topology = true;
-  bool has_authored_polygon_document = false;
 
   [[nodiscard]] bool renderable() const {
     return present && !vertices.empty() && !indices.empty();

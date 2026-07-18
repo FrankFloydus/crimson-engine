@@ -10,7 +10,7 @@
 #include "editor/history/modeling_memento_command.hpp"
 #include "math/types.hpp"
 
-#include <mesh/polygon/document.hpp>
+#include <quader/modeling/neutral/polygon/document.hpp>
 
 #include <algorithm>
 #include <array>
@@ -564,6 +564,8 @@ CommandResult PrimitiveCreationToolService::update_live_primitive() {
   if (checkpoint_hooks_.record_after_projection) {
     checkpoint_hooks_.record_after_projection();
   }
+  live_primitive_->selection_revision =
+      modeling_.selection_summary().selection_revision;
   return command_changed_result();
 }
 

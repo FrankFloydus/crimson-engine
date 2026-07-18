@@ -7,6 +7,7 @@
 #pragma once
 
 #include "assets/mesh_asset.hpp"
+#include "assets/mesh_wire_geometry.hpp"
 #include "core/types.hpp"
 #include "math/types.hpp"
 #include "render/render_scene_binding.hpp"
@@ -22,11 +23,6 @@
 #include <span>
 #include <unordered_map>
 #include <vector>
-
-namespace quader_poly {
-struct Face;
-struct Vertex;
-} // namespace quader_poly
 
 namespace quader {
 
@@ -45,22 +41,25 @@ struct RenderOverlayMeshSnapshot {
   std::uint64_t mesh_revision = 0;
   std::shared_ptr<const MeshGeometryPayload> geometry_payload;
   MeshGeometryContentId geometry_content_id;
-  std::shared_ptr<const quader_poly::Document> authored_topology_payload;
+  std::shared_ptr<const MeshWireGeometryPayload> wire_geometry_payload;
   QMat4 world_transform;
   bool selected = false;
-  /** Resolved unselected wireframe color in packed sRGB RGBA order. */
-  std::uint32_t wireframe_color = kOverlayWireframeXrayColor;
+  /** Scene-owned layer tint; render policy resolves alpha and packing. */
+  QVec3 wireframe_tint = kDefaultSceneLayerWireframeColor;
   std::span<const MeshVertex> vertices;
   std::span<const std::uint32_t> indices;
-  std::span<const quader_poly::Vertex> authored_vertices;
-  std::span<const quader_poly::Face> authored_faces;
+  std::span<const MeshWireSegment> wire_segments;
 
   [[nodiscard]] bool has_triangle_geometry() const {
     return !vertices.empty() && indices.size() >= 3u;
   }
 
+  [[nodiscard]] bool has_wire_geometry() const {
+    return !wire_segments.empty();
+  }
+
   [[nodiscard]] bool has_authored_polygon_geometry() const {
-    return !authored_vertices.empty() && !authored_faces.empty();
+    return wire_geometry_payload != nullptr && wire_geometry_payload->authored;
   }
 };
 
@@ -84,13 +83,6 @@ struct RenderOverlayInstanceSelectionFillRecord final {
   QMat4 world_transform;
   std::span<const MeshVertex> vertices;
   std::span<const std::uint32_t> indices;
-  std::uint32_t color = kOverlayInstanceSelectionFillColor;
-  bool depth_test = true;
-  bool depth_write = false;
-  float polygon_offset_scale = -1.0f;
-  float polygon_offset_constant = -1.0f;
-  std::uint16_t blend_order = 0u;
-  ViewportOverlayLayer draws_before = ViewportOverlayLayer::SourceWire;
 };
 
 /// Carries the crisp selected-occurrence wire drawn after its translucent fill.
@@ -104,19 +96,18 @@ struct RenderOverlayInstanceSelectionWireRecord final {
   std::uint64_t mesh_revision = 0u;
   std::shared_ptr<const MeshGeometryPayload> geometry_payload;
   MeshGeometryContentId geometry_content_id;
-  std::shared_ptr<const quader_poly::Document> authored_topology_payload;
+  std::shared_ptr<const MeshWireGeometryPayload> wire_geometry_payload;
   QMat4 world_transform;
   std::span<const MeshVertex> vertices;
   std::span<const std::uint32_t> indices;
-  std::span<const quader_poly::Vertex> authored_vertices;
-  std::span<const quader_poly::Face> authored_faces;
-  std::uint32_t color = kOverlaySelectionWireColor;
-  float line_width_pixels = kOverlaySelectionWireLineWidthPixels;
-  std::uint16_t blend_order = static_cast<std::uint16_t>(7u * 64u);
-  ViewportOverlayLayer layer = ViewportOverlayLayer::SourceWire;
+  std::span<const MeshWireSegment> wire_segments;
+
+  [[nodiscard]] bool has_wire_geometry() const {
+    return !wire_segments.empty();
+  }
 
   [[nodiscard]] bool has_authored_polygon_geometry() const {
-    return !authored_vertices.empty() && !authored_faces.empty();
+    return wire_geometry_payload != nullptr && wire_geometry_payload->authored;
   }
 };
 

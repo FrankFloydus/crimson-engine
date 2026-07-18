@@ -19,16 +19,9 @@ namespace quader {
  */
 class ModelingHistoryBridge {
 public:
-  [[nodiscard]] static quader_editor_core::EditorRuntimeCommandId
-  undo_command();
-  [[nodiscard]] static quader_editor_core::EditorRuntimeCommandId
-  redo_command();
-
   [[nodiscard]] quader_editor_core::RepeatLastActionState &repeat_last_action();
   [[nodiscard]] const quader_editor_core::RepeatLastActionState &
   repeat_last_action() const;
-  [[nodiscard]] quader_editor_core::CommandResult
-  execute_repeat_last_action(quader_editor_core::EditorSession &session);
   void
   record_operation(const quader_editor_core::EditorOperationCommand &command,
                    const quader_editor_core::CommandResult &result);

@@ -277,6 +277,18 @@ function Add-ModelingDomainFilter {
     Add-Unique $script:Reasons $Reason
 }
 
+function Add-SdkConsumerFilter {
+    param([string]$Filter, [string]$Reason)
+    Add-Unique $script:SdkConsumerFilters $Filter
+    Add-Unique $script:Reasons $Reason
+}
+
+function Add-SdkParityFilter {
+    param([string]$Filter, [string]$Reason)
+    Add-Unique $script:SdkParityFilters $Filter
+    Add-Unique $script:Reasons $Reason
+}
+
 function Add-ModelingLoopFilter {
     param([string]$Target, [string]$Filter, [string]$Reason)
     if (-not $script:ModelingLoopFilters.ContainsKey($Target)) {
@@ -331,13 +343,13 @@ function Get-PolygonOperationFilterForSourcePath {
     param([string]$Path)
 
     $logicalPath = $Path -replace `
-        '^src/sdk/core/modeling/internal/mesh/polygon/',
-        'src/mesh/polygon/'
+        '^src/sdk/core/modeling/neutral/include/quader/modeling/neutral/polygon/',
+        'src/sdk/core/modeling/internal/mesh/polygon/'
 
-    if ($logicalPath -match '^src/mesh/polygon/(operations/)?poly_operation_registry\.(cpp|hpp)$') {
+    if ($logicalPath -match '^src/sdk/core/modeling/internal/mesh/polygon/(operations/)?poly_operation_registry\.(cpp|hpp)$') {
         return Get-TestFileFilter "tests/modeling_domain/operation/qdr_document_operation_registry_tests.cpp"
     }
-    if ($logicalPath -notmatch '^src/mesh/polygon/operations/([^/]+)_operation\.cpp$') {
+    if ($logicalPath -notmatch '^src/sdk/core/modeling/internal/mesh/polygon/operations/([^/]+)_operation\.cpp$') {
         return ""
     }
 
@@ -365,36 +377,8 @@ function Get-PolygonOperationFilterForSourcePath {
 function Get-RuntimeOperationFilterForSourcePath {
     param([string]$Path)
 
-    if ($Path -match '^src/editor/modeling/operations/operation_command\.(cpp|hpp)$') {
-        return Get-TestFileFilter "tests/modeling_domain/operation/qdr_modeling_runtime_operation_command_tests.cpp"
-    }
-    if ($Path -match '^src/editor/modeling/operations/(operation_registry|editor_operation)\.(cpp|hpp)$') {
+    if ($Path -match '^src/editor/modeling/operations/(operation_command|operation_registry|editor_operation|operation_schema|portable_operation_mapping)\.(cpp|hpp)$') {
         return "QdrModelingRuntimeOperationCommandTests.*:QdrModelingRuntimeToolOperationContractTests.*"
-    }
-    if ($Path -match '^src/editor/modeling/operations/operation_schema\.(cpp|hpp)$') {
-        return "QdrModelingRuntimeOperation*:QdrModelingRuntimeCommandTests.*"
-    }
-    if ($Path -eq 'src/editor/modeling/operations/selection_operations.cpp') {
-        return "QdrModelingRuntimeOperationCommandTests.*:QdrModelingRuntimeOperationDeleteTests.*:QdrModelingRuntimeOperationFillHoleTests.*:QdrModelingRuntimeOperationInvertSelectionTests.*:QdrModelingRuntimeOperationMergeEdgesTests.*:QdrModelingRuntimeOperationNormalShadingTests.*:QdrModelingRuntimeOperationRecalculateInsideMeshTests.*:QdrModelingRuntimeOperationRecalculateOutsideMeshTests.*:QdrModelingRuntimeOperationSelectAllTests.*:QdrModelingRuntimeOperationSnapEdgesToActiveTests.*"
-    }
-    if ($Path -notmatch '^src/editor/modeling/operations/([^/]+)_operation\.cpp$') {
-        return ""
-    }
-
-    $slug = $Matches[1]
-    $testSlugOverrides = @{
-        "assign_material" = "assign_material_slot"
-        "duplicate_meshes" = "duplicate"
-    }
-    $testSlug = $slug
-    if ($testSlugOverrides.ContainsKey($slug)) {
-        $testSlug = $testSlugOverrides[$slug]
-    }
-
-    $testPath = "tests/modeling_domain/operation/qdr_modeling_runtime_operation_${testSlug}_tests.cpp"
-    $absoluteTestPath = Join-Path $SourceRoot $testPath
-    if (Test-Path $absoluteTestPath -PathType Leaf) {
-        return Get-TestFileFilter $testPath
     }
     return ""
 }
@@ -405,6 +389,21 @@ function Add-BuildTarget {
     Add-Unique $script:Reasons $Reason
 }
 
+function Add-SdkVerification {
+    param([string]$Reason)
+    Add-BuildTarget "quader_modeling_sdk_consumer_tests" $Reason
+    Add-BuildTarget "quader_modeling_sdk_parity_tests" $Reason
+    Add-SdkConsumerFilter "*" $Reason
+    Add-SdkParityFilter "*" $Reason
+}
+
+function Add-SdkPublicHeaderVerification {
+    param([string]$Reason)
+    Add-SdkVerification $Reason
+    Add-BuildTarget "quader_guardrail_tests" $Reason
+    Add-GuardrailTestsFilter "BuildGuardrailTests.ModelingSdkPublicHeadersStayNativeOwnerFree:ModelingContractHeaderGuardrailTests.*" "guard portable modeling SDK public headers"
+}
+
 function Add-FullVerification {
     param([string]$Reason)
     $script:NeedsConfigure = $true
@@ -412,6 +411,8 @@ function Add-FullVerification {
     Add-BuildTarget "quader_guardrail_tests" $Reason
     Add-BuildTarget "quader_tests" $Reason
     Add-BuildTarget "quader_modeling_domain_tests" $Reason
+    Add-BuildTarget "quader_modeling_sdk_consumer_tests" $Reason
+    Add-BuildTarget "quader_modeling_sdk_parity_tests" $Reason
     if ($IncludeApp) {
         Add-BuildTarget "quader" $Reason
     }
@@ -421,6 +422,24 @@ function Add-TestFilePlan {
     param([string]$Path)
     $suiteFilters = Get-GTestSuites @($Path)
     $filter = Join-GTestFilter $suiteFilters
+    if ($Path -eq "tests/sdk/modeling_sdk_consumer_tests.cpp") {
+        Add-BuildTarget "quader_modeling_sdk_consumer_tests" "changed SDK consumer test source"
+        if ($filter -eq "") {
+            $filter = "*"
+        }
+        Add-SdkConsumerFilter $filter "run suites declared by changed SDK consumer test source"
+        return
+    }
+
+    if ($Path -eq "tests/sdk/modeling_sdk_parity_tests.cpp") {
+        Add-BuildTarget "quader_modeling_sdk_parity_tests" "changed SDK parity test source"
+        if ($filter -eq "") {
+            $filter = "*"
+        }
+        Add-SdkParityFilter $filter "run suites declared by changed SDK parity test source"
+        return
+    }
+
     if ($Path.StartsWith("tests/modeling_domain/")) {
         $loopTarget = Get-ModelingLoopTargetForTestPath $Path
         $testFilter = $filter
@@ -467,7 +486,7 @@ function Add-PathPlan {
         return
     }
 
-    if ($Path -match '^(AGENTS\.md|architecture-review\.md|memory\.md|refactor\.md|INPUT_KEYBINDINGS\.md)$') {
+    if ($Path -match '^(AGENTS\.md|architecture-review\.md|REFACTORING_PLAN\.md|memory\.md|refactor\.md|INPUT_KEYBINDINGS\.md)$') {
         Add-BuildTarget "quader_guardrail_tests" "root guidance or architecture changed"
         Add-GuardrailTestsFilter "AgentInstructionRoutingTests.*:BuildGuardrailTests.ProjectOwnedCommentCapableFilesCarryProprietaryBanner:BuildGuardrailTests.ArchitectureReviewNamesRealModelingDomainTargets:BuildGuardrailTests.TestingDocsExplainPlacementAndSelectionRules:BuildGuardrailTests.AffectedCheckToolPrintsBeforeAfterAndUsesFilteredGoogleTestRuns" "guard instruction routing"
         return
@@ -477,7 +496,7 @@ function Add-PathPlan {
         Add-BuildTarget "quader_guardrail_tests" "developer tooling changed"
         Add-GuardrailTestsFilter "BuildGuardrailTests.ProjectOwnedCommentCapableFilesCarryProprietaryBanner" "guard developer tooling policy"
         if ($Path -eq "tools/affected_check.ps1") {
-            Add-GuardrailTestsFilter "BuildGuardrailTests.AffectedCheckToolPrintsBeforeAfterAndUsesFilteredGoogleTestRuns" "guard affected workflow tool"
+            Add-GuardrailTestsFilter "BuildGuardrailTests.AffectedCheck*" "guard affected workflow tool"
         } elseif ($Path -eq "tools/boot_smoke.ps1") {
             Add-GuardrailTestsFilter "BuildGuardrailTests.BootSmokeFailsOnLoggedErrorsAndRequiresLogCopy" "guard boot smoke tool"
         } else {
@@ -536,15 +555,9 @@ function Add-PathPlan {
         return
     }
 
-    if ($Path -match '^src/mesh/geometry/') {
-        Add-BuildTarget "quader_geometry" "geometry source changed"
-        Add-PolygonModelingLoopFilter "QdrGeometryTests.*:QdrPolyGeometryCharacterizationTests.*" "geometry-domain tests"
-        return
-    }
-
-    if ($Path -match '^src/sdk/core/modeling/internal/mesh/geometry/') {
+    if ($Path -match '^src/sdk/core/modeling/(internal/mesh/geometry/|neutral/include/quader/modeling/neutral/geometry/)') {
         Add-BuildTarget "quader_geometry" "canonical geometry source changed"
-        Add-BuildTarget "quader_modeling_sdk_consumer_tests" "canonical geometry source changed"
+        Add-SdkVerification "canonical geometry source changed"
         Add-PolygonModelingLoopFilter "QdrGeometryTests.*:QdrPolyGeometryCharacterizationTests.*" "native geometry-domain parity tests"
         return
     }
@@ -552,31 +565,39 @@ function Add-PathPlan {
     $polygonOperationFilter = Get-PolygonOperationFilterForSourcePath $Path
     if ($polygonOperationFilter -ne "") {
         Add-BuildTarget "quader_modeling_polygon" "polygon operation source changed"
-        if ($Path -match '^src/sdk/core/modeling/internal/mesh/polygon/') {
-            Add-BuildTarget "quader_modeling_sdk_consumer_tests" "canonical polygon operation source changed"
-        }
+        Add-SdkVerification "canonical polygon operation source changed"
         Add-PolygonModelingLoopFilter $polygonOperationFilter "focused polygon operation tests"
         return
     }
 
-    if ($Path -match '^src/mesh/polygon/') {
-        Add-BuildTarget "quader_modeling_polygon" "polygon document source changed"
-        Add-PolygonModelingLoopFilter "QdrDocument*:QdrPoly*:QdrDocumentOperation*" "polygon and document-operation tests"
-        return
-    }
-
-    if ($Path -match '^src/sdk/core/modeling/internal/mesh/polygon/') {
+    if ($Path -match '^src/sdk/core/modeling/(internal/mesh/polygon/|neutral/include/quader/modeling/neutral/polygon/)') {
         Add-BuildTarget "quader_modeling_polygon" "canonical polygon source changed"
-        Add-BuildTarget "quader_modeling_sdk_consumer_tests" "canonical polygon source changed"
+        Add-SdkVerification "canonical polygon source changed"
         Add-PolygonModelingLoopFilter "QdrDocument*:QdrPoly*:QdrDocumentOperation*" "native polygon parity tests"
         return
     }
 
     if ($Path -match '^src/sdk/core/modeling/(src/qdr_document\.cpp|include/quader/modeling/io/qdr_document\.hpp)$') {
         Add-BuildTarget "quader_modeling_sdk_qdr_document" "portable binary QDR source changed"
-        Add-BuildTarget "quader_modeling_sdk_consumer_tests" "portable binary QDR source changed"
+        if ($Path -match '^src/sdk/core/modeling/include/quader/modeling/') {
+            Add-SdkPublicHeaderVerification "portable binary QDR source changed"
+        } else {
+            Add-SdkVerification "portable binary QDR source changed"
+        }
         Add-BuildTarget "quader_tests" "portable binary QDR source changed"
         Add-QuaderTestsFilter "Qdr*:ProjectionOwnershipGuardrailTests.*" "native binary QDR integration tests"
+        return
+    }
+
+    if ($Path -match '^src/sdk/core/modeling/include/quader/modeling/') {
+        Add-SdkPublicHeaderVerification "portable modeling SDK public header changed"
+        return
+    }
+
+    if ($Path -match '^src/sdk/core/modeling/(src/|internal/)') {
+        Add-SdkVerification "portable modeling SDK source changed"
+        Add-BuildTarget "quader_guardrail_tests" "portable modeling SDK source changed"
+        Add-GuardrailTestsFilter "PolygonOperationRegistryTests.*" "portable modeling SDK source policy"
         return
     }
 
@@ -595,10 +616,35 @@ function Add-PathPlan {
         return
     }
 
+    if ($Path -match '^src/editor/(array|history|placement|session)/' -or
+        $Path -match '^src/editor/commands/(asset_command_service|document_command_service|editor_command_registry|modeling_command_execution_service)\.(cpp|hpp)$' -or
+        $Path -match '^src/editor/input/quader_keybinding_target_catalog\.(cpp|hpp)$' -or
+        $Path -match '^src/editor/modeling/services/primitive_creation_tool_service\.(cpp|hpp)$' -or
+        $Path -match '^src/editor/selection/editor_selection_service\.(cpp|hpp)$') {
+        Add-BuildTarget "quader_editor_services" "editor service source changed"
+        Add-BuildTarget "quader_guardrail_tests" "editor service source changed"
+        Add-BuildTarget "quader_tests" "editor service source changed"
+        Add-GuardrailTestsFilter "CommandAndKeybindingOwnershipGuardrailTests.*:ConversionMappingGuardrailTests.*:DocumentCommandServiceTests.*:DocumentCommandTests.*:ModelingSessionServiceSplitTests.*:ProgrammaticApiGuardrailTests.*" "editor service source policy"
+        Add-QuaderTestsFilter "EditorApiTests.*:ProgrammaticApiTests.*:ProgrammaticBehaviorScenarioTests.*:DocumentCommand*:Selection*:History*:Keybinding*" "editor service behavior tests"
+        return
+    }
+
+    if ($Path -match '^src/editor/(instances|material)/' -or
+        $Path -match '^src/editor/session/project_session\.(cpp|hpp)$') {
+        Add-BuildTarget "quader_project_session" "project session source changed"
+        Add-BuildTarget "quader_guardrail_tests" "project session source changed"
+        Add-BuildTarget "quader_tests" "project session source changed"
+        Add-GuardrailTestsFilter "ConversionMappingGuardrailTests.*:StandardMaterialEditorPresentationTests.*" "project session source policy"
+        Add-QuaderTestsFilter "Project*:Material*:StandardMaterial*:EditorApiTests.*Project*" "project session behavior tests"
+        return
+    }
+
     if ($Path -match '^src/editor/(modeling/runtime|interactions|modeling/operations)/') {
         Add-BuildTarget "quader_modeling_runtime" "modeling runtime source changed"
+        Add-BuildTarget "quader_guardrail_tests" "modeling runtime source changed"
         Add-RuntimeModelingLoopFilter "QdrModelingRuntime*" "modeling runtime tests"
         Add-MetadataModelingLoopFilter "QdrEditorMetadata*" "modeling metadata tests affected by runtime descriptors"
+        Add-GuardrailTestsFilter "ModelingInteractionTests.*:ModelingSessionServiceSplitTests.*:ModelingContractHeaderGuardrailTests.*" "modeling runtime source policy"
         return
     }
 
@@ -608,7 +654,7 @@ function Add-PathPlan {
         Add-BuildTarget "quader_tests" "editor modeling service or command source changed"
         Add-RuntimeModelingLoopFilter "QdrModelingRuntime*" "modeling runtime tests"
         Add-MetadataModelingLoopFilter "QdrEditorMetadata*" "modeling metadata tests affected by editor modeling descriptors"
-        Add-GuardrailTestsFilter "ProgrammaticApiGuardrailTests.*" "modeling/API source-policy guardrails"
+        Add-GuardrailTestsFilter "ProgrammaticApiGuardrailTests.*:ModelingSessionServiceSplitTests.*:ModelingToolCatalogTests.*:SelectionModeAdapterTests.*:ModelingContractHeaderGuardrailTests.*:ConversionMappingGuardrailTests.*" "modeling/API source-policy guardrails"
         Add-QuaderTestsFilter "ModelingSessionService*:ModelingToolCatalogTests.*:SelectionModeAdapterTests.*:EditorApiTests.*Modeling*:EditorApiTests.*Selection*:EditorApiTests.*History*:ProgrammaticBehaviorScenarioTests.*:ProgrammaticApiTests.*:GroupingPublicApiTests.*" "app modeling/API behavior tests"
         return
     }
@@ -621,7 +667,7 @@ function Add-PathPlan {
 
     if ($Path -match '^src/editor/pivot/' -or
         $Path -match '^src/scene/scene_transform_pivot\.(cpp|hpp)$') {
-        Add-BuildTarget "quader_modeling" "visible pivot source changed"
+        Add-BuildTarget "quader_editor_services" "visible pivot source changed"
         Add-BuildTarget "quader_guardrail_tests" "visible pivot source changed"
         Add-BuildTarget "quader_tests" "visible pivot source changed"
         Add-GuardrailTestsFilter "OopArchitectureGuardrailTests.VisiblePivotResolutionHasOneSceneOwner:ProgrammaticApiGuardrailTests.*" "pivot ownership and API source-policy guardrails"
@@ -630,7 +676,7 @@ function Add-PathPlan {
     }
 
     if ($Path -match '^src/editor/transform/') {
-        Add-BuildTarget "quader_modeling" "editor transform source changed"
+        Add-BuildTarget "quader_editor_services" "editor transform source changed"
         Add-BuildTarget "quader_guardrail_tests" "editor transform source changed"
         Add-BuildTarget "quader_tests" "editor transform source changed"
         Add-GuardrailTestsFilter "ProgrammaticApiGuardrailTests.*" "transform/API source-policy guardrails"
@@ -639,46 +685,73 @@ function Add-PathPlan {
     }
 
     if ($Path -match '^src/api/') {
-        Add-BuildTarget "quader_api" "public API source changed"
+        if ($Path -match '^src/api/quader_(editor|render)_api\.(cpp|hpp)$') {
+            Add-BuildTarget "quader_editor_api" "editor-wide public API source changed"
+        } else {
+            Add-BuildTarget "quader_api" "public API source changed"
+        }
         Add-BuildTarget "quader_guardrail_tests" "public API source changed"
         Add-BuildTarget "quader_tests" "public API source changed"
-        Add-GuardrailTestsFilter "ProgrammaticApiGuardrailTests.*" "public API source-policy guardrails"
+        Add-GuardrailTestsFilter "ProgrammaticApiGuardrailTests.*:CommandAndKeybindingOwnershipGuardrailTests.*:ModelingContractHeaderGuardrailTests.*" "public API source-policy guardrails"
         Add-QuaderTestsFilter "EditorApiTests.*:ProgrammaticApiTests.*:ProgrammaticBehaviorScenarioTests.*:GroupingPublicApiTests.*" "public API and behavior tests"
         return
     }
 
     if ($Path -match '^src/render/') {
-        Add-BuildTarget "quader_runtime" "render source changed"
+        Add-BuildTarget "quader_render" "render source changed"
         Add-BuildTarget "quader_guardrail_tests" "render source changed"
         Add-BuildTarget "quader_tests" "render source changed"
-        Add-GuardrailTestsFilter "BuildGuardrailTests.FilamentSdkIsValidatedAtConfigureTime" "render source-policy guardrails"
+        Add-GuardrailTestsFilter "BuildGuardrailTests.FilamentSdkIsValidatedAtConfigureTime:GroundGridMaterialTests.*:OverlayMaterialTests.*:QuaderMeshMaterialTests.*:RenderLifecycleTests.*:RenderProxyLifecycleTests.*:RenderSystemTests.*:SceneRenderBridgeTests.*:TextureRegistryTests.*:ViewportOverlayPolicyTests.*:ViewportPersistentOverlayStyleSnapshotTests.*:ViewportRendererTests.*" "render source-policy guardrails"
         Add-QuaderTestsFilter "Render*:RenderExtractionTests.*:Viewport*:Overlay*:SceneRenderBridge*:TextureRegistryTests.*:LightRenderableCacheTests.*:GroundGridMaterialTests.*:QuaderMeshMaterialTests.*:ModelingSessionService*Overlay*:ModelingSessionService*Hover*:ModelingSessionService*Pick*" "render and viewport extraction tests"
         return
     }
 
     if ($Path -match '^src/ui/') {
-        Add-BuildTarget "quader_runtime" "UI source changed"
+        Add-BuildTarget "quader_ui" "UI source changed"
         Add-BuildTarget "quader_guardrail_tests" "UI source changed"
         Add-BuildTarget "quader_tests" "UI source changed"
-        Add-GuardrailTestsFilter "BuildGuardrailTests.QtWidgetsRuntimeAndLicenseEvidenceAreConfigured:BuildGuardrailTests.ActiveAppAndUiUseQtWithoutSdlAdapters:BuildGuardrailTests.RuntimeUiUsesQtWidgetsWithFusionBaseline:UiLayoutGuardrailTests.*" "UI source-policy guardrails"
+        Add-GuardrailTestsFilter "BuildGuardrailTests.QtWidgetsRuntimeAndLicenseEvidenceAreConfigured:BuildGuardrailTests.ActiveAppAndUiUseQtWithoutSdlAdapters:BuildGuardrailTests.RuntimeUiUsesQtWidgetsWithFusionBaseline:UiLayoutGuardrailTests.*:AppLoopTests.*:ViewportOverlayPolicyTests.*:ViewportRendererTests.*" "UI source-policy guardrails"
         Add-QuaderTestsFilter "UI*:Ui*:Console*:Localization*:QtInputAdapterTests.*:Viewport*" "UI shell and viewport tests"
         return
     }
 
-    if ($Path -match '^src/(viewport|editor/viewport|editor/tools)/') {
-        Add-BuildTarget "quader_runtime" "viewport source changed"
+    if ($Path -match '^src/editor/viewport/' -or
+        $Path -match '^src/editor/input/viewport_keybinding_resolver\.(cpp|hpp)$') {
+        Add-BuildTarget "quader_editor_viewport" "editor viewport source changed"
         Add-BuildTarget "quader_guardrail_tests" "viewport source changed"
         Add-BuildTarget "quader_tests" "viewport source changed"
-        Add-GuardrailTestsFilter "ProgrammaticApiGuardrailTests.*Viewport*" "viewport source-policy guardrails"
+        Add-GuardrailTestsFilter "ProgrammaticApiGuardrailTests.*Viewport*:ViewportToolGuardrailTests.*:ViewportOverlayPolicyTests.*:ViewportSettingsTests.*" "viewport source-policy guardrails"
         Add-QuaderTestsFilter "Viewport*:ViewportTool*:SelectionModeAdapterTests.*:EditorApiTests.*Viewport*:EditorApiTests.*Keybinding*:EditorApiTests.*Input*:EditorApiTests.*BoxSelect*:EditorApiTests.*RightClickPick*:GroupingPublicApiTests.*" "viewport and public behavior tests"
         return
     }
 
+    if ($Path -match '^src/viewport/') {
+        Add-BuildTarget "quader_viewport_services" "viewport service source changed"
+        Add-BuildTarget "quader_guardrail_tests" "viewport source changed"
+        Add-BuildTarget "quader_tests" "viewport source changed"
+        Add-GuardrailTestsFilter "ProgrammaticApiGuardrailTests.*Viewport*:ViewportCameraTests.*:ViewportInputRouterTests.*:ViewportSettingsTests.*:ViewportWorkspaceServiceTests.*" "viewport source-policy guardrails"
+        Add-QuaderTestsFilter "Viewport*:EditorApiTests.*Viewport*:EditorApiTests.*Keybinding*:EditorApiTests.*Input*" "viewport service behavior tests"
+        return
+    }
+
+    if ($Path -match '^src/editor/tools/') {
+        Add-BuildTarget "quader_editor_services" "editor viewport tool source changed"
+        Add-BuildTarget "quader_guardrail_tests" "editor viewport tool source changed"
+        Add-BuildTarget "quader_tests" "editor viewport tool source changed"
+        Add-GuardrailTestsFilter "ViewportToolGuardrailTests.*:ModelingToolCatalogTests.*" "editor viewport tool source policy"
+        Add-QuaderTestsFilter "ViewportTool*:ModelingToolCatalogTests.*:EditorApiTests.*Tool*" "editor viewport tool behavior tests"
+        return
+    }
+
     if ($Path -match '^src/(app|platform)/') {
-        Add-BuildTarget "quader_runtime" "app/platform source changed"
+        if ($Path -match '^src/app/') {
+            Add-BuildTarget "quader_app" "app source changed"
+        } else {
+            Add-BuildTarget "quader_platform" "platform source changed"
+        }
         Add-BuildTarget "quader_guardrail_tests" "app/platform source changed"
         Add-BuildTarget "quader_tests" "app/platform source changed"
-        Add-GuardrailTestsFilter "BuildGuardrailTests.AppLoopRunsOnQApplicationEvents:BuildGuardrailTests.QtShellUsesMainWindowDocksAndStableNames:BuildGuardrailTests.RuntimeUiUsesQtWidgetsWithFusionBaseline:WindowGuardrailTests.WindowPlacementPersistenceAndResizeRecoveryStayOwned" "app/platform source-policy guardrails"
+        Add-GuardrailTestsFilter "BuildGuardrailTests.AppLoopRunsOnQApplicationEvents:BuildGuardrailTests.QtShellUsesMainWindowDocksAndStableNames:BuildGuardrailTests.RuntimeUiUsesQtWidgetsWithFusionBaseline:WindowGuardrailTests.WindowPlacementPersistenceAndResizeRecoveryStayOwned:AppLoopTests.*:AppStartupTests.*:FatalErrorHandlerTests.*" "app/platform source-policy guardrails"
         Add-QuaderTestsFilter "AppFrameClockTests.*:AppStartupTests.*:FatalErrorHandlerTests.*:QtInputAdapterTests.*" "app/platform behavior tests"
         return
     }
@@ -769,12 +842,48 @@ function Remove-RedundantBuildTargets {
     return @($result | Sort-Object -Unique)
 }
 
+function Assert-GTestFilterSelectsTests {
+    param(
+        [string]$Executable,
+        [string]$Filter
+    )
+
+    if (-not (Test-Path $Executable -PathType Leaf)) {
+        throw "GoogleTest executable was not found: '$Executable'."
+    }
+
+    $output = @(& $Executable "--gtest_color=no" "--gtest_filter=$Filter" "--gtest_list_tests" 2>&1)
+    if ($LASTEXITCODE -ne 0) {
+        throw "GoogleTest enumeration failed with exit code ${LASTEXITCODE}: $Executable --gtest_filter=$Filter"
+    }
+
+    $selectedTestCount = @($output | Where-Object { [string]$_ -match '^\s{2}\S' }).Count
+    if ($selectedTestCount -eq 0) {
+        throw "GoogleTest filter '$Filter' selected zero tests in '$Executable'."
+    }
+}
+
+function Assert-CommandExecutableExists {
+    param([string]$Executable)
+
+    $resolved = @(Get-Command -Name $Executable -CommandType Application -ErrorAction SilentlyContinue)
+    if ($resolved.Count -eq 0) {
+        throw "Command executable was not found: '$Executable'."
+    }
+}
+
 function Invoke-CommandLine {
     param(
         [string]$Label,
         [string[]]$Parts
     )
     $command = Format-CommandLine $Parts
+    Assert-CommandExecutableExists $Parts[0]
+    $filterArgument = @($Parts | Where-Object { $_.StartsWith("--gtest_filter=") } | Select-Object -First 1)
+    if ($filterArgument.Count -gt 0) {
+        $filter = $filterArgument[0].Substring("--gtest_filter=".Length)
+        Assert-GTestFilterSelectsTests $Parts[0] $filter
+    }
     Write-Host ""
     Write-Host "==> $Label"
     Write-Host $command
@@ -784,6 +893,7 @@ function Invoke-CommandLine {
     try {
         $arguments = @($Parts | Select-Object -Skip 1)
         $ErrorActionPreference = "Continue"
+        $global:LASTEXITCODE = $null
         & $Parts[0] @arguments 2>&1 | ForEach-Object {
             if ($_ -is [System.Management.Automation.ErrorRecord]) {
                 Write-Host $_.Exception.Message
@@ -791,9 +901,13 @@ function Invoke-CommandLine {
                 Write-Host ([string]$_)
             }
         }
+        $commandExitCode = $LASTEXITCODE
         $ErrorActionPreference = $previousErrorActionPreference
-        if ($LASTEXITCODE -ne 0) {
-            throw "Command failed with exit code ${LASTEXITCODE}: $command"
+        if ($null -eq $commandExitCode) {
+            throw "Command did not report an exit code: $command"
+        }
+        if ($commandExitCode -ne 0) {
+            throw "Command failed with exit code ${commandExitCode}: $command"
         }
     } finally {
         $ErrorActionPreference = $previousErrorActionPreference
@@ -803,10 +917,16 @@ function Invoke-CommandLine {
     return [Math]::Round($timer.Elapsed.TotalSeconds, 2)
 }
 
+if ($MyInvocation.InvocationName -eq ".") {
+    return
+}
+
 $script:BuildTargets = New-Object "System.Collections.Generic.List[string]"
 $script:GuardrailTestsFilters = New-Object "System.Collections.Generic.List[string]"
 $script:QuaderTestsFilters = New-Object "System.Collections.Generic.List[string]"
 $script:ModelingDomainFilters = New-Object "System.Collections.Generic.List[string]"
+$script:SdkConsumerFilters = New-Object "System.Collections.Generic.List[string]"
+$script:SdkParityFilters = New-Object "System.Collections.Generic.List[string]"
 $script:ModelingLoopTargets = New-Object "System.Collections.Generic.List[string]"
 $script:ModelingLoopFilters = @{}
 $script:Reasons = New-Object "System.Collections.Generic.List[string]"
@@ -836,6 +956,12 @@ if (-not $NoTest) {
     if ($ModelingDomainFilters.Count -gt 0) {
         Add-Unique $script:BuildTargets "quader_modeling_domain_tests"
     }
+    if ($SdkConsumerFilters.Count -gt 0) {
+        Add-Unique $script:BuildTargets "quader_modeling_sdk_consumer_tests"
+    }
+    if ($SdkParityFilters.Count -gt 0) {
+        Add-Unique $script:BuildTargets "quader_modeling_sdk_parity_tests"
+    }
     foreach ($target in $ModelingLoopTargets) {
         Add-Unique $script:BuildTargets $target
     }
@@ -845,6 +971,8 @@ $buildTargets = @(Remove-RedundantBuildTargets @($BuildTargets))
 $guardrailTestsFilter = Join-GTestFilter @($GuardrailTestsFilters)
 $quaderTestsFilter = Join-GTestFilter @($QuaderTestsFilters)
 $modelingDomainFilter = Join-GTestFilter @($ModelingDomainFilters)
+$sdkConsumerFilter = Join-GTestFilter @($SdkConsumerFilters)
+$sdkParityFilter = Join-GTestFilter @($SdkParityFilters)
 $modelingLoopJoinedFilters = @{}
 foreach ($target in @($ModelingLoopTargets | Sort-Object -Unique)) {
     $modelingLoopJoinedFilters[$target] = Join-GTestFilter @($script:ModelingLoopFilters[$target])
@@ -872,6 +1000,12 @@ if (-not $NoTest) {
         if ($modelingDomainFilter -ne "") {
             $commands.Add(@((Join-Path $BuildDir "quader_modeling_domain_tests.exe"), "--gtest_color=no", "--gtest_filter=$modelingDomainFilter"))
         }
+        if ($sdkConsumerFilter -ne "") {
+            $commands.Add(@((Join-Path $BuildDir "quader_modeling_sdk_consumer_tests.exe"), "--gtest_color=no", "--gtest_filter=$sdkConsumerFilter"))
+        }
+        if ($sdkParityFilter -ne "") {
+            $commands.Add(@((Join-Path $BuildDir "quader_modeling_sdk_parity_tests.exe"), "--gtest_color=no", "--gtest_filter=$sdkParityFilter"))
+        }
         foreach ($target in @($ModelingLoopTargets | Sort-Object -Unique)) {
             $filter = $modelingLoopJoinedFilters[$target]
             if ($filter -ne "") {
@@ -889,6 +1023,8 @@ $baselineCommands += @(
     "cmake --build --preset $BuildPreset --target quader_guardrail_tests",
     "cmake --build --preset $BuildPreset --target quader_tests",
     "cmake --build --preset $BuildPreset --target quader_modeling_domain_tests",
+    "cmake --build --preset $BuildPreset --target quader_modeling_sdk_consumer_tests",
+    "cmake --build --preset $BuildPreset --target quader_modeling_sdk_parity_tests",
     "ctest --preset $TestPreset --output-on-failure"
 )
 if ($IncludeApp) {
@@ -949,6 +1085,8 @@ if ($MeasureFull) {
     $fullCommands += ,@("cmake", "--build", "--preset", $BuildPreset, "--target", "quader_guardrail_tests")
     $fullCommands += ,@("cmake", "--build", "--preset", $BuildPreset, "--target", "quader_tests")
     $fullCommands += ,@("cmake", "--build", "--preset", $BuildPreset, "--target", "quader_modeling_domain_tests")
+    $fullCommands += ,@("cmake", "--build", "--preset", $BuildPreset, "--target", "quader_modeling_sdk_consumer_tests")
+    $fullCommands += ,@("cmake", "--build", "--preset", $BuildPreset, "--target", "quader_modeling_sdk_parity_tests")
     $fullCommands += ,@("ctest", "--preset", $TestPreset, "--output-on-failure")
 
     $fullSeconds = 0.0

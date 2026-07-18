@@ -4,10 +4,10 @@
 // No permission is granted to use, copy, modify, distribute, or sublicense this
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
-#include <mesh/polygon/internal/quader_poly_document_topology_backend.hpp>
+#include <quader/modeling/neutral/polygon/internal/quader_poly_document_topology_backend.hpp>
 
-#include <mesh/polygon/internal/quader_poly_document_hull_plane_helpers.hpp>
-#include <mesh/polygon/internal/quader_poly_document_topology_helpers.hpp>
+#include <quader/modeling/neutral/polygon/internal/quader_poly_document_hull_plane_helpers.hpp>
+#include <quader/modeling/neutral/polygon/internal/quader_poly_document_topology_helpers.hpp>
 
 #if defined(QUADER_POLY_USE_OPENMESH)
 #include <OpenMesh/Core/Mesh/PolyMesh_ArrayKernelT.hh>

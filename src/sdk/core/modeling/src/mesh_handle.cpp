@@ -366,7 +366,6 @@ OperationReceipt MeshTransform::apply(TransformOptions options) {
 PreviewHandle MeshTransform::preview(TransformOptions options) {
   auto state = std::make_shared<ModelingPreviewState>();
   state->context = mesh_.context_;
-  state->id = make_id<PreviewTag>(1);
   state->kind = ModelingPreviewKind::Transform;
   state->selection = all_face_selection(mesh_);
   state->transform = options;
@@ -413,7 +412,11 @@ AuthoredPolygonPayload MeshPayloads::authored_polygon() const {
   return std::move(payload).value();
 }
 
-MeshPayload MeshPayloads::compile_mesh(MeshCompileOptions) const {
+MeshPayload MeshPayloads::compile_mesh(MeshCompileOptions options) const {
+  if (!require_owned_snapshot_lifetime(*mesh_.context_, options.lifetime,
+                                       "Mesh compilation")) {
+    return {};
+  }
   Result<PolygonDocument> document =
       mesh_.context_->session.document_copy(mesh_.id());
   if (!document.ok()) {
@@ -431,6 +434,10 @@ MeshPayload MeshPayloads::compile_mesh(MeshCompileOptions) const {
 MeshCompileResult
 MeshPayloads::compile_mesh_if_changed(std::uint64_t previous_revision,
                                       MeshCompileOptions options) const {
+  if (!require_owned_snapshot_lifetime(*mesh_.context_, options.lifetime,
+                                       "Mesh compilation")) {
+    return {.changed = false, .reused_previous = false};
+  }
   const RevisionStamp stamp = mesh_.revisions();
   if (stamp.content <= previous_revision) {
     return {.changed = false, .reused_previous = true};

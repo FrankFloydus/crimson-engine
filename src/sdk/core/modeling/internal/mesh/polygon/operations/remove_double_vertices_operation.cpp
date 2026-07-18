@@ -4,12 +4,12 @@
 // No permission is granted to use, copy, modify, distribute, or sublicense this
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
-#include <mesh/polygon/poly_operation.hpp>
-#include <mesh/polygon/poly_operation_descriptor.hpp>
+#include <quader/modeling/neutral/polygon/poly_operation.hpp>
+#include <quader/modeling/neutral/polygon/poly_operation_descriptor.hpp>
 
-#include <mesh/polygon/internal/quader_poly_document_hull_plane_helpers.hpp>
-#include <mesh/polygon/internal/quader_poly_document_knife_helpers.hpp>
-#include <mesh/polygon/internal/quader_poly_document_topology_helpers.hpp>
+#include <quader/modeling/neutral/polygon/internal/quader_poly_document_hull_plane_helpers.hpp>
+#include <quader/modeling/neutral/polygon/internal/quader_poly_document_knife_helpers.hpp>
+#include <quader/modeling/neutral/polygon/internal/quader_poly_document_topology_helpers.hpp>
 
 #include <algorithm>
 #include <cmath>

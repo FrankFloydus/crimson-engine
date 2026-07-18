@@ -66,11 +66,4 @@ void record_repeatable_transform(
 		const EditorSession& session,
 		const TransformDragState& drag,
 		bool duplicate_selected);
-[[nodiscard]] CommandResult execute_repeatable_transform(
-		EditorSession& session,
-		const RepeatTransformAction& action);
-[[nodiscard]] CommandResult execute_repeat_last_action(
-		EditorSession& session,
-		RepeatLastActionState& state);
-
 } // namespace quader_editor_core

@@ -195,6 +195,7 @@ table LockComponent {
 table ModelingObjectComponent {
   object_id:int = -1;
   material_slot:uint;
+  sdk_owned:bool = false;
 }
 
 table MeshComponent {

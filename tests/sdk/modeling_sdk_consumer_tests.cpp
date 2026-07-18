@@ -14,6 +14,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <memory>
 #include <optional>
 #include <span>
 #include <stdexcept>
@@ -25,6 +26,18 @@
 namespace {
 
 using namespace quader::modeling;
+
+/**
+ * Exercises Result storage without requiring a default-constructible value.
+ */
+struct NonDefaultResultValue {
+  explicit NonDefaultResultValue(int initial) : value(initial) {}
+  int value = 0;
+};
+
+static_assert(!std::is_default_constructible_v<NonDefaultResultValue>);
+static_assert(
+    std::is_default_constructible_v<Result<NonDefaultResultValue>>);
 
 static_assert(std::is_same_v<
               decltype(serialize_qdr_document(
@@ -521,6 +534,46 @@ TEST(ModelingSdkConsumerTests,
 }
 
 TEST(ModelingSdkConsumerTests,
+     OrientedBoxFactoryPreservesEightCornersAndRejectsInvalidInput) {
+  const std::array<Vec3, 8> corners{{
+      {-2.0F, -1.0F, -1.0F},
+      {0.0F, -1.0F, -3.0F},
+      {2.0F, -1.0F, -1.0F},
+      {0.0F, -1.0F, 1.0F},
+      {-2.0F, 2.0F, -1.0F},
+      {0.0F, 2.0F, -3.0F},
+      {2.0F, 2.0F, -1.0F},
+      {0.0F, 2.0F, 1.0F},
+  }};
+
+  Result<PolygonDocument> result =
+      PolygonDocument::make_box_from_corners(corners);
+  ASSERT_TRUE(result.ok()) << result.error_message();
+  EXPECT_EQ(result.value().vertex_count(), 8U);
+  EXPECT_EQ(result.value().face_count(), 6U);
+  Result<AuthoredPolygonPayload> payload = result.value().authored_payload();
+  ASSERT_TRUE(payload.ok()) << payload.error_message();
+  for (const Vec3 expected : corners) {
+    EXPECT_TRUE(std::any_of(
+        payload.value().positions.begin(), payload.value().positions.end(),
+        [expected](const Vec3 &position) {
+          return position.x == expected.x && position.y == expected.y &&
+                 position.z == expected.z;
+        }));
+  }
+
+  const std::array<Vec3, 7> too_few{};
+  Result<PolygonDocument> wrong_count =
+      PolygonDocument::make_box_from_corners(too_few);
+  EXPECT_FALSE(wrong_count.ok());
+
+  const std::array<Vec3, 8> degenerate{};
+  Result<PolygonDocument> zero_volume =
+      PolygonDocument::make_box_from_corners(degenerate);
+  EXPECT_FALSE(zero_volume.ok());
+}
+
+TEST(ModelingSdkConsumerTests,
      PrimitiveFactoriesHonorDensityCapsHemisphereMaterialAndWinding) {
   const MaterialId material = make_id<MaterialTag>(7U);
 
@@ -824,6 +877,58 @@ TEST(ModelingSdkConsumerTests, SessionSelectionUndoRedoUsesSdkTypesOnly) {
 
   Result<OperationResult> redo = session.redo();
   ASSERT_TRUE(redo.ok()) << redo.error_message();
+}
+
+TEST(ModelingSdkConsumerTests,
+     SessionBridgesTwoDocumentsInSurvivorSpaceAtomically) {
+  Result<PolygonDocument> first_document = PolygonDocument::make_box({});
+  Result<PolygonDocument> second_document = PolygonDocument::make_box({});
+  ASSERT_TRUE(first_document.ok()) << first_document.error_message();
+  ASSERT_TRUE(second_document.ok()) << second_document.error_message();
+
+  ModelingSession session;
+  Result<ObjectId> first =
+      session.add_document(std::move(first_document).value(), "First");
+  Result<ObjectId> second =
+      session.add_document(std::move(second_document).value(), "Second");
+  ASSERT_TRUE(first.ok()) << first.error_message();
+  ASSERT_TRUE(second.ok()) << second.error_message();
+
+  Result<PolygonDocument> first_copy = session.document_copy(first.value());
+  Result<PolygonDocument> second_copy = session.document_copy(second.value());
+  ASSERT_TRUE(first_copy.ok()) << first_copy.error_message();
+  ASSERT_TRUE(second_copy.ok()) << second_copy.error_message();
+  ASSERT_FALSE(first_copy.value().face_ids().empty());
+  ASSERT_FALSE(second_copy.value().face_ids().empty());
+  ASSERT_TRUE(
+      session.select_face(first.value(), first_copy.value().face_ids().front())
+          .ok());
+  ASSERT_TRUE(
+      session.select_face(second.value(), second_copy.value().face_ids().front())
+          .ok());
+
+  Result<OperationResult> bridged = session.bridge_objects(
+      first.value(), second.value(), Transform3{.origin = {4.0F, 0.0F, 0.0F}},
+      SelectionKind::Face, 3);
+  ASSERT_TRUE(bridged.ok()) << bridged.error_message();
+  ASSERT_TRUE(bridged.value().success) << bridged.value().message;
+  EXPECT_TRUE(bridged.value().changed);
+  EXPECT_TRUE(bridged.value().dirty.topology);
+  ASSERT_EQ(session.objects().size(), 1U);
+  EXPECT_EQ(session.objects().front().id, first.value());
+
+  Result<PolygonDocument> survivor = session.document_copy(first.value());
+  ASSERT_TRUE(survivor.ok()) << survivor.error_message();
+  Result<MeshPayload> mesh = survivor.value().compile_mesh();
+  ASSERT_TRUE(mesh.ok()) << mesh.error_message();
+  const std::optional<SdkMeshBounds> bounds = mesh_bounds(mesh.value());
+  ASSERT_TRUE(bounds.has_value());
+  EXPECT_NEAR(bounds->min.x, -1.0F, 0.0001F);
+  EXPECT_NEAR(bounds->max.x, 5.0F, 0.0001F);
+
+  ASSERT_TRUE(session.undo().ok());
+  EXPECT_EQ(session.objects().size(), 2U);
+  EXPECT_TRUE(session.document_copy(second.value()).ok());
 }
 
 TEST(ModelingSdkConsumerTests,
@@ -1625,16 +1730,19 @@ TEST(ModelingSdkConsumerTests,
      ModelingBatchCommitsReadableWorkflowAsSingleUndoStep) {
   ModelingApi quader = ModelingApi::create();
 
-  BatchResult batch = quader.batch("Create and bevel")
+  BatchResult batch = quader.batch("Create and translate")
                           .create_box({.name = "Batch Body"})
                           .as("body")
                           .with_mesh("body", [](MeshHandle mesh) {
-                            OperationReceipt bevel =
-                                mesh.edges()
-                                    .all()
-                                    .bevel({.width = 0.05F, .segments = 1})
-                                    .commit("Batch Bevel");
-                            ASSERT_TRUE(bevel.success) << bevel.error.message;
+                            OperationReceipt selected =
+                                mesh.faces().all().replace();
+                            ASSERT_TRUE(selected.success)
+                                << selected.error.message;
+                            OperationReceipt translated =
+                                mesh.transform().translate(
+                                    {0.0F, 0.25F, 0.0F});
+                            ASSERT_TRUE(translated.success)
+                                << translated.error.message;
                           })
                           .commit();
 
@@ -1980,6 +2088,13 @@ TEST(ModelingSdkConsumerTests,
   });
   ASSERT_TRUE(first.valid());
   ASSERT_TRUE(second.valid());
+  const AuthoredPolygonPayload survivor_before =
+      first.payloads().authored_polygon();
+  std::vector<FaceId> survivor_faces_before;
+  survivor_faces_before.reserve(survivor_before.faces.size());
+  for (const AuthoredPolygonFacePayload &face : survivor_before.faces) {
+    survivor_faces_before.push_back(face.id);
+  }
 
   const std::array<MeshHandle, 1> sources{second};
   OperationReceipt combined = first.combine_with(sources);
@@ -1989,6 +2104,11 @@ TEST(ModelingSdkConsumerTests,
   EXPECT_FALSE(second.valid());
   ASSERT_EQ(quader.mesh_summaries().size(), 1U);
   EXPECT_EQ(quader.mesh_summaries().front().id, first.id());
+  ASSERT_FALSE(combined.created.faces.empty());
+  for (FaceId created : combined.created.faces) {
+    EXPECT_EQ(std::ranges::find(survivor_faces_before, created),
+              survivor_faces_before.end());
+  }
 
   const std::optional<SdkMeshBounds> combined_bounds =
       mesh_bounds(first.payloads().compile_mesh());
@@ -2228,6 +2348,525 @@ TEST(ModelingSdkConsumerTests,
             std::string::npos);
   EXPECT_TRUE(unknown.mesh_summaries().empty());
   EXPECT_FALSE(unknown.can_undo());
+}
+
+TEST(ModelingSdkConsumerTests,
+     SessionHistorySnapshotRestorePublishesOneMonotonicTransition) {
+  ModelingSession session;
+  Result<PolygonDocument> first_document = PolygonDocument::make_box({});
+  ASSERT_TRUE(first_document.ok()) << first_document.error_message();
+  Result<ObjectId> first =
+      session.add_document(std::move(first_document).value(), "First");
+  ASSERT_TRUE(first.ok()) << first.error_message();
+  ASSERT_TRUE(session.select_object(first.value()).ok());
+  const ModelingSession snapshot = session;
+
+  Result<PolygonDocument> second_document = PolygonDocument::make_box({});
+  ASSERT_TRUE(second_document.ok()) << second_document.error_message();
+  Result<ObjectId> second =
+      session.add_document(std::move(second_document).value(), "Second");
+  ASSERT_TRUE(second.ok()) << second.error_message();
+  ASSERT_TRUE(session.select_object(second.value()).ok());
+  const std::uint64_t content_before_restore = session.content_revision();
+  const std::uint64_t selection_before_restore = session.selection_revision();
+
+  session.restore_snapshot_as_history_transition(snapshot);
+  EXPECT_GT(session.content_revision(), content_before_restore);
+  EXPECT_GT(session.selection_revision(), selection_before_restore);
+  EXPECT_TRUE(session.document_copy(first.value()).ok());
+  EXPECT_FALSE(session.document_copy(second.value()).ok());
+
+  Result<PolygonDocument> replacement_document = PolygonDocument::make_box({});
+  ASSERT_TRUE(replacement_document.ok())
+      << replacement_document.error_message();
+  Result<ObjectId> replacement = session.add_document(
+      std::move(replacement_document).value(), "Replacement");
+  ASSERT_TRUE(replacement.ok()) << replacement.error_message();
+  EXPECT_NE(replacement.value(), second.value());
+}
+
+TEST(ModelingSdkConsumerTests,
+     ResultArmsAndTypedSelectionsRejectContradictoryStates) {
+  Result<NonDefaultResultValue> uninitialized;
+  ASSERT_FALSE(uninitialized.ok());
+  EXPECT_EQ(uninitialized.error().code, ErrorCode::InternalError);
+  EXPECT_THROW(static_cast<void>(uninitialized.value()), std::logic_error);
+
+  Result<NonDefaultResultValue> success =
+      Result<NonDefaultResultValue>::success(NonDefaultResultValue{42});
+  ASSERT_TRUE(success.ok());
+  EXPECT_EQ(success.value().value, 42);
+  EXPECT_THROW(static_cast<void>(success.error()), std::logic_error);
+
+  Result<NonDefaultResultValue> normalized_failure =
+      Result<NonDefaultResultValue>::failure(Error{});
+  ASSERT_FALSE(normalized_failure.ok());
+  EXPECT_EQ(normalized_failure.error().code, ErrorCode::InternalError);
+
+  EXPECT_EQ(ObjectSelection{}.kind(), SelectionKind::Object);
+  EXPECT_EQ(VertexSelection{}.kind(), SelectionKind::Vertex);
+  EXPECT_EQ(EdgeSelection{}.kind(), SelectionKind::Edge);
+  EXPECT_EQ(FaceSelection{}.kind(), SelectionKind::Face);
+
+  SelectionUnion wrong_kind;
+  wrong_kind.kind = SelectionKind::Face;
+  EXPECT_THROW(
+      VertexSelection(std::shared_ptr<ModelingApiContext>{}, wrong_kind),
+      std::invalid_argument);
+
+  SelectionUnion mixed_payload;
+  mixed_payload.kind = SelectionKind::Vertex;
+  mixed_payload.faces.push_back(make_id<FaceTag>(1U));
+  EXPECT_THROW(
+      Selection(std::shared_ptr<ModelingApiContext>{}, mixed_payload),
+      std::invalid_argument);
+
+  ModelingApi quader = ModelingApi::create();
+  MeshHandle mesh = quader.create_box({.name = "Receipt"});
+  ASSERT_TRUE(mesh.valid());
+  OperationReceipt unchanged = mesh.rename("Receipt");
+  EXPECT_TRUE(unchanged.success);
+  EXPECT_FALSE(unchanged.changed);
+  EXPECT_EQ(unchanged.error.code, ErrorCode::Ok);
+  EXPECT_TRUE(unchanged.error.message.empty());
+}
+
+TEST(ModelingSdkConsumerTests,
+     TopologyIdentityNeverAliasesAcrossDeletionUndoBranchAndQdr) {
+  Result<PolygonDocument> direct_result = PolygonDocument::make_box({});
+  ASSERT_TRUE(direct_result.ok()) << direct_result.error_message();
+  PolygonDocument direct = std::move(direct_result).value();
+  const FaceId deleted_face = direct.face_ids().front();
+  ASSERT_TRUE(direct.select_face(deleted_face).ok());
+  Result<OperationResult> deleted = direct.delete_selection();
+  ASSERT_TRUE(deleted.ok()) << deleted.error_message();
+  ASSERT_TRUE(deleted.value().changed);
+
+  Result<OperationResult> stale_deleted = direct.select_face(deleted_face);
+  ASSERT_FALSE(stale_deleted.ok());
+  EXPECT_EQ(stale_deleted.error().code, ErrorCode::StaleId);
+  Result<AuthoredTopology> direct_topology = direct.authored_topology();
+  ASSERT_TRUE(direct_topology.ok()) << direct_topology.error_message();
+  Result<OperationResult> never_issued = direct.select_face(
+      make_id<FaceTag>(direct_topology.value().next_face_id + 100U));
+  ASSERT_FALSE(never_issued.ok());
+  EXPECT_EQ(never_issued.error().code, ErrorCode::InvalidId);
+
+  Result<std::vector<std::byte>> encoded =
+      serialize_qdr_authored_topology(direct);
+  ASSERT_TRUE(encoded.ok()) << encoded.error_message();
+  Result<PolygonDocument> decoded =
+      deserialize_qdr_authored_topology(encoded.value());
+  ASSERT_TRUE(decoded.ok()) << decoded.error_message();
+  Result<OperationResult> stale_after_qdr =
+      decoded.value().select_face(deleted_face);
+  ASSERT_FALSE(stale_after_qdr.ok());
+  EXPECT_EQ(stale_after_qdr.error().code, ErrorCode::StaleId);
+
+  Result<PolygonDocument> edge_result = PolygonDocument::make_box({});
+  ASSERT_TRUE(edge_result.ok()) << edge_result.error_message();
+  PolygonDocument edge_document = std::move(edge_result).value();
+  const EdgeKey removed_edge = edge_document.edge_ids().front();
+  ASSERT_TRUE(edge_document.select_all_faces().ok());
+  ASSERT_TRUE(edge_document.delete_selection().ok());
+  Result<OperationResult> stale_edge =
+      edge_document.select_edge(removed_edge);
+  ASSERT_FALSE(stale_edge.ok());
+  EXPECT_EQ(stale_edge.error().code, ErrorCode::StaleId);
+  Result<AuthoredTopology> empty_topology = edge_document.authored_topology();
+  ASSERT_TRUE(empty_topology.ok()) << empty_topology.error_message();
+  const VertexId never_a =
+      make_id<VertexTag>(empty_topology.value().next_vertex_id + 10U);
+  const VertexId never_b =
+      make_id<VertexTag>(empty_topology.value().next_vertex_id + 11U);
+  Result<OperationResult> invalid_edge =
+      edge_document.select_edge(make_edge_key(never_a, never_b));
+  ASSERT_FALSE(invalid_edge.ok());
+  EXPECT_EQ(invalid_edge.error().code, ErrorCode::InvalidId);
+
+  Result<PolygonDocument> copy_source_result = PolygonDocument::make_box({});
+  ASSERT_TRUE(copy_source_result.ok()) << copy_source_result.error_message();
+  PolygonDocument copy_source = std::move(copy_source_result).value();
+  PolygonDocument independent_copy = copy_source;
+  const FaceId copy_face = copy_source.face_ids().front();
+  ASSERT_TRUE(copy_source.select_face(copy_face).ok());
+  ASSERT_TRUE(independent_copy.select_face(copy_face).ok());
+  Result<OperationResult> source_extrude =
+      copy_source.extrude_selected_faces(0.2F);
+  Result<OperationResult> copy_extrude =
+      independent_copy.extrude_selected_faces(0.4F);
+  ASSERT_TRUE(source_extrude.ok()) << source_extrude.error_message();
+  ASSERT_TRUE(copy_extrude.ok()) << copy_extrude.error_message();
+  EXPECT_EQ(source_extrude.value().created.faces,
+            copy_extrude.value().created.faces);
+
+  Result<PolygonDocument> initial_result = PolygonDocument::make_box({});
+  ASSERT_TRUE(initial_result.ok()) << initial_result.error_message();
+  ModelingSession session;
+  Result<ObjectId> object =
+      session.add_document(std::move(initial_result).value(), "Identity Box");
+  ASSERT_TRUE(object.ok()) << object.error_message();
+  Result<PolygonDocument> stale_copy = session.document_copy(object.value());
+  ASSERT_TRUE(stale_copy.ok()) << stale_copy.error_message();
+
+  Result<PolygonDocument> future = session.document_copy(object.value());
+  ASSERT_TRUE(future.ok()) << future.error_message();
+  const FaceId source_face = future.value().face_ids().front();
+  ASSERT_TRUE(future.value().select_face(source_face).ok());
+  Result<OperationResult> future_edit =
+      future.value().extrude_selected_faces(0.25F);
+  ASSERT_TRUE(future_edit.ok()) << future_edit.error_message();
+  ASSERT_FALSE(future_edit.value().created.faces.empty());
+  const FaceId issued_on_abandoned_branch =
+      future_edit.value().created.faces.front();
+  OperationResult future_receipt = future_edit.value();
+  ASSERT_TRUE(session.commit_document(object.value(),
+                                      std::move(future).value(),
+                                      std::move(future_receipt))
+                  .ok());
+  OperationResult stale_commit_receipt;
+  stale_commit_receipt.changed = true;
+  stale_commit_receipt.dirty.topology = true;
+  Result<OperationResult> stale_commit = session.commit_document(
+      object.value(), std::move(stale_copy).value(), stale_commit_receipt);
+  ASSERT_FALSE(stale_commit.ok());
+  EXPECT_EQ(stale_commit.error().code, ErrorCode::StaleId);
+  ASSERT_TRUE(session.undo().ok());
+
+  Result<PolygonDocument> branch = session.document_copy(object.value());
+  ASSERT_TRUE(branch.ok()) << branch.error_message();
+  ASSERT_TRUE(branch.value().select_face(source_face).ok());
+  Result<OperationResult> branch_edit =
+      branch.value().extrude_selected_faces(0.5F);
+  ASSERT_TRUE(branch_edit.ok()) << branch_edit.error_message();
+  ASSERT_FALSE(branch_edit.value().created.faces.empty());
+  EXPECT_EQ(std::ranges::find(branch_edit.value().created.faces,
+                              issued_on_abandoned_branch),
+            branch_edit.value().created.faces.end());
+  OperationResult branch_receipt = branch_edit.value();
+  ASSERT_TRUE(session.commit_document(object.value(),
+                                      std::move(branch).value(),
+                                      std::move(branch_receipt))
+                  .ok());
+
+  Result<OperationResult> abandoned_id =
+      session.select_face(object.value(), issued_on_abandoned_branch);
+  ASSERT_FALSE(abandoned_id.ok());
+  EXPECT_EQ(abandoned_id.error().code, ErrorCode::StaleId);
+}
+
+TEST(ModelingSdkConsumerTests,
+     PublicAuthoredTopologyRoundTripPreservesExactPortablePayload) {
+  Result<PolygonDocument> document_result = PolygonDocument::make_box({});
+  ASSERT_TRUE(document_result.ok()) << document_result.error_message();
+  PolygonDocument document = std::move(document_result).value();
+  const FaceId removed = document.face_ids().front();
+  ASSERT_TRUE(document.select_face(removed).ok());
+  ASSERT_TRUE(document.delete_selection().ok());
+
+  Result<AuthoredTopology> exported = document.authored_topology();
+  ASSERT_TRUE(exported.ok()) << exported.error_message();
+  Result<PolygonDocument> imported =
+      PolygonDocument::from_authored_topology(exported.value());
+  ASSERT_TRUE(imported.ok()) << imported.error_message();
+  Result<AuthoredTopology> reexported = imported.value().authored_topology();
+  ASSERT_TRUE(reexported.ok()) << reexported.error_message();
+  EXPECT_EQ(reexported.value().next_vertex_id,
+            exported.value().next_vertex_id);
+  EXPECT_EQ(reexported.value().next_face_id, exported.value().next_face_id);
+  EXPECT_EQ(reexported.value().vertices.size(), exported.value().vertices.size());
+  EXPECT_EQ(reexported.value().faces.size(), exported.value().faces.size());
+  EXPECT_EQ(reexported.value().hard_normal_edges,
+            exported.value().hard_normal_edges);
+
+  Result<std::vector<std::byte>> original_bytes =
+      serialize_qdr_authored_topology(document);
+  Result<std::vector<std::byte>> imported_bytes =
+      serialize_qdr_authored_topology(imported.value());
+  ASSERT_TRUE(original_bytes.ok()) << original_bytes.error_message();
+  ASSERT_TRUE(imported_bytes.ok()) << imported_bytes.error_message();
+  EXPECT_EQ(imported_bytes.value(), original_bytes.value());
+}
+
+TEST(ModelingSdkConsumerTests,
+     PreviewHandlesShareOneRegistryAndReleaseExactlyOnce) {
+  ModelingApi quader = ModelingApi::create({
+      .error_policy = ErrorPolicy::StoreLastError,
+  });
+  MeshHandle mesh = quader.create_box({.name = "Preview Registry"});
+  ASSERT_TRUE(mesh.valid());
+  ASSERT_TRUE(mesh.faces().all().replace().success);
+
+  PreviewHandle first = mesh.transform().preview();
+  ASSERT_TRUE(first.active());
+  ASSERT_TRUE(first.id().valid());
+  PreviewHandle copied = first;
+  EXPECT_EQ(copied.id(), first.id());
+  EXPECT_TRUE(copied.active());
+  EXPECT_TRUE(quader.preview().active());
+  EXPECT_EQ(quader.preview().summary().id, first.id());
+
+  PreviewHandle rejected = mesh.transform().preview();
+  EXPECT_FALSE(rejected.active());
+  EXPECT_FALSE(rejected.id().valid());
+  ASSERT_NE(quader.last_error(), nullptr);
+  EXPECT_EQ(quader.last_error()->code, ErrorCode::InvalidArgument);
+
+  OperationReceipt blocked_undo = quader.undo();
+  EXPECT_FALSE(blocked_undo.success);
+  EXPECT_TRUE(first.active());
+  ASSERT_TRUE(copied.cancel().success);
+  EXPECT_FALSE(first.active());
+  EXPECT_FALSE(quader.preview().active());
+  EXPECT_FALSE(first.cancel().success);
+
+  quader.clear_error();
+  PreviewId released_id{};
+  {
+    PreviewHandle owner = mesh.transform().preview();
+    ASSERT_TRUE(owner.active());
+    released_id = owner.id();
+    {
+      PreviewHandle second_owner = owner;
+      EXPECT_TRUE(second_owner.active());
+    }
+    EXPECT_TRUE(owner.active());
+  }
+  EXPECT_FALSE(quader.preview().active());
+
+  PreviewHandle next = mesh.transform().preview();
+  ASSERT_TRUE(next.active());
+  EXPECT_NE(next.id(), released_id);
+  EXPECT_TRUE(next.cancel().success);
+
+  quader.clear_error();
+  TransformTool move = quader.tools().activate_move_tool();
+  OperationReceipt direct_begin = move.begin({1.0F, 0.0F, 0.0F});
+  ASSERT_TRUE(direct_begin.success) << direct_begin.error.message;
+  ASSERT_TRUE(quader.preview().active());
+  PreviewHandle blocked_by_direct_preview = mesh.transform().preview();
+  EXPECT_FALSE(blocked_by_direct_preview.active());
+  EXPECT_TRUE(quader.preview().cancel().success);
+  EXPECT_FALSE(quader.preview().active());
+}
+
+TEST(ModelingSdkConsumerTests,
+     InvalidFacadesAndOwnedSnapshotsStaySafeAcrossSessionMutation) {
+  Result<PolygonDocument> unbound_document = PolygonDocument::make_box({});
+  ASSERT_TRUE(unbound_document.ok()) << unbound_document.error_message();
+  CheckedModelingApi unbound;
+  Result<MeshHandle> unbound_add = unbound.add_document(
+      std::move(unbound_document).value(), "Unbound");
+  ASSERT_FALSE(unbound_add.ok());
+  EXPECT_EQ(unbound_add.error().code, ErrorCode::InvalidArgument);
+
+  MeshHandle invalid_mesh;
+  EXPECT_FALSE(invalid_mesh.valid());
+  EXPECT_FALSE(invalid_mesh.id().valid());
+  EXPECT_TRUE(invalid_mesh.summary().name.empty());
+  EXPECT_THROW(static_cast<void>(invalid_mesh.rename("No owner")),
+               ModelingException);
+
+  Result<PolygonDocument> document = PolygonDocument::make_box({});
+  ASSERT_TRUE(document.ok()) << document.error_message();
+  ModelingSession session;
+  Result<ObjectId> object =
+      session.add_document(std::move(document).value(), "Snapshot");
+  ASSERT_TRUE(object.ok()) << object.error_message();
+  Result<std::shared_ptr<const PolygonDocument>> snapshot =
+      session.document_snapshot(object.value());
+  ASSERT_TRUE(snapshot.ok()) << snapshot.error_message();
+  const std::vector<FaceId> retained_faces = snapshot.value()->face_ids();
+  ASSERT_FALSE(retained_faces.empty());
+
+  ASSERT_TRUE(session.remove_object(object.value()).ok());
+  Result<PolygonDocument> replacement = PolygonDocument::make_box({});
+  ASSERT_TRUE(replacement.ok()) << replacement.error_message();
+  ASSERT_TRUE(
+      session.add_document(std::move(replacement).value(), "Replacement").ok());
+  ASSERT_TRUE(session.undo().ok());
+  EXPECT_EQ(snapshot.value()->face_ids(), retained_faces);
+  EXPECT_TRUE(snapshot.value()->validate().ok());
+}
+
+TEST(ModelingSdkConsumerTests,
+     SnapshotLifetimeRequestsAreOwnedOrExplicitlyUnsupported) {
+  ModelingApi quader = ModelingApi::create({
+      .error_policy = ErrorPolicy::StoreLastError,
+  });
+  MeshHandle mesh = quader.create_box({.name = "Lifetime"});
+  ASSERT_TRUE(mesh.valid());
+
+  MeshPayload owned = mesh.payloads().compile_mesh({
+      .lifetime = SnapshotLifetime::Owned,
+  });
+  ASSERT_FALSE(owned.vertices.empty());
+  const std::size_t owned_vertex_count = owned.vertices.size();
+  RenderSnapshotPayload owned_scene = quader.render().scene_snapshot();
+  EXPECT_EQ(owned_scene.lifetime, SnapshotLifetime::Owned);
+  ASSERT_FALSE(owned_scene.meshes.empty());
+
+  MeshPayload pinned = mesh.payloads().compile_mesh({
+      .lifetime = SnapshotLifetime::Pinned,
+  });
+  EXPECT_TRUE(pinned.vertices.empty());
+  ASSERT_NE(quader.last_error(), nullptr);
+  EXPECT_EQ(quader.last_error()->code, ErrorCode::UnsupportedOperation);
+
+  quader.clear_error();
+  MeshCompileResult borrowed = mesh.payloads().compile_mesh_if_changed(
+      mesh.revisions().content,
+      {.lifetime = SnapshotLifetime::BorrowedSameFrame});
+  EXPECT_FALSE(borrowed.changed);
+  EXPECT_FALSE(borrowed.reused_previous);
+  ASSERT_NE(quader.last_error(), nullptr);
+  EXPECT_EQ(quader.last_error()->code, ErrorCode::UnsupportedOperation);
+
+  quader.clear_error();
+  RenderSnapshotPayload unsupported_scene = quader.render().scene_snapshot({
+      .lifetime = SnapshotLifetime::Pinned,
+  });
+  EXPECT_EQ(unsupported_scene.lifetime, SnapshotLifetime::Owned);
+  EXPECT_TRUE(unsupported_scene.meshes.empty());
+  ASSERT_NE(quader.last_error(), nullptr);
+  EXPECT_EQ(quader.last_error()->code, ErrorCode::UnsupportedOperation);
+
+  ASSERT_TRUE(mesh.faces().all().replace().success);
+  PreviewHandle preview = mesh.transform().preview();
+  ASSERT_TRUE(preview.active());
+  quader.clear_error();
+  ToolPreviewPayload unsupported_preview = preview.payload({
+      .lifetime = SnapshotLifetime::BorrowedSameFrame,
+  });
+  EXPECT_FALSE(unsupported_preview.valid);
+  ASSERT_NE(quader.last_error(), nullptr);
+  EXPECT_EQ(quader.last_error()->code, ErrorCode::UnsupportedOperation);
+  ASSERT_TRUE(preview.cancel().success);
+
+  ASSERT_TRUE(mesh.destroy().success);
+  EXPECT_EQ(owned.vertices.size(), owned_vertex_count);
+  EXPECT_FALSE(owned.indices.empty());
+  EXPECT_FALSE(owned_scene.meshes.front().vertices.empty());
+}
+
+TEST(ModelingSdkConsumerTests,
+     CheckedBatchReceiptsAreAtomicAndGuardReentrantMutation) {
+  ModelingApi successful = ModelingApi::create({
+      .error_policy = ErrorPolicy::StoreLastError,
+  });
+  BatchResult no_op =
+      successful.batch("Checked no-op")
+          .create_box({.name = "Body"})
+          .as("body")
+          .with_mesh_checked("body", [](MeshHandle mesh) {
+            return mesh.rename("Body");
+          })
+          .commit();
+  ASSERT_TRUE(no_op.success()) << no_op.receipt.error.message;
+  ASSERT_EQ(no_op.step_receipts.size(), 2U);
+  EXPECT_TRUE(no_op.step_receipts.front().changed);
+  EXPECT_FALSE(no_op.step_receipts.back().changed);
+  EXPECT_EQ(successful.mesh_summaries().size(), 1U);
+  EXPECT_EQ(successful.revisions().content, no_op.receipt.revisions.content);
+
+  ModelingApi mismatch = ModelingApi::create({
+      .error_policy = ErrorPolicy::StoreLastError,
+  });
+  BatchResult mismatched =
+      mismatch.batch("Mismatched receipt")
+          .create_box({.name = "Transient"})
+          .as("body")
+          .with_mesh_checked("body", [](MeshHandle) {
+            OperationReceipt receipt;
+            receipt.changed = true;
+            receipt.dirty.topology = true;
+            return receipt;
+          })
+          .commit();
+  EXPECT_FALSE(mismatched.success());
+  EXPECT_TRUE(mismatched.meshes.empty());
+  EXPECT_TRUE(mismatch.mesh_summaries().empty());
+  EXPECT_FALSE(mismatch.can_undo());
+
+  ModelingApi reentrant = ModelingApi::create({
+      .error_policy = ErrorPolicy::StoreLastError,
+  });
+  BatchResult blocked =
+      reentrant.batch("Blocked undo")
+          .create_box({.name = "Transient"})
+          .as("body")
+          .with_mesh_checked("body", [&reentrant](MeshHandle) {
+            return reentrant.undo();
+          })
+          .commit();
+  EXPECT_FALSE(blocked.success());
+  EXPECT_TRUE(blocked.meshes.empty());
+  EXPECT_TRUE(reentrant.mesh_summaries().empty());
+  EXPECT_FALSE(reentrant.can_undo());
+
+  reentrant.clear_error();
+  BatchResult unrelated =
+      reentrant.batch("Blocked unrelated create")
+          .create_box({.name = "Scheduled"})
+          .as("scheduled")
+          .with_mesh_checked("scheduled", [&reentrant](MeshHandle) {
+            static_cast<void>(
+                reentrant.create_box({.name = "Unscheduled"}));
+            return OperationReceipt{};
+          })
+          .commit();
+  EXPECT_FALSE(unrelated.success());
+  EXPECT_TRUE(unrelated.meshes.empty());
+  EXPECT_TRUE(reentrant.mesh_summaries().empty());
+  EXPECT_FALSE(reentrant.can_undo());
+
+  reentrant.clear_error();
+  BatchResult nested =
+      reentrant.batch("Blocked nested batch")
+          .create_box({.name = "Outer"})
+          .as("outer")
+          .with_mesh_checked("outer", [&reentrant](MeshHandle) {
+            return reentrant.batch("Nested")
+                .create_box({.name = "Inner"})
+                .as("inner")
+                .commit()
+                .receipt;
+          })
+          .commit();
+  EXPECT_FALSE(nested.success());
+  EXPECT_TRUE(nested.meshes.empty());
+  EXPECT_TRUE(reentrant.mesh_summaries().empty());
+  EXPECT_FALSE(reentrant.can_undo());
+
+  BatchResult recovered =
+      reentrant.batch("Recovered")
+          .create_box({.name = "Permanent"})
+          .as("permanent")
+          .commit();
+  EXPECT_TRUE(recovered.success()) << recovered.receipt.error.message;
+  EXPECT_EQ(reentrant.mesh_summaries().size(), 1U);
+}
+
+TEST(ModelingSdkConsumerTests,
+     UnsupportedSdkPlaceholdersAreDeprecatedAndNotAdvertised) {
+  ModelingApi quader = ModelingApi::create({
+      .error_policy = ErrorPolicy::StoreLastError,
+  });
+  const std::vector<ToolDescriptor> tools = quader.tools().catalog();
+  EXPECT_EQ(std::ranges::find_if(tools, [](const ToolDescriptor &tool) {
+              return tool.id == "pivot";
+            }),
+            tools.end());
+
+  PivotTool pivot = quader.tools().activate_pivot_tool();
+  OperationReceipt pivot_result = pivot.commit();
+  EXPECT_FALSE(pivot_result.success);
+  EXPECT_EQ(pivot_result.error.code, ErrorCode::UnsupportedOperation);
+
+  ProfilingApi profiling = quader.profiling();
+  Result<ProfilingReport> report = profiling.report();
+  ASSERT_FALSE(report.ok());
+  EXPECT_EQ(report.error().code, ErrorCode::UnsupportedOperation);
 }
 
 } // namespace

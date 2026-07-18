@@ -8,15 +8,19 @@ file except through prior written authorization from Francesco Di Blasi.
 -->
 # Quader Architecture Review Against The Portable Modeling SDK Guide
 
-Updated: 2026-07-13
+Updated: 2026-07-18
 
-Reference: `C:\Users\Drako\Desktop\modeling_app_architecture_guide.md`
+Historical provenance: `modeling_app_architecture_guide.md` was an external audit input. It is not
+repository authority and is not required to execute the migration.
 
-This review is the active deterministic plan for aligning Quader with the reference guide. It
-consolidates the 10-agent audit and a local repository pass. The final direction is fixed:
+This review is Quader's fixed architecture-direction authority. It consolidates the 10-agent audit
+and a local repository pass. Executable task IDs, dependencies, acceptance state, and progress live
+only in the linked root `REFACTORING_PLAN.md`; historical `AR-*` phases below are evidence and
+crosswalk labels, not a second task queue. The final direction is fixed:
 
 - Quader remains the native standalone Windows editor.
-- A new app-owned portable modeling core is created under `src/sdk/core/modeling`.
+- The app-owned portable modeling core under `src/sdk/core/modeling` is the modeling source of
+  truth.
 - The SDK namespace is `quader::modeling`.
 - `QuaderEditorApi` and `QuaderApi` remain native host/editor APIs.
 - The old copied SDK workflow stays banned.
@@ -25,17 +29,21 @@ consolidates the 10-agent audit and a local repository pass. The final direction
 
 ## Executive Verdict
 
-Quader already has strong native-app architecture. The public editor APIs are coherent. Mesh and
-polygon code is mostly engine-clean. Rendering has a real snapshot path and keeps Filament in the
-render owner. Viewport input already has semantic, toolkit-neutral structures below the UI adapter.
-Modeling-domain tests and guardrails are broad. QDR project save/open is correctly native: file
-dialogs and project session state stay outside low-level format code.
+Quader has a completed portable-modeling ownership boundary inside its native-app architecture.
+The public editor APIs remain coherent host facades. Canonical mesh and polygon behavior is
+SDK-owned, while source-only neutral declarations let native owner targets consume the same types
+without exposing SDK-private headers. Rendering consumes neutral snapshots and keeps Filament in
+the render owner. Viewport input is semantic and toolkit-neutral below the UI adapter. Modeling
+domain tests, portable consumer/parity checks, and architecture guardrails protect the boundary.
+QDR project save/open remains correctly split: portable document IO is SDK-owned, while file
+dialogs, durable native writes, and project-session state remain native.
 
 The current native host shell is retained Qt Widgets: `QApplication` owns the event loop,
 `UISystem` composes a `QMainWindow` with `QDockWidget` panels under the stock `Fusion` style, and
 the central
 `QtViewportPanel` embeds one to four native-child `QWindow` Filament surfaces. This is the host
-baseline for the SDK migration; it does not move UI or renderer concepts into the portable core.
+boundary around the completed SDK ownership model; it does not move UI or renderer concepts into
+the portable core.
 
 Quader now has a real portable modeling SDK boundary under `src/sdk/core/modeling`: the umbrella
 header, geometry, polygon, QDR document, runtime, install/export package, examples, SDK-only build,
@@ -44,16 +52,20 @@ the same canonical portable sources. The SDK-only vcpkg path disables default fe
 only the test dependency, so it does not install Qt, EnTT, GLM, Sentry, or other native-host
 packages.
 
-The remaining work is adapter migration and contract depth, not creation of the boundary. Native
-runtime/editor DTOs still carry scene, asset, viewport, overlay, and history concepts. The native
-public APIs remain intentionally host-facing while overlapping modeling behavior moves behind SDK
-owners. Render snapshot lifetime, early dirty gates, parity depth, golden fixtures, and seeded
-property tests remain active migration work.
+Every production modeling operation family now routes through the workspace-local SDK
+`ModelingSession` owned by the `ModelingSdkProjectionAdapter`. Native commands and tools adapt
+intent once, then publish SDK receipts to scene, assets, selection, history, and renderer-neutral
+snapshots through explicit transactions. The replaced native runtime, dual-write paths, operation
+catalog, mesh mirrors, and migration-only box fallback are gone. Native DTOs retain only host-owned
+scene, asset, viewport, overlay, project, and platform concepts. Revision gates, parity transcripts,
+operation-specific behavior tests, QDR compatibility fixtures, external consumers, and the final
+CI matrix protect the completed boundary.
 
 ## Resolved Architecture Decisions
 
-1. Active plan: continue migrating modeling truth into the app-owned portable core described in
-   this review.
+1. Direction authority: keep modeling truth in the app-owned portable core described in this
+   review; any follow-up architecture work uses `REFACTORING_PLAN.md` task IDs or a separately
+   approved successor plan.
 2. Source path: `src/sdk/core/modeling`.
 3. Public namespace: `quader::modeling`.
 4. Umbrella header: `quader/modeling/modeling.hpp`.
@@ -81,8 +93,9 @@ property tests remain active migration work.
     CMake options, targets, and tests, not old SDK presets.
 15. Test policy: SDK portability is proven by a standalone consumer test that links only SDK
     targets.
-16. Documentation policy: root `AGENTS.md` and this review hold the architecture plan. New
-    architecture guidance belongs in these files or nearest nested `AGENTS.md` files.
+16. Documentation policy: root `AGENTS.md` and this review hold fixed architecture guidance;
+    `REFACTORING_PLAN.md` alone holds executable refactoring tasks and progress. New local owner
+    guidance belongs in the nearest nested `AGENTS.md` file.
 17. Native UI baseline: keep the `QApplication`/`QMainWindow`/`QDockWidget` shell on stock Qt
     `Fusion` with `fusion_style->standardPalette()` and no QSS, app-authored global palette, font,
     or custom-chrome theme overrides. A local `QPalette::Button` role is reserved for semantic
@@ -105,8 +118,9 @@ The guide translates into these Quader-specific constraints:
 4. Low-level mesh APIs and high-level session APIs both exist. Low-level APIs operate on mesh or
    polygon documents. High-level APIs own selection, history, previews, scene membership inside the
    SDK, dirty state, and change tracking.
-5. Tools are host-agnostic. SDL, ImGui, Qt, and platform events are translated into SDK input DTOs
-   at host boundaries.
+5. Tools are host-agnostic. Raw Qt/platform events become canonical Quader input at the UI boundary;
+   SDK tool calls receive the existing `ViewportHostInputSnapshot` and `ViewportCameraSnapshot`
+   DTOs through the viewport-owned SDK adapter.
 6. Rendering is snapshot-based. The SDK exposes renderer-neutral mesh, material, overlay, selection,
    and dirty payloads. Filament is one adapter.
 7. Expected failures are structured. Invalid IDs, stale IDs, invalid settings, non-manifold
@@ -127,8 +141,7 @@ The guide translates into these Quader-specific constraints:
   scripting surfaces.
 - Public API guardrails keep owner internals out of public API headers.
 
-This remains a native host layer. It becomes an adapter over SDK behavior where modeling behavior
-overlaps.
+This remains a native host layer and adapts modeling intent to SDK-owned behavior.
 
 ### Mesh And Polygon Core
 
@@ -136,10 +149,28 @@ overlaps.
 
 - geometry, polygon documents, topology, picking, compilation, and operations are isolated from
   the Qt host UI, legacy UI backends, and Filament;
-- native `src/mesh` headers mirror the canonical headers only as a transitional include boundary;
+- source-only declarations under
+  `src/sdk/core/modeling/neutral/include/quader/modeling/neutral` are shared by the SDK
+  implementation and native modeling owner targets without exposing SDK-private headers;
+- the former `src/mesh` mirror tree is deleted and guarded against reintroduction;
 - `quader_modeling_polygon` links to geometry, optional OpenMesh, and profiling support;
 - modeling-domain tests cover polygon documents, liveness, validation, operations, QDR document IO,
   runtime operations, runtime tools, and editor metadata.
+
+### Final Compatibility Disposition
+
+The migration has no selected-owner switch, dual modeling runtime, native mesh mirror, or direct
+box-commit fallback. `ModelingSdkProjectionAdapter`, viewport host/input adapters, and render
+projection adapters are the supported final host boundaries, not temporary exceptions.
+
+Four portable SDK 0.1.x shims remain deliberately supported and are installed with the package
+ledger at `src/sdk/core/modeling/COMPATIBILITY.md`: the borrowed document pointer, the void batch
+callback, and the unsupported pivot/profiling facades. Each has a safe replacement, consumer
+behavior coverage, an SDK owner, and a 0.2.0 removal review. The eight deprecated native typed
+command spellings in `quader_command_ids.hpp` remain source aliases for their identical canonical
+IDs; `ProgrammaticApiGuardrailTests.PublicCommandAliasesStayExplicitAndOutOfTypedCatalog` prevents
+them from becoming duplicate catalog truth. Serialized QDR/project/settings compatibility readers
+remain data-compatibility policy and are not refactor adapters.
 
 ### Command, History, And Preview Ownership
 
@@ -149,7 +180,8 @@ commands, modeling mementos, and preview command services are established owners
 begin/update/commit/cancel behavior has deep coverage for transform and generated topology
 workflows.
 
-This behavior maps to the SDK session contract after DTO hygiene is complete.
+These host services now adapt to the SDK session contract while retaining native command and UI
+policy.
 
 ### Rendering
 
@@ -172,6 +204,8 @@ Viewport input is partly host-neutral:
   resolved shortcuts;
 - `src/ui/qt_input_adapter.*` converts Qt key, pointer, wheel, modifier, focus, and text-capture
   state at the host boundary;
+- `src/viewport/modeling_sdk_viewport_input_adapter.*` converts canonical viewport state into the
+  public SDK `ViewportHostInputSnapshot`/`ViewportCameraSnapshot` DTOs;
 - `QuaderCommandsApi` owns command/keybinding APIs and user shortcut persistence.
 
 ### Tests And Guardrails
@@ -223,7 +257,7 @@ Current portable targets are `quader_modeling_sdk_geometry`,
 
 ## Main Gaps
 
-### Completed P0 - SDK Build Boundary
+### SDK Build Boundary Already Established
 
 Required state:
 
@@ -244,7 +278,7 @@ Current state:
 - SDK-only vcpkg configuration installs only the `tests` feature dependency;
 - dependency and public-header guardrails reject native owner leakage.
 
-### P1 - Native Adapter Extraction Is Incomplete
+### Native Adapter Extraction Is Incomplete
 
 Current candidate runtime/modeling headers carry app concepts:
 
@@ -261,12 +295,15 @@ Required state:
 - runtime object to scene entity mapping lives in native adapter code;
 - `ModelingSessionService` stays native and shrinks into an adapter over SDK runtime owners.
 
-### P1 - Operation Results And IDs Are Not SDK-Grade
+### Topology Identity And Result Consistency Still Need Hardening
 
-Current polygon core uses raw `ElementId`, typed adapters for vertices/faces, raw edge endpoint
-pairs, per-operation selection mutation, and `OperationResult` with limited fields.
+Public SDK IDs are already typed/generational, SDK operations already return structured
+`Result<T>`, and operation results already carry dirty flags, element deltas, diagnostics, and
+selection remaps. The remaining gap is semantic enforcement: the polygon core still stores raw
+`ElementId`, public topology generations are effectively fixed at one, undo branching can reuse an
+issued index, and result/typed-selection values can represent inconsistent arms or kinds.
 
-Required state:
+Remaining required state:
 
 - public IDs are typed and generational;
 - stale ID detection is part of SDK API behavior;
@@ -275,7 +312,7 @@ Required state:
 - results carry dirty flags and selection remap data;
 - destructive operation remap behavior is centralized.
 
-### P1 - QDR And OBJ IO Are Native-App Shaped
+### QDR And OBJ IO Are Native-App Shaped
 
 Current native behavior is correct for the app, but not portable:
 
@@ -293,12 +330,15 @@ Required state:
 - OBJ writer consumes neutral mesh spans/views;
 - Win32 durable replace stays native.
 
-### P2 - Render Snapshots Need Stronger Contracts
+### Render Snapshots Need Stronger Contracts
 
 Current render snapshots are useful but still too coupled:
 
-- render mesh and overlay snapshots contain same-frame spans into live app-owned data;
-- snapshot building happens before some revision gates skip work;
+- scene mesh/light records are value inputs and the scene source/revision gates already reuse
+  unchanged snapshots;
+- overlay snapshots still expose authored `quader_poly::Document`/topology spans and need an
+  explicit stable or same-frame lifetime at the neutral seam;
+- some overlay/material preparation still occurs before the narrowest owner revision gate;
 - overlay builders traverse authored polygon topology and include modeling/editor concepts;
 - `SceneRenderBridge` request types expose modeling selection concepts;
 - material/texture services still have live `AssetRegistry` overloads.
@@ -311,7 +351,7 @@ Required state:
 - dirty gates run before expensive snapshot construction;
 - material payloads become renderer-neutral PBR records.
 
-### P2 - UI And Viewport Boundary Is Too Wide
+### UI And Viewport Boundary Is Too Wide
 
 The host boundary is now explicit: `UISystem` owns a retained Qt shell, `QtViewportPanel` presents
 the one-to-four pane workspace, `QtViewportSurface` owns native-child surfaces, and the
@@ -329,12 +369,12 @@ Required state:
   belongs below the host boundary;
 - Qt event and widget types stay at the UI adapter boundary.
 
-### P2 - Performance Dirty Gates Run Too Late
+### Some Performance Dirty Gates Still Run Too Late
 
-Observed hot paths:
+Already-established scene-source matching, transform-only refresh, overlay snapshot caching, and
+retained-UI revision gates are protected by deterministic tests. Remaining observed hot paths are:
 
 - transform preview sync can compile every modeling object;
-- render snapshots rebuild every renderable frame before sync skips work;
 - hover cache validation hashes whole mesh geometry on mouse move;
 - preview transactions copy whole session state;
 - tool preview meshes regenerate and then get hashed by render caches.
@@ -346,21 +386,21 @@ Required state:
 - render API can reuse previous snapshots;
 - picking signatures are cached by object revision, transform, and pick-affecting options.
 
-### P2 - SDK Portability Coverage Needs More Depth
+### SDK Portability Coverage Needs Operation-Specific Depth
 
 Established state:
 
 - SDK consumer test, public-header hygiene, and dependency guardrails;
 - SDK-only configure/build/test without native vcpkg packages;
 - SDK target install/export and clean external-consumer check;
-- SDK public examples.
+- SDK public examples;
+- QDR golden fixtures plus deterministic seeded malformed/round-trip coverage.
 
 Remaining state:
 
 - broader native/SDK parity transcripts;
-- mesh-operation golden fixtures;
-- deterministic seeded fuzz/property tests for topology, validation, malformed data, and
-  serialization.
+- focused golden/seeded/property cases co-located with the high-risk topology operation or
+  persistence contract they protect, rather than a new blanket framework.
 
 ## Architecture Mantras
 
@@ -421,26 +461,110 @@ Revision and signature gates run before:
 - tool preview mesh generation;
 - whole-session preview-state copies.
 
-## Progressive Migration Plan
+## Execution Authority And Legacy Crosswalk
 
-Execution status as of 2026-07-13:
+Crosswalk status as of 2026-07-17:
 
-- Phases 0 and 1 are complete.
+- `architecture-review.md` owns fixed direction, boundaries, and do-not-do decisions.
+- `REFACTORING_PLAN.md` owns the only executable task IDs, prerequisites, progress checkboxes, and
+  completion evidence.
+- `AR-*` below identifies this document's legacy roadmap phases. Those labels are historical and
+  never authorize work by themselves.
+- `Complete` means the legacy outcome is live and protected; `Partial` means useful pieces are live
+  but named canonical work remains; `Open` means the legacy cleanup outcome has not yet landed.
+
+| Legacy phase | Status | Live evidence | Remaining canonical work or disposition |
+| --- | --- | --- | --- |
+| AR-0 — Lock authority | Complete | Root instructions are self-contained, old copied-SDK shapes are banned, the app-owned SDK path is fixed, and architecture/test-policy changes route to guardrails | P0-T00/P0-T01/P0-T08 protect this one-way authority link; P6-T06/P6-T07 keep final documentation aligned |
+| AR-1 — SDK build boundary | Complete | P0/P5/P6 produced isolated installable SDK targets, one canonical source graph, external consumers, total target policy, and clean MSVC/GCC/Clang/native CI jobs | Final supported boundary; native app remains Windows-only |
+| AR-2 — Header/DTO split | Complete | P1/P3/P4/P5 leave installed SDK headers owner-neutral, neutral low-level declarations source-only, and native DTOs behind host adapters | No private SDK or native-owner include exception remains |
+| AR-3 — Polygon/contracts | Complete | P1/P3/P5/P6 leave SDK-owned polygon sources, lifecycle-safe contracts, operation/metadata coverage, and no mirror tree | Automatic validation remains operation-owned and test-protected rather than a global release hook |
+| AR-4 — QDR/mesh IO | Complete | P1/P3 provide portable binary QDR, atomic native transactions/import, exact topology conversion, and explicit lazy asset behavior | Native OBJ disposition remains deliberately scoped below |
+| AR-5 — SDK public API | Complete | P1/P3/P5/P6 provide umbrella/install surfaces, safe handles/results/lifetimes, complete supported workflows, examples, and a versioned compatibility ledger | Four 0.1.x shims revisit at 0.2.0 |
+| AR-6 — Runtime/preview | Complete | P1/P2/P3/P4 leave one SDK modeling session/preview/history truth per workspace and renderer-neutral records | Native command, clipboard, and hit adaptation remain host policy by disposition |
+| AR-7 — Host adapters | Complete | P2/P4 provide Qt input translation, viewport decision owners, material/editor ownership, neutral render projection, and revision-gated retained UI | Stable adapters are final boundaries, not migration exceptions |
+| AR-8 — Performance | Complete | P0/P2/P4/P6 protect revision/cache/allocation counters and comparable fixed-host raw evidence without flaky shared-CI timing thresholds | New optimizations remain evidence-gated |
+| AR-9 — Tests/package/CI | Complete | P0/P2/P3/P5/P6 provide consumer/install/external checks, parity, native/modeling suites, affected routing, GCC/Clang/MSVC, sanitizers, and checksum-pinned native CI | GPU/window smoke remains the explicit local gate |
+| AR-10 — Compatibility cleanup | Complete | P5/P6 removed mirrors, Taskflow, the unused QDR helper, dead abstractions, the box fallback, stale docs, and temporary exceptions while retaining only versioned/tested compatibility | Old copied-SDK bans and the compatibility ledger remain permanent governance |
+
+### Legacy action coverage
+
+The `A*` labels below refer to the numbered actions inside each retained AR section. They provide
+total mapping without duplicating those action descriptions.
+
+- **AR-0 actions:** A1/A2/A3/A4/A5/A6 are Complete. P0-T00/P0-T08 protect the authority/status
+  link; P6-T06/P6-T07 preserve its accuracy through closeout.
+- **AR-1 actions:** A1/A2/A3/A4/A5/A6/A7 are Complete through P0-T04/P0-T05/P0-T07,
+  P5-T01/P5-T02, and P6-T01/P6-T04.
+- **AR-2 actions:** A1/A2/A3/A4/A5/A6 are Complete through P1-T01/P1-T04/P1-T05/P1-T06,
+  P2-T02, P3-T01/P3-T02/P3-T07, P4-T01, and P5-T02.
+- **AR-3 actions:** A1/A2/A3/A4/A5/A6/A7 are Complete through P1-T01/P1-T05,
+  P3-T02/P3-T04/P3-T06/P3-T08, P5-T04, and P6-T01. Validation is operation-owned and covered by
+  focused debug/test contracts rather than a global release-only hook.
+- **AR-4 actions:** A1/A2/A3/A4/A5/A6/A7/A8 are Complete or deliberately dispositioned through
+  P1-T07/P1-T09 and P3-T09. `QdrDocumentDto` plus SDK mesh views are the neutral equivalents; the
+  obsolete proposed names `QdrMeshDto` and `ObjMeshView` are not required, and A7 follows the OBJ
+  disposition below.
+- **AR-5 actions:** A1/A2/A3/A4/A5 are Complete through P1-T01/P1-T02/P1-T04/P1-T05/P1-T08,
+  P2-T03/P2-T04, the P3 operation ledger, P5-T02, and P6-T06.
+- **AR-6 actions:** A1/A2/A3/A4 are Complete or deliberately dispositioned through P1-T02/P1-T03,
+  P2-T01 through P2-T05, P3-T01 through P3-T08, and P4-T01. Whole-session mementos are private
+  transaction implementation, not a second public preview owner.
+- **AR-7 actions:** A1/A2/A3/A4/A5/A6/A7/A8/A9 are Complete through P1-T06, P4-T01 through
+  P4-T05, and P4-V01 through P4-V09.
+- **AR-8 actions:** A1/A2/A3/A4 are Complete and protected by P0-T06/P0-T09, P2-T07, P4-T06,
+  and P6-T05 evidence plus deterministic counter tests.
+- **AR-9 actions:** A1/A2/A3/A4/A5/A6/A7/A8 are Complete or deliberately scoped through P2-T01,
+  P3-T04/P3-T08, P5-T05/P5-T06, and P6-T03/P6-T04; the blanket expansion disposition below still
+  prevents speculative test infrastructure.
+- **AR-10 actions:** A1/A2/A3/A4 are Complete through P0-T05/P0-T08, P3-T07, P4-T01/P4-T05,
+  P5-T01/P5-T02/P5-T06, and P6-T01/P6-T02/P6-T06/P6-T07.
+
+### Explicit legacy-task dispositions
+
+- **AR-4 OBJ writer:** `src/io/mesh/obj_writer.*` remains a native geometry-only exporter that
+  consumes `MeshAsset`. A portable OBJ abstraction is deferred until a real standalone SDK
+  consumer or second exporter exists; portable QDR and neutral SDK snapshots remain required.
+- **AR-6 picking and repeat ownership:** native hit adaptation, command IDs, clipboard, and repeat
+  routing remain host-owned under D-006 and P3-T02/P3-T05. The SDK owns modeling selection,
+  operations, preview state, and receipts. The broader legacy wording is superseded by this split.
+- **AR-7 general `UIContext` decomposition:** Complete. The live `UIIntentContext`,
+  `UIScenePresentationContext`, `UIInspectorPreviewContext`, and `UIPreferencesContext` split owns
+  the proven seams. A further blanket context rewrite is rejected; P4-T04 separately owns the
+  evidenced material mutation issue.
+- **AR-8 speculative picking/preview caches:** the listed revision gates, previous-snapshot reuse,
+  picking signatures, and preview caches already exist and remain protected. Only a newly proposed
+  optimization requires P0-T09 evidence before the corresponding task adds the smallest cache or
+  earlier gate. Unmeasured cache work is deferred.
+- **AR-9 blanket golden/fuzz expansion:** current QDR golden and deterministic seeded coverage makes
+  the old “absent” premise stale. Additional fixtures/properties co-land with the applicable P3-T04
+  operation and P3-T08 verification row rather than becoming a repository-wide framework project.
+
+## Historical Progressive Migration Plan
+
+The labels in this section are retained as `AR-0` through `AR-10` so earlier evidence remains
+traceable. They describe the original direction and are not executable phase IDs. Use the crosswalk
+above and the stable `P*-T*` IDs in `REFACTORING_PLAN.md` for all implementation work.
+
+Historical snapshot recorded 2026-07-13; superseded by the final 2026-07-17 crosswalk above:
+
+- AR-0 through AR-10 are complete or explicitly dispositioned by the canonical P0-P6 work.
 - The public SDK contracts, runtime target, canonical polygon/QDR ownership, packaging, examples,
-  SDK consumer, and the install/export check described across Phases 2 through 6 and 9 are live.
-- Phases 2 through 9 remain open only for the uncompleted adapter migration, parity, snapshot,
-  performance, golden-fixture, and fuzz/property-test items listed below.
-- Phase 10 cleanup is in progress; transitional native header mirrors remain guarded so they cannot
-  become a second compiled implementation.
+  SDK consumer, install/export checks, portable/native CI, and compatibility ledger are live.
+- Stale blanket golden/fuzz, speculative-cache, native OBJ, and broader host-policy wording remains
+  governed by the explicit dispositions rather than being silently treated as unfinished work.
+- The native mesh mirror tree and migration-only box fallback are deleted; guardrails prevent both
+  from returning as parallel ownership paths.
 
-### Phase 0 - Lock Authority
+### AR-0 — Lock Authority
 
 Goal: make the architecture direction legal and unambiguous.
 
 Actions:
 
 1. Keep root `AGENTS.md` as the single self-contained agent authority.
-2. Keep this review as the active architecture migration plan.
+2. Keep this review as fixed architecture direction and link executable work to
+   `REFACTORING_PLAN.md`.
 3. Delete the top-level instruction and documentation folders.
 4. Keep old copied SDK guardrails for old paths, old macros, old presets, and old checkout wiring.
 5. Add new guardrails that permit only the app-owned SDK path `src/sdk/core/modeling`.
@@ -454,7 +578,7 @@ Exit criteria:
 - old copied SDK names remain banned;
 - `src/sdk/core/modeling` is the only allowed SDK source path.
 
-### Phase 1 - Additive SDK Build Boundary
+### AR-1 — Additive SDK Build Boundary
 
 Goal: prove a portable SDK-shaped build without moving behavior.
 
@@ -480,7 +604,7 @@ Exit criteria:
 - native app build remains unchanged with default options;
 - guardrails reject native target dependencies from SDK targets.
 
-### Phase 2 - Header Hygiene And DTO Split
+### AR-2 — Header Hygiene And DTO Split
 
 Goal: make candidate SDK headers clean before physical moves.
 
@@ -519,14 +643,14 @@ Exit criteria:
 - native app adapters compile through explicit conversions;
 - SDK public headers have automated banned-include coverage.
 
-### Phase 3 - Polygon Core And Operation Contracts
+### AR-3 — Polygon Core And Operation Contracts
 
 Goal: package pure modeling behavior and stabilize operation outputs.
 
 Actions:
 
-1. Move geometry and polygon implementation into the SDK boundary after Phase 1 and Phase 2
-   guardrails pass.
+1. Move geometry and polygon implementation into the SDK boundary after AR-1 and AR-2 guardrails
+   pass.
 2. Update all include paths at moved call sites.
 3. Standardize operation results with:
    - success/error status;
@@ -555,7 +679,7 @@ Exit criteria:
 - operation results are consumed by runtime/app layers without inspecting operation internals;
 - selection remap behavior is centralized.
 
-### Phase 4 - Portable QDR And Mesh IO Split
+### AR-4 — Portable QDR And Mesh IO Split
 
 Goal: separate portable document interchange from native project persistence.
 
@@ -589,7 +713,7 @@ Exit criteria:
 - native project save/open behavior remains unchanged;
 - QDR document and project tests pass.
 
-### Phase 5 - SDK Public API
+### AR-5 — SDK Public API
 
 Goal: add the standalone modeling API without disturbing native APIs.
 
@@ -638,7 +762,7 @@ Exit criteria:
   the native app;
 - native public APIs delegate overlapping modeling behavior to SDK owners.
 
-### Phase 6 - Runtime And Preview Extraction
+### AR-6 — Runtime And Preview Extraction
 
 Goal: extract headless modeling runtime below native adapters.
 
@@ -671,7 +795,7 @@ Exit criteria:
 - native services are adapters over runtime algorithms;
 - preview update/commit/cancel semantics remain unchanged.
 
-### Phase 7 - Host Input, Viewport, UI, And Render Adapters
+### AR-7 — Host Input, Viewport, UI, And Render Adapters
 
 Goal: keep the current Qt host boundary explicit while extracting reusable viewport and render
 ownership below it.
@@ -706,7 +830,7 @@ Exit criteria:
 - render consumes renderer-neutral snapshots;
 - the Qt host has one input/render translation boundary.
 
-### Phase 8 - Performance And Dirty-Flag Work
+### AR-8 — Performance And Dirty-Flag Work
 
 Goal: make the extracted architecture efficient.
 
@@ -741,21 +865,23 @@ Exit criteria:
 - expensive hot-path work is skipped before compile/hash/regenerate steps;
 - measurements record before and after results for targeted scenarios.
 
-### Phase 9 - SDK Tests, Packaging, And CI
+### AR-9 — SDK Tests, Packaging, And CI
 
 Goal: prove the guide's portability promise continuously.
 
 Actions:
 
-1. Add `quader_modeling_sdk_consumer_tests`.
-2. Add a minimal external CMake consumer fixture:
+1. **Complete:** `quader_modeling_sdk_consumer_tests` is live.
+2. **Complete:** the external CMake consumer fixture:
    - includes only exported SDK headers;
    - links only SDK targets;
    - creates a mesh/document;
    - runs one operation;
    - validates;
    - round-trips portable QDR.
-3. Add SDK parity transcripts:
+3. **Complete under the operation-ledger disposition:** retained native/SDK parity transcripts
+   cover the migrated user-level workflows, while operation-specific semantics stay in SDK and
+   modeling-domain behavior suites for:
    - create box;
    - select object/component;
    - transform;
@@ -765,15 +891,17 @@ Actions:
    - thicken;
    - slice;
    - QDR roundtrip.
-4. Add mesh-operation golden fixtures for high-risk topology operations.
-5. Add deterministic seeded fuzz/property tests around validation, malformed topology, operation
-   preconditions, and serialize/deserialize round trips.
-6. Add SDK-local guidance and examples under the SDK source boundary.
-7. Add CMake install/export package files and license bundle generation.
-8. Add CI coverage to the existing automation path:
-   - SDK-only configure/build/test;
-   - native configure/build/test;
-   - final `quader` build.
+4. **Complete under the fixture disposition:** operation-specific golden fixtures exist for
+   high-risk topology behavior not already protected by QDR golden coverage; no blanket fixture
+   expansion is required.
+5. **Complete under the seeded-coverage disposition:** deterministic validation,
+   malformed-input, and round-trip properties co-land with the operation or persistence contract
+   they protect.
+6. **Complete:** SDK-local guidance and examples live under the SDK source boundary.
+7. **Complete:** CMake install/export package files and license evidence are live.
+8. **Complete:** CI runs the no-Filament SDK graph with MSVC, GCC, and Clang; a focused Clang
+   ASan/UBSan job covers the SDK consumer suite; and checksum-pinned Filament plus pinned OpenMesh
+   provision the complete native Windows configure/build/CTest/app job.
 
 Exit criteria:
 
@@ -781,7 +909,7 @@ Exit criteria:
 - native app behavior remains protected by existing tests;
 - external consumers have examples that avoid native internals.
 
-### Phase 10 - Compatibility Cleanup
+### AR-10 — Compatibility Cleanup
 
 Goal: remove transitional scaffolding after boundaries are real.
 
@@ -803,13 +931,14 @@ Exit criteria:
 - no transitional SDK/app boundary exceptions remain;
 - source layout, CMake, tests, examples, and guardrails tell the same story.
 
-## First Milestone (Completed)
+## Initial Milestone Delivered
 
 The first milestone delivered:
 
 1. Root `AGENTS.md` is self-contained.
 2. Top-level instruction and documentation folders are deleted.
-3. This review contains the active deterministic architecture plan.
+3. This review contains fixed architecture direction and links the executable
+   `REFACTORING_PLAN.md` tracker.
 4. Guardrails route instruction, architecture, and example changes through root guidance and live
    examples.
 5. `src/sdk/core/modeling` as the only allowed SDK path.
@@ -819,8 +948,10 @@ The first milestone delivered:
    - `quader_modeling_sdk_qdr_document`
    - `quader_modeling_sdk_runtime`
    - `quader_modeling_sdk`
-7. `QUADER_BUILD_NATIVE_APP` gating of native dependencies and targets.
-8. SDK target dependency and manifest-feature guardrails.
+7. `QUADER_BUILD_NATIVE_APP` gating of native dependency discovery and targets, with the SDK-only
+   graph proven free of OpenMesh/native modeling owners.
+8. SDK target dependency and manifest-feature guardrails with total coverage of every live
+   first-party target and explicit P4/P5 removal ownership for temporary reverse edges.
 9. SDK consumer tests, public examples, install/export, and a clean external consumer.
 10. Native app compatibility verification.
 
@@ -847,6 +978,48 @@ cmake --build --preset vs2026-debug --target quader
 - Do not let UI panels own command, scene, viewport, render, asset, history, or modeling truth.
 - Do not treat native test coverage as proof of SDK portability.
 - Do not add compatibility forwarding headers that survive the migration patch that needed them.
+
+## First Production Slice Ownership Contract
+
+The box/select/translate-preview slice has one modeling owner and one host
+projection boundary:
+
+- Every `SceneSession` owns one `ModelingSessionService`, whose
+  `ModelingSdkProjectionAdapter` owns exactly one `quader::modeling::ModelingSession`.
+  The adapter and its SDK/native object map are workspace-scoped. Activating a
+  different scene changes the active facade binding; it never moves or shares
+  SDK state or mappings between workspaces.
+- The SDK session owns box polygon documents, typed object/element identities,
+  component and object selection, translate preview base/current state,
+  portable operation receipts, dirty/revision state, and SDK identity
+  high-water marks. No persistent native polygon document mirrors an
+  SDK-owned object. Temporary native picking projections are read-only input
+  adapters and are discarded after the hit is committed through the SDK.
+- The native workspace owns scene/editor entity identities, hierarchy and
+  transforms, mesh/material asset identities, whole-editor history labels and
+  grouping, project/session lifecycle, QDR project hydration, render
+  invalidation, and Filament publication. `ModelingObjectComponent::sdk_owned`
+  persists which modeling owner must hydrate a scene object after reload.
+- Publication order is SDK mutation, mesh compilation/validation, asset
+  staging, scene entity/bindings/material, scene selection and mapping, then
+  host finalization/history commit. Asset, scene, mapping, selection, and SDK
+  semantic checkpoints are restored together on failure. A failed command
+  publishes no history or render-visible revision. SDK object/preview/topology
+  allocator high-water marks are intentionally not rewound: aborted IDs may
+  leave gaps, remain absent/stale, and can never alias a later live identity.
+- Translate preview updates the same staged native mesh binding once per input
+  event. Commit retains that projection and records one native history action;
+  cancel restores the exact pre-preview asset/scene checkpoint. Read-only
+  summary/export/render queries never compile or publish topology.
+- Project replacement completes candidate load, validation, and manifest
+  persistence before canceling old workspace transients. A late candidate
+  failure therefore leaves the old SDK preview and workspace exact; successful
+  replacement crosses the cancellation boundary once immediately before old
+  workspace teardown.
+
+The native `QuaderEditorApi`, `QuaderApi`, command IDs, public object handles,
+and scene selection/history surfaces remain the compatibility boundary. The
+removed native runtime box commit/create commands must not be reintroduced.
 
 ## Verification Map
 
@@ -909,17 +1082,18 @@ cmake --build --preset vs2026-debug --target quader
 
 | Area | Final Finding |
 | --- | --- |
-| Governance | Root `AGENTS.md` and this review are the active authorities. |
+| Governance | Root `AGENTS.md` owns agent policy, this review owns fixed architecture direction, and `REFACTORING_PLAN.md` alone owns executable refactoring tasks/progress. |
 | Build | SDK targets, native app gating, install/export, clean consumer, and vcpkg feature isolation are live. |
 | Core modeling | Polygon and portable QDR implementation have one canonical SDK-owned compiled source; typed IDs, structured results, dirty flags, and remaps are public SDK contracts. |
 | Public API | Native APIs stay host-facing; the separate SDK API is under `quader::modeling`. |
-| UI/viewport | Qt Widgets/Fusion is the host shell; semantic input exists, while remaining `QtViewportPanel` coordination and UI contexts need owner extraction. |
-| Render | Filament is contained; snapshots and overlays need neutral stable payloads. |
+| UI/viewport | Qt Widgets/Fusion remains the host shell; semantic input, viewport decisions, and split UI contexts keep modeling and render truth in their owners. |
+| Render | Filament is contained behind renderer-neutral scene, overlay, selection, and preview snapshots with early revision gates. |
 | IO/assets | Native project IO remains native; portable QDR document IO is SDK-owned. |
-| Tests | Native, SDK consumer, header/dependency guardrail, parity, and package-consumer coverage exist; golden and fuzz/property depth remain. |
-| Performance | Dirty gates move before compile/hash/regenerate work. |
-| Migration | Continue adapter extraction, snapshot/performance work, deeper parity, and compatibility cleanup. |
+| Tests | Native, SDK consumer, header/dependency guardrail, parity, package-consumer, QDR golden, deterministic seeded, fatal-path, and stress-fixture coverage protect the final graph. |
+| Performance | Dirty gates run before compile/hash/regenerate work; deterministic counters and fixed-host raw comparisons provide regression evidence without flaky CI timing assertions. |
+| Migration | Complete: replaced owners and mirrors are deleted; stable host adapters and four versioned SDK compatibility shims are explicitly governed. |
 
-The core theme is fixed: CMake targets, manifest features, headers, guardrails, examples, and
-consumer tests now enforce the SDK boundary. The remaining work is to route more native modeling
-behavior through that established source of truth without widening the portable dependency graph.
+The final graph is one-way: native APIs and tools express host intent, the SDK transaction owns
+modeling semantics, native projection publishes host state, and render consumes neutral snapshots.
+CMake targets, manifest features, headers, guardrails, examples, consumers, and CI enforce that
+boundary without widening the portable dependency graph.

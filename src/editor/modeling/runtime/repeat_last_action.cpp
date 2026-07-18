@@ -6,13 +6,9 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include <editor/modeling/runtime/repeat_last_action.hpp>
 
-#include <editor/interactions/rotate_tool.hpp>
-#include <editor/interactions/scale_tool.hpp>
-
 #include <algorithm>
 #include <cmath>
 #include <optional>
-#include <utility>
 
 namespace quader_editor_core {
 
@@ -131,22 +127,6 @@ std::optional<quader::QVec3> selected_component_forward_direction(const EditorSe
         return std::nullopt;
 }
 
-CommandResult commit_repeat_transform_preview(EditorSession& session, const CommandResult& update_result)
-{
-	if (!update_result.ok) {
-          (void)session.cancel_preview_transaction(
-              PreviewTransactionKind::Transform);
-          return update_result;
-	}
-	const PreviewTransactionStatus status = session.preview_transaction_status();
-        const bool changed = status.active &&
-                             status.kind == PreviewTransactionKind::Transform &&
-                             status.changed;
-        (void)session.commit_preview_transaction(
-            PreviewTransactionKind::Transform);
-        return { true, changed, {} };
-}
-
 } // namespace
 
 bool operation_is_repeatable(EditorOperationId operation_id)
@@ -239,121 +219,6 @@ void record_repeatable_transform(
         state.last_action_kind = RepeatableActionKind::Transform;
         state.pending_preview_operation.reset();
 	state.last_transform = action;
-}
-
-CommandResult execute_repeatable_transform(
-		EditorSession& session,
-		const RepeatTransformAction& action)
-{
-	if (!session.has_selection()) {
-		return { false, false, "Select something before repeating the last transform." };
-	}
-
-	CommandResult begin_result = session.begin_transform_preview(action.duplicate_selected);
-	if (!begin_result.ok) {
-		return begin_result;
-	}
-
-	CommandResult update_result;
-        if (action.tool == ViewportInteractionTool::Move) {
-          quader::QVec3 delta = action.move_delta;
-          if (action.operation == TransformDragOperation::Extrude) {
-            if (action.direction_mode ==
-                RepeatTransformDirectionMode::SelectionForward) {
-              const std::optional<quader::QVec3> forward =
-                  selected_component_forward_direction(session);
-              if (!forward.has_value()) {
-                (void)session.cancel_preview_transaction(
-                    PreviewTransactionKind::Transform);
-                return {false, false,
-                        "Could not resolve the current selection forward "
-                        "direction."};
-              }
-              delta = *forward * action.signed_forward_distance;
-            }
-            update_result = session.update_transform_extrude_preview(delta);
-          } else {
-            update_result =
-                session.update_transform_translate_preview(delta, false);
-          }
-          return commit_repeat_transform_preview(session, update_result);
-        }
-
-        const quader::QVec3 pivot = session.selection_center().value_or(quader::QVec3 {});
-        if (action.tool == ViewportInteractionTool::Rotate) {
-          RotateToolState rotate;
-          rotate.active = true;
-          rotate.axis = action.axis;
-          rotate.object_ids = session.selected_object_ids();
-          rotate.pivot = pivot;
-          const RotatePreviewResult preview = preview_rotate_from_angle_degrees(
-              rotate, action.rotate_angle_degrees, 0.0);
-          if (!preview.ok) {
-            (void)session.cancel_preview_transaction(
-                PreviewTransactionKind::Transform);
-            return {false, false,
-                    preview.message.empty() ? "Rotate repeat failed."
-                                            : preview.message};
-          }
-          if (action.operation == TransformDragOperation::Extrude) {
-            update_result = session.update_transform_extrude_preview(
-                preview.transform, pivot);
-          } else {
-            update_result = session.update_transform_matrix_preview(
-                preview.transform, pivot, false, false);
-          }
-          return commit_repeat_transform_preview(session, update_result);
-        }
-
-        if (action.tool == ViewportInteractionTool::Scale) {
-          ScaleToolState scale;
-          scale.active = true;
-          scale.axis = action.axis;
-          scale.object_ids = session.selected_object_ids();
-          scale.pivot = pivot;
-          const ScalePreviewResult preview =
-              preview_scale_from_scale(scale, action.scale);
-          if (!preview.ok) {
-            (void)session.cancel_preview_transaction(
-                PreviewTransactionKind::Transform);
-            return {false, false,
-                    preview.message.empty() ? "Scale repeat failed."
-                                            : preview.message};
-          }
-          if (action.operation == TransformDragOperation::Inset) {
-            update_result = session.update_transform_inset_preview(
-                preview.transform, pivot);
-          } else {
-            update_result = session.update_transform_matrix_preview(
-                preview.transform, pivot, false, false);
-          }
-          return commit_repeat_transform_preview(session, update_result);
-        }
-
-        (void)session.cancel_preview_transaction(
-            PreviewTransactionKind::Transform);
-        return { false, false, "Unsupported repeat transform tool." };
-}
-
-CommandResult execute_repeat_last_action(EditorSession& session, RepeatLastActionState& state)
-{
-  if (state.last_action_kind == RepeatableActionKind::Transform) {
-    if (!state.last_transform.has_value()) {
-      return {false, false, "No repeatable transform is available."};
-    }
-    return execute_repeatable_transform(session, *state.last_transform);
-  }
-
-  if (state.last_action_kind == RepeatableActionKind::Operation &&
-      state.last_operation.has_value()) {
-    EditorOperationCommand command = *state.last_operation;
-    command.phase = EditorOperationCommandPhase::Execute;
-    const EditorOperationCommandResult result =
-        execute_command(session, command);
-    return result.command;
-  }
-
-        return { false, false, "No repeatable action is available." };
 }
 
 } // namespace quader_editor_core

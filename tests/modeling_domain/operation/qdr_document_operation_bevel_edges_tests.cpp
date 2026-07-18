@@ -6,7 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "operation_validation_test_helpers.hpp"
 #include "test_support.hpp"
-#include <mesh/polygon/document.hpp>
+#include <quader/modeling/neutral/polygon/document.hpp>
 
 #include <algorithm>
 #include <array>

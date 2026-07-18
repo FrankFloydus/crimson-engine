@@ -19,22 +19,22 @@ specific subtree being edited.
 - The app shell uses Qt Widgets, Filament, native Windows integration, QDR project/document IO, a
   modeling runtime, a scene/asset document model, viewport tools, public editor APIs, examples,
   and GoogleTest-based headless verification.
-- The current product remains the native app. The active architecture path is to add a new
-  app-owned portable modeling core under `src/sdk/core/modeling` and progressively route modeling
-  truth through it.
+- The current product remains the native app. Its app-owned portable modeling core under
+  `src/sdk/core/modeling` is the modeling source of truth, with native host systems adapting
+  around it.
 - Do not preserve the old top-level copied SDK boundary. Do not restore old SDK package names,
   old SDK CMake presets, `QUADER_MODELING_SDK_DIR`, old compile-time SDK presence macro checks, or
   conditional app code that routes around missing first-party SDK source.
 - Former SDK geometry, polygon, editor-core, host-contract, and QDR behavior is app-owned source
-  today. The new SDK boundary is created inside this repo as normal first-party source, not as a
-  resurrected external checkout.
+  today. The SDK boundary is normal first-party source inside this repo, not a resurrected
+  external checkout.
 
 ## Architecture Direction
 
 Quader follows one deterministic direction:
 
 1. The native Windows app remains the shipping editor.
-2. A new portable modeling core becomes the modeling source of truth.
+2. The portable modeling core is the modeling source of truth.
 3. The portable core lives at `src/sdk/core/modeling`.
 4. The public SDK namespace is `quader::modeling`.
 5. The native editor APIs remain native host APIs.
@@ -48,27 +48,33 @@ undo/redo for modeling workflows, dirty flags, and renderer-neutral snapshots. H
 Qt Widgets, Filament, Win32, native file dialogs, project sessions, app scene entities, material
 assets, command palette routing, viewport panels, and platform windows.
 
-Use `architecture-review.md` for the active migration plan. Treat it as an execution plan, not a
-discussion document.
+Use `architecture-review.md` for the fixed architecture direction and completed ownership
+decisions. The linked root `REFACTORING_PLAN.md` is the sole execution record for the completed
+Phase 0-6 refactor; new implementation work requires an explicitly approved follow-up task or
+successor plan. Do not treat historical phase numbers or closed audit ledgers as current task
+authority.
 
 ## Domain Ownership
 
 - `src/api`: Native public editor API. `QuaderEditorApi` is the default whole-editor API for user
   and editor intent. `QuaderApi` covers document/modeling workflows that do not need runtime
   editor domains. These APIs stay host/editor facades and delegate to lower owners.
-- `src/sdk/core/modeling`: New portable modeling core. It has no SDL, ImGui, Filament, Win32, Qt,
+- `src/sdk/core/modeling`: Portable modeling core and modeling source of truth. It has no SDL,
+  ImGui, Filament, Win32, Qt,
   `SceneDocument`, `ProjectDocument`, `ProjectSession`, `AssetRegistry`, `SceneRenderBridge`,
   `ViewportOverlayFrame`, `QuaderEditorApi`, native command IDs, or app UI dependencies.
-- `src/mesh`: Existing pure geometry and polygon seed code. Keep it engine-clean. This package is
-  the first extraction source for the new SDK core.
+- `src/sdk/core/modeling/neutral`: Source-only neutral geometry and polygon declarations shared by
+  native owner targets and the SDK implementation. Native code includes
+  `quader/modeling/neutral/...`, never SDK `internal` paths; this surface is not installed for
+  external SDK consumers.
 - `src/editor`: Native editor services, command services, modeling adapters, history integration,
   selection services, metadata catalogs, pivot tools, and runtime-to-scene wiring.
 - `src/scene`: Scene document, entities, hierarchy, transforms, components, and scene invariants.
 - `src/assets`: Asset registry, asset identities, default material catalogs, and native asset
   ownership.
-- `src/io`: Native project persistence and file format adapters. Portable QDR document IO moves to
-  the SDK boundary; project hydration, file dialogs, durable native writes, scene wiring, and asset
-  registry integration remain native.
+- `src/io`: Native project persistence and file format adapters. Portable QDR document IO lives at
+  the SDK boundary; project hydration, file dialogs, durable native writes, scene wiring, and
+  asset registry integration remain native.
 - `src/render`: Filament resources, renderer caches, render sync, render snapshots, material
   binding, overlays, viewport rendering, and renderer-owned performance stats.
 - `src/viewport`: Toolkit-neutral viewport state, semantic input routing, shortcut resolution,
@@ -122,7 +128,7 @@ platform windows, or SDK internals.
 
 ## SDK Boundary Rules
 
-The new portable modeling SDK is first-party source inside this repo. It is not a separate checkout.
+The portable modeling SDK is first-party source inside this repo. It is not a separate checkout.
 
 The SDK core must:
 
@@ -187,7 +193,8 @@ files add local ownership and verification notes only.
   read the nearest nested `AGENTS.md`.
 - For input, keybindings, shortcuts, shortcut persistence, keybinding contexts, mouse gestures, or
   viewport navigation input, also read `INPUT_KEYBINDINGS.md`.
-- For architecture migration work, also read `architecture-review.md`.
+- For architecture migration work, read `architecture-review.md` for direction and
+  `REFACTORING_PLAN.md` for executable task IDs, prerequisites, and progress.
 - Do not create new top-level instruction folders. Add concise local guidance in the nearest
   nested `AGENTS.md` only when a subtree needs local rules.
 
@@ -399,10 +406,11 @@ Choose the test owner from the behavior being protected, not from the file that 
   modeling invariants under `tests/modeling_domain/`. Operation tests use
   `tests/modeling_domain/operation/qdr_document_operation_<feature>_tests.cpp` and build in
   `quader_modeling_domain_tests`.
-- Put runtime modeling operations, runtime command contracts, session behavior, tool lifecycles,
-  modeling overlays/picking, repeat/undo/redo, and runtime QDR compatibility under
-  `tests/modeling_domain/operation/` or `tests/modeling_domain/tool/`. Runtime operation tests use
-  `qdr_modeling_runtime_operation_<feature>_tests.cpp`.
+- Put portable operation semantics, remap, preview, history, repeat, and QDR behavior in the SDK
+  consumer/parity suites plus the matching `qdr_document_operation_<feature>_tests.cpp`. Keep the
+  single native descriptor-projection contract in
+  `qdr_modeling_runtime_operation_command_tests.cpp`; host tool/input lifecycles remain under
+  `tests/modeling_domain/tool/`, while production adapter behavior belongs in root app tests.
 - Put metadata catalog/schema/placement checks under `tests/modeling_domain/editor_metadata/`.
 - Put shared app-test helpers under `tests/support/`; put modeling-domain-only helpers and fixtures
   under `tests/modeling_domain/` or `tests/modeling_domain/fixtures/`.
@@ -421,9 +429,10 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools/affected_check.ps1 -Pl
   `--gtest_filter=SuiteName.*` before broadening.
 - For direct polygon operation source edits, prefer `quader_modeling_domain_polygon_loop_tests`
   plus the matching `QdrDocumentOperation...` suite.
-- For direct runtime operation source edits, prefer `quader_modeling_domain_runtime_loop_tests`
-  plus the matching `QdrModelingRuntimeOperation...` suite and metadata loop when descriptors can
-  change.
+- For native operation descriptor/projection edits, prefer
+  `quader_modeling_domain_runtime_loop_tests` with
+  `QdrModelingRuntimeOperationCommandTests.*`, the metadata loop, and the SDK consumer/parity
+  targets when portable facts can change.
 - For public API, command, scene, selection, history, viewport, UI, render, resource, or app service
   changes, use `tools/affected_check.ps1`.
 - Use `-MeasureFull` whenever the task claims a compile/test speed improvement and record the

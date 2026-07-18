@@ -8,7 +8,6 @@
 #include <editor/interactions/drawn_plane_tool.hpp>
 #include <diagnostics/profile.hpp>
 #include <editor/modeling/runtime/editor_tool.hpp>
-#include <mesh/polygon/document.hpp>
 
 #include "tool_math_internal.hpp"
 
@@ -88,42 +87,6 @@ public:
 	[[nodiscard]] std::vector<int> target_object_ids_for_selection(const RectangleSelectionState& selection) const
 	{
 		return object_operation_object_ids_for_selection(selection);
-	}
-
-	[[nodiscard]] const PolygonObject* object_by_id(std::span<const PolygonObject> objects, int object_id) const
-	{
-		for (const PolygonObject& object : objects) {
-			if (object.id == object_id) {
-				return &object;
-			}
-		}
-		return nullptr;
-	}
-
-	[[nodiscard]] quader_poly::PlaneCutMode plane_cut_mode(CutMode mode) const
-	{
-		switch (mode) {
-                case CutMode::KeepBack:
-                  return quader_poly::PlaneCutMode::KeepBack;
-                case CutMode::KeepFront:
-                  return quader_poly::PlaneCutMode::KeepFront;
-                case CutMode::KeepBoth:
-                default:
-                  return quader_poly::PlaneCutMode::KeepBoth;
-                }
-	}
-
-	[[nodiscard]] quader_poly::PlaneCutRequest plane_cut_request(const CutToolState& state) const
-	{
-		const std::vector<quader::QVec3> points = plane_points(state);
-		quader_poly::PlaneCutRequest request;
-		request.mode = plane_cut_mode(state.mode);
-		if (points.size() >= 3U) {
-			request.first_point = points[0];
-			request.second_point = points[1];
-			request.third_point = points[2];
-		}
-		return request;
 	}
 
 	[[nodiscard]] CutToolResult set_targets_from_selection(CutToolState& state, const RectangleSelectionState& selection) const
@@ -381,31 +344,17 @@ public:
 	[[nodiscard]] CutToolResult refresh_preview(CutToolState& state, std::span<const PolygonObject> objects) const
 	{
 		QDR_PROFILE_SCOPE("qdr_editor_core.CutTool.refresh_preview");
+		(void)objects;
 		if (!can_preview(state)) {
 			return invalidate_preview(state);
 		}
-
-		const quader_poly::PlaneCutRequest request = plane_cut_request(state);
+		const DrawnPlaneSurface surface =
+			drawn_plane_surface_from_points(plane_points(state));
+		if (!surface.valid) {
+			return set_preview_result(state, state.mode, false, {}, surface.message);
+		}
 		CutPreviewCounts counts;
 		counts.target_count = static_cast<int>(state.target_object_ids.size());
-		std::string message;
-		for (const int object_id : state.target_object_ids) {
-			const PolygonObject* object = object_by_id(objects, object_id);
-			if (object == nullptr) {
-				message = "Cut target mesh was not found.";
-				break;
-			}
-			const quader_poly::PlaneCutResult result = quader_poly::plane_cut(object->document, request);
-			if (!result.changed) {
-				message = result.message.empty() ? "Cut preview failed." : result.message;
-				break;
-			}
-			counts.split_count += result.split_count;
-			counts.removed_count += result.removed_count;
-		}
-		if (!message.empty()) {
-			return set_preview_result(state, state.mode, false, {}, std::move(message));
-		}
 		return set_preview_result(state, state.mode, true, counts, {});
 	}
 
@@ -419,42 +368,6 @@ public:
 			return result;
 		}
 		return refresh_preview(state, objects);
-	}
-
-	[[nodiscard]] std::vector<quader_poly::Document> preview_documents(
-			const CutToolState& state,
-			std::span<const PolygonObject> objects,
-			CutPreviewMeshSide side) const
-	{
-		QDR_PROFILE_SCOPE("qdr_editor_core.CutTool.preview_documents");
-		std::vector<quader_poly::Document> documents;
-		if (!can_preview(state)) {
-			return documents;
-		}
-
-		const quader_poly::PlaneCutRequest request = plane_cut_request(state);
-		for (const int object_id : state.target_object_ids) {
-			const PolygonObject* object = object_by_id(objects, object_id);
-			if (object == nullptr) {
-				continue;
-			}
-			quader_poly::PlaneCutResult result = quader_poly::plane_cut(object->document, request);
-			if (!result.changed) {
-				continue;
-			}
-
-                        const bool keep_front = state.mode != CutMode::KeepBack;
-                        if (side == CutPreviewMeshSide::Keep) {
-                          documents.push_back(
-                              keep_front ? std::move(result.front_document)
-                                         : std::move(result.back_document));
-                        } else {
-                          documents.push_back(
-                              keep_front ? std::move(result.back_document)
-                                         : std::move(result.front_document));
-                        }
-                }
-		return documents;
 	}
 
 	[[nodiscard]] CutToolResult update_hover_from_ray(
@@ -551,16 +464,6 @@ const CutTool& cut_tool_instance()
 const EditorTool& cut_tool()
 {
 	return cut_tool_instance();
-}
-
-quader_poly::PlaneCutMode plane_cut_mode_from_cut_mode(CutMode mode)
-{
-	return cut_tool_instance().plane_cut_mode(mode);
-}
-
-quader_poly::PlaneCutRequest plane_cut_request_from_cut_state(const CutToolState& state)
-{
-	return cut_tool_instance().plane_cut_request(state);
 }
 
 std::vector<int> cut_target_object_ids_for_selection(const RectangleSelectionState& selection)
@@ -719,14 +622,6 @@ CutToolResult refresh_cut_preview_from_selection(
 		std::span<const PolygonObject> objects)
 {
 	return cut_tool_instance().refresh_preview_from_selection(state, selection, objects);
-}
-
-std::vector<quader_poly::Document> cut_preview_documents(
-		const CutToolState& state,
-		std::span<const PolygonObject> objects,
-		CutPreviewMeshSide side)
-{
-	return cut_tool_instance().preview_documents(state, objects, side);
 }
 
 CutToolResult update_cut_hover_from_ray(

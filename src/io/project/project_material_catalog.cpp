@@ -6,6 +6,8 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "io/project/project_material_catalog.hpp"
 
+#include "core/qstr.hpp"
+
 #include <algorithm>
 #include <cctype>
 #include <filesystem>
@@ -22,16 +24,8 @@ namespace {
 
 constexpr std::uintmax_t kMaximumMaterialPreviewBytes = 64u * 1024u * 1024u;
 
-std::string lowercase_ascii(std::string value) {
-  std::transform(value.begin(), value.end(), value.begin(),
-                 [](unsigned char character) {
-                   return static_cast<char>(std::tolower(character));
-                 });
-  return value;
-}
-
 bool has_qmat_extension(const std::filesystem::path &path) {
-  return lowercase_ascii(path.extension().string()) == ".qmat";
+  return QStr::to_ascii_lower(path.extension().string()) == ".qmat";
 }
 
 bool catalog_security_error(ProjectIoErrorCode code) {
@@ -248,8 +242,8 @@ ProjectMaterialCatalog::scan(const ProjectFileSystem &file_system) {
   }
 
   std::ranges::sort(catalog.entries_, [](const auto &left, const auto &right) {
-    const std::string left_name = lowercase_ascii(left.material.name);
-    const std::string right_name = lowercase_ascii(right.material.name);
+    const std::string left_name = QStr::to_ascii_lower(left.material.name);
+    const std::string right_name = QStr::to_ascii_lower(right.material.name);
     if (left_name != right_name) {
       return left_name < right_name;
     }

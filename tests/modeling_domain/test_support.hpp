@@ -24,8 +24,10 @@ inline bool nearly_equal(Left left, Right right, Epsilon epsilon = static_cast<E
 
 } // namespace qdr_test
 
-inline void require_test(bool condition, std::string_view message)
+inline ::testing::AssertionResult require_test(bool condition, std::string_view message)
 {
-	SCOPED_TRACE(::testing::Message() << std::string(message));
-	ASSERT_TRUE(condition);
+	if (condition) {
+		return ::testing::AssertionSuccess();
+	}
+	return ::testing::AssertionFailure() << message;
 }

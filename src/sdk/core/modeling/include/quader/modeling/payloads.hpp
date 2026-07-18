@@ -96,6 +96,48 @@ struct AuthoredPolygonPayload {
 };
 
 /**
+ * Enumerates portable authored face-normal shading modes.
+ */
+enum class AuthoredSurfaceShading {
+  Flat,
+  Smooth,
+  Authored,
+};
+
+/**
+ * Stores one exact authored vertex record for import/export.
+ */
+struct AuthoredTopologyVertex {
+  VertexId id{};
+  Vec3 position{};
+};
+
+/**
+ * Stores one exact authored face record for import/export.
+ */
+struct AuthoredTopologyFace {
+  FaceId id{};
+  std::vector<VertexId> vertices;
+  std::vector<Vec2> uvs;
+  std::uint32_t material_slot = 0;
+  AuthoredSurfaceShading shading = AuthoredSurfaceShading::Flat;
+};
+
+/**
+ * Owns an exact renderer-neutral authored topology snapshot.
+ *
+ * Allocation cursors are part of the payload so round trips preserve the
+ * document lineage's monotonic non-reuse boundary.
+ */
+struct AuthoredTopology {
+  std::vector<AuthoredTopologyVertex> vertices;
+  std::vector<AuthoredTopologyFace> faces;
+  std::vector<EdgeKey> hard_normal_edges;
+  std::uint32_t next_vertex_id = 1U;
+  std::uint32_t next_face_id = 1U;
+};
+
+/**
  * Enumerates semantic overlay record kinds.
  */
 enum class SemanticOverlayKind {
@@ -111,7 +153,6 @@ enum class SemanticOverlayKind {
 struct SemanticOverlayRecord {
   SemanticOverlayKind kind = SemanticOverlayKind::Wire;
   std::vector<Vec3> points;
-  std::uint32_t color_abgr = 0xffffffffU;
 };
 
 /**

@@ -46,8 +46,6 @@ public:
                                    std::nullopt,
                                bool resolved_factor_from_world = false);
   [[nodiscard]] static quader_editor_core::EditorRuntimeCommand
-  commit_insert_edge_loop_drag();
-  [[nodiscard]] static quader_editor_core::EditorRuntimeCommand
   cancel_insert_edge_loop();
 
   [[nodiscard]] static quader_editor_core::EditorRuntimeCommand activate_cut();
@@ -62,7 +60,6 @@ public:
   [[nodiscard]] static quader_editor_core::EditorRuntimeCommand end_cut_drag();
   [[nodiscard]] static quader_editor_core::EditorRuntimeCommand
   set_cut_mode(ModelingCutMode mode);
-  [[nodiscard]] static quader_editor_core::EditorRuntimeCommand finalize_cut();
   [[nodiscard]] static quader_editor_core::EditorRuntimeCommand cancel_cut();
 
   [[nodiscard]] static quader_editor_core::EditorRuntimeCommand
@@ -78,8 +75,6 @@ public:
   [[nodiscard]] static quader_editor_core::EditorRuntimeCommand
   end_mirror_drag();
   [[nodiscard]] static quader_editor_core::EditorRuntimeCommand
-  finalize_mirror();
-  [[nodiscard]] static quader_editor_core::EditorRuntimeCommand
   cancel_mirror();
 
   [[nodiscard]] static quader_editor_core::EditorRuntimeCommand
@@ -88,8 +83,6 @@ public:
       std::optional<quader_editor_core::PickHitRecord> resolved_surface_hit);
   [[nodiscard]] static quader_editor_core::EditorRuntimeCommand
   accept_poly_point();
-  [[nodiscard]] static quader_editor_core::EditorRuntimeCommand
-  commit_poly();
   [[nodiscard]] static quader_editor_core::EditorRuntimeCommand cancel_poly();
 
   [[nodiscard]] static quader_editor_core::EditorRuntimeCommand
@@ -106,10 +99,7 @@ public:
   begin_box_height(const ModelingBoxToolEvent &event);
   [[nodiscard]] static quader_editor_core::EditorRuntimeCommand
   update_box_height(const ModelingBoxToolEvent &event);
-  [[nodiscard]] static quader_editor_core::EditorRuntimeCommand commit_box();
   [[nodiscard]] static quader_editor_core::EditorRuntimeCommand cancel_box();
-  [[nodiscard]] static quader_editor_core::EditorRuntimeCommand
-  create_box_from_bounds(const ModelingCreateBoxRequest &request);
 };
 
 } // namespace quader

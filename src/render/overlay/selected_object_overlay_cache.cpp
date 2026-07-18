@@ -9,7 +9,6 @@
 #include "core/color_space.hpp"
 #include "diagnostics/profile.hpp"
 #include "math/glm_bridge.hpp"
-#include "mesh/polygon/document_model.hpp"
 #include "render/filament_buffer_descriptor_factory.hpp"
 #include "render/filament_utils.hpp"
 #include "render/render_layers.hpp"

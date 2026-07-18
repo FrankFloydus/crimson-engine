@@ -228,20 +228,6 @@ bool update_insert_edge_loop_locked_seed(
 	return update_locked_seed(state, objects, hover, ray, grid_size, snap_enabled, dragging);
 }
 
-CommandResult EditorSession::insert_edge_loop(float factor)
-{
-	const CommandResult result = quader_editor_core::insert_edge_loop(state_.objects, factor);
-	note_content_result(result);
-	return result;
-}
-
-CommandResult EditorSession::insert_edge_loop(int object_id, quader_poly::Edge edge, float factor)
-{
-	const CommandResult result = quader_editor_core::insert_edge_loop(state_.objects, object_id, edge, factor, state_.active_object_id, state_.selection_mode);
-	note_content_result(result);
-	return result;
-}
-
 bool EditorSession::set_insert_edge_loop_preview_from_pick(
 		InsertEdgeLoopToolState& state,
 		SelectionHoverState& hover,

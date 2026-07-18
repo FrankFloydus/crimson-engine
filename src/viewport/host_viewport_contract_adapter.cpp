@@ -563,25 +563,6 @@ viewport_command_target_id_for_view(ViewportView view) {
   return std::nullopt;
 }
 
-ViewportHostDefaults viewport_host_defaults() {
-  const quader_host_contract::HostViewportDefaultsDescriptor defaults =
-      quader_host_contract::viewport_defaults();
-  return {
-      .map_units_per_world_unit = defaults.map_units_per_world_unit,
-      .default_grid_map_units = defaults.default_grid_map_units,
-      .default_orthographic_size = defaults.default_orthographic_size,
-      .focus_origin_distance = defaults.focus_origin_distance,
-      .default_fov_degrees = defaults.default_fov_degrees,
-      .orbit_radians_per_pixel = defaults.orbit_radians_per_pixel,
-      .fly_look_radians_per_pixel = defaults.fly_look_radians_per_pixel,
-      .fly_base_speed = defaults.fly_base_speed,
-      .fly_fast_multiplier = defaults.fly_fast_multiplier,
-      .fly_slow_multiplier = defaults.fly_slow_multiplier,
-      .selection_box_drag_threshold_pixels =
-          defaults.selection_box_drag_threshold_pixels,
-  };
-}
-
 std::string_view viewport_tool_contract_id(ViewportToolId tool) {
   const ToolDescriptor *descriptor = find_viewport_tool_descriptor(tool);
   return descriptor != nullptr ? descriptor->id : std::string_view{};
@@ -603,44 +584,6 @@ bool viewport_tool_has_native_controller(ViewportToolId tool) {
 bool viewport_tool_allows_selection_fallback(ViewportToolId tool) {
   const ToolDescriptor *descriptor = find_viewport_tool_descriptor(tool);
   return descriptor != nullptr && descriptor->allows_selection_fallback;
-}
-
-int viewport_default_grid_preset() {
-  const auto presets = quader_host_contract::grid_preset_catalog();
-  for (std::size_t index = 0; index < presets.size(); ++index) {
-    if (presets[index].default_preset) {
-      return static_cast<int>(index + 1U);
-    }
-  }
-
-  const double default_map_units =
-      quader_host_contract::viewport_defaults().default_grid_map_units;
-  for (std::size_t index = 0; index < presets.size(); ++index) {
-    if (std::abs(presets[index].map_units - default_map_units) <= 0.0001) {
-      return static_cast<int>(index + 1U);
-    }
-  }
-  return 6;
-}
-
-int viewport_clamp_grid_preset(int preset) {
-  const auto presets = quader_host_contract::grid_preset_catalog();
-  const int max_preset =
-      presets.empty() ? 10 : static_cast<int>(presets.size());
-  return std::clamp(preset, 1, max_preset);
-}
-
-float viewport_grid_world_size_from_contract(int preset) {
-  const auto presets = quader_host_contract::grid_preset_catalog();
-  if (!presets.empty()) {
-    const int clamped_preset = viewport_clamp_grid_preset(preset);
-    return static_cast<float>(
-        presets[static_cast<std::size_t>(clamped_preset - 1)].world_units);
-  }
-  const int clamped_preset = viewport_clamp_grid_preset(preset);
-  const float map_units =
-      std::pow(2.0f, static_cast<float>(clamped_preset - 1));
-  return map_units / 32.0f;
 }
 
 bool viewport_tool_from_contract_id(std::string_view id, ViewportToolId &tool) {

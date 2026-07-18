@@ -5,8 +5,8 @@
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
 #include <editor/modeling/runtime/session.hpp>
-#include <mesh/geometry/geometry.hpp>
-#include <mesh/polygon/document.hpp>
+#include <quader/modeling/neutral/geometry/geometry.hpp>
+#include <quader/modeling/neutral/polygon/document.hpp>
 
 #include <diagnostics/profile.hpp>
 

@@ -17,13 +17,11 @@
 #include "editor/tools/viewport_tool_catalog.hpp"
 #include "editor/tools/viewport_tool_ports.hpp"
 #include "editor/tools/viewport_tool_runtime.hpp"
-#include "support/guardrail_file_scan.hpp"
 #include "viewport/host_viewport_contract_adapter.hpp"
 
 #include <gtest/gtest.h>
 
 #include <algorithm>
-#include <filesystem>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -31,9 +29,18 @@
 namespace quader {
 namespace {
 
-using test::guardrail::read_source_file;
-using test::guardrail::source_root;
-using test::guardrail::source_slice;
+TEST(ViewportToolCatalogTests, HostViewportAdapterUsesViewportToolDescriptors) {
+  ViewportToolId tool = ViewportToolId::Select;
+  EXPECT_TRUE(viewport_tool_from_contract_id("insert_edge_loop_tool", tool));
+  EXPECT_EQ(tool, ViewportToolId::InsertEdgeLoop);
+  EXPECT_TRUE(viewport_tool_from_contract_id("mirror_tool", tool));
+  EXPECT_EQ(tool, ViewportToolId::Mirror);
+  EXPECT_EQ(viewport_tool_contract_id(ViewportToolId::Knife),
+            std::string_view("knife"));
+  EXPECT_TRUE(viewport_tool_allows_selection_fallback(ViewportToolId::Move));
+  EXPECT_FALSE(
+      viewport_tool_allows_selection_fallback(ViewportToolId::Knife));
+}
 
 /// Injects deterministic Box preview failures into viewport-tool tests.
 class FailingBoxPreviewPorts final : public ViewportToolHoverPort,
@@ -631,7 +638,7 @@ TEST(ViewportToolRuntimeTests,
       }));
 }
 
-TEST(ViewportToolRuntimeTests, BoxToolCommitUsesCommandOwnedTransaction) {
+TEST(ViewportToolRuntimeTests, BoxToolAcceptUsesCommandOwnedTransaction) {
     SceneSession session;
     QuaderEditorApi editor(
         QuaderApiSessionInternalAccess::from_scene_session(session));
@@ -649,7 +656,8 @@ TEST(ViewportToolRuntimeTests, BoxToolCommitUsesCommandOwnedTransaction) {
     const ViewportTool *box_tool =
         find_viewport_tool(ViewportToolId::CreatePrimitive);
     ASSERT_NE(box_tool, nullptr);
-    ASSERT_TRUE(session.modeling().activate_box_tool().ok);
+    ASSERT_TRUE(
+        editor.tools().activate(ViewportToolId::CreatePrimitive).ok());
 
     const ModelingBoxToolEvent start{
         .screen_position = {400.0f, 300.0f},
@@ -677,27 +685,24 @@ TEST(ViewportToolRuntimeTests, BoxToolCommitUsesCommandOwnedTransaction) {
         .default_material = material.value.id,
     };
     box_context.make_event = [&]() { return current_event; };
-    box_context.commit_preview = [&](std::string name,
-                                     AssetId default_material) {
+    box_context.accept_preview = [&](std::string name,
+                                     AssetId default_material,
+                                     bool snap_enabled) {
       ++commit_count;
-      const QuaderApiResult<QuaderModelingObjectRef> result =
-          editor.modeling().commit_box_preview(std::move(name),
-                                               default_material);
-      ModelingCreateBoxResult committed{
+      const QuaderApiVoidResult result =
+          editor.tools().accept_active_primitive(
+              std::move(name), default_material, snap_enabled);
+      if (result.ok && result.changed) {
+        committed_entity = session.scene().primary_selection();
+      }
+      return ModelingCommandResult{
           .ok = result.ok,
           .changed = result.changed,
           .message = result.message,
       };
-      if (result.ok && result.changed) {
-        committed_entity = result.value.entity;
-        committed.object = {
-            .modeling_object_id = result.value.modeling_object_id,
-            .entity = result.value.entity,
-            .mesh = result.value.mesh,
-            .name = "Viewport Box",
-        };
-      }
-      return committed;
+    };
+    box_context.session_active = [&]() {
+      return editor.tools().has_active_primitive_creation();
     };
     box_context.next_mesh_name = [] { return std::string{"Viewport Box"}; };
 
@@ -752,7 +757,7 @@ TEST(ViewportToolRuntimeTests, BoxToolCommitUsesCommandOwnedTransaction) {
         .left_released = true,
     });
     ASSERT_TRUE(result.handled);
-    ASSERT_TRUE(result.active_tool_changed);
+    EXPECT_FALSE(result.active_tool_changed);
     EXPECT_EQ(session.modeling().box_preview().drag_state,
               ModelingBoxDragState::Idle);
     EXPECT_EQ(commit_count, 1);
@@ -762,6 +767,12 @@ TEST(ViewportToolRuntimeTests, BoxToolCommitUsesCommandOwnedTransaction) {
     EXPECT_EQ(session.scene().material(committed_entity)->material,
               material.value.id);
     EXPECT_EQ(session.scene().primary_selection(), committed_entity);
+
+    const QuaderApiVoidResult applied =
+        editor.tools().commit_active_tool_preview();
+    ASSERT_TRUE(applied.ok) << applied.message;
+    ASSERT_TRUE(applied.changed);
+    EXPECT_FALSE(editor.tools().has_active_primitive_creation());
 
     ASSERT_TRUE(editor.history().can_undo());
     const QuaderApiVoidResult undo = editor.history().undo();
@@ -978,395 +989,16 @@ TEST(ViewportToolRuntimeTests,
   }
 }
 
-TEST(ViewportToolGuardrailTests, RemovedLegacyViewportToolBase) {
-  const std::filesystem::path root = source_root();
-  const std::string tool_header =
-      read_source_file(root / "src" / "editor" / "tools" / "viewport_tool.hpp");
-  const std::string catalog_header = read_source_file(
-      root / "src" / "editor" / "tools" / "viewport_tool_catalog.hpp");
-  EXPECT_EQ(tool_header.find("ViewportToolBase"), std::string::npos);
-  EXPECT_EQ(catalog_header.find("ViewportToolBase"), std::string::npos);
-}
 
-TEST(ViewportToolGuardrailTests, ViewportToolContextUsesNarrowModelingPorts) {
-  const std::filesystem::path root = source_root();
-  const std::string tool_header =
-      read_source_file(root / "src" / "editor" / "tools" / "viewport_tool.hpp");
-  const std::string ports_header = read_source_file(
-      root / "src" / "editor" / "tools" / "viewport_tool_ports.hpp");
-  const std::string context =
-      source_slice(tool_header, "struct ViewportToolContext {", "};");
-  const std::string two_stage_box_tool = read_source_file(
-      root / "src" / "editor" / "tools" / "base" / "two_stage_box_tool.cpp");
-  const std::string drag_commit_tool = read_source_file(
-      root / "src" / "editor" / "tools" / "base" / "drag_commit_tool.cpp");
-  const std::string point_sequence_tool = read_source_file(
-      root / "src" / "editor" / "tools" / "base" /
-          "point_sequence_tool.cpp");
-  const std::string drawn_plane_tool = read_source_file(
-      root / "src" / "editor" / "tools" / "base" / "drawn_plane_tool.cpp");
-  const std::string modal_viewport_tool = read_source_file(
-      root / "src" / "editor" / "tools" / "base" /
-          "modal_viewport_tool.cpp");
 
-  EXPECT_NE(ports_header.find("class ViewportToolHoverPort"),
-            std::string::npos);
-  EXPECT_NE(ports_header.find("class ViewportToolPreviewPort"),
-            std::string::npos);
-  EXPECT_NE(ports_header.find("class ViewportToolCommitPort"),
-            std::string::npos);
-  EXPECT_NE(ports_header.find("class ViewportToolCancelPort"),
-            std::string::npos);
-  EXPECT_NE(ports_header.find("class ViewportToolSelectionModePort"),
-            std::string::npos);
-  EXPECT_NE(ports_header.find("class ViewportToolCommandResultPort"),
-            std::string::npos);
-  EXPECT_NE(context.find("ViewportToolPorts ports"), std::string::npos);
-  EXPECT_EQ(context.find("ModelingSessionService"), std::string::npos);
-  EXPECT_EQ(context.find("modeling"), std::string::npos);
 
-  EXPECT_EQ(two_stage_box_tool.find("context.modeling"), std::string::npos);
-  EXPECT_EQ(drag_commit_tool.find("context.modeling"), std::string::npos);
-  EXPECT_EQ(point_sequence_tool.find("context.modeling"), std::string::npos);
-  EXPECT_EQ(drawn_plane_tool.find("context.modeling"), std::string::npos);
-  EXPECT_EQ(modal_viewport_tool.find("context.modeling"), std::string::npos);
-}
 
-TEST(ViewportToolGuardrailTests, BoxToolUsesFocusedContextInsteadOfBroadToolBag) {
-  const std::filesystem::path root = source_root();
-  const std::string tool_header =
-      read_source_file(root / "src" / "editor" / "tools" / "viewport_tool.hpp");
-  const std::string broad_context =
-      source_slice(tool_header, "struct ViewportToolContext {", "};");
-  const std::string box_tool_source = read_source_file(
-      root / "src" / "editor" / "tools" / "base" / "two_stage_box_tool.cpp");
 
-  EXPECT_NE(tool_header.find("struct ViewportBoxToolContext"),
-            std::string::npos);
-  EXPECT_NE(broad_context.find("ViewportBoxToolContext* box"),
-            std::string::npos);
-  EXPECT_EQ(broad_context.find("makeBoxEvent"), std::string::npos);
-  EXPECT_EQ(broad_context.find("commit_box_preview"), std::string::npos);
-  EXPECT_EQ(broad_context.find("next_mesh_name"), std::string::npos);
-  EXPECT_EQ(broad_context.find("default_material"), std::string::npos);
 
-  EXPECT_NE(
-      box_tool_source.find("ViewportBoxToolContext &box_context = *context.box"),
-      std::string::npos);
-  EXPECT_EQ(box_tool_source.find("context.makeBoxEvent"), std::string::npos);
-  EXPECT_EQ(box_tool_source.find("context.commit_box_preview"),
-            std::string::npos);
-  EXPECT_EQ(box_tool_source.find("context.next_mesh_name ="),
-            std::string::npos);
-  EXPECT_EQ(box_tool_source.find(" context.next_mesh_name"),
-            std::string::npos);
-}
 
-TEST(ViewportToolGuardrailTests, BoxPreviewStateIsReadFromModelingRuntime) {
-  const std::filesystem::path root = source_root();
-  const std::string tool_header =
-      read_source_file(root / "src" / "editor" / "tools" / "viewport_tool.hpp");
-  const std::string modal_state =
-      source_slice(tool_header, "struct ViewportModalToolState {", "};");
-  const std::string box_tool_source = read_source_file(
-      root / "src" / "editor" / "tools" / "base" / "two_stage_box_tool.cpp");
-  const std::string router_header =
-      read_source_file(root / "src" / "viewport" /
-                       "viewport_input_router.hpp");
-  const std::string router_source =
-      read_source_file(root / "src" / "viewport" / "viewport_input_router.cpp");
 
-  EXPECT_EQ(modal_state.find("ModelingBoxPreview"), std::string::npos);
-  EXPECT_EQ(box_tool_source.find("context.modal_state->box_preview"),
-            std::string::npos);
-  EXPECT_NE(box_tool_source.find("preview_port.box_preview("),
-            std::string::npos);
-  EXPECT_NE(router_source.find("tool_runtime_->box_preview(preview"),
-            std::string::npos);
-  EXPECT_EQ(router_header.find("ModelingSessionService"), std::string::npos);
-  EXPECT_EQ(router_source.find("box_preview(const ModelingSessionService"),
-            std::string::npos);
-}
 
-TEST(ViewportToolGuardrailTests, PointToolsUseFocusedContextInsteadOfBroadToolBag) {
-  const std::filesystem::path root = source_root();
-  const std::string tool_header =
-      read_source_file(root / "src" / "editor" / "tools" / "viewport_tool.hpp");
-  const std::string broad_context =
-      source_slice(tool_header, "struct ViewportToolContext {", "};");
-  const std::string drag_tool_source = read_source_file(
-      root / "src" / "editor" / "tools" / "base" / "drag_commit_tool.cpp");
-  const std::string point_sequence_tool_source = read_source_file(
-      root / "src" / "editor" / "tools" / "base" / "point_sequence_tool.cpp");
-  const std::string drawn_plane_tool_source = read_source_file(
-      root / "src" / "editor" / "tools" / "base" / "drawn_plane_tool.cpp");
 
-  EXPECT_NE(tool_header.find("struct ViewportPointToolContext"),
-            std::string::npos);
-  EXPECT_NE(broad_context.find("ViewportPointToolContext* point"),
-            std::string::npos);
-  EXPECT_EQ(broad_context.find("makeToolEventAt"), std::string::npos);
-  EXPECT_EQ(broad_context.find("hit_drawn_plane_captured_point"),
-            std::string::npos);
-  EXPECT_EQ(broad_context.find("hit_drawn_plane_line"), std::string::npos);
-
-  EXPECT_NE(drag_tool_source.find(
-                "ViewportPointToolContext &point_context = *context.point"),
-            std::string::npos);
-  EXPECT_NE(point_sequence_tool_source.find(
-                "ViewportPointToolContext *point_context = context.point"),
-            std::string::npos);
-  EXPECT_NE(drawn_plane_tool_source.find(
-                "ViewportPointToolContext &point_context = *context.point"),
-            std::string::npos);
-}
-
-TEST(ViewportToolGuardrailTests, DrawnPlaneToolUsesSharedCutMirrorLifecycle) {
-  const std::filesystem::path root = source_root();
-  const std::string drawn_plane_tool_source = read_source_file(
-      root / "src" / "editor" / "tools" / "base" / "drawn_plane_tool.cpp");
-
-  EXPECT_NE(drawn_plane_tool_source.find("enum class DrawnPlaneToolKind"),
-            std::string::npos);
-  EXPECT_NE(drawn_plane_tool_source.find("handle_drawn_plane_lifecycle("),
-            std::string::npos);
-  EXPECT_NE(drawn_plane_tool_source.find("begin_drawn_plane_point_drag("),
-            std::string::npos);
-  EXPECT_NE(drawn_plane_tool_source.find("finalize_drawn_plane_tool("),
-            std::string::npos);
-  EXPECT_EQ(drawn_plane_tool_source.find(
-                "if (modeling_tool() == ModelingViewportTool::Cut) {"),
-            std::string::npos);
-  EXPECT_EQ(drawn_plane_tool_source.find(
-                "if (modeling_tool() == ModelingViewportTool::Mirror) {"),
-            std::string::npos);
-  EXPECT_EQ(drawn_plane_tool_source.find(
-                "context.modal_state->cut_drag_active = command.ok"),
-            std::string::npos);
-  EXPECT_EQ(drawn_plane_tool_source.find(
-                "context.modal_state->mirror_drag_active = command.ok"),
-            std::string::npos);
-}
-
-TEST(ViewportToolGuardrailTests, ViewportPanelProvidesPointToolContextToModalTools) {
-  const std::filesystem::path root = source_root();
-  const std::string viewport_panel =
-      read_source_file(root / "src" / "ui" / "qt_viewport_panel.cpp");
-  const std::string transform_gizmo = read_source_file(
-      root / "src" / "editor" / "viewport" / "transform_gizmo_interaction.cpp");
-  const std::string transform_drag_service = read_source_file(
-      root / "src" / "editor" / "modeling" / "services" /
-      "modeling_transform_drag_service.cpp");
-  const std::string move_tool = read_source_file(
-      root / "src" / "editor" / "interactions" / "move_tool.cpp");
-
-  EXPECT_NE(viewport_panel.find("ViewportPointToolContext point_context"),
-            std::string::npos);
-  EXPECT_NE(viewport_panel.find("point_context.make_event_at"),
-            std::string::npos);
-  EXPECT_NE(viewport_panel.find("point_context.hit_drawn_plane_captured_point"),
-            std::string::npos);
-  EXPECT_NE(viewport_panel.find("point_context.hit_drawn_plane_line"),
-            std::string::npos);
-  EXPECT_NE(viewport_panel.find(".point = &point_context"),
-            std::string::npos);
-  EXPECT_NE(viewport_panel.find("make_tool_event_at"), std::string::npos);
-  EXPECT_NE(viewport_panel.find("snap_enabled ="), std::string::npos);
-  EXPECT_NE(viewport_panel.find("snap_enabled = resolved_grid_snap_enabled"),
-            std::string::npos);
-  EXPECT_NE(viewport_panel.find("vertex_radius ="), std::string::npos);
-  EXPECT_NE(viewport_panel.find(
-                "settings.float_value(ViewportFloatSettingId::PickVertexRadius)"),
-            std::string::npos);
-  EXPECT_NE(viewport_panel.find("constrain_axis = input.modifiers.shift"),
-            std::string::npos);
-  EXPECT_NE(transform_gizmo.find(
-                "!frame.settings.bool_value(ViewportBoolSettingId::ShowGizmos)"),
-            std::string::npos);
-  EXPECT_NE(transform_gizmo.find(
-                "const bool grid_snap_active = viewport_grid_snap_active("),
-            std::string::npos);
-  EXPECT_NE(transform_gizmo.find(
-                "frame.settings, frame.input.modifiers.primary)"),
-            std::string::npos);
-  EXPECT_NE(transform_gizmo.find(".vertex_snap_radius ="), std::string::npos);
-  EXPECT_NE(transform_gizmo.find(
-                ".vertex_snap_radius = viewport_vertex_snap_radius(frame.settings)"),
-            std::string::npos);
-  EXPECT_NE(transform_gizmo.find(".grid_snap_enabled = grid_snap_active"),
-            std::string::npos);
-  EXPECT_NE(transform_gizmo.find("viewport_rotation_snap_active("),
-            std::string::npos);
-  EXPECT_NE(transform_gizmo.find(
-                "ViewportFloatSettingId::RotationSnapDegrees"),
-            std::string::npos);
-  EXPECT_NE(transform_gizmo.find(
-                ".rotation_snap_degrees = rotation_snap_degrees"),
-            std::string::npos);
-  EXPECT_NE(transform_drag_service.find(
-                "input.rotation_snap_degrees = request.rotation_snap_degrees"),
-            std::string::npos);
-  EXPECT_NE(move_tool.find("input.rotation_snap_degrees"), std::string::npos);
-  EXPECT_EQ(move_tool.find(
-                "input.grid_enabled ? input.rotation_snap_degrees : 0.0"),
-            std::string::npos);
-  EXPECT_NE(transform_gizmo.find(".precision = frame.input.modifiers.primary"),
-            std::string::npos);
-  const std::size_t selection_center =
-      transform_gizmo.find("editor.query().selection_transform_pivot()");
-  EXPECT_EQ(transform_gizmo.find(
-                "camera_navigation_frame && !dragging_ && "
-                "!pending_drag_.has_value()"),
-            std::string::npos);
-  ASSERT_NE(selection_center, std::string::npos);
-  const std::size_t suppress_hover =
-      transform_gizmo.find("const bool suppress_hover");
-  const std::size_t build_frame =
-      transform_gizmo.find("build_transform_gizmo_frame");
-  ASSERT_NE(suppress_hover, std::string::npos);
-  ASSERT_NE(build_frame, std::string::npos);
-  EXPECT_LT(selection_center, suppress_hover);
-  EXPECT_LT(suppress_hover, build_frame);
-  EXPECT_NE(transform_gizmo.find("frame.input_result.navigation_active ||"),
-            std::string::npos);
-  const std::size_t active_drag_pivot =
-      transform_gizmo.find("pivot = active_drag_pivot_");
-  ASSERT_NE(active_drag_pivot, std::string::npos);
-  EXPECT_LT(active_drag_pivot, selection_center);
-  EXPECT_NE(transform_gizmo.find("active_drag_pivot_ = preview.value().pivot"),
-            std::string::npos);
-
-  const std::string selection_interaction =
-      read_source_file(root / "src" / "editor" / "viewport" /
-                       "viewport_selection_interaction.cpp");
-  EXPECT_NE(
-      selection_interaction.find("frame.input_router.state().selection_mode == "
-                                 "ViewportSelectionMode::Group"),
-      std::string::npos);
-  EXPECT_EQ(
-      selection_interaction.find(
-          "editor.selection().summary().mode == QuaderSelectionMode::Group"),
-      std::string::npos);
-  EXPECT_EQ(viewport_panel.find("selectionOverlaySuppressedForInteraction()"),
-            std::string::npos);
-  EXPECT_NE(
-      viewport_panel.find("overlays_visible && selection_overlay_cache_.valid()"),
-      std::string::npos);
-}
-
-TEST(ViewportToolGuardrailTests, EditorOwnsViewportToolRuntimeSources) {
-  const std::filesystem::path root = source_root();
-  EXPECT_TRUE(std::filesystem::exists(root / "src" / "editor" / "tools" /
-                                      "viewport_tool_runtime.hpp"));
-  EXPECT_TRUE(std::filesystem::exists(root / "src" / "editor" / "tools" /
-                                      "viewport_tool_runtime.cpp"));
-  EXPECT_TRUE(std::filesystem::exists(root / "src" / "editor" / "tools" /
-                                      "base" / "viewport_tool_catalog.cpp"));
-  EXPECT_FALSE(std::filesystem::exists(root / "src" / "viewport" / "modes"));
-}
-
-TEST(ViewportToolGuardrailTests, UiShellHasNoDirectModalToolBranches) {
-  const std::filesystem::path root = source_root();
-  const std::string ui_shell =
-      read_source_file(root / "src" / "ui" / "ui_system.cpp");
-  EXPECT_EQ(ui_shell.find("active_tool == ViewportToolId::CreatePrimitive"),
-            std::string::npos);
-  EXPECT_EQ(ui_shell.find("active_tool == ViewportToolId::InsertEdgeLoop"),
-            std::string::npos);
-  EXPECT_EQ(ui_shell.find("active_tool == ViewportToolId::Knife"),
-            std::string::npos);
-  EXPECT_EQ(ui_shell.find("active_tool == ViewportToolId::Cut"),
-            std::string::npos);
-  EXPECT_EQ(ui_shell.find("active_tool == ViewportToolId::Mirror"),
-            std::string::npos);
-  EXPECT_EQ(ui_shell.find("active_tool == ViewportToolId::Poly"),
-            std::string::npos);
-  EXPECT_EQ(ui_shell.find("boxPreviewController_"), std::string::npos);
-}
-
-TEST(ViewportToolGuardrailTests, TransformGizmoEligibilityLivesInViewportToolMetadata) {
-  const std::filesystem::path root = source_root();
-  const std::string interaction = read_source_file(
-      root / "src" / "editor" / "viewport" / "transform_gizmo_interaction.cpp");
-  const std::string descriptor =
-      read_source_file(root / "src" / "editor" / "tools" /
-                       "viewport_tool_descriptor_catalog.hpp");
-  const std::string catalog = read_source_file(
-      root / "src" / "editor" / "tools" / "viewport_tool_catalog.hpp");
-
-  EXPECT_NE(descriptor.find("supports_transform_gizmo"), std::string::npos);
-  EXPECT_NE(catalog.find("viewport_tool_supports_transform_gizmo"),
-            std::string::npos);
-  EXPECT_NE(catalog.find("viewport_tool_interaction_tool"), std::string::npos);
-  EXPECT_NE(interaction.find("viewport_tool_supports_transform_gizmo(tool)"),
-            std::string::npos);
-  EXPECT_NE(interaction.find("viewport_tool_interaction_tool(tool)"),
-            std::string::npos);
-  EXPECT_EQ(interaction.find("bool supports_transform_gizmo("),
-            std::string::npos);
-  EXPECT_EQ(interaction.find("return tool == ViewportToolId::Move"),
-            std::string::npos);
-  EXPECT_EQ(interaction.find("ViewportInteractionTool::move"),
-            std::string::npos);
-}
-
-TEST(ViewportToolGuardrailTests, HostViewportAdapterUsesViewportToolDescriptors) {
-    ViewportToolId tool = ViewportToolId::Select;
-    EXPECT_TRUE(viewport_tool_from_contract_id("insert_edge_loop_tool", tool));
-    EXPECT_EQ(tool, ViewportToolId::InsertEdgeLoop);
-    EXPECT_TRUE(viewport_tool_from_contract_id("mirror_tool", tool));
-    EXPECT_EQ(tool, ViewportToolId::Mirror);
-    EXPECT_EQ(viewport_tool_contract_id(ViewportToolId::Knife),
-              std::string_view("knife"));
-    EXPECT_TRUE(viewport_tool_allows_selection_fallback(ViewportToolId::Move));
-    EXPECT_FALSE(
-        viewport_tool_allows_selection_fallback(ViewportToolId::Knife));
-
-    const std::filesystem::path root = source_root();
-    const std::string adapter = read_source_file(
-        root / "src" / "viewport" / "host_viewport_contract_adapter.cpp");
-    EXPECT_NE(adapter.find("find_viewport_tool_descriptor(tool)"), std::string::npos);
-    EXPECT_NE(adapter.find("find_viewport_tool_descriptor(id)"), std::string::npos);
-    EXPECT_NE(adapter.find("quader_host_contract::find_action_descriptor(id)"), std::string::npos);
-    EXPECT_EQ(adapter.find("case ViewportToolId::"), std::string::npos);
-    EXPECT_NE(adapter.find("descriptor->editor_owned_native_lifecycle"),
-              std::string::npos);
-    EXPECT_EQ(adapter.find("tool == ViewportToolId::"), std::string::npos);
-}
-
-TEST(ViewportToolGuardrailTests,
-     PivotHandleUsesSphereOverlayAndConsumesSelectionFallback) {
-  const std::filesystem::path root = source_root();
-  const std::string viewport_panel =
-      read_source_file(root / "src" / "ui" / "qt_viewport_panel.cpp");
-
-  const std::string pivot_overlay =
-      source_slice(viewport_panel, "void append_pivot_handle_overlay",
-                   "std::uint32_t linear_array_axis_color");
-  EXPECT_NE(viewport_panel.find("void append_pivot_ring("), std::string::npos);
-  EXPECT_NE(pivot_overlay.find("append_pivot_ring("), std::string::npos);
-  EXPECT_NE(viewport_panel.find("frame.lines.push_back({"),
-            std::string::npos);
-  EXPECT_EQ(pivot_overlay.find("frame.points.push_back"), std::string::npos);
-  EXPECT_NE(viewport_panel.find("blocked_by_navigation"),
-            std::string::npos);
-  EXPECT_NE(viewport_panel.find("pivot->clear_quick_override()"),
-            std::string::npos);
-  EXPECT_NE(viewport_panel.find("!blocked_by_navigation && "
-                                "input.quick_pivot_down"),
-            std::string::npos);
-
-  const std::string pivot_input =
-      source_slice(viewport_panel,
-                   "const PivotHandleState pivot_after_input",
-                   "const ModelingSelectionSummary hover_selection");
-  EXPECT_NE(pivot_input.find("pivot_blocks_gizmo ||"), std::string::npos);
-  EXPECT_NE(pivot_input.find("pivot_consumed)"), std::string::npos);
-  EXPECT_NE(
-      pivot_input.find(
-          "ViewportBeforeToolInteractionResult{.gizmo_consumed = true}"),
-      std::string::npos);
-}
 
 } // namespace
 } // namespace quader

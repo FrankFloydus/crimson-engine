@@ -15,7 +15,7 @@
 #include "ui/qt_viewport_context_menu.hpp"
 #include "ui/qt_viewport_delete_popup.hpp"
 #include "ui/qt_viewport_surface.hpp"
-#include "ui/viewport_host_interaction_policy.hpp"
+#include "viewport/viewport_host_interaction_policy.hpp"
 #include "ui/viewport_hover_controller.hpp"
 #include "ui/viewport_pane_overlay_cache.hpp"
 #include "ui/viewport_shortcut_controller.hpp"
@@ -216,8 +216,6 @@ private:
   QFocusFrame *focused_pane_frame_ = nullptr;
   QuaderEditorApi *interaction_editor_ = nullptr;
   ModelingBoxPreview active_box_preview_ = {};
-  bool pivot_handle_dragging_ = false;
-  bool linear_array_handle_dragging_ = false;
   bool modal_tool_dragging_ = false;
   bool modal_tool_owns_viewport_snapshot_ = false;
   bool pending_external_pointer_event_ = false;

@@ -6,6 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "editor/projection/cut_preview_overlay_projection.hpp"
 
+#include "math/glm_bridge.hpp"
 #include "render/viewport_overlay_policy.hpp"
 
 #include <algorithm>
@@ -247,21 +248,21 @@ void append_preview_line(ViewportOverlayFrame &frame,
 } // namespace
 
 CutPreviewOverlayProjection::PreviewTriangleMesh
-CutPreviewOverlayProjection::mesh_from_documents(
-    const std::vector<quader_poly::Document> &documents) {
+CutPreviewOverlayProjection::mesh_from_previews(
+    const std::vector<ModelingToolPreviewMesh> &previews) {
   PreviewTriangleMesh mesh;
-  for (const quader_poly::Document &document : documents) {
-    const quader_poly::CompiledMesh compiled =
-        quader_poly::compile_document(document);
+  for (const ModelingToolPreviewMesh &preview : previews) {
+    const MeshGeometryPayload &geometry = preview.mesh.geometry();
     const std::uint32_t vertex_offset =
         static_cast<std::uint32_t>(mesh.vertices.size());
-    mesh.vertices.reserve(mesh.vertices.size() + compiled.vertices.size());
-    mesh.indices.reserve(mesh.indices.size() + compiled.indices.size());
-    for (const quader_poly::CompiledVertex &vertex : compiled.vertices) {
-      mesh.vertices.push_back(vertex.position);
+    mesh.vertices.reserve(mesh.vertices.size() + geometry.vertices.size());
+    mesh.indices.reserve(mesh.indices.size() + geometry.indices.size());
+    for (const MeshVertex &vertex : geometry.vertices) {
+      mesh.vertices.push_back(transform_point(preview.transform,
+                                              vertex.position));
     }
-    for (const std::uint32_t index : compiled.indices) {
-      if (index < compiled.vertices.size()) {
+    for (const std::uint32_t index : geometry.indices) {
+      if (index < geometry.vertices.size()) {
         mesh.indices.push_back(vertex_offset + index);
       }
     }

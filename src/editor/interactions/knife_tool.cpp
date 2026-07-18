@@ -30,8 +30,6 @@ public:
 	[[nodiscard]] std::string_view id() const override;
 	[[nodiscard]] std::string_view label() const override;
 	void reset_runtime_state(EditorRuntimeState& runtime, bool keep_active_when_current_tool = false) const override;
-
-	[[nodiscard]] CommandResult commit(EditorSession& session, KnifeToolState& state) const;
 };
 
 const KnifeToolImpl& knife_tool_impl()
@@ -795,68 +793,6 @@ bool accept_knife_current_point(KnifeToolState& state, double grid_size)
 	return true;
 }
 
-CommandResult knife_segment(
-		std::vector<PolygonObject>& objects,
-		int object_id,
-		const quader_poly::KnifePointTarget& previous,
-		const quader_poly::KnifePointTarget& current,
-		int& active_object_id,
-		SelectionMode& mode)
-{
-	const int object_index = object_index_by_id(objects, object_id);
-	if (object_index < 0) {
-		return error_result("Knife segment needs a locked target mesh.");
-	}
-
-	PolygonObject& object = objects[object_index];
-	quader_poly::Selection selection;
-	const quader_poly::OperationResult result = quader_poly::knife_segment(object.document, selection, previous, current);
-	if (!result.changed) {
-		return error_result(result.message.empty() ? "Could not apply the knife segment." : result.message);
-	}
-
-	for (PolygonObject& candidate : objects) {
-		candidate.selected = false;
-		candidate.selection = quader_poly::Selection();
-	}
-	object.selected = true;
-	object.selection = std::move(selection);
-	active_object_id = object.id;
-        mode = SelectionMode::Vertex;
-        return ok_result(true);
-}
-
-CommandResult knife_stroke(
-		std::vector<PolygonObject>& objects,
-		int object_id,
-		std::span<const quader_poly::KnifePointTarget> points,
-		std::span<const quader_poly::KnifeStrokeSegment> segments,
-		int& active_object_id,
-		SelectionMode& mode)
-{
-	const int object_index = object_index_by_id(objects, object_id);
-	if (object_index < 0) {
-		return error_result("Knife stroke needs a locked target mesh.");
-	}
-
-	PolygonObject& object = objects[object_index];
-	quader_poly::Selection selection;
-	const quader_poly::OperationResult result = quader_poly::knife_stroke(object.document, selection, points, segments);
-	if (!result.changed) {
-		return error_result(result.message.empty() ? "Could not apply the knife stroke." : result.message);
-	}
-
-	for (PolygonObject& candidate : objects) {
-		candidate.selected = false;
-		candidate.selection = quader_poly::Selection();
-	}
-	object.selected = true;
-	object.selection = std::move(selection);
-	active_object_id = object.id;
-        mode = SelectionMode::Vertex;
-        return ok_result(true);
-}
-
 KnifeSegmentPreview build_knife_segment_preview(
 		const std::vector<PolygonObject>& objects,
 		int object_id,
@@ -889,63 +825,6 @@ KnifeSegmentPreview build_knife_segment_preview(
           });
         }
 	return preview;
-}
-
-CommandResult EditorSession::commit_knife_tool(KnifeToolState& state)
-{
-	return knife_tool_impl().commit(*this, state);
-}
-
-CommandResult KnifeToolImpl::commit(EditorSession& session, KnifeToolState& state) const
-{
-	QDR_PROFILE_SCOPE("qdr_editor_core.KnifeTool.commit");
-	if (state.segments.empty()) {
-		reset_knife_tool(state);
-		return ok_result(false);
-	}
-	if (state.target_object_id <= 0) {
-          state.status = KnifeToolStatus::InvalidTarget;
-          rebuild_knife_overlay(state);
-          return error_result("Knife needs a locked target mesh.");
-	}
-
-	const CommandResult result = session.apply_history_command([&state](EditorSession& editor_session) {
-		return editor_session.knife_stroke(
-			state.target_object_id,
-			state.points,
-			state.segments);
-	});
-	if (!result.ok || !result.changed) {
-          state.status = KnifeToolStatus::InvalidTarget;
-          rebuild_knife_overlay(state);
-          return result.ok ? error_result("Could not apply the knife stroke.")
-                           : result;
-	}
-
-	reset_knife_tool(state);
-	return result;
-}
-
-CommandResult EditorSession::knife_segment(int object_id, const quader_poly::KnifePointTarget& previous, const quader_poly::KnifePointTarget& current)
-{
-	const SelectionMode mode_before = state_.selection_mode;
-	const CommandResult result = quader_editor_core::knife_segment(state_.objects, object_id, previous, current, state_.active_object_id, state_.selection_mode);
-	note_content_result(result);
-	if (result.changed || state_.selection_mode != mode_before) {
-		note_selection_changed();
-	}
-	return result;
-}
-
-CommandResult EditorSession::knife_stroke(int object_id, std::span<const quader_poly::KnifePointTarget> points, std::span<const quader_poly::KnifeStrokeSegment> segments)
-{
-	const SelectionMode mode_before = state_.selection_mode;
-	const CommandResult result = quader_editor_core::knife_stroke(state_.objects, object_id, points, segments, state_.active_object_id, state_.selection_mode);
-	note_content_result(result);
-	if (result.changed || state_.selection_mode != mode_before) {
-		note_selection_changed();
-	}
-	return result;
 }
 
 } // namespace quader_editor_core

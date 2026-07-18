@@ -6,7 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "test_support.hpp"
 
-#include <mesh/polygon/document.hpp>
+#include <quader/modeling/neutral/polygon/document.hpp>
 
 #include <array>
 
@@ -50,17 +50,17 @@ void liveness_snapshot_reports_live_vertices_faces_edges_and_revision()
 {
     Document document = make_quad_document();
     const PolygonDocumentLiveness liveness = build_polygon_document_liveness(document);
-    require_test(liveness.revision != 0U, "liveness snapshot should expose a non-zero document revision");
-    require_test(liveness.contains_vertex(1), "liveness snapshot should include live vertices");
-    require_test(liveness.contains_face(1), "liveness snapshot should include live faces");
-    require_test(liveness.contains_edge(make_edge(1, 2)), "liveness snapshot should include face boundary edges");
-    require_test(!liveness.contains_edge(make_edge(1, 3)), "liveness snapshot should reject non-boundary edges");
+    ASSERT_TRUE(require_test(liveness.revision != 0U, "liveness snapshot should expose a non-zero document revision"));
+    ASSERT_TRUE(require_test(liveness.contains_vertex(1), "liveness snapshot should include live vertices"));
+    ASSERT_TRUE(require_test(liveness.contains_face(1), "liveness snapshot should include live faces"));
+    ASSERT_TRUE(require_test(liveness.contains_edge(make_edge(1, 2)), "liveness snapshot should include face boundary edges"));
+    ASSERT_TRUE(require_test(!liveness.contains_edge(make_edge(1, 3)), "liveness snapshot should reject non-boundary edges"));
 
     document.faces.clear();
     const PolygonDocumentLiveness after_face_delete = build_polygon_document_liveness(document);
-    require_test(after_face_delete.revision != liveness.revision, "topology deletion should change liveness revision");
-    require_test(!after_face_delete.contains_face(1), "deleted faces should stop being live");
-    require_test(!after_face_delete.contains_edge(make_edge(1, 2)), "deleting the face should remove boundary edge liveness");
+    ASSERT_TRUE(require_test(after_face_delete.revision != liveness.revision, "topology deletion should change liveness revision"));
+    ASSERT_TRUE(require_test(!after_face_delete.contains_face(1), "deleted faces should stop being live"));
+    ASSERT_TRUE(require_test(!after_face_delete.contains_edge(make_edge(1, 2)), "deleting the face should remove boundary edge liveness"));
 }
 
 void valid_selection_liveness_report_stays_empty()
@@ -76,7 +76,7 @@ void valid_selection_liveness_report_stays_empty()
     selection.active_edge = make_edge(1, 2);
 
     const PolygonSelectionLivenessReport report = validate_polygon_selection_liveness(document, selection);
-    require_test(report.ok(), "valid selected and active element IDs should pass liveness validation");
+    ASSERT_TRUE(require_test(report.ok(), "valid selected and active element IDs should pass liveness validation"));
 }
 
 void selection_liveness_detects_deleted_selected_ids()
@@ -96,19 +96,19 @@ void selection_liveness_detects_deleted_selected_ids()
 
     const PolygonSelectionLivenessReport report =
         validate_polygon_selection_liveness(document, stale_selection);
-    require_test(!report.ok(), "deleted selected IDs should fail liveness validation");
-    require_test(
+    ASSERT_TRUE(require_test(!report.ok(), "deleted selected IDs should fail liveness validation"));
+    ASSERT_TRUE(require_test(
         has_issue(report, PolygonSelectionLivenessIssueCode::MissingSelectedVertex, 4),
-        "deleted selected vertex should be diagnosed");
-    require_test(
+        "deleted selected vertex should be diagnosed"));
+    ASSERT_TRUE(require_test(
         has_issue(report, PolygonSelectionLivenessIssueCode::MissingSelectedEdge, kInvalidElementId, make_edge(1, 2)),
-        "selected edge removed from topology should be diagnosed");
-    require_test(
+        "selected edge removed from topology should be diagnosed"));
+    ASSERT_TRUE(require_test(
         has_issue(report, PolygonSelectionLivenessIssueCode::MissingSelectedFace, 1),
-        "deleted selected face should be diagnosed");
-    require_test(
+        "deleted selected face should be diagnosed"));
+    ASSERT_TRUE(require_test(
         has_issue(report, PolygonSelectionLivenessIssueCode::MissingActiveFace, 1),
-        "deleted active face should be diagnosed");
+        "deleted active face should be diagnosed"));
 }
 
 void selection_liveness_detects_missing_edge_endpoints_and_active_ids()
@@ -124,27 +124,39 @@ void selection_liveness_detects_missing_edge_endpoints_and_active_ids()
 
     const PolygonSelectionLivenessReport report =
         validate_polygon_selection_liveness(build_polygon_document_liveness(document), stale_selection);
-    require_test(!report.ok(), "stale edges and active IDs should fail liveness validation");
-    require_test(
+    ASSERT_TRUE(require_test(!report.ok(), "stale edges and active IDs should fail liveness validation"));
+    ASSERT_TRUE(require_test(
         has_issue(report, PolygonSelectionLivenessIssueCode::MissingSelectedEdgeEndpoint, 999, make_edge(2, 999)),
-        "selected edge with a missing endpoint should be diagnosed");
-    require_test(
+        "selected edge with a missing endpoint should be diagnosed"));
+    ASSERT_TRUE(require_test(
         has_issue(report, PolygonSelectionLivenessIssueCode::MissingSelectedEdge, kInvalidElementId, make_edge(1, 3)),
-        "selected edge with live endpoints but no boundary edge should be diagnosed");
-    require_test(
+        "selected edge with live endpoints but no boundary edge should be diagnosed"));
+    ASSERT_TRUE(require_test(
         has_issue(report, PolygonSelectionLivenessIssueCode::MissingSelectedFace, 999),
-        "missing selected face should be diagnosed");
-    require_test(
+        "missing selected face should be diagnosed"));
+    ASSERT_TRUE(require_test(
         has_issue(report, PolygonSelectionLivenessIssueCode::MissingActiveEdgeEndpoint, 999, make_edge(3, 999)),
-        "active edge with a missing endpoint should be diagnosed");
+        "active edge with a missing endpoint should be diagnosed"));
 }
 
 } // namespace
 
-TEST(QdrDocumentLivenessTests, QdrDocumentLivenessTests)
+TEST(QdrDocumentLivenessTests, SnapshotReportsLiveVerticesFacesEdgesAndRevision)
 {
     liveness_snapshot_reports_live_vertices_faces_edges_and_revision();
+}
+
+TEST(QdrDocumentLivenessTests, ValidSelectionReportStaysEmpty)
+{
     valid_selection_liveness_report_stays_empty();
+}
+
+TEST(QdrDocumentLivenessTests, DetectsDeletedSelectedIds)
+{
     selection_liveness_detects_deleted_selected_ids();
+}
+
+TEST(QdrDocumentLivenessTests, DetectsMissingEdgeEndpointsAndActiveIds)
+{
     selection_liveness_detects_missing_edge_endpoints_and_active_ids();
 }

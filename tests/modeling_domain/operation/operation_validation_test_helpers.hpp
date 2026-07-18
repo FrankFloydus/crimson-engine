@@ -8,7 +8,7 @@
 
 #include "operation_test_helpers.hpp"
 
-#include <mesh/polygon/document_validation.hpp>
+#include <quader/modeling/neutral/polygon/document_validation.hpp>
 
 #include <algorithm>
 #include <sstream>

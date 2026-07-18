@@ -20,7 +20,7 @@
 #include <vector>
 
 #include <editor/modeling/runtime/session.hpp>
-#include <mesh/polygon/document.hpp>
+#include <quader/modeling/neutral/polygon/document.hpp>
 
 namespace quader {
 namespace {

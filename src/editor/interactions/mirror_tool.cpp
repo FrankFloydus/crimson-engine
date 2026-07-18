@@ -7,7 +7,6 @@
 #include <editor/interactions/mirror_tool.hpp>
 #include <diagnostics/profile.hpp>
 #include <editor/modeling/runtime/editor_tool.hpp>
-#include <mesh/polygon/document.hpp>
 
 #include "editor/modeling/runtime/session_internal.hpp"
 #include "tool_math_internal.hpp"
@@ -36,221 +35,6 @@ void invalidate_mirror_plane_preview(MirrorToolState& state)
 {
 	state.preview_valid = false;
 	state.preview_counts = {};
-}
-
-const PolygonObject* object_by_id(std::span<const PolygonObject> objects, int object_id)
-{
-	for (const PolygonObject& object : objects) {
-		if (object.id == object_id) {
-			return &object;
-		}
-	}
-	return nullptr;
-}
-
-bool id_span_contains(std::span<const int> ids, int value)
-{
-	return std::find(ids.begin(), ids.end(), value) != ids.end();
-}
-
-quader::QVec3 bounds_center_for_flip(const Bounds3& bounds)
-{
-	if (bounds.empty) {
-		return {};
-	}
-	return {
-		(bounds.min.x + bounds.max.x) * 0.5F,
-		(bounds.min.y + bounds.max.y) * 0.5F,
-		(bounds.min.z + bounds.max.z) * 0.5F,
-	};
-}
-
-/**
- * Coordinates Mirror Operation Service responsibilities for the modal modeling interaction layer.
- */
-class MirrorOperationService final {
-public:
-	void mirror_document(quader_poly::Document& document, const DrawnPlaneSurface& surface) const
-	{
-		for (quader_poly::Vertex& vertex : document.vertices) {
-			vertex.position = reflect_point_across_plane(vertex.position, surface.origin, surface.normal);
-		}
-		for (quader_poly::Face& face : document.faces) {
-			std::reverse(face.vertices.begin(), face.vertices.end());
-			if (face.uvs.size() == face.vertices.size()) {
-				std::reverse(face.uvs.begin(), face.uvs.end());
-			}
-		}
-	}
-
-	[[nodiscard]] DrawnPlaneSurface world_axis_surface(TransformAxis axis) const
-	{
-		DrawnPlaneSurface surface;
-		surface.valid = true;
-		surface.origin = {};
-		switch (axis) {
-                case TransformAxis::X:
-                  surface.normal = {1.0F, 0.0F, 0.0F};
-                  break;
-                case TransformAxis::Y:
-                  surface.normal = {0.0F, 1.0F, 0.0F};
-                  break;
-                case TransformAxis::Z:
-                  surface.normal = {0.0F, 0.0F, 1.0F};
-                  break;
-                case TransformAxis::None:
-                case TransformAxis::Xy:
-                case TransformAxis::Xz:
-                case TransformAxis::Yz:
-                case TransformAxis::All:
-                default:
-                  return {false, {}, {}, "Mirror axis must be X, Y, or Z."};
-		}
-		return surface;
-	}
-
-	[[nodiscard]] std::vector<quader::QVec3> world_axis_plane_points(TransformAxis axis) const
-	{
-		switch (axis) {
-                case TransformAxis::X:
-                  return {{}, {0.0F, 1.0F, 0.0F}, {0.0F, 0.0F, 1.0F}};
-                case TransformAxis::Y:
-                  return {{}, {1.0F, 0.0F, 0.0F}, {0.0F, 0.0F, 1.0F}};
-                case TransformAxis::Z:
-                  return {{}, {1.0F, 0.0F, 0.0F}, {0.0F, 1.0F, 0.0F}};
-                case TransformAxis::None:
-                case TransformAxis::Xy:
-                case TransformAxis::Xz:
-                case TransformAxis::Yz:
-                case TransformAxis::All:
-                default:
-                  return {};
-		}
-	}
-
-	[[nodiscard]] DrawnPlaneSurface mesh_flip_surface(
-			ViewportFlipOrientation orientation,
-			quader::QVec3 pivot) const
-	{
-		DrawnPlaneSurface surface;
-		surface.valid = true;
-		surface.origin = pivot;
-                if (orientation == ViewportFlipOrientation::Horizontal) {
-                  surface.normal = {1.0F, 0.0F, 0.0F};
-                  return surface;
-                }
-                if (orientation == ViewportFlipOrientation::Vertical) {
-                  surface.normal = {0.0F, 1.0F, 0.0F};
-                  return surface;
-                }
-                return { false, {}, {}, "Flip orientation must be horizontal or vertical." };
-	}
-
-	[[nodiscard]] CommandResult mirror_objects(
-			std::vector<PolygonObject>& objects,
-			std::span<const int> object_ids,
-			const DrawnPlaneSurface& surface,
-			int& next_object_id,
-			int& active_object_id,
-			SelectionMode& mode) const
-	{
-		if (object_ids.empty()) {
-			return error_result("Select one or more mesh objects to mirror.");
-		}
-		if (!surface.valid) {
-			return error_result(surface.message.empty() ? "Mirror needs a valid plane." : surface.message);
-		}
-
-		std::vector<PolygonObject> candidate = objects;
-		int candidate_next_object_id = next_polygon_object_id(candidate, next_object_id);
-		for (PolygonObject& object : candidate) {
-			object.selected = false;
-			object.selection = quader_poly::Selection();
-		}
-
-		std::vector<int> mirrored_ids;
-		mirrored_ids.reserve(object_ids.size());
-		for (const int object_id : object_ids) {
-			const int object_index = object_index_by_id(candidate, object_id);
-			if (object_index < 0) {
-				return error_result("Mirror target mesh was not found.");
-			}
-			PolygonObject copy = candidate[static_cast<std::size_t>(object_index)];
-			copy.id = candidate_next_object_id++;
-			copy.selected = true;
-			copy.selection = quader_poly::Selection();
-			mirror_document(copy.document, surface);
-			if (quader_poly::compile_document(copy.document).indices.empty()) {
-				return error_result("Could not mirror the selected mesh.");
-			}
-			mirrored_ids.push_back(copy.id);
-			candidate.push_back(std::move(copy));
-		}
-
-		if (mirrored_ids.empty()) {
-			return error_result("Select one or more mesh objects to mirror.");
-		}
-
-		objects = std::move(candidate);
-		next_object_id = candidate_next_object_id;
-                mode = SelectionMode::Object;
-                active_object_id = mirrored_ids.back();
-		normalize_active_object_id(objects, active_object_id);
-		return ok_result(true);
-	}
-
-	[[nodiscard]] CommandResult flip_objects(
-			std::vector<PolygonObject>& objects,
-			std::span<const int> object_ids,
-			ViewportFlipOrientation orientation,
-			int& active_object_id,
-			SelectionMode& mode) const
-	{
-          if (mode != SelectionMode::Object) {
-            return error_result(
-                "Flip works only in object/mesh selection mode.");
-          }
-                if (object_ids.empty()) {
-			return error_result("Select one or more mesh objects to flip.");
-		}
-		const DrawnPlaneSurface orientation_check = mesh_flip_surface(orientation, {});
-		if (!orientation_check.valid) {
-			return error_result(orientation_check.message.empty() ? "Flip needs a valid orientation." : orientation_check.message);
-		}
-
-		std::vector<PolygonObject> candidate = objects;
-		for (const int object_id : object_ids) {
-			const int object_index = object_index_by_id(candidate, object_id);
-			if (object_index < 0) {
-				return error_result("Flip target mesh was not found.");
-			}
-			PolygonObject& object = candidate[static_cast<std::size_t>(object_index)];
-			const Bounds3 bounds = document_bounds(object);
-			if (bounds.empty) {
-				return error_result("Flip needs selected mesh bounds.");
-			}
-			const DrawnPlaneSurface surface = mesh_flip_surface(orientation, bounds_center_for_flip(bounds));
-			mirror_document(object.document, surface);
-			object.selection = quader_poly::Selection();
-			if (quader_poly::compile_document(object.document).indices.empty()) {
-				return error_result("Could not flip the selected mesh.");
-			}
-		}
-
-		objects = std::move(candidate);
-                mode = SelectionMode::Object;
-                if (!id_span_contains(object_ids, active_object_id)) {
-			active_object_id = object_ids.back();
-		}
-		normalize_active_object_id(objects, active_object_id);
-		return ok_result(true);
-	}
-};
-
-const MirrorOperationService& mirror_operation_service()
-{
-  static const MirrorOperationService kService;
-  return kService;
 }
 
 /**
@@ -504,6 +288,7 @@ public:
 	[[nodiscard]] MirrorToolResult refresh_preview(MirrorToolState& state, std::span<const PolygonObject> objects) const
 	{
 		QDR_PROFILE_SCOPE("qdr_editor_core.MirrorTool.refresh_preview");
+		(void)objects;
 		if (!can_preview(state)) {
 			return invalidate_preview(state);
 		}
@@ -515,18 +300,7 @@ public:
 
 		MirrorPreviewCounts counts;
 		counts.target_count = static_cast<int>(state.target_object_ids.size());
-		for (const int object_id : state.target_object_ids) {
-			const PolygonObject* object = object_by_id(objects, object_id);
-			if (object == nullptr) {
-				return set_preview_result(state, false, {}, "Mirror target mesh was not found.");
-			}
-			PolygonObject copy = *object;
-			mirror_document_across_drawn_plane(copy.document, surface);
-			if (quader_poly::compile_document(copy.document).indices.empty()) {
-				return set_preview_result(state, false, {}, "Mirror preview failed.");
-			}
-			++counts.mirrored_count;
-		}
+		counts.mirrored_count = counts.target_count;
 		return set_preview_result(state, true, counts, {});
 	}
 
@@ -540,31 +314,6 @@ public:
 			return result;
 		}
 		return refresh_preview(state, objects);
-	}
-
-	[[nodiscard]] std::vector<quader_poly::Document> preview_documents(
-			const MirrorToolState& state,
-			std::span<const PolygonObject> objects) const
-	{
-		QDR_PROFILE_SCOPE("qdr_editor_core.MirrorTool.preview_documents");
-		std::vector<quader_poly::Document> documents;
-		if (!can_preview(state)) {
-			return documents;
-		}
-		const DrawnPlaneSurface surface = drawn_plane_surface_from_points(plane_points(state));
-		if (!surface.valid) {
-			return documents;
-		}
-		for (const int object_id : state.target_object_ids) {
-			const PolygonObject* object = object_by_id(objects, object_id);
-			if (object == nullptr) {
-				continue;
-			}
-			quader_poly::Document document = object->document;
-			mirror_document_across_drawn_plane(document, surface);
-			documents.push_back(std::move(document));
-		}
-		return documents;
 	}
 
 	[[nodiscard]] MirrorToolResult update_hover_from_ray(
@@ -661,60 +410,6 @@ const MirrorTool& mirror_tool_instance()
 const EditorTool& mirror_tool()
 {
 	return mirror_tool_instance();
-}
-
-void mirror_document_across_drawn_plane(quader_poly::Document& document, const DrawnPlaneSurface& surface)
-{
-	mirror_operation_service().mirror_document(document, surface);
-}
-
-DrawnPlaneSurface mirror_world_axis_surface(TransformAxis axis)
-{
-	return mirror_operation_service().world_axis_surface(axis);
-}
-
-std::vector<quader::QVec3> mirror_world_axis_plane_points(TransformAxis axis)
-{
-	return mirror_operation_service().world_axis_plane_points(axis);
-}
-
-DrawnPlaneSurface mirror_mesh_flip_surface(
-		ViewportFlipOrientation orientation,
-		quader::QVec3 pivot)
-{
-	return mirror_operation_service().mesh_flip_surface(orientation, pivot);
-}
-
-CommandResult mirror_objects_across_surface(
-		std::vector<PolygonObject>& objects,
-		std::span<const int> object_ids,
-		const DrawnPlaneSurface& surface,
-		int& next_object_id,
-		int& active_object_id,
-		SelectionMode& mode)
-{
-	return mirror_operation_service().mirror_objects(
-		objects,
-		object_ids,
-		surface,
-		next_object_id,
-		active_object_id,
-		mode);
-}
-
-CommandResult flip_objects_by_orientation(
-		std::vector<PolygonObject>& objects,
-		std::span<const int> object_ids,
-		ViewportFlipOrientation orientation,
-		int& active_object_id,
-		SelectionMode& mode)
-{
-	return mirror_operation_service().flip_objects(
-		objects,
-		object_ids,
-		orientation,
-		active_object_id,
-		mode);
 }
 
 std::vector<int> mirror_target_object_ids_for_selection(const RectangleSelectionState& selection)
@@ -863,13 +558,6 @@ MirrorToolResult refresh_mirror_preview_from_selection(
 		std::span<const PolygonObject> objects)
 {
 	return mirror_tool_instance().refresh_preview_from_selection(state, selection, objects);
-}
-
-std::vector<quader_poly::Document> mirror_preview_documents(
-		const MirrorToolState& state,
-		std::span<const PolygonObject> objects)
-{
-	return mirror_tool_instance().preview_documents(state, objects);
 }
 
 MirrorToolResult update_mirror_hover_from_ray(

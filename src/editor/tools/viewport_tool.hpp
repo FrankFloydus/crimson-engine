@@ -99,9 +99,6 @@ struct ViewportBoxToolContext {
   std::function<ModelingCommandResult()> apply_session;
   std::function<ModelingCommandResult()> cancel_session;
   std::function<bool()> session_active;
-  // Transitional fallback for callers that still exercise the legacy
-  // one-shape Box command directly. The native app uses accept_preview.
-  std::function<ModelingCreateBoxResult(std::string, AssetId)> commit_preview;
   std::function<std::string()> next_mesh_name;
 };
 

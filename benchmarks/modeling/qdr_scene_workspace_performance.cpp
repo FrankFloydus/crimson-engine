@@ -13,7 +13,7 @@
 #include "io/qdr/qdr_project_write_snapshot.hpp"
 #include "scene/document/scene_content_document.hpp"
 
-#include <mesh/polygon/document_model.hpp>
+#include <quader/modeling/neutral/polygon/document_model.hpp>
 
 #include <algorithm>
 #include <array>
@@ -689,8 +689,11 @@ SaveMeasurements measure_save(const BenchmarkOptions &options,
       validation_ms = elapsed_ms(phase_started);
 
       const Clock::time_point snapshot_started = Clock::now();
-      const quader::QdrProjectWriteSnapshot snapshot =
+      quader::QdrProjectWriteSnapshotResult snapshot_result =
           quader::qdr_project_write_snapshot_from_document(document);
+      require(snapshot_result.ok(), snapshot_result.error().message);
+      const quader::QdrProjectWriteSnapshot snapshot =
+          snapshot_result.take_value();
       snapshot_ms = elapsed_ms(snapshot_started);
 
       const Clock::time_point encode_started = Clock::now();
@@ -804,8 +807,11 @@ WorkspaceMeasurements measure_workspace(
   require(project.close_scene(initial).ok,
           "Could not close the initial clean benchmark scene.");
 
-  const quader::QdrProjectWriteSnapshot snapshot =
+  quader::QdrProjectWriteSnapshotResult snapshot_result =
       quader::qdr_project_write_snapshot_from_document(document);
+  require(snapshot_result.ok(), snapshot_result.error().message);
+  const quader::QdrProjectWriteSnapshot snapshot =
+      snapshot_result.take_value();
   constexpr std::array<std::string_view, 3> kPaths{
       "Scenes/first.qdr", "Scenes/second.qdr", "Scenes/close.qdr"};
   for (std::size_t index = 0u; index < kPaths.size(); ++index) {

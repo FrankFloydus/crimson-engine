@@ -8,7 +8,7 @@
 
 #include "polygon_document_native.hpp"
 
-#include <mesh/polygon/document_operations.hpp>
+#include <quader/modeling/neutral/polygon/document_operations.hpp>
 
 namespace quader::modeling {
 using namespace detail;
@@ -83,36 +83,6 @@ native_plane_cut_request(PlaneCutOptions options) {
 
 [[nodiscard]] bool nonzero(Vec3 value) {
   return value.x != 0.0F || value.y != 0.0F || value.z != 0.0F;
-}
-
-[[nodiscard]] Result<OperationResult>
-translate_whole_document(PolygonDocument &document, Vec3 offset) {
-  if (!nonzero(offset)) {
-    OperationResult result;
-    result.success = true;
-    result.changed = false;
-    result.message = "Paste offset was zero.";
-    return Result<OperationResult>::success(std::move(result));
-  }
-  Result<OperationResult> selected = document.select_all_faces();
-  if (!selected.ok()) {
-    return selected;
-  }
-  Result<OperationResult> translated = document.translate_selection(offset);
-  if (!translated.ok()) {
-    return translated;
-  }
-  static_cast<void>(document.clear_selection());
-  return translated;
-}
-
-[[nodiscard]] OperationReceipt clean_receipt(const ModelingApiContext &context,
-                                             bool changed) {
-  OperationReceipt receipt;
-  receipt.success = true;
-  receipt.changed = changed;
-  receipt.revisions = current_revisions(context);
-  return receipt;
 }
 
 [[nodiscard]] bool repeatable_command(std::string_view id) {
@@ -439,81 +409,22 @@ OperationReceipt OperationsApi::delete_selection() {
 }
 
 OperationReceipt OperationsApi::copy_selection() {
-  context_->clipboard.clear();
-  for (const SessionObjectSummary &summary : context_->session.objects()) {
-    if (!summary.selected) {
-      continue;
-    }
-    Result<PolygonDocument> document =
-        context_->session.document_copy(summary.id);
-    if (!document.ok()) {
-      return handle_failure(*context_, document.error());
-    }
-    PolygonDocument copied = std::move(document).value();
-    static_cast<void>(copied.clear_selection());
-    context_->clipboard.push_back({
-        .name = summary.name,
-        .document = std::move(copied),
-    });
+  Result<OperationResult> copied =
+      context_->session.copy_selection_to_clipboard();
+  if (!copied.ok()) {
+    return handle_failure(*context_, copied.error());
   }
-  if (context_->clipboard.empty()) {
-    return handle_failure(
-        *context_,
-        make_error(ErrorCode::InvalidArgument,
-                   "Select one or more meshes before copying."));
-  }
-  return clean_receipt(*context_, false);
+  return receipt_from_result(copied.value(), current_revisions(*context_));
 }
 
 OperationReceipt OperationsApi::paste_selection(PasteOptions options) {
-  if (context_->clipboard.empty()) {
-    return handle_failure(
-        *context_,
-        make_error(ErrorCode::InvalidArgument,
-                   "Copy one or more meshes before pasting."));
+  Result<ClipboardPasteResult> pasted =
+      context_->session.paste_clipboard(options.offset);
+  if (!pasted.ok()) {
+    return handle_failure(*context_, pasted.error());
   }
-
-  const std::size_t undo_mark = context_->session.undo_depth();
-  Result<OperationResult> cleared = context_->session.apply_object_selection(
-      std::span<const ObjectId>{}, SelectionEdit::Replace);
-  if (!cleared.ok()) {
-    return handle_failure(*context_, cleared.error());
-  }
-
-  std::vector<ObjectId> pasted;
-  pasted.reserve(context_->clipboard.size());
-  for (const ModelingClipboardObject &object : context_->clipboard) {
-    PolygonDocument document = object.document;
-    Result<OperationResult> translated =
-        translate_whole_document(document, options.offset);
-    if (!translated.ok()) {
-      static_cast<void>(context_->session.rollback_undo_since(undo_mark));
-      return handle_failure(*context_, translated.error());
-    }
-    Result<ObjectId> added =
-        context_->session.add_document(std::move(document), object.name);
-    if (!added.ok()) {
-      static_cast<void>(context_->session.rollback_undo_since(undo_mark));
-      return handle_failure(*context_, added.error());
-    }
-    pasted.push_back(added.value());
-  }
-
-  Result<OperationResult> selected =
-      context_->session.apply_object_selection(pasted, SelectionEdit::Replace);
-  if (!selected.ok()) {
-    static_cast<void>(context_->session.rollback_undo_since(undo_mark));
-    return handle_failure(*context_, selected.error());
-  }
-  context_->session.squash_undo_since(undo_mark);
-
-  OperationReceipt receipt =
-      receipt_from_result(selected.value(), current_revisions(*context_));
-  receipt.changed = true;
-  receipt.dirty.topology = true;
-  receipt.dirty.geometry = true;
-  receipt.dirty.selection = true;
-  return receipt;
+  return receipt_from_result(pasted.value().operation,
+                             current_revisions(*context_));
 }
 
 OperationReceipt OperationsApi::repeat_last_action() {

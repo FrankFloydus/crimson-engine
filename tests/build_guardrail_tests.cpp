@@ -9,12 +9,20 @@
 #include "support/guardrail_file_scan.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cctype>
+#include <cstdio>
 #include <filesystem>
 #include <regex>
+#include <stdexcept>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
+
+#if defined(_WIN32)
+#include <Windows.h>
+#endif
 
 namespace {
 
@@ -23,6 +31,7 @@ using quader::test::guardrail::normalized_relative;
 using quader::test::guardrail::read_file;
 using quader::test::guardrail::read_source_file;
 using quader::test::guardrail::source_path;
+using quader::test::guardrail::source_files_under;
 using quader::test::guardrail::source_root;
 using quader::test::guardrail::source_slice;
 using quader::test::guardrail::starts_with;
@@ -33,6 +42,77 @@ void expect_contains(const std::string &source, const std::string &needle) {
 
 void expect_missing(const std::string &source, const std::string &needle) {
   EXPECT_EQ(source.find(needle), std::string::npos) << needle;
+}
+
+/**
+ * Captures one child-process status and its merged standard output.
+ */
+struct CommandResult {
+  int exit_code{-1};
+  std::string output;
+};
+
+CommandResult run_command_capture(const std::string &command) {
+#if defined(_WIN32)
+  FILE *pipe = _popen((command + " 2>&1").c_str(), "r");
+#else
+  FILE *pipe = popen((command + " 2>&1").c_str(), "r");
+#endif
+  if (pipe == nullptr) {
+    return {};
+  }
+
+  std::string output;
+  std::array<char, 4096> buffer{};
+  while (std::fgets(buffer.data(), static_cast<int>(buffer.size()), pipe) !=
+         nullptr) {
+    output += buffer.data();
+  }
+
+#if defined(_WIN32)
+  const int exit_code = _pclose(pipe);
+#else
+  const int exit_code = pclose(pipe);
+#endif
+  return {exit_code, std::move(output)};
+}
+
+std::string quoted_process_argument(const std::filesystem::path &path) {
+  return "\"" + path.string() + "\"";
+}
+
+std::string powershell_literal(const std::filesystem::path &path) {
+  std::string value = path.string();
+  std::size_t offset = 0;
+  while ((offset = value.find('\'', offset)) != std::string::npos) {
+    value.insert(offset, 1, '\'');
+    offset += 2;
+  }
+  return "'" + value + "'";
+}
+
+std::filesystem::path current_executable_path() {
+#if defined(_WIN32)
+  std::vector<wchar_t> buffer(32768, L'\0');
+  const DWORD length = ::GetModuleFileNameW(
+      nullptr, buffer.data(), static_cast<DWORD>(buffer.size()));
+  if (length == 0 || length == static_cast<DWORD>(buffer.size())) {
+    throw std::runtime_error("Could not resolve the current executable path.");
+  }
+  return std::filesystem::path(std::wstring(buffer.data(), length));
+#else
+  return std::filesystem::canonical("/proc/self/exe");
+#endif
+}
+
+void expect_contains_in_order(const std::string &source,
+                              const std::vector<std::string> &needles) {
+  std::size_t offset = 0;
+  for (const std::string &needle : needles) {
+    const std::size_t found = source.find(needle, offset);
+    ASSERT_NE(found, std::string::npos) << needle << "\n" << source;
+    offset = found + needle.size();
+  }
 }
 
 std::string joined(std::string_view left, std::string_view right) {
@@ -457,7 +537,6 @@ third_party_license_expectations() {
       {"zlib", "zlib", "licenses/zlib-Zlib.txt", true},
       {"spdlog", "spdlog", "licenses/spdlog-MIT.txt", true},
       {"", "{fmt}", "licenses/fmt-MIT.txt", false},
-      {"taskflow", "Taskflow", "licenses/taskflow-MIT.txt", true},
       {"", "Tracy Profiler", "licenses/tracy-BSD-3-Clause.txt", false},
   };
   return kExpectations;
@@ -679,7 +758,8 @@ TEST(BuildGuardrailTests, FormerSdkBoundaryIsAbsorbedIntoAppBuild) {
 TEST(BuildGuardrailTests,
      PolygonOperationResultsReportStructuredTopologyDeltas) {
   const std::string document_header =
-      read_source_file("src/mesh/polygon/document_operations.hpp");
+      read_source_file("src/sdk/core/modeling/neutral/include/quader/modeling/"
+                       "neutral/polygon/document_operations.hpp");
   expect_contains(document_header, "struct OperationElementDelta");
   expect_contains(document_header, "std::vector<ElementId> vertices;");
   expect_contains(document_header, "std::vector<Edge> edges;");
@@ -739,26 +819,35 @@ TEST(BuildGuardrailTests,
   };
 
   const std::vector<PolygonHeaderExpectation> headers = {
-      {"src/mesh/polygon/document_model.hpp",
+      {"src/sdk/core/modeling/neutral/include/quader/modeling/neutral/"
+       "polygon/document_model.hpp",
        {"struct Document", "add_vertex", "make_cube"}},
-      {"src/mesh/polygon/document_selection.hpp",
+      {"src/sdk/core/modeling/neutral/include/quader/modeling/neutral/"
+       "polygon/document_selection.hpp",
        {"struct Selection", "select_only", "selection_center"}},
-      {"src/mesh/polygon/document_operations.hpp",
+      {"src/sdk/core/modeling/neutral/include/quader/modeling/neutral/"
+       "polygon/document_operations.hpp",
        {"struct OperationResult", "PlaneCutRequest", "thicken_selected_faces"}},
-      {"src/mesh/polygon/document_topology.hpp",
+      {"src/sdk/core/modeling/neutral/include/quader/modeling/neutral/"
+       "polygon/document_topology.hpp",
        {"FacePerimeterInfo", "document_edges", "face_normal"}},
-      {"src/mesh/polygon/document_mesh_compilation.hpp",
+      {"src/sdk/core/modeling/neutral/include/quader/modeling/neutral/"
+       "polygon/document_mesh_compilation.hpp",
        {"CompiledMesh", "compile_document"}},
-      {"src/mesh/polygon/document_picking.hpp",
+      {"src/sdk/core/modeling/neutral/include/quader/modeling/neutral/"
+       "polygon/document_picking.hpp",
        {"PickOptions", "PickResult", "pick_element"}},
-      {"src/mesh/polygon/document_overlay_preview.hpp",
+      {"src/sdk/core/modeling/neutral/include/quader/modeling/neutral/"
+       "polygon/document_overlay_preview.hpp",
        {"OverlayData", "KnifeSegmentPreview", "build_overlay"}},
-      {"src/mesh/polygon/element_handles.hpp",
+      {"src/sdk/core/modeling/neutral/include/quader/modeling/neutral/"
+       "polygon/element_handles.hpp",
        {"struct VertexId", "struct FaceId", "struct EdgeKey"}},
   };
 
   const std::string umbrella =
-      read_source_file("src/mesh/polygon/document.hpp");
+      read_source_file("src/sdk/core/modeling/neutral/include/quader/modeling/"
+                       "neutral/polygon/document.hpp");
   for (const PolygonHeaderExpectation &header : headers) {
     const std::string path(header.path);
     ASSERT_TRUE(std::filesystem::exists(source_path(path))) << path;
@@ -766,24 +855,27 @@ TEST(BuildGuardrailTests,
     for (const std::string_view needle : header.owner_needles) {
       expect_contains(source, std::string(needle));
     }
-    expect_missing(source, "#include <mesh/polygon/document.hpp>");
+    expect_missing(source, "#include <quader/modeling/neutral/polygon/document.hpp>");
 
     const std::string include_path =
-        path.substr(std::string("src/mesh/polygon/").size());
-    expect_contains(umbrella, "#include <mesh/polygon/" + include_path + ">");
+        path.substr(std::string("src/sdk/core/modeling/neutral/include/quader/"
+                                "modeling/neutral/polygon/")
+                        .size());
+    expect_contains(umbrella, "#include <quader/modeling/neutral/polygon/" + include_path + ">");
   }
 
-  expect_contains(umbrella, "#include <mesh/polygon/poly_operation.hpp>");
+  expect_contains(umbrella, "#include <quader/modeling/neutral/polygon/poly_operation.hpp>");
   expect_missing(umbrella, "struct Document {");
   expect_missing(umbrella, "struct Selection {");
   expect_missing(umbrella, "struct PickOptions {");
   expect_missing(umbrella, "struct OverlayData {");
 
   const std::string poly_operation =
-      read_source_file("src/mesh/polygon/poly_operation.hpp");
+      read_source_file("src/sdk/core/modeling/neutral/include/quader/modeling/"
+                       "neutral/polygon/poly_operation.hpp");
   expect_contains(poly_operation,
-                  "#include <mesh/polygon/document_operations.hpp>");
-  expect_missing(poly_operation, "#include <mesh/polygon/document.hpp>");
+                  "#include <quader/modeling/neutral/polygon/document_operations.hpp>");
+  expect_missing(poly_operation, "#include <quader/modeling/neutral/polygon/document.hpp>");
 }
 
 TEST(BuildGuardrailTests, BuildOptionsAndDependencyPinsHaveSingleCMakeOwner) {
@@ -897,6 +989,25 @@ TEST(BuildGuardrailTests, RootQuaderTestsListsEveryRootTestSource) {
     expect_contains(guardrail_target, relative);
     expect_missing(app_target, relative);
   }
+}
+
+TEST(BuildGuardrailTests,
+     QuaderTestsDisableIncrementalLinkOnlyForMsvcDebug) {
+  const std::string root_c_make = read_source_file("CMakeLists.txt");
+  const std::string app_target =
+      source_slice(root_c_make, "add_executable(quader_tests",
+                   "add_test(NAME quader_tests COMMAND quader_tests)");
+  const std::string msvc_options =
+      source_slice(app_target, "if(MSVC)", "endif()");
+
+  expect_contains(msvc_options,
+                  "target_compile_options(quader_tests PRIVATE /bigobj)");
+  expect_contains(msvc_options,
+                  "target_link_options(quader_tests PRIVATE\n"
+                  "            \"$<$<CONFIG:Debug>:/INCREMENTAL:NO>\")");
+  expect_missing(msvc_options, "CONFIG:Release");
+  expect_missing(msvc_options, "CONFIG:RelWithDebInfo");
+  EXPECT_EQ(count_occurrences(root_c_make, "/INCREMENTAL:NO"), 1U);
 }
 
 TEST(BuildGuardrailTests,
@@ -1157,7 +1268,9 @@ TEST(BuildGuardrailTests, ArchitectureReviewNamesRealModelingDomainTargets) {
   }
 
   expect_missing(review, "`qdr_modeling_domain_smoke`");
-  expect_contains(review, "## First Milestone (Completed)");
+  expect_contains(review, "## Initial Milestone Delivered");
+  expect_missing(review, "residual SDK-only native dependency");
+  expect_contains(review, "total coverage of every live");
   expect_contains(review, "SDK-only vcpkg configuration installs only the "
                           "`tests` feature dependency");
   expect_missing(review, "no SDK source boundary exists");
@@ -1234,10 +1347,7 @@ TEST(BuildGuardrailTests,
   expect_missing(modeling_c_make, "src/mesh/polygon/*.cpp");
   expect_missing(modeling_c_make, "src/mesh/geometry/geometry.cpp");
 
-  EXPECT_TRUE(files_with_extension(source_path("src/mesh/geometry"), ".cpp")
-                  .empty());
-  EXPECT_TRUE(files_with_extension(source_path("src/mesh/polygon"), ".cpp")
-                  .empty());
+  EXPECT_FALSE(std::filesystem::exists(source_path("src/mesh")));
   EXPECT_TRUE(std::filesystem::exists(
       source_path("src/io/qdr/qdr_atomic_write.cpp")));
   for (std::string_view retired_json_path : {
@@ -1259,17 +1369,39 @@ TEST(BuildGuardrailTests,
   EXPECT_TRUE(files_with_extension(retired_sdk_qdr, ".cpp").empty());
   EXPECT_TRUE(files_with_extension(retired_sdk_qdr, ".hpp").empty());
 
-  const std::filesystem::path native_mesh = source_path("src/mesh");
-  const std::filesystem::path canonical_mesh =
+  const std::filesystem::path neutral_mesh = source_path(
+      "src/sdk/core/modeling/neutral/include/quader/modeling/neutral");
+  const std::filesystem::path implementation_mesh =
       source_path("src/sdk/core/modeling/internal/mesh");
-  for (const std::filesystem::path &native_header :
-       files_with_extension(native_mesh, ".hpp")) {
-    const std::filesystem::path relative =
-        std::filesystem::relative(native_header, native_mesh);
-    const std::filesystem::path canonical_header = canonical_mesh / relative;
-    ASSERT_TRUE(std::filesystem::exists(canonical_header)) << relative;
-    EXPECT_EQ(read_file(native_header), read_file(canonical_header)) << relative;
+  EXPECT_EQ(files_with_extension(neutral_mesh, ".hpp").size(), 29U);
+  EXPECT_TRUE(files_with_extension(implementation_mesh, ".hpp").empty());
+
+  const std::string retired_include = joined("#include <me", "sh/");
+  const std::string retired_quoted_include = joined("#include \"me", "sh/");
+  const std::string neutral_internal_include =
+      joined("quader/modeling/neutral/polygon/", "internal/");
+  for (std::string_view root : {"src", "tests", "examples", "benchmarks"}) {
+    for (const std::filesystem::path &file :
+         source_files_under(source_path(std::string(root)))) {
+      const std::string relative = normalized_relative(file);
+      const std::string source = read_file(file);
+      EXPECT_EQ(source.find(retired_include), std::string::npos) << relative;
+      EXPECT_EQ(source.find(retired_quoted_include), std::string::npos)
+          << relative;
+      const bool internal_modeling_test =
+          relative == "tests/modeling_domain/"
+                      "qdr_document_openmesh_topology_query_tests.cpp";
+      if (!starts_with(relative, "src/sdk/core/modeling/") &&
+          !internal_modeling_test) {
+        EXPECT_EQ(source.find(neutral_internal_include), std::string::npos)
+            << relative;
+      }
+    }
   }
+
+  expect_contains(modeling_c_make, "QUADER_MODELING_SDK_NEUTRAL_INCLUDE_DIR");
+  expect_missing(modeling_c_make,
+                 "install(DIRECTORY \"${QUADER_MODELING_SDK_NEUTRAL_INCLUDE_DIR}");
 
   const std::string sdk_qdr_header = read_source_file(
       "src/sdk/core/modeling/include/quader/modeling/io/qdr_document.hpp");
@@ -1324,7 +1456,7 @@ TEST(BuildGuardrailTests,
   expect_contains(manifest, "\"tests\"");
   for (std::string_view native_only_dependency : {
            "entt", "flatbuffers", "glm", "lodepng", "qtbase",
-           "sentry-native", "spdlog", "stduuid", "taskflow", "zstd",
+           "sentry-native", "spdlog", "stduuid", "zstd",
            "zlib",
        }) {
     expect_contains(native_feature,
@@ -1339,6 +1471,235 @@ TEST(BuildGuardrailTests,
   expect_contains(sdk_only_check, "-DVCPKG_MANIFEST_FEATURES=tests");
   expect_contains(sdk_only_check,
                   "SDK-only configure installed native app package");
+}
+
+TEST(BuildGuardrailTests,
+     ModelingSdkOnlyGraphExcludesNativeModelingTargets) {
+  const std::string modeling =
+      read_source_file("cmake/QuaderModeling.cmake");
+  const std::string sdk_only_check =
+      read_source_file("cmake/QuaderSdkOnlyBuildCheck.cmake");
+  const std::string options =
+      read_source_file("cmake/QuaderBuildOptions.cmake");
+
+  const std::string native_modeling_marker =
+      "if(QUADER_BUILD_NATIVE_APP)\n"
+      "add_library(quader_modeling_profile INTERFACE)";
+  const std::string sdk_marker =
+      "function(quader_configure_modeling_sdk_target target)";
+  const std::string native_test_helpers_marker =
+      "if(QUADER_BUILD_NATIVE_APP)\n"
+      "set(QUADER_MODELING_DOMAIN_TEST_CATEGORIES";
+  const std::string native_test_targets_marker =
+      "if(QUADER_BUILD_TESTS AND QUADER_BUILD_NATIVE_APP)";
+  const std::string sdk_tests_marker =
+      "if(QUADER_BUILD_TESTS)\n"
+      "    find_package(GTest CONFIG REQUIRED)\n"
+      "    add_executable(quader_modeling_sdk_consumer_tests";
+
+  const std::size_t native_modeling_begin =
+      modeling.find(native_modeling_marker);
+  const std::size_t sdk_begin = modeling.find(sdk_marker);
+  const std::size_t native_test_helpers_begin =
+      modeling.find(native_test_helpers_marker);
+  const std::size_t native_test_targets_begin =
+      modeling.find(native_test_targets_marker);
+  const std::size_t sdk_tests_begin = modeling.find(sdk_tests_marker);
+  ASSERT_NE(native_modeling_begin, std::string::npos);
+  ASSERT_NE(sdk_begin, std::string::npos);
+  ASSERT_NE(native_test_helpers_begin, std::string::npos);
+  ASSERT_NE(native_test_targets_begin, std::string::npos);
+  ASSERT_NE(sdk_tests_begin, std::string::npos);
+  ASSERT_LT(native_modeling_begin, sdk_begin);
+  ASSERT_LT(sdk_begin, native_test_helpers_begin);
+  ASSERT_LT(native_test_helpers_begin, native_test_targets_begin);
+  ASSERT_LT(native_test_targets_begin, sdk_tests_begin);
+
+  const std::string native_modeling = modeling.substr(
+      native_modeling_begin, sdk_begin - native_modeling_begin);
+  for (const std::string_view native_target : {
+           "quader_modeling_profile", "quader_geometry",
+           "quader_modeling_polygon", "quader_modeling_runtime",
+           "quader_editor_metadata", "OpenMeshCore",
+       }) {
+    expect_contains(native_modeling, std::string(native_target));
+  }
+  expect_contains(native_modeling, "if(QUADER_USE_OPENMESH_TOPOLOGY)");
+  expect_missing(native_modeling, "quader_modeling_sdk_geometry");
+
+  const std::string native_test_helpers = modeling.substr(
+      native_test_helpers_begin,
+      native_test_targets_begin - native_test_helpers_begin);
+  expect_contains(native_test_helpers,
+                  "function(quader_add_modeling_domain_test_source");
+  expect_contains(native_test_helpers,
+                  "function(quader_add_modeling_domain_gtest_target");
+  expect_contains(native_test_helpers,
+                  "function(quader_add_modeling_domain_loop_target");
+
+  const std::string native_test_targets = modeling.substr(
+      native_test_targets_begin, sdk_tests_begin - native_test_targets_begin);
+  expect_contains(native_test_targets, "quader_modeling_domain_tests");
+  expect_contains(native_test_targets,
+                  "quader_modeling_domain_polygon_loop_tests");
+  expect_contains(native_test_targets,
+                  "quader_modeling_domain_runtime_loop_tests");
+  expect_contains(native_test_targets,
+                  "quader_modeling_domain_metadata_loop_tests");
+  expect_missing(native_test_targets, "quader_modeling_sdk_consumer_tests");
+
+  const std::string sdk_tests = modeling.substr(sdk_tests_begin);
+  expect_contains(sdk_tests, "quader_modeling_sdk_consumer_tests");
+  expect_contains(sdk_tests, "quader_modeling_sdk_only_configure_build");
+  expect_missing(sdk_tests, "quader_modeling_domain_tests");
+  expect_missing(sdk_tests, "QUADER_OPENMESH_SOURCE_DIR");
+  expect_contains(
+      modeling,
+      "if(QUADER_BUILD_NATIVE_APP AND QUADER_BUILD_PERFORMANCE_BENCHMARKS)");
+
+  expect_contains(options,
+                  "option(QUADER_BUILD_NATIVE_APP \"Build the native Quader "
+                  "Windows editor app.\" ON)");
+  expect_contains(
+      options,
+      "option(QUADER_USE_OPENMESH_TOPOLOGY \"Use OpenMesh for "
+      "topology-backed polygon edit operations.\" ON)");
+  expect_missing(options, "QUADER_BUILD_NATIVE_MODELING");
+  expect_missing(modeling, "QUADER_BUILD_NATIVE_MODELING");
+
+  expect_contains(sdk_only_check, "-DQUADER_BUILD_NATIVE_APP=OFF");
+  expect_contains(sdk_only_check, "-DQUADER_USE_OPENMESH_TOPOLOGY=OFF");
+  expect_contains(sdk_only_check,
+                  "-DQUADER_ALLOW_EXTERNAL_OPENMESH_FETCH=OFF");
+  expect_contains(sdk_only_check, "-DQUADER_OPENMESH_SOURCE_DIR=");
+  expect_missing(
+      sdk_only_check,
+      "-DQUADER_OPENMESH_SOURCE_DIR=${QUADER_OPENMESH_SOURCE_DIR}");
+  expect_contains(sdk_only_check, "codemodel-v2");
+  expect_contains(sdk_only_check, "sdk-only-targets.txt");
+  expect_contains(sdk_only_check, "^OpenMesh");
+  expect_contains(sdk_only_check, "^quader_modeling_domain_");
+  for (const std::string_view forbidden_target : {
+           "quader_geometry", "quader_modeling_profile",
+           "quader_modeling_polygon", "quader_modeling_runtime",
+           "quader_editor_metadata",
+       }) {
+    expect_contains(sdk_only_check, std::string(forbidden_target));
+  }
+  expect_contains(sdk_only_check, "quader_guardrail_tests");
+  expect_contains(
+      sdk_only_check,
+      "^(quader_guardrail_tests|quader_modeling_sdk_consumer_tests)$");
+  expect_contains(sdk_only_check,
+                  "quader_modeling_sdk_only_configure_build");
+}
+
+TEST(BuildGuardrailTests,
+     VerificationWorkflowCoversPortableSanitizedAndNativeBoundaries) {
+  const std::string vcpkg_baseline =
+      joined("d0c191d142b7bc048141ddfb618aa9ae5", "dba0233");
+  const std::string filament_sha256 = joined(
+      "f56b7b2717eda5094179748687e57fa2",
+      "0c2f245a3203fdf1fe274dba37e21180");
+  const std::string open_mesh_commit =
+      joined("5f016723f9f183770cffe5787a6f9f62", "8e2914d8");
+  const std::string workflow =
+      read_source_file(".github/workflows/windows-sdk.yml");
+  const std::string workflow_readme =
+      read_source_file(".github/workflows/README.md");
+  const std::string third_party_manifest =
+      read_source_file("thirdparty/THIRD_PARTY_MANIFEST.md");
+  const std::string modeling =
+      read_source_file("cmake/QuaderModeling.cmake");
+  const std::string sdk_only_check =
+      read_source_file("cmake/QuaderSdkOnlyBuildCheck.cmake");
+
+  expect_contains(workflow, "runs-on: windows-2025-vs2026");
+  expect_contains(workflow, "runs-on: ubuntu-24.04");
+  expect_contains(workflow, "-G \"Visual Studio 18 2026\"");
+  expect_contains(workflow, "-G Ninja");
+  expect_contains(workflow, "permissions:\n  contents: read");
+  expect_contains(workflow, "uses: actions/checkout@v6");
+  expect_contains(workflow, "persist-credentials: false");
+
+  expect_contains(workflow, "uses: actions/cache@v4");
+  expect_contains(
+      workflow,
+      "QUADER_VCPKG_BASELINE: " + vcpkg_baseline);
+  expect_contains(workflow, "bootstrap-vcpkg.bat");
+  expect_contains(workflow, "bootstrap-vcpkg.sh");
+  expect_contains(workflow, "${{ hashFiles('vcpkg.json') }}");
+  expect_contains(workflow,
+                  "VCPKG_BINARY_SOURCES: clear;files,${{ github.workspace }}");
+  expect_contains(workflow,
+                  "QUADER_VCPKG_BINARY_CACHE: ${{ github.workspace }}");
+
+  expect_contains(workflow, "sdk-msvc:");
+  expect_contains(workflow, "sdk-portable:");
+  expect_contains(workflow, "sdk-sanitizers:");
+  expect_contains(workflow, "native-windows:");
+  expect_contains(workflow, "cxx: g++");
+  expect_contains(workflow, "cxx: clang++");
+  expect_contains(workflow, "-DCMAKE_CXX_COMPILER=${{ matrix.cxx }}");
+  expect_contains(workflow, "-fsanitize=address,undefined");
+  expect_contains(workflow, "ASAN_OPTIONS:");
+  expect_contains(workflow, "UBSAN_OPTIONS:");
+
+  expect_contains(workflow, "-DQUADER_BUILD_NATIVE_APP=OFF");
+  expect_contains(workflow, "-DQUADER_BUILD_NATIVE_APP=ON");
+  expect_contains(workflow, "-DQUADER_BUILD_TESTS=ON");
+  expect_contains(workflow, "-DQUADER_USE_OPENMESH_TOPOLOGY=OFF");
+  expect_contains(workflow, "-DQUADER_USE_OPENMESH_TOPOLOGY=ON");
+  expect_contains(workflow,
+                  "-DQUADER_ALLOW_EXTERNAL_OPENMESH_FETCH=OFF");
+  expect_contains(workflow, "-DQUADER_OPENMESH_SOURCE_DIR=");
+  expect_contains(workflow, "-DVCPKG_MANIFEST_NO_DEFAULT_FEATURES=ON");
+  expect_contains(workflow, "-DVCPKG_MANIFEST_FEATURES=tests");
+  expect_contains(workflow, "quader_guardrail_tests");
+  expect_contains(workflow, "quader_modeling_sdk_consumer_tests");
+  expect_contains(workflow, "quader_modeling_sdk_parity_tests");
+  expect_contains(workflow, "quader_modeling_domain_tests");
+  expect_contains(workflow, "quader_tests");
+  expect_contains(workflow, "quader `");
+  expect_contains(workflow, "ctest --test-dir");
+  expect_contains(workflow, "-C Debug");
+  expect_contains(workflow, "--output-on-failure");
+  expect_contains(workflow, "--no-tests=error");
+  expect_contains(workflow,
+                  "if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }");
+
+  expect_contains(workflow, "filament-v$env:QUADER_FILAMENT_VERSION-windows.tgz");
+  expect_contains(
+      workflow,
+      "QUADER_FILAMENT_SHA256: " + filament_sha256);
+  expect_contains(workflow, "Get-FileHash -Algorithm SHA256");
+  expect_contains(workflow, "-DFILAMENT_SDK_ROOT=${{ steps.filament.outputs.root }}");
+  expect_contains(
+      workflow,
+      "QUADER_OPENMESH_COMMIT: " + open_mesh_commit);
+  expect_contains(
+      workflow,
+      "https://gitlab.vci.rwth-aachen.de:9000/OpenMesh/OpenMesh.git");
+
+  expect_contains(
+      modeling,
+      "add_test(NAME quader_modeling_sdk_only_configure_build");
+  expect_contains(modeling,
+                  "-DQUADER_CXX_COMPILER=${CMAKE_CXX_COMPILER}");
+  expect_contains(sdk_only_check,
+                  "-DCMAKE_CXX_COMPILER=${QUADER_CXX_COMPILER}");
+
+  expect_contains(workflow_readme, "filament-v1.71.6-windows.tgz");
+  expect_contains(workflow_readme, "Vulkan/window");
+  expect_contains(workflow_readme, "tools/boot_smoke.ps1");
+  expect_contains(third_party_manifest, "## Filament Artifact Policy");
+  expect_contains(third_party_manifest, filament_sha256);
+  for (const std::string_view forbidden : {
+           "VCPKG_INSTALLATION_ROOT", "USERPROFILE", "C:\\Users\\",
+           "Desktop\\_QUADER_DEV",
+       }) {
+    expect_missing(workflow, std::string(forbidden));
+  }
 }
 
 TEST(BuildGuardrailTests,
@@ -1400,8 +1761,8 @@ TEST(BuildGuardrailTests, ModelingSdkPublicHeadersStayNativeOwnerFree) {
       "flatbuffers",
       "nlohmann",
       "zstd",
-      "#include <mesh/",
-      "#include \"mesh/",
+      joined("#include <me", "sh/"),
+      joined("#include \"me", "sh/"),
       "#include <io/qdr/",
       "#include \"io/qdr/",
       "#include <assets/",
@@ -1654,11 +2015,11 @@ TEST(BuildGuardrailTests,
   const std::string instruction_route = source_slice(
       tool,
       "if ($Path -match "
-      "'^(AGENTS\\.md|architecture-review\\.md|memory\\.md|refactor\\.md|INPUT_KEYBINDINGS\\.md)$')",
+      "'^(AGENTS\\.md|architecture-review\\.md|REFACTORING_PLAN\\.md|memory\\.md|refactor\\.md|INPUT_KEYBINDINGS\\.md)$')",
       "if ($Path -match '^tools/')");
   const std::string examples_route = source_slice(
       tool, "if ($Path -match '^examples/')",
-      "if ($Path -match '^src/mesh/geometry/')");
+      "if ($Path -match '^src/sdk/core/modeling/(internal/mesh/geometry/|");
 
   expect_contains(tool, "Before full workflow");
   expect_contains(tool, "After affected workflow");
@@ -1674,6 +2035,8 @@ TEST(BuildGuardrailTests,
   expect_contains(tool, "quader_guardrail_tests.exe");
   expect_contains(tool, "quader_tests.exe");
   expect_contains(tool, "quader_modeling_domain_tests.exe");
+  expect_contains(tool, "quader_modeling_sdk_consumer_tests.exe");
+  expect_contains(tool, "quader_modeling_sdk_parity_tests.exe");
   expect_contains(tool, "quader_modeling_domain_polygon_loop_tests");
   expect_contains(tool, "quader_modeling_domain_runtime_loop_tests");
   expect_contains(tool, "quader_modeling_domain_metadata_loop_tests");
@@ -1692,12 +2055,14 @@ TEST(BuildGuardrailTests,
   expect_missing(tool, "\"tests/oop_architecture_guardrail_tests.cpp\"");
   expect_missing(tool, "\"tests/programmatic_api_guardrail_tests.cpp\"");
   expect_contains(tool, "fill_hole_from_edges");
-  expect_contains(tool, "assign_material");
-  expect_contains(tool, "assign_material_slot");
-  expect_contains(tool, "selection_operations.cpp");
+  expect_contains(tool, "portable_operation_mapping");
+  expect_missing(tool, "selection_operations.cpp");
   expect_contains(tool, "QdrModelingRuntimeOperationCommandTests.*");
   expect_contains(tool, "QdrModelingRuntimeToolOperationContractTests.*");
   expect_contains(tool, "Add-PathPlan");
+  expect_contains(tool, "Add-SdkVerification");
+  expect_contains(tool, "Add-SdkPublicHeaderVerification");
+  expect_contains(tool, "Assert-GTestFilterSelectsTests");
   expect_contains(tool, "Remove-RedundantBuildTargets");
   expect_contains(tool, "AGENTS\\.md");
   expect_contains(
@@ -1708,7 +2073,8 @@ TEST(BuildGuardrailTests,
   expect_contains(tool, "BootSmokeFailsOnLoggedErrorsAndRequiresLogCopy");
   expect_contains(tool, "src/render/");
   expect_contains(tool, "src/ui/");
-  expect_contains(tool, "src/mesh/polygon/");
+  expect_contains(tool,
+                  "neutral/include/quader/modeling/neutral/polygon/");
   expect_contains(tool, "src/editor/transform/");
   expect_contains(tool, "EditorApiTests.*Transform*");
   expect_contains(tool, "modeling/runtime");
@@ -1729,10 +2095,153 @@ TEST(BuildGuardrailTests,
                   "PublicExamplesDoNotStartFromInternalOwnerHeaders");
 
   expect_contains(root_agents, "tools/affected_check.ps1");
+  expect_contains(instruction_route, "REFACTORING_PLAN\\.md");
   expect_contains(root_agents, "quader_modeling_domain_polygon_loop_tests");
   expect_contains(root_agents, "-MeasureFull");
   expect_contains(root_agents, "-ChangedPath");
   expect_contains(root_agents, "before -> after");
+}
+
+TEST(BuildGuardrailTests,
+     AffectedCheckPlanRoutesSdkChangesToOwningExecutables) {
+  /**
+   * Describes the ordered and forbidden commands for one changed path.
+   */
+  struct PlanExpectation {
+    std::string path;
+    std::vector<std::string> expected_in_order;
+    std::vector<std::string> forbidden;
+  };
+
+  const std::vector<PlanExpectation> expectations = {
+      {"src/sdk/core/modeling/src/session.cpp",
+       {"--target quader_modeling_sdk_consumer_tests",
+        "--target quader_modeling_sdk_parity_tests",
+        "quader_modeling_sdk_consumer_tests.exe --gtest_color=no "
+        "--gtest_filter=*",
+        "quader_modeling_sdk_parity_tests.exe --gtest_color=no "
+        "--gtest_filter=*"},
+       {}},
+      {"src/sdk/core/modeling/include/quader/modeling/session/"
+       "modeling_session.hpp",
+       {"--target quader_guardrail_tests",
+        "--target quader_modeling_sdk_consumer_tests",
+        "--target quader_modeling_sdk_parity_tests",
+        "quader_guardrail_tests.exe --gtest_color=no "
+        "--gtest_filter=BuildGuardrailTests."
+        "ModelingSdkPublicHeadersStayNativeOwnerFree",
+        "quader_modeling_sdk_consumer_tests.exe --gtest_color=no "
+        "--gtest_filter=*",
+        "quader_modeling_sdk_parity_tests.exe --gtest_color=no "
+        "--gtest_filter=*"},
+       {}},
+      {"tests/sdk/modeling_sdk_consumer_tests.cpp",
+       {"--target quader_modeling_sdk_consumer_tests",
+        "quader_modeling_sdk_consumer_tests.exe --gtest_color=no "
+        "--gtest_filter=ModelingSdkConsumerTests.*"},
+       {"--target quader_tests", "--target quader_modeling_sdk_parity_tests",
+        "quader_modeling_sdk_parity_tests.exe"}},
+      {"tests/sdk/modeling_sdk_parity_tests.cpp",
+       {"--target quader_modeling_sdk_parity_tests",
+         "quader_modeling_sdk_parity_tests.exe --gtest_color=no "
+         "--gtest_filter=ModelingSdkParityHarnessTests.*:"
+         "ModelingSdkParityTests.*"},
+       {"--target quader_tests", "--target quader_modeling_sdk_consumer_tests",
+        "quader_modeling_sdk_consumer_tests.exe"}},
+      {"src/sdk/core/modeling/internal/mesh/polygon/"
+       "document_validation.cpp",
+       {"--target quader_modeling_domain_polygon_loop_tests",
+        "--target quader_modeling_sdk_consumer_tests",
+        "--target quader_modeling_sdk_parity_tests",
+        "quader_modeling_sdk_consumer_tests.exe --gtest_color=no "
+        "--gtest_filter=*",
+        "quader_modeling_sdk_parity_tests.exe --gtest_color=no "
+        "--gtest_filter=*",
+        "quader_modeling_domain_polygon_loop_tests.exe --gtest_color=no "
+        "--gtest_filter=QdrDocument*:QdrDocumentOperation*:QdrPoly*"},
+       {}},
+      {"CMakeLists.txt",
+       {"cmake --preset vs2026",
+        "--target quader_guardrail_tests",
+        "--target quader_modeling_domain_tests",
+        "--target quader_modeling_sdk_consumer_tests",
+        "--target quader_modeling_sdk_parity_tests",
+        "--target quader_tests",
+        "ctest --preset vs2026-debug --output-on-failure"},
+       {"--target quader_modeling_sdk_only_configure_build"}},
+      {"unknown/affected_check_route.fixture",
+       {"cmake --preset vs2026",
+        "--target quader_guardrail_tests",
+        "--target quader_modeling_domain_tests",
+        "--target quader_modeling_sdk_consumer_tests",
+        "--target quader_modeling_sdk_parity_tests",
+        "--target quader_tests",
+        "ctest --preset vs2026-debug --output-on-failure"},
+       {"--target quader_modeling_sdk_only_configure_build"}},
+  };
+
+  const std::filesystem::path script =
+      source_path("tools/affected_check.ps1");
+  for (const PlanExpectation &expectation : expectations) {
+    SCOPED_TRACE(expectation.path);
+    const std::string command =
+        "powershell -NoProfile -ExecutionPolicy Bypass -File " +
+        quoted_process_argument(script) + " -PlanOnly -ChangedPath \"" +
+        expectation.path + "\"";
+    const CommandResult result = run_command_capture(command);
+    ASSERT_EQ(result.exit_code, 0) << result.output;
+
+    const std::string marker = "After affected workflow:";
+    const std::size_t affected = result.output.find(marker);
+    ASSERT_NE(affected, std::string::npos) << result.output;
+    const std::string affected_plan = result.output.substr(affected);
+    expect_contains_in_order(affected_plan, expectation.expected_in_order);
+    for (const std::string &forbidden : expectation.forbidden) {
+      expect_missing(affected_plan, forbidden);
+    }
+  }
+}
+
+TEST(BuildGuardrailTests,
+     AffectedCheckRejectsMissingExecutableAndZeroSelectedTests) {
+  const std::filesystem::path script =
+      source_path("tools/affected_check.ps1");
+  const std::filesystem::path executable = current_executable_path();
+  const std::string missing_filter =
+      "AffectedCheckDeliberatelyMissingFixture.*";
+  const auto validation_command = [&script](
+                                      const std::filesystem::path &target,
+                                      const std::string &filter) {
+    return "powershell -NoProfile -ExecutionPolicy Bypass -Command \". " +
+           powershell_literal(script) + "; Assert-GTestFilterSelectsTests " +
+           powershell_literal(target) + " '" + filter + "'\"";
+  };
+
+  const CommandResult zero_selected =
+      run_command_capture(validation_command(executable, missing_filter));
+  EXPECT_NE(zero_selected.exit_code, 0) << zero_selected.output;
+  expect_contains(zero_selected.output, "selected zero tests");
+  expect_contains(zero_selected.output, missing_filter);
+
+  const std::filesystem::path missing_executable =
+      source_root() / "affected-check-missing-fixture" /
+      "missing_gtest_executable.exe";
+  ASSERT_FALSE(std::filesystem::exists(missing_executable));
+  const CommandResult missing =
+      run_command_capture(validation_command(missing_executable, "*"));
+  EXPECT_NE(missing.exit_code, 0) << missing.output;
+  expect_contains(missing.output, "GoogleTest executable was not found");
+  expect_contains(missing.output, "missing_gtest_executable.exe");
+
+  const std::string missing_command =
+      "powershell -NoProfile -ExecutionPolicy Bypass -Command \". " +
+      powershell_literal(script) +
+      "; Invoke-CommandLine 'missing fixture' @(" +
+      powershell_literal(missing_executable) + ")\"";
+  const CommandResult generic_missing = run_command_capture(missing_command);
+  EXPECT_NE(generic_missing.exit_code, 0) << generic_missing.output;
+  expect_contains(generic_missing.output, "Command executable was not found");
+  expect_contains(generic_missing.output, "missing_gtest_executable.exe");
 }
 
 TEST(BuildGuardrailTests, TestingDocsExplainPlacementAndSelectionRules) {
@@ -1749,7 +2258,7 @@ TEST(BuildGuardrailTests, TestingDocsExplainPlacementAndSelectionRules) {
   expect_contains(root_agents, "tests/modeling_domain/operation/"
                                  "qdr_document_operation_<feature>_tests.cpp");
   expect_contains(root_agents,
-                  "qdr_modeling_runtime_operation_<feature>_tests.cpp");
+                  "qdr_modeling_runtime_operation_command_tests.cpp");
   expect_contains(root_agents,
                   "tools/affected_check.ps1 -PlanOnly -ChangedPath");
   expect_contains(root_agents, "--gtest_filter=SuiteName.*");
@@ -1768,7 +2277,7 @@ TEST(BuildGuardrailTests, TestingDocsExplainPlacementAndSelectionRules) {
   expect_contains(modeling_guide, "## Placement Rules");
   expect_contains(modeling_guide, "qdr_document_operation_<feature>_tests.cpp");
   expect_contains(modeling_guide,
-                  "qdr_modeling_runtime_operation_<feature>_tests.cpp");
+                  "qdr_modeling_runtime_operation_command_tests.cpp");
   expect_contains(modeling_guide,
                   "qdr_modeling_runtime_tool_<feature>_tests.cpp");
   expect_contains(modeling_guide, "## Selection Rules");
@@ -2654,24 +3163,63 @@ TEST(BuildGuardrailTests, AppVersionMetadataUsesRootVersionSource) {
   expect_contains(agents, "applies only to the request that names the mode");
 }
 
-TEST(BuildGuardrailTests, EditorAggregateStaysOutOfDocumentApiTarget) {
+TEST(BuildGuardrailTests, EditorAggregateHasDedicatedApiTarget) {
   const std::string root_c_make = read_source_file("CMakeLists.txt");
 
   const std::string api_sources =
       cmake_target_source_blocks(root_c_make, "quader_api");
-  const std::string runtime_sources =
-      cmake_target_source_blocks(root_c_make, "quader_runtime");
+  const std::string editor_api_sources =
+      cmake_target_source_blocks(root_c_make, "quader_editor_api");
   const std::string app_sources =
       cmake_target_source_blocks(root_c_make, "quader_app");
 
   expect_missing(api_sources, "src/api/quader_editor_api.cpp");
   expect_missing(api_sources, "src/api/quader_render_api.cpp");
-  EXPECT_TRUE(runtime_sources.find("src/api/quader_editor_api.cpp") !=
-                  std::string::npos ||
-              app_sources.find("src/api/quader_editor_api.cpp") !=
-                  std::string::npos)
-      << "QuaderEditorApi belongs to the native editor/app composition target, "
-         "not the document/modeling API target";
+  expect_contains(editor_api_sources, "src/api/quader_editor_api.cpp");
+  expect_contains(editor_api_sources, "src/api/quader_render_api.cpp");
+  expect_missing(app_sources, "src/api/");
+}
+
+TEST(BuildGuardrailTests, ProductionSourcesCompileInOwningTargets) {
+  const std::string root_c_make = read_source_file("CMakeLists.txt");
+  const std::string api_sources =
+      cmake_target_source_blocks(root_c_make, "quader_api");
+  const std::string editor_api_sources =
+      cmake_target_source_blocks(root_c_make, "quader_editor_api");
+  const std::string editor_services_sources =
+      cmake_target_source_blocks(root_c_make, "quader_editor_services");
+  const std::string editor_viewport_sources =
+      cmake_target_source_blocks(root_c_make, "quader_editor_viewport");
+  const std::string viewport_sources =
+      cmake_target_source_blocks(root_c_make, "quader_viewport_services");
+  const std::string ui_sources =
+      cmake_target_source_blocks(root_c_make, "quader_ui");
+  const std::string app_sources =
+      cmake_target_source_blocks(root_c_make, "quader_app");
+
+  expect_missing(api_sources, "src/editor/");
+  expect_missing(api_sources, "src/viewport/");
+  expect_missing(editor_api_sources, "src/editor/");
+  expect_missing(editor_api_sources, "src/render/");
+  expect_missing(editor_services_sources, "src/api/");
+  expect_missing(editor_viewport_sources, "src/api/");
+  expect_missing(viewport_sources, "src/api/");
+  expect_missing(viewport_sources, "src/editor/");
+  expect_missing(ui_sources, "src/editor/");
+  expect_missing(ui_sources, "src/api/");
+  expect_missing(app_sources, "src/api/");
+  expect_missing(app_sources, "src/editor/");
+
+  expect_contains(editor_services_sources,
+                  "src/editor/commands/editor_command_registry.cpp");
+  expect_contains(editor_services_sources,
+                  "src/editor/transform/mesh_arrangement_service.cpp");
+  expect_contains(editor_services_sources,
+                  "src/editor/transform/scene_transform_drag_service.cpp");
+  expect_contains(editor_viewport_sources,
+                  "src/editor/viewport/viewport_interaction_controller.cpp");
+  expect_contains(viewport_sources,
+                  "src/viewport/host_viewport_contract_adapter.cpp");
 }
 
 TEST(BuildGuardrailTests,
@@ -2736,14 +3284,13 @@ TEST(BuildGuardrailTests,
   const std::string runtime_sources =
       cmake_target_source_blocks(root_c_make, "quader_runtime");
   const std::string viewport_sources =
-      cmake_target_source_blocks(root_c_make, "quader_viewport");
+      cmake_target_source_blocks(root_c_make, "quader_viewport_services");
 
   expect_missing(runtime_sources,
                  "src/viewport/viewport_workspace_service.cpp");
-  if (!viewport_sources.empty()) {
-    expect_contains(viewport_sources,
-                    "src/viewport/viewport_workspace_service.cpp");
-  }
+  ASSERT_FALSE(viewport_sources.empty());
+  expect_contains(viewport_sources,
+                  "src/viewport/viewport_workspace_service.cpp");
 
   for (const std::string &forbidden : {
            "SDL",
@@ -2911,6 +3458,8 @@ TEST(WindowGuardrailTests,
 TEST(DependencyLicenseGuardrailTests, AppThirdPartyManifestHasLicenseEvidence) {
   const std::string manifest =
       read_source_file("thirdparty/THIRD_PARTY_MANIFEST.md");
+  const std::string root_c_make = read_source_file("CMakeLists.txt");
+  const std::string vcpkg_manifest = read_source_file("vcpkg.json");
 
   for (const std::string &needle : retired_modeling_test_framework_needles()) {
     expect_missing(manifest, needle);
@@ -2918,6 +3467,13 @@ TEST(DependencyLicenseGuardrailTests, AppThirdPartyManifestHasLicenseEvidence) {
 
   EXPECT_FALSE(std::filesystem::exists(
       source_path(joined("thirdparty/licenses/cat", "ch2-BSL-1.0.txt"))));
+  EXPECT_FALSE(std::filesystem::exists(
+      source_path("thirdparty/licenses/taskflow-MIT.txt")));
+  EXPECT_FALSE(std::filesystem::exists(
+      source_path("src/io/qdr/qdr_parallel_tasks.hpp")));
+  expect_missing(manifest, "Taskflow");
+  expect_missing(root_c_make, "Taskflow");
+  expect_missing(vcpkg_manifest, "taskflow");
 
   for (const ThirdPartyLicenseExpectation &expectation :
        third_party_license_expectations()) {
@@ -2957,4 +3513,549 @@ TEST(DependencyLicenseGuardrailTests,
   expect_contains(zstd_license, "ZSTD is dual licensed under BSD and GPLv2");
   expect_contains(zstd_license, "BSD License");
   expect_contains(manifest, "Quader uses the BSD-3-Clause option");
+}
+
+TEST(BuildGuardrailTests, ValueHeadersDoNotIncludeGlmBridge) {
+  for (const std::string_view header : {
+           "src/math/types.hpp",
+           "src/math/types/qvec2.hpp",
+           "src/math/types/qvec3.hpp",
+           "src/math/types/qquat.hpp",
+           "src/math/types/qmat4.hpp",
+           "src/math/types/qtransform.hpp",
+       }) {
+    expect_missing(read_source_file({header}), "glm");
+  }
+  expect_contains(read_source_file("src/math/glm_bridge.hpp"), "glm");
+}
+
+TEST(BuildGuardrailTests, QUmbrellaOnlyIncludesSplitVectorHeaders) {
+  const std::string vec_umbrella = read_source_file("src/math/types.hpp");
+  expect_contains(vec_umbrella, "#include \"math/types/qvec2.hpp\"");
+  expect_contains(vec_umbrella, "#include \"math/types/qvec3.hpp\"");
+  expect_missing(vec_umbrella, "struct QVec2");
+  expect_missing(vec_umbrella, "struct QVec3");
+}
+
+TEST(BuildGuardrailTests, PolygonDocumentUsesSharedVectorTypes) {
+  const std::string polygon_document =
+      read_source_file("src/sdk/core/modeling/neutral/include/quader/modeling/"
+                       "neutral/polygon/document_model.hpp");
+  const std::string polygon_umbrella =
+      read_source_file("src/sdk/core/modeling/neutral/include/quader/modeling/"
+                       "neutral/polygon/document.hpp");
+
+  expect_contains(polygon_document, "quader::QVec2");
+  expect_contains(polygon_document, "quader::QVec3");
+  expect_missing(polygon_document, "struct QVec2");
+  expect_missing(polygon_document, "struct QVec3");
+  expect_contains(polygon_umbrella,
+                  "#include <quader/modeling/neutral/polygon/document_model.hpp>");
+}
+
+TEST(BuildGuardrailTests, NativeScenePersistenceDoesNotDispatchLegacyJson) {
+  const std::string cmake = read_source_file("CMakeLists.txt");
+  const std::string native_target = source_slice(
+      cmake, "add_library(quader_project_qdr_io STATIC",
+      "set(QUADER_QDR_GENERATED_DIR");
+  ASSERT_FALSE(native_target.empty());
+  expect_contains(native_target, "src/io/qdr/qdr_scene_binary_codec.cpp");
+  expect_missing(native_target, "src/io/qdr/qdr_project_codecs.cpp");
+  expect_missing(native_target, "src/io/qdr/qdr_document.cpp");
+
+  const std::string reader =
+      read_source_file({"src", "io", "qdr", "qdr_document_reader.cpp"});
+  const std::string writer =
+      read_source_file({"src", "io", "qdr", "qdr_document_writer.cpp"});
+  const std::string codec = read_source_file(
+      {"src", "io", "qdr", "qdr_scene_binary_codec.cpp"});
+  for (const std::string *source : {&reader, &writer, &codec}) {
+    expect_missing(*source, "nlohmann/json");
+    expect_missing(*source, "deserialize_document(");
+    expect_missing(*source, "qdr_project_codecs");
+  }
+  expect_contains(codec, "serialize_qdr_authored_topology(");
+  expect_contains(codec, "deserialize_qdr_authored_topology(");
+}
+
+TEST(BuildGuardrailTests, NativeSourcesDoNotIncludePrivateModelingSdkHeaders) {
+  for (const std::filesystem::path &file :
+       source_files_under(source_path("src"))) {
+    const std::string relative = normalized_relative(file);
+    if (starts_with(relative, "src/sdk/core/modeling/")) {
+      continue;
+    }
+    const std::string source = read_file(file);
+    EXPECT_EQ(source.find("sdk/core/modeling/src/"), std::string::npos)
+        << relative;
+    EXPECT_EQ(source.find("polygon_document_native.hpp"), std::string::npos)
+        << relative;
+  }
+
+  const std::string codec = read_source_file(
+      {"src", "io", "qdr", "qdr_scene_binary_codec.cpp"});
+  expect_contains(codec, "PolygonDocument::from_authored_topology(");
+  expect_contains(codec, ".authored_topology()");
+}
+
+TEST(BuildGuardrailTests,
+     UnsupportedSdkPlaceholdersAreVersionedAndDeadAbstractBasesAreRemoved) {
+  const std::string modeling_api = read_source_file(
+      {"src", "sdk", "core", "modeling", "include", "quader", "modeling",
+       "api", "modeling_api.hpp"});
+  const std::string tools_api = read_source_file(
+      {"src", "sdk", "core", "modeling", "src", "tools_api.cpp"});
+  const std::string tool_catalog = source_slice(
+      tools_api, "std::vector<ToolDescriptor> ToolsApi::catalog() const",
+      "std::string ToolsApi::active_tool() const");
+  const std::string compatibility = read_source_file(
+      "src/sdk/core/modeling/COMPATIBILITY.md");
+  const std::string modeling_cmake =
+      read_source_file("cmake/QuaderModeling.cmake");
+  expect_contains(modeling_api, "scheduled for removal in 0.2.0");
+  expect_contains(modeling_api, "[[deprecated(");
+  expect_contains(tools_api, "ErrorCode::UnsupportedOperation");
+  expect_missing(tool_catalog, "{\"pivot\", \"Pivot\"}");
+  for (const std::string_view retained_surface : {
+           "ModelingSession::document(ObjectId)",
+           "ModelingBatch::with_mesh(string, function<void(MeshHandle)>)",
+           "ToolsApi::activate_pivot_tool()",
+           "ModelingApi::profiling()",
+       }) {
+    expect_contains(compatibility, std::string(retained_surface));
+  }
+  expect_contains(compatibility, "Remove in 0.2.0");
+  expect_contains(modeling_cmake,
+                  "${QUADER_MODELING_SDK_ROOT}/COMPATIBILITY.md");
+  const std::string external_consumer =
+      read_source_file("tests/sdk_consumer/main.cpp");
+  expect_contains(external_consumer, "document_snapshot(");
+  for (const std::string_view deprecated_example_surface : {
+           "session.document(", ".with_mesh(", "activate_pivot_tool(",
+           ".profiling(",
+       }) {
+    expect_missing(external_consumer,
+                   std::string(deprecated_example_surface));
+  }
+
+  const std::string viewport_tool =
+      read_source_file("src/editor/tools/viewport_tool.hpp");
+  const std::string box_tool =
+      read_source_file("src/editor/tools/base/two_stage_box_tool.cpp");
+  expect_missing(viewport_tool, "commit_preview;");
+  expect_missing(box_tool, "TwoStageBoxTool::commit_preview");
+
+  const std::string bake =
+      read_source_file({"src", "assets", "bake_service.hpp"});
+  const std::string panel =
+      read_source_file({"src", "ui", "ui_panel.hpp"});
+  expect_missing(bake, "class BakeBackend");
+  expect_missing(panel, "class UIPanel {");
+  expect_missing(panel, "void draw(UIContext");
+}
+
+TEST(BuildGuardrailTests, SceneSelectableMutationStaysSceneOwned) {
+  const std::string scene_header =
+      read_source_file({"src", "scene", "scene_document.hpp"});
+  const std::string scene_source =
+      read_source_file({"src", "scene", "scene_document.cpp"});
+  const std::string qdr_codec = read_source_file(
+      {"src", "io", "qdr", "qdr_scene_binary_codec.cpp"});
+
+  expect_contains(scene_header,
+                  "bool set_selectable(EntityId id, bool selectable);");
+  expect_contains(scene_source, "bool SceneDocument::set_selectable");
+  expect_contains(qdr_codec, "document.scene().set_selectable(");
+  expect_missing(qdr_codec, "->selectable =");
+
+  for (const std::filesystem::path &file :
+       source_files_under(source_path("src"))) {
+    if (file.filename() != "scene_document.cpp") {
+      EXPECT_EQ(read_file(file).find("->selectable ="), std::string::npos)
+          << file.string();
+    }
+  }
+}
+
+TEST(BuildGuardrailTests, ProjectionIsReadOnlyAndModelingOwnsSceneSync) {
+  const std::string cmake = read_source_file("CMakeLists.txt");
+  expect_contains(cmake, "src/editor/projection/mesh_projection_service.cpp");
+  expect_missing(
+      cmake,
+      "src/editor/projection/modeling_scene_reconcile_service.cpp");
+  expect_contains(cmake,
+                  "src/editor/projection/picking_cache_projection.cpp");
+  expect_contains(cmake,
+                  "src/editor/projection/selection_overlay_projection.cpp");
+  expect_contains(
+      cmake,
+      "src/editor/modeling/services/modeling_mesh_sync_service.cpp");
+
+  const std::string services = read_source_file(
+      {"src", "editor", "modeling", "services",
+       "modeling_session_services.cpp"});
+  expect_missing(services, "ModelingSceneReconcileService::"
+                           "reconcile_modeling_object_scene_nodes");
+  expect_missing(services, "MeshProjectionService::"
+                           "project_modeling_meshes_to_scene");
+  expect_contains(services, "PickingCacheProjection::"
+                            "scene_transformed_objects_for_picking");
+  expect_contains(services, "PickingCacheProjection::"
+                            "object_face_geometry_signature");
+
+  const std::string mesh_sync = read_source_file(
+      {"src", "editor", "modeling", "services",
+       "modeling_mesh_sync_service.cpp"});
+  for (const std::string_view required : {
+           "bool reconcile_modeling_object_scene_nodes",
+           "bool project_modeling_meshes_to_scene",
+           "scene.create_entity",
+           "scene.destroy_entity",
+           "assets.add_mesh",
+           "assets.replace_mesh",
+           "build_projected_mesh_plans",
+           "install_projected_mesh_assets",
+           "rollback_projected_mesh_installs",
+           "remember_projected_mesh_signature",
+       }) {
+    expect_contains(mesh_sync, std::string(required));
+  }
+
+  const std::array<std::string_view, 15> forbidden_projection_mutations = {
+      "AssetRegistry",          "SceneModelingSyncService",
+      "create_entity(",         "create_entity_with_id(",
+      "destroy_entity(",        "set_modeling_object(",
+      "set_mesh(",              "set_material(",
+      "add_mesh(",              "replace_mesh(",
+      ".bind(",                 ".unbind_object(",
+      "mark_scene_objects_synced(", "clear_selection(",
+      "set_selected(",
+  };
+  for (const std::filesystem::path &file : source_files_under(
+           source_path({"src", "editor", "projection"}))) {
+    const std::string source = read_file(file);
+    for (const std::string_view forbidden : forbidden_projection_mutations) {
+      EXPECT_EQ(source.find(forbidden), std::string::npos)
+          << file.string() << " contains projection-owned mutation token "
+          << forbidden;
+    }
+  }
+
+  const std::string facade = read_source_file(
+      {"src", "editor", "modeling", "services",
+       "modeling_session_service.cpp"});
+  expect_missing(facade, "SelectionOverlayProjection::"
+                         "project_selection_overlay_frame");
+  expect_contains(services, "SelectionOverlayProjection::"
+                            "project_selection_overlay_frame");
+}
+
+TEST(BuildGuardrailTests, RenderDoesNotDependOnProjectionOrModelingOwners) {
+  for (const std::filesystem::path &file :
+       source_files_under(source_path({"src", "render"}))) {
+    const std::string source = read_file(file);
+    EXPECT_EQ(source.find("editor/projection/"), std::string::npos)
+        << file.string();
+    EXPECT_EQ(source.find("#include \"modeling/"), std::string::npos)
+        << file.string();
+  }
+}
+
+TEST(BuildGuardrailTests, KeepsRenderHashPolicyInSingleOwner) {
+  for (const std::string_view source : {
+           "src/render/material_binding_service.cpp",
+           "src/render/mesh_renderable_factory.cpp",
+           "src/render/tool_preview_renderable_cache.cpp",
+           "src/render/overlay/overlay_renderable_builder.cpp",
+       }) {
+    const std::string text = read_source_file({source});
+    expect_missing(text, "kFnv");
+    expect_missing(text, "hash_combine");
+    expect_missing(text, "hash_float");
+    expect_missing(text, "hashVec3");
+    expect_contains(text, "RenderSignatureBuilder");
+  }
+}
+
+TEST(BuildGuardrailTests, MeshAndLightRecordsAreValueSnapshotInputs) {
+  const std::string snapshot_header =
+      read_source_file("src/render/render_scene_snapshot.hpp");
+  const std::string extraction_header =
+      read_source_file("src/render/scene_render_extraction.hpp");
+  const std::string extraction_source =
+      read_source_file("src/render/scene_render_extraction.cpp");
+  const std::string mesh_record =
+      source_slice(snapshot_header, "struct RenderSceneMeshRecord",
+                   "struct RenderSceneLightRecord");
+  const std::string light_record =
+      source_slice(snapshot_header, "struct RenderSceneLightRecord",
+                   "struct RenderSceneSnapshotDirtyState");
+
+  for (const std::string_view required : {
+           "struct RenderSceneSnapshot",
+           "RenderSceneMeshRecord",
+           "RenderSceneLightRecord",
+           "std::vector<RenderSceneMeshRecord>",
+           "std::vector<RenderSceneLightRecord>",
+           "scene_revision",
+           "asset_revision",
+           "mesh_revision",
+           "material_revision",
+       }) {
+    expect_contains(snapshot_header, std::string(required));
+  }
+  expect_missing(mesh_record, "const MeshAsset *");
+  expect_missing(mesh_record, "const MeshComponent *");
+  expect_missing(mesh_record, "const MaterialComponent *");
+  expect_missing(light_record, "const LightComponent *");
+  expect_contains(extraction_header, "build_render_scene_snapshot");
+  expect_missing(extraction_source, ".mesh = assets.mesh(");
+  expect_missing(extraction_source, ".mesh_component = mesh_component");
+  expect_missing(extraction_source,
+                 ".material_component = material_component");
+  expect_missing(extraction_source, ".light = light");
+}
+
+TEST(BuildGuardrailTests, OverlayRecordsStayBehindRenderBoundary) {
+  const std::string snapshot_header =
+      read_source_file("src/render/render_scene_snapshot.hpp");
+  const std::string render_bridge_source =
+      read_source_file("src/render/scene_render_bridge.cpp");
+  const std::string viewport_panel_source =
+      read_source_file("src/ui/qt_viewport_panel.cpp");
+
+  for (const std::string_view token : {
+           "SelectedObject",
+           "SceneWireframe",
+           "HierarchySelection",
+           "GroupBounds",
+           "SelectedLight",
+           "ToolOverlay",
+       }) {
+    expect_contains(snapshot_header, std::string(token));
+  }
+  expect_contains(render_bridge_source, "RenderSceneSnapshot");
+  expect_missing(viewport_panel_source, "ViewportSceneOverlayBuilder::");
+  expect_missing(viewport_panel_source, "build_render_overlay_");
+  expect_missing(viewport_panel_source, "sync_selected_object_overlay(");
+  expect_missing(viewport_panel_source, "sync_scene_wireframe_overlay(");
+}
+
+TEST(BuildGuardrailTests,
+     PersistentSceneWireframeLineCacheUsesSnapshotClipPlanes) {
+  const std::string selected_cache_source = read_source_file(
+      "src/render/overlay/selected_object_overlay_cache.cpp");
+  const std::string wireframe_cache_source = read_source_file(
+      "src/render/overlay/scene_wireframe_overlay_cache.cpp");
+  const std::string snapshot_header =
+      read_source_file("src/render/overlay/render_overlay_snapshot.hpp");
+
+  expect_contains(snapshot_header, "ViewportCameraClipPlanes clip_planes");
+  expect_missing(selected_cache_source, "kSelectedObjectLineNearPlane");
+  expect_missing(wireframe_cache_source, "kSceneWireframeLineNearPlane");
+  expect_missing(selected_cache_source, "setParameter(\"nearPlane\", 0.05");
+  expect_missing(wireframe_cache_source,
+                 "setParameter(\"nearPlane\", 0.05");
+  expect_missing(selected_cache_source, "SelectedObjectLineVertex");
+  expect_missing(selected_cache_source, "update_line_proxy");
+  expect_missing(selected_cache_source, "setParameter(\"nearPlane\"");
+  expect_contains(wireframe_cache_source, "clip_planes.near_plane");
+}
+
+TEST(BuildGuardrailTests, SceneOverlayBuildersConsumeSnapshotsOnly) {
+  const std::string builder_source = read_source_file(
+      "src/render/overlay/viewport_scene_overlay_builder.cpp");
+  const std::string builder_header = read_source_file(
+      "src/render/overlay/viewport_scene_overlay_builder.hpp");
+  const std::string selected_cache_source = read_source_file(
+      "src/render/overlay/selected_object_overlay_cache.cpp");
+  const std::string wireframe_cache_source = read_source_file(
+      "src/render/overlay/scene_wireframe_overlay_cache.cpp");
+  const std::string bridge_source =
+      read_source_file("src/render/scene_render_bridge.cpp");
+  const std::string bridge_header =
+      read_source_file("src/render/scene_render_bridge.hpp");
+  const std::string overlay_snapshot_header =
+      read_source_file("src/render/overlay/render_overlay_snapshot.hpp");
+  const std::string render_snapshot_header =
+      read_source_file("src/render/render_scene_snapshot.hpp");
+
+  expect_missing(builder_header, "const SceneDocument &");
+  expect_missing(builder_header, "const AssetRegistry &");
+  expect_missing(builder_source, "build_render_overlay_selection_snapshot");
+  expect_missing(builder_source,
+                 "build_render_overlay_scene_wireframe_snapshot");
+  expect_contains(builder_source,
+                  "const RenderOverlaySelectionSnapshot &snapshot");
+  expect_contains(builder_source,
+                  "const RenderOverlaySceneWireframeSnapshot &snapshot");
+  expect_contains(selected_cache_source,
+                  "const RenderOverlaySelectedObjectSnapshot &snapshot");
+  expect_contains(wireframe_cache_source,
+                  "const RenderOverlaySceneWireframeSnapshot &snapshot");
+  expect_contains(bridge_header, "sync(const SceneDocument &document");
+  expect_contains(bridge_header, "const AssetRegistry &assets");
+  expect_missing(bridge_source,
+                 "build_render_overlay_selected_object_snapshot");
+  expect_missing(bridge_source,
+                 "build_render_overlay_scene_wireframe_snapshot");
+  expect_missing(bridge_header, "RenderOverlaySnapshotCache");
+  expect_contains(overlay_snapshot_header,
+                  "class RenderOverlaySnapshotCache final");
+  expect_contains(bridge_header,
+                  "const RenderOverlaySelectedObjectSnapshot");
+  expect_contains(bridge_header,
+                  "const RenderOverlaySceneWireframeSnapshot");
+  expect_contains(render_snapshot_header,
+                  "using RenderSelectedObjectOverlaySnapshotRecord");
+  expect_contains(render_snapshot_header, "using OverlaySnapshot");
+}
+
+TEST(BuildGuardrailTests,
+     SceneAndOverlayEarlyOutsQualifyReuseBySceneActivation) {
+  const std::string binding_header =
+      read_source_file("src/render/render_scene_binding.hpp");
+  const std::string extraction_source =
+      read_source_file("src/render/scene_render_extraction.cpp");
+  const std::string sync_source =
+      read_source_file("src/render/scene_render_sync_service.cpp");
+  const std::string bridge_source =
+      read_source_file("src/render/scene_render_bridge.cpp");
+  const std::string selected_cache_source = read_source_file(
+      "src/render/overlay/selected_object_overlay_cache.cpp");
+  const std::string wireframe_cache_source = read_source_file(
+      "src/render/overlay/scene_wireframe_overlay_cache.cpp");
+  const std::string texture_cache_source =
+      read_source_file("src/render/texture_binding_service.cpp");
+  const std::string render_api_source =
+      read_source_file("src/api/quader_render_api.cpp");
+
+  expect_contains(binding_header, "scene_session_id");
+  expect_contains(binding_header, "activation_generation");
+  expect_contains(binding_header, "binding_revision");
+  expect_contains(extraction_source,
+                  "previous->scene_binding == snapshot.scene_binding");
+  expect_contains(sync_source,
+                  "synced_scene_binding_ != snapshot.scene_binding");
+  const std::size_t retire_scene_meshes =
+      sync_source.find("mesh_cache_->remove_except(no_scene_entities)");
+  const std::size_t destroy_retired_materials = sync_source.find(
+      "mesh_cache_->drain_retired_destroy_queue(\n"
+      "      mesh_cache_->retired_proxy_count())");
+  const std::size_t invalidate_scene_textures =
+      sync_source.find("material_binding_->bind_scene(scene_binding)");
+  ASSERT_NE(retire_scene_meshes, std::string::npos);
+  ASSERT_NE(destroy_retired_materials, std::string::npos);
+  ASSERT_NE(invalidate_scene_textures, std::string::npos);
+  EXPECT_LT(retire_scene_meshes, destroy_retired_materials);
+  EXPECT_LT(destroy_retired_materials, invalidate_scene_textures)
+      << "A scene switch must destroy retired material instances before "
+         "invalidating the textures they still reference.";
+
+  const std::size_t clear_tool_previews =
+      bridge_source.find("tool_preview_cache_.clear()");
+  const std::size_t clear_viewport_overlays =
+      bridge_source.find("overlay_cache_.clear_slot(index)");
+  const std::size_t bind_scene_resources =
+      bridge_source.find("sync_service_.bind_scene(scene_binding)");
+  ASSERT_NE(clear_tool_previews, std::string::npos);
+  ASSERT_NE(clear_viewport_overlays, std::string::npos);
+  ASSERT_NE(bind_scene_resources, std::string::npos);
+  EXPECT_LT(clear_tool_previews, bind_scene_resources);
+  EXPECT_LT(clear_viewport_overlays, bind_scene_resources)
+      << "Preview and overlay material instances must be destroyed before "
+         "the outgoing scene texture cache is invalidated.";
+  expect_contains(bridge_source, "bind_scene(snapshot.scene_binding)");
+  expect_contains(selected_cache_source,
+                  "synced_scene_binding_ != snapshot.scene_binding");
+  expect_contains(wireframe_cache_source,
+                  "synced_scene_binding_ != snapshot.scene_binding");
+  expect_contains(texture_cache_source, "texture_cache_.clear()");
+  expect_missing(texture_cache_source, "evict_obsolete_texture_revisions");
+  expect_contains(render_api_source, ".scene_session_id =");
+  expect_contains(render_api_source, ".activation_generation =");
+  expect_contains(render_api_source, ".binding_revision =");
+}
+
+TEST(BuildGuardrailTests, OwnsIncrementalLightSyncPolicy) {
+  const std::string header =
+      read_source_file({"src", "render", "light_renderable_cache.hpp"});
+  const std::string source =
+      read_source_file({"src", "render", "light_renderable_cache.cpp"});
+  const std::string sync_source =
+      read_source_file({"src", "render", "scene_render_sync_service.cpp"});
+
+  expect_contains(header, "rebuild_signature");
+  expect_contains(header, "transform_signature");
+  expect_contains(header, "filament_intensity");
+  expect_contains(source,
+                  "kGodotPunctualLightLumensPerIntensity = 1000.0f");
+  expect_contains(
+      source,
+      "kViewportPunctualLightExposureCompensation = 10000.0f");
+  expect_contains(source, "needs_rebuild(light)");
+  expect_contains(source, "update_light_transform(existing->second, "
+                          "light.world_transform)");
+  expect_contains(source, ".intensity(filament_intensity(light))");
+  expect_contains(source, ".position(position_from_matrix(world_transform))");
+  expect_contains(source, ".falloff(light_falloff_radius(light))");
+  expect_contains(source, "light_manager.setPosition(instance, "
+                          "position_from_matrix(world_transform))");
+  expect_contains(sync_source, "light_cache_.sync_light");
+  expect_missing(sync_source, "light_signature");
+  expect_missing(sync_source, "update_light_transform");
+}
+
+TEST(BuildGuardrailTests, EditWireBatchesDoNotOwnPrivateClipPlane) {
+  const std::string builder_header =
+      read_source_file("src/render/overlay/overlay_renderable_builder.hpp");
+  const std::string builder_source =
+      read_source_file("src/render/overlay/overlay_renderable_builder.cpp");
+  const std::string proxy_source =
+      read_source_file("src/render/overlay/overlay_proxy_factory.cpp");
+  const std::string edit_wire_material =
+      read_source_file("resources/materials/quader_edit_wire_line.mat");
+  const std::string edit_wire_batch =
+      source_slice(builder_header, "struct OverlayEditWireBatch",
+                   "struct OverlayPointBatch");
+
+  expect_missing(edit_wire_batch, "near_plane");
+  expect_missing(builder_source, "kOverlayEditWireNearPlane");
+  expect_missing(proxy_source, "batch.near_plane");
+  expect_missing(edit_wire_material, "nearPlane");
+}
+
+TEST(BuildGuardrailTests, DelegatesOverlayAndPreviewProxyOwnership) {
+  const std::string header =
+      read_source_file({"src", "render", "scene_render_bridge.hpp"});
+  const std::string source =
+      read_source_file({"src", "render", "scene_render_bridge.cpp"});
+
+  expect_contains(header, "OverlayRenderableCache overlay_cache_");
+  expect_contains(header, "ToolPreviewRenderableCache tool_preview_cache_");
+  expect_contains(source, "overlay_cache_.set_overlay_frame");
+  expect_contains(source, "tool_preview_cache_.set_meshes");
+  expect_missing(header, "struct OverlayProxy");
+  expect_missing(header, "struct OverlaySlot");
+  expect_missing(header, "struct OverlayProxyGroup");
+  expect_missing(header, "overlaySlots_");
+  expect_missing(header, "toolPreviewMeshProxies_");
+  expect_missing(source, "rebuildOverlayProxies");
+  expect_missing(source, "destroyOverlayProxy");
+  expect_missing(source, "destroyToolPreviewMeshes");
+}
+
+TEST(BuildGuardrailTests,
+     UsesInstancedDeviceDomainEndpointExpansionMaterial) {
+  const std::string material =
+      read_source_file("resources/materials/quader_selected_object_line.mat");
+  const std::string cache = read_source_file(
+      "src/render/overlay/scene_wireframe_overlay_cache.cpp");
+
+  expect_contains(material, "instanced : true");
+  expect_contains(material, "getWorldFromModelMatrix");
+  expect_contains(material, "getResolution");
+  expect_contains(cache, "filament::InstanceBuffer::Builder");
+  expect_contains(cache,
+                  ".instances(transforms.size(), proxy.instance_buffer)");
 }

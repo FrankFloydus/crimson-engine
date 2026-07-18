@@ -37,7 +37,7 @@ std::vector<ToolDescriptor> ToolsApi::catalog() const {
           {"extrude", "Extrude"}, {"rotate", "Rotate"}, {"scale", "Scale"},
           {"box", "Box"}, {"insert_edge_loop", "Insert Edge Loop"},
           {"knife", "Knife"}, {"cut", "Cut"}, {"poly", "Poly"},
-          {"mirror", "Mirror"}, {"pivot", "Pivot"}};
+          {"mirror", "Mirror"}};
 }
 
 std::string ToolsApi::active_tool() const { return context_->active_tool; }
@@ -106,7 +106,6 @@ MirrorTool ToolsApi::activate_mirror_tool(MirrorToolOptions options) {
 }
 
 PivotTool ToolsApi::activate_pivot_tool(PivotToolOptions) {
-  context_->active_tool = "pivot";
   return PivotTool(context_);
 }
 
@@ -451,6 +450,13 @@ OperationReceipt PivotTool::cancel() {
 
 ProfilingApi::ProfilingApi(std::shared_ptr<ModelingApiContext> context)
     : context_(std::move(context)) {}
+
+Result<ProfilingReport> ProfilingApi::report() const {
+  return Result<ProfilingReport>::failure(make_error(
+      ErrorCode::UnsupportedOperation,
+      "Portable profiling capture is unsupported; use the benchmark harness "
+      "or native diagnostics owner."));
+}
 
 CheckedToolsApi::CheckedToolsApi(std::shared_ptr<ModelingApiContext> context)
     : context_(std::move(context)) {}

@@ -6,7 +6,9 @@
 ////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
-#include <mesh/polygon/document.hpp>
+#include <quader/modeling/neutral/polygon/document.hpp>
+
+#include <quader/modeling/commands/command.hpp>
 
 #include <algorithm>
 #include <array>
@@ -15,6 +17,7 @@
 #include <optional>
 #include <span>
 #include <string_view>
+#include <variant>
 
 namespace quader_editor_core {
 
@@ -57,6 +60,18 @@ enum class EditorOperationId {
   RecalculateFaceNormals,
   AssignMaterial,
   DeleteSelection,
+};
+
+/// Maps native preview presentation categories to portable transactions.
+enum class PreviewTransactionKind {
+  None = 0,
+  Bridge = 1,
+  EdgeBevel = 2,
+  Thicken = 3,
+  Transform = 4,
+  SliceQuad = 5,
+  MergeByDistance = 6,
+  HalfCut = 7,
 };
 
 inline constexpr double kDefaultCommandGridWorldSize = 1.0;
@@ -362,84 +377,158 @@ struct AssignMaterialOperationSettings {
  */
 struct SelectionOperationSettings {};
 
+using EditorOperationSettings = std::variant<
+    BridgeOperationSettings, EdgeBevelOperationSettings,
+    ThickenOperationSettings, SliceQuadOperationSettings,
+    MergeByDistanceOperationSettings, HalfCutOperationSettings,
+    BevelVerticesOperationSettings, DuplicateMeshesOperationSettings,
+    RecalculateFaceNormalsOperationSettings, AssignMaterialOperationSettings,
+    SelectionOperationSettings>;
+
 inline constexpr BridgeOperationSchema bridge_operation_schema() {
+  constexpr const quader::modeling::OperationDescriptor *kOperation =
+      quader::modeling::operation_descriptor(
+          quader::modeling::OperationKind::Bridge);
+  constexpr quader::modeling::OperationParameterDescriptor kSteps =
+      kOperation->parameters[0];
   return {
       EditorOperationId::Bridge,
-      "bridge",
+      kOperation->id,
       "Bridge",
-      {"steps", "Steps", 1, 1, 64, 1, true},
+      {kSteps.id, "Steps", static_cast<int>(kSteps.default_value),
+       static_cast<int>(kSteps.minimum), static_cast<int>(kSteps.maximum),
+       static_cast<int>(kSteps.step), kSteps.hard_limits},
   };
 }
 
 inline constexpr EdgeBevelOperationSchema edge_bevel_operation_schema() {
+  constexpr const quader::modeling::OperationDescriptor *kOperation =
+      quader::modeling::operation_descriptor(
+          quader::modeling::OperationKind::EdgeBevel);
+  constexpr quader::modeling::OperationParameterDescriptor kWidth =
+      kOperation->parameters[0];
+  constexpr quader::modeling::OperationParameterDescriptor kProfile =
+      kOperation->parameters[1];
+  constexpr quader::modeling::OperationParameterDescriptor kSegments =
+      kOperation->parameters[2];
   return {
       EditorOperationId::EdgeBevel,
-      "edge_bevel",
+      kOperation->id,
       "Edge Bevel",
-      {"width", "Width", 1.0, 0.0, 512.0, 0.001, true},
-      {"profile", "Profile", 0.5, 0.0, 1.0, 0.01, true},
-      {"segments", "Segments", 1, 1, 16, 1, true},
+      {kWidth.id, "Width", kWidth.default_value, kWidth.minimum,
+       kWidth.maximum, kWidth.step, kWidth.hard_limits},
+      {kProfile.id, "Profile", kProfile.default_value, kProfile.minimum,
+       kProfile.maximum, kProfile.step, kProfile.hard_limits},
+      {kSegments.id, "Segments",
+       static_cast<int>(kSegments.default_value),
+       static_cast<int>(kSegments.minimum),
+       static_cast<int>(kSegments.maximum), static_cast<int>(kSegments.step),
+       kSegments.hard_limits},
       quader_poly::BevelProfileType::Offset,
   };
 }
 
 inline constexpr ThickenOperationSchema thicken_operation_schema() {
+  constexpr const quader::modeling::OperationDescriptor *kOperation =
+      quader::modeling::operation_descriptor(
+          quader::modeling::OperationKind::Thicken);
+  constexpr quader::modeling::OperationParameterDescriptor kThickness =
+      kOperation->parameters[0];
+  constexpr quader::modeling::OperationParameterDescriptor kFromCenter =
+      kOperation->parameters[1];
   return {
       EditorOperationId::Thicken,
-      "thicken",
+      kOperation->id,
       "Thicken",
-      {"thickness", "Thickness", 0.25, -4.0, 4.0, 0.01, false},
-      {"from_center", "From Center", false, false},
+      {kThickness.id, "Thickness", kThickness.default_value,
+       kThickness.minimum, kThickness.maximum, kThickness.step,
+       kThickness.hard_limits},
+      {kFromCenter.id, "From Center", kFromCenter.default_value != 0.0,
+       kFromCenter.visible},
   };
 }
 
 inline constexpr SliceQuadOperationSchema slice_quad_operation_schema() {
+  constexpr const quader::modeling::OperationDescriptor *kOperation =
+      quader::modeling::operation_descriptor(
+          quader::modeling::OperationKind::SliceQuad);
+  constexpr quader::modeling::OperationParameterDescriptor kXSlices =
+      kOperation->parameters[0];
+  constexpr quader::modeling::OperationParameterDescriptor kYSlices =
+      kOperation->parameters[1];
   return {
       EditorOperationId::SliceQuad,
-      "slice_quad",
+      kOperation->id,
       "Slice Quad",
-      {"x_slices", "X", 1, 0, 64, 1, true},
-      {"y_slices", "Y", 1, 0, 64, 1, true},
+      {kXSlices.id, "X", static_cast<int>(kXSlices.default_value),
+       static_cast<int>(kXSlices.minimum), static_cast<int>(kXSlices.maximum),
+       static_cast<int>(kXSlices.step), kXSlices.hard_limits},
+      {kYSlices.id, "Y", static_cast<int>(kYSlices.default_value),
+       static_cast<int>(kYSlices.minimum), static_cast<int>(kYSlices.maximum),
+       static_cast<int>(kYSlices.step), kYSlices.hard_limits},
   };
 }
 
 inline constexpr MergeByDistanceOperationSchema
 merge_by_distance_operation_schema() {
+  constexpr const quader::modeling::OperationDescriptor *kOperation =
+      quader::modeling::operation_descriptor(
+          quader::modeling::OperationKind::MergeByDistance);
+  constexpr quader::modeling::OperationParameterDescriptor kTolerance =
+      kOperation->parameters[0];
   return {
       EditorOperationId::MergeByDistance,
-      "merge_by_distance",
+      kOperation->id,
       "Merge by Distance",
-      {"tolerance", "Tolerance", 0.125, 0.0, 128.0, 0.001, true},
+      {kTolerance.id, "Tolerance", kTolerance.default_value,
+       kTolerance.minimum, kTolerance.maximum, kTolerance.step,
+       kTolerance.hard_limits},
   };
 }
 
 inline constexpr HalfCutOperationSchema half_cut_operation_schema() {
+  constexpr const quader::modeling::OperationDescriptor *kOperation =
+      quader::modeling::operation_descriptor(
+          quader::modeling::OperationKind::HalfCut);
+  constexpr quader::modeling::OperationParameterDescriptor kAxis =
+      kOperation->parameters[0];
+  constexpr quader::modeling::OperationParameterDescriptor kSeparate =
+      kOperation->parameters[1];
+  constexpr quader::modeling::OperationParameterDescriptor kFill =
+      kOperation->parameters[2];
   return {
       EditorOperationId::HalfCut,
-      "half_cut",
+      kOperation->id,
       "Half-Cut",
-      {"axis", "Axis", static_cast<int>(HalfCutAxis::X),
-       static_cast<int>(HalfCutAxis::X), static_cast<int>(HalfCutAxis::Z), 1,
-       true},
-      {"separate_parts", "Separate Parts", false, true},
-      {"fill_parts", "Fill Parts", true, true},
+      {kAxis.id, "Axis", static_cast<int>(kAxis.default_value),
+       static_cast<int>(kAxis.minimum), static_cast<int>(kAxis.maximum),
+       static_cast<int>(kAxis.step), kAxis.hard_limits},
+      {kSeparate.id, "Separate Parts", kSeparate.default_value != 0.0,
+       kSeparate.visible},
+      {kFill.id, "Fill Parts", kFill.default_value != 0.0, kFill.visible},
   };
 }
 
 inline constexpr BevelVerticesOperationSchema
 bevel_vertices_operation_schema() {
+  constexpr const quader::modeling::OperationDescriptor *kOperation =
+      quader::modeling::operation_descriptor(
+          quader::modeling::OperationKind::BevelVertices);
   return {
       EditorOperationId::BevelVertices,
-      "bevel_vertices",
+      kOperation->id,
       "Bevel Vertices",
   };
 }
 
 inline constexpr DuplicateMeshesOperationSchema
 duplicate_meshes_operation_schema() {
+  constexpr const quader::modeling::OperationDescriptor *kOperation =
+      quader::modeling::operation_descriptor(
+          quader::modeling::OperationKind::DuplicateMeshes);
   return {
       EditorOperationId::DuplicateMeshes,
-      "duplicate_meshes",
+      kOperation->id,
       "Duplicate Meshes",
   };
 }

@@ -10,9 +10,22 @@
 #include <editor/modeling/runtime/session.hpp>
 #include <editor/modeling/runtime/tool_runtime_policy.hpp>
 #include <editor/interactions/interaction_api.hpp>
-#include <mesh/polygon/document.hpp>
+#include <quader/modeling/neutral/polygon/document.hpp>
 
 #include <string>
+#include <utility>
+
+namespace {
+
+quader_editor_core::EditorSession selected_cube_session() {
+  quader_editor_core::PolygonObject object;
+  object.id = 1;
+  object.selected = true;
+  object.document = quader_poly::make_cube({});
+  return quader_editor_core::EditorSession({std::move(object)});
+}
+
+} // namespace
 
 TEST(QdrModelingRuntimeToolActivationTests, ViewportToolIdsAreStableHostContracts) {
   EXPECT_TRUE(std::string(quader_editor_core::viewport_interaction_tool_id(
@@ -403,7 +416,6 @@ TEST(QdrModelingRuntimeToolActivationTests, EditorRuntimeStatusAndResetPoliciesR
 	runtime.knife.has_active_stroke = true;
 	runtime.knife.has_current = true;
 	runtime.transform_drag.active = true;
-	runtime.clipboard_objects.push_back({ 99, 0, true, quader_poly::make_cube({}), {} });
 
 	const quader_editor_core::EditorRuntimeStatus status = quader_editor_core::editor_runtime_status(runtime);
         EXPECT_TRUE(status.active_tool ==
@@ -422,8 +434,6 @@ TEST(QdrModelingRuntimeToolActivationTests, EditorRuntimeStatusAndResetPoliciesR
 	EXPECT_TRUE(status.knife_has_active_stroke);
 	EXPECT_TRUE(status.knife_has_current);
 	EXPECT_TRUE(status.transform_drag_active);
-	EXPECT_TRUE(status.clipboard_available);
-	EXPECT_TRUE(status.clipboard_object_count == 1);
 
 	quader_editor_core::clear_editor_runtime_preview_presentation_state(runtime);
 	const quader_editor_core::EditorRuntimeStatus cleared = quader_editor_core::editor_runtime_status(runtime);
@@ -437,7 +447,6 @@ TEST(QdrModelingRuntimeToolActivationTests, EditorRuntimeStatusAndResetPoliciesR
 	EXPECT_FALSE(cleared.transform_drag_active);
         EXPECT_TRUE(cleared.gizmo_hover_axis ==
                     quader_editor_core::TransformAxis::None);
-        EXPECT_TRUE(cleared.clipboard_available);
 }
 
 TEST(QdrModelingRuntimeToolActivationTests, EditorRuntimeSelectionPresentationClearOwnsHoverGizmoAndDragOrdering) {
@@ -452,7 +461,6 @@ TEST(QdrModelingRuntimeToolActivationTests, EditorRuntimeSelectionPresentationCl
 	runtime.box_grid_size = 4.0;
 	runtime.insert_edge_loop.active = true;
 	runtime.insert_edge_loop.preview_lines.push_back({});
-	runtime.clipboard_objects.push_back({ 99, 0, true, quader_poly::make_cube({}), {} });
 
 	quader_editor_core::clear_editor_runtime_selection_presentation_state(runtime);
 
@@ -467,7 +475,6 @@ TEST(QdrModelingRuntimeToolActivationTests, EditorRuntimeSelectionPresentationCl
 	EXPECT_TRUE(status.box_grid_size == 4.0);
 	EXPECT_TRUE(status.insert_edge_loop_active);
 	EXPECT_TRUE(status.insert_edge_loop_has_preview);
-	EXPECT_TRUE(status.clipboard_available);
 
 	quader_editor_core::EditorRuntime wrapper;
 	quader_editor_core::SelectionHoverState hover;
@@ -487,23 +494,16 @@ TEST(QdrModelingRuntimeToolActivationTests, EditorRuntimeSelectionPresentationCl
         EXPECT_FALSE(wrapper.status().transform_drag_active);
 }
 
-TEST(QdrModelingRuntimeToolActivationTests, EditorRuntimeDocumentResetClearsSessionPreviewAndRuntimeToolState) {
-	quader_editor_core::EditorSession session;
-	const quader_editor_core::CommandResult preview_result = session.begin_transform_preview(false);
-	EXPECT_TRUE(preview_result.ok);
-	EXPECT_TRUE(session.preview_transaction_status().active);
-
+TEST(QdrModelingRuntimeToolActivationTests, EditorRuntimeDocumentResetClearsHostToolState) {
 	quader_editor_core::EditorRuntime runtime;
         runtime.state().active_tool =
             quader_editor_core::ViewportInteractionTool::Scale;
         runtime.state().gizmo_hover_axis = quader_editor_core::TransformAxis::Y;
         runtime.state().box_grid_size = 16.0;
 	runtime.state().transform_drag.active = true;
-	runtime.state().clipboard_objects.push_back({ 4, 0, false, quader_poly::make_cube({}), {} });
 
-	runtime.reset_document_state(session);
+	runtime.reset_document_state();
 	const quader_editor_core::EditorRuntimeStatus status = runtime.status();
-	EXPECT_FALSE(session.preview_transaction_status().active);
         EXPECT_TRUE(status.active_tool ==
                     quader_editor_core::ViewportInteractionTool::Select);
         EXPECT_TRUE(status.gizmo_hover_axis ==
@@ -511,14 +511,10 @@ TEST(QdrModelingRuntimeToolActivationTests, EditorRuntimeDocumentResetClearsSess
         EXPECT_FALSE(status.transform_drag_active);
         EXPECT_TRUE(runtime.state().box_grid_size ==
                     quader_editor_core::kDefaultEditorRuntimeBoxGridSize);
-        EXPECT_TRUE(status.clipboard_available);
 }
 
-TEST(QdrModelingRuntimeToolActivationTests, EditorRuntimeSetActiveToolOwnsPreviewCancellationAndSelectionMode) {
-	quader_editor_core::EditorSession session;
-	session.reset_to_default_scene();
-	session.set_selected_object_ids({ 1 }, 1);
-	EXPECT_TRUE(session.begin_transform_preview(false).ok);
+TEST(QdrModelingRuntimeToolActivationTests, EditorRuntimeSetActiveToolCancelsHostDragAndReportsRequiredMode) {
+	quader_editor_core::EditorSession session = selected_cube_session();
 
 	quader_editor_core::EditorRuntime runtime;
         runtime.state().active_tool =
@@ -536,10 +532,12 @@ TEST(QdrModelingRuntimeToolActivationTests, EditorRuntimeSetActiveToolOwnsPrevie
 
         EXPECT_TRUE(result.applied);
 	EXPECT_TRUE(result.transform_preview_cancelled);
-	EXPECT_TRUE(result.selection_mode_applied);
-	EXPECT_FALSE(session.preview_transaction_status().active);
-        EXPECT_TRUE(session.selection_mode() ==
-                    quader_editor_core::SelectionMode::Edge);
+	EXPECT_FALSE(result.selection_mode_applied);
+	EXPECT_TRUE(result.plan.selection_mode_changed);
+	EXPECT_TRUE(result.plan.selection_mode ==
+	            quader_editor_core::SelectionMode::Edge);
+	EXPECT_TRUE(session.selection_mode() ==
+	            quader_editor_core::SelectionMode::Object);
         EXPECT_TRUE(
             runtime.active_tool() ==
             quader_editor_core::ViewportInteractionTool::InsertEdgeLoop);
@@ -686,15 +684,6 @@ TEST(QdrModelingRuntimeToolActivationTests, EditorRuntimeWrapperMethodsKeepState
         runtime.set_gizmo_hover_from_pick(hit);
         EXPECT_TRUE(runtime.status().gizmo_hover_axis ==
                     quader_editor_core::TransformAxis::X);
-
-        runtime.set_clipboard({ { 42, 0, true, quader_poly::make_cube({}), {} } });
-	EXPECT_TRUE(runtime.clipboard_available());
-	EXPECT_TRUE(runtime.clipboard_objects().size() == 1U);
-	EXPECT_TRUE(runtime.clipboard_object_count() == 1U);
-	EXPECT_TRUE(runtime.status().clipboard_object_count == 1U);
-
-	runtime.clear_clipboard();
-	EXPECT_FALSE(runtime.clipboard_available());
 
 	quader_editor_core::EditorRuntimeState replacement;
         replacement.active_tool =

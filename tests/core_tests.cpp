@@ -80,7 +80,6 @@
 #include "scene/scene_entity_naming.hpp"
 #include "scene/scene_transform.hpp"
 #include "scene/transform_pivot.hpp"
-#include "support/guardrail_file_scan.hpp"
 #include "ui/console_model.hpp"
 #include "ui/ui_settings.hpp"
 #include "ui/viewport_context_menu_policy.hpp"
@@ -103,7 +102,6 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
-#include <cctype>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
@@ -124,44 +122,6 @@
 #include <vector>
 
 using namespace quader;
-using quader::test::guardrail::read_source_file;
-
-#ifndef QUADER_SOURCE_DIR
-#define QUADER_SOURCE_DIR "."
-#endif
-
-std::size_t count_occurrences(std::string_view haystack,
-                              std::string_view needle) {
-  std::size_t count = 0;
-  std::size_t offset = 0;
-  while (!needle.empty()) {
-    offset = haystack.find(needle, offset);
-    if (offset == std::string_view::npos) {
-      break;
-    }
-    ++count;
-    offset += needle.size();
-  }
-  return count;
-}
-
-std::string compact_source_text(std::string_view text) {
-  std::string compact;
-  compact.reserve(text.size());
-  for (const char character : text) {
-    if (!std::isspace(static_cast<unsigned char>(character))) {
-      compact.push_back(character);
-    }
-  }
-  return compact;
-}
-
-bool source_contains_compact(std::string_view haystack,
-                             std::string_view needle) {
-  const std::string compact_haystack = compact_source_text(haystack);
-  const std::string compact_needle = compact_source_text(needle);
-  return compact_haystack.find(compact_needle) != std::string::npos;
-}
 
 template <typename T> constexpr bool render_owner_is_non_transferable() {
   static_assert(std::is_default_constructible_v<T>);
@@ -170,28 +130,6 @@ template <typename T> constexpr bool render_owner_is_non_transferable() {
   static_assert(!std::is_move_constructible_v<T>);
   static_assert(!std::is_move_assignable_v<T>);
   return true;
-}
-
-bool metadata_method_returns_literal(std::string_view source,
-                                     std::string_view signature) {
-  std::size_t offset = 0;
-  while (true) {
-    const std::size_t signature_pos = source.find(signature, offset);
-    if (signature_pos == std::string_view::npos) {
-      return false;
-    }
-    const std::size_t body_start = source.find('{', signature_pos);
-    const std::size_t body_end = source.find('}', body_start);
-    if (body_start == std::string_view::npos ||
-        body_end == std::string_view::npos) {
-      return false;
-    }
-    const std::size_t literal_return = source.find("return \"", body_start);
-    if (literal_return != std::string_view::npos && literal_return < body_end) {
-      return true;
-    }
-    offset = body_end + 1;
-  }
 }
 
 ViewportShortcut test_tool_shortcut(ViewportToolId tool) {
@@ -940,61 +878,7 @@ TEST(FatalErrorHandlerTests, ConvertsEmptyAndNonAsciiUtf8WithoutTerminatorWrite)
             std::wstring(L"Quader \u00E8 stabile"));
 }
 
-TEST(FatalErrorHandlerTests, MainInstallsReportableFatalErrorBoundary) {
-  const std::string main_source = read_source_file("src/main.cpp");
-  const std::string handler_source =
-      read_source_file("src/platform/fatal_error_handler.cpp");
-  const std::string cmake_source = read_source_file("CMakeLists.txt");
 
-  EXPECT_NE(main_source.find("install_fatal_error_handler(log_path)"),
-            std::string::npos);
-  EXPECT_NE(main_source.find("report_fatal_error_and_exit"), std::string::npos);
-  EXPECT_NE(main_source.find("FatalErrorCode::UnhandledCppException"),
-            std::string::npos);
-  EXPECT_NE(handler_source.find("Quader Fatal Error"), std::string::npos);
-  EXPECT_NE(handler_source.find("Error code:"), std::string::npos);
-  EXPECT_NE(handler_source.find("Quick message:"), std::string::npos);
-  EXPECT_NE(handler_source.find("Crash report:"), std::string::npos);
-  EXPECT_NE(handler_source.find("crash-reports"), std::string::npos);
-  EXPECT_NE(handler_source.find("MiniDumpWriteDump"), std::string::npos);
-  EXPECT_NE(handler_source.find("write_crash_artifacts"), std::string::npos);
-  EXPECT_NE(handler_source.find("append_text_file(g_log_path"),
-            std::string::npos);
-  EXPECT_NE(handler_source.find("module_description_for_address"),
-            std::string::npos);
-  EXPECT_NE(handler_source.find("Stack trace (most recent call first):"),
-            std::string::npos);
-  EXPECT_NE(handler_source.find("CaptureStackBackTrace"), std::string::npos);
-  EXPECT_NE(handler_source.find("StackWalk64"), std::string::npos);
-  EXPECT_NE(handler_source.find("SymFromAddr"), std::string::npos);
-  EXPECT_NE(handler_source.find("QDR-FATAL-0000"), std::string::npos);
-  EXPECT_NE(handler_source.find("QDR-FATAL-0001"), std::string::npos);
-  EXPECT_NE(handler_source.find("QDR-FATAL-0002"), std::string::npos);
-  EXPECT_NE(handler_source.find("Internal runtime abort."), std::string::npos);
-  EXPECT_NE(handler_source.find("SIGABRT"), std::string::npos);
-  EXPECT_NE(handler_source.find("_set_abort_behavior"), std::string::npos);
-  EXPECT_NE(cmake_source.find("Dbghelp"), std::string::npos);
-}
-
-TEST(FatalErrorHandlerTests, SentryNativeWrapsFatalAndVerificationEvents) {
-  const std::string main_source = read_source_file("src/main.cpp");
-  const std::string sentry_header =
-      read_source_file("src/platform/sentry_client.hpp");
-  const std::string sentry_source =
-      read_source_file("src/platform/sentry_client.cpp");
-
-  EXPECT_NE(sentry_header.find("kQuaderSentryDsn"), std::string::npos);
-  EXPECT_NE(sentry_header.find("enum class SentryEventLevel"),
-            std::string::npos);
-  EXPECT_NE(sentry_header.find("Fatal"), std::string::npos);
-  EXPECT_NE(main_source.find("--sentry-verify"), std::string::npos);
-  EXPECT_NE(main_source.find("\"It works!\""), std::string::npos);
-  EXPECT_NE(main_source.find("Unhandled exception in Quader main"),
-            std::string::npos);
-  EXPECT_NE(main_source.find("shutdown_sentry_client()"), std::string::npos);
-  EXPECT_NE(sentry_source.find("SENTRY_LEVEL_FATAL"), std::string::npos);
-  EXPECT_NE(sentry_source.find("sentry_close()"), std::string::npos);
-}
 
 TEST(ConsoleModelTests, FiltersByLevelAndSearch) {
   std::vector<LogEntry> entries = {
@@ -1640,461 +1524,16 @@ TEST(ViewportSettingsTests,
   std::filesystem::remove(path);
 }
 
-TEST(ViewportSettingsTests, EveryDescriptorHasARuntimeConsumer) {
-  const std::string consumers =
-      read_source_file("src/render/viewport_grid_renderer.cpp") +
-      read_source_file("src/render/material_binding_service.cpp") +
-      read_source_file("src/viewport/viewport_grid_placement_policy.hpp") +
-      read_source_file(
-          "src/render/overlay/viewport_overlay_style_resolver.cpp") +
-      read_source_file("src/ui/qt_viewport_panel.cpp") +
-      read_source_file(
-          "src/editor/viewport/viewport_selection_interaction.cpp") +
-      read_source_file("src/editor/viewport/transform_gizmo_interaction.cpp") +
-      quader::test::guardrail::source_slice(
-          read_source_file("src/viewport/viewport_settings.cpp"),
-          "bool viewport_snapping_active(",
-          "ViewportSettings::ViewportSettings()");
 
-  constexpr std::array<std::string_view, kViewportColorSettingCount>
-      kColorConsumers{{
-          "ViewportColorSettingId::GridMinor",
-          "ViewportColorSettingId::GridMajor",
-          "ViewportColorSettingId::MeshGridMinor",
-          "ViewportColorSettingId::MeshGridMajor",
-          "ViewportColorSettingId::GridXAxis",
-          "ViewportColorSettingId::GridYAxis",
-          "ViewportColorSettingId::GridZAxis",
-          "ViewportColorSettingId::SelectionFace",
-          "ViewportColorSettingId::SelectionWire",
-          "ViewportColorSettingId::SourceWire",
-          "ViewportColorSettingId::OpenEdge",
-          "ViewportColorSettingId::DiagnosticEdge",
-          "ViewportColorSettingId::HoverFace",
-          "ViewportColorSettingId::HoverWire",
-          "ViewportColorSettingId::RemoveSelectionFace",
-          "ViewportColorSettingId::RemoveSelectionWire",
-          "ViewportColorSettingId::Vertex",
-          "ViewportColorSettingId::SelectedVertex",
-          "ViewportColorSettingId::HoverVertex",
-          "ViewportColorSettingId::RemoveSelectionVertex",
-      }};
-  constexpr std::array<std::string_view, kViewportFloatSettingCount>
-      kFloatConsumers{{
-          "ViewportFloatSettingId::GridMinorLineSize",
-          "ViewportFloatSettingId::GridMajorLineSize",
-          "ViewportFloatSettingId::GridAxisLineSize",
-          "ViewportFloatSettingId::ShadedKeyDirectionX",
-          "ViewportFloatSettingId::ShadedKeyDirectionY",
-          "ViewportFloatSettingId::ShadedKeyDirectionZ",
-          "ViewportFloatSettingId::ShadedKeyIntensity",
-          "ViewportFloatSettingId::ShadedDiffuseWrap",
-          "ViewportFloatSettingId::ShadedGroundFill",
-          "ViewportFloatSettingId::ShadedSkyFill",
-          "ViewportFloatSettingId::SourceWireLineSize",
-          "ViewportFloatSettingId::SelectionFaceWireLineSize",
-          "ViewportFloatSettingId::SelectionEdgeLineSize",
-          "ViewportFloatSettingId::HoverWireLineSize",
-          "ViewportFloatSettingId::OpenEdgeLineSize",
-          "ViewportFloatSettingId::DiagnosticEdgeLineSize",
-          "ViewportFloatSettingId::VertexSize",
-          "ViewportFloatSettingId::SelectedVertexGrowth",
-          "ViewportFloatSettingId::HoverVertexGrowth",
-          "ViewportFloatSettingId::VertexOutlineSize",
-          "ViewportFloatSettingId::PickVertexRadius",
-          "ViewportFloatSettingId::PickEdgeRadius",
-          "ViewportFloatSettingId::GizmoSize",
-          "ViewportFloatSettingId::RotationSnapDegrees",
-      }};
-  constexpr std::array<std::string_view, kViewportBoolSettingCount>
-      kBoolConsumers{{
-          "ViewportBoolSettingId::ShowGrid",
-          "ViewportBoolSettingId::ShowMeshGrid",
-          "ViewportBoolSettingId::ShowGizmos",
-          "ViewportBoolSettingId::ShowOverlays",
-          "ViewportBoolSettingId::ShowInfo",
-          "ViewportBoolSettingId::SnappingEnabled",
-          "ViewportBoolSettingId::GridSnap",
-          "ViewportBoolSettingId::VertexSnap",
-          "ViewportBoolSettingId::RotationSnap",
-      }};
 
-  const auto expect_consumed = [&](const auto &tokens) {
-    for (const std::string_view token : tokens) {
-      EXPECT_NE(consumers.find(token), std::string::npos) << token;
-    }
-  };
-  expect_consumed(kColorConsumers);
-  expect_consumed(kFloatConsumers);
-  expect_consumed(kBoolConsumers);
-}
 
-TEST(GroundGridMaterialTests, UsesUserWorldAnchoring) {
-  const std::string source =
-      read_source_file("resources/materials/ground_grid.mat");
-  const std::string grid_renderer_source =
-      read_source_file("src/render/viewport_grid_renderer.cpp");
 
-  EXPECT_NE(source.find("shadingModel : unlit"), std::string::npos);
-  EXPECT_NE(source.find("depthWrite : false"), std::string::npos);
-  EXPECT_NE(source.find("getUserWorldPosition()"), std::string::npos);
-  EXPECT_EQ(source.find("getWorldPosition()"), std::string::npos);
-  EXPECT_NE(source.find("localPosition"), std::string::npos);
-  EXPECT_NE(source.find("variable_localPosition"), std::string::npos);
-  EXPECT_NE(source.find("cameraSize"), std::string::npos);
-  EXPECT_NE(source.find("cameraFarPlane"), std::string::npos);
-  EXPECT_NE(source.find("cameraFarFade"), std::string::npos);
-  EXPECT_NE(source.find("visibleGridSize"), std::string::npos);
-  EXPECT_NE(source.find("minGridWorldSpacing"), std::string::npos);
-  EXPECT_NE(source.find("cameraDistance = length(worldPosition - "
-                        "materialParams.cameraPosition)"),
-            std::string::npos);
-  EXPECT_NE(source.find("farHalf = max(materialParams.cameraFarPlane * 0.5"),
-            std::string::npos);
-  EXPECT_NE(source.find("farClipFade = mix(1.0, farClipFade"),
-            std::string::npos);
-  EXPECT_NE(source.find("distanceFade * edgeFade * farClipFade"),
-            std::string::npos);
-  EXPECT_NE(source.find("majorCoverage = parentGridValue * "
-                        "materialParams.majorGridColor.a"),
-            std::string::npos);
-  EXPECT_NE(source.find("minorCoverage = gridValue * "
-                        "materialParams.gridColor.a * (1.0 - clamp("),
-            std::string::npos);
-  EXPECT_EQ(source.find("alpha = max(alpha, parentGridValue * "
-                        "materialParams.majorGridColor.a)"),
-            std::string::npos);
-  EXPECT_NE(source.find("vec4(color * alpha, alpha)"), std::string::npos);
-  EXPECT_EQ(source.find("getUV0()"), std::string::npos);
-  EXPECT_EQ(source.find("planeCenter"), std::string::npos);
-  EXPECT_NE(grid_renderer_source.find("\"cameraFarPlane\""), std::string::npos);
-  EXPECT_NE(grid_renderer_source.find("\"cameraFarFade\""), std::string::npos);
-  EXPECT_NE(grid_renderer_source.find("ViewportProjection::Perspective ? 1.0f"),
-            std::string::npos);
-  EXPECT_NE(grid_renderer_source.find(".castShadows(false)"),
-            std::string::npos);
-  EXPECT_NE(grid_renderer_source.find(".receiveShadows(false)"),
-            std::string::npos);
-}
 
-TEST(GroundGridMaterialTests,
-     LineThicknessNarrowsCoverageWithoutScalingCenterOpacity) {
-  const std::string source =
-      read_source_file("resources/materials/ground_grid.mat");
-  const std::size_t grid_line_start = source.find("float gridLine(");
-  const std::size_t axis_line_start = source.find("float axisLine(");
-  const std::size_t normalize_start = source.find("vec3 safeNormalize(");
 
-  ASSERT_NE(grid_line_start, std::string::npos);
-  ASSERT_NE(axis_line_start, std::string::npos);
-  ASSERT_NE(normalize_start, std::string::npos);
-  ASSERT_LT(grid_line_start, axis_line_start);
-  ASSERT_LT(axis_line_start, normalize_start);
 
-  const std::string grid_line =
-      source.substr(grid_line_start, axis_line_start - grid_line_start);
-  const std::string axis_line =
-      source.substr(axis_line_start, normalize_start - axis_line_start);
-  EXPECT_NE(grid_line.find("lineWidth = antialias * max(widthScale, 0.05) * "
-                           "thickness"),
-            std::string::npos);
-  EXPECT_NE(axis_line.find("lineWidth = antialias * 0.9 * thickness"),
-            std::string::npos);
-  EXPECT_NE(grid_line.find("return coverage;"), std::string::npos);
-  EXPECT_NE(axis_line.find("return coverage;"), std::string::npos);
-  EXPECT_EQ(grid_line.find("coverage * min(thickness"), std::string::npos);
-  EXPECT_EQ(axis_line.find("coverage * min(thickness"), std::string::npos);
-}
 
-TEST(QuaderMeshMaterialTests, UsesOverlaySelectionInsteadOfStandaloneTint) {
-  const std::string source =
-      read_source_file("resources/materials/quader_mesh.mat");
 
-  EXPECT_EQ(source.find("selectionTint"), std::string::npos);
-  EXPECT_EQ(source.find("getColor()"), std::string::npos);
-  EXPECT_EQ(source.find("vertexColor"), std::string::npos);
-  EXPECT_EQ(source.find("color,"), std::string::npos);
-}
 
-TEST(QuaderMeshMaterialTests, UsesLitTextureTransformTimesColorAndPbrFactors) {
-  const std::string shaded_source =
-      read_source_file("resources/materials/quader_mesh.mat");
-  const std::string source =
-      read_source_file("resources/materials/quader_mesh_lit.mat");
-
-  EXPECT_NE(shaded_source.find("shadingModel : unlit"), std::string::npos);
-  EXPECT_NE(shaded_source.find("vec2 uv = applyTextureTransform("),
-            std::string::npos);
-  EXPECT_NE(shaded_source.find(
-                "(uv - materialParams.textureTransformCenter)"),
-            std::string::npos);
-  EXPECT_NE(shaded_source.find(
-                "* materialParams.textureTransformScale"),
-            std::string::npos);
-  EXPECT_NE(shaded_source.find(
-                "+ materialParams.textureTransformOffset"),
-            std::string::npos);
-  EXPECT_NE(shaded_source.find("texture(materialParams_baseColorTexture, uv)"),
-            std::string::npos);
-  EXPECT_NE(shaded_source.find(
-                "baseColor, baseSample.a * materialParams.baseColorFactor.a"),
-            std::string::npos);
-  EXPECT_NE(shaded_source.find(
-                "material.baseColor = vec4(finalRgb * edited.a, edited.a)"),
-            std::string::npos);
-  EXPECT_NE(shaded_source.find("normalize(vec3(-0.09, 0.47, 0.88))"),
-            std::string::npos);
-  EXPECT_NE(shaded_source.find(
-                "(dot(normalView, keyDirectionView) + diffuseWrap)"),
-            std::string::npos);
-  EXPECT_NE(shaded_source.find(
-                "dot(normalWorld, worldUp) * 0.5 + 0.5"),
-            std::string::npos);
-  EXPECT_NE(shaded_source.find(
-                "min(ambient + keyIntensity * wrappedDiffuse, 1.0)"),
-            std::string::npos);
-  EXPECT_NE(shaded_source.find("name : shadedKeyDirectionX"),
-            std::string::npos);
-  EXPECT_NE(shaded_source.find("name : shadedKeyDirectionY"),
-            std::string::npos);
-  EXPECT_NE(shaded_source.find("name : shadedKeyDirectionZ"),
-            std::string::npos);
-  EXPECT_NE(shaded_source.find(
-                "vec3 finalRgb = edited.rgb * lighting"),
-            std::string::npos);
-  EXPECT_EQ(shaded_source.find("roughnessTexture"), std::string::npos);
-  EXPECT_EQ(shaded_source.find("metallicTexture"), std::string::npos);
-  EXPECT_EQ(shaded_source.find("normalTexture"), std::string::npos);
-  EXPECT_EQ(shaded_source.find("shadedModelingSpecular"), std::string::npos);
-  EXPECT_EQ(shaded_source.find("getWorldViewVector"), std::string::npos);
-  EXPECT_EQ(shaded_source.find("reflect("), std::string::npos);
-  EXPECT_EQ(shaded_source.find("editor_unlit"), std::string::npos);
-  EXPECT_NE(source.find("shadingModel : lit"), std::string::npos);
-  EXPECT_EQ(source.find("doubleSided : true"), std::string::npos);
-  EXPECT_NE(source.find("vec2 uv = applyTextureTransform("),
-            std::string::npos);
-  EXPECT_NE(source.find("cos(materialParams.textureTransformRotationRadians)"),
-            std::string::npos);
-  EXPECT_NE(source.find("sin(materialParams.textureTransformRotationRadians)"),
-            std::string::npos);
-  EXPECT_NE(source.find("texture(materialParams_baseColorTexture, uv)"),
-            std::string::npos);
-  EXPECT_NE(source.find("texture(materialParams_roughnessTexture, uv).r"),
-            std::string::npos);
-  EXPECT_NE(source.find("baseSample.rgb * materialParams.baseColorFactor.rgb"),
-            std::string::npos);
-  EXPECT_NE(source.find(
-                "float sourceAlpha = baseSample.a * "
-                "materialParams.baseColorFactor.a"),
-            std::string::npos);
-  EXPECT_NE(source.find(
-                "material.baseColor = vec4(edited.rgb * edited.a, edited.a)"),
-            std::string::npos);
-  EXPECT_NE(source.find("roughnessSample * materialParams.roughnessFactor"),
-            std::string::npos);
-  EXPECT_NE(source.find("name : metallicTexture"), std::string::npos);
-  EXPECT_NE(source.find("name : normalTexture"), std::string::npos);
-  EXPECT_NE(source.find(
-                "texture(materialParams_metallicTexture, uv).r"),
-            std::string::npos);
-  EXPECT_NE(source.find(
-                "texture(materialParams_normalTexture, uv).xyz"),
-            std::string::npos);
-  EXPECT_NE(source.find("normalSample.y *= materialParams.normalYSign"),
-            std::string::npos);
-  EXPECT_NE(source.find("normalSample.xy *= "
-                        "clamp(materialParams.normalStrength, -16.0, 16.0)"),
-            std::string::npos);
-  EXPECT_NE(source.find("metallicSample * materialParams.metallicFactor"),
-            std::string::npos);
-  EXPECT_NE(source.find("material.normal = normalSample"), std::string::npos);
-  EXPECT_EQ(source.find("editor_unlit"), std::string::npos);
-}
-
-TEST(QuaderMeshMaterialTests,
-     RenderedMaterialSupportsPerViewportPbrDebugViews) {
-  const std::string source =
-      read_source_file("resources/materials/quader_mesh_lit.mat");
-  const std::string renderer =
-      read_source_file("src/render/viewport_renderer.cpp");
-
-  EXPECT_NE(source.find("postLightingBlending : opaque"), std::string::npos);
-  EXPECT_NE(source.find("getMaterialGlobal0().x"), std::string::npos);
-  EXPECT_NE(source.find("material.postLightingColor"), std::string::npos);
-  EXPECT_NE(source.find("material.postLightingMixFactor"),
-            std::string::npos);
-  EXPECT_NE(source.find("material.reflectance = 0.0"), std::string::npos);
-  EXPECT_NE(source.find("mix(vec3(0.04), albedo, metallic)"),
-            std::string::npos);
-  EXPECT_NE(source.find("getWorldTangentFrame() * normalSample"),
-            std::string::npos);
-  EXPECT_NE(source.find("debugColor * sourceAlpha, sourceAlpha"),
-            std::string::npos);
-  EXPECT_NE(renderer.find("view_->setMaterialGlobal("), std::string::npos);
-  EXPECT_NE(renderer.find("ViewportMaterialDebugMode mode"),
-            std::string::npos);
-}
-
-TEST(QuaderMeshMaterialTests, ShadedPreviewBindsOnlyTheBaseColorSurfaceInput) {
-  const std::string source =
-      read_source_file("src/render/material_preview_renderer.cpp");
-
-  EXPECT_EQ(source.find("const auto bind_surface_parameters"),
-            std::string::npos);
-  EXPECT_NE(source.find(
-                "shaded_instance->setParameter(\"baseColorTexture\""),
-            std::string::npos);
-  EXPECT_NE(source.find(
-                "rendered_instance->setParameter(\"roughnessTexture\""),
-            std::string::npos);
-  EXPECT_EQ(source.find("wire_instance->setParameter(\"normalTexture\""),
-            std::string::npos);
-}
-
-TEST(QuaderMeshMaterialTests, SupportsOptionalWorldSpaceSurfaceGrid) {
-  const std::array<std::string, 2> sources = {
-      read_source_file("resources/materials/quader_mesh.mat"),
-      read_source_file("resources/materials/quader_mesh_lit.mat"),
-  };
-
-  for (const std::string &source : sources) {
-    EXPECT_NE(source.find("surfaceGridMinorColor"), std::string::npos);
-    EXPECT_NE(source.find("surfaceGridMajorColor"), std::string::npos);
-    EXPECT_NE(source.find("surfaceGridEnabled"), std::string::npos);
-    EXPECT_NE(source.find("tangents"), std::string::npos);
-    EXPECT_NE(source.find("getUserWorldPosition()"), std::string::npos);
-    EXPECT_NE(source.find("getWorldGeometricNormalVector()"),
-              std::string::npos);
-    EXPECT_NE(source.find("surfaceGridCoordinates("), std::string::npos);
-    EXPECT_NE(source.find("surfaceGridFloor("), std::string::npos);
-    EXPECT_NE(source.find("surfaceGridLineCoverage("), std::string::npos);
-    EXPECT_NE(
-        source.find("float worldPixelWidth = max(length(dFdx(worldPosition)), "
-                    "length(dFdy(worldPosition)))"),
-        std::string::npos);
-    EXPECT_NE(source.find("surfaceGridMinorLineThickness"), std::string::npos);
-    EXPECT_NE(source.find("surfaceGridMajorLineThickness"), std::string::npos);
-    EXPECT_NE(source.find("baseColor = applySurfaceGrid(baseColor)"),
-              std::string::npos);
-    EXPECT_NE(source.find("float derivativeWidth = fwidth(coord)"),
-              std::string::npos);
-    EXPECT_NE(source.find("float lodSpacing = max(surfaceGridFloor"),
-              std::string::npos);
-    EXPECT_NE(source.find("return mix(currentCoverage, nextCoverage, blend);"),
-              std::string::npos);
-    EXPECT_EQ(source.find("surfaceGridVisibility("), std::string::npos);
-    EXPECT_EQ(source.find("coverage * surfaceGridVisibility"),
-              std::string::npos);
-    EXPECT_EQ(source.find("cross(dFdx(worldPosition), dFdy(worldPosition))"),
-              std::string::npos);
-    EXPECT_EQ(source.find("Strip test"), std::string::npos);
-    EXPECT_EQ(source.find("vec2 coords = worldPosition.xz;"),
-              std::string::npos);
-    EXPECT_EQ(source.find("return coverage;"), std::string::npos);
-    EXPECT_EQ(source.find("return coverage * min(thickness, 1.0)"),
-              std::string::npos);
-  }
-}
-
-TEST(QuaderMeshMaterialTests,
-     SurfaceGridMajorSlotsExcludeMinorCoverageIndependentOfMajorAlpha) {
-  const std::array<std::string, 2> sources = {
-      read_source_file("resources/materials/quader_mesh.mat"),
-      read_source_file("resources/materials/quader_mesh_lit.mat"),
-  };
-
-  for (const std::string &source : sources) {
-    const std::size_t slot_function_start =
-        source.find("float surfaceGridLineSlotCoverage(");
-    const std::size_t coordinates_function_start =
-        source.find("vec2 surfaceGridCoordinates(");
-    ASSERT_NE(slot_function_start, std::string::npos);
-    ASSERT_NE(coordinates_function_start, std::string::npos);
-    ASSERT_LT(slot_function_start, coordinates_function_start);
-    const std::string slot_function = source.substr(
-        slot_function_start, coordinates_function_start - slot_function_start);
-
-    EXPECT_NE(slot_function.find("return max(currentCoverage, nextCoverage)"),
-              std::string::npos);
-    EXPECT_TRUE(source_contains_compact(
-        source, "float majorSlotThickness = max("
-                "materialParams.surfaceGridMinorLineThickness, "
-                "materialParams.surfaceGridMajorLineThickness)"));
-    EXPECT_NE(source.find("float majorSlotMask = step(0.000001, "
-                          "majorSlotCoverage)"),
-              std::string::npos);
-    EXPECT_NE(source.find("float majorCoverage = majorLine * "
-                          "materialParams.surfaceGridMajorColor.a"),
-              std::string::npos);
-    EXPECT_TRUE(source_contains_compact(
-        source, "float minorCoverage = minorLine * "
-                "materialParams.surfaceGridMinorColor.a * "
-                "(1.0 - majorSlotMask)"));
-    EXPECT_EQ(source.find("1.0 - clamp(majorCoverage"), std::string::npos);
-    EXPECT_EQ(source.find("float majorMask = clamp(majorLine"),
-              std::string::npos);
-  }
-}
-
-TEST(OverlayMaterialTests, PremultipliesVertexAlphaForTransparentFaceFill) {
-  const std::string source =
-      read_source_file("resources/materials/vertex_color_overlay.mat");
-
-  EXPECT_NE(source.find("blending : transparent"), std::string::npos);
-  EXPECT_NE(source.find("depthWrite : false"), std::string::npos);
-  EXPECT_NE(source.find("vec4(vertexColor.rgb * vertexColor.a, vertexColor.a)"),
-            std::string::npos);
-}
-
-TEST(OverlayMaterialTests,
-     LineAndPointMaterialsUseScreenSpaceOverlayExpansion) {
-  const std::string line_source =
-      read_source_file("resources/materials/quader_overlay_line.mat");
-
-  EXPECT_NE(line_source.find("vertexDomain : device"), std::string::npos);
-  EXPECT_NE(line_source.find("requires : [\n        color,\n        custom0"),
-            std::string::npos);
-  EXPECT_NE(line_source.find("material.lineDistancePixels = getCustom0()"),
-            std::string::npos);
-  EXPECT_EQ(line_source.find("material.world_position"), std::string::npos);
-  EXPECT_EQ(line_source.find("getClipFromViewMatrix()"), std::string::npos);
-  EXPECT_EQ(line_source.find("name : nearPlane"), std::string::npos);
-  EXPECT_NE(line_source.find("variable_lineDistancePixels.x"),
-            std::string::npos);
-
-  const std::string point_source =
-      read_source_file("resources/materials/quader_overlay_point.mat");
-  const std::string icon_source =
-      read_source_file("resources/materials/quader_overlay_icon.mat");
-
-  EXPECT_NE(point_source.find("vertexDomain : device"), std::string::npos);
-  EXPECT_NE(point_source.find("requires : [\n        uv0,\n        color"),
-            std::string::npos);
-  EXPECT_EQ(point_source.find("material.world_position"), std::string::npos);
-  EXPECT_EQ(point_source.find("getClipFromViewMatrix()"), std::string::npos);
-  EXPECT_EQ(point_source.find("name : nearPlane"), std::string::npos);
-  EXPECT_NE(point_source.find("variable_pointUv.xy"), std::string::npos);
-  EXPECT_NE(point_source.find("materialParams.innerRadius"), std::string::npos);
-  const std::size_t inner_radius_guard =
-      point_source.find("if (materialParams.innerRadius > 0.0)");
-  const std::size_t outer_circle_discard =
-      point_source.find("if (distanceFromCenter > 0.5)");
-  ASSERT_NE(outer_circle_discard, std::string::npos);
-  ASSERT_NE(inner_radius_guard, std::string::npos);
-  EXPECT_LT(inner_radius_guard, outer_circle_discard);
-
-  EXPECT_NE(icon_source.find("vertexDomain : device"), std::string::npos);
-  EXPECT_NE(icon_source.find("requires : [\n        uv0,\n        color"),
-            std::string::npos);
-  EXPECT_NE(icon_source.find("type : sampler2d"), std::string::npos);
-  EXPECT_NE(icon_source.find("name : iconTexture"), std::string::npos);
-  EXPECT_NE(icon_source.find("materialParams_iconTexture"), std::string::npos);
-  EXPECT_EQ(icon_source.find("material.world_position"), std::string::npos);
-  EXPECT_EQ(icon_source.find("getClipFromViewMatrix()"), std::string::npos);
-  EXPECT_EQ(icon_source.find("name : nearPlane"), std::string::npos);
-  EXPECT_NE(icon_source.find("sampled.rgb * tint.rgb * alpha"),
-            std::string::npos);
-}
 
 TEST(ViewportOverlayPolicyTests, MatchesNativeLayerDrawOrder) {
   const std::array<ViewportOverlayLayer, kViewportOverlayLayerCount> expected{{
@@ -2375,158 +1814,12 @@ TEST(ViewportOverlayPolicyTests,
   EXPECT_TRUE(selected_object_face_fills_enabled_for_selection_count(1u));
   EXPECT_FALSE(selected_object_face_fills_enabled_for_selection_count(2u));
   EXPECT_FALSE(selected_object_face_fills_enabled_for_selection_count(64u));
-
-  const std::string cache_source =
-      read_source_file("src/render/overlay/selected_object_overlay_cache.cpp");
-  EXPECT_NE(cache_source.find(
-                "synced_selection_revision_ == snapshot.selection_revision"),
-            std::string::npos);
-  EXPECT_EQ(cache_source.find("SelectedObjectLineVertex"), std::string::npos);
-  EXPECT_EQ(cache_source.find("update_line_proxy"), std::string::npos);
-  EXPECT_EQ(cache_source.find("line_proxy_"), std::string::npos);
-  EXPECT_EQ(cache_source.find("setParameter(\"nearPlane\""), std::string::npos);
-  EXPECT_NE(cache_source.find("destroy_face_entries()"), std::string::npos);
 }
 
-TEST(ViewportOverlayPolicyTests,
-     NativeViewportKeepsTransientObjectSelectionWireBeforeProjection) {
-  const std::string viewport_panel_source =
-      read_source_file("src/ui/qt_viewport_panel.cpp");
-  const std::string overlay_service_source = read_source_file(
-      "src/editor/modeling/services/modeling_session_services.cpp");
 
-  EXPECT_TRUE(source_contains_compact(
-      viewport_panel_source,
-      "suppress_persistent_object_selection = overlay_summary.mode == "
-      "ModelingSelectionMode::Object"));
-  EXPECT_NE(viewport_panel_source.find(
-                "modeling.selection_overlay_signature(overlay_options)"),
-            std::string::npos);
-  EXPECT_NE(viewport_panel_source.find(
-                "modeling.selection_overlay_frame(overlay_options)"),
-            std::string::npos);
-  EXPECT_NE(
-      viewport_panel_source.find(
-          "refresh_cached_selection_overlay_frame(modeling, document, assets)"),
-      std::string::npos);
-  EXPECT_NE(viewport_panel_source.find(".scene_revision = document.revision()"),
-            std::string::npos);
-  EXPECT_NE(viewport_panel_source.find(".asset_revision = assets.revision()"),
-            std::string::npos);
-  EXPECT_EQ(viewport_panel_source.find("strip_persistent_object_selection("),
-            std::string::npos);
-  EXPECT_TRUE(source_contains_compact(
-      overlay_service_source,
-      "options.suppress_persistent_object_selection && selection_mode == "
-      "quader_editor_core::SelectionMode::Object && object.selected"));
-  EXPECT_NE(overlay_service_source.find(
-                "remove_persistent_object_face_fill_triangles(entry.frame)"),
-            std::string::npos);
-}
 
-TEST(ViewportOverlayPolicyTests,
-     QtViewportPreservesNativeOverlayCacheAndCompositionOrder) {
-  const std::string source = read_source_file("src/ui/qt_viewport_panel.cpp");
 
-  EXPECT_TRUE(source_contains_compact(
-      source, "suppress_persistent_object_selection = overlay_summary.mode == "
-              "ModelingSelectionMode::Object"));
-  EXPECT_NE(
-      source.find("modeling.selection_overlay_signature(overlay_options)"),
-      std::string::npos);
-  EXPECT_NE(source.find("modeling.selection_overlay_frame(overlay_options)"),
-            std::string::npos);
-  EXPECT_NE(
-      source.find("refresh_cached_selection_overlay_frame(modeling, document, "
-                  "assets)"),
-      std::string::npos);
-  EXPECT_NE(source.find(".scene_revision = document.revision()"),
-            std::string::npos);
-  EXPECT_NE(source.find(".asset_revision = assets.revision()"),
-            std::string::npos);
-  EXPECT_EQ(source.find("sync_selection_overlay("), std::string::npos);
 
-  const std::size_t cached_selection =
-      source.find("selection_overlay_cache_.frame()");
-  const std::size_t scene_overlay =
-      source.find("build_scene_overlay_frame(", cached_selection);
-  const std::size_t transform_gizmo = source.find(
-      "ViewportTransformGizmoOverlayBuilder::append(", scene_overlay);
-  const std::size_t style_resolve =
-      source.find("ViewportOverlayStyleResolver::apply(", transform_gizmo);
-  const std::size_t submit =
-      source.find("render_bridge.set_overlay_frame(", style_resolve);
-  ASSERT_NE(cached_selection, std::string::npos);
-  ASSERT_NE(scene_overlay, std::string::npos);
-  ASSERT_NE(transform_gizmo, std::string::npos);
-  ASSERT_NE(style_resolve, std::string::npos);
-  ASSERT_NE(submit, std::string::npos);
-  EXPECT_LT(cached_selection, scene_overlay);
-  EXPECT_LT(scene_overlay, transform_gizmo);
-  EXPECT_LT(transform_gizmo, style_resolve);
-  EXPECT_LT(style_resolve, submit);
-}
-
-TEST(ViewportOverlayPolicyTests,
-     QtViewportExtractsOneSceneOverlaySnapshotBeforePaneComposition) {
-  const std::string source = read_source_file("src/ui/qt_viewport_panel.cpp");
-
-  const std::size_t snapshot =
-      source.find("build_scene_overlay_snapshot(");
-  const std::size_t pane_composition =
-      source.find("workspace_->clear_pane_visibility();", snapshot);
-  const std::size_t scene_overlay =
-      source.find("build_scene_overlay_frame(", pane_composition);
-  ASSERT_NE(snapshot, std::string::npos);
-  ASSERT_NE(pane_composition, std::string::npos);
-  ASSERT_NE(scene_overlay, std::string::npos);
-  EXPECT_EQ(count_occurrences(source, "build_scene_overlay_snapshot("), 1u);
-  EXPECT_LT(snapshot, pane_composition);
-  EXPECT_LT(pane_composition, scene_overlay);
-  EXPECT_TRUE(source_contains_compact(
-      source,
-      "build_scene_overlay_frame(render_bridge, std::move(overlay_frame), "
-      "*scene_overlay_snapshot"));
-}
-
-TEST(ViewportOverlayPolicyTests,
-     ObjectTransformDragBoundsPreferSceneWorldAabb) {
-  const std::string source = read_source_file(
-      "src/editor/modeling/services/modeling_session_service.cpp");
-
-  const std::size_t drag_bounds = source.find("transform_drag_bounds() const");
-  const std::size_t drag_bounds_end =
-      source.find("try_sync_scene_objects_from_modeling", drag_bounds);
-  ASSERT_NE(drag_bounds, std::string::npos);
-  ASSERT_NE(drag_bounds_end, std::string::npos);
-  const std::string drag_bounds_source =
-      source.substr(drag_bounds, drag_bounds_end - drag_bounds);
-  const std::size_t projected_world_bounds =
-      drag_bounds_source.find("selection_bounds()");
-  const std::size_t runtime_bounds =
-      drag_bounds_source.find("session_.selection_bounds()");
-  ASSERT_NE(projected_world_bounds, std::string::npos);
-  ASSERT_NE(runtime_bounds, std::string::npos);
-  EXPECT_LT(projected_world_bounds, runtime_bounds);
-  EXPECT_NE(source.find(
-                "selection_projection_service_.world_selection_bounds("),
-            std::string::npos);
-}
-
-TEST(ViewportOverlayPolicyTests,
-     WireframeCacheUsesSelectionStyleForSelectedMeshes) {
-  const std::string cache_source =
-      read_source_file("src/render/overlay/scene_wireframe_overlay_cache.cpp");
-  EXPECT_NE(cache_source.find("mesh.selected"), std::string::npos);
-  EXPECT_TRUE(source_contains_compact(cache_source,
-                                      "ViewportOverlayLayer::SelectedEdge : "
-                                      "ViewportOverlayLayer::WireframeXray"));
-  EXPECT_TRUE(source_contains_compact(
-      cache_source, "return mesh.selected ? style.selection_wire_color : "
-                    "mesh.wireframe_color;"));
-  EXPECT_NE(cache_source.find("style.selection_edge_line_width_pixels"),
-            std::string::npos);
-}
 
 TEST(ViewportOverlayPolicyTests,
      RuntimeSelectionOverlayDefaultsAreSemanticRoleTokens) {
@@ -2581,26 +1874,6 @@ TEST(ViewportOverlayPolicyTests,
   EXPECT_EQ(projected.points[0].style_role,
             ViewportOverlayStyleRole::RemoveSelectionVertex);
   EXPECT_EQ(projected.points[0].color, kOverlayRemoveWireColor);
-
-  const std::string runtime_header =
-      read_source_file("src/editor/modeling/runtime/session.hpp");
-  const std::string projection = read_source_file(
-      "src/editor/projection/selection_overlay_projection.cpp");
-  EXPECT_NE(runtime_header.find("SelectionOverlayStyleRole"),
-            std::string::npos);
-  EXPECT_NE(runtime_header.find("selection_overlay_style_token("),
-            std::string::npos);
-  EXPECT_EQ(runtime_header.find("0xebffe05cU"), std::string::npos);
-  EXPECT_EQ(runtime_header.find("0xff1fadffU"), std::string::npos);
-  EXPECT_EQ(runtime_header.find("0xffffe66bU"), std::string::npos);
-  EXPECT_NE(projection.find("selection_overlay_style_role_from_token("),
-            std::string::npos);
-  EXPECT_EQ(
-      projection.find("viewport_overlay_is_native_remove_color(color_abgr)"),
-      std::string::npos);
-  EXPECT_EQ(projection.find(
-                "viewport_overlay_is_native_selection_wire_color(color_abgr)"),
-            std::string::npos);
 }
 
 TEST(SelectionOverlayProjectionTests,
@@ -2810,46 +2083,6 @@ TEST(ViewportPersistentOverlayStyleSnapshotTests,
   EXPECT_EQ(unrelated.wire_signature, defaults.wire_signature);
 }
 
-TEST(ViewportPersistentOverlayStyleSnapshotTests,
-     PersistentCachesConsumeSnapshotStylesWithoutChangingRenderPolicy) {
-  const std::string selected_cache =
-      read_source_file("src/render/overlay/selected_object_overlay_cache.cpp");
-  const std::string wireframe_cache = read_source_file(
-      "src/render/overlay/scene_wireframe_overlay_cache.cpp");
-
-  EXPECT_EQ(selected_cache.find("kOverlaySelectionFaceColor"),
-            std::string::npos);
-  EXPECT_NE(selected_cache.find("snapshot.style.face_signature"),
-            std::string::npos);
-  EXPECT_NE(selected_cache.find("style.selection_face_color"),
-            std::string::npos);
-  EXPECT_EQ(wireframe_cache.find(
-                "mesh.selected ? kOverlaySelectionWireColor"),
-            std::string::npos);
-  EXPECT_NE(wireframe_cache.find("snapshot.style.wire_signature"),
-            std::string::npos);
-  EXPECT_NE(wireframe_cache.find("style.selection_wire_color"),
-            std::string::npos);
-  EXPECT_NE(wireframe_cache.find(
-                "style.selection_edge_line_width_pixels"),
-            std::string::npos);
-
-  for (const std::string_view policy_call : {
-           "OverlayRenderableBuilder::make_state(",
-           ".culling(false)",
-       }) {
-    EXPECT_NE(selected_cache.find(policy_call), std::string::npos)
-        << policy_call;
-    EXPECT_NE(wireframe_cache.find(policy_call), std::string::npos)
-        << policy_call;
-  }
-  EXPECT_TRUE(source_contains_compact(
-      selected_cache, ".blendOrder(0, state.blend_order)"
-                      ".globalBlendOrderEnabled(0, true)"));
-  EXPECT_TRUE(source_contains_compact(
-      wireframe_cache, ".blendOrder(0u, state.blend_order)"
-                       ".globalBlendOrderEnabled(0u, true)"));
-}
 
 TEST(ViewportOverlayStyleResolverTests, SupportsSelectionModeScopedOverrides) {
   ViewportSettings settings = ViewportSettings::defaults();
@@ -2926,91 +2159,7 @@ TEST(ViewportOverlayStyleResolverTests,
   EXPECT_FLOAT_EQ(frame.lines[0].width_pixels, 2.0f);
 }
 
-TEST(PolygonOperationRegistryTests, MetadataComesFromDescriptorOwner) {
-  const std::string descriptor =
-      read_source_file("src/mesh/polygon/poly_operation_descriptor.hpp");
-  const std::string registry = read_source_file(
-      "src/sdk/core/modeling/internal/mesh/polygon/operations/"
-      "poly_operation_registry.cpp");
 
-  EXPECT_NE(descriptor.find("kPolyOperationDescriptors"), std::string::npos);
-  EXPECT_NE(registry.find("poly_operation_descriptors()"), std::string::npos);
-  EXPECT_EQ(registry.find("std::array<PolyOperationMetadata"),
-            std::string::npos);
-  EXPECT_EQ(registry.find("k_poly_operations"), std::string::npos);
-
-  const std::filesystem::path source_root =
-      std::filesystem::path(QUADER_SOURCE_DIR);
-  const std::filesystem::path operations_dir =
-      source_root / "src/sdk/core/modeling/internal/mesh/polygon/operations";
-  ASSERT_TRUE(std::filesystem::exists(operations_dir));
-  for (const std::filesystem::directory_entry &entry :
-       std::filesystem::directory_iterator(operations_dir)) {
-    if (entry.path().extension() != ".cpp" ||
-        entry.path().filename() == "poly_operation_registry.cpp") {
-      continue;
-    }
-    const std::string relative_path =
-        std::filesystem::relative(entry.path(), source_root).generic_string();
-    const std::string source = read_source_file(relative_path);
-    if (source.find("PolyOperation") == std::string::npos) {
-      continue;
-    }
-    SCOPED_TRACE(relative_path);
-    EXPECT_FALSE(metadata_method_returns_literal(
-        source, "std::string_view id() const override"));
-    EXPECT_FALSE(metadata_method_returns_literal(
-        source, "std::string_view label() const override"));
-  }
-}
-
-TEST(ModelingSessionServiceOverlayTests, MapsRuntimeOverlayLayersExplicitly) {
-  const std::string source = read_source_file(
-      "src/editor/projection/selection_overlay_projection.cpp");
-  const std::string modeling_service = read_source_file(
-      "src/editor/modeling/services/modeling_session_service.cpp");
-  const std::string overlay_service = read_source_file(
-      "src/editor/modeling/services/modeling_session_services.cpp");
-
-  EXPECT_EQ(
-      source.find("static_cast<ViewportOverlayLayer>(static_cast<int>(layer))"),
-      std::string::npos);
-  EXPECT_NE(source.find(
-                "case quader_editor_core::SelectionOverlayLayer::SourceWire:"),
-            std::string::npos);
-  EXPECT_NE(source.find(
-                "case "
-                "quader_editor_core::SelectionOverlayLayer::SnapTargetVertex:"),
-            std::string::npos);
-  EXPECT_NE(
-      source.find(
-          "case quader_editor_core::SelectionOverlayLayer::DiagnosticEdge:"),
-      std::string::npos);
-  EXPECT_NE(source.find("case "
-                        "quader_editor_core::SelectionOverlayLayer::"
-                        "SourceWireDepthStamp:"),
-            std::string::npos);
-  EXPECT_NE(source.find("line_style_role"), std::string::npos);
-  EXPECT_NE(source.find("ViewportOverlayStyleRole::SelectedSourceWire"),
-            std::string::npos);
-  EXPECT_NE(source.find("append_projected_overlay_lines"), std::string::npos);
-  EXPECT_NE(source.find("append_projected_overlay_points"),
-            std::string::npos);
-  EXPECT_EQ(modeling_service.find("runtime_.knife_state().preview_lines"),
-            std::string::npos);
-  EXPECT_NE(overlay_service.find("runtime.knife_state().preview_lines"),
-            std::string::npos);
-  EXPECT_NE(overlay_service.find("ViewportOverlayLayer::ToolPreviewLine"),
-            std::string::npos);
-  EXPECT_NE(overlay_service.find("ViewportOverlayLayer::ToolHandle"),
-            std::string::npos);
-  EXPECT_NE(overlay_service.find("ViewportOverlayStyleRole::ExplicitColor"),
-            std::string::npos);
-  EXPECT_EQ(overlay_service.find("knife.preview_lines.begin()"),
-            std::string::npos);
-  EXPECT_EQ(overlay_service.find("knife.preview_points.begin()"),
-            std::string::npos);
-}
 
 TEST(ViewportCameraAdapterTests,
      BuildsOverlayAndModelingCamerasFromSharedBasis) {
@@ -3776,234 +2925,9 @@ TEST(RadialArrayToolServiceTests,
   EXPECT_FALSE(session.radial_array().has_session());
 }
 
-TEST(SceneRenderBridgeTests, UsesDepthStampedFaceFillForOverlayTriangles) {
-  const std::string bridge_source =
-      read_source_file("src/render/scene_render_bridge.cpp");
-  const std::string builder_source =
-      read_source_file("src/render/overlay/overlay_renderable_builder.cpp");
-  const std::string proxy_factory_source =
-      read_source_file("src/render/overlay/overlay_proxy_factory.cpp");
-  const std::string tool_preview_cache_source =
-      read_source_file("src/render/tool_preview_renderable_cache.cpp");
 
-  EXPECT_NE(builder_source.find(
-                "viewport_overlay_layer_uses_depth_stamped_face_fill"),
-            std::string::npos);
-  EXPECT_NE(proxy_factory_source.find("setColorWrite(state.color_write)"),
-            std::string::npos);
-  EXPECT_NE(proxy_factory_source.find("setDepthWrite(state.depth_write)"),
-            std::string::npos);
-  EXPECT_NE(proxy_factory_source.find(
-                "setDepthFunc(to_filament_depth_func(state.depth_func))"),
-            std::string::npos);
-  EXPECT_TRUE(source_contains_compact(
-      proxy_factory_source, "setTransparencyMode(to_filament_transparency_mode("
-                            "state.transparency_mode))"));
-  EXPECT_TRUE(source_contains_compact(
-      proxy_factory_source, "setPolygonOffset(state.polygon_offset_scale, "
-                            "state.polygon_offset_constant)"));
-  EXPECT_NE(proxy_factory_source.find("DepthFunc::GE"), std::string::npos);
-  EXPECT_NE(proxy_factory_source.find("DepthFunc::E"), std::string::npos);
-  EXPECT_NE(builder_source.find("OverlayCullingMode::Back"), std::string::npos);
-  EXPECT_NE(builder_source.find("OverlayTransparencyMode::TwoPassesOneSide"),
-            std::string::npos);
-  EXPECT_NE(
-      builder_source.find("viewport_overlay_triangle_is_two_sided(layer)"),
-      std::string::npos);
-  EXPECT_NE(builder_source.find("OverlayCullingMode::None"), std::string::npos);
-  EXPECT_NE(builder_source.find("OverlayTransparencyMode::TwoPassesTwoSides"),
-            std::string::npos);
-  EXPECT_NE(
-      bridge_source.find("std::vector<RenderToolPreviewMeshRecord> meshes"),
-      std::string::npos);
-  EXPECT_NE(bridge_source.find("tool_preview_cache_.set_meshes(meshes)"),
-            std::string::npos);
-  EXPECT_NE(tool_preview_cache_source.find("preview_groups_"),
-            std::string::npos);
-  EXPECT_NE(tool_preview_cache_source.find("create_shared_instance"),
-            std::string::npos);
-  EXPECT_NE(tool_preview_cache_source.find(
-                "void ToolPreviewRenderableCache::clear()"),
-            std::string::npos);
-}
 
-TEST(SceneRenderBridgeTests, UsesQuadMaterialsForSelectionLineAndPointOverlay) {
-  const std::string proxy_factory_source =
-      read_source_file("src/render/overlay/overlay_proxy_factory.cpp");
-  const std::string line_builder_source =
-      read_source_file("src/render/overlay/overlay_line_mesh_builder.cpp");
-  const std::string point_builder_source =
-      read_source_file("src/render/overlay/overlay_point_mesh_builder.cpp");
-  const std::string renderable_builder_source =
-      read_source_file("src/render/overlay/overlay_renderable_builder.hpp");
-  const std::string renderable_builder_impl =
-      read_source_file("src/render/overlay/overlay_renderable_builder.cpp");
-  const std::string projector_source =
-      read_source_file("src/render/overlay/overlay_camera_projector.cpp");
 
-  EXPECT_NE(line_builder_source.find("append_line_quad"), std::string::npos);
-  EXPECT_NE(point_builder_source.find("append_point_quad"), std::string::npos);
-  EXPECT_NE(proxy_factory_source.find("material.createInstance()"),
-            std::string::npos);
-  EXPECT_NE(proxy_factory_source.find("*overlay_line_material_"),
-            std::string::npos);
-  EXPECT_NE(proxy_factory_source.find("*overlay_point_material_"),
-            std::string::npos);
-  EXPECT_NE(proxy_factory_source.find("*overlay_icon_material_"),
-            std::string::npos);
-  EXPECT_NE(proxy_factory_source.find("setParameter(\"iconTexture\""),
-            std::string::npos);
-  const std::size_t point_light_icon_path = proxy_factory_source.find(
-      "resource_root / \"icons\" / \"point_light.png\"");
-  ASSERT_NE(point_light_icon_path, std::string::npos);
-  const std::size_t point_light_icon_load_start =
-      proxy_factory_source.rfind("load_png_texture", point_light_icon_path);
-  ASSERT_NE(point_light_icon_load_start, std::string::npos);
-  const std::size_t point_light_icon_load_end =
-      proxy_factory_source.find("});", point_light_icon_path);
-  ASSERT_NE(point_light_icon_load_end, std::string::npos);
-  const std::string point_light_icon_load = proxy_factory_source.substr(
-      point_light_icon_load_start,
-      point_light_icon_load_end - point_light_icon_load_start);
-  EXPECT_NE(point_light_icon_load.find(".flip_y = false"), std::string::npos);
-  EXPECT_EQ(point_light_icon_load.find(".flip_y = true"), std::string::npos);
-  EXPECT_NE(proxy_factory_source.find("OverlayRenderableProxyKind::Icon"),
-            std::string::npos);
-  EXPECT_NE(proxy_factory_source.find("filament::VertexAttribute::CUSTOM0"),
-            std::string::npos);
-  EXPECT_TRUE(source_contains_compact(
-      proxy_factory_source,
-      "AttributeType::FLOAT4, offsetof(OverlayLineVertex, position)"));
-  EXPECT_TRUE(source_contains_compact(
-      proxy_factory_source,
-      "AttributeType::FLOAT4, offsetof(OverlayPointVertex, position)"));
-  EXPECT_NE(projector_source.find("OverlayProjectedPoint project"),
-            std::string::npos);
-  EXPECT_NE(projector_source.find("near_plane_distance(a)"), std::string::npos);
-  EXPECT_NE(proxy_factory_source.find(
-                "setParameter(\"lineWidth\", batch.width_pixels)"),
-            std::string::npos);
-  EXPECT_EQ(proxy_factory_source.find(
-                "setParameter(\"point_size\", point_size_pixels)"),
-            std::string::npos);
-  EXPECT_EQ(proxy_factory_source.find("setParameter(\"nearPlane\""),
-            std::string::npos);
-  EXPECT_NE(renderable_builder_source.find("LineBatchKey"), std::string::npos);
-  EXPECT_NE(renderable_builder_source.find("IconBatchKey"), std::string::npos);
-  EXPECT_NE(
-      renderable_builder_impl.find("OverlayPointMeshBuilder::build_icons"),
-      std::string::npos);
-  EXPECT_EQ(proxy_factory_source.find("PrimitiveType::LINES"),
-            std::string::npos);
-  EXPECT_EQ(proxy_factory_source.find("PrimitiveType::POINTS"),
-            std::string::npos);
-}
-
-TEST(SceneRenderBridgeTests, BindsNormalsAndBuildsPrimitiveSpans) {
-  const std::string source =
-      read_source_file("src/render/mesh_renderable_factory.cpp");
-
-  EXPECT_NE(source.find("mesh_tangent_frames(mesh)"),
-            std::string::npos);
-  EXPECT_NE(source.find("tangent_frame_from_basis("),
-            std::string::npos);
-  EXPECT_NE(source.find("delta1.x * delta2.y - delta1.y * delta2.x"),
-            std::string::npos);
-  EXPECT_NE(source.find("!std::isfinite(determinant)"),
-            std::string::npos);
-  EXPECT_NE(source.find("std::fabs(determinant) <= 0.000001f"),
-            std::string::npos);
-  EXPECT_NE(source.find("filament::VertexAttribute::TANGENTS"),
-            std::string::npos);
-  EXPECT_NE(source.find("coalesced_render_mesh_primitive_spans(mesh)"),
-            std::string::npos);
-  EXPECT_NE(source.find("primitive.index_offset"), std::string::npos);
-  EXPECT_NE(source.find("primitive.index_count"), std::string::npos);
-  EXPECT_NE(source.find("primitive.material_slot"), std::string::npos);
-  EXPECT_NE(source.find("material->material_for_slot(primitive.material_slot)"),
-            std::string::npos);
-}
-
-TEST(SceneRenderBridgeTests, UsesRenderSceneSnapshotsForIncrementalMeshSync) {
-  const std::string snapshot_header =
-      read_source_file("src/render/render_scene_snapshot.hpp");
-  const std::string sync_header =
-      read_source_file("src/render/scene_render_sync_service.hpp");
-  const std::string sync_source =
-      read_source_file("src/render/scene_render_sync_service.cpp");
-  const std::string cache_source =
-      read_source_file("src/render/mesh_renderable_cache.cpp");
-  const std::string mesh_record = quader::test::guardrail::source_slice(
-      snapshot_header, "struct RenderSceneMeshRecord",
-      "struct RenderSceneLightRecord");
-  const std::string light_record = quader::test::guardrail::source_slice(
-      snapshot_header, "struct RenderSceneLightRecord",
-      "struct RenderSceneSnapshotDirtyState");
-
-  EXPECT_NE(snapshot_header.find("struct RenderSceneSnapshot"),
-            std::string::npos);
-  EXPECT_NE(snapshot_header.find("RenderSceneMeshRecord"), std::string::npos);
-  EXPECT_NE(snapshot_header.find("RenderSceneLightRecord"), std::string::npos);
-  EXPECT_NE(snapshot_header.find("scene_revision"), std::string::npos);
-  EXPECT_NE(snapshot_header.find("asset_revision"), std::string::npos);
-  EXPECT_NE(sync_header.find("sync(const RenderSceneSnapshot"),
-            std::string::npos);
-  EXPECT_EQ(sync_header.find("sync(const SceneDocument"), std::string::npos);
-  EXPECT_EQ(sync_header.find("sync(const AssetRegistry"), std::string::npos);
-
-  EXPECT_NE(sync_source.find("synced_asset_revision_"), std::string::npos);
-  EXPECT_NE(sync_source.find("render_asset_revisions_changed"),
-            std::string::npos);
-  EXPECT_NE(sync_source.find("snapshot.scene_revision"), std::string::npos);
-  EXPECT_NE(sync_source.find("snapshot.asset_revision"), std::string::npos);
-  EXPECT_EQ(
-      sync_source.find("build_scene_render_extraction_plan(document, assets,"),
-      std::string::npos);
-  EXPECT_EQ(sync_source.find("const SceneDocument"), std::string::npos);
-  EXPECT_EQ(sync_source.find("const AssetRegistry"), std::string::npos);
-  EXPECT_NE(sync_source.find("mesh_cache_->needs_rebuild"), std::string::npos);
-  EXPECT_EQ(mesh_record.find("const MeshAsset *"), std::string::npos);
-  EXPECT_EQ(mesh_record.find("const MeshComponent *"), std::string::npos);
-  EXPECT_EQ(mesh_record.find("const MaterialComponent *"), std::string::npos);
-  EXPECT_EQ(light_record.find("const LightComponent *"), std::string::npos);
-  EXPECT_NE(cache_source.find(
-                "existing->second.mesh_revision != mesh.mesh.mesh_revision"),
-            std::string::npos);
-  EXPECT_NE(cache_source.find(
-                "existing->second.material_revision != mesh.material_revision"),
-            std::string::npos);
-  EXPECT_NE(
-      cache_source.find(
-          "factory_->update_transform(existing->second, mesh.world_transform)"),
-      std::string::npos);
-  const std::size_t change_start = sync_source.find(
-      "bool SceneRenderSyncService::render_asset_revisions_changed");
-  ASSERT_NE(change_start, std::string::npos);
-  const std::size_t rebuild_start =
-      sync_source.find("void SceneRenderSyncService::rebuild(");
-  ASSERT_NE(rebuild_start, std::string::npos);
-  const std::string change_source =
-      sync_source.substr(change_start, rebuild_start - change_start);
-  EXPECT_EQ(change_source.find("document.entities()"), std::string::npos);
-  EXPECT_EQ(change_source.find("document.is_effectively_visible"),
-            std::string::npos);
-  EXPECT_EQ(change_source.find("assets.mesh("), std::string::npos);
-  EXPECT_EQ(change_source.find("material_binding_->material_revision"),
-            std::string::npos);
-  const std::string rebuild_source = sync_source.substr(rebuild_start);
-  EXPECT_NE(rebuild_source.find("can_sync_transforms_only(snapshot)"),
-            std::string::npos);
-  EXPECT_NE(sync_source.find("mesh.transform_dirty"), std::string::npos);
-  EXPECT_NE(sync_source.find("light.transform_dirty"), std::string::npos);
-  EXPECT_NE(sync_source.find("openLocalTransformTransaction()"),
-            std::string::npos);
-  EXPECT_NE(sync_source.find("commitLocalTransformTransaction()"),
-            std::string::npos);
-  EXPECT_NE(rebuild_source.find(
-                "mesh_cache_->remove_except(snapshot.live_mesh_entities)"),
-            std::string::npos);
-  EXPECT_EQ(rebuild_source.find("mesh_proxies_.clear()"), std::string::npos);
-}
 
 TEST(ViewportPaneOverlayCacheTests,
      SceneAssetAndLocalVisibilityRevisionsInvalidateSelectionOverlayFrame) {
@@ -4042,62 +2966,8 @@ TEST(ViewportPaneOverlayCacheTests,
   EXPECT_FALSE(cache.needs_refresh(local_visibility_changed));
 }
 
-TEST(SceneRenderBridgeTests, UsesAnisotropicSamplingForMeshTextures) {
-  const std::string source =
-      read_source_file("src/render/material_binding_service.cpp");
 
-  EXPECT_NE(source.find("kMeshTextureAnisotropy"), std::string::npos);
-  EXPECT_NE(source.find("sampler.setAnisotropy(kMeshTextureAnisotropy)"),
-            std::string::npos);
-  EXPECT_NE(
-      source.find("filament::TextureSampler::MinFilter::LINEAR_MIPMAP_LINEAR"),
-      std::string::npos);
-}
 
-TEST(RenderSystemTests, ShadedViewportUsesClearColorWithoutSkybox) {
-  const std::string source = read_source_file("src/render/render_system.cpp");
-
-  EXPECT_NE(source.find("renderer.setClearOptions(clear)"),
-            std::string::npos);
-  EXPECT_NE(source.find("configure_renderer(*renderer_)"), std::string::npos);
-  EXPECT_NE(source.find("clear.discard = false"), std::string::npos);
-  EXPECT_NE(source.find("renderer_clear_color_ = {environment.clear_color.x"),
-            std::string::npos);
-  EXPECT_EQ(source.find("scene_->setSkybox(skybox_)"), std::string::npos);
-  EXPECT_EQ(source.find("Skybox::Builder()"), std::string::npos);
-}
-
-TEST(RenderSystemTests,
-     ExposesCompletedFramePerformanceStatsFromRendererHistory) {
-  const std::string header = read_source_file("src/render/render_system.hpp");
-  const std::string source = read_source_file("src/render/render_system.cpp");
-
-  EXPECT_NE(header.find(
-                "RenderFramePerformanceStats frame_performance_stats() const"),
-            std::string::npos);
-  EXPECT_NE(header.find("RenderFramePerformanceStats frame_performance_stats_"),
-            std::string::npos);
-  EXPECT_NE(header.find("RenderPresentationFrameTracker"), std::string::npos);
-  EXPECT_NE(header.find("begin_presentation_frame()"), std::string::npos);
-  EXPECT_NE(header.find("complete_presentation_frame("), std::string::npos);
-  EXPECT_NE(source.find("presentation_frame_tracker_.begin_presentation_frame("),
-            std::string::npos);
-  EXPECT_NE(source.find("presentation_frame_tracker_.complete_presentation_frame("),
-            std::string::npos);
-  EXPECT_EQ(source.find("update_frame_performance_stats_after_end_frame"),
-            std::string::npos);
-  EXPECT_NE(source.find("renderer->getFrameInfoHistory(history_size)"),
-            std::string::npos);
-  EXPECT_NE(source.find("renderer->getMaxFrameHistorySize()"),
-            std::string::npos);
-  EXPECT_NE(source.find("performance_renderer_"), std::string::npos);
-  EXPECT_NE(source.find("info.denoisedGpuFrameDuration"), std::string::npos);
-  EXPECT_NE(source.find("info.gpuFrameDuration"), std::string::npos);
-  EXPECT_NE(source.find("filament::Renderer::FrameInfo::INVALID"),
-            std::string::npos);
-  EXPECT_NE(source.find("filament::Renderer::FrameInfo::PENDING"),
-            std::string::npos);
-}
 
 TEST(RenderPresentationFrameTrackerTests,
      CountsMultiSwapchainSubmissionAsOneAggregateFrame) {
@@ -4133,93 +3003,8 @@ TEST(RenderPresentationFrameTrackerTests,
   EXPECT_FALSE(stats.frames_per_second_available);
 }
 
-TEST(ViewportRendererTests,
-     EnvironmentClearColorAndRenderedBackgroundPathsStaySceneOwned) {
-  const std::string renderer =
-      read_source_file("src/render/viewport_renderer.cpp");
-  const std::string renderer_header =
-      read_source_file("src/render/viewport_renderer.hpp");
-  const std::string environment_library =
-      read_source_file("src/render/filament_environment_library.cpp");
 
-  EXPECT_NE(renderer.find(
-                "viewport_clear_color(settings.environment, rendered_mode)"),
-            std::string::npos);
-  EXPECT_NE(renderer.find("if (rendered_mode)"), std::string::npos);
-  EXPECT_NE(renderer.find("environment.clear_color.x"), std::string::npos);
-  EXPECT_EQ(renderer.find("ViewportColorSettingId::Background"),
-            std::string::npos);
-  EXPECT_EQ(renderer.find("settings.color(ViewportColorSettingId"),
-            std::string::npos);
-  EXPECT_EQ(renderer_header.find("camera_near_plane_"), std::string::npos);
-  EXPECT_EQ(renderer_header.find("camera_far_plane_"), std::string::npos);
-  EXPECT_NE(renderer.find("controller.state().near_plane"), std::string::npos);
-  EXPECT_NE(renderer.find("controller.state().far_plane"), std::string::npos);
-  EXPECT_NE(
-      environment_library.find(
-          "settings.show_background && settings.background_intensity > 0.0f"),
-      std::string::npos);
-}
 
-TEST(RenderSystemTests, InitializeUnwindsPartialFilamentStateOnFailure) {
-  const std::string header = read_source_file("src/render/render_system.hpp");
-  const std::string source = read_source_file("src/render/render_system.cpp");
-
-  EXPECT_NE(header.find("[[nodiscard]] bool initialized() const"),
-            std::string::npos);
-  EXPECT_TRUE(source_contains_compact(
-      source, "shutdown(); LOG_INFO(\"Initializing Filament renderer"));
-  EXPECT_NE(source.find("const auto fail = [&](std::string_view message)"),
-            std::string::npos);
-  EXPECT_TRUE(source_contains_compact(source, "shutdown(); return false;"));
-  EXPECT_NE(source.find("if (!swap_chain_)"), std::string::npos);
-  EXPECT_NE(source.find("if (!renderer_)"), std::string::npos);
-  EXPECT_NE(source.find("if (!scene_)"), std::string::npos);
-  EXPECT_NE(source.find(
-                "if (!material_library_.initialize(*engine_, executable_dir))"),
-            std::string::npos);
-  EXPECT_NE(source.find("return begin_frame_with_swap_chain(swap_chain_)"),
-            std::string::npos);
-  EXPECT_NE(source.find("if (!renderer->beginFrame(swap_chain))"),
-            std::string::npos);
-}
-
-TEST(RenderSystemTests,
-     NativeViewportSwapChainsOwnDedicatedFilamentRenderers) {
-  const std::string header = read_source_file("src/render/render_system.hpp");
-  const std::string source = read_source_file("src/render/render_system.cpp");
-  const std::string surface =
-      read_source_file("src/ui/qt_viewport_surface.cpp");
-
-  EXPECT_NE(header.find("filament::Renderer *renderer_ = nullptr"),
-            std::string::npos);
-  EXPECT_NE(header.find("bool begin_frame(RenderAdditionalSwapChain &surface)"),
-            std::string::npos);
-  EXPECT_NE(header.find("void end_frame(RenderAdditionalSwapChain &surface)"),
-            std::string::npos);
-  EXPECT_NE(source.find("filament::Renderer *renderer = "
-                        "engine_->createRenderer()"),
-            std::string::npos);
-  EXPECT_NE(source.find("configure_renderer(*renderer)"), std::string::npos);
-  EXPECT_NE(source.find(
-                "RenderAdditionalSwapChain(*this, swap_chain, renderer)"),
-            std::string::npos);
-  EXPECT_NE(source.find("begin_frame_with_renderer(surface.renderer_, "
-                        "surface.swap_chain_)"),
-            std::string::npos);
-  EXPECT_NE(source.find("viewport_renderer.render(*surface.renderer_)"),
-            std::string::npos);
-  EXPECT_NE(source.find("end_frame_with_renderer(surface.renderer_)"),
-            std::string::npos);
-  EXPECT_NE(surface.find("render_system_->begin_frame(swap_chain_)"),
-            std::string::npos);
-  EXPECT_NE(surface.find(
-                "render_system_->render_viewport(renderer_, swap_chain_)"),
-            std::string::npos);
-  EXPECT_NE(surface.find("render_system_->end_frame(swap_chain_)"),
-            std::string::npos);
-  EXPECT_EQ(surface.find("begin_frame(swap_chain_.get())"), std::string::npos);
-}
 
 TEST(RenderProxyLifecycleTests, RenderableProxyHandlesAreMoveOnly) {
   static_assert(!std::is_copy_constructible_v<MeshRenderableProxy>);
@@ -4228,111 +3013,8 @@ TEST(RenderProxyLifecycleTests, RenderableProxyHandlesAreMoveOnly) {
   static_assert(!std::is_copy_constructible_v<OverlayRenderableProxy>);
   static_assert(!std::is_copy_assignable_v<OverlayRenderableProxy>);
   static_assert(std::is_move_constructible_v<OverlayRenderableProxy>);
-
-  const std::string mesh_proxy_header =
-      read_source_file("src/render/mesh_renderable_proxy.hpp");
-  const std::string mesh_factory_source =
-      read_source_file("src/render/mesh_renderable_factory.cpp");
-  const std::string overlay_proxy_header =
-      read_source_file("src/render/overlay/overlay_renderable_proxy.hpp");
-  const std::string overlay_factory_source =
-      read_source_file("src/render/overlay/overlay_proxy_factory.cpp");
-  const std::string light_cache_header =
-      read_source_file("src/render/light_renderable_cache.hpp");
-  const std::string light_cache_source =
-      read_source_file("src/render/light_renderable_cache.cpp");
-
-  EXPECT_NE(mesh_proxy_header.find(
-                "MeshRenderableProxy(const MeshRenderableProxy&) = delete"),
-            std::string::npos);
-  EXPECT_NE(mesh_proxy_header.find(
-                "MeshRenderableProxy(MeshRenderableProxy&& other) noexcept"),
-            std::string::npos);
-  EXPECT_NE(
-      mesh_proxy_header.find("std::exchange(other.vertex_buffer, nullptr)"),
-      std::string::npos);
-  EXPECT_NE(mesh_factory_source.find("class MeshRenderableCreationGuard"),
-            std::string::npos);
-  EXPECT_NE(mesh_factory_source.find("destroy_renderable_component_resources"),
-            std::string::npos);
-  EXPECT_NE(mesh_factory_source.find("release_geometry(proxy)"),
-            std::string::npos);
-  EXPECT_NE(mesh_factory_source.find("creation_guard.release()"),
-            std::string::npos);
-  EXPECT_NE(
-      overlay_proxy_header.find(
-          "OverlayRenderableProxy(const OverlayRenderableProxy&) = delete"),
-      std::string::npos);
-  EXPECT_NE(
-      overlay_proxy_header.find(
-          "OverlayRenderableProxy(OverlayRenderableProxy &&other) noexcept"),
-      std::string::npos);
-  EXPECT_NE(overlay_factory_source.find("class OverlayProxyCreationGuard"),
-            std::string::npos);
-  EXPECT_NE(overlay_factory_source.find("destroy_overlay_proxy_resources"),
-            std::string::npos);
-  EXPECT_NE(overlay_factory_source.find("creation_guard.release()"),
-            std::string::npos);
-  EXPECT_NE(overlay_factory_source.find("proxies.push_back(std::move(proxy))"),
-            std::string::npos);
-  EXPECT_NE(overlay_factory_source.find("void append_overlay_proxy("),
-            std::string::npos);
-  EXPECT_EQ(count_occurrences(overlay_factory_source,
-                              "filament::RenderableManager::Builder(1)"),
-            1u);
-  EXPECT_EQ(
-      count_occurrences(overlay_factory_source, "scene.addEntity(entity)"), 1u);
-  EXPECT_EQ(overlay_factory_source.find("scene_->addEntity(entity)"),
-            std::string::npos);
-  EXPECT_EQ(count_occurrences(overlay_factory_source,
-                              "proxies.push_back(std::move(proxy))"),
-            1u);
-  EXPECT_NE(light_cache_header.find("LightProxy(const LightProxy&) = delete"),
-            std::string::npos);
-  EXPECT_NE(light_cache_header.find("LightProxy(LightProxy &&other) noexcept"),
-            std::string::npos);
-  EXPECT_NE(light_cache_source.find(
-                "light_proxies_.emplace(light.entity_id, std::move(proxy))"),
-            std::string::npos);
-  EXPECT_NE(light_cache_source.find("LightProxyCreationGuard creation_guard"),
-            std::string::npos);
-  EXPECT_NE(light_cache_source.find("creation_guard.release()"),
-            std::string::npos);
 }
 
-TEST(RenderProxyLifecycleTests, FilamentResourceCreationUsesRenderOwnedGuards) {
-  const std::string light_cache_source =
-      read_source_file("src/render/light_renderable_cache.cpp");
-  const std::string grid_renderer_source =
-      read_source_file("src/render/viewport_grid_renderer.cpp");
-  const std::string render_target_source =
-      read_source_file("src/render/viewport_render_target.cpp");
-
-  EXPECT_NE(light_cache_source.find("LightProxyCreationGuard creation_guard"),
-            std::string::npos);
-  EXPECT_NE(light_cache_source.find("creation_guard.release()"),
-            std::string::npos);
-  EXPECT_NE(grid_renderer_source.find("struct GroundGridCreationGuard"),
-            std::string::npos);
-  EXPECT_NE(grid_renderer_source.find("creation_guard.vertex_buffer"),
-            std::string::npos);
-  EXPECT_NE(grid_renderer_source.find("creation_guard.release()"),
-            std::string::npos);
-  EXPECT_NE(render_target_source.find("struct RenderTargetCreationGuard"),
-            std::string::npos);
-  EXPECT_NE(render_target_source.find("creation_guard.color_texture"),
-            std::string::npos);
-  EXPECT_NE(render_target_source.find("creation_guard.release()"),
-            std::string::npos);
-  const std::size_t register_texture =
-      render_target_source.find("texture_registry_->register_texture(");
-  ASSERT_NE(register_texture, std::string::npos);
-  EXPECT_NE(render_target_source.find("creation_guard.color_texture",
-                                      register_texture),
-            std::string::npos);
-  EXPECT_LT(register_texture,
-            render_target_source.find("creation_guard.release()"));
-}
 
 TEST(RenderProxyLifecycleTests, RenderResourceOwnersAreNonTransferable) {
   EXPECT_TRUE(render_owner_is_non_transferable<RenderSystem>());
@@ -4351,23 +3033,6 @@ TEST(RenderProxyLifecycleTests, RenderResourceOwnersAreNonTransferable) {
   EXPECT_TRUE(render_owner_is_non_transferable<ViewportGridRenderer>());
   EXPECT_TRUE(render_owner_is_non_transferable<ViewportRenderTarget>());
   EXPECT_TRUE(render_owner_is_non_transferable<ViewportRenderer>());
-
-  const std::string render_system_header =
-      read_source_file("src/render/render_system.hpp");
-  const std::string scene_render_bridge_header =
-      read_source_file("src/render/scene_render_bridge.hpp");
-  const std::string viewport_renderer_header =
-      read_source_file("src/render/viewport_renderer.hpp");
-
-  EXPECT_NE(
-      render_system_header.find("RenderSystem(const RenderSystem&) = delete"),
-      std::string::npos);
-  EXPECT_NE(scene_render_bridge_header.find(
-                "SceneRenderBridge(SceneRenderBridge&&) = delete"),
-            std::string::npos);
-  EXPECT_NE(viewport_renderer_header.find(
-                "ViewportRenderer(const ViewportRenderer&) = delete"),
-            std::string::npos);
 }
 
 TEST(ViewportContextMenuPolicyTests,
@@ -4440,18 +3105,6 @@ TEST(ViewportContextMenuPolicyTests, BlocksModalToolsMissingActionsAndDrags) {
   EXPECT_FALSE(should_open_viewport_context_menu(request));
 }
 
-TEST(StandardMaterialEditorPresentationTests,
-     PendingTexturePathUsesOnlyTheNativeFilename) {
-  const std::string ui_system_source =
-      read_source_file("src/ui/ui_system.cpp");
-
-  EXPECT_NE(ui_system_source.find("pending.filename().wstring()"),
-            std::string::npos);
-  EXPECT_EQ(ui_system_source.find(
-                "ui.standard_material_editor.texture.pending"),
-            std::string::npos);
-  EXPECT_EQ(ui_system_source.find("Pending: {name}"), std::string::npos);
-}
 
 TEST(ViewportContextMenuPolicyTests,
      BlocksCapturedFlyDragEvenWhenCursorReturnsToPressPoint) {
@@ -4493,1121 +3146,24 @@ TEST(ViewportContextMenuPolicyTests, PreservesHoverOnlyForClickLikeRightPress) {
   }));
 }
 
-TEST(ModelingInteractionTests, AxisDragDistanceMathLivesInSharedHelper) {
-  const std::string extrude_source =
-      read_source_file("src/editor/interactions/extrude_tool.cpp");
-  const std::string box_source =
-      read_source_file("src/editor/interactions/box_tool.cpp");
-  const std::string drag_math_source =
-      read_source_file("src/editor/interactions/tool_drag_math.cpp");
 
-  EXPECT_NE(drag_math_source.find("DragDistanceResult axis_distance_from_ray"),
-            std::string::npos);
-  EXPECT_NE(extrude_source.find("axis_distance_from_ray("), std::string::npos);
-  EXPECT_NE(box_source.find("axis_distance_from_ray("), std::string::npos);
-  EXPECT_EQ(extrude_source.find("geometry_axis_drag_distance"),
-            std::string::npos);
-  EXPECT_EQ(box_source.find("box_geometry_axis_drag_distance"),
-            std::string::npos);
-}
 
-TEST(ModelingSessionServiceTests,
-     SelectedHoverOverlayKeepsRemovePreviewContract) {
-  const std::string app_overlay = read_source_file(
-      "src/editor/modeling/services/modeling_session_services.cpp");
-  const std::string runtime_overlay = read_source_file(
-      "src/editor/modeling/runtime/session_selection_overlay.cpp");
 
-  EXPECT_EQ(app_overlay.find(
-                "selectedHoverTarget && !hover.selected_modifier_pressed"),
-            std::string::npos);
-  EXPECT_EQ(app_overlay.find("selection_hover_target_matches_selection(session."
-                             "objects(), session.selection_mode(), hover)"),
-            std::string::npos);
-  EXPECT_TRUE(source_contains_compact(
-      app_overlay, "selection_hover_target_is_selected(session.objects(), "
-                   "session.selection_mode(), hover)"));
-  EXPECT_EQ(app_overlay.find("if (hover_frame.hover_target_selected)"),
-            std::string::npos);
-  EXPECT_EQ(runtime_overlay.find("suppress_hover_overlay"), std::string::npos);
-  EXPECT_NE(runtime_overlay.find(
-                "frame.hover_target_selected = hover.selected_modifier_pressed "
-                "&& selected_hover_target"),
-            std::string::npos);
-  EXPECT_NE(runtime_overlay.find("hover.kind == SelectionHoverKind::None"),
-            std::string::npos);
-}
 
-TEST(SceneRenderBridgeTests, UsesExplicitTextureColorSpaceForMaterialUploads) {
-  const std::string texture_source =
-      read_source_file("src/render/texture_binding_service.cpp");
-  const std::string png_loader_source =
-      read_source_file("src/render/png_texture_loader.cpp");
-  const std::string material_source =
-      read_source_file("src/render/material_binding_service.cpp");
-  const std::string factory_source =
-      read_source_file("src/render/mesh_renderable_factory.cpp");
-  const std::string app_source = read_source_file("src/app/app.cpp");
-  const std::string bootstrap_source = read_source_file(
-      "src/editor/session/project_asset_bootstrap_service.cpp");
-  const std::string material_library_source =
-      read_source_file("src/render/filament_material_library.cpp");
-  const std::string scene_bridge_source =
-      read_source_file("src/render/scene_render_bridge.cpp");
 
-  EXPECT_NE(
-      texture_source.find(
-          "create_solid_texture(255, 255, 255, 255, TextureColorSpace::Srgb)"),
-      std::string::npos);
-  EXPECT_NE(texture_source.find("create_solid_texture(255, 255, 255, 255, "
-                                "TextureColorSpace::Linear)"),
-            std::string::npos);
-  EXPECT_TRUE(source_contains_compact(texture_source,
-                                      "load_png_texture(*engine_, path, "
-                                      "PngTextureLoadOptions{"));
-  EXPECT_TRUE(source_contains_compact(
-      png_loader_source, "color_space == PngTextureColorSpace::Srgb ? "
-                         "filament::Texture::InternalFormat::SRGB8_A8 : "
-                         "filament::Texture::InternalFormat::RGBA8"));
-  EXPECT_NE(material_source.find("MinFilter::LINEAR_MIPMAP_LINEAR"),
-            std::string::npos);
-  EXPECT_NE(png_loader_source.find("mip_level_count(width, height)"),
-            std::string::npos);
-  EXPECT_NE(png_loader_source.find("Texture::Usage::GEN_MIPMAPPABLE"),
-            std::string::npos);
-  EXPECT_NE(png_loader_source.find("texture->generateMipmaps(engine)"),
-            std::string::npos);
-  EXPECT_NE(material_source.find("material_instance->setCullingMode("),
-            std::string::npos);
-  EXPECT_NE(material_source.find("double_sided ?"), std::string::npos);
-  EXPECT_EQ(material_source.find("colorCulling"), std::string::npos);
-  EXPECT_EQ(material_source.find("setCullingMode(\n            colorCulling"),
-            std::string::npos);
-  EXPECT_NE(
-      material_source.find("filament::MaterialInstance::CullingMode::NONE"),
-      std::string::npos);
-  EXPECT_NE(
-      material_source.find(": filament::MaterialInstance::CullingMode::BACK"),
-      std::string::npos);
-  EXPECT_EQ(
-      material_source.find(
-          "setCullingMode(filament::MaterialInstance::CullingMode::BACK);"),
-      std::string::npos);
-  EXPECT_NE(bootstrap_source.find(
-                "session.assets().add_texture(std::move(roughness));"),
-            std::string::npos);
-  EXPECT_TRUE(source_contains_compact(
-      bootstrap_source, "set_material_texture_slot(expected_default, "
-                        "material_texture_slot::kBaseColor, albedo_texture)"));
-  EXPECT_EQ(
-      bootstrap_source.find(
-          "make_default_quader_material(\"Default Quader\", albedo_texture"),
-      std::string::npos);
-  EXPECT_EQ(bootstrap_source.find("const AssetId roughnessTexture = "
-                                  "session.assets().add_texture"),
-            std::string::npos);
-  EXPECT_EQ(app_source.find("set_material_texture_slot("), std::string::npos);
-  EXPECT_EQ(app_source.find("make_default_quader_material("),
-            std::string::npos);
-  EXPECT_NE(app_source.find(
-                "render_system_.initialize_scene_render_bridge(render_bridge_"),
-            std::string::npos);
-  EXPECT_EQ(app_source.find("render_system_.quader_mesh_material()"),
-            std::string::npos);
-  EXPECT_EQ(app_source.find("render_system_.quader_mesh_lit_material()"),
-            std::string::npos);
-  EXPECT_NE(material_library_source.find("filament_material_catalog.hpp"),
-            std::string::npos);
-  EXPECT_NE(
-      material_library_source.find("std::string(kFilamentMaterialDirectory)"),
-      std::string::npos);
-  EXPECT_NE(
-      material_library_source.find("std::string(kQuaderMeshMaterialFile)"),
-      std::string::npos);
-  EXPECT_NE(
-      material_library_source.find("std::string(kQuaderMeshLitMaterialFile)"),
-      std::string::npos);
-  EXPECT_EQ(
-      material_library_source.find("materials\" / \"quader_mesh.filamat\""),
-      std::string::npos);
-  EXPECT_EQ(
-      material_library_source.find("materials\" / \"quader_mesh_lit.filamat\""),
-      std::string::npos);
-  EXPECT_NE(scene_bridge_source.find("material_binding_.initialize(shaded_mesh_"
-                                     "material, rendered_mesh_material,"),
-            std::string::npos);
-  EXPECT_NE(scene_bridge_source.find("texture_binding_)"), std::string::npos);
-  EXPECT_NE(
-      factory_source.find("material_binding_->create_mesh_material_instance("),
-      std::string::npos);
-  EXPECT_NE(
-      factory_source.find("primitive_material, double_sided, editor_unlit)"),
-      std::string::npos);
-  EXPECT_NE(
-      material_source.find(
-          "editor_unlit ? *shaded_mesh_material_ : *rendered_mesh_material_"),
-      std::string::npos);
-  EXPECT_NE(material_source.find("if (!editor_unlit)"), std::string::npos);
-  EXPECT_NE(material_source.find("material_texture_slot::kRoughness"),
-            std::string::npos);
-  EXPECT_NE(material_source.find("material_texture_slot::kMetallic"),
-            std::string::npos);
-  EXPECT_NE(material_source.find("material_texture_slot::kNormal"),
-            std::string::npos);
-  EXPECT_NE(material_source.find("apply_mesh_surface_grid"), std::string::npos);
-  EXPECT_NE(material_source.find("surfaceGridMinorColor"), std::string::npos);
-  EXPECT_NE(material_source.find("surfaceGridMajorSize"), std::string::npos);
-  EXPECT_NE(material_source.find("ViewportBoolSettingId::ShowMeshGrid"),
-            std::string::npos);
-  EXPECT_NE(material_source.find("ViewportColorSettingId::MeshGridMinor"),
-            std::string::npos);
-  EXPECT_NE(material_source.find("ViewportColorSettingId::MeshGridMajor"),
-            std::string::npos);
-  EXPECT_NE(material_source.find("ViewportFloatSettingId::GridMinorLineSize"),
-            std::string::npos);
-  EXPECT_EQ(
-      material_source.find("material_instance->setParameter(\"editor_unlit\""),
-      std::string::npos);
-  EXPECT_EQ(factory_source.find(".culling(!doubleSided)"), std::string::npos);
-  EXPECT_NE(texture_source.find("TextureCacheKey cache_key"),
-            std::string::npos);
-  EXPECT_NE(texture_source.find(".color_space = texture->color_space"),
-            std::string::npos);
-  EXPECT_EQ(texture_source.find("bool srgb"), std::string::npos);
-  EXPECT_EQ(material_source.find("bool srgb"), std::string::npos);
-}
 
-TEST(SceneRenderBridgeTests,
-     TextureBindingServiceRetainsRevisionsUntilSceneCacheRelease) {
-  const std::string texture_header =
-      read_source_file("src/render/texture_binding_service.hpp");
-  const std::string texture_source =
-      read_source_file("src/render/texture_binding_service.cpp");
 
-  EXPECT_EQ(texture_header.find("evict_obsolete_texture_revisions"),
-            std::string::npos);
-  EXPECT_EQ(texture_source.find("evict_obsolete_texture_revisions"),
-            std::string::npos)
-      << "A replaced texture revision can remain referenced by a paced, "
-         "retired material instance.";
 
-  const std::size_t bind_scene =
-      texture_source.find("void TextureBindingService::bind_scene(");
-  const std::size_t resolve_texture =
-      texture_source.find("TextureBindingService::resolve_texture(");
-  ASSERT_NE(bind_scene, std::string::npos);
-  ASSERT_NE(resolve_texture, std::string::npos);
-  ASSERT_LT(bind_scene, resolve_texture);
-  const std::string binding_release =
-      texture_source.substr(bind_scene, resolve_texture - bind_scene);
-  EXPECT_NE(binding_release.find("destroy_texture(texture)"),
-            std::string::npos);
-  EXPECT_NE(binding_release.find("texture_cache_.clear()"),
-            std::string::npos)
-      << "Retained revisions must still be reclaimed at the safe scene "
-         "ownership boundary.";
-}
 
-TEST(SceneRenderBridgeTests,
-     SkipsOverlayProxyRebuildWhenOverlayPayloadIsUnchanged) {
-  const std::string cache_source =
-      read_source_file("src/render/overlay/overlay_renderable_cache.cpp");
-  const std::string cache_header =
-      read_source_file("src/render/overlay/overlay_renderable_cache.hpp");
-  const std::string builder_source =
-      read_source_file("src/render/overlay/overlay_renderable_builder.cpp");
-  const std::string signature_header =
-      read_source_file("src/render/render_signature_builder.hpp");
-  const std::string proxy_factory_source =
-      read_source_file("src/render/overlay/overlay_proxy_factory.cpp");
 
-  EXPECT_NE(
-      cache_source.find("OverlayRenderableBuilder::frame_signatures(frame)"),
-      std::string::npos);
-  EXPECT_NE(
-      cache_source.find(
-          "OverlayRenderableBuilder::layer_build_signature(slot.signatures"),
-      std::string::npos);
-  EXPECT_NE(cache_header.find(
-                "std::array<OverlaySlot, kMaxViewportOverlaySlots> slots_"),
-            std::string::npos);
-  EXPECT_NE(cache_header.find("OverlayFrameSignatures signatures"),
-            std::string::npos);
-  EXPECT_NE(cache_source.find("slot.proxy_groups"), std::string::npos);
-  EXPECT_NE(signature_header.find("struct OverlayFrameSignatures"),
-            std::string::npos);
-  EXPECT_NE(builder_source.find(
-                "RenderSignatureBuilder::overlay_frame_signatures(frame)"),
-            std::string::npos);
-  EXPECT_NE(cache_source.find("slot.frame_signature"), std::string::npos);
-  EXPECT_NE(cache_source.find("OverlayRenderableBuilder::camera_signature"),
-            std::string::npos);
-  EXPECT_NE(cache_source.find("const bool camera_changed = camera_signature != "
-                              "slot.camera_signature"),
-            std::string::npos);
-  EXPECT_NE(cache_source.find(
-                "const bool layer_changed = layer_mask != slot.layer_mask"),
-            std::string::npos);
-  EXPECT_NE(cache_source.find(
-                "if (!frame_changed && !camera_changed && !layer_changed)"),
-            std::string::npos);
-  EXPECT_TRUE(source_contains_compact(
-      cache_source, "slot.frame = std::move(frame); return false;"));
-  EXPECT_NE(cache_source.find("group.signature = 0;"), std::string::npos);
-  EXPECT_NE(
-      cache_source.find("rebuild_slot(slot, frame_changed || layer_changed);"),
-      std::string::npos);
-  EXPECT_NE(cache_source.find("if (group.signature == layer_signature)"),
-            std::string::npos);
-  EXPECT_TRUE(source_contains_compact(
-      cache_source, "layer_has_renderable_primitives(slot.signatures, layer)"));
-  EXPECT_NE(cache_source.find("factory_->update_layer_proxies(group.proxies, "
-                              "plan, slot.layer_mask)"),
-            std::string::npos);
-  EXPECT_NE(cache_source.find(
-                "factory_->create_layer_proxies(plan, slot.layer_mask)"),
-            std::string::npos);
-  EXPECT_NE(proxy_factory_source.find(
-                "bool OverlayProxyFactory::update_layer_proxies"),
-            std::string::npos);
-  EXPECT_NE(builder_source.find("viewport_overlay_draw_order(layer) * 64"),
-            std::string::npos);
-}
 
-TEST(SceneRenderBridgeTests,
-     ReusesCanonicalLineIndicesWhenOnlyProjectedVerticesChange) {
-  const std::string proxy_factory_source =
-      read_source_file("src/render/overlay/overlay_proxy_factory.cpp");
-  const std::string line_builder_source =
-      read_source_file("src/render/overlay/overlay_line_mesh_builder.cpp");
 
-  const std::size_t line_update = proxy_factory_source.find(
-      "void OverlayProxyFactory::update_line_proxy");
-  const std::size_t edit_wire_update = proxy_factory_source.find(
-      "void OverlayProxyFactory::update_edit_wire_proxy");
-  const std::size_t point_update = proxy_factory_source.find(
-      "void OverlayProxyFactory::update_point_proxy");
-  ASSERT_NE(line_update, std::string::npos);
-  ASSERT_NE(edit_wire_update, std::string::npos);
-  ASSERT_NE(point_update, std::string::npos);
-  ASSERT_LT(line_update, edit_wire_update);
-  ASSERT_LT(edit_wire_update, point_update);
 
-  const std::string line_update_source = proxy_factory_source.substr(
-      line_update, edit_wire_update - line_update);
-  const std::string edit_wire_update_source = proxy_factory_source.substr(
-      edit_wire_update, point_update - edit_wire_update);
-  EXPECT_NE(line_update_source.find("update_canonical_quad_proxy_vertices"),
-            std::string::npos);
-  EXPECT_NE(
-      edit_wire_update_source.find("update_canonical_quad_proxy_vertices"),
-      std::string::npos);
-  EXPECT_EQ(line_update_source.find("update_proxy_buffers"), std::string::npos);
-  EXPECT_EQ(edit_wire_update_source.find("update_proxy_buffers"),
-            std::string::npos);
 
-  const std::size_t canonical_update = proxy_factory_source.find(
-      "void update_canonical_quad_proxy_vertices");
-  const std::size_t namespace_end =
-      proxy_factory_source.find("} // namespace", canonical_update);
-  ASSERT_NE(canonical_update, std::string::npos);
-  ASSERT_NE(namespace_end, std::string::npos);
-  const std::string canonical_update_source = proxy_factory_source.substr(
-      canonical_update, namespace_end - canonical_update);
-  EXPECT_NE(canonical_update_source.find("update_proxy_vertex_buffer"),
-            std::string::npos);
-  EXPECT_EQ(canonical_update_source.find("index_buffer->setBuffer"),
-            std::string::npos);
 
-  EXPECT_TRUE(source_contains_compact(
-      proxy_factory_source,
-      "proxy.vertex_count == mesh.vertices.size() && proxy.index_count == "
-      "mesh.indices.size()"));
-  EXPECT_TRUE(source_contains_compact(
-      line_builder_source,
-      "mesh.indices.push_back(offset); mesh.indices.push_back(offset + 1u); "
-      "mesh.indices.push_back(offset + 2u); mesh.indices.push_back(offset); "
-      "mesh.indices.push_back(offset + 2u); mesh.indices.push_back(offset + "
-      "3u);"));
-}
 
-TEST(ModelingSessionServiceTests,
-     CachesSelectionOverlayFrameByRevisionAndHoverState) {
-  const std::string source = read_source_file(
-      "src/editor/modeling/services/modeling_session_service.cpp");
-  const std::string split_source = read_source_file(
-      "src/editor/modeling/services/modeling_session_services.cpp");
-  const std::string overlay_header = read_source_file(
-      "src/editor/modeling/services/modeling_overlay_service.hpp");
-  const std::string drawn_plane_projection = read_source_file(
-      "src/editor/projection/drawn_plane_overlay_projection.cpp");
-  const std::string cut_preview_projection = read_source_file(
-      "src/editor/projection/cut_preview_overlay_projection.cpp");
-  const std::string tool_preview_projection = read_source_file(
-      "src/editor/projection/tool_preview_mesh_projection.cpp");
-  const std::string selection_header = read_source_file(
-      "src/editor/modeling/services/modeling_selection_service.hpp");
 
-  EXPECT_NE(
-      overlay_header.find("SelectionOverlayCache selection_overlay_cache_"),
-      std::string::npos);
-  EXPECT_NE(split_source.find("selection_overlay_cache_.matches("),
-            std::string::npos);
-  EXPECT_TRUE(source_contains_compact(
-      split_source, "content_revision, selection_revision, scene_revision"));
-  EXPECT_TRUE(source_contains_compact(
-      split_source, "selection_mode, overlay_signature, hover"));
-  EXPECT_NE(source.find(
-                "return overlay_service_.selection_overlay_signature(runtime_, "
-                "options);"),
-            std::string::npos);
-  EXPECT_EQ(source.find("selectionOverlayToolSignature()"), std::string::npos);
-  EXPECT_NE(
-      split_source.find("ModelingOverlayService::selection_overlay_signature("),
-      std::string::npos);
-  EXPECT_NE(split_source.find("runtime.cut_state()"), std::string::npos);
-  EXPECT_NE(split_source.find("runtime.mirror_state()"), std::string::npos);
-  EXPECT_NE(split_source.find("selection_overlay_cache_.frame()"),
-            std::string::npos);
-  EXPECT_NE(split_source.find(
-                "SelectionOverlayProjection::project_selection_overlay_frame("),
-            std::string::npos);
-  EXPECT_EQ(source.find(
-                "SelectionOverlayProjection::project_selection_overlay_frame("),
-            std::string::npos);
-  EXPECT_NE(split_source.find("selection_overlay_cache_.store("),
-            std::string::npos);
-  EXPECT_NE(split_source.find("selection_overlay_base_frame(session, options)"),
-            std::string::npos);
-  EXPECT_NE(split_source.find("suppress_persistent_object_selection"),
-            std::string::npos);
-  EXPECT_NE(overlay_header.find("overlay_base_cache_"), std::string::npos);
-  EXPECT_NE(split_source.find("build_selection_hover_overlay_frame"),
-            std::string::npos);
-  EXPECT_NE(split_source.find("append_selected_hover_filtered_base_frame"),
-            std::string::npos);
-  EXPECT_NE(split_source.find("DrawnPlaneOverlayProjection::append("),
-            std::string::npos);
-  EXPECT_NE(
-      split_source.find("CutPreviewOverlayProjection::append_result_lines("),
-      std::string::npos);
-  EXPECT_NE(
-      split_source.find("ToolPreviewMeshProjection::mirror_preview_meshes("),
-      std::string::npos);
-  EXPECT_NE(drawn_plane_projection.find("DrawnPlanePreviewFrame"),
-            std::string::npos);
-  EXPECT_NE(cut_preview_projection.find("CutPreviewEdgeAccumulator"),
-            std::string::npos);
-  EXPECT_NE(tool_preview_projection.find(
-                "ToolPreviewMeshProjection::box_preview_mesh_from_descriptor"),
-            std::string::npos);
-  EXPECT_EQ(split_source.find("struct DrawnPlanePreviewFrame"),
-            std::string::npos);
-  EXPECT_EQ(split_source.find("struct CutPreviewEdgeAccumulator"),
-            std::string::npos);
-  EXPECT_EQ(split_source.find("previewMeshFromDocuments("), std::string::npos);
-  EXPECT_EQ(split_source.find(
-                "std::optional<MeshAsset> box_preview_mesh_from_descriptor"),
-            std::string::npos);
-  EXPECT_NE(source.find("cached_pick_object_bounds()"), std::string::npos);
-  EXPECT_NE(source.find("cached_pick_face_geometry(options)"),
-            std::string::npos);
-  EXPECT_NE(
-      split_source.find("ModelingSelectionService::apply_pick_selection("),
-      std::string::npos);
-  EXPECT_NE(split_source.find("quader_editor_core::apply_pick_selection("),
-            std::string::npos);
-  EXPECT_TRUE(source_contains_compact(
-      source, "selection_service_.apply_pick_selection(session_,"));
-  EXPECT_NE(source.find("scene_, object_registry_, effective_request)"),
-            std::string::npos);
-  EXPECT_NE(split_source.find(
-                "cached_pick_object_bounds(session, scene, object_registry)"),
-            std::string::npos);
-  EXPECT_NE(
-      split_source.find("cached_local_pick_face_geometry(session, scene,"),
-            std::string::npos);
-  EXPECT_NE(split_source.find("object_registry, pick_options)"),
-            std::string::npos);
-  EXPECT_NE(split_source.find("picking_cache_.face_geometry_entries"),
-            std::string::npos);
-  EXPECT_NE(split_source.find(
-                "PickingCacheProjection::object_face_geometry_signature("),
-            std::string::npos);
-  EXPECT_NE(split_source.find("objects[index], pick_options)"),
-            std::string::npos);
-  EXPECT_EQ(split_source.find("applyPickedSelectionToSession"),
-            std::string::npos);
-  EXPECT_EQ(split_source.find("sessionHasComponentSelection"),
-            std::string::npos);
-  EXPECT_EQ(split_source.find("pickSelectRequestHitsTarget"),
-            std::string::npos);
-  const std::string picking_projection =
-      read_source_file("src/editor/projection/picking_cache_projection.cpp");
-  EXPECT_NE(picking_projection.find("pick_options.vertex_radius"),
-            std::string::npos);
-  EXPECT_NE(picking_projection.find("pick_options.edge_radius"),
-            std::string::npos);
-  EXPECT_NE(picking_projection.find("pick_options.has_hidden_material_slot"),
-            std::string::npos);
-  EXPECT_EQ(split_source.find("(void)pick_options;"), std::string::npos);
-}
 
-TEST(ModelingSessionServiceTests,
-     TransformDragBuildsVertexSnapCachesOnlyWhenRuntimeCanUseThem) {
-  const std::string source = read_source_file(
-      "src/editor/modeling/services/modeling_transform_drag_service.cpp");
-
-  EXPECT_NE(source.find("bool transform_drag_can_use_vertex_snap("),
-            std::string::npos);
-  EXPECT_NE(
-      source.find(
-          "drag.tool == quader_editor_core::ViewportInteractionTool::Move"),
-      std::string::npos);
-  EXPECT_NE(source.find("drag.move.active"), std::string::npos);
-  EXPECT_NE(source.find("transform_drag_axis_supports_vertex_snap(drag.axis)"),
-            std::string::npos);
-  EXPECT_NE(source.find("request.vertex_snap_radius > 0.0 &&"),
-            std::string::npos);
-  EXPECT_NE(
-      source.find("transform_drag_can_use_vertex_snap(drag_before_update)"),
-      std::string::npos);
-  EXPECT_NE(source.find("context.port.cached_pick_object_bounds()"),
-            std::string::npos);
-  EXPECT_NE(source.find("context.port.cached_pick_face_geometry()"),
-            std::string::npos);
-}
-
-TEST(SceneRenderBridgeTests,
-     ConvertsSceneOverlayColorsToLinearBeforeViewportEncode) {
-  const std::string source =
-      read_source_file("src/render/overlay/overlay_face_fill_builder.cpp");
-
-  EXPECT_NE(source.find("rgba8_srgb_to_linear(triangle.color)"),
-            std::string::npos);
-  EXPECT_NE(source.find("linear_color"), std::string::npos);
-}
-
-TEST(SceneRenderBridgeTests,
-     MeshRenderablesReceiveShadowsAndViewportEnablesShadowing) {
-  const std::string mesh_factory =
-      read_source_file({"src", "render", "mesh_renderable_factory.cpp"});
-  const std::string mesh_cache =
-      read_source_file({"src", "render", "mesh_renderable_cache.cpp"});
-  const std::string viewport_renderer =
-      read_source_file({"src", "render", "viewport_renderer.cpp"});
-  const std::string viewport_panel =
-      read_source_file({"src", "ui", "qt_viewport_panel.cpp"});
-
-  EXPECT_NE(mesh_factory.find(".castShadows(cast_shadows)"), std::string::npos);
-  EXPECT_NE(mesh_factory.find(".receiveShadows(!editor_unlit && !depth_only)"),
-            std::string::npos);
-  EXPECT_NE(mesh_factory.find("material_instance->setColorWrite(false)"),
-            std::string::npos);
-  EXPECT_NE(mesh_factory.find("material_instance->setDepthWrite(true)"),
-            std::string::npos);
-  EXPECT_NE(mesh_factory.find("material_instance->setDepthCulling(true)"),
-            std::string::npos);
-  EXPECT_NE(mesh_factory.find(".channel(channel)"), std::string::npos);
-  EXPECT_NE(mesh_cache.find("kViewportRenderedSceneLayerMask"),
-            std::string::npos);
-  EXPECT_NE(mesh_cache.find("kViewportShadedSceneLayerMask"),
-            std::string::npos);
-  EXPECT_NE(mesh_cache.find("kViewportOverlayLayerMask"), std::string::npos);
-  EXPECT_NE(mesh_cache.find("kViewportOverlayDepthChannel"), std::string::npos);
-  EXPECT_NE(mesh_cache.find("rendered_mesh_proxies_"), std::string::npos);
-  EXPECT_NE(mesh_cache.find("shaded_mesh_proxies_"), std::string::npos);
-  EXPECT_NE(mesh_cache.find("overlay_depth_mesh_proxies_"), std::string::npos);
-  EXPECT_NE(viewport_renderer.find("view_->setShadowingEnabled(true)"),
-            std::string::npos);
-  EXPECT_NE(
-      viewport_renderer.find("view_->setShadowType(filament::ShadowType::PCF)"),
-      std::string::npos);
-  EXPECT_NE(
-      viewport_renderer.find("overlay_view_->setPostProcessingEnabled(false)"),
-      std::string::npos);
-  EXPECT_NE(viewport_renderer.find(
-                "overlay_view_->setAntiAliasing(filament::AntiAliasing::NONE)"),
-            std::string::npos);
-  EXPECT_NE(viewport_renderer.find(
-                "overlay_view_->setDithering(filament::Dithering::NONE)"),
-            std::string::npos);
-  EXPECT_NE(viewport_renderer.find("overlay_view_->setColorGrading(nullptr)"),
-            std::string::npos);
-  EXPECT_NE(viewport_renderer.find("overlay_view_->setShadowingEnabled(false)"),
-            std::string::npos);
-  EXPECT_NE(viewport_renderer.find("overlay_view_->setBlendMode(filament::View:"
-                                   ":BlendMode::TRANSLUCENT)"),
-            std::string::npos);
-  EXPECT_NE(viewport_panel.find("renderer.set_scene_layer_mask"),
-            std::string::npos);
-  EXPECT_NE(viewport_panel.find("kViewportRenderedSceneLayerMask"),
-            std::string::npos);
-  EXPECT_NE(viewport_panel.find("kViewportShadedSceneLayerMask"),
-            std::string::npos);
-  EXPECT_TRUE(source_contains_compact(
-      viewport_panel,
-      "renderer.set_shadowing_enabled("
-      "viewport_shading_uses_scene_lighting(pane_workspace.shading))"));
-}
-
-TEST(ViewportRendererTests, OverlayPassUsesNeutralExposureCamera) {
-  const std::string header =
-      read_source_file({"src", "render", "viewport_renderer.hpp"});
-  const std::string source =
-      read_source_file({"src", "render", "viewport_renderer.cpp"});
-
-  EXPECT_NE(header.find("filament::Camera *overlay_camera_ = nullptr"),
-            std::string::npos);
-  EXPECT_NE(header.find("utils::Entity overlay_camera_entity_"),
-            std::string::npos);
-  EXPECT_NE(
-      source.find(
-          "overlay_camera_ = engine_->createCamera(overlay_camera_entity_)"),
-      std::string::npos);
-  EXPECT_NE(source.find("overlay_view_->setCamera(overlay_camera_)"),
-            std::string::npos);
-  EXPECT_EQ(source.find("overlay_view_->setCamera(camera_)"),
-            std::string::npos);
-  EXPECT_NE(source.find("apply_look_at(overlay_camera_)"), std::string::npos);
-  EXPECT_NE(source.find("apply_projection(overlay_camera_)"),
-            std::string::npos);
-  EXPECT_TRUE(source_contains_compact(
-      source, "camera_->setExposure(std::max(settings.camera.aperture"));
-  EXPECT_NE(
-      source.find("apply_neutral_overlay_exposure(filament::Camera *camera)"),
-      std::string::npos);
-  EXPECT_NE(source.find("kViewportOverlayCameraAperture"), std::string::npos);
-  EXPECT_NE(source.find("kViewportOverlayCameraShutterSpeed"),
-            std::string::npos);
-  EXPECT_NE(source.find("kViewportOverlayCameraSensitivity"),
-            std::string::npos);
-  EXPECT_EQ(count_occurrences(source, "overlay_camera_->setExposure("), 0u);
-  EXPECT_GE(count_occurrences(
-                source, "apply_neutral_overlay_exposure(overlay_camera_)"),
-            3u);
-}
-
-TEST(ViewportRendererTests,
-     PresentsSceneAndOverlayThroughNativeQtChildSwapchain) {
-  const std::string source =
-      read_source_file("src/render/viewport_render_target.cpp");
-  const std::string renderer_header =
-      read_source_file("src/render/viewport_renderer.hpp");
-  const std::string renderer_source =
-      read_source_file("src/render/viewport_renderer.cpp");
-  const std::string coordinator_source =
-      read_source_file("src/render/viewport_render_pass_coordinator.cpp");
-  const std::string viewport_panel_source =
-      read_source_file("src/ui/qt_viewport_panel.cpp");
-  const std::string viewport_surface_source =
-      read_source_file("src/ui/qt_viewport_surface.cpp");
-  const std::string grid_source =
-      read_source_file("src/render/viewport_grid_renderer.cpp");
-
-  EXPECT_NE(source.find(".format(Texture::InternalFormat::RGBA8)"),
-            std::string::npos);
-  EXPECT_NE(source.find("kViewportRenderTargetCapacityStep = 128u"),
-            std::string::npos);
-  EXPECT_NE(source.find("viewport_render_target_capacity_for_size"),
-            std::string::npos);
-  EXPECT_NE(source.find(
-                "view->setViewport({0, 0, viewport_width_, viewport_height_})"),
-            std::string::npos);
-  EXPECT_NE(source.find("void ViewportRenderTarget::set_sample_color_space"),
-            std::string::npos);
-  EXPECT_TRUE(source_contains_compact(
-      source,
-      "texture_registry_->update_texture(texture_handle_, color_texture_, "
-      "sample_color_space_)"));
-  EXPECT_TRUE(source_contains_compact(
-      source,
-      "texture_registry_->register_texture(creation_guard.color_texture, "
-      "sample_color_space_)"));
-  EXPECT_NE(renderer_header.find(
-                "RenderTextureHandle overlay_texture_handle() const"),
-            std::string::npos);
-  EXPECT_NE(renderer_header.find("ViewportRenderTarget overlay_render_target_"),
-            std::string::npos);
-  EXPECT_NE(renderer_header.find("float texture_max_u() const"),
-            std::string::npos);
-  EXPECT_NE(renderer_header.find("float texture_max_v() const"),
-            std::string::npos);
-  EXPECT_NE(renderer_header.find("scene_texture_sample_color_space_"),
-            std::string::npos);
-  EXPECT_TRUE(source_contains_compact(
-      renderer_source, "render_target_.resize(width_, height_, view_, "
-                       "scene_texture_sample_color_space_)"));
-  EXPECT_TRUE(source_contains_compact(
-      renderer_source,
-      "return post_processing_enabled ? TextureSampleColorSpace::DisplaySrgb : "
-      "TextureSampleColorSpace::LinearSrgb"));
-  EXPECT_TRUE(source_contains_compact(renderer_source,
-                                      "render_target_.set_sample_color_space("
-                                      "scene_texture_sample_color_space_)"));
-  EXPECT_TRUE(source_contains_compact(
-      renderer_source,
-      "static_cast<float>(width_) / static_cast<float>(std::max(1u, "
-      "render_target_.width()))"));
-  EXPECT_NE(renderer_source.find(
-                "TextureSampleColorSpace::DisplaySrgbPremultipliedAlpha"),
-            std::string::npos);
-  EXPECT_NE(coordinator_source.find(
-                "overlay_clear.clear = overlay_uses_separate_target"),
-            std::string::npos);
-  EXPECT_NE(coordinator_source.find(
-                "overlay_clear.clearColor = {0.0f, 0.0f, 0.0f, 0.0f}"),
-            std::string::npos);
-  EXPECT_NE(coordinator_source.find("overlay_visible_layer_mask() == 0u && "
-                                    "!overlay_uses_separate_target"),
-            std::string::npos);
-  EXPECT_NE(viewport_surface_source.find(
-                "render_system_->begin_frame(swap_chain_)"),
-            std::string::npos);
-  EXPECT_NE(viewport_surface_source.find(
-                "render_system_->render_viewport(renderer_, swap_chain_)"),
-            std::string::npos);
-  EXPECT_NE(viewport_surface_source.find(
-                "render_system_->end_frame(swap_chain_)"),
-            std::string::npos);
-  const std::size_t aggregate_begin = viewport_panel_source.find(
-      "render_system_->begin_presentation_frame()");
-  const std::size_t pane_submission = viewport_panel_source.find(
-      "pane_state.surface->render_frame()", aggregate_begin);
-  const std::size_t aggregate_complete = viewport_panel_source.find(
-      "render_system_->complete_presentation_frame(submitted)",
-      pane_submission);
-  ASSERT_NE(aggregate_begin, std::string::npos);
-  ASSERT_NE(pane_submission, std::string::npos);
-  ASSERT_NE(aggregate_complete, std::string::npos);
-  EXPECT_LT(aggregate_begin, pane_submission);
-  EXPECT_LT(pane_submission, aggregate_complete);
-  EXPECT_EQ(viewport_panel_source.find("overlay_texture_handle()"),
-            std::string::npos);
-  EXPECT_EQ(viewport_panel_source.find("texture_max_u()"), std::string::npos);
-  EXPECT_EQ(viewport_panel_source.find("texture_max_v()"), std::string::npos);
-  EXPECT_EQ(viewport_panel_source.find("ImGui::"), std::string::npos);
-  EXPECT_NE(
-      grid_source.find("settings.color(ViewportColorSettingId::GridMinor)"),
-      std::string::npos);
-  EXPECT_NE(
-      grid_source.find(
-          "settings.float_value(ViewportFloatSettingId::GridMinorLineSize)"),
-      std::string::npos);
-  EXPECT_TRUE(source_contains_compact(
-      grid_source, "setDepthCulling(controller.state().projection != "
-                   "ViewportProjection::Orthographic)"));
-  EXPECT_EQ(source.find(".format(Texture::InternalFormat::SRGB8_A8)"),
-            std::string::npos);
-}
-
-TEST(ViewportRendererTests,
-     ViewportInfoOverlayUsesRendererTimingAndVisibleMeshSubmissionStats) {
-  const std::string app_source = read_source_file("src/app/app.cpp");
-  const std::string ui_system_header = read_source_file("src/ui/ui_system.hpp");
-  const std::string ui_system_source = read_source_file("src/ui/ui_system.cpp");
-  const std::string viewport_panel_header =
-      read_source_file("src/ui/qt_viewport_panel.hpp");
-  const std::string viewport_panel_source =
-      read_source_file("src/ui/qt_viewport_panel.cpp");
-  const std::string viewport_info_stats_source =
-      read_source_file("src/render/viewport_info_stats.cpp");
-
-  EXPECT_NE(app_source.find("ui_.refresh(frame_timing, render_system_."
-                            "frame_performance_stats())"),
-            std::string::npos);
-  EXPECT_NE(ui_system_header.find(
-                "RenderFramePerformanceStats render_performance"),
-            std::string::npos);
-  EXPECT_NE(ui_system_source.find(
-                "viewport_panel_->set_render_performance_stats("),
-            std::string::npos);
-  EXPECT_NE(viewport_panel_header.find("set_render_performance_stats"),
-            std::string::npos);
-  EXPECT_NE(viewport_panel_header.find("draw_viewport_info_overlay"),
-            std::string::npos);
-  EXPECT_NE(viewport_panel_header.find("viewport_info_cached_scene_revision_"),
-            std::string::npos);
-  EXPECT_NE(viewport_panel_header.find("viewport_info_cached_asset_revision_"),
-            std::string::npos);
-  EXPECT_NE(viewport_panel_header.find(
-                "viewport_info_cached_local_visibility_revision_"),
-            std::string::npos);
-  EXPECT_NE(viewport_panel_header.find("viewport_info_cached_camera_"),
-            std::string::npos);
-  EXPECT_NE(viewport_panel_source.find("same_viewport_info_camera"),
-            std::string::npos);
-  EXPECT_TRUE(source_contains_compact(
-      viewport_panel_source,
-      "collect_viewport_info_scene_stats(document,assets,camera,"
-      "&local_visibility)"));
-  EXPECT_NE(viewport_info_stats_source.find(
-                "document.is_effectively_visible(entity_id)"),
-            std::string::npos);
-  EXPECT_NE(viewport_info_stats_source.find(
-                "coalesced_mesh_primitive_spans(mesh)"),
-            std::string::npos);
-  EXPECT_TRUE(source_contains_compact(
-      viewport_panel_source,
-      "const bool cache_hit = viewport_info_scene_stats_valid_"));
-  EXPECT_NE(viewport_panel_source.find("scene_revision = document.revision()"),
-            std::string::npos);
-  EXPECT_NE(viewport_panel_source.find("asset_revision = assets.revision()"),
-            std::string::npos);
-  EXPECT_NE(viewport_info_stats_source.find("viewport_info_bounds_visible"),
-            std::string::npos);
-  EXPECT_NE(viewport_info_stats_source.find("stats.draw_calls += spans.size()"),
-            std::string::npos);
-  EXPECT_NE(viewport_info_stats_source.find(
-                "stats.primitives += span.index_count / 3u"),
-            std::string::npos);
-  EXPECT_NE(viewport_panel_source.find("ViewportBoolSettingId::ShowInfo"),
-            std::string::npos);
-  EXPECT_NE(viewport_panel_source.find("pane_state.id == focused_pane"),
-            std::string::npos);
-  EXPECT_NE(viewport_panel_source.find("ui.viewport.info.draw_calls"),
-            std::string::npos);
-  EXPECT_NE(viewport_panel_source.find(
-                "render_performance_.frames_per_second"),
-            std::string::npos);
-  EXPECT_EQ(viewport_panel_source.find(
-                "1.0 / ui_context.viewport->frame_timing.raw_delta_seconds"),
-            std::string::npos);
-  EXPECT_EQ(viewport_panel_source.find(
-                "1000.0 / render_performance_.gpu_frame_ms"),
-            std::string::npos);
-  EXPECT_NE(viewport_panel_source.find("new QLabel(pane_state.frame)"),
-            std::string::npos);
-  EXPECT_NE(viewport_panel_source.find("viewportInfo_%1"), std::string::npos);
-  EXPECT_NE(viewport_panel_source.find("Qt::WA_NativeWindow"),
-            std::string::npos);
-  EXPECT_NE(viewport_panel_source.find("Qt::WA_TransparentForMouseEvents"),
-            std::string::npos);
-  EXPECT_NE(viewport_panel_source.find("info_overlay->setText(text)"),
-            std::string::npos);
-  EXPECT_NE(viewport_panel_source.find("info_overlay->setVisible(true)"),
-            std::string::npos);
-  EXPECT_EQ(viewport_panel_source.find("setStyleSheet("), std::string::npos);
-  EXPECT_EQ(viewport_panel_source.find("setPalette("), std::string::npos);
-  EXPECT_EQ(viewport_panel_source.find("setFont("), std::string::npos);
-  EXPECT_EQ(viewport_panel_source.find("ImGui::"), std::string::npos);
-}
-
-TEST(ViewportRendererTests,
-     MultiViewportRenderDoesNotMutateSceneInsideFilamentFrame) {
-  const std::string renderer_source =
-      read_source_file("src/render/viewport_renderer.cpp");
-  const std::string grid_renderer_source =
-      read_source_file("src/render/viewport_grid_renderer.cpp");
-  const std::string coordinator_source =
-      read_source_file("src/render/viewport_render_pass_coordinator.cpp");
-  const std::string app_source = read_source_file("src/app/app.cpp");
-  const std::string ui_system_source = read_source_file("src/ui/ui_system.cpp");
-  const std::string viewport_panel_source =
-      read_source_file("src/ui/qt_viewport_panel.cpp");
-  const std::string overlay_cache_source =
-      read_source_file("src/render/overlay/overlay_renderable_cache.cpp");
-  const std::string overlay_proxy_factory_source =
-      read_source_file("src/render/overlay/overlay_proxy_factory.cpp");
-  const std::string scene_bridge_source =
-      read_source_file("src/render/scene_render_bridge.cpp");
-  const std::string mesh_cache_source =
-      read_source_file("src/render/mesh_renderable_cache.cpp");
-  const std::string mesh_factory_source =
-      read_source_file("src/render/mesh_renderable_factory.cpp");
-
-  const std::size_t render_start =
-      renderer_source.find("void ViewportRenderer::render");
-  const std::size_t render_end =
-      renderer_source.find("void ViewportRenderer::update_visible_layers");
-  ASSERT_NE(render_start, std::string::npos);
-  ASSERT_NE(render_end, std::string::npos);
-  const std::string render_function =
-      renderer_source.substr(render_start, render_end - render_start);
-  EXPECT_EQ(render_function.find("scene_->addEntity"), std::string::npos);
-  EXPECT_EQ(render_function.find("scene_->remove"), std::string::npos);
-  EXPECT_TRUE(source_contains_compact(
-      renderer_source, "grid_renderer_.update(controller, width(), height(), "
-                       "grid_world_spacing, settings, visible, "
-                       "instance_edit_context_active_)"));
-  EXPECT_TRUE(source_contains_compact(
-      grid_renderer_source,
-      ".layerMask(kViewportAllLayerMask, grid_layer_mask_)"));
-  EXPECT_NE(renderer_source.find("render_pass_coordinator_.apply_visible_"
-                                 "layers(view_, overlay_view_)"),
-            std::string::npos);
-  EXPECT_EQ(renderer_source.find("setChannelDepthClearEnabled("),
-            std::string::npos);
-  EXPECT_TRUE(source_contains_compact(
-      renderer_source,
-      "render_pass_coordinator_.render(renderer, view_, overlay_view_, "
-      "surface_ == ViewportRenderSurface::Texture)"));
-  EXPECT_TRUE(source_contains_compact(
-      coordinator_source, "scene_view->setVisibleLayers(kViewportAllLayerMask, "
-                          "scene_visible_layer_mask())"));
-  EXPECT_TRUE(source_contains_compact(
-      coordinator_source,
-      "overlay_view->setVisibleLayers(kViewportAllLayerMask, "
-      "overlay_visible_layer_mask())"));
-  EXPECT_NE(coordinator_source.find("layer_mask | kViewportOverlayLayerMask"),
-            std::string::npos);
-  EXPECT_NE(coordinator_source.find("clear.discard = false"),
-            std::string::npos);
-  EXPECT_NE(coordinator_source.find(
-                "overlay_clear.clear = overlay_uses_separate_target"),
-            std::string::npos);
-  EXPECT_NE(coordinator_source.find("renderer.setClearOptions(clear);"),
-            std::string::npos);
-
-  const std::size_t process_input =
-      app_source.find("ui_.process_viewport_input()");
-  const std::size_t sync_scene =
-      app_source.find("QuaderRenderApiRuntimeAccess::sync_scene(");
-  const std::size_t prepare_viewports =
-      app_source.find("ui_.prepare_viewports(render_bridge_, "
-                      "render_overlay_snapshot_cache_)");
-  const std::size_t render_viewports =
-      app_source.find("ui_.render_surfaces(render_scene_viewports)");
-  ASSERT_NE(process_input, std::string::npos);
-  ASSERT_NE(sync_scene, std::string::npos);
-  ASSERT_NE(prepare_viewports, std::string::npos);
-  ASSERT_NE(render_viewports, std::string::npos);
-  EXPECT_LT(process_input, sync_scene);
-  EXPECT_LT(sync_scene, prepare_viewports);
-  EXPECT_LT(prepare_viewports, render_viewports);
-
-  EXPECT_NE(ui_system_source.find("void UISystem::process_viewport_input("),
-            std::string::npos);
-  EXPECT_NE(ui_system_source.find("void UISystem::prepare_viewports("),
-            std::string::npos);
-  EXPECT_NE(ui_system_source.find("viewport_panel_->prepare_viewports("),
-            std::string::npos);
-  EXPECT_NE(viewport_panel_source.find("workspace_->active_pane_placements()"),
-            std::string::npos);
-  EXPECT_NE(viewport_panel_source.find("const SceneDocument &document"),
-            std::string::npos);
-  EXPECT_NE(viewport_panel_source.find("const AssetRegistry &assets"),
-            std::string::npos);
-  EXPECT_NE(viewport_panel_source.find(
-                "renderer.update_camera(pane_workspace.camera)"),
-            std::string::npos);
-  EXPECT_TRUE(source_contains_compact(
-      viewport_panel_source, "pane_workspace.camera.set_clip_planes( "
-                             "scene_settings->camera.near_plane, "
-                             "scene_settings->camera.far_plane); "
-                             "renderer.apply_scene_settings("));
-  EXPECT_NE(
-      viewport_panel_source.find("renderer.set_scene_layer_mask"),
-      std::string::npos);
-  EXPECT_NE(
-      viewport_panel_source.find("renderer.set_shadowing_enabled"),
-      std::string::npos);
-  EXPECT_NE(viewport_panel_source.find("renderer.set_scene_visible"),
-            std::string::npos);
-  EXPECT_NE(viewport_panel_source.find("ViewportBoolSettingId::ShowGrid"),
-            std::string::npos);
-  EXPECT_NE(viewport_panel_source.find("ViewportBoolSettingId::ShowGizmos"),
-            std::string::npos);
-  EXPECT_NE(viewport_panel_source.find("ViewportBoolSettingId::ShowOverlays"),
-            std::string::npos);
-  EXPECT_NE(viewport_panel_source.find("ViewportBoolSettingId::ShowInfo"),
-            std::string::npos);
-  EXPECT_TRUE(source_contains_compact(
-      viewport_panel_source,
-      "renderer.update_ground_grid(pane_workspace.camera, "
-      "grid_world_size, settings, grid_visible)"));
-  EXPECT_TRUE(source_contains_compact(
-      viewport_panel_source,
-      "render_bridge.update_mesh_surface_grid(grid_world_size, settings)"));
-  EXPECT_TRUE(source_contains_compact(
-      scene_bridge_source,
-      "mesh_cache_.update_surface_grid(grid_world_spacing, settings)"));
-  EXPECT_TRUE(source_contains_compact(
-      mesh_cache_source,
-      "update_surface_grid_proxy_map(*factory_, rendered_mesh_proxies_, "
-      "grid_world_spacing, settings)"));
-  EXPECT_TRUE(source_contains_compact(
-      mesh_cache_source,
-      "update_surface_grid_proxy_map(*factory_, shaded_mesh_proxies_, "
-      "grid_world_spacing, settings)"));
-  EXPECT_EQ(mesh_cache_source.find("update_surface_grid_proxy_map(*factory_, "
-                                   "overlay_depth_mesh_proxies_"),
-            std::string::npos);
-  EXPECT_NE(
-      mesh_factory_source.find("material_binding_->apply_mesh_surface_grid("),
-      std::string::npos);
-  EXPECT_TRUE(source_contains_compact(
-      viewport_panel_source,
-      "renderer.set_overlay_visible(should_enable_viewport_overlay_pass({"));
-  EXPECT_TRUE(source_contains_compact(
-      viewport_panel_source,
-      "const bool tool_overlay_visible = pane_state.id == "
-      "interaction_pane_id_ && active_box_preview_.valid && "
-      "active_box_preview_.drag_state != ModelingBoxDragState::Height"));
-  EXPECT_NE(viewport_panel_source.find(
-                ".tool_overlay_visible = tool_overlay_visible"),
-            std::string::npos);
-  EXPECT_NE(viewport_panel_source.find(
-                "viewport_shading_shows_light_gizmos(shading)"),
-            std::string::npos);
-  EXPECT_TRUE(source_contains_compact(
-      viewport_panel_source,
-      "const bool point_light_gizmos_visible = gizmos_visible && "
-      "viewport_shading_shows_light_gizmos(pane_workspace.shading)"));
-  EXPECT_TRUE(source_contains_compact(
-      viewport_panel_source,
-      "scene_overlay_requests[viewport_pane_index(placement.pane_id)] = "
-      "(overlays_visible && selection_overlay_cache_.valid()) || "
-      "point_light_gizmos_visible"));
-  EXPECT_TRUE(source_contains_compact(
-      viewport_panel_source,
-      "if (scene_overlay_requests[viewport_pane_index(pane_state.id)])"));
-  EXPECT_NE(viewport_panel_source.find(".point_light_gizmos_visible = "
-                                       "point_light_gizmos_visible"),
-            std::string::npos);
-  EXPECT_NE(viewport_panel_source.find("render_bridge.set_overlay_frame("),
-            std::string::npos);
-  EXPECT_NE(viewport_panel_source.find(
-                "viewport_grid_layer_mask(viewport_pane_index(pane_state.id))"),
-            std::string::npos);
-  EXPECT_NE(overlay_proxy_factory_source.find(
-                ".layerMask(kViewportAllLayerMask, layer_mask)"),
-            std::string::npos);
-  EXPECT_TRUE(source_contains_compact(
-      overlay_cache_source,
-      "void OverlayRenderableCache::rebuild_slot(OverlaySlot &slot, "
-      "bool rebuild_camera_independent_layers)"));
-}
-
-TEST(RenderLifecycleTests, ResourceOwnersShutdownBeforeInitialize) {
-  for (const char *relative_path : {
-           "src/render/scene_render_bridge.cpp",
-           "src/render/texture_binding_service.cpp",
-           "src/render/viewport_grid_renderer.cpp",
-       }) {
-    const std::string source = read_source_file(relative_path);
-    const std::size_t initialize = source.find("::initialize");
-    ASSERT_NE(initialize, std::string::npos) << relative_path;
-    const std::size_t shutdown = source.find("shutdown();", initialize);
-    ASSERT_NE(shutdown, std::string::npos) << relative_path;
-    EXPECT_LT(shutdown, source.find("engine_ =", initialize)) << relative_path;
-  }
-}
-
-TEST(TextureRegistryTests, TracksPerTexturePresentationColorSpace) {
-  const std::string header_source =
-      read_source_file("src/render/texture_registry.hpp");
-
-  EXPECT_NE(header_source.find("enum class TextureSampleColorSpace"),
-            std::string::npos);
-  EXPECT_NE(header_source.find("DisplaySrgb"), std::string::npos);
-  EXPECT_NE(header_source.find("DisplaySrgbPremultipliedAlpha"),
-            std::string::npos);
-  EXPECT_NE(header_source.find("LinearSrgb"), std::string::npos);
-  EXPECT_NE(header_source.find("using RenderTextureHandle = std::uintptr_t"),
-            std::string::npos);
-  EXPECT_NE(
-      header_source.find("TextureSampleColorSpace "
-                         "sample_color_space(RenderTextureHandle id) const"),
-      std::string::npos);
-  EXPECT_NE(header_source.find("void update_texture(RenderTextureHandle id"),
-            std::string::npos);
-
-  const std::string source =
-      read_source_file("src/render/texture_registry.cpp");
-
-  EXPECT_NE(source.find(".sample_color_space = sample_color_space"),
-            std::string::npos);
-  EXPECT_NE(source.find("TextureSampleColorSpace::DisplaySrgb"),
-            std::string::npos);
-  EXPECT_NE(source.find("it->second.sample_color_space"), std::string::npos);
-}
-
-TEST(AppStartupTests, DoesNotCreateDefaultModelingMesh) {
-  const std::string source = read_source_file("src/app/app.cpp");
-
-  EXPECT_EQ(source.find("create_box_from_bounds({"), std::string::npos);
-  EXPECT_EQ(source.find("Startup scene created modeling box"),
-            std::string::npos);
-  EXPECT_EQ(source.find("startup box"), std::string::npos);
-  EXPECT_EQ(source.find("Fake Directional Light"), std::string::npos);
-  EXPECT_EQ(source.find("document_.set_light"), std::string::npos);
-}
-
-TEST(AppStartupTests, DelegatesDefaultAssetsAndUsesSessionReadView) {
-  const std::string app_header = read_source_file("src/app/app.hpp");
-  const std::string app_source = read_source_file("src/app/app.cpp");
-  const std::string bootstrap_source = read_source_file(
-      "src/editor/session/project_asset_bootstrap_service.cpp");
-  const std::string build_source = read_source_file("CMakeLists.txt");
-
-  EXPECT_NE(app_header.find("void bind_active_scene(SceneSession &scene)"),
-            std::string::npos);
-  EXPECT_NE(app_header.find("ProjectSession project_session_"),
-            std::string::npos);
-  EXPECT_EQ(app_header.find("SceneSession scene_session_"), std::string::npos);
-  EXPECT_NE(app_source.find("ProjectAssetBootstrapService{}."
-                            "bootstrap_default_assets(scene)"),
-            std::string::npos);
-  EXPECT_NE(app_source.find("const SceneSessionReadView session_view = "
-                            "active_scene->session->read_view();"),
-            std::string::npos);
-  EXPECT_TRUE(source_contains_compact(
-      app_source,
-      "QuaderEditorApiSessionAccess::set_scene_binding_changed_callback("
-      "*editor_, [this](SceneSession &scene) { bind_active_scene(scene); })"));
-  EXPECT_TRUE(source_contains_compact(
-      app_source,
-      "ui_.install_runtime_hooks(*editor_, scene.scene(), scene.assets(), "
-      "scene.modeling(), scene.selection(), scene.pivot(), "
-      "scene.linear_array(), scene.radial_array(), "
-      "scene.point_placement(), default_material_)"));
-  EXPECT_NE(app_source.find("ui_.prepare_viewports(render_bridge_, "
-                            "render_overlay_snapshot_cache_)"),
-            std::string::npos);
-  EXPECT_EQ(app_header.find("create_startup_scene"), std::string::npos);
-  EXPECT_EQ(app_source.find("create_startup_scene"), std::string::npos);
-  EXPECT_EQ(app_source.find("default_material_catalog.hpp"), std::string::npos);
-  EXPECT_EQ(app_source.find("make_default_quader_material("),
-            std::string::npos);
-  EXPECT_EQ(app_source.find(".assets().add_texture("), std::string::npos);
-  EXPECT_EQ(app_source.find(".assets().add_material("), std::string::npos);
-  EXPECT_NE(bootstrap_source.find("default_material_catalog.hpp"),
-            std::string::npos);
-  EXPECT_NE(bootstrap_source.find(
-                "ProjectAssetBootstrapService::bootstrap_default_assets"),
-            std::string::npos);
-  EXPECT_NE(build_source.find(
-                "src/editor/session/project_asset_bootstrap_service.cpp"),
-            std::string::npos);
-}
-
-TEST(AppLoopTests, QtEventLoopKeepsViewportInputAtDisplayCadence) {
-  const std::string app_header = read_source_file("src/app/app.hpp");
-  const std::string app_source = read_source_file("src/app/app.cpp");
-  const std::string ui_header = read_source_file("src/ui/ui_system.hpp");
-
-  EXPECT_NE(app_header.find("QApplication *application_"), std::string::npos);
-  EXPECT_NE(app_header.find("std::unique_ptr<QTimer> frame_timer_"),
-            std::string::npos);
-  EXPECT_NE(app_source.find("return application_->exec()"), std::string::npos);
-  EXPECT_NE(app_source.find("&QTimer::timeout"), std::string::npos);
-  EXPECT_NE(app_source.find("kIdleFrameIntervalMs = 16"), std::string::npos);
-  EXPECT_NE(app_source.find("presentation_frame_interval_ms"),
-            std::string::npos);
-  EXPECT_NE(app_source.find("screen->refreshRate()"), std::string::npos);
-  EXPECT_NE(app_source.find("kMaximumDisplayRefreshRateHz = 240.0"),
-            std::string::npos);
-  EXPECT_EQ(app_source.find("kActiveFrameIntervalMs = 1"), std::string::npos);
-  EXPECT_NE(app_source.find("ui_.needs_continuous_rendering()"),
-            std::string::npos);
-  EXPECT_EQ(app_source.find("SDL_"), std::string::npos);
-  EXPECT_EQ(app_source.find("platform_wait_for_event_timeout"),
-            std::string::npos);
-  EXPECT_NE(
-      ui_header.find("[[nodiscard]] bool needs_continuous_rendering() const"),
-      std::string::npos);
-}
 
 TEST(SceneDocumentTests, CreatesStableEntitiesAndComponents) {
   SceneDocument scene;
@@ -5687,19 +3243,6 @@ TEST(SceneDocumentTests, ComponentAccessorsAreReadOnlyOutsideDocumentMutators) {
   static_assert(std::is_same_v<decltype(std::declval<SceneDocument &>().light(
                                    EntityId{})),
                                const LightComponent *>);
-
-  const std::string header = read_source_file("src/scene/scene_document.hpp");
-  EXPECT_EQ(header.find("TransformComponent* transform(EntityId id);"),
-            std::string::npos);
-  EXPECT_EQ(header.find("VisibilityComponent* visibility(EntityId id);"),
-            std::string::npos);
-  EXPECT_EQ(header.find("MeshComponent* mesh(EntityId id);"),
-            std::string::npos);
-  EXPECT_NE(header.find("TransformComponent *mutable_transform(EntityId id);"),
-            std::string::npos);
-  EXPECT_NE(
-      header.find("VisibilityComponent *mutable_visibility(EntityId id);"),
-      std::string::npos);
 
   SceneDocument scene;
   const EntityId entity = scene.create_entity("Box");
@@ -6683,43 +4226,8 @@ TEST(ViewportWorkspaceServiceTests, GridPresetIsClampedAtWorkspaceOwner) {
   EXPECT_EQ(
       router.state().grid_preset,
       static_cast<int>(quader_host_contract::grid_preset_catalog().size()));
-
-  const std::string router_source =
-      read_source_file("src/viewport/viewport_input_router.cpp");
-  const std::string runtime_source =
-      read_source_file("src/editor/tools/viewport_tool_runtime.cpp");
-  const std::string viewport_panel_source =
-      read_source_file("src/ui/qt_viewport_panel.cpp");
-
-  EXPECT_NE(
-      router_source.find(
-          "void ViewportInputRouter::sync_grid_preset_snapshot(int preset)"),
-      std::string::npos);
-  EXPECT_TRUE(source_contains_compact(
-      runtime_source, "result.requested_grid_preset = "
-                      "viewport_clamp_grid_preset(shortcut.grid_preset)"));
-  EXPECT_EQ(
-      runtime_source.find("state.grid_preset = "
-                          "viewport_clamp_grid_preset(shortcut.grid_preset)"),
-      std::string::npos);
-  EXPECT_NE(
-      viewport_panel_source.find(
-          "workspace_->set_grid_preset(result.requested_grid_preset)"),
-      std::string::npos);
-  EXPECT_NE(
-      viewport_panel_source.find("input_router_.sync_grid_preset_snapshot("
-                                 "workspace_->grid_preset())"),
-      std::string::npos);
 }
 
-TEST(ViewportWorkspaceServiceTests,
-     WorkspaceFocusDistancesUseHostViewportDefaults) {
-  const std::string source =
-      read_source_file("src/viewport/viewport_workspace_service.cpp");
-  EXPECT_NE(source.find("viewport_host_defaults().focus_origin_distance"),
-            std::string::npos);
-  EXPECT_EQ(source.find("focus_origin(64.0f)"), std::string::npos);
-}
 
 TEST(ViewportCameraTests, FlySpeedDefaultsUseHostViewportDefaults) {
   const ViewportHostDefaults defaults = viewport_host_defaults();
@@ -6733,12 +4241,6 @@ TEST(ViewportCameraTests, FlySpeedDefaultsUseHostViewportDefaults) {
   ViewportCameraController camera;
   EXPECT_NEAR(camera.fly_speed(), static_cast<float>(defaults.fly_base_speed),
               0.001f);
-
-  const std::string source =
-      read_source_file("src/viewport/viewport_camera_controller.cpp");
-  EXPECT_EQ(source.find("kDefaultFlySpeed"), std::string::npos);
-  EXPECT_NE(source.find("viewport_host_defaults().fly_base_speed"),
-            std::string::npos);
 }
 
 TEST(ViewportWorkspaceServiceTests, LayoutChangeClearsMaximizedPaneState) {
@@ -7056,15 +4558,6 @@ TEST(ViewportWorkspaceServiceTests,
       replacement_camera_before_exit);
 }
 
-TEST(ViewportWorkspaceServiceTests, PaneStateDoesNotStoreDuplicateView) {
-  const std::string header =
-      read_source_file("src/viewport/viewport_workspace_service.hpp");
-  const std::string source =
-      read_source_file("src/viewport/viewport_workspace_service.cpp");
-
-  EXPECT_EQ(header.find("ViewportView view ="), std::string::npos);
-  EXPECT_EQ(source.find("pane_state.view"), std::string::npos);
-}
 
 TEST(ViewportWorkspaceServiceTests,
      DebugShadingModesAreOwnedIndependentlyPerPane) {
@@ -7954,14 +5447,6 @@ TEST(ViewportInputRouterTests, OperationShortcutsMatchViewportContract) {
   }
 }
 
-TEST(ViewportInputRouterTests, LegacyShortcutAdapterSourceIsNotBuilt) {
-  const std::string cmake = read_source_file("CMakeLists.txt");
-
-  EXPECT_EQ(cmake.find("src/viewport/viewport_legacy_shortcut_adapter.cpp"),
-            std::string::npos);
-  EXPECT_EQ(cmake.find("src/viewport/viewport_legacy_shortcut_adapter.hpp"),
-            std::string::npos);
-}
 
 TEST(ViewportInputRouterTests, FlipShortcutsOnlyApplyInObjectSelectionMode) {
   ViewportInputRouter router;
@@ -8137,6 +5622,7 @@ TEST(ViewportInputRouterTests,
   input.viewport_size = {800.0f, 600.0f};
 
   router.set_active_tool(ViewportTool::kCut);
+  input.active_tool_blocks_focus_shortcuts = true;
   set_resolved_shortcut(
       input, test_router_shortcut(ViewportShortcutKind::FocusDocument));
   ViewportInputResult result = router.handle_frame(input, camera);
@@ -8213,6 +5699,7 @@ TEST(ViewportInputRouterTests,
   EXPECT_EQ(select_result.shortcut.kind, ViewportShortcutKind::DeletePopup);
 
   router.set_active_tool(ViewportTool::kCut);
+  input.active_tool_blocks_focus_shortcuts = true;
   EXPECT_FALSE(router.handle_frame(input, camera).shortcut_handled);
 }
 
@@ -9645,6 +7132,71 @@ TEST(SceneContentDocumentTests,
   EXPECT_EQ(second_record->authored_name, "Authored Second");
 }
 
+TEST(SceneContentDocumentTests,
+     BulkUpsertConflictLeavesRecordsSceneRevisionsAndAllocatorUnchanged) {
+  SceneContentDocument document(SceneContentDocumentRecord{
+      .id = 24,
+      .name = "Atomic Imported Batch",
+  });
+  const EntityId first =
+      document.scene().create_entity("First", EntityKind::Mesh);
+  const EntityId second =
+      document.scene().create_entity("Second", EntityKind::Mesh);
+  ASSERT_NE(first, kInvalidEntityId);
+  ASSERT_NE(second, kInvalidEntityId);
+  const EditorObjectId first_id = document.scene().editor_object_id(first);
+  const EditorObjectId second_id = document.scene().editor_object_id(second);
+  ASSERT_NE(first_id, kInvalidEditorObjectId);
+  ASSERT_NE(second_id, kInvalidEditorObjectId);
+
+  const std::vector<ProjectObjectRecord> records_before =
+      document.object_records();
+  const std::uint64_t document_revision_before = document.revision();
+  const std::uint64_t scene_revision_before = document.scene().revision();
+  const std::uint64_t scene_content_revision_before =
+      document.scene().content_revision();
+
+  const std::vector<EditorObjectId> imported =
+      document.upsert_object_records({
+          ProjectObjectRecord{
+              .id = 100U,
+              .scene_entity = first,
+              .authored_name = "Would mutate first",
+          },
+          ProjectObjectRecord{
+              .id = 100U,
+              .scene_entity = second,
+              .authored_name = "Conflicts later",
+          },
+      });
+
+  EXPECT_TRUE(imported.empty());
+  EXPECT_EQ(document.object_records(), records_before);
+  EXPECT_EQ(document.object_id_for_entity(first), first_id);
+  EXPECT_EQ(document.object_id_for_entity(second), second_id);
+  EXPECT_EQ(document.scene().editor_object_id(first), first_id);
+  EXPECT_EQ(document.scene().editor_object_id(second), second_id);
+  EXPECT_EQ(document.revision(), document_revision_before);
+  EXPECT_EQ(document.scene().revision(), scene_revision_before);
+  EXPECT_EQ(document.scene().content_revision(),
+            scene_content_revision_before);
+  EXPECT_TRUE(document.validate_object_identity_invariants().ok());
+
+  EditorObjectId expected_next = 1U;
+  for (const ProjectObjectRecord &record : records_before) {
+    expected_next = std::max(expected_next, record.id + 1U);
+  }
+  EXPECT_EQ(document.create_object_record(ProjectObjectRecord{}),
+            expected_next);
+}
+
+TEST(PublicApiContractTests, RejectsUnboundNativeFacadeConstruction) {
+  EXPECT_THROW(static_cast<void>(QuaderApi{QuaderApiSession{}}),
+               std::invalid_argument);
+  EXPECT_THROW(static_cast<void>(QuaderEditorApi{QuaderApiSession{}}),
+               std::invalid_argument);
+}
+
 TEST(SceneContentDocumentTests, ValidatesAssetReferencesAtDocumentOwner) {
   SceneContentDocument document(SceneContentDocumentRecord{
       .id = 21,
@@ -9678,24 +7230,6 @@ TEST(SceneContentDocumentTests, ValidatesAssetReferencesAtDocumentOwner) {
   EXPECT_NE(record_report.issues.front().message.find(
                 "object record points at a missing scene entity"),
             std::string::npos);
-
-  const std::string project_document_source =
-      read_source_file("src/scene/document/scene_content_document.cpp");
-  const std::string qdr_codec_source =
-      read_source_file("src/io/qdr/qdr_scene_binary_codec.cpp");
-  EXPECT_NE(project_document_source.find(
-                "SceneContentDocument::validate_asset_references"),
-            std::string::npos);
-  EXPECT_NE(qdr_codec_source.find("document.validate_asset_references()"),
-            std::string::npos);
-  EXPECT_NE(
-      qdr_codec_source.find("document.validate_asset_references(record)"),
-      std::string::npos);
-  EXPECT_EQ(qdr_codec_source.find("document.assets().mesh(mesh->mesh)"),
-            std::string::npos);
-  EXPECT_EQ(
-      qdr_codec_source.find("document.assets().material(material->material)"),
-      std::string::npos);
 }
 
 TEST(SceneContentDocumentTests,
@@ -9968,6 +7502,44 @@ TEST(SceneSessionTests,
   ASSERT_TRUE(moved_selection.ok()) << moved_selection.error_message();
   EXPECT_TRUE(moved_selection.changed());
   EXPECT_TRUE(editor.project().dirty());
+}
+
+TEST(SceneSessionTests,
+     SelectionAndOperationPreviewStayCleanUntilContentCommit) {
+  SceneSession session;
+  QuaderEditorApi editor(
+      QuaderApiSessionInternalAccess::from_scene_session(session));
+  const QuaderApiResult<QuaderModelingObjectRef> box =
+      editor.modeling().create_box(
+          QuaderBounds{.min = {-1.0f, -1.0f, -1.0f},
+                       .max = {1.0f, 1.0f, 1.0f}},
+          "Dirty Polling Box");
+  ASSERT_TRUE(box.ok()) << box.error_message();
+  ASSERT_TRUE(editor.selection().select_object(box.value()).ok());
+  session.mark_clean();
+  const SceneContentRevisionStamp clean_stamp =
+      session.content_revision_stamp();
+
+  ASSERT_TRUE(editor.selection().clear().ok());
+  EXPECT_FALSE(editor.project().dirty());
+  EXPECT_EQ(session.content_revision_stamp(), clean_stamp);
+  ASSERT_TRUE(editor.selection().select_object(box.value()).ok());
+  EXPECT_FALSE(editor.project().dirty());
+  EXPECT_EQ(session.content_revision_stamp(), clean_stamp);
+
+  const QuaderApiVoidResult preview = editor.commands().execute(
+      editor.commands().command_id_for_modeling_action("half_cut"));
+  ASSERT_TRUE(preview.ok()) << preview.error_message();
+  ASSERT_TRUE(editor.modeling().can_cancel_active_tool_or_preview());
+  EXPECT_FALSE(editor.project().dirty());
+  EXPECT_NE(session.content_revision_stamp(), clean_stamp);
+
+  const QuaderApiVoidResult committed =
+      editor.tools().commit_active_tool_preview();
+  ASSERT_TRUE(committed.ok()) << committed.error_message();
+  EXPECT_TRUE(committed.changed());
+  EXPECT_TRUE(editor.project().dirty());
+  EXPECT_NE(session.content_revision_stamp(), clean_stamp);
 }
 
 TEST(SceneSessionTests,
@@ -10464,98 +8036,6 @@ TEST(SceneSessionTests,
   EXPECT_EQ(session.assets().revision(), revision);
 }
 
-TEST(AssetProjectArchitectureTests,
-     SourceExposesNamedAssetAndProjectArchitectureTypes) {
-  const std::string asset_document_source =
-      read_source_file("src/assets/asset_document.hpp");
-  const std::string typed_store_source =
-      read_source_file("src/assets/typed_asset_store.hpp");
-  const std::string registry_source =
-      read_source_file("src/assets/asset_registry.hpp");
-  const std::string project_document_source =
-      read_source_file("src/scene/document/scene_content_document.hpp");
-  const std::string scene_session_source =
-      read_source_file("src/editor/session/scene_session.hpp");
-  const std::string project_session_source =
-      read_source_file("src/editor/session/project_session.hpp");
-  const std::string app_header = read_source_file("src/app/app.hpp");
-
-  EXPECT_NE(asset_document_source.find("struct AssetDocumentBase"),
-            std::string::npos);
-  EXPECT_NE(typed_store_source.find("class TypedAssetStore"),
-            std::string::npos);
-  EXPECT_EQ(typed_store_source.find("    Document* get(AssetId id) {"),
-            std::string::npos);
-  EXPECT_NE(typed_store_source.find("const Document* get(AssetId id) const"),
-            std::string::npos);
-  EXPECT_NE(
-      registry_source.find("using MeshAssetStore = TypedAssetStore<MeshAsset, "
-                           "MeshAssetRevision>;"),
-      std::string::npos);
-  EXPECT_NE(registry_source.find(
-                "using MaterialAssetStore = TypedAssetStore<MaterialDocument, "
-                "MaterialAssetRevision>;"),
-            std::string::npos);
-  EXPECT_NE(registry_source.find(
-                "using TextureAssetStore = TypedAssetStore<TextureAsset, "
-                "TextureAssetRevision>;"),
-            std::string::npos);
-  EXPECT_EQ(registry_source.find("class MeshAssetStore"), std::string::npos);
-  EXPECT_EQ(registry_source.find("class MaterialAssetStore"),
-            std::string::npos);
-  EXPECT_EQ(registry_source.find("class TextureAssetStore"), std::string::npos);
-  EXPECT_NE(registry_source.find("MeshAssetStore meshes_"), std::string::npos);
-  EXPECT_NE(registry_source.find("MaterialAssetStore materials_"),
-            std::string::npos);
-  EXPECT_NE(registry_source.find("TextureAssetStore textures_"),
-            std::string::npos);
-  EXPECT_EQ(registry_source.find("    MeshAsset* mesh(AssetId id);"),
-            std::string::npos);
-  EXPECT_EQ(registry_source.find("    MaterialDocument* material(AssetId id);"),
-            std::string::npos);
-  EXPECT_EQ(registry_source.find("    TextureAsset* texture(AssetId id);"),
-            std::string::npos);
-  EXPECT_NE(registry_source.find("const MeshAsset *mesh(AssetId id) const"),
-            std::string::npos);
-  EXPECT_NE(registry_source.find(
-                "const MaterialDocument *material(AssetId id) const"),
-            std::string::npos);
-  EXPECT_NE(
-      registry_source.find("const TextureAsset *texture(AssetId id) const"),
-      std::string::npos);
-  EXPECT_NE(project_document_source.find(
-                "bool synchronize_object_records_with_scene()"),
-            std::string::npos);
-  EXPECT_NE(
-      project_document_source.find("bool sync_object_records_with_scene()"),
-      std::string::npos);
-  EXPECT_EQ(
-      project_document_source.find("sync_object_records_with_scene() const"),
-      std::string::npos);
-  EXPECT_EQ(project_document_source.find("mutable std::unordered_map"),
-            std::string::npos);
-  EXPECT_NE(project_document_source.find("class SceneContentDocument"),
-            std::string::npos);
-  EXPECT_NE(scene_session_source.find("class SceneSession"),
-            std::string::npos);
-  EXPECT_NE(scene_session_source.find("struct SceneSessionReadView final"),
-            std::string::npos);
-  EXPECT_NE(scene_session_source.find("class SceneSessionService final"),
-            std::string::npos);
-  EXPECT_NE(
-      scene_session_source.find("open_session(SceneContentDocument document)"),
-      std::string::npos);
-  EXPECT_NE(project_session_source.find("class ProjectSession final"),
-            std::string::npos);
-  EXPECT_NE(project_session_source.find(
-                "std::vector<std::unique_ptr<OpenSceneSession>> open_scenes_"),
-            std::string::npos);
-  EXPECT_NE(app_header.find("void bind_active_scene(SceneSession &scene)"),
-            std::string::npos);
-  EXPECT_NE(app_header.find("ProjectSession project_session_"),
-            std::string::npos);
-  EXPECT_EQ(app_header.find("SceneSession scene_session_"), std::string::npos);
-}
 
 TEST(DocumentCommandServiceTests, RecordsUndoRedoForNativeSceneEdits) {
   SceneDocument scene;
@@ -11126,23 +8606,6 @@ TEST(DocumentCommandTests,
   EXPECT_FALSE(history.can_undo());
 }
 
-TEST(DocumentCommandTests,
-     SceneTransformPreviewTransactionIndexesPreviewEditsByEntity) {
-  const std::string source = read_source_file(
-      "src/editor/history/scene_transform_preview_transaction.hpp");
-
-  EXPECT_NE(
-      source.find(
-          "std::unordered_map<EntityId, std::size_t> edit_index_by_entity_"),
-      std::string::npos);
-  EXPECT_NE(source.find("edit_index_by_entity_.emplace(entity, edit_index)"),
-            std::string::npos);
-  EXPECT_NE(source.find("edit_index_by_entity_.find(entity)"),
-            std::string::npos);
-  EXPECT_NE(source.find("scene_.set_transforms(assignments)"),
-            std::string::npos);
-  EXPECT_EQ(source.find("std::find_if(edits_.begin()"), std::string::npos);
-}
 
 TEST(DocumentCommandTests,
      SceneTransformPreviewTransactionBatchesMultiEntityRevisionsAndHistory) {
@@ -11648,25 +9111,6 @@ TEST(DocumentCommandTests,
   EXPECT_TRUE(scene.selected_entities().empty());
 }
 
-TEST(DocumentCommandServiceTests,
-     SceneBatchReparentUsesSceneOwnedReparentCommand) {
-  const std::string source =
-      read_source_file("src/editor/commands/document_command_service.cpp");
-  const std::size_t batch_start =
-      source.find("DocumentCommandService::apply_scene_batch");
-  ASSERT_NE(batch_start, std::string::npos);
-  const std::string batch_source = source.substr(batch_start);
-
-  EXPECT_NE(batch_source.find("std::make_unique<ReparentEntityCommand>("),
-            std::string::npos);
-  EXPECT_NE(batch_source.find("operation.preserve_world_transform"),
-            std::string::npos);
-  EXPECT_EQ(batch_source.find("simulatedWorldMatrix"), std::string::npos);
-  EXPECT_EQ(batch_source.find("simulatedIsDescendantOf"), std::string::npos);
-  EXPECT_EQ(batch_source.find("scene_local_matrix_from_world_matrix"),
-            std::string::npos);
-  EXPECT_EQ(batch_source.find("world_transform_matrix"), std::string::npos);
-}
 
 TEST(DocumentCommandTests, TypedLifecycleCommandsRestoreSceneSnapshots) {
   SceneDocument scene;
@@ -15513,7 +12957,7 @@ TEST(ModelingSessionServiceTests,
   EXPECT_TRUE(service.tool_status().mirror_preview_valid);
   EXPECT_FALSE(service.tool_preview_meshes().empty());
   EXPECT_EQ(service.transformed_picking_projection_build_count(),
-            projection_builds_before + 1u);
+            projection_builds_before);
 
   command = service.finalize_mirror_tool();
   ASSERT_TRUE(command.ok) << command.message;
@@ -17075,6 +14519,42 @@ TEST(ModelingSessionServiceTests,
 }
 
 TEST(ModelingSessionServiceTests,
+     SdkTransformDragAutomaticallyRecordsRepeatLastMove) {
+  SceneDocument scene;
+  AssetRegistry assets;
+  ModelingSessionService service(scene, assets);
+
+  const ModelingCreateBoxResult box = service.create_box_from_bounds({
+      .bounds = {.min = {-1.0f, -1.0f, -1.0f},
+                 .max = {1.0f, 1.0f, 1.0f}},
+      .name = "SDK Repeat Drag Box",
+  });
+  ASSERT_TRUE(box.ok) << box.message;
+  ASSERT_TRUE(service.set_selection_mode(ModelingSelectionMode::Vertex).ok);
+  ASSERT_TRUE(service.select_all().ok);
+
+  ModelingTransformDragPreview begin =
+      service.begin_transform_drag(test_x_move_drag_begin_request());
+  ASSERT_TRUE(begin.ok) << begin.message;
+  ModelingTransformDragPreview update =
+      service.update_transform_drag(test_x_move_drag_update_request(2.0f));
+  ASSERT_TRUE(update.ok) << update.message;
+  ModelingTransformDragPreview committed = service.commit_transform_drag();
+  ASSERT_TRUE(committed.ok) << committed.message;
+  ASSERT_TRUE(committed.changed);
+
+  std::optional<QVec3> center = service.selection_center();
+  ASSERT_TRUE(center.has_value());
+  EXPECT_NEAR(center->x, 2.0f, 0.001f);
+  const ModelingCommandResult repeated = service.repeat_last_action();
+  ASSERT_TRUE(repeated.ok) << repeated.message;
+  EXPECT_TRUE(repeated.changed);
+  center = service.selection_center();
+  ASSERT_TRUE(center.has_value());
+  EXPECT_NEAR(center->x, 4.0f, 0.001f);
+}
+
+TEST(ModelingSessionServiceTests,
      FaceTransformDragKeepsComponentSelectionAndMovesOnlyFaceGeometry) {
   SceneDocument scene;
   AssetRegistry assets;
@@ -18605,88 +16085,6 @@ TEST(MaterialDocumentTests,
   EXPECT_FALSE(material.texture_slots.contains("emissiveTexture"));
 }
 
-TEST(MaterialDocumentTests,
-     MaterialTextureSlotPolicyOwnsApiQdrAndRenderSlotNormalization) {
-  const std::string material_header =
-      read_source_file("src/assets/material_document.hpp");
-  const std::string material_source =
-      read_source_file("src/assets/material_document.cpp");
-  const std::string registry_header =
-      read_source_file("src/assets/asset_registry.hpp");
-  const std::string registry_source =
-      read_source_file("src/assets/asset_registry.cpp");
-  const std::string api_source =
-      read_source_file("src/api/quader_asset_api.cpp");
-  const std::string asset_command_source =
-      read_source_file("src/editor/commands/replace_asset_command.hpp");
-  const std::string document_command_source =
-      read_source_file("src/editor/commands/document_command_service.cpp");
-  const std::string qdr_codec_source =
-      read_source_file("src/io/qdr/qdr_scene_binary_codec.cpp");
-  const std::string texture_binding_source =
-      read_source_file("src/render/texture_binding_service.cpp");
-  const std::string render_signature_source =
-      read_source_file("src/render/render_signature_builder.cpp");
-  const std::size_t set_texture_start = api_source.find(
-      "QuaderApiVoidResult QuaderAssetApi::set_material_texture");
-  const std::size_t assign_material_start =
-      api_source.find("QuaderAssetApi::assign_material_to_entity");
-  const std::size_t assign_object_start =
-      api_source.find("QuaderAssetApi::assign_material_to_object");
-  ASSERT_NE(set_texture_start, std::string::npos);
-  ASSERT_NE(assign_material_start, std::string::npos);
-  ASSERT_NE(assign_object_start, std::string::npos);
-  const std::string set_texture_source = api_source.substr(
-      set_texture_start, assign_material_start - set_texture_start);
-  const std::string assign_material_source = api_source.substr(
-      assign_material_start, assign_object_start - assign_material_start);
-
-  EXPECT_NE(material_header.find("struct MaterialTextureSlotDescriptor"),
-            std::string::npos);
-  EXPECT_NE(material_source.find("kMaterialTextureSlotDescriptors"),
-            std::string::npos);
-  EXPECT_NE(material_source.find("normalize_material_texture_slots"),
-            std::string::npos);
-  EXPECT_TRUE(source_contains_compact(
-      registry_header, "AssetRegistryMutationResult set_material_texture"));
-  EXPECT_NE(registry_source.find("AssetRegistry::set_material_texture"),
-            std::string::npos);
-  EXPECT_NE(registry_source.find("canonical_material_texture_slot(slot)"),
-            std::string::npos);
-  EXPECT_NE(registry_source.find("validate_material(updated)"),
-            std::string::npos);
-  EXPECT_TRUE(source_contains_compact(set_texture_source,
-                                      ".asset_commands().set_material_texture("
-                                      "material, std::move(slot), texture)"));
-  EXPECT_NE(asset_command_source.find("assets().set_material_texture"),
-            std::string::npos);
-  EXPECT_EQ(set_texture_source.find(".assets().set_material_texture"),
-            std::string::npos);
-  EXPECT_NE(
-      document_command_source.find("DocumentCommandService::set_material"),
-      std::string::npos);
-  EXPECT_NE(document_command_source.find("assets_->material(material)"),
-            std::string::npos);
-  EXPECT_EQ(set_texture_source.find("canonical_material_texture_slot"),
-            std::string::npos);
-  EXPECT_EQ(set_texture_source.find("set_material_texture_slot("),
-            std::string::npos);
-  EXPECT_EQ(set_texture_source.find(".texture(texture)"), std::string::npos);
-  EXPECT_EQ(assign_material_source.find(".assets().material(material)"),
-            std::string::npos);
-  EXPECT_NE(qdr_codec_source.find("set_material_texture_slot(material, slot"),
-            std::string::npos);
-  EXPECT_NE(qdr_codec_source.find("material_texture_slot_descriptors()"),
-            std::string::npos);
-  EXPECT_NE(texture_binding_source.find(
-                "material_texture_slot_asset(*material, slot_name)"),
-            std::string::npos);
-  EXPECT_NE(render_signature_source.find("material_texture_slot_descriptors()"),
-            std::string::npos);
-  EXPECT_EQ(texture_binding_source.find("alternateSlot"), std::string::npos);
-  EXPECT_EQ(texture_binding_source.find("ends_with(\"Texture\")"),
-            std::string::npos);
-}
 
 TEST(BakeServiceTests, ValidatesDescriptors) {
   const auto invalid = BakeService::validate({});

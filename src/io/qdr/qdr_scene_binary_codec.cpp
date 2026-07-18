@@ -10,10 +10,9 @@
 #include "assets/material_document.hpp"
 #include "diagnostics/profile.hpp"
 #include "editor/projection/mesh_projection_service.hpp"
-#include "sdk/core/modeling/src/polygon_document_native.hpp"
 
 #include <quader/modeling/io/qdr_document.hpp>
-#include <mesh/polygon/document_validation.hpp>
+#include <quader/modeling/neutral/polygon/document_validation.hpp>
 
 #include <flatbuffers/flatbuffers.h>
 #include <flatbuffers/verifier.h>
@@ -74,6 +73,108 @@ constexpr std::uint16_t kGeometryChunkSchemaVersion = 1u;
 
 [[nodiscard]] QVec3 from_fb(const fb::Vec3 &value, QVec3 = {}) {
   return {value.x(), value.y(), value.z()};
+}
+
+[[nodiscard]] quader::modeling::AuthoredSurfaceShading
+sdk_shading(quader_poly::SurfaceShading shading) {
+  switch (shading) {
+  case quader_poly::SurfaceShading::Flat:
+    return quader::modeling::AuthoredSurfaceShading::Flat;
+  case quader_poly::SurfaceShading::Smooth:
+    return quader::modeling::AuthoredSurfaceShading::Smooth;
+  case quader_poly::SurfaceShading::Authored:
+    return quader::modeling::AuthoredSurfaceShading::Authored;
+  }
+  return quader::modeling::AuthoredSurfaceShading::Flat;
+}
+
+[[nodiscard]] quader_poly::SurfaceShading
+native_shading(quader::modeling::AuthoredSurfaceShading shading) {
+  switch (shading) {
+  case quader::modeling::AuthoredSurfaceShading::Flat:
+    return quader_poly::SurfaceShading::Flat;
+  case quader::modeling::AuthoredSurfaceShading::Smooth:
+    return quader_poly::SurfaceShading::Smooth;
+  case quader::modeling::AuthoredSurfaceShading::Authored:
+    return quader_poly::SurfaceShading::Authored;
+  }
+  return quader_poly::SurfaceShading::Flat;
+}
+
+[[nodiscard]] quader::modeling::AuthoredTopology
+sdk_authored_topology(const quader_poly::Document &document) {
+  quader::modeling::AuthoredTopology topology;
+  topology.next_vertex_id = document.next_vertex_id;
+  topology.next_face_id = document.next_face_id;
+  topology.vertices.reserve(document.vertices.size());
+  for (const quader_poly::Vertex &vertex : document.vertices) {
+    topology.vertices.push_back({
+        .id = quader::modeling::make_id<quader::modeling::VertexTag>(vertex.id),
+        .position = {vertex.position.x, vertex.position.y, vertex.position.z},
+    });
+  }
+  topology.faces.reserve(document.faces.size());
+  for (const quader_poly::Face &face : document.faces) {
+    quader::modeling::AuthoredTopologyFace record;
+    record.id =
+        quader::modeling::make_id<quader::modeling::FaceTag>(face.id);
+    record.material_slot = face.material_slot;
+    record.shading = sdk_shading(face.normal_shading);
+    record.vertices.reserve(face.vertices.size());
+    for (quader_poly::ElementId id : face.vertices) {
+      record.vertices.push_back(
+          quader::modeling::make_id<quader::modeling::VertexTag>(id));
+    }
+    record.uvs.reserve(face.uvs.size());
+    for (QVec2 uv : face.uvs) {
+      record.uvs.push_back({uv.x, uv.y});
+    }
+    topology.faces.push_back(std::move(record));
+  }
+  topology.hard_normal_edges.reserve(document.hard_normal_edges.size());
+  for (quader_poly::Edge edge : document.hard_normal_edges) {
+    topology.hard_normal_edges.push_back(quader::modeling::make_edge_key(
+        quader::modeling::make_id<quader::modeling::VertexTag>(edge.a),
+        quader::modeling::make_id<quader::modeling::VertexTag>(edge.b)));
+  }
+  return topology;
+}
+
+[[nodiscard]] quader_poly::Document native_authored_topology(
+    const quader::modeling::AuthoredTopology &topology) {
+  quader_poly::Document document;
+  document.next_vertex_id = topology.next_vertex_id;
+  document.next_face_id = topology.next_face_id;
+  document.vertices.reserve(topology.vertices.size());
+  for (const quader::modeling::AuthoredTopologyVertex &vertex :
+       topology.vertices) {
+    document.vertices.push_back({
+        .id = vertex.id.index,
+        .position = {vertex.position.x, vertex.position.y, vertex.position.z},
+    });
+  }
+  document.faces.reserve(topology.faces.size());
+  for (const quader::modeling::AuthoredTopologyFace &face : topology.faces) {
+    quader_poly::Face record;
+    record.id = face.id.index;
+    record.material_slot = face.material_slot;
+    record.normal_shading = native_shading(face.shading);
+    record.vertices.reserve(face.vertices.size());
+    for (quader::modeling::VertexId id : face.vertices) {
+      record.vertices.push_back(id.index);
+    }
+    record.uvs.reserve(face.uvs.size());
+    for (quader::modeling::Vec2 uv : face.uvs) {
+      record.uvs.push_back({uv.x, uv.y});
+    }
+    document.faces.push_back(std::move(record));
+  }
+  document.hard_normal_edges.reserve(topology.hard_normal_edges.size());
+  for (quader::modeling::EdgeKey edge : topology.hard_normal_edges) {
+    document.hard_normal_edges.push_back(
+        quader_poly::make_edge(edge.a.index, edge.b.index));
+  }
+  return document;
 }
 
 [[nodiscard]] std::string string_from_fb(const flatbuffers::String *value,
@@ -412,9 +513,16 @@ scene_uuid_from_id(std::uint64_t scene_id) {
   return {begin, begin + builder.GetSize()};
 }
 
+[[nodiscard]] const fb::GeometryPayload *
+verify_geometry_payload(std::span<const std::byte> bytes);
+
 [[nodiscard]] std::vector<std::byte> encode_geometry(
     const QdrProjectMeshAssetWriteSnapshot &mesh) {
   QDR_PROFILE_FUNCTION();
+  if (mesh.encoded_geometry) {
+    (void)verify_geometry_payload(*mesh.encoded_geometry);
+    return *mesh.encoded_geometry;
+  }
   if (!mesh.geometry) {
     throw std::runtime_error("QDR mesh snapshot has no geometry payload.");
   }
@@ -441,9 +549,16 @@ scene_uuid_from_id(std::uint64_t scene_id) {
   if (mesh.has_authored_polygon_document &&
       mesh.authored_polygon_document) {
     kind = fb::GeometryKind::AuthoredPolygon;
+    quader::modeling::Result<quader::modeling::PolygonDocument> imported =
+        quader::modeling::PolygonDocument::from_authored_topology(
+            sdk_authored_topology(*mesh.authored_polygon_document));
+    if (!imported.ok()) {
+      throw std::runtime_error(
+          "SDK authored-topology import failed: " +
+          imported.error_message());
+    }
     quader::modeling::PolygonDocument sdk_document =
-        quader::modeling::PolygonDocumentNativeAccess::from_native(
-            *mesh.authored_polygon_document);
+        std::move(imported).value();
     quader::modeling::Result<std::vector<std::byte>> encoded =
         quader::modeling::serialize_qdr_authored_topology(sdk_document);
     if (!encoded.ok()) {
@@ -500,6 +615,7 @@ struct EncodedGeometrySet final {
 struct PinnedGeometryIdentity final {
   const MeshGeometryPayload *geometry = nullptr;
   const quader_poly::Document *authored = nullptr;
+  const std::vector<std::byte> *encoded = nullptr;
 
   [[nodiscard]] bool operator==(const PinnedGeometryIdentity &) const =
       default;
@@ -512,8 +628,14 @@ struct PinnedGeometryIdentityHash final {
     const std::size_t geometry =
         std::hash<const void *>{}(identity.geometry);
     const std::size_t authored = std::hash<const void *>{}(identity.authored);
-    return geometry ^ (authored + 0x9e3779b9U + (geometry << 6U) +
-                       (geometry >> 2U));
+    const std::size_t encoded =
+        std::hash<const void *>{}(identity.encoded);
+    const std::size_t geometry_authored =
+        geometry ^ (authored + 0x9e3779b9U + (geometry << 6U) +
+                    (geometry >> 2U));
+    return geometry_authored ^
+           (encoded + 0x9e3779b9U + (geometry_authored << 6U) +
+            (geometry_authored >> 2U));
   }
 };
 
@@ -536,8 +658,9 @@ struct PinnedGeometryIdentityHash final {
         .authored = mesh.has_authored_polygon_document
                         ? mesh.authored_polygon_document.get()
                         : nullptr,
+        .encoded = mesh.encoded_geometry.get(),
     };
-    if (identity.geometry != nullptr) {
+    if (identity.geometry != nullptr || identity.encoded != nullptr) {
       if (const auto found = pinned_chunks.find(identity);
           found != pinned_chunks.end()) {
         result.chunk_ids_by_mesh[mesh_index] = found->second;
@@ -575,7 +698,7 @@ struct PinnedGeometryIdentityHash final {
       candidates[hash].push_back(result.chunks.size() - 1u);
     }
     result.chunk_ids_by_mesh[mesh_index] = chunk_id;
-    if (identity.geometry != nullptr) {
+    if (identity.geometry != nullptr || identity.encoded != nullptr) {
       pinned_chunks.emplace(identity, chunk_id);
     }
     result.deduplication_ms +=
@@ -665,7 +788,8 @@ encode_scene_settings(flatbuffers::FlatBufferBuilder &builder,
         builder, mesh.id, builder.CreateString(mesh.name),
         mesh.has_stable_cpu_topology,
         mesh.has_authored_polygon_document &&
-            static_cast<bool>(mesh.authored_polygon_document),
+            (static_cast<bool>(mesh.authored_polygon_document) ||
+             static_cast<bool>(mesh.encoded_geometry)),
         geometry_chunk_ids.at(index)));
   }
 
@@ -731,7 +855,8 @@ encode_scene_settings(flatbuffers::FlatBufferBuilder &builder,
     if (entity.modeling_object.has_value()) {
       modeling_object = fb::CreateModelingObjectComponent(
           builder, entity.modeling_object->object_id,
-          entity.modeling_object->material_slot);
+          entity.modeling_object->material_slot,
+          entity.modeling_object->sdk_owned);
     }
     flatbuffers::Offset<fb::MeshComponent> mesh;
     if (entity.mesh.has_value()) {
@@ -1102,8 +1227,15 @@ decode_geometry(const fb::GeometryPayload &payload,
     }
     quader::modeling::PolygonDocument sdk_document =
         std::move(decoded).value();
-    quader_poly::Document document = std::move(
-        quader::modeling::PolygonDocumentNativeAccess::document(sdk_document));
+    quader::modeling::Result<quader::modeling::AuthoredTopology> exported =
+        sdk_document.authored_topology();
+    if (!exported.ok()) {
+      throw std::runtime_error(
+          "SDK authored-topology export failed: " +
+          exported.error_message());
+    }
+    quader_poly::Document document =
+        native_authored_topology(exported.value());
     stats.geometry_decode_ms += std::chrono::duration<double, std::milli>(
                                     std::chrono::steady_clock::now() -
                                     decode_started)
@@ -1177,10 +1309,23 @@ public:
     return *decoded_;
   }
 
+  [[nodiscard]] std::shared_ptr<const std::vector<std::byte>>
+  encoded_geometry() {
+    std::scoped_lock lock(mutex_);
+    if (!encoded_) {
+      const std::span<const std::byte> bytes = chunk_.bytes();
+      (void)verify_geometry_payload(bytes);
+      encoded_ = std::make_shared<const std::vector<std::byte>>(
+          bytes.begin(), bytes.end());
+    }
+    return encoded_;
+  }
+
 private:
   quader_io::QdrBinaryChunk chunk_;
   std::mutex mutex_;
   std::optional<MeshAsset> decoded_;
+  std::shared_ptr<const std::vector<std::byte>> encoded_;
   std::exception_ptr failure_;
 };
 
@@ -1396,7 +1541,8 @@ void decode_assets(
                 descriptor.id, descriptor.name,
                 descriptor.has_stable_cpu_topology,
                 descriptor.has_authored_polygon_document,
-                [loader]() { return loader->materialize(); }) ==
+                [loader]() { return loader->materialize(); },
+                [loader]() { return loader->encoded_geometry(); }) ==
             kInvalidAssetId) {
           throw std::runtime_error(
               "QDR scene could not install a deferred mesh asset.");
@@ -1582,7 +1728,8 @@ void decode_entities(SceneContentDocument &document,
       if (const fb::ModelingObjectComponent *value = stored->modeling_object()) {
         document.scene().set_modeling_object(
             entity, {.object_id = value->object_id(),
-                     .material_slot = value->material_slot()});
+                     .material_slot = value->material_slot(),
+                     .sdk_owned = value->sdk_owned()});
       }
       if (const fb::MeshComponent *value = stored->mesh()) {
         document.scene().set_mesh(

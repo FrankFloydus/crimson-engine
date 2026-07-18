@@ -14,8 +14,6 @@
 #include <cmath>
 #include <cstdint>
 
-#include <editor/interactions/transform_gizmo.hpp>
-
 namespace quader {
 namespace {
 
@@ -48,84 +46,82 @@ std::uint32_t multiply_color(std::uint32_t color, float rgb_scale,
                scaled_byte(channel(color, 24), alpha_scale));
 }
 
-std::uint32_t color_for_axis(quader_editor_core::TransformAxis axis) {
+std::uint32_t color_for_axis(RenderTransformAxis axis) {
   switch (axis) {
-  case quader_editor_core::TransformAxis::X:
+  case RenderTransformAxis::X:
     return kOverlayToolAxisXColor;
-  case quader_editor_core::TransformAxis::Y:
+  case RenderTransformAxis::Y:
     return kOverlayToolAxisYColor;
-  case quader_editor_core::TransformAxis::Z:
+  case RenderTransformAxis::Z:
     return kOverlayToolAxisZColor;
-  case quader_editor_core::TransformAxis::Xy:
-  case quader_editor_core::TransformAxis::Xz:
-  case quader_editor_core::TransformAxis::Yz:
-  case quader_editor_core::TransformAxis::All:
-  case quader_editor_core::TransformAxis::None:
+  case RenderTransformAxis::Xy:
+  case RenderTransformAxis::Xz:
+  case RenderTransformAxis::Yz:
+  case RenderTransformAxis::All:
+  case RenderTransformAxis::None:
     return kOverlayToolAxisMixedColor;
   }
   return kOverlayToolAxisMixedColor;
 }
 
-std::uint32_t color_for_plane(quader_editor_core::TransformAxis axis) {
+std::uint32_t color_for_plane(RenderTransformAxis axis) {
   switch (axis) {
-  case quader_editor_core::TransformAxis::Xy:
+  case RenderTransformAxis::Xy:
     return kOverlayToolPlaneXYColor;
-  case quader_editor_core::TransformAxis::Xz:
+  case RenderTransformAxis::Xz:
     return kOverlayToolPlaneXZColor;
-  case quader_editor_core::TransformAxis::Yz:
+  case RenderTransformAxis::Yz:
     return kOverlayToolPlaneYZColor;
   default:
     return rgba8(255, 255, 255, 255);
   }
 }
 
-std::uint32_t highlight_color_for_axis(quader_editor_core::TransformAxis axis) {
+std::uint32_t highlight_color_for_axis(RenderTransformAxis axis) {
   switch (axis) {
-  case quader_editor_core::TransformAxis::X:
-  case quader_editor_core::TransformAxis::Yz:
+  case RenderTransformAxis::X:
+  case RenderTransformAxis::Yz:
     return kOverlayToolAxisXHighlightColor;
-  case quader_editor_core::TransformAxis::Y:
-  case quader_editor_core::TransformAxis::Xz:
+  case RenderTransformAxis::Y:
+  case RenderTransformAxis::Xz:
     return kOverlayToolAxisYHighlightColor;
-  case quader_editor_core::TransformAxis::Z:
-  case quader_editor_core::TransformAxis::Xy:
+  case RenderTransformAxis::Z:
+  case RenderTransformAxis::Xy:
     return kOverlayToolAxisZHighlightColor;
-  case quader_editor_core::TransformAxis::All:
-  case quader_editor_core::TransformAxis::None:
+  case RenderTransformAxis::All:
+  case RenderTransformAxis::None:
     return kOverlayToolAxisHighlightColor;
   }
   return kOverlayToolAxisHighlightColor;
 }
 
-bool axis_matches(quader_editor_core::TransformAxis expected,
-                  quader_editor_core::TransformAxis actual) {
-  return expected != quader_editor_core::TransformAxis::None &&
+bool axis_matches(RenderTransformAxis expected, RenderTransformAxis actual) {
+  return expected != RenderTransformAxis::None &&
          expected == actual;
 }
 
 bool highlighted(
-        const quader_editor_core::TransformGizmoFrame& frame,
-        quader_editor_core::TransformAxis axis) {
+        const RenderTransformGizmoRecord& frame, RenderTransformAxis axis) {
   return axis_matches(frame.info.active_axis, axis) ||
          axis_matches(frame.info.hover_axis, axis);
 }
 
 std::uint32_t
-authored_axis_color(const quader_editor_core::TransformGizmoFrame &frame,
-                    quader_editor_core::TransformAxis axis,
+authored_axis_color(const RenderTransformGizmoRecord &frame,
+                    RenderTransformAxis axis,
                     float alpha = 1.0f) {
   return highlighted(frame, axis)
              ? highlight_color_for_axis(axis)
              : multiply_color(color_for_axis(axis), 1.0f, alpha);
 }
 
-float visual_width_scale(const quader_editor_core::TransformGizmoFrame &frame) {
+float visual_width_scale(const RenderTransformGizmoRecord &frame) {
   return std::clamp(static_cast<float>(frame.info.gizmo_scale), 0.75f, 1.5f);
 }
 
-bool drag_axis_includes(quader_editor_core::TransformAxis active_axis,
-                        quader_editor_core::TransformAxis axis) {
-  using quader_editor_core::TransformAxis;
+bool drag_axis_includes(RenderTransformAxis active_axis,
+                        RenderTransformAxis axis) {
+  using TransformAxis = RenderTransformAxis;
   if (active_axis == TransformAxis::None || active_axis == axis) {
     return true;
   }
@@ -141,9 +137,9 @@ bool drag_axis_includes(quader_editor_core::TransformAxis active_axis,
   return false;
 }
 
-bool drag_plane_includes(quader_editor_core::TransformAxis active_axis,
-                         quader_editor_core::TransformAxis plane_axis) {
-  return active_axis == quader_editor_core::TransformAxis::None ||
+bool drag_plane_includes(RenderTransformAxis active_axis,
+                         RenderTransformAxis plane_axis) {
+  return active_axis == RenderTransformAxis::None ||
          active_axis == plane_axis;
 }
 
@@ -206,12 +202,12 @@ void append_quad(
 }
 
 float axis_world_length(
-    const quader_editor_core::TransformGizmoAxisPrimitive &axis) {
+    const RenderTransformGizmoAxis &axis) {
   return length(axis.world_tip - axis.world_start);
 }
 
 float first_axis_world_length(
-    const quader_editor_core::TransformGizmoFrame &frame) {
+    const RenderTransformGizmoRecord &frame) {
   if (frame.axes.empty()) {
     return 0.001f;
   }
@@ -219,10 +215,9 @@ float first_axis_world_length(
 }
 
 float rotation_ring_radius_world(
-    const quader_editor_core::TransformGizmoFrame &frame,
-    quader_editor_core::TransformAxis axis) {
+    const RenderTransformGizmoRecord &frame, RenderTransformAxis axis) {
   float radius = 0.0f;
-  for (const quader_editor_core::TransformGizmoRingSegmentPrimitive &segment :
+  for (const RenderTransformGizmoRingSegment &segment :
        frame.ring_segments) {
     if (segment.axis != axis) {
       continue;
@@ -245,7 +240,7 @@ QVec3 rotate_around_axis(QVec3 value, QVec3 axis, float angle_radians) {
 }
 
 QVec3 normalized_rotate_indicator_start_direction(
-    const quader_editor_core::TransformGizmoRotateIndicator &indicator) {
+    const RenderTransformGizmoRotateIndicator &indicator) {
   const QVec3 start =
       projected_onto_plane(indicator.start_direction, indicator.world_axis);
   const float start_length = length(start);
@@ -256,7 +251,7 @@ QVec3 normalized_rotate_indicator_start_direction(
 }
 
 void append_plane(ViewportOverlayFrame &overlay_frame,
-                  const quader_editor_core::TransformGizmoPlanePrimitive &plane,
+                  const RenderTransformGizmoPlane &plane,
                   std::uint32_t color) {
   const std::array<QVec2, 4> screen_points{{
       plane.screen0,
@@ -477,11 +472,11 @@ void append_cube_handle(ViewportOverlayFrame &overlay_frame,
 
 void append_rotate_indicator(
     ViewportOverlayFrame &overlay_frame,
-    const quader_editor_core::TransformGizmoFrame &gizmo_frame) {
-  const quader_editor_core::TransformGizmoRotateIndicator &indicator =
+    const RenderTransformGizmoRecord &gizmo_frame) {
+  const RenderTransformGizmoRotateIndicator &indicator =
       gizmo_frame.info.rotate_indicator;
   if (!indicator.active ||
-      indicator.axis == quader_editor_core::TransformAxis::None ||
+      indicator.axis == RenderTransformAxis::None ||
       !std::isfinite(indicator.angle_degrees)) {
     return;
   }
@@ -534,17 +529,17 @@ void append_rotate_indicator(
 
 void append_rotate_gizmo(
     ViewportOverlayFrame &overlay_frame,
-    const quader_editor_core::TransformGizmoFrame &gizmo_frame,
+    const RenderTransformGizmoRecord &gizmo_frame,
     float width_scale) {
   const float trackball_width = 2.25f * width_scale;
-  for (const quader_editor_core::TransformGizmoTrackballSegmentPrimitive
+  for (const RenderTransformGizmoTrackballSegment
            &segment : gizmo_frame.trackball_segments) {
     append_line(overlay_frame, segment.world_start, segment.world_end,
                 kOverlayToolTrackballColor, ViewportOverlayLayer::ToolHandle,
                 trackball_width);
   }
 
-  for (const quader_editor_core::TransformGizmoRingSegmentPrimitive &segment :
+  for (const RenderTransformGizmoRingSegment &segment :
        gizmo_frame.ring_segments) {
     if (!segment.front_facing) {
       continue;
@@ -559,9 +554,9 @@ void append_rotate_gizmo(
 
 void append_move_or_scale_gizmo(
     ViewportOverlayFrame &overlay_frame,
-    const quader_editor_core::TransformGizmoFrame &gizmo_frame,
+    const RenderTransformGizmoRecord &gizmo_frame,
     const ViewportOverlayCamera &camera, float width_scale) {
-  for (const quader_editor_core::TransformGizmoPlanePrimitive &plane :
+  for (const RenderTransformGizmoPlane &plane :
        gizmo_frame.planes) {
     if (!drag_plane_includes(gizmo_frame.info.active_axis, plane.axis)) {
       continue;
@@ -572,7 +567,7 @@ void append_move_or_scale_gizmo(
     append_plane(overlay_frame, plane, color);
   }
 
-  for (const quader_editor_core::TransformGizmoAxisPrimitive &axis :
+  for (const RenderTransformGizmoAxis &axis :
        gizmo_frame.axes) {
     if (!drag_axis_includes(gizmo_frame.info.active_axis, axis.axis)) {
       continue;
@@ -586,7 +581,7 @@ void append_move_or_scale_gizmo(
         kOverlayTransformGizmoAxisLineWidthPixels * width_scale;
 
     if (gizmo_frame.info.tool ==
-        quader_editor_core::ViewportInteractionTool::Scale) {
+        RenderTransformTool::Scale) {
       append_scale_handle(overlay_frame, axis.world_start, axis.world_tip,
                           color, axis_line_width);
     } else {
@@ -596,10 +591,10 @@ void append_move_or_scale_gizmo(
   }
 
   const bool center_hovered =
-      gizmo_frame.info.hover_axis == quader_editor_core::TransformAxis::All ||
-      gizmo_frame.info.active_axis == quader_editor_core::TransformAxis::All;
+      gizmo_frame.info.hover_axis == RenderTransformAxis::All ||
+      gizmo_frame.info.active_axis == RenderTransformAxis::All;
   if (gizmo_frame.info.tool ==
-      quader_editor_core::ViewportInteractionTool::Scale) {
+      RenderTransformTool::Scale) {
     if (center_hovered) {
       const float world_size =
           std::max(0.0001f, first_axis_world_length(gizmo_frame) *
@@ -615,7 +610,7 @@ void append_move_or_scale_gizmo(
 
 void ViewportTransformGizmoOverlayBuilder::append(
     ViewportOverlayFrame &overlay_frame,
-    const quader_editor_core::TransformGizmoFrame &gizmo_frame,
+    const RenderTransformGizmoRecord &gizmo_frame,
     const ViewportOverlayCamera &camera) {
   if (!gizmo_frame.info.ok) {
     return;
@@ -623,7 +618,7 @@ void ViewportTransformGizmoOverlayBuilder::append(
 
   const float width_scale = visual_width_scale(gizmo_frame);
   if (gizmo_frame.info.tool ==
-      quader_editor_core::ViewportInteractionTool::Rotate) {
+      RenderTransformTool::Rotate) {
     append_rotate_gizmo(overlay_frame, gizmo_frame, width_scale);
     return;
   }

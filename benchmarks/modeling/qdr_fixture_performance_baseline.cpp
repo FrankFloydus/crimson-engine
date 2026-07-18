@@ -9,7 +9,7 @@
 #include "editor/modeling/services/modeling_session_service.hpp"
 #include "editor/session/scene_session.hpp"
 #include "io/qdr/qdr_document_reader.hpp"
-#include "mesh/polygon/document_model.hpp"
+#include "quader/modeling/neutral/polygon/document_model.hpp"
 #include "render/overlay/overlay_renderable_builder.hpp"
 #include "render/overlay/render_overlay_snapshot.hpp"
 #include "render/overlay/viewport_overlay_style_resolver.hpp"
@@ -898,7 +898,7 @@ OverlayRun run_overlay_workload(quader::QuaderEditorApi &editor,
   const quader::ViewportOverlayFrame frame =
       quader::ViewportSceneOverlayBuilder::build_selection_frame(
           std::move(base_frame), scene_snapshot, true,
-          quader::ModelingSelectionMode::Object);
+          quader::RenderOverlaySelectionMode::Object);
   const quader::OverlayFrameSignatures signatures =
       quader::OverlayRenderableBuilder::frame_signatures(frame);
 
@@ -1101,7 +1101,7 @@ TransformRun run_transform_preview(quader::QuaderEditorApi &editor,
     quader::ViewportOverlayFrame overlay_frame =
         quader::ViewportSceneOverlayBuilder::build_selection_frame(
             std::move(modeling_overlay), selection_snapshot, true,
-            quader::ModelingSelectionMode::Object);
+            quader::RenderOverlaySelectionMode::Object);
     quader::ViewportOverlayStyleResolver::apply(
         overlay_frame, overlay_settings,
         {.selection_mode = quader::ViewportOverlaySelectionContext::Object});

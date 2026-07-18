@@ -5,7 +5,6 @@
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
 #include <editor/interactions/box_tool.hpp>
-#include <editor/interactions/selection_edit.hpp>
 #include <editor/interactions/viewport_projection.hpp>
 #include <editor/modeling/runtime/runtime_command.hpp>
 #include <editor/modeling/runtime/tool_runtime_policy.hpp>
@@ -57,59 +56,6 @@ bool has_object_selection_for_drawn_plane_tool(const EditorSession& session)
          !session.selected_object_ids().empty();
 }
 
-CommandResult copy_selected_meshes(EditorSession& session, EditorRuntime& runtime)
-{
-	const std::size_t copied_count = runtime.copy_selected_objects_to_clipboard(session);
-	if (copied_count == 0) {
-		return { false, false, "Select one or more meshes in object mode before copying." };
-	}
-	return { true, false, "" };
-}
-
-CommandResult clear_selection(EditorSession& session)
-{
-	const std::uint64_t selection_revision_before = session.state().selection_revision;
-	session.clear_selection();
-	return { true, session.state().selection_revision != selection_revision_before, "" };
-}
-
-CommandResult delete_selection(EditorSession& session)
-{
-	if (!session.has_selection()) {
-		return { true, false, "" };
-	}
-	return session.apply_history_command([](EditorSession& editor_session) {
-		return editor_session.delete_selected();
-	});
-}
-
-CommandResult mark_clean(EditorSession& session)
-{
-	const bool was_dirty = session.dirty();
-	session.mark_clean();
-	return { true, was_dirty, "" };
-}
-
-CommandResult restore_undo(EditorSession& session, EditorRuntime& runtime)
-{
-	const bool transient_restored = runtime.discard_transient_state(session, true);
-	const HistoryRestoreResult restored = session.undo();
-	if (restored.applied) {
-		(void)runtime.discard_transient_state(session, false);
-	}
-	return { true, transient_restored || restored.applied, "" };
-}
-
-CommandResult restore_redo(EditorSession& session, EditorRuntime& runtime)
-{
-	const bool transient_restored = runtime.discard_transient_state(session, true);
-	const HistoryRestoreResult restored = session.redo();
-	if (restored.applied) {
-		(void)runtime.discard_transient_state(session, false);
-	}
-	return { true, transient_restored || restored.applied, "" };
-}
-
 CommandResult clear_hover(EditorRuntime& runtime)
 {
 	const bool was_hovering = runtime.status().hover_active;
@@ -117,73 +63,18 @@ CommandResult clear_hover(EditorRuntime& runtime)
 	return { true, was_hovering, "" };
 }
 
-CommandResult set_selection_mode(EditorSession& session, SetSelectionModeRuntimeCommandSettings settings)
-{
-	const std::uint64_t selection_revision_before = session.state().selection_revision;
-	session.set_selection_mode(sanitize_selection_mode(settings.selection_mode));
-	return { true, session.state().selection_revision != selection_revision_before, "" };
-}
-
 CommandResult set_active_tool(
-		EditorSession& session,
+		const EditorSession& session,
 		EditorRuntime& runtime,
 		SetActiveToolRuntimeCommandSettings settings)
 {
 	const ViewportInteractionTool active_tool_before = runtime.active_tool();
-	const std::uint64_t selection_revision_before = session.state().selection_revision;
-	const bool preview_active_before = session.preview_transaction_status().active;
 	const EditorRuntimeToolActivationResult activation = runtime.set_active_tool(session, settings.tool);
 	if (activation.plan.activation_blocked) {
 		return blocked_tool_activation_result(activation, settings.tool);
 	}
 	const bool active_tool_changed = runtime.active_tool() != active_tool_before;
-	const bool selection_changed = session.state().selection_revision != selection_revision_before;
-	const bool preview_active_changed = session.preview_transaction_status().active != preview_active_before;
-	return { true, active_tool_changed || selection_changed || preview_active_changed || activation.transform_preview_cancelled, "" };
-}
-
-CommandResult pick_select(EditorSession& session, PickSelectRuntimeCommandSettings settings)
-{
-	(void)settings.command_pressed;
-	const SelectionMode mode = session.selection_mode();
-	SelectionEditOperation operation =
-			selection_edit_operation_from_modifiers(settings.control_pressed, settings.shift_pressed);
-	quader_poly::PickOptions pick_options =
-		selection_pick_options_from_radii(settings.vertex_radius, settings.edge_radius);
-	pick_options.has_hidden_material_slot = settings.has_hidden_material_slot;
-	pick_options.hidden_material_slot = settings.hidden_material_slot;
-	const bool paint_stroke = settings.click_count == 0;
-	if (paint_stroke) {
-          if (mode == SelectionMode::Object) {
-            return {true, false, ""};
-          }
-          if (operation == SelectionEditOperation::Replace) {
-            operation = SelectionEditOperation::Add;
-          }
-                return { true, session.pick_select(operation, settings.ray, pick_options, false), "" };
-	}
-	const bool edge_loop_select =
-		settings.alt_pressed && mode == SelectionMode::Edge;
-	const bool multi_click = settings.click_count > 1;
-        if (multi_click && mode == SelectionMode::Face) {
-          return {true,
-                  session.pick_select_all_faces(operation, settings.ray,
-                                                pick_options),
-                  ""};
-        }
-        if ((multi_click || edge_loop_select) && mode == SelectionMode::Edge) {
-          return {true,
-                  session.pick_select_edge_loop(operation, settings.ray,
-                                                pick_options),
-                  ""};
-        }
-        if (multi_click && mode == SelectionMode::Vertex) {
-          return {true,
-                  session.pick_select_all_vertices(operation, settings.ray,
-                                                   pick_options),
-                  ""};
-        }
-        return { true, session.pick_select(operation, settings.ray, pick_options), "" };
+	return { true, active_tool_changed || activation.transform_preview_cancelled, "" };
 }
 
 bool box_runtime_status_changed(const EditorRuntimeStatus& before, const EditorRuntimeStatus& after)
@@ -341,37 +232,6 @@ CommandResult update_box_height(
 	return box_state_result_to_command(before, runtime, result, "Box height update failed.");
 }
 
-CommandResult commit_box(EditorSession& session, EditorRuntime& runtime)
-{
-	const EditorRuntimeStatus before = runtime.status();
-	const BoxPreviewDescriptor preview = runtime.box_preview_descriptor(false);
-	if (!preview.ok) {
-		return { false, false, preview.message.empty() ? "Box preview failed." : preview.message };
-	}
-        if (preview.drag_state != BoxDragState::Height) {
-          return {false, false, "Box height must be set before commit."};
-        }
-        const std::vector<quader::QVec3> corners = box_preview_corners(preview);
-	if (corners.size() != 8U) {
-		return { false, false, "Box preview has no volume corners." };
-	}
-	if (preview.bounds.empty) {
-		return { false, false, "Box preview has no bounds." };
-	}
-
-	CommandResult result =
-		session.apply_history_command([corners](EditorSession& editor_session) {
-			return editor_session.create_box_from_corners(corners);
-		});
-	runtime.reset_box_state();
-	runtime.clear_hover();
-	if (!result.ok && result.message.empty()) {
-		result.message = "Box creation failed.";
-	}
-	result.changed = result.changed || box_runtime_status_changed(before, runtime.status());
-	return result;
-}
-
 CommandResult cancel_box(EditorRuntime& runtime)
 {
 	const EditorRuntimeStatus before = runtime.status();
@@ -461,36 +321,6 @@ CommandResult update_insert_edge_loop_drag(
 			session, settings.ray, settings.grid_size,
 			settings.snap_enabled);
 	return { true, changed, "" };
-}
-
-CommandResult commit_insert_edge_loop_drag(EditorSession& session, EditorRuntime& runtime)
-{
-	const InsertEdgeLoopToolState& edge_loop = runtime.insert_edge_loop_state();
-	if (!edge_loop.dragging || edge_loop.preview_lines.empty()) {
-		return { false, false, "Select an edge to insert an edge loop." };
-	}
-
-	const int object_id = edge_loop.object_id;
-	const quader_poly::Edge edge = edge_loop.edge;
-	const float factor = edge_loop.factor;
-	CommandResult result =
-		session.apply_history_command([object_id, edge, factor](EditorSession& editor_session) {
-			return editor_session.insert_edge_loop(object_id, edge, factor);
-		});
-	if (!result.ok && result.message.empty()) {
-		result.message = "Could not insert edge loop.";
-	}
-	if (!result.ok) {
-		runtime.set_insert_edge_loop_dragging(false);
-		return result;
-	}
-
-	runtime.reset_insert_edge_loop_state();
-        (void)runtime.set_active_tool(session, ViewportInteractionTool::Select);
-        runtime.clear_hover();
-	runtime.clear_gizmo_hover();
-	runtime.clear_transform_drag_state();
-	return result;
 }
 
 CommandResult cancel_insert_edge_loop(EditorRuntime& runtime)
@@ -792,38 +622,6 @@ CommandResult end_cut_drag(EditorSession& session, EditorRuntime& runtime)
 		result.message };
 }
 
-CommandResult finalize_cut(EditorSession& session, EditorRuntime& runtime)
-{
-	if (!has_object_selection_for_drawn_plane_tool(session)) {
-		return missing_cut_selection_result();
-	}
-
-	const EditorRuntimeStatus before = runtime.status();
-	const EditorRuntimeToolActivationResult activation = activate_cut_interaction(session, runtime);
-	if (activation.plan.activation_blocked) {
-          return blocked_tool_activation_result(activation,
-                                                ViewportInteractionTool::Cut);
-        }
-	(void)runtime.refresh_cut_preview_from_selection(rectangle_selection_for_cut(session), session.objects());
-	CommandResult result = runtime.commit_cut_tool(session);
-	if (!result.ok) {
-		return {
-			false,
-			false,
-			result.message.empty() ? "Could not apply the cut." : result.message };
-	}
-        const EditorRuntimeToolActivationResult select_activation =
-            runtime.set_active_tool(session, ViewportInteractionTool::Select);
-        runtime.clear_hover();
-	runtime.clear_cut_hover();
-	const EditorRuntimeStatus after = runtime.status();
-	result.changed = result.changed ||
-		select_activation.applied ||
-		select_activation.transform_preview_cancelled ||
-		cut_runtime_status_changed(before, after);
-	return result;
-}
-
 RectangleSelectionState rectangle_selection_for_mirror(const EditorSession& session)
 {
 	RectangleSelectionState selection;
@@ -1102,38 +900,6 @@ CommandResult end_mirror_drag(EditorSession& session, EditorRuntime& runtime)
 		result.message };
 }
 
-CommandResult finalize_mirror(EditorSession& session, EditorRuntime& runtime)
-{
-	if (!has_object_selection_for_drawn_plane_tool(session)) {
-		return missing_mirror_selection_result();
-	}
-
-	const EditorRuntimeStatus before = runtime.status();
-	const EditorRuntimeToolActivationResult activation = activate_mirror_interaction(session, runtime);
-	if (activation.plan.activation_blocked) {
-          return blocked_tool_activation_result(
-              activation, ViewportInteractionTool::Mirror);
-        }
-	(void)runtime.refresh_mirror_preview_from_selection(rectangle_selection_for_mirror(session), session.objects());
-	CommandResult result = runtime.commit_mirror_tool(session);
-	if (!result.ok) {
-		return {
-			false,
-			false,
-			result.message.empty() ? "Could not apply the mirror." : result.message };
-	}
-        const EditorRuntimeToolActivationResult select_activation =
-            runtime.set_active_tool(session, ViewportInteractionTool::Select);
-        runtime.clear_hover();
-	runtime.clear_mirror_hover();
-	const EditorRuntimeStatus after = runtime.status();
-	result.changed = result.changed ||
-		select_activation.applied ||
-		select_activation.transform_preview_cancelled ||
-		mirror_runtime_status_changed(before, after);
-	return result;
-}
-
 CommandResult update_poly_hover(
     EditorSession &session, EditorRuntime &runtime,
     PolyHoverRuntimeCommandSettings settings) {
@@ -1183,10 +949,6 @@ CommandResult accept_poly_point(EditorRuntime &runtime) {
   return {result.ok, result.changed, result.message};
 }
 
-CommandResult commit_poly(EditorSession &session, EditorRuntime &runtime) {
-  return runtime.commit_poly_tool(session);
-}
-
 CommandResult cancel_poly(EditorRuntime &runtime) {
   const EditorRuntimeStatus before = runtime.status();
   runtime.reset_poly_state();
@@ -1199,110 +961,6 @@ CommandResult cancel_poly(EditorRuntime &runtime) {
                        before.poly_point_count != after.poly_point_count ||
                        before.hover_active != after.hover_active;
   return {true, changed, ""};
-}
-
-bool is_world_mirror_axis(TransformAxis axis)
-{
-  return axis == TransformAxis::X || axis == TransformAxis::Y ||
-         axis == TransformAxis::Z;
-}
-
-bool is_view_flip_orientation(ViewportFlipOrientation orientation)
-{
-  return orientation == ViewportFlipOrientation::Horizontal ||
-         orientation == ViewportFlipOrientation::Vertical;
-}
-
-CommandResult mirror_axis(
-		EditorSession& session,
-		EditorRuntime& runtime,
-		MirrorAxisRuntimeCommandSettings settings)
-{
-	if (!is_world_mirror_axis(settings.axis)) {
-		return { false, false, "Mirror axis must be X, Y, or Z." };
-	}
-        if (session.selection_mode() != SelectionMode::Object ||
-            session.selected_object_ids().empty()) {
-          return {false, false, "Select one or more mesh objects to mirror."};
-        }
-
-        const bool transient_changed = runtime.discard_transient_state(session, true);
-	CommandResult result = session.apply_history_command([settings](EditorSession& editor_session) {
-		return editor_session.mirror_selected_objects_across_axis(settings.axis);
-	});
-	if (!result.ok) {
-		return result;
-	}
-	result.changed = result.changed || transient_changed;
-	return result;
-}
-
-CommandResult flip_view(
-		EditorSession& session,
-		EditorRuntime& runtime,
-		ViewFlipRuntimeCommandSettings settings)
-{
-	if (!is_view_flip_orientation(settings.orientation)) {
-		return { false, false, "Flip orientation must be horizontal or vertical." };
-	}
-        if (session.selection_mode() != SelectionMode::Object ||
-            session.selected_object_ids().empty()) {
-          return {false, false, "Select one or more mesh objects to flip."};
-        }
-
-        const bool transient_changed = runtime.discard_transient_state(session, true);
-	CommandResult result = session.apply_history_command([settings](EditorSession& editor_session) {
-		return editor_session.flip_selected_objects_by_orientation(settings.orientation);
-	});
-	if (!result.ok) {
-		return result;
-	}
-	result.changed = result.changed || transient_changed;
-	return result;
-}
-
-std::optional<quader::QVec3> paste_target_from_settings(PasteCopiedMeshesRuntimeCommandSettings settings)
-{
-	if (settings.target_center.valid) {
-		return settings.target_center.value;
-	}
-	return std::nullopt;
-}
-
-CommandResult paste_copied_meshes(
-		EditorSession& session,
-		EditorRuntime& runtime,
-		PasteCopiedMeshesRuntimeCommandSettings settings)
-{
-	return session.apply_history_command([&runtime, settings](EditorSession& editor_session) {
-		return runtime.paste_clipboard(editor_session, paste_target_from_settings(settings));
-	});
-}
-
-CommandResult create_box_from_bounds(
-		EditorSession& session,
-		EditorRuntime& runtime,
-		CreateBoxFromBoundsRuntimeCommandSettings settings)
-{
-	const EditorRuntimeStatus before = runtime.status();
-	CommandResult result =
-		session.apply_history_command([settings](EditorSession& editor_session) {
-			return editor_session.create_box_from_bounds(settings.min_bounds, settings.max_bounds);
-		});
-	if (!result.ok) {
-		if (result.message.empty()) {
-			result.message = "Box creation failed.";
-		}
-		return result;
-	}
-
-	runtime.clear_hover();
-	runtime.clear_gizmo_hover();
-	runtime.clear_transform_drag_state();
-        result.changed = result.changed || before.hover_active ||
-                         before.gizmo_hover_axis != TransformAxis::None ||
-                         before.transform_drag_active;
-        return result;
 }
 
 EditorRuntimeCommandResult runtime_command_result(EditorRuntime& runtime, CommandResult command)
@@ -1318,74 +976,11 @@ EditorRuntimeCommandResult execute_runtime_command(
 		const EditorRuntimeCommand& command)
 {
 	switch (command.command_id) {
-        case EditorRuntimeCommandId::CopySelectedMeshes:
-          if (!std::holds_alternative<std::monostate>(command.settings)) {
-            return runtime_command_result(runtime, settings_mismatch_result());
-          }
-          return runtime_command_result(runtime,
-                                        copy_selected_meshes(session, runtime));
-        case EditorRuntimeCommandId::PasteCopiedMeshes: {
-          const auto *settings =
-              std::get_if<PasteCopiedMeshesRuntimeCommandSettings>(
-                  &command.settings);
-          if (settings == nullptr) {
-            return runtime_command_result(runtime, settings_mismatch_result());
-          }
-          return runtime_command_result(
-              runtime, paste_copied_meshes(session, runtime, *settings));
-        }
-        case EditorRuntimeCommandId::ClearSelection:
-          if (!std::holds_alternative<std::monostate>(command.settings)) {
-            return runtime_command_result(runtime, settings_mismatch_result());
-          }
-          return runtime_command_result(runtime, clear_selection(session));
-        case EditorRuntimeCommandId::SelectAll:
-          if (!std::holds_alternative<std::monostate>(command.settings)) {
-            return runtime_command_result(runtime, settings_mismatch_result());
-          }
-          return runtime_command_result(runtime, session.select_all());
-        case EditorRuntimeCommandId::InvertSelection:
-          if (!std::holds_alternative<std::monostate>(command.settings)) {
-            return runtime_command_result(runtime, settings_mismatch_result());
-          }
-          return runtime_command_result(runtime, session.invert_selection());
-        case EditorRuntimeCommandId::DeleteSelection:
-          if (!std::holds_alternative<std::monostate>(command.settings)) {
-            return runtime_command_result(runtime, settings_mismatch_result());
-          }
-          return runtime_command_result(runtime, delete_selection(session));
-        case EditorRuntimeCommandId::MarkClean:
-          if (!std::holds_alternative<std::monostate>(command.settings)) {
-            return runtime_command_result(runtime, settings_mismatch_result());
-          }
-          return runtime_command_result(runtime, mark_clean(session));
-        case EditorRuntimeCommandId::Undo:
-          if (!std::holds_alternative<std::monostate>(command.settings)) {
-            return runtime_command_result(runtime, settings_mismatch_result());
-          }
-          return runtime_command_result(runtime,
-                                        restore_undo(session, runtime));
-        case EditorRuntimeCommandId::Redo:
-          if (!std::holds_alternative<std::monostate>(command.settings)) {
-            return runtime_command_result(runtime, settings_mismatch_result());
-          }
-          return runtime_command_result(runtime,
-                                        restore_redo(session, runtime));
-        case EditorRuntimeCommandId::ClearHover:
+	case EditorRuntimeCommandId::ClearHover:
           if (!std::holds_alternative<std::monostate>(command.settings)) {
             return runtime_command_result(runtime, settings_mismatch_result());
           }
           return runtime_command_result(runtime, clear_hover(runtime));
-        case EditorRuntimeCommandId::SetSelectionMode: {
-          const auto *settings =
-              std::get_if<SetSelectionModeRuntimeCommandSettings>(
-                  &command.settings);
-          if (settings == nullptr) {
-            return runtime_command_result(runtime, settings_mismatch_result());
-          }
-          return runtime_command_result(runtime,
-                                        set_selection_mode(session, *settings));
-        }
         case EditorRuntimeCommandId::SetActiveTool: {
           const auto *settings =
               std::get_if<SetActiveToolRuntimeCommandSettings>(
@@ -1395,15 +990,6 @@ EditorRuntimeCommandResult execute_runtime_command(
           }
           return runtime_command_result(
               runtime, set_active_tool(session, runtime, *settings));
-        }
-        case EditorRuntimeCommandId::PickSelect: {
-          const auto *settings =
-              std::get_if<PickSelectRuntimeCommandSettings>(&command.settings);
-          if (settings == nullptr) {
-            return runtime_command_result(runtime, settings_mismatch_result());
-          }
-          return runtime_command_result(runtime,
-                                        pick_select(session, *settings));
         }
         case EditorRuntimeCommandId::UpdateInsertEdgeLoopHover: {
           const auto *settings =
@@ -1438,12 +1024,6 @@ EditorRuntimeCommandResult execute_runtime_command(
               runtime,
               update_insert_edge_loop_drag(session, runtime, *settings));
         }
-        case EditorRuntimeCommandId::CommitInsertEdgeLoopDrag:
-          if (!std::holds_alternative<std::monostate>(command.settings)) {
-            return runtime_command_result(runtime, settings_mismatch_result());
-          }
-          return runtime_command_result(
-              runtime, commit_insert_edge_loop_drag(session, runtime));
         case EditorRuntimeCommandId::CancelInsertEdgeLoop:
           if (!std::holds_alternative<std::monostate>(command.settings)) {
             return runtime_command_result(runtime, settings_mismatch_result());
@@ -1519,12 +1099,6 @@ EditorRuntimeCommandResult execute_runtime_command(
           }
           return runtime_command_result(runtime,
                                         end_cut_drag(session, runtime));
-        case EditorRuntimeCommandId::FinalizeCut:
-          if (!std::holds_alternative<std::monostate>(command.settings)) {
-            return runtime_command_result(runtime, settings_mismatch_result());
-          }
-          return runtime_command_result(runtime,
-                                        finalize_cut(session, runtime));
         case EditorRuntimeCommandId::ActivateMirror:
           if (!std::holds_alternative<std::monostate>(command.settings)) {
             return runtime_command_result(runtime, settings_mismatch_result());
@@ -1586,12 +1160,6 @@ EditorRuntimeCommandResult execute_runtime_command(
           }
           return runtime_command_result(runtime,
                                         end_mirror_drag(session, runtime));
-        case EditorRuntimeCommandId::FinalizeMirror:
-          if (!std::holds_alternative<std::monostate>(command.settings)) {
-            return runtime_command_result(runtime, settings_mismatch_result());
-          }
-          return runtime_command_result(runtime,
-                                        finalize_mirror(session, runtime));
         case EditorRuntimeCommandId::UpdatePolyHover: {
           const auto *settings =
               std::get_if<PolyHoverRuntimeCommandSettings>(&command.settings);
@@ -1606,44 +1174,11 @@ EditorRuntimeCommandResult execute_runtime_command(
             return runtime_command_result(runtime, settings_mismatch_result());
           }
           return runtime_command_result(runtime, accept_poly_point(runtime));
-        case EditorRuntimeCommandId::CommitPoly:
-          if (!std::holds_alternative<std::monostate>(command.settings)) {
-            return runtime_command_result(runtime, settings_mismatch_result());
-          }
-          return runtime_command_result(runtime, commit_poly(session, runtime));
         case EditorRuntimeCommandId::CancelPoly:
           if (!std::holds_alternative<std::monostate>(command.settings)) {
             return runtime_command_result(runtime, settings_mismatch_result());
           }
           return runtime_command_result(runtime, cancel_poly(runtime));
-        case EditorRuntimeCommandId::MirrorAxis: {
-          const auto *settings =
-              std::get_if<MirrorAxisRuntimeCommandSettings>(&command.settings);
-          if (settings == nullptr) {
-            return runtime_command_result(runtime, settings_mismatch_result());
-          }
-          return runtime_command_result(
-              runtime, mirror_axis(session, runtime, *settings));
-        }
-        case EditorRuntimeCommandId::FlipView: {
-          const auto *settings =
-              std::get_if<ViewFlipRuntimeCommandSettings>(&command.settings);
-          if (settings == nullptr) {
-            return runtime_command_result(runtime, settings_mismatch_result());
-          }
-          return runtime_command_result(runtime,
-                                        flip_view(session, runtime, *settings));
-        }
-        case EditorRuntimeCommandId::CreateBoxFromBounds: {
-          const auto *settings =
-              std::get_if<CreateBoxFromBoundsRuntimeCommandSettings>(
-                  &command.settings);
-          if (settings == nullptr) {
-            return runtime_command_result(runtime, settings_mismatch_result());
-          }
-          return runtime_command_result(
-              runtime, create_box_from_bounds(session, runtime, *settings));
-        }
         case EditorRuntimeCommandId::UpdateBoxHover: {
           const auto *settings =
               std::get_if<BoxRayRuntimeCommandSettings>(&command.settings);
@@ -1689,11 +1224,6 @@ EditorRuntimeCommandResult execute_runtime_command(
           return runtime_command_result(runtime,
                                         update_box_height(runtime, *settings));
         }
-        case EditorRuntimeCommandId::CommitBox:
-          if (!std::holds_alternative<std::monostate>(command.settings)) {
-            return runtime_command_result(runtime, settings_mismatch_result());
-          }
-          return runtime_command_result(runtime, commit_box(session, runtime));
         case EditorRuntimeCommandId::CancelBox:
           if (!std::holds_alternative<std::monostate>(command.settings)) {
             return runtime_command_result(runtime, settings_mismatch_result());

@@ -8,18 +8,23 @@
 
 #include "editor/modeling/modeling_types.hpp"
 #include "editor/modeling/runtime/editor_runtime.hpp"
+#include "editor/modeling/runtime/selection_types.hpp"
 #include "render/viewport_overlay_frame.hpp"
 
 #include <cstdint>
 #include <vector>
 
-#include <editor/modeling/runtime/session.hpp>
 #include <editor/interactions/selection_edit.hpp>
-#include <mesh/polygon/document.hpp>
+#include <quader/modeling/neutral/polygon/document.hpp>
+
+namespace quader_editor_core {
+class EditorSession;
+}
 
 namespace quader {
 
 class ModelingObjectRuntimeMap;
+class ModelingSdkProjectionAdapter;
 class ModelingSelectionService;
 class SceneDocument;
 
@@ -106,13 +111,12 @@ public:
       const SceneDocument &scene,
       const ModelingObjectRuntimeMap &object_registry,
       const ModelingSelectionService &selection_service,
+      const ModelingSdkProjectionAdapter &sdk_projection,
       ModelingSelectionOverlayOptions options = {}) const;
   [[nodiscard]] std::vector<ModelingToolPreviewMesh>
-  tool_preview_meshes(const quader_editor_core::EditorSession &session,
-                      const quader_editor_core::EditorRuntime &runtime,
-                      const SceneDocument &scene,
-                      const ModelingObjectRuntimeMap &object_registry,
-                      const ModelingSelectionService &selection_service) const;
+  tool_preview_meshes(
+      const quader_editor_core::EditorRuntime &runtime,
+      const ModelingSdkProjectionAdapter &sdk_projection) const;
 
 private:
     /**

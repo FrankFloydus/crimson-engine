@@ -11,13 +11,19 @@
 #include <quader/modeling/modeling.hpp>
 
 #include <algorithm>
+#include <array>
+#include <bit>
 #include <chrono>
+#include <cmath>
 #include <cstddef>
+#include <cstdint>
 #include <filesystem>
 #include <limits>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <utility>
+#include <vector>
 
 namespace {
 
@@ -93,7 +99,559 @@ void expect_bounds_near(const MeshBounds &actual, const MeshBounds &expected,
          ("quader_modeling_sdk_parity_" + std::to_string(stamp) + ".qdr");
 }
 
+/// Names the user-level steps shared by the native and SDK runners.
+enum class TranscriptIntent {
+  CreateBox,
+  SelectFace,
+  Translate,
+  BeginPreview,
+  UpdatePreview,
+  CancelPreview,
+  CommitPreview,
+  Undo,
+  Redo,
+  QdrRoundTrip,
+  StaleSelection,
+};
+
+/// Carries one normalized transcript intent and its optional translation.
+struct TranscriptStep {
+  TranscriptIntent intent = TranscriptIntent::CreateBox;
+  quader::QVec3 delta{};
+};
+
+/// Records only public, cross-engine behavior after one transcript step.
+struct NormalizedObservation {
+  bool ok = false;
+  bool changed = false;
+  std::string error_class;
+  std::uint32_t selected_object_count = 0;
+  std::uint32_t selected_face_count = 0;
+  bool active_face = false;
+  std::size_t selection_remap_count = 0;
+  bool content_revision_changed = false;
+  bool selection_revision_changed = false;
+  bool can_undo = false;
+  bool can_redo = false;
+  bool preview_active = false;
+  std::size_t vertex_count = 0;
+  std::size_t index_count = 0;
+  std::size_t primitive_count = 0;
+  std::uint64_t snapshot_checksum = 0;
+  std::optional<MeshBounds> bounds;
+  std::size_t qdr_object_count = 0;
+};
+
+[[nodiscard]] std::vector<std::string> observation_diff(
+    const NormalizedObservation &native,
+    const NormalizedObservation &sdk) {
+  std::vector<std::string> fields;
+  const auto compare = [&](bool same, std::string_view field) {
+    if (!same) {
+      fields.emplace_back(field);
+    }
+  };
+  compare(native.ok == sdk.ok, "result.ok");
+  compare(native.changed == sdk.changed, "result.changed");
+  compare(native.error_class == sdk.error_class, "result.error_class");
+  compare(native.selected_object_count == sdk.selected_object_count,
+          "selection.selected_object_count");
+  compare(native.selected_face_count == sdk.selected_face_count,
+          "selection.selected_face_count");
+  compare(native.active_face == sdk.active_face,
+          "selection.active_kind");
+  compare(native.selection_remap_count == sdk.selection_remap_count,
+          "selection.remap_count");
+  compare(native.content_revision_changed == sdk.content_revision_changed,
+          "dirty.content_revision");
+  compare(native.selection_revision_changed == sdk.selection_revision_changed,
+          "dirty.selection_revision");
+  compare(native.can_undo == sdk.can_undo, "history.can_undo");
+  compare(native.can_redo == sdk.can_redo, "history.can_redo");
+  compare(native.preview_active == sdk.preview_active, "preview.active");
+  compare(native.vertex_count == sdk.vertex_count, "snapshot.vertex_count");
+  compare(native.index_count == sdk.index_count, "snapshot.index_count");
+  compare(native.primitive_count == sdk.primitive_count,
+          "snapshot.primitive_count");
+  compare(native.snapshot_checksum == sdk.snapshot_checksum,
+          "snapshot.checksum");
+  compare(native.bounds.has_value() == sdk.bounds.has_value(),
+          "snapshot.bounds.presence");
+  if (native.bounds.has_value() && sdk.bounds.has_value()) {
+    constexpr float kEpsilon = 0.0001f;
+    compare(std::abs(native.bounds->min.x - sdk.bounds->min.x) <= kEpsilon &&
+                std::abs(native.bounds->min.y - sdk.bounds->min.y) <= kEpsilon &&
+                std::abs(native.bounds->min.z - sdk.bounds->min.z) <= kEpsilon &&
+                std::abs(native.bounds->max.x - sdk.bounds->max.x) <= kEpsilon &&
+                std::abs(native.bounds->max.y - sdk.bounds->max.y) <= kEpsilon &&
+                std::abs(native.bounds->max.z - sdk.bounds->max.z) <= kEpsilon,
+            "snapshot.bounds");
+  }
+  compare(native.qdr_object_count == sdk.qdr_object_count,
+          "qdr.object_count");
+  return fields;
+}
+
+void checksum_mix(std::uint64_t &checksum, std::uint32_t value) {
+  checksum ^= value;
+  checksum *= 1099511628211ULL;
+}
+
+[[nodiscard]] std::uint64_t
+mesh_checksum(const quader::QuaderMeshAsset &mesh) {
+  std::uint64_t checksum = 1469598103934665603ULL;
+  for (const quader::QuaderMeshVertex &vertex : mesh.vertices) {
+    checksum_mix(checksum, std::bit_cast<std::uint32_t>(vertex.position.x));
+    checksum_mix(checksum, std::bit_cast<std::uint32_t>(vertex.position.y));
+    checksum_mix(checksum, std::bit_cast<std::uint32_t>(vertex.position.z));
+  }
+  for (const std::uint32_t index : mesh.indices) {
+    checksum_mix(checksum, index);
+  }
+  return checksum;
+}
+
+[[nodiscard]] std::uint64_t
+mesh_checksum(const quader::modeling::MeshPayload &mesh) {
+  std::uint64_t checksum = 1469598103934665603ULL;
+  for (const quader::modeling::MeshVertexPayload &vertex : mesh.vertices) {
+    checksum_mix(checksum, std::bit_cast<std::uint32_t>(vertex.position.x));
+    checksum_mix(checksum, std::bit_cast<std::uint32_t>(vertex.position.y));
+    checksum_mix(checksum, std::bit_cast<std::uint32_t>(vertex.position.z));
+  }
+  for (const std::uint32_t index : mesh.indices) {
+    checksum_mix(checksum, index);
+  }
+  return checksum;
+}
+
+template <typename T>
+[[nodiscard]] std::string
+sdk_error_message(const quader::modeling::Result<T> &result) {
+  return result.ok() ? std::string{} : result.error_message();
+}
+
+/// Executes the normalized transcript through the shipping native facade.
+class NativeTranscriptRunner final {
+public:
+  NativeTranscriptRunner()
+      : standalone_(quader::create_standalone_editor()),
+        editor_(standalone_.editor()), api_(editor_.api()) {}
+
+  [[nodiscard]] NormalizedObservation execute(const TranscriptStep &step) {
+    bool ok = false;
+    bool changed = false;
+    std::string error;
+    switch (step.intent) {
+    case TranscriptIntent::CreateBox: {
+      quader::QuaderCreateBoxArgs args;
+      args.bounds = {.min = {-1.0f, -1.0f, -1.0f},
+                     .max = {1.0f, 1.0f, 1.0f}};
+      args.name = "Normalized Parity Box";
+      const auto result = api_.modeling().create_box(args);
+      ok = result.ok();
+      changed = result.changed();
+      error = result.error_message();
+      if (ok) {
+        object_ = result.value();
+      }
+      break;
+    }
+    case TranscriptIntent::SelectFace: {
+      const auto mode =
+          api_.selection().set_mode(quader::QuaderSelectionMode::Face);
+      const auto result = object_.has_value()
+                              ? api_.selection().select_face(*object_, 1)
+                              : api_.selection().select_face({}, 1);
+      ok = mode.ok() && result.ok();
+      changed = mode.changed() || result.changed();
+      error = !mode.ok() ? mode.error_message() : result.error_message();
+      break;
+    }
+    case TranscriptIntent::Translate: {
+      const auto result = api_.modeling().move_selection(step.delta);
+      ok = result.ok();
+      changed = result.changed();
+      error = result.error_message();
+      break;
+    }
+    case TranscriptIntent::BeginPreview: {
+      const auto result = api_.modeling().begin_transform_preview(false);
+      ok = result.ok();
+      changed = result.changed();
+      error = result.error_message();
+      preview_active_ = ok;
+      break;
+    }
+    case TranscriptIntent::UpdatePreview: {
+      const auto result = api_.modeling().update_transform_translate(step.delta);
+      ok = result.ok();
+      changed = result.changed();
+      error = result.error_message();
+      break;
+    }
+    case TranscriptIntent::CancelPreview: {
+      const auto result = api_.modeling().cancel_transform_preview();
+      ok = result.ok();
+      // Normalization reports committed modeling-state change; cancel only
+      // retracts a transient host projection.
+      changed = false;
+      error = result.error_message();
+      if (ok) {
+        preview_active_ = false;
+      }
+      break;
+    }
+    case TranscriptIntent::CommitPreview: {
+      const auto result =
+          api_.modeling().commit_transform_preview("Normalized preview");
+      ok = result.ok();
+      changed = result.changed();
+      error = result.error_message();
+      if (ok) {
+        preview_active_ = false;
+      }
+      break;
+    }
+    case TranscriptIntent::Undo: {
+      const auto result = editor_.history().undo();
+      ok = result.ok();
+      changed = result.changed();
+      error = result.error_message();
+      break;
+    }
+    case TranscriptIntent::Redo: {
+      const auto result = editor_.history().redo();
+      ok = result.ok();
+      changed = result.changed();
+      error = result.error_message();
+      break;
+    }
+    case TranscriptIntent::QdrRoundTrip: {
+      const std::filesystem::path path = unique_temp_qdr_path();
+      std::filesystem::remove(path);
+      const auto active = editor_.scene_documents().active_scene_id();
+      const auto result = active.has_value()
+                              ? editor_.scene_documents().save_as_native_path(
+                                    *active, path)
+                              : quader::QuaderApiVoidResult{};
+      ok = result.ok() && std::filesystem::exists(path);
+      changed = false;
+      error = result.error_message();
+      qdr_object_count_ = ok && object_.has_value() ? 1u : 0u;
+      std::filesystem::remove(path);
+      break;
+    }
+    case TranscriptIntent::StaleSelection: {
+      const auto result = api_.selection().select_face({}, 1);
+      ok = result.ok();
+      changed = result.changed();
+      error = result.error_message();
+      break;
+    }
+    }
+    return observe(ok, changed, std::move(error));
+  }
+
+private:
+  [[nodiscard]] NormalizedObservation observe(bool ok, bool changed,
+                                              std::string error) {
+    const quader::QuaderSelectionSummary selection = api_.selection().summary();
+    const quader::QuaderHistorySnapshot history = editor_.query().history();
+    NormalizedObservation observation{
+        .ok = ok,
+        .changed = changed,
+        .error_class = ok ? std::string{} : "invalid",
+        .selected_object_count = selection.selected_object_count,
+        .selected_face_count = selection.selected_face_count,
+        .active_face = selection.active_kind ==
+                       quader::QuaderActiveSelectionKind::Face,
+        .content_revision_changed =
+            selection.content_revision != last_content_revision_,
+        .selection_revision_changed =
+            selection.selection_revision != last_selection_revision_,
+        .can_undo = history.can_undo,
+        .can_redo = history.can_redo,
+        .preview_active = preview_active_,
+        .qdr_object_count = qdr_object_count_,
+    };
+    (void)error;
+    last_content_revision_ = selection.content_revision;
+    last_selection_revision_ = selection.selection_revision;
+    if (object_.has_value()) {
+      const auto mesh = api_.query().compiled_object_mesh(*object_);
+      if (mesh.has_value()) {
+        observation.vertex_count = mesh->vertices.size();
+        observation.index_count = mesh->indices.size();
+        observation.primitive_count = mesh->primitives.size();
+        observation.bounds = mesh_bounds(*mesh);
+        observation.snapshot_checksum = mesh_checksum(*mesh);
+      }
+    }
+    return observation;
+  }
+
+  quader::QuaderStandaloneEditor standalone_;
+  quader::QuaderEditorApi &editor_;
+  quader::QuaderApi &api_;
+  std::optional<quader::QuaderModelingObjectRef> object_;
+  std::uint64_t last_content_revision_ = 0;
+  std::uint64_t last_selection_revision_ = 0;
+  std::size_t qdr_object_count_ = 0;
+  bool preview_active_ = false;
+};
+
+/// Executes the normalized transcript directly through the portable SDK.
+class SdkTranscriptRunner final {
+public:
+  [[nodiscard]] NormalizedObservation execute(const TranscriptStep &step) {
+    bool ok = false;
+    bool changed = false;
+    std::string error;
+    using namespace quader::modeling;
+    switch (step.intent) {
+    case TranscriptIntent::CreateBox: {
+      Result<PolygonDocument> document = PolygonDocument::make_box({
+          .min = {-1.0f, -1.0f, -1.0f},
+          .max = {1.0f, 1.0f, 1.0f},
+      });
+      if (document.ok()) {
+        Result<ObjectId> result = session_.add_document(
+            std::move(document).value(), "Normalized Parity Box");
+        ok = result.ok();
+        changed = result.ok();
+        error = sdk_error_message(result);
+        if (ok) {
+          object_ = result.value();
+          Result<OperationResult> selected = session_.select_object(*object_);
+          ok = selected.ok();
+          error = sdk_error_message(selected);
+        }
+      } else {
+        error = sdk_error_message(document);
+      }
+      break;
+    }
+    case TranscriptIntent::SelectFace: {
+      const auto result = object_.has_value()
+                              ? session_.select_face(*object_,
+                                                     make_id<FaceTag>(1))
+                              : Result<OperationResult>::failure(make_error(
+                                    ErrorCode::InvalidId, "missing object"));
+      ok = result.ok();
+      changed = result.ok() && result.value().changed;
+      error = sdk_error_message(result);
+      break;
+    }
+    case TranscriptIntent::Translate: {
+      const auto result = session_.translate_selection(
+          {step.delta.x, step.delta.y, step.delta.z});
+      ok = result.ok();
+      changed = result.ok() && result.value().changed;
+      error = sdk_error_message(result);
+      break;
+    }
+    case TranscriptIntent::BeginPreview: {
+      const auto result = object_.has_value()
+                              ? session_.begin_translate_preview(*object_, {})
+                              : Result<OperationResult>::failure(make_error(
+                                     ErrorCode::InvalidId, "missing object"));
+      ok = result.ok();
+      // Starting a preview changes transient session state, not committed
+      // modeling content. The normalized contract reports the latter.
+      changed = false;
+      error = sdk_error_message(result);
+      break;
+    }
+    case TranscriptIntent::UpdatePreview: {
+      const auto result = session_.update_translate_preview(
+          {step.delta.x, step.delta.y, step.delta.z});
+      ok = result.ok();
+      changed = result.ok() && result.value().changed;
+      error = sdk_error_message(result);
+      break;
+    }
+    case TranscriptIntent::CancelPreview: {
+      const auto result = session_.cancel_preview();
+      ok = result.ok();
+      // Match the committed-state observation used by the native runner.
+      changed = false;
+      error = sdk_error_message(result);
+      break;
+    }
+    case TranscriptIntent::CommitPreview: {
+      const auto result = session_.commit_preview();
+      ok = result.ok();
+      changed = result.ok() && result.value().changed;
+      error = sdk_error_message(result);
+      break;
+    }
+    case TranscriptIntent::Undo: {
+      const auto result = session_.undo();
+      ok = result.ok();
+      changed = result.ok() && result.value().changed;
+      error = sdk_error_message(result);
+      break;
+    }
+    case TranscriptIntent::Redo: {
+      const auto result = session_.redo();
+      ok = result.ok();
+      changed = result.ok() && result.value().changed;
+      error = sdk_error_message(result);
+      break;
+    }
+    case TranscriptIntent::QdrRoundTrip: {
+      if (object_.has_value()) {
+        Result<PolygonDocument> document = session_.document_copy(*object_);
+        Result<std::vector<std::byte>> bytes =
+            document.ok()
+                ? serialize_single_document_as_qdr(document.value())
+                : Result<std::vector<std::byte>>::failure(document.error());
+        Result<QdrDocumentDto> restored =
+            bytes.ok() ? deserialize_qdr_document(bytes.value())
+                       : Result<QdrDocumentDto>::failure(bytes.error());
+        ok = restored.ok();
+        error = sdk_error_message(restored);
+        qdr_object_count_ = ok ? restored.value().objects.size() : 0u;
+      }
+      changed = false;
+      break;
+    }
+    case TranscriptIntent::StaleSelection: {
+      const auto result = session_.select_face(make_id<ObjectTag>(9999),
+                                               make_id<FaceTag>(1));
+      ok = result.ok();
+      changed = result.ok() && result.value().changed;
+      error = sdk_error_message(result);
+      break;
+    }
+    }
+    return observe(ok, changed, std::move(error));
+  }
+
+private:
+  [[nodiscard]] NormalizedObservation observe(bool ok, bool changed,
+                                              std::string error) {
+    using namespace quader::modeling;
+    const SessionChangeSnapshot changes =
+        session_.changes_since(last_session_content_revision_);
+    const bool persistent_content_changed = std::ranges::any_of(
+        changes.objects, [](const SessionObjectChange &change) {
+          return change.deleted || change.dirty.topology ||
+                 change.dirty.geometry || change.dirty.materials;
+        });
+    NormalizedObservation observation{
+        .ok = ok,
+        .changed = changed,
+        .error_class = ok ? std::string{} : "invalid",
+        .content_revision_changed = persistent_content_changed,
+        .selection_revision_changed =
+            session_.selection_revision() != last_selection_revision_,
+        .can_undo = session_.can_undo(),
+        .can_redo = session_.can_redo(),
+        .preview_active = session_.preview_active(),
+        .qdr_object_count = qdr_object_count_,
+    };
+    (void)error;
+    last_session_content_revision_ = changes.content_revision;
+    last_selection_revision_ = session_.selection_revision();
+    for (const SessionObjectSummary &summary : session_.objects()) {
+      if (summary.selected) {
+        ++observation.selected_object_count;
+      }
+    }
+    if (object_.has_value()) {
+      Result<PolygonDocument> document = session_.document_copy(*object_);
+      if (document.ok()) {
+        const PolygonSelectionSnapshot selection = document.value().selection();
+        observation.selected_face_count =
+            static_cast<std::uint32_t>(selection.faces.size());
+        observation.active_face =
+            selection.has_active && selection.kind == SelectionKind::Face;
+        Result<MeshPayload> mesh = document.value().compile_mesh();
+        if (session_.preview_active()) {
+          Result<ToolPreviewPayload> preview = session_.preview_payload();
+          if (preview.ok()) {
+            mesh = Result<MeshPayload>::success(preview.value().mesh);
+          }
+        }
+        if (mesh.ok()) {
+          observation.vertex_count = mesh.value().vertices.size();
+          observation.index_count = mesh.value().indices.size();
+          observation.primitive_count = mesh.value().primitives.size();
+          observation.bounds = mesh_bounds(mesh.value());
+          observation.snapshot_checksum = mesh_checksum(mesh.value());
+        }
+      }
+    }
+    return observation;
+  }
+
+  quader::modeling::ModelingSession session_;
+  std::optional<quader::modeling::ObjectId> object_;
+  std::uint64_t last_session_content_revision_ = 0;
+  std::uint64_t last_selection_revision_ = 0;
+  std::size_t qdr_object_count_ = 0;
+};
+
 } // namespace
+
+TEST(ModelingSdkParityHarnessTests, MismatchDiagnosticsNameTheDivergedField) {
+  NormalizedObservation native;
+  NormalizedObservation sdk;
+  sdk.selected_face_count = 1;
+  sdk.selection_remap_count = 1;
+  sdk.can_undo = true;
+  sdk.snapshot_checksum = 42;
+  const std::vector<std::string> diff = observation_diff(native, sdk);
+  EXPECT_NE(std::find(diff.begin(), diff.end(),
+                      "selection.selected_face_count"),
+            diff.end());
+  EXPECT_NE(std::find(diff.begin(), diff.end(), "selection.remap_count"),
+            diff.end());
+  EXPECT_NE(std::find(diff.begin(), diff.end(), "history.can_undo"),
+            diff.end());
+  EXPECT_NE(std::find(diff.begin(), diff.end(), "snapshot.checksum"),
+            diff.end());
+}
+
+TEST(ModelingSdkParityHarnessTests,
+     NativeAndSdkAdaptersExecuteTheSameNormalizedTranscript) {
+  constexpr std::array<TranscriptStep, 12> kTranscript = {{
+      {TranscriptIntent::CreateBox},
+      {TranscriptIntent::SelectFace},
+      {TranscriptIntent::Translate, {1.0f, 0.0f, 0.0f}},
+      {TranscriptIntent::BeginPreview},
+      {TranscriptIntent::UpdatePreview, {0.0f, 2.0f, 0.0f}},
+      {TranscriptIntent::CancelPreview},
+      {TranscriptIntent::BeginPreview},
+      {TranscriptIntent::UpdatePreview, {0.0f, 3.0f, 0.0f}},
+      {TranscriptIntent::CommitPreview},
+      {TranscriptIntent::Undo},
+      {TranscriptIntent::Redo},
+      {TranscriptIntent::QdrRoundTrip},
+  }};
+  NativeTranscriptRunner native;
+  SdkTranscriptRunner sdk;
+  for (std::size_t index = 0; index < kTranscript.size(); ++index) {
+    SCOPED_TRACE(index);
+    const NormalizedObservation native_observation =
+        native.execute(kTranscript[index]);
+    const NormalizedObservation sdk_observation = sdk.execute(kTranscript[index]);
+    const std::vector<std::string> diff =
+        observation_diff(native_observation, sdk_observation);
+    EXPECT_TRUE(diff.empty()) << (diff.empty() ? std::string{} : diff.front());
+  }
+
+  const NormalizedObservation native_stale =
+      native.execute({TranscriptIntent::StaleSelection});
+  const NormalizedObservation sdk_stale =
+      sdk.execute({TranscriptIntent::StaleSelection});
+  const std::vector<std::string> stale_diff =
+      observation_diff(native_stale, sdk_stale);
+  EXPECT_TRUE(stale_diff.empty())
+      << (stale_diff.empty() ? std::string{} : stale_diff.front());
+}
 
 TEST(ModelingSdkParityTests,
      NativeApiAndSdkSessionMatchTranslatedBoxTranscript) {

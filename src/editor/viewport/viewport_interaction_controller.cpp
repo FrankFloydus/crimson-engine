@@ -61,4 +61,85 @@ ViewportInteractionController::selection_marquee() const {
   return selection_.marquee();
 }
 
+void ViewportInteractionController::sync_tool_runtime(ViewportToolId tool) {
+  if (tool_runtime_.active_tool() == nullptr ||
+      tool_runtime_.active_tool()->viewport_tool() != tool) {
+    tool_runtime_.sync_active_tool(tool);
+  }
+}
+
+bool ViewportInteractionController::active_tool_owns_viewport(
+    ViewportToolId tool) {
+  sync_tool_runtime(tool);
+  return tool_runtime_.active_tool_owns_viewport();
+}
+
+bool ViewportInteractionController::active_tool_blocks_viewport_focus_shortcuts(
+    ViewportToolId tool) {
+  sync_tool_runtime(tool);
+  return tool_runtime_.active_tool_blocks_viewport_focus_shortcuts();
+}
+
+bool ViewportInteractionController::active_tool_allows_selection_fallback(
+    ViewportToolId tool) const {
+  return tool_runtime_.tool_allows_selection_fallback(tool);
+}
+
+bool ViewportInteractionController::has_active_modal_preview(
+    const ViewportToolPreviewPort &preview, bool snap_enabled) const {
+  return tool_runtime_.has_active_modal_preview(preview, snap_enabled);
+}
+
+ModelingBoxPreview ViewportInteractionController::box_preview(
+    const ViewportToolPreviewPort &preview, bool snap_enabled) const {
+  return tool_runtime_.box_preview(preview, snap_enabled);
+}
+
+const ViewportTool *
+ViewportInteractionController::active_tool(ViewportToolId tool) {
+  sync_tool_runtime(tool);
+  return tool_runtime_.active_tool();
+}
+
+bool ViewportInteractionController::set_active_tool(
+    ViewportToolState &state, ViewportToolId tool, ViewportInputResult *result) {
+  return tool_runtime_.set_active_tool(state, tool, result);
+}
+
+void ViewportInteractionController::clear_modal_tool_state() {
+  tool_runtime_.clear_modal_tool_state();
+}
+
+void ViewportInteractionController::clear_modal_drag_state() {
+  tool_runtime_.clear_modal_drag_state();
+}
+
+ViewportToolResult ViewportInteractionController::handle_active_tool_event(
+    ViewportToolState &state, ViewportToolContext &context,
+    const ViewportToolEvent &event) {
+  sync_tool_runtime(state.active_tool);
+  return tool_runtime_.handle_active_tool_event(state, context, event);
+}
+
+ViewportNativeToolInteractionResult
+ViewportInteractionController::handle_native_tools(
+    QuaderEditorApi &editor, SceneDocument &document, AssetRegistry &assets,
+    PivotToolService *pivot, LinearArrayToolService *linear_array,
+    RadialArrayToolService *radial_array,
+    ViewportPointPlacementService *point_placement,
+    ViewportCameraController &camera,
+    const ViewportNativeToolInteractionFrame &frame) {
+  return native_tools_.handle_frame(editor, document, assets, pivot,
+                                    linear_array, radial_array,
+                                    point_placement, camera, frame);
+}
+
+void ViewportInteractionController::clear_native_tool_drag_state() {
+  native_tools_.clear_drag_state();
+}
+
+bool ViewportInteractionController::native_tool_dragging() const {
+  return native_tools_.dragging();
+}
+
 } // namespace quader

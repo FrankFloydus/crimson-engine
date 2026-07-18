@@ -9,6 +9,8 @@
 #include "assets/material_reference.hpp"
 #include "assets/mesh_asset.hpp"
 #include "core/types.hpp"
+#include "editor/modeling/modeling_preview_types.hpp"
+#include "editor/modeling/modeling_result_types.hpp"
 #include "math/types.hpp"
 
 #include <array>
@@ -19,7 +21,7 @@
 #include <utility>
 #include <vector>
 
-#include <mesh/polygon/document.hpp>
+#include <quader/modeling/neutral/polygon/document.hpp>
 
 namespace quader {
 
@@ -546,15 +548,6 @@ struct ModelingObjectRecord {
 };
 
 /**
- * Stores the Modeling Command Result data contract used by the modeling domain.
- */
-struct ModelingCommandResult {
-  bool ok = false;
-  bool changed = false;
-  std::string message;
-};
-
-/**
  * Represents a Modeling Repeat Transform value used by the modeling domain.
  */
 struct ModelingRepeatTransform {
@@ -672,17 +665,6 @@ struct ModelingInteractionSettings {
   bool half_cut_separate_parts = false;
   bool half_cut_fill_parts = true;
   ModelingCutMode cut_mode = ModelingCutMode::KeepBoth;
-};
-
-/**
- * Represents a Modeling Tool Preview Mesh value used by the modeling domain.
- */
-struct ModelingToolPreviewMesh {
-  EntityId source_entity = kInvalidEntityId;
-  MaterialReference material;
-  MeshAsset mesh;
-  QMat4 transform;
-  std::vector<QMat4> instance_transforms;
 };
 
 /**

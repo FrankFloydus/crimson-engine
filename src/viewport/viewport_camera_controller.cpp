@@ -449,6 +449,20 @@ void ViewportCameraController::focus_bounds(QVec3 min_bounds, QVec3 max_bounds,
                           quader_editor_core::viewport_frame_bounds(input));
 }
 
+bool ViewportCameraController::focus_optional_bounds(
+    const std::optional<ViewportFocusBounds> &bounds,
+    ViewportEmptyFocusBehavior empty_behavior, float margin) {
+  if (bounds.has_value()) {
+    focus_bounds(bounds->min, bounds->max, margin);
+    return true;
+  }
+  if (empty_behavior == ViewportEmptyFocusBehavior::FocusOrigin) {
+    focus_origin();
+    return true;
+  }
+  return false;
+}
+
 void ViewportCameraController::view_axis(ViewportViewAxis axis, int sign,
                                          ViewportAxisLock lock) {
   clear_orbit_snap_source();

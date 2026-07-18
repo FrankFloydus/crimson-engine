@@ -10,7 +10,7 @@
 
 #include "tool_math_internal.hpp"
 
-#include <mesh/geometry/geometry.hpp>
+#include <quader/modeling/neutral/geometry/geometry.hpp>
 
 #include <algorithm>
 #include <array>

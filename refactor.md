@@ -1,8 +1,10 @@
 # Daily DRY/OOP Drift Audit - 2026-06-30
 
-This file is the source of truth for the current daily audit run. A run item is
-complete only when it is checked here with the fix and verification recorded, or
-when it is moved to the reclassified section with concrete code evidence.
+This closed historical ledger for the 2026-06-30 daily audit is not current implementation
+authority. Architecture direction lives in `architecture-review.md`; executable refactoring task
+IDs and progress live only in `REFACTORING_PLAN.md`. The historical run was complete only when each
+item was checked here with its fix and verification recorded, or moved to the reclassified section
+with concrete code evidence.
 
 ## Run Status
 

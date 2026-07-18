@@ -7,8 +7,8 @@
 #pragma once
 
 #include "core/types.hpp"
-#include "editor/modeling/modeling_types.hpp"
 #include "render/overlay/render_overlay_snapshot.hpp"
+#include "render/overlay/viewport_scene_overlay_builder.hpp"
 #include "render/material_binding_service.hpp"
 #include "render/instance_renderable_cache.hpp"
 #include "render/mesh_renderable_cache.hpp"
@@ -44,7 +44,8 @@ class ViewportSettings;
  * overlay extraction.
  */
 struct ViewportSceneOverlayFrameRequest {
-    ModelingSelectionMode selection_mode = ModelingSelectionMode::Object;
+    RenderOverlaySelectionMode selection_mode =
+        RenderOverlaySelectionMode::Object;
     bool wireframe_pane = false;
     bool point_light_gizmos_visible = false;
 };

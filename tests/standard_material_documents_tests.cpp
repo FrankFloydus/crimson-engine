@@ -527,6 +527,75 @@ TEST(StandardMaterialDocumentsTests,
 }
 
 TEST(StandardMaterialDocumentsTests,
+     RevisionSnapshotAndAtomicPropertyIntentsAvoidUiReadModifyWrite) {
+  StandardMaterialDocumentsHarness harness("atomic-intents");
+  const std::optional<ProjectAssetId> default_id =
+      ProjectAssetId::parse(kDefaultProjectMaterialId);
+  ASSERT_TRUE(default_id.has_value());
+  ASSERT_TRUE(harness.editor()
+                  .standard_material_documents()
+                  .open(*default_id)
+                  .ok());
+
+  const auto before =
+      harness.editor().standard_material_documents().current_revision();
+  ASSERT_TRUE(before.ok());
+  EXPECT_EQ(before.value().id, *default_id);
+  EXPECT_FALSE(before.value().dirty);
+
+  ASSERT_TRUE(harness.editor()
+                  .standard_material_documents()
+                  .set_scalar(QuaderStandardMaterialScalar::Metallic, 0.42f)
+                  .ok());
+  ASSERT_TRUE(
+      harness.editor()
+          .standard_material_documents()
+          .set_texture_transform_component(
+              QuaderStandardMaterialTextureTransformComponent::ScaleU, 2.5f)
+          .ok());
+  ASSERT_TRUE(
+      harness.editor()
+          .standard_material_documents()
+          .set_texture_transform_component(
+              QuaderStandardMaterialTextureTransformComponent::OffsetV,
+              -1.25f)
+          .ok());
+
+  const auto changed =
+      harness.editor().standard_material_documents().current_revision();
+  ASSERT_TRUE(changed.ok());
+  EXPECT_EQ(changed.value().session_id, before.value().session_id);
+  EXPECT_EQ(changed.value().id, before.value().id);
+  EXPECT_EQ(changed.value().draft_revision,
+            before.value().draft_revision + 3u);
+  EXPECT_EQ(changed.value().clean_revision, before.value().clean_revision);
+  EXPECT_TRUE(changed.value().dirty);
+
+  const auto document =
+      harness.editor().standard_material_documents().current();
+  ASSERT_TRUE(document.ok());
+  EXPECT_FLOAT_EQ(document.value().material.metallic, 0.42f);
+  EXPECT_FLOAT_EQ(document.value().material.texture_transform.scale[0], 2.5f);
+  EXPECT_FLOAT_EQ(document.value().material.texture_transform.scale[1], 1.0f);
+  EXPECT_FLOAT_EQ(document.value().material.texture_transform.offset[0],
+                  0.0f);
+  EXPECT_FLOAT_EQ(document.value().material.texture_transform.offset[1],
+                  -1.25f);
+
+  const QuaderApiVoidResult unchanged =
+      harness.editor().standard_material_documents().set_scalar(
+          QuaderStandardMaterialScalar::Metallic, 0.42f);
+  ASSERT_TRUE(unchanged.ok());
+  EXPECT_FALSE(unchanged.changed());
+  EXPECT_EQ(harness.editor()
+                .standard_material_documents()
+                .current_revision()
+                .value()
+                .draft_revision,
+            changed.value().draft_revision);
+}
+
+TEST(StandardMaterialDocumentsTests,
      InvalidPublicEnumsAreRejectedWithoutMutatingTheDraft) {
   StandardMaterialDocumentsHarness harness("invalid-enums");
   const std::optional<ProjectAssetId> default_id =
@@ -542,6 +611,10 @@ TEST(StandardMaterialDocumentsTests,
   const auto invalid_convention = static_cast<QuaderNormalMapConvention>(255);
   const auto invalid_slot =
       static_cast<QuaderStandardMaterialTextureSlot>(255);
+  const auto invalid_scalar =
+      static_cast<QuaderStandardMaterialScalar>(255);
+  const auto invalid_component =
+      static_cast<QuaderStandardMaterialTextureTransformComponent>(255);
   EXPECT_FALSE(harness.editor()
                    .standard_material_documents()
                    .set_normal_convention(invalid_convention)
@@ -558,6 +631,14 @@ TEST(StandardMaterialDocumentsTests,
   EXPECT_FALSE(harness.editor()
                    .standard_material_documents()
                    .set_normal_strength(16.01f)
+                   .ok());
+  EXPECT_FALSE(harness.editor()
+                   .standard_material_documents()
+                   .set_scalar(invalid_scalar, 0.5f)
+                   .ok());
+  EXPECT_FALSE(harness.editor()
+                   .standard_material_documents()
+                   .set_texture_transform_component(invalid_component, 1.0f)
                    .ok());
   QuaderStandardMaterialTextureTransform invalid_transform;
   invalid_transform.rotation_degrees = 360.01f;

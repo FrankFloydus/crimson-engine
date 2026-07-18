@@ -6,50 +6,9 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include <editor/modeling/operations/operation_command.hpp>
 
-#include <utility>
 #include <variant>
 
 namespace quader_editor_core {
-
-namespace {
-
-EditorOperationCommandResult command_result(CommandResult result) {
-  return {std::move(result), std::nullopt};
-}
-
-CommandResult preview_not_supported_result() {
-  return {false, false, "Operation does not support preview."};
-}
-
-CommandResult settings_mismatch_result() {
-  return {false, false,
-          "Operation command settings do not match the operation id."};
-}
-
-EditorOperationCommandResult
-finish_preview_command(EditorSession &session, EditorOperationId operation_id,
-                       bool commit) {
-  const std::optional<PreviewTransactionKind> expected_kind =
-      preview_transaction_kind_for_operation(operation_id);
-  if (!expected_kind.has_value()) {
-    return command_result(preview_not_supported_result());
-  }
-
-  const PreviewTransactionStatus before = session.preview_transaction_status();
-  const PreviewTransactionFinishResult finish =
-      commit ? session.commit_preview_transaction(*expected_kind)
-             : session.cancel_preview_transaction(*expected_kind);
-
-  CommandResult result;
-  result.ok = !before.active || before.kind == *expected_kind;
-  result.changed = result.ok && (finish.before.changed || finish.restored);
-  if (!result.ok) {
-    result.message = "Active preview belongs to another operation.";
-  }
-  return {std::move(result), finish};
-}
-
-} // namespace
 
 std::optional<EditorOperationCommandSchema>
 command_schema_for_operation(EditorOperationId operation_id) {
@@ -190,81 +149,6 @@ operation_for_preview_transaction_kind(PreviewTransactionKind kind) {
     }
   }
   return std::nullopt;
-}
-
-EditorOperationCommandResult
-execute_command(EditorSession &session, const EditorOperationCommand &command) {
-  const EditorOperation *operation =
-      editor_operation_for_id(command.operation_id);
-  if (operation == nullptr) {
-    return command_result({false, false, "Unknown operation."});
-  }
-
-  switch (command.phase) {
-  case EditorOperationCommandPhase::Execute:
-    if (!command_settings_match_operation(command.operation_id,
-                                          command.settings)) {
-      return command_result(settings_mismatch_result());
-    }
-    return command_result(session.apply_history_command(
-        [operation, &command](EditorSession &editor_session) {
-          return operation->execute(editor_session, command.settings);
-        }));
-  case EditorOperationCommandPhase::BeginPreview:
-    if (!operation->supports_preview()) {
-      return command_result(preview_not_supported_result());
-    }
-    if (!command_settings_match_operation(command.operation_id,
-                                          command.settings)) {
-      return command_result(settings_mismatch_result());
-    }
-    return command_result(operation->begin_preview(session, command.settings));
-  case EditorOperationCommandPhase::UpdatePreview:
-    if (!operation->supports_preview()) {
-      return command_result(preview_not_supported_result());
-    }
-    if (!command_settings_match_operation(command.operation_id,
-                                          command.settings)) {
-      return command_result(settings_mismatch_result());
-    }
-    return command_result(operation->update_preview(session, command.settings));
-  case EditorOperationCommandPhase::CommitPreview:
-    return finish_preview_command(session, command.operation_id, true);
-  case EditorOperationCommandPhase::CancelPreview:
-    return finish_preview_command(session, command.operation_id, false);
-  }
-
-  return command_result({false, false, "Unknown operation command phase."});
-}
-
-EditorOperationCommandResult execute_command_with_history_state(
-    EditorSession &session, const EditorOperationCommand &command,
-    SessionState history_state) {
-  if (command.phase != EditorOperationCommandPhase::Execute) {
-    return execute_command(session, command);
-  }
-
-  const EditorOperation *operation =
-      editor_operation_for_id(command.operation_id);
-  if (operation == nullptr) {
-    return command_result({false, false, "Unknown operation."});
-  }
-  if (!command_settings_match_operation(command.operation_id,
-                                        command.settings)) {
-    return command_result(settings_mismatch_result());
-  }
-
-  return command_result(session.apply_history_command_from(
-      std::move(history_state),
-      [operation, &command](EditorSession &editor_session) {
-        return operation->execute(editor_session, command.settings);
-      }));
-}
-
-EditorOperationCommandResult
-dispatch_editor_operation_command(EditorSession &session,
-                                  const EditorOperationCommand &command) {
-  return execute_command(session, command);
 }
 
 } // namespace quader_editor_core

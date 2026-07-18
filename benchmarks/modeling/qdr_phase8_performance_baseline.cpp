@@ -7,6 +7,9 @@
 #include "assets/asset_registry.hpp"
 #include "editor/interactions/box_tool.hpp"
 #include "editor/interactions/mirror_tool.hpp"
+#include "editor/modeling/runtime/modeling_object_runtime_map.hpp"
+#include "editor/modeling/services/modeling_mesh_sync_service.hpp"
+#include "editor/modeling/services/modeling_sdk_projection_adapter.hpp"
 #include "editor/projection/mesh_projection_service.hpp"
 #include "editor/projection/picking_cache_projection.hpp"
 #include "editor/projection/tool_preview_mesh_projection.hpp"
@@ -14,7 +17,7 @@
 #include "render/scene_render_extraction.hpp"
 #include "scene/scene_document.hpp"
 
-#include <mesh/polygon/document.hpp>
+#include <quader/modeling/neutral/polygon/document.hpp>
 #include <quader/modeling/profiling/profiling.hpp>
 
 #include <algorithm>
@@ -592,35 +595,65 @@ std::vector<Measurement> run_benchmarks(const BenchmarkOptions &options) {
   }
 
   {
-    std::vector<quader_editor_core::PolygonObject> objects;
-    objects.reserve(4U);
+    quader::SceneDocument scene;
+    quader::AssetRegistry assets;
+    quader::ModelingObjectRuntimeMap object_map;
+    quader::ModelingMeshSyncService mesh_sync;
+    quader::ModelingSdkProjectionAdapter sdk_projection(
+        scene, assets, object_map, mesh_sync);
+    std::vector<int> object_ids;
+    object_ids.reserve(4U);
     quader_editor_core::MirrorToolState state;
     state.plane.points = {{0.0F, 0.0F, 0.0F}, {1.0F, 0.0F, 0.0F}};
     state.plane.face_normal = {0.0F, 1.0F, 0.0F};
     for (int index = 0; index < 4; ++index) {
-      objects.push_back(make_polygon_object(index + 1, options.grid_segments));
-      state.target_object_ids.push_back(index + 1);
+      const quader_editor_core::PolygonObject object =
+          make_polygon_object(index + 1, options.grid_segments);
+      const quader::ModelingCreateBoxResult created =
+          sdk_projection.create_mesh({
+              .document = object.document,
+              .name = "Mirror Benchmark",
+          });
+      if (!created.ok) {
+        throw std::runtime_error("Could not seed SDK mirror benchmark: " +
+                                 created.message);
+      }
+      object_ids.push_back(created.object.modeling_object_id);
     }
-    (void)quader_editor_core::refresh_mirror_preview(state, objects);
+    state.target_object_ids = object_ids;
+    const std::vector<quader::QVec3> plane_points =
+        quader_editor_core::mirror_plane_points(state);
+    if (plane_points.size() != 3U) {
+      throw std::runtime_error("Could not seed SDK mirror benchmark plane.");
+    }
+    const std::array<quader::QVec3, 3> world_plane_points{
+        plane_points[0], plane_points[1], plane_points[2]};
     const TimedResult before = measure(options.iterations, [&](int) {
-      const std::vector<quader_poly::Document> documents =
-          quader_editor_core::mirror_preview_documents(state, objects);
-      std::uint64_t checksum = documents.size();
-      for (const quader_poly::Document &document : documents) {
-        const quader::MeshAsset mesh =
-            quader::MeshProjectionService::compile_polygon_document_mesh(
-                document);
+      const quader::ModelingSdkMirrorPreviewResult preview =
+          sdk_projection.preview_mirror(object_ids, world_plane_points);
+      if (!preview.command.ok) {
+        throw std::runtime_error("SDK mirror preview benchmark failed: " +
+                                 preview.command.message);
+      }
+      std::uint64_t checksum = preview.meshes.size();
+      for (const quader::ModelingToolPreviewMesh &preview_mesh :
+           preview.meshes) {
+        const quader::MeshAsset &mesh = preview_mesh.mesh;
         checksum +=
             mesh.geometry().vertices.size() + mesh.geometry().indices.size();
       }
       return checksum;
     });
-    const std::vector<quader_poly::Document> cached_documents =
-        quader_editor_core::mirror_preview_documents(state, objects);
-    std::uint64_t cached_checksum = cached_documents.size();
-    for (const quader_poly::Document &document : cached_documents) {
-      const quader::MeshAsset mesh =
-          quader::MeshProjectionService::compile_polygon_document_mesh(document);
+    const quader::ModelingSdkMirrorPreviewResult cached_preview =
+        sdk_projection.preview_mirror(object_ids, world_plane_points);
+    if (!cached_preview.command.ok) {
+      throw std::runtime_error("SDK mirror preview benchmark failed: " +
+                               cached_preview.command.message);
+    }
+    std::uint64_t cached_checksum = cached_preview.meshes.size();
+    for (const quader::ModelingToolPreviewMesh &preview_mesh :
+         cached_preview.meshes) {
+      const quader::MeshAsset &mesh = preview_mesh.mesh;
       cached_checksum +=
           mesh.geometry().vertices.size() + mesh.geometry().indices.size();
     }

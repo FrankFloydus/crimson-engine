@@ -36,12 +36,14 @@ struct EdgeTag;
 struct FaceTag;
 struct ObjectTag;
 struct MaterialTag;
+struct PreviewTag;
 
 using VertexId = Id<VertexTag>;
 using EdgeId = Id<EdgeTag>;
 using FaceId = Id<FaceTag>;
 using ObjectId = Id<ObjectTag>;
 using MaterialId = Id<MaterialTag>;
+using PreviewId = Id<PreviewTag>;
 
 /**
  * Canonical undirected edge identity. The endpoint order is stable.

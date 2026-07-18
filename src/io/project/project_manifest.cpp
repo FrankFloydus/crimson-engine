@@ -6,6 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "io/project/project_manifest.hpp"
 
+#include "core/qstr.hpp"
 #include "io/qdr/qdr_atomic_write.hpp"
 
 #include <nlohmann/json.hpp>
@@ -34,14 +35,6 @@ constexpr std::uintmax_t kMaximumManifestBytes = 4u * 1024u * 1024u;
 constexpr std::size_t kMaximumManifestScenes = 100'000u;
 constexpr std::size_t kMaximumPortablePathBytes = 32'768u;
 
-std::string lowercase_ascii(std::string value) {
-  std::transform(value.begin(), value.end(), value.begin(), [](char character) {
-    return static_cast<char>(
-        std::tolower(static_cast<unsigned char>(character)));
-  });
-  return value;
-}
-
 bool non_whitespace_name(std::string_view value) {
   return std::any_of(value.begin(), value.end(), [](char character) {
     return !std::isspace(static_cast<unsigned char>(character));
@@ -54,7 +47,8 @@ bool same_portable_path(const ProjectRelativePath &left,
 }
 
 bool has_qdr_extension(const ProjectRelativePath &path) {
-  return lowercase_ascii(path.native_path().extension().string()) == ".qdr";
+  return QStr::to_ascii_lower(path.native_path().extension().string()) ==
+         ".qdr";
 }
 
 ProjectIoResult<ProjectManifest> malformed_manifest(std::string message) {
@@ -431,8 +425,9 @@ ProjectManifestStore::open(const std::filesystem::path &manifest_path) {
         decoded.error().code, decoded.error().message, canonical_manifest);
   }
   ProjectManifest manifest = decoded.take_value();
-  if (lowercase_ascii(manifest.name()) !=
-      lowercase_ascii(normalized_root_filename(file_system.root()).string())) {
+  if (QStr::to_ascii_lower(manifest.name()) !=
+      QStr::to_ascii_lower(
+          normalized_root_filename(file_system.root()).string())) {
     return ProjectIoResult<ProjectWorkspaceStorage>::failure(
         ProjectIoErrorCode::ManifestMalformed,
         "Project name must match its containing folder name.",

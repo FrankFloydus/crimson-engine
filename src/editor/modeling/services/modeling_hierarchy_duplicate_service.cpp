@@ -159,7 +159,7 @@ ModelingHierarchyDuplicateService::duplicate_selected_entity_hierarchy(
   if (!source_meshes.empty()) {
     if (!runtime.set_selection_mode ||
         !runtime.project_object_selection_from_scene ||
-        !runtime.duplicate_selected_meshes) {
+        !runtime.duplicate_selected_meshes || !runtime.detach_duplicate_mesh) {
       restore_group_selection(document_commands, runtime, roots,
                               result_selection_mode);
       return {.ok = false,
@@ -188,7 +188,7 @@ ModelingHierarchyDuplicateService::duplicate_selected_entity_hierarchy(
     }
     const ModelingCommandResult duplicate = [&]() {
       QDR_PROFILE_SCOPE("Duplicate runtime meshes");
-      return runtime.duplicate_selected_meshes();
+      return runtime.duplicate_selected_meshes(source_meshes);
     }();
     if (!duplicate.ok) {
       restore_group_selection(document_commands, runtime, roots,
@@ -209,6 +209,19 @@ ModelingHierarchyDuplicateService::duplicate_selected_entity_hierarchy(
           .changed = duplicate.changed,
           .message = "Group duplicate did not create matching mesh clones.",
       };
+    }
+    for (const EntityId duplicate_mesh : duplicate_meshes) {
+      if (scene.parent(duplicate_mesh) != kInvalidEntityId &&
+          !runtime.detach_duplicate_mesh(duplicate_mesh)) {
+        restore_group_selection(document_commands, runtime, roots,
+                                result_selection_mode);
+        return {
+            .ok = false,
+            .changed = true,
+            .message =
+                "Duplicated mesh could not be detached before hierarchy projection.",
+        };
+      }
     }
   }
 

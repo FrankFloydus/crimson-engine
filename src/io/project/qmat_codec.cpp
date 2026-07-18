@@ -6,6 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "io/project/qmat_codec.hpp"
 
+#include "core/qstr.hpp"
 #include "io/qdr/qdr_atomic_write.hpp"
 
 #include <nlohmann/json.hpp>
@@ -53,12 +54,8 @@ bool supported_color_space(ProjectTextureColorSpace color_space) {
 }
 
 bool has_qmat_extension(const ProjectRelativePath &path) {
-  std::string extension = path.native_path().extension().string();
-  std::transform(extension.begin(), extension.end(), extension.begin(),
-                 [](unsigned char value) {
-                   return static_cast<char>(std::tolower(value));
-                 });
-  return extension == ".qmat";
+  return QStr::to_ascii_lower(path.native_path().extension().string()) ==
+         ".qmat";
 }
 
 std::optional<ProjectTextureColorSpace>

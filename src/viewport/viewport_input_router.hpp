@@ -9,15 +9,7 @@
 #include "viewport/viewport_camera_controller.hpp"
 #include "viewport/viewport_input_types.hpp"
 
-#include <memory>
-
 namespace quader {
-
-struct ModelingBoxPreview;
-class ViewportToolPreviewPort;
-struct ViewportToolContext;
-struct ViewportToolEvent;
-struct ViewportToolResult;
 
 /**
  * Owns Viewport Input Router behavior within the viewport input, layout, and camera layer.
@@ -25,7 +17,6 @@ struct ViewportToolResult;
 class ViewportInputRouter {
 public:
     ViewportInputRouter();
-    ~ViewportInputRouter();
 
     ViewportInputResult handle_frame(const ViewportInputFrame &input,
                                      ViewportCameraController &camera);
@@ -33,19 +24,9 @@ public:
     void set_active_tool(ViewportToolId tool);
     void set_selection_mode(ViewportSelectionMode mode);
     void sync_grid_preset_snapshot(int preset);
-    bool active_tool_owns_viewport() const;
-    bool active_tool_blocks_viewport_focus_shortcuts() const;
-    bool active_tool_allows_selection_fallback() const;
-    bool has_active_modal_preview(const ViewportToolPreviewPort &preview,
-                                  bool snap_enabled = true) const;
-    ModelingBoxPreview box_preview(const ViewportToolPreviewPort &preview,
-                                   bool snap_enabled = true) const;
-    void clear_modal_tool_state();
-    void clear_modal_drag_state();
-    ViewportToolResult handle_active_tool_event(ViewportToolContext &context,
-                                                const ViewportToolEvent &event);
 
-    const ViewportToolState& state() const { return state_; }
+    ViewportToolState &state() { return state_; }
+    const ViewportToolState &state() const { return state_; }
     bool navigating() const {
       return navigation_mode_ != ViewportDragMode::None;
     }
@@ -63,12 +44,11 @@ public:
       return fly_cursor_capture_active_;
     }
     bool fly_hud_active() const { return fly_hud_active_; }
-    const class ViewportTool *active_tool() const;
-
   private:
     bool handle_shortcut(const ViewportShortcut &shortcut,
                          ViewportCameraController &camera,
-                         ViewportInputResult &result);
+                         ViewportInputResult &result,
+                         bool active_tool_blocks_focus_shortcuts);
 
     ViewportToolState state_;
     ViewportDragMode navigation_mode_ = ViewportDragMode::None;
@@ -77,7 +57,6 @@ public:
     bool orbit_snap_action_uses_alt_modifier_ = false;
     bool fly_cursor_capture_active_ = false;
     bool fly_hud_active_ = false;
-    std::unique_ptr<class ViewportToolRuntime> tool_runtime_;
 };
 
 } // namespace quader

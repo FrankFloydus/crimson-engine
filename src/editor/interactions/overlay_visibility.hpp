@@ -6,7 +6,8 @@
 ////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
-#include <mesh/polygon/document.hpp>
+#include <editor/modeling/runtime/selection_types.hpp>
+#include <quader/modeling/neutral/polygon/document.hpp>
 
 #include <cstddef>
 #include <cstdint>
@@ -16,8 +17,6 @@
 namespace quader_editor_core {
 
 struct PolygonObject;
-struct SelectionOverlayLine;
-enum class SelectionOverlayLayer;
 struct ViewportCameraState;
 
 /**

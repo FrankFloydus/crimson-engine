@@ -20,11 +20,14 @@ using quader::test::guardrail::files_named_under;
 using quader::test::guardrail::normalized_relative;
 using quader::test::guardrail::read_source_file;
 using quader::test::guardrail::source_root;
+using quader::test::guardrail::split_lines;
+using quader::test::guardrail::starts_with;
 
 std::vector<std::string> required_root_instruction_files() {
   return {
       "AGENTS.md",
       "architecture-review.md",
+      "REFACTORING_PLAN.md",
       "INPUT_KEYBINDINGS.md",
   };
 }
@@ -81,6 +84,7 @@ TEST(AgentInstructionRoutingTests, RequiredRootInstructionFilesExist) {
   }
 
   EXPECT_TRUE(contains(root, "architecture-review.md"));
+  EXPECT_TRUE(contains(root, "REFACTORING_PLAN.md"));
   EXPECT_TRUE(contains(root, "INPUT_KEYBINDINGS.md"));
 }
 
@@ -105,6 +109,7 @@ TEST(AgentInstructionRoutingTests, NestedPackageInstructionFilesExistAndStayFocu
 TEST(AgentInstructionRoutingTests, ArchitectureGuidanceLivesInRootInstructions) {
   const std::string root = read_source_file("AGENTS.md");
   const std::string review = read_source_file("architecture-review.md");
+  const std::string tracker = read_source_file("REFACTORING_PLAN.md");
 
   EXPECT_TRUE(contains(root, "native standalone Windows"));
   EXPECT_TRUE(contains(root,
@@ -113,6 +118,103 @@ TEST(AgentInstructionRoutingTests, ArchitectureGuidanceLivesInRootInstructions) 
   EXPECT_TRUE(contains(root, "quader::modeling"));
   EXPECT_TRUE(contains(review, "Resolved Architecture Decisions"));
   EXPECT_TRUE(contains(review, "src/sdk/core/modeling"));
+  EXPECT_TRUE(contains(tracker, "## 7. Target architecture"));
+}
+
+TEST(AgentInstructionRoutingTests,
+     ArchitectureDirectionAndImplementationTrackerHaveOneAuthorityContract) {
+  const std::string root = read_source_file("AGENTS.md");
+  const std::string review = read_source_file("architecture-review.md");
+  const std::string tracker = read_source_file("REFACTORING_PLAN.md");
+  const std::string historical = read_source_file("refactor.md");
+
+  EXPECT_TRUE(contains(root, "fixed migration direction"));
+  EXPECT_TRUE(contains(root, "only executable refactoring tracker"));
+  EXPECT_TRUE(contains(review, "fixed architecture-direction authority"));
+  EXPECT_TRUE(contains(review, "Execution Authority And Legacy Crosswalk"));
+  EXPECT_TRUE(contains(review, "Explicit legacy-task dispositions"));
+  EXPECT_TRUE(contains(tracker, "Executable task/progress authority"));
+  EXPECT_TRUE(contains(tracker, "sole executable task/progress tracker"));
+  EXPECT_TRUE(contains(historical, "closed historical ledger"));
+  EXPECT_TRUE(contains(historical, "not current implementation"));
+  EXPECT_TRUE(contains(historical, "IDs and progress live only"));
+
+  std::vector<std::string> legacy_rows;
+  for (const std::string &line : split_lines(review)) {
+    if (starts_with(line, "| AR-")) {
+      legacy_rows.push_back(line);
+    }
+  }
+  ASSERT_EQ(legacy_rows.size(), 11u);
+
+  const std::vector<std::string> expected_statuses = {
+      "Complete", "Complete", "Complete", "Complete", "Complete", "Complete",
+      "Complete", "Complete", "Complete", "Complete", "Complete",
+  };
+  for (int phase = 0; phase <= 10; ++phase) {
+    const std::string phase_label = "| AR-" + std::to_string(phase) + " ";
+    EXPECT_TRUE(starts_with(legacy_rows[static_cast<std::size_t>(phase)],
+                            phase_label))
+        << phase;
+    EXPECT_TRUE(contains(legacy_rows[static_cast<std::size_t>(phase)],
+                         "| " + expected_statuses[static_cast<std::size_t>(phase)] +
+                             " |"))
+        << phase;
+    EXPECT_TRUE(contains(legacy_rows[static_cast<std::size_t>(phase)], "P"))
+        << "legacy row has no canonical task owner: " << phase;
+  }
+
+  std::vector<std::string> action_rows;
+  for (const std::string &line : split_lines(review)) {
+    if (starts_with(line, "- **AR-") && contains(line, " actions:**")) {
+      action_rows.push_back(line);
+    }
+  }
+  ASSERT_EQ(action_rows.size(), 11u);
+  const std::vector<int> expected_action_counts = {
+      6, 7, 6, 7, 8, 5, 4, 9, 4, 8, 4,
+  };
+  for (int phase = 0; phase <= 10; ++phase) {
+    const std::string action_label =
+        "- **AR-" + std::to_string(phase) + " actions:**";
+    const std::string &action_row =
+        action_rows[static_cast<std::size_t>(phase)];
+    EXPECT_TRUE(starts_with(action_row, action_label)) << phase;
+    EXPECT_TRUE(contains(action_row, "P") || contains(action_row, "Complete"))
+        << "legacy actions have no task or completed disposition: " << phase;
+
+    const std::size_t action_start = review.find(action_label);
+    ASSERT_NE(action_start, std::string::npos) << phase;
+    std::size_t action_end =
+        review.find("\n- **AR-", action_start + action_label.size());
+    if (action_end == std::string::npos) {
+      action_end = review.find("\n### Explicit legacy-task dispositions",
+                               action_start + action_label.size());
+    }
+    ASSERT_NE(action_end, std::string::npos) << phase;
+    const std::string action_block =
+        review.substr(action_start, action_end - action_start);
+    for (int action = 1;
+         action <= expected_action_counts[static_cast<std::size_t>(phase)];
+         ++action) {
+      EXPECT_TRUE(contains(action_block, "A" + std::to_string(action)))
+          << "legacy action lacks a disposition: AR-" << phase << "."
+          << action;
+    }
+  }
+
+  for (const std::string &disposition : {
+           "AR-4 OBJ writer",
+           "AR-6 picking and repeat ownership",
+           "AR-7 general `UIContext` decomposition",
+           "AR-8 speculative picking/preview caches",
+           "AR-9 blanket golden/fuzz expansion",
+       }) {
+    EXPECT_TRUE(contains(review, disposition)) << disposition;
+  }
+
+  EXPECT_FALSE(contains(review, "active deterministic plan"));
+  EXPECT_FALSE(contains(review, "active architecture migration plan"));
 }
 
 TEST(AgentInstructionRoutingTests, PublicApiPolicyIsFirstClassInstruction) {

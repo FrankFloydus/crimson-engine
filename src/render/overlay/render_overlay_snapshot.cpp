@@ -7,9 +7,8 @@
 #include "render/overlay/render_overlay_snapshot.hpp"
 
 #include "assets/asset_registry.hpp"
-#include "core/color_space.hpp"
+#include "assets/mesh_wire_geometry.hpp"
 #include "diagnostics/profile.hpp"
-#include "mesh/polygon/document_model.hpp"
 #include "render/overlay/viewport_overlay_style_resolver.hpp"
 #include "render/render_signature_builder.hpp"
 #include "render/viewport_overlay_policy.hpp"
@@ -43,18 +42,13 @@ default_persistent_overlay_style() {
   return kStyle;
 }
 
-std::uint32_t resolved_scene_wireframe_color(
+QVec3 resolved_scene_wireframe_tint(
     const SceneDocument &document, EntityId entity) {
   const SceneLayerRecord *layer = document.layer(document.entity_layer(entity));
   if (layer == nullptr) {
-    return kOverlayWireframeXrayColor;
+    return kDefaultSceneLayerWireframeColor;
   }
-  constexpr std::uint8_t kWireframeAlpha = static_cast<std::uint8_t>(
-      (kOverlayWireframeXrayColor >> 24u) & 0xffu);
-  return rgba8(normalized_to_byte(layer->wireframe_color.x),
-               normalized_to_byte(layer->wireframe_color.y),
-               normalized_to_byte(layer->wireframe_color.z),
-               kWireframeAlpha);
+  return layer->wireframe_color;
 }
 
 std::span<const MeshVertex> mesh_vertices(const MeshAsset &mesh) {
@@ -65,23 +59,12 @@ std::span<const std::uint32_t> mesh_indices(const MeshAsset &mesh) {
   return {mesh.geometry().indices.data(), mesh.geometry().indices.size()};
 }
 
-std::span<const quader_poly::Vertex>
-authored_vertices(const MeshAsset &mesh) {
-  if (!mesh.has_authored_polygon_document ||
-      !mesh.authored_polygon_document) {
+std::span<const MeshWireSegment> mesh_wire_segments(
+    const std::shared_ptr<const MeshWireGeometryPayload> &payload) {
+  if (payload == nullptr) {
     return {};
   }
-  return {mesh.authored_polygon_document->vertices.data(),
-          mesh.authored_polygon_document->vertices.size()};
-}
-
-std::span<const quader_poly::Face> authored_faces(const MeshAsset &mesh) {
-  if (!mesh.has_authored_polygon_document ||
-      !mesh.authored_polygon_document) {
-    return {};
-  }
-  return {mesh.authored_polygon_document->faces.data(),
-          mesh.authored_polygon_document->faces.size()};
+  return {payload->segments.data(), payload->segments.size()};
 }
 
 std::optional<RenderOverlayMeshSnapshot>
@@ -106,6 +89,8 @@ mesh_snapshot_for_entity(const SceneDocument &document,
   const SelectionComponent *selection = document.selection(entity);
   const std::shared_ptr<const MeshGeometryPayload> geometry_payload =
       asset->geometry_payload();
+  const std::shared_ptr<const MeshWireGeometryPayload> wire_geometry_payload =
+      build_mesh_wire_geometry_payload(*asset);
   return RenderOverlayMeshSnapshot{
       .entity = entity,
       .participant_token = entity,
@@ -113,14 +98,13 @@ mesh_snapshot_for_entity(const SceneDocument &document,
       .mesh_revision = asset->revision.value,
       .geometry_payload = geometry_payload,
       .geometry_content_id = asset->geometry_content_id(),
-      .authored_topology_payload = asset->authored_polygon_document,
+      .wire_geometry_payload = wire_geometry_payload,
       .world_transform = document.world_transform_matrix(entity),
       .selected = selection != nullptr && selection->selected,
-      .wireframe_color = resolved_scene_wireframe_color(document, entity),
+      .wireframe_tint = resolved_scene_wireframe_tint(document, entity),
       .vertices = mesh_vertices(*asset),
       .indices = mesh_indices(*asset),
-      .authored_vertices = authored_vertices(*asset),
-      .authored_faces = authored_faces(*asset),
+      .wire_segments = mesh_wire_segments(wire_geometry_payload),
   };
 }
 
@@ -199,8 +183,8 @@ void append_instance_wireframe_meshes(
   const QMat4 occurrence_world = document.world_transform_matrix(occurrence);
   const SelectionComponent *selection = document.selection(occurrence);
   const bool selected = selection != nullptr && selection->selected;
-  const std::uint32_t wireframe_color =
-      resolved_scene_wireframe_color(document, occurrence);
+  const QVec3 wireframe_tint =
+      resolved_scene_wireframe_tint(document, occurrence);
   for (const EntityId member :
        document.descendants(instance->definition, false)) {
     if (document.containing_instance_definition(member) !=
@@ -222,6 +206,8 @@ void append_instance_wireframe_meshes(
         *definition_inverse, document.world_transform_matrix(member));
     const std::shared_ptr<const MeshGeometryPayload> geometry_payload =
         mesh->geometry_payload();
+    const std::shared_ptr<const MeshWireGeometryPayload> wire_geometry_payload =
+        build_mesh_wire_geometry_payload(*mesh);
     snapshot.meshes.push_back({
         .entity = occurrence,
         .participant_token =
@@ -230,15 +216,14 @@ void append_instance_wireframe_meshes(
         .mesh_revision = mesh->revision.value,
         .geometry_payload = geometry_payload,
         .geometry_content_id = mesh->geometry_content_id(),
-        .authored_topology_payload = mesh->authored_polygon_document,
+        .wire_geometry_payload = wire_geometry_payload,
         .world_transform = scene_transform_multiply(occurrence_world,
                                                     member_from_definition),
         .selected = selected,
-        .wireframe_color = wireframe_color,
+        .wireframe_tint = wireframe_tint,
         .vertices = mesh_vertices(*mesh),
         .indices = mesh_indices(*mesh),
-        .authored_vertices = authored_vertices(*mesh),
-        .authored_faces = authored_faces(*mesh),
+        .wire_segments = mesh_wire_segments(wire_geometry_payload),
     });
   }
 }
@@ -283,6 +268,8 @@ void append_instance_selection_fills(
         *definition_inverse, document.world_transform_matrix(member));
     const std::shared_ptr<const MeshGeometryPayload> geometry_payload =
         mesh->geometry_payload();
+    const std::shared_ptr<const MeshWireGeometryPayload> wire_geometry_payload =
+        build_mesh_wire_geometry_payload(*mesh);
     const QMat4 world_transform = scene_transform_multiply(
         occurrence_world, member_from_definition);
     snapshot.instance_selection_fills.push_back({
@@ -296,16 +283,6 @@ void append_instance_selection_fills(
         .world_transform = world_transform,
         .vertices = mesh_vertices(*mesh),
         .indices = mesh_indices(*mesh),
-        .color = kOverlayInstanceSelectionFillColor,
-        .depth_test = true,
-        .depth_write = false,
-        .polygon_offset_scale = -1.0f,
-        .polygon_offset_constant = -1.0f,
-        .blend_order = static_cast<std::uint16_t>(
-            viewport_overlay_draw_order(
-                ViewportOverlayLayer::SelectedVisibleFace) *
-            64),
-        .draws_before = ViewportOverlayLayer::SourceWire,
     });
     snapshot.instance_selection_wires.push_back({
         .occurrence = occurrence,
@@ -315,18 +292,11 @@ void append_instance_selection_fills(
         .mesh_revision = mesh->revision.value,
         .geometry_payload = geometry_payload,
         .geometry_content_id = mesh->geometry_content_id(),
-        .authored_topology_payload = mesh->authored_polygon_document,
+        .wire_geometry_payload = wire_geometry_payload,
         .world_transform = world_transform,
         .vertices = mesh_vertices(*mesh),
         .indices = mesh_indices(*mesh),
-        .authored_vertices = authored_vertices(*mesh),
-        .authored_faces = authored_faces(*mesh),
-        .color = kOverlaySelectionWireColor,
-        .line_width_pixels = kOverlaySelectionWireLineWidthPixels,
-        .blend_order = static_cast<std::uint16_t>(
-            viewport_overlay_draw_order(ViewportOverlayLayer::SourceWire) *
-            64),
-        .layer = ViewportOverlayLayer::SourceWire,
+        .wire_segments = mesh_wire_segments(wire_geometry_payload),
     });
   }
 }

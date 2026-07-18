@@ -6,21 +6,22 @@ No permission is granted to use, copy, modify, distribute, or sublicense this
 file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
 -->
-# Modeling Runtime Package
+# Modeling Runtime Projection Package
 
-Native app modeling runtime behavior.
+Native host interaction and short-lived modeling projection behavior.
 
-This package owns engine-clean editor modeling behavior over `quader_poly::Document` objects. It is
-part of the native app, not an external engine adapter or SDK boundary. The namespace
-`quader_editor_core` remains as the historical runtime namespace, but ownership is app-native.
+This package operates on ephemeral `quader_poly::Document` views projected from the portable SDK.
+It is part of the native app, not an external engine adapter or SDK boundary. The historical
+`quader_editor_core` namespace remains for compatibility, but `quader::modeling` owns every durable
+modeling document, selection, operation, preview, and history transition.
 
 Owns:
 
-- polygon object runtime state and selection summaries;
-- component and object hover/picking result state;
+- transient polygon-object projection records and selection summaries;
+- component and object hover/picking result projection;
 - source-wire and surface picking policy;
-- transform previews and component drag behavior;
-- runtime command execution over polygon documents;
+- host transform-drag input state and preview routing;
+- native command metadata and portable-operation mapping;
 - selection overlay frame generation as runtime primitives;
 - rectangle selection, pick cycling, and selection-mode conversion helpers;
 - tool state data for move, rotate, scale, cut, box, knife, and related modeling workflows;
@@ -28,12 +29,16 @@ Owns:
 
 Does not own:
 
+- durable mesh documents, modeling-object/component selection, operations,
+  preview transactions, or modeling undo/redo;
 - public API intent or command palette routing;
 - scene identity, grouping, hierarchy, or document command history;
 - render overlay style, Filament resources, or GPU submission;
 - viewport workspace state, native windows, swapchains, or physical input capture;
 - UI layout, runtime UI resources, localization, or panel behavior.
 
-Selection and hover behavior should stay inspectable with headless modeling-domain tests. Real
+`EditorSession` values in this package are disposable projections used by retained native picking,
+overlay, bounds, and input helpers. Production code must never retain one as a competing source of
+truth. Selection and hover behavior stays inspectable with headless modeling-domain tests. Real
 window, GPU, and pixel-output behavior belongs to render/UI smoke checks until render readback
 coverage exists.

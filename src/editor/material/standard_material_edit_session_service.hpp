@@ -10,6 +10,7 @@
 #include "io/project/qmat_codec.hpp"
 
 #include <array>
+#include <cstdint>
 #include <filesystem>
 #include <memory>
 #include <optional>
@@ -19,6 +20,28 @@
 namespace quader {
 
 class ProjectSession;
+
+/**
+ * Identifies one scalar field for an atomic Standard Material draft edit.
+ */
+enum class StandardMaterialScalar : std::uint8_t {
+  Roughness,
+  Metallic,
+  NormalStrength,
+};
+
+/**
+ * Identifies one texture-transform component for an atomic draft edit.
+ */
+enum class StandardMaterialTextureTransformComponent : std::uint8_t {
+  CenterU,
+  CenterV,
+  ScaleU,
+  ScaleV,
+  OffsetU,
+  OffsetV,
+  RotationDegrees,
+};
 
 /// Reports the outcome of one Standard Material draft operation.
 struct StandardMaterialEditResult final {
@@ -74,9 +97,13 @@ public:
   [[nodiscard]] StandardMaterialEditResult set_metallic(float value);
   [[nodiscard]] StandardMaterialEditResult set_normal_strength(float value);
   [[nodiscard]] StandardMaterialEditResult
+  set_scalar(StandardMaterialScalar scalar, float value);
+  [[nodiscard]] StandardMaterialEditResult
   set_normal_convention(NormalMapConvention convention);
   [[nodiscard]] StandardMaterialEditResult set_texture_transform(
       StandardMaterialTextureTransform transform);
+  [[nodiscard]] StandardMaterialEditResult set_texture_transform_component(
+      StandardMaterialTextureTransformComponent component, float value);
   [[nodiscard]] StandardMaterialEditResult
   import_texture(StandardMaterialTextureSlot slot,
                  const std::filesystem::path &source_path);

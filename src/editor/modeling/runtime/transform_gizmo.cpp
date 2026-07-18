@@ -9,7 +9,7 @@
 #include <editor/interactions/tool_transform_math.hpp>
 #include <editor/modeling/runtime/tool_constants.hpp>
 #include <diagnostics/profile.hpp>
-#include <mesh/geometry/geometry.hpp>
+#include <quader/modeling/neutral/geometry/geometry.hpp>
 
 #include <algorithm>
 #include <array>

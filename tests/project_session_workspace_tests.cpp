@@ -28,6 +28,11 @@
 #include <utility>
 #include <vector>
 
+#if defined(_WIN32)
+#define NOMINMAX
+#include <Windows.h>
+#endif
+
 using namespace quader;
 
 namespace {
@@ -132,6 +137,30 @@ private:
   std::string message_;
   bool ready_ = false;
 };
+
+#if defined(_WIN32)
+/// Keeps a manifest readable while denying the later replace/write boundary.
+class ScopedManifestWriteLock final {
+public:
+  explicit ScopedManifestWriteLock(const std::filesystem::path &manifest)
+      : handle_(::CreateFileW(manifest.c_str(), GENERIC_READ, FILE_SHARE_READ,
+                              nullptr, OPEN_EXISTING,
+                              FILE_ATTRIBUTE_NORMAL, nullptr)) {}
+
+  ~ScopedManifestWriteLock() {
+    if (ready()) {
+      ::CloseHandle(handle_);
+    }
+  }
+
+  [[nodiscard]] bool ready() const noexcept {
+    return handle_ != INVALID_HANDLE_VALUE;
+  }
+
+private:
+  HANDLE handle_ = INVALID_HANDLE_VALUE;
+};
+#endif
 
 TEST(ProjectSessionWorkspace, KeepsSceneHistoryAndSelectionIndependent) {
   ScopedProjectSessionDirectory temporary("independent-state");
@@ -412,6 +441,17 @@ TEST(ProjectSessionWorkspace,
   const OpenSceneSession *reopened_scene = project.find(reopened.value());
   ASSERT_NE(reopened_scene, nullptr);
   EXPECT_FALSE(reopened_scene->dirty());
+  EXPECT_EQ(reopened_scene->session->modeling()
+                .modeling_sdk_object_count_for_tests(),
+            2u);
+  const ModelingObjectComponent *reopened_left =
+      reopened_scene->session->scene().modeling_object(left.value().entity);
+  const ModelingObjectComponent *reopened_right =
+      reopened_scene->session->scene().modeling_object(right.value().entity);
+  ASSERT_NE(reopened_left, nullptr);
+  ASSERT_NE(reopened_right, nullptr);
+  EXPECT_TRUE(reopened_left->sdk_owned);
+  EXPECT_TRUE(reopened_right->sdk_owned);
   ASSERT_TRUE(editor.selection().set_mode(QuaderSelectionMode::Object).ok());
 
   QuaderPickSelectRequest pick_left;
@@ -762,6 +802,64 @@ TEST(ProjectSessionWorkspace, FailedReplacementPreservesExistingWorkspace) {
 }
 
 TEST(ProjectSessionWorkspace,
+     LateOpenPersistenceFailurePreservesActiveSdkPreviewExactly) {
+#if !defined(_WIN32)
+  GTEST_SKIP() << "The late manifest replacement lock is Windows-specific.";
+#else
+  ScopedProjectSessionDirectory temporary("late-open-preview-rollback");
+  ProjectSession project;
+  const ProjectSessionResult created =
+      project.create(temporary.make_empty_child("Active"));
+  ASSERT_TRUE(created.ok) << created.message;
+  OpenSceneSession *active = project.active_scene();
+  ASSERT_NE(active, nullptr);
+
+  const ModelingCreateBoxResult box =
+      active->session->modeling().create_box_from_bounds({
+          .bounds = {.min = {-1.0f, -1.0f, -1.0f},
+                     .max = {1.0f, 1.0f, 1.0f}},
+          .name = "Preview Must Survive",
+      });
+  ASSERT_TRUE(box.ok) << box.message;
+  ASSERT_TRUE(active->session->modeling().begin_transform_preview(false).ok);
+  ASSERT_TRUE(active->session->modeling()
+                  .update_transform_translate_preview({2.0f, 0.0f, 0.0f})
+                  .ok);
+  ASSERT_TRUE(
+      active->session->modeling().can_cancel_active_preview_for_undo());
+  const ModelingSelectionSummary selection_before =
+      active->session->modeling().selection_summary();
+  const std::vector<EntityId> entities_before =
+      active->session->scene().entities();
+  const std::vector<AssetId> meshes_before =
+      active->session->assets().mesh_ids();
+  const std::filesystem::path active_root = project.root();
+
+  ProjectSession candidate;
+  const ProjectSessionResult candidate_created =
+      candidate.create(temporary.make_empty_child("Candidate"));
+  ASSERT_TRUE(candidate_created.ok) << candidate_created.message;
+  const std::filesystem::path candidate_manifest = candidate.manifest_path();
+  ASSERT_TRUE(candidate.close(true).ok);
+
+  ScopedManifestWriteLock locked(candidate_manifest);
+  ASSERT_TRUE(locked.ready());
+  const ProjectSessionResult failed = project.open(candidate_manifest, true);
+  EXPECT_FALSE(failed.ok);
+  EXPECT_EQ(project.root(), active_root);
+  EXPECT_EQ(project.active_scene(), active);
+  EXPECT_TRUE(
+      active->session->modeling().can_cancel_active_preview_for_undo());
+  EXPECT_EQ(active->session->modeling().selection_summary().content_revision,
+            selection_before.content_revision);
+  EXPECT_EQ(active->session->modeling().selection_summary().selection_revision,
+            selection_before.selection_revision);
+  EXPECT_EQ(active->session->scene().entities(), entities_before);
+  EXPECT_EQ(active->session->assets().mesh_ids(), meshes_before);
+#endif
+}
+
+TEST(ProjectSessionWorkspace,
      ObjectHandlesRejectWrongActiveAndClosedSceneGenerations) {
   ScopedProjectSessionDirectory temporary("qualified-handles");
   ProjectSession project;
@@ -832,12 +930,24 @@ TEST(ProjectSessionWorkspace,
           "First Box");
   ASSERT_TRUE(first_box.ok()) << first_box.error_message();
   EXPECT_EQ(first_box.value().scene_session_id, first_id);
+  OpenSceneSession *first_workspace = project.find(first_id);
+  ASSERT_NE(first_workspace, nullptr);
+  const void *first_sdk_session = first_workspace->session->modeling()
+                                      .modeling_sdk_session_identity_for_tests();
+  EXPECT_EQ(first_workspace->session->modeling()
+                .modeling_sdk_object_count_for_tests(),
+            1u);
 
   const QuaderApiResult<SceneSessionId> second_scene =
       editor.scene_documents().new_scene();
   ASSERT_TRUE(second_scene.ok()) << second_scene.error_message();
   const SceneSessionId second_id = second_scene.value();
   ASSERT_NE(second_id, first_id);
+  OpenSceneSession *second_workspace = project.find(second_id);
+  ASSERT_NE(second_workspace, nullptr);
+  EXPECT_NE(second_workspace->session->modeling()
+                .modeling_sdk_session_identity_for_tests(),
+            first_sdk_session);
   EXPECT_EQ(&editor.scene(), &cached_scene);
   EXPECT_EQ(&editor.modeling(), &cached_modeling);
   EXPECT_EQ(&editor.selection(), &cached_selection);
@@ -857,6 +967,12 @@ TEST(ProjectSessionWorkspace,
   EXPECT_EQ(second_box.value().entity, first_box.value().entity);
   EXPECT_EQ(second_box.value().modeling_object_id,
             first_box.value().modeling_object_id);
+  EXPECT_EQ(first_workspace->session->modeling()
+                .modeling_sdk_object_count_for_tests(),
+            1u);
+  EXPECT_EQ(second_workspace->session->modeling()
+                .modeling_sdk_object_count_for_tests(),
+            1u);
 
   const QuaderApiVoidResult stale_selection =
       cached_selection.select_object(first_box.value());

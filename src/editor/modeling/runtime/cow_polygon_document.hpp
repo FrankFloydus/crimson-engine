@@ -6,7 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
-#include <mesh/polygon/document_model.hpp>
+#include <quader/modeling/neutral/polygon/document_model.hpp>
 
 #include <cstddef>
 #include <cstdint>

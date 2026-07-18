@@ -8,7 +8,7 @@
 
 #include "assets/material_document.hpp"
 #include "io/qdr/qdr_project_write_snapshot.hpp"
-#include "mesh/polygon/document_topology.hpp"
+#include "quader/modeling/neutral/polygon/document_topology.hpp"
 
 #include <nlohmann/json.hpp>
 
@@ -353,7 +353,14 @@ chunk_codec_name(quader_io::QdrBinaryChunkCodec codec) {
 [[nodiscard]] Json mesh_json(
     const QdrProjectMeshAssetWriteSnapshot &mesh) {
   Json geometry;
-  if (mesh.has_authored_polygon_document &&
+  if (mesh.encoded_geometry) {
+    geometry = {
+        {"kind", mesh.has_authored_polygon_document
+                     ? "encodedAuthoredPolygon"
+                     : "encodedCompiledMesh"},
+        {"encodedBytes", mesh.encoded_geometry->size()},
+    };
+  } else if (mesh.has_authored_polygon_document &&
       mesh.authored_polygon_document) {
     geometry = {
         {"kind", "authoredPolygon"},
@@ -457,6 +464,7 @@ chunk_codec_name(quader_io::QdrBinaryChunkCodec codec) {
     value["modelingObject"] = {
         {"objectId", entity.modeling_object->object_id},
         {"materialSlot", entity.modeling_object->material_slot},
+        {"sdkOwned", entity.modeling_object->sdk_owned},
     };
   }
   if (entity.mesh) {
@@ -517,8 +525,14 @@ layer_json(const QdrProjectSceneLayerWriteSnapshot &layer) {
 std::string qdr_scene_debug_json(
     const SceneContentDocument &document,
     const quader_io::QdrBinaryContainerReadResult &container) {
-  QdrProjectWriteSnapshot snapshot =
+  QdrProjectWriteSnapshotResult snapshot_result =
       qdr_project_write_snapshot_from_document(document);
+  if (!snapshot_result.ok()) {
+    return Json{{"format", "quader.qdr.debug"},
+                {"error", snapshot_result.error().message}}
+        .dump(2);
+  }
+  QdrProjectWriteSnapshot snapshot = snapshot_result.take_value();
 
   Json chunks = Json::array();
   for (const quader_io::QdrBinaryChunk &chunk : container.chunks) {

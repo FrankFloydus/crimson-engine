@@ -10,7 +10,6 @@
 
 #include <algorithm>
 #include <functional>
-#include <limits>
 #include <optional>
 #include <utility>
 
@@ -28,14 +27,6 @@ enum class ModelingPreviewKind {
   SliceQuad,
   Thicken,
   Transform,
-};
-
-/**
- * Stores one object-level modeling clipboard entry.
- */
-struct ModelingClipboardObject {
-  std::string name;
-  PolygonDocument document;
 };
 
 /**
@@ -62,15 +53,14 @@ struct ModelingRenderMeshCacheEntry {
  */
 struct ModelingApiContext {
   ModelingSession session;
+  bool public_facade_bound = false;
   ModelingApiOptions options;
   std::optional<Error> last_error;
   std::uint64_t error_epoch = 0;
   SelectionEdit default_edit = SelectionEdit::Replace;
   std::string active_tool = "select";
-  std::vector<ModelingClipboardObject> clipboard;
   std::optional<ModelingRepeatOperation> repeat_operation;
   bool repeating_operation = false;
-  std::uint64_t preview_payload_revision = 0;
   std::vector<ModelingRenderMeshCacheEntry> render_mesh_cache;
 };
 
@@ -78,6 +68,8 @@ struct ModelingApiContext {
  * Stores one pending public preview operation without mutating session truth.
  */
 struct ModelingPreviewState {
+  ~ModelingPreviewState();
+
   std::shared_ptr<ModelingApiContext> context;
   PreviewId id{};
   ModelingPreviewKind kind = ModelingPreviewKind::None;
@@ -89,7 +81,6 @@ struct ModelingPreviewState {
   ThickenOptions thicken;
   TransformOptions transform;
   std::uint64_t payload_revision = 0;
-  bool active = true;
 };
 
 namespace detail {
@@ -97,21 +88,6 @@ namespace detail {
 inline void record_error(ModelingApiContext &context, const Error &error) {
   context.last_error = error;
   ++context.error_epoch;
-}
-
-[[nodiscard]] inline std::uint64_t
-advance_preview_payload_revision(ModelingApiContext &context) {
-  constexpr std::uint64_t kMaximum =
-      (std::numeric_limits<std::uint64_t>::max)();
-  const std::uint64_t session_revision = context.session.content_revision();
-  const std::uint64_t session_floor =
-      session_revision == kMaximum ? kMaximum : session_revision + 1U;
-  if (context.preview_payload_revision < kMaximum) {
-    ++context.preview_payload_revision;
-  }
-  context.preview_payload_revision =
-      std::max(context.preview_payload_revision, session_floor);
-  return context.preview_payload_revision;
 }
 
 template <typename T, typename Operation>
@@ -177,11 +153,15 @@ receipt_from_result(const OperationResult &result, RevisionStamp revisions) {
   receipt.modified = result.modified;
   receipt.selection_remap = result.selection_remap;
   receipt.diagnostics = result.diagnostics;
-  receipt.error = {
-      .code = result.error_code,
-      .message = result.message,
-      .diagnostics = result.diagnostics,
-  };
+  if (!result.success) {
+    receipt.error = {
+        .code = result.error_code == ErrorCode::Ok ? ErrorCode::InternalError
+                                                    : result.error_code,
+        .message = result.message.empty() ? "Modeling operation failed."
+                                          : result.message,
+        .diagnostics = result.diagnostics,
+    };
+  }
   return receipt;
 }
 
@@ -223,6 +203,21 @@ polygon_selection_from_union(const SelectionUnion &selection) {
     throw ModelingException(std::move(error));
   }
   return failed_receipt(error, current_revisions(context));
+}
+
+[[nodiscard]] inline bool require_owned_snapshot_lifetime(
+    ModelingApiContext &context, SnapshotLifetime lifetime,
+    std::string_view operation) {
+  if (lifetime == SnapshotLifetime::Owned) {
+    return true;
+  }
+  std::string message(operation);
+  message +=
+      " supports only SnapshotLifetime::Owned; pinned and borrowed storage "
+      "are not implemented.";
+  static_cast<void>(
+      handle_failure(context, unsupported_error(std::move(message))));
+  return false;
 }
 
 inline void record_repeatable_operation(ModelingApiContext &context,

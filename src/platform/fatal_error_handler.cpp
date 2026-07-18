@@ -112,6 +112,74 @@ std::wstring platform_utf8_to_wide(std::string_view value) {
 #endif
 }
 
+FatalArtifactPaths make_fatal_artifact_paths(
+    const std::filesystem::path &directory, std::string_view timestamp,
+    std::uint32_t process_id, std::uint32_t thread_id, bool include_dump) {
+  std::ostringstream filename;
+  filename << "quader-fatal-" << timestamp << "-p" << process_id << "-t"
+           << thread_id;
+  const std::string stem = filename.str();
+  return {
+      .report_path = directory / (stem + ".txt"),
+      .dump_path = include_dump ? directory / (stem + ".dmp")
+                               : std::filesystem::path{},
+  };
+}
+
+std::string format_fatal_error_report(const FatalReportData &data) {
+  std::ostringstream report;
+  report << "Quader fatal error report\n";
+  report << "Generated: " << data.generated_at << "\n";
+  report << "Process id: " << data.process_id << "\n";
+  report << "Thread id: " << data.thread_id << "\n";
+  report << "Error code: " << data.error_code << "\n";
+  report << "Quick message: " << data.quick_message << "\n";
+  report << "Detail: " << data.detail << "\n";
+  report << "Log file: " << data.log_path.string() << "\n";
+  report << "Report file: " << data.report_path.string() << "\n";
+  report << "Dump file: "
+         << (data.dump_path.empty() ? std::string{"<none>"}
+                                    : data.dump_path.string())
+         << "\n";
+  report << "Dump status: " << data.dump_status << "\n\n";
+  report << data.exception_record << "\n\n";
+  report << data.stack_trace << "\n";
+  return report.str();
+}
+
+FatalReportWriteResult write_fatal_error_report(
+    const std::filesystem::path &preferred_path,
+    const std::filesystem::path &fallback_path, std::string_view text) {
+  const auto try_write = [text](const std::filesystem::path &path) {
+    if (path.empty()) {
+      return false;
+    }
+    std::error_code directory_error;
+    if (!path.parent_path().empty()) {
+      std::filesystem::create_directories(path.parent_path(), directory_error);
+    }
+    if (directory_error) {
+      return false;
+    }
+    std::ofstream file(path, std::ios::out | std::ios::trunc |
+                                 std::ios::binary);
+    if (!file.is_open()) {
+      return false;
+    }
+    file.write(text.data(), static_cast<std::streamsize>(text.size()));
+    file.flush();
+    return file.good();
+  };
+
+  if (try_write(preferred_path)) {
+    return {.path = preferred_path, .written = true, .used_fallback = false};
+  }
+  if (fallback_path != preferred_path && try_write(fallback_path)) {
+    return {.path = fallback_path, .written = true, .used_fallback = true};
+  }
+  return {.path = preferred_path, .written = false, .used_fallback = false};
+}
+
 namespace {
 
 std::string timestamp_for_crash_file() {
@@ -161,11 +229,14 @@ std::filesystem::path crash_report_directory() {
   return base;
 }
 
-std::filesystem::path crash_artifact_path(const char *extension) {
-  std::ostringstream filename;
-  filename << "quader-fatal-" << timestamp_for_crash_file() << "-p"
-           << current_process_id() << "-t" << current_thread_id() << extension;
-  return crash_report_directory() / filename.str();
+std::filesystem::path crash_report_fallback_path(
+    const std::filesystem::path &filename) {
+  std::error_code error;
+  std::filesystem::path directory = std::filesystem::temp_directory_path(error);
+  if (error || directory.empty()) {
+    directory = std::filesystem::current_path();
+  }
+  return directory / "Quader" / "crash-reports" / filename;
 }
 
 void append_text_file(const std::filesystem::path &path,
@@ -181,21 +252,13 @@ void append_text_file(const std::filesystem::path &path,
   }
 }
 
-void write_text_file(const std::filesystem::path &path,
-                     const std::string &text) {
-  if (path.empty()) {
-    return;
-  }
-
-  std::ofstream file(path, std::ios::out | std::ios::trunc | std::ios::binary);
-  if (file.is_open()) {
-    file << text;
-    file.flush();
-  }
-}
-
 void show_fatal_message_box(FatalErrorInfo info, const std::string &detail,
                             const CrashArtifacts &artifacts) {
+  if (const char *suppress_ui =
+          std::getenv("QUADER_TEST_SUPPRESS_FATAL_UI");
+      suppress_ui != nullptr && std::string_view(suppress_ui) == "1") {
+    return;
+  }
   std::string message =
       "Quader hit a fatal internal error and must close.\n\n"
       "Error code:\n" +
@@ -479,35 +542,49 @@ CrashArtifacts write_crash_artifacts(FatalErrorInfo info,
                                      const std::string &stack_trace,
                                      FatalExceptionPointers *exception_pointers) {
   CrashArtifacts artifacts;
-  artifacts.report_path = crash_artifact_path(".txt");
+  const FatalArtifactPaths paths = make_fatal_artifact_paths(
+      crash_report_directory(), timestamp_for_crash_file(),
+      current_process_id(), current_thread_id(),
 #if defined(_WIN32)
-  artifacts.dump_path = crash_artifact_path(".dmp");
+      true);
+#else
+      false);
+#endif
+  artifacts.report_path = paths.report_path;
+  artifacts.dump_path = paths.dump_path;
+#if defined(_WIN32)
   artifacts.dump_status =
       write_mini_dump(artifacts.dump_path, exception_pointers);
 #else
   artifacts.dump_status = write_mini_dump({}, exception_pointers);
 #endif
 
-  std::ostringstream report;
-  report << "Quader fatal error report\n";
-  report << "Generated: " << timestamp_for_crash_report() << "\n";
-  report << "Process id: " << current_process_id() << "\n";
-  report << "Thread id: " << current_thread_id() << "\n";
-  report << "Error code: " << info.code << "\n";
-  report << "Quick message: " << info.quick_message << "\n";
-  report << "Detail: " << detail << "\n";
-  report << "Log file: " << g_log_path.string() << "\n";
-  report << "Report file: " << artifacts.report_path.string() << "\n";
-  report << "Dump file: "
-         << (artifacts.dump_path.empty() ? std::string{"<none>"}
-                                         : artifacts.dump_path.string())
-         << "\n";
-  report << "Dump status: " << artifacts.dump_status << "\n\n";
-  report << describe_exception_record(exception_pointers) << "\n\n";
-  report << stack_trace << "\n";
-
-  const std::string text = report.str();
-  write_text_file(artifacts.report_path, text);
+  FatalReportData report_data{
+      .generated_at = timestamp_for_crash_report(),
+      .process_id = current_process_id(),
+      .thread_id = current_thread_id(),
+      .error_code = info.code,
+      .quick_message = info.quick_message,
+      .detail = detail,
+      .log_path = g_log_path,
+      .report_path = artifacts.report_path,
+      .dump_path = artifacts.dump_path,
+      .dump_status = artifacts.dump_status,
+      .exception_record = describe_exception_record(exception_pointers),
+      .stack_trace = stack_trace,
+  };
+  std::string text = format_fatal_error_report(report_data);
+  const FatalReportWriteResult write = write_fatal_error_report(
+      artifacts.report_path,
+      crash_report_fallback_path(artifacts.report_path.filename()), text);
+  if (write.written) {
+    artifacts.report_path = write.path;
+    if (write.used_fallback) {
+      report_data.report_path = write.path;
+      text = format_fatal_error_report(report_data);
+      (void)write_fatal_error_report(write.path, write.path, text);
+    }
+  }
   append_text_file(g_log_path, "\n" + text);
   return artifacts;
 }
@@ -637,11 +714,11 @@ void install_fatal_error_handler(std::filesystem::path log_path) {
   SetUnhandledExceptionFilter(windows_unhandled_exception_filter);
 #endif
 #if defined(_MSC_VER)
-    _set_abort_behavior(0, _WRITE_ABORT_MSG | _CALL_REPORTFAULT);
-    _set_invalid_parameter_handler(invalid_parameter_handler);
+  _set_abort_behavior(0, _WRITE_ABORT_MSG | _CALL_REPORTFAULT);
+  _set_invalid_parameter_handler(invalid_parameter_handler);
 #if defined(_DEBUG)
-    _CrtSetReportMode(_CRT_ERROR, _CRTDBG_MODE_DEBUG);
-    _CrtSetReportMode(_CRT_ASSERT, _CRTDBG_MODE_DEBUG);
+  _CrtSetReportMode(_CRT_ERROR, _CRTDBG_MODE_DEBUG);
+  _CrtSetReportMode(_CRT_ASSERT, _CRTDBG_MODE_DEBUG);
 #endif
 #endif
 }

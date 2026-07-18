@@ -62,7 +62,7 @@ std::size_t count_successful_changed_assertions(const std::string& source)
 TEST(QdrDocumentOperationValidationGuardrailTests, SharedHelperCallsCentralValidator) {
 	const std::string source = read_modeling_domain_source("operation/operation_validation_test_helpers.hpp");
 
-	EXPECT_TRUE(source.find("#include <mesh/polygon/document_validation.hpp>") != std::string::npos);
+	EXPECT_TRUE(source.find("#include <quader/modeling/neutral/polygon/document_validation.hpp>") != std::string::npos);
 	EXPECT_TRUE(source.find("validate_polygon_document(document)") != std::string::npos);
 	EXPECT_TRUE(source.find("expect_valid_polygon_document_after_success") != std::string::npos);
 	EXPECT_TRUE(source.find("expect_polygon_document_validation_issue_after_success") != std::string::npos);

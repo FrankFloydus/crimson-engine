@@ -6,11 +6,9 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "test_support.hpp"
 
-#include <editor/modeling/operations/operation_command.hpp>
-#include <editor/modeling/runtime/session.hpp>
 #include <editor/interactions/interaction_api.hpp>
 #include <editor/metadata/host_contract.hpp>
-#include <mesh/polygon/document.hpp>
+#include <quader/modeling/modeling.hpp>
 
 #include <fstream>
 #include <iterator>
@@ -45,15 +43,13 @@ qec::ViewportCameraState front_camera()
 	return camera;
 }
 
-void require_compilable_meshes(const qec::EditorSession& session)
+void require_compilable_mesh(const quader::modeling::MeshHandle &mesh)
 {
-	EXPECT_FALSE(session.objects().empty());
-	for (const qec::PolygonObject& object : session.objects()) {
-		const quader_poly::CompiledMesh mesh = quader_poly::compile_document(object.document);
-		EXPECT_FALSE(mesh.vertices.empty());
-		EXPECT_FALSE(mesh.indices.empty());
-		EXPECT_FALSE(mesh.primitives.empty());
-	}
+	ASSERT_TRUE(mesh.valid());
+	const quader::modeling::MeshPayload payload = mesh.payloads().compile_mesh();
+	EXPECT_FALSE(payload.vertices.empty());
+	EXPECT_FALSE(payload.indices.empty());
+	EXPECT_FALSE(payload.primitives.empty());
 }
 
 std::string read_text_file(const char *path)
@@ -72,45 +68,24 @@ TEST(QdrCustomEngineModelingRuntimeSmokeTests, CustomEngineConsumerCanRunAModeli
 	EXPECT_FALSE(qhc::overlay_layer_catalog().empty());
 	EXPECT_FALSE(qhc::material_recipe_catalog().empty());
 
-	qec::EditorSession session;
-	const qec::CommandResult create = session.create_box_from_bounds(
-		{ -1.0F, -1.0F, -1.0F },
-		{ 1.0F, 1.0F, 1.0F });
-	EXPECT_TRUE(create.ok);
-	EXPECT_TRUE(create.changed);
-	EXPECT_TRUE(session.has_selection());
-	EXPECT_TRUE(session.objects().size() == 1U);
-
-	qec::DuplicateMeshesOperationSettings duplicate_settings;
-	duplicate_settings.explicit_offset = { { 2.0F, 0.0F, 0.0F }, true };
-
-	qec::EditorOperationCommand duplicate_command;
-        duplicate_command.operation_id =
-            qec::EditorOperationId::DuplicateMeshes;
-        duplicate_command.phase = qec::EditorOperationCommandPhase::Execute;
-        duplicate_command.settings = duplicate_settings;
-
-	const qec::EditorOperationCommandResult duplicate = qec::execute_command(session, duplicate_command);
-	EXPECT_TRUE(duplicate.command.ok);
-	EXPECT_TRUE(duplicate.command.changed);
-	EXPECT_TRUE(session.has_selection());
-	EXPECT_TRUE(session.objects().size() == 2U);
-	require_compilable_meshes(session);
-
-	qec::SelectionHoverState hover;
-	const qec::SelectionOverlayFrame overlay =
-		qec::build_selection_overlay_frame(session.objects(), session.selection_mode(), hover);
-	EXPECT_FALSE(overlay.triangles.empty());
-	EXPECT_FALSE(overlay.lines.empty());
-
-	const std::optional<quader::QVec3> pivot = session.selection_center();
-	EXPECT_TRUE(pivot.has_value());
+	quader::modeling::ModelingApi modeling =
+		quader::modeling::ModelingApi::create();
+	quader::modeling::MeshHandle source =
+		modeling.create_box({ .name = "Custom Engine Box" });
+	ASSERT_TRUE(source.valid());
+	quader::modeling::MeshHandle duplicate = source.duplicate({
+		.offset = { 2.0F, 0.0F, 0.0F },
+	});
+	ASSERT_TRUE(duplicate.valid());
+	EXPECT_EQ(modeling.mesh_summaries().size(), 2U);
+	require_compilable_mesh(source);
+	require_compilable_mesh(duplicate);
 
 	qec::TransformGizmoFrameInput gizmo_input;
         gizmo_input.tool = qec::ViewportInteractionTool::Move;
-        gizmo_input.has_selection = session.has_selection();
+	gizmo_input.has_selection = true;
 	gizmo_input.has_pivot = true;
-	gizmo_input.pivot = *pivot;
+	gizmo_input.pivot = { 0.0F, 0.0F, 0.0F };
 	gizmo_input.camera = front_camera();
 
 	const qec::TransformGizmoFrame gizmo = qec::build_transform_gizmo_frame(gizmo_input);

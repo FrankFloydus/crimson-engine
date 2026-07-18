@@ -12,6 +12,7 @@
 
 #include <cstddef>
 #include <exception>
+#include <stdexcept>
 #include <string>
 #include <utility>
 #include <vector>
@@ -71,8 +72,12 @@ QdrDocumentWriter::serialize_project_document_with_stats(
 std::vector<std::byte> QdrDocumentWriter::serialize_project_document_bytes(
     const SceneContentDocument &document) {
   QDR_PROFILE_FUNCTION();
-  return serialize_project_document_bytes(
-      qdr_project_write_snapshot_from_document(document));
+  QdrProjectWriteSnapshotResult snapshot =
+      qdr_project_write_snapshot_from_document(document);
+  if (!snapshot.ok()) {
+    throw std::runtime_error(snapshot.error().message);
+  }
+  return serialize_project_document_bytes(snapshot.value());
 }
 
 QdrProjectWriteResult QdrDocumentWriter::write_project_document_atomic(
@@ -126,8 +131,12 @@ QdrProjectWriteResult QdrDocumentWriter::write_project_document_atomic(
                        : asset_references.issues.front().message,
     };
   }
-  return write_project_document_atomic(
-      path, qdr_project_write_snapshot_from_document(document));
+  QdrProjectWriteSnapshotResult snapshot =
+      qdr_project_write_snapshot_from_document(document);
+  if (!snapshot.ok()) {
+    return {.ok = false, .message = snapshot.error().message};
+  }
+  return write_project_document_atomic(path, snapshot.value());
 }
 
 QdrProjectWriteResult QdrDocumentWriter::write_project_document_atomic(
@@ -149,8 +158,12 @@ QdrProjectWriteResult QdrDocumentWriter::write_project_document_atomic(
                            ? "Scene asset reference validation failed."
                            : references.issues.front().message};
   }
-  return write_project_document_atomic(
-      path, qdr_project_write_snapshot_from_document(document), scene_uuid);
+  QdrProjectWriteSnapshotResult snapshot =
+      qdr_project_write_snapshot_from_document(document);
+  if (!snapshot.ok()) {
+    return {.ok = false, .message = snapshot.error().message};
+  }
+  return write_project_document_atomic(path, snapshot.value(), scene_uuid);
 }
 
 } // namespace quader

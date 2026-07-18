@@ -8,9 +8,17 @@
 
 #include "render/viewport_overlay_frame.hpp"
 
-#include "editor/modeling/modeling_types.hpp"
+#include <array>
+#include <cstddef>
 
 namespace quader {
+
+/// Renderer-neutral box footprint projected by the editor/tool owner.
+struct RenderBoxPreviewRecord final {
+  bool valid = false;
+  std::array<QVec3, 4> footprint{};
+  std::size_t footprint_count = 0u;
+};
 
 /**
  * Converts the box modal tool preview into viewport overlay primitives.
@@ -18,8 +26,8 @@ namespace quader {
 class ViewportBoxOverlayBuilder {
 public:
   static void append(ViewportOverlayFrame &overlay_frame,
-                     const ViewportOverlayCamera &camera,
-                     const ModelingBoxPreview &preview);
+                      const ViewportOverlayCamera &camera,
+                      const RenderBoxPreviewRecord &preview);
 };
 
 } // namespace quader

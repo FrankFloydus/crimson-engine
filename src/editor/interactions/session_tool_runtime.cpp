@@ -56,7 +56,6 @@ void clear_editor_preview_presentation_state(
 }
 
 void reset_editor_document_runtime_state(
-		EditorSession& session,
 		BoxToolState& box,
 		SelectionHoverState& hover,
 		InsertEdgeLoopToolState& insert_edge_loop,
@@ -69,11 +68,9 @@ void reset_editor_document_runtime_state(
 {
 	reset_preview_presentation_tools(box, hover, insert_edge_loop, knife, cut, mirror, poly, transform_drag);
 	box_grid_size = 1.0;
-	session.clear_preview_transaction();
 }
 
 bool discard_editor_transient_state(
-		EditorSession& session,
 		BoxToolState& box,
 		SelectionHoverState& hover,
 		InsertEdgeLoopToolState& insert_edge_loop,
@@ -82,13 +79,15 @@ bool discard_editor_transient_state(
 		MirrorToolState& mirror,
 		PolyToolState& poly,
 		TransformDragState& transform_drag,
-		double& box_grid_size,
-		bool restore_transform_preview)
+		double& box_grid_size)
 {
-	const bool restored_preview = session.discard_preview_transactions(restore_transform_preview);
+	const bool changed = transform_drag.active ||
+		box.drag_state != BoxDragState::Idle || hover.object_id > 0 ||
+		insert_edge_loop.active || knife.active || cut_is_active(cut) ||
+		mirror_is_active(mirror) || poly.active;
 	reset_preview_presentation_tools(box, hover, insert_edge_loop, knife, cut, mirror, poly, transform_drag);
 	box_grid_size = 1.0;
-	return restored_preview;
+	return changed;
 }
 
 bool editor_runtime_box_active(const BoxToolState& box)
@@ -134,8 +133,6 @@ EditorRuntimeStatus editor_runtime_status(const EditorRuntimeState& runtime)
             poly.finalizable,
             static_cast<int>(poly.point_count),
             runtime.transform_drag.active,
-            !runtime.clipboard_objects.empty(),
-            runtime.clipboard_objects.size(),
         };
 }
 
@@ -161,15 +158,13 @@ EditorRuntimeToolActivationRequest editor_runtime_tool_activation_request(
 		const EditorRuntimeState&,
 		ViewportInteractionTool requested_tool)
 {
-	const PreviewTransactionStatus preview_status = session.preview_transaction_status();
 	const std::size_t selected_object_count = session.selected_object_ids().size();
         return {
             requested_tool,
             session.selection_mode(),
             selected_object_count,
             selected_object_count,
-            preview_status.active &&
-                preview_status.kind == PreviewTransactionKind::Transform,
+            false,
             false,
         };
 }
@@ -280,10 +275,9 @@ void clear_editor_runtime_selection_presentation_state(EditorRuntimeState& runti
 	clear_editor_runtime_transform_drag_state(runtime);
 }
 
-void reset_editor_runtime_document_state(EditorSession& session, EditorRuntimeState& runtime)
+void reset_editor_runtime_document_state(EditorRuntimeState& runtime)
 {
 	reset_editor_document_runtime_state(
-		session,
 		runtime.box,
 		runtime.hover,
 		runtime.insert_edge_loop,
@@ -300,12 +294,9 @@ void reset_editor_runtime_document_state(EditorSession& session, EditorRuntimeSt
 }
 
 bool discard_editor_runtime_transient_state(
-		EditorSession& session,
-		EditorRuntimeState& runtime,
-		bool restore_transform_preview)
+		EditorRuntimeState& runtime)
 {
-	const bool restored_preview = discard_editor_transient_state(
-		session,
+	const bool changed = discard_editor_transient_state(
 		runtime.box,
 		runtime.hover,
 		runtime.insert_edge_loop,
@@ -314,23 +305,19 @@ bool discard_editor_runtime_transient_state(
 		runtime.mirror,
 		runtime.poly,
 		runtime.transform_drag,
-		runtime.box_grid_size,
-		restore_transform_preview);
+		runtime.box_grid_size);
 	runtime.cut_hover = {};
 	runtime.mirror_hover = {};
 	clear_editor_runtime_gizmo_hover(runtime);
-	return restored_preview;
+	return changed;
 }
 
-PreviewTransactionFinishResult cancel_editor_runtime_transform_preview_state(
-		EditorSession& session,
-		EditorRuntimeState& runtime)
+bool cancel_editor_runtime_transform_preview_state(EditorRuntimeState& runtime)
 {
-  PreviewTransactionFinishResult result =
-      session.cancel_preview_transaction(PreviewTransactionKind::Transform);
+  const bool changed = runtime.transform_drag.active;
   reset_transform_drag(runtime.transform_drag);
   clear_editor_runtime_gizmo_hover(runtime);
-  return result;
+  return changed;
 }
 
 void set_editor_runtime_transform_drag_state(EditorRuntimeState& runtime, TransformDragState state)
@@ -379,7 +366,7 @@ void set_editor_runtime_transform_drag_scale_state(EditorRuntimeState& runtime, 
 }
 
 CommandResult apply_editor_runtime_transform_drag_preview(
-		EditorSession& session,
+		const EditorSession& session,
 		EditorRuntimeState& runtime,
 		const TransformDragPreviewInput& input)
 {
@@ -550,49 +537,6 @@ void set_editor_runtime_poly_active(EditorRuntimeState& runtime, bool active)
 	runtime.poly.active = active;
 }
 
-void set_editor_runtime_clipboard(
-		EditorRuntimeState& runtime,
-		std::vector<PolygonObject> objects)
-{
-	runtime.clipboard_objects = std::move(objects);
-}
-
-void clear_editor_runtime_clipboard(EditorRuntimeState& runtime)
-{
-	runtime.clipboard_objects.clear();
-}
-
-const std::vector<PolygonObject>& editor_runtime_clipboard_objects(const EditorRuntimeState& runtime)
-{
-	return runtime.clipboard_objects;
-}
-
-bool editor_runtime_clipboard_available(const EditorRuntimeState& runtime)
-{
-	return !runtime.clipboard_objects.empty();
-}
-
-std::size_t editor_runtime_clipboard_object_count(const EditorRuntimeState& runtime)
-{
-	return runtime.clipboard_objects.size();
-}
-
-std::size_t copy_selected_objects_to_editor_runtime_clipboard(
-		EditorSession& session,
-		EditorRuntimeState& runtime)
-{
-	set_editor_runtime_clipboard(runtime, session.selected_object_copies());
-	return runtime.clipboard_objects.size();
-}
-
-CommandResult paste_editor_runtime_clipboard(
-		EditorSession& session,
-		const EditorRuntimeState& runtime,
-		std::optional<quader::QVec3> target_center)
-{
-	return session.paste_objects(runtime.clipboard_objects, target_center);
-}
-
 void apply_editor_runtime_tool_activation_plan(
 		EditorRuntimeState& runtime,
 		const ViewportToolActivationPlan& plan)
@@ -662,7 +606,7 @@ EditorRuntimeToolActivationResult activate_editor_runtime_tool(
 }
 
 EditorRuntimeToolActivationResult set_editor_runtime_active_tool(
-		EditorSession& session,
+		const EditorSession& session,
 		EditorRuntimeState& runtime,
 		ViewportInteractionTool requested_tool)
 {
@@ -670,17 +614,11 @@ EditorRuntimeToolActivationResult set_editor_runtime_active_tool(
 		editor_runtime_tool_activation_request(session, runtime, requested_tool);
 	EditorRuntimeToolActivationResult result = activate_editor_runtime_tool(runtime, request);
 	if (result.requires_transform_preview_cancel) {
-		const PreviewTransactionFinishResult cancel_result =
-			cancel_editor_runtime_transform_preview_state(session, runtime);
+		const bool preview_cancelled =
+			cancel_editor_runtime_transform_preview_state(runtime);
 		request.transform_preview_cleared = true;
 		result = activate_editor_runtime_tool(runtime, request);
-		result.transform_preview_cancelled = cancel_result.before.active;
-		result.transform_preview_cancel_result = cancel_result;
-	}
-	if (result.applied && result.plan.selection_mode_changed) {
-		session.set_selection_mode(result.plan.selection_mode);
-		result.selection_mode_applied = true;
-		result.status = editor_runtime_status(runtime);
+		result.transform_preview_cancelled = preview_cancelled;
 	}
 	return result;
 }
@@ -910,19 +848,14 @@ void EditorRuntime::clear_selection_presentation_state()
 	clear_editor_runtime_selection_presentation_state(state_);
 }
 
-void EditorRuntime::reset_document_state(EditorSession& session)
+void EditorRuntime::reset_document_state()
 {
-	reset_editor_runtime_document_state(session, state_);
+	reset_editor_runtime_document_state(state_);
 }
 
-bool EditorRuntime::discard_transient_state(EditorSession& session, bool restore_transform_preview)
+bool EditorRuntime::discard_transient_state()
 {
-	return discard_editor_runtime_transient_state(session, state_, restore_transform_preview);
-}
-
-PreviewTransactionFinishResult EditorRuntime::cancel_transform_preview_state(EditorSession& session)
-{
-	return cancel_editor_runtime_transform_preview_state(session, state_);
+	return discard_editor_runtime_transient_state(state_);
 }
 
 void EditorRuntime::set_transform_drag_state(TransformDragState state)
@@ -955,7 +888,7 @@ void EditorRuntime::set_transform_drag_scale_state(ScaleToolState state)
 }
 
 CommandResult EditorRuntime::apply_transform_drag_preview(
-		EditorSession& session,
+		const EditorSession& session,
 		const TransformDragPreviewInput& input)
 {
 	QDR_PROFILE_SCOPE("qdr_editor_core.EditorRuntime.apply_transform_drag_preview");
@@ -972,7 +905,7 @@ EditorRuntimeToolActivationResult EditorRuntime::activate_tool(const EditorRunti
 	return activate_editor_runtime_tool(state_, request);
 }
 
-EditorRuntimeToolActivationResult EditorRuntime::set_active_tool(EditorSession& session, ViewportInteractionTool requested_tool)
+EditorRuntimeToolActivationResult EditorRuntime::set_active_tool(const EditorSession& session, ViewportInteractionTool requested_tool)
 {
 	return set_editor_runtime_active_tool(session, state_, requested_tool);
 }
@@ -1120,11 +1053,6 @@ bool EditorRuntime::accept_knife_current_point(double grid_size)
 	return quader_editor_core::accept_knife_current_point(state_.knife, grid_size);
 }
 
-CommandResult EditorRuntime::commit_knife_tool(EditorSession& session)
-{
-	return session.commit_knife_tool(state_.knife);
-}
-
 void EditorRuntime::reset_cut_state(bool keep_active_when_current_tool_is_cut)
 {
 	reset_editor_runtime_cut_state(state_, keep_active_when_current_tool_is_cut);
@@ -1150,13 +1078,6 @@ CutToolResult EditorRuntime::refresh_cut_preview_from_selection(
 		std::span<const PolygonObject> objects)
 {
 	return quader_editor_core::refresh_cut_preview_from_selection(state_.cut, selection, objects);
-}
-
-std::vector<quader_poly::Document> EditorRuntime::cut_preview_documents(
-		std::span<const PolygonObject> objects,
-		CutPreviewMeshSide side) const
-{
-	return quader_editor_core::cut_preview_documents(state_.cut, objects, side);
 }
 
 CutToolResult EditorRuntime::update_cut_hover_from_ray(
@@ -1204,11 +1125,6 @@ CutToolResult EditorRuntime::set_cut_mode(CutMode mode)
 	return quader_editor_core::set_cut_mode(state_.cut, mode);
 }
 
-CommandResult EditorRuntime::commit_cut_tool(EditorSession& session)
-{
-	return session.commit_cut_tool(state_.cut);
-}
-
 void EditorRuntime::reset_mirror_state(bool keep_active_when_current_tool_is_mirror)
 {
 	reset_editor_runtime_mirror_state(state_, keep_active_when_current_tool_is_mirror);
@@ -1234,12 +1150,6 @@ MirrorToolResult EditorRuntime::refresh_mirror_preview_from_selection(
 		std::span<const PolygonObject> objects)
 {
 	return quader_editor_core::refresh_mirror_preview_from_selection(state_.mirror, selection, objects);
-}
-
-std::vector<quader_poly::Document> EditorRuntime::mirror_preview_documents(
-		std::span<const PolygonObject> objects) const
-{
-	return quader_editor_core::mirror_preview_documents(state_.mirror, objects);
 }
 
 MirrorToolResult EditorRuntime::update_mirror_hover_from_ray(
@@ -1282,11 +1192,6 @@ MirrorToolResult EditorRuntime::end_mirror_drag()
 	return { true, false };
 }
 
-CommandResult EditorRuntime::commit_mirror_tool(EditorSession& session)
-{
-	return session.commit_mirror_tool(state_.mirror);
-}
-
 void EditorRuntime::reset_poly_state(bool keep_active_when_current_tool_is_poly)
 {
 	reset_editor_runtime_poly_state(state_, keep_active_when_current_tool_is_poly);
@@ -1323,11 +1228,6 @@ PolyToolResult EditorRuntime::accept_poly_current_point()
 	return quader_editor_core::accept_poly_current_point(state_.poly);
 }
 
-CommandResult EditorRuntime::commit_poly_tool(EditorSession& session)
-{
-	return session.commit_poly_tool(state_.poly);
-}
-
 void EditorRuntime::set_gizmo_hover_axis(TransformAxis axis)
 {
 	set_editor_runtime_gizmo_hover_axis(state_, axis);
@@ -1341,43 +1241,6 @@ void EditorRuntime::set_gizmo_hover_from_pick(const TransformGizmoPickHit& hit)
 void EditorRuntime::clear_gizmo_hover()
 {
 	clear_editor_runtime_gizmo_hover(state_);
-}
-
-void EditorRuntime::set_clipboard(std::vector<PolygonObject> objects)
-{
-	set_editor_runtime_clipboard(state_, std::move(objects));
-}
-
-void EditorRuntime::clear_clipboard()
-{
-	clear_editor_runtime_clipboard(state_);
-}
-
-const std::vector<PolygonObject>& EditorRuntime::clipboard_objects() const
-{
-	return editor_runtime_clipboard_objects(state_);
-}
-
-bool EditorRuntime::clipboard_available() const
-{
-	return editor_runtime_clipboard_available(state_);
-}
-
-std::size_t EditorRuntime::clipboard_object_count() const
-{
-	return editor_runtime_clipboard_object_count(state_);
-}
-
-std::size_t EditorRuntime::copy_selected_objects_to_clipboard(EditorSession& session)
-{
-	return copy_selected_objects_to_editor_runtime_clipboard(session, state_);
-}
-
-CommandResult EditorRuntime::paste_clipboard(
-		EditorSession& session,
-		std::optional<quader::QVec3> target_center) const
-{
-	return paste_editor_runtime_clipboard(session, state_, target_center);
 }
 
 } // namespace quader_editor_core

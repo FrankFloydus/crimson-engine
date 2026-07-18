@@ -7,6 +7,7 @@
 #include <quader/modeling/modeling.hpp>
 
 #include <cstddef>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -42,12 +43,13 @@ int main() {
   if (!object_id.ok()) {
     return 7;
   }
-  const PolygonDocument *session_document = session.document(object_id.value());
-  if (session_document == nullptr || session_document->face_ids().empty()) {
+  Result<std::shared_ptr<const PolygonDocument>> session_snapshot =
+      session.document_snapshot(object_id.value());
+  if (!session_snapshot.ok() || session_snapshot.value()->face_ids().empty()) {
     return 8;
   }
   if (!session.select_face(object_id.value(),
-                           session_document->face_ids().front())
+                           session_snapshot.value()->face_ids().front())
            .ok()) {
     return 9;
   }

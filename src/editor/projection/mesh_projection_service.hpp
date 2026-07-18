@@ -9,6 +9,9 @@
 #include "assets/mesh_asset.hpp"
 
 #include <editor/modeling/runtime/session.hpp>
+#include <quader/modeling/mesh/polygon_document.hpp>
+
+#include <optional>
 
 namespace quader {
 
@@ -23,6 +26,12 @@ public:
   compile_polygon_document_mesh(const quader_poly::Document &document);
   [[nodiscard]] static MeshAsset
   compile_object_mesh(const quader_editor_core::PolygonObject &object);
+  /** Converts one native authored document at the host/SDK boundary. */
+  [[nodiscard]] static quader::modeling::Result<quader::modeling::PolygonDocument>
+  sdk_document_from_polygon_document(const quader_poly::Document &document);
+  /** Projects one SDK document into native render and persistence payloads. */
+  [[nodiscard]] static std::optional<MeshAsset>
+  compile_sdk_document_mesh(const quader::modeling::PolygonDocument &document);
 };
 
 } // namespace quader

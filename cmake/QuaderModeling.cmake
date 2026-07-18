@@ -9,6 +9,8 @@ set(QUADER_MODELING_DOMAIN_TEST_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/tests/modeling
 set(QUADER_MODELING_SDK_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/src/sdk/core/modeling")
 set(QUADER_MODELING_SDK_INCLUDE_DIR "${QUADER_MODELING_SDK_ROOT}/include")
 set(QUADER_MODELING_SDK_INTERNAL_DIR "${QUADER_MODELING_SDK_ROOT}/internal")
+set(QUADER_MODELING_SDK_NEUTRAL_INCLUDE_DIR
+    "${QUADER_MODELING_SDK_ROOT}/neutral/include")
 set(QUADER_MODELING_SDK_THIRDPARTY_DIR "${QUADER_MODELING_SDK_INTERNAL_DIR}/thirdparty")
 set(QUADER_MODELING_SDK_GENERATED_DIR "${CMAKE_CURRENT_BINARY_DIR}/modeling-sdk")
 
@@ -16,6 +18,7 @@ file(GLOB QUADER_CANONICAL_POLYGON_SOURCES CONFIGURE_DEPENDS
     "${QUADER_MODELING_SDK_INTERNAL_DIR}/mesh/polygon/*.cpp"
     "${QUADER_MODELING_SDK_INTERNAL_DIR}/mesh/polygon/operations/*.cpp")
 
+if(QUADER_BUILD_NATIVE_APP)
 add_library(quader_modeling_profile INTERFACE)
 
 if(QUADER_ENABLE_TRACY)
@@ -107,6 +110,7 @@ target_compile_features(quader_geometry PUBLIC cxx_std_20)
 target_include_directories(quader_geometry
     PUBLIC
         "${CMAKE_CURRENT_SOURCE_DIR}/src"
+        "${QUADER_MODELING_SDK_NEUTRAL_INCLUDE_DIR}"
     PRIVATE
         "${QUADER_MODELING_SDK_INTERNAL_DIR}"
         "${QUADER_APP_THIRDPARTY_DIR}")
@@ -117,9 +121,9 @@ target_compile_features(quader_modeling_polygon PUBLIC cxx_std_20)
 target_include_directories(quader_modeling_polygon
     PUBLIC
         "${CMAKE_CURRENT_SOURCE_DIR}/src"
+        "${QUADER_MODELING_SDK_NEUTRAL_INCLUDE_DIR}"
     PRIVATE
         "${QUADER_MODELING_SDK_INTERNAL_DIR}"
-        "${CMAKE_CURRENT_SOURCE_DIR}/src/mesh/polygon"
         "${QUADER_APP_THIRDPARTY_DIR}")
 if(QUADER_USE_OPENMESH_TOPOLOGY)
     target_compile_definitions(quader_modeling_polygon PRIVATE QUADER_POLY_USE_OPENMESH=1)
@@ -133,30 +137,15 @@ set(QUADER_MODELING_RUNTIME_SOURCES
     src/editor/modeling/runtime/selection_policy.cpp
     src/editor/modeling/runtime/session.cpp
     src/editor/modeling/runtime/session_bookkeeping.cpp
-    src/editor/modeling/runtime/session_face_operations.cpp
-    src/editor/modeling/runtime/session_history.cpp
     src/editor/modeling/runtime/session_lifecycle.cpp
-    src/editor/modeling/runtime/session_lighting.cpp
     src/editor/modeling/runtime/session_operations.cpp
     src/editor/modeling/runtime/session_picking.cpp
-    src/editor/modeling/runtime/session_preview_transactions.cpp
     src/editor/modeling/runtime/session_selection_overlay.cpp
     src/editor/modeling/runtime/session_transform_bounds.cpp
     src/editor/modeling/runtime/transform_gizmo.cpp
     src/editor/modeling/runtime/viewport_navigation.cpp
-    src/editor/modeling/operations/assign_material_operation.cpp
-    src/editor/modeling/operations/bevel_vertices_operation.cpp
-    src/editor/modeling/operations/bridge_operation.cpp
-    src/editor/modeling/operations/duplicate_meshes_operation.cpp
-    src/editor/modeling/operations/edge_bevel_operation.cpp
-    src/editor/modeling/operations/editor_operation.cpp
-    src/editor/modeling/operations/half_cut_operation.cpp
-    src/editor/modeling/operations/merge_by_distance_operation.cpp
     src/editor/modeling/operations/operation_command.cpp
     src/editor/modeling/operations/operation_registry.cpp
-    src/editor/modeling/operations/selection_operations.cpp
-    src/editor/modeling/operations/slice_quad_operation.cpp
-    src/editor/modeling/operations/thicken_operation.cpp
     src/editor/interactions/box_tool.cpp
     src/editor/interactions/cut_tool.cpp
     src/editor/interactions/drawn_plane_tool.cpp
@@ -183,7 +172,8 @@ quader_enable_common_pch(quader_modeling_runtime)
 target_compile_features(quader_modeling_runtime PUBLIC cxx_std_20)
 target_include_directories(quader_modeling_runtime
     PUBLIC
-        "${CMAKE_CURRENT_SOURCE_DIR}/src")
+        "${CMAKE_CURRENT_SOURCE_DIR}/src"
+        "${QUADER_MODELING_SDK_INCLUDE_DIR}")
 target_link_libraries(quader_modeling_runtime
     PUBLIC
         quader_modeling_polygon
@@ -201,6 +191,7 @@ target_include_directories(quader_editor_metadata
     PUBLIC
         "${CMAKE_CURRENT_SOURCE_DIR}/src")
 target_link_libraries(quader_editor_metadata PRIVATE quader_modeling_runtime)
+endif()
 
 function(quader_configure_modeling_sdk_target target)
     quader_enable_common_pch(${target})
@@ -210,6 +201,7 @@ function(quader_configure_modeling_sdk_target target)
             "$<BUILD_INTERFACE:${QUADER_MODELING_SDK_INCLUDE_DIR}>"
             "$<INSTALL_INTERFACE:include>"
         PRIVATE
+            "${QUADER_MODELING_SDK_NEUTRAL_INCLUDE_DIR}"
             "${QUADER_MODELING_SDK_INTERNAL_DIR}"
             "${QUADER_MODELING_SDK_THIRDPARTY_DIR}")
 endfunction()
@@ -318,17 +310,26 @@ install(FILES
         "${QUADER_MODELING_SDK_GENERATED_DIR}/QuaderModelingSdkConfig.cmake"
         "${QUADER_MODELING_SDK_GENERATED_DIR}/QuaderModelingSdkConfigVersion.cmake"
     DESTINATION lib/cmake/QuaderModelingSdk)
-install(FILES "${QUADER_MODELING_SDK_LICENSE_BUNDLE}"
+install(FILES
+        "${QUADER_MODELING_SDK_LICENSE_BUNDLE}"
+        "${QUADER_MODELING_SDK_ROOT}/COMPATIBILITY.md"
     DESTINATION share/QuaderModelingSdk)
 
-if(QUADER_BUILD_PERFORMANCE_BENCHMARKS)
+if(QUADER_BUILD_NATIVE_APP AND QUADER_BUILD_PERFORMANCE_BENCHMARKS)
     add_executable(qdr_performance_baseline
         benchmarks/modeling/qdr_performance_baseline.cpp)
     quader_enable_common_pch(qdr_performance_baseline)
     target_compile_features(qdr_performance_baseline PRIVATE cxx_std_20)
-    target_link_libraries(qdr_performance_baseline PRIVATE quader_modeling_polygon quader_modeling_runtime quader_modeling_profile)
+    target_link_libraries(qdr_performance_baseline
+        PRIVATE
+            quader_assets
+            quader_modeling
+            quader_modeling_polygon
+            quader_modeling_runtime
+            quader_modeling_profile)
 endif()
 
+if(QUADER_BUILD_NATIVE_APP)
 set(QUADER_MODELING_DOMAIN_TEST_CATEGORIES
     smoke
     geometry
@@ -362,8 +363,9 @@ function(quader_configure_modeling_domain_test_compile target)
     target_include_directories(${target}
         PRIVATE
             "${CMAKE_CURRENT_SOURCE_DIR}/src"
-            "${CMAKE_CURRENT_SOURCE_DIR}/src/mesh/polygon"
             "${CMAKE_CURRENT_SOURCE_DIR}/src/editor/modeling"
+            "${QUADER_MODELING_SDK_INCLUDE_DIR}"
+            "${QUADER_MODELING_SDK_NEUTRAL_INCLUDE_DIR}"
             "${QUADER_MODELING_DOMAIN_TEST_ROOT}"
             "${QUADER_MODELING_DOMAIN_TEST_ROOT}/operation")
     target_link_libraries(${target} PRIVATE GTest::gtest)
@@ -375,6 +377,7 @@ function(quader_link_modeling_domain_test target)
             quader_geometry
             quader_modeling_polygon
             quader_modeling_runtime
+            quader_modeling_sdk
             quader_editor_metadata
             GTest::gtest
             GTest::gtest_main)
@@ -399,8 +402,9 @@ function(quader_add_modeling_domain_loop_target target)
     add_executable(${target} EXCLUDE_FROM_ALL ${ARGN})
     target_link_libraries(${target} PRIVATE GTest::gtest GTest::gtest_main)
 endfunction()
+endif()
 
-if(QUADER_BUILD_TESTS)
+if(QUADER_BUILD_TESTS AND QUADER_BUILD_NATIVE_APP)
     set(QUADER_MODELING_DOMAIN_TEST_SOURCES)
     set(QUADER_MODELING_DOMAIN_TEST_SOURCE_MANIFEST)
     foreach(_quader_modeling_domain_category IN LISTS QUADER_MODELING_DOMAIN_TEST_CATEGORIES)
@@ -409,6 +413,8 @@ if(QUADER_BUILD_TESTS)
 
     quader_add_modeling_domain_test_source(smoke qdr_modeling_domain_smoke
         tests/modeling_domain/qdr_modeling_domain_smoke.cpp)
+    quader_add_modeling_domain_test_source(smoke qdr_test_support_prerequisite_tests
+        tests/modeling_domain/qdr_test_support_prerequisite_tests.cpp)
 
     quader_add_modeling_domain_test_source(smoke qdr_custom_engine_modeling_runtime_smoke_tests
         tests/modeling_domain/qdr_custom_engine_modeling_runtime_smoke_tests.cpp)
@@ -430,9 +436,6 @@ if(QUADER_BUILD_TESTS)
 
     quader_add_modeling_domain_test_source(runtime qdr_modeling_runtime_overlay_tests tests/modeling_domain/qdr_modeling_runtime_overlay_tests.cpp)
     quader_add_modeling_domain_test_source(runtime qdr_modeling_runtime_picking_tests tests/modeling_domain/qdr_modeling_runtime_picking_tests.cpp)
-    quader_add_modeling_domain_test_source(runtime qdr_modeling_runtime_lifecycle_tests tests/modeling_domain/qdr_modeling_runtime_lifecycle_tests.cpp)
-    quader_add_modeling_domain_test_source(runtime qdr_modeling_runtime_geometry_characterization_tests tests/modeling_domain/qdr_modeling_runtime_geometry_characterization_tests.cpp)
-    quader_add_modeling_domain_test_source(runtime qdr_modeling_runtime_repeat_last_action_tests tests/modeling_domain/qdr_modeling_runtime_repeat_last_action_tests.cpp)
     quader_add_modeling_domain_test_source(editor_metadata qdr_editor_metadata_operation_catalog_tests tests/modeling_domain/editor_metadata/qdr_editor_metadata_operation_catalog_tests.cpp)
     quader_add_modeling_domain_test_source(editor_metadata qdr_editor_metadata_action_catalog_tests tests/modeling_domain/editor_metadata/qdr_editor_metadata_action_catalog_tests.cpp)
     quader_add_modeling_domain_test_source(editor_metadata qdr_editor_metadata_panel_catalog_tests tests/modeling_domain/editor_metadata/qdr_editor_metadata_panel_catalog_tests.cpp)
@@ -497,40 +500,7 @@ if(QUADER_BUILD_TESTS)
     endforeach()
 
     set(QUADER_RUNTIME_OPERATION_TEST_SOURCES
-        tests/modeling_domain/operation/qdr_modeling_runtime_command_tests.cpp
-        tests/modeling_domain/operation/qdr_modeling_runtime_operation_apply_history_command_tests.cpp
-        tests/modeling_domain/operation/qdr_modeling_runtime_operation_assign_material_slot_tests.cpp
-        tests/modeling_domain/operation/qdr_modeling_runtime_operation_bevel_vertices_tests.cpp
-        tests/modeling_domain/operation/qdr_modeling_runtime_operation_bridge_tests.cpp
-        tests/modeling_domain/operation/qdr_modeling_runtime_operation_combine_mesh_tests.cpp
-        tests/modeling_domain/operation/qdr_modeling_runtime_operation_command_tests.cpp
-        tests/modeling_domain/operation/qdr_modeling_runtime_operation_commit_cut_tool_tests.cpp
-        tests/modeling_domain/operation/qdr_modeling_runtime_operation_commit_knife_tool_tests.cpp
-        tests/modeling_domain/operation/qdr_modeling_runtime_operation_copy_tests.cpp
-        tests/modeling_domain/operation/qdr_modeling_runtime_operation_create_box_tests.cpp
-        tests/modeling_domain/operation/qdr_modeling_runtime_operation_delete_tests.cpp
-        tests/modeling_domain/operation/qdr_modeling_runtime_operation_duplicate_tests.cpp
-        tests/modeling_domain/operation/qdr_modeling_runtime_operation_edge_bevel_tests.cpp
-        tests/modeling_domain/operation/qdr_modeling_runtime_operation_fill_hole_tests.cpp
-        tests/modeling_domain/operation/qdr_modeling_runtime_operation_half_cut_tests.cpp
-        tests/modeling_domain/operation/qdr_modeling_runtime_operation_invert_mesh_tests.cpp
-        tests/modeling_domain/operation/qdr_modeling_runtime_operation_invert_selection_tests.cpp
-        tests/modeling_domain/operation/qdr_modeling_runtime_operation_merge_by_distance_tests.cpp
-        tests/modeling_domain/operation/qdr_modeling_runtime_operation_merge_edges_tests.cpp
-        tests/modeling_domain/operation/qdr_modeling_runtime_operation_mirror_tests.cpp
-        tests/modeling_domain/operation/qdr_modeling_runtime_operation_normal_shading_tests.cpp
-        tests/modeling_domain/operation/qdr_modeling_runtime_operation_paste_tests.cpp
-        tests/modeling_domain/operation/qdr_modeling_runtime_operation_recalculate_inside_mesh_tests.cpp
-        tests/modeling_domain/operation/qdr_modeling_runtime_operation_recalculate_outside_mesh_tests.cpp
-        tests/modeling_domain/operation/qdr_modeling_runtime_operation_redo_tests.cpp
-        tests/modeling_domain/operation/qdr_modeling_runtime_operation_select_all_tests.cpp
-        tests/modeling_domain/operation/qdr_modeling_runtime_operation_slice_quad_tests.cpp
-        tests/modeling_domain/operation/qdr_modeling_runtime_operation_snap_edges_to_active_tests.cpp
-        tests/modeling_domain/operation/qdr_modeling_runtime_operation_thicken_tests.cpp
-        tests/modeling_domain/operation/qdr_modeling_runtime_operation_transform_preview_tests.cpp
-        tests/modeling_domain/operation/qdr_modeling_runtime_operation_transform_tests.cpp
-        tests/modeling_domain/operation/qdr_modeling_runtime_operation_translate_tests.cpp
-        tests/modeling_domain/operation/qdr_modeling_runtime_operation_undo_tests.cpp)
+        tests/modeling_domain/operation/qdr_modeling_runtime_operation_command_tests.cpp)
     foreach(_quader_domain_operation_test_source IN LISTS QUADER_RUNTIME_OPERATION_TEST_SOURCES)
         get_filename_component(_quader_domain_operation_test_target "${_quader_domain_operation_test_source}" NAME_WE)
         quader_add_modeling_domain_test_source(runtime "${_quader_domain_operation_test_target}" "${_quader_domain_operation_test_source}")
@@ -585,15 +555,29 @@ if(QUADER_BUILD_TESTS)
             quader_geometry
             quader_modeling_polygon
             quader_modeling_runtime
+            quader_modeling_sdk
             quader_editor_metadata)
     quader_add_modeling_domain_loop_target(quader_modeling_domain_metadata_loop_tests
         $<TARGET_OBJECTS:quader_modeling_domain_editor_metadata_test_objects>)
     target_link_libraries(quader_modeling_domain_metadata_loop_tests
         PRIVATE
             quader_editor_metadata)
+endif()
 
+if(QUADER_BUILD_TESTS)
+    find_package(GTest CONFIG REQUIRED)
     add_executable(quader_modeling_sdk_consumer_tests
+        tests/sdk/headers/mesh_handle_header_compile.cpp
+        tests/sdk/headers/previews_header_compile.cpp
+        tests/sdk/headers/selection_header_compile.cpp
+        tests/sdk/headers/tools_header_compile.cpp
         tests/sdk/modeling_sdk_consumer_tests.cpp)
+    set_source_files_properties(
+        tests/sdk/headers/mesh_handle_header_compile.cpp
+        tests/sdk/headers/previews_header_compile.cpp
+        tests/sdk/headers/selection_header_compile.cpp
+        tests/sdk/headers/tools_header_compile.cpp
+        PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
     quader_enable_common_pch(quader_modeling_sdk_consumer_tests)
     target_compile_features(quader_modeling_sdk_consumer_tests PRIVATE cxx_std_20)
     target_link_libraries(quader_modeling_sdk_consumer_tests
@@ -612,6 +596,10 @@ if(QUADER_BUILD_TESTS)
     if(NOT "${CMAKE_GENERATOR_PLATFORM}" STREQUAL "")
         list(APPEND _QUADER_SDK_ONLY_BUILD_CHECK_ARGS
             "-DQUADER_CMAKE_GENERATOR_PLATFORM=${CMAKE_GENERATOR_PLATFORM}")
+    endif()
+    if(DEFINED CMAKE_CXX_COMPILER AND NOT "${CMAKE_CXX_COMPILER}" STREQUAL "")
+        list(APPEND _QUADER_SDK_ONLY_BUILD_CHECK_ARGS
+            "-DQUADER_CXX_COMPILER=${CMAKE_CXX_COMPILER}")
     endif()
     set(_QUADER_SDK_ONLY_CMAKE_TOOLCHAIN_FILE "")
     if(DEFINED CMAKE_TOOLCHAIN_FILE AND NOT "${CMAKE_TOOLCHAIN_FILE}" STREQUAL "")
@@ -635,10 +623,6 @@ if(QUADER_BUILD_TESTS)
     if(NOT "${_QUADER_SDK_ONLY_VCPKG_TARGET_TRIPLET}" STREQUAL "")
         list(APPEND _QUADER_SDK_ONLY_BUILD_CHECK_ARGS
             "-DQUADER_VCPKG_TARGET_TRIPLET=${_QUADER_SDK_ONLY_VCPKG_TARGET_TRIPLET}")
-    endif()
-    if(NOT "${QUADER_OPENMESH_SOURCE_DIR}" STREQUAL "")
-        list(APPEND _QUADER_SDK_ONLY_BUILD_CHECK_ARGS
-            "-DQUADER_OPENMESH_SOURCE_DIR=${QUADER_OPENMESH_SOURCE_DIR}")
     endif()
     list(APPEND _QUADER_SDK_ONLY_BUILD_CHECK_ARGS
         -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/QuaderSdkOnlyBuildCheck.cmake")

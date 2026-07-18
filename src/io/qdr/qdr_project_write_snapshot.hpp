@@ -10,9 +10,8 @@
 #include "assets/mesh_asset.hpp"
 #include "assets/texture_asset.hpp"
 #include "io/project/project_asset_resolver.hpp"
+#include "io/project/project_types.hpp"
 #include "scene/document/scene_content_document.hpp"
-
-#include <mesh/polygon/document_model.hpp>
 
 #include <cstdint>
 #include <memory>
@@ -33,6 +32,8 @@ struct QdrProjectMeshAssetWriteSnapshot final {
   bool has_authored_polygon_document = false;
   std::shared_ptr<const MeshGeometryPayload> geometry;
   std::shared_ptr<const quader_poly::Document> authored_polygon_document;
+  /** Verified QDR geometry payload retained without decoding/compilation. */
+  std::shared_ptr<const std::vector<std::byte>> encoded_geometry;
 };
 
 /**
@@ -103,7 +104,9 @@ struct QdrProjectWriteSnapshot final {
   std::vector<QdrProjectSceneLayerWriteSnapshot> layers;
 };
 
-[[nodiscard]] QdrProjectWriteSnapshot
+using QdrProjectWriteSnapshotResult = ProjectIoResult<QdrProjectWriteSnapshot>;
+
+[[nodiscard]] QdrProjectWriteSnapshotResult
 qdr_project_write_snapshot_from_document(const SceneContentDocument &document);
 
 } // namespace quader

@@ -89,7 +89,7 @@ project_overlay_world_point(const ViewportOverlayCamera &camera,
 
 void ViewportBoxOverlayBuilder::append(ViewportOverlayFrame &overlay_frame,
                                        const ViewportOverlayCamera &camera,
-                                       const ModelingBoxPreview &preview) {
+                                       const RenderBoxPreviewRecord &preview) {
   if (!preview.valid) {
     return;
   }

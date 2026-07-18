@@ -6,6 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "io/mesh/obj_writer.hpp"
 
+#include "core/qstr.hpp"
 #include "diagnostics/profile.hpp"
 
 #include <algorithm>
@@ -109,10 +110,7 @@ std::string path_collision_key(const std::filesystem::path &path) {
   }
   std::string key = absolute.lexically_normal().generic_string();
 #if defined(_WIN32)
-  std::transform(key.begin(), key.end(), key.begin(), [](char character) {
-    return static_cast<char>(
-        std::tolower(static_cast<unsigned char>(character)));
-  });
+  key = QStr::to_ascii_lower(key);
 #endif
   return key;
 }

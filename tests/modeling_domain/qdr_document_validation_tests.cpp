@@ -6,8 +6,8 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "test_support.hpp"
 
-#include <mesh/polygon/document.hpp>
-#include <mesh/polygon/document_validation.hpp>
+#include <quader/modeling/neutral/polygon/document.hpp>
+#include <quader/modeling/neutral/polygon/document_validation.hpp>
 
 #include <algorithm>
 #include <array>
@@ -35,14 +35,14 @@ const PolygonDocumentDiagnostic* find_code(
     return diagnostic == report.diagnostics.end() ? nullptr : &(*diagnostic);
 }
 
-Document make_triangle_document()
+::testing::AssertionResult make_triangle_document(Document& document)
 {
-    Document document;
     const ElementId a = add_vertex(document, { 0.0F, 0.0F, 0.0F });
     const ElementId b = add_vertex(document, { 1.0F, 0.0F, 0.0F });
     const ElementId c = add_vertex(document, { 0.0F, 1.0F, 0.0F });
-    require_test(add_face(document, std::array<ElementId, 3> { a, b, c }) != kInvalidElementId, "triangle face should be created");
-    return document;
+    return require_test(
+        add_face(document, std::array<ElementId, 3> { a, b, c }) != kInvalidElementId,
+        "triangle face should be created");
 }
 
 } // namespace
@@ -122,7 +122,7 @@ TEST(QdrDocumentValidationTests, ReportsDegenerateLoopAndTriangulationFailure)
     const ElementId b = add_vertex(document, { 1.0F, 0.0F, 0.0F });
     const ElementId c = add_vertex(document, { 2.0F, 0.0F, 0.0F });
     const ElementId d = add_vertex(document, { 3.0F, 0.0F, 0.0F });
-    require_test(add_face(document, std::array<ElementId, 4> { a, b, c, d }) != kInvalidElementId, "collinear quad should be authored");
+    ASSERT_TRUE(require_test(add_face(document, std::array<ElementId, 4> { a, b, c, d }) != kInvalidElementId, "collinear quad should be authored"));
 
     const PolygonDocumentValidationReport report = validate_polygon_document(document);
 
@@ -139,9 +139,9 @@ TEST(QdrDocumentValidationTests, ReportsNonmanifoldEdges)
     const ElementId c = add_vertex(document, { 0.0F, 1.0F, 0.0F });
     const ElementId d = add_vertex(document, { 0.0F, -1.0F, 0.0F });
     const ElementId e = add_vertex(document, { 0.0F, 0.0F, 1.0F });
-    require_test(add_face(document, std::array<ElementId, 3> { a, b, c }) != kInvalidElementId, "first face should be created");
-    require_test(add_face(document, std::array<ElementId, 3> { b, a, d }) != kInvalidElementId, "second face should be created");
-    require_test(add_face(document, std::array<ElementId, 3> { a, b, e }) != kInvalidElementId, "third face should be created");
+    ASSERT_TRUE(require_test(add_face(document, std::array<ElementId, 3> { a, b, c }) != kInvalidElementId, "first face should be created"));
+    ASSERT_TRUE(require_test(add_face(document, std::array<ElementId, 3> { b, a, d }) != kInvalidElementId, "second face should be created"));
+    ASSERT_TRUE(require_test(add_face(document, std::array<ElementId, 3> { a, b, e }) != kInvalidElementId, "third face should be created"));
 
     const PolygonDocumentValidationReport report = validate_polygon_document(document);
 
@@ -154,7 +154,8 @@ TEST(QdrDocumentValidationTests, ReportsNonmanifoldEdges)
 
 TEST(QdrDocumentValidationTests, ReportsInvalidHardNormalEdges)
 {
-    Document document = make_triangle_document();
+    Document document;
+    ASSERT_TRUE(make_triangle_document(document));
     const ElementId a = document.vertices[0].id;
     const ElementId b = document.vertices[1].id;
     document.hard_normal_edges = {
@@ -176,7 +177,8 @@ TEST(QdrDocumentValidationTests, ReportsInvalidHardNormalEdges)
 
 TEST(QdrDocumentValidationTests, ReportsUnreferencedVerticesAsWarnings)
 {
-    Document document = make_triangle_document();
+    Document document;
+    ASSERT_TRUE(make_triangle_document(document));
     const ElementId unused = add_vertex(document, { 2.0F, 2.0F, 2.0F });
 
     const PolygonDocumentValidationReport report = validate_polygon_document(document);

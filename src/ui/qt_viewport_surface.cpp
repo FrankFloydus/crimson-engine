@@ -6,7 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "ui/qt_viewport_surface.hpp"
 
-#include "ui/viewport_host_interaction_policy.hpp"
+#include "viewport/viewport_host_interaction_policy.hpp"
 
 #include "core/logger.hpp"
 #include "ui/qt_input_adapter.hpp"

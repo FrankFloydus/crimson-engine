@@ -54,7 +54,6 @@ build_preview_overlay_payload(const PolygonDocument &document) {
   for (const AuthoredPolygonFacePayload &face : authored.faces) {
     SemanticOverlayRecord record;
     record.kind = SemanticOverlayKind::ToolPreview;
-    record.color_abgr = 0xfff0c36aU;
     for (VertexId vertex_id : face.vertices) {
       if (const Vec3 *position = position_for(vertex_id)) {
         record.points.push_back(*position);
@@ -131,10 +130,10 @@ build_preview_document(const ModelingPreviewState &state,
 
 [[nodiscard]] OperationReceipt preview_update_receipt(
     const std::shared_ptr<ModelingPreviewState> &state) {
-  if (!state) {
+  if (!state || !state->context) {
     return {};
   }
-  if (!state->active) {
+  if (!state->context->session.preview_active(state->id)) {
     return handle_failure(*state->context,
                           make_error(ErrorCode::InvalidArgument,
                                      "Preview handle is not active."));
@@ -144,37 +143,61 @@ build_preview_document(const ModelingPreviewState &state,
   if (!document.ok()) {
     return handle_failure(*state->context, document.error());
   }
-  OperationReceipt receipt =
-      receipt_from_result(operation, current_revisions(*state->context));
-  receipt.dirty.overlays = true;
-  state->payload_revision =
-      advance_preview_payload_revision(*state->context);
-  return receipt;
+  Result<OperationResult> updated = state->context->session.update_document_preview(
+      state->id, std::move(document).value(), std::move(operation));
+  if (!updated.ok()) {
+    return handle_failure(*state->context, updated.error());
+  }
+  const PreviewTransactionSummary summary =
+      state->context->session.preview_summary();
+  state->payload_revision = summary.content_revision;
+  return receipt_from_result(updated.value(),
+                             current_revisions(*state->context));
 }
 
 } // namespace
 
-PreviewHandle::PreviewHandle(std::shared_ptr<ModelingPreviewState> state)
-    : state_(std::move(state)) {
-  if (state_ && state_->context && state_->payload_revision == 0) {
-    state_->payload_revision =
-        advance_preview_payload_revision(*state_->context);
+ModelingPreviewState::~ModelingPreviewState() {
+  if (context && context->session.preview_active(id)) {
+    static_cast<void>(context->session.cancel_preview(id));
   }
 }
 
+PreviewHandle::PreviewHandle(std::shared_ptr<ModelingPreviewState> state)
+    : state_(std::move(state)) {
+  if (!state_ || !state_->context) {
+    return;
+  }
+  state_->id = {};
+  OperationResult operation;
+  Result<PolygonDocument> document = build_preview_document(*state_, &operation);
+  if (!document.ok()) {
+    record_error(*state_->context, document.error());
+    return;
+  }
+  Result<PreviewId> begun = state_->context->session.begin_document_preview(
+      state_->selection.object, preview_operation_id(state_->kind),
+      std::move(document).value(), std::move(operation));
+  if (!begun.ok()) {
+    record_error(*state_->context, begun.error());
+    return;
+  }
+  state_->id = begun.value();
+  state_->payload_revision =
+      state_->context->session.preview_summary().content_revision;
+}
+
 PreviewId PreviewHandle::id() const { return state_ ? state_->id : PreviewId{}; }
-bool PreviewHandle::active() const { return state_ && state_->active; }
+bool PreviewHandle::active() const {
+  return state_ && state_->context &&
+         state_->context->session.preview_active(state_->id);
+}
 
 PreviewTransactionSummary PreviewHandle::summary() const {
-  if (!state_) {
+  if (!active()) {
     return {};
   }
-  return {
-      .active = state_->active,
-      .object_id = state_->selection.object,
-      .operation_id = preview_operation_id(state_->kind),
-      .content_revision = state_->payload_revision,
-  };
+  return state_->context->session.preview_summary();
 }
 
 OperationReceipt PreviewHandle::update(BridgeOptions options) {
@@ -220,6 +243,14 @@ OperationReceipt PreviewHandle::update(TransformOptions options) {
 }
 
 ToolPreviewPayload PreviewHandle::payload(PayloadRequest request) const {
+  if (!state_ || !state_->context) {
+    return {};
+  }
+  if (!require_owned_snapshot_lifetime(*state_->context, request.lifetime,
+                                       "Preview payload")) {
+    return {};
+  }
+  request.lifetime = SnapshotLifetime::Owned;
   ToolPreviewPayload payload;
   payload.mesh = mesh_payload(request);
   payload.overlay = overlay_payload(request);
@@ -228,20 +259,25 @@ ToolPreviewPayload PreviewHandle::payload(PayloadRequest request) const {
 }
 
 MeshPayload PreviewHandle::mesh_payload(PayloadRequest request) const {
-  if (!state_) {
+  if (!state_ || !state_->context) {
     return {};
   }
-  if (!state_->active) {
+  if (!active()) {
     static_cast<void>(handle_failure(
         *state_->context,
         make_error(ErrorCode::InvalidArgument, "Preview handle is not active.")));
+    return {};
+  }
+  if (!require_owned_snapshot_lifetime(*state_->context, request.lifetime,
+                                       "Preview mesh payload")) {
     return {};
   }
   if (request.only_if_changed &&
       state_->payload_revision <= request.previous_revision) {
     return {};
   }
-  Result<PolygonDocument> document = build_preview_document(*state_);
+  Result<PolygonDocument> document =
+      state_->context->session.preview_document_copy(state_->id);
   if (!document.ok()) {
     static_cast<void>(handle_failure(*state_->context, document.error()));
     return {};
@@ -258,20 +294,25 @@ MeshPayload PreviewHandle::mesh_payload(PayloadRequest request) const {
 
 SemanticOverlayPayload
 PreviewHandle::overlay_payload(PayloadRequest request) const {
-  if (!state_) {
+  if (!state_ || !state_->context) {
     return {};
   }
-  if (!state_->active) {
+  if (!active()) {
     static_cast<void>(handle_failure(
         *state_->context,
         make_error(ErrorCode::InvalidArgument, "Preview handle is not active.")));
+    return {};
+  }
+  if (!require_owned_snapshot_lifetime(*state_->context, request.lifetime,
+                                       "Preview overlay payload")) {
     return {};
   }
   if (request.only_if_changed &&
       state_->payload_revision <= request.previous_revision) {
     return {};
   }
-  Result<PolygonDocument> document = build_preview_document(*state_);
+  Result<PolygonDocument> document =
+      state_->context->session.preview_document_copy(state_->id);
   if (!document.ok()) {
     static_cast<void>(handle_failure(*state_->context, document.error()));
     return {};
@@ -286,82 +327,34 @@ PreviewHandle::overlay_payload(PayloadRequest request) const {
 }
 
 OperationReceipt PreviewHandle::commit(std::string) {
-  if (!state_) {
+  if (!state_ || !state_->context) {
     return {};
   }
-  if (!state_->active) {
+  if (!active()) {
     return handle_failure(*state_->context,
                           make_error(ErrorCode::InvalidArgument,
                                      "Preview handle is not active."));
   }
-  OperationReceipt receipt;
-  switch (state_->kind) {
-  case ModelingPreviewKind::BridgeEdges:
-    receipt = direct_mutate_selection(
-        *state_->context, state_->selection, [&](PolygonDocument &document) {
-          return document.bridge_selected_edges(state_->bridge.steps);
-        });
-    break;
-  case ModelingPreviewKind::BridgeFaces:
-    receipt = direct_mutate_selection(
-        *state_->context, state_->selection, [&](PolygonDocument &document) {
-          return document.bridge_selected_faces(state_->bridge.steps);
-        });
-    break;
-  case ModelingPreviewKind::EdgeBevel:
-    receipt = direct_mutate_selection(
-        *state_->context, state_->selection, [&](PolygonDocument &document) {
-          return document.bevel_selected_edges({
-              .width = state_->edge_bevel.width,
-              .profile = state_->edge_bevel.profile,
-              .segments = state_->edge_bevel.segments,
-          });
-        });
-    break;
-  case ModelingPreviewKind::MergeByDistance:
-    receipt = direct_mutate_selection(
-        *state_->context, state_->selection, [&](PolygonDocument &document) {
-          return document.merge_selected_vertices_by_distance(
-              state_->merge_by_distance.tolerance);
-        });
-    break;
-  case ModelingPreviewKind::SliceQuad:
-    receipt = direct_mutate_selection(
-        *state_->context, state_->selection, [&](PolygonDocument &document) {
-          return document.slice_selected_quads(state_->slice_quad.x_slices,
-                                               state_->slice_quad.y_slices);
-        });
-    break;
-  case ModelingPreviewKind::Thicken:
-    receipt = direct_mutate_selection(
-        *state_->context, state_->selection, [&](PolygonDocument &document) {
-          return document.thicken_selected_faces(state_->thicken.thickness,
-                                                 state_->thicken.from_center);
-        });
-    break;
-  case ModelingPreviewKind::Transform:
-    receipt = direct_mutate_selection(
-        *state_->context, state_->selection, [&](PolygonDocument &document) {
-          return document.transform_selection(state_->transform.transform);
-        });
-    break;
-  case ModelingPreviewKind::None:
-    receipt = unsupported(*state_->context, "Preview has no operation.");
-    break;
+  Result<OperationResult> committed =
+      state_->context->session.commit_preview(state_->id);
+  if (!committed.ok()) {
+    return handle_failure(*state_->context, committed.error());
   }
-  state_->active = false;
-  return receipt;
+  return receipt_from_result(committed.value(),
+                             current_revisions(*state_->context));
 }
 
 OperationReceipt PreviewHandle::cancel() {
-  if (state_) {
-    state_->active = false;
-    OperationReceipt receipt;
-    receipt.revisions = current_revisions(*state_->context);
-    receipt.dirty.overlays = true;
-    return receipt;
+  if (!state_ || !state_->context) {
+    return {};
   }
-  return {};
+  Result<OperationResult> canceled =
+      state_->context->session.cancel_preview(state_->id);
+  if (!canceled.ok()) {
+    return handle_failure(*state_->context, canceled.error());
+  }
+  return receipt_from_result(canceled.value(),
+                             current_revisions(*state_->context));
 }
 
 

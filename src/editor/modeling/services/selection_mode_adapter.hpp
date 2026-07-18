@@ -9,7 +9,7 @@
 #include "editor/modeling/modeling_types.hpp"
 #include "viewport/viewport_input_types.hpp"
 
-#include <editor/modeling/runtime/session.hpp>
+#include <editor/modeling/runtime/selection_types.hpp>
 #include <editor/metadata/host_contract.hpp>
 
 #include <optional>

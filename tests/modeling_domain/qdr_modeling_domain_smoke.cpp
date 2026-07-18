@@ -7,7 +7,9 @@
 #include "test_support.hpp"
 
 #include <editor/modeling/runtime/session.hpp>
-#include <mesh/polygon/document.hpp>
+#include <quader/modeling/neutral/polygon/document.hpp>
+
+#include <utility>
 
 TEST(QdrModelingDomainSmoke, AppOwnedModelingDomainLinksDocumentAndEditorCore) {
 	quader_poly::CubePrimitiveSpec spec;
@@ -23,10 +25,11 @@ TEST(QdrModelingDomainSmoke, AppOwnedModelingDomainLinksDocumentAndEditorCore) {
 	EXPECT_FALSE(mesh.vertices.empty());
 	EXPECT_FALSE(mesh.indices.empty());
 
-	quader_editor_core::EditorSession session;
-	const quader_editor_core::CommandResult create =
-		session.create_box_from_bounds({ -1.0F, -1.0F, -1.0F }, { 1.0F, 1.0F, 1.0F });
-	EXPECT_TRUE(create.ok);
-	EXPECT_TRUE(create.changed);
+	quader_editor_core::PolygonObject object;
+	object.id = 1;
+	object.selected = true;
+	object.document = std::move(document);
+	quader_editor_core::EditorSession session({ std::move(object) });
 	EXPECT_TRUE(session.objects().size() == 1U);
+	EXPECT_TRUE(session.has_selection());
 }

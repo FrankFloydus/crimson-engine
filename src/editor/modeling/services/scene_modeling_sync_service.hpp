@@ -33,13 +33,16 @@ public:
   void invalidate_scene_objects();
   void mark_scene_objects_synced(std::uint64_t content_revision);
   void remember_projected_mesh_signature(int modeling_object_id,
-                                         std::uint64_t signature);
+                                         std::uint64_t signature,
+                                         std::uintptr_t topology_storage);
   void forget_projected_mesh_signature(int modeling_object_id);
   [[nodiscard]] bool
   projected_mesh_signature_known(int modeling_object_id) const;
   [[nodiscard]] bool
   projected_mesh_signature_matches(int modeling_object_id,
                                    std::uint64_t signature) const;
+  [[nodiscard]] bool projected_topology_storage_matches(
+      int modeling_object_id, std::uintptr_t topology_storage) const;
 
   [[nodiscard]] bool scene_objects_synced_for_current_modeling_content(
       const quader_editor_core::EditorSession &session,
@@ -50,6 +53,8 @@ private:
   bool scene_objects_sync_valid_ = false;
   std::uint64_t synced_modeling_content_revision_ = 0;
   std::unordered_map<int, std::uint64_t> projected_mesh_signatures_by_object_;
+  std::unordered_map<int, std::uintptr_t>
+      projected_topology_storage_by_object_;
 };
 
 } // namespace quader

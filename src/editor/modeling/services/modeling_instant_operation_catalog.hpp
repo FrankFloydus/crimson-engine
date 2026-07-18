@@ -38,6 +38,10 @@ modeling_instant_operation_catalog();
 [[nodiscard]] const ModelingInstantOperationCatalogEntry *
 find_modeling_instant_operation_catalog_entry(
     ModelingInstantOperationId operation);
+[[nodiscard]] std::optional<quader_editor_core::EditorOperationCommand>
+modeling_instant_operation_command(
+    ModelingInstantOperationId operation,
+    const ModelingInteractionSettings &interaction_settings);
 [[nodiscard]] bool modeling_instant_operation_enabled(
     const ModelingInstantOperationCatalogEntry &entry,
     const ModelingSelectionSummary &summary);

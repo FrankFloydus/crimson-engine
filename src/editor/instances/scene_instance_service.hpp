@@ -1068,7 +1068,8 @@ private:
     }
     modeling_.project_object_selection_from_scene(true);
     const ModelingCommandResult duplicated =
-        modeling_.duplicate_selected_entity_hierarchy(document_commands_);
+        modeling_.duplicate_selected_entity_hierarchy_with_independent_meshes(
+            document_commands_);
     if (!duplicated.ok || !duplicated.changed) {
       return {
           .ok = duplicated.ok,

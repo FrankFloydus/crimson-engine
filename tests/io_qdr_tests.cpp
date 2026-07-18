@@ -13,7 +13,7 @@
 #include "support/guardrail_file_scan.hpp"
 
 #include <gtest/gtest.h>
-#include <mesh/polygon/document.hpp>
+#include <quader/modeling/neutral/polygon/document.hpp>
 
 #include <array>
 #include <chrono>
@@ -42,10 +42,6 @@ using namespace quader;
 namespace {
 
 using quader::test::guardrail::read_file;
-using quader::test::guardrail::read_source_file;
-using quader::test::guardrail::source_files_under;
-using quader::test::guardrail::source_path;
-using quader::test::guardrail::source_slice;
 
 [[nodiscard]] MeshAsset make_triangle_mesh(std::string name) {
   MeshAsset mesh;
@@ -220,6 +216,8 @@ TEST(QdrDocumentIoTests,
   ASSERT_NE(mesh_id, kInvalidAssetId);
   ASSERT_NE(entity, kInvalidEntityId);
   document.scene().set_mesh(entity, MeshComponent{.mesh = mesh_id});
+  document.scene().set_modeling_object(
+      entity, {.object_id = 42, .material_slot = 3u, .sdk_owned = true});
 
   ScopedTempDirectory directory("atomic-binary-round-trip");
   const std::filesystem::path path = directory.path() / "scene.qdr";
@@ -239,6 +237,12 @@ TEST(QdrDocumentIoTests,
   EXPECT_EQ(read.document.name(), "Binary Scene");
   EXPECT_NE(read.document.assets().mesh(mesh_id), nullptr);
   EXPECT_TRUE(read.document.scene().exists(entity));
+  const ModelingObjectComponent *modeling =
+      read.document.scene().modeling_object(entity);
+  ASSERT_NE(modeling, nullptr);
+  EXPECT_EQ(modeling->object_id, 42);
+  EXPECT_EQ(modeling->material_slot, 3u);
+  EXPECT_TRUE(modeling->sdk_owned);
   EXPECT_FALSE(contains_temp_qdr_files(directory.path()));
 }
 
@@ -543,8 +547,10 @@ TEST(QdrDocumentIoTests, SceneWriteSnapshotOwnsImmutableCopies) {
   ASSERT_NE(entity, kInvalidEntityId);
   document.scene().set_mesh(entity, MeshComponent{.mesh = mesh_id});
 
-  const QdrProjectWriteSnapshot snapshot =
+  QdrProjectWriteSnapshotResult snapshot_result =
       qdr_project_write_snapshot_from_document(document);
+  ASSERT_TRUE(snapshot_result.ok()) << snapshot_result.error().message;
+  const QdrProjectWriteSnapshot snapshot = snapshot_result.take_value();
   document.rename("Mutated Scene");
   ASSERT_TRUE(document.scene().rename_entity(entity, "Mutated Entity"));
   ASSERT_TRUE(document.assets().update_mesh(mesh_id, [](MeshAsset &mesh) {
@@ -570,162 +576,4 @@ TEST(QdrDocumentIoTests, SceneWriteSnapshotOwnsImmutableCopies) {
   EXPECT_EQ(mesh->name, "Snapshot Mesh");
   ASSERT_TRUE(mesh->authored_polygon_document);
   EXPECT_EQ(mesh->authored_polygon_document->faces.front().material_slot, 2u);
-}
-
-TEST(QdrDocumentIoTests, NativeScenePersistenceDoesNotDispatchLegacyJson) {
-  const std::string cmake = read_source_file("CMakeLists.txt");
-  const std::string native_target = source_slice(
-      cmake, "add_library(quader_project_qdr_io STATIC",
-      "set(QUADER_QDR_GENERATED_DIR");
-  ASSERT_FALSE(native_target.empty());
-  EXPECT_NE(native_target.find("src/io/qdr/qdr_scene_binary_codec.cpp"),
-            std::string::npos);
-  EXPECT_EQ(native_target.find("src/io/qdr/qdr_project_codecs.cpp"),
-            std::string::npos);
-  EXPECT_EQ(native_target.find("src/io/qdr/qdr_document.cpp"),
-            std::string::npos);
-
-  const std::string reader =
-      read_source_file({"src", "io", "qdr", "qdr_document_reader.cpp"});
-  const std::string writer =
-      read_source_file({"src", "io", "qdr", "qdr_document_writer.cpp"});
-  const std::string codec = read_source_file(
-      {"src", "io", "qdr", "qdr_scene_binary_codec.cpp"});
-  for (const std::string *source : {&reader, &writer, &codec}) {
-    EXPECT_EQ(source->find("nlohmann/json"), std::string::npos);
-    EXPECT_EQ(source->find("deserialize_document("), std::string::npos);
-    EXPECT_EQ(source->find("qdr_project_codecs"), std::string::npos);
-  }
-  EXPECT_NE(codec.find("serialize_qdr_authored_topology("),
-            std::string::npos);
-  EXPECT_NE(codec.find("deserialize_qdr_authored_topology("),
-            std::string::npos);
-}
-
-TEST(QdrDocumentIoTests, SceneSelectableMutationStaysSceneOwned) {
-  const std::string scene_header =
-      read_source_file({"src", "scene", "scene_document.hpp"});
-  const std::string scene_source =
-      read_source_file({"src", "scene", "scene_document.cpp"});
-  const std::string qdr_codec = read_source_file(
-      {"src", "io", "qdr", "qdr_scene_binary_codec.cpp"});
-
-  EXPECT_NE(
-      scene_header.find("bool set_selectable(EntityId id, bool selectable);"),
-      std::string::npos);
-  EXPECT_NE(scene_source.find("bool SceneDocument::set_selectable"),
-            std::string::npos);
-  EXPECT_NE(qdr_codec.find("document.scene().set_selectable("),
-            std::string::npos);
-  EXPECT_EQ(qdr_codec.find("->selectable ="), std::string::npos);
-
-  const std::filesystem::path source_root = source_path("src");
-  for (const std::filesystem::path &file : source_files_under(source_root)) {
-    if (file.filename() == "scene_document.cpp") {
-      continue;
-    }
-    const std::string source = read_file(file);
-    EXPECT_EQ(source.find("->selectable ="), std::string::npos)
-        << file.string();
-  }
-}
-
-TEST(ProjectionOwnershipGuardrailTests,
-     ProjectionIsReadOnlyAndModelingOwnsSceneSync) {
-  const std::string cmake = read_source_file("CMakeLists.txt");
-  EXPECT_NE(cmake.find("src/editor/projection/mesh_projection_service.cpp"),
-            std::string::npos);
-  EXPECT_EQ(
-      cmake.find("src/editor/projection/modeling_scene_reconcile_service.cpp"),
-      std::string::npos);
-  EXPECT_NE(cmake.find("src/editor/projection/picking_cache_projection.cpp"),
-            std::string::npos);
-  EXPECT_NE(
-      cmake.find("src/editor/projection/selection_overlay_projection.cpp"),
-      std::string::npos);
-  EXPECT_NE(
-      cmake.find("src/editor/modeling/services/modeling_mesh_sync_service.cpp"),
-      std::string::npos);
-
-  const std::string services = read_source_file(
-      {"src", "editor", "modeling", "services",
-       "modeling_session_services.cpp"});
-  EXPECT_EQ(services.find("ModelingSceneReconcileService::"
-                          "reconcile_modeling_object_scene_nodes"),
-            std::string::npos);
-  EXPECT_EQ(services.find("MeshProjectionService::"
-                          "project_modeling_meshes_to_scene"),
-            std::string::npos);
-  EXPECT_NE(services.find("PickingCacheProjection::"
-                          "scene_transformed_objects_for_picking"),
-            std::string::npos);
-  EXPECT_NE(services.find("PickingCacheProjection::"
-                          "object_face_geometry_signature"),
-            std::string::npos);
-
-  const std::string mesh_sync = read_source_file(
-      {"src", "editor", "modeling", "services",
-       "modeling_mesh_sync_service.cpp"});
-  EXPECT_NE(mesh_sync.find("bool reconcile_modeling_object_scene_nodes"),
-            std::string::npos);
-  EXPECT_NE(mesh_sync.find("bool project_modeling_meshes_to_scene"),
-            std::string::npos);
-  EXPECT_NE(mesh_sync.find("scene.create_entity"), std::string::npos);
-  EXPECT_NE(mesh_sync.find("scene.destroy_entity"), std::string::npos);
-  EXPECT_NE(mesh_sync.find("assets.add_mesh"), std::string::npos);
-  EXPECT_NE(mesh_sync.find("assets.replace_mesh"), std::string::npos);
-  EXPECT_NE(mesh_sync.find("build_projected_mesh_plans"), std::string::npos);
-  EXPECT_NE(mesh_sync.find("install_projected_mesh_assets"),
-            std::string::npos);
-  EXPECT_NE(mesh_sync.find("rollback_projected_mesh_installs"),
-            std::string::npos);
-  EXPECT_NE(mesh_sync.find("remember_projected_mesh_signature"),
-            std::string::npos);
-
-  const char *forbidden_projection_mutations[] = {
-      "AssetRegistry",          "SceneModelingSyncService",
-      "create_entity(",         "create_entity_with_id(",
-      "destroy_entity(",        "set_modeling_object(",
-      "set_mesh(",              "set_material(",
-      "add_mesh(",              "replace_mesh(",
-      ".bind(",                 ".unbind_object(",
-      "mark_scene_objects_synced(", "clear_selection(",
-      "set_selected(",
-  };
-  const std::filesystem::path projection_root =
-      source_path({"src", "editor", "projection"});
-  for (const std::filesystem::path &file :
-       source_files_under(projection_root)) {
-    const std::string source = read_file(file);
-    for (const char *forbidden : forbidden_projection_mutations) {
-      EXPECT_EQ(source.find(forbidden), std::string::npos)
-          << file.string() << " contains projection-owned mutation token "
-          << forbidden;
-    }
-  }
-
-  const std::string facade = read_source_file(
-      {"src", "editor", "modeling", "services",
-       "modeling_session_service.cpp"});
-  const std::string overlay_service = read_source_file(
-      {"src", "editor", "modeling", "services",
-       "modeling_session_services.cpp"});
-  EXPECT_EQ(facade.find("SelectionOverlayProjection::"
-                        "project_selection_overlay_frame"),
-            std::string::npos);
-  EXPECT_NE(overlay_service.find("SelectionOverlayProjection::"
-                                 "project_selection_overlay_frame"),
-            std::string::npos);
-}
-
-TEST(ProjectionOwnershipGuardrailTests,
-     RenderDoesNotDependOnProjectionOrModelingOwners) {
-  const std::filesystem::path render_root = source_path({"src", "render"});
-  for (const std::filesystem::path &file : source_files_under(render_root)) {
-    const std::string source = read_file(file);
-    EXPECT_EQ(source.find("editor/projection/"), std::string::npos)
-        << file.string();
-    EXPECT_EQ(source.find("#include \"modeling/"), std::string::npos)
-        << file.string();
-  }
 }

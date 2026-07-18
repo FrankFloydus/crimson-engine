@@ -9,6 +9,344 @@ affected owners/files, resolved approach, and verification. Do not record routin
 private user data, guesses, or unresolved issues. Prefer updating a related existing entry over
 adding a duplicate.
 
+## 2026-07-18 - The Modeling Refactor Ends With One Portable Owner And No Mirror Tree
+
+Task/context: Phase 6 removed migration debt and closed the Phase 0-6 architecture refactor at
+app version `0.1.62`.
+
+Invariant:
+
+- SDK documents, operations, typed identity, modeling selection/preview/history/dirty state,
+  portable QDR, and neutral snapshots have one source under `src/sdk/core/modeling`. The 29
+  low-level geometry/polygon headers live only in the source-private `neutral/include` root;
+  `src/mesh` and SDK-internal header mirrors must not return or become installed API.
+- The native editor remains the host facade and owns scene entities, assets/materials, project
+  durability, commands, viewport policy, Qt, Win32, and Filament. Projection adapters translate
+  SDK results but never retain a second modeling truth.
+- Taskflow and the unused QDR parallel helper are absent. Portable stress input is explicit through
+  `QUADER_STRESS_QDR`; fatal behavior is tested in an isolated UI-suppressed child. Clean CI owns
+  SDK-only MSVC, GCC/Clang, sanitizer, and full pinned native Windows lanes.
+- Exactly four 0.1.x SDK compatibility shims remain in `COMPATIBILITY.md`; each has an owner/test
+  and is reconsidered for removal in 0.2.0. They are supported compatibility, not migration debt.
+- Translate-preview mutation must not eagerly compile its renderer-neutral mesh/overlay payload.
+  `ModelingSession` advances the preview revision and invalidates the cached payload on update;
+  `preview_payload()` materializes it on demand. This keeps the 100,344-triangle three-update
+  workload near `198.6392/205.7955 ms` instead of the observed eager `~2.8 s`, while preserving
+  payload contents and checksum `65`.
+
+Verification: the consolidated Windows graph and all six CTest entries passed; the final
+lazy-payload correction then passed its affected SDK consumer/parity and guardrail route, native
+link/deploy, Release fixed-host samples, and Vulkan/Qt/Filament boot smoke. Version sources match,
+JSON/YAML parse, old SDK/Taskflow/include scans are clean outside negative guardrails, and
+`git diff --check` reports no errors. Hosted workflow execution begins on the first authorized
+commit/push; no hosted result is claimed for the uncommitted handoff.
+
+## 2026-07-17 - Build, Header, Command, And Test Owners Match Their Packages
+
+Task/context: Phase 5 aligned the post-migration production graph and moved source-policy checks
+out of the native behavior failure domain.
+
+Invariant:
+
+- `quader_editor_api` owns editor-wide API implementations, `quader_editor_viewport` owns editor
+  viewport integration, `quader_editor_services` owns low editor services, and
+  `quader_viewport_services` owns toolkit-neutral viewport adapters. A consumer links an owner; it
+  never compiles that owner's source directly.
+- SDK granular API headers own their declarations and compile standalone; `modeling_api.hpp` is the
+  root facade and `modeling.hpp` remains the convenience umbrella. Native result, preview, and
+  selection contracts have narrow headers where consumer groups are genuinely disjoint.
+- `EditorCommandRegistry` executes descriptors, `QuaderKeybindingService` owns effective
+  shortcut/conflict/persistence policy, and `QuaderKeybindingTargetCatalog` owns stable target and
+  scope presentation behind the unchanged public facade.
+- `command_result_from_modeling` is the native modeling-to-history result adapter. ASCII-only
+  normalization uses `QStr::to_ascii_lower`; wide filesystem folding, Qt Unicode lowercasing, and
+  isolated parser normalization stay local because their semantics differ.
+- Pure source/CMake checks run in the existing guardrail executable. Runtime assertions stay in
+  native/modeling owners. Do not create another test shard unless a new measurement materially
+  improves the reliable P0 link baseline; file size alone is not evidence.
+
+Verification at v0.1.60: all separated owner targets, four standalone SDK headers, both test
+executables, and the native app built. Full CTest passed 6/6, including isolated SDK-only install
+and external consumption. Final enumeration was 148 suites/1,139 native tests and 47 suites/349
+guardrails; the relocation lost no test and added 15 split/ownership checks. Representative
+affected routes select every new owner directly.
+
+## 2026-07-17 - The First Production Modeling Slice Has One SDK Truth
+
+Task/context: Phase 2 proved the native/portable owner boundary by cutting the existing
+box/select/component-translate workflow over to an SDK-owned session.
+
+Invariant:
+
+- Every `SceneSession` constructs exactly one `ModelingSdkProjectionAdapter`, which owns one
+  workspace-local SDK `ModelingSession` and only identity/projection bookkeeping. Workspace or
+  active-view changes never transfer its state.
+- Native box entry points invoke SDK box semantics. SDK-backed object/component selection and
+  component translate preview/commit/cancel remain SDK-owned; the host publishes mesh assets,
+  scene bindings, material/identity, selection, history, and render revisions through
+  `ModelingMeshSyncService`. The replaced native box semantic branch is absent.
+- Cross-owner publication checkpoints every SDK/asset/scene/mapping boundary. Failures restore all
+  semantic host state; allocator watermarks remain forward-only across SDK/native handoff and
+  rollback. Primitive rollback rebases current host metadata onto its pre-tool SDK snapshot, so
+  concurrent visibility edits and selection history survive.
+- Unsupported object/group/multi-object workflows hand the complete relevant SDK set to the native
+  runtime once. SDK selection synchronization publishes one exact scene selection and never clears
+  and re-adds it during retained native-tool changes. Failed project open preserves the old
+  workspace preview; successful replacement clears it once.
+
+Performance and verification:
+
+- Release raw A/B samples are under `build/perf-vs2026/p2-t07`. P0-T09 -> P2-T07 results were:
+  transform preview `287.5700/309.2713 -> 216.6368/204.4622 ms`, object overlay
+  `5195.2893/5314.4647 -> 3996.2134/3943.2595 ms`, all-face overlay
+  `9069.4068/8914.4497 -> 6669.8136/6640.7399 ms`, and 5,000 navigation steps
+  `1.8651/1.9055 -> 1.4971/1.4942 ms`. Every workload checksum matched.
+- Render cold/unchanged snapshot pairs were `23723/45 us` and `21572/47 us`; camera-only pairs
+  `21922/38 us` and `20906/41 us`; transform refresh `21877/21623 us` and `23080/20501 us`;
+  cached hover/preview/wireframe reuse remained below timer resolution with matching checksums.
+- Deterministic adapter counters require exactly one compile/asset/scene publication for a
+  committed component move, one preview publication for an update, and no publication from 16
+  repeated selection/object queries. The consolidated Debug CTest preset passed 6/6, including
+  1,221 native tests, guardrails, parity, SDK consumer/modeling-domain tests, and isolated SDK-only
+  configure/install/external-consumer build. Final native v0.1.57 build and Vulkan/Fusion smoke
+  close the phase handoff.
+
+## 2026-07-18 - Portable Modeling Contracts Have One Safe Transaction And Identity Model
+
+Task/context: Phase 1 corrected the portable SDK contracts before production native cutover.
+
+Invariant:
+
+- Polygon vertex/face IDs are monotonic within a document lineage; session-object high-water state
+  lives outside undo snapshots, old copies cannot overwrite newer lineage state, QDR persists the
+  allocation cursors, and edge identity/staleness derives from its endpoint identities.
+- A `ModelingSession` owns exactly one active preview transaction across direct transform and public
+  handle entry points. It captures a unique typed ID and base revision, and commit/cancel/destructor
+  resolution occurs through that registry exactly once.
+- Checked batch callbacks operate behind one session guard, return a real receipt that must match
+  the observed mutation journal, and cannot nest, preview, rewind history, create unscheduled
+  objects, or mutate unrelated state. Every failure closes the guard and restores the history mark.
+- Public unbound handles/facades fail deterministically, retained document access is an owned
+  immutable snapshot, `Result<T>` has exclusive value/error storage, typed selections enforce their
+  runtime kind, and renderer-neutral payloads support only their truthful `Owned` lifetime.
+- Native QDR uses the public exact `AuthoredTopology` seam rather than an SDK private header. Scene
+  bulk upsert preflights identity, allocation, index, and scene assignments off to the side and
+  publishes them atomically.
+
+Compatibility: the borrowed document pointer and void batch callback are deprecated additive
+shims. Unsupported SDK pivot/profiling placeholders are deprecated for removal in 0.2.0 and are
+not advertised by the supported tool catalog; Phase 6 owns the refreshed external-consumer
+decision.
+
+Verification at app version `0.1.56`: SDK consumer/parity/modeling-domain/guardrail/native test
+targets built; registered CTest passed after the declaration-documentation guard was satisfied;
+the isolated SDK-only install/external-consumer check passed; and the native `quader` executable
+linked and deployed. The Qt translation-catalog warning remained non-fatal.
+
+## 2026-07-17 - Phase-Zero Verification Owners Are Total And Phase-Batched
+
+Task/context: P0-T05/P0-T07/P0-T08 closed the remaining false-green architecture, clean-build, and
+test-placement gaps. Per the user's explicit execution rule, implementation is integrated for a
+whole phase before one consolidated build/test pass; Phase 1 onward is coordinator-only.
+
+Invariant:
+
+- `tests/dependency_matrix_guardrail_tests.cpp` derives 65 live/templated first-party targets and
+  93 direct project edges from the two owning CMake files. Target-policy coverage is bidirectional;
+  unknown/stale/missing/forbidden edges fail. Four used reverse-owner exceptions each name an owner
+  and the P4-T05/P5-T01 removal sequence.
+- `.github/workflows/windows-sdk.yml` is the no-Filament clean owner: Windows Server 2025/VS2026,
+  hosted-vcpkg revision plus manifest cache identity, native/OpenMesh off, explicit guardrail/SDK
+  consumer builds, and unfiltered SDK-only CTest including install/external-consumer verification.
+  It makes no parity/native claim; the controlled native CI artifact decision remains P6-T04.
+- Exactly 17 pure source/CMake checks moved from `quader_tests` behavioral sources to
+  `quader_guardrail_tests`: three math-header, four QDR/projection-owner, and ten render-owner
+  checks. Runtime behavior stayed in the native executable. Architecture status must acknowledge
+  live typed IDs/results, SDK viewport input DTOs, scene/render reuse gates, and existing QDR
+  golden/seeded coverage rather than recommissioning them as absent.
+
+Verification at app version `0.1.55`: configure passed; all five executable CTest owners built;
+CTest passed 6/6 (including SDK-only install/external consumer); the Debug `quader` executable
+linked and deployed. The Qt translation-catalog warning remained non-fatal.
+
+## 2026-07-17 - Migration Performance Uses Raw Fixed-Host Pairs And Deterministic Gates
+
+Task/context: P0-T09 established reproducible evidence for later modeling, viewport, render, and UI
+hot-path migrations without introducing flaky shared-CI timing limits or another benchmark system.
+
+Reference environment and protocol:
+
+- Base revision `f41414476d023d8603919629f84293a509c70dd2` plus the active Phase 0 working tree,
+  app version `0.1.51`; MSVC `19.51.36248.0`, Visual Studio 18 2026 x64 Release, Tracy OFF.
+- AMD Ryzen 9 7900X (12 cores/24 logical), 31.2 GiB RAM, Windows 11 Pro `10.0.26200` build 26200.
+- Configure exactly with `cmake -S . -B build/perf-vs2026 -G "Visual Studio 18 2026" -A x64
+  -DCMAKE_TOOLCHAIN_FILE="$env:USERPROFILE/vcpkg/scripts/buildsystems/vcpkg.cmake"
+  -DVCPKG_TARGET_TRIPLET=x64-windows -DQUADER_BUILD_TESTS=ON
+  -DQUADER_BUILD_PERFORMANCE_BENCHMARKS=ON`.
+- Build exactly with `cmake --build build/perf-vs2026 --config Release --target
+  qdr_performance_baseline qdr_fixture_performance_baseline qdr_phase8_performance_baseline
+  --parallel 24 -- /nodeReuse:false`.
+- For each accepted harness, run one complete identical process with output discarded, then two
+  immediate recorded processes while no compiler/build workload is active. Raw JSON stays under
+  `build/perf-vs2026/p0-t09/`. The tracked QDR fixtures are legacy JSON and the fixture benchmark
+  rejects them; no failed fixture sample is part of this baseline.
+
+Recorded commands and raw A/B results:
+
+- `qdr_performance_baseline --tier local --output <A-or-B>.json` generates four objects and
+  100,344 triangles. Transform-preview totals for three updates were `287.5700/309.2713 ms`;
+  5,000 viewport-navigation steps were `1.8651/1.9055 ms`; object overlay extraction was
+  `5195.2893/5314.4647 ms`; all-face overlay extraction was `9069.4068/8914.4497 ms`.
+- `qdr_phase8_performance_baseline --output <A-or-B>.json` uses 256 objects, grid segments 16,
+  and 40 iterations. Cold/unchanged snapshot totals were `23659/51 us` and `23140/47 us`;
+  camera-only snapshot totals were `23580/42 us` and `23401/60 us`; single-object transform
+  refresh totals were `23186/23474 us`; cold/cached wireframe-overlay totals were `1618/0 us`
+  and `1668/0 us`. Here the paired fields mean cold work versus reuse, not software-version
+  before/after, and a reported `0 us` means below the timer resolution rather than zero cost.
+  Every A/B deterministic checksum matched, but those checksums are workload/shape sentinels;
+  ordinary behavior tests remain the semantic authority.
+- Developer-iteration comparisons use `powershell -NoProfile -ExecutionPolicy Bypass -File
+  tools/affected_check.ps1 -ChangedPath <path> -MeasureFull`; record its raw before/after values
+  only on the same build/host rather than enforcing a shared millisecond limit.
+
+Ordinary deterministic gates are
+`ModelingSessionServiceTests.RepeatedComponentDragSampleSkipsPreviewAndSceneResync`,
+`ModelingSessionServiceSplitTests.SceneSessionDirtyPollingUsesConstantTimeModelingRevision`,
+`RenderOverlaySnapshotCacheTests.StableSourcesReuseAllOverlayExtractionsUntilOwnerRevisionChanges`,
+`RenderOverlaySnapshotCacheTests.TransformOnlyRefreshMatchesFullSelectionSnapshotWithoutReordering`,
+`RenderSceneSnapshotTests.RefreshesOnlyPureTransformSnapshotsAndRejectsOtherSourceChanges`,
+`ViewportOverlayPolicyTests.QtViewportExtractsOneSceneOverlaySnapshotBeforePaneComposition`,
+`QtViewportRenderSubmissionPolicyTests.NavigationSubmitsOnlyTheInteractionPane`, and
+`BuildGuardrailTests.QtFrameRefreshKeepsExpensiveChromeEventDriven`.
+A counter/revision/checksum regression is a test failure; timing drift is evaluated only against
+repeated same-host raw observations and must be explained, optimized, rolled back, or accepted.
+These are headless CPU baselines, not native Filament/GPU/FPS measurements, so later frame-loop
+work still requires immediate same-build/same-scene native frame-time or FPS evidence. Because a
+dirty Phase 0 worktree is not reconstructible from HEAD alone, each future hot-path task reruns the
+relevant harness immediately before its change. No accepted QDR-load baseline exists: the tracked
+`.qdr` files were legacy JSON and the rejected fixture attempt is excluded.
+
+## 2026-07-17 - Native Debug Tests Use Deterministic Non-Incremental Linking
+
+Task/context: P0-T03 addressed recurring pre-main MSVC incremental-link corruption in the large
+native `quader_tests` process without changing compilation or other executable policies.
+
+Invariant:
+
+- Only `quader_tests` under MSVC Debug receives `/INCREMENTAL:NO`. Release and RelWithDebInfo
+  policy, parallel compilation, Tracy, test names, and other targets remain unchanged.
+- Generated `LinkIncremental=false` plus the link tlog are the authority for the effective option;
+  source text alone is insufficient evidence.
+
+Verification: the old incremental one-source build/link took 24.059 s and artifact-clean link took
+12.935 s. Five post-fix real edit/build/list cycles took 18.021, 17.535, 17.676, 18.141, and
+13.465 s (16.968 s mean), each enumerating 164 suites/1,226 tests. The post-fix artifact-clean link
+took 10.040 s, and isolated native CTest passed 1/1.
+
+## 2026-07-17 - SDK-Only Configuration Has No Native Modeling Graph
+
+Task/context: P0-T04 made the supported no-native-app matrix genuinely independent of OpenMesh and
+native modeling rather than merely omitting the final app executable.
+
+Invariant:
+
+- With `QUADER_BUILD_NATIVE_APP=OFF`, native profile/Tracy, OpenMesh, geometry, polygon/runtime,
+  editor metadata, modeling-domain tests/loops, parity, benchmarks, and app targets are absent.
+- SDK libraries, SDK examples, SDK consumer tests, guardrails, install/export, and the recursive
+  external-consumer check remain available. The isolated check forces OpenMesh topology/fetch off
+  and an empty source path, then validates the CMake file-api graph and CTest inventory.
+- The full-native default graph is unchanged; no native-modeling-only option was added.
+
+Owners/files: `cmake/QuaderModeling.cmake`, `cmake/QuaderSdkOnlyBuildCheck.cmake`, and the focused
+build guardrail.
+
+Verification: the isolated graph contained only SDK/consumer/guardrail/example targets, passed its
+two executable CTest owners, installed the SDK, and built/ran a clean external consumer. The native
+matrix retained OpenMesh and all modeling/domain owners; 630 domain and 55 consumer tests passed.
+
+## 2026-07-17 - Dirty Polling Uses Content Revisions And Honors Preview Checkpoints
+
+Task/context: P0-T06 removed selection enumeration from frequent scene dirty-state polling while
+preserving the editor's transient-preview contract.
+
+Invariant:
+
+- `SceneSession::content_revision_stamp()` reads `ModelingSessionService::content_revision()`
+  directly; it never builds a `selection_summary()`.
+- Selection-only changes do not change the content stamp. A live owned preview may advance its
+  projected scene/asset/modeling revisions but remains clean only while its checkpoint began clean,
+  matches the expected stamp, and is uncontaminated.
+- Commit removes preview masking and reports dirty. An unrelated edit during preview remains dirty;
+  cancel restores the prior clean state.
+
+Verification: the focused source/behavior filter passed 5/5 and isolated `quader_tests` CTest
+passed 1/1 after running all 1,226 tests.
+
+## 2026-07-17 - Modeling Test Prerequisites Stop At The Caller Boundary
+
+Task/context: P0-T02 repaired modeling-domain prerequisites whose fatal assertion returned only
+from a helper and allowed the calling scenario to continue into unsafe indexing or dereferences.
+
+Invariant:
+
+- `require_test` returns `::testing::AssertionResult`; the caller owns fatal control with
+  `ASSERT_TRUE` or explicitly propagates and checks the result before using dependent state.
+- Value-producing fixture helpers use checked result/out-parameter flow. They do not hide fatal
+  assertions in non-void helpers.
+- Independent workflows have independent GoogleTest registrations, so one failed prerequisite
+  cannot suppress unrelated scenarios in the same aggregate test body.
+
+Owners/files: `tests/modeling_domain/test_support.hpp`, its modeling-domain callers, the dedicated
+prerequisite regression fixture, and `cmake/QuaderModeling.cmake` registration.
+
+Verification: an injected failure left its following sentinel untouched and the next test ran;
+registrations increased from 529 to 630; the main, polygon-loop, and runtime-loop executables
+passed; the complete CTest matrix passed 6/6; the native v0.1.51 target built.
+
+## 2026-07-17 - Affected Checks Build And Execute Every Selected SDK Owner
+
+Task/context: P0-T01 closed false-green routing where portable SDK sources omitted SDK tests and
+`tests/sdk` filters ran against the unrelated native test executable.
+
+Invariant:
+
+- Every `src/sdk/core/modeling` implementation or public-header change builds and executes the SDK
+  consumer and native parity owners; public headers also run the native-owner-free guardrail, while
+  canonical geometry/polygon paths retain their focused native loops.
+- Each `tests/sdk` source runs only its owning executable and parsed suite. Full verification builds
+  all five executable CTest owners before unfiltered CTest executes all six entries, including the
+  script-driven SDK-only external consumer.
+- A focused command cannot pass with a missing executable, a missing generic command, a stale exit
+  code, or a GoogleTest filter that selects zero tests.
+
+Owners/files: `tools/affected_check.ps1` and `tests/build_guardrail_tests.cpp`.
+
+Verification: seven table-driven PlanOnly cases and deliberate missing/zero fixtures passed; a
+temporary SDK-header compile failure stopped the SDK consumer build; a real SDK source run executed
+55 consumer and 2 parity tests; the full affected workflow built five owners and passed CTest 6/6;
+the native v0.1.48 target built.
+
+## 2026-07-17 - Architecture Direction And Refactor Execution Have One-Way Authority
+
+Task/context: P0-T00 reconciled the legacy AR-0 through AR-10 migration roadmap with the approved
+P0 through P6 implementation plan before production refactoring began.
+
+Invariant:
+
+- `architecture-review.md` owns fixed architecture direction, boundaries, and explicit deferrals;
+  its `AR-*` labels are historical evidence and never executable work IDs.
+- Root `REFACTORING_PLAN.md` is the sole implementation/progress tracker. Every retained legacy
+  phase and numbered action maps to a canonical `P*-T*` task, Complete status, or explicit
+  rejection/defer decision.
+- Root/nested instruction routing and `tools/affected_check.ps1` treat both authority files as
+  guardrail-owned inputs. The completed `refactor.md` ledger is historical only.
+
+Owners/files: `AGENTS.md`, `architecture-review.md`, `REFACTORING_PLAN.md`, `refactor.md`,
+`tools/affected_check.ps1`, and the instruction/build guardrail tests.
+
+Verification: PlanOnly selected the focused guardrail workflow for both authority documents; the
+focused governance suite passed 14/14, full CTest passed 6/6, and the native v0.1.46 target built.
+
 ## 2026-07-16 - Home Chrome Is Project-Only And Startup Readiness Is Position-Agnostic
 
 Task/context: adding movable Qt toolbars left projects stuck behind the Home page because startup
@@ -5122,3 +5460,31 @@ extraction tests.
 
 Verification: 7/7 focused scene-overlay builder tests, 378/378 affected render/viewport tests,
 the affected render guardrail, and the final native v0.1.45 build pass.
+
+## 2026-07-17 - Phase 4 Keeps Render And Qt Behind Neutral Revision-Gated Owners
+
+Invariant:
+
+- Render overlay snapshots consume asset-owned neutral wire payloads and semantic host/SDK records;
+  they never traverse polygon documents or editor modeling state. Render alone resolves color,
+  width, depth, material, and draw policy. Interned compiled topology shares one lazy wire payload;
+  authored mesh mutation invalidates its MeshAsset-local payload.
+- Qt viewport code samples raw events, focus, geometry, widgets, and native surfaces, then delegates
+  semantic routing, pane resolution, picking/selection, tool/gizmo, pivot/array, overlay, framing,
+  and submission decisions to viewport/editor owners. There is no second panel-owned interaction
+  state machine.
+- Material controls dispatch atomic editor/public scalar or texture operations and synchronize from
+  a cheap revision snapshot. The unchanged-state check precedes catalog work, formatting, and Qt
+  setters.
+- Modeling services may map runtime tool IDs through the modeling-runtime descriptor catalog; they
+  must not consult the UI-owned ViewportTool object catalog. This keeps fixed-host and other
+  non-UI consumers linkable without `quader_ui`.
+
+Owners: `MeshGeometryPayload`/`MeshAsset`, neutral render-overlay records and render style builders,
+viewport/editor interaction owners, material editor/public services, and the modeling-runtime tool
+descriptor catalog.
+
+Verification: all six `vs2026-debug` CTest entries pass (244 guardrails and 1,228 native tests), the
+native v0.1.59 executable builds, and the Vulkan/Fusion boot smoke passes. Two Release fixed-host
+samples preserve every Phase 2 checksum and all retained reuse paths; the bounded SDK box-preview
+cold-generation increase is accepted because it is outside unchanged frame work.

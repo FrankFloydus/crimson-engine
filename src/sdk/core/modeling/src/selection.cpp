@@ -29,11 +29,85 @@ template <typename T>
   return result;
 }
 
+[[nodiscard]] bool selection_payload_matches_kind(
+    const SelectionUnion &selection) {
+  switch (selection.kind) {
+  case SelectionKind::Object:
+    return selection.vertices.empty() && selection.edges.empty() &&
+           selection.faces.empty();
+  case SelectionKind::Vertex:
+    return selection.objects.empty() && selection.edges.empty() &&
+           selection.faces.empty();
+  case SelectionKind::Edge:
+    return selection.objects.empty() && selection.vertices.empty() &&
+           selection.faces.empty();
+  case SelectionKind::Face:
+    return selection.objects.empty() && selection.vertices.empty() &&
+           selection.edges.empty();
+  }
+  return false;
+}
+
+void require_selection_kind(const SelectionUnion &selection,
+                            SelectionKind expected) {
+  if (selection.kind != expected) {
+    throw std::invalid_argument(
+        "Typed selection kind does not match its constructor.");
+  }
+}
+
 } // namespace
 
 Selection::Selection(std::shared_ptr<ModelingApiContext> context,
-                     SelectionUnion selection)
-    : context_(std::move(context)), selection_(std::move(selection)) {}
+                      SelectionUnion selection)
+    : context_(context ? std::move(context)
+                       : detail::make_unbound_modeling_api_context()),
+      selection_(std::move(selection)) {
+  if (!selection_payload_matches_kind(selection_)) {
+    throw std::invalid_argument(
+        "Selection payload contains IDs from a different selection kind.");
+  }
+}
+
+ObjectSelection::ObjectSelection()
+    : Selection(detail::make_unbound_modeling_api_context(),
+                SelectionUnion{.kind = SelectionKind::Object}) {}
+
+ObjectSelection::ObjectSelection(std::shared_ptr<ModelingApiContext> context,
+                                 SelectionUnion selection)
+    : Selection(std::move(context), std::move(selection)) {
+  require_selection_kind(selection_, SelectionKind::Object);
+}
+
+VertexSelection::VertexSelection()
+    : Selection(detail::make_unbound_modeling_api_context(),
+                SelectionUnion{.kind = SelectionKind::Vertex}) {}
+
+VertexSelection::VertexSelection(std::shared_ptr<ModelingApiContext> context,
+                                 SelectionUnion selection)
+    : Selection(std::move(context), std::move(selection)) {
+  require_selection_kind(selection_, SelectionKind::Vertex);
+}
+
+EdgeSelection::EdgeSelection()
+    : Selection(detail::make_unbound_modeling_api_context(),
+                SelectionUnion{.kind = SelectionKind::Edge}) {}
+
+EdgeSelection::EdgeSelection(std::shared_ptr<ModelingApiContext> context,
+                             SelectionUnion selection)
+    : Selection(std::move(context), std::move(selection)) {
+  require_selection_kind(selection_, SelectionKind::Edge);
+}
+
+FaceSelection::FaceSelection()
+    : Selection(detail::make_unbound_modeling_api_context(),
+                SelectionUnion{.kind = SelectionKind::Face}) {}
+
+FaceSelection::FaceSelection(std::shared_ptr<ModelingApiContext> context,
+                             SelectionUnion selection)
+    : Selection(std::move(context), std::move(selection)) {
+  require_selection_kind(selection_, SelectionKind::Face);
+}
 
 SelectionKind Selection::kind() const { return selection_.kind; }
 ObjectId Selection::object() const { return selection_.object; }
@@ -166,7 +240,6 @@ PreviewHandle VertexSelection::merge_by_distance(
     MergeByDistanceOptions options) const {
   auto state = std::make_shared<ModelingPreviewState>();
   state->context = context_;
-  state->id = make_id<PreviewTag>(1);
   state->kind = ModelingPreviewKind::MergeByDistance;
   state->selection = selection_;
   state->merge_by_distance = options;
@@ -238,7 +311,6 @@ OperationReceipt EdgeSelection::soften_normals() const {
 PreviewHandle EdgeSelection::bevel(EdgeBevelOptions options) const {
   auto state = std::make_shared<ModelingPreviewState>();
   state->context = context_;
-  state->id = make_id<PreviewTag>(1);
   state->kind = ModelingPreviewKind::EdgeBevel;
   state->selection = selection_;
   state->edge_bevel = options;
@@ -254,7 +326,6 @@ OperationReceipt EdgeSelection::bridge(BridgeOptions options) const {
 PreviewHandle EdgeSelection::interpolated_bridge(BridgeOptions options) const {
   auto state = std::make_shared<ModelingPreviewState>();
   state->context = context_;
-  state->id = make_id<PreviewTag>(1);
   state->kind = ModelingPreviewKind::BridgeEdges;
   state->selection = selection_;
   state->bridge = options;
@@ -321,7 +392,6 @@ OperationReceipt FaceSelection::bridge(BridgeOptions options) const {
 PreviewHandle FaceSelection::interpolated_bridge(BridgeOptions options) const {
   auto state = std::make_shared<ModelingPreviewState>();
   state->context = context_;
-  state->id = make_id<PreviewTag>(1);
   state->kind = ModelingPreviewKind::BridgeFaces;
   state->selection = selection_;
   state->bridge = options;
@@ -409,7 +479,6 @@ OperationReceipt FaceSelection::detach() const {
 PreviewHandle FaceSelection::slice_quads(SliceQuadOptions options) const {
   auto state = std::make_shared<ModelingPreviewState>();
   state->context = context_;
-  state->id = make_id<PreviewTag>(1);
   state->kind = ModelingPreviewKind::SliceQuad;
   state->selection = selection_;
   state->slice_quad = options;
@@ -419,7 +488,6 @@ PreviewHandle FaceSelection::slice_quads(SliceQuadOptions options) const {
 PreviewHandle FaceSelection::thicken(ThickenOptions options) const {
   auto state = std::make_shared<ModelingPreviewState>();
   state->context = context_;
-  state->id = make_id<PreviewTag>(1);
   state->kind = ModelingPreviewKind::Thicken;
   state->selection = selection_;
   state->thicken = options;

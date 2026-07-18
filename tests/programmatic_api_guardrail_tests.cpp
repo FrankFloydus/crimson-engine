@@ -1644,6 +1644,9 @@ TEST(ProgrammaticApiGuardrailTests,
       read_file(source_root() / "src/io/qdr/qdr_debug_dump.cpp");
   const std::string session_ops = read_file(
       source_root() / "src/editor/modeling/runtime/session_operations.cpp");
+  const std::string sdk_adapter = read_file(
+      source_root() /
+      "src/editor/modeling/services/modeling_sdk_projection_adapter.cpp");
 
   for (const std::string *codec : {&qdr_reader, &qdr_writer}) {
     EXPECT_EQ(codec->find("nlohmann"), std::string::npos);
@@ -1663,8 +1666,11 @@ TEST(ProgrammaticApiGuardrailTests,
   EXPECT_EQ(session_ops.find("to_plane_cut_mode("), std::string::npos);
   EXPECT_EQ(session_ops.find("plane_cut_request_from_state("),
             std::string::npos);
-  EXPECT_NE(session_ops.find("plane_cut_request_from_cut_state(state)"),
+  EXPECT_EQ(session_ops.find("plane_cut_request_from_cut_state("),
             std::string::npos);
+  EXPECT_EQ(session_ops.find("split_by_plane("), std::string::npos);
+  EXPECT_NE(sdk_adapter.find("preview_plane_cut("), std::string::npos);
+  EXPECT_NE(sdk_adapter.find("split_by_plane("), std::string::npos);
   EXPECT_FALSE(std::filesystem::exists(
       source_root() / "src/editor/modeling/runtime/cut_policy.hpp"));
 }
@@ -1760,26 +1766,17 @@ TEST(ProgrammaticApiGuardrailTests, PublicBehaviorTestsUseApiOrScenarioDsl) {
               std::string::npos);
 }
 
-TEST(ProgrammaticApiGuardrailTests, ModelingOperationTestsUseSharedRuntimeHelpers) {
-  const std::vector<std::string_view> duplicated_helpers = {
-      "find_object(const quader_editor_core::EditorSession&",
-      "require_object(const quader_editor_core::EditorSession&",
-      "selected_face_count(const",
-      "selected_vertex_count(const",
-      "selected_edge_count(const",
-  };
-
+TEST(ProgrammaticApiGuardrailTests,
+     ModelingOperationTestsDoNotRecreateRetiredNativeRuntimeTruth) {
   for (const std::filesystem::path &file : files_with_extension(
            source_root() / "tests/modeling_domain/operation", ".cpp")) {
     const std::string source = read_file(file);
     const std::string relative = normalized_relative(file);
-    for (const std::string &line :
-         lines_containing(source, duplicated_helpers)) {
-      ADD_FAILURE() << relative
-                    << ": move duplicated runtime test helper to "
-                       "editor_operation_test_helpers.hpp: "
-                    << line;
-    }
+    EXPECT_EQ(source.find("EditorSession"), std::string::npos) << relative;
+    EXPECT_EQ(source.find("execute_command("), std::string::npos) << relative;
+    EXPECT_EQ(source.find("editor_operation_test_helpers.hpp"),
+              std::string::npos)
+        << relative;
   }
 }
 
@@ -1843,6 +1840,7 @@ TEST(ProgrammaticApiGuardrailTests, PublicExamplesDoNotStartFromInternalOwnerHea
             "core/undo_redo_manager.hpp",
             "editor/selection/",
             "mesh/polygon/",
+            "quader/modeling/neutral/",
             "viewport/host_viewport_contract_adapter.hpp",
             "quader_editor_core::",
             "quader_host_contract::",

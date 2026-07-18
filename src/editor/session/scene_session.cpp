@@ -157,17 +157,23 @@ SceneSessionReadView SceneSession::read_view() const {
 }
 
 SceneContentRevisionStamp SceneSession::content_revision_stamp() const {
-  const ModelingSelectionSummary modeling = modeling_->selection_summary();
   return {
       .project_revision = document_.revision(),
       .scene_revision = document_.scene().content_revision(),
       .asset_revision = document_.assets().revision(),
-      .modeling_content_revision = modeling.content_revision,
+      .modeling_content_revision = modeling_->content_revision(),
   };
 }
 
 bool SceneSession::dirty() const {
-  return !(content_revision_stamp() == clean_stamp_);
+  const SceneContentRevisionStamp current = content_revision_stamp();
+  if (preview_content_checkpoint_.has_value() &&
+      preview_content_checkpoint_->began_clean &&
+      !preview_content_checkpoint_->contaminated &&
+      current == preview_content_checkpoint_->expected_stamp) {
+    return false;
+  }
+  return !(current == clean_stamp_);
 }
 
 void SceneSession::begin_modeling_preview_checkpoint() {

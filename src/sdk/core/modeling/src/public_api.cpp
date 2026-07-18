@@ -9,6 +9,10 @@
 namespace quader::modeling {
 using namespace detail;
 
+std::shared_ptr<ModelingApiContext>
+detail::make_unbound_modeling_api_context() {
+  return std::make_shared<ModelingApiContext>();
+}
 
 
 ModelingException::ModelingException(Error error)
@@ -72,6 +76,10 @@ Result<MeshHandle> CheckedModelingApi::create_sphere(SphereOptions options) {
 
 Result<MeshHandle>
 CheckedModelingApi::add_document(PolygonDocument document, std::string name) {
+  if (!context_->public_facade_bound) {
+    return Result<MeshHandle>::failure(make_error(
+        ErrorCode::InvalidArgument, "Modeling API facade is not bound."));
+  }
   Result<ObjectId> object =
       context_->session.add_document(std::move(document), std::move(name));
   if (!object.ok()) {
@@ -89,13 +97,16 @@ CheckedOperationsApi CheckedModelingApi::operations() {
 }
 
 ModelingApi::ModelingApi()
-    : context_(std::make_shared<ModelingApiContext>()) {}
+    : context_(std::make_shared<ModelingApiContext>()) {
+  context_->public_facade_bound = true;
+}
 
 ModelingApi::ModelingApi(std::shared_ptr<ModelingApiContext> context)
     : context_(std::move(context)) {}
 
 ModelingApi ModelingApi::create(ModelingApiOptions options) {
   auto context = std::make_shared<ModelingApiContext>();
+  context->public_facade_bound = true;
   context->options = options;
   return ModelingApi(std::move(context));
 }

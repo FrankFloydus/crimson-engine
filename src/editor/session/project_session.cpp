@@ -6,6 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "editor/session/project_session.hpp"
 
+#include "core/qstr.hpp"
 #include "editor/session/project_asset_bootstrap_service.hpp"
 #include "editor/instances/project_clipboard_service.hpp"
 #include "editor/material/standard_material_edit_session_service.hpp"
@@ -64,12 +65,8 @@ std::string display_name_for_path(const ProjectRelativePath &path) {
 }
 
 bool has_qdr_extension(const ProjectRelativePath &path) {
-  std::string extension = path.native_path().extension().string();
-  std::transform(extension.begin(), extension.end(), extension.begin(),
-                 [](unsigned char value) {
-                   return static_cast<char>(std::tolower(value));
-                 });
-  return extension == ".qdr";
+  return QStr::to_ascii_lower(path.native_path().extension().string()) ==
+         ".qdr";
 }
 
 /// Projects resident saved tabs into manifest-restorable workspace state.
@@ -164,8 +161,12 @@ SceneWriteSnapshotResult scene_write_snapshot(
                            : references.issues.front().message};
   }
 
-  QdrProjectWriteSnapshot snapshot =
+  QdrProjectWriteSnapshotResult snapshot_result =
       qdr_project_write_snapshot_from_document(document);
+  if (!snapshot_result.ok()) {
+    return {.message = snapshot_result.error().message};
+  }
+  QdrProjectWriteSnapshot snapshot = snapshot_result.take_value();
   for (const ProjectAssetId &id : project_material_references(snapshot)) {
     const ProjectMaterialCatalogEntry *material = materials.find(id);
     if (material == nullptr) {
@@ -208,8 +209,12 @@ std::optional<std::string> validate_scene_project_dependencies(
     }
   }
 
-  const QdrProjectWriteSnapshot snapshot =
+  QdrProjectWriteSnapshotResult snapshot_result =
       qdr_project_write_snapshot_from_document(document);
+  if (!snapshot_result.ok()) {
+    return snapshot_result.error().message;
+  }
+  const QdrProjectWriteSnapshot &snapshot = snapshot_result.value();
   for (const ProjectAssetId &id : project_material_references(snapshot)) {
     if (!declared_materials.contains(id)) {
       return "Scene project material reference has no dependency record: " +
@@ -391,12 +396,6 @@ ProjectSession::open(const std::filesystem::path &manifest_path,
   }
   const std::optional<ProjectRelativePath> requested_active =
       candidate.manifest.active_scene_path();
-  for (const std::unique_ptr<OpenSceneSession> &scene : open_scenes_) {
-    if (scene && !cancel_transient_state(*scene)) {
-      ProjectMaterialProvisioner::rollback(material_changes);
-      return failure("Could not cancel an open scene preview.");
-    }
-  }
   if (has_project() && (has_dirty_scenes() || has_dirty_material()) &&
       !discard_existing_dirty) {
     ProjectMaterialProvisioner::rollback(material_changes);
@@ -1336,6 +1335,20 @@ ProjectSessionResult ProjectSession::install_workspace(
       }
     }
     return persisted;
+  }
+
+  // Candidate loading, validation, and manifest persistence are complete.
+  // Only now cross the destructive replacement boundary so a late candidate
+  // failure cannot cancel transient state in the still-active workspace.
+  for (const std::unique_ptr<OpenSceneSession> &scene : open_scenes_) {
+    if (scene && !cancel_transient_state(*scene)) {
+      for (const std::unique_ptr<OpenSceneSession> &candidate : scenes) {
+        if (candidate) {
+          release_session_id(candidate->session_id);
+        }
+      }
+      return failure("Could not cancel an open scene preview.");
+    }
   }
 
   release_open_scene_ids();

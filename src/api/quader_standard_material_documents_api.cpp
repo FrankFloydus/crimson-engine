@@ -58,6 +58,43 @@ to_internal_texture_slot(QuaderStandardMaterialTextureSlot slot) {
   return std::nullopt;
 }
 
+std::optional<StandardMaterialScalar>
+to_internal_scalar(QuaderStandardMaterialScalar scalar) {
+  switch (scalar) {
+  case QuaderStandardMaterialScalar::Roughness:
+    return StandardMaterialScalar::Roughness;
+  case QuaderStandardMaterialScalar::Metallic:
+    return StandardMaterialScalar::Metallic;
+  case QuaderStandardMaterialScalar::NormalStrength:
+    return StandardMaterialScalar::NormalStrength;
+  }
+  return std::nullopt;
+}
+
+std::optional<StandardMaterialTextureTransformComponent>
+to_internal_texture_transform_component(
+    QuaderStandardMaterialTextureTransformComponent component) {
+  using Public = QuaderStandardMaterialTextureTransformComponent;
+  using Internal = StandardMaterialTextureTransformComponent;
+  switch (component) {
+  case Public::CenterU:
+    return Internal::CenterU;
+  case Public::CenterV:
+    return Internal::CenterV;
+  case Public::ScaleU:
+    return Internal::ScaleU;
+  case Public::ScaleV:
+    return Internal::ScaleV;
+  case Public::OffsetU:
+    return Internal::OffsetU;
+  case Public::OffsetV:
+    return Internal::OffsetV;
+  case Public::RotationDegrees:
+    return Internal::RotationDegrees;
+  }
+  return std::nullopt;
+}
+
 std::optional<QuaderStandardMaterialTextureReference> to_public_texture(
     const std::optional<ProjectMaterialTextureSlot> &texture) {
   if (!texture.has_value()) {
@@ -166,6 +203,28 @@ QuaderStandardMaterialDocumentsApi::current() const {
   }
   return quader_api_result_from_status(status(session_, true, false),
                                        to_public(*snapshot));
+}
+
+QuaderApiResult<QuaderStandardMaterialDocumentRevision>
+QuaderStandardMaterialDocumentsApi::current_revision() const {
+  StandardMaterialEditSessionService *editor = service(session_);
+  const StandardMaterialEditSnapshot *snapshot =
+      editor != nullptr ? editor->current() : nullptr;
+  if (snapshot == nullptr) {
+    return quader_api_result_from_status<
+        QuaderStandardMaterialDocumentRevision>(
+        status(session_, false, false,
+               "No Standard Material document is open."));
+  }
+  return quader_api_result_from_status(
+      status(session_, true, false),
+      QuaderStandardMaterialDocumentRevision{
+          .session_id = snapshot->session_id,
+          .id = snapshot->document.id,
+          .draft_revision = snapshot->draft_revision,
+          .clean_revision = snapshot->clean_revision,
+          .dirty = snapshot->dirty,
+      });
 }
 
 QuaderApiResult<QuaderStandardMaterialPreviewInfo>
@@ -328,6 +387,17 @@ QuaderStandardMaterialDocumentsApi::set_normal_strength(float value) {
   QUADER_STANDARD_MATERIAL_MUTATION(editor->set_normal_strength(value));
 }
 
+QuaderApiVoidResult QuaderStandardMaterialDocumentsApi::set_scalar(
+    QuaderStandardMaterialScalar scalar, float value) {
+  const std::optional<StandardMaterialScalar> internal =
+      to_internal_scalar(scalar);
+  if (!internal.has_value()) {
+    return status(session_, false, false,
+                  "The Standard Material scalar is invalid.");
+  }
+  QUADER_STANDARD_MATERIAL_MUTATION(editor->set_scalar(*internal, value));
+}
+
 QuaderApiVoidResult
 QuaderStandardMaterialDocumentsApi::set_normal_convention(
     QuaderNormalMapConvention convention) {
@@ -346,6 +416,19 @@ QuaderStandardMaterialDocumentsApi::set_texture_transform(
     QuaderStandardMaterialTextureTransform transform) {
   QUADER_STANDARD_MATERIAL_MUTATION(editor->set_texture_transform(
       to_internal_texture_transform(transform)));
+}
+
+QuaderApiVoidResult
+QuaderStandardMaterialDocumentsApi::set_texture_transform_component(
+    QuaderStandardMaterialTextureTransformComponent component, float value) {
+  const std::optional<StandardMaterialTextureTransformComponent> internal =
+      to_internal_texture_transform_component(component);
+  if (!internal.has_value()) {
+    return status(session_, false, false,
+                  "The Standard Material texture transform component is invalid.");
+  }
+  QUADER_STANDARD_MATERIAL_MUTATION(
+      editor->set_texture_transform_component(*internal, value));
 }
 
 QuaderApiVoidResult QuaderStandardMaterialDocumentsApi::import_texture(

@@ -8,11 +8,92 @@
 #include "assets/mesh_asset_payload.hpp"
 
 #include <algorithm>
+#include <cassert>
 #include <cmath>
+#include <exception>
 #include <optional>
 #include <utility>
 
 namespace quader {
+
+AssetRegistry::AssetRegistry() : owner_thread_(std::this_thread::get_id()) {}
+
+AssetRegistry::AssetRegistry(const AssetRegistry &other)
+    : next_id_(other.next_id_), revision_(other.revision_),
+      meshes_(other.meshes_), deferred_meshes_(other.deferred_meshes_),
+      mesh_geometry_pool_(other.mesh_geometry_pool_),
+      authored_topology_pool_(other.authored_topology_pool_),
+      materials_(other.materials_), textures_(other.textures_),
+      owner_thread_(std::this_thread::get_id()) {}
+
+AssetRegistry &AssetRegistry::operator=(const AssetRegistry &other) {
+  if (this == &other) {
+    return *this;
+  }
+  assert_owner_thread();
+  next_id_ = other.next_id_;
+  revision_ = other.revision_;
+  meshes_ = other.meshes_;
+  deferred_meshes_ = other.deferred_meshes_;
+  mesh_geometry_pool_ = other.mesh_geometry_pool_;
+  authored_topology_pool_ = other.authored_topology_pool_;
+  materials_ = other.materials_;
+  textures_ = other.textures_;
+  owner_thread_ = std::this_thread::get_id();
+  return *this;
+}
+
+AssetRegistry::AssetRegistry(AssetRegistry &&other) noexcept
+    : next_id_(other.next_id_), revision_(other.revision_),
+      meshes_(std::move(other.meshes_)),
+      deferred_meshes_(std::move(other.deferred_meshes_)),
+      mesh_geometry_pool_(std::move(other.mesh_geometry_pool_)),
+      authored_topology_pool_(std::move(other.authored_topology_pool_)),
+      materials_(std::move(other.materials_)),
+      textures_(std::move(other.textures_)),
+      owner_thread_(std::this_thread::get_id()) {}
+
+AssetRegistry &AssetRegistry::operator=(AssetRegistry &&other) noexcept {
+  if (this == &other) {
+    return *this;
+  }
+  next_id_ = other.next_id_;
+  revision_ = other.revision_;
+  meshes_ = std::move(other.meshes_);
+  deferred_meshes_ = std::move(other.deferred_meshes_);
+  mesh_geometry_pool_ = std::move(other.mesh_geometry_pool_);
+  authored_topology_pool_ = std::move(other.authored_topology_pool_);
+  materials_ = std::move(other.materials_);
+  textures_ = std::move(other.textures_);
+  owner_thread_ = std::this_thread::get_id();
+  return *this;
+}
+
+bool AssetRegistry::on_owner_thread() const noexcept {
+  return owner_thread_ == std::this_thread::get_id();
+}
+
+void AssetRegistry::assert_owner_thread() const {
+  assert(on_owner_thread() &&
+         "AssetRegistry mutation/materialization must run on its owner thread");
+}
+
+AssetRegistryProjectionCheckpoint
+AssetRegistry::capture_projection_checkpoint() const {
+  assert_owner_thread();
+  return AssetRegistryProjectionCheckpoint(
+      std::make_shared<const AssetRegistry>(*this));
+}
+
+bool AssetRegistry::restore_projection_checkpoint(
+    const AssetRegistryProjectionCheckpoint &checkpoint) {
+  assert_owner_thread();
+  if (!checkpoint.valid()) {
+    return false;
+  }
+  *this = *checkpoint.snapshot_;
+  return true;
+}
 
 quader_poly::Document &MeshAsset::edit_authored_polygon_document() {
   auto editable = authored_polygon_document
@@ -21,6 +102,7 @@ quader_poly::Document &MeshAsset::edit_authored_polygon_document() {
                       : std::make_shared<quader_poly::Document>();
   authored_polygon_document = editable;
   has_authored_polygon_document = true;
+  invalidate_wire_geometry_payload();
   return *editable;
 }
 
@@ -29,9 +111,11 @@ void MeshAsset::replace_authored_polygon_document(
   authored_polygon_document =
       std::make_shared<const quader_poly::Document>(std::move(document));
   has_authored_polygon_document = true;
+  invalidate_wire_geometry_payload();
 }
 
 AssetId AssetRegistry::add_mesh(MeshAsset mesh) {
+  assert_owner_thread();
   if (next_id_ == kInvalidAssetId || !validate_mesh(mesh).ok) {
     return kInvalidAssetId;
   }
@@ -44,6 +128,7 @@ AssetId AssetRegistry::add_mesh(MeshAsset mesh) {
 }
 
 AssetId AssetRegistry::add_mesh(AssetId id, MeshAsset mesh) {
+  assert_owner_thread();
   if (id == kInvalidAssetId) {
     return add_mesh(std::move(mesh));
   }
@@ -60,7 +145,10 @@ AssetId AssetRegistry::add_mesh(AssetId id, MeshAsset mesh) {
 
 AssetId AssetRegistry::add_deferred_mesh(
     AssetId id, std::string name, bool has_stable_cpu_topology,
-    bool has_authored_polygon_document, std::function<MeshAsset()> loader) {
+    bool has_authored_polygon_document, std::function<MeshAsset()> loader,
+    std::function<std::shared_ptr<const std::vector<std::byte>>()>
+        encoded_geometry_loader) {
+  assert_owner_thread();
   if (id == kInvalidAssetId || meshes_.contains(id) || !loader) {
     return kInvalidAssetId;
   }
@@ -76,6 +164,7 @@ AssetId AssetRegistry::add_deferred_mesh(
               .has_authored_polygon_document =
                   has_authored_polygon_document,
               .loader = std::move(loader),
+              .encoded_geometry_loader = std::move(encoded_geometry_loader),
           });
   next_id_ = std::max(next_id_, id + 1u);
   mark_dirty();
@@ -83,6 +172,7 @@ AssetId AssetRegistry::add_deferred_mesh(
 }
 
 AssetId AssetRegistry::add_material(MaterialDocument material) {
+  assert_owner_thread();
   if (next_id_ == kInvalidAssetId || !validate_material(material).ok) {
     return kInvalidAssetId;
   }
@@ -94,6 +184,7 @@ AssetId AssetRegistry::add_material(MaterialDocument material) {
 }
 
 AssetId AssetRegistry::add_material(AssetId id, MaterialDocument material) {
+  assert_owner_thread();
   if (id == kInvalidAssetId) {
     return add_material(std::move(material));
   }
@@ -108,6 +199,7 @@ AssetId AssetRegistry::add_material(AssetId id, MaterialDocument material) {
 }
 
 AssetId AssetRegistry::add_texture(TextureAsset texture) {
+  assert_owner_thread();
   if (next_id_ == kInvalidAssetId) {
     return kInvalidAssetId;
   }
@@ -118,6 +210,7 @@ AssetId AssetRegistry::add_texture(TextureAsset texture) {
 }
 
 AssetId AssetRegistry::add_texture(AssetId id, TextureAsset texture) {
+  assert_owner_thread();
   if (id == kInvalidAssetId) {
     return add_texture(std::move(texture));
   }
@@ -131,6 +224,7 @@ AssetId AssetRegistry::add_texture(AssetId id, TextureAsset texture) {
 }
 
 bool AssetRegistry::remove_mesh(AssetId id) {
+  assert_owner_thread();
   if (!meshes_.remove(id)) {
     return false;
   }
@@ -140,6 +234,7 @@ bool AssetRegistry::remove_mesh(AssetId id) {
 }
 
 bool AssetRegistry::remove_material(AssetId id) {
+  assert_owner_thread();
   if (!materials_.remove(id)) {
     return false;
   }
@@ -148,6 +243,7 @@ bool AssetRegistry::remove_material(AssetId id) {
 }
 
 bool AssetRegistry::remove_texture(AssetId id) {
+  assert_owner_thread();
   if (!textures_.remove(id)) {
     return false;
   }
@@ -156,6 +252,7 @@ bool AssetRegistry::remove_texture(AssetId id) {
 }
 
 bool AssetRegistry::replace_mesh(AssetId id, MeshAsset mesh) {
+  assert_owner_thread();
   if (!validate_mesh(mesh).ok) {
     return false;
   }
@@ -170,6 +267,7 @@ bool AssetRegistry::replace_mesh(AssetId id, MeshAsset mesh) {
 }
 
 bool AssetRegistry::replace_material(AssetId id, MaterialDocument material) {
+  assert_owner_thread();
   if (!validate_material(material).ok) {
     return false;
   }
@@ -182,6 +280,7 @@ bool AssetRegistry::replace_material(AssetId id, MaterialDocument material) {
 }
 
 bool AssetRegistry::replace_texture(AssetId id, TextureAsset texture) {
+  assert_owner_thread();
   if (!textures_.replace(id, std::move(texture))) {
     return false;
   }
@@ -191,6 +290,7 @@ bool AssetRegistry::replace_texture(AssetId id, TextureAsset texture) {
 
 bool AssetRegistry::update_mesh(
     AssetId id, const std::function<void(MeshAsset &)> &update) {
+  assert_owner_thread();
   const MeshAsset *existing = mesh(id);
   if (existing == nullptr) {
     return false;
@@ -211,6 +311,7 @@ bool AssetRegistry::update_mesh(
 
 bool AssetRegistry::update_material(
     AssetId id, const std::function<void(MaterialDocument &)> &update) {
+  assert_owner_thread();
   const MaterialDocument *existing = materials_.get(id);
   if (existing == nullptr) {
     return false;
@@ -231,6 +332,7 @@ bool AssetRegistry::update_material(
 AssetRegistryMutationResult
 AssetRegistry::set_material_texture(AssetId material, std::string_view slot,
                                     AssetId texture) {
+  assert_owner_thread();
   if (slot.empty()) {
     return {.ok = false,
             .changed = false,
@@ -354,6 +456,7 @@ AssetRegistry::validate_material(const MaterialDocument &material) const {
 
 bool AssetRegistry::update_texture(
     AssetId id, const std::function<void(TextureAsset &)> &update) {
+  assert_owner_thread();
   if (!textures_.update(id, update)) {
     return false;
   }
@@ -362,6 +465,7 @@ bool AssetRegistry::update_texture(
 }
 
 const MeshAsset* AssetRegistry::mesh(AssetId id) const {
+  assert_owner_thread();
   const auto deferred = deferred_meshes_.find(id);
   if (deferred == deferred_meshes_.end()) {
     return meshes_.get(id);
@@ -423,6 +527,69 @@ AssetRegistry::mesh_descriptor(AssetId id) const {
   };
 }
 
+MeshAssetWriteSourceResult
+AssetRegistry::mesh_write_source(AssetId id) const {
+  assert_owner_thread();
+  const std::optional<MeshAssetDescriptor> descriptor = mesh_descriptor(id);
+  if (!descriptor.has_value()) {
+    return {.ok = false, .message = "Mesh asset does not exist."};
+  }
+
+  if (const auto deferred = deferred_meshes_.find(id);
+      deferred != deferred_meshes_.end() &&
+      deferred->second.encoded_geometry_loader) {
+    try {
+      std::shared_ptr<const std::vector<std::byte>> encoded =
+          deferred->second.encoded_geometry_loader();
+      if (!encoded || encoded->empty()) {
+        return {.ok = false,
+                .message = "Deferred mesh encoded geometry is empty."};
+      }
+      return {
+          .ok = true,
+          .source = {.descriptor = *descriptor,
+                     .encoded_geometry = std::move(encoded)},
+      };
+    } catch (const std::exception &exception) {
+      return {.ok = false, .message = exception.what()};
+    } catch (...) {
+      return {.ok = false,
+              .message = "Deferred mesh encoded geometry could not be read."};
+    }
+  }
+
+  try {
+    const MeshAsset *materialized = mesh(id);
+    if (materialized == nullptr) {
+      return {.ok = false,
+              .message = "Mesh asset could not be materialized for save."};
+    }
+    return {
+        .ok = true,
+        .source = {
+            .descriptor = MeshAssetDescriptor{
+                .id = id,
+                .revision = materialized->revision,
+                .name = materialized->name,
+                .has_stable_cpu_topology =
+                    materialized->has_stable_cpu_topology,
+                .has_authored_polygon_document =
+                    materialized->has_authored_polygon_document,
+                .materialized = true,
+            },
+            .geometry = materialized->geometry_payload(),
+            .authored_polygon_document =
+                materialized->authored_polygon_document,
+        },
+    };
+  } catch (const std::exception &exception) {
+    return {.ok = false, .message = exception.what()};
+  } catch (...) {
+    return {.ok = false,
+            .message = "Mesh asset could not be materialized for save."};
+  }
+}
+
 const MaterialDocument* AssetRegistry::material(AssetId id) const {
     return materials_.get(id);
 }
@@ -444,6 +611,7 @@ TextureAssetRevision AssetRegistry::texture_revision(AssetId id) const {
 }
 
 void AssetRegistry::intern_mesh_payload(MeshAsset &mesh) const {
+  assert_owner_thread();
   std::shared_ptr<const MeshGeometryPayload> geometry = mesh.geometry_payload();
   const std::uint64_t content_id = geometry->content_id().value;
   auto &geometry_candidates = mesh_geometry_pool_[content_id];
@@ -513,12 +681,16 @@ void AssetRegistry::intern_mesh_payload(MeshAsset &mesh) const {
 
 void AssetRegistry::advance_revision_for_replacement(
     std::uint64_t previous_revision) {
+  assert_owner_thread();
   meshes_.restamp_after(MeshAssetRevision{previous_revision});
   materials_.restamp_after(MaterialAssetRevision{previous_revision});
   textures_.restamp_after(TextureAssetRevision{previous_revision});
   revision_ = std::max(revision_, previous_revision) + 1u;
 }
 
-void AssetRegistry::mark_dirty() { ++revision_; }
+void AssetRegistry::mark_dirty() {
+  assert_owner_thread();
+  ++revision_;
+}
 
 } // namespace quader

@@ -8,8 +8,6 @@
 
 namespace quader {
 
-class UIContext;
-
 /**
  * Enumerates UIPanelId values used by the ui layer.
  */
@@ -81,21 +79,5 @@ inline const char *ui_panel_localization_key(UIPanelId id) {
   }
   return "ui.panel.unknown";
 }
-
-/**
- * Owns UI Panel behavior within the Qt editor presentation layer.
- */
-class UIPanel {
-public:
-    virtual ~UIPanel() = default;
-
-    virtual UIPanelId id() const = 0;
-    virtual const char* title() const = 0;
-    virtual bool default_visible() const {
-      return ui_panel_default_visible(id());
-    }
-    virtual bool can_toggle() const { return true; }
-    virtual void draw(UIContext& context) = 0;
-};
 
 } // namespace quader

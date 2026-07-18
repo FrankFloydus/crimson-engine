@@ -9,7 +9,7 @@
 #include <diagnostics/profile.hpp>
 #include <editor/modeling/runtime/session.hpp>
 #include <editor/interactions/viewport_projection.hpp>
-#include <mesh/geometry/geometry.hpp>
+#include <quader/modeling/neutral/geometry/geometry.hpp>
 
 #include <algorithm>
 #include <limits>

@@ -8,14 +8,15 @@
 
 #include "polygon_document_native.hpp"
 
-#include <mesh/polygon/document_builder.hpp>
-#include <mesh/polygon/document_mesh_compilation.hpp>
-#include <mesh/polygon/document_operations.hpp>
-#include <mesh/polygon/document_selection.hpp>
-#include <mesh/polygon/document_topology.hpp>
-#include <mesh/polygon/document_validation.hpp>
+#include <quader/modeling/neutral/polygon/document_builder.hpp>
+#include <quader/modeling/neutral/polygon/document_mesh_compilation.hpp>
+#include <quader/modeling/neutral/polygon/document_operations.hpp>
+#include <quader/modeling/neutral/polygon/document_selection.hpp>
+#include <quader/modeling/neutral/polygon/document_topology.hpp>
+#include <quader/modeling/neutral/polygon/document_validation.hpp>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <memory>
 #include <numeric>
@@ -73,6 +74,32 @@ namespace {
   return id.valid() ? id.index - 1U : 0U;
 }
 
+[[nodiscard]] AuthoredSurfaceShading
+authored_shading(quader_poly::SurfaceShading shading) {
+  switch (shading) {
+  case quader_poly::SurfaceShading::Flat:
+    return AuthoredSurfaceShading::Flat;
+  case quader_poly::SurfaceShading::Smooth:
+    return AuthoredSurfaceShading::Smooth;
+  case quader_poly::SurfaceShading::Authored:
+    return AuthoredSurfaceShading::Authored;
+  }
+  return AuthoredSurfaceShading::Flat;
+}
+
+[[nodiscard]] quader_poly::SurfaceShading
+native_shading(AuthoredSurfaceShading shading) {
+  switch (shading) {
+  case AuthoredSurfaceShading::Flat:
+    return quader_poly::SurfaceShading::Flat;
+  case AuthoredSurfaceShading::Smooth:
+    return quader_poly::SurfaceShading::Smooth;
+  case AuthoredSurfaceShading::Authored:
+    return quader_poly::SurfaceShading::Authored;
+  }
+  return quader_poly::SurfaceShading::Flat;
+}
+
 [[nodiscard]] bool positive_finite(float value) {
   return std::isfinite(value) && value > 0.0F;
 }
@@ -110,6 +137,18 @@ void prepare_primitive_document(quader_poly::Document &document,
 
 [[nodiscard]] Error stale_id_error(std::string message) {
   return make_error(ErrorCode::StaleId, std::move(message));
+}
+
+[[nodiscard]] bool vertex_id_was_issued(
+    const quader_poly::Document &document, std::uint32_t index) {
+  return index != 0U &&
+         (document.next_vertex_id == 0U || index < document.next_vertex_id);
+}
+
+[[nodiscard]] bool face_id_was_issued(
+    const quader_poly::Document &document, std::uint32_t index) {
+  return index != 0U &&
+         (document.next_face_id == 0U || index < document.next_face_id);
 }
 
 [[nodiscard]] ElementDelta
@@ -164,6 +203,18 @@ selection_kind_from_native(quader_poly::SelectionMode mode) {
   return SelectionKind::Vertex;
 }
 
+[[nodiscard]] bool
+same_native_selection(const quader_poly::Selection &left,
+                      const quader_poly::Selection &right) {
+  return left.mode == right.mode && left.vertices == right.vertices &&
+         left.edges == right.edges && left.faces == right.faces &&
+         left.has_active == right.has_active &&
+         left.active_kind == right.active_kind &&
+         left.active_vertex == right.active_vertex &&
+         left.active_edge == right.active_edge &&
+         left.active_face == right.active_face;
+}
+
 [[nodiscard]] OperationResult selection_only_result(bool changed,
                                                     std::string message) {
   OperationResult result;
@@ -204,7 +255,10 @@ validate_vertex_id(const quader_poly::Document &document, VertexId id) {
     return Result<OperationResult>::failure(stale_id_error("Vertex ID is stale."));
   }
   if (quader_poly::find_vertex(document, id.index) == nullptr) {
-    return Result<OperationResult>::failure(invalid_id_error("Vertex ID is not live."));
+    return Result<OperationResult>::failure(
+        vertex_id_was_issued(document, id.index)
+            ? stale_id_error("Vertex ID is stale.")
+            : invalid_id_error("Vertex ID was never issued by this document."));
   }
   return operation_success(selection_only_result(false, {}));
 }
@@ -218,7 +272,10 @@ validate_face_id(const quader_poly::Document &document, FaceId id) {
     return Result<OperationResult>::failure(stale_id_error("Face ID is stale."));
   }
   if (quader_poly::find_face(document, id.index) == nullptr) {
-    return Result<OperationResult>::failure(invalid_id_error("Face ID is not live."));
+    return Result<OperationResult>::failure(
+        face_id_was_issued(document, id.index)
+            ? stale_id_error("Face ID is stale.")
+            : invalid_id_error("Face ID was never issued by this document."));
   }
   return operation_success(selection_only_result(false, {}));
 }
@@ -231,10 +288,19 @@ validate_edge_key(const quader_poly::Document &document, EdgeKey edge) {
   if (stale_generation(edge)) {
     return Result<OperationResult>::failure(stale_id_error("Edge key is stale."));
   }
-  if (quader_poly::find_vertex(document, edge.a.index) == nullptr ||
-      quader_poly::find_vertex(document, edge.b.index) == nullptr) {
+  const bool a_live =
+      quader_poly::find_vertex(document, edge.a.index) != nullptr;
+  const bool b_live =
+      quader_poly::find_vertex(document, edge.b.index) != nullptr;
+  if (!a_live || !b_live) {
+    const bool stale_endpoint =
+        (!a_live && vertex_id_was_issued(document, edge.a.index)) ||
+        (!b_live && vertex_id_was_issued(document, edge.b.index));
     return Result<OperationResult>::failure(
-        invalid_id_error("Edge endpoint is not live."));
+        stale_endpoint
+            ? stale_id_error("Edge key references a stale endpoint.")
+            : invalid_id_error(
+                  "Edge key references an endpoint that was never issued."));
   }
   const std::vector<quader_poly::Edge> live_edges =
       quader_poly::document_edges(document);
@@ -244,7 +310,11 @@ validate_edge_key(const quader_poly::Document &document, EdgeKey edge) {
     return item == native_edge;
   });
   if (!live) {
-    return Result<OperationResult>::failure(invalid_id_error("Edge key is not live."));
+    // Edge identity is derived from two issued vertex identities. Once both
+    // endpoints belong to this document lineage, an absent pair is a stale
+    // topology reference rather than an unissued allocator value.
+    return Result<OperationResult>::failure(
+        stale_id_error("Edge key is stale in the current topology."));
   }
   return operation_success(selection_only_result(false, {}));
 }
@@ -365,9 +435,13 @@ apply_operation(PolygonDocumentImpl &impl, Operation operation,
                 bool material_change = false) {
   quader_poly::Document document = *impl.document;
   quader_poly::Selection selection = *impl.selection;
+  const quader_poly::Selection selection_before = selection;
   quader_poly::OperationResult native_result =
       operation(document, selection);
   OperationResult result = adapt_operation_result(native_result);
+  const bool selection_changed =
+      result.changed && !same_native_selection(selection_before, selection);
+  result.dirty.selection = selection_changed;
   if (material_change && result.changed) {
     result.dirty.materials = true;
   }
@@ -378,7 +452,7 @@ apply_operation(PolygonDocumentImpl &impl, Operation operation,
         std::move(selection));
   }
   bump_content(impl, result.changed);
-  bump_selection(impl, result.changed);
+  bump_selection(impl, selection_changed);
   return operation_success(std::move(result));
 }
 
@@ -449,6 +523,40 @@ Result<PolygonDocument> PolygonDocument::make_box(const BoxSpec &spec) {
           std::midpoint(spec.min.z, spec.max.z),
       }),
       native_material_slot(spec.material));
+  return Result<PolygonDocument>::success(
+      PolygonDocumentNativeAccess::from_native(std::move(document)));
+}
+
+Result<PolygonDocument>
+PolygonDocument::make_box_from_corners(std::span<const Vec3> corners,
+                                       MaterialId material) {
+  if (corners.size() != 8U) {
+    return Result<PolygonDocument>::failure(make_error(
+        ErrorCode::InvalidArgument, "Box needs eight corner points."));
+  }
+
+  std::array<quader::QVec3, 8> native_corners{};
+  for (std::size_t index = 0; index < corners.size(); ++index) {
+    const Vec3 corner = corners[index];
+    if (!std::isfinite(corner.x) || !std::isfinite(corner.y) ||
+        !std::isfinite(corner.z)) {
+      return Result<PolygonDocument>::failure(make_error(
+          ErrorCode::InvalidArgument, "Box corners must be finite."));
+    }
+    native_corners[index] = to_native(corner);
+  }
+
+  quader_poly::DocumentBuilder builder;
+  quader_poly::Document document =
+      builder
+          .box_from_corners(native_corners, native_material_slot(material))
+          .take();
+  if (document.vertices.size() != 8U || document.faces.size() != 6U ||
+      quader_poly::compile_document(document).indices.empty()) {
+    return Result<PolygonDocument>::failure(make_error(
+        ErrorCode::InvalidArgument,
+        "Box needs finite width, height, and depth."));
+  }
   return Result<PolygonDocument>::success(
       PolygonDocumentNativeAccess::from_native(std::move(document)));
 }
@@ -536,6 +644,88 @@ Result<PolygonDocument> PolygonDocument::make_face(std::span<const Vec3> points,
         ErrorCode::ValidationFailed, "Polygon face validation failed."));
   }
   return Result<PolygonDocument>::success(std::move(document));
+}
+
+Result<PolygonDocument>
+PolygonDocument::from_authored_topology(const AuthoredTopology &topology) {
+  if (topology.next_vertex_id == 0U || topology.next_face_id == 0U) {
+    return Result<PolygonDocument>::failure(make_error(
+        ErrorCode::ValidationFailed,
+        "Authored topology allocation cursors must be nonzero."));
+  }
+
+  quader_poly::Document document;
+  document.next_vertex_id = topology.next_vertex_id;
+  document.next_face_id = topology.next_face_id;
+  document.vertices.reserve(topology.vertices.size());
+  for (const AuthoredTopologyVertex &vertex : topology.vertices) {
+    if (!vertex.id.valid() || vertex.id.generation != 1U ||
+        vertex.id.index >= topology.next_vertex_id ||
+        !std::isfinite(vertex.position.x) ||
+        !std::isfinite(vertex.position.y) ||
+        !std::isfinite(vertex.position.z)) {
+      return Result<PolygonDocument>::failure(make_error(
+          ErrorCode::ValidationFailed,
+          "Authored topology contains an invalid vertex record."));
+    }
+    document.vertices.push_back({
+        .id = vertex.id.index,
+        .position = to_native(vertex.position),
+    });
+  }
+
+  document.faces.reserve(topology.faces.size());
+  for (const AuthoredTopologyFace &face : topology.faces) {
+    if (!face.id.valid() || face.id.generation != 1U ||
+        face.id.index >= topology.next_face_id) {
+      return Result<PolygonDocument>::failure(make_error(
+          ErrorCode::ValidationFailed,
+          "Authored topology contains an invalid face record."));
+    }
+    quader_poly::Face native_face;
+    native_face.id = face.id.index;
+    native_face.material_slot = face.material_slot;
+    native_face.normal_shading = native_shading(face.shading);
+    native_face.vertices.reserve(face.vertices.size());
+    for (VertexId id : face.vertices) {
+      if (!id.valid() || id.generation != 1U) {
+        return Result<PolygonDocument>::failure(make_error(
+            ErrorCode::ValidationFailed,
+            "Authored topology face contains an invalid vertex ID."));
+      }
+      native_face.vertices.push_back(id.index);
+    }
+    native_face.uvs.reserve(face.uvs.size());
+    for (Vec2 uv : face.uvs) {
+      if (!std::isfinite(uv.x) || !std::isfinite(uv.y)) {
+        return Result<PolygonDocument>::failure(make_error(
+            ErrorCode::ValidationFailed,
+            "Authored topology contains a non-finite face UV."));
+      }
+      native_face.uvs.push_back(to_native(uv));
+    }
+    document.faces.push_back(std::move(native_face));
+  }
+
+  document.hard_normal_edges.reserve(topology.hard_normal_edges.size());
+  for (EdgeKey edge : topology.hard_normal_edges) {
+    if (!edge.valid() || edge.a.generation != 1U ||
+        edge.b.generation != 1U) {
+      return Result<PolygonDocument>::failure(make_error(
+          ErrorCode::ValidationFailed,
+          "Authored topology contains an invalid hard edge."));
+    }
+    document.hard_normal_edges.push_back(
+        quader_poly::make_edge(edge.a.index, edge.b.index));
+  }
+
+  PolygonDocument result = PolygonDocumentNativeAccess::from_native(
+      std::move(document));
+  Result<OperationResult> validation = result.validate();
+  if (!validation.ok()) {
+    return Result<PolygonDocument>::failure(validation.error());
+  }
+  return Result<PolygonDocument>::success(std::move(result));
 }
 
 std::size_t PolygonDocument::vertex_count() const {
@@ -698,6 +888,40 @@ Result<AuthoredPolygonPayload> PolygonDocument::authored_payload() const {
     payload.faces.push_back(std::move(face_payload));
   }
   return Result<AuthoredPolygonPayload>::success(std::move(payload));
+}
+
+Result<AuthoredTopology> PolygonDocument::authored_topology() const {
+  AuthoredTopology topology;
+  topology.next_vertex_id = impl_->document->next_vertex_id;
+  topology.next_face_id = impl_->document->next_face_id;
+  topology.vertices.reserve(impl_->document->vertices.size());
+  for (const quader_poly::Vertex &vertex : impl_->document->vertices) {
+    topology.vertices.push_back({
+        .id = vertex_id(vertex.id),
+        .position = from_native(vertex.position),
+    });
+  }
+  topology.faces.reserve(impl_->document->faces.size());
+  for (const quader_poly::Face &face : impl_->document->faces) {
+    AuthoredTopologyFace authored_face;
+    authored_face.id = face_id(face.id);
+    authored_face.material_slot = face.material_slot;
+    authored_face.shading = authored_shading(face.normal_shading);
+    authored_face.vertices.reserve(face.vertices.size());
+    for (quader_poly::ElementId id : face.vertices) {
+      authored_face.vertices.push_back(vertex_id(id));
+    }
+    authored_face.uvs.reserve(face.uvs.size());
+    for (quader::QVec2 uv : face.uvs) {
+      authored_face.uvs.push_back(from_native(uv));
+    }
+    topology.faces.push_back(std::move(authored_face));
+  }
+  topology.hard_normal_edges.reserve(impl_->document->hard_normal_edges.size());
+  for (quader_poly::Edge edge : impl_->document->hard_normal_edges) {
+    topology.hard_normal_edges.push_back(edge_id(edge));
+  }
+  return Result<AuthoredTopology>::success(std::move(topology));
 }
 
 Result<MeshPayload> PolygonDocument::compile_mesh() const {
@@ -1387,6 +1611,18 @@ PolygonDocument::extrude_selected_elements(Vec3 offset,
 }
 
 Result<OperationResult>
+PolygonDocument::transform_extrude_selected_elements(Transform3 transform,
+                                                      Vec3 pivot) {
+  return apply_operation(
+      *impl_,
+      [transform, pivot](quader_poly::Document &document,
+                         quader_poly::Selection &selection) {
+        return quader_poly::transform_extrude_selected_elements(
+            document, selection, to_native(transform), to_native(pivot));
+      });
+}
+
+Result<OperationResult>
 PolygonDocument::inset_selected_elements(Transform3 transform, Vec3 pivot) {
   return apply_operation(
       *impl_,
@@ -1450,6 +1686,101 @@ Result<ExtractedPolygonDocument> PolygonDocument::extract_selected_faces() {
           std::move(native_result.extracted_selection)),
   };
   return Result<ExtractedPolygonDocument>::success(std::move(result));
+}
+
+Result<SplitPolygonDocuments>
+PolygonDocument::split_by_plane(const PlaneSplitSpec &spec) const {
+  const quader_poly::PlaneCutResult native_result = quader_poly::plane_cut(
+      *impl_->document,
+      {
+          .first_point = to_native(spec.a),
+          .second_point = to_native(spec.b),
+          .third_point = to_native(spec.c),
+          .mode = quader_poly::PlaneCutMode::KeepBoth,
+          .cap = spec.cap,
+      });
+  if (!native_result.changed) {
+    return Result<SplitPolygonDocuments>::failure(make_error(
+        ErrorCode::InvalidArgument,
+        native_result.message.empty() ? "Plane cut could not split the mesh."
+                                      : native_result.message));
+  }
+  OperationResult receipt;
+  receipt.success = true;
+  receipt.changed = true;
+  receipt.message = native_result.message;
+  receipt.created = adapt_delta(native_result.created);
+  receipt.deleted = adapt_delta(native_result.deleted);
+  receipt.affected = adapt_delta(native_result.affected);
+  receipt.modified = receipt.affected;
+  receipt.dirty.topology = true;
+  receipt.dirty.geometry = true;
+  receipt.dirty.selection = true;
+  return Result<SplitPolygonDocuments>::success({
+      .receipt = std::move(receipt),
+      .front = PolygonDocumentNativeAccess::from_native(
+          native_result.front_document, native_result.front_selection),
+      .back = PolygonDocumentNativeAccess::from_native(
+          native_result.back_document, native_result.back_selection),
+      .split_count = native_result.split_count,
+      .removed_count = native_result.removed_count,
+  });
+}
+
+Result<OperationResult>
+PolygonDocument::reflect_across_plane(Vec3 origin, Vec3 normal) {
+  const float normal_length_squared =
+      normal.x * normal.x + normal.y * normal.y + normal.z * normal.z;
+  if (!std::isfinite(origin.x) || !std::isfinite(origin.y) ||
+      !std::isfinite(origin.z) || !std::isfinite(normal_length_squared) ||
+      normal_length_squared <= 0.0000001F) {
+    return Result<OperationResult>::failure(make_error(
+        ErrorCode::InvalidArgument,
+        "Reflection requires a finite origin and non-zero plane normal."));
+  }
+  const float inverse_length = 1.0F / std::sqrt(normal_length_squared);
+  const quader::QVec3 native_origin = to_native(origin);
+  const quader::QVec3 native_normal = to_native(Vec3{
+      normal.x * inverse_length, normal.y * inverse_length,
+      normal.z * inverse_length});
+  return apply_operation(
+      *impl_,
+      [native_origin, native_normal](quader_poly::Document &document,
+                                     quader_poly::Selection &) {
+        for (quader_poly::Vertex &vertex : document.vertices) {
+          const quader::QVec3 offset = vertex.position - native_origin;
+          const float distance = offset.x * native_normal.x +
+                                 offset.y * native_normal.y +
+                                 offset.z * native_normal.z;
+          vertex.position =
+              vertex.position - native_normal * (2.0F * distance);
+        }
+        for (quader_poly::Face &face : document.faces) {
+          std::reverse(face.vertices.begin(), face.vertices.end());
+          if (face.uvs.size() == face.vertices.size()) {
+            std::reverse(face.uvs.begin(), face.uvs.end());
+          }
+        }
+        return quader_poly::OperationResult{
+            !document.vertices.empty() || !document.faces.empty(), {}};
+      });
+}
+
+Result<OperationResult>
+PolygonDocument::cut_surface_by_plane(const PlaneSplitSpec &spec) {
+  return apply_operation(
+      *impl_, [&spec](quader_poly::Document &document,
+                     quader_poly::Selection &selection) {
+        return quader_poly::plane_surface_cut(
+            document, selection,
+            {
+                .first_point = to_native(spec.a),
+                .second_point = to_native(spec.b),
+                .third_point = to_native(spec.c),
+                .mode = quader_poly::PlaneCutMode::KeepBoth,
+                .cap = spec.cap,
+            });
+      });
 }
 
 Result<OperationResult> PolygonDocument::bridge_selected_faces(int steps) {

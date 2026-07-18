@@ -6,7 +6,6 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "render/overlay/instance_selection_overlay_cache.hpp"
 
-#include "assets/mesh_asset_payload.hpp"
 #include "core/color_space.hpp"
 #include "diagnostics/profile.hpp"
 #include "math/glm_bridge.hpp"
@@ -16,7 +15,6 @@
 #include "render/render_layers.hpp"
 #include "render/render_signature_builder.hpp"
 #include "render/viewport_overlay_policy.hpp"
-#include "mesh/polygon/document_model.hpp"
 
 #include <backend/DriverEnums.h>
 #include <filament/Box.h>
@@ -36,8 +34,6 @@
 #include <array>
 #include <limits>
 #include <span>
-#include <unordered_map>
-#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -49,7 +45,7 @@ using AttributeType = filament::backend::ElementType;
 constexpr std::uint64_t kFillMaterialPayload = 0x6f7665726c617901ULL;
 constexpr std::uint64_t kWireMaterialPayload = 0x6f7665726c617902ULL;
 
-/// Stores one shader-expanded authored edge-ribbon vertex for instance wires.
+/// Stores one shader-expanded semantic edge-ribbon vertex for instance wires.
 struct InstanceSelectionWireVertex final {
   OverlayFloat4 position;
   OverlayFloat4 start;
@@ -123,20 +119,17 @@ RenderInstancePrimitiveKey fill_key(
 
 RenderInstancePrimitiveKey wire_key(
     const RenderOverlayInstanceSelectionWireRecord &record) {
-  const std::uint64_t topology =
-      record.authored_topology_payload != nullptr
-          ? static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(
-                record.authored_topology_payload.get()))
-          : static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(
-                record.authored_vertices.data()));
+  const std::uint64_t wire_geometry =
+      record.wire_geometry_payload != nullptr
+          ? record.wire_geometry_payload->content_id
+          : 0u;
   return {
-      .geometry_payload = static_cast<std::uint64_t>(reinterpret_cast<
-          std::uintptr_t>(record.geometry_payload.get())),
+      .geometry_payload = wire_geometry,
       .material_payload = RenderSignatureBuilder{}
-                              .add_value(kWireMaterialPayload)
-                              .add_value(topology)
-                              .value(),
-      .index_count = static_cast<std::uint32_t>(record.indices.size()),
+                               .add_value(kWireMaterialPayload)
+                               .add_value(wire_geometry)
+                               .value(),
+      .index_count = static_cast<std::uint32_t>(record.wire_segments.size()),
       .layer_mask = kViewportOverlayLayerMask,
       .channel = kViewportDefaultRenderableChannel,
       .double_sided = true,
@@ -150,7 +143,7 @@ std::vector<RenderInstancePrimitiveOccurrence> fill_occurrences(
   occurrences.reserve(snapshot.instance_selection_fills.size());
   for (const RenderOverlayInstanceSelectionFillRecord &record :
        snapshot.instance_selection_fills) {
-    if (record.geometry_content_id.value == 0u || record.vertices.empty() ||
+    if (record.geometry_payload == nullptr || record.vertices.empty() ||
         record.indices.size() < 3u) {
       continue;
     }
@@ -206,12 +199,6 @@ const RenderOverlayInstanceSelectionWireRecord *wire_record_for_chunk(
   return found == snapshot.instance_selection_wires.end() ? nullptr : &*found;
 }
 
-std::uint64_t edge_key(std::uint32_t a, std::uint32_t b) {
-  const std::uint32_t low = std::min(a, b);
-  const std::uint32_t high = std::max(a, b);
-  return (static_cast<std::uint64_t>(low) << 32u) | high;
-}
-
 void append_line_quad(std::vector<InstanceSelectionWireVertex> &vertices,
                       std::vector<std::uint32_t> &indices, QVec3 start,
                       QVec3 end, std::uint32_t color) {
@@ -260,11 +247,10 @@ struct InstanceSelectionOverlayCache::PreparedPlans final {
   std::vector<const RenderOverlayInstanceSelectionWireRecord *> wires;
 };
 
-/// Owns one shared authored-edge geometry resource for selected wires.
+/// Owns one shared semantic-edge geometry resource for selected wires.
 struct InstanceSelectionOverlayCache::WireGeometryResource final {
   std::uint64_t signature = 0u;
-  std::shared_ptr<const MeshGeometryPayload> payload;
-  std::shared_ptr<const quader_poly::Document> authored_topology;
+  std::shared_ptr<const MeshWireGeometryPayload> wire_geometry;
   filament::VertexBuffer *vertex_buffer = nullptr;
   filament::IndexBuffer *index_buffer = nullptr;
   std::uint32_t index_count = 0u;
@@ -308,50 +294,9 @@ InstanceSelectionOverlayBatchPlans plan_instance_selection_overlay_batches(
 std::vector<InstanceSelectionWireEdge> instance_selection_wire_edges(
     const RenderOverlayInstanceSelectionWireRecord &record) {
   std::vector<InstanceSelectionWireEdge> edges;
-  if (record.has_authored_polygon_geometry()) {
-    std::unordered_map<quader_poly::ElementId, QVec3> positions;
-    positions.reserve(record.authored_vertices.size());
-    for (const quader_poly::Vertex &vertex : record.authored_vertices) {
-      positions.emplace(vertex.id, vertex.position);
-    }
-    std::unordered_set<std::uint64_t> emitted;
-    for (const quader_poly::Face &face : record.authored_faces) {
-      for (std::size_t index = 0u; index < face.vertices.size(); ++index) {
-        if (face.vertices.size() < 2u) {
-          break;
-        }
-        const quader_poly::ElementId a_id = face.vertices[index];
-        const quader_poly::ElementId b_id =
-            face.vertices[(index + 1u) % face.vertices.size()];
-        if (a_id == b_id || !emitted.insert(edge_key(a_id, b_id)).second) {
-          continue;
-        }
-        const auto a = positions.find(a_id);
-        const auto b = positions.find(b_id);
-        if (a != positions.end() && b != positions.end()) {
-          edges.push_back({.start = a->second, .end = b->second});
-        }
-      }
-    }
-    if (!edges.empty()) {
-      return edges;
-    }
-  }
-
-  std::unordered_set<std::uint64_t> emitted;
-  emitted.reserve(record.indices.size());
-  const auto append_edge = [&](std::uint32_t a, std::uint32_t b) {
-    if (a >= record.vertices.size() || b >= record.vertices.size() || a == b ||
-        !emitted.insert(edge_key(a, b)).second) {
-      return;
-    }
-    edges.push_back({.start = record.vertices[a].position,
-                     .end = record.vertices[b].position});
-  };
-  for (std::size_t index = 0u; index + 2u < record.indices.size(); index += 3u) {
-    append_edge(record.indices[index], record.indices[index + 1u]);
-    append_edge(record.indices[index + 1u], record.indices[index + 2u]);
-    append_edge(record.indices[index + 2u], record.indices[index]);
+  edges.reserve(record.wire_segments.size());
+  for (const MeshWireSegment &segment : record.wire_segments) {
+    edges.push_back({.start = segment.start, .end = segment.end});
   }
   return edges;
 }
@@ -493,7 +438,9 @@ bool InstanceSelectionOverlayCache::rebuild(
     }
     MeshRenderableProxy proxy = mesh_factory_->create_instance_selection_fill(
         fill_mesh_snapshot(*record), *fill_material_, chunk.world_transforms,
-        chunk.world_bounds, record->color, record->blend_order);
+        chunk.world_bounds, kOverlayInstanceSelectionFillColor,
+        static_cast<std::uint16_t>(viewport_overlay_draw_order(
+            ViewportOverlayLayer::SelectedVisibleFace) * 64));
     if (!proxy.entity || proxy.instance_buffer == nullptr) {
       mesh_factory_->destroy(proxy);
       for (MeshRenderableProxy &created : new_fills) {
@@ -580,27 +527,16 @@ bool InstanceSelectionOverlayCache::update_transforms(
 InstanceSelectionOverlayCache::WireGeometryResource *
 InstanceSelectionOverlayCache::acquire_wire_geometry(
     const RenderOverlayInstanceSelectionWireRecord &record) {
-  const std::uint64_t topology =
-      record.authored_topology_payload != nullptr
-          ? static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(
-                record.authored_topology_payload.get()))
-          : static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(
-                record.authored_vertices.data()));
-  const std::uint64_t signature = RenderSignatureBuilder{}
-                                      .add_value(record.geometry_content_id.value)
-                                      .add_value(topology)
-                                      .value();
+  const std::uint64_t signature =
+      record.wire_geometry_payload != nullptr
+          ? record.wire_geometry_payload->content_id
+          : 0u;
   auto &bucket = wire_resources_[signature];
   for (const std::unique_ptr<WireGeometryResource> &resource : bucket) {
-    const bool same_payload =
-        resource->payload.get() == record.geometry_payload.get() ||
-        (resource->payload != nullptr && record.geometry_payload != nullptr &&
-         mesh_geometry_payload_equal(*resource->payload,
-                                     *record.geometry_payload));
-    const bool same_topology =
-        resource->authored_topology.get() ==
-        record.authored_topology_payload.get();
-    if (same_payload && same_topology) {
+    if (resource->wire_geometry != nullptr &&
+        record.wire_geometry_payload != nullptr &&
+        resource->wire_geometry->content_id ==
+            record.wire_geometry_payload->content_id) {
       ++stats_.wire_geometry_reuse_count;
       return resource.get();
     }
@@ -610,15 +546,15 @@ InstanceSelectionOverlayCache::acquire_wire_geometry(
   std::vector<std::uint32_t> indices;
   for (const InstanceSelectionWireEdge &edge :
        instance_selection_wire_edges(record)) {
-    append_line_quad(vertices, indices, edge.start, edge.end, record.color);
+    append_line_quad(vertices, indices, edge.start, edge.end,
+                     kOverlaySelectionWireColor);
   }
   if (vertices.empty() || indices.empty()) {
     return nullptr;
   }
   auto resource = std::make_unique<WireGeometryResource>();
   resource->signature = signature;
-  resource->payload = record.geometry_payload;
-  resource->authored_topology = record.authored_topology_payload;
+  resource->wire_geometry = record.wire_geometry_payload;
   resource->index_count = static_cast<std::uint32_t>(indices.size());
   resource->vertex_bytes =
       vertices.size() * sizeof(InstanceSelectionWireVertex);
@@ -696,7 +632,7 @@ InstanceSelectionOverlayCache::create_wire_batch(
   proxy.material_instance->setCullingMode(
       filament::MaterialInstance::CullingMode::NONE);
   proxy.material_instance->setParameter("lineWidth",
-                                        record.line_width_pixels);
+                                        kOverlaySelectionWireLineWidthPixels);
   proxy.material_instance->setParameter("featherPixels",
                                         kOverlayLineFeatherPixels);
   proxy.material_instance->setParameter("nearPlane", clip_planes.near_plane);
@@ -716,7 +652,10 @@ InstanceSelectionOverlayCache::create_wire_batch(
                 0u, proxy.geometry->index_count)
       .material(0u, proxy.material_instance)
       .instances(transforms.size(), proxy.instance_buffer)
-      .blendOrder(0u, record.blend_order)
+      .blendOrder(0u, static_cast<std::uint16_t>(
+                           viewport_overlay_draw_order(
+                               ViewportOverlayLayer::SourceWire) *
+                           64))
       .globalBlendOrderEnabled(0u, true)
       .boundingBox(filament_bounds(chunk.world_bounds))
       .layerMask(kViewportAllLayerMask, kViewportOverlayLayerMask)

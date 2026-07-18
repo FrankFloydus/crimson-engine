@@ -8,6 +8,7 @@
 
 #include "assets/asset_registry.hpp"
 #include "editor/commands/document/set_material_command.hpp"
+#include "editor/modeling/modeling_result_adapters.hpp"
 #include "scene/scene_document.hpp"
 
 #include <array>
@@ -15,25 +16,6 @@
 #include <utility>
 
 namespace quader {
-namespace {
-
-CommandResult command_result_from(ModelingCommandResult result) {
-  return {
-      .ok = result.ok,
-      .changed = result.changed,
-      .message = std::move(result.message),
-  };
-}
-
-CommandResult command_result_from(const ModelingCreateBoxResult &result) {
-  return {
-      .ok = result.ok,
-      .changed = result.changed,
-      .message = result.message,
-  };
-}
-
-} // namespace
 
 CommitBoxPreviewCommand::CommitBoxPreviewCommand(
     ModelingSessionService &modeling, SceneDocument &scene,
@@ -67,7 +49,7 @@ CommandResult CommitBoxPreviewCommand::undo() {
     }
 
     CommandResult restore =
-        command_result_from(modeling_.restore_history_memento(before_));
+        command_result_from_modeling(modeling_.restore_history_memento(before_));
     if (!restore.ok) {
         return restore;
     }
@@ -93,13 +75,13 @@ CommandResult CommitBoxPreviewCommand::execute_initial() {
   }
   before_ = modeling_.capture_history_memento();
   committed_ = modeling_.commit_box(name_);
-  CommandResult result = command_result_from(committed_);
+  CommandResult result = command_result_from_modeling(committed_);
   if (!result.ok || !result.changed) {
     return result;
   }
 
   const std::array<EntityId, 1> selected{committed_.object.entity};
-  const CommandResult selection = command_result_from(
+  const CommandResult selection = command_result_from_modeling(
       modeling_.set_object_selection(selected, committed_.object.entity));
   if (!selection.ok) {
     return rollback_initial(selection);
@@ -139,7 +121,7 @@ CommandResult CommitBoxPreviewCommand::redo_recorded() {
         "Default material asset is missing from the current project");
   }
   CommandResult restore =
-      command_result_from(modeling_.restore_history_memento(after_));
+      command_result_from_modeling(modeling_.restore_history_memento(after_));
   if (!restore.ok) {
     return restore;
   }
@@ -179,7 +161,7 @@ CommandResult CommitBoxPreviewCommand::rollback_initial(CommandResult failure) {
 }
 
 CommandResult CommitBoxPreviewCommand::cancel_restored_preview() {
-  return command_result_from(modeling_.cancel_box());
+  return command_result_from_modeling(modeling_.cancel_box());
 }
 
 } // namespace quader

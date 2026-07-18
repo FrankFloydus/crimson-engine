@@ -245,7 +245,7 @@ TEST(QdrModelingRuntimeToolCutTests, CutPreviewMetadataInvalidatesOnModeAndPoint
 	EXPECT_FALSE(quader_editor_core::cut_is_active(state));
 }
 
-TEST(QdrModelingRuntimeToolCutTests, CutPreviewPolicyEvaluatesTargetMeshesOutsideNativeTransport) {
+TEST(QdrModelingRuntimeToolCutTests, CutPreviewPolicyRetainsOnlyHostPlaneAndTargetState) {
 	quader_editor_core::PolygonObject object;
 	object.id = 7;
 	object.document = quader_poly::make_cube({});
@@ -268,21 +268,8 @@ TEST(QdrModelingRuntimeToolCutTests, CutPreviewPolicyEvaluatesTargetMeshesOutsid
 		quader_editor_core::cut_preview_metadata(state);
 	EXPECT_TRUE(metadata.preview_valid);
 	EXPECT_TRUE(metadata.target_count == 1);
-	EXPECT_TRUE(metadata.split_count == 1);
+	EXPECT_TRUE(metadata.split_count == 0);
 	EXPECT_TRUE(metadata.removed_count == 0);
-
-        const std::vector<quader_poly::Document> keep_documents =
-            quader_editor_core::cut_preview_documents(
-                state, objects, quader_editor_core::CutPreviewMeshSide::Keep);
-        const std::vector<quader_poly::Document> discard_documents =
-            quader_editor_core::cut_preview_documents(
-                state, objects,
-                quader_editor_core::CutPreviewMeshSide::Discard);
-
-        EXPECT_TRUE(keep_documents.size() == 1U);
-	EXPECT_TRUE(discard_documents.size() == 1U);
-	EXPECT_FALSE(quader_poly::compile_document(keep_documents.front()).vertices.empty());
-	EXPECT_FALSE(quader_poly::compile_document(discard_documents.front()).vertices.empty());
 }
 
 TEST(QdrModelingRuntimeToolCutTests, CutLineDragMovesTheWholePlacedPlane) {

@@ -6,11 +6,19 @@
 ////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
-#include "editor/modeling/modeling_types.hpp"
 #include "render/overlay/render_overlay_snapshot.hpp"
 #include "render/viewport_overlay_frame.hpp"
 
+#include <cstdint>
+
 namespace quader {
+
+/// Renderer-facing selection category; native modeling modes are adapted above render.
+enum class RenderOverlaySelectionMode : std::uint8_t {
+  Object,
+  Group,
+  Component,
+};
 
 /**
  * Builds scene-derived viewport overlay geometry for renderer submission.
@@ -21,17 +29,18 @@ public:
   build_selection_frame(ViewportOverlayFrame base_frame,
                         const RenderOverlaySelectionSnapshot &snapshot,
                         bool point_light_gizmos_visible = false,
-                        ModelingSelectionMode selection_mode =
-                            ModelingSelectionMode::Object);
+                        RenderOverlaySelectionMode selection_mode =
+                            RenderOverlaySelectionMode::Object);
   [[nodiscard]] static ViewportOverlayFrame build_wireframe_frame(
-      ViewportOverlayFrame base_frame, ModelingSelectionMode selection_mode,
+      ViewportOverlayFrame base_frame,
+      RenderOverlaySelectionMode selection_mode,
       const RenderOverlaySceneWireframeSnapshot &snapshot);
   [[nodiscard]] static ViewportOverlayFrame
   strip_persistent_object_selection_fills(
-      ViewportOverlayFrame frame, ModelingSelectionMode selection_mode);
+      ViewportOverlayFrame frame, RenderOverlaySelectionMode selection_mode);
   [[nodiscard]] static ViewportOverlayFrame
   strip_wireframe_selection_fills(ViewportOverlayFrame frame,
-                                  ModelingSelectionMode selection_mode);
+                                  RenderOverlaySelectionMode selection_mode);
 };
 
 } // namespace quader

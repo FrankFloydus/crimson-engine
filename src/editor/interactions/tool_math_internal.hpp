@@ -7,7 +7,7 @@
 #pragma once
 
 #include <editor/interactions/interaction_api.hpp>
-#include <mesh/geometry/geometry.hpp>
+#include <quader/modeling/neutral/geometry/geometry.hpp>
 
 #include <algorithm>
 #include <cmath>

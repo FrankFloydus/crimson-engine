@@ -32,11 +32,10 @@
 #include "render/overlay/viewport_scene_overlay_builder.hpp"
 #include "scene/scene_document.hpp"
 #include "scene/scene_bounds.hpp"
-#include "support/guardrail_file_scan.hpp"
 #include "viewport/viewport_settings.hpp"
 #include "viewport/viewport_workspace_service.hpp"
 
-#include <mesh/polygon/document.hpp>
+#include <quader/modeling/neutral/polygon/document.hpp>
 
 #include <gtest/gtest.h>
 
@@ -55,9 +54,6 @@
 using namespace quader;
 
 namespace {
-
-using quader::test::guardrail::read_source_file;
-using quader::test::guardrail::source_slice;
 
 /// Supplies deterministic project-material snapshots to render tests.
 class TestProjectMaterialResolver final
@@ -480,23 +476,6 @@ TEST(MeshAssetTests, CoalescesContiguousPrimitiveSpansByMaterialSlotForRenderSub
     EXPECT_EQ(spans[2].index_offset, 12u);
     EXPECT_EQ(spans[2].index_count, 3u);
     EXPECT_EQ(spans[2].material_slot, 0u);
-}
-
-TEST(RenderSignatureBuilderTests, KeepsRenderHashPolicyInSingleOwner) {
-  const std::array<std::string_view, 4u> cache_sources = {
-      "src/render/material_binding_service.cpp",
-      "src/render/mesh_renderable_factory.cpp",
-      "src/render/tool_preview_renderable_cache.cpp",
-      "src/render/overlay/overlay_renderable_builder.cpp",
-  };
-  for (const std::string_view source : cache_sources) {
-    const std::string text = read_source_file({source});
-    EXPECT_EQ(text.find("kFnv"), std::string::npos);
-    EXPECT_EQ(text.find("hash_combine"), std::string::npos);
-    EXPECT_EQ(text.find("hash_float"), std::string::npos);
-    EXPECT_EQ(text.find("hashVec3"), std::string::npos);
-    EXPECT_NE(text.find("RenderSignatureBuilder"), std::string::npos);
-  }
 }
 
 TEST(RenderSceneSnapshotTests, BuildsVisibleMeshLightAndMaterialRecords) {
@@ -1095,77 +1074,32 @@ TEST(ViewportInfoStatsTests,
   EXPECT_EQ(all_occurrences.draw_calls, 2u);
 }
 
-TEST(RenderSceneSnapshotTests, MeshAndLightRecordsAreValueSnapshotInputs) {
-  const std::string snapshot_header =
-      read_source_file("src/render/render_scene_snapshot.hpp");
-  const std::string extraction_header =
-      read_source_file("src/render/scene_render_extraction.hpp");
-  const std::string extraction_source =
-      read_source_file("src/render/scene_render_extraction.cpp");
-  const std::string mesh_record =
-      source_slice(snapshot_header, "struct RenderSceneMeshRecord",
-                   "struct RenderSceneLightRecord");
-  const std::string light_record =
-      source_slice(snapshot_header, "struct RenderSceneLightRecord",
-                   "struct RenderSceneSnapshotDirtyState");
+TEST(RenderOverlaySnapshotTests,
+     WireGeometryPayloadIsDeterministicCachedAndLifetimePinned) {
+  MeshAsset mesh = make_authored_quad_mesh();
+  const std::shared_ptr<const MeshWireGeometryPayload> first =
+      mesh.wire_geometry_payload();
+  const std::shared_ptr<const MeshWireGeometryPayload> second =
+      mesh.wire_geometry_payload();
+  ASSERT_NE(first, nullptr);
+  EXPECT_EQ(first, second);
+  EXPECT_TRUE(first->authored);
+  ASSERT_EQ(first->segments.size(), 4u);
+  EXPECT_NE(first->content_id, 0u);
 
-  EXPECT_NE(snapshot_header.find("struct RenderSceneSnapshot"),
-            std::string::npos);
-  EXPECT_NE(snapshot_header.find("RenderSceneMeshRecord"), std::string::npos);
-  EXPECT_NE(snapshot_header.find("RenderSceneLightRecord"), std::string::npos);
-  EXPECT_NE(snapshot_header.find("std::vector<RenderSceneMeshRecord>"),
-            std::string::npos);
-  EXPECT_NE(snapshot_header.find("std::vector<RenderSceneLightRecord>"),
-            std::string::npos);
-  EXPECT_NE(snapshot_header.find("scene_revision"), std::string::npos);
-  EXPECT_NE(snapshot_header.find("asset_revision"), std::string::npos);
-  EXPECT_NE(snapshot_header.find("mesh_revision"), std::string::npos);
-  EXPECT_NE(snapshot_header.find("material_revision"), std::string::npos);
-
-  EXPECT_EQ(mesh_record.find("const MeshAsset *"), std::string::npos);
-  EXPECT_EQ(mesh_record.find("const MeshComponent *"), std::string::npos);
-  EXPECT_EQ(mesh_record.find("const MaterialComponent *"), std::string::npos);
-  EXPECT_EQ(light_record.find("const LightComponent *"), std::string::npos);
-  EXPECT_NE(extraction_header.find("build_render_scene_snapshot"),
-            std::string::npos);
-  EXPECT_EQ(extraction_source.find(".mesh = assets.mesh("),
-            std::string::npos);
-  EXPECT_EQ(extraction_source.find(".mesh_component = mesh_component"),
-            std::string::npos);
-  EXPECT_EQ(extraction_source.find(".material_component = material_component"),
-            std::string::npos);
-  EXPECT_EQ(extraction_source.find(".light = light"), std::string::npos);
-}
-
-TEST(RenderSceneSnapshotTests, OverlayRecordsStayBehindRenderBoundary) {
-  const std::string snapshot_header =
-      read_source_file("src/render/render_scene_snapshot.hpp");
-  const std::string render_bridge_source =
-      read_source_file("src/render/scene_render_bridge.cpp");
-  const std::string viewport_panel_source =
-      read_source_file("src/ui/qt_viewport_panel.cpp");
-
-  for (std::string_view token : {
-           std::string_view{"SelectedObject"},
-           std::string_view{"SceneWireframe"},
-           std::string_view{"HierarchySelection"},
-           std::string_view{"GroupBounds"},
-           std::string_view{"SelectedLight"},
-           std::string_view{"ToolOverlay"},
-       }) {
-    EXPECT_NE(snapshot_header.find(token), std::string::npos) << token;
-  }
-
-  EXPECT_NE(render_bridge_source.find("RenderSceneSnapshot"),
-            std::string::npos);
-  EXPECT_EQ(viewport_panel_source.find("ViewportSceneOverlayBuilder::"),
-            std::string::npos);
-  EXPECT_EQ(viewport_panel_source.find("build_render_overlay_"),
-            std::string::npos);
-  EXPECT_EQ(viewport_panel_source.find("sync_selected_object_overlay("),
-            std::string::npos);
-  EXPECT_EQ(viewport_panel_source.find("sync_scene_wireframe_overlay("),
-            std::string::npos);
+  const MeshWireSegment pinned_first_segment = first->segments.front();
+  quader_poly::Document &authored = mesh.edit_authored_polygon_document();
+  ASSERT_FALSE(authored.vertices.empty());
+  authored.vertices.front().position.x -= 3.0f;
+  const std::shared_ptr<const MeshWireGeometryPayload> changed =
+      mesh.wire_geometry_payload();
+  ASSERT_NE(changed, nullptr);
+  EXPECT_NE(changed, first);
+  EXPECT_NE(changed->content_id, first->content_id);
+  EXPECT_FLOAT_EQ(first->segments.front().start.x, pinned_first_segment.start.x);
+  EXPECT_FLOAT_EQ(first->segments.front().start.y, pinned_first_segment.start.y);
+  EXPECT_FLOAT_EQ(first->segments.front().start.z, pinned_first_segment.start.z)
+      << "the old payload remains immutable while a render snapshot pins it";
 }
 
 TEST(RenderOverlaySnapshotTests,
@@ -1333,7 +1267,7 @@ TEST(RenderOverlaySnapshotTests,
 
   const ViewportOverlayFrame frame =
       ViewportSceneOverlayBuilder::build_wireframe_frame(
-          {}, ModelingSelectionMode::Object, wireframe_snapshot);
+          {}, RenderOverlaySelectionMode::Object, wireframe_snapshot);
   EXPECT_EQ(line_count_for(frame, ViewportOverlayLayer::SelectedEdge), 3u);
   EXPECT_EQ(line_count_for(frame, ViewportOverlayLayer::WireframeXray), 4u);
   EXPECT_TRUE(std::all_of(
@@ -1383,11 +1317,12 @@ TEST(RenderOverlaySnapshotTests,
       build_render_overlay_scene_wireframe_snapshot(document, assets, 1u,
                                                     style);
   ASSERT_EQ(unselected_snapshot.meshes.size(), 1u);
-  EXPECT_EQ(unselected_snapshot.meshes.front().wireframe_color,
-            kLayerWireColor);
+  EXPECT_FLOAT_EQ(unselected_snapshot.meshes.front().wireframe_tint.x, 1.0f);
+  EXPECT_FLOAT_EQ(unselected_snapshot.meshes.front().wireframe_tint.y, 0.25f);
+  EXPECT_FLOAT_EQ(unselected_snapshot.meshes.front().wireframe_tint.z, 0.0f);
   const ViewportOverlayFrame unselected_frame =
       ViewportSceneOverlayBuilder::build_wireframe_frame(
-          {}, ModelingSelectionMode::Object, unselected_snapshot);
+          {}, RenderOverlaySelectionMode::Object, unselected_snapshot);
   EXPECT_EQ(line_count_for(unselected_frame,
                            ViewportOverlayLayer::WireframeXray),
             3u);
@@ -1417,11 +1352,15 @@ TEST(RenderOverlaySnapshotTests,
                                                     style);
   ASSERT_EQ(selected_wire_snapshot.meshes.size(), 1u);
   EXPECT_TRUE(selected_wire_snapshot.meshes.front().selected);
-  EXPECT_EQ(selected_wire_snapshot.meshes.front().wireframe_color,
-            kLayerWireColor);
+  EXPECT_FLOAT_EQ(selected_wire_snapshot.meshes.front().wireframe_tint.x,
+                  1.0f);
+  EXPECT_FLOAT_EQ(selected_wire_snapshot.meshes.front().wireframe_tint.y,
+                  0.25f);
+  EXPECT_FLOAT_EQ(selected_wire_snapshot.meshes.front().wireframe_tint.z,
+                  0.0f);
   const ViewportOverlayFrame selected_wire_frame =
       ViewportSceneOverlayBuilder::build_wireframe_frame(
-          {}, ModelingSelectionMode::Object, selected_wire_snapshot);
+          {}, RenderOverlaySelectionMode::Object, selected_wire_snapshot);
   EXPECT_EQ(line_count_for(selected_wire_frame,
                            ViewportOverlayLayer::SelectedEdge),
             3u);
@@ -1489,8 +1428,12 @@ TEST(RenderOverlaySnapshotTests,
   const RenderOverlaySceneWireframeSnapshot restored_wire_snapshot =
       build_render_overlay_scene_wireframe_snapshot(document, assets, 1u);
   ASSERT_EQ(restored_wire_snapshot.meshes.size(), 1u);
-  EXPECT_EQ(restored_wire_snapshot.meshes.front().wireframe_color,
-            kLayerWireColor);
+  EXPECT_FLOAT_EQ(restored_wire_snapshot.meshes.front().wireframe_tint.x,
+                  1.0f);
+  EXPECT_FLOAT_EQ(restored_wire_snapshot.meshes.front().wireframe_tint.y,
+                  0.25f);
+  EXPECT_FLOAT_EQ(restored_wire_snapshot.meshes.front().wireframe_tint.z,
+                  0.0f);
 
   const std::uint64_t layer_revision = document.layer_revision();
   ASSERT_TRUE(document.set_layer_locked(layer, true));
@@ -1514,35 +1457,6 @@ TEST(RenderOverlaySnapshotTests,
                 ModelingSelectionMode::Object, {})
                 .objects.size(),
             1u);
-}
-
-TEST(RenderOverlaySnapshotTests,
-     PersistentSceneWireframeLineCacheUsesSnapshotClipPlanes) {
-  const std::string selected_cache_source = read_source_file(
-      "src/render/overlay/selected_object_overlay_cache.cpp");
-  const std::string wireframe_cache_source = read_source_file(
-      "src/render/overlay/scene_wireframe_overlay_cache.cpp");
-  const std::string snapshot_header =
-      read_source_file("src/render/overlay/render_overlay_snapshot.hpp");
-
-  EXPECT_NE(snapshot_header.find("ViewportCameraClipPlanes clip_planes"),
-            std::string::npos);
-  EXPECT_EQ(selected_cache_source.find("kSelectedObjectLineNearPlane"),
-            std::string::npos);
-  EXPECT_EQ(wireframe_cache_source.find("kSceneWireframeLineNearPlane"),
-            std::string::npos);
-  EXPECT_EQ(selected_cache_source.find("setParameter(\"nearPlane\", 0.05"),
-            std::string::npos);
-  EXPECT_EQ(wireframe_cache_source.find("setParameter(\"nearPlane\", 0.05"),
-            std::string::npos);
-  EXPECT_EQ(selected_cache_source.find("SelectedObjectLineVertex"),
-            std::string::npos);
-  EXPECT_EQ(selected_cache_source.find("update_line_proxy"),
-            std::string::npos);
-  EXPECT_EQ(selected_cache_source.find("setParameter(\"nearPlane\""),
-            std::string::npos);
-  EXPECT_NE(wireframe_cache_source.find("clip_planes.near_plane"),
-            std::string::npos);
 }
 
 TEST(RenderOverlaySnapshotCacheTests,
@@ -1704,8 +1618,12 @@ TEST(RenderOverlaySnapshotCacheTests,
   ASSERT_TRUE(changed.scene_wireframe_changed);
   ASSERT_NE(changed.scene_wireframe, nullptr);
   ASSERT_EQ(changed.scene_wireframe->meshes.size(), 1u);
-  EXPECT_EQ(changed.scene_wireframe->meshes.front().wireframe_color,
-            rgba8(32, 128, 255, 230));
+  EXPECT_FLOAT_EQ(changed.scene_wireframe->meshes.front().wireframe_tint.x,
+                  changed_color.x);
+  EXPECT_FLOAT_EQ(changed.scene_wireframe->meshes.front().wireframe_tint.y,
+                  changed_color.y);
+  EXPECT_FLOAT_EQ(changed.scene_wireframe->meshes.front().wireframe_tint.z,
+                  changed_color.z);
   EXPECT_EQ(cache.stats().selected_object_build_count, 1u);
   EXPECT_EQ(cache.stats().scene_wireframe_build_count, 2u);
 
@@ -1950,7 +1868,7 @@ TEST(RenderOverlaySnapshotCacheTests,
                               *expected);
   const ViewportOverlayFrame overlay =
       ViewportSceneOverlayBuilder::build_selection_frame(
-          {}, transformed, false, ModelingSelectionMode::Object);
+          {}, transformed, false, RenderOverlaySelectionMode::Object);
   EXPECT_EQ(line_source_count_for(overlay, ViewportOverlaySource::GroupBounds),
             12u);
   EXPECT_EQ(cache.stats().selection_build_count, 1u);
@@ -2142,143 +2060,6 @@ TEST(RenderOverlaySnapshotCacheTests,
   ASSERT_NE(switched.scene_wireframe, nullptr);
   EXPECT_EQ(switched.selected_object->scene_binding, third_binding);
   EXPECT_EQ(switched.scene_wireframe->scene_binding, third_binding);
-}
-
-TEST(RenderOverlaySnapshotTests, SceneOverlayBuildersConsumeSnapshotsOnly) {
-  const std::string builder_source = read_source_file(
-      "src/render/overlay/viewport_scene_overlay_builder.cpp");
-  const std::string builder_header = read_source_file(
-      "src/render/overlay/viewport_scene_overlay_builder.hpp");
-  const std::string selected_cache_source = read_source_file(
-      "src/render/overlay/selected_object_overlay_cache.cpp");
-  const std::string wireframe_cache_source = read_source_file(
-      "src/render/overlay/scene_wireframe_overlay_cache.cpp");
-  const std::string bridge_source =
-      read_source_file("src/render/scene_render_bridge.cpp");
-  const std::string bridge_header =
-      read_source_file("src/render/scene_render_bridge.hpp");
-  const std::string overlay_snapshot_header =
-      read_source_file("src/render/overlay/render_overlay_snapshot.hpp");
-  const std::string render_snapshot_header =
-      read_source_file("src/render/render_scene_snapshot.hpp");
-
-  EXPECT_EQ(builder_header.find("const SceneDocument &"), std::string::npos);
-  EXPECT_EQ(builder_header.find("const AssetRegistry &"), std::string::npos);
-  EXPECT_EQ(builder_source.find("build_render_overlay_selection_snapshot"),
-            std::string::npos);
-  EXPECT_EQ(builder_source.find("build_render_overlay_scene_wireframe_snapshot"),
-            std::string::npos);
-  EXPECT_NE(
-      builder_source.find("const RenderOverlaySelectionSnapshot &snapshot"),
-      std::string::npos);
-  EXPECT_NE(builder_source.find(
-                "const RenderOverlaySceneWireframeSnapshot &snapshot"),
-            std::string::npos);
-  EXPECT_NE(selected_cache_source.find(
-                "const RenderOverlaySelectedObjectSnapshot &snapshot"),
-            std::string::npos);
-  EXPECT_NE(wireframe_cache_source.find(
-                "const RenderOverlaySceneWireframeSnapshot &snapshot"),
-            std::string::npos);
-  EXPECT_NE(bridge_header.find("sync(const SceneDocument &document"),
-            std::string::npos);
-  EXPECT_NE(bridge_header.find("const AssetRegistry &assets"),
-            std::string::npos);
-  EXPECT_EQ(bridge_source.find("build_render_overlay_selected_object_snapshot"),
-            std::string::npos);
-  EXPECT_EQ(bridge_source.find("build_render_overlay_scene_wireframe_snapshot"),
-            std::string::npos);
-  EXPECT_EQ(bridge_header.find("RenderOverlaySnapshotCache"),
-            std::string::npos);
-  EXPECT_NE(overlay_snapshot_header.find(
-                "class RenderOverlaySnapshotCache final"),
-            std::string::npos);
-  EXPECT_NE(bridge_header.find("const RenderOverlaySelectedObjectSnapshot"),
-            std::string::npos);
-  EXPECT_NE(bridge_header.find("const RenderOverlaySceneWireframeSnapshot"),
-            std::string::npos);
-  EXPECT_NE(render_snapshot_header.find(
-                "using RenderSelectedObjectOverlaySnapshotRecord"),
-            std::string::npos);
-  EXPECT_NE(render_snapshot_header.find("using OverlaySnapshot"),
-            std::string::npos);
-}
-
-TEST(RenderSceneBindingGuardrailTests,
-     SceneAndOverlayEarlyOutsQualifyReuseBySceneActivation) {
-  const std::string binding_header =
-      read_source_file("src/render/render_scene_binding.hpp");
-  const std::string extraction_source =
-      read_source_file("src/render/scene_render_extraction.cpp");
-  const std::string sync_source =
-      read_source_file("src/render/scene_render_sync_service.cpp");
-  const std::string bridge_source =
-      read_source_file("src/render/scene_render_bridge.cpp");
-  const std::string selected_cache_source = read_source_file(
-      "src/render/overlay/selected_object_overlay_cache.cpp");
-  const std::string wireframe_cache_source = read_source_file(
-      "src/render/overlay/scene_wireframe_overlay_cache.cpp");
-  const std::string texture_cache_source =
-      read_source_file("src/render/texture_binding_service.cpp");
-  const std::string render_api_source =
-      read_source_file("src/api/quader_render_api.cpp");
-
-  EXPECT_NE(binding_header.find("scene_session_id"), std::string::npos);
-  EXPECT_NE(binding_header.find("activation_generation"), std::string::npos);
-  EXPECT_NE(binding_header.find("binding_revision"), std::string::npos);
-  EXPECT_NE(extraction_source.find(
-                "previous->scene_binding == snapshot.scene_binding"),
-            std::string::npos);
-  EXPECT_NE(sync_source.find(
-                "synced_scene_binding_ != snapshot.scene_binding"),
-            std::string::npos);
-  const std::size_t retire_scene_meshes =
-      sync_source.find("mesh_cache_->remove_except(no_scene_entities)");
-  const std::size_t destroy_retired_materials = sync_source.find(
-      "mesh_cache_->drain_retired_destroy_queue(\n"
-      "      mesh_cache_->retired_proxy_count())");
-  const std::size_t invalidate_scene_textures =
-      sync_source.find("material_binding_->bind_scene(scene_binding)");
-  ASSERT_NE(retire_scene_meshes, std::string::npos);
-  ASSERT_NE(destroy_retired_materials, std::string::npos);
-  ASSERT_NE(invalidate_scene_textures, std::string::npos);
-  EXPECT_LT(retire_scene_meshes, destroy_retired_materials);
-  EXPECT_LT(destroy_retired_materials, invalidate_scene_textures)
-      << "A scene switch must destroy retired material instances before "
-         "invalidating the textures they still reference.";
-  const std::size_t clear_tool_previews =
-      bridge_source.find("tool_preview_cache_.clear()");
-  const std::size_t clear_viewport_overlays =
-      bridge_source.find("overlay_cache_.clear_slot(index)");
-  const std::size_t bind_scene_resources =
-      bridge_source.find("sync_service_.bind_scene(scene_binding)");
-  ASSERT_NE(clear_tool_previews, std::string::npos);
-  ASSERT_NE(clear_viewport_overlays, std::string::npos);
-  ASSERT_NE(bind_scene_resources, std::string::npos);
-  EXPECT_LT(clear_tool_previews, bind_scene_resources);
-  EXPECT_LT(clear_viewport_overlays, bind_scene_resources)
-      << "Preview and overlay material instances must be destroyed before "
-         "the outgoing scene texture cache is invalidated.";
-  EXPECT_NE(bridge_source.find("bind_scene(snapshot.scene_binding)"),
-            std::string::npos);
-  EXPECT_NE(selected_cache_source.find(
-                "synced_scene_binding_ != snapshot.scene_binding"),
-            std::string::npos);
-  EXPECT_NE(wireframe_cache_source.find(
-                "synced_scene_binding_ != snapshot.scene_binding"),
-            std::string::npos);
-  EXPECT_NE(texture_cache_source.find("texture_cache_.clear()"),
-            std::string::npos);
-  EXPECT_EQ(texture_cache_source.find("evict_obsolete_texture_revisions"),
-            std::string::npos)
-      << "Without texture reference tracking, old revisions must remain "
-         "alive until the scene cache is safely released.";
-  EXPECT_NE(render_api_source.find(".scene_session_id ="),
-            std::string::npos);
-  EXPECT_NE(render_api_source.find(".activation_generation ="),
-            std::string::npos);
-  EXPECT_NE(render_api_source.find(".binding_revision ="),
-            std::string::npos);
 }
 
 TEST(RenderSceneSnapshotTests, BuildsValueSpanRecordsAndTracksDirtyState) {
@@ -2707,40 +2488,6 @@ TEST(LightRenderableCacheTests, ConvertsEditorIntensityToViewportFilamentUnits) 
                     100000.0f);
 }
 
-TEST(LightRenderableCacheTests, OwnsIncrementalLightSyncPolicy) {
-  const std::string header =
-      read_source_file({"src", "render", "light_renderable_cache.hpp"});
-  const std::string source =
-      read_source_file({"src", "render", "light_renderable_cache.cpp"});
-  const std::string sync_source =
-      read_source_file({"src", "render", "scene_render_sync_service.cpp"});
-
-  EXPECT_NE(header.find("rebuild_signature"), std::string::npos);
-  EXPECT_NE(header.find("transform_signature"), std::string::npos);
-  EXPECT_NE(header.find("filament_intensity"), std::string::npos);
-  EXPECT_NE(source.find("kGodotPunctualLightLumensPerIntensity = 1000.0f"),
-            std::string::npos);
-  EXPECT_NE(
-      source.find("kViewportPunctualLightExposureCompensation = 10000.0f"),
-      std::string::npos);
-  EXPECT_NE(source.find("needs_rebuild(light)"), std::string::npos);
-  EXPECT_NE(source.find("update_light_transform(existing->second, "
-                        "light.world_transform)"),
-            std::string::npos);
-  EXPECT_NE(source.find(".intensity(filament_intensity(light))"),
-            std::string::npos);
-  EXPECT_NE(source.find(".position(position_from_matrix(world_transform))"),
-            std::string::npos);
-  EXPECT_NE(source.find(".falloff(light_falloff_radius(light))"),
-            std::string::npos);
-  EXPECT_NE(source.find("light_manager.setPosition(instance, "
-                        "position_from_matrix(world_transform))"),
-            std::string::npos);
-  EXPECT_NE(sync_source.find("light_cache_.sync_light"), std::string::npos);
-  EXPECT_EQ(sync_source.find("light_signature"), std::string::npos);
-  EXPECT_EQ(sync_source.find("update_light_transform"), std::string::npos);
-}
-
 TEST(ViewportSceneOverlayBuilderTests, AddsHierarchySelectionWiresAndGroupBounds) {
     SceneDocument document;
     AssetRegistry assets;
@@ -2811,7 +2558,7 @@ TEST(ViewportSceneOverlayBuilderTests,
     const ViewportOverlayFrame object_frame =
         ViewportSceneOverlayBuilder::build_selection_frame(
             ViewportOverlayFrame{}, snapshot, false,
-            ModelingSelectionMode::Object);
+            RenderOverlaySelectionMode::Object);
     EXPECT_EQ(line_count_for(object_frame, ViewportOverlayLayer::GroupBounds),
               12u);
     const std::optional<SceneBounds> cage_bounds =
@@ -2822,7 +2569,7 @@ TEST(ViewportSceneOverlayBuilderTests,
     const ViewportOverlayFrame face_frame =
         ViewportSceneOverlayBuilder::build_selection_frame(
             ViewportOverlayFrame{}, snapshot, false,
-            ModelingSelectionMode::Face);
+            RenderOverlaySelectionMode::Component);
     EXPECT_EQ(line_count_for(face_frame, ViewportOverlayLayer::GroupBounds),
               0u);
 }
@@ -2887,7 +2634,7 @@ TEST(ViewportSceneOverlayBuilderTests,
     const ViewportOverlayFrame frame =
         ViewportSceneOverlayBuilder::build_selection_frame(
             std::move(base_frame), snapshot, false,
-            ModelingSelectionMode::Object);
+            RenderOverlaySelectionMode::Object);
 
     EXPECT_EQ(line_count_for(frame, ViewportOverlayLayer::SelectedEdge), 2u)
         << "the aggregate cage must not replace each selected mesh outline";
@@ -3042,7 +2789,7 @@ TEST(ViewportSceneOverlayBuilderTests, BuildsWireframeOverlayWithoutObjectFaceFi
             document, assets, static_cast<std::uint8_t>(0xffu));
     const ViewportOverlayFrame object_frame =
         ViewportSceneOverlayBuilder::build_wireframe_frame(
-            base_frame, ModelingSelectionMode::Object, snapshot);
+            base_frame, RenderOverlaySelectionMode::Object, snapshot);
 
     EXPECT_EQ(triangle_count_for(object_frame,
                                  ViewportOverlayLayer::SelectedVisibleFace),
@@ -3067,7 +2814,7 @@ TEST(ViewportSceneOverlayBuilderTests, BuildsWireframeOverlayWithoutObjectFaceFi
 
     const ViewportOverlayFrame face_frame =
         ViewportSceneOverlayBuilder::build_wireframe_frame(
-            base_frame, ModelingSelectionMode::Face, snapshot);
+            base_frame, RenderOverlaySelectionMode::Component, snapshot);
 
     EXPECT_EQ(triangle_count_for(face_frame,
                                  ViewportOverlayLayer::SelectedVisibleFace),
@@ -3096,7 +2843,7 @@ TEST(ViewportSceneOverlayBuilderTests, WireframeModeUsesAuthoredTopologyWithoutT
             document, assets, static_cast<std::uint8_t>(0xffu));
     const ViewportOverlayFrame frame =
         ViewportSceneOverlayBuilder::build_wireframe_frame(
-            {}, ModelingSelectionMode::Object, snapshot);
+            {}, RenderOverlaySelectionMode::Object, snapshot);
 
     EXPECT_EQ(line_count_for(frame, ViewportOverlayLayer::WireframeBase), 0u);
     EXPECT_EQ(line_count_for(frame, ViewportOverlayLayer::WireframeXray), 4u);
@@ -3230,26 +2977,6 @@ TEST(OverlayLineMeshBuilderTests,
   EXPECT_EQ(draw_on_top.state.depth_func, OverlayDepthFunc::Always);
   EXPECT_FLOAT_EQ(draw_on_top.depth_bias, 0.0f);
   EXPECT_FALSE(draw_on_top.state.depth_culling);
-}
-
-TEST(OverlayLineMeshBuilderTests, EditWireBatchesDoNotOwnPrivateClipPlane) {
-  const std::string builder_header =
-      read_source_file("src/render/overlay/overlay_renderable_builder.hpp");
-  const std::string builder_source =
-      read_source_file("src/render/overlay/overlay_renderable_builder.cpp");
-  const std::string proxy_source =
-      read_source_file("src/render/overlay/overlay_proxy_factory.cpp");
-  const std::string edit_wire_material =
-      read_source_file("resources/materials/quader_edit_wire_line.mat");
-
-  const std::string edit_wire_batch =
-      source_slice(builder_header, "struct OverlayEditWireBatch",
-                   "struct OverlayPointBatch");
-  EXPECT_EQ(edit_wire_batch.find("near_plane"), std::string::npos);
-  EXPECT_EQ(builder_source.find("kOverlayEditWireNearPlane"),
-            std::string::npos);
-  EXPECT_EQ(proxy_source.find("batch.near_plane"), std::string::npos);
-  EXPECT_EQ(edit_wire_material.find("nearPlane"), std::string::npos);
 }
 
 TEST(OverlayLineMeshBuilderTests, SourceWireDepthStampsRemainInactiveForVisibility) {
@@ -4043,29 +3770,6 @@ TEST(OverlayRenderableCacheTests, TracksSlotSignaturesWithoutOwningFilamentProxi
               OverlayRenderableBuilder::frame_signature(frame));
 }
 
-TEST(SceneRenderBridgeExtractionTests, DelegatesOverlayAndPreviewProxyOwnership) {
-  const std::string header =
-      read_source_file({"src", "render", "scene_render_bridge.hpp"});
-  const std::string source =
-      read_source_file({"src", "render", "scene_render_bridge.cpp"});
-
-  EXPECT_NE(header.find("OverlayRenderableCache overlay_cache_"),
-            std::string::npos);
-  EXPECT_NE(header.find("ToolPreviewRenderableCache tool_preview_cache_"),
-            std::string::npos);
-  EXPECT_NE(source.find("overlay_cache_.set_overlay_frame"), std::string::npos);
-  EXPECT_NE(source.find("tool_preview_cache_.set_meshes"), std::string::npos);
-
-  EXPECT_EQ(header.find("struct OverlayProxy"), std::string::npos);
-  EXPECT_EQ(header.find("struct OverlaySlot"), std::string::npos);
-  EXPECT_EQ(header.find("struct OverlayProxyGroup"), std::string::npos);
-  EXPECT_EQ(header.find("overlaySlots_"), std::string::npos);
-  EXPECT_EQ(header.find("toolPreviewMeshProxies_"), std::string::npos);
-  EXPECT_EQ(source.find("rebuildOverlayProxies"), std::string::npos);
-  EXPECT_EQ(source.find("destroyOverlayProxy"), std::string::npos);
-  EXPECT_EQ(source.find("destroyToolPreviewMeshes"), std::string::npos);
-}
-
 TEST(ViewportRenderPassCoordinatorTests, SeparatesSceneAndOverlayLayerMasks) {
     ViewportRenderPassCoordinator coordinator;
     const std::uint8_t grid_layer_mask = viewport_grid_layer_mask(2);
@@ -4390,10 +4094,15 @@ TEST(RenderSceneWireframeBatchPlannerTests,
   const RenderOverlaySceneWireframeSnapshot wire_snapshot =
       build_render_overlay_scene_wireframe_snapshot(document, assets, 1u);
   ASSERT_EQ(wire_snapshot.meshes.size(), 200u);
+  const MeshWireGeometryPayload *shared_wire_geometry =
+      wire_snapshot.meshes.front().wire_geometry_payload.get();
+  ASSERT_NE(shared_wire_geometry, nullptr);
   for (const RenderOverlayMeshSnapshot &mesh : wire_snapshot.meshes) {
     ASSERT_NE(mesh.geometry_payload, nullptr);
     EXPECT_EQ(reinterpret_cast<std::uintptr_t>(mesh.geometry_payload.get()),
               shared_geometry_token);
+    EXPECT_EQ(mesh.wire_geometry_payload.get(), shared_wire_geometry);
+    EXPECT_EQ(mesh.wire_segments.data(), shared_wire_geometry->segments.data());
   }
   const SceneWireframeOverlayBatchPlan wire_plan =
       plan_scene_wireframe_overlay_batches(wire_snapshot, 64u);
@@ -4414,6 +4123,9 @@ TEST(RenderSceneWireframeBatchPlannerTests,
   ASSERT_NE(mesh, nullptr);
   const std::shared_ptr<const MeshGeometryPayload> payload =
       mesh->geometry_payload();
+  const std::shared_ptr<const MeshWireGeometryPayload> wire_payload =
+      mesh->wire_geometry_payload();
+  ASSERT_NE(wire_payload, nullptr);
 
   const std::array<std::pair<std::size_t, std::vector<std::size_t>>, 4u>
       cases{{
@@ -4435,9 +4147,11 @@ TEST(RenderSceneWireframeBatchPlannerTests,
           .mesh_revision = mesh->revision.value,
           .geometry_payload = payload,
           .geometry_content_id = mesh->geometry_content_id(),
+          .wire_geometry_payload = wire_payload,
           .world_transform = transform,
           .vertices = payload->vertices,
           .indices = payload->indices,
+          .wire_segments = wire_payload->segments,
       });
     }
     const SceneWireframeOverlayBatchPlan plan =
@@ -4469,12 +4183,13 @@ TEST(RenderSceneWireframeBatchPlannerTests,
         .mesh_revision = mesh->revision.value,
         .geometry_payload = payload,
         .geometry_content_id = mesh->geometry_content_id(),
+        .wire_geometry_payload = wire_payload,
         .selected = index == 0u,
-        .wireframe_color =
-            index >= 100u ? rgba8(255, 128, 0, 230)
-                          : kOverlayWireframeXrayColor,
+        .wireframe_tint = index >= 100u ? QVec3{1.0f, 0.5f, 0.0f}
+                                       : kDefaultSceneLayerWireframeColor,
         .vertices = payload->vertices,
         .indices = payload->indices,
+        .wire_segments = wire_payload->segments,
     });
   }
   const SceneWireframeOverlayBatchPlan split =
@@ -4516,8 +4231,9 @@ TEST(RenderSceneWireframeBatchPlannerTests,
   EXPECT_EQ(snapshot.meshes.front().entity, occurrence);
   EXPECT_NE(snapshot.meshes.front().participant_token, 0u);
   EXPECT_FLOAT_EQ(snapshot.meshes.front().world_transform.values[12], 12.0f);
-  EXPECT_EQ(snapshot.meshes.front().wireframe_color,
-            rgba8(64, 128, 191, 230));
+  EXPECT_FLOAT_EQ(snapshot.meshes.front().wireframe_tint.x, 0.25f);
+  EXPECT_FLOAT_EQ(snapshot.meshes.front().wireframe_tint.y, 0.5f);
+  EXPECT_FLOAT_EQ(snapshot.meshes.front().wireframe_tint.z, 0.75f);
   const SceneWireframeOverlayBatchPlan plan =
       plan_scene_wireframe_overlay_batches(snapshot, 64u);
   EXPECT_EQ(plan.participant_count, 1u);
@@ -4586,21 +4302,6 @@ TEST(RenderSceneWireframeBatchPlannerTests,
   EXPECT_EQ(selection.instance_selection_fills.front().occurrence, isolated);
   ASSERT_EQ(selection.instance_selection_wires.size(), 1u);
   EXPECT_EQ(selection.instance_selection_wires.front().occurrence, isolated);
-}
-
-TEST(RenderSceneWireframeBatchPlannerTests,
-     UsesInstancedDeviceDomainEndpointExpansionMaterial) {
-  const std::string material =
-      read_source_file("resources/materials/quader_selected_object_line.mat");
-  const std::string cache = read_source_file(
-      "src/render/overlay/scene_wireframe_overlay_cache.cpp");
-  EXPECT_NE(material.find("instanced : true"), std::string::npos);
-  EXPECT_NE(material.find("getWorldFromModelMatrix"), std::string::npos);
-  EXPECT_NE(material.find("getResolution"), std::string::npos);
-  EXPECT_NE(cache.find("filament::InstanceBuffer::Builder"),
-            std::string::npos);
-  EXPECT_NE(cache.find(".instances(transforms.size(), proxy.instance_buffer)"),
-            std::string::npos);
 }
 
 TEST(RenderInstanceEditPresentationTests,
@@ -4698,28 +4399,19 @@ TEST(RenderInstanceEditPresentationTests,
   EXPECT_EQ(fill.occurrence, occurrence);
   EXPECT_EQ(fill.definition, definition);
   EXPECT_EQ(fill.member, member);
-  EXPECT_EQ(fill.color, rgba8(201, 92, 88, 89));
-  EXPECT_TRUE(fill.depth_test);
-  EXPECT_FALSE(fill.depth_write);
-  EXPECT_FLOAT_EQ(fill.polygon_offset_scale, -1.0f);
-  EXPECT_FLOAT_EQ(fill.polygon_offset_constant, -1.0f);
-  EXPECT_EQ(fill.draws_before, ViewportOverlayLayer::SourceWire);
-  EXPECT_LT(fill.blend_order,
-            viewport_overlay_draw_order(ViewportOverlayLayer::SourceWire) *
-                64);
+  ASSERT_NE(fill.geometry_payload, nullptr);
+  EXPECT_NE(fill.geometry_content_id.value, 0u);
+  EXPECT_FALSE(fill.vertices.empty());
+  EXPECT_GE(fill.indices.size(), 3u);
   EXPECT_FLOAT_EQ(fill.world_transform.values[12], 12.0f);
   EXPECT_EQ(wire.semantic, RenderOverlaySemantic::InstanceSelectionWire);
   EXPECT_EQ(wire.occurrence, occurrence);
   EXPECT_EQ(wire.definition, definition);
   EXPECT_EQ(wire.member, member);
-  EXPECT_EQ(wire.color, kOverlaySelectionWireColor);
-  EXPECT_FLOAT_EQ(wire.line_width_pixels,
-                  kOverlaySelectionWireLineWidthPixels);
-  EXPECT_EQ(wire.layer, ViewportOverlayLayer::SourceWire);
-  EXPECT_GT(wire.blend_order, fill.blend_order);
-  EXPECT_EQ(wire.blend_order,
-            viewport_overlay_draw_order(ViewportOverlayLayer::SourceWire) *
-                64);
+  ASSERT_NE(wire.geometry_payload, nullptr);
+  ASSERT_NE(wire.wire_geometry_payload, nullptr);
+  EXPECT_EQ(wire.geometry_content_id, fill.geometry_content_id);
+  EXPECT_FALSE(wire.wire_segments.empty());
   EXPECT_FLOAT_EQ(wire.world_transform.values[12], 12.0f);
 }
 

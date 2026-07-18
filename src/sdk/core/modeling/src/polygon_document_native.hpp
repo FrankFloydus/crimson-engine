@@ -8,7 +8,7 @@
 
 #include <quader/modeling/mesh/polygon_document.hpp>
 
-#include <mesh/polygon/document.hpp>
+#include <quader/modeling/neutral/polygon/document.hpp>
 
 #include <memory>
 #include <utility>

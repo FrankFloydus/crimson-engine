@@ -27,8 +27,6 @@ public:
     [[nodiscard]] bool rollback_failed_preview(
         ViewportBoxToolContext &box_context, const char *action,
         const ModelingBoxPreview &preview) const;
-    [[nodiscard]] bool commit_preview(ViewportBoxToolContext &box_context,
-                                      const std::string &name) const;
     [[nodiscard]] ViewportToolResult
     handle_event(ViewportToolContext &context,
                  const ViewportToolEvent &event) const override;

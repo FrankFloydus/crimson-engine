@@ -92,7 +92,6 @@ if(QUADER_BUILD_NATIVE_APP)
     find_package(glm CONFIG REQUIRED)
     find_package(EnTT CONFIG REQUIRED)
     find_package(stduuid CONFIG REQUIRED)
-    find_package(Taskflow CONFIG REQUIRED)
     find_package(flatbuffers CONFIG REQUIRED)
     find_package(zstd CONFIG REQUIRED)
     find_package(Qt6 CONFIG REQUIRED COMPONENTS Core Gui Widgets)
@@ -177,11 +176,11 @@ add_library(quader_modeling STATIC
     src/editor/modeling/services/modeling_instant_operation_catalog.cpp
     src/editor/modeling/services/modeling_mesh_sync_service.cpp
     src/editor/modeling/services/modeling_operation_settings.cpp
+    src/editor/modeling/services/modeling_sdk_projection_adapter.cpp
     src/editor/modeling/services/runtime_tool_command_service.cpp
     src/editor/modeling/services/modeling_session_services.cpp
     src/editor/modeling/services/modeling_session_service.cpp
     src/editor/modeling/services/modeling_transform_drag_service.cpp
-    src/editor/modeling/preview/transform_preview_service.cpp
     src/editor/modeling/runtime_state/modal_tool_runtime.cpp
     src/editor/modeling/runtime_state/transform_drag_controller.cpp
     ${QUADER_MODELING_TOOL_SOURCES}
@@ -198,6 +197,7 @@ target_compile_features(quader_modeling PUBLIC cxx_std_20)
 target_link_libraries(quader_modeling
     PUBLIC
         quader_modeling_runtime
+        quader_modeling_sdk_runtime
         quader_editor_metadata
     PRIVATE
         quader_modeling_profile
@@ -227,10 +227,13 @@ add_library(quader_assets STATIC
     src/assets/asset_registry.cpp
     src/assets/bake_service.cpp
     src/assets/material_document.cpp
+    src/assets/mesh_wire_geometry.cpp
     src/assets/project_asset_id.cpp
 )
 
 quader_configure_core_module(quader_assets)
+target_include_directories(quader_assets
+    PRIVATE "${QUADER_MODELING_SDK_NEUTRAL_INCLUDE_DIR}")
 target_link_libraries(quader_assets
     PUBLIC quader_core_utilities
     PRIVATE stduuid)
@@ -258,12 +261,15 @@ target_link_libraries(quader_document
         stduuid)
 
 add_library(quader_editor_services STATIC
+    ${QUADER_EDITOR_VIEWPORT_TOOL_SOURCES}
     src/editor/array/linear_array_tool_service.cpp
     src/editor/array/radial_array_tool_service.cpp
     src/editor/commands/asset_command_service.cpp
     src/editor/commands/document_command_service.cpp
+    src/editor/commands/editor_command_registry.cpp
     src/editor/commands/modeling_command_execution_service.cpp
     src/editor/history/editor_history_service.cpp
+    src/editor/input/quader_keybinding_target_catalog.cpp
     src/editor/modeling/services/primitive_creation_tool_service.cpp
     src/editor/pivot/pivot_tool_service.cpp
     src/editor/placement/viewport_point_placement_service.cpp
@@ -272,6 +278,8 @@ add_library(quader_editor_services STATIC
     src/editor/session/scene_session.cpp
     src/editor/session/viewport_local_visibility_service.cpp
     src/editor/tools/native_viewport_tool_coordinator.cpp
+    src/editor/transform/mesh_arrangement_service.cpp
+    src/editor/transform/scene_transform_drag_service.cpp
 )
 
 quader_configure_core_module(quader_editor_services)
@@ -327,6 +335,7 @@ quader_configure_core_module(quader_project_qdr_io)
 target_include_directories(quader_project_qdr_io
     PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty"
+        "${QUADER_MODELING_SDK_NEUTRAL_INCLUDE_DIR}"
         "${QUADER_QDR_GENERATED_DIR}")
 target_compile_definitions(quader_project_qdr_io
     PRIVATE QUADER_QDR_ENABLE_ZSTD=1)
@@ -335,7 +344,6 @@ target_link_libraries(quader_project_qdr_io
         quader_assets
         quader_document
     PRIVATE
-        Taskflow::Taskflow
         flatbuffers::flatbuffers
         quader_modeling
         quader_modeling_profile
@@ -353,7 +361,8 @@ if(QUADER_BUILD_QDR_TOOLS)
         src/io/qdr/qdr_debug_dump.cpp)
     target_compile_features(qdr_dump PRIVATE cxx_std_20)
     target_include_directories(qdr_dump PRIVATE
-        "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty")
+        "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty"
+        "${QUADER_MODELING_SDK_NEUTRAL_INCLUDE_DIR}")
     target_link_libraries(qdr_dump PRIVATE quader_project_qdr_io)
 endif()
 
@@ -380,25 +389,26 @@ quader_configure_core_module(quader_core_ui_support)
 target_link_libraries(quader_core_ui_support PUBLIC quader_core_utilities)
 
 add_library(quader_viewport_services STATIC
+    src/viewport/host_viewport_contract_adapter.cpp
     src/viewport/material_preview_state.cpp
     src/viewport/viewport_camera_controller.cpp
-    src/viewport/host_viewport_contract_adapter.cpp
     src/viewport/modeling_sdk_viewport_input_adapter.cpp
+    src/viewport/viewport_host_defaults.cpp
     src/viewport/viewport_input_router.cpp
     src/viewport/viewport_layout.cpp
     src/viewport/viewport_settings.cpp
     src/viewport/viewport_workspace_service.cpp
-    ${QUADER_EDITOR_VIEWPORT_TOOL_SOURCES}
 )
 
 quader_configure_core_module(quader_viewport_services)
 target_link_libraries(quader_viewport_services
     PUBLIC
         quader_core_utilities
-        quader_editor_metadata
-        quader_modeling
         quader_modeling_sdk
     PRIVATE
+        quader_editor_metadata
+        quader_modeling
+        quader_modeling_runtime
         quader_modeling_profile)
 
 add_library(quader_core INTERFACE)
@@ -443,13 +453,14 @@ add_library(quader_api STATIC
     src/api/quader_tools_api.cpp
     src/api/quader_ui_api.cpp
     src/api/quader_viewport_api.cpp
-    src/editor/commands/editor_command_registry.cpp
 )
 
 quader_enable_common_pch(quader_api)
 target_include_directories(quader_api
     PUBLIC src
-    PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty")
+    PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty"
+        "${QUADER_MODELING_SDK_NEUTRAL_INCLUDE_DIR}")
 target_link_libraries(quader_api PUBLIC quader_core PRIVATE quader_modeling_profile)
 target_compile_definitions(quader_api
     PUBLIC
@@ -617,7 +628,6 @@ add_library(quader_render STATIC
     src/render/filament_material_library.cpp
     src/render/instance_batch_planner.cpp
     src/render/instance_renderable_cache.cpp
-    src/api/quader_render_api.cpp
     src/render/light_renderable_cache.cpp
     src/render/material_binding_service.cpp
     src/render/material_preview_mesh_library.cpp
@@ -666,7 +676,8 @@ target_compile_definitions(quader_render
 )
 target_link_libraries(quader_render
     PUBLIC
-        quader_api
+        quader_document
+        quader_viewport_services
         filament_sdk
     PRIVATE
         lodepng
@@ -687,12 +698,46 @@ if(QUADER_BUILD_PERFORMANCE_BENCHMARKS)
             quader_render)
 endif()
 
-add_library(quader_ui STATIC
+add_library(quader_editor_api STATIC
+    src/api/quader_editor_api.cpp
+    src/api/quader_render_api.cpp
+)
+
+quader_enable_common_pch(quader_editor_api)
+target_include_directories(quader_editor_api PUBLIC src)
+target_link_libraries(quader_editor_api
+    PUBLIC
+        quader_api
+    PRIVATE
+        quader_modeling_profile
+        quader_project_session
+        quader_render
+        quader_viewport_services)
+target_compile_features(quader_editor_api PUBLIC cxx_std_20)
+
+add_library(quader_editor_viewport STATIC
+    src/editor/input/viewport_keybinding_resolver.cpp
+    src/editor/viewport/viewport_scene_projection.cpp
+    src/editor/viewport/viewport_tool_overlay_projection.cpp
     src/editor/viewport/transform_gizmo_interaction.cpp
     src/editor/viewport/viewport_interaction_controller.cpp
+    src/editor/viewport/viewport_native_tool_interaction.cpp
     src/editor/viewport/viewport_selection_interaction.cpp
-    src/editor/transform/mesh_arrangement_service.cpp
-    src/editor/transform/scene_transform_drag_service.cpp
+)
+
+quader_enable_common_pch(quader_editor_viewport)
+target_include_directories(quader_editor_viewport PUBLIC src)
+target_link_libraries(quader_editor_viewport
+    PUBLIC
+        quader_editor_api
+        quader_render
+    PRIVATE
+        quader_editor_services
+        quader_modeling_profile
+        quader_viewport_services)
+target_compile_features(quader_editor_viewport PUBLIC cxx_std_20)
+
+add_library(quader_ui STATIC
     src/ui/console_panel.cpp
     src/ui/inspector_panel.cpp
     src/ui/layer_panel.cpp
@@ -739,7 +784,8 @@ target_include_directories(quader_ui
     PRIVATE "${QUADER_GENERATED_DIR}")
 target_link_libraries(quader_ui
     PUBLIC
-        quader_api
+        quader_editor_api
+        quader_editor_viewport
         quader_render
         Qt6::Widgets
     PRIVATE
@@ -751,14 +797,13 @@ add_library(quader_app STATIC
     src/app/app_frame_clock.cpp
     src/app/app_window_settings.cpp
     src/app/app.cpp
-    src/api/quader_editor_api.cpp
 )
 
 quader_enable_common_pch(quader_app)
 target_include_directories(quader_app PUBLIC src)
 target_link_libraries(quader_app
     PUBLIC
-        quader_api
+        quader_editor_api
         quader_platform
         quader_render
         quader_ui
@@ -1081,8 +1126,11 @@ if(QUADER_BUILD_TESTS)
         tests/build_guardrail_tests.cpp
         tests/cpp_style_guardrail_tests.cpp
         tests/dependency_matrix_guardrail_tests.cpp
+        tests/editor_source_policy_guardrail_tests.cpp
+        tests/native_source_policy_guardrail_tests.cpp
         tests/oop_architecture_guardrail_tests.cpp
         tests/programmatic_api_guardrail_tests.cpp
+        tests/render_source_policy_guardrail_tests.cpp
         tests/ui_layout_guardrail_tests.cpp
         tests/support/guardrail_file_scan.cpp
     )
@@ -1099,6 +1147,7 @@ if(QUADER_BUILD_TESTS)
         tests/quader_tests_main.cpp
         tests/app_frame_clock_tests.cpp
         tests/core_tests.cpp
+        tests/fatal_error_handler_behavior_tests.cpp
         tests/linear_array_tests.cpp
         tests/local_stress_tests.cpp
         tests/local_visibility_tests.cpp
@@ -1160,6 +1209,8 @@ if(QUADER_BUILD_TESTS)
     quader_enable_common_pch(quader_tests)
     if(MSVC)
         target_compile_options(quader_tests PRIVATE /bigobj)
+        target_link_options(quader_tests PRIVATE
+            "$<$<CONFIG:Debug>:/INCREMENTAL:NO>")
     endif()
     target_include_directories(quader_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty")
     target_compile_definitions(quader_tests

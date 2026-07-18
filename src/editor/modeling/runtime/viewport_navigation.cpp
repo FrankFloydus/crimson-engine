@@ -6,7 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include <editor/interactions/viewport_navigation.hpp>
 #include <diagnostics/profile.hpp>
-#include <mesh/geometry/geometry.hpp>
+#include <quader/modeling/neutral/geometry/geometry.hpp>
 
 #include <algorithm>
 #include <array>

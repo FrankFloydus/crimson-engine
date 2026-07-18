@@ -33,6 +33,24 @@ enum class QuaderStandardMaterialTextureSlot : std::uint8_t {
   Normal,
 };
 
+/// Identifies one scalar Standard Material property for user-intent mutation.
+enum class QuaderStandardMaterialScalar : std::uint8_t {
+  Roughness,
+  Metallic,
+  NormalStrength,
+};
+
+/// Identifies one shared texture-transform component for atomic mutation.
+enum class QuaderStandardMaterialTextureTransformComponent : std::uint8_t {
+  CenterU,
+  CenterV,
+  ScaleU,
+  ScaleV,
+  OffsetU,
+  OffsetV,
+  RotationDegrees,
+};
+
 /// Declares the tangent-space convention exposed by the public material API.
 enum class QuaderNormalMapConvention : std::uint8_t {
   OpenGL,
@@ -109,6 +127,15 @@ struct QuaderStandardMaterialDocumentInfo {
   bool dirty = false;
 };
 
+/// Cheap retained-document identity/revision used by UI synchronization gates.
+struct QuaderStandardMaterialDocumentRevision {
+  MaterialEditSessionId session_id;
+  ProjectAssetId id;
+  std::uint64_t draft_revision = 0u;
+  std::uint64_t clean_revision = 0u;
+  bool dirty = false;
+};
+
 /// Immutable decoded texture data used by a Standard Material preview.
 struct QuaderStandardMaterialPreviewTexture {
   std::optional<ProjectAssetId> id;
@@ -139,6 +166,8 @@ public:
 
   [[nodiscard]] QuaderApiResult<QuaderStandardMaterialDocumentInfo>
   current() const;
+  [[nodiscard]] QuaderApiResult<QuaderStandardMaterialDocumentRevision>
+  current_revision() const;
   [[nodiscard]] QuaderApiResult<QuaderStandardMaterialPreviewInfo>
   preview() const;
   [[nodiscard]] QuaderApiResult<QuaderStandardMaterialDocumentInfo>
@@ -153,10 +182,14 @@ public:
   QuaderApiVoidResult set_roughness(float value);
   QuaderApiVoidResult set_metallic(float value);
   QuaderApiVoidResult set_normal_strength(float value);
+  QuaderApiVoidResult set_scalar(QuaderStandardMaterialScalar scalar,
+                                 float value);
   QuaderApiVoidResult
   set_normal_convention(QuaderNormalMapConvention convention);
   QuaderApiVoidResult set_texture_transform(
       QuaderStandardMaterialTextureTransform transform);
+  QuaderApiVoidResult set_texture_transform_component(
+      QuaderStandardMaterialTextureTransformComponent component, float value);
   QuaderApiVoidResult import_texture(QuaderStandardMaterialTextureSlot slot,
                                      const std::filesystem::path &source_path);
   QuaderApiVoidResult clear_texture(QuaderStandardMaterialTextureSlot slot);

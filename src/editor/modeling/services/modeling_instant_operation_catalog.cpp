@@ -6,6 +6,8 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "editor/modeling/services/modeling_instant_operation_catalog.hpp"
 
+#include "editor/modeling/services/modeling_operation_settings.hpp"
+
 #include <algorithm>
 #include <array>
 
@@ -241,6 +243,27 @@ find_modeling_instant_operation_catalog_entry(
                      return entry.operation == operation;
                    });
   return found == entries.end() ? nullptr : &*found;
+}
+
+std::optional<quader_editor_core::EditorOperationCommand>
+modeling_instant_operation_command(
+    ModelingInstantOperationId operation,
+    const ModelingInteractionSettings &interaction_settings) {
+  const ModelingInstantOperationCatalogEntry *entry =
+      find_modeling_instant_operation_catalog_entry(operation);
+  if (entry == nullptr || !entry->runtime_operation.has_value()) {
+    return std::nullopt;
+  }
+
+  quader_editor_core::EditorOperationCommand command;
+  command.operation_id = *entry->runtime_operation;
+  command.phase = quader_editor_core::EditorOperationCommandPhase::Execute;
+  command.settings =
+      settings_for_operation(command.operation_id, interaction_settings);
+  if (operation == ModelingInstantOperationId::Bridge) {
+    command.settings = quader_editor_core::BridgeOperationSettings{.steps = 1};
+  }
+  return command;
 }
 
 bool modeling_instant_operation_enabled(

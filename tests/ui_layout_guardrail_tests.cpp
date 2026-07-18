@@ -1855,7 +1855,9 @@ TEST(UiLayoutGuardrailTests,
   expect_contains(panel, "!input.modifiers.shift");
   expect_contains(panel, "!input.modifiers.alt");
   expect_contains(panel, "is_viewport_context_menu_click_gesture(");
-  expect_contains(panel, "input_router_.active_tool_allows_selection_fallback()");
+  expect_contains(
+      panel,
+      "interaction_controller_.active_tool_allows_selection_fallback(");
   expect_contains(panel, "interaction_controller_.pick_context_menu_target(");
   expect_contains(panel, "should_open_viewport_context_menu(");
   expect_contains(panel, "context_menu_presenter_.show(");
@@ -1965,9 +1967,10 @@ TEST(UiLayoutGuardrailTests,
       read_source_file("src/ui/qt_input_adapter.cpp");
   const std::string viewport_sources =
       read_source_file("src/ui/qt_viewport_panel.cpp") +
-      read_source_file("src/ui/qt_viewport_surface.cpp");
+      read_source_file("src/ui/qt_viewport_surface.cpp") +
+      read_source_file("src/editor/input/viewport_keybinding_resolver.cpp");
   const std::string input_policy =
-      read_source_file("src/ui/viewport_host_interaction_policy.hpp");
+      read_source_file("src/viewport/viewport_host_interaction_policy.hpp");
 
   expect_contains(adapter_header, "std::optional<QuaderInputChord>");
   expect_contains(adapter, "quader_pressed_input_chord_from_qt_event(");
@@ -2001,28 +2004,31 @@ TEST(UiLayoutGuardrailTests,
 
 TEST(UiLayoutGuardrailTests,
      ArrayWheelRoutingConsumesEventsAndFiltersNavigationDelta) {
-  const std::string panel =
-      read_source_file("src/ui/qt_viewport_panel.cpp");
+  const std::string input_resolver = read_source_file(
+      "src/editor/input/viewport_keybinding_resolver.cpp");
+  const std::string native_tools = read_source_file(
+      "src/editor/viewport/viewport_native_tool_interaction.cpp");
   const std::string input_policy =
-      read_source_file("src/ui/viewport_host_interaction_policy.hpp");
+      read_source_file("src/viewport/viewport_host_interaction_policy.hpp");
 
   // Raw Qt wheel magnitude is useful for detecting activity, but camera input
   // is rebuilt only from edges that resolve to a zoom semantic action.
-  expect_contains(panel, "input.mouse_wheel = 0.0f;");
-  expect_contains(panel,
+  expect_contains(input_resolver, "input.mouse_wheel = 0.0f;");
+  expect_contains(input_resolver,
                   "action == ViewportInputActionKind::ZoomToCursor");
-  expect_contains(panel, "input.mouse_wheel +=");
+  expect_contains(input_resolver, "input.mouse_wheel +=");
 
   // Array actions consume even fractional or clamped events. Completion is
   // physical-event scoped so a generic Wheel remap remains one event while an
   // unrelated next event clears stale high-resolution motion.
-  expect_contains(panel, "input.keybinding_input_consumed = true;");
-  expect_contains(panel, "finish_array_wheel_event(");
+  expect_contains(input_resolver,
+                  "input.keybinding_input_consumed = true;");
+  expect_contains(input_resolver, "finish_array_wheel_event(");
   expect_contains(input_policy, "CompleteWheelEvent");
   expect_contains(input_policy,
                   "complete_wheel_event(wheel.subspan(index, 2u))");
 
-  EXPECT_EQ(count_occurrences(panel,
+  EXPECT_EQ(count_occurrences(native_tools,
                               "reconcile_bounded_wheel_remainder("),
             2u);
 }
@@ -2291,4 +2297,89 @@ TEST(UiLayoutGuardrailTests,
   ASSERT_NE(main_window_shutdown, std::string::npos);
   EXPECT_LT(preview_shutdown, main_window_shutdown);
   expect_contains(ui_system, "material_preview_surface_->reset_preview()");
+}
+
+TEST(UiLayoutGuardrailTests,
+     StandardMaterialRefreshGatesBroadSnapshotAndPreviewWorkOnRevision) {
+  const std::string source = read_source_file("src/ui/ui_system.cpp");
+  const std::size_t begin =
+      source.find("void UISystem::refresh_standard_material_editor()");
+  const std::size_t end =
+      source.find("void UISystem::open_standard_material(", begin);
+  ASSERT_NE(begin, std::string::npos);
+  ASSERT_NE(end, std::string::npos);
+  const std::string refresh = source.substr(begin, end - begin);
+
+  const std::size_t revision = refresh.find("current_revision()");
+  const std::size_t unchanged =
+      refresh.find("standard_material_editor_draft_revision_ ==");
+  const std::size_t snapshot = refresh.find(".current()");
+  const std::size_t preview = refresh.find(".preview()");
+  const std::size_t setter = refresh.find("->set_document(");
+  ASSERT_NE(revision, std::string::npos);
+  ASSERT_NE(unchanged, std::string::npos);
+  ASSERT_NE(snapshot, std::string::npos);
+  ASSERT_NE(preview, std::string::npos);
+  ASSERT_NE(setter, std::string::npos);
+  EXPECT_LT(revision, unchanged);
+  EXPECT_LT(unchanged, snapshot);
+  EXPECT_LT(snapshot, preview);
+  EXPECT_LT(preview, setter);
+
+  const std::size_t scalar_begin =
+      source.find("void UISystem::handle_standard_material_scalar(");
+  const std::size_t texture_begin = source.find(
+      "void UISystem::handle_standard_material_texture_transform(");
+  ASSERT_NE(scalar_begin, std::string::npos);
+  ASSERT_NE(texture_begin, std::string::npos);
+  const std::string scalar = source.substr(scalar_begin,
+                                           texture_begin - scalar_begin);
+  expect_contains(scalar, ".set_scalar(");
+  expect_missing(scalar, ".current()");
+  const std::string texture = source.substr(texture_begin,
+                                            source.find(
+                                                "void UISystem::refresh_localized_chrome(",
+                                                texture_begin) -
+                                                texture_begin);
+  expect_contains(texture, ".set_texture_transform_component(");
+  expect_missing(texture, ".current()");
+}
+
+TEST(UiLayoutGuardrailTests,
+     Phase4ViewportRowsKeepPrecedenceDecisionsInNamedOwners) {
+  const std::string panel = read_source_file("src/ui/qt_viewport_panel.cpp");
+  const std::string host_policy = read_source_file(
+      "src/viewport/viewport_host_interaction_policy.hpp");
+  const std::string interaction = read_source_file(
+      "src/editor/viewport/viewport_interaction_controller.cpp");
+  const std::string native_tools = read_source_file(
+      "src/editor/viewport/viewport_native_tool_interaction.cpp");
+  const std::string scene_projection = read_source_file(
+      "src/editor/viewport/viewport_scene_projection.cpp");
+
+  expect_contains(panel, "ViewportKeybindingResolver::resolve(");
+  expect_contains(panel, "resolve_viewport_input_pane({");
+  expect_contains(panel, "interaction_controller_.handle_after_active_tool(");
+  expect_contains(panel, "interaction_controller_.handle_before_active_tool(");
+  expect_contains(panel, "interaction_controller_.handle_native_tools(");
+  expect_contains(panel,
+                  "ViewportSceneProjection::point_light_pick_candidates(");
+  expect_contains(panel, "ViewportToolOverlayProjection::append_box(");
+  expect_contains(panel, ".focus_optional_bounds(");
+  expect_contains(panel, "qt_submit_viewport_render_frames(");
+
+  expect_contains(host_policy,
+                  "locked owner -> activity -> hover -> focus -> workspace focus");
+  expect_contains(interaction, "selection_.handle_frame(");
+  expect_contains(interaction, "transform_gizmo_.handle_frame(");
+  expect_contains(native_tools, "linear_array_drag_point(");
+  expect_contains(native_tools, "pivot_handle_hit(");
+  expect_contains(native_tools, "radial_array->lock_center()");
+  expect_contains(scene_projection, "point_light_pick_candidates(");
+
+  expect_missing(panel, "float screen_distance_squared(");
+  expect_missing(panel, "bool pivot_handle_hit(");
+  expect_missing(panel, "bool linear_array_handle_hit(");
+  expect_missing(panel, "document_world_bounds(");
+  expect_missing(panel, "point_light_pick_candidates(\n    const SceneDocument");
 }

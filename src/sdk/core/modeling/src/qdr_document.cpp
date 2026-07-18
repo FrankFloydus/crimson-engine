@@ -8,9 +8,9 @@
 
 #include "polygon_document_native.hpp"
 
-#include <mesh/polygon/document_selection.hpp>
-#include <mesh/polygon/document_topology.hpp>
-#include <mesh/polygon/document_validation.hpp>
+#include <quader/modeling/neutral/polygon/document_selection.hpp>
+#include <quader/modeling/neutral/polygon/document_topology.hpp>
+#include <quader/modeling/neutral/polygon/document_validation.hpp>
 
 #include <algorithm>
 #include <array>

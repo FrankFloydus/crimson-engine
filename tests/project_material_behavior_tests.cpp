@@ -14,7 +14,7 @@
 #include "io/qdr/qdr_document_reader.hpp"
 
 #include <gtest/gtest.h>
-#include <mesh/polygon/document.hpp>
+#include <quader/modeling/neutral/polygon/document.hpp>
 
 #include <algorithm>
 #include <array>

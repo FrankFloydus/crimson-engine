@@ -91,7 +91,9 @@ TEST(QdrModelingRuntimeToolOperationContractTests, EditorOperationRegistryExpose
         const qec::EditorOperation *operation =
             qec::editor_operation_for_id(qec::EditorOperationId::Bridge);
         EXPECT_TRUE(operation != nullptr);
-	EXPECT_TRUE(operation == &qec::bridge_operation());
+	EXPECT_TRUE(operation->portable_descriptor() ==
+	            quader::modeling::operation_descriptor(
+	                quader::modeling::OperationKind::Bridge));
         EXPECT_TRUE(operation->operation_id() ==
                     qec::EditorOperationId::Bridge);
         EXPECT_TRUE(std::string(operation->id()) == std::string(qec::bridge_operation_schema().operation_id));

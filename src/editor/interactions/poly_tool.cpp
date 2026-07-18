@@ -8,7 +8,7 @@
 #include <editor/interactions/tool_snapping.hpp>
 #include <editor/modeling/runtime/editor_tool.hpp>
 
-#include <mesh/geometry/geometry.hpp>
+#include <quader/modeling/neutral/geometry/geometry.hpp>
 
 #include "tool_math_internal.hpp"
 

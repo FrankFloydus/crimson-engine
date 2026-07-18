@@ -10,6 +10,7 @@
 #include "core/types.hpp"
 
 #include <functional>
+#include <span>
 
 namespace quader_editor_core {
 class EditorSession;
@@ -29,7 +30,9 @@ struct ModelingHierarchyDuplicateRuntime {
   std::function<ModelingCommandResult(ModelingSelectionMode)>
       set_selection_mode;
   std::function<void()> project_object_selection_from_scene;
-  std::function<ModelingCommandResult()> duplicate_selected_meshes;
+  std::function<ModelingCommandResult(std::span<const EntityId>)>
+      duplicate_selected_meshes;
+  std::function<bool(EntityId)> detach_duplicate_mesh;
 };
 
 /**

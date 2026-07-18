@@ -72,22 +72,6 @@ bool TwoStageBoxTool::rollback_failed_preview(
          (box_context.session_active && !box_context.session_active());
 }
 
-bool TwoStageBoxTool::commit_preview(ViewportBoxToolContext &box_context,
-                                     const std::string &name) const {
-  if (!box_context.commit_preview) {
-    LOG_ERROR("Box commit failed: Commit command is not available.");
-    return false;
-  }
-
-  const ModelingCreateBoxResult committed =
-      box_context.commit_preview(name, box_context.default_material);
-  if (!committed.ok) {
-    LOG_ERROR("Box commit failed: {}", committed.message);
-    return false;
-  }
-  return committed.changed;
-}
-
 ViewportToolResult TwoStageBoxTool::handle_event(
         ViewportToolContext& context,
         const ViewportToolEvent& event) const {
@@ -127,7 +111,7 @@ ViewportToolResult TwoStageBoxTool::handle_event(
     if (event.kind != ViewportToolEventKind::Frame ||
         event.tool != viewport_tool() || context.modal_state == nullptr ||
         context.box == nullptr || !context.box->make_event ||
-        (!context.box->accept_preview && !context.box->commit_preview) ||
+        !context.box->accept_preview ||
         context.ports.preview == nullptr) {
       return ModalViewportTool::handle_event(context, event);
     }
@@ -184,20 +168,10 @@ ViewportToolResult TwoStageBoxTool::handle_event(
         const std::string name = box_context.next_mesh_name
                                      ? box_context.next_mesh_name()
                                      : std::string{"Mesh"};
-        if (box_context.accept_preview) {
-          const bool accepted =
-              accept_preview(box_context, name, box_event.snap_enabled);
-          if (!accepted && box_context.session_active &&
-              !box_context.session_active()) {
-            active_tool_sync_requested = true;
-          }
-        } else if (commit_preview(box_context, name)) {
-          if (context.ports.selection_mode != nullptr) {
-            context.ports.selection_mode->set_viewport_selection_mode(
-                ViewportSelectionMode::Object);
-            context.ports.selection_mode->set_app_selection_mode(
-                ModelingSelectionMode::Object);
-          }
+        const bool accepted =
+            accept_preview(box_context, name, box_event.snap_enabled);
+        if (!accepted && box_context.session_active &&
+            !box_context.session_active()) {
           active_tool_sync_requested = true;
         }
       }

@@ -83,25 +83,6 @@ struct MirrorPreviewMetadata {
 using MirrorRayUpdateInput = DrawnPlaneRayUpdateInput;
 using MirrorHoverState = DrawnPlaneHoverState;
 
-void mirror_document_across_drawn_plane(quader_poly::Document& document, const DrawnPlaneSurface& surface);
-DrawnPlaneSurface mirror_world_axis_surface(TransformAxis axis);
-std::vector<quader::QVec3> mirror_world_axis_plane_points(TransformAxis axis);
-DrawnPlaneSurface mirror_mesh_flip_surface(
-	ViewportFlipOrientation orientation,
-	quader::QVec3 pivot);
-CommandResult mirror_objects_across_surface(
-	std::vector<PolygonObject>& objects,
-	std::span<const int> object_ids,
-	const DrawnPlaneSurface& surface,
-	int& next_object_id,
-	int& active_object_id,
-	SelectionMode& mode);
-CommandResult flip_objects_by_orientation(
-	std::vector<PolygonObject>& objects,
-	std::span<const int> object_ids,
-	ViewportFlipOrientation orientation,
-	int& active_object_id,
-	SelectionMode& mode);
 std::vector<int> mirror_target_object_ids_for_selection(const RectangleSelectionState& selection);
 MirrorToolResult set_mirror_targets_from_selection(MirrorToolState& state, const RectangleSelectionState& selection);
 MirrorToolResult capture_first_mirror_point(MirrorToolState& state, const RectangleSelectionState& selection, quader::QVec3 position, quader::QVec3 plane_normal);
@@ -134,10 +115,6 @@ MirrorToolResult refresh_mirror_preview(MirrorToolState& state, std::span<const 
 MirrorToolResult refresh_mirror_preview_from_selection(
 	MirrorToolState& state,
 	const RectangleSelectionState& selection,
-	std::span<const PolygonObject> objects);
-
-std::vector<quader_poly::Document> mirror_preview_documents(
-	const MirrorToolState& state,
 	std::span<const PolygonObject> objects);
 
 MirrorToolResult update_mirror_hover_from_ray(

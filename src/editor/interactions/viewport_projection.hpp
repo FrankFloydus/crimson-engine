@@ -7,7 +7,7 @@
 #pragma once
 
 #include <editor/modeling/runtime/tool_constants.hpp>
-#include <mesh/polygon/document.hpp>
+#include <quader/modeling/neutral/polygon/document.hpp>
 
 #include <string>
 
