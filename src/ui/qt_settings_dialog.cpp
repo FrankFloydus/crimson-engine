@@ -316,9 +316,24 @@ public:
     if (rows_ == rows) {
       return;
     }
-    beginResetModel();
-    rows_ = std::move(rows);
-    endResetModel();
+    if (!has_same_row_membership(rows_, rows)) {
+      beginResetModel();
+      rows_ = std::move(rows);
+      endResetModel();
+      return;
+    }
+    if (has_same_row_order(rows_, rows)) {
+      rows_ = std::move(rows);
+      if (!rows_.empty()) {
+        emit dataChanged(index(0, CommandNameColumn),
+                         index(static_cast<int>(rows_.size()) - 1,
+                               InputMappingColumn),
+                         {Qt::DisplayRole, Qt::AccessibleTextRole,
+                          Qt::UserRole});
+      }
+      return;
+    }
+    replace_rows_preserving_persistent_indexes(std::move(rows));
   }
 
   void sort(int column, Qt::SortOrder order) override {
@@ -332,9 +347,8 @@ public:
     if (rows == rows_) {
       return;
     }
-    beginResetModel();
-    rows_ = std::move(rows);
-    endResetModel();
+
+    replace_rows_preserving_persistent_indexes(std::move(rows));
   }
 
   [[nodiscard]] const KeybindingTableRow *row_at(int row) const {
@@ -344,6 +358,61 @@ public:
   }
 
 private:
+  static bool has_same_row_membership(
+      const std::vector<KeybindingTableRow> &left,
+      const std::vector<KeybindingTableRow> &right) {
+    return left.size() == right.size() &&
+           std::is_permutation(
+               left.begin(), left.end(), right.begin(), right.end(),
+               [](const KeybindingTableRow &left_row,
+                  const KeybindingTableRow &right_row) {
+                 return left_row.key == right_row.key;
+               });
+  }
+
+  static bool has_same_row_order(
+      const std::vector<KeybindingTableRow> &left,
+      const std::vector<KeybindingTableRow> &right) {
+    return left.size() == right.size() &&
+           std::equal(left.begin(), left.end(), right.begin(),
+                      [](const KeybindingTableRow &left_row,
+                         const KeybindingTableRow &right_row) {
+                        return left_row.key == right_row.key;
+                      });
+  }
+
+  void replace_rows_preserving_persistent_indexes(
+      std::vector<KeybindingTableRow> rows) {
+    emit layoutAboutToBeChanged({}, QAbstractItemModel::VerticalSortHint);
+    const QModelIndexList from = persistentIndexList();
+    /// Identifies one persistent table cell across a row reorder.
+    struct PersistentCell {
+      QuaderKeybindingActionKey key;
+      int column = 0;
+    };
+    std::vector<PersistentCell> cells;
+    cells.reserve(static_cast<std::size_t>(from.size()));
+    for (const QModelIndex &index : from) {
+      cells.push_back({rows_[static_cast<std::size_t>(index.row())].key,
+                       index.column()});
+    }
+
+    rows_ = std::move(rows);
+    QModelIndexList to;
+    to.reserve(from.size());
+    for (const PersistentCell &cell : cells) {
+      const auto found = std::find_if(
+          rows_.begin(), rows_.end(), [&cell](const KeybindingTableRow &row) {
+            return row.key == cell.key;
+          });
+      to.push_back(found != rows_.end()
+                       ? index(static_cast<int>(found - rows_.begin()),
+                               cell.column)
+                       : QModelIndex{});
+    }
+    changePersistentIndexList(from, to);
+    emit layoutChanged({}, QAbstractItemModel::VerticalSortHint);
+  }
   static const QString &column_text(const KeybindingTableRow &row,
                                     int column) {
     switch (column) {
@@ -1110,7 +1179,6 @@ struct QtSettingsDialog::Impl {
     auto *content_layout = new QHBoxLayout();
     category_list = new QListWidget(&owner);
     category_list->setObjectName(QStringLiteral("settingsCategories"));
-    category_list->setSelectionMode(QAbstractItemView::SingleSelection);
     category_list->setMinimumWidth(160);
     category_list->setMaximumWidth(220);
     content_layout->addWidget(category_list);
@@ -1313,7 +1381,6 @@ struct QtSettingsDialog::Impl {
     keybindings_table->setObjectName(
         QStringLiteral("settingsKeybindingsTable"));
     keybindings_table->setAlternatingRowColors(true);
-    keybindings_table->setEditTriggers(QAbstractItemView::NoEditTriggers);
     keybindings_table->setSelectionBehavior(QAbstractItemView::SelectRows);
     keybindings_table->setSelectionMode(QAbstractItemView::SingleSelection);
     keybindings_table->setShowGrid(false);
@@ -1399,10 +1466,16 @@ struct QtSettingsDialog::Impl {
   }
 
   [[nodiscard]] const KeybindingTableRow *selected_keybinding_row() const {
-    return keybindings_model == nullptr || keybindings_table == nullptr
-               ? nullptr
-               : keybindings_model->row_at(
-                     keybindings_table->currentIndex().row());
+    if (keybindings_model == nullptr || keybindings_table == nullptr ||
+        keybindings_table->selectionModel() == nullptr) {
+      return nullptr;
+    }
+    const QModelIndexList selected =
+        keybindings_table->selectionModel()->selectedRows(
+            QtKeybindingTableModel::CommandNameColumn);
+    return selected.size() == 1
+               ? keybindings_model->row_at(selected.front().row())
+               : nullptr;
   }
 
   [[nodiscard]] std::optional<QuaderKeybindingActionKey>

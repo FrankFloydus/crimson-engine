@@ -13,11 +13,15 @@
 #endif
 
 #include <algorithm>
+#include <atomic>
+#include <cstdint>
 #include <deque>
 #include <utility>
 
 namespace quader {
 namespace {
+
+std::atomic<std::uint64_t> g_memory_revision = 0;
 
 /**
  * Owns Memory Sink behavior within the shared core service layer.
@@ -32,10 +36,11 @@ public:
     return {entries_.begin(), entries_.end()};
   }
 
-    void clear() {
-      std::lock_guard lock(entries_mutex_);
-      entries_.clear();
-    }
+  void clear() {
+    std::lock_guard lock(entries_mutex_);
+    entries_.clear();
+    g_memory_revision.fetch_add(1, std::memory_order_release);
+  }
 
 protected:
     void sink_it_(const spdlog::details::log_msg& msg) override {
@@ -57,6 +62,7 @@ protected:
         while (entries_.size() > max_entries_) {
           entries_.pop_front();
         }
+        g_memory_revision.fetch_add(1, std::memory_order_release);
     }
 
     void flush_() override {}
@@ -95,6 +101,7 @@ void initialize_locked(LoggerConfig config) {
   g_memory_sink = std::move(memory_sink);
   g_logger = std::move(logger);
   spdlog::set_default_logger(g_logger);
+  g_memory_revision.fetch_add(1, std::memory_order_release);
 }
 
 std::shared_ptr<MemorySink> memory_sink_snapshot() {
@@ -120,6 +127,7 @@ void Logger::shutdown() {
     logger = std::move(g_logger);
     memory_sink = std::move(g_memory_sink);
     spdlog::drop_all();
+    g_memory_revision.fetch_add(1, std::memory_order_release);
   }
   if (logger) {
     logger->flush();
@@ -129,6 +137,10 @@ void Logger::shutdown() {
 void Logger::clear_memory() {
   const std::shared_ptr<MemorySink> memory_sink = memory_sink_snapshot();
   memory_sink->clear();
+}
+
+std::uint64_t Logger::memory_revision() noexcept {
+  return g_memory_revision.load(std::memory_order_acquire);
 }
 
 std::vector<LogEntry> Logger::entries_snapshot() {

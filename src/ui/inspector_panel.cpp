@@ -239,7 +239,12 @@ public:
 protected:
   void focusInEvent(QFocusEvent *event) override {
     QLineEdit::focusInEvent(event);
-    QTimer::singleShot(0, this, &QLineEdit::selectAll);
+    if (event != nullptr &&
+        (event->reason() == Qt::TabFocusReason ||
+         event->reason() == Qt::BacktabFocusReason ||
+         event->reason() == Qt::ShortcutFocusReason)) {
+      QTimer::singleShot(0, this, &QLineEdit::selectAll);
+    }
   }
 };
 
@@ -335,6 +340,7 @@ struct InspectorPanel::Impl {
     tree_->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     tree_->setTextElideMode(Qt::ElideRight);
     tree_->setItemDelegate(new InspectorPropertyDelegate(tree_));
+    panel_.setFocusProxy(tree_);
     tree_->header()->setVisible(true);
     tree_->header()->setSectionsMovable(false);
     tree_->header()->setSectionsClickable(false);
@@ -373,27 +379,22 @@ struct InspectorPanel::Impl {
   }
 
   void refresh(UIContext &context) {
-    editor_ = &context.intent.editor;
-    document_ = &context.scene.document;
-    modeling_ = &context.scene.modeling;
-    localization_ = &context.localization;
-    preview_document_ = context.inspector_preview != nullptr
-                            ? &context.inspector_preview->document
-                            : nullptr;
-    preview_assets_ = context.inspector_preview != nullptr
-                          ? &context.inspector_preview->assets
-                          : nullptr;
+    const SceneDocument *next_document = &context.scene.document;
+    const ModelingSessionService *next_modeling = &context.scene.modeling;
+    const bool owner_changed =
+        document_ != next_document || modeling_ != next_modeling;
 
-    std::vector<EntityId> next_selection = document_->selected_entities();
-    EntityId next_primary = document_->primary_selection();
+    std::vector<EntityId> next_selection =
+        next_document->selected_entities();
+    EntityId next_primary = next_document->primary_selection();
     if (next_primary == kInvalidEntityId && !next_selection.empty()) {
       next_primary = next_selection.front();
     }
     const bool selection_changed =
-        next_selection != selection_ || next_primary != primary_;
+        owner_changed || next_selection != selection_ ||
+        next_primary != primary_;
     if (selection_changed && active_color_dialog_ != nullptr) {
       active_color_dialog_->reject();
-      return;
     }
     if (selection_changed) {
       cancel_active_transform_edit();
@@ -404,6 +405,17 @@ struct InspectorPanel::Impl {
       primary_ = next_primary;
       force_rebuild_ = true;
     }
+
+    editor_ = &context.intent.editor;
+    document_ = next_document;
+    modeling_ = next_modeling;
+    localization_ = &context.localization;
+    preview_document_ = context.inspector_preview != nullptr
+                            ? &context.inspector_preview->document
+                            : nullptr;
+    preview_assets_ = context.inspector_preview != nullptr
+                          ? &context.inspector_preview->assets
+                          : nullptr;
 
     const ModelingSelectionSummary summary = modeling_->selection_summary();
     const bool presentation_changed =

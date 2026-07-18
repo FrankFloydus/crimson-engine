@@ -460,7 +460,7 @@ QtStandardMaterialEditorWindow::QtStandardMaterialEditorWindow(QWidget *parent)
     row_layout->addWidget(controls.path, 1);
     row_layout->addWidget(controls.browse);
     row_layout->addWidget(controls.clear);
-    controls.label->setBuddy(controls.path);
+    controls.label->setBuddy(controls.browse);
     form->addRow(controls.label, row);
     QObject::connect(
         controls.browse, &QToolButton::clicked, this, [this, slot]() {

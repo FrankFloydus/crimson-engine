@@ -95,6 +95,9 @@ public:
   [[nodiscard]] bool active() const;
   [[nodiscard]] bool has_session() const { return session_.has_value(); }
   [[nodiscard]] bool can_activate() const;
+  [[nodiscard]] std::uint64_t tool_settings_revision() const {
+    return revision_counter_;
+  }
   [[nodiscard]] bool center_locked() const;
   [[nodiscard]] double degrees() const;
   [[nodiscard]] std::uint32_t copies() const;

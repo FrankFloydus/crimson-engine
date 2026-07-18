@@ -588,6 +588,11 @@ void UISystem::install_runtime_hooks(
   layers_refresh_valid_ = false;
   inspector_refresh_valid_ = false;
   toolbar_refresh_valid_ = false;
+  tool_settings_refresh_valid_ = false;
+  status_refresh_valid_ = false;
+  project_workspace_instance_edit_revision_ = 0;
+  project_workspace_instance_edit_revision_valid_ = false;
+  bind_project_workspace_events(editor);
 
   selection_toolbar_->set_mode_requested_callback(
       [this](QuaderSelectionMode mode) {
@@ -1006,9 +1011,9 @@ void UISystem::install_runtime_hooks(
                                           : ViewportToolState{};
       });
   command_event_filter_->set_command_input_owner_provider([this]() {
-    return standard_material_editor_window_ != nullptr &&
-           standard_material_editor_window_->isVisible() &&
-           standard_material_editor_window_->isActiveWindow();
+    return qt_window_owns_command_input(settings_dialog_) ||
+           qt_window_owns_command_input(material_browser_window_) ||
+           qt_window_owns_command_input(standard_material_editor_window_);
   });
   if (QCoreApplication *application = QApplication::instance()) {
     application->installEventFilter(command_event_filter_.get());
@@ -1016,13 +1021,37 @@ void UISystem::install_runtime_hooks(
   refresh_project_workspace();
 }
 
-void UISystem::refresh_project_workspace() {
+void UISystem::refresh_project_workspace(bool force) {
   if (editor_ == nullptr || project_home_page_ == nullptr ||
       scene_workspace_ == nullptr) {
     return;
   }
 
-  if (home_visible_) {
+  refresh_standard_material_editor();
+  if (force) {
+    project_workspace_refresh_signal_->store(true, std::memory_order_relaxed);
+  }
+  const std::uint64_t instance_edit_revision =
+      editor_->modeling().instance_edit_revision();
+  if (!project_workspace_instance_edit_revision_valid_ ||
+      project_workspace_instance_edit_revision_ != instance_edit_revision) {
+    project_workspace_instance_edit_revision_ = instance_edit_revision;
+    project_workspace_instance_edit_revision_valid_ = true;
+    project_workspace_refresh_signal_->store(true, std::memory_order_relaxed);
+  }
+  if (!project_workspace_refresh_signal_->exchange(
+          false, std::memory_order_acq_rel)) {
+    return;
+  }
+
+  const bool has_project = editor_->project().has_project();
+  if (has_project) {
+    show_workspace();
+  } else {
+    show_home();
+  }
+
+  if (!has_project) {
     std::vector<QtRecentProjectItem> recent;
     for (const QuaderRecentProject &project :
          editor_->project().recent_projects()) {
@@ -1069,8 +1098,7 @@ void UISystem::refresh_project_workspace() {
     scene_workspace_->set_instance_edit_breadcrumb(std::nullopt);
   }
 
-  if (editor_->project().has_project() &&
-      material_browser_window_ != nullptr) {
+  if (has_project && material_browser_window_ != nullptr) {
     const QuaderApiResult<std::vector<QuaderProjectMaterialInfo>> materials =
         editor_->project_assets().materials();
     const QuaderApiResult<QuaderProjectMaterialInfo> active_material =
@@ -1148,16 +1176,12 @@ void UISystem::refresh_project_workspace() {
     }
   }
 
-  refresh_standard_material_editor();
-
-  if (editor_->project().has_project()) {
-    show_workspace();
-  } else {
-    show_home();
-  }
 }
 
 void UISystem::show_home() {
+  if (home_visible_) {
+    return;
+  }
   const bool presentation_changed = !home_visible_;
   if (presentation_changed) {
     capture_workspace_window_state();
@@ -1214,12 +1238,17 @@ void UISystem::show_workspace() {
       render_system_ != nullptr) {
     if (!viewport_panel_->initialize(*render_system_)) {
       LOG_ERROR("Unable to initialize the native viewport surface");
+      project_workspace_refresh_signal_->store(true,
+                                               std::memory_order_relaxed);
       return;
     }
     viewport_initialized_ = true;
     if (main_window_ != nullptr && main_window_->isVisible()) {
       prepare_startup_presentation();
     }
+  }
+  if (!presentation_changed) {
+    return;
   }
   home_visible_ = false;
   if (central_stack_ != nullptr && scene_workspace_ != nullptr) {
@@ -1376,6 +1405,7 @@ void UISystem::shutdown() {
   (void)save_settings();
   (void)save_viewport_settings();
   save_window_state();
+  clear_project_workspace_events();
   if (command_event_filter_ != nullptr) {
     if (QCoreApplication *application = QApplication::instance()) {
       application->removeEventFilter(command_event_filter_.get());
@@ -1429,22 +1459,38 @@ void UISystem::shutdown() {
   point_placement_ = nullptr;
   initialized_ = false;
   viewport_initialized_ = false;
+  home_visible_ = false;
+  project_workspace_instance_edit_revision_ = 0;
+  project_workspace_instance_edit_revision_valid_ = false;
+  project_workspace_refresh_signal_->store(true, std::memory_order_relaxed);
+  tool_settings_revision_ = 0;
+  tool_settings_refresh_valid_ = false;
+  status_command_revision_ = 0;
+  status_live_count_ = 0;
+  status_live_kind_ = 0;
+  status_locale_.clear();
+  status_refresh_valid_ = false;
 }
 
 void UISystem::refresh(const FrameTiming &frame_timing,
                        RenderFramePerformanceStats render_performance) {
   frame_timing_ = frame_timing;
   render_performance_ = render_performance;
-  refresh_project_workspace();
+  refresh_project_workspace(false);
   if (editor_ != nullptr) {
     const std::string active_tool = editor_->tools().active_tool();
+    const bool owner_available = document_ != nullptr && modeling_ != nullptr;
     const bool owner_state_changed =
-        !toolbar_refresh_valid_ || document_ == nullptr || modeling_ == nullptr ||
-        toolbar_scene_revision_ != document_->revision() ||
-        toolbar_scene_selection_revision_ != document_->selection_revision() ||
-        toolbar_modeling_content_revision_ != modeling_->content_revision() ||
-        toolbar_modeling_selection_revision_ !=
-            modeling_->selection_revision();
+        !toolbar_refresh_valid_ ||
+        toolbar_owner_available_ != owner_available ||
+        (owner_available &&
+         (toolbar_scene_revision_ != document_->revision() ||
+          toolbar_scene_selection_revision_ !=
+              document_->selection_revision() ||
+          toolbar_modeling_content_revision_ !=
+              modeling_->content_revision() ||
+          toolbar_modeling_selection_revision_ !=
+              modeling_->selection_revision()));
     const bool active_tool_changed =
         !toolbar_refresh_valid_ || toolbar_active_tool_ != active_tool;
     if (owner_state_changed || active_tool_changed) {
@@ -1453,17 +1499,19 @@ void UISystem::refresh(const FrameTiming &frame_timing,
         selection_toolbar_->synchronize(*editor_, selection.mode);
       }
       if (tool_toolbar_ != nullptr) {
-        tool_toolbar_->synchronize(*editor_, selection);
+        tool_toolbar_->synchronize(*editor_, selection,
+                                   owner_state_changed);
       }
-      if (document_ != nullptr && modeling_ != nullptr) {
+      if (owner_available) {
         toolbar_scene_revision_ = document_->revision();
         toolbar_scene_selection_revision_ = document_->selection_revision();
         toolbar_modeling_content_revision_ = modeling_->content_revision();
         toolbar_modeling_selection_revision_ =
             modeling_->selection_revision();
-        toolbar_active_tool_ = active_tool;
-        toolbar_refresh_valid_ = true;
       }
+      toolbar_owner_available_ = owner_available;
+      toolbar_active_tool_ = active_tool;
+      toolbar_refresh_valid_ = true;
     }
     if (snapping_toolbar_ != nullptr) {
       snapping_toolbar_->synchronize(*editor_);
@@ -1542,12 +1590,21 @@ void UISystem::refresh(const FrameTiming &frame_timing,
   if (panel_visible(UIPanelId::Console)) {
     console_panel_->refresh(context);
   }
-  tool_settings_window_->refresh();
+  const std::uint64_t tool_settings_revision =
+      editor_->tools().active_settings_revision();
+  if (!tool_settings_refresh_valid_ ||
+      tool_settings_revision_ != tool_settings_revision) {
+    tool_settings_window_->refresh();
+    tool_settings_revision_ = tool_settings_revision;
+    tool_settings_refresh_valid_ = true;
+  }
   synchronize_auxiliary_window_visibility();
   refresh_status_bar();
 
   if (localized_locale_ != localization_.current_locale()) {
     localized_locale_ = localization_.current_locale();
+    project_workspace_refresh_signal_->store(true, std::memory_order_relaxed);
+    status_refresh_valid_ = false;
     refresh_localized_chrome();
     main_menu_->rebuild();
     viewport_panel_->set_localization(localization_);
@@ -2011,6 +2068,60 @@ void UISystem::save_auxiliary_window_state() {
       settings_paths_.qt_auxiliary_window_state_file);
 }
 
+void UISystem::bind_project_workspace_events(QuaderEditorApi &editor) {
+  if (project_workspace_events_editor_ == &editor) {
+    return;
+  }
+  clear_project_workspace_events();
+  project_workspace_refresh_signal_ =
+      std::make_shared<std::atomic_bool>(true);
+  project_workspace_events_editor_ = &editor;
+  constexpr std::array<std::string_view, 8> kWorkspaceEvents{
+      quader_event::kProjectOpened,
+      quader_event::kProjectClosed,
+      quader_event::kProjectAssetsChanged,
+      quader_event::kActiveProjectMaterialChanged,
+      quader_event::kSceneOpened,
+      quader_event::kActiveSceneChanged,
+      quader_event::kSceneDirtyChanged,
+      quader_event::kSceneSaved,
+  };
+  project_workspace_event_subscriptions_.reserve(kWorkspaceEvents.size() +
+                                                  1u);
+  const std::shared_ptr<std::atomic_bool> refresh_signal =
+      project_workspace_refresh_signal_;
+  const auto mark_pending = [refresh_signal](const QuaderEvent &) {
+    refresh_signal->store(true, std::memory_order_relaxed);
+  };
+  for (const std::string_view event_name : kWorkspaceEvents) {
+    QuaderEventSubscription subscription =
+        editor.events().subscribe(event_name, mark_pending);
+    if (subscription.valid()) {
+      project_workspace_event_subscriptions_.push_back(subscription);
+    }
+  }
+  QuaderEventSubscription scene_closed =
+      editor.events().subscribe(quader_event::kSceneClosed, mark_pending);
+  if (scene_closed.valid()) {
+    project_workspace_event_subscriptions_.push_back(scene_closed);
+  }
+  project_workspace_refresh_signal_->store(true, std::memory_order_relaxed);
+}
+
+void UISystem::clear_project_workspace_events() {
+  if (project_workspace_events_editor_ != nullptr) {
+    for (const QuaderEventSubscription subscription :
+         project_workspace_event_subscriptions_) {
+      (void)project_workspace_events_editor_->events().unsubscribe(
+          subscription);
+    }
+  }
+  project_workspace_event_subscriptions_.clear();
+  project_workspace_events_editor_ = nullptr;
+  project_workspace_refresh_signal_ =
+      std::make_shared<std::atomic_bool>(false);
+}
+
 void UISystem::synchronize_auxiliary_window_visibility() {
   if (main_window_ == nullptr || !main_window_->isVisible() ||
       !main_window_->updatesEnabled()) {
@@ -2041,14 +2152,34 @@ void UISystem::refresh_status_bar() {
   if (status_message_ == nullptr || editor_ == nullptr || modeling_ == nullptr) {
     return;
   }
-  status_message_->setText(QString::fromStdString(status_bar_message(
-      modeling_->live_status(), localization_,
-      editor_->commands().last_status())));
+  const ModelingLiveStatus live_status = modeling_->live_status();
+  const std::uint64_t command_revision =
+      editor_->commands().last_status_revision();
+  const std::uint8_t live_kind =
+      static_cast<std::uint8_t>(live_status.kind);
+  const std::string &locale = localization_.current_locale();
+  if (status_refresh_valid_ && status_command_revision_ == command_revision &&
+      status_live_kind_ == live_kind &&
+      status_live_count_ == live_status.count && status_locale_ == locale) {
+    return;
+  }
+
+  const QString message = QString::fromStdString(status_bar_message(
+      live_status, localization_, editor_->commands().last_status()));
+  if (status_message_->text() != message) {
+    status_message_->setText(message);
+  }
+  status_command_revision_ = command_revision;
+  status_live_kind_ = live_kind;
+  status_live_count_ = live_status.count;
+  status_locale_ = locale;
+  status_refresh_valid_ = true;
 }
 
 void UISystem::present_lifecycle_result(const QuaderApiStatus &result) {
   if (status_message_ != nullptr && !result.message.empty()) {
     status_message_->setText(QString::fromStdString(result.message));
+    status_refresh_valid_ = false;
   }
 
   const bool restored_scene_warning =

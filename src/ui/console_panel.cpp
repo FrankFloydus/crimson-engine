@@ -12,7 +12,6 @@
 #include "ui/ui_context.hpp"
 #include "ui/ui_panel.hpp"
 
-#include <QAbstractItemView>
 #include <QCheckBox>
 #include <QComboBox>
 #include <QHBoxLayout>
@@ -30,6 +29,7 @@
 
 #include <array>
 #include <cstddef>
+#include <cstdint>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -149,11 +149,10 @@ struct ConsolePanel::Impl {
     search_edit_->setClearButtonEnabled(true);
     search_edit_->setPlaceholderText(QStringLiteral("Filter logs"));
     controls_layout->addWidget(search_edit_, 1);
+    panel_.setFocusProxy(search_edit_);
 
     entries_view_ = new QListView(&panel_);
     entries_view_->setObjectName(QStringLiteral("console.entries"));
-    entries_view_->setEditTriggers(QAbstractItemView::NoEditTriggers);
-    entries_view_->setSelectionMode(QAbstractItemView::NoSelection);
     entries_view_->setUniformItemSizes(true);
     entries_view_->setWordWrap(false);
     entries_view_->setTextElideMode(Qt::ElideNone);
@@ -165,8 +164,7 @@ struct ConsolePanel::Impl {
 
     QObject::connect(clear_button_, &QPushButton::clicked, &panel_, [this]() {
       Logger::clear_memory();
-      source_entries_ = Logger::entries_snapshot();
-      rebuild_entries();
+      synchronize_source_entries();
     });
     QObject::connect(auto_scroll_box_, &QCheckBox::toggled, &panel_,
                      [this](bool enabled) { auto_scroll_ = enabled; });
@@ -200,14 +198,26 @@ struct ConsolePanel::Impl {
       update_localization();
     }
 
-    std::vector<LogEntry> entries = Logger::entries_snapshot();
-    if (!same_visible_log_entries(source_entries_, entries)) {
-      source_entries_ = std::move(entries);
-      rebuild_entries();
-    }
+    synchronize_source_entries();
   }
 
 private:
+  void synchronize_source_entries() {
+    const std::uint64_t revision = Logger::memory_revision();
+    if (source_revision_valid_ && source_revision_ == revision) {
+      return;
+    }
+
+    std::vector<LogEntry> entries = Logger::entries_snapshot();
+    source_revision_ = revision;
+    source_revision_valid_ = true;
+    if (same_visible_log_entries(source_entries_, entries)) {
+      return;
+    }
+    source_entries_ = std::move(entries);
+    rebuild_entries();
+  }
+
   void update_localization() {
     if (localization_ == nullptr) {
       return;
@@ -295,8 +305,10 @@ private:
   std::string localized_locale_;
   ConsoleFilter filter_;
   std::vector<LogEntry> source_entries_;
+  std::uint64_t source_revision_ = 0;
   bool auto_scroll_ = true;
   bool updating_controls_ = false;
+  bool source_revision_valid_ = false;
 };
 
 ConsolePanel::ConsolePanel(QWidget *parent)

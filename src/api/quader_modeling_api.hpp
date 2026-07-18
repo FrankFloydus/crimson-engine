@@ -533,6 +533,8 @@ public:
   QuaderApiVoidResult enter_instance_edit(EntityId occurrence);
   [[nodiscard]] bool can_exit_instance_edit() const;
   QuaderApiVoidResult exit_instance_edit();
+  /** Cheap change token for retained UI that presents instance edit state. */
+  [[nodiscard]] std::uint64_t instance_edit_revision() const;
   [[nodiscard]] QuaderInstanceEditState instance_edit_state() const;
 
   QuaderApiVoidResult apply_active_material(std::uint32_t material_slot = 0);

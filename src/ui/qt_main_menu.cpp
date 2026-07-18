@@ -295,7 +295,7 @@ struct QtMainMenu::Impl {
   }
 
   void build_file_menu() {
-    QMenu *menu = add_top_level_menu("ui.menu.file", "File");
+    QMenu *menu = add_top_level_menu("ui.menu.file", "&File");
     menu->setObjectName(QStringLiteral("menu_file"));
     add_command_action(*menu, quader_command::kSceneDocumentNew,
                        "ui.menu.file.new_scene", "New Scene");
@@ -341,7 +341,7 @@ struct QtMainMenu::Impl {
   }
 
   void build_edit_menu() {
-    QMenu *menu = add_top_level_menu("ui.menu.edit", "Edit");
+    QMenu *menu = add_top_level_menu("ui.menu.edit", "&Edit");
     menu->setObjectName(QStringLiteral("menu_edit"));
     add_command_action(*menu, quader_command::kEditUndo, "ui.menu.edit.undo",
                        "Undo");
@@ -403,7 +403,7 @@ struct QtMainMenu::Impl {
   }
 
   void build_align_menu() {
-    align_menu = add_top_level_menu("ui.menu.align", "Align");
+    align_menu = add_top_level_menu("ui.menu.align", "&Align");
     align_menu->setObjectName(QStringLiteral("menu_align"));
     QAction *snap = align_menu->addAction(qtext(
         context.localization, "ui.menu.align.snap_to_grid", "Snap to Grid"));
@@ -466,14 +466,14 @@ struct QtMainMenu::Impl {
   }
 
   void build_cleanup_menu() {
-    QMenu *menu = add_top_level_menu("ui.menu.cleanup", "Clean Up");
+    QMenu *menu = add_top_level_menu("ui.menu.cleanup", "&Clean Up");
     menu->setObjectName(QStringLiteral("menu_cleanup"));
     add_command_action(*menu, quader_command::kModelingRemoveDoubles,
                        "ui.menu.cleanup.remove_doubles", "Remove Doubles");
   }
 
   void build_tools_menu() {
-    QMenu *menu = add_top_level_menu("ui.menu.tools", "Tools");
+    QMenu *menu = add_top_level_menu("ui.menu.tools", "&Tools");
     menu->setObjectName(QStringLiteral("menu_tools"));
     ToolMenuGroup current_group = ToolMenuGroup::Navigation;
     bool first = true;
@@ -512,7 +512,7 @@ struct QtMainMenu::Impl {
   }
 
   void build_create_menu() {
-    QMenu *menu = add_top_level_menu("ui.menu.create", "Create");
+    QMenu *menu = add_top_level_menu("ui.menu.create", "C&reate");
     menu->setObjectName(QStringLiteral("menu_create"));
     add_command_action(*menu, quader_command::kSceneCreatePointLight,
                        "ui.menu.create.point_light", "Point Light");
@@ -522,7 +522,7 @@ struct QtMainMenu::Impl {
   }
 
   void build_view_menu() {
-    QMenu *menu = add_top_level_menu("ui.menu.view", "View");
+    QMenu *menu = add_top_level_menu("ui.menu.view", "&View");
     menu->setObjectName(QStringLiteral("menu_view"));
     add_bool_setting_action(*menu, ViewportBoolSettingId::ShowGrid,
                             "ui.menu.view.grid", "Grid");
@@ -641,7 +641,7 @@ struct QtMainMenu::Impl {
   }
 
   void build_layout_menu() {
-    QMenu *menu = add_top_level_menu("ui.menu.layout", "Layout");
+    QMenu *menu = add_top_level_menu("ui.menu.layout", "&Layout");
     menu->setObjectName(QStringLiteral("menu_layout"));
     auto *group = new QActionGroup(menu);
     group->setExclusive(true);

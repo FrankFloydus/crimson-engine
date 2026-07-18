@@ -174,7 +174,6 @@ QtProjectHomePage::QtProjectHomePage(QWidget *parent) : QWidget(parent) {
   recent_projects_view_ = new QTableView(recent_projects_stack_);
   recent_projects_view_->setObjectName(
       QStringLiteral("projectHome.recentProjects.view"));
-  recent_projects_view_->setEditTriggers(QAbstractItemView::NoEditTriggers);
   recent_projects_view_->setSelectionBehavior(
       QAbstractItemView::SelectRows);
   recent_projects_view_->setSelectionMode(
@@ -269,6 +268,17 @@ void QtProjectHomePage::set_remove_recent_project_requested_callback(
   remove_recent_project_requested_ = std::move(callback);
 }
 
+QModelIndex QtProjectHomePage::selected_recent_project_index() const {
+  if (recent_projects_view_ == nullptr ||
+      recent_projects_view_->selectionModel() == nullptr) {
+    return {};
+  }
+  const QModelIndexList selected =
+      recent_projects_view_->selectionModel()->selectedRows(
+          QtRecentProjectsModel::NameColumn);
+  return selected.size() == 1 ? selected.front() : QModelIndex{};
+}
+
 void QtProjectHomePage::dispatch_recent_project_open(
     const QModelIndex &index) {
   const QtRecentProjectItem *project =
@@ -285,7 +295,7 @@ void QtProjectHomePage::dispatch_recent_project_removal() {
   if (!remove_recent_project_requested_) {
     return;
   }
-  const QModelIndex index = recent_projects_view_->currentIndex();
+  const QModelIndex index = selected_recent_project_index();
   const QtRecentProjectItem *project =
       recent_projects_model_->project_at(index.row());
   if (project != nullptr) {
@@ -296,8 +306,7 @@ void QtProjectHomePage::dispatch_recent_project_removal() {
 void QtProjectHomePage::refresh_remove_recent_button() {
   if (remove_recent_project_button_ != nullptr) {
     remove_recent_project_button_->setEnabled(
-        recent_projects_view_ != nullptr &&
-        recent_projects_view_->currentIndex().isValid());
+        selected_recent_project_index().isValid());
   }
 }
 

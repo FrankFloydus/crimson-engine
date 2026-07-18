@@ -2883,27 +2883,17 @@ ModelingInteractionSettings ModelingInteractionSettingsService::normalize(
 bool ModelingInteractionSettingsService::set_normalized(
     ModelingInteractionSettings settings) {
   settings = normalize(settings);
-  const bool changed =
-      settings.bridge_steps != settings_.bridge_steps ||
-      settings.edge_bevel_width != settings_.edge_bevel_width ||
-      settings.edge_bevel_profile != settings_.edge_bevel_profile ||
-      settings.edge_bevel_segments != settings_.edge_bevel_segments ||
-      settings.thicken_thickness != settings_.thicken_thickness ||
-      settings.thicken_from_center != settings_.thicken_from_center ||
-      settings.slice_quad_x_slices != settings_.slice_quad_x_slices ||
-      settings.slice_quad_y_slices != settings_.slice_quad_y_slices ||
-      settings.merge_by_distance_tolerance !=
-          settings_.merge_by_distance_tolerance ||
-      settings.half_cut_axis != settings_.half_cut_axis ||
-      settings.half_cut_separate_parts != settings_.half_cut_separate_parts ||
-      settings.half_cut_fill_parts != settings_.half_cut_fill_parts ||
-      settings.cut_mode != settings_.cut_mode;
+  const bool changed = !(settings == settings_);
   settings_ = settings;
+  if (changed) {
+    ++revision_;
+  }
   return changed;
 }
 
 void ModelingInteractionSettingsService::reset_for_preview_action(
     ModelingActionPreviewKind preview_kind) {
+  const ModelingInteractionSettings before = settings_;
   const ModelingInteractionSettings defaults =
       normalize(ModelingInteractionSettings{});
   switch (preview_kind) {
@@ -2911,29 +2901,36 @@ void ModelingInteractionSettingsService::reset_for_preview_action(
     settings_.edge_bevel_width = defaults.edge_bevel_width;
     settings_.edge_bevel_profile = defaults.edge_bevel_profile;
     settings_.edge_bevel_segments = defaults.edge_bevel_segments;
-    return;
+    break;
   case ModelingActionPreviewKind::Thicken:
     settings_.thicken_thickness = defaults.thicken_thickness;
     settings_.thicken_from_center = defaults.thicken_from_center;
-    return;
+    break;
   case ModelingActionPreviewKind::MergeByDistance:
     settings_.merge_by_distance_tolerance =
         defaults.merge_by_distance_tolerance;
-    return;
+    break;
   case ModelingActionPreviewKind::HalfCut:
     settings_.half_cut_axis = defaults.half_cut_axis;
     settings_.half_cut_separate_parts = defaults.half_cut_separate_parts;
     settings_.half_cut_fill_parts = defaults.half_cut_fill_parts;
-    return;
+    break;
   case ModelingActionPreviewKind::Bridge:
   case ModelingActionPreviewKind::SliceQuad:
   case ModelingActionPreviewKind::None:
-    return;
+    break;
+  }
+  if (!(settings_ == before)) {
+    ++revision_;
   }
 }
 
 void ModelingInteractionSettingsService::set_cut_mode(ModelingCutMode mode) {
+  if (settings_.cut_mode == mode) {
+    return;
+  }
   settings_.cut_mode = mode;
+  ++revision_;
 }
 
 void ModelingInteractionSettingsService::cycle_cut_mode_without_runtime() {
@@ -2942,6 +2939,7 @@ void ModelingInteractionSettingsService::cycle_cut_mode_without_runtime() {
                        : settings_.cut_mode == ModelingCutMode::DiscardRight
                            ? ModelingCutMode::KeepBoth
                            : ModelingCutMode::DiscardLeft;
+  ++revision_;
 }
 
 const std::string &
@@ -2961,15 +2959,26 @@ const std::string &ModelingToolSettingsService::active_preview_label() const {
 void ModelingToolSettingsService::set_preview_metadata(std::string action_id,
                                                        std::string operation_id,
                                                        std::string label) {
+  if (active_preview_action_id_ == action_id &&
+      active_preview_operation_id_ == operation_id &&
+      active_preview_label_ == label) {
+    return;
+  }
   active_preview_action_id_ = std::move(action_id);
   active_preview_operation_id_ = std::move(operation_id);
   active_preview_label_ = std::move(label);
+  ++revision_;
 }
 
 void ModelingToolSettingsService::clear_preview_metadata() {
+  if (active_preview_action_id_.empty() &&
+      active_preview_operation_id_.empty() && active_preview_label_.empty()) {
+    return;
+  }
   active_preview_action_id_.clear();
   active_preview_operation_id_.clear();
   active_preview_label_.clear();
+  ++revision_;
 }
 
 ModelingToolSettingsTarget

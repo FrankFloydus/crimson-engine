@@ -8,6 +8,13 @@
 
 #include "ui/ui_panel_manager.hpp"
 
+#include <QApplication>
+#include <QCoreApplication>
+#include <QDockWidget>
+#include <QLineEdit>
+#include <QMainWindow>
+#include <QWidget>
+
 namespace quader {
 namespace {
 
@@ -31,6 +38,40 @@ TEST(UIPanelManagerTests, ExplicitVisibilityTransitionIgnoresPhysicalNoise) {
       ui_panel_visibility_transition(unchanged_hidden.visible, true);
   EXPECT_TRUE(restored.visible);
   EXPECT_TRUE(restored.changed);
+}
+
+TEST(UIPanelManagerTests, FocusUsesThePanelContentsQtFocusProxy) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-panel-manager-focus-tests";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  QApplication::setStyle(QStringLiteral("Fusion"));
+
+  QMainWindow window;
+  auto *dock = new QDockWidget(&window);
+  auto *content = new QWidget(dock);
+  auto *decoy = new QLineEdit(content);
+  auto *focus_target = new QLineEdit(content);
+  decoy->setGeometry(0, 0, 120, 24);
+  focus_target->setGeometry(0, 32, 120, 24);
+  content->setFocusProxy(focus_target);
+  dock->setWidget(content);
+  window.addDockWidget(Qt::LeftDockWidgetArea, dock);
+  window.show();
+  window.activateWindow();
+  window.raise();
+  QCoreApplication::processEvents();
+  decoy->setFocus(Qt::OtherFocusReason);
+  QCoreApplication::processEvents();
+  ASSERT_EQ(window.focusWidget(), decoy)
+      << "the test must begin away from the panel focus proxy";
+
+  UIPanelManager manager;
+  manager.add(UIPanelId::Outliner, *dock);
+  EXPECT_TRUE(manager.focus(UIPanelId::Outliner));
+  QCoreApplication::processEvents();
+  EXPECT_EQ(window.focusWidget(), focus_target);
 }
 
 } // namespace

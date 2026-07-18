@@ -15,9 +15,10 @@
 
 #include <gtest/gtest.h>
 
+#include <QKeySequence>
+
 #include <algorithm>
 #include <array>
-#include <cctype>
 #include <filesystem>
 #include <fstream>
 #include <regex>
@@ -220,7 +221,7 @@ TEST(LocalizationResourceTests, ShipsEnglishAndItalianCatalogs) {
     ASSERT_TRUE(localization.load(root, "it-IT"));
 
     EXPECT_EQ(localization.current_locale(), "it-IT");
-    EXPECT_EQ(localization.text("ui.menu.edit", "Edit"), "Modifica");
+    EXPECT_EQ(localization.text("ui.menu.edit", "Edit"), "&Modifica");
     EXPECT_EQ(localization.text("viewport.tool.move.label", "Move"), "Sposta");
     EXPECT_EQ(localization.text("modeling.action.bridge_faces.label",
                                 "Bridge Selected Faces"),
@@ -255,7 +256,7 @@ TEST(LocalizationResourceTests, ShipsEnglishAndItalianCatalogs) {
     EXPECT_EQ(localization.text("ui.action.apply", "Apply"), "Applica");
     EXPECT_EQ(localization.text("ui.action.cancel", "Cancel"), "Annulla");
     EXPECT_TRUE(localization.select_locale("en-US"));
-    EXPECT_EQ(localization.text("ui.menu.edit", "Edit"), "Edit");
+    EXPECT_EQ(localization.text("ui.menu.edit", "Edit"), "&Edit");
     EXPECT_EQ(localization.text("modeling.action.copy_pivot_from_active.label",
                                 "Copy Pivot From Active"),
               "Copy Pivot from Active Object");
@@ -276,6 +277,36 @@ TEST(LocalizationResourceTests, ShipsEnglishAndItalianCatalogs) {
               "Repeat Spacing");
     EXPECT_EQ(localization.text("ui.action.apply", "Apply"), "Apply");
     EXPECT_EQ(localization.text("ui.action.cancel", "Cancel"), "Cancel");
+}
+
+TEST(LocalizationResourceTests, TopLevelMenusExposeUniqueQtMnemonics) {
+  constexpr std::array<std::string_view, 8> kTopLevelMenuKeys = {
+      "ui.menu.file",   "ui.menu.edit",  "ui.menu.align",
+      "ui.menu.cleanup", "ui.menu.tools", "ui.menu.create",
+      "ui.menu.view",   "ui.menu.layout",
+  };
+
+  for (const auto &[locale, catalog] : load_resource_locale_catalogs()) {
+    SCOPED_TRACE(locale);
+    std::set<std::string> mnemonics;
+    for (const std::string_view key : kTopLevelMenuKeys) {
+      const auto found = catalog.find(std::string(key));
+      ASSERT_NE(found, catalog.end()) << key;
+
+      const QKeySequence mnemonic = QKeySequence::mnemonic(
+          QString::fromUtf8(found->second.data(),
+                            static_cast<qsizetype>(found->second.size())));
+      ASSERT_FALSE(mnemonic.isEmpty())
+          << key << " must expose a Qt mnemonic";
+      const std::string portable =
+          mnemonic.toString(QKeySequence::PortableText)
+              .toCaseFolded()
+              .toUtf8()
+              .toStdString();
+      EXPECT_TRUE(mnemonics.insert(portable).second)
+          << "duplicate top-level mnemonic '" << portable << "' for " << key;
+    }
+  }
 }
 
 TEST(LocalizationResourceTests, ViewportToolCatalogHasLocaleKeys) {

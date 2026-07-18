@@ -880,6 +880,7 @@ TEST(EditorApiTests, AggregatesDocumentApisAndCommandRouting) {
       EXPECT_EQ(editor.commands().shortcut_for(target), "");
     }
     EXPECT_FALSE(editor.commands().last_status().has_value());
+    EXPECT_EQ(editor.commands().last_status_revision(), 0u);
     const quader::QuaderApiVoidResult missing_command =
         editor.commands().execute("__missing_command__");
     EXPECT_FALSE(missing_command.ok());
@@ -887,15 +888,18 @@ TEST(EditorApiTests, AggregatesDocumentApisAndCommandRouting) {
     EXPECT_EQ(missing_command.error_message(), "Unknown command id.");
     ASSERT_TRUE(editor.commands().last_status().has_value());
     expect_same_api_status(*editor.commands().last_status(), missing_command);
+    EXPECT_EQ(editor.commands().last_status_revision(), 1u);
     EXPECT_EQ(editor.commands()
                   .execute("modeling.__missing_action__")
                   .error_message(),
               "Unknown command id.");
+    EXPECT_EQ(editor.commands().last_status_revision(), 2u);
     EXPECT_EQ(editor.commands()
                   .execute(quader::quader_tool_activation_command_target_id(
                       "__missing_tool__"))
                   .error_message(),
               "Unknown command id.");
+    EXPECT_EQ(editor.commands().last_status_revision(), 3u);
 
     quader::QuaderCreateBoxArgs args;
     args.bounds = {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}};
@@ -915,6 +919,7 @@ TEST(EditorApiTests, AggregatesDocumentApisAndCommandRouting) {
     EXPECT_TRUE(undo.changed());
     ASSERT_TRUE(editor.commands().last_status().has_value());
     expect_same_api_status(*editor.commands().last_status(), undo);
+    EXPECT_EQ(editor.commands().last_status_revision(), 4u);
 }
 
 TEST(EditorApiTests, ProjectLifecycleCommandsRouteThroughProjectApi) {
@@ -2920,6 +2925,38 @@ TEST(EditorApiTests,
   EXPECT_TRUE(canceled.ok()) << canceled.error_message();
   EXPECT_EQ(editor.tools().active_tool(), "select");
   EXPECT_FALSE(editor.tools().active_settings().active);
+}
+
+TEST(EditorApiTests,
+     ActiveSettingsRevisionSkipsStableReadsAndTracksPrimitiveChanges) {
+  CommandTestHarness harness;
+  quader::QuaderEditorApi &editor = harness.editor;
+
+  const std::uint64_t initial = editor.tools().active_settings_revision();
+  EXPECT_EQ(editor.tools().active_settings_revision(), initial);
+
+  ASSERT_TRUE(
+      editor.tools().activate(quader::ViewportToolId::CreatePrimitive).ok());
+  const std::uint64_t activated = editor.tools().active_settings_revision();
+  EXPECT_GT(activated, initial);
+  EXPECT_EQ(editor.tools().active_settings_revision(), activated);
+
+  const quader::QuaderApiVoidResult changed = editor.tools().set_setting(
+      "create_primitive", "primitive.box.subdivisions_x", 4.0);
+  ASSERT_TRUE(changed.ok()) << changed.error_message();
+  EXPECT_TRUE(changed.changed());
+  const std::uint64_t setting_changed =
+      editor.tools().active_settings_revision();
+  EXPECT_GT(setting_changed, activated);
+
+  const quader::QuaderApiVoidResult unchanged = editor.tools().set_setting(
+      "create_primitive", "primitive.box.subdivisions_x", 4.0);
+  ASSERT_TRUE(unchanged.ok()) << unchanged.error_message();
+  EXPECT_FALSE(unchanged.changed());
+  EXPECT_EQ(editor.tools().active_settings_revision(), setting_changed);
+
+  ASSERT_TRUE(editor.tools().cancel_active_tool_preview().ok());
+  EXPECT_GT(editor.tools().active_settings_revision(), setting_changed);
 }
 
 TEST(EditorApiTests,
@@ -8642,6 +8679,13 @@ TEST(EditorApiTests,
      SceneInstancesCreateLinkedDuplicateEditScopeAndFlattenOccurrence) {
   CommandTestHarness harness;
   quader::QuaderEditorApi &editor = harness.editor;
+  const std::uint64_t initial_instance_edit_revision =
+      editor.modeling().instance_edit_revision();
+  EXPECT_EQ(editor.modeling().instance_edit_revision(),
+            initial_instance_edit_revision);
+  EXPECT_FALSE(editor.modeling().exit_instance_edit().ok());
+  EXPECT_EQ(editor.modeling().instance_edit_revision(),
+            initial_instance_edit_revision);
   const quader::QuaderModelingObjectRef member =
       create_selected_box(editor, "Instance Member");
   ASSERT_TRUE(editor.scene()
@@ -8701,6 +8745,9 @@ TEST(EditorApiTests,
   ASSERT_TRUE(editor.modeling().can_enter_instance_edit(second_occurrence));
   ASSERT_TRUE(
       editor.modeling().enter_instance_edit(second_occurrence).ok());
+  const std::uint64_t entered_instance_edit_revision =
+      editor.modeling().instance_edit_revision();
+  EXPECT_GT(entered_instance_edit_revision, initial_instance_edit_revision);
   const quader::QuaderInstanceEditState edit_state =
       editor.modeling().instance_edit_state();
   EXPECT_TRUE(edit_state.active);
@@ -8708,6 +8755,8 @@ TEST(EditorApiTests,
   EXPECT_EQ(edit_state.definition.id, definition);
   EXPECT_FALSE(edit_state.scene_name.empty());
   EXPECT_FALSE(edit_state.instance_name.empty());
+  EXPECT_EQ(editor.modeling().instance_edit_revision(),
+            entered_instance_edit_revision);
 
   // Outside entities are unselectable in definition edit scope, while the
   // canonical member remains the one editable source shared by both roots.
@@ -8730,7 +8779,12 @@ TEST(EditorApiTests,
   ASSERT_TRUE(editor.commands()
                   .execute(quader::quader_command::kEditExitInstanceEdit)
                   .ok());
+  const std::uint64_t exited_instance_edit_revision =
+      editor.modeling().instance_edit_revision();
+  EXPECT_GT(exited_instance_edit_revision, entered_instance_edit_revision);
   EXPECT_FALSE(editor.modeling().instance_edit_state().active);
+  EXPECT_EQ(editor.modeling().instance_edit_revision(),
+            exited_instance_edit_revision);
   EXPECT_EQ(selected_entities(editor),
             std::vector<quader::EntityId>{second_occurrence});
 
@@ -9716,6 +9770,8 @@ TEST(EditorApiTests,
   ASSERT_TRUE(editor.modeling().create_instance().ok());
   const quader::EntityId occurrence = selected_entities(editor).front();
   ASSERT_TRUE(editor.modeling().enter_instance_edit(occurrence).ok());
+  const std::uint64_t entered_instance_edit_revision =
+      editor.modeling().instance_edit_revision();
   ASSERT_TRUE(editor.selection().select_object(member).ok());
   ASSERT_TRUE(
       editor.selection().set_mode(quader::QuaderSelectionMode::Face).ok());
@@ -9726,6 +9782,10 @@ TEST(EditorApiTests,
       editor.scene().destroy(occurrence);
   ASSERT_TRUE(destroyed.ok()) << destroyed.error_message();
   ASSERT_TRUE(destroyed.changed());
+  const std::uint64_t invalidated_instance_edit_revision =
+      editor.modeling().instance_edit_revision();
+  EXPECT_GT(invalidated_instance_edit_revision,
+            entered_instance_edit_revision);
   const quader::QuaderInstanceEditState state =
       editor.modeling().instance_edit_state();
   EXPECT_FALSE(state.active);
@@ -9733,6 +9793,8 @@ TEST(EditorApiTests,
             quader::QuaderSelectionMode::Object);
   EXPECT_TRUE(selected_entities(editor).empty());
   EXPECT_FALSE(editor.modeling().can_exit_instance_edit());
+  EXPECT_EQ(editor.modeling().instance_edit_revision(),
+            invalidated_instance_edit_revision);
 }
 
 TEST(EditorApiTests,

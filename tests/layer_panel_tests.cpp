@@ -126,8 +126,9 @@ TEST(LayerPanelTests, UsesCompactTopActionsAndEditableMultiSelectRows) {
   EXPECT_LT(actions->geometry().top(), tree->geometry().top());
   EXPECT_EQ(tree->selectionMode(), QAbstractItemView::ExtendedSelection);
   EXPECT_EQ(tree->selectionBehavior(), QAbstractItemView::SelectRows);
-  EXPECT_EQ(tree->editTriggers(), QAbstractItemView::DoubleClicked |
-                                      QAbstractItemView::EditKeyPressed);
+  QTreeView stock_tree;
+  EXPECT_EQ(tree->editTriggers(), stock_tree.editTriggers());
+  EXPECT_EQ(panel.focusProxy(), tree);
   ASSERT_NE(tree->model(), nullptr);
   ASSERT_EQ(tree->model()->columnCount(), 4);
   EXPECT_TRUE(create->text().isEmpty());
@@ -246,23 +247,28 @@ TEST(LayerPanelTests,
   EXPECT_EQ(editor.layers().layer(second_layer)->name,
             "Renamed With Double Click");
 
-  const QModelIndex first_eye = tree->model()->index(0, 2);
-  const QPoint first_eye_position = tree->visualRect(first_eye).center();
-  send_mouse(*tree->viewport(), QEvent::MouseButtonPress,
-             first_eye_position, Qt::LeftButton, Qt::LeftButton);
-  send_mouse(*tree->viewport(), QEvent::MouseButtonRelease,
-             first_eye_position, Qt::LeftButton, Qt::NoButton);
+  auto *visibility_button = qobject_cast<QToolButton *>(
+      tree->indexWidget(tree->model()->index(0, 2)));
+  ASSERT_NE(visibility_button, nullptr);
+  QPointer<QToolButton> replaced_visibility_button(visibility_button);
+  visibility_button->click();
+  QCoreApplication::processEvents();
+  QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+  EXPECT_TRUE(replaced_visibility_button.isNull())
+      << "rebuilt index widgets must not outlive their model row";
   ASSERT_TRUE(editor.layers().layer(first_layer).has_value());
   EXPECT_FALSE(editor.layers().layer(first_layer)->visible);
-  EXPECT_TRUE(tree->selectionModel()->selectedRows(1).isEmpty());
-  EXPECT_FALSE(tree->currentIndex().isValid());
+  ASSERT_EQ(tree->selectionModel()->selectedRows(1).size(), 1);
+  EXPECT_EQ(tree->selectionModel()->selectedRows(1).front().row(), 1);
+  EXPECT_EQ(tree->currentIndex().row(), 1)
+      << "an index widget action must preserve the stock row selection";
   EXPECT_EQ(tree->model()
                 ->index(0, 2)
                 .data(Qt::AccessibleTextRole)
                 .toString(),
             QStringLiteral("Layer hidden"));
 
-  auto *visibility_button = qobject_cast<QToolButton *>(
+  visibility_button = qobject_cast<QToolButton *>(
       tree->indexWidget(tree->model()->index(0, 2)));
   ASSERT_NE(visibility_button, nullptr);
   EXPECT_EQ(visibility_button->accessibleName(),
@@ -276,26 +282,27 @@ TEST(LayerPanelTests,
   send_key(*visibility_button, Qt::Key_Space);
   ASSERT_TRUE(editor.layers().layer(first_layer).has_value());
   EXPECT_TRUE(editor.layers().layer(first_layer)->visible);
-  EXPECT_TRUE(tree->selectionModel()->selectedRows(1).isEmpty());
-  EXPECT_FALSE(tree->currentIndex().isValid());
+  ASSERT_EQ(tree->selectionModel()->selectedRows(1).size(), 1);
+  EXPECT_EQ(tree->selectionModel()->selectedRows(1).front().row(), 0);
+  EXPECT_EQ(tree->currentIndex().row(), 0);
 
-  const QModelIndex first_lock = tree->model()->index(0, 3);
-  const QPoint first_lock_position = tree->visualRect(first_lock).center();
-  send_mouse(*tree->viewport(), QEvent::MouseButtonPress,
-             first_lock_position, Qt::LeftButton, Qt::LeftButton);
-  send_mouse(*tree->viewport(), QEvent::MouseButtonRelease,
-             first_lock_position, Qt::LeftButton, Qt::NoButton);
+  auto *lock_button = qobject_cast<QToolButton *>(
+      tree->indexWidget(tree->model()->index(0, 3)));
+  ASSERT_NE(lock_button, nullptr);
+  lock_button->click();
+  QCoreApplication::processEvents();
   ASSERT_TRUE(editor.layers().layer(first_layer).has_value());
   EXPECT_TRUE(editor.layers().layer(first_layer)->locked);
-  EXPECT_TRUE(tree->selectionModel()->selectedRows(1).isEmpty());
-  EXPECT_FALSE(tree->currentIndex().isValid());
+  ASSERT_EQ(tree->selectionModel()->selectedRows(1).size(), 1);
+  EXPECT_EQ(tree->selectionModel()->selectedRows(1).front().row(), 0);
+  EXPECT_EQ(tree->currentIndex().row(), 0);
   EXPECT_EQ(tree->model()
                 ->index(0, 3)
                 .data(Qt::AccessibleTextRole)
                 .toString(),
             QStringLiteral("Layer locked"));
 
-  auto *lock_button = qobject_cast<QToolButton *>(
+  lock_button = qobject_cast<QToolButton *>(
       tree->indexWidget(tree->model()->index(0, 3)));
   ASSERT_NE(lock_button, nullptr);
   EXPECT_EQ(lock_button->accessibleName(), QStringLiteral("Layer locked"));
@@ -308,8 +315,9 @@ TEST(LayerPanelTests,
   send_key(*lock_button, Qt::Key_Space);
   ASSERT_TRUE(editor.layers().layer(first_layer).has_value());
   EXPECT_FALSE(editor.layers().layer(first_layer)->locked);
-  EXPECT_TRUE(tree->selectionModel()->selectedRows(1).isEmpty());
-  EXPECT_FALSE(tree->currentIndex().isValid());
+  ASSERT_EQ(tree->selectionModel()->selectedRows(1).size(), 1);
+  EXPECT_EQ(tree->selectionModel()->selectedRows(1).front().row(), 0);
+  EXPECT_EQ(tree->currentIndex().row(), 0);
 
   auto *swatch = dynamic_cast<quader::QtColorSwatchButton *>(
       tree->indexWidget(tree->model()->index(0, 0)));
@@ -332,8 +340,9 @@ TEST(LayerPanelTests,
   ASSERT_NE(guarded_swatch, nullptr);
   EXPECT_EQ(guarded_swatch->swatch_color(), initial_swatch);
   EXPECT_EQ(editor.layers().revision(), before_cancel);
-  EXPECT_TRUE(tree->selectionModel()->selectedRows(1).isEmpty());
-  EXPECT_FALSE(tree->currentIndex().isValid());
+  ASSERT_EQ(tree->selectionModel()->selectedRows(1).size(), 1);
+  EXPECT_EQ(tree->selectionModel()->selectedRows(1).front().row(), 0);
+  EXPECT_EQ(tree->currentIndex().row(), 0);
 
   const QColor committed_color = QColor::fromRgb(24, 96, 208);
   const std::uint64_t before_accept = editor.layers().revision();
@@ -390,6 +399,21 @@ TEST(LayerPanelTests,
   EXPECT_TRUE(menu_opened);
   EXPECT_EQ(editor.layers().all().size(), 2u);
 
+  bool keyboard_menu_opened = false;
+  QTimer::singleShot(0, &panel, [&]() {
+    auto *menu = panel.findChild<QMenu *>(
+        QStringLiteral("layers.context_menu"));
+    if (menu != nullptr) {
+      keyboard_menu_opened = true;
+      menu->close();
+    }
+  });
+  QContextMenuEvent keyboard_context_event(
+      QContextMenuEvent::Keyboard, QPoint{}, QPoint{});
+  QCoreApplication::sendEvent(tree->viewport(), &keyboard_context_event);
+  EXPECT_TRUE(keyboard_menu_opened);
+  EXPECT_EQ(tree->selectionModel()->selectedRows(1).size(), 2);
+
   tree->selectionModel()->select(
       tree->model()->index(0, 1),
       QItemSelectionModel::ClearAndSelect | QItemSelectionModel::Rows);
@@ -407,12 +431,95 @@ TEST(LayerPanelTests,
   tree->selectionModel()->setCurrentIndex(
       tree->model()->index(1, 1),
       QItemSelectionModel::ClearAndSelect | QItemSelectionModel::Rows);
+  const QModelIndex current_before_blank = tree->currentIndex();
   const QPoint empty_position(4, tree->viewport()->height() - 4);
   ASSERT_FALSE(tree->indexAt(empty_position).isValid());
   send_mouse(*tree->viewport(), QEvent::MouseButtonPress, empty_position,
              Qt::LeftButton, Qt::LeftButton);
   send_mouse(*tree->viewport(), QEvent::MouseButtonRelease, empty_position,
              Qt::LeftButton, Qt::NoButton);
+  EXPECT_TRUE(tree->selectionModel()->selectedRows(1).isEmpty());
+  EXPECT_EQ(tree->currentIndex(), current_before_blank)
+      << "Qt keeps currentIndex independent from the cleared selection";
+}
+
+TEST(LayerPanelTests,
+     EqualRevisionDocumentSwitchRebuildsRowsAndClearsDocumentLocalSelection) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-layer-panel-document-switch-tests";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  QApplication::setStyle(QStringLiteral("Fusion"));
+
+  quader::SceneSession first_session;
+  quader::SceneSession second_session;
+  quader::QuaderEditorApi first_editor(
+      quader::QuaderApiSessionInternalAccess::from_scene_session(
+          first_session));
+  quader::QuaderEditorApi second_editor(
+      quader::QuaderApiSessionInternalAccess::from_scene_session(
+          second_session));
+  const auto first_layer = first_editor.layers().create();
+  const auto second_layer = second_editor.layers().create();
+  ASSERT_TRUE(first_layer.ok()) << first_layer.error_message();
+  ASSERT_TRUE(second_layer.ok()) << second_layer.error_message();
+  ASSERT_TRUE(first_editor.layers()
+                  .rename(first_layer.value().id, "First Document Layer")
+                  .ok());
+  ASSERT_TRUE(second_editor.layers()
+                  .rename(second_layer.value().id, "Second Document Layer")
+                  .ok());
+  ASSERT_EQ(first_editor.layers().revision(),
+            second_editor.layers().revision());
+  ASSERT_EQ(first_session.scene().selection_revision(),
+            second_session.scene().selection_revision());
+
+  quader::UISettings ui_settings = quader::UISettings::defaults();
+  quader::ViewportSettings viewport_settings =
+      quader::ViewportSettings::defaults();
+  quader::LocalizationService localization = loaded_localization();
+  quader::UIContext first_context{
+      .intent = {.editor = first_editor},
+      .scene = {.document = first_session.scene(),
+                .assets = first_session.assets(),
+                .modeling = first_session.modeling(),
+                .selection = first_session.selection()},
+      .preferences = {.ui = ui_settings, .viewport = viewport_settings},
+      .localization = localization,
+  };
+  quader::UIContext second_context{
+      .intent = {.editor = second_editor},
+      .scene = {.document = second_session.scene(),
+                .assets = second_session.assets(),
+                .modeling = second_session.modeling(),
+                .selection = second_session.selection()},
+      .preferences = {.ui = ui_settings, .viewport = viewport_settings},
+      .localization = localization,
+  };
+
+  quader::LayerPanel panel;
+  panel.setAttribute(Qt::WA_DontShowOnScreen, true);
+  panel.resize(360, 480);
+  panel.show();
+  panel.refresh(first_context);
+  QCoreApplication::processEvents();
+  auto *tree = panel.findChild<QTreeView *>(QStringLiteral("layers.tree"));
+  ASSERT_NE(tree, nullptr);
+  ASSERT_EQ(tree->model()->rowCount(), 1);
+  EXPECT_EQ(tree->model()->index(0, 1).data().toString(),
+            QStringLiteral("First Document Layer"));
+  tree->selectionModel()->select(
+      tree->model()->index(0, 1),
+      QItemSelectionModel::ClearAndSelect | QItemSelectionModel::Rows);
+  tree->selectionModel()->setCurrentIndex(tree->model()->index(0, 1),
+                                           QItemSelectionModel::NoUpdate);
+
+  panel.refresh(second_context);
+  QCoreApplication::processEvents();
+  ASSERT_EQ(tree->model()->rowCount(), 1);
+  EXPECT_EQ(tree->model()->index(0, 1).data().toString(),
+            QStringLiteral("Second Document Layer"));
   EXPECT_TRUE(tree->selectionModel()->selectedRows(1).isEmpty());
   EXPECT_FALSE(tree->currentIndex().isValid());
 }

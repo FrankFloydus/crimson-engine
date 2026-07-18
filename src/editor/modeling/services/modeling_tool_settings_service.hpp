@@ -8,6 +8,7 @@
 
 #include "editor/modeling/modeling_types.hpp"
 
+#include <cstdint>
 #include <string>
 #include <string_view>
 
@@ -24,6 +25,7 @@ public:
   [[nodiscard]] const std::string &active_preview_action_id() const;
   [[nodiscard]] const std::string &active_preview_operation_id() const;
   [[nodiscard]] const std::string &active_preview_label() const;
+  [[nodiscard]] std::uint64_t revision() const { return revision_; }
 
   void set_preview_metadata(std::string action_id, std::string operation_id,
                             std::string label);
@@ -42,6 +44,7 @@ private:
   std::string active_preview_action_id_;
   std::string active_preview_operation_id_;
   std::string active_preview_label_;
+  std::uint64_t revision_ = 0;
 };
 
 } // namespace quader

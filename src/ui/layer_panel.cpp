@@ -25,7 +25,6 @@
 #include <QItemSelectionModel>
 #include <QLineEdit>
 #include <QMenu>
-#include <QMouseEvent>
 #include <QPainter>
 #include <QPalette>
 #include <QPixmap>
@@ -144,17 +143,13 @@ public:
   }
 };
 
-/// Selects only names while translating visibility, lock, and context input.
+/// Adds only keyboard context targeting.
 class LayerTreeView final : public QTreeView {
 public:
-  using VisibilityToggleHandler = std::function<void(QuaderLayerId)>;
-  using LockToggleHandler = std::function<void(QuaderLayerId)>;
   using ContextMenuHandler = std::function<void(QuaderLayerId, QPoint)>;
 
   explicit LayerTreeView(QWidget *parent = nullptr) : QTreeView(parent) {}
 
-  VisibilityToggleHandler visibility_toggle_handler;
-  LockToggleHandler lock_toggle_handler;
   ContextMenuHandler context_menu_handler;
 
   void clear_layer_selection() {
@@ -167,57 +162,31 @@ public:
   }
 
 protected:
-  void mousePressEvent(QMouseEvent *event) override {
-    const QModelIndex pressed = indexAt(event->position().toPoint());
-    if (!pressed.isValid()) {
-      QTreeView::mousePressEvent(event);
-      if (event->button() == Qt::LeftButton) {
-        clear_layer_selection();
-      }
-      return;
-    }
-
-    const QModelIndex name_index =
-        pressed.siblingAtColumn(column_index(LayerColumn::Name));
-    if (event->button() == Qt::RightButton) {
-      if (selectionModel() != nullptr) {
-        if (!selectionModel()->isRowSelected(pressed.row(),
-                                             pressed.parent())) {
-          selectionModel()->select(
-              name_index, QItemSelectionModel::ClearAndSelect |
-                              QItemSelectionModel::Rows);
-        }
-        selectionModel()->setCurrentIndex(name_index,
-                                          QItemSelectionModel::NoUpdate);
-      }
-      event->accept();
-      return;
-    }
-
-    if (event->button() == Qt::LeftButton &&
-        pressed.column() != column_index(LayerColumn::Name)) {
-      clear_layer_selection();
-      if (pressed.column() == column_index(LayerColumn::Visible) &&
-          visibility_toggle_handler != nullptr) {
-        visibility_toggle_handler(layer_id(pressed));
-      } else if (pressed.column() == column_index(LayerColumn::Locked) &&
-                 lock_toggle_handler != nullptr) {
-        lock_toggle_handler(layer_id(pressed));
-      }
-      event->accept();
-      return;
-    }
-
-    QTreeView::mousePressEvent(event);
-  }
-
   void contextMenuEvent(QContextMenuEvent *event) override {
-    const QModelIndex index = indexAt(event->pos());
+    const QModelIndex index =
+        event->reason() == QContextMenuEvent::Keyboard
+            ? currentIndex()
+            : indexAt(event->pos());
     if (!index.isValid() || context_menu_handler == nullptr) {
       QTreeView::contextMenuEvent(event);
       return;
     }
-    context_menu_handler(layer_id(index), event->globalPos());
+    if (event->reason() == QContextMenuEvent::Keyboard &&
+        selectionModel() != nullptr &&
+        !selectionModel()->isRowSelected(index.row(), index.parent())) {
+      const QModelIndex name_index =
+          index.siblingAtColumn(column_index(LayerColumn::Name));
+      selectionModel()->select(name_index,
+                               QItemSelectionModel::ClearAndSelect |
+                                   QItemSelectionModel::Rows);
+      selectionModel()->setCurrentIndex(name_index,
+                                        QItemSelectionModel::NoUpdate);
+    }
+    const QPoint global_position =
+        event->reason() == QContextMenuEvent::Keyboard
+            ? viewport()->mapToGlobal(visualRect(index).center())
+            : event->globalPos();
+    context_menu_handler(layer_id(index), global_position);
     event->accept();
   }
 };
@@ -241,17 +210,13 @@ struct LayerPanel::Impl {
     tree_->setObjectName(QStringLiteral("layers.tree"));
     tree_->setAccessibleName(QStringLiteral("Layers"));
     tree_->setRootIsDecorated(false);
-    tree_->setItemsExpandable(false);
-    tree_->setExpandsOnDoubleClick(false);
-    tree_->setAnimated(false);
     tree_->setAlternatingRowColors(true);
     tree_->setUniformRowHeights(true);
     tree_->setIconSize(QSize(18, 18));
     tree_->setSelectionBehavior(QAbstractItemView::SelectRows);
     tree_->setSelectionMode(QAbstractItemView::ExtendedSelection);
-    tree_->setEditTriggers(QAbstractItemView::DoubleClicked |
-                           QAbstractItemView::EditKeyPressed);
     tree_->setItemDelegate(new LayerNameDelegate(tree_));
+    panel_.setFocusProxy(tree_);
 
     model_ = new QStandardItemModel(tree_);
     model_->setObjectName(QStringLiteral("layers.model"));
@@ -303,12 +268,6 @@ struct LayerPanel::Impl {
     layout->addWidget(actions);
     layout->addWidget(tree_);
 
-    tree_->visibility_toggle_handler = [this](QuaderLayerId id) {
-      toggle_visibility(id);
-    };
-    tree_->lock_toggle_handler = [this](QuaderLayerId id) {
-      toggle_lock(id);
-    };
     tree_->context_menu_handler = [this](QuaderLayerId id,
                                           QPoint global_position) {
       show_context_menu(id, global_position);
@@ -325,10 +284,18 @@ struct LayerPanel::Impl {
   }
 
   void refresh(UIContext &context) {
+    const bool owner_changed =
+        editor_ != &context.intent.editor ||
+        document_ != &context.scene.document;
     editor_ = &context.intent.editor;
     document_ = &context.scene.document;
     localization_ = &context.localization;
-    synchronize(false);
+    if (owner_changed) {
+      select_after_refresh_.reset();
+      tree_->clear_layer_selection();
+      synchronization_valid_ = false;
+    }
+    synchronize(owner_changed);
   }
 
 private:
@@ -480,8 +447,6 @@ private:
           localized("ui.layers.color", "Color"));
       color_button->set_swatch_color(qt_color(layer.wireframe_color));
       tree_->setIndexWidget(color_item->index(), color_button);
-      QObject::connect(color_button, &QPushButton::pressed, &panel_,
-                       [this]() { tree_->clear_layer_selection(); });
       QObject::connect(color_button, &QPushButton::clicked, &panel_,
                        [this, id = layer.id, color_button]() {
                          choose_color(id, *color_button);
@@ -502,8 +467,6 @@ private:
       visibility_button->setAccessibleName(visibility_text);
       visibility_button->setAccessibleDescription(visibility_text);
       tree_->setIndexWidget(visible_item->index(), visibility_button);
-      QObject::connect(visibility_button, &QToolButton::pressed, &panel_,
-                       [this]() { tree_->clear_layer_selection(); });
       QObject::connect(visibility_button, &QToolButton::clicked, &panel_,
                        [this, id = layer.id]() { toggle_visibility(id); });
 
@@ -521,8 +484,6 @@ private:
       lock_button->setAccessibleName(locked_text);
       lock_button->setAccessibleDescription(locked_text);
       tree_->setIndexWidget(locked_item->index(), lock_button);
-      QObject::connect(lock_button, &QToolButton::pressed, &panel_,
-                       [this]() { tree_->clear_layer_selection(); });
       QObject::connect(lock_button, &QToolButton::clicked, &panel_,
                        [this, id = layer.id]() { toggle_lock(id); });
     }
@@ -536,7 +497,6 @@ private:
           selection.select(item->second->index(), item->second->index());
         }
       }
-      const QSignalBlocker blocker(tree_->selectionModel());
       tree_->selectionModel()->clearSelection();
       tree_->selectionModel()->select(selection,
                                       QItemSelectionModel::Select |

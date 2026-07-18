@@ -238,6 +238,7 @@ PrimitiveCreationToolService::activate(PrimitiveCreationKind kind) {
       .before = before,
   };
   preferred_kind_ = kind;
+  ++tool_settings_revision_;
   return {
       .ok = true,
       .changed = true,
@@ -261,6 +262,7 @@ PrimitiveCreationToolService::set_kind(PrimitiveCreationKind kind) {
     return command_unchanged_result();
   }
   session_->kind = kind;
+  ++tool_settings_revision_;
   return update_live_primitive();
 }
 
@@ -308,6 +310,7 @@ CommandResult PrimitiveCreationToolService::accept_preview(
         true);
   }
   ++session_->accepted_shapes;
+  ++tool_settings_revision_;
   session_->created_object_ids.push_back(created.object.modeling_object_id);
   const ModelingSelectionSummary selection = modeling_.selection_summary();
   live_primitive_ = LivePrimitive{
@@ -379,6 +382,7 @@ CommandResult PrimitiveCreationToolService::apply() {
 
   live_primitive_.reset();
   session_.reset();
+  ++tool_settings_revision_;
   finish_checkpoint(false);
   return {
       .ok = true,
@@ -425,6 +429,7 @@ CommandResult PrimitiveCreationToolService::set_setting(std::string_view name,
         return command_unchanged_result();
       }
       box_settings_.flip_faces = toggle;
+      ++tool_settings_revision_;
       return update_live_primitive();
     } else {
       return command_invalid_result("Unknown Box primitive setting.");
@@ -437,6 +442,7 @@ CommandResult PrimitiveCreationToolService::set_setting(std::string_view name,
       return command_unchanged_result();
     }
     *setting = count;
+    ++tool_settings_revision_;
     return update_live_primitive();
   }
   case PrimitiveCreationKind::Cylinder: {
@@ -450,6 +456,7 @@ CommandResult PrimitiveCreationToolService::set_setting(std::string_view name,
         return command_unchanged_result();
       }
       cylinder_settings_.side_count = count;
+      ++tool_settings_revision_;
       return update_live_primitive();
     }
     bool *setting = nullptr;
@@ -464,6 +471,7 @@ CommandResult PrimitiveCreationToolService::set_setting(std::string_view name,
       return command_unchanged_result();
     }
     *setting = toggle;
+    ++tool_settings_revision_;
     return update_live_primitive();
   }
   case PrimitiveCreationKind::Sphere: {
@@ -477,6 +485,7 @@ CommandResult PrimitiveCreationToolService::set_setting(std::string_view name,
         return command_unchanged_result();
       }
       sphere_settings_.radial_segments = count;
+      ++tool_settings_revision_;
       return update_live_primitive();
     }
     if (name == kSphereRingsSetting) {
@@ -488,6 +497,7 @@ CommandResult PrimitiveCreationToolService::set_setting(std::string_view name,
         return command_unchanged_result();
       }
       sphere_settings_.rings = count;
+      ++tool_settings_revision_;
       return update_live_primitive();
     }
     bool *setting = nullptr;
@@ -502,6 +512,7 @@ CommandResult PrimitiveCreationToolService::set_setting(std::string_view name,
       return command_unchanged_result();
     }
     *setting = toggle;
+    ++tool_settings_revision_;
     return update_live_primitive();
   }
   }
@@ -615,6 +626,7 @@ CommandResult PrimitiveCreationToolService::rollback_and_exit(
   }
   live_primitive_.reset();
   session_.reset();
+  ++tool_settings_revision_;
   finish_checkpoint(ok);
   return {
       .ok = ok && !report_failure,

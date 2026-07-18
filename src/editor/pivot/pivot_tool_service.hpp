@@ -36,6 +36,9 @@ public:
 
   [[nodiscard]] bool persistent_active() const;
   [[nodiscard]] PivotSnapSettings snap_settings() const { return snap_settings_; }
+  [[nodiscard]] std::uint64_t tool_settings_revision() const {
+    return tool_settings_revision_;
+  }
   [[nodiscard]] PivotHandleState handle_state() const;
   [[nodiscard]] SelectionPivotOverride selection_pivot_override() const;
   [[nodiscard]] std::uint64_t selection_pivot_revision() const {
@@ -117,6 +120,7 @@ private:
   mutable std::optional<PersistentSession> persistent_;
   QuickState quick_;
   std::uint64_t selection_pivot_revision_ = 0;
+  std::uint64_t tool_settings_revision_ = 0;
 };
 
 } // namespace quader

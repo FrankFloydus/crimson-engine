@@ -12,15 +12,19 @@
 #include "ui/qt_input_adapter.hpp"
 #include "ui/qt_viewport_surface.hpp"
 
+#include <QAbstractButton>
 #include <QAbstractItemView>
+#include <QAbstractSlider>
 #include <QAbstractSpinBox>
 #include <QApplication>
 #include <QComboBox>
 #include <QEvent>
 #include <QGuiApplication>
 #include <QKeyEvent>
+#include <QKeySequence>
 #include <QLineEdit>
 #include <QPlainTextEdit>
+#include <QTabBar>
 #include <QTextEdit>
 #include <QWidget>
 #include <QWindow>
@@ -94,6 +98,169 @@ bool is_primitive_finalize_command(const std::string &command_id) {
              quader_command::kToolsCancelPrimitiveCreation.string();
 }
 
+const QAbstractItemView *focused_item_view(const QWidget *focus_widget) {
+  if (focus_widget == nullptr) {
+    return nullptr;
+  }
+
+  // Delegate editors live below the viewport and own their own edit keys. A
+  // view itself (or its focus proxy viewport) owns the documented item-view
+  // navigation, selection, activation, and keyboard-search behavior.
+  for (const QWidget *current = focus_widget; current != nullptr;
+       current = current->parentWidget()) {
+    const auto *view = dynamic_cast<const QAbstractItemView *>(current);
+    if (view == nullptr) {
+      continue;
+    }
+    return focus_widget == view || focus_widget == view->viewport() ? view
+                                                                    : nullptr;
+  }
+  return nullptr;
+}
+
+bool item_view_owns_key_press(const QWidget *focus_widget,
+                             const QKeyEvent &event) {
+  const QAbstractItemView *view = focused_item_view(focus_widget);
+  if (view == nullptr) {
+    return false;
+  }
+
+  if (event.matches(QKeySequence::SelectAll)) {
+    return view->selectionMode() != QAbstractItemView::NoSelection;
+  }
+
+  Qt::KeyboardModifiers modifiers = event.modifiers();
+  modifiers.setFlag(Qt::KeypadModifier, false);
+  if (modifiers.testFlag(Qt::AltModifier) ||
+      modifiers.testFlag(Qt::MetaModifier)) {
+    return false;
+  }
+
+  switch (event.key()) {
+  case Qt::Key_Up:
+  case Qt::Key_Down:
+  case Qt::Key_Left:
+  case Qt::Key_Right:
+  case Qt::Key_Home:
+  case Qt::Key_End:
+  case Qt::Key_PageUp:
+  case Qt::Key_PageDown:
+    return true;
+  case Qt::Key_Tab:
+    return modifiers == Qt::NoModifier;
+  case Qt::Key_Backtab:
+    return modifiers == Qt::NoModifier ||
+           modifiers == Qt::ShiftModifier;
+  case Qt::Key_Return:
+  case Qt::Key_Enter:
+  case Qt::Key_F2:
+    return modifiers == Qt::NoModifier;
+  case Qt::Key_Space:
+    return true;
+  default:
+    break;
+  }
+
+  // QAbstractItemView uses unmodified text for its built-in keyboard search.
+  return !event.text().isEmpty() &&
+         !modifiers.testFlag(Qt::ControlModifier);
+}
+
+bool standard_control_owns_key_press(const QWidget *focus_widget,
+                                    const QKeyEvent &event) {
+  if (focus_widget == nullptr) {
+    return false;
+  }
+
+  Qt::KeyboardModifiers modifiers = event.modifiers();
+  modifiers.setFlag(Qt::KeypadModifier, false);
+
+  if ((event.key() == Qt::Key_Tab || event.key() == Qt::Key_Backtab) &&
+      (modifiers == Qt::NoModifier || modifiers == Qt::ShiftModifier)) {
+    return true;
+  }
+
+  if (dynamic_cast<const QTabBar *>(focus_widget) != nullptr &&
+      modifiers == Qt::NoModifier) {
+    switch (event.key()) {
+    case Qt::Key_Up:
+    case Qt::Key_Down:
+    case Qt::Key_Left:
+    case Qt::Key_Right:
+      return true;
+    default:
+      break;
+    }
+  }
+
+  if (const auto *combo = dynamic_cast<const QComboBox *>(focus_widget);
+      combo != nullptr && !combo->isEditable()) {
+    const bool unmodified = modifiers == Qt::NoModifier;
+    switch (event.key()) {
+    case Qt::Key_Up:
+    case Qt::Key_PageUp:
+    case Qt::Key_Home:
+    case Qt::Key_End:
+    case Qt::Key_F4:
+    case Qt::Key_Space:
+    case Qt::Key_Return:
+    case Qt::Key_Enter:
+      return unmodified;
+    case Qt::Key_Down:
+      return unmodified || modifiers == Qt::AltModifier;
+    case Qt::Key_PageDown:
+      return unmodified;
+    default:
+      return !event.text().isEmpty() &&
+             !modifiers.testFlag(Qt::ControlModifier) &&
+             !modifiers.testFlag(Qt::AltModifier) &&
+             !modifiers.testFlag(Qt::MetaModifier);
+    }
+  }
+
+  if (dynamic_cast<const QAbstractButton *>(focus_widget) != nullptr &&
+      modifiers == Qt::NoModifier) {
+    switch (event.key()) {
+    case Qt::Key_Space:
+    case Qt::Key_Return:
+    case Qt::Key_Enter:
+    case Qt::Key_Up:
+    case Qt::Key_Down:
+    case Qt::Key_Left:
+    case Qt::Key_Right:
+      return true;
+    default:
+      break;
+    }
+  }
+
+  if (dynamic_cast<const QAbstractSlider *>(focus_widget) != nullptr &&
+      !modifiers.testFlag(Qt::AltModifier) &&
+      !modifiers.testFlag(Qt::MetaModifier)) {
+    switch (event.key()) {
+    case Qt::Key_Up:
+    case Qt::Key_Down:
+    case Qt::Key_Left:
+    case Qt::Key_Right:
+    case Qt::Key_PageUp:
+    case Qt::Key_PageDown:
+    case Qt::Key_Home:
+    case Qt::Key_End:
+      return true;
+    default:
+      break;
+    }
+  }
+
+  return false;
+}
+
+bool focused_widget_owns_key_press(QWidget *focus_widget,
+                                  const QKeyEvent &event) {
+  return item_view_owns_key_press(focus_widget, event) ||
+         standard_control_owns_key_press(focus_widget, event);
+}
+
 } // namespace
 
 ViewportToolState
@@ -107,6 +274,17 @@ qt_command_dispatch_tool_state(const QtViewportToolStateProvider &provider,
 bool qt_application_command_input_owner_active(
     const QtApplicationCommandInputOwnerProvider &provider) {
   return provider && provider();
+}
+
+bool qt_window_owns_command_input(const QWidget *window) {
+  if (window == nullptr || !window->isVisible()) {
+    return false;
+  }
+
+  const QWidget *const focus_widget = QApplication::focusWidget();
+  return window->isActiveWindow() ||
+         (focus_widget != nullptr &&
+          (focus_widget == window || window->isAncestorOf(focus_widget)));
 }
 
 QtCommandEventFilter::QtCommandEventFilter(
@@ -138,6 +316,7 @@ bool QtCommandEventFilter::eventFilter(QObject *watched, QEvent *event) {
       reset_pending_chord();
       return QObject::eventFilter(watched, event);
     }
+    QWidget *const focus_widget = QApplication::focusWidget();
     if (qt_application_command_input_owner_active(
             command_input_owner_provider_)) {
       // Retained tool windows own their window-scoped document shortcuts.
@@ -158,7 +337,6 @@ bool QtCommandEventFilter::eventFilter(QObject *watched, QEvent *event) {
 
     const ViewportToolState state = qt_command_dispatch_tool_state(
         tool_state_provider_, editor_->viewports().grid_preset());
-    QWidget *const focus_widget = QApplication::focusWidget();
     const bool text_input_active = text_input_has_focus();
     const bool primitive_tool_settings_editor_active =
         is_primitive_tool(state.active_tool) &&
@@ -167,6 +345,10 @@ bool QtCommandEventFilter::eventFilter(QObject *watched, QEvent *event) {
     QuaderViewportKeybindingDispatch dispatch =
         editor_->commands().dispatch_viewport_input_binding(
             *chord, state, false, text_input_active);
+    bool explicit_tool_settings_dispatch =
+        primitive_tool_settings_editor_active &&
+        dispatch.kind == QuaderViewportKeybindingDispatch::Kind::Command &&
+        is_primitive_finalize_command(dispatch.command_id);
     if (dispatch.kind ==
             QuaderViewportKeybindingDispatch::Kind::NoMatch &&
         primitive_tool_settings_editor_active) {
@@ -184,6 +366,7 @@ bool QtCommandEventFilter::eventFilter(QObject *watched, QEvent *event) {
           spin->interpretText();
         }
         dispatch = std::move(tool_settings_dispatch);
+        explicit_tool_settings_dispatch = true;
       } else if (tool_settings_dispatch.kind ==
                      QuaderViewportKeybindingDispatch::Kind::ViewportShortcut &&
                  tool_settings_dispatch.shortcut.kind ==
@@ -196,10 +379,21 @@ bool QtCommandEventFilter::eventFilter(QObject *watched, QEvent *event) {
             .command_id = std::string(
                 quader_command::kToolsCancelPrimitiveCreation.string()),
         };
+        explicit_tool_settings_dispatch = true;
       } else if (tool_settings_dispatch.kind ==
                  QuaderViewportKeybindingDispatch::Kind::PendingChord) {
         editor_->commands().reset_pending_keybinding_chord();
       }
+    }
+
+    if (!explicit_tool_settings_dispatch &&
+        focused_widget_owns_key_press(
+            focus_widget, *static_cast<QKeyEvent *>(event))) {
+      // Preserve the documented key behavior of the focused Qt control,
+      // including item-view Ctrl+A, range navigation, activation, and
+      // keyboard search.
+      reset_pending_chord();
+      return QObject::eventFilter(watched, event);
     }
     switch (dispatch.kind) {
     case QuaderViewportKeybindingDispatch::Kind::PendingChord:

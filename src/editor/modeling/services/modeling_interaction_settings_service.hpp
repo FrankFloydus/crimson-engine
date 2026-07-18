@@ -9,6 +9,8 @@
 #include "editor/modeling/services/modeling_action_catalog.hpp"
 #include "editor/modeling/modeling_types.hpp"
 
+#include <cstdint>
+
 namespace quader {
 
 /**
@@ -19,6 +21,7 @@ public:
     ModelingInteractionSettingsService();
 
     [[nodiscard]] ModelingInteractionSettings settings() const;
+    [[nodiscard]] std::uint64_t revision() const { return revision_; }
     [[nodiscard]] ModelingInteractionSettings normalize(const ModelingInteractionSettings& settings) const;
     [[nodiscard]] bool set_normalized(ModelingInteractionSettings settings);
 
@@ -28,6 +31,7 @@ public:
 
   private:
     ModelingInteractionSettings settings_;
+    std::uint64_t revision_ = 0;
 };
 
 } // namespace quader

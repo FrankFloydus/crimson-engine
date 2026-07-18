@@ -711,7 +711,7 @@ function Add-PathPlan {
         Add-BuildTarget "quader_guardrail_tests" "UI source changed"
         Add-BuildTarget "quader_tests" "UI source changed"
         Add-GuardrailTestsFilter "BuildGuardrailTests.QtWidgetsRuntimeAndLicenseEvidenceAreConfigured:BuildGuardrailTests.ActiveAppAndUiUseQtWithoutSdlAdapters:BuildGuardrailTests.RuntimeUiUsesQtWidgetsWithFusionBaseline:UiLayoutGuardrailTests.*:AppLoopTests.*:ViewportOverlayPolicyTests.*:ViewportRendererTests.*" "UI source-policy guardrails"
-        Add-QuaderTestsFilter "UI*:Ui*:Console*:Localization*:QtInputAdapterTests.*:Viewport*" "UI shell and viewport tests"
+        Add-QuaderTestsFilter "UI*:Ui*:Console*:LayerPanelTests.*:Localization*:OutlinerPanelTests.*:Qt*:Viewport*" "UI shell, item-view, and viewport tests"
         return
     }
 

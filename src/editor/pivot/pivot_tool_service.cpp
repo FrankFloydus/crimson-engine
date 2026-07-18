@@ -1137,6 +1137,7 @@ PivotToolService::set_snap_enabled(std::string_view setting_id, bool enabled) {
     return command_unchanged_result();
   }
   *target = enabled;
+  ++tool_settings_revision_;
   return command_changed_result();
 }
 

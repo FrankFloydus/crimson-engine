@@ -30,9 +30,16 @@ qt_command_dispatch_tool_state(const QtViewportToolStateProvider &provider,
     const QtApplicationCommandInputOwnerProvider &provider);
 
 /**
+ * Returns whether a retained auxiliary window currently owns keyboard input.
+ * The focus-chain check covers platforms and headless tests where activation
+ * notification can lag behind QWidget focus delivery.
+ */
+[[nodiscard]] bool qt_window_owns_command_input(const QWidget *window);
+
+/**
  * Routes application-level Qt key presses through Quader's canonical command
  * and keybinding API. Viewport surfaces keep ownership of viewport-focused
- * input, while text editors retain their normal editing shortcuts.
+ * input, while focused Qt controls retain their standard key behavior.
  */
 class QtCommandEventFilter final : public QObject {
 public:

@@ -2148,6 +2148,11 @@ TEST(BuildGuardrailTests,
          "ModelingSdkParityTests.*"},
        {"--target quader_tests", "--target quader_modeling_sdk_consumer_tests",
         "quader_modeling_sdk_consumer_tests.exe"}},
+      {"src/ui/outliner_panel.cpp",
+       {"--target quader_guardrail_tests", "--target quader_tests",
+        "--target quader_ui", "UiLayoutGuardrailTests.*",
+        "LayerPanelTests.*", "OutlinerPanelTests.*", "Qt*"},
+       {"ctest --preset vs2026-debug"}},
       {"src/sdk/core/modeling/internal/mesh/polygon/"
        "document_validation.cpp",
        {"--target quader_modeling_domain_polygon_loop_tests",
@@ -2808,6 +2813,18 @@ TEST(BuildGuardrailTests, QtFrameRefreshKeepsExpensiveChromeEventDriven) {
   const std::string settings_show = source_slice(
       ui_system_source, "void UISystem::show_settings_dialog()",
       "} // namespace quader");
+  const std::string workspace_refresh = source_slice(
+      ui_system_source, "void UISystem::refresh_project_workspace(",
+      "void UISystem::show_home()");
+  const std::string show_home = source_slice(
+      ui_system_source, "void UISystem::show_home()",
+      "void UISystem::show_workspace()");
+  const std::string show_workspace = source_slice(
+      ui_system_source, "void UISystem::show_workspace()",
+      "QuaderDirtyProjectDecision");
+  const std::string status_refresh = source_slice(
+      ui_system_source, "void UISystem::refresh_status_bar()",
+      "void UISystem::present_lifecycle_result(");
 
   expect_contains(frame_refresh, "outliner_panel_->refresh(context)");
   expect_contains(frame_refresh, "layer_panel_->refresh(context)");
@@ -2823,9 +2840,89 @@ TEST(BuildGuardrailTests, QtFrameRefreshKeepsExpensiveChromeEventDriven) {
   expect_missing(frame_refresh, "editor_->revisions()");
   expect_contains(frame_refresh,
                   "!transform_drag_active && panel_visible(UIPanelId::Inspector)");
+  expect_contains(frame_refresh, "refresh_project_workspace(false)");
   expect_missing(frame_refresh, "settings_dialog_->refresh()");
   expect_missing(frame_refresh, "main_menu_->refresh()");
   expect_missing(frame_refresh, "viewport_panel_->refresh_workspace_layout()");
+  for (const std::string &broad_workspace_query :
+       {"recent_projects()", "open_scenes()", ".materials()",
+        ".active_material()", ".metadata()", ".material_preview("}) {
+    expect_missing(frame_refresh, broad_workspace_query);
+  }
+
+  const std::size_t instance_edit_revision =
+      workspace_refresh.find("instance_edit_revision()");
+  const std::size_t workspace_gate = workspace_refresh.find(
+      "project_workspace_refresh_signal_->exchange(");
+  ASSERT_NE(instance_edit_revision, std::string::npos);
+  ASSERT_NE(workspace_gate, std::string::npos);
+  EXPECT_LT(instance_edit_revision, workspace_gate);
+  for (std::string_view broad_workspace_query :
+       {"recent_projects()", "open_scenes()", ".materials()",
+        ".active_material()", ".metadata()", ".material_preview("}) {
+    const std::size_t query = workspace_refresh.find(broad_workspace_query);
+    ASSERT_NE(query, std::string::npos) << broad_workspace_query;
+    EXPECT_LT(workspace_gate, query) << broad_workspace_query;
+  }
+  expect_contains(ui_system_source, "bind_project_workspace_events(editor)");
+  expect_contains(ui_system_source,
+                  "project_workspace_refresh_signal_->store(true");
+  expect_contains(ui_system_source, "clear_project_workspace_events()");
+  expect_missing(workspace_refresh, "last_status_revision()");
+
+  const std::size_t home_unchanged =
+      show_home.find("if (home_visible_)");
+  const std::size_t home_setter = show_home.find("setCurrentWidget(");
+  ASSERT_NE(home_unchanged, std::string::npos);
+  ASSERT_NE(home_setter, std::string::npos);
+  EXPECT_LT(home_unchanged, home_setter);
+  const std::size_t workspace_unchanged =
+      show_workspace.find("if (!presentation_changed)");
+  const std::size_t workspace_setter =
+      show_workspace.find("setCurrentWidget(");
+  const std::size_t panel_settings =
+      show_workspace.find("panels_.apply_settings(settings_)");
+  ASSERT_NE(workspace_unchanged, std::string::npos);
+  ASSERT_NE(workspace_setter, std::string::npos);
+  ASSERT_NE(panel_settings, std::string::npos);
+  EXPECT_LT(workspace_unchanged, workspace_setter);
+  EXPECT_LT(workspace_unchanged, panel_settings);
+  const std::size_t viewport_initialize_failure =
+      show_workspace.find("Unable to initialize the native viewport surface");
+  const std::size_t viewport_initialize_retry = show_workspace.find(
+      "project_workspace_refresh_signal_->store(true",
+      viewport_initialize_failure);
+  ASSERT_NE(viewport_initialize_failure, std::string::npos);
+  ASSERT_NE(viewport_initialize_retry, std::string::npos);
+  EXPECT_LT(viewport_initialize_failure, viewport_initialize_retry);
+
+  const std::size_t status_revision =
+      status_refresh.find("last_status_revision()");
+  const std::size_t status_gate =
+      status_refresh.find("if (status_refresh_valid_");
+  const std::size_t status_copy = status_refresh.find("last_status()", 1u);
+  const std::size_t status_setter = status_refresh.find("setText(message)");
+  ASSERT_NE(status_revision, std::string::npos);
+  ASSERT_NE(status_gate, std::string::npos);
+  ASSERT_NE(status_copy, std::string::npos);
+  ASSERT_NE(status_setter, std::string::npos);
+  EXPECT_LT(status_revision, status_gate);
+  EXPECT_LT(status_gate, status_copy);
+  EXPECT_LT(status_gate, status_setter);
+
+  const std::size_t tool_settings_revision =
+      frame_refresh.find("active_settings_revision()");
+  const std::size_t tool_settings_gate =
+      frame_refresh.find("if (!tool_settings_refresh_valid_");
+  const std::size_t tool_settings_refresh =
+      frame_refresh.find("tool_settings_window_->refresh()",
+                         tool_settings_gate);
+  ASSERT_NE(tool_settings_revision, std::string::npos);
+  ASSERT_NE(tool_settings_gate, std::string::npos);
+  ASSERT_NE(tool_settings_refresh, std::string::npos);
+  EXPECT_LT(tool_settings_revision, tool_settings_gate);
+  EXPECT_LT(tool_settings_gate, tool_settings_refresh);
+  expect_missing(frame_refresh, "tools().active_settings()");
   expect_contains(main_menu_source, "&QMenu::aboutToShow");
   expect_contains(settings_show, "settings_dialog_->refresh()");
 }

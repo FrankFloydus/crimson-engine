@@ -705,6 +705,10 @@ TEST(QtProjectWorkspaceTests,
   auto *recent_view = home.findChild<QTableView *>(
       QStringLiteral("projectHome.recentProjects.view"));
   ASSERT_NE(recent_view, nullptr);
+  QTableView stock_table;
+  EXPECT_EQ(recent_view->selectionMode(),
+            QAbstractItemView::SingleSelection);
+  EXPECT_EQ(recent_view->editTriggers(), stock_table.editTriggers());
   EXPECT_TRUE(recent_view->model()->flags(
                   recent_view->model()->index(1, 0)) & Qt::ItemIsEnabled)
       << "missing projects must remain selectable so they can be removed";
@@ -736,6 +740,21 @@ TEST(QtProjectWorkspaceTests,
   remove_recent->click();
   EXPECT_EQ(removed_manifest,
             QStringLiteral("C:/Projects/Missing/Missing.qproj"));
+
+  removed_manifest.clear();
+  recent_view->selectionModel()->clearSelection();
+  QCoreApplication::processEvents();
+  ASSERT_TRUE(recent_view->currentIndex().isValid())
+      << "clearing a Qt selection must not be mistaken for clearing its "
+         "independent current index";
+  EXPECT_EQ(recent_view->currentIndex().row(), 1);
+  EXPECT_TRUE(recent_view->selectionModel()->selectedRows().isEmpty());
+  EXPECT_FALSE(remove_recent->isEnabled());
+
+  remove_recent->setEnabled(true);
+  remove_recent->click();
+  EXPECT_TRUE(removed_manifest.isEmpty())
+      << "the removal action must be a no-op without an actual selection";
 
   QWidget viewport;
   quader::QtSceneWorkspace workspace;

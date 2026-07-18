@@ -1933,6 +1933,10 @@ QuaderApiVoidResult QuaderModelingApi::exit_instance_edit() {
                                        "Exit Instance Edit");
 }
 
+std::uint64_t QuaderModelingApi::instance_edit_revision() const {
+  return scene_session(session_).instances().instance_edit_revision();
+}
+
 QuaderInstanceEditState QuaderModelingApi::instance_edit_state() const {
   const SceneSession &session = scene_session(session_);
   const SceneInstanceEditState state =

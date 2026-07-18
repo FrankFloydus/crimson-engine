@@ -11,6 +11,7 @@
 #include <spdlog/spdlog.h>
 
 #include <cstddef>
+#include <cstdint>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -47,6 +48,7 @@ public:
     static void initialize(LoggerConfig config = {});
     static void shutdown();
     static void clear_memory();
+    [[nodiscard]] static std::uint64_t memory_revision() noexcept;
     static std::vector<LogEntry> entries_snapshot();
     static std::shared_ptr<spdlog::logger> instance();
 

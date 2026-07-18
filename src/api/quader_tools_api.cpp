@@ -34,6 +34,22 @@
 namespace quader {
 namespace {
 
+/// Identifies the owner whose active tool-settings revision is exposed.
+enum class ActiveToolSettingsSourceKind : std::uint8_t {
+  Modeling,
+  Primitive,
+  RadialArray,
+  LinearArray,
+  Pivot,
+};
+
+/// Couples a settings owner identity with its monotonic presentation revision.
+struct ActiveToolSettingsSource {
+  const void *identity = nullptr;
+  std::uint64_t revision = 0;
+  ActiveToolSettingsSourceKind kind = ActiveToolSettingsSourceKind::Modeling;
+};
+
 SceneSession &scene_session(QuaderApiSession session) {
   return QuaderApiSessionInternalAccess::scene_session(session);
 }
@@ -47,6 +63,49 @@ MaterialReference active_project_material(QuaderApiSession session) {
   const std::optional<ProjectAssetId> id = project->active_material_id();
   return id.has_value() ? MaterialReference::project(*id)
                         : MaterialReference{};
+}
+
+ActiveToolSettingsSource
+active_tool_settings_source(const SceneSession &session) {
+  const PrimitiveCreationToolService &primitive =
+      session.primitive_creation();
+  if (primitive.active()) {
+    return {
+        .identity = &primitive,
+        .revision = primitive.tool_settings_revision(),
+        .kind = ActiveToolSettingsSourceKind::Primitive,
+    };
+  }
+  const RadialArrayToolService &radial_array = session.radial_array();
+  if (radial_array.active()) {
+    return {
+        .identity = &radial_array,
+        .revision = radial_array.tool_settings_revision(),
+        .kind = ActiveToolSettingsSourceKind::RadialArray,
+    };
+  }
+  const LinearArrayToolService &linear_array = session.linear_array();
+  if (linear_array.active()) {
+    return {
+        .identity = &linear_array,
+        .revision = linear_array.tool_settings_revision(),
+        .kind = ActiveToolSettingsSourceKind::LinearArray,
+    };
+  }
+  const PivotToolService &pivot = session.pivot();
+  if (pivot.persistent_active()) {
+    return {
+        .identity = &pivot,
+        .revision = pivot.tool_settings_revision(),
+        .kind = ActiveToolSettingsSourceKind::Pivot,
+    };
+  }
+  const ModelingSessionService &modeling = session.modeling();
+  return {
+      .identity = &modeling,
+      .revision = modeling.tool_settings_revision(),
+      .kind = ActiveToolSettingsSourceKind::Modeling,
+  };
 }
 
 CommandResult runtime_tool_activation_preflight(
@@ -557,6 +616,11 @@ void QuaderToolsApi::set_runtime_hooks(QuaderToolsRuntimeHooks hooks) {
   hooks_ = std::move(hooks);
 }
 
+void QuaderToolsApi::rebind_session(QuaderApiSession session) {
+  session_ = session;
+  active_settings_source_valid_ = false;
+}
+
 QuaderApiVoidResult QuaderToolsApi::activate(std::string_view tool_id) {
   if (hooks_.activate) {
     return hooks_.activate(tool_id);
@@ -638,6 +702,23 @@ QuaderToolSettingsTarget QuaderToolsApi::active_settings() const {
   const ModelingSessionService &modeling = session.modeling();
   return modeling_tool_settings_target(modeling.tool_settings_target(),
                                        modeling.interaction_settings());
+}
+
+std::uint64_t QuaderToolsApi::active_settings_revision() const {
+  const ActiveToolSettingsSource source =
+      active_tool_settings_source(scene_session(session_));
+  const std::uint8_t source_kind = static_cast<std::uint8_t>(source.kind);
+  if (!active_settings_source_valid_ ||
+      active_settings_source_identity_ != source.identity ||
+      active_settings_source_revision_ != source.revision ||
+      active_settings_source_kind_ != source_kind) {
+    active_settings_source_identity_ = source.identity;
+    active_settings_source_revision_ = source.revision;
+    active_settings_source_kind_ = source_kind;
+    active_settings_source_valid_ = true;
+    ++active_settings_revision_;
+  }
+  return active_settings_revision_;
 }
 
 QuaderApiVoidResult QuaderToolsApi::set_setting(std::string_view tool_id,

@@ -12,11 +12,13 @@
 #include <QHBoxLayout>
 #include <QImage>
 #include <QItemSelectionModel>
+#include <QKeyEvent>
 #include <QLabel>
 #include <QLineEdit>
 #include <QListView>
 #include <QLocale>
 #include <QPixmap>
+#include <QScopedValueRollback>
 #include <QShowEvent>
 #include <QSignalBlocker>
 #include <QSlider>
@@ -38,6 +40,29 @@ constexpr int kDefaultTileSize = 128;
 constexpr int kTileSizeStep = 16;
 constexpr int kGridLabelHeight = 34;
 constexpr int kGridSpacing = 8;
+
+/// Distinguishes Qt's keyboard activation from platform-dependent mouse
+/// activation so a mouse click cannot dispatch the same intent twice.
+template <typename View> class KeyboardActivationView final : public View {
+public:
+  using View::View;
+
+  [[nodiscard]] bool keyboard_activation_in_progress() const noexcept {
+    return keyboard_activation_in_progress_;
+  }
+
+protected:
+  void keyPressEvent(QKeyEvent *event) override {
+    const bool activation_key =
+        event->key() == Qt::Key_Return || event->key() == Qt::Key_Enter;
+    const QScopedValueRollback<bool> guard(keyboard_activation_in_progress_,
+                                           activation_key);
+    View::keyPressEvent(event);
+  }
+
+private:
+  bool keyboard_activation_in_progress_ = false;
+};
 
 QString normalized_search_text(QString text) {
   return text.trimmed().toCaseFolded();
@@ -287,7 +312,9 @@ QtMaterialBrowserWindow::QtMaterialBrowserWindow(QWidget *parent)
 
   content_stack_ = new QStackedWidget(this);
   content_stack_->setObjectName(QStringLiteral("materialBrowser.content"));
-  grid_view_ = new QListView(content_stack_);
+  auto *keyboard_grid =
+      new KeyboardActivationView<QListView>(content_stack_);
+  grid_view_ = keyboard_grid;
   grid_view_->setObjectName(QStringLiteral("materialBrowser.gridView"));
   grid_view_->setModel(proxy_);
   grid_view_->setSelectionModel(selection);
@@ -301,7 +328,9 @@ QtMaterialBrowserWindow::QtMaterialBrowserWindow(QWidget *parent)
   grid_view_->setSelectionMode(QAbstractItemView::SingleSelection);
   content_stack_->addWidget(grid_view_);
 
-  list_view_ = new QTableView(content_stack_);
+  auto *keyboard_list =
+      new KeyboardActivationView<QTableView>(content_stack_);
+  list_view_ = keyboard_list;
   list_view_->setObjectName(QStringLiteral("materialBrowser.listView"));
   list_view_->setModel(proxy_);
   list_view_->setSelectionModel(selection);
@@ -349,6 +378,18 @@ QtMaterialBrowserWindow::QtMaterialBrowserWindow(QWidget *parent)
                    [this](const QModelIndex &index) { activate_index(index); });
   QObject::connect(list_view_, &QTableView::clicked, this,
                    [this](const QModelIndex &index) { activate_index(index); });
+  QObject::connect(grid_view_, &QListView::activated, this,
+                   [this, keyboard_grid](const QModelIndex &index) {
+                     if (keyboard_grid->keyboard_activation_in_progress()) {
+                       activate_index(index);
+                     }
+                   });
+  QObject::connect(list_view_, &QTableView::activated, this,
+                   [this, keyboard_list](const QModelIndex &index) {
+                     if (keyboard_list->keyboard_activation_in_progress()) {
+                       activate_index(index);
+                     }
+                   });
   QObject::connect(grid_view_, &QListView::doubleClicked, this,
                    [this](const QModelIndex &index) { open_index(index); });
   QObject::connect(list_view_, &QTableView::doubleClicked, this,

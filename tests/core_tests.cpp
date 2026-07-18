@@ -817,6 +817,25 @@ TEST(LoggerTests, RoutesMessagesToMemorySink) {
   EXPECT_NE(entries.back().message.find("hello quader"), std::string::npos);
 }
 
+TEST(LoggerTests, MemoryRevisionChangesOnlyWhenMemoryContentsCanChange) {
+  Logger::initialize(LoggerConfig{.name = "revision-test",
+                                  .file_path = "",
+                                  .max_entries = 16});
+  const std::uint64_t initialized = Logger::memory_revision();
+  (void)Logger::entries_snapshot();
+  EXPECT_EQ(Logger::memory_revision(), initialized)
+      << "read-only snapshots must keep the cheap UI gate stable";
+
+  LOG_INFO("revision entry");
+  const std::uint64_t logged = Logger::memory_revision();
+  EXPECT_GT(logged, initialized);
+  (void)Logger::entries_snapshot();
+  EXPECT_EQ(Logger::memory_revision(), logged);
+
+  Logger::clear_memory();
+  EXPECT_GT(Logger::memory_revision(), logged);
+}
+
 TEST(LoggerTests, ConcurrentLifecycleAndSnapshotsKeepOwnedStateAlive) {
   const LoggerConfig config{
       .name = "logger-concurrency-test",
@@ -10487,6 +10506,9 @@ TEST(ModelingSessionServiceTests,
   SceneDocument scene;
   AssetRegistry assets;
   ModelingSessionService service(scene, assets);
+  const std::uint64_t initial_settings_revision =
+      service.tool_settings_revision();
+  EXPECT_EQ(service.tool_settings_revision(), initial_settings_revision);
 
   const ModelingCreateBoxResult box = service.create_box_from_bounds({
       .bounds = {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
@@ -10499,6 +10521,10 @@ TEST(ModelingSessionServiceTests,
   const ModelingCommandResult begin =
       service.execute_context_action("bevel_edges");
   ASSERT_TRUE(begin.ok) << begin.message;
+  const std::uint64_t preview_settings_revision =
+      service.tool_settings_revision();
+  EXPECT_GT(preview_settings_revision, initial_settings_revision);
+  EXPECT_EQ(service.tool_settings_revision(), preview_settings_revision);
 
   ModelingToolSettingsTarget target = service.tool_settings_target();
   EXPECT_TRUE(target.active);
@@ -10518,6 +10544,9 @@ TEST(ModelingSessionServiceTests,
       service.set_interaction_settings(settings);
   EXPECT_TRUE(update.ok) << update.message;
   EXPECT_TRUE(update.changed);
+  const std::uint64_t updated_settings_revision =
+      service.tool_settings_revision();
+  EXPECT_GT(updated_settings_revision, preview_settings_revision);
 
   const std::optional<MeshAsset> preview_after =
       service.compile_object_mesh(box.object.modeling_object_id);
@@ -10529,6 +10558,7 @@ TEST(ModelingSessionServiceTests,
       service.cancel_active_operation_preview();
   EXPECT_TRUE(cancel.ok) << cancel.message;
   EXPECT_FALSE(service.tool_settings_target().active);
+  EXPECT_GT(service.tool_settings_revision(), updated_settings_revision);
 }
 
 TEST(ModelingSessionServiceTests,

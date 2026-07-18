@@ -104,6 +104,9 @@ public:
   [[nodiscard]] bool owns_created_object(int modeling_object_id) const;
   [[nodiscard]] std::optional<PrimitiveCreationKind> active_kind() const;
   [[nodiscard]] std::string_view active_tool_id() const;
+  [[nodiscard]] std::uint64_t tool_settings_revision() const {
+    return tool_settings_revision_;
+  }
 
   [[nodiscard]] const BoxPrimitiveCreationSettings &box_settings() const {
     return box_settings_;
@@ -159,6 +162,7 @@ private:
   PrimitiveCreationKind preferred_kind_ = PrimitiveCreationKind::Box;
   std::optional<Session> session_;
   std::optional<LivePrimitive> live_primitive_;
+  std::uint64_t tool_settings_revision_ = 0;
 };
 
 } // namespace quader

@@ -96,6 +96,9 @@ public:
   [[nodiscard]] bool active() const;
   [[nodiscard]] bool has_session() const { return session_.has_value(); }
   [[nodiscard]] bool can_activate() const;
+  [[nodiscard]] std::uint64_t tool_settings_revision() const {
+    return revision_counter_;
+  }
   [[nodiscard]] std::uint32_t count() const;
   [[nodiscard]] std::uint32_t maximum_count() const;
   [[nodiscard]] LinearArrayHandleState handle_state() const;

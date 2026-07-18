@@ -5591,3 +5591,25 @@ Verification: all six `vs2026-debug` CTest entries pass (244 guardrails and 1,22
 native v0.1.59 executable builds, and the Vulkan/Fusion boot smoke passes. Two Release fixed-host
 samples preserve every Phase 2 checksum and all retained reuse paths; the bounded SDK box-preview
 cold-generation increase is accepted because it is outside unchanged frame work.
+
+## 2026-07-18 - Qt Defaults Own Widget Interaction
+
+Invariant:
+
+- Qt model/view current state and selection are independent. Item-view actions consume the actual
+  selection, while blank clicks, Shift/Ctrl ranges, drag selection, keyboard navigation,
+  activation, editing, type search, and context-menu delivery remain owned by Qt.
+- Configure selection cardinality, models, delegates, focus proxies, and edit triggers instead of
+  replacing Qt gestures with panel event filters or parallel state machines. An override is valid
+  only for explicit Quader behavior and must preserve the base path. The outliner's narrow range-
+  anchor reset exists only after programmatic owner selection synchronization; a complete native
+  drag gesture is coalesced into one owner/history commit.
+- The application command filter yields documented control keys and auxiliary-window input to the
+  focused Qt widget. Retained UI synchronization gates broad queries, formatting, and setters on
+  owner revisions or explicit events before doing work.
+
+Owners: `OutlinerPanel`, `LayerPanel`, Qt settings/home/material/inspector/console surfaces,
+`QtCommandEventFilter`, `UISystem`, public tool/modeling/command revision APIs, and UI guardrails.
+
+Verification: focused native Qt interaction tests, the complete affected guardrail/application/
+modeling-domain workflow, full CTest, and the final native v0.1.66 build.

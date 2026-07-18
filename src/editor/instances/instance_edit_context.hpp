@@ -8,6 +8,8 @@
 
 #include "core/types.hpp"
 
+#include <cstdint>
+
 namespace quader {
 
 /**
@@ -18,17 +20,32 @@ namespace quader {
  * editable member hierarchy.
  */
 struct InstanceEditContext final {
-  EntityId occurrence = kInvalidEntityId;
-  EntityId definition = kInvalidEntityId;
-
   [[nodiscard]] bool active() const {
-    return occurrence != kInvalidEntityId && definition != kInvalidEntityId;
+    return occurrence_ != kInvalidEntityId && definition_ != kInvalidEntityId;
+  }
+
+  [[nodiscard]] EntityId occurrence() const { return occurrence_; }
+  [[nodiscard]] EntityId definition() const { return definition_; }
+  /** Advances only when the effective transient edit scope changes. */
+  [[nodiscard]] std::uint64_t revision() const { return revision_; }
+
+  void set(EntityId next_occurrence, EntityId next_definition) {
+    if (occurrence_ == next_occurrence && definition_ == next_definition) {
+      return;
+    }
+    occurrence_ = next_occurrence;
+    definition_ = next_definition;
+    ++revision_;
   }
 
   void clear() {
-    occurrence = kInvalidEntityId;
-    definition = kInvalidEntityId;
+    set(kInvalidEntityId, kInvalidEntityId);
   }
+
+private:
+  EntityId occurrence_ = kInvalidEntityId;
+  EntityId definition_ = kInvalidEntityId;
+  std::uint64_t revision_ = 0;
 };
 
 } // namespace quader

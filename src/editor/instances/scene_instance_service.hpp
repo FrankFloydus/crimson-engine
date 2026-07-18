@@ -595,8 +595,7 @@ public:
     }
     const InstanceOccurrenceComponent *component =
         scene_.instance_occurrence(occurrence);
-    edit_context_.occurrence = occurrence;
-    edit_context_.definition = component->definition;
+    edit_context_.set(occurrence, component->definition);
     (void)apply_scene_selection(
         scene_, SceneSelectionState{}, SceneSelectionApplicationMode::RuntimeSync);
     modeling_.project_object_selection_from_scene(true);
@@ -627,8 +626,8 @@ public:
                          ? "Instance edit could not return to Object mode."
                          : object_mode.message);
     }
-    const EntityId occurrence = edit_context_.occurrence;
-    const EntityId definition = edit_context_.definition;
+    const EntityId occurrence = edit_context_.occurrence();
+    const EntityId definition = edit_context_.definition();
     edit_context_.clear();
     (void)apply_scene_selection(
         scene_, make_scene_selection(scene_, std::span<const EntityId>{&occurrence,
@@ -649,8 +648,8 @@ public:
     sanitize_edit_context();
     SceneInstanceEditState state;
     state.active = edit_context_.active();
-    state.occurrence = edit_context_.occurrence;
-    state.definition = edit_context_.definition;
+    state.occurrence = edit_context_.occurrence();
+    state.definition = edit_context_.definition();
     state.scene_name = scene_name_;
     if (state.active) {
       if (const NameComponent *name = scene_.name(state.occurrence)) {
@@ -660,17 +659,22 @@ public:
     return state;
   }
 
+  [[nodiscard]] std::uint64_t instance_edit_revision() const {
+    sanitize_edit_context();
+    return edit_context_.revision();
+  }
+
   [[nodiscard]] bool is_active_definition(EntityId definition) const {
     sanitize_edit_context();
-    return edit_context_.active() && edit_context_.definition == definition;
+    return edit_context_.active() && edit_context_.definition() == definition;
   }
 
   [[nodiscard]] bool is_in_active_definition_scope(EntityId entity) const {
     sanitize_edit_context();
     return edit_context_.active() &&
            scene_.containing_instance_definition(entity) ==
-               edit_context_.definition &&
-           entity != edit_context_.definition;
+               edit_context_.definition() &&
+           entity != edit_context_.definition();
   }
 
   [[nodiscard]] bool is_selectable_in_current_scope(EntityId entity) const {
@@ -731,8 +735,8 @@ public:
     }
     sanitize_edit_context();
     if (occurrence == kInvalidEntityId && edit_context_.active() &&
-        edit_context_.definition == definition) {
-      occurrence = edit_context_.occurrence;
+        edit_context_.definition() == definition) {
+      occurrence = edit_context_.occurrence();
     }
     if (!valid_occurrence(occurrence)) {
       return std::nullopt;
@@ -761,12 +765,12 @@ public:
     }
     const std::optional<QMat4> inverse_definition =
         try_scene_matrix_inverse(
-            scene_.world_transform_matrix(edit_context_.definition));
+            scene_.world_transform_matrix(edit_context_.definition()));
     if (!inverse_definition.has_value()) {
       return std::nullopt;
     }
     return scene_transform_multiply(
-        scene_.world_transform_matrix(edit_context_.occurrence),
+        scene_.world_transform_matrix(edit_context_.occurrence()),
         *inverse_definition);
   }
 
@@ -939,12 +943,12 @@ private:
       edit_context_.clear();
       return;
     }
-    const EntityId occurrence_id = edit_context_.occurrence;
+    const EntityId occurrence_id = edit_context_.occurrence();
     bool valid = valid_occurrence(occurrence_id);
     const InstanceOccurrenceComponent *occurrence =
         valid ? scene_.instance_occurrence(occurrence_id) : nullptr;
     valid = valid && occurrence != nullptr &&
-            occurrence->definition == edit_context_.definition;
+            occurrence->definition == edit_context_.definition();
     if (valid) {
       return;
     }

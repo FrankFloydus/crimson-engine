@@ -11,6 +11,7 @@
 #include "api/quader_keybinding_types.hpp"
 #include "api/quader_viewport_input_types.hpp"
 
+#include <cstdint>
 #include <filesystem>
 #include <memory>
 #include <optional>
@@ -100,6 +101,7 @@ public:
     QuaderApiVoidResult execute(std::string_view command_id);
     QuaderApiVoidResult execute(QuaderCommandId command_id);
     [[nodiscard]] std::optional<QuaderApiStatus> last_status() const;
+    [[nodiscard]] std::uint64_t last_status_revision() const;
     [[nodiscard]] std::optional<QuaderCommandDescriptor>
     descriptor(std::string_view command_id) const;
     [[nodiscard]] std::optional<QuaderCommandDescriptor>

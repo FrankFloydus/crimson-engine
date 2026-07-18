@@ -1973,7 +1973,12 @@ TEST(ModelingSessionServiceSplitTests, ServicesOwnIndependentModelingState) {
   EXPECT_FALSE(object_extrude.scene_transform_preview_eligible);
 
   ModelingToolSettingsService tool_settings;
+  EXPECT_EQ(tool_settings.revision(), 0u);
   tool_settings.set_preview_metadata("edge_bevel", "edge_bevel", "Edge Bevel");
+  const std::uint64_t metadata_revision = tool_settings.revision();
+  EXPECT_GT(metadata_revision, 0u);
+  tool_settings.set_preview_metadata("edge_bevel", "edge_bevel", "Edge Bevel");
+  EXPECT_EQ(tool_settings.revision(), metadata_revision);
   const ModelingToolSettingsTarget target =
       tool_settings.operation_preview_target(
           ModelingToolSettingsTargetKind::EdgeBevel, "Fallback",
@@ -1984,6 +1989,10 @@ TEST(ModelingSessionServiceSplitTests, ServicesOwnIndependentModelingState) {
   EXPECT_EQ(target.operation_id, "edge_bevel");
   EXPECT_EQ(target.label, "Edge Bevel");
   tool_settings.clear_preview_metadata();
+  EXPECT_GT(tool_settings.revision(), metadata_revision);
+  const std::uint64_t cleared_metadata_revision = tool_settings.revision();
+  tool_settings.clear_preview_metadata();
+  EXPECT_EQ(tool_settings.revision(), cleared_metadata_revision);
   const ModelingToolSettingsTarget fallback =
       tool_settings.operation_preview_target(
           ModelingToolSettingsTargetKind::Thicken, "Thicken", "thicken");
@@ -2007,12 +2016,18 @@ TEST(ModelingSessionServiceSplitTests, ServicesOwnIndependentModelingState) {
   EXPECT_EQ(runtime_target.label, "Cut");
 
   ModelingInteractionSettingsService interaction_settings;
+  EXPECT_EQ(interaction_settings.revision(), 0u);
   EXPECT_EQ(interaction_settings.settings().cut_mode,
             ModelingCutMode::KeepBoth);
   interaction_settings.set_cut_mode(ModelingCutMode::DiscardLeft);
+  const std::uint64_t cut_mode_revision = interaction_settings.revision();
+  EXPECT_GT(cut_mode_revision, 0u);
+  interaction_settings.set_cut_mode(ModelingCutMode::DiscardLeft);
+  EXPECT_EQ(interaction_settings.revision(), cut_mode_revision);
   EXPECT_EQ(interaction_settings.settings().cut_mode,
             ModelingCutMode::DiscardLeft);
   interaction_settings.cycle_cut_mode_without_runtime();
+  EXPECT_GT(interaction_settings.revision(), cut_mode_revision);
   EXPECT_EQ(interaction_settings.settings().cut_mode,
             ModelingCutMode::DiscardRight);
 }

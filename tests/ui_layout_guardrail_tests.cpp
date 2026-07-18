@@ -465,15 +465,25 @@ TEST(UiLayoutGuardrailTests,
   expect_contains(outliner, "QStringLiteral(\"outliner.tree\")");
   expect_contains(outliner, "QStringLiteral(\"outliner.model\")");
   expect_contains(outliner, "QStringLiteral(\"outliner.context_menu\")");
-  expect_contains(outliner, "tree_->setHeaderHidden(false)");
   expect_contains(outliner, "tree_->setAlternatingRowColors(true)");
+  expect_contains(outliner, "QAbstractItemView::ExtendedSelection");
+  expect_contains(outliner, "QAbstractItemView::SelectRows");
+  expect_contains(outliner, "selectionModel()->selectedRows(");
+  expect_contains(outliner, "QItemSelectionModel::NoUpdate");
+  expect_contains(outliner, "cache_.document != document_");
+  expect_contains(outliner, "collapsed_entities_.clear()");
+  expect_contains(outliner, "document_->content_revision()");
+  expect_contains(outliner, "panel_.setFocusProxy(tree_)");
+  expect_missing(outliner, "QAbstractItemView::NoSelection");
+  expect_missing(outliner, "entity_range_selection(");
+  expect_missing(outliner, "outliner_anchor_");
+  expect_missing(outliner, "row_press_handler");
+  expect_missing(outliner, "property_toggle_handler");
+  expect_missing(outliner, "tree_->setCurrentIndex(");
   expect_contains(outliner,
                   "header->setSectionResizeMode(column_index(OutlinerColumn::Name),");
   expect_contains(outliner, "QHeaderView::Stretch");
   EXPECT_EQ(count_occurrences(outliner, "QHeaderView::ResizeToContents"), 2u);
-  expect_contains(outliner,
-                  "QAbstractItemView::SelectedClicked |\n"
-                  "                           QAbstractItemView::EditKeyPressed");
   expect_contains(outliner, "Qt::PartiallyChecked");
   expect_contains(outliner, "editor_->scene().rename(");
   expect_contains(outliner, "editor_->scene().set_visible(");
@@ -495,6 +505,9 @@ TEST(UiLayoutGuardrailTests,
   expect_contains(inspector, "ui_panel_stable_id(UIPanelId::Inspector)");
   expect_contains(inspector, "QStringLiteral(\"inspector.\")");
   expect_contains(inspector, "QStringLiteral(\"inspector.tree\")");
+  expect_contains(inspector, "panel_.setFocusProxy(tree_)");
+  expect_contains(inspector, "event->reason() == Qt::TabFocusReason");
+  expect_missing(inspector, "event->reason() == Qt::MouseFocusReason");
   expect_contains(inspector, "editor_->scene().set_scene_settings(");
   expect_contains(inspector, "editor_->scene().set_light_component(");
   expect_contains(inspector,
@@ -515,9 +528,9 @@ TEST(UiLayoutGuardrailTests,
   expect_contains(layer, "QStringLiteral(\"layers.model\")");
   expect_contains(layer, "QStringLiteral(\"layers.context_menu\")");
   expect_contains(layer, "QAbstractItemView::ExtendedSelection");
-  expect_contains(layer,
-                  "QAbstractItemView::DoubleClicked |\n"
-                  "                           QAbstractItemView::EditKeyPressed");
+  expect_contains(layer, "panel_.setFocusProxy(tree_)");
+  expect_missing(layer, "visibility_toggle_handler");
+  expect_missing(layer, "lock_toggle_handler");
   expect_contains(layer, "new QtColorSwatchButton");
   expect_contains(layer, "Color = 0");
   expect_contains(layer, "Name = 1");
@@ -546,7 +559,20 @@ TEST(UiLayoutGuardrailTests,
   expect_contains(console, "ui_panel_stable_id(UIPanelId::Console)");
   expect_contains(console, "QStringLiteral(\"console.search\")");
   expect_contains(console, "QStringLiteral(\"console.entries\")");
+  expect_contains(console, "panel_.setFocusProxy(search_edit_)");
   expect_contains(console, "QStringLiteral(\"console.entries.model\")");
+  expect_contains(console, "item->setEditable(false)");
+  expect_missing(console, "entries_view_->setSelectionMode(");
+  expect_missing(console, "entries_view_->setEditTriggers(");
+  const std::size_t revision_gate =
+      console.find("const std::uint64_t revision = Logger::memory_revision()");
+  const std::size_t snapshot =
+      console.find("Logger::entries_snapshot()", revision_gate);
+  ASSERT_NE(revision_gate, std::string::npos);
+  ASSERT_NE(snapshot, std::string::npos);
+  EXPECT_LT(revision_gate, snapshot);
+  expect_contains(console,
+                  "source_revision_valid_ && source_revision_ == revision");
 }
 
 TEST(UiLayoutGuardrailTests,
@@ -570,7 +596,7 @@ TEST(UiLayoutGuardrailTests,
   expect_contains(outliner, "document_->selection_revision()");
   expect_contains(outliner, "outliner_selection_sync_required(");
   expect_contains(outliner, "row_is_revealed(");
-  expect_contains(outliner, "document_->primary_selection())");
+  expect_contains(outliner, "document_->primary_selection()");
 }
 
 TEST(UiLayoutGuardrailTests,
@@ -875,11 +901,11 @@ TEST(UiLayoutGuardrailTests,
   expect_contains(dialog, "new QtKeybindingTableView(page)");
   expect_contains(dialog, "setAlternatingRowColors(true)");
   expect_contains(dialog,
-                  "setEditTriggers(QAbstractItemView::NoEditTriggers)");
-  expect_contains(dialog,
                   "setSelectionBehavior(QAbstractItemView::SelectRows)");
-  expect_contains(dialog,
-                  "setSelectionMode(QAbstractItemView::SingleSelection)");
+  expect_missing(dialog, "keybindings_table->setEditTriggers(");
+  expect_contains(
+      dialog,
+      "keybindings_table->setSelectionMode(QAbstractItemView::SingleSelection)");
   expect_contains(dialog, "setDefaultSectionSize(20)");
   expect_contains(dialog,
                   "header->setSectionResizeMode(QHeaderView::Interactive)");
@@ -1207,6 +1233,12 @@ TEST(UiLayoutGuardrailTests,
   expect_contains(ui_system,
                   "command_id_for_tool_activation(tool_id)");
   expect_contains(ui_system, "commands().execute(command_id)");
+  expect_contains(
+      ui_system,
+      "tool_toolbar_->synchronize(*editor_, selection,\n"
+      "                                   owner_state_changed)");
+  expect_contains(ui_system,
+                  "toolbar_owner_available_ != owner_available");
   expect_contains(toolbar, "editor.tools().active_tool()");
   expect_contains(toolbar,
                   "command_id_for_tool_activation(entry.tool_id)");
@@ -2177,7 +2209,7 @@ TEST(UiLayoutGuardrailTests,
 }
 
 TEST(UiLayoutGuardrailTests,
-     QtApplicationCommandsYieldToFocusedStandardMaterialEditor) {
+     QtApplicationCommandsYieldToFocusedAuxiliaryWindows) {
   const std::string filter_header =
       read_source_file("src/ui/qt_command_event_filter.hpp");
   const std::string filter =
@@ -2185,9 +2217,17 @@ TEST(UiLayoutGuardrailTests,
   const std::string ui_system = read_source_file("src/ui/ui_system.cpp");
 
   expect_contains(filter_header, "QtApplicationCommandInputOwnerProvider");
+  expect_contains(filter_header, "qt_window_owns_command_input(");
   expect_contains(filter, "qt_application_command_input_owner_active(");
   expect_contains(ui_system,
-                  "standard_material_editor_window_->isActiveWindow()");
+                  "qt_window_owns_command_input(settings_dialog_)");
+  expect_contains(ui_system,
+                  "qt_window_owns_command_input(material_browser_window_)");
+  expect_contains(
+      ui_system,
+      "qt_window_owns_command_input(standard_material_editor_window_)");
+  expect_missing(ui_system,
+                 "qt_window_owns_command_input(tool_settings_window_)");
 
   const std::size_t ownership_check =
       filter.find("if (qt_application_command_input_owner_active(");

@@ -30,6 +30,7 @@
 #include <QToolButton>
 #include <QWheelEvent>
 
+#include <algorithm>
 #include <array>
 #include <utility>
 #include <vector>
@@ -316,6 +317,13 @@ TEST(QtStandardMaterialEditorWindowTests,
               expected_browse_icon);
     EXPECT_EQ(clear->icon().pixmap(QSize(16, 16)).toImage(),
               expected_clear_icon);
+
+    const QList<QLabel *> labels = window->findChildren<QLabel *>();
+    const auto buddy_label = std::find_if(
+        labels.cbegin(), labels.cend(),
+        [browse](const QLabel *label) { return label->buddy() == browse; });
+    ASSERT_NE(buddy_label, labels.cend())
+        << "each texture label must focus its actionable Browse control";
   }
   normal_browse->click();
   metallic_clear->click();

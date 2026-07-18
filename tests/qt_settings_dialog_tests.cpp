@@ -10,6 +10,7 @@
 #include "api/quader_editor_api.hpp"
 #include "core/localization_service.hpp"
 #include "editor/session/scene_session.hpp"
+#include "editor/modeling/services/modeling_session_service.hpp"
 #include "ui/inspector_panel.hpp"
 #include "ui/qt_color_swatch_button.hpp"
 #include "ui/qt_main_menu.hpp"
@@ -32,6 +33,7 @@
 #include <QEventLoop>
 #include <QFocusEvent>
 #include <QHeaderView>
+#include <QItemSelectionModel>
 #include <QKeyEvent>
 #include <QLabel>
 #include <QLineEdit>
@@ -46,6 +48,7 @@
 #include <QStringList>
 #include <QTableView>
 #include <QTimer>
+#include <QTreeView>
 #include <QWheelEvent>
 
 #include <algorithm>
@@ -776,7 +779,8 @@ TEST(QtSettingsDialogTests,
   ASSERT_NE(keybindings_category, nullptr);
   EXPECT_EQ(keybindings_category->text(), QStringLiteral("Keybindings"));
   EXPECT_TRUE(table->alternatingRowColors());
-  EXPECT_EQ(table->editTriggers(), QAbstractItemView::NoEditTriggers);
+  QTableView stock_table;
+  EXPECT_EQ(table->editTriggers(), stock_table.editTriggers());
   EXPECT_EQ(table->selectionBehavior(), QAbstractItemView::SelectRows);
   EXPECT_EQ(table->selectionMode(), QAbstractItemView::SingleSelection);
   EXPECT_LE(table->verticalHeader()->defaultSectionSize(), 20);
@@ -886,6 +890,116 @@ TEST(QtSettingsDialogTests,
     }
     return -1;
   };
+
+  const QString undo_target = QString::fromUtf8(
+      quader_command::kEditUndo.string().data(),
+      static_cast<qsizetype>(quader_command::kEditUndo.string().size()));
+  const int customized_undo_row =
+      find_row(quader_command::kEditUndo.string(), "Ctrl+Alt+Z");
+  ASSERT_GE(customized_undo_row, 0);
+  table->selectRow(customized_undo_row);
+  QCoreApplication::processEvents();
+  ASSERT_EQ(table->selectionModel()->selectedRows(0).size(), 1);
+  EXPECT_EQ(table->selectionModel()->selectedRows(0).front().data(
+                Qt::UserRole),
+            undo_target);
+
+  const QString redo_target = QString::fromUtf8(
+      quader_command::kEditRedo.string().data(),
+      static_cast<qsizetype>(quader_command::kEditRedo.string().size()));
+  int redo_row = -1;
+  for (int row = 0; row < model->rowCount(); ++row) {
+    if (model->index(row, 0).data(Qt::UserRole).toString() == redo_target) {
+      redo_row = row;
+      break;
+    }
+  }
+  ASSERT_GE(redo_row, 0);
+  table->selectionModel()->select(
+      model->index(redo_row, 0),
+      QItemSelectionModel::ClearAndSelect | QItemSelectionModel::Rows);
+  ASSERT_TRUE(table->currentIndex().isValid());
+  EXPECT_EQ(table->currentIndex().data(Qt::UserRole), undo_target);
+  ASSERT_EQ(table->selectionModel()->selectedRows(0).size(), 1);
+  EXPECT_EQ(table->selectionModel()->selectedRows(0).front().data(
+                Qt::UserRole),
+            redo_target)
+      << "selection and current are independent Qt item-view state";
+
+  table->sortByColumn(2, Qt::DescendingOrder);
+  QCoreApplication::processEvents();
+  const QModelIndexList selected_after_sort =
+      table->selectionModel()->selectedRows(0);
+  ASSERT_EQ(selected_after_sort.size(), 1)
+      << "layout-based sorting must preserve the Qt selection";
+  EXPECT_EQ(selected_after_sort.front().data(Qt::UserRole), redo_target);
+  ASSERT_TRUE(table->currentIndex().isValid());
+  EXPECT_EQ(table->currentIndex().data(Qt::UserRole), undo_target);
+
+  table->sortByColumn(0, Qt::AscendingOrder);
+  QCoreApplication::processEvents();
+  int layout_changed_count = 0;
+  int data_changed_count = 0;
+  QObject::connect(model, &QAbstractItemModel::layoutChanged, &dialog,
+                   [&layout_changed_count]() { ++layout_changed_count; });
+  QObject::connect(model, &QAbstractItemModel::dataChanged, &dialog,
+                   [&data_changed_count]() { ++data_changed_count; });
+  ASSERT_TRUE(editor.preferences()
+                  .set_shortcut(quader_command::kEditUndo, "Ctrl+Alt+F18")
+                  .ok());
+  dialog.refresh();
+  QCoreApplication::processEvents();
+  EXPECT_EQ(layout_changed_count, 0)
+      << "same-order cell updates must not masquerade as model layout changes";
+  EXPECT_GT(data_changed_count, 0);
+  ASSERT_EQ(table->selectionModel()->selectedRows(0).size(), 1);
+  EXPECT_EQ(table->selectionModel()->selectedRows(0).front().data(
+                Qt::UserRole),
+            redo_target);
+  EXPECT_EQ(table->currentIndex().data(Qt::UserRole), redo_target)
+      << "the dialog restores its selected singular action after refresh";
+  ASSERT_TRUE(editor.preferences()
+                  .set_shortcut(quader_command::kEditUndo, "Ctrl+Alt+Z")
+                  .ok());
+  dialog.refresh();
+  QCoreApplication::processEvents();
+
+  table->selectionModel()->clearSelection();
+  QCoreApplication::processEvents();
+  ASSERT_TRUE(table->currentIndex().isValid())
+      << "Qt keeps the current index independently from selection";
+  EXPECT_EQ(table->currentIndex().data(Qt::UserRole), redo_target);
+  EXPECT_TRUE(table->selectionModel()->selectedRows(0).isEmpty());
+  EXPECT_FALSE(reset_action->isEnabled());
+
+  bool unexpected_rebind_dialog = false;
+  QTimer::singleShot(0, &dialog, [&unexpected_rebind_dialog]() {
+    if (QWidget *modal = QApplication::activeModalWidget();
+        modal != nullptr) {
+      unexpected_rebind_dialog = true;
+      modal->close();
+    }
+  });
+  send_key(*table, Qt::Key_Return);
+  QCoreApplication::processEvents();
+  EXPECT_FALSE(unexpected_rebind_dialog)
+      << "Enter must not rebind a merely-current, unselected row";
+
+  const std::size_t changes_before_unselected_reset = changes.size();
+  reset_action->setEnabled(true);
+  reset_action->click();
+  QCoreApplication::processEvents();
+  EXPECT_EQ(changes.size(), changes_before_unselected_reset);
+  const auto catalog_after_unselected_reset =
+      editor.commands().keybinding_catalog();
+  const QuaderKeybindingCatalogEntry *undo_after_unselected_reset =
+      find_keybinding_catalog_entry(catalog_after_unselected_reset,
+                                    quader_command::kEditUndo.string());
+  ASSERT_NE(undo_after_unselected_reset, nullptr);
+  EXPECT_EQ(undo_after_unselected_reset->shortcut, "Ctrl+Alt+Z");
+  EXPECT_TRUE(undo_after_unselected_reset->customized)
+      << "reset must be a no-op without an actual selected row";
+
   EXPECT_GE(find_row(quader_command::kEditUndo.string(), "Ctrl+Alt+Z"), 0);
   EXPECT_GE(
       find_row(quader_command::kEditRedo.string(), "Ctrl+Shift+Z"), 0);
@@ -938,8 +1052,15 @@ TEST(QtSettingsDialogTests,
 
   dialog.show();
   QCoreApplication::processEvents();
-  table->selectRow(0);
+  table->selectionModel()->clearSelection();
   QCoreApplication::processEvents();
+  const QModelIndex first_row_after_filter = model->index(0, 0);
+  ASSERT_TRUE(first_row_after_filter.isValid());
+  table->selectionModel()->select(
+      first_row_after_filter,
+      QItemSelectionModel::ClearAndSelect | QItemSelectionModel::Rows);
+  QCoreApplication::processEvents();
+  ASSERT_EQ(table->selectionModel()->selectedRows(0).size(), 1);
   EXPECT_TRUE(reset_action->isEnabled());
   EXPECT_TRUE(reset_all->isEnabled());
   EXPECT_FALSE(apply_button->isEnabled());
@@ -1471,7 +1592,29 @@ TEST(InspectorPanelTests,
   panel.refresh(context);
   auto *name = panel.findChild<QLineEdit *>(
       QStringLiteral("inspector.general.name"));
+  auto *tree = panel.findChild<QTreeView *>(
+      QStringLiteral("inspector.tree"));
   ASSERT_NE(name, nullptr);
+  ASSERT_NE(tree, nullptr);
+  EXPECT_EQ(panel.focusProxy(), tree);
+
+  name->deselect();
+  name->setCursorPosition(3);
+  QFocusEvent mouse_focus_in(QEvent::FocusIn, Qt::MouseFocusReason);
+  QCoreApplication::sendEvent(name, &mouse_focus_in);
+  QCoreApplication::processEvents();
+  EXPECT_TRUE(name->selectedText().isEmpty())
+      << "mouse focus must preserve the caret instead of selecting all";
+
+  QFocusEvent focus_out_before_keyboard(QEvent::FocusOut,
+                                        Qt::TabFocusReason);
+  QCoreApplication::sendEvent(name, &focus_out_before_keyboard);
+  name->deselect();
+  QFocusEvent keyboard_focus_in(QEvent::FocusIn, Qt::TabFocusReason);
+  QCoreApplication::sendEvent(name, &keyboard_focus_in);
+  QCoreApplication::processEvents();
+  EXPECT_EQ(name->selectedText(), name->text())
+      << "Tab focus should retain the editor's keyboard-select-all behavior";
 
   name->setText(QStringLiteral("Renamed With Enter"));
   send_key(*name, Qt::Key_Return);
@@ -1485,6 +1628,84 @@ TEST(InspectorPanelTests,
   ASSERT_NE(session.scene().name(occurrence), nullptr);
   EXPECT_EQ(session.scene().name(occurrence)->name,
             "Renamed On Focus Loss");
+}
+
+TEST(InspectorPanelTests,
+     EqualRevisionDocumentSwitchRebuildsSameIdProperties) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-inspector-document-switch-tests";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+
+  SceneSession first_session;
+  SceneSession second_session;
+  QuaderEditorApi first_editor(
+      QuaderApiSessionInternalAccess::from_scene_session(first_session));
+  QuaderEditorApi second_editor(
+      QuaderApiSessionInternalAccess::from_scene_session(second_session));
+  const auto first_entity = first_editor.scene().create_entity({
+      .name = "First Document Object",
+      .kind = QuaderEntityKind::Empty,
+  });
+  const auto second_entity = second_editor.scene().create_entity({
+      .name = "Second Document Object",
+      .kind = QuaderEntityKind::Empty,
+  });
+  ASSERT_TRUE(first_entity.ok()) << first_entity.error_message();
+  ASSERT_TRUE(second_entity.ok()) << second_entity.error_message();
+  ASSERT_EQ(first_entity.value().id, second_entity.value().id);
+  ASSERT_TRUE(first_editor.scene().select(first_entity.value().id).ok());
+  ASSERT_TRUE(second_editor.scene().select(second_entity.value().id).ok());
+  ASSERT_EQ(first_session.scene().revision(), second_session.scene().revision());
+  ASSERT_EQ(first_session.modeling().content_revision(),
+            second_session.modeling().content_revision());
+  ASSERT_EQ(first_session.modeling().selection_revision(),
+            second_session.modeling().selection_revision());
+
+  UISettings ui_settings = UISettings::defaults();
+  ViewportSettings viewport_settings = ViewportSettings::defaults();
+  LocalizationService localization = loaded_localization();
+  UIInspectorPreviewContext first_preview{.document = first_session.scene(),
+                                           .assets = first_session.assets()};
+  UIInspectorPreviewContext second_preview{.document = second_session.scene(),
+                                            .assets = second_session.assets()};
+  UIContext first_context{
+      .intent = {.editor = first_editor},
+      .scene = {.document = first_session.scene(),
+                .assets = first_session.assets(),
+                .modeling = first_session.modeling(),
+                .selection = first_session.selection()},
+      .inspector_preview = &first_preview,
+      .preferences = {.ui = ui_settings, .viewport = viewport_settings},
+      .localization = localization,
+  };
+  UIContext second_context{
+      .intent = {.editor = second_editor},
+      .scene = {.document = second_session.scene(),
+                .assets = second_session.assets(),
+                .modeling = second_session.modeling(),
+                .selection = second_session.selection()},
+      .inspector_preview = &second_preview,
+      .preferences = {.ui = ui_settings, .viewport = viewport_settings},
+      .localization = localization,
+  };
+
+  InspectorPanel panel;
+  panel.setAttribute(Qt::WA_DontShowOnScreen, true);
+  panel.refresh(first_context);
+  auto *name = panel.findChild<QLineEdit *>(
+      QStringLiteral("inspector.general.name"));
+  ASSERT_NE(name, nullptr);
+  EXPECT_EQ(name->text(), QStringLiteral("First Document Object"));
+
+  panel.refresh(second_context);
+  QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+  name = panel.findChild<QLineEdit *>(
+      QStringLiteral("inspector.general.name"));
+  ASSERT_NE(name, nullptr);
+  EXPECT_EQ(name->text(), QStringLiteral("Second Document Object"));
 }
 
 TEST(InspectorPanelTests,

@@ -16,16 +16,19 @@
 #include <QAbstractItemView>
 #include <QAction>
 #include <QContextMenuEvent>
+#include <QEvent>
+#include <QFocusEvent>
 #include <QHeaderView>
 #include <QItemSelection>
 #include <QItemSelectionModel>
-#include <QKeyEvent>
 #include <QLineEdit>
 #include <QList>
 #include <QMenu>
+#include <QMetaObject>
 #include <QModelIndex>
 #include <QMouseEvent>
 #include <QPainter>
+#include <QScopedValueRollback>
 #include <QSignalBlocker>
 #include <QStandardItem>
 #include <QStandardItemModel>
@@ -122,35 +125,6 @@ bool contains_entity(const std::vector<EntityId> &ids, EntityId id) {
   return std::find(ids.begin(), ids.end(), id) != ids.end();
 }
 
-std::vector<EntityId>
-entity_range_selection(const std::vector<EntityRecord> &records,
-                       EntityId anchor, EntityId clicked) {
-  if (anchor == kInvalidEntityId || anchor == clicked) {
-    return {clicked};
-  }
-
-  std::vector<EntityId> selection;
-  bool selecting = false;
-  for (const EntityRecord &record : records) {
-    const bool endpoint = record.id == anchor || record.id == clicked;
-    if (endpoint && !selecting) {
-      selecting = true;
-      selection.push_back(record.id);
-      continue;
-    }
-
-    if (selecting) {
-      selection.push_back(record.id);
-    }
-
-    if (endpoint) {
-      return selection;
-    }
-  }
-
-  return {clicked};
-}
-
 bool select_only(QuaderEditorApi &editor, const std::vector<EntityId> &entities,
                  EntityId active = kInvalidEntityId) {
   const QuaderApiVoidResult result =
@@ -244,69 +218,104 @@ public:
   }
 };
 
-/// Routes outliner row presses and context requests through semantic handlers.
+/// Coalesces mouse selection into one owner transaction, normalizes Qt's
+/// private range anchor after external selection changes, and adds keyboard
+/// context targeting.
 class OutlinerTreeView final : public QTreeView {
 public:
-  using RowPressHandler =
-      std::function<void(EntityId, Qt::MouseButton, Qt::KeyboardModifiers)>;
-  using PropertyToggleHandler = std::function<void(EntityId, int)>;
   using ContextMenuHandler = std::function<void(EntityId, QPoint)>;
+  using SelectionGestureFinishedHandler = std::function<void()>;
 
   explicit OutlinerTreeView(QWidget *parent = nullptr) : QTreeView(parent) {}
 
-  RowPressHandler row_press_handler;
-  PropertyToggleHandler property_toggle_handler;
   ContextMenuHandler context_menu_handler;
+  SelectionGestureFinishedHandler selection_gesture_finished_handler;
+
+  [[nodiscard]] bool selection_gesture_active() const noexcept {
+    return selection_gesture_active_;
+  }
+
+  void reset_selection_anchor(const QModelIndex &index) {
+    const QScopedValueRollback<bool> reset_guard(resetting_selection_anchor_,
+                                                  true);
+    if (!index.isValid() && model() != nullptr) {
+      const QModelIndex fallback = model()->index(0, 0, rootIndex());
+      if (fallback.isValid()) {
+        QTreeView::setCurrentIndex(fallback);
+      }
+    }
+    QTreeView::setCurrentIndex(index);
+  }
 
 protected:
-  void keyPressEvent(QKeyEvent *event) override {
-    const QModelIndex index = currentIndex();
-    if (event->key() == Qt::Key_Space && index.isValid() &&
-        index.column() != column_index(OutlinerColumn::Name) &&
-        property_toggle_handler != nullptr) {
-      property_toggle_handler(entity_id(index), index.column());
-      event->accept();
-      return;
+  QItemSelectionModel::SelectionFlags
+  selectionCommand(const QModelIndex &index,
+                   const QEvent *event = nullptr) const override {
+    if (resetting_selection_anchor_) {
+      return QItemSelectionModel::ClearAndSelect | QItemSelectionModel::Rows;
     }
-    QTreeView::keyPressEvent(event);
+    return QTreeView::selectionCommand(index, event);
   }
 
   void mousePressEvent(QMouseEvent *event) override {
-    const QModelIndex index = indexAt(event->position().toPoint());
-    const EntityId pressed_entity = entity_id(index);
-    if (index.isValid() && event->button() == Qt::LeftButton &&
-        index.column() != column_index(OutlinerColumn::Name) &&
-        row_press_handler != nullptr && property_toggle_handler != nullptr) {
-      row_press_handler(pressed_entity, event->button(), event->modifiers());
-      property_toggle_handler(pressed_entity, index.column());
-      event->accept();
-      return;
+    if (event->button() == Qt::LeftButton) {
+      selection_gesture_active_ = true;
     }
-
-    const bool was_expanded = index.isValid() && isExpanded(index);
     QTreeView::mousePressEvent(event);
-    const bool toggled_open =
-        index.isValid() && was_expanded != isExpanded(index);
+  }
 
-    if (!index.isValid() || row_press_handler == nullptr) {
-      return;
-    }
-    if (event->button() == Qt::LeftButton && !toggled_open) {
-      row_press_handler(pressed_entity, event->button(), event->modifiers());
-    } else if (event->button() == Qt::RightButton) {
-      row_press_handler(pressed_entity, event->button(), event->modifiers());
+  void mouseReleaseEvent(QMouseEvent *event) override {
+    QTreeView::mouseReleaseEvent(event);
+    if (event->button() == Qt::LeftButton) {
+      finish_selection_gesture();
     }
   }
 
+  void focusOutEvent(QFocusEvent *event) override {
+    QTreeView::focusOutEvent(event);
+    finish_selection_gesture();
+  }
+
+  bool event(QEvent *event) override {
+    const bool handled = QTreeView::event(event);
+    if (event->type() == QEvent::UngrabMouse ||
+        event->type() == QEvent::WindowDeactivate ||
+        event->type() == QEvent::Hide) {
+      finish_selection_gesture();
+    }
+    return handled;
+  }
+
   void contextMenuEvent(QContextMenuEvent *event) override {
-    const QModelIndex index = indexAt(event->pos());
+    const QModelIndex index =
+        event->reason() == QContextMenuEvent::Keyboard
+            ? currentIndex()
+            : indexAt(event->pos());
     if (!index.isValid() || context_menu_handler == nullptr) {
       QTreeView::contextMenuEvent(event);
       return;
     }
-    context_menu_handler(entity_id(index), event->globalPos());
+    const QPoint global_position =
+        event->reason() == QContextMenuEvent::Keyboard
+            ? viewport()->mapToGlobal(visualRect(index).center())
+            : event->globalPos();
+    context_menu_handler(entity_id(index), global_position);
     event->accept();
   }
+
+private:
+  void finish_selection_gesture() {
+    if (!selection_gesture_active_) {
+      return;
+    }
+    selection_gesture_active_ = false;
+    if (selection_gesture_finished_handler != nullptr) {
+      selection_gesture_finished_handler();
+    }
+  }
+
+  bool selection_gesture_active_ = false;
+  bool resetting_selection_anchor_ = false;
 };
 
 } // namespace
@@ -316,7 +325,8 @@ struct OutlinerPanel::Impl {
   /// Caches the scene hierarchy projection for revision-gated tree rebuilds.
   struct TreeCache {
     bool valid = false;
-    std::uint64_t scene_revision = 0;
+    const SceneDocument *document = nullptr;
+    std::uint64_t content_revision = 0;
     EntityId instance_scope_definition = kInvalidEntityId;
     std::vector<EntityRecord> records;
     std::unordered_map<EntityId, std::size_t> record_index_by_entity;
@@ -335,18 +345,13 @@ struct OutlinerPanel::Impl {
     layout->setContentsMargins(0, 0, 0, 0);
     tree_ = new OutlinerTreeView(&panel_);
     tree_->setObjectName(QStringLiteral("outliner.tree"));
-    tree_->setHeaderHidden(false);
-    tree_->setAnimated(false);
-    tree_->setItemsExpandable(true);
-    tree_->setExpandsOnDoubleClick(true);
-    tree_->setRootIsDecorated(true);
-    tree_->setEditTriggers(QAbstractItemView::SelectedClicked |
-                           QAbstractItemView::EditKeyPressed);
     tree_->setSelectionBehavior(QAbstractItemView::SelectRows);
-    tree_->setSelectionMode(QAbstractItemView::NoSelection);
+    tree_->setSelectionMode(QAbstractItemView::ExtendedSelection);
+    tree_->setEditTriggers(QAbstractItemView::EditKeyPressed);
     tree_->setAlternatingRowColors(true);
     tree_->setUniformRowHeights(true);
     tree_->setItemDelegate(new SubduedRowDelegate(tree_));
+    panel_.setFocusProxy(tree_);
 
     model_ = new QStandardItemModel(tree_);
     model_->setObjectName(QStringLiteral("outliner.model"));
@@ -365,21 +370,31 @@ struct OutlinerPanel::Impl {
                                  QHeaderView::ResizeToContents);
     layout->addWidget(tree_);
 
-    tree_->row_press_handler = [this](EntityId entity, Qt::MouseButton button,
-                                      Qt::KeyboardModifiers modifiers) {
-      handle_row_press(entity, button, modifiers);
-    };
-    tree_->property_toggle_handler = [this](EntityId entity, int column) {
-      handle_property_toggle(entity, column);
-    };
     tree_->context_menu_handler = [this](EntityId entity,
                                          QPoint global_position) {
       show_context_menu(entity, global_position);
+    };
+    tree_->selection_gesture_finished_handler = [this]() {
+      if (!widget_selection_sync_deferred_) {
+        return;
+      }
+      widget_selection_sync_deferred_ = false;
+      handle_widget_selection_changed();
     };
 
     QObject::connect(model_, &QStandardItemModel::itemChanged, &panel_,
                      [this](QStandardItem *item) {
                        handle_item_changed(item);
+                     });
+    QObject::connect(tree_->selectionModel(),
+                     &QItemSelectionModel::selectionChanged, &panel_,
+                     [this](const QItemSelection &, const QItemSelection &) {
+                       schedule_widget_selection_sync();
+                     });
+    QObject::connect(tree_->selectionModel(),
+                     &QItemSelectionModel::currentChanged, &panel_,
+                     [this](const QModelIndex &, const QModelIndex &) {
+                       schedule_widget_selection_sync();
                      });
 
     QObject::connect(tree_, &QTreeView::collapsed, &panel_,
@@ -411,10 +426,6 @@ struct OutlinerPanel::Impl {
     refresh_headers();
     refresh_model_if_needed();
     sync_selection();
-    if (outliner_anchor_ != kInvalidEntityId &&
-        !document_->exists(outliner_anchor_)) {
-      outliner_anchor_ = kInvalidEntityId;
-    }
   }
 
 private:
@@ -455,13 +466,20 @@ private:
   }
 
   void refresh_model_if_needed() {
+    const bool document_changed = cache_.document != document_;
     if (document_ == nullptr ||
-        (cache_.valid && cache_.scene_revision == document_->revision() &&
+        (cache_.valid &&
+         !document_changed &&
+         cache_.content_revision == document_->content_revision() &&
          cache_.instance_scope_definition == instance_scope_definition_)) {
       return;
     }
 
-    cache_.scene_revision = document_->revision();
+    if (document_changed) {
+      collapsed_entities_.clear();
+    }
+    cache_.document = document_;
+    cache_.content_revision = document_->content_revision();
     cache_.instance_scope_definition = instance_scope_definition_;
     cache_.records = instance_scope_definition_ != kInvalidEntityId
                          ? document_->entity_records_for_instance_definition(
@@ -578,13 +596,16 @@ private:
     }
 
     const std::uint64_t selection_revision = document_->selection_revision();
+    const std::vector<EntityId> selected = document_->selected_entities();
+    const EntityId primary_selection = document_->primary_selection();
     if (!outliner_selection_sync_required(
             selection_sync_after_model_rebuild_, selection_revision_valid_,
-            synced_selection_revision_, selection_revision)) {
+            synced_selection_revision_, selection_revision) &&
+        synced_selected_entities_ == selected &&
+        synced_primary_selection_ == primary_selection) {
       return;
     }
 
-    const std::vector<EntityId> selected = document_->selected_entities();
     QItemSelection widget_selection;
     for (const EntityId entity : selected) {
       const auto item = item_by_entity_.find(entity);
@@ -594,71 +615,88 @@ private:
       }
     }
 
-    const QSignalBlocker selection_blocker(tree_->selectionModel());
-    tree_->selectionModel()->clearSelection();
-    tree_->selectionModel()->select(widget_selection,
-                                    QItemSelectionModel::Select |
-                                        QItemSelectionModel::Rows);
+    QItemSelectionModel *selection_model = tree_->selectionModel();
+    const QScopedValueRollback<bool> selection_guard(syncing_selection_, true);
+    selection_model->clear();
 
-    const auto primary = item_by_entity_.find(document_->primary_selection());
-    tree_->setCurrentIndex(primary != item_by_entity_.end() &&
-                                   row_is_revealed(
-                                       document_->primary_selection())
-                               ? primary->second->index()
-                               : QModelIndex{});
+    const auto primary = item_by_entity_.find(primary_selection);
+    tree_->reset_selection_anchor(
+        primary != item_by_entity_.end() &&
+                row_is_revealed(primary_selection)
+            ? primary->second->index()
+            : QModelIndex{});
+    selection_model->select(widget_selection, QItemSelectionModel::Select |
+                                                   QItemSelectionModel::Rows);
     synced_selection_revision_ = selection_revision;
+    synced_selected_entities_ = selected;
+    synced_primary_selection_ = primary_selection;
     selection_revision_valid_ = true;
     selection_sync_after_model_rebuild_ = false;
   }
 
-  void handle_row_press(EntityId entity, Qt::MouseButton button,
-                        Qt::KeyboardModifiers modifiers) {
-    if (editor_ == nullptr || document_ == nullptr ||
-        entity == kInvalidEntityId) {
+  void schedule_widget_selection_sync() {
+    if (syncing_model_ || syncing_selection_) {
       return;
     }
-    refresh_model_if_needed();
-    if (record(entity) == nullptr) {
+    if (tree_->selection_gesture_active()) {
+      widget_selection_sync_deferred_ = true;
+      return;
+    }
+    if (pending_widget_selection_sync_) {
+      return;
+    }
+    pending_widget_selection_sync_ = true;
+    QMetaObject::invokeMethod(
+        &panel_,
+        [this]() {
+          pending_widget_selection_sync_ = false;
+          handle_widget_selection_changed();
+        },
+        Qt::QueuedConnection);
+  }
+
+  void handle_widget_selection_changed() {
+    if (syncing_model_ || syncing_selection_ || editor_ == nullptr ||
+        document_ == nullptr ||
+        tree_->selectionModel() == nullptr) {
       return;
     }
 
-    const std::vector<EntityId> selected = document_->selected_entities();
-    if (button == Qt::RightButton) {
-      if (!contains_entity(selected, entity)) {
-        (void)select_only(*editor_, {entity}, entity);
-        sync_selection();
+    const QModelIndexList selected_rows =
+        tree_->selectionModel()->selectedRows(
+            column_index(OutlinerColumn::Name));
+    std::vector<EntityId> selected;
+    selected.reserve(static_cast<std::size_t>(selected_rows.size()));
+    for (const QModelIndex &index : selected_rows) {
+      const EntityId selected_entity = entity_id(index);
+      if (selected_entity != kInvalidEntityId) {
+        selected.push_back(selected_entity);
       }
-      return;
     }
-    if (button != Qt::LeftButton) {
+
+    EntityId active = entity_id(tree_->currentIndex());
+    if (!contains_entity(selected, active)) {
+      const EntityId previous_active = document_->primary_selection();
+      active = contains_entity(selected, previous_active)
+                   ? previous_active
+                   : (selected.empty() ? kInvalidEntityId : selected.back());
+    }
+
+    const QuaderApiVoidResult result =
+        editor_->selection().select_objects_for_inspection(
+            std::span<const EntityId>(selected.data(), selected.size()),
+            active);
+    if (!result.ok) {
+      selection_sync_after_model_rebuild_ = true;
+      sync_selection();
       return;
     }
 
-    EntityId active_selection = entity;
-    std::vector<EntityId> next_selection;
-    if (modifiers.testFlag(Qt::ShiftModifier)) {
-      next_selection =
-          entity_range_selection(cache_.records, outliner_anchor_, entity);
-    } else if (modifiers.testFlag(Qt::ControlModifier) ||
-               modifiers.testFlag(Qt::MetaModifier)) {
-      next_selection = selected;
-      if (contains_entity(next_selection, entity)) {
-        next_selection.erase(
-            std::remove(next_selection.begin(), next_selection.end(), entity),
-            next_selection.end());
-        active_selection = document_->primary_selection() == entity
-                               ? kInvalidEntityId
-                               : document_->primary_selection();
-      } else {
-        next_selection.push_back(entity);
-      }
-    } else {
-      next_selection = {entity};
-    }
-
-    outliner_anchor_ = entity;
-    (void)select_only(*editor_, next_selection, active_selection);
-    sync_selection();
+    synced_selection_revision_ = document_->selection_revision();
+    synced_selected_entities_ = document_->selected_entities();
+    synced_primary_selection_ = document_->primary_selection();
+    selection_revision_valid_ = true;
+    selection_sync_after_model_rebuild_ = false;
   }
 
   void handle_property_toggle(EntityId entity, int column) {
@@ -680,22 +718,36 @@ private:
       return;
     }
 
-    if (result.ok && result.changed) {
-      refresh_model_if_needed();
-      sync_selection();
+    if (!result.ok || !result.changed) {
+      cache_.valid = false;
     }
+    QMetaObject::invokeMethod(
+        &panel_,
+        [this]() {
+          refresh_model_if_needed();
+          sync_selection();
+        },
+        Qt::QueuedConnection);
   }
 
   void handle_item_changed(QStandardItem *item) {
     if (syncing_model_ || item == nullptr || editor_ == nullptr ||
-        document_ == nullptr ||
-        item->column() != column_index(OutlinerColumn::Name)) {
+        document_ == nullptr) {
       return;
     }
 
     const EntityId entity = entity_id(item->index());
     const EntityRecord *entity_record = record(entity);
-    if (entity_record == nullptr || entity_record->is_scene_root) {
+    if (entity_record == nullptr) {
+      return;
+    }
+
+    if (item->column() != column_index(OutlinerColumn::Name)) {
+      handle_property_toggle(entity, item->column());
+      return;
+    }
+
+    if (entity_record->is_scene_root) {
       return;
     }
 
@@ -719,7 +771,8 @@ private:
       return;
     }
     const QModelIndex index = item->second->index();
-    tree_->setCurrentIndex(index);
+    tree_->selectionModel()->setCurrentIndex(index,
+                                             QItemSelectionModel::NoUpdate);
     tree_->scrollTo(index);
     tree_->edit(index);
   }
@@ -736,6 +789,9 @@ private:
       return;
     }
     refresh_model_if_needed();
+    if (!contains_entity(document_->selected_entities(), entity)) {
+      (void)select_only(*editor_, {entity}, entity);
+    }
     sync_selection();
     const EntityRecord *entity_record = record(entity);
     if (entity_record == nullptr) {
@@ -804,11 +860,15 @@ private:
   TreeCache cache_;
   std::unordered_map<EntityId, QStandardItem *> item_by_entity_;
   std::unordered_set<EntityId> collapsed_entities_;
-  EntityId outliner_anchor_ = kInvalidEntityId;
   EntityId instance_scope_definition_ = kInvalidEntityId;
   std::uint64_t synced_selection_revision_ = 0;
+  std::vector<EntityId> synced_selected_entities_;
+  EntityId synced_primary_selection_ = kInvalidEntityId;
   bool syncing_expansion_ = false;
   bool syncing_model_ = false;
+  bool syncing_selection_ = false;
+  bool pending_widget_selection_sync_ = false;
+  bool widget_selection_sync_deferred_ = false;
   bool selection_revision_valid_ = false;
   bool selection_sync_after_model_rebuild_ = true;
 };

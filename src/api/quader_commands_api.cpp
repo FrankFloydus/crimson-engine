@@ -654,6 +654,7 @@ public:
     QuaderApiVoidResult execute(std::string_view command_id);
     QuaderApiVoidResult execute(QuaderCommandId command_id);
     [[nodiscard]] std::optional<QuaderApiStatus> last_status() const;
+    [[nodiscard]] std::uint64_t last_status_revision() const;
     [[nodiscard]] std::optional<QuaderCommandDescriptor>
     descriptor(std::string_view command_id) const;
     [[nodiscard]] std::vector<QuaderCommandDescriptor> available() const;
@@ -785,6 +786,7 @@ public:
     QuaderKeybindingService keybindings_;
     QuaderKeybindingTargetCatalog keybinding_target_catalog_;
     std::optional<QuaderApiStatus> last_status_;
+    std::uint64_t last_status_revision_ = 0;
 };
 
 QuaderCommandsApi::Impl::Impl(
@@ -832,16 +834,22 @@ QuaderCommandsApi::Impl::execute(std::string_view command_id) {
           registry_.execute(command_id)) {
     result->revisions = api_.revisions();
     last_status_ = *result;
+    ++last_status_revision_;
     return *result;
   }
   QuaderApiVoidResult result = failure("Unknown command id.");
   last_status_ = result;
+  ++last_status_revision_;
   return result;
 }
 
 std::optional<QuaderApiStatus>
 QuaderCommandsApi::Impl::last_status() const {
   return last_status_;
+}
+
+std::uint64_t QuaderCommandsApi::Impl::last_status_revision() const {
+  return last_status_revision_;
 }
 
 std::optional<QuaderCommandDescriptor>
@@ -2482,6 +2490,10 @@ QuaderApiVoidResult QuaderCommandsApi::execute(std::string_view command_id) {
 
 std::optional<QuaderApiStatus> QuaderCommandsApi::last_status() const {
     return impl_->last_status();
+}
+
+std::uint64_t QuaderCommandsApi::last_status_revision() const {
+  return impl_->last_status_revision();
 }
 
 std::optional<QuaderCommandDescriptor>

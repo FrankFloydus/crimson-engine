@@ -11,6 +11,7 @@
 #include <QApplication>
 #include <QCoreApplication>
 #include <QItemSelectionModel>
+#include <QKeyEvent>
 #include <QLabel>
 #include <QLineEdit>
 #include <QListView>
@@ -24,6 +25,14 @@
 
 namespace quader {
 namespace {
+
+void send_key(QWidget &target, int key) {
+  QKeyEvent press(QEvent::KeyPress, key, Qt::NoModifier);
+  QCoreApplication::sendEvent(&target, &press);
+  QKeyEvent release(QEvent::KeyRelease, key, Qt::NoModifier);
+  QCoreApplication::sendEvent(&target, &release);
+  QCoreApplication::processEvents();
+}
 
 TEST(QtMaterialBrowserWindowTests,
      PresentsFiltersActivatesAndRetainsOnlyLayoutPreferences) {
@@ -106,6 +115,12 @@ TEST(QtMaterialBrowserWindowTests,
   ASSERT_NE(list_button, nullptr);
   ASSERT_NE(slider, nullptr);
 
+  QListView stock_grid;
+  QTableView stock_list;
+  EXPECT_EQ(grid->selectionMode(), QAbstractItemView::SingleSelection);
+  EXPECT_EQ(list->selectionMode(), QAbstractItemView::SingleSelection);
+  EXPECT_EQ(grid->editTriggers(), stock_grid.editTriggers());
+  EXPECT_EQ(list->editTriggers(), stock_list.editTriggers());
   ASSERT_EQ(grid->model(), list->model());
   ASSERT_EQ(grid->selectionModel(), list->selectionModel());
   ASSERT_EQ(grid->model()->rowCount(), 2);
@@ -138,13 +153,41 @@ TEST(QtMaterialBrowserWindowTests,
                      Qt::AscendingOrder);
 
   QString activated;
+  int activation_count = 0;
   window->set_activate_material_callback(
-      [&activated](QString stable_id) { activated = std::move(stable_id); });
+      [&activated, &activation_count](QString stable_id) {
+        activated = std::move(stable_id);
+        ++activation_count;
+      });
   const QModelIndex zinc = grid->model()->index(1, 0);
   ASSERT_TRUE(QMetaObject::invokeMethod(
       grid, "clicked", Qt::DirectConnection, Q_ARG(QModelIndex, zinc)));
   EXPECT_EQ(activated,
             QStringLiteral("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"));
+  EXPECT_EQ(activation_count, 1);
+  ASSERT_TRUE(QMetaObject::invokeMethod(
+      grid, "activated", Qt::DirectConnection, Q_ARG(QModelIndex, zinc)));
+  EXPECT_EQ(activation_count, 1)
+      << "a platform mouse activation following clicked must not dispatch "
+         "the material intent twice";
+
+  activated.clear();
+  grid->selectionModel()->setCurrentIndex(
+      zinc, QItemSelectionModel::ClearAndSelect);
+  send_key(*grid, Qt::Key_Return);
+  EXPECT_EQ(activated,
+            QStringLiteral("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"))
+      << "keyboard activation must dispatch the same intent as a click";
+  EXPECT_EQ(activation_count, 2);
+
+  activated.clear();
+  list->selectionModel()->setCurrentIndex(
+      zinc, QItemSelectionModel::ClearAndSelect | QItemSelectionModel::Rows);
+  send_key(*list, Qt::Key_Return);
+  EXPECT_EQ(activated,
+            QStringLiteral("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"))
+      << "both material views must honor QAbstractItemView::activated";
+  EXPECT_EQ(activation_count, 3);
 
   QString opened;
   window->set_open_material_callback(

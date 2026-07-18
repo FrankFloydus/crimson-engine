@@ -10,6 +10,8 @@
 #include "api/quader_editor_api_types.hpp"
 #include "api/quader_viewport_input_types.hpp"
 
+#include <cstdint>
+
 namespace quader {
 
 /**
@@ -26,6 +28,7 @@ public:
     [[nodiscard]] bool can_activate(std::string_view tool_id) const;
     [[nodiscard]] bool can_activate(ViewportToolId tool) const;
     [[nodiscard]] QuaderToolSettingsTarget active_settings() const;
+    [[nodiscard]] std::uint64_t active_settings_revision() const;
     QuaderApiVoidResult set_setting(std::string_view tool_id,
                                     std::string_view name, double value);
     QuaderApiVoidResult set_setting(std::string_view tool_id,
@@ -51,11 +54,16 @@ public:
     [[nodiscard]] std::string active_tool() const;
 
     /** Rebinds this host facade after the active scene session changes. */
-    void rebind_session(QuaderApiSession session) { session_ = session; }
+    void rebind_session(QuaderApiSession session);
 
   private:
     QuaderApiSession session_;
     QuaderToolsRuntimeHooks hooks_;
+    mutable const void *active_settings_source_identity_ = nullptr;
+    mutable std::uint64_t active_settings_source_revision_ = 0;
+    mutable std::uint64_t active_settings_revision_ = 0;
+    mutable std::uint8_t active_settings_source_kind_ = 0;
+    mutable bool active_settings_source_valid_ = false;
 };
 
 } // namespace quader

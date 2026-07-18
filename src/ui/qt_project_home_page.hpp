@@ -125,6 +125,7 @@ public:
   }
 
 private:
+  [[nodiscard]] QModelIndex selected_recent_project_index() const;
   void dispatch_recent_project_open(const QModelIndex &index);
   void dispatch_recent_project_removal();
   void refresh_remove_recent_button();

@@ -1890,6 +1890,28 @@ public:
     return tool_settings_service_.active_runtime_tool_target(runtime_.status());
   }
 
+  [[nodiscard]] std::uint64_t tool_settings_revision() const {
+    const std::optional<quader_editor_core::EditorOperationId>
+        preview_operation = sdk_projection_adapter_.active_preview_operation();
+    const bool cut_active = runtime_.status().cut_active;
+    const std::uint64_t interaction_revision =
+        interaction_settings_service_.revision();
+    const std::uint64_t metadata_revision = tool_settings_service_.revision();
+    if (!tool_settings_revision_valid_ ||
+        tool_settings_preview_operation_ != preview_operation ||
+        tool_settings_cut_active_ != cut_active ||
+        tool_settings_interaction_revision_ != interaction_revision ||
+        tool_settings_metadata_revision_ != metadata_revision) {
+      tool_settings_preview_operation_ = preview_operation;
+      tool_settings_cut_active_ = cut_active;
+      tool_settings_interaction_revision_ = interaction_revision;
+      tool_settings_metadata_revision_ = metadata_revision;
+      tool_settings_revision_valid_ = true;
+      ++tool_settings_revision_;
+    }
+    return tool_settings_revision_;
+  }
+
   [[nodiscard]] ModelingInteractionSettings interaction_settings() const {
     return interaction_settings_service_.settings();
   }
@@ -5416,6 +5438,14 @@ private:
   std::function<ModelingInstanceEditScope()> instance_edit_scope_provider_;
   ModelingSelectionMode app_selection_mode_ = ModelingSelectionMode::Object;
 
+  mutable std::optional<quader_editor_core::EditorOperationId>
+      tool_settings_preview_operation_;
+  mutable std::uint64_t tool_settings_interaction_revision_ = 0;
+  mutable std::uint64_t tool_settings_metadata_revision_ = 0;
+  mutable std::uint64_t tool_settings_revision_ = 0;
+  mutable bool tool_settings_cut_active_ = false;
+  mutable bool tool_settings_revision_valid_ = false;
+
   quader_editor_core::EditorRuntime runtime_;
 };
 
@@ -5720,6 +5750,10 @@ ModelingLiveStatus ModelingSessionService::live_status() const {
 ModelingToolSettingsTarget
 ModelingSessionService::tool_settings_target() const {
   return impl_->tool_settings_target();
+}
+
+std::uint64_t ModelingSessionService::tool_settings_revision() const {
+  return impl_->tool_settings_revision();
 }
 
 ModelingInteractionSettings

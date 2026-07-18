@@ -6,6 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
+#include "api/quader_events_api.hpp"
 #include "api/quader_standard_material_documents_api.hpp"
 #include "core/frame_timing.hpp"
 #include "core/localization_service.hpp"
@@ -19,13 +20,15 @@
 #include "ui/ui_settings.hpp"
 #include "viewport/viewport_settings.hpp"
 
+#include <atomic>
 #include <chrono>
-#include <filesystem>
 #include <cstddef>
 #include <cstdint>
+#include <filesystem>
 #include <memory>
 #include <string>
 #include <string_view>
+#include <vector>
 
 class QDockWidget;
 class QLabel;
@@ -109,7 +112,7 @@ public:
                       std::string_view action_id);
   [[nodiscard]] bool
   prepare_standard_material_project_transition(std::string_view action_id);
-  void refresh_project_workspace();
+  void refresh_project_workspace(bool force = true);
   void show_home();
   void show_workspace();
   void show();
@@ -147,6 +150,8 @@ private:
       int native_client_height_pixels) const;
   void save_auxiliary_window_state();
   void synchronize_auxiliary_window_visibility();
+  void bind_project_workspace_events(QuaderEditorApi &editor);
+  void clear_project_workspace_events();
   void refresh_status_bar();
   void present_lifecycle_result(const QuaderApiStatus &result);
   void present_standard_material_error(std::string_view message);
@@ -234,6 +239,15 @@ private:
   std::uint64_t toolbar_modeling_content_revision_ = 0;
   std::uint64_t toolbar_modeling_selection_revision_ = 0;
   std::string toolbar_active_tool_;
+  std::uint64_t tool_settings_revision_ = 0;
+  bool tool_settings_refresh_valid_ = false;
+  QuaderEditorApi *project_workspace_events_editor_ = nullptr;
+  std::vector<QuaderEventSubscription>
+      project_workspace_event_subscriptions_;
+  std::uint64_t project_workspace_instance_edit_revision_ = 0;
+  bool project_workspace_instance_edit_revision_valid_ = false;
+  std::shared_ptr<std::atomic_bool> project_workspace_refresh_signal_ =
+      std::make_shared<std::atomic_bool>(true);
   std::uint64_t material_browser_catalog_signature_ = 0;
   std::string material_browser_active_id_;
   QtStandardMaterialPreviewImageCache
@@ -252,6 +266,12 @@ private:
   bool layers_refresh_valid_ = false;
   bool inspector_refresh_valid_ = false;
   bool toolbar_refresh_valid_ = false;
+  bool toolbar_owner_available_ = false;
+  std::uint64_t status_command_revision_ = 0;
+  std::uint32_t status_live_count_ = 0;
+  std::uint8_t status_live_kind_ = 0;
+  std::string status_locale_;
+  bool status_refresh_valid_ = false;
   bool home_visible_ = false;
   bool viewport_initialized_ = false;
   bool selection_toolbar_workspace_visible_ = true;

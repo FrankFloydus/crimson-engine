@@ -665,6 +665,9 @@ struct ModelingInteractionSettings {
   bool half_cut_separate_parts = false;
   bool half_cut_fill_parts = true;
   ModelingCutMode cut_mode = ModelingCutMode::KeepBoth;
+
+  [[nodiscard]] bool
+  operator==(const ModelingInteractionSettings &) const = default;
 };
 
 /**

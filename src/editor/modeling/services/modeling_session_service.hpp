@@ -172,6 +172,7 @@ public:
   [[nodiscard]] ModelingToolStatus tool_status() const;
   [[nodiscard]] ModelingLiveStatus live_status() const;
   [[nodiscard]] ModelingToolSettingsTarget tool_settings_target() const;
+  [[nodiscard]] std::uint64_t tool_settings_revision() const;
   [[nodiscard]] ModelingInteractionSettings interaction_settings() const;
   ModelingCommandResult
   set_interaction_settings(const ModelingInteractionSettings &settings);
