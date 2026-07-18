@@ -5,6 +5,7 @@
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
 #include "app/app.hpp"
+#include "app/app_frame_presentation.hpp"
 
 #include "api/quader_editor_api.hpp"
 #include "core/logger.hpp"
@@ -17,11 +18,13 @@
 #include "assets/material_document.hpp"
 
 #include <QApplication>
+#include <QEvent>
 #include <QGuiApplication>
 #include <QMainWindow>
 #include <QRect>
 #include <QScreen>
 #include <QTimer>
+#include <QWidget>
 
 #include <algorithm>
 #include <array>
@@ -36,6 +39,114 @@
 #include <vector>
 
 namespace quader {
+
+AppFramePresentationGate::AppFramePresentationGate(
+    QApplication &application, QObject *parent)
+    : QObject(parent), application_(&application) {
+  application.installEventFilter(this);
+}
+
+AppFramePresentationGate::~AppFramePresentationGate() {
+  if (application_ != nullptr) {
+    application_->removeEventFilter(this);
+  }
+}
+
+bool AppFramePresentationGate::blocks_frame_submission() const noexcept {
+  return std::ranges::any_of(
+      pending_transients_, [](const PendingTransient &pending) {
+        return pending.widget != nullptr;
+      });
+}
+
+bool AppFramePresentationGate::eventFilter(QObject *watched, QEvent *event) {
+  if (watched == nullptr || event == nullptr) {
+    return QObject::eventFilter(watched, event);
+  }
+
+  QWidget *widget = qobject_cast<QWidget *>(watched);
+  switch (event->type()) {
+  case QEvent::Show:
+    if (widget != nullptr && is_top_level_transient(*widget)) {
+      begin_first_paint_wait(*widget);
+    }
+    break;
+  case QEvent::Paint:
+    if (widget != nullptr) {
+      queue_first_paint_release(*widget);
+    }
+    break;
+  case QEvent::Hide:
+  case QEvent::Close:
+  case QEvent::Destroy:
+    forget_transient(watched);
+    break;
+  default:
+    break;
+  }
+  return QObject::eventFilter(watched, event);
+}
+
+bool AppFramePresentationGate::is_top_level_transient(
+    const QWidget &widget) {
+  if (!widget.isWindow()) {
+    return false;
+  }
+  switch (widget.windowType()) {
+  case Qt::Dialog:
+  case Qt::Popup:
+  case Qt::Tool:
+  case Qt::Sheet:
+  case Qt::Drawer:
+    return true;
+  default:
+    return false;
+  }
+}
+
+void AppFramePresentationGate::begin_first_paint_wait(QWidget &widget) {
+  forget_transient(&widget);
+  pending_transients_.push_back(PendingTransient{
+      .widget = &widget,
+      .generation = next_generation_++,
+      .release_queued = false,
+  });
+}
+
+void AppFramePresentationGate::queue_first_paint_release(QWidget &widget) {
+  auto pending = std::ranges::find_if(
+      pending_transients_, [&widget](const PendingTransient &candidate) {
+        return candidate.widget == &widget;
+      });
+  if (pending == pending_transients_.end() || pending->release_queued) {
+    return;
+  }
+
+  pending->release_queued = true;
+  const QPointer<QWidget> guarded_widget = pending->widget;
+  const std::uint64_t generation = pending->generation;
+  QTimer::singleShot(0, this, [this, guarded_widget, generation]() {
+    release_if_current(guarded_widget.data(), generation);
+  });
+}
+
+void AppFramePresentationGate::release_if_current(
+    QWidget *widget, std::uint64_t generation) {
+  std::erase_if(pending_transients_,
+                [widget, generation](const PendingTransient &pending) {
+                  return pending.widget == widget &&
+                         pending.generation == generation;
+                });
+}
+
+void AppFramePresentationGate::forget_transient(const QObject *widget) {
+  std::erase_if(pending_transients_,
+                [widget](const PendingTransient &pending) {
+                  return pending.widget == nullptr ||
+                         pending.widget.data() == widget;
+                });
+}
+
 namespace {
 
 constexpr int kIdleFrameIntervalMs = 16;
@@ -411,9 +522,21 @@ bool App::initialize(QApplication &application,
   ui_.show();
   frame_timer_ = std::make_unique<QTimer>();
   frame_timer_->setTimerType(Qt::PreciseTimer);
+  auto *frame_presentation_gate =
+      new AppFramePresentationGate(application, frame_timer_.get());
   QObject::connect(frame_timer_.get(), &QTimer::timeout, application_,
-                   [this]() {
+                   [this, frame_presentation_gate]() {
                      if (running_ && !shutdown_complete_) {
+                       if (frame_presentation_gate
+                               ->blocks_frame_submission()) {
+                         // QDialog::exec() and QMenu::exec() keep this timer
+                         // alive in a nested event loop. Yield only until each
+                         // newly shown transient completes its first paint;
+                         // live modal previews continue rendering afterward.
+                         frame_clock_.reset();
+                         schedule_next_frame();
+                         return;
+                       }
                        (void)render_frame(frame_clock_.tick());
                        schedule_next_frame();
                      }

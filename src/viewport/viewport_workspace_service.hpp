@@ -162,6 +162,10 @@ public:
   [[nodiscard]] ViewportCameraController &camera(ViewportPaneId pane);
   [[nodiscard]] const ViewportCameraController &
   camera(ViewportPaneId pane) const;
+  bool set_default_fly_speed(float speed);
+  [[nodiscard]] float default_fly_speed() const {
+    return default_fly_speed_;
+  }
   bool focus_origin(ViewportPaneId pane, float distance = 64.0f);
   bool focus_local_visibility_bounds(QVec3 min_bounds, QVec3 max_bounds,
                                      float margin = 1.25f);
@@ -241,6 +245,7 @@ private:
   ViewportPaneId focused_pane_ = ViewportPaneId::Perspective;
   bool focused_pane_maximized_ = false;
   int grid_preset_ = 0;
+  float default_fly_speed_ = kDefaultViewportFlyNavigationSpeed;
   std::vector<ViewportWorkspaceAuxiliaryViewportState> auxiliary_viewports_;
   ViewportLocalVisibilitySnapshot local_visibility_snapshot_;
   std::array<ViewportCameraController, kViewportPaneCount>

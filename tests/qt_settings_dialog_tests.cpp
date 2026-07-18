@@ -396,6 +396,10 @@ TEST(QtSettingsDialogTests,
       dialog.findChild<QPushButton *>(QStringLiteral("settingsCancel"));
   auto *thickness = dialog.findChild<QDoubleSpinBox *>(
       QStringLiteral("viewportSetting_GridMajorLineSize"));
+  auto *default_fly_speed = dialog.findChild<QDoubleSpinBox *>(
+      QStringLiteral("viewportSetting_DefaultFlyNavigationSpeed"));
+  auto *bounding_box_thickness = dialog.findChild<QDoubleSpinBox *>(
+      QStringLiteral("viewportSetting_BoundingBoxWireThickness"));
   auto *show_grid = dialog.findChild<QCheckBox *>(
       QStringLiteral("viewportSetting_ShowGrid"));
   auto *show_info = dialog.findChild<QCheckBox *>(
@@ -408,6 +412,8 @@ TEST(QtSettingsDialogTests,
       QStringLiteral("viewportSetting_InstanceEditBackgroundColor"));
   auto *instance_context_swatch = dialog.findChild<QPushButton *>(
       QStringLiteral("viewportSetting_InstanceEditContextColor"));
+  auto *bounding_box_swatch = dialog.findChild<QPushButton *>(
+      QStringLiteral("viewportSetting_BoundingBoxWireColor"));
 
   ASSERT_NE(category_list, nullptr);
   ASSERT_NE(button_box, nullptr);
@@ -415,25 +421,38 @@ TEST(QtSettingsDialogTests,
   ASSERT_NE(ok_button, nullptr);
   ASSERT_NE(cancel_button, nullptr);
   ASSERT_NE(thickness, nullptr);
+  ASSERT_NE(default_fly_speed, nullptr);
+  ASSERT_NE(bounding_box_thickness, nullptr);
   ASSERT_NE(show_grid, nullptr);
   ASSERT_NE(show_info, nullptr);
   ASSERT_NE(locale_combo, nullptr);
   ASSERT_NE(mesh_major_swatch, nullptr);
   ASSERT_NE(instance_background_swatch, nullptr);
   ASSERT_NE(instance_context_swatch, nullptr);
+  ASSERT_NE(bounding_box_swatch, nullptr);
+  EXPECT_DOUBLE_EQ(default_fly_speed->value(), 25.0);
+  EXPECT_DOUBLE_EQ(bounding_box_thickness->value(), 1.5);
+  EXPECT_EQ(bounding_box_swatch->accessibleName(),
+            QStringLiteral("Bounding Box Wire Color"));
   EXPECT_EQ(dialog.findChild<QPushButton *>(
                 QStringLiteral("settingsResetDefaults")),
             nullptr);
 
   int grid_row = -1;
+  int navigation_row = -1;
   for (int row = 0; row < category_list->count(); ++row) {
-    if (category_list->item(row)->data(Qt::UserRole).toString() ==
-        QStringLiteral("grid")) {
+    const QString stable_id =
+        category_list->item(row)->data(Qt::UserRole).toString();
+    if (stable_id == QStringLiteral("grid")) {
       grid_row = row;
-      break;
+    } else if (stable_id == QStringLiteral("navigation")) {
+      navigation_row = row;
     }
   }
   ASSERT_GE(grid_row, 0);
+  ASSERT_GE(navigation_row, 0);
+  EXPECT_EQ(category_list->item(navigation_row)->text(),
+            QStringLiteral("Navigation"));
   category_list->setCurrentRow(grid_row);
 
   dialog.show();
@@ -472,25 +491,43 @@ TEST(QtSettingsDialogTests,
 
   const ViewportSettingColor initial_mesh_major =
       viewport_settings.color(ViewportColorSettingId::MeshGridMajor);
+  const ViewportSettingColor initial_bounding_box =
+      viewport_settings.color(ViewportColorSettingId::BoundingBoxWire);
   const QColor applied_mesh_major = QColor::fromRgb(46, 92, 138, 184);
   ASSERT_TRUE(accept_color_picker(
       dialog, *mesh_major_swatch,
       QStringLiteral("viewportSetting_MeshGridMajorColor_dialog"),
       applied_mesh_major));
+  const QColor applied_bounding_box = QColor::fromRgb(26, 77, 128, 230);
+  ASSERT_TRUE(accept_color_picker(
+      dialog, *bounding_box_swatch,
+      QStringLiteral("viewportSetting_BoundingBoxWireColor_dialog"),
+      applied_bounding_box));
 
   thickness->setValue(1.75);
+  default_fly_speed->setValue(35.0);
+  bounding_box_thickness->setValue(4.25);
   show_grid->setChecked(false);
   locale_combo->setCurrentIndex(italian_index);
   EXPECT_TRUE(apply_button->isEnabled());
   EXPECT_FLOAT_EQ(viewport_settings.float_value(
                       ViewportFloatSettingId::GridMajorLineSize),
                   initial_thickness);
+  EXPECT_FLOAT_EQ(viewport_settings.float_value(
+                      ViewportFloatSettingId::DefaultFlyNavigationSpeed),
+                  25.0f);
+  EXPECT_FLOAT_EQ(viewport_settings.float_value(
+                      ViewportFloatSettingId::BoundingBoxWireThickness),
+                  1.5f);
   EXPECT_TRUE(viewport_settings.bool_value(ViewportBoolSettingId::ShowGrid));
   EXPECT_EQ(ui_settings.locale(), "en-US");
   EXPECT_EQ(localization.current_locale(), "en-US");
   EXPECT_TRUE(viewport_setting_colors_approximately(
       viewport_settings.color(ViewportColorSettingId::MeshGridMajor),
       initial_mesh_major));
+  EXPECT_TRUE(viewport_setting_colors_approximately(
+      viewport_settings.color(ViewportColorSettingId::BoundingBoxWire),
+      initial_bounding_box));
   EXPECT_TRUE(changes.empty());
 
   apply_button->click();
@@ -500,16 +537,27 @@ TEST(QtSettingsDialogTests,
   EXPECT_FLOAT_EQ(viewport_settings.float_value(
                       ViewportFloatSettingId::GridMajorLineSize),
                   1.75f);
+  EXPECT_FLOAT_EQ(viewport_settings.float_value(
+                      ViewportFloatSettingId::DefaultFlyNavigationSpeed),
+                  35.0f);
+  EXPECT_FLOAT_EQ(viewport_settings.float_value(
+                      ViewportFloatSettingId::BoundingBoxWireThickness),
+                  4.25f);
   EXPECT_FALSE(viewport_settings.bool_value(ViewportBoolSettingId::ShowGrid));
   EXPECT_EQ(ui_settings.locale(), "it-IT");
   EXPECT_EQ(localization.current_locale(), "it-IT");
   EXPECT_TRUE(viewport_setting_colors_approximately(
       viewport_settings.color(ViewportColorSettingId::MeshGridMajor),
       setting_color(applied_mesh_major)));
+  EXPECT_TRUE(viewport_setting_colors_approximately(
+      viewport_settings.color(ViewportColorSettingId::BoundingBoxWire),
+      setting_color(applied_bounding_box)));
   EXPECT_EQ(count_changes(changes, QtSettingsChangeKind::ViewportCommit), 1u);
   EXPECT_EQ(count_changes(changes, QtSettingsChangeKind::InterfaceCommit), 1u);
 
   thickness->setValue(2.5);
+  default_fly_speed->setValue(80.0);
+  bounding_box_thickness->setValue(7.0);
   show_grid->setChecked(true);
   locale_combo->setCurrentIndex(english_index);
   const QColor discarded_mesh_major = QColor::fromRgb(186, 130, 74, 105);
@@ -529,6 +577,12 @@ TEST(QtSettingsDialogTests,
   EXPECT_FLOAT_EQ(viewport_settings.float_value(
                       ViewportFloatSettingId::GridMajorLineSize),
                   1.75f);
+  EXPECT_FLOAT_EQ(viewport_settings.float_value(
+                      ViewportFloatSettingId::DefaultFlyNavigationSpeed),
+                  35.0f);
+  EXPECT_FLOAT_EQ(viewport_settings.float_value(
+                      ViewportFloatSettingId::BoundingBoxWireThickness),
+                  4.25f);
   EXPECT_FALSE(viewport_settings.bool_value(ViewportBoolSettingId::ShowGrid));
   EXPECT_EQ(ui_settings.locale(), "it-IT");
   EXPECT_EQ(localization.current_locale(), "it-IT");

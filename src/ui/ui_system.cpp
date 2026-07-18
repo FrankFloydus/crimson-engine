@@ -670,6 +670,7 @@ void UISystem::install_runtime_hooks(
 
   ViewportWorkspaceService &workspace =
       QuaderViewportApiRuntimeAccess::workspace(editor.viewports());
+  apply_viewport_settings_to_workspace();
   viewport_panel_->attach_workspace(workspace);
   tool_settings_window_->bind(editor);
   settings_dialog_->set_context(
@@ -2860,6 +2861,7 @@ void UISystem::handle_settings_dialog_change(QtSettingsChangeKind kind) {
   case QtSettingsChangeKind::ViewportPreview:
     return;
   case QtSettingsChangeKind::ViewportCommit:
+    apply_viewport_settings_to_workspace();
     (void)save_viewport_settings();
     break;
   case QtSettingsChangeKind::InterfaceCommit:
@@ -2889,6 +2891,16 @@ void UISystem::handle_settings_dialog_change(QtSettingsChangeKind kind) {
   if (main_menu_ != nullptr) {
     main_menu_->refresh();
   }
+}
+
+void UISystem::apply_viewport_settings_to_workspace() {
+  if (editor_ == nullptr) {
+    return;
+  }
+  ViewportWorkspaceService &workspace =
+      QuaderViewportApiRuntimeAccess::workspace(editor_->viewports());
+  (void)workspace.set_default_fly_speed(viewport_settings_.float_value(
+      ViewportFloatSettingId::DefaultFlyNavigationSpeed));
 }
 
 void UISystem::synchronize_settings_surfaces(bool refresh_dialog) {

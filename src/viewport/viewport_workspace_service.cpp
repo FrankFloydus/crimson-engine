@@ -116,6 +116,7 @@ ViewportWorkspaceService::ViewportWorkspaceService(
   for (ViewportWorkspacePaneState &pane_state : panes_) {
     reset_viewport_camera_for_view(pane_state.camera,
                                    viewport_view_for_pane(pane_state.id));
+    (void)pane_state.camera.set_default_fly_speed(default_fly_speed_);
   }
 }
 
@@ -216,6 +217,7 @@ bool ViewportWorkspaceService::set_view(ViewportPaneId pane_id,
     return false;
   }
   reset_viewport_camera_for_view(pane_state.camera, view);
+  (void)pane_state.camera.set_default_fly_speed(default_fly_speed_);
   return true;
 }
 
@@ -227,6 +229,29 @@ ViewportWorkspaceService::camera(ViewportPaneId pane_id) {
 const ViewportCameraController &
 ViewportWorkspaceService::camera(ViewportPaneId pane_id) const {
   return pane(pane_id).camera;
+}
+
+bool ViewportWorkspaceService::set_default_fly_speed(float speed) {
+  const float sanitized = viewport_sanitize_fly_navigation_speed(speed);
+  const bool changed =
+      std::abs(default_fly_speed_ - sanitized) > 0.0001f;
+  default_fly_speed_ = sanitized;
+  for (ViewportWorkspacePaneState &pane_state : panes_) {
+    (void)pane_state.camera.set_default_fly_speed(default_fly_speed_);
+  }
+  for (ViewportWorkspaceAuxiliaryViewportState &viewport_state :
+       auxiliary_viewports_) {
+    (void)viewport_state.camera.set_default_fly_speed(default_fly_speed_);
+  }
+  for (ViewportCameraController &backup :
+       local_visibility_pane_camera_backups_) {
+    (void)backup.set_default_fly_speed(default_fly_speed_);
+  }
+  for (AuxiliaryViewportCameraBackup &backup :
+       local_visibility_auxiliary_camera_backups_) {
+    (void)backup.camera.set_default_fly_speed(default_fly_speed_);
+  }
+  return changed;
 }
 
 bool ViewportWorkspaceService::focus_origin(ViewportPaneId pane_id,
@@ -341,6 +366,7 @@ ViewportWorkspaceService::ensure_auxiliary_viewport(std::string stable_id,
   ViewportWorkspaceAuxiliaryViewportState state;
   state.stable_id = std::move(stable_id);
   state.layer_index = layer_index;
+  (void)state.camera.set_default_fly_speed(default_fly_speed_);
   state.camera.focus_origin(
       static_cast<float>(viewport_host_defaults().focus_origin_distance));
   auxiliary_viewports_.push_back(std::move(state));
@@ -404,6 +430,7 @@ bool ViewportWorkspaceService::set_auxiliary_viewport_view(
     return false;
   }
   reset_viewport_camera_for_view(state->camera, view);
+  (void)state->camera.set_default_fly_speed(default_fly_speed_);
   return true;
 }
 

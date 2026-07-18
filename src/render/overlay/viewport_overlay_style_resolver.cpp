@@ -245,7 +245,7 @@ ViewportOverlayStyleResolver::color_for(ViewportOverlayStyleRole role,
     return setting_color(settings,
                          ViewportColorSettingId::RemoveSelectionVertex);
   case ViewportOverlayStyleRole::GroupBounds:
-    return kOverlayGroupBoundsColor;
+    return setting_color(settings, ViewportColorSettingId::BoundingBoxWire);
   case ViewportOverlayStyleRole::ToolPlaneFill:
     return kOverlayToolPlaneColor;
   case ViewportOverlayStyleRole::ToolPlaneLine:
@@ -299,6 +299,9 @@ float ViewportOverlayStyleResolver::line_width_for(
     return settings.float_value(ViewportFloatSettingId::OpenEdgeLineSize);
   case ViewportOverlayStyleRole::DiagnosticEdge:
     return settings.float_value(ViewportFloatSettingId::DiagnosticEdgeLineSize);
+  case ViewportOverlayStyleRole::GroupBounds:
+    return settings.float_value(
+        ViewportFloatSettingId::BoundingBoxWireThickness);
   default:
     return authored_width_pixels;
   }

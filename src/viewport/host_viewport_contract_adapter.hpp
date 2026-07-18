@@ -7,6 +7,7 @@
 #pragma once
 
 #include "viewport/viewport_input_types.hpp"
+#include "viewport/viewport_navigation_defaults.hpp"
 
 #include <optional>
 #include <span>
@@ -27,7 +28,7 @@ struct ViewportHostDefaults {
   double default_fov_degrees = 60.0;
   double orbit_radians_per_pixel = 0.006;
   double fly_look_radians_per_pixel = 0.004;
-  double fly_base_speed = 6.0;
+  double fly_base_speed = kDefaultViewportFlyNavigationSpeed;
   double fly_fast_multiplier = 4.0;
   double fly_slow_multiplier = 0.25;
   double selection_box_drag_threshold_pixels = 4.0;

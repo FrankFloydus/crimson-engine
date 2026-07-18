@@ -9,6 +9,52 @@ affected owners/files, resolved approach, and verification. Do not record routin
 private user data, guesses, or unresolved issues. Prefer updating a related existing entry over
 adding a duplicate.
 
+## 2026-07-18 - Qt Transients Paint Before Native Viewport Submission Resumes
+
+Task/context: modal prompts and popup menus could expose a white top-level window for seconds before
+their controls painted.
+
+Invariant:
+
+- Quader's synchronous `QMessageBox` paths fully construct their labels and buttons before
+  `exec()`. The shared stall was the app-owned precise frame timer continuing UI/render sync and
+  Filament swapchain submission inside Qt's nested dialog/menu event loop on the GUI thread.
+- `AppFramePresentationGate` tracks newly shown top-level Qt dialog, popup, tool, sheet, and drawer
+  widgets. Native frame submission yields from Show through the first Paint and resumes from a
+  queued turn after that paint returns. It must not pause for the full modal lifetime because live
+  color-dialog viewport preview remains supported.
+- Pending transients are independent and generation tagged. `QPointer`, Hide/Close/Destroy cleanup,
+  and generation-matched release keep nested, destroyed, and re-shown widgets from stranding or
+  prematurely releasing the gate. Main windows and ordinary children are excluded.
+
+Affected owners/files: `src/app/app_frame_presentation.hpp`, the `App` frame timer, and app frame
+presentation/source-policy tests.
+
+Verification: the first-paint behavior test covers modal and menu paint, continued submission while
+the modal remains visible, nested transients, and close-before-paint. The focused popup, input,
+settings-preview, and close-boundary tests passed, followed by all six CTest entries. Final handoff
+version is `0.1.65`.
+
+## 2026-07-18 - Viewport Preferences Own Fly Defaults And Selection Cage Style
+
+Task/context: Settings gained a default fly navigation speed plus color and thickness controls for
+the bounding cage used by rotated meshes, group selections, and aggregate multi-selection.
+
+Invariant:
+
+- `DefaultFlyNavigationSpeed` is a persisted descriptor-backed viewport preference with compiled
+  default `25.0`. `UISystem` applies it to the workspace on runtime attachment and Settings commit.
+  Workspace propagation covers current/future pane and auxiliary cameras plus local-visibility
+  backups; a temporary wheel-adjusted speed is preserved until reset, while an unadjusted current
+  speed follows a changed default.
+- Bounding-box color and thickness are descriptor-backed Selection settings consumed only by
+  `ViewportOverlayStyleRole::GroupBounds`. Scene bounds, aggregate-cage geometry, snapshot
+  extraction, and persistent overlay cache ownership remain unchanged.
+
+Verification: descriptor defaults/counts, persistence and clamping, localized dialog Apply/Cancel,
+runtime style resolution, camera reset semantics, workspace propagation, metadata parity, and
+source consumers passed their focused tests and all six CTest entries.
+
 ## 2026-07-18 - Selection Bounds Use Tight Geometry Extents And Include Instances
 
 Task/context: selected irregular meshes showed oversized cages after rotation, while formal

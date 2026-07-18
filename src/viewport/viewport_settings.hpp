@@ -30,6 +30,7 @@ struct ViewportSettingColor {
  */
 enum class ViewportSettingsSectionId {
     Grid,
+    Navigation,
     Shading,
     Selection,
     InstanceEditing,
@@ -53,6 +54,7 @@ enum class ViewportColorSettingId {
     GridZAxis,
     SelectionFace,
     SelectionWire,
+    BoundingBoxWire,
     InstanceEditBackground,
     InstanceEditContext,
     SourceWire,
@@ -76,6 +78,7 @@ enum class ViewportFloatSettingId {
     GridMinorLineSize,
     GridMajorLineSize,
     GridAxisLineSize,
+    DefaultFlyNavigationSpeed,
     ShadedKeyDirectionX,
     ShadedKeyDirectionY,
     ShadedKeyDirectionZ,
@@ -86,6 +89,7 @@ enum class ViewportFloatSettingId {
     SourceWireLineSize,
     SelectionFaceWireLineSize,
     SelectionEdgeLineSize,
+    BoundingBoxWireThickness,
     HoverWireLineSize,
     OpenEdgeLineSize,
     DiagnosticEdgeLineSize,

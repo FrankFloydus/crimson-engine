@@ -29,10 +29,6 @@ float vertical_fov_radians(float fov_degrees) {
   return fov_degrees * std::numbers::pi_v<float> / 180.0f;
 }
 
-float default_fly_speed() {
-  return static_cast<float>(viewport_host_defaults().fly_base_speed);
-}
-
 float perspective_visible_height(const ViewportCameraState &state) {
   return std::max(0.0001f,
                   2.0f * std::max(kMinCameraDistance, state.distance) *
@@ -275,7 +271,10 @@ ViewportCameraController::ViewportCameraController() {
   state_.orthographic_size =
       static_cast<float>(defaults.default_orthographic_size);
   state_.fov_degrees = static_cast<float>(defaults.default_fov_degrees);
-  fly_speed_ = static_cast<float>(defaults.fly_base_speed);
+  default_fly_speed_ =
+      viewport_sanitize_fly_navigation_speed(
+          static_cast<float>(defaults.fly_base_speed));
+  fly_speed_ = default_fly_speed_;
   sync_basis_from_angles();
 }
 
@@ -523,11 +522,26 @@ void ViewportCameraController::adjust_fly_speed(float wheel_steps) {
     return;
   }
   fly_speed_ =
-      clamp(fly_speed_ + wheel_steps * kFlySpeedWheelStep, 1.0f, 1000.0f);
+      clamp(fly_speed_ + wheel_steps * kFlySpeedWheelStep,
+            kMinimumViewportFlyNavigationSpeed,
+            kMaximumViewportFlyNavigationSpeed);
+}
+
+bool ViewportCameraController::set_default_fly_speed(float speed) {
+  const float sanitized = viewport_sanitize_fly_navigation_speed(speed);
+  if (std::abs(default_fly_speed_ - sanitized) <= 0.0001f) {
+    return false;
+  }
+  const bool current_was_default = fly_speed_is_default();
+  default_fly_speed_ = sanitized;
+  if (current_was_default) {
+    fly_speed_ = default_fly_speed_;
+  }
+  return true;
 }
 
 void ViewportCameraController::reset_fly_speed() {
-  fly_speed_ = default_fly_speed();
+  fly_speed_ = default_fly_speed_;
 }
 
 void ViewportCameraController::set_clip_planes(float near_plane,
@@ -539,7 +553,7 @@ void ViewportCameraController::set_clip_planes(float near_plane,
 }
 
 bool ViewportCameraController::fly_speed_is_default() const {
-  return std::abs(fly_speed_ - default_fly_speed()) <= 0.0001f;
+  return std::abs(fly_speed_ - default_fly_speed_) <= 0.0001f;
 }
 
 ViewportCameraPose ViewportCameraController::pose() const {

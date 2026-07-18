@@ -168,6 +168,7 @@ private:
   void handle_standard_material_texture_transform(
       QtStandardMaterialTextureTransformComponent component, double value);
   void handle_settings_dialog_change(QtSettingsChangeKind kind);
+  void apply_viewport_settings_to_workspace();
   void synchronize_settings_surfaces(bool refresh_dialog);
   void show_settings_dialog();
   void show_material_browser();

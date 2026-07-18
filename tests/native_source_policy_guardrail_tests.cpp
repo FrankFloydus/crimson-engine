@@ -93,7 +93,9 @@ TEST(ViewportSettingsTests, EveryDescriptorHasARuntimeConsumer) {
       read_source_file("src/viewport/viewport_grid_placement_policy.hpp") +
       read_source_file(
           "src/render/overlay/viewport_overlay_style_resolver.cpp") +
+      read_source_file("src/ui/ui_system.cpp") +
       read_source_file("src/ui/qt_viewport_panel.cpp") +
+      read_source_file("src/viewport/viewport_workspace_service.cpp") +
       read_source_file(
           "src/editor/viewport/viewport_selection_interaction.cpp") +
       read_source_file("src/editor/viewport/transform_gizmo_interaction.cpp") +
@@ -112,6 +114,7 @@ TEST(ViewportSettingsTests, EveryDescriptorHasARuntimeConsumer) {
           "ViewportColorSettingId::GridZAxis",
           "ViewportColorSettingId::SelectionFace",
           "ViewportColorSettingId::SelectionWire",
+          "ViewportColorSettingId::BoundingBoxWire",
           "ViewportColorSettingId::SourceWire",
           "ViewportColorSettingId::OpenEdge",
           "ViewportColorSettingId::DiagnosticEdge",
@@ -128,6 +131,7 @@ TEST(ViewportSettingsTests, EveryDescriptorHasARuntimeConsumer) {
           "ViewportFloatSettingId::GridMinorLineSize",
           "ViewportFloatSettingId::GridMajorLineSize",
           "ViewportFloatSettingId::GridAxisLineSize",
+          "ViewportFloatSettingId::DefaultFlyNavigationSpeed",
           "ViewportFloatSettingId::ShadedKeyDirectionX",
           "ViewportFloatSettingId::ShadedKeyDirectionY",
           "ViewportFloatSettingId::ShadedKeyDirectionZ",
@@ -138,6 +142,7 @@ TEST(ViewportSettingsTests, EveryDescriptorHasARuntimeConsumer) {
           "ViewportFloatSettingId::SourceWireLineSize",
           "ViewportFloatSettingId::SelectionFaceWireLineSize",
           "ViewportFloatSettingId::SelectionEdgeLineSize",
+          "ViewportFloatSettingId::BoundingBoxWireThickness",
           "ViewportFloatSettingId::HoverWireLineSize",
           "ViewportFloatSettingId::OpenEdgeLineSize",
           "ViewportFloatSettingId::DiagnosticEdgeLineSize",
@@ -555,6 +560,28 @@ TEST(AppLoopTests, QtEventLoopKeepsViewportInputAtDisplayCadence) {
       std::string::npos);
 }
 
+TEST(AppLoopTests,
+     TransientFirstPaintPrecedesNativeViewportFrameSubmission) {
+  const std::string app_source = read_source_file("src/app/app.cpp");
+  const std::string gate_header =
+      read_source_file("src/app/app_frame_presentation.hpp");
+
+  EXPECT_NE(gate_header.find("class AppFramePresentationGate"),
+            std::string::npos);
+  EXPECT_NE(app_source.find("case QEvent::Show:"), std::string::npos);
+  EXPECT_NE(app_source.find("case QEvent::Paint:"), std::string::npos);
+  EXPECT_NE(app_source.find("QTimer::singleShot(0, this"),
+            std::string::npos);
+  const std::string frame_timer_source = source_slice(
+      app_source,
+      "QObject::connect(frame_timer_.get(), &QTimer::timeout",
+      "QObject::connect(application_, &QApplication::aboutToQuit");
+  EXPECT_LT(frame_timer_source.find("blocks_frame_submission()"),
+            frame_timer_source.find("render_frame(frame_clock_.tick())"));
+  EXPECT_EQ(app_source.find("activeModalWidget"), std::string::npos);
+  EXPECT_EQ(app_source.find("activePopupWidget"), std::string::npos);
+}
+
 TEST(ViewportWorkspaceServiceTests,
      WorkspaceFocusDistancesUseHostViewportDefaults) {
   const std::string source =
@@ -844,11 +871,32 @@ TEST(ViewportWorkspaceServiceTests,
 }
 
 TEST(ViewportCameraTests, FlySpeedSourceUsesHostViewportDefaults) {
-  const std::string source =
+  const std::string camera_source =
       read_source_file("src/viewport/viewport_camera_controller.cpp");
-  EXPECT_EQ(source.find("kDefaultFlySpeed"), std::string::npos);
-  EXPECT_NE(source.find("viewport_host_defaults().fly_base_speed"),
+  const std::string workspace_source =
+      read_source_file("src/viewport/viewport_workspace_service.cpp");
+  const std::string ui_source = read_source_file("src/ui/ui_system.cpp");
+
+  EXPECT_EQ(camera_source.find("kDefaultFlySpeed"), std::string::npos);
+  EXPECT_NE(camera_source.find(
+                "const ViewportHostDefaults defaults = viewport_host_defaults()"),
             std::string::npos);
+  EXPECT_NE(camera_source.find("defaults.fly_base_speed"), std::string::npos);
+  EXPECT_NE(camera_source.find("default_fly_speed_"), std::string::npos);
+  EXPECT_NE(workspace_source.find("set_default_fly_speed"),
+            std::string::npos);
+  EXPECT_NE(ui_source.find(
+                "ViewportFloatSettingId::DefaultFlyNavigationSpeed"),
+            std::string::npos);
+  EXPECT_LT(ui_source.find("apply_viewport_settings_to_workspace();"),
+            ui_source.find("viewport_panel_->attach_workspace(workspace)"));
+  const std::string commit_source = source_slice(
+      ui_source, "void UISystem::handle_settings_dialog_change(",
+      "void UISystem::apply_viewport_settings_to_workspace()");
+  EXPECT_TRUE(source_contains_compact(
+      commit_source,
+      "case QtSettingsChangeKind::ViewportCommit: "
+      "apply_viewport_settings_to_workspace();"));
 }
 
 TEST(SceneContentDocumentTests,

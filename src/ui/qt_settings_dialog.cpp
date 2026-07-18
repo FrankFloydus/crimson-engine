@@ -73,6 +73,8 @@ std::string_view section_stable_id(ViewportSettingsSectionId section) {
   switch (section) {
   case ViewportSettingsSectionId::Grid:
     return "grid";
+  case ViewportSettingsSectionId::Navigation:
+    return "navigation";
   case ViewportSettingsSectionId::Shading:
     return "shading";
   case ViewportSettingsSectionId::Selection:

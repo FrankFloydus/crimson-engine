@@ -456,6 +456,8 @@ void expect_viewport_camera_near(const ViewportCameraController &actual,
   expect_vec3_near(actual.pose().target, expected.pose().target);
   expect_vec3_near(actual.pose().up, expected.pose().up);
   EXPECT_NEAR(actual.fly_speed(), expected.fly_speed(), 0.001f);
+  EXPECT_NEAR(actual.default_fly_speed(), expected.default_fly_speed(),
+              0.001f);
   EXPECT_EQ(actual.is_dragging(), expected.is_dragging());
   EXPECT_EQ(actual.orthographic_view_locked(),
             expected.orthographic_view_locked());
@@ -1134,19 +1136,23 @@ TEST(WindowPlacementTests, PreservesMinimumSizeWithoutConnectedWorkAreas) {
 TEST(ViewportSettingsTests, DefaultsMatchNativeViewportSettingsState) {
   const ViewportSettings settings = ViewportSettings::defaults();
 
-  ASSERT_EQ(viewport_settings_sections().size(), 8u);
+  ASSERT_EQ(viewport_settings_sections().size(), 9u);
   EXPECT_EQ(viewport_settings_sections()[0].label, "Grid");
   EXPECT_FALSE(viewport_settings_sections()[0].default_expanded);
-  EXPECT_EQ(viewport_settings_sections()[1].label, "Shading");
-  EXPECT_EQ(viewport_settings_sections()[2].label, "Selection");
-  EXPECT_EQ(viewport_settings_sections()[3].label, "Instance Editing");
-  EXPECT_EQ(viewport_settings_sections()[4].label, "Overlay");
-  EXPECT_EQ(viewport_settings_sections()[5].label, "Vertices");
-  EXPECT_EQ(viewport_settings_sections()[6].label, "Picking");
-  EXPECT_EQ(viewport_settings_sections()[7].label, "Gizmo");
+  EXPECT_EQ(viewport_settings_sections()[1].label, "Navigation");
+  EXPECT_EQ(viewport_settings_sections()[2].label, "Shading");
+  EXPECT_EQ(viewport_settings_sections()[3].label, "Selection");
+  EXPECT_EQ(viewport_settings_sections()[4].label, "Instance Editing");
+  EXPECT_EQ(viewport_settings_sections()[5].label, "Overlay");
+  EXPECT_EQ(viewport_settings_sections()[6].label, "Vertices");
+  EXPECT_EQ(viewport_settings_sections()[7].label, "Picking");
+  EXPECT_EQ(viewport_settings_sections()[8].label, "Gizmo");
 
   expect_color_near(settings.color(ViewportColorSettingId::SelectionWire),
                     overlay_policy_setting_color(kOverlaySelectionWireColor));
+  expect_color_near(
+      settings.color(ViewportColorSettingId::BoundingBoxWire),
+      overlay_policy_setting_color(kOverlayGroupBoundsColor));
   expect_color_near(settings.color(ViewportColorSettingId::SourceWire),
                     overlay_policy_setting_color(kOverlaySourceWireColor));
   expect_color_near(settings.color(ViewportColorSettingId::GridMinor),
@@ -1172,6 +1178,9 @@ TEST(ViewportSettingsTests, DefaultsMatchNativeViewportSettingsState) {
       settings.float_value(ViewportFloatSettingId::GridMajorLineSize), 0.250f);
   EXPECT_FLOAT_EQ(
       settings.float_value(ViewportFloatSettingId::GridAxisLineSize), 1.0f);
+  EXPECT_FLOAT_EQ(settings.float_value(
+                      ViewportFloatSettingId::DefaultFlyNavigationSpeed),
+                  25.0f);
   EXPECT_FLOAT_EQ(
       settings.float_value(ViewportFloatSettingId::ShadedKeyDirectionX),
       -0.09f);
@@ -1193,6 +1202,9 @@ TEST(ViewportSettingsTests, DefaultsMatchNativeViewportSettingsState) {
   EXPECT_FLOAT_EQ(
       settings.float_value(ViewportFloatSettingId::SelectionEdgeLineSize),
       2.5f);
+  EXPECT_FLOAT_EQ(settings.float_value(
+                      ViewportFloatSettingId::BoundingBoxWireThickness),
+                  1.5f);
   EXPECT_FLOAT_EQ(
       settings.float_value(ViewportFloatSettingId::PickVertexRadius), 0.3f);
   EXPECT_FLOAT_EQ(settings.float_value(ViewportFloatSettingId::GizmoSize),
@@ -1200,7 +1212,8 @@ TEST(ViewportSettingsTests, DefaultsMatchNativeViewportSettingsState) {
   EXPECT_FLOAT_EQ(
       settings.float_value(ViewportFloatSettingId::RotationSnapDegrees),
       15.0f);
-  ASSERT_EQ(viewport_float_settings().size(), 24u);
+  ASSERT_EQ(viewport_color_settings().size(), 23u);
+  ASSERT_EQ(viewport_float_settings().size(), 26u);
   ASSERT_EQ(viewport_bool_settings().size(), 9u);
   EXPECT_TRUE(settings.bool_value(ViewportBoolSettingId::ShowGrid));
   EXPECT_FALSE(settings.bool_value(ViewportBoolSettingId::ShowMeshGrid));
@@ -1330,6 +1343,8 @@ TEST(ViewportSettingsTests, OverlayDefaultsComeFromRenderOverlayPolicy) {
                                kOverlaySelectionFaceColor);
   expect_overlay_color_default(ViewportColorSettingId::SelectionWire,
                                kOverlaySelectionWireColor);
+  expect_overlay_color_default(ViewportColorSettingId::BoundingBoxWire,
+                               kOverlayGroupBoundsColor);
   expect_overlay_color_default(ViewportColorSettingId::SourceWire,
                                kOverlaySourceWireColor);
   expect_overlay_color_default(ViewportColorSettingId::OpenEdge,
@@ -1360,6 +1375,9 @@ TEST(ViewportSettingsTests, OverlayDefaultsComeFromRenderOverlayPolicy) {
       kOverlaySelectionWireLineWidthPixels);
   expect_overlay_float_default(ViewportFloatSettingId::SelectionEdgeLineSize,
                                kOverlaySelectionWireLineWidthPixels);
+  expect_overlay_float_default(
+      ViewportFloatSettingId::BoundingBoxWireThickness,
+      kOverlayGroupBoundsLineWidthPixels);
   expect_overlay_float_default(ViewportFloatSettingId::HoverWireLineSize,
                                kOverlayHoverWireLineWidthPixels);
   expect_overlay_float_default(ViewportFloatSettingId::OpenEdgeLineSize,
@@ -1390,8 +1408,14 @@ TEST(ViewportSettingsTests, SavesLoadsAndClampsViewportPreferenceKeys) {
                                  {0.1f, 0.2f, 0.3f, 0.4f}));
   EXPECT_TRUE(settings.set_color(ViewportColorSettingId::MeshGridMajor,
                                  {0.8f, 0.7f, 0.6f, 0.5f}));
+  EXPECT_TRUE(settings.set_color(ViewportColorSettingId::BoundingBoxWire,
+                                 {0.2f, 0.4f, 0.6f, 0.8f}));
   EXPECT_TRUE(
       settings.set_float_value(ViewportFloatSettingId::GizmoSize, 10.0f));
+  EXPECT_TRUE(settings.set_float_value(
+      ViewportFloatSettingId::DefaultFlyNavigationSpeed, 2000.0f));
+  EXPECT_TRUE(settings.set_float_value(
+      ViewportFloatSettingId::BoundingBoxWireThickness, 20.0f));
   EXPECT_TRUE(settings.set_bool_value(ViewportBoolSettingId::ShowGrid, false));
   EXPECT_TRUE(
       settings.set_bool_value(ViewportBoolSettingId::ShowMeshGrid, true));
@@ -1416,7 +1440,15 @@ TEST(ViewportSettingsTests, SavesLoadsAndClampsViewportPreferenceKeys) {
                     {0.101961f, 0.2f, 0.301961f, 0.4f});
   expect_color_near(loaded.color(ViewportColorSettingId::MeshGridMajor),
                     {0.8f, 0.701961f, 0.6f, 0.501961f});
+  expect_color_near(loaded.color(ViewportColorSettingId::BoundingBoxWire),
+                    {0.2f, 0.4f, 0.6f, 0.8f});
   EXPECT_FLOAT_EQ(loaded.float_value(ViewportFloatSettingId::GizmoSize), 2.0f);
+  EXPECT_FLOAT_EQ(loaded.float_value(
+                      ViewportFloatSettingId::DefaultFlyNavigationSpeed),
+                  1000.0f);
+  EXPECT_FLOAT_EQ(loaded.float_value(
+                      ViewportFloatSettingId::BoundingBoxWireThickness),
+                  8.0f);
   EXPECT_FALSE(loaded.bool_value(ViewportBoolSettingId::ShowGrid));
   EXPECT_TRUE(loaded.bool_value(ViewportBoolSettingId::ShowMeshGrid));
   EXPECT_TRUE(loaded.bool_value(ViewportBoolSettingId::ShowInfo));
@@ -1443,6 +1475,15 @@ TEST(ViewportSettingsTests, SavesLoadsAndClampsViewportPreferenceKeys) {
     EXPECT_NE(source.find("QVertexWorks.Quader.Viewport.MeshGridMajorColor"),
               std::string::npos);
     EXPECT_NE(source.find("QVertexWorks.Quader.Viewport.GizmoSize"),
+              std::string::npos);
+    EXPECT_NE(source.find(
+                  "QVertexWorks.Quader.Viewport.DefaultFlyNavigationSpeed"),
+              std::string::npos);
+    EXPECT_NE(source.find(
+                  "QVertexWorks.Quader.Viewport.BoundingBoxWireThickness"),
+              std::string::npos);
+    EXPECT_NE(source.find(
+                  "QVertexWorks.Quader.Viewport.BoundingBoxWireColor"),
               std::string::npos);
     EXPECT_NE(source.find("QVertexWorks.Quader.Viewport.ShowGrid"),
               std::string::npos);
@@ -1947,12 +1988,16 @@ TEST(ViewportOverlayStyleResolverTests,
                                  {1.0f, 0.0f, 1.0f, 1.0f}));
   ASSERT_TRUE(settings.set_color(ViewportColorSettingId::HoverVertex,
                                  {1.0f, 1.0f, 0.0f, 1.0f}));
+  ASSERT_TRUE(settings.set_color(ViewportColorSettingId::BoundingBoxWire,
+                                 {0.25f, 0.5f, 0.75f, 1.0f}));
   ASSERT_TRUE(settings.set_float_value(
       ViewportFloatSettingId::SourceWireLineSize, 2.0f));
   ASSERT_TRUE(settings.set_float_value(
       ViewportFloatSettingId::SelectionFaceWireLineSize, 5.0f));
   ASSERT_TRUE(settings.set_float_value(
       ViewportFloatSettingId::SelectionEdgeLineSize, 3.0f));
+  ASSERT_TRUE(settings.set_float_value(
+      ViewportFloatSettingId::BoundingBoxWireThickness, 6.0f));
   ASSERT_TRUE(settings.set_float_value(
       ViewportFloatSettingId::HoverWireLineSize, 4.0f));
   ASSERT_TRUE(
@@ -2018,8 +2063,8 @@ TEST(ViewportOverlayStyleResolverTests,
   EXPECT_FLOAT_EQ(frame.lines[2].width_pixels, 4.0f);
   EXPECT_EQ(frame.lines[3].color, rgba8(0, 255, 0));
   EXPECT_FLOAT_EQ(frame.lines[3].width_pixels, 3.0f);
-  EXPECT_EQ(frame.lines[4].color, kOverlayGroupBoundsColor);
-  EXPECT_FLOAT_EQ(frame.lines[4].width_pixels, 1.5f);
+  EXPECT_EQ(frame.lines[4].color, rgba8(64, 128, 191));
+  EXPECT_FLOAT_EQ(frame.lines[4].width_pixels, 6.0f);
   EXPECT_EQ(frame.points[0].color, rgba8(255, 255, 0));
   EXPECT_FLOAT_EQ(frame.points[0].size_pixels, 10.0f);
   ASSERT_TRUE(frame.points[0].outline_growth_pixels.has_value());
@@ -4239,8 +4284,84 @@ TEST(ViewportCameraTests, FlySpeedDefaultsUseHostViewportDefaults) {
             quader_host_contract::viewport_defaults().fly_slow_multiplier);
 
   ViewportCameraController camera;
+  EXPECT_DOUBLE_EQ(defaults.fly_base_speed, 25.0);
   EXPECT_NEAR(camera.fly_speed(), static_cast<float>(defaults.fly_base_speed),
               0.001f);
+  EXPECT_NEAR(camera.default_fly_speed(),
+              static_cast<float>(defaults.fly_base_speed), 0.001f);
+}
+
+TEST(ViewportCameraTests,
+     ConfigurableFlyDefaultPreservesTemporaryWheelAdjustmentUntilReset) {
+  ViewportCameraController camera;
+  ASSERT_TRUE(camera.set_default_fly_speed(40.0f));
+  EXPECT_FLOAT_EQ(camera.default_fly_speed(), 40.0f);
+  EXPECT_FLOAT_EQ(camera.fly_speed(), 40.0f);
+  EXPECT_TRUE(camera.fly_speed_is_default());
+
+  camera.adjust_fly_speed(5.0f);
+  ASSERT_TRUE(camera.set_default_fly_speed(30.0f));
+  EXPECT_FLOAT_EQ(camera.default_fly_speed(), 30.0f);
+  EXPECT_FLOAT_EQ(camera.fly_speed(), 45.0f);
+  EXPECT_FALSE(camera.fly_speed_is_default());
+
+  camera.reset_fly_speed();
+  EXPECT_FLOAT_EQ(camera.fly_speed(), 30.0f);
+  EXPECT_TRUE(camera.fly_speed_is_default());
+  ASSERT_TRUE(camera.set_default_fly_speed(
+      std::numeric_limits<float>::quiet_NaN()));
+  EXPECT_FLOAT_EQ(camera.default_fly_speed(), 25.0f);
+  EXPECT_FLOAT_EQ(camera.fly_speed(), 25.0f);
+}
+
+TEST(ViewportWorkspaceServiceTests,
+     FlyDefaultPropagatesToEveryCurrentFutureAndRestoredCamera) {
+  ViewportWorkspaceService workspace;
+  ASSERT_TRUE(workspace.set_default_fly_speed(42.0f));
+  EXPECT_FLOAT_EQ(workspace.default_fly_speed(), 42.0f);
+  for (const ViewportPaneId pane : {ViewportPaneId::Perspective,
+                                    ViewportPaneId::Top,
+                                    ViewportPaneId::Front,
+                                    ViewportPaneId::Side}) {
+    EXPECT_FLOAT_EQ(workspace.camera(pane).default_fly_speed(), 42.0f);
+    EXPECT_FLOAT_EQ(workspace.camera(pane).fly_speed(), 42.0f);
+  }
+
+  workspace.camera(ViewportPaneId::Perspective).adjust_fly_speed(5.0f);
+  ASSERT_TRUE(workspace.set_default_fly_speed(30.0f));
+  EXPECT_FLOAT_EQ(workspace.camera(ViewportPaneId::Perspective).fly_speed(),
+                  47.0f);
+  EXPECT_FLOAT_EQ(workspace.camera(ViewportPaneId::Top).fly_speed(), 30.0f);
+  workspace.camera(ViewportPaneId::Perspective).reset_fly_speed();
+  EXPECT_FLOAT_EQ(workspace.camera(ViewportPaneId::Perspective).fly_speed(),
+                  30.0f);
+
+  ASSERT_TRUE(
+      workspace.set_view(ViewportPaneId::Perspective, ViewportView::Top));
+  EXPECT_FLOAT_EQ(
+      workspace.camera(ViewportPaneId::Perspective).default_fly_speed(),
+      30.0f);
+  EXPECT_FLOAT_EQ(workspace.camera(ViewportPaneId::Perspective).fly_speed(),
+                  30.0f);
+  ViewportWorkspaceAuxiliaryViewportState &auxiliary =
+      workspace.ensure_auxiliary_viewport("fly-default-test", 1u);
+  EXPECT_FLOAT_EQ(auxiliary.camera.default_fly_speed(), 30.0f);
+  EXPECT_FLOAT_EQ(auxiliary.camera.fly_speed(), 30.0f);
+
+  constexpr std::array<ViewportLocalVisibilityEntityId, 1> kMembers{{1u}};
+  ASSERT_TRUE(workspace.enter_local_visibility(kMembers, kMembers));
+  ASSERT_TRUE(workspace.set_default_fly_speed(55.0f));
+  ASSERT_TRUE(workspace.exit_local_visibility());
+  EXPECT_FLOAT_EQ(
+      workspace.camera(ViewportPaneId::Perspective).default_fly_speed(),
+      55.0f);
+  EXPECT_FLOAT_EQ(workspace.camera(ViewportPaneId::Perspective).fly_speed(),
+                  55.0f);
+  ASSERT_TRUE(workspace.set_auxiliary_viewport_view("fly-default-test",
+                                                    ViewportView::Front));
+  EXPECT_FLOAT_EQ(workspace.auxiliary_viewport("fly-default-test")
+                      ->camera.default_fly_speed(),
+                  55.0f);
 }
 
 TEST(ViewportWorkspaceServiceTests, LayoutChangeClearsMaximizedPaneState) {

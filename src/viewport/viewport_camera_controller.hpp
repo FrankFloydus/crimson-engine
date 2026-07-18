@@ -7,6 +7,7 @@
 #pragma once
 
 #include "math/types.hpp"
+#include "viewport/viewport_navigation_defaults.hpp"
 
 #include <optional>
 
@@ -133,12 +134,14 @@ public:
     void update_drag_delta(QVec2 delta);
     void fly_move(QVec3 local_direction, float delta_seconds);
     void adjust_fly_speed(float wheel_steps);
+    bool set_default_fly_speed(float speed);
     void reset_fly_speed();
     void set_clip_planes(float near_plane, float far_plane);
 
     const ViewportCameraState& state() const { return state_; }
     QVec2 viewport_size() const { return {viewport_width_, viewport_height_}; }
     float fly_speed() const { return fly_speed_; }
+    float default_fly_speed() const { return default_fly_speed_; }
     bool fly_speed_is_default() const;
     ViewportCameraPose pose() const;
     ViewportRay ray_from_viewport_point(QVec2 local_mouse) const;
@@ -162,7 +165,8 @@ public:
     QVec3 pivot_ = {};
     float viewport_width_ = 1.0f;
     float viewport_height_ = 1.0f;
-    float fly_speed_ = 6.0f;
+    float fly_speed_ = kDefaultViewportFlyNavigationSpeed;
+    float default_fly_speed_ = kDefaultViewportFlyNavigationSpeed;
     QVec2 last_mouse_ = {};
     ViewportDragMode drag_mode_ = ViewportDragMode::None;
     bool orthographic_view_locked_ = false;

@@ -8,6 +8,7 @@
 
 #include "core/qstr.hpp"
 #include "render/viewport_overlay_policy.hpp"
+#include "viewport/viewport_navigation_defaults.hpp"
 #include "viewport/viewport_settings_defaults.hpp"
 
 #include <algorithm>
@@ -77,6 +78,7 @@ constexpr std::string_view key(std::string_view suffix) {
 
 const std::array<ViewportSettingsSectionDescriptor, kViewportSettingsSectionCount> kSections{{
         {ViewportSettingsSectionId::Grid, "Grid", false},
+        {ViewportSettingsSectionId::Navigation, "Navigation", false},
         {ViewportSettingsSectionId::Shading, "Shading", false},
         {ViewportSettingsSectionId::Selection, "Selection", false},
         {ViewportSettingsSectionId::InstanceEditing, "Instance Editing", false},
@@ -96,6 +98,7 @@ const std::array<ViewportColorSettingDescriptor, kViewportColorSettingCount> kCo
         {ViewportColorSettingId::GridZAxis, ViewportSettingsSectionId::Grid, "Z QAxis", key("GridZAxisColor"), kDefaultViewportGridZAxisColor},
         {ViewportColorSettingId::SelectionFace, ViewportSettingsSectionId::Selection, "Face Fill", key("SelectionFaceColor"), abgr8(kOverlaySelectionFaceColor)},
         {ViewportColorSettingId::SelectionWire, ViewportSettingsSectionId::Selection, "Wire", key("SelectionWireColor"), abgr8(kOverlaySelectionWireColor)},
+        {ViewportColorSettingId::BoundingBoxWire, ViewportSettingsSectionId::Selection, "Bounding Box Wire Color", key("BoundingBoxWireColor"), abgr8(kOverlayGroupBoundsColor)},
         {ViewportColorSettingId::InstanceEditBackground, ViewportSettingsSectionId::InstanceEditing, "Background", key("InstanceEditBackgroundColor"), kDefaultViewportInstanceEditBackgroundColor},
         {ViewportColorSettingId::InstanceEditContext, ViewportSettingsSectionId::InstanceEditing, "Context Mesh", key("InstanceEditContextColor"), kDefaultViewportInstanceEditContextColor},
         {ViewportColorSettingId::SourceWire, ViewportSettingsSectionId::Overlay, "Source Wire", key("SourceWireColor"), abgr8(kOverlaySourceWireColor)},
@@ -115,6 +118,7 @@ const std::array<ViewportFloatSettingDescriptor, kViewportFloatSettingCount> kFl
         {ViewportFloatSettingId::GridMinorLineSize, ViewportSettingsSectionId::Grid, "Minor Line", key("GridMinorLineSize"), kMinLineSize, kMaxLineSize, kDefaultViewportGridMinorLineSize},
         {ViewportFloatSettingId::GridMajorLineSize, ViewportSettingsSectionId::Grid, "Major Line", key("GridMajorLineSize"), kMinLineSize, kMaxLineSize, kDefaultViewportGridMajorLineSize},
         {ViewportFloatSettingId::GridAxisLineSize, ViewportSettingsSectionId::Grid, "QAxis Line", key("GridAxisLineSize"), kMinLineSize, kMaxLineSize, kDefaultViewportGridAxisLineSize},
+        {ViewportFloatSettingId::DefaultFlyNavigationSpeed, ViewportSettingsSectionId::Navigation, "Default Fly Navigation Speed", key("DefaultFlyNavigationSpeed"), kMinimumViewportFlyNavigationSpeed, kMaximumViewportFlyNavigationSpeed, kDefaultViewportFlyNavigationSpeed},
         {ViewportFloatSettingId::ShadedKeyDirectionX, ViewportSettingsSectionId::Shading, "Key Direction X", key("ShadedKeyDirectionX"), -1.0f, 1.0f, kDefaultViewportShadedKeyDirectionX},
         {ViewportFloatSettingId::ShadedKeyDirectionY, ViewportSettingsSectionId::Shading, "Key Direction Y", key("ShadedKeyDirectionY"), -1.0f, 1.0f, kDefaultViewportShadedKeyDirectionY},
         {ViewportFloatSettingId::ShadedKeyDirectionZ, ViewportSettingsSectionId::Shading, "Key Direction Z", key("ShadedKeyDirectionZ"), -1.0f, 1.0f, kDefaultViewportShadedKeyDirectionZ},
@@ -125,6 +129,7 @@ const std::array<ViewportFloatSettingDescriptor, kViewportFloatSettingCount> kFl
         {ViewportFloatSettingId::SourceWireLineSize, ViewportSettingsSectionId::Overlay, "Source Wire Size", key("SourceWireLineSize"), kMinLineSize, kMaxLineSize, kOverlaySourceWireLineWidthPixels},
         {ViewportFloatSettingId::SelectionFaceWireLineSize, ViewportSettingsSectionId::Selection, "Face Wire Size", key("SelectionFaceWireLineSize"), kMinLineSize, kMaxLineSize, kOverlaySelectionWireLineWidthPixels},
         {ViewportFloatSettingId::SelectionEdgeLineSize, ViewportSettingsSectionId::Selection, "Edge Line Size", key("SelectionEdgeLineSize"), kMinLineSize, kMaxLineSize, kOverlaySelectionWireLineWidthPixels},
+        {ViewportFloatSettingId::BoundingBoxWireThickness, ViewportSettingsSectionId::Selection, "Bounding Box Wire Thickness", key("BoundingBoxWireThickness"), kMinLineSize, kMaxLineSize, kOverlayGroupBoundsLineWidthPixels},
         {ViewportFloatSettingId::HoverWireLineSize, ViewportSettingsSectionId::Overlay, "Hover Wire Size", key("HoverWireLineSize"), kMinLineSize, kMaxLineSize, kOverlayHoverWireLineWidthPixels},
         {ViewportFloatSettingId::OpenEdgeLineSize, ViewportSettingsSectionId::Overlay, "Open Edge Size", key("OpenEdgeLineSize"), kMinLineSize, kMaxLineSize, kOverlayOpenEdgeLineWidthPixels},
         {ViewportFloatSettingId::DiagnosticEdgeLineSize, ViewportSettingsSectionId::Overlay, "Diagnostic Edge Size", key("DiagnosticEdgeLineSize"), kMinLineSize, kMaxLineSize, kOverlayDiagnosticEdgeLineWidthPixels},
