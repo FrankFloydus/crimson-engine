@@ -33,23 +33,41 @@ std::size_t overlay_layer_index(ViewportOverlayLayer layer) {
   return static_cast<std::size_t>(layer);
 }
 
+void add_overlay_element_signature(RenderSignatureBuilder &signature,
+                                   const ViewportOverlayElementRef &element) {
+  const auto add_signed = [&signature](int value) {
+    signature.add_value(
+        static_cast<std::uint64_t>(static_cast<std::int64_t>(value)));
+  };
+  add_signed(element.object_id);
+  add_signed(element.vertex_id);
+  add_signed(element.edge_a);
+  add_signed(element.edge_b);
+  add_signed(element.face_id);
+}
+
 void add_frame_triangle_signature(RenderSignatureBuilder &signature,
                                   const ViewportOverlayTriangle &triangle) {
   signature.add_value(static_cast<std::uint32_t>(triangle.layer))
       .add_value(triangle.color)
+      .add_value(static_cast<std::uint32_t>(triangle.style_role))
+      .add_value(static_cast<std::uint32_t>(triangle.source))
       .add_vec3(triangle.a)
       .add_vec3(triangle.b)
       .add_vec3(triangle.c);
+  add_overlay_element_signature(signature, triangle.element);
 }
 
 void add_layer_triangle_signature(RenderSignatureBuilder &signature,
                                   const ViewportOverlayTriangle &triangle) {
   signature.add_value(static_cast<std::uint32_t>(triangle.layer))
       .add_value(triangle.color)
-      .add_value(triangle.element.object_id)
+      .add_value(static_cast<std::uint32_t>(triangle.style_role))
+      .add_value(static_cast<std::uint32_t>(triangle.source))
       .add_vec3(triangle.a)
       .add_vec3(triangle.b)
       .add_vec3(triangle.c);
+  add_overlay_element_signature(signature, triangle.element);
 }
 
 void add_line_signature(RenderSignatureBuilder &signature,
@@ -57,8 +75,11 @@ void add_line_signature(RenderSignatureBuilder &signature,
   signature.add_value(static_cast<std::uint32_t>(line.layer))
       .add_value(line.color)
       .add_float(line.width_pixels)
+      .add_value(static_cast<std::uint32_t>(line.style_role))
+      .add_value(static_cast<std::uint32_t>(line.source))
       .add_vec3(line.start)
       .add_vec3(line.end);
+  add_overlay_element_signature(signature, line.element);
 }
 
 void add_point_signature(RenderSignatureBuilder &signature,
@@ -66,11 +87,14 @@ void add_point_signature(RenderSignatureBuilder &signature,
   signature.add_value(static_cast<std::uint32_t>(point.layer))
       .add_value(point.color)
       .add_float(point.size_pixels)
+      .add_value(static_cast<std::uint32_t>(point.style_role))
+      .add_value(static_cast<std::uint32_t>(point.source))
       .add_bool(point.outline_growth_pixels.has_value());
   if (point.outline_growth_pixels.has_value()) {
     signature.add_float(*point.outline_growth_pixels);
   }
   signature.add_vec3(point.position);
+  add_overlay_element_signature(signature, point.element);
 }
 
 void add_icon_signature(RenderSignatureBuilder &signature,
@@ -79,7 +103,9 @@ void add_icon_signature(RenderSignatureBuilder &signature,
       .add_value(static_cast<std::uint32_t>(icon.kind))
       .add_value(icon.color)
       .add_float(icon.size_pixels)
+      .add_value(static_cast<std::uint32_t>(icon.source))
       .add_vec3(icon.position);
+  add_overlay_element_signature(signature, icon.element);
 }
 
 } // namespace
@@ -290,6 +316,8 @@ OverlayFrameSignatures RenderSignatureBuilder::overlay_frame_signatures(
     add_icon_signature(layer_signatures[overlay_layer_index(icon.layer)],
                        icon);
   }
+
+  frame_signature.add_bool(frame.hover_target_selected);
 
   result.frame_signature = frame_signature.value();
   for (std::size_t layer_index = 0; layer_index < layer_signatures.size();

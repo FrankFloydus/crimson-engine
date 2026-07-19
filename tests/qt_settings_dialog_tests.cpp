@@ -2040,6 +2040,9 @@ TEST(QtMainMenuTests, ToolActionsUseEffectiveKeybindingsAndCommandRouting) {
                             return material_browser_available;
                           },
                   });
+  // Menu descriptors are intentionally synchronized on demand; initialization
+  // only builds the retained hierarchy and global chrome.
+  menu.refresh();
   auto *pivot_action =
       menu_bar.findChild<QAction *>(QStringLiteral("tool_pivot"));
   ASSERT_NE(pivot_action, nullptr);

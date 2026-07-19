@@ -8,6 +8,7 @@
 
 #include "assets/asset_registry.hpp"
 #include "assets/mesh_asset.hpp"
+#include "assets/mesh_wire_geometry.hpp"
 #include "math/glm_bridge.hpp"
 #include "scene/scene_bounds.hpp"
 #include "scene/scene_document.hpp"
@@ -18,6 +19,7 @@
 #include <array>
 #include <cmath>
 #include <optional>
+#include <unordered_map>
 #include <vector>
 
 namespace quader {
@@ -121,15 +123,10 @@ bool viewport_info_bounds_visible(const ViewportInfoVisibilityVolume &volume,
   return false;
 }
 
-std::optional<SceneBounds> viewport_info_mesh_world_bounds(
-    const QMat4 &world_from_local, const MeshAsset &mesh) {
-  const std::optional<SceneBounds> local_bounds = local_mesh_bounds(mesh);
-  if (!local_bounds.has_value()) {
-    return std::nullopt;
-  }
-
+std::optional<SceneBounds> viewport_info_world_bounds(
+    const QMat4 &world_from_local, const SceneBounds &local_bounds) {
   std::optional<SceneBounds> world_bounds;
-  for (const QVec3 local_corner : viewport_info_bounds_corners(*local_bounds)) {
+  for (const QVec3 local_corner : viewport_info_bounds_corners(local_bounds)) {
     const QVec3 world_corner = transform_point(world_from_local, local_corner);
     if (!world_bounds.has_value()) {
       world_bounds = SceneBounds{.min = world_corner, .max = world_corner};
@@ -140,30 +137,74 @@ std::optional<SceneBounds> viewport_info_mesh_world_bounds(
   return world_bounds;
 }
 
+/// Accumulates user-facing topology counts and renderer-facing submission
+/// counts for one mesh payload.
+struct ViewportInfoMeshStats {
+  std::uint64_t vertices = 0;
+  std::uint64_t edges = 0;
+  std::uint64_t faces = 0;
+  std::uint64_t triangles = 0;
+  std::uint64_t primitives = 0;
+  std::uint64_t draw_calls = 0;
+};
+
+ViewportInfoMeshStats build_viewport_info_mesh_stats(const MeshAsset &mesh) {
+  ViewportInfoMeshStats stats;
+  const std::vector<MeshPrimitiveSpan> spans =
+      coalesced_mesh_primitive_spans(mesh);
+  for (const MeshPrimitiveSpan &span : spans) {
+    stats.primitives += span.index_count / 3u;
+  }
+  stats.draw_calls = spans.size();
+  const MeshTopologyCounts topology = mesh_topology_counts(mesh);
+  stats.vertices = topology.vertices;
+  stats.edges = topology.edges;
+  stats.faces = topology.faces;
+  stats.triangles = topology.triangles;
+  return stats;
+}
+
 void append_viewport_info_mesh_stats(ViewportInfoSceneSnapshot &snapshot,
                                      const MeshAsset &mesh,
-                                     const QMat4 &world_from_local) {
+                                     const QMat4 &world_from_local,
+                                     EntityId source_entity,
+                                     EntityId instance_definition,
+                                     EntityId instance_occurrence,
+                                     std::unordered_map<const MeshAsset *,
+                                                        ViewportInfoMeshStats>
+                                         &mesh_stats_cache) {
   if (mesh.geometry().vertices.empty() || mesh.geometry().indices.empty()) {
     return;
   }
+  const std::optional<SceneBounds> local_bounds = local_mesh_bounds(mesh);
+  if (!local_bounds.has_value()) {
+    return;
+  }
   const std::optional<SceneBounds> world_bounds =
-      viewport_info_mesh_world_bounds(world_from_local, mesh);
+      viewport_info_world_bounds(world_from_local, *local_bounds);
   if (!world_bounds.has_value()) {
     return;
   }
-  const std::vector<MeshPrimitiveSpan> spans =
-      coalesced_mesh_primitive_spans(mesh);
-  if (spans.empty()) {
-    return;
+  const auto [cached, inserted] = mesh_stats_cache.try_emplace(&mesh);
+  if (inserted) {
+    cached->second = build_viewport_info_mesh_stats(mesh);
   }
-  std::uint64_t primitive_count = 0;
-  for (const MeshPrimitiveSpan &span : spans) {
-    primitive_count += span.index_count / 3u;
+  const ViewportInfoMeshStats &mesh_stats = cached->second;
+  if (mesh_stats.draw_calls == 0u) {
+    return;
   }
   snapshot.renderables.push_back({
       .world_bounds = *world_bounds,
-      .primitives = primitive_count,
-      .draw_calls = spans.size(),
+      .local_bounds = *local_bounds,
+      .source_entity = source_entity,
+      .instance_definition = instance_definition,
+      .instance_occurrence = instance_occurrence,
+      .vertices = mesh_stats.vertices,
+      .edges = mesh_stats.edges,
+      .faces = mesh_stats.faces,
+      .triangles = mesh_stats.triangles,
+      .primitives = mesh_stats.primitives,
+      .draw_calls = mesh_stats.draw_calls,
   });
 }
 
@@ -181,6 +222,9 @@ ViewportInfoSceneSnapshot build_viewport_info_scene_snapshot(
   ViewportInfoSceneSnapshot snapshot;
   const std::vector<EntityId> entities = document.entities();
   snapshot.renderables.reserve(entities.size());
+  std::unordered_map<const MeshAsset *, ViewportInfoMeshStats>
+      mesh_stats_cache;
+  mesh_stats_cache.reserve(entities.size());
   for (const EntityId entity_id : entities) {
     if (!document.is_effectively_visible(entity_id) ||
         !viewport_info_local_visibility_allows(local_visibility, entity_id) ||
@@ -198,7 +242,9 @@ ViewportInfoSceneSnapshot build_viewport_info_scene_snapshot(
     const MeshAsset *mesh = assets.mesh(mesh_component->mesh);
     if (mesh != nullptr) {
       append_viewport_info_mesh_stats(
-          snapshot, *mesh, document.world_transform_matrix(entity_id));
+          snapshot, *mesh, document.world_transform_matrix(entity_id),
+          entity_id, kInvalidEntityId, kInvalidEntityId,
+          mesh_stats_cache);
     }
   }
 
@@ -239,11 +285,60 @@ ViewportInfoSceneSnapshot build_viewport_info_scene_snapshot(
         append_viewport_info_mesh_stats(
             snapshot, *mesh,
             scene_transform_multiply(occurrence_world,
-                                     member_from_definition));
+                                     member_from_definition),
+            member, definition, occurrence,
+            mesh_stats_cache);
       }
     }
   }
   return snapshot;
+}
+
+bool try_refresh_viewport_info_scene_snapshot_transforms(
+    ViewportInfoSceneSnapshot &snapshot, const SceneDocument &document) {
+  std::unordered_map<EntityId, QMat4> definition_inverse_cache;
+  for (ViewportInfoRenderableStats &renderable : snapshot.renderables) {
+    if (renderable.source_entity == kInvalidEntityId ||
+        !document.exists(renderable.source_entity)) {
+      return false;
+    }
+
+    QMat4 world_from_local =
+        document.world_transform_matrix(renderable.source_entity);
+    if (renderable.instance_occurrence != kInvalidEntityId) {
+      if (renderable.instance_definition == kInvalidEntityId ||
+          !document.exists(renderable.instance_definition) ||
+          !document.exists(renderable.instance_occurrence)) {
+        return false;
+      }
+      auto definition_inverse =
+          definition_inverse_cache.find(renderable.instance_definition);
+      if (definition_inverse == definition_inverse_cache.end()) {
+        const std::optional<QMat4> inverse = try_scene_matrix_inverse(
+            document.world_transform_matrix(renderable.instance_definition));
+        if (!inverse.has_value()) {
+          return false;
+        }
+        definition_inverse =
+            definition_inverse_cache
+                .emplace(renderable.instance_definition, *inverse)
+                .first;
+      }
+      const QMat4 member_from_definition = scene_transform_multiply(
+          definition_inverse->second, world_from_local);
+      world_from_local = scene_transform_multiply(
+          document.world_transform_matrix(renderable.instance_occurrence),
+          member_from_definition);
+    }
+
+    const std::optional<SceneBounds> world_bounds = viewport_info_world_bounds(
+        world_from_local, renderable.local_bounds);
+    if (!world_bounds.has_value()) {
+      return false;
+    }
+    renderable.world_bounds = *world_bounds;
+  }
+  return true;
 }
 
 ViewportInfoSceneStats collect_viewport_info_scene_stats(
@@ -257,6 +352,10 @@ ViewportInfoSceneStats collect_viewport_info_scene_stats(
       continue;
     }
     ++stats.objects;
+    stats.vertices += renderable.vertices;
+    stats.edges += renderable.edges;
+    stats.faces += renderable.faces;
+    stats.triangles += renderable.triangles;
     stats.primitives += renderable.primitives;
     stats.draw_calls += renderable.draw_calls;
   }

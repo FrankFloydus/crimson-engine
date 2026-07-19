@@ -13,6 +13,9 @@ param(
 
     [string]$CMakeCache,
 
+    [ValidateSet('Release', 'Debug')]
+    [string]$Configuration = 'Release',
+
     [string[]]$TracyArguments = @(),
 
     [string[]]$QuaderArguments = @(),
@@ -115,7 +118,7 @@ try {
     }
 
     if ([string]::IsNullOrWhiteSpace($QuaderExe)) {
-        $QuaderExe = Join-Path $PSScriptRoot '..\build\vs2026\Debug\quader.exe'
+        $QuaderExe = Join-Path $PSScriptRoot "..\build\vs2026\$Configuration\quader.exe"
     }
 
     if ([string]::IsNullOrWhiteSpace($CMakeCache)) {
@@ -131,6 +134,7 @@ try {
         Write-Host '[boot-tracy] Ready'
         Write-Host "[boot-tracy] Tracy: $profilerPath"
         Write-Host "[boot-tracy] Quader: $quaderPath"
+        Write-Host "[boot-tracy] Config: $Configuration"
         Write-Host "[boot-tracy] Cache:  $cachePath"
         return
     }

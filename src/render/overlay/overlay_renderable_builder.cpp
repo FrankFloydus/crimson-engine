@@ -536,7 +536,8 @@ OverlayRenderState OverlayRenderableBuilder::make_state(
 
 OverlayLayerBuildPlan OverlayRenderableBuilder::build_layer(
     const ViewportOverlayFrame &frame, const ViewportOverlayCamera &camera,
-    ViewportOverlayLayer layer, const OverlayFrameSignatures *signatures) {
+    ViewportOverlayLayer layer, const OverlayFrameSignatures *signatures,
+    std::uint16_t blend_order_bias) {
   QDR_PROFILE_FUNCTION();
   OverlayLayerBuildPlan plan;
   const ViewportOverlayCamera sanitized_camera =
@@ -555,7 +556,8 @@ OverlayLayerBuildPlan OverlayRenderableBuilder::build_layer(
   }
 
   std::uint16_t blend_order =
-      static_cast<std::uint16_t>(viewport_overlay_draw_order(layer) * 64);
+      static_cast<std::uint16_t>(viewport_overlay_draw_order(layer) * 64u +
+                                 blend_order_bias);
   if (overlay_layer_can_build_face_fill(layer)) {
     OverlayFaceFillMesh face_fill_mesh = [&]() {
       QDR_PROFILE_SCOPE("Overlay build face fill mesh");
@@ -859,6 +861,7 @@ void OverlayRenderableBuilder::append_point_pass(
                   ? viewport_overlay_point_inner_radius(layer)
                   : 0.0f,
           .depth_bias = depth_bias,
+          .near_plane = OverlayCameraProjector::sanitized_camera(camera).near_plane,
       });
     }
   }
@@ -899,7 +902,7 @@ void OverlayRenderableBuilder::append_icon_pass(
       }
     }
 
-    OverlayPointMesh mesh = OverlayPointMeshBuilder::build_icons(
+    OverlayIconMesh mesh = OverlayPointMeshBuilder::build_icons(
         batch_icons, camera, key.size_pixels, depth_bias);
     if (!mesh.empty()) {
       plan.icon_batches.push_back({

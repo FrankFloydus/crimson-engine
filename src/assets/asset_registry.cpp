@@ -12,6 +12,7 @@
 #include <cmath>
 #include <exception>
 #include <optional>
+#include <unordered_set>
 #include <utility>
 
 namespace quader {
@@ -252,16 +253,46 @@ bool AssetRegistry::remove_texture(AssetId id) {
 }
 
 bool AssetRegistry::replace_mesh(AssetId id, MeshAsset mesh) {
+  MeshAssetReplacement replacement{.id = id, .mesh = std::move(mesh)};
+  return replace_meshes(
+      std::span<MeshAssetReplacement>(&replacement, 1u));
+}
+
+bool AssetRegistry::replace_meshes(
+    std::span<MeshAssetReplacement> replacements) {
   assert_owner_thread();
-  if (!validate_mesh(mesh).ok) {
-    return false;
+  if (replacements.empty()) {
+    return true;
   }
-  mesh = isolate_mesh_asset_payload(std::move(mesh));
-  intern_mesh_payload(mesh);
-  if (!meshes_.replace(id, std::move(mesh))) {
-    return false;
+
+  std::unordered_set<AssetId> unique_ids;
+  unique_ids.reserve(replacements.size());
+  for (const MeshAssetReplacement &replacement : replacements) {
+    if (replacement.id == kInvalidAssetId ||
+        !meshes_.contains(replacement.id) ||
+        !unique_ids.insert(replacement.id).second ||
+        !validate_mesh(replacement.mesh).ok) {
+      return false;
+    }
   }
-  deferred_meshes_.erase(id);
+
+  // No owner state changes before the complete batch has passed validation.
+  // Preparation can then share immutable payloads without copying geometry.
+  for (MeshAssetReplacement &replacement : replacements) {
+    replacement.mesh =
+        isolate_mesh_asset_payload(std::move(replacement.mesh));
+    intern_mesh_payload(replacement.mesh);
+  }
+
+  for (MeshAssetReplacement &replacement : replacements) {
+    const bool replaced =
+        meshes_.replace(replacement.id, std::move(replacement.mesh));
+    assert(replaced && "prevalidated mesh replacement disappeared");
+    if (!replaced) {
+      return false;
+    }
+    deferred_meshes_.erase(replacement.id);
+  }
   mark_dirty();
   return true;
 }

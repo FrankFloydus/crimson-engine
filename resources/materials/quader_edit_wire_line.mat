@@ -86,8 +86,9 @@ vertex {
 
         float sideDistance = (max(materialParams.lineWidth, 1.0) + max(materialParams.featherPixels, 0.0)) * 0.5;
         vec2 offsetPixels = (normal * side + direction * cap) * sideDistance;
-        vec2 offsetClip = offsetPixels * getResolution().zw * 2.0 * baseClip.w;
-        highp vec4 finalClip = baseClip + vec4(offsetClip, 0.0, 0.0);
+        vec2 offsetDevice = offsetPixels * getResolution().zw * 2.0;
+        float reciprocalW = 1.0 / max(abs(baseClip.w), 0.000001);
+        highp vec3 baseDevice = baseClip.xyz * reciprocalW;
 
         const float viewDepthBias = 0.04;
         const float maxDeviceDepthOffset = -0.0008;
@@ -100,11 +101,17 @@ vertex {
             deviceOffset = -(2.0 * nearPlane * viewDepthBias) / max(viewDepth * viewDepth, 0.000001);
         }
         deviceOffset = max(deviceOffset, maxDeviceDepthOffset);
-        float deviceDepth = finalClip.z / max(abs(finalClip.w), 0.000001);
-        finalClip.z = max(-1.0, deviceDepth + deviceOffset) * finalClip.w;
+        // Filament's DEVICE vertex domain maps OpenGL NDC Z to its reversed
+        // device depth after materialVertex. getClipFromViewMatrix() already
+        // yields reversed [0, 1] depth, so convert it back to the GL-domain
+        // value produced by the former CPU OverlayCameraProjector first.
+        float deviceDepth = 1.0 - 2.0 * baseDevice.z;
+        deviceDepth = max(-1.0, deviceDepth + deviceOffset);
+        highp vec4 finalDevice = vec4(baseDevice.xy + offsetDevice,
+                                     deviceDepth, 1.0);
 
         material.clipSpaceTransform = mat4(1.0);
-        material.clipSpaceTransform[3] = finalClip;
+        material.clipSpaceTransform[3] = finalDevice;
         material.lineDistancePixels = vec4(side * sideDistance, 0.0, 0.0, 0.0);
     }
 }

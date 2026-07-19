@@ -54,22 +54,31 @@ public:
      */
     struct PreviewGroup {
       std::uint64_t geometry_signature = 0;
+      std::uint64_t topology_signature = 0;
+      std::uint64_t layout_key = 0;
       std::vector<QMat4> transforms;
+      bool dynamic_positions = false;
       MeshRenderableProxy prototype;
       std::vector<MeshRenderableProxy> instances;
+      MeshRenderableProxy overlay_depth_prototype;
+      std::vector<MeshRenderableProxy> overlay_depth_instances;
     };
 
     static std::uint64_t
     preview_geometry_signature(
         const RenderToolPreviewMeshRecord &preview_mesh);
+    static std::uint64_t preview_topology_signature(
+        const RenderToolPreviewMeshRecord &preview_mesh);
     static std::uint64_t
     preview_meshes_signature(
         const std::vector<RenderToolPreviewMeshRecord> &preview_meshes);
+    void set_preview_groups_visible(bool visible);
 
     MeshRenderableFactory* factory_ = nullptr;
     MaterialBindingService *material_binding_ = nullptr;
     std::vector<PreviewGroup> preview_groups_;
     std::uint64_t mesh_signature_ = 0;
+    bool preview_groups_visible_ = true;
 };
 
 } // namespace quader

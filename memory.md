@@ -5819,3 +5819,271 @@ Verification: `ui_trace_2.tracy` confirms the preceding menu fix reduced menu `a
 arrangement predicate stalls addressed here. The combined `vs2026-debug` native `quader` target
 builds successfully. Automated suites remain skipped under the explicitly requested Fast
 Iteration Workflow; a post-fix trace is required for measured confirmation.
+
+## 2026-07-19 - Dense Box Selection Publishes Once And Reuses Stationary Bounds
+
+Task/context: `last_trace.tracy` showed component box selection spending 10.62-11.28 seconds in
+SDK/native selection publication across 784 meshes, object selection spending roughly 174-181 ms
+in scene/SDK synchronization, and transform snapping rebuilding every participant's world AABB on
+each drag update.
+
+Invariant:
+
+- A multi-mesh component selection gesture stages exact per-object selections, then commits one
+  atomic portable SDK transaction, one undo record, one change-journal publication, and one
+  delta-based scene selection sync. It never copies/checkpoints and commits the complete SDK
+  session once per mesh. Invalid, duplicate, or noncanonical batches leave state, history, redo,
+  and revisions unchanged.
+- SDK object-selection membership, transition lookup, persistent change-record lookup, and native
+  reverse-ID projection are hash-indexed. Production selection publication does not take expensive
+  rollback snapshots after all fallible input has been staged and preflighted; injected failure
+  tests retain exact rollback checkpoints.
+- Scene selection-only revisions do not invalidate the rectangle-selection universe or projected
+  picking participants. Scene content changes still invalidate lock and instance participation.
+- World pick bounds retain each participant's topology identity/signature and exact world matrix.
+  A transform revision recomputes only changed participants; layout, visibility, topology, and
+  hierarchy changes remain conservative.
+
+Owners: portable `ModelingSession` and `PolygonDocument`, the SDK projection adapter,
+`ModelingSelectionService` picking/rectangle caches, and focused SDK/native/source-policy tests.
+
+Verification: atomic success/undo/redo, no-op redo preservation, invalid-batch atomicity, exact
+rollback, repeated rectangle reuse, lock/instance invalidation, and one-of-200 world-bound rebuild
+tests pass. The broad regression gate was stopped when the user reaffirmed the ongoing Fast
+Iteration Workflow; the native executable is the handoff gate, and a new Tracy capture is required
+for measured wall-time confirmation.
+
+## 2026-07-19 - Dense Component Transforms Reset Only Portable Working State
+
+Task/context: `profiling.tracy` showed three component-transform pointer updates taking 7.47-7.53
+seconds each across 784 meshes. Static layer identity publication alone consumed 14.642 seconds
+over 2,352 calls; the remaining path restored the whole host projection and created one complete
+SDK undo snapshot per object on every pointer update. Component box publication remained dominated
+by repeated document lookup/application, with Edge selection additionally rebuilding all live edges
+for every requested edge.
+
+Invariant:
+
+- Reapplying an entity's existing scene layer is a constant-time no-op. It must not clone,
+  normalize, validate, and reinstall the whole scene layer state.
+- A dense workspace transform update restores the frozen portable SDK base directly when every
+  target owns a unique mesh binding, stages all selected documents from that base, commits one
+  atomic multi-document transition, and reprojects every target so a nonzero-to-zero update restores
+  baseline geometry. Shared mesh bindings retain the conservative full-projection restore path.
+- Multi-document reads index the SDK session once. Multi-document commits validate first, retain one
+  undo state, replace all documents, and publish one change transition; per-object history snapshots
+  are forbidden in this hot path.
+- Dense Edge selection materializes the live edge universe once per document, not once per selected
+  edge. Object-versus-component participant caches remain stable across Vertex, Edge, and Face mode
+  switches, and rectangle policy containers reserve from the known universe/hit sizes.
+- Tracy separates portable transform update, SDK-only versus full reset, atomic document commit, and
+  host document projection so the next capture immediately identifies the remaining mesh-compilation
+  floor.
+
+Owners: `ModelingTransformDragService`, `ModelingSdkProjectionAdapter`, portable
+`ModelingSession`/`PolygonDocument`, `SceneDocument`, and modeling rectangle-selection caches/policy.
+
+Verification: under the explicitly requested Fast Iteration Workflow, automated suites remain
+skipped. The `vs2026-debug` native `quader` target builds successfully; a new same-scene Tracy
+capture is required to measure the post-fix transform and component-box latency.
+
+## 2026-07-19 - Dense Preview Projection And Statistics Use Indexed Work
+
+Task/context: `profiling_2.tracy` confirmed the previous transform pass reduced dense component
+updates from roughly 7.5 seconds to 1.08 seconds, then isolated 948 ms/update in host projection.
+It also showed component box publication averaging 578 ms and selection-only viewport-info
+snapshot rebuilds taking 20-30 ms.
+
+Invariant:
+
+- A transform preview that already proved every target has a unique mesh binding carries that proof
+  into host publication. It must not rescan every scene mesh once per projected document. Independent
+  document mesh compilation uses a bounded parallel batch for dense workloads; asset replacement,
+  failure injection, scene binding, and notification remain sequential and deterministic.
+- Exact multi-object Replace selection goes directly to the portable atomic commit. The native
+  adapter does not copy and apply every selection before asking the SDK to validate and apply it
+  again. Dense vertex/face selection validation builds one live-ID index per document, and edge
+  validation uses the already sorted edge universe rather than an edge-by-edge linear scan.
+- Viewport topology statistics count authored vertices, unique edges, faces, and Blender-style
+  triangles (`sum(face corners - 2)`), falling back to compiled triangle facts when authored
+  topology is unavailable. Per-mesh facts are reused across occurrences within one snapshot.
+- The retained info panel is invalidated by visibility, transforms, mesh bindings, render
+  components, layers, assets, and local visibility—not the broad scene revision—so selection-only
+  changes do not rebuild scene geometry statistics. Qt text remains unchanged-value gated.
+
+Owners: portable polygon/session selection, SDK projection adapter, asset mesh topology facts,
+render viewport-info extraction, and the Qt viewport info presentation.
+
+Verification: Fast Iteration Workflow skips automated suites. The native Debug `quader` target
+build is the handoff gate. A new same-scene trace is required to quantify these post-`profiling_2`
+changes; the trace also establishes that a future Blender-style partial preview workspace and
+retained selection-mask overlays are the next architectural floor.
+
+## 2026-07-19 - Modal Transforms Stream Positions And Dense Points Stay On GPU
+
+Task/context: `profiling_3.tracy` showed four dense transform samples averaging 457.70 ms in the
+portable preview and roughly 1.24-1.33 seconds end to end. Every sample recompiled and republished
+557 documents. Navigation with the dense component overlay averaged about 150 ms/frame while the
+renderer itself used only about 4.84 ms; CPU point visibility and quad rebuilding dominated.
+
+Invariant:
+
+- A modal affine transform resolves durable participants, selected source vertex IDs, compiled
+  corner slots, base positions, topology layout keys, materials, and world transforms once at drag
+  begin. Pointer samples update only selected preview positions. They do not mutate the portable
+  documents, compile topology, replace assets, notify the scene, or create history.
+- Render-owned transform previews use uncached dynamic vertex buffers with position in its own
+  stream. Tangents, UVs, surface-grid data, colors, indices, primitives, and materials remain
+  static. Preview layout checks are O(participants); unchanged frames are revision-gated. Direct
+  and instanced source renderables are suppressed while their previews are live, and all shared
+  preview instances receive updated local bounds.
+- Mouse release applies the stored portable transform to all participating documents in one atomic
+  batch, performs the complete compile/projection once, and squashes the drag to one history entry.
+  Returning to the base transform commits nothing. Cancel clears transient renderer state and
+  retains the exact pre-drag restore contract.
+- Dense vertex points remain world-space retained geometry. The point material performs clip-space
+  projection and fixed-pixel billboard expansion from camera uniforms, and Filament depth testing
+  replaces per-frame CPU depth-stamp visibility. Camera navigation therefore does not rebuild point
+  quads or test every point against scene triangles.
+- Compiled render vertices preserve their portable source vertex IDs. This identity is the stable
+  bridge for position streaming and component-overlay remapping; it is not a resurrected external
+  SDK boundary.
+
+Reference: Blender's edit-mesh transform path creates stable `TransData` once and its overlay path
+keeps edit points in GPU batches. A BVH does not address either measured hot path and is deliberately
+not added; Filament's dynamic vertex-buffer and depth-culling facilities are the existing owners.
+
+Owners: portable polygon compilation payloads, `ModelingSdkProjectionAdapter`, modeling overlay
+service, tool-preview extraction/cache, mesh/instance renderable caches and factory, point-overlay
+builder/material, render API preview synchronization, and retained viewport overlay submission.
+
+Verification: under the explicitly requested Fast Iteration Workflow, automated suites were
+skipped. The Tracy-enabled `vs2026-debug` native `quader` target builds successfully with
+`QUADER_ENABLE_TRACY`, `TRACY_ENABLE`, and `TRACY_ON_DEMAND` enabled. A new same-scene trace is
+required to measure the new position-stream path and commit spike separately.
+
+## 2026-07-19 - Dense Selection And Transform Publication Stay Retained
+
+Task/context: `profiling_5.tracy` showed transform release reaching 3.019 seconds, canonical
+compilation using 3.415 seconds of aggregate CPU across 1,094 documents, box selection spending
+3.106 seconds across nine SDK publishes, and persistent overlay construction rebuilding selected
+face tessellation twice. Tool preview suppression also hid every occurrence of an instance member
+instead of only the edited occurrence.
+
+Invariant:
+
+- Component selection batches use dense object indexing and may share one immutable canonical
+  selection payload across identical documents after every target independently validates its
+  requested IDs. Sparse history and atomic failure behavior remain exact.
+- A topology-stable sparse transform publishes one prevalidated asset batch and one scene mesh
+  notification batch. It never deselects/reselects unchanged scene entities and never increments
+  asset/scene revisions once per transformed object.
+- Dense authored IDs use their append-only slot as an O(1) lookup hint with a correctness fallback.
+  Flat-shaded transform commits update only affected compiled face ranges while recomputing exact
+  normals, generated UVs, tessellation, winding, source IDs, and primitive spans; smooth or changed
+  layouts use the full compiler. Compiler output and per-face scratch allocations are retained.
+- Persistent selection and volatile hover/tool overlays have distinct invalidation streams. Face
+  fill and mask layers share one tessellation pass, dense overlay lookup avoids per-document hash
+  tables, and open-edge diagnostics compute normals/ticks only for selected boundary edges.
+- Tool-preview suppression is occurrence-scoped for instance edits. Direct meshes retain broad
+  source suppression; instance fills, wires, and scene wireframes match the exact source member or
+  definition plus occurrence.
+
+Reference: Blender's BMesh path retains indexed element tables and uses partial edit-mesh
+tessellation/normal updates from changed vertices. Quader follows those ownership principles while
+retaining its portable immutable document boundary.
+
+Owners: portable polygon/session selection and compilation, mesh projection, SDK projection,
+asset/scene batch publication, modeling overlay construction, render extraction, instance cache,
+and scene render bridge.
+
+Verification: Fast Iteration Workflow uses the Tracy-enabled native app build as the handoff gate.
+`cmake --build --preset vs2026-debug --target quader` succeeds with Tracy and on-demand capture
+enabled. A new `profiling_6.tracy` is required for measured confirmation.
+
+## 2026-07-19 - P6 Equal Domains, Shared Projection, And Moving Overlays
+
+Task/context: `profiling_6.tracy` proved that sustained navigation had reached roughly 7-13 ms
+frames, but component-box completion and transform release still produced 0.9-1.8 second
+main-thread frames. Selection replacement preparation consumed 99.58% of component publication;
+transform release compiled 2,490 mostly identical mesh results and then rebuilt the complete
+semantic selection overlay. The dense-transform fallback also incorrectly hid overlays above
+4,096 positions.
+
+Invariant:
+
+- One canonical component-selection payload validated against a document may be transferred to
+  another document only after an exact live vertex, edge, or face domain comparison. Equal domains
+  do not repeat selected-ID validation or canonical vector comparison; different domains retain the
+  full stale-ID checks.
+- Topology-stable transform publication groups inputs by the exact retained geometry/authored
+  payload identity and exact position updates. One representative is canonically projected and its
+  immutable result is shared by every identical input; hash matches are always collision-checked.
+- Dense transform overlays never disappear as a performance fallback. Point, line, source-wire,
+  and face proxies retain immutable topology/style streams and separate mutable Filament position
+  buffers; drag ticks update only retained position slots.
+- Vertex overlay membership is O(V), including an all-selected fast path, never O(V * selected-V).
+  Identical per-object semantic overlays reuse one exact local-geometry/selection template before
+  world projection, while object IDs and transforms remain occurrence-correct.
+- Performance captures use the Tracy-enabled optimized Release executable by default. Debug `/Od`
+  captures remain useful for correctness diagnostics but are not valid Blender performance
+  comparisons.
+
+Remaining architectural floor: Blender retains dense edit flags, adjacency/partial-update state,
+integer selection-ID buffers, and indexed GPU edit batches. Quader still needs those owners to
+remove CPU rectangle candidate DTOs, immutable-vector selection publication, and full semantic
+overlay aggregation for arbitrary non-identical dense scenes.
+
+Owners: portable polygon/session selection, SDK projection adapter, modeling overlay service,
+render overlay builders/cache/factory, and Tracy launcher tooling.
+
+Verification: Fast Iteration Workflow skips automated suites. Debug built successfully during the
+retained-overlay implementation; the optimized Tracy Release native build is the final handoff
+gate, followed by a same-scene `profiling_7.tracy` capture including vertex, edge, face, translate,
+rotate, and scale samples.
+
+## 2026-07-19 - P7 Moving Depth, Linear Overlay Aggregation, And Atomic Duplication
+
+Task/context: optimized Release `profiling_7.tracy` confirmed low-millisecond navigation,
+component box selection, transform ticks, and ordinary transform commits, but exposed three
+discrete regressions: moving component meshes appeared X-ray, semantic overlay acquisition reached
+1.861 seconds, and linked duplication of 1,568 selected objects blocked transform start for 3.216
+seconds.
+
+Invariant:
+
+- The overlay Filament view has an independent depth buffer. When a transform preview suppresses a
+  source mesh's static overlay-depth proxy, the moving preview must provide a depth-only companion
+  on `kViewportOverlayLayerMask` / `kViewportOverlayDepthChannel`. The companion shares the visible
+  preview's dynamic vertex/index buffers and receives matching bounds, transforms, instances, and
+  visibility, so one position upload feeds both passes.
+- `SourceWireDepthStamp` remains non-rendered visibility metadata. Persistent component source wire
+  and a non-sticky component hover candidate emit it by direct face tessellation with authored
+  vertex IDs, while the old full `build_overlay` path stays removed. Point-layer visibility must
+  construct the stamp filter and retain the full camera signature because its CPU occlusion result
+  changes with camera pose.
+- Filament `vertexDomain : device` materials consume OpenGL NDC and then map Z to reversed device
+  depth. GPU ribbon and point shaders divide clip XYZ by clip W, convert clipFromView's already
+  reversed `[0, 1]` Z back with `1 - 2 * z`, apply the existing GL-domain depth bias, and submit
+  `w = 1`. Passing the already-reversed Z through DEVICE causes a second remap, making rear
+  component wires/vertices win `GreaterOrEqual` and appear X-ray.
+- Many-object semantic overlay aggregation totals triangle, line, and point records first, reserves
+  each combined vector once, and then appends linearly. Never call exact
+  `reserve(current_size + source_size)` once per object; that reallocates and recopies the complete
+  accumulated frame quadratically.
+- Ordered multi-object duplication is one SDK session mutation with one source index, one undo
+  snapshot, one selection publication, and one state transition. The host adapter preserves
+  source/result order and existing rollback checkpoints; it must not call per-object duplication
+  in a loop because each call copies the growing session state.
+
+Reference: Blender's edit overlay draws a current-position depth prepass before edit faces, edges,
+and vertices, and its selected-object duplication/transform setup processes the selected set in one
+dense pass rather than publishing one full state transition per object.
+
+Owners: tool-preview renderable cache and mesh factory, component semantic overlay construction,
+portable modeling session duplication, and the SDK-to-native projection adapter.
+
+Verification: under Fast Iteration Workflow, automated suites were skipped. The combined
+Tracy-enabled `vs2026-release` native `quader` target builds successfully. A same-scene follow-up
+trace must cover vertex, edge, and face box selection plus translate, rotate, scale, and linked
+duplicate drag; `profiling_7.tracy` had no edge/face box samples.

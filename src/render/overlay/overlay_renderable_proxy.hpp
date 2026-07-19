@@ -6,8 +6,11 @@
 ////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
+#include "render/overlay/overlay_mesh_types.hpp"
+
 #include <cstdint>
 #include <utility>
+#include <vector>
 
 namespace filament {
 class IndexBuffer;
@@ -43,7 +46,14 @@ struct OverlayRenderableProxy {
           material_instance(std::exchange(other.material_instance, nullptr)),
           kind(std::exchange(other.kind, OverlayRenderableProxyKind::Unknown)),
           vertex_count(std::exchange(other.vertex_count, 0u)),
-          index_count(std::exchange(other.index_count, 0u)) {}
+          index_count(std::exchange(other.index_count, 0u)),
+          position_stream_bindings(
+              std::move(other.position_stream_bindings)),
+          position_stream3(std::move(other.position_stream3)),
+          primary_position_stream4(
+              std::move(other.primary_position_stream4)),
+          secondary_position_stream4(
+              std::move(other.secondary_position_stream4)) {}
     OverlayRenderableProxy& operator=(OverlayRenderableProxy&&) noexcept = delete;
 
     std::uint32_t entity_id = 0;
@@ -53,6 +63,10 @@ struct OverlayRenderableProxy {
     OverlayRenderableProxyKind kind = OverlayRenderableProxyKind::Unknown;
     std::uint32_t vertex_count = 0;
     std::uint32_t index_count = 0;
+    std::vector<OverlayPositionStreamBinding> position_stream_bindings;
+    std::vector<OverlayFloat3> position_stream3;
+    std::vector<OverlayFloat4> primary_position_stream4;
+    std::vector<OverlayFloat4> secondary_position_stream4;
 };
 
 } // namespace quader

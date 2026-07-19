@@ -28,6 +28,7 @@
 #include <span>
 #include <string>
 #include <tuple>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -65,14 +66,15 @@ OperationResult TransformSelectionOperation::apply(Document& document, Selection
         return { false, "No polygon elements are selected." };
     }
 
+    std::unordered_set<ElementId> selected_ids;
+    selected_ids.reserve(ids.size());
+    selected_ids.insert(ids.begin(), ids.end());
     bool changed = false;
-    for (const ElementId id : ids) {
-        Vertex* vertex = find_vertex(document, id);
-        if (vertex == nullptr) {
+    for (Vertex& vertex : document.vertices) {
+        if (!selected_ids.contains(vertex.id)) {
             continue;
         }
-
-        vertex->position = transform_point(transform_, vertex->position);
+        vertex.position = transform_point(transform_, vertex.position);
         changed = true;
     }
     return { changed, {} };

@@ -99,13 +99,14 @@ struct OverlayPointBatch {
     float size_pixels = 1.0f;
     float inner_radius = 0.0f;
     float depth_bias = 0.0f;
+    float near_plane = 0.05f;
 };
 
 /**
  * Represents an Overlay Icon Batch value used by the render extraction and Filament resource layer.
  */
 struct OverlayIconBatch {
-    OverlayPointMesh mesh;
+    OverlayIconMesh mesh;
     OverlayRenderState state;
     ViewportOverlayIconKind icon = ViewportOverlayIconKind::PointLight;
     float size_pixels = 1.0f;
@@ -158,7 +159,8 @@ public:
   static OverlayLayerBuildPlan
   build_layer(const ViewportOverlayFrame &frame,
               const ViewportOverlayCamera &camera, ViewportOverlayLayer layer,
-              const OverlayFrameSignatures *signatures = nullptr);
+              const OverlayFrameSignatures *signatures = nullptr,
+              std::uint16_t blend_order_bias = 0u);
 
 private:
     /**

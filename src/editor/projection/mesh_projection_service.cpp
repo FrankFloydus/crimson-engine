@@ -8,42 +8,180 @@
 
 #include "diagnostics/profile.hpp"
 
+#include <algorithm>
 #include <memory>
 #include <utility>
 
 #include <quader/modeling/neutral/polygon/document.hpp>
+#include <quader/modeling/neutral/polygon/internal/quader_poly_document_mesh_internal.hpp>
 
 namespace quader {
 namespace {
 
 QVec3 from_runtime(quader::QVec3 value) { return {value.x, value.y, value.z}; }
 
+void replace_geometry_from_compiled(
+    const quader_poly::CompiledMesh &compiled,
+    MeshGeometryPayload &geometry);
+
+bool same_position(quader::QVec3 left, quader::QVec3 right) {
+  return left.x == right.x && left.y == right.y && left.z == right.z;
+}
+
+float triangle_orientation(quader::QVec3 a, quader::QVec3 b,
+                           quader::QVec3 c, quader::QVec3 normal) {
+  const quader::QVec3 ab{b.x - a.x, b.y - a.y, b.z - a.z};
+  const quader::QVec3 ac{c.x - a.x, c.y - a.y, c.z - a.z};
+  const quader::QVec3 area{
+      ab.y * ac.z - ab.z * ac.y,
+      ab.z * ac.x - ab.x * ac.z,
+      ab.x * ac.y - ab.y * ac.x,
+  };
+  return area.x * normal.x + area.y * normal.y + area.z * normal.z;
+}
+
+/**
+ * Applies a topology-retained transform directly to the already compiled
+ * flat-shaded face ranges. This is the Quader equivalent of Blender's edit
+ * mesh partial tessellation/normal update: unchanged faces retain their
+ * derived buffers, while every affected face still receives canonical
+ * normals, generated UVs, triangulation, winding, IDs, and primitive spans.
+ * Smooth islands fall back to the full compiler because their normals can
+ * propagate beyond the directly affected faces.
+ */
+bool try_update_flat_document_mesh_positions(
+    const quader_poly::Document &previous,
+    const quader_poly::Document &next, MeshAsset &projected) {
+  QDR_PROFILE_SCOPE("Mesh projection retained flat-face update");
+  using quader_poly::document_internal::Triangle;
+
+  if (previous.faces.size() != next.faces.size() ||
+      std::ranges::any_of(next.faces, [](const quader_poly::Face &face) {
+        return face.normal_shading != quader_poly::SurfaceShading::Flat;
+      })) {
+    return false;
+  }
+
+  MeshGeometryPayload &geometry = projected.edit_geometry();
+  if (geometry.primitives.size() != next.faces.size()) {
+    return false;
+  }
+
+  std::size_t vertex_offset = 0U;
+  std::size_t index_offset = 0U;
+  for (std::size_t face_index = 0U; face_index < next.faces.size();
+       ++face_index) {
+    const quader_poly::Face &previous_face = previous.faces[face_index];
+    const quader_poly::Face &face = next.faces[face_index];
+    if (previous_face.id != face.id ||
+        previous_face.vertices != face.vertices ||
+        vertex_offset + face.vertices.size() > geometry.vertices.size()) {
+      return false;
+    }
+
+    MeshPrimitiveSpan &primitive = geometry.primitives[face_index];
+    if (primitive.index_offset != index_offset ||
+        primitive.material_slot != face.material_slot ||
+        index_offset + primitive.index_count > geometry.indices.size()) {
+      return false;
+    }
+
+    bool face_changed = false;
+    for (std::size_t local_index = 0U;
+         local_index < face.vertices.size(); ++local_index) {
+      const quader_poly::ElementId vertex_id = face.vertices[local_index];
+      const quader_poly::Vertex *before =
+          quader_poly::find_vertex(previous, vertex_id);
+      const quader_poly::Vertex *after = quader_poly::find_vertex(next, vertex_id);
+      if (before == nullptr || after == nullptr ||
+          geometry.vertices[vertex_offset + local_index].source_vertex_id !=
+              vertex_id) {
+        return false;
+      }
+      face_changed = face_changed ||
+                     !same_position(before->position, after->position);
+    }
+
+    if (face_changed) {
+      QDR_PROFILE_SCOPE("Mesh projection retained flat-face changed face");
+      const std::vector<Triangle> triangles =
+          quader_poly::document_internal::triangulate_face_local_indices(next,
+                                                                          face);
+      if (triangles.empty() ||
+          triangles.size() * 3U != primitive.index_count) {
+        return false;
+      }
+
+      const quader::QVec3 normal = quader_poly::face_normal(next, face);
+      const int dropped_axis =
+          quader_poly::document_internal::dropped_axis_for_normal(normal);
+      const quader_poly::document_internal::FaceUvBasis uv_basis =
+          quader_poly::document_internal::generated_face_uv_basis(next, face,
+                                                                   normal);
+      const bool use_loop_uvs =
+          quader_poly::document_internal::face_has_loop_uvs(face);
+      for (std::size_t local_index = 0U;
+           local_index < face.vertices.size(); ++local_index) {
+        const quader_poly::ElementId vertex_id = face.vertices[local_index];
+        const quader_poly::Vertex *vertex =
+            quader_poly::find_vertex(next, vertex_id);
+        if (vertex == nullptr) {
+          return false;
+        }
+        geometry.vertices[vertex_offset + local_index] = MeshVertex{
+            .position = vertex->position,
+            .normal = normal,
+            .uv = use_loop_uvs
+                      ? face.uvs[local_index]
+                      : quader_poly::document_internal::generated_uv_for_position(
+                            vertex->position, uv_basis, dropped_axis),
+            .rgba = 0xff9f9f9fU,
+            .source_vertex_id = vertex_id,
+        };
+      }
+
+      std::size_t write_index = index_offset;
+      for (const Triangle &triangle : triangles) {
+        const quader_poly::Vertex *a =
+            quader_poly::find_vertex(next, face.vertices[triangle.a]);
+        const quader_poly::Vertex *b =
+            quader_poly::find_vertex(next, face.vertices[triangle.b]);
+        const quader_poly::Vertex *c =
+            quader_poly::find_vertex(next, face.vertices[triangle.c]);
+        if (a == nullptr || b == nullptr || c == nullptr) {
+          return false;
+        }
+        geometry.indices[write_index++] =
+            static_cast<std::uint32_t>(vertex_offset + triangle.a);
+        if (triangle_orientation(a->position, b->position, c->position,
+                                 normal) >= 0.0F) {
+          geometry.indices[write_index++] =
+              static_cast<std::uint32_t>(vertex_offset + triangle.b);
+          geometry.indices[write_index++] =
+              static_cast<std::uint32_t>(vertex_offset + triangle.c);
+        } else {
+          geometry.indices[write_index++] =
+              static_cast<std::uint32_t>(vertex_offset + triangle.c);
+          geometry.indices[write_index++] =
+              static_cast<std::uint32_t>(vertex_offset + triangle.b);
+        }
+      }
+    }
+
+    vertex_offset += face.vertices.size();
+    index_offset += primitive.index_count;
+  }
+
+  return vertex_offset == geometry.vertices.size() &&
+         index_offset == geometry.indices.size();
+}
+
 MeshAsset
 mesh_asset_from_compiled_mesh(const quader_poly::CompiledMesh &compiled) {
   MeshAsset mesh;
   mesh.name = "Mesh";
-  MeshGeometryPayload &geometry = mesh.edit_geometry();
-  geometry.vertices.reserve(compiled.vertices.size());
-  geometry.indices = compiled.indices;
-  geometry.primitives.reserve(compiled.primitives.size());
+  replace_geometry_from_compiled(compiled, mesh.edit_geometry());
   mesh.has_stable_cpu_topology = true;
-
-  for (const quader_poly::CompiledVertex &vertex : compiled.vertices) {
-    geometry.vertices.push_back(MeshVertex{
-        .position = from_runtime(vertex.position),
-        .normal = from_runtime(vertex.normal),
-        .uv = {vertex.uv0.x, vertex.uv0.y},
-        .rgba = vertex.color,
-    });
-  }
-  for (const quader_poly::CompiledPrimitive &primitive : compiled.primitives) {
-    geometry.primitives.push_back(MeshPrimitiveSpan{
-        .index_offset = primitive.index_offset,
-        .index_count = primitive.index_count,
-        .material_slot = primitive.material_slot,
-    });
-  }
-
   return mesh;
 }
 
@@ -149,6 +287,89 @@ to_native_topology(const quader::modeling::AuthoredTopology &topology) {
   return document;
 }
 
+bool same_topology_layout(const quader_poly::Document &left,
+                          const quader_poly::Document &right) {
+  if (left.vertices.size() != right.vertices.size() ||
+      left.faces.size() != right.faces.size() ||
+      left.hard_normal_edges != right.hard_normal_edges ||
+      left.next_vertex_id != right.next_vertex_id ||
+      left.next_face_id != right.next_face_id) {
+    return false;
+  }
+  for (std::size_t index = 0; index < left.vertices.size(); ++index) {
+    if (left.vertices[index].id != right.vertices[index].id) {
+      return false;
+    }
+  }
+  for (std::size_t index = 0; index < left.faces.size(); ++index) {
+    const quader_poly::Face &a = left.faces[index];
+    const quader_poly::Face &b = right.faces[index];
+    if (a.id != b.id || a.vertices != b.vertices ||
+        a.uvs.size() != b.uvs.size() ||
+        a.material_slot != b.material_slot ||
+        a.normal_shading != b.normal_shading) {
+      return false;
+    }
+    for (std::size_t uv = 0; uv < a.uvs.size(); ++uv) {
+      if (a.uvs[uv].x != b.uvs[uv].x || a.uvs[uv].y != b.uvs[uv].y) {
+        return false;
+      }
+    }
+  }
+  return true;
+}
+
+bool sdk_document_authored_topology(
+    const quader::modeling::PolygonDocument &document,
+    quader_poly::Document &authored) {
+  quader::modeling::Result<quader::modeling::AuthoredTopology> result =
+      document.authored_topology();
+  if (!result.ok()) {
+    return false;
+  }
+  authored = to_native_topology(result.value());
+  return true;
+}
+
+quader_poly::CompiledMesh &canonical_compilation_scratch() {
+  // Transform commits are already partitioned across worker threads. Keeping
+  // one scratch payload per worker removes repeated output-vector allocation
+  // without sharing mutable compiler state between workers.
+  thread_local quader_poly::CompiledMesh scratch;
+  return scratch;
+}
+
+void replace_geometry_from_compiled(
+    const quader_poly::CompiledMesh &compiled,
+    MeshGeometryPayload &geometry) {
+  geometry.vertices.resize(compiled.vertices.size());
+  for (std::size_t index = 0; index < compiled.vertices.size(); ++index) {
+    const quader_poly::CompiledVertex &vertex = compiled.vertices[index];
+    geometry.vertices[index] = MeshVertex{
+        .position = from_runtime(vertex.position),
+        .normal = from_runtime(vertex.normal),
+        .uv = {vertex.uv0.x, vertex.uv0.y},
+        .rgba = vertex.color,
+        .source_vertex_id = vertex.source_vertex_id,
+    };
+  }
+
+  geometry.indices.resize(compiled.indices.size());
+  std::copy(compiled.indices.begin(), compiled.indices.end(),
+            geometry.indices.begin());
+
+  geometry.primitives.resize(compiled.primitives.size());
+  for (std::size_t index = 0; index < compiled.primitives.size(); ++index) {
+    const quader_poly::CompiledPrimitive &primitive =
+        compiled.primitives[index];
+    geometry.primitives[index] = MeshPrimitiveSpan{
+        .index_offset = primitive.index_offset,
+        .index_count = primitive.index_count,
+        .material_slot = primitive.material_slot,
+    };
+  }
+}
+
 } // namespace
 
 MeshAsset MeshProjectionService::mesh_asset_from_compiled_mesh(
@@ -183,40 +404,57 @@ MeshProjectionService::sdk_document_from_polygon_document(
 std::optional<MeshAsset> MeshProjectionService::compile_sdk_document_mesh(
     const quader::modeling::PolygonDocument &document) {
   QDR_PROFILE_FUNCTION();
-  quader::modeling::Result<quader::modeling::MeshPayload> compiled =
-      document.compile_mesh();
-  quader::modeling::Result<quader::modeling::AuthoredTopology> authored =
-      document.authored_topology();
-  if (!compiled.ok() || !authored.ok()) {
+  quader_poly::Document authored;
+  if (!sdk_document_authored_topology(document, authored)) {
+    return std::nullopt;
+  }
+  quader_poly::CompiledMesh &compiled = canonical_compilation_scratch();
+  quader_poly::compile_document_into(authored, compiled);
+
+  MeshAsset mesh = quader::mesh_asset_from_compiled_mesh(compiled);
+  mesh.replace_authored_polygon_document(std::move(authored));
+  return mesh;
+}
+
+std::optional<MeshAsset>
+MeshProjectionService::update_sdk_document_mesh_positions(
+    const quader::modeling::PolygonDocument &document,
+    const MeshAsset &current) {
+  QDR_PROFILE_FUNCTION();
+  if (!current.has_stable_cpu_topology ||
+      !current.has_authored_polygon_document ||
+      !current.authored_polygon_document) {
+    return std::nullopt;
+  }
+  quader_poly::Document next_authored;
+  if (!sdk_document_authored_topology(document, next_authored)) {
+    return std::nullopt;
+  }
+  if (!same_topology_layout(*current.authored_polygon_document,
+                            next_authored)) {
     return std::nullopt;
   }
 
-  MeshAsset mesh;
-  MeshGeometryPayload &geometry = mesh.edit_geometry();
-  geometry.vertices.reserve(compiled.value().vertices.size());
-  geometry.indices = compiled.value().indices;
-  geometry.primitives.reserve(compiled.value().primitives.size());
-  for (const quader::modeling::MeshVertexPayload &vertex :
-       compiled.value().vertices) {
-    geometry.vertices.push_back({
-        .position = {vertex.position.x, vertex.position.y, vertex.position.z},
-        .normal = {vertex.normal.x, vertex.normal.y, vertex.normal.z},
-        .uv = {vertex.uv0.x, vertex.uv0.y},
-        .rgba = vertex.color,
-    });
+  // Flat editable meshes can update only the face ranges touched by the
+  // transformed vertices. This preserves the canonical compiler result while
+  // avoiding a full derived-buffer rebuild for every object in a large edit
+  // selection. Any layout, degeneracy, or smooth-normal case drops to the
+  // complete compiler below.
+  MeshAsset projected = current;
+  if (try_update_flat_document_mesh_positions(
+          *current.authored_polygon_document, next_authored, projected)) {
+    projected.replace_authored_polygon_document(std::move(next_authored));
+    return projected;
   }
-  for (const quader::modeling::MeshPrimitivePayload &primitive :
-       compiled.value().primitives) {
-    geometry.primitives.push_back({
-        .index_offset = primitive.index_offset,
-        .index_count = primitive.index_count,
-        .material_slot = primitive.material.index,
-    });
-  }
-  mesh.has_stable_cpu_topology = true;
-  mesh.replace_authored_polygon_document(
-      to_native_topology(authored.value()));
-  return mesh;
+
+  quader_poly::CompiledMesh &compiled = canonical_compilation_scratch();
+  quader_poly::compile_document_into(next_authored, compiled);
+
+  projected = current;
+  MeshGeometryPayload &geometry = projected.edit_geometry();
+  replace_geometry_from_compiled(compiled, geometry);
+  projected.replace_authored_polygon_document(std::move(next_authored));
+  return projected;
 }
 
 } // namespace quader

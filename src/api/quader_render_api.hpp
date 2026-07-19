@@ -56,6 +56,15 @@ public:
     std::uint64_t native_array_preview_asset_revision_ = 0;
     std::uint64_t native_array_preview_local_visibility_revision_ = 0;
     std::uint8_t native_array_preview_kind_ = 0;
+    const void *transform_preview_sync_bridge_ = nullptr;
+    std::uint64_t transform_preview_bridge_submission_revision_ = 0;
+    std::uint64_t transform_preview_revision_ = 0;
+    std::uint64_t transform_preview_asset_revision_ = 0;
+    std::uint64_t transform_preview_local_visibility_revision_ = 0;
+    const void *idle_tool_preview_sync_bridge_ = nullptr;
+    std::uint64_t idle_tool_preview_bridge_submission_revision_ = 0;
+    std::uint64_t idle_tool_preview_asset_revision_ = 0;
+    std::uint64_t idle_tool_preview_local_visibility_revision_ = 0;
     std::uint64_t scene_session_id_ = 1u;
     std::uint64_t activation_generation_ = 1u;
     std::uint64_t scene_binding_revision_ = 1;

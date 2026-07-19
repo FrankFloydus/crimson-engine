@@ -234,10 +234,18 @@ bool LinearArrayToolService::can_activate_preflight() const {
     return false;
   }
 
-  const EntityId first = sources.front();
-  return scene_.instance_occurrence(first) != nullptr ||
-         (scene_.modeling_object(first) != nullptr &&
-          scene_.mesh(first) != nullptr);
+  const bool instance_occurrences =
+      scene_.instance_occurrence(sources.front()) != nullptr;
+  return std::all_of(sources.begin(), sources.end(), [&](EntityId source) {
+    const bool source_is_occurrence =
+        scene_.instance_occurrence(source) != nullptr;
+    if (source_is_occurrence != instance_occurrences) {
+      return false;
+    }
+    return source_is_occurrence ||
+           (scene_.modeling_object(source) != nullptr &&
+            scene_.mesh(source) != nullptr);
+  });
 }
 
 std::optional<QVec3>

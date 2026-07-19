@@ -82,16 +82,21 @@ vertex {
 
         float sideDistance = (max(materialParams.lineWidth, 1.0) + max(materialParams.featherPixels, 0.0)) * 0.5;
         vec2 offsetPixels = (normal * side + direction * cap) * sideDistance;
-        vec2 offsetClip = offsetPixels * getResolution().zw * 2.0 * baseClip.w;
-        highp vec4 finalClip = baseClip + vec4(offsetClip, 0.0, 0.0);
+        vec2 offsetDevice = offsetPixels * getResolution().zw * 2.0;
+        float reciprocalW = 1.0 / max(abs(baseClip.w), 0.000001);
+        highp vec3 baseDevice = baseClip.xyz * reciprocalW;
 
-        float deviceDepth = finalClip.z / max(abs(finalClip.w), 0.000001);
+        // DEVICE-domain vertices are remapped by Filament from OpenGL NDC Z
+        // to reversed depth. Convert clipFromView's already-reversed depth
+        // back to OpenGL NDC so that remap happens exactly once.
+        float deviceDepth = 1.0 - 2.0 * baseDevice.z;
         float deviceOffset = max(materialParams.depthBias, 0.0) * nearPlane * 0.0025;
         deviceDepth = max(-1.0, deviceDepth - deviceOffset);
-        finalClip.z = deviceDepth * finalClip.w;
+        highp vec4 finalDevice = vec4(baseDevice.xy + offsetDevice,
+                                     deviceDepth, 1.0);
 
         material.clipSpaceTransform = mat4(1.0);
-        material.clipSpaceTransform[3] = finalClip;
+        material.clipSpaceTransform[3] = finalDevice;
         material.lineDistancePixels = vec4(side * sideDistance, 0.0, 0.0, 0.0);
     }
 }

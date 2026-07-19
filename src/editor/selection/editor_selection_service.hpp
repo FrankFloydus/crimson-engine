@@ -180,6 +180,7 @@ private:
   mutable std::uint64_t summary_cache_scene_revision_ = 0;
   mutable std::uint64_t summary_cache_modeling_content_revision_ = 0;
   mutable std::uint64_t summary_cache_modeling_selection_revision_ = 0;
+  mutable int summary_cache_modeling_selection_mode_ = -1;
   mutable ModelingSelectionSummary summary_cache_modeling_;
   mutable ModelingSelectionSummary summary_cache_resolved_;
 };

@@ -48,6 +48,15 @@ struct RenderVertex {
     std::uint32_t color;
 };
 
+/// Stores static vertex attributes retained while a modal tool streams only
+/// changing positions.
+struct DynamicRenderVertexStatic {
+    filament::math::float4 tangent_frame;
+    filament::math::float2 uv;
+    filament::math::float4 surface_grid_projection;
+    std::uint32_t color;
+};
+
 /**
  * Cleans up partially constructed Filament mesh resources until ownership is handed to the proxy.
  */
@@ -241,6 +250,25 @@ filament::Box compute_bounds(const RenderMeshAssetSnapshot &mesh) {
   return box;
 }
 
+filament::Box compute_bounds(std::span<const QVec3> positions) {
+  if (positions.empty()) {
+    return {{0.0f, 0.0f, 0.0f}, {1.0f, 1.0f, 1.0f}};
+  }
+  QVec3 min_value = positions.front();
+  QVec3 max_value = positions.front();
+  for (const QVec3 position : positions.subspan(1u)) {
+    min_value.x = std::min(min_value.x, position.x);
+    min_value.y = std::min(min_value.y, position.y);
+    min_value.z = std::min(min_value.z, position.z);
+    max_value.x = std::max(max_value.x, position.x);
+    max_value.y = std::max(max_value.y, position.y);
+    max_value.z = std::max(max_value.z, position.z);
+  }
+  filament::Box box;
+  box.set(to_filament(min_value), to_filament(max_value));
+  return box;
+}
+
 bool same_vertex(const MeshVertex &left, const MeshVertex &right) {
   return left.position.x == right.position.x &&
          left.position.y == right.position.y &&
@@ -422,6 +450,8 @@ bool MeshRenderableFactory::acquire_geometry(
       proxy.vertex_buffer = candidate.vertex_buffer;
       proxy.index_buffer = candidate.index_buffer;
       proxy.owns_mesh_buffers = true;
+      proxy.vertex_count = static_cast<std::uint32_t>(mesh.vertices.size());
+      proxy.index_count = static_cast<std::uint32_t>(mesh.indices.size());
       return true;
     }
   }
@@ -475,6 +505,8 @@ bool MeshRenderableFactory::acquire_geometry(
   proxy.vertex_buffer = resource->vertex_buffer;
   proxy.index_buffer = resource->index_buffer;
   proxy.owns_mesh_buffers = true;
+  proxy.vertex_count = static_cast<std::uint32_t>(mesh.vertices.size());
+  proxy.index_count = static_cast<std::uint32_t>(mesh.indices.size());
   geometry_cache_->candidates[signature].push_back(resource_id);
   geometry_cache_->resources.emplace(resource_id, std::move(resource));
   ++geometry_cache_->stats.upload_count;
@@ -483,6 +515,75 @@ bool MeshRenderableFactory::acquire_geometry(
   geometry_cache_->stats.uploaded_index_bytes +=
       static_cast<std::uint64_t>(mesh.indices.size_bytes());
   geometry_cache_->stats.resource_count = geometry_cache_->resources.size();
+  return true;
+}
+
+bool MeshRenderableFactory::acquire_dynamic_geometry(
+    const RenderMeshAssetSnapshot &mesh, MeshRenderableProxy &proxy,
+    std::span<const QVec3> dynamic_positions) {
+  if (engine_ == nullptr || !mesh.renderable() ||
+      (!dynamic_positions.empty() &&
+       dynamic_positions.size() != mesh.vertices.size())) {
+    return false;
+  }
+  std::vector<RenderVertex> vertices = build_render_vertices(mesh);
+  std::vector<filament::math::float3> positions;
+  std::vector<DynamicRenderVertexStatic> static_vertices;
+  positions.reserve(vertices.size());
+  static_vertices.reserve(vertices.size());
+  for (std::size_t index = 0u; index < vertices.size(); ++index) {
+    positions.push_back(dynamic_positions.empty()
+                            ? vertices[index].position
+                            : to_filament(dynamic_positions[index]));
+    const RenderVertex &vertex = vertices[index];
+    static_vertices.push_back({
+        .tangent_frame = vertex.tangent_frame,
+        .uv = vertex.uv,
+        .surface_grid_projection = vertex.surface_grid_projection,
+        .color = vertex.color,
+    });
+  }
+  proxy.vertex_buffer =
+      filament::VertexBuffer::Builder()
+          .vertexCount(static_cast<std::uint32_t>(positions.size()))
+          .bufferCount(2)
+          .attribute(filament::VertexAttribute::POSITION, 0,
+                     AttributeType::FLOAT3, 0,
+                     sizeof(filament::math::float3))
+          .attribute(filament::VertexAttribute::TANGENTS, 1,
+                     AttributeType::FLOAT4,
+                     offsetof(DynamicRenderVertexStatic, tangent_frame),
+                     sizeof(DynamicRenderVertexStatic))
+          .attribute(filament::VertexAttribute::UV0, 1, AttributeType::FLOAT2,
+                     offsetof(DynamicRenderVertexStatic, uv),
+                     sizeof(DynamicRenderVertexStatic))
+          .attribute(filament::VertexAttribute::CUSTOM0, 1,
+                     AttributeType::FLOAT4,
+                     offsetof(DynamicRenderVertexStatic,
+                              surface_grid_projection),
+                     sizeof(DynamicRenderVertexStatic))
+          .attribute(filament::VertexAttribute::COLOR, 1,
+                     AttributeType::UBYTE4,
+                     offsetof(DynamicRenderVertexStatic, color),
+                     sizeof(DynamicRenderVertexStatic))
+          .normalized(filament::VertexAttribute::COLOR)
+          .build(*engine_);
+  proxy.vertex_buffer->setBufferAt(
+      *engine_, 0, FilamentBufferDescriptorFactory::vector(positions));
+  proxy.vertex_buffer->setBufferAt(
+      *engine_, 1, FilamentBufferDescriptorFactory::vector(static_vertices));
+  proxy.index_buffer =
+      filament::IndexBuffer::Builder()
+          .indexCount(static_cast<std::uint32_t>(mesh.indices.size()))
+          .bufferType(filament::IndexBuffer::IndexType::UINT)
+          .build(*engine_);
+  proxy.index_buffer->setBuffer(
+      *engine_, FilamentBufferDescriptorFactory::span(mesh.indices));
+  proxy.geometry_resource = 0u;
+  proxy.owns_mesh_buffers = true;
+  proxy.dynamic_geometry = true;
+  proxy.vertex_count = static_cast<std::uint32_t>(mesh.vertices.size());
+  proxy.index_count = static_cast<std::uint32_t>(mesh.indices.size());
   return true;
 }
 
@@ -528,7 +629,8 @@ MeshRenderableProxy MeshRenderableFactory::create(
     const RenderMaterialBindingSnapshot *material,
     const QMat4 &world_transform, bool cast_shadows, bool double_sided,
     std::uint8_t layer_mask, bool editor_unlit, bool depth_only,
-    std::uint8_t channel) {
+    std::uint8_t channel, bool dynamic_geometry,
+    std::span<const QVec3> dynamic_positions) {
   QDR_PROFILE_FUNCTION();
   MeshRenderableProxy proxy;
   MeshRenderableCreationGuard creation_guard(*this, proxy);
@@ -544,7 +646,9 @@ MeshRenderableProxy MeshRenderableFactory::create(
 
   {
     QDR_PROFILE_SCOPE("Mesh renderable acquire shared geometry");
-    if (!acquire_geometry(mesh, proxy)) {
+    if (!(dynamic_geometry
+              ? acquire_dynamic_geometry(mesh, proxy, dynamic_positions)
+                           : acquire_geometry(mesh, proxy))) {
       return proxy;
     }
   }
@@ -581,7 +685,9 @@ MeshRenderableProxy MeshRenderableFactory::create(
   }
   {
     QDR_PROFILE_SCOPE("Mesh renderable build Filament entity");
-    builder.boundingBox(compute_bounds(mesh))
+    builder.boundingBox(dynamic_positions.empty()
+                            ? compute_bounds(mesh)
+                            : compute_bounds(dynamic_positions))
         .layerMask(kViewportAllLayerMask, layer_mask)
         .channel(channel)
         .castShadows(cast_shadows)
@@ -595,6 +701,52 @@ MeshRenderableProxy MeshRenderableFactory::create(
   creation_guard.mark_scene_added();
   creation_guard.release();
   return proxy;
+}
+
+bool MeshRenderableFactory::update_dynamic_geometry(
+    const MeshRenderableProxy &proxy,
+    const RenderMeshAssetSnapshot &mesh,
+    std::span<const QVec3> dynamic_positions) {
+  if (engine_ == nullptr || !proxy.dynamic_geometry ||
+      proxy.vertex_buffer == nullptr || proxy.vertex_count != mesh.vertices.size() ||
+      proxy.index_count != mesh.indices.size() ||
+      (!dynamic_positions.empty() &&
+       dynamic_positions.size() != mesh.vertices.size())) {
+    return false;
+  }
+  std::vector<filament::math::float3> positions;
+  {
+    QDR_PROFILE_SCOPE("Mesh dynamic position upload pack");
+    positions.reserve(mesh.vertices.size());
+    if (dynamic_positions.empty()) {
+      for (const MeshVertex &vertex : mesh.vertices) {
+        positions.push_back(to_filament(vertex.position));
+      }
+    } else {
+      for (const QVec3 position : dynamic_positions) {
+        positions.push_back(to_filament(position));
+      }
+    }
+  }
+  {
+    QDR_PROFILE_SCOPE("Mesh dynamic position upload submit");
+    proxy.vertex_buffer->setBufferAt(
+        *engine_, 0, FilamentBufferDescriptorFactory::vector(positions));
+  }
+  {
+    QDR_PROFILE_SCOPE("Mesh dynamic position update bounds");
+    filament::RenderableManager &renderable_manager =
+        engine_->getRenderableManager();
+    const filament::RenderableManager::Instance instance =
+        renderable_manager.getInstance(proxy.entity);
+    if (instance) {
+      renderable_manager.setAxisAlignedBoundingBox(
+          instance,
+          dynamic_positions.empty() ? compute_bounds(mesh)
+                                    : compute_bounds(dynamic_positions));
+    }
+  }
+  return true;
 }
 
 MeshRenderableProxy MeshRenderableFactory::create_shared_instance(
@@ -639,6 +791,77 @@ MeshRenderableProxy MeshRenderableFactory::create_shared_instance(
       .channel(channel)
       .castShadows(proxy.cast_shadows)
       .receiveShadows(false)
+      .build(*engine_, proxy.entity);
+
+  engine_->getTransformManager().create(proxy.entity);
+  update_transform(proxy, world_transform);
+  scene_->addEntity(proxy.entity);
+  creation_guard.mark_scene_added();
+  creation_guard.release();
+  return proxy;
+}
+
+MeshRenderableProxy MeshRenderableFactory::create_shared_geometry(
+    EntityId entity_id, const RenderMeshAssetSnapshot &mesh,
+    const RenderMaterialBindingSnapshot *material,
+    const MeshRenderableProxy &geometry_source,
+    const QMat4 &world_transform, bool double_sided,
+    std::uint8_t layer_mask, bool editor_unlit, bool depth_only,
+    std::uint8_t channel) {
+  QDR_PROFILE_FUNCTION();
+  MeshRenderableProxy proxy;
+  proxy.owns_mesh_buffers = false;
+  MeshRenderableCreationGuard creation_guard(*this, proxy);
+  if (!initialized() || geometry_source.vertex_buffer == nullptr ||
+      geometry_source.index_buffer == nullptr) {
+    return proxy;
+  }
+
+  proxy.entity = utils::EntityManager::get().create();
+  proxy.source_entity = entity_id;
+  proxy.mesh = geometry_source.mesh;
+  proxy.mesh_revision = geometry_source.mesh_revision;
+  proxy.material = material ? material->component.material
+                            : MaterialReference{};
+  proxy.material_revision = material ? material->revision : 0u;
+  proxy.double_sided = double_sided;
+  proxy.vertex_buffer = geometry_source.vertex_buffer;
+  proxy.index_buffer = geometry_source.index_buffer;
+  proxy.vertex_count = geometry_source.vertex_count;
+  proxy.index_count = geometry_source.index_count;
+
+  const std::vector<MeshPrimitiveSpan> primitive_spans =
+      coalesced_render_mesh_primitive_spans(mesh);
+  proxy.material_slots.reserve(primitive_spans.size());
+  proxy.material_instances.reserve(primitive_spans.size());
+  filament::RenderableManager::Builder builder(primitive_spans.size());
+  for (std::size_t primitive_index = 0u;
+       primitive_index < primitive_spans.size(); ++primitive_index) {
+    const MeshPrimitiveSpan &primitive = primitive_spans[primitive_index];
+    const RenderMaterialAssetSnapshot *primitive_material =
+        material ? material->material_for_slot(primitive.material_slot)
+                 : nullptr;
+    filament::MaterialInstance *material_instance =
+        material_binding_->create_mesh_material_instance(
+            primitive_material, double_sided, editor_unlit);
+    if (depth_only && material_instance != nullptr) {
+      material_instance->setColorWrite(false);
+      material_instance->setDepthWrite(true);
+      material_instance->setDepthCulling(true);
+    }
+    proxy.material_slots.push_back(primitive.material_slot);
+    proxy.material_instances.push_back(material_instance);
+    builder.geometry(primitive_index,
+                     filament::RenderableManager::PrimitiveType::TRIANGLES,
+                     proxy.vertex_buffer, proxy.index_buffer,
+                     primitive.index_offset, primitive.index_count);
+    builder.material(primitive_index, material_instance);
+  }
+  builder.boundingBox(compute_bounds(mesh))
+      .layerMask(kViewportAllLayerMask, layer_mask)
+      .channel(channel)
+      .castShadows(false)
+      .receiveShadows(!editor_unlit && !depth_only)
       .build(*engine_, proxy.entity);
 
   engine_->getTransformManager().create(proxy.entity);
@@ -852,6 +1075,45 @@ void MeshRenderableFactory::update_transform(const MeshRenderableProxy &proxy,
     instance = transform_manager.getInstance(proxy.entity);
   }
   transform_manager.setTransform(instance, make_transform(world_transform));
+}
+
+void MeshRenderableFactory::update_layer_mask(
+    const MeshRenderableProxy &proxy, std::uint8_t layer_mask) {
+  if (engine_ == nullptr || !proxy.entity) {
+    return;
+  }
+  filament::RenderableManager &renderables = engine_->getRenderableManager();
+  const filament::RenderableManager::Instance instance =
+      renderables.getInstance(proxy.entity);
+  if (instance) {
+    renderables.setLayerMask(instance, kViewportAllLayerMask, layer_mask);
+  }
+}
+
+void MeshRenderableFactory::update_bounds(
+    const MeshRenderableProxy &proxy, const RenderMeshAssetSnapshot &mesh) {
+  if (engine_ == nullptr || !proxy.entity) {
+    return;
+  }
+  filament::RenderableManager &renderables = engine_->getRenderableManager();
+  const filament::RenderableManager::Instance instance =
+      renderables.getInstance(proxy.entity);
+  if (instance) {
+    renderables.setAxisAlignedBoundingBox(instance, compute_bounds(mesh));
+  }
+}
+
+void MeshRenderableFactory::update_bounds(
+    const MeshRenderableProxy &proxy, std::span<const QVec3> positions) {
+  if (engine_ == nullptr || !proxy.entity || positions.empty()) {
+    return;
+  }
+  filament::RenderableManager &renderables = engine_->getRenderableManager();
+  const filament::RenderableManager::Instance instance =
+      renderables.getInstance(proxy.entity);
+  if (instance) {
+    renderables.setAxisAlignedBoundingBox(instance, compute_bounds(positions));
+  }
 }
 
 void MeshRenderableFactory::update_surface_grid(

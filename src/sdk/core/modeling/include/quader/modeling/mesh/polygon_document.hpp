@@ -187,6 +187,9 @@ public:
   /** Returns whether two facades currently reference the same immutable topology. */
   [[nodiscard]] bool
   shares_topology_with(const PolygonDocument &other) const noexcept;
+  /** Returns whether two facades reference the same immutable selection state. */
+  [[nodiscard]] bool
+  shares_selection_with(const PolygonDocument &other) const noexcept;
   /** Returns whether local vertex positions and polygon topology match exactly. */
   [[nodiscard]] bool
   has_same_geometry(const PolygonDocument &other) const;
@@ -228,6 +231,8 @@ public:
   [[nodiscard]] Result<OperationResult> translate_selection(Vec3 delta);
   [[nodiscard]] Result<OperationResult>
   transform_selection(Transform3 transform);
+  [[nodiscard]] Result<OperationResult>
+  set_vertex_positions(std::span<const VertexPositionUpdate> updates);
   [[nodiscard]] Result<OperationResult>
   reflect_across_plane(Vec3 origin, Vec3 normal);
   [[nodiscard]] Result<OperationResult>

@@ -7,6 +7,7 @@
 #include "editor/session/viewport_local_visibility_service.hpp"
 
 #include "assets/asset_registry.hpp"
+#include "diagnostics/profile.hpp"
 #include "editor/instances/scene_instance_service.hpp"
 #include "editor/modeling/services/modeling_session_service.hpp"
 #include "editor/tools/native_viewport_tool_coordinator.hpp"
@@ -72,16 +73,7 @@ bool ViewportLocalVisibilityService::can_enter() const {
   }
 
   if (component_selection_mode(mode)) {
-    const ModelingSelectionExport selection = modeling_.export_selection();
-    for (const ModelingSelectionExportObject &object :
-         selection.objects) {
-      if (!object.selection.empty() && object.entity != kInvalidEntityId &&
-          scene_.is_layer_eligible(object.entity) &&
-          scene_.is_effectively_visible(object.entity)) {
-        return true;
-      }
-    }
-    return false;
+    return component_selection_can_enter();
   }
 
   for (const EntityId entity : scene_.selected_entities()) {
@@ -176,13 +168,11 @@ ViewportLocalVisibilityMutation ViewportLocalVisibilityService::toggle() {
       members.push_back(edit_state.occurrence);
     }
   } else if (component_selection_mode(mode)) {
-    const ModelingSelectionExport selection = modeling_.export_selection();
-    for (const ModelingSelectionExportObject &object :
-         selection.objects) {
-      if (!object.selection.empty() && object.entity != kInvalidEntityId &&
-          scene_.is_layer_eligible(object.entity) &&
-          scene_.is_effectively_visible(object.entity)) {
-        members.push_back(object.entity);
+    QDR_PROFILE_SCOPE("Local visibility collect component selection members");
+    for (const EntityId entity : modeling_.selected_component_entities()) {
+      if (scene_.is_layer_eligible(entity) &&
+          scene_.is_effectively_visible(entity)) {
+        members.push_back(entity);
       }
     }
   } else {
@@ -248,6 +238,7 @@ ViewportLocalVisibilityMutation ViewportLocalVisibilityService::toggle() {
 void ViewportLocalVisibilityService::reset_for_document_replacement() {
   (void)workspace_.reset_local_visibility();
   lifecycle_reconcile_valid_ = false;
+  component_availability_valid_ = false;
 }
 
 void ViewportLocalVisibilityService::reconcile_scene_lifecycle() const {
@@ -305,6 +296,34 @@ bool ViewportLocalVisibilityService::transient_interaction_active() const {
          modeling_.transform_drag_active() ||
          modeling_.tool_settings_target().operation_preview_active ||
          native_tools_.has_pending_tool();
+}
+
+bool ViewportLocalVisibilityService::component_selection_can_enter() const {
+  const std::uint64_t selection_revision = modeling_.selection_revision();
+  const std::uint64_t object_map_revision =
+      modeling_.modeling_object_map_revision();
+  const std::uint64_t visibility_revision = scene_.visibility_revision();
+  const std::uint64_t layer_revision = scene_.layer_revision();
+  if (component_availability_valid_ &&
+      component_availability_selection_revision_ == selection_revision &&
+      component_availability_object_map_revision_ == object_map_revision &&
+      component_availability_visibility_revision_ == visibility_revision &&
+      component_availability_layer_revision_ == layer_revision) {
+    return component_availability_value_;
+  }
+
+  QDR_PROFILE_SCOPE("Local visibility rebuild component availability");
+  component_availability_value_ = std::ranges::any_of(
+      modeling_.selected_component_entities(), [&](const EntityId entity) {
+        return scene_.is_layer_eligible(entity) &&
+               scene_.is_effectively_visible(entity);
+      });
+  component_availability_selection_revision_ = selection_revision;
+  component_availability_object_map_revision_ = object_map_revision;
+  component_availability_visibility_revision_ = visibility_revision;
+  component_availability_layer_revision_ = layer_revision;
+  component_availability_valid_ = true;
+  return component_availability_value_;
 }
 
 } // namespace quader

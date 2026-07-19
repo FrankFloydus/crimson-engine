@@ -155,4 +155,29 @@ build_mesh_wire_geometry_payload(const MeshAsset &mesh) {
   return mesh.wire_geometry_payload();
 }
 
+MeshTopologyCounts mesh_topology_counts(const MeshAsset &mesh) {
+  MeshTopologyCounts counts;
+  if (mesh.has_authored_polygon_document &&
+      mesh.authored_polygon_document != nullptr) {
+    const quader_poly::Document &document =
+        *mesh.authored_polygon_document;
+    counts.vertices = document.vertices.size();
+    counts.faces = document.faces.size();
+    for (const quader_poly::Face &face : document.faces) {
+      if (face.vertices.size() >= 3u) {
+        counts.triangles += face.vertices.size() - 2u;
+      }
+    }
+  } else {
+    counts.vertices = mesh.geometry().vertices.size();
+    counts.triangles = mesh.geometry().indices.size() / 3u;
+    counts.faces = counts.triangles;
+  }
+  if (const std::shared_ptr<const MeshWireGeometryPayload> wire =
+          mesh.wire_geometry_payload()) {
+    counts.edges = wire->segments.size();
+  }
+  return counts;
+}
+
 } // namespace quader

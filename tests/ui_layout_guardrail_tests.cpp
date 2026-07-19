@@ -1233,10 +1233,9 @@ TEST(UiLayoutGuardrailTests,
   expect_contains(ui_system,
                   "command_id_for_tool_activation(tool_id)");
   expect_contains(ui_system, "commands().execute(command_id)");
-  expect_contains(
-      ui_system,
-      "tool_toolbar_->synchronize(*editor_, selection,\n"
-      "                                   owner_state_changed)");
+  expect_contains(ui_system,
+                  "tool_toolbar_->synchronize(*editor_, selection,");
+  expect_contains(ui_system, "owner_state_changed);");
   expect_contains(ui_system,
                   "toolbar_owner_available_ != owner_available");
   expect_contains(toolbar, "editor.tools().active_tool()");
@@ -1251,14 +1250,14 @@ TEST(UiLayoutGuardrailTests,
   expect_missing(button_presentation, "setDown(");
   expect_contains(toolbar, "if (!force && synchronization_valid_");
   expect_contains(toolbar, "editor.commands().descriptor(command_id)");
-  expect_contains(toolbar, "editor.commands().shortcut_for(command_id)");
+  expect_contains(toolbar, "command.has_value() ? command->shortcut");
   expect_missing(toolbar, "editor.commands().available()");
   const std::size_t unchanged_state_gate =
       toolbar.find("if (!force && synchronization_valid_");
   const std::size_t command_lookup =
       toolbar.find("editor.commands().descriptor(command_id)");
   const std::size_t shortcut_lookup =
-      toolbar.find("editor.commands().shortcut_for(command_id)");
+      toolbar.find("command.has_value() ? command->shortcut");
   ASSERT_NE(unchanged_state_gate, std::string::npos);
   ASSERT_NE(command_lookup, std::string::npos);
   ASSERT_NE(shortcut_lookup, std::string::npos);
@@ -1564,7 +1563,7 @@ TEST(UiLayoutGuardrailTests, QtViewportSupportsOneThroughFourPaneLayouts) {
   }
   expect_contains(menu, "context.editor.commands().execute(");
   expect_contains(menu,
-                  "context.editor.commands().shortcut_for(*entry.command_id)");
+                  "context.editor.commands().descriptor(*entry.command_id)");
   expect_contains(menu, "editor.viewports().set_layout(layout)");
 }
 
@@ -1954,17 +1953,18 @@ TEST(UiLayoutGuardrailTests,
   expect_contains(menu_header,
                   "Keyboard dispatch remains owned by QuaderKeybindingService");
   expect_contains(menu, "editor.commands().execute(command_id)");
-  expect_contains(menu, "editor.commands().available()");
+  expect_missing(menu, "editor.commands().available()");
   expect_contains(menu,
-                  "context.editor.commands().shortcut_for(entry.command_id)");
+                  "context.editor.commands().descriptor(entry.command_id)");
   expect_contains(menu,
-                  "context.editor.commands().shortcut_for(command_id)");
-  expect_missing(menu, "command->shortcut");
+                  "context.editor.commands().descriptor(*entry.command_id)");
+  expect_contains(menu, "command->shortcut");
   expect_contains(menu, "command_id_for_tool_activation(");
   expect_contains(menu, "context.editor.commands().execute(command_id)");
   expect_missing(menu, "context.editor.tools().activate(tool_id)");
   expect_contains(menu, "QLatin1Char('\\t')");
-  expect_contains(menu, "entry.action->setText(action_text(");
+  expect_contains(menu, "present_text(*entry.action,");
+  expect_contains(menu, "if (action.text() != text)");
   for (std::string_view axis_key :
        {"ui.menu.align.axis_x", "ui.menu.align.axis_y",
         "ui.menu.align.axis_z"}) {

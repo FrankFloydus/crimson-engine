@@ -11,6 +11,7 @@
 #include "core/types.hpp"
 #include "math/types.hpp"
 
+#include <memory>
 #include <vector>
 
 namespace quader {
@@ -19,11 +20,20 @@ namespace quader {
  * Carries one renderer-neutral native modeling preview mesh.
  */
 struct ModelingToolPreviewMesh {
+  int source_object_id = -1;
   EntityId source_entity = kInvalidEntityId;
   MaterialReference material;
   MeshAsset mesh;
   QMat4 transform;
   std::vector<QMat4> instance_transforms;
+  bool dynamic_positions = false;
+  bool suppress_source = false;
+  std::uint64_t layout_key = 0u;
+  std::uint64_t position_revision = 0u;
+  // Position-only transform previews retain immutable topology in `mesh` and
+  // publish one separately pinned packed position stream per revision. This
+  // keeps render snapshots valid without cloning indices or primitive spans.
+  std::shared_ptr<const std::vector<QVec3>> dynamic_position_payload;
 };
 
 } // namespace quader

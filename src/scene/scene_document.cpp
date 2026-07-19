@@ -983,9 +983,27 @@ bool SceneDocument::set_mesh(EntityId id, MeshComponent mesh) {
 }
 
 bool SceneDocument::notify_mesh_payload_changed(EntityId id) {
-  const entt::entity entity = require_entity(id);
-  if (entity == entt::null ||
-      !registry_.all_of<MeshComponent>(entity)) {
+  return notify_mesh_payloads_changed(std::span<const EntityId>(&id, 1u));
+}
+
+bool SceneDocument::can_notify_mesh_payloads_changed(
+    std::span<const EntityId> ids) const {
+  for (const EntityId id : ids) {
+    const entt::entity entity = require_entity(id);
+    if (entity == entt::null ||
+        !registry_.all_of<MeshComponent>(entity)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool SceneDocument::notify_mesh_payloads_changed(
+    std::span<const EntityId> ids) {
+  if (ids.empty()) {
+    return true;
+  }
+  if (!can_notify_mesh_payloads_changed(ids)) {
     return false;
   }
   ++mesh_binding_revision_;
@@ -1199,6 +1217,9 @@ bool SceneDocument::set_entity_layer(EntityId entity,
       (layer_id != kInvalidSceneLayerId &&
        (!is_layer_eligible(entity) || layer(layer_id) == nullptr))) {
     return false;
+  }
+  if (entity_layer(entity) == layer_id) {
+    return true;
   }
   SceneLayerState state = layer_state();
   std::erase_if(state.assignments,

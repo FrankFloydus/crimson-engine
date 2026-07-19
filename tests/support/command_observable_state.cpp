@@ -1428,13 +1428,13 @@ std::string capture_viewports(const CaptureData &data) {
   writer.line("viewport.grid_preset", std::to_string(viewports.grid_preset()));
   writer.line("viewport.local_visibility",
               bool_text(viewports.local_visibility_active()));
-  constexpr std::array<ViewportPaneId, 4> panes = {
+  constexpr std::array<ViewportPaneId, 4> kPanes = {
       ViewportPaneId::Perspective,
       ViewportPaneId::Top,
       ViewportPaneId::Front,
       ViewportPaneId::Side,
   };
-  for (ViewportPaneId pane : panes) {
+  for (ViewportPaneId pane : kPanes) {
     const std::string prefix = "viewport.pane[" + enum_text(pane) + "]";
     writer.line(prefix + ".view", enum_text(viewports.view(pane)));
     writer.line(prefix + ".shading",

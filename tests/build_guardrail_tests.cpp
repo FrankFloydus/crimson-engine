@@ -1380,6 +1380,12 @@ TEST(BuildGuardrailTests,
   const std::string retired_quoted_include = joined("#include \"me", "sh/");
   const std::string neutral_internal_include =
       joined("quader/modeling/neutral/polygon/", "internal/");
+  constexpr std::array<std::string_view, 3> kNeutralInternalConsumers = {
+      "src/editor/modeling/runtime/session_selection_overlay.cpp",
+      "src/editor/projection/mesh_projection_service.cpp",
+      "tests/modeling_domain/"
+      "qdr_document_openmesh_topology_query_tests.cpp",
+  };
   for (std::string_view root : {"src", "tests", "examples", "benchmarks"}) {
     for (const std::filesystem::path &file :
          source_files_under(source_path(std::string(root)))) {
@@ -1388,15 +1394,19 @@ TEST(BuildGuardrailTests,
       EXPECT_EQ(source.find(retired_include), std::string::npos) << relative;
       EXPECT_EQ(source.find(retired_quoted_include), std::string::npos)
           << relative;
-      const bool internal_modeling_test =
-          relative == "tests/modeling_domain/"
-                      "qdr_document_openmesh_topology_query_tests.cpp";
       if (!starts_with(relative, "src/sdk/core/modeling/") &&
-          !internal_modeling_test) {
-        EXPECT_EQ(source.find(neutral_internal_include), std::string::npos)
+          source.find(neutral_internal_include) != std::string::npos) {
+        EXPECT_NE(std::find(kNeutralInternalConsumers.begin(),
+                            kNeutralInternalConsumers.end(), relative),
+                  kNeutralInternalConsumers.end())
             << relative;
       }
     }
+  }
+  for (const std::string_view consumer : kNeutralInternalConsumers) {
+    EXPECT_NE(read_source_file(consumer).find(neutral_internal_include),
+              std::string::npos)
+        << consumer;
   }
 
   expect_contains(modeling_c_make, "QUADER_MODELING_SDK_NEUTRAL_INCLUDE_DIR");

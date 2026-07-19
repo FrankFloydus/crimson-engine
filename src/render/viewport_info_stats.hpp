@@ -24,6 +24,10 @@ class SceneDocument;
  */
 struct ViewportInfoSceneStats {
   std::uint64_t objects = 0;
+  std::uint64_t vertices = 0;
+  std::uint64_t edges = 0;
+  std::uint64_t faces = 0;
+  std::uint64_t triangles = 0;
   std::uint64_t primitives = 0;
   std::uint64_t draw_calls = 0;
 };
@@ -37,6 +41,14 @@ struct ViewportInfoSceneStats {
  */
 struct ViewportInfoRenderableStats {
   SceneBounds world_bounds = {};
+  SceneBounds local_bounds = {};
+  EntityId source_entity = kInvalidEntityId;
+  EntityId instance_definition = kInvalidEntityId;
+  EntityId instance_occurrence = kInvalidEntityId;
+  std::uint64_t vertices = 0;
+  std::uint64_t edges = 0;
+  std::uint64_t faces = 0;
+  std::uint64_t triangles = 0;
   std::uint64_t primitives = 0;
   std::uint64_t draw_calls = 0;
 };
@@ -49,6 +61,9 @@ struct ViewportInfoSceneSnapshot {
 ViewportInfoSceneSnapshot build_viewport_info_scene_snapshot(
     const SceneDocument &document, const AssetRegistry &assets,
     const ViewportLocalVisibilitySnapshot *local_visibility = nullptr);
+
+[[nodiscard]] bool try_refresh_viewport_info_scene_snapshot_transforms(
+    ViewportInfoSceneSnapshot &snapshot, const SceneDocument &document);
 
 ViewportInfoSceneStats collect_viewport_info_scene_stats(
     const ViewportInfoSceneSnapshot &snapshot,

@@ -32,6 +32,16 @@ public:
   /** Projects one SDK document into native render and persistence payloads. */
   [[nodiscard]] static std::optional<MeshAsset>
   compile_sdk_document_mesh(const quader::modeling::PolygonDocument &document);
+  /**
+   * Canonically recompiles a topology-retained committed transform into the
+   * current asset's detached buffers. Every derived vertex attribute and index
+   * is refreshed; only vector allocations and unchanged authored layout are
+   * retained.
+   */
+  [[nodiscard]] static std::optional<MeshAsset>
+  update_sdk_document_mesh_positions(
+      const quader::modeling::PolygonDocument &document,
+      const MeshAsset &current);
 };
 
 } // namespace quader

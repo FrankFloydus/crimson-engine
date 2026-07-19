@@ -10,8 +10,11 @@
 
 #include <quader/modeling/neutral/polygon/document.hpp>
 
+#include <cstdint>
 #include <memory>
+#include <string>
 #include <utility>
+#include <vector>
 
 namespace quader::modeling {
 
@@ -25,6 +28,28 @@ struct PolygonDocumentImpl {
       std::make_shared<const quader_poly::Selection>();
   std::uint64_t content_revision = 1;
   std::uint64_t selection_revision = 0;
+  mutable std::shared_ptr<const quader_poly::Document> edge_cache_document;
+  mutable std::shared_ptr<const std::vector<quader_poly::Edge>> edge_cache;
+};
+
+/**
+ * Captures only the immutable selection payload and its document-local
+ * revision. Topology is deliberately excluded so component-selection history
+ * can swap a sparse payload without replacing the polygon document.
+ */
+struct PolygonDocumentSelectionState {
+  std::shared_ptr<const quader_poly::Selection> selection;
+  std::uint64_t selection_revision = 0;
+};
+
+/**
+ * Owns a fully validated immutable replacement ready for a no-fail commit.
+ */
+struct PolygonDocumentSelectionReplacement {
+  std::shared_ptr<const quader_poly::Selection> selection;
+  std::uint64_t selection_revision = 0;
+  bool changed = false;
+  std::string message;
 };
 
 /**
@@ -63,6 +88,56 @@ public:
                                 quader_poly::Selection replacement) {
     document.impl_->selection =
         std::make_shared<const quader_poly::Selection>(std::move(replacement));
+  }
+
+  /**
+   * Validates and canonicalizes an exact component-selection replacement
+   * without mutating the document or copying its immutable topology.
+   */
+  [[nodiscard]] static Result<PolygonDocumentSelectionReplacement>
+  prepare_selection_replacement(
+      const PolygonDocument &document,
+      const PolygonSelectionSnapshot &replacement);
+
+  /**
+   * Validates an exact replacement against another document while reusing an
+   * already canonical immutable payload for the same snapshot. This removes
+   * one selection allocation per identical object in large batch selections
+   * without weakening per-document stale-ID validation.
+   */
+  [[nodiscard]] static Result<PolygonDocumentSelectionReplacement>
+  prepare_selection_replacement_reusing(
+      const PolygonDocument &document,
+      const PolygonDocument &validated_document,
+      const PolygonSelectionSnapshot &replacement,
+      std::shared_ptr<const quader_poly::Selection> canonical_selection);
+
+  [[nodiscard]] static PolygonDocumentSelectionState
+  capture_selection_state(const PolygonDocument &document) noexcept {
+    return {
+        .selection = document.impl_->selection,
+        .selection_revision = document.impl_->selection_revision,
+    };
+  }
+
+  /** Commits a previously prepared replacement using only no-fail moves. */
+  static void apply_selection_replacement(
+      PolygonDocument &document,
+      PolygonDocumentSelectionReplacement replacement) noexcept {
+    if (!replacement.changed) {
+      return;
+    }
+    document.impl_->selection = std::move(replacement.selection);
+    document.impl_->selection_revision = replacement.selection_revision;
+  }
+
+  /** Swaps a sparse selection-history payload for undo/redo. */
+  static void swap_selection_state(
+      PolygonDocument &document,
+      PolygonDocumentSelectionState &alternate) noexcept {
+    std::swap(document.impl_->selection, alternate.selection);
+    std::swap(document.impl_->selection_revision,
+              alternate.selection_revision);
   }
 
   [[nodiscard]] static PolygonDocumentImpl &impl(PolygonDocument &document) {

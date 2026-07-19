@@ -30,7 +30,8 @@ inline bool same_vec3(QVec3 left, QVec3 right) {
 inline bool same_vertex(const MeshVertex &left, const MeshVertex &right) {
   return same_vec3(left.position, right.position) &&
          same_vec3(left.normal, right.normal) && same_vec2(left.uv, right.uv) &&
-         left.rgba == right.rgba;
+         left.rgba == right.rgba &&
+         left.source_vertex_id == right.source_vertex_id;
 }
 
 inline bool same_polygon_vertex(const quader_poly::Vertex &left,

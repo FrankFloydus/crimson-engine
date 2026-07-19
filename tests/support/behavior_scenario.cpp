@@ -7,6 +7,7 @@
 #include "behavior_scenario.hpp"
 
 #include "behavior_expect.hpp"
+#include "viewport_overlay_test_helpers.hpp"
 #include "api/quader_api_type_conversions.hpp"
 #include "assets/asset_registry.hpp"
 #include "editor/modeling/services/modeling_session_service.hpp"
@@ -170,7 +171,7 @@ BehaviorSnapshot BehaviorScenario::snapshot(std::string label) const {
     result.label = std::move(label);
     result.selection = session_.modeling().selection_summary();
     result.tool_status = session_.modeling().tool_status();
-    add_overlay_stats(result, session_.modeling().selection_overlay_frame());
+    add_overlay_stats(result, selection_overlay_frame());
 
     for (const auto& [alias, object] : aliases_) {
         EntitySnapshot entity;
@@ -320,7 +321,7 @@ QVec3 BehaviorScenario::world_position(EntityId entity) const {
 }
 
 ViewportOverlayFrame BehaviorScenario::selection_overlay_frame() const {
-  return session_.modeling().selection_overlay_frame();
+  return test_support::visible_modeling_overlay_frame(session_.modeling());
 }
 
 BehaviorGiven &BehaviorGiven::unit_box(std::string_view alias,

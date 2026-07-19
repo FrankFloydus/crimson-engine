@@ -451,7 +451,8 @@ ViewportOverlayFrame ViewportSceneOverlayBuilder::build_selection_frame(
     ViewportOverlayFrame base_frame,
     const RenderOverlaySelectionSnapshot &snapshot,
     bool point_light_gizmos_visible,
-    RenderOverlaySelectionMode selection_mode) {
+    RenderOverlaySelectionMode selection_mode,
+    bool include_tool_overlays) {
   QDR_PROFILE_FUNCTION();
   if (selection_mode == RenderOverlaySelectionMode::Object &&
       snapshot.selected_mesh_bounds.size() > 1u) {
@@ -465,21 +466,23 @@ ViewportOverlayFrame ViewportSceneOverlayBuilder::build_selection_frame(
   if (point_light_gizmos_visible) {
     append_point_light_gizmos(base_frame, snapshot);
   }
-  base_frame.lines.insert(base_frame.lines.end(),
-                          snapshot.tool_overlays.lines.begin(),
-                          snapshot.tool_overlays.lines.end());
-  base_frame.triangles.insert(base_frame.triangles.end(),
-                              snapshot.tool_overlays.triangles.begin(),
-                              snapshot.tool_overlays.triangles.end());
-  base_frame.points.insert(base_frame.points.end(),
-                           snapshot.tool_overlays.points.begin(),
-                           snapshot.tool_overlays.points.end());
-  base_frame.icons.insert(base_frame.icons.end(),
-                          snapshot.tool_overlays.icons.begin(),
-                          snapshot.tool_overlays.icons.end());
-  base_frame.hover_target_selected =
-      base_frame.hover_target_selected ||
-      snapshot.tool_overlays.hover_target_selected;
+  if (include_tool_overlays) {
+    base_frame.lines.insert(base_frame.lines.end(),
+                            snapshot.tool_overlays.lines.begin(),
+                            snapshot.tool_overlays.lines.end());
+    base_frame.triangles.insert(base_frame.triangles.end(),
+                                snapshot.tool_overlays.triangles.begin(),
+                                snapshot.tool_overlays.triangles.end());
+    base_frame.points.insert(base_frame.points.end(),
+                             snapshot.tool_overlays.points.begin(),
+                             snapshot.tool_overlays.points.end());
+    base_frame.icons.insert(base_frame.icons.end(),
+                            snapshot.tool_overlays.icons.begin(),
+                            snapshot.tool_overlays.icons.end());
+    base_frame.hover_target_selected =
+        base_frame.hover_target_selected ||
+        snapshot.tool_overlays.hover_target_selected;
+  }
   return base_frame;
 }
 

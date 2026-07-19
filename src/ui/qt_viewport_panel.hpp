@@ -134,8 +134,6 @@ private:
     std::uint64_t transform_revision = 0;
     std::uint64_t mesh_binding_revision = 0;
     std::uint64_t render_component_revision = 0;
-    std::uint64_t scene_tool_overlay_signature = 0;
-    std::uint64_t dynamic_overlay_signature = 0;
     std::uint64_t style_signature = 0;
     ModelingSelectionMode selection_mode = ModelingSelectionMode::Object;
     bool selection_overlay_visible = false;
@@ -145,6 +143,17 @@ private:
 
     friend bool operator==(const PaneOverlaySubmissionKey &,
                            const PaneOverlaySubmissionKey &) = default;
+  };
+
+  /// Keys the small frame-volatile tool overlay separately from retained
+  /// component selection and scene overlays.
+  struct PaneDynamicOverlaySubmissionKey {
+    std::uint64_t frame_signature = 0;
+    std::uint64_t style_signature = 0;
+    ModelingSelectionMode selection_mode = ModelingSelectionMode::Object;
+
+    friend bool operator==(const PaneDynamicOverlaySubmissionKey &,
+                           const PaneDynamicOverlaySubmissionKey &) = default;
   };
 
   /// Owns the retained Qt presentation objects for one workspace pane.
@@ -166,6 +175,8 @@ private:
     QWidget *surface_container = nullptr;
     PaneOverlaySubmissionKey overlay_submission_key;
     bool overlay_submission_valid = false;
+    PaneDynamicOverlaySubmissionKey dynamic_overlay_submission_key;
+    bool dynamic_overlay_submission_valid = false;
   };
 
   void create_pane(Pane &pane);
@@ -260,7 +271,11 @@ private:
   bool last_fly_navigation_active_ = false;
   const SceneDocument *viewport_info_cached_document_ = nullptr;
   const AssetRegistry *viewport_info_cached_assets_ = nullptr;
-  std::uint64_t viewport_info_cached_scene_revision_ = 0;
+  std::uint64_t viewport_info_cached_visibility_revision_ = 0;
+  std::uint64_t viewport_info_cached_transform_revision_ = 0;
+  std::uint64_t viewport_info_cached_mesh_binding_revision_ = 0;
+  std::uint64_t viewport_info_cached_render_component_revision_ = 0;
+  std::uint64_t viewport_info_cached_layer_revision_ = 0;
   std::uint64_t viewport_info_cached_asset_revision_ = 0;
   std::uint64_t viewport_info_cached_local_visibility_revision_ = 0;
   ViewportInfoSceneSnapshot viewport_info_cached_scene_snapshot_;

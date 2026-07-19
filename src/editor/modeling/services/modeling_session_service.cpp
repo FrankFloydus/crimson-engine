@@ -896,6 +896,13 @@ bool ModelingSelectionBoxBaseline::valid() const {
  * Owns Impl behavior within the modeling application service layer.
  */
 class ModelingSessionService::Impl : private ModelingTransformDragPort {
+  /// Retains one selected object's transform basis for the duration of a drag.
+  struct TransformDragLocalInput {
+    int modeling_object_id = kInvalidModelingObjectId;
+    QMat4 world_from_object;
+    QMat4 object_from_world;
+  };
+
   /// Precomputes one source's identity and representable local transforms.
   struct TransformedDuplicateSourcePlan {
     EntityId source_entity = kInvalidEntityId;
@@ -920,6 +927,10 @@ public:
         preview_checkpoint_hooks_(std::move(preview_checkpoint_hooks)) {
     selection_service_.set_app_selection_mode_provider(
         [this]() { return app_selection_mode_; });
+    sdk_projection_adapter_.set_modeling_object_world_transform_resolver(
+        [this](int modeling_object_id) {
+          return modeling_object_world_transform(modeling_object_id);
+        });
   }
 
   [[nodiscard]] ModelingCommandDescriptor box_tool_command() const {
@@ -1322,6 +1333,11 @@ public:
                                                 app_selection_mode_);
   }
 
+  [[nodiscard]] std::span<const EntityId>
+  selected_component_entities() const {
+    return sdk_projection_adapter_.selected_component_entities();
+  }
+
   [[nodiscard]] std::uint64_t content_revision() const {
     return sdk_projection_adapter_.content_revision();
   }
@@ -1418,10 +1434,26 @@ public:
         sdk_projection_adapter_, options);
   }
 
+  [[nodiscard]] ViewportOverlayFrame volatile_overlay_frame() const {
+    const quader_editor_core::EditorSession &projected =
+        selection_projection_view();
+    return overlay_service_.volatile_overlay_frame(
+        projected, runtime_, scene_, object_registry_, selection_service_,
+        sdk_projection_adapter_);
+  }
+
   [[nodiscard]] std::vector<ModelingToolPreviewMesh>
   tool_preview_meshes() const {
     return overlay_service_.tool_preview_meshes(runtime_,
                                                 sdk_projection_adapter_);
+  }
+
+  [[nodiscard]] bool transient_transform_preview_active() const override {
+    return sdk_projection_adapter_.workspace_transform_preview_active();
+  }
+
+  [[nodiscard]] std::uint64_t transient_transform_preview_revision() const {
+    return sdk_projection_adapter_.workspace_transform_preview_revision();
   }
 
   [[nodiscard]] std::uint64_t
@@ -1435,12 +1467,21 @@ public:
   }
 
   [[nodiscard]] std::uint64_t
+  rectangle_selection_universe_build_count() const {
+    return selection_service_.rectangle_selection_universe_build_count();
+  }
+
+  [[nodiscard]] std::uint64_t
   rectangle_selection_resolution_build_count() const {
     return selection_service_.rectangle_selection_resolution_build_count();
   }
 
   [[nodiscard]] std::uint64_t local_face_geometry_build_count() const {
     return selection_service_.local_face_geometry_build_count();
+  }
+
+  [[nodiscard]] std::uint64_t world_pick_bounds_build_count() const {
+    return selection_service_.world_pick_bounds_build_count();
   }
 
   [[nodiscard]] const void *modeling_sdk_session_identity_for_tests() const {
@@ -2537,6 +2578,92 @@ public:
     return from_glm(glm::translate(glm::mat4{1.0f}, to_glm(delta)));
   }
 
+  void refresh_transform_drag_projection_cache() {
+    const quader_editor_core::EditorSession &projection =
+        selection_projection_view();
+    if (transform_drag_projection_cache_ == nullptr) {
+      transform_drag_projection_cache_ =
+          std::make_unique<quader_editor_core::EditorSession>(projection);
+      return;
+    }
+    // Keep the pointee address stable: an in-flight drag context borrows it.
+    *transform_drag_projection_cache_ = projection;
+  }
+
+  void clear_transform_drag_caches() {
+    transform_drag_projection_cache_.reset();
+    transform_drag_local_inputs_.clear();
+    transform_drag_preview_transforms_.clear();
+  }
+
+  [[nodiscard]] bool
+  initialize_transform_drag_local_inputs(std::string &message) {
+    QDR_PROFILE_SCOPE("Modeling transform drag cache local inputs");
+    transform_drag_local_inputs_.clear();
+    transform_drag_preview_transforms_.clear();
+    if (transform_drag_projection_cache_ == nullptr) {
+      refresh_transform_drag_projection_cache();
+    }
+    const quader_editor_core::EditorSession &projection =
+        *transform_drag_projection_cache_;
+    transform_drag_local_inputs_.reserve(projection.objects().size());
+    for (const quader_editor_core::PolygonObject &object :
+         projection.objects()) {
+      if (!object.selected) {
+        continue;
+      }
+      const std::optional<QMat4> world_from_object =
+          modeling_object_world_transform(object.id);
+      const std::optional<QMat4> object_from_world =
+          world_from_object.has_value()
+              ? try_scene_matrix_inverse(*world_from_object)
+              : std::nullopt;
+      if (!world_from_object.has_value() || !object_from_world.has_value()) {
+        transform_drag_local_inputs_.clear();
+        message = "Could not resolve selected object scene transform.";
+        return false;
+      }
+      transform_drag_local_inputs_.push_back({
+          .modeling_object_id = object.id,
+          .world_from_object = *world_from_object,
+          .object_from_world = *object_from_world,
+      });
+    }
+    if (transform_drag_local_inputs_.empty()) {
+      message = "Select something before transforming.";
+      return false;
+    }
+    transform_drag_preview_transforms_.reserve(
+        transform_drag_local_inputs_.size());
+    for (const TransformDragLocalInput &input :
+         transform_drag_local_inputs_) {
+      transform_drag_preview_transforms_.push_back({
+          .modeling_object_id = input.modeling_object_id,
+      });
+    }
+    return true;
+  }
+
+  [[nodiscard]] bool update_transform_drag_local_transforms(
+      const QMat4 &world_affine, std::string &message) {
+    if (transform_drag_local_inputs_.empty() &&
+        !initialize_transform_drag_local_inputs(message)) {
+      return false;
+    }
+    const glm::mat4 world_delta = to_glm(world_affine);
+    for (std::size_t index = 0;
+         index < transform_drag_local_inputs_.size(); ++index) {
+      const TransformDragLocalInput &input =
+          transform_drag_local_inputs_[index];
+      const glm::mat4 local_delta =
+          to_glm(input.object_from_world) * world_delta *
+          to_glm(input.world_from_object);
+      transform_drag_preview_transforms_[index].transform = from_runtime(
+          runtime_transform_from_matrix(from_glm(local_delta)));
+    }
+    return true;
+  }
+
   std::vector<quader_editor_core::ObjectLocalTransform>
   local_transforms_for_selected_objects(const QMat4 &world_affine,
                                         std::string &message) const {
@@ -3021,25 +3148,44 @@ public:
   begin_transform_drag(const ModelingTransformDragBeginRequest &request,
                        DocumentCommandService *document_commands = nullptr,
                        EditorHistoryService *history = nullptr) {
-    return transform_drag_service_.begin_transform_drag(
+    refresh_transform_drag_projection_cache();
+    ModelingTransformDragPreview result =
+        transform_drag_service_.begin_transform_drag(
         transform_drag_context(document_commands, history), request);
+    if (!runtime_.transform_drag_active() &&
+        !sdk_projection_adapter_.preview_active()) {
+      clear_transform_drag_caches();
+    }
+    return result;
   }
 
   ModelingTransformDragPreview
   update_transform_drag(const ModelingTransformDragUpdateRequest &request) {
-    return transform_drag_service_.update_transform_drag(
+    ModelingTransformDragPreview result =
+        transform_drag_service_.update_transform_drag(
         transform_drag_context(), request);
+    if (!runtime_.transform_drag_active() &&
+        !sdk_projection_adapter_.preview_active()) {
+      clear_transform_drag_caches();
+    }
+    return result;
   }
 
   ModelingTransformDragPreview
   commit_transform_drag(EditorHistoryService *history = nullptr) {
-    return transform_drag_service_.commit_transform_drag(
+    ModelingTransformDragPreview result =
+        transform_drag_service_.commit_transform_drag(
         transform_drag_context(), history);
+    clear_transform_drag_caches();
+    return result;
   }
 
   ModelingCommandResult cancel_transform_drag() {
-    return transform_drag_service_.cancel_transform_drag(
+    ModelingCommandResult result =
+        transform_drag_service_.cancel_transform_drag(
         transform_drag_context());
+    clear_transform_drag_caches();
+    return result;
   }
 
   ModelingSelectionSummary
@@ -4063,11 +4209,11 @@ public:
 
   ModelingCommandResult clear_knife_hover() {
     const std::uint64_t overlay_signature_before =
-        overlay_service_.selection_overlay_signature(runtime_);
+        overlay_service_.volatile_overlay_signature(runtime_);
     runtime_.clear_knife_hover();
     const bool changed =
         overlay_signature_before !=
-        overlay_service_.selection_overlay_signature(runtime_);
+        overlay_service_.volatile_overlay_signature(runtime_);
     if (changed) {
       invalidate_selection_overlay_caches();
     }
@@ -4076,11 +4222,11 @@ public:
 
   ModelingCommandResult update_knife_hover(const ModelingToolRayEvent &event) {
     const std::uint64_t overlay_signature_before =
-        overlay_service_.selection_overlay_signature(runtime_);
+        overlay_service_.volatile_overlay_signature(runtime_);
     auto finish = [&](bool ok, std::string message) {
       const bool changed =
           overlay_signature_before !=
-          overlay_service_.selection_overlay_signature(runtime_);
+          overlay_service_.volatile_overlay_signature(runtime_);
       if (changed) {
         invalidate_selection_overlay_caches();
       }
@@ -5332,7 +5478,8 @@ public:
         .hover = hover,
     });
     if (changed) {
-      invalidate_selection_overlay_caches();
+      QDR_PROFILE_SCOPE("Selection hover invalidate composed overlay only");
+      overlay_service_.invalidate_composed_frame();
     }
     return {.ok = true, .changed = changed};
   }
@@ -5391,10 +5538,13 @@ private:
   [[nodiscard]] ModelingTransformDragServiceContext
   transform_drag_context(DocumentCommandService *document_commands = nullptr,
                          EditorHistoryService *history = nullptr) {
+    if (transform_drag_projection_cache_ == nullptr) {
+      refresh_transform_drag_projection_cache();
+    }
     return {
         .scene = scene_,
         .assets = assets_,
-        .session = transient_selection_projection(),
+        .session = *transform_drag_projection_cache_,
         .runtime = runtime_,
         .port = *this,
         .document_commands = document_commands,
@@ -5428,9 +5578,29 @@ private:
   }
 
   ModelingCommandResult begin_portable_transform_preview(
-      bool duplicate_selected) override {
-    return sdk_projection_adapter_.begin_translate_preview(
-        duplicate_selected);
+      bool duplicate_selected, bool topology_stable_transform) override {
+    ModelingCommandResult result =
+        sdk_projection_adapter_.begin_translate_preview(
+            duplicate_selected, topology_stable_transform);
+    if (!result.ok) {
+      transform_drag_local_inputs_.clear();
+      transform_drag_preview_transforms_.clear();
+      return result;
+    }
+
+    // Duplication may replace the selected SDK objects. Refresh the stable
+    // borrowed session in place, then resolve every world/local basis once.
+    refresh_transform_drag_projection_cache();
+    std::string message;
+    if (!initialize_transform_drag_local_inputs(message)) {
+      (void)sdk_projection_adapter_.cancel_translate_preview();
+      return {
+          .ok = false,
+          .changed = false,
+          .message = std::move(message),
+      };
+    }
+    return result;
   }
 
   ModelingCommandResult
@@ -5478,21 +5648,11 @@ private:
     }
 
     std::string message;
-    const std::vector<quader_editor_core::ObjectLocalTransform> local =
-        local_transforms_for_selected_objects(world_affine, message);
-    if (local.empty() && !message.empty()) {
+    if (!update_transform_drag_local_transforms(world_affine, message)) {
       return {.ok = false, .changed = false, .message = std::move(message)};
     }
-    std::vector<ModelingSdkObjectTransformPreview> transforms;
-    transforms.reserve(local.size());
-    for (const quader_editor_core::ObjectLocalTransform &transform : local) {
-      transforms.push_back({
-          .modeling_object_id = transform.object_id,
-          .transform = from_runtime(transform.transform),
-      });
-    }
     return sdk_projection_adapter_.update_object_transform_preview(
-        transforms, kind, closed_edge_ledge_size);
+        transform_drag_preview_transforms_, kind, closed_edge_ledge_size);
   }
 
   ModelingCommandResult commit_portable_translate_preview() override {
@@ -5501,6 +5661,18 @@ private:
 
   ModelingCommandResult cancel_portable_translate_preview() override {
     return sdk_projection_adapter_.cancel_translate_preview();
+  }
+
+  [[nodiscard]] ModelingSdkTransformHistoryDelta
+  take_committed_transform_history_delta() override {
+    return sdk_projection_adapter_.take_committed_transform_history_delta();
+  }
+
+  ModelingCommandResult apply_transform_history_delta(
+      const ModelingSdkTransformHistoryDelta &delta,
+      bool use_after) override {
+    return sdk_projection_adapter_.apply_transform_history_delta(delta,
+                                                                 use_after);
   }
 
   void record_portable_transform(
@@ -5710,6 +5882,11 @@ private:
   ModelingInteractionSettingsService interaction_settings_service_;
   ModelingToolSettingsService tool_settings_service_;
   ModelingTransformDragService transform_drag_service_;
+  std::unique_ptr<quader_editor_core::EditorSession>
+      transform_drag_projection_cache_;
+  std::vector<TransformDragLocalInput> transform_drag_local_inputs_;
+  std::vector<ModelingSdkObjectTransformPreview>
+      transform_drag_preview_transforms_;
   ModalToolRuntime modal_tool_runtime_;
   std::vector<ModelingObjectSceneIdentity> clipboard_scene_identities_;
   std::optional<QVec3> clipboard_world_center_;
@@ -5806,6 +5983,11 @@ ModelingSelectionSummary ModelingSessionService::selection_summary() const {
   return impl_->selection_summary();
 }
 
+std::span<const EntityId>
+ModelingSessionService::selected_component_entities() const {
+  return impl_->selected_component_entities();
+}
+
 std::uint64_t ModelingSessionService::content_revision() const {
   return impl_->content_revision();
 }
@@ -5834,9 +6016,22 @@ ViewportOverlayFrame ModelingSessionService::selection_overlay_frame(
   return impl_->selection_overlay_frame(options);
 }
 
+ViewportOverlayFrame ModelingSessionService::volatile_overlay_frame() const {
+  return impl_->volatile_overlay_frame();
+}
+
 std::vector<ModelingToolPreviewMesh>
 ModelingSessionService::tool_preview_meshes() const {
   return impl_->tool_preview_meshes();
+}
+
+bool ModelingSessionService::transient_transform_preview_active() const {
+  return impl_->transient_transform_preview_active();
+}
+
+std::uint64_t
+ModelingSessionService::transient_transform_preview_revision() const {
+  return impl_->transient_transform_preview_revision();
 }
 
 std::uint64_t
@@ -5850,12 +6045,21 @@ ModelingSessionService::rectangle_picking_projection_build_count() const {
 }
 
 std::uint64_t
+ModelingSessionService::rectangle_selection_universe_build_count() const {
+  return impl_->rectangle_selection_universe_build_count();
+}
+
+std::uint64_t
 ModelingSessionService::rectangle_selection_resolution_build_count() const {
   return impl_->rectangle_selection_resolution_build_count();
 }
 
 std::uint64_t ModelingSessionService::local_face_geometry_build_count() const {
   return impl_->local_face_geometry_build_count();
+}
+
+std::uint64_t ModelingSessionService::world_pick_bounds_build_count() const {
+  return impl_->world_pick_bounds_build_count();
 }
 
 const void *

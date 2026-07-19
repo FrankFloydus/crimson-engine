@@ -12,6 +12,7 @@
 #include "render/render_scene_snapshot.hpp"
 
 #include <cstdint>
+#include <memory>
 #include <vector>
 
 namespace quader {
@@ -24,6 +25,7 @@ class SceneDocument;
  * are expanded into a render-owned preview snapshot.
  */
 struct ToolPreviewMesh {
+  int source_object_id = -1;
   EntityId source_entity = kInvalidEntityId;
   // Local Visibility can be owned by a public instance occurrence while the
   // preview source remains a canonical definition member.
@@ -32,6 +34,11 @@ struct ToolPreviewMesh {
   MeshAsset mesh;
   QMat4 transform;
   std::vector<QMat4> instance_transforms;
+  bool dynamic_positions = false;
+  bool suppress_source = false;
+  std::uint64_t layout_key = 0u;
+  std::uint64_t position_revision = 0u;
+  std::shared_ptr<const std::vector<QVec3>> dynamic_position_payload;
 };
 
 using SceneRenderMeshEntry = RenderSceneMeshRecord;

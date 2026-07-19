@@ -88,8 +88,11 @@ public:
   [[nodiscard]] std::uint64_t
   rectangle_picking_projection_build_count() const;
   [[nodiscard]] std::uint64_t
+  rectangle_selection_universe_build_count() const;
+  [[nodiscard]] std::uint64_t
   rectangle_selection_resolution_build_count() const;
   [[nodiscard]] std::uint64_t local_face_geometry_build_count() const;
+  [[nodiscard]] std::uint64_t world_pick_bounds_build_count() const;
   [[nodiscard]] const std::vector<quader_editor_core::PolygonObject> &
   cached_scene_transformed_objects_for_picking(
       const quader_editor_core::EditorSession &session,
@@ -187,6 +190,7 @@ private:
   struct RectangleProjectionCache {
     bool valid = false;
     std::uint64_t content_revision = 0;
+    std::uint64_t scene_content_revision = 0;
     std::uint64_t scene_transform_revision = 0;
     std::uint64_t scene_visibility_revision = 0;
     std::uint64_t scene_layer_revision = 0;
@@ -207,12 +211,13 @@ private:
   struct RectangleUniverseCache {
     bool valid = false;
     std::uint64_t content_revision = 0;
-    std::uint64_t scene_revision = 0;
+    std::uint64_t scene_content_revision = 0;
     std::uint64_t scene_layer_revision = 0;
     std::uint64_t object_map_revision = 0;
     std::uint64_t viewport_visibility_revision = 0;
     ModelingInstanceEditScope instance_edit_scope;
-    ModelingSelectionMode app_selection_mode = ModelingSelectionMode::Object;
+    quader_editor_core::SelectionMode selection_mode =
+        quader_editor_core::SelectionMode::Object;
     quader_editor_core::RectangleSelectionUniverse universe;
   };
 
@@ -242,11 +247,14 @@ private:
   [[nodiscard]] int instance_participant_id(
       EntityId occurrence,
       const quader_editor_core::EditorSession &session) const;
+  [[nodiscard]] const std::vector<quader_poly::Edge> &cached_document_edges(
+      const quader_editor_core::PolygonObject &object) const;
   [[nodiscard]] const quader_editor_core::RectangleSelectionUniverse &
   rectangle_selection_universe(
       const quader_editor_core::EditorSession &session,
       const SceneDocument &scene,
-      const ModelingObjectRuntimeMap &object_map) const;
+      const ModelingObjectRuntimeMap &object_map,
+      quader_editor_core::SelectionMode selection_mode) const;
 
   mutable ModelingPickingCache picking_cache_;
   mutable RectangleProjectionCache rectangle_projection_cache_;
@@ -254,8 +262,10 @@ private:
   mutable RectangleResolutionCache rectangle_resolution_cache_;
   mutable std::uint64_t transformed_picking_projection_build_count_ = 0;
   mutable std::uint64_t rectangle_picking_projection_build_count_ = 0;
+  mutable std::uint64_t rectangle_selection_universe_build_count_ = 0;
   mutable std::uint64_t rectangle_selection_resolution_build_count_ = 0;
   mutable std::uint64_t local_face_geometry_build_count_ = 0;
+  mutable std::uint64_t world_pick_bounds_build_count_ = 0;
   std::function<ModelingInstanceEditScope()> instance_edit_scope_provider_;
   std::function<ModelingSelectionMode()> app_selection_mode_provider_;
   std::function<bool(EntityId)> viewport_visibility_filter_;

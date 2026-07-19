@@ -756,10 +756,11 @@ TEST(ModelingSessionServiceSplitTests,
             std::string::npos);
   EXPECT_NE(facade.find("sdk_projection_adapter_.box_select("),
             std::string::npos);
-  EXPECT_NE(sdk_adapter.find("set_component_selection_without_preview("),
+  EXPECT_EQ(sdk_adapter.find("set_component_selection_without_preview("),
             std::string::npos);
   EXPECT_NE(sdk_adapter.find("document.apply_selection("), std::string::npos);
-  EXPECT_NE(sdk_adapter.find("session_.commit_document("), std::string::npos);
+  EXPECT_NE(sdk_adapter.find("session_.commit_component_selection_batch("),
+            std::string::npos);
   EXPECT_NE(sdk_adapter.find("selection.apply_rectangle_selection("),
             std::string::npos);
   EXPECT_NE(
@@ -856,6 +857,23 @@ TEST(ModelingSessionServiceSplitTests,
 }
 
 TEST(ModelingSessionServiceSplitTests,
+     SelectedObjectDuplicationUsesOneSdkBatchTransition) {
+  const std::string adapter = read_source_file(
+      "src/editor/modeling/services/modeling_sdk_projection_adapter.cpp");
+  const std::string duplicate_selected = source_slice(
+      adapter, "duplicate_selected_objects(QVec3 geometry_offset,",
+      "mirror_selected_objects_across_plane(");
+
+  ASSERT_FALSE(duplicate_selected.empty());
+  EXPECT_NE(duplicate_selected.find("session_.duplicate_objects("),
+            std::string::npos);
+  EXPECT_EQ(duplicate_selected.find("session_.duplicate_object("),
+            std::string::npos);
+  EXPECT_NE(duplicate_selected.find("session_.squash_undo_since(undo_mark)"),
+            std::string::npos);
+}
+
+TEST(ModelingSessionServiceSplitTests,
      TransformDragPreviewRoutingLivesInController) {
   const std::string facade = read_source_file(
       "src/editor/modeling/services/modeling_session_service.cpp");
@@ -908,9 +926,9 @@ TEST(ModelingSessionServiceSplitTests,
   EXPECT_EQ(facade.find("quader_editor_core::begin_move_drag("),
             std::string::npos);
   const std::size_t delegated_begin =
-      facade.find("return transform_drag_service_.begin_transform_drag(");
+      facade.find("transform_drag_service_.begin_transform_drag(");
   const std::size_t delegated_cancel =
-      facade.find("return transform_drag_service_.cancel_transform_drag(",
+      facade.find("transform_drag_service_.cancel_transform_drag(",
                   delegated_begin);
   ASSERT_NE(delegated_begin, std::string::npos);
   ASSERT_NE(delegated_cancel, std::string::npos);

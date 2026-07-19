@@ -35,6 +35,11 @@ class SceneDocument;
  */
 struct RenderOverlayMeshSnapshot {
   EntityId entity = kInvalidEntityId;
+  // Expanded instance records retain their canonical identity so transient
+  // preview suppression can target one member in one occurrence precisely.
+  EntityId occurrence = kInvalidEntityId;
+  EntityId definition = kInvalidEntityId;
+  EntityId member = kInvalidEntityId;
   /** Distinguishes expanded definition members that share one occurrence. */
   std::uint64_t participant_token = 0u;
   AssetId mesh_id = kInvalidAssetId;

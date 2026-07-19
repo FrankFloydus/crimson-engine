@@ -126,6 +126,15 @@ void QuaderRenderApi::rebind_session(QuaderApiSession session,
   native_array_preview_asset_revision_ = 0;
   native_array_preview_local_visibility_revision_ = 0;
   native_array_preview_kind_ = 0;
+  transform_preview_sync_bridge_ = nullptr;
+  transform_preview_bridge_submission_revision_ = 0;
+  transform_preview_revision_ = 0;
+  transform_preview_asset_revision_ = 0;
+  transform_preview_local_visibility_revision_ = 0;
+  idle_tool_preview_sync_bridge_ = nullptr;
+  idle_tool_preview_bridge_submission_revision_ = 0;
+  idle_tool_preview_asset_revision_ = 0;
+  idle_tool_preview_local_visibility_revision_ = 0;
 }
 
 RenderSceneBindingKey QuaderRenderApiRuntimeAccess::scene_binding(
@@ -188,6 +197,30 @@ QuaderRenderApiRuntimeAccess::sync_tool_previews(QuaderRenderApi &api,
     return api.runtime_status("Render tool previews unchanged.");
   }
 
+  const bool transform_preview_active =
+      project.modeling().transient_transform_preview_active();
+  const std::uint64_t transform_preview_revision =
+      project.modeling().transient_transform_preview_revision();
+  if (native_array_kind == 0u && !transform_preview_active &&
+      api.idle_tool_preview_sync_bridge_ == &bridge &&
+      api.idle_tool_preview_bridge_submission_revision_ ==
+          bridge.tool_preview_submission_revision() &&
+      api.idle_tool_preview_asset_revision_ == native_array_asset_revision &&
+      api.idle_tool_preview_local_visibility_revision_ ==
+          local_visibility_revision) {
+    return api.runtime_status("Render tool previews idle.");
+  }
+  if (native_array_kind == 0u && transform_preview_active &&
+      api.transform_preview_sync_bridge_ == &bridge &&
+      api.transform_preview_bridge_submission_revision_ ==
+          bridge.tool_preview_submission_revision() &&
+      api.transform_preview_revision_ == transform_preview_revision &&
+      api.transform_preview_asset_revision_ == native_array_asset_revision &&
+      api.transform_preview_local_visibility_revision_ ==
+          local_visibility_revision) {
+    return api.runtime_status("Render transform preview unchanged.");
+  }
+
   std::vector<ModelingToolPreviewMesh> modeling_preview_meshes =
       project.modeling().tool_preview_meshes();
   append_linear_array_preview(project, linear_preview,
@@ -199,6 +232,7 @@ QuaderRenderApiRuntimeAccess::sync_tool_previews(QuaderRenderApi &api,
   render_preview_meshes.reserve(modeling_preview_meshes.size());
   for (ModelingToolPreviewMesh &preview_mesh : modeling_preview_meshes) {
     render_preview_meshes.push_back(ToolPreviewMesh{
+        .source_object_id = preview_mesh.source_object_id,
         .source_entity = preview_mesh.source_entity,
         .visibility_entity =
             preview_visibility_entity(project, preview_mesh.source_entity),
@@ -207,6 +241,12 @@ QuaderRenderApiRuntimeAccess::sync_tool_previews(QuaderRenderApi &api,
         .transform = preview_mesh.transform,
         .instance_transforms =
             std::move(preview_mesh.instance_transforms),
+        .dynamic_positions = preview_mesh.dynamic_positions,
+        .suppress_source = preview_mesh.suppress_source,
+        .layout_key = preview_mesh.layout_key,
+        .position_revision = preview_mesh.position_revision,
+        .dynamic_position_payload =
+            std::move(preview_mesh.dynamic_position_payload),
     });
   }
 
@@ -214,6 +254,19 @@ QuaderRenderApiRuntimeAccess::sync_tool_previews(QuaderRenderApi &api,
       build_render_tool_preview_snapshot(render_preview_meshes,
                                          session.assets,
                                          &local_visibility));
+  if (native_array_kind == 0u && !transform_preview_active) {
+    api.idle_tool_preview_sync_bridge_ = &bridge;
+    api.idle_tool_preview_bridge_submission_revision_ =
+        bridge.tool_preview_submission_revision();
+    api.idle_tool_preview_asset_revision_ = native_array_asset_revision;
+    api.idle_tool_preview_local_visibility_revision_ =
+        local_visibility_revision;
+  } else {
+    api.idle_tool_preview_sync_bridge_ = nullptr;
+    api.idle_tool_preview_bridge_submission_revision_ = 0;
+    api.idle_tool_preview_asset_revision_ = 0;
+    api.idle_tool_preview_local_visibility_revision_ = 0;
+  }
   if (native_array_kind != 0u) {
     api.native_array_preview_sync_bridge_ = &bridge;
     api.native_array_preview_bridge_submission_revision_ =
@@ -230,6 +283,21 @@ QuaderRenderApiRuntimeAccess::sync_tool_previews(QuaderRenderApi &api,
     api.native_array_preview_asset_revision_ = 0;
     api.native_array_preview_local_visibility_revision_ = 0;
     api.native_array_preview_kind_ = 0;
+  }
+  if (transform_preview_active) {
+    api.transform_preview_sync_bridge_ = &bridge;
+    api.transform_preview_bridge_submission_revision_ =
+        bridge.tool_preview_submission_revision();
+    api.transform_preview_revision_ = transform_preview_revision;
+    api.transform_preview_asset_revision_ = native_array_asset_revision;
+    api.transform_preview_local_visibility_revision_ =
+        local_visibility_revision;
+  } else {
+    api.transform_preview_sync_bridge_ = nullptr;
+    api.transform_preview_bridge_submission_revision_ = 0;
+    api.transform_preview_revision_ = 0;
+    api.transform_preview_asset_revision_ = 0;
+    api.transform_preview_local_visibility_revision_ = 0;
   }
   return api.runtime_status("Render tool previews synchronized.");
 }
@@ -250,7 +318,7 @@ QuaderApiVoidResult QuaderRenderApiRuntimeAccess::sync_scene_asset_overlays(
           request.selected_object_overlay_visible,
           request.scene_wireframe_layer_mask, request.style, binding,
           &local_visibility, request.selected_scene_wire_visible);
-  if (update.changed()) {
+  if (update.changed() || bridge.scene_asset_overlay_sync_pending()) {
     bridge.sync_scene_asset_overlays(*update.selected_object,
                                      *update.scene_wireframe);
   }

@@ -17,6 +17,7 @@
 #include "editor/tools/viewport_tool_catalog.hpp"
 #include "editor/tools/viewport_tool_ports.hpp"
 #include "editor/tools/viewport_tool_runtime.hpp"
+#include "support/viewport_overlay_test_helpers.hpp"
 #include "viewport/host_viewport_contract_adapter.hpp"
 
 #include <gtest/gtest.h>
@@ -630,7 +631,8 @@ TEST(ViewportToolRuntimeTests,
 
   EXPECT_TRUE(result.handled);
   EXPECT_TRUE(modeling.tool_status().insert_edge_loop_has_preview);
-  const ViewportOverlayFrame overlay = modeling.selection_overlay_frame();
+  const ViewportOverlayFrame overlay =
+      test_support::visible_modeling_overlay_frame(modeling);
   EXPECT_TRUE(std::ranges::any_of(
       overlay.lines, [](const ViewportOverlayLine &line) {
         return line.source == ViewportOverlaySource::Tool ||

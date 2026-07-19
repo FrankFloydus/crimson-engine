@@ -17,6 +17,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <iterator>
 #include <limits>
 #include <optional>
 #include <span>
@@ -1068,8 +1069,11 @@ SceneRenderExtractionPlan build_scene_render_extraction_plan(
 std::vector<RenderToolPreviewMeshRecord> build_render_tool_preview_snapshot(
     const std::vector<ToolPreviewMesh> &meshes, const AssetRegistry &assets,
     const ViewportLocalVisibilitySnapshot *local_visibility) {
+  QDR_PROFILE_FUNCTION();
   std::vector<RenderToolPreviewMeshRecord> records;
   records.reserve(meshes.size());
+  std::vector<std::pair<AssetId, RenderMaterialBindingSnapshot>> material_cache;
+  material_cache.reserve(4U);
   for (const ToolPreviewMesh &mesh : meshes) {
     const EntityId visibility_entity =
         mesh.visibility_entity == kInvalidEntityId ? mesh.source_entity
@@ -1078,17 +1082,36 @@ std::vector<RenderToolPreviewMeshRecord> build_render_tool_preview_snapshot(
         !local_visibility_allows(local_visibility, visibility_entity)) {
       continue;
     }
-    const MaterialComponent material{.material = mesh.material};
+    auto cached_material = std::ranges::find(
+        material_cache, mesh.material,
+        [](const auto &entry) -> AssetId {
+          return entry.first;
+        });
+    if (cached_material == material_cache.end()) {
+      QDR_PROFILE_SCOPE("Tool preview build unique material snapshot");
+      const MaterialComponent material{.material = mesh.material};
+      material_cache.emplace_back(
+          mesh.material,
+          build_render_material_binding_snapshot(assets, &material));
+      cached_material = std::prev(material_cache.end());
+    }
     RenderMaterialBindingSnapshot material_snapshot =
-        build_render_material_binding_snapshot(assets, &material);
+        cached_material->second;
     records.push_back(RenderToolPreviewMeshRecord{
+        .source_object_id = mesh.source_object_id,
         .source_entity = mesh.source_entity,
+        .visibility_entity = visibility_entity,
         .material_id = mesh.material,
         .mesh = mesh.mesh,
         .material = std::move(material_snapshot),
         .material_revision = 0u,
         .transform = mesh.transform,
         .instance_transforms = mesh.instance_transforms,
+        .dynamic_positions = mesh.dynamic_positions,
+        .suppress_source = mesh.suppress_source,
+        .layout_key = mesh.layout_key,
+        .position_revision = mesh.position_revision,
+        .dynamic_position_payload = mesh.dynamic_position_payload,
     });
     records.back().material_revision = records.back().material.revision;
   }

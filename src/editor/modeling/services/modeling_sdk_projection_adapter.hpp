@@ -33,6 +33,7 @@ class ModelingObjectRuntimeMap;
 class ModelingSelectionService;
 struct ModelingObjectSceneIdentity;
 class SceneDocument;
+struct ViewportOverlayFrame;
 
 /// Identifies deterministic host-publication failure boundaries used by tests.
 enum class ModelingSdkProjectionFailurePoint {
@@ -164,6 +165,29 @@ private:
   std::shared_ptr<const Impl> impl_;
 };
 
+/// Stores exact sparse authored-position before/after values for one transform.
+class ModelingSdkTransformHistoryDelta final {
+public:
+  ModelingSdkTransformHistoryDelta();
+  ~ModelingSdkTransformHistoryDelta();
+  ModelingSdkTransformHistoryDelta(
+      const ModelingSdkTransformHistoryDelta &) noexcept = default;
+  ModelingSdkTransformHistoryDelta &
+  operator=(const ModelingSdkTransformHistoryDelta &) noexcept = default;
+  ModelingSdkTransformHistoryDelta(
+      ModelingSdkTransformHistoryDelta &&) noexcept = default;
+  ModelingSdkTransformHistoryDelta &
+  operator=(ModelingSdkTransformHistoryDelta &&) noexcept = default;
+
+  [[nodiscard]] bool valid() const noexcept;
+
+private:
+  friend class ModelingSdkProjectionAdapter;
+  struct Impl;
+  explicit ModelingSdkTransformHistoryDelta(std::shared_ptr<const Impl> impl);
+  std::shared_ptr<const Impl> impl_;
+};
+
 /**
  * Owns one workspace's portable modeling session and only its SDK/native
  * identity mappings plus transactional host-projection bookkeeping.
@@ -182,6 +206,8 @@ public:
   ModelingSdkProjectionAdapter &
   operator=(const ModelingSdkProjectionAdapter &) = delete;
 
+  void set_modeling_object_world_transform_resolver(
+      std::function<std::optional<QMat4>(int)> resolver);
   void reset_from_scene();
 
   [[nodiscard]] bool owns_object(int modeling_object_id) const;
@@ -307,7 +333,8 @@ public:
       std::span<const ModelingMaterialSlotAssignment> assignments);
 
   [[nodiscard]] ModelingCommandResult
-  begin_translate_preview(bool duplicate_selected = false);
+  begin_translate_preview(bool duplicate_selected = false,
+                          bool topology_stable_transform = false);
   [[nodiscard]] ModelingCommandResult update_translate_preview(QVec3 delta);
   [[nodiscard]] ModelingCommandResult update_transform_preview(
       const ModelingTransform3 &transform, QVec3 pivot);
@@ -315,16 +342,28 @@ public:
       std::span<const ModelingSdkObjectTransformPreview> transforms,
       ModelingSdkTransformPreviewKind kind,
       float closed_edge_ledge_size = 0.0F);
+  [[nodiscard]] std::vector<ModelingToolPreviewMesh>
+  workspace_transform_preview_meshes() const;
+  [[nodiscard]] std::uint64_t workspace_transform_preview_revision() const;
+  [[nodiscard]] bool workspace_transform_preview_active() const;
+  void apply_workspace_transform_preview_to_overlay(
+      ViewportOverlayFrame &frame) const;
   [[nodiscard]] ModelingCommandResult
   update_extrude_preview(QVec3 offset, float closed_edge_ledge_size = 0.0F);
   [[nodiscard]] ModelingCommandResult
   update_inset_preview(const ModelingTransform3 &transform, QVec3 pivot);
   [[nodiscard]] ModelingCommandResult commit_translate_preview();
   [[nodiscard]] ModelingCommandResult cancel_translate_preview();
+  [[nodiscard]] ModelingSdkTransformHistoryDelta
+  take_committed_transform_history_delta();
+  [[nodiscard]] ModelingCommandResult apply_transform_history_delta(
+      const ModelingSdkTransformHistoryDelta &delta, bool use_after);
   [[nodiscard]] bool preview_active() const noexcept;
 
   [[nodiscard]] ModelingSelectionMode selection_mode() const noexcept;
   [[nodiscard]] ModelingSelectionSummary selection_summary() const;
+  [[nodiscard]] std::span<const EntityId>
+  selected_component_entities() const;
   [[nodiscard]] ModelingSelectionExport export_selection() const;
   [[nodiscard]] std::optional<SceneBounds> selection_bounds() const;
   [[nodiscard]] std::vector<EntityId> selected_entities() const;

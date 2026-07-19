@@ -9,8 +9,10 @@
 #include "diagnostics/profile.hpp"
 
 #include <algorithm>
+#include <iterator>
 #include <limits>
 #include <optional>
+#include <tuple>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -113,6 +115,41 @@ bool rectangle_vertex_is_valid(RectangleSelectionVertex vertex)
 	return vertex.object_id >= 0 && vertex.vertex_index >= 0;
 }
 
+using RectangleElementKey = std::pair<int, int>;
+using RectangleObjectEdgeKey = std::tuple<int, int, int>;
+
+template <typename Key>
+void sort_unique_rectangle_keys(std::vector<Key> &keys) {
+  std::sort(keys.begin(), keys.end());
+  keys.erase(std::unique(keys.begin(), keys.end()), keys.end());
+}
+
+template <typename Key>
+std::vector<Key> apply_rectangle_key_edit(std::vector<Key> baseline,
+                                          std::vector<Key> hits,
+                                          SelectionEditOperation operation) {
+  sort_unique_rectangle_keys(baseline);
+  sort_unique_rectangle_keys(hits);
+  if (operation == SelectionEditOperation::Replace) {
+    return hits;
+  }
+
+  std::vector<Key> selected;
+  selected.reserve(baseline.size() + hits.size());
+  if (operation == SelectionEditOperation::Add) {
+    std::set_union(baseline.begin(), baseline.end(), hits.begin(), hits.end(),
+                   std::back_inserter(selected));
+  } else if (operation == SelectionEditOperation::Remove) {
+    std::set_difference(baseline.begin(), baseline.end(), hits.begin(),
+                        hits.end(), std::back_inserter(selected));
+  } else {
+    std::set_symmetric_difference(
+        baseline.begin(), baseline.end(), hits.begin(), hits.end(),
+        std::back_inserter(selected));
+  }
+  return selected;
+}
+
 RectangleFaceKey rectangle_face_key(RectangleSelectionFace face)
 {
 	return { face.object_id, face.face_index };
@@ -201,34 +238,33 @@ RectangleSelectionResult rectangle_select_faces(const RectangleSelectionRequest&
 	const RectangleSelectionUniverse& universe = rectangle_request_universe(request);
 	RectangleSelectionResult result;
         result.selection.mode = SelectionMode::Face;
-        std::unordered_set<RectangleFaceKey, RectangleFaceKeyHash> selected_faces;
-	if (rectangle_preserves_existing(request.operation)) {
-		selected_faces.reserve(request.current_selection.selected_faces.size() + request.hits.faces.size());
-		for (const RectangleSelectionFace face : request.current_selection.selected_faces) {
-			rectangle_insert_face(selected_faces, face);
-		}
-	}
-	for (const RectangleSelectionFace face : request.hits.faces) {
-		if (!rectangle_face_is_valid(face)) {
-			continue;
-		}
-		const RectangleFaceKey key = rectangle_face_key(face);
-                if (request.operation == SelectionEditOperation::Remove) {
-                  selected_faces.erase(key);
-                } else if (request.operation ==
-                           SelectionEditOperation::Toggle) {
-                  if (selected_faces.find(key) != selected_faces.end()) {
-                    selected_faces.erase(key);
-                  } else {
-                    selected_faces.insert(key);
-                  }
-                } else {
-                  selected_faces.insert(key);
-                }
+        std::vector<RectangleElementKey> baseline_keys;
+        if (rectangle_preserves_existing(request.operation)) {
+          baseline_keys.reserve(request.current_selection.selected_faces.size());
+          for (const RectangleSelectionFace face :
+               request.current_selection.selected_faces) {
+            if (rectangle_face_is_valid(face)) {
+              baseline_keys.emplace_back(face.object_id, face.face_index);
+            }
+          }
         }
+        std::vector<RectangleElementKey> hit_keys;
+        hit_keys.reserve(request.hits.faces.size());
+        for (const RectangleSelectionFace face : request.hits.faces) {
+          if (rectangle_face_is_valid(face)) {
+            hit_keys.emplace_back(face.object_id, face.face_index);
+          }
+        }
+        const std::vector<RectangleElementKey> selected_faces =
+            apply_rectangle_key_edit(std::move(baseline_keys),
+                                     std::move(hit_keys), request.operation);
 	result.selection.selected_faces.reserve(selected_faces.size());
 	for (const RectangleSelectionFace face : universe.faces) {
-		if (rectangle_face_is_valid(face) && selected_faces.find(rectangle_face_key(face)) != selected_faces.end()) {
+		if (rectangle_face_is_valid(face) &&
+                    std::binary_search(selected_faces.begin(),
+                                       selected_faces.end(),
+                                       RectangleElementKey{face.object_id,
+                                                           face.face_index})) {
 			result.selection.selected_faces.push_back(face);
 		}
 	}
@@ -246,70 +282,87 @@ RectangleSelectionResult rectangle_select_edges(const RectangleSelectionRequest&
 	const RectangleSelectionUniverse& universe = rectangle_request_universe(request);
 	RectangleSelectionResult result;
         result.selection.mode = SelectionMode::Edge;
-        std::unordered_map<int, std::unordered_set<RectangleEdgeKey, RectangleEdgeKeyHash>> selected_edges_by_object;
+        const auto edge_key = [](RectangleSelectionEdge edge) {
+          return RectangleObjectEdgeKey{
+              edge.object_id, std::min(edge.a_index, edge.b_index),
+              std::max(edge.a_index, edge.b_index)};
+        };
+        std::vector<RectangleObjectEdgeKey> baseline_keys;
 	if (rectangle_preserves_existing(request.operation)) {
-		selected_edges_by_object.reserve(request.current_selection.selected_edges.size() + request.current_selection.selected_edge_full_object_ids.size());
+          baseline_keys.reserve(
+              request.current_selection.selected_edges.size() +
+              (request.current_selection.selected_edge_full_object_ids.empty()
+                   ? 0U
+                   : universe.edges.size()));
 		for (const RectangleSelectionEdge edge : request.current_selection.selected_edges) {
-			rectangle_insert_edge(selected_edges_by_object, edge);
+                  if (rectangle_edge_is_valid(edge)) {
+                    baseline_keys.push_back(edge_key(edge));
+                  }
 		}
-		for (const int full_object_id : request.current_selection.selected_edge_full_object_ids) {
-			if (full_object_id < 0) {
-				continue;
-			}
-			for (const RectangleSelectionEdge edge : universe.edges) {
-				if (edge.object_id == full_object_id) {
-					rectangle_insert_edge(selected_edges_by_object, edge);
-				}
+          std::vector<int> baseline_full_object_ids =
+              request.current_selection.selected_edge_full_object_ids;
+          std::sort(baseline_full_object_ids.begin(),
+                    baseline_full_object_ids.end());
+          baseline_full_object_ids.erase(
+              std::unique(baseline_full_object_ids.begin(),
+                          baseline_full_object_ids.end()),
+              baseline_full_object_ids.end());
+		for (const RectangleSelectionEdge edge : universe.edges) {
+                  if (rectangle_edge_is_valid(edge) &&
+                      std::binary_search(baseline_full_object_ids.begin(),
+                                         baseline_full_object_ids.end(),
+                                         edge.object_id)) {
+                    baseline_keys.push_back(edge_key(edge));
 			}
 		}
 	}
+        std::vector<RectangleObjectEdgeKey> hit_keys;
+        hit_keys.reserve(request.hits.edges.size());
 	for (const RectangleSelectionEdge edge : request.hits.edges) {
-		if (!rectangle_edge_is_valid(edge)) {
-			continue;
-		}
-		std::unordered_set<RectangleEdgeKey, RectangleEdgeKeyHash>& edge_keys = selected_edges_by_object[edge.object_id];
-		const RectangleEdgeKey key = rectangle_edge_key(edge);
-                if (request.operation == SelectionEditOperation::Remove) {
-                  edge_keys.erase(key);
-                } else if (request.operation ==
-                           SelectionEditOperation::Toggle) {
-                  if (edge_keys.find(key) != edge_keys.end()) {
-                    edge_keys.erase(key);
-                  } else {
-                    edge_keys.insert(key);
-                  }
-                } else {
-                  edge_keys.insert(key);
-                }
+          if (rectangle_edge_is_valid(edge)) {
+            hit_keys.push_back(edge_key(edge));
+          }
         }
+        const std::vector<RectangleObjectEdgeKey> selected_edges =
+            apply_rectangle_key_edit(std::move(baseline_keys),
+                                     std::move(hit_keys), request.operation);
 
-	std::unordered_map<int, int> edge_count_by_object;
+        std::unordered_map<int, std::size_t> edge_count_by_object;
 	edge_count_by_object.reserve(universe.object_ids.size());
 	for (const RectangleSelectionEdge edge : universe.edges) {
 		if (rectangle_edge_is_valid(edge)) {
-			edge_count_by_object[edge.object_id]++;
+			++edge_count_by_object[edge.object_id];
 		}
 	}
-	std::unordered_set<int> full_object_ids;
-	full_object_ids.reserve(selected_edges_by_object.size());
-	for (const auto& entry : selected_edges_by_object) {
-		const auto found_count = edge_count_by_object.find(entry.first);
-		if (found_count != edge_count_by_object.end() && found_count->second > 0 && entry.second.size() >= static_cast<std::size_t>(found_count->second)) {
-			full_object_ids.insert(entry.first);
-		}
-	}
+        std::unordered_map<int, std::size_t> selected_count_by_object;
+        selected_count_by_object.reserve(edge_count_by_object.size());
+        for (const RectangleObjectEdgeKey &key : selected_edges) {
+          ++selected_count_by_object[std::get<0>(key)];
+        }
+        std::vector<int> full_object_ids;
+        full_object_ids.reserve(selected_count_by_object.size());
 
 	for (const int object_id : universe.object_ids) {
-		if (full_object_ids.find(object_id) != full_object_ids.end()) {
+          const auto universe_count = edge_count_by_object.find(object_id);
+          const auto selected_count = selected_count_by_object.find(object_id);
+          if (universe_count != edge_count_by_object.end() &&
+              universe_count->second > 0U &&
+              selected_count != selected_count_by_object.end() &&
+              selected_count->second >= universe_count->second) {
+			full_object_ids.push_back(object_id);
 			result.selection.selected_edge_full_object_ids.push_back(object_id);
 		}
 	}
+        std::sort(full_object_ids.begin(), full_object_ids.end());
 	for (const RectangleSelectionEdge edge : universe.edges) {
-		if (!rectangle_edge_is_valid(edge) || full_object_ids.find(edge.object_id) != full_object_ids.end()) {
+		if (!rectangle_edge_is_valid(edge) ||
+                    std::binary_search(full_object_ids.begin(),
+                                       full_object_ids.end(),
+                                       edge.object_id)) {
 			continue;
 		}
-		const auto found_edges = selected_edges_by_object.find(edge.object_id);
-		if (found_edges != selected_edges_by_object.end() && found_edges->second.find(rectangle_edge_key(edge)) != found_edges->second.end()) {
+                if (std::binary_search(selected_edges.begin(),
+                                       selected_edges.end(), edge_key(edge))) {
 			result.selection.selected_edges.push_back(edge);
 		}
 	}
@@ -327,70 +380,84 @@ RectangleSelectionResult rectangle_select_vertices(const RectangleSelectionReque
 	const RectangleSelectionUniverse& universe = rectangle_request_universe(request);
 	RectangleSelectionResult result;
         result.selection.mode = SelectionMode::Vertex;
-        std::unordered_map<int, std::unordered_set<int>> selected_vertices_by_object;
+        std::vector<RectangleElementKey> baseline_keys;
 	if (rectangle_preserves_existing(request.operation)) {
-		selected_vertices_by_object.reserve(request.current_selection.selected_vertices.size() + request.current_selection.selected_vertex_full_object_ids.size());
+          baseline_keys.reserve(
+              request.current_selection.selected_vertices.size() +
+              (request.current_selection.selected_vertex_full_object_ids.empty()
+                   ? 0U
+                   : universe.vertices.size()));
 		for (const RectangleSelectionVertex vertex : request.current_selection.selected_vertices) {
-			rectangle_insert_vertex(selected_vertices_by_object, vertex);
+                  if (rectangle_vertex_is_valid(vertex)) {
+                    baseline_keys.emplace_back(vertex.object_id,
+                                               vertex.vertex_index);
+                  }
 		}
-		for (const int full_object_id : request.current_selection.selected_vertex_full_object_ids) {
-			if (full_object_id < 0) {
-				continue;
-			}
-			for (const RectangleSelectionVertex vertex : universe.vertices) {
-				if (vertex.object_id == full_object_id) {
-					rectangle_insert_vertex(selected_vertices_by_object, vertex);
-				}
-			}
+          std::vector<int> full_baseline_ids =
+              request.current_selection.selected_vertex_full_object_ids;
+          std::sort(full_baseline_ids.begin(), full_baseline_ids.end());
+          full_baseline_ids.erase(
+              std::unique(full_baseline_ids.begin(), full_baseline_ids.end()),
+              full_baseline_ids.end());
+          for (const RectangleSelectionVertex vertex : universe.vertices) {
+            if (rectangle_vertex_is_valid(vertex) &&
+                std::binary_search(full_baseline_ids.begin(),
+                                   full_baseline_ids.end(),
+                                   vertex.object_id)) {
+              baseline_keys.emplace_back(vertex.object_id,
+                                         vertex.vertex_index);
+            }
 		}
 	}
+        std::vector<RectangleElementKey> hit_keys;
+        hit_keys.reserve(request.hits.vertices.size());
 	for (const RectangleSelectionVertex vertex : request.hits.vertices) {
-		if (!rectangle_vertex_is_valid(vertex)) {
-			continue;
-		}
-		std::unordered_set<int>& vertex_indices = selected_vertices_by_object[vertex.object_id];
-                if (request.operation == SelectionEditOperation::Remove) {
-                  vertex_indices.erase(vertex.vertex_index);
-                } else if (request.operation ==
-                           SelectionEditOperation::Toggle) {
-                  if (vertex_indices.find(vertex.vertex_index) !=
-                      vertex_indices.end()) {
-                    vertex_indices.erase(vertex.vertex_index);
-                  } else {
-                    vertex_indices.insert(vertex.vertex_index);
-                  }
-                } else {
-                  vertex_indices.insert(vertex.vertex_index);
-                }
+          if (rectangle_vertex_is_valid(vertex)) {
+            hit_keys.emplace_back(vertex.object_id, vertex.vertex_index);
+          }
         }
+        const std::vector<RectangleElementKey> selected_vertices =
+            apply_rectangle_key_edit(std::move(baseline_keys),
+                                     std::move(hit_keys), request.operation);
 
-	std::unordered_map<int, int> vertex_count_by_object;
+	std::unordered_map<int, std::size_t> vertex_count_by_object;
 	vertex_count_by_object.reserve(universe.object_ids.size());
 	for (const RectangleSelectionVertex vertex : universe.vertices) {
 		if (rectangle_vertex_is_valid(vertex)) {
 			vertex_count_by_object[vertex.object_id]++;
 		}
 	}
-	std::unordered_set<int> full_object_ids;
-	full_object_ids.reserve(selected_vertices_by_object.size());
-	for (const auto& entry : selected_vertices_by_object) {
-		const auto found_count = vertex_count_by_object.find(entry.first);
-		if (found_count != vertex_count_by_object.end() && found_count->second > 0 && entry.second.size() >= static_cast<std::size_t>(found_count->second)) {
-			full_object_ids.insert(entry.first);
-		}
+        std::unordered_map<int, std::size_t> selected_count_by_object;
+        selected_count_by_object.reserve(vertex_count_by_object.size());
+        for (const RectangleElementKey &key : selected_vertices) {
+          ++selected_count_by_object[key.first];
 	}
+	std::vector<int> full_object_ids;
+	full_object_ids.reserve(selected_count_by_object.size());
 
 	for (const int object_id : universe.object_ids) {
-		if (full_object_ids.find(object_id) != full_object_ids.end()) {
+          const auto universe_count = vertex_count_by_object.find(object_id);
+          const auto selected_count = selected_count_by_object.find(object_id);
+          if (universe_count != vertex_count_by_object.end() &&
+              universe_count->second > 0U &&
+              selected_count != selected_count_by_object.end() &&
+              selected_count->second >= universe_count->second) {
+			full_object_ids.push_back(object_id);
 			result.selection.selected_vertex_full_object_ids.push_back(object_id);
 		}
 	}
+        std::sort(full_object_ids.begin(), full_object_ids.end());
 	for (const RectangleSelectionVertex vertex : universe.vertices) {
-		if (!rectangle_vertex_is_valid(vertex) || full_object_ids.find(vertex.object_id) != full_object_ids.end()) {
+		if (!rectangle_vertex_is_valid(vertex) ||
+                    std::binary_search(full_object_ids.begin(),
+                                       full_object_ids.end(),
+                                       vertex.object_id)) {
 			continue;
 		}
-		const auto found_vertices = selected_vertices_by_object.find(vertex.object_id);
-		if (found_vertices != selected_vertices_by_object.end() && found_vertices->second.find(vertex.vertex_index) != found_vertices->second.end()) {
+                if (std::binary_search(
+                        selected_vertices.begin(), selected_vertices.end(),
+                        RectangleElementKey{vertex.object_id,
+                                            vertex.vertex_index})) {
 			result.selection.selected_vertices.push_back(vertex);
 		}
 	}

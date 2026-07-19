@@ -27,12 +27,17 @@ public:
         float depth_bias, std::uint32_t override_color,
         bool use_override_color);
 
-  static OverlayPointMesh
+  static OverlayIconMesh
   build_icons(const std::vector<const ViewportOverlayIcon *> &icons,
               const ViewportOverlayCamera &camera, float size_pixels,
               float depth_bias);
 
   static bool append_point_quad(OverlayPointMesh &mesh, QVec3 position,
+                                std::uint32_t color,
+                                const ViewportOverlayElementRef *element =
+                                    nullptr);
+
+  static bool append_icon_quad(OverlayIconMesh &mesh, QVec3 position,
                                 std::uint32_t color,
                                 const OverlayCameraProjector &projector,
                                 float size_pixels, float depth_bias);

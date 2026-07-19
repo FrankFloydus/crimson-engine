@@ -678,6 +678,9 @@ OverlayData build_overlay(
                         c->position,
                         style.face_fill_color,
                         face.id,
+                        a->id,
+                        b->id,
+                        c->id,
                     });
                 }
             }

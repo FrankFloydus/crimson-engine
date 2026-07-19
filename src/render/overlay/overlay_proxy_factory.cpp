@@ -27,6 +27,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <type_traits>
 #include <utility>
 
 namespace quader {
@@ -160,22 +161,40 @@ template <typename Vertex, typename ConfigureAttributes,
           typename ConfigureMaterial>
 void append_overlay_proxy(filament::Engine &engine, filament::Scene &scene,
                           filament::Material &material,
-                          const std::vector<Vertex> &vertices,
-                          const std::vector<std::uint32_t> &indices,
+                          const OverlayMesh<Vertex> &mesh,
                           OverlayRenderableProxyKind kind,
                           const OverlayRenderState &state,
                           std::uint8_t layer_mask,
                           std::vector<OverlayRenderableProxy> &proxies,
                           ConfigureAttributes configure_attributes,
                           ConfigureMaterial configure_material) {
-  if (vertices.empty() || indices.empty()) {
+  if (mesh.vertices.empty() || mesh.indices.empty()) {
     return;
   }
 
   OverlayRenderableProxy proxy;
   proxy.kind = kind;
-  proxy.vertex_count = static_cast<std::uint32_t>(vertices.size());
-  proxy.index_count = static_cast<std::uint32_t>(indices.size());
+  proxy.vertex_count = static_cast<std::uint32_t>(mesh.vertices.size());
+  proxy.index_count = static_cast<std::uint32_t>(mesh.indices.size());
+  proxy.position_stream_bindings = mesh.position_stream_bindings;
+  if constexpr (std::is_same_v<Vertex, OverlayFaceFillVertex>) {
+    proxy.position_stream3.reserve(mesh.vertices.size());
+    for (const Vertex &vertex : mesh.vertices) {
+      proxy.position_stream3.push_back(vertex.position);
+    }
+  } else if constexpr (std::is_same_v<Vertex, OverlayLineVertex>) {
+    proxy.primary_position_stream4.reserve(mesh.vertices.size());
+    proxy.secondary_position_stream4.reserve(mesh.vertices.size());
+    for (const Vertex &vertex : mesh.vertices) {
+      proxy.primary_position_stream4.push_back(vertex.start);
+      proxy.secondary_position_stream4.push_back(vertex.end);
+    }
+  } else if constexpr (std::is_same_v<Vertex, OverlayPointVertex>) {
+    proxy.primary_position_stream4.reserve(mesh.vertices.size());
+    for (const Vertex &vertex : mesh.vertices) {
+      proxy.primary_position_stream4.push_back(vertex.center);
+    }
+  }
   const utils::Entity entity = utils::EntityManager::get().create();
   proxy.entity_id = to_overlay_entity_id(entity);
   OverlayProxyCreationGuard creation_guard(engine, scene, proxy);
@@ -183,20 +202,40 @@ void append_overlay_proxy(filament::Engine &engine, filament::Scene &scene,
   configure_material(*proxy.material_instance);
 
   filament::VertexBuffer::Builder vertex_builder;
-  vertex_builder.vertexCount(static_cast<std::uint32_t>(vertices.size()))
-      .bufferCount(1);
+  const std::uint8_t buffer_count =
+      !proxy.position_stream3.empty() ||
+              !proxy.primary_position_stream4.empty()
+          ? static_cast<std::uint8_t>(
+                proxy.secondary_position_stream4.empty() ? 2u : 3u)
+          : 1u;
+  vertex_builder.vertexCount(static_cast<std::uint32_t>(mesh.vertices.size()))
+      .bufferCount(buffer_count);
   configure_attributes(vertex_builder);
   proxy.vertex_buffer = vertex_builder.build(engine);
   proxy.vertex_buffer->setBufferAt(
-      engine, 0, FilamentBufferDescriptorFactory::vector(vertices));
+      engine, 0, FilamentBufferDescriptorFactory::vector(mesh.vertices));
+  if (!proxy.position_stream3.empty()) {
+    proxy.vertex_buffer->setBufferAt(
+        engine, 1,
+        FilamentBufferDescriptorFactory::vector(proxy.position_stream3));
+  } else if (!proxy.primary_position_stream4.empty()) {
+    proxy.vertex_buffer->setBufferAt(
+        engine, 1, FilamentBufferDescriptorFactory::vector(
+                       proxy.primary_position_stream4));
+  }
+  if (!proxy.secondary_position_stream4.empty()) {
+    proxy.vertex_buffer->setBufferAt(
+        engine, 2, FilamentBufferDescriptorFactory::vector(
+                       proxy.secondary_position_stream4));
+  }
 
   proxy.index_buffer =
       filament::IndexBuffer::Builder()
-          .indexCount(static_cast<std::uint32_t>(indices.size()))
+          .indexCount(static_cast<std::uint32_t>(mesh.indices.size()))
           .bufferType(filament::IndexBuffer::IndexType::UINT)
           .build(engine);
   proxy.index_buffer->setBuffer(
-      engine, FilamentBufferDescriptorFactory::vector(indices));
+      engine, FilamentBufferDescriptorFactory::vector(mesh.indices));
 
   filament::RenderableManager::Builder(1)
       .geometry(0, filament::RenderableManager::PrimitiveType::TRIANGLES,
@@ -228,7 +267,7 @@ bool proxy_can_update_mesh(const OverlayRenderableProxy &proxy,
 }
 
 void update_proxy_layer_mask(filament::Engine &engine,
-                             OverlayRenderableProxy &proxy,
+                             const OverlayRenderableProxy &proxy,
                              std::uint8_t layer_mask) {
   if (proxy.entity_id == 0u) {
     return;
@@ -243,11 +282,63 @@ void update_proxy_layer_mask(filament::Engine &engine,
 }
 
 template <typename Vertex>
+void refresh_proxy_position_streams(OverlayRenderableProxy &proxy,
+                                    const OverlayMesh<Vertex> &mesh) {
+  proxy.position_stream_bindings = mesh.position_stream_bindings;
+  proxy.position_stream3.clear();
+  proxy.primary_position_stream4.clear();
+  proxy.secondary_position_stream4.clear();
+  if constexpr (std::is_same_v<Vertex, OverlayFaceFillVertex>) {
+    proxy.position_stream3.reserve(mesh.vertices.size());
+    for (const Vertex &vertex : mesh.vertices) {
+      proxy.position_stream3.push_back(vertex.position);
+    }
+  } else if constexpr (std::is_same_v<Vertex, OverlayLineVertex>) {
+    proxy.primary_position_stream4.reserve(mesh.vertices.size());
+    proxy.secondary_position_stream4.reserve(mesh.vertices.size());
+    for (const Vertex &vertex : mesh.vertices) {
+      proxy.primary_position_stream4.push_back(vertex.start);
+      proxy.secondary_position_stream4.push_back(vertex.end);
+    }
+  } else if constexpr (std::is_same_v<Vertex, OverlayPointVertex>) {
+    proxy.primary_position_stream4.reserve(mesh.vertices.size());
+    for (const Vertex &vertex : mesh.vertices) {
+      proxy.primary_position_stream4.push_back(vertex.center);
+    }
+  }
+}
+
+bool upload_proxy_position_streams(filament::Engine &engine,
+                                   OverlayRenderableProxy &proxy) {
+  if (proxy.vertex_buffer == nullptr) {
+    return false;
+  }
+  if (!proxy.position_stream3.empty()) {
+    proxy.vertex_buffer->setBufferAt(
+        engine, 1,
+        FilamentBufferDescriptorFactory::vector(proxy.position_stream3));
+  } else if (!proxy.primary_position_stream4.empty()) {
+    proxy.vertex_buffer->setBufferAt(
+        engine, 1, FilamentBufferDescriptorFactory::vector(
+                       proxy.primary_position_stream4));
+  }
+  if (!proxy.secondary_position_stream4.empty()) {
+    proxy.vertex_buffer->setBufferAt(
+        engine, 2, FilamentBufferDescriptorFactory::vector(
+                       proxy.secondary_position_stream4));
+  }
+  return !proxy.position_stream3.empty() ||
+         !proxy.primary_position_stream4.empty();
+}
+
+template <typename Vertex>
 void update_proxy_vertex_buffer(filament::Engine &engine,
                                 OverlayRenderableProxy &proxy,
                                 const OverlayMesh<Vertex> &mesh) {
   proxy.vertex_buffer->setBufferAt(
       engine, 0, FilamentBufferDescriptorFactory::vector(mesh.vertices));
+  refresh_proxy_position_streams(proxy, mesh);
+  (void)upload_proxy_position_streams(engine, proxy);
 }
 
 template <typename Vertex>
@@ -424,6 +515,23 @@ bool OverlayProxyFactory::update_layer_proxies(
   return true;
 }
 
+bool OverlayProxyFactory::update_position_streams(
+    OverlayRenderableProxy &proxy) {
+  return engine_ != nullptr &&
+         upload_proxy_position_streams(*engine_, proxy);
+}
+
+void OverlayProxyFactory::set_layer_mask(
+    const std::vector<OverlayRenderableProxy> &proxies,
+    std::uint8_t layer_mask) {
+  if (!engine_) {
+    return;
+  }
+  for (const OverlayRenderableProxy &proxy : proxies) {
+    update_proxy_layer_mask(*engine_, proxy, layer_mask);
+  }
+}
+
 void OverlayProxyFactory::destroy(OverlayRenderableProxy& proxy) {
     if (!engine_) {
         return;
@@ -461,15 +569,14 @@ void OverlayProxyFactory::create_triangle_proxy(
   }
 
   append_overlay_proxy(
-      *engine_, *scene_, *overlay_material_, batch.mesh.vertices,
-      batch.mesh.indices, OverlayRenderableProxyKind::Triangle, batch.state,
+      *engine_, *scene_, *overlay_material_, batch.mesh,
+      OverlayRenderableProxyKind::Triangle, batch.state,
       layer_mask, proxies,
       [](filament::VertexBuffer::Builder &builder) {
         builder
-            .attribute(filament::VertexAttribute::POSITION, 0,
+            .attribute(filament::VertexAttribute::POSITION, 1,
                        AttributeType::FLOAT3,
-                       offsetof(OverlayFaceFillVertex, position),
-                       sizeof(OverlayFaceFillVertex))
+                       0, sizeof(OverlayFloat3))
             .attribute(filament::VertexAttribute::UV0, 0, AttributeType::FLOAT2,
                        offsetof(OverlayFaceFillVertex, uv),
                        sizeof(OverlayFaceFillVertex))
@@ -492,8 +599,8 @@ void OverlayProxyFactory::create_line_proxy(
   }
 
   append_overlay_proxy(
-      *engine_, *scene_, *overlay_line_material_, batch.mesh.vertices,
-      batch.mesh.indices, OverlayRenderableProxyKind::Line, batch.state,
+      *engine_, *scene_, *overlay_line_material_, batch.mesh,
+      OverlayRenderableProxyKind::Line, batch.state,
       layer_mask, proxies,
       [](filament::VertexBuffer::Builder &builder) {
         builder
@@ -501,14 +608,12 @@ void OverlayProxyFactory::create_line_proxy(
                        AttributeType::FLOAT4,
                        offsetof(OverlayLineVertex, position),
                        sizeof(OverlayLineVertex))
-            .attribute(filament::VertexAttribute::CUSTOM0, 0,
+            .attribute(filament::VertexAttribute::CUSTOM0, 1,
                        AttributeType::FLOAT4,
-                       offsetof(OverlayLineVertex, start),
-                       sizeof(OverlayLineVertex))
-            .attribute(filament::VertexAttribute::CUSTOM1, 0,
+                       0, sizeof(OverlayFloat4))
+            .attribute(filament::VertexAttribute::CUSTOM1, 2,
                        AttributeType::FLOAT4,
-                       offsetof(OverlayLineVertex, end),
-                       sizeof(OverlayLineVertex))
+                       0, sizeof(OverlayFloat4))
             .attribute(filament::VertexAttribute::CUSTOM2, 0,
                        AttributeType::FLOAT4,
                        offsetof(OverlayLineVertex, control),
@@ -535,8 +640,8 @@ void OverlayProxyFactory::create_edit_wire_proxy(
   }
 
   append_overlay_proxy(
-      *engine_, *scene_, *edit_wire_line_material_, batch.mesh.vertices,
-      batch.mesh.indices, OverlayRenderableProxyKind::EditWire, batch.state,
+      *engine_, *scene_, *edit_wire_line_material_, batch.mesh,
+      OverlayRenderableProxyKind::EditWire, batch.state,
       layer_mask, proxies,
       [](filament::VertexBuffer::Builder &builder) {
         builder
@@ -544,14 +649,12 @@ void OverlayProxyFactory::create_edit_wire_proxy(
                        AttributeType::FLOAT4,
                        offsetof(OverlayLineVertex, position),
                        sizeof(OverlayLineVertex))
-            .attribute(filament::VertexAttribute::CUSTOM0, 0,
+            .attribute(filament::VertexAttribute::CUSTOM0, 1,
                        AttributeType::FLOAT4,
-                       offsetof(OverlayLineVertex, start),
-                       sizeof(OverlayLineVertex))
-            .attribute(filament::VertexAttribute::CUSTOM1, 0,
+                       0, sizeof(OverlayFloat4))
+            .attribute(filament::VertexAttribute::CUSTOM1, 2,
                        AttributeType::FLOAT4,
-                       offsetof(OverlayLineVertex, end),
-                       sizeof(OverlayLineVertex))
+                       0, sizeof(OverlayFloat4))
             .attribute(filament::VertexAttribute::CUSTOM2, 0,
                        AttributeType::FLOAT4,
                        offsetof(OverlayLineVertex, control),
@@ -579,11 +682,9 @@ void OverlayProxyFactory::create_point_proxy(
     return;
   }
 
-  (void)batch.size_pixels;
-  (void)batch.depth_bias;
   append_overlay_proxy(
-      *engine_, *scene_, *overlay_point_material_, batch.mesh.vertices,
-      batch.mesh.indices, OverlayRenderableProxyKind::Point, batch.state,
+      *engine_, *scene_, *overlay_point_material_, batch.mesh,
+      OverlayRenderableProxyKind::Point, batch.state,
       layer_mask, proxies,
       [](filament::VertexBuffer::Builder &builder) {
         builder
@@ -591,6 +692,9 @@ void OverlayProxyFactory::create_point_proxy(
                        AttributeType::FLOAT4,
                        offsetof(OverlayPointVertex, position),
                        sizeof(OverlayPointVertex))
+            .attribute(filament::VertexAttribute::CUSTOM0, 1,
+                       AttributeType::FLOAT4,
+                       0, sizeof(OverlayFloat4))
             .attribute(filament::VertexAttribute::UV0, 0, AttributeType::FLOAT2,
                        offsetof(OverlayPointVertex, uv),
                        sizeof(OverlayPointVertex))
@@ -602,6 +706,9 @@ void OverlayProxyFactory::create_point_proxy(
       [this, &batch](filament::MaterialInstance &material) {
         configure_overlay_material(material, batch.state);
         material.setParameter("innerRadius", batch.inner_radius);
+        material.setParameter("pointSize", batch.size_pixels);
+        material.setParameter("nearPlane", batch.near_plane);
+        material.setParameter("depthBias", batch.depth_bias);
       });
 }
 
@@ -616,21 +723,21 @@ void OverlayProxyFactory::create_icon_proxy(
   (void)batch.size_pixels;
   (void)batch.depth_bias;
   append_overlay_proxy(
-      *engine_, *scene_, *overlay_icon_material_, batch.mesh.vertices,
-      batch.mesh.indices, OverlayRenderableProxyKind::Icon, batch.state,
+      *engine_, *scene_, *overlay_icon_material_, batch.mesh,
+      OverlayRenderableProxyKind::Icon, batch.state,
       layer_mask, proxies,
       [](filament::VertexBuffer::Builder &builder) {
         builder
             .attribute(filament::VertexAttribute::POSITION, 0,
                        AttributeType::FLOAT4,
-                       offsetof(OverlayPointVertex, position),
-                       sizeof(OverlayPointVertex))
+                       offsetof(OverlayIconVertex, position),
+                       sizeof(OverlayIconVertex))
             .attribute(filament::VertexAttribute::UV0, 0, AttributeType::FLOAT2,
-                       offsetof(OverlayPointVertex, uv),
-                       sizeof(OverlayPointVertex))
+                       offsetof(OverlayIconVertex, uv),
+                       sizeof(OverlayIconVertex))
             .attribute(
                 filament::VertexAttribute::COLOR, 0, AttributeType::UBYTE4,
-                offsetof(OverlayPointVertex, color), sizeof(OverlayPointVertex))
+                offsetof(OverlayIconVertex, color), sizeof(OverlayIconVertex))
             .normalized(filament::VertexAttribute::COLOR);
       },
       [this, &batch, icon_texture](filament::MaterialInstance &material) {
@@ -682,9 +789,12 @@ void OverlayProxyFactory::update_edit_wire_proxy(
 void OverlayProxyFactory::update_point_proxy(OverlayRenderableProxy &proxy,
                                              const OverlayPointBatch &batch,
                                              std::uint8_t layer_mask) {
-  update_proxy_buffers(*engine_, proxy, batch.mesh, layer_mask);
+  update_canonical_quad_proxy_vertices(*engine_, proxy, batch.mesh, layer_mask);
   configure_overlay_material(*proxy.material_instance, batch.state);
   proxy.material_instance->setParameter("innerRadius", batch.inner_radius);
+  proxy.material_instance->setParameter("pointSize", batch.size_pixels);
+  proxy.material_instance->setParameter("nearPlane", batch.near_plane);
+  proxy.material_instance->setParameter("depthBias", batch.depth_bias);
 }
 
 void OverlayProxyFactory::update_icon_proxy(OverlayRenderableProxy &proxy,

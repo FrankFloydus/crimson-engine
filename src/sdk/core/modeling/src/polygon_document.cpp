@@ -8,6 +8,7 @@
 
 #include "polygon_document_native.hpp"
 
+#include <diagnostics/profile.hpp>
 #include <quader/modeling/neutral/polygon/document_builder.hpp>
 #include <quader/modeling/neutral/polygon/document_mesh_compilation.hpp>
 #include <quader/modeling/neutral/polygon/document_operations.hpp>
@@ -24,6 +25,7 @@
 #include <span>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 
 namespace quader::modeling {
@@ -215,6 +217,47 @@ same_native_selection(const quader_poly::Selection &left,
          left.active_face == right.active_face;
 }
 
+[[nodiscard]] bool native_selection_matches_snapshot(
+    const quader_poly::Selection &selection,
+    const PolygonSelectionSnapshot &snapshot) {
+  if (selection_kind_from_native(selection.mode) != snapshot.kind ||
+      selection.vertices.size() != snapshot.vertices.size() ||
+      selection.edges.size() != snapshot.edges.size() ||
+      selection.faces.size() != snapshot.faces.size() ||
+      selection.has_active != snapshot.has_active) {
+    return false;
+  }
+  for (std::size_t index = 0; index < selection.vertices.size(); ++index) {
+    if (vertex_id(selection.vertices[index]) != snapshot.vertices[index]) {
+      return false;
+    }
+  }
+  for (std::size_t index = 0; index < selection.edges.size(); ++index) {
+    if (edge_id(selection.edges[index]) != snapshot.edges[index]) {
+      return false;
+    }
+  }
+  for (std::size_t index = 0; index < selection.faces.size(); ++index) {
+    if (face_id(selection.faces[index]) != snapshot.faces[index]) {
+      return false;
+    }
+  }
+  if (!selection.has_active) {
+    return true;
+  }
+  switch (snapshot.kind) {
+  case SelectionKind::Vertex:
+    return vertex_id(selection.active_vertex) == snapshot.active_vertex;
+  case SelectionKind::Edge:
+    return edge_id(selection.active_edge) == snapshot.active_edge;
+  case SelectionKind::Face:
+    return face_id(selection.active_face) == snapshot.active_face;
+  case SelectionKind::Object:
+    return true;
+  }
+  return false;
+}
+
 [[nodiscard]] OperationResult selection_only_result(bool changed,
                                                     std::string message) {
   OperationResult result;
@@ -246,15 +289,32 @@ void commit_selection(PolygonDocumentImpl &impl,
   bump_selection(impl, true);
 }
 
+[[nodiscard]] bool selection_validation_uses_index(
+    std::size_t requested_count, std::size_t live_count) {
+  // Hash indexes pay for one allocation per live element. Small edit-mode
+  // meshes (notably dense selections of many boxes) are substantially faster
+  // with their cache-local linear scan; build an index only when the avoided
+  // comparison work is large enough to amortize those allocations.
+  constexpr std::size_t kLinearComparisonBudget = 4096U;
+  return requested_count != 0U &&
+         live_count > kLinearComparisonBudget / requested_count;
+}
+
 [[nodiscard]] Result<OperationResult>
-validate_vertex_id(const quader_poly::Document &document, VertexId id) {
+validate_vertex_id(
+    const quader_poly::Document &document, VertexId id,
+    const std::unordered_set<quader_poly::ElementId> *live_ids = nullptr) {
   if (!id.valid()) {
     return Result<OperationResult>::failure(invalid_id_error("Vertex ID is invalid."));
   }
   if (stale_generation(id)) {
     return Result<OperationResult>::failure(stale_id_error("Vertex ID is stale."));
   }
-  if (quader_poly::find_vertex(document, id.index) == nullptr) {
+  const bool live = live_ids != nullptr
+                        ? live_ids->contains(id.index)
+                        : quader_poly::find_vertex(document, id.index) !=
+                              nullptr;
+  if (!live) {
     return Result<OperationResult>::failure(
         vertex_id_was_issued(document, id.index)
             ? stale_id_error("Vertex ID is stale.")
@@ -264,14 +324,19 @@ validate_vertex_id(const quader_poly::Document &document, VertexId id) {
 }
 
 [[nodiscard]] Result<OperationResult>
-validate_face_id(const quader_poly::Document &document, FaceId id) {
+validate_face_id(
+    const quader_poly::Document &document, FaceId id,
+    const std::unordered_set<quader_poly::ElementId> *live_ids = nullptr) {
   if (!id.valid()) {
     return Result<OperationResult>::failure(invalid_id_error("Face ID is invalid."));
   }
   if (stale_generation(id)) {
     return Result<OperationResult>::failure(stale_id_error("Face ID is stale."));
   }
-  if (quader_poly::find_face(document, id.index) == nullptr) {
+  const bool live = live_ids != nullptr
+                        ? live_ids->contains(id.index)
+                        : quader_poly::find_face(document, id.index) != nullptr;
+  if (!live) {
     return Result<OperationResult>::failure(
         face_id_was_issued(document, id.index)
             ? stale_id_error("Face ID is stale.")
@@ -281,7 +346,10 @@ validate_face_id(const quader_poly::Document &document, FaceId id) {
 }
 
 [[nodiscard]] Result<OperationResult>
-validate_edge_key(const quader_poly::Document &document, EdgeKey edge) {
+validate_edge_key(const quader_poly::Document &document, EdgeKey edge,
+                  std::span<const quader_poly::Edge> live_edges,
+                  const std::unordered_set<quader_poly::ElementId>
+                      *live_vertex_ids = nullptr) {
   if (!edge.valid()) {
     return Result<OperationResult>::failure(invalid_id_error("Edge key is invalid."));
   }
@@ -289,9 +357,13 @@ validate_edge_key(const quader_poly::Document &document, EdgeKey edge) {
     return Result<OperationResult>::failure(stale_id_error("Edge key is stale."));
   }
   const bool a_live =
-      quader_poly::find_vertex(document, edge.a.index) != nullptr;
+      live_vertex_ids != nullptr
+          ? live_vertex_ids->contains(edge.a.index)
+          : quader_poly::find_vertex(document, edge.a.index) != nullptr;
   const bool b_live =
-      quader_poly::find_vertex(document, edge.b.index) != nullptr;
+      live_vertex_ids != nullptr
+          ? live_vertex_ids->contains(edge.b.index)
+          : quader_poly::find_vertex(document, edge.b.index) != nullptr;
   if (!a_live || !b_live) {
     const bool stale_endpoint =
         (!a_live && vertex_id_was_issued(document, edge.a.index)) ||
@@ -302,13 +374,14 @@ validate_edge_key(const quader_poly::Document &document, EdgeKey edge) {
             : invalid_id_error(
                   "Edge key references an endpoint that was never issued."));
   }
-  const std::vector<quader_poly::Edge> live_edges =
-      quader_poly::document_edges(document);
   const quader_poly::Edge native_edge =
       quader_poly::make_edge(edge.a.index, edge.b.index);
-  const bool live = std::ranges::any_of(live_edges, [&](quader_poly::Edge item) {
-    return item == native_edge;
-  });
+  const auto edge_less = [](quader_poly::Edge left,
+                            quader_poly::Edge right) {
+    return left.a < right.a || (left.a == right.a && left.b < right.b);
+  };
+  const bool live =
+      std::ranges::binary_search(live_edges, native_edge, edge_less);
   if (!live) {
     // Edge identity is derived from two issued vertex identities. Once both
     // endpoints belong to this document lineage, an absent pair is a stale
@@ -317,6 +390,13 @@ validate_edge_key(const quader_poly::Document &document, EdgeKey edge) {
         stale_id_error("Edge key is stale in the current topology."));
   }
   return operation_success(selection_only_result(false, {}));
+}
+
+[[nodiscard]] Result<OperationResult>
+validate_edge_key(const quader_poly::Document &document, EdgeKey edge) {
+  const std::vector<quader_poly::Edge> live_edges =
+      quader_poly::document_edges(document);
+  return validate_edge_key(document, edge, live_edges);
 }
 
 template <typename T>
@@ -818,6 +898,340 @@ bool PolygonDocument::shares_topology_with(
   return impl_ && other.impl_ && impl_->document == other.impl_->document;
 }
 
+[[nodiscard]] const std::vector<quader_poly::Edge> &
+cached_document_edges(const PolygonDocumentImpl &impl) {
+  if (impl.edge_cache == nullptr ||
+      impl.edge_cache_document != impl.document) {
+    impl.edge_cache =
+        std::make_shared<const std::vector<quader_poly::Edge>>(
+            quader_poly::document_edges(*impl.document));
+    impl.edge_cache_document = impl.document;
+  }
+  return *impl.edge_cache;
+}
+
+[[nodiscard]] bool has_same_selection_domain(
+    const PolygonDocumentImpl &left, const PolygonDocumentImpl &right,
+    SelectionKind kind) {
+  if (left.document == right.document) {
+    return true;
+  }
+
+  switch (kind) {
+  case SelectionKind::Vertex: {
+    if (left.document->vertices.size() != right.document->vertices.size()) {
+      return false;
+    }
+    for (std::size_t index = 0U; index < left.document->vertices.size();
+         ++index) {
+      if (left.document->vertices[index].id !=
+          right.document->vertices[index].id) {
+        return false;
+      }
+    }
+    return true;
+  }
+  case SelectionKind::Edge: {
+    if (left.document->vertices.size() != right.document->vertices.size() ||
+        left.document->faces.size() != right.document->faces.size()) {
+      return false;
+    }
+    for (std::size_t index = 0U; index < left.document->vertices.size();
+         ++index) {
+      if (left.document->vertices[index].id !=
+          right.document->vertices[index].id) {
+        return false;
+      }
+    }
+    for (std::size_t index = 0U; index < left.document->faces.size(); ++index) {
+      if (left.document->faces[index].vertices !=
+          right.document->faces[index].vertices) {
+        return false;
+      }
+    }
+    return true;
+  }
+  case SelectionKind::Face: {
+    if (left.document->faces.size() != right.document->faces.size()) {
+      return false;
+    }
+    for (std::size_t index = 0U; index < left.document->faces.size(); ++index) {
+      if (left.document->faces[index].id != right.document->faces[index].id) {
+        return false;
+      }
+    }
+    return true;
+  }
+  case SelectionKind::Object:
+    return false;
+  }
+  return false;
+}
+
+bool PolygonDocument::shares_selection_with(
+    const PolygonDocument &other) const noexcept {
+  return impl_ && other.impl_ && impl_->selection == other.impl_->selection;
+}
+
+Result<PolygonDocumentSelectionReplacement>
+PolygonDocumentNativeAccess::prepare_selection_replacement(
+    const PolygonDocument &document,
+    const PolygonSelectionSnapshot &snapshot) {
+  QDR_PROFILE_SCOPE("SDK polygon prepare direct selection replacement");
+  if (native_selection_matches_snapshot(*document.impl_->selection,
+                                        snapshot)) {
+    return Result<PolygonDocumentSelectionReplacement>::success({
+        .selection = document.impl_->selection,
+        .selection_revision = document.impl_->selection_revision,
+        .changed = false,
+    });
+  }
+  if (snapshot.kind == SelectionKind::Object) {
+    return Result<PolygonDocumentSelectionReplacement>::failure(make_error(
+        ErrorCode::InvalidArgument,
+        "A component selection batch requires component selections."));
+  }
+
+  quader_poly::Selection replacement;
+  std::string message;
+  {
+    QDR_PROFILE_SCOPE("SDK polygon direct selection validate");
+    switch (snapshot.kind) {
+    case SelectionKind::Vertex: {
+      replacement.mode = quader_poly::SelectionMode::Vertex;
+      std::unordered_set<quader_poly::ElementId> live_ids;
+      const bool use_live_index = selection_validation_uses_index(
+          snapshot.vertices.size(), document.impl_->document->vertices.size());
+      if (use_live_index) {
+        live_ids.reserve(document.impl_->document->vertices.size());
+        for (const quader_poly::Vertex &vertex :
+             document.impl_->document->vertices) {
+          live_ids.emplace(vertex.id);
+        }
+      }
+      replacement.vertices.reserve(snapshot.vertices.size());
+      for (const VertexId id : snapshot.vertices) {
+        Result<OperationResult> validation = validate_vertex_id(
+            *document.impl_->document, id,
+            use_live_index ? &live_ids : nullptr);
+        if (!validation.ok()) {
+          return Result<PolygonDocumentSelectionReplacement>::failure(
+              std::move(validation).error());
+        }
+        replacement.vertices.push_back(id.index);
+      }
+      message = "Vertices selected.";
+      break;
+    }
+    case SelectionKind::Edge: {
+      replacement.mode = quader_poly::SelectionMode::Edge;
+      const std::vector<quader_poly::Edge> &live_edges =
+          cached_document_edges(*document.impl_);
+      std::unordered_set<quader_poly::ElementId> live_vertex_ids;
+      const bool use_live_index = selection_validation_uses_index(
+          snapshot.edges.size(), document.impl_->document->vertices.size());
+      if (use_live_index) {
+        live_vertex_ids.reserve(document.impl_->document->vertices.size());
+        for (const quader_poly::Vertex &vertex :
+             document.impl_->document->vertices) {
+          live_vertex_ids.emplace(vertex.id);
+        }
+      }
+      replacement.edges.reserve(snapshot.edges.size());
+      for (const EdgeKey edge : snapshot.edges) {
+        Result<OperationResult> validation = validate_edge_key(
+            *document.impl_->document, edge, live_edges,
+            use_live_index ? &live_vertex_ids : nullptr);
+        if (!validation.ok()) {
+          return Result<PolygonDocumentSelectionReplacement>::failure(
+              std::move(validation).error());
+        }
+        replacement.edges.push_back(native_edge(edge));
+      }
+      message = "Edges selected.";
+      break;
+    }
+    case SelectionKind::Face: {
+      replacement.mode = quader_poly::SelectionMode::Face;
+      std::unordered_set<quader_poly::ElementId> live_ids;
+      const bool use_live_index = selection_validation_uses_index(
+          snapshot.faces.size(), document.impl_->document->faces.size());
+      if (use_live_index) {
+        live_ids.reserve(document.impl_->document->faces.size());
+        for (const quader_poly::Face &face : document.impl_->document->faces) {
+          live_ids.emplace(face.id);
+        }
+      }
+      replacement.faces.reserve(snapshot.faces.size());
+      for (const FaceId id : snapshot.faces) {
+        Result<OperationResult> validation = validate_face_id(
+            *document.impl_->document, id,
+            use_live_index ? &live_ids : nullptr);
+        if (!validation.ok()) {
+          return Result<PolygonDocumentSelectionReplacement>::failure(
+              std::move(validation).error());
+        }
+        replacement.faces.push_back(id.index);
+      }
+      message = "Faces selected.";
+      break;
+    }
+    case SelectionKind::Object:
+      break;
+    }
+    update_active_selection(replacement);
+    if (!native_selection_matches_snapshot(replacement, snapshot)) {
+      return Result<PolygonDocumentSelectionReplacement>::failure(make_error(
+          ErrorCode::InvalidArgument,
+          "A component selection batch requires canonical exact snapshots."));
+    }
+  }
+
+  std::shared_ptr<const quader_poly::Selection> immutable_selection;
+  {
+    QDR_PROFILE_SCOPE("SDK polygon direct selection allocate payload");
+    immutable_selection = std::make_shared<const quader_poly::Selection>(
+        std::move(replacement));
+  }
+  return Result<PolygonDocumentSelectionReplacement>::success({
+      .selection = std::move(immutable_selection),
+      .selection_revision = document.impl_->selection_revision + 1U,
+      .changed = true,
+      .message = std::move(message),
+  });
+}
+
+Result<PolygonDocumentSelectionReplacement>
+PolygonDocumentNativeAccess::prepare_selection_replacement_reusing(
+    const PolygonDocument &document,
+    const PolygonDocument &validated_document,
+    const PolygonSelectionSnapshot &snapshot,
+    std::shared_ptr<const quader_poly::Selection> canonical_selection) {
+  QDR_PROFILE_SCOPE("SDK polygon reuse validated selection payload");
+  if (native_selection_matches_snapshot(*document.impl_->selection,
+                                        snapshot)) {
+    return Result<PolygonDocumentSelectionReplacement>::success({
+        .selection = document.impl_->selection,
+        .selection_revision = document.impl_->selection_revision,
+        .changed = false,
+    });
+  }
+  if (snapshot.kind == SelectionKind::Object ||
+      canonical_selection == nullptr ||
+      selection_kind_from_native(canonical_selection->mode) != snapshot.kind ||
+      canonical_selection->vertices.size() != snapshot.vertices.size() ||
+      canonical_selection->edges.size() != snapshot.edges.size() ||
+      canonical_selection->faces.size() != snapshot.faces.size() ||
+      canonical_selection->has_active != snapshot.has_active) {
+    return Result<PolygonDocumentSelectionReplacement>::failure(make_error(
+        ErrorCode::InvalidArgument,
+        "A component selection batch requires canonical exact snapshots."));
+  }
+
+  // The payload was already validated against validated_document. Equal live
+  // identifier domains make that proof transferable without rebuilding hash
+  // indexes or revalidating every selected element for every identical mesh.
+  // The comparison is exact (not hash based), so stale-ID rejection remains
+  // unchanged for documents with a different live domain.
+  if (has_same_selection_domain(*document.impl_, *validated_document.impl_,
+                                snapshot.kind)) {
+    const char *message = snapshot.kind == SelectionKind::Vertex
+                              ? "Vertices selected."
+                          : snapshot.kind == SelectionKind::Edge
+                              ? "Edges selected."
+                              : "Faces selected.";
+    return Result<PolygonDocumentSelectionReplacement>::success({
+        .selection = std::move(canonical_selection),
+        .selection_revision = document.impl_->selection_revision + 1U,
+        .changed = true,
+        .message = message,
+    });
+  }
+
+  std::string message;
+  switch (snapshot.kind) {
+  case SelectionKind::Vertex: {
+    std::unordered_set<quader_poly::ElementId> live_ids;
+    const bool use_live_index = selection_validation_uses_index(
+        snapshot.vertices.size(), document.impl_->document->vertices.size());
+    if (use_live_index) {
+      live_ids.reserve(document.impl_->document->vertices.size());
+      for (const quader_poly::Vertex &vertex :
+           document.impl_->document->vertices) {
+        live_ids.emplace(vertex.id);
+      }
+    }
+    for (const VertexId id : snapshot.vertices) {
+      Result<OperationResult> validation = validate_vertex_id(
+          *document.impl_->document, id,
+          use_live_index ? &live_ids : nullptr);
+      if (!validation.ok()) {
+        return Result<PolygonDocumentSelectionReplacement>::failure(
+            std::move(validation).error());
+      }
+    }
+    message = "Vertices selected.";
+    break;
+  }
+  case SelectionKind::Edge: {
+    const std::vector<quader_poly::Edge> &live_edges =
+        cached_document_edges(*document.impl_);
+    std::unordered_set<quader_poly::ElementId> live_vertex_ids;
+    const bool use_live_index = selection_validation_uses_index(
+        snapshot.edges.size(), document.impl_->document->vertices.size());
+    if (use_live_index) {
+      live_vertex_ids.reserve(document.impl_->document->vertices.size());
+      for (const quader_poly::Vertex &vertex :
+           document.impl_->document->vertices) {
+        live_vertex_ids.emplace(vertex.id);
+      }
+    }
+    for (const EdgeKey edge : snapshot.edges) {
+      Result<OperationResult> validation = validate_edge_key(
+          *document.impl_->document, edge, live_edges,
+          use_live_index ? &live_vertex_ids : nullptr);
+      if (!validation.ok()) {
+        return Result<PolygonDocumentSelectionReplacement>::failure(
+            std::move(validation).error());
+      }
+    }
+    message = "Edges selected.";
+    break;
+  }
+  case SelectionKind::Face: {
+    std::unordered_set<quader_poly::ElementId> live_ids;
+    const bool use_live_index = selection_validation_uses_index(
+        snapshot.faces.size(), document.impl_->document->faces.size());
+    if (use_live_index) {
+      live_ids.reserve(document.impl_->document->faces.size());
+      for (const quader_poly::Face &face : document.impl_->document->faces) {
+        live_ids.emplace(face.id);
+      }
+    }
+    for (const FaceId id : snapshot.faces) {
+      Result<OperationResult> validation = validate_face_id(
+          *document.impl_->document, id,
+          use_live_index ? &live_ids : nullptr);
+      if (!validation.ok()) {
+        return Result<PolygonDocumentSelectionReplacement>::failure(
+            std::move(validation).error());
+      }
+    }
+    message = "Faces selected.";
+    break;
+  }
+  case SelectionKind::Object:
+    break;
+  }
+
+  return Result<PolygonDocumentSelectionReplacement>::success({
+      .selection = std::move(canonical_selection),
+      .selection_revision = document.impl_->selection_revision + 1U,
+      .changed = true,
+      .message = std::move(message),
+  });
+}
+
 bool PolygonDocument::has_same_geometry(
     const PolygonDocument &other) const {
   return impl_ && other.impl_ &&
@@ -836,8 +1250,8 @@ std::vector<VertexId> PolygonDocument::vertex_ids() const {
 
 std::vector<EdgeKey> PolygonDocument::edge_ids() const {
   std::vector<EdgeKey> ids;
-  const std::vector<quader_poly::Edge> native_edges =
-      quader_poly::document_edges(*impl_->document);
+  const std::vector<quader_poly::Edge> &native_edges =
+      cached_document_edges(*impl_);
   ids.reserve(native_edges.size());
   for (const quader_poly::Edge edge : native_edges) {
     ids.push_back(edge_id(edge));
@@ -1007,6 +1421,7 @@ Result<MeshPayload> PolygonDocument::compile_mesh() const {
         .normal = from_native(vertex.normal),
         .uv0 = from_native(vertex.uv0),
         .color = vertex.color,
+        .source_vertex = vertex_id(vertex.source_vertex_id),
     });
   }
   payload.indices = compiled.indices;
@@ -1097,8 +1512,19 @@ Result<OperationResult> PolygonDocument::clear_selection() {
 Result<OperationResult>
 PolygonDocument::select_vertices(std::span<const VertexId> ids,
                                  SelectionEdit edit) {
+  std::unordered_set<quader_poly::ElementId> live_ids;
+  const bool use_live_index = selection_validation_uses_index(
+      ids.size(), impl_->document->vertices.size());
+  if (use_live_index) {
+    live_ids.reserve(impl_->document->vertices.size());
+    for (const quader_poly::Vertex &vertex : impl_->document->vertices) {
+      live_ids.emplace(vertex.id);
+    }
+  }
   for (const VertexId id : ids) {
-    Result<OperationResult> validation = validate_vertex_id(*impl_->document, id);
+    Result<OperationResult> validation =
+        validate_vertex_id(*impl_->document, id,
+                           use_live_index ? &live_ids : nullptr);
     if (!validation.ok()) {
       return validation;
     }
@@ -1126,9 +1552,21 @@ PolygonDocument::select_vertices(std::span<const VertexId> ids,
 Result<OperationResult>
 PolygonDocument::select_edges(std::span<const EdgeKey> edges,
                               SelectionEdit edit) {
+  const std::vector<quader_poly::Edge> &live_edges =
+      cached_document_edges(*impl_);
+  std::unordered_set<quader_poly::ElementId> live_vertex_ids;
+  const bool use_live_index = selection_validation_uses_index(
+      edges.size(), impl_->document->vertices.size());
+  if (use_live_index) {
+    live_vertex_ids.reserve(impl_->document->vertices.size());
+    for (const quader_poly::Vertex &vertex : impl_->document->vertices) {
+      live_vertex_ids.emplace(vertex.id);
+    }
+  }
   for (const EdgeKey edge : edges) {
     Result<OperationResult> validation =
-        validate_edge_key(*impl_->document, edge);
+        validate_edge_key(*impl_->document, edge, live_edges,
+                          use_live_index ? &live_vertex_ids : nullptr);
     if (!validation.ok()) {
       return validation;
     }
@@ -1156,8 +1594,19 @@ PolygonDocument::select_edges(std::span<const EdgeKey> edges,
 Result<OperationResult>
 PolygonDocument::select_faces(std::span<const FaceId> ids,
                               SelectionEdit edit) {
+  std::unordered_set<quader_poly::ElementId> live_ids;
+  const bool use_live_index = selection_validation_uses_index(
+      ids.size(), impl_->document->faces.size());
+  if (use_live_index) {
+    live_ids.reserve(impl_->document->faces.size());
+    for (const quader_poly::Face &face : impl_->document->faces) {
+      live_ids.emplace(face.id);
+    }
+  }
   for (const FaceId id : ids) {
-    Result<OperationResult> validation = validate_face_id(*impl_->document, id);
+    Result<OperationResult> validation =
+        validate_face_id(*impl_->document, id,
+                         use_live_index ? &live_ids : nullptr);
     if (!validation.ok()) {
       return validation;
     }
@@ -1278,6 +1727,102 @@ PolygonDocument::transform_selection(Transform3 transform) {
     return quader_poly::transform_selection(document, selection,
                                             to_native(transform));
   });
+}
+
+Result<OperationResult> PolygonDocument::set_vertex_positions(
+    std::span<const VertexPositionUpdate> updates) {
+  QDR_PROFILE_FUNCTION();
+  OperationResult result;
+  result.message = "Vertex positions unchanged.";
+  if (updates.empty()) {
+    return operation_success(std::move(result));
+  }
+
+  bool strictly_increasing_ids = true;
+  quader_poly::ElementId previous_id = quader_poly::kInvalidElementId;
+  for (const VertexPositionUpdate &update : updates) {
+    if (!update.vertex.valid() || update.vertex.generation != 1U) {
+      return Result<OperationResult>::failure(
+          invalid_id_error("Vertex position update ID is invalid."));
+    }
+    if (!std::isfinite(update.position.x) ||
+        !std::isfinite(update.position.y) ||
+        !std::isfinite(update.position.z)) {
+      return Result<OperationResult>::failure(make_error(
+          ErrorCode::InvalidArgument,
+          "Vertex position updates must contain finite coordinates."));
+    }
+    strictly_increasing_ids =
+        strictly_increasing_ids &&
+        (previous_id == quader_poly::kInvalidElementId ||
+         previous_id < update.vertex.index);
+    previous_id = update.vertex.index;
+  }
+
+  quader_poly::Document document = *impl_->document;
+  result.affected.vertices.reserve(updates.size());
+  if (strictly_increasing_ids) {
+    QDR_PROFILE_SCOPE("PolygonDocument set ordered vertex positions");
+    for (const VertexPositionUpdate &update : updates) {
+      quader_poly::Vertex *vertex =
+          quader_poly::find_vertex(document, update.vertex.index);
+      if (vertex == nullptr) {
+        return Result<OperationResult>::failure(
+            invalid_id_error("Vertex position update ID is not live."));
+      }
+      const quader::QVec3 desired = to_native(update.position);
+      if (vertex->position.x == desired.x &&
+          vertex->position.y == desired.y &&
+          vertex->position.z == desired.z) {
+        continue;
+      }
+      vertex->position = desired;
+      result.affected.vertices.push_back(update.vertex);
+    }
+  } else {
+    QDR_PROFILE_SCOPE("PolygonDocument set unordered vertex positions");
+    std::unordered_map<quader_poly::ElementId, quader::QVec3> positions;
+    positions.reserve(updates.size());
+    for (const VertexPositionUpdate &update : updates) {
+      if (!positions.emplace(update.vertex.index, to_native(update.position))
+               .second) {
+        return Result<OperationResult>::failure(make_error(
+            ErrorCode::InvalidArgument,
+            "Vertex position updates contain a duplicate vertex ID."));
+      }
+    }
+    std::size_t matched = 0U;
+    for (quader_poly::Vertex &vertex : document.vertices) {
+      const auto position = positions.find(vertex.id);
+      if (position == positions.end()) {
+        continue;
+      }
+      ++matched;
+      const quader::QVec3 desired = position->second;
+      if (vertex.position.x == desired.x && vertex.position.y == desired.y &&
+          vertex.position.z == desired.z) {
+        continue;
+      }
+      vertex.position = desired;
+      result.affected.vertices.push_back(vertex_id(vertex.id));
+    }
+    if (matched != positions.size()) {
+      return Result<OperationResult>::failure(
+          invalid_id_error("Vertex position update ID is not live."));
+    }
+  }
+  if (result.affected.vertices.empty()) {
+    return operation_success(std::move(result));
+  }
+
+  result.changed = true;
+  result.message = "Vertex positions changed.";
+  result.modified = result.affected;
+  result.dirty.geometry = true;
+  impl_->document =
+      std::make_shared<const quader_poly::Document>(std::move(document));
+  bump_content(*impl_, true);
+  return operation_success(std::move(result));
 }
 
 Result<OperationResult>

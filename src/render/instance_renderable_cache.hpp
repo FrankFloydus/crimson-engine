@@ -13,6 +13,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <span>
+#include <unordered_set>
 #include <vector>
 
 namespace quader {
@@ -51,6 +52,10 @@ public:
   [[nodiscard]] bool initialized() const { return factory_ != nullptr; }
   [[nodiscard]] bool sync(
       std::span<const RenderSceneInstancePrimitiveRecord> primitives);
+  void set_preview_suppressed_entities(
+      std::unordered_set<EntityId> entities,
+      std::vector<RenderInstancePreviewSuppression> occurrence_suppressions,
+      std::span<const RenderSceneInstancePrimitiveRecord> primitives);
   [[nodiscard]] RenderInstanceBatchUpdateKind classify_update(
       std::span<const RenderSceneInstancePrimitiveRecord> primitives) const;
   void update_surface_grid(float grid_world_spacing,
@@ -81,6 +86,9 @@ private:
   std::size_t max_instances_per_chunk_ = 1u;
   RenderInstanceBatchPlan plan_;
   std::vector<MeshRenderableProxy> proxies_;
+  std::unordered_set<EntityId> preview_suppressed_entities_;
+  std::vector<RenderInstancePreviewSuppression>
+      preview_occurrence_suppressions_;
   InstanceRenderableCacheStats stats_;
 };
 

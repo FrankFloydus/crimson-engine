@@ -466,7 +466,9 @@ SelectionOverlayProjection::project_selection_overlay_frame(
           .style_role = role,
           .source = overlay_source_for_role(role),
           .element = runtime_element_ref(triangle.object_id,
-                                         quader_poly::kInvalidElementId, {},
+                                         triangle.vertex_a,
+                                         {triangle.vertex_b,
+                                          triangle.vertex_c},
                                          triangle.face_id),
       });
     }

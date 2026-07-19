@@ -30,7 +30,8 @@ public:
                         const RenderOverlaySelectionSnapshot &snapshot,
                         bool point_light_gizmos_visible = false,
                         RenderOverlaySelectionMode selection_mode =
-                            RenderOverlaySelectionMode::Object);
+                            RenderOverlaySelectionMode::Object,
+                        bool include_tool_overlays = true);
   [[nodiscard]] static ViewportOverlayFrame build_wireframe_frame(
       ViewportOverlayFrame base_frame,
       RenderOverlaySelectionMode selection_mode,

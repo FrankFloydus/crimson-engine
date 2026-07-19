@@ -12,6 +12,7 @@
 #include <quader/modeling/neutral/polygon/internal/quader_poly_document_constants.hpp>
 #include <quader/modeling/neutral/polygon/internal/quader_poly_document_mesh_internal.hpp>
 
+#include <algorithm>
 #include <cstdint>
 #include <map>
 #include <set>
@@ -240,10 +241,33 @@ quader::QVec3 face_normal(const Document& document, const Face& face)
                                              : quader::QVec3{0.0F, 1.0F, 0.0F};
 }
 
-CompiledMesh compile_document(const Document& document, SurfaceShading shading)
+void compile_document_into(const Document &document, CompiledMesh &mesh,
+                           SurfaceShading shading)
 {
     QDR_PROFILE_SCOPE("qdr_document.compile_document");
-    CompiledMesh mesh;
+    mesh.vertices.clear();
+    mesh.indices.clear();
+    mesh.primitives.clear();
+
+    // A compiled mesh owns one vertex per authored face corner and at most
+    // (corner_count - 2) triangles per face. Reserve once per document and
+    // reuse one corner-index buffer across faces. Transform reconciliation
+    // compiles hundreds of small documents in one batch, so eliminating the
+    // former two heap allocations per face is material to release latency.
+    std::size_t compiled_vertex_capacity = 0U;
+    std::size_t compiled_index_capacity = 0U;
+    std::size_t maximum_face_size = 0U;
+    for (const Face &face : document.faces) {
+      compiled_vertex_capacity += face.vertices.size();
+      maximum_face_size = std::max(maximum_face_size, face.vertices.size());
+      if (face.vertices.size() >= 3U) {
+        compiled_index_capacity += (face.vertices.size() - 2U) * 3U;
+      }
+    }
+    mesh.vertices.reserve(compiled_vertex_capacity);
+    mesh.indices.reserve(compiled_index_capacity);
+    mesh.primitives.reserve(document.faces.size());
+
     const std::map<ElementId, quader::QVec3> smooth_normals =
         shading == SurfaceShading::Smooth
             ? build_smooth_normals(document)
@@ -253,6 +277,9 @@ CompiledMesh compile_document(const Document& document, SurfaceShading shading)
             ? build_authored_smooth_corner_normals(document, shading)
             : std::map<CornerKey, quader::QVec3>{};
 
+    std::vector<std::uint32_t> compiled_face_vertices;
+    compiled_face_vertices.reserve(maximum_face_size);
+
     for (const Face& face : document.faces) {
         QDR_PROFILE_SCOPE("qdr_document.compile_document.face");
         const std::vector<Triangle> triangles = triangulate_face_local_indices(document, face);
@@ -260,8 +287,7 @@ CompiledMesh compile_document(const Document& document, SurfaceShading shading)
             continue;
         }
 
-        std::vector<std::uint32_t> compiled_face_vertices;
-        compiled_face_vertices.reserve(face.vertices.size());
+        compiled_face_vertices.clear();
         const quader::QVec3 normal = face_normal(document, face);
         const int dropped_axis = dropped_axis_for_normal(normal);
         const FaceUvBasis uv_basis = generated_face_uv_basis(document, face, normal);
@@ -296,6 +322,7 @@ CompiledMesh compile_document(const Document& document, SurfaceShading shading)
                 vertex_normal,
                 use_loop_uvs ? face.uvs[local_index] : generated_uv_for_position(vertex->position, uv_basis, dropped_axis),
                 0xff9f9f9f,
+                vertex_id,
             });
         }
 
@@ -330,6 +357,12 @@ CompiledMesh compile_document(const Document& document, SurfaceShading shading)
             face.material_slot,
         });
     }
+}
+
+CompiledMesh compile_document(const Document& document, SurfaceShading shading)
+{
+    CompiledMesh mesh;
+    compile_document_into(document, mesh, shading);
     return mesh;
 }
 

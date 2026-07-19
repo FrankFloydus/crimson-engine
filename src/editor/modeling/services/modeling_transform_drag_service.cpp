@@ -155,6 +155,33 @@ private:
   ModelingSessionMemento after_;
 };
 
+/// Records a topology-stable transform as exact sparse authored positions.
+class RecordedModelingTransformDeltaCommand final : public IUndoableCommand {
+public:
+  using Apply = std::function<ModelingCommandResult(
+      const ModelingSdkTransformHistoryDelta &, bool)>;
+
+  RecordedModelingTransformDeltaCommand(
+      Apply apply, std::string label, ModelingSdkTransformHistoryDelta delta)
+      : apply_(std::move(apply)), label_(std::move(label)),
+        delta_(std::move(delta)) {}
+
+  [[nodiscard]] const std::string &label() const override { return label_; }
+
+  CommandResult undo() override {
+    return command_result_from_modeling(apply_(delta_, false));
+  }
+
+  CommandResult redo() override {
+    return command_result_from_modeling(apply_(delta_, true));
+  }
+
+private:
+  Apply apply_;
+  std::string label_;
+  ModelingSdkTransformHistoryDelta delta_;
+};
+
 quader_editor_core::TransformAxis to_runtime(ModelingTransformAxis axis) {
   switch (axis) {
   case ModelingTransformAxis::X:
@@ -417,7 +444,7 @@ ModelingTransformDragService::begin_transform_drag(
       }
     }
     const ModelingCommandResult duplicated =
-        context.port.begin_portable_transform_preview(true);
+        context.port.begin_portable_transform_preview(true, false);
     if (!duplicated.ok) {
       if (scene_duplicate_transaction_.has_value()) {
         (void)scene_duplicate_transaction_->cancel();
@@ -464,7 +491,10 @@ ModelingTransformDragService::begin_transform_drag(
     }
     const ModelingCommandResult portable_begin =
         context.port.begin_portable_transform_preview(
-            request.duplicate_selected);
+            request.duplicate_selected,
+            operation ==
+                    quader_editor_core::TransformDragOperation::Transform &&
+                !request.duplicate_selected);
     const quader_editor_core::CommandResult begin_preview{
         .ok = portable_begin.ok,
         .changed = portable_begin.changed,
@@ -479,7 +509,12 @@ ModelingTransformDragService::begin_transform_drag(
                          : begin_preview.message,
       };
     }
-    {
+    // A topology-stable transform does not change semantic selection. Its
+    // retained overlay is driven by the transient position revision, so keep
+    // the expensive semantic/projected bases alive for the entire drag.
+    if (operation !=
+            quader_editor_core::TransformDragOperation::Transform ||
+        request.duplicate_selected || begin_preview.changed) {
       QDR_PROFILE_SCOPE("Modeling transform drag invalidate overlay caches");
       context.port.invalidate_selection_overlay_caches();
     }
@@ -664,9 +699,16 @@ ModelingTransformDragService::commit_transform_drag(
        !scene_duplicate_transaction_active);
   const quader_editor_core::TransformDragState repeat_drag =
       context.runtime.transform_drag_state();
+  const bool sparse_transform_history =
+      finish_preview_transaction && history != nullptr &&
+      context.port.transient_transform_preview_active() &&
+      !controller_.duplicate_selected() &&
+      repeat_drag.operation ==
+          quader_editor_core::TransformDragOperation::Transform;
   ModelingSessionMemento preview_before =
       finish_preview_transaction && history != nullptr &&
-              context.port.portable_modeling_preview_active()
+              context.port.portable_modeling_preview_active() &&
+              !sparse_transform_history
           ? context.port.capture_active_preview_history_memento()
           : ModelingSessionMemento();
   bool changed = false;
@@ -696,7 +738,52 @@ ModelingTransformDragService::commit_transform_drag(
     }
     changed = committed.changed;
     context.port.invalidate_selection_overlay_caches();
-    if (changed && history != nullptr && preview_before.valid()) {
+    if (changed && history != nullptr && sparse_transform_history) {
+      QDR_PROFILE_SCOPE("Modeling transform drag record sparse history");
+      ModelingSdkTransformHistoryDelta delta =
+          context.port.take_committed_transform_history_delta();
+      if (!delta.valid()) {
+        clear_runtime_state(context);
+        return {
+            .ok = false,
+            .changed = true,
+            .preview_driven = was_preview_driven,
+            .message = "Committed transform did not publish sparse history.",
+        };
+      }
+      ModelingTransformDragPort *port = &context.port;
+      const ModelingSdkTransformHistoryDelta rollback_delta = delta;
+      const CommandResult recorded = history->record_executed(
+          std::make_unique<RecordedModelingTransformDeltaCommand>(
+              [port](const ModelingSdkTransformHistoryDelta &history_delta,
+                     bool use_after) {
+                return port->apply_transform_history_delta(history_delta,
+                                                           use_after);
+              },
+              transform_drag_history_label(repeat_drag.tool),
+              std::move(delta)));
+      if (!recorded.ok) {
+        QDR_PROFILE_SCOPE(
+            "Modeling transform drag rollback sparse history failure");
+        const ModelingCommandResult restored =
+            context.port.apply_transform_history_delta(rollback_delta, false);
+        clear_runtime_state(context);
+        return {
+            .ok = false,
+            .changed = !restored.ok,
+            .preview_driven = was_preview_driven,
+            .message = !restored.ok
+                           ? (restored.message.empty()
+                                  ? "Could not roll back a sparse transform "
+                                    "after history recording failed."
+                                  : restored.message)
+                           : (recorded.message.empty()
+                                  ? "Could not record transform drag history."
+                                  : recorded.message),
+        };
+      }
+    } else if (changed && history != nullptr && preview_before.valid()) {
+      QDR_PROFILE_SCOPE("Modeling transform drag record snapshot history");
       const ModelingSessionMemento preview_after =
           context.port.capture_history_memento();
       const ModelingSessionMemento rollback_before = preview_before;
@@ -991,9 +1078,11 @@ ModelingTransformDragService::apply_transform_drag_preview(
 
   bool changed = result.changed;
   if (portable_modeling_preview && result.changed) {
-    const ModelingCommandResult portable_result =
-        context.port.update_portable_transform_preview(
-            context.runtime.transform_drag_state(), input.grid_size);
+    const ModelingCommandResult portable_result = [&]() {
+      QDR_PROFILE_SCOPE("Modeling transform drag update portable preview");
+      return context.port.update_portable_transform_preview(
+          context.runtime.transform_drag_state(), input.grid_size);
+    }();
     if (!portable_result.ok) {
       const bool was_preview_driven = controller_.preview_driven();
       (void)cancel_transform_drag(context);
@@ -1036,7 +1125,8 @@ ModelingTransformDragService::apply_transform_drag_preview(
     }
   }
 
-  if (controller_.preview_driven() && changed) {
+  if (controller_.preview_driven() && changed &&
+      !context.port.transient_transform_preview_active()) {
     {
       QDR_PROFILE_SCOPE(
           "Modeling transform drag invalidate overlay caches after apply");

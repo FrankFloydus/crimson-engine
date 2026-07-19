@@ -58,6 +58,7 @@ public:
 private:
   void reconcile_scene_lifecycle() const;
   [[nodiscard]] bool transient_interaction_active() const;
+  [[nodiscard]] bool component_selection_can_enter() const;
 
   SceneDocument &scene_;
   AssetRegistry &assets_;
@@ -68,6 +69,12 @@ private:
   mutable std::uint64_t last_reconciled_scene_content_revision_ = 0u;
   mutable std::uint64_t last_reconciled_workspace_revision_ = 0u;
   mutable bool lifecycle_reconcile_valid_ = false;
+  mutable std::uint64_t component_availability_selection_revision_ = 0u;
+  mutable std::uint64_t component_availability_object_map_revision_ = 0u;
+  mutable std::uint64_t component_availability_visibility_revision_ = 0u;
+  mutable std::uint64_t component_availability_layer_revision_ = 0u;
+  mutable bool component_availability_value_ = false;
+  mutable bool component_availability_valid_ = false;
 };
 
 } // namespace quader

@@ -267,12 +267,15 @@ public:
   void reset_selection_anchor(const QModelIndex &index) {
     const QScopedValueRollback<bool> reset_guard(resetting_selection_anchor_,
                                                   true);
+    externally_synchronized_anchor_ = index;
     if (!index.isValid() && model() != nullptr) {
       const QModelIndex fallback = model()->index(0, 0, rootIndex());
       if (fallback.isValid()) {
-        QTreeView::setCurrentIndex(fallback);
+        externally_synchronized_anchor_ = fallback;
       }
     }
+    externally_synchronized_anchor_valid_ =
+        externally_synchronized_anchor_.isValid();
     QTreeView::setCurrentIndex(index);
   }
 
@@ -291,6 +294,26 @@ protected:
   void mousePressEvent(QMouseEvent *event) override {
     if (event->button() == Qt::LeftButton) {
       selection_gesture_active_ = true;
+      if ((event->modifiers() & Qt::ShiftModifier) != 0 &&
+          externally_synchronized_anchor_valid_ &&
+          selectionModel() != nullptr) {
+        const QModelIndex clicked = indexAt(event->position().toPoint());
+        if (clicked.isValid()) {
+          // QAbstractItemView retains a private range anchor which cannot be
+          // updated when an external owner keeps the same current row. Apply
+          // the first Shift range from the explicit owner-synchronized anchor
+          // while preserving Qt's normal row geometry and deferred commit.
+          const QRect range(visualRect(externally_synchronized_anchor_).center(),
+                            event->position().toPoint());
+          selectionModel()->setCurrentIndex(
+              clicked, QItemSelectionModel::NoUpdate);
+          setSelection(range, QItemSelectionModel::ClearAndSelect |
+                                  QItemSelectionModel::Rows);
+          event->accept();
+          return;
+        }
+      }
+      externally_synchronized_anchor_valid_ = false;
     }
     QTreeView::mousePressEvent(event);
   }
@@ -347,6 +370,8 @@ private:
 
   bool selection_gesture_active_ = false;
   bool resetting_selection_anchor_ = false;
+  QPersistentModelIndex externally_synchronized_anchor_;
+  bool externally_synchronized_anchor_valid_ = false;
 };
 
 } // namespace
@@ -746,19 +771,24 @@ private:
     const QItemSelection rows_to_deselect =
         batched_row_selection(entities_to_deselect);
     const QScopedValueRollback<bool> selection_guard(syncing_selection_, true);
-    const QSignalBlocker selection_model_blocker(selection_model);
     const bool updates_enabled = tree_->updatesEnabled();
     if (updates_enabled) {
       tree_->setUpdatesEnabled(false);
     }
-    if (!rows_to_deselect.isEmpty()) {
-      selection_model->select(rows_to_deselect,
-                              QItemSelectionModel::Deselect |
-                                  QItemSelectionModel::Rows);
-    }
-    if (!rows_to_select.isEmpty()) {
-      selection_model->select(rows_to_select, QItemSelectionModel::Select |
-                                                  QItemSelectionModel::Rows);
+    {
+      // Row membership synchronization must remain signal-silent. Release the
+      // blocker before resetting the current index below: QAbstractItemView
+      // observes that currentChanged signal to reset its private Shift anchor.
+      const QSignalBlocker selection_model_blocker(selection_model);
+      if (!rows_to_deselect.isEmpty()) {
+        selection_model->select(rows_to_deselect,
+                                QItemSelectionModel::Deselect |
+                                    QItemSelectionModel::Rows);
+      }
+      if (!rows_to_select.isEmpty()) {
+        selection_model->select(rows_to_select, QItemSelectionModel::Select |
+                                                    QItemSelectionModel::Rows);
+      }
     }
 
     const auto primary = item_by_entity_.find(primary_selection);

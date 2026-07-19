@@ -52,6 +52,25 @@ struct SessionChangeSnapshot {
 };
 
 /**
+ * Replaces one session object's exact portable component selection as part of
+ * an atomic multi-object selection publication.
+ */
+struct SessionComponentSelectionUpdate {
+  ObjectId object{};
+  PolygonSelectionSnapshot selection;
+};
+
+/**
+ * Replaces one session object's portable document as part of an atomic
+ * multi-object publication.
+ */
+struct SessionDocumentUpdate {
+  ObjectId object{};
+  PolygonDocument document;
+  OperationResult receipt;
+};
+
+/**
  * Summarizes the active headless SDK preview transaction.
  */
 struct PreviewTransactionSummary {
@@ -89,13 +108,26 @@ public:
   [[nodiscard]] Result<OperationResult>
   apply_object_selection(std::span<const ObjectId> objects,
                          SelectionEdit edit = SelectionEdit::Replace);
+  [[nodiscard]] Result<OperationResult> commit_component_selection_batch(
+      std::span<const SessionComponentSelectionUpdate> updates,
+      std::span<const ObjectId> selected_objects, ObjectId active_object = {});
+  [[nodiscard]] Result<OperationResult>
+  commit_documents_batch(std::vector<SessionDocumentUpdate> updates,
+                         bool preserve_object_selection = false);
   [[nodiscard]] Result<OperationResult> select_object(ObjectId object_id);
   [[nodiscard]] Result<OperationResult> rename_object(ObjectId object_id,
                                                       std::string name);
   [[nodiscard]] Result<OperationResult> remove_object(ObjectId object_id);
   [[nodiscard]] Result<ObjectId> duplicate_object(ObjectId object_id,
-                                                  Vec3 offset = {},
-                                                  std::string name = {});
+                                                   Vec3 offset = {},
+                                                   std::string name = {});
+  /**
+   * Duplicates an ordered object set as one atomic session mutation and one
+   * undo step. Returned IDs preserve the source order.
+   */
+  [[nodiscard]] Result<std::vector<ObjectId>>
+  duplicate_objects(std::span<const ObjectId> object_ids, Vec3 offset = {},
+                    std::string name = {});
   [[nodiscard]] Result<OperationResult> copy_selection_to_clipboard();
   [[nodiscard]] Result<ClipboardPasteResult>
   paste_clipboard(Vec3 offset = {});
@@ -136,6 +168,8 @@ public:
   [[nodiscard]] bool can_redo() const;
   [[nodiscard]] std::size_t undo_depth() const;
   void squash_undo_since(std::size_t mark);
+  /** Drops SDK-local history entries without changing the current state. */
+  void discard_undo_since(std::size_t mark);
   [[nodiscard]] bool rollback_undo_since(std::size_t mark);
   /**
    * Restores a semantic session snapshot while retaining every allocator and
@@ -163,6 +197,8 @@ public:
   [[nodiscard]] Result<std::shared_ptr<const PolygonDocument>>
   document_snapshot(ObjectId object_id) const;
   [[nodiscard]] Result<PolygonDocument> document_copy(ObjectId object_id) const;
+  [[nodiscard]] Result<std::vector<PolygonDocument>>
+  document_copies(std::span<const ObjectId> object_ids) const;
   [[nodiscard]] Result<OperationResult>
   commit_document(ObjectId object_id, PolygonDocument document,
                   OperationResult receipt);

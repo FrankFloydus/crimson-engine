@@ -115,6 +115,47 @@ void expect_reversed_face_winding(const PolygonDocument &regular,
   }
 }
 
+[[nodiscard]] PolygonSelectionSnapshot single_face_selection(FaceId face) {
+  return {
+      .kind = SelectionKind::Face,
+      .faces = {face},
+      .has_active = true,
+      .active_face = face,
+  };
+}
+
+void expect_session_face_selection(const ModelingSession &session,
+                                   ObjectId object,
+                                   std::optional<FaceId> expected_face) {
+  Result<PolygonDocument> document = session.document_copy(object);
+  ASSERT_TRUE(document.ok()) << document.error_message();
+  const PolygonSelectionSnapshot selection = document.value().selection();
+  if (!expected_face.has_value()) {
+    EXPECT_TRUE(selection.vertices.empty());
+    EXPECT_TRUE(selection.edges.empty());
+    EXPECT_TRUE(selection.faces.empty());
+    EXPECT_FALSE(selection.has_active);
+    return;
+  }
+
+  EXPECT_EQ(selection.kind, SelectionKind::Face);
+  ASSERT_EQ(selection.faces.size(), 1U);
+  EXPECT_EQ(selection.faces.front(), *expected_face);
+  EXPECT_TRUE(selection.has_active);
+  EXPECT_EQ(selection.active_face, *expected_face);
+}
+
+void expect_session_object_selected(const ModelingSession &session,
+                                    ObjectId object, bool expected) {
+  const std::vector<SessionObjectSummary> objects = session.objects();
+  const auto found = std::ranges::find_if(
+      objects, [&](const SessionObjectSummary &candidate) {
+        return candidate.id == object;
+      });
+  ASSERT_NE(found, objects.end());
+  EXPECT_EQ(found->selected, expected);
+}
+
 [[nodiscard]] bool vec3_near(Vec3 actual, Vec3 expected,
                              float epsilon = 0.0001F) {
   return std::abs(actual.x - expected.x) <= epsilon &&
@@ -1097,6 +1138,292 @@ TEST(ModelingSdkConsumerTests,
   EXPECT_TRUE(session.can_redo());
   EXPECT_EQ(session.content_revision(), content_revision);
   EXPECT_TRUE(session.changes_since(content_revision).objects.empty());
+}
+
+TEST(ModelingSdkConsumerTests,
+     SessionComponentSelectionBatchIsAtomicAndOneUndoStep) {
+  Result<PolygonDocument> first_document = PolygonDocument::make_box({});
+  Result<PolygonDocument> second_document = PolygonDocument::make_box({});
+  ASSERT_TRUE(first_document.ok()) << first_document.error_message();
+  ASSERT_TRUE(second_document.ok()) << second_document.error_message();
+  ASSERT_GE(first_document.value().face_ids().size(), 2U);
+  ASSERT_GE(second_document.value().face_ids().size(), 2U);
+  const FaceId first_face = first_document.value().face_ids()[0];
+  const FaceId second_face = second_document.value().face_ids()[1];
+
+  ModelingSession session;
+  Result<ObjectId> first =
+      session.add_document(std::move(first_document).value(), "First");
+  Result<ObjectId> second =
+      session.add_document(std::move(second_document).value(), "Second");
+  ASSERT_TRUE(first.ok()) << first.error_message();
+  ASSERT_TRUE(second.ok()) << second.error_message();
+
+  const std::array<SessionComponentSelectionUpdate, 2> updates{{
+      {.object = first.value(),
+       .selection = single_face_selection(first_face)},
+      {.object = second.value(),
+       .selection = single_face_selection(second_face)},
+  }};
+  const std::array<ObjectId, 2> selected_objects{first.value(),
+                                                 second.value()};
+  const std::size_t undo_depth = session.undo_depth();
+  const std::uint64_t content_revision = session.content_revision();
+  const std::uint64_t selection_revision = session.selection_revision();
+
+  Result<OperationResult> committed = session.commit_component_selection_batch(
+      updates, selected_objects, second.value());
+  ASSERT_TRUE(committed.ok()) << committed.error_message();
+  EXPECT_TRUE(committed.value().success) << committed.value().message;
+  EXPECT_TRUE(committed.value().changed);
+  EXPECT_TRUE(committed.value().dirty.selection);
+  EXPECT_TRUE(committed.value().dirty.overlays);
+  EXPECT_EQ(session.undo_depth(), undo_depth + 1U);
+  EXPECT_GT(session.content_revision(), content_revision);
+  EXPECT_GT(session.selection_revision(), selection_revision);
+  expect_session_face_selection(session, first.value(), first_face);
+  expect_session_face_selection(session, second.value(), second_face);
+  expect_session_object_selected(session, first.value(), true);
+  expect_session_object_selected(session, second.value(), true);
+
+  const SessionChangeSnapshot changes =
+      session.changes_since(content_revision);
+  ASSERT_EQ(changes.objects.size(), 2U);
+  for (const ObjectId object : selected_objects) {
+    const auto change = std::ranges::find_if(
+        changes.objects, [&](const SessionObjectChange &candidate) {
+          return candidate.id == object;
+        });
+    ASSERT_NE(change, changes.objects.end());
+    EXPECT_TRUE(change->dirty.selection);
+    EXPECT_TRUE(change->dirty.overlays);
+    EXPECT_FALSE(change->dirty.topology);
+    EXPECT_FALSE(change->dirty.geometry);
+  }
+
+  Result<OperationResult> undo = session.undo();
+  ASSERT_TRUE(undo.ok()) << undo.error_message();
+  EXPECT_EQ(session.undo_depth(), undo_depth);
+  EXPECT_TRUE(session.can_redo());
+  expect_session_face_selection(session, first.value(), std::nullopt);
+  expect_session_face_selection(session, second.value(), std::nullopt);
+  expect_session_object_selected(session, first.value(), false);
+  expect_session_object_selected(session, second.value(), false);
+
+  Result<OperationResult> redo = session.redo();
+  ASSERT_TRUE(redo.ok()) << redo.error_message();
+  EXPECT_EQ(session.undo_depth(), undo_depth + 1U);
+  expect_session_face_selection(session, first.value(), first_face);
+  expect_session_face_selection(session, second.value(), second_face);
+  expect_session_object_selected(session, first.value(), true);
+  expect_session_object_selected(session, second.value(), true);
+}
+
+TEST(ModelingSdkConsumerTests,
+     SessionDenseObjectDuplicationPublishesOneAtomicTransition) {
+  constexpr std::size_t kSourceCount = 64u;
+  Result<PolygonDocument> template_document = PolygonDocument::make_box({});
+  ASSERT_TRUE(template_document.ok()) << template_document.error_message();
+
+  ModelingSession session;
+  std::vector<ObjectId> sources;
+  sources.reserve(kSourceCount);
+  for (std::size_t index = 0u; index < kSourceCount; ++index) {
+    Result<ObjectId> added = session.add_document(
+        template_document.value(), "Dense duplicate source");
+    ASSERT_TRUE(added.ok()) << added.error_message();
+    sources.push_back(added.value());
+  }
+
+  const std::size_t undo_depth = session.undo_depth();
+  const std::uint64_t content_revision = session.content_revision();
+  Result<std::vector<ObjectId>> duplicated =
+      session.duplicate_objects(sources);
+  ASSERT_TRUE(duplicated.ok()) << duplicated.error_message();
+  ASSERT_EQ(duplicated.value().size(), kSourceCount);
+  EXPECT_EQ(session.undo_depth(), undo_depth + 1u);
+  EXPECT_EQ(session.content_revision(), content_revision + 1u);
+
+  const std::vector<SessionObjectSummary> after_duplicate = session.objects();
+  ASSERT_EQ(after_duplicate.size(), kSourceCount * 2u);
+  for (const ObjectId duplicate : duplicated.value()) {
+    const auto found = std::ranges::find_if(
+        after_duplicate, [&](const SessionObjectSummary &candidate) {
+          return candidate.id == duplicate;
+        });
+    ASSERT_NE(found, after_duplicate.end());
+    EXPECT_TRUE(found->selected);
+  }
+  for (const ObjectId source : sources) {
+    const auto found = std::ranges::find_if(
+        after_duplicate, [&](const SessionObjectSummary &candidate) {
+          return candidate.id == source;
+        });
+    ASSERT_NE(found, after_duplicate.end());
+    EXPECT_FALSE(found->selected);
+  }
+
+  Result<OperationResult> undo = session.undo();
+  ASSERT_TRUE(undo.ok()) << undo.error_message();
+  EXPECT_EQ(session.objects().size(), kSourceCount);
+  EXPECT_EQ(session.undo_depth(), undo_depth);
+
+  Result<OperationResult> redo = session.redo();
+  ASSERT_TRUE(redo.ok()) << redo.error_message();
+  EXPECT_EQ(session.objects().size(), kSourceCount * 2u);
+  EXPECT_EQ(session.undo_depth(), undo_depth + 1u);
+}
+
+TEST(ModelingSdkConsumerTests,
+     SessionUnchangedComponentSelectionBatchPreservesRedoHistory) {
+  Result<PolygonDocument> first_document = PolygonDocument::make_box({});
+  Result<PolygonDocument> second_document = PolygonDocument::make_box({});
+  ASSERT_TRUE(first_document.ok()) << first_document.error_message();
+  ASSERT_TRUE(second_document.ok()) << second_document.error_message();
+  ASSERT_FALSE(first_document.value().face_ids().empty());
+  ASSERT_FALSE(second_document.value().face_ids().empty());
+  const FaceId first_face = first_document.value().face_ids().front();
+  const FaceId second_face = second_document.value().face_ids().back();
+
+  ModelingSession session;
+  Result<ObjectId> first =
+      session.add_document(std::move(first_document).value(), "First");
+  Result<ObjectId> second =
+      session.add_document(std::move(second_document).value(), "Second");
+  ASSERT_TRUE(first.ok()) << first.error_message();
+  ASSERT_TRUE(second.ok()) << second.error_message();
+  const std::array<SessionComponentSelectionUpdate, 2> updates{{
+      {.object = first.value(),
+       .selection = single_face_selection(first_face)},
+      {.object = second.value(),
+       .selection = single_face_selection(second_face)},
+  }};
+  const std::array<ObjectId, 2> selected_objects{first.value(),
+                                                 second.value()};
+  ASSERT_TRUE(session
+                  .commit_component_selection_batch(updates, selected_objects,
+                                                    second.value())
+                  .ok());
+  ASSERT_TRUE(session.rename_object(first.value(), "Renamed").ok());
+  ASSERT_TRUE(session.undo().ok());
+  ASSERT_TRUE(session.can_redo());
+  expect_session_face_selection(session, first.value(), first_face);
+  expect_session_face_selection(session, second.value(), second_face);
+  expect_session_object_selected(session, first.value(), true);
+  expect_session_object_selected(session, second.value(), true);
+
+  const std::size_t undo_depth = session.undo_depth();
+  const std::uint64_t content_revision = session.content_revision();
+  const std::uint64_t selection_revision = session.selection_revision();
+  Result<OperationResult> unchanged = session.commit_component_selection_batch(
+      updates, selected_objects, second.value());
+  ASSERT_TRUE(unchanged.ok()) << unchanged.error_message();
+  EXPECT_TRUE(unchanged.value().success) << unchanged.value().message;
+  EXPECT_FALSE(unchanged.value().changed);
+  EXPECT_FALSE(unchanged.value().dirty.selection);
+  EXPECT_FALSE(unchanged.value().dirty.overlays);
+  EXPECT_EQ(session.undo_depth(), undo_depth);
+  EXPECT_TRUE(session.can_redo());
+  EXPECT_EQ(session.content_revision(), content_revision);
+  EXPECT_EQ(session.selection_revision(), selection_revision);
+  EXPECT_TRUE(session.changes_since(content_revision).objects.empty());
+
+  Result<OperationResult> redo = session.redo();
+  ASSERT_TRUE(redo.ok()) << redo.error_message();
+  const std::vector<SessionObjectSummary> objects = session.objects();
+  const auto renamed = std::ranges::find_if(
+      objects, [&](const SessionObjectSummary &candidate) {
+        return candidate.id == first.value();
+      });
+  ASSERT_NE(renamed, objects.end());
+  EXPECT_EQ(renamed->name, "Renamed");
+}
+
+TEST(ModelingSdkConsumerTests,
+     SessionInvalidAndDuplicateComponentSelectionBatchesAreAtomic) {
+  Result<PolygonDocument> first_document = PolygonDocument::make_box({});
+  Result<PolygonDocument> second_document = PolygonDocument::make_box({});
+  ASSERT_TRUE(first_document.ok()) << first_document.error_message();
+  ASSERT_TRUE(second_document.ok()) << second_document.error_message();
+  ASSERT_FALSE(first_document.value().face_ids().empty());
+  ASSERT_FALSE(second_document.value().face_ids().empty());
+  const FaceId first_face = first_document.value().face_ids().front();
+  const FaceId second_face = second_document.value().face_ids().front();
+
+  ModelingSession session;
+  Result<ObjectId> first =
+      session.add_document(std::move(first_document).value(), "First");
+  Result<ObjectId> second =
+      session.add_document(std::move(second_document).value(), "Second");
+  ASSERT_TRUE(first.ok()) << first.error_message();
+  ASSERT_TRUE(second.ok()) << second.error_message();
+  ASSERT_TRUE(session.rename_object(first.value(), "Renamed").ok());
+  ASSERT_TRUE(session.undo().ok());
+  ASSERT_TRUE(session.can_redo());
+
+  const std::array<ObjectId, 2> selected_objects{first.value(),
+                                                 second.value()};
+  const std::size_t undo_depth = session.undo_depth();
+  const std::uint64_t content_revision = session.content_revision();
+  const std::uint64_t selection_revision = session.selection_revision();
+  const std::array<SessionComponentSelectionUpdate, 2> invalid_updates{{
+      {.object = first.value(),
+       .selection = single_face_selection(first_face)},
+      {.object = second.value(),
+       .selection = single_face_selection(make_id<FaceTag>(999999U))},
+  }};
+
+  Result<OperationResult> invalid = session.commit_component_selection_batch(
+      invalid_updates, selected_objects, second.value());
+  EXPECT_FALSE(invalid.ok());
+  EXPECT_EQ(session.undo_depth(), undo_depth);
+  EXPECT_TRUE(session.can_redo());
+  EXPECT_EQ(session.content_revision(), content_revision);
+  EXPECT_EQ(session.selection_revision(), selection_revision);
+  EXPECT_TRUE(session.changes_since(content_revision).objects.empty());
+  expect_session_face_selection(session, first.value(), std::nullopt);
+  expect_session_face_selection(session, second.value(), std::nullopt);
+  expect_session_object_selected(session, first.value(), false);
+  expect_session_object_selected(session, second.value(), false);
+
+  PolygonSelectionSnapshot noncanonical_selection =
+      single_face_selection(first_face);
+  noncanonical_selection.has_active = false;
+  noncanonical_selection.active_face = {};
+  const std::array<SessionComponentSelectionUpdate, 1>
+      noncanonical_updates{{
+          {.object = first.value(),
+           .selection = std::move(noncanonical_selection)},
+      }};
+  Result<OperationResult> noncanonical =
+      session.commit_component_selection_batch(
+          noncanonical_updates, selected_objects, second.value());
+  ASSERT_FALSE(noncanonical.ok());
+  EXPECT_EQ(noncanonical.error().code, ErrorCode::InvalidArgument);
+  EXPECT_EQ(session.undo_depth(), undo_depth);
+  EXPECT_TRUE(session.can_redo());
+  EXPECT_EQ(session.content_revision(), content_revision);
+  EXPECT_EQ(session.selection_revision(), selection_revision);
+
+  const std::array<SessionComponentSelectionUpdate, 2> duplicate_updates{{
+      {.object = first.value(),
+       .selection = single_face_selection(first_face)},
+      {.object = first.value(),
+       .selection = single_face_selection(second_face)},
+  }};
+  Result<OperationResult> duplicate = session.commit_component_selection_batch(
+      duplicate_updates, selected_objects, second.value());
+  ASSERT_FALSE(duplicate.ok());
+  EXPECT_EQ(duplicate.error().code, ErrorCode::InvalidArgument);
+  EXPECT_EQ(session.undo_depth(), undo_depth);
+  EXPECT_TRUE(session.can_redo());
+  EXPECT_EQ(session.content_revision(), content_revision);
+  EXPECT_EQ(session.selection_revision(), selection_revision);
+  EXPECT_TRUE(session.changes_since(content_revision).objects.empty());
+  expect_session_face_selection(session, first.value(), std::nullopt);
+  expect_session_face_selection(session, second.value(), std::nullopt);
+  expect_session_object_selected(session, first.value(), false);
+  expect_session_object_selected(session, second.value(), false);
 }
 
 TEST(ModelingSdkConsumerTests,

@@ -551,11 +551,11 @@ bool normals_match_same_facing(quader::QVec3 left,
         const double second =
             static_cast<double>(left_second) * right_first;
         const double value = first - second;
-        constexpr double epsilon =
+        constexpr double kEpsilon =
             std::numeric_limits<float>::epsilon();
         const double bound =
-            4.0 * epsilon +
-            2.0 * epsilon * (std::abs(first) + std::abs(second));
+            4.0 * kEpsilon +
+            2.0 * kEpsilon * (std::abs(first) + std::abs(second));
         return std::abs(value) <= bound;
     };
     const bool collinear =

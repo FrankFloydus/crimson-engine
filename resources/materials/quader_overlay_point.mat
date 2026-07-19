@@ -8,7 +8,8 @@ material {
     vertexDomain : device,
     requires : [
         uv0,
-        color
+        color,
+        custom0
     ],
     variables : [
         pointUv
@@ -17,12 +18,51 @@ material {
         {
             type : float,
             name : innerRadius
+        },
+        {
+            type : float,
+            name : pointSize
+        },
+        {
+            type : float,
+            name : nearPlane
+        },
+        {
+            type : float,
+            name : depthBias
         }
     ]
 }
 
 vertex {
     void materialVertex(inout MaterialVertexInputs material) {
+        highp vec4 centerWorld = getWorldFromModelMatrix() * vec4(getCustom0().xyz, 1.0);
+        highp vec4 centerView = getViewFromWorldMatrix() * centerWorld;
+        float nearPlane = max(materialParams.nearPlane, 0.0001);
+        highp vec4 centerClip;
+        if (centerView.z > -nearPlane) {
+            centerClip = vec4(1000000.0, 1000000.0, 0.0, 1.0);
+        } else {
+            centerClip = getClipFromViewMatrix() * centerView;
+        }
+
+        vec2 corner = material.uv0 - vec2(0.5);
+        vec2 offsetPixels = corner * max(materialParams.pointSize, 1.0);
+        vec2 offsetDevice = offsetPixels * getResolution().zw * 2.0;
+        float reciprocalW = 1.0 / max(abs(centerClip.w), 0.000001);
+        highp vec3 centerDevice = centerClip.xyz * reciprocalW;
+
+        // DEVICE-domain vertices are remapped by Filament from OpenGL NDC Z
+        // to reversed depth. Convert clipFromView's already-reversed depth
+        // back to OpenGL NDC so that remap happens exactly once.
+        float deviceDepth = 1.0 - 2.0 * centerDevice.z;
+        float deviceOffset = max(materialParams.depthBias, 0.0) * nearPlane * 0.0025;
+        deviceDepth = max(-1.0, deviceDepth - deviceOffset);
+        highp vec4 finalDevice = vec4(centerDevice.xy + offsetDevice,
+                                     deviceDepth, 1.0);
+
+        material.clipSpaceTransform = mat4(1.0);
+        material.clipSpaceTransform[3] = finalDevice;
         material.pointUv = float4(material.uv0, 0.0, 0.0);
     }
 }

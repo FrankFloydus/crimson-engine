@@ -76,9 +76,12 @@ public:
       bool modal_tool_owns_viewport) const;
   [[nodiscard]] static bool has_modal_overlay(const ModelingToolStatus &status);
   void invalidate() const;
+  void invalidate_composed_frame() const;
   [[nodiscard]] std::uint64_t selection_overlay_signature(
       const quader_editor_core::EditorRuntime &runtime,
       ModelingSelectionOverlayOptions options = {}) const;
+  [[nodiscard]] std::uint64_t volatile_overlay_signature(
+      const quader_editor_core::EditorRuntime &runtime) const;
 
   [[nodiscard]] bool selection_frame_matches(
       std::uint64_t content_revision, std::uint64_t selection_revision,
@@ -113,6 +116,13 @@ public:
       const ModelingSelectionService &selection_service,
       const ModelingSdkProjectionAdapter &sdk_projection,
       ModelingSelectionOverlayOptions options = {}) const;
+  [[nodiscard]] ViewportOverlayFrame volatile_overlay_frame(
+      const quader_editor_core::EditorSession &session,
+      const quader_editor_core::EditorRuntime &runtime,
+      const SceneDocument &scene,
+      const ModelingObjectRuntimeMap &object_registry,
+      const ModelingSelectionService &selection_service,
+      const ModelingSdkProjectionAdapter &sdk_projection) const;
   [[nodiscard]] std::vector<ModelingToolPreviewMesh>
   tool_preview_meshes(
       const quader_editor_core::EditorRuntime &runtime,

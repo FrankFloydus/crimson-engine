@@ -1158,6 +1158,10 @@ TEST(ViewportInfoStatsTests, CountsOnlyCameraVisibleRenderableMeshes) {
       collect_viewport_info_scene_stats(snapshot, camera);
 
   EXPECT_EQ(visible_stats.objects, 1u);
+  EXPECT_EQ(visible_stats.vertices, 3u);
+  EXPECT_EQ(visible_stats.edges, 3u);
+  EXPECT_EQ(visible_stats.faces, 1u);
+  EXPECT_EQ(visible_stats.triangles, 1u);
   EXPECT_EQ(visible_stats.primitives, 1u);
   EXPECT_EQ(visible_stats.draw_calls, 1u);
 
@@ -1169,6 +1173,10 @@ TEST(ViewportInfoStatsTests, CountsOnlyCameraVisibleRenderableMeshes) {
       collect_viewport_info_scene_stats(snapshot, looked_away);
 
   EXPECT_EQ(empty_view_stats.objects, 0u);
+  EXPECT_EQ(empty_view_stats.vertices, 0u);
+  EXPECT_EQ(empty_view_stats.edges, 0u);
+  EXPECT_EQ(empty_view_stats.faces, 0u);
+  EXPECT_EQ(empty_view_stats.triangles, 0u);
   EXPECT_EQ(empty_view_stats.primitives, 0u);
   EXPECT_EQ(empty_view_stats.draw_calls, 0u);
 }
@@ -1212,6 +1220,10 @@ TEST(ViewportInfoStatsTests,
   const ViewportInfoSceneStats isolated_stats =
       collect_viewport_info_scene_stats(document, assets, camera, &local);
   EXPECT_EQ(isolated_stats.objects, 1u);
+  EXPECT_EQ(isolated_stats.vertices, 3u);
+  EXPECT_EQ(isolated_stats.edges, 3u);
+  EXPECT_EQ(isolated_stats.faces, 1u);
+  EXPECT_EQ(isolated_stats.triangles, 1u);
   EXPECT_EQ(isolated_stats.primitives, 1u);
   EXPECT_EQ(isolated_stats.draw_calls, 1u);
 
@@ -1229,6 +1241,10 @@ TEST(ViewportInfoStatsTests,
   const ViewportInfoSceneStats all_occurrences =
       collect_viewport_info_scene_stats(document, assets, camera);
   EXPECT_EQ(all_occurrences.objects, 2u);
+  EXPECT_EQ(all_occurrences.vertices, 6u);
+  EXPECT_EQ(all_occurrences.edges, 6u);
+  EXPECT_EQ(all_occurrences.faces, 2u);
+  EXPECT_EQ(all_occurrences.triangles, 2u);
   EXPECT_EQ(all_occurrences.primitives, 2u);
   EXPECT_EQ(all_occurrences.draw_calls, 2u);
 }
@@ -1236,6 +1252,11 @@ TEST(ViewportInfoStatsTests,
 TEST(RenderOverlaySnapshotTests,
      WireGeometryPayloadIsDeterministicCachedAndLifetimePinned) {
   MeshAsset mesh = make_authored_quad_mesh();
+  const MeshTopologyCounts topology = mesh_topology_counts(mesh);
+  EXPECT_EQ(topology.vertices, 4u);
+  EXPECT_EQ(topology.edges, 4u);
+  EXPECT_EQ(topology.faces, 1u);
+  EXPECT_EQ(topology.triangles, 2u);
   const std::shared_ptr<const MeshWireGeometryPayload> first =
       mesh.wire_geometry_payload();
   const std::shared_ptr<const MeshWireGeometryPayload> second =
@@ -3717,11 +3738,6 @@ TEST(OverlayLineMeshBuilderTests,
   ASSERT_EQ(line_mesh.vertices.size(), 4u);
   ASSERT_EQ(point_mesh.vertices.size(), 4u);
 
-  const OverlayCameraProjector projector(camera);
-  const OverlayProjectedPoint projected_point =
-      projector.project(projector.view_point_for(point_position));
-  ASSERT_TRUE(projected_point.valid);
-
   EXPECT_FLOAT_EQ(line_plan.line_batches.front().near_plane,
                   camera.near_plane);
   EXPECT_FLOAT_EQ(line_plan.line_batches.front().depth_bias,
@@ -3732,26 +3748,20 @@ TEST(OverlayLineMeshBuilderTests,
   EXPECT_FLOAT_EQ(line_mesh.vertices[0].end.x, line_end.x);
   EXPECT_FLOAT_EQ(line_mesh.vertices[0].end.y, line_end.y);
   EXPECT_FLOAT_EQ(line_mesh.vertices[0].end.z, line_end.z);
-
-  const float expected_point_depth =
-      projected_point.device.z - camera.near_plane *
-                                     kOverlayDeviceDepthBiasPerNearPlane *
-                                     kOverlayPointDepthBias;
-  const float point_center_x =
-      (point_mesh.vertices[0].position.x + point_mesh.vertices[1].position.x +
-       point_mesh.vertices[2].position.x + point_mesh.vertices[3].position.x) *
-      0.25f;
-  const float point_center_y =
-      (point_mesh.vertices[0].position.y + point_mesh.vertices[1].position.y +
-       point_mesh.vertices[2].position.y + point_mesh.vertices[3].position.y) *
-      0.25f;
-  EXPECT_NEAR(point_center_x, projected_point.device.x, 0.00001f);
-  EXPECT_NEAR(point_center_y, projected_point.device.y, 0.00001f);
-  EXPECT_NEAR(point_mesh.vertices[0].position.z, expected_point_depth,
-              0.00001f);
-  EXPECT_LT(point_mesh.vertices[0].position.z, projected_point.device.z);
-  EXPECT_GT(point_mesh.vertices[0].position.z * -0.5f + 0.5f,
-            projected_point.device.z * -0.5f + 0.5f);
+  EXPECT_FLOAT_EQ(point_plan.point_batches.front().near_plane,
+                  camera.near_plane);
+  EXPECT_FLOAT_EQ(point_plan.point_batches.front().depth_bias,
+                  kOverlayPointDepthBias);
+  for (const OverlayPointVertex &vertex : point_mesh.vertices) {
+    EXPECT_FLOAT_EQ(vertex.position.x, 0.0f);
+    EXPECT_FLOAT_EQ(vertex.position.y, 0.0f);
+    EXPECT_FLOAT_EQ(vertex.position.z, 0.0f);
+    EXPECT_FLOAT_EQ(vertex.position.w, 1.0f);
+    EXPECT_FLOAT_EQ(vertex.center.x, point_position.x);
+    EXPECT_FLOAT_EQ(vertex.center.y, point_position.y);
+    EXPECT_FLOAT_EQ(vertex.center.z, point_position.z);
+    EXPECT_FLOAT_EQ(vertex.center.w, 1.0f);
+  }
 }
 
 TEST(OverlayCameraProjectorTests,

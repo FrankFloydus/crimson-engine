@@ -29,6 +29,7 @@ namespace quader {
 class AssetRegistry;
 class DocumentCommandService;
 class ModelingSessionMemento;
+class ModelingSdkTransformHistoryDelta;
 class SceneDocument;
 
 /**
@@ -44,13 +45,20 @@ public:
   [[nodiscard]] virtual ModelingSelectionMode
   portable_modeling_selection_mode() const = 0;
   [[nodiscard]] virtual bool portable_modeling_preview_active() const = 0;
+  /** True while a topology-stable transform is streamed as transient positions. */
+  [[nodiscard]] virtual bool transient_transform_preview_active() const = 0;
   virtual ModelingCommandResult
-  begin_portable_transform_preview(bool duplicate_selected) = 0;
+  begin_portable_transform_preview(bool duplicate_selected,
+                                   bool topology_stable_transform) = 0;
   virtual ModelingCommandResult update_portable_transform_preview(
       const quader_editor_core::TransformDragState &drag,
       double grid_size) = 0;
   virtual ModelingCommandResult commit_portable_translate_preview() = 0;
   virtual ModelingCommandResult cancel_portable_translate_preview() = 0;
+  [[nodiscard]] virtual ModelingSdkTransformHistoryDelta
+  take_committed_transform_history_delta() = 0;
+  virtual ModelingCommandResult apply_transform_history_delta(
+      const ModelingSdkTransformHistoryDelta &delta, bool use_after) = 0;
   virtual void record_portable_transform(
       const quader_editor_core::TransformDragState &drag,
       bool duplicate_selected) = 0;
@@ -97,8 +105,8 @@ public:
 struct ModelingTransformDragServiceContext {
   SceneDocument &scene;
   AssetRegistry &assets;
-  /// Short-lived SDK projection used only by retained native input helpers.
-  quader_editor_core::EditorSession session;
+  /// Drag-lifetime projection borrowed by retained native input helpers.
+  const quader_editor_core::EditorSession &session;
   quader_editor_core::EditorRuntime &runtime;
   ModelingTransformDragPort &port;
   DocumentCommandService *document_commands = nullptr;

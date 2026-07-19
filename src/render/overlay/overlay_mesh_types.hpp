@@ -6,7 +6,9 @@
 ////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <vector>
 
 namespace quader {
@@ -65,9 +67,44 @@ struct OverlayLineVertex {
  * Represents an Overlay Point Vertex value used by the render extraction and Filament resource layer.
  */
 struct OverlayPointVertex {
+    // Point centers remain in world space. The point material projects the
+    // center and expands this canonical quad in device space, so camera motion
+    // never requires rebuilding the dense point buffer.
+    OverlayFloat4 position;
+    OverlayFloat4 center;
+    OverlayFloat2 uv;
+    std::uint32_t color = 0;
+};
+
+/**
+ * Represents an Overlay Icon Vertex value used by the render extraction and Filament resource layer.
+ */
+struct OverlayIconVertex {
     OverlayFloat4 position;
     OverlayFloat2 uv;
     std::uint32_t color = 0;
+};
+
+/// Selects one independently uploaded world-position attribute stream.
+enum class OverlayPositionStream : std::uint8_t {
+    Primary,
+    Secondary,
+};
+
+/**
+ * Maps one semantic mesh element to a retained range of expanded GPU vertices.
+ * Point/line quads keep their indices, UVs, controls, colors and render state
+ * immutable while transform previews update only these position streams.
+ */
+struct OverlayPositionStreamBinding {
+    int object_id = -1;
+    int vertex_id = -1;
+    std::uint32_t first_vertex = 0u;
+    std::uint32_t vertex_count = 0u;
+    OverlayPositionStream stream = OverlayPositionStream::Primary;
+    OverlayFloat4 base_position;
+    std::uint32_t source_index = std::numeric_limits<std::uint32_t>::max();
+    std::uint32_t position_index = std::numeric_limits<std::uint32_t>::max();
 };
 
 template <typename Vertex>
@@ -77,6 +114,7 @@ template <typename Vertex>
 struct OverlayMesh {
     std::vector<Vertex> vertices;
     std::vector<std::uint32_t> indices;
+    std::vector<OverlayPositionStreamBinding> position_stream_bindings;
 
     bool empty() const {
         return vertices.empty() || indices.empty();
@@ -87,5 +125,6 @@ using OverlayFaceFillMesh = OverlayMesh<OverlayFaceFillVertex>;
 using OverlayLineMesh = OverlayMesh<OverlayLineVertex>;
 using OverlayEditWireMesh = OverlayMesh<OverlayLineVertex>;
 using OverlayPointMesh = OverlayMesh<OverlayPointVertex>;
+using OverlayIconMesh = OverlayMesh<OverlayIconVertex>;
 
 } // namespace quader

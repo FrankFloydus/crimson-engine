@@ -55,6 +55,18 @@ struct MeshVertexPayload {
   Vec3 normal{0.0F, 1.0F, 0.0F};
   Vec2 uv0{};
   std::uint32_t color = 0xff9f9f9fU;
+  VertexId source_vertex{};
+};
+
+/**
+ * Assigns one authored vertex an exact local-space position.
+ *
+ * This payload is intentionally topology-neutral so transform history can
+ * replay sparse position deltas without rebuilding an authored mesh.
+ */
+struct VertexPositionUpdate {
+  VertexId vertex{};
+  Vec3 position{};
 };
 
 /**

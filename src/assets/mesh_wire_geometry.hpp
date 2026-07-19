@@ -33,7 +33,18 @@ struct MeshWireGeometryPayload final {
   bool authored = false;
 };
 
+/// Renderer-neutral topology totals for one logical mesh asset.
+struct MeshTopologyCounts final {
+  std::uint64_t vertices = 0;
+  std::uint64_t edges = 0;
+  std::uint64_t faces = 0;
+  std::uint64_t triangles = 0;
+};
+
 [[nodiscard]] std::shared_ptr<const MeshWireGeometryPayload>
 build_mesh_wire_geometry_payload(const MeshAsset &mesh);
+
+/** Counts authored topology when available, with compiled-triangle fallback. */
+[[nodiscard]] MeshTopologyCounts mesh_topology_counts(const MeshAsset &mesh);
 
 } // namespace quader

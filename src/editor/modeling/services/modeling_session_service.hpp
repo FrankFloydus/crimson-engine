@@ -102,6 +102,8 @@ public:
   [[nodiscard]] std::optional<SceneBounds> selection_bounds() const;
   [[nodiscard]] ModelingSelectionMode selection_mode() const;
   [[nodiscard]] ModelingSelectionSummary selection_summary() const;
+  [[nodiscard]] std::span<const EntityId>
+  selected_component_entities() const;
   [[nodiscard]] std::uint64_t content_revision() const;
   [[nodiscard]] std::uint64_t selection_revision() const;
   [[nodiscard]] ModelingSelectionExport export_selection() const;
@@ -109,15 +111,21 @@ public:
       ModelingSelectionOverlayOptions options = {}) const;
   [[nodiscard]] ViewportOverlayFrame
   selection_overlay_frame(ModelingSelectionOverlayOptions options = {}) const;
+  [[nodiscard]] ViewportOverlayFrame volatile_overlay_frame() const;
   [[nodiscard]] std::vector<ModelingToolPreviewMesh>
   tool_preview_meshes() const;
+  [[nodiscard]] bool transient_transform_preview_active() const;
+  [[nodiscard]] std::uint64_t transient_transform_preview_revision() const;
   [[nodiscard]] std::uint64_t
   transformed_picking_projection_build_count() const;
   [[nodiscard]] std::uint64_t
   rectangle_picking_projection_build_count() const;
   [[nodiscard]] std::uint64_t
+  rectangle_selection_universe_build_count() const;
+  [[nodiscard]] std::uint64_t
   rectangle_selection_resolution_build_count() const;
   [[nodiscard]] std::uint64_t local_face_geometry_build_count() const;
+  [[nodiscard]] std::uint64_t world_pick_bounds_build_count() const;
   [[nodiscard]] const void *modeling_sdk_session_identity_for_tests() const;
   [[nodiscard]] std::size_t modeling_sdk_object_count_for_tests() const;
   void set_modeling_sdk_projection_failure_for_tests(

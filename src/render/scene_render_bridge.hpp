@@ -31,6 +31,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <unordered_set>
 #include <vector>
 
 namespace quader {
@@ -48,6 +49,7 @@ struct ViewportSceneOverlayFrameRequest {
         RenderOverlaySelectionMode::Object;
     bool wireframe_pane = false;
     bool point_light_gizmos_visible = false;
+    bool include_tool_overlays = true;
 };
 
 /// Aggregates render-resource sharing and explicit-batch diagnostic counters.
@@ -118,12 +120,28 @@ public:
     [[nodiscard]] std::uint64_t tool_preview_submission_revision() const {
       return tool_preview_submission_revision_;
     }
+    [[nodiscard]] bool scene_asset_overlay_sync_pending() const {
+      return tool_preview_overlay_suppression_dirty_;
+    }
     [[nodiscard]] SceneRenderResourceDiagnostics diagnostics() const;
+    /// Restricts transient overlay work to currently visible workspace panes;
+    /// slots leaving the layout are released and lazily resubmitted if shown.
+    void set_active_overlay_viewports(std::uint8_t viewport_mask);
     void set_overlay_frame(ViewportOverlayFrame frame,
                            ViewportOverlayCamera camera);
     void set_overlay_frame(std::size_t viewport_index, std::uint8_t layer_mask,
                            ViewportOverlayFrame frame,
                            ViewportOverlayCamera camera);
+    /**
+     * Submits the small, frame-volatile tool overlay independently from the
+     * retained selection and scene overlay. Keeping these streams separate
+     * prevents gizmo, marquee, and pivot motion from copying and rebinding a
+     * large component-selection frame.
+     */
+    void set_dynamic_overlay_frame(std::size_t viewport_index,
+                                   std::uint8_t layer_mask,
+                                   ViewportOverlayFrame frame,
+                                   ViewportOverlayCamera camera);
     [[nodiscard]] bool
     update_overlay_camera(std::size_t viewport_index, std::uint8_t layer_mask,
                           ViewportOverlayCamera camera);
@@ -139,6 +157,7 @@ public:
     ToolPreviewRenderableCache tool_preview_cache_;
     OverlayProxyFactory overlay_proxy_factory_;
     OverlayRenderableCache overlay_cache_;
+    OverlayRenderableCache dynamic_overlay_cache_;
     InstanceSelectionOverlayCache instance_selection_overlay_cache_;
     SceneWireframeOverlayCache scene_wireframe_overlay_cache_;
     SelectedObjectOverlayCache selected_object_overlay_cache_;
@@ -149,6 +168,15 @@ public:
     const RenderProjectMaterialResolver *project_material_resolver_ = nullptr;
     bool has_scene_binding_ = false;
     std::uint64_t tool_preview_submission_revision_ = 0;
+    std::uint64_t tool_preview_suppression_signature_ = 0;
+    bool tool_preview_suppression_valid_ = false;
+    std::unordered_set<EntityId> tool_preview_suppressed_entities_;
+    std::vector<RenderInstancePreviewSuppression>
+        tool_preview_occurrence_suppressions_;
+    bool tool_preview_overlay_suppression_dirty_ = false;
+    std::uint8_t active_overlay_viewport_mask_ =
+        static_cast<std::uint8_t>(
+            (1u << OverlayRenderableCache::kMaxViewportOverlaySlots) - 1u);
 };
 
 } // namespace quader

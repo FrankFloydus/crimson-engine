@@ -262,18 +262,37 @@ struct RenderSceneSnapshotBuildOptions {
  * Captures a tool preview mesh and its render material dependencies.
  */
 struct RenderToolPreviewMeshRecord {
+  int source_object_id = -1;
   EntityId source_entity = kInvalidEntityId;
+  // A preview sourced from a canonical instance-definition member is rendered
+  // in one public occurrence. Retain that occurrence so source suppression
+  // does not hide every other occurrence of the same definition member.
+  EntityId visibility_entity = kInvalidEntityId;
   AssetId material_id = kInvalidAssetId;
   MeshAsset mesh;
   RenderMaterialBindingSnapshot material;
   std::uint64_t material_revision = 0;
   QMat4 transform;
   std::vector<QMat4> instance_transforms;
+  bool dynamic_positions = false;
+  bool suppress_source = false;
+  std::uint64_t layout_key = 0u;
+  std::uint64_t position_revision = 0u;
+  std::shared_ptr<const std::vector<QVec3>> dynamic_position_payload;
 
   [[nodiscard]] bool renderable() const {
     return !mesh.geometry().vertices.empty() &&
            !mesh.geometry().indices.empty();
   }
+};
+
+/// Suppresses one canonical member/definition only in one public occurrence.
+struct RenderInstancePreviewSuppression final {
+  EntityId source_entity = kInvalidEntityId;
+  EntityId occurrence = kInvalidEntityId;
+
+  friend bool operator==(const RenderInstancePreviewSuppression &,
+                         const RenderInstancePreviewSuppression &) = default;
 };
 
 } // namespace quader

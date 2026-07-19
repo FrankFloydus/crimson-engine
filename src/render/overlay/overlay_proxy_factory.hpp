@@ -59,6 +59,14 @@ public:
     bool update_layer_proxies(std::vector<OverlayRenderableProxy> &proxies,
                               const OverlayLayerBuildPlan &plan,
                               std::uint8_t layer_mask);
+    /// Uploads only retained world-position attributes. Static quad topology,
+    /// controls, colors, indices and material/depth state remain untouched.
+    bool update_position_streams(OverlayRenderableProxy &proxy);
+    /// Changes visibility without rebuilding or re-uploading retained overlay
+    /// geometry. Used to keep very large component overlays off the drag hot
+    /// path while the dynamic mesh preview is visible.
+    void set_layer_mask(const std::vector<OverlayRenderableProxy> &proxies,
+                        std::uint8_t layer_mask);
     void destroy(OverlayRenderableProxy& proxy);
 
     static std::size_t planned_proxy_count(const OverlayLayerBuildPlan &plan);

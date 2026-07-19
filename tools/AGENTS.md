@@ -38,5 +38,7 @@ generates its disposable compile database in `.build/cmake-tidy`, and enforces t
   then starts Quader and waits until both application windows are ready for profiling.
 - Launcher failures remain visible until Enter is pressed. Automated callers can pass
   `-NoPauseOnError` to preserve non-interactive failure behavior.
-- The recorded local Tracy 0.13.1 and Debug build paths are defaults. Use the script parameters for
-  alternate profiler, executable, or build-cache paths.
+- The recorded local Tracy 0.13.1 and optimized Release build paths are defaults. Performance
+  captures must not use the unoptimized Debug executable. Pass `-Configuration Debug` only for
+  correctness diagnostics, or use the script parameters for alternate profiler, executable, or
+  build-cache paths.

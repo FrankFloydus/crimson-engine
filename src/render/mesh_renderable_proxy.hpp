@@ -44,6 +44,9 @@ struct MeshRenderableProxy {
     bool double_sided = false;
     bool owns_mesh_buffers = true;
     bool owns_material_instances = true;
+    bool dynamic_geometry = false;
+    std::uint32_t vertex_count = 0u;
+    std::uint32_t index_count = 0u;
     filament::VertexBuffer *vertex_buffer = nullptr;
     filament::IndexBuffer *index_buffer = nullptr;
     filament::InstanceBuffer *instance_buffer = nullptr;
@@ -65,6 +68,9 @@ struct MeshRenderableProxy {
       owns_mesh_buffers = std::exchange(other.owns_mesh_buffers, true);
       owns_material_instances =
           std::exchange(other.owns_material_instances, true);
+      dynamic_geometry = std::exchange(other.dynamic_geometry, false);
+      vertex_count = std::exchange(other.vertex_count, 0u);
+      index_count = std::exchange(other.index_count, 0u);
       vertex_buffer = std::exchange(other.vertex_buffer, nullptr);
       index_buffer = std::exchange(other.index_buffer, nullptr);
       instance_buffer = std::exchange(other.instance_buffer, nullptr);

@@ -195,6 +195,9 @@ struct SelectionOverlayTriangle {
   std::uint32_t color_abgr = 0xffffffffU;
   int object_id = -1;
   quader_poly::ElementId face_id = quader_poly::kInvalidElementId;
+  quader_poly::ElementId vertex_a = quader_poly::kInvalidElementId;
+  quader_poly::ElementId vertex_b = quader_poly::kInvalidElementId;
+  quader_poly::ElementId vertex_c = quader_poly::kInvalidElementId;
 };
 
 /**

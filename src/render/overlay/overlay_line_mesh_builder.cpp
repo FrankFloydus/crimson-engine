@@ -44,6 +44,26 @@ void OverlayLineMeshBuilder::append_line_quad(
       {origin, start, end, {1.0f, 1.0f, 1.0f, 0.0f}, linear_color});
   mesh.vertices.push_back(
       {origin, start, end, {1.0f, -1.0f, 0.0f, 0.0f}, linear_color});
+  if (line.element.object_id >= 0 && line.element.edge_a >= 0) {
+    mesh.position_stream_bindings.push_back({
+        .object_id = line.element.object_id,
+        .vertex_id = line.element.edge_a,
+        .first_vertex = offset,
+        .vertex_count = 4u,
+        .stream = OverlayPositionStream::Primary,
+        .base_position = start,
+    });
+  }
+  if (line.element.object_id >= 0 && line.element.edge_b >= 0) {
+    mesh.position_stream_bindings.push_back({
+        .object_id = line.element.object_id,
+        .vertex_id = line.element.edge_b,
+        .first_vertex = offset,
+        .vertex_count = 4u,
+        .stream = OverlayPositionStream::Secondary,
+        .base_position = end,
+    });
+  }
   mesh.indices.push_back(offset);
   mesh.indices.push_back(offset + 1u);
   mesh.indices.push_back(offset + 2u);

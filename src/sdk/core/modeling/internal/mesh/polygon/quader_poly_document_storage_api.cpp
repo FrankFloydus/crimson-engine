@@ -36,6 +36,19 @@ ElementId add_face(Document& document, std::span<const ElementId> vertices, std:
 
 const Vertex* find_vertex(const Document& document, ElementId id)
 {
+    // Authored IDs are append-only and therefore normally match their dense
+    // storage slot. Keep the linear fallback for documents whose storage was
+    // compacted or imported in a different order, but make the overwhelmingly
+    // common modeling/compilation lookup O(1). This mirrors the indexed lookup
+    // tables used by mature editable-mesh implementations without changing the
+    // portable Document layout.
+    if (id != kInvalidElementId) {
+        const std::size_t hinted_index = static_cast<std::size_t>(id - 1U);
+        if (hinted_index < document.vertices.size() &&
+            document.vertices[hinted_index].id == id) {
+          return &document.vertices[hinted_index];
+        }
+    }
     const auto vertex = std::ranges::find_if(document.vertices, [id](const Vertex& candidate) {
         return candidate.id == id;
     });
@@ -44,6 +57,13 @@ const Vertex* find_vertex(const Document& document, ElementId id)
 
 Vertex* find_vertex(Document& document, ElementId id)
 {
+    if (id != kInvalidElementId) {
+        const std::size_t hinted_index = static_cast<std::size_t>(id - 1U);
+        if (hinted_index < document.vertices.size() &&
+            document.vertices[hinted_index].id == id) {
+          return &document.vertices[hinted_index];
+        }
+    }
     const auto vertex = std::ranges::find_if(document.vertices, [id](const Vertex& candidate) {
         return candidate.id == id;
     });
@@ -52,6 +72,13 @@ Vertex* find_vertex(Document& document, ElementId id)
 
 const Face* find_face(const Document& document, ElementId id)
 {
+    if (id != kInvalidElementId) {
+        const std::size_t hinted_index = static_cast<std::size_t>(id - 1U);
+        if (hinted_index < document.faces.size() &&
+            document.faces[hinted_index].id == id) {
+          return &document.faces[hinted_index];
+        }
+    }
     const auto face = std::ranges::find_if(document.faces, [id](const Face& candidate) {
         return candidate.id == id;
     });
@@ -60,6 +87,13 @@ const Face* find_face(const Document& document, ElementId id)
 
 Face* find_face(Document& document, ElementId id)
 {
+    if (id != kInvalidElementId) {
+        const std::size_t hinted_index = static_cast<std::size_t>(id - 1U);
+        if (hinted_index < document.faces.size() &&
+            document.faces[hinted_index].id == id) {
+          return &document.faces[hinted_index];
+        }
+    }
     const auto face = std::ranges::find_if(document.faces, [id](const Face& candidate) {
         return candidate.id == id;
     });

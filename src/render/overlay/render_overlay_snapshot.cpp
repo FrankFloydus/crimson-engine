@@ -249,6 +249,9 @@ void append_instance_wireframe_meshes(
         build_mesh_wire_geometry_payload(*mesh);
     snapshot.meshes.push_back({
         .entity = occurrence,
+        .occurrence = occurrence,
+        .definition = instance->definition,
+        .member = member,
         .participant_token =
             instance_overlay_participant_token(occurrence, member),
         .mesh_id = mesh_component->mesh,

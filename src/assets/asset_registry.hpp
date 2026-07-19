@@ -17,6 +17,7 @@
 #include <functional>
 #include <memory>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -82,6 +83,12 @@ struct AssetRegistryMutationResult {
     std::string message;
 };
 
+/// Pairs one existing mesh asset ID with its fully prepared replacement.
+struct MeshAssetReplacement final {
+  AssetId id = kInvalidAssetId;
+  MeshAsset mesh;
+};
+
 /**
  * Describes one mesh asset without forcing its deferred geometry payload to
  * hydrate.
@@ -140,6 +147,11 @@ public:
   bool remove_material(AssetId id);
   bool remove_texture(AssetId id);
   bool replace_mesh(AssetId id, MeshAsset mesh);
+  /**
+   * Atomically validates and replaces existing mesh payloads, then advances
+   * the registry owner revision once for the complete publication.
+   */
+  bool replace_meshes(std::span<MeshAssetReplacement> replacements);
   bool replace_material(AssetId id, MaterialDocument material);
   bool replace_texture(AssetId id, TextureAsset texture);
   bool update_mesh(AssetId id, const std::function<void(MeshAsset &)> &update);

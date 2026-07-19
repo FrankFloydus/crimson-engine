@@ -225,6 +225,11 @@ quader_configure_modeling_sdk_target(quader_modeling_sdk_polygon)
 target_link_libraries(quader_modeling_sdk_polygon
     PUBLIC
         quader_modeling_sdk_geometry)
+if(TARGET quader_modeling_profile)
+    target_link_libraries(quader_modeling_sdk_polygon
+        PRIVATE
+            $<BUILD_INTERFACE:quader_modeling_profile>)
+endif()
 
 add_library(quader_modeling_sdk_qdr_document STATIC
     src/sdk/core/modeling/src/qdr_document.cpp)
@@ -253,6 +258,11 @@ quader_configure_modeling_sdk_target(quader_modeling_sdk_runtime)
 target_link_libraries(quader_modeling_sdk_runtime
     PUBLIC
         quader_modeling_sdk_polygon)
+if(TARGET quader_modeling_profile)
+    target_link_libraries(quader_modeling_sdk_runtime
+        PRIVATE
+            $<BUILD_INTERFACE:quader_modeling_profile>)
+endif()
 
 add_library(quader_modeling_sdk INTERFACE)
 add_library(quader::modeling_sdk ALIAS quader_modeling_sdk)

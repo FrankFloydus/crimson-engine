@@ -35,6 +35,10 @@ struct MeshVertex {
     QVec3 normal;
     QVec2 uv;
     std::uint32_t rgba = 0xffffffffu;
+    // Stable authored identity for position-only modeling previews. A compiled
+    // corner may duplicate an authored vertex, but every duplicate carries the
+    // same ID so topology and indices can remain retained during a drag.
+    std::uint32_t source_vertex_id = 0u;
 };
 
 /**
@@ -148,6 +152,7 @@ struct MeshGeometryPayload final {
       hash_float(vertex.uv.x);
       hash_float(vertex.uv.y);
       hash_u32(vertex.rgba);
+      hash_u32(vertex.source_vertex_id);
     }
     hash_size(indices.size());
     for (const std::uint32_t index : indices) {

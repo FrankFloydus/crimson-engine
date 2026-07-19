@@ -259,7 +259,8 @@ void run_component_transform_drag_case(ComponentPickCase test_case) {
 
 } // namespace
 
-TEST(ProgrammaticBehaviorScenarioTests, ShiftDuplicatePreviewUsesAbsoluteDeltasAndKeepsDuplicatePickable) {
+TEST(ProgrammaticBehaviorScenarioTests,
+     ShiftDuplicatePreviewKeepsDurableMeshStableUntilAbsoluteDeltaCommit) {
   auto s = quader::test::BehaviorScenario::new_project();
 
   s.given().unit_box("source", "Shift Duplicate Source").selected("source");
@@ -277,7 +278,9 @@ TEST(ProgrammaticBehaviorScenarioTests, ShiftDuplicatePreviewUsesAbsoluteDeltasA
       .selected_alias_is("source.copy")
       .selected_bounds_center_near({3.0f, 0.0f, 0.0f});
 
-  s.then().snapshot(first_move).selected_bounds_center_near({1.0f, 0.0f, 0.0f});
+  // The renderer-owned position stream moves the visible duplicate; behavior
+  // snapshots intentionally continue to expose the durable scene until commit.
+  s.then().snapshot(first_move).selected_bounds_center_near({0.0f, 0.0f, 0.0f});
 
   s.when().pick({3.0f, 0.0f, 5.0f});
   s.then().selection().object_count(1).active_alias("source.copy");

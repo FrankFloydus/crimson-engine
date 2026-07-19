@@ -52,11 +52,21 @@ public:
            const QMat4 &world_transform, bool cast_shadows, bool double_sided,
            std::uint8_t layer_mask = kViewportRenderedSceneLayerMask,
            bool editor_unlit = false, bool depth_only = false,
-           std::uint8_t channel = kViewportDefaultRenderableChannel);
+           std::uint8_t channel = kViewportDefaultRenderableChannel,
+           bool dynamic_geometry = false,
+           std::span<const QVec3> dynamic_positions = {});
     MeshRenderableProxy create_shared_instance(
         EntityId entity_id, const RenderMeshAssetSnapshot &mesh,
         const MeshRenderableProxy &prototype, const QMat4 &world_transform,
         std::uint8_t layer_mask = kViewportRenderedSceneLayerMask,
+        std::uint8_t channel = kViewportDefaultRenderableChannel);
+    MeshRenderableProxy create_shared_geometry(
+        EntityId entity_id, const RenderMeshAssetSnapshot &mesh,
+        const RenderMaterialBindingSnapshot *material,
+        const MeshRenderableProxy &geometry_source,
+        const QMat4 &world_transform, bool double_sided,
+        std::uint8_t layer_mask, bool editor_unlit = false,
+        bool depth_only = false,
         std::uint8_t channel = kViewportDefaultRenderableChannel);
     MeshRenderableProxy create_explicit_instances(
         const RenderMeshAssetSnapshot &mesh,
@@ -78,11 +88,20 @@ public:
         const RenderInstanceBounds &world_bounds);
     void update_transform(const MeshRenderableProxy &proxy,
                           const QMat4 &world_transform);
+    void update_layer_mask(const MeshRenderableProxy &proxy,
+                           std::uint8_t layer_mask);
+    void update_bounds(const MeshRenderableProxy &proxy,
+                       const RenderMeshAssetSnapshot &mesh);
+    void update_bounds(const MeshRenderableProxy &proxy,
+                       std::span<const QVec3> positions);
     void update_surface_grid(const MeshRenderableProxy &proxy,
                              float grid_world_spacing,
                              const ViewportSettings &settings);
     void update_shaded_lighting(const MeshRenderableProxy &proxy,
                                 const ViewportSettings &settings);
+    bool update_dynamic_geometry(const MeshRenderableProxy &proxy,
+                                 const RenderMeshAssetSnapshot &mesh,
+                                 std::span<const QVec3> dynamic_positions = {});
     void remove_from_scene(const MeshRenderableProxy &proxy);
     void destroy(MeshRenderableProxy& proxy);
     void destroy_detached(MeshRenderableProxy &proxy);
@@ -105,6 +124,9 @@ public:
     struct GeometryCacheState;
     bool acquire_geometry(const RenderMeshAssetSnapshot &mesh,
                           MeshRenderableProxy &proxy);
+    bool acquire_dynamic_geometry(const RenderMeshAssetSnapshot &mesh,
+                                  MeshRenderableProxy &proxy,
+                                  std::span<const QVec3> dynamic_positions);
     void release_geometry(MeshRenderableProxy &proxy);
 
     filament::Engine* engine_ = nullptr;

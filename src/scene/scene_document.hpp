@@ -134,6 +134,14 @@ public:
     bool clear_instance_occurrence(EntityId id);
     bool set_mesh(EntityId id, MeshComponent mesh);
     bool notify_mesh_payload_changed(EntityId id);
+    /** Validates a batch without advancing any scene revision. */
+    [[nodiscard]] bool can_notify_mesh_payloads_changed(
+        std::span<const EntityId> ids) const;
+    /**
+     * Notifies one prevalidated mesh-payload publication and advances scene,
+     * content, mesh-binding, and render-component revisions exactly once.
+     */
+    bool notify_mesh_payloads_changed(std::span<const EntityId> ids);
     bool set_material(EntityId id, MaterialComponent material);
     bool clear_material(EntityId id);
     bool set_light(EntityId id, LightComponent light);

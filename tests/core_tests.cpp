@@ -93,6 +93,7 @@
 #include "viewport/viewport_layout.hpp"
 #include "viewport/viewport_settings.hpp"
 #include "viewport/viewport_workspace_service.hpp"
+#include "support/viewport_overlay_test_helpers.hpp"
 
 #include <gtest/gtest.h>
 
@@ -122,6 +123,7 @@
 #include <vector>
 
 using namespace quader;
+using test_support::visible_modeling_overlay_frame;
 
 template <typename T> constexpr bool render_owner_is_non_transferable() {
   static_assert(std::is_default_constructible_v<T>);
@@ -11125,6 +11127,8 @@ TEST(ModelingSessionServiceTests,
       service.transformed_picking_projection_build_count();
   const std::uint64_t rectangle_builds_before =
       service.rectangle_picking_projection_build_count();
+  const std::uint64_t universe_builds_before =
+      service.rectangle_selection_universe_build_count();
   const std::uint64_t resolutions_before =
       service.rectangle_selection_resolution_build_count();
   const ModelingSelectionSummary first = service.box_select(request, baseline);
@@ -11134,9 +11138,12 @@ TEST(ModelingSessionServiceTests,
   EXPECT_EQ(builds_after_first, builds_before + 1u);
   const std::uint64_t rectangle_builds_after_first =
       service.rectangle_picking_projection_build_count();
+  const std::uint64_t universe_builds_after_first =
+      service.rectangle_selection_universe_build_count();
   const std::uint64_t resolutions_after_first =
       service.rectangle_selection_resolution_build_count();
   EXPECT_EQ(rectangle_builds_after_first, rectangle_builds_before + 1u);
+  EXPECT_EQ(universe_builds_after_first, universe_builds_before + 1u);
   EXPECT_EQ(resolutions_after_first, resolutions_before + 1u);
 
   for (int sample = 0; sample < 32; ++sample) {
@@ -11149,6 +11156,8 @@ TEST(ModelingSessionServiceTests,
             builds_after_first);
   EXPECT_EQ(service.rectangle_picking_projection_build_count(),
             rectangle_builds_after_first);
+  EXPECT_EQ(service.rectangle_selection_universe_build_count(),
+            universe_builds_after_first);
   EXPECT_EQ(service.rectangle_selection_resolution_build_count(),
             resolutions_after_first);
 
@@ -11158,6 +11167,8 @@ TEST(ModelingSessionServiceTests,
             builds_after_first);
   EXPECT_EQ(service.rectangle_picking_projection_build_count(),
             rectangle_builds_after_first + 1u);
+  EXPECT_EQ(service.rectangle_selection_universe_build_count(),
+            universe_builds_after_first);
   EXPECT_EQ(service.rectangle_selection_resolution_build_count(),
             resolutions_after_first + 1u);
 
@@ -11169,6 +11180,8 @@ TEST(ModelingSessionServiceTests,
             builds_after_first + 1u);
   EXPECT_EQ(service.rectangle_picking_projection_build_count(),
             rectangle_builds_after_first + 2u);
+  EXPECT_EQ(service.rectangle_selection_universe_build_count(),
+            universe_builds_after_first + 1u);
   EXPECT_EQ(service.rectangle_selection_resolution_build_count(),
             resolutions_after_first + 2u);
 }
@@ -11238,6 +11251,123 @@ TEST(ModelingSessionServiceTests,
 }
 
 TEST(ModelingSessionServiceTests,
+     EntityLockInvalidatesWarmPointAndRectanglePickingCaches) {
+  SceneDocument scene;
+  AssetRegistry assets;
+  ModelingSessionService service(scene, assets);
+
+  const ModelingCreateBoxResult mesh = service.create_box_from_bounds({
+      .bounds = {.min = {-1.0f, -1.0f, -1.0f},
+                 .max = {1.0f, 1.0f, 1.0f}},
+      .name = "Entity Lock Picking Box",
+  });
+  ASSERT_TRUE(mesh.ok) << mesh.message;
+
+  const ModelingPickSelectRequest point_request{
+      .ray = {.origin = {0.0f, 0.0f, 5.0f},
+              .direction = {0.0f, 0.0f, -1.0f}},
+  };
+  const ModelingBoxSelectRequest rectangle_request{
+      .camera = test_orthographic_viewport_camera(),
+      .start = {35.0f, 35.0f},
+      .end = {65.0f, 65.0f},
+      .edit = ModelingSelectionEdit::Replace,
+      .rule = ModelingBoxSelectionRule::Contain,
+  };
+
+  const std::optional<EntityId> warm_point =
+      service.pick_object_entity(point_request);
+  ASSERT_TRUE(warm_point.has_value());
+  EXPECT_EQ(*warm_point, mesh.object.entity);
+  EXPECT_EQ(service.box_pick_object_entities(rectangle_request),
+            (std::vector<EntityId>{mesh.object.entity}));
+  const std::uint64_t point_builds =
+      service.transformed_picking_projection_build_count();
+  const std::uint64_t rectangle_builds =
+      service.rectangle_picking_projection_build_count();
+
+  ASSERT_TRUE(scene.set_locked(mesh.object.entity, true));
+  EXPECT_FALSE(service.pick_object_entity(point_request).has_value());
+  EXPECT_TRUE(service.box_pick_object_entities(rectangle_request).empty());
+  EXPECT_EQ(service.transformed_picking_projection_build_count(),
+            point_builds + 1u);
+  EXPECT_EQ(service.rectangle_picking_projection_build_count(),
+            rectangle_builds + 1u);
+
+  ASSERT_TRUE(scene.set_locked(mesh.object.entity, false));
+  const std::optional<EntityId> unlocked_point =
+      service.pick_object_entity(point_request);
+  ASSERT_TRUE(unlocked_point.has_value());
+  EXPECT_EQ(*unlocked_point, mesh.object.entity);
+  EXPECT_EQ(service.box_pick_object_entities(rectangle_request),
+            (std::vector<EntityId>{mesh.object.entity}));
+  EXPECT_EQ(service.transformed_picking_projection_build_count(),
+            point_builds + 2u);
+  EXPECT_EQ(service.rectangle_picking_projection_build_count(),
+            rectangle_builds + 2u);
+}
+
+TEST(ModelingSessionServiceTests,
+     InstanceOccurrenceChangesInvalidateWarmPickingParticipationCaches) {
+  SceneDocument scene;
+  AssetRegistry assets;
+  ModelingSessionService service(scene, assets);
+
+  const ModelingCreateBoxResult member = service.create_box_from_bounds({
+      .bounds = {.min = {-1.0f, -1.0f, -1.0f},
+                 .max = {1.0f, 1.0f, 1.0f}},
+      .name = "Instance Picking Member",
+  });
+  ASSERT_TRUE(member.ok) << member.message;
+  const EntityId definition = scene.create_empty("Picking Definition");
+  ASSERT_NE(definition, kInvalidEntityId);
+  ASSERT_TRUE(scene.set_instance_definition(definition));
+  ASSERT_TRUE(scene.set_parent(member.object.entity, definition, false));
+  const EntityId occurrence = scene.create_empty("Future Occurrence");
+  ASSERT_NE(occurrence, kInvalidEntityId);
+
+  const ModelingPickSelectRequest point_request{
+      .ray = {.origin = {0.0f, 0.0f, 5.0f},
+              .direction = {0.0f, 0.0f, -1.0f}},
+  };
+  const ModelingBoxSelectRequest rectangle_request{
+      .camera = test_orthographic_viewport_camera(),
+      .start = {35.0f, 35.0f},
+      .end = {65.0f, 65.0f},
+      .edit = ModelingSelectionEdit::Replace,
+      .rule = ModelingBoxSelectionRule::Contain,
+  };
+
+  EXPECT_FALSE(service.pick_object_entity(point_request).has_value());
+  EXPECT_TRUE(service.box_pick_object_entities(rectangle_request).empty());
+  const std::uint64_t point_builds =
+      service.transformed_picking_projection_build_count();
+  const std::uint64_t rectangle_builds =
+      service.rectangle_picking_projection_build_count();
+
+  ASSERT_TRUE(scene.set_instance_occurrence(
+      occurrence, InstanceOccurrenceComponent{.definition = definition}));
+  const std::optional<EntityId> occurrence_hit =
+      service.pick_object_entity(point_request);
+  ASSERT_TRUE(occurrence_hit.has_value());
+  EXPECT_EQ(*occurrence_hit, occurrence);
+  EXPECT_EQ(service.box_pick_object_entities(rectangle_request),
+            (std::vector<EntityId>{occurrence}));
+  EXPECT_EQ(service.transformed_picking_projection_build_count(),
+            point_builds + 1u);
+  EXPECT_EQ(service.rectangle_picking_projection_build_count(),
+            rectangle_builds + 1u);
+
+  ASSERT_TRUE(scene.clear_instance_occurrence(occurrence));
+  EXPECT_FALSE(service.pick_object_entity(point_request).has_value());
+  EXPECT_TRUE(service.box_pick_object_entities(rectangle_request).empty());
+  EXPECT_EQ(service.transformed_picking_projection_build_count(),
+            point_builds + 2u);
+  EXPECT_EQ(service.rectangle_picking_projection_build_count(),
+            rectangle_builds + 2u);
+}
+
+TEST(ModelingSessionServiceTests,
      TwoHundredSharedDuplicatesBuildOneLocalPickingGeometryAndTransformWithoutRebuild) {
   SceneDocument scene;
   AssetRegistry assets;
@@ -11271,6 +11401,8 @@ TEST(ModelingSessionServiceTests,
       service.local_face_geometry_build_count();
   const std::uint64_t projection_builds_before =
       service.transformed_picking_projection_build_count();
+  const std::uint64_t world_bounds_builds_before =
+      service.world_pick_bounds_build_count();
   const float last_x = 3.0f * 199.0f;
   const std::optional<EntityId> first_hit =
       service.pick_object_entity(ModelingPickSelectRequest{
@@ -11283,6 +11415,8 @@ TEST(ModelingSessionServiceTests,
             geometry_builds_before + 1u);
   EXPECT_EQ(service.transformed_picking_projection_build_count(),
             projection_builds_before + 1u);
+  EXPECT_EQ(service.world_pick_bounds_build_count(),
+            world_bounds_builds_before + participants.size());
 
   TransformComponent moved = *scene.transform(participants.back());
   moved.position.x = 700.0f;
@@ -11298,6 +11432,8 @@ TEST(ModelingSessionServiceTests,
             geometry_builds_before + 1u);
   EXPECT_EQ(service.transformed_picking_projection_build_count(),
             projection_builds_before + 2u);
+  EXPECT_EQ(service.world_pick_bounds_build_count(),
+            world_bounds_builds_before + participants.size() + 1u);
 }
 
 TEST(ModelingSessionServiceTests,
@@ -11774,6 +11910,59 @@ TEST(ModelingSessionServiceTests,
 }
 
 TEST(ModelingSessionServiceTests,
+     VisibleOverlayComposesPersistentSelectionAndVolatileToolStreams) {
+  SceneDocument scene;
+  AssetRegistry assets;
+  ModelingSessionService service(scene, assets);
+
+  const ModelingCreateBoxResult box = service.create_box_from_bounds({
+      .bounds = {.min = {-1.0f, -1.0f, -1.0f},
+                 .max = {1.0f, 1.0f, 1.0f}},
+      .name = "Split Overlay Stream Source",
+  });
+  ASSERT_TRUE(box.ok) << box.message;
+  ASSERT_TRUE(
+      service.activate_viewport_tool(ModelingViewportTool::Knife).ok);
+
+  ModelingViewportCamera camera = test_orthographic_viewport_camera();
+  camera.viewport_size = {800.0f, 600.0f};
+  const ModelingCommandResult hover = service.update_knife_hover(
+      test_knife_screen_event(camera, {0.0f, -1.0f, 1.0f}, 4.0f));
+  ASSERT_TRUE(hover.ok) << hover.message;
+  ASSERT_TRUE(service.tool_status().knife_has_current);
+
+  const ViewportOverlayFrame persistent = service.selection_overlay_frame();
+  const ViewportOverlayFrame volatile_frame = service.volatile_overlay_frame();
+  EXPECT_TRUE(std::ranges::none_of(
+      persistent.points, [](const ViewportOverlayPoint &point) {
+        return point.source == ViewportOverlaySource::Tool;
+      }));
+  EXPECT_TRUE(std::ranges::none_of(
+      persistent.lines, [](const ViewportOverlayLine &line) {
+        return line.source == ViewportOverlaySource::Tool;
+      }));
+  EXPECT_TRUE(std::ranges::any_of(
+      volatile_frame.points, [](const ViewportOverlayPoint &point) {
+        return point.source == ViewportOverlaySource::Tool &&
+               point.layer == ViewportOverlayLayer::ToolHandle;
+      }));
+
+  const ViewportOverlayFrame visible =
+      visible_modeling_overlay_frame(service);
+  EXPECT_EQ(visible.lines.size(),
+            persistent.lines.size() + volatile_frame.lines.size());
+  EXPECT_EQ(visible.triangles.size(),
+            persistent.triangles.size() + volatile_frame.triangles.size());
+  EXPECT_EQ(visible.points.size(),
+            persistent.points.size() + volatile_frame.points.size());
+  EXPECT_EQ(visible.icons.size(),
+            persistent.icons.size() + volatile_frame.icons.size());
+  EXPECT_EQ(visible.hover_target_selected,
+            persistent.hover_target_selected ||
+                volatile_frame.hover_target_selected);
+}
+
+TEST(ModelingSessionServiceTests,
      KnifeAcceptUsesClickRayAndWorldEdgeSnapOnTransformedObject) {
   SceneDocument scene;
   AssetRegistry assets;
@@ -11829,7 +12018,7 @@ TEST(ModelingSessionServiceTests,
   const QVec3 expected_world =
       transform_point(world_from_object, {0.25f, 1.0f, 1.0f});
   const QVec3 stale_world = transform_point(world_from_object, stale_local);
-  const ViewportOverlayFrame frame = service.selection_overlay_frame();
+  const ViewportOverlayFrame frame = visible_modeling_overlay_frame(service);
   const auto has_point_near = [&](QVec3 expected) {
     return std::any_of(frame.points.begin(), frame.points.end(),
                        [expected](const ViewportOverlayPoint &point) {
@@ -11887,7 +12076,7 @@ TEST(ModelingSessionServiceTests,
   EXPECT_EQ(service.objects().size(), 1U);
   EXPECT_EQ(scene.primary_selection(), box.object.entity);
 
-  const ViewportOverlayFrame frame = service.selection_overlay_frame();
+  const ViewportOverlayFrame frame = visible_modeling_overlay_frame(service);
   const auto has_point_near = [&frame](QVec3 expected) {
     return std::ranges::any_of(
         frame.points, [expected](const ViewportOverlayPoint &point) {
@@ -11939,7 +12128,7 @@ TEST(ModelingSessionServiceTests,
   ASSERT_TRUE(command.ok) << command.message;
   ASSERT_TRUE(command.changed);
   ASSERT_TRUE(service.tool_status().knife_has_current);
-  const ViewportOverlayFrame frame = service.selection_overlay_frame();
+  const ViewportOverlayFrame frame = visible_modeling_overlay_frame(service);
   const auto has_point_near = [&frame](QVec3 expected) {
     return std::ranges::any_of(
         frame.points, [expected](const ViewportOverlayPoint &point) {
@@ -11998,7 +12187,7 @@ TEST(ModelingSessionServiceTests,
   ASSERT_TRUE(command.ok) << command.message;
   ASSERT_TRUE(command.changed);
   ASSERT_TRUE(service.tool_status().knife_has_current);
-  const ViewportOverlayFrame frame = service.selection_overlay_frame();
+  const ViewportOverlayFrame frame = visible_modeling_overlay_frame(service);
   const auto has_point_near = [&frame](QVec3 expected) {
     return std::ranges::any_of(
         frame.points, [expected](const ViewportOverlayPoint &point) {
@@ -12068,7 +12257,7 @@ TEST(ModelingSessionServiceTests,
   ASSERT_TRUE(command.ok) << command.message;
   ASSERT_TRUE(command.changed);
   ASSERT_TRUE(service.tool_status().knife_has_current);
-  const ViewportOverlayFrame frame = service.selection_overlay_frame();
+  const ViewportOverlayFrame frame = visible_modeling_overlay_frame(service);
   const auto has_point_near = [&frame](QVec3 expected) {
     return std::ranges::any_of(
         frame.points, [expected](const ViewportOverlayPoint &point) {
@@ -12115,7 +12304,7 @@ TEST(ModelingSessionServiceTests,
   ASSERT_TRUE(command.ok) << command.message;
   ASSERT_TRUE(command.changed);
   ASSERT_TRUE(service.tool_status().knife_has_current);
-  const ViewportOverlayFrame frame = service.selection_overlay_frame();
+  const ViewportOverlayFrame frame = visible_modeling_overlay_frame(service);
   const auto has_point_near = [&frame](QVec3 expected) {
     return std::ranges::any_of(
         frame.points, [expected](const ViewportOverlayPoint &point) {
@@ -12182,7 +12371,7 @@ TEST(ModelingSessionServiceTests,
   ASSERT_TRUE(command.ok) << command.message;
   ASSERT_TRUE(command.changed);
   ASSERT_TRUE(service.tool_status().knife_has_current);
-  const ViewportOverlayFrame frame = service.selection_overlay_frame();
+  const ViewportOverlayFrame frame = visible_modeling_overlay_frame(service);
   const auto has_point_near = [&frame](QVec3 expected) {
     return std::ranges::any_of(
         frame.points, [expected](const ViewportOverlayPoint &point) {
@@ -12225,7 +12414,7 @@ TEST(ModelingSessionServiceTests,
   const std::array cameras{near_perspective, far_perspective,
                            near_orthographic, far_orthographic};
   const auto has_tool_marker = [&service]() {
-    const ViewportOverlayFrame frame = service.selection_overlay_frame();
+    const ViewportOverlayFrame frame = visible_modeling_overlay_frame(service);
     return std::ranges::any_of(
         frame.points, [](const ViewportOverlayPoint &point) {
           return point.layer == ViewportOverlayLayer::ToolHandle &&
@@ -12329,7 +12518,7 @@ TEST(ModelingSessionServiceTests,
     EXPECT_TRUE(command.changed);
     EXPECT_TRUE(service.tool_status().knife_has_current);
     EXPECT_TRUE(std::ranges::any_of(
-        service.selection_overlay_frame().points,
+        visible_modeling_overlay_frame(service).points,
         [](const ViewportOverlayPoint &point) {
           return point.layer == ViewportOverlayLayer::ToolHandle &&
                  point.source == ViewportOverlaySource::Tool &&
@@ -12383,7 +12572,7 @@ TEST(ModelingSessionServiceTests,
   ASSERT_TRUE(service.tool_status().knife_has_current);
   const auto has_tool_point_near = [&service](QVec3 expected) {
     return std::ranges::any_of(
-        service.selection_overlay_frame().points,
+        visible_modeling_overlay_frame(service).points,
         [expected](const ViewportOverlayPoint &point) {
           return point.layer == ViewportOverlayLayer::ToolHandle &&
                  point.source == ViewportOverlaySource::Tool &&
@@ -12473,7 +12662,8 @@ TEST(ModelingSessionServiceTests,
   ASSERT_TRUE(command.ok) << command.message;
   ASSERT_TRUE(command.changed);
   ASSERT_TRUE(service.tool_status().knife_has_current);
-  const ViewportOverlayFrame hover_frame = service.selection_overlay_frame();
+  const ViewportOverlayFrame hover_frame =
+      visible_modeling_overlay_frame(service);
   EXPECT_TRUE(std::ranges::any_of(
       hover_frame.points, [](const ViewportOverlayPoint &point) {
         return point.layer == ViewportOverlayLayer::ToolHandle &&
@@ -12524,7 +12714,8 @@ TEST(ModelingSessionServiceTests,
   command = service.update_knife_hover(seed_event);
   ASSERT_TRUE(command.ok) << command.message;
   ASSERT_TRUE(service.tool_status().knife_has_current);
-  const ViewportOverlayFrame seed_frame = service.selection_overlay_frame();
+  const ViewportOverlayFrame seed_frame =
+      visible_modeling_overlay_frame(service);
   const auto seed_point = std::ranges::find_if(
       seed_frame.points, [](const ViewportOverlayPoint &point) {
         return point.layer == ViewportOverlayLayer::ToolHandle &&
@@ -12550,7 +12741,8 @@ TEST(ModelingSessionServiceTests,
   ASSERT_TRUE(command.ok) << command.message;
   ASSERT_TRUE(command.changed);
   EXPECT_TRUE(service.tool_status().knife_has_current);
-  const ViewportOverlayFrame face_frame = service.selection_overlay_frame();
+  const ViewportOverlayFrame face_frame =
+      visible_modeling_overlay_frame(service);
   EXPECT_TRUE(std::ranges::any_of(
       face_frame.points, [](const ViewportOverlayPoint &point) {
         return point.layer == ViewportOverlayLayer::ToolHandle &&
@@ -12619,7 +12811,7 @@ TEST(ModelingSessionServiceTests,
   ASSERT_TRUE(command.ok) << command.message;
   ASSERT_TRUE(command.changed);
   ASSERT_TRUE(service.tool_status().knife_has_current);
-  const ViewportOverlayFrame frame = service.selection_overlay_frame();
+  const ViewportOverlayFrame frame = visible_modeling_overlay_frame(service);
   const auto has_point_near = [&frame](QVec3 expected) {
     return std::ranges::any_of(
         frame.points, [expected](const ViewportOverlayPoint &point) {
@@ -12681,7 +12873,7 @@ TEST(ModelingSessionServiceTests,
   ASSERT_TRUE(command.ok) << command.message;
   ASSERT_TRUE(command.changed);
   ASSERT_TRUE(service.tool_status().knife_has_current);
-  const ViewportOverlayFrame frame = service.selection_overlay_frame();
+  const ViewportOverlayFrame frame = visible_modeling_overlay_frame(service);
   const auto has_point_near = [&frame](QVec3 expected) {
     return std::ranges::any_of(
         frame.points, [expected](const ViewportOverlayPoint &point) {
@@ -12785,7 +12977,7 @@ TEST(ModelingSessionServiceTests,
   ASSERT_TRUE(command.ok) << command.message;
   ASSERT_TRUE(command.changed);
   ASSERT_TRUE(service.tool_status().knife_has_current);
-  const ViewportOverlayFrame frame = service.selection_overlay_frame();
+  const ViewportOverlayFrame frame = visible_modeling_overlay_frame(service);
   const auto has_point_near = [&frame](QVec3 expected) {
     return std::ranges::any_of(
         frame.points, [expected](const ViewportOverlayPoint &point) {
@@ -12869,7 +13061,7 @@ TEST(ModelingSessionServiceTests, CutAndMirrorEmitDrawnPlaneOverlay) {
     ASSERT_TRUE(command.ok) << command.message;
 
     const ViewportOverlayFrame hover_only_frame =
-        service.selection_overlay_frame();
+        visible_modeling_overlay_frame(service);
     const auto hover_only_handle_lines = static_cast<std::size_t>(std::count_if(
         hover_only_frame.lines.begin(), hover_only_frame.lines.end(),
         [](const ViewportOverlayLine &line) {
@@ -12910,7 +13102,8 @@ TEST(ModelingSessionServiceTests, CutAndMirrorEmitDrawnPlaneOverlay) {
             : service.update_mirror_hover(test_drawn_plane_event(1.0f, true));
     ASSERT_TRUE(command.ok) << command.message;
 
-    const ViewportOverlayFrame frame = service.selection_overlay_frame();
+    const ViewportOverlayFrame frame =
+        visible_modeling_overlay_frame(service);
     const auto tool_planes = static_cast<std::size_t>(std::count_if(
         frame.triangles.begin(), frame.triangles.end(),
         [](const ViewportOverlayTriangle &triangle) {
@@ -12948,7 +13141,7 @@ TEST(ModelingSessionServiceTests, CutAndMirrorEmitDrawnPlaneOverlay) {
     ASSERT_TRUE(command.ok) << command.message;
 
     const ViewportOverlayFrame preview_frame =
-        service.selection_overlay_frame();
+        visible_modeling_overlay_frame(service);
     const auto preview_fills = static_cast<std::size_t>(std::count_if(
         preview_frame.triangles.begin(), preview_frame.triangles.end(),
         [](const ViewportOverlayTriangle &triangle) {
@@ -12969,7 +13162,7 @@ TEST(ModelingSessionServiceTests, CutAndMirrorEmitDrawnPlaneOverlay) {
           service.set_cut_mode(ModelingCutMode::DiscardLeft);
       ASSERT_TRUE(mode_result.ok) << mode_result.message;
       const ViewportOverlayFrame discard_left_frame =
-          service.selection_overlay_frame();
+          visible_modeling_overlay_frame(service);
       const auto keep_both_orange_fills = static_cast<std::size_t>(
           std::count_if(keep_both_frame.triangles.begin(),
                         keep_both_frame.triangles.end(),
@@ -13519,7 +13712,7 @@ TEST(ModelingSessionServiceTests,
   EXPECT_NEAR(center->y, 2.0f, 0.001f);
   EXPECT_NEAR(center->z, -3.0f, 0.001f);
 
-  const ViewportOverlayFrame frame = service.selection_overlay_frame();
+  const ViewportOverlayFrame frame = visible_modeling_overlay_frame(service);
   ASSERT_FALSE(frame.lines.empty());
   std::optional<SceneBounds> overlay_bounds;
   for (const ViewportOverlayLine &line : frame.lines) {
@@ -13641,7 +13834,7 @@ TEST(ModelingSessionServiceTests,
       });
   ASSERT_TRUE(hover.ok) << hover.message;
 
-  const ViewportOverlayFrame frame = service.selection_overlay_frame();
+  const ViewportOverlayFrame frame = visible_modeling_overlay_frame(service);
   std::optional<SceneBounds> point_bounds;
   for (const ViewportOverlayPoint &point : frame.points) {
     if (point.layer != ViewportOverlayLayer::UnselectedVertex) {
@@ -13692,7 +13885,7 @@ TEST(ModelingSessionServiceTests,
       });
   ASSERT_TRUE(hover.ok) << hover.message;
 
-  const ViewportOverlayFrame frame = service.selection_overlay_frame();
+  const ViewportOverlayFrame frame = visible_modeling_overlay_frame(service);
   const auto hover_face_count =
       std::count_if(frame.triangles.begin(), frame.triangles.end(),
                     [](const ViewportOverlayTriangle &triangle) {
@@ -13742,7 +13935,8 @@ TEST(ModelingSessionServiceTests,
       });
   ASSERT_TRUE(modifier_hover.ok) << modifier_hover.message;
 
-  const ViewportOverlayFrame modifier_frame = service.selection_overlay_frame();
+  const ViewportOverlayFrame modifier_frame =
+      visible_modeling_overlay_frame(service);
   EXPECT_TRUE(modifier_frame.hover_target_selected);
   const auto modifier_hover_face_count = std::count_if(
       modifier_frame.triangles.begin(), modifier_frame.triangles.end(),
@@ -13856,7 +14050,7 @@ TEST(
   ASSERT_TRUE(modifier_hover.ok) << modifier_hover.message;
 
   const ViewportOverlayFrame modifier_hover_frame =
-      service.selection_overlay_frame();
+      visible_modeling_overlay_frame(service);
   const bool remove_face_visible =
       std::any_of(modifier_hover_frame.triangles.begin(),
                   modifier_hover_frame.triangles.end(),
@@ -13958,7 +14152,7 @@ TEST(ModelingSessionServiceTests,
       });
   ASSERT_TRUE(same_target_hover.ok) << same_target_hover.message;
   const ViewportOverlayFrame same_target_frame =
-      service.selection_overlay_frame();
+      visible_modeling_overlay_frame(service);
   EXPECT_TRUE(has_hover_edge(same_target_frame));
   EXPECT_TRUE(has_selected_edge(same_target_frame));
 
@@ -13972,7 +14166,8 @@ TEST(ModelingSessionServiceTests,
           .edge_radius = 0.4f,
       });
   ASSERT_TRUE(rehover.ok) << rehover.message;
-  const ViewportOverlayFrame rehover_frame = service.selection_overlay_frame();
+  const ViewportOverlayFrame rehover_frame =
+      visible_modeling_overlay_frame(service);
   EXPECT_TRUE(has_hover_edge(rehover_frame));
   EXPECT_TRUE(has_selected_edge(rehover_frame));
 }
@@ -14083,7 +14278,7 @@ TEST(ModelingSessionServiceTests,
       });
   ASSERT_TRUE(same_target_hover.ok) << same_target_hover.message;
   const ViewportOverlayFrame same_target_frame =
-      service.selection_overlay_frame();
+      visible_modeling_overlay_frame(service);
   EXPECT_TRUE(has_hover_vertex(same_target_frame));
   EXPECT_TRUE(has_selected_vertex(same_target_frame));
 
@@ -14097,7 +14292,8 @@ TEST(ModelingSessionServiceTests,
           .vertex_radius = 0.4f,
       });
   ASSERT_TRUE(rehover.ok) << rehover.message;
-  const ViewportOverlayFrame rehover_frame = service.selection_overlay_frame();
+  const ViewportOverlayFrame rehover_frame =
+      visible_modeling_overlay_frame(service);
   EXPECT_TRUE(has_hover_vertex(rehover_frame));
   EXPECT_TRUE(has_selected_vertex(rehover_frame));
 }
@@ -14137,7 +14333,7 @@ TEST(ModelingSessionServiceTests,
       });
   ASSERT_TRUE(hover.ok) << hover.message;
 
-  const ViewportOverlayFrame frame = service.selection_overlay_frame();
+  const ViewportOverlayFrame frame = visible_modeling_overlay_frame(service);
   EXPECT_FALSE(frame.hover_target_selected);
   const bool has_selected_edge =
       std::any_of(frame.lines.begin(), frame.lines.end(),
@@ -14166,7 +14362,8 @@ TEST(ModelingSessionServiceTests,
       });
   ASSERT_TRUE(modifier_hover.ok) << modifier_hover.message;
 
-  const ViewportOverlayFrame modifier_frame = service.selection_overlay_frame();
+  const ViewportOverlayFrame modifier_frame =
+      visible_modeling_overlay_frame(service);
   EXPECT_TRUE(modifier_frame.hover_target_selected);
   const bool has_remove_hover_edge =
       std::any_of(modifier_frame.lines.begin(), modifier_frame.lines.end(),
@@ -14216,7 +14413,8 @@ TEST(ModelingSessionServiceTests,
       });
   ASSERT_TRUE(normal_hover.ok) << normal_hover.message;
 
-  const ViewportOverlayFrame normal_frame = service.selection_overlay_frame();
+  const ViewportOverlayFrame normal_frame =
+      visible_modeling_overlay_frame(service);
   EXPECT_FALSE(normal_frame.hover_target_selected);
   const bool has_selected_handle =
       std::any_of(normal_frame.points.begin(), normal_frame.points.end(),
@@ -14244,7 +14442,7 @@ TEST(ModelingSessionServiceTests,
       });
   ASSERT_TRUE(hover.ok) << hover.message;
 
-  const ViewportOverlayFrame frame = service.selection_overlay_frame();
+  const ViewportOverlayFrame frame = visible_modeling_overlay_frame(service);
   EXPECT_TRUE(frame.hover_target_selected);
   const bool has_remove_hover_handle =
       std::any_of(frame.points.begin(), frame.points.end(),
@@ -14438,8 +14636,44 @@ TEST(ModelingSessionServiceTests, TransformPreviewZeroDeltaRestoresSceneMesh) {
   ASSERT_TRUE(service.cancel_transform_preview().ok);
 }
 
+std::unordered_set<std::uint32_t> expect_streamed_transform_delta(
+    const ModelingSessionService &service, float expected_x) {
+  const std::vector<ModelingToolPreviewMesh> meshes =
+      service.tool_preview_meshes();
+  EXPECT_FALSE(meshes.empty());
+  std::unordered_set<std::uint32_t> moved_source_vertices;
+  for (const ModelingToolPreviewMesh &mesh : meshes) {
+    EXPECT_TRUE(mesh.dynamic_positions);
+    EXPECT_TRUE(mesh.suppress_source);
+    if (!mesh.dynamic_position_payload ||
+        mesh.dynamic_position_payload->size() !=
+            mesh.mesh.geometry().vertices.size()) {
+      ADD_FAILURE() << "Transient transform positions must match retained "
+                       "compiled topology.";
+      continue;
+    }
+    for (std::size_t index = 0;
+         index < mesh.dynamic_position_payload->size(); ++index) {
+      const MeshVertex &base = mesh.mesh.geometry().vertices[index];
+      const QVec3 streamed = (*mesh.dynamic_position_payload)[index];
+      const QVec3 delta = streamed - base.position;
+      if (std::abs(delta.x) <= 0.0001f &&
+          std::abs(delta.y) <= 0.0001f &&
+          std::abs(delta.z) <= 0.0001f) {
+        continue;
+      }
+      EXPECT_NEAR(delta.x, expected_x, 0.001f);
+      EXPECT_NEAR(delta.y, 0.0f, 0.001f);
+      EXPECT_NEAR(delta.z, 0.0f, 0.001f);
+      moved_source_vertices.insert(base.source_vertex_id);
+    }
+  }
+  EXPECT_FALSE(moved_source_vertices.empty());
+  return moved_source_vertices;
+}
+
 TEST(ModelingSessionServiceTests,
-     ComponentTransformPreviewRefreshesSelectionOverlayEveryUpdate) {
+     ComponentTransformPreviewStreamsFacePositionsWithoutRepublishingOverlay) {
   SceneDocument scene;
   AssetRegistry assets;
   ModelingSessionService service(scene, assets);
@@ -14464,11 +14698,20 @@ TEST(ModelingSessionServiceTests,
   ASSERT_TRUE(service.begin_transform_preview(false).ok);
   ASSERT_TRUE(
       service.update_transform_translate_preview({1.0f, 0.0f, 0.0f}).ok);
+  const std::unordered_set<std::uint32_t> first_streamed_vertices =
+      expect_streamed_transform_delta(service, 1.0f);
   const ViewportOverlayFrame first_frame = service.selection_overlay_frame();
+  const std::uint64_t first_preview_revision =
+      service.transient_transform_preview_revision();
 
   ASSERT_TRUE(
       service.update_transform_translate_preview({3.0f, 0.0f, 0.0f}).ok);
+  const std::unordered_set<std::uint32_t> second_streamed_vertices =
+      expect_streamed_transform_delta(service, 3.0f);
   const ViewportOverlayFrame second_frame = service.selection_overlay_frame();
+  EXPECT_EQ(second_streamed_vertices, first_streamed_vertices);
+  EXPECT_GT(service.transient_transform_preview_revision(),
+            first_preview_revision);
 
   auto selected_face_edge_bounds = [](const ViewportOverlayFrame &frame) {
     std::optional<SceneBounds> bounds;
@@ -14493,14 +14736,16 @@ TEST(ModelingSessionServiceTests,
       selected_face_edge_bounds(second_frame);
   ASSERT_TRUE(first_bounds.has_value());
   ASSERT_TRUE(second_bounds.has_value());
-  EXPECT_NEAR(bounds_center(*first_bounds).x, 1.0f, 0.001f);
-  EXPECT_NEAR(bounds_center(*second_bounds).x, 3.0f, 0.001f);
+  // Semantic selection remains retained at its durable coordinates; the
+  // renderer applies the changing position stream by authored vertex ID.
+  EXPECT_NEAR(bounds_center(*first_bounds).x, 0.0f, 0.001f);
+  EXPECT_NEAR(bounds_center(*second_bounds).x, 0.0f, 0.001f);
 
   ASSERT_TRUE(service.cancel_transform_preview().ok);
 }
 
 TEST(ModelingSessionServiceTests,
-     ComponentTransformPreviewMovesVertexHandlesEveryUpdate) {
+     ComponentTransformPreviewStreamsVertexPositionsWithoutRepublishingOverlay) {
   SceneDocument scene;
   AssetRegistry assets;
   ModelingSessionService service(scene, assets);
@@ -14522,11 +14767,16 @@ TEST(ModelingSessionServiceTests,
   ASSERT_TRUE(service.begin_transform_preview(false).ok);
   ASSERT_TRUE(
       service.update_transform_translate_preview({1.0f, 0.0f, 0.0f}).ok);
+  const std::unordered_set<std::uint32_t> first_streamed_vertices =
+      expect_streamed_transform_delta(service, 1.0f);
   const ViewportOverlayFrame first_frame = service.selection_overlay_frame();
 
   ASSERT_TRUE(
       service.update_transform_translate_preview({3.0f, 0.0f, 0.0f}).ok);
+  const std::unordered_set<std::uint32_t> second_streamed_vertices =
+      expect_streamed_transform_delta(service, 3.0f);
   const ViewportOverlayFrame second_frame = service.selection_overlay_frame();
+  EXPECT_EQ(second_streamed_vertices, first_streamed_vertices);
 
   auto selected_vertex_bounds = [](const ViewportOverlayFrame &frame) {
     std::optional<SceneBounds> bounds;
@@ -14549,14 +14799,14 @@ TEST(ModelingSessionServiceTests,
       selected_vertex_bounds(second_frame);
   ASSERT_TRUE(first_bounds.has_value());
   ASSERT_TRUE(second_bounds.has_value());
-  EXPECT_NEAR(bounds_center(*first_bounds).x, 1.0f, 0.001f);
-  EXPECT_NEAR(bounds_center(*second_bounds).x, 3.0f, 0.001f);
+  EXPECT_NEAR(bounds_center(*first_bounds).x, 0.0f, 0.001f);
+  EXPECT_NEAR(bounds_center(*second_bounds).x, 0.0f, 0.001f);
 
   ASSERT_TRUE(service.cancel_transform_preview().ok);
 }
 
 TEST(ModelingSessionServiceTests,
-     ComponentTransformPreviewMovesEdgeHandlesEveryUpdate) {
+     ComponentTransformPreviewStreamsEdgePositionsWithoutRepublishingOverlay) {
   SceneDocument scene;
   AssetRegistry assets;
   ModelingSessionService service(scene, assets);
@@ -14578,11 +14828,16 @@ TEST(ModelingSessionServiceTests,
   ASSERT_TRUE(service.begin_transform_preview(false).ok);
   ASSERT_TRUE(
       service.update_transform_translate_preview({1.0f, 0.0f, 0.0f}).ok);
+  const std::unordered_set<std::uint32_t> first_streamed_vertices =
+      expect_streamed_transform_delta(service, 1.0f);
   const ViewportOverlayFrame first_frame = service.selection_overlay_frame();
 
   ASSERT_TRUE(
       service.update_transform_translate_preview({3.0f, 0.0f, 0.0f}).ok);
+  const std::unordered_set<std::uint32_t> second_streamed_vertices =
+      expect_streamed_transform_delta(service, 3.0f);
   const ViewportOverlayFrame second_frame = service.selection_overlay_frame();
+  EXPECT_EQ(second_streamed_vertices, first_streamed_vertices);
 
   auto selected_edge_bounds = [](const ViewportOverlayFrame &frame) {
     std::optional<SceneBounds> bounds;
@@ -14607,8 +14862,8 @@ TEST(ModelingSessionServiceTests,
       selected_edge_bounds(second_frame);
   ASSERT_TRUE(first_bounds.has_value());
   ASSERT_TRUE(second_bounds.has_value());
-  EXPECT_NEAR(bounds_center(*first_bounds).x, 1.0f, 0.001f);
-  EXPECT_NEAR(bounds_center(*second_bounds).x, 3.0f, 0.001f);
+  EXPECT_NEAR(bounds_center(*first_bounds).x, 0.0f, 0.001f);
+  EXPECT_NEAR(bounds_center(*second_bounds).x, 0.0f, 0.001f);
 
   ASSERT_TRUE(service.cancel_transform_preview().ok);
 }
@@ -14648,7 +14903,7 @@ TEST(ModelingSessionServiceTests,
       });
   ASSERT_TRUE(hover.ok) << hover.message;
 
-  const ViewportOverlayFrame frame = service.selection_overlay_frame();
+  const ViewportOverlayFrame frame = visible_modeling_overlay_frame(service);
   std::optional<SceneBounds> point_bounds;
   for (const ViewportOverlayPoint &point : frame.points) {
     if (point.layer != ViewportOverlayLayer::UnselectedVertex) {
@@ -14686,18 +14941,21 @@ TEST(ModelingSessionServiceTests,
   ASSERT_TRUE(service.begin_transform_preview(false).ok);
   ASSERT_TRUE(
       service.update_transform_translate_preview({2.0f, 0.0f, 0.0f}).ok);
+  EXPECT_FALSE(expect_streamed_transform_delta(service, 2.0f).empty());
   std::optional<SceneBounds> selected_bounds =
       selected_world_bounds(scene, assets);
   ASSERT_TRUE(selected_bounds.has_value());
-  EXPECT_NEAR(bounds_center(*selected_bounds).x, 2.0f, 0.001f);
+  EXPECT_NEAR(bounds_center(*selected_bounds).x, 0.0f, 0.001f);
 
   ModelingCommandResult cancel = service.cancel_transform_preview();
   ASSERT_TRUE(cancel.ok) << cancel.message;
+  EXPECT_FALSE(service.transient_transform_preview_active());
+  EXPECT_TRUE(service.tool_preview_meshes().empty());
   selected_bounds = selected_world_bounds(scene, assets);
   ASSERT_TRUE(selected_bounds.has_value());
   EXPECT_NEAR(bounds_center(*selected_bounds).x, 0.0f, 0.001f);
 
-  const ViewportOverlayFrame frame = service.selection_overlay_frame();
+  const ViewportOverlayFrame frame = visible_modeling_overlay_frame(service);
   std::optional<SceneBounds> point_bounds;
   for (const ViewportOverlayPoint &point : frame.points) {
     if (point.layer != ViewportOverlayLayer::SelectedVertex) {
@@ -14762,7 +15020,7 @@ TEST(ModelingSessionServiceTests,
       });
   ASSERT_TRUE(hover.ok) << hover.message;
 
-  const ViewportOverlayFrame frame = service.selection_overlay_frame();
+  const ViewportOverlayFrame frame = visible_modeling_overlay_frame(service);
   std::optional<SceneBounds> point_bounds;
   for (const ViewportOverlayPoint &point : frame.points) {
     if (point.layer != ViewportOverlayLayer::UnselectedVertex) {
@@ -14954,14 +15212,23 @@ TEST(ModelingSessionServiceTests,
   ASSERT_TRUE(update.ok) << update.message;
   EXPECT_TRUE(update.preview_driven);
 
-  EXPECT_GT(assets.mesh_revision(edited_mesh_id).value, edited_revision_before);
+  const std::uint64_t asset_revision_before_commit = assets.revision();
+  const std::uint64_t scene_revision_before_commit = scene.revision();
+  EXPECT_FALSE(expect_streamed_transform_delta(service, 2.0f).empty());
+  EXPECT_EQ(assets.mesh_revision(edited_mesh_id).value,
+            edited_revision_before);
   EXPECT_EQ(assets.mesh_revision(untouched_mesh_id).value,
             untouched_revision_before);
+  EXPECT_EQ(assets.revision(), asset_revision_before_commit);
+  EXPECT_EQ(scene.revision(), scene_revision_before_commit);
 
   ModelingTransformDragPreview commit = service.commit_transform_drag();
   ASSERT_TRUE(commit.ok) << commit.message;
+  EXPECT_GT(assets.mesh_revision(edited_mesh_id).value, edited_revision_before);
   EXPECT_EQ(assets.mesh_revision(untouched_mesh_id).value,
             untouched_revision_before);
+  EXPECT_GT(assets.revision(), asset_revision_before_commit);
+  EXPECT_GT(scene.revision(), scene_revision_before_commit);
 }
 
 TEST(ModelingSessionServiceTests,
@@ -15016,6 +15283,106 @@ TEST(ModelingSessionServiceTests,
 
   const ModelingCommandResult cancel = service.cancel_transform_drag();
   ASSERT_TRUE(cancel.ok) << cancel.message;
+}
+
+TEST(ModelingSessionServiceTests,
+     ComponentDragStreamsPinnedPositionsWithoutPublishingSceneMeshes) {
+  SceneDocument scene;
+  AssetRegistry assets;
+  ModelingSessionService service(scene, assets);
+
+  const ModelingCreateBoxResult box = service.create_box_from_bounds({
+      .bounds = {.min = {-1.0f, -1.0f, -1.0f},
+                 .max = {1.0f, 1.0f, 1.0f}},
+      .name = "Retained Position Stream Box",
+  });
+  ASSERT_TRUE(box.ok) << box.message;
+  ASSERT_TRUE(service.set_selection_mode(ModelingSelectionMode::Vertex).ok);
+  ASSERT_TRUE(seed_component_bulk_selection_scope(
+                  service, box.object.modeling_object_id,
+                  ModelingSelectionMode::Vertex)
+                  .ok);
+  ASSERT_TRUE(service.select_all().ok);
+
+  const MeshComponent *binding = scene.mesh(box.object.entity);
+  ASSERT_NE(binding, nullptr);
+  const AssetId mesh_id = binding->mesh;
+  const MeshAsset *source_mesh = assets.mesh(mesh_id);
+  ASSERT_NE(source_mesh, nullptr);
+  const std::uint64_t source_mesh_revision =
+      assets.mesh_revision(mesh_id).value;
+
+  const ModelingTransformDragPreview begin =
+      service.begin_transform_drag(test_x_move_drag_begin_request());
+  ASSERT_TRUE(begin.ok) << begin.message;
+  ASSERT_TRUE(begin.preview_driven);
+  EXPECT_FALSE(service.transient_transform_preview_active());
+
+  const ModelingSdkProjectionStats before_samples =
+      service.modeling_sdk_projection_stats_for_tests();
+  const std::uint64_t scene_revision_before_samples = scene.revision();
+  const std::uint64_t transform_revision_before_samples =
+      scene.transform_revision();
+
+  const ModelingTransformDragPreview first =
+      service.update_transform_drag(test_x_move_drag_update_request(1.0f));
+  ASSERT_TRUE(first.ok) << first.message;
+  ASSERT_TRUE(first.changed);
+  ASSERT_TRUE(service.transient_transform_preview_active());
+  std::vector<ModelingToolPreviewMesh> first_meshes =
+      service.tool_preview_meshes();
+  ASSERT_EQ(first_meshes.size(), 1u);
+  const ModelingToolPreviewMesh &first_mesh = first_meshes.front();
+  EXPECT_TRUE(first_mesh.dynamic_positions);
+  EXPECT_TRUE(first_mesh.suppress_source);
+  EXPECT_NE(first_mesh.layout_key, 0u);
+  EXPECT_GT(first_mesh.position_revision, 0u);
+  ASSERT_NE(first_mesh.dynamic_position_payload, nullptr);
+  ASSERT_EQ(first_mesh.dynamic_position_payload->size(),
+            first_mesh.mesh.geometry().vertices.size());
+  const std::shared_ptr<const MeshGeometryPayload> retained_geometry =
+      first_mesh.mesh.geometry_payload();
+  const std::shared_ptr<const std::vector<QVec3>> retained_first_positions =
+      first_mesh.dynamic_position_payload;
+
+  const ModelingTransformDragPreview second =
+      service.update_transform_drag(test_x_move_drag_update_request(3.0f));
+  ASSERT_TRUE(second.ok) << second.message;
+  ASSERT_TRUE(second.changed);
+  std::vector<ModelingToolPreviewMesh> second_meshes =
+      service.tool_preview_meshes();
+  ASSERT_EQ(second_meshes.size(), 1u);
+  const ModelingToolPreviewMesh &second_mesh = second_meshes.front();
+  EXPECT_EQ(second_mesh.layout_key, first_mesh.layout_key);
+  EXPECT_GT(second_mesh.position_revision, first_mesh.position_revision);
+  EXPECT_EQ(second_mesh.mesh.geometry_payload().get(), retained_geometry.get());
+  ASSERT_NE(second_mesh.dynamic_position_payload, nullptr);
+  EXPECT_NE(second_mesh.dynamic_position_payload.get(),
+            retained_first_positions.get());
+  ASSERT_FALSE(retained_first_positions->empty());
+  ASSERT_EQ(second_mesh.dynamic_position_payload->size(),
+            retained_first_positions->size());
+  EXPECT_NEAR(second_mesh.dynamic_position_payload->front().x,
+              retained_first_positions->front().x + 2.0f, 0.001f);
+
+  const ModelingSdkProjectionStats after_samples =
+      service.modeling_sdk_projection_stats_for_tests();
+  EXPECT_EQ(after_samples.mesh_compile_count,
+            before_samples.mesh_compile_count);
+  EXPECT_EQ(after_samples.asset_publication_count,
+            before_samples.asset_publication_count);
+  EXPECT_EQ(after_samples.scene_publication_count,
+            before_samples.scene_publication_count);
+  EXPECT_EQ(after_samples.preview_publication_count,
+            before_samples.preview_publication_count);
+  EXPECT_EQ(assets.mesh_revision(mesh_id).value, source_mesh_revision);
+  EXPECT_EQ(scene.revision(), scene_revision_before_samples);
+  EXPECT_EQ(scene.transform_revision(), transform_revision_before_samples);
+
+  const ModelingCommandResult cancel = service.cancel_transform_drag();
+  ASSERT_TRUE(cancel.ok) << cancel.message;
+  EXPECT_FALSE(service.transient_transform_preview_active());
+  EXPECT_TRUE(service.tool_preview_meshes().empty());
 }
 
 TEST(ModelingSessionServiceTests,
@@ -15267,16 +15634,43 @@ TEST(ModelingSessionServiceTests,
     EXPECT_TRUE(begin.value.active);
     EXPECT_TRUE(begin.value.preview_driven);
 
+    const ModelingSdkProjectionStats before_sample =
+        session.modeling().modeling_sdk_projection_stats_for_tests();
+    const std::uint64_t scene_revision_before_sample =
+        session.scene().revision();
+    const std::uint64_t asset_revision_before_sample =
+        session.assets().revision();
+
     QuaderApiResult<QuaderTransformDragPreview> update =
         editor.modeling().update_transform_drag(
             test_api_x_move_drag_update_request(screen_x));
     EXPECT_TRUE(update.ok) << update.message;
     EXPECT_TRUE(update.value.preview_driven);
+    EXPECT_TRUE(session.modeling().transient_transform_preview_active());
+    const ModelingSdkProjectionStats after_sample =
+        session.modeling().modeling_sdk_projection_stats_for_tests();
+    EXPECT_EQ(after_sample.mesh_compile_count,
+              before_sample.mesh_compile_count);
+    EXPECT_EQ(after_sample.asset_publication_count,
+              before_sample.asset_publication_count);
+    EXPECT_EQ(after_sample.scene_publication_count,
+              before_sample.scene_publication_count);
+    EXPECT_EQ(session.scene().revision(), scene_revision_before_sample);
+    EXPECT_EQ(session.assets().revision(), asset_revision_before_sample);
 
     QuaderApiResult<QuaderTransformDragPreview> commit =
         editor.modeling().commit_transform_drag();
     EXPECT_TRUE(commit.ok) << commit.message;
     EXPECT_TRUE(commit.changed);
+    EXPECT_FALSE(session.modeling().transient_transform_preview_active());
+    const ModelingSdkProjectionStats after_commit =
+        session.modeling().modeling_sdk_projection_stats_for_tests();
+    EXPECT_EQ(after_commit.mesh_compile_count,
+              before_sample.mesh_compile_count);
+    EXPECT_EQ(after_commit.asset_publication_count,
+              before_sample.asset_publication_count + 1u);
+    EXPECT_EQ(after_commit.scene_publication_count,
+              before_sample.scene_publication_count + 1u);
   };
 
   drag_face_by(2.0f);
@@ -15430,18 +15824,21 @@ TEST(ModelingSessionServiceTests,
   ModelingTransformDragPreview update =
       service.update_transform_drag(test_x_move_drag_update_request(2.0f));
   ASSERT_TRUE(update.ok) << update.message;
+  EXPECT_FALSE(expect_streamed_transform_delta(service, 2.0f).empty());
   std::optional<SceneBounds> selected_bounds =
       selected_world_bounds(scene, assets);
   ASSERT_TRUE(selected_bounds.has_value());
-  EXPECT_NEAR(bounds_center(*selected_bounds).x, 2.0f, 0.001f);
+  EXPECT_NEAR(bounds_center(*selected_bounds).x, 0.0f, 0.001f);
 
   const ModelingCommandResult cancel = service.cancel_transform_drag();
   ASSERT_TRUE(cancel.ok) << cancel.message;
+  EXPECT_FALSE(service.transient_transform_preview_active());
+  EXPECT_TRUE(service.tool_preview_meshes().empty());
   selected_bounds = selected_world_bounds(scene, assets);
   ASSERT_TRUE(selected_bounds.has_value());
   EXPECT_NEAR(bounds_center(*selected_bounds).x, 0.0f, 0.001f);
 
-  const ViewportOverlayFrame frame = service.selection_overlay_frame();
+  const ViewportOverlayFrame frame = visible_modeling_overlay_frame(service);
   std::optional<SceneBounds> point_bounds;
   for (const ViewportOverlayPoint &point : frame.points) {
     if (point.layer != ViewportOverlayLayer::SelectedVertex) {
@@ -15509,20 +15906,22 @@ TEST(
       service.update_transform_translate_preview({1.0f, 0.0f, 0.0f});
   ASSERT_TRUE(first_move.ok) << first_move.message;
   ASSERT_TRUE(first_move.changed);
+  EXPECT_FALSE(expect_streamed_transform_delta(service, 1.0f).empty());
   std::optional<SceneBounds> selected_bounds =
       selected_world_bounds(scene, assets);
   ASSERT_TRUE(selected_bounds.has_value());
-  EXPECT_NEAR(bounds_center(*selected_bounds).x, 1.0f, 0.001f);
+  EXPECT_NEAR(bounds_center(*selected_bounds).x, 0.0f, 0.001f);
 
   const std::uint64_t revision_after_first_move = scene.revision();
   const ModelingCommandResult second_move =
       service.update_transform_translate_preview({3.0f, 0.0f, 0.0f});
   ASSERT_TRUE(second_move.ok) << second_move.message;
   ASSERT_TRUE(second_move.changed);
-  EXPECT_GT(scene.revision(), revision_after_first_move);
+  EXPECT_FALSE(expect_streamed_transform_delta(service, 3.0f).empty());
+  EXPECT_EQ(scene.revision(), revision_after_first_move);
   selected_bounds = selected_world_bounds(scene, assets);
   ASSERT_TRUE(selected_bounds.has_value());
-  EXPECT_NEAR(bounds_center(*selected_bounds).x, 3.0f, 0.001f);
+  EXPECT_NEAR(bounds_center(*selected_bounds).x, 0.0f, 0.001f);
   ASSERT_NE(scene.transform(duplicate_entity), nullptr);
   expect_vec3_near(scene.transform(duplicate_entity)->rotation_euler,
                    source_transform.rotation_euler);

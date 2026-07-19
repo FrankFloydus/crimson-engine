@@ -23,6 +23,7 @@ struct CompiledVertex {
     quader::QVec3 normal { 0.0F, 1.0F, 0.0F };
     quader::QVec2 uv0;
     std::uint32_t color = 0xff9f9f9f;
+    ElementId source_vertex_id = kInvalidElementId;
 };
 
 /**
@@ -42,6 +43,13 @@ struct CompiledMesh {
     std::vector<std::uint32_t> indices;
     std::vector<CompiledPrimitive> primitives;
 };
+
+/**
+ * Rebuilds one canonical compiled mesh while retaining the output vectors'
+ * allocations when their existing capacities are sufficient.
+ */
+void compile_document_into(const Document &document, CompiledMesh &mesh,
+                           SurfaceShading shading = SurfaceShading::Authored);
 
 [[nodiscard]] CompiledMesh
 compile_document(const Document &document,

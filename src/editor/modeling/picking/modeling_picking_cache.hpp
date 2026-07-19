@@ -33,11 +33,26 @@ struct ModelingSharedPickBoundsCacheEntry {
   quader_editor_core::PickObjectBounds bounds;
 };
 
+/// Identifies one participant's cached world-space pick bounds.
+struct ModelingPickBoundsCacheEntry {
+  int object_id = -1;
+  std::uintptr_t topology_storage = 0;
+  std::uint64_t geometry_signature = 0;
+  bool has_world_transform = false;
+  QMat4 world_from_object;
+};
+
 /// Pins reusable local face triangles for one immutable topology signature.
 struct ModelingSharedPickFaceGeometryCacheEntry {
   std::uintptr_t topology_storage = 0;
   std::uint64_t geometry_signature = 0;
   std::shared_ptr<const std::vector<quader_poly::PickFaceTriangle>> triangles;
+};
+
+/// Pins derived unique edges beside their immutable authored topology.
+struct ModelingSharedPickEdgeGeometryCacheEntry {
+  std::shared_ptr<const quader_poly::Document> topology;
+  std::shared_ptr<const std::vector<quader_poly::Edge>> edges;
 };
 
 /**
@@ -53,6 +68,7 @@ struct ModelingPickingCache {
   std::uint32_t local_face_geometry_hidden_material_slot = 0;
   std::uint64_t content_revision = 0;
   std::uint64_t selection_revision = 0;
+  std::uint64_t scene_content_revision = 0;
   std::uint64_t scene_selection_revision = 0;
   std::uint64_t scene_transform_revision = 0;
   std::uint64_t scene_visibility_revision = 0;
@@ -67,6 +83,7 @@ struct ModelingPickingCache {
   std::vector<quader_editor_core::PolygonObject> world_objects;
   std::unordered_map<int, EntityId> scene_target_by_participant;
   std::vector<quader_editor_core::PickObjectBounds> bounds;
+  std::vector<ModelingPickBoundsCacheEntry> bounds_entries;
   std::vector<quader_editor_core::PickObjectFaceGeometry> face_geometry;
   std::vector<ModelingPickFaceGeometryCacheEntry> face_geometry_entries;
   std::vector<quader_editor_core::PickObjectFaceGeometry>
@@ -77,6 +94,9 @@ struct ModelingPickingCache {
       shared_local_bounds;
   std::vector<ModelingSharedPickFaceGeometryCacheEntry>
       shared_local_face_geometry;
+  std::unordered_map<std::uintptr_t,
+                     ModelingSharedPickEdgeGeometryCacheEntry>
+      shared_local_edges;
 };
 
 } // namespace quader

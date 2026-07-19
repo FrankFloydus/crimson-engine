@@ -27,6 +27,7 @@
 #include <span>
 #include <string>
 #include <tuple>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -64,14 +65,18 @@ OperationResult TranslateSelectionOperation::apply(Document& document, Selection
         return { false, "No polygon elements are selected." };
     }
 
+    // selected_vertex_ids is an ID set, while find_vertex is a linear scan.
+    // Calling it for every selected element makes dense translation O(S * V).
+    // Index the selected IDs once and touch the document storage in one pass.
+    std::unordered_set<ElementId> selected_ids;
+    selected_ids.reserve(ids.size());
+    selected_ids.insert(ids.begin(), ids.end());
     bool changed = false;
-    for (const ElementId id : ids) {
-        Vertex* vertex = find_vertex(document, id);
-        if (vertex == nullptr) {
+    for (Vertex& vertex : document.vertices) {
+        if (!selected_ids.contains(vertex.id)) {
             continue;
         }
-
-        vertex->position += delta_;
+        vertex.position += delta_;
         changed = true;
     }
     return { changed, {} };

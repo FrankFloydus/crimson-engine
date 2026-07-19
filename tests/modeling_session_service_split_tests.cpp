@@ -1595,17 +1595,41 @@ TEST(ModelingSessionServiceSplitTests,
   const MeshAsset *committed = assets.mesh(binding->mesh);
   ASSERT_NE(committed, nullptr);
   const MeshGeometryPayload committed_geometry = committed->geometry();
+  const std::uint64_t mesh_revision_before_preview =
+      assets.mesh_revision(binding->mesh).value;
+  const std::uint64_t asset_revision_before_preview = assets.revision();
+  const std::uint64_t scene_revision_before_preview = scene.revision();
 
   ASSERT_TRUE(service.begin_transform_preview(false).ok);
   ASSERT_TRUE(service.update_transform_translate_preview({0.0f, 2.0f, 0.0f})
                   .ok);
   EXPECT_TRUE(service.can_cancel_active_preview_for_undo());
+  EXPECT_TRUE(service.transient_transform_preview_active());
   const ModelingSdkProjectionStats after_preview =
       service.modeling_sdk_projection_stats_for_tests();
   EXPECT_EQ(after_preview.preview_publication_count,
-            after_move.preview_publication_count + 1u);
+            after_move.preview_publication_count);
+  EXPECT_EQ(after_preview.mesh_compile_count, after_move.mesh_compile_count);
+  EXPECT_EQ(after_preview.asset_publication_count,
+            after_move.asset_publication_count);
+  EXPECT_EQ(after_preview.scene_publication_count,
+            after_move.scene_publication_count);
+  EXPECT_EQ(assets.mesh_revision(binding->mesh).value,
+            mesh_revision_before_preview);
+  EXPECT_EQ(assets.revision(), asset_revision_before_preview);
+  EXPECT_EQ(scene.revision(), scene_revision_before_preview);
+  const std::vector<ModelingToolPreviewMesh> preview_meshes =
+      service.tool_preview_meshes();
+  ASSERT_EQ(preview_meshes.size(), 1u);
+  EXPECT_TRUE(preview_meshes.front().dynamic_positions);
+  EXPECT_TRUE(preview_meshes.front().suppress_source);
+  ASSERT_NE(preview_meshes.front().dynamic_position_payload, nullptr);
+  EXPECT_EQ(preview_meshes.front().dynamic_position_payload->size(),
+            preview_meshes.front().mesh.geometry().vertices.size());
   ASSERT_TRUE(service.cancel_transform_preview().ok);
   EXPECT_FALSE(service.can_cancel_active_preview_for_undo());
+  EXPECT_FALSE(service.transient_transform_preview_active());
+  EXPECT_TRUE(service.tool_preview_meshes().empty());
   ASSERT_NE(assets.mesh(scene.mesh(created.object.entity)->mesh), nullptr);
   EXPECT_EQ(assets.mesh(scene.mesh(created.object.entity)->mesh)
                 ->geometry()
@@ -1671,7 +1695,7 @@ TEST(ModelingSessionServiceSplitTests,
 
     service.set_modeling_sdk_projection_failure_for_tests(failure_point);
     const ModelingCommandResult failed =
-        service.update_transform_translate_preview({0.0f, 2.0f, 0.0f});
+        service.update_transform_extrude_preview({0.0f, 0.0f, 1.0f}, 1.0f);
     EXPECT_FALSE(failed.ok);
     EXPECT_FALSE(failed.changed);
     EXPECT_TRUE(service.can_cancel_active_preview_for_undo());
@@ -1682,7 +1706,8 @@ TEST(ModelingSessionServiceSplitTests,
     service.set_modeling_sdk_projection_failure_for_tests(
         ModelingSdkProjectionFailurePoint::None);
     ASSERT_TRUE(
-        service.update_transform_translate_preview({0.0f, 2.0f, 0.0f}).ok);
+        service.update_transform_extrude_preview({0.0f, 0.0f, 1.0f}, 1.0f)
+            .ok);
     ASSERT_TRUE(service.cancel_transform_preview().ok);
     EXPECT_FALSE(service.can_cancel_active_preview_for_undo());
     EXPECT_EQ(assets.mesh(mesh)->geometry().content_id(), content_before);

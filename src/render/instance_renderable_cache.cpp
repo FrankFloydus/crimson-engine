@@ -13,6 +13,7 @@
 
 #include <algorithm>
 #include <array>
+#include <utility>
 
 namespace quader {
 namespace {
@@ -104,6 +105,8 @@ void InstanceRenderableCache::initialize(
 
 void InstanceRenderableCache::shutdown() {
   clear();
+  preview_suppressed_entities_.clear();
+  preview_occurrence_suppressions_.clear();
   factory_ = nullptr;
   max_instances_per_chunk_ = 1u;
   stats_ = {};
@@ -125,12 +128,36 @@ void InstanceRenderableCache::clear() {
 InstanceRenderableCache::PreparedPlan InstanceRenderableCache::prepare(
     std::span<const RenderSceneInstancePrimitiveRecord> primitives) const {
   QDR_PROFILE_FUNCTION();
+  const auto occurrence_suppressed =
+      [this](const RenderSceneInstancePrimitiveRecord &record,
+             const RenderSceneInstanceOccurrenceRecord &occurrence) {
+        if (preview_suppressed_entities_.contains(occurrence.entity_id) ||
+            (record.definition_entity != kInvalidEntityId &&
+             preview_suppressed_entities_.contains(record.definition_entity)) ||
+            (record.member_entity != kInvalidEntityId &&
+             preview_suppressed_entities_.contains(record.member_entity))) {
+          return true;
+        }
+        return std::ranges::any_of(
+            preview_occurrence_suppressions_,
+            [&](const RenderInstancePreviewSuppression &suppression) {
+              return suppression.occurrence == occurrence.entity_id &&
+                     (suppression.source_entity == record.member_entity ||
+                      suppression.source_entity == record.definition_entity);
+            });
+      };
   std::size_t occurrence_count = 0u;
   std::size_t participant_count = 0u;
   for (const RenderSceneInstancePrimitiveRecord &record : primitives) {
-    if (record.renderable()) {
-      participant_count += record.occurrences.size();
-      occurrence_count += record.occurrences.size() * kInstanceVariants.size();
+    if (!record.renderable()) {
+      continue;
+    }
+    for (const RenderSceneInstanceOccurrenceRecord &occurrence :
+         record.occurrences) {
+      if (!occurrence_suppressed(record, occurrence)) {
+        ++participant_count;
+        occurrence_count += kInstanceVariants.size();
+      }
     }
   }
   std::vector<RenderInstancePrimitiveOccurrence> occurrences;
@@ -142,6 +169,9 @@ InstanceRenderableCache::PreparedPlan InstanceRenderableCache::prepare(
     for (const InstanceVariant &variant : kInstanceVariants) {
       for (const RenderSceneInstanceOccurrenceRecord &occurrence :
            record.occurrences) {
+        if (occurrence_suppressed(record, occurrence)) {
+          continue;
+        }
         occurrences.push_back({
             .key = variant_key(record, occurrence, variant),
             .occurrence = occurrence.occurrence,
@@ -161,6 +191,22 @@ InstanceRenderableCache::PreparedPlan InstanceRenderableCache::prepare(
     prepared.records_by_chunk.push_back(record_for_chunk(primitives, chunk));
   }
   return prepared;
+}
+
+void InstanceRenderableCache::set_preview_suppressed_entities(
+    std::unordered_set<EntityId> entities,
+    std::vector<RenderInstancePreviewSuppression> occurrence_suppressions,
+    std::span<const RenderSceneInstancePrimitiveRecord> primitives) {
+  if (preview_suppressed_entities_ == entities &&
+      preview_occurrence_suppressions_ == occurrence_suppressions) {
+    return;
+  }
+  preview_suppressed_entities_ = std::move(entities);
+  preview_occurrence_suppressions_ = std::move(occurrence_suppressions);
+  // Suppression changes only at preview begin/end. Re-plan once at that
+  // boundary; subsequent scene synchronization keeps consulting the retained
+  // set and therefore cannot accidentally restore a suppressed occurrence.
+  (void)sync(primitives);
 }
 
 RenderInstanceBatchUpdateKind InstanceRenderableCache::classify_update(

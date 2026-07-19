@@ -556,6 +556,8 @@ public:
   [[nodiscard]] std::vector<QuaderModelingObjectRecord> objects() const;
 
 private:
+  /// Caches mesh-arrangement availability against every owner revision that
+  /// can change the answer without rebuilding command predicates per frame.
   struct MeshArrangementAvailabilityCache final {
     const void *scene_identity = nullptr;
     std::uint64_t scene_session_id = 0;

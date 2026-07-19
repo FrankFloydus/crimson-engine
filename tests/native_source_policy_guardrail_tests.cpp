@@ -468,9 +468,19 @@ TEST(ModelingSessionServiceTests,
   EXPECT_NE(
       source.find("transform_drag_can_use_vertex_snap(drag_before_update)"),
       std::string::npos);
+  EXPECT_NE(
+      source.find(
+          "transform_drag_has_stationary_vertex_snap_target(context.session)"),
+      std::string::npos);
   EXPECT_NE(source.find("context.port.cached_pick_object_bounds()"),
             std::string::npos);
-  EXPECT_NE(source.find("context.port.cached_pick_face_geometry()"),
+  EXPECT_NE(source.find("context.port.cached_local_pick_face_geometry()"),
+            std::string::npos);
+  EXPECT_NE(source.find("context.port.cached_local_picking_transforms()"),
+            std::string::npos);
+  EXPECT_NE(source.find("context.port.cached_local_objects_for_picking()"),
+            std::string::npos);
+  EXPECT_EQ(source.find("context.port.cached_pick_face_geometry()"),
             std::string::npos);
 }
 

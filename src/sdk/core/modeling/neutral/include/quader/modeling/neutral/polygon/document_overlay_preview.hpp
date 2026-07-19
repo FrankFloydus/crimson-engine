@@ -37,6 +37,9 @@ struct OverlayTriangle {
     quader::QVec3 c;
     std::uint32_t color = 0xffffffff;
     ElementId face_id = kInvalidElementId;
+    ElementId vertex_a = kInvalidElementId;
+    ElementId vertex_b = kInvalidElementId;
+    ElementId vertex_c = kInvalidElementId;
 };
 
 /**

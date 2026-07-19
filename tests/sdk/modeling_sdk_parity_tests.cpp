@@ -568,13 +568,11 @@ private:
             static_cast<std::uint32_t>(selection.faces.size());
         observation.active_face =
             selection.has_active && selection.kind == SelectionKind::Face;
+        // The native transform hot path keeps the committed mesh asset stable
+        // and streams transient preview positions directly to the renderer.
+        // Compare durable geometry here; preview_active above is the portable
+        // cross-engine observation for the transient transaction itself.
         Result<MeshPayload> mesh = document.value().compile_mesh();
-        if (session_.preview_active()) {
-          Result<ToolPreviewPayload> preview = session_.preview_payload();
-          if (preview.ok()) {
-            mesh = Result<MeshPayload>::success(preview.value().mesh);
-          }
-        }
         if (mesh.ok()) {
           observation.vertex_count = mesh.value().vertices.size();
           observation.index_count = mesh.value().indices.size();

@@ -85,6 +85,7 @@ void MeshRenderableCache::shutdown() {
     destroy_detached_proxy_vector(*factory_, retired_mesh_proxies_);
     surface_grid_signature_ = 0u;
     surface_grid_dirty_ = true;
+    preview_suppressed_entities_.clear();
     factory_ = nullptr;
 }
 
@@ -126,6 +127,7 @@ void MeshRenderableCache::sync_mesh(const RenderSceneMeshRecord &mesh) {
         kViewportOverlayDepthChannel);
     overlay_depth_mesh_proxies_.emplace(mesh.entity_id,
                                         std::move(overlay_depth_proxy));
+    apply_preview_suppression(mesh.entity_id);
     surface_grid_dirty_ = true;
     return;
   }
@@ -144,6 +146,42 @@ void MeshRenderableCache::sync_mesh(const RenderSceneMeshRecord &mesh) {
       existing != overlay_depth_mesh_proxies_.end()) {
     QDR_PROFILE_SCOPE("Mesh renderable update depth transform");
     factory_->update_transform(existing->second, mesh.world_transform);
+  }
+}
+
+void MeshRenderableCache::set_preview_suppressed_entities(
+    std::unordered_set<EntityId> entities) {
+  if (preview_suppressed_entities_ == entities) {
+    return;
+  }
+  std::unordered_set<EntityId> affected = preview_suppressed_entities_;
+  affected.insert(entities.begin(), entities.end());
+  preview_suppressed_entities_ = std::move(entities);
+  for (const EntityId entity : affected) {
+    apply_preview_suppression(entity);
+  }
+}
+
+void MeshRenderableCache::apply_preview_suppression(EntityId entity_id) {
+  if (!factory_) {
+    return;
+  }
+  const bool suppressed = preview_suppressed_entities_.contains(entity_id);
+  if (const auto proxy = rendered_mesh_proxies_.find(entity_id);
+      proxy != rendered_mesh_proxies_.end()) {
+    factory_->update_layer_mask(
+        proxy->second,
+        suppressed ? 0u : kViewportRenderedSceneLayerMask);
+  }
+  if (const auto proxy = shaded_mesh_proxies_.find(entity_id);
+      proxy != shaded_mesh_proxies_.end()) {
+    factory_->update_layer_mask(
+        proxy->second, suppressed ? 0u : kViewportShadedSceneLayerMask);
+  }
+  if (const auto proxy = overlay_depth_mesh_proxies_.find(entity_id);
+      proxy != overlay_depth_mesh_proxies_.end()) {
+    factory_->update_layer_mask(
+        proxy->second, suppressed ? 0u : kViewportOverlayLayerMask);
   }
 }
 

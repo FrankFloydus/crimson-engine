@@ -116,13 +116,16 @@ ModelingSelectionSummary EditorSelectionService::summary() const {
       modeling_.content_revision();
   const std::uint64_t modeling_selection_revision =
       modeling_.selection_revision();
+  const int modeling_selection_mode =
+      static_cast<int>(modeling_.selection_mode());
   const bool preview_active = modeling_.can_cancel_active_preview_for_undo();
   if (summary_cache_valid_ && !preview_active &&
       !summary_cache_preview_active_ &&
       summary_cache_scene_revision_ == scene_revision &&
       summary_cache_modeling_content_revision_ == modeling_content_revision &&
       summary_cache_modeling_selection_revision_ ==
-          modeling_selection_revision) {
+          modeling_selection_revision &&
+      summary_cache_modeling_selection_mode_ == modeling_selection_mode) {
     return summary_cache_resolved_;
   }
 
@@ -156,6 +159,7 @@ ModelingSelectionSummary EditorSelectionService::summary() const {
   summary_cache_preview_active_ = preview_active;
   summary_cache_modeling_content_revision_ = modeling_content_revision;
   summary_cache_modeling_selection_revision_ = modeling_selection_revision;
+  summary_cache_modeling_selection_mode_ = modeling_selection_mode;
   summary_cache_modeling_ = current;
   summary_cache_resolved_ = resolved;
   summary_cache_valid_ = true;

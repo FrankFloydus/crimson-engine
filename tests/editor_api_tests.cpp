@@ -6451,7 +6451,7 @@ TEST(EditorApiTests,
     quader::QuaderActiveSelectionKind hover_kind;
     std::size_t expected_count;
   };
-  constexpr std::array<ModeCase, 3> cases{
+  constexpr std::array<ModeCase, 3> kCases{
       ModeCase{quader::QuaderSelectionMode::Vertex,
                quader::QuaderActiveSelectionKind::Vertex, 8u},
       ModeCase{quader::QuaderSelectionMode::Edge,
@@ -6460,7 +6460,7 @@ TEST(EditorApiTests,
                quader::QuaderActiveSelectionKind::Face, 6u},
   };
 
-  for (const ModeCase &mode_case : cases) {
+  for (const ModeCase &mode_case : kCases) {
     SCOPED_TRACE(static_cast<int>(mode_case.mode));
     CommandTestHarness harness;
     quader::QuaderEditorApi &editor = harness.editor;

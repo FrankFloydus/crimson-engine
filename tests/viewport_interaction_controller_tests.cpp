@@ -17,6 +17,7 @@
 #include "render/viewport_overlay_policy.hpp"
 #include "editor/session/scene_session.hpp"
 #include "scene/scene_bounds.hpp"
+#include "support/viewport_overlay_test_helpers.hpp"
 #include "ui/viewport_hover_controller.hpp"
 #include "viewport/viewport_host_interaction_policy.hpp"
 #include "viewport/viewport_camera_adapter.hpp"
@@ -296,6 +297,22 @@ bool has_line_style(const quader::QuaderOverlayFrame &frame,
                     quader::QuaderOverlayStyleRole role) {
   return std::any_of(frame.lines.begin(), frame.lines.end(),
                      [role](const quader::QuaderOverlayLine &line) {
+                       return line.style_role == role;
+                     });
+}
+
+bool has_triangle_style(const quader::ViewportOverlayFrame &frame,
+                        quader::ViewportOverlayStyleRole role) {
+  return std::any_of(frame.triangles.begin(), frame.triangles.end(),
+                     [role](const quader::ViewportOverlayTriangle &triangle) {
+                       return triangle.style_role == role;
+                     });
+}
+
+bool has_line_style(const quader::ViewportOverlayFrame &frame,
+                    quader::ViewportOverlayStyleRole role) {
+  return std::any_of(frame.lines.begin(), frame.lines.end(),
+                     [role](const quader::ViewportOverlayLine &line) {
                        return line.style_role == role;
                      });
 }
@@ -969,14 +986,15 @@ TEST(ViewportInteractionControllerTests,
         harness.editor, harness.frame(), quader::ViewportToolResult{},
         quader::ViewportBeforeToolInteractionResult{});
 
-    const quader::QuaderOverlayFrame overlay =
-        harness.editor.query().selection_overlay();
+    const quader::ViewportOverlayFrame overlay =
+        quader::test_support::visible_modeling_overlay_frame(
+            harness.session.modeling());
     EXPECT_TRUE(has_triangle_style(
-        overlay, quader::QuaderOverlayStyleRole::FacePlaneHoverFace));
+        overlay, quader::ViewportOverlayStyleRole::FacePlaneHoverFace));
     EXPECT_TRUE(has_line_style(
-        overlay, quader::QuaderOverlayStyleRole::FacePlaneHoverWire));
+        overlay, quader::ViewportOverlayStyleRole::FacePlaneHoverWire));
     EXPECT_FALSE(has_triangle_style(
-        overlay, quader::QuaderOverlayStyleRole::RemoveSelectionFace));
+        overlay, quader::ViewportOverlayStyleRole::RemoveSelectionFace));
 }
 
 TEST(ViewportInteractionControllerTests,
@@ -2053,7 +2071,7 @@ TEST(ViewportInteractionControllerTests,
         knife_event_at(harness, {0.0f, -1.0f, 1.0f});
     const auto has_knife_handle = [&]() {
       const quader::ViewportOverlayFrame overlay =
-          modeling.selection_overlay_frame();
+          quader::test_support::visible_modeling_overlay_frame(modeling);
       return std::any_of(
           overlay.points.begin(), overlay.points.end(),
           [](const quader::ViewportOverlayPoint &point) {

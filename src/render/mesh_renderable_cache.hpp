@@ -48,6 +48,8 @@ public:
     void sync_mesh(const RenderSceneMeshRecord &mesh);
     void update_surface_grid(float grid_world_spacing,
                              const ViewportSettings &settings);
+    void set_preview_suppressed_entities(
+        std::unordered_set<EntityId> entities);
     void remove(EntityId entity_id);
     void remove_except(const std::unordered_set<EntityId> &live_mesh_entities);
     void drain_retired_destroy_queue(std::size_t max_proxy_count);
@@ -61,6 +63,7 @@ public:
 
   private:
     void retire_proxy(MeshRenderableProxy &&proxy);
+    void apply_preview_suppression(EntityId entity_id);
 
     MeshRenderableFactory* factory_ = nullptr;
     std::unordered_map<EntityId, MeshRenderableProxy> rendered_mesh_proxies_;
@@ -68,6 +71,7 @@ public:
     std::unordered_map<EntityId, MeshRenderableProxy>
         overlay_depth_mesh_proxies_;
     std::vector<MeshRenderableProxy> retired_mesh_proxies_;
+    std::unordered_set<EntityId> preview_suppressed_entities_;
     std::uint64_t surface_grid_signature_ = 0u;
     bool surface_grid_dirty_ = true;
 };
