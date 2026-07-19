@@ -10,12 +10,14 @@
 #include "api/quader_editor_api.hpp"
 #include "api/quader_mesh_arrangement_catalog.hpp"
 #include "core/localization_service.hpp"
+#include "diagnostics/profile.hpp"
 #include "editor/modeling/services/modeling_session_service.hpp"
 #include "editor/tools/viewport_tool_catalog.hpp"
 #include "viewport/viewport_layout.hpp"
 
 #include <QAction>
 #include <QActionGroup>
+#include <QByteArray>
 #include <QMenu>
 #include <QMenuBar>
 #include <QObject>
@@ -31,7 +33,6 @@
 #include <string>
 #include <string_view>
 #include <tuple>
-#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -63,17 +64,6 @@ std::string stable_object_suffix(std::string_view value) {
     }
   }
   return result;
-}
-
-const QuaderCommandDescriptor *
-find_command(const std::vector<QuaderCommandDescriptor> &commands,
-             std::string_view command_id) {
-  for (const QuaderCommandDescriptor &command : commands) {
-    if (command.id == command_id) {
-      return &command;
-    }
-  }
-  return nullptr;
 }
 
 std::string layout_localization_key(ViewportLayoutId layout) {
@@ -157,6 +147,7 @@ struct QtMainMenu::Impl {
   /// Associates a QAction with a typed editor command and localized label.
   struct CommandAction {
     QAction *action = nullptr;
+    QMenu *owner_menu = nullptr;
     QuaderCommandId command_id;
     std::string localization_key;
     std::string fallback;
@@ -166,12 +157,14 @@ struct QtMainMenu::Impl {
   /// Associates a checkable QAction with one viewport boolean setting.
   struct BoolSettingAction {
     QAction *action = nullptr;
+    QMenu *owner_menu = nullptr;
     ViewportBoolSettingId setting = ViewportBoolSettingId::Count;
   };
 
   /// Associates a QAction with a viewport workspace layout.
   struct LayoutAction {
     QAction *action = nullptr;
+    QMenu *owner_menu = nullptr;
     ViewportLayoutId layout = ViewportLayoutId::Single;
     std::optional<QuaderCommandId> command_id;
   };
@@ -179,14 +172,16 @@ struct QtMainMenu::Impl {
   /// Associates a QAction with a stable dock-panel identifier.
   struct PanelAction {
     QAction *action = nullptr;
+    QMenu *owner_menu = nullptr;
     UIPanelId panel = UIPanelId::Viewport;
   };
 
   /// Associates a QAction with a viewport tool identifier.
   struct ToolAction {
     QAction *action = nullptr;
+    QMenu *owner_menu = nullptr;
     ViewportToolId tool = ViewportToolId::Select;
-    std::string tool_id;
+    std::string command_id;
     std::string localization_key;
     std::string fallback;
   };
@@ -194,6 +189,7 @@ struct QtMainMenu::Impl {
   /// Associates a Select-menu action or separator with the modes that show it.
   struct SelectionModeAction {
     QAction *action = nullptr;
+    QMenu *owner_menu = nullptr;
     SelectionModeMask modes = 0;
   };
 
@@ -220,6 +216,7 @@ struct QtMainMenu::Impl {
     tool_actions.clear();
     selection_mode_actions.clear();
     align_menu = nullptr;
+    view_menu = nullptr;
     navigation_gizmo_action = nullptr;
     material_browser_action = nullptr;
     selection_toolbar_action = nullptr;
@@ -241,11 +238,20 @@ struct QtMainMenu::Impl {
     return menu;
   }
 
+  static QMenu *top_level_owner(QMenu &menu) {
+    QMenu *owner = &menu;
+    while (QMenu *parent = qobject_cast<QMenu *>(owner->parentWidget())) {
+      owner = parent;
+    }
+    return owner;
+  }
+
   QPointer<QMenuBar> menu_bar;
   QtMainMenuContext context;
   std::unique_ptr<QObject> connection_context = std::make_unique<QObject>();
   std::vector<QPointer<QMenu>> top_level_menus;
   QMenu *align_menu = nullptr;
+  QMenu *view_menu = nullptr;
   QAction *navigation_gizmo_action = nullptr;
   QAction *material_browser_action = nullptr;
   QAction *selection_toolbar_action = nullptr;
@@ -271,20 +277,29 @@ struct QtMainMenu::Impl {
     action->setCheckable(static_cast<bool>(checked));
     QObject::connect(action, &QAction::triggered, connection_context.get(),
                      [this, action, command_id, checked]() {
+                       QDR_PROFILE_SCOPE(
+                           "Qt main menu dispatch command action");
                        (void)context.editor.commands().execute(command_id);
                        if (checked) {
-                         const QSignalBlocker blocker(action);
-                         action->setChecked(checked());
+                         const bool checked_value = checked();
+                         if (action->isChecked() != checked_value) {
+                           const QSignalBlocker blocker(action);
+                           action->setChecked(checked_value);
+                         }
                          const std::optional<QuaderCommandDescriptor>
                              descriptor =
                                  context.editor.commands().descriptor(
                                      command_id);
-                         action->setEnabled(descriptor.has_value() &&
-                                            descriptor->enabled);
+                         const bool enabled =
+                             descriptor.has_value() && descriptor->enabled;
+                         if (action->isEnabled() != enabled) {
+                           action->setEnabled(enabled);
+                         }
                        }
                      });
     command_actions.push_back(CommandAction{
         .action = action,
+        .owner_menu = top_level_owner(menu),
         .command_id = command_id,
         .localization_key = std::move(localization_key),
         .fallback = std::move(fallback),
@@ -301,14 +316,15 @@ struct QtMainMenu::Impl {
     QAction *action = add_command_action(menu, command_id,
                                          std::move(localization_key),
                                          std::move(fallback));
-    selection_mode_actions.push_back({action, modes});
+    selection_mode_actions.push_back({action, top_level_owner(menu), modes});
     return action;
   }
 
   QAction *add_selection_mode_separator(QMenu &menu,
                                         SelectionModeMask modes) {
     QAction *separator = menu.addSeparator();
-    selection_mode_actions.push_back({separator, modes});
+    selection_mode_actions.push_back(
+        {separator, top_level_owner(menu), modes});
     return separator;
   }
 
@@ -324,6 +340,8 @@ struct QtMainMenu::Impl {
     action->setCheckable(true);
     QObject::connect(action, &QAction::toggled, connection_context.get(),
                      [this, setting](bool checked) {
+                       QDR_PROFILE_SCOPE(
+                           "Qt main menu dispatch bool setting");
                        if (context.viewport_settings.set_bool_value(setting,
                                                                     checked)) {
                          if (context.viewport_settings_changed) {
@@ -331,7 +349,8 @@ struct QtMainMenu::Impl {
                          }
                        }
                      });
-    bool_setting_actions.push_back({action, setting});
+    bool_setting_actions.push_back(
+        {action, top_level_owner(menu), setting});
     return action;
   }
 
@@ -385,6 +404,8 @@ struct QtMainMenu::Impl {
     QObject::connect(exit_action, &QAction::triggered,
                      connection_context.get(),
                      [this]() {
+                       QDR_PROFILE_SCOPE(
+                           "Qt main menu dispatch presentation action");
                        if (context.request_quit) {
                          context.request_quit();
                        }
@@ -443,6 +464,7 @@ struct QtMainMenu::Impl {
     settings->setObjectName(QStringLiteral("action_settings"));
     QObject::connect(settings, &QAction::triggered, connection_context.get(),
                      [this]() {
+      QDR_PROFILE_SCOPE("Qt main menu dispatch presentation action");
       if (context.show_settings) {
         context.show_settings();
       }
@@ -507,10 +529,12 @@ struct QtMainMenu::Impl {
     QObject::connect(
         snap, &QAction::toggled, connection_context.get(),
         [this](bool checked) {
+          QDR_PROFILE_SCOPE("Qt main menu dispatch bool setting");
           (void)context.editor.preferences().set_grid_snap_enabled(checked);
         });
     bool_setting_actions.push_back(
-        {snap, ViewportBoolSettingId::GridSnap});
+        {snap, top_level_owner(*align_menu),
+         ViewportBoolSettingId::GridSnap});
     align_menu->addSeparator();
     constexpr std::array<
         std::tuple<QuaderTransformAxis, std::string_view, std::string_view>, 3>
@@ -594,12 +618,15 @@ struct QtMainMenu::Impl {
           context.editor.commands().command_id_for_tool_activation(tool->id());
       QObject::connect(action, &QAction::triggered, connection_context.get(),
                        [this, command_id]() {
+                         QDR_PROFILE_SCOPE(
+                             "Qt main menu dispatch tool action");
                          (void)context.editor.commands().execute(command_id);
                        });
       tool_actions.push_back({
           .action = action,
+          .owner_menu = top_level_owner(*menu),
           .tool = tool_id,
-          .tool_id = std::string(tool->id()),
+          .command_id = command_id,
           .localization_key = tool_localization_key(*tool),
           .fallback = std::string(tool->label()),
       });
@@ -618,6 +645,7 @@ struct QtMainMenu::Impl {
 
   void build_view_menu() {
     QMenu *menu = add_top_level_menu("ui.menu.view", "&View");
+    view_menu = menu;
     menu->setObjectName(QStringLiteral("menu_view"));
     add_bool_setting_action(*menu, ViewportBoolSettingId::ShowGrid,
                             "ui.menu.view.grid", "Grid");
@@ -651,6 +679,8 @@ struct QtMainMenu::Impl {
     QObject::connect(navigation_gizmo_action, &QAction::toggled,
                      connection_context.get(),
                      [this](bool visible) {
+                       QDR_PROFILE_SCOPE(
+                           "Qt main menu dispatch bool setting");
                        (void)context.editor.preferences()
                            .set_navigation_gizmo_visible(visible);
                      });
@@ -662,6 +692,8 @@ struct QtMainMenu::Impl {
         QStringLiteral("action_material_browser"));
     QObject::connect(material_browser_action, &QAction::triggered,
                      connection_context.get(), [this]() {
+                       QDR_PROFILE_SCOPE(
+                           "Qt main menu dispatch presentation action");
                        if (context.show_material_browser) {
                          context.show_material_browser();
                        }
@@ -677,6 +709,8 @@ struct QtMainMenu::Impl {
     selection_toolbar_action->setCheckable(true);
     QObject::connect(selection_toolbar_action, &QAction::toggled,
                      connection_context.get(), [this](bool visible) {
+                       QDR_PROFILE_SCOPE(
+                           "Qt main menu dispatch toolbar visibility");
                        if (context.set_selection_toolbar_visible) {
                          context.set_selection_toolbar_visible(visible);
                        }
@@ -688,6 +722,8 @@ struct QtMainMenu::Impl {
     snapping_toolbar_action->setCheckable(true);
     QObject::connect(snapping_toolbar_action, &QAction::toggled,
                      connection_context.get(), [this](bool visible) {
+                       QDR_PROFILE_SCOPE(
+                           "Qt main menu dispatch toolbar visibility");
                        if (context.set_snapping_toolbar_visible) {
                          context.set_snapping_toolbar_visible(visible);
                        }
@@ -700,6 +736,8 @@ struct QtMainMenu::Impl {
     viewport_display_toolbar_action->setCheckable(true);
     QObject::connect(viewport_display_toolbar_action, &QAction::toggled,
                      connection_context.get(), [this](bool visible) {
+                       QDR_PROFILE_SCOPE(
+                           "Qt main menu dispatch toolbar visibility");
                        if (context.set_viewport_display_toolbar_visible) {
                          context.set_viewport_display_toolbar_visible(visible);
                        }
@@ -710,6 +748,8 @@ struct QtMainMenu::Impl {
     tool_toolbar_action->setCheckable(true);
     QObject::connect(tool_toolbar_action, &QAction::toggled,
                      connection_context.get(), [this](bool visible) {
+                       QDR_PROFILE_SCOPE(
+                           "Qt main menu dispatch toolbar visibility");
                        if (context.set_tool_toolbar_visible) {
                          context.set_tool_toolbar_visible(visible);
                        }
@@ -727,11 +767,13 @@ struct QtMainMenu::Impl {
       action->setCheckable(true);
       QObject::connect(action, &QAction::toggled, connection_context.get(),
                        [this, id](bool visible) {
+                         QDR_PROFILE_SCOPE(
+                             "Qt main menu dispatch panel visibility");
                          if (context.set_panel_visible) {
                            context.set_panel_visible(id, visible);
                          }
                        });
-      panel_actions.push_back({action, id});
+      panel_actions.push_back({action, top_level_owner(*panels), id});
     }
   }
 
@@ -753,6 +795,8 @@ struct QtMainMenu::Impl {
           layout_command_id(option.id);
       QObject::connect(action, &QAction::triggered, connection_context.get(),
                        [this, layout = option.id, command_id]() {
+                         QDR_PROFILE_SCOPE(
+                             "Qt main menu dispatch layout action");
                          if (command_id.has_value()) {
                            (void)context.editor.commands().execute(
                                *command_id);
@@ -760,7 +804,211 @@ struct QtMainMenu::Impl {
                            (void)context.editor.viewports().set_layout(layout);
                          }
                        });
-      layout_actions.push_back({action, option.id, command_id});
+      layout_actions.push_back(
+          {action, top_level_owner(*menu), option.id, command_id});
+    }
+  }
+
+  static void present_text(QAction &action, const QString &text) {
+    if (action.text() != text) {
+      action.setText(text);
+    }
+  }
+
+  static void present_enabled(QAction &action, bool enabled) {
+    if (action.isEnabled() != enabled) {
+      action.setEnabled(enabled);
+    }
+  }
+
+  static void present_checked(QAction &action, bool checked) {
+    if (action.isChecked() == checked) {
+      return;
+    }
+    const QSignalBlocker blocker(&action);
+    action.setChecked(checked);
+  }
+
+  [[nodiscard]] ModelingSelectionMode refresh_global_chrome() {
+    QDR_PROFILE_SCOPE("Qt main menu sync global chrome");
+    const ModelingSelectionMode selection_mode =
+        context.modeling.selection_mode();
+    if (align_menu != nullptr) {
+      QAction *align_action = align_menu->menuAction();
+      const bool visible = selection_mode == ModelingSelectionMode::Object;
+      if (align_action->isVisible() != visible) {
+        align_action->setVisible(visible);
+      }
+    }
+    return selection_mode;
+  }
+
+  void refresh_menu(QMenu &menu, ModelingSelectionMode selection_mode) {
+    QDR_PROFILE_SCOPE("Qt main menu refresh owning menu");
+
+    {
+      QDR_PROFILE_SCOPE("Qt main menu sync command actions");
+      for (CommandAction &entry : command_actions) {
+        if (entry.owner_menu != &menu) {
+          continue;
+        }
+        const std::optional<QuaderCommandDescriptor> command =
+            context.editor.commands().descriptor(entry.command_id);
+        const std::string shortcut =
+            command.has_value() ? command->shortcut : std::string{};
+        const bool checked = entry.checked ? entry.checked() : false;
+        present_text(*entry.action,
+                     action_text(context.localization, entry.localization_key,
+                                 entry.fallback, shortcut));
+        present_enabled(*entry.action,
+                        command.has_value() && command->enabled);
+        if (entry.checked) {
+          present_checked(*entry.action, checked);
+        }
+      }
+    }
+
+    {
+      QDR_PROFILE_SCOPE("Qt main menu sync selection-mode visibility");
+      for (const SelectionModeAction &entry : selection_mode_actions) {
+        if (entry.owner_menu != &menu) {
+          continue;
+        }
+        const bool visible =
+            (entry.modes & selection_mode_bit(selection_mode)) != 0;
+        if (entry.action->isVisible() != visible) {
+          entry.action->setVisible(visible);
+        }
+      }
+    }
+
+    {
+      QDR_PROFILE_SCOPE("Qt main menu sync bool settings");
+      for (const BoolSettingAction &entry : bool_setting_actions) {
+        if (entry.owner_menu != &menu) {
+          continue;
+        }
+        present_checked(
+            *entry.action,
+            context.viewport_settings.bool_value(entry.setting));
+      }
+    }
+
+    {
+      QDR_PROFILE_SCOPE("Qt main menu sync layout actions");
+      std::optional<ViewportLayoutId> current_layout;
+      for (const LayoutAction &entry : layout_actions) {
+        if (entry.owner_menu != &menu) {
+          continue;
+        }
+        if (!current_layout.has_value()) {
+          current_layout = context.editor.viewports().layout();
+        }
+        const std::optional<QuaderCommandDescriptor> command =
+            entry.command_id.has_value()
+                ? context.editor.commands().descriptor(*entry.command_id)
+                : std::nullopt;
+        const std::string shortcut =
+            command.has_value() ? command->shortcut : std::string{};
+        present_text(
+            *entry.action,
+            action_text(context.localization,
+                        layout_localization_key(entry.layout),
+                        viewport_layout_label(entry.layout), shortcut));
+        present_checked(*entry.action, *current_layout == entry.layout);
+      }
+    }
+
+    {
+      QDR_PROFILE_SCOPE("Qt main menu sync panel actions");
+      for (const PanelAction &entry : panel_actions) {
+        if (entry.owner_menu != &menu) {
+          continue;
+        }
+        const bool visible =
+            context.panel_visible ? context.panel_visible(entry.panel) : false;
+        present_checked(*entry.action, visible);
+      }
+    }
+
+    if (&menu == view_menu) {
+      QDR_PROFILE_SCOPE("Qt main menu sync view actions");
+      if (selection_toolbar_action != nullptr) {
+        present_text(*selection_toolbar_action,
+                     qtext(context.localization,
+                           "ui.toolbar.selection.title", "Selection"));
+        present_checked(*selection_toolbar_action,
+                        context.selection_toolbar_visible
+                            ? context.selection_toolbar_visible()
+                            : false);
+      }
+      if (tool_toolbar_action != nullptr) {
+        present_text(*tool_toolbar_action,
+                     qtext(context.localization, "ui.toolbar.tools.title",
+                           "Tools"));
+        present_checked(*tool_toolbar_action,
+                        context.tool_toolbar_visible
+                            ? context.tool_toolbar_visible()
+                            : false);
+      }
+      if (snapping_toolbar_action != nullptr) {
+        present_text(*snapping_toolbar_action,
+                     qtext(context.localization, "ui.toolbar.snapping.title",
+                           "Snapping"));
+        present_checked(*snapping_toolbar_action,
+                        context.snapping_toolbar_visible
+                            ? context.snapping_toolbar_visible()
+                            : false);
+      }
+      if (viewport_display_toolbar_action != nullptr) {
+        present_text(
+            *viewport_display_toolbar_action,
+            qtext(context.localization,
+                  "ui.toolbar.viewport_display.title", "Viewport Display"));
+        present_checked(*viewport_display_toolbar_action,
+                        context.viewport_display_toolbar_visible
+                            ? context.viewport_display_toolbar_visible()
+                            : false);
+      }
+      if (navigation_gizmo_action != nullptr) {
+        present_checked(
+            *navigation_gizmo_action,
+            context.editor.preferences().navigation_gizmo_visible());
+      }
+      if (material_browser_action != nullptr) {
+        present_text(*material_browser_action,
+                     qtext(context.localization,
+                           "ui.menu.view.material_browser",
+                           "Material Browser"));
+        present_enabled(*material_browser_action,
+                        context.material_browser_available
+                            ? context.material_browser_available()
+                            : false);
+      }
+    }
+
+    {
+      QDR_PROFILE_SCOPE("Qt main menu sync tool actions");
+      std::optional<std::string> active_tool;
+      for (const ToolAction &entry : tool_actions) {
+        if (entry.owner_menu != &menu) {
+          continue;
+        }
+        if (!active_tool.has_value()) {
+          active_tool = context.editor.tools().active_tool();
+        }
+        const std::optional<QuaderCommandDescriptor> command =
+            context.editor.commands().descriptor(entry.command_id);
+        const std::string shortcut =
+            command.has_value() ? command->shortcut : std::string{};
+        present_text(*entry.action,
+                     action_text(context.localization, entry.localization_key,
+                                 entry.fallback, shortcut));
+        present_checked(*entry.action,
+                        *active_tool == viewport_tool_id(entry.tool));
+        present_enabled(*entry.action,
+                        command.has_value() && command->enabled);
+      }
     }
   }
 };
@@ -775,155 +1023,61 @@ void QtMainMenu::initialize(QMenuBar &menu_bar, QtMainMenuContext context) {
 }
 
 void QtMainMenu::rebuild() {
+  QDR_PROFILE_SCOPE("Qt main menu rebuild");
   if (!impl_ || impl_->menu_bar == nullptr) {
     return;
   }
-  impl_->prepare_rebuild();
-  impl_->build_file_menu();
-  impl_->build_edit_menu();
-  impl_->build_select_menu();
-  impl_->build_align_menu();
-  impl_->build_cleanup_menu();
-  impl_->build_tools_menu();
-  impl_->build_create_menu();
-  impl_->build_view_menu();
-  impl_->build_layout_menu();
-  for (QAction *top_level_action : impl_->menu_bar->actions()) {
-    if (QMenu *menu = top_level_action->menu()) {
-      QObject::connect(menu, &QMenu::aboutToShow,
-                       impl_->connection_context.get(),
-                       [this]() { refresh(); });
+  {
+    QDR_PROFILE_SCOPE("Qt main menu rebuild hierarchy");
+    impl_->prepare_rebuild();
+    impl_->build_file_menu();
+    impl_->build_edit_menu();
+    impl_->build_select_menu();
+    impl_->build_align_menu();
+    impl_->build_cleanup_menu();
+    impl_->build_tools_menu();
+    impl_->build_create_menu();
+    impl_->build_view_menu();
+    impl_->build_layout_menu();
+  }
+  {
+    QDR_PROFILE_SCOPE("Qt main menu connect aboutToShow");
+    for (QAction *top_level_action : impl_->menu_bar->actions()) {
+      if (QMenu *menu = top_level_action->menu()) {
+        QObject::connect(
+            menu, &QMenu::aboutToShow, impl_->connection_context.get(),
+            [this, menu]() {
+              QDR_PROFILE_SCOPE("Qt main menu aboutToShow");
+              [[maybe_unused]] const QByteArray menu_identity =
+                  menu->objectName().isEmpty() ? menu->title().toUtf8()
+                                               : menu->objectName().toUtf8();
+              QDR_PROFILE_TEXT(
+                  menu_identity.constData(),
+                  static_cast<std::size_t>(menu_identity.size()));
+              const ModelingSelectionMode selection_mode =
+                  impl_->refresh_global_chrome();
+              impl_->refresh_menu(*menu, selection_mode);
+            });
+      }
     }
   }
-  refresh();
+  {
+    QDR_PROFILE_SCOPE("Qt main menu initial chrome sync");
+    (void)impl_->refresh_global_chrome();
+  }
 }
 
 void QtMainMenu::refresh() {
+  QDR_PROFILE_SCOPE("Qt main menu refresh");
   if (!impl_ || impl_->menu_bar == nullptr) {
     return;
   }
   const ModelingSelectionMode selection_mode =
-      impl_->context.modeling.selection_summary().mode;
-  const std::vector<QuaderCommandDescriptor> commands =
-      impl_->context.editor.commands().available();
-  for (Impl::CommandAction &entry : impl_->command_actions) {
-    const QuaderCommandDescriptor *command =
-        find_command(commands, entry.command_id.string());
-    const std::string shortcut =
-        impl_->context.editor.commands().shortcut_for(entry.command_id);
-    entry.action->setText(action_text(impl_->context.localization,
-                                      entry.localization_key, entry.fallback,
-                                      shortcut));
-    entry.action->setEnabled(command != nullptr && command->enabled);
-    if (entry.checked) {
-      const QSignalBlocker blocker(entry.action);
-      entry.action->setChecked(entry.checked());
+      impl_->refresh_global_chrome();
+  for (const QPointer<QMenu> &menu : impl_->top_level_menus) {
+    if (menu != nullptr) {
+      impl_->refresh_menu(*menu.data(), selection_mode);
     }
-  }
-  for (const Impl::SelectionModeAction &entry :
-       impl_->selection_mode_actions) {
-    const bool visible =
-        (entry.modes & selection_mode_bit(selection_mode)) != 0;
-    if (entry.action->isVisible() != visible) {
-      entry.action->setVisible(visible);
-    }
-  }
-  for (const Impl::BoolSettingAction &entry :
-       impl_->bool_setting_actions) {
-    const QSignalBlocker blocker(entry.action);
-    entry.action->setChecked(
-        impl_->context.viewport_settings.bool_value(entry.setting));
-  }
-  for (const Impl::LayoutAction &entry : impl_->layout_actions) {
-    const QSignalBlocker blocker(entry.action);
-    const std::string shortcut =
-        entry.command_id.has_value()
-            ? impl_->context.editor.commands().shortcut_for(*entry.command_id)
-            : std::string{};
-    entry.action->setText(action_text(
-        impl_->context.localization, layout_localization_key(entry.layout),
-        viewport_layout_label(entry.layout), shortcut));
-    entry.action->setChecked(impl_->context.editor.viewports().layout() ==
-                             entry.layout);
-  }
-  for (const Impl::PanelAction &entry : impl_->panel_actions) {
-    const QSignalBlocker blocker(entry.action);
-    entry.action->setChecked(impl_->context.panel_visible
-                                 ? impl_->context.panel_visible(entry.panel)
-                                 : false);
-  }
-  if (impl_->selection_toolbar_action != nullptr) {
-    const QSignalBlocker blocker(impl_->selection_toolbar_action);
-    impl_->selection_toolbar_action->setText(qtext(
-        impl_->context.localization, "ui.toolbar.selection.title",
-        "Selection"));
-    impl_->selection_toolbar_action->setChecked(
-        impl_->context.selection_toolbar_visible
-            ? impl_->context.selection_toolbar_visible()
-            : false);
-  }
-  if (impl_->tool_toolbar_action != nullptr) {
-    const QSignalBlocker blocker(impl_->tool_toolbar_action);
-    impl_->tool_toolbar_action->setText(qtext(
-        impl_->context.localization, "ui.toolbar.tools.title", "Tools"));
-    impl_->tool_toolbar_action->setChecked(
-        impl_->context.tool_toolbar_visible
-            ? impl_->context.tool_toolbar_visible()
-            : false);
-  }
-  if (impl_->snapping_toolbar_action != nullptr) {
-    const QSignalBlocker blocker(impl_->snapping_toolbar_action);
-    impl_->snapping_toolbar_action->setText(qtext(
-        impl_->context.localization, "ui.toolbar.snapping.title",
-        "Snapping"));
-    impl_->snapping_toolbar_action->setChecked(
-        impl_->context.snapping_toolbar_visible
-            ? impl_->context.snapping_toolbar_visible()
-            : false);
-  }
-  if (impl_->viewport_display_toolbar_action != nullptr) {
-    const QSignalBlocker blocker(impl_->viewport_display_toolbar_action);
-    impl_->viewport_display_toolbar_action->setText(qtext(
-        impl_->context.localization, "ui.toolbar.viewport_display.title",
-        "Viewport Display"));
-    impl_->viewport_display_toolbar_action->setChecked(
-        impl_->context.viewport_display_toolbar_visible
-            ? impl_->context.viewport_display_toolbar_visible()
-            : false);
-  }
-  const std::string active_tool =
-      impl_->context.editor.tools().active_tool();
-  for (const Impl::ToolAction &entry : impl_->tool_actions) {
-    const QSignalBlocker blocker(entry.action);
-    const std::string command_id =
-        impl_->context.editor.commands().command_id_for_tool_activation(
-            entry.tool_id);
-    const QuaderCommandDescriptor *command = find_command(commands, command_id);
-    const std::string shortcut =
-        impl_->context.editor.commands().shortcut_for(command_id);
-    entry.action->setText(action_text(impl_->context.localization,
-                                      entry.localization_key, entry.fallback,
-                                      shortcut));
-    entry.action->setChecked(active_tool == viewport_tool_id(entry.tool));
-    entry.action->setEnabled(command != nullptr && command->enabled);
-  }
-  if (impl_->navigation_gizmo_action != nullptr) {
-    const QSignalBlocker blocker(impl_->navigation_gizmo_action);
-    impl_->navigation_gizmo_action->setChecked(
-        impl_->context.editor.preferences().navigation_gizmo_visible());
-  }
-  if (impl_->material_browser_action != nullptr) {
-    impl_->material_browser_action->setText(qtext(
-        impl_->context.localization, "ui.menu.view.material_browser",
-        "Material Browser"));
-    impl_->material_browser_action->setEnabled(
-        impl_->context.material_browser_available
-            ? impl_->context.material_browser_available()
-            : false);
-  }
-  if (impl_->align_menu != nullptr) {
-    impl_->align_menu->menuAction()->setVisible(
-        selection_mode == ModelingSelectionMode::Object);
   }
 }
 

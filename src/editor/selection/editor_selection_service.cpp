@@ -30,6 +30,24 @@ bool has_scene_only_selection(const SceneDocument &scene,
   });
 }
 
+bool same_selection_summary(const ModelingSelectionSummary &left,
+                            const ModelingSelectionSummary &right) {
+  return left.mode == right.mode &&
+         left.has_selection == right.has_selection &&
+         left.active_kind == right.active_kind &&
+         left.active_object_id == right.active_object_id &&
+         left.active_vertex_id == right.active_vertex_id &&
+         left.active_edge_a == right.active_edge_a &&
+         left.active_edge_b == right.active_edge_b &&
+         left.active_face_id == right.active_face_id &&
+         left.selected_object_count == right.selected_object_count &&
+         left.selected_vertex_count == right.selected_vertex_count &&
+         left.selected_edge_count == right.selected_edge_count &&
+         left.selected_face_count == right.selected_face_count &&
+         left.content_revision == right.content_revision &&
+         left.selection_revision == right.selection_revision;
+}
+
 DocumentCommandResult
 merge_modeling_selection_change(DocumentCommandResult result,
                                 const ModelingSelectionSummary &before,
@@ -93,23 +111,55 @@ EditorSelectionTarget EditorSelectionService::target() const {
 }
 
 ModelingSelectionSummary EditorSelectionService::summary() const {
-  const ModelingSelectionSummary current = modeling_.selection_summary();
-  const std::vector<EntityId> selected = scene_.selected_entities();
-  if (!selected.empty() && has_scene_only_selection(scene_, selected)) {
-    return scene_summary_for(current.mode == ModelingSelectionMode::Group
-                                 ? ModelingSelectionMode::Group
-                                 : ModelingSelectionMode::Object);
+  const std::uint64_t scene_revision = scene_.revision();
+  const std::uint64_t modeling_content_revision =
+      modeling_.content_revision();
+  const std::uint64_t modeling_selection_revision =
+      modeling_.selection_revision();
+  const bool preview_active = modeling_.can_cancel_active_preview_for_undo();
+  if (summary_cache_valid_ && !preview_active &&
+      !summary_cache_preview_active_ &&
+      summary_cache_scene_revision_ == scene_revision &&
+      summary_cache_modeling_content_revision_ == modeling_content_revision &&
+      summary_cache_modeling_selection_revision_ ==
+          modeling_selection_revision) {
+    return summary_cache_resolved_;
   }
-  if (current.has_selection &&
-      current.active_object_id != kInvalidModelingObjectId) {
+
+  const ModelingSelectionSummary current = modeling_.selection_summary();
+  if (summary_cache_valid_ &&
+      summary_cache_scene_revision_ == scene_revision &&
+      same_selection_summary(summary_cache_modeling_, current)) {
+    return summary_cache_resolved_;
+  }
+
+  const std::vector<EntityId> selected = scene_.selected_entities();
+  ModelingSelectionSummary resolved = current;
+  if (!selected.empty() && has_scene_only_selection(scene_, selected)) {
+    resolved = make_scene_selection_summary(
+        scene_,
+        current.mode == ModelingSelectionMode::Group
+            ? ModelingSelectionMode::Group
+            : ModelingSelectionMode::Object,
+        current.content_revision);
+  } else if (current.has_selection &&
+             current.active_object_id != kInvalidModelingObjectId) {
     const std::optional<EntityId> active_entity =
         modeling_.entity_for_modeling_object(current.active_object_id);
     if (active_entity.has_value() &&
         scene_.is_effectively_locked(*active_entity)) {
-      return scene_summary_for(current.mode);
+      resolved = make_scene_selection_summary(scene_, current.mode,
+                                              current.content_revision);
     }
   }
-  return current;
+  summary_cache_scene_revision_ = scene_revision;
+  summary_cache_preview_active_ = preview_active;
+  summary_cache_modeling_content_revision_ = modeling_content_revision;
+  summary_cache_modeling_selection_revision_ = modeling_selection_revision;
+  summary_cache_modeling_ = current;
+  summary_cache_resolved_ = resolved;
+  summary_cache_valid_ = true;
+  return resolved;
 }
 
 ModelingHoverSummary EditorSelectionService::hover_summary() const {
@@ -450,6 +500,7 @@ ModelingCommandResult EditorSelectionService::shrink() {
 
 EditorSelectionBoxBaseline
 EditorSelectionService::capture_box_selection_baseline() const {
+  QDR_PROFILE_SCOPE("Box selection capture editor baseline");
   EditorSelectionBoxBaseline baseline;
   baseline.mode = modeling_.selection_mode();
   baseline.scene_selection = scene_.selected_entities();
@@ -490,30 +541,43 @@ EditorSelectionService::box_select(const ModelingBoxSelectRequest &request,
 ModelingSelectionSummary
 EditorSelectionService::box_select(const ModelingBoxSelectRequest &request,
                                    const EditorSelectionBoxBaseline *baseline) {
+  QDR_PROFILE_SCOPE("Editor box selection route");
   const ModelingSelectionMode selection_mode = modeling_.selection_mode();
   if (selection_mode_uses_scene_document(selection_mode)) {
+    const std::vector<EntityId> mesh_entities = [&]() {
+      QDR_PROFILE_SCOPE("Box selection collect scene object hits");
+      return modeling_.box_pick_object_entities(request);
+    }();
     std::vector<EntityId> entities;
-    for (const EntityId mesh_entity :
-         modeling_.box_pick_object_entities(request)) {
-      const EntityId entity = selection_mode == ModelingSelectionMode::Group
-                                  ? nearest_group_ancestor(mesh_entity)
-                                  : mesh_entity;
-      if (entity != kInvalidEntityId &&
-          std::find(entities.begin(), entities.end(), entity) ==
-              entities.end()) {
-        entities.push_back(entity);
+    {
+      QDR_PROFILE_SCOPE("Box selection map group or object targets");
+      for (const EntityId mesh_entity : mesh_entities) {
+        const EntityId entity = selection_mode == ModelingSelectionMode::Group
+                                    ? nearest_group_ancestor(mesh_entity)
+                                    : mesh_entity;
+        if (entity != kInvalidEntityId &&
+            std::find(entities.begin(), entities.end(), entity) ==
+                entities.end()) {
+          entities.push_back(entity);
+        }
       }
     }
-    return scene_box_selection(entities, selection_mode, request.edit,
-                               baseline);
+    {
+      QDR_PROFILE_SCOPE("Box selection publish scene selection");
+      return scene_box_selection(entities, selection_mode, request.edit,
+                                 baseline);
+    }
   }
 
-  if (baseline != nullptr && baseline->modeling_selection.has_value() &&
-      baseline->modeling_selection->valid() &&
-      baseline->mode == modeling_.selection_mode()) {
-    return modeling_.box_select(request, *baseline->modeling_selection);
+  {
+    QDR_PROFILE_SCOPE("Box selection publish modeling selection");
+    if (baseline != nullptr && baseline->modeling_selection.has_value() &&
+        baseline->modeling_selection->valid() &&
+        baseline->mode == modeling_.selection_mode()) {
+      return modeling_.box_select(request, *baseline->modeling_selection);
+    }
+    return modeling_.box_select(request);
   }
-  return modeling_.box_select(request);
 }
 
 ModelingCommandResult
@@ -663,6 +727,7 @@ ModelingSelectionSummary EditorSelectionService::scene_pick_selection(
 ModelingSelectionSummary EditorSelectionService::scene_box_selection(
     std::span<const EntityId> target_entities, ModelingSelectionMode mode,
     ModelingSelectionEdit edit, const EditorSelectionBoxBaseline *baseline) {
+  QDR_PROFILE_SCOPE("Box selection apply scene state");
   const std::vector<EntityId> previous_selected =
       (baseline != nullptr && baseline->mode == mode)
           ? baseline->scene_selection
@@ -685,6 +750,7 @@ ModelingSelectionSummary EditorSelectionService::scene_box_selection(
                                    selectable, to_scene_selection_edit(edit));
   if (resolved.selected != scene_.selected_entities() ||
       resolved.active != scene_.primary_selection()) {
+    QDR_PROFILE_SCOPE("Box selection commit scene selection");
     (void)set_scene_selection(
         std::span<const EntityId>(resolved.selected.data(),
                                   resolved.selected.size()),

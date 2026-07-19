@@ -7,6 +7,7 @@
 #include "editor/transform/mesh_arrangement_service.hpp"
 
 #include "assets/asset_registry.hpp"
+#include "diagnostics/profile.hpp"
 #include "editor/commands/document/document_command_edits.hpp"
 #include "editor/commands/document_command_service.hpp"
 #include "math/glm_bridge.hpp"
@@ -140,15 +141,19 @@ ArrangementSelection
 collect_arrangement_selection(const SceneDocument &scene,
                               const AssetRegistry &assets,
                               MeshArrangementSelectionContext context) {
+  QDR_PROFILE_SCOPE("Mesh arrangement collect selection");
   if (!context.object_mode) {
     return {.message = "Mesh arrangement only works in object mode."};
   }
 
   std::unordered_set<EntityId> selected_meshes;
-  for (const EntityId entity : scene.selected_entities()) {
-    if (scene.modeling_object(entity) != nullptr &&
-        scene.mesh(entity) != nullptr) {
-      selected_meshes.insert(entity);
+  {
+    QDR_PROFILE_SCOPE("Mesh arrangement collect selected meshes");
+    for (const EntityId entity : scene.selected_entities()) {
+      if (scene.modeling_object(entity) != nullptr &&
+          scene.mesh(entity) != nullptr) {
+        selected_meshes.insert(entity);
+      }
     }
   }
   if (selected_meshes.empty()) {
@@ -178,8 +183,11 @@ collect_arrangement_selection(const SceneDocument &scene,
       continue;
     }
     const TransformComponent *transform = scene.transform(entity);
-    const std::optional<SceneBounds> bounds =
-        entity_world_bounds(scene, assets, entity);
+    std::optional<SceneBounds> bounds;
+    {
+      QDR_PROFILE_SCOPE("Mesh arrangement entity world bounds");
+      bounds = entity_world_bounds(scene, assets, entity);
+    }
     if (transform == nullptr || !bounds.has_value() || !valid_bounds(*bounds)) {
       return {.message =
                   "Every arranged mesh must be visible and have valid bounds."};
@@ -198,6 +206,50 @@ collect_arrangement_selection(const SceneDocument &scene,
   }
   selection.ok = true;
   return selection;
+}
+
+MeshArrangementAvailability collect_arrangement_availability(
+    const SceneDocument &scene, const AssetRegistry &assets,
+    MeshArrangementSelectionContext context) {
+  QDR_PROFILE_SCOPE("Mesh arrangement availability preflight");
+  if (!context.object_mode) {
+    return {};
+  }
+
+  std::unordered_set<EntityId> selected_meshes;
+  for (const EntityId entity : scene.selected_entities()) {
+    const MeshComponent *mesh_component = scene.mesh(entity);
+    if (scene.modeling_object(entity) == nullptr || mesh_component == nullptr) {
+      continue;
+    }
+    const MeshAsset *mesh = assets.mesh(mesh_component->mesh);
+    if (scene.is_effectively_locked(entity) ||
+        !scene.is_effectively_visible(entity) ||
+        scene.transform(entity) == nullptr || mesh == nullptr ||
+        mesh->geometry().vertices.empty()) {
+      return {};
+    }
+    selected_meshes.insert(entity);
+  }
+  if (selected_meshes.empty()) {
+    return {};
+  }
+
+  std::size_t root_count = 0u;
+  for (const EntityId entity : selected_meshes) {
+    if (!has_selected_mesh_ancestor(scene, entity, selected_meshes)) {
+      ++root_count;
+    }
+  }
+  const EntityId active_root =
+      context.active_mesh != kInvalidEntityId &&
+              selected_meshes.contains(context.active_mesh)
+          ? selected_mesh_root(scene, context.active_mesh, selected_meshes)
+          : kInvalidEntityId;
+  return {
+      .can_align = root_count >= 2u && active_root != kInvalidEntityId,
+      .can_distribute = root_count >= 3u,
+  };
 }
 
 std::optional<DocumentTransformEdit>
@@ -241,16 +293,18 @@ MeshArrangementService::MeshArrangementService(
       document_commands_(document_commands) {}
 
 bool MeshArrangementService::can_align_selected_meshes() const {
-  const ArrangementSelection selection =
-      collect_arrangement_selection(scene_, assets_, selection_context_);
-  return selection.ok && selection.roots.size() >= 2u &&
-         find_target(selection, selection.active_root) != nullptr;
+  return availability().can_align;
 }
 
 bool MeshArrangementService::can_distribute_selected_meshes() const {
-  const ArrangementSelection selection =
-      collect_arrangement_selection(scene_, assets_, selection_context_);
-  return selection.ok && selection.roots.size() >= 3u;
+  return availability().can_distribute;
+}
+
+MeshArrangementAvailability MeshArrangementService::availability() const {
+  // UI command predicates only need a cheap structural preflight. The command
+  // path below still computes and validates exact transformed geometry bounds
+  // immediately before applying edits.
+  return collect_arrangement_availability(scene_, assets_, selection_context_);
 }
 
 DocumentCommandResult

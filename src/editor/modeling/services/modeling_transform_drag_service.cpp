@@ -224,6 +224,19 @@ bool transform_drag_can_use_vertex_snap(
          transform_drag_axis_supports_vertex_snap(drag.axis);
 }
 
+bool transform_drag_has_stationary_vertex_snap_target(
+    const quader_editor_core::EditorSession &session) {
+  if (session.selection_mode() !=
+      quader_editor_core::SelectionMode::Object) {
+    return true;
+  }
+  return std::any_of(
+      session.objects().begin(), session.objects().end(),
+      [](const quader_editor_core::PolygonObject &object) {
+        return !object.selected;
+      });
+}
+
 quader_editor_core::ViewportInteractionTool
 to_runtime(ModelingTransformTool tool) {
   switch (tool) {
@@ -947,14 +960,17 @@ ModelingTransformDragService::apply_transform_drag_preview(
   const bool portable_modeling_preview =
       context.port.portable_modeling_preview_active();
   if (request.vertex_snap_radius > 0.0 &&
-      transform_drag_can_use_vertex_snap(drag_before_update)) {
+      transform_drag_can_use_vertex_snap(drag_before_update) &&
+      transform_drag_has_stationary_vertex_snap_target(context.session)) {
     QDR_PROFILE_SCOPE("Modeling transform drag build snap caches");
     input.vertex_snap_enabled = true;
     input.vertex_snap_radius = request.vertex_snap_radius;
     input.snap_object_bounds = context.port.cached_pick_object_bounds();
-    input.snap_face_geometry = context.port.cached_pick_face_geometry();
-    input.snap_objects =
-        &context.port.cached_scene_transformed_objects_for_picking();
+    input.snap_face_geometry =
+        context.port.cached_local_pick_face_geometry();
+    input.snap_object_transforms =
+        context.port.cached_local_picking_transforms();
+    input.snap_objects = &context.port.cached_local_objects_for_picking();
   }
 
   const quader_editor_core::CommandResult result = [&]() {

@@ -556,11 +556,28 @@ public:
   [[nodiscard]] std::vector<QuaderModelingObjectRecord> objects() const;
 
 private:
+  struct MeshArrangementAvailabilityCache final {
+    const void *scene_identity = nullptr;
+    std::uint64_t scene_session_id = 0;
+    std::uint64_t scene_content_revision = 0;
+    std::uint64_t scene_selection_revision = 0;
+    std::uint64_t asset_revision = 0;
+    std::uint64_t modeling_content_revision = 0;
+    std::uint64_t modeling_selection_revision = 0;
+    std::uint64_t modeling_object_map_revision = 0;
+    bool can_align = false;
+    bool can_distribute = false;
+    bool valid = false;
+  };
+
+  [[nodiscard]] const MeshArrangementAvailabilityCache &
+  mesh_arrangement_availability() const;
   [[nodiscard]] QuaderModelingObjectRef
   ref_from_record(const QuaderModelingObjectRecord &record) const;
 
   QuaderApiSession session_;
   QuaderApiMutationRunner &mutations_;
+  mutable MeshArrangementAvailabilityCache mesh_arrangement_availability_;
 };
 
 } // namespace quader

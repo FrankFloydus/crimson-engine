@@ -856,6 +856,70 @@ RenderMaterialAssetSnapshot build_render_material_asset_snapshot(
 
 } // namespace
 
+bool try_refresh_render_scene_snapshot_selection(
+    RenderSceneSnapshot &snapshot, const SceneDocument &document,
+    const AssetRegistry &assets, std::uint64_t frame_index,
+    RenderSceneBindingKey scene_binding,
+    std::uint64_t project_material_revision,
+    RenderInstanceEditScope instance_edit_scope,
+    const ViewportLocalVisibilitySnapshot *local_visibility) {
+  if (snapshot.scene_binding != scene_binding ||
+      snapshot.asset_revision != assets.revision() ||
+      snapshot.project_material_revision != project_material_revision ||
+      snapshot.local_visibility_revision !=
+          local_visibility_revision(local_visibility) ||
+      snapshot.instance_edit_scope != instance_edit_scope ||
+      snapshot.visibility_revision != document.visibility_revision() ||
+      snapshot.transform_revision != document.transform_revision() ||
+      snapshot.mesh_binding_revision != document.mesh_binding_revision() ||
+      snapshot.render_component_revision !=
+          document.render_component_revision() ||
+      snapshot.selection_revision == document.selection_revision()) {
+    return false;
+  }
+
+  QDR_PROFILE_SCOPE("Render scene selection-only snapshot refresh");
+  const std::uint64_t previous_scene_revision = snapshot.scene_revision;
+  const std::uint64_t previous_selection_revision =
+      snapshot.selection_revision;
+
+  snapshot.frame_index = frame_index;
+  snapshot.scene_revision = document.revision();
+  snapshot.selection_revision = document.selection_revision();
+  snapshot.dirty = {
+      .scene_changed = previous_scene_revision != snapshot.scene_revision,
+      .selection_changed =
+          previous_selection_revision != snapshot.selection_revision,
+      .visibility_changed = false,
+      .local_visibility_changed = false,
+      .transforms_changed = false,
+      .mesh_bindings_changed = false,
+      .render_components_changed = false,
+      .assets_changed = false,
+      .project_materials_changed = false,
+  };
+  snapshot.reused_previous_records = false;
+
+  for (RenderSceneMeshRecord &record : snapshot.meshes) {
+    record.mesh_dirty = false;
+    record.material_dirty = false;
+    record.transform_dirty = false;
+    record.binding_dirty = false;
+  }
+  for (RenderSceneInstancePrimitiveRecord &record :
+       snapshot.instance_primitives) {
+    for (RenderSceneInstanceOccurrenceRecord &occurrence :
+         record.occurrences) {
+      occurrence.selected = selected(document, occurrence.entity_id);
+    }
+  }
+  for (RenderSceneLightRecord &record : snapshot.lights) {
+    record.light_dirty = false;
+    record.transform_dirty = false;
+  }
+  return true;
+}
+
 bool try_refresh_render_scene_snapshot_transforms(
     RenderSceneSnapshot &snapshot, const SceneDocument &document,
     const AssetRegistry &assets, std::uint64_t frame_index,

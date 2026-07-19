@@ -56,6 +56,7 @@ struct ModelingSdkProjectionStats {
   std::uint64_t asset_publication_count = 0;
   std::uint64_t scene_publication_count = 0;
   std::uint64_t preview_publication_count = 0;
+  std::uint64_t selection_summary_build_count = 0;
 };
 
 /// Describes one host-decided material slot fact to publish to SDK topology.
@@ -200,6 +201,9 @@ public:
   /** Builds a short-lived native view for host-only picking and overlays. */
   [[nodiscard]] quader_editor_core::EditorSession
   native_selection_projection() const;
+  /** Borrows the revision-cached native view for read-only host queries. */
+  [[nodiscard]] const quader_editor_core::EditorSession &
+  native_selection_projection_view() const;
   [[nodiscard]] std::optional<EntityId> pick_object_entity(
       const ModelingPickSelectRequest &request,
       std::optional<EntityId> competing_native = std::nullopt) const;

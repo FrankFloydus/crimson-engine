@@ -14,6 +14,7 @@
 #include "editor/selection/scene_selection_application.hpp"
 #include "scene/components.hpp"
 
+#include <cstdint>
 #include <functional>
 #include <optional>
 #include <span>
@@ -174,6 +175,13 @@ private:
   SceneSelectionScopeFilter scene_scope_filter_;
   SceneSelectionHistorySuppressionProvider
       scene_selection_history_suppression_provider_;
+  mutable bool summary_cache_valid_ = false;
+  mutable bool summary_cache_preview_active_ = false;
+  mutable std::uint64_t summary_cache_scene_revision_ = 0;
+  mutable std::uint64_t summary_cache_modeling_content_revision_ = 0;
+  mutable std::uint64_t summary_cache_modeling_selection_revision_ = 0;
+  mutable ModelingSelectionSummary summary_cache_modeling_;
+  mutable ModelingSelectionSummary summary_cache_resolved_;
 };
 
 } // namespace quader

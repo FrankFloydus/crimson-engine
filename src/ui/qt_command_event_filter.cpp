@@ -9,6 +9,7 @@
 #include "api/quader_command_ids.hpp"
 #include "api/quader_editor_api.hpp"
 #include "core/logger.hpp"
+#include "diagnostics/profile.hpp"
 #include "ui/qt_input_adapter.hpp"
 #include "ui/qt_viewport_surface.hpp"
 
@@ -310,6 +311,7 @@ bool QtCommandEventFilter::eventFilter(QObject *watched, QEvent *event) {
     reset_pending_chord();
     break;
   case QEvent::KeyPress: {
+    QDR_PROFILE_SCOPE("Qt command key event dispatch");
     if (modal_or_popup_owns_input()) {
       // QColorDialog, QMessageBox, QMenu and other transient owners must keep
       // Delete, tool, undo and chord keys inside their own interaction scope.
@@ -342,9 +344,11 @@ bool QtCommandEventFilter::eventFilter(QObject *watched, QEvent *event) {
         is_primitive_tool(state.active_tool) &&
         belongs_to_tool_settings_window(focus_widget) &&
         (text_input_active || focused_combo_box(focus_widget) != nullptr);
-    QuaderViewportKeybindingDispatch dispatch =
-        editor_->commands().dispatch_viewport_input_binding(
-            *chord, state, false, text_input_active);
+    QuaderViewportKeybindingDispatch dispatch = [&]() {
+      QDR_PROFILE_SCOPE("Qt command resolve keybinding");
+      return editor_->commands().dispatch_viewport_input_binding(
+          *chord, state, false, text_input_active);
+    }();
     bool explicit_tool_settings_dispatch =
         primitive_tool_settings_editor_active &&
         dispatch.kind == QuaderViewportKeybindingDispatch::Kind::Command &&
@@ -352,9 +356,11 @@ bool QtCommandEventFilter::eventFilter(QObject *watched, QEvent *event) {
     if (dispatch.kind ==
             QuaderViewportKeybindingDispatch::Kind::NoMatch &&
         primitive_tool_settings_editor_active) {
-      QuaderViewportKeybindingDispatch tool_settings_dispatch =
-          editor_->commands().dispatch_viewport_input_binding(
-              *chord, state, true, false);
+      QuaderViewportKeybindingDispatch tool_settings_dispatch = [&]() {
+        QDR_PROFILE_SCOPE("Qt command resolve tool-settings keybinding");
+        return editor_->commands().dispatch_viewport_input_binding(
+            *chord, state, true, false);
+      }();
       if (tool_settings_dispatch.kind ==
               QuaderViewportKeybindingDispatch::Kind::Command &&
           is_primitive_finalize_command(
@@ -400,8 +406,10 @@ bool QtCommandEventFilter::eventFilter(QObject *watched, QEvent *event) {
       event->accept();
       return true;
     case QuaderViewportKeybindingDispatch::Kind::Command: {
-      const QuaderApiVoidResult result =
-          editor_->commands().execute(dispatch.command_id);
+      const QuaderApiVoidResult result = [&]() {
+        QDR_PROFILE_SCOPE("Qt command execute keybinding");
+        return editor_->commands().execute(dispatch.command_id);
+      }();
       if (!result.ok) {
         LOG_ERROR("Qt keybinding command failed: {}",
                   result.message.empty() ? "Command failed." : result.message);

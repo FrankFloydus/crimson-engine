@@ -7,6 +7,7 @@
 #pragma once
 
 #include "api/quader_keybinding_types.hpp"
+#include "diagnostics/profile.hpp"
 #include "editor/input/quader_input_binding.hpp"
 
 #include <algorithm>
@@ -766,6 +767,7 @@ public:
 
   void clear_user_keybindings() {
     user_rules_.clear();
+    invalidate_effective_rule_cache();
     pending_sequence_.clear();
   }
 
@@ -789,8 +791,13 @@ public:
 
   bool add_default_keybinding(std::string target_id, std::string shortcut,
                               std::string when = {}, int weight = 0) {
-    return add_rule(default_rules_, std::move(target_id), std::move(shortcut),
-                    std::move(when), "default", weight, false);
+    const bool accepted =
+        add_rule(default_rules_, std::move(target_id), std::move(shortcut),
+                 std::move(when), "default", weight, false);
+    if (accepted) {
+      invalidate_effective_rule_cache();
+    }
+    return accepted;
   }
 
   /** Replaces the compiled mapping for one internal target. */
@@ -800,6 +807,7 @@ public:
       return false;
     }
     erase_rules_for(default_rules_, target_id);
+    invalidate_effective_rule_cache();
     if (shortcut.empty()) {
       register_target(std::move(target_id));
       return true;
@@ -887,6 +895,7 @@ public:
       }
     }
     user_rules_ = std::move(normalized);
+    invalidate_effective_rule_cache();
     next_order_ = candidate_order;
     pending_sequence_.clear();
     return {.ok = true, .changed = true, .message = "Keybindings updated."};
@@ -993,17 +1002,16 @@ public:
   }
 
   [[nodiscard]] std::string shortcut_for(std::string_view target_id) const {
-    const std::vector<QuaderKeybindingRule> rules = effective_rules();
-    const QuaderKeybindingRule *best = nullptr;
-    for (const QuaderKeybindingRule &rule : rules) {
-      if (rule.target_id != target_id) {
-        continue;
-      }
-      if (best == nullptr || rule_precedes(*best, rule)) {
-        best = &rule;
-      }
+    QDR_PROFILE_SCOPE("Quader keybinding shortcut lookup");
+    ensure_effective_rule_cache();
+    {
+      QDR_PROFILE_SCOPE("Quader keybinding shortcut cache lookup");
+      const auto found =
+          effective_rule_index_by_target_.find(std::string(target_id));
+      return found == effective_rule_index_by_target_.end()
+                 ? std::string{}
+                 : effective_rules_cache_[found->second].shortcut;
     }
-    return best == nullptr ? std::string{} : best->shortcut;
   }
 
     [[nodiscard]] std::vector<QuaderKeybindingRule> keybindings() const {
@@ -1179,6 +1187,7 @@ public:
       }
 
       user_rules_ = std::move(loaded);
+      invalidate_effective_rule_cache();
       pending_sequence_.clear();
       return std::nullopt;
     }
@@ -1294,18 +1303,13 @@ private:
 
     [[nodiscard]] std::optional<QuaderKeybindingRule>
     effective_rule_for_target(std::string_view target_id) const {
-      const std::vector<QuaderKeybindingRule> rules = effective_rules();
-      const QuaderKeybindingRule *best = nullptr;
-      for (const QuaderKeybindingRule &rule : rules) {
-        if (rule.target_id != target_id) {
-          continue;
-        }
-        if (best == nullptr || rule_precedes(*best, rule)) {
-          best = &rule;
-        }
-      }
-      return best == nullptr ? std::nullopt
-                             : std::optional<QuaderKeybindingRule>{*best};
+      ensure_effective_rule_cache();
+      const auto found =
+          effective_rule_index_by_target_.find(std::string(target_id));
+      return found == effective_rule_index_by_target_.end()
+                 ? std::nullopt
+                 : std::optional<QuaderKeybindingRule>{
+                       effective_rules_cache_[found->second]};
     }
 
     static void erase_rules_for(std::vector<QuaderKeybindingRule> &rules,
@@ -1347,25 +1351,54 @@ private:
       return true;
     }
 
-    [[nodiscard]] std::vector<QuaderKeybindingRule> effective_rules() const {
+    void invalidate_effective_rule_cache() {
+      effective_rule_cache_valid_ = false;
+    }
+
+    void ensure_effective_rule_cache() const {
+      if (effective_rule_cache_valid_) {
+        return;
+      }
+
+      QDR_PROFILE_SCOPE("Quader keybinding effective rule cache rebuild");
       std::unordered_set<std::string> shadowed_targets;
       for (const QuaderKeybindingRule &rule : user_rules_) {
         shadowed_targets.insert(rule.target_id);
       }
 
-      std::vector<QuaderKeybindingRule> result;
-      result.reserve(default_rules_.size() + user_rules_.size());
+      effective_rules_cache_.clear();
+      effective_rules_cache_.reserve(default_rules_.size() +
+                                     user_rules_.size());
       for (const QuaderKeybindingRule &rule : default_rules_) {
         if (!shadowed_targets.contains(rule.target_id)) {
-          result.push_back(rule);
+          effective_rules_cache_.push_back(rule);
         }
       }
       for (const QuaderKeybindingRule &rule : user_rules_) {
         if (!rule.removal) {
-          result.push_back(rule);
+          effective_rules_cache_.push_back(rule);
         }
       }
-      return result;
+
+      effective_rule_index_by_target_.clear();
+      effective_rule_index_by_target_.reserve(effective_rules_cache_.size());
+      for (std::size_t index = 0u; index < effective_rules_cache_.size();
+           ++index) {
+        const QuaderKeybindingRule &rule = effective_rules_cache_[index];
+        const auto [found, inserted] =
+            effective_rule_index_by_target_.try_emplace(rule.target_id, index);
+        if (!inserted &&
+            rule_precedes(effective_rules_cache_[found->second], rule)) {
+          found->second = index;
+        }
+      }
+      effective_rule_cache_valid_ = true;
+    }
+
+    [[nodiscard]] std::vector<QuaderKeybindingRule> effective_rules() const {
+      QDR_PROFILE_SCOPE("Quader keybinding effective rules");
+      ensure_effective_rule_cache();
+      return effective_rules_cache_;
     }
 
     [[nodiscard]] static bool rule_precedes(const QuaderKeybindingRule &left,
@@ -1381,6 +1414,10 @@ private:
     std::unordered_set<std::string> known_targets_;
     std::vector<QuaderKeybindingRule> default_rules_;
     std::vector<QuaderKeybindingRule> user_rules_;
+    mutable std::vector<QuaderKeybindingRule> effective_rules_cache_;
+    mutable std::unordered_map<std::string, std::size_t>
+        effective_rule_index_by_target_;
+    mutable bool effective_rule_cache_valid_ = false;
     std::vector<QuaderInputChord> pending_sequence_;
     std::size_t next_order_ = 1u;
 };

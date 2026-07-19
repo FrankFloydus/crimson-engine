@@ -69,6 +69,7 @@ bool OverlayRenderableCache::set_overlay_frame(std::size_t viewport_index,
   }
 
   slot.frame = std::move(frame);
+  slot.has_frame = true;
   slot.frame_signature = signature;
   if (frame_changed) {
     slot.signatures = signatures;
@@ -86,6 +87,45 @@ bool OverlayRenderableCache::set_overlay_frame(std::size_t viewport_index,
 
   if (factory_ && factory_->initialized()) {
     rebuild_slot(slot, frame_changed || layer_changed);
+  }
+  return true;
+}
+
+bool OverlayRenderableCache::update_overlay_camera(
+    std::size_t viewport_index, std::uint8_t layer_mask,
+    ViewportOverlayCamera camera) {
+  QDR_PROFILE_FUNCTION();
+  if (viewport_index >= slots_.size()) {
+    return false;
+  }
+
+  OverlaySlot &slot = slots_[viewport_index];
+  if (!slot.has_frame) {
+    return false;
+  }
+  if (layer_mask == 0u) {
+    layer_mask = kViewportOverlayLayerMask;
+  }
+
+  camera = OverlayCameraProjector::sanitized_camera(camera);
+  const std::uint64_t camera_signature =
+      OverlayRenderableBuilder::camera_signature(camera);
+  const bool camera_changed = camera_signature != slot.camera_signature;
+  const bool layer_changed = layer_mask != slot.layer_mask;
+  if (!camera_changed && !layer_changed) {
+    return true;
+  }
+
+  slot.camera = camera;
+  slot.camera_signature = camera_signature;
+  slot.layer_mask = layer_mask;
+  if (layer_changed) {
+    for (OverlayProxyGroup &group : slot.proxy_groups) {
+      group.signature = 0;
+    }
+  }
+  if (factory_ && factory_->initialized()) {
+    rebuild_slot(slot, layer_changed);
   }
   return true;
 }
@@ -170,6 +210,7 @@ void OverlayRenderableCache::destroy_slot(OverlaySlot &slot) {
   slot.camera = {};
   slot.camera_signature = 0;
   slot.layer_mask = 0;
+  slot.has_frame = false;
 }
 
 void OverlayRenderableCache::destroy_group(OverlayProxyGroup &group) {

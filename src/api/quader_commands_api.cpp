@@ -861,11 +861,19 @@ QuaderCommandsApi::Impl::descriptor(std::string_view command_id) const {
 }
 
 std::vector<QuaderCommandDescriptor> QuaderCommandsApi::Impl::available() const {
-    std::vector<QuaderCommandDescriptor> commands = registry_.available();
-    for (QuaderCommandDescriptor& command : commands) {
+  QDR_PROFILE_FUNCTION();
+  std::vector<QuaderCommandDescriptor> commands;
+  {
+    QDR_PROFILE_SCOPE("Quader commands registry scan");
+    commands = registry_.available();
+  }
+  {
+    QDR_PROFILE_SCOPE("Quader commands shortcut enrichment");
+    for (QuaderCommandDescriptor &command : commands) {
       command.shortcut = shortcut_for(command.id);
     }
-    return commands;
+  }
+  return commands;
 }
 
 std::string QuaderCommandsApi::Impl::command_id_for_modeling_action(

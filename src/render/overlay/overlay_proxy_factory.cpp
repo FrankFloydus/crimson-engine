@@ -268,9 +268,9 @@ void update_canonical_quad_proxy_vertices(filament::Engine &engine,
                                           std::uint8_t layer_mask) {
   // OverlayLineMeshBuilder emits the same six indices for every four-vertex
   // line quad. proxy_can_update_mesh has already verified the kind and both
-  // counts, so the existing index payload is identical. Line order, clipping,
-  // depth, width and color remain encoded in the freshly uploaded vertices and
-  // material state.
+  // counts, so the existing index payload is identical. World endpoints and
+  // color remain encoded in the vertices; clipping, depth and width are shader
+  // state and built-in view uniforms.
   update_proxy_vertex_buffer(engine, proxy, mesh);
   update_proxy_layer_mask(engine, proxy, layer_mask);
 }
@@ -491,7 +491,6 @@ void OverlayProxyFactory::create_line_proxy(
     return;
   }
 
-  (void)batch.depth_bias;
   append_overlay_proxy(
       *engine_, *scene_, *overlay_line_material_, batch.mesh.vertices,
       batch.mesh.indices, OverlayRenderableProxyKind::Line, batch.state,
@@ -504,7 +503,15 @@ void OverlayProxyFactory::create_line_proxy(
                        sizeof(OverlayLineVertex))
             .attribute(filament::VertexAttribute::CUSTOM0, 0,
                        AttributeType::FLOAT4,
-                       offsetof(OverlayLineVertex, line_distance_pixels),
+                       offsetof(OverlayLineVertex, start),
+                       sizeof(OverlayLineVertex))
+            .attribute(filament::VertexAttribute::CUSTOM1, 0,
+                       AttributeType::FLOAT4,
+                       offsetof(OverlayLineVertex, end),
+                       sizeof(OverlayLineVertex))
+            .attribute(filament::VertexAttribute::CUSTOM2, 0,
+                       AttributeType::FLOAT4,
+                       offsetof(OverlayLineVertex, control),
                        sizeof(OverlayLineVertex))
             .attribute(
                 filament::VertexAttribute::COLOR, 0, AttributeType::UBYTE4,
@@ -515,6 +522,8 @@ void OverlayProxyFactory::create_line_proxy(
         configure_overlay_material(material, batch.state);
         material.setParameter("lineWidth", batch.width_pixels);
         material.setParameter("featherPixels", kOverlayLineFeatherPixels);
+        material.setParameter("nearPlane", batch.near_plane);
+        material.setParameter("depthBias", batch.depth_bias);
       });
 }
 
@@ -537,7 +546,15 @@ void OverlayProxyFactory::create_edit_wire_proxy(
                        sizeof(OverlayLineVertex))
             .attribute(filament::VertexAttribute::CUSTOM0, 0,
                        AttributeType::FLOAT4,
-                       offsetof(OverlayLineVertex, line_distance_pixels),
+                       offsetof(OverlayLineVertex, start),
+                       sizeof(OverlayLineVertex))
+            .attribute(filament::VertexAttribute::CUSTOM1, 0,
+                       AttributeType::FLOAT4,
+                       offsetof(OverlayLineVertex, end),
+                       sizeof(OverlayLineVertex))
+            .attribute(filament::VertexAttribute::CUSTOM2, 0,
+                       AttributeType::FLOAT4,
+                       offsetof(OverlayLineVertex, control),
                        sizeof(OverlayLineVertex))
             .attribute(
                 filament::VertexAttribute::COLOR, 0, AttributeType::UBYTE4,
@@ -548,6 +565,10 @@ void OverlayProxyFactory::create_edit_wire_proxy(
         configure_overlay_material(material, batch.state);
         material.setParameter("lineWidth", batch.width_pixels);
         material.setParameter("featherPixels", kOverlayLineFeatherPixels);
+        material.setParameter("nearPlane", batch.near_plane);
+        material.setParameter("farPlane", batch.far_plane);
+        material.setParameter("orthographicProjection",
+                              batch.orthographic_projection ? 1.0f : 0.0f);
       });
 }
 
@@ -638,6 +659,8 @@ void OverlayProxyFactory::update_line_proxy(OverlayRenderableProxy &proxy,
   proxy.material_instance->setParameter("lineWidth", batch.width_pixels);
   proxy.material_instance->setParameter("featherPixels",
                                         kOverlayLineFeatherPixels);
+  proxy.material_instance->setParameter("nearPlane", batch.near_plane);
+  proxy.material_instance->setParameter("depthBias", batch.depth_bias);
 }
 
 void OverlayProxyFactory::update_edit_wire_proxy(
@@ -649,6 +672,11 @@ void OverlayProxyFactory::update_edit_wire_proxy(
   proxy.material_instance->setParameter("lineWidth", batch.width_pixels);
   proxy.material_instance->setParameter("featherPixels",
                                         kOverlayLineFeatherPixels);
+  proxy.material_instance->setParameter("nearPlane", batch.near_plane);
+  proxy.material_instance->setParameter("farPlane", batch.far_plane);
+  proxy.material_instance->setParameter(
+      "orthographicProjection",
+      batch.orthographic_projection ? 1.0f : 0.0f);
 }
 
 void OverlayProxyFactory::update_point_proxy(OverlayRenderableProxy &proxy,

@@ -53,6 +53,9 @@ public:
     bool set_overlay_frame(std::size_t viewport_index, std::uint8_t layer_mask,
                            ViewportOverlayFrame frame,
                            ViewportOverlayCamera camera);
+    [[nodiscard]] bool
+    update_overlay_camera(std::size_t viewport_index, std::uint8_t layer_mask,
+                          ViewportOverlayCamera camera);
     void clear_slot(std::size_t viewport_index);
 
     OverlayRenderableCacheStats stats(std::size_t viewport_index) const;
@@ -77,6 +80,7 @@ public:
         ViewportOverlayCamera camera;
         std::uint64_t camera_signature = 0;
         std::uint8_t layer_mask = 0;
+        bool has_frame = false;
         std::array<OverlayProxyGroup, kViewportOverlayLayerCount> proxy_groups;
     };
 

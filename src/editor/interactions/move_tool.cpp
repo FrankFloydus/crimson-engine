@@ -215,7 +215,8 @@ std::optional<TransformSnapTarget> resolve_transform_vertex_snap_target(
 		snap_objects,
 		{ input.ray, options },
 		input.snap_object_bounds,
-		input.snap_face_geometry);
+		input.snap_face_geometry,
+		input.snap_object_transforms);
 	const SelectionMode selection_mode = session.selection_mode();
 	for (const PickHitRecord& hit : hits) {
           if (!hit.hit || hit.kind != quader_poly::ElementKind::Vertex ||

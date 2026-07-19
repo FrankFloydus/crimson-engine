@@ -2128,6 +2128,40 @@ TEST(ViewportOverlayStyleResolverTests,
   EXPECT_FLOAT_EQ(*frame.points[1].outline_growth_pixels, 3.0f);
 }
 
+TEST(ViewportOverlayStyleResolverTests,
+     StylesOnlyNewlyAppendedRecordsAfterCachedBase) {
+  ViewportSettings settings = ViewportSettings::defaults();
+  const std::uint64_t default_signature =
+      ViewportOverlayStyleResolver::style_signature(settings);
+  ViewportOverlayFrame frame;
+  frame.lines.push_back({
+      .layer = ViewportOverlayLayer::SourceWire,
+      .color = rgba8(255, 255, 255),
+      .style_role = ViewportOverlayStyleRole::SourceWire,
+  });
+  ViewportOverlayStyleResolver::apply(frame, settings);
+  const std::uint32_t cached_color = frame.lines.front().color;
+
+  const ViewportOverlayStyleRange appended{
+      .line_begin = frame.lines.size(),
+  };
+  frame.lines.push_back({
+      .layer = ViewportOverlayLayer::SourceWire,
+      .color = rgba8(255, 255, 255),
+      .style_role = ViewportOverlayStyleRole::SourceWire,
+  });
+  ASSERT_TRUE(settings.set_color(ViewportColorSettingId::SourceWire,
+                                 {1.0f, 0.0f, 0.0f, 1.0f}));
+  EXPECT_NE(ViewportOverlayStyleResolver::style_signature(settings),
+            default_signature);
+
+  ViewportOverlayStyleResolver::apply_from(frame, settings, {}, appended);
+
+  ASSERT_EQ(frame.lines.size(), 2u);
+  EXPECT_EQ(frame.lines[0].color, cached_color);
+  EXPECT_EQ(frame.lines[1].color, rgba8(255, 0, 0));
+}
+
 TEST(ViewportPersistentOverlayStyleSnapshotTests,
      UsesNarrowFaceAndWireSignaturesForCacheInvalidation) {
   const ViewportPersistentOverlayStyleSnapshot defaults =
@@ -3037,6 +3071,7 @@ TEST(ViewportPaneOverlayCacheTests,
       .asset_revision = 4u,
       .local_visibility_revision = 5u,
       .overlay_signature = 6u,
+      .style_signature = 7u,
       .selection_mode = ModelingSelectionMode::Object,
   };
   cache.update({}, key);
@@ -3062,6 +3097,11 @@ TEST(ViewportPaneOverlayCacheTests,
   EXPECT_TRUE(cache.needs_refresh(local_visibility_changed));
   cache.update({}, local_visibility_changed);
   EXPECT_FALSE(cache.needs_refresh(local_visibility_changed));
+
+  ViewportPaneOverlayCacheKey style_changed = local_visibility_changed;
+  ++style_changed.style_signature;
+  EXPECT_EQ(cache.refresh_reason(style_changed),
+            ViewportPaneOverlayCacheRefreshReason::StyleSignature);
 }
 
 

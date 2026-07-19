@@ -11,6 +11,7 @@
 #include "viewport/viewport_settings.hpp"
 
 #include <cstdint>
+#include <cstddef>
 #include <optional>
 #include <vector>
 
@@ -50,6 +51,13 @@ struct ViewportOverlayStyleContext {
   std::vector<ViewportOverlayStyleOverride> overrides;
 };
 
+/// Identifies the first newly appended record of each styled geometry kind.
+struct ViewportOverlayStyleRange {
+  std::size_t triangle_begin = 0u;
+  std::size_t line_begin = 0u;
+  std::size_t point_begin = 0u;
+};
+
 /**
  * Owns Viewport Overlay Style Resolver behavior within the render extraction and Filament resource layer.
  */
@@ -57,6 +65,8 @@ class ViewportOverlayStyleResolver {
 public:
     [[nodiscard]] static ViewportPersistentOverlayStyleSnapshot
     persistent_style_snapshot(const ViewportSettings &settings);
+    [[nodiscard]] static std::uint64_t
+    style_signature(const ViewportSettings &settings);
     static ViewportOverlayFrame resolve(
             ViewportOverlayFrame frame,
             const ViewportSettings& settings,
@@ -66,6 +76,11 @@ public:
             ViewportOverlayFrame& frame,
             const ViewportSettings& settings,
             const ViewportOverlayStyleContext& context);
+    static void apply_from(
+            ViewportOverlayFrame &frame,
+            const ViewportSettings &settings,
+            const ViewportOverlayStyleContext &context,
+            ViewportOverlayStyleRange range);
 
 private:
   static ViewportOverlayStyleRole

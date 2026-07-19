@@ -667,7 +667,10 @@ bool App::render_frame(const FrameTiming &frame_timing) {
   const auto frame_begin = std::chrono::steady_clock::now();
   rendering_frame_ = true;
 
-  ui_.refresh(frame_timing, render_system_.frame_performance_stats());
+  {
+    QDR_PROFILE_SCOPE("UI retained refresh");
+    ui_.refresh(frame_timing, render_system_.frame_performance_stats());
+  }
   const auto ui_refresh_end = std::chrono::steady_clock::now();
   const OpenSceneSession *active_scene = project_session_.active_scene();
   if (active_scene != nullptr) {

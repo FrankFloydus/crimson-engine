@@ -2404,6 +2404,19 @@ TEST(UiLayoutGuardrailTests,
   expect_contains(panel, "interaction_controller_.handle_native_tools(");
   expect_contains(panel,
                   "ViewportSceneProjection::point_light_pick_candidates(");
+  const std::size_t suppress_hover = panel.find("const bool suppress_hover_work");
+  const std::size_t billboard_candidates =
+      panel.find("ViewportSceneProjection::point_light_pick_candidates(");
+  ASSERT_NE(suppress_hover, std::string::npos);
+  ASSERT_NE(billboard_candidates, std::string::npos);
+  EXPECT_LT(suppress_hover, billboard_candidates);
+  expect_contains(panel, "!suppress_hover_work && active_viewport_settings()");
+  expect_contains(panel, "point_light_pick_cache_valid_");
+  expect_contains(panel, "point_light_pick_cached_scene_revision_");
+  expect_contains(panel,
+                  "point_light_pick_cached_local_visibility_revision_");
+  expect_contains(panel,
+                  "Viewport rebuild point light pick candidates");
   expect_contains(panel, "ViewportToolOverlayProjection::append_box(");
   expect_contains(panel, ".focus_optional_bounds(");
   expect_contains(panel, "qt_submit_viewport_render_frames(");

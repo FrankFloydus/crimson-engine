@@ -28,6 +28,7 @@
 #include "editor/tools/viewport_tool_ports.hpp"
 #include "editor/viewport/viewport_native_tool_interaction.hpp"
 #include "math/glm_bridge.hpp"
+#include "render/overlay/overlay_renderable_builder.hpp"
 #include "render/overlay/viewport_overlay_style_resolver.hpp"
 #include "render/render_layers.hpp"
 #include "render/scene_render_bridge.hpp"
@@ -129,6 +130,20 @@ bool same_pane_placements(const std::vector<ViewportPanePlacement> &left,
     }
   }
   return true;
+}
+
+void append_overlay_frame(ViewportOverlayFrame &target,
+                          const ViewportOverlayFrame &source) {
+  target.lines.insert(target.lines.end(), source.lines.begin(),
+                      source.lines.end());
+  target.triangles.insert(target.triangles.end(), source.triangles.begin(),
+                          source.triangles.end());
+  target.points.insert(target.points.end(), source.points.begin(),
+                       source.points.end());
+  target.icons.insert(target.icons.end(), source.icons.begin(),
+                      source.icons.end());
+  target.hover_target_selected =
+      target.hover_target_selected || source.hover_target_selected;
 }
 
 constexpr std::array<ViewportView, 7> kViewportViews{
@@ -472,6 +487,8 @@ void QtViewportPanel::attach_workspace(ViewportWorkspaceService &workspace) {
     interaction_controller_.reset(interaction_editor_);
     hover_controller_.invalidate();
     selection_overlay_cache_.mark_dirty();
+    point_light_pick_cache_valid_ = false;
+    viewport_info_scene_snapshot_valid_ = false;
     viewport_info_scene_stats_valid_ = false;
     displayed_placements_.clear();
     interaction_controller_.clear_modal_drag_state();
@@ -596,10 +613,10 @@ void QtViewportPanel::prepare_viewports(
   // Preserve the native viewport's semantic-overlay cache contract.  In
   // particular, object-mode face fills are owned by the persistent render
   // cache while authored selection wires remain in this transient frame.
-  refresh_cached_selection_overlay_frame(modeling, document, assets);
-
   const ViewportSettings &settings =
       viewport_settings_ != nullptr ? *viewport_settings_ : fallback_settings_;
+  refresh_cached_selection_overlay_frame(modeling, document, assets,
+                                          settings);
   const float grid_world_size =
       viewport_grid_world_size_for_preset(workspace_->grid_preset());
   const bool grid_visible =
@@ -643,6 +660,8 @@ void QtViewportPanel::prepare_viewports(
                 input_router_.state().selection_mode);
   const ViewportPersistentOverlayStyleSnapshot persistent_overlay_style =
       ViewportOverlayStyleResolver::persistent_style_snapshot(settings);
+  const std::uint64_t overlay_style_signature =
+      ViewportOverlayStyleResolver::style_signature(settings);
 
   std::uint8_t wireframe_layer_mask = 0u;
   for (const ViewportPanePlacement &placement :
@@ -690,6 +709,11 @@ void QtViewportPanel::prepare_viewports(
         &QuaderRenderApiRuntimeAccess::build_scene_overlay_snapshot(
             editor.render(), snapshot_cache);
   }
+  const std::uint64_t scene_tool_overlay_signature =
+      scene_overlay_snapshot != nullptr
+          ? OverlayRenderableBuilder::frame_signature(
+                scene_overlay_snapshot->tool_overlays)
+          : 0u;
 
   workspace_->clear_pane_visibility();
   for (const ViewportPanePlacement &placement :
@@ -759,14 +783,104 @@ void QtViewportPanel::prepare_viewports(
     if (viewport_info_visible && pane_state.id == focused_pane) {
       draw_viewport_info_overlay(pane_state, document, assets, overlay_camera);
     }
-    ViewportOverlayFrame overlay_frame =
-        overlays_visible && selection_overlay_cache_.valid()
-            ? selection_overlay_cache_.frame()
-            : ViewportOverlayFrame{};
     const bool point_light_gizmos_visible =
         gizmos_visible &&
         viewport_shading_shows_light_gizmos(pane_workspace.shading);
-    if (scene_overlay_requests[viewport_pane_index(pane_state.id)]) {
+    ViewportOverlayFrame dynamic_overlay_frame;
+    if (pane_state.id == interaction_pane_id_) {
+      if (tool_overlay_visible) {
+        ViewportToolOverlayProjection::append_box(
+            dynamic_overlay_frame, overlay_camera, active_box_preview_);
+      }
+      if (gizmos_visible && !pivot_handle_editing) {
+        if (const quader_editor_core::TransformGizmoFrame *gizmo =
+                interaction_controller_.transform_gizmo_frame()) {
+          ViewportToolOverlayProjection::append_transform_gizmo(
+              dynamic_overlay_frame, overlay_camera, *gizmo);
+        }
+      }
+      if (overlays_visible) {
+        ViewportToolOverlayProjection::append_selection_marquee(
+            dynamic_overlay_frame, overlay_camera,
+            interaction_controller_.selection_marquee());
+      }
+    }
+    ViewportToolOverlayProjection::append_pivot_handle(
+        dynamic_overlay_frame, pane_workspace.camera, pivot_handle);
+    ViewportToolOverlayProjection::append_linear_array_handle(
+        dynamic_overlay_frame, linear_array_handle);
+    if (radial_array_center_visible) {
+      ViewportToolOverlayProjection::append_radial_array_center(
+          dynamic_overlay_frame, radial_array_center);
+    }
+
+    const std::size_t viewport_index = viewport_pane_index(pane_state.id);
+    const std::uint8_t layer_mask =
+        viewport_grid_layer_mask(viewport_index);
+    const bool scene_overlay_requested =
+        scene_overlay_requests[viewport_index];
+    const bool selection_overlay_visible =
+        overlays_visible && selection_overlay_cache_.valid();
+    const PaneOverlaySubmissionKey submission_key{
+        .selection_overlay_revision =
+            selection_overlay_visible ? selection_overlay_cache_.revision()
+                                      : 0u,
+        .scene_revision = scene_overlay_requested
+                              ? scene_overlay_snapshot->scene_revision
+                              : 0u,
+        .asset_revision = scene_overlay_requested
+                              ? scene_overlay_snapshot->asset_revision
+                              : 0u,
+        .selection_revision = scene_overlay_requested
+                                  ? scene_overlay_snapshot->selection_revision
+                                  : 0u,
+        .visibility_revision = scene_overlay_requested
+                                   ? scene_overlay_snapshot->visibility_revision
+                                   : 0u,
+        .local_visibility_revision =
+            scene_overlay_requested
+                ? scene_overlay_snapshot->local_visibility_revision
+                : 0u,
+        .transform_revision = scene_overlay_requested
+                                  ? scene_overlay_snapshot->transform_revision
+                                  : 0u,
+        .mesh_binding_revision =
+            scene_overlay_requested
+                ? scene_overlay_snapshot->mesh_binding_revision
+                : 0u,
+        .render_component_revision =
+            scene_overlay_requested
+                ? scene_overlay_snapshot->render_component_revision
+                : 0u,
+        .scene_tool_overlay_signature =
+            scene_overlay_requested ? scene_tool_overlay_signature : 0u,
+        .dynamic_overlay_signature =
+            OverlayRenderableBuilder::frame_signature(dynamic_overlay_frame),
+        .style_signature = overlay_style_signature,
+        .selection_mode = cached_overlay_mode,
+        .selection_overlay_visible = selection_overlay_visible,
+        .scene_overlay_requested = scene_overlay_requested,
+        .wireframe_pane =
+            pane_workspace.shading == ViewportShadingMode::Wireframe,
+        .point_light_gizmos_visible = point_light_gizmos_visible,
+    };
+    if (pane_state.overlay_submission_valid &&
+        pane_state.overlay_submission_key == submission_key &&
+        render_bridge.update_overlay_camera(viewport_index, layer_mask,
+                                            overlay_camera)) {
+      sync_pane_control_selection(pane_state);
+      continue;
+    }
+
+    ViewportOverlayFrame overlay_frame =
+        selection_overlay_visible ? selection_overlay_cache_.frame()
+                                  : ViewportOverlayFrame{};
+    const ViewportOverlayStyleRange dynamic_style_range{
+        .triangle_begin = overlay_frame.triangles.size(),
+        .line_begin = overlay_frame.lines.size(),
+        .point_begin = overlay_frame.points.size(),
+    };
+    if (scene_overlay_requested) {
       overlay_frame = QuaderRenderApiRuntimeAccess::build_scene_overlay_frame(
           render_bridge, std::move(overlay_frame), *scene_overlay_snapshot,
           ViewportSceneOverlayFrameRequest{
@@ -777,41 +891,17 @@ void QtViewportPanel::prepare_viewports(
               .point_light_gizmos_visible = point_light_gizmos_visible,
           });
     }
-    if (pane_state.id == interaction_pane_id_) {
-      if (tool_overlay_visible) {
-        ViewportToolOverlayProjection::append_box(
-            overlay_frame, overlay_camera, active_box_preview_);
-      }
-      if (gizmos_visible && !pivot_handle_editing) {
-        if (const quader_editor_core::TransformGizmoFrame *gizmo =
-                interaction_controller_.transform_gizmo_frame()) {
-          ViewportToolOverlayProjection::append_transform_gizmo(
-              overlay_frame, overlay_camera, *gizmo);
-        }
-      }
-      if (overlays_visible) {
-        ViewportToolOverlayProjection::append_selection_marquee(
-            overlay_frame, overlay_camera,
-            interaction_controller_.selection_marquee());
-      }
-    }
-    ViewportToolOverlayProjection::append_pivot_handle(
-        overlay_frame, pane_workspace.camera, pivot_handle);
-    ViewportToolOverlayProjection::append_linear_array_handle(
-        overlay_frame, linear_array_handle);
-    if (radial_array_center_visible) {
-      ViewportToolOverlayProjection::append_radial_array_center(
-          overlay_frame, radial_array_center);
-    }
-    ViewportOverlayStyleResolver::apply(
+    append_overlay_frame(overlay_frame, dynamic_overlay_frame);
+    ViewportOverlayStyleResolver::apply_from(
         overlay_frame, settings,
         ViewportOverlayStyleContext{
             .selection_mode = overlay_selection_context(cached_overlay_mode),
-        });
-    render_bridge.set_overlay_frame(
-        viewport_pane_index(pane_state.id),
-        viewport_grid_layer_mask(viewport_pane_index(pane_state.id)),
-        std::move(overlay_frame), overlay_camera);
+        },
+        dynamic_style_range);
+    render_bridge.set_overlay_frame(viewport_index, layer_mask,
+                                    std::move(overlay_frame), overlay_camera);
+    pane_state.overlay_submission_key = submission_key;
+    pane_state.overlay_submission_valid = true;
     sync_pane_control_selection(pane_state);
   }
   if (diagnostics_enabled) {
@@ -823,7 +913,7 @@ void QtViewportPanel::prepare_viewports(
 
 void QtViewportPanel::refresh_cached_selection_overlay_frame(
     ModelingSessionService &modeling, const SceneDocument &document,
-    const AssetRegistry &assets) {
+    const AssetRegistry &assets, const ViewportSettings &settings) {
   const ModelingSelectionSummary overlay_summary = modeling.selection_summary();
   const ModelingSelectionOverlayOptions overlay_options{
       .suppress_persistent_object_selection =
@@ -840,14 +930,22 @@ void QtViewportPanel::refresh_cached_selection_overlay_frame(
       .local_visibility_revision = local_visibility.revision(),
       .overlay_signature =
           modeling.selection_overlay_signature(overlay_options),
+      .style_signature =
+          ViewportOverlayStyleResolver::style_signature(settings),
       .selection_mode = overlay_summary.mode,
   };
   if (!selection_overlay_cache_.needs_refresh(key)) {
     return;
   }
 
-  selection_overlay_cache_.update(
-      modeling.selection_overlay_frame(overlay_options), key);
+  ViewportOverlayFrame frame =
+      modeling.selection_overlay_frame(overlay_options);
+  ViewportOverlayStyleResolver::apply(
+      frame, settings,
+      ViewportOverlayStyleContext{
+          .selection_mode = overlay_selection_context(overlay_summary.mode),
+      });
+  selection_overlay_cache_.update(std::move(frame), key);
 }
 
 std::size_t
@@ -936,6 +1034,7 @@ QtViewportPanel::render_viewports(bool account_presentation_frame) {
 QuaderApiVoidResult QtViewportPanel::frame_all(const SceneDocument &document,
                                                const AssetRegistry &assets,
                                                ViewportPaneId pane_id) {
+  QDR_PROFILE_SCOPE("Viewport frame all");
   if (workspace_ == nullptr) {
     return {.ok = false,
             .changed = false,
@@ -1554,34 +1653,41 @@ void QtViewportPanel::draw_viewport_info_overlay(
                             : ViewportLocalVisibilitySnapshot{};
   const std::uint64_t local_visibility_revision =
       local_visibility.revision();
-  const bool cache_hit =
-      viewport_info_scene_stats_valid_ &&
+  const bool snapshot_cache_hit =
+      viewport_info_scene_snapshot_valid_ &&
       viewport_info_cached_document_ == &document &&
       viewport_info_cached_assets_ == &assets &&
       viewport_info_cached_scene_revision_ == scene_revision &&
       viewport_info_cached_asset_revision_ == asset_revision &&
       viewport_info_cached_local_visibility_revision_ ==
-          local_visibility_revision &&
-      same_viewport_info_camera(viewport_info_cached_camera_, camera);
-  ViewportInfoSceneStats scene_stats;
-  if (cache_hit) {
-    scene_stats.objects = viewport_info_cached_objects_;
-    scene_stats.primitives = viewport_info_cached_primitives_;
-    scene_stats.draw_calls = viewport_info_cached_draw_calls_;
-  } else {
-    QDR_PROFILE_SCOPE("Viewport info collect scene stats");
-    scene_stats = collect_viewport_info_scene_stats(
-        document, assets, camera, &local_visibility);
+          local_visibility_revision;
+  if (!snapshot_cache_hit) {
+    QDR_PROFILE_SCOPE("Viewport info rebuild scene snapshot");
+    viewport_info_cached_scene_snapshot_ =
+        build_viewport_info_scene_snapshot(document, assets,
+                                           &local_visibility);
     viewport_info_cached_document_ = &document;
     viewport_info_cached_assets_ = &assets;
     viewport_info_cached_scene_revision_ = scene_revision;
     viewport_info_cached_asset_revision_ = asset_revision;
     viewport_info_cached_local_visibility_revision_ =
         local_visibility_revision;
+    viewport_info_scene_snapshot_valid_ = true;
+    viewport_info_scene_stats_valid_ = false;
+  }
+
+  const bool stats_cache_hit =
+      viewport_info_scene_stats_valid_ &&
+      same_viewport_info_camera(viewport_info_cached_camera_, camera);
+  ViewportInfoSceneStats scene_stats;
+  if (stats_cache_hit) {
+    scene_stats = viewport_info_cached_scene_stats_;
+  } else {
+    QDR_PROFILE_SCOPE("Viewport info cull scene snapshot");
+    scene_stats = collect_viewport_info_scene_stats(
+        viewport_info_cached_scene_snapshot_, camera);
     viewport_info_cached_camera_ = camera;
-    viewport_info_cached_objects_ = scene_stats.objects;
-    viewport_info_cached_primitives_ = scene_stats.primitives;
-    viewport_info_cached_draw_calls_ = scene_stats.draw_calls;
+    viewport_info_cached_scene_stats_ = scene_stats;
     viewport_info_scene_stats_valid_ = true;
   }
 
@@ -2011,18 +2117,38 @@ void QtViewportPanel::process_viewport_input(
     delete_popup_global_point = pane_state.surface->mapToGlobal(local_point);
   }
 
+  const bool suppress_hover_work =
+      result.navigation_active || result.camera_changed ||
+      navigation_gizmo_consumed;
   const bool point_lights_pickable =
-      active_viewport_settings().bool_value(
-          ViewportBoolSettingId::ShowGizmos) &&
+      !suppress_hover_work && active_viewport_settings().bool_value(
+                                  ViewportBoolSettingId::ShowGizmos) &&
       viewport_shading_shows_light_gizmos(
           workspace_->shading_mode(*input_pane));
   const ViewportLocalVisibilitySnapshot local_visibility =
       workspace_->local_visibility_snapshot();
-  const std::vector<ViewportSceneBillboardPickCandidate> billboards =
-      point_lights_pickable
-          ? ViewportSceneProjection::point_light_pick_candidates(
-                document, local_visibility)
-          : std::vector<ViewportSceneBillboardPickCandidate>{};
+  std::span<const ViewportSceneBillboardPickCandidate> billboards;
+  if (point_lights_pickable) {
+    const std::uint64_t scene_revision = document.revision();
+    const std::uint64_t local_visibility_revision =
+        local_visibility.revision();
+    if (!point_light_pick_cache_valid_ ||
+        point_light_pick_cached_document_ != &document ||
+        point_light_pick_cached_scene_revision_ != scene_revision ||
+        point_light_pick_cached_local_visibility_revision_ !=
+            local_visibility_revision) {
+      QDR_PROFILE_SCOPE("Viewport rebuild point light pick candidates");
+      point_light_pick_cached_candidates_ =
+          ViewportSceneProjection::point_light_pick_candidates(
+              document, local_visibility);
+      point_light_pick_cached_document_ = &document;
+      point_light_pick_cached_scene_revision_ = scene_revision;
+      point_light_pick_cached_local_visibility_revision_ =
+          local_visibility_revision;
+      point_light_pick_cache_valid_ = true;
+    }
+    billboards = point_light_pick_cached_candidates_;
+  }
   ViewportInteractionFrame interaction_frame{
       .input_router = input_router_,
       .camera = camera,
@@ -2156,9 +2282,6 @@ void QtViewportPanel::process_viewport_input(
     cancel_consumed = true;
   }
 
-  const bool suppress_hover_work =
-      result.navigation_active || result.camera_changed ||
-      navigation_gizmo_consumed;
   if (suppress_hover_work || result.grid_preset_changed) {
     hover_controller_.invalidate();
   }

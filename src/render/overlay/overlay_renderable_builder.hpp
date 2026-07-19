@@ -75,6 +75,7 @@ struct OverlayLineBatch {
     OverlayRenderState state;
     float width_pixels = 1.0f;
     float depth_bias = 0.0f;
+    float near_plane = 0.05f;
 };
 
 /**
@@ -84,6 +85,9 @@ struct OverlayEditWireBatch {
     OverlayEditWireMesh mesh;
     OverlayRenderState state;
     float width_pixels = 1.0f;
+    float near_plane = 0.05f;
+    float far_plane = 1000.0f;
+    bool orthographic_projection = false;
 };
 
 /**

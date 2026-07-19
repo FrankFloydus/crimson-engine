@@ -149,8 +149,24 @@ private:
         std::vector<OverlayBaseObjectCacheEntry> object_entries;
     };
 
+    /// Retains the expensive world projection of the semantic selection base.
+    struct ProjectedOverlayBaseCache {
+      bool valid = false;
+      std::uint64_t content_revision = 0;
+      std::uint64_t selection_revision = 0;
+      std::uint64_t scene_revision = 0;
+      std::uint64_t local_visibility_revision = 0;
+      std::uint64_t object_map_revision = 0;
+      quader_editor_core::SelectionMode selection_mode =
+          quader_editor_core::SelectionMode::Object;
+      ModelingInstanceEditScope instance_edit_scope;
+      bool suppress_persistent_object_selection = false;
+      ViewportOverlayFrame frame;
+    };
+
     mutable SelectionOverlayCache selection_overlay_cache_;
     mutable OverlayBaseCache overlay_base_cache_;
+    mutable ProjectedOverlayBaseCache projected_overlay_base_cache_;
 };
 
 } // namespace quader

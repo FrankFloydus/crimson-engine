@@ -31,3 +31,12 @@ generates its disposable compile database in `.build/cmake-tidy`, and enforces t
   skip-tests or baseline-update switches.
 - `update_command_behavior_baseline.ps1` is the separate intentional-change path. It must require a
   non-empty reason and leave the resulting baseline diff for review.
+
+## Tracy Launcher
+
+- `boot_tracy.ps1` validates the Tracy-enabled `vs2026` cache, starts the Tracy profiler first,
+  then starts Quader and waits until both application windows are ready for profiling.
+- Launcher failures remain visible until Enter is pressed. Automated callers can pass
+  `-NoPauseOnError` to preserve non-interactive failure behavior.
+- The recorded local Tracy 0.13.1 and Debug build paths are defaults. Use the script parameters for
+  alternate profiler, executable, or build-cache paths.

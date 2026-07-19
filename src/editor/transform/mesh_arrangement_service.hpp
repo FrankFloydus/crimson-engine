@@ -46,6 +46,12 @@ struct MeshArrangementSelectionContext {
   EntityId active_mesh = kInvalidEntityId;
 };
 
+/// Summarizes selection validation shared by every arrangement command.
+struct MeshArrangementAvailability {
+  bool can_align = false;
+  bool can_distribute = false;
+};
+
 /// Arranges selected scene mesh roots through atomic document transforms.
 class MeshArrangementService final {
 public:
@@ -53,6 +59,7 @@ public:
                          MeshArrangementSelectionContext selection_context,
                          DocumentCommandService &document_commands);
 
+  [[nodiscard]] MeshArrangementAvailability availability() const;
   [[nodiscard]] bool can_align_selected_meshes() const;
   [[nodiscard]] bool can_distribute_selected_meshes() const;
 

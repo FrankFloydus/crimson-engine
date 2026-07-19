@@ -50,45 +50,71 @@ QVec3 viewport_info_normalized_axis(QVec3 axis, QVec3 fallback) {
   return length_squared(normalized) > 0.0f ? normalized : fallback;
 }
 
-bool viewport_info_point_visible(const ViewportOverlayCamera &camera,
+/// Precomputes the camera facts shared by every cached bounds visibility test.
+struct ViewportInfoVisibilityVolume {
+  QVec3 eye = {};
+  QVec3 forward = {0.0f, 0.0f, -1.0f};
+  QVec3 right = {1.0f, 0.0f, 0.0f};
+  QVec3 up = {0.0f, 1.0f, 0.0f};
+  float near_plane = 0.0001f;
+  float far_plane = 0.0001f;
+  float aspect = 1.0f;
+  float perspective_half_height_scale = 0.0f;
+  float orthographic_half_height = 0.0001f;
+  ViewportOverlayProjection projection =
+      ViewportOverlayProjection::Perspective;
+};
+
+ViewportInfoVisibilityVolume viewport_info_visibility_volume(
+    const ViewportOverlayCamera &camera) {
+  constexpr float kPi = 3.14159265358979323846f;
+  const float fov_radians =
+      std::clamp(camera.fov_degrees, 1.0f, 170.0f) * kPi / 180.0f;
+  return {
+      .eye = camera.eye,
+      .forward = viewport_info_normalized_axis(camera.forward,
+                                               {0.0f, 0.0f, -1.0f}),
+      .right = viewport_info_normalized_axis(camera.right,
+                                             {1.0f, 0.0f, 0.0f}),
+      .up = viewport_info_normalized_axis(camera.up, {0.0f, 1.0f, 0.0f}),
+      .near_plane = std::max(camera.near_plane, 0.0001f),
+      .far_plane = std::max(camera.far_plane,
+                            std::max(camera.near_plane, 0.0001f)),
+      .aspect = std::max(camera.viewport_size.x, 1.0f) /
+                std::max(camera.viewport_size.y, 1.0f),
+      .perspective_half_height_scale = std::tan(fov_radians * 0.5f),
+      .orthographic_half_height =
+          std::max(camera.orthographic_size, 0.0001f) * 0.5f,
+      .projection = camera.projection,
+  };
+}
+
+bool viewport_info_point_visible(const ViewportInfoVisibilityVolume &volume,
                                  QVec3 point) {
-  const QVec3 forward =
-      viewport_info_normalized_axis(camera.forward, {0.0f, 0.0f, -1.0f});
-  const QVec3 right =
-      viewport_info_normalized_axis(camera.right, {1.0f, 0.0f, 0.0f});
-  const QVec3 up = viewport_info_normalized_axis(camera.up, {0.0f, 1.0f, 0.0f});
-  const QVec3 delta = point - camera.eye;
-  const float depth = dot(delta, forward);
-  const float near_plane = std::max(camera.near_plane, 0.0001f);
-  const float far_plane = std::max(camera.far_plane, near_plane);
-  if (depth < near_plane || depth > far_plane) {
+  const QVec3 delta = point - volume.eye;
+  const float depth = dot(delta, volume.forward);
+  if (depth < volume.near_plane || depth > volume.far_plane) {
     return false;
   }
 
-  const float aspect =
-      std::max(camera.viewport_size.x, 1.0f) /
-      std::max(camera.viewport_size.y, 1.0f);
-  float half_height = std::max(camera.orthographic_size, 0.0001f) * 0.5f;
-  if (camera.projection == ViewportOverlayProjection::Perspective) {
-    constexpr float kPi = 3.14159265358979323846f;
-    const float fov_radians =
-        std::clamp(camera.fov_degrees, 1.0f, 170.0f) * kPi / 180.0f;
-    half_height = std::tan(fov_radians * 0.5f) * depth;
-  }
-  const float half_width = half_height * aspect;
-  const float horizontal = dot(delta, right);
-  const float vertical = dot(delta, up);
+  const float half_height =
+      volume.projection == ViewportOverlayProjection::Perspective
+          ? volume.perspective_half_height_scale * depth
+          : volume.orthographic_half_height;
+  const float half_width = half_height * volume.aspect;
+  const float horizontal = dot(delta, volume.right);
+  const float vertical = dot(delta, volume.up);
   return std::abs(horizontal) <= half_width && std::abs(vertical) <= half_height;
 }
 
-bool viewport_info_bounds_visible(const ViewportOverlayCamera &camera,
+bool viewport_info_bounds_visible(const ViewportInfoVisibilityVolume &volume,
                                   const SceneBounds &bounds) {
-  if (viewport_info_bounds_contains_point(bounds, camera.eye) ||
-      viewport_info_point_visible(camera, bounds_center(bounds))) {
+  if (viewport_info_bounds_contains_point(bounds, volume.eye) ||
+      viewport_info_point_visible(volume, bounds_center(bounds))) {
     return true;
   }
   for (const QVec3 corner : viewport_info_bounds_corners(bounds)) {
-    if (viewport_info_point_visible(camera, corner)) {
+    if (viewport_info_point_visible(volume, corner)) {
       return true;
     }
   }
@@ -114,17 +140,15 @@ std::optional<SceneBounds> viewport_info_mesh_world_bounds(
   return world_bounds;
 }
 
-void append_viewport_info_mesh_stats(ViewportInfoSceneStats &stats,
+void append_viewport_info_mesh_stats(ViewportInfoSceneSnapshot &snapshot,
                                      const MeshAsset &mesh,
-                                     const QMat4 &world_from_local,
-                                     const ViewportOverlayCamera &camera) {
+                                     const QMat4 &world_from_local) {
   if (mesh.geometry().vertices.empty() || mesh.geometry().indices.empty()) {
     return;
   }
   const std::optional<SceneBounds> world_bounds =
       viewport_info_mesh_world_bounds(world_from_local, mesh);
-  if (!world_bounds.has_value() ||
-      !viewport_info_bounds_visible(camera, *world_bounds)) {
+  if (!world_bounds.has_value()) {
     return;
   }
   const std::vector<MeshPrimitiveSpan> spans =
@@ -132,11 +156,15 @@ void append_viewport_info_mesh_stats(ViewportInfoSceneStats &stats,
   if (spans.empty()) {
     return;
   }
-  ++stats.objects;
-  stats.draw_calls += spans.size();
+  std::uint64_t primitive_count = 0;
   for (const MeshPrimitiveSpan &span : spans) {
-    stats.primitives += span.index_count / 3u;
+    primitive_count += span.index_count / 3u;
   }
+  snapshot.renderables.push_back({
+      .world_bounds = *world_bounds,
+      .primitives = primitive_count,
+      .draw_calls = spans.size(),
+  });
 }
 
 bool viewport_info_local_visibility_allows(
@@ -147,14 +175,13 @@ bool viewport_info_local_visibility_allows(
 
 } // namespace
 
-ViewportInfoSceneStats
-collect_viewport_info_scene_stats(const SceneDocument &document,
-                                  const AssetRegistry &assets,
-                                  const ViewportOverlayCamera &camera,
-                                  const ViewportLocalVisibilitySnapshot *
-                                      local_visibility) {
-  ViewportInfoSceneStats stats;
-  for (const EntityId entity_id : document.entities()) {
+ViewportInfoSceneSnapshot build_viewport_info_scene_snapshot(
+    const SceneDocument &document, const AssetRegistry &assets,
+    const ViewportLocalVisibilitySnapshot *local_visibility) {
+  ViewportInfoSceneSnapshot snapshot;
+  const std::vector<EntityId> entities = document.entities();
+  snapshot.renderables.reserve(entities.size());
+  for (const EntityId entity_id : entities) {
     if (!document.is_effectively_visible(entity_id) ||
         !viewport_info_local_visibility_allows(local_visibility, entity_id) ||
         document.is_instance_definition_entity(entity_id) ||
@@ -171,11 +198,11 @@ collect_viewport_info_scene_stats(const SceneDocument &document,
     const MeshAsset *mesh = assets.mesh(mesh_component->mesh);
     if (mesh != nullptr) {
       append_viewport_info_mesh_stats(
-          stats, *mesh, document.world_transform_matrix(entity_id), camera);
+          snapshot, *mesh, document.world_transform_matrix(entity_id));
     }
   }
 
-  for (const EntityId definition : document.entities()) {
+  for (const EntityId definition : entities) {
     if (!document.is_instance_definition_entity(definition)) {
       continue;
     }
@@ -210,14 +237,41 @@ collect_viewport_info_scene_stats(const SceneDocument &document,
         const QMat4 member_from_definition = scene_transform_multiply(
             *definition_inverse, document.world_transform_matrix(member));
         append_viewport_info_mesh_stats(
-            stats, *mesh,
+            snapshot, *mesh,
             scene_transform_multiply(occurrence_world,
-                                     member_from_definition),
-            camera);
+                                     member_from_definition));
       }
     }
   }
+  return snapshot;
+}
+
+ViewportInfoSceneStats collect_viewport_info_scene_stats(
+    const ViewportInfoSceneSnapshot &snapshot,
+    const ViewportOverlayCamera &camera) {
+  ViewportInfoSceneStats stats;
+  const ViewportInfoVisibilityVolume volume =
+      viewport_info_visibility_volume(camera);
+  for (const ViewportInfoRenderableStats &renderable : snapshot.renderables) {
+    if (!viewport_info_bounds_visible(volume, renderable.world_bounds)) {
+      continue;
+    }
+    ++stats.objects;
+    stats.primitives += renderable.primitives;
+    stats.draw_calls += renderable.draw_calls;
+  }
   return stats;
+}
+
+ViewportInfoSceneStats
+collect_viewport_info_scene_stats(const SceneDocument &document,
+                                  const AssetRegistry &assets,
+                                  const ViewportOverlayCamera &camera,
+                                  const ViewportLocalVisibilitySnapshot *
+                                      local_visibility) {
+  return collect_viewport_info_scene_stats(
+      build_viewport_info_scene_snapshot(document, assets, local_visibility),
+      camera);
 }
 
 } // namespace quader

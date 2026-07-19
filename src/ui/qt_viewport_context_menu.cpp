@@ -11,6 +11,7 @@
 #include "api/quader_editor_api.hpp"
 #include "core/localization_service.hpp"
 #include "core/logger.hpp"
+#include "diagnostics/profile.hpp"
 #include "editor/modeling/services/selection_mode_adapter.hpp"
 #include "viewport/viewport_input_router.hpp"
 
@@ -63,70 +64,94 @@ void QtViewportContextMenuPresenter::show(
     QWidget &parent, const QPoint &global_point, QuaderEditorApi &editor,
     ViewportInputRouter &input_router, LocalizationService &localization,
     bool modal_tool_owns_viewport) const {
+  QDR_PROFILE_SCOPE("Qt viewport context menu show");
   const QuaderActionQuery query{
       .surface = QuaderActionSurface::ViewportContextMenu,
       .modal_tool_owns_viewport = modal_tool_owns_viewport,
       .include_disabled = true,
       .include_hidden = false,
   };
-  const std::vector<QuaderActionItem> actions =
-      editor.modeling().available_actions(query);
+  const std::vector<QuaderActionItem> actions = [&]() {
+    QDR_PROFILE_SCOPE("Qt viewport context menu query actions");
+    return editor.modeling().available_actions(query);
+  }();
 
   QMenu menu(&parent);
-  menu.setObjectName(QStringLiteral("viewport_operations_context_menu"));
-  menu.setToolTipsVisible(true);
-
-  QAction *create_instance_action = menu.addAction(QString::fromStdString(
-      localization.text("ui.menu.edit.create_instance", "Create Instance")));
-  create_instance_action->setObjectName(QStringLiteral("create_instance"));
-  create_instance_action->setEnabled(editor.modeling().can_create_instance());
-  QAction *flatten_instance_action = menu.addAction(QString::fromStdString(
-      localization.text("ui.menu.edit.flatten_instance", "Flatten Instance")));
-  flatten_instance_action->setObjectName(QStringLiteral("flatten_instance"));
-  flatten_instance_action->setEnabled(
-      editor.modeling().can_flatten_instance());
-  QAction *remove_from_layer_action = menu.addAction(QString::fromStdString(
-      localization.text("ui.layers.remove_selection",
-                        "Remove Object from Layer")));
-  remove_from_layer_action->setObjectName(
-      QStringLiteral("scene.layers.remove_selection"));
-  remove_from_layer_action->setEnabled(
-      editor.layers().can_remove_selection_from_all_layers());
-  menu.addSeparator();
-
+  QAction *create_instance_action = nullptr;
+  QAction *flatten_instance_action = nullptr;
+  QAction *remove_from_layer_action = nullptr;
   std::vector<std::pair<QAction *, const QuaderActionItem *>> menu_actions;
-  menu_actions.reserve(actions.size());
-  bool separated_generic_actions = false;
-  for (const QuaderActionItem &action : actions) {
-    if (action.visibility == QuaderActionVisibility::Hidden) {
-      continue;
-    }
-    if (!separated_generic_actions &&
-        is_generic_context_action(action.action_id)) {
-      menu.addSeparator();
-      separated_generic_actions = true;
-    }
+  {
+    QDR_PROFILE_SCOPE("Qt viewport context menu build");
+    menu.setObjectName(QStringLiteral("viewport_operations_context_menu"));
+    menu.setToolTipsVisible(true);
 
-    QAction *menu_action =
-        menu.addAction(localized_action_label(action, localization));
-    menu_action->setObjectName(QString::fromStdString(action.action_id));
-    const bool enabled =
-        action.visibility == QuaderActionVisibility::Enabled;
-    menu_action->setEnabled(enabled);
-    if (!enabled) {
-      const QString reason = localized_disabled_reason(action, localization);
-      if (!reason.isEmpty()) {
-        menu_action->setToolTip(reason);
-      }
+    create_instance_action = menu.addAction(QString::fromStdString(
+        localization.text("ui.menu.edit.create_instance", "Create Instance")));
+    create_instance_action->setObjectName(QStringLiteral("create_instance"));
+    {
+      QDR_PROFILE_SCOPE("Qt viewport context menu query fixed actions");
+      create_instance_action->setEnabled(
+          editor.modeling().can_create_instance());
     }
-    menu_actions.emplace_back(menu_action, &action);
+    flatten_instance_action = menu.addAction(QString::fromStdString(
+        localization.text("ui.menu.edit.flatten_instance", "Flatten Instance")));
+    flatten_instance_action->setObjectName(QStringLiteral("flatten_instance"));
+    {
+      QDR_PROFILE_SCOPE("Qt viewport context menu query fixed actions");
+      flatten_instance_action->setEnabled(
+          editor.modeling().can_flatten_instance());
+    }
+    remove_from_layer_action = menu.addAction(QString::fromStdString(
+        localization.text("ui.layers.remove_selection",
+                          "Remove Object from Layer")));
+    remove_from_layer_action->setObjectName(
+        QStringLiteral("scene.layers.remove_selection"));
+    {
+      QDR_PROFILE_SCOPE("Qt viewport context menu query fixed actions");
+      remove_from_layer_action->setEnabled(
+          editor.layers().can_remove_selection_from_all_layers());
+    }
+    menu.addSeparator();
+
+    menu_actions.reserve(actions.size());
+    bool separated_generic_actions = false;
+    for (const QuaderActionItem &action : actions) {
+      if (action.visibility == QuaderActionVisibility::Hidden) {
+        continue;
+      }
+      if (!separated_generic_actions &&
+          is_generic_context_action(action.action_id)) {
+        menu.addSeparator();
+        separated_generic_actions = true;
+      }
+
+      QAction *menu_action =
+          menu.addAction(localized_action_label(action, localization));
+      menu_action->setObjectName(QString::fromStdString(action.action_id));
+      const bool enabled =
+          action.visibility == QuaderActionVisibility::Enabled;
+      menu_action->setEnabled(enabled);
+      if (!enabled) {
+        const QString reason = localized_disabled_reason(action, localization);
+        if (!reason.isEmpty()) {
+          menu_action->setToolTip(reason);
+        }
+      }
+      menu_actions.emplace_back(menu_action, &action);
+    }
   }
 
-  QAction *selected_action = menu.exec(global_point);
+  QAction *selected_action = nullptr;
+  {
+    QDR_PROFILE_SCOPE("Qt viewport context menu exec");
+    selected_action = menu.exec(global_point);
+  }
   if (selected_action == nullptr) {
     return;
   }
   if (selected_action == remove_from_layer_action) {
+    QDR_PROFILE_SCOPE("Qt viewport context menu dispatch command");
     const QuaderApiVoidResult result = editor.commands().execute(
         quader_command::kSceneLayersRemoveSelection);
     if (!result.ok()) {
@@ -141,6 +166,7 @@ void QtViewportContextMenuPresenter::show(
   }
   if (selected_action == create_instance_action ||
       selected_action == flatten_instance_action) {
+    QDR_PROFILE_SCOPE("Qt viewport context menu dispatch command");
     const QuaderCommandId command =
         selected_action == create_instance_action
             ? quader_command::kEditCreateInstance
@@ -164,19 +190,22 @@ void QtViewportContextMenuPresenter::show(
     return;
   }
 
-  const QuaderActionItem &action = *selected->second;
-  const std::string command_id =
-      action.kind == QuaderActionKind::Tool
-          ? editor.commands().command_id_for_tool_activation(action.tool_id)
-          : editor.commands().command_id_for_modeling_action(action.action_id);
-  const QuaderApiVoidResult result = editor.commands().execute(command_id);
-  if (!result.ok()) {
-    LOG_ERROR("Operation '{}' failed: {}", action.action_id,
-              result.error_message().empty() ? "Operation failed."
-                                             : result.error_message());
+  {
+    QDR_PROFILE_SCOPE("Qt viewport context menu dispatch command");
+    const QuaderActionItem &action = *selected->second;
+    const std::string command_id =
+        action.kind == QuaderActionKind::Tool
+            ? editor.commands().command_id_for_tool_activation(action.tool_id)
+            : editor.commands().command_id_for_modeling_action(action.action_id);
+    const QuaderApiVoidResult result = editor.commands().execute(command_id);
+    if (!result.ok()) {
+      LOG_ERROR("Operation '{}' failed: {}", action.action_id,
+                result.error_message().empty() ? "Operation failed."
+                                               : result.error_message());
+    }
+    input_router.set_selection_mode(app_selection_mode_to_viewport(
+        to_modeling_selection_mode(editor.selection().summary().mode)));
   }
-  input_router.set_selection_mode(app_selection_mode_to_viewport(
-      to_modeling_selection_mode(editor.selection().summary().mode)));
 }
 
 } // namespace quader

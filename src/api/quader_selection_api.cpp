@@ -388,6 +388,7 @@ QuaderSelectionApi::pick_select(const QuaderPickSelectRequest &request) {
 
 QuaderSelectionBoxBaseline
 QuaderSelectionApi::capture_box_selection_baseline() const {
+  QDR_PROFILE_SCOPE("Box selection API capture baseline");
   return QuaderSelectionBoxBaseline(
       std::shared_ptr<const QuaderSelectionBoxBaseline::Impl>(
           new QuaderSelectionBoxBaseline::Impl(
@@ -403,19 +404,24 @@ QuaderSelectionApi::box_select(const QuaderBoxSelectRequest &request) {
   const bool document_selection_mode =
       selection_mode_uses_scene_document(session.selection().mode());
   const ModelingSelectionSummary before = session.selection().summary();
-  const ModelingSelectionSummary selected =
-      session.selection().box_select(to_modeling_box_select_request(request));
+  const ModelingSelectionSummary selected = [&]() {
+    QDR_PROFILE_SCOPE("Box selection API route");
+    return session.selection().box_select(
+        to_modeling_box_select_request(request));
+  }();
   const ModelingSelectionSummary after = session.selection().summary();
   const bool changed = before.content_revision != after.content_revision ||
                        before.selection_revision != after.selection_revision;
-  QuaderApiVoidResult status =
-      document_selection_mode
-          ? mutations_.run_document_result(
-                DocumentCommandResult{.ok = true, .changed = changed},
-                "Box Select")
-          : mutations_.run_modeling_result(
-                ModelingCommandResult{.ok = true, .changed = changed},
-                "Box Select");
+  QuaderApiVoidResult status = [&]() {
+    QDR_PROFILE_SCOPE("Box selection API publish mutation");
+    return document_selection_mode
+               ? mutations_.run_document_result(
+                     DocumentCommandResult{.ok = true, .changed = changed},
+                     "Box Select")
+               : mutations_.run_modeling_result(
+                     ModelingCommandResult{.ok = true, .changed = changed},
+                     "Box Select");
+  }();
   return selection_result_from_status(std::move(status), selected);
 }
 
@@ -427,23 +433,28 @@ QuaderSelectionApi::box_select(const QuaderBoxSelectRequest &request,
   const bool document_selection_mode =
       selection_mode_uses_scene_document(session.selection().mode());
   const ModelingSelectionSummary before = session.selection().summary();
-  const ModelingSelectionSummary selected =
-      baseline.impl_ != nullptr ? session.selection().box_select(
-                                      to_modeling_box_select_request(request),
-                                      baseline.impl_->baseline)
-                                : session.selection().box_select(
-                                      to_modeling_box_select_request(request));
+  const ModelingSelectionSummary selected = [&]() {
+    QDR_PROFILE_SCOPE("Box selection API baseline route");
+    return baseline.impl_ != nullptr
+               ? session.selection().box_select(
+                     to_modeling_box_select_request(request),
+                     baseline.impl_->baseline)
+               : session.selection().box_select(
+                     to_modeling_box_select_request(request));
+  }();
   const ModelingSelectionSummary after = session.selection().summary();
   const bool changed = before.content_revision != after.content_revision ||
                        before.selection_revision != after.selection_revision;
-  QuaderApiVoidResult status =
-      document_selection_mode
-          ? mutations_.run_document_result(
-                DocumentCommandResult{.ok = true, .changed = changed},
-                "Box Select")
-          : mutations_.run_modeling_result(
-                ModelingCommandResult{.ok = true, .changed = changed},
-                "Box Select");
+  QuaderApiVoidResult status = [&]() {
+    QDR_PROFILE_SCOPE("Box selection API publish mutation");
+    return document_selection_mode
+               ? mutations_.run_document_result(
+                     DocumentCommandResult{.ok = true, .changed = changed},
+                     "Box Select")
+               : mutations_.run_modeling_result(
+                     ModelingCommandResult{.ok = true, .changed = changed},
+                     "Box Select");
+  }();
   return selection_result_from_status(std::move(status), selected);
 }
 

@@ -262,6 +262,7 @@ struct TransformDragPreviewInput {
 	const std::vector<PolygonObject>* snap_objects = nullptr;
 	std::span<const PickObjectBounds> snap_object_bounds;
 	std::span<const PickObjectFaceGeometry> snap_face_geometry;
+	std::span<const PickObjectTransform> snap_object_transforms;
 };
 
 ModalMoveDragTool modal_move_drag_tool_from_id(std::string_view tool_id);

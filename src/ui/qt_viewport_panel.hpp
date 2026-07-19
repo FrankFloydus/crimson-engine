@@ -10,6 +10,7 @@
 #include "api/quader_viewport_layout_types.hpp"
 #include "editor/viewport/viewport_interaction_controller.hpp"
 #include "render/render_system.hpp"
+#include "render/viewport_info_stats.hpp"
 #include "ui/qt_navigation_gizmo.hpp"
 #include "ui/qt_startup_presentation.hpp"
 #include "ui/qt_viewport_context_menu.hpp"
@@ -122,6 +123,30 @@ protected:
   void resizeEvent(QResizeEvent *event) override;
 
 private:
+  /// Keys one pane's retained semantic overlay independently of camera pose.
+  struct PaneOverlaySubmissionKey {
+    std::uint64_t selection_overlay_revision = 0;
+    std::uint64_t scene_revision = 0;
+    std::uint64_t asset_revision = 0;
+    std::uint64_t selection_revision = 0;
+    std::uint64_t visibility_revision = 0;
+    std::uint64_t local_visibility_revision = 0;
+    std::uint64_t transform_revision = 0;
+    std::uint64_t mesh_binding_revision = 0;
+    std::uint64_t render_component_revision = 0;
+    std::uint64_t scene_tool_overlay_signature = 0;
+    std::uint64_t dynamic_overlay_signature = 0;
+    std::uint64_t style_signature = 0;
+    ModelingSelectionMode selection_mode = ModelingSelectionMode::Object;
+    bool selection_overlay_visible = false;
+    bool scene_overlay_requested = false;
+    bool wireframe_pane = false;
+    bool point_light_gizmos_visible = false;
+
+    friend bool operator==(const PaneOverlaySubmissionKey &,
+                           const PaneOverlaySubmissionKey &) = default;
+  };
+
   /// Owns the retained Qt presentation objects for one workspace pane.
   struct Pane {
     ViewportPaneId id = ViewportPaneId::Perspective;
@@ -139,6 +164,8 @@ private:
     QtViewportFlyNavigationHud *fly_navigation_hud = nullptr;
     QtViewportSurface *surface = nullptr;
     QWidget *surface_container = nullptr;
+    PaneOverlaySubmissionKey overlay_submission_key;
+    bool overlay_submission_valid = false;
   };
 
   void create_pane(Pane &pane);
@@ -173,8 +200,9 @@ private:
                               ViewportPointPlacementService *point_placement,
                               double delta_seconds);
   void refresh_cached_selection_overlay_frame(ModelingSessionService &modeling,
-                                              const SceneDocument &document,
-                                              const AssetRegistry &assets);
+                                               const SceneDocument &document,
+                                               const AssetRegistry &assets,
+                                               const ViewportSettings &settings);
   bool sync_active_tool_from_editor(QuaderEditorApi &editor);
   [[nodiscard]] const ViewportSettings &active_viewport_settings() const;
   [[nodiscard]] Pane &pane(ViewportPaneId pane_id);
@@ -203,6 +231,12 @@ private:
   QtViewportContextMenuPresenter context_menu_presenter_;
   QtViewportDeletePopupPresenter delete_popup_presenter_;
   ViewportPaneOverlayCache selection_overlay_cache_;
+  const SceneDocument *point_light_pick_cached_document_ = nullptr;
+  std::uint64_t point_light_pick_cached_scene_revision_ = 0u;
+  std::uint64_t point_light_pick_cached_local_visibility_revision_ = 0u;
+  std::vector<ViewportSceneBillboardPickCandidate>
+      point_light_pick_cached_candidates_;
+  bool point_light_pick_cache_valid_ = false;
   ViewportPaneId interaction_pane_id_ = ViewportPaneId::Perspective;
   ViewportPaneId context_menu_pane_id_ = ViewportPaneId::Perspective;
   QVec2 context_menu_right_press_screen_ = {};
@@ -229,10 +263,10 @@ private:
   std::uint64_t viewport_info_cached_scene_revision_ = 0;
   std::uint64_t viewport_info_cached_asset_revision_ = 0;
   std::uint64_t viewport_info_cached_local_visibility_revision_ = 0;
+  ViewportInfoSceneSnapshot viewport_info_cached_scene_snapshot_;
   ViewportOverlayCamera viewport_info_cached_camera_ = {};
-  std::uint64_t viewport_info_cached_objects_ = 0;
-  std::uint64_t viewport_info_cached_primitives_ = 0;
-  std::uint64_t viewport_info_cached_draw_calls_ = 0;
+  ViewportInfoSceneStats viewport_info_cached_scene_stats_ = {};
+  bool viewport_info_scene_snapshot_valid_ = false;
   bool viewport_info_scene_stats_valid_ = false;
   QtStartupPresentationState native_surface_startup_;
   bool startup_presentation_blocked_ = true;

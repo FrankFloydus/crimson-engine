@@ -8,6 +8,7 @@
 
 #include "assets/asset_registry.hpp"
 #include "assets/mesh_asset.hpp"
+#include "diagnostics/profile.hpp"
 #include "editor/array/linked_instance_array_command.hpp"
 #include "editor/history/editor_history_service.hpp"
 #include "editor/history/modeling_memento_command.hpp"
@@ -199,10 +200,44 @@ bool LinearArrayToolService::valid_source_selection(
 }
 
 bool LinearArrayToolService::can_activate() const {
-  std::vector<EntityId> sources;
-  EntityId primary = kInvalidEntityId;
-  bool instance_occurrences = false;
-  return valid_source_selection(sources, primary, instance_occurrences);
+  QDR_PROFILE_SCOPE("Linear array can activate");
+  const std::uint64_t scene_revision = scene_.revision();
+  const int selection_mode = static_cast<int>(selection_.mode());
+  if (can_activate_cache_valid_ &&
+      can_activate_scene_revision_ == scene_revision &&
+      can_activate_selection_mode_ == selection_mode) {
+    return can_activate_cached_value_;
+  }
+
+  {
+    QDR_PROFILE_SCOPE("Linear array can activate cache miss");
+    can_activate_cached_value_ = can_activate_preflight();
+  }
+  can_activate_scene_revision_ = scene_revision;
+  can_activate_selection_mode_ = selection_mode;
+  can_activate_cache_valid_ = true;
+  return can_activate_cached_value_;
+}
+
+bool LinearArrayToolService::can_activate_preflight() const {
+  QDR_PROFILE_SCOPE("Linear array can activate structural preflight");
+  if (selection_.mode() != ModelingSelectionMode::Object) {
+    return false;
+  }
+  const std::vector<EntityId> sources = scene_.selected_entities();
+  if (maximum_count_for(sources.size()) < kLinearArrayMinimumCount) {
+    return false;
+  }
+  const EntityId primary = scene_.primary_selection();
+  if (primary == kInvalidEntityId ||
+      std::find(sources.begin(), sources.end(), primary) == sources.end()) {
+    return false;
+  }
+
+  const EntityId first = sources.front();
+  return scene_.instance_occurrence(first) != nullptr ||
+         (scene_.modeling_object(first) != nullptr &&
+          scene_.mesh(first) != nullptr);
 }
 
 std::optional<QVec3>

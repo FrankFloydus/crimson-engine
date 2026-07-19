@@ -6,6 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "viewport/viewport_camera_controller.hpp"
 
+#include "diagnostics/profile.hpp"
 #include "viewport/host_viewport_contract_adapter.hpp"
 #include "viewport/viewport_camera_clip_planes.hpp"
 
@@ -323,6 +324,7 @@ void ViewportCameraController::update_drag(QVec2 mouse, ViewportDragMode mode) {
 void ViewportCameraController::update_drag_delta(QVec2 delta) {
   if (drag_mode_ == ViewportDragMode::Orbit ||
       drag_mode_ == ViewportDragMode::OrbitSnap) {
+    QDR_PROFILE_SCOPE("Viewport camera orbit");
     const ViewportHostDefaults defaults = viewport_host_defaults();
     if (orthographic_view_locked_) {
       state_.projection = ViewportProjection::Orthographic;
@@ -364,6 +366,7 @@ void ViewportCameraController::update_drag_delta(QVec2 delta) {
       orthographic_view_locked_ = false;
     }
   } else if (drag_mode_ == ViewportDragMode::Pan) {
+    QDR_PROFILE_SCOPE("Viewport camera pan");
     quader_editor_core::ViewportPanInput input;
     input.camera =
         make_runtime_camera(pose(), state_, viewport_width_, viewport_height_);
@@ -372,6 +375,7 @@ void ViewportCameraController::update_drag_delta(QVec2 delta) {
     apply_runtime_transform(state_, pivot_, camera_forward_, camera_up_,
                             quader_editor_core::viewport_pan(input));
   } else if (drag_mode_ == ViewportDragMode::Fly) {
+    QDR_PROFILE_SCOPE("Viewport camera fly look");
     const ViewportHostDefaults defaults = viewport_host_defaults();
     quader_editor_core::ViewportFlyLookInput input;
     input.camera_transform = make_runtime_transform(pose());
@@ -396,6 +400,7 @@ void ViewportCameraController::end_drag() {
 }
 
 void ViewportCameraController::scroll(float wheel_delta) {
+  QDR_PROFILE_SCOPE("Viewport camera zoom");
   quader_editor_core::ViewportZoomInput input;
   input.camera =
       make_runtime_camera(pose(), state_, viewport_width_, viewport_height_);
@@ -411,6 +416,7 @@ void ViewportCameraController::scroll_to_cursor(float wheel_delta,
     return;
   }
 
+  QDR_PROFILE_SCOPE("Viewport camera zoom to cursor");
   const ViewportRay ray = ray_from_viewport_point(local_mouse);
   quader_editor_core::ViewportZoomToCursorInput input;
   input.camera =
@@ -507,6 +513,7 @@ void ViewportCameraController::fly_move(QVec3 local_direction,
     return;
   }
 
+  QDR_PROFILE_SCOPE("Viewport camera WASD fly move");
   quader_editor_core::ViewportFlyMoveInput input;
   input.camera_transform = make_runtime_transform(pose());
   input.pivot = to_runtime(pivot_);

@@ -55,6 +55,13 @@ build_render_material_binding_snapshot(const AssetRegistry &assets,
 build_render_scene_snapshot(const SceneDocument &document,
                             const AssetRegistry &assets,
                             RenderSceneSnapshotBuildOptions options = {});
+[[nodiscard]] bool try_refresh_render_scene_snapshot_selection(
+    RenderSceneSnapshot &snapshot, const SceneDocument &document,
+    const AssetRegistry &assets, std::uint64_t frame_index = 0,
+    RenderSceneBindingKey scene_binding = {},
+    std::uint64_t project_material_revision = 0u,
+    RenderInstanceEditScope instance_edit_scope = {},
+    const ViewportLocalVisibilitySnapshot *local_visibility = nullptr);
 [[nodiscard]] bool try_refresh_render_scene_snapshot_transforms(
     RenderSceneSnapshot &snapshot, const SceneDocument &document,
     const AssetRegistry &assets, std::uint64_t frame_index = 0,

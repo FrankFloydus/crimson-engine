@@ -146,6 +146,14 @@ void SceneRenderBridge::sync(const SceneDocument &document,
     return;
   }
   if (has_previous_scene_snapshot_ &&
+      try_refresh_render_scene_snapshot_selection(
+          previous_scene_snapshot_, document, assets, frame_index,
+          scene_binding, project_material_revision,
+          instance_edit_scope, local_visibility)) {
+    (void)sync_service_.sync(previous_scene_snapshot_);
+    return;
+  }
+  if (has_previous_scene_snapshot_ &&
       try_refresh_render_scene_snapshot_transforms(
           previous_scene_snapshot_, document, assets, frame_index,
           scene_binding, project_material_revision,
@@ -305,6 +313,14 @@ void SceneRenderBridge::set_overlay_frame(std::size_t viewport_index,
   QDR_PROFILE_FUNCTION();
   (void)overlay_cache_.set_overlay_frame(viewport_index, layer_mask,
                                          std::move(frame), camera);
+}
+
+bool SceneRenderBridge::update_overlay_camera(std::size_t viewport_index,
+                                              std::uint8_t layer_mask,
+                                              ViewportOverlayCamera camera) {
+  QDR_PROFILE_FUNCTION();
+  return overlay_cache_.update_overlay_camera(viewport_index, layer_mask,
+                                              camera);
 }
 
 } // namespace quader

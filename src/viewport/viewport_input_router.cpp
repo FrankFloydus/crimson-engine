@@ -197,7 +197,14 @@ ViewportInputRouter::handle_frame(const ViewportInputFrame &input,
           (active_navigation_mode == ViewportDragMode::Orbit ||
            active_navigation_mode == ViewportDragMode::OrbitSnap);
       if (!locked_orthographic_orbit) {
-        camera.update_drag(input.mouse_screen, active_navigation_mode);
+        if (active_navigation_mode == ViewportDragMode::Orbit ||
+            active_navigation_mode == ViewportDragMode::OrbitSnap) {
+          QDR_PROFILE_SCOPE("Viewport navigation orbit");
+          camera.update_drag(input.mouse_screen, active_navigation_mode);
+        } else {
+          QDR_PROFILE_SCOPE("Viewport navigation pan");
+          camera.update_drag(input.mouse_screen, active_navigation_mode);
+        }
         result.camera_changed = true;
       }
       navigation_mode_ = active_navigation_mode;

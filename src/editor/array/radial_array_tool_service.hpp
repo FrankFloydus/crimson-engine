@@ -165,6 +165,7 @@ private:
   valid_source_selection(std::vector<EntityId> &ordered_sources,
                          EntityId &primary_source,
                          bool &instance_occurrences) const;
+  [[nodiscard]] bool can_activate_preflight() const;
   [[nodiscard]] bool session_sources_are_valid(const Session &session) const;
   [[nodiscard]] bool
   compute_session_sources_are_valid(const Session &session) const;
@@ -191,6 +192,10 @@ private:
   mutable std::uint64_t validated_object_map_revision_ = 0;
   mutable int validated_selection_mode_ = -1;
   mutable bool cached_session_sources_valid_ = false;
+  mutable std::uint64_t can_activate_scene_revision_ = 0;
+  mutable int can_activate_selection_mode_ = -1;
+  mutable bool can_activate_cached_value_ = false;
+  mutable bool can_activate_cache_valid_ = false;
   mutable std::uint64_t cached_preview_revision_ = 0;
   mutable RadialArrayPreviewState cached_preview_;
 };

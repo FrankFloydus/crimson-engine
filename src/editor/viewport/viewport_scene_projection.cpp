@@ -7,6 +7,7 @@
 #include "editor/viewport/viewport_scene_projection.hpp"
 
 #include "assets/asset_registry.hpp"
+#include "diagnostics/profile.hpp"
 #include "editor/modeling/services/modeling_session_service.hpp"
 #include "render/viewport_overlay_policy.hpp"
 #include "scene/scene_bounds.hpp"
@@ -41,6 +42,7 @@ ViewportSceneProjection::point_light_pick_candidates(
 std::optional<ViewportFocusBounds> ViewportSceneProjection::world_bounds(
     const SceneDocument &document, const AssetRegistry &assets,
     const ViewportLocalVisibilitySnapshot &local_visibility) {
+  QDR_PROFILE_SCOPE("Viewport scene world bounds");
   const std::optional<SceneBounds> bounds = document_world_bounds(
       document, assets, [&local_visibility](EntityId entity) {
         return local_visibility.allows(

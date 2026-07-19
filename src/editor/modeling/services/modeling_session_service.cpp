@@ -1136,8 +1136,8 @@ public:
 
   [[nodiscard]] std::optional<EntityId>
   pick_object_entity(const ModelingPickSelectRequest &request) const {
-    const quader_editor_core::EditorSession projected =
-        transient_selection_projection();
+    const quader_editor_core::EditorSession &projected =
+        selection_projection_view();
     const std::optional<int> object_id = selection_service_.pick_object_id(
         projected, scene_, object_registry_, request);
     if (!object_id.has_value()) {
@@ -1153,23 +1153,33 @@ public:
 
   [[nodiscard]] std::vector<EntityId>
   box_pick_object_entities(const ModelingBoxSelectRequest &request) const {
-    const quader_editor_core::EditorSession projected =
-        transient_selection_projection();
-    const std::vector<int> object_ids = selection_service_.box_pick_object_ids(
-        projected, scene_, object_registry_, request);
+    QDR_PROFILE_SCOPE("Modeling session box pick objects");
+    const quader_editor_core::EditorSession &projected = [&]()
+        -> const quader_editor_core::EditorSession & {
+      QDR_PROFILE_SCOPE("Box selection acquire session pick projection");
+      return selection_projection_view();
+    }();
+    const std::vector<int> object_ids = [&]() {
+      QDR_PROFILE_SCOPE("Box selection test session object candidates");
+      return selection_service_.box_pick_object_ids(
+          projected, scene_, object_registry_, request);
+    }();
     std::vector<EntityId> entities;
-    entities.reserve(object_ids.size());
-    for (const int object_id : object_ids) {
-      std::optional<EntityId> entity =
-          selection_service_.scene_target_for_picking_participant(object_id);
-      if (!entity.has_value()) {
-        entity = object_registry_.entity_for_modeling_object(object_id);
+    {
+      QDR_PROFILE_SCOPE("Box selection map session object hits");
+      entities.reserve(object_ids.size());
+      for (const int object_id : object_ids) {
+        std::optional<EntityId> entity =
+            selection_service_.scene_target_for_picking_participant(object_id);
+        if (!entity.has_value()) {
+          entity = object_registry_.entity_for_modeling_object(object_id);
+        }
+        if (!entity.has_value() || std::find(entities.begin(), entities.end(),
+                                             *entity) != entities.end()) {
+          continue;
+        }
+        entities.push_back(*entity);
       }
-      if (!entity.has_value() || std::find(entities.begin(), entities.end(),
-                                           *entity) != entities.end()) {
-        continue;
-      }
-      entities.push_back(*entity);
     }
     return entities;
   }
@@ -1192,8 +1202,8 @@ public:
       return sdk_projection_adapter_.selection_bounds();
     }
     if (instance_edit_active) {
-      const quader_editor_core::EditorSession projected =
-          transient_selection_projection();
+      const quader_editor_core::EditorSession &projected =
+          selection_projection_view();
       std::optional<SceneBounds> bounds;
       for (const quader_editor_core::PolygonObject &object :
            projected.objects()) {
@@ -1243,8 +1253,8 @@ public:
       }
       return bounds;
     }
-    const quader_editor_core::EditorSession projected =
-        transient_selection_projection();
+    const quader_editor_core::EditorSession &projected =
+        selection_projection_view();
     return selection_projection_service_.world_selection_bounds(
         projected, scene_, assets_, object_registry_);
   }
@@ -1293,8 +1303,8 @@ public:
     if (sdk_selection_active()) {
       return sdk_projection_adapter_.selection_mode();
     }
-    const quader_editor_core::EditorSession projected =
-        transient_selection_projection();
+    const quader_editor_core::EditorSession &projected =
+        selection_projection_view();
     return selection_service_.selection_mode(projected, app_selection_mode_);
   }
 
@@ -1306,8 +1316,8 @@ public:
       summary.selection_revision = selection_revision();
       return summary;
     }
-    const quader_editor_core::EditorSession projected =
-        transient_selection_projection();
+    const quader_editor_core::EditorSession &projected =
+        selection_projection_view();
     return selection_service_.selection_summary(projected, scene_,
                                                 app_selection_mode_);
   }
@@ -1330,8 +1340,8 @@ public:
     }
     ModelingSelectionExport exported;
     exported.summary = selection_summary();
-    const quader_editor_core::EditorSession projected =
-        transient_selection_projection();
+    const quader_editor_core::EditorSession &projected =
+        selection_projection_view();
 
     const std::vector<EntityId> selected_scene_entities =
         scene_.selected_entities();
@@ -1380,11 +1390,18 @@ public:
 
   [[nodiscard]] ModelingSelectionBoxBaseline
   capture_box_selection_baseline() const {
-    const quader_editor_core::EditorSession projected =
-        transient_selection_projection();
-    return ModelingSelectionBoxBaseline(
-        std::make_shared<ModelingSelectionBoxBaseline::Impl>(
-            selection_service_.rectangle_selection_state(projected)));
+    QDR_PROFILE_SCOPE("Modeling session capture box selection baseline");
+    const quader_editor_core::EditorSession &projected = [&]()
+        -> const quader_editor_core::EditorSession & {
+      QDR_PROFILE_SCOPE("Box selection acquire session baseline projection");
+      return selection_projection_view();
+    }();
+    {
+      QDR_PROFILE_SCOPE("Box selection capture session runtime baseline");
+      return ModelingSelectionBoxBaseline(
+          std::make_shared<ModelingSelectionBoxBaseline::Impl>(
+              selection_service_.rectangle_selection_state(projected)));
+    }
   }
 
   [[nodiscard]] std::uint64_t selection_overlay_signature(
@@ -1394,8 +1411,8 @@ public:
 
   [[nodiscard]] ViewportOverlayFrame
   selection_overlay_frame(ModelingSelectionOverlayOptions options = {}) const {
-    const quader_editor_core::EditorSession projected =
-        transient_selection_projection();
+    const quader_editor_core::EditorSession &projected =
+        selection_projection_view();
     return overlay_service_.selection_overlay_frame(
         projected, runtime_, scene_, object_registry_, selection_service_,
         sdk_projection_adapter_, options);
@@ -3039,12 +3056,16 @@ public:
   }
 
   ModelingSelectionSummary box_select(const ModelingBoxSelectRequest &request) {
+    QDR_PROFILE_SCOPE("Modeling session box selection");
     const ModelingSelectionSummary before = selection_summary();
-    ModelingSelectionSummary summary =
-        sdk_projection_adapter_.box_select(request, selection_service_);
+    ModelingSelectionSummary summary = [&]() {
+      QDR_PROFILE_SCOPE("Modeling session box select SDK projection");
+      return sdk_projection_adapter_.box_select(request, selection_service_);
+    }();
     summary.content_revision = content_revision();
     summary.selection_revision = selection_revision();
     if (summary.selection_revision != before.selection_revision) {
+      QDR_PROFILE_SCOPE("Modeling session box select invalidate overlays");
       invalidate_selection_overlay_caches();
     }
     return summary;
@@ -3053,12 +3074,17 @@ public:
   ModelingSelectionSummary box_select(
       const ModelingBoxSelectRequest &request,
       const quader_editor_core::RectangleSelectionState &baseline_selection) {
+    QDR_PROFILE_SCOPE("Modeling session box selection from baseline");
     const ModelingSelectionSummary before = selection_summary();
-    ModelingSelectionSummary summary = sdk_projection_adapter_.box_select(
-        request, baseline_selection, selection_service_);
+    ModelingSelectionSummary summary = [&]() {
+      QDR_PROFILE_SCOPE("Modeling session box select SDK projection");
+      return sdk_projection_adapter_.box_select(
+          request, baseline_selection, selection_service_);
+    }();
     summary.content_revision = content_revision();
     summary.selection_revision = selection_revision();
     if (summary.selection_revision != before.selection_revision) {
+      QDR_PROFILE_SCOPE("Modeling session box select invalidate overlays");
       invalidate_selection_overlay_caches();
     }
     return summary;
@@ -3066,8 +3092,8 @@ public:
 
   ModelingCommandResult
   update_selection_hover(const ModelingHoverRequest &request) {
-    const quader_editor_core::EditorSession projected =
-        transient_selection_projection();
+    const quader_editor_core::EditorSession &projected =
+        selection_projection_view();
     const quader_editor_core::SelectionHoverUpdateResult hover =
         selection_service_.selection_hover(
             projected, scene_, object_registry_, runtime_.hover(), request);
@@ -3079,15 +3105,15 @@ public:
   }
 
   [[nodiscard]] ModelingHoverSummary selection_hover_summary() const {
-    const quader_editor_core::EditorSession projected =
-        transient_selection_projection();
+    const quader_editor_core::EditorSession &projected =
+        selection_projection_view();
     return from_runtime_hover_summary(projected, runtime_.hover(), false);
   }
 
   [[nodiscard]] ModelingHoverSummary
   preview_selection_hover(const ModelingHoverRequest &request) const {
-    const quader_editor_core::EditorSession projected =
-        transient_selection_projection();
+    const quader_editor_core::EditorSession &projected =
+        selection_projection_view();
     const quader_editor_core::SelectionHoverUpdateResult hover =
         selection_service_.selection_hover(
             projected, scene_, object_registry_, runtime_.hover(), request);
@@ -5344,6 +5370,12 @@ private:
     return sdk_projection_adapter_.native_selection_projection();
   }
 
+  /** Borrows the cached native projection for read-only selection queries. */
+  [[nodiscard]] const quader_editor_core::EditorSession &
+  selection_projection_view() const {
+    return sdk_projection_adapter_.native_selection_projection_view();
+  }
+
   void invalidate_selection_overlay_caches() const override {
     overlay_service_.invalidate();
   }
@@ -5552,17 +5584,26 @@ private:
   [[nodiscard]] const std::vector<quader_editor_core::PolygonObject> &
   cached_scene_transformed_objects_for_picking() const override {
     QDR_PROFILE_FUNCTION();
-    const quader_editor_core::EditorSession projected =
-        transient_selection_projection();
+    const quader_editor_core::EditorSession &projected =
+        selection_projection_view();
     return selection_service_.cached_scene_transformed_objects_for_picking(
+        projected, scene_, object_registry_);
+  }
+
+  [[nodiscard]] const std::vector<quader_editor_core::PolygonObject> &
+  cached_local_objects_for_picking() const override {
+    QDR_PROFILE_FUNCTION();
+    const quader_editor_core::EditorSession &projected =
+        selection_projection_view();
+    return selection_service_.cached_local_picking_objects(
         projected, scene_, object_registry_);
   }
 
   [[nodiscard]] std::vector<quader_editor_core::PolygonObject>
   scene_transformed_objects_for_picking() const {
     QDR_PROFILE_FUNCTION();
-    const quader_editor_core::EditorSession projected =
-        transient_selection_projection();
+    const quader_editor_core::EditorSession &projected =
+        selection_projection_view();
     return selection_service_.scene_transformed_objects_for_picking(
         projected, scene_, object_registry_);
   }
@@ -5570,8 +5611,8 @@ private:
   [[nodiscard]] const std::vector<quader_editor_core::PickObjectBounds> &
   cached_pick_object_bounds() const override {
     QDR_PROFILE_FUNCTION();
-    const quader_editor_core::EditorSession projected =
-        transient_selection_projection();
+    const quader_editor_core::EditorSession &projected =
+        selection_projection_view();
     return selection_service_.cached_pick_object_bounds(
         projected, scene_, object_registry_);
   }
@@ -5580,10 +5621,30 @@ private:
   cached_pick_face_geometry(
       quader_poly::PickOptions pick_options = {}) const override {
     QDR_PROFILE_FUNCTION();
-    const quader_editor_core::EditorSession projected =
-        transient_selection_projection();
+    const quader_editor_core::EditorSession &projected =
+        selection_projection_view();
     return selection_service_.cached_pick_face_geometry(
         projected, scene_, object_registry_, pick_options);
+  }
+
+  [[nodiscard]] const std::vector<
+      quader_editor_core::PickObjectFaceGeometry> &
+  cached_local_pick_face_geometry(
+      quader_poly::PickOptions pick_options = {}) const override {
+    QDR_PROFILE_FUNCTION();
+    const quader_editor_core::EditorSession &projected =
+        selection_projection_view();
+    return selection_service_.cached_local_pick_face_geometry(
+        projected, scene_, object_registry_, pick_options);
+  }
+
+  [[nodiscard]] std::span<const quader_editor_core::PickObjectTransform>
+  cached_local_picking_transforms() const override {
+    QDR_PROFILE_FUNCTION();
+    const quader_editor_core::EditorSession &projected =
+        selection_projection_view();
+    return selection_service_.cached_local_picking_transforms(
+        projected, scene_, object_registry_);
   }
 
   ModelingCommandResult execute_runtime_no_settings(
@@ -5725,6 +5786,7 @@ std::optional<EntityId> ModelingSessionService::pick_object_entity(
 
 std::vector<EntityId> ModelingSessionService::box_pick_object_entities(
     const ModelingBoxSelectRequest &request) const {
+  QDR_PROFILE_SCOPE("Modeling session box pick entry");
   return impl_->box_pick_object_entities(request);
 }
 
@@ -5758,6 +5820,7 @@ ModelingSelectionExport ModelingSessionService::export_selection() const {
 
 ModelingSelectionBoxBaseline
 ModelingSessionService::capture_box_selection_baseline() const {
+  QDR_PROFILE_SCOPE("Modeling session box baseline entry");
   return impl_->capture_box_selection_baseline();
 }
 
@@ -6123,12 +6186,14 @@ ModelingSessionService::pick_select(const ModelingPickSelectRequest &request) {
 
 ModelingSelectionSummary
 ModelingSessionService::box_select(const ModelingBoxSelectRequest &request) {
+  QDR_PROFILE_SCOPE("Modeling session box select entry");
   return impl_->box_select(request);
 }
 
 ModelingSelectionSummary ModelingSessionService::box_select(
     const ModelingBoxSelectRequest &request,
     const ModelingSelectionBoxBaseline &baseline) {
+  QDR_PROFILE_SCOPE("Modeling session baseline box select entry");
   return baseline.impl_ ? impl_->box_select(request, baseline.impl_->selection)
                         : impl_->box_select(request);
 }

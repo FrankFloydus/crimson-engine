@@ -6,6 +6,8 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include <editor/modeling/runtime/session.hpp>
 
+#include "diagnostics/profile.hpp"
+
 #include <algorithm>
 #include <limits>
 #include <optional>
@@ -150,6 +152,7 @@ const RectangleSelectionUniverse &rectangle_request_universe(
 
 RectangleSelectionResult rectangle_select_objects(const RectangleSelectionRequest& request)
 {
+	QDR_PROFILE_SCOPE("Box selection policy object mode");
 	RectangleSelectionResult result;
         result.selection.mode = SelectionMode::Object;
         result.selection.selected_object_ids = rectangle_preserves_existing(request.operation) ? request.current_selection.selected_object_ids : std::vector<int>();
@@ -194,6 +197,7 @@ RectangleSelectionResult rectangle_select_objects(const RectangleSelectionReques
 
 RectangleSelectionResult rectangle_select_faces(const RectangleSelectionRequest& request)
 {
+	QDR_PROFILE_SCOPE("Box selection policy face mode");
 	const RectangleSelectionUniverse& universe = rectangle_request_universe(request);
 	RectangleSelectionResult result;
         result.selection.mode = SelectionMode::Face;
@@ -238,6 +242,7 @@ RectangleSelectionResult rectangle_select_faces(const RectangleSelectionRequest&
 
 RectangleSelectionResult rectangle_select_edges(const RectangleSelectionRequest& request)
 {
+	QDR_PROFILE_SCOPE("Box selection policy edge mode");
 	const RectangleSelectionUniverse& universe = rectangle_request_universe(request);
 	RectangleSelectionResult result;
         result.selection.mode = SelectionMode::Edge;
@@ -318,6 +323,7 @@ RectangleSelectionResult rectangle_select_edges(const RectangleSelectionRequest&
 
 RectangleSelectionResult rectangle_select_vertices(const RectangleSelectionRequest& request)
 {
+	QDR_PROFILE_SCOPE("Box selection policy vertex mode");
 	const RectangleSelectionUniverse& universe = rectangle_request_universe(request);
 	RectangleSelectionResult result;
         result.selection.mode = SelectionMode::Vertex;
@@ -1189,6 +1195,7 @@ bool selection_hit_is_empty(const SelectionHitTarget& hit)
 
 RectangleSelectionResult apply_rectangle_selection(const RectangleSelectionRequest& request)
 {
+	QDR_PROFILE_SCOPE("Box selection apply rectangle policy");
 	switch (request.current_selection.mode) {
         case SelectionMode::Object:
           return rectangle_select_objects(request);

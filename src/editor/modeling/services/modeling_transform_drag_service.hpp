@@ -73,12 +73,22 @@ public:
   [[nodiscard]] virtual const std::vector<
       quader_editor_core::PolygonObject> &
   cached_scene_transformed_objects_for_picking() const = 0;
+  [[nodiscard]] virtual const std::vector<
+      quader_editor_core::PolygonObject> &
+  cached_local_objects_for_picking() const = 0;
   [[nodiscard]] virtual const std::vector<quader_editor_core::PickObjectBounds>
       &cached_pick_object_bounds() const = 0;
   [[nodiscard]] virtual const std::vector<
       quader_editor_core::PickObjectFaceGeometry> &
   cached_pick_face_geometry(quader_poly::PickOptions pick_options = {}) const =
       0;
+  [[nodiscard]] virtual const std::vector<
+      quader_editor_core::PickObjectFaceGeometry> &
+  cached_local_pick_face_geometry(
+      quader_poly::PickOptions pick_options = {}) const = 0;
+  [[nodiscard]] virtual std::span<
+      const quader_editor_core::PickObjectTransform>
+  cached_local_picking_transforms() const = 0;
 };
 
 /**

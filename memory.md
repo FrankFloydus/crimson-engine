@@ -5745,3 +5745,77 @@ fingerprint sweep passes twice consecutively after a clean native resource deplo
 weld case pass. The face-overlay suite, outer-hull preview regression, and regression-gate
 guardrails pass. The complete read-only gate passes 6/6 registered CTest owners, including the
 SDK-only configure/build check, and the native v0.1.66 `quader` executable builds successfully.
+
+## 2026-07-19 - Navigation Reuses Dense Selection And Overlay Projections
+
+Invariant:
+
+- Camera navigation must not rebuild, copy, hash, or resubmit an unchanged dense semantic overlay.
+  A pane submission key covers every semantic overlay owner revision and style/input source; when
+  it is unchanged, the render cache receives only the new camera and rebuilds camera-dependent GPU
+  groups if required.
+- Native SDK-to-editor selection projection is revision-cached. Read-only picking, hover, summary,
+  bounds, export, and overlay queries borrow that projection; mutating command paths retain an
+  independent copy.
+- The modeling overlay owner caches the expensive world-space projection of the persistent
+  selection base by content, selection, scene, local visibility, object-map, selection mode,
+  instance-edit scope, and suppression policy. Hover and insert/poly tool records are projected as
+  small deltas, then composed with the retained base while preserving selected-hover filtering and
+  fallback source-wire replacement.
+- Active navigation suppresses hover picking. Orbit, pan, wheel zoom, fly look, and WASD camera math
+  remains instrumented independently from input routing, overlay preparation, and render work.
+- Retained Qt UI profiling must preserve the complete causal chain from menu/panel/event entry to
+  API queries and Qt presentation. Main-menu refresh, command enumeration, individual availability
+  predicates, shortcut-rule construction, repeated arrangement bounds, context menus, retained
+  toolbar/panel/status refresh, key dispatch, and Focus All world-bounds traversal have distinct
+  Tracy zones; modal `exec()` zones intentionally include the nested event-loop lifetime.
+
+Owners: `QtViewportPanel`, `ViewportPaneOverlayCache`, `OverlayRenderableCache`,
+`SceneRenderBridge`, `ModelingSdkProjectionAdapter`, `ModelingSessionService`,
+`ModelingOverlayService`, `QtMainMenu`, `UISystem`, command/keybinding APIs, mesh arrangement,
+context-menu presenters, and viewport camera/input routing.
+
+Verification: `navigation_log_2.tracy` reduced dense-selection navigation from a 98.04 ms median
+frame-start cadence to 15.48 ms (about 10.2 to 64.6 FPS); navigation math itself remained below
+0.016 ms per operation. The trace still exposed stable-overlay submission and hover-triggered full
+selection projection, which the second-pass caches address. Under the explicitly requested Fast
+Iteration Workflow, automated suites were skipped and the final `vs2026-debug` native `quader`
+executable built successfully; a new Tracy capture is required for post-fix measurements.
+
+`navigation_log_3.tracy` validates the second pass: active navigation reaches a 10.72 ms median
+frame-start cadence (about 93.3 FPS), hover falls from 21.36 ms to 0.227 ms median, and full
+selection-overlay projection falls from 39.75 ms to 0.015 ms. Camera-only overlay updates replace
+semantic submission on 3621 of 3724 frames. The same trace exposes a separate UI defect: each of
+seven top-level menu openings spends 1.56-1.63 seconds evaluating all 157 command predicates;
+arrangement, local-visibility, instance, and pivot availability dominate. The native executable
+builds with the new UI attribution zones; automated suites remain skipped under Fast Iteration.
+
+## 2026-07-19 - Dense UI And Transform Work Follow Narrow Revisions
+
+Invariant:
+
+- Retained UI command presentation must reuse cached effective keybinding rules and narrow command
+  availability. Dense array and arrangement predicates use structural preflights; actual command
+  activation keeps complete validation. Transform drags defer selection/tool toolbar refresh, and
+  unchanged toolbar properties never call Qt setters.
+- Object-mode transform snapping consumes cached local picking geometry plus object transforms.
+  When every object is selected there is no stationary vertex target, so the snap geometry cache
+  must not be built. Native selection projections are independent of scene transforms and are
+  invalidated by mesh bindings, assets, object mappings, SDK content, or selection instead.
+- A pure scene-selection revision updates selected occurrence flags in the retained render scene
+  snapshot without rebuilding geometry. Outliner content refresh first compares its display
+  projection and never rebuilds the `QStandardItemModel` for transform-only changes.
+- Box selection is profiled end to end: baseline capture, gesture routing, rectangle-universe and
+  projected-candidate cache hits/misses, hit testing, mode-specific policy, SDK/native publication,
+  scene selection commit, mutation publication, and overlay invalidation have distinct Tracy zones.
+
+Owners: keybinding and array services, mesh arrangement, modeling transform drag/selection/SDK
+projection services, render scene extraction/bridge, retained Qt toolbar/outliner/UI refresh, and
+box-selection API/editor/runtime policy.
+
+Verification: `ui_trace_2.tracy` confirms the preceding menu fix reduced menu `aboutToShow` from a
+1502.09 ms median to 1.17 ms. It exposed 220.43 ms mean transform snap-face reconstruction,
+82.84 ms mean selection-only render extraction, 80-98 ms Outliner rebuilds, and dense array/
+arrangement predicate stalls addressed here. The combined `vs2026-debug` native `quader` target
+builds successfully. Automated suites remain skipped under the explicitly requested Fast
+Iteration Workflow; a post-fix trace is required for measured confirmation.

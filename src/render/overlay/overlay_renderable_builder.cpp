@@ -28,8 +28,6 @@ namespace {
 constexpr float kOverlayVisibilityEpsilon = 0.000001f;
 constexpr float kOverlayOwnershipTolerance = 0.001f;
 constexpr int kOverlaySourceWireSegmentSamples = 17;
-constexpr float kOverlayEditWireViewDepthBias = 0.04f;
-constexpr float kOverlayEditWireMaxDeviceDepthOffset = -0.0008f;
 
 bool overlay_layer_uses_depth_stamp_visibility(ViewportOverlayLayer layer) {
   return layer == ViewportOverlayLayer::UnselectedVertex ||
@@ -126,34 +124,6 @@ bool line_uses_edit_wire_batch(const ViewportOverlayLine &line) {
          line.layer == ViewportOverlayLayer::SelectedEdge ||
          line.layer == ViewportOverlayLayer::HoverFaceEdge ||
          line.layer == ViewportOverlayLayer::HoverEdge;
-}
-
-void apply_edit_wire_depth_bias(OverlayEditWireMesh &mesh,
-                                const ViewportOverlayCamera &raw_camera) {
-  const ViewportOverlayCamera camera =
-      OverlayCameraProjector::sanitized_camera(raw_camera);
-  for (OverlayLineVertex &vertex : mesh.vertices) {
-    float device_offset = 0.0f;
-    if (camera.projection == ViewportOverlayProjection::Perspective) {
-      const float depth_denominator =
-          std::max(0.000001f, 1.0f - vertex.position.z);
-      const float depth =
-          std::max(camera.near_plane,
-                   (2.0f * camera.near_plane) / depth_denominator);
-      device_offset =
-          -(2.0f * camera.near_plane * kOverlayEditWireViewDepthBias) /
-          std::max(depth * depth, 0.000001f);
-      device_offset =
-          std::max(device_offset, kOverlayEditWireMaxDeviceDepthOffset);
-    } else {
-      device_offset =
-          -(2.0f * kOverlayEditWireViewDepthBias) /
-          std::max(camera.far_plane - camera.near_plane, 0.000001f);
-      device_offset =
-          std::max(device_offset, kOverlayEditWireMaxDeviceDepthOffset);
-    }
-    vertex.position.z += device_offset;
-  }
 }
 
 QVec3 camera_forward(const ViewportOverlayCamera &camera) {
@@ -539,8 +509,19 @@ std::uint64_t OverlayRenderableBuilder::layer_build_signature(
   RenderSignatureBuilder signature;
   signature.add_value(layer_signature(signatures, layer));
   if (layer_build_depends_on_camera(layer)) {
-    signature.add_value(
-        camera_signature(OverlayCameraProjector::sanitized_camera(camera)));
+    const ViewportOverlayCamera sanitized =
+        OverlayCameraProjector::sanitized_camera(camera);
+    if (overlay_layer_can_build_points(layer) ||
+        overlay_layer_can_build_icons(layer)) {
+      signature.add_value(camera_signature(sanitized));
+    } else if (overlay_layer_can_build_lines(layer)) {
+      // Line endpoints stay in world space. Only material clip/depth state can
+      // invalidate their GPU batches; camera pose and viewport size cannot.
+      signature
+          .add_value(static_cast<std::uint64_t>(sanitized.projection))
+          .add_float(sanitized.near_plane)
+          .add_float(sanitized.far_plane);
+    }
   }
   return signature.value();
 }
@@ -558,6 +539,8 @@ OverlayLayerBuildPlan OverlayRenderableBuilder::build_layer(
     ViewportOverlayLayer layer, const OverlayFrameSignatures *signatures) {
   QDR_PROFILE_FUNCTION();
   OverlayLayerBuildPlan plan;
+  const ViewportOverlayCamera sanitized_camera =
+      OverlayCameraProjector::sanitized_camera(camera);
   if (layer == ViewportOverlayLayer::SourceWireDepthStamp) {
     return plan;
   }
@@ -639,7 +622,6 @@ OverlayLayerBuildPlan OverlayRenderableBuilder::build_layer(
           viewport_overlay_line_width_pixels(layer, 0.0f);
       OverlayEditWireMesh mesh = OverlayLineMeshBuilder::build(
           edit_wire_lines, camera, width_pixels, 0.0f);
-      apply_edit_wire_depth_bias(mesh, camera);
       if (!mesh.empty()) {
         plan.edit_wire_batches.push_back({
             .mesh = std::move(mesh),
@@ -647,6 +629,11 @@ OverlayLayerBuildPlan OverlayRenderableBuilder::build_layer(
                 layer, ViewportOverlayGeometryKind::Lines, blend_order++,
                 ViewportOverlayDepthMode::DepthTested),
             .width_pixels = width_pixels,
+            .near_plane = sanitized_camera.near_plane,
+            .far_plane = sanitized_camera.far_plane,
+            .orthographic_projection =
+                sanitized_camera.projection ==
+                ViewportOverlayProjection::Orthographic,
         });
       }
     }
@@ -678,6 +665,7 @@ OverlayLayerBuildPlan OverlayRenderableBuilder::build_layer(
               key.depth_mode),
           .width_pixels = key.width_pixels,
           .depth_bias = depth_bias,
+          .near_plane = sanitized_camera.near_plane,
       });
     }
   }

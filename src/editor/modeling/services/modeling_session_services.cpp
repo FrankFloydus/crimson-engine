@@ -10,6 +10,7 @@
 #include "editor/selection/scene_selection_summary.hpp"
 
 #include "assets/asset_registry.hpp"
+#include "diagnostics/profile.hpp"
 #include "editor/modeling/services/modeling_instant_operation_catalog.hpp"
 #include "editor/modeling/services/modeling_operation_settings.hpp"
 #include "editor/modeling/services/modeling_sdk_projection_adapter.hpp"
@@ -341,6 +342,129 @@ void remove_source_wire_for_object(
             return triangle.object_id == object_id &&
                    triangle.layer == quader_editor_core::SelectionOverlayLayer::
                                          SourceWireDepthStamp;
+          }),
+      frame.triangles.end());
+}
+
+void append_viewport_overlay_frame(ViewportOverlayFrame &target,
+                                   const ViewportOverlayFrame &source) {
+  target.triangles.reserve(target.triangles.size() + source.triangles.size());
+  target.lines.reserve(target.lines.size() + source.lines.size());
+  target.points.reserve(target.points.size() + source.points.size());
+  target.icons.reserve(target.icons.size() + source.icons.size());
+  target.triangles.insert(target.triangles.end(), source.triangles.begin(),
+                          source.triangles.end());
+  target.lines.insert(target.lines.end(), source.lines.begin(),
+                      source.lines.end());
+  target.points.insert(target.points.end(), source.points.begin(),
+                       source.points.end());
+  target.icons.insert(target.icons.end(), source.icons.begin(),
+                      source.icons.end());
+  target.hover_target_selected =
+      target.hover_target_selected || source.hover_target_selected;
+}
+
+bool projected_edges_match_unordered(const ViewportOverlayElementRef &left,
+                                     const ViewportOverlayElementRef &right) {
+  return (left.edge_a == right.edge_a && left.edge_b == right.edge_b) ||
+         (left.edge_a == right.edge_b && left.edge_b == right.edge_a);
+}
+
+bool projected_hover_suppresses_triangle(
+    const ViewportOverlayFrame &hover_frame,
+    const ViewportOverlayTriangle &triangle) {
+  if (triangle.layer != ViewportOverlayLayer::SelectedVisibleFace &&
+      triangle.layer != ViewportOverlayLayer::SelectedXrayFace &&
+      triangle.layer != ViewportOverlayLayer::SelectedFaceMask) {
+    return false;
+  }
+  return std::any_of(
+      hover_frame.triangles.begin(), hover_frame.triangles.end(),
+      [&](const ViewportOverlayTriangle &hover_triangle) {
+        return hover_triangle.layer == ViewportOverlayLayer::HoverFace &&
+               hover_triangle.element.object_id == triangle.element.object_id &&
+               hover_triangle.element.face_id == triangle.element.face_id;
+      });
+}
+
+bool projected_hover_suppresses_line(const ViewportOverlayFrame &hover_frame,
+                                     const ViewportOverlayLine &line) {
+  if (line.layer != ViewportOverlayLayer::SelectedFaceEdge &&
+      line.layer != ViewportOverlayLayer::SelectedEdge) {
+    return false;
+  }
+  return std::any_of(
+      hover_frame.lines.begin(), hover_frame.lines.end(),
+      [&](const ViewportOverlayLine &hover_line) {
+        if (hover_line.element.object_id != line.element.object_id) {
+          return false;
+        }
+        if (hover_line.layer == ViewportOverlayLayer::HoverFaceEdge) {
+          return line.element.face_id == hover_line.element.face_id &&
+                 projected_edges_match_unordered(line.element,
+                                                 hover_line.element);
+        }
+        return hover_line.layer == ViewportOverlayLayer::HoverEdge &&
+               projected_edges_match_unordered(line.element,
+                                               hover_line.element);
+      });
+}
+
+bool projected_hover_suppresses_point(const ViewportOverlayFrame &hover_frame,
+                                      const ViewportOverlayPoint &point) {
+  if (point.layer != ViewportOverlayLayer::SelectedVertex) {
+    return false;
+  }
+  return std::any_of(
+      hover_frame.points.begin(), hover_frame.points.end(),
+      [&](const ViewportOverlayPoint &hover_point) {
+        return hover_point.layer == ViewportOverlayLayer::HoverVertex &&
+               hover_point.element.object_id == point.element.object_id &&
+               hover_point.element.vertex_id == point.element.vertex_id;
+      });
+}
+
+void append_selected_hover_filtered_projected_base_frame(
+    ViewportOverlayFrame &target, const ViewportOverlayFrame &base,
+    const ViewportOverlayFrame &hover_frame) {
+  target.triangles.reserve(target.triangles.size() + base.triangles.size());
+  target.lines.reserve(target.lines.size() + base.lines.size());
+  target.points.reserve(target.points.size() + base.points.size());
+  target.icons.reserve(target.icons.size() + base.icons.size());
+  for (const ViewportOverlayTriangle &triangle : base.triangles) {
+    if (!projected_hover_suppresses_triangle(hover_frame, triangle)) {
+      target.triangles.push_back(triangle);
+    }
+  }
+  for (const ViewportOverlayLine &line : base.lines) {
+    if (!projected_hover_suppresses_line(hover_frame, line)) {
+      target.lines.push_back(line);
+    }
+  }
+  for (const ViewportOverlayPoint &point : base.points) {
+    if (!projected_hover_suppresses_point(hover_frame, point)) {
+      target.points.push_back(point);
+    }
+  }
+  target.icons.insert(target.icons.end(), base.icons.begin(), base.icons.end());
+}
+
+void remove_projected_source_wire_for_object(ViewportOverlayFrame &frame,
+                                             int object_id) {
+  frame.lines.erase(
+      std::remove_if(
+          frame.lines.begin(), frame.lines.end(),
+          [object_id](const ViewportOverlayLine &line) {
+            return line.element.object_id == object_id &&
+                   line.layer == ViewportOverlayLayer::SourceWire;
+          }),
+      frame.lines.end());
+  frame.triangles.erase(
+      std::remove_if(
+          frame.triangles.begin(), frame.triangles.end(),
+          [object_id](const ViewportOverlayTriangle &triangle) {
+            return triangle.element.object_id == object_id &&
+                   triangle.layer == ViewportOverlayLayer::SourceWireDepthStamp;
           }),
       frame.triangles.end());
 }
@@ -1783,6 +1907,7 @@ ModelingSelectionService::rectangle_selection_universe(
     const quader_editor_core::EditorSession &session,
     const SceneDocument &scene,
     const ModelingObjectRuntimeMap &object_map) const {
+  QDR_PROFILE_SCOPE("Box selection rectangle universe");
   const std::uint64_t content_revision = session.state().content_revision;
   const std::uint64_t scene_revision = scene.revision();
   const std::uint64_t scene_layer_revision = scene.layer_revision();
@@ -1802,30 +1927,34 @@ ModelingSelectionService::rectangle_selection_universe(
       rectangle_universe_cache_.instance_edit_scope == edit_scope &&
       rectangle_universe_cache_.app_selection_mode ==
           current_app_selection_mode) {
+    QDR_PROFILE_SCOPE("Box selection rectangle universe cache hit");
     return rectangle_universe_cache_.universe;
   }
 
   quader_editor_core::RectangleSelectionUniverse universe;
-  const std::vector<quader_editor_core::PolygonObject> &picking_objects =
-      cached_local_picking_objects(session, scene, object_map);
-  for (const quader_editor_core::PolygonObject &object : picking_objects) {
-    universe.object_ids.push_back(object.id);
-    for (const quader_poly::Face &face : object.document.faces) {
-      std::vector<int> vertex_ids;
-      vertex_ids.reserve(face.vertices.size());
-      for (const quader_poly::ElementId vertex_id : face.vertices) {
-        vertex_ids.push_back(static_cast<int>(vertex_id));
+  {
+    QDR_PROFILE_SCOPE("Box selection build rectangle universe cache miss");
+    const std::vector<quader_editor_core::PolygonObject> &picking_objects =
+        cached_local_picking_objects(session, scene, object_map);
+    for (const quader_editor_core::PolygonObject &object : picking_objects) {
+      universe.object_ids.push_back(object.id);
+      for (const quader_poly::Face &face : object.document.faces) {
+        std::vector<int> vertex_ids;
+        vertex_ids.reserve(face.vertices.size());
+        for (const quader_poly::ElementId vertex_id : face.vertices) {
+          vertex_ids.push_back(static_cast<int>(vertex_id));
+        }
+        universe.faces.push_back(
+            {object.id, static_cast<int>(face.id), std::move(vertex_ids)});
       }
-      universe.faces.push_back(
-          {object.id, static_cast<int>(face.id), std::move(vertex_ids)});
-    }
-    for (const quader_poly::Edge edge :
-         quader_poly::document_edges(object.document)) {
-      universe.edges.push_back(
-          {object.id, static_cast<int>(edge.a), static_cast<int>(edge.b)});
-    }
-    for (const quader_poly::Vertex &vertex : object.document.vertices) {
-      universe.vertices.push_back({object.id, static_cast<int>(vertex.id)});
+      for (const quader_poly::Edge edge :
+           quader_poly::document_edges(object.document)) {
+        universe.edges.push_back(
+            {object.id, static_cast<int>(edge.a), static_cast<int>(edge.b)});
+      }
+      for (const quader_poly::Vertex &vertex : object.document.vertices) {
+        universe.vertices.push_back({object.id, static_cast<int>(vertex.id)});
+      }
     }
   }
   rectangle_universe_cache_.valid = true;
@@ -1848,6 +1977,7 @@ ModelingSelectionService::rectangle_projected_hits_request(
         object_transforms,
     quader_editor_core::SelectionMode selection_mode,
     const ModelingBoxSelectRequest &request) const {
+  QDR_PROFILE_SCOPE("Box selection project candidates");
   const quader_editor_core::ViewportCameraState camera =
       modeling_runtime_camera(request.camera);
   quader_editor_core::RectangleProjectedHitsRequest hits_request;
@@ -2023,6 +2153,7 @@ ModelingSelectionService::cached_rectangle_projected_hits_request(
     const SceneDocument &scene, const ModelingObjectRuntimeMap &object_map,
     quader_editor_core::SelectionMode selection_mode,
     const ModelingBoxSelectRequest &request) const {
+  QDR_PROFILE_SCOPE("Box selection projected candidates cache");
   const std::uint64_t content_revision = session.state().content_revision;
   const std::uint64_t scene_transform_revision = scene.transform_revision();
   const std::uint64_t scene_visibility_revision = scene.visibility_revision();
@@ -2056,6 +2187,7 @@ ModelingSelectionService::cached_rectangle_projected_hits_request(
       !same_viewport_camera(rectangle_projection_cache_.camera,
                             request.camera);
   if (rebuild) {
+    QDR_PROFILE_SCOPE("Box selection build projected candidates cache miss");
     const std::vector<quader_editor_core::PolygonObject> &picking_objects =
         cached_local_picking_objects(session, scene, object_map);
     rectangle_projection_cache_.request = rectangle_projected_hits_request(
@@ -2080,6 +2212,8 @@ ModelingSelectionService::cached_rectangle_projected_hits_request(
     rectangle_projection_cache_.selection_mode = selection_mode;
     rectangle_projection_cache_.camera = request.camera;
     ++rectangle_picking_projection_build_count_;
+  } else {
+    QDR_PROFILE_SCOPE("Box selection projected candidates cache hit");
   }
   rectangle_projection_cache_.request.match =
       rectangle_selection_match(request.rule, request.start, request.end);
@@ -2092,6 +2226,7 @@ std::vector<int> ModelingSelectionService::box_pick_object_ids(
     const quader_editor_core::EditorSession &session,
     const SceneDocument &scene, const ModelingObjectRuntimeMap &object_registry,
     const ModelingBoxSelectRequest &request) const {
+  QDR_PROFILE_SCOPE("Box selection resolve object hits");
   const quader_editor_core::RectangleSelectionHits hits =
       quader_editor_core::rectangle_hits_from_projected_candidates(
           cached_rectangle_projected_hits_request(
@@ -2103,6 +2238,7 @@ std::vector<int> ModelingSelectionService::box_pick_object_ids(
 bool ModelingSelectionService::apply_rectangle_selection(
     quader_editor_core::EditorSession &session,
     const quader_editor_core::RectangleSelectionState &selection) const {
+  QDR_PROFILE_SCOPE("Box selection publish runtime selection");
   quader_editor_core::SessionState &state = session.state();
   bool changed = state.selection_mode != selection.mode ||
                  state.active_object_id != selection.active_object_id;
@@ -2244,6 +2380,7 @@ ModelingSelectionApplyResult ModelingSelectionService::apply_rectangle_selection
     const ModelingObjectRuntimeMap &object_registry,
     const ModelingBoxSelectRequest &request,
     const quader_editor_core::RectangleSelectionState &baseline) const {
+  QDR_PROFILE_SCOPE("Box selection resolve component selection");
   quader_editor_core::RectangleSelectionRequest rectangle_request;
   rectangle_request.current_selection = baseline;
   const quader_editor_core::SelectionEditOperation operation =
@@ -2267,14 +2404,20 @@ ModelingSelectionApplyResult ModelingSelectionService::apply_rectangle_selection
                                      baseline) &&
       same_rectangle_hits(rectangle_resolution_cache_.hits,
                           rectangle_request.hits)) {
+    QDR_PROFILE_SCOPE("Box selection resolution cache hit");
     return {};
   }
 
   ++rectangle_selection_resolution_build_count_;
-  const quader_editor_core::RectangleSelectionResult result =
-      quader_editor_core::apply_rectangle_selection(rectangle_request);
+  const quader_editor_core::RectangleSelectionResult result = [&]() {
+    QDR_PROFILE_SCOPE("Box selection execute selection policy");
+    return quader_editor_core::apply_rectangle_selection(rectangle_request);
+  }();
   const std::uint64_t selection_before = session.state().selection_revision;
-  const bool applied = apply_rectangle_selection(session, result.selection);
+  const bool applied = [&]() {
+    QDR_PROFILE_SCOPE("Box selection apply resolved state");
+    return apply_rectangle_selection(session, result.selection);
+  }();
   rectangle_resolution_cache_.valid = true;
   rectangle_resolution_cache_.projected_candidates_revision =
       rectangle_picking_projection_build_count_;
@@ -2534,6 +2677,7 @@ bool ModelingOverlayService::has_modal_overlay(const ModelingToolStatus &status)
 void ModelingOverlayService::invalidate() const {
   selection_overlay_cache_.invalidate();
   overlay_base_cache_.valid = false;
+  projected_overlay_base_cache_.valid = false;
 }
 
 std::uint64_t ModelingOverlayService::selection_overlay_signature(
@@ -2866,10 +3010,18 @@ ModelingOverlayService::selection_overlay_base_frame(
       entry.component_edit_target = object.component_edit_target;
       entry.active_source_wire_object = active_source_wire_object;
       entry.selection = object.selection;
-      entry.frame = quader_editor_core::build_selection_overlay_frame(
-          std::span<const quader_editor_core::PolygonObject>(&object, 1U),
-          selection_mode, active_source_wire_object ? object.id : -1,
-          empty_hover, {});
+      if (options.suppress_persistent_object_selection &&
+          selection_mode == quader_editor_core::SelectionMode::Object &&
+          object.selected) {
+        entry.frame =
+            quader_editor_core::build_object_selection_wire_overlay_frame(
+                object, {});
+      } else {
+        entry.frame = quader_editor_core::build_selection_overlay_frame(
+            std::span<const quader_editor_core::PolygonObject>(&object, 1U),
+            selection_mode, active_source_wire_object ? object.id : -1,
+            empty_hover, {});
+      }
       if (selection_mode != quader_editor_core::SelectionMode::Object &&
           !active_source_wire_object) {
         remove_source_wire_for_object(entry.frame, object.id);
@@ -2947,34 +3099,117 @@ ViewportOverlayFrame ModelingOverlayService::selection_overlay_frame(
       selection_service.viewport_visibility_revision();
   const quader_editor_core::SelectionMode selection_mode =
       session.selection_mode();
-  const std::uint64_t overlay_signature =
+  const ModelingInstanceEditScope instance_edit_scope =
+      selection_service.overlay_instance_edit_scope();
+  const std::uint64_t object_map_revision = object_registry.revision();
+  std::uint64_t overlay_signature =
       selection_overlay_signature(runtime, options);
+  mix_overlay_signature_hash(overlay_signature, object_map_revision);
+  mix_overlay_signature_hash(
+      overlay_signature,
+      static_cast<std::uint64_t>(instance_edit_scope.occurrence));
+  mix_overlay_signature_hash(
+      overlay_signature,
+      static_cast<std::uint64_t>(instance_edit_scope.definition));
   if (selection_frame_matches(content_revision, selection_revision,
                               scene_revision, local_visibility_revision,
                               selection_mode, overlay_signature, hover)) {
     return selection_frame();
   }
 
-  const quader_editor_core::SelectionOverlayFrame current_frame =
-      selection_overlay_current_frame(session, runtime, hover, options);
   const std::function<bool(EntityId)> entity_visible =
       [&selection_service](EntityId entity) {
         return selection_service.viewport_entity_visible(entity);
       };
-  ViewportOverlayFrame frame =
+  const quader_editor_core::SelectionOverlayFrame &base_frame =
+      selection_overlay_base_frame(session, options);
+  if (!projected_overlay_base_cache_.valid ||
+      projected_overlay_base_cache_.content_revision != content_revision ||
+      projected_overlay_base_cache_.selection_revision != selection_revision ||
+      projected_overlay_base_cache_.scene_revision != scene_revision ||
+      projected_overlay_base_cache_.local_visibility_revision !=
+          local_visibility_revision ||
+      projected_overlay_base_cache_.object_map_revision !=
+          object_map_revision ||
+      projected_overlay_base_cache_.selection_mode != selection_mode ||
+      projected_overlay_base_cache_.instance_edit_scope !=
+          instance_edit_scope ||
+      projected_overlay_base_cache_.suppress_persistent_object_selection !=
+          options.suppress_persistent_object_selection) {
+    QDR_PROFILE_SCOPE("Selection overlay project persistent base");
+    projected_overlay_base_cache_.frame =
+        SelectionOverlayProjection::project_selection_overlay_frame(
+            base_frame, object_registry, scene, selection_mode,
+            instance_edit_scope, entity_visible);
+    projected_overlay_base_cache_.content_revision = content_revision;
+    projected_overlay_base_cache_.selection_revision = selection_revision;
+    projected_overlay_base_cache_.scene_revision = scene_revision;
+    projected_overlay_base_cache_.local_visibility_revision =
+        local_visibility_revision;
+    projected_overlay_base_cache_.object_map_revision = object_map_revision;
+    projected_overlay_base_cache_.selection_mode = selection_mode;
+    projected_overlay_base_cache_.instance_edit_scope = instance_edit_scope;
+    projected_overlay_base_cache_.suppress_persistent_object_selection =
+        options.suppress_persistent_object_selection;
+    projected_overlay_base_cache_.valid = true;
+  }
+
+  const quader_editor_core::SelectionOverlayFrame hover_frame =
+      quader_editor_core::build_selection_hover_overlay_frame(
+          session.objects(), selection_mode, hover, {});
+  const ViewportOverlayFrame projected_hover_frame =
       SelectionOverlayProjection::project_selection_overlay_frame(
-          current_frame, object_registry, scene, selection_mode,
-          selection_service.overlay_instance_edit_scope(), entity_visible);
+          hover_frame, object_registry, scene, selection_mode,
+          instance_edit_scope, entity_visible);
+  const bool suppress_base_under_hover =
+      quader_editor_core::selection_hover_target_is_selected(
+          session.objects(), selection_mode, hover);
+
+  ViewportOverlayFrame frame;
+  if (suppress_base_under_hover) {
+    frame.hover_target_selected =
+        projected_hover_frame.hover_target_selected;
+    append_selected_hover_filtered_projected_base_frame(
+        frame, projected_overlay_base_cache_.frame, projected_hover_frame);
+  } else {
+    frame = projected_overlay_base_cache_.frame;
+    if (component_hover_replaces_fallback_active_source_wire(session, hover)) {
+      remove_projected_source_wire_for_object(frame,
+                                              session.active_object_id());
+    }
+  }
+  append_viewport_overlay_frame(frame, projected_hover_frame);
+
+  quader_editor_core::SelectionOverlayFrame runtime_tool_frame;
+  const quader_editor_core::InsertEdgeLoopToolState &insert_loop =
+      runtime.insert_edge_loop_state();
+  runtime_tool_frame.lines.insert(runtime_tool_frame.lines.end(),
+                                  insert_loop.preview_lines.begin(),
+                                  insert_loop.preview_lines.end());
+  const quader_editor_core::PolyToolState &poly = runtime.poly_state();
+  runtime_tool_frame.lines.insert(runtime_tool_frame.lines.end(),
+                                  poly.preview_lines.begin(),
+                                  poly.preview_lines.end());
+  runtime_tool_frame.points.insert(runtime_tool_frame.points.end(),
+                                   poly.preview_points.begin(),
+                                   poly.preview_points.end());
+  if (!runtime_tool_frame.lines.empty() ||
+      !runtime_tool_frame.points.empty()) {
+    append_viewport_overlay_frame(
+        frame, SelectionOverlayProjection::project_selection_overlay_frame(
+                   runtime_tool_frame, object_registry, scene, selection_mode,
+                   instance_edit_scope, entity_visible));
+  }
   SelectionOverlayProjection::append_projected_overlay_points(
       frame, runtime.knife_state().preview_points, object_registry, scene,
       ViewportOverlayLayer::ToolHandle,
       ViewportOverlayStyleRole::ExplicitColor, ViewportOverlaySource::Tool,
-      selection_service.overlay_instance_edit_scope(), entity_visible);
+      instance_edit_scope, entity_visible);
   SelectionOverlayProjection::append_projected_overlay_lines(
       frame, runtime.knife_state().preview_lines, object_registry, scene,
       ViewportOverlayLayer::ToolPreviewLine,
       ViewportOverlayStyleRole::ToolPreviewLine, ViewportOverlaySource::Tool,
-      selection_service.overlay_instance_edit_scope(), entity_visible);
+      instance_edit_scope, entity_visible);
   if (runtime.transform_drag_active()) {
     SelectionOverlayProjection::append_world_space_overlay_points(
         frame, quader_editor_core::transform_drag_snap_overlay_points(

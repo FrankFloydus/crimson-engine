@@ -109,6 +109,22 @@ public:
                             const SceneDocument &scene,
                             const ModelingObjectRuntimeMap &object_map,
                             quader_poly::PickOptions pick_options = {}) const;
+  [[nodiscard]] const std::vector<quader_editor_core::PolygonObject> &
+  cached_local_picking_objects(
+      const quader_editor_core::EditorSession &session,
+      const SceneDocument &scene,
+      const ModelingObjectRuntimeMap &object_map) const;
+  [[nodiscard]] std::span<const quader_editor_core::PickObjectTransform>
+  cached_local_picking_transforms(
+      const quader_editor_core::EditorSession &session,
+      const SceneDocument &scene,
+      const ModelingObjectRuntimeMap &object_map) const;
+  [[nodiscard]] const std::vector<quader_editor_core::PickObjectFaceGeometry> &
+  cached_local_pick_face_geometry(
+      const quader_editor_core::EditorSession &session,
+      const SceneDocument &scene,
+      const ModelingObjectRuntimeMap &object_map,
+      quader_poly::PickOptions pick_options = {}) const;
   [[nodiscard]] ModelingSelectionApplyResult
   apply_pick_selection(quader_editor_core::EditorSession &session,
                        const SceneDocument &scene,
@@ -220,23 +236,6 @@ private:
       const ModelingObjectRuntimeMap &object_map,
       quader_editor_core::SelectionMode selection_mode,
       const ModelingBoxSelectRequest &request) const;
-
-  [[nodiscard]] const std::vector<quader_editor_core::PolygonObject> &
-  cached_local_picking_objects(
-      const quader_editor_core::EditorSession &session,
-      const SceneDocument &scene,
-      const ModelingObjectRuntimeMap &object_map) const;
-  [[nodiscard]] std::span<const quader_editor_core::PickObjectTransform>
-  cached_local_picking_transforms(
-      const quader_editor_core::EditorSession &session,
-      const SceneDocument &scene,
-      const ModelingObjectRuntimeMap &object_map) const;
-  [[nodiscard]] const std::vector<quader_editor_core::PickObjectFaceGeometry> &
-  cached_local_pick_face_geometry(
-      const quader_editor_core::EditorSession &session,
-      const SceneDocument &scene,
-      const ModelingObjectRuntimeMap &object_map,
-      quader_poly::PickOptions pick_options = {}) const;
 
   [[nodiscard]] ModelingInstanceEditScope instance_edit_scope() const;
   [[nodiscard]] ModelingSelectionMode app_selection_mode() const;

@@ -41,6 +41,9 @@ ViewportPaneOverlayCacheRefreshReason ViewportPaneOverlayCache::refresh_reason(
   if (key_.overlay_signature != key.overlay_signature) {
     return ViewportPaneOverlayCacheRefreshReason::OverlaySignature;
   }
+  if (key_.style_signature != key.style_signature) {
+    return ViewportPaneOverlayCacheRefreshReason::StyleSignature;
+  }
   if (key_.selection_mode != key.selection_mode) {
     return ViewportPaneOverlayCacheRefreshReason::SelectionMode;
   }
@@ -52,6 +55,7 @@ void ViewportPaneOverlayCache::mark_dirty() { dirty_ = true; }
 void ViewportPaneOverlayCache::update(ViewportOverlayFrame frame, const ViewportPaneOverlayCacheKey& key) {
     frame_ = std::move(frame);
     key_ = key;
+    ++revision_;
     valid_ = true;
     dirty_ = false;
 }

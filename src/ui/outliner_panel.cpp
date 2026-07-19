@@ -8,6 +8,7 @@
 
 #include "api/quader_editor_api.hpp"
 #include "core/localization_service.hpp"
+#include "diagnostics/profile.hpp"
 #include "editor/commands/document/document_command_scene_helpers.hpp"
 #include "scene/scene_document.hpp"
 #include "ui/ui_context.hpp"
@@ -123,6 +124,34 @@ EntityId entity_id(const QModelIndex &index) {
 
 bool contains_entity(const std::vector<EntityId> &ids, EntityId id) {
   return std::find(ids.begin(), ids.end(), id) != ids.end();
+}
+
+bool outliner_projection_matches(std::span<const EntityRecord> left,
+                                  std::span<const EntityRecord> right) {
+  if (left.size() != right.size()) {
+    return false;
+  }
+  for (std::size_t index = 0; index < left.size(); ++index) {
+    const EntityRecord &a = left[index];
+    const EntityRecord &b = right[index];
+    if (a.id != b.id || a.uuid != b.uuid ||
+        a.editor_object_id != b.editor_object_id || a.name != b.name ||
+        a.kind != b.kind || a.parent != b.parent || a.depth != b.depth ||
+        a.visible != b.visible ||
+        a.effectively_visible != b.effectively_visible ||
+        a.locked != b.locked ||
+        a.effectively_locked != b.effectively_locked ||
+        a.has_children != b.has_children || a.has_mesh != b.has_mesh ||
+        a.has_light != b.has_light || a.is_scene_root != b.is_scene_root ||
+        a.has_scene_settings != b.has_scene_settings ||
+        a.has_modeling_object != b.has_modeling_object ||
+        a.is_instance_definition != b.is_instance_definition ||
+        a.has_instance_occurrence != b.has_instance_occurrence ||
+        a.layer_id != b.layer_id) {
+      return false;
+    }
+  }
+  return true;
 }
 
 bool select_only(QuaderEditorApi &editor, const std::vector<EntityId> &entities,
@@ -252,7 +281,9 @@ protected:
   selectionCommand(const QModelIndex &index,
                    const QEvent *event = nullptr) const override {
     if (resetting_selection_anchor_) {
-      return QItemSelectionModel::ClearAndSelect | QItemSelectionModel::Rows;
+      // Reset the current/Shift-selection anchor without replacing the
+      // externally synchronized multi-row selection.
+      return QItemSelectionModel::NoUpdate;
     }
     return QTreeView::selectionCommand(index, event);
   }
@@ -466,6 +497,7 @@ private:
   }
 
   void refresh_model_if_needed() {
+    QDR_PROFILE_SCOPE("Qt outliner refresh model if needed");
     const bool document_changed = cache_.document != document_;
     if (document_ == nullptr ||
         (cache_.valid &&
@@ -478,13 +510,29 @@ private:
     if (document_changed) {
       collapsed_entities_.clear();
     }
+
+    std::vector<EntityRecord> next_records;
+    {
+      QDR_PROFILE_SCOPE("Qt outliner project records");
+      next_records =
+          instance_scope_definition_ != kInvalidEntityId
+              ? document_->entity_records_for_instance_definition(
+                    instance_scope_definition_)
+              : document_->entity_records_tree_order();
+    }
+
+    if (cache_.valid && !document_changed &&
+        cache_.instance_scope_definition == instance_scope_definition_ &&
+        outliner_projection_matches(cache_.records, next_records)) {
+      QDR_PROFILE_SCOPE("Qt outliner retain unchanged projection");
+      cache_.content_revision = document_->content_revision();
+      return;
+    }
+
     cache_.document = document_;
     cache_.content_revision = document_->content_revision();
     cache_.instance_scope_definition = instance_scope_definition_;
-    cache_.records = instance_scope_definition_ != kInvalidEntityId
-                         ? document_->entity_records_for_instance_definition(
-                               instance_scope_definition_)
-                         : document_->entity_records_tree_order();
+    cache_.records = std::move(next_records);
     cache_.record_index_by_entity.clear();
     cache_.record_index_by_entity.reserve(cache_.records.size());
     cache_.children_by_entity.clear();
@@ -506,12 +554,14 @@ private:
       return !cache_.record_index_by_entity.contains(entity);
     });
 
-    tree_->setUpdatesEnabled(false);
-    syncing_expansion_ = true;
-    syncing_model_ = true;
-    model_->removeRows(0, model_->rowCount());
-    item_by_entity_.clear();
-    item_by_entity_.reserve(cache_.records.size());
+    {
+      QDR_PROFILE_SCOPE("Qt outliner rebuild item model");
+      tree_->setUpdatesEnabled(false);
+      syncing_expansion_ = true;
+      syncing_model_ = true;
+      model_->removeRows(0, model_->rowCount());
+      item_by_entity_.clear();
+      item_by_entity_.reserve(cache_.records.size());
 
     std::unordered_set<EntityId> appended;
     appended.reserve(cache_.records.size());
@@ -584,13 +634,63 @@ private:
                            !collapsed_entities_.contains(entity_record.id));
       }
     }
-    selection_sync_after_model_rebuild_ = true;
-    syncing_model_ = false;
-    syncing_expansion_ = false;
-    tree_->setUpdatesEnabled(true);
+      selection_sync_after_model_rebuild_ = true;
+      syncing_model_ = false;
+      syncing_expansion_ = false;
+      tree_->setUpdatesEnabled(true);
+    }
+  }
+
+  [[nodiscard]] QItemSelection
+  batched_row_selection(std::span<const EntityId> entities) const {
+    std::vector<QStandardItem *> items;
+    items.reserve(entities.size());
+    for (const EntityId entity : entities) {
+      const auto found = item_by_entity_.find(entity);
+      if (found != item_by_entity_.end() && found->second != nullptr) {
+        items.push_back(found->second);
+      }
+    }
+    std::sort(items.begin(), items.end(),
+              [](QStandardItem *left, QStandardItem *right) {
+                if (left->parent() != right->parent()) {
+                  return std::less<QStandardItem *>{}(left->parent(),
+                                                      right->parent());
+                }
+                return left->row() < right->row();
+              });
+
+    QItemSelection selection;
+    if (items.empty()) {
+      return selection;
+    }
+
+    QStandardItem *range_first = items.front();
+    QStandardItem *range_last = range_first;
+    const auto append_range = [&selection](QStandardItem *first,
+                                            QStandardItem *last) {
+      selection.select(first->index(), last->index());
+    };
+    for (std::size_t index = 1; index < items.size(); ++index) {
+      QStandardItem *item = items[index];
+      if (item == range_last) {
+        continue;
+      }
+      if (item->parent() == range_last->parent() &&
+          item->row() == range_last->row() + 1) {
+        range_last = item;
+        continue;
+      }
+      append_range(range_first, range_last);
+      range_first = item;
+      range_last = item;
+    }
+    append_range(range_first, range_last);
+    return selection;
   }
 
   void sync_selection() {
+    QDR_PROFILE_SCOPE("Qt outliner synchronize selection");
     if (document_ == nullptr || tree_->selectionModel() == nullptr) {
       return;
     }
@@ -606,18 +706,60 @@ private:
       return;
     }
 
-    QItemSelection widget_selection;
-    for (const EntityId entity : selected) {
-      const auto item = item_by_entity_.find(entity);
-      if (item != item_by_entity_.end()) {
-        const QModelIndex index = item->second->index();
-        widget_selection.select(index, index);
+    QItemSelectionModel *selection_model = tree_->selectionModel();
+    std::unordered_set<EntityId> widget_entities;
+    const QModelIndexList widget_rows = selection_model->selectedRows(
+        column_index(OutlinerColumn::Name));
+    widget_entities.reserve(static_cast<std::size_t>(widget_rows.size()));
+    for (const QModelIndex &index : widget_rows) {
+      const EntityId entity = entity_id(index);
+      if (entity != kInvalidEntityId) {
+        widget_entities.insert(entity);
       }
     }
 
-    QItemSelectionModel *selection_model = tree_->selectionModel();
+    std::unordered_set<EntityId> desired_entities;
+    desired_entities.reserve(selected.size());
+    for (const EntityId entity : selected) {
+      if (item_by_entity_.contains(entity)) {
+        desired_entities.insert(entity);
+      }
+    }
+
+    std::vector<EntityId> entities_to_select;
+    entities_to_select.reserve(desired_entities.size());
+    for (const EntityId entity : desired_entities) {
+      if (!widget_entities.contains(entity)) {
+        entities_to_select.push_back(entity);
+      }
+    }
+    std::vector<EntityId> entities_to_deselect;
+    entities_to_deselect.reserve(widget_entities.size());
+    for (const EntityId entity : widget_entities) {
+      if (!desired_entities.contains(entity)) {
+        entities_to_deselect.push_back(entity);
+      }
+    }
+
+    const QItemSelection rows_to_select =
+        batched_row_selection(entities_to_select);
+    const QItemSelection rows_to_deselect =
+        batched_row_selection(entities_to_deselect);
     const QScopedValueRollback<bool> selection_guard(syncing_selection_, true);
-    selection_model->clear();
+    const QSignalBlocker selection_model_blocker(selection_model);
+    const bool updates_enabled = tree_->updatesEnabled();
+    if (updates_enabled) {
+      tree_->setUpdatesEnabled(false);
+    }
+    if (!rows_to_deselect.isEmpty()) {
+      selection_model->select(rows_to_deselect,
+                              QItemSelectionModel::Deselect |
+                                  QItemSelectionModel::Rows);
+    }
+    if (!rows_to_select.isEmpty()) {
+      selection_model->select(rows_to_select, QItemSelectionModel::Select |
+                                                  QItemSelectionModel::Rows);
+    }
 
     const auto primary = item_by_entity_.find(primary_selection);
     tree_->reset_selection_anchor(
@@ -625,8 +767,10 @@ private:
                 row_is_revealed(primary_selection)
             ? primary->second->index()
             : QModelIndex{});
-    selection_model->select(widget_selection, QItemSelectionModel::Select |
-                                                   QItemSelectionModel::Rows);
+    if (updates_enabled) {
+      tree_->setUpdatesEnabled(true);
+      tree_->viewport()->update();
+    }
     synced_selection_revision_ = selection_revision;
     synced_selected_entities_ = selected;
     synced_primary_selection_ = primary_selection;
@@ -784,15 +928,19 @@ private:
   }
 
   void show_context_menu(EntityId entity, QPoint global_position) {
+    QDR_PROFILE_SCOPE("Qt outliner context menu show");
     if (editor_ == nullptr || document_ == nullptr ||
         entity == kInvalidEntityId) {
       return;
     }
-    refresh_model_if_needed();
-    if (!contains_entity(document_->selected_entities(), entity)) {
-      (void)select_only(*editor_, {entity}, entity);
+    {
+      QDR_PROFILE_SCOPE("Qt outliner context menu query state");
+      refresh_model_if_needed();
+      if (!contains_entity(document_->selected_entities(), entity)) {
+        (void)select_only(*editor_, {entity}, entity);
+      }
+      sync_selection();
     }
-    sync_selection();
     const EntityRecord *entity_record = record(entity);
     if (entity_record == nullptr) {
       return;
@@ -805,50 +953,69 @@ private:
                              entity_record->has_children;
 
     QMenu menu(tree_);
-    menu.setObjectName(QStringLiteral("outliner.context_menu"));
-    QAction *rename_action =
-        menu.addAction(localized("ui.outliner.rename", "Rename"));
-    rename_action->setObjectName(QStringLiteral("outliner.action.rename"));
-    rename_action->setEnabled(!entity_record->is_scene_root);
-    menu.addSeparator();
+    QAction *rename_action = nullptr;
+    QAction *delete_action = nullptr;
+    QAction *duplicate_action = nullptr;
+    QAction *group_action = nullptr;
+    QAction *ungroup_action = nullptr;
+    {
+      QDR_PROFILE_SCOPE("Qt outliner context menu build");
+      menu.setObjectName(QStringLiteral("outliner.context_menu"));
+      rename_action =
+          menu.addAction(localized("ui.outliner.rename", "Rename"));
+      rename_action->setObjectName(QStringLiteral("outliner.action.rename"));
+      rename_action->setEnabled(!entity_record->is_scene_root);
+      menu.addSeparator();
 
-    QAction *delete_action =
-        menu.addAction(localized("ui.outliner.delete", "Delete"));
-    delete_action->setObjectName(QStringLiteral("outliner.action.delete"));
-    delete_action->setEnabled(can_mutate_hierarchy);
+      delete_action =
+          menu.addAction(localized("ui.outliner.delete", "Delete"));
+      delete_action->setObjectName(QStringLiteral("outliner.action.delete"));
+      delete_action->setEnabled(can_mutate_hierarchy);
 
-    QAction *duplicate_action =
-        menu.addAction(localized("ui.outliner.duplicate", "Duplicate"));
-    duplicate_action->setObjectName(
-        QStringLiteral("outliner.action.duplicate"));
-    duplicate_action->setEnabled(can_mutate_hierarchy);
+      duplicate_action =
+          menu.addAction(localized("ui.outliner.duplicate", "Duplicate"));
+      duplicate_action->setObjectName(
+          QStringLiteral("outliner.action.duplicate"));
+      duplicate_action->setEnabled(can_mutate_hierarchy);
 
-    QAction *group_action =
-        menu.addAction(localized("ui.outliner.group", "Group"));
-    group_action->setObjectName(QStringLiteral("outliner.action.group"));
-    group_action->setEnabled(can_mutate_hierarchy);
+      group_action =
+          menu.addAction(localized("ui.outliner.group", "Group"));
+      group_action->setObjectName(QStringLiteral("outliner.action.group"));
+      group_action->setEnabled(can_mutate_hierarchy);
 
-    QAction *ungroup_action =
-        menu.addAction(localized("ui.outliner.ungroup", "Ungroup"));
-    ungroup_action->setObjectName(QStringLiteral("outliner.action.ungroup"));
-    ungroup_action->setEnabled(can_ungroup);
-
-    QAction *chosen = menu.exec(global_position);
-    if (chosen == rename_action) {
-      begin_rename(entity);
-      return;
-    } else if (chosen == delete_action) {
-      delete_selection(*editor_, *document_);
-    } else if (chosen == duplicate_action) {
-      duplicate_selection(*editor_);
-    } else if (chosen == group_action) {
-      group_selection(*editor_, *document_);
-    } else if (chosen == ungroup_action) {
-      ungroup_entity(*editor_, *document_, entity);
+      ungroup_action =
+          menu.addAction(localized("ui.outliner.ungroup", "Ungroup"));
+      ungroup_action->setObjectName(
+          QStringLiteral("outliner.action.ungroup"));
+      ungroup_action->setEnabled(can_ungroup);
     }
 
-    refresh_model_if_needed();
-    sync_selection();
+    QAction *chosen = nullptr;
+    {
+      QDR_PROFILE_SCOPE("Qt outliner context menu exec");
+      chosen = menu.exec(global_position);
+    }
+    {
+      QDR_PROFILE_SCOPE("Qt outliner context menu dispatch action");
+      if (chosen == rename_action) {
+        begin_rename(entity);
+        return;
+      } else if (chosen == delete_action) {
+        delete_selection(*editor_, *document_);
+      } else if (chosen == duplicate_action) {
+        duplicate_selection(*editor_);
+      } else if (chosen == group_action) {
+        group_selection(*editor_, *document_);
+      } else if (chosen == ungroup_action) {
+        ungroup_entity(*editor_, *document_, entity);
+      }
+    }
+
+    {
+      QDR_PROFILE_SCOPE("Qt outliner context menu synchronize result");
+      refresh_model_if_needed();
+      sync_selection();
+    }
   }
 
   OutlinerPanel &panel_;

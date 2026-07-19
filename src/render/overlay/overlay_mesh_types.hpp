@@ -51,8 +51,13 @@ struct OverlayFaceFillVertex {
  * Represents an Overlay Line Vertex value used by the render extraction and Filament resource layer.
  */
 struct OverlayLineVertex {
+    // The line remains in world space so camera navigation can update only
+    // Filament's view uniforms. The vertex shader clips and expands these
+    // endpoints into a constant-pixel ribbon using the per-corner control.
     OverlayFloat4 position;
-    OverlayFloat4 line_distance_pixels;
+    OverlayFloat4 start;
+    OverlayFloat4 end;
+    OverlayFloat4 control;
     std::uint32_t color = 0;
 };
 

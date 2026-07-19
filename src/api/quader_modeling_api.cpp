@@ -352,16 +352,15 @@ mesh_arrangement_options(QuaderMeshArrangementOptions options) {
 
 MeshArrangementSelectionContext
 mesh_arrangement_selection_context(SceneSession &session) {
-  const ModelingSelectionSummary summary =
-      session.modeling().selection_summary();
-  const std::optional<EntityId> active_mesh =
-      summary.active_object_id > 0
-          ? session.modeling().entity_for_modeling_object(
-                summary.active_object_id)
-          : std::nullopt;
+  const ModelingSelectionMode mode = session.modeling().selection_mode();
+  const EntityId active = session.scene().primary_selection();
+  const bool active_is_mesh =
+      active != kInvalidEntityId &&
+      session.scene().modeling_object(active) != nullptr &&
+      session.scene().mesh(active) != nullptr;
   return {
-      .object_mode = summary.mode == ModelingSelectionMode::Object,
-      .active_mesh = active_mesh.value_or(kInvalidEntityId),
+      .object_mode = mode == ModelingSelectionMode::Object,
+      .active_mesh = active_is_mesh ? active : kInvalidEntityId,
   };
 }
 
@@ -1388,22 +1387,74 @@ QuaderApiVoidResult QuaderModelingApi::copy_pivot_from_active() {
       "Copy Pivot From Active");
 }
 
-bool QuaderModelingApi::can_align_selected_meshes() const {
+const QuaderModelingApi::MeshArrangementAvailabilityCache &
+QuaderModelingApi::mesh_arrangement_availability() const {
+  QDR_PROFILE_SCOPE("Quader modeling arrangement availability");
   SceneSession &session = scene_session(session_);
-  MeshArrangementService arrangement(
-      session.scene(), session.assets(),
-      mesh_arrangement_selection_context(session),
-      session.document_commands());
-  return arrangement.can_align_selected_meshes();
+  const SceneDocument &scene = session.scene();
+  const AssetRegistry &assets = session.assets();
+  const ModelingSessionService &modeling = session.modeling();
+  const std::uint64_t scene_session_id =
+      QuaderApiSessionInternalAccess::scene_session_id(session_).packed();
+  const std::uint64_t scene_content_revision = scene.content_revision();
+  const std::uint64_t scene_selection_revision = scene.selection_revision();
+  const std::uint64_t asset_revision = assets.revision();
+  const std::uint64_t modeling_content_revision = modeling.content_revision();
+  const std::uint64_t modeling_selection_revision =
+      modeling.selection_revision();
+  const std::uint64_t modeling_object_map_revision =
+      modeling.modeling_object_map_revision();
+
+  const bool unchanged =
+      mesh_arrangement_availability_.valid &&
+      mesh_arrangement_availability_.scene_identity == &session &&
+      mesh_arrangement_availability_.scene_session_id == scene_session_id &&
+      mesh_arrangement_availability_.scene_content_revision ==
+          scene_content_revision &&
+      mesh_arrangement_availability_.scene_selection_revision ==
+          scene_selection_revision &&
+      mesh_arrangement_availability_.asset_revision == asset_revision &&
+      mesh_arrangement_availability_.modeling_content_revision ==
+          modeling_content_revision &&
+      mesh_arrangement_availability_.modeling_selection_revision ==
+          modeling_selection_revision &&
+      mesh_arrangement_availability_.modeling_object_map_revision ==
+          modeling_object_map_revision;
+  if (unchanged) {
+    return mesh_arrangement_availability_;
+  }
+
+  {
+    QDR_PROFILE_SCOPE("Quader modeling arrangement availability cache miss");
+    MeshArrangementService arrangement(
+        session.scene(), session.assets(),
+        mesh_arrangement_selection_context(session),
+        session.document_commands());
+    const MeshArrangementAvailability availability =
+        arrangement.availability();
+    mesh_arrangement_availability_ = {
+        .scene_identity = &session,
+        .scene_session_id = scene_session_id,
+        .scene_content_revision = scene_content_revision,
+        .scene_selection_revision = scene_selection_revision,
+        .asset_revision = asset_revision,
+        .modeling_content_revision = modeling_content_revision,
+        .modeling_selection_revision = modeling_selection_revision,
+        .modeling_object_map_revision = modeling_object_map_revision,
+        .can_align = availability.can_align,
+        .can_distribute = availability.can_distribute,
+        .valid = true,
+    };
+  }
+  return mesh_arrangement_availability_;
+}
+
+bool QuaderModelingApi::can_align_selected_meshes() const {
+  return mesh_arrangement_availability().can_align;
 }
 
 bool QuaderModelingApi::can_distribute_selected_meshes() const {
-  SceneSession &session = scene_session(session_);
-  MeshArrangementService arrangement(
-      session.scene(), session.assets(),
-      mesh_arrangement_selection_context(session),
-      session.document_commands());
-  return arrangement.can_distribute_selected_meshes();
+  return mesh_arrangement_availability().can_distribute;
 }
 
 QuaderApiVoidResult QuaderModelingApi::align_selected_meshes(

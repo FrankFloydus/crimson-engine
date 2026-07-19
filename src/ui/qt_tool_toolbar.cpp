@@ -136,21 +136,29 @@ void QtToolToolbar::synchronize(const QuaderEditorApi &editor,
   synchronized_selection_revision_ = selection.selection_revision;
 
   for (const ToolAction &entry : tool_actions_) {
-    const QSignalBlocker blocker(entry.action);
-    entry.action->setChecked(active_tool == entry.tool_id);
+    const bool checked = active_tool == entry.tool_id;
+    if (entry.action->isChecked() != checked) {
+      const QSignalBlocker blocker(entry.action);
+      entry.action->setChecked(checked);
+    }
     const std::string command_id =
         editor.commands().command_id_for_tool_activation(entry.tool_id);
     const std::optional<QuaderCommandDescriptor> command =
         editor.commands().descriptor(command_id);
-    entry.action->setEnabled(command.has_value() && command->enabled);
+    const bool enabled = command.has_value() && command->enabled;
+    if (entry.action->isEnabled() != enabled) {
+      entry.action->setEnabled(enabled);
+    }
     QString tooltip = entry.action->text();
     const std::string shortcut =
-        editor.commands().shortcut_for(command_id);
+        command.has_value() ? command->shortcut : std::string{};
     if (!shortcut.empty()) {
       tooltip.append(QStringLiteral(" [%1]")
                          .arg(QString::fromStdString(shortcut)));
     }
-    entry.action->setToolTip(tooltip);
+    if (entry.action->toolTip() != tooltip) {
+      entry.action->setToolTip(tooltip);
+    }
   }
 }
 

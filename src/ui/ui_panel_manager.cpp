@@ -6,6 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "ui/ui_panel_manager.hpp"
 
+#include "diagnostics/profile.hpp"
 #include "ui/ui_settings.hpp"
 
 #include <QAction>
@@ -99,6 +100,7 @@ QDockWidget *UIPanelManager::dock(UIPanelId id) const {
 
 bool UIPanelManager::eventFilter(QObject *watched, QEvent *event) {
   if (event != nullptr && event->type() == QEvent::Close) {
+    QDR_PROFILE_SCOPE("Qt dock close event dispatch");
     for (UIPanelId id :
          {UIPanelId::Outliner, UIPanelId::Inspector, UIPanelId::Layers,
           UIPanelId::Console}) {

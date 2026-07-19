@@ -10,6 +10,8 @@
 #include "render/render_signature_builder.hpp"
 #include "render/viewport_overlay_policy.hpp"
 
+#include <algorithm>
+
 namespace quader {
 namespace {
 
@@ -43,6 +45,24 @@ ViewportOverlayStyleResolver::persistent_style_snapshot(
   return snapshot;
 }
 
+std::uint64_t ViewportOverlayStyleResolver::style_signature(
+    const ViewportSettings &settings) {
+  RenderSignatureBuilder signature;
+  for (std::size_t index = 0u; index < kViewportColorSettingCount; ++index) {
+    const ViewportSettingColor color =
+        settings.color(static_cast<ViewportColorSettingId>(index));
+    signature.add_float(color.r)
+        .add_float(color.g)
+        .add_float(color.b)
+        .add_float(color.a);
+  }
+  for (std::size_t index = 0u; index < kViewportFloatSettingCount; ++index) {
+    signature.add_float(
+        settings.float_value(static_cast<ViewportFloatSettingId>(index)));
+  }
+  return signature.value();
+}
+
 ViewportOverlayFrame ViewportOverlayStyleResolver::resolve(
         ViewportOverlayFrame frame,
         const ViewportSettings& settings,
@@ -59,7 +79,20 @@ void ViewportOverlayStyleResolver::apply(
         ViewportOverlayFrame& frame,
         const ViewportSettings& settings,
         const ViewportOverlayStyleContext& context) {
-    for (ViewportOverlayTriangle& triangle : frame.triangles) {
+  apply_from(frame, settings, context, {});
+}
+
+void ViewportOverlayStyleResolver::apply_from(
+    ViewportOverlayFrame &frame, const ViewportSettings &settings,
+    const ViewportOverlayStyleContext &context,
+    ViewportOverlayStyleRange range) {
+    range.triangle_begin = std::min(range.triangle_begin, frame.triangles.size());
+    range.line_begin = std::min(range.line_begin, frame.lines.size());
+    range.point_begin = std::min(range.point_begin, frame.points.size());
+    for (auto it = frame.triangles.begin() +
+                   static_cast<std::ptrdiff_t>(range.triangle_begin);
+         it != frame.triangles.end(); ++it) {
+      ViewportOverlayTriangle &triangle = *it;
       const ViewportOverlayStyleRole role = role_for(triangle);
       triangle.color = color_for(role, triangle.color, settings);
       if (const ViewportOverlayStyleOverride *override =
@@ -71,7 +104,10 @@ void ViewportOverlayStyleResolver::apply(
       }
     }
 
-    for (ViewportOverlayLine& line : frame.lines) {
+    for (auto it = frame.lines.begin() +
+                   static_cast<std::ptrdiff_t>(range.line_begin);
+         it != frame.lines.end(); ++it) {
+      ViewportOverlayLine &line = *it;
       const ViewportOverlayStyleRole role = role_for(line);
       line.color = color_for(role, line.color, settings);
       line.width_pixels =
@@ -88,7 +124,10 @@ void ViewportOverlayStyleResolver::apply(
       }
     }
 
-    for (ViewportOverlayPoint& point : frame.points) {
+    for (auto it = frame.points.begin() +
+                   static_cast<std::ptrdiff_t>(range.point_begin);
+         it != frame.points.end(); ++it) {
+      ViewportOverlayPoint &point = *it;
       const ViewportOverlayStyleRole role = role_for(point);
       point.color = color_for(role, point.color, settings);
       point.size_pixels = point_size_for(role, point.size_pixels, settings);

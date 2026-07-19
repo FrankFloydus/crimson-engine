@@ -9,7 +9,6 @@
 #include "core/color_space.hpp"
 #include "render/viewport_overlay_frame.hpp"
 #include "render/viewport_overlay_policy.hpp"
-#include "render/overlay/overlay_camera_projector.hpp"
 #include "render/overlay/overlay_mesh_types.hpp"
 
 #include <vector>
@@ -26,10 +25,8 @@ public:
         const ViewportOverlayCamera &camera, float width_pixels,
         float depth_bias);
 
-  static bool append_line_quad(OverlayLineMesh &mesh,
-                               const ViewportOverlayLine &line,
-                               const OverlayCameraProjector &projector,
-                               float width_pixels, float depth_bias);
+  static void append_line_quad(OverlayLineMesh &mesh,
+                               const ViewportOverlayLine &line);
 };
 
 } // namespace quader

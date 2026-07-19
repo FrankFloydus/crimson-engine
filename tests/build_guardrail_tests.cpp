@@ -4110,7 +4110,7 @@ TEST(BuildGuardrailTests, OwnsIncrementalLightSyncPolicy) {
   expect_missing(sync_source, "update_light_transform");
 }
 
-TEST(BuildGuardrailTests, EditWireBatchesDoNotOwnPrivateClipPlane) {
+TEST(BuildGuardrailTests, EditWireBatchesUseViewportClipStateForGpuExpansion) {
   const std::string builder_header =
       read_source_file("src/render/overlay/overlay_renderable_builder.hpp");
   const std::string builder_source =
@@ -4123,10 +4123,19 @@ TEST(BuildGuardrailTests, EditWireBatchesDoNotOwnPrivateClipPlane) {
       source_slice(builder_header, "struct OverlayEditWireBatch",
                    "struct OverlayPointBatch");
 
-  expect_missing(edit_wire_batch, "near_plane");
+  expect_contains(edit_wire_batch, "near_plane");
+  expect_contains(edit_wire_batch, "far_plane");
+  expect_contains(edit_wire_batch, "orthographic_projection");
   expect_missing(builder_source, "kOverlayEditWireNearPlane");
-  expect_missing(proxy_source, "batch.near_plane");
-  expect_missing(edit_wire_material, "nearPlane");
+  expect_contains(proxy_source, "batch.near_plane");
+  expect_contains(proxy_source, "batch.far_plane");
+  expect_contains(proxy_source, "batch.orthographic_projection");
+  expect_contains(edit_wire_material, "nearPlane");
+  expect_contains(edit_wire_material, "farPlane");
+  expect_contains(edit_wire_material, "orthographicProjection");
+  expect_contains(edit_wire_material, "getClipFromViewMatrix()");
+  expect_contains(edit_wire_material,
+                  "return vec4(1000000.0, 1000000.0, 0.0, 1.0)");
 }
 
 TEST(BuildGuardrailTests, DelegatesOverlayAndPreviewProxyOwnership) {

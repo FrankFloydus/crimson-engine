@@ -65,7 +65,6 @@ bool ViewportLocalVisibilityService::can_enter() const {
   }
 
   const ModelingSelectionMode mode = modeling_.selection_mode();
-  const ModelingSelectionExport selection = modeling_.export_selection();
   const SceneInstanceEditState edit_state = instances_.instance_edit_state();
   if (edit_state.active) {
     return scene_.is_layer_eligible(edit_state.occurrence) &&
@@ -73,6 +72,7 @@ bool ViewportLocalVisibilityService::can_enter() const {
   }
 
   if (component_selection_mode(mode)) {
+    const ModelingSelectionExport selection = modeling_.export_selection();
     for (const ModelingSelectionExportObject &object :
          selection.objects) {
       if (!object.selection.empty() && object.entity != kInvalidEntityId &&
@@ -170,13 +170,13 @@ ViewportLocalVisibilityMutation ViewportLocalVisibilityService::toggle() {
   std::vector<EntityId> members;
   const SceneInstanceEditState edit_state = instances_.instance_edit_state();
   const ModelingSelectionMode mode = modeling_.selection_mode();
-  const ModelingSelectionExport selection = modeling_.export_selection();
   if (edit_state.active) {
     if (scene_.is_layer_eligible(edit_state.occurrence) &&
         scene_.is_effectively_visible(edit_state.occurrence)) {
       members.push_back(edit_state.occurrence);
     }
   } else if (component_selection_mode(mode)) {
+    const ModelingSelectionExport selection = modeling_.export_selection();
     for (const ModelingSelectionExportObject &object :
          selection.objects) {
       if (!object.selection.empty() && object.entity != kInvalidEntityId &&

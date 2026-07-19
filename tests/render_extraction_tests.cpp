@@ -1151,8 +1151,11 @@ TEST(ViewportInfoStatsTests, CountsOnlyCameraVisibleRenderableMeshes) {
   document.set_visible(hidden, false);
 
   const ViewportOverlayCamera camera = test_perspective_overlay_camera();
+  const ViewportInfoSceneSnapshot snapshot =
+      build_viewport_info_scene_snapshot(document, assets);
+  ASSERT_EQ(snapshot.renderables.size(), 1u);
   const ViewportInfoSceneStats visible_stats =
-      collect_viewport_info_scene_stats(document, assets, camera);
+      collect_viewport_info_scene_stats(snapshot, camera);
 
   EXPECT_EQ(visible_stats.objects, 1u);
   EXPECT_EQ(visible_stats.primitives, 1u);
@@ -1163,7 +1166,7 @@ TEST(ViewportInfoStatsTests, CountsOnlyCameraVisibleRenderableMeshes) {
   looked_away.right = {1.0f, 0.0f, 0.0f};
   looked_away.up = {0.0f, 0.0f, -1.0f};
   const ViewportInfoSceneStats empty_view_stats =
-      collect_viewport_info_scene_stats(document, assets, looked_away);
+      collect_viewport_info_scene_stats(snapshot, looked_away);
 
   EXPECT_EQ(empty_view_stats.objects, 0u);
   EXPECT_EQ(empty_view_stats.primitives, 0u);
@@ -2512,6 +2515,141 @@ TEST(RenderSceneSnapshotTests,
 }
 
 TEST(RenderSceneSnapshotTests,
+     RefreshesOrdinaryInstanceBatchSelectionWithoutReextractingSceneRecords) {
+  SceneDocument document;
+  AssetRegistry assets;
+  const AssetId mesh = assets.add_mesh(make_overlay_triangle_mesh());
+  const EntityId first =
+      document.create_entity("First Duplicate", EntityKind::Mesh);
+  const EntityId second =
+      document.create_entity("Second Duplicate", EntityKind::Mesh);
+  document.set_mesh(first, MeshComponent{.mesh = mesh});
+  document.set_mesh(second, MeshComponent{.mesh = mesh});
+
+  RenderSceneSnapshot snapshot =
+      build_render_scene_snapshot(document, assets, {.frame_index = 1u});
+  ASSERT_TRUE(snapshot.meshes.empty());
+  ASSERT_EQ(snapshot.instance_primitives.size(), 1u);
+  ASSERT_EQ(snapshot.instance_primitives.front().occurrences.size(), 2u);
+  const MeshGeometryPayload *const retained_geometry =
+      snapshot.instance_primitives.front().mesh.geometry_payload.get();
+
+  ASSERT_TRUE(document.set_selected(first, true));
+  ASSERT_TRUE(try_refresh_render_scene_snapshot_selection(
+      snapshot, document, assets, 2u));
+
+  EXPECT_EQ(snapshot.frame_index, 2u);
+  EXPECT_EQ(snapshot.scene_revision, document.revision());
+  EXPECT_EQ(snapshot.selection_revision, document.selection_revision());
+  EXPECT_TRUE(snapshot.dirty.scene_changed);
+  EXPECT_TRUE(snapshot.dirty.selection_changed);
+  EXPECT_FALSE(snapshot.dirty.visibility_changed);
+  EXPECT_FALSE(snapshot.dirty.local_visibility_changed);
+  EXPECT_FALSE(snapshot.dirty.transforms_changed);
+  EXPECT_FALSE(snapshot.dirty.mesh_bindings_changed);
+  EXPECT_FALSE(snapshot.dirty.render_components_changed);
+  EXPECT_FALSE(snapshot.dirty.assets_changed);
+  EXPECT_FALSE(snapshot.dirty.project_materials_changed);
+  EXPECT_EQ(snapshot.instance_primitives.front().mesh.geometry_payload.get(),
+            retained_geometry);
+  const auto selected_first = std::ranges::find_if(
+      snapshot.instance_primitives.front().occurrences,
+      [first](const auto &occurrence) { return occurrence.entity_id == first; });
+  const auto unselected_second = std::ranges::find_if(
+      snapshot.instance_primitives.front().occurrences,
+      [second](const auto &occurrence) {
+        return occurrence.entity_id == second;
+      });
+  ASSERT_NE(selected_first,
+            snapshot.instance_primitives.front().occurrences.end());
+  ASSERT_NE(unselected_second,
+            snapshot.instance_primitives.front().occurrences.end());
+  EXPECT_TRUE(selected_first->selected);
+  EXPECT_FALSE(unselected_second->selected);
+  EXPECT_TRUE(render_scene_snapshot_matches_sources(snapshot, document,
+                                                    assets));
+  EXPECT_FALSE(try_refresh_render_scene_snapshot_selection(
+      snapshot, document, assets, 3u));
+
+  TransformComponent moved = *document.transform(first);
+  moved.position.x = 3.0f;
+  document.set_transform(first, moved);
+  const std::uint64_t retained_scene_revision = snapshot.scene_revision;
+  const std::uint64_t retained_frame_index = snapshot.frame_index;
+  EXPECT_FALSE(try_refresh_render_scene_snapshot_selection(
+      snapshot, document, assets, 3u));
+  EXPECT_EQ(snapshot.scene_revision, retained_scene_revision);
+  EXPECT_EQ(snapshot.frame_index, retained_frame_index);
+}
+
+TEST(RenderSceneSnapshotTests,
+     RefreshesFormalInstanceOccurrenceSelectionInPlace) {
+  SceneDocument document;
+  AssetRegistry assets;
+  const AssetId mesh = assets.add_mesh(make_overlay_triangle_mesh());
+  const EntityId definition =
+      document.create_entity("Definition", EntityKind::Empty);
+  ASSERT_TRUE(document.set_instance_definition(definition));
+  ASSERT_TRUE(document.set_visible(definition, false));
+  const EntityId member =
+      document.create_entity("Definition Member", EntityKind::Mesh);
+  document.set_mesh(member, MeshComponent{.mesh = mesh});
+  ASSERT_TRUE(document.set_parent(member, definition, false));
+  const EntityId first =
+      document.create_entity("First Occurrence", EntityKind::Instance);
+  const EntityId second =
+      document.create_entity("Second Occurrence", EntityKind::Instance);
+  ASSERT_TRUE(document.set_instance_occurrence(
+      first, InstanceOccurrenceComponent{.definition = definition}));
+  ASSERT_TRUE(document.set_instance_occurrence(
+      second, InstanceOccurrenceComponent{.definition = definition}));
+  ASSERT_TRUE(document.set_selected(first, true));
+
+  RenderSceneSnapshot snapshot =
+      build_render_scene_snapshot(document, assets, {.frame_index = 1u});
+  ASSERT_EQ(snapshot.instance_primitives.size(), 1u);
+  ASSERT_EQ(snapshot.instance_primitives.front().occurrences.size(), 2u);
+  document.clear_selection();
+  ASSERT_TRUE(document.set_selected(second, true));
+
+  ASSERT_TRUE(try_refresh_render_scene_snapshot_selection(
+      snapshot, document, assets, 2u));
+  const auto refreshed_first = std::ranges::find_if(
+      snapshot.instance_primitives.front().occurrences,
+      [first](const auto &occurrence) { return occurrence.entity_id == first; });
+  const auto refreshed_second = std::ranges::find_if(
+      snapshot.instance_primitives.front().occurrences,
+      [second](const auto &occurrence) {
+        return occurrence.entity_id == second;
+      });
+  ASSERT_NE(refreshed_first,
+            snapshot.instance_primitives.front().occurrences.end());
+  ASSERT_NE(refreshed_second,
+            snapshot.instance_primitives.front().occurrences.end());
+  EXPECT_FALSE(refreshed_first->selected);
+  EXPECT_TRUE(refreshed_second->selected);
+
+  const RenderSceneSnapshot rebuilt =
+      build_render_scene_snapshot(document, assets, {.frame_index = 2u});
+  ASSERT_EQ(rebuilt.instance_primitives.size(), 1u);
+  ASSERT_EQ(rebuilt.instance_primitives.front().occurrences.size(), 2u);
+  const auto rebuilt_first = std::ranges::find_if(
+      rebuilt.instance_primitives.front().occurrences,
+      [first](const auto &occurrence) { return occurrence.entity_id == first; });
+  const auto rebuilt_second = std::ranges::find_if(
+      rebuilt.instance_primitives.front().occurrences,
+      [second](const auto &occurrence) {
+        return occurrence.entity_id == second;
+      });
+  ASSERT_NE(rebuilt_first,
+            rebuilt.instance_primitives.front().occurrences.end());
+  ASSERT_NE(rebuilt_second,
+            rebuilt.instance_primitives.front().occurrences.end());
+  EXPECT_EQ(refreshed_first->selected, rebuilt_first->selected);
+  EXPECT_EQ(refreshed_second->selected, rebuilt_second->selected);
+}
+
+TEST(RenderSceneSnapshotTests,
      RefreshesOnlyPureTransformSnapshotsAndRejectsOtherSourceChanges) {
   SceneDocument document;
   AssetRegistry assets;
@@ -3185,7 +3323,8 @@ TEST(ViewportSceneOverlayBuilderTests, WireframeModeUsesAuthoredTopologyWithoutT
         }));
 }
 
-TEST(OverlayLineMeshBuilderTests, ClipsAndExpandsLinesToDeviceSpaceQuads) {
+TEST(OverlayLineMeshBuilderTests,
+     KeepsWorldEndpointsForShaderClippingAndPixelExpansion) {
     ViewportOverlayFrame frame;
     frame.lines.push_back({
         .layer = ViewportOverlayLayer::OpenEdge,
@@ -3211,16 +3350,30 @@ TEST(OverlayLineMeshBuilderTests, ClipsAndExpandsLinesToDeviceSpaceQuads) {
     EXPECT_EQ(batch.mesh.indices.size(), 12u);
     EXPECT_FLOAT_EQ(batch.width_pixels, 2.0f);
     EXPECT_FLOAT_EQ(batch.depth_bias, kOverlayLineDepthBias);
+    EXPECT_FLOAT_EQ(batch.near_plane, test_overlay_camera().near_plane);
     EXPECT_EQ(batch.state.depth_func, OverlayDepthFunc::GreaterOrEqual);
     EXPECT_TRUE(batch.state.depth_culling);
     EXPECT_FALSE(batch.state.depth_write);
-    for (const OverlayLineVertex& vertex : batch.mesh.vertices) {
+    for (const OverlayLineVertex &vertex : batch.mesh.vertices) {
+        EXPECT_FLOAT_EQ(vertex.position.x, 0.0f);
+        EXPECT_FLOAT_EQ(vertex.position.y, 0.0f);
+        EXPECT_FLOAT_EQ(vertex.position.z, 0.0f);
         EXPECT_FLOAT_EQ(vertex.position.w, 1.0f);
         EXPECT_EQ(vertex.color, rgba8_srgb_to_linear(rgba8(255, 128, 64, 255)));
     }
+    EXPECT_FLOAT_EQ(batch.mesh.vertices[0].start.x, -0.5f);
+    EXPECT_FLOAT_EQ(batch.mesh.vertices[0].start.z, -0.05f);
+    EXPECT_FLOAT_EQ(batch.mesh.vertices[0].end.x, 0.5f);
+    EXPECT_FLOAT_EQ(batch.mesh.vertices[0].end.z, -1.0f);
+    EXPECT_FLOAT_EQ(batch.mesh.vertices[0].control.x, -1.0f);
+    EXPECT_FLOAT_EQ(batch.mesh.vertices[0].control.y, -1.0f);
+    EXPECT_FLOAT_EQ(batch.mesh.vertices[0].control.z, 0.0f);
+    EXPECT_FLOAT_EQ(batch.mesh.vertices[2].control.x, 1.0f);
+    EXPECT_FLOAT_EQ(batch.mesh.vertices[2].control.y, 1.0f);
+    EXPECT_FLOAT_EQ(batch.mesh.vertices[2].control.z, 1.0f);
 }
 
-TEST(OverlayLineMeshBuilderTests, ExpandsDiagonalLinesPerpendicularToScreenDirection) {
+TEST(OverlayLineMeshBuilderTests, EmitsCanonicalShaderRibbonControls) {
     ViewportOverlayFrame frame;
     frame.lines.push_back({
         .layer = ViewportOverlayLayer::SourceWire,
@@ -3240,8 +3393,14 @@ TEST(OverlayLineMeshBuilderTests, ExpandsDiagonalLinesPerpendicularToScreenDirec
     EXPECT_FALSE(batch.state.depth_culling);
     const OverlayLineMesh& mesh = batch.mesh;
     ASSERT_EQ(mesh.vertices.size(), 4u);
-    EXPECT_GT(std::fabs(mesh.vertices[0].position.x - mesh.vertices[3].position.x), 0.0001f);
-    EXPECT_GT(std::fabs(mesh.vertices[0].position.y - mesh.vertices[3].position.y), 0.0001f);
+    EXPECT_FLOAT_EQ(mesh.vertices[0].start.x, -0.5f);
+    EXPECT_FLOAT_EQ(mesh.vertices[0].start.y, -0.5f);
+    EXPECT_FLOAT_EQ(mesh.vertices[0].end.x, 0.5f);
+    EXPECT_FLOAT_EQ(mesh.vertices[0].end.y, 0.5f);
+    EXPECT_FLOAT_EQ(mesh.vertices[0].control.x, -1.0f);
+    EXPECT_FLOAT_EQ(mesh.vertices[1].control.y, 1.0f);
+    EXPECT_FLOAT_EQ(mesh.vertices[2].control.x, 1.0f);
+    EXPECT_FLOAT_EQ(mesh.vertices[3].control.y, -1.0f);
 }
 
 TEST(OverlayLineMeshBuilderTests, BatchesSameWidthLinesWithDifferentColors) {
@@ -3474,7 +3633,7 @@ TEST(OverlayLineMeshBuilderTests,
     EXPECT_FALSE(plan.line_batches[0].state.depth_culling);
 }
 
-TEST(OverlayLineMeshBuilderTests, ExtendsLineCapsInScreenSpace) {
+TEST(OverlayLineMeshBuilderTests, ReusesWorldGeometryAcrossCameraMotion) {
   const ViewportOverlayCamera camera = test_overlay_camera();
   const QVec3 line_start{-0.25f, 0.0f, -1.0f};
   const QVec3 line_end{0.25f, 0.0f, -1.0f};
@@ -3494,24 +3653,33 @@ TEST(OverlayLineMeshBuilderTests, ExtendsLineCapsInScreenSpace) {
   const OverlayLineMesh &mesh = plan.line_batches.front().mesh;
   ASSERT_EQ(mesh.vertices.size(), 4u);
 
-  const OverlayCameraProjector projector(camera);
-  const OverlayProjectedPoint projected_start =
-      projector.project(projector.view_point_for(line_start));
-  const OverlayProjectedPoint projected_end =
-      projector.project(projector.view_point_for(line_end));
-  ASSERT_TRUE(projected_start.valid);
-  ASSERT_TRUE(projected_end.valid);
-
-  const float cap_pixels = (2.0f + kOverlayLineFeatherPixels) * 0.5f;
-  const float cap_device_x = cap_pixels * 2.0f / camera.viewport_size.x;
-  const float start_cap_center_x =
-      (mesh.vertices[0].position.x + mesh.vertices[3].position.x) * 0.5f;
-  const float end_cap_center_x =
-      (mesh.vertices[1].position.x + mesh.vertices[2].position.x) * 0.5f;
-  EXPECT_NEAR(start_cap_center_x, projected_start.device.x - cap_device_x,
-              0.00001f);
-  EXPECT_NEAR(end_cap_center_x, projected_end.device.x + cap_device_x,
-              0.00001f);
+  ViewportOverlayCamera moved_camera = camera;
+  moved_camera.eye = {7.0f, -3.0f, 4.0f};
+  moved_camera.forward = {-0.5f, 0.25f, -1.0f};
+  const OverlayLayerBuildPlan moved_plan =
+      OverlayRenderableBuilder::build_layer(
+          frame, moved_camera, ViewportOverlayLayer::SelectedEdge);
+  ASSERT_EQ(moved_plan.line_batches.size(), 1u);
+  const OverlayLineMesh &moved_mesh = moved_plan.line_batches.front().mesh;
+  ASSERT_EQ(moved_mesh.vertices.size(), mesh.vertices.size());
+  for (std::size_t index = 0u; index < mesh.vertices.size(); ++index) {
+    const OverlayLineVertex &before = mesh.vertices[index];
+    const OverlayLineVertex &after = moved_mesh.vertices[index];
+    EXPECT_FLOAT_EQ(before.position.x, after.position.x);
+    EXPECT_FLOAT_EQ(before.position.y, after.position.y);
+    EXPECT_FLOAT_EQ(before.position.z, after.position.z);
+    EXPECT_FLOAT_EQ(before.position.w, after.position.w);
+    EXPECT_FLOAT_EQ(before.start.x, after.start.x);
+    EXPECT_FLOAT_EQ(before.start.y, after.start.y);
+    EXPECT_FLOAT_EQ(before.start.z, after.start.z);
+    EXPECT_FLOAT_EQ(before.end.x, after.end.x);
+    EXPECT_FLOAT_EQ(before.end.y, after.end.y);
+    EXPECT_FLOAT_EQ(before.end.z, after.end.z);
+    EXPECT_FLOAT_EQ(before.control.x, after.control.x);
+    EXPECT_FLOAT_EQ(before.control.y, after.control.y);
+    EXPECT_FLOAT_EQ(before.control.z, after.control.z);
+    EXPECT_EQ(before.color, after.color);
+  }
 }
 
 TEST(OverlayLineMeshBuilderTests,
@@ -3550,41 +3718,20 @@ TEST(OverlayLineMeshBuilderTests,
   ASSERT_EQ(point_mesh.vertices.size(), 4u);
 
   const OverlayCameraProjector projector(camera);
-  const OverlayProjectedPoint projected_line_start =
-      projector.project(projector.view_point_for(line_start));
-  const OverlayProjectedPoint projected_line_end =
-      projector.project(projector.view_point_for(line_end));
   const OverlayProjectedPoint projected_point =
       projector.project(projector.view_point_for(point_position));
-  ASSERT_TRUE(projected_line_start.valid);
-  ASSERT_TRUE(projected_line_end.valid);
   ASSERT_TRUE(projected_point.valid);
 
-  const float expected_line_depth =
-      projected_line_start.device.z - camera.near_plane *
-                                          kOverlayDeviceDepthBiasPerNearPlane *
-                                          kOverlayLineDepthBias;
-  const float line_center_x =
-      (line_mesh.vertices[0].position.x + line_mesh.vertices[1].position.x +
-       line_mesh.vertices[2].position.x + line_mesh.vertices[3].position.x) *
-      0.25f;
-  const float line_center_y =
-      (line_mesh.vertices[0].position.y + line_mesh.vertices[1].position.y +
-       line_mesh.vertices[2].position.y + line_mesh.vertices[3].position.y) *
-      0.25f;
-  EXPECT_NEAR(line_center_x,
-              (projected_line_start.device.x + projected_line_end.device.x) *
-                  0.5f,
-              0.00001f);
-  EXPECT_NEAR(line_center_y,
-              (projected_line_start.device.y + projected_line_end.device.y) *
-                  0.5f,
-              0.00001f);
-  EXPECT_NEAR(line_mesh.vertices[0].position.z, expected_line_depth, 0.00001f);
-  EXPECT_LT(line_mesh.vertices[0].position.z,
-            projected_line_start.device.z);
-  EXPECT_GT(line_mesh.vertices[0].position.z * -0.5f + 0.5f,
-            projected_line_start.device.z * -0.5f + 0.5f);
+  EXPECT_FLOAT_EQ(line_plan.line_batches.front().near_plane,
+                  camera.near_plane);
+  EXPECT_FLOAT_EQ(line_plan.line_batches.front().depth_bias,
+                  kOverlayLineDepthBias);
+  EXPECT_FLOAT_EQ(line_mesh.vertices[0].start.x, line_start.x);
+  EXPECT_FLOAT_EQ(line_mesh.vertices[0].start.y, line_start.y);
+  EXPECT_FLOAT_EQ(line_mesh.vertices[0].start.z, line_start.z);
+  EXPECT_FLOAT_EQ(line_mesh.vertices[0].end.x, line_end.x);
+  EXPECT_FLOAT_EQ(line_mesh.vertices[0].end.y, line_end.y);
+  EXPECT_FLOAT_EQ(line_mesh.vertices[0].end.z, line_end.z);
 
   const float expected_point_depth =
       projected_point.device.z - camera.near_plane *
@@ -3973,7 +4120,8 @@ TEST(OverlayRenderableBuilderTests, SanitizesCameraBeforeSigning) {
             OverlayRenderableBuilder::camera_signature(test_overlay_camera()));
 }
 
-TEST(OverlayRenderableBuilderTests, LayerBuildSignatureOnlyUsesCameraForScreenSpaceLayers) {
+TEST(OverlayRenderableBuilderTests,
+     LineLayerSignatureIgnoresPoseButTracksClipState) {
     ViewportOverlayFrame frame;
     frame.triangles.push_back({
             .layer = ViewportOverlayLayer::SelectedVisibleFace,
@@ -4005,6 +4153,11 @@ TEST(OverlayRenderableBuilderTests, LayerBuildSignatureOnlyUsesCameraForScreenSp
 
     EXPECT_TRUE(OverlayRenderableBuilder::layer_build_depends_on_camera(
         ViewportOverlayLayer::SourceWire));
+    EXPECT_EQ(OverlayRenderableBuilder::layer_build_signature(
+                  frame, camera, ViewportOverlayLayer::SourceWire),
+              OverlayRenderableBuilder::layer_build_signature(
+                  frame, moved_camera, ViewportOverlayLayer::SourceWire));
+    moved_camera.near_plane *= 2.0f;
     EXPECT_NE(OverlayRenderableBuilder::layer_build_signature(
                   frame, camera, ViewportOverlayLayer::SourceWire),
               OverlayRenderableBuilder::layer_build_signature(
@@ -4031,14 +4184,11 @@ TEST(OverlayProxyFactoryTests, CountsOnlyNonEmptyRenderableBatches) {
             {
                 .vertices =
                     {
-                        {{0.0f, 0.0f, 0.0f, 1.0f},
-                         {},
+                        {{0.0f, 0.0f, 0.0f, 1.0f}, {}, {}, {},
                          rgba8(255, 255, 255, 255)},
-                        {{1.0f, 0.0f, 0.0f, 1.0f},
-                         {},
+                        {{1.0f, 0.0f, 0.0f, 1.0f}, {}, {}, {},
                          rgba8(255, 255, 255, 255)},
-                        {{1.0f, 1.0f, 0.0f, 1.0f},
-                         {},
+                        {{1.0f, 1.0f, 0.0f, 1.0f}, {}, {}, {},
                          rgba8(255, 255, 255, 255)},
                     },
                 .indices = {0u, 1u, 2u},

@@ -10,6 +10,7 @@
 #include "api/quader_editor_api.hpp"
 #include "core/localization_service.hpp"
 #include "core/logger.hpp"
+#include "diagnostics/profile.hpp"
 #include "editor/modeling/services/modeling_session_service.hpp"
 #include "editor/modeling/services/selection_mode_adapter.hpp"
 #include "viewport/viewport_input_router.hpp"
@@ -41,6 +42,7 @@ QString localized(const LocalizationService &localization,
 QuaderApiVoidResult execute_delete_popup_command(
     QuaderEditorApi &editor, ViewportInputRouter &input_router,
     QuaderCommandId command_id) {
+  QDR_PROFILE_SCOPE("Qt viewport delete popup dispatch command");
   const QuaderApiVoidResult result = editor.commands().execute(command_id);
   if (!result.ok()) {
     LOG_ERROR("Delete popup command '{}' failed: {}", command_id.string(),
@@ -61,6 +63,7 @@ void restore_viewport_focus(const QPointer<QWidget> &focus_parent) {
 bool show_object_confirmation(QWidget &parent, QuaderEditorApi &editor,
                               ViewportInputRouter &input_router,
                               LocalizationService &localization) {
+  QDR_PROFILE_SCOPE("Qt viewport delete confirmation show");
   QMessageBox confirmation(QMessageBox::NoIcon,
                            localized(localization,
                                      "ui.viewport.delete_popup.window_title",
@@ -69,17 +72,24 @@ bool show_object_confirmation(QWidget &parent, QuaderEditorApi &editor,
                                      "ui.viewport.delete_popup.title",
                                      "Delete Selected Objects"),
                            QMessageBox::NoButton, &parent);
-  confirmation.setObjectName(
-      QStringLiteral("viewport_delete_objects_confirmation"));
-  confirmation.setWindowModality(Qt::WindowModal);
-  QPushButton *delete_button = confirmation.addButton(
-      localized(localization, "ui.viewport.delete_popup.delete", "Delete"),
-      QMessageBox::AcceptRole);
-  QPushButton *cancel_button = confirmation.addButton(
-      localized(localization, "ui.viewport.delete_popup.cancel", "Cancel"),
-      QMessageBox::RejectRole);
-  confirmation.setEscapeButton(cancel_button);
-  confirmation.exec();
+  QPushButton *delete_button = nullptr;
+  {
+    QDR_PROFILE_SCOPE("Qt viewport delete confirmation build");
+    confirmation.setObjectName(
+        QStringLiteral("viewport_delete_objects_confirmation"));
+    confirmation.setWindowModality(Qt::WindowModal);
+    delete_button = confirmation.addButton(
+        localized(localization, "ui.viewport.delete_popup.delete", "Delete"),
+        QMessageBox::AcceptRole);
+    QPushButton *cancel_button = confirmation.addButton(
+        localized(localization, "ui.viewport.delete_popup.cancel", "Cancel"),
+        QMessageBox::RejectRole);
+    confirmation.setEscapeButton(cancel_button);
+  }
+  {
+    QDR_PROFILE_SCOPE("Qt viewport delete confirmation exec");
+    confirmation.exec();
+  }
   if (confirmation.clickedButton() != delete_button) {
     return false;
   }
@@ -92,25 +102,37 @@ bool show_component_menu(QWidget &parent, const QPoint &global_point,
                          QuaderEditorApi &editor,
                          ViewportInputRouter &input_router,
                          LocalizationService &localization) {
-  const ModelingSelectionSummary summary =
-      to_modeling_selection_summary(editor.selection().summary());
-  const std::array<QtViewportDeletePopupAction, 5> actions =
-      qt_viewport_delete_popup_actions(summary);
+  QDR_PROFILE_SCOPE("Qt viewport component delete menu show");
+  const ModelingSelectionSummary summary = [&]() {
+    QDR_PROFILE_SCOPE("Qt viewport delete menu query selection summary");
+    return to_modeling_selection_summary(editor.selection().summary());
+  }();
+  const std::array<QtViewportDeletePopupAction, 5> actions = [&]() {
+    QDR_PROFILE_SCOPE("Qt viewport delete menu query actions");
+    return qt_viewport_delete_popup_actions(summary);
+  }();
 
   QMenu menu(&parent);
-  menu.setObjectName(QStringLiteral("viewport_delete_elements_menu"));
   std::array<QAction *, 5> qt_actions{};
-  for (std::size_t index = 0; index < actions.size(); ++index) {
-    const QtViewportDeletePopupAction &action = actions[index];
-    QAction *qt_action = menu.addAction(localized(
-        localization, action.label_key, action.fallback_label));
-    qt_action->setObjectName(QString::fromUtf8(action.id.data(),
-                                                action.id.size()));
-    qt_action->setEnabled(action.enabled);
-    qt_actions[index] = qt_action;
+  {
+    QDR_PROFILE_SCOPE("Qt viewport delete menu build");
+    menu.setObjectName(QStringLiteral("viewport_delete_elements_menu"));
+    for (std::size_t index = 0; index < actions.size(); ++index) {
+      const QtViewportDeletePopupAction &action = actions[index];
+      QAction *qt_action = menu.addAction(localized(
+          localization, action.label_key, action.fallback_label));
+      qt_action->setObjectName(QString::fromUtf8(action.id.data(),
+                                                  action.id.size()));
+      qt_action->setEnabled(action.enabled);
+      qt_actions[index] = qt_action;
+    }
   }
 
-  QAction *selected_action = menu.exec(global_point);
+  QAction *selected_action = nullptr;
+  {
+    QDR_PROFILE_SCOPE("Qt viewport delete menu exec");
+    selected_action = menu.exec(global_point);
+  }
   const auto selected =
       std::find(qt_actions.begin(), qt_actions.end(), selected_action);
   if (selected == qt_actions.end()) {
@@ -176,11 +198,17 @@ bool QtViewportDeletePopupPresenter::show(
     QuaderEditorApi &editor, ModelingSessionService &modeling,
     ViewportInputRouter &input_router,
     LocalizationService &localization) const {
+  QDR_PROFILE_SCOPE("Qt viewport delete popup show");
   const QPointer<QWidget> guarded_focus_parent(&focus_parent);
-  const ModelingSelectionSummary summary =
-      to_modeling_selection_summary(editor.selection().summary());
-  const QtViewportDeletePopupKind kind = qt_viewport_delete_popup_kind(
-      summary.mode, modeling.has_selected_scene_aware_delete_root());
+  const ModelingSelectionSummary summary = [&]() {
+    QDR_PROFILE_SCOPE("Qt viewport delete popup query selection summary");
+    return to_modeling_selection_summary(editor.selection().summary());
+  }();
+  const QtViewportDeletePopupKind kind = [&]() {
+    QDR_PROFILE_SCOPE("Qt viewport delete popup query kind");
+    return qt_viewport_delete_popup_kind(
+        summary.mode, modeling.has_selected_scene_aware_delete_root());
+  }();
   const bool changed = kind == QtViewportDeletePopupKind::ObjectConfirmation
                            ? show_object_confirmation(focus_parent, editor,
                                                       input_router,

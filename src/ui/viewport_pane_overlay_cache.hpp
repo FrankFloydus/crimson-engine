@@ -23,6 +23,7 @@ struct ViewportPaneOverlayCacheKey {
   std::uint64_t asset_revision = 0;
   std::uint64_t local_visibility_revision = 0;
   std::uint64_t overlay_signature = 0;
+  std::uint64_t style_signature = 0;
   ModelingSelectionMode selection_mode = ModelingSelectionMode::Object;
 };
 
@@ -39,6 +40,7 @@ enum class ViewportPaneOverlayCacheRefreshReason {
     AssetRevision,
     LocalVisibilityRevision,
     OverlaySignature,
+    StyleSignature,
     SelectionMode,
 };
 
@@ -50,6 +52,7 @@ public:
     [[nodiscard]] bool valid() const { return valid_; }
     [[nodiscard]] const ViewportOverlayFrame& frame() const { return frame_; }
     [[nodiscard]] const ViewportPaneOverlayCacheKey& key() const { return key_; }
+    [[nodiscard]] std::uint64_t revision() const { return revision_; }
     [[nodiscard]] bool
     needs_refresh(const ViewportPaneOverlayCacheKey &key) const;
     [[nodiscard]] ViewportPaneOverlayCacheRefreshReason
@@ -61,6 +64,7 @@ public:
 private:
     ViewportOverlayFrame frame_;
     ViewportPaneOverlayCacheKey key_;
+    std::uint64_t revision_ = 0;
     bool valid_ = false;
     bool dirty_ = true;
 };

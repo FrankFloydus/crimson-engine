@@ -167,11 +167,15 @@ struct OpenEdgeOverlayRef {
  */
 class SelectionOverlayDocumentLookup {
 public:
-	explicit SelectionOverlayDocumentLookup(const quader_poly::Document& document)
+	explicit SelectionOverlayDocumentLookup(
+		const quader_poly::Document& document, bool include_faces = true)
 	{
 		vertices_by_id_.reserve(document.vertices.size());
 		for (const quader_poly::Vertex& vertex : document.vertices) {
 			vertices_by_id_.try_emplace(vertex.id, &vertex);
+		}
+		if (!include_faces) {
+			return;
 		}
 		faces_by_id_.reserve(document.faces.size());
 		for (const quader_poly::Face& face : document.faces) {
@@ -990,6 +994,36 @@ SelectionOverlayFrame build_selection_overlay_frame(
 		const SelectionOverlayStyle& style)
 {
 	return build_selection_overlay_frame(std::span<const PolygonObject>(objects), mode, hover, style);
+}
+
+SelectionOverlayFrame build_object_selection_wire_overlay_frame(
+		const PolygonObject& object,
+		const SelectionOverlayStyle& style)
+{
+	QDR_PROFILE_SCOPE("qdr_editor_core.build_object_selection_wire_overlay_frame");
+	SelectionOverlayFrame frame;
+	const SelectionOverlayDocumentLookup lookup(object.document, false);
+	const std::vector<quader_poly::Edge> edges =
+		quader_poly::document_edges(object.document);
+	frame.lines.reserve(edges.size());
+	for (const quader_poly::Edge edge : edges) {
+		const quader_poly::Vertex* a = lookup.vertex(edge.a);
+		const quader_poly::Vertex* b = lookup.vertex(edge.b);
+		if (a == nullptr || b == nullptr) {
+			continue;
+		}
+		frame.lines.push_back({
+			.layer = SelectionOverlayLayer::SelectedEdge,
+			.start = a->position,
+			.end = b->position,
+			.color_abgr = style.selected_edge_color_abgr,
+			.width_pixels = style.edge_line_width_pixels,
+			.object_id = object.id,
+			.face_id = quader_poly::kInvalidElementId,
+			.edge = edge,
+		});
+	}
+	return frame;
 }
 
 SelectionOverlayFrame build_selection_hover_overlay_frame(

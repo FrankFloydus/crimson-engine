@@ -485,13 +485,18 @@ TEST(OverlayMaterialTests,
       read_source_file("resources/materials/quader_overlay_line.mat");
 
   EXPECT_NE(line_source.find("vertexDomain : device"), std::string::npos);
-  EXPECT_NE(line_source.find("requires : [\n        color,\n        custom0"),
+  EXPECT_NE(line_source.find("requires : [\n        color,\n        custom0,\n        custom1,\n        custom2"),
             std::string::npos);
-  EXPECT_NE(line_source.find("material.lineDistancePixels = getCustom0()"),
+  EXPECT_NE(line_source.find("getWorldFromModelMatrix()"),
             std::string::npos);
   EXPECT_EQ(line_source.find("material.world_position"), std::string::npos);
-  EXPECT_EQ(line_source.find("getClipFromViewMatrix()"), std::string::npos);
-  EXPECT_EQ(line_source.find("name : nearPlane"), std::string::npos);
+  EXPECT_NE(line_source.find("getClipFromViewMatrix()"), std::string::npos);
+  EXPECT_NE(line_source.find("name : nearPlane"), std::string::npos);
+  EXPECT_NE(line_source.find("name : depthBias"), std::string::npos);
+  EXPECT_NE(line_source.find("getResolution()"), std::string::npos);
+  EXPECT_NE(line_source.find(
+                "return vec4(1000000.0, 1000000.0, 0.0, 1.0)"),
+            std::string::npos);
   EXPECT_NE(line_source.find("variable_lineDistancePixels.x"),
             std::string::npos);
 
@@ -546,10 +551,10 @@ TEST(ViewportOverlayPolicyTests,
   EXPECT_NE(viewport_panel_source.find(
                 "modeling.selection_overlay_frame(overlay_options)"),
             std::string::npos);
-  EXPECT_NE(
-      viewport_panel_source.find(
-          "refresh_cached_selection_overlay_frame(modeling, document, assets)"),
-      std::string::npos);
+  EXPECT_TRUE(source_contains_compact(
+      viewport_panel_source,
+      "refresh_cached_selection_overlay_frame(modeling, document, assets, "
+      "settings)"));
   EXPECT_NE(viewport_panel_source.find(".scene_revision = document.revision()"),
             std::string::npos);
   EXPECT_NE(viewport_panel_source.find(".asset_revision = assets.revision()"),
@@ -577,10 +582,10 @@ TEST(ViewportOverlayPolicyTests,
       std::string::npos);
   EXPECT_NE(source.find("modeling.selection_overlay_frame(overlay_options)"),
             std::string::npos);
-  EXPECT_NE(
-      source.find("refresh_cached_selection_overlay_frame(modeling, document, "
-                  "assets)"),
-      std::string::npos);
+  EXPECT_TRUE(source_contains_compact(
+      source,
+      "refresh_cached_selection_overlay_frame(modeling, document, assets, "
+      "settings)"));
   EXPECT_NE(source.find(".scene_revision = document.revision()"),
             std::string::npos);
   EXPECT_NE(source.find(".asset_revision = assets.revision()"),
@@ -595,7 +600,7 @@ TEST(ViewportOverlayPolicyTests,
       "ViewportToolOverlayProjection::append_transform_gizmo(",
       scene_overlay);
   const std::size_t style_resolve =
-      source.find("ViewportOverlayStyleResolver::apply(", transform_gizmo);
+      source.find("ViewportOverlayStyleResolver::apply_from(", transform_gizmo);
   const std::size_t submit =
       source.find("render_bridge.set_overlay_frame(", style_resolve);
   ASSERT_NE(cached_selection, std::string::npos);
@@ -607,6 +612,8 @@ TEST(ViewportOverlayPolicyTests,
   EXPECT_LT(scene_overlay, transform_gizmo);
   EXPECT_LT(transform_gizmo, style_resolve);
   EXPECT_LT(style_resolve, submit);
+  EXPECT_NE(source.find(".style_signature ="), std::string::npos);
+  EXPECT_NE(source.find("dynamic_style_range"), std::string::npos);
 }
 
 TEST(ViewportOverlayPolicyTests,
@@ -813,6 +820,15 @@ TEST(SceneRenderBridgeTests, UsesQuadMaterialsForSelectionLineAndPointOverlay) {
       "AttributeType::FLOAT4, offsetof(OverlayLineVertex, position)"));
   EXPECT_TRUE(source_contains_compact(
       proxy_factory_source,
+      "AttributeType::FLOAT4, offsetof(OverlayLineVertex, start)"));
+  EXPECT_TRUE(source_contains_compact(
+      proxy_factory_source,
+      "AttributeType::FLOAT4, offsetof(OverlayLineVertex, end)"));
+  EXPECT_TRUE(source_contains_compact(
+      proxy_factory_source,
+      "AttributeType::FLOAT4, offsetof(OverlayLineVertex, control)"));
+  EXPECT_TRUE(source_contains_compact(
+      proxy_factory_source,
       "AttributeType::FLOAT4, offsetof(OverlayPointVertex, position)"));
   EXPECT_NE(projector_source.find("OverlayProjectedPoint project"),
             std::string::npos);
@@ -823,7 +839,9 @@ TEST(SceneRenderBridgeTests, UsesQuadMaterialsForSelectionLineAndPointOverlay) {
   EXPECT_EQ(proxy_factory_source.find(
                 "setParameter(\"point_size\", point_size_pixels)"),
             std::string::npos);
-  EXPECT_EQ(proxy_factory_source.find("setParameter(\"nearPlane\""),
+  EXPECT_NE(proxy_factory_source.find("setParameter(\"nearPlane\""),
+            std::string::npos);
+  EXPECT_NE(proxy_factory_source.find("setParameter(\"depthBias\""),
             std::string::npos);
   EXPECT_NE(renderable_builder_source.find("LineBatchKey"), std::string::npos);
   EXPECT_NE(renderable_builder_source.find("IconBatchKey"), std::string::npos);
@@ -1690,6 +1708,8 @@ TEST(ViewportRendererTests,
       read_source_file("src/ui/qt_viewport_panel.hpp");
   const std::string viewport_panel_source =
       read_source_file("src/ui/qt_viewport_panel.cpp");
+  const std::string viewport_info_stats_header =
+      read_source_file("src/render/viewport_info_stats.hpp");
   const std::string viewport_info_stats_source =
       read_source_file("src/render/viewport_info_stats.cpp");
 
@@ -1713,14 +1733,26 @@ TEST(ViewportRendererTests,
   EXPECT_NE(viewport_panel_header.find(
                 "viewport_info_cached_local_visibility_revision_"),
             std::string::npos);
+  EXPECT_NE(viewport_panel_header.find(
+                "viewport_info_cached_scene_snapshot_"),
+            std::string::npos);
   EXPECT_NE(viewport_panel_header.find("viewport_info_cached_camera_"),
             std::string::npos);
   EXPECT_NE(viewport_panel_source.find("same_viewport_info_camera"),
             std::string::npos);
   EXPECT_TRUE(source_contains_compact(
       viewport_panel_source,
-      "collect_viewport_info_scene_stats(document,assets,camera,"
+      "build_viewport_info_scene_snapshot(document,assets,"
       "&local_visibility)"));
+  EXPECT_TRUE(source_contains_compact(
+      viewport_panel_source,
+      "collect_viewport_info_scene_stats("
+      "viewport_info_cached_scene_snapshot_,camera)"));
+  EXPECT_TRUE(source_contains_compact(
+      viewport_info_stats_header,
+      "ViewportInfoSceneSnapshot build_viewport_info_scene_snapshot("
+      "const SceneDocument&document,const AssetRegistry&assets,"
+      "const ViewportLocalVisibilitySnapshot*local_visibility=nullptr)"));
   EXPECT_NE(viewport_info_stats_source.find(
                 "document.is_effectively_visible(entity_id)"),
             std::string::npos);
@@ -1729,17 +1761,36 @@ TEST(ViewportRendererTests,
             std::string::npos);
   EXPECT_TRUE(source_contains_compact(
       viewport_panel_source,
-      "const bool cache_hit = viewport_info_scene_stats_valid_"));
+      "const bool snapshot_cache_hit="
+      "viewport_info_scene_snapshot_valid_&&"
+      "viewport_info_cached_document_==&document&&"
+      "viewport_info_cached_assets_==&assets&&"
+      "viewport_info_cached_scene_revision_==scene_revision&&"
+      "viewport_info_cached_asset_revision_==asset_revision&&"
+      "viewport_info_cached_local_visibility_revision_=="
+      "local_visibility_revision"));
+  EXPECT_TRUE(source_contains_compact(
+      viewport_panel_source,
+      "if(!snapshot_cache_hit){"
+      "QDR_PROFILE_SCOPE(\"Viewport info rebuild scene snapshot\")"));
+  EXPECT_TRUE(source_contains_compact(
+      viewport_panel_source,
+      "const bool stats_cache_hit=viewport_info_scene_stats_valid_&&"
+      "same_viewport_info_camera(viewport_info_cached_camera_,camera)"));
+  EXPECT_NE(viewport_panel_source.find(
+                "QDR_PROFILE_SCOPE(\"Viewport info cull scene snapshot\")"),
+            std::string::npos);
   EXPECT_NE(viewport_panel_source.find("scene_revision = document.revision()"),
             std::string::npos);
   EXPECT_NE(viewport_panel_source.find("asset_revision = assets.revision()"),
             std::string::npos);
   EXPECT_NE(viewport_info_stats_source.find("viewport_info_bounds_visible"),
             std::string::npos);
-  EXPECT_NE(viewport_info_stats_source.find("stats.draw_calls += spans.size()"),
+  EXPECT_NE(viewport_info_stats_source.find(
+                "stats.draw_calls += renderable.draw_calls"),
             std::string::npos);
   EXPECT_NE(viewport_info_stats_source.find(
-                "stats.primitives += span.index_count / 3u"),
+                "primitive_count += span.index_count / 3u"),
             std::string::npos);
   EXPECT_NE(viewport_panel_source.find("ViewportBoolSettingId::ShowInfo"),
             std::string::npos);

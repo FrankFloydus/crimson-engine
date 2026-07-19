@@ -1569,6 +1569,14 @@ TEST(ModelingSessionServiceSplitTests,
                   })
                   .ok);
   EXPECT_EQ(service.selection_summary().selected_face_count, 1u);
+  const ModelingSdkProjectionStats after_initial_summary =
+      service.modeling_sdk_projection_stats_for_tests();
+  for (int index = 0; index < 16; ++index) {
+    EXPECT_EQ(service.selection_summary().selected_face_count, 1u);
+  }
+  EXPECT_EQ(service.modeling_sdk_projection_stats_for_tests()
+                .selection_summary_build_count,
+            after_initial_summary.selection_summary_build_count);
 
   const ModelingSdkProjectionStats before_move =
       service.modeling_sdk_projection_stats_for_tests();
@@ -1604,6 +1612,7 @@ TEST(ModelingSessionServiceSplitTests,
                 .content_id(),
             committed_geometry.content_id());
 
+  (void)service.selection_summary();
   const ModelingSdkProjectionStats before_queries =
       service.modeling_sdk_projection_stats_for_tests();
   for (int index = 0; index < 16; ++index) {
@@ -1621,6 +1630,8 @@ TEST(ModelingSessionServiceSplitTests,
             before_queries.scene_publication_count);
   EXPECT_EQ(after_queries.preview_publication_count,
             before_queries.preview_publication_count);
+  EXPECT_EQ(after_queries.selection_summary_build_count,
+            before_queries.selection_summary_build_count);
 }
 
 TEST(ModelingSessionServiceSplitTests,

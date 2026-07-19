@@ -13,6 +13,7 @@
 #include "editor/modeling/services/modeling_mesh_sync_service.hpp"
 #include "editor/modeling/services/modeling_selection_service.hpp"
 #include "editor/projection/mesh_projection_service.hpp"
+#include "diagnostics/profile.hpp"
 #include "math/glm_bridge.hpp"
 #include "scene/scene_document.hpp"
 #include "scene/scene_transform.hpp"
@@ -44,6 +45,7 @@ using quader::modeling::ObjectId;
 using quader::modeling::OperationResult;
 using quader::modeling::PolygonDocument;
 using quader::modeling::PolygonSelectionSnapshot;
+using quader::modeling::PreviewId;
 using quader::modeling::Result;
 using quader::modeling::SelectionEdit;
 using quader::modeling::SelectionKind;
@@ -270,6 +272,45 @@ private:
     quader_editor_core::EditorOperationSettings settings;
   };
 
+  /// Keys the derived selection summary by every SDK and host owner revision.
+  struct SelectionSummaryCacheKey {
+    std::uint64_t persistent_content_revision = 0;
+    std::uint64_t session_content_revision = 0;
+    std::uint64_t session_selection_revision = 0;
+    std::uint64_t mode_revision = 0;
+    int active_native_object_id = kInvalidModelingObjectId;
+    ModelingSelectionMode mode = ModelingSelectionMode::Object;
+    bool workspace_preview_active = false;
+    bool sdk_preview_active = false;
+    PreviewId preview_id{};
+    ObjectId preview_object_id{};
+    std::uint64_t preview_content_revision = 0;
+
+    friend bool operator==(const SelectionSummaryCacheKey &,
+                           const SelectionSummaryCacheKey &) = default;
+  };
+
+  /// Keys the immutable native projection used by read-only host queries.
+  struct NativeSelectionProjectionCacheKey {
+    std::uint64_t persistent_content_revision = 0;
+    std::uint64_t session_content_revision = 0;
+    std::uint64_t session_selection_revision = 0;
+    std::uint64_t mode_revision = 0;
+    std::uint64_t scene_mesh_binding_revision = 0;
+    std::uint64_t asset_revision = 0;
+    std::uint64_t object_map_revision = 0;
+    int active_native_object_id = kInvalidModelingObjectId;
+    ModelingSelectionMode mode = ModelingSelectionMode::Object;
+    bool workspace_preview_active = false;
+    bool sdk_preview_active = false;
+    PreviewId preview_id{};
+    ObjectId preview_object_id{};
+    std::uint64_t preview_content_revision = 0;
+
+    friend bool operator==(const NativeSelectionProjectionCacheKey &,
+                           const NativeSelectionProjectionCacheKey &) = default;
+  };
+
   friend class ModelingSdkProjectionAdapter;
 
 public:
@@ -366,10 +407,7 @@ public:
   }
 
   [[nodiscard]] bool has_selection() const {
-    return std::ranges::any_of(session_.objects(),
-                               [](const auto &object) {
-                                 return object.selected;
-                               });
+    return selection_summary().selected_object_count != 0;
   }
 
   [[nodiscard]] const void *session_identity() const noexcept {
@@ -568,7 +606,8 @@ public:
   }
 
   [[nodiscard]] quader_editor_core::EditorSession
-  native_selection_projection() const {
+  build_native_selection_projection() const {
+    QDR_PROFILE_SCOPE("Modeling SDK rebuild native selection projection");
     std::vector<quader_editor_core::PolygonObject> objects;
     objects.reserve(object_ids_.size());
     const std::vector<quader::modeling::SessionObjectSummary> summaries =
@@ -666,6 +705,41 @@ public:
     return projected;
   }
 
+  [[nodiscard]] const quader_editor_core::EditorSession &
+  native_selection_projection_view() const {
+    QDR_PROFILE_FUNCTION();
+    const quader::modeling::PreviewTransactionSummary preview =
+        session_.preview_summary();
+    const NativeSelectionProjectionCacheKey cache_key{
+        .persistent_content_revision = persistent_content_revision_,
+        .session_content_revision = session_.content_revision(),
+        .session_selection_revision = session_.selection_revision(),
+        .mode_revision = mode_revision_,
+        .scene_mesh_binding_revision = scene_.mesh_binding_revision(),
+        .asset_revision = assets_.revision(),
+        .object_map_revision = object_map_.revision(),
+        .active_native_object_id = active_native_object_id_,
+        .mode = selection_mode_,
+        .workspace_preview_active = workspace_preview_active_,
+        .sdk_preview_active = preview.active,
+        .preview_id = preview.id,
+        .preview_object_id = preview.object_id,
+        .preview_content_revision = preview.content_revision,
+    };
+    if (!native_selection_projection_cache_key_.has_value() ||
+        *native_selection_projection_cache_key_ != cache_key ||
+        !native_selection_projection_cache_.has_value()) {
+      native_selection_projection_cache_ = build_native_selection_projection();
+      native_selection_projection_cache_key_ = cache_key;
+    }
+    return *native_selection_projection_cache_;
+  }
+
+  [[nodiscard]] quader_editor_core::EditorSession
+  native_selection_projection() const {
+    return native_selection_projection_view();
+  }
+
   [[nodiscard]] std::optional<EntityId> pick_object_entity(
       const ModelingPickSelectRequest &request,
       std::optional<EntityId> competing_native) const {
@@ -681,17 +755,27 @@ public:
 
   [[nodiscard]] std::vector<EntityId> box_pick_object_entities(
       const ModelingBoxSelectRequest &request) const {
-    quader_editor_core::EditorSession projected = native_selection_projection();
+    QDR_PROFILE_SCOPE("Modeling SDK box pick objects");
+    quader_editor_core::EditorSession projected = [&]() {
+      QDR_PROFILE_SCOPE("Box selection build SDK pick projection");
+      return native_selection_projection();
+    }();
     ModelingSelectionService selection;
-    const std::vector<int> object_ids =
-        selection.box_pick_object_ids(projected, scene_, object_map_, request);
+    const std::vector<int> object_ids = [&]() {
+      QDR_PROFILE_SCOPE("Box selection test SDK object candidates");
+      return selection.box_pick_object_ids(projected, scene_, object_map_,
+                                           request);
+    }();
     std::vector<EntityId> entities;
-    entities.reserve(object_ids.size());
-    for (const int object_id : object_ids) {
-      const std::optional<EntityId> entity =
-          object_map_.entity_for_modeling_object(object_id);
-      if (entity.has_value()) {
-        entities.push_back(*entity);
+    {
+      QDR_PROFILE_SCOPE("Box selection map SDK object hits");
+      entities.reserve(object_ids.size());
+      for (const int object_id : object_ids) {
+        const std::optional<EntityId> entity =
+            object_map_.entity_for_modeling_object(object_id);
+        if (entity.has_value()) {
+          entities.push_back(*entity);
+        }
       }
     }
     return entities;
@@ -2501,14 +2585,22 @@ public:
   [[nodiscard]] ModelingSelectionSummary
   box_select(const ModelingBoxSelectRequest &request,
              ModelingSelectionService &selection) {
-    const PreviewSelectionEditState preview_edit =
-        suspend_operation_preview_for_selection_edit();
+    QDR_PROFILE_SCOPE("Modeling SDK box selection");
+    const PreviewSelectionEditState preview_edit = [&]() {
+      QDR_PROFILE_SCOPE("Box selection suspend operation preview");
+      return suspend_operation_preview_for_selection_edit();
+    }();
     if (!preview_edit.ok) {
       return selection_summary();
     }
-    quader_editor_core::EditorSession projected = native_selection_projection();
-    const quader_editor_core::RectangleSelectionState baseline =
-        selection.rectangle_selection_state(projected);
+    quader_editor_core::EditorSession projected = [&]() {
+      QDR_PROFILE_SCOPE("Box selection build SDK selection projection");
+      return native_selection_projection();
+    }();
+    const quader_editor_core::RectangleSelectionState baseline = [&]() {
+      QDR_PROFILE_SCOPE("Box selection capture SDK runtime baseline");
+      return selection.rectangle_selection_state(projected);
+    }();
     return box_select(request, baseline, selection, projected, preview_edit);
   }
 
@@ -2516,15 +2608,25 @@ public:
       const ModelingBoxSelectRequest &request,
       const quader_editor_core::RectangleSelectionState &baseline,
       ModelingSelectionService &selection) {
-    const PreviewSelectionEditState preview_edit =
-        suspend_operation_preview_for_selection_edit();
+    QDR_PROFILE_SCOPE("Modeling SDK box selection from baseline");
+    const PreviewSelectionEditState preview_edit = [&]() {
+      QDR_PROFILE_SCOPE("Box selection suspend operation preview");
+      return suspend_operation_preview_for_selection_edit();
+    }();
     if (!preview_edit.ok) {
       return selection_summary();
     }
-    quader_editor_core::EditorSession projected = native_selection_projection();
-    const quader_editor_core::RectangleSelectionState &effective_baseline =
-        preview_edit.active ? selection.rectangle_selection_state(projected)
-                            : baseline;
+    quader_editor_core::EditorSession projected = [&]() {
+      QDR_PROFILE_SCOPE("Box selection build SDK selection projection");
+      return native_selection_projection();
+    }();
+    const quader_editor_core::RectangleSelectionState effective_baseline =
+        [&]() {
+          QDR_PROFILE_SCOPE("Box selection resolve SDK baseline");
+          return preview_edit.active
+                     ? selection.rectangle_selection_state(projected)
+                     : baseline;
+        }();
     return box_select(request, effective_baseline, selection, projected,
                       preview_edit);
   }
@@ -2535,15 +2637,26 @@ public:
       ModelingSelectionService &selection,
       quader_editor_core::EditorSession &projected,
       const PreviewSelectionEditState &preview_edit) {
-    const ModelingSelectionApplyResult applied =
-        selection.apply_rectangle_selection(projected, scene_, object_map_,
-                                             request, baseline);
+    QDR_PROFILE_SCOPE("Modeling SDK apply box selection");
+    const ModelingSelectionApplyResult applied = [&]() {
+      QDR_PROFILE_SCOPE("Box selection resolve SDK rectangle selection");
+      return selection.apply_rectangle_selection(projected, scene_,
+                                                  object_map_, request,
+                                                  baseline);
+    }();
     if (applied.changed) {
+      QDR_PROFILE_SCOPE("Box selection publish SDK native selection");
       (void)apply_native_selection_projection(projected);
     }
-    (void)finish_operation_preview_selection_edit(
-        preview_edit, {.ok = true, .changed = applied.changed});
-    return selection_summary();
+    {
+      QDR_PROFILE_SCOPE("Box selection finish operation preview edit");
+      (void)finish_operation_preview_selection_edit(
+          preview_edit, {.ok = true, .changed = applied.changed});
+    }
+    {
+      QDR_PROFILE_SCOPE("Box selection summarize SDK selection");
+      return selection_summary();
+    }
   }
 
   [[nodiscard]] ModelingCommandResult move_selection(QVec3 delta) {
@@ -3156,6 +3269,33 @@ public:
   }
 
   [[nodiscard]] ModelingSelectionSummary selection_summary() const {
+    const quader::modeling::PreviewTransactionSummary preview =
+        session_.preview_summary();
+    const SelectionSummaryCacheKey cache_key{
+        .persistent_content_revision = persistent_content_revision_,
+        .session_content_revision = session_.content_revision(),
+        .session_selection_revision = session_.selection_revision(),
+        .mode_revision = mode_revision_,
+        .active_native_object_id = active_native_object_id_,
+        .mode = selection_mode_,
+        .workspace_preview_active = workspace_preview_active_,
+        .sdk_preview_active = preview.active,
+        .preview_id = preview.id,
+        .preview_object_id = preview.object_id,
+        .preview_content_revision = preview.content_revision,
+    };
+    if (selection_summary_cache_key_.has_value() &&
+        *selection_summary_cache_key_ == cache_key) {
+      return selection_summary_cache_;
+    }
+    const auto cache_summary = [this, &cache_key](
+                                   ModelingSelectionSummary summary) {
+      selection_summary_cache_key_ = cache_key;
+      selection_summary_cache_ = summary;
+      return summary;
+    };
+
+    ++stats_.selection_summary_build_count;
     ModelingSelectionSummary summary;
     summary.mode = selection_mode_;
     summary.content_revision = persistent_content_revision_;
@@ -3173,17 +3313,15 @@ public:
       summary.active_kind = summary.has_selection
                                 ? ModelingActiveSelectionKind::Object
                                 : ModelingActiveSelectionKind::None;
-      return summary;
+      return cache_summary(std::move(summary));
     }
 
     const std::optional<ObjectId> active = active_sdk_object();
     if (!active.has_value()) {
-      return summary;
+      return cache_summary(std::move(summary));
     }
     PolygonSelectionSnapshot active_selection;
     bool active_selection_available = false;
-    const quader::modeling::PreviewTransactionSummary preview =
-        session_.preview_summary();
     for (const auto &object : objects) {
       if (!object.selected && object.id != *active) {
         continue;
@@ -3257,7 +3395,7 @@ public:
                                 ? ModelingActiveSelectionKind::Edge
                                 : ModelingActiveSelectionKind::Face;
     }
-    return summary;
+    return cache_summary(std::move(summary));
   }
 
   [[nodiscard]] ModelingSelectionExport export_selection() const {
@@ -5755,6 +5893,13 @@ private:
   std::optional<quader_editor_core::EditorOperationSettings>
       active_preview_settings_;
   std::size_t active_preview_deleted_vertex_count_ = 0U;
+  mutable std::optional<SelectionSummaryCacheKey>
+      selection_summary_cache_key_;
+  mutable ModelingSelectionSummary selection_summary_cache_;
+  mutable std::optional<NativeSelectionProjectionCacheKey>
+      native_selection_projection_cache_key_;
+  mutable std::optional<quader_editor_core::EditorSession>
+      native_selection_projection_cache_;
   ModelingSdkProjectionFailurePoint failure_point_ =
       ModelingSdkProjectionFailurePoint::None;
   mutable ModelingSdkProjectionStats stats_;
@@ -5817,6 +5962,11 @@ ModelingSdkProjectionAdapter::native_selection_projection() const {
   return impl_->native_selection_projection();
 }
 
+const quader_editor_core::EditorSession &
+ModelingSdkProjectionAdapter::native_selection_projection_view() const {
+  return impl_->native_selection_projection_view();
+}
+
 std::optional<EntityId> ModelingSdkProjectionAdapter::pick_object_entity(
     const ModelingPickSelectRequest &request,
     std::optional<EntityId> competing_native) const {
@@ -5826,6 +5976,7 @@ std::optional<EntityId> ModelingSdkProjectionAdapter::pick_object_entity(
 std::vector<EntityId>
 ModelingSdkProjectionAdapter::box_pick_object_entities(
     const ModelingBoxSelectRequest &request) const {
+  QDR_PROFILE_SCOPE("Modeling SDK box pick entry");
   return impl_->box_pick_object_entities(request);
 }
 
@@ -5993,6 +6144,7 @@ ModelingSelectionSummary ModelingSdkProjectionAdapter::pick_select(
 ModelingSelectionSummary ModelingSdkProjectionAdapter::box_select(
     const ModelingBoxSelectRequest &request,
     ModelingSelectionService &selection) {
+  QDR_PROFILE_SCOPE("Modeling SDK box select entry");
   return impl_->box_select(request, selection);
 }
 
@@ -6000,6 +6152,7 @@ ModelingSelectionSummary ModelingSdkProjectionAdapter::box_select(
     const ModelingBoxSelectRequest &request,
     const quader_editor_core::RectangleSelectionState &baseline,
     ModelingSelectionService &selection) {
+  QDR_PROFILE_SCOPE("Modeling SDK baseline box select entry");
   return impl_->box_select(request, baseline, selection);
 }
 

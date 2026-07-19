@@ -8,7 +8,9 @@ material {
     vertexDomain : device,
     requires : [
         color,
-        custom0
+        custom0,
+        custom1,
+        custom2
     ],
     variables : [
         lineDistancePixels
@@ -21,13 +23,76 @@ material {
         {
             type : float,
             name : featherPixels
+        },
+        {
+            type : float,
+            name : nearPlane
+        },
+        {
+            type : float,
+            name : depthBias
         }
     ]
 }
 
 vertex {
+    highp vec4 clippedEndpoint(highp vec4 startView, highp vec4 endView, bool startEndpoint, float nearZ) {
+        bool startBehind = startView.z > nearZ;
+        bool endBehind = endView.z > nearZ;
+        if (startBehind && endBehind) {
+            return vec4(1000000.0, 1000000.0, 0.0, 1.0);
+        }
+        if (startBehind != endBehind) {
+            float denominator = endView.z - startView.z;
+            float t = abs(denominator) > 0.000001 ? (nearZ - startView.z) / denominator : 0.0;
+            t = clamp(t, 0.0, 1.0);
+            highp vec4 clipped = mix(startView, endView, t);
+            if (startBehind) {
+                startView = clipped;
+            } else {
+                endView = clipped;
+            }
+        }
+        return getClipFromViewMatrix() * (startEndpoint ? startView : endView);
+    }
+
     void materialVertex(inout MaterialVertexInputs material) {
-        material.lineDistancePixels = getCustom0();
+        highp vec4 startWorld = getWorldFromModelMatrix() * vec4(getCustom0().xyz, 1.0);
+        highp vec4 endWorld = getWorldFromModelMatrix() * vec4(getCustom1().xyz, 1.0);
+        highp vec4 startView = getViewFromWorldMatrix() * startWorld;
+        highp vec4 endView = getViewFromWorldMatrix() * endWorld;
+
+        vec4 control = getCustom2();
+        float side = control.x;
+        float cap = control.y;
+        bool startEndpoint = control.z < 0.5;
+        float nearPlane = max(materialParams.nearPlane, 0.0001);
+        float nearZ = -nearPlane;
+        highp vec4 clipStart = clippedEndpoint(startView, endView, true, nearZ);
+        highp vec4 clipEnd = clippedEndpoint(startView, endView, false, nearZ);
+        highp vec4 baseClip = startEndpoint ? clipStart : clipEnd;
+
+        vec2 resolution = max(getResolution().xy, vec2(1.0));
+        vec2 startNdc = clipStart.xy / max(abs(clipStart.w), 0.000001);
+        vec2 endNdc = clipEnd.xy / max(abs(clipEnd.w), 0.000001);
+        vec2 directionPixels = (endNdc - startNdc) * resolution;
+        float directionLength = length(directionPixels);
+        vec2 direction = directionLength > 0.000001 ? directionPixels / directionLength : vec2(1.0, 0.0);
+        vec2 normal = vec2(-direction.y, direction.x);
+
+        float sideDistance = (max(materialParams.lineWidth, 1.0) + max(materialParams.featherPixels, 0.0)) * 0.5;
+        vec2 offsetPixels = (normal * side + direction * cap) * sideDistance;
+        vec2 offsetClip = offsetPixels * getResolution().zw * 2.0 * baseClip.w;
+        highp vec4 finalClip = baseClip + vec4(offsetClip, 0.0, 0.0);
+
+        float deviceDepth = finalClip.z / max(abs(finalClip.w), 0.000001);
+        float deviceOffset = max(materialParams.depthBias, 0.0) * nearPlane * 0.0025;
+        deviceDepth = max(-1.0, deviceDepth - deviceOffset);
+        finalClip.z = deviceDepth * finalClip.w;
+
+        material.clipSpaceTransform = mat4(1.0);
+        material.clipSpaceTransform[3] = finalClip;
+        material.lineDistancePixels = vec4(side * sideDistance, 0.0, 0.0, 0.0);
     }
 }
 

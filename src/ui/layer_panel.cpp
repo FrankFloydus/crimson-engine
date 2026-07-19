@@ -8,6 +8,7 @@
 
 #include "api/quader_editor_api.hpp"
 #include "core/localization_service.hpp"
+#include "diagnostics/profile.hpp"
 #include "scene/scene_document.hpp"
 #include "ui/qt_color_swatch_button.hpp"
 #include "ui/ui_context.hpp"
@@ -620,6 +621,7 @@ private:
   }
 
   void show_context_menu(QuaderLayerId id, QPoint global_position) {
+    QDR_PROFILE_SCOPE("Qt layers context menu show");
     if (editor_ == nullptr || !layer_by_id_.contains(id)) {
       return;
     }
@@ -631,50 +633,69 @@ private:
     }
 
     QMenu menu(tree_);
-    menu.setObjectName(QStringLiteral("layers.context_menu"));
-    QAction *add_selection_action = menu.addAction(localized(
-        "ui.layers.add_selection", "Add Selection to Layer"));
-    add_selection_action->setObjectName(
-        QStringLiteral("layers.action.add_selection"));
-    add_selection_action->setEnabled(
-        editor_->layers().can_add_selection_to(id));
+    QAction *add_selection_action = nullptr;
+    QAction *remove_selection_action = nullptr;
+    QAction *empty_action = nullptr;
+    QAction *delete_action = nullptr;
+    std::vector<QuaderLayerId> selected;
+    {
+      QDR_PROFILE_SCOPE("Qt layers context menu query state");
+      selected = selected_layer_ids();
+    }
+    {
+      QDR_PROFILE_SCOPE("Qt layers context menu build");
+      menu.setObjectName(QStringLiteral("layers.context_menu"));
+      add_selection_action = menu.addAction(localized(
+          "ui.layers.add_selection", "Add Selection to Layer"));
+      add_selection_action->setObjectName(
+          QStringLiteral("layers.action.add_selection"));
+      add_selection_action->setEnabled(
+          editor_->layers().can_add_selection_to(id));
 
-    QAction *remove_selection_action = menu.addAction(localized(
-        "ui.layers.remove_selection", "Remove Object from Layer"));
-    remove_selection_action->setObjectName(
-        QStringLiteral("layers.action.remove_selection"));
-    remove_selection_action->setEnabled(
-        editor_->layers().can_remove_selection(id));
-    menu.addSeparator();
+      remove_selection_action = menu.addAction(localized(
+          "ui.layers.remove_selection", "Remove Object from Layer"));
+      remove_selection_action->setObjectName(
+          QStringLiteral("layers.action.remove_selection"));
+      remove_selection_action->setEnabled(
+          editor_->layers().can_remove_selection(id));
+      menu.addSeparator();
 
-    QAction *empty_action =
-        menu.addAction(localized("ui.layers.empty", "Empty Layer"));
-    empty_action->setObjectName(QStringLiteral("layers.action.empty"));
-    empty_action->setEnabled(!layer_by_id_.at(id).members.empty());
+      empty_action =
+          menu.addAction(localized("ui.layers.empty", "Empty Layer"));
+      empty_action->setObjectName(QStringLiteral("layers.action.empty"));
+      empty_action->setEnabled(!layer_by_id_.at(id).members.empty());
 
-    const std::vector<QuaderLayerId> selected = selected_layer_ids();
-    QAction *delete_action = menu.addAction(
-        selected.size() > 1
-            ? localized("ui.layers.delete_multiple", "Delete Layers")
-            : localized("ui.layers.delete", "Delete Layer"));
-    delete_action->setObjectName(QStringLiteral("layers.action.delete"));
-    delete_action->setEnabled(!selected.empty());
+      delete_action = menu.addAction(
+          selected.size() > 1
+              ? localized("ui.layers.delete_multiple", "Delete Layers")
+              : localized("ui.layers.delete", "Delete Layer"));
+      delete_action->setObjectName(QStringLiteral("layers.action.delete"));
+      delete_action->setEnabled(!selected.empty());
+    }
 
-    QAction *chosen = menu.exec(global_position);
+    QAction *chosen = nullptr;
+    {
+      QDR_PROFILE_SCOPE("Qt layers context menu exec");
+      chosen = menu.exec(global_position);
+    }
     QuaderApiVoidResult result;
-    if (chosen == add_selection_action) {
-      result = editor_->layers().add_selection(id);
-    } else if (chosen == remove_selection_action) {
-      result = editor_->layers().remove_selection(id);
-    } else if (chosen == empty_action) {
-      result = editor_->layers().empty(id);
-    } else if (chosen == delete_action) {
-      result = editor_->layers().destroy(std::span<const QuaderLayerId>(
-          selected.data(), selected.size()));
-    } else {
-      return;
+    {
+      QDR_PROFILE_SCOPE("Qt layers context menu dispatch action");
+      if (chosen == add_selection_action) {
+        result = editor_->layers().add_selection(id);
+      } else if (chosen == remove_selection_action) {
+        result = editor_->layers().remove_selection(id);
+      } else if (chosen == empty_action) {
+        result = editor_->layers().empty(id);
+      } else if (chosen == delete_action) {
+        result = editor_->layers().destroy(std::span<const QuaderLayerId>(
+            selected.data(), selected.size()));
+      } else {
+        return;
+      }
     }
     if (result.ok() && result.changed()) {
+      QDR_PROFILE_SCOPE("Qt layers context menu synchronize result");
       synchronize(true);
     }
   }

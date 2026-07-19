@@ -8,6 +8,7 @@
 #include <editor/interactions/selection_box.hpp>
 #include <editor/interactions/selection_edit.hpp>
 
+#include "diagnostics/profile.hpp"
 #include "tool_math_internal.hpp"
 
 #include <quader/modeling/neutral/geometry/geometry.hpp>
@@ -577,6 +578,7 @@ public:
 
 	[[nodiscard]] RectangleSelectionHits rectangle_hits_from_projected_candidates(const RectangleProjectedHitsRequest& request) const
 	{
+		QDR_PROFILE_SCOPE("Box selection test projected candidates");
 		RectangleSelectionHits hits;
                 if (request.mode == SelectionMode::Object) {
                   for (const RectangleProjectedObject &object :

@@ -918,6 +918,26 @@ TEST(ProgrammaticApiGuardrailTests, SelectionCommandToolsPreferEditorSelectionSe
   }
 }
 
+TEST(ProgrammaticApiGuardrailTests,
+     EditorSelectionSummaryGatesProjectionBehindOwnerRevisions) {
+  const std::string source = read_file(
+      source_root() / "src/editor/selection/editor_selection_service.cpp");
+  const std::string summary = source_slice(
+      source, "ModelingSelectionSummary EditorSelectionService::summary() const",
+      "ModelingHoverSummary EditorSelectionService::hover_summary() const");
+  const std::size_t unchanged_gate =
+      summary.find("if (summary_cache_valid_ && !preview_active");
+  const std::size_t projected_summary =
+      summary.find("modeling_.selection_summary()");
+
+  ASSERT_NE(unchanged_gate, std::string::npos);
+  ASSERT_NE(projected_summary, std::string::npos);
+  EXPECT_LT(unchanged_gate, projected_summary);
+  EXPECT_NE(summary.find("modeling_.content_revision()"), std::string::npos);
+  EXPECT_NE(summary.find("modeling_.selection_revision()"),
+            std::string::npos);
+}
+
 TEST(ProgrammaticApiGuardrailTests, PublicSelectionApiDelegatesEntityEditPolicyToEditorSelectionService) {
   const std::string api_header =
       read_file(source_root() / "src/api/quader_selection_api.hpp");

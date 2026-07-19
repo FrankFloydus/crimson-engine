@@ -124,6 +124,9 @@ public:
     void set_overlay_frame(std::size_t viewport_index, std::uint8_t layer_mask,
                            ViewportOverlayFrame frame,
                            ViewportOverlayCamera camera);
+    [[nodiscard]] bool
+    update_overlay_camera(std::size_t viewport_index, std::uint8_t layer_mask,
+                          ViewportOverlayCamera camera);
 
   private:
     filament::Engine* engine_ = nullptr;
