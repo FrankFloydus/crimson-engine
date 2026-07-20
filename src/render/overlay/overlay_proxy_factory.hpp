@@ -62,6 +62,11 @@ public:
     /// Uploads only retained world-position attributes. Static quad topology,
     /// controls, colors, indices and material/depth state remain untouched.
     bool update_position_streams(OverlayRenderableProxy &proxy);
+    /// Refreshes camera-dependent clip/bias uniforms without rebuilding or
+    /// uploading retained line and point geometry.
+    void update_camera_state(
+        const std::vector<OverlayRenderableProxy> &proxies,
+        const ViewportOverlayCamera &camera);
     /// Changes visibility without rebuilding or re-uploading retained overlay
     /// geometry. Used to keep very large component overlays off the drag hot
     /// path while the dynamic mesh preview is visible.

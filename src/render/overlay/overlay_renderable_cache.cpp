@@ -26,6 +26,14 @@ std::size_t overlay_layer_index(ViewportOverlayLayer layer) {
   return static_cast<std::size_t>(layer);
 }
 
+bool overlay_camera_material_state_changed(
+    const ViewportOverlayCamera &before,
+    const ViewportOverlayCamera &after) {
+  return before.projection != after.projection ||
+         before.near_plane != after.near_plane ||
+         before.far_plane != after.far_plane;
+}
+
 } // namespace
 
 OverlayRenderableCache::~OverlayRenderableCache() {
@@ -86,6 +94,8 @@ bool OverlayRenderableCache::set_overlay_frame(std::size_t viewport_index,
   const bool frame_changed =
       !slot.has_frame || signature != retained_frame_signature;
   const bool camera_changed = camera_signature != slot.camera_signature;
+  const bool camera_material_state_changed =
+      overlay_camera_material_state_changed(slot.camera, camera);
   const bool layer_changed = layer_mask != slot.layer_mask;
   if (!frame_changed) {
     if (!camera_changed && !layer_changed) {
@@ -101,6 +111,9 @@ bool OverlayRenderableCache::set_overlay_frame(std::size_t viewport_index,
     }
     if (factory_ && factory_->initialized()) {
       rebuild_slot(slot, layer_changed);
+      if (camera_material_state_changed && !layer_changed) {
+        update_retained_camera_state(slot);
+      }
     }
     return true;
   }
@@ -115,6 +128,8 @@ bool OverlayRenderableCache::set_overlay_frame(std::size_t viewport_index,
   slot.frame_signature = signature;
   slot.signatures = signatures;
   slot.transform_layers.fill(false);
+  slot.transform_binding_ranges.clear();
+  slot.transform_source_binding_spans.clear();
   slot.transform_layout_signature = 0u;
   slot.transform_bindings_valid = false;
   slot.camera = camera;
@@ -158,6 +173,8 @@ bool OverlayRenderableCache::update_overlay_camera(
   const std::uint64_t camera_signature =
       OverlayRenderableBuilder::camera_signature(camera);
   const bool camera_changed = camera_signature != slot.camera_signature;
+  const bool camera_material_state_changed =
+      overlay_camera_material_state_changed(slot.camera, camera);
   const bool layer_changed = layer_mask != slot.layer_mask;
   if (!camera_changed && !layer_changed) {
     return true;
@@ -173,6 +190,9 @@ bool OverlayRenderableCache::update_overlay_camera(
   }
   if (factory_ && factory_->initialized()) {
     rebuild_slot(slot, layer_changed);
+    if (camera_material_state_changed && !layer_changed) {
+      update_retained_camera_state(slot);
+    }
   }
   return true;
 }
@@ -252,27 +272,35 @@ bool OverlayRenderableCache::set_transform_position_streams(
 
   const std::uint64_t next_layout = layout_signature.value();
   const std::uint64_t next_position = position_signature.value();
-  if (next_layout == transform_layout_signature_ &&
-      next_position == transform_position_signature_ && stable_layout &&
-      transform_stream_active_) {
-    return false;
-  }
-
   const bool layout_changed =
       next_layout != transform_layout_signature_ || !stable_layout;
+  std::vector<std::uint8_t> dirty_source_mask(
+      dynamic_source_count, layout_changed ? 1u : 0u);
+  bool any_source_dirty = layout_changed;
   if (!layout_changed) {
-    QDR_PROFILE_SCOPE("Overlay transform stream update retained sources");
+    QDR_PROFILE_SCOPE("Overlay transform stream refresh dirty sources");
     std::size_t source_index = 0u;
     for (const RenderToolPreviewMeshRecord &mesh : meshes) {
       if (!is_dynamic_source(mesh)) {
         continue;
       }
-      TransformPositionSource &source = transform_sources_[source_index++];
+      TransformPositionSource &source = transform_sources_[source_index];
+      const bool source_dirty =
+          source.position_revision != mesh.position_revision ||
+          source.positions != mesh.dynamic_position_payload ||
+          source.transform.values != mesh.transform.values;
+      if (!source_dirty) {
+        ++source_index;
+        continue;
+      }
+      dirty_source_mask[source_index] = 1u;
+      any_source_dirty = true;
       source.position_revision = mesh.position_revision;
       source.position_count = mesh.dynamic_position_payload->size();
       source.transform = mesh.transform;
       source.positions = mesh.dynamic_position_payload;
       refresh_world_positions(source);
+      ++source_index;
     }
   } else {
     QDR_PROFILE_SCOPE("Overlay transform stream rebuild source layout");
@@ -327,6 +355,14 @@ bool OverlayRenderableCache::set_transform_position_streams(
     }
     transform_sources_ = std::move(next_sources);
   }
+
+  // position_revision is participant-local. If every retained participant
+  // kept its revision, payload and transform, no world-position work or GPU
+  // upload is required even when the caller republishes the aggregate vector.
+  if (!layout_changed && !any_source_dirty && transform_stream_active_) {
+    transform_position_signature_ = next_position;
+    return false;
+  }
   transform_layout_signature_ = next_layout;
   transform_position_signature_ = next_position;
   transform_stream_active_ = true;
@@ -336,13 +372,23 @@ bool OverlayRenderableCache::set_transform_position_streams(
       if (!slot.has_frame) {
         continue;
       }
-      if (layout_changed || !slot.transform_active) {
+      bool upload_all_sources = false;
+      if (layout_changed) {
         if (slot.transform_active) {
           restore_transform_base(slot, false);
         }
         begin_transform_stream(slot, next_layout);
+        upload_all_sources = true;
+      } else if (!slot.transform_active) {
+        begin_transform_stream(slot, next_layout);
+        upload_all_sources = true;
+      } else if (!slot.transform_bindings_valid) {
+        resolve_transform_stream_bindings(slot);
+        upload_all_sources = true;
       }
-      apply_transform_stream(slot, next_position);
+      apply_transform_stream(slot, next_position,
+                             upload_all_sources ? nullptr
+                                                : &dirty_source_mask);
     }
   }
   return true;
@@ -357,6 +403,8 @@ void OverlayRenderableCache::reset_transform_position_streams() {
   for (OverlaySlot &slot : slots_) {
     restore_transform_base(slot, true);
     slot.transform_layers.fill(false);
+    slot.transform_binding_ranges.clear();
+    slot.transform_source_binding_spans.clear();
     slot.transform_layout_signature = 0u;
     slot.transform_bindings_valid = false;
   }
@@ -381,6 +429,10 @@ void OverlayRenderableCache::resolve_transform_stream_bindings(
     OverlaySlot &slot) {
   QDR_PROFILE_SCOPE("Overlay resolve retained GPU stream bindings");
   slot.transform_layers.fill(false);
+  slot.transform_binding_ranges.clear();
+  slot.transform_binding_ranges.reserve(transform_sources_.size() * 4u);
+  slot.transform_source_binding_spans.clear();
+  slot.transform_source_binding_spans.resize(transform_sources_.size());
 
   std::unordered_map<int, std::uint32_t> source_by_object;
   source_by_object.reserve(transform_sources_.size());
@@ -389,10 +441,16 @@ void OverlayRenderableCache::resolve_transform_stream_bindings(
                              static_cast<std::uint32_t>(index));
   }
   for (const ViewportOverlayLayer layer : kViewportOverlayDrawOrder) {
-    OverlayProxyGroup &group = slot.proxy_groups[overlay_layer_index(layer)];
-    for (OverlayRenderableProxy &proxy : group.proxies) {
-      for (OverlayPositionStreamBinding &binding :
-           proxy.position_stream_bindings) {
+    const std::size_t layer_index = overlay_layer_index(layer);
+    OverlayProxyGroup &group = slot.proxy_groups[layer_index];
+    for (std::size_t proxy_index = 0u; proxy_index < group.proxies.size();
+         ++proxy_index) {
+      OverlayRenderableProxy &proxy = group.proxies[proxy_index];
+      for (std::size_t binding_index = 0u;
+           binding_index < proxy.position_stream_bindings.size();
+           ++binding_index) {
+        OverlayPositionStreamBinding &binding =
+            proxy.position_stream_bindings[binding_index];
         binding.source_index = std::numeric_limits<std::uint32_t>::max();
         binding.position_index = std::numeric_limits<std::uint32_t>::max();
         const auto source = source_by_object.find(binding.object_id);
@@ -411,80 +469,193 @@ void OverlayRenderableCache::resolve_transform_stream_bindings(
         }
         binding.source_index = source->second;
         binding.position_index = position->second;
-        slot.transform_layers[overlay_layer_index(layer)] = true;
+        slot.transform_layers[layer_index] = true;
+        if (!slot.transform_binding_ranges.empty() &&
+            slot.transform_binding_ranges.back().source_index ==
+                source->second &&
+            slot.transform_binding_ranges.back().layer_index == layer_index &&
+            slot.transform_binding_ranges.back().proxy_index == proxy_index &&
+            static_cast<std::uint64_t>(
+                slot.transform_binding_ranges.back().first_binding) +
+                    slot.transform_binding_ranges.back().binding_count ==
+                binding_index) {
+          ++slot.transform_binding_ranges.back().binding_count;
+        } else {
+          slot.transform_binding_ranges.push_back({
+              .source_index = source->second,
+              .layer_index = static_cast<std::uint32_t>(layer_index),
+              .proxy_index = static_cast<std::uint32_t>(proxy_index),
+              .first_binding = static_cast<std::uint32_t>(binding_index),
+              .binding_count = 1u,
+          });
+        }
       }
     }
+  }
+  std::sort(slot.transform_binding_ranges.begin(),
+            slot.transform_binding_ranges.end(),
+            [](const TransformBindingRange &a,
+               const TransformBindingRange &b) {
+              if (a.source_index != b.source_index) {
+                return a.source_index < b.source_index;
+              }
+              if (a.layer_index != b.layer_index) {
+                return a.layer_index < b.layer_index;
+              }
+              if (a.proxy_index != b.proxy_index) {
+                return a.proxy_index < b.proxy_index;
+              }
+              return a.first_binding < b.first_binding;
+            });
+  for (std::size_t range_index = 0u;
+       range_index < slot.transform_binding_ranges.size(); ++range_index) {
+    const TransformBindingRange &range =
+        slot.transform_binding_ranges[range_index];
+    if (range.source_index >= slot.transform_source_binding_spans.size()) {
+      continue;
+    }
+    TransformSourceBindingSpan &span =
+        slot.transform_source_binding_spans[range.source_index];
+    if (span.range_count == 0u) {
+      span.first_range = static_cast<std::uint32_t>(range_index);
+    }
+    ++span.range_count;
   }
   slot.transform_bindings_valid = true;
 }
 
 void OverlayRenderableCache::apply_transform_stream(
-    OverlaySlot &slot, std::uint64_t position_signature) {
+    OverlaySlot &slot, std::uint64_t position_signature,
+    const std::vector<std::uint8_t> *dirty_source_mask) {
   QDR_PROFILE_FUNCTION();
-  if (!slot.transform_active ||
-      slot.transform_position_signature == position_signature) {
+  if (!slot.transform_active) {
+    return;
+  }
+  const bool upload_all_sources = dirty_source_mask == nullptr;
+  if (!upload_all_sources &&
+      slot.transform_position_signature == position_signature &&
+      std::none_of(dirty_source_mask->begin(), dirty_source_mask->end(),
+                   [](std::uint8_t dirty) { return dirty != 0u; })) {
     return;
   }
   if (factory_ && factory_->initialized()) {
     QDR_PROFILE_SCOPE("Overlay upload retained GPU position streams");
-    for (const ViewportOverlayLayer layer : kViewportOverlayDrawOrder) {
-      if (!slot.transform_layers[overlay_layer_index(layer)]) {
-        continue;
+    std::vector<std::uint64_t> dirty_proxy_keys;
+    dirty_proxy_keys.reserve(16u);
+    {
+      QDR_PROFILE_SCOPE("Overlay update dirty position stream bindings");
+      const std::size_t source_count =
+          std::min(transform_sources_.size(),
+                   slot.transform_source_binding_spans.size());
+      for (std::size_t source_index = 0u; source_index < source_count;
+           ++source_index) {
+        if (!upload_all_sources &&
+            (source_index >= dirty_source_mask->size() ||
+             (*dirty_source_mask)[source_index] == 0u)) {
+          continue;
+        }
+        const TransformPositionSource &source =
+            transform_sources_[source_index];
+        const TransformSourceBindingSpan &source_span =
+            slot.transform_source_binding_spans[source_index];
+        const std::size_t first_range = source_span.first_range;
+        const std::size_t end_range =
+            first_range + source_span.range_count;
+        if (end_range > slot.transform_binding_ranges.size()) {
+          continue;
+        }
+        for (std::size_t range_index = first_range;
+             range_index < end_range; ++range_index) {
+          const TransformBindingRange &target =
+              slot.transform_binding_ranges[range_index];
+          if (target.source_index != source_index) {
+            continue;
+          }
+          if (target.layer_index >= slot.proxy_groups.size()) {
+            continue;
+          }
+          OverlayProxyGroup &group = slot.proxy_groups[target.layer_index];
+          if (target.proxy_index >= group.proxies.size()) {
+            continue;
+          }
+          OverlayRenderableProxy &proxy = group.proxies[target.proxy_index];
+          const std::size_t first_binding = target.first_binding;
+          const std::size_t end_binding =
+              first_binding + target.binding_count;
+          if (end_binding > proxy.position_stream_bindings.size()) {
+            continue;
+          }
+          bool proxy_stream_changed = false;
+          for (std::size_t binding_index = first_binding;
+               binding_index < end_binding; ++binding_index) {
+            const OverlayPositionStreamBinding &binding =
+                proxy.position_stream_bindings[binding_index];
+            if (binding.source_index != source_index ||
+                binding.position_index >= source.world_positions.size()) {
+              continue;
+            }
+
+            const QVec3 position =
+                source.world_positions[binding.position_index];
+            const OverlayFloat4 position4{position.x, position.y, position.z,
+                                          1.0f};
+            const std::size_t first = binding.first_vertex;
+            const std::size_t end = first + binding.vertex_count;
+            if (!proxy.position_stream3.empty()) {
+              if (end > proxy.position_stream3.size()) {
+                continue;
+              }
+              std::fill(proxy.position_stream3.begin() + first,
+                        proxy.position_stream3.begin() + end,
+                        OverlayFloat3{position.x, position.y, position.z});
+            } else {
+              std::vector<OverlayFloat4> &stream =
+                  binding.stream == OverlayPositionStream::Secondary
+                      ? proxy.secondary_position_stream4
+                      : proxy.primary_position_stream4;
+              if (end > stream.size()) {
+                continue;
+              }
+              std::fill(stream.begin() + first, stream.begin() + end,
+                        position4);
+            }
+            proxy_stream_changed = true;
+          }
+          if (!proxy_stream_changed) {
+            continue;
+          }
+          dirty_proxy_keys.push_back(
+              (static_cast<std::uint64_t>(target.layer_index) << 32u) |
+              static_cast<std::uint64_t>(target.proxy_index));
+        }
       }
-      OverlayProxyGroup &group = slot.proxy_groups[overlay_layer_index(layer)];
-      for (OverlayRenderableProxy &proxy : group.proxies) {
-        bool changed = false;
-        for (const OverlayPositionStreamBinding &binding :
-             proxy.position_stream_bindings) {
-          if (binding.source_index >= transform_sources_.size()) {
-            continue;
-          }
-          const TransformPositionSource &source =
-              transform_sources_[binding.source_index];
-          if (binding.position_index >= source.world_positions.size()) {
-            continue;
-          }
-          const QVec3 position = source.world_positions[binding.position_index];
-          const OverlayFloat4 position4{position.x, position.y, position.z,
-                                        1.0f};
-          const std::size_t first = binding.first_vertex;
-          const std::size_t end = first + binding.vertex_count;
-          if (!proxy.position_stream3.empty()) {
-            if (end > proxy.position_stream3.size()) {
-              continue;
-            }
-            std::fill(proxy.position_stream3.begin() + first,
-                      proxy.position_stream3.begin() + end,
-                      OverlayFloat3{position.x, position.y, position.z});
-          } else {
-            std::vector<OverlayFloat4> &stream =
-                binding.stream == OverlayPositionStream::Secondary
-                    ? proxy.secondary_position_stream4
-                    : proxy.primary_position_stream4;
-            if (end > stream.size()) {
-              continue;
-            }
-            std::fill(stream.begin() + first, stream.begin() + end, position4);
-          }
-          changed = true;
+    }
+    std::sort(dirty_proxy_keys.begin(), dirty_proxy_keys.end());
+    dirty_proxy_keys.erase(
+        std::unique(dirty_proxy_keys.begin(), dirty_proxy_keys.end()),
+        dirty_proxy_keys.end());
+    {
+      QDR_PROFILE_SCOPE("Overlay upload dirty position stream proxies");
+      for (const std::uint64_t proxy_key : dirty_proxy_keys) {
+        const std::size_t layer_index =
+            static_cast<std::size_t>(proxy_key >> 32u);
+        const std::size_t proxy_index = static_cast<std::size_t>(
+            proxy_key & static_cast<std::uint64_t>(0xffffffffu));
+        if (layer_index >= slot.proxy_groups.size()) {
+          continue;
         }
-        if (changed) {
-          (void)factory_->update_position_streams(proxy);
+        OverlayProxyGroup &group = slot.proxy_groups[layer_index];
+        if (proxy_index >= group.proxies.size()) {
+          continue;
         }
+        (void)factory_->update_position_streams(group.proxies[proxy_index]);
       }
     }
   }
   slot.signatures = slot.transform_base_signatures;
-  for (std::size_t index = 0u; index < slot.transform_layers.size(); ++index) {
-    if (!slot.transform_layers[index]) {
-      continue;
-    }
-    slot.signatures.layer_signatures[index] =
-        RenderSignatureBuilder(
-            slot.transform_base_signatures.layer_signatures[index])
-            .add_value(position_signature)
-            .value();
-  }
+  // Transform positions live in retained GPU streams. Keeping per-layer
+  // topology signatures at their semantic base prevents a later camera-only
+  // update from mistaking a position upload for a geometry/style rebuild.
   slot.frame_signature =
       RenderSignatureBuilder(slot.transform_base_frame_signature)
           .add_value(position_signature)
@@ -600,15 +771,26 @@ OverlayRenderableCache::active_proxy_count(std::size_t viewport_index) const {
   return count;
 }
 
+void OverlayRenderableCache::update_retained_camera_state(OverlaySlot &slot) {
+  QDR_PROFILE_SCOPE("Overlay update retained camera material state");
+  if (!factory_ || !factory_->initialized()) {
+    return;
+  }
+  for (const OverlayProxyGroup &group : slot.proxy_groups) {
+    factory_->update_camera_state(group.proxies, slot.camera);
+  }
+}
+
 void OverlayRenderableCache::rebuild_slot(
     OverlaySlot &slot, bool rebuild_camera_independent_layers) {
   QDR_PROFILE_FUNCTION();
+  bool transformed_binding_group_rebuilt = false;
   for (const ViewportOverlayLayer layer : kViewportOverlayDrawOrder) {
-    QDR_PROFILE_SCOPE("Overlay rebuild layer");
     if (!rebuild_camera_independent_layers &&
         !OverlayRenderableBuilder::layer_build_depends_on_camera(layer)) {
       continue;
     }
+    QDR_PROFILE_SCOPE("Overlay rebuild layer");
     const std::uint64_t layer_signature =
         OverlayRenderableBuilder::layer_build_signature(slot.signatures,
                                                         slot.camera, layer);
@@ -617,11 +799,16 @@ void OverlayRenderableCache::rebuild_slot(
     if (group.signature == layer_signature) {
       continue;
     }
+    const bool group_has_active_transform_bindings =
+        slot.transform_active &&
+        slot.transform_layers[overlay_layer_index(layer)];
 
     if (!OverlayRenderableBuilder::layer_has_renderable_primitives(
             slot.signatures, layer)) {
       destroy_group(group);
       group.signature = layer_signature;
+      transformed_binding_group_rebuilt |=
+          group_has_active_transform_bindings;
       continue;
     }
 
@@ -633,12 +820,13 @@ void OverlayRenderableCache::rebuild_slot(
       group.proxies = factory_->create_layer_proxies(plan, layer_mask);
     }
     group.signature = layer_signature;
+    transformed_binding_group_rebuilt |= group_has_active_transform_bindings;
   }
-  if (slot.transform_active && rebuild_camera_independent_layers) {
+  if (slot.transform_active && transformed_binding_group_rebuilt) {
     // A retained proxy update refreshes its base streams and binding keys.
-    // Re-resolve once at that uncommon boundary, then restore the current
-    // transform using position-only uploads; normal drag ticks never enter
-    // this path.
+    // Re-resolve only when the rebuilt group participated in the transform,
+    // then restore current positions with one forced upload. Camera-only icon
+    // rebuilds do not disturb dense point/line/face bindings.
     slot.transform_bindings_valid = false;
     resolve_transform_stream_bindings(slot);
     slot.transform_position_signature = 0u;
@@ -662,6 +850,8 @@ void OverlayRenderableCache::destroy_slot(OverlaySlot &slot) {
   slot.transform_layout_signature = 0u;
   slot.transform_position_signature = 0u;
   slot.transform_layers.fill(false);
+  slot.transform_binding_ranges.clear();
+  slot.transform_source_binding_spans.clear();
   slot.transform_bindings_valid = false;
   slot.transform_active = false;
 }

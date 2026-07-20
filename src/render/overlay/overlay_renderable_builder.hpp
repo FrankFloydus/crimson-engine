@@ -16,8 +16,6 @@
 
 namespace quader {
 
-class OverlayDepthStampVisibilityFilter;
-
 /**
  * Enumerates OverlayDepthFunc values used by the render layer.
  */
@@ -191,15 +189,10 @@ private:
 
     static std::vector<const ViewportOverlayLine *>
     lines_for_layer(const ViewportOverlayFrame &frame,
-                    ViewportOverlayLayer layer,
-                    const ViewportOverlayCamera &camera,
-                    const OverlayDepthStampVisibilityFilter *visibility,
-                    std::vector<ViewportOverlayLine> &line_storage);
+                    ViewportOverlayLayer layer);
     static std::vector<const ViewportOverlayPoint *>
     points_for_layer(const ViewportOverlayFrame &frame,
-                     ViewportOverlayLayer layer,
-                     const ViewportOverlayCamera &camera,
-                     const OverlayDepthStampVisibilityFilter *visibility);
+                     ViewportOverlayLayer layer);
     static std::vector<const ViewportOverlayIcon *>
     icons_for_layer(const ViewportOverlayFrame &frame,
                     ViewportOverlayLayer layer);
@@ -211,8 +204,7 @@ private:
                       const std::vector<const ViewportOverlayPoint *> &points,
                       const ViewportOverlayCamera &camera,
                       ViewportOverlayLayer layer, std::uint16_t &blend_order,
-                      bool outline,
-                      const OverlayDepthStampVisibilityFilter *visibility);
+                      bool outline);
     static void
     append_icon_pass(OverlayLayerBuildPlan &plan,
                      const std::vector<const ViewportOverlayIcon *> &icons,

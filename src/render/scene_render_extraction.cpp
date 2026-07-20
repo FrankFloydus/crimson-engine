@@ -1067,7 +1067,7 @@ SceneRenderExtractionPlan build_scene_render_extraction_plan(
 }
 
 std::vector<RenderToolPreviewMeshRecord> build_render_tool_preview_snapshot(
-    const std::vector<ToolPreviewMesh> &meshes, const AssetRegistry &assets,
+    std::vector<ToolPreviewMesh> meshes, const AssetRegistry &assets,
     const ViewportLocalVisibilitySnapshot *local_visibility,
     const RenderProjectMaterialResolver *project_material_resolver) {
   QDR_PROFILE_FUNCTION();
@@ -1076,7 +1076,7 @@ std::vector<RenderToolPreviewMeshRecord> build_render_tool_preview_snapshot(
   std::vector<std::pair<MaterialComponent, RenderMaterialBindingSnapshot>>
       material_cache;
   material_cache.reserve(4U);
-  for (const ToolPreviewMesh &mesh : meshes) {
+  for (ToolPreviewMesh &mesh : meshes) {
     const EntityId visibility_entity =
         mesh.visibility_entity == kInvalidEntityId ? mesh.source_entity
                                                     : mesh.visibility_entity;
@@ -1105,16 +1105,17 @@ std::vector<RenderToolPreviewMeshRecord> build_render_tool_preview_snapshot(
         .visibility_entity = visibility_entity,
         .material_reference = mesh.material.material,
         .material_id = mesh.material.material.embedded_asset(),
-        .mesh = mesh.mesh,
+        .mesh = std::move(mesh.mesh),
         .material = std::move(material_snapshot),
         .material_revision = 0u,
         .transform = mesh.transform,
-        .instance_transforms = mesh.instance_transforms,
+        .instance_transforms = std::move(mesh.instance_transforms),
         .dynamic_positions = mesh.dynamic_positions,
         .suppress_source = mesh.suppress_source,
         .layout_key = mesh.layout_key,
         .position_revision = mesh.position_revision,
-        .dynamic_position_payload = mesh.dynamic_position_payload,
+        .dynamic_position_payload =
+            std::move(mesh.dynamic_position_payload),
     });
     records.back().material_revision = records.back().material.revision;
   }

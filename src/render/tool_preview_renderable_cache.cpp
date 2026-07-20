@@ -52,17 +52,6 @@ preview_dynamic_positions(const RenderToolPreviewMeshRecord &preview_mesh) {
              : std::span<const QVec3>{};
 }
 
-void update_bounds(MeshRenderableFactory &factory,
-                   const MeshRenderableProxy &proxy,
-                   const RenderMeshAssetSnapshot &mesh,
-                   std::span<const QVec3> positions) {
-  if (positions.empty()) {
-    factory.update_bounds(proxy, mesh);
-  } else {
-    factory.update_bounds(proxy, positions);
-  }
-}
-
 bool same_float_bits(float left, float right) {
   return std::bit_cast<std::uint32_t>(left) ==
          std::bit_cast<std::uint32_t>(right);
@@ -77,6 +66,20 @@ bool same_vec3(const QVec3 left, const QVec3 right) {
 bool same_mat4(const QMat4 &left, const QMat4 &right) {
   return std::equal(left.values.begin(), left.values.end(),
                     right.values.begin(), same_float_bits);
+}
+
+bool preview_transforms_equal(
+    const std::vector<QMat4> &transforms,
+    const RenderToolPreviewMeshRecord &preview_mesh) {
+  if (transforms.size() != preview_transform_count(preview_mesh)) {
+    return false;
+  }
+  for (std::size_t index = 0u; index < transforms.size(); ++index) {
+    if (!same_mat4(transforms[index], preview_transform(preview_mesh, index))) {
+      return false;
+    }
+  }
+  return true;
 }
 
 bool same_geometry_payload(
@@ -258,11 +261,19 @@ ToolPreviewRenderableCache::build_generation(
         render_mesh_asset_snapshot(kInvalidAssetId, preview_mesh.mesh);
     const std::span<const QVec3> positions =
         preview_dynamic_positions(preview_mesh);
+    const RenderInstanceBounds local_bounds =
+        preview_mesh.dynamic_positions
+            ? (positions.empty()
+                   ? MeshRenderableFactory::compute_local_bounds(mesh_snapshot)
+                   : MeshRenderableFactory::compute_local_bounds(positions))
+            : RenderInstanceBounds{};
+    const RenderInstanceBounds *bounds_override =
+        preview_mesh.dynamic_positions ? &local_bounds : nullptr;
     MeshRenderableProxy rendered_prototype = factory_->create(
         preview_mesh.source_entity, mesh_snapshot, &preview_mesh.material,
         transforms.front(), false, true, 0u, false, false,
         kViewportDefaultRenderableChannel, preview_mesh.dynamic_positions,
-        positions);
+        positions, bounds_override);
     if (!rendered_prototype.entity) {
       return generation;
     }
@@ -270,12 +281,15 @@ ToolPreviewRenderableCache::build_generation(
 
     MeshRenderableProxy shaded_prototype = factory_->create_shared_geometry(
         preview_mesh.source_entity, mesh_snapshot, &preview_mesh.material,
-        rendered_prototype, transforms.front(), true, 0u, true);
+        rendered_prototype, transforms.front(), true, 0u, true, false,
+        kViewportDefaultRenderableChannel, bounds_override);
     const auto make_group = [&](MeshRenderableProxy rendered,
                                 MeshRenderableProxy shaded = {},
                                 MeshRenderableProxy overlay_depth = {}) {
       return PreviewGroup{
+          .source_object_id = preview_mesh.source_object_id,
           .source_entity = preview_mesh.source_entity,
+          .visibility_entity = preview_mesh.visibility_entity,
           .geometry_signature = preview_geometry_signature(preview_mesh),
           .topology_signature = preview_topology_signature(preview_mesh),
           .material_signature = preview_material_signature(preview_mesh),
@@ -302,7 +316,7 @@ ToolPreviewRenderableCache::build_generation(
         factory_->create_shared_geometry(
             preview_mesh.source_entity, mesh_snapshot, &preview_mesh.material,
             rendered_prototype, transforms.front(), true, 0u, true, true,
-            kViewportOverlayDepthChannel);
+            kViewportOverlayDepthChannel, bounds_override);
     if (!overlay_depth_prototype.entity) {
       generation->groups.push_back(make_group(
           std::move(rendered_prototype), std::move(shaded_prototype)));
@@ -312,10 +326,6 @@ ToolPreviewRenderableCache::build_generation(
     PreviewGroup group = make_group(
         std::move(rendered_prototype), std::move(shaded_prototype),
         std::move(overlay_depth_prototype));
-    if (!positions.empty()) {
-      factory_->update_bounds(group.shaded_prototype, positions);
-      factory_->update_bounds(group.overlay_depth_prototype, positions);
-    }
     group.rendered_instances.reserve(group.transforms.size() - 1u);
     group.shaded_instances.reserve(group.transforms.size() - 1u);
     group.overlay_depth_instances.reserve(group.transforms.size() - 1u);
@@ -323,7 +333,7 @@ ToolPreviewRenderableCache::build_generation(
       MeshRenderableProxy rendered_instance = factory_->create_shared_instance(
           preview_mesh.source_entity, mesh_snapshot,
           group.rendered_prototype, group.transforms[index], 0u,
-          kViewportDefaultRenderableChannel, true);
+          kViewportDefaultRenderableChannel, true, bounds_override);
       if (!rendered_instance.entity) {
         generation->groups.push_back(std::move(group));
         return generation;
@@ -334,7 +344,7 @@ ToolPreviewRenderableCache::build_generation(
       MeshRenderableProxy shaded_instance = factory_->create_shared_instance(
           preview_mesh.source_entity, mesh_snapshot, group.shaded_prototype,
           group.transforms[index], 0u, kViewportDefaultRenderableChannel,
-          false);
+          false, bounds_override);
       if (!shaded_instance.entity) {
         generation->groups.push_back(std::move(group));
         return generation;
@@ -346,7 +356,7 @@ ToolPreviewRenderableCache::build_generation(
           factory_->create_shared_instance(
               preview_mesh.source_entity, mesh_snapshot,
               group.overlay_depth_prototype, group.transforms[index], 0u,
-              kViewportOverlayDepthChannel, false);
+              kViewportOverlayDepthChannel, false, bounds_override);
       if (!overlay_depth_instance.entity) {
         generation->groups.push_back(std::move(group));
         return generation;
@@ -354,12 +364,6 @@ ToolPreviewRenderableCache::build_generation(
       retain_entity(overlay_depth_instance);
       group.overlay_depth_instances.push_back(
           std::move(overlay_depth_instance));
-      if (!positions.empty()) {
-        factory_->update_bounds(group.rendered_instances.back(), positions);
-        factory_->update_bounds(group.shaded_instances.back(), positions);
-        factory_->update_bounds(group.overlay_depth_instances.back(),
-                                positions);
-      }
     }
     generation->groups.push_back(std::move(group));
   }
@@ -397,8 +401,10 @@ bool ToolPreviewRenderableCache::prepare_generation(
       QDR_PROFILE_SCOPE("Tool preview ordered active fast path");
       candidate_indices = generation.active_group_indices;
       for (std::size_t index = 0u; index < meshes.size(); ++index) {
-        update_group(generation.groups[candidate_indices[index]],
-                     meshes[index]);
+        PreviewGroup &group = generation.groups[candidate_indices[index]];
+        if (!group_submission_unchanged(group, meshes[index])) {
+          update_group(group, meshes[index]);
+        }
       }
       return true;
     }
@@ -490,8 +496,10 @@ bool ToolPreviewRenderableCache::prepare_generation(
   {
     QDR_PROFILE_SCOPE("Tool preview update reused candidate groups");
     for (std::size_t index = 0u; index < renderable_meshes.size(); ++index) {
-      update_group(generation.groups[candidate_indices[index]],
-                   *renderable_meshes[index]);
+      PreviewGroup &group = generation.groups[candidate_indices[index]];
+      if (!group_submission_unchanged(group, *renderable_meshes[index])) {
+        update_group(group, *renderable_meshes[index]);
+      }
     }
   }
   return true;
@@ -500,12 +508,11 @@ bool ToolPreviewRenderableCache::prepare_generation(
 void ToolPreviewRenderableCache::update_group(
     PreviewGroup &group,
     const RenderToolPreviewMeshRecord &preview_mesh) {
-  const RenderMeshAssetSnapshot mesh_snapshot =
-      render_mesh_asset_snapshot(kInvalidAssetId, preview_mesh.mesh);
-  const std::span<const QVec3> positions =
-      preview_dynamic_positions(preview_mesh);
+  QDR_PROFILE_FUNCTION();
   const bool identity_changed =
+      group.source_object_id != preview_mesh.source_object_id ||
       group.source_entity != preview_mesh.source_entity ||
+      group.visibility_entity != preview_mesh.visibility_entity ||
       group.layout_key != preview_mesh.layout_key;
   const std::uint64_t geometry_signature =
       preview_geometry_signature(preview_mesh);
@@ -517,66 +524,77 @@ void ToolPreviewRenderableCache::update_group(
        group.position_revision != preview_mesh.position_revision ||
        group.geometry_signature != geometry_signature ||
        (!preview_mesh.dynamic_position_payload &&
-        group.topology_payload.get() != topology_payload.get()));
+         group.topology_payload.get() != topology_payload.get()));
 
   if (positions_changed) {
+    QDR_PROFILE_SCOPE("Tool preview changed position payload");
+    const RenderMeshAssetSnapshot mesh_snapshot =
+        render_mesh_asset_snapshot(kInvalidAssetId, preview_mesh.mesh);
+    const std::span<const QVec3> positions =
+        preview_dynamic_positions(preview_mesh);
+    const RenderInstanceBounds local_bounds =
+        positions.empty()
+            ? MeshRenderableFactory::compute_local_bounds(mesh_snapshot)
+            : MeshRenderableFactory::compute_local_bounds(positions);
     // prepare_generation exhaustively validates the only guards that can make
     // update_dynamic_geometry return false. Factory lifetime is single-threaded
     // here, so no guard can change between validation and this mutation pass.
     const bool updated = factory_->update_dynamic_geometry(
-        group.rendered_prototype, mesh_snapshot, positions);
+        group.rendered_prototype, mesh_snapshot, positions, &local_bounds);
     assert(updated);
     (void)updated;
-  }
-  if (positions_changed) {
-    update_bounds(*factory_, group.shaded_prototype, mesh_snapshot, positions);
-    update_bounds(*factory_, group.overlay_depth_prototype, mesh_snapshot,
-                  positions);
+    factory_->update_bounds(group.shaded_prototype, local_bounds);
+    factory_->update_bounds(group.overlay_depth_prototype, local_bounds);
     for (std::size_t index = 0u;
          index < group.rendered_instances.size(); ++index) {
-      update_bounds(*factory_, group.rendered_instances[index], mesh_snapshot,
-                    positions);
-      update_bounds(*factory_, group.shaded_instances[index], mesh_snapshot,
-                    positions);
-      update_bounds(*factory_, group.overlay_depth_instances[index],
-                    mesh_snapshot, positions);
+      factory_->update_bounds(group.rendered_instances[index], local_bounds);
+      factory_->update_bounds(group.shaded_instances[index], local_bounds);
+      factory_->update_bounds(group.overlay_depth_instances[index],
+                              local_bounds);
     }
   }
 
-  copy_preview_transforms(group.transforms, preview_mesh);
-  factory_->update_transform(group.rendered_prototype,
-                             group.transforms.front());
-  factory_->update_transform(group.shaded_prototype,
-                             group.transforms.front());
-  factory_->update_transform(group.overlay_depth_prototype,
-                             group.transforms.front());
-  for (std::size_t index = 0u; index < group.rendered_instances.size();
-       ++index) {
-    factory_->update_transform(group.rendered_instances[index],
-                               group.transforms[index + 1u]);
-    factory_->update_transform(group.shaded_instances[index],
-                               group.transforms[index + 1u]);
-    factory_->update_transform(group.overlay_depth_instances[index],
-                               group.transforms[index + 1u]);
+  if (!preview_transforms_equal(group.transforms, preview_mesh)) {
+    QDR_PROFILE_SCOPE("Tool preview changed transforms");
+    copy_preview_transforms(group.transforms, preview_mesh);
+    factory_->update_transform(group.rendered_prototype,
+                               group.transforms.front());
+    factory_->update_transform(group.shaded_prototype,
+                               group.transforms.front());
+    factory_->update_transform(group.overlay_depth_prototype,
+                               group.transforms.front());
+    for (std::size_t index = 0u; index < group.rendered_instances.size();
+         ++index) {
+      factory_->update_transform(group.rendered_instances[index],
+                                 group.transforms[index + 1u]);
+      factory_->update_transform(group.shaded_instances[index],
+                                 group.transforms[index + 1u]);
+      factory_->update_transform(group.overlay_depth_instances[index],
+                                 group.transforms[index + 1u]);
+    }
   }
 
-  const auto update_source = [&](MeshRenderableProxy &proxy) {
-    proxy.source_entity = preview_mesh.source_entity;
-  };
-  update_source(group.rendered_prototype);
-  update_source(group.shaded_prototype);
-  update_source(group.overlay_depth_prototype);
-  for (MeshRenderableProxy &proxy : group.rendered_instances) {
-    update_source(proxy);
-  }
-  for (MeshRenderableProxy &proxy : group.shaded_instances) {
-    update_source(proxy);
-  }
-  for (MeshRenderableProxy &proxy : group.overlay_depth_instances) {
-    update_source(proxy);
+  if (group.source_entity != preview_mesh.source_entity) {
+    const auto update_source = [&](MeshRenderableProxy &proxy) {
+      proxy.source_entity = preview_mesh.source_entity;
+    };
+    update_source(group.rendered_prototype);
+    update_source(group.shaded_prototype);
+    update_source(group.overlay_depth_prototype);
+    for (MeshRenderableProxy &proxy : group.rendered_instances) {
+      update_source(proxy);
+    }
+    for (MeshRenderableProxy &proxy : group.shaded_instances) {
+      update_source(proxy);
+    }
+    for (MeshRenderableProxy &proxy : group.overlay_depth_instances) {
+      update_source(proxy);
+    }
   }
 
+  group.source_object_id = preview_mesh.source_object_id;
   group.source_entity = preview_mesh.source_entity;
+  group.visibility_entity = preview_mesh.visibility_entity;
   group.geometry_signature = geometry_signature;
   group.material_signature = preview_material_signature(preview_mesh);
   group.layout_key = preview_mesh.layout_key;
@@ -930,7 +948,9 @@ std::uint64_t ToolPreviewRenderableCache::group_structural_reuse_signature(
 bool ToolPreviewRenderableCache::group_matches_exact(
     const PreviewGroup &group,
     const RenderToolPreviewMeshRecord &preview_mesh) {
-  if (group.source_entity != preview_mesh.source_entity ||
+  if (group.source_object_id != preview_mesh.source_object_id ||
+      group.source_entity != preview_mesh.source_entity ||
+      group.visibility_entity != preview_mesh.visibility_entity ||
       group.material_signature != preview_material_signature(preview_mesh) ||
       group.dynamic_positions != preview_mesh.dynamic_positions ||
       group.transforms.size() != preview_transform_count(preview_mesh)) {
@@ -978,6 +998,24 @@ bool ToolPreviewRenderableCache::group_topology_equals(
                                preview_mesh.mesh.geometry_payload(), false);
 }
 
+bool ToolPreviewRenderableCache::group_submission_unchanged(
+    const PreviewGroup &group,
+    const RenderToolPreviewMeshRecord &preview_mesh) {
+  return group.source_object_id == preview_mesh.source_object_id &&
+         group.source_entity == preview_mesh.source_entity &&
+         group.visibility_entity == preview_mesh.visibility_entity &&
+         group.material_signature ==
+             preview_material_signature(preview_mesh) &&
+         group.geometry_signature ==
+             preview_geometry_signature(preview_mesh) &&
+         group.layout_key == preview_mesh.layout_key &&
+         group.position_revision == preview_mesh.position_revision &&
+         group.topology_payload.get() ==
+             preview_mesh.mesh.geometry_payload().get() &&
+         group.dynamic_positions == preview_mesh.dynamic_positions &&
+         preview_transforms_equal(group.transforms, preview_mesh);
+}
+
 bool ToolPreviewRenderableCache::group_dynamic_update_is_valid(
     const PreviewGroup &group,
     const RenderToolPreviewMeshRecord &preview_mesh) const {
@@ -1005,7 +1043,8 @@ bool ToolPreviewRenderableCache::submitted_meshes_equal(
   for (std::size_t index = 0u; index < meshes.size(); ++index) {
     const PreviewSubmissionState &left = submitted[index];
     const RenderToolPreviewMeshRecord &right = meshes[index];
-    if (left.source_entity != right.source_entity ||
+    if (left.source_object_id != right.source_object_id ||
+        left.source_entity != right.source_entity ||
         left.visibility_entity != right.visibility_entity ||
         left.material_reference != right.material_reference ||
         left.material_signature != preview_material_signature(right) ||
@@ -1023,8 +1062,8 @@ bool ToolPreviewRenderableCache::submitted_meshes_equal(
                     right.instance_transforms.begin(), same_mat4)) {
       return false;
     }
-    if (right.dynamic_positions &&
-        (left.layout_key != right.layout_key ||
+    if (left.layout_key != right.layout_key ||
+        (right.dynamic_positions &&
          left.position_revision != right.position_revision)) {
       return false;
     }
@@ -1039,6 +1078,7 @@ ToolPreviewRenderableCache::capture_submission(
   captured.reserve(meshes.size());
   for (const RenderToolPreviewMeshRecord &mesh : meshes) {
     captured.push_back({
+        .source_object_id = mesh.source_object_id,
         .source_entity = mesh.source_entity,
         .visibility_entity = mesh.visibility_entity,
         .material_reference = mesh.material_reference,
@@ -1078,7 +1118,8 @@ std::uint64_t ToolPreviewRenderableCache::preview_meshes_signature(
   RenderSignatureBuilder signature;
   signature.add_size(preview_meshes.size());
   for (const RenderToolPreviewMeshRecord &preview_mesh : preview_meshes) {
-    signature.add_value(preview_mesh.source_entity)
+    signature.add_value(preview_mesh.source_object_id)
+        .add_value(preview_mesh.source_entity)
         .add_value(preview_mesh.visibility_entity)
         .add_value(preview_material_signature(preview_mesh))
         .add_value(preview_geometry_signature(preview_mesh))

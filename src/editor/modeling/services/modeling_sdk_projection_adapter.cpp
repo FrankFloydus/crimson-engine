@@ -325,6 +325,7 @@ private:
     MaterialComponent material;
     QMat4 world_transform;
     std::uint64_t layout_key = 0u;
+    std::uint64_t position_revision = 0u;
     MeshAsset base_mesh;
     std::vector<QVec3> base_mesh_positions;
     std::vector<WorkspaceTransformSelectedVertex> selected_vertices;
@@ -3390,6 +3391,7 @@ public:
                   : scene_.world_transform_matrix(*entity),
           .layout_key = transform_mesh_layout_key(
               object, base_mesh.geometry().vertices),
+          .position_revision = workspace_transform_preview_revision_,
           .base_mesh = std::move(base_mesh),
           .base_mesh_positions = std::move(base_mesh_positions),
           .selected_vertices = std::move(selected_transform_vertices),
@@ -3424,7 +3426,7 @@ public:
 
     bool changed = false;
     bool effective_changed = false;
-    std::vector<std::uint8_t> participant_changed(
+    std::vector<std::uint8_t> participant_packed_positions_changed(
         workspace_transform_participants_.size(), 0u);
     {
       QDR_PROFILE_SCOPE("Transform preview update selected positions");
@@ -3435,6 +3437,9 @@ public:
             workspace_transform_participants_[participant_index];
         const std::optional<quader::modeling::Transform3> &transform =
             transforms[participant_index];
+        const std::vector<QVec3> &published_positions =
+            *participant
+                 .position_buffers[participant.published_position_buffer];
         for (WorkspaceTransformSelectedVertex &vertex :
              participant.selected_vertices) {
           const QVec3 next = transform.has_value()
@@ -3445,8 +3450,19 @@ public:
               vertex.preview_position.x != next.x ||
               vertex.preview_position.y != next.y ||
               vertex.preview_position.z != next.z;
-          participant_changed[participant_index] = static_cast<std::uint8_t>(
-              participant_changed[participant_index] || vertex_changed);
+          changed = changed || vertex_changed;
+          if (vertex_changed &&
+              !participant_packed_positions_changed[participant_index]) {
+            for (const std::size_t compiled_index :
+                 vertex.compiled_vertex_indices) {
+              const QVec3 &published = published_positions[compiled_index];
+              if (published.x != next.x || published.y != next.y ||
+                  published.z != next.z) {
+                participant_packed_positions_changed[participant_index] = 1u;
+                break;
+              }
+            }
+          }
           effective_changed =
               effective_changed || vertex.base_position.x != next.x ||
               vertex.base_position.y != next.y ||
@@ -3455,14 +3471,16 @@ public:
         }
       }
     }
+    bool packed_positions_changed = false;
     {
       QDR_PROFILE_SCOPE("Transform preview publish packed positions");
       for (std::size_t participant_index = 0u;
            participant_index < workspace_transform_participants_.size();
            ++participant_index) {
-        if (!participant_changed[participant_index]) {
+        if (!participant_packed_positions_changed[participant_index]) {
           continue;
         }
+        packed_positions_changed = true;
         WorkspaceTransformParticipant &participant =
             workspace_transform_participants_[participant_index];
         std::size_t buffer_index = participant.position_buffers.size();
@@ -3489,13 +3507,20 @@ public:
           }
         }
         participant.published_position_buffer = buffer_index;
-        changed = true;
       }
     }
     workspace_transform_commit_mutation_ = std::move(commit_mutation);
     workspace_transform_transient_active_ = true;
-    if (changed) {
+    if (packed_positions_changed) {
       ++workspace_transform_preview_revision_;
+      for (std::size_t participant_index = 0u;
+           participant_index < workspace_transform_participants_.size();
+           ++participant_index) {
+        if (participant_packed_positions_changed[participant_index]) {
+          workspace_transform_participants_[participant_index]
+              .position_revision = workspace_transform_preview_revision_;
+        }
+      }
     }
     preview_changed_ =
         workspace_transform_preexisting_changed_ || effective_changed;
@@ -3524,7 +3549,7 @@ public:
           .dynamic_positions = true,
           .suppress_source = true,
           .layout_key = participant.layout_key,
-          .position_revision = workspace_transform_preview_revision_,
+          .position_revision = participant.position_revision,
           .dynamic_position_payload =
               participant.position_buffers[participant.published_position_buffer],
       });

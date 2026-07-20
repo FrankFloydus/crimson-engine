@@ -136,7 +136,8 @@ bool SceneRenderSyncService::sync(const RenderSceneSnapshot &snapshot) {
         synced_asset_revision_ == snapshot.asset_revision &&
         synced_project_material_revision_ ==
             snapshot.project_material_revision;
-    if (document_unchanged && assets_unchanged) {
+    if (document_unchanged && assets_unchanged &&
+        instance_cache_->last_sync_succeeded()) {
       return false;
     }
     if (document_unchanged && !render_asset_revisions_changed(snapshot)) {
@@ -149,6 +150,9 @@ bool SceneRenderSyncService::sync(const RenderSceneSnapshot &snapshot) {
     {
         QDR_PROFILE_SCOPE("Scene render rebuild");
         rebuild(snapshot);
+    }
+    if (!instance_cache_->last_sync_succeeded()) {
+      return false;
     }
     synced_revision_ = snapshot.scene_revision;
     synced_local_visibility_revision_ = snapshot.local_visibility_revision;
@@ -163,6 +167,9 @@ bool SceneRenderSyncService::sync(const RenderSceneSnapshot &snapshot) {
 bool SceneRenderSyncService::render_asset_revisions_changed(
     const RenderSceneSnapshot &snapshot) const {
   QDR_PROFILE_FUNCTION();
+  if (!instance_cache_->last_sync_succeeded()) {
+    return true;
+  }
   for (const RenderSceneMeshRecord &mesh_entry : snapshot.meshes) {
     if (!mesh_entry.renderable()) {
       if (mesh_cache_->contains(mesh_entry.entity_id)) {
@@ -184,6 +191,7 @@ bool SceneRenderSyncService::render_asset_revisions_changed(
 bool SceneRenderSyncService::can_sync_transforms_only(
     const RenderSceneSnapshot &snapshot) const {
   if (!has_synced_ || synced_scene_binding_ != snapshot.scene_binding ||
+      synced_instance_edit_scope_ != snapshot.instance_edit_scope ||
       !snapshot.dirty.transforms_changed ||
       snapshot.dirty.visibility_changed ||
       snapshot.dirty.local_visibility_changed ||
@@ -206,10 +214,10 @@ bool SceneRenderSyncService::can_sync_transforms_only(
       return false;
     }
   }
-  if (instance_cache_->classify_update(snapshot.instance_primitives) ==
-      RenderInstanceBatchUpdateKind::Rebuild) {
-    return false;
-  }
+  // InstanceRenderableCache retains semantic occurrence/chunk slots and owns
+  // the validated transform-vs-rebuild decision. Avoid preparing the complete
+  // instance plan here and then preparing it a second time in
+  // sync_dirty_transforms().
   for (const RenderSceneLightRecord &light : snapshot.lights) {
     if (light.light_dirty || light_cache_.needs_rebuild(light)) {
       return false;
@@ -235,6 +243,9 @@ void SceneRenderSyncService::sync_dirty_transforms(
   {
     QDR_PROFILE_SCOPE("Scene render update instance transforms");
     (void)instance_cache_->sync(snapshot.instance_primitives);
+  }
+  if (!instance_cache_->last_sync_succeeded()) {
+    return;
   }
 
   for (const RenderSceneLightRecord &light : snapshot.lights) {
@@ -268,6 +279,9 @@ void SceneRenderSyncService::rebuild(const RenderSceneSnapshot &snapshot) {
     {
       QDR_PROFILE_SCOPE("Scene render sync explicit instance batches");
       (void)instance_cache_->sync(snapshot.instance_primitives);
+    }
+    if (!instance_cache_->last_sync_succeeded()) {
+      return;
     }
 
     for (const RenderSceneLightRecord &light_entry : snapshot.lights) {

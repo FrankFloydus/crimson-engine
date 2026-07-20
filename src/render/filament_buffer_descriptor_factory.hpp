@@ -11,6 +11,7 @@
 
 #include <cstddef>
 #include <span>
+#include <utility>
 #include <vector>
 
 namespace quader {
@@ -31,10 +32,28 @@ public:
     return bytes(values.data(), sizeof(T) * values.size());
   }
 
+  /**
+   * Transfers a vector allocation directly to Filament's asynchronous upload
+   * descriptor. The release callback owns the vector until the render thread
+   * reports that the upload no longer references its storage.
+   */
+  template <typename T>
+  static filament::backend::BufferDescriptor vector(std::vector<T> &&values) {
+    auto *owner = new std::vector<T>(std::move(values));
+    return filament::backend::BufferDescriptor(
+        owner->data(), sizeof(T) * owner->size(), &release_vector<T>, owner);
+  }
+
   template <typename T>
   static filament::backend::BufferDescriptor
   span(std::span<const T> values) {
     return bytes(values.data(), sizeof(T) * values.size());
+  }
+
+private:
+  template <typename T>
+  static void release_vector(void *, std::size_t, void *user) noexcept {
+    delete static_cast<std::vector<T> *>(user);
   }
 };
 

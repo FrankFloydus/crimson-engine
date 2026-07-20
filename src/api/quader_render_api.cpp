@@ -272,7 +272,7 @@ QuaderRenderApiRuntimeAccess::sync_tool_previews(QuaderRenderApi &api,
 
   const ToolPreviewSubmissionResult preview_result =
       bridge.set_tool_preview_meshes(
-          build_render_tool_preview_snapshot(render_preview_meshes,
+          build_render_tool_preview_snapshot(std::move(render_preview_meshes),
                                              session.assets,
                                              &local_visibility,
                                              project_material_resolver));

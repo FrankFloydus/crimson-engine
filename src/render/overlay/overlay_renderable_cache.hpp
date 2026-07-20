@@ -100,6 +100,21 @@ public:
           source_vertex_to_position;
     };
 
+    /// Directs one participant-local source to a contiguous run of retained
+    /// overlay bindings without rescanning unrelated objects on every drag tick.
+    struct TransformBindingRange {
+      std::uint32_t source_index = 0u;
+      std::uint32_t layer_index = 0u;
+      std::uint32_t proxy_index = 0u;
+      std::uint32_t first_binding = 0u;
+      std::uint32_t binding_count = 0u;
+    };
+
+    struct TransformSourceBindingSpan {
+      std::uint32_t first_range = 0u;
+      std::uint32_t range_count = 0u;
+    };
+
     /**
      * Represents an Overlay Slot value used by the render extraction and Filament resource layer.
      */
@@ -117,17 +132,22 @@ public:
         std::uint64_t transform_layout_signature = 0u;
         std::uint64_t transform_position_signature = 0u;
         std::array<bool, kViewportOverlayLayerCount> transform_layers{};
+        std::vector<TransformBindingRange> transform_binding_ranges;
+        std::vector<TransformSourceBindingSpan> transform_source_binding_spans;
         bool transform_bindings_valid = false;
         bool transform_active = false;
     };
 
     void rebuild_slot(OverlaySlot &slot,
                       bool rebuild_camera_independent_layers);
+    void update_retained_camera_state(OverlaySlot &slot);
     void begin_transform_stream(OverlaySlot &slot,
                                 std::uint64_t layout_signature);
     void resolve_transform_stream_bindings(OverlaySlot &slot);
     void apply_transform_stream(OverlaySlot &slot,
-                                std::uint64_t position_signature);
+                                std::uint64_t position_signature,
+                                const std::vector<std::uint8_t>
+                                    *dirty_source_mask = nullptr);
     void restore_transform_base(OverlaySlot &slot, bool rebuild);
     [[nodiscard]] std::uint8_t effective_layer_mask(
         const OverlaySlot &slot, ViewportOverlayLayer layer) const;

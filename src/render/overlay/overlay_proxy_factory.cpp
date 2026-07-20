@@ -6,6 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "render/overlay/overlay_proxy_factory.hpp"
 
+#include "diagnostics/profile.hpp"
 #include "render/filament_buffer_descriptor_factory.hpp"
 #include "render/png_texture_loader.hpp"
 #include "render/render_layers.hpp"
@@ -519,6 +520,39 @@ bool OverlayProxyFactory::update_position_streams(
     OverlayRenderableProxy &proxy) {
   return engine_ != nullptr &&
          upload_proxy_position_streams(*engine_, proxy);
+}
+
+void OverlayProxyFactory::update_camera_state(
+    const std::vector<OverlayRenderableProxy> &proxies,
+    const ViewportOverlayCamera &camera) {
+  QDR_PROFILE_FUNCTION();
+  if (!initialized()) {
+    return;
+  }
+  for (const OverlayRenderableProxy &proxy : proxies) {
+    filament::MaterialInstance *material = proxy.material_instance;
+    if (material == nullptr) {
+      continue;
+    }
+    switch (proxy.kind) {
+    case OverlayRenderableProxyKind::Line:
+    case OverlayRenderableProxyKind::Point:
+      material->setParameter("nearPlane", camera.near_plane);
+      break;
+    case OverlayRenderableProxyKind::EditWire:
+      material->setParameter("nearPlane", camera.near_plane);
+      material->setParameter("farPlane", camera.far_plane);
+      material->setParameter(
+          "orthographicProjection",
+          camera.projection == ViewportOverlayProjection::Orthographic ? 1.0f
+                                                                      : 0.0f);
+      break;
+    case OverlayRenderableProxyKind::Unknown:
+    case OverlayRenderableProxyKind::Triangle:
+    case OverlayRenderableProxyKind::Icon:
+      break;
+    }
+  }
 }
 
 void OverlayProxyFactory::set_layer_mask(

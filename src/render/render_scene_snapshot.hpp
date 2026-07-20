@@ -278,6 +278,8 @@ struct RenderToolPreviewMeshRecord {
   bool dynamic_positions = false;
   bool suppress_source = false;
   std::uint64_t layout_key = 0u;
+  // Participant-local token. Equal identity, revision, and payload ownership
+  // mean the retained render group does not need a position upload.
   std::uint64_t position_revision = 0u;
   std::shared_ptr<const std::vector<QVec3>> dynamic_position_payload;
 

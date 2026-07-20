@@ -6,6 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "render/instance_batch_planner.hpp"
 
+#include "diagnostics/profile.hpp"
 #include "math/glm_bridge.hpp"
 #include "render/render_signature_builder.hpp"
 
@@ -32,6 +33,54 @@ struct PrimitiveKeyHash final {
         .add_bool(key.receive_shadows)
         .add_bool(key.double_sided)
         .add_bool(key.editor_unlit);
+    return static_cast<std::size_t>(signature.value());
+  }
+};
+
+/// Compares every slot-layout field while allowing immutable geometry storage
+/// to advance. The full key remains different so a cache cannot reuse stale
+/// geometry buffers.
+bool same_slot_key(const RenderInstancePrimitiveKey &left,
+                   const RenderInstancePrimitiveKey &right) {
+  return left.material_payload == right.material_payload &&
+         left.index_offset == right.index_offset &&
+         left.index_count == right.index_count &&
+         left.layer_mask == right.layer_mask &&
+         left.channel == right.channel &&
+         left.presentation_flags == right.presentation_flags &&
+         left.cast_shadows == right.cast_shadows &&
+         left.receive_shadows == right.receive_shadows &&
+         left.double_sided == right.double_sided &&
+         left.editor_unlit == right.editor_unlit;
+}
+
+/// Identifies one semantic occurrence slot independently of its current
+/// immutable geometry allocation.
+struct PrimitiveSlotKey final {
+  RenderInstancePrimitiveKey key;
+  std::uint64_t occurrence = 0u;
+
+  friend bool operator==(const PrimitiveSlotKey &left,
+                         const PrimitiveSlotKey &right) {
+    return left.occurrence == right.occurrence &&
+           same_slot_key(left.key, right.key);
+  }
+};
+
+struct PrimitiveSlotKeyHash final {
+  std::size_t operator()(const PrimitiveSlotKey &slot) const noexcept {
+    RenderSignatureBuilder signature;
+    signature.add_value(slot.key.material_payload)
+        .add_value(slot.key.index_offset)
+        .add_value(slot.key.index_count)
+        .add_value(slot.key.layer_mask)
+        .add_value(slot.key.channel)
+        .add_value(slot.key.presentation_flags)
+        .add_bool(slot.key.cast_shadows)
+        .add_bool(slot.key.receive_shadows)
+        .add_bool(slot.key.double_sided)
+        .add_bool(slot.key.editor_unlit)
+        .add_value(slot.occurrence);
     return static_cast<std::size_t>(signature.value());
   }
 };
@@ -163,11 +212,111 @@ bool same_layout(const RenderInstanceBatchChunk &left,
          left.visibility.size() == right.visibility.size();
 }
 
+void append_occurrence(RenderInstanceBatchChunk &chunk,
+                       const PrimitiveGroup::Occurrence &planned) {
+  const RenderInstancePrimitiveOccurrence &occurrence = *planned.source;
+  chunk.occurrences.push_back(occurrence.occurrence);
+  chunk.world_transforms.push_back(occurrence.world_transform);
+  chunk.visibility.push_back(occurrence.visible ? 1u : 0u);
+  if (occurrence.visible) {
+    ++chunk.visible_occurrence_count;
+  }
+  if (occurrence.visible && planned.world_bounds.present) {
+    include_point(chunk.world_bounds, planned.world_bounds.min);
+    include_point(chunk.world_bounds, planned.world_bounds.max);
+  }
+}
+
+void finish_chunk(RenderInstanceBatchChunk &chunk) {
+  chunk.transform_signature =
+      transform_signature(chunk.world_transforms, chunk.visibility);
+}
+
+bool try_retain_layout(const std::vector<PrimitiveGroup> &groups,
+                       const RenderInstanceBatchPlan &previous,
+                       std::size_t occurrence_count,
+                       std::size_t max_instances_per_chunk,
+                       RenderInstanceBatchPlan &plan) {
+  QDR_PROFILE_FUNCTION();
+  if (previous.max_instances_per_chunk != max_instances_per_chunk ||
+      previous.occurrence_count != occurrence_count ||
+      previous.chunks.empty()) {
+    return false;
+  }
+
+  std::unordered_map<PrimitiveSlotKey, const PrimitiveGroup::Occurrence *,
+                     PrimitiveSlotKeyHash>
+      occurrence_by_slot;
+  occurrence_by_slot.reserve(occurrence_count);
+  for (const PrimitiveGroup &group : groups) {
+    for (const PrimitiveGroup::Occurrence &occurrence : group.occurrences) {
+      const auto [unused, inserted] = occurrence_by_slot.emplace(
+          PrimitiveSlotKey{.key = group.key,
+                           .occurrence = occurrence.source->occurrence},
+          &occurrence);
+      (void)unused;
+      if (!inserted) {
+        // A duplicated semantic slot is ambiguous. Rebuild the spatial plan
+        // instead of silently binding one occurrence's transform to another.
+        return false;
+      }
+    }
+  }
+
+  RenderInstanceBatchPlan retained;
+  retained.max_instances_per_chunk = max_instances_per_chunk;
+  retained.occurrence_count = occurrence_count;
+  retained.chunks.reserve(previous.chunks.size());
+  for (const RenderInstanceBatchChunk &before : previous.chunks) {
+    if (before.occurrences.empty() ||
+        before.occurrences.size() > max_instances_per_chunk ||
+        before.world_transforms.size() != before.occurrences.size() ||
+        before.visibility.size() != before.occurrences.size() ||
+        before.visible_occurrence_count > before.occurrences.size()) {
+      return false;
+    }
+
+    RenderInstanceBatchChunk chunk;
+    chunk.occurrences.reserve(before.occurrences.size());
+    chunk.world_transforms.reserve(before.occurrences.size());
+    chunk.visibility.reserve(before.occurrences.size());
+    bool has_key = false;
+    for (const std::uint64_t occurrence_id : before.occurrences) {
+      const auto found = occurrence_by_slot.find(
+          PrimitiveSlotKey{.key = before.key, .occurrence = occurrence_id});
+      if (found == occurrence_by_slot.end()) {
+        return false;
+      }
+      const PrimitiveGroup::Occurrence &occurrence = *found->second;
+      if (!has_key) {
+        chunk.key = occurrence.source->key;
+        has_key = true;
+      } else if (chunk.key != occurrence.source->key) {
+        // One former chunk now spans multiple immutable payloads. It must be
+        // rechunked so no proxy binds the wrong geometry or material.
+        return false;
+      }
+      append_occurrence(chunk, occurrence);
+      occurrence_by_slot.erase(found);
+    }
+    finish_chunk(chunk);
+    retained.chunks.push_back(std::move(chunk));
+  }
+
+  if (!occurrence_by_slot.empty()) {
+    return false;
+  }
+  plan = std::move(retained);
+  return true;
+}
+
 } // namespace
 
 RenderInstanceBatchPlan plan_render_instance_batches(
     std::span<const RenderInstancePrimitiveOccurrence> occurrences,
-    std::size_t max_instances_per_chunk) {
+    std::size_t max_instances_per_chunk,
+    const RenderInstanceBatchPlan *retained_layout) {
+  QDR_PROFILE_FUNCTION();
   RenderInstanceBatchPlan plan;
   plan.max_instances_per_chunk = std::max<std::size_t>(
       1u, max_instances_per_chunk);
@@ -201,38 +350,39 @@ RenderInstanceBatchPlan plan_render_instance_batches(
     });
   }
 
-  for (PrimitiveGroup &group : groups) {
-    morton_sort_group(group);
-    const std::size_t chunk_count =
-        (group.occurrences.size() + plan.max_instances_per_chunk - 1u) /
-        plan.max_instances_per_chunk;
-    plan.chunks.reserve(plan.chunks.size() + chunk_count);
-    for (std::size_t offset = 0u; offset < group.occurrences.size();
-         offset += plan.max_instances_per_chunk) {
-      const std::size_t end = std::min(
-          group.occurrences.size(), offset + plan.max_instances_per_chunk);
-      RenderInstanceBatchChunk chunk;
-      chunk.key = group.key;
-      chunk.occurrences.reserve(end - offset);
-      chunk.world_transforms.reserve(end - offset);
-      chunk.visibility.reserve(end - offset);
-      for (std::size_t index = offset; index < end; ++index) {
-        const PrimitiveGroup::Occurrence &planned = group.occurrences[index];
-        const RenderInstancePrimitiveOccurrence &occurrence = *planned.source;
-        chunk.occurrences.push_back(occurrence.occurrence);
-        chunk.world_transforms.push_back(occurrence.world_transform);
-        chunk.visibility.push_back(occurrence.visible ? 1u : 0u);
-        if (occurrence.visible) {
-          ++chunk.visible_occurrence_count;
+  if (retained_layout != nullptr) {
+    QDR_PROFILE_SCOPE("Instance batch retain semantic slots");
+    if (try_retain_layout(groups, *retained_layout, occurrences.size(),
+                          plan.max_instances_per_chunk, plan)) {
+      return plan;
+    }
+  }
+
+  {
+    QDR_PROFILE_SCOPE("Instance batch rebuild Morton layout");
+    for (PrimitiveGroup &group : groups) {
+      morton_sort_group(group);
+      const std::size_t chunk_count =
+          (group.occurrences.size() + plan.max_instances_per_chunk - 1u) /
+          plan.max_instances_per_chunk;
+      plan.chunks.reserve(plan.chunks.size() + chunk_count);
+      for (std::size_t offset = 0u; offset < group.occurrences.size();
+           offset += plan.max_instances_per_chunk) {
+        const std::size_t end = std::min(
+            group.occurrences.size(), offset + plan.max_instances_per_chunk);
+        RenderInstanceBatchChunk chunk;
+        chunk.key = group.key;
+        chunk.occurrences.reserve(end - offset);
+        chunk.world_transforms.reserve(end - offset);
+        chunk.visibility.reserve(end - offset);
+        for (std::size_t index = offset; index < end; ++index) {
+          const PrimitiveGroup::Occurrence &planned =
+              group.occurrences[index];
+          append_occurrence(chunk, planned);
         }
-        if (occurrence.visible && planned.world_bounds.present) {
-          include_point(chunk.world_bounds, planned.world_bounds.min);
-          include_point(chunk.world_bounds, planned.world_bounds.max);
-        }
+        finish_chunk(chunk);
+        plan.chunks.push_back(std::move(chunk));
       }
-      chunk.transform_signature =
-          transform_signature(chunk.world_transforms, chunk.visibility);
-      plan.chunks.push_back(std::move(chunk));
     }
   }
   return plan;

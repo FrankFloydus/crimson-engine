@@ -221,9 +221,10 @@ build_render_vertices(const RenderMeshAssetSnapshot &mesh) {
   return vertices;
 }
 
-filament::Box compute_bounds(const RenderMeshAssetSnapshot &mesh) {
+RenderInstanceBounds
+compute_local_bounds_impl(const RenderMeshAssetSnapshot &mesh) {
   if (mesh.vertices.empty()) {
-    return {{0.0f, 0.0f, 0.0f}, {1.0f, 1.0f, 1.0f}};
+    return {};
   }
 
   QVec3 min_value{
@@ -246,14 +247,13 @@ filament::Box compute_bounds(const RenderMeshAssetSnapshot &mesh) {
     max_value.z = std::max(max_value.z, vertex.position.z);
   }
 
-  filament::Box box;
-  box.set(to_filament(min_value), to_filament(max_value));
-  return box;
+  return {.min = min_value, .max = max_value, .present = true};
 }
 
-filament::Box compute_bounds(std::span<const QVec3> positions) {
+RenderInstanceBounds
+compute_local_bounds_impl(std::span<const QVec3> positions) {
   if (positions.empty()) {
-    return {{0.0f, 0.0f, 0.0f}, {1.0f, 1.0f, 1.0f}};
+    return {};
   }
   QVec3 min_value = positions.front();
   QVec3 max_value = positions.front();
@@ -265,9 +265,7 @@ filament::Box compute_bounds(std::span<const QVec3> positions) {
     max_value.y = std::max(max_value.y, position.y);
     max_value.z = std::max(max_value.z, position.z);
   }
-  filament::Box box;
-  box.set(to_filament(min_value), to_filament(max_value));
-  return box;
+  return {.min = min_value, .max = max_value, .present = true};
 }
 
 bool same_vertex(const MeshVertex &left, const MeshVertex &right) {
@@ -372,6 +370,16 @@ struct MeshRenderableFactory::GeometryCacheState final {
 MeshRenderableFactory::MeshRenderableFactory() = default;
 
 MeshRenderableFactory::~MeshRenderableFactory() { shutdown(); }
+
+RenderInstanceBounds MeshRenderableFactory::compute_local_bounds(
+    const RenderMeshAssetSnapshot &mesh) {
+  return compute_local_bounds_impl(mesh);
+}
+
+RenderInstanceBounds MeshRenderableFactory::compute_local_bounds(
+    std::span<const QVec3> positions) {
+  return compute_local_bounds_impl(positions);
+}
 
 void MeshRenderableFactory::initialize(
     filament::Engine &engine, filament::Scene &scene,
@@ -570,9 +578,11 @@ bool MeshRenderableFactory::acquire_dynamic_geometry(
           .normalized(filament::VertexAttribute::COLOR)
           .build(*engine_);
   proxy.vertex_buffer->setBufferAt(
-      *engine_, 0, FilamentBufferDescriptorFactory::vector(positions));
+      *engine_, 0,
+      FilamentBufferDescriptorFactory::vector(std::move(positions)));
   proxy.vertex_buffer->setBufferAt(
-      *engine_, 1, FilamentBufferDescriptorFactory::vector(static_vertices));
+      *engine_, 1,
+      FilamentBufferDescriptorFactory::vector(std::move(static_vertices)));
   proxy.index_buffer =
       filament::IndexBuffer::Builder()
           .indexCount(static_cast<std::uint32_t>(mesh.indices.size()))
@@ -631,7 +641,8 @@ MeshRenderableProxy MeshRenderableFactory::create(
     const QMat4 &world_transform, bool cast_shadows, bool double_sided,
     std::uint8_t layer_mask, bool editor_unlit, bool depth_only,
     std::uint8_t channel, bool dynamic_geometry,
-    std::span<const QVec3> dynamic_positions) {
+    std::span<const QVec3> dynamic_positions,
+    const RenderInstanceBounds *local_bounds_override) {
   QDR_PROFILE_FUNCTION();
   MeshRenderableProxy proxy;
   MeshRenderableCreationGuard creation_guard(*this, proxy);
@@ -686,9 +697,13 @@ MeshRenderableProxy MeshRenderableFactory::create(
   }
   {
     QDR_PROFILE_SCOPE("Mesh renderable build Filament entity");
-    builder.boundingBox(dynamic_positions.empty()
-                            ? compute_bounds(mesh)
-                            : compute_bounds(dynamic_positions))
+    const RenderInstanceBounds local_bounds =
+        local_bounds_override != nullptr
+            ? *local_bounds_override
+            : (dynamic_positions.empty()
+                   ? compute_local_bounds_impl(mesh)
+                   : compute_local_bounds_impl(dynamic_positions));
+    builder.boundingBox(filament_bounds(local_bounds))
         .layerMask(kViewportAllLayerMask, layer_mask)
         .channel(channel)
         .castShadows(cast_shadows)
@@ -707,9 +722,11 @@ MeshRenderableProxy MeshRenderableFactory::create(
 bool MeshRenderableFactory::update_dynamic_geometry(
     const MeshRenderableProxy &proxy,
     const RenderMeshAssetSnapshot &mesh,
-    std::span<const QVec3> dynamic_positions) {
+    std::span<const QVec3> dynamic_positions,
+    const RenderInstanceBounds *local_bounds_override) {
   if (engine_ == nullptr || !proxy.dynamic_geometry ||
-      proxy.vertex_buffer == nullptr || proxy.vertex_count != mesh.vertices.size() ||
+      proxy.vertex_buffer == nullptr ||
+      proxy.vertex_count != mesh.vertices.size() ||
       proxy.index_count != mesh.indices.size() ||
       (!dynamic_positions.empty() &&
        dynamic_positions.size() != mesh.vertices.size())) {
@@ -732,7 +749,8 @@ bool MeshRenderableFactory::update_dynamic_geometry(
   {
     QDR_PROFILE_SCOPE("Mesh dynamic position upload submit");
     proxy.vertex_buffer->setBufferAt(
-        *engine_, 0, FilamentBufferDescriptorFactory::vector(positions));
+        *engine_, 0,
+        FilamentBufferDescriptorFactory::vector(std::move(positions)));
   }
   {
     QDR_PROFILE_SCOPE("Mesh dynamic position update bounds");
@@ -741,10 +759,14 @@ bool MeshRenderableFactory::update_dynamic_geometry(
     const filament::RenderableManager::Instance instance =
         renderable_manager.getInstance(proxy.entity);
     if (instance) {
+      const RenderInstanceBounds local_bounds =
+          local_bounds_override != nullptr
+              ? *local_bounds_override
+              : (dynamic_positions.empty()
+                     ? compute_local_bounds_impl(mesh)
+                     : compute_local_bounds_impl(dynamic_positions));
       renderable_manager.setAxisAlignedBoundingBox(
-          instance,
-          dynamic_positions.empty() ? compute_bounds(mesh)
-                                    : compute_bounds(dynamic_positions));
+          instance, filament_bounds(local_bounds));
     }
   }
   return true;
@@ -863,7 +885,8 @@ bool MeshRenderableFactory::try_rebind_static_geometry(
     }
   }
 
-  const filament::Box replacement_bounds = compute_bounds(mesh);
+  const filament::Box replacement_bounds =
+      filament_bounds(compute_local_bounds_impl(mesh));
   {
     QDR_PROFILE_SCOPE("Mesh renderable bind topology-stable geometry");
     for (std::size_t proxy_index = 0u; proxy_index < proxies.size();
@@ -907,7 +930,8 @@ bool MeshRenderableFactory::try_rebind_static_geometry(
 MeshRenderableProxy MeshRenderableFactory::create_shared_instance(
     EntityId entity_id, const RenderMeshAssetSnapshot &mesh,
     const MeshRenderableProxy &prototype, const QMat4 &world_transform,
-    std::uint8_t layer_mask, std::uint8_t channel, bool receive_shadows) {
+    std::uint8_t layer_mask, std::uint8_t channel, bool receive_shadows,
+    const RenderInstanceBounds *local_bounds_override) {
   QDR_PROFILE_FUNCTION();
   MeshRenderableProxy proxy;
   proxy.owns_mesh_buffers = false;
@@ -941,7 +965,11 @@ MeshRenderableProxy MeshRenderableFactory::create_shared_instance(
                          ? proxy.material_instances[primitive_index]
                          : nullptr);
   }
-  builder.boundingBox(compute_bounds(mesh))
+  builder
+      .boundingBox(filament_bounds(
+          local_bounds_override != nullptr
+              ? *local_bounds_override
+              : compute_local_bounds_impl(mesh)))
       .layerMask(kViewportAllLayerMask, layer_mask)
       .channel(channel)
       .castShadows(proxy.cast_shadows)
@@ -962,7 +990,8 @@ MeshRenderableProxy MeshRenderableFactory::create_shared_geometry(
     const MeshRenderableProxy &geometry_source,
     const QMat4 &world_transform, bool double_sided,
     std::uint8_t layer_mask, bool editor_unlit, bool depth_only,
-    std::uint8_t channel) {
+    std::uint8_t channel,
+    const RenderInstanceBounds *local_bounds_override) {
   QDR_PROFILE_FUNCTION();
   MeshRenderableProxy proxy;
   proxy.owns_mesh_buffers = false;
@@ -1012,7 +1041,11 @@ MeshRenderableProxy MeshRenderableFactory::create_shared_geometry(
                      primitive.index_offset, primitive.index_count);
     builder.material(primitive_index, material_instance);
   }
-  builder.boundingBox(compute_bounds(mesh))
+  builder
+      .boundingBox(filament_bounds(
+          local_bounds_override != nullptr
+              ? *local_bounds_override
+              : compute_local_bounds_impl(mesh)))
       .layerMask(kViewportAllLayerMask, layer_mask)
       .channel(channel)
       .castShadows(false)
@@ -1345,7 +1378,8 @@ void MeshRenderableFactory::update_bounds(
   const filament::RenderableManager::Instance instance =
       renderables.getInstance(proxy.entity);
   if (instance) {
-    renderables.setAxisAlignedBoundingBox(instance, compute_bounds(mesh));
+    renderables.setAxisAlignedBoundingBox(
+        instance, filament_bounds(compute_local_bounds_impl(mesh)));
   }
 }
 
@@ -1358,7 +1392,23 @@ void MeshRenderableFactory::update_bounds(
   const filament::RenderableManager::Instance instance =
       renderables.getInstance(proxy.entity);
   if (instance) {
-    renderables.setAxisAlignedBoundingBox(instance, compute_bounds(positions));
+    renderables.setAxisAlignedBoundingBox(
+        instance, filament_bounds(compute_local_bounds_impl(positions)));
+  }
+}
+
+void MeshRenderableFactory::update_bounds(
+    const MeshRenderableProxy &proxy,
+    const RenderInstanceBounds &local_bounds) {
+  if (engine_ == nullptr || !proxy.entity) {
+    return;
+  }
+  filament::RenderableManager &renderables = engine_->getRenderableManager();
+  const filament::RenderableManager::Instance instance =
+      renderables.getInstance(proxy.entity);
+  if (instance) {
+    renderables.setAxisAlignedBoundingBox(instance,
+                                          filament_bounds(local_bounds));
   }
 }
 

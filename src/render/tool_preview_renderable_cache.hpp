@@ -71,12 +71,17 @@ public:
 
   private:
     struct PreviewGroup {
+      int source_object_id = -1;
       EntityId source_entity = kInvalidEntityId;
+      EntityId visibility_entity = kInvalidEntityId;
       std::uint64_t geometry_signature = 0u;
       std::uint64_t topology_signature = 0u;
       std::uint64_t material_signature = 0u;
       std::uint64_t material_uniform_signature = 0u;
       std::uint64_t layout_key = 0u;
+      // Participant-local payload identity. Dynamic position payload ownership
+      // deliberately remains with the producer so its workspace pool can reuse
+      // buffers immediately after submission.
       std::uint64_t position_revision = 0u;
       std::shared_ptr<const MeshGeometryPayload> topology_payload;
       std::vector<QMat4> transforms;
@@ -101,6 +106,7 @@ public:
     };
 
     struct PreviewSubmissionState {
+      int source_object_id = -1;
       EntityId source_entity = kInvalidEntityId;
       EntityId visibility_entity = kInvalidEntityId;
       MaterialReference material_reference;
@@ -136,6 +142,9 @@ public:
         const PreviewGroup &group,
         const RenderToolPreviewMeshRecord &preview_mesh);
     static bool group_topology_equals(
+        const PreviewGroup &group,
+        const RenderToolPreviewMeshRecord &preview_mesh);
+    static bool group_submission_unchanged(
         const PreviewGroup &group,
         const RenderToolPreviewMeshRecord &preview_mesh);
     bool group_dynamic_update_is_valid(

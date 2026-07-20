@@ -37,6 +37,7 @@ struct ToolPreviewMesh {
   bool dynamic_positions = false;
   bool suppress_source = false;
   std::uint64_t layout_key = 0u;
+  // Participant-local token preserved from the modeling producer.
   std::uint64_t position_revision = 0u;
   std::shared_ptr<const std::vector<QVec3>> dynamic_position_payload;
 };
@@ -85,7 +86,7 @@ build_render_scene_snapshot(const SceneDocument &document,
 [[nodiscard]] SceneRenderExtractionPlan build_scene_render_extraction_plan(
     const SceneDocument &document, const AssetRegistry &assets);
 [[nodiscard]] std::vector<RenderToolPreviewMeshRecord>
-build_render_tool_preview_snapshot(const std::vector<ToolPreviewMesh> &meshes,
+build_render_tool_preview_snapshot(std::vector<ToolPreviewMesh> meshes,
                                    const AssetRegistry &assets,
                                    const ViewportLocalVisibilitySnapshot *
                                        local_visibility = nullptr,

@@ -92,12 +92,17 @@ enum class RenderInstanceBatchUpdateKind : std::uint8_t {
 
 /**
  * Groups primitive occurrences by immutable payload and splits them at the
- * backend instance limit. Input order is retained inside each payload group so
- * occurrence-to-transform mapping remains deterministic.
+ * backend instance limit. When retained_layout still describes the same
+ * semantic slots, its occurrence/chunk order is preserved so transform,
+ * visibility, bounds, and one-payload-per-chunk geometry updates cannot
+ * reshuffle retained slots. Geometry-token changes still classify as rebuilds
+ * so the affected proxy can bind current buffers. A null or incompatible
+ * retained layout rebuilds the spatial Morton plan.
  */
 [[nodiscard]] RenderInstanceBatchPlan plan_render_instance_batches(
     std::span<const RenderInstancePrimitiveOccurrence> occurrences,
-    std::size_t max_instances_per_chunk);
+    std::size_t max_instances_per_chunk,
+    const RenderInstanceBatchPlan *retained_layout = nullptr);
 
 /** Returns whether a new plan can update only existing InstanceBuffers. */
 [[nodiscard]] RenderInstanceBatchUpdateKind classify_instance_batch_update(

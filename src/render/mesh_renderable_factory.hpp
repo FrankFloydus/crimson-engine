@@ -47,6 +47,9 @@ public:
              material_binding_ != nullptr;
     }
 
+    // A bounds override is borrowed only for the duration of the call and is
+    // copied into Filament. Sibling renderables can therefore reuse one
+    // caller-computed local AABB without sharing lifetime-sensitive storage.
     MeshRenderableProxy
     create(EntityId entity_id, const RenderMeshAssetSnapshot &mesh,
            const RenderMaterialBindingSnapshot *material,
@@ -55,13 +58,15 @@ public:
            bool editor_unlit = false, bool depth_only = false,
            std::uint8_t channel = kViewportDefaultRenderableChannel,
            bool dynamic_geometry = false,
-           std::span<const QVec3> dynamic_positions = {});
+           std::span<const QVec3> dynamic_positions = {},
+           const RenderInstanceBounds *local_bounds_override = nullptr);
     MeshRenderableProxy create_shared_instance(
         EntityId entity_id, const RenderMeshAssetSnapshot &mesh,
         const MeshRenderableProxy &prototype, const QMat4 &world_transform,
         std::uint8_t layer_mask = kViewportRenderedSceneLayerMask,
         std::uint8_t channel = kViewportDefaultRenderableChannel,
-        bool receive_shadows = false);
+        bool receive_shadows = false,
+        const RenderInstanceBounds *local_bounds_override = nullptr);
     MeshRenderableProxy create_shared_geometry(
         EntityId entity_id, const RenderMeshAssetSnapshot &mesh,
         const RenderMaterialBindingSnapshot *material,
@@ -69,7 +74,8 @@ public:
         const QMat4 &world_transform, bool double_sided,
         std::uint8_t layer_mask, bool editor_unlit = false,
         bool depth_only = false,
-        std::uint8_t channel = kViewportDefaultRenderableChannel);
+        std::uint8_t channel = kViewportDefaultRenderableChannel,
+        const RenderInstanceBounds *local_bounds_override = nullptr);
     MeshRenderableProxy create_explicit_instances(
         const RenderMeshAssetSnapshot &mesh,
         const RenderMaterialBindingSnapshot *material,
@@ -108,6 +114,8 @@ public:
                        const RenderMeshAssetSnapshot &mesh);
     void update_bounds(const MeshRenderableProxy &proxy,
                        std::span<const QVec3> positions);
+    void update_bounds(const MeshRenderableProxy &proxy,
+                       const RenderInstanceBounds &local_bounds);
     void update_surface_grid(const MeshRenderableProxy &proxy,
                              float grid_world_spacing,
                              const ViewportSettings &settings);
@@ -115,7 +123,9 @@ public:
                                 const ViewportSettings &settings);
     bool update_dynamic_geometry(const MeshRenderableProxy &proxy,
                                  const RenderMeshAssetSnapshot &mesh,
-                                 std::span<const QVec3> dynamic_positions = {});
+                                 std::span<const QVec3> dynamic_positions = {},
+                                 const RenderInstanceBounds *
+                                     local_bounds_override = nullptr);
     /// Rebinds one or more existing static renderables to a replacement
     /// immutable geometry payload without recreating their entities or
     /// material instances. Every proxy is validated and every replacement
@@ -132,6 +142,11 @@ public:
 
     static std::uint64_t mesh_asset_signature(std::uint64_t hash,
                                               const MeshAsset &mesh);
+    /// Computes one renderer-neutral local AABB for reuse across siblings.
+    [[nodiscard]] static RenderInstanceBounds
+    compute_local_bounds(const RenderMeshAssetSnapshot &mesh);
+    [[nodiscard]] static RenderInstanceBounds
+    compute_local_bounds(std::span<const QVec3> positions);
 
     /// Reports shared GPU geometry resources, reuse, and upload bytes.
     struct GeometryCacheStats final {

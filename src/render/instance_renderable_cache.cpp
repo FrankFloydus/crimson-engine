@@ -110,6 +110,19 @@ std::span<const QMat4> visible_world_transforms(
   return std::span<const QMat4>(scratch);
 }
 
+bool same_persistent_chunk_layout(const RenderInstanceBatchChunk &left,
+                                  const RenderInstanceBatchChunk &right) {
+  return left.key == right.key && left.occurrences == right.occurrences &&
+         left.world_transforms.size() == right.world_transforms.size() &&
+         left.visibility.size() == right.visibility.size();
+}
+
+/// Holds a replacement proxy until every affected chunk has been created.
+/// Unaffected live proxies remain untouched if any replacement creation fails.
+struct StagedInstanceProxy final {
+  MeshRenderableProxy proxy;
+};
+
 } // namespace
 
 InstanceRenderableCache::~InstanceRenderableCache() { shutdown(); }
@@ -130,6 +143,7 @@ void InstanceRenderableCache::shutdown() {
   max_instances_per_chunk_ = 1u;
   material_uniform_signature_ = 0u;
   material_uniforms_dirty_ = true;
+  last_sync_succeeded_ = true;
   stats_ = {};
 }
 
@@ -214,7 +228,7 @@ InstanceRenderableCache::PreparedPlan InstanceRenderableCache::prepare(
   prepared.participant_count = participant_count;
   prepared.visible_occurrence_count = visible_occurrence_count;
   prepared.plan = plan_render_instance_batches(
-      occurrences, max_instances_per_chunk_);
+      occurrences, max_instances_per_chunk_, &plan_);
   prepared.records_by_chunk.reserve(prepared.plan.chunks.size());
   for (const RenderInstanceBatchChunk &chunk : prepared.plan.chunks) {
     prepared.records_by_chunk.push_back(record_for_chunk(primitives, chunk));
@@ -251,11 +265,13 @@ bool InstanceRenderableCache::sync(
     std::span<const RenderSceneInstancePrimitiveRecord> primitives) {
   QDR_PROFILE_FUNCTION();
   if (!initialized()) {
+    last_sync_succeeded_ = false;
     return false;
   }
   const PreparedPlan prepared = prepare(primitives);
   switch (classify_instance_batch_update(plan_, prepared.plan)) {
   case RenderInstanceBatchUpdateKind::Unchanged:
+    last_sync_succeeded_ = true;
     return false;
   case RenderInstanceBatchUpdateKind::TransformsOnly:
     if (update_transforms(prepared)) {
@@ -264,66 +280,222 @@ bool InstanceRenderableCache::sync(
       stats_.participant_count = prepared.participant_count;
       stats_.occurrence_count = prepared.visible_occurrence_count;
       stats_.chunk_count = plan_.chunks.size();
+      last_sync_succeeded_ = true;
       return true;
     }
     break;
   case RenderInstanceBatchUpdateKind::Rebuild:
     break;
   }
-  return rebuild(prepared);
+  const bool rebuilt = rebuild(prepared);
+  last_sync_succeeded_ = rebuilt;
+  return rebuilt;
+}
+
+MeshRenderableProxy InstanceRenderableCache::create_chunk_proxy(
+    const PreparedPlan &prepared, std::size_t index) {
+  QDR_PROFILE_FUNCTION();
+  if (factory_ == nullptr || index >= prepared.plan.chunks.size() ||
+      index >= prepared.records_by_chunk.size()) {
+    return {};
+  }
+
+  const RenderInstanceBatchChunk &chunk = prepared.plan.chunks[index];
+  const RenderSceneInstancePrimitiveRecord *record =
+      prepared.records_by_chunk[index];
+  const InstanceVariant *variant = variant_for_key(chunk.key);
+  if (record == nullptr || variant == nullptr) {
+    return {};
+  }
+
+  MeshPrimitiveSpan primitive = record->primitive;
+  primitive.index_offset = chunk.key.index_offset;
+  primitive.index_count = chunk.key.index_count;
+  const std::uint8_t initial_layer_mask =
+      chunk.visible_occurrence_count == 0u ? 0u : chunk.key.layer_mask;
+  MeshRenderableProxy proxy = factory_->create_explicit_instances(
+      record->mesh, &record->material, primitive, chunk.world_transforms,
+      chunk.world_bounds, chunk.key.cast_shadows, chunk.key.receive_shadows,
+      chunk.key.double_sided, initial_layer_mask, chunk.key.editor_unlit,
+      variant->depth_only, chunk.key.channel, chunk.key.presentation_flags);
+  if (!proxy.entity || proxy.instance_buffer == nullptr) {
+    factory_->destroy(proxy);
+    return {};
+  }
+
+  if (chunk.visible_occurrence_count != chunk.world_transforms.size()) {
+    std::vector<QMat4> visible_transforms;
+    const std::span<const QMat4> active_transforms =
+        visible_world_transforms(chunk, visible_transforms);
+    QDR_PROFILE_SCOPE("Instance create apply retained suppression");
+    if (!factory_->rebind_explicit_instances(
+            proxy, primitive, active_transforms, chunk.world_bounds,
+            chunk.key.cast_shadows, chunk.key.receive_shadows,
+            chunk.key.double_sided, initial_layer_mask, variant->depth_only,
+            chunk.key.channel)) {
+      factory_->destroy(proxy);
+      return {};
+    }
+  }
+  return proxy;
+}
+
+bool InstanceRenderableCache::update_chunk_proxy(
+    const MeshRenderableProxy &proxy,
+    const RenderInstanceBatchChunk &before,
+    const RenderInstanceBatchChunk &after,
+    const RenderSceneInstancePrimitiveRecord *record) {
+  QDR_PROFILE_FUNCTION();
+  if (before.transform_signature == after.transform_signature &&
+      before.world_bounds == after.world_bounds &&
+      before.visibility == after.visibility) {
+    return true;
+  }
+
+  std::vector<QMat4> visible_transforms;
+  const std::span<const QMat4> active_transforms =
+      visible_world_transforms(after, visible_transforms);
+  const bool visibility_changed = before.visibility != after.visibility;
+  if (visibility_changed) {
+    const InstanceVariant *variant = variant_for_key(after.key);
+    if (record == nullptr || variant == nullptr) {
+      return false;
+    }
+    MeshPrimitiveSpan primitive = record->primitive;
+    primitive.index_offset = after.key.index_offset;
+    primitive.index_count = after.key.index_count;
+    const std::uint8_t layer_mask =
+        active_transforms.empty() ? 0u : after.key.layer_mask;
+    QDR_PROFILE_SCOPE("Instance suppression update affected chunk");
+    return factory_->rebind_explicit_instances(
+        proxy, primitive, active_transforms, after.world_bounds,
+        after.key.cast_shadows, after.key.receive_shadows,
+        after.key.double_sided, layer_mask, variant->depth_only,
+        after.key.channel);
+  }
+
+  {
+    QDR_PROFILE_SCOPE("Instance transform update affected chunk");
+    return factory_->update_explicit_instances(proxy, active_transforms,
+                                               after.world_bounds);
+  }
 }
 
 bool InstanceRenderableCache::rebuild(const PreparedPlan &prepared) {
   QDR_PROFILE_FUNCTION();
-  clear();
-  proxies_.reserve(prepared.plan.chunks.size());
-  std::vector<QMat4> visible_transforms;
-  for (std::size_t index = 0u; index < prepared.plan.chunks.size(); ++index) {
-    const RenderInstanceBatchChunk &chunk = prepared.plan.chunks[index];
-    const RenderSceneInstancePrimitiveRecord *record =
-        prepared.records_by_chunk[index];
-    const InstanceVariant *variant = variant_for_key(chunk.key);
-    if (record == nullptr || variant == nullptr) {
-      clear();
-      return false;
-    }
-    MeshPrimitiveSpan primitive = record->primitive;
-    primitive.index_offset = chunk.key.index_offset;
-    primitive.index_count = chunk.key.index_count;
-    const std::uint8_t initial_layer_mask =
-        chunk.visible_occurrence_count == 0u ? 0u : chunk.key.layer_mask;
-    MeshRenderableProxy proxy = factory_->create_explicit_instances(
-        record->mesh, &record->material, primitive, chunk.world_transforms,
-        chunk.world_bounds, chunk.key.cast_shadows,
-        chunk.key.receive_shadows, chunk.key.double_sided,
-        initial_layer_mask, chunk.key.editor_unlit, variant->depth_only,
-        chunk.key.channel, chunk.key.presentation_flags);
-    if (!proxy.entity || proxy.instance_buffer == nullptr) {
-      factory_->destroy(proxy);
-      clear();
-      return false;
-    }
-    if (chunk.visible_occurrence_count != chunk.world_transforms.size()) {
-      const std::span<const QMat4> active_transforms =
-          visible_world_transforms(chunk, visible_transforms);
-      QDR_PROFILE_SCOPE("Instance rebuild apply retained suppression");
-      if (!factory_->rebind_explicit_instances(
-              proxy, primitive, active_transforms, chunk.world_bounds,
-              chunk.key.cast_shadows, chunk.key.receive_shadows,
-              chunk.key.double_sided, initial_layer_mask,
-              variant->depth_only, chunk.key.channel)) {
-        factory_->destroy(proxy);
-        clear();
-        return false;
+  const std::size_t old_proxy_count = proxies_.size();
+  const std::size_t no_proxy = old_proxy_count;
+  std::vector<std::size_t> old_proxy_by_chunk(
+      prepared.plan.chunks.size(), no_proxy);
+  std::vector<bool> old_proxy_reserved(old_proxy_count, false);
+
+  {
+    QDR_PROFILE_SCOPE("Instance rebuild match persistent chunks");
+    for (std::size_t next_index = 0u;
+         next_index < prepared.plan.chunks.size(); ++next_index) {
+      const RenderInstanceBatchChunk &next = prepared.plan.chunks[next_index];
+      const auto reusable = [&](std::size_t old_index) {
+        if (old_index >= plan_.chunks.size() ||
+            old_index >= old_proxy_count || old_proxy_reserved[old_index] ||
+            !same_persistent_chunk_layout(plan_.chunks[old_index], next)) {
+          return false;
+        }
+        const MeshRenderableProxy &proxy = proxies_[old_index];
+        return proxy.entity && proxy.instance_buffer != nullptr &&
+               proxy.instance_buffer->getInstanceCount() >=
+                   next.world_transforms.size();
+      };
+      if (reusable(next_index)) {
+        old_proxy_by_chunk[next_index] = next_index;
+        old_proxy_reserved[next_index] = true;
+        continue;
+      }
+      for (std::size_t old_index = 0u; old_index < old_proxy_count;
+           ++old_index) {
+        if (reusable(old_index)) {
+          old_proxy_by_chunk[next_index] = old_index;
+          old_proxy_reserved[old_index] = true;
+          break;
+        }
       }
     }
-    proxies_.push_back(std::move(proxy));
   }
+
+  std::vector<StagedInstanceProxy> staged;
+  staged.reserve(prepared.plan.chunks.size());
+  {
+    QDR_PROFILE_SCOPE("Instance rebuild create affected chunks");
+    for (std::size_t next_index = 0u;
+         next_index < prepared.plan.chunks.size(); ++next_index) {
+      if (old_proxy_by_chunk[next_index] != no_proxy) {
+        continue;
+      }
+      MeshRenderableProxy proxy = create_chunk_proxy(prepared, next_index);
+      if (!proxy.entity || proxy.instance_buffer == nullptr) {
+        for (StagedInstanceProxy &replacement : staged) {
+          factory_->destroy(replacement.proxy);
+        }
+        return false;
+      }
+      staged.push_back({.proxy = std::move(proxy)});
+    }
+  }
+
+  {
+    QDR_PROFILE_SCOPE("Instance rebuild update retained chunks");
+    for (std::size_t next_index = 0u;
+         next_index < prepared.plan.chunks.size(); ++next_index) {
+      const std::size_t old_index = old_proxy_by_chunk[next_index];
+      if (old_index == no_proxy) {
+        continue;
+      }
+      if (!update_chunk_proxy(
+              proxies_[old_index], plan_.chunks[old_index],
+              prepared.plan.chunks[next_index],
+              prepared.records_by_chunk[next_index])) {
+        for (StagedInstanceProxy &replacement : staged) {
+          factory_->destroy(replacement.proxy);
+        }
+        // A count-changing Filament rebind can leave that component detached
+        // on failure. Preserve the old all-or-nothing recovery path for this
+        // exceptional backend case; normal layout changes never reach it.
+        QDR_PROFILE_SCOPE("Instance rebuild fallback full replacement");
+        clear();
+        return rebuild(prepared);
+      }
+    }
+  }
+
+  std::vector<MeshRenderableProxy> next_proxies;
+  next_proxies.reserve(prepared.plan.chunks.size());
+  std::size_t staged_index = 0u;
+  for (std::size_t next_index = 0u;
+       next_index < prepared.plan.chunks.size(); ++next_index) {
+    const std::size_t old_index = old_proxy_by_chunk[next_index];
+    if (old_index != no_proxy) {
+      next_proxies.emplace_back(std::move(proxies_[old_index]));
+      continue;
+    }
+    next_proxies.emplace_back(std::move(staged[staged_index].proxy));
+    ++staged_index;
+  }
+
+  {
+    QDR_PROFILE_SCOPE("Instance rebuild destroy stale chunks");
+    for (MeshRenderableProxy &proxy : proxies_) {
+      if (proxy.entity) {
+        factory_->destroy(proxy);
+      }
+    }
+  }
+  const bool created_chunks = !staged.empty();
+  proxies_ = std::move(next_proxies);
   plan_ = prepared.plan;
   ++stats_.rebuild_count;
   stats_.participant_count = prepared.participant_count;
   stats_.occurrence_count = prepared.visible_occurrence_count;
   stats_.chunk_count = plan_.chunks.size();
+  material_uniforms_dirty_ = material_uniforms_dirty_ || created_chunks;
   return true;
 }
 
@@ -333,45 +505,11 @@ bool InstanceRenderableCache::update_transforms(
   if (prepared.plan.chunks.size() != proxies_.size()) {
     return false;
   }
-  std::vector<QMat4> visible_transforms;
   for (std::size_t index = 0u; index < proxies_.size(); ++index) {
     const RenderInstanceBatchChunk &before = plan_.chunks[index];
     const RenderInstanceBatchChunk &after = prepared.plan.chunks[index];
-    if (before.transform_signature == after.transform_signature &&
-        before.world_bounds == after.world_bounds &&
-        before.visibility == after.visibility) {
-      continue;
-    }
-
-    const std::span<const QMat4> active_transforms =
-        visible_world_transforms(after, visible_transforms);
-    const bool visibility_changed = before.visibility != after.visibility;
-    if (visibility_changed) {
-      const RenderSceneInstancePrimitiveRecord *record =
-          prepared.records_by_chunk[index];
-      const InstanceVariant *variant = variant_for_key(after.key);
-      if (record == nullptr || variant == nullptr) {
-        return false;
-      }
-      MeshPrimitiveSpan primitive = record->primitive;
-      primitive.index_offset = after.key.index_offset;
-      primitive.index_count = after.key.index_count;
-      const std::uint8_t layer_mask =
-          active_transforms.empty() ? 0u : after.key.layer_mask;
-      QDR_PROFILE_SCOPE("Instance suppression update affected chunk");
-      if (!factory_->rebind_explicit_instances(
-              proxies_[index], primitive, active_transforms,
-              after.world_bounds, after.key.cast_shadows,
-              after.key.receive_shadows, after.key.double_sided, layer_mask,
-              variant->depth_only, after.key.channel)) {
-        return false;
-      }
-      continue;
-    }
-
-    QDR_PROFILE_SCOPE("Instance transform update affected chunk");
-    if (!factory_->update_explicit_instances(
-            proxies_[index], active_transforms, after.world_bounds)) {
+    if (!update_chunk_proxy(proxies_[index], before, after,
+                            prepared.records_by_chunk[index])) {
       return false;
     }
   }

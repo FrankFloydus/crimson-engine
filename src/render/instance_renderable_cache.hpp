@@ -52,6 +52,10 @@ public:
   [[nodiscard]] bool initialized() const { return factory_ != nullptr; }
   [[nodiscard]] bool sync(
       std::span<const RenderSceneInstancePrimitiveRecord> primitives);
+  /** Reports whether the latest sync reached a valid retained/new plan. */
+  [[nodiscard]] bool last_sync_succeeded() const {
+    return last_sync_succeeded_;
+  }
   void set_preview_suppressed_entities(
       std::unordered_set<EntityId> entities,
       std::vector<RenderInstancePreviewSuppression> occurrence_suppressions,
@@ -80,6 +84,13 @@ private:
 
   [[nodiscard]] PreparedPlan prepare(
       std::span<const RenderSceneInstancePrimitiveRecord> primitives) const;
+  [[nodiscard]] MeshRenderableProxy
+  create_chunk_proxy(const PreparedPlan &prepared, std::size_t index);
+  bool update_chunk_proxy(
+      const MeshRenderableProxy &proxy,
+      const RenderInstanceBatchChunk &before,
+      const RenderInstanceBatchChunk &after,
+      const RenderSceneInstancePrimitiveRecord *record);
   bool rebuild(const PreparedPlan &prepared);
   bool update_transforms(const PreparedPlan &prepared);
 
@@ -92,6 +103,7 @@ private:
       preview_occurrence_suppressions_;
   std::uint64_t material_uniform_signature_ = 0u;
   bool material_uniforms_dirty_ = true;
+  bool last_sync_succeeded_ = true;
   InstanceRenderableCacheStats stats_;
 };
 

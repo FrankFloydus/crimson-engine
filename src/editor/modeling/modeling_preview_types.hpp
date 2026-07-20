@@ -32,6 +32,9 @@ struct ModelingToolPreviewMesh {
   bool dynamic_positions = false;
   bool suppress_source = false;
   std::uint64_t layout_key = 0u;
+  // Participant-local token for the packed position stream. A collection
+  // update must leave this value and the payload unchanged for participants
+  // whose packed positions did not change.
   std::uint64_t position_revision = 0u;
   // Position-only transform previews retain immutable topology in `mesh` and
   // publish one separately pinned packed position stream per revision. This

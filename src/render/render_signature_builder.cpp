@@ -19,16 +19,6 @@ namespace {
 
 constexpr std::uint64_t kFnvOffset = 1469598103934665603ull;
 constexpr std::uint64_t kFnvPrime = 1099511628211ull;
-constexpr std::array<ViewportOverlayLayer, 7u> kDepthStampVisibilityLayers{{
-        ViewportOverlayLayer::SourceWire,
-        ViewportOverlayLayer::SelectedFaceEdge,
-        ViewportOverlayLayer::SelectedEdge,
-        ViewportOverlayLayer::HoverFaceEdge,
-        ViewportOverlayLayer::HoverEdge,
-        ViewportOverlayLayer::SelectedVertex,
-        ViewportOverlayLayer::HoverVertex,
-}};
-
 std::size_t overlay_layer_index(ViewportOverlayLayer layer) {
   return static_cast<std::size_t>(layer);
 }
@@ -286,11 +276,6 @@ OverlayFrameSignatures RenderSignatureBuilder::overlay_frame_signatures(
     add_layer_triangle_signature(layer_signatures[layer_index], triangle);
     if (triangle.layer == ViewportOverlayLayer::SourceWireDepthStamp) {
       result.has_source_wire_depth_stamp = true;
-      for (const ViewportOverlayLayer visible_layer :
-           kDepthStampVisibilityLayers) {
-        add_layer_triangle_signature(
-            layer_signatures[overlay_layer_index(visible_layer)], triangle);
-      }
     }
   }
 
