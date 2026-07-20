@@ -786,13 +786,129 @@ TEST(SceneRenderBridgeTests, UsesDepthStampedFaceFillForOverlayTriangles) {
       std::string::npos);
   EXPECT_NE(bridge_source.find("tool_preview_cache_.set_meshes(meshes)"),
             std::string::npos);
-  EXPECT_NE(tool_preview_cache_source.find("preview_groups_"),
+  EXPECT_NE(tool_preview_cache_source.find("current_generation_"),
             std::string::npos);
   EXPECT_NE(tool_preview_cache_source.find("create_shared_instance"),
             std::string::npos);
   EXPECT_NE(tool_preview_cache_source.find(
                 "void ToolPreviewRenderableCache::clear()"),
             std::string::npos);
+}
+
+TEST(SceneRenderBridgeTests,
+     RetainedMaterialUniformsInvalidateAtEachProxyCacheBoundary) {
+  const std::string bridge_source =
+      read_source_file("src/render/scene_render_bridge.cpp");
+  const std::string instance_cache_source =
+      read_source_file("src/render/instance_renderable_cache.cpp");
+  const std::string instance_cache_header =
+      read_source_file("src/render/instance_renderable_cache.hpp");
+  const std::string preview_cache_source =
+      read_source_file("src/render/tool_preview_renderable_cache.cpp");
+  const std::string preview_cache_header =
+      read_source_file("src/render/tool_preview_renderable_cache.hpp");
+  const std::string viewport_source =
+      read_source_file("src/ui/qt_viewport_panel.cpp");
+
+  for (const std::string *header :
+       {&instance_cache_header, &preview_cache_header}) {
+    EXPECT_NE(header->find("material_uniform_signature_"),
+              std::string::npos);
+    EXPECT_NE(header->find("material_uniforms_dirty_ = true"),
+              std::string::npos);
+  }
+  for (const std::string *source :
+       {&instance_cache_source, &preview_cache_source}) {
+    EXPECT_TRUE(source_contains_compact(
+        *source,
+        "if (!material_uniforms_dirty_ && material_uniform_signature_ == "
+        "signature) { return; }"));
+    EXPECT_NE(source->find("material_uniforms_dirty_ = true;"),
+              std::string::npos);
+    EXPECT_NE(source->find("material_uniforms_dirty_ = false;"),
+              std::string::npos);
+  }
+  EXPECT_NE(instance_cache_source.find("Instance material uniforms apply"),
+            std::string::npos);
+  EXPECT_NE(preview_cache_source.find(
+                "Tool preview material uniforms apply"),
+            std::string::npos);
+
+  EXPECT_TRUE(source_contains_compact(
+      bridge_source,
+      "instance_cache_.update_surface_grid(grid_world_spacing, settings); "
+      "tool_preview_cache_.update_surface_grid(grid_world_spacing, settings);"));
+  EXPECT_EQ(bridge_source.find("material_uniform_signature_"),
+            std::string::npos)
+      << "a bridge-wide gate would miss proxies created inside either cache";
+
+  const std::size_t preview_sync = viewport_source.find(
+      "QuaderRenderApiRuntimeAccess::sync_tool_previews");
+  const std::size_t material_sync = viewport_source.find(
+      "render_bridge.update_mesh_surface_grid(grid_world_size, settings)");
+  ASSERT_NE(preview_sync, std::string::npos);
+  ASSERT_NE(material_sync, std::string::npos);
+  EXPECT_LT(preview_sync, material_sync)
+      << "new preview proxies must be marked dirty before current settings "
+         "are applied in the same frame";
+}
+
+TEST(SceneRenderBridgeTests,
+     ToolPreviewPublishesCandidateBeforeSuppressingSourcesAndRetriesFailure) {
+  const std::string cache_header =
+      read_source_file("src/render/tool_preview_renderable_cache.hpp");
+  const std::string cache_source =
+      read_source_file("src/render/tool_preview_renderable_cache.cpp");
+  const std::string bridge_source =
+      read_source_file("src/render/scene_render_bridge.cpp");
+  const std::string render_api_source =
+      read_source_file("src/api/quader_render_api.cpp");
+
+  EXPECT_NE(cache_header.find("current_generation_"), std::string::npos);
+  EXPECT_NE(cache_header.find("warm_generation_"), std::string::npos);
+  EXPECT_NE(cache_header.find("retired_generations_"), std::string::npos);
+  EXPECT_NE(cache_source.find("group_topology_equals"), std::string::npos);
+  EXPECT_NE(cache_source.find("preview_mesh.mesh.geometry_payload()"),
+            std::string::npos);
+  EXPECT_NE(cache_source.find("Tool preview ordered active fast path"),
+            std::string::npos);
+  EXPECT_NE(cache_source.find("detach_generation(*generation)"),
+            std::string::npos);
+  EXPECT_NE(cache_source.find("factory_->destroy_detached(proxy)"),
+            std::string::npos);
+  EXPECT_NE(cache_source.find(
+                "Tool preview build hidden candidate generation"),
+            std::string::npos);
+
+  const std::size_t publish =
+      bridge_source.find("tool_preview_cache_.set_meshes(meshes)");
+  const std::size_t failed = bridge_source.find(
+      "preview_result == ToolPreviewSubmissionResult::Failed", publish);
+  const std::size_t overlay = bridge_source.find(
+      "overlay_cache_.set_transform_position_streams(meshes)", failed);
+  const std::size_t suppression = bridge_source.find(
+      "Tool preview update source suppression", overlay);
+  ASSERT_NE(publish, std::string::npos);
+  ASSERT_NE(failed, std::string::npos);
+  ASSERT_NE(overlay, std::string::npos);
+  ASSERT_NE(suppression, std::string::npos);
+  EXPECT_LT(publish, failed);
+  EXPECT_LT(failed, overlay);
+  EXPECT_LT(overlay, suppression);
+
+  const std::size_t api_submission = render_api_source.find(
+      "bridge.set_tool_preview_meshes(");
+  const std::size_t api_failure = render_api_source.find(
+      "preview_result == ToolPreviewSubmissionResult::Failed",
+      api_submission);
+  const std::size_t cache_sync_gate = render_api_source.find(
+      "api.idle_tool_preview_sync_bridge_ = &bridge", api_failure);
+  ASSERT_NE(api_submission, std::string::npos);
+  ASSERT_NE(api_failure, std::string::npos);
+  ASSERT_NE(cache_sync_gate, std::string::npos);
+  EXPECT_LT(api_submission, api_failure);
+  EXPECT_LT(api_failure, cache_sync_gate)
+      << "failed preview publication must return before sync gates advance";
 }
 
 TEST(SceneRenderBridgeTests, UsesQuadMaterialsForSelectionLineAndPointOverlay) {

@@ -763,6 +763,7 @@ const RadialArrayPreviewState &RadialArrayToolService::preview_state() const {
         }
         preview.sources.push_back({
             .source_entity = source.entity,
+            .material_entity = mesh.member,
             .mesh = mesh.mesh,
             .material = mesh.material,
             .generated_world_transforms = std::move(member_world),
@@ -772,6 +773,7 @@ const RadialArrayPreviewState &RadialArrayToolService::preview_state() const {
     }
     preview.sources.push_back({
         .source_entity = source.entity,
+        .material_entity = source.entity,
         .mesh = source.mesh,
         .material = source.material,
         .generated_world_transforms = layout.generated_world_transforms,

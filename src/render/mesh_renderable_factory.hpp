@@ -16,6 +16,7 @@
 #include <filament/Engine.h>
 #include <filament/Scene.h>
 
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <span>
@@ -59,7 +60,8 @@ public:
         EntityId entity_id, const RenderMeshAssetSnapshot &mesh,
         const MeshRenderableProxy &prototype, const QMat4 &world_transform,
         std::uint8_t layer_mask = kViewportRenderedSceneLayerMask,
-        std::uint8_t channel = kViewportDefaultRenderableChannel);
+        std::uint8_t channel = kViewportDefaultRenderableChannel,
+        bool receive_shadows = false);
     MeshRenderableProxy create_shared_geometry(
         EntityId entity_id, const RenderMeshAssetSnapshot &mesh,
         const RenderMaterialBindingSnapshot *material,
@@ -86,6 +88,18 @@ public:
         const MeshRenderableProxy &proxy,
         std::span<const QMat4> world_transforms,
         const RenderInstanceBounds &world_bounds);
+    /// Uploads a compact visible prefix and changes the active instance count
+    /// without replacing the entity, geometry, material, or InstanceBuffer.
+    /// A false result after a count-changing build leaves the renderable
+    /// component detached so the cache can immediately destroy/full-rebuild
+    /// the still-owned proxy deterministically.
+    bool rebind_explicit_instances(
+        const MeshRenderableProxy &proxy, MeshPrimitiveSpan primitive,
+        std::span<const QMat4> active_world_transforms,
+        const RenderInstanceBounds &world_bounds, bool cast_shadows,
+        bool receive_shadows, bool double_sided, std::uint8_t layer_mask,
+        bool depth_only = false,
+        std::uint8_t channel = kViewportDefaultRenderableChannel);
     void update_transform(const MeshRenderableProxy &proxy,
                           const QMat4 &world_transform);
     void update_layer_mask(const MeshRenderableProxy &proxy,
@@ -102,7 +116,17 @@ public:
     bool update_dynamic_geometry(const MeshRenderableProxy &proxy,
                                  const RenderMeshAssetSnapshot &mesh,
                                  std::span<const QVec3> dynamic_positions = {});
+    /// Rebinds one or more existing static renderables to a replacement
+    /// immutable geometry payload without recreating their entities or
+    /// material instances. Every proxy is validated and every replacement
+    /// geometry reference is acquired before any renderable is mutated.
+    bool try_rebind_static_geometry(
+        std::span<MeshRenderableProxy *> proxies,
+        const RenderMeshAssetSnapshot &mesh);
     void remove_from_scene(const MeshRenderableProxy &proxy);
+    /// Detaches an already-collected proxy generation with one Filament scene
+    /// call so retirement cost does not scale in renderer API calls.
+    void remove_from_scene(std::span<const utils::Entity> entities);
     void destroy(MeshRenderableProxy& proxy);
     void destroy_detached(MeshRenderableProxy &proxy);
 

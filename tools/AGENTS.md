@@ -34,11 +34,19 @@ generates its disposable compile database in `.build/cmake-tidy`, and enforces t
 
 ## Tracy Launcher
 
-- `boot_tracy.ps1` validates the Tracy-enabled `vs2026` cache, starts the Tracy profiler first,
-  then starts Quader and waits until both application windows are ready for profiling.
+- `boot_tracy.ps1` is fixed to the canonical `build/vs2026/Debug/quader.exe`. On a normal launch it
+  configures `vs2026`, incrementally builds only `vs2026-debug --target quader`, validates that
+  Debug uses Release-speed runtime/dependencies with Tracy/on-demand enabled and Release has no
+  Tracy definitions, starts the Tracy profiler first, then starts Quader and waits until both
+  application windows are ready.
+- The `Debug` path is the Profile artifact compatibility path: Release-speed code and dependencies,
+  embedded symbols, and Tracy. It is not a traditional checked Debug build and is never shipped.
 - Launcher failures remain visible until Enter is pressed. Automated callers can pass
   `-NoPauseOnError` to preserve non-interactive failure behavior.
-- The recorded local Tracy 0.13.1 and optimized Release build paths are defaults. Performance
-  captures must not use the unoptimized Debug executable. Pass `-Configuration Debug` only for
-  correctness diagnostics, or use the script parameters for alternate profiler, executable, or
-  build-cache paths.
+- `-ValidateOnly` checks an already configured/built canonical tree without rebuilding or launching.
+  The profiler path may be overridden, but the executable, configuration, cache, and build preset
+  may not: profiling captures always use the optimized Tracy-enabled Debug executable. Validation
+  must reject the Debug CRT, checked STL, Qt `*d`, vcpkg `debug/lib`, Filament `mdd`, and `matdbg`.
+- Launcher validation must verify the required Release DLL identities and recursively inspect the
+  deployed executable, DLLs, and Qt plugins for missing dependencies before starting Quader. A
+  direct-DLL checklist is not a replacement for dependency-closure validation.

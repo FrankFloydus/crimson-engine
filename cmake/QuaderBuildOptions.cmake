@@ -8,9 +8,9 @@ option(QUADER_BUILD_TESTS "Build Quader tests" ON)
 option(QUADER_BUILD_NATIVE_APP "Build the native Quader Windows editor app." ON)
 option(QUADER_USE_OPENMESH_TOPOLOGY "Use OpenMesh for topology-backed polygon edit operations." ON)
 option(QUADER_ALLOW_EXTERNAL_OPENMESH_FETCH "Allow CMake to download OpenMesh when a local source checkout is not supplied." OFF)
-option(QUADER_ENABLE_TRACY "Enable Tracy profiler instrumentation for Quader targets." OFF)
+option(QUADER_ENABLE_TRACY "Make Tracy profiler instrumentation available to Debug Quader targets." ON)
 option(QUADER_ENABLE_SENTRY "Enable Sentry Native crash and event reporting." ON)
-option(QUADER_TRACY_ON_DEMAND "Enable Tracy on-demand capture mode when Tracy instrumentation is enabled." ON)
+option(QUADER_TRACY_ON_DEMAND "Enable Tracy on-demand capture mode for Debug Quader targets." ON)
 option(QUADER_BUILD_PERFORMANCE_BENCHMARKS "Build opt-in Quader performance baseline executables." OFF)
 option(QUADER_BUILD_QDR_TOOLS "Build opt-in native QDR validation and inspection tools." OFF)
 option(QUADER_ENABLE_PCH "Enable Quader target-local precompiled headers for faster incremental C++ builds." ON)
@@ -45,4 +45,19 @@ quader_resolve_dependency_source(
     CMakeLists.txt)
 
 set(QUADER_OPENMESH_SOURCE_DIR "${_QUADER_DEFAULT_OPENMESH_SOURCE_DIR}" CACHE PATH "Path to a local OpenMesh source checkout.")
-set(QUADER_TRACY_SOURCE_DIR "" CACHE PATH "Path to a local Tracy profiler source checkout.")
+# Debug is the canonical profiling configuration. These are forced so a stale
+# cache or command-line override cannot silently produce an unprofiled Debug
+# executable. QuaderModeling.cmake still gates every definition and link edge
+# on CONFIG:Debug, so the Release executable contains no Tracy client.
+set(QUADER_ENABLE_TRACY ON CACHE BOOL
+    "Make Tracy profiler instrumentation available to Debug Quader targets." FORCE)
+set(QUADER_TRACY_ON_DEMAND ON CACHE BOOL
+    "Enable Tracy on-demand capture mode for Debug Quader targets." FORCE)
+
+set(_QUADER_DEFAULT_TRACY_SOURCE_DIR
+    "${CMAKE_CURRENT_SOURCE_DIR}/../_SOURCES/tracy-0.13.1")
+if(NOT EXISTS "${_QUADER_DEFAULT_TRACY_SOURCE_DIR}/public/tracy/Tracy.hpp")
+    set(_QUADER_DEFAULT_TRACY_SOURCE_DIR "")
+endif()
+set(QUADER_TRACY_SOURCE_DIR "${_QUADER_DEFAULT_TRACY_SOURCE_DIR}" CACHE PATH
+    "Path to a local Tracy profiler source checkout.")

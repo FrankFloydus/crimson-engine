@@ -11,6 +11,8 @@
 #include "render/render_layers.hpp"
 #include "viewport/viewport_settings.hpp"
 
+#include <algorithm>
+#include <array>
 #include <utility>
 
 namespace quader {
@@ -27,6 +29,18 @@ bool mesh_proxy_needs_rebuild(
          existing->second.cast_shadows != cast_shadows ||
          existing->second.double_sided != mesh.double_sided() ||
          existing->second.material_revision != mesh.material_revision;
+}
+
+bool mesh_proxy_allows_geometry_rebind(
+    const std::unordered_map<EntityId, MeshRenderableProxy> &proxies,
+    const RenderSceneMeshRecord &mesh, bool cast_shadows) {
+  const auto existing = proxies.find(mesh.entity_id);
+  return existing != proxies.end() &&
+         existing->second.mesh == mesh.mesh.mesh_id &&
+         existing->second.material == mesh.material_reference &&
+         existing->second.cast_shadows == cast_shadows &&
+         existing->second.double_sided == mesh.double_sided() &&
+         existing->second.material_revision == mesh.material_revision;
 }
 
 void destroy_proxy_map(
@@ -84,6 +98,9 @@ void MeshRenderableCache::shutdown() {
     destroy_proxy_map(*factory_, overlay_depth_mesh_proxies_);
     destroy_detached_proxy_vector(*factory_, retired_mesh_proxies_);
     surface_grid_signature_ = 0u;
+    topology_stable_geometry_rebind_count_ = 0u;
+    full_proxy_rebuild_count_ = 0u;
+    retired_proxy_high_watermark_ = 0u;
     surface_grid_dirty_ = true;
     preview_suppressed_entities_.clear();
     factory_ = nullptr;
@@ -110,7 +127,17 @@ void MeshRenderableCache::sync_mesh(const RenderSceneMeshRecord &mesh) {
   }
 
   if (needs_rebuild(mesh)) {
+    if (try_rebind_topology_stable_geometry(mesh)) {
+      QDR_PROFILE_SCOPE("Mesh renderable topology-stable rebind success");
+      ++topology_stable_geometry_rebind_count_;
+      if (retired_mesh_proxies_.empty()) {
+        QDR_PROFILE_SCOPE("Mesh rebind retired queue remains empty");
+      }
+      return;
+    }
+
     QDR_PROFILE_SCOPE("Mesh renderable rebuild proxies");
+    ++full_proxy_rebuild_count_;
     remove(mesh.entity_id);
     MeshRenderableProxy rendered_proxy = factory_->create(
         mesh.entity_id, mesh.mesh, &mesh.material, mesh.world_transform,
@@ -147,6 +174,40 @@ void MeshRenderableCache::sync_mesh(const RenderSceneMeshRecord &mesh) {
     QDR_PROFILE_SCOPE("Mesh renderable update depth transform");
     factory_->update_transform(existing->second, mesh.world_transform);
   }
+}
+
+bool MeshRenderableCache::try_rebind_topology_stable_geometry(
+    const RenderSceneMeshRecord &mesh) {
+  QDR_PROFILE_FUNCTION();
+  if (!factory_ ||
+      !mesh_proxy_allows_geometry_rebind(rendered_mesh_proxies_, mesh,
+                                         mesh.cast_shadows()) ||
+      !mesh_proxy_allows_geometry_rebind(shaded_mesh_proxies_, mesh, false) ||
+      !mesh_proxy_allows_geometry_rebind(overlay_depth_mesh_proxies_, mesh,
+                                         false)) {
+    return false;
+  }
+
+  MeshRenderableProxy &rendered =
+      rendered_mesh_proxies_.find(mesh.entity_id)->second;
+  MeshRenderableProxy &shaded =
+      shaded_mesh_proxies_.find(mesh.entity_id)->second;
+  MeshRenderableProxy &overlay_depth =
+      overlay_depth_mesh_proxies_.find(mesh.entity_id)->second;
+  std::array<MeshRenderableProxy *, 3u> proxies{
+      &rendered,
+      &shaded,
+      &overlay_depth,
+  };
+  if (!factory_->try_rebind_static_geometry(proxies, mesh.mesh)) {
+    return false;
+  }
+
+  factory_->update_transform(rendered, mesh.world_transform);
+  factory_->update_transform(shaded, mesh.world_transform);
+  factory_->update_transform(overlay_depth, mesh.world_transform);
+  apply_preview_suppression(mesh.entity_id);
+  return true;
 }
 
 void MeshRenderableCache::set_preview_suppressed_entities(
@@ -296,6 +357,8 @@ void MeshRenderableCache::retire_proxy(MeshRenderableProxy &&proxy) {
   QDR_PROFILE_FUNCTION();
   factory_->remove_from_scene(proxy);
   retired_mesh_proxies_.push_back(std::move(proxy));
+  retired_proxy_high_watermark_ =
+      std::max(retired_proxy_high_watermark_, retired_mesh_proxies_.size());
 }
 
 } // namespace quader

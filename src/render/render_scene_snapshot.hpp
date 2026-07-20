@@ -268,6 +268,7 @@ struct RenderToolPreviewMeshRecord {
   // in one public occurrence. Retain that occurrence so source suppression
   // does not hide every other occurrence of the same definition member.
   EntityId visibility_entity = kInvalidEntityId;
+  MaterialReference material_reference;
   AssetId material_id = kInvalidAssetId;
   MeshAsset mesh;
   RenderMaterialBindingSnapshot material;

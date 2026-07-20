@@ -322,7 +322,7 @@ private:
     ObjectId object;
     int native_object_id = kInvalidModelingObjectId;
     EntityId entity = kInvalidEntityId;
-    MaterialReference material;
+    MaterialComponent material;
     QMat4 world_transform;
     std::uint64_t layout_key = 0u;
     MeshAsset base_mesh;
@@ -616,20 +616,19 @@ public:
       }
 
       const MaterialComponent *material = scene_.material(*entity);
-      const MaterialReference material_id =
-          material != nullptr ? material->material
-                              : MaterialReference{kInvalidAssetId};
+      const MaterialComponent material_component =
+          material != nullptr ? *material : MaterialComponent{};
       kept_mesh->name = "Cut Preview Keep";
       discarded_mesh->name = "Cut Preview Discard";
       preview.kept_meshes.push_back({
           .source_entity = *entity,
-          .material = material_id,
+          .material = material_component,
           .mesh = std::move(*kept_mesh),
           .transform = world,
       });
       preview.discarded_meshes.push_back({
           .source_entity = *entity,
-          .material = material_id,
+          .material = material_component,
           .mesh = std::move(*discarded_mesh),
           .transform = world,
       });
@@ -707,9 +706,7 @@ public:
       mesh->name = "Mirror Preview";
       preview.meshes.push_back({
           .source_entity = *entity,
-          .material = material != nullptr
-                          ? material->material
-                          : MaterialReference{kInvalidAssetId},
+          .material = material != nullptr ? *material : MaterialComponent{},
           .mesh = std::move(*mesh),
           .transform = world,
       });
@@ -3385,8 +3382,7 @@ public:
           .object = object,
           .native_object_id = *native,
           .entity = *entity,
-          .material = material != nullptr ? material->material
-                                          : MaterialReference{},
+          .material = material != nullptr ? *material : MaterialComponent{},
           .world_transform =
               modeling_object_world_transform_resolver_
                   ? modeling_object_world_transform_resolver_(*native)

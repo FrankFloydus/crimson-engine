@@ -8,6 +8,7 @@
 #include "api/quader_api_session_internal_access.hpp"
 
 #include "api/quader_api.hpp"
+#include "api/quader_api_status_internal.hpp"
 #include "api/quader_api_type_conversions.hpp"
 #include "api/quader_query_api.hpp"
 #include "editor/array/linear_array_tool_service.hpp"
@@ -17,6 +18,7 @@
 #include "editor/modeling/services/modeling_session_service.hpp"
 #include "editor/session/viewport_local_visibility_service.hpp"
 #include "render/overlay/render_overlay_snapshot.hpp"
+#include "render/render_signature_builder.hpp"
 #include "render/scene_render_extraction.hpp"
 #include "render/scene_render_bridge.hpp"
 #include "editor/session/scene_session.hpp"
@@ -60,9 +62,13 @@ void append_linear_array_preview(
     if (mesh == nullptr || source.generated_world_transforms.empty()) {
       continue;
     }
+    const MaterialComponent *source_material =
+        session.scene().material(source.material_entity);
     previews.push_back(ModelingToolPreviewMesh{
         .source_entity = source.source_entity,
-        .material = source.material,
+        .material = source_material != nullptr
+                        ? *source_material
+                        : MaterialComponent{.material = source.material},
         .mesh = *mesh,
         .transform = {},
         .instance_transforms = source.generated_world_transforms,
@@ -82,9 +88,13 @@ void append_radial_array_preview(
     if (mesh == nullptr || source.generated_world_transforms.empty()) {
       continue;
     }
+    const MaterialComponent *source_material =
+        session.scene().material(source.material_entity);
     previews.push_back(ModelingToolPreviewMesh{
         .source_entity = source.source_entity,
-        .material = source.material,
+        .material = source_material != nullptr
+                        ? *source_material
+                        : MaterialComponent{.material = source.material},
         .mesh = *mesh,
         .transform = {},
         .instance_transforms = source.generated_world_transforms,
@@ -177,8 +187,18 @@ QuaderRenderApiRuntimeAccess::sync_tool_previews(QuaderRenderApi &api,
 
   std::uint8_t native_array_kind = 0;
   std::uint64_t native_array_revision = 0;
+  const RenderProjectMaterialResolver *project_material_resolver =
+      bridge.project_material_resolver();
+  const std::uint64_t project_material_revision =
+      project_material_resolver != nullptr
+          ? project_material_resolver->revision()
+          : 0u;
   const std::uint64_t native_array_asset_revision =
-      project.assets().revision();
+      RenderSignatureBuilder{}
+          .add_value(project.assets().revision())
+          .add_value(project_material_revision)
+          .add_value(project.scene().render_component_revision())
+          .value();
   if (linear_preview.active != radial_preview.active) {
     native_array_kind = linear_preview.active ? 1u : 2u;
     native_array_revision = linear_preview.active ? linear_preview.revision
@@ -236,7 +256,7 @@ QuaderRenderApiRuntimeAccess::sync_tool_previews(QuaderRenderApi &api,
         .source_entity = preview_mesh.source_entity,
         .visibility_entity =
             preview_visibility_entity(project, preview_mesh.source_entity),
-        .material = preview_mesh.material,
+        .material = std::move(preview_mesh.material),
         .mesh = std::move(preview_mesh.mesh),
         .transform = preview_mesh.transform,
         .instance_transforms =
@@ -250,10 +270,17 @@ QuaderRenderApiRuntimeAccess::sync_tool_previews(QuaderRenderApi &api,
     });
   }
 
-  bridge.set_tool_preview_meshes(
-      build_render_tool_preview_snapshot(render_preview_meshes,
-                                         session.assets,
-                                         &local_visibility));
+  const ToolPreviewSubmissionResult preview_result =
+      bridge.set_tool_preview_meshes(
+          build_render_tool_preview_snapshot(render_preview_meshes,
+                                             session.assets,
+                                             &local_visibility,
+                                             project_material_resolver));
+  if (preview_result == ToolPreviewSubmissionResult::Failed) {
+    return quader_api_failure_status(
+        project,
+        "Render tool preview candidate could not be published; retrying.");
+  }
   if (native_array_kind == 0u && !transform_preview_active) {
     api.idle_tool_preview_sync_bridge_ = &bridge;
     api.idle_tool_preview_bridge_submission_revision_ =

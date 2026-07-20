@@ -216,7 +216,7 @@ void SceneRenderBridge::update_mesh_surface_grid(
   }
   mesh_cache_.update_surface_grid(grid_world_spacing, settings);
   instance_cache_.update_surface_grid(grid_world_spacing, settings);
-  tool_preview_cache_.update_shaded_lighting(settings);
+  tool_preview_cache_.update_surface_grid(grid_world_spacing, settings);
 }
 
 SceneRenderResourceDiagnostics SceneRenderBridge::diagnostics() const {
@@ -280,6 +280,14 @@ SceneRenderResourceDiagnostics SceneRenderBridge::diagnostics() const {
       result.selection_fill_batch_chunk_count +
       result.selection_wire_batch_chunk_count;
   return result;
+}
+
+void SceneRenderBridge::perform_idle_resource_maintenance() {
+  QDR_PROFILE_FUNCTION();
+  if (!tool_preview_cache_.initialized()) {
+    return;
+  }
+  tool_preview_cache_.drain_retired_destroy_queue(1u);
 }
 
 void SceneRenderBridge::set_active_overlay_viewports(
@@ -398,13 +406,21 @@ ViewportOverlayFrame SceneRenderBridge::build_scene_overlay_frame(
   return frame;
 }
 
-void SceneRenderBridge::set_tool_preview_meshes(
+ToolPreviewSubmissionResult SceneRenderBridge::set_tool_preview_meshes(
     std::vector<RenderToolPreviewMeshRecord> meshes) {
   QDR_PROFILE_FUNCTION();
-  ++tool_preview_submission_revision_;
   if (!engine_ || !scene_ || !tool_preview_cache_.initialized()) {
-    return;
+    return ToolPreviewSubmissionResult::Failed;
   }
+  const ToolPreviewSubmissionResult preview_result =
+      tool_preview_cache_.set_meshes(meshes);
+  if (preview_result == ToolPreviewSubmissionResult::Failed) {
+    QDR_PROFILE_SCOPE("Tool preview preserve previous source coverage");
+    return preview_result;
+  }
+  ++tool_preview_submission_revision_;
+  (void)overlay_cache_.set_transform_position_streams(meshes);
+
   RenderSignatureBuilder suppression_signature;
   suppression_signature.add_size(meshes.size());
   for (const RenderToolPreviewMeshRecord &mesh : meshes) {
@@ -458,8 +474,7 @@ void SceneRenderBridge::set_tool_preview_meshes(
     tool_preview_suppression_valid_ = true;
     tool_preview_overlay_suppression_dirty_ = true;
   }
-  (void)overlay_cache_.set_transform_position_streams(meshes);
-  (void)tool_preview_cache_.set_meshes(meshes);
+  return preview_result;
 }
 
 void SceneRenderBridge::set_overlay_frame(ViewportOverlayFrame frame,

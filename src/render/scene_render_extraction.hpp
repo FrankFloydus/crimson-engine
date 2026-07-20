@@ -30,7 +30,7 @@ struct ToolPreviewMesh {
   // Local Visibility can be owned by a public instance occurrence while the
   // preview source remains a canonical definition member.
   EntityId visibility_entity = kInvalidEntityId;
-  AssetId material = kInvalidAssetId;
+  MaterialComponent material;
   MeshAsset mesh;
   QMat4 transform;
   std::vector<QMat4> instance_transforms;
@@ -88,6 +88,8 @@ build_render_scene_snapshot(const SceneDocument &document,
 build_render_tool_preview_snapshot(const std::vector<ToolPreviewMesh> &meshes,
                                    const AssetRegistry &assets,
                                    const ViewportLocalVisibilitySnapshot *
-                                       local_visibility = nullptr);
+                                       local_visibility = nullptr,
+                                   const RenderProjectMaterialResolver *
+                                       project_material_resolver = nullptr);
 
 } // namespace quader

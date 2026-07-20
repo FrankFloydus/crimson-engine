@@ -621,6 +621,13 @@ void QtViewportPanel::prepare_viewports(
                           : ViewportProbeClock::time_point{};
   (void)QuaderRenderApiRuntimeAccess::sync_tool_previews(editor.render(),
                                                          render_bridge);
+  const bool viewport_interaction_active =
+      input_router_.navigating() || input_router_.fly_navigating() ||
+      modal_tool_dragging_ || modeling.transform_drag_active() ||
+      modeling.modal_tool_owns_viewport();
+  if (!viewport_interaction_active) {
+    render_bridge.perform_idle_resource_maintenance();
+  }
   if (diagnostics_enabled) {
     g_viewport_probe.preview_sync_ms +=
         elapsed_milliseconds(preview_start, ViewportProbeClock::now());

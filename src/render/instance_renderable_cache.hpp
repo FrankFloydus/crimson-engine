@@ -75,6 +75,7 @@ private:
     RenderInstanceBatchPlan plan;
     std::vector<const RenderSceneInstancePrimitiveRecord *> records_by_chunk;
     std::size_t participant_count = 0u;
+    std::size_t visible_occurrence_count = 0u;
   };
 
   [[nodiscard]] PreparedPlan prepare(
@@ -89,6 +90,8 @@ private:
   std::unordered_set<EntityId> preview_suppressed_entities_;
   std::vector<RenderInstancePreviewSuppression>
       preview_occurrence_suppressions_;
+  std::uint64_t material_uniform_signature_ = 0u;
+  bool material_uniforms_dirty_ = true;
   InstanceRenderableCacheStats stats_;
 };
 

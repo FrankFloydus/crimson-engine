@@ -346,14 +346,48 @@ within `0..9999`; if it is already `9999`, stop and ask before rolling minor or 
 
 Do not bump for planning, review, inspection-only, failed/no-change, or explanation-only turns.
 
+## Canonical Dual-Configuration Build Contract
+
+- Use one multi-config Visual Studio tree only: `build/vs2026`. Do not create or hand off Ninja,
+  single-config, alternate Visual Studio, Release-only, or profiling-only build trees.
+- Every time an agent performs a native Quader build, build both canonical executables before the
+  final handoff, in this order:
+  1. `cmake --build --preset vs2026-debug --target quader`
+  2. `cmake --build --preset vs2026-release --target quader`
+- Debug is the profiling build at `build/vs2026/Debug/quader.exe`. It retains embedded debug
+  information and always compiles and links Tracy with on-demand capture enabled, but it must use
+  Release-equivalent runtime semantics and dependencies: `/O2`, the non-Debug MSVC runtime,
+  `NDEBUG`, unchecked STL iterators, Release Qt/vcpkg imports, and Filament `md` libraries. Never
+  profile against Debug CRT, checked STL, Qt `*d`, Filament `mdd`/`matdbg`, or other Debug
+  dependency variants; those costs do not represent product performance. Deployment must use
+  vcpkg's recursive app-local resolver against the Release `bin` directory plus
+  `windeployqt --force --release`; copying only direct target DLLs is incomplete because Qt has
+  private dependencies such as `md4c.dll`, `z.dll`, and `libpng16.dll`.
+- In this two-artifact workflow, `Debug` is a path/configuration compatibility name for the Profile
+  build. It is not a traditional checked Debug build and must never be shipped. A traditional slow
+  Debug configuration is useful only for correctness diagnostics and is not one of the canonical
+  handoff artifacts; do not create or build it unless the user explicitly asks for a third build.
+- `tools/boot_tracy.ps1` is Debug-only. Its normal path configures `vs2026`, incrementally builds
+  `vs2026-debug --target quader`, validates the Debug-only Tracy contract, and launches exactly
+  `build/vs2026/Debug/quader.exe`; it must never select or accept the Release executable.
+- Release is the maximum-performance non-profiling build at `build/vs2026/Release/quader.exe`. It
+  uses `/O2`, aggressive inlining, function/data COMDAT packaging, and whole-program/link-time
+  optimization. It must not receive `QUADER_ENABLE_TRACY`, `TRACY_ENABLE`, `TRACY_ON_DEMAND`, or a
+  Tracy client link dependency, and it must not emit Debug information. The canonical preset also
+  disables optional Sentry instrumentation so neither handoff executable carries that runtime.
+  Release is the only shipping artifact.
+- A final handoff after any build must explicitly report both configurations, whether each build
+  succeeded, and the absolute path to each executable. Never describe a build as complete while
+  omitting either artifact.
+
 ## Fast Iteration Mode
 
 Only when the user's current request explicitly asks for `fast iteration mode`, skip automated
-tests and affected-check runs, implement the requested changes, and build the native `quader`
-executable as quickly as possible for manual testing. Still report build failures and do not claim
-untested behavior as verified. This exception applies only to the request that names the mode; when
-the user does not explicitly request it, follow the normal testing and verification workflow in
-this guide.
+tests and affected-check runs, implement the requested changes, and build both canonical native
+`quader` executables as quickly as possible for manual testing. Still report build failures and do
+not claim untested behavior as verified. This exception applies only to the request that names the
+mode; when the user does not explicitly request it, follow the normal testing and verification
+workflow in this guide.
 
 ## Command Behavior Regression Lock
 
@@ -383,14 +417,16 @@ When launching build or test commands through Codex tools, set timeouts to at le
 cmake --preset vs2026
 cmake --build --preset vs2026-debug
 cmake --build --preset vs2026-debug --target quader
+cmake --build --preset vs2026-release --target quader
 ctest --preset vs2026-debug
 ```
 
-Whenever a task changes any project file, final verification must include building the native app
-executable:
+Whenever a task changes any project file, final verification must include building both native app
+executables from the canonical tree:
 
 ```powershell
 cmake --build --preset vs2026-debug --target quader
+cmake --build --preset vs2026-release --target quader
 ```
 
 Run the C++ style gate only before commit/push, or when the user explicitly asks for clang-tidy or
@@ -398,15 +434,6 @@ a C++ style audit:
 
 ```powershell
 python tools/check_cpp_style.py
-```
-
-For local prototyping, the optional Ninja Multi-Config path keeps artifacts in `build/ninja-msvc`.
-Run it from a Visual Studio Developer PowerShell/CMD so `cl.exe` is on `PATH`.
-
-```powershell
-cmake --preset ninja-msvc
-cmake --build --preset ninja-msvc-debug --target quader
-ctest --preset ninja-msvc-debug
 ```
 
 ## Test Placement

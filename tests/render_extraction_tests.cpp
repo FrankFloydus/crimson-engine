@@ -1009,7 +1009,7 @@ TEST(RenderSceneSnapshotTests,
       build_render_tool_preview_snapshot(
           {ToolPreviewMesh{
               .source_entity = 7u,
-              .material = material,
+              .material = MaterialComponent{.material = material},
               .mesh = make_overlay_triangle_mesh(),
           }},
           assets);
@@ -1023,6 +1023,80 @@ TEST(RenderSceneSnapshotTests,
   EXPECT_EQ(records.front().material.primary_material.material_id, material);
   EXPECT_EQ(records.front().material_revision,
             records.front().material.revision);
+}
+
+TEST(RenderSceneSnapshotTests,
+     ToolPreviewSnapshotsPreserveProjectMaterialsAndSlotOverrides) {
+  AssetRegistry assets;
+  const AssetId first_slot_material =
+      assets.add_material(make_default_quader_material("Preview Slot A"));
+  const AssetId second_slot_material =
+      assets.add_material(make_default_quader_material("Preview Slot B"));
+  const ProjectAssetId project_material =
+      *ProjectAssetId::parse("44444444-4444-4444-8444-444444444444");
+  TestProjectMaterialResolver resolver;
+  resolver.revision_value = 61u;
+  resolver.material = RenderProjectMaterialSnapshot{
+      .evaluation =
+          RenderMaterialEvaluationSnapshot{
+              .project_material_id = project_material,
+              .kind = RenderMaterialEvaluationKind::Standard,
+              .identity_revision = 67u,
+              .content_revision = 71u,
+              .payload = RenderStandardMaterialEvaluationSnapshot{
+                  .base_color = {0.2f, 0.4f, 0.8f},
+                  .roughness = 0.3f,
+                  .metallic = 0.7f,
+              },
+          },
+      .catalog_revision = 73u,
+  };
+  const MaterialComponent first_material{
+      .material = MaterialReference::project(project_material),
+      .material_slots = {{3u, first_slot_material}},
+  };
+  const MaterialComponent second_material{
+      .material = MaterialReference::project(project_material),
+      .material_slots = {{3u, second_slot_material}},
+  };
+
+  const std::vector<RenderToolPreviewMeshRecord> records =
+      build_render_tool_preview_snapshot(
+          {
+              ToolPreviewMesh{
+                  .source_entity = 7u,
+                  .material = first_material,
+                  .mesh = make_overlay_triangle_mesh(),
+              },
+              ToolPreviewMesh{
+                  .source_entity = 8u,
+                  .material = second_material,
+                  .mesh = make_overlay_triangle_mesh(),
+              },
+          },
+          assets, nullptr, &resolver);
+
+  ASSERT_EQ(records.size(), 2u);
+  EXPECT_EQ(records.front().material_reference, first_material.material);
+  EXPECT_EQ(records.front().material_id, kInvalidAssetId);
+  EXPECT_EQ(records.front().material.component, first_material);
+  ASSERT_TRUE(records.front().material.primary_material.present);
+  EXPECT_EQ(records.front().material.primary_material.reference,
+            first_material.material);
+  const RenderMaterialAssetSnapshot *first_slot =
+      records.front().material.material_for_slot(3u);
+  ASSERT_NE(first_slot, nullptr);
+  EXPECT_TRUE(first_slot->reference.embedded());
+  EXPECT_EQ(first_slot->material_id, first_slot_material);
+  EXPECT_EQ(records.front().material_revision,
+            records.front().material.revision);
+  EXPECT_EQ(records.back().material.component, second_material);
+  const RenderMaterialAssetSnapshot *second_slot =
+      records.back().material.material_for_slot(3u);
+  ASSERT_NE(second_slot, nullptr);
+  EXPECT_EQ(second_slot->material_id, second_slot_material);
+  EXPECT_NE(records.front().material_revision,
+            records.back().material_revision);
 }
 
 TEST(RenderSceneSnapshotTests,
@@ -1042,13 +1116,16 @@ TEST(RenderSceneSnapshotTests,
       build_render_tool_preview_snapshot(
           {
               ToolPreviewMesh{.source_entity = 7u,
-                              .material = material,
+                              .material =
+                                  MaterialComponent{.material = material},
                               .mesh = make_overlay_triangle_mesh()},
               ToolPreviewMesh{.source_entity = 8u,
-                              .material = material,
+                              .material =
+                                  MaterialComponent{.material = material},
                               .mesh = make_overlay_triangle_mesh()},
               ToolPreviewMesh{.source_entity = kInvalidEntityId,
-                              .material = material,
+                              .material =
+                                  MaterialComponent{.material = material},
                               .mesh = make_overlay_triangle_mesh()},
           },
           assets, &local);
@@ -1078,7 +1155,8 @@ TEST(RenderSceneSnapshotTests,
       build_render_tool_preview_snapshot(
           {ToolPreviewMesh{.source_entity = kCanonicalMember,
                            .visibility_entity = kOccurrence,
-                           .material = material,
+                           .material =
+                               MaterialComponent{.material = material},
                            .mesh = make_overlay_triangle_mesh()}},
           assets, &local);
 
@@ -4406,6 +4484,66 @@ TEST(RenderInstanceBatchPlannerTests,
       plan_render_instance_batches(occurrences, 64u);
   EXPECT_EQ(classify_instance_batch_update(moved, changed_payload),
             RenderInstanceBatchUpdateKind::Rebuild);
+}
+
+TEST(RenderInstanceBatchPlannerTests,
+     VisibilityDeltaRetainsLayoutAndFiniteSourceTransforms) {
+  const RenderInstancePrimitiveKey key{
+      .geometry_payload = 71u,
+      .material_payload = 73u,
+      .index_count = 3u,
+  };
+  const RenderInstanceBounds bounds{
+      .min = {-1.0f, -1.0f, -1.0f},
+      .max = {1.0f, 1.0f, 1.0f},
+      .present = true,
+  };
+  std::array<RenderInstancePrimitiveOccurrence, 3u> occurrences;
+  for (std::size_t index = 0u; index < occurrences.size(); ++index) {
+    QMat4 transform;
+    transform.values[12] = static_cast<float>(index * 10u);
+    occurrences[index] = {
+        .key = key,
+        .occurrence = static_cast<std::uint64_t>(index + 1u),
+        .world_transform = transform,
+        .local_bounds = bounds,
+    };
+  }
+
+  const RenderInstanceBatchPlan visible =
+      plan_render_instance_batches(occurrences, 64u);
+  occurrences[2].visible = false;
+  const RenderInstanceBatchPlan partially_hidden =
+      plan_render_instance_batches(occurrences, 64u);
+
+  ASSERT_EQ(visible.chunks.size(), 1u);
+  ASSERT_EQ(partially_hidden.chunks.size(), 1u);
+  const RenderInstanceBatchChunk &before = visible.chunks.front();
+  const RenderInstanceBatchChunk &after =
+      partially_hidden.chunks.front();
+  EXPECT_EQ(after.occurrences, before.occurrences);
+  EXPECT_EQ(after.world_transforms.size(), before.world_transforms.size());
+  EXPECT_EQ(after.visible_occurrence_count, 2u);
+  EXPECT_EQ(after.visibility,
+            (std::vector<std::uint8_t>{1u, 1u, 0u}));
+  EXPECT_FLOAT_EQ(after.world_transforms[2].values[12], 20.0f)
+      << "suppression metadata must not inject a singular or far transform";
+  ASSERT_TRUE(after.world_bounds.present);
+  EXPECT_FLOAT_EQ(after.world_bounds.max.x, 11.0f);
+  EXPECT_EQ(classify_instance_batch_update(visible, partially_hidden),
+            RenderInstanceBatchUpdateKind::TransformsOnly);
+
+  for (RenderInstancePrimitiveOccurrence &occurrence : occurrences) {
+    occurrence.visible = false;
+  }
+  const RenderInstanceBatchPlan fully_hidden =
+      plan_render_instance_batches(occurrences, 64u);
+  ASSERT_EQ(fully_hidden.chunks.size(), 1u);
+  EXPECT_EQ(fully_hidden.chunks.front().occurrences, before.occurrences);
+  EXPECT_EQ(fully_hidden.chunks.front().visible_occurrence_count, 0u);
+  EXPECT_FALSE(fully_hidden.chunks.front().world_bounds.present);
+  EXPECT_EQ(classify_instance_batch_update(partially_hidden, fully_hidden),
+            RenderInstanceBatchUpdateKind::TransformsOnly);
 }
 
 TEST(RenderInstanceBatchPlannerTests,

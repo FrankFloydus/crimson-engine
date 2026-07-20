@@ -12,6 +12,7 @@
 #include "render/mesh_renderable_proxy.hpp"
 #include "render/scene_render_extraction.hpp"
 
+#include <cstddef>
 #include <cstdint>
 #include <unordered_map>
 #include <unordered_set>
@@ -27,6 +28,13 @@ class ViewportSettings;
 class MeshRenderableCache {
 public:
     using MeshProxy = MeshRenderableProxy;
+
+    struct UpdateStats final {
+      std::uint64_t topology_stable_geometry_rebind_count = 0u;
+      std::uint64_t full_proxy_rebuild_count = 0u;
+      std::size_t retired_proxy_count = 0u;
+      std::size_t retired_proxy_high_watermark = 0u;
+    };
 
     MeshRenderableCache() = default;
     MeshRenderableCache(const MeshRenderableCache&) = delete;
@@ -58,10 +66,22 @@ public:
       return retired_mesh_proxies_.size();
     }
 
+    [[nodiscard]] UpdateStats update_stats() const {
+      return {
+          .topology_stable_geometry_rebind_count =
+              topology_stable_geometry_rebind_count_,
+          .full_proxy_rebuild_count = full_proxy_rebuild_count_,
+          .retired_proxy_count = retired_mesh_proxies_.size(),
+          .retired_proxy_high_watermark = retired_proxy_high_watermark_,
+      };
+    }
+
     static std::uint64_t mesh_asset_signature(std::uint64_t hash,
                                               const MeshAsset &mesh);
 
   private:
+    bool try_rebind_topology_stable_geometry(
+        const RenderSceneMeshRecord &mesh);
     void retire_proxy(MeshRenderableProxy &&proxy);
     void apply_preview_suppression(EntityId entity_id);
 
@@ -73,6 +93,9 @@ public:
     std::vector<MeshRenderableProxy> retired_mesh_proxies_;
     std::unordered_set<EntityId> preview_suppressed_entities_;
     std::uint64_t surface_grid_signature_ = 0u;
+    std::uint64_t topology_stable_geometry_rebind_count_ = 0u;
+    std::uint64_t full_proxy_rebuild_count_ = 0u;
+    std::size_t retired_proxy_high_watermark_ = 0u;
     bool surface_grid_dirty_ = true;
 };
 

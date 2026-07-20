@@ -30,6 +30,7 @@
 #include <memory>
 #include <span>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 namespace quader {
@@ -749,10 +750,164 @@ bool MeshRenderableFactory::update_dynamic_geometry(
   return true;
 }
 
+template <typename Resource>
+bool same_geometry_topology(const Resource &resource,
+                            const RenderMeshAssetSnapshot &mesh) {
+  const std::span<const MeshVertex> previous_vertices =
+      resource.payload != nullptr
+          ? std::span<const MeshVertex>(resource.payload->vertices)
+          : std::span<const MeshVertex>(resource.vertices);
+  const std::span<const std::uint32_t> previous_indices =
+      resource.payload != nullptr
+          ? std::span<const std::uint32_t>(resource.payload->indices)
+          : std::span<const std::uint32_t>(resource.indices);
+  const std::span<const MeshPrimitiveSpan> previous_primitives =
+      resource.payload != nullptr
+          ? std::span<const MeshPrimitiveSpan>(resource.payload->primitives)
+          : std::span<const MeshPrimitiveSpan>(resource.primitives);
+  return previous_vertices.size() == mesh.vertices.size() &&
+         previous_indices.size() == mesh.indices.size() &&
+         previous_primitives.size() == mesh.primitives.size() &&
+         std::equal(previous_indices.begin(), previous_indices.end(),
+                    mesh.indices.begin()) &&
+         std::equal(previous_primitives.begin(), previous_primitives.end(),
+                    mesh.primitives.begin());
+}
+
+bool MeshRenderableFactory::try_rebind_static_geometry(
+    std::span<MeshRenderableProxy *> proxies,
+    const RenderMeshAssetSnapshot &mesh) {
+  QDR_PROFILE_FUNCTION();
+  if (!initialized() || proxies.empty() || !mesh.renderable() ||
+      geometry_cache_ == nullptr) {
+    return false;
+  }
+
+  const std::vector<MeshPrimitiveSpan> primitive_spans =
+      coalesced_render_mesh_primitive_spans(mesh);
+  filament::RenderableManager &renderables = engine_->getRenderableManager();
+  {
+    QDR_PROFILE_SCOPE("Mesh renderable validate topology-stable rebind");
+    for (const MeshRenderableProxy *proxy : proxies) {
+      if (proxy == nullptr || !proxy->entity || proxy->dynamic_geometry ||
+          proxy->instance_buffer != nullptr ||
+          proxy->mesh != mesh.mesh_id ||
+          proxy->geometry_resource == 0u || proxy->vertex_buffer == nullptr ||
+          proxy->index_buffer == nullptr || !proxy->owns_mesh_buffers ||
+          !proxy->owns_material_instances ||
+          proxy->vertex_count != mesh.vertices.size() ||
+          proxy->index_count != mesh.indices.size() ||
+          proxy->material_slots.size() != primitive_spans.size() ||
+          proxy->material_instances.size() != primitive_spans.size()) {
+        return false;
+      }
+
+      const auto resource =
+          geometry_cache_->resources.find(proxy->geometry_resource);
+      if (resource == geometry_cache_->resources.end()) {
+        return false;
+      }
+      const GeometryCacheState::Resource &geometry = *resource->second;
+      if (geometry.vertex_buffer != proxy->vertex_buffer ||
+          geometry.index_buffer != proxy->index_buffer ||
+          !same_geometry_topology(geometry, mesh)) {
+        return false;
+      }
+      for (std::size_t primitive_index = 0u;
+           primitive_index < primitive_spans.size(); ++primitive_index) {
+        if (proxy->material_slots[primitive_index] !=
+            primitive_spans[primitive_index].material_slot) {
+          return false;
+        }
+      }
+
+      const filament::RenderableManager::Instance instance =
+          renderables.getInstance(proxy->entity);
+      if (!instance ||
+          renderables.getPrimitiveCount(instance) != primitive_spans.size()) {
+        return false;
+      }
+      for (std::size_t primitive_index = 0u;
+           primitive_index < primitive_spans.size(); ++primitive_index) {
+        if (renderables.getMaterialInstanceAt(instance, primitive_index) !=
+            proxy->material_instances[primitive_index]) {
+          return false;
+        }
+      }
+    }
+    for (std::size_t left = 0u; left < proxies.size(); ++left) {
+      for (std::size_t right = left + 1u; right < proxies.size(); ++right) {
+        if (proxies[left] == proxies[right]) {
+          return false;
+        }
+      }
+    }
+  }
+
+  // Acquire every replacement reference before changing a renderable. Once
+  // validation and acquisition complete, Filament's setGeometryAt operation
+  // is noexcept, so all passes advance together or the caller can take the
+  // unchanged full-rebuild fallback.
+  std::vector<MeshRenderableProxy> replacement_geometry;
+  replacement_geometry.reserve(proxies.size());
+  {
+    QDR_PROFILE_SCOPE("Mesh renderable acquire topology-stable geometry");
+    for (std::size_t index = 0u; index < proxies.size(); ++index) {
+      replacement_geometry.emplace_back();
+      if (!acquire_geometry(mesh, replacement_geometry.back())) {
+        for (MeshRenderableProxy &replacement : replacement_geometry) {
+          release_geometry(replacement);
+        }
+        return false;
+      }
+    }
+  }
+
+  const filament::Box replacement_bounds = compute_bounds(mesh);
+  {
+    QDR_PROFILE_SCOPE("Mesh renderable bind topology-stable geometry");
+    for (std::size_t proxy_index = 0u; proxy_index < proxies.size();
+         ++proxy_index) {
+      MeshRenderableProxy &proxy = *proxies[proxy_index];
+      const MeshRenderableProxy &replacement =
+          replacement_geometry[proxy_index];
+      const filament::RenderableManager::Instance instance =
+          renderables.getInstance(proxy.entity);
+      for (std::size_t primitive_index = 0u;
+           primitive_index < primitive_spans.size(); ++primitive_index) {
+        const MeshPrimitiveSpan &primitive = primitive_spans[primitive_index];
+        renderables.setGeometryAt(
+            instance, primitive_index,
+            filament::RenderableManager::PrimitiveType::TRIANGLES,
+            replacement.vertex_buffer, replacement.index_buffer,
+            primitive.index_offset, primitive.index_count);
+      }
+      renderables.setAxisAlignedBoundingBox(instance, replacement_bounds);
+    }
+  }
+
+  for (std::size_t proxy_index = 0u; proxy_index < proxies.size();
+       ++proxy_index) {
+    MeshRenderableProxy &proxy = *proxies[proxy_index];
+    MeshRenderableProxy &replacement = replacement_geometry[proxy_index];
+    release_geometry(proxy);
+    proxy.mesh = mesh.mesh_id;
+    proxy.mesh_revision = mesh.mesh_revision;
+    proxy.geometry_resource =
+        std::exchange(replacement.geometry_resource, 0u);
+    proxy.owns_mesh_buffers = replacement.owns_mesh_buffers;
+    proxy.vertex_buffer = std::exchange(replacement.vertex_buffer, nullptr);
+    proxy.index_buffer = std::exchange(replacement.index_buffer, nullptr);
+    proxy.vertex_count = std::exchange(replacement.vertex_count, 0u);
+    proxy.index_count = std::exchange(replacement.index_count, 0u);
+  }
+  return true;
+}
+
 MeshRenderableProxy MeshRenderableFactory::create_shared_instance(
     EntityId entity_id, const RenderMeshAssetSnapshot &mesh,
     const MeshRenderableProxy &prototype, const QMat4 &world_transform,
-    std::uint8_t layer_mask, std::uint8_t channel) {
+    std::uint8_t layer_mask, std::uint8_t channel, bool receive_shadows) {
   QDR_PROFILE_FUNCTION();
   MeshRenderableProxy proxy;
   proxy.owns_mesh_buffers = false;
@@ -790,7 +945,7 @@ MeshRenderableProxy MeshRenderableFactory::create_shared_instance(
       .layerMask(kViewportAllLayerMask, layer_mask)
       .channel(channel)
       .castShadows(proxy.cast_shadows)
-      .receiveShadows(false)
+      .receiveShadows(receive_shadows)
       .build(*engine_, proxy.entity);
 
   engine_->getTransformManager().create(proxy.entity);
@@ -1039,7 +1194,15 @@ bool MeshRenderableFactory::update_explicit_instances(
     const RenderInstanceBounds &world_bounds) {
   QDR_PROFILE_FUNCTION();
   if (!initialized() || proxy.instance_buffer == nullptr || !proxy.entity ||
-      proxy.instance_buffer->getInstanceCount() != world_transforms.size()) {
+      world_transforms.empty() ||
+      world_transforms.size() > proxy.instance_buffer->getInstanceCount()) {
+    return false;
+  }
+  filament::RenderableManager &renderables = engine_->getRenderableManager();
+  const filament::RenderableManager::Instance renderable =
+      renderables.getInstance(proxy.entity);
+  if (!renderable ||
+      renderables.getInstanceCount(renderable) != world_transforms.size()) {
     return false;
   }
   std::vector<filament::math::mat4f> transforms;
@@ -1049,14 +1212,97 @@ bool MeshRenderableFactory::update_explicit_instances(
   }
   proxy.instance_buffer->setLocalTransforms(transforms.data(),
                                              transforms.size());
-  filament::RenderableManager &renderables = engine_->getRenderableManager();
-  const filament::RenderableManager::Instance renderable =
-      renderables.getInstance(proxy.entity);
-  if (!renderable) {
-    return false;
-  }
   renderables.setAxisAlignedBoundingBox(renderable,
                                         filament_bounds(world_bounds));
+  return true;
+}
+
+bool MeshRenderableFactory::rebind_explicit_instances(
+    const MeshRenderableProxy &proxy, MeshPrimitiveSpan primitive,
+    std::span<const QMat4> active_world_transforms,
+    const RenderInstanceBounds &world_bounds, bool cast_shadows,
+    bool receive_shadows, bool double_sided, std::uint8_t layer_mask,
+    bool depth_only, std::uint8_t channel) {
+  QDR_PROFILE_FUNCTION();
+  if (!initialized() || !proxy.entity || proxy.instance_buffer == nullptr ||
+      proxy.vertex_buffer == nullptr || proxy.index_buffer == nullptr ||
+      proxy.material_instances.size() != 1u ||
+      proxy.material_instances.front() == nullptr ||
+      proxy.material_slots.size() != 1u ||
+      proxy.material_slots.front() != primitive.material_slot ||
+      proxy.cast_shadows != cast_shadows ||
+      proxy.double_sided != double_sided ||
+      active_world_transforms.size() >
+          proxy.instance_buffer->getInstanceCount() ||
+      primitive.index_count == 0u ||
+      static_cast<std::uint64_t>(primitive.index_offset) +
+              primitive.index_count >
+          proxy.index_count) {
+    return false;
+  }
+
+  filament::RenderableManager &renderables = engine_->getRenderableManager();
+  const filament::RenderableManager::Instance current =
+      renderables.getInstance(proxy.entity);
+  if (!current || renderables.getPrimitiveCount(current) != 1u ||
+      renderables.getMaterialInstanceAt(current, 0u) !=
+          proxy.material_instances.front()) {
+    return false;
+  }
+
+  if (active_world_transforms.empty()) {
+    QDR_PROFILE_SCOPE("Explicit instance rebind hide empty batch");
+    renderables.setLayerMask(current, kViewportAllLayerMask, 0u);
+    return true;
+  }
+
+  std::vector<filament::math::mat4f> transforms;
+  transforms.reserve(active_world_transforms.size());
+  for (const QMat4 &transform : active_world_transforms) {
+    transforms.push_back(make_transform(transform));
+  }
+  proxy.instance_buffer->setLocalTransforms(transforms.data(),
+                                             transforms.size());
+
+  if (renderables.getInstanceCount(current) ==
+      active_world_transforms.size()) {
+    QDR_PROFILE_SCOPE("Explicit instance update retained active count");
+    renderables.setAxisAlignedBoundingBox(current,
+                                          filament_bounds(world_bounds));
+    renderables.setLayerMask(current, kViewportAllLayerMask, layer_mask);
+    renderables.setCastShadows(current, cast_shadows);
+    renderables.setReceiveShadows(current,
+                                  receive_shadows && !depth_only);
+    return true;
+  }
+
+  {
+    QDR_PROFILE_SCOPE("Explicit instance rebind renderable component");
+    scene_->remove(proxy.entity);
+    renderables.destroy(proxy.entity);
+    const filament::RenderableManager::Builder::Result result =
+        filament::RenderableManager::Builder(1u)
+            .geometry(0u,
+                      filament::RenderableManager::PrimitiveType::TRIANGLES,
+                      proxy.vertex_buffer, proxy.index_buffer,
+                      primitive.index_offset, primitive.index_count)
+            .material(0u, proxy.material_instances.front())
+            .instances(active_world_transforms.size(), proxy.instance_buffer)
+            .boundingBox(filament_bounds(world_bounds))
+            .layerMask(kViewportAllLayerMask, layer_mask)
+            .channel(channel)
+            .castShadows(cast_shadows)
+            .receiveShadows(receive_shadows && !depth_only)
+            .build(*engine_, proxy.entity);
+    if (result != filament::RenderableManager::Builder::Success) {
+      // The proxy still owns every retained resource and its transform/entity
+      // components. Leaving only the renderable component detached gives the
+      // instance cache one deterministic state to destroy before its
+      // immediate full-rebuild fallback.
+      return false;
+    }
+    scene_->addEntity(proxy.entity);
+  }
   return true;
 }
 
@@ -1155,6 +1401,14 @@ void MeshRenderableFactory::remove_from_scene(
   }
 
   scene_->remove(proxy.entity);
+}
+
+void MeshRenderableFactory::remove_from_scene(
+    std::span<const utils::Entity> entities) {
+  if (!scene_ || entities.empty()) {
+    return;
+  }
+  scene_->removeEntities(entities.data(), entities.size());
 }
 
 void MeshRenderableFactory::destroy(MeshRenderableProxy& proxy) {

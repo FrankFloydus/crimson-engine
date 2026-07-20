@@ -41,6 +41,11 @@ configure_file(
 
 include(cmake/QuaderBuildOptions.cmake)
 
+# Release is the canonical maximum-throughput build. Enable whole-program
+# optimization before any project-owned target is created so static libraries
+# participate in the final executable's link-time optimization pass.
+set(CMAKE_INTERPROCEDURAL_OPTIMIZATION_RELEASE ON)
+
 set(_QUADER_DEFAULT_FILAMENT_SDK_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../_SOURCES/filament-v1.71.6-windows")
 if(DEFINED ENV{FILAMENT_SDK_ROOT} AND NOT "$ENV{FILAMENT_SDK_ROOT}" STREQUAL "")
     file(TO_CMAKE_PATH "$ENV{FILAMENT_SDK_ROOT}" _QUADER_DEFAULT_FILAMENT_SDK_ROOT)
@@ -53,9 +58,47 @@ if(MSVC)
     if(POLICY CMP0141)
         cmake_policy(SET CMP0141 NEW)
     endif()
-    set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
+
+    # Debug is Quader's Tracy profiling configuration, not a checked-runtime
+    # configuration. Map imported dependencies to their Release artifacts and
+    # use the Release CRT so captures measure product behavior instead of Qt,
+    # Filament, STL, and vcpkg debug-library overhead. Embedded symbols and
+    # Tracy remain enabled for CONFIG:Debug.
+    # The empty fallback keeps configuration-less imported tool executables
+    # (for example Qt's moc/rcc/windeployqt targets) valid.
+    set(CMAKE_MAP_IMPORTED_CONFIG_DEBUG "Release;")
+    set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreadedDLL")
     set(CMAKE_MSVC_DEBUG_INFORMATION_FORMAT "$<$<CONFIG:Debug,RelWithDebInfo>:Embedded>")
-    add_compile_options(/FS)
+
+    # Remove MSVC's optimization-incompatible Debug defaults before applying
+    # the profiling configuration's Release-equivalent code-generation policy.
+    foreach(_quader_debug_flag /Od /Ob0 /RTC1)
+        string(REPLACE "${_quader_debug_flag}" "" CMAKE_CXX_FLAGS_DEBUG
+            "${CMAKE_CXX_FLAGS_DEBUG}")
+    endforeach()
+    string(STRIP "${CMAKE_CXX_FLAGS_DEBUG}" CMAKE_CXX_FLAGS_DEBUG)
+
+    add_compile_definitions(
+        $<$<CONFIG:Debug>:NDEBUG>
+        $<$<CONFIG:Debug>:QT_NO_DEBUG>
+        $<$<CONFIG:Debug>:_ITERATOR_DEBUG_LEVEL=0>)
+    add_compile_options(
+        /FS
+        $<$<CONFIG:Debug>:/O2>
+        $<$<CONFIG:Debug>:/Ob2>
+        $<$<CONFIG:Debug>:/Gy>
+        $<$<CONFIG:Debug>:/Gw>
+        $<$<CONFIG:Release>:/O2>
+        $<$<CONFIG:Release>:/Ob3>
+        $<$<CONFIG:Release>:/Gy>
+        $<$<CONFIG:Release>:/Gw>)
+    add_link_options(
+        $<$<CONFIG:Debug>:/INCREMENTAL:NO>
+        $<$<CONFIG:Debug>:/OPT:REF>
+        $<$<CONFIG:Debug>:/OPT:ICF>
+        $<$<CONFIG:Release>:/INCREMENTAL:NO>
+        $<$<CONFIG:Release>:/OPT:REF>
+        $<$<CONFIG:Release>:/OPT:ICF>)
 endif()
 
 function(quader_enable_common_pch target)
@@ -469,7 +512,7 @@ target_compile_features(quader_api PUBLIC cxx_std_20)
 
 function(quader_filament_lib out_var lib_name)
     set(${out_var}
-        "${FILAMENT_SDK_ROOT}/lib/x86_64/$<IF:$<CONFIG:Debug>,mdd,md>/${lib_name}.lib"
+        "${FILAMENT_SDK_ROOT}/lib/x86_64/md/${lib_name}.lib"
         PARENT_SCOPE)
 endfunction()
 
@@ -507,14 +550,11 @@ function(quader_validate_filament_sdk sdk_root)
     quader_require_existing_path("${sdk_root}/include/filament/Engine.h" "Filament SDK header include/filament/Engine.h")
     quader_require_existing_path("${sdk_root}/bin/matc.exe" "Filament material compiler bin/matc.exe")
 
-    foreach(_quader_filament_runtime IN ITEMS md mdd)
-        foreach(_quader_filament_lib IN LISTS QUADER_FILAMENT_LIB_NAMES)
-            quader_require_existing_path(
-                "${sdk_root}/lib/x86_64/${_quader_filament_runtime}/${_quader_filament_lib}.lib"
-                "Filament ${_quader_filament_runtime} library ${_quader_filament_lib}.lib")
-        endforeach()
+    foreach(_quader_filament_lib IN LISTS QUADER_FILAMENT_LIB_NAMES)
+        quader_require_existing_path(
+            "${sdk_root}/lib/x86_64/md/${_quader_filament_lib}.lib"
+            "Filament release-runtime library ${_quader_filament_lib}.lib")
     endforeach()
-    quader_require_existing_path("${sdk_root}/lib/x86_64/mdd/matdbg.lib" "Filament debug library matdbg.lib")
 endfunction()
 
 quader_validate_filament_sdk("${FILAMENT_SDK_ROOT}")
@@ -526,9 +566,6 @@ foreach(lib_name IN LISTS QUADER_FILAMENT_LIB_NAMES)
     quader_filament_lib(lib_path "${lib_name}")
     target_link_libraries(filament_sdk INTERFACE "${lib_path}")
 endforeach()
-
-target_link_libraries(filament_sdk INTERFACE
-    "$<$<CONFIG:Debug>:${FILAMENT_SDK_ROOT}/lib/x86_64/mdd/matdbg.lib>")
 
 if(WIN32)
     target_link_libraries(filament_sdk INTERFACE gdi32 user32 opengl32)
@@ -934,9 +971,17 @@ if(WIN32)
         OBJECT_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/quader.ico")
 endif()
 
+# vcpkg's default app-local hook keys only on the configuration name and would
+# therefore copy x64-windows/debug DLLs into Quader's Release-semantics Debug
+# profiling directory. Suppress it for this executable; the post-build command
+# below copies the mapped Release runtime targets explicitly.
+set(_QUADER_SAVED_VCPKG_APPLOCAL_DEPS "${VCPKG_APPLOCAL_DEPS}")
+set(VCPKG_APPLOCAL_DEPS OFF)
 add_executable(quader WIN32
     src/main.cpp
     ${QUADER_NATIVE_APPLICATION_RESOURCES})
+set(VCPKG_APPLOCAL_DEPS "${_QUADER_SAVED_VCPKG_APPLOCAL_DEPS}")
+unset(_QUADER_SAVED_VCPKG_APPLOCAL_DEPS)
 qt_add_resources(quader "quader_application_icons"
     PREFIX "/quader/icons"
     BASE "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons"
@@ -973,15 +1018,70 @@ if(WIN32)
     if(NOT TARGET Qt6::windeployqt)
         message(FATAL_ERROR "Qt6::windeployqt is required to package the Quader Windows runtime.")
     endif()
+
+    get_filename_component(_QUADER_VCPKG_BUILDSYSTEMS_DIR
+        "${CMAKE_TOOLCHAIN_FILE}" DIRECTORY)
+    set(_QUADER_VCPKG_APPLOCAL_SCRIPT
+        "${_QUADER_VCPKG_BUILDSYSTEMS_DIR}/msbuild/applocal.ps1")
+    quader_require_existing_path(
+        "${_QUADER_VCPKG_APPLOCAL_SCRIPT}"
+        "vcpkg recursive app-local deployment script")
+    if(NOT DEFINED Z_VCPKG_POWERSHELL_PATH OR
+       NOT EXISTS "${Z_VCPKG_POWERSHELL_PATH}")
+        find_program(Z_VCPKG_POWERSHELL_PATH
+            NAMES powershell.exe powershell
+            REQUIRED)
+    endif()
+
+    # Remove every DLL name supplied by either vcpkg runtime before deploying.
+    # This prevents a newer stale Debug DLL from surviving app-local's
+    # timestamp check when the Debug-named Profile directory is rebuilt.
+    file(GLOB _QUADER_VCPKG_RELEASE_DLLS
+        RELATIVE "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/bin"
+        "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/bin/*.dll")
+    file(GLOB _QUADER_VCPKG_DEBUG_DLLS
+        RELATIVE "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/debug/bin"
+        "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/debug/bin/*.dll")
+    set(_QUADER_VCPKG_RUNTIME_DLLS
+        ${_QUADER_VCPKG_RELEASE_DLLS}
+        ${_QUADER_VCPKG_DEBUG_DLLS})
+    list(REMOVE_DUPLICATES _QUADER_VCPKG_RUNTIME_DLLS)
+    set(_QUADER_STALE_RUNTIME_PATHS)
+    foreach(_quader_runtime_dll IN LISTS _QUADER_VCPKG_RUNTIME_DLLS)
+        list(APPEND _QUADER_STALE_RUNTIME_PATHS
+            "$<TARGET_FILE_DIR:quader>/${_quader_runtime_dll}")
+    endforeach()
+
+    add_custom_command(TARGET quader PRE_BUILD
+        COMMAND "${CMAKE_COMMAND}" -E rm -f
+                ${_QUADER_STALE_RUNTIME_PATHS}
+        COMMAND "${CMAKE_COMMAND}" -E remove_directory
+                "$<TARGET_FILE_DIR:quader>/imageformats"
+        COMMAND "${CMAKE_COMMAND}" -E remove_directory
+                "$<TARGET_FILE_DIR:quader>/platforms"
+        COMMENT "Removing stale vcpkg and Qt runtime files from the native output"
+        COMMAND_EXPAND_LISTS
+        VERBATIM)
     add_custom_command(TARGET quader POST_BUILD
         COMMAND "$<TARGET_FILE:Qt6::windeployqt>"
-                --$<IF:$<CONFIG:Debug>,debug,release>
+                --force
+                --release
                 --dir "$<TARGET_FILE_DIR:quader>"
                 --no-translations
                 --skip-plugin-types styles
                 --include-plugins qwindows
                 "$<TARGET_FILE:quader>"
         COMMENT "Deploying the Qt runtime and qwindows platform plugin"
+        VERBATIM)
+    add_custom_command(TARGET quader POST_BUILD
+        COMMAND "${Z_VCPKG_POWERSHELL_PATH}"
+                -NoProfile
+                -ExecutionPolicy Bypass
+                -File "${_QUADER_VCPKG_APPLOCAL_SCRIPT}"
+                -targetBinary "$<TARGET_FILE:quader>"
+                -installedDir
+                "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/bin"
+        COMMENT "Deploying the complete recursive Release runtime dependency closure"
         VERBATIM)
 endif()
 

@@ -142,11 +142,16 @@ void morton_sort_group(PrimitiveGroup &group) {
 }
 
 std::uint64_t transform_signature(
-    std::span<const QMat4> world_transforms) {
+    std::span<const QMat4> world_transforms,
+    std::span<const std::uint8_t> visibility) {
   RenderSignatureBuilder signature;
   signature.add_size(world_transforms.size());
-  for (const QMat4 &transform : world_transforms) {
-    signature.add_mat4(transform);
+  for (std::size_t index = 0u; index < world_transforms.size(); ++index) {
+    const bool visible = index >= visibility.size() || visibility[index] != 0u;
+    signature.add_bool(visible);
+    if (visible) {
+      signature.add_mat4(world_transforms[index]);
+    }
   }
   return signature.value();
 }
@@ -154,7 +159,8 @@ std::uint64_t transform_signature(
 bool same_layout(const RenderInstanceBatchChunk &left,
                  const RenderInstanceBatchChunk &right) {
   return left.key == right.key && left.occurrences == right.occurrences &&
-         left.world_transforms.size() == right.world_transforms.size();
+         left.world_transforms.size() == right.world_transforms.size() &&
+         left.visibility.size() == right.visibility.size();
 }
 
 } // namespace
@@ -209,17 +215,23 @@ RenderInstanceBatchPlan plan_render_instance_batches(
       chunk.key = group.key;
       chunk.occurrences.reserve(end - offset);
       chunk.world_transforms.reserve(end - offset);
+      chunk.visibility.reserve(end - offset);
       for (std::size_t index = offset; index < end; ++index) {
         const PrimitiveGroup::Occurrence &planned = group.occurrences[index];
         const RenderInstancePrimitiveOccurrence &occurrence = *planned.source;
         chunk.occurrences.push_back(occurrence.occurrence);
         chunk.world_transforms.push_back(occurrence.world_transform);
-        if (planned.world_bounds.present) {
+        chunk.visibility.push_back(occurrence.visible ? 1u : 0u);
+        if (occurrence.visible) {
+          ++chunk.visible_occurrence_count;
+        }
+        if (occurrence.visible && planned.world_bounds.present) {
           include_point(chunk.world_bounds, planned.world_bounds.min);
           include_point(chunk.world_bounds, planned.world_bounds.max);
         }
       }
-      chunk.transform_signature = transform_signature(chunk.world_transforms);
+      chunk.transform_signature =
+          transform_signature(chunk.world_transforms, chunk.visibility);
       plan.chunks.push_back(std::move(chunk));
     }
   }

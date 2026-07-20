@@ -98,6 +98,10 @@ public:
     void shutdown();
     void set_project_material_resolver(
         const RenderProjectMaterialResolver *resolver);
+    [[nodiscard]] const RenderProjectMaterialResolver *
+    project_material_resolver() const {
+      return project_material_resolver_;
+    }
     void bind_scene(RenderSceneBindingKey scene_binding);
     void sync(const SceneDocument &document, const AssetRegistry &assets,
               std::uint64_t frame_index = 0,
@@ -115,7 +119,7 @@ public:
         ViewportOverlayFrame base_frame,
         const RenderOverlaySelectionSnapshot &snapshot,
         const ViewportSceneOverlayFrameRequest &request) const;
-    void
+    [[nodiscard]] ToolPreviewSubmissionResult
     set_tool_preview_meshes(std::vector<RenderToolPreviewMeshRecord> meshes);
     [[nodiscard]] std::uint64_t tool_preview_submission_revision() const {
       return tool_preview_submission_revision_;
@@ -124,6 +128,8 @@ public:
       return tool_preview_overlay_suppression_dirty_;
     }
     [[nodiscard]] SceneRenderResourceDiagnostics diagnostics() const;
+    /** Drains one retired preview proxy during an explicitly idle UI slice. */
+    void perform_idle_resource_maintenance();
     /// Restricts transient overlay work to currently visible workspace panes;
     /// slots leaving the layout are released and lazily resubmitted if shown.
     void set_active_overlay_viewports(std::uint8_t viewport_mask);

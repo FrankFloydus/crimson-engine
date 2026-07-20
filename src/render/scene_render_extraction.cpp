@@ -1068,11 +1068,13 @@ SceneRenderExtractionPlan build_scene_render_extraction_plan(
 
 std::vector<RenderToolPreviewMeshRecord> build_render_tool_preview_snapshot(
     const std::vector<ToolPreviewMesh> &meshes, const AssetRegistry &assets,
-    const ViewportLocalVisibilitySnapshot *local_visibility) {
+    const ViewportLocalVisibilitySnapshot *local_visibility,
+    const RenderProjectMaterialResolver *project_material_resolver) {
   QDR_PROFILE_FUNCTION();
   std::vector<RenderToolPreviewMeshRecord> records;
   records.reserve(meshes.size());
-  std::vector<std::pair<AssetId, RenderMaterialBindingSnapshot>> material_cache;
+  std::vector<std::pair<MaterialComponent, RenderMaterialBindingSnapshot>>
+      material_cache;
   material_cache.reserve(4U);
   for (const ToolPreviewMesh &mesh : meshes) {
     const EntityId visibility_entity =
@@ -1084,15 +1086,15 @@ std::vector<RenderToolPreviewMeshRecord> build_render_tool_preview_snapshot(
     }
     auto cached_material = std::ranges::find(
         material_cache, mesh.material,
-        [](const auto &entry) -> AssetId {
+        [](const auto &entry) -> const MaterialComponent & {
           return entry.first;
         });
     if (cached_material == material_cache.end()) {
       QDR_PROFILE_SCOPE("Tool preview build unique material snapshot");
-      const MaterialComponent material{.material = mesh.material};
       material_cache.emplace_back(
           mesh.material,
-          build_render_material_binding_snapshot(assets, &material));
+          build_render_material_binding_snapshot(
+              assets, &mesh.material, project_material_resolver));
       cached_material = std::prev(material_cache.end());
     }
     RenderMaterialBindingSnapshot material_snapshot =
@@ -1101,7 +1103,8 @@ std::vector<RenderToolPreviewMeshRecord> build_render_tool_preview_snapshot(
         .source_object_id = mesh.source_object_id,
         .source_entity = mesh.source_entity,
         .visibility_entity = visibility_entity,
-        .material_id = mesh.material,
+        .material_reference = mesh.material.material,
+        .material_id = mesh.material.material.embedded_asset(),
         .mesh = mesh.mesh,
         .material = std::move(material_snapshot),
         .material_revision = 0u,

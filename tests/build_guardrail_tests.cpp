@@ -707,9 +707,9 @@ TEST(BuildGuardrailTests, FormerSdkBoundaryIsAbsorbedIntoAppBuild) {
   expect_missing(presets, "vs2026-sdk-tests");
   expect_missing(presets, "QUADER_BUILD_SDK_TESTS");
   expect_missing(presets, "quader_sdk_tests");
-  expect_contains(presets, "\"name\": \"ninja-msvc\"");
-  expect_contains(presets, "\"generator\": \"Ninja Multi-Config\"");
-  expect_contains(presets, "${sourceDir}/build/ninja-msvc");
+  expect_contains(presets, "\"name\": \"vs2026-release\"");
+  expect_contains(presets, "${sourceDir}/build/vs2026");
+  expect_missing(presets, "ninja-msvc");
 
   expect_contains(build_files, "QUADER_CANONICAL_POLYGON_SOURCES");
   expect_contains(build_files,
@@ -939,6 +939,112 @@ TEST(BuildGuardrailTests, BuildOptionsAndDependencyPinsHaveSingleCMakeOwner) {
   for (const std::string &needle : retired_modeling_test_framework_needles()) {
     expect_missing(build_policy, needle);
   }
+}
+
+TEST(BuildGuardrailTests,
+     CanonicalBuildTreeSeparatesDebugTracyFromRelease) {
+  const std::string root_c_make = read_source_file("CMakeLists.txt");
+  const std::string options =
+      read_source_file("cmake/QuaderBuildOptions.cmake");
+  const std::string modeling =
+      read_source_file("cmake/QuaderModeling.cmake");
+  const std::string presets = read_source_file("CMakePresets.json");
+  const std::string launcher = read_source_file("tools/boot_tracy.ps1");
+  const std::string root_agents = read_source_file("AGENTS.md");
+
+  EXPECT_EQ(count_occurrences(presets, "\"binaryDir\""), 1U);
+  expect_contains(presets, "${sourceDir}/build/vs2026");
+  expect_contains(presets, "\"name\": \"vs2026-debug\"");
+  expect_contains(presets, "\"name\": \"vs2026-release\"");
+  expect_contains(presets, "\"QUADER_ENABLE_TRACY\": \"ON\"");
+  expect_contains(presets, "\"QUADER_ENABLE_SENTRY\": \"OFF\"");
+  expect_contains(presets, "\"QUADER_TRACY_ON_DEMAND\": \"ON\"");
+  expect_missing(presets, "Ninja");
+  expect_missing(presets, "ninja-msvc");
+
+  expect_contains(options, "set(QUADER_ENABLE_TRACY ON CACHE BOOL");
+  expect_contains(options, "set(QUADER_TRACY_ON_DEMAND ON CACHE BOOL");
+  expect_contains(options, "../_SOURCES/tracy-0.13.1");
+  expect_contains(modeling,
+                  "$<$<CONFIG:Debug>:QUADER_ENABLE_TRACY=1>");
+  expect_contains(modeling, "$<$<CONFIG:Debug>:TRACY_ENABLE=1>");
+  expect_contains(modeling, "$<$<CONFIG:Debug>:TRACY_ON_DEMAND=1>");
+  expect_contains(
+      modeling,
+      "$<$<CONFIG:Debug>:${_quader_tracy_client_target}>");
+  expect_missing(modeling,
+                 "INTERFACE QUADER_ENABLE_TRACY=1 TRACY_ENABLE=1");
+
+  expect_contains(root_c_make,
+                  "set(CMAKE_INTERPROCEDURAL_OPTIMIZATION_RELEASE ON)");
+  expect_contains(root_c_make,
+                  "set(CMAKE_MAP_IMPORTED_CONFIG_DEBUG \"Release;\")");
+  expect_contains(root_c_make,
+                  "set(CMAKE_MSVC_RUNTIME_LIBRARY \"MultiThreadedDLL\")");
+  expect_contains(root_c_make, "$<$<CONFIG:Debug>:NDEBUG>");
+  expect_contains(root_c_make, "$<$<CONFIG:Debug>:QT_NO_DEBUG>");
+  expect_contains(root_c_make,
+                  "$<$<CONFIG:Debug>:_ITERATOR_DEBUG_LEVEL=0>");
+  expect_contains(root_c_make, "$<$<CONFIG:Debug>:/O2>");
+  expect_contains(root_c_make, "$<$<CONFIG:Debug>:/Ob2>");
+  expect_contains(root_c_make, "$<$<CONFIG:Debug>:/INCREMENTAL:NO>");
+  expect_contains(root_c_make, "$<$<CONFIG:Debug>:/OPT:REF>");
+  expect_contains(root_c_make, "$<$<CONFIG:Debug>:/OPT:ICF>");
+  expect_contains(root_c_make, "$<$<CONFIG:Release>:/O2>");
+  expect_contains(root_c_make, "$<$<CONFIG:Release>:/Ob3>");
+  expect_contains(root_c_make, "$<$<CONFIG:Release>:/OPT:REF>");
+  expect_contains(root_c_make, "$<$<CONFIG:Release>:/OPT:ICF>");
+  expect_contains(root_c_make,
+                  "${FILAMENT_SDK_ROOT}/lib/x86_64/md/${lib_name}.lib");
+  expect_missing(root_c_make, "lib/x86_64/mdd");
+  expect_missing(root_c_make, "matdbg.lib");
+  expect_contains(root_c_make, "--release");
+  expect_contains(root_c_make, "--force");
+  expect_contains(root_c_make, "msbuild/applocal.ps1");
+  expect_contains(
+      root_c_make,
+      "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/bin");
+  expect_contains(root_c_make,
+                  "Deploying the complete recursive Release runtime ");
+  expect_contains(root_c_make, "_QUADER_STALE_RUNTIME_PATHS");
+  expect_contains(root_c_make, "set(VCPKG_APPLOCAL_DEPS OFF)");
+  expect_missing(root_c_make,
+                 "--$<IF:$<CONFIG:Debug>,debug,release>");
+
+  expect_contains(launcher,
+                  "build\\vs2026\\Debug\\quader.exe");
+  expect_contains(
+      launcher,
+      "@('--build', '--preset', 'vs2026-debug', '--target', 'quader')");
+  expect_contains(launcher, "Assert-ProfilingBuildProject");
+  expect_contains(launcher, "Assert-NativeExecutableLinkContract");
+  expect_contains(launcher, "Assert-ProfileRuntimeDeployment");
+  expect_contains(launcher, "Assert-RuntimeDependencyClosure");
+  expect_contains(launcher, "Resolve-DumpbinPath");
+  expect_contains(launcher, "md4c.dll");
+  expect_contains(launcher, "libpng16.dll");
+  expect_contains(launcher, "z.dll");
+  expect_contains(launcher, "Qt6Widgetsd.dll");
+  expect_contains(launcher, "platforms\\qwindowsd.dll");
+  expect_contains(launcher, "vcpkg_installed\\x64-windows\\bin");
+  expect_contains(launcher, "Get-FileHash -Algorithm SHA256");
+  expect_contains(launcher, "QUADER_ENABLE_SENTRY:BOOL=OFF");
+  expect_missing(launcher, "[string]$QuaderExe");
+  expect_missing(launcher, "[string]$CMakeCache");
+  expect_missing(launcher, "[ValidateSet('Release', 'Debug')]");
+  expect_missing(launcher, "$Configuration = 'Release'");
+  expect_missing(launcher, "vs2026-release");
+
+  expect_contains(root_agents,
+                  "build/vs2026/Debug/quader.exe");
+  expect_contains(root_agents,
+                  "build/vs2026/Release/quader.exe");
+  expect_contains(root_agents,
+                  "cmake --build --preset vs2026-debug --target quader");
+  expect_contains(root_agents,
+                  "cmake --build --preset vs2026-release --target quader");
+  expect_contains(root_agents,
+                  "Release is the only shipping artifact");
 }
 
 TEST(BuildGuardrailTests, RootQuaderTestsListsEveryRootTestSource) {
@@ -2005,8 +2111,9 @@ TEST(BuildGuardrailTests, FilamentSdkIsValidatedAtConfigureTime) {
   expect_contains(root_c_make, "bin/matc.exe");
   expect_contains(
       root_c_make,
-      "lib/x86_64/${_quader_filament_runtime}/${_quader_filament_lib}.lib");
-  expect_contains(root_c_make, "lib/x86_64/mdd/matdbg.lib");
+      "lib/x86_64/md/${_quader_filament_lib}.lib");
+  expect_missing(root_c_make, "lib/x86_64/mdd");
+  expect_missing(root_c_make, "matdbg.lib");
 }
 
 TEST(BuildGuardrailTests, BootSmokeFailsOnLoggedErrorsAndRequiresLogCopy) {

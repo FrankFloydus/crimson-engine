@@ -3516,7 +3516,7 @@ ModelingOverlayService::tool_preview_meshes(
               runtime.box_preview_descriptor(true))) {
     preview_meshes.push_back(ModelingToolPreviewMesh{
         .source_entity = kInvalidEntityId,
-        .material = kInvalidAssetId,
+        .material = {},
         .mesh = *box_preview,
     });
   }

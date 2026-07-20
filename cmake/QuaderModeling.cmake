@@ -27,7 +27,15 @@ if(QUADER_ENABLE_TRACY)
         file(TO_CMAKE_PATH "$ENV{QUADER_TRACY_SOURCE_DIR}" _quader_tracy_source_dir)
     endif()
     if(_quader_tracy_source_dir STREQUAL "")
-        set(_quader_tracy_default_source_dir "${QUADER_APP_THIRDPARTY_DIR}/tracy/tracy")
+        set(_quader_tracy_default_source_dir
+            "${CMAKE_CURRENT_SOURCE_DIR}/../_SOURCES/tracy-0.13.1")
+        if(EXISTS "${_quader_tracy_default_source_dir}/public/tracy/Tracy.hpp")
+            set(_quader_tracy_source_dir "${_quader_tracy_default_source_dir}")
+        endif()
+    endif()
+    if(_quader_tracy_source_dir STREQUAL "")
+        set(_quader_tracy_default_source_dir
+            "${QUADER_APP_THIRDPARTY_DIR}/tracy/tracy")
         if(EXISTS "${_quader_tracy_default_source_dir}/public/tracy/Tracy.hpp")
             set(_quader_tracy_source_dir "${_quader_tracy_default_source_dir}")
         endif()
@@ -42,9 +50,7 @@ if(QUADER_ENABLE_TRACY)
 
     message(STATUS "Using local Tracy source: ${_quader_tracy_source_dir}")
     set(TRACY_ENABLE ON CACHE BOOL "Enable Tracy profiler." FORCE)
-    if(QUADER_TRACY_ON_DEMAND)
-        set(TRACY_ON_DEMAND ON CACHE BOOL "Enable Tracy on-demand mode." FORCE)
-    endif()
+    set(TRACY_ON_DEMAND ON CACHE BOOL "Enable Tracy on-demand mode." FORCE)
     add_subdirectory("${_quader_tracy_source_dir}" "${CMAKE_CURRENT_BINARY_DIR}/_deps/tracy-local-build" EXCLUDE_FROM_ALL)
 
     if(TARGET Tracy::TracyClient)
@@ -55,11 +61,15 @@ if(QUADER_ENABLE_TRACY)
         message(FATAL_ERROR "Tracy checkout did not define a TracyClient CMake target.")
     endif()
 
-    target_compile_definitions(quader_modeling_profile INTERFACE QUADER_ENABLE_TRACY=1 TRACY_ENABLE=1)
-    if(QUADER_TRACY_ON_DEMAND)
-        target_compile_definitions(quader_modeling_profile INTERFACE TRACY_ON_DEMAND=1)
-    endif()
-    target_link_libraries(quader_modeling_profile INTERFACE ${_quader_tracy_client_target})
+    # The Visual Studio tree is deliberately multi-config. Tracy is a Debug-only
+    # dependency even though its source is configured once for the tree. The
+    # Release link graph therefore has neither TracyClient nor Tracy definitions.
+    target_compile_definitions(quader_modeling_profile INTERFACE
+        $<$<CONFIG:Debug>:QUADER_ENABLE_TRACY=1>
+        $<$<CONFIG:Debug>:TRACY_ENABLE=1>
+        $<$<CONFIG:Debug>:TRACY_ON_DEMAND=1>)
+    target_link_libraries(quader_modeling_profile INTERFACE
+        $<$<CONFIG:Debug>:${_quader_tracy_client_target}>)
 endif()
 
 if(QUADER_USE_OPENMESH_TOPOLOGY)

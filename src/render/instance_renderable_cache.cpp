@@ -7,6 +7,7 @@
 #include "render/instance_renderable_cache.hpp"
 
 #include "diagnostics/profile.hpp"
+#include "render/material_binding_service.hpp"
 #include "render/mesh_renderable_factory.hpp"
 #include "render/render_layers.hpp"
 #include "viewport/viewport_settings.hpp"
@@ -91,6 +92,24 @@ const InstanceVariant *variant_for_key(const RenderInstancePrimitiveKey &key) {
   return found == kInstanceVariants.end() ? nullptr : &*found;
 }
 
+std::span<const QMat4> visible_world_transforms(
+    const RenderInstanceBatchChunk &chunk, std::vector<QMat4> &scratch) {
+  if (chunk.visible_occurrence_count == chunk.world_transforms.size()) {
+    return std::span<const QMat4>(chunk.world_transforms);
+  }
+  // Compact real transforms into the retained InstanceBuffer capacity. The
+  // renderable binds only this active prefix, so suppression needs neither
+  // duplicate draws nor singular/far-away sentinel matrices.
+  scratch.clear();
+  scratch.reserve(chunk.visible_occurrence_count);
+  for (std::size_t index = 0u; index < chunk.world_transforms.size(); ++index) {
+    if (index >= chunk.visibility.size() || chunk.visibility[index] != 0u) {
+      scratch.push_back(chunk.world_transforms[index]);
+    }
+  }
+  return std::span<const QMat4>(scratch);
+}
+
 } // namespace
 
 InstanceRenderableCache::~InstanceRenderableCache() { shutdown(); }
@@ -109,6 +128,8 @@ void InstanceRenderableCache::shutdown() {
   preview_occurrence_suppressions_.clear();
   factory_ = nullptr;
   max_instances_per_chunk_ = 1u;
+  material_uniform_signature_ = 0u;
+  material_uniforms_dirty_ = true;
   stats_ = {};
 }
 
@@ -120,6 +141,7 @@ void InstanceRenderableCache::clear() {
   }
   proxies_.clear();
   plan_ = {};
+  material_uniforms_dirty_ = true;
   stats_.participant_count = 0u;
   stats_.occurrence_count = 0u;
   stats_.chunk_count = 0u;
@@ -138,45 +160,51 @@ InstanceRenderableCache::PreparedPlan InstanceRenderableCache::prepare(
              preview_suppressed_entities_.contains(record.member_entity))) {
           return true;
         }
-        return std::ranges::any_of(
-            preview_occurrence_suppressions_,
-            [&](const RenderInstancePreviewSuppression &suppression) {
-              return suppression.occurrence == occurrence.entity_id &&
-                     (suppression.source_entity == record.member_entity ||
-                      suppression.source_entity == record.definition_entity);
-            });
+        const auto pair_suppressed = [&](EntityId source_entity) {
+          const std::pair key{occurrence.entity_id, source_entity};
+          const auto found = std::ranges::lower_bound(
+              preview_occurrence_suppressions_, key, {},
+              [](const RenderInstancePreviewSuppression &suppression) {
+                return std::pair{suppression.occurrence,
+                                 suppression.source_entity};
+              });
+          return found != preview_occurrence_suppressions_.end() &&
+                 std::pair{found->occurrence, found->source_entity} == key;
+        };
+        return pair_suppressed(record.member_entity) ||
+               (record.definition_entity != record.member_entity &&
+                pair_suppressed(record.definition_entity));
       };
-  std::size_t occurrence_count = 0u;
+  std::size_t storage_occurrence_count = 0u;
+  std::size_t visible_occurrence_count = 0u;
   std::size_t participant_count = 0u;
+  for (const RenderSceneInstancePrimitiveRecord &record : primitives) {
+    if (!record.renderable()) {
+      continue;
+    }
+    storage_occurrence_count +=
+        record.occurrences.size() * kInstanceVariants.size();
+  }
+  std::vector<RenderInstancePrimitiveOccurrence> occurrences;
+  occurrences.reserve(storage_occurrence_count);
   for (const RenderSceneInstancePrimitiveRecord &record : primitives) {
     if (!record.renderable()) {
       continue;
     }
     for (const RenderSceneInstanceOccurrenceRecord &occurrence :
          record.occurrences) {
-      if (!occurrence_suppressed(record, occurrence)) {
+      const bool visible = !occurrence_suppressed(record, occurrence);
+      if (visible) {
         ++participant_count;
-        occurrence_count += kInstanceVariants.size();
+        visible_occurrence_count += kInstanceVariants.size();
       }
-    }
-  }
-  std::vector<RenderInstancePrimitiveOccurrence> occurrences;
-  occurrences.reserve(occurrence_count);
-  for (const RenderSceneInstancePrimitiveRecord &record : primitives) {
-    if (!record.renderable()) {
-      continue;
-    }
-    for (const InstanceVariant &variant : kInstanceVariants) {
-      for (const RenderSceneInstanceOccurrenceRecord &occurrence :
-           record.occurrences) {
-        if (occurrence_suppressed(record, occurrence)) {
-          continue;
-        }
+      for (const InstanceVariant &variant : kInstanceVariants) {
         occurrences.push_back({
             .key = variant_key(record, occurrence, variant),
             .occurrence = occurrence.occurrence,
             .world_transform = occurrence.world_transform,
             .local_bounds = record.local_bounds,
+            .visible = visible,
         });
       }
     }
@@ -184,6 +212,7 @@ InstanceRenderableCache::PreparedPlan InstanceRenderableCache::prepare(
 
   PreparedPlan prepared;
   prepared.participant_count = participant_count;
+  prepared.visible_occurrence_count = visible_occurrence_count;
   prepared.plan = plan_render_instance_batches(
       occurrences, max_instances_per_chunk_);
   prepared.records_by_chunk.reserve(prepared.plan.chunks.size());
@@ -201,6 +230,7 @@ void InstanceRenderableCache::set_preview_suppressed_entities(
       preview_occurrence_suppressions_ == occurrence_suppressions) {
     return;
   }
+  QDR_PROFILE_SCOPE("Instance preview suppression delta");
   preview_suppressed_entities_ = std::move(entities);
   preview_occurrence_suppressions_ = std::move(occurrence_suppressions);
   // Suppression changes only at preview begin/end. Re-plan once at that
@@ -232,7 +262,7 @@ bool InstanceRenderableCache::sync(
       plan_ = prepared.plan;
       ++stats_.transform_update_count;
       stats_.participant_count = prepared.participant_count;
-      stats_.occurrence_count = plan_.occurrence_count;
+      stats_.occurrence_count = prepared.visible_occurrence_count;
       stats_.chunk_count = plan_.chunks.size();
       return true;
     }
@@ -247,6 +277,7 @@ bool InstanceRenderableCache::rebuild(const PreparedPlan &prepared) {
   QDR_PROFILE_FUNCTION();
   clear();
   proxies_.reserve(prepared.plan.chunks.size());
+  std::vector<QMat4> visible_transforms;
   for (std::size_t index = 0u; index < prepared.plan.chunks.size(); ++index) {
     const RenderInstanceBatchChunk &chunk = prepared.plan.chunks[index];
     const RenderSceneInstancePrimitiveRecord *record =
@@ -259,36 +290,88 @@ bool InstanceRenderableCache::rebuild(const PreparedPlan &prepared) {
     MeshPrimitiveSpan primitive = record->primitive;
     primitive.index_offset = chunk.key.index_offset;
     primitive.index_count = chunk.key.index_count;
+    const std::uint8_t initial_layer_mask =
+        chunk.visible_occurrence_count == 0u ? 0u : chunk.key.layer_mask;
     MeshRenderableProxy proxy = factory_->create_explicit_instances(
         record->mesh, &record->material, primitive, chunk.world_transforms,
         chunk.world_bounds, chunk.key.cast_shadows,
         chunk.key.receive_shadows, chunk.key.double_sided,
-        chunk.key.layer_mask, chunk.key.editor_unlit, variant->depth_only,
+        initial_layer_mask, chunk.key.editor_unlit, variant->depth_only,
         chunk.key.channel, chunk.key.presentation_flags);
     if (!proxy.entity || proxy.instance_buffer == nullptr) {
       factory_->destroy(proxy);
       clear();
       return false;
     }
+    if (chunk.visible_occurrence_count != chunk.world_transforms.size()) {
+      const std::span<const QMat4> active_transforms =
+          visible_world_transforms(chunk, visible_transforms);
+      QDR_PROFILE_SCOPE("Instance rebuild apply retained suppression");
+      if (!factory_->rebind_explicit_instances(
+              proxy, primitive, active_transforms, chunk.world_bounds,
+              chunk.key.cast_shadows, chunk.key.receive_shadows,
+              chunk.key.double_sided, initial_layer_mask,
+              variant->depth_only, chunk.key.channel)) {
+        factory_->destroy(proxy);
+        clear();
+        return false;
+      }
+    }
     proxies_.push_back(std::move(proxy));
   }
   plan_ = prepared.plan;
   ++stats_.rebuild_count;
   stats_.participant_count = prepared.participant_count;
-  stats_.occurrence_count = plan_.occurrence_count;
+  stats_.occurrence_count = prepared.visible_occurrence_count;
   stats_.chunk_count = plan_.chunks.size();
   return true;
 }
 
 bool InstanceRenderableCache::update_transforms(
     const PreparedPlan &prepared) {
+  QDR_PROFILE_FUNCTION();
   if (prepared.plan.chunks.size() != proxies_.size()) {
     return false;
   }
+  std::vector<QMat4> visible_transforms;
   for (std::size_t index = 0u; index < proxies_.size(); ++index) {
-    const RenderInstanceBatchChunk &chunk = prepared.plan.chunks[index];
+    const RenderInstanceBatchChunk &before = plan_.chunks[index];
+    const RenderInstanceBatchChunk &after = prepared.plan.chunks[index];
+    if (before.transform_signature == after.transform_signature &&
+        before.world_bounds == after.world_bounds &&
+        before.visibility == after.visibility) {
+      continue;
+    }
+
+    const std::span<const QMat4> active_transforms =
+        visible_world_transforms(after, visible_transforms);
+    const bool visibility_changed = before.visibility != after.visibility;
+    if (visibility_changed) {
+      const RenderSceneInstancePrimitiveRecord *record =
+          prepared.records_by_chunk[index];
+      const InstanceVariant *variant = variant_for_key(after.key);
+      if (record == nullptr || variant == nullptr) {
+        return false;
+      }
+      MeshPrimitiveSpan primitive = record->primitive;
+      primitive.index_offset = after.key.index_offset;
+      primitive.index_count = after.key.index_count;
+      const std::uint8_t layer_mask =
+          active_transforms.empty() ? 0u : after.key.layer_mask;
+      QDR_PROFILE_SCOPE("Instance suppression update affected chunk");
+      if (!factory_->rebind_explicit_instances(
+              proxies_[index], primitive, active_transforms,
+              after.world_bounds, after.key.cast_shadows,
+              after.key.receive_shadows, after.key.double_sided, layer_mask,
+              variant->depth_only, after.key.channel)) {
+        return false;
+      }
+      continue;
+    }
+
+    QDR_PROFILE_SCOPE("Instance transform update affected chunk");
     if (!factory_->update_explicit_instances(
-            proxies_[index], chunk.world_transforms, chunk.world_bounds)) {
+            proxies_[index], active_transforms, after.world_bounds)) {
       return false;
     }
   }
@@ -297,19 +380,33 @@ bool InstanceRenderableCache::update_transforms(
 
 void InstanceRenderableCache::update_surface_grid(
     float grid_world_spacing, const ViewportSettings &settings) {
+  QDR_PROFILE_FUNCTION();
   if (factory_ == nullptr) {
     return;
   }
-  for (std::size_t index = 0u; index < proxies_.size(); ++index) {
-    const MeshRenderableProxy &proxy = proxies_[index];
-    factory_->update_surface_grid(proxy, grid_world_spacing, settings);
-    if (index < plan_.chunks.size() &&
-        plan_.chunks[index].key.layer_mask ==
-            kViewportShadedSceneLayerMask &&
-        plan_.chunks[index].key.editor_unlit) {
-      factory_->update_shaded_lighting(proxy, settings);
+
+  const std::uint64_t signature =
+      mesh_surface_grid_signature(grid_world_spacing, settings);
+  if (!material_uniforms_dirty_ &&
+      material_uniform_signature_ == signature) {
+    return;
+  }
+
+  {
+    QDR_PROFILE_SCOPE("Instance material uniforms apply");
+    for (std::size_t index = 0u; index < proxies_.size(); ++index) {
+      const MeshRenderableProxy &proxy = proxies_[index];
+      factory_->update_surface_grid(proxy, grid_world_spacing, settings);
+      if (index < plan_.chunks.size() &&
+          plan_.chunks[index].key.layer_mask ==
+              kViewportShadedSceneLayerMask &&
+          plan_.chunks[index].key.editor_unlit) {
+        factory_->update_shaded_lighting(proxy, settings);
+      }
     }
   }
+  material_uniform_signature_ = signature;
+  material_uniforms_dirty_ = false;
 }
 
 } // namespace quader

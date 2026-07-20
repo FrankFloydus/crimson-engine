@@ -6,10 +6,10 @@
 ////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
-#include "assets/material_reference.hpp"
 #include "assets/mesh_asset.hpp"
 #include "core/types.hpp"
 #include "math/types.hpp"
+#include "scene/components.hpp"
 
 #include <memory>
 #include <vector>
@@ -22,7 +22,10 @@ namespace quader {
 struct ModelingToolPreviewMesh {
   int source_object_id = -1;
   EntityId source_entity = kInvalidEntityId;
-  MaterialReference material;
+  // Preserve the source entity's complete binding. A primary-only reference
+  // loses per-primitive slot overrides and cannot faithfully represent a
+  // project-owned material while the source renderable is suppressed.
+  MaterialComponent material;
   MeshAsset mesh;
   QMat4 transform;
   std::vector<QMat4> instance_transforms;

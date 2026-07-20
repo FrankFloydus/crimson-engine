@@ -13190,7 +13190,7 @@ TEST(ModelingSessionServiceTests, CutAndMirrorEmitDrawnPlaneOverlay) {
           service.tool_preview_meshes();
       ASSERT_FALSE(preview_meshes.empty());
       EXPECT_EQ(preview_meshes.front().source_entity, box.object.entity);
-      EXPECT_EQ(preview_meshes.front().material, preview_material);
+      EXPECT_EQ(preview_meshes.front().material.material, preview_material);
       EXPECT_GT(preview_meshes.front().mesh.geometry().vertices.size(), 0u);
       EXPECT_GT(preview_meshes.front().mesh.geometry().indices.size(), 0u);
     }

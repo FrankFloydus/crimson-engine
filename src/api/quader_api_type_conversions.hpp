@@ -1245,7 +1245,7 @@ inline QuaderToolPreviewMesh
 to_api_tool_preview_mesh(const ModelingToolPreviewMesh &preview) {
   return {
       .source_entity = preview.source_entity,
-      .material = preview.material,
+      .material = preview.material.material,
       .mesh = to_api_mesh_asset(preview.mesh),
       .transform = preview.transform,
       .instance_transforms = preview.instance_transforms,

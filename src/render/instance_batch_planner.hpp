@@ -60,6 +60,8 @@ struct RenderInstancePrimitiveOccurrence final {
   std::uint64_t occurrence = 0u;
   QMat4 world_transform;
   RenderInstanceBounds local_bounds;
+  /** Retains a stable batch slot while excluding this occurrence from draw. */
+  bool visible = true;
 };
 
 /// Describes one device-cap-sized indexed-instanced draw.
@@ -67,6 +69,9 @@ struct RenderInstanceBatchChunk final {
   RenderInstancePrimitiveKey key;
   std::vector<std::uint64_t> occurrences;
   std::vector<QMat4> world_transforms;
+  /** One byte per stable occurrence slot; hidden slots are not submitted. */
+  std::vector<std::uint8_t> visibility;
+  std::size_t visible_occurrence_count = 0u;
   RenderInstanceBounds world_bounds;
   std::uint64_t transform_signature = 0u;
 };

@@ -6087,3 +6087,109 @@ Verification: under Fast Iteration Workflow, automated suites were skipped. The 
 Tracy-enabled `vs2026-release` native `quader` target builds successfully. A same-scene follow-up
 trace must cover vertex, edge, and face box selection plus translate, rotate, scale, and linked
 duplicate drag; `profiling_7.tracy` had no edge/face box samples.
+
+## 2026-07-20 - Retained Material Uniforms Invalidate At Cache Ownership
+
+Task/context: `profiling_new_2.tracy` captured two experiments that were subsequently removed. Its
+camera-driven persistent point rebuild produced roughly 61 ms navigation frames; the known-good
+baseline path was restored before any new optimization. The baseline still recorded 17,950,472
+`MeshRenderableFactory::update_shaded_lighting` calls and 6.820 seconds inside
+`SceneRenderBridge::update_mesh_surface_grid` across 7,937 frames.
+
+Invariant:
+
+- Viewport grid and Shaded-lighting parameters are global presentation state, not per-frame mesh
+  work. `InstanceRenderableCache` and `ToolPreviewRenderableCache` retain the last applied narrow
+  signature and return before traversing proxies while it is unchanged.
+- The unchanged-state gate belongs inside each proxy-owning cache. Every path that destroys or
+  creates material instances marks that cache dirty, so newly created transform-preview and
+  explicit-instance proxies receive the current settings before their first render even when the
+  settings signature itself did not change. A bridge-wide gate is forbidden because it cannot see
+  later cache-local proxy generations.
+- Dynamic-position, transform-only, and visibility-only updates retain existing material instances
+  and do not invalidate global material parameters.
+- Blender uses one Workbench world UBO and one Overlay theme UBO per engine/pass sync rather than
+  rewriting global lighting/theme parameters per object. Quader keeps Filament material-instance
+  parameters but follows the same frequency principle through cache-local revision gates.
+- Transform preview material fidelity is a separate correctness issue: the baseline preview DTO
+  narrows the full `MaterialComponent` to one asset ID, loses material-slot overrides/project
+  material resolution, and always uses the Shaded material family. Do not conflate that follow-up
+  with global uniform invalidation.
+
+Owners: `InstanceRenderableCache`, `ToolPreviewRenderableCache`, `MeshRenderableCache`,
+`SceneRenderBridge`, `QtViewportPanel`, material binding, and render source-policy guardrails.
+
+Verification: the optimized Tracy Debug/Profile and Tracy-free Release `quader` targets both build
+successfully. Automated tests and desktop launch remain intentionally skipped under the user's
+standing manual-verification instruction. The next same-scene trace should show unchanged frames
+entering both cache update functions without `Instance material uniforms apply` or
+`Tool preview material uniforms apply`, and factory lighting calls should scale with cache rebuilds
+or settings changes rather than frame count.
+
+## 2026-07-20 - P9 Transactional Preview Generations And Topology-Stable Rebind
+
+Task/context: `profiling_new_3.tracy` showed that an ordinary one-object drag could still trigger
+large main-thread spikes even though steady navigation and dense drag ticks had improved. The
+remaining work was renderer lifecycle, not modeling math: preview extraction narrowed the scene's
+material contract, changing preview cardinality synchronously destroyed thousands of Filament
+objects, suppressing one instance source rebuilt complete retained batches, and a topology-stable
+dense commit replaced all canonical mesh proxies then left a large deferred-destruction backlog.
+
+Invariant:
+
+- Every modeling preview carries the complete `MaterialComponent`, including project material
+  references and per-slot overrides. Render extraction resolves that component through the same
+  project-aware resolver as scene meshes and includes resolver/material revisions in its cache
+  signatures. Rendered, Shaded, and overlay-depth preview siblings share immutable geometry but
+  use their pass-correct material binding; a drag must not visibly replace authored materials.
+- Preview publication is transactional. A hidden candidate generation is completely created and
+  validated before it is made visible; replacements become visible before the previous current
+  generation is hidden. Allocation or validation failure preserves the previous preview and source
+  coverage, does not advance the bridge submission revision, and is retried by the next sync.
+- The preview cache retains the current generation and one warm predecessor. Exact structural and
+  topology comparison is collision-safe and permits dense -> small -> dense reuse. The ordered
+  active-generation path updates dense previews without building a per-tick hash map. A third
+  generation is detached from the Filament scene with one bulk Scene call, moved to a retired
+  queue, and destroyed only through explicit idle maintenance, one proxy per idle slice.
+  Navigation and modal/modeling drags never pay retired-preview destruction. The cache does not
+  retain transient dynamic-position payload ownership after submission: it trusts the monotonic
+  position revision so the modeling workspace buffer pool can reuse its buffers on the next tick.
+- Instance suppression is explicit visibility state on a stable occurrence/chunk plan. Suppression
+  lookup is sorted and evaluated once per logical occurrence, not once for each render variant.
+  Unchanged visible membership uploads only retained transforms/bounds. A changed active count
+  rebinds the affected RenderableManager component while preserving its entity, geometry,
+  InstanceBuffer, transform, and material instances; unrelated chunks are untouched. Hidden
+  occurrences are never represented by singular, far-away, or duplicate transforms.
+- A scene mesh update with the same mesh identity, material/pass family, primitive count, index
+  layout, and material-slot layout rebinds replacement immutable geometry through
+  `RenderableManager::setGeometryAt` on all three canonical proxies. The operation prevalidates
+  ownership and live Filament bindings and acquires every replacement reference before mutation.
+  It preserves entities and material instances and enqueues no retired proxy. Any topology,
+  material, ownership, or layout mismatch keeps the full replacement fallback.
+
+Regression risks:
+
+- Never move Filament destruction back into preview publication or an interaction frame. Retired
+  objects must already be detached before their budgeted destruction begins.
+- Never retain the transient dynamic-position payload in a preview generation or submission-state
+  cache; doing so pins a workspace-pool buffer and restores per-tick allocation pressure.
+- Never infer topology equality from a layout hash alone; exact indices, primitive spans, and
+  material-slot structure remain mandatory collision checks.
+- Do not advance render-preview revision gates after a failed candidate publication, or the old
+  source can stay suppressed without a visible replacement.
+- Dynamic preview uploads currently update positions. Normal/tangent deformation fidelity is a
+  separate follow-up and must not be hidden inside these lifecycle paths without a measured design.
+
+Owners: modeling preview DTO/projection services, render extraction and material resolution,
+`ToolPreviewRenderableCache`, `SceneRenderBridge`, `InstanceBatchPlanner`,
+`InstanceRenderableCache`, `MeshRenderableCache`, `MeshRenderableFactory`, and the viewport's
+explicit idle-maintenance gate.
+
+Verification: the canonical Tracy-enabled optimized Debug/Profile and Tracy-free Release native
+targets both build successfully after this change. Automated tests and desktop launch remain intentionally skipped by
+the user's standing manual-verification instruction. The follow-up capture should use the same
+784-mesh scene and include select-all component translate/rotate/scale, dense -> one-object -> dense
+drag cardinality changes, a single instance-occurrence drag, and commit. During interaction,
+Tracy should show no retired-preview destruction, suppression should touch only affected instance
+chunks, and topology-stable commit should report geometry rebinds without growing retired-proxy
+debt.

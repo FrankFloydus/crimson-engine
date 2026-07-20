@@ -67,6 +67,8 @@ struct RadialArrayCenterState {
  */
 struct RadialArrayPreviewSource {
   EntityId source_entity = kInvalidEntityId;
+  /// Canonical scene entity that owns this preview mesh and material.
+  EntityId material_entity = kInvalidEntityId;
   AssetId mesh = kInvalidAssetId;
   MaterialReference material;
   std::vector<QMat4> generated_world_transforms;
