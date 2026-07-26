@@ -9,6 +9,7 @@
 #include "assets/mesh_asset.hpp"
 
 #include <algorithm>
+#include <bit>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -66,6 +67,59 @@ inline bool same_polygon_document(const quader_poly::Document &left,
          left.hard_normal_edges == right.hard_normal_edges &&
          left.next_vertex_id == right.next_vertex_id &&
          left.next_face_id == right.next_face_id;
+}
+
+inline std::uint64_t append_authored_hash(std::uint64_t hash,
+                                         std::uint64_t value) {
+  constexpr std::uint64_t kPrime = 1'099'511'628'211ull;
+  for (std::size_t offset = 0u; offset < sizeof(value); ++offset) {
+    hash ^= static_cast<unsigned char>(value >> (offset * 8u));
+    hash *= kPrime;
+  }
+  return hash;
+}
+
+inline std::uint64_t authored_float_hash_value(float value) {
+  return value == 0.0f ? 0u : std::bit_cast<std::uint32_t>(value);
+}
+
+inline std::uint64_t
+polygon_document_hash(const quader_poly::Document &document) {
+  std::uint64_t hash = 14'695'981'039'346'656'037ull;
+  hash = append_authored_hash(hash, document.vertices.size());
+  for (const quader_poly::Vertex &vertex : document.vertices) {
+    hash = append_authored_hash(hash, vertex.id);
+    hash = append_authored_hash(
+        hash, authored_float_hash_value(vertex.position.x));
+    hash = append_authored_hash(
+        hash, authored_float_hash_value(vertex.position.y));
+    hash = append_authored_hash(
+        hash, authored_float_hash_value(vertex.position.z));
+  }
+  hash = append_authored_hash(hash, document.faces.size());
+  for (const quader_poly::Face &face : document.faces) {
+    hash = append_authored_hash(hash, face.id);
+    hash = append_authored_hash(hash, face.vertices.size());
+    for (const quader_poly::ElementId vertex : face.vertices) {
+      hash = append_authored_hash(hash, vertex);
+    }
+    hash = append_authored_hash(hash, face.uvs.size());
+    for (const QVec2 uv : face.uvs) {
+      hash = append_authored_hash(hash, authored_float_hash_value(uv.x));
+      hash = append_authored_hash(hash, authored_float_hash_value(uv.y));
+    }
+    hash = append_authored_hash(hash, face.material_slot);
+    hash = append_authored_hash(
+        hash, static_cast<std::uint64_t>(face.normal_shading));
+  }
+  hash = append_authored_hash(hash, document.hard_normal_edges.size());
+  for (const quader_poly::Edge edge : document.hard_normal_edges) {
+    hash = append_authored_hash(hash, edge.a);
+    hash = append_authored_hash(hash, edge.b);
+  }
+  hash = append_authored_hash(hash, document.next_vertex_id);
+  hash = append_authored_hash(hash, document.next_face_id);
+  return hash;
 }
 
 inline bool same_authored_document(const MeshAsset &left,

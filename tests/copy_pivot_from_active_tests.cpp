@@ -8,6 +8,8 @@
 #include "api/quader_editor_api.hpp"
 #include "api/quader_polygon_document_internal_access.hpp"
 #include "editor/modeling/modeling_types.hpp"
+#include "editor/modeling/services/modeling_sdk_projection_adapter.hpp"
+#include "editor/modeling/services/modeling_session_service.hpp"
 #include "editor/pivot/pivot_tool_service.hpp"
 #include "editor/session/scene_session.hpp"
 #include "math/glm_bridge.hpp"
@@ -1546,6 +1548,203 @@ TEST(CopyPivotFromActiveTests,
       find_action(*object_panel, "copy_pivot_from_active");
   ASSERT_NE(hidden, nullptr);
   EXPECT_EQ(hidden->visibility, quader::QuaderActionVisibility::Hidden);
+}
+
+TEST(PivotPerformanceTests,
+     CopyBatchBuildsOneHierarchyAndMeshReferenceIndex) {
+  constexpr std::size_t kTargetCount = 24u;
+  CopyPivotHarness harness;
+  const quader::QuaderModelingObjectRef source =
+      create_asymmetric_mesh(harness, "Scale Source", 2.0f);
+  set_transform(harness, source.entity,
+                {.position = {8.0f, 3.0f, -5.0f},
+                 .custom_pivot = true});
+
+  std::vector<quader::QuaderModelingObjectRef> targets;
+  targets.reserve(kTargetCount);
+  for (std::size_t index = 0u; index < kTargetCount; ++index) {
+    targets.push_back(
+        create_box(harness, "Scale Target " + std::to_string(index)));
+    set_transform(harness, targets.back().entity,
+                  {.position = {static_cast<float>(index) * 3.0f,
+                                static_cast<float>(index % 5u),
+                                -static_cast<float>(index % 7u)}});
+    if (index > 0u) {
+      ASSERT_TRUE(harness.editor.scene()
+                      .reparent(targets[index].entity,
+                                targets[index - 1u].entity, true)
+                      .ok());
+    }
+  }
+
+  const quader::AssetId shared_mesh =
+      mesh_id(harness, targets.front().entity);
+  for (std::size_t index = 1u; index < targets.size(); ++index) {
+    quader::MeshComponent component =
+        *harness.session.scene().mesh(targets[index].entity);
+    component.mesh = shared_mesh;
+    harness.session.scene().set_mesh(targets[index].entity, component);
+  }
+
+  std::vector<quader::EntityId> selected{source.entity};
+  selected.reserve(kTargetCount + 1u);
+  std::vector<quader::QVec3> origins_before;
+  std::vector<std::vector<quader::QVec3>> vertices_before;
+  origins_before.reserve(kTargetCount);
+  vertices_before.reserve(kTargetCount);
+  for (const quader::QuaderModelingObjectRef target : targets) {
+    selected.push_back(target.entity);
+    origins_before.push_back(world_origin(harness, target.entity));
+    vertices_before.push_back(world_vertices(harness, target.entity));
+  }
+  ASSERT_TRUE(
+      harness.editor.selection().select_objects(selected, source.entity).ok());
+  const std::vector<quader::EntityId> selection_before =
+      harness.session.scene().selected_entities();
+  const std::size_t entity_count =
+      harness.session.scene().entities().size();
+  const std::size_t mesh_count_before = harness.session.assets().mesh_count();
+  const quader::PivotPlanningStats planning_before =
+      harness.session.pivot().planning_stats_for_tests();
+  const quader::ModelingSdkProjectionStats projection_before =
+      harness.session.modeling().modeling_sdk_projection_stats_for_tests();
+  harness.session.history().clear();
+
+  const quader::QuaderApiVoidResult copied =
+      harness.editor.modeling().copy_pivot_from_active();
+  ASSERT_TRUE(copied.ok()) << copied.error_message();
+  ASSERT_TRUE(copied.changed());
+
+  const quader::PivotPlanningStats planning_after =
+      harness.session.pivot().planning_stats_for_tests();
+  EXPECT_EQ(planning_after.copy_batch_count,
+            planning_before.copy_batch_count + 1u);
+  EXPECT_EQ(planning_after.planned_target_count,
+            planning_before.planned_target_count + kTargetCount);
+  EXPECT_EQ(planning_after.hierarchy_index_build_count,
+            planning_before.hierarchy_index_build_count + 1u);
+  EXPECT_EQ(planning_after.hierarchy_entity_visit_count,
+            planning_before.hierarchy_entity_visit_count + entity_count);
+  EXPECT_EQ(planning_after.hierarchy_depth_resolution_count,
+            planning_before.hierarchy_depth_resolution_count + kTargetCount);
+  EXPECT_EQ(planning_after.mesh_reference_index_build_count,
+            planning_before.mesh_reference_index_build_count + 1u);
+  EXPECT_EQ(planning_after.mesh_reference_entity_visit_count,
+            planning_before.mesh_reference_entity_visit_count + entity_count);
+  EXPECT_EQ(planning_after.mesh_reference_lookup_count,
+            planning_before.mesh_reference_lookup_count + kTargetCount);
+
+  std::vector<quader::AssetId> copied_meshes;
+  copied_meshes.reserve(kTargetCount);
+  for (std::size_t index = 0u; index < targets.size(); ++index) {
+    EXPECT_TRUE(
+        harness.session.scene().transform(targets[index].entity)->custom_pivot);
+    EXPECT_GT(quader::length(world_origin(harness, targets[index].entity) -
+                             origins_before[index]),
+              0.1f);
+    expect_vertices_near(world_vertices(harness, targets[index].entity),
+                         vertices_before[index]);
+    copied_meshes.push_back(mesh_id(harness, targets[index].entity));
+    if (index + 1u == targets.size()) {
+      EXPECT_EQ(copied_meshes.back(), shared_mesh);
+    } else {
+      EXPECT_NE(copied_meshes.back(), shared_mesh);
+    }
+  }
+  EXPECT_EQ(harness.session.assets().mesh_count(),
+            mesh_count_before + kTargetCount - 1u);
+  EXPECT_EQ(harness.session.scene().selected_entities(), selection_before);
+  EXPECT_EQ(harness.session.scene().primary_selection(), source.entity);
+
+  const quader::ModelingSdkProjectionStats projection_after =
+      harness.session.modeling().modeling_sdk_projection_stats_for_tests();
+  EXPECT_EQ(projection_after.full_scene_reset_count,
+            projection_before.full_scene_reset_count);
+  EXPECT_EQ(projection_after.targeted_scene_sync_count,
+            projection_before.targeted_scene_sync_count + 1u);
+  EXPECT_EQ(projection_after.targeted_scene_sync_document_count,
+            projection_before.targeted_scene_sync_document_count +
+                kTargetCount);
+
+  ASSERT_TRUE(harness.editor.history().undo().ok());
+  EXPECT_FALSE(harness.editor.history().can_undo());
+  EXPECT_EQ(harness.session.assets().mesh_count(), mesh_count_before);
+  for (std::size_t index = 0u; index < targets.size(); ++index) {
+    EXPECT_EQ(mesh_id(harness, targets[index].entity), shared_mesh);
+    expect_vec3_near(world_origin(harness, targets[index].entity),
+                     origins_before[index]);
+    expect_vertices_near(world_vertices(harness, targets[index].entity),
+                         vertices_before[index]);
+  }
+  EXPECT_EQ(harness.session.scene().selected_entities(), selection_before);
+
+  ASSERT_TRUE(harness.editor.history().redo().ok());
+  EXPECT_EQ(harness.session.pivot().planning_stats_for_tests()
+                .copy_batch_count,
+            planning_after.copy_batch_count);
+  EXPECT_EQ(harness.session.assets().mesh_count(),
+            mesh_count_before + kTargetCount - 1u);
+  for (std::size_t index = 0u; index < targets.size(); ++index) {
+    EXPECT_EQ(mesh_id(harness, targets[index].entity),
+              copied_meshes[index]);
+    expect_vertices_near(world_vertices(harness, targets[index].entity),
+                         vertices_before[index]);
+  }
+  EXPECT_EQ(harness.session.scene().selected_entities(), selection_before);
+}
+
+TEST(PivotPerformanceTests,
+     ApplyUndoAndRedoRestoreOnlyTheAffectedModelingDocument) {
+  constexpr std::size_t kUnrelatedMeshCount = 16U;
+  CopyPivotHarness harness;
+  for (std::size_t index = 0; index < kUnrelatedMeshCount; ++index) {
+    create_box(harness, "Unrelated Pivot Mesh " + std::to_string(index));
+  }
+  const quader::QuaderModelingObjectRef target =
+      create_box(harness, "Target Pivot Mesh");
+  ASSERT_TRUE(harness.editor.selection().select_object(target).ok());
+
+  const quader::ModelingSdkProjectionStats before =
+      harness.session.modeling().modeling_sdk_projection_stats_for_tests();
+  ASSERT_TRUE(
+      harness.editor.tools().activate(quader::ViewportToolId::Pivot).ok());
+  ASSERT_TRUE(
+      harness.editor.tools().execute_action("pivot", "pivot.align.next").ok());
+  const quader::QuaderApiVoidResult applied =
+      harness.editor.tools().commit_active_tool_preview();
+  ASSERT_TRUE(applied.ok()) << applied.error_message();
+  ASSERT_TRUE(applied.changed());
+
+  const quader::ModelingSdkProjectionStats after_apply =
+      harness.session.modeling().modeling_sdk_projection_stats_for_tests();
+  EXPECT_EQ(after_apply.full_scene_reset_count,
+            before.full_scene_reset_count);
+  EXPECT_EQ(after_apply.scene_import_document_count,
+            before.scene_import_document_count);
+  EXPECT_EQ(after_apply.targeted_scene_sync_count,
+            before.targeted_scene_sync_count + 1U);
+  EXPECT_EQ(after_apply.targeted_scene_sync_document_count,
+            before.targeted_scene_sync_document_count + 1U);
+
+  ASSERT_TRUE(harness.editor.history().undo().ok());
+  const quader::ModelingSdkProjectionStats after_undo =
+      harness.session.modeling().modeling_sdk_projection_stats_for_tests();
+  EXPECT_EQ(after_undo.full_scene_reset_count,
+            before.full_scene_reset_count);
+  EXPECT_EQ(after_undo.targeted_scene_sync_count,
+            after_apply.targeted_scene_sync_count + 1U);
+  EXPECT_EQ(after_undo.targeted_scene_sync_document_count,
+            after_apply.targeted_scene_sync_document_count + 1U);
+
+  ASSERT_TRUE(harness.editor.history().redo().ok());
+  const quader::ModelingSdkProjectionStats after_redo =
+      harness.session.modeling().modeling_sdk_projection_stats_for_tests();
+  EXPECT_EQ(after_redo.full_scene_reset_count,
+            before.full_scene_reset_count);
+  EXPECT_EQ(after_redo.targeted_scene_sync_count,
+            after_undo.targeted_scene_sync_count + 1U);
+  EXPECT_EQ(after_redo.targeted_scene_sync_document_count,
+            after_undo.targeted_scene_sync_document_count + 1U);
 }
 
 } // namespace

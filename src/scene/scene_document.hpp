@@ -11,6 +11,7 @@
 
 #include <entt/entt.hpp>
 
+#include <cstddef>
 #include <cstdint>
 #include <functional>
 #include <span>
@@ -55,6 +56,58 @@ struct EntityRecord {
 struct SceneTransformAssignment {
   EntityId entity = kInvalidEntityId;
   TransformComponent transform;
+};
+
+/**
+ * Stores one exact parent link used by atomic scene hierarchy replacement.
+ */
+struct SceneParentAssignment {
+  EntityId child = kInvalidEntityId;
+  EntityId parent = kInvalidEntityId;
+};
+
+/**
+ * Stores scene-derived hierarchy state for one entity.
+ *
+ * Records are emitted in exact scene tree order, so a parent always precedes
+ * its children and sibling order matches the authored hierarchy.
+ */
+struct SceneHierarchyProjectionRecord {
+  EntityId entity = kInvalidEntityId;
+  EntityId parent = kInvalidEntityId;
+  EntityId containing_instance_definition = kInvalidEntityId;
+  std::size_t depth = 0u;
+  QMat4 world_transform;
+  bool effectively_visible = true;
+  bool effectively_locked = false;
+};
+
+/**
+ * Counts deterministic work performed by one hierarchy projection.
+ */
+struct SceneHierarchyProjectionWorkStats {
+  std::uint64_t entity_visit_count = 0u;
+  std::uint64_t parent_state_lookup_count = 0u;
+  std::uint64_t world_transform_multiply_count = 0u;
+};
+
+/**
+ * Owns one immutable, indexed projection of scene-derived hierarchy state.
+ */
+class SceneHierarchyProjectionSnapshot final {
+public:
+  [[nodiscard]] std::span<const SceneHierarchyProjectionRecord>
+  records() const noexcept {
+    return records_;
+  }
+  [[nodiscard]] const SceneHierarchyProjectionRecord *
+  find(EntityId entity) const noexcept;
+
+private:
+  friend class SceneDocument;
+
+  std::vector<SceneHierarchyProjectionRecord> records_;
+  std::unordered_map<EntityId, std::size_t> index_by_entity_;
 };
 
 /**
@@ -120,9 +173,34 @@ public:
     bool set_locked(EntityId id, bool locked);
     bool set_selected(EntityId id, bool selected);
     bool set_active_selection(EntityId id);
+    /**
+     * Replaces the complete selection in one publication. Missing entities
+     * and duplicates are ignored; an invalid requested active entity falls
+     * back to the last retained selection.
+     */
+    bool replace_selection(std::span<const EntityId> selected,
+                           EntityId active = kInvalidEntityId);
     void clear_selection();
     bool set_parent(EntityId child, EntityId parent,
                     bool preserve_world_transform = true);
+    /**
+     * Reparents a batch atomically while retaining each entity's current
+     * local transform. This fast path is available before instance roles are
+     * installed; callers that need world preservation precompute and publish
+     * local transforms with set_transforms().
+     */
+    bool set_parents(std::span<const SceneParentAssignment> assignments);
+    /**
+     * Atomically replaces the complete hierarchy while retaining authored
+     * local transforms. Every scene entity must appear exactly once.
+     *
+     * This storage-hydration path is accepted only before instance roles are
+     * installed, validates the complete forest once, preserves assignment
+     * order within each parent's child list, and advances hierarchy-dependent
+     * revisions once.
+     */
+    bool replace_hierarchy(
+        std::span<const SceneParentAssignment> assignments);
 
     bool set_transform(EntityId id, TransformComponent transform);
     void set_transforms(std::span<const SceneTransformAssignment> transforms);
@@ -205,6 +283,13 @@ public:
     std::vector<EntityId> descendants(EntityId id,
                                       bool include_self = true) const;
     std::vector<EntityId> entity_tree_order() const;
+    /**
+     * Computes world transforms, inherited visibility/locking, and instance
+     * containment in one top-down scene traversal.
+     */
+    [[nodiscard]] SceneHierarchyProjectionSnapshot
+    hierarchy_projection_snapshot(
+        SceneHierarchyProjectionWorkStats *work_stats = nullptr) const;
     std::vector<EntityRecord> entity_records() const;
     std::vector<EntityRecord> entity_records_tree_order() const;
     /** Projects only canonical members while an instance definition is edited. */
@@ -275,10 +360,9 @@ private:
   bool is_selected(EntityId id) const;
   EntityId first_selected_entity() const;
   EntityRecord make_entity_record(EntityId id, int depth,
-                                  EntityId active) const;
-  void append_tree_order(EntityId id, std::vector<EntityId> &ids) const;
-  void append_entity_records(EntityId id, int depth, EntityId active,
-                             std::vector<EntityRecord> &records) const;
+                                  EntityId active,
+                                  const SceneHierarchyProjectionRecord *
+                                      projection = nullptr) const;
 
   EntityId next_id_ = 1;
   EditorObjectId next_editor_object_id_ = 1;

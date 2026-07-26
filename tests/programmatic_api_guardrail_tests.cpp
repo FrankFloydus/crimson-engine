@@ -1281,11 +1281,13 @@ TEST(ProgrammaticApiGuardrailTests, UiAppAndViewportDoNotAddRawModelingMutations
 }
 
 TEST(ProgrammaticApiGuardrailTests,
-     QtToolSettingsWindowWritesSettingsThroughPublicToolsApi) {
+     QtToolSettingsPanelWritesSettingsThroughPublicToolsApi) {
   const std::string panel =
-      read_file(source_root() / "src/ui/qt_tool_settings_window.cpp");
+      read_file(source_root() / "src/ui/qt_tool_settings_panel.cpp");
 
   EXPECT_NE(panel.find("editor_->tools().set_setting("), std::string::npos);
+  EXPECT_NE(panel.find("editor_->tools().reset_active_settings()"),
+            std::string::npos);
   EXPECT_EQ(panel.find("set_interaction_settings("), std::string::npos);
   EXPECT_EQ(panel.find("context.tool_settings"), std::string::npos);
 }
@@ -1406,9 +1408,11 @@ TEST(ProgrammaticApiGuardrailTests, UiPanelRoutingUsesStableIdsAndNoDeadShowMenu
   EXPECT_NE(main_menu_source.find("ui_panel_stable_id(id)"),
             std::string::npos);
   EXPECT_EQ(settings_source.find("file << ui_panel_key"), std::string::npos);
-  EXPECT_NE(settings_source.find("ui_panel_stable_id(UIPanelId::Outliner)"),
+  EXPECT_NE(settings_source.find("for (UIPanelId id : kUiDockPanelIds)"),
             std::string::npos);
-  EXPECT_NE(settings_source.find("ui_panel_stable_id(UIPanelId::Layers)"),
+  EXPECT_NE(settings_source.find("file << ui_panel_stable_id(id)"),
+            std::string::npos);
+  EXPECT_NE(ui_panel_header.find("return \"tool_settings\""),
             std::string::npos);
 }
 

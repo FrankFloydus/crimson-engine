@@ -51,6 +51,7 @@
 #include "editor/tools/native_viewport_tool_coordinator.hpp"
 #include "editor/tools/viewport_tool_descriptor_catalog.hpp"
 #include "editor/transform/scene_transform_drag_service.hpp"
+#include "editor/viewport/viewport_scene_projection.hpp"
 #include "platform/fatal_error_handler.hpp"
 #include "render/filament_material_library.hpp"
 #include "render/light_renderable_cache.hpp"
@@ -91,6 +92,7 @@
 #include "viewport/viewport_grid_placement_policy.hpp"
 #include "viewport/viewport_input_router.hpp"
 #include "viewport/viewport_layout.hpp"
+#include "viewport/viewport_local_visibility.hpp"
 #include "viewport/viewport_settings.hpp"
 #include "viewport/viewport_workspace_service.hpp"
 #include "support/viewport_overlay_test_helpers.hpp"
@@ -121,6 +123,88 @@
 #include <unordered_set>
 #include <utility>
 #include <vector>
+
+namespace quader {
+
+/// Exposes deterministic preview matching without constructing Filament state.
+class ToolPreviewRenderableCacheTestPeer final {
+public:
+  /// Mirrors the production cache's generation-match classification.
+  enum class MatchKind : std::uint8_t {
+    None,
+    Exact,
+    Structural,
+  };
+
+  /// Captures matched indices and work counters for scale assertions.
+  struct MatchOutcome final {
+    MatchKind kind = MatchKind::None;
+    std::vector<std::size_t> candidate_indices;
+    ToolPreviewCacheWorkCounters counters;
+  };
+
+  static MatchOutcome match(
+      const std::vector<RenderToolPreviewMeshRecord> &retained,
+      const std::vector<RenderToolPreviewMeshRecord> &submitted) {
+    ToolPreviewRenderableCache cache;
+    ToolPreviewRenderableCache::PreviewGeneration generation;
+    generation.groups.reserve(retained.size());
+    for (const RenderToolPreviewMeshRecord &mesh : retained) {
+      generation.groups.push_back(group_from(mesh));
+    }
+
+    std::vector<const RenderToolPreviewMeshRecord *> submitted_meshes;
+    submitted_meshes.reserve(submitted.size());
+    for (const RenderToolPreviewMeshRecord &mesh : submitted) {
+      submitted_meshes.push_back(&mesh);
+    }
+
+    MatchOutcome outcome;
+    const ToolPreviewRenderableCache::GenerationMatchResult result =
+        cache.match_generation_groups(
+            generation,
+            std::span<const RenderToolPreviewMeshRecord *const>{
+                submitted_meshes.data(), submitted_meshes.size()},
+            outcome.candidate_indices);
+    switch (result) {
+    case ToolPreviewRenderableCache::GenerationMatchResult::Exact:
+      outcome.kind = MatchKind::Exact;
+      break;
+    case ToolPreviewRenderableCache::GenerationMatchResult::Structural:
+      outcome.kind = MatchKind::Structural;
+      break;
+    case ToolPreviewRenderableCache::GenerationMatchResult::None:
+      break;
+    }
+    outcome.counters = cache.work_counters();
+    return outcome;
+  }
+
+private:
+  static ToolPreviewRenderableCache::PreviewGroup
+  group_from(const RenderToolPreviewMeshRecord &mesh) {
+    ToolPreviewRenderableCache::PreviewGroup group;
+    group.source_object_id = mesh.source_object_id;
+    group.source_entity = mesh.source_entity;
+    group.visibility_entity = mesh.visibility_entity;
+    group.geometry_signature =
+        ToolPreviewRenderableCache::preview_geometry_signature(mesh);
+    group.topology_signature =
+        ToolPreviewRenderableCache::preview_topology_signature(mesh);
+    group.material_signature =
+        ToolPreviewRenderableCache::preview_material_signature(mesh);
+    group.layout_key = mesh.layout_key;
+    group.position_revision = mesh.position_revision;
+    group.topology_payload = mesh.mesh.geometry_payload();
+    group.transforms = mesh.instance_transforms.empty()
+                           ? std::vector<QMat4>{mesh.transform}
+                           : mesh.instance_transforms;
+    group.dynamic_positions = mesh.dynamic_positions;
+    return group;
+  }
+};
+
+} // namespace quader
 
 using namespace quader;
 using test_support::visible_modeling_overlay_frame;
@@ -1034,6 +1118,7 @@ TEST(UISettingsTests, DefaultsKeepPanelVisibilityLocaleAndNavigationGizmo) {
   EXPECT_TRUE(settings.is_panel_visible(UIPanelId::Outliner));
   EXPECT_TRUE(settings.is_panel_visible(UIPanelId::Inspector));
   EXPECT_TRUE(settings.is_panel_visible(UIPanelId::Layers));
+  EXPECT_TRUE(settings.is_panel_visible(UIPanelId::ToolSettings));
   EXPECT_FALSE(settings.is_panel_visible(UIPanelId::Console));
   EXPECT_TRUE(settings.navigation_gizmo_visible());
 }
@@ -1048,6 +1133,7 @@ TEST(UISettingsTests, RoundTripsPanelVisibilityLocaleAndNavigationGizmo) {
   settings.set_panel_visible(UIPanelId::Outliner, false);
   settings.set_panel_visible(UIPanelId::Inspector, false);
   settings.set_panel_visible(UIPanelId::Layers, false);
+  settings.set_panel_visible(UIPanelId::ToolSettings, false);
   settings.set_panel_visible(UIPanelId::Console, true);
   settings.set_navigation_gizmo_visible(false);
 
@@ -1059,10 +1145,12 @@ TEST(UISettingsTests, RoundTripsPanelVisibilityLocaleAndNavigationGizmo) {
   EXPECT_NE(saved_text.find("outliner=false"), std::string::npos);
   EXPECT_NE(saved_text.find("inspector=false"), std::string::npos);
   EXPECT_NE(saved_text.find("layers=false"), std::string::npos);
+  EXPECT_NE(saved_text.find("tool_settings=false"), std::string::npos);
   EXPECT_NE(saved_text.find("console=true"), std::string::npos);
   EXPECT_EQ(saved_text.find("Outliner="), std::string::npos);
   EXPECT_EQ(saved_text.find("Inspector="), std::string::npos);
   EXPECT_EQ(saved_text.find("Layers="), std::string::npos);
+  EXPECT_EQ(saved_text.find("Tool Settings="), std::string::npos);
   EXPECT_EQ(saved_text.find("Console="), std::string::npos);
   saved.close();
 
@@ -1072,6 +1160,7 @@ TEST(UISettingsTests, RoundTripsPanelVisibilityLocaleAndNavigationGizmo) {
   EXPECT_FALSE(loaded.is_panel_visible(UIPanelId::Outliner));
   EXPECT_FALSE(loaded.is_panel_visible(UIPanelId::Inspector));
   EXPECT_FALSE(loaded.is_panel_visible(UIPanelId::Layers));
+  EXPECT_FALSE(loaded.is_panel_visible(UIPanelId::ToolSettings));
   EXPECT_TRUE(loaded.is_panel_visible(UIPanelId::Console));
   EXPECT_FALSE(loaded.navigation_gizmo_visible());
 
@@ -1090,6 +1179,7 @@ TEST(UISettingsTests, LoadsLegacyDisplayPanelKeysAndSavesStableKeys) {
     file << "Outliner=false\n";
     file << "Inspector=false\n";
     file << "Layers=false\n";
+    file << "Tool Settings=false\n";
     file << "Console=true\n";
   }
 
@@ -1097,6 +1187,7 @@ TEST(UISettingsTests, LoadsLegacyDisplayPanelKeysAndSavesStableKeys) {
   EXPECT_FALSE(loaded.is_panel_visible(UIPanelId::Outliner));
   EXPECT_FALSE(loaded.is_panel_visible(UIPanelId::Inspector));
   EXPECT_FALSE(loaded.is_panel_visible(UIPanelId::Layers));
+  EXPECT_FALSE(loaded.is_panel_visible(UIPanelId::ToolSettings));
   EXPECT_TRUE(loaded.is_panel_visible(UIPanelId::Console));
 
   ASSERT_TRUE(loaded.save(path));
@@ -1107,10 +1198,12 @@ TEST(UISettingsTests, LoadsLegacyDisplayPanelKeysAndSavesStableKeys) {
   EXPECT_NE(saved_text.find("outliner=false"), std::string::npos);
   EXPECT_NE(saved_text.find("inspector=false"), std::string::npos);
   EXPECT_NE(saved_text.find("layers=false"), std::string::npos);
+  EXPECT_NE(saved_text.find("tool_settings=false"), std::string::npos);
   EXPECT_NE(saved_text.find("console=true"), std::string::npos);
   EXPECT_EQ(saved_text.find("Outliner="), std::string::npos);
   EXPECT_EQ(saved_text.find("Inspector="), std::string::npos);
   EXPECT_EQ(saved_text.find("Layers="), std::string::npos);
+  EXPECT_EQ(saved_text.find("Tool Settings="), std::string::npos);
   EXPECT_EQ(saved_text.find("Console="), std::string::npos);
   saved.close();
 
@@ -1129,6 +1222,7 @@ TEST(UISettingsTests, IgnoresMalformedPanelVisibilityAndEmptyLocale) {
     file << "Outliner=maybe\n";
     file << "Inspector=0\n";
     file << "Layers=maybe\n";
+    file << "Tool Settings=maybe\n";
     file << "Console=yes\n";
     file << "[Show]\n";
     file << "NavigationGizmo=no\n";
@@ -1142,6 +1236,7 @@ TEST(UISettingsTests, IgnoresMalformedPanelVisibilityAndEmptyLocale) {
   EXPECT_TRUE(loaded.is_panel_visible(UIPanelId::Outliner));
   EXPECT_FALSE(loaded.is_panel_visible(UIPanelId::Inspector));
   EXPECT_TRUE(loaded.is_panel_visible(UIPanelId::Layers));
+  EXPECT_TRUE(loaded.is_panel_visible(UIPanelId::ToolSettings));
   EXPECT_TRUE(loaded.is_panel_visible(UIPanelId::Console));
   EXPECT_FALSE(loaded.navigation_gizmo_visible());
 
@@ -3175,6 +3270,137 @@ TEST(RenderProxyLifecycleTests, RenderResourceOwnersAreNonTransferable) {
   EXPECT_TRUE(render_owner_is_non_transferable<ViewportRenderer>());
 }
 
+RenderToolPreviewMeshRecord preview_match_test_record(bool dynamic_positions) {
+  MeshGeometryPayload geometry;
+  geometry.vertices = {
+      MeshVertex{.position = {0.0f, 0.0f, 0.0f},
+                 .normal = {0.0f, 0.0f, 1.0f},
+                 .uv = {0.0f, 0.0f},
+                 .rgba = 0xffffffffu,
+                 .source_vertex_id = 1u},
+      MeshVertex{.position = {1.0f, 0.0f, 0.0f},
+                 .normal = {0.0f, 0.0f, 1.0f},
+                 .uv = {1.0f, 0.0f},
+                 .rgba = 0xffffffffu,
+                 .source_vertex_id = 2u},
+      MeshVertex{.position = {0.0f, 1.0f, 0.0f},
+                 .normal = {0.0f, 0.0f, 1.0f},
+                 .uv = {0.0f, 1.0f},
+                 .rgba = 0xffffffffu,
+                 .source_vertex_id = 3u},
+  };
+  geometry.indices = {0u, 1u, 2u};
+  geometry.primitives = {
+      {.index_offset = 0u, .index_count = 3u, .material_slot = 0u}};
+
+  RenderToolPreviewMeshRecord record;
+  record.source_object_id = 41;
+  record.source_entity = 73u;
+  record.visibility_entity = 79u;
+  record.mesh.replace_geometry(std::move(geometry));
+  record.dynamic_positions = dynamic_positions;
+  record.layout_key = dynamic_positions ? 101u : 0u;
+  record.position_revision = dynamic_positions ? 1u : 0u;
+  return record;
+}
+
+TEST(ToolPreviewRenderableCacheTests,
+     ExactClaimBucketsVisitEquivalentGroupsOnceInStableOrder) {
+  const auto run = [](std::size_t group_count) {
+    const RenderToolPreviewMeshRecord prototype =
+        preview_match_test_record(false);
+    const std::vector<RenderToolPreviewMeshRecord> retained(group_count,
+                                                            prototype);
+    const std::vector<RenderToolPreviewMeshRecord> submitted(group_count,
+                                                             prototype);
+    return ToolPreviewRenderableCacheTestPeer::match(retained, submitted);
+  };
+
+  const auto small = run(32u);
+  const auto large = run(256u);
+  ASSERT_EQ(small.kind,
+            ToolPreviewRenderableCacheTestPeer::MatchKind::Exact);
+  ASSERT_EQ(large.kind,
+            ToolPreviewRenderableCacheTestPeer::MatchKind::Exact);
+  ASSERT_EQ(large.candidate_indices.size(), 256u);
+  for (std::size_t index = 0u; index < large.candidate_indices.size();
+       ++index) {
+    EXPECT_EQ(large.candidate_indices[index], index);
+  }
+  EXPECT_EQ(small.counters.exact_match_candidate_visits, 32u);
+  EXPECT_EQ(large.counters.exact_match_candidate_visits, 256u);
+  EXPECT_EQ(large.counters.exact_match_candidate_visits,
+            small.counters.exact_match_candidate_visits * 8u);
+  EXPECT_EQ(large.counters.structural_match_candidate_visits, 0u);
+}
+
+TEST(ToolPreviewRenderableCacheTests,
+     ExactLayoutWildcardMatchingKeepsEarliestCompatibleAssociation) {
+  const RenderToolPreviewMeshRecord prototype =
+      preview_match_test_record(true);
+  std::vector<RenderToolPreviewMeshRecord> retained(4u, prototype);
+  retained[0].layout_key = 0u;
+  retained[1].layout_key = 7u;
+  retained[2].layout_key = 7u;
+  retained[3].layout_key = 0u;
+
+  std::vector<RenderToolPreviewMeshRecord> submitted(4u, prototype);
+  submitted[0].layout_key = 7u;
+  submitted[1].layout_key = 7u;
+  submitted[2].layout_key = 9u;
+  submitted[3].layout_key = 0u;
+
+  const auto outcome =
+      ToolPreviewRenderableCacheTestPeer::match(retained, submitted);
+  ASSERT_EQ(outcome.kind,
+            ToolPreviewRenderableCacheTestPeer::MatchKind::Exact);
+  EXPECT_EQ(outcome.candidate_indices,
+            (std::vector<std::size_t>{0u, 1u, 3u, 2u}));
+  EXPECT_LE(outcome.counters.exact_match_candidate_visits,
+            retained.size() * 3u);
+  EXPECT_EQ(outcome.counters.structural_match_candidate_visits, 0u);
+}
+
+TEST(ToolPreviewRenderableCacheTests,
+     StructuralClaimBucketsScaleLinearlyAndPreserveReuseOrder) {
+  const auto run = [](std::size_t group_count) {
+    const RenderToolPreviewMeshRecord prototype =
+        preview_match_test_record(true);
+    std::vector<RenderToolPreviewMeshRecord> retained(group_count, prototype);
+    std::vector<RenderToolPreviewMeshRecord> submitted(group_count, prototype);
+    for (std::size_t index = 0u; index < group_count; ++index) {
+      retained[index].source_object_id = static_cast<int>(index);
+      retained[index].source_entity = static_cast<EntityId>(100u + index);
+      retained[index].visibility_entity =
+          static_cast<EntityId>(200u + index);
+      submitted[index].source_object_id =
+          static_cast<int>(1000u + index);
+      submitted[index].source_entity =
+          static_cast<EntityId>(2000u + index);
+      submitted[index].visibility_entity =
+          static_cast<EntityId>(3000u + index);
+    }
+    return ToolPreviewRenderableCacheTestPeer::match(retained, submitted);
+  };
+
+  const auto small = run(32u);
+  const auto large = run(256u);
+  ASSERT_EQ(small.kind,
+            ToolPreviewRenderableCacheTestPeer::MatchKind::Structural);
+  ASSERT_EQ(large.kind,
+            ToolPreviewRenderableCacheTestPeer::MatchKind::Structural);
+  ASSERT_EQ(large.candidate_indices.size(), 256u);
+  for (std::size_t index = 0u; index < large.candidate_indices.size();
+       ++index) {
+    EXPECT_EQ(large.candidate_indices[index], index);
+  }
+  EXPECT_EQ(large.counters.exact_match_candidate_visits, 0u);
+  EXPECT_EQ(small.counters.structural_match_candidate_visits, 32u);
+  EXPECT_EQ(large.counters.structural_match_candidate_visits, 256u);
+  EXPECT_EQ(large.counters.structural_match_candidate_visits,
+            small.counters.structural_match_candidate_visits * 8u);
+}
+
 TEST(ViewportContextMenuPolicyTests,
      OpensForRightClickReleaseInsideViewportWithActions) {
   EXPECT_TRUE(should_open_viewport_context_menu({
@@ -3600,6 +3826,40 @@ TEST(SceneDocumentTests, TracksMultipleSelectedEntitiesInStableOrder) {
   EXPECT_EQ(scene.primary_selection(), kInvalidEntityId);
 }
 
+TEST(SceneDocumentTests, ReplacesLargeSelectionWithOneRevisionPublication) {
+  SceneDocument scene;
+  std::vector<EntityId> entities;
+  entities.reserve(2048u);
+  for (std::size_t index = 0u; index < 2048u; ++index) {
+    entities.push_back(scene.create_entity("Selection Entity"));
+  }
+
+  const std::uint64_t revision_before = scene.revision();
+  const std::uint64_t selection_before = scene.selection_revision();
+  ASSERT_TRUE(scene.replace_selection(entities, entities[17u]));
+  EXPECT_EQ(scene.revision(), revision_before + 1u);
+  EXPECT_EQ(scene.selection_revision(), selection_before + 1u);
+  EXPECT_EQ(scene.selected_entities(), entities);
+  EXPECT_EQ(scene.primary_selection(), entities[17u]);
+
+  EXPECT_TRUE(scene.replace_selection(entities, entities[17u]));
+  EXPECT_EQ(scene.revision(), revision_before + 1u);
+  EXPECT_EQ(scene.selection_revision(), selection_before + 1u);
+
+  const std::array<EntityId, 4u> replacement{{
+      entities.back(),
+      kInvalidEntityId,
+      entities.back(),
+      entities.front(),
+  }};
+  ASSERT_TRUE(scene.replace_selection(replacement, 99999999u));
+  EXPECT_EQ(scene.revision(), revision_before + 2u);
+  EXPECT_EQ(scene.selection_revision(), selection_before + 2u);
+  EXPECT_EQ(scene.selected_entities(),
+            (std::vector<EntityId>{entities.front(), entities.back()}));
+  EXPECT_EQ(scene.primary_selection(), entities.front());
+}
+
 TEST(SceneDocumentTests, PromotesPrimarySelectionWhenActiveEntityIsDestroyed) {
   SceneDocument scene;
   const EntityId first = scene.create_entity("First");
@@ -3726,6 +3986,182 @@ TEST(SceneDocumentTests, TracksHierarchyTreeOrderAndInheritedState) {
   EXPECT_FALSE(scene.is_effectively_visible(child));
   ASSERT_TRUE(scene.set_locked(group, true));
   EXPECT_TRUE(scene.is_effectively_locked(grandchild));
+}
+
+TEST(SceneDocumentTests,
+     HierarchyProjectionMatchesScalarStateAndPreservesTreeOrder) {
+  SceneDocument scene;
+  const EntityId root = scene.create_empty("Root");
+  const EntityId definition = scene.create_empty("Definition");
+  const EntityId member = scene.create_empty("Member");
+  const EntityId sibling = scene.create_empty("Sibling");
+  const std::array<SceneParentAssignment, 4u> hierarchy{{
+      {.child = root, .parent = kInvalidEntityId},
+      {.child = definition, .parent = root},
+      {.child = member, .parent = definition},
+      {.child = sibling, .parent = root},
+  }};
+  ASSERT_TRUE(scene.replace_hierarchy(hierarchy));
+  ASSERT_TRUE(scene.set_transform(
+      root, TransformComponent{.position = {10.0f, 0.0f, 0.0f}}));
+  ASSERT_TRUE(scene.set_transform(
+      definition, TransformComponent{.position = {2.0f, 0.0f, 0.0f}}));
+  ASSERT_TRUE(scene.set_transform(
+      member, TransformComponent{.position = {0.0f, 3.0f, 0.0f}}));
+  ASSERT_TRUE(scene.set_visible(root, false));
+  ASSERT_TRUE(scene.set_locked(definition, true));
+  ASSERT_TRUE(scene.set_instance_definition(definition));
+
+  SceneHierarchyProjectionWorkStats work;
+  const SceneHierarchyProjectionSnapshot projection =
+      scene.hierarchy_projection_snapshot(&work);
+  ASSERT_EQ(projection.records().size(), 4u);
+  EXPECT_EQ(projection.records()[0].entity, root);
+  EXPECT_EQ(projection.records()[1].entity, definition);
+  EXPECT_EQ(projection.records()[2].entity, member);
+  EXPECT_EQ(projection.records()[3].entity, sibling);
+  EXPECT_EQ(projection.records()[2].depth, 2u);
+  EXPECT_EQ(projection.find(kInvalidEntityId), nullptr);
+  EXPECT_EQ(projection.find(99999999u), nullptr);
+
+  for (const SceneHierarchyProjectionRecord &record :
+       projection.records()) {
+    EXPECT_EQ(record.world_transform.values,
+              scene.world_transform_matrix(record.entity).values);
+    EXPECT_EQ(record.effectively_visible,
+              scene.is_effectively_visible(record.entity));
+    EXPECT_EQ(record.effectively_locked,
+              scene.is_effectively_locked(record.entity));
+    EXPECT_EQ(record.containing_instance_definition,
+              scene.containing_instance_definition(record.entity));
+  }
+  EXPECT_EQ(work.entity_visit_count, 4u);
+  EXPECT_EQ(work.parent_state_lookup_count, 3u);
+  EXPECT_EQ(work.world_transform_multiply_count, 3u);
+
+  const std::vector<EntityRecord> outliner =
+      scene.entity_records_tree_order();
+  ASSERT_EQ(outliner.size(), 2u);
+  EXPECT_EQ(outliner[0].id, root);
+  EXPECT_EQ(outliner[1].id, sibling);
+  EXPECT_FALSE(outliner[1].effectively_visible);
+}
+
+TEST(SceneDocumentTests, HierarchyProjectionWorkScalesLinearlyWithDepth) {
+  const auto exercise = [](std::size_t entity_count) {
+    SceneDocument scene;
+    std::vector<EntityId> entities;
+    std::vector<SceneParentAssignment> hierarchy;
+    entities.reserve(entity_count);
+    hierarchy.reserve(entity_count);
+    for (std::size_t index = 0u; index < entity_count; ++index) {
+      const EntityId entity = scene.create_empty("Deep Hierarchy Entity");
+      entities.push_back(entity);
+      hierarchy.push_back({
+          .child = entity,
+          .parent =
+              index == 0u ? kInvalidEntityId : entities[index - 1u],
+      });
+    }
+    EXPECT_TRUE(scene.replace_hierarchy(hierarchy));
+
+    SceneHierarchyProjectionWorkStats work;
+    const SceneHierarchyProjectionSnapshot projection =
+        scene.hierarchy_projection_snapshot(&work);
+    EXPECT_EQ(projection.records().size(), entity_count);
+    const SceneHierarchyProjectionRecord *leaf =
+        projection.find(entities.back());
+    EXPECT_NE(leaf, nullptr);
+    if (leaf != nullptr) {
+      EXPECT_EQ(leaf->depth, entity_count - 1u);
+    }
+    EXPECT_EQ(work.entity_visit_count, entity_count);
+    EXPECT_EQ(work.parent_state_lookup_count, entity_count - 1u);
+    EXPECT_EQ(work.world_transform_multiply_count, entity_count - 1u);
+    return work;
+  };
+
+  const SceneHierarchyProjectionWorkStats work_1k = exercise(1024u);
+  const SceneHierarchyProjectionWorkStats work_2k = exercise(2048u);
+  const auto total_work = [](const SceneHierarchyProjectionWorkStats &work) {
+    return work.entity_visit_count + work.parent_state_lookup_count +
+           work.world_transform_multiply_count;
+  };
+  EXPECT_LE(total_work(work_2k), total_work(work_1k) * 2u + 3u);
+}
+
+TEST(ViewportSceneProjectionTests,
+     PointLightCandidatesUseInheritedHierarchyProjection) {
+  SceneDocument scene;
+  const EntityId root = scene.create_empty("Root");
+  const EntityId point = scene.create_entity("Point", EntityKind::Light);
+  ASSERT_TRUE(scene.set_transform(
+      root, TransformComponent{.position = {10.0f, 0.0f, 0.0f}}));
+  ASSERT_TRUE(scene.set_transform(
+      point, TransformComponent{.position = {2.0f, 0.0f, 0.0f}}));
+  ASSERT_TRUE(scene.set_parent(point, root, false));
+  ASSERT_TRUE(scene.set_light(
+      point, LightComponent{.type = LightType::Point, .intensity = 2.0f}));
+
+  const ViewportLocalVisibilitySnapshot local_visibility;
+  std::vector<ViewportSceneBillboardPickCandidate> candidates =
+      ViewportSceneProjection::point_light_pick_candidates(
+          scene, local_visibility);
+  ASSERT_EQ(candidates.size(), 1u);
+  EXPECT_EQ(candidates.front().entity, point);
+  EXPECT_FLOAT_EQ(candidates.front().position.x, 12.0f);
+
+  ASSERT_TRUE(scene.set_visible(root, false));
+  candidates = ViewportSceneProjection::point_light_pick_candidates(
+      scene, local_visibility);
+  EXPECT_TRUE(candidates.empty());
+}
+
+TEST(SceneDocumentTests,
+     AtomicallyReplacesCompleteHierarchyInAssignmentOrder) {
+  SceneDocument scene;
+  const EntityId root = scene.create_empty("Root");
+  const EntityId group = scene.create_empty("Group");
+  const EntityId first = scene.create_entity("First");
+  const EntityId second = scene.create_entity("Second");
+
+  const std::uint64_t revision_before = scene.revision();
+  const std::uint64_t visibility_before = scene.visibility_revision();
+  const std::uint64_t transform_before = scene.transform_revision();
+  const std::array<SceneParentAssignment, 4u> hierarchy{{
+      {.child = root, .parent = kInvalidEntityId},
+      {.child = group, .parent = root},
+      {.child = second, .parent = group},
+      {.child = first, .parent = group},
+  }};
+  ASSERT_TRUE(scene.replace_hierarchy(hierarchy));
+
+  EXPECT_EQ(scene.revision(), revision_before + 1u);
+  EXPECT_EQ(scene.visibility_revision(), visibility_before + 1u);
+  EXPECT_EQ(scene.transform_revision(), transform_before + 1u);
+  EXPECT_EQ(scene.parent(group), root);
+  EXPECT_EQ(scene.parent(first), group);
+  EXPECT_EQ(scene.parent(second), group);
+  EXPECT_EQ(scene.children(group),
+            (std::vector<EntityId>{second, first}));
+  EXPECT_EQ(scene.descendants(root, true),
+            (std::vector<EntityId>{root, group, second, first}));
+
+  const std::uint64_t stable_revision = scene.revision();
+  EXPECT_TRUE(scene.replace_hierarchy(hierarchy));
+  EXPECT_EQ(scene.revision(), stable_revision);
+
+  const std::array<SceneParentAssignment, 4u> cycle{{
+      {.child = root, .parent = kInvalidEntityId},
+      {.child = group, .parent = first},
+      {.child = second, .parent = group},
+      {.child = first, .parent = group},
+  }};
+  EXPECT_FALSE(scene.replace_hierarchy(cycle));
+  EXPECT_EQ(scene.revision(), stable_revision);
+  EXPECT_EQ(scene.parent(group), root);
+  EXPECT_EQ(scene.children(group),
+            (std::vector<EntityId>{second, first}));
 }
 
 TEST(SceneDocumentTests, ReparentCanPreserveWorldTransformAndDestroyChildren) {
@@ -6725,6 +7161,67 @@ TEST(AssetRegistryTests,
                       ->authored_polygon_document->vertices.front()
                       .position.x,
                   -0.5f);
+}
+
+TEST(AssetRegistryTests,
+     AuthoredInterningSeparatesStableIdsWithoutCompiledGeometryBuckets) {
+  AssetRegistry registry;
+  MeshAsset prototype = make_test_triangle_mesh("Stable Id Prototype");
+  quader_poly::Document authored;
+  authored.vertices = {
+      {.id = 1u, .position = {-0.5f, 0.0f, 0.0f}},
+      {.id = 2u, .position = {0.5f, 0.0f, 0.0f}},
+      {.id = 3u, .position = {0.0f, 0.0f, 1.0f}},
+  };
+  authored.faces = {{.id = 1u, .vertices = {1u, 2u, 3u}}};
+  authored.next_vertex_id = 4u;
+  authored.next_face_id = 2u;
+
+  constexpr std::size_t kVariantCount = 512u;
+  std::vector<AssetId> variants;
+  variants.reserve(kVariantCount);
+  for (std::size_t index = 0u; index < kVariantCount; ++index) {
+    MeshAsset logical = prototype;
+    logical.name = "Stable Id Variant " + std::to_string(index);
+    quader_poly::Document variant = authored;
+    variant.faces.front().id =
+        static_cast<quader_poly::ElementId>(index + 1u);
+    variant.next_face_id =
+        static_cast<quader_poly::ElementId>(index + 2u);
+    logical.replace_authored_polygon_document(std::move(variant));
+    const AssetId id = registry.add_mesh(std::move(logical));
+    ASSERT_NE(id, kInvalidAssetId);
+    variants.push_back(id);
+  }
+
+  std::unordered_set<const quader_poly::Document *> authored_tokens;
+  std::unordered_set<std::uintptr_t> geometry_tokens;
+  for (const AssetId id : variants) {
+    const MeshAsset *mesh = registry.mesh(id);
+    ASSERT_NE(mesh, nullptr);
+    authored_tokens.insert(mesh->authored_polygon_document.get());
+    geometry_tokens.insert(mesh->geometry_token());
+  }
+  EXPECT_EQ(authored_tokens.size(), kVariantCount);
+  EXPECT_EQ(geometry_tokens.size(), 1u);
+
+  constexpr std::size_t kDuplicateIndex = 317u;
+  MeshAsset duplicate = prototype;
+  quader_poly::Document duplicate_authored = authored;
+  duplicate_authored.faces.front().id =
+      static_cast<quader_poly::ElementId>(kDuplicateIndex + 1u);
+  duplicate_authored.next_face_id =
+      static_cast<quader_poly::ElementId>(kDuplicateIndex + 2u);
+  duplicate.replace_authored_polygon_document(
+      std::move(duplicate_authored));
+  const AssetId duplicate_id = registry.add_mesh(std::move(duplicate));
+  ASSERT_NE(duplicate_id, kInvalidAssetId);
+  ASSERT_NE(registry.mesh(duplicate_id), nullptr);
+  ASSERT_NE(registry.mesh(variants[kDuplicateIndex]), nullptr);
+  EXPECT_EQ(
+      registry.mesh(duplicate_id)->authored_polygon_document.get(),
+      registry.mesh(variants[kDuplicateIndex])
+          ->authored_polygon_document.get());
 }
 
 TEST(AssetRegistryTests,

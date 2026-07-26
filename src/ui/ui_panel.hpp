@@ -6,17 +6,32 @@
 ////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
+#include <array>
+#include <cstddef>
+
 namespace quader {
 
 /**
  * Enumerates UIPanelId values used by the ui layer.
  */
 enum class UIPanelId {
-    Viewport,
-    Outliner,
-    Inspector,
-    Console,
-    Layers,
+  Viewport,
+  Outliner,
+  Inspector,
+  Console,
+  Layers,
+  ToolSettings,
+  Count,
+};
+
+inline constexpr std::size_t kUiPanelCount =
+    static_cast<std::size_t>(UIPanelId::Count);
+inline constexpr std::array<UIPanelId, 5> kUiDockPanelIds = {
+    UIPanelId::Outliner,
+    UIPanelId::Inspector,
+    UIPanelId::Layers,
+    UIPanelId::ToolSettings,
+    UIPanelId::Console,
 };
 
 inline const char *ui_panel_key(UIPanelId id) {
@@ -31,6 +46,10 @@ inline const char *ui_panel_key(UIPanelId id) {
     return "Console";
   case UIPanelId::Layers:
     return "Layers";
+  case UIPanelId::ToolSettings:
+    return "Tool Settings";
+  case UIPanelId::Count:
+    break;
   }
   return "Unknown";
 }
@@ -47,6 +66,10 @@ inline const char *ui_panel_stable_id(UIPanelId id) {
     return "console";
   case UIPanelId::Layers:
     return "layers";
+  case UIPanelId::ToolSettings:
+    return "tool_settings";
+  case UIPanelId::Count:
+    break;
   }
   return "unknown";
 }
@@ -57,9 +80,12 @@ inline bool ui_panel_default_visible(UIPanelId id) {
   case UIPanelId::Outliner:
   case UIPanelId::Inspector:
   case UIPanelId::Layers:
+  case UIPanelId::ToolSettings:
     return true;
   case UIPanelId::Console:
     return false;
+  case UIPanelId::Count:
+    break;
   }
   return true;
 }
@@ -76,6 +102,10 @@ inline const char *ui_panel_localization_key(UIPanelId id) {
     return "ui.panel.console";
   case UIPanelId::Layers:
     return "ui.panel.layers";
+  case UIPanelId::ToolSettings:
+    return "ui.panel.tool_settings";
+  case UIPanelId::Count:
+    break;
   }
   return "ui.panel.unknown";
 }

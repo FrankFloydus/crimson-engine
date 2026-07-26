@@ -4,20 +4,25 @@
 // No permission is granted to use, copy, modify, distribute, or sublicense this
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
-#include "ui/qt_tool_settings_window.hpp"
+#include "ui/qt_tool_settings_panel.hpp"
 
 #include "api/quader_editor_api.hpp"
 #include "core/localization_service.hpp"
 #include "core/logger.hpp"
 #include "ui/qt_tool_settings_number_slider.hpp"
+#include "ui/ui_panel.hpp"
 
 #include <QApplication>
 #include <QByteArray>
 #include <QButtonGroup>
 #include <QCheckBox>
 #include <QComboBox>
+#include <QCoreApplication>
+#include <QDockWidget>
 #include <QDoubleSpinBox>
 #include <QFrame>
+#include <QFont>
+#include <QGridLayout>
 #include <QGroupBox>
 #include <QHBoxLayout>
 #include <QLabel>
@@ -26,10 +31,13 @@
 #include <QRadioButton>
 #include <QScrollArea>
 #include <QSignalBlocker>
+#include <QSizePolicy>
 #include <QSlider>
 #include <QSpinBox>
 #include <QTimer>
+#include <QToolButton>
 #include <QVBoxLayout>
+#include <QWindow>
 
 #include <algorithm>
 #include <cmath>
@@ -75,6 +83,18 @@ QString localized_target_title(const LocalizationService *localization,
   }
   return localized_text(localization, "ui.panel.tool_settings",
                         "Tool Settings");
+}
+
+QString localized_target_description(
+    const LocalizationService *localization,
+    const QuaderToolSettingsTarget &target) {
+  if (localization != nullptr && !target.tool_id.empty()) {
+    std::string key = "tool_settings.description.";
+    key.append(target.tool_id);
+    return QString::fromStdString(
+        localization->text(key, target.description));
+  }
+  return qtext(target.description);
 }
 
 QString localized_descriptor_label(const LocalizationService *localization,
@@ -161,7 +181,7 @@ bool same_control_structure(const QuaderToolSettingControl &left,
 bool same_target_structure(const QuaderToolSettingsTarget &left,
                            const QuaderToolSettingsTarget &right) {
   if (left.active != right.active || left.tool_id != right.tool_id ||
-      left.title != right.title ||
+      left.title != right.title || left.description != right.description ||
       left.controls.size() != right.controls.size()) {
     return false;
   }
@@ -224,10 +244,61 @@ void clear_layout(QLayout &layout) {
   }
 }
 
+/// Keeps one disclosure section expanded/collapsed without rebuilding it.
+class QtToolSettingsSection final : public QWidget {
+public:
+  explicit QtToolSettingsSection(QString stable_name,
+                                 QWidget *parent = nullptr)
+      : QWidget(parent) {
+    setObjectName(stable_name);
+    auto *layout = new QVBoxLayout(this);
+    layout->setContentsMargins(0, 0, 0, 0);
+    layout->setSpacing(4);
+
+    header_ = new QToolButton(this);
+    header_->setObjectName(stable_name + QStringLiteral(".header"));
+    header_->setAutoRaise(true);
+    header_->setCheckable(true);
+    header_->setChecked(true);
+    header_->setArrowType(Qt::DownArrow);
+    header_->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+    header_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    layout->addWidget(header_);
+
+    content_ = new QFrame(this);
+    content_->setObjectName(stable_name + QStringLiteral(".content"));
+    content_->setFrameShape(QFrame::StyledPanel);
+    content_->setFrameShadow(QFrame::Plain);
+    layout->addWidget(content_);
+
+    QObject::connect(header_, &QToolButton::toggled, this,
+                     [this](bool expanded) {
+                       header_->setArrowType(expanded ? Qt::DownArrow
+                                                       : Qt::RightArrow);
+                       content_->setVisible(expanded);
+                     });
+  }
+
+  void set_title(const QString &title) {
+    if (header_->text() != title) {
+      header_->setText(title);
+    }
+    if (header_->accessibleName() != title) {
+      header_->setAccessibleName(title);
+    }
+  }
+
+  [[nodiscard]] QWidget *content() const { return content_; }
+
+private:
+  QToolButton *header_ = nullptr;
+  QFrame *content_ = nullptr;
+};
+
 } // namespace
 
 /// Owns retained controls for the active tool's descriptor-driven settings.
-struct QtToolSettingsWindow::Impl {
+struct QtToolSettingsPanel::Impl {
   /// Associates one choice button with its stable option and numeric value.
   struct ChoiceWidget {
     QRadioButton *button = nullptr;
@@ -252,49 +323,113 @@ struct QtToolSettingsWindow::Impl {
     std::vector<ChoiceWidget> choices;
   };
 
-  explicit Impl(QtToolSettingsWindow &window) : window_(window) {
-    window_.setObjectName(QStringLiteral("floating.tool_settings"));
-    window_.setAttribute(Qt::WA_DeleteOnClose, false);
-    window_.resize(340, 220);
+  explicit Impl(QtToolSettingsPanel &panel) : panel_(panel) {
+    panel_.setObjectName(QString::fromLatin1(
+        ui_panel_stable_id(UIPanelId::ToolSettings)));
+    panel_.setMinimumWidth(240);
 
-    auto *root_layout = new QVBoxLayout(&window_);
+    auto *root_layout = new QVBoxLayout(&panel_);
+    root_layout->setObjectName(QStringLiteral("tool_settings.layout"));
+    root_layout->setContentsMargins(8, 8, 8, 8);
+    root_layout->setSpacing(8);
 
-    target_title_ = new QLabel(&window_);
+    scroll_area_ = new QScrollArea(&panel_);
+    scroll_area_->setObjectName(QStringLiteral("tool_settings.scroll"));
+    scroll_area_->setFrameShape(QFrame::NoFrame);
+    scroll_area_->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    scroll_area_->setWidgetResizable(true);
+    panel_.setFocusProxy(scroll_area_);
+
+    auto *scroll_content = new QWidget(scroll_area_);
+    scroll_content->setObjectName(QStringLiteral("tool_settings.content"));
+    auto *content_layout = new QVBoxLayout(scroll_content);
+    content_layout->setContentsMargins(0, 0, 0, 0);
+    content_layout->setSpacing(8);
+
+    target_title_ = new QLabel(scroll_content);
     target_title_->setObjectName(QStringLiteral("tool_settings.target_title"));
-    root_layout->addWidget(target_title_);
+    target_title_->setWordWrap(true);
+    QFont target_font = target_title_->font();
+    target_font.setBold(true);
+    target_title_->setFont(target_font);
+    content_layout->addWidget(target_title_);
 
-    auto *title_separator = new QFrame(&window_);
+    auto *title_separator = new QFrame(scroll_content);
     title_separator->setObjectName(
         QStringLiteral("tool_settings.title_separator"));
     title_separator->setFrameShape(QFrame::HLine);
-    root_layout->addWidget(title_separator);
+    content_layout->addWidget(title_separator);
 
-    scroll_area_ = new QScrollArea(&window_);
-    scroll_area_->setObjectName(QStringLiteral("tool_settings.scroll"));
-    scroll_area_->setWidgetResizable(true);
-    controls_container_ = new QWidget(scroll_area_);
-    controls_container_->setObjectName(
-        QStringLiteral("tool_settings.controls"));
+    description_section_ = new QtToolSettingsSection(
+        QStringLiteral("tool_settings.section.description"),
+        scroll_content);
+    auto *description_layout =
+        new QVBoxLayout(description_section_->content());
+    description_layout->setContentsMargins(8, 6, 8, 6);
+    description_label_ =
+        new QLabel(description_section_->content());
+    description_label_->setObjectName(
+        QStringLiteral("tool_settings.description"));
+    description_label_->setWordWrap(true);
+    description_label_->setTextInteractionFlags(
+        Qt::TextSelectableByKeyboard | Qt::TextSelectableByMouse);
+    description_layout->addWidget(description_label_);
+    content_layout->addWidget(description_section_);
+
+    settings_section_ = new QtToolSettingsSection(
+        QStringLiteral("tool_settings.section.settings"), scroll_content);
+    controls_container_ = settings_section_->content();
+    controls_container_->setObjectName(QStringLiteral(
+        "tool_settings.section.settings.content"));
     controls_layout_ = new QVBoxLayout(controls_container_);
-    scroll_area_->setWidget(controls_container_);
+    controls_layout_->setContentsMargins(8, 6, 8, 6);
+    controls_layout_->setSpacing(6);
+    content_layout->addWidget(settings_section_);
+    content_layout->addStretch(1);
+    scroll_area_->setWidget(scroll_content);
     root_layout->addWidget(scroll_area_, 1);
 
-    actions_container_ = new QWidget(&window_);
+    actions_container_ = new QWidget(&panel_);
     actions_container_->setObjectName(QStringLiteral("tool_settings.actions"));
-    auto *actions_layout = new QHBoxLayout(actions_container_);
-    actions_layout->addStretch(1);
+    auto *actions_layout = new QVBoxLayout(actions_container_);
+    actions_layout->setContentsMargins(0, 0, 0, 0);
+    actions_layout->setSpacing(6);
 
-    apply_button_ = new QPushButton(actions_container_);
+    preview_actions_container_ = new QWidget(actions_container_);
+    preview_actions_container_->setObjectName(
+        QStringLiteral("tool_settings.preview_actions"));
+    auto *preview_actions_layout =
+        new QHBoxLayout(preview_actions_container_);
+    preview_actions_layout->setContentsMargins(0, 0, 0, 0);
+    preview_actions_layout->addStretch(1);
+
+    apply_button_ = new QPushButton(preview_actions_container_);
     apply_button_->setObjectName(QStringLiteral("tool_settings.apply"));
-    actions_layout->addWidget(apply_button_);
+    preview_actions_layout->addWidget(apply_button_);
 
-    cancel_button_ = new QPushButton(actions_container_);
+    cancel_button_ = new QPushButton(preview_actions_container_);
     cancel_button_->setObjectName(QStringLiteral("tool_settings.cancel"));
-    actions_layout->addWidget(cancel_button_);
+    preview_actions_layout->addWidget(cancel_button_);
+    actions_layout->addWidget(preview_actions_container_);
+
+    reset_button_ = new QPushButton(actions_container_);
+    reset_button_->setObjectName(
+        QStringLiteral("tool_settings.reset_defaults"));
+    reset_button_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    actions_layout->addWidget(reset_button_);
     root_layout->addWidget(actions_container_);
     refresh_localized_text();
 
-    QObject::connect(apply_button_, &QPushButton::clicked, &window_, [this]() {
+    QObject::connect(reset_button_, &QPushButton::clicked, &panel_, [this]() {
+      if (editor_ == nullptr) {
+        return;
+      }
+      const QuaderApiVoidResult result =
+          editor_->tools().reset_active_settings();
+      log_failure("Reset tool settings", result);
+      schedule_refresh();
+    });
+    QObject::connect(apply_button_, &QPushButton::clicked, &panel_, [this]() {
       if (editor_ == nullptr) {
         return;
       }
@@ -303,7 +438,7 @@ struct QtToolSettingsWindow::Impl {
       log_failure("Tool preview apply", result);
       schedule_refresh();
     });
-    QObject::connect(cancel_button_, &QPushButton::clicked, &window_,
+    QObject::connect(cancel_button_, &QPushButton::clicked, &panel_,
                      [this]() {
                        if (editor_ == nullptr) {
                          return;
@@ -313,9 +448,7 @@ struct QtToolSettingsWindow::Impl {
                        log_failure("Tool preview cancel", result);
                        schedule_refresh();
                      });
-
-    actions_container_->hide();
-    window_.hide();
+    present_inactive_target();
   }
 
   void bind(QuaderEditorApi &editor) {
@@ -327,14 +460,13 @@ struct QtToolSettingsWindow::Impl {
   void unbind() {
     editor_ = nullptr;
     last_target_.reset();
-    clear_controls();
-    window_.hide();
+    present_inactive_target();
   }
 
   void set_localization(const LocalizationService &localization) {
     localization_ = &localization;
     // Descriptor controls retain their visible text, so force a rebuild when
-    // the selected locale changes instead of updating only the window title.
+    // the selected locale changes instead of updating only the dock title.
     last_target_.reset();
     refresh_localized_text();
     refresh();
@@ -343,17 +475,17 @@ struct QtToolSettingsWindow::Impl {
   void refresh() {
     refresh_localized_text();
     if (editor_ == nullptr) {
-      window_.hide();
+      if (!inactive_presented_) {
+        present_inactive_target();
+      }
       return;
     }
 
     const QuaderToolSettingsTarget target = editor_->tools().active_settings();
     if (!target.active) {
-      if (last_target_.has_value()) {
-        clear_controls();
-        last_target_.reset();
+      if (!inactive_presented_) {
+        present_inactive_target();
       }
-      window_.hide();
       return;
     }
 
@@ -364,10 +496,10 @@ struct QtToolSettingsWindow::Impl {
       synchronize_values(target);
     }
     last_target_ = target;
+  }
 
-    if (window_.isHidden()) {
-      window_.show();
-    }
+  [[nodiscard]] bool has_active_target() const {
+    return last_target_.has_value() && last_target_->active;
   }
 
 private:
@@ -376,7 +508,7 @@ private:
       return;
     }
     refresh_scheduled_ = true;
-    QTimer::singleShot(0, &window_, [this]() {
+    QTimer::singleShot(0, &panel_, [this]() {
       refresh_scheduled_ = false;
       refresh();
     });
@@ -384,9 +516,37 @@ private:
 
   void clear_controls() {
     controls_.clear();
+    empty_settings_label_ = nullptr;
     clear_layout(*controls_layout_);
     target_title_->clear();
-    actions_container_->hide();
+    description_label_->clear();
+    reset_button_->setEnabled(false);
+    preview_actions_container_->hide();
+    apply_button_->hide();
+    cancel_button_->hide();
+  }
+
+  void add_empty_settings_message(const QString &text) {
+    empty_settings_label_ = new QLabel(text, controls_container_);
+    empty_settings_label_->setObjectName(
+        QStringLiteral("tool_settings.settings_empty"));
+    empty_settings_label_->setWordWrap(true);
+    controls_layout_->addWidget(empty_settings_label_);
+  }
+
+  void present_inactive_target() {
+    clear_controls();
+    last_target_.reset();
+    inactive_presented_ = true;
+    target_title_->setText(localized_text(
+        localization_, "tool_settings.no_active.title", "No Active Tool"));
+    description_label_->setText(localized_text(
+        localization_, "tool_settings.no_active.description",
+        "Activate a tool to view its description and settings."));
+    add_empty_settings_message(localized_text(
+        localization_, "tool_settings.no_active.settings",
+        "No tool settings are available."));
+    controls_layout_->addStretch(1);
   }
 
   void queue_number_dispatch(std::size_t control_index, double value) {
@@ -438,8 +598,15 @@ private:
   }
 
   void refresh_localized_text() {
-    window_.setWindowTitle(localized_text(
+    panel_.setWindowTitle(localized_text(
         localization_, "ui.panel.tool_settings", "Tool Settings"));
+    description_section_->set_title(localized_text(
+        localization_, "tool_settings.section.description", "Description"));
+    settings_section_->set_title(localized_text(
+        localization_, "tool_settings.section.settings", "Settings"));
+    reset_button_->setText(localized_text(
+        localization_, "tool_settings.reset_defaults",
+        "Reset to Tool Defaults"));
     apply_button_->setText(
         localized_text(localization_, "ui.action.apply", "Apply"));
     cancel_button_->setText(
@@ -447,15 +614,41 @@ private:
     if (last_target_.has_value()) {
       target_title_->setText(
           localized_target_title(localization_, *last_target_));
+      description_label_->setText(
+          localized_target_description(localization_, *last_target_));
+      if (empty_settings_label_ != nullptr) {
+        empty_settings_label_->setText(localized_text(
+            localization_, "tool_settings.no_settings",
+            "This tool has no adjustable settings."));
+      }
+    } else if (inactive_presented_) {
+      target_title_->setText(localized_text(
+          localization_, "tool_settings.no_active.title", "No Active Tool"));
+      description_label_->setText(localized_text(
+          localization_, "tool_settings.no_active.description",
+          "Activate a tool to view its description and settings."));
+      if (empty_settings_label_ != nullptr) {
+        empty_settings_label_->setText(localized_text(
+            localization_, "tool_settings.no_active.settings",
+            "No tool settings are available."));
+      }
     }
   }
 
   void rebuild(const QuaderToolSettingsTarget &target) {
     clear_controls();
+    inactive_presented_ = false;
     target_title_->setText(localized_target_title(localization_, target));
+    description_label_->setText(
+        localized_target_description(localization_, target));
 
     for (std::size_t index = 0; index < target.controls.size(); ++index) {
       add_control(target, target.controls[index], index);
+    }
+    if (target.controls.empty()) {
+      add_empty_settings_message(localized_text(
+          localization_, "tool_settings.no_settings",
+          "This tool has no adjustable settings."));
     }
     controls_layout_->addStretch(1);
     synchronize_values(target);
@@ -478,7 +671,7 @@ private:
       auto *toggle = new QCheckBox(label, controls_container_);
       toggle->setObjectName(object_name);
       toggle->setAccessibleName(label);
-      QObject::connect(toggle, &QCheckBox::toggled, &window_,
+      QObject::connect(toggle, &QCheckBox::toggled, &panel_,
                        [this, tool_id = target.tool_id,
                         control_id = control.id](bool checked) {
                          if (editor_ == nullptr || synchronizing_) {
@@ -499,10 +692,12 @@ private:
     case QuaderToolSettingControlKind::Number: {
       auto *row = new QWidget(controls_container_);
       row->setObjectName(object_name + QStringLiteral(".row"));
-      auto *row_layout = new QHBoxLayout(row);
+      auto *row_layout = new QGridLayout(row);
+      row_layout->setColumnStretch(0, 1);
       auto *field_label = new QLabel(label, row);
       field_label->setObjectName(object_name + QStringLiteral(".label"));
-      row_layout->addWidget(field_label);
+      field_label->setWordWrap(true);
+      row_layout->addWidget(field_label, 0, 0, 1, 2);
 
       const bool integer_control = uses_integer_spin_box(control);
       const QtToolSettingsNumberSliderMapping slider_mapping =
@@ -516,7 +711,7 @@ private:
       slider->setRange(slider_mapping.slider_minimum,
                        slider_mapping.slider_maximum);
       slider->setTracking(true);
-      row_layout->addWidget(slider, 1);
+      row_layout->addWidget(slider, 1, 0);
       binding.number_slider = slider;
       binding.number_slider_mapping = slider_mapping;
 
@@ -538,11 +733,11 @@ private:
       dispatch_timer->setInterval(kLiveNumberDispatchIntervalMs);
       binding.number_dispatch_timer = dispatch_timer;
       binding.number_dispatch = send_number_to_editor;
-      QObject::connect(dispatch_timer, &QTimer::timeout, &window_,
+      QObject::connect(dispatch_timer, &QTimer::timeout, &panel_,
                        [this, control_index]() {
                          flush_number_dispatch(control_index);
                        });
-      QObject::connect(slider, &QSlider::sliderReleased, &window_,
+      QObject::connect(slider, &QSlider::sliderReleased, &panel_,
                        [this, control_index]() {
                          flush_number_dispatch(control_index);
                        });
@@ -557,7 +752,7 @@ private:
             std::max(1, static_cast<int>(std::llround(control.step))));
         slider->setSingleStep(spin->singleStep());
         QObject::connect(
-            slider, &QSlider::valueChanged, &window_,
+            slider, &QSlider::valueChanged, &panel_,
             [this, spin, slider, control_index](int position) {
               if (editor_ == nullptr || synchronizing_) {
                 return;
@@ -575,7 +770,7 @@ private:
               dispatch_number(control_index, static_cast<double>(value),
                               slider->isSliderDown());
             });
-        QObject::connect(spin, &QSpinBox::valueChanged, &window_,
+        QObject::connect(spin, &QSpinBox::valueChanged, &panel_,
                          [this, spin, slider, control_index](int value) {
                            if (editor_ == nullptr || synchronizing_) {
                              return;
@@ -595,7 +790,7 @@ private:
                            dispatch_number(control_index,
                                            static_cast<double>(value), false);
                          });
-        row_layout->addWidget(spin);
+        row_layout->addWidget(spin, 1, 1);
         field_label->setBuddy(spin);
         binding.integer = spin;
       } else {
@@ -614,7 +809,7 @@ private:
         spin->setDecimals(
             std::max(4, decimal_places_for_step(control.step)));
         QObject::connect(
-            slider, &QSlider::valueChanged, &window_,
+            slider, &QSlider::valueChanged, &panel_,
             [this, spin, slider, control_index](int position) {
               if (editor_ == nullptr || synchronizing_) {
                 return;
@@ -632,7 +827,7 @@ private:
               dispatch_number(control_index, spin->value(),
                               slider->isSliderDown());
             });
-        QObject::connect(spin, &QDoubleSpinBox::valueChanged, &window_,
+        QObject::connect(spin, &QDoubleSpinBox::valueChanged, &panel_,
                          [this, spin, slider, control_index](double value) {
                            if (editor_ == nullptr || synchronizing_) {
                              return;
@@ -650,7 +845,7 @@ private:
                                                spin->singleStep());
                            dispatch_number(control_index, value, false);
                          });
-        row_layout->addWidget(spin);
+        row_layout->addWidget(spin, 1, 1);
         field_label->setBuddy(spin);
         binding.floating = spin;
       }
@@ -681,7 +876,7 @@ private:
         field_label->setBuddy(dropdown);
         row_layout->addWidget(dropdown, 1);
         QObject::connect(
-            dropdown, &QComboBox::currentIndexChanged, &window_,
+            dropdown, &QComboBox::currentIndexChanged, &panel_,
             [this, dropdown, tool_id = target.tool_id,
              control_id = control.id](int index) {
               if (editor_ == nullptr || synchronizing_ || index < 0) {
@@ -714,15 +909,19 @@ private:
            option_index < control.choices.size(); ++option_index) {
         const QuaderToolSettingChoiceOption &option =
             control.choices[option_index];
+        std::string option_localization_key = "tool_settings.";
+        option_localization_key.append(target.tool_id);
+        option_localization_key.push_back('.');
+        option_localization_key.append(option.id);
         const QString option_label = localized_descriptor_label(
-            localization_, option.id, option.label);
+            localization_, option_localization_key, option.label);
         auto *radio = new QRadioButton(option_label, group);
         radio->setObjectName(
             option_object_name(object_name, option.id, option_index));
         radio->setAccessibleName(option_label);
         button_group->addButton(radio);
         choice_layout->addWidget(radio);
-        QObject::connect(radio, &QRadioButton::toggled, &window_,
+        QObject::connect(radio, &QRadioButton::toggled, &panel_,
                          [this, tool_id = target.tool_id,
                           control_id = control.id,
                           value = option.value](bool checked) {
@@ -748,7 +947,7 @@ private:
       auto *button = new QPushButton(label, controls_container_);
       button->setObjectName(object_name);
       button->setAccessibleName(label);
-      QObject::connect(button, &QPushButton::clicked, &window_,
+      QObject::connect(button, &QPushButton::clicked, &panel_,
                        [this, tool_id = target.tool_id,
                         action_id = control.id]() {
                          if (editor_ == nullptr) {
@@ -770,12 +969,37 @@ private:
 
   void synchronize_values(const QuaderToolSettingsTarget &target) {
     synchronizing_ = true;
-    target_title_->setText(localized_target_title(localization_, target));
-    apply_button_->setVisible(target.apply_visible);
-    apply_button_->setEnabled(target.can_apply);
-    cancel_button_->setVisible(target.can_cancel);
-    cancel_button_->setEnabled(target.can_cancel);
-    actions_container_->setVisible(target.apply_visible || target.can_cancel);
+    const QString target_title =
+        localized_target_title(localization_, target);
+    if (target_title_->text() != target_title) {
+      target_title_->setText(target_title);
+    }
+    const QString description =
+        localized_target_description(localization_, target);
+    if (description_label_->text() != description) {
+      description_label_->setText(description);
+    }
+    if (reset_button_->isEnabled() != target.can_reset) {
+      reset_button_->setEnabled(target.can_reset);
+    }
+    if (apply_button_->isHidden() == target.apply_visible) {
+      apply_button_->setVisible(target.apply_visible);
+    }
+    if (apply_button_->isEnabled() != target.can_apply) {
+      apply_button_->setEnabled(target.can_apply);
+    }
+    if (cancel_button_->isHidden() == target.can_cancel) {
+      cancel_button_->setVisible(target.can_cancel);
+    }
+    if (cancel_button_->isEnabled() != target.can_cancel) {
+      cancel_button_->setEnabled(target.can_cancel);
+    }
+    const bool preview_actions_visible =
+        target.apply_visible || target.can_cancel;
+    if (preview_actions_container_->isHidden() ==
+        preview_actions_visible) {
+      preview_actions_container_->setVisible(preview_actions_visible);
+    }
 
     const std::size_t count = std::min(controls_.size(), target.controls.size());
     for (std::size_t index = 0; index < count; ++index) {
@@ -901,39 +1125,108 @@ private:
     synchronizing_ = false;
   }
 
-  QtToolSettingsWindow &window_;
+  QtToolSettingsPanel &panel_;
   const LocalizationService *localization_ = nullptr;
   QuaderEditorApi *editor_ = nullptr;
   QLabel *target_title_ = nullptr;
   QScrollArea *scroll_area_ = nullptr;
+  QtToolSettingsSection *description_section_ = nullptr;
+  QLabel *description_label_ = nullptr;
+  QtToolSettingsSection *settings_section_ = nullptr;
   QWidget *controls_container_ = nullptr;
   QVBoxLayout *controls_layout_ = nullptr;
+  QLabel *empty_settings_label_ = nullptr;
   QWidget *actions_container_ = nullptr;
+  QWidget *preview_actions_container_ = nullptr;
+  QPushButton *reset_button_ = nullptr;
   QPushButton *apply_button_ = nullptr;
   QPushButton *cancel_button_ = nullptr;
   std::vector<ControlWidget> controls_;
   std::optional<QuaderToolSettingsTarget> last_target_;
   bool synchronizing_ = false;
   bool refresh_scheduled_ = false;
+  bool inactive_presented_ = false;
 };
 
-QtToolSettingsWindow::QtToolSettingsWindow(QWidget *parent)
-    : QWidget(parent, Qt::Tool),
+QtToolSettingsPanel::QtToolSettingsPanel(QWidget *parent)
+    : QWidget(parent),
       impl_(std::make_unique<Impl>(*this)) {}
 
-QtToolSettingsWindow::~QtToolSettingsWindow() = default;
+QtToolSettingsPanel::~QtToolSettingsPanel() = default;
 
-void QtToolSettingsWindow::bind(QuaderEditorApi &editor) {
+void QtToolSettingsPanel::bind(QuaderEditorApi &editor) {
   impl_->bind(editor);
 }
 
-void QtToolSettingsWindow::unbind() { impl_->unbind(); }
+void QtToolSettingsPanel::unbind() { impl_->unbind(); }
 
-void QtToolSettingsWindow::set_localization(
+void QtToolSettingsPanel::set_localization(
     const LocalizationService &localization) {
   impl_->set_localization(localization);
 }
 
-void QtToolSettingsWindow::refresh() { impl_->refresh(); }
+void QtToolSettingsPanel::refresh() { impl_->refresh(); }
+
+bool QtToolSettingsPanel::has_active_target() const {
+  return impl_->has_active_target();
+}
+
+bool qt_object_belongs_to_tool_settings_panel(const QObject *target) {
+  for (const QObject *current = target; current != nullptr;
+       current = current->parent()) {
+    if (dynamic_cast<const QtToolSettingsPanel *>(current) != nullptr) {
+      return true;
+    }
+  }
+
+  const auto *target_window = qobject_cast<const QWindow *>(target);
+  if (target_window == nullptr ||
+      qobject_cast<QApplication *>(QCoreApplication::instance()) == nullptr) {
+    return false;
+  }
+  for (const QWidget *top_level : QApplication::topLevelWidgets()) {
+    if (top_level == nullptr || top_level->windowHandle() != target_window) {
+      continue;
+    }
+    if (dynamic_cast<const QtToolSettingsPanel *>(top_level) != nullptr) {
+      return true;
+    }
+    const auto *dock = qobject_cast<const QDockWidget *>(top_level);
+    return dock != nullptr &&
+           dynamic_cast<const QtToolSettingsPanel *>(dock->widget()) !=
+               nullptr;
+  }
+  return false;
+}
+
+bool qt_object_belongs_to_tool_settings_panel(
+    const QObject *target, const QPoint &global_position) {
+  const auto *target_window = qobject_cast<const QWindow *>(target);
+  if (target_window == nullptr ||
+      qobject_cast<QApplication *>(QCoreApplication::instance()) == nullptr) {
+    return false;
+  }
+  for (const QWidget *top_level : QApplication::topLevelWidgets()) {
+    if (top_level == nullptr || top_level->windowHandle() != target_window) {
+      continue;
+    }
+    const auto descendants = top_level->findChildren<QWidget *>();
+    if (std::any_of(
+            descendants.begin(), descendants.end(),
+            [&global_position](const QWidget *widget) {
+              const auto *panel =
+                  dynamic_cast<const QtToolSettingsPanel *>(widget);
+              if (panel == nullptr) {
+                return false;
+              }
+              const QPoint local = panel->mapFromGlobal(global_position);
+              return panel->rect().contains(local) &&
+                     panel->visibleRegion().contains(local);
+            })) {
+      return true;
+    }
+  }
+  return false;
+}
 
 } // namespace quader

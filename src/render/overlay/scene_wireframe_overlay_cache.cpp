@@ -34,6 +34,7 @@
 #include <bit>
 #include <limits>
 #include <span>
+#include <unordered_map>
 #include <unordered_set>
 #include <utility>
 
@@ -185,7 +186,27 @@ RenderInstancePrimitiveKey wire_key(
   };
 }
 
-RenderInstanceBounds local_bounds(
+/// Hashes every exact field used to group one derived wire primitive.
+struct PrimitiveKeyHash final {
+  std::size_t operator()(const RenderInstancePrimitiveKey &key) const noexcept {
+    return static_cast<std::size_t>(
+        RenderSignatureBuilder{}
+            .add_value(key.geometry_payload)
+            .add_value(key.material_payload)
+            .add_value(key.index_offset)
+            .add_value(key.index_count)
+            .add_value(key.layer_mask)
+            .add_value(key.channel)
+            .add_value(key.presentation_flags)
+            .add_bool(key.cast_shadows)
+            .add_bool(key.receive_shadows)
+            .add_bool(key.double_sided)
+            .add_bool(key.editor_unlit)
+            .value());
+  }
+};
+
+RenderInstanceBounds compute_local_bounds(
     std::span<const MeshVertex> vertices) {
   RenderInstanceBounds bounds;
   for (const MeshVertex &vertex : vertices) {
@@ -209,34 +230,95 @@ std::uint64_t participant_token(const RenderOverlayMeshSnapshot &mesh) {
   return mesh.participant_token != 0u ? mesh.participant_token : mesh.entity;
 }
 
-std::vector<RenderInstancePrimitiveOccurrence> wire_occurrences(
-    const RenderOverlaySceneWireframeSnapshot &snapshot) {
+/// Holds indexed scene-wire occurrences before instance batch planning.
+struct SceneWireframeOccurrencePreparation final {
   std::vector<RenderInstancePrimitiveOccurrence> occurrences;
-  occurrences.reserve(snapshot.meshes.size());
+  std::unordered_map<RenderInstancePrimitiveKey,
+                     const RenderOverlayMeshSnapshot *, PrimitiveKeyHash>
+      record_by_key;
+  SceneWireframeOverlayPlanWorkStats work;
+  std::size_t unique_geometry_style_count = 0u;
+};
+
+SceneWireframeOccurrencePreparation prepare_wire_occurrences(
+    const RenderOverlaySceneWireframeSnapshot &snapshot) {
+  SceneWireframeOccurrencePreparation prepared;
+  prepared.occurrences.reserve(snapshot.meshes.size());
+  prepared.record_by_key.reserve(snapshot.meshes.size());
+  std::unordered_set<RenderInstancePrimitiveKey, PrimitiveKeyHash> unique_keys;
+  unique_keys.reserve(snapshot.meshes.size());
+  std::unordered_map<const MeshGeometryPayload *, RenderInstanceBounds>
+      local_bounds_by_geometry;
+  local_bounds_by_geometry.reserve(snapshot.meshes.size());
   for (const RenderOverlayMeshSnapshot &mesh : snapshot.meshes) {
-    if (!mesh.has_wire_geometry() ||
-        participant_token(mesh) == 0u) {
+    if (!mesh.has_wire_geometry()) {
       continue;
     }
-    occurrences.push_back({
-        .key = wire_key(mesh, snapshot.style),
-        .occurrence = participant_token(mesh),
+    const RenderInstancePrimitiveKey key = wire_key(mesh, snapshot.style);
+    prepared.record_by_key.try_emplace(key, &mesh);
+    const std::uint64_t participant = participant_token(mesh);
+    if (participant == 0u) {
+      continue;
+    }
+
+    RenderInstanceBounds bounds;
+    const MeshGeometryPayload *geometry = mesh.geometry_payload.get();
+    const auto cached = geometry != nullptr
+                            ? local_bounds_by_geometry.find(geometry)
+                            : local_bounds_by_geometry.end();
+    if (cached != local_bounds_by_geometry.end()) {
+      bounds = cached->second;
+      ++prepared.work.local_bounds_cache_hit_count;
+    } else {
+      bounds = compute_local_bounds(mesh.vertices);
+      prepared.work.local_bounds_vertex_visit_count +=
+          static_cast<std::uint64_t>(mesh.vertices.size());
+      if (geometry != nullptr) {
+        local_bounds_by_geometry.try_emplace(geometry, bounds);
+      }
+    }
+
+    unique_keys.insert(key);
+    prepared.occurrences.push_back({
+        .key = key,
+        .occurrence = participant,
         .world_transform = mesh.world_transform,
-        .local_bounds = local_bounds(mesh.vertices),
+        .local_bounds = bounds,
     });
   }
-  return occurrences;
+  prepared.work.primitive_record_index_entry_count =
+      prepared.record_by_key.size();
+  prepared.unique_geometry_style_count = unique_keys.size();
+  return prepared;
 }
 
-const RenderOverlayMeshSnapshot *record_for_chunk(
+/// Couples planned wire batches with their source mesh records.
+struct SceneWireframeBatchPreparation final {
+  SceneWireframeOverlayBatchPlan planned;
+  std::vector<const RenderOverlayMeshSnapshot *> records;
+};
+
+SceneWireframeBatchPreparation prepare_wire_batches(
     const RenderOverlaySceneWireframeSnapshot &snapshot,
-    const RenderInstanceBatchChunk &chunk) {
-  const auto found = std::ranges::find_if(
-      snapshot.meshes, [&](const RenderOverlayMeshSnapshot &mesh) {
-        return mesh.has_wire_geometry() &&
-               wire_key(mesh, snapshot.style) == chunk.key;
-      });
-  return found == snapshot.meshes.end() ? nullptr : &*found;
+    std::size_t max_instances_per_chunk) {
+  SceneWireframeOccurrencePreparation occurrences =
+      prepare_wire_occurrences(snapshot);
+  SceneWireframeBatchPreparation prepared;
+  prepared.planned.batches = plan_render_instance_batches(
+      occurrences.occurrences, max_instances_per_chunk);
+  prepared.planned.participant_count = occurrences.occurrences.size();
+  prepared.planned.unique_geometry_style_count =
+      occurrences.unique_geometry_style_count;
+  prepared.planned.work = occurrences.work;
+  prepared.records.reserve(prepared.planned.batches.chunks.size());
+  for (const RenderInstanceBatchChunk &chunk :
+       prepared.planned.batches.chunks) {
+    ++prepared.planned.work.chunk_record_lookup_count;
+    const auto found = occurrences.record_by_key.find(chunk.key);
+    prepared.records.push_back(
+        found == occurrences.record_by_key.end() ? nullptr : found->second);
+  }
+  return prepared;
 }
 
 void append_line_quad(std::vector<SceneWireframeLineVertex> &vertices,
@@ -319,22 +401,9 @@ SceneWireframeOverlayCache::SceneWireframeOverlayCache() = default;
 SceneWireframeOverlayBatchPlan plan_scene_wireframe_overlay_batches(
     const RenderOverlaySceneWireframeSnapshot &snapshot,
     std::size_t max_instances_per_chunk) {
-  const std::vector<RenderInstancePrimitiveOccurrence> occurrences =
-      wire_occurrences(snapshot);
-  std::vector<RenderInstancePrimitiveKey> unique_geometry;
-  unique_geometry.reserve(occurrences.size());
-  for (const RenderInstancePrimitiveOccurrence &occurrence : occurrences) {
-    if (std::ranges::find(unique_geometry, occurrence.key) ==
-        unique_geometry.end()) {
-      unique_geometry.push_back(occurrence.key);
-    }
-  }
-  return {
-      .batches = plan_render_instance_batches(occurrences,
-                                              max_instances_per_chunk),
-      .participant_count = occurrences.size(),
-      .unique_geometry_style_count = unique_geometry.size(),
-  };
+  SceneWireframeBatchPreparation prepared =
+      prepare_wire_batches(snapshot, max_instances_per_chunk);
+  return std::move(prepared.planned);
 }
 
 SceneWireframeOverlayCache::~SceneWireframeOverlayCache() { shutdown(); }
@@ -382,14 +451,11 @@ void SceneWireframeOverlayCache::clear() {
 SceneWireframeOverlayCache::PreparedPlan
 SceneWireframeOverlayCache::prepare(
     const RenderOverlaySceneWireframeSnapshot &snapshot) const {
+  SceneWireframeBatchPreparation batch_preparation =
+      prepare_wire_batches(snapshot, max_instances_per_chunk_);
   PreparedPlan prepared;
-  prepared.planned = plan_scene_wireframe_overlay_batches(
-      snapshot, max_instances_per_chunk_);
-  prepared.records.reserve(prepared.planned.batches.chunks.size());
-  for (const RenderInstanceBatchChunk &chunk :
-       prepared.planned.batches.chunks) {
-    prepared.records.push_back(record_for_chunk(snapshot, chunk));
-  }
+  prepared.planned = std::move(batch_preparation.planned);
+  prepared.records = std::move(batch_preparation.records);
   return prepared;
 }
 
@@ -579,17 +645,13 @@ SceneWireframeOverlayCache::acquire_geometry(
       *engine_, FilamentBufferDescriptorFactory::vector(indices));
 
   WireGeometryResource *result = resource.get();
-  stats_.derived_vertex_bytes += resource->vertex_bytes;
-  stats_.derived_index_bytes += resource->index_bytes;
-  ++stats_.geometry_upload_count;
+  const std::uint64_t vertex_bytes = resource->vertex_bytes;
+  const std::uint64_t index_bytes = resource->index_bytes;
   bucket.push_back(std::move(resource));
-  stats_.unique_geometry_resource_count = geometry_resources_.size();
-  std::size_t resource_count = 0u;
-  for (const auto &[key, resources] : geometry_resources_) {
-    (void)key;
-    resource_count += resources.size();
-  }
-  stats_.unique_geometry_resource_count = resource_count;
+  stats_.derived_vertex_bytes += vertex_bytes;
+  stats_.derived_index_bytes += index_bytes;
+  ++stats_.geometry_upload_count;
+  ++stats_.unique_geometry_resource_count;
   return result;
 }
 
@@ -732,14 +794,12 @@ void SceneWireframeOverlayCache::prune_unused_geometry_resources() {
       live.insert(proxy.geometry);
     }
   }
-  std::size_t resource_count = 0u;
   for (auto bucket_it = geometry_resources_.begin();
        bucket_it != geometry_resources_.end();) {
     auto &bucket = bucket_it->second;
     for (auto it = bucket.begin(); it != bucket.end();) {
       WireGeometryResource &resource = **it;
       if (live.contains(&resource)) {
-        ++resource_count;
         ++it;
         continue;
       }
@@ -751,6 +811,7 @@ void SceneWireframeOverlayCache::prune_unused_geometry_resources() {
       }
       stats_.derived_vertex_bytes -= resource.vertex_bytes;
       stats_.derived_index_bytes -= resource.index_bytes;
+      --stats_.unique_geometry_resource_count;
       it = bucket.erase(it);
     }
     if (bucket.empty()) {
@@ -759,7 +820,6 @@ void SceneWireframeOverlayCache::prune_unused_geometry_resources() {
       ++bucket_it;
     }
   }
-  stats_.unique_geometry_resource_count = resource_count;
 }
 
 void SceneWireframeOverlayCache::update_clip_planes(

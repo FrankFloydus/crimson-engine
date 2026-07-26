@@ -22,17 +22,20 @@ ViewportSceneProjection::point_light_pick_candidates(
     const SceneDocument &document,
     const ViewportLocalVisibilitySnapshot &local_visibility) {
   std::vector<ViewportSceneBillboardPickCandidate> candidates;
+  const SceneHierarchyProjectionSnapshot hierarchy =
+      document.hierarchy_projection_snapshot();
   for (const EntityId entity : document.entities()) {
     const LightComponent *light = document.light(entity);
+    const SceneHierarchyProjectionRecord *state = hierarchy.find(entity);
     if (light == nullptr || light->type != LightType::Point ||
-        !document.is_effectively_visible(entity) ||
+        state == nullptr || !state->effectively_visible ||
         !local_visibility.allows(
             static_cast<ViewportLocalVisibilityEntityId>(entity))) {
       continue;
     }
     candidates.push_back({
         .entity = entity,
-        .position = transform_point(document.world_transform_matrix(entity), {}),
+        .position = transform_point(state->world_transform, {}),
         .size_pixels = kOverlayPointLightGizmoSizePixels,
     });
   }

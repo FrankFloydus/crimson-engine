@@ -90,17 +90,40 @@ public:
       const DocumentSelectionState before_selection =
           document_command_capture_selection(scene());
       std::vector<EntityId> selected_children;
+      std::vector<SceneParentAssignment> parent_assignments;
+      std::vector<SceneTransformAssignment> transform_assignments;
+      std::vector<EntityId> group_entities;
       for (const UngroupedEntity &state : *planned_groups) {
-        const EntityId group = state.snapshot.original_id;
+        group_entities.push_back(state.snapshot.original_id);
         for (const DocumentEntityPlacement &child : state.children) {
-          if (!scene().set_parent(child.entity, state.parent, true)) {
-            return document_command_invalid_request_result(
-                "Entity cannot be reparented");
-          }
+          parent_assignments.push_back({
+              .child = child.entity,
+              .parent = state.parent,
+          });
           selected_children.push_back(child.entity);
         }
-        if (!scene().destroy_entity(group)) {
+        transform_assignments.insert(transform_assignments.end(),
+                                     state.ungrouped_transforms.begin(),
+                                     state.ungrouped_transforms.end());
+      }
+
+      if (scene().set_parents(parent_assignments)) {
+        scene().set_transforms(transform_assignments);
+        if (!scene().destroy_entities(group_entities)) {
           return document_command_missing_entity_result();
+        }
+      } else {
+        for (const UngroupedEntity &state : *planned_groups) {
+          const EntityId group = state.snapshot.original_id;
+          for (const DocumentEntityPlacement &child : state.children) {
+            if (!scene().set_parent(child.entity, state.parent, true)) {
+              return document_command_invalid_request_result(
+                  "Entity cannot be reparented");
+            }
+          }
+          if (!scene().destroy_entity(group)) {
+            return document_command_missing_entity_result();
+          }
         }
       }
 
@@ -119,6 +142,7 @@ private:
         DocumentEntitySnapshot snapshot;
         EntityId parent = kInvalidEntityId;
         std::vector<DocumentEntityPlacement> children;
+        std::vector<SceneTransformAssignment> ungrouped_transforms;
     };
 
     std::optional<std::vector<UngroupedEntity>>
@@ -149,20 +173,29 @@ private:
         if (child_placements.size() != children.size()) {
           return std::nullopt;
         }
+        std::vector<SceneTransformAssignment> ungrouped_transforms;
+        ungrouped_transforms.reserve(children.size());
         for (const EntityId child : children) {
           const TransformComponent *transform = scene().transform(child);
-          if (transform == nullptr ||
-              !try_scene_local_transform_preserving_world(
-                   parent_world, scene().world_transform_matrix(child),
-                   *transform)
-                   .has_value()) {
+          const std::optional<TransformComponent> local =
+              transform == nullptr
+                  ? std::nullopt
+                  : try_scene_local_transform_preserving_world(
+                        parent_world, scene().world_transform_matrix(child),
+                        *transform);
+          if (!local.has_value()) {
             return std::nullopt;
           }
+          ungrouped_transforms.push_back({
+              .entity = child,
+              .transform = *local,
+          });
         }
         result.push_back(UngroupedEntity{
             .snapshot = *snapshot,
             .parent = parent,
             .children = std::move(child_placements),
+            .ungrouped_transforms = std::move(ungrouped_transforms),
         });
       }
       return result;

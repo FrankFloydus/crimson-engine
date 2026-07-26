@@ -8,11 +8,24 @@
 
 #include "io/project/project_types.hpp"
 
+#include <cstddef>
 #include <filesystem>
+#include <memory>
 #include <span>
 #include <utility>
 
 namespace quader {
+
+/**
+ * Deterministic diagnostics for the directory work performed while validating
+ * project-path casing. A resolution batch enumerates each distinct directory
+ * at most once; component lookups may still repeat because they are O(1).
+ */
+struct ProjectFileSystemWorkStats final {
+  std::size_t directory_case_enumerations = 0u;
+  std::size_t directory_case_entries_visited = 0u;
+  std::size_t component_case_lookups = 0u;
+};
 
 /**
  * Resolves all project-owned paths against one canonical root. This is the
@@ -30,6 +43,17 @@ public:
   [[nodiscard]] const std::filesystem::path &root() const noexcept {
     return root_;
   }
+
+  /**
+   * Returns an equivalent filesystem authority with a scan-lifetime directory
+   * case index. Use the returned value only for one read-only scan so external
+   * filesystem changes cannot make its directory-name index stale.
+   *
+   * When supplied, work_stats is reset and populated for deterministic scale
+   * tests. Copies of the returned batch share its cache.
+   */
+  [[nodiscard]] ProjectFileSystem
+  begin_resolution_batch(ProjectFileSystemWorkStats *work_stats = nullptr) const;
 
   /** Resolves a path without requiring its final entry to exist. */
   [[nodiscard]] ProjectIoResult<std::filesystem::path>
@@ -70,6 +94,8 @@ public:
       std::span<const ProjectRelativePath> paths) const;
 
 private:
+  struct ResolutionBatchCache;
+
   explicit ProjectFileSystem(std::filesystem::path root)
       : root_(std::move(root)) {}
 
@@ -77,6 +103,7 @@ private:
   validate_existing_component_case(const ProjectRelativePath &path) const;
 
   std::filesystem::path root_;
+  std::shared_ptr<ResolutionBatchCache> resolution_batch_cache_;
 };
 
 } // namespace quader

@@ -624,6 +624,76 @@ CommandResult PrimitiveCreationToolService::set_setting(std::string_view name,
   return command_invalid_result("Unknown primitive setting.");
 }
 
+CommandResult PrimitiveCreationToolService::reset_settings() {
+  if (!session_.has_value()) {
+    return command_invalid_result("No primitive tool is active.");
+  }
+  if (!can_reset_settings()) {
+    return command_invalid_result(
+        "Primitive settings can only change before drawing a footprint.");
+  }
+
+  freeze_live_primitive_if_selection_changed();
+  bool changed = false;
+  switch (session_->kind) {
+  case PrimitiveCreationKind::Box: {
+    const BoxPrimitiveCreationSettings defaults;
+    changed = box_settings_.subdivisions_x != defaults.subdivisions_x ||
+              box_settings_.subdivisions_y != defaults.subdivisions_y ||
+              box_settings_.subdivisions_z != defaults.subdivisions_z ||
+              box_settings_.flip_faces != defaults.flip_faces;
+    box_settings_ = defaults;
+    break;
+  }
+  case PrimitiveCreationKind::Cylinder: {
+    const CylinderPrimitiveCreationSettings defaults;
+    changed = cylinder_settings_.side_count != defaults.side_count ||
+              cylinder_settings_.caps != defaults.caps ||
+              cylinder_settings_.flip_faces != defaults.flip_faces;
+    cylinder_settings_ = defaults;
+    break;
+  }
+  case PrimitiveCreationKind::Cone: {
+    const ConePrimitiveCreationSettings defaults;
+    changed = cone_settings_.side_count != defaults.side_count ||
+              cone_settings_.caps != defaults.caps ||
+              cone_settings_.flip_faces != defaults.flip_faces;
+    cone_settings_ = defaults;
+    break;
+  }
+  case PrimitiveCreationKind::Sphere: {
+    const SpherePrimitiveCreationSettings defaults;
+    changed =
+        sphere_settings_.radial_segments != defaults.radial_segments ||
+        sphere_settings_.rings != defaults.rings ||
+        sphere_settings_.hemisphere != defaults.hemisphere ||
+        sphere_settings_.flip_faces != defaults.flip_faces;
+    sphere_settings_ = defaults;
+    break;
+  }
+  case PrimitiveCreationKind::Torus: {
+    const TorusPrimitiveCreationSettings defaults;
+    changed = torus_settings_.major_segments != defaults.major_segments ||
+              torus_settings_.minor_segments != defaults.minor_segments ||
+              torus_settings_.tube_radius_ratio !=
+                  defaults.tube_radius_ratio ||
+              torus_settings_.flip_faces != defaults.flip_faces;
+    torus_settings_ = defaults;
+    break;
+  }
+  }
+  if (!changed) {
+    return command_unchanged_result();
+  }
+  ++tool_settings_revision_;
+  return update_live_primitive();
+}
+
+bool PrimitiveCreationToolService::can_reset_settings() const {
+  return session_.has_value() &&
+         modeling_.box_drag_state() == ModelingBoxDragState::Idle;
+}
+
 bool PrimitiveCreationToolService::live_primitive_is_selected() const {
   if (!live_primitive_.has_value()) {
     return false;

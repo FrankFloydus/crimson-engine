@@ -12,6 +12,7 @@
 #include "editor/session/scene_session.hpp"
 
 #include <algorithm>
+#include <unordered_map>
 #include <utility>
 
 namespace quader {
@@ -59,11 +60,26 @@ QuaderLayersApi::QuaderLayersApi(QuaderApiSession session,
 
 std::vector<QuaderLayerSnapshot> QuaderLayersApi::all() const {
   const SceneDocument &scene = read_scene_session(session_).scene();
+  SceneLayerState state = scene.layer_state();
   std::vector<QuaderLayerSnapshot> snapshots;
-  const std::vector<SceneLayerRecord> records = scene.layers();
-  snapshots.reserve(records.size());
-  for (const SceneLayerRecord &record : records) {
-    snapshots.push_back(layer_snapshot(scene, record));
+  snapshots.reserve(state.layers.size());
+  std::unordered_map<SceneLayerId, std::size_t> snapshot_by_layer;
+  snapshot_by_layer.reserve(state.layers.size());
+  for (const SceneLayerRecord &record : state.layers) {
+    snapshot_by_layer.emplace(record.id, snapshots.size());
+    snapshots.push_back({
+        .id = record.id,
+        .name = record.name,
+        .visible = record.visible,
+        .wireframe_color = record.wireframe_color,
+        .locked = record.locked,
+    });
+  }
+  for (const SceneLayerAssignment &assignment : state.assignments) {
+    const auto snapshot = snapshot_by_layer.find(assignment.layer_id);
+    if (snapshot != snapshot_by_layer.end()) {
+      snapshots[snapshot->second].members.push_back(assignment.entity);
+    }
   }
   return snapshots;
 }

@@ -34,6 +34,7 @@
 #include <array>
 #include <limits>
 #include <span>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -75,7 +76,8 @@ filament::Box filament_bounds(const RenderInstanceBounds &bounds) {
   return result;
 }
 
-RenderInstanceBounds local_bounds(std::span<const MeshVertex> vertices) {
+RenderInstanceBounds compute_local_bounds(
+    std::span<const MeshVertex> vertices) {
   RenderInstanceBounds bounds;
   for (const MeshVertex &vertex : vertices) {
     if (!bounds.present) {
@@ -137,66 +139,120 @@ RenderInstancePrimitiveKey wire_key(
   };
 }
 
-std::vector<RenderInstancePrimitiveOccurrence> fill_occurrences(
+/// Hashes every exact field used to group one selected-instance primitive.
+struct PrimitiveKeyHash final {
+  std::size_t operator()(const RenderInstancePrimitiveKey &key) const noexcept {
+    return static_cast<std::size_t>(
+        RenderSignatureBuilder{}
+            .add_value(key.geometry_payload)
+            .add_value(key.material_payload)
+            .add_value(key.index_offset)
+            .add_value(key.index_count)
+            .add_value(key.layer_mask)
+            .add_value(key.channel)
+            .add_value(key.presentation_flags)
+            .add_bool(key.cast_shadows)
+            .add_bool(key.receive_shadows)
+            .add_bool(key.double_sided)
+            .add_bool(key.editor_unlit)
+            .value());
+  }
+};
+
+using LocalBoundsByGeometry =
+    std::unordered_map<const MeshGeometryPayload *, RenderInstanceBounds>;
+
+RenderInstanceBounds shared_local_bounds(
+    const std::shared_ptr<const MeshGeometryPayload> &geometry_payload,
+    std::span<const MeshVertex> vertices,
+    LocalBoundsByGeometry &bounds_by_geometry,
+    InstanceSelectionOverlayPlanWorkStats &work) {
+  const MeshGeometryPayload *geometry = geometry_payload.get();
+  const auto cached = geometry != nullptr
+                          ? bounds_by_geometry.find(geometry)
+                          : bounds_by_geometry.end();
+  if (cached != bounds_by_geometry.end()) {
+    ++work.local_bounds_cache_hit_count;
+    return cached->second;
+  }
+  const RenderInstanceBounds bounds = compute_local_bounds(vertices);
+  work.local_bounds_vertex_visit_count +=
+      static_cast<std::uint64_t>(vertices.size());
+  if (geometry != nullptr) {
+    bounds_by_geometry.try_emplace(geometry, bounds);
+  }
+  return bounds;
+}
+
+/// Holds indexed fill and wire occurrences before instance batch planning.
+struct InstanceSelectionOccurrencePreparation final {
+  std::vector<RenderInstancePrimitiveOccurrence> fills;
+  std::vector<RenderInstancePrimitiveOccurrence> wires;
+  std::unordered_map<RenderInstancePrimitiveKey,
+                     const RenderOverlayInstanceSelectionFillRecord *,
+                     PrimitiveKeyHash>
+      fill_record_by_key;
+  std::unordered_map<RenderInstancePrimitiveKey,
+                     const RenderOverlayInstanceSelectionWireRecord *,
+                     PrimitiveKeyHash>
+      wire_record_by_key;
+  InstanceSelectionOverlayPlanWorkStats work;
+};
+
+InstanceSelectionOccurrencePreparation prepare_selection_occurrences(
     const RenderOverlaySelectedObjectSnapshot &snapshot) {
-  std::vector<RenderInstancePrimitiveOccurrence> occurrences;
-  occurrences.reserve(snapshot.instance_selection_fills.size());
+  InstanceSelectionOccurrencePreparation prepared;
+  prepared.fills.reserve(snapshot.instance_selection_fills.size());
+  prepared.wires.reserve(snapshot.instance_selection_wires.size());
+  prepared.fill_record_by_key.reserve(
+      snapshot.instance_selection_fills.size());
+  prepared.wire_record_by_key.reserve(
+      snapshot.instance_selection_wires.size());
+  LocalBoundsByGeometry bounds_by_geometry;
+  bounds_by_geometry.reserve(snapshot.instance_selection_fills.size() +
+                             snapshot.instance_selection_wires.size());
+
   for (const RenderOverlayInstanceSelectionFillRecord &record :
        snapshot.instance_selection_fills) {
+    const RenderInstancePrimitiveKey key = fill_key(record);
+    prepared.fill_record_by_key.try_emplace(key, &record);
     if (record.geometry_payload == nullptr || record.vertices.empty() ||
         record.indices.size() < 3u) {
       continue;
     }
-    occurrences.push_back({
-        .key = fill_key(record),
+    prepared.fills.push_back({
+        .key = key,
         .occurrence = overlay_occurrence_token(record.occurrence,
                                                record.member),
         .world_transform = record.world_transform,
-        .local_bounds = local_bounds(record.vertices),
+        .local_bounds =
+            shared_local_bounds(record.geometry_payload, record.vertices,
+                                bounds_by_geometry, prepared.work),
     });
   }
-  return occurrences;
-}
-
-std::vector<RenderInstancePrimitiveOccurrence> wire_occurrences(
-    const RenderOverlaySelectedObjectSnapshot &snapshot) {
-  std::vector<RenderInstancePrimitiveOccurrence> occurrences;
-  occurrences.reserve(snapshot.instance_selection_wires.size());
   for (const RenderOverlayInstanceSelectionWireRecord &record :
        snapshot.instance_selection_wires) {
+    const RenderInstancePrimitiveKey key = wire_key(record);
+    prepared.wire_record_by_key.try_emplace(key, &record);
     if (record.geometry_content_id.value == 0u || record.vertices.empty() ||
         record.indices.size() < 3u) {
       continue;
     }
-    occurrences.push_back({
-        .key = wire_key(record),
+    prepared.wires.push_back({
+        .key = key,
         .occurrence = overlay_occurrence_token(record.occurrence,
                                                record.member),
         .world_transform = record.world_transform,
-        .local_bounds = local_bounds(record.vertices),
+        .local_bounds =
+            shared_local_bounds(record.geometry_payload, record.vertices,
+                                bounds_by_geometry, prepared.work),
     });
   }
-  return occurrences;
-}
-
-const RenderOverlayInstanceSelectionFillRecord *fill_record_for_chunk(
-    const RenderOverlaySelectedObjectSnapshot &snapshot,
-    const RenderInstanceBatchChunk &chunk) {
-  const auto found = std::ranges::find_if(
-      snapshot.instance_selection_fills, [&](const auto &record) {
-        return fill_key(record) == chunk.key;
-      });
-  return found == snapshot.instance_selection_fills.end() ? nullptr : &*found;
-}
-
-const RenderOverlayInstanceSelectionWireRecord *wire_record_for_chunk(
-    const RenderOverlaySelectedObjectSnapshot &snapshot,
-    const RenderInstanceBatchChunk &chunk) {
-  const auto found = std::ranges::find_if(
-      snapshot.instance_selection_wires, [&](const auto &record) {
-        return wire_key(record) == chunk.key;
-      });
-  return found == snapshot.instance_selection_wires.end() ? nullptr : &*found;
+  prepared.work.fill_record_index_entry_count =
+      prepared.fill_record_by_key.size();
+  prepared.work.wire_record_index_entry_count =
+      prepared.wire_record_by_key.size();
+  return prepared;
 }
 
 void append_line_quad(std::vector<InstanceSelectionWireVertex> &vertices,
@@ -236,6 +292,46 @@ RenderMeshAssetSnapshot fill_mesh_snapshot(
     mesh.primitives = record.geometry_payload->primitives;
   }
   return mesh;
+}
+
+/// Couples planned selection batches with their source overlay records.
+struct InstanceSelectionBatchPreparation final {
+  InstanceSelectionOverlayBatchPlans plans;
+  std::vector<const RenderOverlayInstanceSelectionFillRecord *> fills;
+  std::vector<const RenderOverlayInstanceSelectionWireRecord *> wires;
+};
+
+InstanceSelectionBatchPreparation prepare_selection_batches(
+    const RenderOverlaySelectedObjectSnapshot &snapshot,
+    std::size_t max_instances_per_chunk) {
+  InstanceSelectionOccurrencePreparation occurrences =
+      prepare_selection_occurrences(snapshot);
+  InstanceSelectionBatchPreparation prepared;
+  prepared.plans.fills = plan_render_instance_batches(
+      occurrences.fills, max_instances_per_chunk);
+  prepared.plans.wires = plan_render_instance_batches(
+      occurrences.wires, max_instances_per_chunk);
+  prepared.plans.work = occurrences.work;
+
+  prepared.fills.reserve(prepared.plans.fills.chunks.size());
+  for (const RenderInstanceBatchChunk &chunk :
+       prepared.plans.fills.chunks) {
+    ++prepared.plans.work.fill_chunk_record_lookup_count;
+    const auto found = occurrences.fill_record_by_key.find(chunk.key);
+    prepared.fills.push_back(
+        found == occurrences.fill_record_by_key.end() ? nullptr
+                                                       : found->second);
+  }
+  prepared.wires.reserve(prepared.plans.wires.chunks.size());
+  for (const RenderInstanceBatchChunk &chunk :
+       prepared.plans.wires.chunks) {
+    ++prepared.plans.work.wire_chunk_record_lookup_count;
+    const auto found = occurrences.wire_record_by_key.find(chunk.key);
+    prepared.wires.push_back(
+        found == occurrences.wire_record_by_key.end() ? nullptr
+                                                       : found->second);
+  }
+  return prepared;
 }
 
 } // namespace
@@ -281,14 +377,9 @@ struct InstanceSelectionOverlayCache::WireBatchProxy final {
 InstanceSelectionOverlayBatchPlans plan_instance_selection_overlay_batches(
     const RenderOverlaySelectedObjectSnapshot &snapshot,
     std::size_t max_instances_per_chunk) {
-  const std::vector<RenderInstancePrimitiveOccurrence> fills =
-      fill_occurrences(snapshot);
-  const std::vector<RenderInstancePrimitiveOccurrence> wires =
-      wire_occurrences(snapshot);
-  return {
-      .fills = plan_render_instance_batches(fills, max_instances_per_chunk),
-      .wires = plan_render_instance_batches(wires, max_instances_per_chunk),
-  };
+  InstanceSelectionBatchPreparation prepared =
+      prepare_selection_batches(snapshot, max_instances_per_chunk);
+  return std::move(prepared.plans);
 }
 
 std::vector<InstanceSelectionWireEdge> instance_selection_wire_edges(
@@ -357,17 +448,12 @@ void InstanceSelectionOverlayCache::clear(bool release_geometry_resources) {
 InstanceSelectionOverlayCache::PreparedPlans
 InstanceSelectionOverlayCache::prepare(
     const RenderOverlaySelectedObjectSnapshot &snapshot) const {
+  InstanceSelectionBatchPreparation batch_preparation =
+      prepare_selection_batches(snapshot, max_instances_per_chunk_);
   PreparedPlans prepared;
-  prepared.plans = plan_instance_selection_overlay_batches(
-      snapshot, max_instances_per_chunk_);
-  prepared.fills.reserve(prepared.plans.fills.chunks.size());
-  for (const RenderInstanceBatchChunk &chunk : prepared.plans.fills.chunks) {
-    prepared.fills.push_back(fill_record_for_chunk(snapshot, chunk));
-  }
-  prepared.wires.reserve(prepared.plans.wires.chunks.size());
-  for (const RenderInstanceBatchChunk &chunk : prepared.plans.wires.chunks) {
-    prepared.wires.push_back(wire_record_for_chunk(snapshot, chunk));
-  }
+  prepared.plans = std::move(batch_preparation.plans);
+  prepared.fills = std::move(batch_preparation.fills);
+  prepared.wires = std::move(batch_preparation.wires);
   return prepared;
 }
 
@@ -595,15 +681,12 @@ InstanceSelectionOverlayCache::acquire_wire_geometry(
   resource->index_buffer->setBuffer(
       *engine_, FilamentBufferDescriptorFactory::vector(indices));
   WireGeometryResource *result = resource.get();
-  stats_.wire_derived_vertex_bytes += resource->vertex_bytes;
-  stats_.wire_derived_index_bytes += resource->index_bytes;
+  const std::uint64_t vertex_bytes = resource->vertex_bytes;
+  const std::uint64_t index_bytes = resource->index_bytes;
   bucket.push_back(std::move(resource));
-  std::size_t resource_count = 0u;
-  for (const auto &[key, resources] : wire_resources_) {
-    (void)key;
-    resource_count += resources.size();
-  }
-  stats_.unique_wire_geometry_resource_count = resource_count;
+  stats_.wire_derived_vertex_bytes += vertex_bytes;
+  stats_.wire_derived_index_bytes += index_bytes;
+  ++stats_.unique_wire_geometry_resource_count;
   ++stats_.wire_geometry_upload_count;
   return result;
 }

@@ -10,6 +10,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <optional>
@@ -17,7 +18,20 @@
 #include <string_view>
 #include <system_error>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
+
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#else
+#include <cerrno>
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <unistd.h>
+#endif
 
 namespace quader {
 namespace {
@@ -50,6 +64,105 @@ std::uint64_t append_hash(std::uint64_t hash, std::uint64_t value) {
   return hash;
 }
 
+/// Identifies a physical file independently of its project-relative alias.
+struct PhysicalFileIdentity final {
+  std::uint64_t device = 0u;
+  std::uint64_t file = 0u;
+
+  friend bool operator==(const PhysicalFileIdentity &,
+                         const PhysicalFileIdentity &) = default;
+};
+
+/// Hashes physical file identities used for alias validation.
+struct PhysicalFileIdentityHash final {
+  std::size_t operator()(const PhysicalFileIdentity &identity) const noexcept {
+    const std::uint64_t mixed =
+        identity.device ^
+        (identity.file + 0x9e3779b97f4a7c15ull +
+         (identity.device << 6u) + (identity.device >> 2u));
+    return static_cast<std::size_t>(mixed);
+  }
+};
+
+ProjectIoResult<PhysicalFileIdentity>
+physical_file_identity(const std::filesystem::path &path) {
+#ifdef _WIN32
+  /// Closes a Windows file handle when identity inspection completes.
+  class ScopedHandle final {
+  public:
+    explicit ScopedHandle(HANDLE handle) : handle_(handle) {}
+    ~ScopedHandle() {
+      if (handle_ != INVALID_HANDLE_VALUE) {
+        (void)::CloseHandle(handle_);
+      }
+    }
+    [[nodiscard]] HANDLE get() const noexcept { return handle_; }
+
+  private:
+    HANDLE handle_ = INVALID_HANDLE_VALUE;
+  };
+
+  ScopedHandle file(::CreateFileW(
+      path.c_str(), FILE_READ_ATTRIBUTES,
+      FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
+      OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr));
+  if (file.get() == INVALID_HANDLE_VALUE) {
+    return ProjectIoResult<PhysicalFileIdentity>::failure(
+        ProjectIoErrorCode::IoFailure,
+        "Could not open project material for identity validation: " +
+            std::error_code(static_cast<int>(::GetLastError()),
+                            std::system_category())
+                .message(),
+        path);
+  }
+  BY_HANDLE_FILE_INFORMATION information{};
+  if (::GetFileInformationByHandle(file.get(), &information) == 0 ||
+      (information.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0u) {
+    return ProjectIoResult<PhysicalFileIdentity>::failure(
+        ProjectIoErrorCode::IoFailure,
+        "Could not inspect project material file identity: " +
+            std::error_code(static_cast<int>(::GetLastError()),
+                            std::system_category())
+                .message(),
+        path);
+  }
+  return ProjectIoResult<PhysicalFileIdentity>::success({
+      .device = information.dwVolumeSerialNumber,
+      .file =
+          (static_cast<std::uint64_t>(information.nFileIndexHigh) << 32u) |
+          information.nFileIndexLow,
+  });
+#else
+  const int descriptor = ::open(path.c_str(), O_RDONLY);
+  if (descriptor < 0) {
+    return ProjectIoResult<PhysicalFileIdentity>::failure(
+        ProjectIoErrorCode::IoFailure,
+        "Could not open project material for identity validation: " +
+            std::error_code(errno, std::generic_category()).message(),
+        path);
+  }
+  /// Closes a POSIX file descriptor when identity inspection completes.
+  struct ScopedDescriptor final {
+    explicit ScopedDescriptor(int value) : value(value) {}
+    ~ScopedDescriptor() { (void)::close(value); }
+    int value = -1;
+  } file(descriptor);
+  struct stat information {};
+  if (::fstat(file.value, &information) != 0 ||
+      !S_ISREG(information.st_mode)) {
+    return ProjectIoResult<PhysicalFileIdentity>::failure(
+        ProjectIoErrorCode::IoFailure,
+        "Could not inspect project material file identity: " +
+            std::error_code(errno, std::generic_category()).message(),
+        path);
+  }
+  return ProjectIoResult<PhysicalFileIdentity>::success({
+      .device = static_cast<std::uint64_t>(information.st_dev),
+      .file = static_cast<std::uint64_t>(information.st_ino),
+  });
+#endif
+}
+
 ProjectIoResult<void> validate_no_physical_aliases(
     const ProjectFileSystem &file_system,
     std::span<const ProjectRelativePath> paths) {
@@ -57,20 +170,29 @@ ProjectIoResult<void> validate_no_physical_aliases(
   if (!basic.ok()) {
     return basic;
   }
-  for (std::size_t left = 0u; left < paths.size(); ++left) {
-    for (std::size_t right = left + 1u; right < paths.size(); ++right) {
-      ProjectIoResult<bool> same =
-          file_system.refers_to_same_location(paths[left], paths[right]);
-      if (!same.ok()) {
-        return ProjectIoResult<void>::failure(
-            same.error().code, same.error().message, same.error().path);
-      }
-      if (same.value()) {
-        return ProjectIoResult<void>::failure(
-            ProjectIoErrorCode::PathCaseCollision,
-            "Project material files alias the same physical location.",
-            paths[right].native_path());
-      }
+  std::unordered_set<PhysicalFileIdentity, PhysicalFileIdentityHash>
+      identities;
+  identities.reserve(paths.size());
+  for (const ProjectRelativePath &path : paths) {
+    ProjectIoResult<std::filesystem::path> resolved =
+        file_system.resolve_existing_file(path);
+    if (!resolved.ok()) {
+      return ProjectIoResult<void>::failure(
+          resolved.error().code, resolved.error().message,
+          resolved.error().path);
+    }
+    ProjectIoResult<PhysicalFileIdentity> identity =
+        physical_file_identity(resolved.value());
+    if (!identity.ok()) {
+      return ProjectIoResult<void>::failure(
+          identity.error().code, identity.error().message,
+          identity.error().path);
+    }
+    if (!identities.insert(identity.value()).second) {
+      return ProjectIoResult<void>::failure(
+          ProjectIoErrorCode::PathCaseCollision,
+          "Project material files alias the same physical location.",
+          path.native_path());
     }
   }
   return ProjectIoResult<void>::success();
@@ -79,13 +201,16 @@ ProjectIoResult<void> validate_no_physical_aliases(
 } // namespace
 
 ProjectIoResult<ProjectMaterialCatalog>
-ProjectMaterialCatalog::scan(const ProjectFileSystem &file_system) {
+ProjectMaterialCatalog::scan(const ProjectFileSystem &file_system,
+                             ProjectFileSystemWorkStats *work_stats) {
   if (!file_system.valid()) {
     return ProjectIoResult<ProjectMaterialCatalog>::failure(
         ProjectIoErrorCode::InvalidWorkspaceState,
         "Cannot scan materials without an open project filesystem.");
   }
 
+  ProjectFileSystem scan_file_system =
+      file_system.begin_resolution_batch(work_stats);
   ProjectMaterialCatalog catalog;
   ProjectIoResult<ProjectRelativePath> materials_relative =
       ProjectRelativePath::parse_portable("Materials");
@@ -96,7 +221,7 @@ ProjectMaterialCatalog::scan(const ProjectFileSystem &file_system) {
         materials_relative.error().path);
   }
   ProjectIoResult<std::filesystem::path> materials_resolved =
-      file_system.resolve(materials_relative.value());
+      scan_file_system.resolve(materials_relative.value());
   if (!materials_resolved.ok()) {
     return ProjectIoResult<ProjectMaterialCatalog>::failure(
         materials_resolved.error().code, materials_resolved.error().message,
@@ -135,7 +260,7 @@ ProjectMaterialCatalog::scan(const ProjectFileSystem &file_system) {
       continue;
     }
     ProjectIoResult<ProjectRelativePath> relative =
-        file_system.relative_from_absolute(entry.path());
+        scan_file_system.relative_from_absolute(entry.path());
     if (!relative.ok()) {
       return ProjectIoResult<ProjectMaterialCatalog>::failure(
           relative.error().code, relative.error().message,
@@ -155,7 +280,7 @@ ProjectMaterialCatalog::scan(const ProjectFileSystem &file_system) {
     return left.portable_case_key() < right.portable_case_key();
   });
   ProjectIoResult<void> aliases =
-      validate_no_physical_aliases(file_system, paths);
+      validate_no_physical_aliases(scan_file_system, paths);
   if (!aliases.ok()) {
     return ProjectIoResult<ProjectMaterialCatalog>::failure(
         aliases.error().code, aliases.error().message,
@@ -167,7 +292,7 @@ ProjectMaterialCatalog::scan(const ProjectFileSystem &file_system) {
   identities.reserve(paths.size());
   for (const ProjectRelativePath &path : paths) {
     ProjectIoResult<QmatDecodedFile> decoded =
-        QmatCodec::read(file_system, path);
+        QmatCodec::read(scan_file_system, path);
     if (!decoded.ok()) {
       if (catalog_security_error(decoded.error().code)) {
         return ProjectIoResult<ProjectMaterialCatalog>::failure(
@@ -213,7 +338,7 @@ ProjectMaterialCatalog::scan(const ProjectFileSystem &file_system) {
         return;
       }
       ProjectIoResult<std::filesystem::path> texture =
-          file_system.resolve_existing_file(relative.value());
+          scan_file_system.resolve_existing_file(relative.value());
       if (!texture.ok()) {
         if (catalog_security_error(texture.error().code)) {
           texture_security_error = texture.error();
@@ -250,6 +375,12 @@ ProjectMaterialCatalog::scan(const ProjectFileSystem &file_system) {
     return left.path.portable_case_key() < right.path.portable_case_key();
   });
 
+  catalog.entry_index_by_id_.reserve(catalog.entries_.size());
+  for (std::size_t index = 0u; index < catalog.entries_.size(); ++index) {
+    catalog.entry_index_by_id_.emplace(
+        catalog.entries_[index].material.id, index);
+  }
+
   std::uint64_t revision = 14'695'981'039'346'656'037ull;
   for (const ProjectMaterialCatalogEntry &entry : catalog.entries_) {
     revision = append_hash(revision, entry.material.id.str());
@@ -264,11 +395,10 @@ ProjectMaterialCatalog::scan(const ProjectFileSystem &file_system) {
 
 const ProjectMaterialCatalogEntry *
 ProjectMaterialCatalog::find(ProjectAssetId id) const noexcept {
-  const auto found = std::ranges::find_if(
-      entries_, [id](const ProjectMaterialCatalogEntry &entry) {
-        return entry.material.id == id;
-      });
-  return found == entries_.end() ? nullptr : &*found;
+  const auto found = entry_index_by_id_.find(id);
+  return found == entry_index_by_id_.end()
+             ? nullptr
+             : &entries_[found->second];
 }
 
 ProjectIoResult<ProjectMaterialPreview>

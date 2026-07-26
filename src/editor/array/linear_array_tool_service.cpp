@@ -122,6 +122,10 @@ std::uint64_t LinearArrayToolService::issue_revision() {
   return ++revision_counter_;
 }
 
+void LinearArrayToolService::issue_tool_settings_revision() {
+  ++tool_settings_revision_counter_;
+}
+
 std::uint32_t
 LinearArrayToolService::maximum_count_for(std::size_t source_count) {
   if (source_count == 0u ||
@@ -503,6 +507,7 @@ CommandResult LinearArrayToolService::activate(double fallback_grid_size) {
       QVec3{adjacent_step * static_cast<float>(next.count - 1u), 0.0f, 0.0f};
   session_ = std::move(next);
   clear_preview_cache();
+  issue_tool_settings_revision();
   return command_changed_result();
 }
 
@@ -515,6 +520,7 @@ CommandResult LinearArrayToolService::refresh() {
   }
   session_.reset();
   clear_preview_cache();
+  issue_tool_settings_revision();
   return {
       .ok = true,
       .changed = true,
@@ -528,6 +534,7 @@ CommandResult LinearArrayToolService::cancel() {
   }
   session_.reset();
   clear_preview_cache();
+  issue_tool_settings_revision();
   return command_changed_result();
 }
 
@@ -538,6 +545,7 @@ CommandResult LinearArrayToolService::apply() {
   if (!session_sources_are_valid(*session_)) {
     session_.reset();
     clear_preview_cache();
+    issue_tool_settings_revision();
     return command_invalid_result(
         "Linear Array sources changed before the operation was applied.");
   }
@@ -545,6 +553,7 @@ CommandResult LinearArrayToolService::apply() {
   const Session committed = *session_;
   session_.reset();
   clear_preview_cache();
+  issue_tool_settings_revision();
   if (committed.instance_occurrences) {
     std::vector<LinkedInstanceArraySource> sources;
     sources.reserve(committed.sources.size());
@@ -598,6 +607,23 @@ CommandResult LinearArrayToolService::set_count(std::uint32_t count) {
   session_->count = count;
   session_->revision = issue_revision();
   clear_preview_cache();
+  issue_tool_settings_revision();
+  return command_changed_result();
+}
+
+CommandResult LinearArrayToolService::reset_settings() {
+  if (!session_.has_value()) {
+    return command_invalid_result("Linear Array tool is not active.");
+  }
+  const std::uint32_t default_count =
+      std::min(kLinearArrayDefaultCount, maximum_count());
+  if (session_->count == default_count) {
+    return command_unchanged_result();
+  }
+  session_->count = default_count;
+  session_->revision = issue_revision();
+  clear_preview_cache();
+  issue_tool_settings_revision();
   return command_changed_result();
 }
 

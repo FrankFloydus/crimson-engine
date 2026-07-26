@@ -23,7 +23,9 @@
 #include "scene/scene_transform_pivot.hpp"
 
 #include <optional>
+#include <span>
 #include <string>
+#include <unordered_map>
 #include <utility>
 
 namespace quader {
@@ -33,16 +35,47 @@ const SceneSession &read_scene_session(QuaderApiSession session) {
   return QuaderApiSessionInternalAccess::read_scene_session(session);
 }
 
-bool entity_visible_in_scene_query(const SceneDocument &scene, EntityId entity,
-                                   EntityId active_definition) {
+/// Caches shared hierarchy facts while projecting a query result set.
+struct EntityQueryContext final {
+  EntityId active_selection = kInvalidEntityId;
+  std::unordered_map<EntityId, EntityId> containing_definition;
+};
+
+EntityQueryContext build_entity_query_context(
+    const SceneDocument &scene, std::span<const EntityId> tree_order) {
+  EntityQueryContext context;
+  context.active_selection = scene.primary_selection();
+  context.containing_definition.reserve(tree_order.size());
+  for (const EntityId entity : tree_order) {
+    const EntityId parent = scene.parent(entity);
+    EntityId definition =
+        parent == kInvalidEntityId
+            ? kInvalidEntityId
+            : context.containing_definition[parent];
+    if (scene.is_instance_definition_entity(entity)) {
+      definition = entity;
+    }
+    context.containing_definition.emplace(entity, definition);
+  }
+  return context;
+}
+
+bool entity_visible_in_scene_query(
+    const SceneDocument &scene, EntityId entity,
+    EntityId active_definition, const EntityQueryContext &context) {
   if (scene.is_instance_definition_entity(entity)) {
     return false;
   }
-  if (!scene.is_instance_definition_member(entity)) {
+  const auto containing = context.containing_definition.find(entity);
+  const EntityId definition =
+      containing == context.containing_definition.end()
+          ? kInvalidEntityId
+          : containing->second;
+  if (definition == kInvalidEntityId) {
     return true;
   }
   return active_definition != kInvalidEntityId &&
-         scene.containing_instance_definition(entity) == active_definition;
+         definition == active_definition;
 }
 
 QuaderBounds api_bounds(const SceneBounds &bounds) {
@@ -74,7 +107,8 @@ QuaderModelingObjectRef object_ref_for_entity(
 }
 
 QuaderEntitySnapshot entity_snapshot_for(const SceneSession &session,
-                                         EntityId entity) {
+                                         EntityId entity,
+                                         EntityId active_selection) {
   const SceneDocument &scene = session.scene();
   QuaderEntitySnapshot snapshot;
   snapshot.id = entity;
@@ -82,7 +116,7 @@ QuaderEntitySnapshot entity_snapshot_for(const SceneSession &session,
   snapshot.editor_object_id = scene.editor_object_id(entity);
   snapshot.kind = to_api_entity_kind(scene.kind(entity));
   snapshot.parent = scene.parent(entity);
-  snapshot.active = scene.primary_selection() == entity;
+  snapshot.active = active_selection == entity;
   snapshot.layer_id = scene.entity_layer(entity);
 
   if (const NameComponent *name = scene.name(entity)) {
@@ -161,14 +195,19 @@ std::vector<QuaderEntitySnapshot> QuaderQueryApi::entities() const {
       session.instances().instance_edit_state();
   const EntityId active_definition =
       edit_state.active ? edit_state.definition : kInvalidEntityId;
+  const std::vector<EntityId> tree_order =
+      session.scene().entity_tree_order();
+  const EntityQueryContext context =
+      build_entity_query_context(session.scene(), tree_order);
   const std::vector<EntityId> ids = session.scene().entities();
   result.reserve(ids.size());
   for (const EntityId id : ids) {
     if (!entity_visible_in_scene_query(session.scene(), id,
-                                       active_definition)) {
+                                       active_definition, context)) {
       continue;
     }
-    result.push_back(entity_snapshot_for(session, id));
+    result.push_back(
+        entity_snapshot_for(session, id, context.active_selection));
   }
   return result;
 }
@@ -181,13 +220,16 @@ std::vector<QuaderEntitySnapshot> QuaderQueryApi::entity_tree() const {
   const EntityId active_definition =
       edit_state.active ? edit_state.definition : kInvalidEntityId;
   const std::vector<EntityId> ids = session.scene().entity_tree_order();
+  const EntityQueryContext context =
+      build_entity_query_context(session.scene(), ids);
   result.reserve(ids.size());
   for (const EntityId id : ids) {
     if (!entity_visible_in_scene_query(session.scene(), id,
-                                       active_definition)) {
+                                       active_definition, context)) {
       continue;
     }
-    result.push_back(entity_snapshot_for(session, id));
+    result.push_back(
+        entity_snapshot_for(session, id, context.active_selection));
   }
   return result;
 }
@@ -197,7 +239,8 @@ std::optional<QuaderEntitySnapshot> QuaderQueryApi::entity(EntityId id) const {
   if (!session.scene().exists(id)) {
     return std::nullopt;
   }
-  return entity_snapshot_for(session, id);
+  return entity_snapshot_for(session, id,
+                             session.scene().primary_selection());
 }
 
 std::optional<QuaderMeshSnapshot> QuaderQueryApi::mesh(AssetId id) const {

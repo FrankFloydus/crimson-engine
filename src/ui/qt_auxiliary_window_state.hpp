@@ -21,8 +21,6 @@ namespace quader {
 struct QtAuxiliaryWindowState {
   QByteArray settings_dialog_geometry;
   bool settings_dialog_visible = false;
-  QByteArray tool_settings_geometry;
-  bool tool_settings_visible = false;
   QByteArray material_browser_geometry;
   bool material_browser_grid_mode = true;
   int material_browser_tile_size = 128;

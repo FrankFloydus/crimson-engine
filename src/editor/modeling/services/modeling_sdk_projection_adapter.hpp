@@ -58,6 +58,14 @@ struct ModelingSdkProjectionStats {
   std::uint64_t scene_publication_count = 0;
   std::uint64_t preview_publication_count = 0;
   std::uint64_t selection_summary_build_count = 0;
+  std::uint64_t full_scene_reset_count = 0;
+  std::uint64_t scene_import_document_count = 0;
+  std::uint64_t targeted_scene_sync_count = 0;
+  std::uint64_t targeted_scene_sync_document_count = 0;
+  std::uint64_t native_object_id_scene_scan_count = 0;
+  std::uint64_t native_object_id_scene_entity_visit_count = 0;
+  std::uint64_t sdk_duplicate_batch_mutation_count = 0;
+  std::uint64_t sdk_duplicate_object_count = 0;
 };
 
 /// Describes one host-decided material slot fact to publish to SDK topology.
@@ -209,6 +217,8 @@ public:
   void set_modeling_object_world_transform_resolver(
       std::function<std::optional<QMat4>(int)> resolver);
   void reset_from_scene();
+  [[nodiscard]] ModelingCommandResult
+  restore_mesh_documents_from_scene(std::span<const EntityId> entities);
 
   [[nodiscard]] bool owns_object(int modeling_object_id) const;
   [[nodiscard]] bool owns_entity(EntityId entity) const;

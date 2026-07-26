@@ -108,6 +108,92 @@ bool same_geometry_payload(
   return true;
 }
 
+std::uint64_t exact_reuse_signature(std::uint64_t base_signature,
+                                    bool wildcard_dynamic_layout,
+                                    std::uint64_t dynamic_layout_key) {
+  return RenderSignatureBuilder{base_signature}
+      .add_bool(wildcard_dynamic_layout)
+      .add_value(dynamic_layout_key)
+      .value();
+}
+
+/// Retains candidate group indices in stable source order during matching.
+struct StableCandidateBucket final {
+  std::vector<std::size_t> group_indices;
+  std::size_t cursor = 0u;
+};
+
+using StableCandidateBuckets =
+    std::unordered_map<std::uint64_t, StableCandidateBucket>;
+
+void append_candidate(StableCandidateBuckets &buckets, std::uint64_t key,
+                      std::size_t group_index) {
+  buckets[key].group_indices.push_back(group_index);
+}
+
+/// Identifies one unclaimed retained group selected from a candidate bucket.
+struct CandidateMatch final {
+  StableCandidateBucket *bucket = nullptr;
+  std::size_t bucket_position = 0u;
+  std::size_t group_index = 0u;
+
+  [[nodiscard]] explicit operator bool() const noexcept {
+    return bucket != nullptr;
+  }
+};
+
+template <typename Matches>
+CandidateMatch find_candidate(StableCandidateBuckets &buckets,
+                              std::uint64_t key,
+                              const std::vector<bool> &claimed,
+                              std::uint64_t &candidate_visits,
+                              Matches &&matches) {
+  const auto found = buckets.find(key);
+  if (found == buckets.end()) {
+    return {};
+  }
+  StableCandidateBucket &bucket = found->second;
+  while (bucket.cursor < bucket.group_indices.size() &&
+         claimed[bucket.group_indices[bucket.cursor]]) {
+    ++candidate_visits;
+    ++bucket.cursor;
+  }
+  for (std::size_t position = bucket.cursor;
+       position < bucket.group_indices.size(); ++position) {
+    ++candidate_visits;
+    const std::size_t group_index = bucket.group_indices[position];
+    if (!claimed[group_index] && matches(group_index)) {
+      return {
+          .bucket = &bucket,
+          .bucket_position = position,
+          .group_index = group_index,
+      };
+    }
+  }
+  return {};
+}
+
+void claim_candidate(const CandidateMatch match, std::vector<bool> &claimed) {
+  assert(match);
+  assert(match.group_index < claimed.size());
+  assert(!claimed[match.group_index]);
+  claimed[match.group_index] = true;
+  if (match.bucket_position == match.bucket->cursor) {
+    ++match.bucket->cursor;
+  }
+}
+
+CandidateMatch earlier_candidate(CandidateMatch left,
+                                 CandidateMatch right) {
+  if (!left) {
+    return right;
+  }
+  if (!right) {
+    return left;
+  }
+  return left.group_index <= right.group_index ? left : right;
+}
+
 } // namespace
 
 ToolPreviewRenderableCache::~ToolPreviewRenderableCache() {
@@ -301,6 +387,10 @@ ToolPreviewRenderableCache::build_generation(
           .dynamic_positions = preview_mesh.dynamic_positions,
           .visible = false,
           .material_uniforms_initialized = false,
+          .live_proxy_count =
+              static_cast<std::size_t>(rendered.entity ? 1u : 0u) +
+              static_cast<std::size_t>(shaded.entity ? 1u : 0u) +
+              static_cast<std::size_t>(overlay_depth.entity ? 1u : 0u),
           .rendered_prototype = std::move(rendered),
           .shaded_prototype = std::move(shaded),
           .overlay_depth_prototype = std::move(overlay_depth),
@@ -340,6 +430,7 @@ ToolPreviewRenderableCache::build_generation(
       }
       retain_entity(rendered_instance);
       group.rendered_instances.push_back(std::move(rendered_instance));
+      ++group.live_proxy_count;
 
       MeshRenderableProxy shaded_instance = factory_->create_shared_instance(
           preview_mesh.source_entity, mesh_snapshot, group.shaded_prototype,
@@ -351,6 +442,7 @@ ToolPreviewRenderableCache::build_generation(
       }
       retain_entity(shaded_instance);
       group.shaded_instances.push_back(std::move(shaded_instance));
+      ++group.live_proxy_count;
 
       MeshRenderableProxy overlay_depth_instance =
           factory_->create_shared_instance(
@@ -364,6 +456,7 @@ ToolPreviewRenderableCache::build_generation(
       retain_entity(overlay_depth_instance);
       group.overlay_depth_instances.push_back(
           std::move(overlay_depth_instance));
+      ++group.live_proxy_count;
     }
     generation->groups.push_back(std::move(group));
   }
@@ -423,66 +516,13 @@ bool ToolPreviewRenderableCache::prepare_generation(
     return false;
   }
 
-  std::vector<bool> claimed(generation.groups.size(), false);
-  std::unordered_multimap<EntityId, std::size_t> groups_by_source;
-  groups_by_source.reserve(generation.groups.size());
-  for (std::size_t index = 0u; index < generation.groups.size(); ++index) {
-    groups_by_source.emplace(generation.groups[index].source_entity, index);
-  }
-
-  bool exact = true;
-  for (const RenderToolPreviewMeshRecord *mesh : renderable_meshes) {
-    bool matched = false;
-    const auto [first, last] = groups_by_source.equal_range(mesh->source_entity);
-    for (auto candidate = first; candidate != last; ++candidate) {
-      const std::size_t index = candidate->second;
-      if (!claimed[index] && group_matches_exact(generation.groups[index],
-                                                 *mesh)) {
-        claimed[index] = true;
-        candidate_indices.push_back(index);
-        matched = true;
-        break;
-      }
-    }
-    if (!matched) {
-      exact = false;
-      break;
-    }
-  }
-
-  if (!exact) {
-    // Structural reassignment changes the stable source/layout identity, so it
-    // is allowed only when the complete generation is being reused. Subset
-    // reuse remains exact and therefore preserves a dense warm generation.
-    if (renderable_meshes.size() != generation.groups.size()) {
-      return false;
-    }
-    candidate_indices.clear();
-    std::fill(claimed.begin(), claimed.end(), false);
-    std::unordered_multimap<std::uint64_t, std::size_t> groups_by_structure;
-    groups_by_structure.reserve(generation.groups.size());
-    for (std::size_t index = 0u; index < generation.groups.size(); ++index) {
-      groups_by_structure.emplace(
-          group_structural_reuse_signature(generation.groups[index]), index);
-    }
-    for (const RenderToolPreviewMeshRecord *mesh : renderable_meshes) {
-      bool matched = false;
-      const auto key = preview_structural_reuse_signature(*mesh);
-      const auto [first, last] = groups_by_structure.equal_range(key);
-      for (auto candidate = first; candidate != last; ++candidate) {
-        const std::size_t index = candidate->second;
-        if (!claimed[index] &&
-            group_matches_structure(generation.groups[index], *mesh)) {
-          claimed[index] = true;
-          candidate_indices.push_back(index);
-          matched = true;
-          break;
-        }
-      }
-      if (!matched) {
-        return false;
-      }
-    }
+  if (match_generation_groups(
+          generation,
+          std::span<const RenderToolPreviewMeshRecord *const>{
+              renderable_meshes.data(), renderable_meshes.size()},
+          candidate_indices) ==
+      GenerationMatchResult::None) {
+    return false;
   }
 
   for (std::size_t index = 0u; index < renderable_meshes.size(); ++index) {
@@ -503,6 +543,111 @@ bool ToolPreviewRenderableCache::prepare_generation(
     }
   }
   return true;
+}
+
+ToolPreviewRenderableCache::GenerationMatchResult
+ToolPreviewRenderableCache::match_generation_groups(
+    const PreviewGeneration &generation,
+    std::span<const RenderToolPreviewMeshRecord *const> renderable_meshes,
+    std::vector<std::size_t> &candidate_indices) {
+  candidate_indices.clear();
+  if (renderable_meshes.size() > generation.groups.size()) {
+    return GenerationMatchResult::None;
+  }
+
+  // Exact candidates use the complete stable association and geometry facts,
+  // not only source_entity. Each bucket retains generation order and advances
+  // a cursor after a claim, so repeated equivalent groups are visited once
+  // instead of rescanning an ever-growing claimed prefix.
+  std::vector<bool> claimed(generation.groups.size(), false);
+  StableCandidateBuckets exact_buckets;
+  StableCandidateBuckets exact_dynamic_wildcard_buckets;
+  exact_buckets.reserve(generation.groups.size() * 2u);
+  exact_dynamic_wildcard_buckets.reserve(generation.groups.size());
+  for (std::size_t index = 0u; index < generation.groups.size(); ++index) {
+    const PreviewGroup &group = generation.groups[index];
+    const std::uint64_t base = group_exact_reuse_base_signature(group);
+    append_candidate(
+        exact_buckets,
+        exact_reuse_signature(base, false,
+                              group.dynamic_positions ? group.layout_key : 0u),
+        index);
+    if (group.dynamic_positions) {
+      append_candidate(exact_dynamic_wildcard_buckets,
+                       exact_reuse_signature(base, true, 0u), index);
+    }
+  }
+
+  bool exact = true;
+  for (const RenderToolPreviewMeshRecord *mesh : renderable_meshes) {
+    const std::uint64_t base = preview_exact_reuse_base_signature(*mesh);
+    const auto matches = [&](std::size_t group_index) {
+      return group_matches_exact(generation.groups[group_index], *mesh);
+    };
+    CandidateMatch match;
+    if (!mesh->dynamic_positions) {
+      match = find_candidate(
+          exact_buckets, exact_reuse_signature(base, false, 0u), claimed,
+          work_counters_.exact_match_candidate_visits, matches);
+    } else if (mesh->layout_key == 0u) {
+      match = find_candidate(
+          exact_dynamic_wildcard_buckets,
+          exact_reuse_signature(base, true, 0u), claimed,
+          work_counters_.exact_match_candidate_visits, matches);
+    } else {
+      CandidateMatch same_layout = find_candidate(
+          exact_buckets,
+          exact_reuse_signature(base, false, mesh->layout_key), claimed,
+          work_counters_.exact_match_candidate_visits, matches);
+      CandidateMatch wildcard_layout = find_candidate(
+          exact_buckets, exact_reuse_signature(base, false, 0u), claimed,
+          work_counters_.exact_match_candidate_visits, matches);
+      match = earlier_candidate(same_layout, wildcard_layout);
+    }
+    if (!match) {
+      exact = false;
+      break;
+    }
+    claim_candidate(match, claimed);
+    candidate_indices.push_back(match.group_index);
+  }
+  if (exact) {
+    return GenerationMatchResult::Exact;
+  }
+
+  // Structural reassignment changes the stable source/layout identity, so it
+  // is allowed only when the complete generation is being reused. Subset
+  // reuse remains exact and therefore preserves a dense warm generation.
+  if (renderable_meshes.size() != generation.groups.size()) {
+    candidate_indices.clear();
+    return GenerationMatchResult::None;
+  }
+
+  candidate_indices.clear();
+  std::fill(claimed.begin(), claimed.end(), false);
+  StableCandidateBuckets structural_buckets;
+  structural_buckets.reserve(generation.groups.size());
+  for (std::size_t index = 0u; index < generation.groups.size(); ++index) {
+    append_candidate(
+        structural_buckets,
+        group_structural_reuse_signature(generation.groups[index]), index);
+  }
+  for (const RenderToolPreviewMeshRecord *mesh : renderable_meshes) {
+    const CandidateMatch match = find_candidate(
+        structural_buckets, preview_structural_reuse_signature(*mesh),
+        claimed, work_counters_.structural_match_candidate_visits,
+        [&](std::size_t group_index) {
+          return group_matches_structure(generation.groups[group_index],
+                                         *mesh);
+        });
+    if (!match) {
+      candidate_indices.clear();
+      return GenerationMatchResult::None;
+    }
+    claim_candidate(match, claimed);
+    candidate_indices.push_back(match.group_index);
+  }
+  return GenerationMatchResult::Structural;
 }
 
 void ToolPreviewRenderableCache::update_group(
@@ -707,6 +852,18 @@ void ToolPreviewRenderableCache::update_surface_grid(
   material_uniforms_dirty_ = false;
 }
 
+void ToolPreviewRenderableCache::detach_generation(
+    PreviewGeneration &generation) {
+  if (generation.detached) {
+    return;
+  }
+  if (!generation.scene_entities.empty()) {
+    factory_->remove_from_scene(
+        std::span<const utils::Entity>(generation.scene_entities));
+  }
+  generation.detached = true;
+}
+
 void ToolPreviewRenderableCache::retire_generation(
     std::unique_ptr<PreviewGeneration> generation) {
   if (!generation) {
@@ -715,11 +872,7 @@ void ToolPreviewRenderableCache::retire_generation(
   // Retired generations have already been hidden (or were built at layer 0).
   // Keep their prebuilt entity list so retirement needs one Filament call,
   // independent of proxy count; resource destruction remains idle-budgeted.
-  if (!generation->detached && !generation->scene_entities.empty()) {
-    factory_->remove_from_scene(
-        std::span<const utils::Entity>(generation->scene_entities));
-  }
-  generation->detached = true;
+  detach_generation(*generation);
   retired_generations_.push_back(std::move(generation));
 }
 
@@ -729,6 +882,10 @@ bool ToolPreviewRenderableCache::destroy_one_proxy(
     return false;
   }
   PreviewGroup &group = generation.groups.back();
+  const auto record_destroyed_proxy = [&] {
+    assert(group.live_proxy_count > 0u);
+    --group.live_proxy_count;
+  };
   const auto destroy_proxy = [&](MeshRenderableProxy &proxy) {
     if (generation.detached) {
       factory_->destroy_detached(proxy);
@@ -742,6 +899,7 @@ bool ToolPreviewRenderableCache::destroy_one_proxy(
     }
     destroy_proxy(proxies.back());
     proxies.pop_back();
+    record_destroyed_proxy();
     return true;
   };
   if (destroy_back(group.overlay_depth_instances) ||
@@ -751,14 +909,17 @@ bool ToolPreviewRenderableCache::destroy_one_proxy(
   }
   if (group.overlay_depth_prototype.entity) {
     destroy_proxy(group.overlay_depth_prototype);
+    record_destroyed_proxy();
     return true;
   }
   if (group.shaded_prototype.entity) {
     destroy_proxy(group.shaded_prototype);
+    record_destroyed_proxy();
     return true;
   }
   if (group.rendered_prototype.entity) {
     destroy_proxy(group.rendered_prototype);
+    record_destroyed_proxy();
     return true;
   }
   return false;
@@ -782,6 +943,7 @@ void ToolPreviewRenderableCache::drain_retired_destroy_queue(
       continue;
     }
     QDR_PROFILE_SCOPE("Tool preview destroy retired proxy");
+    ++work_counters_.retired_proxy_destroy_attempts;
     if (destroy_one_proxy(generation)) {
       ++destroyed;
     }
@@ -812,6 +974,7 @@ void ToolPreviewRenderableCache::destroy_group(PreviewGroup &group,
   destroy_proxy(group.overlay_depth_prototype);
   destroy_proxy(group.shaded_prototype);
   destroy_proxy(group.rendered_prototype);
+  group.live_proxy_count = 0u;
 }
 
 void ToolPreviewRenderableCache::clear() {
@@ -859,19 +1022,7 @@ std::size_t ToolPreviewRenderableCache::proxy_count() const {
 
 std::size_t ToolPreviewRenderableCache::group_proxy_count(
     const PreviewGroup &group) {
-  const auto live_count = [](const std::vector<MeshRenderableProxy> &proxies) {
-    return static_cast<std::size_t>(std::ranges::count_if(
-        proxies, [](const MeshRenderableProxy &proxy) {
-          return static_cast<bool>(proxy.entity);
-        }));
-  };
-  return static_cast<std::size_t>(group.rendered_prototype.entity ? 1u : 0u) +
-         static_cast<std::size_t>(group.shaded_prototype.entity ? 1u : 0u) +
-         static_cast<std::size_t>(
-             group.overlay_depth_prototype.entity ? 1u : 0u) +
-         live_count(group.rendered_instances) +
-         live_count(group.shaded_instances) +
-         live_count(group.overlay_depth_instances);
+  return group.live_proxy_count;
 }
 
 std::uint64_t ToolPreviewRenderableCache::preview_material_signature(
@@ -943,6 +1094,41 @@ std::uint64_t ToolPreviewRenderableCache::group_structural_reuse_signature(
       .add_bool(group.dynamic_positions)
       .add_size(group.transforms.size())
       .value();
+}
+
+std::uint64_t
+ToolPreviewRenderableCache::preview_exact_reuse_base_signature(
+    const RenderToolPreviewMeshRecord &preview_mesh) {
+  RenderSignatureBuilder signature;
+  signature.add_value(preview_mesh.source_object_id)
+      .add_value(preview_mesh.source_entity)
+      .add_value(preview_mesh.visibility_entity)
+      .add_value(preview_material_signature(preview_mesh))
+      .add_bool(preview_mesh.dynamic_positions)
+      .add_size(preview_transform_count(preview_mesh));
+  if (preview_mesh.dynamic_positions) {
+    signature.add_value(preview_topology_signature(preview_mesh));
+  } else {
+    signature.add_value(preview_geometry_signature(preview_mesh));
+  }
+  return signature.value();
+}
+
+std::uint64_t ToolPreviewRenderableCache::group_exact_reuse_base_signature(
+    const PreviewGroup &group) {
+  RenderSignatureBuilder signature;
+  signature.add_value(group.source_object_id)
+      .add_value(group.source_entity)
+      .add_value(group.visibility_entity)
+      .add_value(group.material_signature)
+      .add_bool(group.dynamic_positions)
+      .add_size(group.transforms.size());
+  if (group.dynamic_positions) {
+    signature.add_value(group.topology_signature);
+  } else {
+    signature.add_value(group.geometry_signature);
+  }
+  return signature.value();
 }
 
 bool ToolPreviewRenderableCache::group_matches_exact(

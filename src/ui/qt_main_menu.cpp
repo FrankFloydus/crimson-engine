@@ -755,9 +755,7 @@ struct QtMainMenu::Impl {
                        }
                      });
     panels->addSeparator();
-    for (UIPanelId id :
-         {UIPanelId::Outliner, UIPanelId::Inspector, UIPanelId::Layers,
-          UIPanelId::Console}) {
+    for (UIPanelId id : kUiDockPanelIds) {
       QAction *action = panels->addAction(qtext(
           context.localization, ui_panel_localization_key(id),
           ui_panel_key(id)));

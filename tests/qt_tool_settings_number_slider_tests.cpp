@@ -8,31 +8,48 @@
 
 #include "api/quader_editor_api.hpp"
 #include "api/quader_api_session_internal_access.hpp"
+#include "core/localization_service.hpp"
 #include "editor/modeling/services/primitive_creation_tool_service.hpp"
 #include "editor/session/scene_session.hpp"
 #include "ui/qt_command_event_filter.hpp"
 #include "ui/qt_tool_settings_number_slider.hpp"
-#include "ui/qt_tool_settings_window.hpp"
+#include "ui/qt_tool_settings_panel.hpp"
+#include "ui/qt_viewport_panel.hpp"
+#include "ui/ui_system.hpp"
 
 #include <QApplication>
 #include <QCoreApplication>
 #include <QComboBox>
 #include <QDoubleSpinBox>
+#include <QDockWidget>
 #include <QEventLoop>
 #include <QKeyEvent>
 #include <QLineEdit>
+#include <QLabel>
 #include <QMouseEvent>
+#include <QMainWindow>
 #include <QPointer>
+#include <QPushButton>
+#include <QRadioButton>
+#include <QRegion>
 #include <QSignalBlocker>
+#include <QSlider>
 #include <QSpinBox>
 #include <QStyle>
 #include <QStyleOptionSlider>
 #include <QTimer>
+#include <QToolButton>
+#include <QWindow>
 
 #include <algorithm>
 #include <array>
 #include <chrono>
 #include <cmath>
+#include <filesystem>
+
+#ifndef QUADER_SOURCE_DIR
+#define QUADER_SOURCE_DIR "."
+#endif
 
 namespace {
 
@@ -343,8 +360,10 @@ TEST(QtToolSettingsNumberSliderTests,
   ASSERT_TRUE(editor.selection().select_object(source.value()).ok());
   ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::RadialArray).ok());
 
-  quader::QtToolSettingsWindow window;
+  quader::QtToolSettingsPanel window;
+  window.setAttribute(Qt::WA_DontShowOnScreen, true);
   window.bind(editor);
+  window.show();
   QCoreApplication::processEvents();
   auto *copies = dynamic_cast<quader::QtToolSettingsNumberSlider *>(
       window.findChild<QSlider *>(QStringLiteral(
@@ -395,6 +414,244 @@ TEST(QtToolSettingsNumberSliderTests,
   window.hide();
 }
 
+TEST(QtToolSettingsPanelTests,
+     CollapsibleSectionsDescribeAndResetTheActiveToolWithoutClosingThePanel) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char executable[] = "quader-tool-settings-panel-tests";
+  char *argv[] = {executable, nullptr};
+  QApplication application(argc, argv);
+  QApplication::setStyle(QStringLiteral("Fusion"));
+
+  quader::QuaderStandaloneEditor standalone =
+      quader::create_standalone_editor();
+  quader::QuaderEditorApi &editor = standalone.editor();
+  const quader::QuaderApiResult<quader::QuaderModelingObjectRef> source =
+      editor.modeling().create_box(
+          quader::QuaderBounds{.min = {-1.0f, -1.0f, -1.0f},
+                               .max = {1.0f, 1.0f, 1.0f}},
+          "Tool Settings Panel Source");
+  ASSERT_TRUE(source.ok()) << source.error_message();
+  ASSERT_TRUE(editor.selection().select_object(source.value()).ok());
+  ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::RadialArray).ok());
+
+  const quader::QuaderToolSettingsTarget defaults =
+      editor.tools().active_settings();
+  const quader::QuaderToolSettingControl *default_copies =
+      find_setting(defaults, "radial_array.copies");
+  ASSERT_NE(default_copies, nullptr);
+  ASSERT_TRUE(editor.tools()
+                  .set_setting("radial_array", "radial_array.copies",
+                               default_copies->number_value + 3.0)
+                  .ok());
+
+  quader::QtToolSettingsPanel panel;
+  panel.setAttribute(Qt::WA_DontShowOnScreen, true);
+  panel.bind(editor);
+  panel.show();
+  QCoreApplication::processEvents();
+
+  auto *description_header = panel.findChild<QToolButton *>(
+      QStringLiteral("tool_settings.section.description.header"));
+  auto *description_content = panel.findChild<QWidget *>(
+      QStringLiteral("tool_settings.section.description.content"));
+  auto *settings_header = panel.findChild<QToolButton *>(
+      QStringLiteral("tool_settings.section.settings.header"));
+  auto *settings_content = panel.findChild<QWidget *>(
+      QStringLiteral("tool_settings.section.settings.content"));
+  auto *description = panel.findChild<QLabel *>(
+      QStringLiteral("tool_settings.description"));
+  auto *reset = panel.findChild<QPushButton *>(
+      QStringLiteral("tool_settings.reset_defaults"));
+  auto *copies_label = panel.findChild<QLabel *>(
+      QStringLiteral("tool_settings.control.radial_array.copies.label"));
+  auto *copies_slider =
+      dynamic_cast<quader::QtToolSettingsNumberSlider *>(
+          panel.findChild<QSlider *>(QStringLiteral(
+              "tool_settings.control.radial_array.copies.slider")));
+  ASSERT_NE(description_header, nullptr);
+  ASSERT_NE(description_content, nullptr);
+  ASSERT_NE(settings_header, nullptr);
+  ASSERT_NE(settings_content, nullptr);
+  ASSERT_NE(description, nullptr);
+  ASSERT_NE(reset, nullptr);
+  ASSERT_NE(copies_label, nullptr);
+  ASSERT_NE(copies_slider, nullptr);
+  EXPECT_TRUE(panel.has_active_target());
+  EXPECT_FALSE(description->text().isEmpty());
+  EXPECT_TRUE(description_header->isChecked());
+  EXPECT_TRUE(settings_header->isChecked());
+  EXPECT_FALSE(description_content->isHidden());
+  EXPECT_FALSE(settings_content->isHidden());
+  EXPECT_TRUE(reset->isEnabled());
+  EXPECT_LE(copies_label->geometry().bottom(),
+            copies_slider->geometry().top());
+
+  settings_header->click();
+  EXPECT_FALSE(settings_header->isChecked());
+  EXPECT_TRUE(settings_content->isHidden());
+  panel.refresh();
+  EXPECT_TRUE(settings_content->isHidden());
+  settings_header->click();
+  EXPECT_FALSE(settings_content->isHidden());
+
+  reset->click();
+  QCoreApplication::processEvents();
+  const quader::QuaderToolSettingControl *reset_copies =
+      find_setting(editor.tools().active_settings(), "radial_array.copies");
+  ASSERT_NE(reset_copies, nullptr);
+  EXPECT_DOUBLE_EQ(reset_copies->number_value, default_copies->number_value);
+
+  ASSERT_TRUE(editor.tools().cancel_active_tool_preview().ok());
+  panel.refresh();
+  EXPECT_FALSE(panel.has_active_target());
+  EXPECT_FALSE(panel.isHidden());
+  EXPECT_FALSE(reset->isEnabled());
+  auto *target_title = panel.findChild<QLabel *>(
+      QStringLiteral("tool_settings.target_title"));
+  ASSERT_NE(target_title, nullptr);
+  EXPECT_EQ(target_title->text(), QStringLiteral("No Active Tool"));
+
+  ASSERT_TRUE(editor.selection().select_object(source.value()).ok());
+  ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::Cut).ok());
+  quader::LocalizationService italian;
+  ASSERT_TRUE(italian.load(
+      std::filesystem::path(QUADER_SOURCE_DIR) / "resources" / "locales",
+      "it-IT"));
+  panel.set_localization(italian);
+  QCoreApplication::processEvents();
+  auto *discard_left = panel.findChild<QRadioButton *>(
+      QStringLiteral(
+          "tool_settings.control.operation.cut.keep_mode.option.discard_left"));
+  ASSERT_NE(discard_left, nullptr);
+  EXPECT_EQ(discard_left->text(), QStringLiteral("Scarta sinistra"));
+  EXPECT_EQ(target_title->text(), QStringLiteral("Taglia"));
+  EXPECT_EQ(reset->text(), QStringLiteral("Ripristina predefiniti"));
+
+  ASSERT_TRUE(
+      editor.tools().activate(quader::ViewportToolId::LinearArray).ok());
+  panel.refresh();
+  auto *linear_count_label = panel.findChild<QLabel *>(
+      QStringLiteral("tool_settings.control.linear_array.count.label"));
+  ASSERT_NE(linear_count_label, nullptr);
+  EXPECT_EQ(linear_count_label->text(), QStringLiteral("Numero di copie"));
+  panel.unbind();
+}
+
+TEST(QtToolSettingsPanelTests,
+     DynamicResetAvailabilityUpdatesWithoutRebuildingSettingsControls) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char executable[] = "quader-tool-settings-reset-availability-tests";
+  char *argv[] = {executable, nullptr};
+  QApplication application(argc, argv);
+  QApplication::setStyle(QStringLiteral("Fusion"));
+
+  quader::SceneSession session;
+  quader::QuaderEditorApi editor(
+      quader::QuaderApiSessionInternalAccess::from_scene_session(session));
+  ASSERT_TRUE(
+      editor.tools().activate(quader::ViewportToolId::CreatePrimitive).ok());
+
+  quader::QtToolSettingsPanel panel;
+  panel.setAttribute(Qt::WA_DontShowOnScreen, true);
+  panel.bind(editor);
+  panel.show();
+  QCoreApplication::processEvents();
+
+  auto *subdivisions = panel.findChild<QSpinBox *>(QStringLiteral(
+      "tool_settings.control.primitive.box.subdivisions_x"));
+  auto *reset = panel.findChild<QPushButton *>(
+      QStringLiteral("tool_settings.reset_defaults"));
+  ASSERT_NE(subdivisions, nullptr);
+  ASSERT_NE(reset, nullptr);
+  QPointer<QSpinBox> retained_subdivisions(subdivisions);
+  EXPECT_TRUE(reset->isEnabled());
+
+  const quader::ModelingBoxPreview footprint =
+      session.modeling().begin_box_footprint({
+          .screen_position = {400.0f, 300.0f},
+          .ray = {.origin = {0.0f, 4.0f, 0.0f},
+                  .direction = {0.0f, -1.0f, 0.0f}},
+          .grid_size = 1.0,
+      });
+  ASSERT_TRUE(footprint.ok) << footprint.message;
+  ASSERT_EQ(footprint.drag_state, quader::ModelingBoxDragState::Footprint);
+  panel.refresh();
+  EXPECT_EQ(panel.findChild<QSpinBox *>(QStringLiteral(
+                "tool_settings.control.primitive.box.subdivisions_x")),
+            retained_subdivisions.data());
+  EXPECT_FALSE(reset->isEnabled());
+
+  const quader::ModelingCommandResult canceled =
+      session.modeling().cancel_box();
+  ASSERT_TRUE(canceled.ok) << canceled.message;
+  panel.refresh();
+  EXPECT_EQ(panel.findChild<QSpinBox *>(QStringLiteral(
+                "tool_settings.control.primitive.box.subdivisions_x")),
+            retained_subdivisions.data());
+  EXPECT_TRUE(reset->isEnabled());
+  panel.unbind();
+}
+
+TEST(QtToolSettingsPanelTests,
+     DockedNativeWindowClassificationAndTabRefreshUseVisibleRegion) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char executable[] = "quader-tool-settings-native-window-tests";
+  char *argv[] = {executable, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+
+  QMainWindow main_window;
+  main_window.setAttribute(Qt::WA_DontShowOnScreen, true);
+  main_window.resize(900, 600);
+  auto *central = new QWidget(&main_window);
+  main_window.setCentralWidget(central);
+
+  auto *tool_settings_dock = new QDockWidget(&main_window);
+  auto *tool_settings = new quader::QtToolSettingsPanel();
+  tool_settings_dock->setWidget(tool_settings);
+  main_window.addDockWidget(Qt::RightDockWidgetArea, tool_settings_dock);
+  auto *inspector_dock = new QDockWidget(&main_window);
+  inspector_dock->setWidget(new QWidget());
+  main_window.addDockWidget(Qt::RightDockWidgetArea, inspector_dock);
+  main_window.tabifyDockWidget(inspector_dock, tool_settings_dock);
+
+  main_window.show();
+  tool_settings_dock->show();
+  tool_settings_dock->raise();
+  QCoreApplication::processEvents();
+  QWindow *native_main_window = main_window.windowHandle();
+  ASSERT_NE(native_main_window, nullptr);
+  const QRegion tool_settings_region = tool_settings->visibleRegion();
+  ASSERT_FALSE(tool_settings_region.isEmpty());
+  const QPoint tool_settings_point =
+      tool_settings->mapToGlobal(tool_settings_region.begin()->center());
+  const QPoint viewport_point = central->mapToGlobal(central->rect().center());
+
+  // The shared main QWindow is not blanket-classified as Tool Settings.
+  EXPECT_FALSE(quader::qt_event_target_belongs_to_tool_settings(
+      native_main_window));
+  EXPECT_TRUE(quader::qt_event_target_belongs_to_tool_settings(
+      native_main_window, tool_settings_point));
+  EXPECT_FALSE(quader::qt_event_target_belongs_to_tool_settings(
+      native_main_window, viewport_point));
+  EXPECT_TRUE(quader::qt_dock_panel_presented_for_refresh(
+      true, tool_settings_dock));
+  EXPECT_FALSE(quader::qt_dock_panel_presented_for_refresh(
+      false, tool_settings_dock));
+
+  inspector_dock->raise();
+  QCoreApplication::processEvents();
+  EXPECT_FALSE(quader::qt_dock_panel_presented_for_refresh(
+      true, tool_settings_dock));
+  EXPECT_TRUE(
+      quader::qt_dock_panel_presented_for_refresh(true, inspector_dock));
+  EXPECT_FALSE(quader::qt_event_target_belongs_to_tool_settings(
+      native_main_window, tool_settings_point));
+}
+
 TEST(QtToolSettingsNumberSliderTests,
      PrimitiveEnterEditsAndEscapeRemainsSemanticAcrossDynamicSettingsEditors) {
   ASSERT_EQ(QCoreApplication::instance(), nullptr);
@@ -420,7 +677,7 @@ TEST(QtToolSettingsNumberSliderTests,
                   .accept_preview(tool_settings_primitive_preview(),
                                   "Focused Settings Box")
                   .ok);
-  quader::QtToolSettingsWindow window;
+  quader::QtToolSettingsPanel window;
   window.bind(editor);
   window.show();
   window.activateWindow();
@@ -562,7 +819,7 @@ TEST(QtToolSettingsNumberSliderTests,
                                "operation.edge_bevel.segments", 1.0)
                   .ok());
 
-  quader::QtToolSettingsWindow window;
+  quader::QtToolSettingsPanel window;
   window.bind(editor);
   QCoreApplication::processEvents();
 

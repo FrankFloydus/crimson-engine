@@ -55,9 +55,23 @@ vertex {
         // DEVICE-domain vertices are remapped by Filament from OpenGL NDC Z
         // to reversed depth. Convert clipFromView's already-reversed depth
         // back to OpenGL NDC so that remap happens exactly once.
-        float deviceDepth = 1.0 - 2.0 * centerDevice.z;
-        float deviceOffset = max(materialParams.depthBias, 0.0) * nearPlane * 0.0025;
-        deviceDepth = max(-1.0, deviceDepth - deviceOffset);
+        // Pull visible handles toward the camera by a fixed view-space amount,
+        // then reproject only their depth. Unlike a constant post-projection
+        // offset, this decays with distance in perspective and cannot overtake
+        // an occluding surface merely because the camera moved farther away.
+        float depthBiasUnits = max(materialParams.depthBias, 0.0);
+        highp vec4 biasedView = centerView;
+        biasedView.z = min(centerView.z + 0.04 * depthBiasUnits, -nearPlane);
+        highp vec4 biasedClip = getClipFromViewMatrix() * biasedView;
+        float biasedReciprocalW =
+            1.0 / max(abs(biasedClip.w), 0.000001);
+        float biasedReversedDepth = biasedClip.z * biasedReciprocalW;
+        float unbiasedDeviceDepth = 1.0 - 2.0 * centerDevice.z;
+        float biasedDeviceDepth = 1.0 - 2.0 * biasedReversedDepth;
+        float legacyMaximumPull = depthBiasUnits * nearPlane * 0.0025;
+        float deviceDepth = max(
+            -1.0,
+            max(unbiasedDeviceDepth - legacyMaximumPull, biasedDeviceDepth));
         highp vec4 finalDevice = vec4(centerDevice.xy + offsetDevice,
                                      deviceDepth, 1.0);
 

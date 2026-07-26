@@ -27,6 +27,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <utility>
 #include <variant>
 #include <vector>
 
@@ -1138,6 +1139,117 @@ TEST(ModelingSessionServiceSplitTests,
 }
 
 TEST(ModelingSessionServiceSplitTests,
+     DeepNativeMementoHistoryRestoresOneWorkspaceExactly) {
+  constexpr std::size_t kHistoryDepth = 128U;
+  SceneDocument scene;
+  AssetRegistry assets;
+  ModelingSessionService service(scene, assets);
+
+  const ModelingCreateBoxResult box = service.create_box_from_bounds({
+      .bounds = {.min = {-1.0f, -1.0f, -1.0f},
+                 .max = {1.0f, 1.0f, 1.0f}},
+      .name = "Deep Memento Source",
+  });
+  ASSERT_TRUE(box.ok) << box.message;
+  ASSERT_TRUE(service.set_selection_mode(ModelingSelectionMode::Vertex).ok);
+  ASSERT_TRUE(service
+                  .set_component_selection({
+                      .modeling_object_id = box.object.modeling_object_id,
+                      .mode = ModelingSelectionMode::Vertex,
+                      .vertices = {1},
+                      .edit = ModelingSelectionEdit::Replace,
+                      .active_kind = ModelingActiveSelectionKind::Vertex,
+                      .active_vertex = 1,
+                  })
+                  .ok);
+  ASSERT_TRUE(service.select_all().ok);
+
+  const MeshComponent *initial_binding = scene.mesh(box.object.entity);
+  ASSERT_NE(initial_binding, nullptr);
+  const AssetId initial_mesh_id = initial_binding->mesh;
+  const MeshAsset *initial_asset = assets.mesh(initial_mesh_id);
+  ASSERT_NE(initial_asset, nullptr);
+  const MeshAsset initial_payload = clone_mesh_asset_payload(*initial_asset);
+  const ModelingSelectionSummary initial_selection =
+      service.selection_summary();
+  const std::uint64_t initial_content_revision =
+      initial_selection.content_revision;
+
+  EditorHistoryService history;
+  for (std::size_t index = 0; index < kHistoryDepth; ++index) {
+    const CommandResult moved = history.execute(
+        std::make_unique<MoveSelectionHistoryCommand>(
+            service, QVec3{0.01F, 0.0F, 0.0F}));
+    ASSERT_TRUE(moved.ok) << moved.message;
+    ASSERT_TRUE(moved.changed);
+  }
+  ASSERT_TRUE(history.can_undo());
+  const MeshComponent *moved_binding = scene.mesh(box.object.entity);
+  ASSERT_NE(moved_binding, nullptr);
+  const AssetId moved_mesh_id = moved_binding->mesh;
+  const MeshAsset *moved_asset = assets.mesh(moved_mesh_id);
+  ASSERT_NE(moved_asset, nullptr);
+  const MeshAsset moved_payload = clone_mesh_asset_payload(*moved_asset);
+  EXPECT_FALSE(mesh_asset_payload_equal(initial_payload, moved_payload));
+
+  for (std::size_t index = 0; index < kHistoryDepth; ++index) {
+    const CommandResult restored = history.undo();
+    ASSERT_TRUE(restored.ok) << restored.message;
+    ASSERT_TRUE(restored.changed);
+  }
+  EXPECT_FALSE(history.can_undo());
+  EXPECT_TRUE(history.can_redo());
+  ASSERT_EQ(service.objects().size(), 1U);
+  EXPECT_EQ(service.objects().front().modeling_object_id,
+            box.object.modeling_object_id);
+  EXPECT_EQ(service.objects().front().entity, box.object.entity);
+  const MeshComponent *undone_binding = scene.mesh(box.object.entity);
+  ASSERT_NE(undone_binding, nullptr);
+  EXPECT_EQ(undone_binding->mesh, initial_mesh_id);
+  const MeshAsset *undone_asset = assets.mesh(undone_binding->mesh);
+  ASSERT_NE(undone_asset, nullptr);
+  EXPECT_TRUE(mesh_asset_payload_equal(*undone_asset, initial_payload));
+  const ModelingSelectionSummary undone_selection =
+      service.selection_summary();
+  EXPECT_EQ(undone_selection.mode, initial_selection.mode);
+  EXPECT_EQ(undone_selection.active_kind, initial_selection.active_kind);
+  EXPECT_EQ(undone_selection.active_object_id,
+            initial_selection.active_object_id);
+  EXPECT_EQ(undone_selection.selected_vertex_count,
+            initial_selection.selected_vertex_count);
+  EXPECT_GT(undone_selection.content_revision, initial_content_revision);
+
+  const std::uint64_t undo_content_revision =
+      undone_selection.content_revision;
+  for (std::size_t index = 0; index < kHistoryDepth; ++index) {
+    const CommandResult restored = history.redo();
+    ASSERT_TRUE(restored.ok) << restored.message;
+    ASSERT_TRUE(restored.changed);
+  }
+  EXPECT_TRUE(history.can_undo());
+  EXPECT_FALSE(history.can_redo());
+  ASSERT_EQ(service.objects().size(), 1U);
+  EXPECT_EQ(service.objects().front().modeling_object_id,
+            box.object.modeling_object_id);
+  EXPECT_EQ(service.objects().front().entity, box.object.entity);
+  const MeshComponent *redone_binding = scene.mesh(box.object.entity);
+  ASSERT_NE(redone_binding, nullptr);
+  EXPECT_EQ(redone_binding->mesh, moved_mesh_id);
+  const MeshAsset *redone_asset = assets.mesh(redone_binding->mesh);
+  ASSERT_NE(redone_asset, nullptr);
+  EXPECT_TRUE(mesh_asset_payload_equal(*redone_asset, moved_payload));
+  const ModelingSelectionSummary redone_selection =
+      service.selection_summary();
+  EXPECT_EQ(redone_selection.mode, initial_selection.mode);
+  EXPECT_EQ(redone_selection.active_kind, initial_selection.active_kind);
+  EXPECT_EQ(redone_selection.active_object_id,
+            initial_selection.active_object_id);
+  EXPECT_EQ(redone_selection.selected_vertex_count,
+            initial_selection.selected_vertex_count);
+  EXPECT_GT(redone_selection.content_revision, undo_content_revision);
+}
+
+TEST(ModelingSessionServiceSplitTests,
      SelectionProjectionServiceProjectsSceneSelectionIntoModelingOnly) {
   SceneDocument scene;
   const EntityId group = scene.create_entity("Group", EntityKind::Empty);
@@ -1171,6 +1283,78 @@ TEST(ModelingSessionServiceSplitTests,
   std::sort(selected_entities.begin(), selected_entities.end());
   EXPECT_EQ(selected_entities, (std::vector<EntityId>{group, first, second}));
   EXPECT_EQ(scene.primary_selection(), second);
+}
+
+TEST(ModelingSessionServiceSplitTests,
+     SelectionProjectionServiceComponentBoundsWorkScalesLinearly) {
+  const auto exercise = [](std::size_t vertex_count) {
+    SceneDocument scene;
+    AssetRegistry assets;
+    const EntityId entity =
+        scene.create_entity("Selected Mesh", EntityKind::Mesh);
+    TransformComponent transform;
+    transform.position = {10.0f, 20.0f, 30.0f};
+    EXPECT_TRUE(scene.set_transform(entity, transform));
+
+    ModelingObjectRuntimeMap object_map;
+    object_map.bind(100, entity);
+
+    quader_poly::Document document;
+    document.vertices.reserve(vertex_count);
+    quader_poly::Selection selection;
+    selection.vertices.reserve(vertex_count);
+    for (std::size_t index = 0; index < vertex_count; ++index) {
+      const quader_poly::ElementId id =
+          static_cast<quader_poly::ElementId>(index + 1u);
+      document.vertices.push_back({
+          .id = id,
+          .position = {static_cast<float>(index),
+                       static_cast<float>(index % 7u),
+                       -static_cast<float>(index)},
+      });
+      selection.vertices.push_back(id);
+    }
+
+    quader_editor_core::PolygonObject object;
+    object.id = 100;
+    object.document = std::move(document);
+    quader_editor_core::EditorSession session({std::move(object)});
+    session.set_component_selection(
+        100, std::move(selection),
+        quader_editor_core::SelectionMode::Vertex);
+
+    const SelectionProjectionService projection;
+    SelectionBoundsWorkStats work;
+    const std::optional<SceneBounds> bounds =
+        projection.world_selection_bounds(session, scene, assets, object_map,
+                                          &work);
+    EXPECT_TRUE(bounds.has_value());
+    if (bounds.has_value()) {
+      EXPECT_FLOAT_EQ(bounds->min.x, 10.0f);
+      EXPECT_FLOAT_EQ(bounds->max.x,
+                      10.0f + static_cast<float>(vertex_count - 1u));
+      EXPECT_FLOAT_EQ(bounds->max.z, 30.0f);
+      EXPECT_FLOAT_EQ(bounds->min.z,
+                      30.0f - static_cast<float>(vertex_count - 1u));
+    }
+    EXPECT_EQ(work.selected_object_visit_count, 1u);
+    EXPECT_EQ(work.vertex_index_visit_count, vertex_count);
+    EXPECT_EQ(work.selected_vertex_lookup_count, vertex_count);
+    EXPECT_EQ(work.world_transform_evaluation_count, 1u);
+    EXPECT_EQ(work.included_point_count, vertex_count);
+    return work;
+  };
+
+  const SelectionBoundsWorkStats work_n = exercise(256u);
+  const SelectionBoundsWorkStats work_2n = exercise(512u);
+  EXPECT_EQ(work_2n.vertex_index_visit_count,
+            work_n.vertex_index_visit_count * 2u);
+  EXPECT_EQ(work_2n.selected_vertex_lookup_count,
+            work_n.selected_vertex_lookup_count * 2u);
+  EXPECT_EQ(work_2n.included_point_count,
+            work_n.included_point_count * 2u);
+  EXPECT_EQ(work_2n.world_transform_evaluation_count,
+            work_n.world_transform_evaluation_count);
 }
 
 TEST(ModelingSessionServiceSplitTests,
@@ -2078,6 +2262,34 @@ TEST(ModelingSessionServiceSplitTests, ServicesOwnIndependentModelingState) {
             ModelingCutMode::DiscardRight);
 }
 
+TEST(ModelingSessionServiceSplitTests,
+     ResetForTargetRestoresOnlyThatOperationInOneRevision) {
+  ModelingInteractionSettingsService service;
+  ModelingInteractionSettings edited = service.settings();
+  edited.edge_bevel_width = 4.0;
+  edited.half_cut_axis = ModelingHalfCutAxis::Z;
+  edited.half_cut_separate_parts = true;
+  edited.half_cut_fill_parts = false;
+  ASSERT_TRUE(service.set_normalized(edited));
+  const std::uint64_t edited_revision = service.revision();
+
+  EXPECT_TRUE(
+      service.reset_for_target(ModelingToolSettingsTargetKind::HalfCut));
+  EXPECT_EQ(service.revision(), edited_revision + 1u);
+  const ModelingInteractionSettings reset = service.settings();
+  EXPECT_EQ(reset.half_cut_axis, ModelingHalfCutAxis::X);
+  EXPECT_FALSE(reset.half_cut_separate_parts);
+  EXPECT_TRUE(reset.half_cut_fill_parts);
+  EXPECT_DOUBLE_EQ(reset.edge_bevel_width, 4.0);
+
+  EXPECT_FALSE(
+      service.reset_for_target(ModelingToolSettingsTargetKind::HalfCut));
+  EXPECT_EQ(service.revision(), edited_revision + 1u);
+  EXPECT_FALSE(
+      service.reset_for_target(ModelingToolSettingsTargetKind::Mirror));
+  EXPECT_EQ(service.revision(), edited_revision + 1u);
+}
+
 TEST(ModelingSessionServiceSplitTests, PolicyServicesExposeDirectBehavior) {
   ModelingSelectionSummary component_selection;
   EXPECT_FALSE(
@@ -2159,6 +2371,9 @@ TEST(ModelingSessionServiceSplitTests, PolicyServicesExposeDirectBehavior) {
   EXPECT_STREQ(
       fallback_tool_settings_label(ModelingToolSettingsTargetKind::EdgeBevel),
       "Bevel Edges");
+  EXPECT_STREQ(
+      fallback_tool_settings_label(ModelingToolSettingsTargetKind::Thicken),
+      "Thicken");
   EXPECT_STREQ(
       fallback_tool_settings_label(ModelingToolSettingsTargetKind::HalfCut),
       "Half-Cut");

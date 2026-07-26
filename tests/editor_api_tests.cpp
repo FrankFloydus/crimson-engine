@@ -2893,6 +2893,10 @@ TEST(EditorApiTests,
             quader::quader_command::kToolsCancelPrimitiveCreation.string());
   quader::QuaderToolSettingsTarget settings = editor.tools().active_settings();
   EXPECT_TRUE(settings.active);
+  EXPECT_EQ(settings.description,
+            "Draw a footprint, set its height, and refine the primitive before "
+            "applying it.");
+  EXPECT_TRUE(settings.can_reset);
   EXPECT_TRUE(settings.apply_visible);
   EXPECT_FALSE(settings.can_apply);
   EXPECT_TRUE(settings.can_cancel);
@@ -3013,6 +3017,25 @@ TEST(EditorApiTests,
                                "primitive.torus.tube_radius_ratio", 0.3)
                   .ok());
 
+  const quader::QuaderApiVoidResult reset =
+      editor.tools().reset_active_settings();
+  ASSERT_TRUE(reset.ok()) << reset.error_message();
+  EXPECT_TRUE(reset.changed());
+  EXPECT_EQ(editor.tools().active_primitive_type(), "torus");
+  settings = editor.tools().active_settings();
+  const quader::QuaderToolSettingControl *reset_major =
+      find_tool_setting_control(settings, "primitive.torus.major_segments");
+  const quader::QuaderToolSettingControl *reset_minor =
+      find_tool_setting_control(settings, "primitive.torus.minor_segments");
+  const quader::QuaderToolSettingControl *reset_ratio =
+      find_tool_setting_control(settings, "primitive.torus.tube_radius_ratio");
+  ASSERT_NE(reset_major, nullptr);
+  ASSERT_NE(reset_minor, nullptr);
+  ASSERT_NE(reset_ratio, nullptr);
+  EXPECT_DOUBLE_EQ(reset_major->number_value, 32.0);
+  EXPECT_DOUBLE_EQ(reset_minor->number_value, 12.0);
+  EXPECT_DOUBLE_EQ(reset_ratio->number_value, 0.2);
+
   const quader::QuaderApiVoidResult canceled =
       editor.tools().cancel_active_tool_preview();
   EXPECT_TRUE(canceled.ok()) << canceled.error_message();
@@ -3051,6 +3074,76 @@ TEST(EditorApiTests,
 
   ASSERT_TRUE(editor.tools().cancel_active_tool_preview().ok());
   EXPECT_GT(editor.tools().active_settings_revision(), setting_changed);
+}
+
+TEST(EditorApiTests,
+     ArrayToolSettingsRevisionSkipsStableReadsAndTracksSettingsChanges) {
+  CommandTestHarness harness;
+  quader::QuaderEditorApi &editor = harness.editor;
+  (void)create_selected_box(editor, "Array Settings Revision Source");
+
+  ASSERT_TRUE(
+      editor.tools().activate(quader::ViewportToolId::LinearArray).ok());
+  const std::uint64_t linear_settings_revision =
+      editor.tools().active_settings_revision();
+  for (int step = 0; step < 32; ++step) {
+    EXPECT_EQ(editor.tools().active_settings_revision(),
+              linear_settings_revision);
+  }
+
+  const quader::QuaderApiVoidResult count_changed =
+      editor.tools().set_setting("linear_array", "linear_array.count", 6.0);
+  ASSERT_TRUE(count_changed.ok()) << count_changed.error_message();
+  ASSERT_TRUE(count_changed.changed());
+  const std::uint64_t count_revision =
+      editor.tools().active_settings_revision();
+  EXPECT_GT(count_revision, linear_settings_revision);
+  const quader::QuaderApiVoidResult count_unchanged =
+      editor.tools().set_setting("linear_array", "linear_array.count", 6.0);
+  ASSERT_TRUE(count_unchanged.ok()) << count_unchanged.error_message();
+  EXPECT_FALSE(count_unchanged.changed());
+  EXPECT_EQ(editor.tools().active_settings_revision(), count_revision);
+  ASSERT_TRUE(editor.tools().cancel_active_tool_preview().ok());
+
+  ASSERT_TRUE(
+      editor.tools().activate(quader::ViewportToolId::RadialArray).ok());
+  const std::uint64_t radial_settings_revision =
+      editor.tools().active_settings_revision();
+  for (int step = 0; step < 32; ++step) {
+    EXPECT_EQ(editor.tools().active_settings_revision(),
+              radial_settings_revision);
+  }
+
+  const quader::QuaderApiVoidResult degrees_changed =
+      editor.tools().set_setting("radial_array", "radial_array.degrees",
+                                 270.0);
+  ASSERT_TRUE(degrees_changed.ok()) << degrees_changed.error_message();
+  ASSERT_TRUE(degrees_changed.changed());
+  const std::uint64_t degrees_revision =
+      editor.tools().active_settings_revision();
+  EXPECT_GT(degrees_revision, radial_settings_revision);
+
+  const quader::QuaderApiVoidResult degrees_unchanged =
+      editor.tools().set_setting("radial_array", "radial_array.degrees",
+                                 270.0);
+  ASSERT_TRUE(degrees_unchanged.ok()) << degrees_unchanged.error_message();
+  EXPECT_FALSE(degrees_unchanged.changed());
+  EXPECT_EQ(editor.tools().active_settings_revision(), degrees_revision);
+}
+
+TEST(EditorApiTests, ToolSettingsResetRejectsNoTarget) {
+  CommandTestHarness harness;
+  quader::QuaderEditorApi &editor = harness.editor;
+
+  const quader::QuaderToolSettingsTarget inactive =
+      editor.tools().active_settings();
+  EXPECT_FALSE(inactive.active);
+  EXPECT_TRUE(inactive.description.empty());
+  EXPECT_FALSE(inactive.can_reset);
+  const quader::QuaderApiVoidResult no_target =
+      editor.tools().reset_active_settings();
+  EXPECT_FALSE(no_target.ok());
+  EXPECT_FALSE(no_target.changed());
 }
 
 TEST(EditorApiTests,
@@ -7846,6 +7939,11 @@ TEST(EditorApiTests, ToolsApiSetsCutKeepModeThroughPublicSetting) {
         editor.tools().active_settings();
     ASSERT_TRUE(cut_settings.active);
     EXPECT_EQ(cut_settings.tool_id, "cut");
+    EXPECT_EQ(
+        cut_settings.description,
+        "Draw a cutting plane through the selection and choose which side to "
+        "keep.");
+    EXPECT_TRUE(cut_settings.can_reset);
     const quader::QuaderToolSettingControl *keep_mode =
         find_tool_setting_control(cut_settings, "operation.cut.keep_mode");
     ASSERT_NE(keep_mode, nullptr);
@@ -7860,6 +7958,24 @@ TEST(EditorApiTests, ToolsApiSetsCutKeepModeThroughPublicSetting) {
         << updated_cut_setting.error_message();
   EXPECT_EQ(editor.query().tool_status().cut_mode,
               quader::QuaderCutMode::DiscardRight);
+
+    const std::uint64_t edited_revision =
+        editor.tools().active_settings_revision();
+    const quader::QuaderApiVoidResult reset =
+        editor.tools().reset_active_settings();
+    ASSERT_TRUE(reset.ok()) << reset.error_message();
+    EXPECT_TRUE(reset.changed());
+    EXPECT_EQ(editor.query().tool_status().cut_mode,
+              quader::QuaderCutMode::KeepBoth);
+    const std::uint64_t reset_revision =
+        editor.tools().active_settings_revision();
+    EXPECT_GT(reset_revision, edited_revision);
+
+    const quader::QuaderApiVoidResult repeated =
+        editor.tools().reset_active_settings();
+    ASSERT_TRUE(repeated.ok()) << repeated.error_message();
+    EXPECT_FALSE(repeated.changed());
+    EXPECT_EQ(editor.tools().active_settings_revision(), reset_revision);
 }
 
 TEST(EditorApiTests, HalfCutPreviewExposesLiveAxisAndPartSettings) {
@@ -7881,6 +7997,11 @@ TEST(EditorApiTests, HalfCutPreviewExposesLiveAxisAndPartSettings) {
     EXPECT_TRUE(settings.preview_active);
     EXPECT_EQ(settings.tool_id, "half_cut");
   EXPECT_EQ(settings.title, "Half-Cut Selected Meshes");
+    EXPECT_EQ(
+        settings.description,
+        "Split selected meshes along a local axis and choose how the parts are "
+        "produced.");
+    EXPECT_TRUE(settings.can_reset);
     EXPECT_TRUE(settings.can_apply);
     EXPECT_TRUE(settings.can_cancel);
 
@@ -7929,6 +8050,23 @@ TEST(EditorApiTests, HalfCutPreviewExposesLiveAxisAndPartSettings) {
     EXPECT_EQ(axis->choice_value, "2");
     EXPECT_TRUE(separate->bool_value);
     EXPECT_FALSE(fill->bool_value);
+
+    const quader::QuaderApiVoidResult reset =
+        editor.tools().reset_active_settings();
+    ASSERT_TRUE(reset.ok()) << reset.error_message();
+    EXPECT_TRUE(reset.changed());
+    settings = editor.tools().active_settings();
+    axis = find_tool_setting_control(settings, "operation.half_cut.axis");
+    separate = find_tool_setting_control(
+        settings, "operation.half_cut.separate_parts");
+    fill =
+        find_tool_setting_control(settings, "operation.half_cut.fill_parts");
+    ASSERT_NE(axis, nullptr);
+    ASSERT_NE(separate, nullptr);
+    ASSERT_NE(fill, nullptr);
+    EXPECT_EQ(axis->choice_value, "0");
+    EXPECT_FALSE(separate->bool_value);
+    EXPECT_TRUE(fill->bool_value);
 
     ASSERT_TRUE(editor.tools().cancel_active_tool_preview().ok());
     EXPECT_FALSE(editor.tools().active_settings().active);
@@ -8139,6 +8277,9 @@ TEST(EditorApiTests,
   EXPECT_FALSE(settings.preview_active);
   EXPECT_EQ(settings.tool_id, "radial_array");
   EXPECT_EQ(settings.title, "Radial Array");
+  EXPECT_EQ(settings.description,
+            "Choose a center and arrange copies around its axis.");
+  EXPECT_TRUE(settings.can_reset);
   EXPECT_TRUE(settings.apply_visible);
   EXPECT_FALSE(settings.can_apply);
   EXPECT_TRUE(settings.can_cancel);
@@ -8201,6 +8342,25 @@ TEST(EditorApiTests,
   EXPECT_DOUBLE_EQ(changed_repeats->number_value, 2.0);
   EXPECT_DOUBLE_EQ(changed_repeats->max_value, 64.0);
   EXPECT_DOUBLE_EQ(changed_spacing->number_value, 2.5);
+
+  const quader::QuaderApiVoidResult reset =
+      editor.tools().reset_active_settings();
+  ASSERT_TRUE(reset.ok()) << reset.error_message();
+  EXPECT_TRUE(reset.changed());
+  settings = editor.tools().active_settings();
+  degrees = find_tool_setting_control(settings, "radial_array.degrees");
+  copies = find_tool_setting_control(settings, "radial_array.copies");
+  repeats = find_tool_setting_control(settings, "radial_array.repeats");
+  spacing =
+      find_tool_setting_control(settings, "radial_array.repeat_spacing");
+  ASSERT_NE(degrees, nullptr);
+  ASSERT_NE(copies, nullptr);
+  ASSERT_NE(repeats, nullptr);
+  ASSERT_NE(spacing, nullptr);
+  EXPECT_DOUBLE_EQ(degrees->number_value, 360.0);
+  EXPECT_DOUBLE_EQ(copies->number_value, 8.0);
+  EXPECT_DOUBLE_EQ(repeats->number_value, 1.0);
+  EXPECT_DOUBLE_EQ(spacing->number_value, 1.0);
 
   ASSERT_TRUE(editor.tools().cancel_active_tool_preview().ok());
   EXPECT_EQ(editor.tools().active_tool(), "select");
@@ -8279,6 +8439,9 @@ TEST(EditorApiTests,
   EXPECT_TRUE(initial_settings.preview_active);
   EXPECT_EQ(initial_settings.tool_id, "linear_array");
   EXPECT_EQ(initial_settings.title, "Linear Array");
+  EXPECT_EQ(initial_settings.description,
+            "Drag an endpoint to create evenly spaced copies along a line.");
+  EXPECT_TRUE(initial_settings.can_reset);
   EXPECT_TRUE(initial_settings.can_apply);
   EXPECT_TRUE(initial_settings.can_cancel);
   const quader::QuaderToolSettingControl *count =
@@ -8323,6 +8486,21 @@ TEST(EditorApiTests,
               kTestPositionEpsilon);
   EXPECT_NEAR(previews[1].instance_transforms.back().values[12], 36.0f,
               kTestPositionEpsilon);
+
+  const quader::QuaderApiVoidResult reset =
+      editor.tools().reset_active_settings();
+  ASSERT_TRUE(reset.ok()) << reset.error_message();
+  EXPECT_TRUE(reset.changed());
+  const quader::QuaderToolSettingsTarget reset_settings =
+      editor.tools().active_settings();
+  const quader::QuaderToolSettingControl *reset_count =
+      find_tool_setting_control(reset_settings, "linear_array.count");
+  ASSERT_NE(reset_count, nullptr);
+  EXPECT_DOUBLE_EQ(reset_count->number_value, 4.0);
+  previews = editor.render().tool_preview_meshes();
+  ASSERT_EQ(previews.size(), 2u);
+  EXPECT_EQ(previews[0].instance_transforms.size(), 3u);
+  EXPECT_EQ(previews[1].instance_transforms.size(), 3u);
 
   const quader::QuaderApiVoidResult canceled =
       editor.tools().cancel_active_tool_preview();
@@ -9156,6 +9334,10 @@ TEST(EditorApiTests, PivotToolAppliesMeshOriginRebaseWithoutMovingWorldBounds) {
   ASSERT_TRUE(settings.active);
   EXPECT_TRUE(settings.preview_active);
   EXPECT_EQ(settings.tool_id, "pivot");
+  EXPECT_EQ(settings.description,
+            "Move the selected object's pivot and choose which features it "
+            "can snap to.");
+  EXPECT_TRUE(settings.can_reset);
   EXPECT_TRUE(settings.can_apply);
   EXPECT_TRUE(settings.can_cancel);
   ASSERT_NE(find_tool_setting_control(settings, "pivot.align.prev"), nullptr);
@@ -9181,6 +9363,17 @@ TEST(EditorApiTests, PivotToolAppliesMeshOriginRebaseWithoutMovingWorldBounds) {
       find_tool_setting_control(settings_after_grid_toggle, kGridSnapSetting);
   ASSERT_NE(grid_after, nullptr);
   EXPECT_FALSE(grid_after->bool_value);
+
+  const quader::QuaderApiVoidResult reset =
+      editor.tools().reset_active_settings();
+  ASSERT_TRUE(reset.ok()) << reset.error_message();
+  EXPECT_TRUE(reset.changed());
+  const quader::QuaderToolSettingsTarget reset_pivot_settings =
+      editor.tools().active_settings();
+  const quader::QuaderToolSettingControl *reset_grid =
+      find_tool_setting_control(reset_pivot_settings, kGridSnapSetting);
+  ASSERT_NE(reset_grid, nullptr);
+  EXPECT_TRUE(reset_grid->bool_value);
 
   const quader::QuaderApiVoidResult unknown_action =
       editor.tools().execute_action("pivot", "pivot.align.__missing__");

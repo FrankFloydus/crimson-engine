@@ -339,6 +339,90 @@ TEST(LocalStressTests, MyFirstProjectLargeWorkflow) {
     std::filesystem::remove(save_path, remove_error);
 }
 
+TEST(LocalStressTests, SingleMeshPivotApply) {
+  const std::optional<std::filesystem::path> configured_path =
+      stress_project_path();
+  if (!configured_path.has_value()) {
+    GTEST_SKIP() << "Set QUADER_STRESS_QDR to an explicit licensed binary QDR "
+                    "fixture to run the single-mesh pivot stress test.";
+  }
+
+  StressFixtureReadResult fixture;
+  timed_stress_step("pivot_qdr_read", [&] {
+    fixture = read_stress_fixture(*configured_path);
+  });
+  if (fixture.status == StressFixtureStatus::Missing) {
+    GTEST_SKIP() << "Configured QUADER_STRESS_QDR is not a regular file: "
+                 << configured_path->string();
+  }
+  ASSERT_TRUE(fixture.read.has_value());
+  if (fixture.status == StressFixtureStatus::LegacyJson) {
+    expect_legacy_json_unsupported(*fixture.read);
+    return;
+  }
+  quader::QdrProjectReadResult read = std::move(*fixture.read);
+  ASSERT_TRUE(read.ok) << read.message;
+
+  quader::SceneSessionService sessions;
+  std::unique_ptr<quader::SceneSession> session;
+  timed_stress_step("pivot_session_open", [&] {
+    session = sessions.open_session(std::move(read.document));
+  });
+  ASSERT_NE(session, nullptr);
+
+  quader::QuaderEditorApi editor(
+      quader::QuaderApiSessionInternalAccess::from_scene_session(*session));
+  const std::vector<quader::QuaderEntitySnapshot> entities =
+      editor.query().entities();
+  const auto target = std::ranges::find_if(
+      entities, [&](const quader::QuaderEntitySnapshot &entity) {
+        if (!entity.has_mesh || !entity.has_modeling_object || entity.locked ||
+            !entity.selectable) {
+          return false;
+        }
+        const std::optional<quader::QuaderMeshSnapshot> mesh =
+            editor.query().mesh(entity.mesh);
+        return mesh.has_value() && mesh->stable_cpu_topology &&
+               mesh->vertex_count > 0u;
+      });
+  ASSERT_NE(target, entities.end())
+      << "The stress fixture has no editable modeling mesh.";
+  std::cout << "[local-stress] pivot_entity_count=" << entities.size() << '\n';
+  std::cout << "[local-stress] pivot_target_entity=" << target->id << '\n';
+
+  const quader::QuaderApiVoidResult selected =
+      editor.selection().select_objects({target->id}, target->id);
+  ASSERT_TRUE(selected.ok()) << selected.error_message();
+  const quader::QuaderApiVoidResult activated =
+      editor.tools().activate(quader::ViewportToolId::Pivot);
+  ASSERT_TRUE(activated.ok()) << activated.error_message();
+  const quader::QuaderApiVoidResult aligned =
+      editor.tools().execute_action("pivot", "pivot.align.next");
+  ASSERT_TRUE(aligned.ok()) << aligned.error_message();
+  ASSERT_TRUE(aligned.changed());
+
+  const quader::ModelingSdkProjectionStats projection_before =
+      session->modeling().modeling_sdk_projection_stats_for_tests();
+  timed_stress_step("single_mesh_pivot_apply", [&] {
+    const quader::QuaderApiVoidResult applied =
+        editor.tools().commit_active_tool_preview();
+    ASSERT_TRUE(applied.ok()) << applied.error_message();
+    ASSERT_TRUE(applied.changed());
+  });
+  const quader::ModelingSdkProjectionStats projection_after =
+      session->modeling().modeling_sdk_projection_stats_for_tests();
+  EXPECT_EQ(projection_after.full_scene_reset_count,
+            projection_before.full_scene_reset_count);
+  EXPECT_EQ(projection_after.targeted_scene_sync_count,
+            projection_before.targeted_scene_sync_count + 1U);
+  EXPECT_EQ(projection_after.targeted_scene_sync_document_count,
+            projection_before.targeted_scene_sync_document_count + 1U);
+  std::cout << "[local-stress] pivot_full_scene_resets="
+            << projection_after.full_scene_reset_count << '\n';
+  std::cout << "[local-stress] pivot_targeted_document_syncs="
+            << projection_after.targeted_scene_sync_document_count << '\n';
+}
+
 TEST(LocalStressTests, MyFirstProjectRepeatedAllSelectionDragSamples) {
   constexpr std::size_t kSampleCount = 32u;
   const std::optional<std::filesystem::path> configured_path =

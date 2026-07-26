@@ -81,6 +81,10 @@ std::uint64_t RadialArrayToolService::issue_revision() {
   return ++revision_counter_;
 }
 
+void RadialArrayToolService::issue_tool_settings_revision() {
+  ++tool_settings_revision_counter_;
+}
+
 bool RadialArrayToolService::valid_source_selection(
     std::vector<EntityId> &ordered_sources, EntityId &primary_source,
     bool &instance_occurrences) const {
@@ -356,6 +360,22 @@ std::uint32_t RadialArrayToolService::maximum_repeats_for(
       std::min<std::size_t>(kRadialArrayMaximumRepeats, maximum));
 }
 
+double RadialArrayToolService::automatic_repeat_spacing(
+    const Session &session) {
+  if (session.center_locked && !session.sources.empty()) {
+    const SourceSnapshot &primary = session.sources.back();
+    const QVec3 delta = primary.visible_pivot_world - session.center_world;
+    const QVec3 planar =
+        delta - session.plane_normal_world *
+                    dot(delta, session.plane_normal_world);
+    const double radius = static_cast<double>(length(planar));
+    if (std::isfinite(radius) && radius > kRadialArrayToolEpsilon) {
+      return radius;
+    }
+  }
+  return session.fallback_grid_size;
+}
+
 std::uint32_t RadialArrayToolService::maximum_copies() const {
   return session_.has_value()
              ? maximum_copies_for(session_->sources.size(), session_->repeats)
@@ -463,6 +483,7 @@ CommandResult RadialArrayToolService::activate(double fallback_grid_size) {
   }
   session_ = std::move(next);
   clear_preview_cache();
+  issue_tool_settings_revision();
   return command_changed_result();
 }
 
@@ -475,6 +496,7 @@ CommandResult RadialArrayToolService::refresh() {
   }
   session_.reset();
   clear_preview_cache();
+  issue_tool_settings_revision();
   return {
       .ok = true,
       .changed = true,
@@ -488,6 +510,7 @@ CommandResult RadialArrayToolService::cancel() {
   }
   session_.reset();
   clear_preview_cache();
+  issue_tool_settings_revision();
   return command_changed_result();
 }
 
@@ -498,6 +521,7 @@ CommandResult RadialArrayToolService::apply() {
   if (!session_sources_are_valid(*session_)) {
     session_.reset();
     clear_preview_cache();
+    issue_tool_settings_revision();
     return command_invalid_result(
         "Radial Array sources changed before the operation was applied.");
   }
@@ -508,6 +532,7 @@ CommandResult RadialArrayToolService::apply() {
   const Session committed = *session_;
   session_.reset();
   clear_preview_cache();
+  issue_tool_settings_revision();
   if (committed.instance_occurrences) {
     std::vector<LinkedInstanceArraySource> sources;
     sources.reserve(committed.sources.size());
@@ -607,18 +632,11 @@ CommandResult RadialArrayToolService::lock_center() {
     return command_invalid_result("Choose a valid Radial Array center.");
   }
   session_->center_locked = true;
-  if (!session_->repeat_spacing_edited && !session_->sources.empty()) {
-    const SourceSnapshot &primary = session_->sources.back();
-    const QVec3 delta = primary.visible_pivot_world - session_->center_world;
-    const QVec3 planar = delta - session_->plane_normal_world *
-                                    dot(delta, session_->plane_normal_world);
-    const double radius = static_cast<double>(length(planar));
-    session_->repeat_spacing =
-        std::isfinite(radius) && radius > kRadialArrayToolEpsilon
-            ? radius
-            : session_->fallback_grid_size;
+  if (!session_->repeat_spacing_edited) {
+    session_->repeat_spacing = automatic_repeat_spacing(*session_);
   }
   session_->revision = issue_revision();
+  issue_tool_settings_revision();
   return command_changed_result();
 }
 
@@ -636,6 +654,7 @@ CommandResult RadialArrayToolService::set_degrees(double degrees) {
   }
   session_->degrees = degrees;
   session_->revision = issue_revision();
+  issue_tool_settings_revision();
   return command_changed_result();
 }
 
@@ -653,6 +672,7 @@ CommandResult RadialArrayToolService::set_copies(std::uint32_t copies) {
   }
   session_->copies = copies;
   session_->revision = issue_revision();
+  issue_tool_settings_revision();
   return command_changed_result();
 }
 
@@ -683,6 +703,7 @@ CommandResult RadialArrayToolService::set_repeats(std::uint32_t repeats) {
   }
   session_->repeats = repeats;
   session_->revision = issue_revision();
+  issue_tool_settings_revision();
   return command_changed_result();
 }
 
@@ -702,6 +723,35 @@ CommandResult RadialArrayToolService::set_repeat_spacing(double spacing) {
   }
   session_->repeat_spacing = spacing;
   session_->revision = issue_revision();
+  issue_tool_settings_revision();
+  return command_changed_result();
+}
+
+CommandResult RadialArrayToolService::reset_settings() {
+  if (!session_.has_value()) {
+    return command_invalid_result("Radial Array tool is not active.");
+  }
+  const std::uint32_t default_repeats = kRadialArrayDefaultRepeats;
+  const std::uint32_t default_copies = std::min(
+      kRadialArrayDefaultCopies,
+      maximum_copies_for(session_->sources.size(), default_repeats));
+  const double default_spacing = automatic_repeat_spacing(*session_);
+  const bool changed =
+      session_->degrees != kRadialArrayDefaultDegrees ||
+      session_->copies != default_copies ||
+      session_->repeats != default_repeats ||
+      session_->repeat_spacing != default_spacing ||
+      session_->repeat_spacing_edited;
+  if (!changed) {
+    return command_unchanged_result();
+  }
+  session_->degrees = kRadialArrayDefaultDegrees;
+  session_->copies = default_copies;
+  session_->repeats = default_repeats;
+  session_->repeat_spacing = default_spacing;
+  session_->repeat_spacing_edited = false;
+  session_->revision = issue_revision();
+  issue_tool_settings_revision();
   return command_changed_result();
 }
 

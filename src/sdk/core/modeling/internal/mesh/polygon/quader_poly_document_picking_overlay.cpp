@@ -17,6 +17,7 @@
 #include <cmath>
 #include <limits>
 #include <optional>
+#include <set>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -138,110 +139,6 @@ bool face_can_be_picked(const Face& face, const PickOptions& options)
     return !options.hides_material_slot(face.material_slot);
 }
 
-bool vertex_can_be_picked(const Document& document, ElementId vertex_id, const PickOptions& options)
-{
-    if (!options.has_hidden_material_slot) {
-        return true;
-    }
-
-    bool used_by_face = false;
-    for (const Face& face : document.faces) {
-        if (!face_uses_vertex(face, vertex_id)) {
-            continue;
-        }
-
-        used_by_face = true;
-        if (face_can_be_picked(face, options)) {
-            return true;
-        }
-    }
-    return !used_by_face;
-}
-
-bool edge_can_be_picked(const Document& document, Edge edge, const PickOptions& options)
-{
-    if (!options.has_hidden_material_slot) {
-        return true;
-    }
-
-    bool used_by_face = false;
-    for (const Face& face : document.faces) {
-        if (!face_uses_edge(face, edge)) {
-            continue;
-        }
-
-        used_by_face = true;
-        if (face_can_be_picked(face, options)) {
-            return true;
-        }
-    }
-    return !used_by_face;
-}
-
-bool vertex_has_front_facing_pickable_face(
-    const Document& document,
-    ElementId vertex_id,
-    const Ray& ray,
-    const PickOptions& options)
-{
-    for (const Face& face : document.faces) {
-        if (!face_uses_vertex(face, vertex_id) || !face_can_be_picked(face, options)) {
-            continue;
-        }
-        if (face_is_front_facing_from_ray(face_normal(document, face), ray)) {
-            return true;
-        }
-    }
-    return false;
-}
-
-bool edge_has_front_facing_pickable_face(
-    const Document& document,
-    Edge edge,
-    const Ray& ray,
-    const PickOptions& options)
-{
-    for (const Face& face : document.faces) {
-        if (!face_uses_edge(face, edge) || !face_can_be_picked(face, options)) {
-            continue;
-        }
-        if (face_is_front_facing_from_ray(face_normal(document, face), ray)) {
-            return true;
-        }
-    }
-    return false;
-}
-
-ElementId edge_pick_context_face_id(
-    const Document& document,
-    Edge edge,
-    const Ray& ray,
-    const PickOptions& options,
-    const std::optional<FaceRayHit>& surface_hit)
-{
-    if (surface_hit.has_value()) {
-        const Face* face = find_face(document, surface_hit->face_id);
-        if (face != nullptr && face_uses_edge(*face, edge)) {
-            return face->id;
-        }
-    }
-
-    ElementId best_face_id = kInvalidElementId;
-    float best_score = -std::numeric_limits<float>::infinity();
-    for (const Face& face : document.faces) {
-        if (!face_uses_edge(face, edge) || !face_can_be_picked(face, options)) {
-            continue;
-        }
-        const float score = -dot(face_normal(document, face), ray.direction);
-        if (best_face_id == kInvalidElementId ||
-            score > best_score + kEpsilon) {
-            best_face_id = face.id;
-            best_score = score;
-        }
-    }
-    return best_face_id;
-}
-
 bool component_pick_is_better(
     float pick_distance,
     float ray_distance,
@@ -265,41 +162,6 @@ bool component_pick_is_better(
         return front_facing;
     }
     return ray_distance < best.distance;
-}
-
-std::optional<FaceRayHit> nearest_face_ray_hit(const Document& document, const Ray& ray, const PickOptions& options = {})
-{
-    QDR_PROFILE_SCOPE("qdr_document.nearest_face_ray_hit");
-    std::optional<FaceRayHit> nearest;
-    for (const Face& face : document.faces) {
-        if (!face_can_be_picked(face, options)) {
-            continue;
-        }
-
-        const quader::QVec3 normal = face_normal(document, face);
-        const bool front_facing = face_is_front_facing_from_ray(normal, ray);
-        if (!front_facing && !options.pick_backfaces) {
-            continue;
-        }
-
-        const std::vector<Triangle> triangles = triangulate_face_local_indices(document, face);
-        for (const Triangle& triangle : triangles) {
-            const Vertex* a = find_vertex(document, face.vertices[triangle.a]);
-            const Vertex* b = find_vertex(document, face.vertices[triangle.b]);
-            const Vertex* c = find_vertex(document, face.vertices[triangle.c]);
-            if (a == nullptr || b == nullptr || c == nullptr) {
-                continue;
-            }
-
-            float distance = 0.0F;
-            quader::QVec3 position;
-            if (ray_intersects_triangle(ray, a->position, b->position, c->position, distance, position) &&
-                face_hit_is_better({ face.id, distance, front_facing }, nearest, options)) {
-                nearest = FaceRayHit { face.id, distance, front_facing };
-            }
-        }
-    }
-    return nearest;
 }
 
 bool component_depth_is_occluded(float component_distance, const std::optional<FaceRayHit>& surface_hit)
@@ -328,6 +190,507 @@ bool edge_pick_is_occluded(const Document& document, Edge edge, float ray_distan
 }
 
 } // namespace
+
+namespace document_internal {
+
+std::uint64_t DocumentPickFacts::edge_key(Edge edge) noexcept
+{
+    edge = make_edge(edge.a, edge.b);
+    return (static_cast<std::uint64_t>(edge.a) << 32U) |
+        static_cast<std::uint64_t>(edge.b);
+}
+
+DocumentPickFacts::DocumentPickFacts(
+    const Document& document,
+    const PickOptions& options,
+    PickWorkCounters* work_counters)
+    : document_(document)
+    , options_(options)
+    , work_counters_(work_counters)
+{
+    QDR_PROFILE_SCOPE("qdr_document.build_pick_facts");
+    if (work_counters_ != nullptr) {
+        ++work_counters_->fact_sets_built;
+    }
+    face_facts_.reserve(document.faces.size());
+    incident_faces_by_vertex_.reserve(document.vertices.size());
+    incident_faces_by_edge_.reserve(document.faces.size() * 2U);
+
+    std::set<std::pair<ElementId, ElementId>> unique_edges;
+    for (std::size_t face_index = 0U;
+         face_index < document.faces.size();
+         ++face_index) {
+        const Face& face = document.faces[face_index];
+        FaceFact fact;
+        fact.face = &face;
+        fact.pickable = face_can_be_picked(face, options_);
+        if (fact.pickable) {
+            fact.normal = face_normal(document_, face);
+        }
+        face_facts_.push_back(std::move(fact));
+        if (work_counters_ != nullptr) {
+            ++work_counters_->face_facts_built;
+        }
+
+        std::unordered_set<ElementId> face_vertex_ids;
+        face_vertex_ids.reserve(face.vertices.size());
+        for (const ElementId vertex_id : face.vertices) {
+            if (face_vertex_ids.insert(vertex_id).second) {
+                incident_faces_by_vertex_[vertex_id].push_back(face_index);
+            }
+        }
+
+        if (face.vertices.size() < 2U) {
+            continue;
+        }
+        std::unordered_set<std::uint64_t> face_edge_keys;
+        face_edge_keys.reserve(face.vertices.size());
+        for (std::size_t vertex_index = 0U;
+             vertex_index < face.vertices.size();
+             ++vertex_index) {
+            const Edge edge = make_edge(
+                face.vertices[vertex_index],
+                face.vertices[(vertex_index + 1U) % face.vertices.size()]);
+            if (edge.a == kInvalidElementId ||
+                edge.b == kInvalidElementId ||
+                edge.a == edge.b) {
+                continue;
+            }
+            unique_edges.emplace(edge.a, edge.b);
+            const std::uint64_t key = edge_key(edge);
+            if (face_edge_keys.insert(key).second) {
+                incident_faces_by_edge_[key].push_back(face_index);
+            }
+        }
+    }
+
+    edges_.reserve(unique_edges.size());
+    for (const auto& [a, b] : unique_edges) {
+        edges_.push_back({a, b});
+    }
+}
+
+std::span<const std::size_t> DocumentPickFacts::incident_faces(
+    ElementId vertex_id) const
+{
+    const auto found = incident_faces_by_vertex_.find(vertex_id);
+    return found == incident_faces_by_vertex_.end()
+        ? std::span<const std::size_t>{}
+        : std::span<const std::size_t>(
+              found->second.data(), found->second.size());
+}
+
+std::span<const std::size_t> DocumentPickFacts::incident_faces(
+    Edge edge) const
+{
+    const auto found = incident_faces_by_edge_.find(edge_key(edge));
+    return found == incident_faces_by_edge_.end()
+        ? std::span<const std::size_t>{}
+        : std::span<const std::size_t>(
+              found->second.data(), found->second.size());
+}
+
+DocumentPickFacts::FaceFact* DocumentPickFacts::face_fact(ElementId face_id)
+{
+    const Face* face = find_face(document_, face_id);
+    if (face == nullptr || document_.faces.empty()) {
+        return nullptr;
+    }
+    const std::ptrdiff_t face_index = face - document_.faces.data();
+    return face_index >= 0 &&
+            static_cast<std::size_t>(face_index) < face_facts_.size()
+        ? &face_facts_[static_cast<std::size_t>(face_index)]
+        : nullptr;
+}
+
+const DocumentPickFacts::FaceFact* DocumentPickFacts::face_fact(
+    ElementId face_id) const
+{
+    const Face* face = find_face(document_, face_id);
+    if (face == nullptr || document_.faces.empty()) {
+        return nullptr;
+    }
+    const std::ptrdiff_t face_index = face - document_.faces.data();
+    return face_index >= 0 &&
+            static_cast<std::size_t>(face_index) < face_facts_.size()
+        ? &face_facts_[static_cast<std::size_t>(face_index)]
+        : nullptr;
+}
+
+void DocumentPickFacts::build_face_triangles(FaceFact& fact)
+{
+    if (fact.triangles_built) {
+        return;
+    }
+    fact.triangles_built = true;
+    if (!fact.pickable || fact.face == nullptr) {
+        return;
+    }
+
+    const std::vector<Triangle> triangles =
+        triangulate_face_local_indices(document_, *fact.face);
+    fact.triangles.reserve(triangles.size());
+    for (const Triangle& triangle : triangles) {
+        const Vertex* a =
+            find_vertex(document_, fact.face->vertices[triangle.a]);
+        const Vertex* b =
+            find_vertex(document_, fact.face->vertices[triangle.b]);
+        const Vertex* c =
+            find_vertex(document_, fact.face->vertices[triangle.c]);
+        if (a == nullptr || b == nullptr || c == nullptr) {
+            continue;
+        }
+        fact.triangles.push_back({
+            a->position,
+            b->position,
+            c->position,
+        });
+        if (work_counters_ != nullptr) {
+            ++work_counters_->face_triangle_facts_built;
+        }
+    }
+}
+
+PickResult DocumentPickFacts::normalized_surface_hit(const Ray& ray)
+{
+    QDR_PROFILE_SCOPE("qdr_document.nearest_prepared_face_ray_hit");
+    std::optional<FaceRayHit> nearest;
+    for (FaceFact& fact : face_facts_) {
+        if (!fact.pickable || fact.face == nullptr) {
+            continue;
+        }
+
+        const bool front_facing =
+            face_is_front_facing_from_ray(fact.normal, ray);
+        if (!front_facing && !options_.pick_backfaces) {
+            continue;
+        }
+
+        build_face_triangles(fact);
+        for (const FaceTriangleFact& triangle : fact.triangles) {
+            if (work_counters_ != nullptr) {
+                ++work_counters_->surface_triangle_tests;
+            }
+            float distance = 0.0F;
+            quader::QVec3 position;
+            if (ray_intersects_triangle(
+                    ray,
+                    triangle.a,
+                    triangle.b,
+                    triangle.c,
+                    distance,
+                    position) &&
+                face_hit_is_better(
+                    {fact.face->id, distance, front_facing},
+                    nearest,
+                    options_)) {
+                nearest = FaceRayHit{
+                    fact.face->id,
+                    distance,
+                    front_facing,
+                };
+            }
+        }
+    }
+    if (!nearest.has_value()) {
+        return {};
+    }
+    return {
+        true,
+        ElementKind::Face,
+        kInvalidElementId,
+        {},
+        nearest->face_id,
+        nearest->distance,
+        ray.origin + ray.direction * nearest->distance,
+    };
+}
+
+PickResult DocumentPickFacts::surface_hit(const Ray& local_ray)
+{
+    const Ray ray{
+        local_ray.origin,
+        normalize_or_zero(local_ray.direction),
+    };
+    return length_squared(ray.direction) <= kEpsilon
+        ? PickResult{}
+        : normalized_surface_hit(ray);
+}
+
+bool DocumentPickFacts::vertex_can_be_picked(ElementId vertex_id) const
+{
+    if (!options_.has_hidden_material_slot) {
+        return true;
+    }
+    const std::span<const std::size_t> faces = incident_faces(vertex_id);
+    for (const std::size_t face_index : faces) {
+        if (work_counters_ != nullptr) {
+            ++work_counters_->incident_face_visits;
+        }
+        if (face_index < face_facts_.size() &&
+            face_facts_[face_index].pickable) {
+            return true;
+        }
+    }
+    return faces.empty();
+}
+
+bool DocumentPickFacts::edge_can_be_picked(Edge edge) const
+{
+    if (!options_.has_hidden_material_slot) {
+        return true;
+    }
+    const std::span<const std::size_t> faces = incident_faces(edge);
+    for (const std::size_t face_index : faces) {
+        if (work_counters_ != nullptr) {
+            ++work_counters_->incident_face_visits;
+        }
+        if (face_index < face_facts_.size() &&
+            face_facts_[face_index].pickable) {
+            return true;
+        }
+    }
+    return faces.empty();
+}
+
+bool DocumentPickFacts::vertex_has_front_facing_pickable_face(
+    ElementId vertex_id,
+    const Ray& ray) const
+{
+    for (const std::size_t face_index : incident_faces(vertex_id)) {
+        if (work_counters_ != nullptr) {
+            ++work_counters_->incident_face_visits;
+        }
+        if (face_index >= face_facts_.size()) {
+            continue;
+        }
+        const FaceFact& fact = face_facts_[face_index];
+        if (fact.pickable &&
+            face_is_front_facing_from_ray(fact.normal, ray)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool DocumentPickFacts::edge_has_front_facing_pickable_face(
+    Edge edge,
+    const Ray& ray) const
+{
+    for (const std::size_t face_index : incident_faces(edge)) {
+        if (work_counters_ != nullptr) {
+            ++work_counters_->incident_face_visits;
+        }
+        if (face_index >= face_facts_.size()) {
+            continue;
+        }
+        const FaceFact& fact = face_facts_[face_index];
+        if (fact.pickable &&
+            face_is_front_facing_from_ray(fact.normal, ray)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+ElementId DocumentPickFacts::best_edge_context_face_id(
+    Edge edge,
+    const Ray& ray) const
+{
+    ElementId best_face_id = kInvalidElementId;
+    float best_score = -std::numeric_limits<float>::infinity();
+    for (const std::size_t face_index : incident_faces(edge)) {
+        if (work_counters_ != nullptr) {
+            ++work_counters_->incident_face_visits;
+        }
+        if (face_index >= face_facts_.size()) {
+            continue;
+        }
+        const FaceFact& fact = face_facts_[face_index];
+        if (!fact.pickable || fact.face == nullptr) {
+            continue;
+        }
+        const float score = -dot(fact.normal, ray.direction);
+        if (best_face_id == kInvalidElementId ||
+            score > best_score + kEpsilon) {
+            best_face_id = fact.face->id;
+            best_score = score;
+        }
+    }
+    return best_face_id;
+}
+
+ElementId DocumentPickFacts::edge_pick_context_face_id(
+    Edge edge,
+    const Ray& ray,
+    const std::optional<PickResult>& surface_hit) const
+{
+    if (surface_hit.has_value() && surface_hit->hit) {
+        const FaceFact* surface_face = face_fact(surface_hit->face_id);
+        if (surface_face != nullptr &&
+            surface_face->face != nullptr &&
+            face_uses_edge(*surface_face->face, edge)) {
+            return surface_face->face->id;
+        }
+    }
+    return best_edge_context_face_id(edge, ray);
+}
+
+std::span<const Edge> DocumentPickFacts::edges() const noexcept
+{
+    return edges_;
+}
+
+PickResult DocumentPickFacts::pick_element(
+    const Ray& local_ray,
+    const std::optional<PickResult>* precomputed_surface_hit)
+{
+    return pick_element(local_ray, options_.mode, precomputed_surface_hit);
+}
+
+PickResult DocumentPickFacts::pick_element(
+    const Ray& local_ray,
+    SelectionMode mode,
+    const std::optional<PickResult>* precomputed_surface_hit)
+{
+    const Ray ray{
+        local_ray.origin,
+        normalize_or_zero(local_ray.direction),
+    };
+    if (length_squared(ray.direction) <= kEpsilon) {
+        return {};
+    }
+    if (mode == SelectionMode::Face) {
+        return normalized_surface_hit(ray);
+    }
+
+    std::optional<PickResult> computed_surface_hit;
+    const std::optional<PickResult>* surface_hit = precomputed_surface_hit;
+    if (surface_hit == nullptr) {
+        PickResult hit = normalized_surface_hit(ray);
+        if (hit.hit) {
+            computed_surface_hit = hit;
+        }
+        surface_hit = &computed_surface_hit;
+    }
+    std::optional<FaceRayHit> surface_face_hit;
+    if (surface_hit->has_value() && surface_hit->value().hit) {
+        surface_face_hit = FaceRayHit{
+            surface_hit->value().face_id,
+            surface_hit->value().distance,
+            false,
+        };
+    }
+
+    PickResult best;
+    best.distance = std::numeric_limits<float>::max();
+    float best_pick_distance = std::numeric_limits<float>::max();
+    bool best_front_facing = false;
+
+    if (mode == SelectionMode::Vertex) {
+        for (const Vertex& vertex : document_.vertices) {
+            if (work_counters_ != nullptr) {
+                ++work_counters_->component_candidates_tested;
+            }
+            if (!vertex_can_be_picked(vertex.id)) {
+                continue;
+            }
+
+            float ray_distance = 0.0F;
+            const float distance =
+                point_ray_distance(ray, vertex.position, ray_distance);
+            if (distance > options_.vertex_radius) {
+                continue;
+            }
+            const bool front_facing =
+                vertex_has_front_facing_pickable_face(vertex.id, ray);
+            if (!vertex_pick_is_occluded(
+                    document_,
+                    vertex.id,
+                    ray_distance,
+                    surface_face_hit) &&
+                component_pick_is_better(
+                    distance,
+                    ray_distance,
+                    front_facing,
+                    best,
+                    best_pick_distance,
+                    best_front_facing,
+                    options_)) {
+                best = {
+                    true,
+                    ElementKind::Vertex,
+                    vertex.id,
+                    {},
+                    kInvalidElementId,
+                    ray_distance,
+                    vertex.position,
+                };
+                best_pick_distance = distance;
+                best_front_facing = front_facing;
+            }
+        }
+        return best.hit ? best : PickResult{};
+    }
+
+    for (const Edge& edge : edges_) {
+        if (work_counters_ != nullptr) {
+            ++work_counters_->component_candidates_tested;
+        }
+        if (!edge_can_be_picked(edge)) {
+            continue;
+        }
+
+        const Vertex* a = find_vertex(document_, edge.a);
+        const Vertex* b = find_vertex(document_, edge.b);
+        if (a == nullptr || b == nullptr) {
+            continue;
+        }
+
+        float ray_distance = 0.0F;
+        quader::QVec3 position;
+        const float distance = segment_ray_distance(
+            ray,
+            a->position,
+            b->position,
+            ray_distance,
+            position);
+        if (distance > options_.edge_radius) {
+            continue;
+        }
+        const bool front_facing =
+            edge_has_front_facing_pickable_face(edge, ray);
+        if (!edge_pick_is_occluded(
+                document_,
+                edge,
+                ray_distance,
+                surface_face_hit) &&
+            component_pick_is_better(
+                distance,
+                ray_distance,
+                front_facing,
+                best,
+                best_pick_distance,
+                best_front_facing,
+                options_)) {
+            best = {
+                true,
+                ElementKind::Edge,
+                kInvalidElementId,
+                edge,
+                edge_pick_context_face_id(
+                    edge, ray, *surface_hit),
+                ray_distance,
+                position,
+            };
+            best_pick_distance = distance;
+            best_front_facing = front_facing;
+        }
+    }
+    return best.hit ? best : PickResult{};
+}
+
+} // namespace document_internal
 
 std::vector<PickFaceTriangle> build_face_pick_geometry(const Document& document)
 {
@@ -399,130 +762,8 @@ PickResult pick_face_geometry(std::span<const PickFaceTriangle> triangles, const
 PickResult pick_element(const Document& document, const Ray& local_ray, const PickOptions& options)
 {
     QDR_PROFILE_SCOPE("qdr_document.pick_element");
-    const Ray ray {
-        local_ray.origin,
-        normalize_or_zero(local_ray.direction),
-    };
-    if (length_squared(ray.direction) <= kEpsilon) {
-      return {};
-    }
-
-    PickResult best;
-    best.distance = std::numeric_limits<float>::max();
-    float best_pick_distance = std::numeric_limits<float>::max();
-    bool best_front_facing = false;
-    const std::optional<FaceRayHit> surface_hit =
-        options.mode == SelectionMode::Vertex ||
-                options.mode == SelectionMode::Edge
-            ? nearest_face_ray_hit(document, ray, options)
-            : std::optional<FaceRayHit>{};
-
-    if (options.mode == SelectionMode::Vertex) {
-      for (const Vertex &vertex : document.vertices) {
-        if (!vertex_can_be_picked(document, vertex.id, options)) {
-          continue;
-        }
-
-        float ray_distance = 0.0F;
-        const float distance =
-            point_ray_distance(ray, vertex.position, ray_distance);
-        const bool front_facing = vertex_has_front_facing_pickable_face(
-            document, vertex.id, ray, options);
-        if (distance <= options.vertex_radius &&
-            !vertex_pick_is_occluded(document, vertex.id, ray_distance,
-                                     surface_hit) &&
-            component_pick_is_better(distance, ray_distance, front_facing, best,
-                                     best_pick_distance, best_front_facing,
-                                     options)) {
-          best = {
-              true,
-              ElementKind::Vertex,
-              vertex.id,
-              {},
-              kInvalidElementId,
-              ray_distance,
-              vertex.position,
-          };
-          best_pick_distance = distance;
-          best_front_facing = front_facing;
-        }
-      }
-      return best.hit ? best : PickResult{};
-    }
-
-    if (options.mode == SelectionMode::Edge) {
-      for (const Edge &edge : document_edges(document)) {
-        if (!edge_can_be_picked(document, edge, options)) {
-          continue;
-        }
-
-        const Vertex *a = find_vertex(document, edge.a);
-        const Vertex *b = find_vertex(document, edge.b);
-        if (a == nullptr || b == nullptr) {
-          continue;
-        }
-
-        float ray_distance = 0.0F;
-        quader::QVec3 position;
-        const float distance = segment_ray_distance(
-            ray, a->position, b->position, ray_distance, position);
-        const bool front_facing =
-            edge_has_front_facing_pickable_face(document, edge, ray, options);
-        if (distance <= options.edge_radius &&
-            !edge_pick_is_occluded(document, edge, ray_distance, surface_hit) &&
-            component_pick_is_better(distance, ray_distance, front_facing, best,
-                                     best_pick_distance, best_front_facing,
-                                     options)) {
-          best = {
-              true,     ElementKind::Edge, kInvalidElementId,
-              edge,
-              edge_pick_context_face_id(document, edge, ray, options,
-                                        surface_hit),
-              ray_distance,
-              position,
-          };
-          best_pick_distance = distance;
-          best_front_facing = front_facing;
-        }
-      }
-      return best.hit ? best : PickResult{};
-    }
-
-    for (const Face& face : document.faces) {
-        if (!face_can_be_picked(face, options)) {
-            continue;
-        }
-
-        const quader::QVec3 normal = face_normal(document, face);
-        const bool front_facing = face_is_front_facing_from_ray(normal, ray);
-        if (!front_facing && !options.pick_backfaces) {
-            continue;
-        }
-
-        const std::vector<Triangle> triangles = triangulate_face_local_indices(document, face);
-        for (const Triangle& triangle : triangles) {
-            const Vertex* a = find_vertex(document, face.vertices[triangle.a]);
-            const Vertex* b = find_vertex(document, face.vertices[triangle.b]);
-            const Vertex* c = find_vertex(document, face.vertices[triangle.c]);
-            if (a == nullptr || b == nullptr || c == nullptr) {
-                continue;
-            }
-
-            float distance = 0.0F;
-            quader::QVec3 position;
-            if (ray_intersects_triangle(ray, a->position, b->position, c->position, distance, position) &&
-                face_hit_is_better({ face.id, distance, front_facing }, best.hit ? std::optional<FaceRayHit> {
-                    FaceRayHit { best.face_id, best.distance, best_front_facing }
-                } : std::optional<FaceRayHit> {}, options)) {
-              best = {
-                  true,    ElementKind::Face, kInvalidElementId, {},
-                  face.id, distance,          position,
-              };
-              best_front_facing = front_facing;
-            }
-        }
-    }
-    return best.hit ? best : PickResult {};
+    document_internal::DocumentPickFacts facts(document, options);
+    return facts.pick_element(local_ray);
 }
 
 OverlayData build_edge_loop_preview(const Document& document, Edge edge, float factor, const OverlayStyle& style)

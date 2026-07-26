@@ -300,6 +300,8 @@ void ViewportSelectionInteraction::reset() {
   committed_marquee_.reset();
   hover_suppressed_target_.reset();
   paint_selection_active_ = false;
+  viewport_hover_state_initialized_ = false;
+  viewport_hovered_last_frame_ = false;
 }
 
 ViewportSelectionMarquee ViewportSelectionInteraction::marquee() const {
@@ -316,6 +318,7 @@ void ViewportSelectionInteraction::handle_frame(
     ViewportToolHoverPort *tool_hover) {
   QDR_PROFILE_FUNCTION();
   committed_marquee_.reset();
+  const bool paint_selection_was_active = paint_selection_active_;
   const bool gizmo_consumed = before_tool.gizmo_consumed;
   const bool selection_fallback_active =
       frame.active_tool_allows_selection_fallback;
@@ -333,6 +336,48 @@ void ViewportSelectionInteraction::handle_frame(
       !tool_result.handled;
   const bool can_pick =
       can_use_selection_fallback && frame.input.viewport_hovered;
+
+  auto claim_hover_work = [&]() {
+    return tool_hover == nullptr ||
+           tool_hover->claim(ModelingBoxDragState::Idle);
+  };
+
+  auto refresh_hover_work_after_selection =
+      [&](QVec2 local_mouse, bool consume_stationary_key) {
+    if (tool_hover == nullptr) {
+      return;
+    }
+    // Refresh the host-owned work-key inputs after the selection mutation.
+    tool_hover->invalidate();
+    if (!consume_stationary_key ||
+        local_mouse.x != frame.input.mouse_local.x ||
+        local_mouse.y != frame.input.mouse_local.y) {
+      return;
+    }
+    // Held paint cannot run the release-time hover suppression comparison.
+    // Consume its post-pick revision explicitly so the stationary pointer
+    // does not paint again on the next frame.
+    (void)tool_hover->claim(ModelingBoxDragState::Idle);
+  };
+
+  const bool pointer_left_viewport =
+      viewport_hover_state_initialized_ && viewport_hovered_last_frame_ &&
+      !frame.input.viewport_hovered;
+  const bool pointer_entered_viewport =
+      viewport_hover_state_initialized_ && !viewport_hovered_last_frame_ &&
+      frame.input.viewport_hovered;
+  viewport_hover_state_initialized_ = true;
+  viewport_hovered_last_frame_ = frame.input.viewport_hovered;
+  if (pointer_left_viewport) {
+    hover_suppressed_target_.reset();
+  }
+  if (pointer_entered_viewport && tool_hover != nullptr &&
+      frame.input_router.state().active_tool != ViewportToolId::Knife) {
+    // Leaving clears retained hover below. Re-arm the unchanged spatial key
+    // only on re-entry. Knife re-arms its owner key when its retained hover is
+    // cleared on leave, so it must not receive a second invalidation here.
+    tool_hover->invalidate();
+  }
 
   auto clear_hover = [&]() {
     const QuaderApiVoidResult clear_hover_result =
@@ -375,6 +420,8 @@ void ViewportSelectionInteraction::handle_frame(
         is_component_selection_mode(to_modeling_selection_mode(summary.mode));
     suppress_hover_after_selection(before_tool.selection_click_local,
                                    hovered_before_selection);
+    refresh_hover_work_after_selection(before_tool.selection_click_local,
+                                       false);
   }
 
   if (!box_state_.active && can_pick && frame.input.modifiers.alt &&
@@ -438,6 +485,7 @@ void ViewportSelectionInteraction::handle_frame(
                           commit.end, box_edit_,
                           box_baseline_ ? &*box_baseline_ : nullptr);
       suppress_hover_after_selection(commit.end, hovered_before_selection);
+      refresh_hover_work_after_selection(commit.end, false);
     } else if (can_pick) {
       const QuaderSelectionSummary summary = pick_selection(
           editor, frame.input_router, frame, frame.left_click_local,
@@ -459,6 +507,7 @@ void ViewportSelectionInteraction::handle_frame(
       }
       suppress_hover_after_selection(frame.left_click_local,
                                      hovered_before_selection);
+      refresh_hover_work_after_selection(frame.left_click_local, false);
     }
     box_edit_ = QuaderSelectionEdit::Replace;
     box_hovered_before_selection_.reset();
@@ -470,11 +519,19 @@ void ViewportSelectionInteraction::handle_frame(
       quader_editor_core::clear_selection_box(box_state_);
     }
     paint_selection_active_ = false;
+    if (paint_selection_was_active && frame.input.viewport_hovered &&
+        tool_hover != nullptr) {
+      // The held-paint key was consumed after its last mutation. Re-arm the
+      // release frame so suppression policy, including the primary-modifier
+      // hover exception, runs once before the pointer becomes stationary.
+      tool_hover->invalidate();
+    }
   }
 
   if (!box_state_.active && can_pick && paint_selection_active_ &&
-      frame.left_down) {
+      frame.left_down && claim_hover_work()) {
     QDR_PROFILE_SCOPE("Viewport paint selection");
+    ++work_stats_.paint_pick_count;
     const QuaderHoverTarget hovered_before_selection =
         editor.selection().hover_summary().target;
     const QuaderSelectionSummary summary = pick_selection(
@@ -483,6 +540,7 @@ void ViewportSelectionInteraction::handle_frame(
         is_component_selection_mode(to_modeling_selection_mode(summary.mode));
     suppress_hover_after_selection(frame.input.mouse_local,
                                    hovered_before_selection);
+    refresh_hover_work_after_selection(frame.input.mouse_local, true);
   }
 
   const bool box_dragging = box_state_.active && box_state_.dragging;
@@ -500,6 +558,9 @@ void ViewportSelectionInteraction::handle_frame(
                          frame.input.viewport_hovered && !suppress_hover_work &&
                          !box_dragging && !frame.left_down &&
                          !tool_result.handled;
+  if (can_hover && !claim_hover_work()) {
+    return;
+  }
 
   bool hover_suppressed_this_frame = false;
   if (can_hover && hover_suppressed_target_.has_value()) {
@@ -519,6 +580,7 @@ void ViewportSelectionInteraction::handle_frame(
 
   if (can_hover && !hover_suppressed_this_frame) {
     QDR_PROFILE_SCOPE("Viewport hover selection");
+    ++work_stats_.hover_pick_count;
     const QuaderApiResult<QuaderHoverSummary> hover = editor.selection().hover(
         make_hover_request(frame.camera, frame.settings,
                            frame.input.mouse_local, frame.input.modifiers));

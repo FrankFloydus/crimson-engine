@@ -25,6 +25,18 @@ class ModelingSessionService;
 class SceneDocument;
 struct SceneBounds;
 
+/// Reports deterministic Copy Pivot planning work without timing assertions.
+struct PivotPlanningStats {
+  std::uint64_t copy_batch_count = 0;
+  std::uint64_t planned_target_count = 0;
+  std::uint64_t hierarchy_index_build_count = 0;
+  std::uint64_t hierarchy_entity_visit_count = 0;
+  std::uint64_t hierarchy_depth_resolution_count = 0;
+  std::uint64_t mesh_reference_index_build_count = 0;
+  std::uint64_t mesh_reference_entity_visit_count = 0;
+  std::uint64_t mesh_reference_lookup_count = 0;
+};
+
 /**
  * Owns persistent and temporary pivot placement state for the editor session.
  */
@@ -44,6 +56,9 @@ public:
   [[nodiscard]] std::uint64_t selection_pivot_revision() const {
     return selection_pivot_revision_;
   }
+  [[nodiscard]] PivotPlanningStats planning_stats_for_tests() const {
+    return planning_stats_;
+  }
   [[nodiscard]] std::optional<QVec3> persistent_preview_position() const;
   [[nodiscard]] bool
   can_activate_persistent(const EditorSelectionService &selection) const;
@@ -56,6 +71,7 @@ public:
   CommandResult
   copy_pivot_from_active(const EditorSelectionService &selection);
   CommandResult set_snap_enabled(std::string_view setting_id, bool enabled);
+  CommandResult reset_settings();
   CommandResult execute_align_action(std::string_view action_id);
   void set_persistent_preview_position(QVec3 world_position);
 
@@ -121,6 +137,7 @@ private:
   QuickState quick_;
   std::uint64_t selection_pivot_revision_ = 0;
   std::uint64_t tool_settings_revision_ = 0;
+  PivotPlanningStats planning_stats_;
 };
 
 } // namespace quader

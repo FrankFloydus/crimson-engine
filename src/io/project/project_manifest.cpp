@@ -93,13 +93,6 @@ ProjectIoResult<void> validate_manifest_for_filesystem(
   paths.reserve(manifest.scenes().size());
   for (const ProjectSceneCatalogEntry &scene : manifest.scenes()) {
     paths.push_back(scene.path);
-    const ProjectIoResult<std::filesystem::path> resolved =
-        file_system.resolve(scene.path);
-    if (!resolved.ok()) {
-      return ProjectIoResult<void>::failure(
-          resolved.error().code, resolved.error().message,
-          resolved.error().path);
-    }
   }
   return file_system.validate_no_path_aliases(paths);
 }
@@ -164,19 +157,18 @@ ProjectIoResult<ProjectManifest> ProjectManifest::hydrate(
 
 const ProjectSceneCatalogEntry *
 ProjectManifest::find_scene(const SceneId &id) const {
-  const auto found = std::find_if(
-      scenes_.begin(), scenes_.end(),
-      [&](const ProjectSceneCatalogEntry &scene) { return scene.id == id; });
-  return found == scenes_.end() ? nullptr : &*found;
+  const auto found = scene_index_by_id_.find(id);
+  return found == scene_index_by_id_.end()
+             ? nullptr
+             : &scenes_[found->second];
 }
 
 const ProjectSceneCatalogEntry *
 ProjectManifest::find_scene(const ProjectRelativePath &path) const {
-  const auto found = std::find_if(
-      scenes_.begin(), scenes_.end(), [&](const ProjectSceneCatalogEntry &scene) {
-        return same_portable_path(scene.path, path);
-      });
-  return found == scenes_.end() ? nullptr : &*found;
+  const auto found = scene_index_by_path_.find(path.portable_case_key());
+  return found == scene_index_by_path_.end()
+             ? nullptr
+             : &scenes_[found->second];
 }
 
 ProjectIoResult<void>
@@ -205,22 +197,26 @@ ProjectManifest::register_scene(ProjectSceneCatalogEntry scene) {
         scene.path.native_path());
   }
 
+  const std::size_t index = scenes_.size();
+  scene_index_by_id_.emplace(scene.id, index);
+  scene_index_by_path_.emplace(scene.path.portable_case_key(), index);
   scenes_.push_back(std::move(scene));
   return ProjectIoResult<void>::success();
 }
 
 ProjectIoResult<void> ProjectManifest::unregister_scene(const SceneId &id) {
-  const auto found = std::find_if(
-      scenes_.begin(), scenes_.end(),
-      [&](const ProjectSceneCatalogEntry &scene) { return scene.id == id; });
-  if (found == scenes_.end()) {
+  const auto indexed = scene_index_by_id_.find(id);
+  if (indexed == scene_index_by_id_.end()) {
     return ProjectIoResult<void>::failure(
         ProjectIoErrorCode::SceneNotFound,
         "Scene catalog does not contain this scene UUID.");
   }
 
+  const auto found =
+      scenes_.begin() + static_cast<std::ptrdiff_t>(indexed->second);
   const ProjectRelativePath removed_path = found->path;
   scenes_.erase(found);
+  rebuild_scene_indexes();
   open_scene_paths_.erase(
       std::remove_if(open_scene_paths_.begin(), open_scene_paths_.end(),
                      [&](const ProjectRelativePath &path) {
@@ -236,6 +232,18 @@ ProjectIoResult<void> ProjectManifest::unregister_scene(const SceneId &id) {
     }
   }
   return ProjectIoResult<void>::success();
+}
+
+void ProjectManifest::rebuild_scene_indexes() {
+  scene_index_by_id_.clear();
+  scene_index_by_path_.clear();
+  scene_index_by_id_.reserve(scenes_.size());
+  scene_index_by_path_.reserve(scenes_.size());
+  for (std::size_t index = 0u; index < scenes_.size(); ++index) {
+    scene_index_by_id_.emplace(scenes_[index].id, index);
+    scene_index_by_path_.emplace(
+        scenes_[index].path.portable_case_key(), index);
+  }
 }
 
 ProjectIoResult<void> ProjectManifest::set_workspace(

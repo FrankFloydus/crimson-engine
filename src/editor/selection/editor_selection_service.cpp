@@ -17,6 +17,7 @@
 #include <algorithm>
 #include <array>
 #include <optional>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -208,6 +209,8 @@ EditorSelectionService::set_scene_selection(std::span<const EntityId> entities,
   if (scene_target_resolver_ || scene_scope_filter_) {
     std::vector<EntityId> resolved;
     resolved.reserve(entities.size());
+    std::unordered_set<EntityId> membership;
+    membership.reserve(entities.size());
     EntityId resolved_active = kInvalidEntityId;
     for (const EntityId entity : entities) {
       const EntityId target = scene_target_resolver_
@@ -215,8 +218,7 @@ EditorSelectionService::set_scene_selection(std::span<const EntityId> entities,
                                   : entity;
       if (target == kInvalidEntityId ||
           (scene_scope_filter_ && !scene_scope_filter_(target)) ||
-          std::find(resolved.begin(), resolved.end(), target) !=
-              resolved.end()) {
+          !membership.insert(target).second) {
         continue;
       }
       resolved.push_back(target);
@@ -343,9 +345,11 @@ ModelingCommandResult EditorSelectionService::invert() {
   }
 
   const std::vector<EntityId> current = scene_.selected_entities();
+  const std::unordered_set<EntityId> current_membership(
+      current.begin(), current.end());
   std::vector<EntityId> selected;
   for (const EntityId entity : scene_bulk_candidates(selection_mode)) {
-    if (std::find(current.begin(), current.end(), entity) == current.end()) {
+    if (!current_membership.contains(entity)) {
       selected.push_back(entity);
     }
   }
@@ -555,13 +559,14 @@ EditorSelectionService::box_select(const ModelingBoxSelectRequest &request,
     std::vector<EntityId> entities;
     {
       QDR_PROFILE_SCOPE("Box selection map group or object targets");
+      std::unordered_set<EntityId> membership;
+      membership.reserve(mesh_entities.size());
       for (const EntityId mesh_entity : mesh_entities) {
         const EntityId entity = selection_mode == ModelingSelectionMode::Group
                                     ? nearest_group_ancestor(mesh_entity)
                                     : mesh_entity;
         if (entity != kInvalidEntityId &&
-            std::find(entities.begin(), entities.end(), entity) ==
-                entities.end()) {
+            membership.insert(entity).second) {
           entities.push_back(entity);
         }
       }
@@ -742,10 +747,11 @@ ModelingSelectionSummary EditorSelectionService::scene_box_selection(
           : scene_.primary_selection();
   std::vector<EntityId> selectable;
   selectable.reserve(target_entities.size());
+  std::unordered_set<EntityId> membership;
+  membership.reserve(target_entities.size());
   for (const EntityId entity : target_entities) {
     if (scene_target_selectable(entity) &&
-        std::find(selectable.begin(), selectable.end(), entity) ==
-            selectable.end()) {
+        membership.insert(entity).second) {
       selectable.push_back(entity);
     }
   }

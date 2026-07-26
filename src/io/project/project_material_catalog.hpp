@@ -12,6 +12,7 @@
 #include <cstdint>
 #include <span>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace quader {
@@ -45,7 +46,8 @@ struct ProjectMaterialTextureData final {
 class ProjectMaterialCatalog final {
 public:
   [[nodiscard]] static ProjectIoResult<ProjectMaterialCatalog>
-  scan(const ProjectFileSystem &file_system);
+  scan(const ProjectFileSystem &file_system,
+       ProjectFileSystemWorkStats *work_stats = nullptr);
 
   [[nodiscard]] std::span<const ProjectMaterialCatalogEntry>
   entries() const noexcept {
@@ -69,6 +71,8 @@ public:
 
 private:
   std::vector<ProjectMaterialCatalogEntry> entries_;
+  std::unordered_map<ProjectAssetId, std::size_t, ProjectAssetIdHash>
+      entry_index_by_id_;
   std::vector<std::string> warnings_;
   std::uint64_t content_revision_ = 0u;
 };

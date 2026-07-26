@@ -15,17 +15,27 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <span>
 #include <vector>
 
 namespace quader {
 
 class MaterialBindingService;
+class ToolPreviewRenderableCacheTestPeer;
 class ViewportSettings;
 
+/// Describes whether a preview submission changed the retained render state.
 enum class ToolPreviewSubmissionResult : std::uint8_t {
   Unchanged,
   Published,
   Failed,
+};
+
+/// Records candidate and retirement work for deterministic scale tests.
+struct ToolPreviewCacheWorkCounters final {
+  std::uint64_t exact_match_candidate_visits = 0u;
+  std::uint64_t structural_match_candidate_visits = 0u;
+  std::uint64_t retired_proxy_destroy_attempts = 0u;
 };
 
 /**
@@ -68,8 +78,13 @@ public:
 
     [[nodiscard]] std::uint64_t signature() const { return mesh_signature_; }
     [[nodiscard]] std::size_t proxy_count() const;
+    [[nodiscard]] ToolPreviewCacheWorkCounters work_counters() const noexcept {
+      return work_counters_;
+    }
+    void reset_work_counters() noexcept { work_counters_ = {}; }
 
   private:
+    /// Owns the render proxies and identity facts for one preview participant.
     struct PreviewGroup {
       int source_object_id = -1;
       EntityId source_entity = kInvalidEntityId;
@@ -88,6 +103,9 @@ public:
       bool dynamic_positions = false;
       bool visible = false;
       bool material_uniforms_initialized = false;
+      // Updated only when a proxy is created or retired. Idle retirement must
+      // not rediscover this value by scanning all remaining instance vectors.
+      std::size_t live_proxy_count = 0u;
       MeshRenderableProxy rendered_prototype;
       std::vector<MeshRenderableProxy> rendered_instances;
       MeshRenderableProxy shaded_prototype;
@@ -96,6 +114,7 @@ public:
       std::vector<MeshRenderableProxy> overlay_depth_instances;
     };
 
+    /// Collects all preview groups published as one atomic generation.
     struct PreviewGeneration {
       std::vector<PreviewGroup> groups;
       std::vector<std::size_t> active_group_indices;
@@ -105,6 +124,7 @@ public:
       bool detached = false;
     };
 
+    /// Captures normalized producer state used to match retained preview groups.
     struct PreviewSubmissionState {
       int source_object_id = -1;
       EntityId source_entity = kInvalidEntityId;
@@ -122,6 +142,15 @@ public:
       bool suppress_source = false;
     };
 
+    /// Classifies reuse compatibility between a submission and a generation.
+    enum class GenerationMatchResult : std::uint8_t {
+      None,
+      Exact,
+      Structural,
+    };
+
+    friend class ToolPreviewRenderableCacheTestPeer;
+
     static std::uint64_t preview_material_signature(
         const RenderToolPreviewMeshRecord &preview_mesh);
     static std::uint64_t preview_geometry_signature(
@@ -133,6 +162,10 @@ public:
     static std::uint64_t preview_structural_reuse_signature(
         const RenderToolPreviewMeshRecord &preview_mesh);
     static std::uint64_t group_structural_reuse_signature(
+        const PreviewGroup &group);
+    static std::uint64_t preview_exact_reuse_base_signature(
+        const RenderToolPreviewMeshRecord &preview_mesh);
+    static std::uint64_t group_exact_reuse_base_signature(
         const PreviewGroup &group);
     static std::size_t group_proxy_count(const PreviewGroup &group);
     static bool group_matches_exact(
@@ -166,6 +199,10 @@ public:
         PreviewGeneration &generation,
         const std::vector<RenderToolPreviewMeshRecord> &meshes,
         std::vector<std::size_t> &candidate_indices);
+    GenerationMatchResult match_generation_groups(
+        const PreviewGeneration &generation,
+        std::span<const RenderToolPreviewMeshRecord *const> renderable_meshes,
+        std::vector<std::size_t> &candidate_indices);
     void update_group(PreviewGroup &group,
                       const RenderToolPreviewMeshRecord &preview_mesh);
     void publish_generation_subset(
@@ -173,6 +210,7 @@ public:
         std::vector<std::size_t> candidate_indices);
     void set_group_visible(PreviewGroup &group, bool visible);
     void hide_generation(PreviewGeneration &generation);
+    void detach_generation(PreviewGeneration &generation);
     void retire_generation(std::unique_ptr<PreviewGeneration> generation);
     bool destroy_one_proxy(PreviewGeneration &generation);
     void destroy_group(PreviewGroup &group, bool detached);
@@ -186,6 +224,7 @@ public:
     std::uint64_t mesh_signature_ = 0u;
     std::uint64_t material_uniform_signature_ = 0u;
     bool material_uniforms_dirty_ = true;
+    ToolPreviewCacheWorkCounters work_counters_;
 };
 
 } // namespace quader

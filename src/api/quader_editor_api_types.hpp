@@ -148,7 +148,9 @@ struct QuaderToolSettingsTarget {
   bool preview_active = false;
   std::string tool_id;
   std::string title;
+  std::string description;
   std::vector<QuaderToolSettingControl> controls;
+  bool can_reset = false;
   bool apply_visible = false;
   bool can_apply = false;
   bool can_cancel = false;

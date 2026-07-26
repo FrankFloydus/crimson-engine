@@ -33,6 +33,49 @@ struct InstanceRenderableCacheStats final {
   std::uint64_t transform_update_count = 0u;
 };
 
+namespace instance_renderable_cache_detail {
+
+/**
+ * Reports the exact indexed lookup work used to associate planned chunks
+ * with their first source primitive. This render-internal result also keeps
+ * the hot-path complexity deterministic in headless regression coverage.
+ */
+struct PrimitiveRecordLookupResult final {
+  std::vector<const RenderSceneInstancePrimitiveRecord *> records_by_chunk;
+  std::size_t indexed_key_count = 0u;
+  std::size_t key_lookup_count = 0u;
+};
+
+[[nodiscard]] PrimitiveRecordLookupResult resolve_primitive_records(
+    std::span<const RenderSceneInstancePrimitiveRecord> primitives,
+    std::span<const RenderInstanceBatchChunk> chunks);
+
+/// Describes the retained proxy facts needed by the GPU-free reuse planner.
+struct ChunkProxyReuseCandidate final {
+  std::size_t instance_capacity = 0u;
+  bool valid = false;
+};
+
+/**
+ * Maps next-plan chunks to reusable old proxies. `no_old_chunk` is the
+ * sentinel stored for chunks that need a new proxy.
+ */
+struct ChunkProxyReuseResult final {
+  std::vector<std::size_t> old_chunk_by_next_chunk;
+  std::size_t no_old_chunk = 0u;
+  std::size_t indexed_candidate_count = 0u;
+  std::size_t same_index_probe_count = 0u;
+  std::size_t key_lookup_count = 0u;
+  std::size_t candidate_probe_count = 0u;
+};
+
+[[nodiscard]] ChunkProxyReuseResult match_reusable_chunk_proxies(
+    std::span<const RenderInstanceBatchChunk> old_chunks,
+    std::span<const ChunkProxyReuseCandidate> old_candidates,
+    std::span<const RenderInstanceBatchChunk> next_chunks);
+
+} // namespace instance_renderable_cache_detail
+
 /**
  * Owns the Filament renderables and InstanceBuffers produced by the neutral
  * primitive planner. Geometry storage remains shared by MeshRenderableFactory.

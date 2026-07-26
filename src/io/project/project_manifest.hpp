@@ -9,11 +9,13 @@
 #include "io/project/project_file_system.hpp"
 #include "io/project/project_types.hpp"
 
+#include <cstddef>
 #include <filesystem>
 #include <optional>
 #include <span>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <vector>
 
 namespace quader {
@@ -85,9 +87,14 @@ public:
   set_active_material(std::optional<ProjectAssetId> material_id);
 
 private:
+  void rebuild_scene_indexes();
+
   ProjectId id_;
   std::string name_;
   std::vector<ProjectSceneCatalogEntry> scenes_;
+  std::unordered_map<SceneId, std::size_t, SceneIdHash>
+      scene_index_by_id_;
+  std::unordered_map<std::wstring, std::size_t> scene_index_by_path_;
   std::vector<ProjectRelativePath> open_scene_paths_;
   std::optional<ProjectRelativePath> active_scene_path_;
   std::optional<ProjectAssetId> active_material_id_;

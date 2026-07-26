@@ -41,6 +41,7 @@ public:
                                     const char *value);
     QuaderApiVoidResult execute_action(std::string_view tool_id,
                                        std::string_view action_id);
+    QuaderApiVoidResult reset_active_settings();
     QuaderApiVoidResult
     accept_active_primitive(std::string name,
                             AssetId default_material = kInvalidAssetId,
@@ -64,6 +65,7 @@ public:
     mutable std::uint64_t active_settings_source_revision_ = 0;
     mutable std::uint64_t active_settings_revision_ = 0;
     mutable std::uint8_t active_settings_source_kind_ = 0;
+    mutable bool active_settings_source_reset_availability_token_ = false;
     mutable bool active_settings_source_valid_ = false;
 };
 

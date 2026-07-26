@@ -8,8 +8,10 @@
 
 #include <algorithm>
 #include <cwctype>
+#include <optional>
 #include <string>
 #include <system_error>
+#include <unordered_map>
 #include <unordered_set>
 
 namespace quader {
@@ -51,6 +53,19 @@ std::string filesystem_error_message(std::string_view action,
 
 } // namespace
 
+/// Shares directory-name indexes across one batch of project path resolutions.
+struct ProjectFileSystem::ResolutionBatchCache final {
+  /// Holds exact and case-folded names observed in one project directory.
+  struct DirectoryCaseIndex final {
+    bool is_directory = false;
+    std::unordered_set<std::wstring> exact_names;
+    std::unordered_set<std::wstring> folded_names;
+  };
+
+  std::unordered_map<std::wstring, DirectoryCaseIndex> directories;
+  ProjectFileSystemWorkStats *work_stats = nullptr;
+};
+
 ProjectIoResult<ProjectFileSystem>
 ProjectFileSystem::open(const std::filesystem::path &root) {
   if (root.empty()) {
@@ -90,6 +105,17 @@ ProjectFileSystem::open(const std::filesystem::path &root) {
   }
   return ProjectIoResult<ProjectFileSystem>::success(
       ProjectFileSystem(canonical_root.lexically_normal()));
+}
+
+ProjectFileSystem ProjectFileSystem::begin_resolution_batch(
+    ProjectFileSystemWorkStats *work_stats) const {
+  ProjectFileSystem batch(root_);
+  batch.resolution_batch_cache_ = std::make_shared<ResolutionBatchCache>();
+  batch.resolution_batch_cache_->work_stats = work_stats;
+  if (work_stats != nullptr) {
+    *work_stats = {};
+  }
+  return batch;
 }
 
 ProjectIoResult<std::filesystem::path>
@@ -337,7 +363,15 @@ ProjectIoResult<void> ProjectFileSystem::validate_no_case_collisions(
 
 ProjectIoResult<void> ProjectFileSystem::validate_no_path_aliases(
     std::span<const ProjectRelativePath> paths) const {
-  const ProjectIoResult<void> portable = validate_no_case_collisions(paths);
+  const ProjectFileSystem *resolver = this;
+  std::optional<ProjectFileSystem> local_batch;
+  if (resolution_batch_cache_ == nullptr) {
+    local_batch.emplace(begin_resolution_batch());
+    resolver = &*local_batch;
+  }
+
+  const ProjectIoResult<void> portable =
+      resolver->validate_no_case_collisions(paths);
   if (!portable.ok()) {
     return portable;
   }
@@ -346,7 +380,7 @@ ProjectIoResult<void> ProjectFileSystem::validate_no_path_aliases(
   physical_keys.reserve(paths.size());
   for (const ProjectRelativePath &path : paths) {
     ProjectIoResult<std::filesystem::path> physical =
-        resolve_physical_location(path);
+        resolver->resolve_physical_location(path);
     if (!physical.ok()) {
       return ProjectIoResult<void>::failure(
           physical.error().code, physical.error().message,
@@ -366,6 +400,79 @@ ProjectIoResult<void> ProjectFileSystem::validate_existing_component_case(
     const ProjectRelativePath &path) const {
   std::filesystem::path current = root_;
   for (const std::filesystem::path &component : path.native_path()) {
+    if (resolution_batch_cache_ != nullptr) {
+      ResolutionBatchCache &cache = *resolution_batch_cache_;
+      if (cache.work_stats != nullptr) {
+        ++cache.work_stats->component_case_lookups;
+      }
+
+      const std::wstring directory_key =
+          current.lexically_normal().generic_wstring();
+      auto indexed = cache.directories.find(directory_key);
+      if (indexed == cache.directories.end()) {
+        ResolutionBatchCache::DirectoryCaseIndex directory;
+        std::error_code error;
+        directory.is_directory =
+            std::filesystem::is_directory(current, error);
+        if (error) {
+          return ProjectIoResult<void>::failure(
+              ProjectIoErrorCode::IoFailure,
+              filesystem_error_message(
+                  "Could not inspect project path component", error),
+              current);
+        }
+
+        if (directory.is_directory) {
+          if (cache.work_stats != nullptr) {
+            ++cache.work_stats->directory_case_enumerations;
+          }
+          std::filesystem::directory_iterator iterator(current, error);
+          const std::filesystem::directory_iterator end;
+          for (; !error && iterator != end; iterator.increment(error)) {
+            const std::wstring exact =
+                iterator->path().filename().generic_wstring();
+            directory.exact_names.insert(exact);
+            directory.folded_names.insert(
+                case_key(iterator->path().filename()));
+            if (cache.work_stats != nullptr) {
+              ++cache.work_stats->directory_case_entries_visited;
+            }
+          }
+          if (error) {
+            return ProjectIoResult<void>::failure(
+                ProjectIoErrorCode::IoFailure,
+                filesystem_error_message(
+                    "Could not enumerate project directory", error),
+                current);
+          }
+        }
+        indexed =
+            cache.directories.emplace(directory_key, std::move(directory))
+                .first;
+      }
+
+      const ResolutionBatchCache::DirectoryCaseIndex &directory =
+          indexed->second;
+      if (!directory.is_directory) {
+        break;
+      }
+      const std::wstring exact = component.generic_wstring();
+      const bool exact_match = directory.exact_names.contains(exact);
+      const bool folded_match =
+          directory.folded_names.contains(case_key(component));
+      if (!exact_match && folded_match) {
+        return ProjectIoResult<void>::failure(
+            ProjectIoErrorCode::PathCaseCollision,
+            "Project path casing collides with an existing filesystem entry.",
+            current / component);
+      }
+      current /= component;
+      if (!exact_match) {
+        break;
+      }
+      continue;
+    }
+
     std::error_code error;
     if (!std::filesystem::is_directory(current, error)) {
       if (error) {

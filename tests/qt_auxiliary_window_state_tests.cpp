@@ -29,8 +29,6 @@ TEST(QtAuxiliaryWindowStateTests,
       quader::QtAuxiliaryWindowState::load(path);
   EXPECT_TRUE(state.settings_dialog_geometry.isEmpty());
   EXPECT_FALSE(state.settings_dialog_visible);
-  EXPECT_TRUE(state.tool_settings_geometry.isEmpty());
-  EXPECT_FALSE(state.tool_settings_visible);
   EXPECT_TRUE(state.material_browser_geometry.isEmpty());
   EXPECT_TRUE(state.material_browser_grid_mode);
   EXPECT_EQ(state.material_browser_tile_size, 128);
@@ -49,8 +47,6 @@ TEST(QtAuxiliaryWindowStateTests, RoundTripsGeometryAndLogicalVisibility) {
   quader::QtAuxiliaryWindowState state;
   state.settings_dialog_geometry = QByteArray("settings-geometry");
   state.settings_dialog_visible = true;
-  state.tool_settings_geometry = QByteArray("tool-settings-geometry");
-  state.tool_settings_visible = true;
   state.material_browser_geometry = QByteArray("material-browser-geometry");
   state.material_browser_grid_mode = false;
   state.material_browser_tile_size = 192;
@@ -67,8 +63,6 @@ TEST(QtAuxiliaryWindowStateTests, RoundTripsGeometryAndLogicalVisibility) {
       quader::QtAuxiliaryWindowState::load(path);
   EXPECT_EQ(loaded.settings_dialog_geometry, state.settings_dialog_geometry);
   EXPECT_TRUE(loaded.settings_dialog_visible);
-  EXPECT_EQ(loaded.tool_settings_geometry, state.tool_settings_geometry);
-  EXPECT_TRUE(loaded.tool_settings_visible);
   EXPECT_EQ(loaded.material_browser_geometry,
             state.material_browser_geometry);
   EXPECT_FALSE(loaded.material_browser_grid_mode);

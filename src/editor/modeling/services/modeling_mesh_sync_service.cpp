@@ -479,16 +479,6 @@ void apply_complete_scene_identity_to_entity(
   }
 }
 
-bool scene_uses_mesh_asset(const SceneDocument &scene, AssetId mesh) {
-  for (const EntityId entity : scene.entities()) {
-    const MeshComponent *component = scene.mesh(entity);
-    if (component != nullptr && component->mesh == mesh) {
-      return true;
-    }
-  }
-  return false;
-}
-
 bool reconcile_modeling_object_scene_nodes(
     const quader_editor_core::EditorSession &session, SceneDocument &scene,
     SceneModelingSyncService &scene_sync,
@@ -892,8 +882,17 @@ void ModelingMeshSyncService::remove_unreferenced_history_mesh_assets(
   std::sort(ordered_ids.begin(), ordered_ids.end());
   ordered_ids.erase(std::unique(ordered_ids.begin(), ordered_ids.end()),
                     ordered_ids.end());
+  const std::vector<EntityId> scene_entities = scene.entities();
+  std::unordered_set<AssetId> live_meshes;
+  live_meshes.reserve(scene_entities.size());
+  for (const EntityId entity : scene_entities) {
+    const MeshComponent *component = scene.mesh(entity);
+    if (component != nullptr && component->mesh != kInvalidAssetId) {
+      live_meshes.insert(component->mesh);
+    }
+  }
   for (const AssetId id : ordered_ids) {
-    if (id != kInvalidAssetId && !scene_uses_mesh_asset(scene, id)) {
+    if (id != kInvalidAssetId && !live_meshes.contains(id)) {
       (void)assets.remove_mesh(id);
     }
   }

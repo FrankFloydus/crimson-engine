@@ -12,6 +12,7 @@
 #include <optional>
 #include <string>
 #include <utility>
+#include <vector>
 
 #include <editor/modeling/runtime/editor_runtime.hpp>
 #include <editor/interactions/knife_tool.hpp>
@@ -19,6 +20,7 @@
 #include <editor/modeling/runtime/tool_registry.hpp>
 #include <editor/interactions/interaction_api.hpp>
 #include <quader/modeling/neutral/polygon/document.hpp>
+#include <quader/modeling/neutral/polygon/internal/quader_poly_document_picking_helpers.hpp>
 
 TEST(QdrModelingRuntimeToolKnifeTests, KnifeToolExposesStableRegistryContractAndResetOwnership) {
 	const quader_editor_core::EditorTool& tool = quader_editor_core::knife_tool();
@@ -512,11 +514,98 @@ bool seed_knife_from_shared_edge(
 			session, state, hover, seed_hit, 0.25, false, false) &&
 		quader_editor_core::accept_knife_current_point(
 			state, 0.25) &&
-		state.has_active_stroke && state.points.size() == 1U &&
-		state.segments.empty();
+			state.has_active_stroke && state.points.size() == 1U &&
+			state.segments.empty();
+}
+
+quader_poly::Document make_knife_pick_grid(std::size_t side_count)
+{
+	quader_poly::Document document;
+	std::vector<quader_poly::ElementId> vertices(
+		(side_count + 1U) * (side_count + 1U));
+	for (std::size_t y = 0U; y <= side_count; ++y) {
+		for (std::size_t x = 0U; x <= side_count; ++x) {
+			vertices[y * (side_count + 1U) + x] = quader_poly::add_vertex(
+				document,
+				{
+					static_cast<float>(x),
+					static_cast<float>(y),
+					0.0F,
+				});
+		}
+	}
+	for (std::size_t y = 0U; y < side_count; ++y) {
+		for (std::size_t x = 0U; x < side_count; ++x) {
+			const std::size_t row = y * (side_count + 1U);
+			const std::size_t next_row = (y + 1U) * (side_count + 1U);
+			(void)quader_poly::add_face(
+				document,
+				std::array {
+					vertices[row + x],
+					vertices[row + x + 1U],
+					vertices[next_row + x + 1U],
+					vertices[next_row + x],
+				});
+		}
+	}
+	return document;
 }
 
 } // namespace
+
+TEST(QdrModelingRuntimeToolKnifeTests,
+	OrderedPickPreparesEachMeshOnceAndScalesWithTopology)
+{
+	const auto measure = [](std::size_t side_count) {
+		quader_editor_core::PolygonObject object;
+		object.id = 7;
+		object.document = make_knife_pick_grid(side_count);
+		quader_editor_core::EditorSession session({std::move(object)});
+		quader_poly::PickOptions options;
+		options.mode = quader_poly::SelectionMode::Vertex;
+		options.pick_backfaces = true;
+		options.prefer_front_facing_faces = true;
+		constexpr std::array kPriorityModes {
+			quader_editor_core::SelectionMode::Vertex,
+			quader_editor_core::SelectionMode::Edge,
+			quader_editor_core::SelectionMode::Face,
+		};
+		quader_poly::document_internal::PickWorkCounters work;
+		const std::optional<quader_editor_core::PickHitRecord> hit =
+			quader_editor_core::pick_nearest_priority(
+				session.objects(),
+				{
+					{{0.5F, 0.5F, 2.0F}, {0.0F, 0.0F, -1.0F}},
+					options,
+					-1,
+				},
+				kPriorityModes,
+				{},
+				{},
+				{},
+				&work);
+		EXPECT_TRUE(hit.has_value());
+		if (hit.has_value()) {
+			EXPECT_TRUE(hit->kind == quader_poly::ElementKind::Face);
+		}
+		const std::size_t face_count = side_count * side_count;
+		EXPECT_EQ(work.fact_sets_built, 1U);
+		EXPECT_EQ(work.face_facts_built, face_count);
+		EXPECT_EQ(work.face_triangle_facts_built, face_count * 2U);
+		EXPECT_EQ(work.surface_triangle_tests, face_count * 2U);
+		EXPECT_EQ(
+			work.component_candidates_tested,
+			(side_count + 1U) * (side_count + 1U) +
+				2U * side_count * (side_count + 1U));
+		return work;
+	};
+
+	const quader_poly::document_internal::PickWorkCounters small =
+		measure(16U);
+	const quader_poly::document_internal::PickWorkCounters large =
+		measure(32U);
+	EXPECT_LE(large.total(), small.total() * 4U);
+}
 
 TEST(QdrModelingRuntimeToolKnifeTests,
 	HoverDoesNotLockTargetObjectUntilTheFirstPointIsAccepted) {

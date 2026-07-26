@@ -36,6 +36,7 @@
 #include "render/viewport_overlay_policy.hpp"
 #include "scene/scene_document.hpp"
 #include "scene/scene_entity_naming.hpp"
+#include "ui/qt_tool_settings_panel.hpp"
 #include "ui/qt_viewport_chrome_layout.hpp"
 #include "ui/qt_viewport_fly_navigation_hud.hpp"
 #include "ui/qt_viewport_pane_activation.hpp"
@@ -366,30 +367,13 @@ overlay_selection_context(ModelingSelectionMode mode) {
 } // namespace
 
 bool qt_event_target_belongs_to_tool_settings(const QObject *target) {
-  for (const QObject *current = target; current != nullptr;
-       current = current->parent()) {
-    if (current->objectName() == QStringLiteral("floating.tool_settings")) {
-      return true;
-    }
-  }
+  return qt_object_belongs_to_tool_settings_panel(target);
+}
 
-  // Top-level QWidget mouse events can be delivered to the separate
-  // QWidgetWindow returned by windowHandle(). That native window is not a
-  // QObject child of the widget, so QObject ancestry alone cannot associate
-  // it with Tool Settings. Match only the exact window handle of a marked
-  // top-level widget; other dialogs and windows remain outside interactions.
-  const auto *target_window = qobject_cast<const QWindow *>(target);
-  if (target_window == nullptr ||
-      qobject_cast<QApplication *>(QCoreApplication::instance()) == nullptr) {
-    return false;
-  }
-  for (const QWidget *top_level : QApplication::topLevelWidgets()) {
-    if (top_level != nullptr && top_level->windowHandle() == target_window &&
-        top_level->objectName() == QStringLiteral("floating.tool_settings")) {
-      return true;
-    }
-  }
-  return false;
+bool qt_event_target_belongs_to_tool_settings(
+    const QObject *target, const QPoint &global_position) {
+  return qt_event_target_belongs_to_tool_settings(target) ||
+         qt_object_belongs_to_tool_settings_panel(target, global_position);
 }
 
 QtViewportPanel::QtViewportPanel(QWidget *parent) : QWidget(parent) {
@@ -1162,17 +1146,22 @@ QtViewportPanel::surface(ViewportPaneId pane_id) const {
 }
 
 bool QtViewportPanel::eventFilter(QObject *watched, QEvent *event) {
-  if (event != nullptr && modal_tool_owns_viewport_snapshot_ &&
-      !is_viewport_internal_event_target(watched) &&
+  const bool pointer_event =
+      event != nullptr &&
       (event->type() == QEvent::MouseButtonPress ||
        event->type() == QEvent::MouseButtonDblClick ||
-       event->type() == QEvent::MouseButtonRelease)) {
+       event->type() == QEvent::MouseButtonRelease);
+  if (pointer_event && modal_tool_owns_viewport_snapshot_) {
+    const auto &mouse = *static_cast<const QMouseEvent *>(event);
+    if (!is_viewport_internal_event_target(
+            watched, mouse.globalPosition().toPoint())) {
     // Pane-owned chrome and its combo popups are internal by QObject ancestry.
     // Split handles, docks, menus and dialogs remain external. Active Qt
     // popups/modals are intentionally not blanket exemptions: their keyboard
     // scope is protected by QtCommandEventFilter, while an outside pointer
     // gesture still exits an already-active viewport modal tool.
-    queue_external_pointer_event(*static_cast<QMouseEvent *>(event));
+      queue_external_pointer_event(mouse);
+    }
   }
 
   auto found = std::find_if(
@@ -1643,8 +1632,8 @@ bool QtViewportPanel::pane_interaction_locked() const {
 }
 
 bool QtViewportPanel::is_viewport_internal_event_target(
-    const QObject *target) const {
-  if (qt_event_target_belongs_to_tool_settings(target)) {
+    const QObject *target, const QPoint &global_position) const {
+  if (qt_event_target_belongs_to_tool_settings(target, global_position)) {
     return true;
   }
 
@@ -2443,7 +2432,7 @@ void QtViewportPanel::process_viewport_input(
           : interaction_controller_.handle_before_active_tool(
                 editor, interaction_frame);
 
-  const ModelingSelectionSummary hover_selection =
+  ModelingSelectionSummary hover_selection =
       to_modeling_selection_summary(interaction_selection);
   auto make_hover_key = [&](bool gizmo_consumed) {
     const ViewportSettings &settings = active_viewport_settings();
@@ -2506,7 +2495,11 @@ void QtViewportPanel::process_viewport_input(
   tool_callbacks.claim_hover = [&](ModelingBoxDragState) {
     return hover_controller_.claim(make_hover_key(before_tool.gizmo_consumed));
   };
-  tool_callbacks.invalidate_hover = [&]() { hover_controller_.invalidate(); };
+  tool_callbacks.invalidate_hover = [&]() {
+    hover_controller_.invalidate();
+    hover_selection =
+        to_modeling_selection_summary(editor.selection().summary());
+  };
   tool_callbacks.mark_overlay_dirty = [&]() {
     selection_overlay_cache_.mark_dirty();
   };

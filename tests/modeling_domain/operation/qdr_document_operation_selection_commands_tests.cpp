@@ -52,6 +52,57 @@ AddedFace add_quad(Document& document, float x_offset)
     return add_independent_face(document, points);
 }
 
+/// Stores one dense face-selection shrink scenario and its ordered result.
+struct BulkFaceShrinkFixture {
+  Document document;
+  std::vector<ElementId> selected_faces;
+  std::vector<ElementId> retained_faces;
+  ElementId active_face = kInvalidElementId;
+};
+
+BulkFaceShrinkFixture make_bulk_face_shrink_fixture(
+    std::size_t selected_face_count)
+{
+    BulkFaceShrinkFixture fixture;
+    std::vector<ElementId> document_selected_faces;
+    document_selected_faces.reserve(selected_face_count);
+    ElementId boundary_vertex = kInvalidElementId;
+    ElementId boundary_face = kInvalidElementId;
+    const std::size_t boundary_index = selected_face_count / 2U;
+
+    for (std::size_t index = 0U; index < selected_face_count; ++index) {
+        const AddedFace face = add_quad(
+            fixture.document, static_cast<float>(index * 2U));
+        document_selected_faces.push_back(face.id);
+        if (index == boundary_index) {
+            boundary_vertex = face.vertices.front();
+            boundary_face = face.id;
+        }
+    }
+
+    for (std::size_t index = 1U; index < selected_face_count; ++index) {
+        add_quad(fixture.document,
+                 10000.0F + static_cast<float>(index * 2U));
+    }
+    const ElementId boundary_b =
+        add_vertex(fixture.document, { -2.0F, -1.0F, 1.0F });
+    const ElementId boundary_c =
+        add_vertex(fixture.document, { -1.0F, -2.0F, 1.0F });
+    EXPECT_NE(add_face(
+                  fixture.document,
+                  std::array<ElementId, 3> {
+                      boundary_vertex, boundary_b, boundary_c }),
+              kInvalidElementId);
+
+    fixture.selected_faces.assign(document_selected_faces.rbegin(),
+                                  document_selected_faces.rend());
+    fixture.retained_faces = fixture.selected_faces;
+    std::erase(fixture.retained_faces, boundary_face);
+    fixture.active_face =
+        document_selected_faces[selected_face_count / 4U];
+    return fixture;
+}
+
 TEST(QdrDocumentOperationSelectionCommandsTests,
      SelectAllAndInversePreserveActiveAndReportNoOps)
 {
@@ -420,6 +471,37 @@ TEST(QdrDocumentOperationSelectionCommandsTests,
     EXPECT_TRUE(shrink_selection(face_document, faces));
     EXPECT_EQ(faces.faces, std::vector<ElementId> { first });
     EXPECT_EQ(faces.active_face, first);
+}
+
+TEST(QdrDocumentOperationSelectionCommandsTests,
+     FaceShrinkRetainsOrderedInteriorAtNAndTwoNScale)
+{
+    constexpr std::size_t kFaceCountN = 256U;
+    for (const std::size_t selected_face_count :
+         std::array<std::size_t, 2> {
+             kFaceCountN, kFaceCountN * 2U }) {
+        BulkFaceShrinkFixture fixture =
+            make_bulk_face_shrink_fixture(selected_face_count);
+        ASSERT_EQ(fixture.document.faces.size(),
+                  selected_face_count * 2U);
+        ASSERT_EQ(fixture.selected_faces.size(), selected_face_count);
+        ASSERT_EQ(fixture.retained_faces.size(),
+                  selected_face_count - 1U);
+        Selection selection =
+            face_selection({ fixture.active_face }, fixture.active_face);
+        selection.faces = fixture.selected_faces;
+
+        ASSERT_TRUE(shrink_selection(fixture.document, selection))
+            << "selected face count: " << selected_face_count;
+        EXPECT_EQ(selection.faces, fixture.retained_faces)
+            << "selected face count: " << selected_face_count;
+        EXPECT_TRUE(selection.has_active);
+        EXPECT_EQ(selection.active_kind, ElementKind::Face);
+        EXPECT_EQ(selection.active_face, fixture.active_face);
+        EXPECT_FALSE(shrink_selection(fixture.document, selection));
+        EXPECT_EQ(selection.faces, fixture.retained_faces);
+        EXPECT_EQ(selection.active_face, fixture.active_face);
+    }
 }
 
 TEST(QdrDocumentOperationSelectionCommandsTests,

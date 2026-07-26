@@ -1259,6 +1259,7 @@ SceneSessionId ProjectSession::allocate_session_id() {
   if (!free_slots_.empty()) {
     slot = free_slots_.back();
     free_slots_.pop_back();
+    free_slot_membership_.erase(slot);
     std::uint32_t &generation = slot_generations_[slot];
     ++generation;
     if (generation == 0u) {
@@ -1274,8 +1275,7 @@ SceneSessionId ProjectSession::allocate_session_id() {
 void ProjectSession::release_session_id(SceneSessionId id) {
   if (id.valid() && id.slot() < slot_generations_.size() &&
       slot_generations_[id.slot()] == id.generation() &&
-      std::find(free_slots_.begin(), free_slots_.end(), id.slot()) ==
-          free_slots_.end()) {
+      free_slot_membership_.insert(id.slot()).second) {
     free_slots_.push_back(id.slot());
   }
 }

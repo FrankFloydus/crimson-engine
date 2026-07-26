@@ -67,6 +67,7 @@ struct PrimitiveSlotKey final {
   }
 };
 
+/// Hashes a primitive slot together with its stable occurrence ordinal.
 struct PrimitiveSlotKeyHash final {
   std::size_t operator()(const PrimitiveSlotKey &slot) const noexcept {
     RenderSignatureBuilder signature;

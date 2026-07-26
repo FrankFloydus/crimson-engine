@@ -210,6 +210,43 @@ TEST(ProjectFileSystem, RejectsPortableCaseCollisionsAndLinkEscapes) {
   }
 }
 
+TEST(ProjectFileSystem,
+     ResolutionBatchEnumeratesOneLargeSceneDirectoryOnlyOnce) {
+  ScopedProjectTestDirectory temporary("path-batch-scale");
+  const std::filesystem::path project_root =
+      temporary.path() / "PathBatchScale";
+  ASSERT_TRUE(std::filesystem::create_directory(project_root));
+  ProjectIoResult<ProjectWorkspaceStorage> created =
+      ProjectManifestStore::create_in_empty_directory(project_root);
+  ASSERT_TRUE(created.ok()) << created.error().message;
+
+  constexpr std::size_t kSceneCount = 512u;
+  std::vector<ProjectRelativePath> scene_paths;
+  scene_paths.reserve(kSceneCount);
+  for (std::size_t index = 0u; index < kSceneCount; ++index) {
+    const std::string portable =
+        "Scenes/Scene_" + std::to_string(index) + ".qdr";
+    write_text_file(project_root / portable, "QDRB");
+    ProjectIoResult<ProjectRelativePath> parsed =
+        ProjectRelativePath::parse_portable(portable);
+    ASSERT_TRUE(parsed.ok()) << parsed.error().message;
+    scene_paths.push_back(parsed.take_value());
+  }
+
+  ProjectFileSystemWorkStats work;
+  ProjectFileSystem batch =
+      created.value().file_system.begin_resolution_batch(&work);
+  const ProjectIoResult<void> validated =
+      batch.validate_no_path_aliases(scene_paths);
+  ASSERT_TRUE(validated.ok()) << validated.error().message;
+
+  EXPECT_EQ(work.directory_case_enumerations, 2u);
+  EXPECT_EQ(work.component_case_lookups, kSceneCount * 2u);
+  EXPECT_LE(work.directory_case_entries_visited, kSceneCount + 4u)
+      << "case validation must index the root and Scenes directory once, "
+         "not enumerate all siblings once per scene";
+}
+
 TEST(ProjectManifestStore, RoundTripsCatalogTabOrderAndMissingScenes) {
   ScopedProjectTestDirectory temporary("roundtrip");
   const std::filesystem::path project_root = temporary.path() / "Gallery";

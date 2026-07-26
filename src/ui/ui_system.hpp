@@ -54,7 +54,7 @@ class QtCommandEventFilter;
 class QtMaterialBrowserWindow;
 class QtMaterialPreviewSurface;
 class QtStandardMaterialEditorWindow;
-class QtToolSettingsWindow;
+class QtToolSettingsPanel;
 class QtViewportPanel;
 class QtProjectHomePage;
 class QtSceneWorkspace;
@@ -77,6 +77,15 @@ class SceneRenderBridge;
 enum class QuaderDirtyProjectDecision;
 enum class QuaderDirtySceneDecision;
 struct QuaderSceneDocumentInfo;
+
+/**
+ * Returns whether a requested dock is actually exposed for presentation work.
+ * Tabified docks retain their explicit visibility for commands and
+ * persistence, but only the raised tab has a non-empty visible region.
+ */
+[[nodiscard]] bool
+qt_dock_panel_presented_for_refresh(bool explicitly_visible,
+                                    const QDockWidget *dock);
 
 /**
  * Owns Quader's retained Qt Widgets shell and all top-level presentation
@@ -179,6 +188,7 @@ private:
   void show_material_browser();
   [[nodiscard]] bool allow_main_window_close();
   [[nodiscard]] bool panel_visible(UIPanelId id) const;
+  [[nodiscard]] bool panel_presented(UIPanelId id) const;
   void set_panel_visible(UIPanelId id, bool visible);
 
   std::unique_ptr<QMainWindow> main_window_;
@@ -200,7 +210,7 @@ private:
   QtMaterialBrowserWindow *material_browser_window_ = nullptr;
   QtMaterialPreviewSurface *material_preview_surface_ = nullptr;
   QtStandardMaterialEditorWindow *standard_material_editor_window_ = nullptr;
-  QtToolSettingsWindow *tool_settings_window_ = nullptr;
+  QtToolSettingsPanel *tool_settings_panel_ = nullptr;
   QLabel *status_message_ = nullptr;
   QLabel *status_version_ = nullptr;
   UIPanelManager panels_;

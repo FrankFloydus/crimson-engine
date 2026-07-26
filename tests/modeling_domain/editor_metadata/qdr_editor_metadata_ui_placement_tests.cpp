@@ -92,7 +92,7 @@ TEST(QdrEditorMetadataUiPlacementTests, HostContractUISurfacesDescribeMenuAndToo
 	const qhc::HostUiSurfaceDescriptor& settings = require_surface("tool_settings_panel");
 	EXPECT_TRUE(same_text(settings.label, "Tool Settings Panel"));
         EXPECT_TRUE(settings.kind == qhc::HostUiSurfaceKind::Panel);
-        EXPECT_TRUE(settings.floating);
+        EXPECT_FALSE(settings.floating);
 	EXPECT_FALSE(settings.selection_contextual);
 }
 

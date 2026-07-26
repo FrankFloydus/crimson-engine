@@ -55,11 +55,14 @@ class ViewportPointPlacementService;
 
 /**
  * Returns whether an application event target belongs to the retained Tool
- * Settings window. Its controls are part of an active viewport tool rather
- * than an outside interaction that should cancel that tool.
+ * Settings dock panel, including when the dock is floated. Its controls are
+ * part of an active viewport tool rather than an outside interaction that
+ * should cancel that tool.
  */
 [[nodiscard]] bool
 qt_event_target_belongs_to_tool_settings(const QObject *target);
+[[nodiscard]] bool qt_event_target_belongs_to_tool_settings(
+    const QObject *target, const QPoint &global_position);
 
 /**
  * Qt Widgets host for Quader's embedded one-to-four pane viewport workspace.
@@ -190,7 +193,7 @@ private:
   [[nodiscard]] bool viewport_surface_has_keyboard_focus() const;
   [[nodiscard]] bool pane_interaction_locked() const;
   [[nodiscard]] bool is_viewport_internal_event_target(
-      const QObject *target) const;
+      const QObject *target, const QPoint &global_position) const;
   void queue_external_pointer_event(const QMouseEvent &event);
   void update_fly_navigation_hud(Pane &pane, bool active,
                                  bool speed_is_default, float speed);

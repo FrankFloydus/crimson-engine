@@ -12,6 +12,7 @@
 
 #include <editor/interactions/selection_box.hpp>
 
+#include <cstdint>
 #include <optional>
 
 namespace quader {
@@ -30,6 +31,12 @@ struct ViewportSelectionMarquee {
     ModelingBoxSelectionRule rule = ModelingBoxSelectionRule::Contain;
 };
 
+/// Counts selection hit-test work for diagnostics and deterministic tests.
+struct ViewportSelectionInteractionWorkStats {
+  std::uint64_t hover_pick_count = 0;
+  std::uint64_t paint_pick_count = 0;
+};
+
 /**
  * Owns selection fallback, paint selection, and hover sequencing for viewport frames.
  */
@@ -45,6 +52,10 @@ public:
     pick_context_menu_target(QuaderEditorApi &editor,
                              const ViewportInteractionFrame &frame);
     [[nodiscard]] ViewportSelectionMarquee marquee() const;
+    [[nodiscard]] const ViewportSelectionInteractionWorkStats &
+    work_stats() const {
+      return work_stats_;
+    }
 
 private:
   bool hover_clear_issued_ = false;
@@ -55,6 +66,9 @@ private:
   std::optional<ViewportSelectionMarquee> committed_marquee_;
   std::optional<QuaderHoverTarget> hover_suppressed_target_;
   bool paint_selection_active_ = false;
+  bool viewport_hover_state_initialized_ = false;
+  bool viewport_hovered_last_frame_ = false;
+  ViewportSelectionInteractionWorkStats work_stats_;
 };
 
 } // namespace quader

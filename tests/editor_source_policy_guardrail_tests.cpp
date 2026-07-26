@@ -807,10 +807,20 @@ TEST(ModelingSessionServiceSplitTests,
       std::string::npos);
   EXPECT_NE(projection.find("selected_world_bounds(scene, assets)"),
             std::string::npos);
-  EXPECT_NE(projection.find("world_point_for_modeling_object("),
-            std::string::npos);
   EXPECT_NE(projection.find("quader_poly::selected_vertex_ids(object.document, "
                             "object.selection)"),
+            std::string::npos);
+  EXPECT_NE(
+      projection.find("vertices_by_id.reserve(object.document.vertices.size())"),
+      std::string::npos);
+  EXPECT_NE(
+      projection.find("world_from_object = "
+                      "scene.world_transform_matrix(*entity)"),
+      std::string::npos);
+  EXPECT_NE(projection.find("transform_point(*world_from_object, "
+                            "vertex->second->position)"),
+            std::string::npos);
+  EXPECT_EQ(projection.find("world_point_for_modeling_object("),
             std::string::npos);
 }
 

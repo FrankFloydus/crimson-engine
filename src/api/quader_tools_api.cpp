@@ -48,6 +48,9 @@ struct ActiveToolSettingsSource {
   const void *identity = nullptr;
   std::uint64_t revision = 0;
   ActiveToolSettingsSourceKind kind = ActiveToolSettingsSourceKind::Modeling;
+  // Captures owner presentation state that is intentionally independent from
+  // its settings revision. Primitive placement freezes reset mid-gesture.
+  bool reset_availability_token = false;
 };
 
 SceneSession &scene_session(QuaderApiSession session) {
@@ -74,6 +77,7 @@ active_tool_settings_source(const SceneSession &session) {
         .identity = &primitive,
         .revision = primitive.tool_settings_revision(),
         .kind = ActiveToolSettingsSourceKind::Primitive,
+        .reset_availability_token = primitive.can_reset_settings(),
     };
   }
   const RadialArrayToolService &radial_array = session.radial_array();
@@ -296,6 +300,10 @@ pivot_tool_settings_target(const PivotToolService &pivot) {
       .preview_active = true,
       .tool_id = std::string(kPivotToolId),
       .title = "Pivot",
+      .description =
+          "Move the selected object's pivot and choose which features it can "
+          "snap to.",
+      .can_reset = true,
       .apply_visible = true,
       .can_apply = true,
       .can_cancel = true,
@@ -322,6 +330,9 @@ QuaderToolSettingsTarget linear_array_tool_settings_target(
       .preview_active = true,
       .tool_id = std::string(kLinearArrayToolId),
       .title = "Linear Array",
+      .description =
+          "Drag an endpoint to create evenly spaced copies along a line.",
+      .can_reset = true,
       .apply_visible = true,
       .can_apply = true,
       .can_cancel = true,
@@ -340,6 +351,9 @@ QuaderToolSettingsTarget radial_array_tool_settings_target(
       .preview_active = center_locked,
       .tool_id = std::string(kRadialArrayToolId),
       .title = "Radial Array",
+      .description =
+          "Choose a center and arrange copies around its axis.",
+      .can_reset = true,
       .apply_visible = true,
       .can_apply = center_locked,
       .can_cancel = true,
@@ -375,6 +389,10 @@ QuaderToolSettingsTarget primitive_tool_settings_target(
       .preview_active = primitive.shape_count() > 0U,
       .tool_id = std::string(kCreatePrimitiveToolId),
       .title = "Create Primitive",
+      .description =
+          "Draw a footprint, set its height, and refine the primitive before "
+          "applying it.",
+      .can_reset = primitive.can_reset_settings(),
       .apply_visible = true,
       .can_apply = primitive.can_apply(),
       .can_cancel = true,
@@ -530,6 +548,35 @@ std::string tool_settings_target_tool_id(
   return {};
 }
 
+const char *fallback_tool_settings_description(
+    ModelingToolSettingsTargetKind kind) {
+  switch (kind) {
+  case ModelingToolSettingsTargetKind::Cut:
+    return "Draw a cutting plane through the selection and choose which side "
+           "to keep.";
+  case ModelingToolSettingsTargetKind::Mirror:
+    return "Draw a plane that mirrors the selected geometry.";
+  case ModelingToolSettingsTargetKind::Bridge:
+    return "Connect selected boundary edges with an adjustable interpolated "
+           "bridge.";
+  case ModelingToolSettingsTargetKind::EdgeBevel:
+    return "Round selected edges and adjust the bevel width, segments, and "
+           "profile.";
+  case ModelingToolSettingsTargetKind::Thicken:
+    return "Add adjustable thickness to the selected faces.";
+  case ModelingToolSettingsTargetKind::SliceQuad:
+    return "Subdivide selected quads into an adjustable grid.";
+  case ModelingToolSettingsTargetKind::MergeByDistance:
+    return "Merge selected vertices that fall within the chosen tolerance.";
+  case ModelingToolSettingsTargetKind::HalfCut:
+    return "Split selected meshes along a local axis and choose how the parts "
+           "are produced.";
+  case ModelingToolSettingsTargetKind::None:
+    break;
+  }
+  return "Adjust settings for the active tool.";
+}
+
 QuaderToolSettingsTarget modeling_tool_settings_target(
     const ModelingToolSettingsTarget &target,
     const ModelingInteractionSettings &settings) {
@@ -544,6 +591,7 @@ QuaderToolSettingsTarget modeling_tool_settings_target(
   result.title = target.label.empty()
                      ? fallback_tool_settings_label(target.kind)
                      : target.label;
+  result.description = fallback_tool_settings_description(target.kind);
   result.apply_visible = target.operation_preview_active;
   result.can_apply = target.operation_preview_active;
   result.can_cancel = target.operation_preview_active;
@@ -659,6 +707,11 @@ QuaderToolSettingsTarget modeling_tool_settings_target(
     break;
   }
 
+  result.can_reset = std::any_of(
+      result.controls.begin(), result.controls.end(),
+      [](const QuaderToolSettingControl &control) {
+        return control.kind != QuaderToolSettingControlKind::Action;
+      });
   return result;
 }
 
@@ -766,10 +819,14 @@ std::uint64_t QuaderToolsApi::active_settings_revision() const {
   if (!active_settings_source_valid_ ||
       active_settings_source_identity_ != source.identity ||
       active_settings_source_revision_ != source.revision ||
-      active_settings_source_kind_ != source_kind) {
+      active_settings_source_kind_ != source_kind ||
+      active_settings_source_reset_availability_token_ !=
+          source.reset_availability_token) {
     active_settings_source_identity_ = source.identity;
     active_settings_source_revision_ = source.revision;
     active_settings_source_kind_ = source_kind;
+    active_settings_source_reset_availability_token_ =
+        source.reset_availability_token;
     active_settings_source_valid_ = true;
     ++active_settings_revision_;
   }
@@ -941,6 +998,37 @@ QuaderApiVoidResult QuaderToolsApi::execute_action(std::string_view tool_id,
         QuaderMutationKind::Runtime, "Pivot Action");
   }
   return quader_api_failure_status(session, "Unknown tool action.");
+}
+
+QuaderApiVoidResult QuaderToolsApi::reset_active_settings() {
+  SceneSession &session = scene_session(session_);
+  if (session.primitive_creation().active()) {
+    return api_status_from_command(
+        session, session.primitive_creation().reset_settings(),
+        QuaderMutationKind::Runtime, "Reset Primitive Settings");
+  }
+  if (session.radial_array().active()) {
+    return api_status_from_command(
+        session, session.radial_array().reset_settings(),
+        QuaderMutationKind::Runtime, "Reset Radial Array Settings");
+  }
+  if (session.linear_array().active()) {
+    return api_status_from_command(
+        session, session.linear_array().reset_settings(),
+        QuaderMutationKind::Runtime, "Reset Linear Array Settings");
+  }
+  if (session.pivot().persistent_active()) {
+    return api_status_from_command(
+        session, session.pivot().reset_settings(),
+        QuaderMutationKind::Runtime, "Reset Pivot Settings");
+  }
+
+  ModelingCommandResult result =
+      session.modeling().reset_active_tool_settings();
+  return quader_api_void_status(session, result.ok, result.changed,
+                                std::move(result.message),
+                                QuaderMutationKind::Modeling,
+                                "Reset Tool Settings");
 }
 
 QuaderApiVoidResult QuaderToolsApi::accept_active_primitive(

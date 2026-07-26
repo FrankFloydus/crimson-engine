@@ -49,18 +49,38 @@ public:
       return document_command_missing_entity_result();
     }
 
-    std::size_t restored_count = 0u;
+    std::vector<SceneParentAssignment> parent_assignments;
+    std::vector<SceneTransformAssignment> transform_assignments;
+    parent_assignments.reserve(root_placements_.size());
+    transform_assignments.reserve(root_placements_.size());
     for (const DocumentEntityPlacement &placement : root_placements_) {
-      DocumentCommandResult result =
-          document_command_apply_placement(scene(), placement);
-      if (!result.ok) {
-        if (!rollback_placements(grouped_placements, restored_count)) {
-          return document_command_invalid_request_result(
-              "Group undo failed and rollback failed");
+      parent_assignments.push_back({
+          .child = placement.entity,
+          .parent = placement.parent,
+      });
+      transform_assignments.push_back({
+          .entity = placement.entity,
+          .transform = placement.transform,
+      });
+    }
+
+    std::size_t restored_count = 0u;
+    if (scene().set_parents(parent_assignments)) {
+      scene().set_transforms(transform_assignments);
+      restored_count = root_placements_.size();
+    } else {
+      for (const DocumentEntityPlacement &placement : root_placements_) {
+        DocumentCommandResult result =
+            document_command_apply_placement(scene(), placement);
+        if (!result.ok) {
+          if (!rollback_placements(grouped_placements, restored_count)) {
+            return document_command_invalid_request_result(
+                "Group undo failed and rollback failed");
+          }
+          return result;
         }
-        return result;
+        ++restored_count;
       }
-      ++restored_count;
     }
     if (!scene().destroy_entity(group_)) {
       if (!rollback_placements(grouped_placements, restored_count)) {
@@ -89,8 +109,13 @@ public:
           document_command_common_parent(scene(), roots_);
       const std::optional<QMat4> effective_group_world =
           preflight_group_world(common_parent);
+      const std::optional<std::vector<SceneTransformAssignment>>
+          root_transforms =
+              effective_group_world.has_value()
+                  ? planned_root_reparents(*effective_group_world)
+                  : std::nullopt;
       if (!effective_group_world.has_value() ||
-          !preflight_root_reparents(*effective_group_world)) {
+          !root_transforms.has_value()) {
         return document_command_invalid_request_result(
             "Selected entities cannot preserve their world transforms under "
             "the group");
@@ -121,17 +146,30 @@ public:
         return document_command_invalid_request_result(
             "Group entity cannot be reparented");
       }
-        std::size_t grouped_count = 0u;
+        std::vector<SceneParentAssignment> parent_assignments;
+        parent_assignments.reserve(roots_.size());
         for (const EntityId root : roots_) {
-          if (!scene().set_parent(root, group_, true)) {
-            if (!rollback_created_group(grouped_count)) {
+          parent_assignments.push_back({
+              .child = root,
+              .parent = group_,
+          });
+        }
+        std::size_t grouped_count = 0u;
+        if (scene().set_parents(parent_assignments)) {
+          scene().set_transforms(*root_transforms);
+          grouped_count = roots_.size();
+        } else {
+          for (const EntityId root : roots_) {
+            if (!scene().set_parent(root, group_, true)) {
+              if (!rollback_created_group(grouped_count)) {
+                return document_command_invalid_request_result(
+                    "Grouping failed and rollback failed");
+              }
               return document_command_invalid_request_result(
-                  "Grouping failed and rollback failed");
+                  "Selected entity cannot be grouped");
             }
-            return document_command_invalid_request_result(
-                "Selected entity cannot be grouped");
+            ++grouped_count;
           }
-          ++grouped_count;
         }
         document_command_select_only(scene(), {group_});
         return document_command_changed_result();
@@ -163,17 +201,27 @@ private:
         parent_world, compose_transform(group_local->spatial_transform()));
   }
 
-  bool preflight_root_reparents(const QMat4 &group_world) const {
+  std::optional<std::vector<SceneTransformAssignment>>
+  planned_root_reparents(const QMat4 &group_world) const {
+    std::vector<SceneTransformAssignment> transforms;
+    transforms.reserve(roots_.size());
     for (const EntityId root : roots_) {
       const TransformComponent *transform = scene().transform(root);
-      if (transform == nullptr ||
-          !try_scene_local_transform_preserving_world(
-               group_world, scene().world_transform_matrix(root), *transform)
-               .has_value()) {
-        return false;
+      const std::optional<TransformComponent> local =
+          transform == nullptr
+              ? std::nullopt
+              : try_scene_local_transform_preserving_world(
+                    group_world, scene().world_transform_matrix(root),
+                    *transform);
+      if (!local.has_value()) {
+        return std::nullopt;
       }
+      transforms.push_back({
+          .entity = root,
+          .transform = *local,
+      });
     }
-    return true;
+    return transforms;
   }
 
   bool rollback_placements(

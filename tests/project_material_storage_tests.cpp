@@ -670,6 +670,44 @@ TEST(ProjectMaterialCatalogTests,
             "Materials/shared.qmat");
 }
 
+TEST(ProjectMaterialCatalogTests,
+     LargeFlatScanIndexesDirectoryCaseEntriesOnce) {
+  ScopedMaterialTestDirectory temporary("catalog-scale");
+  const std::filesystem::path root =
+      temporary.make_empty_project("CatalogScale");
+  ProjectIoResult<ProjectWorkspaceStorage> workspace =
+      ProjectManifestStore::create_in_empty_directory(root);
+  ASSERT_TRUE(workspace.ok()) << workspace.error().message;
+  ASSERT_TRUE(std::filesystem::create_directory(root / "Materials"));
+
+  constexpr std::size_t kMaterialCount = 256u;
+  for (std::size_t index = 0u; index < kMaterialCount; ++index) {
+    ProjectMaterialDocument material = material_definition(
+        "40f2ec44-b994-4109-94fc-744f305d7d07",
+        "Scale Material " + std::to_string(index));
+    material.id = ProjectAssetId::generate();
+    ProjectIoResult<std::string> encoded = QmatCodec::encode(material);
+    ASSERT_TRUE(encoded.ok()) << encoded.error().message;
+    write_text(root / "Materials" /
+                   ("material_" + std::to_string(index) + ".qmat"),
+               encoded.value());
+  }
+
+  ProjectFileSystemWorkStats work;
+  ProjectIoResult<ProjectMaterialCatalog> catalog =
+      ProjectMaterialCatalog::scan(workspace.value().file_system, &work);
+  ASSERT_TRUE(catalog.ok()) << catalog.error().message;
+  ASSERT_EQ(catalog.value().entries().size(), kMaterialCount);
+  EXPECT_TRUE(catalog.value().warnings().empty());
+
+  EXPECT_EQ(work.directory_case_enumerations, 2u);
+  EXPECT_LE(work.directory_case_entries_visited, kMaterialCount + 4u)
+      << "the Materials sibling set must be indexed once for the whole scan";
+  EXPECT_LE(work.component_case_lookups, kMaterialCount * 9u + 4u)
+      << "repeated catalog validation may do O(1) index lookups, but must "
+         "not re-enumerate the sibling directory";
+}
+
 TEST(ProjectMaterialWorkspaceTests,
      CreatesDefaultFilesAndPersistsActiveMaterialInManifestV2) {
   ScopedMaterialTestDirectory temporary("create");

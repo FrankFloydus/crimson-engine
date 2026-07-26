@@ -71,6 +71,24 @@ struct SessionDocumentUpdate {
 };
 
 /**
+ * Carries one exact document into a no-history workspace hydration.
+ */
+struct SessionWorkspaceDocument {
+  PolygonDocument document;
+  std::string name;
+  bool selected = false;
+};
+
+/**
+ * Restores one live document as part of a host-owned history transition.
+ */
+struct SessionDocumentHistoryRestore {
+  ObjectId object{};
+  PolygonDocument document;
+  DirtyFlags dirty;
+};
+
+/**
  * Summarizes the active headless SDK preview transaction.
  */
 struct PreviewTransactionSummary {
@@ -137,6 +155,20 @@ public:
    * Replaces the modeled workspace while retaining the session clipboard.
    */
   void reset_workspace_preserving_clipboard();
+  /**
+   * Hydrates a complete modeled workspace in one publication and without
+   * producing one growing undo snapshot per imported document.
+   */
+  [[nodiscard]] Result<std::vector<ObjectId>>
+  replace_workspace_preserving_clipboard(
+      std::vector<SessionWorkspaceDocument> documents);
+  /**
+   * Restores exact documents for a host-owned undo/redo transition without
+   * copying or diffing the complete workspace.
+   */
+  [[nodiscard]] Result<OperationResult>
+  restore_documents_as_history_transition(
+      std::vector<SessionDocumentHistoryRestore> documents);
   [[nodiscard]] Result<OperationResult>
   combine_objects(std::span<const ObjectId> object_ids,
                   std::string name = {});
@@ -171,6 +203,14 @@ public:
   /** Drops SDK-local history entries without changing the current state. */
   void discard_undo_since(std::size_t mark);
   [[nodiscard]] bool rollback_undo_since(std::size_t mark);
+  /**
+   * Clones the current durable workspace for a host-owned checkpoint.
+   *
+   * Objects, documents, selection, clipboard, revisions, and identity
+   * high-water marks are retained. SDK undo/redo storage, active preview
+   * payloads, and transient batch transaction state are deliberately omitted.
+   */
+  [[nodiscard]] ModelingSession current_workspace_checkpoint() const;
   /**
    * Restores a semantic session snapshot while retaining every allocator and
    * topology-identity high-water mark already observed by this session.

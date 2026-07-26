@@ -35,7 +35,7 @@
 #include "ui/qt_snapping_toolbar.hpp"
 #include "ui/qt_standard_material_editor_window.hpp"
 #include "ui/qt_tool_toolbar.hpp"
-#include "ui/qt_tool_settings_window.hpp"
+#include "ui/qt_tool_settings_panel.hpp"
 #include "ui/qt_viewport_display_toolbar.hpp"
 #include "ui/qt_viewport_panel.hpp"
 #include "ui/ui_context.hpp"
@@ -218,9 +218,11 @@ QuaderApiVoidResult runtime_failure(std::string message) {
 }
 
 std::optional<UIPanelId> panel_id_from_name(std::string_view name) {
-  for (UIPanelId id : {UIPanelId::Viewport, UIPanelId::Outliner,
-                       UIPanelId::Inspector, UIPanelId::Console,
-                       UIPanelId::Layers}) {
+  if (name == ui_panel_stable_id(UIPanelId::Viewport) ||
+      name == ui_panel_key(UIPanelId::Viewport)) {
+    return UIPanelId::Viewport;
+  }
+  for (UIPanelId id : kUiDockPanelIds) {
     if (name == ui_panel_stable_id(id) || name == ui_panel_key(id)) {
       return id;
     }
@@ -276,6 +278,12 @@ bool write_binary_file(const std::filesystem::path &path,
 }
 
 } // namespace
+
+bool qt_dock_panel_presented_for_refresh(bool explicitly_visible,
+                                         const QDockWidget *dock) {
+  return explicitly_visible && dock != nullptr && dock->isVisible() &&
+         !dock->visibleRegion().isEmpty();
+}
 
 UISystem::UISystem() = default;
 
@@ -547,10 +555,6 @@ bool UISystem::initialize(RenderSystem &render_system,
   standard_material_editor_window_->set_close_request_handler(
       [this]() { return resolve_standard_material_document(true); });
   standard_material_editor_window_->hide();
-  tool_settings_window_ = new QtToolSettingsWindow(main_window_.get());
-  tool_settings_window_->set_localization(localization_);
-  tool_settings_window_->hide();
-
   status_message_ = new QLabel(main_window_.get());
   status_message_->setObjectName(QStringLiteral("statusMessage"));
   status_version_ = new QLabel(
@@ -678,7 +682,7 @@ void UISystem::install_runtime_hooks(
       QuaderViewportApiRuntimeAccess::workspace(editor.viewports());
   apply_viewport_settings_to_workspace();
   viewport_panel_->attach_workspace(workspace);
-  tool_settings_window_->bind(editor);
+  tool_settings_panel_->bind(editor);
   settings_dialog_->set_context(
       settings_, viewport_settings_, localization_, editor.commands(),
       [this](QtSettingsChangeKind kind) {
@@ -1229,9 +1233,7 @@ void UISystem::show_home() {
     tool_toolbar_->setEnabled(false);
     tool_toolbar_->hide();
   }
-  for (UIPanelId id :
-       {UIPanelId::Outliner, UIPanelId::Inspector, UIPanelId::Layers,
-        UIPanelId::Console}) {
+  for (UIPanelId id : kUiDockPanelIds) {
     if (QDockWidget *dock = panels_.dock(id)) {
       dock->hide();
     }
@@ -1421,8 +1423,8 @@ void UISystem::shutdown() {
     }
     command_event_filter_.reset();
   }
-  if (tool_settings_window_ != nullptr) {
-    tool_settings_window_->unbind();
+  if (tool_settings_panel_ != nullptr) {
+    tool_settings_panel_->unbind();
   }
   if (viewport_panel_ != nullptr) {
     viewport_panel_->shutdown();
@@ -1453,7 +1455,7 @@ void UISystem::shutdown() {
   material_browser_window_ = nullptr;
   material_preview_surface_ = nullptr;
   standard_material_editor_window_ = nullptr;
-  tool_settings_window_ = nullptr;
+  tool_settings_panel_ = nullptr;
   status_message_ = nullptr;
   status_version_ = nullptr;
   render_system_ = nullptr;
@@ -1587,7 +1589,7 @@ void UISystem::refresh(const FrameTiming &frame_timing,
   {
     QDR_PROFILE_SCOPE("UI refresh dock panels");
     const std::string &current_locale = localization_.current_locale();
-    if (!transform_drag_active && panel_visible(UIPanelId::Outliner) &&
+    if (!transform_drag_active && panel_presented(UIPanelId::Outliner) &&
         (!outliner_refresh_valid_ ||
          outliner_scene_revision_ != document_->revision() ||
          outliner_locale_ != current_locale)) {
@@ -1597,7 +1599,7 @@ void UISystem::refresh(const FrameTiming &frame_timing,
       outliner_locale_ = current_locale;
       outliner_refresh_valid_ = true;
     }
-    if (!transform_drag_active && panel_visible(UIPanelId::Layers) &&
+    if (!transform_drag_active && panel_presented(UIPanelId::Layers) &&
         (!layers_refresh_valid_ ||
          layers_scene_revision_ != document_->layer_revision() ||
          layers_scene_selection_revision_ != document_->selection_revision() ||
@@ -1609,7 +1611,7 @@ void UISystem::refresh(const FrameTiming &frame_timing,
       layers_locale_ = current_locale;
       layers_refresh_valid_ = true;
     }
-    if (!transform_drag_active && panel_visible(UIPanelId::Inspector)) {
+    if (!transform_drag_active && panel_presented(UIPanelId::Inspector)) {
       const ModelingSelectionSummary summary = [&]() {
         QDR_PROFILE_SCOPE("UI inspector query selection summary");
         return modeling_->selection_summary();
@@ -1629,7 +1631,7 @@ void UISystem::refresh(const FrameTiming &frame_timing,
         inspector_refresh_valid_ = true;
       }
     }
-    if (panel_visible(UIPanelId::Console)) {
+    if (panel_presented(UIPanelId::Console)) {
       QDR_PROFILE_SCOPE("UI refresh console panel");
       console_panel_->refresh(context);
     }
@@ -1639,7 +1641,14 @@ void UISystem::refresh(const FrameTiming &frame_timing,
   if (!tool_settings_refresh_valid_ ||
       tool_settings_revision_ != tool_settings_revision) {
     QDR_PROFILE_SCOPE("UI refresh tool settings presentation");
-    tool_settings_window_->refresh();
+    const bool was_active = tool_settings_panel_->has_active_target();
+    tool_settings_panel_->refresh();
+    if (!was_active && tool_settings_panel_->has_active_target() &&
+        panel_visible(UIPanelId::ToolSettings)) {
+      if (QDockWidget *dock = panels_.dock(UIPanelId::ToolSettings)) {
+        dock->raise();
+      }
+    }
     tool_settings_revision_ = tool_settings_revision;
     tool_settings_refresh_valid_ = true;
   }
@@ -1660,7 +1669,7 @@ void UISystem::refresh(const FrameTiming &frame_timing,
     refresh_localized_chrome();
     main_menu_->rebuild();
     viewport_panel_->set_localization(localization_);
-    tool_settings_window_->set_localization(localization_);
+    tool_settings_panel_->set_localization(localization_);
   }
   if (ui_settings_changed_) {
     ui_settings_changed_ = false;
@@ -1813,6 +1822,8 @@ void UISystem::create_docks() {
   inspector_panel_ = new InspectorPanel(main_window_.get());
   layer_panel_ = new LayerPanel(main_window_.get());
   console_panel_ = new ConsolePanel(main_window_.get());
+  tool_settings_panel_ = new QtToolSettingsPanel(main_window_.get());
+  tool_settings_panel_->set_localization(localization_);
   QDockWidget &outliner = create_dock(
       UIPanelId::Outliner, *outliner_panel_, Qt::LeftDockWidgetArea);
   QDockWidget &inspector = create_dock(
@@ -1821,7 +1832,12 @@ void UISystem::create_docks() {
       UIPanelId::Layers, *layer_panel_, Qt::RightDockWidgetArea);
   QDockWidget &console = create_dock(
       UIPanelId::Console, *console_panel_, Qt::BottomDockWidgetArea);
+  QDockWidget &tool_settings = create_dock(
+      UIPanelId::ToolSettings, *tool_settings_panel_,
+      Qt::RightDockWidgetArea);
   main_window_->splitDockWidget(&inspector, &layers, Qt::Vertical);
+  main_window_->tabifyDockWidget(&inspector, &tool_settings);
+  inspector.raise();
   main_window_->resizeDocks({&outliner, &inspector}, {340, 340},
                             Qt::Horizontal);
   main_window_->resizeDocks({&inspector, &layers}, {420, 260}, Qt::Vertical);
@@ -1867,11 +1883,6 @@ void UISystem::restore_window_state() {
       !auxiliary_window_state_.settings_dialog_geometry.isEmpty()) {
     (void)settings_dialog_->restoreGeometry(
         auxiliary_window_state_.settings_dialog_geometry);
-  }
-  if (tool_settings_window_ != nullptr &&
-      !auxiliary_window_state_.tool_settings_geometry.isEmpty()) {
-    (void)tool_settings_window_->restoreGeometry(
-        auxiliary_window_state_.tool_settings_geometry);
   }
   if (material_browser_window_ != nullptr) {
     if (!auxiliary_window_state_.material_browser_geometry.isEmpty()) {
@@ -2010,8 +2021,7 @@ bool UISystem::startup_layout_ready() const {
     return false;
   }
 
-  for (UIPanelId id : {UIPanelId::Outliner, UIPanelId::Inspector,
-                       UIPanelId::Layers, UIPanelId::Console}) {
+  for (UIPanelId id : kUiDockPanelIds) {
     const QDockWidget *dock = panels_.dock(id);
     if (dock != nullptr && dock->isVisible() && !geometry_ready(dock)) {
       return false;
@@ -2059,8 +2069,7 @@ std::uint64_t UISystem::startup_layout_geometry_signature(
   }
   mix_rect(main_window_->menuBar()->geometry());
   mix_rect(main_window_->statusBar()->geometry());
-  for (UIPanelId id : {UIPanelId::Outliner, UIPanelId::Inspector,
-                       UIPanelId::Layers, UIPanelId::Console}) {
+  for (UIPanelId id : kUiDockPanelIds) {
     mix(panels_.is_visible(id) ? 1 : 0);
     if (const QDockWidget *dock = panels_.dock(id)) {
       mix(dock->isFloating() ? 1 : 0);
@@ -2088,10 +2097,6 @@ void UISystem::save_auxiliary_window_state() {
   if (settings_dialog_ != nullptr) {
     auxiliary_window_state_.settings_dialog_geometry =
         settings_dialog_->saveGeometry();
-  }
-  if (tool_settings_window_ != nullptr) {
-    auxiliary_window_state_.tool_settings_geometry =
-        tool_settings_window_->saveGeometry();
   }
   if (material_browser_window_ != nullptr) {
     auxiliary_window_state_.material_browser_geometry =
@@ -2186,13 +2191,6 @@ void UISystem::synchronize_auxiliary_window_visibility() {
     const bool visible = settings_dialog_->isVisible();
     if (visible != auxiliary_window_state_.settings_dialog_visible) {
       auxiliary_window_state_.settings_dialog_visible = visible;
-      changed = true;
-    }
-  }
-  if (tool_settings_window_ != nullptr) {
-    const bool visible = tool_settings_window_->isVisible();
-    if (visible != auxiliary_window_state_.tool_settings_visible) {
-      auxiliary_window_state_.tool_settings_visible = visible;
       changed = true;
     }
   }
@@ -2844,6 +2842,7 @@ void UISystem::refresh_localized_chrome() {
   update_title(UIPanelId::Outliner);
   update_title(UIPanelId::Inspector);
   update_title(UIPanelId::Layers);
+  update_title(UIPanelId::ToolSettings);
   update_title(UIPanelId::Console);
   if (selection_toolbar_ != nullptr) {
     selection_toolbar_->set_localization(localization_);
@@ -3142,6 +3141,12 @@ void UISystem::show_material_browser() {
 
 bool UISystem::panel_visible(UIPanelId id) const {
   return id == UIPanelId::Viewport ? true : panels_.is_visible(id);
+}
+
+bool UISystem::panel_presented(UIPanelId id) const {
+  return id == UIPanelId::Viewport ||
+         qt_dock_panel_presented_for_refresh(panel_visible(id),
+                                             panels_.dock(id));
 }
 
 void UISystem::set_panel_visible(UIPanelId id, bool visible) {

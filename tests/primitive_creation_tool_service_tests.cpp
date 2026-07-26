@@ -171,6 +171,49 @@ TEST(PrimitiveCreationToolServiceTests,
 }
 
 TEST(PrimitiveCreationToolServiceTests,
+     ResetRestoresOnlyTheActiveKindAndRebuildsTheLivePrimitiveOnce) {
+  PrimitiveCreationHarness harness;
+  ASSERT_TRUE(harness.tool.activate(PrimitiveCreationKind::Torus).ok);
+  ASSERT_TRUE(
+      harness.tool.set_setting(kTorusMajorSegmentsSetting, 8.0).ok);
+  ASSERT_TRUE(
+      harness.tool.set_setting(kTorusMinorSegmentsSetting, 4.0).ok);
+  ASSERT_TRUE(
+      harness.tool.set_setting(kTorusTubeRadiusRatioSetting, 0.3).ok);
+  ASSERT_TRUE(
+      harness.tool.set_setting(kPrimitiveFlipFacesSetting, 1.0).ok);
+  ASSERT_TRUE(
+      harness.tool.accept_preview(valid_primitive_preview(), "Reset Torus")
+          .ok);
+  const std::uint64_t edited_content =
+      compiled_content_id(harness.modeling, "Reset Torus");
+  const std::uint64_t edited_revision =
+      harness.tool.tool_settings_revision();
+
+  const CommandResult reset = harness.tool.reset_settings();
+  ASSERT_TRUE(reset.ok) << reset.message;
+  EXPECT_TRUE(reset.changed);
+  ASSERT_TRUE(harness.tool.active_kind().has_value());
+  EXPECT_EQ(*harness.tool.active_kind(), PrimitiveCreationKind::Torus);
+  EXPECT_EQ(harness.tool.torus_settings().major_segments, 32);
+  EXPECT_EQ(harness.tool.torus_settings().minor_segments, 12);
+  EXPECT_DOUBLE_EQ(harness.tool.torus_settings().tube_radius_ratio, 0.2);
+  EXPECT_FALSE(harness.tool.torus_settings().flip_faces);
+  EXPECT_EQ(harness.tool.tool_settings_revision(), edited_revision + 1u);
+  const std::uint64_t reset_content =
+      compiled_content_id(harness.modeling, "Reset Torus");
+  EXPECT_NE(reset_content, edited_content);
+
+  const CommandResult repeated = harness.tool.reset_settings();
+  ASSERT_TRUE(repeated.ok) << repeated.message;
+  EXPECT_FALSE(repeated.changed);
+  EXPECT_EQ(harness.tool.tool_settings_revision(), edited_revision + 1u);
+  EXPECT_EQ(compiled_content_id(harness.modeling, "Reset Torus"),
+            reset_content);
+  ASSERT_TRUE(harness.tool.cancel().ok);
+}
+
+TEST(PrimitiveCreationToolServiceTests,
      CancelRollsBackEveryAcceptedShapeToThePreToolState) {
   PrimitiveCreationHarness harness;
   const ModelingCreateBoxResult baseline =
@@ -569,6 +612,8 @@ TEST(PrimitiveCreationToolServiceTests,
      SettingsAreFrozenWhileTheCurrentFootprintIsBeingDrawn) {
   PrimitiveCreationHarness harness;
   ASSERT_TRUE(harness.tool.activate(PrimitiveCreationKind::Box).ok);
+  ASSERT_TRUE(
+      harness.tool.set_setting(kBoxSubdivisionsXSetting, 4.0).ok);
   const ModelingBoxPreview footprint =
       harness.modeling.begin_box_footprint({
           .screen_position = {400.0f, 300.0f},
@@ -580,12 +625,63 @@ TEST(PrimitiveCreationToolServiceTests,
   ASSERT_EQ(footprint.drag_state, ModelingBoxDragState::Footprint);
 
   const CommandResult changed_during_draw =
-      harness.tool.set_setting(kBoxSubdivisionsXSetting, 4.0);
+      harness.tool.set_setting(kBoxSubdivisionsXSetting, 5.0);
   EXPECT_FALSE(changed_during_draw.ok);
   EXPECT_FALSE(changed_during_draw.changed);
-  EXPECT_EQ(harness.tool.box_settings().subdivisions_x, 1);
+  EXPECT_EQ(harness.tool.box_settings().subdivisions_x, 4);
+
+  const CommandResult reset_during_draw = harness.tool.reset_settings();
+  EXPECT_FALSE(reset_during_draw.ok);
+  EXPECT_FALSE(reset_during_draw.changed);
+  EXPECT_FALSE(harness.tool.can_reset_settings());
+  EXPECT_EQ(harness.tool.box_settings().subdivisions_x, 4);
+  EXPECT_EQ(harness.modeling.box_preview(false).drag_state,
+            ModelingBoxDragState::Footprint);
 
   EXPECT_TRUE(harness.tool.cancel().ok);
+}
+
+TEST(PrimitiveCreationToolServiceTests,
+     ResetAvailabilityRevisionTracksPrimitiveFootprintLifecycle) {
+  SceneSession session;
+  QuaderEditorApi editor(
+      QuaderApiSessionInternalAccess::from_scene_session(session));
+  ASSERT_TRUE(editor.tools().activate(ViewportToolId::CreatePrimitive).ok());
+  ASSERT_TRUE(editor.tools().active_settings().can_reset);
+
+  const std::uint64_t idle_revision =
+      editor.tools().active_settings_revision();
+  EXPECT_EQ(editor.tools().active_settings_revision(), idle_revision);
+
+  const ModelingBoxPreview footprint =
+      session.modeling().begin_box_footprint({
+          .screen_position = {400.0f, 300.0f},
+          .ray = {.origin = {0.0f, 4.0f, 0.0f},
+                  .direction = {0.0f, -1.0f, 0.0f}},
+          .grid_size = 1.0,
+      });
+  ASSERT_TRUE(footprint.ok) << footprint.message;
+  ASSERT_EQ(footprint.drag_state, ModelingBoxDragState::Footprint);
+
+  const std::uint64_t footprint_revision =
+      editor.tools().active_settings_revision();
+  EXPECT_GT(footprint_revision, idle_revision);
+  EXPECT_EQ(editor.tools().active_settings_revision(), footprint_revision);
+  EXPECT_FALSE(editor.tools().active_settings().can_reset);
+  const QuaderApiVoidResult rejected =
+      editor.tools().reset_active_settings();
+  EXPECT_FALSE(rejected.ok());
+  EXPECT_FALSE(rejected.changed());
+
+  const ModelingCommandResult canceled = session.modeling().cancel_box();
+  ASSERT_TRUE(canceled.ok) << canceled.message;
+  EXPECT_TRUE(canceled.changed);
+  const std::uint64_t restored_revision =
+      editor.tools().active_settings_revision();
+  EXPECT_GT(restored_revision, footprint_revision);
+  EXPECT_TRUE(editor.tools().active_settings().can_reset);
+
+  ASSERT_TRUE(editor.tools().cancel_active_tool_preview().ok());
 }
 
 TEST(PrimitiveCreationToolServiceTests,

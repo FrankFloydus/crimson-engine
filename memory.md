@@ -9,6 +9,76 @@ affected owners/files, resolved approach, and verification. Do not record routin
 private user data, guesses, or unresolved issues. Prefer updating a related existing entry over
 adding a duplicate.
 
+## 2026-07-26 - Large-Scene Work Is Bulk, Indexed, And Revision-Gated
+
+Task/context: applying Pivot in a 6,276-entity stress scene froze the UI for about ten seconds,
+and a cross-owner audit found the same scalar-in-batch pattern in scene, SDK, persistence, render,
+picking, selection, history, and retained UI paths.
+
+Invariant:
+
+- Scene-to-SDK hydration is one `replace_workspace_preserving_clipboard` publication. Host history
+  captures a current-workspace checkpoint that excludes nested SDK undo/redo history, while Pivot
+  apply/undo/redo restores only the affected modeling document; a local mesh operation must never
+  call `reset_from_scene()`.
+- Multi-object work uses owner-level bulk/indexed operations: hierarchy replacement and projection,
+  parent/selection/destruction batches, SDK duplication/publication, stable-ID vertex lookup,
+  component-selection adjacency, project path/catalog/manifest indexes, and one native-ID range
+  reservation. Scalar convenience calls must not be nested inside a batch.
+- Render extraction and retained caches use exact hash/index lookup with equality checks and stable
+  first-seen ordering. Component and Knife picking prepare mesh facts and surface hits once per
+  eligible object. Stationary hover/paint and Tool Settings synchronization are gated by the narrow
+  owner work key or settings revision before allocation, topology work, or Qt setters.
+- Deterministic scale regressions use work counters, not wall-clock thresholds. They cover scene
+  hierarchy/selection, SDK history and sparse IDs, polygon selection, picking and Knife, array
+  publication, project paths/materials, render extraction/caches, selection bounds, and Pivot
+  target-only synchronization.
+
+Measured on the same Debug/Profile build and exact scene: QDR read stayed effectively flat
+(118.752 ms -> 116.858 ms), session open fell from 9,494.51 ms to 225.328 ms, and Pivot Apply fell
+from 10,737.5 ms to 32.193 ms. The post-fix run performed one initial full-scene hydration and one
+targeted document synchronization for Pivot.
+
+Affected owners/files: `src/scene`, `src/editor` modeling/pivot/selection/viewport services,
+`src/sdk/core/modeling`, `src/io/project` and QDR hydration, `src/render`, public query/layer/tool
+facades, assets, the docked Tool Settings UI, and focused scale/source-policy tests.
+
+Verification: all 438 modeling-domain tests and 73 SDK consumer tests passed. The native app suite
+passed 1,222 tests with three local-stress skips and only six pre-existing command/render failures;
+the guardrail suite passed 360 tests with only three pre-existing instruction/build-policy failures.
+The mandatory regression gate was run and additionally exposed the existing SDK-only GoogleTest
+runtime mismatch. Both canonical Debug/Profile and Release app builds succeeded.
+
+## 2026-07-26 - Tool Settings Is A Retained Dock With Owner-Level Reset
+
+Task/context: Tool Settings moved from a transient `Qt::Tool` window into the normal dockable editor
+workspace, gained collapsible Description and Settings sections, and added one bottom reset action.
+
+Invariant:
+
+- `UIPanelId::ToolSettings` is a regular `QDockWidget` surface. `QMainWindow` state owns placement
+  and floating geometry, while `UISettings` owns logical visibility; auxiliary-window state must not
+  regain a separate Tool Settings geometry or visibility record.
+- `QtToolSettingsPanel` retains its section disclosure state and descriptor widgets. `UISystem`
+  queries only `active_settings_revision()` on the frame path and refreshes the panel behind that
+  unchanged-state gate. Activating a tool may raise an already-visible tab, but must not reopen a
+  panel the user explicitly closed.
+- Tool descriptions are public target metadata with localized presentation. Reset is one public
+  `QuaderToolsApi::reset_active_settings()` intent routed to the active owner, which restores only
+  that target's displayed settings in one coherent owner mutation and refreshes a live preview at
+  most once. Primitive reset preserves the selected primitive kind.
+- Tool-owned input recognition uses `QtToolSettingsPanel` ancestry and the native window of a
+  floated owning dock, not a reusable object-name marker. Settings interaction therefore remains
+  inside Pivot and primitive tool lifecycles without classifying unrelated windows as tool-owned.
+
+Affected owners/files: public tools API and active tool services, `src/ui/qt_tool_settings_panel.*`,
+the dock registry/settings/main menu/`UISystem`, localization, and focused UI/API/owner guardrails.
+
+Verification: 264 focused UI/API/owner tests, the frame-loop guardrail, and all 53 metadata-loop
+tests passed. Full CTest and the cross-owner regression gate were run; unrelated existing
+command/render and instruction/build-policy failures plus the SDK-only GoogleTest ABI mismatch kept
+the repository-wide gate red. Both canonical native app configurations succeeded.
+
 ## 2026-07-18 - Qt Transients Paint Before Native Viewport Submission Resumes
 
 Task/context: modal prompts and popup menus could expose a white top-level window for seconds before

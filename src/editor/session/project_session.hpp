@@ -16,6 +16,7 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 namespace quader {
@@ -172,6 +173,7 @@ private:
   std::vector<std::unique_ptr<OpenSceneSession>> open_scenes_;
   std::vector<std::uint32_t> slot_generations_;
   std::vector<std::uint32_t> free_slots_;
+  std::unordered_set<std::uint32_t> free_slot_membership_;
   SceneSessionId active_scene_id_;
   std::uint64_t activation_generation_ = 0u;
   SceneSession fallback_scene_;

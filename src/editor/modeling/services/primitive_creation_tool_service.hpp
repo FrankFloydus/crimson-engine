@@ -138,6 +138,7 @@ public:
 
   [[nodiscard]] bool active() const { return session_.has_value(); }
   [[nodiscard]] bool can_apply() const;
+  [[nodiscard]] bool can_reset_settings() const;
   [[nodiscard]] std::size_t shape_count() const;
   [[nodiscard]] bool owns_created_object(int modeling_object_id) const;
   [[nodiscard]] std::optional<PrimitiveCreationKind> active_kind() const;
@@ -172,6 +173,7 @@ public:
   CommandResult apply();
   CommandResult cancel();
   CommandResult set_setting(std::string_view name, double value);
+  CommandResult reset_settings();
 
 private:
   /// Captures the rollback boundary and accepted-shape count for one session.

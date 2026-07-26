@@ -121,7 +121,9 @@ bool face_vertices_are_resolved(const Face& face, const std::set<ElementId>& ver
     });
 }
 
-bool face_loop_is_degenerate(const Document& document, const Face& face)
+bool face_loop_is_degenerate(
+    const Face& face,
+    const VertexLookupIndex& vertex_lookup)
 {
     if (face.vertices.size() < 3U) {
         return true;
@@ -129,8 +131,10 @@ bool face_loop_is_degenerate(const Document& document, const Face& face)
 
     quader::QVec3 area_vector;
     for (std::size_t index = 0; index < face.vertices.size(); ++index) {
-        const Vertex* current = find_vertex(document, face.vertices[index]);
-        const Vertex* next = find_vertex(document, face.vertices[(index + 1U) % face.vertices.size()]);
+        const Vertex* current = vertex_lookup.find(face.vertices[index]);
+        const Vertex* next =
+            vertex_lookup.find(
+                face.vertices[(index + 1U) % face.vertices.size()]);
         if (current == nullptr || next == nullptr) {
             return false;
         }
@@ -160,7 +164,11 @@ std::map<EdgeIdPair, int> edge_incidence_counts_for_valid_faces(const Document& 
     return counts;
 }
 
-void validate_faces(const Document& document, const std::set<ElementId>& vertex_ids, PolygonDocumentValidationReport& report)
+void validate_faces(
+    const Document& document,
+    const std::set<ElementId>& vertex_ids,
+    const VertexLookupIndex& vertex_lookup,
+    PolygonDocumentValidationReport& report)
 {
     for (const Face& face : document.faces) {
         const std::vector<ElementId> missing_ids = missing_face_vertex_ids(face, vertex_ids);
@@ -203,7 +211,7 @@ void validate_faces(const Document& document, const std::set<ElementId>& vertex_
         }
 
         const bool resolved = face_vertices_are_resolved(face, vertex_ids);
-        if (resolved && face_loop_is_degenerate(document, face)) {
+        if (resolved && face_loop_is_degenerate(face, vertex_lookup)) {
             add_diagnostic(
                 report,
                 PolygonDocumentDiagnosticCode::DegenerateFaceLoop,
@@ -216,7 +224,10 @@ void validate_faces(const Document& document, const std::set<ElementId>& vertex_
         }
 
         if (resolved && face.vertices.size() >= 3U &&
-            triangulate_face_local_indices(document, face).empty()) {
+            triangulate_face_local_indices(
+                document,
+                face,
+                vertex_lookup).empty()) {
             add_diagnostic(
                 report,
                 PolygonDocumentDiagnosticCode::TriangulationFailure,
@@ -329,9 +340,10 @@ bool PolygonDocumentValidationReport::ok() const
 PolygonDocumentValidationReport validate_polygon_document(const Document& document)
 {
     PolygonDocumentValidationReport report;
+    const VertexLookupIndex vertex_lookup(document);
     const std::set<ElementId> vertex_ids = collect_unique_vertex_ids(document, report);
     validate_face_ids(document, report);
-    validate_faces(document, vertex_ids, report);
+    validate_faces(document, vertex_ids, vertex_lookup, report);
     const std::map<EdgeIdPair, int> edge_counts = edge_incidence_counts_for_valid_faces(document, vertex_ids);
     validate_nonmanifold_edges(edge_counts, report);
     validate_hard_normal_edges(document, vertex_ids, edge_counts, report);

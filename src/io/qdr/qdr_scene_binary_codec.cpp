@@ -1479,6 +1479,7 @@ void decode_assets(
   std::unordered_map<std::uint64_t, MeshAsset> decoded_geometry;
   std::unordered_map<std::uint64_t, std::shared_ptr<DeferredGeometryDecoder>>
       deferred_geometry;
+  std::unordered_map<std::uint64_t, AssetId> installed_geometry_source;
   std::set<AssetId> mesh_ids;
   if (const auto *meshes = payload.meshes()) {
     stats.logical_geometry_count = meshes->size();
@@ -1549,6 +1550,21 @@ void decode_assets(
         }
         continue;
       }
+      const auto installed = installed_geometry_source.find(geometry_id);
+      if (installed != installed_geometry_source.end()) {
+        const MeshAsset *source =
+            document.assets().mesh(installed->second);
+        if (source == nullptr ||
+            descriptor.has_authored_polygon_document !=
+                source->has_authored_polygon_document ||
+            document.assets().add_mesh_payload_alias(
+                descriptor.id, installed->second, descriptor.name,
+                descriptor.has_stable_cpu_topology) == kInvalidAssetId) {
+          throw std::runtime_error(
+              "QDR scene could not install a shared mesh asset.");
+        }
+        continue;
+      }
       MeshAsset mesh = decoded->second;
       mesh.name = descriptor.name;
       mesh.has_stable_cpu_topology = descriptor.has_stable_cpu_topology;
@@ -1561,6 +1577,7 @@ void decode_assets(
           kInvalidAssetId) {
         throw std::runtime_error("QDR scene could not install a mesh asset.");
       }
+      installed_geometry_source.emplace(geometry_id, descriptor.id);
     }
   }
 
@@ -1676,7 +1693,7 @@ void decode_scene_layers(SceneContentDocument &document,
 void decode_entities(SceneContentDocument &document,
                      const fb::ScenePayload &payload,
                      std::uint16_t schema_version) {
-  std::vector<std::pair<EntityId, EntityId>> parent_links;
+  std::vector<SceneParentAssignment> parent_links;
   std::vector<EntityId> instance_definitions;
   std::vector<std::pair<EntityId, EntityId>> instance_occurrences;
   std::vector<SceneLayerAssignment> layer_assignments;
@@ -1793,16 +1810,15 @@ void decode_entities(SceneContentDocument &document,
         throw std::runtime_error(
             "QDR instance entity is missing its occurrence component.");
       }
-      parent_links.emplace_back(entity, stored->parent());
+      parent_links.push_back(SceneParentAssignment{
+          .child = entity,
+          .parent = stored->parent(),
+      });
     }
   }
-  for (const auto [child, parent] : parent_links) {
-    if (parent != kInvalidEntityId &&
-        (!document.scene().exists(parent) ||
-         !document.scene().set_parent(child, parent, false))) {
-      throw std::runtime_error(
-          "QDR scene contains an invalid entity hierarchy.");
-    }
+  if (!document.scene().replace_hierarchy(parent_links)) {
+    throw std::runtime_error(
+        "QDR scene contains an invalid entity hierarchy.");
   }
   if (document.ensure_scene_root() == kInvalidEntityId) {
     throw std::runtime_error("QDR scene could not establish its scene root.");
@@ -1810,16 +1826,21 @@ void decode_entities(SceneContentDocument &document,
 
   const std::set<EntityId> definition_ids(instance_definitions.begin(),
                                           instance_definitions.end());
-  for (const EntityId definition : instance_definitions) {
-    EntityId ancestor = document.scene().parent(definition);
-    std::size_t remaining = document.scene().entities().size();
-    while (ancestor != kInvalidEntityId && remaining-- > 0u) {
-      if (definition_ids.contains(ancestor)) {
-        throw std::runtime_error(
-            "QDR instance definitions cannot be nested.");
-      }
-      ancestor = document.scene().parent(ancestor);
+  std::unordered_map<EntityId, bool> beneath_definition;
+  beneath_definition.reserve(parent_links.size() + 1u);
+  for (const EntityId entity : document.scene().entity_tree_order()) {
+    const EntityId parent = document.scene().parent(entity);
+    const bool parent_is_or_beneath_definition =
+        parent != kInvalidEntityId &&
+        (definition_ids.contains(parent) || beneath_definition[parent]);
+    if (definition_ids.contains(entity) &&
+        parent_is_or_beneath_definition) {
+      throw std::runtime_error(
+          "QDR instance definitions cannot be nested.");
     }
+    beneath_definition[entity] = parent_is_or_beneath_definition;
+  }
+  for (const EntityId definition : instance_definitions) {
     if (document.scene().children(definition).empty() ||
         !document.scene().set_instance_definition(definition)) {
       throw std::runtime_error(

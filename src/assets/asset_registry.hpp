@@ -133,6 +133,13 @@ public:
 
   AssetId add_mesh(MeshAsset mesh);
   AssetId add_mesh(AssetId id, MeshAsset mesh);
+  /**
+   * Adds one logical mesh by reusing an already validated registry-owned
+   * immutable payload. Only logical name/topology metadata may differ.
+   */
+  AssetId add_mesh_payload_alias(AssetId id, AssetId payload_source,
+                                 std::string name,
+                                 bool has_stable_cpu_topology);
   AssetId add_deferred_mesh(AssetId id, std::string name,
                             bool has_stable_cpu_topology,
                             bool has_authored_polygon_document,

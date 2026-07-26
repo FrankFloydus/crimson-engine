@@ -11,6 +11,8 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <list>
+#include <unordered_map>
 #include <unordered_set>
 
 namespace quader {
@@ -44,14 +46,10 @@ EntityId resolve_active_selection(std::span<const EntityId> selected,
 bool apply_undoable_scene_selection(SceneDocument &scene,
                                     const SceneSelectionState &state) {
   const std::uint64_t revision_before = scene.revision();
-  scene.clear_selection();
-  for (const EntityId entity : state.selected) {
-    if (scene.exists(entity)) {
-      scene.set_selected(entity, true);
-    }
-  }
-  if (state.active != kInvalidEntityId && scene.exists(state.active)) {
-    scene.set_active_selection(state.active);
+  (void)scene.replace_selection(state.selected, state.active);
+  if (scene.revision() == revision_before && !state.selected.empty()) {
+    scene.clear_selection();
+    (void)scene.replace_selection(state.selected, state.active);
   }
   return scene.revision() != revision_before;
 }
@@ -59,37 +57,20 @@ bool apply_undoable_scene_selection(SceneDocument &scene,
 bool apply_runtime_sync_scene_selection(SceneDocument &scene,
                                         const SceneSelectionState &state) {
   const std::uint64_t revision_before = scene.revision();
-  std::unordered_set<EntityId> desired;
-  desired.reserve(state.selected.size());
   std::vector<EntityId> ordered_selected;
   ordered_selected.reserve(state.selected.size());
-
+  std::unordered_set<EntityId> desired;
+  desired.reserve(state.selected.size());
   for (const EntityId entity : state.selected) {
     if (scene.exists(entity) && desired.insert(entity).second) {
       ordered_selected.push_back(entity);
     }
   }
-
-  for (const EntityId entity : scene.selected_entities()) {
-    if (!desired.contains(entity)) {
-      scene.set_selected(entity, false);
-    }
-  }
-  for (const EntityId entity : ordered_selected) {
-    const SelectionComponent *selection = scene.selection(entity);
-    if (selection == nullptr || !selection->selected) {
-      scene.set_selected(entity, true);
-    }
-  }
-
   const EntityId resolved_active = resolve_active_selection(
       std::span<const EntityId>(ordered_selected.data(),
                                 ordered_selected.size()),
       state.active);
-  if (resolved_active != kInvalidEntityId) {
-    scene.set_active_selection(resolved_active);
-  }
-
+  (void)scene.replace_selection(ordered_selected, resolved_active);
   return scene.revision() != revision_before;
 }
 
@@ -153,9 +134,11 @@ user_selectable_scene_entities(const SceneDocument &scene,
                                std::span<const EntityId> entities) {
   std::vector<EntityId> result;
   result.reserve(entities.size());
+  std::unordered_set<EntityId> seen;
+  seen.reserve(entities.size());
   for (const EntityId entity : entities) {
     if (!scene_entity_selectable_for_user_selection(scene, entity) ||
-        std::find(result.begin(), result.end(), entity) != result.end()) {
+        !seen.insert(entity).second) {
       continue;
     }
     result.push_back(entity);
@@ -191,9 +174,29 @@ std::vector<EntityId>
 user_selectable_scene_entities_for_mode(const SceneDocument &scene,
                                         SceneSelectionBulkMode mode) {
   std::vector<EntityId> result;
-  for (const EntityId entity : scene.entity_tree_order()) {
-    if (scene.is_scene_root(entity) ||
-        !scene_entity_selectable_for_user_selection(scene, entity)) {
+  std::unordered_map<EntityId, bool> effectively_locked;
+  const std::vector<EntityId> tree_order = scene.entity_tree_order();
+  result.reserve(tree_order.size());
+  effectively_locked.reserve(tree_order.size());
+  for (const EntityId entity : tree_order) {
+    const EntityId parent = scene.parent(entity);
+    bool locked =
+        parent != kInvalidEntityId && effectively_locked[parent];
+    if (const LockComponent *component = scene.lock(entity);
+        component != nullptr && component->locked) {
+      locked = true;
+    }
+    const SceneLayerId layer_id = scene.entity_layer(entity);
+    if (layer_id != kInvalidSceneLayerId) {
+      const SceneLayerRecord *layer = scene.layer(layer_id);
+      if (layer == nullptr || layer->locked) {
+        locked = true;
+      }
+    }
+    effectively_locked.emplace(entity, locked);
+    const VisibilityComponent *visibility = scene.visibility(entity);
+    if (scene.is_scene_root(entity) || locked ||
+        (visibility != nullptr && !visibility->selectable)) {
       continue;
     }
     if (mode == SceneSelectionBulkMode::Group &&
@@ -213,10 +216,10 @@ resolve_scene_selection_edit(std::span<const EntityId> current_selection,
   SceneSelectionState result;
   if (edit == SceneSelectionEdit::Replace) {
     result.selected.reserve(edited_entities.size());
+    std::unordered_set<EntityId> seen;
+    seen.reserve(edited_entities.size());
     for (const EntityId entity : edited_entities) {
-      if (entity == kInvalidEntityId ||
-          std::find(result.selected.begin(), result.selected.end(), entity) !=
-              result.selected.end()) {
+      if (entity == kInvalidEntityId || !seen.insert(entity).second) {
         continue;
       }
       result.selected.push_back(entity);
@@ -225,31 +228,39 @@ resolve_scene_selection_edit(std::span<const EntityId> current_selection,
     return result;
   }
 
-  result.selected.assign(current_selection.begin(), current_selection.end());
-  result.active =
-      std::find(result.selected.begin(), result.selected.end(),
-                current_active) != result.selected.end()
-          ? current_active
-          : (result.selected.empty() ? kInvalidEntityId
-                                     : result.selected.back());
+  std::list<EntityId> ordered;
+  std::unordered_map<EntityId, std::list<EntityId>::iterator> membership;
+  membership.reserve(current_selection.size() + edited_entities.size());
+  for (const EntityId entity : current_selection) {
+    if (entity == kInvalidEntityId || membership.contains(entity)) {
+      continue;
+    }
+    ordered.push_back(entity);
+    membership.emplace(entity, std::prev(ordered.end()));
+  }
+  result.active = membership.contains(current_active)
+                      ? current_active
+                      : (ordered.empty() ? kInvalidEntityId : ordered.back());
   for (const EntityId entity : edited_entities) {
-    const auto found =
-        std::find(result.selected.begin(), result.selected.end(), entity);
-    const bool already_selected = found != result.selected.end();
+    const auto found = membership.find(entity);
+    const bool already_selected = found != membership.end();
     if (edit == SceneSelectionEdit::Add ||
         (edit == SceneSelectionEdit::Toggle && !already_selected)) {
       if (entity != kInvalidEntityId && !already_selected) {
-        result.selected.push_back(entity);
+        ordered.push_back(entity);
+        membership.emplace(entity, std::prev(ordered.end()));
         result.active = entity;
       }
     } else if ((edit == SceneSelectionEdit::Remove ||
                 edit == SceneSelectionEdit::Toggle) &&
                already_selected) {
-      result.selected.erase(found);
+      ordered.erase(found->second);
+      membership.erase(found);
       result.active =
-          result.selected.empty() ? kInvalidEntityId : result.selected.back();
+          ordered.empty() ? kInvalidEntityId : ordered.back();
     }
   }
+  result.selected.assign(ordered.begin(), ordered.end());
   return result;
 }
 
@@ -272,16 +283,32 @@ bool add_scene_selection(SceneDocument &scene,
   const std::uint64_t revision_before = scene.revision();
   switch (mode) {
   case SceneSelectionApplicationMode::UndoableCommand:
-  case SceneSelectionApplicationMode::RuntimeSync:
+  case SceneSelectionApplicationMode::RuntimeSync: {
+    std::vector<EntityId> combined = scene.selected_entities();
+    std::unordered_set<EntityId> membership(combined.begin(),
+                                            combined.end());
+    membership.reserve(combined.size() + selected.size());
     for (const EntityId entity : selected) {
-      if (scene.exists(entity)) {
-        scene.set_selected(entity, true);
+      if (scene.exists(entity) && membership.insert(entity).second) {
+        combined.push_back(entity);
       }
     }
-    if (active != kInvalidEntityId && scene.exists(active)) {
-      scene.set_active_selection(active);
+    EntityId resolved_active = active;
+    if (resolved_active == kInvalidEntityId ||
+        !membership.contains(resolved_active)) {
+      const EntityId current_active = scene.primary_selection();
+      resolved_active =
+          current_active != kInvalidEntityId &&
+                  membership.contains(current_active)
+              ? current_active
+              : resolve_active_selection(
+                    std::span<const EntityId>(combined.data(),
+                                              combined.size()),
+                    kInvalidEntityId);
     }
+    (void)scene.replace_selection(combined, resolved_active);
     break;
+  }
   }
   return scene.revision() != revision_before;
 }

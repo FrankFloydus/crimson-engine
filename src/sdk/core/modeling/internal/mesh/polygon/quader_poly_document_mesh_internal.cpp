@@ -116,12 +116,15 @@ quader::QVec3 project_vector_to_plane(const quader::QVec3& vector, const quader:
         quader_geometry::project_point_to_plane<float>(geometry_origin + geometry_vec3(vector), plane) - geometry_origin);
 }
 
-TriangulationAxisCandidate triangulation_axis_candidate(const Document& document, const Face& face, int dropped_axis)
+TriangulationAxisCandidate triangulation_axis_candidate(
+    const Face& face,
+    int dropped_axis,
+    const VertexLookupIndex& vertex_lookup)
 {
     std::vector<quader_geometry::QVec2d> points;
     points.reserve(face.vertices.size());
     for (const ElementId vertex_id : face.vertices) {
-        const Vertex* vertex = find_vertex(document, vertex_id);
+        const Vertex* vertex = vertex_lookup.find(vertex_id);
         if (vertex == nullptr) {
             return { dropped_axis, 0.0, true };
         }
@@ -145,14 +148,17 @@ TriangulationAxisCandidate triangulation_axis_candidate(const Document& document
     };
 }
 
-std::vector<Triangle> triangulate_face_local_indices_for_axis(const Document& document, const Face& face, int dropped_axis)
+std::vector<Triangle> triangulate_face_local_indices_for_axis(
+    const Face& face,
+    int dropped_axis,
+    const VertexLookupIndex& vertex_lookup)
 {
     QDR_PROFILE_SCOPE("qdr_document.triangulate_face_local_indices_for_axis");
     std::vector<quader_geometry::QVec2d> projected_points;
     projected_points.reserve(face.vertices.size());
 
     for (const ElementId vertex_id : face.vertices) {
-        const Vertex* vertex = find_vertex(document, vertex_id);
+        const Vertex* vertex = vertex_lookup.find(vertex_id);
         if (vertex == nullptr) {
             return {};
         }
@@ -194,9 +200,12 @@ std::vector<Triangle> triangulate_face_local_indices_for_axis(const Document& do
             continue;
         }
 
-        const Vertex* a = find_vertex(document, face.vertices[triangle_indices[0]]);
-        const Vertex* b = find_vertex(document, face.vertices[triangle_indices[1]]);
-        const Vertex* c = find_vertex(document, face.vertices[triangle_indices[2]]);
+        const Vertex* a =
+            vertex_lookup.find(face.vertices[triangle_indices[0]]);
+        const Vertex* b =
+            vertex_lookup.find(face.vertices[triangle_indices[1]]);
+        const Vertex* c =
+            vertex_lookup.find(face.vertices[triangle_indices[2]]);
         if (a == nullptr || b == nullptr || c == nullptr) {
             return {};
         }
@@ -219,21 +228,23 @@ std::vector<Triangle> triangulate_face_local_indices_for_axis(const Document& do
     return triangles;
 }
 
-std::vector<Triangle> triangulate_quad_face_local_indices(const Document& document, const Face& face)
+std::vector<Triangle> triangulate_quad_face_local_indices(
+    const Face& face,
+    const VertexLookupIndex& vertex_lookup)
 {
-    const Vertex* a = find_vertex(document, face.vertices[0]);
-    const Vertex* b = find_vertex(document, face.vertices[1]);
-    const Vertex* c = find_vertex(document, face.vertices[2]);
-    const Vertex* d = find_vertex(document, face.vertices[3]);
+    const Vertex* a = vertex_lookup.find(face.vertices[0]);
+    const Vertex* b = vertex_lookup.find(face.vertices[1]);
+    const Vertex* c = vertex_lookup.find(face.vertices[2]);
+    const Vertex* d = vertex_lookup.find(face.vertices[3]);
     if (a == nullptr || b == nullptr || c == nullptr || d == nullptr) {
         return {};
     }
 
     const auto triangle_is_valid = [&](const Triangle& triangle) {
         const std::array vertices {
-            find_vertex(document, face.vertices[triangle.a]),
-            find_vertex(document, face.vertices[triangle.b]),
-            find_vertex(document, face.vertices[triangle.c]),
+            vertex_lookup.find(face.vertices[triangle.a]),
+            vertex_lookup.find(face.vertices[triangle.b]),
+            vertex_lookup.find(face.vertices[triangle.c]),
         };
         if (vertices[0] == nullptr || vertices[1] == nullptr || vertices[2] == nullptr) {
             return false;
@@ -264,6 +275,50 @@ std::vector<Triangle> triangulate_quad_face_local_indices(const Document& docume
         return second_fourth_diagonal;
     }
     return {};
+}
+
+quader::QVec3 face_normal_from_lookup(
+    const Face& face,
+    const VertexLookupIndex& vertex_lookup)
+{
+    quader::QVec3 normal;
+    if (face.vertices.size() < 3U) {
+        return { 0.0F, 1.0F, 0.0F };
+    }
+
+    for (std::size_t index = 0; index < face.vertices.size(); ++index) {
+        const Vertex* current = vertex_lookup.find(face.vertices[index]);
+        const Vertex* next = vertex_lookup.find(
+            face.vertices[(index + 1U) % face.vertices.size()]);
+        if (current == nullptr || next == nullptr) {
+            continue;
+        }
+
+        normal.x += (current->position.y - next->position.y) *
+                    (current->position.z + next->position.z);
+        normal.y += (current->position.z - next->position.z) *
+                    (current->position.x + next->position.x);
+        normal.z += (current->position.x - next->position.x) *
+                    (current->position.y + next->position.y);
+    }
+
+    normal = normalize_or_zero(normal);
+    if (length_squared(normal) > kEpsilon) {
+        return normal;
+    }
+
+    const Vertex* a = vertex_lookup.find(face.vertices[0]);
+    const Vertex* b = vertex_lookup.find(face.vertices[1]);
+    const Vertex* c = vertex_lookup.find(face.vertices[2]);
+    if (a == nullptr || b == nullptr || c == nullptr) {
+        return { 0.0F, 1.0F, 0.0F };
+    }
+
+    normal = poly_vec3(quader_geometry::triangle_unit_normal(
+        geometry_triangle(a->position, b->position, c->position)));
+    return length_squared(normal) > kEpsilon
+               ? normal
+               : quader::QVec3 { 0.0F, 1.0F, 0.0F };
 }
 
 quader::QVec3 quader_to_source_vector(const quader::QVec3& vector)
@@ -356,6 +411,20 @@ FaceUvBasis source_projected_uv_basis_for_normal(const quader::QVec3& source_nor
     return basis;
 }
 
+FaceUvBasis generated_face_uv_basis_for_normal(const quader::QVec3& normal)
+{
+    FaceUvBasis basis;
+    const quader::QVec3 safe_normal = length_squared(normal) > kEpsilon
+                                          ? normalize_or_zero(normal)
+                                          : quader::QVec3 { 0.0F, 1.0F, 0.0F };
+    const quader::QVec3 source_normal =
+        normalize_or_zero(quader_to_source_vector(safe_normal));
+    if (length_squared(source_normal) <= kEpsilon) {
+        return basis;
+    }
+    return source_projected_uv_basis_for_normal(source_normal);
+}
+
 } // namespace
 
 int dropped_axis_for_normal(const quader::QVec3& normal)
@@ -364,6 +433,35 @@ int dropped_axis_for_normal(const quader::QVec3& normal)
 }
 
 std::vector<Triangle> triangulate_face_local_indices(const Document& document, const Face& face)
+{
+    if (face.vertices.size() < 3U) {
+        return {};
+    }
+    if (face.vertices.size() == 3U) {
+        return { { 0U, 1U, 2U } };
+    }
+
+    const VertexLookupIndex vertex_lookup(document);
+    return triangulate_face_local_indices(document, face, vertex_lookup);
+}
+
+std::vector<Triangle> triangulate_face_local_indices(
+    const Document& document,
+    const Face& face,
+    const VertexLookupIndex& vertex_lookup)
+{
+    return triangulate_face_local_indices(
+        document,
+        face,
+        vertex_lookup,
+        face_normal_from_lookup(face, vertex_lookup));
+}
+
+std::vector<Triangle> triangulate_face_local_indices(
+    const Document&,
+    const Face& face,
+    const VertexLookupIndex& vertex_lookup,
+    const quader::QVec3& normal)
 {
     QDR_PROFILE_SCOPE("qdr_document.triangulate_face_local_indices");
     std::vector<Triangle> triangles;
@@ -376,18 +474,18 @@ std::vector<Triangle> triangulate_face_local_indices(const Document& document, c
         return triangles;
     }
     if (face.vertices.size() == 4) {
-        triangles = triangulate_quad_face_local_indices(document, face);
+        triangles =
+            triangulate_quad_face_local_indices(face, vertex_lookup);
         if (!triangles.empty()) {
             return triangles;
         }
     }
 
-    const quader::QVec3 normal = face_normal(document, face);
     const int preferred_axis = dropped_axis_for_normal(normal);
     std::array<TriangulationAxisCandidate, 3> axes {
-        triangulation_axis_candidate(document, face, 0),
-        triangulation_axis_candidate(document, face, 1),
-        triangulation_axis_candidate(document, face, 2),
+        triangulation_axis_candidate(face, 0, vertex_lookup),
+        triangulation_axis_candidate(face, 1, vertex_lookup),
+        triangulation_axis_candidate(face, 2, vertex_lookup),
     };
     std::ranges::sort(axes, [preferred_axis](const TriangulationAxisCandidate& left, const TriangulationAxisCandidate& right) {
         if (left.has_duplicate_points != right.has_duplicate_points) {
@@ -403,7 +501,10 @@ std::vector<Triangle> triangulate_face_local_indices(const Document& document, c
         if (axis.projected_area <= 0.000001) {
             continue;
         }
-        triangles = triangulate_face_local_indices_for_axis(document, face, axis.dropped_axis);
+        triangles = triangulate_face_local_indices_for_axis(
+            face,
+            axis.dropped_axis,
+            vertex_lookup);
         if (!triangles.empty()) {
             return triangles;
         }
@@ -412,9 +513,9 @@ std::vector<Triangle> triangulate_face_local_indices(const Document& document, c
     triangles.clear();
     triangles.reserve(face.vertices.size() - 2U);
     for (std::uint32_t index = 1; index + 1U < face.vertices.size(); ++index) {
-        const Vertex* a = find_vertex(document, face.vertices[0]);
-        const Vertex* b = find_vertex(document, face.vertices[index]);
-        const Vertex* c = find_vertex(document, face.vertices[index + 1U]);
+        const Vertex* a = vertex_lookup.find(face.vertices[0]);
+        const Vertex* b = vertex_lookup.find(face.vertices[index]);
+        const Vertex* c = vertex_lookup.find(face.vertices[index + 1U]);
         if (a == nullptr || b == nullptr || c == nullptr) {
             triangles.clear();
             return triangles;
@@ -432,22 +533,28 @@ std::vector<Triangle> triangulate_face_local_indices(const Document& document, c
 
 FaceUvBasis generated_face_uv_basis(const Document& document, const Face& face, const quader::QVec3& normal)
 {
-    FaceUvBasis basis;
     if (face.vertices.empty()) {
-        return basis;
+        return {};
     }
-
     if (find_vertex(document, face.vertices.front()) == nullptr) {
-        return basis;
+        return {};
     }
-    const quader::QVec3 safe_normal = length_squared(normal) > kEpsilon
-                                          ? normalize_or_zero(normal)
-                                          : quader::QVec3{0.0F, 1.0F, 0.0F};
-    const quader::QVec3 source_normal = normalize_or_zero(quader_to_source_vector(safe_normal));
-    if (length_squared(source_normal) <= kEpsilon) {
-      return basis;
+    return generated_face_uv_basis_for_normal(normal);
+}
+
+FaceUvBasis generated_face_uv_basis(
+    const Document&,
+    const Face& face,
+    const quader::QVec3& normal,
+    const VertexLookupIndex& vertex_lookup)
+{
+    if (face.vertices.empty()) {
+        return {};
     }
-    return source_projected_uv_basis_for_normal(source_normal);
+    if (vertex_lookup.find(face.vertices.front()) == nullptr) {
+        return {};
+    }
+    return generated_face_uv_basis_for_normal(normal);
 }
 
 FaceUvBasis project_uv_basis_to_face_plane(const FaceUvBasis& generated_basis, const quader::QVec3& normal, const quader::QVec3& origin)

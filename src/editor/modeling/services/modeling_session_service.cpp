@@ -1071,11 +1071,9 @@ public:
         return false;
       }
       std::vector<bool> right_matched(right.size(), false);
-      const auto match_members = [&](const auto &self,
-                                     std::size_t left_index) -> bool {
-        if (left_index == left.size()) {
-          return true;
-        }
+      for (std::size_t left_index = 0U; left_index < left.size();
+           ++left_index) {
+        bool found_equivalent = false;
         for (std::size_t right_index = 0U; right_index < right.size();
              ++right_index) {
           if (right_matched[right_index] ||
@@ -1088,14 +1086,14 @@ public:
             continue;
           }
           right_matched[right_index] = true;
-          if (self(self, left_index + 1U)) {
-            return true;
-          }
-          right_matched[right_index] = false;
+          found_equivalent = true;
+          break;
         }
-        return false;
-      };
-      return match_members(match_members, 0U);
+        if (!found_equivalent) {
+          return false;
+        }
+      }
+      return true;
     };
 
     std::vector<GeometryTargetDescriptor> reference_descriptors;
@@ -1610,6 +1608,17 @@ public:
           scene_.selected_entities(), scene_.primary_selection());
     }
     invalidate_selection_overlay_caches();
+  }
+
+  [[nodiscard]] ModelingCommandResult
+  restore_mesh_documents_from_scene(std::span<const EntityId> entities) {
+    ModelingCommandResult restored =
+        sdk_projection_adapter_.restore_mesh_documents_from_scene(entities);
+    if (restored.ok) {
+      runtime_.reset_document_state();
+      invalidate_selection_overlay_caches();
+    }
+    return restored;
   }
 
   void set_instance_edit_scope_provider(
@@ -2212,6 +2221,47 @@ public:
       return result;
     }
     return {.ok = true, .changed = changed};
+  }
+
+  ModelingCommandResult reset_active_tool_settings() {
+    const ModelingToolSettingsTarget active_target = tool_settings_target();
+    if (!active_target.active) {
+      return {
+          .ok = false,
+          .changed = false,
+          .message = "No active tool settings.",
+      };
+    }
+    if (active_target.kind == ModelingToolSettingsTargetKind::Mirror ||
+        active_target.kind == ModelingToolSettingsTargetKind::None) {
+      return {
+          .ok = false,
+          .changed = false,
+          .message = "The active tool has no resettable settings.",
+      };
+    }
+    if (active_target.kind == ModelingToolSettingsTargetKind::Cut) {
+      const ModelingInteractionSettings defaults =
+          interaction_settings_service_.normalize(
+              ModelingInteractionSettings{});
+      if (interaction_settings_service_.settings().cut_mode ==
+          defaults.cut_mode) {
+        return {.ok = true, .changed = false};
+      }
+      return set_cut_mode(defaults.cut_mode);
+    }
+
+    const bool changed =
+        interaction_settings_service_.reset_for_target(active_target.kind);
+    if (!changed) {
+      return {.ok = true, .changed = false};
+    }
+    if (!active_target.operation_preview_active) {
+      return {.ok = true, .changed = true};
+    }
+    ModelingCommandResult result = update_active_operation_preview_settings();
+    result.changed = result.changed || changed;
+    return result;
   }
 
   [[nodiscard]] bool modal_tool_owns_viewport() const {
@@ -4671,6 +4721,10 @@ public:
         event.snap_enabled);
   }
 
+  [[nodiscard]] ModelingBoxDragState box_drag_state() const {
+    return from_runtime(runtime_.box_state().drag_state);
+  }
+
   [[nodiscard]] ModelingBoxPreview box_preview(bool snap_enabled = true) const {
     return current_box_preview(snap_enabled);
   }
@@ -6118,6 +6172,12 @@ void ModelingSessionService::clear_transient_state_for_document_replacement() {
 
 void ModelingSessionService::reset_from_scene() { impl_->reset_from_scene(); }
 
+ModelingCommandResult
+ModelingSessionService::restore_mesh_documents_from_scene(
+    std::span<const EntityId> entities) {
+  return impl_->restore_mesh_documents_from_scene(entities);
+}
+
 void ModelingSessionService::set_instance_edit_scope_provider(
     std::function<ModelingInstanceEditScope()> provider) {
   impl_->set_instance_edit_scope_provider(std::move(provider));
@@ -6266,6 +6326,10 @@ ModelingSessionService::interaction_settings() const {
 ModelingCommandResult ModelingSessionService::set_interaction_settings(
     const ModelingInteractionSettings &settings) {
   return impl_->set_interaction_settings(settings);
+}
+
+ModelingCommandResult ModelingSessionService::reset_active_tool_settings() {
+  return impl_->reset_active_tool_settings();
 }
 
 ModelingActionSet ModelingSessionService::context_action_set(
@@ -6596,6 +6660,10 @@ ModelingSessionService::begin_box_height(const ModelingBoxToolEvent &event) {
 ModelingBoxPreview
 ModelingSessionService::update_box_height(const ModelingBoxToolEvent &event) {
   return impl_->update_box_height(event);
+}
+
+ModelingBoxDragState ModelingSessionService::box_drag_state() const {
+  return impl_->box_drag_state();
 }
 
 ModelingBoxPreview

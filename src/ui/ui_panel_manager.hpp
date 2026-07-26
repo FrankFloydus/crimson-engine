@@ -59,13 +59,14 @@ private:
   bool eventFilter(QObject *watched, QEvent *event) override;
   bool record_explicit_visibility(UIPanelId id, bool visible);
 
-  std::array<QDockWidget *, 5> docks_{};
-  std::array<bool, 5> explicit_visibility_{
+  std::array<QDockWidget *, kUiPanelCount> docks_{};
+  std::array<bool, kUiPanelCount> explicit_visibility_{
       ui_panel_default_visible(UIPanelId::Viewport),
       ui_panel_default_visible(UIPanelId::Outliner),
       ui_panel_default_visible(UIPanelId::Inspector),
       ui_panel_default_visible(UIPanelId::Console),
       ui_panel_default_visible(UIPanelId::Layers),
+      ui_panel_default_visible(UIPanelId::ToolSettings),
   };
   VisibilityChangedCallback visibility_changed_;
 };

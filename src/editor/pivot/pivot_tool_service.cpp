@@ -32,6 +32,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -140,6 +141,7 @@ struct PivotRebasePlan {
 struct PivotRebaseRequest {
   EntityId target = kInvalidEntityId;
   QVec3 world_pivot = {};
+  std::size_t hierarchy_depth = 0u;
 };
 
 void offset_mesh_vertices(MeshAsset &mesh, QVec3 local_delta) {
@@ -154,20 +156,66 @@ void offset_mesh_vertices(MeshAsset &mesh, QVec3 local_delta) {
   }
 }
 
-int mesh_usage_count(const SceneDocument &scene, AssetId mesh) {
-  int count = 0;
-  for (const EntityId entity : scene.entities()) {
-    const MeshComponent *component = scene.mesh(entity);
-    if (component != nullptr && component->mesh == mesh) {
-      ++count;
+/**
+ * Tracks live scene mesh ownership during one sequential rebase-plan batch.
+ */
+class MeshReferenceTracker {
+public:
+  MeshReferenceTracker(const SceneDocument &scene,
+                       PivotPlanningStats *planning_stats)
+      : scene_(scene), planning_stats_(planning_stats) {}
+
+  [[nodiscard]] std::size_t reference_count(AssetId mesh) {
+    ensure_index();
+    if (planning_stats_ != nullptr) {
+      ++planning_stats_->mesh_reference_lookup_count;
+    }
+    const auto found = reference_counts_.find(mesh);
+    return found == reference_counts_.end() ? 0u : found->second;
+  }
+
+  void record_rebind(AssetId before_mesh, AssetId after_mesh) {
+    if (before_mesh == after_mesh) {
+      return;
+    }
+    ensure_index();
+    const auto before = reference_counts_.find(before_mesh);
+    if (before != reference_counts_.end() && before->second > 0u) {
+      --before->second;
+    }
+    ++reference_counts_[after_mesh];
+  }
+
+private:
+  void ensure_index() {
+    if (initialized_) {
+      return;
+    }
+    initialized_ = true;
+    const std::vector<EntityId> entities = scene_.entities();
+    reference_counts_.reserve(entities.size());
+    for (const EntityId entity : entities) {
+      const MeshComponent *component = scene_.mesh(entity);
+      if (component != nullptr) {
+        ++reference_counts_[component->mesh];
+      }
+    }
+    if (planning_stats_ != nullptr) {
+      ++planning_stats_->mesh_reference_index_build_count;
+      planning_stats_->mesh_reference_entity_visit_count += entities.size();
     }
   }
-  return count;
-}
+
+  const SceneDocument &scene_;
+  PivotPlanningStats *planning_stats_ = nullptr;
+  std::unordered_map<AssetId, std::size_t> reference_counts_;
+  bool initialized_ = false;
+};
 
 std::optional<std::string>
 prepare_mesh_edit(const SceneDocument &scene, const AssetRegistry &assets,
                   EntityId target, QVec3 local_delta,
+                  MeshReferenceTracker &mesh_references,
                   PivotMeshEdit &edit) {
   const MeshComponent *component = scene.mesh(target);
   if (component == nullptr) {
@@ -188,14 +236,16 @@ prepare_mesh_edit(const SceneDocument &scene, const AssetRegistry &assets,
   edit.before_asset = *mesh;
   edit.after_asset = *mesh;
   offset_mesh_vertices(edit.after_asset, local_delta);
-  edit.clone_on_write = mesh_usage_count(scene, component->mesh) > 1;
+  edit.clone_on_write =
+      mesh_references.reference_count(component->mesh) > 1u;
   edit.after_mesh = edit.clone_on_write ? kInvalidAssetId : component->mesh;
   return std::nullopt;
 }
 
 std::optional<PivotRebasePlan>
 make_rebase_plan(const SceneDocument &scene, const AssetRegistry &assets,
-                 EntityId target, QVec3 pivot,
+                 MeshReferenceTracker &mesh_references, EntityId target,
+                 QVec3 pivot,
                  std::string &error_message) {
   if (!finite_vector(pivot)) {
     error_message = "Pivot position is not finite.";
@@ -286,7 +336,7 @@ make_rebase_plan(const SceneDocument &scene, const AssetRegistry &assets,
        target_local_delta.z != 0.0f)) {
     if (const std::optional<std::string> mesh_error =
             prepare_mesh_edit(scene, assets, target, target_local_delta,
-                              plan.mesh)) {
+                              mesh_references, plan.mesh)) {
       error_message = *mesh_error;
       return std::nullopt;
     }
@@ -396,9 +446,11 @@ public:
   PivotRebaseCommand(SceneDocument &scene, AssetRegistry &assets,
                      ModelingSessionService &modeling,
                      std::vector<PivotRebaseRequest> requests,
-                     std::string label)
+                     std::string label,
+                     PivotPlanningStats *planning_stats = nullptr)
       : scene_(scene), assets_(assets), modeling_(modeling),
-        requests_(std::move(requests)), label_(std::move(label)) {}
+        requests_(std::move(requests)), label_(std::move(label)),
+        planning_stats_(planning_stats) {}
 
   const std::string &label() const override { return label_; }
 
@@ -416,12 +468,12 @@ public:
                 "Unable to restore pivot mesh asset; rollback failed.");
           }
         }
-        modeling_.reset_from_scene();
+        restore_modeling_documents();
         return command_invalid_result("Unable to restore pivot mesh asset.");
       }
       undone.push_back(plan_index);
     }
-    modeling_.reset_from_scene();
+    restore_modeling_documents();
     return plans_.empty() ? command_unchanged_result()
                           : command_changed_result();
   }
@@ -434,10 +486,12 @@ private:
   CommandResult resolve_and_apply_plans() {
     plans_.clear();
     plans_.reserve(requests_.size());
+    MeshReferenceTracker mesh_references(scene_, planning_stats_);
     for (const PivotRebaseRequest &request : requests_) {
       std::string error_message;
       std::optional<PivotRebasePlan> plan = make_rebase_plan(
-          scene_, assets_, request.target, request.world_pivot, error_message);
+          scene_, assets_, mesh_references, request.target,
+          request.world_pivot, error_message);
       if (!plan.has_value()) {
         if (error_message.empty()) {
           continue;
@@ -447,11 +501,15 @@ private:
       if (!apply_plan_after(scene_, assets_, *plan)) {
         return rollback_initial_apply("Unable to apply pivot mesh asset.");
       }
+      if (plan->mesh.active && plan->mesh.clone_on_write) {
+        mesh_references.record_rebind(plan->mesh.before_mesh,
+                                      plan->mesh.after_mesh);
+      }
       plans_.push_back(std::move(*plan));
     }
 
     initialized_ = true;
-    modeling_.reset_from_scene();
+    restore_modeling_documents();
     return plans_.empty() ? command_unchanged_result()
                           : command_changed_result();
   }
@@ -465,8 +523,8 @@ private:
                                       "; rollback failed.");
       }
     }
+    restore_modeling_documents();
     plans_.clear();
-    modeling_.reset_from_scene();
     return command_invalid_result(std::move(error_message));
   }
 
@@ -483,14 +541,34 @@ private:
                 "Unable to apply pivot mesh asset; rollback failed.");
           }
         }
-        modeling_.reset_from_scene();
+        restore_modeling_documents();
         return command_invalid_result("Unable to apply pivot mesh asset.");
       }
       redone.push_back(index);
     }
-    modeling_.reset_from_scene();
+    restore_modeling_documents();
     return plans_.empty() ? command_unchanged_result()
                           : command_changed_result();
+  }
+
+  void restore_modeling_documents() {
+    std::vector<EntityId> entities;
+    entities.reserve(plans_.size());
+    for (const PivotRebasePlan &plan : plans_) {
+      if (plan.mesh.active) {
+        entities.push_back(plan.mesh.entity);
+      }
+    }
+    if (entities.empty()) {
+      return;
+    }
+    const ModelingCommandResult restored =
+        modeling_.restore_mesh_documents_from_scene(entities);
+    if (!restored.ok) {
+      // The targeted path is expected for normal pivot history. Keep a full
+      // rebuild only as a correctness fallback for stale/corrupt mappings.
+      modeling_.reset_from_scene();
+    }
   }
 
   SceneDocument &scene_;
@@ -499,6 +577,7 @@ private:
   std::vector<PivotRebaseRequest> requests_;
   std::vector<PivotRebasePlan> plans_;
   std::string label_;
+  PivotPlanningStats *planning_stats_ = nullptr;
   bool initialized_ = false;
 };
 
@@ -739,21 +818,87 @@ pivot_geometry_frame(const SceneDocument &scene, const AssetRegistry &assets,
   };
 }
 
-std::size_t entity_hierarchy_depth(const SceneDocument &scene,
-                                   EntityId entity) {
-  const std::size_t maximum_depth = scene.entities().size();
-  std::size_t depth = 0u;
-  EntityId parent = scene.parent(entity);
-  while (parent != kInvalidEntityId && depth < maximum_depth) {
-    ++depth;
-    parent = scene.parent(parent);
+using EntityHierarchyDepthIndex =
+    std::unordered_map<EntityId, std::size_t>;
+
+EntityHierarchyDepthIndex
+build_entity_hierarchy_depth_index(const SceneDocument &scene,
+                                   PivotPlanningStats *planning_stats) {
+  const std::vector<EntityId> entities = scene.entities();
+  EntityHierarchyDepthIndex depths;
+  depths.reserve(entities.size());
+  const std::size_t maximum_depth = entities.size();
+
+  std::vector<EntityId> lineage;
+  lineage.reserve(16u);
+  for (const EntityId entity : entities) {
+    if (depths.contains(entity)) {
+      continue;
+    }
+
+    lineage.clear();
+    EntityId cursor = entity;
+    while (cursor != kInvalidEntityId && !depths.contains(cursor) &&
+           lineage.size() < maximum_depth) {
+      lineage.push_back(cursor);
+      cursor = scene.parent(cursor);
+    }
+
+    if (cursor != kInvalidEntityId && !depths.contains(cursor)) {
+      for (const EntityId cyclic_entity : lineage) {
+        depths.try_emplace(cyclic_entity, maximum_depth);
+      }
+      continue;
+    }
+
+    std::size_t depth =
+        cursor == kInvalidEntityId ? 0u : depths.at(cursor) + 1u;
+    for (auto ancestor = lineage.rbegin(); ancestor != lineage.rend();
+         ++ancestor) {
+      depths.try_emplace(*ancestor, depth);
+      ++depth;
+    }
   }
-  return depth;
+
+  if (planning_stats != nullptr) {
+    ++planning_stats->hierarchy_index_build_count;
+    planning_stats->hierarchy_entity_visit_count += entities.size();
+  }
+  return depths;
+}
+
+void sort_copy_pivot_requests_parent_first(
+    const SceneDocument &scene, std::vector<PivotRebaseRequest> &requests,
+    PivotPlanningStats *planning_stats) {
+  if (requests.size() < 2u) {
+    return;
+  }
+
+  const EntityHierarchyDepthIndex depths =
+      build_entity_hierarchy_depth_index(scene, planning_stats);
+  for (PivotRebaseRequest &request : requests) {
+    const auto found = depths.find(request.target);
+    request.hierarchy_depth =
+        found == depths.end() ? std::numeric_limits<std::size_t>::max()
+                              : found->second;
+  }
+  if (planning_stats != nullptr) {
+    planning_stats->hierarchy_depth_resolution_count += requests.size();
+  }
+  std::sort(requests.begin(), requests.end(),
+            [](const PivotRebaseRequest &left,
+               const PivotRebaseRequest &right) {
+              if (left.hierarchy_depth != right.hierarchy_depth) {
+                return left.hierarchy_depth < right.hierarchy_depth;
+              }
+              return left.target < right.target;
+            });
 }
 
 CopyPivotSelection collect_copy_pivot_selection(
     const SceneDocument &scene, const AssetRegistry &assets,
-    const EditorSelectionService &selection) {
+    const EditorSelectionService &selection,
+    PivotPlanningStats *planning_stats = nullptr) {
   const EditorSelectionState state = selection.state();
   if (state.mode != ModelingSelectionMode::Object) {
     return {.message =
@@ -846,18 +991,8 @@ CopyPivotSelection collect_copy_pivot_selection(
                 "Select at least one other mesh to receive the active pivot."};
   }
 
-  std::sort(result.requests.begin(), result.requests.end(),
-            [&](const PivotRebaseRequest &left,
-                const PivotRebaseRequest &right) {
-              const std::size_t left_depth =
-                  entity_hierarchy_depth(scene, left.target);
-              const std::size_t right_depth =
-                  entity_hierarchy_depth(scene, right.target);
-              if (left_depth != right_depth) {
-                return left_depth < right_depth;
-              }
-              return left.target < right.target;
-            });
+  sort_copy_pivot_requests_parent_first(scene, result.requests,
+                                        planning_stats);
   result.ok = true;
   return result;
 }
@@ -1106,16 +1241,19 @@ CommandResult PivotToolService::apply_persistent() {
 CommandResult PivotToolService::copy_pivot_from_active(
     const EditorSelectionService &selection) {
   CopyPivotSelection copy =
-      collect_copy_pivot_selection(scene_, assets_, selection);
+      collect_copy_pivot_selection(scene_, assets_, selection,
+                                   &planning_stats_);
   if (!copy.ok) {
     return command_invalid_result(std::move(copy.message));
   }
   if (copy.requests.empty()) {
     return command_unchanged_result();
   }
+  ++planning_stats_.copy_batch_count;
+  planning_stats_.planned_target_count += copy.requests.size();
   return history_.execute(std::make_unique<PivotRebaseCommand>(
       scene_, assets_, modeling_, std::move(copy.requests),
-      "Copy Pivot From Active"));
+      "Copy Pivot From Active", &planning_stats_));
 }
 
 CommandResult
@@ -1137,6 +1275,22 @@ PivotToolService::set_snap_enabled(std::string_view setting_id, bool enabled) {
     return command_unchanged_result();
   }
   *target = enabled;
+  ++tool_settings_revision_;
+  return command_changed_result();
+}
+
+CommandResult PivotToolService::reset_settings() {
+  if (!persistent_.has_value()) {
+    return command_invalid_result("Pivot tool is not active.");
+  }
+  const PivotSnapSettings defaults;
+  if (snap_settings_.vertex == defaults.vertex &&
+      snap_settings_.edge_midpoint == defaults.edge_midpoint &&
+      snap_settings_.face_center == defaults.face_center &&
+      snap_settings_.grid == defaults.grid) {
+    return command_unchanged_result();
+  }
+  snap_settings_ = defaults;
   ++tool_settings_revision_;
   return command_changed_result();
 }
@@ -1223,8 +1377,7 @@ void PivotToolService::clear_quick_override() {
 
 bool PivotToolService::quick_edit_active() const {
   return quick_.editing && quick_.override_valid &&
-         quick_.selection_revision == scene_.selection_revision() &&
-         !scene_.selected_entities().empty();
+         quick_.selection_revision == scene_.selection_revision();
 }
 
 std::optional<EntityId> PivotToolService::active_selection_target(
@@ -1298,18 +1451,20 @@ bool PivotToolService::persistent_session_is_valid() const {
     return false;
   }
   PersistentSession &session = *persistent_;
-  const std::vector<EntityId> selected = scene_.selected_entities();
   if (scene_.selection_revision() != session.selection_revision ||
-      scene_.uuid(session.target) != session.target_uuid ||
-      scene_.parent(session.target) != session.target_parent ||
-      modeling_.selection_mode() != session.selection_mode ||
-      selected.size() != 1u || selected.front() != session.target ||
-      scene_.primary_selection() != session.target) {
+      modeling_.selection_mode() != session.selection_mode) {
     return false;
   }
-  if (scene_.revision() == session.validated_scene_revision &&
-      assets_.revision() == session.validated_asset_revision) {
+  const std::uint64_t scene_revision = scene_.revision();
+  const std::uint64_t asset_revision = assets_.revision();
+  if (scene_revision == session.validated_scene_revision &&
+      asset_revision == session.validated_asset_revision) {
     return true;
+  }
+  const EntityUuidComponent *identity = scene_.entity_uuid(session.target);
+  if (identity == nullptr || identity->uuid != session.target_uuid ||
+      scene_.parent(session.target) != session.target_parent) {
+    return false;
   }
   if (!target_is_eligible(session.target, session.kind)) {
     return false;
@@ -1328,8 +1483,8 @@ bool PivotToolService::persistent_session_is_valid() const {
       near_same_point(bounds->max, session.target_bounds_max) &&
       near_same_point(*committed_pivot, session.original_world_position);
   if (valid) {
-    session.validated_scene_revision = scene_.revision();
-    session.validated_asset_revision = assets_.revision();
+    session.validated_scene_revision = scene_revision;
+    session.validated_asset_revision = asset_revision;
   }
   return valid;
 }

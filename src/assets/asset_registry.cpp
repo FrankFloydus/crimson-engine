@@ -144,6 +144,29 @@ AssetId AssetRegistry::add_mesh(AssetId id, MeshAsset mesh) {
   return id;
 }
 
+AssetId AssetRegistry::add_mesh_payload_alias(
+    AssetId id, AssetId payload_source, std::string name,
+    bool has_stable_cpu_topology) {
+  assert_owner_thread();
+  if (id == kInvalidAssetId || meshes_.contains(id)) {
+    return kInvalidAssetId;
+  }
+  const MeshAsset *source = mesh(payload_source);
+  if (source == nullptr) {
+    return kInvalidAssetId;
+  }
+
+  MeshAsset alias = *source;
+  alias.name = std::move(name);
+  alias.has_stable_cpu_topology = has_stable_cpu_topology;
+  if (meshes_.add(id, std::move(alias)) == kInvalidAssetId) {
+    return kInvalidAssetId;
+  }
+  next_id_ = std::max(next_id_, id + 1u);
+  mark_dirty();
+  return id;
+}
+
 AssetId AssetRegistry::add_deferred_mesh(
     AssetId id, std::string name, bool has_stable_cpu_topology,
     bool has_authored_polygon_document, std::function<MeshAsset()> loader,
@@ -646,6 +669,7 @@ void AssetRegistry::intern_mesh_payload(MeshAsset &mesh) const {
   std::shared_ptr<const MeshGeometryPayload> geometry = mesh.geometry_payload();
   const std::uint64_t content_id = geometry->content_id().value;
   auto &geometry_candidates = mesh_geometry_pool_[content_id];
+  bool geometry_present = false;
   for (auto candidate = geometry_candidates.begin();
        candidate != geometry_candidates.end();) {
     std::shared_ptr<const MeshGeometryPayload> existing = candidate->lock();
@@ -657,20 +681,16 @@ void AssetRegistry::intern_mesh_payload(MeshAsset &mesh) const {
         mesh_geometry_payload_equal(*existing, *geometry)) {
       mesh.share_geometry(existing);
       geometry = std::move(existing);
+      geometry_present = true;
       break;
     }
     if (existing.get() == geometry.get()) {
+      geometry_present = true;
       break;
     }
     ++candidate;
   }
-  if (std::none_of(
-          geometry_candidates.begin(), geometry_candidates.end(),
-          [&geometry](const auto &candidate) {
-            const std::shared_ptr<const MeshGeometryPayload> existing =
-                candidate.lock();
-            return existing && existing.get() == geometry.get();
-          })) {
+  if (!geometry_present) {
     geometry_candidates.emplace_back(geometry);
   }
 
@@ -678,9 +698,13 @@ void AssetRegistry::intern_mesh_payload(MeshAsset &mesh) const {
       !mesh.authored_polygon_document) {
     return;
   }
-  auto &authored_candidates = authored_topology_pool_[content_id];
   std::shared_ptr<const quader_poly::Document> authored =
       mesh.authored_polygon_document;
+  const std::uint64_t authored_content_id =
+      mesh_asset_payload_detail::polygon_document_hash(*authored);
+  auto &authored_candidates =
+      authored_topology_pool_[authored_content_id];
+  bool authored_present = false;
   for (auto candidate = authored_candidates.begin();
        candidate != authored_candidates.end();) {
     std::shared_ptr<const quader_poly::Document> existing = candidate->lock();
@@ -689,23 +713,19 @@ void AssetRegistry::intern_mesh_payload(MeshAsset &mesh) const {
       continue;
     }
     if (existing.get() == authored.get()) {
+      authored_present = true;
       break;
     }
     if (mesh_asset_payload_detail::same_polygon_document(*existing,
                                                          *authored)) {
       mesh.share_authored_polygon_document(existing);
       authored = std::move(existing);
+      authored_present = true;
       break;
     }
     ++candidate;
   }
-  if (std::none_of(
-          authored_candidates.begin(), authored_candidates.end(),
-          [&authored](const auto &candidate) {
-            const std::shared_ptr<const quader_poly::Document> existing =
-                candidate.lock();
-            return existing && existing.get() == authored.get();
-          })) {
+  if (!authored_present) {
     authored_candidates.emplace_back(authored);
   }
 }

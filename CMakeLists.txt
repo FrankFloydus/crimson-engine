@@ -802,7 +802,7 @@ add_library(quader_ui STATIC
     src/ui/qt_settings_dialog.cpp
     src/ui/qt_settings_controller.cpp
     src/ui/qt_tool_settings_number_slider.cpp
-    src/ui/qt_tool_settings_window.cpp
+    src/ui/qt_tool_settings_panel.cpp
     src/ui/qt_viewport_context_menu.cpp
     src/ui/qt_viewport_delete_popup.cpp
     src/ui/qt_viewport_fly_navigation_hud.cpp

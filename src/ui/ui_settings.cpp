@@ -23,8 +23,13 @@ bool parse_bool(std::string value, bool fallback) {
   return parsed.value_or(fallback);
 }
 
-bool panel_settings_key_matches(UIPanelId id, std::string_view key) {
-  return key == ui_panel_stable_id(id) || key == ui_panel_key(id);
+std::optional<UIPanelId> panel_settings_id(std::string_view key) {
+  for (UIPanelId id : kUiDockPanelIds) {
+    if (key == ui_panel_stable_id(id) || key == ui_panel_key(id)) {
+      return id;
+    }
+  }
+  return std::nullopt;
 }
 
 } // namespace
@@ -54,18 +59,10 @@ UISettings UISettings::load(const std::filesystem::path& path) {
 
       const std::string key = QStr::trim_ascii_whitespace(split->before);
       const std::string value = QStr::trim_ascii_whitespace(split->after);
-      if (panel_settings_key_matches(UIPanelId::Outliner, key)) {
-        settings.outliner_visible_ =
-            parse_bool(value, settings.outliner_visible_);
-      } else if (panel_settings_key_matches(UIPanelId::Inspector, key)) {
-        settings.inspector_visible_ =
-            parse_bool(value, settings.inspector_visible_);
-      } else if (panel_settings_key_matches(UIPanelId::Console, key)) {
-        settings.console_visible_ =
-            parse_bool(value, settings.console_visible_);
-      } else if (panel_settings_key_matches(UIPanelId::Layers, key)) {
-        settings.layers_visible_ =
-            parse_bool(value, settings.layers_visible_);
+      if (const std::optional<UIPanelId> panel_id = panel_settings_id(key)) {
+        settings.set_panel_visible(
+            *panel_id,
+            parse_bool(value, settings.is_panel_visible(*panel_id)));
       } else if (key == "NavigationGizmo") {
         settings.navigation_gizmo_visible_ =
             parse_bool(value, settings.navigation_gizmo_visible_);
@@ -99,14 +96,10 @@ bool UISettings::save(const std::filesystem::path& path) const {
     }
 
     file << "[Panels]\n";
-    file << ui_panel_stable_id(UIPanelId::Outliner) << '='
-         << (outliner_visible_ ? "true" : "false") << '\n';
-    file << ui_panel_stable_id(UIPanelId::Inspector) << '='
-         << (inspector_visible_ ? "true" : "false") << '\n';
-    file << ui_panel_stable_id(UIPanelId::Console) << '='
-         << (console_visible_ ? "true" : "false") << '\n';
-    file << ui_panel_stable_id(UIPanelId::Layers) << '='
-         << (layers_visible_ ? "true" : "false") << '\n';
+    for (UIPanelId id : kUiDockPanelIds) {
+      file << ui_panel_stable_id(id) << '='
+           << (is_panel_visible(id) ? "true" : "false") << '\n';
+    }
     file << "\n[Show]\n";
     file << "NavigationGizmo=" << (navigation_gizmo_visible_ ? "true" : "false")
          << '\n';
@@ -128,6 +121,10 @@ bool UISettings::is_panel_visible(UIPanelId id) const {
     return console_visible_;
   case UIPanelId::Layers:
     return layers_visible_;
+  case UIPanelId::ToolSettings:
+    return tool_settings_visible_;
+  case UIPanelId::Count:
+    break;
   }
   return true;
 }
@@ -147,6 +144,11 @@ void UISettings::set_panel_visible(UIPanelId id, bool visible) {
     break;
   case UIPanelId::Layers:
     layers_visible_ = visible;
+    break;
+  case UIPanelId::ToolSettings:
+    tool_settings_visible_ = visible;
+    break;
+  case UIPanelId::Count:
     break;
   }
 }

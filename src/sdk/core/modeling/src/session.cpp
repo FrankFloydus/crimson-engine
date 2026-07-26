@@ -193,6 +193,11 @@ struct TopologyIdentityHighWater {
          static_cast<std::uint64_t>(id.index);
 }
 
+[[nodiscard]] constexpr std::uint64_t vertex_id_key(VertexId id) noexcept {
+  return (static_cast<std::uint64_t>(id.generation) << 32U) |
+         static_cast<std::uint64_t>(id.index);
+}
+
 [[nodiscard]] std::optional<SelectionMode>
 selection_mode_for_kind(SelectionKind kind) {
   switch (kind) {
@@ -484,20 +489,26 @@ build_semantic_overlay_payload(const PolygonDocument &document) {
   }
 
   const AuthoredPolygonPayload &authored = authored_result.value();
+  std::unordered_map<std::uint64_t, std::size_t> position_indices;
+  position_indices.reserve(authored.vertices.size());
+  for (std::size_t index = 0; index < authored.vertices.size(); ++index) {
+    position_indices.emplace(vertex_id_key(authored.vertices[index]), index);
+  }
   auto position_for = [&](VertexId vertex_id) -> const Vec3 * {
-    for (std::size_t index = 0; index < authored.vertices.size(); ++index) {
-      if (authored.vertices[index] == vertex_id) {
-        return &authored.positions[index];
-      }
+    const auto found = position_indices.find(vertex_id_key(vertex_id));
+    if (found != position_indices.end()) {
+      return &authored.positions[found->second];
     }
     return nullptr;
   };
 
   SemanticOverlayPayload overlay;
   overlay.selection_revision = document.selection_revision();
+  overlay.records.reserve(authored.faces.size());
   for (const AuthoredPolygonFacePayload &face : authored.faces) {
     SemanticOverlayRecord record;
     record.kind = SemanticOverlayKind::Wire;
+    record.points.reserve(face.vertices.size() + 1U);
     for (VertexId vertex_id : face.vertices) {
       if (const Vec3 *position = position_for(vertex_id)) {
         record.points.push_back(*position);
@@ -988,6 +999,25 @@ ModelingSession &
 ModelingSession::operator=(ModelingSession &&other) noexcept = default;
 
 ModelingSession::~ModelingSession() = default;
+
+ModelingSession ModelingSession::current_workspace_checkpoint() const {
+  ModelingSession checkpoint;
+  // Assign durable fields directly: copying ModelingSessionImpl and clearing
+  // its stacks afterward would already have paid the accumulated-history cost.
+  checkpoint.impl_->state = impl_->state;
+  checkpoint.impl_->clipboard = impl_->clipboard;
+  checkpoint.impl_->object_changes = impl_->object_changes;
+  checkpoint.impl_->object_change_index = impl_->object_change_index;
+  checkpoint.impl_->content_revision = impl_->content_revision;
+  checkpoint.impl_->selection_revision = impl_->selection_revision;
+  checkpoint.impl_->preview_payload_revision =
+      impl_->preview_payload_revision;
+  checkpoint.impl_->next_preview_index = impl_->next_preview_index;
+  checkpoint.impl_->topology_identity_high_water =
+      impl_->topology_identity_high_water;
+  checkpoint.impl_->next_object_index = impl_->next_object_index;
+  return checkpoint;
+}
 
 Result<ObjectId> ModelingSession::add_document(PolygonDocument document,
                                                std::string name) {
@@ -1866,9 +1896,119 @@ void ModelingSession::reset_workspace_preserving_clipboard() {
   impl_->clipboard = std::move(clipboard);
 }
 
+Result<std::vector<ObjectId>>
+ModelingSession::replace_workspace_preserving_clipboard(
+    std::vector<SessionWorkspaceDocument> documents) {
+  auto replacement = std::make_unique<ModelingSessionImpl>();
+  replacement->state.objects.reserve(documents.size());
+
+  std::vector<ObjectId> object_ids;
+  object_ids.reserve(documents.size());
+  for (SessionWorkspaceDocument &document : documents) {
+    Result<ObjectId> allocated = replacement->allocate_object_id();
+    if (!allocated.ok()) {
+      return Result<std::vector<ObjectId>>::failure(allocated.error());
+    }
+    const ObjectId object_id = allocated.value();
+    replacement->state.objects.push_back({
+        .id = object_id,
+        .name = std::move(document.name),
+        .document = std::move(document.document),
+        .selected = document.selected,
+    });
+    replacement->record_topology_identity(
+        object_id, replacement->state.objects.back().document);
+    if (document.selected && !replacement->state.active_object.valid()) {
+      replacement->state.active_object = object_id;
+    }
+    object_ids.push_back(object_id);
+  }
+
+  const SessionState empty;
+  replacement->publish_state_transition(empty);
+  replacement->clipboard = std::move(impl_->clipboard);
+  impl_ = std::move(replacement);
+  return Result<std::vector<ObjectId>>::success(std::move(object_ids));
+}
+
+Result<OperationResult>
+ModelingSession::restore_documents_as_history_transition(
+    std::vector<SessionDocumentHistoryRestore> documents) {
+  if (impl_->batch_transaction_active) {
+    impl_->batch_transaction_violated = true;
+    return Result<OperationResult>::failure(make_error(
+        ErrorCode::InvalidArgument,
+        "A document history restore cannot run inside an SDK batch."));
+  }
+  if (impl_->preview.active) {
+    return active_preview_error();
+  }
+  if (documents.empty()) {
+    return Result<OperationResult>::success(
+        session_result(false, "Documents unchanged."));
+  }
+
+  std::unordered_map<std::uint64_t, std::size_t> object_index;
+  object_index.reserve(impl_->state.objects.size());
+  for (std::size_t index = 0; index < impl_->state.objects.size(); ++index) {
+    object_index.emplace(object_id_key(impl_->state.objects[index].id), index);
+  }
+
+  std::unordered_set<std::uint64_t> restored_ids;
+  restored_ids.reserve(documents.size());
+  for (const SessionDocumentHistoryRestore &restore : documents) {
+    const std::uint64_t key = object_id_key(restore.object);
+    if (!restore.object.valid() || !object_index.contains(key)) {
+      return Result<OperationResult>::failure(
+          make_error(ErrorCode::InvalidId, "Object ID is not live."));
+    }
+    if (!restored_ids.emplace(key).second) {
+      return Result<OperationResult>::failure(make_error(
+          ErrorCode::InvalidArgument,
+          "A document history restore contains a duplicate object."));
+    }
+    Result<OperationResult> identity =
+        impl_->validate_commit_identity(restore.object, restore.document);
+    if (!identity.ok()) {
+      return identity;
+    }
+  }
+
+  const auto merge_dirty = [](DirtyFlags &destination,
+                              const DirtyFlags &source) {
+    destination.topology = destination.topology || source.topology;
+    destination.geometry = destination.geometry || source.geometry;
+    destination.selection = destination.selection || source.selection;
+    destination.materials = destination.materials || source.materials;
+    destination.overlays = destination.overlays || source.overlays;
+  };
+
+  OperationResult result =
+      session_result(true, "Documents restored from host history.");
+  std::vector<PendingSessionObjectChange> pending;
+  pending.reserve(documents.size());
+  for (SessionDocumentHistoryRestore &restore : documents) {
+    SessionObject &object = impl_->state.objects[
+        object_index.at(object_id_key(restore.object))];
+    object.document = std::move(restore.document);
+    impl_->record_topology_identity(restore.object, object.document);
+    merge_dirty(result.dirty, restore.dirty);
+    pending.push_back({
+        .id = object.id,
+        .name = object.name,
+        .dirty = restore.dirty,
+    });
+  }
+
+  impl_->undo_stack.clear();
+  impl_->redo_stack.clear();
+  impl_->publish_pending_changes(pending);
+  return Result<OperationResult>::success(std::move(result));
+}
+
 Result<OperationResult>
 ModelingSession::combine_objects(std::span<const ObjectId> object_ids,
-                                  std::string name) {
+                                 std::string name) {
   if (impl_->batch_transaction_active) {
     impl_->batch_transaction_violated = true;
     return Result<OperationResult>::failure(make_error(

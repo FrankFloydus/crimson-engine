@@ -110,6 +110,7 @@ public:
       std::uint32_t binding_count = 0u;
     };
 
+    /// Identifies the contiguous binding ranges owned by one transform source.
     struct TransformSourceBindingSpan {
       std::uint32_t first_range = 0u;
       std::uint32_t range_count = 0u;

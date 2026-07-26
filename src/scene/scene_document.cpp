@@ -23,6 +23,15 @@
 
 namespace quader {
 
+const SceneHierarchyProjectionRecord *
+SceneHierarchyProjectionSnapshot::find(EntityId entity) const noexcept {
+  const auto found = index_by_entity_.find(entity);
+  if (found == index_by_entity_.end() || found->second >= records_.size()) {
+    return nullptr;
+  }
+  return &records_[found->second];
+}
+
 SceneProjectionCheckpoint SceneDocument::capture_projection_checkpoint() const {
   SceneProjectionCheckpoint checkpoint;
   checkpoint.valid_ = true;
@@ -56,16 +65,8 @@ bool SceneDocument::restore_projection_checkpoint(
     }
   }
 
-  clear_selection();
-  for (const EntityId entity : checkpoint.selected_entities_) {
-    if (exists(entity)) {
-      (void)set_selected(entity, true);
-    }
-  }
-  if (checkpoint.active_selection_ != kInvalidEntityId &&
-      exists(checkpoint.active_selection_)) {
-    (void)set_active_selection(checkpoint.active_selection_);
-  }
+  (void)replace_selection(checkpoint.selected_entities_,
+                          checkpoint.active_selection_);
 
   next_id_ = checkpoint.next_id_;
   next_editor_object_id_ = checkpoint.next_editor_object_id_;
@@ -239,23 +240,33 @@ bool is_supported_instance_member_subtree(const SceneDocument &scene,
 bool destruction_preserves_instance_graph(
     const SceneDocument &scene,
     const std::unordered_set<EntityId> &destroyed_entities) {
-  for (const EntityId entity : scene.entities()) {
+  const std::vector<EntityId> entities = scene.entities();
+  std::unordered_map<EntityId, std::size_t> occurrence_counts;
+  occurrence_counts.reserve(entities.size());
+  for (const EntityId entity : entities) {
+    const InstanceOccurrenceComponent *occurrence =
+        scene.instance_occurrence(entity);
+    if (occurrence == nullptr) {
+      continue;
+    }
+    ++occurrence_counts[occurrence->definition];
+    if (destroyed_entities.contains(occurrence->definition) &&
+        !destroyed_entities.contains(entity)) {
+      return false;
+    }
+  }
+
+  for (const EntityId entity : entities) {
     if (!scene.is_instance_definition_entity(entity)) {
       continue;
     }
     const bool definition_destroyed = destroyed_entities.contains(entity);
     if (definition_destroyed) {
-      for (const EntityId occurrence :
-           scene.instance_occurrences_for_definition(entity)) {
-        if (!destroyed_entities.contains(occurrence)) {
-          return false;
-        }
-      }
       continue;
     }
 
     const std::vector<EntityId> members = scene.children(entity);
-    if (!scene.instance_occurrences_for_definition(entity).empty() &&
+    if (occurrence_counts.contains(entity) &&
         std::none_of(members.begin(), members.end(),
                      [&](EntityId member) {
                        return !destroyed_entities.contains(member);
@@ -356,65 +367,7 @@ EntityId SceneDocument::create_empty(std::string name,
 }
 
 bool SceneDocument::destroy_entity(EntityId id) {
-  if (is_scene_root(id)) {
-    return false;
-  }
-  const std::vector<EntityId> to_destroy = descendants(id, true);
-  if (to_destroy.empty()) {
-    return false;
-  }
-
-  const std::unordered_set<EntityId> destroy_set(to_destroy.begin(),
-                                                  to_destroy.end());
-  if (!destruction_preserves_instance_graph(*this, destroy_set)) {
-    return false;
-  }
-
-  const bool active_destroyed =
-      std::find(to_destroy.begin(), to_destroy.end(), active_selection_) !=
-      to_destroy.end();
-  const bool layer_membership_destroyed =
-      std::any_of(to_destroy.begin(), to_destroy.end(),
-                  [this](EntityId entity) {
-                    return entity_layer(entity) != kInvalidSceneLayerId;
-                  });
-  for (auto it = to_destroy.rbegin(); it != to_destroy.rend(); ++it) {
-    const EntityId entity_id = *it;
-    const entt::entity entity = require_entity(entity_id);
-    if (entity == entt::null) {
-      continue;
-    }
-    if (HierarchyComponent *component = mutable_hierarchy(entity_id)) {
-      if (HierarchyComponent *parent_hierarchy =
-              mutable_hierarchy(component->parent)) {
-        remove_child(parent_hierarchy->children, entity_id);
-      }
-    }
-    if (const EditorObjectIdentityComponent *identity =
-            editor_object_identity(entity_id)) {
-      entity_by_editor_object_id_.erase(identity->id);
-    }
-    if (const EntityUuidComponent *identity = entity_uuid(entity_id)) {
-      entity_by_uuid_.erase(identity->uuid);
-    }
-    registry_.destroy(entity);
-    entities_.erase(entity_id);
-    ids_by_entity_.erase(entity_key(entity));
-  }
-
-  if (active_destroyed || !is_selected(active_selection_)) {
-    active_selection_ = first_selected_entity();
-  }
-  ++selection_revision_;
-  ++visibility_revision_;
-  ++transform_revision_;
-  ++mesh_binding_revision_;
-  ++render_component_revision_;
-  if (layer_membership_destroyed) {
-    ++layer_revision_;
-  }
-  mark_dirty();
-  return true;
+  return destroy_entities(std::span<const EntityId>(&id, 1u));
 }
 
 bool SceneDocument::destroy_entities(std::span<const EntityId> ids) {
@@ -452,17 +405,30 @@ bool SceneDocument::destroy_entities(std::span<const EntityId> ids) {
                   [this](EntityId entity) {
                     return entity_layer(entity) != kInvalidSceneLayerId;
                   });
+
+  std::unordered_set<EntityId> surviving_parents;
+  surviving_parents.reserve(to_destroy.size());
+  for (const EntityId entity_id : to_destroy) {
+    const EntityId parent_id = parent(entity_id);
+    if (parent_id != kInvalidEntityId &&
+        !destroy_set.contains(parent_id)) {
+      surviving_parents.insert(parent_id);
+    }
+  }
+  for (const EntityId parent_id : surviving_parents) {
+    if (HierarchyComponent *parent_hierarchy =
+            mutable_hierarchy(parent_id)) {
+      std::erase_if(parent_hierarchy->children, [&](EntityId child) {
+        return destroy_set.contains(child);
+      });
+    }
+  }
+
   for (auto it = to_destroy.rbegin(); it != to_destroy.rend(); ++it) {
     const EntityId entity_id = *it;
     const entt::entity entity = require_entity(entity_id);
     if (entity == entt::null) {
       continue;
-    }
-    if (HierarchyComponent *component = mutable_hierarchy(entity_id)) {
-      if (HierarchyComponent *parent_hierarchy =
-              mutable_hierarchy(component->parent)) {
-        remove_child(parent_hierarchy->children, entity_id);
-      }
     }
     if (const EditorObjectIdentityComponent *identity =
             editor_object_identity(entity_id)) {
@@ -676,22 +642,51 @@ bool SceneDocument::set_active_selection(EntityId id) {
   return true;
 }
 
-void SceneDocument::clear_selection() {
-  bool changed = false;
-  for (auto [entity, selection] : registry_.view<SelectionComponent>().each()) {
-    if (selection.selected) {
-      selection.selected = false;
+bool SceneDocument::replace_selection(std::span<const EntityId> selected,
+                                      EntityId active) {
+  std::unordered_set<EntityId> desired;
+  desired.reserve(selected.size());
+  EntityId fallback_active = kInvalidEntityId;
+  for (const EntityId entity : selected) {
+    if (entity != kInvalidEntityId && exists(entity) &&
+        desired.insert(entity).second) {
+      fallback_active = entity;
+    }
+  }
+  const EntityId resolved_active =
+      active != kInvalidEntityId && desired.contains(active)
+          ? active
+          : fallback_active;
+
+  bool changed = active_selection_ != resolved_active;
+  const std::vector<EntityId> current = selected_entities();
+  for (const EntityId entity : current) {
+    if (desired.contains(entity)) {
+      continue;
+    }
+    if (SelectionComponent *component = mutable_selection(entity)) {
+      component->selected = false;
       changed = true;
     }
   }
-  if (active_selection_ != kInvalidEntityId) {
-    active_selection_ = kInvalidEntityId;
-    changed = true;
+  for (const EntityId entity : desired) {
+    SelectionComponent *component = mutable_selection(entity);
+    if (component != nullptr && !component->selected) {
+      component->selected = true;
+      changed = true;
+    }
   }
+
+  active_selection_ = resolved_active;
   if (changed) {
     ++selection_revision_;
     mark_transient_dirty();
   }
+  return true;
+}
+
+void SceneDocument::clear_selection() {
+  (void)replace_selection({}, kInvalidEntityId);
 }
 
 bool SceneDocument::set_parent(EntityId child, EntityId new_parent,
@@ -808,6 +803,130 @@ bool SceneDocument::set_parent(EntityId child, EntityId new_parent,
     ++layer_revision_;
     ++render_component_revision_;
   }
+  mark_dirty();
+  return true;
+}
+
+bool SceneDocument::set_parents(
+    std::span<const SceneParentAssignment> assignments) {
+  if (assignments.empty()) {
+    return true;
+  }
+  std::unordered_map<EntityId, EntityId> replacements;
+  replacements.reserve(assignments.size());
+  for (const SceneParentAssignment &assignment : assignments) {
+    if (assignment.child == kInvalidEntityId ||
+        !exists(assignment.child) ||
+        (assignment.parent != kInvalidEntityId &&
+         !exists(assignment.parent)) ||
+        !replacements.emplace(assignment.child, assignment.parent).second) {
+      return false;
+    }
+  }
+
+  const std::vector<EntityId> tree_order = entity_tree_order();
+  std::vector<SceneParentAssignment> hierarchy;
+  hierarchy.reserve(tree_order.size());
+  for (const EntityId entity : tree_order) {
+    const auto replacement = replacements.find(entity);
+    hierarchy.push_back(SceneParentAssignment{
+        .child = entity,
+        .parent = replacement == replacements.end()
+                      ? parent(entity)
+                      : replacement->second,
+    });
+  }
+  return replace_hierarchy(hierarchy);
+}
+
+bool SceneDocument::replace_hierarchy(
+    std::span<const SceneParentAssignment> assignments) {
+  if (assignments.size() != entities_.size()) {
+    return false;
+  }
+
+  std::unordered_map<EntityId, EntityId> parents;
+  parents.reserve(assignments.size());
+  std::unordered_map<EntityId, std::vector<EntityId>> children;
+  children.reserve(assignments.size());
+
+  for (const SceneParentAssignment &assignment : assignments) {
+    if (assignment.child == kInvalidEntityId ||
+        require_entity(assignment.child) == entt::null ||
+        !parents.emplace(assignment.child, assignment.parent).second ||
+        assignment.child == assignment.parent ||
+        (assignment.parent != kInvalidEntityId &&
+         require_entity(assignment.parent) == entt::null) ||
+        (is_scene_root(assignment.child) &&
+         assignment.parent != kInvalidEntityId) ||
+        instance_definition(assignment.child) != nullptr ||
+        instance_occurrence(assignment.child) != nullptr) {
+      return false;
+    }
+    if (assignment.parent != kInvalidEntityId) {
+      children[assignment.parent].push_back(assignment.child);
+    }
+  }
+  if (parents.size() != entities_.size()) {
+    return false;
+  }
+
+  std::unordered_map<EntityId, std::uint8_t> visit_state;
+  visit_state.reserve(assignments.size());
+  std::vector<EntityId> chain;
+  chain.reserve(32u);
+  for (const SceneParentAssignment &assignment : assignments) {
+    EntityId current = assignment.child;
+    chain.clear();
+    while (current != kInvalidEntityId) {
+      std::uint8_t &state = visit_state[current];
+      if (state == 2u) {
+        break;
+      }
+      if (state == 1u) {
+        return false;
+      }
+      state = 1u;
+      chain.push_back(current);
+      current = parents.at(current);
+    }
+    for (const EntityId entity : chain) {
+      visit_state[entity] = 2u;
+    }
+  }
+
+  bool changed = false;
+  for (const SceneParentAssignment &assignment : assignments) {
+    const HierarchyComponent *current = hierarchy(assignment.child);
+    const auto child_it = children.find(assignment.child);
+    const bool children_changed =
+        current == nullptr ||
+        (child_it == children.end() ? !current->children.empty()
+                                    : current->children != child_it->second);
+    if (current == nullptr || current->parent != assignment.parent ||
+        children_changed) {
+      changed = true;
+      break;
+    }
+  }
+  if (!changed) {
+    return true;
+  }
+
+  for (const SceneParentAssignment &assignment : assignments) {
+    HierarchyComponent *component = mutable_hierarchy(assignment.child);
+    if (component == nullptr) {
+      return false;
+    }
+    component->parent = assignment.parent;
+    const auto child_it = children.find(assignment.child);
+    component->children =
+        child_it == children.end() ? std::vector<EntityId>{}
+                                   : std::move(child_it->second);
+  }
+
+  ++visibility_revision_;
+  ++transform_revision_;
   mark_dirty();
   return true;
 }
@@ -1253,8 +1372,20 @@ bool SceneDocument::replace_layer_state(SceneLayerState state) {
 
   std::unordered_set<EntityId> assigned_entities;
   assigned_entities.reserve(state.assignments.size());
+  const std::vector<EntityId> scene_entities = entity_tree_order();
+  std::unordered_map<EntityId, bool> inside_instance_definition;
+  inside_instance_definition.reserve(scene_entities.size());
+  for (const EntityId entity : scene_entities) {
+    const EntityId parent_id = parent(entity);
+    inside_instance_definition[entity] =
+        parent_id != kInvalidEntityId &&
+        (is_instance_definition_entity(parent_id) ||
+         inside_instance_definition[parent_id]);
+  }
   for (const SceneLayerAssignment &assignment : state.assignments) {
-    if (!is_layer_eligible(assignment.entity) ||
+    if (!exists(assignment.entity) || is_scene_root(assignment.entity) ||
+        is_instance_definition_entity(assignment.entity) ||
+        inside_instance_definition[assignment.entity] ||
         !layer_ids.contains(assignment.layer_id) ||
         !assigned_entities.insert(assignment.entity).second) {
       return false;
@@ -1266,12 +1397,35 @@ bool SceneDocument::replace_layer_state(SceneLayerState state) {
     return true;
   }
 
-  const std::vector<EntityId> scene_entities = entities();
-  std::vector<bool> visible_before;
-  visible_before.reserve(scene_entities.size());
-  for (const EntityId entity : scene_entities) {
-    visible_before.push_back(is_effectively_visible(entity));
-  }
+  const auto effective_visibility =
+      [&](std::span<const EntityId> tree_order) {
+        std::vector<bool> result;
+        result.reserve(tree_order.size());
+        std::unordered_map<EntityId, bool> visible_by_entity;
+        visible_by_entity.reserve(tree_order.size());
+        for (const EntityId entity : tree_order) {
+          const EntityId parent_id = parent(entity);
+          bool visible =
+              parent_id == kInvalidEntityId ||
+              visible_by_entity[parent_id];
+          if (const VisibilityComponent *component = visibility(entity);
+              component != nullptr && !component->visible) {
+            visible = false;
+          }
+          const SceneLayerId layer_id = entity_layer(entity);
+          if (layer_id != kInvalidSceneLayerId) {
+            const SceneLayerRecord *record = layer(layer_id);
+            if (record == nullptr || !record->visible) {
+              visible = false;
+            }
+          }
+          visible_by_entity.emplace(entity, visible);
+          result.push_back(visible);
+        }
+        return result;
+      };
+  const std::vector<bool> visible_before =
+      effective_visibility(scene_entities);
 
   layers_.clear();
   for (SceneLayerRecord &record : state.layers) {
@@ -1295,14 +1449,9 @@ bool SceneDocument::replace_layer_state(SceneLayerState state) {
         handle, SceneLayerMembershipComponent{.layer_id = assigned->second});
   }
 
-  bool visibility_changed = false;
-  for (std::size_t index = 0; index < scene_entities.size(); ++index) {
-    if (visible_before[index] !=
-        is_effectively_visible(scene_entities[index])) {
-      visibility_changed = true;
-      break;
-    }
-  }
+  const std::vector<bool> visible_after =
+      effective_visibility(scene_entities);
+  const bool visibility_changed = visible_before != visible_after;
   if (visibility_changed) {
     ++visibility_revision_;
   }
@@ -1388,21 +1537,35 @@ bool SceneDocument::is_layer_eligible(EntityId entity) const {
 
 std::vector<EntityId> SceneDocument::layer_eligible_entities(
     std::span<const EntityId> roots) const {
-  std::unordered_set<EntityId> candidates;
+  std::unordered_set<EntityId> requested_roots;
+  requested_roots.reserve(roots.size());
   for (const EntityId root : roots) {
-    if (!exists(root)) {
-      continue;
-    }
-    for (const EntityId entity : descendants(root, true)) {
-      if (is_layer_eligible(entity)) {
-        candidates.insert(entity);
-      }
+    if (exists(root)) {
+      requested_roots.insert(root);
     }
   }
+
   std::vector<EntityId> eligible;
-  eligible.reserve(candidates.size());
-  for (const EntityId entity : entity_tree_order()) {
-    if (candidates.contains(entity)) {
+  std::unordered_map<EntityId, bool> inside_requested_subtree;
+  std::unordered_map<EntityId, bool> inside_instance_definition;
+  const std::vector<EntityId> tree_order = entity_tree_order();
+  eligible.reserve(tree_order.size());
+  inside_requested_subtree.reserve(tree_order.size());
+  inside_instance_definition.reserve(tree_order.size());
+  for (const EntityId entity : tree_order) {
+    const EntityId parent_id = parent(entity);
+    const bool requested =
+        requested_roots.contains(entity) ||
+        (parent_id != kInvalidEntityId &&
+         inside_requested_subtree[parent_id]);
+    inside_requested_subtree.emplace(entity, requested);
+    const bool definition_member =
+        parent_id != kInvalidEntityId &&
+        (is_instance_definition_entity(parent_id) ||
+         inside_instance_definition[parent_id]);
+    inside_instance_definition.emplace(entity, definition_member);
+    if (requested && !is_scene_root(entity) &&
+        !is_instance_definition_entity(entity) && !definition_member) {
       eligible.push_back(entity);
     }
   }
@@ -1621,13 +1784,30 @@ std::vector<EntityId> SceneDocument::descendants(EntityId id,
   }
 
   std::vector<EntityId> result;
+  result.reserve(16u);
   if (include_self) {
     result.push_back(id);
   }
-  for (const EntityId child : children(id)) {
-    std::vector<EntityId> child_descendants = descendants(child, true);
-    result.insert(result.end(), child_descendants.begin(),
-                  child_descendants.end());
+
+  std::vector<EntityId> pending;
+  if (const HierarchyComponent *root_hierarchy = hierarchy(id)) {
+    pending.reserve(root_hierarchy->children.size());
+    for (auto child = root_hierarchy->children.rbegin();
+         child != root_hierarchy->children.rend(); ++child) {
+      pending.push_back(*child);
+    }
+  }
+
+  while (!pending.empty()) {
+    const EntityId entity = pending.back();
+    pending.pop_back();
+    result.push_back(entity);
+    if (const HierarchyComponent *component = hierarchy(entity)) {
+      for (auto child = component->children.rbegin();
+           child != component->children.rend(); ++child) {
+        pending.push_back(*child);
+      }
+    }
   }
   return result;
 }
@@ -1635,20 +1815,101 @@ std::vector<EntityId> SceneDocument::descendants(EntityId id,
 std::vector<EntityId> SceneDocument::entity_tree_order() const {
   std::vector<EntityId> ids;
   ids.reserve(entities_.size());
-  for (const EntityId root : root_entities()) {
-    append_tree_order(root, ids);
+  const std::vector<EntityId> roots = root_entities();
+  std::vector<EntityId> pending;
+  pending.reserve(entities_.size());
+  for (auto root = roots.rbegin(); root != roots.rend(); ++root) {
+    pending.push_back(*root);
+  }
+  while (!pending.empty()) {
+    const EntityId entity = pending.back();
+    pending.pop_back();
+    ids.push_back(entity);
+    if (const HierarchyComponent *component = hierarchy(entity)) {
+      for (auto child = component->children.rbegin();
+           child != component->children.rend(); ++child) {
+        pending.push_back(*child);
+      }
+    }
   }
   return ids;
+}
+
+SceneHierarchyProjectionSnapshot
+SceneDocument::hierarchy_projection_snapshot(
+    SceneHierarchyProjectionWorkStats *work_stats) const {
+  SceneHierarchyProjectionWorkStats work;
+  SceneHierarchyProjectionSnapshot snapshot;
+  const std::vector<EntityId> tree_order = entity_tree_order();
+  snapshot.records_.reserve(tree_order.size());
+  snapshot.index_by_entity_.reserve(tree_order.size());
+
+  for (const EntityId entity : tree_order) {
+    ++work.entity_visit_count;
+    SceneHierarchyProjectionRecord record;
+    record.entity = entity;
+    record.parent = parent(entity);
+    record.world_transform = local_transform_matrix(entity);
+
+    const SceneHierarchyProjectionRecord *parent_state = nullptr;
+    if (record.parent != kInvalidEntityId) {
+      ++work.parent_state_lookup_count;
+      parent_state = snapshot.find(record.parent);
+    }
+    if (parent_state != nullptr) {
+      record.depth = parent_state->depth + 1u;
+      record.world_transform = scene_transform_multiply(
+          parent_state->world_transform, record.world_transform);
+      ++work.world_transform_multiply_count;
+      record.effectively_visible = parent_state->effectively_visible;
+      record.effectively_locked = parent_state->effectively_locked;
+      record.containing_instance_definition =
+          parent_state->containing_instance_definition;
+    }
+
+    if (const VisibilityComponent *component = visibility(entity);
+        component != nullptr && !component->visible) {
+      record.effectively_visible = false;
+    }
+    if (const LockComponent *component = lock(entity);
+        component != nullptr && component->locked) {
+      record.effectively_locked = true;
+    }
+    const SceneLayerId layer_id = entity_layer(entity);
+    if (layer_id != kInvalidSceneLayerId) {
+      const SceneLayerRecord *layer_record = layer(layer_id);
+      if (layer_record == nullptr || !layer_record->visible) {
+        record.effectively_visible = false;
+      }
+      if (layer_record == nullptr || layer_record->locked) {
+        record.effectively_locked = true;
+      }
+    }
+    if (is_instance_definition_entity(entity)) {
+      record.containing_instance_definition = entity;
+    }
+
+    snapshot.index_by_entity_.emplace(entity, snapshot.records_.size());
+    snapshot.records_.push_back(std::move(record));
+  }
+
+  if (work_stats != nullptr) {
+    *work_stats = work;
+  }
+  return snapshot;
 }
 
 std::vector<EntityRecord> SceneDocument::entity_records() const {
   std::vector<EntityRecord> records;
   const std::vector<EntityId> ids = entities();
+  const SceneHierarchyProjectionSnapshot projection =
+      hierarchy_projection_snapshot();
   const EntityId active = primary_selection();
   records.reserve(ids.size());
 
   for (const EntityId id : ids) {
-    records.push_back(make_entity_record(id, 0, active));
+    records.push_back(
+        make_entity_record(id, 0, active, projection.find(id)));
   }
 
   return records;
@@ -1657,9 +1918,15 @@ std::vector<EntityRecord> SceneDocument::entity_records() const {
 std::vector<EntityRecord> SceneDocument::entity_records_tree_order() const {
   std::vector<EntityRecord> records;
   records.reserve(entities_.size());
+  const SceneHierarchyProjectionSnapshot projection =
+      hierarchy_projection_snapshot();
   const EntityId active = primary_selection();
-  for (const EntityId root : root_entities()) {
-    append_entity_records(root, 0, active, records);
+  for (const SceneHierarchyProjectionRecord &state : projection.records()) {
+    if (state.containing_instance_definition != kInvalidEntityId) {
+      continue;
+    }
+    records.push_back(make_entity_record(
+        state.entity, static_cast<int>(state.depth), active, &state));
   }
   return records;
 }
@@ -1673,12 +1940,15 @@ SceneDocument::entity_records_for_instance_definition(
   }
 
   const EntityId active = primary_selection();
+  const SceneHierarchyProjectionSnapshot projection =
+      hierarchy_projection_snapshot();
   const std::vector<EntityId> members = descendants(definition, false);
   records.reserve(members.size());
   std::function<void(EntityId, int, bool, bool)> append_member =
       [&](EntityId member, int depth, bool parent_visible,
           bool parent_locked) {
-        EntityRecord record = make_entity_record(member, depth, active);
+        EntityRecord record = make_entity_record(
+            member, depth, active, projection.find(member));
         if (depth == 0) {
           record.parent = kInvalidEntityId;
         }
@@ -1991,7 +2261,9 @@ EntityId SceneDocument::first_selected_entity() const {
 }
 
 EntityRecord SceneDocument::make_entity_record(EntityId id, int depth,
-                                               EntityId active) const {
+                                               EntityId active,
+                                               const SceneHierarchyProjectionRecord *
+                                                   projection) const {
   EntityRecord record;
   record.id = id;
   record.uuid = uuid(id);
@@ -2005,11 +2277,15 @@ EntityRecord SceneDocument::make_entity_record(EntityId id, int depth,
   if (const VisibilityComponent *component = visibility(id)) {
     record.visible = component->visible;
   }
-  record.effectively_visible = is_effectively_visible(id);
+  record.effectively_visible =
+      projection != nullptr ? projection->effectively_visible
+                            : is_effectively_visible(id);
   if (const LockComponent *component = lock(id)) {
     record.locked = component->locked;
   }
-  record.effectively_locked = is_effectively_locked(id);
+  record.effectively_locked =
+      projection != nullptr ? projection->effectively_locked
+                            : is_effectively_locked(id);
   if (const SelectionComponent *component = selection(id)) {
     record.selected = component->selected;
   }
@@ -2024,35 +2300,6 @@ EntityRecord SceneDocument::make_entity_record(EntityId id, int depth,
   record.has_instance_occurrence = instance_occurrence(id) != nullptr;
   record.layer_id = entity_layer(id);
   return record;
-}
-
-void SceneDocument::append_tree_order(EntityId id,
-                                      std::vector<EntityId> &ids) const {
-  if (require_entity(id) == entt::null) {
-    return;
-  }
-  ids.push_back(id);
-  for (const EntityId child : children(id)) {
-    append_tree_order(child, ids);
-  }
-}
-
-void SceneDocument::append_entity_records(
-    EntityId id, int depth, EntityId active,
-    std::vector<EntityRecord> &records) const {
-  if (require_entity(id) == entt::null) {
-    return;
-  }
-  // Instance definitions and their canonical children are internal scene
-  // content. They remain in entities()/entity_tree_order() for persistence and
-  // extraction, but never appear in the ordinary outliner projection.
-  if (is_instance_definition_entity(id)) {
-    return;
-  }
-  records.push_back(make_entity_record(id, depth, active));
-  for (const EntityId child : children(id)) {
-    append_entity_records(child, depth + 1, active, records);
-  }
 }
 
 } // namespace quader

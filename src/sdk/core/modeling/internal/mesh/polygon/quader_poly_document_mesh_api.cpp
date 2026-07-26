@@ -38,7 +38,74 @@ quader_geometry::QTriangle3<float> geometry_triangle(const quader::QVec3& a, con
     return { geometry_vec3(a), geometry_vec3(b), geometry_vec3(c) };
 }
 
-std::map<ElementId, quader::QVec3> build_smooth_normals(const Document& document)
+/**
+ * Retains the standalone face_normal lookup behavior without building an
+ * operation-wide index for one isolated face query.
+ */
+class DirectVertexLookup final {
+public:
+    explicit DirectVertexLookup(const Document& document)
+        : document_(document)
+    {
+    }
+
+    [[nodiscard]] const Vertex* find(ElementId id) const
+    {
+        return find_vertex(document_, id);
+    }
+
+private:
+    const Document& document_;
+};
+
+template <typename VertexLookup>
+quader::QVec3 face_normal_from_lookup(
+    const Face& face,
+    const VertexLookup& vertex_lookup)
+{
+    quader::QVec3 normal;
+    if (face.vertices.size() < 3) {
+        return { 0.0F, 1.0F, 0.0F };
+    }
+
+    for (std::size_t index = 0; index < face.vertices.size(); ++index) {
+        const Vertex* current = vertex_lookup.find(face.vertices[index]);
+        const Vertex* next =
+            vertex_lookup.find(face.vertices[(index + 1) % face.vertices.size()]);
+        if (current == nullptr || next == nullptr) {
+            continue;
+        }
+
+        normal.x += (current->position.y - next->position.y) *
+                    (current->position.z + next->position.z);
+        normal.y += (current->position.z - next->position.z) *
+                    (current->position.x + next->position.x);
+        normal.z += (current->position.x - next->position.x) *
+                    (current->position.y + next->position.y);
+    }
+
+    normal = normalize_or_zero(normal);
+    if (length_squared(normal) > kEpsilon) {
+        return normal;
+    }
+
+    const Vertex* a = vertex_lookup.find(face.vertices[0]);
+    const Vertex* b = vertex_lookup.find(face.vertices[1]);
+    const Vertex* c = vertex_lookup.find(face.vertices[2]);
+    if (a == nullptr || b == nullptr || c == nullptr) {
+        return { 0.0F, 1.0F, 0.0F };
+    }
+
+    normal = poly_vec3(quader_geometry::triangle_unit_normal(
+        geometry_triangle(a->position, b->position, c->position)));
+    return length_squared(normal) > kEpsilon
+               ? normal
+               : quader::QVec3 { 0.0F, 1.0F, 0.0F };
+}
+
+std::map<ElementId, quader::QVec3> build_smooth_normals(
+    const Document& document,
+    const VertexLookupIndex& vertex_lookup)
 {
     QDR_PROFILE_SCOPE("qdr_document.build_smooth_normals");
     std::map<ElementId, quader::QVec3> normals;
@@ -47,7 +114,8 @@ std::map<ElementId, quader::QVec3> build_smooth_normals(const Document& document
             continue;
         }
 
-        const quader::QVec3 normal = face_normal(document, face);
+        const quader::QVec3 normal =
+            face_normal_from_lookup(face, vertex_lookup);
         for (const ElementId vertex_id : face.vertices) {
             normals[vertex_id] += normal;
         }
@@ -142,7 +210,10 @@ bool face_uses_smooth_normals(const Face& face, SurfaceShading shading)
     return false;
 }
 
-std::map<CornerKey, quader::QVec3> build_authored_smooth_corner_normals(const Document& document, SurfaceShading shading)
+std::map<CornerKey, quader::QVec3> build_authored_smooth_corner_normals(
+    const Document& document,
+    SurfaceShading shading,
+    const VertexLookupIndex& vertex_lookup)
 {
     QDR_PROFILE_SCOPE("qdr_document.build_authored_smooth_corner_normals");
     CornerDisjointSet corners;
@@ -161,7 +232,8 @@ std::map<CornerKey, quader::QVec3> build_authored_smooth_corner_normals(const Do
         }
 
         smooth_faces[face.id] = &face;
-        face_normals[face.id] = face_normal(document, face);
+        face_normals[face.id] =
+            face_normal_from_lookup(face, vertex_lookup);
         for (ElementId vertex_id : face.vertices) {
             corners.add({ face.id, vertex_id });
         }
@@ -207,38 +279,8 @@ std::map<CornerKey, quader::QVec3> build_authored_smooth_corner_normals(const Do
 
 quader::QVec3 face_normal(const Document& document, const Face& face)
 {
-    quader::QVec3 normal;
-    if (face.vertices.size() < 3) {
-        return { 0.0F, 1.0F, 0.0F };
-    }
-
-    for (std::size_t index = 0; index < face.vertices.size(); ++index) {
-        const Vertex* current = find_vertex(document, face.vertices[index]);
-        const Vertex* next = find_vertex(document, face.vertices[(index + 1) % face.vertices.size()]);
-        if (current == nullptr || next == nullptr) {
-            continue;
-        }
-
-        normal.x += (current->position.y - next->position.y) * (current->position.z + next->position.z);
-        normal.y += (current->position.z - next->position.z) * (current->position.x + next->position.x);
-        normal.z += (current->position.x - next->position.x) * (current->position.y + next->position.y);
-    }
-
-    normal = normalize_or_zero(normal);
-    if (length_squared(normal) > kEpsilon) {
-      return normal;
-    }
-
-    const Vertex* a = find_vertex(document, face.vertices[0]);
-    const Vertex* b = find_vertex(document, face.vertices[1]);
-    const Vertex* c = find_vertex(document, face.vertices[2]);
-    if (a == nullptr || b == nullptr || c == nullptr) {
-        return { 0.0F, 1.0F, 0.0F };
-    }
-
-    normal = poly_vec3(quader_geometry::triangle_unit_normal(geometry_triangle(a->position, b->position, c->position)));
-    return length_squared(normal) > kEpsilon ? normal
-                                             : quader::QVec3{0.0F, 1.0F, 0.0F};
+    const DirectVertexLookup vertex_lookup(document);
+    return face_normal_from_lookup(face, vertex_lookup);
 }
 
 void compile_document_into(const Document &document, CompiledMesh &mesh,
@@ -248,6 +290,7 @@ void compile_document_into(const Document &document, CompiledMesh &mesh,
     mesh.vertices.clear();
     mesh.indices.clear();
     mesh.primitives.clear();
+    const VertexLookupIndex vertex_lookup(document);
 
     // A compiled mesh owns one vertex per authored face corner and at most
     // (corner_count - 2) triangles per face. Reserve once per document and
@@ -270,11 +313,12 @@ void compile_document_into(const Document &document, CompiledMesh &mesh,
 
     const std::map<ElementId, quader::QVec3> smooth_normals =
         shading == SurfaceShading::Smooth
-            ? build_smooth_normals(document)
+            ? build_smooth_normals(document, vertex_lookup)
             : std::map<ElementId, quader::QVec3>{};
     const std::map<CornerKey, quader::QVec3> authored_smooth_corner_normals =
         shading == SurfaceShading::Authored
-            ? build_authored_smooth_corner_normals(document, shading)
+            ? build_authored_smooth_corner_normals(
+                  document, shading, vertex_lookup)
             : std::map<CornerKey, quader::QVec3>{};
 
     std::vector<std::uint32_t> compiled_face_vertices;
@@ -282,19 +326,32 @@ void compile_document_into(const Document &document, CompiledMesh &mesh,
 
     for (const Face& face : document.faces) {
         QDR_PROFILE_SCOPE("qdr_document.compile_document.face");
-        const std::vector<Triangle> triangles = triangulate_face_local_indices(document, face);
+        const quader::QVec3 normal =
+            face_normal_from_lookup(face, vertex_lookup);
+        const std::vector<Triangle> triangles =
+            triangulate_face_local_indices(
+                document,
+                face,
+                vertex_lookup,
+                normal);
         if (triangles.empty()) {
             continue;
         }
 
         compiled_face_vertices.clear();
-        const quader::QVec3 normal = face_normal(document, face);
         const int dropped_axis = dropped_axis_for_normal(normal);
-        const FaceUvBasis uv_basis = generated_face_uv_basis(document, face, normal);
         const bool use_loop_uvs = face_has_loop_uvs(face);
+        const FaceUvBasis uv_basis =
+            use_loop_uvs
+                ? FaceUvBasis {}
+                : generated_face_uv_basis(
+                      document,
+                      face,
+                      normal,
+                      vertex_lookup);
         for (std::size_t local_index = 0; local_index < face.vertices.size(); ++local_index) {
             const ElementId vertex_id = face.vertices[local_index];
-            const Vertex* vertex = find_vertex(document, vertex_id);
+            const Vertex* vertex = vertex_lookup.find(vertex_id);
             if (vertex == nullptr) {
                 compiled_face_vertices.clear();
                 break;
@@ -332,9 +389,12 @@ void compile_document_into(const Document &document, CompiledMesh &mesh,
 
         const std::uint32_t index_offset = static_cast<std::uint32_t>(mesh.indices.size());
         for (const Triangle& triangle : triangles) {
-            const Vertex* a = find_vertex(document, face.vertices[triangle.a]);
-            const Vertex* b = find_vertex(document, face.vertices[triangle.b]);
-            const Vertex* c = find_vertex(document, face.vertices[triangle.c]);
+            const Vertex* a =
+                vertex_lookup.find(face.vertices[triangle.a]);
+            const Vertex* b =
+                vertex_lookup.find(face.vertices[triangle.b]);
+            const Vertex* c =
+                vertex_lookup.find(face.vertices[triangle.c]);
             if (a == nullptr || b == nullptr || c == nullptr) {
                 continue;
             }

@@ -39,13 +39,6 @@ QtAuxiliaryWindowState::load(const std::filesystem::path &path) {
       settings.value(QStringLiteral("visible"), false).toBool();
   settings.endGroup();
 
-  settings.beginGroup(QStringLiteral("ToolSettingsWindow"));
-  state.tool_settings_geometry =
-      settings.value(QStringLiteral("geometry")).toByteArray();
-  state.tool_settings_visible =
-      settings.value(QStringLiteral("visible"), false).toBool();
-  settings.endGroup();
-
   settings.beginGroup(QStringLiteral("MaterialBrowser"));
   state.material_browser_geometry =
       settings.value(QStringLiteral("geometry")).toByteArray();
@@ -84,11 +77,6 @@ bool QtAuxiliaryWindowState::save(const std::filesystem::path &path) const {
   settings.beginGroup(QStringLiteral("SettingsDialog"));
   settings.setValue(QStringLiteral("geometry"), settings_dialog_geometry);
   settings.setValue(QStringLiteral("visible"), settings_dialog_visible);
-  settings.endGroup();
-
-  settings.beginGroup(QStringLiteral("ToolSettingsWindow"));
-  settings.setValue(QStringLiteral("geometry"), tool_settings_geometry);
-  settings.setValue(QStringLiteral("visible"), tool_settings_visible);
   settings.endGroup();
 
   settings.beginGroup(QStringLiteral("MaterialBrowser"));

@@ -11,6 +11,7 @@
 #include "editor/array/linear_array_tool_service.hpp"
 #include "editor/array/radial_array_tool_service.hpp"
 #include "editor/modeling/linear_array_layout.hpp"
+#include "editor/modeling/services/modeling_session_service.hpp"
 #include "editor/render/quader_render_api_runtime_access.hpp"
 #include "editor/session/scene_session.hpp"
 #include "math/glm_bridge.hpp"
@@ -28,6 +29,7 @@
 #include <algorithm>
 #include <array>
 #include <cstddef>
+#include <cstdint>
 #include <optional>
 #include <string>
 #include <utility>
@@ -133,6 +135,172 @@ TEST(LinearArrayLayoutTests, PreservesOrientationAndIncludesSharedEndpoint) {
       transform_vector(layout.generated_world_transforms[1],
                        {1.0f, 0.0f, 0.0f}),
       transform_vector(source_world, {1.0f, 0.0f, 0.0f}));
+}
+
+TEST(LinearArrayPerformanceTests,
+     MultiSourceCommitUsesOneSdkBatchAndOneNativeIdSceneScan) {
+  constexpr std::uint32_t kElementCount = 65U;
+  constexpr std::size_t kSourceCount = 2U;
+  constexpr std::size_t kDuplicateCount =
+      kSourceCount * (kElementCount - 1U);
+
+  SceneSession session;
+  QuaderEditorApi editor(
+      QuaderApiSessionInternalAccess::from_scene_session(session));
+  const QuaderApiResult<QuaderModelingObjectRef> first =
+      editor.modeling().create_box(
+          QuaderBounds{.min = {-1.0f, -1.0f, -1.0f},
+                       .max = {1.0f, 1.0f, 1.0f}},
+          "Batch Source A");
+  const QuaderApiResult<QuaderModelingObjectRef> second =
+      editor.modeling().create_box(
+          QuaderBounds{.min = {-0.5f, -0.5f, -0.5f},
+                       .max = {0.5f, 0.5f, 0.5f}},
+          "Batch Source B");
+  ASSERT_TRUE(first.ok()) << first.error_message();
+  ASSERT_TRUE(second.ok()) << second.error_message();
+
+  const ModelingSdkProjectionStats before =
+      session.modeling().modeling_sdk_projection_stats_for_tests();
+  const std::size_t scene_entities_before = session.scene().entities().size();
+  const ModelingLinearArrayResult created =
+      session.modeling().create_linear_array({
+          .sources =
+              {
+                  {.entity = first.value().entity,
+                   .modeling_object_id =
+                       first.value().modeling_object_id},
+                  {.entity = second.value().entity,
+                   .modeling_object_id =
+                       second.value().modeling_object_id},
+              },
+          .span_world = {64.0F, 0.0F, 0.0F},
+          .count = kElementCount,
+      });
+  ASSERT_TRUE(created.ok) << created.message;
+  ASSERT_TRUE(created.changed);
+  ASSERT_EQ(created.source_arrays.size(), kSourceCount);
+  ASSERT_EQ(created.source_arrays[0].elements.size(), kElementCount);
+  ASSERT_EQ(created.source_arrays[1].elements.size(), kElementCount);
+
+  int previous_duplicate_id = kInvalidModelingObjectId;
+  for (const ModelingLinearArraySourceResult &source : created.source_arrays) {
+    for (std::size_t index = 1U; index < source.elements.size(); ++index) {
+      EXPECT_GT(source.elements[index].modeling_object_id,
+                previous_duplicate_id);
+      previous_duplicate_id = source.elements[index].modeling_object_id;
+    }
+  }
+
+  const ModelingSdkProjectionStats after =
+      session.modeling().modeling_sdk_projection_stats_for_tests();
+  EXPECT_EQ(after.sdk_duplicate_batch_mutation_count,
+            before.sdk_duplicate_batch_mutation_count + 1U);
+  EXPECT_EQ(after.sdk_duplicate_object_count,
+            before.sdk_duplicate_object_count + kDuplicateCount);
+  EXPECT_EQ(after.native_object_id_scene_scan_count,
+            before.native_object_id_scene_scan_count + 1U);
+  EXPECT_EQ(after.native_object_id_scene_entity_visit_count,
+            before.native_object_id_scene_entity_visit_count +
+                scene_entities_before);
+}
+
+TEST(LinearArrayToolServiceTests,
+     ResetRestoresTheDynamicDefaultWithOnePreviewRevision) {
+  SceneSession session;
+  QuaderEditorApi editor(
+      QuaderApiSessionInternalAccess::from_scene_session(session));
+  const QuaderApiResult<QuaderModelingObjectRef> source =
+      editor.modeling().create_box(
+          QuaderBounds{.min = {-1.0f, -1.0f, -1.0f},
+                       .max = {1.0f, 1.0f, 1.0f}},
+          "Linear Reset Source");
+  ASSERT_TRUE(source.ok()) << source.error_message();
+  ASSERT_TRUE(editor.selection().select_object(source.value()).ok());
+
+  LinearArrayToolService &tool = session.linear_array();
+  ASSERT_TRUE(tool.activate(1.0).ok);
+  ASSERT_TRUE(tool.set_count(7u).ok);
+  const std::uint64_t edited_revision = tool.tool_settings_revision();
+  ASSERT_EQ(tool.preview_state().sources.size(), 1u);
+  EXPECT_EQ(tool.preview_state().sources.front()
+                .generated_world_transforms.size(),
+            6u);
+
+  const CommandResult reset = tool.reset_settings();
+  ASSERT_TRUE(reset.ok) << reset.message;
+  EXPECT_TRUE(reset.changed);
+  EXPECT_EQ(tool.count(), kLinearArrayDefaultCount);
+  EXPECT_EQ(tool.tool_settings_revision(), edited_revision + 1u);
+  ASSERT_EQ(tool.preview_state().sources.size(), 1u);
+  EXPECT_EQ(tool.preview_state().sources.front()
+                .generated_world_transforms.size(),
+            3u);
+
+  const CommandResult repeated = tool.reset_settings();
+  ASSERT_TRUE(repeated.ok) << repeated.message;
+  EXPECT_FALSE(repeated.changed);
+  EXPECT_EQ(tool.tool_settings_revision(), edited_revision + 1u);
+}
+
+TEST(RadialArrayToolServiceTests,
+     ResetRestoresCoupledDefaultsAndAutomaticSpacingInOneRevision) {
+  SceneSession session;
+  QuaderEditorApi editor(
+      QuaderApiSessionInternalAccess::from_scene_session(session));
+  const QuaderApiResult<QuaderModelingObjectRef> source =
+      editor.modeling().create_box(
+          QuaderBounds{.min = {-1.0f, -1.0f, -1.0f},
+                       .max = {1.0f, 1.0f, 1.0f}},
+          "Radial Reset Source");
+  ASSERT_TRUE(source.ok()) << source.error_message();
+  ASSERT_TRUE(editor.scene()
+                  .set_transform(source.value().entity,
+                                 {.position = {6.0f, 0.0f, 0.0f}})
+                  .ok());
+  ASSERT_TRUE(editor.selection().select_object(source.value()).ok());
+
+  RadialArrayToolService &tool = session.radial_array();
+  ASSERT_TRUE(tool.activate(2.5).ok);
+  ASSERT_TRUE(
+      tool.update_center_candidate({}, {0.0f, 1.0f, 0.0f}, 2.5).ok);
+  ASSERT_TRUE(tool.set_degrees(180.0).ok);
+  ASSERT_TRUE(tool.set_copies(4u).ok);
+  ASSERT_TRUE(tool.set_repeats(2u).ok);
+  ASSERT_TRUE(tool.set_repeat_spacing(7.0).ok);
+  const std::uint64_t unlocked_revision = tool.tool_settings_revision();
+
+  const CommandResult unlocked_reset = tool.reset_settings();
+  ASSERT_TRUE(unlocked_reset.ok) << unlocked_reset.message;
+  EXPECT_TRUE(unlocked_reset.changed);
+  EXPECT_DOUBLE_EQ(tool.degrees(), kRadialArrayDefaultDegrees);
+  EXPECT_EQ(tool.copies(), kRadialArrayDefaultCopies);
+  EXPECT_EQ(tool.repeats(), kRadialArrayDefaultRepeats);
+  EXPECT_DOUBLE_EQ(tool.repeat_spacing(), 2.5);
+  EXPECT_EQ(tool.tool_settings_revision(), unlocked_revision + 1u);
+
+  ASSERT_TRUE(tool.lock_center().ok);
+  EXPECT_NEAR(tool.repeat_spacing(), 6.0, 0.0001);
+  ASSERT_TRUE(tool.set_degrees(90.0).ok);
+  ASSERT_TRUE(tool.set_copies(3u).ok);
+  ASSERT_TRUE(tool.set_repeats(3u).ok);
+  ASSERT_TRUE(tool.set_repeat_spacing(9.0).ok);
+  const std::uint64_t locked_revision = tool.tool_settings_revision();
+
+  const CommandResult locked_reset = tool.reset_settings();
+  ASSERT_TRUE(locked_reset.ok) << locked_reset.message;
+  EXPECT_TRUE(locked_reset.changed);
+  EXPECT_DOUBLE_EQ(tool.degrees(), kRadialArrayDefaultDegrees);
+  EXPECT_EQ(tool.copies(), kRadialArrayDefaultCopies);
+  EXPECT_EQ(tool.repeats(), kRadialArrayDefaultRepeats);
+  EXPECT_NEAR(tool.repeat_spacing(), 6.0, 0.0001);
+  EXPECT_EQ(tool.tool_settings_revision(), locked_revision + 1u);
+  ASSERT_TRUE(tool.preview_state().active);
+
+  const CommandResult repeated = tool.reset_settings();
+  ASSERT_TRUE(repeated.ok) << repeated.message;
+  EXPECT_FALSE(repeated.changed);
+  EXPECT_EQ(tool.tool_settings_revision(), locked_revision + 1u);
 }
 
 TEST(LinearArrayToolServiceTests,

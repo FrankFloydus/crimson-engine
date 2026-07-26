@@ -98,7 +98,7 @@ public:
   [[nodiscard]] bool has_session() const { return session_.has_value(); }
   [[nodiscard]] bool can_activate() const;
   [[nodiscard]] std::uint64_t tool_settings_revision() const {
-    return revision_counter_;
+    return tool_settings_revision_counter_;
   }
   [[nodiscard]] bool center_locked() const;
   [[nodiscard]] double degrees() const;
@@ -125,6 +125,7 @@ public:
   CommandResult adjust_copies(int delta);
   CommandResult set_repeats(std::uint32_t repeats);
   CommandResult set_repeat_spacing(double spacing);
+  CommandResult reset_settings();
 
 private:
   /// Captures every source invariant required to reject a stale session.
@@ -175,9 +176,12 @@ private:
   maximum_copies_for(std::size_t source_count, std::uint32_t repeats);
   [[nodiscard]] static std::uint32_t
   maximum_repeats_for(std::size_t source_count, std::uint32_t copies);
+  [[nodiscard]] static double
+  automatic_repeat_spacing(const Session &session);
   [[nodiscard]] std::optional<QVec3>
   source_visible_pivot(EntityId entity) const;
   [[nodiscard]] std::uint64_t issue_revision();
+  void issue_tool_settings_revision();
   void clear_preview_cache();
 
   SceneDocument &scene_;
@@ -188,6 +192,7 @@ private:
   SceneInstanceService &instances_;
   std::optional<Session> session_;
   std::uint64_t revision_counter_ = 0;
+  std::uint64_t tool_settings_revision_counter_ = 0;
   mutable std::uint64_t validated_session_generation_ = 0;
   mutable std::uint64_t validated_scene_revision_ = 0;
   mutable std::uint64_t validated_asset_revision_ = 0;

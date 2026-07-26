@@ -59,8 +59,8 @@ const std::vector<std::string_view> &qt_shell_source_paths() {
       "src/ui/qt_settings_dialog.cpp",
       "src/ui/qt_settings_controller.hpp",
       "src/ui/qt_settings_controller.cpp",
-      "src/ui/qt_tool_settings_window.hpp",
-      "src/ui/qt_tool_settings_window.cpp",
+      "src/ui/qt_tool_settings_panel.hpp",
+      "src/ui/qt_tool_settings_panel.cpp",
       "src/ui/qt_viewport_context_menu.hpp",
       "src/ui/qt_viewport_context_menu.cpp",
       "src/ui/qt_navigation_gizmo.hpp",
@@ -215,9 +215,9 @@ TEST(UiLayoutGuardrailTests,
   expect_contains(ui_source, "saveState(kQtWindowStateVersion)");
   expect_contains(ui_source, "restoreState(state, kQtWindowStateVersion)");
   expect_contains(panel_manager_header,
-                  "std::array<QDockWidget *, 5> docks_");
+                  "std::array<QDockWidget *, kUiPanelCount> docks_");
   expect_contains(panel_manager_header,
-                  "std::array<bool, 5> explicit_visibility_");
+                  "std::array<bool, kUiPanelCount> explicit_visibility_");
   expect_contains(panel_manager_source, "UIPanelManager::add(");
   expect_contains(panel_manager_source, "UIPanelManager::set_visible(");
   expect_contains(panel_manager_source, "UIPanelManager::dock(");
@@ -303,7 +303,9 @@ TEST(UiLayoutGuardrailTests,
       ui_source.data() + create_docks_owner,
       create_dock_factory - create_docks_owner);
   for (std::string_view panel : {"UIPanelId::Outliner", "UIPanelId::Inspector",
-                                 "UIPanelId::Layers", "UIPanelId::Console"}) {
+                                 "UIPanelId::Layers",
+                                 "UIPanelId::ToolSettings",
+                                 "UIPanelId::Console"}) {
     EXPECT_EQ(count_occurrences(create_docks_body, panel), 1u) << panel;
   }
 
@@ -734,7 +736,7 @@ TEST(UiLayoutGuardrailTests,
 }
 
 TEST(UiLayoutGuardrailTests,
-     SettingsAndToolWindowsUseStockControlsAndStableNames) {
+     SettingsDialogAndToolSettingsDockUseStockControlsAndStableNames) {
   const std::string settings_header =
       read_source_file("src/ui/qt_settings_dialog.hpp");
   const std::string settings =
@@ -742,9 +744,9 @@ TEST(UiLayoutGuardrailTests,
   const std::string settings_controller =
       read_source_file("src/ui/qt_settings_controller.cpp");
   const std::string tool_header =
-      read_source_file("src/ui/qt_tool_settings_window.hpp");
+      read_source_file("src/ui/qt_tool_settings_panel.hpp");
   const std::string tool =
-      read_source_file("src/ui/qt_tool_settings_window.cpp");
+      read_source_file("src/ui/qt_tool_settings_panel.cpp");
   const std::string number_slider_header =
       read_source_file("src/ui/qt_tool_settings_number_slider.hpp");
   const std::string ui_source = read_source_file("src/ui/ui_system.cpp");
@@ -785,9 +787,17 @@ TEST(UiLayoutGuardrailTests,
   expect_contains(settings, "new QComboBox");
 
   expect_contains(tool_header,
-                  "class QtToolSettingsWindow final : public QWidget");
-  expect_contains(tool, "QWidget(parent, Qt::Tool)");
-  expect_contains(tool, "QStringLiteral(\"floating.tool_settings\")");
+                  "class QtToolSettingsPanel final : public QWidget");
+  expect_contains(tool, "ui_panel_stable_id(UIPanelId::ToolSettings)");
+  expect_contains(tool,
+                  "class QtToolSettingsSection final : public QWidget");
+  expect_contains(tool, "new QToolButton(this)");
+  expect_contains(tool,
+                  "QStringLiteral(\"tool_settings.section.description\")");
+  expect_contains(tool,
+                  "QStringLiteral(\"tool_settings.section.settings\")");
+  expect_contains(tool,
+                  "QStringLiteral(\"tool_settings.reset_defaults\")");
   expect_contains(tool, "QStringLiteral(\"tool_settings.apply\")");
   expect_contains(tool, "QStringLiteral(\"tool_settings.cancel\")");
   expect_contains(tool, "new QCheckBox");
@@ -808,7 +818,12 @@ TEST(UiLayoutGuardrailTests,
   expect_contains(tool, "new QDoubleSpinBox");
   expect_contains(tool, "new QRadioButton");
   expect_contains(tool, "new QPushButton");
+  expect_contains(tool, "new QGridLayout(row)");
+  expect_contains(tool, "row_layout->addWidget(field_label, 0, 0, 1, 2)");
+  expect_contains(tool,
+                  "option_localization_key = \"tool_settings.\"");
   expect_contains(tool, "editor_->tools().active_settings()");
+  expect_contains(tool, "editor_->tools().reset_active_settings()");
   expect_contains(tool, "editor_->tools().commit_active_tool_preview()");
   expect_contains(tool, "editor_->tools().cancel_active_tool_preview()");
   expect_contains(tool, "editor_->tools().execute_action(");
@@ -819,11 +834,19 @@ TEST(UiLayoutGuardrailTests,
 
   expect_contains(ui_source, "new QtSettingsDialog(main_window_.get())");
   expect_contains(ui_source,
-                  "new QtToolSettingsWindow(main_window_.get())");
+                  "new QtToolSettingsPanel(main_window_.get())");
+  expect_contains(ui_source,
+                  "UIPanelId::ToolSettings, *tool_settings_panel_");
+  expect_contains(ui_source,
+                  "main_window_->tabifyDockWidget(&inspector, "
+                  "&tool_settings)");
   EXPECT_EQ(count_occurrences(
                 ui_source,
-                "tool_settings_window_->set_localization(localization_)"),
+                "tool_settings_panel_->set_localization(localization_)"),
             2u);
+  expect_missing(tool, "setWindowFlag(Qt::Tool");
+  expect_missing(tool, "setWindowFlags(Qt::Tool");
+  expect_missing(tool, "floating.tool_settings");
 }
 
 TEST(UiLayoutGuardrailTests,
@@ -1047,11 +1070,11 @@ TEST(UiLayoutGuardrailTests,
 }
 
 TEST(UiLayoutGuardrailTests,
-     AuxiliaryWindowsLocalizeAndRetainStateWithStockCloseChrome) {
+     AuxiliaryWindowsRetainStateWhileToolSettingsUsesDockPersistence) {
   const std::string settings =
       read_source_file("src/ui/qt_settings_dialog.cpp");
   const std::string tool =
-      read_source_file("src/ui/qt_tool_settings_window.cpp");
+      read_source_file("src/ui/qt_tool_settings_panel.cpp");
   const std::string auxiliary_state =
       read_source_file("src/ui/qt_auxiliary_window_state.cpp");
   const std::string ui_settings =
@@ -1063,24 +1086,25 @@ TEST(UiLayoutGuardrailTests,
   expect_contains(tool, "\"ui.action.apply\"");
   expect_contains(tool, "\"ui.action.cancel\"");
   expect_contains(ui_system,
-                  "tool_settings_window_->set_localization(localization_)");
+                  "tool_settings_panel_->set_localization(localization_)");
 
   expect_contains(auxiliary_state, "QSettings::IniFormat");
   expect_contains(auxiliary_state,
                   "QStringLiteral(\"SettingsDialog\")");
-  expect_contains(auxiliary_state,
-                  "QStringLiteral(\"ToolSettingsWindow\")");
   expect_contains(auxiliary_state, "QStringLiteral(\"geometry\")");
   expect_contains(auxiliary_state, "QStringLiteral(\"visible\")");
   expect_contains(ui_settings, "\"qt_auxiliary_windows.ini\"");
   expect_contains(ui_system, "settings_dialog_->restoreGeometry(");
-  expect_contains(ui_system, "tool_settings_window_->restoreGeometry(");
   expect_contains(ui_system, "settings_dialog_->saveGeometry()");
-  expect_contains(ui_system, "tool_settings_window_->saveGeometry()");
   expect_contains(ui_system,
                   "auxiliary_window_state_.settings_dialog_visible");
   expect_contains(ui_system,
-                  "auxiliary_window_state_.tool_settings_visible");
+                  "main_window_->saveState(kQtWindowStateVersion)");
+  expect_contains(ui_system,
+                  "main_window_->restoreState(state, kQtWindowStateVersion)");
+  expect_missing(auxiliary_state, "ToolSettingsWindow");
+  expect_missing(ui_system, "tool_settings_geometry");
+  expect_missing(ui_system, "auxiliary_window_state_.tool_settings");
 
   // QDialog's normal platform title bar supplies the requested close button.
   expect_contains(settings, ": QDialog(parent)");
@@ -1098,7 +1122,8 @@ TEST(UiLayoutGuardrailTests,
 
   for (std::string_view stable_id :
        {"return \"viewport\"", "return \"outliner\"",
-        "return \"inspector\"", "return \"console\""}) {
+        "return \"inspector\"", "return \"console\"", "return \"layers\"",
+        "return \"tool_settings\""}) {
     expect_contains(panel_ids, stable_id);
   }
   expect_contains(ui_source, "dock->setObjectName(");
@@ -1893,7 +1918,8 @@ TEST(UiLayoutGuardrailTests,
   expect_contains(panel, "should_open_viewport_context_menu(");
   expect_contains(panel, "context_menu_presenter_.show(");
   expect_contains(panel, "qt_event_target_belongs_to_tool_settings(target)");
-  expect_contains(panel, "QStringLiteral(\"floating.tool_settings\")");
+  expect_contains(panel, "qt_object_belongs_to_tool_settings_panel(target)");
+  expect_missing(panel, "floating.tool_settings");
   expect_contains(panel, "editor.modeling().available_actions(query)");
   expect_missing(panel, "modeling.context_actions(query)");
 
@@ -2227,7 +2253,7 @@ TEST(UiLayoutGuardrailTests,
       ui_system,
       "qt_window_owns_command_input(standard_material_editor_window_)");
   expect_missing(ui_system,
-                 "qt_window_owns_command_input(tool_settings_window_)");
+                 "qt_window_owns_command_input(tool_settings_panel_)");
 
   const std::size_t ownership_check =
       filter.find("if (qt_application_command_input_owner_active(");

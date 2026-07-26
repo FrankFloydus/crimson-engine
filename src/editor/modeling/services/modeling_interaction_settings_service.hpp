@@ -24,6 +24,8 @@ public:
     [[nodiscard]] std::uint64_t revision() const { return revision_; }
     [[nodiscard]] ModelingInteractionSettings normalize(const ModelingInteractionSettings& settings) const;
     [[nodiscard]] bool set_normalized(ModelingInteractionSettings settings);
+    [[nodiscard]] bool
+    reset_for_target(ModelingToolSettingsTargetKind target_kind);
 
     void reset_for_preview_action(ModelingActionPreviewKind preview_kind);
     void set_cut_mode(ModelingCutMode mode);

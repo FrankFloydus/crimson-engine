@@ -514,6 +514,16 @@ TEST(OverlayMaterialTests,
   EXPECT_NE(point_source.find("getClipFromViewMatrix()"), std::string::npos);
   EXPECT_NE(point_source.find("name : nearPlane"), std::string::npos);
   EXPECT_NE(point_source.find("getResolution()"), std::string::npos);
+  EXPECT_NE(point_source.find(
+                "biasedView.z = min(centerView.z + 0.04 * depthBiasUnits"),
+            std::string::npos);
+  EXPECT_NE(point_source.find(
+                "biasedClip = getClipFromViewMatrix() * biasedView"),
+            std::string::npos);
+  EXPECT_NE(point_source.find("legacyMaximumPull"), std::string::npos);
+  EXPECT_EQ(point_source.find("deviceDepth = max(-1.0, deviceDepth - "),
+            std::string::npos)
+      << "a fixed post-projection pull makes occluded points leak at distance";
   EXPECT_NE(point_source.find("variable_pointUv.xy"), std::string::npos);
   EXPECT_NE(point_source.find("materialParams.innerRadius"), std::string::npos);
   const std::size_t inner_radius_guard =
@@ -701,6 +711,51 @@ TEST(ViewportOverlayPolicyTests,
   EXPECT_NE(cache_source.find("mesh.wireframe_tint"), std::string::npos);
   EXPECT_NE(cache_source.find("style.selection_edge_line_width_pixels"),
             std::string::npos);
+}
+
+TEST(ViewportOverlayPolicyTests,
+     PersistentInstanceCachesUpdateGeometryResourceStatsIncrementally) {
+  const std::string wireframe_cache =
+      read_source_file("src/render/overlay/scene_wireframe_overlay_cache.cpp");
+  const std::string selection_cache = read_source_file(
+      "src/render/overlay/instance_selection_overlay_cache.cpp");
+  EXPECT_NE(wireframe_cache.find(
+                "std::unordered_set<RenderInstancePrimitiveKey"),
+            std::string::npos);
+  EXPECT_EQ(wireframe_cache.find(
+                "std::vector<RenderInstancePrimitiveKey> unique_geometry"),
+            std::string::npos);
+
+  const auto acquire_body = [](const std::string &source,
+                               std::string_view acquire,
+                               std::string_view next_function) {
+    const std::size_t begin = source.find(acquire);
+    const std::size_t end = source.find(next_function, begin);
+    EXPECT_NE(begin, std::string::npos);
+    EXPECT_NE(end, std::string::npos);
+    return begin == std::string::npos || end == std::string::npos
+               ? std::string{}
+               : source.substr(begin, end - begin);
+  };
+
+  const std::string wireframe_acquire = acquire_body(
+      wireframe_cache, "SceneWireframeOverlayCache::acquire_geometry(",
+      "SceneWireframeOverlayCache::create_batch(");
+  EXPECT_NE(wireframe_acquire.find(
+                "++stats_.unique_geometry_resource_count"),
+            std::string::npos);
+  EXPECT_EQ(wireframe_acquire.find("resource_count ="), std::string::npos);
+  EXPECT_NE(wireframe_cache.find(
+                "--stats_.unique_geometry_resource_count"),
+            std::string::npos);
+
+  const std::string selection_acquire = acquire_body(
+      selection_cache, "InstanceSelectionOverlayCache::acquire_wire_geometry(",
+      "InstanceSelectionOverlayCache::create_wire_batch(");
+  EXPECT_NE(selection_acquire.find(
+                "++stats_.unique_wire_geometry_resource_count"),
+            std::string::npos);
+  EXPECT_EQ(selection_acquire.find("resource_count ="), std::string::npos);
 }
 
 TEST(ViewportPersistentOverlayStyleSnapshotTests,
@@ -909,6 +964,61 @@ TEST(SceneRenderBridgeTests,
   EXPECT_LT(api_submission, api_failure);
   EXPECT_LT(api_failure, cache_sync_gate)
       << "failed preview publication must return before sync gates advance";
+}
+
+TEST(SceneRenderBridgeTests,
+     ToolPreviewRetirementAndClaimIndexesKeepIdleWorkLinear) {
+  const std::string cache_header =
+      read_source_file("src/render/tool_preview_renderable_cache.hpp");
+  const std::string cache_source =
+      read_source_file("src/render/tool_preview_renderable_cache.cpp");
+
+  EXPECT_NE(cache_header.find("std::size_t live_proxy_count = 0u"),
+            std::string::npos);
+  EXPECT_NE(cache_header.find("exact_match_candidate_visits"),
+            std::string::npos);
+  EXPECT_NE(cache_header.find("structural_match_candidate_visits"),
+            std::string::npos);
+  EXPECT_NE(cache_header.find("retired_proxy_destroy_attempts"),
+            std::string::npos);
+  EXPECT_NE(cache_source.find("struct StableCandidateBucket"),
+            std::string::npos);
+  EXPECT_NE(cache_source.find("std::size_t cursor = 0u"),
+            std::string::npos);
+  EXPECT_NE(cache_source.find("group_exact_reuse_base_signature"),
+            std::string::npos);
+  EXPECT_EQ(cache_source.find("std::unordered_multimap"), std::string::npos)
+      << "a claimed multimap range restarts at its claimed prefix for every "
+         "preview group";
+
+  const std::size_t count_start = cache_source.find(
+      "std::size_t ToolPreviewRenderableCache::group_proxy_count(");
+  const std::size_t count_end =
+      cache_source.find("preview_material_signature(", count_start);
+  ASSERT_NE(count_start, std::string::npos);
+  ASSERT_NE(count_end, std::string::npos);
+  const std::string count_source =
+      cache_source.substr(count_start, count_end - count_start);
+  EXPECT_NE(count_source.find("return group.live_proxy_count;"),
+            std::string::npos);
+  EXPECT_EQ(count_source.find("count_if"), std::string::npos);
+  EXPECT_EQ(count_source.find("rendered_instances"), std::string::npos);
+  EXPECT_EQ(count_source.find("shaded_instances"), std::string::npos);
+  EXPECT_EQ(count_source.find("overlay_depth_instances"), std::string::npos);
+
+  const std::size_t drain_start = cache_source.find(
+      "void ToolPreviewRenderableCache::drain_retired_destroy_queue(");
+  const std::size_t drain_end =
+      cache_source.find("void ToolPreviewRenderableCache::destroy_group(",
+                        drain_start);
+  ASSERT_NE(drain_start, std::string::npos);
+  ASSERT_NE(drain_end, std::string::npos);
+  const std::string drain_source =
+      cache_source.substr(drain_start, drain_end - drain_start);
+  EXPECT_NE(drain_source.find(
+                "++work_counters_.retired_proxy_destroy_attempts"),
+            std::string::npos);
+  EXPECT_EQ(drain_source.find("count_if"), std::string::npos);
 }
 
 TEST(SceneRenderBridgeTests, UsesQuadMaterialsForSelectionLineAndPointOverlay) {

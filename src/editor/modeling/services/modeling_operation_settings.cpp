@@ -47,7 +47,7 @@ const char *fallback_tool_settings_label(ModelingToolSettingsTargetKind kind) {
   case ModelingToolSettingsTargetKind::EdgeBevel:
     return "Bevel Edges";
   case ModelingToolSettingsTargetKind::Thicken:
-    return "Distance";
+    return "Thicken";
   case ModelingToolSettingsTargetKind::SliceQuad:
     return "Slice Quad";
   case ModelingToolSettingsTargetKind::MergeByDistance:

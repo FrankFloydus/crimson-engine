@@ -16,11 +16,12 @@
 #include "scene/scene_transform.hpp"
 
 #include <algorithm>
+#include <bit>
 #include <cstdint>
-#include <iterator>
 #include <limits>
 #include <optional>
 #include <span>
+#include <unordered_map>
 #include <utility>
 
 namespace quader {
@@ -272,9 +273,11 @@ RenderMaterialAssetSnapshot::texture_for_slot(std::string_view slot) const {
 
 const RenderMaterialAssetSnapshot *
 RenderMaterialBindingSnapshot::material_for_slot(std::uint32_t slot) const {
-  const auto override_material = std::ranges::find_if(
-      material_slots, [slot](const auto &entry) { return entry.first == slot; });
-  if (override_material != material_slots.end()) {
+  const auto override_material = std::ranges::lower_bound(
+      material_slots, slot, {},
+      [](const auto &entry) { return entry.first; });
+  if (override_material != material_slots.end() &&
+      override_material->first == slot) {
     return &override_material->second;
   }
   return present ? &primary_material : nullptr;
@@ -398,9 +401,271 @@ std::uint64_t render_material_binding_signature(
   return signature.value();
 }
 
-bool ordinary_meshes_are_instance_compatible(
-    const RenderSceneMeshRecord &left,
-    const RenderSceneMeshRecord &right);
+std::uint64_t render_material_payload_signature(
+    const RenderMaterialAssetSnapshot *material);
+RenderInstanceBounds mesh_instance_bounds(
+    const RenderMeshAssetSnapshot &mesh);
+
+namespace {
+
+bool same_float_payload(float left, float right) {
+  return std::bit_cast<std::uint32_t>(left) ==
+         std::bit_cast<std::uint32_t>(right);
+}
+
+bool same_vec2_payload(QVec2 left, QVec2 right) {
+  return same_float_payload(left.x, right.x) &&
+         same_float_payload(left.y, right.y);
+}
+
+bool same_vec3_payload(QVec3 left, QVec3 right) {
+  return same_float_payload(left.x, right.x) &&
+         same_float_payload(left.y, right.y) &&
+         same_float_payload(left.z, right.z);
+}
+
+bool same_render_texture_payload(
+    const RenderTextureAssetSnapshot &left,
+    const RenderTextureAssetSnapshot &right) {
+  const std::uint32_t left_width =
+      left.width != 0u ? left.width : left.texture.width;
+  const std::uint32_t right_width =
+      right.width != 0u ? right.width : right.texture.width;
+  const std::uint32_t left_height =
+      left.height != 0u ? left.height : left.texture.height;
+  const std::uint32_t right_height =
+      right.height != 0u ? right.height : right.texture.height;
+  return left.slot == right.slot && left.present == right.present &&
+         left.content_revision == right.content_revision &&
+         left.texture.revision.value == right.texture.revision.value &&
+         left.texture.usage == right.texture.usage &&
+         left.texture.color_space == right.texture.color_space &&
+         left_width == right_width && left_height == right_height &&
+         left.texture.source_path.generic_string() ==
+             right.texture.source_path.generic_string() &&
+         left.encoded_file_bytes.get() == right.encoded_file_bytes.get() &&
+         left.decoded_rgba8.get() == right.decoded_rgba8.get();
+}
+
+bool same_render_material_payload(
+    const RenderMaterialAssetSnapshot *left,
+    const RenderMaterialAssetSnapshot *right) {
+  const bool left_present = left != nullptr && left->present;
+  const bool right_present = right != nullptr && right->present;
+  if (!left_present || !right_present) {
+    return left_present == right_present;
+  }
+  if (!same_vec3_payload(left->document.base_color,
+                         right->document.base_color) ||
+      !same_float_payload(left->document.roughness,
+                          right->document.roughness) ||
+      !same_float_payload(left->document.metallic,
+                          right->document.metallic) ||
+      !same_float_payload(left->normal_strength, right->normal_strength) ||
+      left->directx_normal != right->directx_normal ||
+      !same_vec2_payload(left->texture_transform.center,
+                         right->texture_transform.center) ||
+      !same_vec2_payload(left->texture_transform.scale,
+                         right->texture_transform.scale) ||
+      !same_vec2_payload(left->texture_transform.offset,
+                         right->texture_transform.offset) ||
+      !same_float_payload(left->texture_transform.rotation_degrees,
+                          right->texture_transform.rotation_degrees) ||
+      left->revision != right->revision ||
+      left->textures.size() != right->textures.size()) {
+    return false;
+  }
+  for (std::size_t index = 0u; index < left->textures.size(); ++index) {
+    if (!same_render_texture_payload(left->textures[index],
+                                     right->textures[index])) {
+      return false;
+    }
+  }
+  return true;
+}
+
+/// Summarizes one primitive's material facts for instance compatibility.
+struct OrdinaryMeshPrimitiveCompatibilityDescriptor final {
+  MeshPrimitiveSpan primitive;
+  std::uint64_t material_payload_signature = 0u;
+  const RenderMaterialAssetSnapshot *material = nullptr;
+};
+
+/// Summarizes one ordinary mesh for stable instance-group matching.
+struct OrdinaryMeshCompatibilityDescriptor final {
+  const MeshGeometryPayload *geometry_payload = nullptr;
+  MeshGeometryContentId geometry_content_id;
+  std::vector<OrdinaryMeshPrimitiveCompatibilityDescriptor> primitives;
+  std::uint64_t signature = 0u;
+  bool cast_shadows = false;
+  bool double_sided = false;
+  bool eligible = false;
+};
+
+OrdinaryMeshCompatibilityDescriptor
+ordinary_mesh_compatibility_descriptor(
+    const RenderSceneMeshRecord &mesh) {
+  OrdinaryMeshCompatibilityDescriptor descriptor{
+      .geometry_payload = mesh.mesh.geometry_payload.get(),
+      .geometry_content_id = mesh.mesh.geometry_content_id,
+      .cast_shadows = mesh.cast_shadows(),
+      .double_sided = mesh.double_sided(),
+      .eligible = mesh.renderable() &&
+                  mesh.mesh.geometry_content_id.value != 0u &&
+                  mesh.mesh.geometry_payload != nullptr,
+  };
+  if (!mesh.renderable()) {
+    return descriptor;
+  }
+
+  const std::vector<MeshPrimitiveSpan> primitives =
+      coalesced_render_mesh_primitive_spans(mesh.mesh);
+  descriptor.primitives.reserve(primitives.size());
+  RenderSignatureBuilder signature;
+  if (descriptor.eligible) {
+    signature
+        .add_value(mesh.mesh.geometry_content_id.value)
+        .add_value(static_cast<std::uint64_t>(
+            reinterpret_cast<std::uintptr_t>(
+                descriptor.geometry_payload)))
+        .add_bool(descriptor.cast_shadows)
+        .add_bool(descriptor.double_sided)
+        .add_size(primitives.size());
+  }
+  for (const MeshPrimitiveSpan &primitive : primitives) {
+    const RenderMaterialAssetSnapshot *material =
+        mesh.material.material_for_slot(primitive.material_slot);
+    const std::uint64_t material_signature =
+        render_material_payload_signature(material);
+    descriptor.primitives.push_back({
+        .primitive = primitive,
+        .material_payload_signature = material_signature,
+        .material = material,
+    });
+    if (descriptor.eligible) {
+      signature.add_value(primitive.index_offset)
+          .add_value(primitive.index_count)
+          .add_value(primitive.material_slot)
+          .add_value(material_signature);
+    }
+  }
+  if (descriptor.eligible) {
+    descriptor.signature = signature.value();
+  }
+  return descriptor;
+}
+
+bool ordinary_mesh_descriptors_are_compatible(
+    const OrdinaryMeshCompatibilityDescriptor &left,
+    const OrdinaryMeshCompatibilityDescriptor &right) {
+  if (!left.eligible || !right.eligible ||
+      left.geometry_content_id != right.geometry_content_id ||
+      left.geometry_payload != right.geometry_payload ||
+      left.cast_shadows != right.cast_shadows ||
+      left.double_sided != right.double_sided ||
+      left.primitives.size() != right.primitives.size()) {
+    return false;
+  }
+  for (std::size_t index = 0u; index < left.primitives.size(); ++index) {
+    const OrdinaryMeshPrimitiveCompatibilityDescriptor &left_primitive =
+        left.primitives[index];
+    const OrdinaryMeshPrimitiveCompatibilityDescriptor &right_primitive =
+        right.primitives[index];
+    if (left_primitive.primitive != right_primitive.primitive ||
+        left_primitive.material_payload_signature !=
+            right_primitive.material_payload_signature ||
+        !same_render_material_payload(left_primitive.material,
+                                      right_primitive.material)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+/// Preserves one representative and its compatible meshes in source order.
+struct OrdinaryMeshCompatibilityGroup final {
+  std::size_t representative = 0u;
+  std::vector<std::size_t> additional_members;
+};
+
+std::vector<OrdinaryMeshCompatibilityGroup>
+stable_group_ordinary_meshes(
+    std::span<const OrdinaryMeshCompatibilityDescriptor> descriptors) {
+  std::vector<OrdinaryMeshCompatibilityGroup> groups;
+  groups.reserve(descriptors.size());
+  std::unordered_multimap<std::uint64_t, std::size_t> groups_by_signature;
+  groups_by_signature.reserve(descriptors.size());
+
+  for (std::size_t mesh_index = 0u; mesh_index < descriptors.size();
+       ++mesh_index) {
+    const OrdinaryMeshCompatibilityDescriptor &descriptor =
+        descriptors[mesh_index];
+    std::optional<std::size_t> compatible_group;
+    if (descriptor.eligible) {
+      const auto [bucket_begin, bucket_end] =
+          groups_by_signature.equal_range(descriptor.signature);
+      for (auto candidate = bucket_begin; candidate != bucket_end;
+           ++candidate) {
+        const std::size_t group_index = candidate->second;
+        if (ordinary_mesh_descriptors_are_compatible(
+                descriptors[groups[group_index].representative],
+                descriptor)) {
+          compatible_group = group_index;
+          break;
+        }
+      }
+    }
+
+    if (compatible_group.has_value()) {
+      groups[*compatible_group].additional_members.push_back(mesh_index);
+      continue;
+    }
+
+    const std::size_t group_index = groups.size();
+    groups.push_back({.representative = mesh_index});
+    if (descriptor.eligible) {
+      groups_by_signature.emplace(descriptor.signature, group_index);
+    }
+  }
+  return groups;
+}
+
+void append_ordinary_instance_primitive_records(
+    RenderSceneSnapshot &snapshot, const RenderSceneMeshRecord &source,
+    const OrdinaryMeshCompatibilityDescriptor &compatibility,
+    std::span<const RenderSceneInstanceOccurrenceRecord> occurrences);
+
+void add_material_reference_signature(
+    RenderSignatureBuilder &signature, MaterialReference reference) {
+  signature.add_value(static_cast<std::uint64_t>(reference.kind()));
+  if (reference.project_owned()) {
+    signature.add_string(reference.project_asset().str());
+  } else {
+    signature.add_value(reference.embedded_asset());
+  }
+}
+
+std::uint64_t
+preview_material_component_signature(const MaterialComponent &material) {
+  RenderSignatureBuilder signature;
+  add_material_reference_signature(signature, material.material);
+  std::vector<std::pair<std::uint32_t, MaterialReference>> slots;
+  slots.reserve(material.material_slots.size());
+  for (const auto &[slot, reference] : material.material_slots) {
+    slots.emplace_back(slot, reference);
+  }
+  std::ranges::sort(
+      slots, {}, [](const auto &entry) { return entry.first; });
+  signature.add_size(slots.size());
+  for (const auto &[slot, reference] : slots) {
+    signature.add_value(slot);
+    add_material_reference_signature(signature, reference);
+  }
+  return signature.value();
+}
+
+} // namespace
+
 std::uint64_t instance_occurrence_token(EntityId definition,
                                         EntityId member,
                                         EntityId occurrence);
@@ -493,21 +758,21 @@ RenderSceneSnapshot build_render_scene_snapshot(
   // Preserve the legacy single-mesh cache for unique payloads, but route two
   // or more fully compatible ordinary objects through explicit GPU instancing.
   // Compatibility is payload-based and deliberately excludes scene/asset IDs.
-  std::vector<bool> batched_ordinary(ordinary_meshes.size(), false);
-  for (std::size_t first = 0u; first < ordinary_meshes.size(); ++first) {
-    if (batched_ordinary[first]) {
-      continue;
-    }
-    std::vector<std::size_t> compatible{first};
-    for (std::size_t candidate = first + 1u;
-         candidate < ordinary_meshes.size(); ++candidate) {
-      if (!batched_ordinary[candidate] &&
-          ordinary_meshes_are_instance_compatible(ordinary_meshes[first],
-                                                   ordinary_meshes[candidate])) {
-        compatible.push_back(candidate);
-      }
-    }
-    if (compatible.size() < 2u && !options.instance_edit_scope.active()) {
+  // Build each exact descriptor once. The hash only selects candidates; exact
+  // equality keeps collisions from merging incompatible render payloads.
+  std::vector<OrdinaryMeshCompatibilityDescriptor>
+      ordinary_compatibility;
+  ordinary_compatibility.reserve(ordinary_meshes.size());
+  for (const RenderSceneMeshRecord &mesh : ordinary_meshes) {
+    ordinary_compatibility.push_back(
+        ordinary_mesh_compatibility_descriptor(mesh));
+  }
+  const std::vector<OrdinaryMeshCompatibilityGroup> ordinary_groups =
+      stable_group_ordinary_meshes(ordinary_compatibility);
+  for (const OrdinaryMeshCompatibilityGroup &group : ordinary_groups) {
+    const std::size_t first = group.representative;
+    if (group.additional_members.empty() &&
+        !options.instance_edit_scope.active()) {
       RenderSceneMeshRecord &record = ordinary_meshes[first];
       if (record.renderable()) {
         snapshot.live_mesh_entities.insert(record.entity_id);
@@ -515,11 +780,11 @@ RenderSceneSnapshot build_render_scene_snapshot(
       snapshot.meshes.push_back(std::move(record));
       continue;
     }
+
     std::vector<RenderSceneInstanceOccurrenceRecord> occurrences;
-    occurrences.reserve(compatible.size());
-    for (const std::size_t index : compatible) {
+    occurrences.reserve(group.additional_members.size() + 1u);
+    const auto append_occurrence = [&](std::size_t index) {
       RenderSceneMeshRecord &record = ordinary_meshes[index];
-      batched_ordinary[index] = true;
       occurrences.push_back({
           .entity_id = record.entity_id,
           .occurrence = instance_occurrence_token(
@@ -528,10 +793,14 @@ RenderSceneSnapshot build_render_scene_snapshot(
           .selected = selected(document, record.entity_id),
           .dimmed = options.instance_edit_scope.active(),
       });
+    };
+    append_occurrence(first);
+    for (const std::size_t member : group.additional_members) {
+      append_occurrence(member);
     }
-    append_instance_primitive_records(
-        snapshot, ordinary_meshes[first], kInvalidEntityId,
-        kInvalidEntityId, QMat4{}, occurrences);
+    append_ordinary_instance_primitive_records(
+        snapshot, ordinary_meshes[first], ordinary_compatibility[first],
+        occurrences);
   }
 
   // Expand every visible occurrence from its hidden canonical definition.
@@ -656,38 +925,52 @@ std::uint64_t render_material_payload_signature(
   return signature.value();
 }
 
-std::vector<std::uint64_t> primitive_material_payloads(
-    const RenderSceneMeshRecord &mesh) {
-  std::vector<std::uint64_t> payloads;
-  const std::vector<MeshPrimitiveSpan> primitives =
-      coalesced_render_mesh_primitive_spans(mesh.mesh);
-  payloads.reserve(primitives.size());
-  for (const MeshPrimitiveSpan &primitive : primitives) {
-    payloads.push_back(render_material_payload_signature(
-        mesh.material.material_for_slot(primitive.material_slot)));
-  }
-  return payloads;
+namespace {
+
+void append_instance_primitive_record(
+    RenderSceneSnapshot &snapshot, const RenderSceneMeshRecord &source,
+    EntityId definition, EntityId member, const QMat4 &member_from_definition,
+    const MeshPrimitiveSpan &primitive, std::uint64_t material_payload,
+    const RenderInstanceBounds &local_bounds,
+    std::span<const RenderSceneInstanceOccurrenceRecord> occurrences) {
+  snapshot.instance_primitives.push_back({
+      .definition_entity = definition,
+      .member_entity = member,
+      .member_from_definition = member_from_definition,
+      .key = {.geometry_payload = static_cast<std::uint64_t>(
+                  source.mesh.geometry_token),
+              .material_payload = material_payload,
+              .index_offset = primitive.index_offset,
+              .index_count = primitive.index_count,
+              .cast_shadows = source.cast_shadows(),
+              .receive_shadows = true,
+              .double_sided = source.double_sided()},
+      .mesh = source.mesh,
+      .primitive = primitive,
+      .material = source.material,
+      .local_bounds = local_bounds,
+      .occurrences = {occurrences.begin(), occurrences.end()},
+  });
 }
 
-bool ordinary_meshes_are_instance_compatible(
-    const RenderSceneMeshRecord &left,
-    const RenderSceneMeshRecord &right) {
-  if (!left.renderable() || !right.renderable() ||
-      left.mesh.geometry_content_id.value == 0u ||
-      left.mesh.geometry_content_id != right.mesh.geometry_content_id ||
-      left.mesh.geometry_payload.get() != right.mesh.geometry_payload.get() ||
-      left.cast_shadows() != right.cast_shadows() ||
-      left.double_sided() != right.double_sided()) {
-    return false;
+void append_ordinary_instance_primitive_records(
+    RenderSceneSnapshot &snapshot, const RenderSceneMeshRecord &source,
+    const OrdinaryMeshCompatibilityDescriptor &compatibility,
+    std::span<const RenderSceneInstanceOccurrenceRecord> occurrences) {
+  if (!source.renderable() || occurrences.empty()) {
+    return;
   }
-  const std::vector<MeshPrimitiveSpan> left_primitives =
-      coalesced_render_mesh_primitive_spans(left.mesh);
-  const std::vector<MeshPrimitiveSpan> right_primitives =
-      coalesced_render_mesh_primitive_spans(right.mesh);
-  return left_primitives == right_primitives &&
-         primitive_material_payloads(left) ==
-             primitive_material_payloads(right);
+  const RenderInstanceBounds local_bounds = mesh_instance_bounds(source.mesh);
+  for (const OrdinaryMeshPrimitiveCompatibilityDescriptor &primitive :
+       compatibility.primitives) {
+    append_instance_primitive_record(
+        snapshot, source, kInvalidEntityId, kInvalidEntityId, QMat4{},
+        primitive.primitive, primitive.material_payload_signature,
+        local_bounds, occurrences);
+  }
 }
+
+} // namespace
 
 std::uint64_t instance_occurrence_token(EntityId definition,
                                         EntityId member,
@@ -717,24 +1000,9 @@ void append_instance_primitive_records(
     const std::uint64_t material_payload =
         render_material_payload_signature(
             source.material.material_for_slot(primitive.material_slot));
-    snapshot.instance_primitives.push_back({
-        .definition_entity = definition,
-        .member_entity = member,
-        .member_from_definition = member_from_definition,
-        .key = {.geometry_payload = static_cast<std::uint64_t>(
-                    source.mesh.geometry_token),
-                .material_payload = material_payload,
-                .index_offset = primitive.index_offset,
-                .index_count = primitive.index_count,
-                .cast_shadows = source.cast_shadows(),
-                .receive_shadows = true,
-                .double_sided = source.double_sided()},
-        .mesh = source.mesh,
-        .primitive = primitive,
-        .material = source.material,
-        .local_bounds = local_bounds,
-        .occurrences = {occurrences.begin(), occurrences.end()},
-    });
+    append_instance_primitive_record(
+        snapshot, source, definition, member, member_from_definition,
+        primitive, material_payload, local_bounds, occurrences);
   }
 }
 
@@ -1073,9 +1341,17 @@ std::vector<RenderToolPreviewMeshRecord> build_render_tool_preview_snapshot(
   QDR_PROFILE_FUNCTION();
   std::vector<RenderToolPreviewMeshRecord> records;
   records.reserve(meshes.size());
-  std::vector<std::pair<MaterialComponent, RenderMaterialBindingSnapshot>>
-      material_cache;
-  material_cache.reserve(4U);
+  /// Retains an exact material component and its projected render snapshot.
+  struct PreviewMaterialCacheEntry final {
+    MaterialComponent component;
+    RenderMaterialBindingSnapshot snapshot;
+  };
+  std::vector<PreviewMaterialCacheEntry> material_cache;
+  material_cache.reserve(
+      std::min(meshes.size(), std::size_t{64u}));
+  std::unordered_multimap<std::uint64_t, std::size_t>
+      material_cache_by_signature;
+  material_cache_by_signature.reserve(meshes.size());
   for (ToolPreviewMesh &mesh : meshes) {
     const EntityId visibility_entity =
         mesh.visibility_entity == kInvalidEntityId ? mesh.source_entity
@@ -1084,21 +1360,32 @@ std::vector<RenderToolPreviewMeshRecord> build_render_tool_preview_snapshot(
         !local_visibility_allows(local_visibility, visibility_entity)) {
       continue;
     }
-    auto cached_material = std::ranges::find(
-        material_cache, mesh.material,
-        [](const auto &entry) -> const MaterialComponent & {
-          return entry.first;
-        });
-    if (cached_material == material_cache.end()) {
+
+    const std::uint64_t material_signature =
+        preview_material_component_signature(mesh.material);
+    std::optional<std::size_t> cached_material;
+    const auto [bucket_begin, bucket_end] =
+        material_cache_by_signature.equal_range(material_signature);
+    for (auto candidate = bucket_begin; candidate != bucket_end;
+         ++candidate) {
+      if (material_cache[candidate->second].component == mesh.material) {
+        cached_material = candidate->second;
+        break;
+      }
+    }
+    if (!cached_material.has_value()) {
       QDR_PROFILE_SCOPE("Tool preview build unique material snapshot");
-      material_cache.emplace_back(
-          mesh.material,
-          build_render_material_binding_snapshot(
-              assets, &mesh.material, project_material_resolver));
-      cached_material = std::prev(material_cache.end());
+      cached_material = material_cache.size();
+      material_cache.push_back({
+          .component = mesh.material,
+          .snapshot = build_render_material_binding_snapshot(
+              assets, &mesh.material, project_material_resolver),
+      });
+      material_cache_by_signature.emplace(material_signature,
+                                          *cached_material);
     }
     RenderMaterialBindingSnapshot material_snapshot =
-        cached_material->second;
+        material_cache[*cached_material].snapshot;
     records.push_back(RenderToolPreviewMeshRecord{
         .source_object_id = mesh.source_object_id,
         .source_entity = mesh.source_entity,

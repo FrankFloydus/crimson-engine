@@ -99,7 +99,7 @@ public:
   [[nodiscard]] bool has_session() const { return session_.has_value(); }
   [[nodiscard]] bool can_activate() const;
   [[nodiscard]] std::uint64_t tool_settings_revision() const {
-    return revision_counter_;
+    return tool_settings_revision_counter_;
   }
   [[nodiscard]] std::uint32_t count() const;
   [[nodiscard]] std::uint32_t maximum_count() const;
@@ -112,6 +112,7 @@ public:
   CommandResult cancel();
   CommandResult apply();
   CommandResult set_count(std::uint32_t count);
+  CommandResult reset_settings();
   CommandResult adjust_count(int delta);
   CommandResult set_axis_constraint(LinearArrayAxisConstraint constraint);
   CommandResult set_endpoint(QVec3 world_position, bool snap_to_grid,
@@ -164,6 +165,7 @@ private:
   [[nodiscard]] std::optional<QVec3>
   source_visible_pivot(EntityId entity) const;
   [[nodiscard]] std::uint64_t issue_revision();
+  void issue_tool_settings_revision();
   void clear_preview_cache();
 
   SceneDocument &scene_;
@@ -174,6 +176,7 @@ private:
   SceneInstanceService &instances_;
   std::optional<Session> session_;
   std::uint64_t revision_counter_ = 0;
+  std::uint64_t tool_settings_revision_counter_ = 0;
   mutable std::uint64_t validated_session_generation_ = 0;
   mutable std::uint64_t validated_scene_revision_ = 0;
   mutable std::uint64_t validated_asset_revision_ = 0;

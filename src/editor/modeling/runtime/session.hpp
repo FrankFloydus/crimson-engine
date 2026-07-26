@@ -24,6 +24,10 @@
 #include <utility>
 #include <vector>
 
+namespace quader_poly::document_internal {
+struct PickWorkCounters;
+}
+
 namespace quader_editor_core {
 
 struct ViewportCameraState;
@@ -916,6 +920,13 @@ pick_nearest(const std::vector<PolygonObject> &objects,
              std::span<const PickObjectBounds> object_bounds,
              std::span<const PickObjectFaceGeometry> face_geometry,
              std::span<const PickObjectTransform> object_transforms = {});
+std::optional<PickHitRecord> pick_nearest_priority(
+    const std::vector<PolygonObject> &objects, const PickRequest &request,
+    std::span<const SelectionMode> priority_modes,
+    std::span<const PickObjectBounds> object_bounds = {},
+    std::span<const PickObjectFaceGeometry> face_geometry = {},
+    std::span<const PickObjectTransform> object_transforms = {},
+    quader_poly::document_internal::PickWorkCounters *work_counters = nullptr);
 std::vector<PickHitRecord> pick_all(const std::vector<PolygonObject> &objects,
                                     const PickRequest &request);
 std::vector<PickHitRecord>

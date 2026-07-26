@@ -11,6 +11,7 @@
 #include "core/logger.hpp"
 #include "diagnostics/profile.hpp"
 #include "ui/qt_input_adapter.hpp"
+#include "ui/qt_tool_settings_panel.hpp"
 #include "ui/qt_viewport_surface.hpp"
 
 #include <QAbstractButton>
@@ -60,16 +61,6 @@ bool is_viewport_surface_container(const QWidget *widget) {
 
 bool is_primitive_tool(ViewportToolId tool) {
   return tool == ViewportToolId::CreatePrimitive;
-}
-
-bool belongs_to_tool_settings_window(const QWidget *widget) {
-  for (const QWidget *current = widget; current != nullptr;
-       current = current->parentWidget()) {
-    if (current->objectName() == QStringLiteral("floating.tool_settings")) {
-      return true;
-    }
-  }
-  return false;
 }
 
 QAbstractSpinBox *focused_spin_box(QWidget *widget) {
@@ -342,7 +333,7 @@ bool QtCommandEventFilter::eventFilter(QObject *watched, QEvent *event) {
     const bool text_input_active = text_input_has_focus();
     const bool primitive_tool_settings_editor_active =
         is_primitive_tool(state.active_tool) &&
-        belongs_to_tool_settings_window(focus_widget) &&
+        qt_object_belongs_to_tool_settings_panel(focus_widget) &&
         (text_input_active || focused_combo_box(focus_widget) != nullptr);
     QuaderViewportKeybindingDispatch dispatch = [&]() {
       QDR_PROFILE_SCOPE("Qt command resolve keybinding");

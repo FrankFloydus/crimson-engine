@@ -6,11 +6,14 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include <gtest/gtest.h>
 
+#include "ui/qt_tool_settings_panel.hpp"
 #include "ui/qt_viewport_pane_activation.hpp"
 #include "ui/qt_viewport_panel.hpp"
 
 #include <QApplication>
 #include <QCoreApplication>
+#include <QDockWidget>
+#include <QMainWindow>
 #include <QObject>
 #include <QWidget>
 #include <QWindow>
@@ -82,7 +85,7 @@ TEST(QtViewportPaneActivationTests,
 }
 
 TEST(QtViewportEventTargetPolicyTests,
-     RetainedToolSettingsControlsStayInsideTheActiveTool) {
+     LegacyObjectNameAloneDoesNotCaptureTheActiveTool) {
   QObject tool_settings;
   tool_settings.setObjectName(QStringLiteral("floating.tool_settings"));
   QObject previous_button(&tool_settings);
@@ -94,12 +97,13 @@ TEST(QtViewportEventTargetPolicyTests,
   QObject apply_button(&tool_settings);
   apply_button.setObjectName(QStringLiteral("tool_settings.apply"));
 
-  EXPECT_TRUE(
+  EXPECT_FALSE(
       quader::qt_event_target_belongs_to_tool_settings(&tool_settings));
-  EXPECT_TRUE(
+  EXPECT_FALSE(
       quader::qt_event_target_belongs_to_tool_settings(&previous_button));
-  EXPECT_TRUE(quader::qt_event_target_belongs_to_tool_settings(&next_button));
-  EXPECT_TRUE(quader::qt_event_target_belongs_to_tool_settings(&apply_button));
+  EXPECT_FALSE(quader::qt_event_target_belongs_to_tool_settings(&next_button));
+  EXPECT_FALSE(
+      quader::qt_event_target_belongs_to_tool_settings(&apply_button));
 
   QObject ordinary_dialog;
   ordinary_dialog.setObjectName(QStringLiteral("unrelated.dialog"));
@@ -112,19 +116,36 @@ TEST(QtViewportEventTargetPolicyTests,
 }
 
 TEST(QtViewportEventTargetPolicyTests,
-     ToolSettingsNativeWindowHandleStaysInsideButOtherWindowsRemainOutside) {
+     DockedControlsAndFloatedNativeWindowStayInsideTheActiveTool) {
   ASSERT_EQ(QCoreApplication::instance(), nullptr);
   int argc = 1;
-  char application_name[] = "quader-tool-settings-window-tests";
+  char application_name[] = "quader-tool-settings-dock-tests";
   char *argv[] = {application_name, nullptr};
   QApplication application(argc, argv);
   application.setQuitOnLastWindowClosed(false);
 
-  QWidget tool_settings;
-  tool_settings.setObjectName(QStringLiteral("floating.tool_settings"));
-  tool_settings.setAttribute(Qt::WA_DontShowOnScreen, true);
-  (void)tool_settings.winId();
-  QWindow *tool_settings_window = tool_settings.windowHandle();
+  QMainWindow main_window;
+  QDockWidget tool_settings_dock(&main_window);
+  auto *tool_settings = new quader::QtToolSettingsPanel();
+  tool_settings_dock.setWidget(tool_settings);
+  main_window.addDockWidget(Qt::RightDockWidgetArea, &tool_settings_dock);
+
+  QObject previous_button(tool_settings);
+  previous_button.setObjectName(
+      QStringLiteral("tool_settings.control.pivot.align.prev"));
+  QObject apply_button(tool_settings);
+  apply_button.setObjectName(QStringLiteral("tool_settings.apply"));
+  EXPECT_TRUE(
+      quader::qt_event_target_belongs_to_tool_settings(tool_settings));
+  EXPECT_TRUE(
+      quader::qt_event_target_belongs_to_tool_settings(&previous_button));
+  EXPECT_TRUE(
+      quader::qt_event_target_belongs_to_tool_settings(&apply_button));
+
+  tool_settings_dock.setAttribute(Qt::WA_DontShowOnScreen, true);
+  tool_settings_dock.setFloating(true);
+  (void)tool_settings_dock.winId();
+  QWindow *tool_settings_window = tool_settings_dock.windowHandle();
   ASSERT_NE(tool_settings_window, nullptr);
   EXPECT_TRUE(quader::qt_event_target_belongs_to_tool_settings(
       tool_settings_window));

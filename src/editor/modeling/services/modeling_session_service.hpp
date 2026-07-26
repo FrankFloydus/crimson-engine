@@ -144,6 +144,8 @@ public:
       const ModelingSessionMemento &memento);
   void clear_transient_state_for_document_replacement();
   void reset_from_scene();
+  [[nodiscard]] ModelingCommandResult
+  restore_mesh_documents_from_scene(std::span<const EntityId> entities);
   void set_instance_edit_scope_provider(
       std::function<ModelingInstanceEditScope()> provider);
   void set_viewport_visibility_filter(
@@ -191,6 +193,7 @@ public:
   [[nodiscard]] ModelingInteractionSettings interaction_settings() const;
   ModelingCommandResult
   set_interaction_settings(const ModelingInteractionSettings &settings);
+  ModelingCommandResult reset_active_tool_settings();
   [[nodiscard]] ModelingActionSet
   context_action_set(const ModelingActionQuery &query = {}) const;
   [[nodiscard]] std::vector<ModelingActionItem>
@@ -287,6 +290,7 @@ public:
   ModelingBoxPreview update_box_footprint(const ModelingBoxToolEvent &event);
   ModelingBoxPreview begin_box_height(const ModelingBoxToolEvent &event);
   ModelingBoxPreview update_box_height(const ModelingBoxToolEvent &event);
+  [[nodiscard]] ModelingBoxDragState box_drag_state() const;
   [[nodiscard]] ModelingBoxPreview box_preview(bool snap_enabled = true) const;
   ModelingCreateBoxResult commit_box(std::string name);
   ModelingCommandResult cancel_box();

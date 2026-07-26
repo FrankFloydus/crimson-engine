@@ -6,8 +6,11 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "scene/document/scene_content_document.hpp"
 
+#include "scene/scene_transform.hpp"
+
 #include <algorithm>
 #include <iterator>
+#include <optional>
 #include <utility>
 
 namespace quader {
@@ -548,11 +551,13 @@ SceneContentDocument::validate_asset_references(ProjectObjectRecord record) cons
 
 EntityId SceneContentDocument::ensure_scene_root() {
   EntityId root = scene_.scene_root();
+  bool created_root = false;
   if (root == kInvalidEntityId) {
     root = scene_.create_entity("scene", EntityKind::Empty);
     if (root == kInvalidEntityId) {
       return kInvalidEntityId;
     }
+    created_root = true;
     if (!scene_.set_scene_settings(root, SceneSettingsComponent{})) {
       return kInvalidEntityId;
     }
@@ -579,9 +584,47 @@ EntityId SceneContentDocument::ensure_scene_root() {
   }
 
   const std::vector<EntityId> entities = scene_.entities();
+  std::vector<SceneParentAssignment> hierarchy;
+  std::vector<SceneTransformAssignment> preserved_transforms;
+  hierarchy.reserve(entities.size());
+  preserved_transforms.reserve(entities.size());
+  const QMat4 root_world = scene_.world_transform_matrix(root);
+  bool has_orphans = false;
   for (const EntityId entity : entities) {
-    if (entity != root && scene_.parent(entity) == kInvalidEntityId) {
-      (void)scene_.set_parent(entity, root, true);
+    EntityId parent = scene_.parent(entity);
+    if (entity != root && parent == kInvalidEntityId) {
+      parent = root;
+      has_orphans = true;
+      if (!created_root) {
+        const TransformComponent *current = scene_.transform(entity);
+        if (current == nullptr) {
+          return kInvalidEntityId;
+        }
+        const std::optional<TransformComponent> preserved =
+            try_scene_local_transform_preserving_world(
+                root_world, scene_.world_transform_matrix(entity), *current);
+        if (!preserved.has_value()) {
+          return kInvalidEntityId;
+        }
+        preserved_transforms.push_back(SceneTransformAssignment{
+            .entity = entity,
+            .transform = *preserved,
+        });
+      }
+    }
+    hierarchy.push_back(SceneParentAssignment{
+        .child = entity,
+        .parent = parent,
+    });
+  }
+  if (has_orphans && scene_.replace_hierarchy(hierarchy)) {
+    scene_.set_transforms(preserved_transforms);
+  } else if (has_orphans) {
+    for (const SceneParentAssignment &assignment : hierarchy) {
+      if (assignment.child != root &&
+          scene_.parent(assignment.child) == kInvalidEntityId) {
+        (void)scene_.set_parent(assignment.child, root, true);
+      }
     }
   }
   return root;

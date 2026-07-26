@@ -29,11 +29,20 @@ namespace quader {
   return !has_synced || synced_signature != style.wire_signature;
 }
 
+/// Reports deterministic renderer-neutral work performed by one batch prepare.
+struct SceneWireframeOverlayPlanWorkStats final {
+  std::size_t primitive_record_index_entry_count = 0u;
+  std::size_t chunk_record_lookup_count = 0u;
+  std::size_t local_bounds_cache_hit_count = 0u;
+  std::uint64_t local_bounds_vertex_visit_count = 0u;
+};
+
 /// Carries the renderer-neutral full-scene wire plan and sharing counts.
 struct SceneWireframeOverlayBatchPlan final {
   RenderInstanceBatchPlan batches;
   std::size_t participant_count = 0u;
   std::size_t unique_geometry_style_count = 0u;
+  SceneWireframeOverlayPlanWorkStats work;
 };
 
 /**

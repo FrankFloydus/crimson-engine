@@ -32,41 +32,10 @@ namespace {
   return "modeling.preview";
 }
 
-[[nodiscard]] Result<SemanticOverlayPayload>
-build_preview_overlay_payload(const PolygonDocument &document) {
-  Result<AuthoredPolygonPayload> authored_result = document.authored_payload();
-  if (!authored_result.ok()) {
-    return Result<SemanticOverlayPayload>::failure(authored_result.error());
-  }
-
-  const AuthoredPolygonPayload &authored = authored_result.value();
-  auto position_for = [&](VertexId vertex_id) -> const Vec3 * {
-    for (std::size_t index = 0; index < authored.vertices.size(); ++index) {
-      if (authored.vertices[index] == vertex_id) {
-        return &authored.positions[index];
-      }
-    }
-    return nullptr;
-  };
-
-  SemanticOverlayPayload overlay;
-  overlay.selection_revision = document.selection_revision();
-  for (const AuthoredPolygonFacePayload &face : authored.faces) {
-    SemanticOverlayRecord record;
+void mark_as_tool_preview(SemanticOverlayPayload &overlay) {
+  for (SemanticOverlayRecord &record : overlay.records) {
     record.kind = SemanticOverlayKind::ToolPreview;
-    for (VertexId vertex_id : face.vertices) {
-      if (const Vec3 *position = position_for(vertex_id)) {
-        record.points.push_back(*position);
-      }
-    }
-    if (!record.points.empty()) {
-      record.points.push_back(record.points.front());
-    }
-    if (record.points.size() >= 2U) {
-      overlay.records.push_back(std::move(record));
-    }
   }
-  return Result<SemanticOverlayPayload>::success(std::move(overlay));
 }
 
 [[nodiscard]] Result<OperationResult>
@@ -250,12 +219,27 @@ ToolPreviewPayload PreviewHandle::payload(PayloadRequest request) const {
                                        "Preview payload")) {
     return {};
   }
-  request.lifetime = SnapshotLifetime::Owned;
-  ToolPreviewPayload payload;
-  payload.mesh = mesh_payload(request);
-  payload.overlay = overlay_payload(request);
-  payload.valid = !payload.mesh.vertices.empty() || !payload.overlay.records.empty();
-  return payload;
+  if (!active()) {
+    static_cast<void>(handle_failure(
+        *state_->context,
+        make_error(ErrorCode::InvalidArgument, "Preview handle is not active.")));
+    return {};
+  }
+  if (request.only_if_changed &&
+      state_->payload_revision <= request.previous_revision) {
+    return {};
+  }
+  Result<ToolPreviewPayload> payload =
+      state_->context->session.preview_payload(state_->id);
+  if (!payload.ok()) {
+    static_cast<void>(handle_failure(*state_->context, payload.error()));
+    return {};
+  }
+  ToolPreviewPayload result = std::move(payload).value();
+  mark_as_tool_preview(result.overlay);
+  result.valid =
+      !result.mesh.vertices.empty() || !result.overlay.records.empty();
+  return result;
 }
 
 MeshPayload PreviewHandle::mesh_payload(PayloadRequest request) const {
@@ -276,20 +260,13 @@ MeshPayload PreviewHandle::mesh_payload(PayloadRequest request) const {
       state_->payload_revision <= request.previous_revision) {
     return {};
   }
-  Result<PolygonDocument> document =
-      state_->context->session.preview_document_copy(state_->id);
-  if (!document.ok()) {
-    static_cast<void>(handle_failure(*state_->context, document.error()));
-    return {};
-  }
-  Result<MeshPayload> payload = document.value().compile_mesh();
+  Result<ToolPreviewPayload> payload =
+      state_->context->session.preview_payload(state_->id);
   if (!payload.ok()) {
     static_cast<void>(handle_failure(*state_->context, payload.error()));
     return {};
   }
-  MeshPayload result = std::move(payload).value();
-  result.content_revision = state_->payload_revision;
-  return result;
+  return std::move(payload).value().mesh;
 }
 
 SemanticOverlayPayload
@@ -311,19 +288,15 @@ PreviewHandle::overlay_payload(PayloadRequest request) const {
       state_->payload_revision <= request.previous_revision) {
     return {};
   }
-  Result<PolygonDocument> document =
-      state_->context->session.preview_document_copy(state_->id);
-  if (!document.ok()) {
-    static_cast<void>(handle_failure(*state_->context, document.error()));
-    return {};
-  }
-  Result<SemanticOverlayPayload> payload =
-      build_preview_overlay_payload(document.value());
+  Result<ToolPreviewPayload> payload =
+      state_->context->session.preview_payload(state_->id);
   if (!payload.ok()) {
     static_cast<void>(handle_failure(*state_->context, payload.error()));
     return {};
   }
-  return std::move(payload).value();
+  SemanticOverlayPayload result = std::move(payload).value().overlay;
+  mark_as_tool_preview(result);
+  return result;
 }
 
 OperationReceipt PreviewHandle::commit(std::string) {

@@ -20,6 +20,7 @@
 #include <stdexcept>
 #include <string>
 #include <type_traits>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -1034,6 +1035,62 @@ TEST(ModelingSdkConsumerTests, SessionSelectionUndoRedoUsesSdkTypesOnly) {
 }
 
 TEST(ModelingSdkConsumerTests,
+     SessionHydrationAndHostHistoryRestorePublishLinearBatches) {
+  constexpr std::size_t kDocumentCount = 2048U;
+  Result<PolygonDocument> template_document = PolygonDocument::make_box({});
+  ASSERT_TRUE(template_document.ok()) << template_document.error_message();
+
+  std::vector<SessionWorkspaceDocument> documents;
+  documents.reserve(kDocumentCount);
+  for (std::size_t index = 0; index < kDocumentCount; ++index) {
+    documents.push_back({
+        .document = template_document.value(),
+        .name = "Hydrated " + std::to_string(index),
+        .selected = index == 17U,
+    });
+  }
+
+  ModelingSession session;
+  Result<std::vector<ObjectId>> hydrated =
+      session.replace_workspace_preserving_clipboard(std::move(documents));
+  ASSERT_TRUE(hydrated.ok()) << hydrated.error_message();
+  ASSERT_EQ(hydrated.value().size(), kDocumentCount);
+  EXPECT_EQ(session.objects().size(), kDocumentCount);
+  EXPECT_EQ(session.content_revision(), 1U);
+  EXPECT_EQ(session.undo_depth(), 0U);
+  EXPECT_FALSE(session.can_undo());
+  EXPECT_TRUE(session.objects()[17U].selected);
+  EXPECT_EQ(session.changes_since(0U).objects.size(), kDocumentCount);
+
+  Result<PolygonDocument> replacement =
+      session.document_copy(hydrated.value()[17U]);
+  ASSERT_TRUE(replacement.ok()) << replacement.error_message();
+  ASSERT_TRUE(replacement.value().select_all_faces().ok());
+  Result<OperationResult> translated =
+      replacement.value().translate_selection({0.0F, 2.0F, 0.0F});
+  ASSERT_TRUE(translated.ok()) << translated.error_message();
+  ASSERT_TRUE(translated.value().changed);
+
+  const std::uint64_t before_restore = session.content_revision();
+  std::vector<SessionDocumentHistoryRestore> restores;
+  restores.push_back({
+      .object = hydrated.value()[17U],
+      .document = std::move(replacement).value(),
+      .dirty = {.geometry = true, .overlays = true},
+  });
+  Result<OperationResult> restored =
+      session.restore_documents_as_history_transition(std::move(restores));
+  ASSERT_TRUE(restored.ok()) << restored.error_message();
+  EXPECT_TRUE(restored.value().changed);
+  EXPECT_EQ(session.content_revision(), before_restore + 1U);
+  EXPECT_EQ(session.undo_depth(), 0U);
+  const SessionChangeSnapshot changes =
+      session.changes_since(before_restore);
+  ASSERT_EQ(changes.objects.size(), 1U);
+  EXPECT_EQ(changes.objects.front().id, hydrated.value()[17U]);
+}
+
+TEST(ModelingSdkConsumerTests,
      SessionBridgesTwoDocumentsInSurvivorSpaceAtomically) {
   Result<PolygonDocument> first_document = PolygonDocument::make_box({});
   Result<PolygonDocument> second_document = PolygonDocument::make_box({});
@@ -1605,6 +1662,11 @@ TEST(ModelingSdkConsumerTests, SessionPreviewCommitAndCancelStayHeadless) {
   EXPECT_TRUE(preview_payload.value().valid);
   EXPECT_FALSE(preview_payload.value().mesh.vertices.empty());
   EXPECT_FALSE(preview_payload.value().overlay.records.empty());
+  EXPECT_TRUE(std::ranges::all_of(
+      preview_payload.value().overlay.records,
+      [](const SemanticOverlayRecord &record) {
+        return record.kind == SemanticOverlayKind::Wire;
+      }));
 
   document = session.document(object_id.value());
   ASSERT_NE(document, nullptr);
@@ -1633,6 +1695,78 @@ TEST(ModelingSdkConsumerTests, SessionPreviewCommitAndCancelStayHeadless) {
   document = session.document(object_id.value());
   ASSERT_NE(document, nullptr);
   EXPECT_LT(document->content_revision(), committed_preview_revision);
+}
+
+TEST(ModelingSdkConsumerTests,
+     SemanticOverlayScalePreservesEveryFaceAndCornerInAuthoredOrder) {
+  constexpr int kSubdivisions = 128;
+  Result<PolygonDocument> document_result = PolygonDocument::make_box({
+      .x_subdivisions = kSubdivisions,
+      .y_subdivisions = kSubdivisions,
+      .z_subdivisions = kSubdivisions,
+  });
+  ASSERT_TRUE(document_result.ok()) << document_result.error_message();
+
+  Result<AuthoredPolygonPayload> authored_result =
+      document_result.value().authored_payload();
+  ASSERT_TRUE(authored_result.ok()) << authored_result.error_message();
+  AuthoredPolygonPayload authored = std::move(authored_result).value();
+  ASSERT_GT(authored.vertices.size(), 50'000U);
+  ASSERT_GT(authored.faces.size(), 50'000U);
+
+  ModelingSession session;
+  Result<ObjectId> object =
+      session.add_document(std::move(document_result).value(), "Overlay Scale");
+  ASSERT_TRUE(object.ok()) << object.error_message();
+  Result<SemanticOverlayPayload> overlay_result =
+      session.semantic_overlay(object.value());
+  ASSERT_TRUE(overlay_result.ok()) << overlay_result.error_message();
+  const SemanticOverlayPayload &overlay = overlay_result.value();
+
+  ASSERT_EQ(overlay.records.size(), authored.faces.size());
+  EXPECT_EQ(overlay.selection_revision, 0U);
+
+  const auto vertex_key = [](VertexId id) {
+    return (static_cast<std::uint64_t>(id.generation) << 32U) |
+           static_cast<std::uint64_t>(id.index);
+  };
+  std::unordered_map<std::uint64_t, Vec3> positions;
+  positions.reserve(authored.vertices.size());
+  for (std::size_t index = 0; index < authored.vertices.size(); ++index) {
+    positions.emplace(vertex_key(authored.vertices[index]),
+                      authored.positions[index]);
+  }
+
+  std::size_t expected_point_count = 0;
+  std::size_t observed_point_count = 0;
+  std::size_t mismatched_records = 0;
+  std::size_t mismatched_points = 0;
+  for (std::size_t face_index = 0; face_index < authored.faces.size();
+       ++face_index) {
+    const AuthoredPolygonFacePayload &face = authored.faces[face_index];
+    const SemanticOverlayRecord &record = overlay.records[face_index];
+    expected_point_count += face.vertices.size() + 1U;
+    observed_point_count += record.points.size();
+    if (record.kind != SemanticOverlayKind::Wire ||
+        record.points.size() != face.vertices.size() + 1U) {
+      ++mismatched_records;
+      continue;
+    }
+    for (std::size_t corner = 0; corner < face.vertices.size(); ++corner) {
+      const auto position = positions.find(vertex_key(face.vertices[corner]));
+      if (position == positions.end() ||
+          !vec3_near(record.points[corner], position->second)) {
+        ++mismatched_points;
+      }
+    }
+    if (!vec3_near(record.points.back(), record.points.front())) {
+      ++mismatched_points;
+    }
+  }
+
+  EXPECT_EQ(observed_point_count, expected_point_count);
+  EXPECT_EQ(mismatched_records, 0U);
+  EXPECT_EQ(mismatched_points, 0U);
 }
 
 TEST(ModelingSdkConsumerTests,
@@ -2722,6 +2856,25 @@ TEST(ModelingSdkConsumerTests,
   EXPECT_EQ(first_mesh.content_revision, first_revision);
   EXPECT_FALSE(first_mesh.vertices.empty());
   EXPECT_FALSE(first_overlay.records.empty());
+  EXPECT_GT(first_overlay.selection_revision, 0U);
+  EXPECT_TRUE(std::ranges::all_of(
+      first_overlay.records, [](const SemanticOverlayRecord &record) {
+        return record.kind == SemanticOverlayKind::ToolPreview;
+      }));
+
+  const ToolPreviewPayload first_combined = preview.payload(initial_request);
+  EXPECT_TRUE(first_combined.valid);
+  EXPECT_EQ(first_combined.mesh.content_revision, first_revision);
+  EXPECT_EQ(first_combined.mesh.vertices.size(), first_mesh.vertices.size());
+  EXPECT_EQ(first_combined.overlay.records.size(),
+            first_overlay.records.size());
+  EXPECT_EQ(first_combined.overlay.selection_revision,
+            first_overlay.selection_revision);
+  EXPECT_TRUE(std::ranges::all_of(
+      first_combined.overlay.records,
+      [](const SemanticOverlayRecord &record) {
+        return record.kind == SemanticOverlayKind::ToolPreview;
+      }));
 
   const PayloadRequest unchanged_request{
       .only_if_changed = true,
@@ -2729,6 +2882,7 @@ TEST(ModelingSdkConsumerTests,
   };
   EXPECT_TRUE(preview.mesh_payload(unchanged_request).vertices.empty());
   EXPECT_TRUE(preview.overlay_payload(unchanged_request).records.empty());
+  EXPECT_FALSE(preview.payload(unchanged_request).valid);
 
   TransformOptions moved;
   moved.transform.origin = {2.0F, 0.0F, 0.0F};
@@ -2743,7 +2897,13 @@ TEST(ModelingSdkConsumerTests,
   const MeshPayload second_mesh = preview.mesh_payload(updated_request);
   EXPECT_EQ(second_mesh.content_revision, second_revision);
   EXPECT_FALSE(second_mesh.vertices.empty());
-  EXPECT_FALSE(preview.overlay_payload(updated_request).records.empty());
+  const SemanticOverlayPayload second_overlay =
+      preview.overlay_payload(updated_request);
+  EXPECT_FALSE(second_overlay.records.empty());
+  EXPECT_TRUE(std::ranges::all_of(
+      second_overlay.records, [](const SemanticOverlayRecord &record) {
+        return record.kind == SemanticOverlayKind::ToolPreview;
+      }));
 
   ASSERT_TRUE(preview.cancel().success);
   PreviewHandle next_preview = mesh.transform().preview();
@@ -2823,6 +2983,155 @@ TEST(ModelingSdkConsumerTests,
       std::move(replacement_document).value(), "Replacement");
   ASSERT_TRUE(replacement.ok()) << replacement.error_message();
   EXPECT_NE(replacement.value(), second.value());
+}
+
+TEST(ModelingSdkConsumerTests,
+     SessionCurrentWorkspaceCheckpointDropsDeepHistoryAndRetainsHighWater) {
+  constexpr std::size_t kRenameHistoryDepth = 512U;
+  constexpr std::size_t kRetiredObjectCount = 32U;
+  Result<PolygonDocument> template_document = PolygonDocument::make_box({});
+  ASSERT_TRUE(template_document.ok()) << template_document.error_message();
+
+  ModelingSession session;
+  Result<ObjectId> primary =
+      session.add_document(template_document.value(), "Checkpoint Primary");
+  ASSERT_TRUE(primary.ok()) << primary.error_message();
+  ASSERT_TRUE(session.select_object(primary.value()).ok());
+  Result<OperationResult> copied = session.copy_selection_to_clipboard();
+  ASSERT_TRUE(copied.ok()) << copied.error_message();
+  ASSERT_TRUE(session.clipboard_available());
+
+  ObjectId last_allocated = primary.value();
+  for (std::size_t index = 0; index < kRetiredObjectCount; ++index) {
+    Result<ObjectId> transient = session.add_document(
+        template_document.value(), "Retired " + std::to_string(index));
+    ASSERT_TRUE(transient.ok()) << transient.error_message();
+    last_allocated = transient.value();
+    Result<OperationResult> removed =
+        session.remove_object(transient.value());
+    ASSERT_TRUE(removed.ok()) << removed.error_message();
+    ASSERT_TRUE(removed.value().changed);
+  }
+  for (std::size_t index = 0; index < kRenameHistoryDepth; ++index) {
+    Result<OperationResult> renamed = session.rename_object(
+        primary.value(), "Checkpoint " + std::to_string(index));
+    ASSERT_TRUE(renamed.ok()) << renamed.error_message();
+    ASSERT_TRUE(renamed.value().changed);
+  }
+
+  Result<PolygonDocument> edited = session.document_copy(primary.value());
+  ASSERT_TRUE(edited.ok()) << edited.error_message();
+  const FaceId source_face = edited.value().face_ids().front();
+  ASSERT_TRUE(session.select_face(primary.value(), source_face).ok());
+  edited = session.document_copy(primary.value());
+  ASSERT_TRUE(edited.ok()) << edited.error_message();
+  Result<OperationResult> extruded =
+      edited.value().extrude_selected_faces(0.25F);
+  ASSERT_TRUE(extruded.ok()) << extruded.error_message();
+  ASSERT_TRUE(extruded.value().changed);
+  ASSERT_FALSE(extruded.value().created.faces.empty());
+  const FaceId abandoned_face = extruded.value().created.faces.front();
+  OperationResult extrude_receipt = extruded.value();
+  Result<OperationResult> committed = session.commit_document(
+      primary.value(), std::move(edited).value(),
+      std::move(extrude_receipt));
+  ASSERT_TRUE(committed.ok()) << committed.error_message();
+  ASSERT_TRUE(session.undo().ok());
+  ASSERT_TRUE(session.can_redo());
+
+  Result<OperationResult> preview =
+      session.begin_translate_preview(primary.value(), {0.5F, 0.0F, 0.0F});
+  ASSERT_TRUE(preview.ok()) << preview.error_message();
+  Result<ToolPreviewPayload> preview_payload = session.preview_payload();
+  ASSERT_TRUE(preview_payload.ok()) << preview_payload.error_message();
+  ASSERT_TRUE(preview_payload.value().valid);
+  const PreviewId allocated_preview = session.preview_summary().id;
+  ASSERT_TRUE(allocated_preview.valid());
+
+  const std::vector<SessionObjectSummary> expected_objects =
+      session.objects();
+  const std::uint64_t expected_content_revision = session.content_revision();
+  const std::uint64_t expected_selection_revision =
+      session.selection_revision();
+  ASSERT_GT(session.undo_depth(), kRenameHistoryDepth);
+
+  ModelingSession checkpoint = session.current_workspace_checkpoint();
+  EXPECT_TRUE(session.preview_active());
+  EXPECT_TRUE(session.can_redo());
+  EXPECT_EQ(checkpoint.undo_depth(), 0U);
+  EXPECT_FALSE(checkpoint.can_undo());
+  EXPECT_FALSE(checkpoint.can_redo());
+  EXPECT_FALSE(checkpoint.preview_active());
+  EXPECT_FALSE(checkpoint.preview_payload().ok());
+  EXPECT_TRUE(checkpoint.clipboard_available());
+  EXPECT_EQ(checkpoint.clipboard_object_count(), 1U);
+  EXPECT_EQ(checkpoint.content_revision(), expected_content_revision);
+  EXPECT_EQ(checkpoint.selection_revision(), expected_selection_revision);
+
+  const std::vector<SessionObjectSummary> checkpoint_objects =
+      checkpoint.objects();
+  ASSERT_EQ(checkpoint_objects.size(), expected_objects.size());
+  for (std::size_t index = 0; index < expected_objects.size(); ++index) {
+    EXPECT_EQ(checkpoint_objects[index].id, expected_objects[index].id);
+    EXPECT_EQ(checkpoint_objects[index].name, expected_objects[index].name);
+    EXPECT_EQ(checkpoint_objects[index].selected,
+              expected_objects[index].selected);
+    EXPECT_EQ(checkpoint_objects[index].content_revision,
+              expected_objects[index].content_revision);
+    EXPECT_EQ(checkpoint_objects[index].selection_revision,
+              expected_objects[index].selection_revision);
+  }
+
+  for (std::size_t index = 0; index < 32U; ++index) {
+    checkpoint = checkpoint.current_workspace_checkpoint();
+    EXPECT_EQ(checkpoint.undo_depth(), 0U);
+    EXPECT_FALSE(checkpoint.can_redo());
+  }
+
+  ModelingSession restored;
+  Result<ObjectId> discarded = restored.add_document(
+      template_document.value(), "Discarded Restore Target");
+  ASSERT_TRUE(discarded.ok()) << discarded.error_message();
+  restored.restore_snapshot_as_history_transition(checkpoint);
+  EXPECT_EQ(restored.undo_depth(), 0U);
+  EXPECT_FALSE(restored.can_undo());
+  EXPECT_FALSE(restored.can_redo());
+  EXPECT_FALSE(restored.preview_active());
+  ASSERT_EQ(restored.objects().size(), expected_objects.size());
+  EXPECT_EQ(restored.objects().front().id, primary.value());
+  EXPECT_EQ(restored.objects().front().name, expected_objects.front().name);
+
+  Result<OperationResult> next_preview =
+      restored.begin_translate_preview(primary.value(),
+                                       {0.25F, 0.0F, 0.0F});
+  ASSERT_TRUE(next_preview.ok()) << next_preview.error_message();
+  EXPECT_GT(restored.preview_summary().id.index, allocated_preview.index);
+  ASSERT_TRUE(restored.cancel_preview().ok());
+
+  Result<ObjectId> replacement = restored.add_document(
+      template_document.value(), "Post-checkpoint Object");
+  ASSERT_TRUE(replacement.ok()) << replacement.error_message();
+  EXPECT_GT(replacement.value().index, last_allocated.index);
+
+  Result<PolygonDocument> topology_branch =
+      restored.document_copy(primary.value());
+  ASSERT_TRUE(topology_branch.ok()) << topology_branch.error_message();
+  Result<AuthoredTopology> topology =
+      topology_branch.value().authored_topology();
+  ASSERT_TRUE(topology.ok()) << topology.error_message();
+  EXPECT_GT(topology.value().next_face_id, abandoned_face.index);
+  ASSERT_TRUE(topology_branch.value().select_face(source_face).ok());
+  Result<OperationResult> branch_extruded =
+      topology_branch.value().extrude_selected_faces(0.5F);
+  ASSERT_TRUE(branch_extruded.ok()) << branch_extruded.error_message();
+  EXPECT_EQ(std::ranges::find(branch_extruded.value().created.faces,
+                              abandoned_face),
+            branch_extruded.value().created.faces.end());
+  OperationResult branch_receipt = branch_extruded.value();
+  Result<OperationResult> branch_committed = restored.commit_document(
+      primary.value(), std::move(topology_branch).value(),
+      std::move(branch_receipt));
+  ASSERT_TRUE(branch_committed.ok()) << branch_committed.error_message();
 }
 
 TEST(ModelingSdkConsumerTests,

@@ -7,6 +7,7 @@
 #include "test_support.hpp"
 
 #include <quader/modeling/neutral/polygon/document.hpp>
+#include <quader/modeling/neutral/polygon/internal/quader_poly_document_picking_helpers.hpp>
 
 #include <array>
 #include <algorithm>
@@ -276,6 +277,78 @@ struct BackfacePreferenceFixture {
         return ::testing::AssertionFailure() << "concave n-gon should be accepted as a face";
     }
     return ::testing::AssertionSuccess();
+}
+
+Document make_component_pick_grid(int dimension)
+{
+    Document document;
+    std::vector<ElementId> vertex_ids(
+        static_cast<std::size_t>(dimension + 1) *
+        static_cast<std::size_t>(dimension + 1));
+    const auto vertex_index = [dimension](int x, int y) {
+        return static_cast<std::size_t>(y) *
+                static_cast<std::size_t>(dimension + 1) +
+            static_cast<std::size_t>(x);
+    };
+    const float center = static_cast<float>(dimension) * 0.5F;
+    for (int y = 0; y <= dimension; ++y) {
+        for (int x = 0; x <= dimension; ++x) {
+            vertex_ids[vertex_index(x, y)] = add_vertex(
+                document,
+                {
+                    static_cast<float>(x) - center,
+                    static_cast<float>(y) - center,
+                    0.0F,
+                });
+        }
+    }
+    for (int y = 0; y < dimension; ++y) {
+        for (int x = 0; x < dimension; ++x) {
+            const std::array<ElementId, 4> face_vertices{
+                vertex_ids[vertex_index(x, y)],
+                vertex_ids[vertex_index(x + 1, y)],
+                vertex_ids[vertex_index(x + 1, y + 1)],
+                vertex_ids[vertex_index(x, y + 1)],
+            };
+            EXPECT_NE(add_face(document, face_vertices), kInvalidElementId);
+        }
+    }
+    return document;
+}
+
+document_internal::PickWorkCounters component_pick_grid_work(
+    int dimension,
+    SelectionMode mode)
+{
+    const Document document = make_component_pick_grid(dimension);
+    PickOptions options;
+    options.mode = mode;
+    options.vertex_radius = 0.01F;
+    options.edge_radius = 0.01F;
+    document_internal::PickWorkCounters counters;
+    document_internal::DocumentPickFacts facts(
+        document, options, &counters);
+    const float x = mode == SelectionMode::Edge ? 0.5F : 0.0F;
+    const PickResult hit = facts.pick_element(
+        {{x, 0.0F, 2.0F}, {0.0F, 0.0F, -1.0F}});
+    EXPECT_TRUE(hit.hit);
+    EXPECT_EQ(
+        hit.kind,
+        mode == SelectionMode::Edge
+            ? ElementKind::Edge
+            : ElementKind::Vertex);
+    EXPECT_EQ(counters.fact_sets_built, 1U);
+    EXPECT_EQ(
+        counters.face_facts_built,
+        static_cast<std::size_t>(dimension * dimension));
+    EXPECT_EQ(
+        counters.face_triangle_facts_built,
+        static_cast<std::size_t>(2 * dimension * dimension));
+    EXPECT_EQ(
+        counters.surface_triangle_tests,
+        static_cast<std::size_t>(2 * dimension * dimension));
+    EXPECT_LE(counters.incident_face_visits, 4U);
+    return counters;
 }
 
 void characterizes_face_pick_on_quad()
@@ -695,6 +768,28 @@ TEST(QdrPolyGeometryCharacterizationTests, BackfaceEnabledComponentPickingPrefer
 
 TEST(QdrPolyGeometryCharacterizationTests, NearestSurfaceComponentPickingUsesRayDepthOnOverlap) {
     nearest_surface_component_picking_uses_ray_depth_on_overlap();
+}
+
+TEST(QdrPolyGeometryCharacterizationTests, VertexPickGridWorkScalesWithTopology) {
+    const document_internal::PickWorkCounters small =
+        component_pick_grid_work(8, SelectionMode::Vertex);
+    const document_internal::PickWorkCounters large =
+        component_pick_grid_work(16, SelectionMode::Vertex);
+
+    EXPECT_EQ(small.component_candidates_tested, 81U);
+    EXPECT_EQ(large.component_candidates_tested, 289U);
+    EXPECT_LE(large.total(), small.total() * 5U);
+}
+
+TEST(QdrPolyGeometryCharacterizationTests, EdgePickGridWorkScalesWithTopology) {
+    const document_internal::PickWorkCounters small =
+        component_pick_grid_work(8, SelectionMode::Edge);
+    const document_internal::PickWorkCounters large =
+        component_pick_grid_work(16, SelectionMode::Edge);
+
+    EXPECT_EQ(small.component_candidates_tested, 144U);
+    EXPECT_EQ(large.component_candidates_tested, 544U);
+    EXPECT_LE(large.total(), small.total() * 5U);
 }
 
 TEST(QdrPolyGeometryCharacterizationTests, CharacterizesConcaveNgonRenderability) {

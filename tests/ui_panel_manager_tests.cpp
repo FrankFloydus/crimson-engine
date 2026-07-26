@@ -7,6 +7,7 @@
 #include <gtest/gtest.h>
 
 #include "ui/ui_panel_manager.hpp"
+#include "ui/ui_settings.hpp"
 
 #include <QApplication>
 #include <QCoreApplication>
@@ -40,6 +41,20 @@ TEST(UIPanelManagerTests, ExplicitVisibilityTransitionIgnoresPhysicalNoise) {
   EXPECT_TRUE(restored.changed);
 }
 
+TEST(UIPanelManagerTests, ToolSettingsUsesTheSharedDockPanelContract) {
+  bool found_tool_settings = false;
+  for (UIPanelId id : kUiDockPanelIds) {
+    found_tool_settings = found_tool_settings || id == UIPanelId::ToolSettings;
+  }
+
+  EXPECT_TRUE(found_tool_settings);
+  EXPECT_EQ(kUiDockPanelIds.size(), 5U);
+  EXPECT_STREQ(ui_panel_stable_id(UIPanelId::ToolSettings), "tool_settings");
+  EXPECT_STREQ(ui_panel_localization_key(UIPanelId::ToolSettings),
+               "ui.panel.tool_settings");
+  EXPECT_TRUE(ui_panel_default_visible(UIPanelId::ToolSettings));
+}
+
 TEST(UIPanelManagerTests, FocusUsesThePanelContentsQtFocusProxy) {
   ASSERT_EQ(QCoreApplication::instance(), nullptr);
   int argc = 1;
@@ -68,10 +83,24 @@ TEST(UIPanelManagerTests, FocusUsesThePanelContentsQtFocusProxy) {
       << "the test must begin away from the panel focus proxy";
 
   UIPanelManager manager;
-  manager.add(UIPanelId::Outliner, *dock);
-  EXPECT_TRUE(manager.focus(UIPanelId::Outliner));
+  manager.add(UIPanelId::ToolSettings, *dock);
+  EXPECT_TRUE(manager.focus(UIPanelId::ToolSettings));
   QCoreApplication::processEvents();
   EXPECT_EQ(window.focusWidget(), focus_target);
+
+  UISettings requested = UISettings::defaults();
+  requested.set_panel_visible(UIPanelId::ToolSettings, false);
+  manager.apply_settings(requested);
+  EXPECT_FALSE(manager.is_visible(UIPanelId::ToolSettings));
+
+  requested.set_panel_visible(UIPanelId::ToolSettings, true);
+  manager.apply_settings(requested);
+  EXPECT_TRUE(manager.is_visible(UIPanelId::ToolSettings));
+
+  UISettings persisted = UISettings::defaults();
+  persisted.set_panel_visible(UIPanelId::ToolSettings, false);
+  manager.write_settings(persisted);
+  EXPECT_TRUE(persisted.is_panel_visible(UIPanelId::ToolSettings));
 }
 
 } // namespace

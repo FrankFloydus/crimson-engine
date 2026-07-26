@@ -32,10 +32,21 @@ namespace quader {
 
 class MeshRenderableFactory;
 
+/// Reports deterministic renderer-neutral work performed by one batch prepare.
+struct InstanceSelectionOverlayPlanWorkStats final {
+  std::size_t fill_record_index_entry_count = 0u;
+  std::size_t wire_record_index_entry_count = 0u;
+  std::size_t fill_chunk_record_lookup_count = 0u;
+  std::size_t wire_chunk_record_lookup_count = 0u;
+  std::size_t local_bounds_cache_hit_count = 0u;
+  std::uint64_t local_bounds_vertex_visit_count = 0u;
+};
+
 /// Groups renderer-neutral selected-instance fill and wire batch plans.
 struct InstanceSelectionOverlayBatchPlans final {
   RenderInstanceBatchPlan fills;
   RenderInstanceBatchPlan wires;
+  InstanceSelectionOverlayPlanWorkStats work;
 };
 
 /// Stores one renderer-neutral segment for an instance selection wire.

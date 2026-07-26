@@ -3662,37 +3662,70 @@ bool ModelingInteractionSettingsService::set_normalized(
   return changed;
 }
 
-void ModelingInteractionSettingsService::reset_for_preview_action(
-    ModelingActionPreviewKind preview_kind) {
+bool ModelingInteractionSettingsService::reset_for_target(
+    ModelingToolSettingsTargetKind target_kind) {
   const ModelingInteractionSettings before = settings_;
   const ModelingInteractionSettings defaults =
       normalize(ModelingInteractionSettings{});
-  switch (preview_kind) {
-  case ModelingActionPreviewKind::EdgeBevel:
+  switch (target_kind) {
+  case ModelingToolSettingsTargetKind::Cut:
+    settings_.cut_mode = defaults.cut_mode;
+    break;
+  case ModelingToolSettingsTargetKind::Bridge:
+    settings_.bridge_steps = defaults.bridge_steps;
+    break;
+  case ModelingToolSettingsTargetKind::EdgeBevel:
     settings_.edge_bevel_width = defaults.edge_bevel_width;
     settings_.edge_bevel_profile = defaults.edge_bevel_profile;
     settings_.edge_bevel_segments = defaults.edge_bevel_segments;
     break;
-  case ModelingActionPreviewKind::Thicken:
+  case ModelingToolSettingsTargetKind::Thicken:
     settings_.thicken_thickness = defaults.thicken_thickness;
     settings_.thicken_from_center = defaults.thicken_from_center;
     break;
-  case ModelingActionPreviewKind::MergeByDistance:
+  case ModelingToolSettingsTargetKind::SliceQuad:
+    settings_.slice_quad_x_slices = defaults.slice_quad_x_slices;
+    settings_.slice_quad_y_slices = defaults.slice_quad_y_slices;
+    break;
+  case ModelingToolSettingsTargetKind::MergeByDistance:
     settings_.merge_by_distance_tolerance =
         defaults.merge_by_distance_tolerance;
     break;
-  case ModelingActionPreviewKind::HalfCut:
+  case ModelingToolSettingsTargetKind::HalfCut:
     settings_.half_cut_axis = defaults.half_cut_axis;
     settings_.half_cut_separate_parts = defaults.half_cut_separate_parts;
     settings_.half_cut_fill_parts = defaults.half_cut_fill_parts;
     break;
+  case ModelingToolSettingsTargetKind::Mirror:
+  case ModelingToolSettingsTargetKind::None:
+    return false;
+  }
+  if (settings_ == before) {
+    return false;
+  }
+  ++revision_;
+  return true;
+}
+
+void ModelingInteractionSettingsService::reset_for_preview_action(
+    ModelingActionPreviewKind preview_kind) {
+  switch (preview_kind) {
+  case ModelingActionPreviewKind::EdgeBevel:
+    (void)reset_for_target(ModelingToolSettingsTargetKind::EdgeBevel);
+    return;
+  case ModelingActionPreviewKind::Thicken:
+    (void)reset_for_target(ModelingToolSettingsTargetKind::Thicken);
+    return;
+  case ModelingActionPreviewKind::MergeByDistance:
+    (void)reset_for_target(ModelingToolSettingsTargetKind::MergeByDistance);
+    return;
+  case ModelingActionPreviewKind::HalfCut:
+    (void)reset_for_target(ModelingToolSettingsTargetKind::HalfCut);
+    return;
   case ModelingActionPreviewKind::Bridge:
   case ModelingActionPreviewKind::SliceQuad:
   case ModelingActionPreviewKind::None:
     break;
-  }
-  if (!(settings_ == before)) {
-    ++revision_;
   }
 }
 

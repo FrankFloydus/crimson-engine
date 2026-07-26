@@ -12,12 +12,15 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <limits>
 #include <map>
 #include <optional>
 #include <ranges>
 #include <set>
 #include <span>
+#include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -569,6 +572,66 @@ bool normals_match_same_facing(quader::QVec3 left,
     return collinear && std::isfinite(alignment) && alignment > 0.0;
 }
 
+using ElementIdIndex = std::unordered_set<ElementId>;
+using EdgeIndex = std::unordered_set<std::uint64_t>;
+using FaceByIdIndex = std::unordered_map<ElementId, const Face*>;
+
+ElementIdIndex make_element_id_index(std::span<const ElementId> ids)
+{
+    ElementIdIndex index;
+    index.reserve(ids.size());
+    index.insert(ids.begin(), ids.end());
+    return index;
+}
+
+std::uint64_t indexed_edge_key(Edge edge)
+{
+    edge = make_edge(edge.a, edge.b);
+    return (static_cast<std::uint64_t>(edge.a) << 32U) |
+           static_cast<std::uint64_t>(edge.b);
+}
+
+EdgeIndex make_edge_index(std::span<const Edge> edges)
+{
+    EdgeIndex index;
+    index.reserve(edges.size());
+    for (const Edge edge : edges) {
+        index.insert(indexed_edge_key(edge));
+    }
+    return index;
+}
+
+FaceByIdIndex make_face_by_id_index(const Document& document)
+{
+    FaceByIdIndex index;
+    index.reserve(document.faces.size());
+    for (const Face& face : document.faces) {
+        index.try_emplace(face.id, &face);
+    }
+    return index;
+}
+
+void add_indexed_id(std::vector<ElementId>& ids,
+                    ElementIdIndex& index,
+                    ElementId id)
+{
+    if (id != kInvalidElementId && index.insert(id).second) {
+        ids.push_back(id);
+    }
+}
+
+void add_indexed_edge(std::vector<Edge>& edges,
+                      EdgeIndex& index,
+                      Edge edge)
+{
+    edge = make_edge(edge.a, edge.b);
+    if (edge.a == kInvalidElementId || edge.b == kInvalidElementId ||
+        edge.a == edge.b || !index.insert(indexed_edge_key(edge)).second) {
+        return;
+    }
+    edges.push_back(edge);
+}
+
 bool same_selection(const Selection& left, const Selection& right)
 {
     return left.mode == right.mode &&
@@ -729,39 +792,30 @@ bool planes_are_exactly_coplanar(const SelectionComparisonPlane& left,
     return std::abs(left_offset - right_offset) <= roundoff;
 }
 
-std::vector<ElementId> selected_edge_vertex_ids(const Selection& selection)
-{
-    std::vector<ElementId> vertices;
-    vertices.reserve(selection.edges.size() * 2U);
-    for (const Edge& edge : selection.edges) {
-        add_unique_id(vertices, edge.a);
-        add_unique_id(vertices, edge.b);
-    }
-    return vertices;
-}
-
 bool face_all_vertices_selected(const Face& face,
-                                const Selection& selection)
+                                const ElementIdIndex& selected_vertices)
 {
     return !face.vertices.empty() &&
            std::ranges::all_of(face.vertices, [&](ElementId vertex_id) {
-               return contains_id(selection.vertices, vertex_id);
+               return selected_vertices.contains(vertex_id);
            });
 }
 
-bool face_all_edges_selected(const Face& face, const Selection& selection)
+bool face_all_edges_selected(const Face& face,
+                             const EdgeIndex& selected_edges)
 {
     const std::vector<Edge> edges = face_edges(face);
     return !edges.empty() && std::ranges::all_of(edges, [&](Edge edge) {
-               return contains_edge(selection.edges, edge);
+               return selected_edges.contains(indexed_edge_key(edge));
            });
 }
 
-bool face_shares_selected_vertex(const Face& face,
-                                 std::span<const ElementId> selected_vertices)
+bool face_shares_selected_vertex(
+    const Face& face,
+    const ElementIdIndex& selected_vertices)
 {
     return std::ranges::any_of(face.vertices, [&](ElementId vertex_id) {
-        return contains_id(selected_vertices, vertex_id);
+        return selected_vertices.contains(vertex_id);
     });
 }
 
@@ -769,23 +823,29 @@ bool select_all_components(const Document& document, Selection& selection)
 {
     const Selection before = selection;
     switch (selection.mode) {
-    case SelectionMode::Vertex:
+    case SelectionMode::Vertex: {
       selection.vertices.clear();
       selection.vertices.reserve(document.vertices.size());
+      ElementIdIndex selected_vertices;
+      selected_vertices.reserve(document.vertices.size());
       for (const Vertex& vertex : document.vertices) {
-          add_unique_id(selection.vertices, vertex.id);
+          add_indexed_id(selection.vertices, selected_vertices, vertex.id);
       }
       break;
+    }
     case SelectionMode::Edge:
       selection.edges = document_edges(document);
       break;
-    case SelectionMode::Face:
+    case SelectionMode::Face: {
       selection.faces.clear();
       selection.faces.reserve(document.faces.size());
+      ElementIdIndex selected_faces;
+      selected_faces.reserve(document.faces.size());
       for (const Face& face : document.faces) {
-          add_unique_id(selection.faces, face.id);
+          add_indexed_id(selection.faces, selected_faces, face.id);
       }
       break;
+    }
     }
     return finish_selection_change(selection, before);
 }
@@ -796,10 +856,12 @@ bool invert_component_selection(const Document& document,
     const Selection before = selection;
     switch (selection.mode) {
     case SelectionMode::Vertex: {
+      const ElementIdIndex selected_vertices =
+          make_element_id_index(before.vertices);
       std::vector<ElementId> inverse;
       inverse.reserve(document.vertices.size());
       for (const Vertex& vertex : document.vertices) {
-          if (!contains_id(before.vertices, vertex.id)) {
+          if (!selected_vertices.contains(vertex.id)) {
               inverse.push_back(vertex.id);
           }
       }
@@ -807,9 +869,10 @@ bool invert_component_selection(const Document& document,
       break;
     }
     case SelectionMode::Edge: {
+      const EdgeIndex selected_edges = make_edge_index(before.edges);
       std::vector<Edge> inverse;
       for (const Edge edge : document_edges(document)) {
-          if (!contains_edge(before.edges, edge)) {
+          if (!selected_edges.contains(indexed_edge_key(edge))) {
               inverse.push_back(edge);
           }
       }
@@ -817,10 +880,12 @@ bool invert_component_selection(const Document& document,
       break;
     }
     case SelectionMode::Face: {
+      const ElementIdIndex selected_faces =
+          make_element_id_index(before.faces);
       std::vector<ElementId> inverse;
       inverse.reserve(document.faces.size());
       for (const Face& face : document.faces) {
-          if (!contains_id(before.faces, face.id)) {
+          if (!selected_faces.contains(face.id)) {
               inverse.push_back(face.id);
           }
       }
@@ -928,35 +993,49 @@ void convert_selection_mode(const Document& document, Selection& selection, Sele
     }
 
     const Selection source = selection;
-    const std::vector<ElementId> source_vertices = selected_vertex_ids(document, source);
     selection.clear();
     selection.mode = mode;
 
     switch (mode) {
-    case SelectionMode::Vertex:
+    case SelectionMode::Vertex: {
+      const std::vector<ElementId> source_vertices =
+          selected_vertex_ids(document, source);
+      ElementIdIndex document_vertices;
+      document_vertices.reserve(document.vertices.size());
+      for (const Vertex& vertex : document.vertices) {
+          document_vertices.insert(vertex.id);
+      }
       for (const ElementId vertex_id : source_vertices) {
-        if (find_vertex(document, vertex_id) != nullptr) {
-          add_unique_id(selection.vertices, vertex_id);
+        if (document_vertices.contains(vertex_id)) {
+          selection.vertices.push_back(vertex_id);
         }
       }
       break;
+    }
 
     case SelectionMode::Edge:
       if (source.mode == SelectionMode::Face) {
+        const FaceByIdIndex faces_by_id =
+            make_face_by_id_index(document);
+        EdgeIndex selected_edges;
         for (const ElementId face_id : source.faces) {
-          const Face *face = find_face(document, face_id);
-          if (face == nullptr) {
+          const auto found = faces_by_id.find(face_id);
+          if (found == faces_by_id.end() || found->second == nullptr) {
             continue;
           }
-          for (const Edge &edge : face_edges(*face)) {
-            add_unique_edge(selection.edges, edge);
+          for (const Edge &edge : face_edges(*found->second)) {
+            add_indexed_edge(selection.edges, selected_edges, edge);
           }
         }
       } else {
+        const std::vector<ElementId> source_vertices =
+            selected_vertex_ids(document, source);
+        const ElementIdIndex source_vertex_index =
+            make_element_id_index(source_vertices);
         for (const Edge &edge : document_edges(document)) {
-          if (contains_id(source_vertices, edge.a) &&
-              contains_id(source_vertices, edge.b)) {
-            add_unique_edge(selection.edges, edge);
+          if (source_vertex_index.contains(edge.a) &&
+              source_vertex_index.contains(edge.b)) {
+            selection.edges.push_back(edge);
           }
         }
       }
@@ -964,23 +1043,31 @@ void convert_selection_mode(const Document& document, Selection& selection, Sele
 
     case SelectionMode::Face:
       if (source.mode == SelectionMode::Edge) {
+        const EdgeIndex source_edge_index =
+            make_edge_index(source.edges);
+        ElementIdIndex selected_faces;
         for (const Face &face : document.faces) {
           const std::vector<Edge> edges = face_edges(face);
           if (!edges.empty() &&
-              std::ranges::all_of(edges, [&source](Edge edge) {
-                return selection_contains(source, edge);
+              std::ranges::all_of(edges, [&source_edge_index](Edge edge) {
+                return source_edge_index.contains(indexed_edge_key(edge));
               })) {
-            add_unique_id(selection.faces, face.id);
+            add_indexed_id(selection.faces, selected_faces, face.id);
           }
         }
       } else {
+        const std::vector<ElementId> source_vertices =
+            selected_vertex_ids(document, source);
+        const ElementIdIndex source_vertex_index =
+            make_element_id_index(source_vertices);
+        ElementIdIndex selected_faces;
         for (const Face &face : document.faces) {
           if (!face.vertices.empty() &&
               std::ranges::all_of(
-                  face.vertices, [&source_vertices](ElementId vertex_id) {
-                    return contains_id(source_vertices, vertex_id);
+                  face.vertices, [&source_vertex_index](ElementId vertex_id) {
+                    return source_vertex_index.contains(vertex_id);
                   })) {
-            add_unique_id(selection.faces, face.id);
+            add_indexed_id(selection.faces, selected_faces, face.id);
           }
         }
       }
@@ -1011,12 +1098,16 @@ std::vector<ElementId> selected_vertex_ids(const Document& document, const Selec
         ids.push_back(edge.a);
         ids.push_back(edge.b);
     }
+    const FaceByIdIndex faces_by_id =
+        selection.faces.empty() ? FaceByIdIndex {}
+                                : make_face_by_id_index(document);
     for (const ElementId face_id : selection.faces) {
-        const Face* face = find_face(document, face_id);
-        if (face == nullptr) {
+        const auto found = faces_by_id.find(face_id);
+        if (found == faces_by_id.end() || found->second == nullptr) {
             continue;
         }
-        ids.insert(ids.end(), face->vertices.begin(), face->vertices.end());
+        ids.insert(ids.end(), found->second->vertices.begin(),
+                   found->second->vertices.end());
     }
     return unique_vertex_ids(std::move(ids));
 }
@@ -1449,62 +1540,80 @@ bool grow_selection(const Document& document, Selection& selection)
         edge_incidence_counts(document);
 
     switch (selection.mode) {
-    case SelectionMode::Vertex:
+    case SelectionMode::Vertex: {
+      const ElementIdIndex original_vertices =
+          make_element_id_index(before.vertices);
+      ElementIdIndex selected_vertices = original_vertices;
       for (const Face& face : document.faces) {
-          if (!face_shares_selected_vertex(face, before.vertices)) {
+          if (!face_shares_selected_vertex(face, original_vertices)) {
               continue;
           }
           for (const ElementId vertex_id : face.vertices) {
-              add_unique_id(selection.vertices, vertex_id);
+              add_indexed_id(selection.vertices, selected_vertices,
+                             vertex_id);
           }
       }
       for (const Edge edge : all_edges) {
           if (edge_incidence_count(incidence_counts, edge) != 0) {
               continue;
           }
-          if (contains_id(before.vertices, edge.a)) {
-              add_unique_id(selection.vertices, edge.b);
+          if (original_vertices.contains(edge.a)) {
+              add_indexed_id(selection.vertices, selected_vertices, edge.b);
           }
-          if (contains_id(before.vertices, edge.b)) {
-              add_unique_id(selection.vertices, edge.a);
+          if (original_vertices.contains(edge.b)) {
+              add_indexed_id(selection.vertices, selected_vertices, edge.a);
           }
       }
       break;
+    }
     case SelectionMode::Edge: {
-      const std::vector<ElementId> original_vertices =
-          selected_edge_vertex_ids(before);
+      ElementIdIndex original_vertices;
+      original_vertices.reserve(before.edges.size() * 2U);
+      for (const Edge edge : before.edges) {
+          if (edge.a != kInvalidElementId) {
+              original_vertices.insert(edge.a);
+          }
+          if (edge.b != kInvalidElementId) {
+              original_vertices.insert(edge.b);
+          }
+      }
+      EdgeIndex selected_edges = make_edge_index(before.edges);
       for (const Face& face : document.faces) {
           if (!face_shares_selected_vertex(face, original_vertices)) {
               continue;
           }
           for (const Edge edge : face_edges(face)) {
-              add_unique_edge(selection.edges, edge);
+              add_indexed_edge(selection.edges, selected_edges, edge);
           }
       }
       for (const Edge edge : all_edges) {
           if (edge_incidence_count(incidence_counts, edge) == 0 &&
-              (contains_id(original_vertices, edge.a) ||
-               contains_id(original_vertices, edge.b))) {
-              add_unique_edge(selection.edges, edge);
+              (original_vertices.contains(edge.a) ||
+               original_vertices.contains(edge.b))) {
+              add_indexed_edge(selection.edges, selected_edges, edge);
           }
       }
       break;
     }
-    case SelectionMode::Face:
+    case SelectionMode::Face: {
+      const ElementIdIndex original_faces =
+          make_element_id_index(before.faces);
+      ElementIdIndex original_vertices;
+      original_vertices.reserve(document.vertices.size());
       for (const Face& face : document.faces) {
-          const bool shares_vertex = std::ranges::any_of(
-              before.faces, [&](ElementId selected_face_id) {
-                  const Face* selected_face =
-                      find_face(document, selected_face_id);
-                  return selected_face != nullptr &&
-                         face_uses_any_vertex(face,
-                                              selected_face->vertices);
-              });
-          if (shares_vertex) {
-              add_unique_id(selection.faces, face.id);
+          if (original_faces.contains(face.id)) {
+              original_vertices.insert(face.vertices.begin(),
+                                       face.vertices.end());
+          }
+      }
+      ElementIdIndex selected_faces = original_faces;
+      for (const Face& face : document.faces) {
+          if (face_shares_selected_vertex(face, original_vertices)) {
+              add_indexed_id(selection.faces, selected_faces, face.id);
           }
       }
       break;
+    }
     }
     return finish_selection_change(selection, before);
 }
@@ -1518,75 +1627,118 @@ bool shrink_selection(const Document& document, Selection& selection)
 
     switch (selection.mode) {
     case SelectionMode::Vertex: {
-      std::vector<ElementId> retained;
-      for (const ElementId vertex_id : before.vertices) {
-          bool boundary = false;
-          for (const Face& face : document.faces) {
-              if (face_uses_vertex(face, vertex_id) &&
-                  !face_all_vertices_selected(face, before)) {
-                  boundary = true;
-                  break;
+      const ElementIdIndex selected_vertices =
+          make_element_id_index(before.vertices);
+      ElementIdIndex boundary_vertices;
+      for (const Face& face : document.faces) {
+          if (face_all_vertices_selected(face, selected_vertices)) {
+              continue;
+          }
+          for (const ElementId vertex_id : face.vertices) {
+              if (selected_vertices.contains(vertex_id)) {
+                  boundary_vertices.insert(vertex_id);
               }
           }
-          if (!boundary) {
-              boundary = std::ranges::any_of(all_edges, [&](Edge edge) {
-                  return edge_incidence_count(incidence_counts, edge) == 0 &&
-                         (edge.a == vertex_id || edge.b == vertex_id) &&
-                         (!contains_id(before.vertices, edge.a) ||
-                          !contains_id(before.vertices, edge.b));
-              });
+      }
+      for (const Edge edge : all_edges) {
+          if (edge_incidence_count(incidence_counts, edge) != 0 ||
+              (selected_vertices.contains(edge.a) &&
+               selected_vertices.contains(edge.b))) {
+              continue;
           }
-          if (!boundary) {
-              add_unique_id(retained, vertex_id);
+          if (selected_vertices.contains(edge.a)) {
+              boundary_vertices.insert(edge.a);
+          }
+          if (selected_vertices.contains(edge.b)) {
+              boundary_vertices.insert(edge.b);
+          }
+      }
+
+      std::vector<ElementId> retained;
+      retained.reserve(before.vertices.size());
+      ElementIdIndex retained_vertices;
+      retained_vertices.reserve(before.vertices.size());
+      for (const ElementId vertex_id : before.vertices) {
+          if (!boundary_vertices.contains(vertex_id)) {
+              add_indexed_id(retained, retained_vertices, vertex_id);
           }
       }
       selection.vertices = std::move(retained);
       break;
     }
     case SelectionMode::Edge: {
-      std::set<ElementId> boundary_vertices;
-      for (const ElementId vertex_id : selected_edge_vertex_ids(before)) {
-          bool boundary = false;
-          for (const Face& face : document.faces) {
-              if (face_uses_vertex(face, vertex_id) &&
-                  !face_all_edges_selected(face, before)) {
-                  boundary = true;
-                  break;
+      const EdgeIndex selected_edges = make_edge_index(before.edges);
+      ElementIdIndex selected_vertices;
+      selected_vertices.reserve(before.edges.size() * 2U);
+      for (const Edge edge : before.edges) {
+          if (edge.a != kInvalidElementId) {
+              selected_vertices.insert(edge.a);
+          }
+          if (edge.b != kInvalidElementId) {
+              selected_vertices.insert(edge.b);
+          }
+      }
+
+      ElementIdIndex boundary_vertices;
+      for (const Face& face : document.faces) {
+          if (face_all_edges_selected(face, selected_edges)) {
+              continue;
+          }
+          for (const ElementId vertex_id : face.vertices) {
+              if (selected_vertices.contains(vertex_id)) {
+                  boundary_vertices.insert(vertex_id);
               }
           }
-          if (!boundary) {
-              boundary = std::ranges::any_of(all_edges, [&](Edge edge) {
-                  return edge_incidence_count(incidence_counts, edge) == 0 &&
-                         (edge.a == vertex_id || edge.b == vertex_id) &&
-                         !contains_edge(before.edges, edge);
-              });
+      }
+      for (const Edge edge : all_edges) {
+          if (edge_incidence_count(incidence_counts, edge) != 0 ||
+              selected_edges.contains(indexed_edge_key(edge))) {
+              continue;
           }
-          if (boundary) {
-              boundary_vertices.insert(vertex_id);
+          if (selected_vertices.contains(edge.a)) {
+              boundary_vertices.insert(edge.a);
+          }
+          if (selected_vertices.contains(edge.b)) {
+              boundary_vertices.insert(edge.b);
           }
       }
 
       std::vector<Edge> retained;
+      retained.reserve(before.edges.size());
+      EdgeIndex retained_edges;
+      retained_edges.reserve(before.edges.size());
       for (const Edge edge : before.edges) {
           if (!boundary_vertices.contains(edge.a) &&
               !boundary_vertices.contains(edge.b)) {
-              add_unique_edge(retained, edge);
+              add_indexed_edge(retained, retained_edges, edge);
           }
       }
       selection.edges = std::move(retained);
       break;
     }
     case SelectionMode::Face: {
+      const ElementIdIndex selected_faces =
+          make_element_id_index(before.faces);
+      const FaceByIdIndex faces_by_id = make_face_by_id_index(document);
+      ElementIdIndex unselected_vertices;
+      unselected_vertices.reserve(document.vertices.size());
+      for (const Face& face : document.faces) {
+          if (!selected_faces.contains(face.id)) {
+              unselected_vertices.insert(face.vertices.begin(),
+                                         face.vertices.end());
+          }
+      }
+
       std::vector<ElementId> retained;
+      retained.reserve(before.faces.size());
       for (const ElementId face_id : before.faces) {
-          const Face* face = find_face(document, face_id);
-          if (face == nullptr) {
+          const auto found = faces_by_id.find(face_id);
+          if (found == faces_by_id.end() || found->second == nullptr) {
               continue;
           }
           const bool boundary = std::ranges::any_of(
-              document.faces, [&](const Face& candidate) {
-                  return !contains_id(before.faces, candidate.id) &&
-                         face_uses_any_vertex(candidate, face->vertices);
+              found->second->vertices, [&](ElementId vertex_id) {
+                  return unselected_vertices.contains(vertex_id);
               });
           if (!boundary) {
               retained.push_back(face_id);

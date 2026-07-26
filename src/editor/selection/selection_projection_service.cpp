@@ -16,6 +16,7 @@
 #include "scene/scene_transform.hpp"
 
 #include <algorithm>
+#include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
@@ -129,21 +130,6 @@ EntityId active_scene_entity_for_runtime_object(
   return kInvalidEntityId;
 }
 
-QVec3 world_point_for_modeling_object(
-    int object_id, QVec3 point, const ModelingObjectRuntimeMap &object_registry,
-    const SceneDocument &scene) {
-  const std::optional<EntityId> entity =
-      object_registry.entity_for_modeling_object(object_id);
-  if (!entity.has_value()) {
-    return point;
-  }
-  const TransformComponent *transform = scene.transform(*entity);
-  if (transform == nullptr) {
-    return point;
-  }
-  return transform_point(scene.world_transform_matrix(*entity), point);
-}
-
 } // namespace
 
 bool SelectionProjectionService::should_project_object_selection_from_scene(
@@ -253,7 +239,11 @@ std::optional<QVec3> SelectionProjectionService::world_selection_center(
 std::optional<SceneBounds> SelectionProjectionService::world_selection_bounds(
     const quader_editor_core::EditorSession &session,
     const SceneDocument &scene, const AssetRegistry &assets,
-    const ModelingObjectRuntimeMap &object_registry) const {
+    const ModelingObjectRuntimeMap &object_registry,
+    SelectionBoundsWorkStats *work_stats) const {
+  if (work_stats != nullptr) {
+    *work_stats = {};
+  }
   if (session.selection_mode() == quader_editor_core::SelectionMode::Object) {
     if (const std::optional<SceneBounds> bounds =
             selected_world_bounds(scene, assets)) {
@@ -266,6 +256,9 @@ std::optional<SceneBounds> SelectionProjectionService::world_selection_bounds(
     if (!object.selected || object.selection.empty()) {
       continue;
     }
+    if (work_stats != nullptr) {
+      ++work_stats->selected_object_visit_count;
+    }
     const std::optional<EntityId> entity =
         object_registry.entity_for_modeling_object(object.id);
     if (entity.has_value() && !scene.is_effectively_visible(*entity)) {
@@ -274,14 +267,43 @@ std::optional<SceneBounds> SelectionProjectionService::world_selection_bounds(
 
     const std::vector<quader_poly::ElementId> vertex_ids =
         quader_poly::selected_vertex_ids(object.document, object.selection);
+    if (vertex_ids.empty()) {
+      continue;
+    }
+    std::unordered_map<quader_poly::ElementId, const quader_poly::Vertex *>
+        vertices_by_id;
+    vertices_by_id.reserve(object.document.vertices.size());
+    for (const quader_poly::Vertex &vertex : object.document.vertices) {
+      if (work_stats != nullptr) {
+        ++work_stats->vertex_index_visit_count;
+      }
+      // Preserve find_vertex's first-record behavior for malformed duplicate
+      // IDs while making every selected-ID lookup constant expected time.
+      vertices_by_id.emplace(vertex.id, &vertex);
+    }
+
+    std::optional<QMat4> world_from_object;
+    if (entity.has_value() && scene.transform(*entity) != nullptr) {
+      world_from_object = scene.world_transform_matrix(*entity);
+      if (work_stats != nullptr) {
+        ++work_stats->world_transform_evaluation_count;
+      }
+    }
     for (const quader_poly::ElementId vertex_id : vertex_ids) {
-      const quader_poly::Vertex *vertex =
-          quader_poly::find_vertex(object.document, vertex_id);
-      if (vertex == nullptr) {
+      if (work_stats != nullptr) {
+        ++work_stats->selected_vertex_lookup_count;
+      }
+      const auto vertex = vertices_by_id.find(vertex_id);
+      if (vertex == vertices_by_id.end() || vertex->second == nullptr) {
         continue;
       }
-      const QVec3 world = world_point_for_modeling_object(
-          object.id, vertex->position, object_registry, scene);
+      const QVec3 world =
+          world_from_object.has_value()
+              ? transform_point(*world_from_object, vertex->second->position)
+              : vertex->second->position;
+      if (work_stats != nullptr) {
+        ++work_stats->included_point_count;
+      }
       if (!bounds) {
         bounds = SceneBounds{.min = world, .max = world};
       } else {

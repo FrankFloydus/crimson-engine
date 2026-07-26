@@ -14,6 +14,7 @@
 #include "math/glm_bridge.hpp"
 #include "render/light_renderable_cache.hpp"
 #include "render/instance_batch_planner.hpp"
+#include "render/instance_renderable_cache.hpp"
 #include "render/material_binding_service.hpp"
 #include "render/mesh_renderable_factory.hpp"
 #include "render/mesh_surface_grid_projection.hpp"
@@ -4661,6 +4662,172 @@ TEST(RenderInstanceBatchPlannerTests,
   EXPECT_FLOAT_EQ(plan.chunks[1].world_bounds.max.x, 31.0f);
 }
 
+TEST(InstanceRenderableCacheLookupTests,
+     ResolvesSourceRecordsWithOneExactKeyLookupPerChunk) {
+  const auto exercise = [](std::size_t record_count) {
+    std::vector<RenderSceneInstancePrimitiveRecord> records;
+    std::vector<RenderInstanceBatchChunk> chunks;
+    records.reserve(record_count + 1u);
+    chunks.reserve(record_count * 3u);
+    for (std::size_t index = 0u; index < record_count; ++index) {
+      RenderInstancePrimitiveKey key{
+          .geometry_payload = 10'000u + index,
+          .material_payload = 20'000u + index,
+          .index_offset = static_cast<std::uint32_t>(index * 3u),
+          .index_count = 3u,
+          .double_sided = index % 2u != 0u,
+      };
+      records.push_back({.key = key});
+      for (std::uint8_t variant = 0u; variant < 3u; ++variant) {
+        RenderInstanceBatchChunk chunk;
+        chunk.key = key;
+        chunk.key.layer_mask = static_cast<std::uint8_t>(variant + 1u);
+        chunk.key.channel = variant;
+        chunk.key.cast_shadows = variant == 0u;
+        chunk.key.receive_shadows = variant == 0u;
+        chunk.key.editor_unlit = variant != 0u;
+        chunks.push_back(std::move(chunk));
+      }
+    }
+
+    RenderSceneInstancePrimitiveRecord duplicate = records.front();
+    duplicate.key.layer_mask = 0xffu;
+    duplicate.key.channel = 0xffu;
+    duplicate.key.cast_shadows = true;
+    duplicate.key.receive_shadows = true;
+    duplicate.key.editor_unlit = true;
+    records.push_back(std::move(duplicate));
+
+    auto result =
+        instance_renderable_cache_detail::resolve_primitive_records(
+            records, chunks);
+    EXPECT_EQ(result.indexed_key_count, record_count);
+    EXPECT_EQ(result.key_lookup_count, chunks.size());
+    EXPECT_EQ(result.records_by_chunk.size(), chunks.size());
+    if (result.records_by_chunk.size() == chunks.size()) {
+      for (std::size_t chunk_index = 0u; chunk_index < chunks.size();
+           ++chunk_index) {
+        EXPECT_EQ(result.records_by_chunk[chunk_index],
+                  &records[chunk_index / 3u]);
+      }
+    }
+    return result.key_lookup_count;
+  };
+
+  const std::size_t small_lookup_count = exercise(128u);
+  const std::size_t large_lookup_count = exercise(1'024u);
+  EXPECT_EQ(large_lookup_count, small_lookup_count * 8u);
+}
+
+TEST(InstanceRenderableCacheLookupTests,
+     ReusesEveryShiftedChunkWithLinearCandidateProbes) {
+  const auto exercise = [](std::size_t old_chunk_count) {
+    std::vector<RenderInstanceBatchChunk> old_chunks;
+    old_chunks.reserve(old_chunk_count);
+    for (std::size_t index = 0u; index < old_chunk_count; ++index) {
+      RenderInstanceBatchChunk chunk;
+      chunk.key = {
+          .geometry_payload = 30'000u + index,
+          .material_payload = 40'000u + index,
+          .index_count = 3u,
+      };
+      chunk.occurrences.push_back(50'000u + index);
+      chunk.world_transforms.emplace_back();
+      chunk.visibility.push_back(1u);
+      old_chunks.push_back(std::move(chunk));
+    }
+
+    std::vector<RenderInstanceBatchChunk> next_chunks;
+    next_chunks.reserve(old_chunk_count + 1u);
+    RenderInstanceBatchChunk inserted;
+    inserted.key = {
+        .geometry_payload = 1u,
+        .material_payload = 2u,
+        .index_count = 3u,
+    };
+    inserted.occurrences.push_back(3u);
+    inserted.world_transforms.emplace_back();
+    inserted.visibility.push_back(1u);
+    next_chunks.push_back(std::move(inserted));
+    next_chunks.insert(next_chunks.end(), old_chunks.begin(),
+                       old_chunks.end());
+
+    const instance_renderable_cache_detail::ChunkProxyReuseCandidate
+        reusable_candidate{.instance_capacity = 1u, .valid = true};
+    std::vector<
+        instance_renderable_cache_detail::ChunkProxyReuseCandidate>
+        candidates(old_chunk_count, reusable_candidate);
+    auto result =
+        instance_renderable_cache_detail::match_reusable_chunk_proxies(
+            old_chunks, candidates, next_chunks);
+
+    EXPECT_EQ(result.old_chunk_by_next_chunk.size(), next_chunks.size());
+    if (result.old_chunk_by_next_chunk.size() == next_chunks.size()) {
+      EXPECT_EQ(result.old_chunk_by_next_chunk.front(),
+                result.no_old_chunk);
+      for (std::size_t next_index = 1u; next_index < next_chunks.size();
+           ++next_index) {
+        EXPECT_EQ(result.old_chunk_by_next_chunk[next_index],
+                  next_index - 1u);
+      }
+    }
+    EXPECT_EQ(result.indexed_candidate_count, old_chunk_count);
+    EXPECT_EQ(result.key_lookup_count, next_chunks.size());
+    EXPECT_EQ(result.candidate_probe_count, old_chunk_count);
+    EXPECT_LE(result.candidate_probe_count,
+              result.indexed_candidate_count);
+    return result.candidate_probe_count;
+  };
+
+  const std::size_t small_probe_count = exercise(128u);
+  const std::size_t large_probe_count = exercise(1'024u);
+  EXPECT_EQ(large_probe_count, small_probe_count * 8u);
+
+  RenderInstanceBatchChunk duplicate;
+  duplicate.key = {
+      .geometry_payload = 71u,
+      .material_payload = 73u,
+      .index_count = 3u,
+  };
+  duplicate.occurrences.push_back(79u);
+  duplicate.world_transforms.emplace_back();
+  duplicate.visibility.push_back(1u);
+  const std::array<RenderInstanceBatchChunk, 2u> duplicate_old{
+      duplicate, duplicate};
+  const std::array<RenderInstanceBatchChunk, 2u> duplicate_next{
+      duplicate, duplicate};
+  const std::array<
+      instance_renderable_cache_detail::ChunkProxyReuseCandidate, 2u>
+      duplicate_candidates{{
+          {.instance_capacity = 1u, .valid = true},
+          {.instance_capacity = 1u, .valid = true},
+      }};
+  const auto duplicate_result =
+      instance_renderable_cache_detail::match_reusable_chunk_proxies(
+          duplicate_old, duplicate_candidates, duplicate_next);
+  EXPECT_EQ(duplicate_result.old_chunk_by_next_chunk,
+            (std::vector<std::size_t>{0u, 1u}))
+      << "same-index reuse remains preferred for duplicate exact layouts";
+
+  const std::array<
+      instance_renderable_cache_detail::ChunkProxyReuseCandidate, 4u>
+      fallback_candidates{{
+          {.instance_capacity = 0u, .valid = true},
+          {.instance_capacity = 1u, .valid = false},
+          {.instance_capacity = 1u, .valid = true},
+          {.instance_capacity = 1u, .valid = true},
+      }};
+  const std::array<RenderInstanceBatchChunk, 4u> fallback_old{
+      duplicate, duplicate, duplicate, duplicate};
+  const auto fallback_result =
+      instance_renderable_cache_detail::match_reusable_chunk_proxies(
+          fallback_old, fallback_candidates, duplicate_next);
+  EXPECT_EQ(fallback_result.old_chunk_by_next_chunk,
+            (std::vector<std::size_t>{2u, 3u}))
+      << "fallback keeps ascending old-index order while excluding invalid "
+         "or undersized proxies";
+}
+
 TEST(RenderSceneWireframeBatchPlannerTests,
      TwoHundredOrdinaryLogicalAssetsShareOnePayloadAndFourChunksPerPass) {
   SceneDocument document;
@@ -4740,6 +4907,57 @@ TEST(RenderSceneWireframeBatchPlannerTests,
   EXPECT_EQ(wire_plan.batches.chunks[1].occurrences.size(), 64u);
   EXPECT_EQ(wire_plan.batches.chunks[2].occurrences.size(), 64u);
   EXPECT_EQ(wire_plan.batches.chunks[3].occurrences.size(), 8u);
+}
+
+TEST(RenderSceneWireframeBatchPlannerTests,
+     SharedGeometryPrepareWorkIsLinearAtDoubleOccurrenceCount) {
+  AssetRegistry assets;
+  const AssetId asset = assets.add_mesh(make_overlay_triangle_mesh());
+  const MeshAsset *mesh = assets.mesh(asset);
+  ASSERT_NE(mesh, nullptr);
+  const std::shared_ptr<const MeshGeometryPayload> geometry =
+      mesh->geometry_payload();
+  const std::shared_ptr<const MeshWireGeometryPayload> wire_geometry =
+      mesh->wire_geometry_payload();
+  ASSERT_NE(geometry, nullptr);
+  ASSERT_NE(wire_geometry, nullptr);
+
+  const auto exercise = [&](std::size_t participant_count) {
+    RenderOverlaySceneWireframeSnapshot snapshot{.layer_mask = 1u};
+    snapshot.meshes.reserve(participant_count);
+    for (std::size_t index = 0u; index < participant_count; ++index) {
+      snapshot.meshes.push_back({
+          .entity = static_cast<EntityId>(index + 1u),
+          .participant_token = static_cast<std::uint64_t>(index + 1u),
+          .mesh_id = asset,
+          .mesh_revision = mesh->revision.value,
+          .geometry_payload = geometry,
+          .geometry_content_id = mesh->geometry_content_id(),
+          .wire_geometry_payload = wire_geometry,
+          .vertices = geometry->vertices,
+          .indices = geometry->indices,
+          .wire_segments = wire_geometry->segments,
+      });
+    }
+    const SceneWireframeOverlayBatchPlan plan =
+        plan_scene_wireframe_overlay_batches(snapshot, 1u);
+    EXPECT_EQ(plan.participant_count, participant_count);
+    EXPECT_EQ(plan.batches.chunks.size(), participant_count);
+    EXPECT_EQ(plan.work.primitive_record_index_entry_count, 1u);
+    EXPECT_EQ(plan.work.chunk_record_lookup_count, participant_count);
+    EXPECT_EQ(plan.work.local_bounds_cache_hit_count,
+              participant_count - 1u);
+    EXPECT_EQ(plan.work.local_bounds_vertex_visit_count,
+              geometry->vertices.size());
+    return plan.work;
+  };
+
+  const SceneWireframeOverlayPlanWorkStats work_n = exercise(64u);
+  const SceneWireframeOverlayPlanWorkStats work_2n = exercise(128u);
+  EXPECT_EQ(work_2n.chunk_record_lookup_count,
+            work_n.chunk_record_lookup_count * 2u);
+  EXPECT_EQ(work_2n.local_bounds_vertex_visit_count,
+            work_n.local_bounds_vertex_visit_count);
 }
 
 TEST(RenderSceneWireframeBatchPlannerTests,
@@ -5124,6 +5342,81 @@ TEST(RenderInstanceEditPresentationTests,
 }
 
 TEST(RenderInstanceEditPresentationTests,
+     SharedGeometryPrepareWorkIsLinearAcrossFillAndWireAtDoubleCount) {
+  SceneDocument document;
+  AssetRegistry assets;
+  const AssetId mesh = assets.add_mesh(make_overlay_triangle_mesh());
+  const EntityId definition =
+      document.create_entity("Definition", EntityKind::Empty);
+  ASSERT_TRUE(document.set_instance_definition(definition));
+  ASSERT_TRUE(document.set_visible(definition, false));
+  const EntityId member =
+      document.create_entity("Canonical Mesh", EntityKind::Mesh);
+  ASSERT_TRUE(document.set_mesh(member, MeshComponent{.mesh = mesh}));
+  ASSERT_TRUE(document.set_parent(member, definition, false));
+  const EntityId occurrence =
+      document.create_entity("Occurrence", EntityKind::Instance);
+  ASSERT_TRUE(document.set_instance_occurrence(
+      occurrence, InstanceOccurrenceComponent{.definition = definition}));
+  ASSERT_TRUE(document.set_selected(occurrence, true));
+
+  const RenderOverlaySelectedObjectSnapshot seed =
+      build_render_overlay_selected_object_snapshot(document, assets, true);
+  ASSERT_EQ(seed.instance_selection_fills.size(), 1u);
+  ASSERT_EQ(seed.instance_selection_wires.size(), 1u);
+  ASSERT_NE(seed.instance_selection_fills.front().geometry_payload, nullptr);
+  const std::size_t shared_vertex_count =
+      seed.instance_selection_fills.front().vertices.size();
+
+  const auto exercise = [&](std::size_t selected_member_count) {
+    RenderOverlaySelectedObjectSnapshot snapshot = seed;
+    const RenderOverlayInstanceSelectionFillRecord fill_template =
+        seed.instance_selection_fills.front();
+    const RenderOverlayInstanceSelectionWireRecord wire_template =
+        seed.instance_selection_wires.front();
+    snapshot.instance_selection_fills.clear();
+    snapshot.instance_selection_wires.clear();
+    snapshot.instance_selection_fills.reserve(selected_member_count);
+    snapshot.instance_selection_wires.reserve(selected_member_count);
+    for (std::size_t index = 0u; index < selected_member_count; ++index) {
+      RenderOverlayInstanceSelectionFillRecord fill = fill_template;
+      RenderOverlayInstanceSelectionWireRecord wire = wire_template;
+      fill.occurrence = static_cast<EntityId>(index + 1u);
+      wire.occurrence = fill.occurrence;
+      fill.world_transform.values[12] = static_cast<float>(index);
+      wire.world_transform = fill.world_transform;
+      snapshot.instance_selection_fills.push_back(std::move(fill));
+      snapshot.instance_selection_wires.push_back(std::move(wire));
+    }
+
+    const InstanceSelectionOverlayBatchPlans plans =
+        plan_instance_selection_overlay_batches(snapshot, 1u);
+    EXPECT_EQ(plans.fills.chunks.size(), selected_member_count);
+    EXPECT_EQ(plans.wires.chunks.size(), selected_member_count);
+    EXPECT_EQ(plans.work.fill_record_index_entry_count, 1u);
+    EXPECT_EQ(plans.work.wire_record_index_entry_count, 1u);
+    EXPECT_EQ(plans.work.fill_chunk_record_lookup_count,
+              selected_member_count);
+    EXPECT_EQ(plans.work.wire_chunk_record_lookup_count,
+              selected_member_count);
+    EXPECT_EQ(plans.work.local_bounds_cache_hit_count,
+              selected_member_count * 2u - 1u);
+    EXPECT_EQ(plans.work.local_bounds_vertex_visit_count,
+              shared_vertex_count);
+    return plans.work;
+  };
+
+  const InstanceSelectionOverlayPlanWorkStats work_n = exercise(64u);
+  const InstanceSelectionOverlayPlanWorkStats work_2n = exercise(128u);
+  EXPECT_EQ(work_2n.fill_chunk_record_lookup_count,
+            work_n.fill_chunk_record_lookup_count * 2u);
+  EXPECT_EQ(work_2n.wire_chunk_record_lookup_count,
+            work_n.wire_chunk_record_lookup_count * 2u);
+  EXPECT_EQ(work_2n.local_bounds_vertex_visit_count,
+            work_n.local_bounds_vertex_visit_count);
+}
+
+TEST(RenderInstanceEditPresentationTests,
      SelectedInstanceWireUsesAuthoredBoundariesWithoutTriangleDiagonal) {
   SceneDocument document;
   AssetRegistry assets;
@@ -5292,4 +5585,216 @@ TEST(RenderInstanceEditPresentationTests,
   EXPECT_FLOAT_EQ(in_edit.lines.front().end.x, 13.0f);
   EXPECT_EQ(in_edit.lines.front().source,
             ViewportOverlaySource::ComponentSelection);
+}
+
+TEST(RenderSceneExtractionScaleTests,
+     StableCompatibilityGroupsKeepFirstSeenAndOccurrenceOrder) {
+  SceneDocument document;
+  AssetRegistry assets;
+  const AssetId mesh = assets.add_mesh(make_overlay_triangle_mesh());
+  ASSERT_NE(mesh, kInvalidAssetId);
+
+  std::array<AssetId, 3u> materials{};
+  const std::array<QVec3, 3u> colors{{
+      {0.8f, 0.1f, 0.1f},
+      {0.1f, 0.8f, 0.1f},
+      {0.1f, 0.1f, 0.8f},
+  }};
+  for (std::size_t index = 0u; index < materials.size(); ++index) {
+    MaterialDocument material =
+        make_default_quader_material("Grouped Material");
+    material.base_color = colors[index];
+    materials[index] = assets.add_material(std::move(material));
+    ASSERT_NE(materials[index], kInvalidAssetId);
+  }
+
+  constexpr std::array<std::size_t, 6u> kMaterialOrder{
+      0u, 1u, 0u, 2u, 1u, 2u};
+  std::array<EntityId, kMaterialOrder.size()> entities{};
+  for (std::size_t index = 0u; index < kMaterialOrder.size(); ++index) {
+    entities[index] = document.create_entity(
+        "Stable Group " + std::to_string(index), EntityKind::Mesh);
+    ASSERT_TRUE(
+        document.set_mesh(entities[index], MeshComponent{.mesh = mesh}));
+    ASSERT_TRUE(document.set_material(
+        entities[index],
+        MaterialComponent{.material = materials[kMaterialOrder[index]]}));
+  }
+
+  const RenderSceneSnapshot snapshot =
+      build_render_scene_snapshot(document, assets);
+
+  EXPECT_TRUE(snapshot.meshes.empty());
+  ASSERT_EQ(snapshot.instance_primitives.size(), materials.size());
+  constexpr std::array<std::array<std::size_t, 2u>, 3u> kExpectedMembers{{
+      {{0u, 2u}},
+      {{1u, 4u}},
+      {{3u, 5u}},
+  }};
+  for (std::size_t group = 0u; group < materials.size(); ++group) {
+    const RenderSceneInstancePrimitiveRecord &record =
+        snapshot.instance_primitives[group];
+    EXPECT_EQ(record.material.component.material, materials[group]);
+    ASSERT_EQ(record.occurrences.size(), 2u);
+    EXPECT_EQ(record.occurrences[0].entity_id,
+              entities[kExpectedMembers[group][0]]);
+    EXPECT_EQ(record.occurrences[1].entity_id,
+              entities[kExpectedMembers[group][1]]);
+  }
+}
+
+TEST(RenderSceneExtractionScaleTests,
+     KeepsOneThousandTwentyFourUniqueMeshesInEntityOrder) {
+  constexpr std::size_t kMeshCount = 1'024u;
+  SceneDocument document;
+  AssetRegistry assets;
+  std::vector<EntityId> entities;
+  entities.reserve(kMeshCount);
+
+  for (std::size_t index = 0u; index < kMeshCount; ++index) {
+    MeshAsset unique_mesh = make_overlay_triangle_mesh();
+    unique_mesh.edit_geometry().vertices.front().position.x -=
+        static_cast<float>(index) * 0.001f;
+    const AssetId mesh = assets.add_mesh(std::move(unique_mesh));
+    ASSERT_NE(mesh, kInvalidAssetId);
+    const EntityId entity = document.create_entity(
+        "Unique Mesh " + std::to_string(index), EntityKind::Mesh);
+    ASSERT_TRUE(document.set_mesh(entity, MeshComponent{.mesh = mesh}));
+    entities.push_back(entity);
+  }
+
+  const RenderSceneSnapshot snapshot =
+      build_render_scene_snapshot(document, assets);
+
+  EXPECT_TRUE(snapshot.instance_primitives.empty());
+  ASSERT_EQ(snapshot.meshes.size(), kMeshCount);
+  for (std::size_t index = 0u; index < kMeshCount; ++index) {
+    EXPECT_EQ(snapshot.meshes[index].entity_id, entities[index]);
+  }
+}
+
+TEST(RenderSceneExtractionScaleTests,
+     KeepsSharedGeometryWithUniqueMaterialsInEntityOrder) {
+  constexpr std::size_t kMaterialCount = 1'024u;
+  SceneDocument document;
+  AssetRegistry assets;
+  const AssetId mesh = assets.add_mesh(make_overlay_triangle_mesh());
+  ASSERT_NE(mesh, kInvalidAssetId);
+  std::vector<EntityId> entities;
+  std::vector<AssetId> materials;
+  entities.reserve(kMaterialCount);
+  materials.reserve(kMaterialCount);
+
+  for (std::size_t index = 0u; index < kMaterialCount; ++index) {
+    MaterialDocument material =
+        make_default_quader_material("Unique Render Material");
+    material.base_color.x =
+        static_cast<float>(index + 1u) /
+        static_cast<float>(kMaterialCount + 1u);
+    const AssetId material_id = assets.add_material(std::move(material));
+    ASSERT_NE(material_id, kInvalidAssetId);
+    const EntityId entity = document.create_entity(
+        "Unique Material Mesh " + std::to_string(index),
+        EntityKind::Mesh);
+    ASSERT_TRUE(document.set_mesh(entity, MeshComponent{.mesh = mesh}));
+    ASSERT_TRUE(document.set_material(
+        entity, MaterialComponent{.material = material_id}));
+    entities.push_back(entity);
+    materials.push_back(material_id);
+  }
+
+  const RenderSceneSnapshot snapshot =
+      build_render_scene_snapshot(document, assets);
+
+  EXPECT_TRUE(snapshot.instance_primitives.empty());
+  ASSERT_EQ(snapshot.meshes.size(), kMaterialCount);
+  for (std::size_t index = 0u; index < kMaterialCount; ++index) {
+    EXPECT_EQ(snapshot.meshes[index].entity_id, entities[index]);
+    EXPECT_EQ(snapshot.meshes[index].material.component.material,
+              materials[index]);
+  }
+}
+
+TEST(RenderSceneExtractionScaleTests,
+     PreviewMaterialBucketsReuseEveryExactComponentInALargeSet) {
+  /// Counts project-material resolutions while exercising preview caching.
+  class CountingProjectMaterialResolver final
+      : public RenderProjectMaterialResolver {
+  public:
+    [[nodiscard]] std::uint64_t revision() const noexcept override {
+      return revision_value;
+    }
+
+    [[nodiscard]] std::optional<RenderProjectMaterialSnapshot>
+    resolve(ProjectAssetId id) const override {
+      ++resolve_count;
+      return snapshot.has_value() &&
+                     snapshot->evaluation.project_material_id == id
+                 ? snapshot
+                 : std::nullopt;
+    }
+
+    std::uint64_t revision_value = 1u;
+    mutable std::size_t resolve_count = 0u;
+    std::optional<RenderProjectMaterialSnapshot> snapshot;
+  };
+
+  constexpr std::size_t kUniqueMaterialCount = 512u;
+  const ProjectAssetId project_material =
+      *ProjectAssetId::parse("77777777-7777-4777-8777-777777777777");
+  CountingProjectMaterialResolver resolver;
+  resolver.snapshot = RenderProjectMaterialSnapshot{
+      .evaluation =
+          RenderMaterialEvaluationSnapshot{
+              .project_material_id = project_material,
+              .kind = RenderMaterialEvaluationKind::Standard,
+              .identity_revision = 3u,
+              .content_revision = 5u,
+              .payload = RenderStandardMaterialEvaluationSnapshot{},
+          },
+      .catalog_revision = 7u,
+  };
+
+  AssetRegistry assets;
+  std::vector<MaterialComponent> components;
+  std::vector<ToolPreviewMesh> previews;
+  components.reserve(kUniqueMaterialCount);
+  previews.reserve(kUniqueMaterialCount * 2u);
+  for (std::size_t index = 0u; index < kUniqueMaterialCount; ++index) {
+    MaterialDocument slot_material =
+        make_default_quader_material("Preview Slot");
+    slot_material.base_color.y =
+        static_cast<float>(index + 1u) /
+        static_cast<float>(kUniqueMaterialCount + 1u);
+    const AssetId slot = assets.add_material(std::move(slot_material));
+    ASSERT_NE(slot, kInvalidAssetId);
+    components.push_back({
+        .material = MaterialReference::project(project_material),
+        .material_slots = {{3u, slot}},
+    });
+    previews.push_back({
+        .source_entity = static_cast<EntityId>(index + 1u),
+        .material = components.back(),
+    });
+  }
+  for (std::size_t index = kUniqueMaterialCount; index > 0u; --index) {
+    previews.push_back({
+        .source_entity =
+            static_cast<EntityId>(kUniqueMaterialCount + index),
+        .material = components[index - 1u],
+    });
+  }
+
+  const std::vector<RenderToolPreviewMeshRecord> records =
+      build_render_tool_preview_snapshot(
+          std::move(previews), assets, nullptr, &resolver);
+
+  ASSERT_EQ(records.size(), kUniqueMaterialCount * 2u);
+  EXPECT_EQ(resolver.resolve_count, kUniqueMaterialCount)
+      << "each exact material component is expanded only once";
+  for (std::size_t index = 0u; index < kUniqueMaterialCount; ++index) {
+    EXPECT_EQ(records[index].material.component, components[index]);
+    EXPECT_EQ(records[kUniqueMaterialCount + index].material.component,
+              components[kUniqueMaterialCount - index - 1u]);
+  }
 }

@@ -1486,11 +1486,15 @@ TEST(BuildGuardrailTests,
   const std::string retired_quoted_include = joined("#include \"me", "sh/");
   const std::string neutral_internal_include =
       joined("quader/modeling/neutral/polygon/", "internal/");
-  constexpr std::array<std::string_view, 3> kNeutralInternalConsumers = {
+  constexpr std::array<std::string_view, 6> kNeutralInternalConsumers = {
+      "src/editor/modeling/runtime/session_picking.cpp",
       "src/editor/modeling/runtime/session_selection_overlay.cpp",
       "src/editor/projection/mesh_projection_service.cpp",
       "tests/modeling_domain/"
       "qdr_document_openmesh_topology_query_tests.cpp",
+      "tests/modeling_domain/qdr_poly_geometry_characterization_tests.cpp",
+      "tests/modeling_domain/tool/"
+      "qdr_modeling_runtime_tool_knife_tests.cpp",
   };
   for (std::string_view root : {"src", "tests", "examples", "benchmarks"}) {
     for (const std::filesystem::path &file :
@@ -2486,7 +2490,7 @@ TEST(BuildGuardrailTests, QtWidgetsRuntimeAndLicenseEvidenceAreConfigured) {
   expect_contains(root_c_make, "src/ui/qt_color_swatch_button.cpp");
   expect_contains(root_c_make, "src/ui/qt_auxiliary_window_state.cpp");
   expect_contains(root_c_make, "src/ui/qt_settings_dialog.cpp");
-  expect_contains(root_c_make, "src/ui/qt_tool_settings_window.cpp");
+  expect_contains(root_c_make, "src/ui/qt_tool_settings_panel.cpp");
   expect_contains(vcpkg_manifest, "\"name\": \"qtbase\"");
   expect_contains(vcpkg_manifest, "\"widgets\"");
   expect_contains(third_party_manifest, "Qt Base");
@@ -2841,8 +2845,8 @@ TEST(BuildGuardrailTests, QtShellUsesMainWindowDocksAndStableNames) {
       read_source_file("src/ui/ui_panel_manager.cpp");
   const std::string settings_dialog_header =
       read_source_file("src/ui/qt_settings_dialog.hpp");
-  const std::string tool_window_header =
-      read_source_file("src/ui/qt_tool_settings_window.hpp");
+  const std::string tool_panel_header =
+      read_source_file("src/ui/qt_tool_settings_panel.hpp");
 
   expect_contains(ui_system_header, "class QMainWindow");
   expect_contains(ui_system_header, "class QDockWidget");
@@ -2890,6 +2894,11 @@ TEST(BuildGuardrailTests, QtShellUsesMainWindowDocksAndStableNames) {
   expect_contains(ui_system_source,
                   "UIPanelId::Console, *console_panel_, "
                   "Qt::BottomDockWidgetArea");
+  expect_contains(ui_system_source,
+                  "UIPanelId::ToolSettings, *tool_settings_panel_");
+  expect_contains(ui_system_source,
+                  "main_window_->tabifyDockWidget(&inspector, "
+                  "&tool_settings)");
   expect_contains(ui_system_source, "new QDockWidget(");
   expect_contains(ui_system_source,
                   "QStringLiteral(\"dock_%1\").arg("
@@ -2905,28 +2914,42 @@ TEST(BuildGuardrailTests, QtShellUsesMainWindowDocksAndStableNames) {
   expect_contains(panel_header, "return \"inspector\"");
   expect_contains(panel_header, "return \"console\"");
   expect_contains(panel_header, "return \"layers\"");
+  expect_contains(panel_header, "return \"tool_settings\"");
+  expect_contains(panel_header, "kUiDockPanelIds");
   expect_contains(panel_manager_header,
-                  "std::array<QDockWidget *, 5> docks_");
+                  "std::array<QDockWidget *, kUiPanelCount> docks_");
   expect_contains(panel_manager_source, "void UIPanelManager::add(");
   expect_contains(panel_manager_source, "QDockWidget *UIPanelManager::dock(");
 
   expect_contains(settings_dialog_header,
                   "class QtSettingsDialog final : public QDialog");
-  expect_contains(tool_window_header,
-                  "class QtToolSettingsWindow final : public QWidget");
+  expect_contains(tool_panel_header,
+                  "class QtToolSettingsPanel final : public QWidget");
   expect_contains(ui_system_source,
                   "new QtSettingsDialog(main_window_.get())");
   expect_contains(ui_system_source,
-                  "new QtToolSettingsWindow(main_window_.get())");
+                  "new QtToolSettingsPanel(main_window_.get())");
 }
 
 TEST(BuildGuardrailTests, QtFrameRefreshKeepsExpensiveChromeEventDriven) {
   const std::string ui_system_source = read_source_file("src/ui/ui_system.cpp");
   const std::string main_menu_source =
       read_source_file("src/ui/qt_main_menu.cpp");
+  const std::string primitive_creation_source = read_source_file(
+      "src/editor/modeling/services/primitive_creation_tool_service.cpp");
   const std::string frame_refresh = source_slice(
       ui_system_source, "void UISystem::refresh(",
       "void UISystem::prepare_viewports(");
+  const std::string dock_presented_helper = source_slice(
+      ui_system_source, "bool qt_dock_panel_presented_for_refresh(",
+      "UISystem::UISystem()");
+  const std::string panel_presented = source_slice(
+      ui_system_source, "bool UISystem::panel_presented(UIPanelId id) const",
+      "void UISystem::set_panel_visible(");
+  const std::string primitive_reset_availability = source_slice(
+      primitive_creation_source,
+      "bool PrimitiveCreationToolService::can_reset_settings() const",
+      "bool PrimitiveCreationToolService::live_primitive_is_selected() const");
   const std::string settings_show = source_slice(
       ui_system_source, "void UISystem::show_settings_dialog()",
       "} // namespace quader");
@@ -2949,23 +2972,57 @@ TEST(BuildGuardrailTests, QtFrameRefreshKeepsExpensiveChromeEventDriven) {
   expect_contains(frame_refresh, "console_panel_->refresh(context)");
   expect_contains(frame_refresh, "modeling_->transform_drag_active()");
   expect_contains(frame_refresh,
-                  "!transform_drag_active && panel_visible(UIPanelId::Outliner)");
+                  "!transform_drag_active && "
+                  "panel_presented(UIPanelId::Outliner)");
   expect_contains(frame_refresh,
-                  "!transform_drag_active && panel_visible(UIPanelId::Layers)");
+                  "!transform_drag_active && "
+                  "panel_presented(UIPanelId::Layers)");
   expect_contains(frame_refresh,
                   "layers_scene_revision_ != document_->layer_revision()");
   expect_missing(frame_refresh, "editor_->revisions()");
   expect_contains(frame_refresh,
-                  "!transform_drag_active && panel_visible(UIPanelId::Inspector)");
+                  "!transform_drag_active && "
+                  "panel_presented(UIPanelId::Inspector)");
+  expect_contains(frame_refresh, "panel_presented(UIPanelId::Console)");
   expect_contains(frame_refresh, "refresh_project_workspace(false)");
   expect_missing(frame_refresh, "settings_dialog_->refresh()");
   expect_missing(frame_refresh, "main_menu_->refresh()");
   expect_missing(frame_refresh, "viewport_panel_->refresh_workspace_layout()");
+  expect_missing(frame_refresh, "panel_visible(UIPanelId::Outliner)");
+  expect_missing(frame_refresh, "panel_visible(UIPanelId::Layers)");
+  expect_missing(frame_refresh, "panel_visible(UIPanelId::Inspector)");
+  expect_missing(frame_refresh, "panel_visible(UIPanelId::Console)");
   for (const std::string &broad_workspace_query :
        {"recent_projects()", "open_scenes()", ".materials()",
         ".active_material()", ".metadata()", ".material_preview("}) {
     expect_missing(frame_refresh, broad_workspace_query);
   }
+
+  expect_contains(dock_presented_helper,
+                  "return explicitly_visible && dock != nullptr && "
+                  "dock->isVisible() &&");
+  expect_contains(dock_presented_helper,
+                  "!dock->visibleRegion().isEmpty()");
+  expect_contains(panel_presented, "id == UIPanelId::Viewport ||");
+  expect_contains(panel_presented,
+                  "qt_dock_panel_presented_for_refresh(panel_visible(id),");
+  expect_contains(panel_presented, "panels_.dock(id)");
+
+  const auto expect_presented_before =
+      [&](std::string_view panel_id, std::string_view expensive_work) {
+        const std::size_t presented =
+            frame_refresh.find(std::string{"panel_presented(UIPanelId::"} +
+                               std::string{panel_id} + ")");
+        const std::size_t work = frame_refresh.find(expensive_work, presented);
+        ASSERT_NE(presented, std::string::npos) << panel_id;
+        ASSERT_NE(work, std::string::npos) << expensive_work;
+        EXPECT_LT(presented, work) << panel_id;
+      };
+  expect_presented_before("Outliner", "outliner_panel_->refresh(context)");
+  expect_presented_before("Layers", "layer_panel_->refresh(context)");
+  expect_presented_before("Inspector", "modeling_->selection_summary()");
+  expect_presented_before("Inspector", "inspector_panel_->refresh(context)");
+  expect_presented_before("Console", "console_panel_->refresh(context)");
 
   const std::size_t instance_edit_revision =
       workspace_refresh.find("instance_edit_revision()");
@@ -3032,7 +3089,7 @@ TEST(BuildGuardrailTests, QtFrameRefreshKeepsExpensiveChromeEventDriven) {
   const std::size_t tool_settings_gate =
       frame_refresh.find("if (!tool_settings_refresh_valid_");
   const std::size_t tool_settings_refresh =
-      frame_refresh.find("tool_settings_window_->refresh()",
+      frame_refresh.find("tool_settings_panel_->refresh()",
                          tool_settings_gate);
   ASSERT_NE(tool_settings_revision, std::string::npos);
   ASSERT_NE(tool_settings_gate, std::string::npos);
@@ -3040,6 +3097,9 @@ TEST(BuildGuardrailTests, QtFrameRefreshKeepsExpensiveChromeEventDriven) {
   EXPECT_LT(tool_settings_revision, tool_settings_gate);
   EXPECT_LT(tool_settings_gate, tool_settings_refresh);
   expect_missing(frame_refresh, "tools().active_settings()");
+  expect_contains(primitive_reset_availability,
+                  "modeling_.box_drag_state()");
+  expect_missing(primitive_reset_availability, "box_preview(");
   expect_contains(main_menu_source, "&QMenu::aboutToShow");
   expect_contains(settings_show, "settings_dialog_->refresh()");
 }

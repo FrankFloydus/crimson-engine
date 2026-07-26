@@ -14,6 +14,7 @@
 #include "editor/tools/viewport_tool.hpp"
 #include "editor/tools/viewport_tool_ports.hpp"
 #include "editor/viewport/viewport_interaction_controller.hpp"
+#include "editor/viewport/viewport_selection_interaction.hpp"
 #include "render/viewport_overlay_policy.hpp"
 #include "editor/session/scene_session.hpp"
 #include "scene/scene_bounds.hpp"
@@ -100,6 +101,60 @@ struct ViewportInteractionHarness {
               },
       };
     }
+};
+
+/// Backs the selection interaction's narrow hover port with the same work key
+/// controller and live selection revisions used by the Qt viewport host.
+struct ViewportSelectionWorkGateHarness {
+  ViewportInteractionHarness &harness;
+  quader::ViewportHoverController controller;
+  std::uint64_t local_visibility_revision = 0;
+  quader::ViewportModelingToolPortAdapter adapter;
+
+  explicit ViewportSelectionWorkGateHarness(
+      ViewportInteractionHarness &interaction_harness)
+      : harness(interaction_harness),
+        adapter(harness.session.modeling(), callbacks()) {}
+
+  [[nodiscard]] quader::ViewportToolHoverPort *hover_port() {
+    return &adapter;
+  }
+
+private:
+  [[nodiscard]] quader::ViewportModelingToolPortCallbacks callbacks() {
+    quader::ViewportModelingToolPortCallbacks result;
+    result.claim_hover = [this](quader::ModelingBoxDragState drag_state) {
+      const quader::QuaderSelectionSummary selection =
+          harness.editor.selection().summary();
+      const quader::ViewportSettings &settings = harness.settings;
+      const quader::ViewportHoverWorkKey key = controller.make_key(
+          harness.camera,
+          quader::ViewportHoverWorkRequest{
+              .active_tool = harness.router.state().active_tool,
+              .selection_mode = harness.router.state().selection_mode,
+              .box_drag_state = drag_state,
+              .grid_preset = harness.router.state().grid_preset,
+              .grid_snap_enabled = true,
+              .mouse_local = harness.input.mouse_local,
+              .viewport_size = harness.input.viewport_size,
+              .modifiers = harness.input.modifiers,
+              .vertex_radius =
+                  settings.float_value(
+                      quader::ViewportFloatSettingId::PickVertexRadius),
+              .edge_radius =
+                  settings.float_value(
+                      quader::ViewportFloatSettingId::PickEdgeRadius),
+              .scene_revision = harness.session.scene().revision(),
+              .asset_revision = harness.session.assets().revision(),
+              .local_visibility_revision = local_visibility_revision,
+              .content_revision = selection.content_revision,
+              .selection_revision = selection.selection_revision,
+          });
+      return controller.claim(key);
+    };
+    result.invalidate_hover = [this]() { controller.invalidate(); };
+    return result;
+  }
 };
 
 quader::QuaderModelingObjectRef
@@ -1947,6 +2002,269 @@ TEST(ViewportInteractionControllerTests,
     EXPECT_FLOAT_EQ(gizmo->info.pivot.x, 0.0f);
     EXPECT_FLOAT_EQ(gizmo->info.pivot.y, 1.0f);
     EXPECT_FLOAT_EQ(gizmo->info.pivot.z, 0.0f);
+}
+
+TEST(ViewportSelectionInteractionTests,
+     StationaryFallbackHoverIssuesOnePickPerWorkKey) {
+  ViewportInteractionHarness harness;
+  (void)create_unit_box(harness);
+  ASSERT_TRUE(harness.editor.selection()
+                  .set_mode(quader::QuaderSelectionMode::Face)
+                  .ok());
+  ASSERT_TRUE(harness.editor.selection().clear().ok());
+  harness.router.set_selection_mode(quader::ViewportSelectionMode::Face);
+  harness.input.mouse_local = {400.0f, 300.0f};
+  harness.input.mouse_screen = harness.input.mouse_local;
+
+  quader::ViewportSelectionInteraction interaction;
+  ViewportSelectionWorkGateHarness work_gate(harness);
+  const auto handle_frame = [&]() {
+    interaction.handle_frame(
+        harness.editor, harness.frame(), quader::ViewportToolResult{},
+        quader::ViewportBeforeToolInteractionResult{},
+        work_gate.hover_port());
+  };
+
+  handle_frame();
+  EXPECT_EQ(interaction.work_stats().hover_pick_count, 1u);
+  ASSERT_NE(harness.editor.selection().hover_summary().target.kind,
+            quader::QuaderActiveSelectionKind::None);
+
+  for (int frame = 0; frame < 4; ++frame) {
+    handle_frame();
+  }
+  EXPECT_EQ(interaction.work_stats().hover_pick_count, 1u);
+
+  harness.input.mouse_local = {410.0f, 300.0f};
+  harness.input.mouse_screen = harness.input.mouse_local;
+  handle_frame();
+  EXPECT_EQ(interaction.work_stats().hover_pick_count, 2u);
+  handle_frame();
+  EXPECT_EQ(interaction.work_stats().hover_pick_count, 2u);
+
+  harness.camera.set_view_direction({0.1f, 0.0f, -1.0f});
+  handle_frame();
+  EXPECT_EQ(interaction.work_stats().hover_pick_count, 3u);
+  handle_frame();
+  EXPECT_EQ(interaction.work_stats().hover_pick_count, 3u);
+
+  ++work_gate.local_visibility_revision;
+  handle_frame();
+  EXPECT_EQ(interaction.work_stats().hover_pick_count, 4u);
+  handle_frame();
+  EXPECT_EQ(interaction.work_stats().hover_pick_count, 4u);
+}
+
+TEST(ViewportSelectionInteractionTests,
+     StationaryHeldPaintIssuesOnePickPerWorkKeyAndStopsOnRelease) {
+  ViewportInteractionHarness harness;
+  (void)create_unit_box(harness);
+  ASSERT_TRUE(harness.editor.selection()
+                  .set_mode(quader::QuaderSelectionMode::Face)
+                  .ok());
+  ASSERT_TRUE(harness.editor.selection().clear().ok());
+  harness.router.set_selection_mode(quader::ViewportSelectionMode::Face);
+
+  quader::ViewportSelectionInteraction interaction;
+  harness.input.mouse_local = {0.0f, 0.0f};
+  harness.input.mouse_screen = harness.input.mouse_local;
+  const quader::QuaderSelectionSummary miss =
+      interaction.pick_context_menu_target(harness.editor, harness.frame());
+  ASSERT_EQ(miss.selected_face_count, 0u);
+
+  harness.input.mouse_local = {400.0f, 300.0f};
+  harness.input.mouse_screen = harness.input.mouse_local;
+  ViewportSelectionWorkGateHarness work_gate(harness);
+  const auto handle_held_frame = [&]() {
+    interaction.handle_frame(
+        harness.editor, harness.frame(false, true, false),
+        quader::ViewportToolResult{},
+        quader::ViewportBeforeToolInteractionResult{},
+        work_gate.hover_port());
+  };
+
+  handle_held_frame();
+  EXPECT_EQ(interaction.work_stats().paint_pick_count, 1u);
+  ASSERT_EQ(harness.editor.selection().summary().selected_face_count, 1u);
+
+  for (int frame = 0; frame < 4; ++frame) {
+    handle_held_frame();
+  }
+  EXPECT_EQ(interaction.work_stats().paint_pick_count, 1u);
+
+  harness.input.mouse_local = {410.0f, 300.0f};
+  harness.input.mouse_screen = harness.input.mouse_local;
+  handle_held_frame();
+  EXPECT_EQ(interaction.work_stats().paint_pick_count, 2u);
+  handle_held_frame();
+  EXPECT_EQ(interaction.work_stats().paint_pick_count, 2u);
+
+  harness.camera.set_view_direction({0.1f, 0.0f, -1.0f});
+  handle_held_frame();
+  EXPECT_EQ(interaction.work_stats().paint_pick_count, 3u);
+  handle_held_frame();
+  EXPECT_EQ(interaction.work_stats().paint_pick_count, 3u);
+
+  ++work_gate.local_visibility_revision;
+  handle_held_frame();
+  EXPECT_EQ(interaction.work_stats().paint_pick_count, 4u);
+  handle_held_frame();
+  EXPECT_EQ(interaction.work_stats().paint_pick_count, 4u);
+
+  interaction.handle_frame(
+      harness.editor, harness.frame(false, false, true),
+      quader::ViewportToolResult{},
+      quader::ViewportBeforeToolInteractionResult{}, work_gate.hover_port());
+  interaction.handle_frame(
+      harness.editor, harness.frame(false, true, false),
+      quader::ViewportToolResult{},
+      quader::ViewportBeforeToolInteractionResult{}, work_gate.hover_port());
+  EXPECT_EQ(interaction.work_stats().paint_pick_count, 4u);
+}
+
+TEST(ViewportSelectionInteractionTests,
+     MarqueeReleaseAtDifferentTargetRestoresHoverImmediately) {
+  ViewportInteractionHarness harness;
+  const quader::QuaderModelingObjectRef left =
+      create_box_at(harness, {-3.0f, 0.0f, 0.0f});
+  const quader::QuaderModelingObjectRef right =
+      create_box_at(harness, {3.0f, 0.0f, 0.0f});
+  ASSERT_TRUE(harness.editor.selection()
+                  .set_mode(quader::QuaderSelectionMode::Face)
+                  .ok());
+  ASSERT_TRUE(harness.editor.selection().clear().ok());
+  harness.router.set_selection_mode(quader::ViewportSelectionMode::Face);
+
+  const quader::ViewportScreenPoint left_screen =
+      harness.camera.project_world_point({-3.0f, 0.0f, 0.0f});
+  const quader::ViewportScreenPoint right_screen =
+      harness.camera.project_world_point({3.0f, 0.0f, 0.0f});
+  ASSERT_TRUE(left_screen.visible);
+  ASSERT_TRUE(right_screen.visible);
+
+  quader::ViewportSelectionInteraction interaction;
+  ViewportSelectionWorkGateHarness work_gate(harness);
+  harness.input.mouse_local = left_screen.position;
+  harness.input.mouse_screen = harness.input.mouse_local;
+  interaction.handle_frame(
+      harness.editor, harness.frame(), quader::ViewportToolResult{},
+      quader::ViewportBeforeToolInteractionResult{}, work_gate.hover_port());
+  ASSERT_EQ(harness.editor.selection().hover_summary().target.object_id,
+            left.modeling_object_id);
+  ASSERT_EQ(interaction.work_stats().hover_pick_count, 1u);
+
+  interaction.handle_frame(
+      harness.editor,
+      harness.frame(true, true, false, left_screen.position),
+      quader::ViewportToolResult{},
+      quader::ViewportBeforeToolInteractionResult{}, work_gate.hover_port());
+  harness.input.mouse_local = right_screen.position;
+  harness.input.mouse_screen = harness.input.mouse_local;
+  interaction.handle_frame(
+      harness.editor,
+      harness.frame(false, false, true, left_screen.position),
+      quader::ViewportToolResult{},
+      quader::ViewportBeforeToolInteractionResult{}, work_gate.hover_port());
+
+  EXPECT_EQ(interaction.work_stats().hover_pick_count, 2u);
+  EXPECT_EQ(harness.editor.selection().hover_summary().target.object_id,
+            right.modeling_object_id);
+}
+
+TEST(ViewportSelectionInteractionTests,
+     PrimarySelectionRestoresStationaryHoverException) {
+  ViewportInteractionHarness harness;
+  const quader::QuaderModelingObjectRef box = create_unit_box(harness);
+  ASSERT_TRUE(harness.editor.selection()
+                  .set_mode(quader::QuaderSelectionMode::Face)
+                  .ok());
+  ASSERT_TRUE(harness.editor.selection().clear().ok());
+  harness.router.set_selection_mode(quader::ViewportSelectionMode::Face);
+  harness.input.mouse_local = {400.0f, 300.0f};
+  harness.input.mouse_screen = harness.input.mouse_local;
+
+  quader::ViewportSelectionInteraction interaction;
+  ViewportSelectionWorkGateHarness work_gate(harness);
+  interaction.handle_frame(
+      harness.editor, harness.frame(), quader::ViewportToolResult{},
+      quader::ViewportBeforeToolInteractionResult{}, work_gate.hover_port());
+  ASSERT_EQ(interaction.work_stats().hover_pick_count, 1u);
+  ASSERT_EQ(harness.editor.selection().hover_summary().target.object_id,
+            box.modeling_object_id);
+  ASSERT_EQ(harness.editor.selection().hover_summary().target.kind,
+            quader::QuaderActiveSelectionKind::Face);
+  ASSERT_TRUE(harness.editor.selection()
+                  .select_face(
+                      box,
+                      harness.editor.selection().hover_summary().target.face_id)
+                  .ok());
+
+  harness.input.modifiers.primary = true;
+  interaction.handle_frame(
+      harness.editor,
+      harness.frame(true, true, false, harness.input.mouse_local),
+      quader::ViewportToolResult{},
+      quader::ViewportBeforeToolInteractionResult{}, work_gate.hover_port());
+  interaction.handle_frame(
+      harness.editor,
+      harness.frame(false, false, true, harness.input.mouse_local),
+      quader::ViewportToolResult{},
+      quader::ViewportBeforeToolInteractionResult{}, work_gate.hover_port());
+
+  EXPECT_EQ(harness.editor.selection().summary().selected_object_count, 0u);
+  EXPECT_EQ(interaction.work_stats().hover_pick_count, 2u);
+  EXPECT_EQ(harness.editor.selection().hover_summary().target.object_id,
+            box.modeling_object_id);
+
+  interaction.handle_frame(
+      harness.editor, harness.frame(), quader::ViewportToolResult{},
+      quader::ViewportBeforeToolInteractionResult{}, work_gate.hover_port());
+  EXPECT_EQ(interaction.work_stats().hover_pick_count, 2u);
+  EXPECT_EQ(harness.editor.selection().hover_summary().target.object_id,
+            box.modeling_object_id);
+}
+
+TEST(ViewportSelectionInteractionTests,
+     PointerReentryAtSameCoordinatesIssuesOneFreshHoverPick) {
+  ViewportInteractionHarness harness;
+  const quader::QuaderModelingObjectRef box = create_unit_box(harness);
+  ASSERT_TRUE(harness.editor.selection()
+                  .set_mode(quader::QuaderSelectionMode::Face)
+                  .ok());
+  ASSERT_TRUE(harness.editor.selection().clear().ok());
+  harness.router.set_selection_mode(quader::ViewportSelectionMode::Face);
+  harness.input.mouse_local = {400.0f, 300.0f};
+  harness.input.mouse_screen = harness.input.mouse_local;
+
+  quader::ViewportSelectionInteraction interaction;
+  ViewportSelectionWorkGateHarness work_gate(harness);
+  const auto handle_frame = [&]() {
+    interaction.handle_frame(
+        harness.editor, harness.frame(), quader::ViewportToolResult{},
+        quader::ViewportBeforeToolInteractionResult{},
+        work_gate.hover_port());
+  };
+
+  handle_frame();
+  ASSERT_EQ(interaction.work_stats().hover_pick_count, 1u);
+  ASSERT_EQ(harness.editor.selection().hover_summary().target.object_id,
+            box.modeling_object_id);
+
+  harness.input.viewport_hovered = false;
+  handle_frame();
+  EXPECT_EQ(interaction.work_stats().hover_pick_count, 1u);
+  EXPECT_EQ(harness.editor.selection().hover_summary().target.kind,
+            quader::QuaderActiveSelectionKind::None);
+  handle_frame();
+  EXPECT_EQ(interaction.work_stats().hover_pick_count, 1u);
+
+  harness.input.viewport_hovered = true;
+  handle_frame();
+  EXPECT_EQ(interaction.work_stats().hover_pick_count, 2u);
+  EXPECT_EQ(harness.editor.selection().hover_summary().target.object_id,
+            box.modeling_object_id);
+  handle_frame();
+  EXPECT_EQ(interaction.work_stats().hover_pick_count, 2u);
 }
 
 TEST(ViewportInteractionControllerTests, HoverSurvivesNavigationSuppressionAndClearsWhenPointerLeaves) {

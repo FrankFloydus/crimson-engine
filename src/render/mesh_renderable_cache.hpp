@@ -29,6 +29,7 @@ class MeshRenderableCache {
 public:
     using MeshProxy = MeshRenderableProxy;
 
+    /// Counts the cache update paths used by render-performance regressions.
     struct UpdateStats final {
       std::uint64_t topology_stable_geometry_rebind_count = 0u;
       std::uint64_t full_proxy_rebuild_count = 0u;

@@ -13,6 +13,7 @@
 #include "editor/modeling/runtime/session_internal.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <optional>
@@ -386,21 +387,6 @@ bool fill_knife_vertex_hit(
 	return true;
 }
 
-bool fill_knife_vertex_target(
-		EditorSession& session,
-		KnifeToolState& state,
-		const quader_poly::Ray& ray,
-		int target_object_id,
-		KnifeResolvedPoint& out_point)
-{
-	const quader_poly::PickOptions options =
-		knife_pick_options(quader_poly::SelectionMode::Vertex);
-        const std::optional<PickHitRecord> hit =
-            session.pick_nearest({ray, options, target_object_id});
-	return hit.has_value() &&
-		fill_knife_vertex_hit(session, state, *hit, out_point);
-}
-
 bool fill_knife_edge_hit(
 		EditorSession& session,
 		KnifeToolState& state,
@@ -457,23 +443,6 @@ bool fill_knife_edge_hit(
 	return true;
 }
 
-bool fill_knife_edge_target(
-		EditorSession& session,
-		KnifeToolState& state,
-		const quader_poly::Ray& ray,
-		double grid_size,
-		bool snap_enabled,
-		int target_object_id,
-		KnifeResolvedPoint& out_point)
-{
-	const quader_poly::PickOptions options =
-		knife_pick_options(quader_poly::SelectionMode::Edge);
-        const std::optional<PickHitRecord> hit =
-            session.pick_nearest({ray, options, target_object_id});
-	return hit.has_value() && fill_knife_edge_hit(
-		session, state, *hit, grid_size, snap_enabled, out_point);
-}
-
 bool fill_knife_face_hit(
 		EditorSession& session,
 		KnifeToolState& state,
@@ -525,25 +494,6 @@ bool fill_knife_face_hit(
 	return true;
 }
 
-bool fill_knife_face_point(
-		EditorSession& session,
-		KnifeToolState& state,
-		const quader_poly::Ray& ray,
-		double grid_size,
-		bool snap_enabled,
-		bool constrain_axis,
-		int target_object_id,
-		KnifeResolvedPoint& out_point)
-{
-	const quader_poly::PickOptions options =
-		knife_pick_options(quader_poly::SelectionMode::Face);
-        const std::optional<PickHitRecord> hit =
-            session.pick_nearest({ray, options, target_object_id});
-	return hit.has_value() && fill_knife_face_hit(
-		session, state, *hit, grid_size, snap_enabled, constrain_axis,
-		out_point);
-}
-
 KnifeResolvedPoint resolve_knife_point_from_pick(
 		EditorSession& session,
 		KnifeToolState& state,
@@ -554,15 +504,39 @@ KnifeResolvedPoint resolve_knife_point_from_pick(
 		int target_object_id)
 {
 	KnifeResolvedPoint point;
-	if (fill_knife_vertex_target(session, state, ray, target_object_id, point)) {
+	constexpr std::array kPriorityModes {
+		SelectionMode::Vertex,
+		SelectionMode::Edge,
+		SelectionMode::Face,
+	};
+	const int effective_target_object_id = target_object_id >= 0
+		? target_object_id
+		: state.target_object_id;
+	const std::optional<PickHitRecord> hit = pick_nearest_priority(
+		session.objects(),
+		{
+			ray,
+			knife_pick_options(quader_poly::SelectionMode::Vertex),
+			effective_target_object_id,
+		},
+		kPriorityModes);
+	if (!hit.has_value()) {
 		return point;
 	}
-	if (fill_knife_edge_target(session, state, ray, grid_size, snap_enabled,
-			target_object_id, point)) {
-		return point;
+	switch (hit->kind) {
+	case quader_poly::ElementKind::Vertex:
+		(void)fill_knife_vertex_hit(session, state, *hit, point);
+		break;
+	case quader_poly::ElementKind::Edge:
+		(void)fill_knife_edge_hit(
+			session, state, *hit, grid_size, snap_enabled, point);
+		break;
+	case quader_poly::ElementKind::Face:
+		(void)fill_knife_face_hit(
+			session, state, *hit, grid_size, snap_enabled, constrain_axis,
+			point);
+		break;
 	}
-	(void)fill_knife_face_point(session, state, ray, grid_size, snap_enabled,
-		constrain_axis, target_object_id, point);
 	return point;
 }
 

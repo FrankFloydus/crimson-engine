@@ -1163,19 +1163,23 @@ DocumentCommandService::delete_layers(std::vector<SceneLayerId> layer_ids) {
   }
   std::unordered_set<SceneLayerId> removed;
   removed.reserve(layer_ids.size());
-  std::vector<EntityId> affected;
   for (const SceneLayerId layer_id : layer_ids) {
     if (scene_.layer(layer_id) == nullptr) {
       return document_command_invalid_request_result("Layer does not exist");
     }
     removed.insert(layer_id);
-    const std::vector<EntityId> members = scene_.layer_members(layer_id);
-    affected.insert(affected.end(), members.begin(), members.end());
+  }
+  SceneLayerState before = scene_.layer_state();
+  std::vector<EntityId> affected;
+  affected.reserve(before.assignments.size());
+  for (const SceneLayerAssignment &assignment : before.assignments) {
+    if (removed.contains(assignment.layer_id)) {
+      affected.push_back(assignment.entity);
+    }
   }
   if (entities_mutation_blocked(affected)) {
     return document_command_active_tool_entity_result();
   }
-  SceneLayerState before = scene_.layer_state();
   SceneLayerState after = before;
   std::erase_if(after.layers, [&removed](const SceneLayerRecord &record) {
     return removed.contains(record.id);

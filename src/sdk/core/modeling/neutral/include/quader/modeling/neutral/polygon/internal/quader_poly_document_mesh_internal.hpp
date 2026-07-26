@@ -10,11 +10,68 @@
 
 #include <quader/modeling/neutral/polygon/document.hpp>
 
+#include <cstddef>
 #include <cstdint>
 #include <span>
+#include <unordered_map>
 #include <vector>
 
 namespace quader_poly::document_internal {
+
+/**
+ * Resolves authored vertex IDs for one immutable document operation.
+ *
+ * Dense append-only IDs keep the existing direct-slot fast path. Documents
+ * with deleted, compacted, or imported IDs build one fallback index instead of
+ * rescanning the complete vertex array for every face corner. Duplicate and
+ * invalid IDs retain find_vertex's exact resolution order.
+ */
+class VertexLookupIndex final {
+public:
+    explicit VertexLookupIndex(const Document& document)
+        : vertices_(document.vertices)
+    {
+        std::size_t fallback_vertex_count = 0U;
+        for (const Vertex& vertex : vertices_) {
+            if (!resolves_from_dense_hint(vertex.id)) {
+                ++fallback_vertex_count;
+            }
+        }
+        if (fallback_vertex_count == 0U) {
+            return;
+        }
+
+        fallback_vertices_.reserve(fallback_vertex_count);
+        for (const Vertex& vertex : vertices_) {
+            if (!resolves_from_dense_hint(vertex.id)) {
+                fallback_vertices_.try_emplace(vertex.id, &vertex);
+            }
+        }
+    }
+
+    [[nodiscard]] const Vertex* find(ElementId id) const
+    {
+        if (resolves_from_dense_hint(id)) {
+            return &vertices_[static_cast<std::size_t>(id - 1U)];
+        }
+        const auto vertex = fallback_vertices_.find(id);
+        return vertex == fallback_vertices_.end() ? nullptr : vertex->second;
+    }
+
+private:
+    [[nodiscard]] bool resolves_from_dense_hint(ElementId id) const noexcept
+    {
+        if (id == kInvalidElementId) {
+            return false;
+        }
+        const std::size_t hinted_index = static_cast<std::size_t>(id - 1U);
+        return hinted_index < vertices_.size() &&
+               vertices_[hinted_index].id == id;
+    }
+
+    const std::vector<Vertex>& vertices_;
+    std::unordered_map<ElementId, const Vertex*> fallback_vertices_;
+};
 
 /**
  * Represents a Triangle value used by the polygon document and mesh editing core.
@@ -55,8 +112,22 @@ struct MergeFaceUvAssignment {
 
 [[nodiscard]] int dropped_axis_for_normal(const quader::QVec3& normal);
 [[nodiscard]] std::vector<Triangle> triangulate_face_local_indices(const Document& document, const Face& face);
+[[nodiscard]] std::vector<Triangle> triangulate_face_local_indices(
+    const Document& document,
+    const Face& face,
+    const VertexLookupIndex& vertex_lookup);
+[[nodiscard]] std::vector<Triangle> triangulate_face_local_indices(
+    const Document& document,
+    const Face& face,
+    const VertexLookupIndex& vertex_lookup,
+    const quader::QVec3& normal);
 
 [[nodiscard]] FaceUvBasis generated_face_uv_basis(const Document& document, const Face& face, const quader::QVec3& normal);
+[[nodiscard]] FaceUvBasis generated_face_uv_basis(
+    const Document& document,
+    const Face& face,
+    const quader::QVec3& normal,
+    const VertexLookupIndex& vertex_lookup);
 [[nodiscard]] FaceUvBasis project_uv_basis_to_face_plane(const FaceUvBasis& generated_basis, const quader::QVec3& normal, const quader::QVec3& origin);
 [[nodiscard]] FaceUvBasis face_local_uv_basis(const Document& document, const Face& face, const quader::QVec3& normal);
 [[nodiscard]] quader::QVec2 generated_face_uv(const quader::QVec3& position, const FaceUvBasis& basis);
