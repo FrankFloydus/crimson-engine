@@ -184,6 +184,18 @@ struct EditorRuntimeCommandResult {
 	EditorRuntimeStatus runtime;
 };
 
+/**
+ * Executes the Cut hover command against a borrowed, read-only session view.
+ *
+ * Cut hover changes only EditorRuntime state. Keeping this path const prevents
+ * high-frequency pointer motion from copying the session's complete object
+ * projection merely to satisfy the mutable generic command boundary.
+ */
+[[nodiscard]] EditorRuntimeCommandResult execute_cut_hover_runtime_command(
+		const EditorSession& session,
+		EditorRuntime& runtime,
+		const EditorRuntimeCommand& command);
+
 [[nodiscard]] EditorRuntimeCommandResult execute_runtime_command(
 		EditorSession& session,
 		EditorRuntime& runtime,

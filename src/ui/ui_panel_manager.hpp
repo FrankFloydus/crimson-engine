@@ -47,6 +47,7 @@ public:
   void write_settings(UISettings &settings) const;
 
   [[nodiscard]] bool is_visible(UIPanelId id) const;
+  [[nodiscard]] bool is_presented(UIPanelId id) const;
   bool set_visible(UIPanelId id, bool visible);
   bool focus(UIPanelId id);
   [[nodiscard]] QDockWidget *dock(UIPanelId id) const;
@@ -68,6 +69,7 @@ private:
       ui_panel_default_visible(UIPanelId::Layers),
       ui_panel_default_visible(UIPanelId::ToolSettings),
   };
+  std::array<bool, kUiPanelCount> presented_{};
   VisibilityChangedCallback visibility_changed_;
 };
 

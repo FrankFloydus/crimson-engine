@@ -143,7 +143,17 @@ QtViewportFlyNavigationHud::QtViewportFlyNavigationHud(
 }
 
 void QtViewportFlyNavigationHud::set_bounds(const QRect &bounds) {
+  if (bounds_initialized_ &&
+      !qt_viewport_fly_navigation_hud_bounds_refresh_required(bounds_,
+                                                               bounds)) {
+    return;
+  }
   bounds_ = bounds;
+  bounds_initialized_ = true;
+  update_geometry();
+}
+
+void QtViewportFlyNavigationHud::update_geometry() {
   const QSize crosshair_size = crosshair_->size();
   crosshair_->move(bounds_.x() +
                        (bounds_.width() - crosshair_size.width()) / 2,
@@ -160,27 +170,75 @@ void QtViewportFlyNavigationHud::set_bounds(const QRect &bounds) {
 }
 
 void QtViewportFlyNavigationHud::present(
+    bool fly_hud_active, bool fly_speed_is_default, float fly_speed,
+    const LocalizationService *localization) {
+  const std::string_view locale =
+      localization != nullptr ? localization->current_locale()
+                              : std::string_view{};
+  if (input_valid_ && input_fly_hud_active_ == fly_hud_active &&
+      input_fly_speed_is_default_ == fly_speed_is_default &&
+      input_speed_ == fly_speed && input_localization_ == localization &&
+      input_locale_ == locale) {
+    return;
+  }
+
+  input_fly_hud_active_ = fly_hud_active;
+  input_fly_speed_is_default_ = fly_speed_is_default;
+  input_speed_ = fly_speed;
+  input_localization_ = localization;
+  input_locale_.assign(locale);
+  input_valid_ = true;
+  apply_presentation(qt_viewport_fly_navigation_hud_presentation(
+      fly_hud_active, fly_speed_is_default, fly_speed, localization));
+}
+
+void QtViewportFlyNavigationHud::present(
     const QtViewportFlyNavigationHudPresentation &presentation) {
-  crosshair_->setVisible(presentation.crosshair_visible);
+  input_valid_ = false;
+  apply_presentation(presentation);
+}
+
+void QtViewportFlyNavigationHud::apply_presentation(
+    const QtViewportFlyNavigationHudPresentation &presentation) {
+  if (!qt_viewport_fly_navigation_hud_presentation_refresh_required(
+          presentation_, presentation)) {
+    return;
+  }
+
+  const bool crosshair_visibility_changed =
+      presentation_.crosshair_visible != presentation.crosshair_visible;
+  const bool speed_visibility_changed =
+      presentation_.speed_visible != presentation.speed_visible;
+  bool speed_label_changed = false;
   if (presentation.speed_visible) {
     const QString label = QString::fromStdString(presentation.speed_label);
     if (speed_label_->text() != label) {
       speed_label_->setText(label);
+      speed_label_changed = true;
     }
   }
-  speed_label_->setVisible(presentation.speed_visible);
-  set_bounds(bounds_);
-  if (presentation.crosshair_visible) {
+
+  presentation_ = presentation;
+  if (speed_label_changed) {
+    update_geometry();
+  }
+  if (crosshair_visibility_changed) {
+    crosshair_->setVisible(presentation.crosshair_visible);
+  }
+  if (speed_visibility_changed) {
+    speed_label_->setVisible(presentation.speed_visible);
+  }
+  if (crosshair_visibility_changed && presentation.crosshair_visible) {
     crosshair_->raise();
   }
-  if (presentation.speed_visible) {
+  if (speed_visibility_changed && presentation.speed_visible) {
     speed_label_->raise();
   }
 }
 
 void QtViewportFlyNavigationHud::hide() {
-  crosshair_->hide();
-  speed_label_->hide();
+  input_valid_ = false;
+  apply_presentation({});
 }
 
 } // namespace quader

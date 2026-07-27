@@ -9,6 +9,7 @@
 #include "core/logger.hpp"
 #include "diagnostics/profile.hpp"
 #include "render/render_layers.hpp"
+#include "render/render_signature_builder.hpp"
 
 #include <filament/ColorGrading.h>
 #include <filament/Options.h>
@@ -92,6 +93,65 @@ scene_texture_sample_color_space(bool post_processing_enabled) {
                                  : TextureSampleColorSpace::LinearSrgb;
 }
 
+RenderSignatureBuilder &
+add_setting_color(RenderSignatureBuilder &signature,
+                  ViewportSettingColor color) {
+  return signature.add_float(color.r)
+      .add_float(color.g)
+      .add_float(color.b)
+      .add_float(color.a);
+}
+
+std::uint64_t viewport_camera_presentation_signature(
+    const ViewportCameraController &controller, std::uint32_t width,
+    std::uint32_t height) {
+  const ViewportCameraPose pose = controller.pose();
+  const ViewportCameraState &state = controller.state();
+  return RenderSignatureBuilder{}
+      .add_vec3(pose.eye)
+      .add_vec3(pose.target)
+      .add_vec3(pose.up)
+      .add_value(static_cast<std::uint32_t>(state.projection))
+      .add_float(state.orthographic_size)
+      .add_float(state.fov_degrees)
+      .add_float(state.near_plane)
+      .add_float(state.far_plane)
+      .add_value(width)
+      .add_value(height)
+      .value();
+}
+
+std::uint64_t scene_settings_presentation_signature(
+    const SceneSettingsComponent &settings, bool rendered_mode,
+    bool instance_edit_context_active,
+    ViewportSettingColor instance_edit_background) {
+  const bool post_processing_enabled =
+      rendered_mode && settings.post_process.enabled;
+  RenderSignatureBuilder signature;
+  add_setting_color(
+      signature,
+      instance_edit_context_active
+          ? instance_edit_background
+          : viewport_clear_color(settings.environment, rendered_mode));
+  signature.add_bool(post_processing_enabled)
+      .add_float(settings.camera.aperture)
+      .add_float(settings.camera.shutter_speed)
+      .add_float(settings.camera.sensitivity);
+  if (post_processing_enabled) {
+    signature
+        .add_bool(settings.post_process.anti_aliasing)
+        .add_bool(settings.post_process.ambient_occlusion)
+        .add_float(settings.post_process.ambient_occlusion_intensity)
+        .add_float(settings.post_process.ambient_occlusion_radius)
+        .add_bool(settings.post_process.bloom)
+        .add_float(settings.post_process.bloom_strength)
+        .add_bool(settings.post_process.dithering)
+        .add_value(
+            static_cast<std::uint32_t>(settings.post_process.tone_mapping));
+  }
+  return signature.value();
+}
+
 } // namespace
 
 ViewportRenderer::~ViewportRenderer() {
@@ -104,6 +164,7 @@ void ViewportRenderer::initialize(filament::Engine &engine,
                                   filament::Material &ground_grid_material,
                                   std::uint8_t grid_layer_mask,
                                   ViewportRenderSurface surface) {
+  reset_presentation_cache();
   engine_ = &engine;
   scene_ = &scene;
   texture_registry_ = &texture_registry;
@@ -149,6 +210,7 @@ void ViewportRenderer::initialize(filament::Engine &engine,
 }
 
 void ViewportRenderer::shutdown() {
+    reset_presentation_cache();
     if (!engine_) {
         return;
     }
@@ -241,6 +303,15 @@ float ViewportRenderer::texture_max_v() const {
 void ViewportRenderer::update_camera(
     const ViewportCameraController &controller) {
   QDR_PROFILE_FUNCTION();
+  if (!camera_ || !overlay_camera_) {
+    return;
+  }
+  const std::uint64_t presentation_signature =
+      viewport_camera_presentation_signature(controller, width(), height());
+  if (camera_presentation_signature_ == presentation_signature) {
+    return;
+  }
+
   const auto pose = controller.pose();
   const auto apply_look_at = [&](filament::Camera *camera) {
     if (camera) {
@@ -274,12 +345,21 @@ void ViewportRenderer::update_camera(
   apply_projection(camera_);
   apply_projection(overlay_camera_);
   apply_neutral_overlay_exposure(overlay_camera_);
+  camera_presentation_signature_ = presentation_signature;
 }
 
 void ViewportRenderer::apply_scene_settings(
     const SceneSettingsComponent &settings, bool rendered_mode) {
   QDR_PROFILE_FUNCTION();
   if (!view_ || !camera_) {
+    return;
+  }
+
+  const std::uint64_t presentation_signature =
+      scene_settings_presentation_signature(
+          settings, rendered_mode, instance_edit_context_active_,
+          instance_edit_background_);
+  if (scene_settings_presentation_signature_ == presentation_signature) {
     return;
   }
 
@@ -331,6 +411,7 @@ void ViewportRenderer::apply_scene_settings(
                        std::max(settings.camera.shutter_speed, 0.000001f),
                        std::max(settings.camera.sensitivity, 1.0f));
   apply_neutral_overlay_exposure(overlay_camera_);
+  scene_settings_presentation_signature_ = presentation_signature;
 }
 
 void ViewportRenderer::apply_tone_mapping(SceneToneMapping tone_mapping,
@@ -379,8 +460,9 @@ void ViewportRenderer::update_ground_grid(
     return;
   }
 
-  render_pass_coordinator_.set_grid_visible(visible);
-  update_visible_layers();
+  if (render_pass_coordinator_.set_grid_visible(visible)) {
+    update_visible_layers();
+  }
   grid_renderer_.update(controller, width(), height(), grid_world_spacing,
                         settings, visible, instance_edit_context_active_);
 }
@@ -413,12 +495,16 @@ void ViewportRenderer::set_scene_layer_mask(std::uint8_t layer_mask) {
 }
 
 void ViewportRenderer::set_shadowing_enabled(bool enabled) {
+  if (shadowing_enabled_ == enabled) {
+    return;
+  }
   if (view_) {
     view_->setShadowingEnabled(enabled);
   }
   if (overlay_view_) {
     overlay_view_->setShadowingEnabled(false);
   }
+  shadowing_enabled_ = enabled;
 }
 
 void ViewportRenderer::set_material_debug_mode(
@@ -445,6 +531,12 @@ void ViewportRenderer::update_visible_layers() {
     return;
   }
   render_pass_coordinator_.apply_visible_layers(view_, overlay_view_);
+}
+
+void ViewportRenderer::reset_presentation_cache() {
+  camera_presentation_signature_.reset();
+  scene_settings_presentation_signature_.reset();
+  shadowing_enabled_.reset();
 }
 
 } // namespace quader

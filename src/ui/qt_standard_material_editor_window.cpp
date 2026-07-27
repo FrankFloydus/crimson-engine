@@ -40,6 +40,7 @@
 #include <QStatusBar>
 #include <QStringList>
 #include <QStyle>
+#include <QTimer>
 #include <QToolButton>
 #include <QVBoxLayout>
 #include <QWheelEvent>
@@ -60,6 +61,7 @@ constexpr int kPropertiesStretch = 2;
 constexpr int kScalarDecimals = 3;
 constexpr double kScalarStep = 0.01;
 constexpr int kScalarSliderScale = 100;
+constexpr int kLiveNumberDispatchIntervalMs = 16;
 constexpr int kTexturePreviewExtent = 64;
 constexpr int kTexturePreviewIconExtent = 56;
 constexpr int kTextureInspectorWidth = 720;
@@ -275,6 +277,15 @@ private:
 
 constexpr std::size_t texture_index(QtStandardMaterialTextureSlot slot) {
   return static_cast<std::size_t>(slot);
+}
+
+constexpr std::size_t scalar_index(QtStandardMaterialScalar scalar) {
+  return static_cast<std::size_t>(scalar);
+}
+
+constexpr std::size_t texture_transform_index(
+    QtStandardMaterialTextureTransformComponent component) {
+  return static_cast<std::size_t>(component);
 }
 
 constexpr std::size_t mesh_index(QtStandardMaterialPreviewMesh mesh) {
@@ -587,6 +598,19 @@ QtStandardMaterialEditorWindow::QtStandardMaterialEditorWindow(QWidget *parent)
         controls.label->setBuddy(controls.slider);
         transform_form->addRow(controls.label, row);
 
+        controls.live_dispatch.timer = new QTimer(row);
+        controls.live_dispatch.timer->setObjectName(
+            controls.slider->objectName() +
+            QStringLiteral(".dispatchTimer"));
+        controls.live_dispatch.timer->setSingleShot(true);
+        controls.live_dispatch.timer->setInterval(
+            kLiveNumberDispatchIntervalMs);
+        QObject::connect(
+            controls.live_dispatch.timer, &QTimer::timeout, this,
+            [this, component]() { flush_texture_transform_edit(component); });
+        QObject::connect(
+            controls.slider, &QSlider::sliderReleased, this,
+            [this, component]() { flush_texture_transform_edit(component); });
         QObject::connect(
             controls.spin, &QDoubleSpinBox::valueChanged, this,
             [this, component, slider = controls.slider](double value) {
@@ -595,22 +619,20 @@ QtStandardMaterialEditorWindow::QtStandardMaterialEditorWindow(QWidget *parent)
                 slider->setValue(
                     static_cast<int>(std::lround(value * kScalarSliderScale)));
               }
-              if (!refreshing_ && texture_transform_edited_) {
-                texture_transform_edited_(component, value);
-              }
+              dispatch_texture_transform_edit(component, value, false);
             });
         QObject::connect(
             controls.slider, &QSlider::valueChanged, this,
-            [this, component, spin = controls.spin](int slider_value) {
+            [this, component, spin = controls.spin,
+             slider = controls.slider](int slider_value) {
               const double value =
                   static_cast<double>(slider_value) / kScalarSliderScale;
               {
                 const QSignalBlocker blocker(spin);
                 spin->setValue(value);
               }
-              if (!refreshing_ && texture_transform_edited_) {
-                texture_transform_edited_(component, value);
-              }
+              dispatch_texture_transform_edit(component, value,
+                                              slider->isSliderDown());
             });
       };
   create_transform_controls(
@@ -680,6 +702,26 @@ QtStandardMaterialEditorWindow::QtStandardMaterialEditorWindow(QWidget *parent)
   });
   QObject::connect(albedo_button_, &QPushButton::clicked, this,
                    [this]() { choose_albedo_color(); });
+  const auto configure_scalar_live_dispatch =
+      [this](QtStandardMaterialScalar scalar, QSlider *slider) {
+        LiveNumberDispatch &live_dispatch =
+            scalar_live_dispatches_[scalar_index(scalar)];
+        live_dispatch.timer = new QTimer(slider);
+        live_dispatch.timer->setObjectName(
+            slider->objectName() + QStringLiteral(".dispatchTimer"));
+        live_dispatch.timer->setSingleShot(true);
+        live_dispatch.timer->setInterval(kLiveNumberDispatchIntervalMs);
+        QObject::connect(live_dispatch.timer, &QTimer::timeout, this,
+                         [this, scalar]() { flush_scalar_edit(scalar); });
+        QObject::connect(slider, &QSlider::sliderReleased, this,
+                         [this, scalar]() { flush_scalar_edit(scalar); });
+      };
+  configure_scalar_live_dispatch(QtStandardMaterialScalar::Roughness,
+                                 roughness_slider_);
+  configure_scalar_live_dispatch(QtStandardMaterialScalar::Metallic,
+                                 metallic_slider_);
+  configure_scalar_live_dispatch(QtStandardMaterialScalar::NormalStrength,
+                                 normal_strength_slider_);
   QObject::connect(
       roughness_spin_, &QDoubleSpinBox::valueChanged, this,
       [this](double value) {
@@ -688,23 +730,21 @@ QtStandardMaterialEditorWindow::QtStandardMaterialEditorWindow(QWidget *parent)
           roughness_slider_->setValue(
               static_cast<int>(std::lround(value * kScalarSliderScale)));
         }
-        if (!refreshing_ && scalar_edited_) {
-          scalar_edited_(QtStandardMaterialScalar::Roughness, value);
-        }
+        dispatch_scalar_edit(QtStandardMaterialScalar::Roughness, value,
+                             false);
       });
   QObject::connect(roughness_slider_, &QSlider::valueChanged, this,
                    [this](int slider_value) {
                      const double value =
                          static_cast<double>(slider_value) / kScalarSliderScale;
-                     {
-                       const QSignalBlocker blocker(roughness_spin_);
-                       roughness_spin_->setValue(value);
-                     }
-                     if (!refreshing_ && scalar_edited_) {
-                       scalar_edited_(QtStandardMaterialScalar::Roughness,
-                                      value);
-                     }
-                   });
+                      {
+                        const QSignalBlocker blocker(roughness_spin_);
+                        roughness_spin_->setValue(value);
+                      }
+                      dispatch_scalar_edit(
+                          QtStandardMaterialScalar::Roughness, value,
+                          roughness_slider_->isSliderDown());
+                    });
   QObject::connect(
       metallic_spin_, &QDoubleSpinBox::valueChanged, this,
       [this](double value) {
@@ -713,9 +753,8 @@ QtStandardMaterialEditorWindow::QtStandardMaterialEditorWindow(QWidget *parent)
           metallic_slider_->setValue(
               static_cast<int>(std::lround(value * kScalarSliderScale)));
         }
-        if (!refreshing_ && scalar_edited_) {
-          scalar_edited_(QtStandardMaterialScalar::Metallic, value);
-        }
+        dispatch_scalar_edit(QtStandardMaterialScalar::Metallic, value,
+                             false);
       });
   QObject::connect(
       metallic_slider_, &QSlider::valueChanged, this, [this](int slider_value) {
@@ -725,9 +764,8 @@ QtStandardMaterialEditorWindow::QtStandardMaterialEditorWindow(QWidget *parent)
           const QSignalBlocker blocker(metallic_spin_);
           metallic_spin_->setValue(value);
         }
-        if (!refreshing_ && scalar_edited_) {
-          scalar_edited_(QtStandardMaterialScalar::Metallic, value);
-        }
+        dispatch_scalar_edit(QtStandardMaterialScalar::Metallic, value,
+                             metallic_slider_->isSliderDown());
       });
   QObject::connect(
       normal_strength_spin_, &QDoubleSpinBox::valueChanged, this,
@@ -737,23 +775,21 @@ QtStandardMaterialEditorWindow::QtStandardMaterialEditorWindow(QWidget *parent)
           normal_strength_slider_->setValue(
               static_cast<int>(std::lround(value * kScalarSliderScale)));
         }
-        if (!refreshing_ && scalar_edited_) {
-          scalar_edited_(QtStandardMaterialScalar::NormalStrength, value);
-        }
+        dispatch_scalar_edit(QtStandardMaterialScalar::NormalStrength, value,
+                             false);
       });
   QObject::connect(normal_strength_slider_, &QSlider::valueChanged, this,
                    [this](int slider_value) {
                      const double value =
                          static_cast<double>(slider_value) / kScalarSliderScale;
-                     {
-                       const QSignalBlocker blocker(normal_strength_spin_);
-                       normal_strength_spin_->setValue(value);
-                     }
-                     if (!refreshing_ && scalar_edited_) {
-                       scalar_edited_(QtStandardMaterialScalar::NormalStrength,
-                                      value);
-                     }
-                   });
+                      {
+                        const QSignalBlocker blocker(normal_strength_spin_);
+                        normal_strength_spin_->setValue(value);
+                      }
+                      dispatch_scalar_edit(
+                          QtStandardMaterialScalar::NormalStrength, value,
+                          normal_strength_slider_->isSliderDown());
+                    });
   QObject::connect(direct_x_normal_, &QCheckBox::toggled, this,
                    [this](bool direct_x) {
                      if (!refreshing_ && normal_convention_edited_) {
@@ -769,6 +805,163 @@ QtStandardMaterialEditorWindow::QtStandardMaterialEditorWindow(QWidget *parent)
 
 QtStandardMaterialEditorWindow::~QtStandardMaterialEditorWindow() = default;
 
+void QtStandardMaterialEditorWindow::dispatch_scalar_edit(
+    QtStandardMaterialScalar scalar, double value, bool coalesce) {
+  if (refreshing_) {
+    return;
+  }
+
+  LiveNumberDispatch &live_dispatch =
+      scalar_live_dispatches_[scalar_index(scalar)];
+  if (coalesce) {
+    live_dispatch.pending_value = value;
+    if (live_dispatch.timer != nullptr &&
+        !live_dispatch.timer->isActive()) {
+      live_dispatch.timer->start();
+    }
+    return;
+  }
+
+  live_dispatch.pending_value.reset();
+  if (live_dispatch.timer != nullptr) {
+    live_dispatch.timer->stop();
+  }
+  if (scalar_edited_) {
+    scalar_edited_(scalar, value);
+  }
+}
+
+void QtStandardMaterialEditorWindow::flush_scalar_edit(
+    QtStandardMaterialScalar scalar) {
+  LiveNumberDispatch &live_dispatch =
+      scalar_live_dispatches_[scalar_index(scalar)];
+  if (!live_dispatch.pending_value.has_value()) {
+    return;
+  }
+
+  const double value = *live_dispatch.pending_value;
+  live_dispatch.pending_value.reset();
+  if (live_dispatch.timer != nullptr) {
+    live_dispatch.timer->stop();
+  }
+  if (!refreshing_ && scalar_edited_) {
+    scalar_edited_(scalar, value);
+  }
+}
+
+void QtStandardMaterialEditorWindow::dispatch_texture_transform_edit(
+    QtStandardMaterialTextureTransformComponent component, double value,
+    bool coalesce) {
+  if (refreshing_) {
+    return;
+  }
+
+  LiveNumberDispatch &live_dispatch =
+      texture_transform_controls_[texture_transform_index(component)]
+          .live_dispatch;
+  if (coalesce) {
+    live_dispatch.pending_value = value;
+    if (live_dispatch.timer != nullptr &&
+        !live_dispatch.timer->isActive()) {
+      live_dispatch.timer->start();
+    }
+    return;
+  }
+
+  live_dispatch.pending_value.reset();
+  if (live_dispatch.timer != nullptr) {
+    live_dispatch.timer->stop();
+  }
+  if (texture_transform_edited_) {
+    texture_transform_edited_(component, value);
+  }
+}
+
+void QtStandardMaterialEditorWindow::flush_texture_transform_edit(
+    QtStandardMaterialTextureTransformComponent component) {
+  LiveNumberDispatch &live_dispatch =
+      texture_transform_controls_[texture_transform_index(component)]
+          .live_dispatch;
+  if (!live_dispatch.pending_value.has_value()) {
+    return;
+  }
+
+  const double value = *live_dispatch.pending_value;
+  live_dispatch.pending_value.reset();
+  if (live_dispatch.timer != nullptr) {
+    live_dispatch.timer->stop();
+  }
+  if (!refreshing_ && texture_transform_edited_) {
+    texture_transform_edited_(component, value);
+  }
+}
+
+bool QtStandardMaterialEditorWindow::cancel_pending_number_edits() {
+  bool canceled = false;
+  const auto cancel = [&canceled](LiveNumberDispatch &live_dispatch) {
+    canceled = live_dispatch.pending_value.has_value() || canceled;
+    live_dispatch.pending_value.reset();
+    if (live_dispatch.timer != nullptr) {
+      live_dispatch.timer->stop();
+    }
+  };
+  for (LiveNumberDispatch &live_dispatch : scalar_live_dispatches_) {
+    cancel(live_dispatch);
+  }
+  for (TextureTransformControls &controls : texture_transform_controls_) {
+    cancel(controls.live_dispatch);
+  }
+  return canceled;
+}
+
+void QtStandardMaterialEditorWindow::flush_pending_number_edits() {
+  std::array<std::optional<double>, kScalarCount> scalar_values;
+  std::array<std::optional<double>, kTextureTransformCount> transform_values;
+  const auto take = [](LiveNumberDispatch &live_dispatch) {
+    std::optional<double> pending_value =
+        std::exchange(live_dispatch.pending_value, std::nullopt);
+    if (live_dispatch.timer != nullptr) {
+      live_dispatch.timer->stop();
+    }
+    return pending_value;
+  };
+  for (std::size_t index = 0; index < scalar_values.size(); ++index) {
+    scalar_values[index] = take(scalar_live_dispatches_[index]);
+  }
+  for (std::size_t index = 0; index < transform_values.size(); ++index) {
+    transform_values[index] =
+        take(texture_transform_controls_[index].live_dispatch);
+  }
+
+  const bool expected_has_document = has_document_;
+  const QString expected_document_id = document_.stable_id;
+  const auto document_is_unchanged = [this, expected_has_document,
+                                      expected_document_id]() {
+    return has_document_ == expected_has_document &&
+           (!expected_has_document ||
+            document_.stable_id == expected_document_id);
+  };
+  for (std::size_t index = 0; index < scalar_values.size(); ++index) {
+    if (!scalar_values[index].has_value() || !document_is_unchanged()) {
+      continue;
+    }
+    if (scalar_edited_) {
+      scalar_edited_(static_cast<QtStandardMaterialScalar>(index),
+                     *scalar_values[index]);
+    }
+  }
+  for (std::size_t index = 0; index < transform_values.size(); ++index) {
+    if (!transform_values[index].has_value() || !document_is_unchanged()) {
+      continue;
+    }
+    if (texture_transform_edited_) {
+      texture_transform_edited_(
+          static_cast<QtStandardMaterialTextureTransformComponent>(index),
+          *transform_values[index]);
+    }
+  }
+}
+
 void QtStandardMaterialEditorWindow::set_labels(
     QtStandardMaterialEditorLabels labels) {
   labels_ = std::move(labels);
@@ -777,7 +970,11 @@ void QtStandardMaterialEditorWindow::set_labels(
 
 void QtStandardMaterialEditorWindow::set_document(
     QtStandardMaterialEditorDocument document) {
+  const bool canceled_pending_edit = cancel_pending_number_edits();
   if (has_document_ && document_ == document) {
+    if (canceled_pending_edit) {
+      refresh_document_controls();
+    }
     return;
   }
   const bool changed_document =
@@ -804,6 +1001,7 @@ void QtStandardMaterialEditorWindow::set_document(
 }
 
 void QtStandardMaterialEditorWindow::clear_document() {
+  (void)cancel_pending_number_edits();
   document_ = {};
   has_document_ = false;
   if (texture_inspector_window_ != nullptr) {
@@ -912,6 +1110,7 @@ void QtStandardMaterialEditorWindow::install_preview_widget(QWidget *widget) {
 }
 
 void QtStandardMaterialEditorWindow::closeEvent(QCloseEvent *event) {
+  flush_pending_number_edits();
   if (close_request_handler_ && !close_request_handler_()) {
     event->ignore();
     return;
@@ -1258,6 +1457,7 @@ void QtStandardMaterialEditorWindow::choose_albedo_color() {
 
 void QtStandardMaterialEditorWindow::emit_file_action(
     QtStandardMaterialEditorFileAction action) {
+  flush_pending_number_edits();
   if (file_action_) {
     file_action_(action);
   }

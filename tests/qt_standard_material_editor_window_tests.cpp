@@ -27,6 +27,7 @@
 #include <QSlider>
 #include <QStatusBar>
 #include <QStyle>
+#include <QTimer>
 #include <QToolButton>
 #include <QWheelEvent>
 
@@ -283,7 +284,38 @@ TEST(QtStandardMaterialEditorWindowTests,
   ASSERT_TRUE(
       QMetaObject::invokeMethod(name, "editingFinished", Qt::DirectConnection));
   roughness->setValue(0.5);
+  auto *roughness_dispatch_timer = window->findChild<QTimer *>(
+      QStringLiteral("standardMaterialEditor.roughness.slider.dispatchTimer"));
+  ASSERT_NE(roughness_dispatch_timer, nullptr);
+  EXPECT_TRUE(roughness_dispatch_timer->isSingleShot());
+  roughness_slider->setSliderDown(true);
   roughness_slider->setValue(51);
+  roughness_slider->setValue(67);
+  roughness_slider->setValue(83);
+  EXPECT_DOUBLE_EQ(roughness->value(), 0.83)
+      << "the paired spin box must follow every live slider sample";
+  ASSERT_EQ(scalar_edits.size(), 1U)
+      << "live slider samples stay pending until the bounded dispatch";
+  EXPECT_TRUE(roughness_dispatch_timer->isActive());
+  ASSERT_TRUE(QMetaObject::invokeMethod(
+      roughness_dispatch_timer, "timeout", Qt::DirectConnection));
+  ASSERT_EQ(scalar_edits.size(), 2U);
+  EXPECT_EQ(scalar_edits.back().first,
+            QtStandardMaterialScalar::Roughness);
+  EXPECT_DOUBLE_EQ(scalar_edits.back().second, 0.83)
+      << "one interval dispatches only the latest pending sample";
+  EXPECT_FALSE(roughness_dispatch_timer->isActive());
+  roughness_slider->setValue(84);
+  roughness_slider->setValue(91);
+  EXPECT_DOUBLE_EQ(roughness->value(), 0.91);
+  ASSERT_EQ(scalar_edits.size(), 2U);
+  roughness_slider->setSliderDown(false);
+  ASSERT_EQ(scalar_edits.size(), 3U);
+  EXPECT_EQ(scalar_edits.back().first,
+            QtStandardMaterialScalar::Roughness);
+  EXPECT_DOUBLE_EQ(scalar_edits.back().second, 0.91)
+      << "release must synchronously flush the exact final value";
+  EXPECT_FALSE(roughness_dispatch_timer->isActive());
   direct_x->setChecked(false);
   auto *normal_browse = window->findChild<QToolButton *>(
       QStringLiteral("standardMaterialEditor.normalTexture.browse"));
@@ -328,11 +360,13 @@ TEST(QtStandardMaterialEditorWindowTests,
   normal_browse->click();
   metallic_clear->click();
   EXPECT_EQ(edited_name, QStringLiteral("Aged Bronze"));
-  ASSERT_EQ(scalar_edits.size(), 2U);
+  ASSERT_EQ(scalar_edits.size(), 3U);
   EXPECT_EQ(scalar_edits[0].first, QtStandardMaterialScalar::Roughness);
   EXPECT_DOUBLE_EQ(scalar_edits[0].second, 0.5);
   EXPECT_EQ(scalar_edits[1].first, QtStandardMaterialScalar::Roughness);
-  EXPECT_DOUBLE_EQ(scalar_edits[1].second, 0.51);
+  EXPECT_DOUBLE_EQ(scalar_edits[1].second, 0.83);
+  EXPECT_EQ(scalar_edits[2].first, QtStandardMaterialScalar::Roughness);
+  EXPECT_DOUBLE_EQ(scalar_edits[2].second, 0.91);
   EXPECT_FALSE(direct_x_edit);
   ASSERT_EQ(texture_actions.size(), 2U);
   EXPECT_EQ(texture_actions[0].first, QtStandardMaterialTextureSlot::Normal);
@@ -344,24 +378,60 @@ TEST(QtStandardMaterialEditorWindowTests,
       QStringLiteral("standardMaterialEditor.textureTransform.centerU"));
   auto *scale_v_slider = window->findChild<QSlider *>(
       QStringLiteral("standardMaterialEditor.textureTransform.scaleV.slider"));
+  auto *scale_v = window->findChild<QDoubleSpinBox *>(
+      QStringLiteral("standardMaterialEditor.textureTransform.scaleV"));
   auto *rotation = window->findChild<QDoubleSpinBox *>(
       QStringLiteral("standardMaterialEditor.textureTransform.rotation"));
   ASSERT_NE(center_u, nullptr);
   ASSERT_NE(scale_v_slider, nullptr);
+  ASSERT_NE(scale_v, nullptr);
   ASSERT_NE(rotation, nullptr);
   EXPECT_DOUBLE_EQ(center_u->value(), 0.25);
   EXPECT_EQ(scale_v_slider->singleStep(), 1);
   EXPECT_EQ(scale_v_slider->value(), -100);
   EXPECT_DOUBLE_EQ(rotation->value(), 45.0);
+  auto *scale_v_dispatch_timer = window->findChild<QTimer *>(
+      QStringLiteral("standardMaterialEditor.textureTransform.scaleV.slider."
+                     "dispatchTimer"));
+  ASSERT_NE(scale_v_dispatch_timer, nullptr);
+  EXPECT_TRUE(scale_v_dispatch_timer->isSingleShot());
+  scale_v_slider->setSliderDown(true);
   scale_v_slider->setValue(-99);
-  rotation->setValue(90.0);
+  scale_v_slider->setValue(-25);
+  scale_v_slider->setValue(125);
+  EXPECT_DOUBLE_EQ(scale_v->value(), 1.25)
+      << "transform presentation remains live while owner dispatch is bounded";
+  EXPECT_TRUE(transform_edits.empty());
+  EXPECT_TRUE(scale_v_dispatch_timer->isActive());
+  ASSERT_TRUE(QMetaObject::invokeMethod(
+      scale_v_dispatch_timer, "timeout", Qt::DirectConnection));
+  ASSERT_EQ(transform_edits.size(), 1U);
+  EXPECT_EQ(transform_edits.back().first,
+            QtStandardMaterialTextureTransformComponent::ScaleV);
+  EXPECT_DOUBLE_EQ(transform_edits.back().second, 1.25);
+  EXPECT_FALSE(scale_v_dispatch_timer->isActive());
+  scale_v_slider->setValue(150);
+  scale_v_slider->setValue(225);
+  EXPECT_DOUBLE_EQ(scale_v->value(), 2.25);
+  ASSERT_EQ(transform_edits.size(), 1U);
+  scale_v_slider->setSliderDown(false);
   ASSERT_EQ(transform_edits.size(), 2U);
+  EXPECT_EQ(transform_edits.back().first,
+            QtStandardMaterialTextureTransformComponent::ScaleV);
+  EXPECT_DOUBLE_EQ(transform_edits.back().second, 2.25)
+      << "transform release must synchronously flush the final sample";
+  EXPECT_FALSE(scale_v_dispatch_timer->isActive());
+  rotation->setValue(90.0);
+  ASSERT_EQ(transform_edits.size(), 3U);
   EXPECT_EQ(transform_edits[0].first,
             QtStandardMaterialTextureTransformComponent::ScaleV);
-  EXPECT_DOUBLE_EQ(transform_edits[0].second, -0.99);
+  EXPECT_DOUBLE_EQ(transform_edits[0].second, 1.25);
   EXPECT_EQ(transform_edits[1].first,
+            QtStandardMaterialTextureTransformComponent::ScaleV);
+  EXPECT_DOUBLE_EQ(transform_edits[1].second, 2.25);
+  EXPECT_EQ(transform_edits[2].first,
             QtStandardMaterialTextureTransformComponent::RotationDegrees);
-  EXPECT_DOUBLE_EQ(transform_edits[1].second, 90.0);
+  EXPECT_DOUBLE_EQ(transform_edits[2].second, 90.0);
 
   auto *albedo_texture_preview = window->findChild<QToolButton *>(
       QStringLiteral("standardMaterialEditor.albedoTexture.preview"));
@@ -538,6 +608,153 @@ TEST(QtStandardMaterialEditorWindowTests,
   window->clear_document();
   EXPECT_FALSE(window->has_document());
   EXPECT_FALSE(properties->isEnabled());
+}
+
+TEST(QtStandardMaterialEditorWindowTests,
+     PendingSliderEditsRespectDocumentAndLifecycleBoundaries) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-standard-material-editor-lifecycle-tests";
+  char *argv[] = {application_name, nullptr};
+  QLocale::setDefault(QLocale::c());
+  QApplication application(argc, argv);
+  QApplication::setStyle(QStringLiteral("Fusion"));
+  application.setQuitOnLastWindowClosed(false);
+
+  QWidget owner;
+  auto *window = new QtStandardMaterialEditorWindow(&owner);
+  window->setAttribute(Qt::WA_DontShowOnScreen, true);
+  auto *roughness = window->findChild<QDoubleSpinBox *>(
+      QStringLiteral("standardMaterialEditor.roughness"));
+  auto *roughness_slider = window->findChild<QSlider *>(
+      QStringLiteral("standardMaterialEditor.roughness.slider"));
+  auto *roughness_timer = window->findChild<QTimer *>(
+      QStringLiteral("standardMaterialEditor.roughness.slider.dispatchTimer"));
+  auto *scale_v = window->findChild<QDoubleSpinBox *>(
+      QStringLiteral("standardMaterialEditor.textureTransform.scaleV"));
+  auto *scale_v_slider = window->findChild<QSlider *>(
+      QStringLiteral("standardMaterialEditor.textureTransform.scaleV.slider"));
+  auto *scale_v_timer = window->findChild<QTimer *>(
+      QStringLiteral("standardMaterialEditor.textureTransform.scaleV.slider."
+                     "dispatchTimer"));
+  ASSERT_NE(roughness, nullptr);
+  ASSERT_NE(roughness_slider, nullptr);
+  ASSERT_NE(roughness_timer, nullptr);
+  ASSERT_NE(scale_v, nullptr);
+  ASSERT_NE(scale_v_slider, nullptr);
+  ASSERT_NE(scale_v_timer, nullptr);
+
+  QtStandardMaterialEditorDocument first{
+      .stable_id = QStringLiteral("material-first"),
+      .name = QStringLiteral("First"),
+      .roughness = 0.2,
+      .texture_transform =
+          QtStandardMaterialTextureTransform{.scale_v = 1.0},
+  };
+  QtStandardMaterialEditorDocument replacement{
+      .stable_id = QStringLiteral("material-replacement"),
+      .name = QStringLiteral("Replacement"),
+      .roughness = 0.7,
+      .texture_transform =
+          QtStandardMaterialTextureTransform{.scale_v = 2.0},
+  };
+  std::vector<std::pair<QtStandardMaterialScalar, double>> scalar_edits;
+  std::vector<std::pair<QtStandardMaterialTextureTransformComponent, double>>
+      transform_edits;
+  window->set_scalar_edited_callback(
+      [&scalar_edits](QtStandardMaterialScalar scalar, double value) {
+        scalar_edits.emplace_back(scalar, value);
+      });
+  window->set_texture_transform_edited_callback(
+      [&transform_edits](QtStandardMaterialTextureTransformComponent component,
+                         double value) {
+        transform_edits.emplace_back(component, value);
+      });
+
+  window->set_document(first);
+  roughness_slider->setSliderDown(true);
+  roughness_slider->setValue(41);
+  ASSERT_TRUE(roughness_timer->isActive());
+  window->set_document(replacement);
+  EXPECT_TRUE(scalar_edits.empty());
+  EXPECT_FALSE(roughness_timer->isActive());
+  EXPECT_DOUBLE_EQ(roughness->value(), 0.7)
+      << "an authoritative replacement must restore its own value";
+  ASSERT_TRUE(QMetaObject::invokeMethod(roughness_timer, "timeout",
+                                        Qt::DirectConnection));
+  EXPECT_TRUE(scalar_edits.empty())
+      << "a stale timeout must not edit the replacement document";
+  roughness_slider->setSliderDown(false);
+
+  window->set_document(first);
+  scale_v_slider->setSliderDown(true);
+  scale_v_slider->setValue(230);
+  ASSERT_TRUE(scale_v_timer->isActive());
+  window->clear_document();
+  EXPECT_TRUE(transform_edits.empty());
+  EXPECT_FALSE(scale_v_timer->isActive());
+  ASSERT_TRUE(QMetaObject::invokeMethod(scale_v_timer, "timeout",
+                                        Qt::DirectConnection));
+  EXPECT_TRUE(transform_edits.empty())
+      << "a stale timeout must not edit after the document is cleared";
+  scale_v_slider->setSliderDown(false);
+
+  QtStandardMaterialEditorDocument authoritative = first;
+  bool file_action_saw_latest_edit = false;
+  window->set_scalar_edited_callback(
+      [&](QtStandardMaterialScalar scalar, double value) {
+        scalar_edits.emplace_back(scalar, value);
+        authoritative.roughness = value;
+        authoritative.dirty = true;
+        window->set_document(authoritative);
+      });
+  window->set_file_action_callback(
+      [&](QtStandardMaterialEditorFileAction action) {
+        file_action_saw_latest_edit =
+            action == QtStandardMaterialEditorFileAction::Save &&
+            authoritative.dirty && authoritative.roughness == 0.64;
+      });
+  window->set_document(authoritative);
+  roughness_slider->setSliderDown(true);
+  roughness_slider->setValue(64);
+  ASSERT_TRUE(roughness_timer->isActive());
+  QAction *save_action =
+      find_action(*window, "standardMaterialEditor.file.save");
+  ASSERT_NE(save_action, nullptr);
+  ASSERT_TRUE(save_action->isEnabled());
+  save_action->trigger();
+  EXPECT_TRUE(file_action_saw_latest_edit)
+      << "file lifecycle decisions must observe the latest slider edit";
+  EXPECT_FALSE(roughness_timer->isActive());
+  roughness_slider->setSliderDown(false);
+
+  bool close_request_saw_latest_edit = false;
+  window->set_texture_transform_edited_callback(
+      [&](QtStandardMaterialTextureTransformComponent component,
+          double value) {
+        transform_edits.emplace_back(component, value);
+        authoritative.texture_transform.scale_v = value;
+        authoritative.dirty = true;
+        window->set_document(authoritative);
+      });
+  window->set_close_request_handler([&]() {
+    close_request_saw_latest_edit =
+        authoritative.dirty &&
+        authoritative.texture_transform.scale_v == 2.75;
+    return true;
+  });
+  authoritative.dirty = false;
+  authoritative.texture_transform.scale_v = 1.0;
+  window->set_document(authoritative);
+  window->show();
+  QCoreApplication::processEvents();
+  scale_v_slider->setSliderDown(true);
+  scale_v_slider->setValue(275);
+  ASSERT_TRUE(scale_v_timer->isActive());
+  EXPECT_TRUE(window->close());
+  EXPECT_TRUE(close_request_saw_latest_edit)
+      << "dirty-close resolution must run after the pending edit is applied";
+  EXPECT_FALSE(scale_v_timer->isActive());
 }
 
 } // namespace

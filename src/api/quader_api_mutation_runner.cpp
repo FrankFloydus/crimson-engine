@@ -587,7 +587,7 @@ void QuaderApiMutationRunner::observe_dirty_state() {
 ModelingCommandResult
 QuaderApiMutationRunner::cancel_active_tool_or_preview_for_undo() {
   SceneSession &session = scene_session();
-  if (session.modeling().tool_settings_target().operation_preview_active) {
+  if (session.modeling().operation_preview_active()) {
     return modeling_commands_.cancel_preview(session.modeling());
   }
 

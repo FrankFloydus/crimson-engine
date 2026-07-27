@@ -31,10 +31,10 @@ execute_viewport_shortcut_command(QuaderEditorApi &editor,
 ViewportShortcutControllerResult
 ViewportShortcutController::handle_operation_preview_shortcut(
     const ViewportInputResult &input_result,
-    const ModelingToolSettingsTarget &tool_settings_target,
+    bool operation_preview_active,
     QuaderEditorApi &editor) const {
   if (!input_result.shortcut_handled ||
-      !tool_settings_target.operation_preview_active) {
+      !operation_preview_active) {
     return {};
   }
 

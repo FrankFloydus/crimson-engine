@@ -27,6 +27,7 @@
 #include <QWidget>
 
 #include <array>
+#include <chrono>
 #include <cstdint>
 #include <vector>
 
@@ -180,6 +181,12 @@ private:
     bool overlay_submission_valid = false;
     PaneDynamicOverlaySubmissionKey dynamic_overlay_submission_key;
     bool dynamic_overlay_submission_valid = false;
+    ViewportView presented_view = ViewportView::Perspective;
+    ViewportShadingMode presented_shading = ViewportShadingMode::Shaded;
+    bool control_selection_valid = false;
+    bool frame_presented = false;
+    bool surface_presented = false;
+    bool overlay_stack_valid = false;
   };
 
   void create_pane(Pane &pane);
@@ -191,7 +198,9 @@ private:
   void request_pane_focus(ViewportPaneId pane_id,
                           ViewportPaneFocusTrigger trigger);
   [[nodiscard]] bool viewport_surface_has_keyboard_focus() const;
+  [[nodiscard]] bool pane_surface_has_keyboard_focus(const Pane &pane) const;
   [[nodiscard]] bool pane_interaction_locked() const;
+  void set_modal_tool_owns_viewport_snapshot(bool owns_viewport);
   [[nodiscard]] bool is_viewport_internal_event_target(
       const QObject *target, const QPoint &global_position) const;
   void queue_external_pointer_event(const QMouseEvent &event);
@@ -217,7 +226,8 @@ private:
                                                const SceneDocument &document,
                                                const AssetRegistry &assets,
                                                const ViewportSettings &settings);
-  bool sync_active_tool_from_editor(QuaderEditorApi &editor);
+  bool sync_active_tool_from_editor(QuaderEditorApi &editor,
+                                    ModelingSessionService &modeling);
   [[nodiscard]] const ViewportSettings &active_viewport_settings() const;
   [[nodiscard]] Pane &pane(ViewportPaneId pane_id);
   [[nodiscard]] const Pane &pane(ViewportPaneId pane_id) const;
@@ -263,9 +273,12 @@ private:
   bool split_handle_dragging_ = false;
   QFocusFrame *focused_pane_frame_ = nullptr;
   QuaderEditorApi *interaction_editor_ = nullptr;
+  std::uint64_t active_tool_revision_ = 0;
   ModelingBoxPreview active_box_preview_ = {};
   bool modal_tool_dragging_ = false;
   bool modal_tool_owns_viewport_snapshot_ = false;
+  bool active_tool_revision_valid_ = false;
+  bool application_pointer_filter_installed_ = false;
   bool pending_external_pointer_event_ = false;
   bool pending_external_pointer_left_release_only_ = true;
   std::vector<QuaderInputChord> suppressed_keybinding_chords_;
@@ -282,8 +295,13 @@ private:
   std::uint64_t viewport_info_cached_asset_revision_ = 0;
   std::uint64_t viewport_info_cached_local_visibility_revision_ = 0;
   ViewportInfoSceneSnapshot viewport_info_cached_scene_snapshot_;
+  ViewportPaneId viewport_info_cached_pane_id_ =
+      ViewportPaneId::Perspective;
   ViewportOverlayCamera viewport_info_cached_camera_ = {};
   ViewportInfoSceneStats viewport_info_cached_scene_stats_ = {};
+  std::chrono::steady_clock::time_point
+      viewport_info_last_scene_stats_refresh_{};
+  std::chrono::steady_clock::time_point viewport_info_last_text_refresh_{};
   bool viewport_info_scene_snapshot_valid_ = false;
   bool viewport_info_scene_stats_valid_ = false;
   QtStartupPresentationState native_surface_startup_;

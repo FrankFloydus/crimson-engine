@@ -548,6 +548,16 @@ std::string tool_settings_target_tool_id(
   return {};
 }
 
+std::string_view active_tool_id(const SceneSession &session) {
+  if (const std::string_view native_tool =
+          session.native_tools().active_tool_id();
+      !native_tool.empty()) {
+    return native_tool;
+  }
+  return viewport_tool_catalog_id(
+      viewport_tool_for_modeling(session.modeling().tool_status().active_tool));
+}
+
 const char *fallback_tool_settings_description(
     ModelingToolSettingsTargetKind kind) {
   switch (kind) {
@@ -727,6 +737,7 @@ void QuaderToolsApi::set_runtime_hooks(QuaderToolsRuntimeHooks hooks) {
 void QuaderToolsApi::rebind_session(QuaderApiSession session) {
   session_ = session;
   active_settings_source_valid_ = false;
+  active_tool_valid_ = false;
 }
 
 QuaderApiVoidResult QuaderToolsApi::activate(std::string_view tool_id) {
@@ -831,6 +842,17 @@ std::uint64_t QuaderToolsApi::active_settings_revision() const {
     ++active_settings_revision_;
   }
   return active_settings_revision_;
+}
+
+std::uint64_t QuaderToolsApi::active_tool_revision() const {
+  const std::string_view current_id =
+      active_tool_id(scene_session(session_));
+  if (!active_tool_valid_ || active_tool_id_ != current_id) {
+    active_tool_id_.assign(current_id);
+    active_tool_valid_ = true;
+    ++active_tool_revision_;
+  }
+  return active_tool_revision_;
 }
 
 QuaderApiVoidResult QuaderToolsApi::set_setting(std::string_view tool_id,
@@ -1132,14 +1154,7 @@ QuaderApiVoidResult QuaderToolsApi::cancel_modal_tool() {
 }
 
 std::string QuaderToolsApi::active_tool() const {
-  const SceneSession &session = scene_session(session_);
-  if (const std::string_view native_tool =
-          session.native_tools().active_tool_id();
-      !native_tool.empty()) {
-    return std::string(native_tool);
-  }
-  return std::string(viewport_tool_catalog_id(viewport_tool_for_modeling(
-      session.modeling().tool_status().active_tool)));
+  return std::string(active_tool_id(scene_session(session_)));
 }
 
 } // namespace quader

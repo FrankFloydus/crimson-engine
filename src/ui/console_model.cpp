@@ -10,20 +10,30 @@
 
 namespace quader {
 
+bool ConsoleModel::accepts(const LogEntry &entry,
+                           const ConsoleFilter &filter) {
+  const std::string search = QStr::to_ascii_lower(filter.search_text);
+  return accepts_normalized(entry, filter.minimum_level, search);
+}
+
+bool ConsoleModel::accepts_normalized(
+    const LogEntry &entry, spdlog::level::level_enum minimum_level,
+    std::string_view normalized_search) {
+  return entry.level >= minimum_level &&
+         (normalized_search.empty() ||
+          QStr::to_ascii_lower(entry.message).find(normalized_search) !=
+              std::string::npos);
+}
+
 std::vector<LogEntry> ConsoleModel::filter(const std::vector<LogEntry> &entries,
                                            const ConsoleFilter &filter) {
   std::vector<LogEntry> result;
   const std::string search = QStr::to_ascii_lower(filter.search_text);
 
   for (const LogEntry &entry : entries) {
-    if (entry.level < filter.minimum_level) {
-      continue;
+    if (accepts_normalized(entry, filter.minimum_level, search)) {
+      result.push_back(entry);
     }
-    if (!search.empty() &&
-        QStr::to_ascii_lower(entry.message).find(search) == std::string::npos) {
-      continue;
-    }
-    result.push_back(entry);
   }
 
   return result;

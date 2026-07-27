@@ -237,7 +237,8 @@ bool is_console_logger_memory_access(std::string_view relative,
   return relative == "src/ui/console_panel.cpp" &&
          (line.find("Logger::clear_memory()") != std::string::npos ||
           line.find("Logger::memory_revision()") != std::string::npos ||
-          line.find("Logger::entries_snapshot()") != std::string::npos);
+          line.find("Logger::entries_snapshot()") != std::string::npos ||
+          line.find("Logger::entries_since(") != std::string::npos);
 }
 
 bool has_nearby_declaration_doc(const std::vector<std::string> &file_lines,

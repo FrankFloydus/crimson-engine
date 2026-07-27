@@ -556,8 +556,14 @@ TEST(ViewportOverlayPolicyTests,
 
   EXPECT_TRUE(source_contains_compact(
       viewport_panel_source,
-      "suppress_persistent_object_selection = overlay_summary.mode == "
+      "suppress_persistent_object_selection = selection_mode == "
       "ModelingSelectionMode::Object"));
+  EXPECT_EQ(viewport_panel_source.find("modeling.selection_summary()"),
+            std::string::npos);
+  EXPECT_NE(viewport_panel_source.find("modeling.content_revision()"),
+            std::string::npos);
+  EXPECT_NE(viewport_panel_source.find("modeling.selection_revision()"),
+            std::string::npos);
   EXPECT_NE(viewport_panel_source.find(
                 "modeling.selection_overlay_signature(overlay_options)"),
             std::string::npos);
@@ -589,7 +595,7 @@ TEST(ViewportOverlayPolicyTests,
   const std::string header = read_source_file("src/ui/qt_viewport_panel.hpp");
 
   EXPECT_TRUE(source_contains_compact(
-      source, "suppress_persistent_object_selection = overlay_summary.mode == "
+      source, "suppress_persistent_object_selection = selection_mode == "
               "ModelingSelectionMode::Object"));
   EXPECT_NE(
       source.find("modeling.selection_overlay_signature(overlay_options)"),
@@ -1797,6 +1803,61 @@ TEST(ViewportRendererTests, OverlayPassUsesNeutralExposureCamera) {
             3u);
 }
 
+TEST(ViewportRendererTests,
+     RetainedPresentationStateSkipsUnchangedFilamentSetters) {
+  const std::string renderer_header =
+      read_source_file("src/render/viewport_renderer.hpp");
+  const std::string renderer_source =
+      read_source_file("src/render/viewport_renderer.cpp");
+  const std::string grid_header =
+      read_source_file("src/render/viewport_grid_renderer.hpp");
+  const std::string grid_source =
+      read_source_file("src/render/viewport_grid_renderer.cpp");
+
+  EXPECT_NE(renderer_header.find("camera_presentation_signature_"),
+            std::string::npos);
+  EXPECT_NE(renderer_header.find("scene_settings_presentation_signature_"),
+            std::string::npos);
+  EXPECT_NE(renderer_header.find("shadowing_enabled_"), std::string::npos);
+  EXPECT_TRUE(source_contains_compact(
+      renderer_source,
+      "if (camera_presentation_signature_ == presentation_signature) { "
+      "return; } const auto pose = controller.pose();"));
+  EXPECT_TRUE(source_contains_compact(
+      renderer_source,
+      "if (scene_settings_presentation_signature_ == presentation_signature) "
+      "{ return; } const bool post_processing_enabled"));
+  EXPECT_TRUE(source_contains_compact(
+      renderer_source,
+      "if (render_pass_coordinator_.set_grid_visible(visible)) { "
+      "update_visible_layers(); }"));
+  EXPECT_TRUE(source_contains_compact(
+      renderer_source,
+      "if (shadowing_enabled_ == enabled) { return; }"));
+  EXPECT_GE(count_occurrences(renderer_source,
+                              "reset_presentation_cache();"),
+            2u);
+
+  EXPECT_NE(grid_header.find("presentation_signature_"), std::string::npos);
+  EXPECT_TRUE(source_contains_compact(
+      grid_source,
+      "if (presentation_signature_ == presentation_signature) { return; } "
+      "const ViewportCameraPose pose = controller.pose();"));
+  EXPECT_GE(count_occurrences(grid_source, "presentation_signature_.reset();"),
+            4u);
+  const std::size_t unchanged_gate =
+      grid_source.find("if (presentation_signature_ ==");
+  ASSERT_NE(unchanged_gate, std::string::npos);
+  const std::size_t transform_setter =
+      grid_source.find("setTransform(", unchanged_gate);
+  const std::size_t material_setter =
+      grid_source.find("setParameter(", unchanged_gate);
+  ASSERT_NE(transform_setter, std::string::npos);
+  ASSERT_NE(material_setter, std::string::npos);
+  EXPECT_LT(unchanged_gate, transform_setter);
+  EXPECT_LT(unchanged_gate, material_setter);
+}
+
 TEST(RenderLifecycleTests, ResourceOwnersShutdownBeforeInitialize) {
   for (const char *relative_path : {
            "src/render/scene_render_bridge.cpp",
@@ -2010,6 +2071,8 @@ TEST(ViewportRendererTests,
   EXPECT_NE(viewport_panel_header.find(
                 "viewport_info_cached_scene_snapshot_"),
             std::string::npos);
+  EXPECT_NE(viewport_panel_header.find("viewport_info_cached_pane_id_"),
+            std::string::npos);
   EXPECT_NE(viewport_panel_header.find("viewport_info_cached_camera_"),
             std::string::npos);
   EXPECT_NE(viewport_panel_source.find("same_viewport_info_camera"),
@@ -2022,6 +2085,23 @@ TEST(ViewportRendererTests,
       viewport_panel_source,
       "collect_viewport_info_scene_stats("
       "viewport_info_cached_scene_snapshot_,camera)"));
+  EXPECT_NE(viewport_info_source.find("kViewportInfoSceneStatsInterval"),
+            std::string::npos);
+  EXPECT_TRUE(source_contains_compact(
+      viewport_info_source,
+      "const bool pane_cache_hit="
+      "viewport_info_cached_pane_id_==pane_state.id"));
+  EXPECT_TRUE(source_contains_compact(
+      viewport_info_source,
+      "const bool camera_cache_hit=pane_cache_hit&&"
+      "same_viewport_info_camera(viewport_info_cached_camera_,camera)"));
+  EXPECT_TRUE(source_contains_compact(
+      viewport_info_source,
+      "const bool recent_stats_sample=pane_cache_hit&&"));
+  EXPECT_NE(viewport_info_source.find("kViewportInfoTextInterval"),
+            std::string::npos);
+  EXPECT_EQ(viewport_info_source.find("update_pane_overlay_geometry("),
+            std::string::npos);
   EXPECT_TRUE(source_contains_compact(
       viewport_info_stats_header,
       "ViewportInfoSceneSnapshot build_viewport_info_scene_snapshot("
@@ -2064,7 +2144,7 @@ TEST(ViewportRendererTests,
   EXPECT_TRUE(source_contains_compact(
       viewport_info_source,
       "const bool stats_cache_hit=viewport_info_scene_stats_valid_&&"
-      "same_viewport_info_camera(viewport_info_cached_camera_,camera)"));
+      "(camera_cache_hit||recent_stats_sample)"));
   EXPECT_NE(viewport_info_source.find(
                 "QDR_PROFILE_SCOPE(\"Viewport info cull scene snapshot\")"),
             std::string::npos);
@@ -2114,7 +2194,7 @@ TEST(ViewportRendererTests,
             std::string::npos);
   EXPECT_NE(viewport_panel_source.find("info_overlay->setText(text)"),
             std::string::npos);
-  EXPECT_NE(viewport_panel_source.find("info_overlay->setVisible(true)"),
+  EXPECT_NE(viewport_panel_source.find("info_overlay->show()"),
             std::string::npos);
   EXPECT_EQ(viewport_panel_source.find("setStyleSheet("), std::string::npos);
   EXPECT_EQ(viewport_panel_source.find("setPalette("), std::string::npos);

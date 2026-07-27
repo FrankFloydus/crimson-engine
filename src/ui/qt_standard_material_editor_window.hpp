@@ -31,6 +31,7 @@ class QLineEdit;
 class QMenu;
 class QPushButton;
 class QSlider;
+class QTimer;
 class QToolButton;
 class QVBoxLayout;
 class QWidget;
@@ -289,8 +290,16 @@ protected:
   void closeEvent(QCloseEvent *event) override;
 
 private:
+  static constexpr std::size_t kScalarCount = 3;
   static constexpr std::size_t kTextureSlotCount = 4;
+  static constexpr std::size_t kTextureTransformCount = 7;
   static constexpr std::size_t kPreviewMeshCount = 5;
+
+  /// Retains the latest live-slider value until its bounded dispatch cadence.
+  struct LiveNumberDispatch final {
+    QTimer *timer = nullptr;
+    std::optional<double> pending_value;
+  };
 
   /// Groups the stock Qt controls belonging to one texture slot row.
   struct TextureControls final {
@@ -311,8 +320,19 @@ private:
     QLabel *label = nullptr;
     QDoubleSpinBox *spin = nullptr;
     QSlider *slider = nullptr;
+    LiveNumberDispatch live_dispatch;
   };
 
+  void dispatch_scalar_edit(QtStandardMaterialScalar scalar, double value,
+                            bool coalesce);
+  void flush_scalar_edit(QtStandardMaterialScalar scalar);
+  void dispatch_texture_transform_edit(
+      QtStandardMaterialTextureTransformComponent component, double value,
+      bool coalesce);
+  void flush_texture_transform_edit(
+      QtStandardMaterialTextureTransformComponent component);
+  [[nodiscard]] bool cancel_pending_number_edits();
+  void flush_pending_number_edits();
   void set_preview_mesh(QtStandardMaterialPreviewMesh mesh, bool notify);
   void set_preview_shading(QtStandardMaterialPreviewShading shading,
                            bool notify);
@@ -371,10 +391,12 @@ private:
   QLabel *normal_strength_label_ = nullptr;
   QDoubleSpinBox *normal_strength_spin_ = nullptr;
   QSlider *normal_strength_slider_ = nullptr;
+  std::array<LiveNumberDispatch, kScalarCount> scalar_live_dispatches_{};
   QCheckBox *direct_x_normal_ = nullptr;
   std::array<TextureControls, kTextureSlotCount> texture_controls_{};
   QGroupBox *texture_transform_group_ = nullptr;
-  std::array<TextureTransformControls, 7> texture_transform_controls_{};
+  std::array<TextureTransformControls, kTextureTransformCount>
+      texture_transform_controls_{};
   QMainWindow *texture_inspector_window_ = nullptr;
   std::optional<QtStandardMaterialTextureSlot> inspected_texture_slot_;
 

@@ -28,6 +28,29 @@ struct LogEntry {
     std::string message;
     std::string file;
     int line = 0;
+    std::uint64_t sequence = 0;
+};
+
+/**
+ * Identifies the last in-memory log entry observed by a retained consumer.
+ */
+struct LogEntriesCursor {
+    std::uint64_t generation = 0;
+    std::uint64_t sequence = 0;
+
+    friend bool operator==(const LogEntriesCursor &,
+                           const LogEntriesCursor &) = default;
+};
+
+/**
+ * Carries only the in-memory log changes after a consumer cursor.
+ */
+struct LogEntriesDelta {
+    LogEntriesCursor cursor;
+    std::uint64_t first_sequence = 0;
+    std::uint64_t revision = 0;
+    std::vector<LogEntry> entries;
+    bool reset_required = false;
 };
 
 /**
@@ -50,6 +73,7 @@ public:
     static void clear_memory();
     [[nodiscard]] static std::uint64_t memory_revision() noexcept;
     static std::vector<LogEntry> entries_snapshot();
+    static LogEntriesDelta entries_since(LogEntriesCursor cursor);
     static std::shared_ptr<spdlog::logger> instance();
 
     template <typename... Args>

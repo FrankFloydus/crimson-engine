@@ -25,7 +25,15 @@ void UIPanelManager::add(UIPanelId id, QDockWidget &dock_widget) {
   }
   docks_[slot] = &dock_widget;
   explicit_visibility_[slot] = !dock_widget.isHidden();
+  presented_[slot] = dock_widget.isVisible();
   dock_widget.installEventFilter(this);
+  QObject::connect(&dock_widget, &QDockWidget::visibilityChanged, this,
+                   [this, id](bool visible) {
+                     const std::size_t presented_slot = index(id);
+                     if (presented_slot < presented_.size()) {
+                       presented_[presented_slot] = visible;
+                     }
+                   });
   QObject::connect(dock_widget.toggleViewAction(), &QAction::triggered, this,
                    [this, id](bool visible) {
                      (void)record_explicit_visibility(id, visible);
@@ -54,6 +62,13 @@ bool UIPanelManager::is_visible(UIPanelId id) const {
   return id == UIPanelId::Viewport ||
          (slot < docks_.size() && docks_[slot] != nullptr &&
           explicit_visibility_[slot]);
+}
+
+bool UIPanelManager::is_presented(UIPanelId id) const {
+  const std::size_t slot = index(id);
+  return id == UIPanelId::Viewport ||
+         (slot < docks_.size() && docks_[slot] != nullptr &&
+          explicit_visibility_[slot] && presented_[slot]);
 }
 
 bool UIPanelManager::set_visible(UIPanelId id, bool visible) {

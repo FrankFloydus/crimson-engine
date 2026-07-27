@@ -46,6 +46,7 @@
 #include <functional>
 #include <memory>
 #include <span>
+#include <string>
 #include <string_view>
 #include <unordered_map>
 #include <unordered_set>
@@ -134,20 +135,15 @@ bool outliner_projection_matches(std::span<const EntityRecord> left,
   for (std::size_t index = 0; index < left.size(); ++index) {
     const EntityRecord &a = left[index];
     const EntityRecord &b = right[index];
-    if (a.id != b.id || a.uuid != b.uuid ||
-        a.editor_object_id != b.editor_object_id || a.name != b.name ||
-        a.kind != b.kind || a.parent != b.parent || a.depth != b.depth ||
-        a.visible != b.visible ||
+    // Keep this comparison limited to the fields rendered by Outliner rows or
+    // consumed by their actions. Other record changes must retain the model.
+    if (a.id != b.id || a.name != b.name || a.kind != b.kind ||
+        a.parent != b.parent || a.visible != b.visible ||
         a.effectively_visible != b.effectively_visible ||
         a.locked != b.locked ||
         a.effectively_locked != b.effectively_locked ||
-        a.has_children != b.has_children || a.has_mesh != b.has_mesh ||
-        a.has_light != b.has_light || a.is_scene_root != b.is_scene_root ||
-        a.has_scene_settings != b.has_scene_settings ||
-        a.has_modeling_object != b.has_modeling_object ||
-        a.is_instance_definition != b.is_instance_definition ||
-        a.has_instance_occurrence != b.has_instance_occurrence ||
-        a.layer_id != b.layer_id) {
+        a.has_children != b.has_children ||
+        a.is_scene_root != b.is_scene_root) {
       return false;
     }
   }
@@ -382,7 +378,7 @@ struct OutlinerPanel::Impl {
   struct TreeCache {
     bool valid = false;
     const SceneDocument *document = nullptr;
-    std::uint64_t content_revision = 0;
+    std::uint64_t hierarchy_presentation_revision = 0;
     EntityId instance_scope_definition = kInvalidEntityId;
     std::vector<EntityRecord> records;
     std::unordered_map<EntityId, std::size_t> record_index_by_entity;
@@ -470,16 +466,22 @@ struct OutlinerPanel::Impl {
   void refresh(UIContext &context) {
     editor_ = &context.intent.editor;
     document_ = &context.scene.document;
+    const bool localization_changed =
+        localization_ != &context.localization ||
+        localized_locale_ != context.localization.current_locale();
     localization_ = &context.localization;
     const QuaderInstanceEditState instance_edit =
         editor_->modeling().instance_edit_state();
     instance_scope_definition_ =
         instance_edit.active ? instance_edit.definition.id : kInvalidEntityId;
 
-    panel_.setWindowTitle(qt_text(
-        localization_->text(ui_panel_localization_key(UIPanelId::Outliner),
-                            ui_panel_key(UIPanelId::Outliner))));
-    refresh_headers();
+    if (localization_changed) {
+      localized_locale_ = localization_->current_locale();
+      panel_.setWindowTitle(qt_text(
+          localization_->text(ui_panel_localization_key(UIPanelId::Outliner),
+                              ui_panel_key(UIPanelId::Outliner))));
+      refresh_headers();
+    }
     refresh_model_if_needed();
     sync_selection();
   }
@@ -527,7 +529,8 @@ private:
     if (document_ == nullptr ||
         (cache_.valid &&
          !document_changed &&
-         cache_.content_revision == document_->content_revision() &&
+         cache_.hierarchy_presentation_revision ==
+             document_->hierarchy_presentation_revision() &&
          cache_.instance_scope_definition == instance_scope_definition_)) {
       return;
     }
@@ -550,12 +553,14 @@ private:
         cache_.instance_scope_definition == instance_scope_definition_ &&
         outliner_projection_matches(cache_.records, next_records)) {
       QDR_PROFILE_SCOPE("Qt outliner retain unchanged projection");
-      cache_.content_revision = document_->content_revision();
+      cache_.hierarchy_presentation_revision =
+          document_->hierarchy_presentation_revision();
       return;
     }
 
     cache_.document = document_;
-    cache_.content_revision = document_->content_revision();
+    cache_.hierarchy_presentation_revision =
+        document_->hierarchy_presentation_revision();
     cache_.instance_scope_definition = instance_scope_definition_;
     cache_.records = std::move(next_records);
     cache_.record_index_by_entity.clear();
@@ -721,15 +726,13 @@ private:
     }
 
     const std::uint64_t selection_revision = document_->selection_revision();
-    const std::vector<EntityId> selected = document_->selected_entities();
-    const EntityId primary_selection = document_->primary_selection();
     if (!outliner_selection_sync_required(
             selection_sync_after_model_rebuild_, selection_revision_valid_,
-            synced_selection_revision_, selection_revision) &&
-        synced_selected_entities_ == selected &&
-        synced_primary_selection_ == primary_selection) {
+            synced_selection_revision_, selection_revision)) {
       return;
     }
+    const std::vector<EntityId> selected = document_->selected_entities();
+    const EntityId primary_selection = document_->primary_selection();
 
     QItemSelectionModel *selection_model = tree_->selectionModel();
     std::unordered_set<EntityId> widget_entities;
@@ -802,8 +805,6 @@ private:
       tree_->viewport()->update();
     }
     synced_selection_revision_ = selection_revision;
-    synced_selected_entities_ = selected;
-    synced_primary_selection_ = primary_selection;
     selection_revision_valid_ = true;
     selection_sync_after_model_rebuild_ = false;
   }
@@ -867,8 +868,6 @@ private:
     }
 
     synced_selection_revision_ = document_->selection_revision();
-    synced_selected_entities_ = document_->selected_entities();
-    synced_primary_selection_ = document_->primary_selection();
     selection_revision_valid_ = true;
     selection_sync_after_model_rebuild_ = false;
   }
@@ -1054,13 +1053,12 @@ private:
   QuaderEditorApi *editor_ = nullptr;
   const SceneDocument *document_ = nullptr;
   LocalizationService *localization_ = nullptr;
+  std::string localized_locale_;
   TreeCache cache_;
   std::unordered_map<EntityId, QStandardItem *> item_by_entity_;
   std::unordered_set<EntityId> collapsed_entities_;
   EntityId instance_scope_definition_ = kInvalidEntityId;
   std::uint64_t synced_selection_revision_ = 0;
-  std::vector<EntityId> synced_selected_entities_;
-  EntityId synced_primary_selection_ = kInvalidEntityId;
   bool syncing_expansion_ = false;
   bool syncing_model_ = false;
   bool syncing_selection_ = false;

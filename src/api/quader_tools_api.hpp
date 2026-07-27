@@ -29,6 +29,7 @@ public:
     [[nodiscard]] bool can_activate(ViewportToolId tool) const;
     [[nodiscard]] QuaderToolSettingsTarget active_settings() const;
     [[nodiscard]] std::uint64_t active_settings_revision() const;
+    [[nodiscard]] std::uint64_t active_tool_revision() const;
     QuaderApiVoidResult set_setting(std::string_view tool_id,
                                     std::string_view name, double value);
     QuaderApiVoidResult set_setting(std::string_view tool_id,
@@ -67,6 +68,9 @@ public:
     mutable std::uint8_t active_settings_source_kind_ = 0;
     mutable bool active_settings_source_reset_availability_token_ = false;
     mutable bool active_settings_source_valid_ = false;
+    mutable std::string active_tool_id_;
+    mutable std::uint64_t active_tool_revision_ = 0;
+    mutable bool active_tool_valid_ = false;
 };
 
 } // namespace quader

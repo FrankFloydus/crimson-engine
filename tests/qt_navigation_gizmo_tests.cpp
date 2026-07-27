@@ -16,6 +16,7 @@ using quader::QVec3;
 using quader::QtNavigationGizmoInteraction;
 using quader::ViewportCameraController;
 using quader::ViewportCameraPose;
+using quader::ViewportDragMode;
 using quader::ViewportPaneId;
 using quader::ViewportProjection;
 
@@ -78,9 +79,10 @@ TEST(QtViewportChromeLayoutTests,
 }
 
 TEST(QtNavigationGizmoUpdatePolicyTests,
-     CameraSnapshotSkipsStablePreparesButTracksCameraMotion) {
+     CameraSnapshotSkipsPanAndDollyButTracksOrientation) {
   ViewportCameraController first_camera;
   ViewportCameraController second_camera;
+  first_camera.set_viewport_size(800.0f, 600.0f);
   std::optional<quader::QtNavigationGizmoCameraSnapshot> current =
       quader::qt_navigation_gizmo_camera_snapshot(&first_camera);
 
@@ -88,13 +90,25 @@ TEST(QtNavigationGizmoUpdatePolicyTests,
       current,
       quader::qt_navigation_gizmo_camera_snapshot(&first_camera)));
 
+  first_camera.begin_drag({100.0f, 100.0f}, ViewportDragMode::Pan);
+  first_camera.update_drag({140.0f, 125.0f});
+  first_camera.end_drag();
+  EXPECT_FALSE(quader::qt_navigation_gizmo_camera_refresh_required(
+      current,
+      quader::qt_navigation_gizmo_camera_snapshot(&first_camera)));
+
+  first_camera.scroll(2.0f);
+  EXPECT_FALSE(quader::qt_navigation_gizmo_camera_refresh_required(
+      current,
+      quader::qt_navigation_gizmo_camera_snapshot(&first_camera)));
+
   first_camera.set_view_direction({1.0f, 0.0f, 0.0f});
-  const quader::QtNavigationGizmoCameraSnapshot moved =
+  const quader::QtNavigationGizmoCameraSnapshot rotated =
       quader::qt_navigation_gizmo_camera_snapshot(&first_camera);
   EXPECT_TRUE(
-      quader::qt_navigation_gizmo_camera_refresh_required(current, moved));
+      quader::qt_navigation_gizmo_camera_refresh_required(current, rotated));
 
-  current = moved;
+  current = rotated;
   EXPECT_FALSE(quader::qt_navigation_gizmo_camera_refresh_required(
       current,
       quader::qt_navigation_gizmo_camera_snapshot(&first_camera)));
@@ -113,6 +127,18 @@ TEST(QtNavigationGizmoUpdatePolicyTests,
       quader::qt_navigation_gizmo_visibility_refresh_required(false, true));
   EXPECT_TRUE(
       quader::qt_navigation_gizmo_visibility_refresh_required(true, false));
+}
+
+TEST(QtNavigationGizmoUpdatePolicyTests,
+     EmptyHoverHitsRemainStableUntilARealHitChanges) {
+  const quader_editor_core::ViewCubeHit empty;
+  EXPECT_TRUE(quader::qt_navigation_gizmo_hits_match(empty, empty));
+
+  quader_editor_core::ViewCubeHit hit;
+  hit.hit = true;
+  EXPECT_FALSE(quader::qt_navigation_gizmo_hits_match(empty, hit));
+  EXPECT_FALSE(quader::qt_navigation_gizmo_hits_match(hit, empty));
+  EXPECT_TRUE(quader::qt_navigation_gizmo_hits_match(hit, hit));
 }
 
 TEST(QtNavigationGizmoInteractionTests,

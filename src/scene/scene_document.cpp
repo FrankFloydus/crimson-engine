@@ -43,6 +43,8 @@ SceneProjectionCheckpoint SceneDocument::capture_projection_checkpoint() const {
   checkpoint.revision_ = revision_;
   checkpoint.content_revision_ = content_revision_;
   checkpoint.selection_revision_ = selection_revision_;
+  checkpoint.hierarchy_presentation_revision_ =
+      hierarchy_presentation_revision_;
   checkpoint.visibility_revision_ = visibility_revision_;
   checkpoint.transform_revision_ = transform_revision_;
   checkpoint.mesh_binding_revision_ = mesh_binding_revision_;
@@ -75,6 +77,8 @@ bool SceneDocument::restore_projection_checkpoint(
   revision_ = checkpoint.revision_;
   content_revision_ = checkpoint.content_revision_;
   selection_revision_ = checkpoint.selection_revision_;
+  hierarchy_presentation_revision_ =
+      checkpoint.hierarchy_presentation_revision_;
   visibility_revision_ = checkpoint.visibility_revision_;
   transform_revision_ = checkpoint.transform_revision_;
   mesh_binding_revision_ = checkpoint.mesh_binding_revision_;
@@ -312,6 +316,7 @@ EntityId SceneDocument::create_entity(std::string name, EntityKind kind,
   ids_by_entity_.emplace(entity_key(entity), id);
   entity_by_uuid_.emplace(uuid, id);
   entity_by_editor_object_id_.emplace(object_id, id);
+  ++hierarchy_presentation_revision_;
   ++visibility_revision_;
   ++transform_revision_;
   ++render_component_revision_;
@@ -354,6 +359,7 @@ EntityId SceneDocument::create_entity_with_id(EntityId id, std::string name,
   ids_by_entity_.emplace(entity_key(entity), id);
   entity_by_uuid_.emplace(uuid, id);
   entity_by_editor_object_id_.emplace(object_id, id);
+  ++hierarchy_presentation_revision_;
   ++transform_revision_;
   ++visibility_revision_;
   ++render_component_revision_;
@@ -445,6 +451,7 @@ bool SceneDocument::destroy_entities(std::span<const EntityId> ids) {
   if (active_destroyed || !is_selected(active_selection_)) {
     active_selection_ = first_selected_entity();
   }
+  ++hierarchy_presentation_revision_;
   ++selection_revision_;
   ++visibility_revision_;
   ++transform_revision_;
@@ -467,6 +474,7 @@ bool SceneDocument::rename_entity(EntityId id, std::string name) {
       return true;
     }
     component->name = std::move(name);
+    ++hierarchy_presentation_revision_;
     mark_dirty();
     return true;
   }
@@ -566,6 +574,7 @@ bool SceneDocument::set_entity_kind(EntityId id, EntityKind kind) {
       return true;
     }
     component->kind = kind;
+    ++hierarchy_presentation_revision_;
     mark_dirty();
     return true;
   }
@@ -578,6 +587,7 @@ bool SceneDocument::set_visible(EntityId id, bool visible) {
       return true;
     }
     component->visible = visible;
+    ++hierarchy_presentation_revision_;
     ++visibility_revision_;
     mark_dirty();
     return true;
@@ -604,6 +614,7 @@ bool SceneDocument::set_locked(EntityId id, bool locked) {
       return true;
     }
     component->locked = locked;
+    ++hierarchy_presentation_revision_;
     mark_dirty();
     return true;
   }
@@ -803,6 +814,7 @@ bool SceneDocument::set_parent(EntityId child, EntityId new_parent,
     ++layer_revision_;
     ++render_component_revision_;
   }
+  ++hierarchy_presentation_revision_;
   mark_dirty();
   return true;
 }
@@ -927,6 +939,7 @@ bool SceneDocument::replace_hierarchy(
 
   ++visibility_revision_;
   ++transform_revision_;
+  ++hierarchy_presentation_revision_;
   mark_dirty();
   return true;
 }
@@ -1023,6 +1036,7 @@ bool SceneDocument::set_instance_definition(EntityId id) {
     ++layer_revision_;
     ++visibility_revision_;
   }
+  ++hierarchy_presentation_revision_;
   ++render_component_revision_;
   mark_dirty();
   return true;
@@ -1036,6 +1050,7 @@ bool SceneDocument::clear_instance_definition(EntityId id) {
     return false;
   }
   registry_.remove<InstanceDefinitionComponent>(entity);
+  ++hierarchy_presentation_revision_;
   ++render_component_revision_;
   mark_dirty();
   return true;
@@ -1058,10 +1073,14 @@ bool SceneDocument::set_instance_occurrence(
       kind(id) == EntityKind::Instance) {
     return true;
   }
+  const bool kind_changed = kind(id) != EntityKind::Instance;
   registry_.emplace_or_replace<InstanceOccurrenceComponent>(entity,
                                                              occurrence);
   registry_.emplace_or_replace<EntityKindComponent>(
       entity, EntityKindComponent{.kind = EntityKind::Instance});
+  if (kind_changed) {
+    ++hierarchy_presentation_revision_;
+  }
   ++render_component_revision_;
   mark_dirty();
   return true;
@@ -1076,6 +1095,7 @@ bool SceneDocument::clear_instance_occurrence(EntityId id) {
   registry_.remove<InstanceOccurrenceComponent>(entity);
   registry_.emplace_or_replace<EntityKindComponent>(
       entity, EntityKindComponent{.kind = EntityKind::Generic});
+  ++hierarchy_presentation_revision_;
   ++render_component_revision_;
   mark_dirty();
   return true;
@@ -1092,9 +1112,13 @@ bool SceneDocument::set_mesh(EntityId id, MeshComponent mesh) {
       kind(id) == EntityKind::Mesh) {
     return true;
   }
+  const bool kind_changed = kind(id) != EntityKind::Mesh;
   registry_.emplace_or_replace<MeshComponent>(entity, mesh);
   registry_.emplace_or_replace<EntityKindComponent>(
       entity, EntityKindComponent{.kind = EntityKind::Mesh});
+  if (kind_changed) {
+    ++hierarchy_presentation_revision_;
+  }
   ++mesh_binding_revision_;
   ++render_component_revision_;
   mark_dirty();
@@ -1171,11 +1195,15 @@ bool SceneDocument::set_light(EntityId id, LightComponent light) {
       kind(id) == EntityKind::Light) {
     return true;
   }
+  const bool kind_changed = kind(id) != EntityKind::Light;
   const bool active_kind_changed =
       current == nullptr && active_selection_ == id && is_selected(id);
   registry_.emplace_or_replace<LightComponent>(entity, light);
   registry_.emplace_or_replace<EntityKindComponent>(
       entity, EntityKindComponent{.kind = EntityKind::Light});
+  if (kind_changed) {
+    ++hierarchy_presentation_revision_;
+  }
   ++render_component_revision_;
   if (active_kind_changed) {
     ++selection_revision_;
@@ -1198,10 +1226,15 @@ bool SceneDocument::set_scene_settings(EntityId id,
       current != nullptr && *current == settings) {
     return true;
   }
+  const bool hierarchy_presentation_changed =
+      scene_settings(id) == nullptr || kind(id) != EntityKind::Empty;
   registry_.emplace_or_replace<SceneSettingsComponent>(entity,
                                                        std::move(settings));
   registry_.emplace_or_replace<EntityKindComponent>(
       entity, EntityKindComponent{.kind = EntityKind::Empty});
+  if (hierarchy_presentation_changed) {
+    ++hierarchy_presentation_revision_;
+  }
   mark_dirty();
   return true;
 }
@@ -1397,20 +1430,29 @@ bool SceneDocument::replace_layer_state(SceneLayerState state) {
     return true;
   }
 
-  const auto effective_visibility =
+  constexpr std::uint8_t kEffectivelyVisible = 1u << 0u;
+  constexpr std::uint8_t kEffectivelyLocked = 1u << 1u;
+  const auto effective_hierarchy_presentation_state =
       [&](std::span<const EntityId> tree_order) {
-        std::vector<bool> result;
+        std::vector<std::uint8_t> result;
         result.reserve(tree_order.size());
-        std::unordered_map<EntityId, bool> visible_by_entity;
-        visible_by_entity.reserve(tree_order.size());
+        std::unordered_map<EntityId, std::uint8_t> state_by_entity;
+        state_by_entity.reserve(tree_order.size());
         for (const EntityId entity : tree_order) {
           const EntityId parent_id = parent(entity);
           bool visible =
               parent_id == kInvalidEntityId ||
-              visible_by_entity[parent_id];
+              (state_by_entity[parent_id] & kEffectivelyVisible) != 0u;
+          bool locked =
+              parent_id != kInvalidEntityId &&
+              (state_by_entity[parent_id] & kEffectivelyLocked) != 0u;
           if (const VisibilityComponent *component = visibility(entity);
               component != nullptr && !component->visible) {
             visible = false;
+          }
+          if (const LockComponent *component = lock(entity);
+              component != nullptr && component->locked) {
+            locked = true;
           }
           const SceneLayerId layer_id = entity_layer(entity);
           if (layer_id != kInvalidSceneLayerId) {
@@ -1418,14 +1460,20 @@ bool SceneDocument::replace_layer_state(SceneLayerState state) {
             if (record == nullptr || !record->visible) {
               visible = false;
             }
+            if (record == nullptr || record->locked) {
+              locked = true;
+            }
           }
-          visible_by_entity.emplace(entity, visible);
-          result.push_back(visible);
+          const std::uint8_t presentation_state =
+              (visible ? kEffectivelyVisible : 0u) |
+              (locked ? kEffectivelyLocked : 0u);
+          state_by_entity.emplace(entity, presentation_state);
+          result.push_back(presentation_state);
         }
         return result;
       };
-  const std::vector<bool> visible_before =
-      effective_visibility(scene_entities);
+  const std::vector<std::uint8_t> presentation_before =
+      effective_hierarchy_presentation_state(scene_entities);
 
   layers_.clear();
   for (SceneLayerRecord &record : state.layers) {
@@ -1449,11 +1497,21 @@ bool SceneDocument::replace_layer_state(SceneLayerState state) {
         handle, SceneLayerMembershipComponent{.layer_id = assigned->second});
   }
 
-  const std::vector<bool> visible_after =
-      effective_visibility(scene_entities);
-  const bool visibility_changed = visible_before != visible_after;
+  const std::vector<std::uint8_t> presentation_after =
+      effective_hierarchy_presentation_state(scene_entities);
+  bool visibility_changed = false;
+  for (std::size_t index = 0u; index < presentation_before.size(); ++index) {
+    if ((presentation_before[index] & kEffectivelyVisible) !=
+        (presentation_after[index] & kEffectivelyVisible)) {
+      visibility_changed = true;
+      break;
+    }
+  }
   if (visibility_changed) {
     ++visibility_revision_;
+  }
+  if (presentation_before != presentation_after) {
+    ++hierarchy_presentation_revision_;
   }
   ++layer_revision_;
   ++render_component_revision_;
@@ -2180,6 +2238,8 @@ void SceneDocument::advance_revision_for_replacement(
   render_component_revision_ =
       std::max(render_component_revision_ + 1u, revision_);
   layer_revision_ = std::max(layer_revision_ + 1u, revision_);
+  hierarchy_presentation_revision_ =
+      std::max(hierarchy_presentation_revision_ + 1u, revision_);
 }
 
 entt::entity SceneDocument::entt_entity(EntityId id) const {

@@ -387,6 +387,26 @@ TEST(QtInputAdapterTests,
 }
 
 TEST(QtViewportSurfaceInputTests,
+     RepeatedInitializationDoesNotSucceedWithoutASwapchain) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-viewport-initialization-tests";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+
+  quader::RenderSystem render_system;
+  quader::QtViewportSurface surface(quader::ViewportPaneId::Perspective);
+
+  ASSERT_FALSE(render_system.initialized());
+  EXPECT_FALSE(surface.initialize(render_system, 0x01u));
+  EXPECT_FALSE(surface.ready_to_render());
+  EXPECT_FALSE(surface.initialize(render_system, 0x01u));
+  EXPECT_FALSE(surface.ready_to_render());
+  EXPECT_FALSE(surface.render_frame());
+}
+
+TEST(QtViewportSurfaceInputTests,
      StationaryReleaseEmitsClickButPointerDragDoesNot) {
   ASSERT_EQ(QCoreApplication::instance(), nullptr);
   int argc = 1;

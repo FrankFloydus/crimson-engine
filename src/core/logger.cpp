@@ -22,6 +22,8 @@ namespace quader {
 namespace {
 
 std::atomic<std::uint64_t> g_memory_revision = 0;
+std::atomic<std::uint64_t> g_memory_generation = 0;
+std::atomic<std::uint64_t> g_log_entry_sequence = 0;
 
 /**
  * Owns Memory Sink behavior within the shared core service layer.
@@ -29,16 +31,59 @@ std::atomic<std::uint64_t> g_memory_revision = 0;
 class MemorySink final : public spdlog::sinks::base_sink<std::mutex> {
 public:
   explicit MemorySink(std::size_t max_entries)
-      : max_entries_(std::max<std::size_t>(1, max_entries)) {}
+      : max_entries_(std::max<std::size_t>(1, max_entries)),
+        generation_(next_generation()) {}
 
   std::vector<LogEntry> snapshot() const {
     std::lock_guard lock(entries_mutex_);
     return {entries_.begin(), entries_.end()};
   }
 
+  LogEntriesDelta entries_since(LogEntriesCursor cursor) const {
+    std::lock_guard lock(entries_mutex_);
+    LogEntriesDelta delta{
+        .cursor =
+            {
+                .generation = generation_,
+                .sequence = entries_.empty() ? 0u : entries_.back().sequence,
+            },
+        .first_sequence =
+            entries_.empty() ? 0u : entries_.front().sequence,
+        .revision = g_memory_revision.load(std::memory_order_acquire),
+    };
+
+    if (cursor.generation != generation_) {
+      delta.entries.assign(entries_.begin(), entries_.end());
+      delta.reset_required = true;
+      return delta;
+    }
+    if (entries_.empty()) {
+      return delta;
+    }
+
+    const std::uint64_t first_sequence = entries_.front().sequence;
+    const std::uint64_t last_sequence = entries_.back().sequence;
+    if (cursor.sequence > last_sequence ||
+        (cursor.sequence != 0u && cursor.sequence < first_sequence &&
+         first_sequence - cursor.sequence > 1u)) {
+      delta.entries.assign(entries_.begin(), entries_.end());
+      delta.reset_required = true;
+      return delta;
+    }
+
+    const auto first_new = std::upper_bound(
+        entries_.begin(), entries_.end(), cursor.sequence,
+        [](std::uint64_t sequence, const LogEntry &entry) {
+          return sequence < entry.sequence;
+        });
+    delta.entries.assign(first_new, entries_.end());
+    return delta;
+  }
+
   void clear() {
     std::lock_guard lock(entries_mutex_);
     entries_.clear();
+    generation_ = next_generation();
     g_memory_revision.fetch_add(1, std::memory_order_release);
   }
 
@@ -56,6 +101,8 @@ protected:
             entry.file = msg.source.filename;
             entry.line = static_cast<int>(msg.source.line);
         }
+        entry.sequence =
+            g_log_entry_sequence.fetch_add(1, std::memory_order_relaxed) + 1u;
 
         std::lock_guard lock(entries_mutex_);
         entries_.push_back(std::move(entry));
@@ -68,9 +115,14 @@ protected:
     void flush_() override {}
 
 private:
+  static std::uint64_t next_generation() {
+    return g_memory_generation.fetch_add(1, std::memory_order_relaxed) + 1u;
+  }
+
   std::size_t max_entries_ = 0;
   mutable std::mutex entries_mutex_;
   std::deque<LogEntry> entries_;
+  std::uint64_t generation_ = 0;
 };
 
 std::mutex g_logger_mutex;
@@ -146,6 +198,17 @@ std::uint64_t Logger::memory_revision() noexcept {
 std::vector<LogEntry> Logger::entries_snapshot() {
   const std::shared_ptr<MemorySink> memory_sink = memory_sink_snapshot();
   return memory_sink->snapshot();
+}
+
+LogEntriesDelta Logger::entries_since(LogEntriesCursor cursor) {
+  for (;;) {
+    const std::shared_ptr<MemorySink> memory_sink = memory_sink_snapshot();
+    LogEntriesDelta delta = memory_sink->entries_since(cursor);
+    std::lock_guard lock(g_logger_mutex);
+    if (g_memory_sink == memory_sink) {
+      return delta;
+    }
+  }
 }
 
 std::shared_ptr<spdlog::logger> Logger::instance() {

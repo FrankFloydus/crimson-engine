@@ -188,6 +188,7 @@ public:
   ModelingCommandResult cancel_competing_state_for_native_tool_activation();
   [[nodiscard]] ModelingToolStatus tool_status() const;
   [[nodiscard]] ModelingLiveStatus live_status() const;
+  [[nodiscard]] bool operation_preview_active() const;
   [[nodiscard]] ModelingToolSettingsTarget tool_settings_target() const;
   [[nodiscard]] std::uint64_t tool_settings_revision() const;
   [[nodiscard]] ModelingInteractionSettings interaction_settings() const;

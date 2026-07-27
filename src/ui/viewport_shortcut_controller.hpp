@@ -31,7 +31,7 @@ public:
   [[nodiscard]] ViewportShortcutControllerResult
   handle_operation_preview_shortcut(
       const ViewportInputResult &input_result,
-      const ModelingToolSettingsTarget &tool_settings_target,
+      bool operation_preview_active,
       QuaderEditorApi &editor) const;
 
   [[nodiscard]] ViewportShortcutControllerResult

@@ -918,6 +918,30 @@ class ModelingSessionService::Impl : private ModelingTransformDragPort {
     std::vector<std::vector<ModelingObjectRecord>> source_elements;
   };
 
+  /// Keys the retained world-space overlay for one valid Cut preview.
+  struct VolatileCutOverlayCacheKey final {
+    std::uint64_t content_revision = 0;
+    std::uint64_t selection_revision = 0;
+    std::uint64_t scene_revision = 0;
+    std::uint64_t local_visibility_revision = 0;
+    std::uint64_t object_map_revision = 0;
+    std::uint64_t asset_revision = 0;
+    std::uint64_t transform_preview_revision = 0;
+    std::uint64_t runtime_overlay_signature = 0;
+    ModelingSelectionMode app_selection_mode = ModelingSelectionMode::Object;
+    ModelingInstanceEditScope instance_edit_scope;
+
+    friend bool operator==(const VolatileCutOverlayCacheKey &,
+                           const VolatileCutOverlayCacheKey &) = default;
+  };
+
+  /// Retains the compiled Cut preview until one semantic owner changes.
+  struct VolatileCutOverlayCache final {
+    bool valid = false;
+    VolatileCutOverlayCacheKey key;
+    ViewportOverlayFrame frame;
+  };
+
 public:
   Impl(SceneDocument &scene, AssetRegistry &assets,
        ModelingOperationPreviewCheckpointHooks preview_checkpoint_hooks)
@@ -1433,11 +1457,52 @@ public:
   }
 
   [[nodiscard]] ViewportOverlayFrame volatile_overlay_frame() const {
+    const quader_editor_core::CutToolState &cut = runtime_.cut_state();
+    const quader_editor_core::InsertEdgeLoopToolState &insert_loop =
+        runtime_.insert_edge_loop_state();
+    const quader_editor_core::PolyToolState &poly = runtime_.poly_state();
+    const bool cacheable_cut_preview =
+        quader_editor_core::cut_is_active(cut) &&
+        quader_editor_core::cut_can_preview(cut) && cut.preview_valid &&
+        !sdk_projection_adapter_.preview_active() &&
+        insert_loop.preview_lines.empty() && poly.preview_lines.empty() &&
+        poly.preview_points.empty();
+    std::optional<VolatileCutOverlayCacheKey> cache_key;
+    if (cacheable_cut_preview) {
+      cache_key = VolatileCutOverlayCacheKey{
+          .content_revision = content_revision(),
+          .selection_revision = selection_revision(),
+          .scene_revision = scene_.revision(),
+          .local_visibility_revision =
+              selection_service_.viewport_visibility_revision(),
+          .object_map_revision = object_registry_.revision(),
+          .asset_revision = assets_.revision(),
+          .transform_preview_revision =
+              sdk_projection_adapter_.workspace_transform_preview_revision(),
+          .runtime_overlay_signature =
+              overlay_service_.volatile_overlay_signature(runtime_),
+          .app_selection_mode = app_selection_mode_,
+          .instance_edit_scope =
+              selection_service_.overlay_instance_edit_scope(),
+      };
+      if (volatile_cut_overlay_cache_.valid &&
+          volatile_cut_overlay_cache_.key == *cache_key) {
+        return volatile_cut_overlay_cache_.frame;
+      }
+      volatile_cut_overlay_cache_.valid = false;
+    }
+
     const quader_editor_core::EditorSession &projected =
         selection_projection_view();
-    return overlay_service_.volatile_overlay_frame(
+    ViewportOverlayFrame frame = overlay_service_.volatile_overlay_frame(
         projected, runtime_, scene_, object_registry_, selection_service_,
         sdk_projection_adapter_);
+    if (cache_key.has_value()) {
+      volatile_cut_overlay_cache_.key = *cache_key;
+      volatile_cut_overlay_cache_.frame = frame;
+      volatile_cut_overlay_cache_.valid = true;
+    }
+    return frame;
   }
 
   [[nodiscard]] std::vector<ModelingToolPreviewMesh>
@@ -1493,6 +1558,7 @@ public:
   void set_modeling_sdk_projection_failure_for_tests(
       ModelingSdkProjectionFailurePoint point) {
     sdk_projection_adapter_.set_failure_point_for_tests(point);
+    volatile_cut_overlay_cache_.valid = false;
   }
 
   [[nodiscard]] ModelingSdkProjectionStats
@@ -1625,6 +1691,7 @@ public:
       std::function<ModelingInstanceEditScope()> provider) {
     instance_edit_scope_provider_ = provider;
     selection_service_.set_instance_edit_scope_provider(std::move(provider));
+    volatile_cut_overlay_cache_.valid = false;
   }
 
   void set_viewport_visibility_filter(
@@ -1634,6 +1701,7 @@ public:
     selection_service_.set_viewport_visibility_filter(
         std::move(filter), std::move(revision_provider),
         std::move(active_provider));
+    volatile_cut_overlay_cache_.valid = false;
   }
 
   void sync_object_selection_from_scene(bool force_object_mode = false) {
@@ -1793,7 +1861,7 @@ public:
       canceled_preview = canceled_preview || result.changed;
       return result;
     };
-    if (tool_settings_target().operation_preview_active) {
+    if (operation_preview_active()) {
       const ModelingCommandResult canceled =
           absorb_cancel(cancel_active_operation_preview());
       if (!canceled.ok) {
@@ -2164,6 +2232,15 @@ public:
     return {};
   }
 
+  [[nodiscard]] bool operation_preview_active() const {
+    const std::optional<quader_editor_core::EditorOperationId> operation =
+        sdk_projection_adapter_.active_preview_operation();
+    return operation.has_value() &&
+           quader_editor_core::preview_transaction_kind_for_operation(
+               *operation)
+               .has_value();
+  }
+
   [[nodiscard]] ModelingToolSettingsTarget tool_settings_target() const {
     if (const std::optional<quader_editor_core::EditorOperationId> operation =
             sdk_projection_adapter_.active_preview_operation()) {
@@ -2406,14 +2483,14 @@ public:
   }
 
   [[nodiscard]] bool can_cancel_active_tool_or_preview() const {
-    return tool_settings_target().operation_preview_active ||
+    return operation_preview_active() ||
            runtime_.transform_drag_active() || has_transform_preview() ||
            transform_drag_service_.scene_preview_active() ||
            modal_tool_owns_viewport();
   }
 
   [[nodiscard]] bool can_cancel_active_preview_for_undo() const {
-    return tool_settings_target().operation_preview_active ||
+    return operation_preview_active() ||
            runtime_.transform_drag_active() || has_transform_preview() ||
            transform_drag_service_.scene_preview_active();
   }
@@ -2426,7 +2503,7 @@ public:
       return result;
     };
 
-    if (tool_settings_target().operation_preview_active) {
+    if (operation_preview_active()) {
       const ModelingCommandResult result =
           cancel(cancel_active_operation_preview());
       if (!result.ok) {
@@ -4414,8 +4491,23 @@ public:
   }
 
   ModelingCommandResult update_cut_hover(const ModelingToolRayEvent &event) {
-    return execute_runtime_command(
-        RuntimeToolCommandService::update_cut_hover(event), false);
+    const quader_editor_core::EditorSession &projection =
+        selection_projection_view();
+    const quader_editor_core::EditorRuntimeCommand command =
+        RuntimeToolCommandService::update_cut_hover(event);
+    const quader_editor_core::EditorRuntimeCommandResult result =
+        quader_editor_core::execute_cut_hover_runtime_command(
+            projection, runtime_, command);
+    if (result.command.changed) {
+      const quader_editor_core::CutToolState &cut = runtime_.cut_state();
+      const bool inert_hover_over_retained_preview =
+          !event.dragging && quader_editor_core::cut_can_preview(cut) &&
+          cut.preview_valid && !quader_editor_core::cut_is_dragging(cut);
+      if (!inert_hover_over_retained_preview) {
+        invalidate_selection_overlay_caches();
+      }
+    }
+    return command_executor_.from_runtime(result.command);
   }
 
   ModelingCommandResult click_cut(const ModelingToolRayEvent &event) {
@@ -5579,6 +5671,7 @@ private:
 
   void invalidate_selection_overlay_caches() const override {
     overlay_service_.invalidate();
+    volatile_cut_overlay_cache_.valid = false;
   }
 
   [[nodiscard]] bool scene_objects_synced_for_current_modeling_content() const {
@@ -5931,6 +6024,7 @@ private:
   ModelingSelectionService selection_service_;
   SelectionProjectionService selection_projection_service_;
   mutable ModelingOverlayService overlay_service_;
+  mutable VolatileCutOverlayCache volatile_cut_overlay_cache_;
   ModelingCommandExecutor command_executor_;
   ModelingContextActionService context_action_service_;
   ModelingInteractionSettingsService interaction_settings_service_;
@@ -6307,6 +6401,10 @@ ModelingToolStatus ModelingSessionService::tool_status() const {
 
 ModelingLiveStatus ModelingSessionService::live_status() const {
   return impl_->live_status();
+}
+
+bool ModelingSessionService::operation_preview_active() const {
+  return impl_->operation_preview_active();
 }
 
 ModelingToolSettingsTarget

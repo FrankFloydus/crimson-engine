@@ -2175,6 +2175,11 @@ TEST(ProgrammaticApiGuardrailTests, ApiStatusStampsUseSharedInternalHelper) {
       read_file(source_root() / "src/api/quader_project_api.cpp");
 
   EXPECT_NE(status_helper.find("quader_api_current_revisions"), std::string::npos);
+  EXPECT_NE(status_helper.find("session.modeling().content_revision()"),
+            std::string::npos);
+  EXPECT_NE(status_helper.find("session.modeling().selection_revision()"),
+            std::string::npos);
+  EXPECT_EQ(status_helper.find("selection_summary()"), std::string::npos);
   EXPECT_NE(mutation_runner.find("quader_api_void_status"), std::string::npos);
   EXPECT_NE(tools_api.find("quader_api_void_status"), std::string::npos);
   EXPECT_NE(query_api.find("quader_api_current_revisions"), std::string::npos);

@@ -15,7 +15,7 @@
 #include "ui/qt_tool_settings_number_slider.hpp"
 #include "ui/qt_tool_settings_panel.hpp"
 #include "ui/qt_viewport_panel.hpp"
-#include "ui/ui_system.hpp"
+#include "ui/ui_panel_manager.hpp"
 
 #include <QApplication>
 #include <QCoreApplication>
@@ -595,7 +595,7 @@ TEST(QtToolSettingsPanelTests,
 }
 
 TEST(QtToolSettingsPanelTests,
-     DockedNativeWindowClassificationAndTabRefreshUseVisibleRegion) {
+     DockedNativeWindowClassificationAndTabRefreshUseDockSignals) {
   ASSERT_EQ(QCoreApplication::instance(), nullptr);
   int argc = 1;
   char executable[] = "quader-tool-settings-native-window-tests";
@@ -616,6 +616,9 @@ TEST(QtToolSettingsPanelTests,
   auto *inspector_dock = new QDockWidget(&main_window);
   inspector_dock->setWidget(new QWidget());
   main_window.addDockWidget(Qt::RightDockWidgetArea, inspector_dock);
+  quader::UIPanelManager panels;
+  panels.add(quader::UIPanelId::ToolSettings, *tool_settings_dock);
+  panels.add(quader::UIPanelId::Inspector, *inspector_dock);
   main_window.tabifyDockWidget(inspector_dock, tool_settings_dock);
 
   main_window.show();
@@ -637,17 +640,20 @@ TEST(QtToolSettingsPanelTests,
       native_main_window, tool_settings_point));
   EXPECT_FALSE(quader::qt_event_target_belongs_to_tool_settings(
       native_main_window, viewport_point));
-  EXPECT_TRUE(quader::qt_dock_panel_presented_for_refresh(
-      true, tool_settings_dock));
-  EXPECT_FALSE(quader::qt_dock_panel_presented_for_refresh(
-      false, tool_settings_dock));
+  EXPECT_TRUE(panels.is_presented(quader::UIPanelId::ToolSettings));
+  EXPECT_TRUE(
+      panels.set_visible(quader::UIPanelId::ToolSettings, false));
+  QCoreApplication::processEvents();
+  EXPECT_FALSE(panels.is_presented(quader::UIPanelId::ToolSettings));
+  EXPECT_TRUE(panels.set_visible(quader::UIPanelId::ToolSettings, true));
+  tool_settings_dock->raise();
+  QCoreApplication::processEvents();
+  EXPECT_TRUE(panels.is_presented(quader::UIPanelId::ToolSettings));
 
   inspector_dock->raise();
   QCoreApplication::processEvents();
-  EXPECT_FALSE(quader::qt_dock_panel_presented_for_refresh(
-      true, tool_settings_dock));
-  EXPECT_TRUE(
-      quader::qt_dock_panel_presented_for_refresh(true, inspector_dock));
+  EXPECT_FALSE(panels.is_presented(quader::UIPanelId::ToolSettings));
+  EXPECT_TRUE(panels.is_presented(quader::UIPanelId::Inspector));
   EXPECT_FALSE(quader::qt_event_target_belongs_to_tool_settings(
       native_main_window, tool_settings_point));
 }

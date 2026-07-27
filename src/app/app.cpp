@@ -64,25 +64,28 @@ bool AppFramePresentationGate::eventFilter(QObject *watched, QEvent *event) {
     return QObject::eventFilter(watched, event);
   }
 
-  QWidget *widget = qobject_cast<QWidget *>(watched);
   switch (event->type()) {
-  case QEvent::Show:
+  case QEvent::Show: {
+    QWidget *widget = qobject_cast<QWidget *>(watched);
     if (widget != nullptr && is_top_level_transient(*widget)) {
       begin_first_paint_wait(*widget);
     }
     break;
-  case QEvent::Paint:
+  }
+  case QEvent::Paint: {
+    QWidget *widget = qobject_cast<QWidget *>(watched);
     if (widget != nullptr) {
       queue_first_paint_release(*widget);
     }
     break;
+  }
   case QEvent::Hide:
   case QEvent::Close:
   case QEvent::Destroy:
     forget_transient(watched);
     break;
   default:
-    break;
+    return QObject::eventFilter(watched, event);
   }
   return QObject::eventFilter(watched, event);
 }

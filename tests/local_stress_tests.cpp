@@ -403,6 +403,8 @@ TEST(LocalStressTests, SingleMeshPivotApply) {
 
   const quader::ModelingSdkProjectionStats projection_before =
       session->modeling().modeling_sdk_projection_stats_for_tests();
+  const std::uint64_t hierarchy_presentation_revision_before =
+      session->scene().hierarchy_presentation_revision();
   timed_stress_step("single_mesh_pivot_apply", [&] {
     const quader::QuaderApiVoidResult applied =
         editor.tools().commit_active_tool_preview();
@@ -417,10 +419,14 @@ TEST(LocalStressTests, SingleMeshPivotApply) {
             projection_before.targeted_scene_sync_count + 1U);
   EXPECT_EQ(projection_after.targeted_scene_sync_document_count,
             projection_before.targeted_scene_sync_document_count + 1U);
+  EXPECT_EQ(session->scene().hierarchy_presentation_revision(),
+            hierarchy_presentation_revision_before)
+      << "pivot apply must not wake the Outliner hierarchy projection";
   std::cout << "[local-stress] pivot_full_scene_resets="
             << projection_after.full_scene_reset_count << '\n';
   std::cout << "[local-stress] pivot_targeted_document_syncs="
             << projection_after.targeted_scene_sync_document_count << '\n';
+  std::cout << "[local-stress] pivot_hierarchy_revision_delta=0\n";
 }
 
 TEST(LocalStressTests, MyFirstProjectRepeatedAllSelectionDragSamples) {

@@ -41,10 +41,11 @@ bool QtMaterialPreviewSurface::initialize(RenderSystem &render_system) {
   }
   renderer_.set_preview_state(preview_state_);
   initialized_ = true;
+  mark_render_pending();
 
   (void)winId();
   native_surface_available_ = handle() != nullptr;
-  recreate_swap_chain();
+  recreate_swap_chain(true);
   if (native_surface_available_ && !swap_chain_) {
     LOG_ERROR("Unable to initialize the material preview native surface");
     shutdown();
@@ -68,11 +69,17 @@ void QtMaterialPreviewSurface::shutdown() {
   render_system_ = nullptr;
   initialized_ = false;
   native_surface_available_ = false;
+  swap_chain_creation_failed_ = false;
+  render_pending_ = false;
 }
 
 bool QtMaterialPreviewSurface::render_frame() {
+  if (!render_pending_) {
+    return false;
+  }
   synchronize_render_size();
-  if (!swap_chain_ && native_surface_available_ && isVisible()) {
+  if (!swap_chain_ && native_surface_available_ && isVisible() &&
+      isExposed()) {
     recreate_swap_chain();
   }
   if (!ready_to_render() || !render_system_->begin_frame(swap_chain_)) {
@@ -80,6 +87,7 @@ bool QtMaterialPreviewSurface::render_frame() {
   }
   render_system_->render_material_preview(renderer_, swap_chain_);
   render_system_->end_frame(swap_chain_);
+  render_pending_ = false;
   return true;
 }
 
@@ -88,6 +96,10 @@ bool QtMaterialPreviewSurface::ready_to_render() const {
          render_system_->initialized() && renderer_.initialized() &&
          static_cast<bool>(swap_chain_) && native_surface_available_ &&
          isExposed() && isVisible() && width() > 0 && height() > 0;
+}
+
+bool QtMaterialPreviewSurface::needs_rendering() const {
+  return render_pending_ && ready_to_render();
 }
 
 void QtMaterialPreviewSurface::synchronize_render_size() {
@@ -101,12 +113,14 @@ void QtMaterialPreviewSurface::synchronize_render_size() {
       std::max<qreal>(1.0, std::round(height() * scale)));
   if (renderer_.width() != pixel_width || renderer_.height() != pixel_height) {
     renderer_.resize(pixel_width, pixel_height);
+    mark_render_pending();
   }
 }
 
 void QtMaterialPreviewSurface::set_material(
     StandardMaterialPreviewSnapshot snapshot) {
   renderer_.set_material(std::move(snapshot));
+  mark_render_pending();
   if (surface_changed_callback_) {
     surface_changed_callback_();
   }
@@ -163,20 +177,24 @@ bool QtMaterialPreviewSurface::event(QEvent *event) {
       native_surface_available_ = false;
       swap_chain_.reset();
       swap_chain_native_id_ = 0u;
+      swap_chain_creation_failed_ = false;
+      render_pending_ = false;
     } else if (surface_event->surfaceEventType() ==
                QPlatformSurfaceEvent::SurfaceCreated) {
       native_surface_available_ = true;
-      recreate_swap_chain();
+      recreate_swap_chain(true);
       synchronize_render_size();
+      mark_render_pending();
     }
   } else if (event != nullptr &&
              (event->type() == QEvent::DevicePixelRatioChange ||
               event->type() == QEvent::ScreenChangeInternal ||
               event->type() == QEvent::WinIdChange)) {
     if (event->type() == QEvent::WinIdChange) {
-      recreate_swap_chain();
+      recreate_swap_chain(true);
     }
     synchronize_render_size();
+    mark_render_pending();
   }
   return QWindow::event(event);
 }
@@ -185,7 +203,8 @@ void QtMaterialPreviewSurface::exposeEvent(QExposeEvent *event) {
   QWindow::exposeEvent(event);
   native_surface_available_ = handle() != nullptr;
   if (isExposed()) {
-    recreate_swap_chain();
+    recreate_swap_chain(true);
+    mark_render_pending();
   }
   synchronize_render_size();
   if (surface_changed_callback_) {
@@ -304,14 +323,22 @@ void QtMaterialPreviewSurface::apply_interaction(
 
 void QtMaterialPreviewSurface::publish_state_change() {
   renderer_.set_preview_state(preview_state_);
+  mark_render_pending();
   if (surface_changed_callback_) {
     surface_changed_callback_();
   }
 }
 
-void QtMaterialPreviewSurface::recreate_swap_chain() {
+void QtMaterialPreviewSurface::mark_render_pending() {
+  render_pending_ = true;
+}
+
+void QtMaterialPreviewSurface::recreate_swap_chain(bool force_retry) {
   if (!initialized_ || render_system_ == nullptr ||
       !render_system_->initialized() || !native_surface_available_) {
+    return;
+  }
+  if (swap_chain_creation_failed_ && !force_retry) {
     return;
   }
   void *native = native_window_handle();
@@ -327,10 +354,15 @@ void QtMaterialPreviewSurface::recreate_swap_chain() {
   swap_chain_ = render_system_->create_additional_swap_chain(
       native, SwapChainPresentationColorSpace::Srgb);
   if (!swap_chain_) {
-    LOG_ERROR("Unable to create Filament swapchain for material preview");
+    if (!swap_chain_creation_failed_) {
+      LOG_ERROR("Unable to create Filament swapchain for material preview");
+    }
+    swap_chain_creation_failed_ = true;
     return;
   }
+  swap_chain_creation_failed_ = false;
   swap_chain_native_id_ = native_id;
+  mark_render_pending();
 }
 
 void *QtMaterialPreviewSurface::native_window_handle() const {

@@ -11,6 +11,7 @@
 #include <spdlog/common.h>
 
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace quader {
@@ -28,6 +29,12 @@ struct ConsoleFilter {
  */
 class ConsoleModel {
 public:
+  [[nodiscard]] static bool accepts(const LogEntry &entry,
+                                    const ConsoleFilter &filter);
+  [[nodiscard]] static bool
+  accepts_normalized(const LogEntry &entry,
+                     spdlog::level::level_enum minimum_level,
+                     std::string_view normalized_search);
   static std::vector<LogEntry> filter(const std::vector<LogEntry> &entries,
                                       const ConsoleFilter &filter);
 };

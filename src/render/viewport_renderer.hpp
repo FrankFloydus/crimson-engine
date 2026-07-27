@@ -23,6 +23,7 @@
 #include <utils/Entity.h>
 
 #include <cstdint>
+#include <optional>
 
 namespace quader {
 
@@ -99,6 +100,7 @@ public:
     void update_visible_layers();
     void apply_tone_mapping(SceneToneMapping tone_mapping, bool enabled);
     void destroy_color_grading();
+    void reset_presentation_cache();
 
     filament::Engine* engine_ = nullptr;
     filament::Scene* scene_ = nullptr;
@@ -125,6 +127,9 @@ public:
     ViewportMaterialDebugMode material_debug_mode_ =
         ViewportMaterialDebugMode::None;
     ViewportSettingColor instance_edit_background_;
+    std::optional<std::uint64_t> camera_presentation_signature_;
+    std::optional<std::uint64_t> scene_settings_presentation_signature_;
+    std::optional<bool> shadowing_enabled_;
 };
 
 } // namespace quader

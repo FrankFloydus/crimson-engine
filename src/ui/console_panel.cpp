@@ -8,6 +8,7 @@
 
 #include "core/localization_service.hpp"
 #include "core/logger.hpp"
+#include "core/qstr.hpp"
 #include "ui/console_model.hpp"
 #include "ui/ui_context.hpp"
 #include "ui/ui_panel.hpp"
@@ -17,6 +18,7 @@
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QLineEdit>
+#include <QList>
 #include <QListView>
 #include <QPushButton>
 #include <QScrollBar>
@@ -24,12 +26,14 @@
 #include <QStandardItem>
 #include <QStandardItemModel>
 #include <QString>
+#include <QTimer>
 #include <QVBoxLayout>
 #include <QVariant>
 
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <deque>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -39,6 +43,7 @@ namespace quader {
 namespace {
 
 constexpr int kConsoleLevelRole = Qt::UserRole + 1;
+constexpr int kConsoleSearchDebounceMs = 120;
 
 QString qt_text(std::string_view text) {
   return QString::fromUtf8(text.data(), static_cast<qsizetype>(text.size()));
@@ -91,20 +96,6 @@ constexpr std::array<spdlog::level::level_enum, 7> kConsoleLevels{{
     spdlog::level::critical,
     spdlog::level::off,
 }};
-
-bool same_visible_log_entries(const std::vector<LogEntry> &left,
-                              const std::vector<LogEntry> &right) {
-  if (left.size() != right.size()) {
-    return false;
-  }
-  for (std::size_t index = 0; index < left.size(); ++index) {
-    if (left[index].level != right[index].level ||
-        left[index].message != right[index].message) {
-      return false;
-    }
-  }
-  return true;
-}
 
 } // namespace
 
@@ -162,6 +153,16 @@ struct ConsolePanel::Impl {
     entries_view_->setModel(entries_model_);
     root_layout->addWidget(entries_view_, 1);
 
+    search_filter_timer_ = new QTimer(&panel_);
+    search_filter_timer_->setSingleShot(true);
+    search_filter_timer_->setInterval(kConsoleSearchDebounceMs);
+    QObject::connect(search_filter_timer_, &QTimer::timeout, &panel_,
+                     [this]() {
+                       if (commit_pending_search_filter()) {
+                         rebuild_entries();
+                       }
+                     });
+
     QObject::connect(clear_button_, &QPushButton::clicked, &panel_, [this]() {
       Logger::clear_memory();
       synchronize_source_entries();
@@ -176,6 +177,7 @@ struct ConsolePanel::Impl {
                        filter_.minimum_level =
                            static_cast<spdlog::level::level_enum>(
                                level_combo_->itemData(index).toInt());
+                       (void)commit_pending_search_filter();
                        rebuild_entries();
                      });
     QObject::connect(search_edit_, &QLineEdit::textChanged, &panel_,
@@ -183,8 +185,8 @@ struct ConsolePanel::Impl {
                        if (updating_controls_) {
                          return;
                        }
-                       filter_.search_text = text.toUtf8().toStdString();
-                       rebuild_entries();
+                       pending_search_text_ = text.toUtf8().toStdString();
+                       search_filter_timer_->start();
                      });
   }
 
@@ -208,14 +210,56 @@ private:
       return;
     }
 
-    std::vector<LogEntry> entries = Logger::entries_snapshot();
-    source_revision_ = revision;
+    LogEntriesDelta delta = Logger::entries_since(source_cursor_);
+    source_revision_ = delta.revision;
     source_revision_valid_ = true;
-    if (same_visible_log_entries(source_entries_, entries)) {
+    source_cursor_ = delta.cursor;
+    if (delta.reset_required) {
+      source_entries_.clear();
+      for (LogEntry &entry : delta.entries) {
+        source_entries_.push_back(std::move(entry));
+      }
+      rebuild_entries();
       return;
     }
-    source_entries_ = std::move(entries);
-    rebuild_entries();
+    if (delta.entries.empty() &&
+        (source_entries_.empty() || delta.first_sequence == 0u ||
+         source_entries_.front().sequence == delta.first_sequence)) {
+      return;
+    }
+
+    QScrollBar *vertical_scroll = entries_view_->verticalScrollBar();
+    const bool was_at_bottom =
+        vertical_scroll == nullptr ||
+        vertical_scroll->value() >= vertical_scroll->maximum();
+    int removed_visible_rows = 0;
+    while (!source_entries_.empty() && delta.first_sequence != 0u &&
+           source_entries_.front().sequence < delta.first_sequence) {
+      if (entry_matches(source_entries_.front())) {
+        ++removed_visible_rows;
+      }
+      source_entries_.pop_front();
+    }
+    if (removed_visible_rows > 0) {
+      entries_model_->removeRows(0, removed_visible_rows);
+    }
+
+    QList<QStandardItem *> appended_items;
+    appended_items.reserve(static_cast<qsizetype>(delta.entries.size()));
+    for (LogEntry &entry : delta.entries) {
+      if (entry_matches(entry)) {
+        appended_items.push_back(make_entry_item(entry));
+      }
+      source_entries_.push_back(std::move(entry));
+    }
+    const int appended_visible_rows = appended_items.size();
+    if (!appended_items.empty()) {
+      entries_model_->invisibleRootItem()->appendRows(appended_items);
+    }
+    if (auto_scroll_ && was_at_bottom &&
+        (removed_visible_rows > 0 || appended_visible_rows > 0)) {
+      entries_view_->scrollToBottom();
+    }
   }
 
   void update_localization() {
@@ -270,27 +314,52 @@ private:
         vertical_scroll == nullptr ||
         vertical_scroll->value() >= vertical_scroll->maximum();
 
-    const std::vector<LogEntry> filtered =
-        ConsoleModel::filter(source_entries_, filter_);
     entries_model_->clear();
     entries_model_->setColumnCount(1);
-    entries_model_->setRowCount(static_cast<int>(filtered.size()));
-    for (std::size_t index = 0; index < filtered.size(); ++index) {
-      const LogEntry &entry = filtered[index];
-      auto *item = new QStandardItem(qt_text(entry.message));
-      item->setEditable(false);
-      item->setData(static_cast<int>(entry.level), kConsoleLevelRole);
-      if (localization_ != nullptr) {
-        item->setData(qt_text(localization_->text(level_key(entry.level),
-                                                  level_fallback(entry.level))),
-                      Qt::AccessibleDescriptionRole);
+    QList<QStandardItem *> items;
+    items.reserve(static_cast<qsizetype>(source_entries_.size()));
+    for (const LogEntry &entry : source_entries_) {
+      if (entry_matches(entry)) {
+        items.push_back(make_entry_item(entry));
       }
-      entries_model_->setItem(static_cast<int>(index), 0, item);
+    }
+    if (!items.empty()) {
+      entries_model_->invisibleRootItem()->appendRows(items);
     }
 
     if (auto_scroll_ && was_at_bottom) {
       entries_view_->scrollToBottom();
     }
+  }
+
+  [[nodiscard]] bool entry_matches(const LogEntry &entry) const {
+    return ConsoleModel::accepts_normalized(
+        entry, filter_.minimum_level, normalized_search_);
+  }
+
+  bool commit_pending_search_filter() {
+    if (search_filter_timer_ != nullptr &&
+        search_filter_timer_->isActive()) {
+      search_filter_timer_->stop();
+    }
+    if (filter_.search_text == pending_search_text_) {
+      return false;
+    }
+    filter_.search_text = pending_search_text_;
+    normalized_search_ = QStr::to_ascii_lower(filter_.search_text);
+    return true;
+  }
+
+  [[nodiscard]] QStandardItem *make_entry_item(const LogEntry &entry) const {
+    auto *item = new QStandardItem(qt_text(entry.message));
+    item->setEditable(false);
+    item->setData(static_cast<int>(entry.level), kConsoleLevelRole);
+    if (localization_ != nullptr) {
+      item->setData(qt_text(localization_->text(level_key(entry.level),
+                                                level_fallback(entry.level))),
+                    Qt::AccessibleDescriptionRole);
+    }
+    return item;
   }
 
   ConsolePanel &panel_;
@@ -299,12 +368,16 @@ private:
   QLabel *level_label_ = nullptr;
   QComboBox *level_combo_ = nullptr;
   QLineEdit *search_edit_ = nullptr;
+  QTimer *search_filter_timer_ = nullptr;
   QListView *entries_view_ = nullptr;
   QStandardItemModel *entries_model_ = nullptr;
   LocalizationService *localization_ = nullptr;
   std::string localized_locale_;
   ConsoleFilter filter_;
-  std::vector<LogEntry> source_entries_;
+  std::string pending_search_text_;
+  std::string normalized_search_;
+  std::deque<LogEntry> source_entries_;
+  LogEntriesCursor source_cursor_;
   std::uint64_t source_revision_ = 0;
   bool auto_scroll_ = true;
   bool updating_controls_ = false;

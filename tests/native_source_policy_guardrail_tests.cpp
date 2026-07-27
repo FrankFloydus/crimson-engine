@@ -582,6 +582,18 @@ TEST(AppLoopTests,
   EXPECT_NE(app_source.find("case QEvent::Paint:"), std::string::npos);
   EXPECT_NE(app_source.find("QTimer::singleShot(0, this"),
             std::string::npos);
+  const std::size_t event_filter = app_source.find(
+      "bool AppFramePresentationGate::eventFilter(");
+  const std::size_t event_type_gate =
+      app_source.find("switch (event->type())", event_filter);
+  const std::size_t widget_cast =
+      app_source.find("qobject_cast<QWidget *>(watched)", event_filter);
+  ASSERT_NE(event_filter, std::string::npos);
+  ASSERT_NE(event_type_gate, std::string::npos);
+  ASSERT_NE(widget_cast, std::string::npos);
+  EXPECT_LT(event_type_gate, widget_cast)
+      << "the application-wide filter must reject irrelevant event types "
+         "before QObject meta-casts";
   const std::string frame_timer_source = source_slice(
       app_source,
       "QObject::connect(frame_timer_.get(), &QTimer::timeout",

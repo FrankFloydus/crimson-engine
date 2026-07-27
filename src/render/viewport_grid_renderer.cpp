@@ -10,6 +10,7 @@
 #include "render/filament_buffer_descriptor_factory.hpp"
 #include "render/filament_utils.hpp"
 #include "render/render_layers.hpp"
+#include "render/render_signature_builder.hpp"
 #include "viewport/viewport_grid_placement_policy.hpp"
 
 #include <backend/DriverEnums.h>
@@ -62,6 +63,52 @@ filament::math::float4 instance_edit_grid_color(ViewportSettingColor color) {
   const float washed = std::clamp(0.48f + luminance * 0.22f, 0.48f, 0.70f);
   return {srgb_to_linear(washed * 0.84f), srgb_to_linear(washed),
           srgb_to_linear(washed), color.a * 0.72f};
+}
+
+RenderSignatureBuilder &
+add_setting_color(RenderSignatureBuilder &signature,
+                  ViewportSettingColor color) {
+  return signature.add_float(color.r)
+      .add_float(color.g)
+      .add_float(color.b)
+      .add_float(color.a);
+}
+
+std::uint64_t ground_grid_presentation_signature(
+    const ViewportCameraController &controller, std::uint32_t viewport_width,
+    std::uint32_t viewport_height, float grid_world_spacing,
+    const ViewportSettings &settings, bool instance_edit_context) {
+  const ViewportCameraPose pose = controller.pose();
+  const ViewportCameraState &state = controller.state();
+  RenderSignatureBuilder signature;
+  signature.add_vec3(pose.eye)
+      .add_vec3(pose.target)
+      .add_vec3(pose.up)
+      .add_value(static_cast<std::uint32_t>(state.projection))
+      .add_float(state.orthographic_size)
+      .add_float(state.far_plane)
+      .add_value(viewport_width)
+      .add_value(viewport_height)
+      .add_float(std::max(grid_world_spacing, 0.0001f))
+      .add_bool(instance_edit_context);
+  add_setting_color(
+      signature, settings.color(ViewportColorSettingId::GridMinor));
+  add_setting_color(
+      signature, settings.color(ViewportColorSettingId::GridMajor));
+  add_setting_color(
+      signature, settings.color(ViewportColorSettingId::GridXAxis));
+  add_setting_color(
+      signature, settings.color(ViewportColorSettingId::GridYAxis));
+  add_setting_color(
+      signature, settings.color(ViewportColorSettingId::GridZAxis));
+  return signature
+      .add_float(
+          settings.float_value(ViewportFloatSettingId::GridMinorLineSize))
+      .add_float(
+          settings.float_value(ViewportFloatSettingId::GridMajorLineSize))
+      .add_float(
+          settings.float_value(ViewportFloatSettingId::GridAxisLineSize))
+      .value();
 }
 
 filament::math::mat4f ground_grid_transform(const ViewportGridPlacement &grid) {
@@ -143,12 +190,14 @@ void ViewportGridRenderer::initialize(filament::Engine &engine,
   engine_ = &engine;
   scene_ = &scene;
   ground_grid_material_ = &ground_grid_material;
+  presentation_signature_.reset();
   grid_layer_mask_ =
       grid_layer_mask == 0u ? viewport_grid_layer_mask(0) : grid_layer_mask;
   create_ground_grid();
 }
 
 void ViewportGridRenderer::shutdown() {
+    presentation_signature_.reset();
     if (!engine_) {
         return;
     }
@@ -171,6 +220,16 @@ void ViewportGridRenderer::update(const ViewportCameraController &controller,
 
   set_ground_grid_visible(visible);
   if (!visible) {
+    presentation_signature_.reset();
+    return;
+  }
+
+  const std::uint64_t presentation_signature =
+      ground_grid_presentation_signature(
+          controller, std::max(1u, viewport_width),
+          std::max(1u, viewport_height), grid_world_spacing, settings,
+          instance_edit_context);
+  if (presentation_signature_ == presentation_signature) {
     return;
   }
 
@@ -252,9 +311,11 @@ void ViewportGridRenderer::update(const ViewportCameraController &controller,
       "viewportHeight", static_cast<float>(std::max(1u, viewport_height)));
   ground_grid_material_instance_->setParameter("visibleGridSize", spacing);
   ground_grid_material_instance_->setParameter("minGridWorldSpacing", 0.001f);
+  presentation_signature_ = presentation_signature;
 }
 
 void ViewportGridRenderer::create_ground_grid() {
+  presentation_signature_.reset();
   if (!engine_ || !scene_ || !ground_grid_material_) {
     return;
   }
@@ -369,6 +430,7 @@ void ViewportGridRenderer::update_ground_grid_mesh(float width, float height) {
 }
 
 void ViewportGridRenderer::destroy_ground_grid() {
+  presentation_signature_.reset();
   if (!engine_) {
     return;
   }

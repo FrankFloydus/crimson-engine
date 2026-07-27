@@ -452,7 +452,9 @@ CutRayUpdateInput cut_ray_input(CutRayRuntimeCommandSettings settings)
 	};
 }
 
-EditorRuntimeToolActivationResult activate_cut_interaction(EditorSession& session, EditorRuntime& runtime)
+EditorRuntimeToolActivationResult activate_cut_interaction(
+		const EditorSession& session,
+		EditorRuntime& runtime)
 {
   const EditorRuntimeToolActivationResult activation =
       runtime.set_active_tool(session, ViewportInteractionTool::Cut);
@@ -467,7 +469,7 @@ EditorRuntimeToolActivationResult activate_cut_interaction(EditorSession& sessio
 }
 
 CommandResult update_cut_hover(
-		EditorSession& session,
+		const EditorSession& session,
 		EditorRuntime& runtime,
 		CutRayRuntimeCommandSettings settings)
 {
@@ -970,6 +972,24 @@ EditorRuntimeCommandResult runtime_command_result(EditorRuntime& runtime, Comman
 
 } // namespace
 
+EditorRuntimeCommandResult execute_cut_hover_runtime_command(
+		const EditorSession& session,
+		EditorRuntime& runtime,
+		const EditorRuntimeCommand& command)
+{
+	if (command.command_id != EditorRuntimeCommandId::UpdateCutHover) {
+		return runtime_command_result(
+			runtime, { false, false, "Command is not a Cut hover update." });
+	}
+	const auto* settings =
+		std::get_if<CutRayRuntimeCommandSettings>(&command.settings);
+	if (settings == nullptr) {
+		return runtime_command_result(runtime, settings_mismatch_result());
+	}
+	return runtime_command_result(
+		runtime, update_cut_hover(session, runtime, *settings));
+}
+
 EditorRuntimeCommandResult execute_runtime_command(
 		EditorSession& session,
 		EditorRuntime& runtime,
@@ -1057,13 +1077,7 @@ EditorRuntimeCommandResult execute_runtime_command(
           }
           return runtime_command_result(runtime, cancel_cut(session, runtime));
         case EditorRuntimeCommandId::UpdateCutHover: {
-          const auto *settings =
-              std::get_if<CutRayRuntimeCommandSettings>(&command.settings);
-          if (settings == nullptr) {
-            return runtime_command_result(runtime, settings_mismatch_result());
-          }
-          return runtime_command_result(
-              runtime, update_cut_hover(session, runtime, *settings));
+          return execute_cut_hover_runtime_command(session, runtime, command);
         }
         case EditorRuntimeCommandId::ClickCut: {
           const auto *settings =

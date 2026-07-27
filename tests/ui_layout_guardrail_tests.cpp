@@ -218,7 +218,11 @@ TEST(UiLayoutGuardrailTests,
                   "std::array<QDockWidget *, kUiPanelCount> docks_");
   expect_contains(panel_manager_header,
                   "std::array<bool, kUiPanelCount> explicit_visibility_");
+  expect_contains(panel_manager_header,
+                  "std::array<bool, kUiPanelCount> presented_");
   expect_contains(panel_manager_source, "UIPanelManager::add(");
+  expect_contains(panel_manager_source, "UIPanelManager::is_presented(");
+  expect_contains(panel_manager_source, "&QDockWidget::visibilityChanged");
   expect_contains(panel_manager_source, "UIPanelManager::set_visible(");
   expect_contains(panel_manager_source, "UIPanelManager::dock(");
   expect_contains(panel_manager_source, "&QAction::triggered");
@@ -474,7 +478,16 @@ TEST(UiLayoutGuardrailTests,
   expect_contains(outliner, "QItemSelectionModel::NoUpdate");
   expect_contains(outliner, "cache_.document != document_");
   expect_contains(outliner, "collapsed_entities_.clear()");
-  expect_contains(outliner, "document_->content_revision()");
+  expect_contains(outliner,
+                  "document_->hierarchy_presentation_revision()");
+  expect_missing(outliner, "document_->content_revision()");
+  const std::size_t outliner_revision_gate =
+      outliner.find("document_->hierarchy_presentation_revision()");
+  const std::size_t outliner_projection =
+      outliner.find("std::vector<EntityRecord> next_records");
+  ASSERT_NE(outliner_revision_gate, std::string::npos);
+  ASSERT_NE(outliner_projection, std::string::npos);
+  EXPECT_LT(outliner_revision_gate, outliner_projection);
   expect_contains(outliner, "panel_.setFocusProxy(tree_)");
   expect_missing(outliner, "QAbstractItemView::NoSelection");
   expect_missing(outliner, "entity_range_selection(");
@@ -568,13 +581,35 @@ TEST(UiLayoutGuardrailTests,
   expect_missing(console, "entries_view_->setEditTriggers(");
   const std::size_t revision_gate =
       console.find("const std::uint64_t revision = Logger::memory_revision()");
-  const std::size_t snapshot =
-      console.find("Logger::entries_snapshot()", revision_gate);
+  const std::size_t incremental_read =
+      console.find("Logger::entries_since(source_cursor_)", revision_gate);
   ASSERT_NE(revision_gate, std::string::npos);
-  ASSERT_NE(snapshot, std::string::npos);
-  EXPECT_LT(revision_gate, snapshot);
+  ASSERT_NE(incremental_read, std::string::npos);
+  EXPECT_LT(revision_gate, incremental_read);
   expect_contains(console,
-                  "source_revision_valid_ && source_revision_ == revision");
+                   "source_revision_valid_ && source_revision_ == revision");
+  expect_contains(console, "entries_model_->removeRows(0, removed_visible_rows)");
+  expect_contains(console,
+                  "entries_model_->invisibleRootItem()->appendRows("
+                  "appended_items)");
+  expect_contains(console,
+                  "entries_model_->invisibleRootItem()->appendRows(items)");
+  expect_missing(console, "entries_model_->appendRow(item)");
+  expect_contains(console, "ConsoleModel::accepts_normalized(");
+  expect_contains(console, "search_filter_timer_->setSingleShot(true)");
+  expect_contains(console,
+                  "search_filter_timer_->setInterval("
+                  "kConsoleSearchDebounceMs)");
+  expect_contains(console, "pending_search_text_ = text.toUtf8().toStdString()");
+  const std::size_t source_sync =
+      console.find("void synchronize_source_entries()");
+  const std::size_t localization =
+      console.find("void update_localization()", source_sync);
+  ASSERT_NE(source_sync, std::string::npos);
+  ASSERT_NE(localization, std::string::npos);
+  const std::string source_sync_body =
+      console.substr(source_sync, localization - source_sync);
+  expect_missing(source_sync_body, "entries_model_->clear()");
 }
 
 TEST(UiLayoutGuardrailTests,
@@ -597,8 +632,20 @@ TEST(UiLayoutGuardrailTests,
 
   expect_contains(outliner, "document_->selection_revision()");
   expect_contains(outliner, "outliner_selection_sync_required(");
+  const std::size_t sync_selection_method =
+      outliner.find("  void sync_selection()");
+  const std::size_t selection_revision_gate =
+      outliner.find("outliner_selection_sync_required(",
+                    sync_selection_method);
+  const std::size_t selected_entity_projection =
+      outliner.find("document_->selected_entities()", selection_revision_gate);
+  ASSERT_NE(sync_selection_method, std::string::npos);
+  ASSERT_NE(selection_revision_gate, std::string::npos);
+  ASSERT_NE(selected_entity_projection, std::string::npos);
+  EXPECT_LT(selection_revision_gate, selected_entity_projection);
   expect_contains(outliner, "row_is_revealed(");
   expect_contains(outliner, "document_->primary_selection()");
+  expect_contains(outliner, "localized_locale_ !=");
 }
 
 TEST(UiLayoutGuardrailTests,
@@ -1067,6 +1114,7 @@ TEST(UiLayoutGuardrailTests,
       ui_system.substr(frame_refresh, frame_refresh_end - frame_refresh);
   expect_missing(frame_body, "settings_dialog_->refresh()");
   expect_missing(frame_body, "main_menu_->refresh()");
+  expect_missing(frame_body, "synchronize_auxiliary_window_visibility()");
 }
 
 TEST(UiLayoutGuardrailTests,
@@ -1096,6 +1144,9 @@ TEST(UiLayoutGuardrailTests,
   expect_contains(ui_settings, "\"qt_auxiliary_windows.ini\"");
   expect_contains(ui_system, "settings_dialog_->restoreGeometry(");
   expect_contains(ui_system, "settings_dialog_->saveGeometry()");
+  expect_contains(ui_system, "&QDialog::finished");
+  expect_contains(ui_system, "auxiliary_window_save_timer_->setSingleShot(true)");
+  expect_contains(ui_system, "schedule_auxiliary_window_state_save()");
   expect_contains(ui_system,
                   "auxiliary_window_state_.settings_dialog_visible");
   expect_contains(ui_system,
@@ -1489,12 +1540,23 @@ TEST(UiLayoutGuardrailTests,
       ui_system.substr(refresh_begin, refresh_end - refresh_begin);
 
   const std::size_t revision_gate =
-      refresh.find("if (owner_state_changed || active_tool_changed)");
+      refresh.find("if (owner_state_changed || "
+                   "active_tool_revision_changed)");
   const std::size_t selection_summary =
       refresh.find("editor_->selection().summary()");
+  const std::size_t active_tool_revision =
+      refresh.find("editor_->tools().active_tool_revision()");
+  const std::size_t active_tool_revision_gate =
+      refresh.find("if (owner_state_changed || "
+                   "active_tool_revision_changed)");
   ASSERT_NE(revision_gate, std::string::npos);
   ASSERT_NE(selection_summary, std::string::npos);
+  ASSERT_NE(active_tool_revision, std::string::npos);
+  ASSERT_NE(active_tool_revision_gate, std::string::npos);
   EXPECT_LT(revision_gate, selection_summary);
+  EXPECT_LT(active_tool_revision, active_tool_revision_gate);
+  expect_contains(refresh, "toolbar_active_tool_revision_ !=");
+  expect_missing(refresh, "editor_->tools().active_tool()");
   expect_contains(refresh, "modeling_->content_revision()");
   expect_contains(refresh, "modeling_->selection_revision()");
   expect_missing(refresh, "commands().available()");
@@ -1661,9 +1723,17 @@ TEST(UiLayoutGuardrailTests,
   expect_contains(hud, "colors.shadow().color()");
   expect_contains(hud, "colors.highlightedText().color()");
   expect_contains(hud, "setAttribute(Qt::WA_NativeWindow)");
+  const std::size_t raw_input_gate =
+      hud.find("if (input_valid_ && input_fly_hud_active_");
+  const std::size_t localized_presentation =
+      hud.find("qt_viewport_fly_navigation_hud_presentation(",
+               raw_input_gate);
+  ASSERT_NE(raw_input_gate, std::string::npos);
+  ASSERT_NE(localized_presentation, std::string::npos);
+  EXPECT_LT(raw_input_gate, localized_presentation);
   expect_contains(panel_header, "QFocusFrame *focused_pane_frame_");
   expect_contains(panel, "new QFocusFrame(this)");
-  expect_contains(panel, "placements.size() <= 1u");
+  expect_contains(panel, "displayed_placements_.size() <= 1u");
   expect_contains(panel, "focused_pane_frame_->setWidget(target)");
   expect_contains(panel, "result.fly_hud_active");
   expect_contains(panel, "camera.fly_speed_is_default()");
@@ -1705,6 +1775,8 @@ TEST(UiLayoutGuardrailTests,
   EXPECT_LT(visibility, geometry_sync);
   expect_contains(body, "active[index] = true");
   expect_contains(body, "visible && !startup_presentation_blocked_");
+  expect_contains(body,
+                  "frame_presented == should_present");
   expect_missing(body, "pane_state.frame->isVisible()");
   expect_missing(body, "pane_state.frame->show()");
   expect_missing(body, "pane_state.frame->hide()");
@@ -1712,6 +1784,21 @@ TEST(UiLayoutGuardrailTests,
   const std::string overlay_body = panel.substr(overlay_geometry);
   expect_contains(overlay_body,
                   "pane_state.surface_container->setGeometry(");
+  expect_contains(
+      overlay_body,
+      "pane_state.surface_container->geometry() != pane_bounds");
+  expect_contains(overlay_body,
+                  "pane_state.toolbar->geometry() != toolbar_geometry");
+  expect_contains(
+      overlay_body,
+      "pane_state.navigation_gizmo->geometry() != navigation_geometry");
+  expect_contains(overlay_body, "if (!pane_state.overlay_stack_valid)");
+  expect_contains(overlay_body, "const bool becoming_visible = !host.visible");
+  expect_contains(overlay_body,
+                  "host.widget->geometry() != geometry");
+  expect_contains(overlay_body,
+                  "host.widget->cursor().shape() != cursor_shape");
+  expect_contains(overlay_body, "if (becoming_visible)");
   expect_missing(overlay_body, "pane_state.surface->resize(");
 }
 
@@ -1832,6 +1919,35 @@ TEST(UiLayoutGuardrailTests,
   ASSERT_NE(keybinding_refresh, std::string::npos);
   EXPECT_LT(editor_gate, keybinding_refresh);
 
+  const std::size_t active_tool_sync =
+      panel.find("bool QtViewportPanel::sync_active_tool_from_editor(");
+  const std::size_t active_tool_revision =
+      panel.find("editor.tools().active_tool_revision()", active_tool_sync);
+  const std::size_t active_tool_gate =
+      panel.find("if (active_tool_revision_valid_", active_tool_revision);
+  const std::size_t active_tool_string =
+      panel.find("editor.tools().active_tool()", active_tool_gate);
+  ASSERT_NE(active_tool_sync, std::string::npos);
+  ASSERT_NE(active_tool_revision, std::string::npos);
+  ASSERT_NE(active_tool_gate, std::string::npos);
+  ASSERT_NE(active_tool_string, std::string::npos);
+  EXPECT_LT(active_tool_revision, active_tool_gate);
+  EXPECT_LT(active_tool_gate, active_tool_string);
+  const std::size_t active_tool_sync_end =
+      panel.find("const ViewportSettings &"
+                 "QtViewportPanel::active_viewport_settings() const",
+                 active_tool_string);
+  ASSERT_NE(active_tool_sync_end, std::string::npos);
+  const std::string active_tool_sync_body =
+      panel.substr(active_tool_sync, active_tool_sync_end - active_tool_sync);
+  expect_contains(panel_header, "active_tool_revision_valid_");
+  expect_contains(active_tool_sync_body, "modeling.selection_mode()");
+  expect_missing(active_tool_sync_body,
+                 "to_modeling_selection_mode("
+                 "editor.selection().summary().mode)");
+  expect_contains(panel, "modeling.operation_preview_active()");
+  expect_missing(panel, "modeling.tool_settings_target()");
+
   // Detailed cadence probes remain available for regression diagnosis, but
   // production frames must not pay their clock/logging cost.
   expect_contains(panel, "std::getenv(\"QUADER_FRAME_DIAGNOSTICS\")");
@@ -1892,6 +2008,17 @@ TEST(UiLayoutGuardrailTests,
   const std::string prepare_body =
       panel.substr(prepare_definition, next_definition - prepare_definition);
   expect_missing(prepare_body, "process_viewport_input(");
+  EXPECT_EQ(count_occurrences(prepare_body,
+                              "workspace_->active_pane_placements()"),
+            1u);
+  expect_contains(
+      prepare_body,
+      "const std::vector<ViewportPanePlacement> active_placements");
+  expect_contains(panel_header, "bool control_selection_valid = false");
+  expect_contains(panel,
+                  "pane_state.control_selection_valid &&");
+  expect_contains(panel,
+                  "if (target_changed || was_hidden)");
 }
 
 TEST(UiLayoutGuardrailTests,
@@ -2305,6 +2432,25 @@ TEST(UiLayoutGuardrailTests,
   expect_contains(surface, "ViewportPaneFocusTrigger::Wheel");
   expect_contains(panel, "viewport_pane_focus_decision({");
   expect_contains(panel, "qApp->installEventFilter(this)");
+  expect_contains(panel_header, "application_pointer_filter_installed_");
+  expect_contains(
+      panel,
+      "void QtViewportPanel::set_modal_tool_owns_viewport_snapshot(");
+  expect_contains(panel,
+                  "modal_tool_owns_viewport_snapshot_ && qApp != nullptr");
+  expect_contains(panel, "qApp->removeEventFilter(this)");
+  const std::size_t constructor_begin =
+      panel.find("QtViewportPanel::QtViewportPanel(QWidget *parent)");
+  const std::size_t destructor_begin =
+      panel.find("QtViewportPanel::~QtViewportPanel()", constructor_begin);
+  ASSERT_NE(constructor_begin, std::string::npos);
+  ASSERT_NE(destructor_begin, std::string::npos);
+  EXPECT_EQ(panel.substr(constructor_begin,
+                         destructor_begin - constructor_begin)
+                .find("qApp->installEventFilter(this)"),
+            std::string::npos)
+      << "the QApplication-wide filter must not remain installed while "
+         "viewport modal ownership is inactive";
   expect_contains(panel, "current == pane_state.frame");
   expect_contains(panel,
                   "should_cancel_modal_tool_for_external_pointer({");
@@ -2354,7 +2500,10 @@ TEST(UiLayoutGuardrailTests,
   expect_contains(app, "ui_.render_surfaces(render_scene_viewports)");
   expect_contains(ui_system, "!standard_material_editor_window_");
   expect_contains(ui_system, "->isMinimized()");
-  expect_contains(ui_system, "material_preview_surface_->isExposed()");
+  expect_contains(ui_system, "material_preview_surface_->needs_rendering()");
+  expect_contains(surface, "if (!render_pending_)");
+  expect_contains(surface, "render_pending_ = false");
+  expect_contains(surface, "mark_render_pending()");
 
   const std::size_t preview_shutdown =
       ui_system.find("material_preview_surface_->shutdown()");

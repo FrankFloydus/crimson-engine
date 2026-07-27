@@ -23,10 +23,14 @@ class QPaintEvent;
 
 namespace quader {
 
-/// Captures the camera identity and pose that can invalidate the retained gizmo image.
+/// Captures the camera identity and normalized orientation that can invalidate
+/// the retained gizmo image. Camera translation and zoom do not affect the
+/// view-cube projection.
 struct QtNavigationGizmoCameraSnapshot {
   const ViewportCameraController *camera = nullptr;
-  ViewportCameraPose pose = {};
+  QVec3 forward = {0.0f, 0.0f, -1.0f};
+  QVec3 right = {1.0f, 0.0f, 0.0f};
+  QVec3 up = {0.0f, 1.0f, 0.0f};
 };
 
 [[nodiscard]] QtNavigationGizmoCameraSnapshot
@@ -35,6 +39,9 @@ qt_navigation_gizmo_camera_snapshot(
 [[nodiscard]] bool qt_navigation_gizmo_camera_refresh_required(
     const std::optional<QtNavigationGizmoCameraSnapshot> &current,
     const QtNavigationGizmoCameraSnapshot &next);
+[[nodiscard]] bool qt_navigation_gizmo_hits_match(
+    const quader_editor_core::ViewCubeHit &left,
+    const quader_editor_core::ViewCubeHit &right);
 
 [[nodiscard]] constexpr bool
 qt_navigation_gizmo_visibility_refresh_required(bool current,

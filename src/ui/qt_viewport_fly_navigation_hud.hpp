@@ -25,7 +25,24 @@ struct QtViewportFlyNavigationHudPresentation {
   bool crosshair_visible = false;
   bool speed_visible = false;
   std::string speed_label;
+
+  friend bool operator==(const QtViewportFlyNavigationHudPresentation &,
+                         const QtViewportFlyNavigationHudPresentation &) =
+      default;
 };
+
+[[nodiscard]] inline bool
+qt_viewport_fly_navigation_hud_presentation_refresh_required(
+    const QtViewportFlyNavigationHudPresentation &current,
+    const QtViewportFlyNavigationHudPresentation &requested) {
+  return current != requested;
+}
+
+[[nodiscard]] inline bool
+qt_viewport_fly_navigation_hud_bounds_refresh_required(
+    const QRect &current, const QRect &requested) {
+  return current != requested;
+}
 
 /**
  * Reproduces the legacy fly HUD visibility contract without owning navigation
@@ -50,13 +67,28 @@ public:
   operator=(const QtViewportFlyNavigationHud &) = delete;
 
   void set_bounds(const QRect &bounds);
+  void present(bool fly_hud_active, bool fly_speed_is_default,
+               float fly_speed,
+               const LocalizationService *localization);
   void present(const QtViewportFlyNavigationHudPresentation &presentation);
   void hide();
 
 private:
+  void apply_presentation(
+      const QtViewportFlyNavigationHudPresentation &presentation);
+  void update_geometry();
+
   QWidget *crosshair_ = nullptr;
   QLabel *speed_label_ = nullptr;
   QRect bounds_;
+  QtViewportFlyNavigationHudPresentation presentation_;
+  const LocalizationService *input_localization_ = nullptr;
+  std::string input_locale_;
+  float input_speed_ = 0.0f;
+  bool input_fly_hud_active_ = false;
+  bool input_fly_speed_is_default_ = true;
+  bool input_valid_ = false;
+  bool bounds_initialized_ = false;
 };
 
 } // namespace quader

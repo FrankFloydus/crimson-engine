@@ -45,6 +45,7 @@
 #include <QByteArray>
 #include <QClipboard>
 #include <QColor>
+#include <QDialog>
 #include <QDockWidget>
 #include <QIcon>
 #include <QImage>
@@ -57,6 +58,7 @@
 #include <QPushButton>
 #include <QStatusBar>
 #include <QStackedWidget>
+#include <QTimer>
 #include <QWidget>
 #include <QWindow>
 
@@ -279,12 +281,6 @@ bool write_binary_file(const std::filesystem::path &path,
 
 } // namespace
 
-bool qt_dock_panel_presented_for_refresh(bool explicitly_visible,
-                                         const QDockWidget *dock) {
-  return explicitly_visible && dock != nullptr && dock->isVisible() &&
-         !dock->visibleRegion().isEmpty();
-}
-
 UISystem::UISystem() = default;
 
 UISystem::~UISystem() { shutdown(); }
@@ -435,10 +431,23 @@ bool UISystem::initialize(RenderSystem &render_system,
   create_docks();
 
   settings_dialog_ = new QtSettingsDialog(main_window_.get());
+  QObject::connect(settings_dialog_, &QDialog::finished, settings_dialog_,
+                   [this](int) {
+                     if (auxiliary_window_state_.settings_dialog_visible) {
+                       auxiliary_window_state_.settings_dialog_visible = false;
+                       save_auxiliary_window_state();
+                     }
+                   });
+  auxiliary_window_save_timer_ = new QTimer(main_window_.get());
+  auxiliary_window_save_timer_->setSingleShot(true);
+  auxiliary_window_save_timer_->setInterval(200);
+  QObject::connect(auxiliary_window_save_timer_, &QTimer::timeout,
+                   main_window_.get(),
+                   [this]() { save_auxiliary_window_state(); });
   material_browser_window_ =
       new QtMaterialBrowserWindow(main_window_.get());
   material_browser_window_->set_presentation_state_changed_callback(
-      [this]() { save_auxiliary_window_state(); });
+      [this]() { schedule_auxiliary_window_state_save(); });
   material_browser_window_->set_activate_material_callback(
       [this](QString stable_id) {
         if (editor_ == nullptr) {
@@ -545,7 +554,7 @@ bool UISystem::initialize(RenderSystem &render_system,
                       standard_material_editor_window_
                           ->preview_environment_background_visible());
             }
-            save_auxiliary_window_state();
+            schedule_auxiliary_window_state_save();
           });
   standard_material_editor_window_->set_preview_reset_callback([this]() {
     if (material_preview_surface_ != nullptr) {
@@ -1458,6 +1467,7 @@ void UISystem::shutdown() {
   tool_settings_panel_ = nullptr;
   status_message_ = nullptr;
   status_version_ = nullptr;
+  auxiliary_window_save_timer_ = nullptr;
   render_system_ = nullptr;
   editor_ = nullptr;
   document_ = nullptr;
@@ -1490,6 +1500,10 @@ void UISystem::refresh(const FrameTiming &frame_timing,
   render_performance_ = render_performance;
   const bool transform_drag_active =
       modeling_ != nullptr && modeling_->transform_drag_active();
+  const std::uint64_t frame_tool_settings_revision =
+      editor_ != nullptr ? editor_->tools().active_settings_revision() : 0u;
+  const std::uint64_t frame_active_tool_revision =
+      editor_ != nullptr ? editor_->tools().active_tool_revision() : 0u;
   {
     QDR_PROFILE_SCOPE("UI refresh project workspace");
     refresh_project_workspace(false);
@@ -1497,10 +1511,6 @@ void UISystem::refresh(const FrameTiming &frame_timing,
   if (editor_ != nullptr) {
     if (!transform_drag_active) {
       QDR_PROFILE_SCOPE("UI refresh retained toolbars");
-      const std::string active_tool = [&]() {
-        QDR_PROFILE_SCOPE("UI toolbar query active tool");
-        return editor_->tools().active_tool();
-      }();
       const bool owner_available =
           document_ != nullptr && modeling_ != nullptr;
       const bool owner_state_changed = [&]() {
@@ -1516,9 +1526,10 @@ void UISystem::refresh(const FrameTiming &frame_timing,
                  toolbar_modeling_selection_revision_ !=
                      modeling_->selection_revision()));
       }();
-      const bool active_tool_changed =
-          !toolbar_refresh_valid_ || toolbar_active_tool_ != active_tool;
-      if (owner_state_changed || active_tool_changed) {
+      const bool active_tool_revision_changed =
+          !toolbar_refresh_valid_ ||
+          toolbar_active_tool_revision_ != frame_active_tool_revision;
+      if (owner_state_changed || active_tool_revision_changed) {
         const QuaderSelectionSummary selection = [&]() {
           QDR_PROFILE_SCOPE("UI toolbar query selection summary");
           return editor_->selection().summary();
@@ -1541,8 +1552,10 @@ void UISystem::refresh(const FrameTiming &frame_timing,
               modeling_->selection_revision();
         }
         toolbar_owner_available_ = owner_available;
-        toolbar_active_tool_ = active_tool;
         toolbar_refresh_valid_ = true;
+      }
+      if (active_tool_revision_changed) {
+        toolbar_active_tool_revision_ = frame_active_tool_revision;
       }
     }
     if (snapping_toolbar_ != nullptr) {
@@ -1589,15 +1602,26 @@ void UISystem::refresh(const FrameTiming &frame_timing,
   {
     QDR_PROFILE_SCOPE("UI refresh dock panels");
     const std::string &current_locale = localization_.current_locale();
-    if (!transform_drag_active && panel_presented(UIPanelId::Outliner) &&
-        (!outliner_refresh_valid_ ||
-         outliner_scene_revision_ != document_->revision() ||
-         outliner_locale_ != current_locale)) {
-      QDR_PROFILE_SCOPE("UI refresh outliner panel");
-      outliner_panel_->refresh(context);
-      outliner_scene_revision_ = document_->revision();
-      outliner_locale_ = current_locale;
-      outliner_refresh_valid_ = true;
+    if (!transform_drag_active && panel_presented(UIPanelId::Outliner)) {
+      const std::uint64_t hierarchy_presentation_revision =
+          document_->hierarchy_presentation_revision();
+      const std::uint64_t scene_selection_revision =
+          document_->selection_revision();
+      const std::uint64_t instance_edit_revision =
+          editor_->modeling().instance_edit_revision();
+      if (!outliner_refresh_valid_ ||
+          outliner_scene_revision_ != hierarchy_presentation_revision ||
+          outliner_scene_selection_revision_ != scene_selection_revision ||
+          outliner_instance_edit_revision_ != instance_edit_revision ||
+          outliner_locale_ != current_locale) {
+        QDR_PROFILE_SCOPE("UI refresh outliner panel");
+        outliner_panel_->refresh(context);
+        outliner_scene_revision_ = hierarchy_presentation_revision;
+        outliner_scene_selection_revision_ = scene_selection_revision;
+        outliner_instance_edit_revision_ = instance_edit_revision;
+        outliner_locale_ = current_locale;
+        outliner_refresh_valid_ = true;
+      }
     }
     if (!transform_drag_active && panel_presented(UIPanelId::Layers) &&
         (!layers_refresh_valid_ ||
@@ -1612,21 +1636,22 @@ void UISystem::refresh(const FrameTiming &frame_timing,
       layers_refresh_valid_ = true;
     }
     if (!transform_drag_active && panel_presented(UIPanelId::Inspector)) {
-      const ModelingSelectionSummary summary = [&]() {
-        QDR_PROFILE_SCOPE("UI inspector query selection summary");
-        return modeling_->selection_summary();
-      }();
+      const std::uint64_t modeling_content_revision =
+          modeling_->content_revision();
+      const std::uint64_t modeling_selection_revision =
+          modeling_->selection_revision();
       if (!inspector_refresh_valid_ ||
           inspector_scene_revision_ != document_->revision() ||
-          inspector_modeling_content_revision_ != summary.content_revision ||
+          inspector_modeling_content_revision_ !=
+              modeling_content_revision ||
           inspector_modeling_selection_revision_ !=
-              summary.selection_revision ||
+              modeling_selection_revision ||
           inspector_locale_ != current_locale) {
         QDR_PROFILE_SCOPE("UI refresh inspector panel");
         inspector_panel_->refresh(context);
         inspector_scene_revision_ = document_->revision();
-        inspector_modeling_content_revision_ = summary.content_revision;
-        inspector_modeling_selection_revision_ = summary.selection_revision;
+        inspector_modeling_content_revision_ = modeling_content_revision;
+        inspector_modeling_selection_revision_ = modeling_selection_revision;
         inspector_locale_ = current_locale;
         inspector_refresh_valid_ = true;
       }
@@ -1636,10 +1661,9 @@ void UISystem::refresh(const FrameTiming &frame_timing,
       console_panel_->refresh(context);
     }
   }
-  const std::uint64_t tool_settings_revision =
-      editor_->tools().active_settings_revision();
-  if (!tool_settings_refresh_valid_ ||
-      tool_settings_revision_ != tool_settings_revision) {
+  if (panel_visible(UIPanelId::ToolSettings) &&
+      (!tool_settings_refresh_valid_ ||
+       tool_settings_revision_ != frame_tool_settings_revision)) {
     QDR_PROFILE_SCOPE("UI refresh tool settings presentation");
     const bool was_active = tool_settings_panel_->has_active_target();
     tool_settings_panel_->refresh();
@@ -1649,12 +1673,8 @@ void UISystem::refresh(const FrameTiming &frame_timing,
         dock->raise();
       }
     }
-    tool_settings_revision_ = tool_settings_revision;
+    tool_settings_revision_ = frame_tool_settings_revision;
     tool_settings_refresh_valid_ = true;
-  }
-  {
-    QDR_PROFILE_SCOPE("UI synchronize auxiliary window visibility");
-    synchronize_auxiliary_window_visibility();
   }
   {
     QDR_PROFILE_SCOPE("UI synchronize status bar");
@@ -1727,13 +1747,13 @@ bool UISystem::needs_continuous_rendering() const {
   const bool scene_continuous =
       !home_visible_ && viewport_panel_ != nullptr &&
       viewport_panel_->needs_continuous_rendering();
-  const bool preview_visible = material_preview_surface_ != nullptr &&
-                               standard_material_editor_window_ != nullptr &&
-                               standard_material_editor_window_->isVisible() &&
-                               !standard_material_editor_window_
-                                    ->isMinimized() &&
-                               material_preview_surface_->isExposed();
-  return scene_continuous || preview_visible;
+  const bool preview_pending =
+      material_preview_surface_ != nullptr &&
+      standard_material_editor_window_ != nullptr &&
+      standard_material_editor_window_->isVisible() &&
+      !standard_material_editor_window_->isMinimized() &&
+      material_preview_surface_->needs_rendering();
+  return scene_continuous || preview_pending;
 }
 
 void *UISystem::native_window_handle() const {
@@ -1855,7 +1875,7 @@ QDockWidget &UISystem::create_dock(UIPanelId id, QWidget &content,
                     QDockWidget::DockWidgetMovable |
                     QDockWidget::DockWidgetFloatable);
   apply_dark_dock_title_presentation(*dock);
-  dock->setMinimumWidth(220);
+  content.setMinimumWidth(std::max(220, content.minimumWidth()));
   dock->setWidget(&content);
   main_window_->addDockWidget(static_cast<Qt::DockWidgetArea>(default_area),
                               dock);
@@ -2094,6 +2114,10 @@ void UISystem::save_auxiliary_window_state() {
   if (settings_paths_.qt_auxiliary_window_state_file.empty()) {
     return;
   }
+  if (auxiliary_window_save_timer_ != nullptr &&
+      auxiliary_window_save_timer_->isActive()) {
+    auxiliary_window_save_timer_->stop();
+  }
   if (settings_dialog_ != nullptr) {
     auxiliary_window_state_.settings_dialog_geometry =
         settings_dialog_->saveGeometry();
@@ -2179,23 +2203,9 @@ void UISystem::clear_project_workspace_events() {
       std::make_shared<std::atomic_bool>(false);
 }
 
-void UISystem::synchronize_auxiliary_window_visibility() {
-  QDR_PROFILE_SCOPE("UI auxiliary window visibility sync");
-  if (main_window_ == nullptr || !main_window_->isVisible() ||
-      !main_window_->updatesEnabled()) {
-    return;
-  }
-
-  bool changed = false;
-  if (settings_dialog_ != nullptr) {
-    const bool visible = settings_dialog_->isVisible();
-    if (visible != auxiliary_window_state_.settings_dialog_visible) {
-      auxiliary_window_state_.settings_dialog_visible = visible;
-      changed = true;
-    }
-  }
-  if (changed) {
-    save_auxiliary_window_state();
+void UISystem::schedule_auxiliary_window_state_save() {
+  if (auxiliary_window_save_timer_ != nullptr) {
+    auxiliary_window_save_timer_->start();
   }
 }
 
@@ -3144,9 +3154,7 @@ bool UISystem::panel_visible(UIPanelId id) const {
 }
 
 bool UISystem::panel_presented(UIPanelId id) const {
-  return id == UIPanelId::Viewport ||
-         qt_dock_panel_presented_for_refresh(panel_visible(id),
-                                             panels_.dock(id));
+  return panels_.is_presented(id);
 }
 
 void UISystem::set_panel_visible(UIPanelId id, bool visible) {

@@ -19,38 +19,12 @@
 namespace quader {
 
 /**
- * Stores the lifecycle emitted by a retained continuous-edit control.
- */
-struct UIContinuousEditResult {
-    bool changed = false;
-    bool activated = false;
-    bool deactivated = false;
-    bool deactivated_after_edit = false;
-    std::string merge_key;
-
-    [[nodiscard]] bool should_apply() const {
-      return changed || deactivated_after_edit;
-    }
-};
-
-/**
- * Tracks staged values for one active entity-backed UI edit gesture.
+ * Tracks the merge-key lifecycle for one active entity-backed UI edit gesture.
  */
 class UIContinuousEditTracker final {
 public:
     void reset() {
         active_.reset();
-    }
-
-    void reset_if_entity_scope_changed(EntityId primary,
-                                       std::span<const EntityId> selection) {
-      if (!active_) {
-        return;
-      }
-      if (active_->primary != primary ||
-          !same_selection(active_->selection, selection)) {
-        active_.reset();
-      }
     }
 
     [[nodiscard]] std::string
@@ -67,7 +41,6 @@ public:
             .primary = primary,
             .selection =
                 std::vector<EntityId>(selection.begin(), selection.end()),
-            .values = {},
             .merge_key = std::move(merge_key),
         };
       }
@@ -78,52 +51,14 @@ public:
       return active_->merge_key;
     }
 
-    [[nodiscard]] bool matches(std::string_view stable_id, EntityId primary,
-                               std::span<const EntityId> selection,
-                               std::size_t value_count) const {
-      return active_ && active_->stable_id == stable_id &&
-             active_->primary == primary &&
-             active_->values.size() == value_count &&
-             same_selection(active_->selection, selection);
-    }
-
-    void apply_active_values(std::string_view stable_id, EntityId primary,
-                             std::span<const EntityId> selection,
-                             std::span<float> values) const {
-      if (!matches(stable_id, primary, selection, values.size())) {
-        return;
-      }
-      std::copy(active_->values.begin(), active_->values.end(), values.begin());
-    }
-
-    void stage(std::string stable_id, EntityId primary,
-               std::span<const EntityId> selection,
-               std::span<const float> values) {
-      const std::string merge_key =
-          ensure_merge_key(std::move(stable_id), primary, selection);
-      active_->values = std::vector<float>(values.begin(), values.end());
-      active_->merge_key = merge_key;
-    }
-
-    [[nodiscard]] std::vector<float>
-    final_values(std::string_view stable_id, EntityId primary,
-                 std::span<const EntityId> selection,
-                 std::span<const float> fallback_values) const {
-      if (!matches(stable_id, primary, selection, fallback_values.size())) {
-        return {fallback_values.begin(), fallback_values.end()};
-      }
-      return active_->values;
-    }
-
 private:
     /**
-     * Stores one active continuous edit gesture and its final values.
+     * Stores one active continuous edit gesture and its merge key.
      */
     struct State {
       std::string stable_id;
       EntityId primary = kInvalidEntityId;
       std::vector<EntityId> selection;
-      std::vector<float> values;
       std::string merge_key;
     };
 

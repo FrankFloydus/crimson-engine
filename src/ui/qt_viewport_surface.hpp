@@ -108,7 +108,7 @@ protected:
   void wheelEvent(QWheelEvent *event) override;
 
 private:
-  void recreate_swap_chain();
+  void recreate_swap_chain(bool force_retry = false);
   [[nodiscard]] void *native_window_handle() const;
   void record_focus_in();
   void record_focus_out();
@@ -141,6 +141,7 @@ private:
   std::uint64_t pointer_capture_generation_ = 0u;
   bool initialized_ = false;
   bool native_surface_available_ = false;
+  bool swap_chain_creation_failed_ = false;
   std::uintptr_t swap_chain_native_id_ = 0u;
 };
 

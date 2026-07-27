@@ -956,6 +956,42 @@ TEST(LoggerTests, MemoryRevisionChangesOnlyWhenMemoryContentsCanChange) {
   EXPECT_GT(Logger::memory_revision(), logged);
 }
 
+TEST(LoggerTests, IncrementalMemoryCursorReturnsOnlyNewRingEntries) {
+  Logger::initialize(LoggerConfig{.name = "incremental-memory-test",
+                                  .file_path = "",
+                                  .max_entries = 3});
+  Logger::clear_memory();
+
+  const LogEntriesDelta cleared = Logger::entries_since({});
+  EXPECT_TRUE(cleared.reset_required);
+  EXPECT_TRUE(cleared.entries.empty());
+
+  LOG_INFO("incremental one");
+  LOG_INFO("incremental two");
+  const LogEntriesDelta first = Logger::entries_since(cleared.cursor);
+  ASSERT_FALSE(first.reset_required);
+  ASSERT_EQ(first.entries.size(), 2u);
+  EXPECT_LT(first.entries[0].sequence, first.entries[1].sequence);
+
+  LOG_INFO("incremental three");
+  LOG_INFO("incremental four");
+  const LogEntriesDelta ring_shift = Logger::entries_since(first.cursor);
+  ASSERT_FALSE(ring_shift.reset_required);
+  ASSERT_EQ(ring_shift.entries.size(), 2u);
+  EXPECT_GT(ring_shift.first_sequence, first.entries.front().sequence);
+  EXPECT_EQ(ring_shift.entries.front().sequence,
+            first.entries.back().sequence + 1u);
+
+  for (int index = 0; index < 6; ++index) {
+    LOG_INFO("incremental skipped {}", index);
+  }
+  const LogEntriesDelta missed_ring = Logger::entries_since(ring_shift.cursor);
+  EXPECT_TRUE(missed_ring.reset_required);
+  EXPECT_EQ(missed_ring.entries.size(), 3u);
+  EXPECT_EQ(missed_ring.first_sequence,
+            missed_ring.entries.front().sequence);
+}
+
 TEST(LoggerTests, ConcurrentLifecycleAndSnapshotsKeepOwnedStateAlive) {
   const LoggerConfig config{
       .name = "logger-concurrency-test",
@@ -3670,6 +3706,80 @@ TEST(SceneDocumentTests, TracksDomainRevisionsForOverlayCacheInvalidation) {
   EXPECT_GT(scene.selection_revision(), clear_selection_before);
 }
 
+TEST(SceneDocumentTests,
+     HierarchyPresentationRevisionSkipsNonPresentedSceneChanges) {
+  SceneDocument scene;
+  const EntityId parent =
+      scene.create_entity("Parent", EntityKind::Empty);
+  const EntityId entity =
+      scene.create_entity("Mesh", EntityKind::Mesh);
+  ASSERT_TRUE(scene.set_mesh(entity, MeshComponent{.mesh = 7u}));
+
+  const std::uint64_t presentation_before =
+      scene.hierarchy_presentation_revision();
+  ASSERT_TRUE(scene.set_transform(
+      entity, TransformComponent{.position = {3.0f, 2.0f, 1.0f}}));
+  ASSERT_TRUE(scene.set_modeling_object(
+      entity, ModelingObjectComponent{.object_id = 42u}));
+  ASSERT_TRUE(scene.set_mesh(entity, MeshComponent{.mesh = 8u}));
+  ASSERT_TRUE(scene.set_material(entity, MaterialComponent{.material = 11u}));
+  ASSERT_TRUE(scene.notify_mesh_payload_changed(entity));
+  ASSERT_TRUE(scene.set_selected(entity, true));
+  ASSERT_TRUE(scene.set_selectable(entity, false));
+
+  const SceneLayerId layer =
+      scene.create_layer("Presentation Neutral Layer");
+  ASSERT_NE(layer, kInvalidSceneLayerId);
+  ASSERT_TRUE(scene.set_entity_layer(entity, layer));
+  ASSERT_TRUE(scene.rename_layer(layer, "Renamed Layer"));
+  ASSERT_TRUE(scene.set_layer_wireframe_color(layer, {0.1f, 0.2f, 0.3f}));
+  EXPECT_EQ(scene.hierarchy_presentation_revision(), presentation_before);
+
+  std::uint64_t presentation = presentation_before;
+  ASSERT_TRUE(scene.set_layer_visible(layer, false));
+  EXPECT_GT(scene.hierarchy_presentation_revision(), presentation);
+  presentation = scene.hierarchy_presentation_revision();
+  ASSERT_TRUE(scene.set_layer_visible(layer, true));
+  EXPECT_GT(scene.hierarchy_presentation_revision(), presentation);
+  presentation = scene.hierarchy_presentation_revision();
+  ASSERT_TRUE(scene.set_layer_locked(layer, true));
+  EXPECT_GT(scene.hierarchy_presentation_revision(), presentation);
+  presentation = scene.hierarchy_presentation_revision();
+  ASSERT_TRUE(scene.set_layer_locked(layer, false));
+  EXPECT_GT(scene.hierarchy_presentation_revision(), presentation);
+  presentation = scene.hierarchy_presentation_revision();
+
+  ASSERT_TRUE(scene.rename_entity(entity, "Renamed Mesh"));
+  EXPECT_GT(scene.hierarchy_presentation_revision(), presentation);
+  presentation = scene.hierarchy_presentation_revision();
+
+  ASSERT_TRUE(scene.set_visible(entity, false));
+  EXPECT_GT(scene.hierarchy_presentation_revision(), presentation);
+  presentation = scene.hierarchy_presentation_revision();
+
+  ASSERT_TRUE(scene.set_locked(entity, true));
+  EXPECT_GT(scene.hierarchy_presentation_revision(), presentation);
+  presentation = scene.hierarchy_presentation_revision();
+
+  ASSERT_TRUE(scene.set_parent(entity, parent, false));
+  EXPECT_GT(scene.hierarchy_presentation_revision(), presentation);
+  presentation = scene.hierarchy_presentation_revision();
+
+  ASSERT_TRUE(scene.set_entity_kind(entity, EntityKind::Empty));
+  EXPECT_GT(scene.hierarchy_presentation_revision(), presentation);
+  presentation = scene.hierarchy_presentation_revision();
+
+  ASSERT_TRUE(scene.set_layer_visible(layer, false));
+  EXPECT_EQ(scene.hierarchy_presentation_revision(), presentation)
+      << "an already locally hidden row has unchanged effective visibility";
+  ASSERT_TRUE(scene.set_layer_locked(layer, true));
+  EXPECT_EQ(scene.hierarchy_presentation_revision(), presentation)
+      << "an already locally locked row has unchanged effective locking";
+
+  ASSERT_TRUE(scene.destroy_entity(entity));
+  EXPECT_GT(scene.hierarchy_presentation_revision(), presentation);
+}
+
 TEST(SceneDocumentTests, IdempotentComponentWritesKeepAllRevisionsStable) {
   SceneDocument scene;
   const EntityId mesh_entity =
@@ -3697,6 +3807,8 @@ TEST(SceneDocumentTests, IdempotentComponentWritesKeepAllRevisionsStable) {
   const std::uint64_t revision = scene.revision();
   const std::uint64_t content_revision = scene.content_revision();
   const std::uint64_t selection_revision = scene.selection_revision();
+  const std::uint64_t hierarchy_presentation_revision =
+      scene.hierarchy_presentation_revision();
   const std::uint64_t visibility_revision = scene.visibility_revision();
   const std::uint64_t transform_revision = scene.transform_revision();
   const std::uint64_t mesh_binding_revision =
@@ -3716,6 +3828,8 @@ TEST(SceneDocumentTests, IdempotentComponentWritesKeepAllRevisionsStable) {
   EXPECT_EQ(scene.revision(), revision);
   EXPECT_EQ(scene.content_revision(), content_revision);
   EXPECT_EQ(scene.selection_revision(), selection_revision);
+  EXPECT_EQ(scene.hierarchy_presentation_revision(),
+            hierarchy_presentation_revision);
   EXPECT_EQ(scene.visibility_revision(), visibility_revision);
   EXPECT_EQ(scene.transform_revision(), transform_revision);
   EXPECT_EQ(scene.mesh_binding_revision(), mesh_binding_revision);
@@ -11082,6 +11196,7 @@ TEST(ModelingSessionServiceTests,
   const std::uint64_t initial_settings_revision =
       service.tool_settings_revision();
   EXPECT_EQ(service.tool_settings_revision(), initial_settings_revision);
+  EXPECT_FALSE(service.operation_preview_active());
 
   const ModelingCreateBoxResult box = service.create_box_from_bounds({
       .bounds = {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
@@ -11106,6 +11221,7 @@ TEST(ModelingSessionServiceTests,
   ModelingToolSettingsTarget target = service.tool_settings_target();
   EXPECT_TRUE(target.active);
   EXPECT_TRUE(target.operation_preview_active);
+  EXPECT_TRUE(service.operation_preview_active());
   EXPECT_EQ(target.kind, ModelingToolSettingsTargetKind::EdgeBevel);
   EXPECT_EQ(target.action_id, "bevel_edges");
   EXPECT_EQ(target.operation_id, "edge_bevel");
@@ -11135,6 +11251,7 @@ TEST(ModelingSessionServiceTests,
       service.cancel_active_operation_preview();
   EXPECT_TRUE(cancel.ok) << cancel.message;
   EXPECT_FALSE(service.tool_settings_target().active);
+  EXPECT_FALSE(service.operation_preview_active());
   EXPECT_GT(service.tool_settings_revision(), updated_settings_revision);
 }
 
@@ -13696,6 +13813,79 @@ TEST(ModelingSessionServiceTests, CutAndMirrorEmitDrawnPlaneOverlay) {
 
   expect_drawn_plane_overlay(ModelingViewportTool::Cut);
   expect_drawn_plane_overlay(ModelingViewportTool::Mirror);
+}
+
+TEST(ModelingSessionServiceTests,
+     VolatileCutOverlayCachesPreviewCompilationAcrossInertHoverMotion) {
+  SceneDocument scene;
+  AssetRegistry assets;
+  ModelingSessionService service(scene, assets);
+
+  const ModelingCreateBoxResult box = service.create_box_from_bounds({
+      .bounds = {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
+      .name = "Cached Cut Preview Source",
+  });
+  ASSERT_TRUE(box.ok) << box.message;
+
+  ModelingCommandResult command =
+      service.activate_viewport_tool(ModelingViewportTool::Cut);
+  ASSERT_TRUE(command.ok) << command.message;
+  command = service.click_cut(test_drawn_plane_event(0.0f));
+  ASSERT_TRUE(command.ok) << command.message;
+  command = service.update_cut_hover(test_drawn_plane_event(1.0f, false));
+  ASSERT_TRUE(command.ok) << command.message;
+  command = service.update_cut_hover(test_drawn_plane_event(1.0f, true));
+  ASSERT_TRUE(command.ok) << command.message;
+  command = service.end_cut_drag();
+  ASSERT_TRUE(command.ok) << command.message;
+  ASSERT_TRUE(service.tool_status().cut_can_preview);
+  ASSERT_TRUE(service.tool_status().cut_preview_valid);
+
+  const ModelingSdkProjectionStats before_first_frame =
+      service.modeling_sdk_projection_stats_for_tests();
+  const ViewportOverlayFrame first_frame = service.volatile_overlay_frame();
+  const ModelingSdkProjectionStats after_first_frame =
+      service.modeling_sdk_projection_stats_for_tests();
+  EXPECT_EQ(after_first_frame.mesh_compile_count,
+            before_first_frame.mesh_compile_count + 2u);
+  EXPECT_TRUE(std::any_of(
+      first_frame.triangles.begin(), first_frame.triangles.end(),
+      [](const ViewportOverlayTriangle &triangle) {
+        return triangle.layer == ViewportOverlayLayer::ToolPreviewFill;
+      }));
+
+  for (int frame = 0; frame < 32; ++frame) {
+    command = service.update_cut_hover(
+        test_drawn_plane_event(2.0f + static_cast<float>(frame), false));
+    ASSERT_TRUE(command.ok) << command.message;
+    ASSERT_TRUE(command.changed);
+    (void)service.volatile_overlay_frame();
+  }
+  const ModelingSdkProjectionStats after_hover_motion =
+      service.modeling_sdk_projection_stats_for_tests();
+  EXPECT_EQ(after_hover_motion.mesh_compile_count,
+            after_first_frame.mesh_compile_count);
+
+  command = service.set_cut_mode(ModelingCutMode::DiscardLeft);
+  ASSERT_TRUE(command.ok) << command.message;
+  (void)service.volatile_overlay_frame();
+  const ModelingSdkProjectionStats after_mode_change =
+      service.modeling_sdk_projection_stats_for_tests();
+  EXPECT_EQ(after_mode_change.mesh_compile_count,
+            after_hover_motion.mesh_compile_count + 2u);
+  (void)service.volatile_overlay_frame();
+  const ModelingSdkProjectionStats after_repeated_mode_frame =
+      service.modeling_sdk_projection_stats_for_tests();
+  EXPECT_EQ(after_repeated_mode_frame.mesh_compile_count,
+            after_mode_change.mesh_compile_count);
+
+  ASSERT_TRUE(scene.set_transform(
+      box.object.entity, TransformComponent{.position = {0.25f, 0.0f, 0.0f}}));
+  (void)service.volatile_overlay_frame();
+  const ModelingSdkProjectionStats after_scene_change =
+      service.modeling_sdk_projection_stats_for_tests();
+  EXPECT_EQ(after_scene_change.mesh_compile_count,
+            after_mode_change.mesh_compile_count + 2u);
 }
 
 TEST(ModelingSessionServiceTests, CutToolDragEndAndFinalizeSplitMesh) {

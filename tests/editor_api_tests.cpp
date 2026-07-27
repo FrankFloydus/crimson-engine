@@ -3077,6 +3077,27 @@ TEST(EditorApiTests,
 }
 
 TEST(EditorApiTests,
+     ActiveToolRevisionTracksOrdinaryToolIdentityWithoutStableReadChurn) {
+  CommandTestHarness harness;
+  quader::QuaderEditorApi &editor = harness.editor;
+  (void)create_selected_box(editor, "Active Tool Revision Source");
+
+  const std::uint64_t select_revision = editor.tools().active_tool_revision();
+  EXPECT_EQ(editor.tools().active_tool_revision(), select_revision);
+  EXPECT_EQ(editor.tools().active_tool(), "select");
+
+  ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::Move).ok());
+  const std::uint64_t move_revision = editor.tools().active_tool_revision();
+  EXPECT_GT(move_revision, select_revision);
+  EXPECT_EQ(editor.tools().active_tool_revision(), move_revision);
+  EXPECT_EQ(editor.tools().active_tool(), "move");
+
+  ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::Rotate).ok());
+  EXPECT_GT(editor.tools().active_tool_revision(), move_revision);
+  EXPECT_EQ(editor.tools().active_tool(), "rotate");
+}
+
+TEST(EditorApiTests,
      ArrayToolSettingsRevisionSkipsStableReadsAndTracksSettingsChanges) {
   CommandTestHarness harness;
   quader::QuaderEditorApi &editor = harness.editor;

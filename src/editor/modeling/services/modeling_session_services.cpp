@@ -2928,9 +2928,14 @@ std::uint64_t ModelingOverlayService::volatile_overlay_signature(
   mix_overlay_signature_hash(hash, cut.preview_counts.target_count);
   mix_overlay_signature_hash(hash, cut.preview_counts.split_count);
   mix_overlay_signature_hash(hash, cut.preview_counts.removed_count);
-  mix_overlay_signature_hash(hash, cut_hover.valid);
-  mix_overlay_signature_hash(hash, cut_hover.object_id);
-  mix_overlay_signature_hash(hash, cut_hover.position);
+  // DrawnPlaneToolLogic stops presenting hover once both Cut points exist.
+  // Excluding that inert state keeps a valid split preview reusable while the
+  // pointer moves. Point and drag fields above still invalidate live edits.
+  if (cut.points.size() < 2U) {
+    mix_overlay_signature_hash(hash, cut_hover.valid);
+    mix_overlay_signature_hash(hash, cut_hover.object_id);
+    mix_overlay_signature_hash(hash, cut_hover.position);
+  }
 
   const quader_editor_core::MirrorToolState &mirror = runtime.mirror_state();
   const quader_editor_core::MirrorHoverState &mirror_hover =

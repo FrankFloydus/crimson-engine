@@ -135,6 +135,7 @@ private:
   std::uint64_t revision_ = 0;
   std::uint64_t content_revision_ = 0;
   std::uint64_t selection_revision_ = 0;
+  std::uint64_t hierarchy_presentation_revision_ = 0;
   std::uint64_t visibility_revision_ = 0;
   std::uint64_t transform_revision_ = 0;
   std::uint64_t mesh_binding_revision_ = 0;
@@ -323,6 +324,15 @@ public:
     /** Revision of scene data that is persisted in a scene document. */
     std::uint64_t content_revision() const { return content_revision_; }
     std::uint64_t selection_revision() const { return selection_revision_; }
+    /**
+     * Revision of fields projected into the hierarchy presentation.
+     *
+     * Transform, material, mesh-payload, and other scene-content changes do
+     * not advance this counter.
+     */
+    std::uint64_t hierarchy_presentation_revision() const {
+      return hierarchy_presentation_revision_;
+    }
     std::uint64_t visibility_revision() const { return visibility_revision_; }
     std::uint64_t transform_revision() const { return transform_revision_; }
     std::uint64_t mesh_binding_revision() const {
@@ -371,6 +381,7 @@ private:
   std::uint64_t revision_ = 0;
   std::uint64_t content_revision_ = 0;
   std::uint64_t selection_revision_ = 0;
+  std::uint64_t hierarchy_presentation_revision_ = 0;
   std::uint64_t visibility_revision_ = 0;
   std::uint64_t transform_revision_ = 0;
   std::uint64_t mesh_binding_revision_ = 0;

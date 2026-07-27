@@ -2933,6 +2933,8 @@ TEST(BuildGuardrailTests, QtShellUsesMainWindowDocksAndStableNames) {
 
 TEST(BuildGuardrailTests, QtFrameRefreshKeepsExpensiveChromeEventDriven) {
   const std::string ui_system_source = read_source_file("src/ui/ui_system.cpp");
+  const std::string panel_manager_source =
+      read_source_file("src/ui/ui_panel_manager.cpp");
   const std::string main_menu_source =
       read_source_file("src/ui/qt_main_menu.cpp");
   const std::string primitive_creation_source = read_source_file(
@@ -2940,9 +2942,6 @@ TEST(BuildGuardrailTests, QtFrameRefreshKeepsExpensiveChromeEventDriven) {
   const std::string frame_refresh = source_slice(
       ui_system_source, "void UISystem::refresh(",
       "void UISystem::prepare_viewports(");
-  const std::string dock_presented_helper = source_slice(
-      ui_system_source, "bool qt_dock_panel_presented_for_refresh(",
-      "UISystem::UISystem()");
   const std::string panel_presented = source_slice(
       ui_system_source, "bool UISystem::panel_presented(UIPanelId id) const",
       "void UISystem::set_panel_visible(");
@@ -2975,6 +2974,12 @@ TEST(BuildGuardrailTests, QtFrameRefreshKeepsExpensiveChromeEventDriven) {
                   "!transform_drag_active && "
                   "panel_presented(UIPanelId::Outliner)");
   expect_contains(frame_refresh,
+                  "document_->hierarchy_presentation_revision()");
+  expect_contains(frame_refresh,
+                  "outliner_scene_selection_revision_ !=");
+  expect_contains(frame_refresh,
+                  "outliner_instance_edit_revision_ !=");
+  expect_contains(frame_refresh,
                   "!transform_drag_active && "
                   "panel_presented(UIPanelId::Layers)");
   expect_contains(frame_refresh,
@@ -2984,10 +2989,16 @@ TEST(BuildGuardrailTests, QtFrameRefreshKeepsExpensiveChromeEventDriven) {
                   "!transform_drag_active && "
                   "panel_presented(UIPanelId::Inspector)");
   expect_contains(frame_refresh, "panel_presented(UIPanelId::Console)");
+  expect_contains(frame_refresh,
+                  "panel_visible(UIPanelId::ToolSettings)");
   expect_contains(frame_refresh, "refresh_project_workspace(false)");
   expect_missing(frame_refresh, "settings_dialog_->refresh()");
   expect_missing(frame_refresh, "main_menu_->refresh()");
   expect_missing(frame_refresh, "viewport_panel_->refresh_workspace_layout()");
+  expect_missing(frame_refresh, "synchronize_auxiliary_window_visibility()");
+  expect_missing(frame_refresh, "modeling_->selection_summary()");
+  expect_contains(frame_refresh, "modeling_->content_revision()");
+  expect_contains(frame_refresh, "modeling_->selection_revision()");
   expect_missing(frame_refresh, "panel_visible(UIPanelId::Outliner)");
   expect_missing(frame_refresh, "panel_visible(UIPanelId::Layers)");
   expect_missing(frame_refresh, "panel_visible(UIPanelId::Inspector)");
@@ -2998,15 +3009,11 @@ TEST(BuildGuardrailTests, QtFrameRefreshKeepsExpensiveChromeEventDriven) {
     expect_missing(frame_refresh, broad_workspace_query);
   }
 
-  expect_contains(dock_presented_helper,
-                  "return explicitly_visible && dock != nullptr && "
-                  "dock->isVisible() &&");
-  expect_contains(dock_presented_helper,
-                  "!dock->visibleRegion().isEmpty()");
-  expect_contains(panel_presented, "id == UIPanelId::Viewport ||");
-  expect_contains(panel_presented,
-                  "qt_dock_panel_presented_for_refresh(panel_visible(id),");
-  expect_contains(panel_presented, "panels_.dock(id)");
+  expect_contains(panel_manager_source,
+                  "&QDockWidget::visibilityChanged");
+  expect_contains(panel_manager_source, "presented_[presented_slot] = visible");
+  expect_contains(panel_presented, "return panels_.is_presented(id)");
+  expect_missing(ui_system_source, "visibleRegion().isEmpty()");
 
   const auto expect_presented_before =
       [&](std::string_view panel_id, std::string_view expensive_work) {
@@ -3020,7 +3027,7 @@ TEST(BuildGuardrailTests, QtFrameRefreshKeepsExpensiveChromeEventDriven) {
       };
   expect_presented_before("Outliner", "outliner_panel_->refresh(context)");
   expect_presented_before("Layers", "layer_panel_->refresh(context)");
-  expect_presented_before("Inspector", "modeling_->selection_summary()");
+  expect_presented_before("Inspector", "modeling_->content_revision()");
   expect_presented_before("Inspector", "inspector_panel_->refresh(context)");
   expect_presented_before("Console", "console_panel_->refresh(context)");
 
@@ -3087,7 +3094,7 @@ TEST(BuildGuardrailTests, QtFrameRefreshKeepsExpensiveChromeEventDriven) {
   const std::size_t tool_settings_revision =
       frame_refresh.find("active_settings_revision()");
   const std::size_t tool_settings_gate =
-      frame_refresh.find("if (!tool_settings_refresh_valid_");
+      frame_refresh.find("if (panel_visible(UIPanelId::ToolSettings)");
   const std::size_t tool_settings_refresh =
       frame_refresh.find("tool_settings_panel_->refresh()",
                          tool_settings_gate);

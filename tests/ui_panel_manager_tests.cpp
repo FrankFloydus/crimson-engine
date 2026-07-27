@@ -6,8 +6,12 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include <gtest/gtest.h>
 
+#include "ui/ui_continuous_edit_tracker.hpp"
 #include "ui/ui_panel_manager.hpp"
 #include "ui/ui_settings.hpp"
+
+#include <array>
+#include <span>
 
 #include <QApplication>
 #include <QCoreApplication>
@@ -18,6 +22,43 @@
 
 namespace quader {
 namespace {
+
+TEST(UIContinuousEditTrackerTests, ReusesKeyWithinOneControlAndEntityScope) {
+  UIContinuousEditTracker tracker;
+  const std::array<EntityId, 2> selection{17, 23};
+  const std::span<const EntityId> scope(selection);
+
+  const std::string first =
+      tracker.ensure_merge_key("environment.intensity", 17, scope);
+  const std::string repeated =
+      tracker.ensure_merge_key("environment.intensity", 17, scope);
+
+  EXPECT_FALSE(first.empty());
+  EXPECT_EQ(repeated, first);
+}
+
+TEST(UIContinuousEditTrackerTests, ChangesKeyWhenScopeChangesOrAfterReset) {
+  UIContinuousEditTracker tracker;
+  const std::array<EntityId, 2> selection{17, 23};
+  const std::array<EntityId, 2> reordered_selection{23, 17};
+
+  const std::string first =
+      tracker.ensure_merge_key("environment.intensity", 17, selection);
+  const std::string changed_control =
+      tracker.ensure_merge_key("environment.rotation", 17, selection);
+  const std::string changed_primary =
+      tracker.ensure_merge_key("environment.rotation", 23, selection);
+  const std::string changed_selection = tracker.ensure_merge_key(
+      "environment.rotation", 23, reordered_selection);
+  tracker.reset();
+  const std::string after_reset = tracker.ensure_merge_key(
+      "environment.rotation", 23, reordered_selection);
+
+  EXPECT_NE(changed_control, first);
+  EXPECT_NE(changed_primary, changed_control);
+  EXPECT_NE(changed_selection, changed_primary);
+  EXPECT_NE(after_reset, changed_selection);
+}
 
 TEST(UIPanelManagerTests, ExplicitVisibilityTransitionIgnoresPhysicalNoise) {
   const UIPanelVisibilityTransition unchanged_visible =
@@ -84,6 +125,7 @@ TEST(UIPanelManagerTests, FocusUsesThePanelContentsQtFocusProxy) {
 
   UIPanelManager manager;
   manager.add(UIPanelId::ToolSettings, *dock);
+  EXPECT_TRUE(manager.is_presented(UIPanelId::ToolSettings));
   EXPECT_TRUE(manager.focus(UIPanelId::ToolSettings));
   QCoreApplication::processEvents();
   EXPECT_EQ(window.focusWidget(), focus_target);
@@ -92,10 +134,12 @@ TEST(UIPanelManagerTests, FocusUsesThePanelContentsQtFocusProxy) {
   requested.set_panel_visible(UIPanelId::ToolSettings, false);
   manager.apply_settings(requested);
   EXPECT_FALSE(manager.is_visible(UIPanelId::ToolSettings));
+  EXPECT_FALSE(manager.is_presented(UIPanelId::ToolSettings));
 
   requested.set_panel_visible(UIPanelId::ToolSettings, true);
   manager.apply_settings(requested);
   EXPECT_TRUE(manager.is_visible(UIPanelId::ToolSettings));
+  EXPECT_TRUE(manager.is_presented(UIPanelId::ToolSettings));
 
   UISettings persisted = UISettings::defaults();
   persisted.set_panel_visible(UIPanelId::ToolSettings, false);

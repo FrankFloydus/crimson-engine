@@ -707,10 +707,6 @@ private:
           const std::string merge_key =
               active_continuous_edit_.ensure_merge_key(stable_id, primary_,
                                                        selection);
-          const std::array<float, 1> staged{static_cast<float>(next)};
-          active_continuous_edit_.stage(
-              stable_id, primary_, selection,
-              std::span<const float>(staged.data(), staged.size()));
           continuous_edit_active_ = true;
           active_continuous_id_ = stable_id;
           changed(next, merge_key);

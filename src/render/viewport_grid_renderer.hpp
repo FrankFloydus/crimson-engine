@@ -18,6 +18,7 @@
 #include <utils/Entity.h>
 
 #include <cstdint>
+#include <optional>
 
 namespace quader {
 
@@ -62,6 +63,7 @@ private:
   filament::MaterialInstance *ground_grid_material_instance_ = nullptr;
   float ground_grid_mesh_width_ = 0.0f;
   float ground_grid_mesh_height_ = 0.0f;
+  std::optional<std::uint64_t> presentation_signature_;
   bool visible_ = true;
   std::uint8_t grid_layer_mask_ = 0x04u;
 };

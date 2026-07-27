@@ -34,6 +34,7 @@ class QDockWidget;
 class QLabel;
 class QMainWindow;
 class QStackedWidget;
+class QTimer;
 class QWidget;
 
 namespace quader {
@@ -77,15 +78,6 @@ class SceneRenderBridge;
 enum class QuaderDirtyProjectDecision;
 enum class QuaderDirtySceneDecision;
 struct QuaderSceneDocumentInfo;
-
-/**
- * Returns whether a requested dock is actually exposed for presentation work.
- * Tabified docks retain their explicit visibility for commands and
- * persistence, but only the raised tab has a non-empty visible region.
- */
-[[nodiscard]] bool
-qt_dock_panel_presented_for_refresh(bool explicitly_visible,
-                                    const QDockWidget *dock);
 
 /**
  * Owns Quader's retained Qt Widgets shell and all top-level presentation
@@ -158,7 +150,7 @@ private:
       int native_client_width_pixels,
       int native_client_height_pixels) const;
   void save_auxiliary_window_state();
-  void synchronize_auxiliary_window_visibility();
+  void schedule_auxiliary_window_state_save();
   void bind_project_workspace_events(QuaderEditorApi &editor);
   void clear_project_workspace_events();
   void refresh_status_bar();
@@ -213,6 +205,7 @@ private:
   QtToolSettingsPanel *tool_settings_panel_ = nullptr;
   QLabel *status_message_ = nullptr;
   QLabel *status_version_ = nullptr;
+  QTimer *auxiliary_window_save_timer_ = nullptr;
   UIPanelManager panels_;
   LocalizationService localization_;
   UISettings settings_;
@@ -239,6 +232,8 @@ private:
   bool ui_settings_changed_ = false;
   std::string localized_locale_;
   std::uint64_t outliner_scene_revision_ = 0;
+  std::uint64_t outliner_scene_selection_revision_ = 0;
+  std::uint64_t outliner_instance_edit_revision_ = 0;
   std::uint64_t layers_scene_revision_ = 0;
   std::uint64_t layers_scene_selection_revision_ = 0;
   std::uint64_t inspector_scene_revision_ = 0;
@@ -248,7 +243,7 @@ private:
   std::uint64_t toolbar_scene_selection_revision_ = 0;
   std::uint64_t toolbar_modeling_content_revision_ = 0;
   std::uint64_t toolbar_modeling_selection_revision_ = 0;
-  std::string toolbar_active_tool_;
+  std::uint64_t toolbar_active_tool_revision_ = 0;
   std::uint64_t tool_settings_revision_ = 0;
   bool tool_settings_refresh_valid_ = false;
   QuaderEditorApi *project_workspace_events_editor_ = nullptr;

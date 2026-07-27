@@ -6263,3 +6263,50 @@ drag cardinality changes, a single instance-occurrence drag, and commit. During 
 Tracy should show no retired-preview destruction, suppression should touch only affected instance
 chunks, and topology-stable commit should report geometry rebinds without growing retired-proxy
 debt.
+
+## 2026-07-27 - Retained Qt Presentation And Narrow Frame Queries
+
+Task/context: tool UI and a pivot operation in a roughly 6,000-mesh scene exhibited multi-second
+stalls. The broad Qt/UI audit found that retained widgets were cheap; repeated owner projection,
+model construction, string allocation, Qt setters, application-wide event filtering, and render
+state submission from continuous frame paths were not.
+
+Invariant:
+
+- Put the cheapest owner revision check before catalog/selection projection, descriptor and string
+  construction, model resets, geometry work, and Qt setters. Active-tool presentation uses a
+  dedicated revision. The Outliner uses a hierarchy-presentation revision that does not advance
+  for transform/pivot, material, mesh-payload, or neutral layer metadata changes.
+- Dock and auxiliary-window state is event-driven. Use `QDockWidget::visibilityChanged` and
+  `QDialog::finished`; debounce durable `QSettings` writes. Do not poll `visibleRegion()` or save
+  window state from each frame/presentation callback.
+- Application-wide event filters reject irrelevant event types before QObject casts or owner
+  queries, and the viewport pointer filter exists only while a modal tool owns viewport input.
+- Stable HUD, gizmo, pane, split-handle, material-preview, camera, scene-setting, grid, shadow, and
+  layer presentation retains its last effective values. Do not repeat unchanged geometry,
+  visibility, z-order, repaint, or Filament setter work.
+- Console presentation consumes incremental log deltas, batches row insertion/removal, and
+  debounces search. Do not snapshot and rebuild the complete retained model for every new entry or
+  keystroke.
+- High-frequency tool paths expose narrow queries. Viewport operation-preview routing consumes one
+  boolean, not a full settings target containing labels and IDs. Stable Cut hover borrows the
+  projected session and retains its compiled two-point overlay until a semantic owner revision
+  changes.
+- Coalesced slider edits are transaction-aware: flush at semantic commit/lifecycle boundaries and
+  discard pending values when an authoritative document replacement or clear occurs.
+
+Owners: `UISystem`, `UIPanelManager`, Outliner and Console panels, `QtViewportPanel` and its native
+surfaces/HUD/gizmo, Standard Material editor/preview, `SceneDocument`,
+`ModelingSessionService`, renderer viewport/grid presentation, and source-policy guardrails.
+
+Verification: 37 focused UI/behavior tests and 148 focused architecture/source-policy tests pass.
+The Cut regression performs 32 distinct hover moves without another mesh compile after initial
+preview construction; hierarchy tests prove transform/pivot-relevant changes retain Outliner rows.
+On `one.qdr`, the Debug/Profile stress harness loads 6,276 entities and applies the selected-mesh
+pivot in a five-run median of 20.91 ms (20.15-21.89 ms), with one targeted document sync, no
+additional full-scene reset, and zero hierarchy-presentation revision change.
+The complete app suite passes 1,234 tests with six unrelated existing failures in command-baseline,
+linear-array render-preview, and source-wire overlay contracts. The complete guardrail suite passes
+361 tests with three unrelated existing root instruction/CMake contract failures. Modeling-domain
+and SDK consumer/parity suites pass; the nested SDK-only check still crashes in its existing
+isolated test configuration.

@@ -26,6 +26,7 @@ namespace {
 
 constexpr double kPreferredWidgetSize = 70.0;
 constexpr float kDragThresholdSquared = 9.0f;
+constexpr float kOrientationRefreshEpsilon = 0.000001f;
 constexpr qreal kAxisMarkerRadius = 8.0;
 
 QVec3 runtime_vector(QVec3 value) { return {value.x, value.y, value.z}; }
@@ -58,19 +59,25 @@ QPointF painter_point(QVec2 point) {
           std::floor(static_cast<qreal>(point.y)) + 0.5};
 }
 
-bool hits_match(const quader_editor_core::ViewCubeHit &left,
-                const quader_editor_core::ViewCubeHit &right) {
-  return left.hit && right.hit &&
-         quader_editor_core::view_cube_hits_match(left, right);
+bool orientation_axis_matches(QVec3 left, QVec3 right) {
+  return std::fabs(left.x - right.x) <= kOrientationRefreshEpsilon &&
+         std::fabs(left.y - right.y) <= kOrientationRefreshEpsilon &&
+         std::fabs(left.z - right.z) <= kOrientationRefreshEpsilon;
 }
 
 } // namespace
 
 QtNavigationGizmoCameraSnapshot qt_navigation_gizmo_camera_snapshot(
     const ViewportCameraController *camera) {
+  if (camera == nullptr) {
+    return {};
+  }
+  const ViewportCameraBasis basis = ViewportCameraAdapter::basis(*camera);
   return {
       .camera = camera,
-      .pose = camera != nullptr ? camera->pose() : ViewportCameraPose{},
+      .forward = basis.forward,
+      .right = basis.right,
+      .up = basis.up,
   };
 }
 
@@ -83,13 +90,18 @@ bool qt_navigation_gizmo_camera_refresh_required(
   if (next.camera == nullptr) {
     return false;
   }
-  const ViewportCameraPose &left = current->pose;
-  const ViewportCameraPose &right = next.pose;
-  return left.eye.x != right.eye.x || left.eye.y != right.eye.y ||
-         left.eye.z != right.eye.z || left.target.x != right.target.x ||
-         left.target.y != right.target.y ||
-         left.target.z != right.target.z || left.up.x != right.up.x ||
-         left.up.y != right.up.y || left.up.z != right.up.z;
+  return !orientation_axis_matches(current->forward, next.forward) ||
+         !orientation_axis_matches(current->right, next.right) ||
+         !orientation_axis_matches(current->up, next.up);
+}
+
+bool qt_navigation_gizmo_hits_match(
+    const quader_editor_core::ViewCubeHit &left,
+    const quader_editor_core::ViewCubeHit &right) {
+  if (left.hit != right.hit) {
+    return false;
+  }
+  return !left.hit || quader_editor_core::view_cube_hits_match(left, right);
 }
 
 quader_editor_core::ViewCubePrimitiveInput
@@ -287,12 +299,13 @@ void QtNavigationGizmo::paintEvent(QPaintEvent *event) {
 
     const bool pressed = interaction_.input_locked() &&
                          !interaction_.drag_started() &&
-                         hits_match(interaction_.pressed_hit(),
-                                    {.hit = true,
-                                     .kind = quader_editor_core::
-                                         ViewCubeHitKind::Face,
-                                     .axis = face.axis,
-                                     .sign = face.sign});
+                         qt_navigation_gizmo_hits_match(
+                             interaction_.pressed_hit(),
+                             {.hit = true,
+                              .kind =
+                                  quader_editor_core::ViewCubeHitKind::Face,
+                              .axis = face.axis,
+                              .sign = face.sign});
     const bool highlighted = pressed ||
                              (hover_hit_.hit &&
                               hover_hit_.kind == quader_editor_core::
@@ -372,10 +385,16 @@ void QtNavigationGizmo::mouseMoveEvent(QMouseEvent *event) {
     QFrame::mouseMoveEvent(event);
     return;
   }
-  hover_hit_ = interaction_.hit_test(*camera_, viewport_size(),
-                                     local_position(event->position()));
+  const quader_editor_core::ViewCubeHit next_hover =
+      interaction_.hit_test(*camera_, viewport_size(),
+                            local_position(event->position()));
+  const bool hover_changed =
+      !qt_navigation_gizmo_hits_match(hover_hit_, next_hover);
+  hover_hit_ = next_hover;
   if (!interaction_.input_locked()) {
-    update();
+    if (hover_changed) {
+      update();
+    }
     QFrame::mouseMoveEvent(event);
     return;
   }

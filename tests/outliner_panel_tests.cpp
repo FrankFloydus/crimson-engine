@@ -204,6 +204,96 @@ TEST(OutlinerPanelTests,
 }
 
 TEST(OutlinerPanelTests,
+     NonPresentedLayerAndTransformChangesRetainExistingRows) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-outliner-retained-row-tests";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  QApplication::setStyle(QStringLiteral("Fusion"));
+
+  quader::SceneSession session;
+  quader::QuaderEditorApi editor(
+      quader::QuaderApiSessionInternalAccess::from_scene_session(session));
+  const auto entity = editor.scene().create_entity({
+      .name = "Layer Member",
+      .kind = quader::QuaderEntityKind::Empty,
+  });
+  ASSERT_TRUE(entity.ok()) << entity.error_message();
+  ASSERT_TRUE(editor.scene().select(entity.value().id).ok());
+
+  quader::UISettings ui_settings = quader::UISettings::defaults();
+  quader::ViewportSettings viewport_settings =
+      quader::ViewportSettings::defaults();
+  quader::LocalizationService localization = loaded_localization();
+  quader::UIContext context{
+      .intent = {.editor = editor},
+      .scene = {.document = session.scene(),
+                .assets = session.assets(),
+                .modeling = session.modeling(),
+                .selection = session.selection()},
+      .preferences = {.ui = ui_settings, .viewport = viewport_settings},
+      .localization = localization,
+  };
+
+  quader::OutlinerPanel panel;
+  panel.setAttribute(Qt::WA_DontShowOnScreen, true);
+  panel.resize(420, 420);
+  panel.show();
+  panel.refresh(context);
+  QCoreApplication::processEvents();
+
+  auto *tree = panel.findChild<QTreeView *>(QStringLiteral("outliner.tree"));
+  ASSERT_NE(tree, nullptr);
+  QAbstractItemModel *const stable_model = tree->model();
+  ASSERT_NE(stable_model, nullptr);
+  const QModelIndex entity_index =
+      find_entity_index(*stable_model, entity.value().id);
+  ASSERT_TRUE(entity_index.isValid());
+  const QPersistentModelIndex persistent_entity_index(entity_index);
+  int rows_removed = 0;
+  QObject::connect(stable_model, &QAbstractItemModel::rowsRemoved, &panel,
+                   [&rows_removed](const QModelIndex &, int, int) {
+                     ++rows_removed;
+                   });
+
+  const std::uint64_t content_revision_before =
+      session.scene().content_revision();
+  const std::uint64_t presentation_revision_before =
+      session.scene().hierarchy_presentation_revision();
+  const auto layer =
+      editor.layers().create_from_selection("Presentation-Neutral Layer");
+  ASSERT_TRUE(layer.ok()) << layer.error_message();
+  ASSERT_TRUE(layer.changed());
+  ASSERT_TRUE(layer.value().visible);
+  ASSERT_FALSE(layer.value().locked);
+  ASSERT_GT(session.scene().content_revision(), content_revision_before);
+  ASSERT_EQ(session.scene().hierarchy_presentation_revision(),
+            presentation_revision_before);
+  ASSERT_EQ(editor.query().entity(entity.value().id)->layer_id,
+            layer.value().id);
+  quader::TransformComponent moved =
+      *session.scene().transform(entity.value().id);
+  moved.position = {4.0f, 5.0f, 6.0f};
+  ASSERT_TRUE(session.scene().set_transform(entity.value().id, moved));
+  ASSERT_GT(session.scene().content_revision(), content_revision_before);
+  ASSERT_EQ(session.scene().hierarchy_presentation_revision(),
+            presentation_revision_before);
+
+  panel.refresh(context);
+  QCoreApplication::processEvents();
+
+  EXPECT_EQ(tree->model(), stable_model);
+  EXPECT_EQ(rows_removed, 0);
+  ASSERT_TRUE(persistent_entity_index.isValid());
+  EXPECT_EQ(static_cast<quader::EntityId>(
+                persistent_entity_index.data(kEntityIdRole).toULongLong()),
+            entity.value().id);
+  EXPECT_EQ(persistent_entity_index.data().toString(),
+            QStringLiteral("Layer Member"));
+}
+
+TEST(OutlinerPanelTests,
      QtSelectionModelDrivesClickShiftControlDragKeyboardAndBlankSelection) {
   ASSERT_EQ(QCoreApplication::instance(), nullptr);
   int argc = 1;

@@ -151,8 +151,16 @@ QtViewportSurface::~QtViewportSurface() { shutdown(); }
 
 bool QtViewportSurface::initialize(RenderSystem &render_system,
                                    std::uint8_t grid_layer_mask) {
+  if (!render_system.initialized()) {
+    return false;
+  }
   if (initialized_) {
-    return true;
+    native_surface_available_ = handle() != nullptr;
+    if (!swap_chain_) {
+      recreate_swap_chain(true);
+    }
+    synchronize_render_size();
+    return static_cast<bool>(swap_chain_);
   }
 
   render_system_ = &render_system;
@@ -165,7 +173,7 @@ bool QtViewportSurface::initialize(RenderSystem &render_system,
   (void)winId();
   native_surface_available_ = handle() != nullptr;
   if (!swap_chain_) {
-    recreate_swap_chain();
+    recreate_swap_chain(true);
   }
   synchronize_render_size();
   return static_cast<bool>(swap_chain_);
@@ -183,10 +191,15 @@ void QtViewportSurface::shutdown() {
   render_system_ = nullptr;
   initialized_ = false;
   native_surface_available_ = false;
+  swap_chain_creation_failed_ = false;
 }
 
 bool QtViewportSurface::render_frame() {
   synchronize_render_size();
+  if (!swap_chain_ && native_surface_available_ && isVisible() &&
+      isExposed()) {
+    recreate_swap_chain();
+  }
   if (!ready_to_render()) {
     return false;
   }
@@ -446,10 +459,11 @@ bool QtViewportSurface::event(QEvent *event) {
       native_surface_available_ = false;
       swap_chain_.reset();
       swap_chain_native_id_ = 0u;
+      swap_chain_creation_failed_ = false;
     } else if (surface_event->surfaceEventType() ==
                QPlatformSurfaceEvent::SurfaceCreated) {
       native_surface_available_ = true;
-      recreate_swap_chain();
+      recreate_swap_chain(true);
       synchronize_render_size();
     }
   } else if (event != nullptr &&
@@ -457,7 +471,7 @@ bool QtViewportSurface::event(QEvent *event) {
               event->type() == QEvent::ScreenChangeInternal ||
               event->type() == QEvent::WinIdChange)) {
     if (event->type() == QEvent::WinIdChange) {
-      recreate_swap_chain();
+      recreate_swap_chain(true);
     }
     synchronize_render_size();
   } else if (event != nullptr && event->type() == QEvent::Enter) {
@@ -524,6 +538,10 @@ bool QtViewportSurface::eventFilter(QObject *watched, QEvent *event) {
 
 void QtViewportSurface::exposeEvent(QExposeEvent *event) {
   QWindow::exposeEvent(event);
+  native_surface_available_ = handle() != nullptr;
+  if (isExposed()) {
+    recreate_swap_chain(true);
+  }
   synchronize_render_size();
   if (surface_changed_callback_) {
     surface_changed_callback_();
@@ -575,7 +593,6 @@ void QtViewportSurface::mousePressEvent(QMouseEvent *event) {
       focus_request_callback_(pane_id_,
                               ViewportPaneFocusTrigger::PointerPress);
     }
-    requestActivate();
     record_mouse_press(*event, false);
     event->accept();
   }
@@ -594,7 +611,6 @@ void QtViewportSurface::mouseDoubleClickEvent(QMouseEvent *event) {
       focus_request_callback_(pane_id_,
                               ViewportPaneFocusTrigger::PointerPress);
     }
-    requestActivate();
     record_mouse_press(*event, true);
     event->accept();
   }
@@ -956,9 +972,12 @@ void QtViewportSurface::record_wheel(QWheelEvent &event) {
                        translation.wheel_input_edges.end());
 }
 
-void QtViewportSurface::recreate_swap_chain() {
+void QtViewportSurface::recreate_swap_chain(bool force_retry) {
   if (!initialized_ || render_system_ == nullptr ||
       !render_system_->initialized() || !native_surface_available_) {
+    return;
+  }
+  if (swap_chain_creation_failed_ && !force_retry) {
     return;
   }
 
@@ -975,9 +994,13 @@ void QtViewportSurface::recreate_swap_chain() {
   swap_chain_ = render_system_->create_additional_swap_chain(
       native, SwapChainPresentationColorSpace::Srgb);
   if (!swap_chain_) {
-    LOG_ERROR("Unable to create Filament swapchain for Qt viewport pane {}",
-              viewport_pane_stable_id(pane_id_));
+    if (!swap_chain_creation_failed_) {
+      LOG_ERROR("Unable to create Filament swapchain for Qt viewport pane {}",
+                viewport_pane_stable_id(pane_id_));
+    }
+    swap_chain_creation_failed_ = true;
   } else {
+    swap_chain_creation_failed_ = false;
     swap_chain_native_id_ = native_id;
   }
 }

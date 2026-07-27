@@ -43,6 +43,7 @@ public:
 
   [[nodiscard]] bool render_frame();
   [[nodiscard]] bool ready_to_render() const;
+  [[nodiscard]] bool needs_rendering() const;
   void synchronize_render_size();
 
   void set_material(StandardMaterialPreviewSnapshot snapshot);
@@ -80,7 +81,8 @@ private:
 
   void apply_interaction(const MaterialPreviewInteractionFrame &input);
   void publish_state_change();
-  void recreate_swap_chain();
+  void mark_render_pending();
+  void recreate_swap_chain(bool force_retry = false);
   [[nodiscard]] void *native_window_handle() const;
 
   RenderSystem *render_system_ = nullptr;
@@ -92,6 +94,8 @@ private:
   QPointF last_drag_position_;
   bool initialized_ = false;
   bool native_surface_available_ = false;
+  bool swap_chain_creation_failed_ = false;
+  bool render_pending_ = true;
   DragMode drag_mode_ = DragMode::None;
   std::uintptr_t swap_chain_native_id_ = 0u;
 };
