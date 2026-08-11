@@ -296,6 +296,12 @@ table SceneLayer {
   locked:bool = false;
 }
 
+table ViewportCameraPose {
+  eye:Vec3;
+  target:Vec3;
+  up:Vec3;
+}
+
 table ObjectRecord {
   editor_object_id:ulong;
   scene_entity:ulong;
@@ -324,6 +330,7 @@ table ScenePayload {
   objects:[ObjectRecord];
   project_asset_dependencies:[ProjectAssetDependency];
   layers:[SceneLayer];
+  viewport_camera_pose:ViewportCameraPose;
 }
 
 root_type ScenePayload;

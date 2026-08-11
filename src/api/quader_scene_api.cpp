@@ -13,6 +13,7 @@
 #include "editor/session/scene_session.hpp"
 #include "editor/commands/document/document_command_edits.hpp"
 #include "editor/modeling/services/modeling_session_service.hpp"
+#include "editor/modeling/services/selection_mode_adapter.hpp"
 #include "editor/selection/editor_selection_service.hpp"
 #include "scene/scene_bounds.hpp"
 
@@ -115,13 +116,27 @@ UndoRedoExecuteOptions to_undo_redo_options(QuaderSceneEditOptions options) {
   };
 }
 
-QuaderApiVoidResult run_lock_document_result_and_project_selection(
+QuaderApiVoidResult run_document_result_and_project_selection(
     QuaderApiMutationRunner &mutations, SceneSession &session,
     DocumentCommandResult result, std::string_view label) {
   if (result.ok && result.changed) {
     session.modeling().project_object_selection_from_scene(true);
   }
   return mutations.run_document_result(std::move(result), label);
+}
+
+void synchronize_modeling_selection_after_grouping(
+    SceneSession &session, bool grouped,
+    ModelingSelectionMode selection_mode_before) {
+  if (is_component_selection_mode(selection_mode_before)) {
+    return;
+  }
+  if (grouped || selection_mode_before == ModelingSelectionMode::Group) {
+    session.modeling()
+        .clear_runtime_object_selection_for_scene_owned_selection();
+    return;
+  }
+  session.modeling().project_object_selection_from_scene(true);
 }
 
 } // namespace
@@ -303,7 +318,7 @@ QuaderApiVoidResult QuaderSceneApi::set_visibility(
 
 QuaderApiVoidResult QuaderSceneApi::set_locked(EntityId entity, bool locked) {
   SceneSession &session = scene_session(session_);
-  return run_lock_document_result_and_project_selection(
+  return run_document_result_and_project_selection(
       mutations_, session,
       session.document_commands().set_locked(entity, locked), "Set Lock");
 }
@@ -311,7 +326,7 @@ QuaderApiVoidResult QuaderSceneApi::set_locked(EntityId entity, bool locked) {
 QuaderApiVoidResult
 QuaderSceneApi::set_locks(std::span<const QuaderSceneLockEdit> edits) {
   SceneSession &session = scene_session(session_);
-  return run_lock_document_result_and_project_selection(
+  return run_document_result_and_project_selection(
       mutations_, session,
       session.document_commands().set_locks(to_document_lock_edits(edits)),
       "Set Lock");
@@ -412,14 +427,21 @@ QuaderSceneApi::duplicate_selected_hierarchy() {
 QuaderApiResult<QuaderEntityRef>
 QuaderSceneApi::group_selection(std::string group_name,
                                 QuaderTransform transform) {
+  SceneSession &session = scene_session(session_);
+  const ModelingSelectionMode selection_mode_before =
+      session.modeling().selection_mode();
   DocumentGroupSelectionResult command =
-      scene_session(session_).document_commands().group_selection(
+      session.document_commands().group_selection(
           std::move(group_name), group_transform_or_selected_bounds_center(
-                                     scene_session(session_), transform));
+                                     session, transform));
   const EntityId group_entity = command.group_entity;
 
-  const QuaderApiVoidResult status =
-      mutations_.run_document_result(std::move(command), "Group Selection");
+  if (command.ok && command.changed) {
+    synchronize_modeling_selection_after_grouping(
+        session, true, selection_mode_before);
+  }
+  const QuaderApiVoidResult status = mutations_.run_document_result(
+      std::move(command), "Group Selection");
   QuaderApiResult<QuaderEntityRef> result =
       quader_api_result_from_status<QuaderEntityRef>(status);
   if (result.ok && result.changed) {
@@ -435,9 +457,17 @@ QuaderSceneApi::group_selection(std::string group_name,
 }
 
 QuaderApiVoidResult QuaderSceneApi::ungroup_selection() {
-  return mutations_.run_document_result(
-      scene_session(session_).document_commands().ungroup_selection(),
-      "Ungroup Selection");
+  SceneSession &session = scene_session(session_);
+  const ModelingSelectionMode selection_mode_before =
+      session.modeling().selection_mode();
+  DocumentCommandResult command =
+      session.document_commands().ungroup_selection();
+  if (command.ok && command.changed) {
+    synchronize_modeling_selection_after_grouping(
+        session, false, selection_mode_before);
+  }
+  return mutations_.run_document_result(std::move(command),
+                                        "Ungroup Selection");
 }
 
 QuaderSceneBatch QuaderSceneApi::batch(std::string label) {
@@ -484,7 +514,7 @@ QuaderSceneApi::commit_batch(const QuaderSceneBatch &batch) {
   DocumentCommandResult result = session.document_commands().apply_scene_batch(
       batch.label_, std::move(operations));
   if (project_selection_after_batch) {
-    return run_lock_document_result_and_project_selection(
+    return run_document_result_and_project_selection(
         mutations_, session, std::move(result), batch.label_);
   }
   return mutations_.run_document_result(std::move(result), batch.label_);

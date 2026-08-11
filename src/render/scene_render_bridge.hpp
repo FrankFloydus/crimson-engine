@@ -47,6 +47,7 @@ class ViewportSettings;
 struct ViewportSceneOverlayFrameRequest {
     RenderOverlaySelectionMode selection_mode =
         RenderOverlaySelectionMode::Object;
+    bool selection_overlays_visible = true;
     bool wireframe_pane = false;
     bool point_light_gizmos_visible = false;
     bool include_tool_overlays = true;

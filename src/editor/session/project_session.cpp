@@ -8,6 +8,7 @@
 
 #include "core/qstr.hpp"
 #include "editor/session/project_asset_bootstrap_service.hpp"
+#include "editor/session/scene_viewport_camera_persistence.hpp"
 #include "editor/instances/project_clipboard_service.hpp"
 #include "editor/material/standard_material_edit_session_service.hpp"
 #include "editor/selection/editor_selection_service.hpp"
@@ -144,8 +145,9 @@ struct SceneWriteSnapshotResult final {
 };
 
 SceneWriteSnapshotResult scene_write_snapshot(
-    const SceneContentDocument &document,
+    const SceneSession &session,
     const ProjectMaterialCatalog &materials) {
+  const SceneContentDocument &document = session.document();
   const SceneContentDocumentIdentityReport identity =
       document.validate_object_identity_invariants();
   if (!identity.ok()) {
@@ -167,6 +169,7 @@ SceneWriteSnapshotResult scene_write_snapshot(
     return {.message = snapshot_result.error().message};
   }
   QdrProjectWriteSnapshot snapshot = snapshot_result.take_value();
+  append_qdr_viewport_camera_pose(session, snapshot);
   for (const ProjectAssetId &id : project_material_references(snapshot)) {
     const ProjectMaterialCatalogEntry *material = materials.find(id);
     if (material == nullptr) {
@@ -439,7 +442,9 @@ ProjectSession::open(const std::filesystem::path &manifest_path,
     const bool identity_mismatch = embedded_id != catalog->id;
     std::unique_ptr<OpenSceneSession> scene =
         make_scene(catalog->id, display_name_for_path(path), path,
-                   std::move(read.document));
+                   std::move(read.document),
+                   viewport_camera_pose_from_qdr(
+                       read.viewport_camera_pose));
     scene->identity_dirty = identity_mismatch;
     if (identity_mismatch) {
       warnings.push_back(
@@ -566,7 +571,8 @@ ProjectSessionResult ProjectSession::open_scene(ProjectRelativePath path) {
   }
   std::unique_ptr<OpenSceneSession> scene = make_scene(
       scene_id, display_name_for_path(session_path), session_path,
-      std::move(read.document));
+      std::move(read.document),
+      viewport_camera_pose_from_qdr(read.viewport_camera_pose));
   if (reseeded_duplicate || identity_mismatch) {
     scene->identity_dirty = true;
   }
@@ -657,7 +663,7 @@ ProjectSessionResult ProjectSession::save(SceneSessionId id) {
   }
   const SceneContentRevisionStamp stamp = scene->session->content_revision_stamp();
   SceneWriteSnapshotResult snapshot = scene_write_snapshot(
-      scene->session->document(), material_catalog_);
+      *scene->session, material_catalog_);
   if (!snapshot.ok) {
     return failure(snapshot.message);
   }
@@ -708,7 +714,7 @@ ProjectSessionResult ProjectSession::save_as(SceneSessionId id,
   SceneId new_scene_id = SceneId::generate();
   const SceneContentRevisionStamp stamp = scene->session->content_revision_stamp();
   SceneWriteSnapshotResult snapshot = scene_write_snapshot(
-      scene->session->document(), material_catalog_);
+      *scene->session, material_catalog_);
   if (!snapshot.ok) {
     return failure(snapshot.message);
   }
@@ -1292,8 +1298,11 @@ void ProjectSession::release_open_scene_ids() {
 
 std::unique_ptr<OpenSceneSession> ProjectSession::make_scene(
     SceneId scene_id, std::string display_name,
-    std::optional<ProjectRelativePath> path, SceneContentDocument document) {
+    std::optional<ProjectRelativePath> path, SceneContentDocument document,
+    std::optional<ViewportCameraPose> viewport_camera_pose) {
   auto session = std::make_unique<SceneSession>(std::move(document));
+  (void)session->restore_persisted_viewport_camera_pose(
+      viewport_camera_pose);
   session->mark_clean();
   return std::make_unique<OpenSceneSession>(OpenSceneSession{
       .session_id = allocate_session_id(),

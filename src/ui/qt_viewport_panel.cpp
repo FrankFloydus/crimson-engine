@@ -23,6 +23,7 @@
 #include "editor/viewport/viewport_scene_projection.hpp"
 #include "editor/viewport/viewport_tool_overlay_projection.hpp"
 #include "editor/render/quader_render_api_runtime_access.hpp"
+#include "editor/viewport/quader_viewport_api_runtime_access.hpp"
 #include "editor/tools/viewport_tool.hpp"
 #include "editor/tools/viewport_tool_catalog.hpp"
 #include "editor/tools/viewport_tool_ports.hpp"
@@ -370,13 +371,20 @@ bool qt_event_target_belongs_to_tool_settings(const QObject *target) {
   return qt_object_belongs_to_tool_settings_panel(target);
 }
 
+double viewport_monotonic_time_seconds() {
+  return std::chrono::duration<double>(
+             ViewportProbeClock::now().time_since_epoch())
+      .count();
+}
+
 bool qt_event_target_belongs_to_tool_settings(
     const QObject *target, const QPoint &global_position) {
   return qt_event_target_belongs_to_tool_settings(target) ||
          qt_object_belongs_to_tool_settings_panel(target, global_position);
 }
 
-QtViewportPanel::QtViewportPanel(QWidget *parent) : QWidget(parent) {
+QtViewportPanel::QtViewportPanel(QWidget *parent)
+    : QWidget(parent), delete_popup_presenter_(*this) {
   setObjectName(QStringLiteral("viewportWorkspace"));
   setMinimumSize(300, 200);
   setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
@@ -475,9 +483,11 @@ void QtViewportPanel::shutdown() {
   if (workspace_ != nullptr) {
     workspace_->clear_pane_visibility();
   }
+  persisted_camera_signature_valid_ = false;
 }
 
 void QtViewportPanel::attach_workspace(ViewportWorkspaceService &workspace) {
+  interaction_controller_.cancel_pending_material_interaction();
   if (workspace_ != &workspace) {
     interaction_controller_.reset(interaction_editor_);
     hover_controller_.invalidate();
@@ -492,6 +502,9 @@ void QtViewportPanel::attach_workspace(ViewportWorkspaceService &workspace) {
     set_modal_tool_owns_viewport_snapshot(false);
   }
   workspace_ = &workspace;
+  observed_persisted_camera_signature_ =
+      workspace.persisted_perspective_camera_pose_signature();
+  persisted_camera_signature_valid_ = true;
   for (Pane &pane_state : panes_) {
     pane_state.navigation_gizmo->set_camera(
         &workspace.camera(pane_state.id));
@@ -514,6 +527,10 @@ void QtViewportPanel::set_localization(LocalizationService &localization) {
   for (Pane &pane_state : panes_) {
     refresh_pane_controls(pane_state);
   }
+}
+
+void QtViewportPanel::prewarm_retained_dialogs() {
+  delete_popup_presenter_.prewarm();
 }
 
 void QtViewportPanel::set_startup_presentation_blocked(bool blocked) {
@@ -576,10 +593,32 @@ void QtViewportPanel::process_input(
   process_viewport_input(editor, document, assets, modeling, default_material,
                          pivot, linear_array, radial_array, point_placement,
                          delta_seconds);
+  observe_persisted_camera_change(editor);
   if (diagnostics_enabled) {
     g_viewport_probe.input_ms +=
         elapsed_milliseconds(input_start, ViewportProbeClock::now());
   }
+}
+
+void QtViewportPanel::observe_persisted_camera_change(
+    QuaderEditorApi &editor) {
+  if (workspace_ == nullptr) {
+    persisted_camera_signature_valid_ = false;
+    return;
+  }
+  const std::uint64_t current_signature =
+      workspace_->persisted_perspective_camera_pose_signature();
+  if (!persisted_camera_signature_valid_) {
+    observed_persisted_camera_signature_ = current_signature;
+    persisted_camera_signature_valid_ = true;
+    return;
+  }
+  if (current_signature == observed_persisted_camera_signature_) {
+    return;
+  }
+  observed_persisted_camera_signature_ = current_signature;
+  QuaderViewportApiRuntimeAccess::observe_persisted_camera_change(
+      editor.viewports());
 }
 
 void QtViewportPanel::prepare_viewports(
@@ -927,6 +966,7 @@ void QtViewportPanel::prepare_viewports(
                 .selection_mode =
                     ViewportToolOverlayProjection::selection_mode(
                         cached_overlay_mode),
+                .selection_overlays_visible = overlays_visible,
                 .wireframe_pane =
                     pane_workspace.shading == ViewportShadingMode::Wireframe,
                 .point_light_gizmos_visible = point_light_gizmos_visible,
@@ -1047,6 +1087,10 @@ QtViewportPanel::render_viewports(bool account_presentation_frame) {
     for (Pane &pane_state : panes_) {
       if (!pane_state.surface_presented) {
         pane_state.surface_container->show();
+        // QWidget::createWindowContainer can expose its native child with the
+        // rect cached while startup presentation was blocked. Reassert the
+        // frame rect once after reveal, before yielding the exposure turn.
+        pane_state.surface_container->setGeometry(pane_state.frame->rect());
         pane_state.surface_presented = true;
         pane_state.overlay_stack_valid = false;
       }
@@ -2121,6 +2165,7 @@ void QtViewportPanel::process_viewport_input(
       .focused_pane = workspace_->focused_pane(),
   });
   if (!input_pane.has_value()) {
+    interaction_controller_.cancel_pending_material_interaction();
     for (Pane &pane_state : panes_) {
       pane_state.surface->set_pointer_capture(false);
     }
@@ -2428,6 +2473,9 @@ void QtViewportPanel::process_viewport_input(
       .right_pressed = sample.right_pressed,
       .right_down = sample.right_down,
       .right_released = sample.right_released,
+      .double_click_interval_seconds =
+          static_cast<double>(QApplication::doubleClickInterval()) / 1000.0,
+      .monotonic_time_seconds = viewport_monotonic_time_seconds(),
       .active_tool_allows_selection_fallback =
           interaction_controller_.active_tool_allows_selection_fallback(
               input_router_.state().active_tool),

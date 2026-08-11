@@ -85,6 +85,7 @@ public:
   void set_render_performance_stats(RenderFramePerformanceStats stats);
   void set_localization(LocalizationService &localization);
   void refresh_keybinding_presentation(QuaderEditorApi &editor);
+  void prewarm_retained_dialogs();
   void set_startup_presentation_blocked(bool blocked);
   [[nodiscard]] bool startup_presentation_blocked() const {
     return startup_presentation_blocked_;
@@ -222,6 +223,7 @@ private:
                               RadialArrayToolService *radial_array,
                               ViewportPointPlacementService *point_placement,
                               double delta_seconds);
+  void observe_persisted_camera_change(QuaderEditorApi &editor);
   void refresh_cached_selection_overlay_frame(ModelingSessionService &modeling,
                                                const SceneDocument &document,
                                                const AssetRegistry &assets,
@@ -242,6 +244,8 @@ private:
   std::array<Pane, kViewportPaneCount> panes_;
   RenderSystem *render_system_ = nullptr;
   ViewportWorkspaceService *workspace_ = nullptr;
+  std::uint64_t observed_persisted_camera_signature_ = 0u;
+  bool persisted_camera_signature_valid_ = false;
   const ViewportSettings *viewport_settings_ = nullptr;
   LocalizationService *localization_ = nullptr;
   RenderFramePerformanceStats render_performance_ = {};

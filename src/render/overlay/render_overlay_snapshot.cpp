@@ -163,6 +163,33 @@ std::uint64_t instance_overlay_participant_token(EntityId occurrence,
       .value();
 }
 
+QMat4 compose_instance_member_world_transform(
+    const QMat4 &occurrence_world, const QMat4 &definition_inverse,
+    const QMat4 &member_world) {
+  return scene_transform_multiply(
+      occurrence_world,
+      scene_transform_multiply(definition_inverse, member_world));
+}
+
+std::optional<QMat4> instance_member_world_transform(
+    const SceneDocument &document, EntityId occurrence, EntityId definition,
+    EntityId member) {
+  const InstanceOccurrenceComponent *instance =
+      document.instance_occurrence(occurrence);
+  if (instance == nullptr || instance->definition != definition ||
+      document.containing_instance_definition(member) != definition) {
+    return std::nullopt;
+  }
+  const std::optional<QMat4> definition_inverse =
+      try_scene_matrix_inverse(document.world_transform_matrix(definition));
+  if (!definition_inverse.has_value()) {
+    return std::nullopt;
+  }
+  return compose_instance_member_world_transform(
+      document.world_transform_matrix(occurrence), *definition_inverse,
+      document.world_transform_matrix(member));
+}
+
 std::optional<std::uint64_t> build_instance_bounds_dependency_signature(
     const SceneDocument &document, const AssetRegistry &assets,
     EntityId definition) {
@@ -202,11 +229,12 @@ std::optional<std::uint64_t> build_instance_bounds_dependency_signature(
   return signature.value();
 }
 
-void append_instance_wireframe_meshes(
-    RenderOverlaySceneWireframeSnapshot &snapshot,
+void append_instance_wire_meshes(
+    std::vector<RenderOverlayMeshSnapshot> &meshes,
     const SceneDocument &document, const AssetRegistry &assets,
     EntityId occurrence,
-    const ViewportLocalVisibilitySnapshot *local_visibility) {
+    const ViewportLocalVisibilitySnapshot *local_visibility, bool selected,
+    QVec3 wireframe_tint) {
   const InstanceOccurrenceComponent *instance =
       document.instance_occurrence(occurrence);
   if (instance == nullptr || !document.is_effectively_visible(occurrence) ||
@@ -220,10 +248,6 @@ void append_instance_wireframe_meshes(
     return;
   }
   const QMat4 occurrence_world = document.world_transform_matrix(occurrence);
-  const SelectionComponent *selection = document.selection(occurrence);
-  const bool selected = selection != nullptr && selection->selected;
-  const QVec3 wireframe_tint =
-      resolved_scene_wireframe_tint(document, occurrence);
   for (const EntityId member :
        document.descendants(instance->definition, false)) {
     if (document.containing_instance_definition(member) !=
@@ -241,13 +265,11 @@ void append_instance_wireframe_meshes(
         mesh->geometry().indices.size() < 3u) {
       continue;
     }
-    const QMat4 member_from_definition = scene_transform_multiply(
-        *definition_inverse, document.world_transform_matrix(member));
     const std::shared_ptr<const MeshGeometryPayload> geometry_payload =
         mesh->geometry_payload();
     const std::shared_ptr<const MeshWireGeometryPayload> wire_geometry_payload =
         build_mesh_wire_geometry_payload(*mesh);
-    snapshot.meshes.push_back({
+    meshes.push_back({
         .entity = occurrence,
         .occurrence = occurrence,
         .definition = instance->definition,
@@ -259,8 +281,9 @@ void append_instance_wireframe_meshes(
         .geometry_payload = geometry_payload,
         .geometry_content_id = mesh->geometry_content_id(),
         .wire_geometry_payload = wire_geometry_payload,
-        .world_transform = scene_transform_multiply(occurrence_world,
-                                                    member_from_definition),
+        .world_transform = compose_instance_member_world_transform(
+            occurrence_world, *definition_inverse,
+            document.world_transform_matrix(member)),
         .selected = selected,
         .wireframe_tint = wireframe_tint,
         .vertices = mesh_vertices(*mesh),
@@ -268,6 +291,19 @@ void append_instance_wireframe_meshes(
         .wire_segments = mesh_wire_segments(wire_geometry_payload),
     });
   }
+}
+
+void append_instance_wireframe_meshes(
+    RenderOverlaySceneWireframeSnapshot &snapshot,
+    const SceneDocument &document, const AssetRegistry &assets,
+    EntityId occurrence,
+    const ViewportLocalVisibilitySnapshot *local_visibility) {
+  const SelectionComponent *selection = document.selection(occurrence);
+  const bool selected = selection != nullptr && selection->selected;
+  append_instance_wire_meshes(
+      snapshot.meshes, document, assets, occurrence, local_visibility,
+      selected,
+      resolved_scene_wireframe_tint(document, occurrence));
 }
 
 void append_instance_selection_fills(
@@ -306,14 +342,13 @@ void append_instance_selection_fills(
         mesh->geometry().indices.size() < 3u) {
       continue;
     }
-    const QMat4 member_from_definition = scene_transform_multiply(
-        *definition_inverse, document.world_transform_matrix(member));
     const std::shared_ptr<const MeshGeometryPayload> geometry_payload =
         mesh->geometry_payload();
     const std::shared_ptr<const MeshWireGeometryPayload> wire_geometry_payload =
         build_mesh_wire_geometry_payload(*mesh);
-    const QMat4 world_transform = scene_transform_multiply(
-        occurrence_world, member_from_definition);
+    const QMat4 world_transform = compose_instance_member_world_transform(
+        occurrence_world, *definition_inverse,
+        document.world_transform_matrix(member));
     snapshot.instance_selection_fills.push_back({
         .occurrence = occurrence,
         .definition = instance->definition,
@@ -336,6 +371,9 @@ void append_instance_selection_fills(
         .geometry_content_id = mesh->geometry_content_id(),
         .wire_geometry_payload = wire_geometry_payload,
         .world_transform = world_transform,
+        .wire_color = snapshot.style.selection_wire_color,
+        .wire_width_pixels =
+            snapshot.style.selection_edge_line_width_pixels,
         .vertices = mesh_vertices(*mesh),
         .indices = mesh_indices(*mesh),
         .wire_segments = mesh_wire_segments(wire_geometry_payload),
@@ -537,6 +575,13 @@ RenderOverlaySelectionSnapshot build_render_overlay_selection_snapshot_impl(
         if (selection != nullptr && selection->selected) {
           continue;
         }
+        if (document.instance_occurrence(descendant) != nullptr) {
+          append_instance_wire_meshes(
+              snapshot.hierarchy_selection_wires, document, assets,
+              descendant, local_visibility, false,
+              resolved_scene_wireframe_tint(document, descendant));
+          continue;
+        }
         if (std::optional<RenderOverlayMeshSnapshot> mesh =
                 mesh_snapshot_for_entity(document, assets, descendant,
                                          local_visibility)) {
@@ -627,7 +672,10 @@ RenderOverlaySnapshotCache::update_persistent(
           document.mesh_binding_revision() &&
       selected_object_snapshot_.visible == selected_object_overlay_visible &&
       selected_object_snapshot_.style.face_signature ==
-          style.face_signature;
+          style.face_signature &&
+      (selected_object_snapshot_.instance_selection_wires.empty() ||
+       selected_object_snapshot_.style.wire_signature ==
+           style.wire_signature);
   const bool selected_object_changed = !selected_snapshot_matches;
   if (selected_object_changed) {
     selected_object_snapshot_ = build_render_overlay_selected_object_snapshot(
@@ -1059,7 +1107,17 @@ bool RenderOverlaySnapshotCache::refresh_selection_transforms(
   selection_snapshot_.group_bounds = std::move(group_bounds);
   for (RenderOverlayMeshSnapshot &mesh :
        selection_snapshot_.hierarchy_selection_wires) {
-    mesh.world_transform = document.world_transform_matrix(mesh.entity);
+    if (mesh.occurrence != kInvalidEntityId) {
+      const std::optional<QMat4> world_transform =
+          instance_member_world_transform(document, mesh.occurrence,
+                                          mesh.definition, mesh.member);
+      if (!world_transform.has_value()) {
+        return false;
+      }
+      mesh.world_transform = *world_transform;
+    } else {
+      mesh.world_transform = document.world_transform_matrix(mesh.entity);
+    }
   }
   for (RenderOverlayLightMarkerSnapshot &light :
        selection_snapshot_.selected_lights) {

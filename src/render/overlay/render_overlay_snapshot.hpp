@@ -103,6 +103,8 @@ struct RenderOverlayInstanceSelectionWireRecord final {
   MeshGeometryContentId geometry_content_id;
   std::shared_ptr<const MeshWireGeometryPayload> wire_geometry_payload;
   QMat4 world_transform;
+  std::uint32_t wire_color = kOverlaySelectionWireColor;
+  float wire_width_pixels = kOverlaySelectionWireLineWidthPixels;
   std::span<const MeshVertex> vertices;
   std::span<const std::uint32_t> indices;
   std::span<const MeshWireSegment> wire_segments;

@@ -10,6 +10,7 @@
 #include "editor/modeling/modeling_types.hpp"
 
 #include <array>
+#include <memory>
 #include <string_view>
 
 class QPoint;
@@ -20,6 +21,7 @@ namespace quader {
 class LocalizationService;
 class ModelingSessionService;
 class QuaderEditorApi;
+class QtRetainedMessageBox;
 class ViewportInputRouter;
 
 /**
@@ -56,11 +58,21 @@ qt_viewport_delete_popup_actions(const ModelingSelectionSummary &summary);
  */
 class QtViewportDeletePopupPresenter final {
 public:
+  explicit QtViewportDeletePopupPresenter(QWidget &owner);
+  ~QtViewportDeletePopupPresenter();
+
+  /// Resolves the hidden object-confirmation window and its retained controls
+  /// after the owning viewport window has completed startup presentation.
+  void prewarm();
+
   [[nodiscard]] bool
   show(QWidget &focus_parent, const QPoint &global_point,
        QuaderEditorApi &editor, ModelingSessionService &modeling,
        ViewportInputRouter &input_router,
-       LocalizationService &localization) const;
+       LocalizationService &localization);
+
+private:
+  std::unique_ptr<QtRetainedMessageBox> object_confirmation_;
 };
 
 } // namespace quader

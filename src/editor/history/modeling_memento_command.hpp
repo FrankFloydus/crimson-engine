@@ -438,6 +438,29 @@ private:
 };
 
 /**
+ * Normalizes one mesh to the resolved material sampled from one of its faces.
+ * Redo restores the captured post-execution memento and therefore never
+ * resamples material state that may have changed since the initial gesture.
+ */
+class ApplyFaceMaterialToMeshHistoryCommand final
+    : public ModelingMementoCommand {
+public:
+  ApplyFaceMaterialToMeshHistoryCommand(ModelingSessionService &modeling,
+                                        int modeling_object_id, int face_id)
+      : ModelingMementoCommand(modeling, "Apply Face Material to Mesh"),
+        modeling_object_id_(modeling_object_id), face_id_(face_id) {}
+
+private:
+  ModelingCommandResult execute_initial() override {
+    return modeling().apply_face_material_to_mesh(modeling_object_id_,
+                                                  face_id_);
+  }
+
+  int modeling_object_id_ = kInvalidModelingObjectId;
+  int face_id_ = quader_poly::kInvalidElementId;
+};
+
+/**
  * Applies Cut Selected Meshes By Hovered Face Plane History Command behavior as
  * a command in the editor coordination layer.
  */

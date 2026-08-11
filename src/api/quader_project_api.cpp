@@ -17,6 +17,7 @@
 #include "io/qdr/qdr_document_reader.hpp"
 #include "editor/session/scene_session.hpp"
 #include "editor/session/project_session.hpp"
+#include "editor/session/scene_viewport_camera_persistence.hpp"
 #include "scene/components.hpp"
 #include "io/project/project_manifest.hpp"
 #include "io/project/recent_project_store.hpp"
@@ -473,7 +474,12 @@ QuaderApiVoidResult QuaderProjectApi::open(const std::filesystem::path& path) {
     }
 
     SceneSession &session = scene_session(session_);
-    session.replace_document(std::move(read.document));
+    if (!session.replace_document_with_persisted_viewport_camera(
+            std::move(read.document),
+            viewport_camera_pose_from_qdr(read.viewport_camera_pose))) {
+      return quader_api_failure_status(
+          session, "Scene viewport camera pose could not be restored.");
+    }
     path_ = std::move(target);
     return project_runtime_status(session, true, "Scene opened.");
 }
@@ -631,6 +637,9 @@ std::vector<QuaderRecentProject> QuaderProjectApi::recent_projects() const {
         .name = entry.name,
         .manifest_path = entry.manifest_path,
         .available = entry.available,
+        .manifest_last_modified_unix_ms =
+            entry.manifest_last_modified_unix_ms,
+        .manifest_size_bytes = entry.manifest_size_bytes,
     });
   }
   return result;

@@ -10,6 +10,7 @@
       "cacheVariables": {
         "CMAKE_TOOLCHAIN_FILE": "$env{USERPROFILE}/vcpkg/scripts/buildsystems/vcpkg.cmake",
         "VCPKG_TARGET_TRIPLET": "x64-windows",
+        "VCPKG_APPLOCAL_DEPS": "OFF",
         "QUADER_BUILD_TESTS": "ON",
         "QUADER_ENABLE_TRACY": "ON",
         "QUADER_ENABLE_SENTRY": "OFF",

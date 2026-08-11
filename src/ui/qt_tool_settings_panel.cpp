@@ -42,6 +42,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
+#include <cstdint>
 #include <cstdlib>
 #include <functional>
 #include <limits>
@@ -55,9 +56,9 @@ namespace quader {
 namespace {
 
 // Geometry previews can be substantially slower than raw pointer delivery.
-// Keep visual controls immediate while limiting editor mutations to one batch
-// per display-scale interval; release always flushes the latest value.
-constexpr int kLiveNumberDispatchIntervalMs = 16;
+// Keep visual controls immediate and dispatch only after the latest input has
+// paused. Release/edit completion still flushes the exact latest value.
+constexpr int kTrailingNumberDispatchDelayMs = 50;
 constexpr std::string_view kPrimitiveTypeSettingId = "primitive.type";
 
 QString qtext(std::string_view text) {
@@ -299,6 +300,14 @@ private:
 
 /// Owns retained controls for the active tool's descriptor-driven settings.
 struct QtToolSettingsPanel::Impl {
+  /// Binds a delayed numeric write to the owner lifecycle that queued it.
+  struct NumberDispatchLifecycle {
+    std::uint64_t settings_revision = 0;
+    std::uint64_t active_tool_revision = 0;
+    std::string tool_id;
+    bool preview_active = false;
+  };
+
   /// Associates one choice button with its stable option and numeric value.
   struct ChoiceWidget {
     QRadioButton *button = nullptr;
@@ -319,6 +328,7 @@ struct QtToolSettingsPanel::Impl {
     QtToolSettingsNumberSliderMapping number_slider_mapping;
     QTimer *number_dispatch_timer = nullptr;
     std::optional<double> pending_number_value;
+    std::optional<NumberDispatchLifecycle> pending_number_lifecycle;
     std::function<void(double)> number_dispatch;
     std::vector<ChoiceWidget> choices;
   };
@@ -409,18 +419,28 @@ struct QtToolSettingsPanel::Impl {
 
     cancel_button_ = new QPushButton(preview_actions_container_);
     cancel_button_->setObjectName(QStringLiteral("tool_settings.cancel"));
+    // Keep mouse focus on the numeric editor until pressed has invalidated its
+    // delayed value. clicked restores normal button focus after that boundary.
+    cancel_button_->setFocusPolicy(Qt::TabFocus);
     preview_actions_layout->addWidget(cancel_button_);
     actions_layout->addWidget(preview_actions_container_);
 
     reset_button_ = new QPushButton(actions_container_);
     reset_button_->setObjectName(
         QStringLiteral("tool_settings.reset_defaults"));
+    reset_button_->setFocusPolicy(Qt::TabFocus);
     reset_button_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
     actions_layout->addWidget(reset_button_);
     root_layout->addWidget(actions_container_);
     refresh_localized_text();
 
+    QObject::connect(reset_button_, &QPushButton::pressed, &panel_, [this]() {
+      discard_pending_number_dispatches();
+    });
     QObject::connect(reset_button_, &QPushButton::clicked, &panel_, [this]() {
+      // Reset is authoritative: a stale delayed edit must never overwrite it.
+      discard_pending_number_dispatches();
+      reset_button_->setFocus(Qt::MouseFocusReason);
       if (editor_ == nullptr) {
         return;
       }
@@ -431,8 +451,10 @@ struct QtToolSettingsPanel::Impl {
     });
     QObject::connect(apply_button_, &QPushButton::clicked, &panel_, [this]() {
       if (editor_ == nullptr) {
+        discard_pending_number_dispatches();
         return;
       }
+      flush_pending_number_dispatches();
       const QuaderApiVoidResult result =
           editor_->tools().commit_active_tool_preview();
       log_failure("Tool preview apply", result);
@@ -440,6 +462,9 @@ struct QtToolSettingsPanel::Impl {
     });
     QObject::connect(cancel_button_, &QPushButton::clicked, &panel_,
                      [this]() {
+                       // Cancel owns the previous authoritative preview state.
+                       discard_pending_number_dispatches();
+                       cancel_button_->setFocus(Qt::MouseFocusReason);
                        if (editor_ == nullptr) {
                          return;
                        }
@@ -448,16 +473,21 @@ struct QtToolSettingsPanel::Impl {
                        log_failure("Tool preview cancel", result);
                        schedule_refresh();
                      });
+    QObject::connect(cancel_button_, &QPushButton::pressed, &panel_, [this]() {
+      discard_pending_number_dispatches();
+    });
     present_inactive_target();
   }
 
   void bind(QuaderEditorApi &editor) {
+    discard_pending_number_dispatches();
     editor_ = &editor;
     last_target_.reset();
     refresh();
   }
 
   void unbind() {
+    discard_pending_number_dispatches();
     editor_ = nullptr;
     last_target_.reset();
     present_inactive_target();
@@ -502,6 +532,15 @@ struct QtToolSettingsPanel::Impl {
     return last_target_.has_value() && last_target_->active;
   }
 
+  [[nodiscard]] bool numeric_interaction_active() const {
+    return std::any_of(
+        controls_.begin(), controls_.end(), [](const ControlWidget &binding) {
+          return binding.pending_number_value.has_value() ||
+                 (binding.number_slider != nullptr &&
+                  binding.number_slider->isSliderDown());
+        });
+  }
+
 private:
   void schedule_refresh() {
     if (refresh_scheduled_) {
@@ -515,6 +554,8 @@ private:
   }
 
   void clear_controls() {
+    // Stop old control-owned timers before deleting their rows and callbacks.
+    discard_pending_number_dispatches();
     controls_.clear();
     empty_settings_label_ = nullptr;
     clear_layout(*controls_layout_);
@@ -554,10 +595,69 @@ private:
       return;
     }
     ControlWidget &binding = controls_[control_index];
+    if (!binding.pending_number_value.has_value()) {
+      if (editor_ == nullptr || !last_target_.has_value() ||
+          !last_target_->active) {
+        return;
+      }
+      binding.pending_number_lifecycle = NumberDispatchLifecycle{
+          .settings_revision = editor_->tools().active_settings_revision(),
+          .active_tool_revision = editor_->tools().active_tool_revision(),
+          .tool_id = last_target_->tool_id,
+          .preview_active = last_target_->preview_active,
+      };
+    }
     binding.pending_number_value = value;
-    if (binding.number_dispatch_timer != nullptr &&
-        !binding.number_dispatch_timer->isActive()) {
+    if (binding.number_dispatch_timer != nullptr) {
+      // QTimer::start restarts an active single-shot timer. This gives every
+      // pointer/key/wheel update one latest-value trailing dispatch window.
       binding.number_dispatch_timer->start();
+    }
+  }
+
+  [[nodiscard]] bool number_dispatch_lifecycle_is_current(
+      const ControlWidget &binding) const {
+    if (editor_ == nullptr ||
+        !binding.pending_number_lifecycle.has_value()) {
+      return false;
+    }
+    const NumberDispatchLifecycle &lifecycle =
+        *binding.pending_number_lifecycle;
+    if (editor_->tools().active_settings_revision() !=
+            lifecycle.settings_revision ||
+        editor_->tools().active_tool_revision() !=
+            lifecycle.active_tool_revision) {
+      return false;
+    }
+
+    const QuaderToolSettingsTarget target = editor_->tools().active_settings();
+    if (!target.active || target.tool_id != lifecycle.tool_id ||
+        target.preview_active != lifecycle.preview_active) {
+      return false;
+    }
+    return std::any_of(
+        target.controls.begin(), target.controls.end(),
+        [&binding](const QuaderToolSettingControl &control) {
+          return control.kind == QuaderToolSettingControlKind::Number &&
+                 control.id == binding.id;
+        });
+  }
+
+  void rebind_pending_number_dispatches_to_current_revision() {
+    if (editor_ == nullptr) {
+      return;
+    }
+    const std::uint64_t settings_revision =
+        editor_->tools().active_settings_revision();
+    const std::uint64_t active_tool_revision =
+        editor_->tools().active_tool_revision();
+    for (ControlWidget &binding : controls_) {
+      if (!binding.pending_number_lifecycle.has_value()) {
+        continue;
+      }
+      binding.pending_number_lifecycle->settings_revision = settings_revision;
+      binding.pending_number_lifecycle->active_tool_revision =
+          active_tool_revision;
     }
   }
 
@@ -566,34 +666,40 @@ private:
       return;
     }
     ControlWidget &binding = controls_[control_index];
-    if (!binding.pending_number_value.has_value() ||
-        !binding.number_dispatch) {
+    if (!binding.pending_number_value.has_value()) {
       return;
     }
+    const bool lifecycle_current =
+        number_dispatch_lifecycle_is_current(binding);
     const double value = *binding.pending_number_value;
     binding.pending_number_value.reset();
+    binding.pending_number_lifecycle.reset();
     if (binding.number_dispatch_timer != nullptr) {
       binding.number_dispatch_timer->stop();
+    }
+    if (!lifecycle_current || !binding.number_dispatch) {
+      schedule_refresh();
+      return;
     }
     binding.number_dispatch(value);
+    // A successful owner write advances the settings revision. Other values
+    // queued in the same UI lifecycle remain valid and must still flush.
+    rebind_pending_number_dispatches_to_current_revision();
   }
 
-  void dispatch_number(std::size_t control_index, double value,
-                       bool coalesce) {
-    if (control_index >= controls_.size()) {
-      return;
+  void flush_pending_number_dispatches() {
+    for (std::size_t index = 0; index < controls_.size(); ++index) {
+      flush_number_dispatch(index);
     }
-    ControlWidget &binding = controls_[control_index];
-    if (coalesce) {
-      queue_number_dispatch(control_index, value);
-      return;
-    }
-    binding.pending_number_value.reset();
-    if (binding.number_dispatch_timer != nullptr) {
-      binding.number_dispatch_timer->stop();
-    }
-    if (binding.number_dispatch) {
-      binding.number_dispatch(value);
+  }
+
+  void discard_pending_number_dispatches() {
+    for (ControlWidget &binding : controls_) {
+      binding.pending_number_value.reset();
+      binding.pending_number_lifecycle.reset();
+      if (binding.number_dispatch_timer != nullptr) {
+        binding.number_dispatch_timer->stop();
+      }
     }
   }
 
@@ -730,7 +836,7 @@ private:
           };
       auto *dispatch_timer = new QTimer(row);
       dispatch_timer->setSingleShot(true);
-      dispatch_timer->setInterval(kLiveNumberDispatchIntervalMs);
+      dispatch_timer->setInterval(kTrailingNumberDispatchDelayMs);
       binding.number_dispatch_timer = dispatch_timer;
       binding.number_dispatch = send_number_to_editor;
       QObject::connect(dispatch_timer, &QTimer::timeout, &panel_,
@@ -767,8 +873,8 @@ private:
               }
               update_slider_steps(*slider, mapping, value,
                                   spin->singleStep());
-              dispatch_number(control_index, static_cast<double>(value),
-                              slider->isSliderDown());
+              queue_number_dispatch(control_index,
+                                    static_cast<double>(value));
             });
         QObject::connect(spin, &QSpinBox::valueChanged, &panel_,
                          [this, spin, slider, control_index](int value) {
@@ -787,8 +893,12 @@ private:
                            }
                            update_slider_steps(*slider, mapping, value,
                                                spin->singleStep());
-                           dispatch_number(control_index,
-                                           static_cast<double>(value), false);
+                           queue_number_dispatch(control_index,
+                                                 static_cast<double>(value));
+                         });
+        QObject::connect(spin, &QSpinBox::editingFinished, &panel_,
+                         [this, control_index]() {
+                           flush_number_dispatch(control_index);
                          });
         row_layout->addWidget(spin, 1, 1);
         field_label->setBuddy(spin);
@@ -824,8 +934,7 @@ private:
               }
               update_slider_steps(*slider, mapping, spin->value(),
                                   spin->singleStep());
-              dispatch_number(control_index, spin->value(),
-                              slider->isSliderDown());
+              queue_number_dispatch(control_index, spin->value());
             });
         QObject::connect(spin, &QDoubleSpinBox::valueChanged, &panel_,
                          [this, spin, slider, control_index](double value) {
@@ -843,7 +952,11 @@ private:
                            }
                            update_slider_steps(*slider, mapping, value,
                                                spin->singleStep());
-                           dispatch_number(control_index, value, false);
+                           queue_number_dispatch(control_index, value);
+                         });
+        QObject::connect(spin, &QDoubleSpinBox::editingFinished, &panel_,
+                         [this, control_index]() {
+                           flush_number_dispatch(control_index);
                          });
         row_layout->addWidget(spin, 1, 1);
         field_label->setBuddy(spin);
@@ -1012,16 +1125,19 @@ private:
       const bool slider_editing =
           binding.number_slider != nullptr &&
           binding.number_slider->isSliderDown();
+      const bool number_dispatch_pending =
+          binding.pending_number_value.has_value();
+      const bool number_interaction_active =
+          slider_editing || integer_editing || floating_editing ||
+          number_dispatch_pending;
 
       if (binding.number_slider != nullptr) {
-        const bool interaction_active =
-            slider_editing || integer_editing || floating_editing;
         const bool integer_control = binding.integer != nullptr;
         const QtToolSettingsNumberSliderMapping desired_mapping =
             qt_tool_settings_number_slider_mapping(
                 control.min_value, control.max_value, integer_control,
                 control.step);
-        if (!interaction_active &&
+        if (!number_interaction_active &&
             desired_mapping != binding.number_slider_mapping) {
           {
             const QSignalBlocker blocker(binding.number_slider);
@@ -1041,7 +1157,7 @@ private:
           binding.number_slider_mapping = desired_mapping;
         }
 
-        if (!interaction_active) {
+        if (!number_interaction_active) {
           if (binding.integer != nullptr) {
             binding.integer->setSingleStep(std::max(
                 1, static_cast<int>(std::llround(std::clamp(
@@ -1064,18 +1180,20 @@ private:
         const QSignalBlocker blocker(binding.toggle);
         binding.toggle->setChecked(control.bool_value);
       }
-      if (binding.integer != nullptr && !integer_editing && !slider_editing) {
+      if (binding.integer != nullptr && !integer_editing && !slider_editing &&
+          !number_dispatch_pending) {
         const QSignalBlocker blocker(binding.integer);
         binding.integer->setValue(
             static_cast<int>(std::llround(control.number_value)));
       }
       if (binding.floating != nullptr && !floating_editing &&
-          !slider_editing) {
+          !slider_editing && !number_dispatch_pending) {
         const QSignalBlocker blocker(binding.floating);
         binding.floating->setValue(control.number_value);
       }
       if (binding.number_slider != nullptr &&
-          !binding.number_slider->isSliderDown()) {
+          !slider_editing && !integer_editing && !floating_editing &&
+          !number_dispatch_pending) {
         const QSignalBlocker blocker(binding.number_slider);
         binding.number_slider->setValue(
             qt_tool_settings_number_slider_position(
@@ -1083,9 +1201,9 @@ private:
       }
       if (binding.number_slider != nullptr) {
         const double current_number_value =
-            slider_editing && binding.integer != nullptr
+            number_interaction_active && binding.integer != nullptr
                 ? static_cast<double>(binding.integer->value())
-                : slider_editing && binding.floating != nullptr
+                : number_interaction_active && binding.floating != nullptr
                       ? binding.floating->value()
                       : control.number_value;
         const double logical_step =
@@ -1169,6 +1287,10 @@ void QtToolSettingsPanel::refresh() { impl_->refresh(); }
 
 bool QtToolSettingsPanel::has_active_target() const {
   return impl_->has_active_target();
+}
+
+bool QtToolSettingsPanel::numeric_interaction_active() const {
+  return impl_->numeric_interaction_active();
 }
 
 bool qt_object_belongs_to_tool_settings_panel(const QObject *target) {

@@ -523,6 +523,51 @@ TEST(ModelingSdkConsumerTests,
   EXPECT_TRUE(source.selection().faces.empty());
 }
 
+TEST(ModelingSdkConsumerTests,
+     DenseAssignAllFaceMaterialSlotUsesOneMutationAndPreservesSelection) {
+  Result<PolygonDocument> document_result = PolygonDocument::make_sphere(
+      {.radial_segments = 96, .rings = 64});
+  ASSERT_TRUE(document_result.ok()) << document_result.error_message();
+  PolygonDocument document = std::move(document_result).value();
+  const std::vector<FaceId> faces = document.face_ids();
+  ASSERT_GT(faces.size(), 1000U);
+  const std::array selected{faces[1], faces[3]};
+  ASSERT_TRUE(document.select_faces(selected).ok());
+  ASSERT_TRUE(document.assign_face_material_slot(faces.back(), 9U).ok());
+
+  const PolygonSelectionSnapshot selection_before = document.selection();
+  const std::uint64_t selection_revision_before =
+      document.selection_revision();
+  const std::uint64_t content_revision_before = document.content_revision();
+  Result<OperationResult> assigned = document.assign_all_face_material_slot(4U);
+  ASSERT_TRUE(assigned.ok()) << assigned.error_message();
+  EXPECT_TRUE(assigned.value().changed);
+  EXPECT_TRUE(assigned.value().dirty.materials);
+  EXPECT_EQ(document.content_revision(), content_revision_before + 1U);
+  EXPECT_EQ(document.selection_revision(), selection_revision_before);
+  const PolygonSelectionSnapshot selection_after = document.selection();
+  EXPECT_EQ(selection_after.kind, selection_before.kind);
+  EXPECT_EQ(selection_after.vertices, selection_before.vertices);
+  EXPECT_EQ(selection_after.edges, selection_before.edges);
+  EXPECT_EQ(selection_after.faces, selection_before.faces);
+  EXPECT_EQ(selection_after.has_active, selection_before.has_active);
+  EXPECT_EQ(selection_after.active_vertex, selection_before.active_vertex);
+  EXPECT_EQ(selection_after.active_edge, selection_before.active_edge);
+  EXPECT_EQ(selection_after.active_face, selection_before.active_face);
+  EXPECT_EQ(document.face_ids_by_material_slot(4U), faces);
+
+  const PolygonContentIdentity normalized_identity = document.content_identity();
+  const std::uint64_t normalized_revision = document.content_revision();
+  Result<OperationResult> unchanged =
+      document.assign_all_face_material_slot(4U);
+  ASSERT_TRUE(unchanged.ok()) << unchanged.error_message();
+  EXPECT_FALSE(unchanged.value().changed);
+  EXPECT_FALSE(unchanged.value().dirty.materials);
+  EXPECT_EQ(document.content_identity(), normalized_identity);
+  EXPECT_EQ(document.content_revision(), normalized_revision);
+  EXPECT_EQ(document.selection_revision(), selection_revision_before);
+}
+
 TEST(ModelingSdkConsumerTests, GoldenBoxMeshFixtureStaysDeterministic) {
   Result<PolygonDocument> document_result =
       PolygonDocument::make_box({.min = {0.0F, 0.0F, 0.0F},

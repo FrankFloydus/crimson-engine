@@ -12,6 +12,7 @@
 #include "api/quader_events_api_internal_access.hpp"
 #include "editor/modeling/services/modeling_session_service.hpp"
 #include "editor/session/project_session.hpp"
+#include "editor/session/scene_viewport_camera_persistence.hpp"
 #include "editor/tools/native_viewport_tool_coordinator.hpp"
 #include "io/qdr/qdr_document_reader.hpp"
 #include "io/qdr/qdr_document_writer.hpp"
@@ -279,8 +280,14 @@ QuaderApiResult<SceneSessionId> QuaderSceneDocumentsApi::open_native_path(
                                         : std::move(read.message)),
         SceneSessionId{});
   }
-  session.replace_document(std::move(read.document));
-  session.mark_clean();
+  if (!session.replace_document_with_persisted_viewport_camera(
+          std::move(read.document),
+          viewport_camera_pose_from_qdr(read.viewport_camera_pose))) {
+    return quader_api_result_from_status(
+        status_for(session, false, false,
+                   "Scene viewport camera pose could not be restored."),
+        SceneSessionId{});
+  }
   impl_->standalone_path = path;
   impl_->standalone_scene_id = SceneId::from_bytes(read.scene_uuid);
   impl_->notify_binding_changed();
@@ -326,7 +333,8 @@ QuaderApiVoidResult QuaderSceneDocumentsApi::save(SceneSessionId id) {
     const bool was_dirty = session.dirty();
     const QdrProjectWriteResult written =
         QdrDocumentWriter::write_project_document_atomic(
-            impl_->standalone_path, session.document());
+            impl_->standalone_path, session.document(),
+            qdr_viewport_camera_pose_for_scene(session));
     if (!written.ok) {
       return status_for(session, false, false, written.message);
     }
@@ -415,8 +423,9 @@ QuaderApiVoidResult QuaderSceneDocumentsApi::save_as_native_path(
     }
     const bool was_dirty = session.dirty();
     const QdrProjectWriteResult written =
-        QdrDocumentWriter::write_project_document_atomic(path,
-                                                         session.document());
+        QdrDocumentWriter::write_project_document_atomic(
+            path, session.document(),
+            qdr_viewport_camera_pose_for_scene(session));
     if (!written.ok) {
       return status_for(session, false, false, written.message);
     }

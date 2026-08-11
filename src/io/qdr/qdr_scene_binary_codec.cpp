@@ -47,7 +47,7 @@ namespace {
 namespace fb = ::quader::qdr::fb;
 
 constexpr std::uint16_t kMinimumSceneChunkSchemaVersion = 1u;
-constexpr std::uint16_t kSceneChunkSchemaVersion = 4u;
+constexpr std::uint16_t kSceneChunkSchemaVersion = 5u;
 constexpr std::uint16_t kGeometryChunkSchemaVersion = 1u;
 
 [[nodiscard]] fb::Vec2 to_fb(QVec2 value) {
@@ -55,6 +55,10 @@ constexpr std::uint16_t kGeometryChunkSchemaVersion = 1u;
 }
 
 [[nodiscard]] fb::Vec3 to_fb(QVec3 value) {
+  return fb::Vec3(value.x, value.y, value.z);
+}
+
+[[nodiscard]] fb::Vec3 to_fb(QdrSceneViewportCameraVector value) {
   return fb::Vec3(value.x, value.y, value.z);
 }
 
@@ -73,6 +77,13 @@ constexpr std::uint16_t kGeometryChunkSchemaVersion = 1u;
 
 [[nodiscard]] QVec3 from_fb(const fb::Vec3 &value, QVec3 = {}) {
   return {value.x(), value.y(), value.z()};
+}
+
+[[nodiscard]] QdrSceneViewportCameraVector
+qdr_camera_vector_from_fb(const fb::Vec3 *value) {
+  return value ? QdrSceneViewportCameraVector{
+                     value->x(), value->y(), value->z()}
+               : QdrSceneViewportCameraVector{};
 }
 
 [[nodiscard]] quader::modeling::AuthoredSurfaceShading
@@ -956,12 +967,25 @@ encode_scene_settings(flatbuffers::FlatBufferBuilder &builder,
         &color, layer.locked));
   }
 
+  flatbuffers::Offset<fb::ViewportCameraPose> viewport_camera_pose;
+  if (snapshot.viewport_camera_pose.has_value()) {
+    if (!qdr_scene_viewport_camera_pose_is_valid(
+            *snapshot.viewport_camera_pose)) {
+      throw std::runtime_error("QDR viewport camera pose is invalid.");
+    }
+    const fb::Vec3 eye = to_fb(snapshot.viewport_camera_pose->eye);
+    const fb::Vec3 target = to_fb(snapshot.viewport_camera_pose->target);
+    const fb::Vec3 up = to_fb(snapshot.viewport_camera_pose->up);
+    viewport_camera_pose =
+        fb::CreateViewportCameraPose(builder, &eye, &target, &up);
+  }
+
   const auto root = fb::CreateScenePayload(
       builder, snapshot.project_id, builder.CreateString(snapshot.project_name),
       builder.CreateVector(meshes), builder.CreateVector(materials),
       builder.CreateVector(textures), builder.CreateVector(entities),
       builder.CreateVector(objects), builder.CreateVector(dependencies),
-      builder.CreateVector(layers));
+      builder.CreateVector(layers), viewport_camera_pose);
   fb::FinishScenePayloadBuffer(builder, root);
   return flatbuffer_bytes(builder);
 }
@@ -1690,6 +1714,27 @@ void decode_scene_layers(SceneContentDocument &document,
   }
 }
 
+[[nodiscard]] std::optional<QdrSceneViewportCameraPose>
+decode_viewport_camera_pose(const fb::ScenePayload &payload,
+                            std::uint16_t schema_version) {
+  if (schema_version < 5u || payload.viewport_camera_pose() == nullptr) {
+    return std::nullopt;
+  }
+  const fb::ViewportCameraPose &stored = *payload.viewport_camera_pose();
+  QdrSceneViewportCameraPose pose{
+      .eye = qdr_camera_vector_from_fb(stored.eye()),
+      .target = qdr_camera_vector_from_fb(stored.target()),
+      .up = qdr_camera_vector_from_fb(stored.up()),
+  };
+  if (stored.eye() == nullptr || stored.target() == nullptr ||
+      stored.up() == nullptr ||
+      !qdr_scene_viewport_camera_pose_is_valid(pose)) {
+    throw std::runtime_error(
+        "QDR scene contains an invalid viewport camera pose.");
+  }
+  return pose;
+}
+
 void decode_entities(SceneContentDocument &document,
                      const fb::ScenePayload &payload,
                      std::uint16_t schema_version) {
@@ -2018,6 +2063,8 @@ QdrSceneBinaryDecodeResult decode_qdr_scene_binary_with_stats(
       SceneContentDocumentRootPolicy::DeferSceneRoot);
   std::vector<ProjectAssetReference> project_asset_dependencies =
       decode_project_asset_dependencies(*payload);
+  std::optional<QdrSceneViewportCameraPose> viewport_camera_pose =
+      decode_viewport_camera_pose(*payload, metadata.schema_version);
   decode_scene_layers(document, *payload, metadata.schema_version);
   decode_assets(document, *payload, geometry_chunks, stats);
   decode_entities(document, *payload, metadata.schema_version);
@@ -2041,6 +2088,7 @@ QdrSceneBinaryDecodeResult decode_qdr_scene_binary_with_stats(
   return {
       .document = std::move(document),
       .project_asset_dependencies = std::move(project_asset_dependencies),
+      .viewport_camera_pose = std::move(viewport_camera_pose),
       .stats = stats,
   };
 }

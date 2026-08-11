@@ -185,6 +185,9 @@ enum class ViewportInputActionKind {
     LinearArrayDecreaseCopies,
     RadialArrayIncreaseCopies,
     RadialArrayDecreaseCopies,
+    SampleFaceMaterial,
+    ApplyActiveMaterialToSelection,
+    ApplyFaceMaterialToMesh,
 };
 
 /**

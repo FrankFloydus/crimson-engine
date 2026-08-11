@@ -40,6 +40,7 @@ struct SceneContentRevisionStamp {
   std::uint64_t scene_revision = 0;
   std::uint64_t asset_revision = 0;
   std::uint64_t modeling_content_revision = 0;
+  std::uint64_t viewport_camera_pose_signature = 0;
 
   [[nodiscard]] bool
   operator==(const SceneContentRevisionStamp &) const = default;
@@ -125,6 +126,14 @@ public:
   const ViewportWorkspaceService &viewport_workspace() const {
     return viewport_workspace_;
   }
+  [[nodiscard]] ViewportCameraPose persisted_viewport_camera_pose() const {
+    return viewport_workspace_.persisted_perspective_camera_pose();
+  }
+  bool restore_persisted_viewport_camera_pose(
+      const std::optional<ViewportCameraPose> &camera_pose) {
+    return viewport_workspace_.restore_persisted_perspective_camera_pose(
+        camera_pose);
+  }
   ViewportLocalVisibilityService &viewport_local_visibility() {
     return *viewport_local_visibility_;
   }
@@ -138,6 +147,9 @@ public:
   [[nodiscard]] SceneAssetMutationResult
   replace_standalone_mesh(AssetId mesh, MeshAsset replacement);
   void replace_document(SceneContentDocument document);
+  bool replace_document_with_persisted_viewport_camera(
+      SceneContentDocument document,
+      const std::optional<ViewportCameraPose> &camera_pose);
   void set_document_replacement_finalizer(
       std::function<void(SceneSession &)> finalizer);
   void mark_clean();
@@ -158,6 +170,9 @@ private:
   void observe_before_modeling_preview_projection();
   void record_after_modeling_preview_projection();
   void finish_modeling_preview_checkpoint(bool restored_by_cancel);
+  void replace_document_impl(
+      SceneContentDocument document,
+      const std::optional<ViewportCameraPose> &camera_pose);
 
   SceneContentDocument document_;
   SceneContentRevisionStamp clean_stamp_;

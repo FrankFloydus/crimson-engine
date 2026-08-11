@@ -3139,6 +3139,31 @@ public:
         "Assign material slot failed.");
   }
 
+  [[nodiscard]] ModelingCommandResult assign_material_slot_to_objects(
+      std::span<const int> modeling_object_ids,
+      std::uint32_t material_slot) {
+    if (modeling_object_ids.empty()) {
+      return failure("Select one or more meshes before assigning a material.");
+    }
+    std::vector<ObjectId> objects;
+    objects.reserve(modeling_object_ids.size());
+    for (const int modeling_object_id : modeling_object_ids) {
+      const std::optional<ObjectId> object = sdk_object(modeling_object_id);
+      if (!object.has_value()) {
+        return failure("Material target mesh is not live.");
+      }
+      if (std::ranges::find(objects, *object) == objects.end()) {
+        objects.push_back(*object);
+      }
+    }
+    return mutate_documents_by_object(
+        objects,
+        [material_slot](ObjectId, PolygonDocument &document) {
+          return document.assign_all_face_material_slot(material_slot);
+        },
+        "Assign material slot failed.", false, false, false, true);
+  }
+
   [[nodiscard]] ModelingCommandResult assign_material_slot_to_face(
       int modeling_object_id, int face_id, std::uint32_t material_slot) {
     const std::optional<ObjectId> object = sdk_object(modeling_object_id);
@@ -3146,15 +3171,15 @@ public:
       return failure("Material target face is not live.");
     }
     const std::array<ObjectId, 1> objects{*object};
-    return mutate_documents(
+    return mutate_documents_by_object(
         objects,
-        [face_id, material_slot](PolygonDocument &document) {
+        [face_id, material_slot](ObjectId, PolygonDocument &document) {
           return document.assign_face_material_slot(
               quader::modeling::make_id<quader::modeling::FaceTag>(
                   static_cast<std::uint32_t>(face_id)),
               material_slot);
         },
-        "Assign material slot failed.");
+        "Assign material slot failed.", false, false, false, true);
   }
 
   [[nodiscard]] ModelingCommandResult assign_material_slots_to_faces(
@@ -7965,6 +7990,13 @@ ModelingCommandResult
 ModelingSdkProjectionAdapter::assign_material_slot_to_selection(
     std::uint32_t material_slot) {
   return impl_->assign_material_slot_to_selection(material_slot);
+}
+
+ModelingCommandResult
+ModelingSdkProjectionAdapter::assign_material_slot_to_objects(
+    std::span<const int> modeling_object_ids, std::uint32_t material_slot) {
+  return impl_->assign_material_slot_to_objects(modeling_object_ids,
+                                                material_slot);
 }
 
 ModelingCommandResult ModelingSdkProjectionAdapter::assign_material_slot_to_face(

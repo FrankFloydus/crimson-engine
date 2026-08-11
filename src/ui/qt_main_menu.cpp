@@ -215,7 +215,6 @@ struct QtMainMenu::Impl {
     panel_actions.clear();
     tool_actions.clear();
     selection_mode_actions.clear();
-    align_menu = nullptr;
     view_menu = nullptr;
     navigation_gizmo_action = nullptr;
     material_browser_action = nullptr;
@@ -250,7 +249,6 @@ struct QtMainMenu::Impl {
   QtMainMenuContext context;
   std::unique_ptr<QObject> connection_context = std::make_unique<QObject>();
   std::vector<QPointer<QMenu>> top_level_menus;
-  QMenu *align_menu = nullptr;
   QMenu *view_menu = nullptr;
   QAction *navigation_gizmo_action = nullptr;
   QAction *material_browser_action = nullptr;
@@ -520,7 +518,7 @@ struct QtMainMenu::Impl {
   }
 
   void build_align_menu() {
-    align_menu = add_top_level_menu("ui.menu.align", "&Align");
+    QMenu *align_menu = add_top_level_menu("ui.menu.align", "&Align");
     align_menu->setObjectName(QStringLiteral("menu_align"));
     QAction *snap = align_menu->addAction(qtext(
         context.localization, "ui.menu.align.snap_to_grid", "Snap to Grid"));
@@ -827,18 +825,8 @@ struct QtMainMenu::Impl {
     action.setChecked(checked);
   }
 
-  [[nodiscard]] ModelingSelectionMode refresh_global_chrome() {
-    QDR_PROFILE_SCOPE("Qt main menu sync global chrome");
-    const ModelingSelectionMode selection_mode =
-        context.modeling.selection_mode();
-    if (align_menu != nullptr) {
-      QAction *align_action = align_menu->menuAction();
-      const bool visible = selection_mode == ModelingSelectionMode::Object;
-      if (align_action->isVisible() != visible) {
-        align_action->setVisible(visible);
-      }
-    }
-    return selection_mode;
+  [[nodiscard]] ModelingSelectionMode current_selection_mode() const {
+    return context.modeling.selection_mode();
   }
 
   void refresh_menu(QMenu &menu, ModelingSelectionMode selection_mode) {
@@ -1053,15 +1041,11 @@ void QtMainMenu::rebuild() {
                   menu_identity.constData(),
                   static_cast<std::size_t>(menu_identity.size()));
               const ModelingSelectionMode selection_mode =
-                  impl_->refresh_global_chrome();
+                  impl_->current_selection_mode();
               impl_->refresh_menu(*menu, selection_mode);
             });
       }
     }
-  }
-  {
-    QDR_PROFILE_SCOPE("Qt main menu initial chrome sync");
-    (void)impl_->refresh_global_chrome();
   }
 }
 
@@ -1070,8 +1054,7 @@ void QtMainMenu::refresh() {
   if (!impl_ || impl_->menu_bar == nullptr) {
     return;
   }
-  const ModelingSelectionMode selection_mode =
-      impl_->refresh_global_chrome();
+  const ModelingSelectionMode selection_mode = impl_->current_selection_mode();
   for (const QPointer<QMenu> &menu : impl_->top_level_menus) {
     if (menu != nullptr) {
       impl_->refresh_menu(*menu.data(), selection_mode);

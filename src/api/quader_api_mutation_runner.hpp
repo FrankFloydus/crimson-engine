@@ -34,6 +34,7 @@ public:
 
   void set_dirty_changed_callback(std::function<void(bool)> callback);
   void synchronize_dirty_state();
+  void observe_dirty_state();
   [[nodiscard]] bool available() const;
   [[nodiscard]] SceneSessionId scene_session_id() const;
   [[nodiscard]] bool
@@ -99,7 +100,6 @@ private:
   [[nodiscard]] QuaderApiVoidResult
   status_from(ModelingCommandResult result, QuaderMutationKind kind,
               std::string_view fallback_message = {});
-  void observe_dirty_state();
   [[nodiscard]] ModelingCommandResult cancel_active_tool_or_preview_for_undo();
   [[nodiscard]] SceneSession &scene_session() const;
   [[nodiscard]] EditorHistoryService &history() const;

@@ -57,6 +57,8 @@ struct ViewportInteractionFrame {
   bool right_pressed = false;
   bool right_down = false;
   bool right_released = false;
+  double double_click_interval_seconds = 0.5;
+  double monotonic_time_seconds = 0.0;
   bool active_tool_allows_selection_fallback = false;
   std::span<const ViewportSceneBillboardPickCandidate>
       scene_billboard_pick_candidates;

@@ -52,6 +52,11 @@ struct QuaderEdgeBevelArgs {
   int segments = 1;
 };
 
+/// Carries the project-owned material resolved from one polygon face.
+struct QuaderFaceProjectMaterial {
+  ProjectAssetId id;
+};
+
 /**
  * Configures native public face thickening previews.
  */
@@ -390,6 +395,10 @@ public:
   QuaderApiVoidResult assign_slot(std::uint32_t material_slot) const;
   QuaderApiVoidResult assign_to_face(QuaderElementId face,
                                      std::uint32_t material_slot) const;
+  [[nodiscard]] QuaderApiResult<QuaderFaceProjectMaterial>
+  project_material_for_face(QuaderElementId face) const;
+  QuaderApiVoidResult
+  apply_face_material_to_mesh(QuaderElementId face) const;
 
 private:
   friend class QuaderMeshHandle;
@@ -538,6 +547,12 @@ public:
   [[nodiscard]] QuaderInstanceEditState instance_edit_state() const;
 
   QuaderApiVoidResult apply_active_material(std::uint32_t material_slot = 0);
+  [[nodiscard]] QuaderApiResult<QuaderFaceProjectMaterial>
+  project_material_for_face(QuaderModelingObjectId object_id,
+                            QuaderElementId face_id) const;
+  QuaderApiVoidResult
+  apply_face_material_to_mesh(QuaderModelingObjectId object_id,
+                              QuaderElementId face_id);
   QuaderApiVoidResult
   assign_material_slot_to_selection(std::uint32_t material_slot);
   QuaderApiVoidResult

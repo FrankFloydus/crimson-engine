@@ -7,6 +7,7 @@
 #include "command_observable_state.hpp"
 
 #include "api/quader_editor_api.hpp"
+#include "editor/viewport/quader_viewport_api_runtime_access.hpp"
 
 #include <algorithm>
 #include <bit>
@@ -1421,6 +1422,8 @@ std::string capture_tools(const CaptureData &data) {
 std::string capture_viewports(const CaptureData &data) {
   CanonicalWriter writer;
   const QuaderViewportApi &viewports = data.editor.viewports();
+  const ViewportWorkspaceService &workspace =
+      QuaderViewportApiRuntimeAccess::workspace(viewports);
   writer.line("viewport.layout", enum_text(viewports.layout()));
   writer.line("viewport.active_pane_count",
               std::to_string(viewports.active_pane_count()));
@@ -1439,6 +1442,10 @@ std::string capture_viewports(const CaptureData &data) {
     writer.line(prefix + ".view", enum_text(viewports.view(pane)));
     writer.line(prefix + ".shading",
                 enum_text(viewports.shading_mode(pane)));
+    const ViewportCameraPose pose = workspace.camera(pane).pose();
+    writer.line(prefix + ".camera.eye", vec3_text(pose.eye));
+    writer.line(prefix + ".camera.target", vec3_text(pose.target));
+    writer.line(prefix + ".camera.up", vec3_text(pose.up));
   }
   return std::move(writer).finish();
 }

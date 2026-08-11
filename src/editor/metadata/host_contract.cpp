@@ -1335,7 +1335,7 @@ std::vector<HostPreferenceDescriptor> build_preference_descriptors()
   }};
 
   std::vector<HostPreferenceDescriptor> descriptors;
-  descriptors.reserve(45);
+  descriptors.reserve(49);
   for (const quader_editor_core::EditorOperationOptionDescriptor &option :
        quader_editor_core::operation_option_descriptor_catalog()) {
     descriptors.push_back(operation_preference(option));
@@ -1380,6 +1380,9 @@ std::vector<HostPreferenceDescriptor> build_preference_descriptors()
   descriptors.push_back(color_preference(
       "viewport.selection.wire_color", "Wire", color_from_abgr(0xff1fd3ffU),
       "viewport.selection", "selected_face_edge"));
+  descriptors.push_back(color_preference(
+      "viewport.selection.bounding_box_wire_color", "Bounding Box Wire Color",
+      color_from_abgr(0xff00e6ffU), "viewport.selection"));
   descriptors.push_back(color_preference(
       "viewport.overlay.source_wire_color", "Source Wire",
       color_from_abgr(0xebffe05cU), "viewport.overlay", "source_wire"));
@@ -1568,10 +1571,11 @@ HostPreferenceGroupStorage build_preference_group_descriptors()
                 "viewport.grid.major_line_size",
                 "viewport.grid.axis_line_size",
             }};
-        static constexpr std::array<std::string_view, 4>
+        static constexpr std::array<std::string_view, 5>
             kViewportSelectionPreferences{{
                 "viewport.selection.face_color",
                 "viewport.selection.wire_color",
+                "viewport.selection.bounding_box_wire_color",
                 "viewport.selection.face_wire_line_size",
                 "viewport.selection.edge_line_size",
             }};

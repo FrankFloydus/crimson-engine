@@ -409,7 +409,7 @@ TEST(LocalVisibilityTests,
 }
 
 TEST(LocalVisibilityTests,
-     DocumentReplacementResetsLocalVisibilityAndRestoresCamera) {
+     DocumentReplacementResetsLocalVisibilityAndInstallsCanonicalCamera) {
   quader::QuaderStandaloneEditor standalone =
       quader::create_standalone_editor();
   quader::QuaderEditorApi &editor = standalone.editor();
@@ -423,8 +423,6 @@ TEST(LocalVisibilityTests,
   workspace.clear_pane_visibility();
   workspace.set_pane_visible(quader::ViewportPaneId::Perspective, true);
   workspace.camera(quader::ViewportPaneId::Perspective).focus_origin(81.0f);
-  const quader::ViewportCameraState camera_before =
-      workspace.camera(quader::ViewportPaneId::Perspective).state();
   ASSERT_TRUE(editor.viewports().toggle_local_visibility().ok());
 
   editor.project().set_runtime_hooks({
@@ -438,9 +436,10 @@ TEST(LocalVisibilityTests,
   EXPECT_FALSE(workspace.local_visibility_active());
   EXPECT_FALSE(editor.viewports().local_visibility_active());
   EXPECT_FALSE(editor.query().entity(isolated.entity).has_value());
+  const quader::ViewportCameraController canonical_camera;
   expect_camera_state_equal(
       workspace.camera(quader::ViewportPaneId::Perspective).state(),
-      camera_before);
+      canonical_camera.state());
 }
 
 TEST(LocalVisibilityTests,

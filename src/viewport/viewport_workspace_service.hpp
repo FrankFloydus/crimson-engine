@@ -13,6 +13,7 @@
 
 #include <array>
 #include <cstdint>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -162,6 +163,11 @@ public:
   [[nodiscard]] ViewportCameraController &camera(ViewportPaneId pane);
   [[nodiscard]] const ViewportCameraController &
   camera(ViewportPaneId pane) const;
+  [[nodiscard]] ViewportCameraPose persisted_perspective_camera_pose() const;
+  [[nodiscard]] std::uint64_t
+  persisted_perspective_camera_pose_signature() const;
+  bool restore_persisted_perspective_camera_pose(
+      const std::optional<ViewportCameraPose> &camera_pose);
   bool set_default_fly_speed(float speed);
   [[nodiscard]] float default_fly_speed() const {
     return default_fly_speed_;

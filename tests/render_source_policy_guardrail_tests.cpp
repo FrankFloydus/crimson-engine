@@ -652,6 +652,8 @@ TEST(ViewportOverlayPolicyTests,
   EXPECT_TRUE(source_contains_compact(
       source,
       "overlay_frame = selection_overlay_cache_.frame()"));
+  EXPECT_NE(source.find(".selection_overlays_visible = overlays_visible"),
+            std::string::npos);
   EXPECT_EQ(source.find("append_overlay_frame(overlay_frame,"),
             std::string::npos);
 }
@@ -707,6 +709,8 @@ TEST(ViewportOverlayPolicyTests,
      WireframeCacheUsesSelectionStyleForSelectedMeshes) {
   const std::string cache_source =
       read_source_file("src/render/overlay/scene_wireframe_overlay_cache.cpp");
+  const std::string cache_header =
+      read_source_file("src/render/overlay/scene_wireframe_overlay_cache.hpp");
   EXPECT_NE(cache_source.find("mesh.selected"), std::string::npos);
   EXPECT_TRUE(source_contains_compact(cache_source,
                                       "ViewportOverlayLayer::SelectedEdge : "
@@ -717,6 +721,16 @@ TEST(ViewportOverlayPolicyTests,
   EXPECT_NE(cache_source.find("mesh.wireframe_tint"), std::string::npos);
   EXPECT_NE(cache_source.find("style.selection_edge_line_width_pixels"),
             std::string::npos);
+  EXPECT_NE(cache_header.find("synced_selected_mesh_wire_visible_"),
+            std::string::npos);
+  EXPECT_TRUE(source_contains_compact(
+      cache_source,
+      "synced_selected_mesh_wire_visible_ == "
+      "snapshot.selected_mesh_wire_visible"));
+  EXPECT_TRUE(source_contains_compact(
+      cache_source,
+      "synced_selected_mesh_wire_visible_ = "
+      "snapshot.selected_mesh_wire_visible"));
 }
 
 TEST(ViewportOverlayPolicyTests,
@@ -754,6 +768,11 @@ TEST(ViewportOverlayPolicyTests,
   EXPECT_NE(wireframe_cache.find(
                 "--stats_.unique_geometry_resource_count"),
             std::string::npos);
+  EXPECT_TRUE(source_contains_compact(
+      wireframe_cache,
+      "for (WireBatchProxy &proxy : created) { "
+      "destroy_batch(proxy); } "
+      "prune_unused_geometry_resources(); return false;"));
 
   const std::string selection_acquire = acquire_body(
       selection_cache, "InstanceSelectionOverlayCache::acquire_wire_geometry(",
@@ -762,6 +781,28 @@ TEST(ViewportOverlayPolicyTests,
                 "++stats_.unique_wire_geometry_resource_count"),
             std::string::npos);
   EXPECT_EQ(selection_acquire.find("resource_count ="), std::string::npos);
+  EXPECT_TRUE(source_contains_compact(
+      selection_acquire,
+      "resource->wire_geometry->content_id == "
+      "record.wire_geometry_payload->content_id && "
+      "resource->wire_color == record.wire_color"));
+  EXPECT_NE(selection_acquire.find(
+                "resource->wire_color = record.wire_color"),
+            std::string::npos);
+  EXPECT_TRUE(source_contains_compact(
+      selection_cache,
+      ".material_payload = std::bit_cast<std::uint32_t>("
+      "record.wire_width_pixels)"));
+  EXPECT_NE(selection_cache.find(".index_offset = record.wire_color"),
+            std::string::npos);
+  EXPECT_TRUE(source_contains_compact(
+      selection_cache,
+      "stats_.selected_member_count = "
+      "snapshot.instance_selection_fills.size(); "
+      "prune_unused_wire_resources(); return true;"));
+  EXPECT_NE(selection_cache.find(
+                "--stats_.unique_wire_geometry_resource_count"),
+            std::string::npos);
 }
 
 TEST(ViewportPersistentOverlayStyleSnapshotTests,

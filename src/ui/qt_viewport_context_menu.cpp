@@ -37,7 +37,7 @@ bool is_generic_context_action(std::string_view action_id) {
 
 QString localized_action_label(const QuaderActionItem &action,
                                const LocalizationService &localization) {
-  std::string key = "modeling.action.";
+  std::string key = "ui.viewport.context_menu.action.";
   key.append(action.action_id);
   key.append(".label");
   return QString::fromStdString(localization.text(key, action.label));

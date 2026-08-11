@@ -1167,6 +1167,12 @@ public:
     return sdk_projection_adapter_.has_selection();
   }
 
+  [[nodiscard]] bool active_scene_selection_is_owned_outside_modeling() const {
+    const EntityId active = scene_.primary_selection();
+    return active != kInvalidEntityId &&
+           !sdk_projection_adapter_.owns_entity(active);
+  }
+
   [[nodiscard]] std::optional<EntityId>
   pick_object_entity(const ModelingPickSelectRequest &request) const {
     const quader_editor_core::EditorSession &projected =
@@ -1444,11 +1450,17 @@ public:
 
   [[nodiscard]] std::uint64_t selection_overlay_signature(
       ModelingSelectionOverlayOptions options = {}) const {
+    options.suppress_persistent_selection =
+        options.suppress_persistent_selection ||
+        active_scene_selection_is_owned_outside_modeling();
     return overlay_service_.selection_overlay_signature(runtime_, options);
   }
 
   [[nodiscard]] ViewportOverlayFrame
   selection_overlay_frame(ModelingSelectionOverlayOptions options = {}) const {
+    options.suppress_persistent_selection =
+        options.suppress_persistent_selection ||
+        active_scene_selection_is_owned_outside_modeling();
     const quader_editor_core::EditorSession &projected =
         selection_projection_view();
     return overlay_service_.selection_overlay_frame(
@@ -1724,6 +1736,21 @@ public:
             ? scene_active
             : (sdk_selected.empty() ? kInvalidEntityId
                                     : sdk_selected.front()));
+  }
+
+  void clear_runtime_object_selection_for_scene_owned_selection() {
+    QDR_PROFILE_FUNCTION();
+    const ModelingSelectionMode selection_mode =
+        sdk_projection_adapter_.selection_mode();
+    const ModelingCommandResult cleared =
+        sdk_projection_adapter_.project_object_selection_from_scene(
+            {}, kInvalidEntityId);
+    if (cleared.ok && selection_mode != ModelingSelectionMode::Object) {
+      (void)sdk_projection_adapter_.set_selection_mode(selection_mode);
+    }
+    if (cleared.ok && cleared.changed) {
+      invalidate_selection_overlay_caches();
+    }
   }
 
   void promote_drawn_plane_tool_object_selection() {
@@ -2346,6 +2373,199 @@ public:
         from_runtime_viewport_tool(runtime_.active_tool()));
   }
 
+  /// Stages every topology and host-component fact needed to resolve a face
+  /// material without retaining pointers across a modeling mutation.
+  struct FaceMaterialTarget final {
+    ModelingCommandResult command;
+    MaterialReference material;
+  };
+
+  [[nodiscard]] FaceMaterialTarget
+  resolve_face_material(int modeling_object_id, int face_id) const {
+    const auto rejected = [](std::string message) {
+      return FaceMaterialTarget{
+          .command = {
+              .ok = false,
+              .changed = false,
+              .message = std::move(message),
+          },
+      };
+    };
+    if (modeling_object_id <= 0 || face_id <= 0 ||
+        !sdk_projection_adapter_.owns_object(modeling_object_id)) {
+      return rejected("The material target mesh is not live.");
+    }
+
+    const std::optional<EntityId> entity =
+        object_registry_.entity_for_modeling_object(modeling_object_id);
+    if (!entity.has_value() || !scene_.exists(*entity) ||
+        scene_.kind(*entity) != EntityKind::Mesh) {
+      return rejected("The material target mesh is stale.");
+    }
+
+    const ModelingInstanceEditScope edit_scope =
+        instance_edit_scope_provider_ ? instance_edit_scope_provider_()
+                                      : ModelingInstanceEditScope{};
+    const EntityId definition =
+        scene_.containing_instance_definition(*entity);
+    if (edit_scope.active()) {
+      if (!scene_.exists(edit_scope.occurrence) ||
+          !scene_.exists(edit_scope.definition) ||
+          definition != edit_scope.definition ||
+          *entity == edit_scope.definition) {
+        return rejected(
+            "The material target is outside the active instance edit scope.");
+      }
+      if (!scene_hierarchy_segment_is_selectable(
+              scene_, *entity, edit_scope.definition) ||
+          !scene_.is_effectively_visible(edit_scope.occurrence) ||
+          scene_.is_effectively_locked(edit_scope.occurrence) ||
+          (scene_.visibility(edit_scope.occurrence) != nullptr &&
+           !scene_.visibility(edit_scope.occurrence)->selectable) ||
+          !selection_service_.viewport_entity_visible(*entity) ||
+          !selection_service_.viewport_entity_visible(edit_scope.occurrence)) {
+        return rejected("The material target mesh is hidden or locked.");
+      }
+    } else {
+      if (definition != kInvalidEntityId) {
+        return rejected(
+            "The face belongs to an atomic instance occurrence; enter "
+            "instance edit mode before editing its material.");
+      }
+      const VisibilityComponent *visibility = scene_.visibility(*entity);
+      if (!scene_.is_effectively_visible(*entity) ||
+          scene_.is_effectively_locked(*entity) ||
+          (visibility != nullptr && !visibility->selectable) ||
+          !selection_service_.viewport_entity_visible(*entity)) {
+        return rejected("The material target mesh is hidden or locked.");
+      }
+    }
+
+    const quader_editor_core::EditorSession &projection =
+        selection_projection_view();
+    const auto object = std::find_if(
+        projection.objects().begin(), projection.objects().end(),
+        [modeling_object_id](const quader_editor_core::PolygonObject &item) {
+          return item.id == modeling_object_id;
+        });
+    if (object == projection.objects().end()) {
+      return rejected("The material target mesh is stale.");
+    }
+    const quader_poly::Face *face = quader_poly::find_face(
+        object->document, static_cast<quader_poly::ElementId>(face_id));
+    if (face == nullptr) {
+      return rejected("The material target face is not live.");
+    }
+
+    const MaterialComponent *component = scene_.material(*entity);
+    if (component == nullptr) {
+      return rejected("The target face has no material.");
+    }
+    const MaterialReference reference =
+        component->material_for_slot(face->material_slot);
+    if (!reference.valid()) {
+      return rejected("The target face material is unavailable.");
+    }
+    return {
+        .command = {.ok = true, .changed = false},
+        .material = reference,
+    };
+  }
+
+  ModelingCommandResult normalize_whole_object_materials(
+      std::span<const int> modeling_object_ids, MaterialReference material) {
+    if (!material.valid()) {
+      return {
+          .ok = false,
+          .changed = false,
+          .message = "The material is unavailable.",
+      };
+    }
+    if (modeling_object_ids.empty()) {
+      return {
+          .ok = false,
+          .changed = false,
+          .message = "Select one or more meshes before applying material.",
+      };
+    }
+
+    const quader_editor_core::EditorSession &projection =
+        selection_projection_view();
+    std::vector<int> normalized_object_ids;
+    std::vector<EntityId> entities;
+    std::unordered_set<int> staged_object_ids;
+    normalized_object_ids.reserve(modeling_object_ids.size());
+    entities.reserve(modeling_object_ids.size());
+    staged_object_ids.reserve(modeling_object_ids.size());
+    for (const int modeling_object_id : modeling_object_ids) {
+      if (!staged_object_ids.insert(modeling_object_id).second) {
+        continue;
+      }
+      const std::optional<EntityId> entity =
+          object_registry_.entity_for_modeling_object(modeling_object_id);
+      const auto object = std::find_if(
+          projection.objects().begin(), projection.objects().end(),
+          [modeling_object_id](const quader_editor_core::PolygonObject &item) {
+            return item.id == modeling_object_id;
+          });
+      if (!entity.has_value() || !scene_.exists(*entity) ||
+          object == projection.objects().end() ||
+          object->document.faces.empty()) {
+        return {
+            .ok = false,
+            .changed = false,
+            .message = "A material target mesh is not live.",
+          };
+      }
+      normalized_object_ids.push_back(modeling_object_id);
+      entities.push_back(*entity);
+    }
+
+    ModelingCommandResult modeling_result =
+        sdk_projection_adapter_.assign_material_slot_to_objects(
+            normalized_object_ids, 0u);
+    if (!modeling_result.ok) {
+      return modeling_result;
+    }
+    bool component_changed = false;
+    for (const EntityId entity : entities) {
+      component_changed =
+          mesh_sync_service_.set_entity_material(
+              scene_, entity, MaterialComponent{.material = material}) ||
+          component_changed;
+    }
+    modeling_result.changed = modeling_result.changed || component_changed;
+    return modeling_result;
+  }
+
+  [[nodiscard]] ModelingProjectMaterialQueryResult
+  project_material_for_face(int modeling_object_id, int face_id) const {
+    FaceMaterialTarget target =
+        resolve_face_material(modeling_object_id, face_id);
+    if (target.command.ok && !target.material.project_owned()) {
+      target.command = {
+          .ok = false,
+          .changed = false,
+          .message = "The target face does not use a project material.",
+      };
+    }
+    return {
+        .command = std::move(target.command),
+        .material = target.material.project_asset(),
+    };
+  }
+
+  ModelingCommandResult apply_face_material_to_mesh(int modeling_object_id,
+                                                    int face_id) {
+    const FaceMaterialTarget target =
+        resolve_face_material(modeling_object_id, face_id);
+    if (!target.command.ok) {
+      return target.command;
+    }
+    const std::array object_ids{modeling_object_id};
+    return normalize_whole_object_materials(object_ids, target.material);
+  }
+
   ModelingCommandResult apply_active_material(MaterialReference material) {
     if (!material.valid()) {
       return {
@@ -2381,93 +2601,82 @@ public:
                   "Select one or more faces before applying material."};
     }
 
-    bool component_changed = false;
-    ModelingCommandResult modeling_result;
     if (summary.mode == ModelingSelectionMode::Object) {
-      modeling_result =
-          sdk_projection_adapter_.assign_material_slot_to_selection(0u);
-      if (!modeling_result.ok) {
-        return modeling_result;
-      }
+      std::vector<int> selected_object_ids;
+      selected_object_ids.reserve(selection.objects.size());
       for (const ModelingSelectionExportObject &object : selection.objects) {
-        if (!object.selected || object.entity == kInvalidEntityId ||
-            !scene_.exists(object.entity)) {
-          continue;
+        if (object.selected) {
+          selected_object_ids.push_back(object.modeling_object_id);
         }
-        const MaterialComponent desired{.material = material};
-        component_changed =
-            mesh_sync_service_.set_entity_material(scene_, object.entity,
-                                                   desired) ||
-            component_changed;
       }
-    } else {
-      std::vector<ModelingMaterialSlotAssignment> assignments;
-      /// Stages one host material component until SDK topology mutation succeeds.
-      struct MaterialProjection {
-        EntityId entity = kInvalidEntityId;
-        MaterialComponent material;
-      };
-      std::vector<MaterialProjection> projections;
-      for (const ModelingSelectionExportObject &object : selection.objects) {
-        if (object.selected_faces.empty() ||
-            object.entity == kInvalidEntityId ||
-            !scene_.exists(object.entity)) {
-          continue;
-        }
+      return normalize_whole_object_materials(selected_object_ids, material);
+    }
 
-        MaterialComponent desired;
-        if (const MaterialComponent *existing =
-                scene_.material(object.entity)) {
-          desired = *existing;
-        }
+    bool component_changed = false;
+    std::vector<ModelingMaterialSlotAssignment> assignments;
+    /// Stages one host material component until SDK topology mutation succeeds.
+    struct MaterialProjection {
+      EntityId entity = kInvalidEntityId;
+      MaterialComponent material;
+    };
+    std::vector<MaterialProjection> projections;
+    for (const ModelingSelectionExportObject &object : selection.objects) {
+      if (object.selected_faces.empty() ||
+          object.entity == kInvalidEntityId ||
+          !scene_.exists(object.entity)) {
+        continue;
+      }
 
-        std::uint32_t slot = 0u;
-        if (desired.material != material) {
-          const auto bound = std::min_element(
-              desired.material_slots.begin(), desired.material_slots.end(),
-              [&](const auto &left, const auto &right) {
-                const bool left_matches = left.second == material;
-                const bool right_matches = right.second == material;
-                if (left_matches != right_matches) {
-                  return left_matches;
-                }
-                return left.first < right.first;
-              });
-          if (bound != desired.material_slots.end() &&
-              bound->second == material) {
-            slot = bound->first;
-          } else {
-            slot = 1u;
-            while (desired.material_slots.contains(slot)) {
-              ++slot;
-            }
-            desired.material_slots.emplace(slot, material);
+      MaterialComponent desired;
+      if (const MaterialComponent *existing = scene_.material(object.entity)) {
+        desired = *existing;
+      }
+
+      std::uint32_t slot = 0u;
+      if (desired.material != material) {
+        const auto bound = std::min_element(
+            desired.material_slots.begin(), desired.material_slots.end(),
+            [&](const auto &left, const auto &right) {
+              const bool left_matches = left.second == material;
+              const bool right_matches = right.second == material;
+              if (left_matches != right_matches) {
+                return left_matches;
+              }
+              return left.first < right.first;
+            });
+        if (bound != desired.material_slots.end() &&
+            bound->second == material) {
+          slot = bound->first;
+        } else {
+          slot = 1u;
+          while (desired.material_slots.contains(slot)) {
+            ++slot;
           }
+          desired.material_slots.emplace(slot, material);
         }
-
-        for (const ModelingSelectionExportFace &face :
-             object.selected_faces) {
-          assignments.push_back({
-              .modeling_object_id = object.modeling_object_id,
-              .face_id = static_cast<int>(face.id),
-              .material_slot = slot,
-          });
-        }
-        projections.push_back({.entity = object.entity,
-                               .material = std::move(desired)});
       }
 
-      modeling_result =
-          sdk_projection_adapter_.assign_material_slots_to_faces(assignments);
-      if (!modeling_result.ok) {
-        return modeling_result;
+      for (const ModelingSelectionExportFace &face : object.selected_faces) {
+        assignments.push_back({
+            .modeling_object_id = object.modeling_object_id,
+            .face_id = static_cast<int>(face.id),
+            .material_slot = slot,
+        });
       }
-      for (MaterialProjection &projection : projections) {
-        component_changed = mesh_sync_service_.set_entity_material(
-                                scene_, projection.entity,
-                                std::move(projection.material)) ||
-                            component_changed;
-      }
+      projections.push_back(
+          {.entity = object.entity, .material = std::move(desired)});
+    }
+
+    ModelingCommandResult modeling_result =
+        sdk_projection_adapter_.assign_material_slots_to_faces(assignments);
+    if (!modeling_result.ok) {
+      return modeling_result;
+    }
+    for (MaterialProjection &projection : projections) {
+      component_changed = mesh_sync_service_.set_entity_material(
+                              scene_, projection.entity,
+                              std::move(projection.material)) ||
+                          component_changed;
     }
 
     return {
@@ -6282,6 +6491,11 @@ void ModelingSessionService::project_object_selection_from_scene(
   impl_->sync_object_selection_from_scene(force_object_mode);
 }
 
+void ModelingSessionService::
+    clear_runtime_object_selection_for_scene_owned_selection() {
+  impl_->clear_runtime_object_selection_for_scene_owned_selection();
+}
+
 ModelingCommandResult
 ModelingSessionService::duplicate_selected_hierarchy_for_group_drag(
     DocumentCommandService &document_commands) {
@@ -6372,6 +6586,17 @@ ModelingSessionService::apply_active_material(std::uint32_t material_slot) {
 ModelingCommandResult
 ModelingSessionService::apply_active_material(MaterialReference material) {
   return impl_->apply_active_material(material);
+}
+
+ModelingProjectMaterialQueryResult
+ModelingSessionService::project_material_for_face(int modeling_object_id,
+                                                  int face_id) const {
+  return impl_->project_material_for_face(modeling_object_id, face_id);
+}
+
+ModelingCommandResult ModelingSessionService::apply_face_material_to_mesh(
+    int modeling_object_id, int face_id) {
+  return impl_->apply_face_material_to_mesh(modeling_object_id, face_id);
 }
 
 bool ModelingSessionService::modal_tool_owns_viewport() const {

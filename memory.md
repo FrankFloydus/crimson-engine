@@ -6310,3 +6310,115 @@ linear-array render-preview, and source-wire overlay contracts. The complete gua
 361 tests with three unrelated existing root instruction/CMake contract failures. Modeling-domain
 and SDK consumer/parity suites pass; the nested SDK-only check still crashes in its existing
 isolated test configuration.
+
+## 2026-07-27 - Unified Selection Overlays And Persisted Perspective Camera
+
+Task/context: disabling viewport outlines left selection cages and retained wires visible, grouped
+meshes used a different-looking expanded outline, multi-mesh selection lost its face fill, and
+reopening a scene reset its Perspective camera. Experiments with a separate active-selection color
+were ultimately removed in favor of the original uniform selection presentation.
+
+Invariant:
+
+- `ShowOverlays` gates every selection-produced presentation path: modeling selection frames,
+  scene hierarchy wires and cages, selected-light markers, retained object/instance wires,
+  selection fills, marquee feedback, and scene/modeling tool overlays. Gizmos and unrelated tool
+  handles keep their separate policy switches.
+- A selected group outlines descendant mesh topology with the normal `SelectedEdge` layer and
+  Selection Edge Line Size. Prefer authored polygon wire segments over triangle-derived edges.
+  Formal instance occurrences expand their definition-member meshes, and transform-only cache
+  refresh composes occurrence, inverse-definition, and member transforms exactly. The group bounds
+  cage remains the independently configured bounding-box presentation.
+- Selecting a scene-owned group hides latent component-selection presentation without destroying
+  the component state. Undo exposes the restored component selection; redo hides it again. The
+  per-frame ownership decision uses the primary scene selection and constant-time modeling
+  ownership lookup rather than allocating or sorting the selected-entity set.
+- Active selection remains semantic tool/document state but has no separate visual color or
+  setting. Active and non-active selections share the configured Selection Wire, Bounding Box
+  Wire, and Selected Vertex colors. Do not add active-only overlay style roles or persistence keys.
+  Retained instance/wire caches still consume the normal configured wire color and width and prune
+  unused resources on success and failure paths.
+- Retained selected-object face fills remain enabled for every non-empty mesh selection, not only
+  a single selected mesh. Transient object-fill triangles stay stripped when the retained cache is
+  their owner so the two paths never draw duplicate fills.
+- QDR scene schema v5 appends an optional validated Perspective camera pose (`eye`, `target`, and
+  `up`). Scene save captures it before local-visibility projection, older schemas remain readable,
+  open/new/switch restores it through `ViewportWorkspaceService`, and camera signatures participate
+  in scene dirty tracking. Direct viewport input publishes a dirty transition only when the pose
+  signature changes.
+- Canonical Profile tests link the Release-mapped GTest DLLs. Every GTest executable deploys its
+  mapped runtime closure explicitly, and the native app's shared-output cleanup must preserve
+  `gtest.dll` and `gtest_main.dll` whenever tests are enabled. Do not rely on vcpkg's configuration-
+  named app-local hook here because the canonical `Debug` path intentionally uses Release imports.
+
+Owners: modeling selection projection and session services, render overlay policy/builders/caches,
+Qt viewport orchestration, viewport camera/workspace services, scene/project sessions, native QDR
+reader/writer/codec, public viewport/project APIs, and command behavior contracts.
+
+Verification: focused grouping, overlay, cache, camera, project-workspace, codec,
+public API, source-policy, dependency-matrix, command behavior contract, and direct executable
+loader suites pass. The final Debug regression gate runs 1,261 app tests and passes 1,253 with
+three local-stress skips; its five failures are the pre-existing linear-array preview and
+source-wire depth/signature regressions recorded above. Modeling-domain and main SDK
+consumer/parity tests pass. The isolated SDK-only tree now configures, deploys the mapped GTest
+runtime, and executes its consumer test instead of failing at process load; its wrapper inherits
+only the existing root guardrail failures. After reconciling the selection-cage helper with the
+architecture contract, the guardrail binary has three remaining instruction/CMake failures out of
+366 tests, all predating this task.
+
+## 2026-08-04 - Cold Qt Presentation, Coalesced Tool Edits, And Material Gestures
+
+Task/context: the first native viewport reveal retained a stale child-window size until input,
+Align disappeared after another menu synchronized component selection, RMB popup labels reused
+verbose keybinding prose, synchronous tool previews starved retained Qt controls, first-use warning
+dialogs painted white while cold resources were created, Project Home lacked recent-file metadata
+and actions, and viewport material workflows required direct gestures.
+
+Invariant:
+
+- A newly revealed `createWindowContainer` must reassert its owning frame rect exactly once after
+  `show()` and before the startup exposure turn. Do not turn this into a steady-state geometry
+  setter. Align remains top-level-visible in every selection mode; its children use their narrow
+  command predicates. Viewport popup wording has its own `ui.viewport.context_menu.action.*`
+  localization namespace, separate from verbose command/keybinding labels.
+- Numeric tool edits retain the latest local slider/spin value and use one restarted trailing
+  dispatch. A pending edit captures the settings revision, tool revision and identity, and preview
+  lifecycle; discard it if any owner changed before expiry, and rebase the remaining queue after a
+  successful write. Exact release, editing-finished, and Apply boundaries flush. Reset and Cancel
+  discard on button press before focus loss can emit `editingFinished`; unbind and structural rebuild
+  also discard. While an edit is pending, Inspector and retained toolbar projection stay frozen,
+  then catch up once. Standard Material polling is behind the workspace event gate, and hidden
+  Material Browser windows do not query catalogs or previews.
+- Reusable native confirmation dialogs own their layout, buttons, icons, and exact native window for
+  the UI lifetime. Prewarm the hidden platform window only after startup presentation is enabled;
+  each invocation refreshes localized text and resets its result. Their `done()` path records the
+  result, hides the retained dialog, and emits the normal signals without destroying the HWND.
+- Project Home uses one equality-gated recent-project model and one shared actions menu, never
+  per-row widgets or filesystem polling. The recent-project store captures stable manifest size and
+  timestamp metadata; platform-owned reveal selects the manifest or falls back to its nearest
+  existing parent.
+- Material RMB actions are canonical viewport input targets: Shift+Click samples a project-backed
+  face material, Ctrl+Click applies the active material in Object/Face selection, and Ctrl+Double
+  Click normalizes the clicked face's material across its mesh. Single/double disambiguation follows
+  the effective editable click pair and a steady-clock deadline. A pending single captures scene,
+  selection revision, and active project material and revalidates them only at expiry. Bare RMB is
+  reserved by fly navigation and the viewport popup and must be rejected by keybinding assignment,
+  not silently accepted.
+- Whole-mesh material normalization is one SDK mutation, not repeated immutable per-face edits. It
+  preserves object/component selection, publishes one content revision, and records one exact
+  undo/redo memento. Embedded references are valid for clicked-face normalization; only project
+  identities can become the ProjectSession-owned active material.
+
+Owners: Qt viewport/startup presentation, main menu and context menu localization, Tool Settings
+and `UISystem` revision gates, Project Home/recent-project/platform shell, viewport input resolver
+and interaction controller, native project/modeling APIs and history, and SDK polygon documents.
+
+Verification: focused retained-dialog, Tool Settings, menu, Project Home, project/material, input,
+and viewport suites passed (86/86 and 81/81); focused UI/source guardrails passed 8/8; the bevel,
+project-material, SDK consumer/parity, and modeling-domain suites passed. The mandatory regression
+gate built all targets and accepted the task-owned command baseline, then stopped in full CTest on
+eight pre-existing unrelated instruction/build, linear-array, and overlay failures. Both canonical
+`quader` builds succeeded. A fresh Debug launch confirmed the Project Home layout and recent actions,
+an immediately filled viewport, and Align remaining visible with File open in Edge mode. On the same
+dense scene, the steady sample stayed effectively flat: 57.6 FPS / 1.25 ms CPU / 0.34 ms GPU before,
+versus 58.7-58.8 FPS / 1.09-1.30 ms CPU / 0.34 ms GPU after.

@@ -137,6 +137,7 @@ class OverlayExpect final {
 public:
     explicit OverlayExpect(const BehaviorScenario& scenario) : scenario_(scenario) {}
 
+    OverlayExpect &empty();
     OverlayExpect &has_line(ViewportOverlayLayer layer);
     OverlayExpect &line_count(ViewportOverlayLayer layer, std::size_t count);
     OverlayExpect &has_point(ViewportOverlayLayer layer);

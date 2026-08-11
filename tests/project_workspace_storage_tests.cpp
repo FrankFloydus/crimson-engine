@@ -317,6 +317,19 @@ TEST(RecentProjectStore, DeduplicatesAndRetainsUnavailableEntries) {
   ASSERT_TRUE(loaded.ok()) << loaded.error().message;
   ASSERT_EQ(loaded.value().size(), 1u);
   EXPECT_TRUE(loaded.value()[0].available);
+  ASSERT_TRUE(loaded.value()[0].manifest_last_modified_unix_ms.has_value());
+  EXPECT_GT(*loaded.value()[0].manifest_last_modified_unix_ms, 0);
+  ASSERT_TRUE(loaded.value()[0].manifest_size_bytes.has_value());
+  EXPECT_EQ(*loaded.value()[0].manifest_size_bytes,
+            std::filesystem::file_size(created.value().manifest_path));
+  const auto first_last_modified =
+      loaded.value()[0].manifest_last_modified_unix_ms;
+  loaded = store.load();
+  ASSERT_TRUE(loaded.ok()) << loaded.error().message;
+  ASSERT_EQ(loaded.value().size(), 1u);
+  EXPECT_EQ(loaded.value()[0].manifest_last_modified_unix_ms,
+            first_last_modified)
+      << "unchanged manifest metadata must remain stable across refreshes";
 
   std::error_code error;
   std::filesystem::remove(created.value().manifest_path, error);
@@ -325,6 +338,9 @@ TEST(RecentProjectStore, DeduplicatesAndRetainsUnavailableEntries) {
   ASSERT_TRUE(loaded.ok()) << loaded.error().message;
   ASSERT_EQ(loaded.value().size(), 1u);
   EXPECT_FALSE(loaded.value()[0].available);
+  EXPECT_FALSE(
+      loaded.value()[0].manifest_last_modified_unix_ms.has_value());
+  EXPECT_FALSE(loaded.value()[0].manifest_size_bytes.has_value());
 
   ASSERT_TRUE(store.remove(created.value().manifest_path).ok());
   loaded = store.load();

@@ -8,6 +8,7 @@
 #include "api/quader_events_api_internal_access.hpp"
 #include "api/quader_editor_api.hpp"
 #include "editor/session/project_session.hpp"
+#include "editor/viewport/quader_viewport_api_runtime_access.hpp"
 
 #include <gtest/gtest.h>
 
@@ -108,6 +109,64 @@ TEST(QuaderEventsApiTests, SubscriptionMutationDuringPublishIsDeterministic) {
     EXPECT_EQ(calls,
               (std::vector<std::string>{"survivor", "late"}));
     EXPECT_FALSE(events.unsubscribe(first));
+}
+
+TEST(QuaderEventsApiTests,
+     DirectPerspectiveCameraNavigationPublishesOnlyTheDirtyTransition) {
+  QuaderStandaloneEditor standalone = create_standalone_editor();
+  QuaderEditorApi &editor = standalone.editor();
+  std::size_t dirty_events = 0u;
+  std::optional<QuaderEvent> last_event;
+  const QuaderEventSubscription subscription = editor.events().subscribe(
+      quader_event::kSceneDirtyChanged,
+      [&](const QuaderEvent &event) {
+        ++dirty_events;
+        last_event = event;
+      });
+  ASSERT_TRUE(subscription.valid());
+  ASSERT_TRUE(editor.scene_documents().active_scene().has_value());
+  ASSERT_FALSE(editor.scene_documents().active_scene()->dirty);
+
+  ViewportWorkspaceService &workspace =
+      QuaderViewportApiRuntimeAccess::workspace(editor.viewports());
+  workspace.camera(ViewportPaneId::Perspective).scroll(1.0f);
+  QuaderViewportApiRuntimeAccess::observe_persisted_camera_change(
+      editor.viewports());
+
+  EXPECT_EQ(dirty_events, 1u);
+  ASSERT_TRUE(last_event.has_value());
+  EXPECT_EQ(last_event->name, quader_event::kSceneDirtyChanged);
+  EXPECT_EQ(last_event->scene_dirty, true);
+  ASSERT_TRUE(editor.scene_documents().active_scene().has_value());
+  EXPECT_TRUE(editor.scene_documents().active_scene()->dirty);
+
+  workspace.camera(ViewportPaneId::Perspective).scroll(1.0f);
+  QuaderViewportApiRuntimeAccess::observe_persisted_camera_change(
+      editor.viewports());
+  EXPECT_EQ(dirty_events, 1u)
+      << "camera navigation while already dirty must not republish the same "
+         "transition";
+}
+
+TEST(QuaderEventsApiTests,
+     PerspectiveViewApiPublishesThePersistedCameraDirtyTransition) {
+  QuaderStandaloneEditor standalone = create_standalone_editor();
+  QuaderEditorApi &editor = standalone.editor();
+  std::size_t dirty_events = 0u;
+  const QuaderEventSubscription subscription = editor.events().subscribe(
+      quader_event::kSceneDirtyChanged,
+      [&](const QuaderEvent &) { ++dirty_events; });
+  ASSERT_TRUE(subscription.valid());
+  ASSERT_TRUE(editor.scene_documents().active_scene().has_value());
+  ASSERT_FALSE(editor.scene_documents().active_scene()->dirty);
+
+  const QuaderApiVoidResult changed = editor.viewports().set_view(
+      ViewportPaneId::Perspective, ViewportView::Top);
+  ASSERT_TRUE(changed.ok()) << changed.error_message();
+  ASSERT_TRUE(changed.changed());
+  EXPECT_EQ(dirty_events, 1u);
+  ASSERT_TRUE(editor.scene_documents().active_scene().has_value());
+  EXPECT_TRUE(editor.scene_documents().active_scene()->dirty);
 }
 
 TEST(QuaderEventsApiTests, PublishesDirtyTransitionsAcrossSaveCheckpoints) {

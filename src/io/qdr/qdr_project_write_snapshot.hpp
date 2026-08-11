@@ -11,6 +11,7 @@
 #include "assets/texture_asset.hpp"
 #include "io/project/project_asset_resolver.hpp"
 #include "io/project/project_types.hpp"
+#include "io/qdr/qdr_scene_viewport_camera.hpp"
 #include "scene/document/scene_content_document.hpp"
 
 #include <cstdint>
@@ -102,6 +103,7 @@ struct QdrProjectWriteSnapshot final {
   std::vector<ProjectObjectRecord> object_records;
   std::vector<ProjectAssetReference> project_asset_dependencies;
   std::vector<QdrProjectSceneLayerWriteSnapshot> layers;
+  std::optional<QdrSceneViewportCameraPose> viewport_camera_pose;
 };
 
 using QdrProjectWriteSnapshotResult = ProjectIoResult<QdrProjectWriteSnapshot>;

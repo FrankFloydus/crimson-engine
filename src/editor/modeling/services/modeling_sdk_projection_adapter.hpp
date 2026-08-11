@@ -337,6 +337,8 @@ public:
   flip_selected_objects(ModelingFlipOrientation orientation);
   [[nodiscard]] ModelingCommandResult
   assign_material_slot_to_selection(std::uint32_t material_slot);
+  [[nodiscard]] ModelingCommandResult assign_material_slot_to_objects(
+      std::span<const int> modeling_object_ids, std::uint32_t material_slot);
   [[nodiscard]] ModelingCommandResult assign_material_slot_to_face(
       int modeling_object_id, int face_id, std::uint32_t material_slot);
   [[nodiscard]] ModelingCommandResult assign_material_slots_to_faces(

@@ -10,6 +10,7 @@
 #include "core/localization_service.hpp"
 #include "ui/qt_color_swatch_button.hpp"
 #include "ui/qt_input_adapter.hpp"
+#include "ui/qt_retained_message_box.hpp"
 #include "ui/qt_settings_controller.hpp"
 #include "ui/ui_settings.hpp"
 #include "viewport/viewport_settings.hpp"
@@ -30,7 +31,6 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QListWidget>
-#include <QMessageBox>
 #include <QMouseEvent>
 #include <QPointer>
 #include <QPushButton>
@@ -931,7 +931,9 @@ struct QtSettingsDialog::Impl {
   bool locale_dirty = false;
   bool transaction_active = false;
   bool refreshing = false;
+  bool keybinding_message_box_prewarm_scheduled = false;
 
+  QtRetainedMessageBox *keybinding_message_box = nullptr;
   QListWidget *category_list = nullptr;
   QStackedWidget *page_stack = nullptr;
   QListWidgetItem *interface_category_item = nullptr;
@@ -1094,6 +1096,20 @@ struct QtSettingsDialog::Impl {
     refresh();
   }
 
+  void schedule_keybinding_message_box_prewarm() {
+    if (keybinding_message_box == nullptr ||
+        keybinding_message_box_prewarm_scheduled) {
+      return;
+    }
+    keybinding_message_box_prewarm_scheduled = true;
+    QTimer::singleShot(0, &owner, [this]() {
+      keybinding_message_box_prewarm_scheduled = false;
+      if (keybinding_message_box != nullptr && owner.isVisible()) {
+        keybinding_message_box->prewarm();
+      }
+    });
+  }
+
   bool apply_changes() {
     if (!transaction_active || !has_context()) {
       return true;
@@ -1174,6 +1190,8 @@ struct QtSettingsDialog::Impl {
     owner.setAttribute(Qt::WA_DeleteOnClose, false);
     owner.setSizeGripEnabled(true);
     owner.resize(720, 560);
+
+    keybinding_message_box = new QtRetainedMessageBox(&owner);
 
     auto *dialog_layout = new QVBoxLayout(&owner);
     auto *content_layout = new QHBoxLayout();
@@ -1516,14 +1534,26 @@ struct QtSettingsDialog::Impl {
         qtext(localization, "ui.settings.keybindings.error.message",
               "Unable to save the keybinding change.\n\n%1")
             .arg(detail);
-    QMessageBox box(QMessageBox::Critical,
-                    qtext(localization,
-                          "ui.settings.keybindings.error.title",
-                          "Keybinding Error"),
-                    body,
-                    QMessageBox::Ok, &owner);
-    box.setObjectName(QStringLiteral("settingsKeybindingErrorDialog"));
-    box.exec();
+    (void)keybinding_message_box->present(QtRetainedMessageBoxPresentation{
+        .icon = QMessageBox::Critical,
+        .object_name = QStringLiteral("settingsKeybindingErrorDialog"),
+        .title = qtext(localization,
+                       "ui.settings.keybindings.error.title",
+                       "Keybinding Error"),
+        .text = body,
+        .buttons =
+            {
+                {
+                    .button = QtRetainedMessageBoxButton::Primary,
+                    .object_name = {},
+                    .label = qtext(localization, "ui.action.ok", "OK"),
+                    .role = QMessageBox::AcceptRole,
+                },
+            },
+        .default_button = QtRetainedMessageBoxButton::Primary,
+        .escape_button = QtRetainedMessageBoxButton::Primary,
+        .close_button = QtRetainedMessageBoxButton::Primary,
+    });
   }
 
   [[nodiscard]] std::optional<QuaderKeybindingConflictPolicy>
@@ -1546,26 +1576,41 @@ struct QtSettingsDialog::Impl {
               "This input mapping clashes with “%1”.")
             .arg(action_names.join(QStringLiteral("”, “")));
 
-    QMessageBox box(QMessageBox::Warning,
-                    qtext(localization,
-                          "ui.settings.keybindings.conflict.title",
-                          "Keybinding Conflict"),
-                    details, QMessageBox::NoButton, &owner);
-    box.setObjectName(QStringLiteral("settingsKeybindingConflictDialog"));
-    QPushButton *replace = box.addButton(
-        qtext(localization, "ui.settings.keybindings.conflict.replace",
-              "Replace"),
-        QMessageBox::AcceptRole);
-    QPushButton *cancel = box.addButton(
-        qtext(localization, "ui.action.cancel", "Cancel"),
-        QMessageBox::RejectRole);
-    replace->setObjectName(
-        QStringLiteral("settingsKeybindingConflictReplace"));
-    cancel->setObjectName(
-        QStringLiteral("settingsKeybindingConflictCancel"));
-    box.setDefaultButton(cancel);
-    box.exec();
-    if (box.clickedButton() == replace) {
+    const QtRetainedMessageBoxButton selected =
+        keybinding_message_box->present(QtRetainedMessageBoxPresentation{
+            .icon = QMessageBox::Warning,
+            .object_name =
+                QStringLiteral("settingsKeybindingConflictDialog"),
+            .title = qtext(localization,
+                           "ui.settings.keybindings.conflict.title",
+                           "Keybinding Conflict"),
+            .text = details,
+            .buttons =
+                {
+                    {
+                        .button = QtRetainedMessageBoxButton::Primary,
+                        .object_name = QStringLiteral(
+                            "settingsKeybindingConflictReplace"),
+                        .label = qtext(
+                            localization,
+                            "ui.settings.keybindings.conflict.replace",
+                            "Replace"),
+                        .role = QMessageBox::AcceptRole,
+                    },
+                    {
+                        .button = QtRetainedMessageBoxButton::Tertiary,
+                        .object_name = QStringLiteral(
+                            "settingsKeybindingConflictCancel"),
+                        .label =
+                            qtext(localization, "ui.action.cancel", "Cancel"),
+                        .role = QMessageBox::RejectRole,
+                    },
+                },
+            .default_button = QtRetainedMessageBoxButton::Tertiary,
+            .escape_button = QtRetainedMessageBoxButton::Tertiary,
+            .close_button = QtRetainedMessageBoxButton::Tertiary,
+        });
+    if (selected == QtRetainedMessageBoxButton::Primary) {
       return QuaderKeybindingConflictPolicy::Replace;
     }
     return std::nullopt;
@@ -1683,29 +1728,43 @@ struct QtSettingsDialog::Impl {
     if (commands == nullptr) {
       return;
     }
-    QMessageBox confirmation(
-        QMessageBox::Question,
-        qtext(localization, "ui.settings.keybindings.reset_all.title",
-              "Reset All Keybindings"),
-        qtext(localization, "ui.settings.keybindings.reset_all.confirm",
-              "Reset every keybinding to its default mapping?"),
-        QMessageBox::NoButton, &owner);
-    confirmation.setObjectName(
-        QStringLiteral("settingsKeybindingResetAllDialog"));
-    QPushButton *reset = confirmation.addButton(
-        qtext(localization, "ui.settings.keybindings.action.reset_all",
-              "Reset All"),
-        QMessageBox::AcceptRole);
-    QPushButton *cancel = confirmation.addButton(
-        qtext(localization, "ui.action.cancel", "Cancel"),
-        QMessageBox::RejectRole);
-    reset->setObjectName(
-        QStringLiteral("settingsKeybindingResetAllConfirm"));
-    cancel->setObjectName(
-        QStringLiteral("settingsKeybindingResetAllCancel"));
-    confirmation.setDefaultButton(cancel);
-    confirmation.exec();
-    if (confirmation.clickedButton() != reset) {
+    const QtRetainedMessageBoxButton decision =
+        keybinding_message_box->present(QtRetainedMessageBoxPresentation{
+            .icon = QMessageBox::Question,
+            .object_name =
+                QStringLiteral("settingsKeybindingResetAllDialog"),
+            .title = qtext(localization,
+                           "ui.settings.keybindings.reset_all.title",
+                           "Reset All Keybindings"),
+            .text = qtext(
+                localization, "ui.settings.keybindings.reset_all.confirm",
+                "Reset every keybinding to its default mapping?"),
+            .buttons =
+                {
+                    {
+                        .button = QtRetainedMessageBoxButton::Primary,
+                        .object_name = QStringLiteral(
+                            "settingsKeybindingResetAllConfirm"),
+                        .label = qtext(
+                            localization,
+                            "ui.settings.keybindings.action.reset_all",
+                            "Reset All"),
+                        .role = QMessageBox::AcceptRole,
+                    },
+                    {
+                        .button = QtRetainedMessageBoxButton::Tertiary,
+                        .object_name = QStringLiteral(
+                            "settingsKeybindingResetAllCancel"),
+                        .label =
+                            qtext(localization, "ui.action.cancel", "Cancel"),
+                        .role = QMessageBox::RejectRole,
+                    },
+                },
+            .default_button = QtRetainedMessageBoxButton::Tertiary,
+            .escape_button = QtRetainedMessageBoxButton::Tertiary,
+            .close_button = QtRetainedMessageBoxButton::Tertiary,
+        });
+    if (decision != QtRetainedMessageBoxButton::Primary) {
       return;
     }
     const std::optional<QuaderKeybindingActionKey> selected =
@@ -2073,6 +2132,7 @@ void QtSettingsDialog::reject() {
 void QtSettingsDialog::showEvent(QShowEvent *event) {
   impl_->begin_transaction();
   QDialog::showEvent(event);
+  impl_->schedule_keybinding_message_box_prewarm();
 }
 
 } // namespace quader

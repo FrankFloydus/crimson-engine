@@ -14,6 +14,7 @@
 #include "editor/modeling/services/primitive_creation_tool_service.hpp"
 #include "editor/session/project_session.hpp"
 #include "editor/session/scene_session.hpp"
+#include "editor/viewport/quader_viewport_api_runtime_access.hpp"
 
 #include <quader/modeling/neutral/polygon/document.hpp>
 
@@ -496,18 +497,29 @@ private:
   void install_viewport_hooks() {
     editor().viewports().set_runtime_hooks(QuaderViewportRuntimeHooks{
         .frame_all =
-            [this](ViewportPaneId) {
+            [this](ViewportPaneId pane) {
               ++external_calls_;
+              QuaderViewportApiRuntimeAccess::workspace(editor().viewports())
+                  .camera(pane)
+                  .focus_bounds({-10.0f, -8.0f, -6.0f},
+                                {10.0f, 8.0f, 6.0f});
               return runtime_result(true, "Frame all test hook");
             },
         .frame_selection =
-            [this](ViewportPaneId) {
+            [this](ViewportPaneId pane) {
               ++external_calls_;
+              QuaderViewportApiRuntimeAccess::workspace(editor().viewports())
+                  .camera(pane)
+                  .focus_bounds({-2.0f, -1.0f, -0.5f},
+                                {3.0f, 2.0f, 1.5f});
               return runtime_result(true, "Frame selection test hook");
             },
         .focus_origin =
-            [this](ViewportPaneId) {
+            [this](ViewportPaneId pane) {
               ++external_calls_;
+              QuaderViewportApiRuntimeAccess::workspace(editor().viewports())
+                  .camera(pane)
+                  .focus_origin(32.0f);
               return runtime_result(true, "Focus origin test hook");
             },
         .spawn_window =

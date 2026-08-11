@@ -91,6 +91,33 @@ std::optional<std::string> viewport_command_target_id_for_shortcut_descriptor(
   return std::nullopt;
 }
 
+constexpr std::uint32_t
+viewport_selection_mode_mask(ViewportSelectionMode mode) {
+  switch (mode) {
+  case ViewportSelectionMode::Vertex:
+    return 1u << 0u;
+  case ViewportSelectionMode::Edge:
+    return 1u << 1u;
+  case ViewportSelectionMode::Face:
+    return 1u << 2u;
+  case ViewportSelectionMode::Object:
+    return 1u << 3u;
+  case ViewportSelectionMode::Group:
+    return 1u << 4u;
+  }
+  return 0u;
+}
+
+constexpr std::uint32_t kMaterialSourceSelectionModes =
+    viewport_selection_mode_mask(ViewportSelectionMode::Vertex) |
+    viewport_selection_mode_mask(ViewportSelectionMode::Edge) |
+    viewport_selection_mode_mask(ViewportSelectionMode::Face) |
+    viewport_selection_mode_mask(ViewportSelectionMode::Object) |
+    viewport_selection_mode_mask(ViewportSelectionMode::Group);
+constexpr std::uint32_t kMaterialTargetSelectionModes =
+    viewport_selection_mode_mask(ViewportSelectionMode::Face) |
+    viewport_selection_mode_mask(ViewportSelectionMode::Object);
+
 } // namespace
 
 bool viewport_host_contract_available() { return true; }
@@ -324,6 +351,53 @@ viewport_input_action_binding_catalog() {
           .shortcut = "A",
           .when = "viewportFocus && !textInputActive && navigation.flyActive",
           .action = ViewportInputActionKind::FlyLeft,
+      },
+      {
+          .target_id = viewport_input_action_target_id("material.sample_face"),
+          .action_id = "viewport.material.sample_face",
+          .label = "Set Active Material from Clicked Face",
+          .localization_key =
+              "keybindings.target.viewport.material.sample_face.label",
+          .context = ViewportInputBindingContext::Viewport,
+          .shortcut = "Shift+RightMouseClick",
+          .when = "viewportFocus && !textInputActive && !navigation.active && "
+                  "!modalTool.active && !activeTool.ownsViewport && "
+                  "!transformDrag.active && !operationPreview.active",
+          .selection_mode_mask = kMaterialSourceSelectionModes,
+          .weight = 30,
+          .action = ViewportInputActionKind::SampleFaceMaterial,
+      },
+      {
+          .target_id = viewport_input_action_target_id(
+              "material.apply_active_to_selection"),
+          .action_id = "viewport.material.apply_active_to_selection",
+          .label = "Apply Active Material to Selection",
+          .localization_key = "keybindings.target.viewport.material."
+                              "apply_active_to_selection.label",
+          .context = ViewportInputBindingContext::Viewport,
+          .shortcut = "Ctrl+RightMouseClick",
+          .when = "viewportFocus && !textInputActive && !navigation.active && "
+                  "!modalTool.active && !activeTool.ownsViewport && "
+                  "!transformDrag.active && !operationPreview.active",
+          .selection_mode_mask = kMaterialTargetSelectionModes,
+          .weight = 30,
+          .action = ViewportInputActionKind::ApplyActiveMaterialToSelection,
+      },
+      {
+          .target_id =
+              viewport_input_action_target_id("material.apply_face_to_mesh"),
+          .action_id = "viewport.material.apply_face_to_mesh",
+          .label = "Apply Clicked Face Material to Mesh",
+          .localization_key = "keybindings.target.viewport.material."
+                              "apply_face_to_mesh.label",
+          .context = ViewportInputBindingContext::Viewport,
+          .shortcut = "Ctrl+RightMouseDoubleClick",
+          .when = "viewportFocus && !textInputActive && !navigation.active && "
+                  "!modalTool.active && !activeTool.ownsViewport && "
+                  "!transformDrag.active && !operationPreview.active",
+          .selection_mode_mask = kMaterialSourceSelectionModes,
+          .weight = 30,
+          .action = ViewportInputActionKind::ApplyFaceMaterialToMesh,
       },
       {
           .target_id = viewport_input_action_target_id("modal_tool.finalize"),

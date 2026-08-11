@@ -395,6 +395,30 @@ TEST(ViewportToolGuardrailTests, UiShellHasNoDirectModalToolBranches) {
   EXPECT_EQ(ui_shell.find("boxPreviewController_"), std::string::npos);
 }
 
+TEST(ViewportToolGuardrailTests,
+     PersistedCameraDirtyObservationIsSignatureGatedInTheFrameLoop) {
+  const std::string viewport_panel =
+      read_source_file("src/ui/qt_viewport_panel.cpp");
+  const std::string observation = source_slice(
+      viewport_panel,
+      "void QtViewportPanel::observe_persisted_camera_change(",
+      "void QtViewportPanel::prepare_viewports(");
+
+  const std::size_t signature_query =
+      observation.find("persisted_perspective_camera_pose_signature(");
+  const std::size_t unchanged_gate = observation.find(
+      "current_signature == observed_persisted_camera_signature_");
+  const std::size_t notify = observation.find(
+      "QuaderViewportApiRuntimeAccess::observe_persisted_camera_change(");
+  ASSERT_NE(signature_query, std::string::npos);
+  ASSERT_NE(unchanged_gate, std::string::npos);
+  ASSERT_NE(notify, std::string::npos);
+  EXPECT_LT(signature_query, unchanged_gate);
+  EXPECT_LT(unchanged_gate, notify);
+  EXPECT_EQ(observation.find("open_scenes()"), std::string::npos);
+  EXPECT_EQ(observation.find("commands().available()"), std::string::npos);
+}
+
 TEST(ViewportToolGuardrailTests, TransformGizmoEligibilityLivesInViewportToolMetadata) {
   const std::filesystem::path root = source_root();
   const std::string interaction = read_source_file(

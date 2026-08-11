@@ -436,6 +436,33 @@ TEST(UiLayoutGuardrailTests,
   EXPECT_LT(startup_gate, reveal_surface);
   EXPECT_LT(reveal_surface, exposure_turn);
   EXPECT_LT(exposure_turn, begin_presentation);
+  const std::size_t geometry_stabilized = viewport_source.find(
+      "startup_action == QtStartupPresentationAction::GeometryStabilized",
+      startup_gate);
+  const std::size_t first_surface_presentation = viewport_source.find(
+      "if (!pane_state.surface_presented)", geometry_stabilized);
+  const std::size_t startup_geometry_reassert = viewport_source.find(
+      "pane_state.surface_container->setGeometry(pane_state.frame->rect())",
+      first_surface_presentation);
+  const std::size_t mark_surface_presented = viewport_source.find(
+      "pane_state.surface_presented = true", startup_geometry_reassert);
+  ASSERT_NE(geometry_stabilized, std::string::npos);
+  ASSERT_NE(first_surface_presentation, std::string::npos);
+  ASSERT_NE(startup_geometry_reassert, std::string::npos);
+  ASSERT_NE(mark_surface_presented, std::string::npos);
+  EXPECT_LT(geometry_stabilized, first_surface_presentation);
+  EXPECT_LT(first_surface_presentation, reveal_surface);
+  EXPECT_LT(reveal_surface, startup_geometry_reassert);
+  EXPECT_LT(startup_geometry_reassert, mark_surface_presented);
+  EXPECT_LT(mark_surface_presented, exposure_turn);
+  const std::string_view startup_reveal_span(
+      viewport_source.data() + geometry_stabilized,
+      exposure_turn - geometry_stabilized);
+  EXPECT_EQ(count_occurrences(
+                startup_reveal_span,
+                "pane_state.surface_container->setGeometry("
+                "pane_state.frame->rect())"),
+            1u);
   expect_contains(viewport_source, "devicePixelRatioF()");
   expect_contains(viewport_source,
                   "qt_invalidate_startup_presentation_geometry(");
@@ -857,11 +884,43 @@ TEST(UiLayoutGuardrailTests,
   expect_contains(tool, "const QSignalBlocker slider_blocker(slider)");
   expect_contains(tool,
                   "std::max(4, decimal_places_for_step(control.step))");
-  expect_contains(tool, "constexpr int kLiveNumberDispatchIntervalMs = 16");
-  expect_contains(tool, "binding.pending_number_value = value");
-  expect_contains(tool, "flush_number_dispatch(control_index)");
   expect_contains(tool,
-                  "dispatch_number(control_index, spin->value(),");
+                  "constexpr int kTrailingNumberDispatchDelayMs = 50");
+  expect_contains(tool, "binding.pending_number_value = value");
+  expect_contains(tool, "binding.number_dispatch_timer->start()");
+  expect_missing(tool, "!binding.number_dispatch_timer->isActive()");
+  expect_contains(tool, "flush_number_dispatch(control_index)");
+  expect_contains(tool, "queue_number_dispatch(control_index, spin->value())");
+  expect_contains(tool, "&QSpinBox::editingFinished");
+  expect_contains(tool, "&QDoubleSpinBox::editingFinished");
+  expect_contains(tool, "flush_pending_number_dispatches()");
+  expect_contains(tool, "discard_pending_number_dispatches()");
+  expect_contains(tool,
+                  "reset_button_->setFocusPolicy(Qt::TabFocus)");
+  expect_contains(tool,
+                  "cancel_button_->setFocusPolicy(Qt::TabFocus)");
+  expect_contains(tool,
+                  "QObject::connect(reset_button_, &QPushButton::pressed, "
+                  "&panel_, [this]() {\n"
+                  "      discard_pending_number_dispatches();\n"
+                  "    })");
+  expect_contains(tool,
+                  "QObject::connect(cancel_button_, &QPushButton::pressed, "
+                  "&panel_, [this]() {\n"
+                  "      discard_pending_number_dispatches();\n"
+                  "    })");
+  expect_contains(tool, "struct NumberDispatchLifecycle");
+  expect_contains(tool, "number_dispatch_lifecycle_is_current(");
+  expect_contains(tool, "active_settings_revision()");
+  expect_contains(tool, "active_tool_revision()");
+  expect_contains(tool,
+                  "flush_pending_number_dispatches();\n"
+                  "      const QuaderApiVoidResult result =\n"
+                  "          editor_->tools().commit_active_tool_preview()");
+  expect_contains(tool,
+                  "void clear_controls() {\n"
+                  "    // Stop old control-owned timers");
+  expect_contains(tool_header, "bool numeric_interaction_active() const");
   expect_contains(tool, "new QDoubleSpinBox");
   expect_contains(tool, "new QRadioButton");
   expect_contains(tool, "new QPushButton");
@@ -887,6 +946,13 @@ TEST(UiLayoutGuardrailTests,
   expect_contains(ui_source,
                   "main_window_->tabifyDockWidget(&inspector, "
                   "&tool_settings)");
+  expect_contains(ui_source,
+                  "tool_settings_panel_->numeric_interaction_active()");
+  expect_contains(ui_source,
+                  "if (!transform_drag_active && "
+                  "!numeric_interaction_active) {");
+  expect_contains(ui_source,
+                  "if (!transform_drag_active && !numeric_interaction_active &&");
   EXPECT_EQ(count_occurrences(
                 ui_source,
                 "tool_settings_panel_->set_localization(localization_)"),
@@ -1008,6 +1074,12 @@ TEST(UiLayoutGuardrailTests,
   expect_contains(dialog,
                   "QStringLiteral(\"settingsKeybindingConflictDialog\")");
   expect_contains(dialog,
+                  "#include \"ui/qt_retained_message_box.hpp\"");
+  expect_contains(dialog,
+                  "keybinding_message_box = new QtRetainedMessageBox(&owner)");
+  expect_contains(dialog, "schedule_keybinding_message_box_prewarm()");
+  expect_contains(dialog, "keybinding_message_box->prewarm()");
+  expect_contains(dialog,
                   "QtSettingsChangeKind::KeybindingsCommit");
   expect_contains(dialog, "entry.localization_key");
   expect_contains(dialog, "entry.scope_localization_key");
@@ -1025,6 +1097,27 @@ TEST(UiLayoutGuardrailTests,
   expect_missing(dialog, "QStringLiteral(\"settingsKeybindingsRemove\")");
   expect_missing(dialog, "settingsKeybindingConflictKeepBoth");
   expect_missing(dialog, "QuaderKeybindingConflictPolicy::KeepBoth");
+
+  const std::string keybinding_message_paths = source_slice(
+      dialog, "void show_keybinding_error(",
+      "create_viewport_section(");
+  EXPECT_EQ(count_occurrences(keybinding_message_paths,
+                              "keybinding_message_box->present("),
+            3u);
+  expect_missing(keybinding_message_paths, "QMessageBox box(");
+  expect_missing(keybinding_message_paths, "QMessageBox confirmation(");
+  expect_contains(keybinding_message_paths,
+                  ".escape_button = QtRetainedMessageBoxButton::Primary");
+  expect_contains(keybinding_message_paths,
+                  ".close_button = QtRetainedMessageBoxButton::Primary");
+  EXPECT_EQ(count_occurrences(
+                keybinding_message_paths,
+                ".escape_button = QtRetainedMessageBoxButton::Tertiary"),
+            2u);
+  EXPECT_EQ(count_occurrences(
+                keybinding_message_paths,
+                ".close_button = QtRetainedMessageBoxButton::Tertiary"),
+            2u);
 
   for (std::string_view forbidden : {
            "editor/input/quader_keybinding_service.hpp",
@@ -2022,6 +2115,28 @@ TEST(UiLayoutGuardrailTests,
 }
 
 TEST(UiLayoutGuardrailTests,
+     ViewportWorkspaceReattachCancelsPendingMaterialIntentBeforeIdentityGate) {
+  const std::string panel =
+      read_source_file("src/ui/qt_viewport_panel.cpp");
+  const std::size_t attach = panel.find(
+      "void QtViewportPanel::attach_workspace(ViewportWorkspaceService "
+      "&workspace)");
+  const std::size_t next = panel.find(
+      "void QtViewportPanel::set_viewport_settings(", attach);
+  ASSERT_NE(attach, std::string::npos);
+  ASSERT_NE(next, std::string::npos);
+  const std::string body = panel.substr(attach, next - attach);
+  const std::size_t cancel = body.find(
+      "interaction_controller_.cancel_pending_material_interaction()");
+  const std::size_t identity_gate =
+      body.find("if (workspace_ != &workspace)");
+  ASSERT_NE(cancel, std::string::npos);
+  ASSERT_NE(identity_gate, std::string::npos);
+  EXPECT_LT(cancel, identity_gate)
+      << "same-pointer runtime hook rebinds must cancel delayed intent";
+}
+
+TEST(UiLayoutGuardrailTests,
      QtViewportContextMenuPreservesReleasePickingAndCommandRouting) {
   const std::string panel_header =
       read_source_file("src/ui/qt_viewport_panel.hpp");
@@ -2072,6 +2187,11 @@ TEST(UiLayoutGuardrailTests,
 
   expect_contains(presenter,
                   "editor.modeling().available_actions(query)");
+  expect_contains(
+      presenter,
+      "std::string key = \"ui.viewport.context_menu.action.\";");
+  expect_contains(presenter, "localization.text(key, action.label)");
+  expect_missing(presenter, "std::string key = \"modeling.action.\";");
   expect_contains(presenter,
                   "editor.commands().command_id_for_tool_activation(");
   expect_contains(presenter,

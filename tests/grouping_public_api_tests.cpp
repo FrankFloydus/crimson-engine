@@ -179,6 +179,11 @@ TEST(GroupingPublicApiTests, GroupSelectionParentsSelectedRootsAndUndoRedoRestor
       .active_alias("group")
       .world_position_near("left", {-3.0f, 0.0f, 0.0f})
       .world_position_near("right", {4.0f, 0.0f, 0.0f});
+  QuaderSelectionSummary summary =
+      scenario.api().modeling().selection_summary();
+  EXPECT_EQ(summary.mode, QuaderSelectionMode::Object);
+  EXPECT_TRUE(summary.has_selection);
+  scenario.then().overlay().empty();
 
   scenario.when().undo();
   scenario.then()
@@ -187,6 +192,9 @@ TEST(GroupingPublicApiTests, GroupSelectionParentsSelectedRootsAndUndoRedoRestor
       .no_parent("left")
       .no_parent("right")
       .selected_aliases({"left", "right"});
+  summary = scenario.api().modeling().selection_summary();
+  EXPECT_EQ(summary.mode, QuaderSelectionMode::Object);
+  EXPECT_TRUE(summary.has_selection);
 
   scenario.when().redo();
   scenario.remember_entity_named("group", "Pair");
@@ -196,6 +204,10 @@ TEST(GroupingPublicApiTests, GroupSelectionParentsSelectedRootsAndUndoRedoRestor
       .parent("right", "group")
       .selected_aliases({"group"})
       .active_alias("group");
+  summary = scenario.api().modeling().selection_summary();
+  EXPECT_EQ(summary.mode, QuaderSelectionMode::Object);
+  EXPECT_TRUE(summary.has_selection);
+  scenario.then().overlay().empty();
 }
 
 TEST(GroupingPublicApiTests, GroupSelectionUsesSelectedRootsOnlyWhenParentAndChildAreSelected) {
@@ -235,6 +247,7 @@ TEST(GroupingPublicApiTests, UngroupUndoRedoRestoresGroupSelectionAndChildPlacem
       .no_parent("second")
       .world_position_near("first", {-2.0f, 0.0f, 0.0f})
       .world_position_near("second", {2.0f, 0.0f, 0.0f});
+  EXPECT_TRUE(scenario.api().modeling().selection_summary().has_selection);
 
   scenario.when().undo();
   remember_restored_subtree(scenario, "group", "Ungroup Me");
@@ -790,6 +803,67 @@ TEST(GroupingPublicApiTests, DuplicateMixedMeshAndLightHierarchyCopiesStateAndUn
   EXPECT_EQ(children_of(scenario.api(), redone_duplicate_group).size(), 2u);
   EXPECT_EQ(selected_entities(scenario.api()),
             std::vector<EntityId>{redone_duplicate_group});
+}
+
+TEST(GroupingPublicApiTests,
+     GroupAndUngroupPreserveSceneOwnedGroupSelectionMode) {
+  BehaviorScenario scenario = BehaviorScenario::new_project();
+  given_box_at(scenario, "first", "First", {-2.0f, 0.0f, 0.0f});
+  given_box_at(scenario, "second", "Second", {2.0f, 0.0f, 0.0f});
+  scenario.given().selected_aliases({"first", "second"}, "second");
+  scenario.given().selection_mode(QuaderSelectionMode::Group);
+
+  scenario.when().group_selection("group", "Group Mode");
+  scenario.then().command().ok_changed();
+  QuaderSelectionSummary summary =
+      scenario.api().modeling().selection_summary();
+  EXPECT_EQ(summary.mode, QuaderSelectionMode::Group);
+
+  scenario.when().ungroup_selection();
+  scenario.then().command().ok_changed();
+  summary = scenario.api().modeling().selection_summary();
+  EXPECT_EQ(summary.mode, QuaderSelectionMode::Group);
+
+  scenario.when().undo();
+  summary = scenario.api().modeling().selection_summary();
+  EXPECT_EQ(summary.mode, QuaderSelectionMode::Group);
+
+  scenario.when().redo();
+  summary = scenario.api().modeling().selection_summary();
+  EXPECT_EQ(summary.mode, QuaderSelectionMode::Group);
+}
+
+TEST(GroupingPublicApiTests,
+     GroupHidesComponentSelectionAndUndoRedoRestoreEachSemanticState) {
+  BehaviorScenario scenario = BehaviorScenario::new_project();
+  given_box_at(scenario, "first", "Component First", {-2.0f, 0.0f, 0.0f});
+  given_box_at(scenario, "second", "Component Second", {2.0f, 0.0f, 0.0f});
+  scenario.given().selected_aliases({"first", "second"}, "first");
+  ASSERT_TRUE(
+      scenario.editor().selection().select_face(scenario.object("first"), 1).ok());
+  QuaderSelectionSummary summary =
+      scenario.api().modeling().selection_summary();
+  ASSERT_EQ(summary.mode, QuaderSelectionMode::Face);
+  ASSERT_EQ(summary.selected_face_count, 1u);
+
+  scenario.when().group_selection("group", "Component Selection Group");
+  scenario.then().command().ok_changed();
+  summary = scenario.api().modeling().selection_summary();
+  EXPECT_EQ(summary.mode, QuaderSelectionMode::Object);
+  EXPECT_EQ(summary.selected_face_count, 0u);
+  scenario.then().overlay().empty();
+
+  scenario.when().undo();
+  summary = scenario.api().modeling().selection_summary();
+  EXPECT_EQ(summary.mode, QuaderSelectionMode::Face);
+  EXPECT_EQ(summary.selected_face_count, 1u);
+  scenario.then().overlay().has_line(ViewportOverlayLayer::SelectedFaceEdge);
+
+  scenario.when().redo();
+  summary = scenario.api().modeling().selection_summary();
+  EXPECT_EQ(summary.mode, QuaderSelectionMode::Object);
+  EXPECT_EQ(summary.selected_face_count, 0u);
+  scenario.then().overlay().empty();
 }
 
 TEST(GroupingPublicApiTests, DeleteMixedMeshAndLightHierarchyUndoRedoRestoresSceneComponents) {

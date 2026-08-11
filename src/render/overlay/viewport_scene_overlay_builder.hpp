@@ -31,7 +31,8 @@ public:
                         bool point_light_gizmos_visible = false,
                         RenderOverlaySelectionMode selection_mode =
                             RenderOverlaySelectionMode::Object,
-                        bool include_tool_overlays = true);
+                        bool include_tool_overlays = true,
+                        bool selection_overlays_visible = true);
   [[nodiscard]] static ViewportOverlayFrame build_wireframe_frame(
       ViewportOverlayFrame base_frame,
       RenderOverlaySelectionMode selection_mode,

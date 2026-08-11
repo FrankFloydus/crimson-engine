@@ -133,6 +133,7 @@ private:
                          const RenderInstanceBatchChunk &chunk);
   void destroy_wire_batch(WireBatchProxy &proxy);
   void destroy_wire_resources();
+  void prune_unused_wire_resources();
   void update_wire_clip_planes(ViewportCameraClipPlanes clip_planes);
 
   filament::Engine *engine_ = nullptr;

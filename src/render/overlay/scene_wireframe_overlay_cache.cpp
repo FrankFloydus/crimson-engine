@@ -432,6 +432,7 @@ void SceneWireframeOverlayCache::shutdown() {
   synced_asset_revision_ = 0u;
   synced_local_visibility_revision_ = 0u;
   synced_wire_style_signature_ = 0u;
+  synced_selected_mesh_wire_visible_ = true;
   synced_clip_planes_ = {};
   layer_mask_ = 0u;
   has_synced_ = false;
@@ -484,6 +485,8 @@ void SceneWireframeOverlayCache::sync(
       synced_asset_revision_ == snapshot.asset_revision &&
       synced_local_visibility_revision_ ==
           snapshot.local_visibility_revision &&
+      synced_selected_mesh_wire_visible_ ==
+          snapshot.selected_mesh_wire_visible &&
       !clip_changed &&
       !style_changed) {
     return;
@@ -518,6 +521,8 @@ void SceneWireframeOverlayCache::sync(
   synced_asset_revision_ = snapshot.asset_revision;
   synced_local_visibility_revision_ = snapshot.local_visibility_revision;
   synced_wire_style_signature_ = snapshot.style.wire_signature;
+  synced_selected_mesh_wire_visible_ =
+      snapshot.selected_mesh_wire_visible;
   synced_clip_planes_ = snapshot.clip_planes;
   has_synced_ = true;
   stats_.participant_count = prepared.planned.participant_count;
@@ -537,6 +542,7 @@ bool SceneWireframeOverlayCache::rebuild(
       for (WireBatchProxy &proxy : created) {
         destroy_batch(proxy);
       }
+      prune_unused_geometry_resources();
       return false;
     }
     WireBatchProxy proxy = create_batch(
@@ -547,6 +553,7 @@ bool SceneWireframeOverlayCache::rebuild(
       for (WireBatchProxy &existing : created) {
         destroy_batch(existing);
       }
+      prune_unused_geometry_resources();
       return false;
     }
     created.push_back(std::move(proxy));

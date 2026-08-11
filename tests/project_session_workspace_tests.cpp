@@ -97,6 +97,15 @@ void expect_vec3_eq(QVec3 actual, QVec3 expected) {
   EXPECT_FLOAT_EQ(actual.z, expected.z);
 }
 
+template <typename ActualVector3, typename ExpectedVector3>
+void expect_vec3_near(const ActualVector3 &actual,
+                      const ExpectedVector3 &expected,
+                      float tolerance = 0.0001f) {
+  EXPECT_NEAR(actual.x, expected.x, tolerance);
+  EXPECT_NEAR(actual.y, expected.y, tolerance);
+  EXPECT_NEAR(actual.z, expected.z, tolerance);
+}
+
 /// Temporarily replaces a manifest file with a directory to force write failure.
 class ScopedManifestWriteFailure final {
 public:
@@ -278,6 +287,65 @@ TEST(ProjectSessionWorkspace,
   ASSERT_EQ(project.active_scene(), second);
   EXPECT_FLOAT_EQ(first_camera.state().distance, 23.0f);
   EXPECT_FLOAT_EQ(second_camera.state().distance, 91.0f);
+}
+
+TEST(ProjectSessionWorkspace,
+     SaveAndWorkspaceRestorePreservePerspectivePoseFromBeforeLocalVisibility) {
+  ScopedProjectSessionDirectory temporary("persisted-camera");
+  const std::filesystem::path project_root =
+      temporary.make_empty_child("PersistedCamera");
+  ProjectSession project;
+  const ProjectSessionResult created = project.create(project_root);
+  ASSERT_TRUE(created.ok) << created.message;
+  ASSERT_TRUE(created.scene_session_id.has_value());
+  OpenSceneSession *scene = project.find(*created.scene_session_id);
+  ASSERT_NE(scene, nullptr);
+
+  ViewportWorkspaceService &workspace =
+      scene->session->viewport_workspace();
+  ViewportCameraController &camera =
+      workspace.camera(ViewportPaneId::Perspective);
+  camera.focus_origin(37.0f);
+  camera.set_view_direction({-0.4f, -0.2f, -1.0f});
+  const ViewportCameraPose expected = camera.pose();
+  EXPECT_TRUE(scene->dirty());
+
+  const std::array<ViewportLocalVisibilityEntityId, 1> members{1u};
+  ASSERT_TRUE(workspace.enter_local_visibility(members, members));
+  camera.focus_origin(91.0f);
+  camera.set_view_direction({1.0f, 0.0f, 0.0f});
+  expect_vec3_near(scene->session->persisted_viewport_camera_pose().eye,
+                   expected.eye);
+
+  const ProjectRelativePath scene_path =
+      project_path("Scenes/PersistedCamera.qdr");
+  const ProjectSessionResult saved =
+      project.save_as(scene->session_id, scene_path);
+  ASSERT_TRUE(saved.ok) << saved.message;
+  EXPECT_FALSE(scene->dirty());
+
+  const QdrProjectReadResult raw =
+      QdrDocumentReader::read_project_document(
+          project.root() / scene_path.native_path());
+  ASSERT_TRUE(raw.ok) << raw.message;
+  ASSERT_TRUE(raw.viewport_camera_pose.has_value());
+  expect_vec3_near(raw.viewport_camera_pose->eye, expected.eye);
+  expect_vec3_near(raw.viewport_camera_pose->target, expected.target);
+  expect_vec3_near(raw.viewport_camera_pose->up, expected.up);
+
+  ProjectSession restored;
+  const ProjectSessionResult opened = restored.open(project.manifest_path());
+  ASSERT_TRUE(opened.ok) << opened.message;
+  const OpenSceneSession *restored_scene = restored.active_scene();
+  ASSERT_NE(restored_scene, nullptr);
+  const ViewportCameraPose actual =
+      restored_scene->session->viewport_workspace()
+          .camera(ViewportPaneId::Perspective)
+          .pose();
+  expect_vec3_near(actual.eye, expected.eye);
+  expect_vec3_near(actual.target, expected.target);
+  expect_vec3_near(actual.up, expected.up);
+  EXPECT_FALSE(restored_scene->dirty());
 }
 
 TEST(ProjectSessionWorkspace, RejectsStaleIdsAcrossTabsAndProjects) {
@@ -1278,6 +1346,11 @@ TEST(ProjectSessionWorkspace,
       editor.project().recent_projects();
   ASSERT_FALSE(recent.empty());
   EXPECT_EQ(recent.front().manifest_path, editor.project().manifest_path());
+  EXPECT_TRUE(recent.front().available);
+  EXPECT_TRUE(recent.front().manifest_last_modified_unix_ms.has_value());
+  ASSERT_TRUE(recent.front().manifest_size_bytes.has_value());
+  EXPECT_EQ(*recent.front().manifest_size_bytes,
+            std::filesystem::file_size(editor.project().manifest_path()));
 }
 
 TEST(ProjectSessionWorkspace, ActiveSceneApisReportUnavailableWithZeroTabs) {

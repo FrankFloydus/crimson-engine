@@ -7,11 +7,19 @@
 #include "ui/qt_project_home_page.hpp"
 
 #include <QAbstractItemView>
+#include <QAction>
+#include <QApplication>
+#include <QDateTime>
+#include <QFrame>
+#include <QFont>
 #include <QHeaderView>
 #include <QHBoxLayout>
-#include <QItemSelectionModel>
+#include <QIcon>
 #include <QLabel>
+#include <QLocale>
+#include <QMenu>
 #include <QModelIndex>
+#include <QPalette>
 #include <QPushButton>
 #include <QSizePolicy>
 #include <QStackedWidget>
@@ -20,20 +28,61 @@
 #include <QVBoxLayout>
 
 #include <algorithm>
+#include <limits>
 #include <utility>
 
 namespace quader {
+namespace {
+
+QString unavailable_metadata_text() {
+  return QStringLiteral("\u2014");
+}
+
+QString format_local_timestamp(
+    const std::optional<std::uint64_t> unix_milliseconds) {
+  if (!unix_milliseconds.has_value()) {
+    return unavailable_metadata_text();
+  }
+  const std::uint64_t maximum_qint64 =
+      static_cast<std::uint64_t>(std::numeric_limits<qint64>::max());
+  const qint64 clamped_unix_milliseconds = static_cast<qint64>(
+      std::min(*unix_milliseconds, maximum_qint64));
+  const QDateTime local_time =
+      QDateTime::fromMSecsSinceEpoch(clamped_unix_milliseconds)
+          .toLocalTime();
+  return QLocale().toString(local_time, QLocale::ShortFormat);
+}
+
+QString format_manifest_size(
+    const std::optional<std::uintmax_t> size_bytes) {
+  if (!size_bytes.has_value()) {
+    return unavailable_metadata_text();
+  }
+  const std::uintmax_t maximum_qint64 =
+      static_cast<std::uintmax_t>(std::numeric_limits<qint64>::max());
+  return QLocale().formattedDataSize(
+      static_cast<qint64>(std::min(*size_bytes, maximum_qint64)), 2,
+      QLocale::DataSizeTraditionalFormat);
+}
+
+} // namespace
 
 QtProjectHomeLabels QtProjectHomeLabels::defaults() {
   return {
-      .new_project = QStringLiteral("New Quader Project"),
-      .open_project = QStringLiteral("Open Project"),
-      .recent_projects = QStringLiteral("Recent Projects"),
+      .new_project = QStringLiteral("New"),
+      .open_project = QStringLiteral("Open"),
+      .recent_projects = QStringLiteral("Recent"),
       .recent_name_column = QStringLiteral("Name"),
-      .recent_location_column = QStringLiteral("Location"),
+      .recent_last_modified_column = QStringLiteral("Last modified"),
+      .recent_size_column = QStringLiteral("Size"),
+      .recent_actions_column = QStringLiteral("Actions"),
       .no_recent_projects = QStringLiteral("No recent projects"),
       .unavailable_project = QStringLiteral("Project is unavailable"),
-      .remove_recent_project = QStringLiteral("Remove from Recent"),
+      .open_recent_project = QStringLiteral("Open"),
+      .open_recent_project_location =
+          QStringLiteral("Open file location"),
+      .copy_recent_project_path = QStringLiteral("Copy path"),
+      .remove_recent_project = QStringLiteral("Remove from recent"),
   };
 }
 
@@ -62,7 +111,14 @@ QVariant QtRecentProjectsModel::data(const QModelIndex &index,
   if (role == AvailableRole) {
     return project->available;
   }
+  if (role == Qt::TextAlignmentRole &&
+      index.column() == ActionsColumn) {
+    return Qt::AlignCenter;
+  }
   if (role == Qt::ToolTipRole) {
+    if (index.column() == ActionsColumn) {
+      return labels_.recent_actions_column;
+    }
     if (!project->available) {
       return QStringLiteral("%1\n%2")
           .arg(project->manifest_path, labels_.unavailable_project);
@@ -76,13 +132,24 @@ QVariant QtRecentProjectsModel::data(const QModelIndex &index,
     return {};
   }
 
-  if (index.column() == NameColumn) {
-    return project->available
-               ? project->name
-               : QStringLiteral("%1 (%2)")
-                     .arg(project->name, labels_.unavailable_project);
+  if (index.column() == ActionsColumn) {
+    return role == Qt::DisplayRole ? QStringLiteral("\u2026")
+                                   : labels_.recent_actions_column;
   }
-  return project->manifest_path;
+  if (index.column() == NameColumn) {
+    const QString display_name =
+        project->available
+            ? project->name
+            : QStringLiteral("%1 (%2)")
+                  .arg(project->name, labels_.unavailable_project);
+    return QStringLiteral("%1\n%2")
+        .arg(display_name, project->manifest_path);
+  }
+  if (index.column() == LastModifiedColumn) {
+    return format_local_timestamp(
+        project->manifest_last_modified_unix_ms);
+  }
+  return format_manifest_size(project->manifest_size_bytes);
 }
 
 QVariant QtRecentProjectsModel::headerData(int section,
@@ -94,8 +161,14 @@ QVariant QtRecentProjectsModel::headerData(int section,
   if (section == NameColumn) {
     return labels_.recent_name_column;
   }
-  if (section == LocationColumn) {
-    return labels_.recent_location_column;
+  if (section == LastModifiedColumn) {
+    return labels_.recent_last_modified_column;
+  }
+  if (section == SizeColumn) {
+    return labels_.recent_size_column;
+  }
+  if (section == ActionsColumn) {
+    return labels_.recent_actions_column;
   }
   return {};
 }
@@ -110,26 +183,28 @@ Qt::ItemFlags QtRecentProjectsModel::flags(const QModelIndex &index) const {
 
 void QtRecentProjectsModel::set_labels(QtProjectHomeLabels labels) {
   labels_ = std::move(labels);
-  emit headerDataChanged(Qt::Horizontal, NameColumn, LocationColumn);
+  emit headerDataChanged(Qt::Horizontal, NameColumn, ActionsColumn);
   if (!projects_.empty()) {
     emit dataChanged(index(0, 0),
                      index(static_cast<int>(projects_.size()) - 1,
                            ColumnCount - 1),
-                     {Qt::ToolTipRole, Qt::AccessibleDescriptionRole});
+                     {Qt::DisplayRole, Qt::AccessibleTextRole,
+                      Qt::ToolTipRole, Qt::AccessibleDescriptionRole});
   }
 }
 
-void QtRecentProjectsModel::set_projects(
+bool QtRecentProjectsModel::set_projects(
     std::vector<QtRecentProjectItem> projects) {
   if (projects.size() > kQtProjectHomeMaximumRecentProjects) {
     projects.resize(kQtProjectHomeMaximumRecentProjects);
   }
   if (projects_ == projects) {
-    return;
+    return false;
   }
   beginResetModel();
   projects_ = std::move(projects);
   endResetModel();
+  return true;
 }
 
 const QtRecentProjectItem *
@@ -143,31 +218,87 @@ QtRecentProjectsModel::project_at(int row) const {
 QtProjectHomePage::QtProjectHomePage(QWidget *parent) : QWidget(parent) {
   setObjectName(QStringLiteral("projectHome"));
 
-  auto *root_layout = new QVBoxLayout(this);
-  root_layout->setContentsMargins(32, 32, 32, 32);
-  root_layout->setSpacing(16);
+  auto *root_layout = new QHBoxLayout(this);
+  root_layout->setContentsMargins(0, 0, 0, 0);
+  root_layout->setSpacing(0);
 
-  auto *project_actions = new QHBoxLayout();
-  project_actions->setSpacing(8);
-  new_project_button_ = new QPushButton(this);
+  left_rail_ = new QFrame(this);
+  left_rail_->setObjectName(QStringLiteral("projectHome.leftRail"));
+  left_rail_->setFrameShape(QFrame::StyledPanel);
+  left_rail_->setFixedWidth(248);
+  QPalette rail_palette = left_rail_->palette();
+  rail_palette.setColor(QPalette::Window,
+                        rail_palette.color(QPalette::AlternateBase));
+  left_rail_->setPalette(rail_palette);
+  left_rail_->setAutoFillBackground(true);
+  auto *rail_layout = new QVBoxLayout(left_rail_);
+  rail_layout->setContentsMargins(28, 32, 28, 28);
+  rail_layout->setSpacing(8);
+
+  auto *brand_layout = new QHBoxLayout();
+  brand_layout->setSpacing(12);
+  brand_icon_ = new QLabel(left_rail_);
+  brand_icon_->setObjectName(QStringLiteral("projectHome.brand.icon"));
+  brand_icon_->setFixedSize(44, 44);
+  brand_icon_->setAlignment(Qt::AlignCenter);
+  brand_icon_->setAccessibleName(QStringLiteral("Quader"));
+  const QIcon application_icon = QApplication::windowIcon();
+  if (!application_icon.isNull()) {
+    brand_icon_->setPixmap(application_icon.pixmap(40, 40));
+  }
+  brand_layout->addWidget(brand_icon_);
+
+  brand_name_ = new QLabel(QStringLiteral("QUADER"), left_rail_);
+  brand_name_->setObjectName(QStringLiteral("projectHome.brand.name"));
+  QFont brand_font = brand_name_->font();
+  brand_font.setBold(true);
+  brand_font.setPointSize(15);
+  brand_name_->setFont(brand_font);
+  brand_layout->addWidget(brand_name_, 1);
+  rail_layout->addLayout(brand_layout);
+  rail_layout->addSpacing(28);
+
+  new_project_button_ = new QPushButton(left_rail_);
   new_project_button_->setObjectName(
       QStringLiteral("projectHome.newProject"));
   new_project_button_->setDefault(true);
-  project_actions->addWidget(new_project_button_);
+  new_project_button_->setMinimumHeight(32);
+  rail_layout->addWidget(new_project_button_);
 
-  open_project_button_ = new QPushButton(this);
+  open_project_button_ = new QPushButton(left_rail_);
   open_project_button_->setObjectName(
       QStringLiteral("projectHome.openProject"));
-  project_actions->addWidget(open_project_button_);
-  project_actions->addStretch(1);
-  root_layout->addLayout(project_actions);
+  open_project_button_->setMinimumHeight(32);
+  rail_layout->addWidget(open_project_button_);
+  rail_layout->addSpacing(24);
 
-  recent_projects_label_ = new QLabel(this);
+  recent_navigation_button_ = new QPushButton(left_rail_);
+  recent_navigation_button_->setObjectName(
+      QStringLiteral("projectHome.navigation.recent"));
+  recent_navigation_button_->setCheckable(true);
+  recent_navigation_button_->setAutoExclusive(true);
+  recent_navigation_button_->setChecked(true);
+  recent_navigation_button_->setFlat(true);
+  recent_navigation_button_->setMinimumHeight(32);
+  rail_layout->addWidget(recent_navigation_button_);
+  rail_layout->addStretch(1);
+  root_layout->addWidget(left_rail_);
+
+  auto *recent_content = new QWidget(this);
+  recent_content->setObjectName(QStringLiteral("projectHome.recentContent"));
+  auto *recent_layout = new QVBoxLayout(recent_content);
+  recent_layout->setContentsMargins(48, 44, 48, 40);
+  recent_layout->setSpacing(14);
+
+  recent_projects_label_ = new QLabel(recent_content);
   recent_projects_label_->setObjectName(
       QStringLiteral("projectHome.recentProjects.label"));
-  root_layout->addWidget(recent_projects_label_);
+  QFont heading_font = recent_projects_label_->font();
+  heading_font.setPointSize(16);
+  recent_projects_label_->setFont(heading_font);
+  recent_layout->addWidget(recent_projects_label_);
 
-  recent_projects_stack_ = new QStackedWidget(this);
+  recent_projects_stack_ = new QStackedWidget(recent_content);
   recent_projects_stack_->setObjectName(
       QStringLiteral("projectHome.recentProjects.stack"));
 
@@ -179,9 +310,11 @@ QtProjectHomePage::QtProjectHomePage(QWidget *parent) : QWidget(parent) {
   recent_projects_view_->setSelectionMode(
       QAbstractItemView::SingleSelection);
   recent_projects_view_->setShowGrid(false);
-  recent_projects_view_->setWordWrap(false);
+  recent_projects_view_->setWordWrap(true);
+  recent_projects_view_->setAlternatingRowColors(true);
   recent_projects_view_->verticalHeader()->hide();
-  recent_projects_view_->horizontalHeader()->setStretchLastSection(true);
+  recent_projects_view_->verticalHeader()->setDefaultSectionSize(48);
+  recent_projects_view_->horizontalHeader()->setStretchLastSection(false);
 
   recent_projects_model_ =
       new QtRecentProjectsModel(recent_projects_view_);
@@ -189,9 +322,19 @@ QtProjectHomePage::QtProjectHomePage(QWidget *parent) : QWidget(parent) {
       QStringLiteral("projectHome.recentProjects.model"));
   recent_projects_view_->setModel(recent_projects_model_);
   recent_projects_view_->horizontalHeader()->setSectionResizeMode(
-      QtRecentProjectsModel::NameColumn, QHeaderView::ResizeToContents);
+      QtRecentProjectsModel::NameColumn, QHeaderView::Stretch);
   recent_projects_view_->horizontalHeader()->setSectionResizeMode(
-      QtRecentProjectsModel::LocationColumn, QHeaderView::Stretch);
+      QtRecentProjectsModel::LastModifiedColumn, QHeaderView::Fixed);
+  recent_projects_view_->setColumnWidth(
+      QtRecentProjectsModel::LastModifiedColumn, 184);
+  recent_projects_view_->horizontalHeader()->setSectionResizeMode(
+      QtRecentProjectsModel::SizeColumn, QHeaderView::Fixed);
+  recent_projects_view_->setColumnWidth(
+      QtRecentProjectsModel::SizeColumn, 112);
+  recent_projects_view_->horizontalHeader()->setSectionResizeMode(
+      QtRecentProjectsModel::ActionsColumn, QHeaderView::Fixed);
+  recent_projects_view_->setColumnWidth(
+      QtRecentProjectsModel::ActionsColumn, 72);
   recent_projects_stack_->addWidget(recent_projects_view_);
 
   no_recent_projects_label_ = new QLabel(recent_projects_stack_);
@@ -201,13 +344,32 @@ QtProjectHomePage::QtProjectHomePage(QWidget *parent) : QWidget(parent) {
   no_recent_projects_label_->setSizePolicy(QSizePolicy::Expanding,
                                             QSizePolicy::Expanding);
   recent_projects_stack_->addWidget(no_recent_projects_label_);
-  root_layout->addWidget(recent_projects_stack_, 1);
+  recent_layout->addWidget(recent_projects_stack_, 1);
+  root_layout->addWidget(recent_content, 1);
 
-  remove_recent_project_button_ = new QPushButton(this);
-  remove_recent_project_button_->setObjectName(
-      QStringLiteral("projectHome.removeRecent"));
-  remove_recent_project_button_->setEnabled(false);
-  root_layout->addWidget(remove_recent_project_button_, 0, Qt::AlignLeft);
+  recent_project_actions_menu_ = new QMenu(this);
+  recent_project_actions_menu_->setObjectName(
+      QStringLiteral("projectHome.recentProjects.actionsMenu"));
+  open_recent_project_action_ =
+      recent_project_actions_menu_->addAction(QString{});
+  open_recent_project_action_->setObjectName(
+      QStringLiteral("projectHome.recentProjects.action.open"));
+  open_recent_project_location_action_ =
+      recent_project_actions_menu_->addAction(QString{});
+  open_recent_project_location_action_->setObjectName(
+      QStringLiteral("projectHome.recentProjects.action.openFileLocation"));
+  copy_recent_project_path_action_ =
+      recent_project_actions_menu_->addAction(QString{});
+  copy_recent_project_path_action_->setObjectName(
+      QStringLiteral("projectHome.recentProjects.action.copyPath"));
+  remove_recent_project_action_ =
+      recent_project_actions_menu_->addAction(QString{});
+  remove_recent_project_action_->setObjectName(
+      QStringLiteral("projectHome.recentProjects.action.removeFromRecent"));
+  open_recent_project_action_->setEnabled(false);
+  open_recent_project_location_action_->setEnabled(false);
+  copy_recent_project_path_action_->setEnabled(false);
+  remove_recent_project_action_->setEnabled(false);
 
   QObject::connect(new_project_button_, &QPushButton::clicked, this,
                    [this]() {
@@ -221,15 +383,42 @@ QtProjectHomePage::QtProjectHomePage(QWidget *parent) : QWidget(parent) {
                        open_project_requested_();
                      }
                    });
+  QObject::connect(recent_projects_view_, &QTableView::clicked, this,
+                   [this](const QModelIndex &index) {
+                     if (index.column() ==
+                         QtRecentProjectsModel::ActionsColumn) {
+                       show_recent_project_actions(index);
+                     }
+                   });
   QObject::connect(recent_projects_view_, &QTableView::activated, this,
                    [this](const QModelIndex &index) {
-                     dispatch_recent_project_open(index);
+                     if (index.column() ==
+                         QtRecentProjectsModel::ActionsColumn) {
+                       show_recent_project_actions(index);
+                     } else {
+                       dispatch_recent_project_open(index);
+                     }
                    });
-  QObject::connect(recent_projects_view_->selectionModel(),
-                   &QItemSelectionModel::selectionChanged, this,
-                   [this]() { refresh_remove_recent_button(); });
-  QObject::connect(remove_recent_project_button_, &QPushButton::clicked, this,
-                   [this]() { dispatch_recent_project_removal(); });
+  QObject::connect(open_recent_project_action_, &QAction::triggered, this,
+                   [this]() {
+                     dispatch_recent_project_action(
+                         QtRecentProjectAction::Open);
+                   });
+  QObject::connect(open_recent_project_location_action_,
+                   &QAction::triggered, this, [this]() {
+                     dispatch_recent_project_action(
+                         QtRecentProjectAction::OpenFileLocation);
+                   });
+  QObject::connect(copy_recent_project_path_action_, &QAction::triggered,
+                   this, [this]() {
+                     dispatch_recent_project_action(
+                         QtRecentProjectAction::CopyPath);
+                   });
+  QObject::connect(remove_recent_project_action_, &QAction::triggered, this,
+                   [this]() {
+                     dispatch_recent_project_action(
+                         QtRecentProjectAction::RemoveFromRecent);
+                   });
 
   refresh_labels();
   refresh_recent_projects_page();
@@ -243,9 +432,16 @@ void QtProjectHomePage::set_labels(QtProjectHomeLabels labels) {
 
 void QtProjectHomePage::set_recent_projects(
     std::vector<QtRecentProjectItem> projects) {
-  recent_projects_model_->set_projects(std::move(projects));
+  if (!recent_projects_model_->set_projects(std::move(projects))) {
+    return;
+  }
+  recent_project_actions_menu_->hide();
+  recent_action_manifest_path_.clear();
+  open_recent_project_action_->setEnabled(false);
+  open_recent_project_location_action_->setEnabled(false);
+  copy_recent_project_path_action_->setEnabled(false);
+  remove_recent_project_action_->setEnabled(false);
   refresh_recent_projects_page();
-  refresh_remove_recent_button();
 }
 
 void QtProjectHomePage::set_new_project_requested_callback(
@@ -258,25 +454,9 @@ void QtProjectHomePage::set_open_project_requested_callback(
   open_project_requested_ = std::move(callback);
 }
 
-void QtProjectHomePage::set_open_recent_project_requested_callback(
-    OpenRecentProjectCallback callback) {
-  open_recent_project_requested_ = std::move(callback);
-}
-
-void QtProjectHomePage::set_remove_recent_project_requested_callback(
-    RemoveRecentProjectCallback callback) {
-  remove_recent_project_requested_ = std::move(callback);
-}
-
-QModelIndex QtProjectHomePage::selected_recent_project_index() const {
-  if (recent_projects_view_ == nullptr ||
-      recent_projects_view_->selectionModel() == nullptr) {
-    return {};
-  }
-  const QModelIndexList selected =
-      recent_projects_view_->selectionModel()->selectedRows(
-          QtRecentProjectsModel::NameColumn);
-  return selected.size() == 1 ? selected.front() : QModelIndex{};
+void QtProjectHomePage::set_recent_project_action_requested_callback(
+    RecentProjectActionCallback callback) {
+  recent_project_action_requested_ = std::move(callback);
 }
 
 void QtProjectHomePage::dispatch_recent_project_open(
@@ -284,30 +464,46 @@ void QtProjectHomePage::dispatch_recent_project_open(
   const QtRecentProjectItem *project =
       recent_projects_model_->project_at(index.row());
   if (project == nullptr || !project->available ||
-      !open_recent_project_requested_) {
+      !recent_project_action_requested_) {
     return;
   }
-  const QString manifest_path = project->manifest_path;
-  open_recent_project_requested_(manifest_path);
+  recent_project_action_requested_(QtRecentProjectAction::Open,
+                                   project->manifest_path);
 }
 
-void QtProjectHomePage::dispatch_recent_project_removal() {
-  if (!remove_recent_project_requested_) {
+void QtProjectHomePage::dispatch_recent_project_action(
+    QtRecentProjectAction action) {
+  if (recent_action_manifest_path_.isEmpty() ||
+      !recent_project_action_requested_) {
     return;
   }
-  const QModelIndex index = selected_recent_project_index();
+  if (action == QtRecentProjectAction::Open &&
+      !open_recent_project_action_->isEnabled()) {
+    return;
+  }
+  recent_project_action_requested_(action, recent_action_manifest_path_);
+}
+
+void QtProjectHomePage::show_recent_project_actions(
+    const QModelIndex &index) {
   const QtRecentProjectItem *project =
       recent_projects_model_->project_at(index.row());
-  if (project != nullptr) {
-    remove_recent_project_requested_(project->manifest_path);
+  if (project == nullptr || !index.isValid()) {
+    return;
   }
-}
+  recent_action_manifest_path_ = project->manifest_path;
+  open_recent_project_action_->setEnabled(project->available);
+  open_recent_project_location_action_->setEnabled(true);
+  copy_recent_project_path_action_->setEnabled(true);
+  remove_recent_project_action_->setEnabled(true);
 
-void QtProjectHomePage::refresh_remove_recent_button() {
-  if (remove_recent_project_button_ != nullptr) {
-    remove_recent_project_button_->setEnabled(
-        selected_recent_project_index().isValid());
-  }
+  recent_projects_view_->selectRow(index.row());
+  const QModelIndex action_index = recent_projects_model_->index(
+      index.row(), QtRecentProjectsModel::ActionsColumn);
+  recent_projects_view_->setCurrentIndex(action_index);
+  const QRect action_rect = recent_projects_view_->visualRect(action_index);
+  recent_project_actions_menu_->popup(
+      recent_projects_view_->viewport()->mapToGlobal(action_rect.bottomRight()));
 }
 
 void QtProjectHomePage::refresh_labels() {
@@ -315,9 +511,17 @@ void QtProjectHomePage::refresh_labels() {
   new_project_button_->setAccessibleName(labels_.new_project);
   open_project_button_->setText(labels_.open_project);
   open_project_button_->setAccessibleName(labels_.open_project);
+  recent_navigation_button_->setText(labels_.recent_projects);
+  recent_navigation_button_->setAccessibleName(labels_.recent_projects);
   recent_projects_label_->setText(labels_.recent_projects);
+  recent_projects_label_->setAccessibleName(labels_.recent_projects);
   no_recent_projects_label_->setText(labels_.no_recent_projects);
-  remove_recent_project_button_->setText(labels_.remove_recent_project);
+  open_recent_project_action_->setText(labels_.open_recent_project);
+  open_recent_project_location_action_->setText(
+      labels_.open_recent_project_location);
+  copy_recent_project_path_action_->setText(
+      labels_.copy_recent_project_path);
+  remove_recent_project_action_->setText(labels_.remove_recent_project);
 }
 
 void QtProjectHomePage::refresh_recent_projects_page() {

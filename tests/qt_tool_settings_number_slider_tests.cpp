@@ -119,6 +119,12 @@ QPoint forward_drag_position(const QSlider &slider) {
   };
 }
 
+void process_events_for(int milliseconds) {
+  QEventLoop event_loop;
+  QTimer::singleShot(milliseconds, &event_loop, &QEventLoop::quit);
+  event_loop.exec();
+}
+
 const quader::QuaderToolSettingControl *find_setting(
     const quader::QuaderToolSettingsTarget &target, std::string_view id) {
   const auto found = std::find_if(
@@ -798,9 +804,9 @@ TEST(QtToolSettingsNumberSliderTests,
   QApplication application(argc, argv);
   QApplication::setStyle(QStringLiteral("Fusion"));
 
-  quader::QuaderStandaloneEditor standalone =
-      quader::create_standalone_editor();
-  quader::QuaderEditorApi &editor = standalone.editor();
+  quader::SceneSession session;
+  quader::QuaderEditorApi editor(
+      quader::QuaderApiSessionInternalAccess::from_scene_session(session));
   const quader::QuaderApiResult<quader::QuaderModelingObjectRef> source =
       editor.modeling().create_box(
           quader::QuaderBounds{.min = {-1.0f, -1.0f, -1.0f},
@@ -826,7 +832,10 @@ TEST(QtToolSettingsNumberSliderTests,
                   .ok());
 
   quader::QtToolSettingsPanel window;
+  window.setAttribute(Qt::WA_DontShowOnScreen, true);
   window.bind(editor);
+  window.show();
+  window.activateWindow();
   QCoreApplication::processEvents();
 
   auto *width_slider = window.findChild<QSlider *>(QStringLiteral(
@@ -858,6 +867,7 @@ TEST(QtToolSettingsNumberSliderTests,
   send_mouse_event(*width_slider, QEvent::MouseButtonPress, width_press,
                    Qt::LeftButton, Qt::LeftButton);
   ASSERT_TRUE(width_slider->isSliderDown());
+  EXPECT_TRUE(window.numeric_interaction_active());
   width_slider_changes = 0;
   width_slider_moves = 0;
   width_spin_changes = 0;
@@ -896,6 +906,7 @@ TEST(QtToolSettingsNumberSliderTests,
                 "tool_settings.control.operation.edge_bevel.width")),
             retained_width_spin.data());
   EXPECT_TRUE(width_slider->isSliderDown());
+  EXPECT_TRUE(window.numeric_interaction_active());
   EXPECT_DOUBLE_EQ(width_spin->value(), pending_width);
   const auto width_release_start = std::chrono::steady_clock::now();
   send_mouse_event(*width_slider, QEvent::MouseButtonRelease, width_move,
@@ -904,6 +915,7 @@ TEST(QtToolSettingsNumberSliderTests,
       std::chrono::microseconds>(std::chrono::steady_clock::now() -
                                 width_release_start);
   EXPECT_FALSE(width_slider->isSliderDown());
+  EXPECT_FALSE(window.numeric_interaction_active());
   EXPECT_EQ(width_slider_changes, 1);
   EXPECT_EQ(width_spin_changes, 0);
   EXPECT_GT(editor.revisions().asset_revision,
@@ -943,7 +955,7 @@ TEST(QtToolSettingsNumberSliderTests,
   const QRect segments_groove = slider_groove(*segments_slider);
   const QPoint segments_press = slider_handle(*segments_slider).center();
   const int segments_delta = std::max(4, segments_groove.width() / 16);
-  const std::array<QPoint, 3> segments_moves{
+  const std::array<QPoint, 5> segments_moves{
       QPoint(std::min(segments_groove.right(),
                       segments_press.x() + segments_delta),
              segments_groove.center().y()),
@@ -952,6 +964,12 @@ TEST(QtToolSettingsNumberSliderTests,
              segments_groove.center().y()),
       QPoint(std::min(segments_groove.right(),
                       segments_press.x() + segments_delta * 3),
+             segments_groove.center().y()),
+      QPoint(std::min(segments_groove.right(),
+                      segments_press.x() + segments_delta * 4),
+             segments_groove.center().y()),
+      QPoint(std::min(segments_groove.right(),
+                      segments_press.x() + segments_delta * 5),
              segments_groove.center().y()),
   };
   ASSERT_NE(segments_moves.front().x(), segments_press.x());
@@ -965,8 +983,9 @@ TEST(QtToolSettingsNumberSliderTests,
   const quader::QuaderRevisionStamp segments_revisions_before =
       editor.revisions();
   const auto segments_start = std::chrono::steady_clock::now();
-  for (const QPoint move : segments_moves) {
-    send_mouse_event(*segments_slider, QEvent::MouseMove, move,
+  for (std::size_t index = 0; index < 3; ++index) {
+    send_mouse_event(*segments_slider, QEvent::MouseMove,
+                     segments_moves[index],
                      Qt::NoButton, Qt::LeftButton);
   }
   const auto segments_elapsed = std::chrono::duration_cast<
@@ -989,6 +1008,7 @@ TEST(QtToolSettingsNumberSliderTests,
   EXPECT_DOUBLE_EQ(pending_segments_setting->number_value, 1.0);
   EXPECT_NE(pending_segments_setting->number_value,
             static_cast<double>(pending_segments));
+  EXPECT_TRUE(window.numeric_interaction_active());
 
   window.refresh();
   EXPECT_EQ(segments_slider_changes, 3);
@@ -1001,10 +1021,9 @@ TEST(QtToolSettingsNumberSliderTests,
                 "tool_settings.control.operation.edge_bevel.segments")),
             retained_segments_spin.data());
   EXPECT_TRUE(segments_slider->isSliderDown());
+  EXPECT_TRUE(window.numeric_interaction_active());
   EXPECT_EQ(segments_spin->value(), pending_segments);
-  QEventLoop live_update_loop;
-  QTimer::singleShot(50, &live_update_loop, &QEventLoop::quit);
-  live_update_loop.exec();
+  process_events_for(100);
   const quader::QuaderRevisionStamp segments_revisions_after_live_update =
       editor.revisions();
   EXPECT_GT(segments_revisions_after_live_update.asset_revision,
@@ -1017,12 +1036,38 @@ TEST(QtToolSettingsNumberSliderTests,
   ASSERT_NE(live_segments_setting, nullptr);
   EXPECT_DOUBLE_EQ(live_segments_setting->number_value,
                    static_cast<double>(pending_segments));
+  EXPECT_TRUE(window.numeric_interaction_active());
+
+  // A trailing pause dispatches once. Keeping the pointer down without new
+  // input must not continuously rebuild the preview.
+  process_events_for(75);
+  EXPECT_EQ(editor.revisions().asset_revision,
+            segments_revisions_after_live_update.asset_revision);
+
+  // Continued movement starts a new trailing window, but release owns the
+  // exact final flush and cancels that timer.
+  for (std::size_t index = 3; index < segments_moves.size(); ++index) {
+    send_mouse_event(*segments_slider, QEvent::MouseMove,
+                     segments_moves[index], Qt::NoButton, Qt::LeftButton);
+  }
+  EXPECT_EQ(segments_slider_moves, 5);
+  EXPECT_EQ(segments_slider_changes, 5);
+  EXPECT_EQ(segments_spin_changes, 0);
+  EXPECT_EQ(editor.revisions().asset_revision,
+            segments_revisions_after_live_update.asset_revision);
+  EXPECT_TRUE(window.numeric_interaction_active());
+  const int final_pending_segments = segments_spin->value();
+  EXPECT_NE(final_pending_segments, pending_segments);
+  window.refresh();
+  EXPECT_EQ(segments_slider_destroys, 0);
+  EXPECT_EQ(segments_spin->value(), final_pending_segments);
   send_mouse_event(*segments_slider, QEvent::MouseButtonRelease,
                    segments_moves.back(), Qt::LeftButton, Qt::NoButton);
   EXPECT_FALSE(segments_slider->isSliderDown());
-  EXPECT_EQ(segments_slider_changes, 3);
+  EXPECT_FALSE(window.numeric_interaction_active());
+  EXPECT_EQ(segments_slider_changes, 5);
   EXPECT_EQ(segments_spin_changes, 0);
-  EXPECT_EQ(editor.revisions().asset_revision,
+  EXPECT_GT(editor.revisions().asset_revision,
             segments_revisions_after_live_update.asset_revision);
   const quader::QuaderToolSettingsTarget applied_segments_settings =
       editor.tools().active_settings();
@@ -1031,7 +1076,162 @@ TEST(QtToolSettingsNumberSliderTests,
                    "operation.edge_bevel.segments");
   ASSERT_NE(applied_segments_setting, nullptr);
   EXPECT_DOUBLE_EQ(applied_segments_setting->number_value,
-                   static_cast<double>(pending_segments));
+                   static_cast<double>(final_pending_segments));
+  const quader::QuaderRevisionStamp segments_revisions_after_release =
+      editor.revisions();
+  process_events_for(75);
+  EXPECT_EQ(editor.revisions().asset_revision,
+            segments_revisions_after_release.asset_revision);
+
+  // Spin arrows, wheel, and keyboard input all arrive through valueChanged.
+  // Several synchronous changes stay presentation-local until editing ends.
+  const int spin_value_before = segments_spin->value();
+  const int forward_capacity = segments_spin->maximum() - spin_value_before;
+  const int backward_capacity = spin_value_before - segments_spin->minimum();
+  ASSERT_TRUE(forward_capacity >= 3 || backward_capacity >= 3);
+  const int spin_direction = forward_capacity >= 3 ? 1 : -1;
+  const std::array<int, 3> spin_values{
+      spin_value_before + spin_direction,
+      spin_value_before + spin_direction * 2,
+      spin_value_before + spin_direction * 3,
+  };
+  const quader::QuaderRevisionStamp spin_revisions_before = editor.revisions();
+  const int spin_changes_before = segments_spin_changes;
+  for (const int value : spin_values) {
+    segments_spin->setValue(value);
+  }
+  EXPECT_EQ(segments_spin_changes - spin_changes_before, 3);
+  EXPECT_EQ(editor.revisions().asset_revision,
+            spin_revisions_before.asset_revision);
+  EXPECT_TRUE(window.numeric_interaction_active());
+  window.refresh();
+  EXPECT_EQ(segments_slider_destroys, 0);
+  EXPECT_EQ(segments_spin->value(), spin_values.back());
+  ASSERT_TRUE(QMetaObject::invokeMethod(segments_spin, "editingFinished",
+                                        Qt::DirectConnection));
+  EXPECT_FALSE(window.numeric_interaction_active());
+  EXPECT_GT(editor.revisions().asset_revision,
+            spin_revisions_before.asset_revision);
+  const quader::QuaderToolSettingControl *spin_applied_setting = find_setting(
+      editor.tools().active_settings(), "operation.edge_bevel.segments");
+  ASSERT_NE(spin_applied_setting, nullptr);
+  EXPECT_DOUBLE_EQ(spin_applied_setting->number_value,
+                   static_cast<double>(spin_values.back()));
+  const quader::QuaderRevisionStamp spin_revisions_after_flush =
+      editor.revisions();
+  process_events_for(75);
+  EXPECT_EQ(editor.revisions().asset_revision,
+            spin_revisions_after_flush.asset_revision);
+
+  // A real mouse Reset begins while the spin editor still owns focus. The
+  // press invalidates its delayed value before the click transfers focus and
+  // emits editingFinished, so Reset remains the only owner mutation.
+  const int stale_reset_value =
+      spin_values.back() == segments_spin->maximum()
+          ? segments_spin->minimum()
+          : segments_spin->maximum();
+  segments_spin->setFocus(Qt::OtherFocusReason);
+  QCoreApplication::processEvents();
+  ASSERT_TRUE(segments_spin->hasFocus() ||
+              (QApplication::focusWidget() != nullptr &&
+               segments_spin->isAncestorOf(QApplication::focusWidget())));
+  segments_spin->setValue(stale_reset_value);
+  EXPECT_TRUE(window.numeric_interaction_active());
+  auto *reset_button = window.findChild<QPushButton *>(
+      QStringLiteral("tool_settings.reset_defaults"));
+  ASSERT_NE(reset_button, nullptr);
+  send_mouse_event(*reset_button, QEvent::MouseButtonPress,
+                   reset_button->rect().center(), Qt::LeftButton,
+                   Qt::LeftButton);
+  EXPECT_FALSE(window.numeric_interaction_active());
+  EXPECT_TRUE(segments_spin->hasFocus() ||
+              (QApplication::focusWidget() != nullptr &&
+               segments_spin->isAncestorOf(QApplication::focusWidget())));
+  send_mouse_event(*reset_button, QEvent::MouseButtonRelease,
+                   reset_button->rect().center(), Qt::LeftButton,
+                   Qt::NoButton);
+  EXPECT_TRUE(reset_button->hasFocus());
+  QCoreApplication::processEvents();
+  EXPECT_FALSE(window.numeric_interaction_active());
+  const quader::QuaderToolSettingControl *reset_segments_setting =
+      find_setting(editor.tools().active_settings(),
+                   "operation.edge_bevel.segments");
+  ASSERT_NE(reset_segments_setting, nullptr);
+  EXPECT_DOUBLE_EQ(reset_segments_setting->number_value, 1.0);
+  process_events_for(75);
+  reset_segments_setting = find_setting(editor.tools().active_settings(),
+                                        "operation.edge_bevel.segments");
+  ASSERT_NE(reset_segments_setting, nullptr);
+  EXPECT_DOUBLE_EQ(reset_segments_setting->number_value, 1.0);
+
+  // Ctrl+Z semantics cancel a live preview before touching document history.
+  // A value queued against that preview epoch must disappear rather than
+  // mutating the persistent interaction setting after the timer wakes.
+  segments_spin->setFocus(Qt::OtherFocusReason);
+  QCoreApplication::processEvents();
+  const int stale_undo_value = stale_reset_value == 1 ? 2 : stale_reset_value;
+  segments_spin->setValue(stale_undo_value);
+  ASSERT_TRUE(window.numeric_interaction_active());
+  ASSERT_TRUE(editor.history().undo().ok());
+  EXPECT_EQ(session.modeling().interaction_settings().edge_bevel_segments, 1);
+  const std::uint64_t settings_revision_after_undo =
+      editor.tools().active_settings_revision();
+  const quader::QuaderRevisionStamp revisions_after_undo = editor.revisions();
+  process_events_for(75);
+  EXPECT_FALSE(window.numeric_interaction_active());
+  EXPECT_EQ(session.modeling().interaction_settings().edge_bevel_segments, 1);
+  EXPECT_EQ(editor.tools().active_settings_revision(),
+            settings_revision_after_undo);
+  EXPECT_EQ(editor.revisions().asset_revision,
+            revisions_after_undo.asset_revision);
+  EXPECT_EQ(editor.revisions().modeling_content_revision,
+            revisions_after_undo.modeling_content_revision);
+
+  // Re-enter the preview and exercise Cancel through the same real
+  // press/release ordering. The focused edit is discarded on press, before
+  // focus-out can flush it, and never persists after cancellation.
+  ASSERT_TRUE(editor.commands()
+                  .execute(editor.commands().command_id_for_modeling_action(
+                      "bevel_edges"))
+                  .ok());
+  window.refresh();
+  QCoreApplication::processEvents();
+  segments_spin = window.findChild<QSpinBox *>(QStringLiteral(
+      "tool_settings.control.operation.edge_bevel.segments"));
+  auto *cancel_button = window.findChild<QPushButton *>(
+      QStringLiteral("tool_settings.cancel"));
+  ASSERT_NE(segments_spin, nullptr);
+  ASSERT_NE(cancel_button, nullptr);
+  segments_spin->setFocus(Qt::OtherFocusReason);
+  QCoreApplication::processEvents();
+  ASSERT_TRUE(segments_spin->hasFocus() ||
+              (QApplication::focusWidget() != nullptr &&
+               segments_spin->isAncestorOf(QApplication::focusWidget())));
+  segments_spin->setValue(stale_undo_value);
+  ASSERT_TRUE(window.numeric_interaction_active());
+  send_mouse_event(*cancel_button, QEvent::MouseButtonPress,
+                   cancel_button->rect().center(), Qt::LeftButton,
+                   Qt::LeftButton);
+  EXPECT_FALSE(window.numeric_interaction_active());
+  EXPECT_EQ(session.modeling().interaction_settings().edge_bevel_segments, 1);
+  send_mouse_event(*cancel_button, QEvent::MouseButtonRelease,
+                   cancel_button->rect().center(), Qt::LeftButton,
+                   Qt::NoButton);
+  EXPECT_TRUE(cancel_button->hasFocus());
+  QCoreApplication::processEvents();
+  const std::uint64_t settings_revision_after_cancel =
+      editor.tools().active_settings_revision();
+  const quader::QuaderRevisionStamp revisions_after_cancel =
+      editor.revisions();
+  process_events_for(75);
+  EXPECT_FALSE(window.numeric_interaction_active());
+  EXPECT_EQ(session.modeling().interaction_settings().edge_bevel_segments, 1);
+  EXPECT_EQ(editor.tools().active_settings_revision(),
+            settings_revision_after_cancel);
+  EXPECT_EQ(editor.revisions().asset_revision,
+            revisions_after_cancel.asset_revision);
+  EXPECT_EQ(editor.revisions().modeling_content_revision,
+            revisions_after_cancel.modeling_content_revision);
 
   RecordProperty("width_slider_callbacks", width_slider_changes);
   RecordProperty("width_paired_spin_callbacks", width_spin_changes);
@@ -1043,10 +1243,12 @@ TEST(QtToolSettingsNumberSliderTests,
   RecordProperty("segments_slider_callbacks", segments_slider_changes);
   RecordProperty("segments_paired_spin_callbacks", segments_spin_changes);
   RecordProperty("segments_editor_rebuilds", segments_slider_destroys);
+  RecordProperty("segments_owner_dispatch_batches", 2);
+  RecordProperty("segments_spin_coalesced_callbacks",
+                 segments_spin_changes - spin_changes_before);
   RecordProperty("segments_three_pointer_moves_us",
                  static_cast<int>(segments_elapsed.count()));
 
-  ASSERT_TRUE(editor.tools().cancel_active_tool_preview().ok());
   window.unbind();
   window.hide();
 }

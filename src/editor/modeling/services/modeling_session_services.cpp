@@ -2799,6 +2799,7 @@ std::uint64_t ModelingOverlayService::selection_overlay_signature(
   std::uint64_t hash = 1469598103934665603ULL;
   mix_overlay_signature_hash(hash,
                              options.suppress_persistent_object_selection);
+  mix_overlay_signature_hash(hash, options.suppress_persistent_selection);
   return hash;
 }
 
@@ -3118,9 +3119,9 @@ ModelingOverlayService::selection_overlay_base_frame(
       const bool active_source_wire_object =
           selection_mode != quader_editor_core::SelectionMode::Object &&
           object.id > 0 && object.selected &&
-          (object.component_edit_target ||
-           quader_editor_core::component_selection_has_any_components(
-               object.selection) ||
+           (object.component_edit_target ||
+            quader_editor_core::component_selection_has_any_components(
+                object.selection) ||
            (!has_component_source_targets && object.id == active_object_id));
 
       OverlayBaseObjectCacheEntry entry;
@@ -3286,6 +3287,9 @@ ViewportOverlayFrame ModelingOverlayService::selection_overlay_frame(
     const ModelingSelectionService &selection_service,
     const ModelingSdkProjectionAdapter &sdk_projection,
     ModelingSelectionOverlayOptions options) const {
+  if (options.suppress_persistent_selection) {
+    return {};
+  }
   const quader_editor_core::SelectionHoverState persistent_hover;
   (void)sdk_projection;
   const std::uint64_t content_revision = session.state().content_revision;

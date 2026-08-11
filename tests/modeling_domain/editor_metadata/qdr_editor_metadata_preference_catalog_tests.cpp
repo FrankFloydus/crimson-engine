@@ -81,7 +81,7 @@ void check_float_preference(
 
 TEST(QdrEditorMetadataPreferenceCatalogTests, HostContractPreferenceCatalogExposesViewportSettingDefaultsAsEngineNeutralDescriptors) {
 	const std::span<const qhc::HostPreferenceDescriptor> preferences = qhc::preference_catalog();
-	EXPECT_TRUE(preferences.size() == 48U);
+	EXPECT_TRUE(preferences.size() == 49U);
 
 	const qhc::HostPreferenceDescriptor& background = require_preference("viewport.scene.background_color");
         EXPECT_TRUE(background.scope ==
@@ -115,6 +115,11 @@ TEST(QdrEditorMetadataPreferenceCatalogTests, HostContractPreferenceCatalogExpos
                     qhc::HostPreferenceValueKind::ColorRgba);
         EXPECT_TRUE(same_text(selection_wire.related_overlay_layer_id, "selected_face_edge"));
 	check_color(selection_wire.default_color, 1.0, 211.0 / 255.0, 31.0 / 255.0, 1.0);
+
+	const qhc::HostPreferenceDescriptor& bounding_box_wire =
+		require_preference("viewport.selection.bounding_box_wire_color");
+	check_color(bounding_box_wire.default_color, 1.0, 230.0 / 255.0, 0.0,
+	            1.0);
 
 	const qhc::HostPreferenceDescriptor& diagnostic_edge =
 		require_preference("viewport.overlay.diagnostic_edge_color");
@@ -249,6 +254,16 @@ TEST(QdrEditorMetadataPreferenceCatalogTests, HostContractPreferenceGroupsCanDri
         EXPECT_TRUE(overlay.preference_ids.size() == 11U);
 	EXPECT_TRUE(group_contains(overlay, "viewport.overlay.diagnostic_edge_color"));
 	EXPECT_TRUE(group_contains(overlay, "viewport.overlay.diagnostic_edge_line_size"));
+
+	const qhc::HostPreferenceGroupDescriptor& selection =
+		require_group("viewport.selection");
+	EXPECT_TRUE(selection.preference_ids.size() == 5U);
+	EXPECT_TRUE(group_contains(
+		selection, "viewport.selection.bounding_box_wire_color"));
+
+	const qhc::HostPreferenceGroupDescriptor& vertices =
+		require_group("viewport.vertices");
+	EXPECT_TRUE(vertices.preference_ids.size() == 8U);
 
 	const qhc::HostPreferenceGroupDescriptor& picking = require_group("viewport.picking");
         EXPECT_TRUE(picking.scope == qhc::HostPreferenceScope::ViewportPicking);

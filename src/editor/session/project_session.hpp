@@ -145,7 +145,9 @@ private:
   [[nodiscard]] std::unique_ptr<OpenSceneSession>
   make_scene(SceneId scene_id, std::string display_name,
              std::optional<ProjectRelativePath> path,
-             SceneContentDocument document);
+             SceneContentDocument document,
+             std::optional<ViewportCameraPose> viewport_camera_pose =
+                 std::nullopt);
   [[nodiscard]] ProjectSessionResult install_workspace(
       ProjectWorkspaceStorage workspace,
       ProjectMaterialCatalog material_catalog,

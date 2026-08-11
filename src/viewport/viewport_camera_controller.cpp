@@ -6,6 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "viewport/viewport_camera_controller.hpp"
 
+#include "core/camera_pose_validation.hpp"
 #include "diagnostics/profile.hpp"
 #include "viewport/host_viewport_contract_adapter.hpp"
 #include "viewport/viewport_camera_clip_planes.hpp"
@@ -13,7 +14,9 @@
 #include <editor/interactions/viewport_navigation.hpp>
 #include <editor/interactions/viewport_projection.hpp>
 
+#include <bit>
 #include <cmath>
+#include <cstdint>
 #include <numbers>
 #include <optional>
 
@@ -78,6 +81,22 @@ QVec3 fallback_up_for_forward(QVec3 forward) {
                             : QVec3{0.0f, 0.0f, -1.0f};
   }
   return {0.0f, 1.0f, 0.0f};
+}
+
+[[nodiscard]] std::uint32_t
+canonical_persistence_float_bits(float value) noexcept {
+  if (value == 0.0f) {
+    value = 0.0f;
+  }
+  return std::bit_cast<std::uint32_t>(value);
+}
+
+void append_persistence_float(std::uint64_t &hash, float value) noexcept {
+  const std::uint32_t bits = canonical_persistence_float_bits(value);
+  for (unsigned int shift = 0u; shift < 32u; shift += 8u) {
+    hash ^= static_cast<std::uint8_t>((bits >> shift) & 0xffu);
+    hash *= 1099511628211ull;
+  }
 }
 
 /**
@@ -266,6 +285,23 @@ QVec3 fallback_forward_for_axis(ViewportViewAxis axis, int sign) {
 }
 
 } // namespace
+
+bool viewport_camera_pose_is_valid(
+    const ViewportCameraPose &pose) noexcept {
+  return camera_pose_basis_is_valid(pose.eye, pose.target, pose.up);
+}
+
+std::uint64_t viewport_camera_pose_persistence_signature(
+    const ViewportCameraPose &pose) noexcept {
+  std::uint64_t hash = 14695981039346656037ull;
+  const QVec3 values[] = {pose.eye, pose.target, pose.up};
+  for (const QVec3 value : values) {
+    append_persistence_float(hash, value.x);
+    append_persistence_float(hash, value.y);
+    append_persistence_float(hash, value.z);
+  }
+  return hash;
+}
 
 ViewportCameraController::ViewportCameraController() {
   const ViewportHostDefaults defaults = viewport_host_defaults();
@@ -557,6 +593,48 @@ void ViewportCameraController::set_clip_planes(float near_plane,
       sanitize_viewport_camera_clip_planes(near_plane, far_plane);
   state_.near_plane = clip_planes.near_plane;
   state_.far_plane = clip_planes.far_plane;
+}
+
+bool ViewportCameraController::restore_perspective_pose(
+    const ViewportCameraPose &camera_pose) {
+  if (!viewport_camera_pose_is_valid(camera_pose)) {
+    return false;
+  }
+  const double forward_x = static_cast<double>(camera_pose.target.x) -
+                           static_cast<double>(camera_pose.eye.x);
+  const double forward_y = static_cast<double>(camera_pose.target.y) -
+                           static_cast<double>(camera_pose.eye.y);
+  const double forward_z = static_cast<double>(camera_pose.target.z) -
+                           static_cast<double>(camera_pose.eye.z);
+  const double distance_double =
+      std::sqrt(forward_x * forward_x + forward_y * forward_y +
+                forward_z * forward_z);
+  const float distance = static_cast<float>(distance_double);
+  const QVec3 forward_direction{
+      static_cast<float>(forward_x / distance_double),
+      static_cast<float>(forward_y / distance_double),
+      static_cast<float>(forward_z / distance_double),
+  };
+  const double up_x = camera_pose.up.x;
+  const double up_y = camera_pose.up.y;
+  const double up_z = camera_pose.up.z;
+  const double up_length =
+      std::sqrt(up_x * up_x + up_y * up_y + up_z * up_z);
+  const QVec3 up_direction{
+      static_cast<float>(up_x / up_length),
+      static_cast<float>(up_y / up_length),
+      static_cast<float>(up_z / up_length),
+  };
+
+  state_.target = camera_pose.target;
+  state_.distance = distance;
+  state_.projection = ViewportProjection::Perspective;
+  pivot_ = camera_pose.target;
+  set_camera_basis(forward_direction, up_direction);
+  drag_mode_ = ViewportDragMode::None;
+  orthographic_view_locked_ = false;
+  clear_orbit_snap_source();
+  return true;
 }
 
 bool ViewportCameraController::fly_speed_is_default() const {

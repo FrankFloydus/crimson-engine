@@ -180,21 +180,30 @@ OperationResult bevel_selected_edges_impl(Document& document, Selection& selecti
     }
 
     const std::vector<Edge> all_document_edges = document_edges(document);
+    std::map<ElementId, int> incident_edge_counts;
+    std::map<ElementId, int> selected_incident_edge_counts;
+    for (const Edge& edge : all_document_edges) {
+        ++incident_edge_counts[edge.a];
+        if (edge.b != edge.a) {
+            ++incident_edge_counts[edge.b];
+        }
+        if (!selected_edge_keys.contains(edge_key(edge))) {
+            continue;
+        }
+        ++selected_incident_edge_counts[edge.a];
+        if (edge.b != edge.a) {
+            ++selected_incident_edge_counts[edge.b];
+        }
+    }
+
     std::map<ElementId, bool> fully_selected_vertices;
     for (const Vertex& vertex : document.vertices) {
-        bool has_incident_edge = false;
-        bool all_incident_edges_selected = true;
-        for (const Edge& edge : all_document_edges) {
-            if (edge.a != vertex.id && edge.b != vertex.id) {
-                continue;
-            }
-            has_incident_edge = true;
-            if (!selected_edge_keys.contains(edge_key(edge))) {
-                all_incident_edges_selected = false;
-                break;
-            }
-        }
-        fully_selected_vertices[vertex.id] = has_incident_edge && all_incident_edges_selected;
+        const auto incident_count = incident_edge_counts.find(vertex.id);
+        const auto selected_count = selected_incident_edge_counts.find(vertex.id);
+        fully_selected_vertices[vertex.id] =
+            incident_count != incident_edge_counts.end() &&
+            selected_count != selected_incident_edge_counts.end() &&
+            selected_count->second == incident_count->second;
     }
 
     Document candidate = document;
@@ -1689,12 +1698,46 @@ OperationResult bevel_selected_edges_impl(Document& document, Selection& selecti
     auto append_terminal_open_patch_faces = [&]() {
         std::map<std::pair<ElementId, ElementId>, int> edge_counts =
             combined_face_edge_counts();
-        const auto record_patch_face_edges = [&edge_counts](const std::vector<ElementId>& vertices) {
-            for (std::size_t index = 0; index < vertices.size(); ++index) {
-                const Edge edge = make_edge(vertices[index], vertices[(index + 1U) % vertices.size()]);
-                ++edge_counts[edge_key(edge)];
-            }
+        std::map<ElementId, std::set<ElementId>> open_boundary_neighbors;
+        const auto set_open_boundary_edge =
+            [&open_boundary_neighbors](const std::pair<ElementId, ElementId>& edge_pair, bool is_open) {
+            const auto update_endpoint = [&open_boundary_neighbors, is_open](ElementId from, ElementId to) {
+                if (is_open) {
+                    open_boundary_neighbors[from].insert(to);
+                    return;
+                }
+                const auto neighbors = open_boundary_neighbors.find(from);
+                if (neighbors == open_boundary_neighbors.end()) {
+                    return;
+                }
+                neighbors->second.erase(to);
+                if (neighbors->second.empty()) {
+                    open_boundary_neighbors.erase(neighbors);
+                }
+            };
+            update_endpoint(edge_pair.first, edge_pair.second);
+            update_endpoint(edge_pair.second, edge_pair.first);
         };
+        for (const auto& [edge_pair, count] : edge_counts) {
+            if (count == 1) {
+                set_open_boundary_edge(edge_pair, true);
+            }
+        }
+
+        const auto record_patch_face_edges =
+            [&edge_counts, &set_open_boundary_edge](const std::vector<ElementId>& vertices) {
+                for (std::size_t index = 0; index < vertices.size(); ++index) {
+                    const Edge edge = make_edge(vertices[index], vertices[(index + 1U) % vertices.size()]);
+                    const std::pair edge_pair = edge_key(edge);
+                    int& count = edge_counts[edge_pair];
+                    if (count == 0) {
+                        set_open_boundary_edge(edge_pair, true);
+                    } else if (count == 1) {
+                        set_open_boundary_edge(edge_pair, false);
+                    }
+                    ++count;
+                }
+            };
         const auto append_local_loop = [&](ElementId source_vertex_id, std::vector<ElementId> loop) {
             loop = compact_edge_bevel_face_loop(std::move(loop));
             if (loop.size() < 3U) {
@@ -1756,24 +1799,30 @@ OperationResult bevel_selected_edges_impl(Document& document, Selection& selecti
             }
         }
 
-        const auto expand_local_open_edge_component = [&edge_counts](std::set<ElementId>& local_vertex_ids) {
-            bool changed = true;
-            while (changed) {
-                changed = false;
-                for (const auto& [edge_pair, count] : edge_counts) {
-                    if (count != 1) {
+        const auto local_open_edge_components =
+            [&open_boundary_neighbors](std::set<ElementId>& local_vertex_ids) {
+                std::set<std::pair<ElementId, ElementId>> local_open_edges;
+                std::vector<ElementId> stack(local_vertex_ids.begin(), local_vertex_ids.end());
+                std::set<ElementId> visited_vertices;
+                while (!stack.empty()) {
+                    const ElementId current_id = stack.back();
+                    stack.pop_back();
+                    if (!visited_vertices.insert(current_id).second) {
                         continue;
                     }
-                    const bool has_first = local_vertex_ids.contains(edge_pair.first);
-                    const bool has_second = local_vertex_ids.contains(edge_pair.second);
-                    if (has_first == has_second) {
+                    const auto neighbors = open_boundary_neighbors.find(current_id);
+                    if (neighbors == open_boundary_neighbors.end()) {
                         continue;
                     }
-                    local_vertex_ids.insert(has_first ? edge_pair.second : edge_pair.first);
-                    changed = true;
+                    for (const ElementId neighbor_id : neighbors->second) {
+                        local_open_edges.insert(edge_key(make_edge(current_id, neighbor_id)));
+                        if (local_vertex_ids.insert(neighbor_id).second) {
+                            stack.push_back(neighbor_id);
+                        }
+                    }
                 }
-            }
-        };
+                return local_open_edges;
+            };
 
         for (const auto& [vertex_id, profile_vertices] : local_profiles_by_vertex) {
             if (profile_vertices.size() < 2U) {
@@ -1796,42 +1845,34 @@ OperationResult bevel_selected_edges_impl(Document& document, Selection& selecti
             if (local_vertex_ids.size() < 3U) {
                 continue;
             }
-            expand_local_open_edge_component(local_vertex_ids);
-
-            std::vector<Edge> local_open_edges;
-            for (const auto& [edge_pair, count] : edge_counts) {
-                if (count != 1) {
-                    continue;
-                }
-                if (!local_vertex_ids.contains(edge_pair.first) ||
-                    !local_vertex_ids.contains(edge_pair.second)) {
-                    continue;
-                }
-                local_open_edges.push_back(make_edge(edge_pair.first, edge_pair.second));
-            }
-            if (local_open_edges.size() < 3U) {
+            std::set<std::pair<ElementId, ElementId>> remaining_edges =
+                local_open_edge_components(local_vertex_ids);
+            if (remaining_edges.size() < 3U) {
                 continue;
-            }
-
-            std::set<std::pair<ElementId, ElementId>> remaining_edges;
-            for (const Edge& edge : local_open_edges) {
-                remaining_edges.insert(edge_key(edge));
             }
             while (!remaining_edges.empty()) {
                 const std::pair first_edge_key = *remaining_edges.begin();
                 std::vector<ElementId> stack { first_edge_key.first, first_edge_key.second };
                 std::vector<Edge> component_edges;
+                std::set<ElementId> visited_vertices;
                 while (!stack.empty()) {
                     const ElementId current_id = stack.back();
                     stack.pop_back();
-                    for (auto edge = remaining_edges.begin(); edge != remaining_edges.end();) {
-                        if (edge->first != current_id && edge->second != current_id) {
-                            ++edge;
+                    if (!visited_vertices.insert(current_id).second) {
+                        continue;
+                    }
+                    const auto neighbors = open_boundary_neighbors.find(current_id);
+                    if (neighbors == open_boundary_neighbors.end()) {
+                        continue;
+                    }
+                    for (const ElementId next_id : neighbors->second) {
+                        const std::pair edge_pair = edge_key(make_edge(current_id, next_id));
+                        const auto edge = remaining_edges.find(edge_pair);
+                        if (edge == remaining_edges.end()) {
                             continue;
                         }
-                        const ElementId next_id = edge->first == current_id ? edge->second : edge->first;
-                        component_edges.push_back(make_edge(edge->first, edge->second));
-                        edge = remaining_edges.erase(edge);
+                        component_edges.push_back(make_edge(edge_pair.first, edge_pair.second));
+                        remaining_edges.erase(edge);
                         stack.push_back(next_id);
                     }
                 }

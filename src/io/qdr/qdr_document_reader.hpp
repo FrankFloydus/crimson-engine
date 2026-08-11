@@ -7,12 +7,14 @@
 #pragma once
 
 #include "io/qdr/qdr_diagnostic.hpp"
+#include "io/qdr/qdr_scene_viewport_camera.hpp"
 #include "io/project/project_asset_resolver.hpp"
 #include "scene/document/scene_content_document.hpp"
 
 #include <array>
 #include <cstddef>
 #include <filesystem>
+#include <optional>
 #include <span>
 #include <string>
 #include <vector>
@@ -48,6 +50,7 @@ struct QdrProjectReadResult {
     std::vector<quader_io::QdrDiagnostic> diagnostics;
     std::array<std::byte, 16> scene_uuid{};
     std::vector<ProjectAssetReference> project_asset_dependencies;
+    std::optional<QdrSceneViewportCameraPose> viewport_camera_pose;
     QdrProjectReadStats stats;
 };
 

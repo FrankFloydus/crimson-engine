@@ -132,6 +132,35 @@ constexpr std::string_view local_visibility_keybinding_context() {
          "!transformDrag.active && !operationPreview.active";
 }
 
+bool is_material_viewport_action(
+    const QuaderKeybindingActionKey &action) {
+  return action.action_id == "viewport.material.sample_face" ||
+         action.action_id ==
+             "viewport.material.apply_active_to_selection" ||
+         action.action_id == "viewport.material.apply_face_to_mesh";
+}
+
+bool is_reserved_bare_right_mouse_material_chord(
+    const QuaderInputChord &chord) {
+  if (chord.device != QuaderInputDevice::Mouse ||
+      chord.mouse_button != QuaderMouseButton::Right || chord.primary ||
+      chord.shift || chord.alt) {
+    return false;
+  }
+  return chord.gesture == QuaderInputGesture::Press ||
+         chord.gesture == QuaderInputGesture::Click ||
+         chord.gesture == QuaderInputGesture::DoubleClick ||
+         chord.gesture == QuaderInputGesture::Drag;
+}
+
+bool material_assignment_uses_reserved_bare_right_mouse(
+    const QuaderKeybindingActionKey &action,
+    const std::vector<QuaderInputChord> &sequence) {
+  return is_material_viewport_action(action) &&
+         std::ranges::any_of(
+             sequence, is_reserved_bare_right_mouse_material_chord);
+}
+
 bool command_semantically_requires_viewport(std::string_view command_id) {
   if (command_id == quader_command::kViewportSpawnWindow.string()) {
     return false;
@@ -1126,6 +1155,13 @@ QuaderCommandsApi::Impl::analyze_shortcut_assignment(
       keybinding_catalog_entry(catalog, action);
   if (proposed_entry == nullptr) {
     analysis.message = "Unknown keybinding action.";
+    return analysis;
+  }
+  if (material_assignment_uses_reserved_bare_right_mouse(action,
+                                                          *proposed)) {
+    analysis.message =
+        "Unmodified right mouse gestures are reserved for viewport "
+        "navigation and context menus.";
     return analysis;
   }
 
@@ -2289,6 +2325,11 @@ void QuaderCommandsApi::Impl::register_viewport_default_keybindings() {
                                 : std::string(descriptor.when),
         {}, descriptor.action_id.empty() ? descriptor.target_id
                                          : std::string(descriptor.action_id));
+    if (descriptor.selection_mode_mask != 0u) {
+      keybinding_target_catalog_.set_selection_modes(
+          descriptor.target_id, descriptor.selection_mode_mask,
+          descriptor.when.empty() ? kViewportContext : descriptor.when);
+    }
   }
 
   /// Stores the stable presentation metadata for one selection-mode target.
@@ -2353,10 +2394,14 @@ void QuaderCommandsApi::Impl::register_viewport_default_keybindings() {
       std::string(viewport_command_keybinding_context()), 10);
   for (const ViewportInputActionBindingDescriptor &descriptor :
        viewport_input_action_binding_catalog()) {
+    const QuaderKeybindingTargetMetadata *metadata =
+        keybinding_target_metadata(descriptor.target_id);
     keybindings_.add_default_keybinding(
         descriptor.target_id, descriptor.shortcut,
-        descriptor.when.empty() ? std::string(kViewportContext)
-                                : std::string(descriptor.when),
+        metadata != nullptr
+            ? metadata->when
+            : (descriptor.when.empty() ? std::string(kViewportContext)
+                                       : std::string(descriptor.when)),
         descriptor.weight);
   }
 
@@ -2549,6 +2594,14 @@ void QuaderCommandsApi::Impl::normalize_loaded_user_keybindings() {
 
   std::vector<QuaderKeybindingRule> canonical;
   for (const LoadedGroupOverride &override : overrides) {
+    if (!override.rule->removal) {
+      const std::optional<std::vector<QuaderInputChord>> parsed =
+          quader_input_parse_shortcut(override.rule->shortcut);
+      if (!parsed || material_assignment_uses_reserved_bare_right_mouse(
+                         override.entry->key, *parsed)) {
+        continue;
+      }
+    }
     write_action_override(canonical, *override.entry,
                           override.rule->removal
                               ? std::string_view{}

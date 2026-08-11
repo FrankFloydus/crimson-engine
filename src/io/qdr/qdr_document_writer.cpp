@@ -110,6 +110,13 @@ QdrProjectWriteResult QdrDocumentWriter::write_project_document_atomic(
 QdrProjectWriteResult QdrDocumentWriter::write_project_document_atomic(
     const std::filesystem::path &path,
     const SceneContentDocument &document) {
+  return write_project_document_atomic(path, document, std::nullopt);
+}
+
+QdrProjectWriteResult QdrDocumentWriter::write_project_document_atomic(
+    const std::filesystem::path &path,
+    const SceneContentDocument &document,
+    std::optional<QdrSceneViewportCameraPose> viewport_camera_pose) {
   QDR_PROFILE_FUNCTION();
   const SceneContentDocumentIdentityReport identity =
       document.validate_object_identity_invariants();
@@ -136,6 +143,7 @@ QdrProjectWriteResult QdrDocumentWriter::write_project_document_atomic(
   if (!snapshot.ok()) {
     return {.ok = false, .message = snapshot.error().message};
   }
+  snapshot.value().viewport_camera_pose = std::move(viewport_camera_pose);
   return write_project_document_atomic(path, snapshot.value());
 }
 

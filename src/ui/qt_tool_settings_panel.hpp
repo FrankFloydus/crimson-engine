@@ -36,6 +36,11 @@ public:
   void set_localization(const LocalizationService &localization);
   void refresh();
   [[nodiscard]] bool has_active_target() const;
+  /**
+   * Returns whether a local numeric edit is still in progress or waiting to
+   * dispatch. This is a presentation-only check and performs no owner query.
+   */
+  [[nodiscard]] bool numeric_interaction_active() const;
 
 private:
   struct Impl;

@@ -17,6 +17,7 @@
 #include "editor/placement/viewport_point_placement_service.hpp"
 #include "editor/viewport/quader_viewport_api_runtime_access.hpp"
 #include "platform/platform_file_dialog.hpp"
+#include "platform/platform_shell.hpp"
 #include "platform/window_placement.hpp"
 #include "quader_app_version.hpp"
 #include "scene/scene_document.hpp"
@@ -29,6 +30,7 @@
 #include "ui/qt_material_browser_window.hpp"
 #include "ui/qt_material_preview_surface.hpp"
 #include "ui/qt_project_home_page.hpp"
+#include "ui/qt_retained_message_box.hpp"
 #include "ui/qt_scene_workspace.hpp"
 #include "ui/qt_selection_toolbar.hpp"
 #include "ui/qt_settings_dialog.hpp"
@@ -36,12 +38,12 @@
 #include "ui/qt_standard_material_editor_window.hpp"
 #include "ui/qt_tool_toolbar.hpp"
 #include "ui/qt_tool_settings_panel.hpp"
+#include "ui/qt_unsaved_confirmation_dialog.hpp"
 #include "ui/qt_viewport_display_toolbar.hpp"
 #include "ui/qt_viewport_panel.hpp"
 #include "ui/ui_context.hpp"
 
 #include <QApplication>
-#include <QAbstractButton>
 #include <QByteArray>
 #include <QClipboard>
 #include <QColor>
@@ -52,10 +54,9 @@
 #include <QLabel>
 #include <QLayout>
 #include <QMainWindow>
-#include <QMessageBox>
 #include <QMenuBar>
+#include <QPointer>
 #include <QRect>
-#include <QPushButton>
 #include <QStatusBar>
 #include <QStackedWidget>
 #include <QTimer>
@@ -317,6 +318,10 @@ bool UISystem::initialize(RenderSystem &render_system,
                                QMainWindow::AllowTabbedDocks |
                                QMainWindow::AnimatedDocks);
 
+  unsaved_confirmation_ =
+      new QtUnsavedConfirmationDialog(main_window_.get());
+  lifecycle_message_box_ = new QtRetainedMessageBox(main_window_.get());
+
   selection_toolbar_ = new QtSelectionToolbar(main_window_.get());
   selection_toolbar_->set_localization(localization_);
   selection_toolbar_->setEnabled(false);
@@ -365,23 +370,33 @@ bool UISystem::initialize(RenderSystem &render_system,
       refresh_project_workspace();
     }
   });
-  project_home_page_->set_open_recent_project_requested_callback(
-      [this](QString manifest_path) {
-        if (editor_ != nullptr) {
-          const QuaderApiVoidResult result = editor_->project().open(
-              std::filesystem::path(manifest_path.toStdWString()));
-          present_lifecycle_result(result);
-          refresh_project_workspace();
-        }
-      });
-  project_home_page_->set_remove_recent_project_requested_callback(
-      [this](QString manifest_path) {
-        if (editor_ != nullptr) {
-          const QuaderApiVoidResult result =
-              editor_->project().remove_recent_project(
-                  std::filesystem::path(manifest_path.toStdWString()));
-          present_lifecycle_result(result);
-          refresh_project_workspace();
+  project_home_page_->set_recent_project_action_requested_callback(
+      [this](QtRecentProjectAction action, QString manifest_path) {
+        const std::filesystem::path path(manifest_path.toStdWString());
+        switch (action) {
+        case QtRecentProjectAction::Open:
+          if (editor_ != nullptr) {
+            const QuaderApiVoidResult result = editor_->project().open(path);
+            present_lifecycle_result(result);
+            refresh_project_workspace();
+          }
+          break;
+        case QtRecentProjectAction::OpenFileLocation:
+          (void)platform_reveal_file(path);
+          break;
+        case QtRecentProjectAction::CopyPath:
+          if (QClipboard *clipboard = QApplication::clipboard()) {
+            clipboard->setText(manifest_path);
+          }
+          break;
+        case QtRecentProjectAction::RemoveFromRecent:
+          if (editor_ != nullptr) {
+            const QuaderApiVoidResult result =
+                editor_->project().remove_recent_project(path);
+            present_lifecycle_result(result);
+            refresh_project_workspace();
+          }
+          break;
         }
       });
   scene_workspace_->set_new_scene_requested_callback([this]() {
@@ -470,6 +485,10 @@ bool UISystem::initialize(RenderSystem &render_system,
   material_browser_window_->hide();
   standard_material_editor_window_ =
       new QtStandardMaterialEditorWindow(main_window_.get());
+  standard_material_unsaved_confirmation_ =
+      new QtUnsavedConfirmationDialog(standard_material_editor_window_);
+  standard_material_error_message_box_ =
+      new QtRetainedMessageBox(standard_material_editor_window_);
   material_preview_surface_ = new QtMaterialPreviewSurface();
   QWidget *preview_container = QWidget::createWindowContainer(
       material_preview_surface_, standard_material_editor_window_);
@@ -1042,10 +1061,6 @@ void UISystem::refresh_project_workspace(bool force) {
     return;
   }
 
-  {
-    QDR_PROFILE_SCOPE("UI project workspace refresh material editor");
-    refresh_standard_material_editor();
-  }
   if (force) {
     project_workspace_refresh_signal_->store(true, std::memory_order_relaxed);
   }
@@ -1062,6 +1077,11 @@ void UISystem::refresh_project_workspace(bool force) {
   if (!project_workspace_refresh_signal_->exchange(
           false, std::memory_order_acq_rel)) {
     return;
+  }
+
+  {
+    QDR_PROFILE_SCOPE("UI project workspace refresh material editor");
+    refresh_standard_material_editor();
   }
 
   {
@@ -1082,6 +1102,9 @@ void UISystem::refresh_project_workspace(bool force) {
             .manifest_path =
                 QString::fromStdWString(project.manifest_path.wstring()),
             .available = project.available,
+            .manifest_last_modified_unix_ms =
+                project.manifest_last_modified_unix_ms,
+            .manifest_size_bytes = project.manifest_size_bytes,
         });
       }
       project_home_page_->set_recent_projects(std::move(recent));
@@ -1120,7 +1143,8 @@ void UISystem::refresh_project_workspace(bool force) {
       scene_workspace_->set_instance_edit_breadcrumb(std::nullopt);
     }
 
-    if (has_project && material_browser_window_ != nullptr) {
+    if (has_project && material_browser_window_ != nullptr &&
+        material_browser_window_->isVisible()) {
       const QuaderApiResult<std::vector<QuaderProjectMaterialInfo>> materials =
           editor_->project_assets().materials();
       const QuaderApiResult<QuaderProjectMaterialInfo> active_material =
@@ -1320,38 +1344,33 @@ QuaderDirtyProjectDecision
 UISystem::confirm_dirty_project_replacement(std::string_view action_id) {
   const bool opening = action_id == "project.open";
   const bool closing = action_id == "application.close";
-  QMessageBox confirmation(
-      QMessageBox::Warning,
-      QString::fromStdString(localization_.text(
-          "ui.project.unsaved.title", "Unsaved Changes")),
-      QString::fromStdString(localization_.text(
-          opening   ? "ui.project.unsaved.open"
-          : closing ? "ui.project.unsaved.close"
-                    : "ui.project.unsaved.new",
-          opening   ? "Save changes before opening another project?"
-          : closing ? "Save changes before closing Quader?"
-                    : "Save changes before creating a new project?")),
-      QMessageBox::NoButton, main_window_.get());
-  confirmation.setObjectName(QStringLiteral("project_unsaved_confirmation"));
-  confirmation.setWindowModality(Qt::WindowModal);
-  QPushButton *save = confirmation.addButton(
-      QString::fromStdString(
-          localization_.text("ui.project.unsaved.save", "Save")),
-      QMessageBox::AcceptRole);
-  QPushButton *discard = confirmation.addButton(
-      QString::fromStdString(
-          localization_.text("ui.project.unsaved.discard", "Discard")),
-      QMessageBox::DestructiveRole);
-  QPushButton *cancel = confirmation.addButton(
-      QString::fromStdString(
-          localization_.text("ui.project.unsaved.cancel", "Cancel")),
-      QMessageBox::RejectRole);
-  confirmation.setEscapeButton(cancel);
-  confirmation.exec();
-  if (confirmation.clickedButton() == save) {
+  if (unsaved_confirmation_ == nullptr) {
+    return QuaderDirtyProjectDecision::Cancel;
+  }
+  const QtUnsavedConfirmationDecision decision =
+      unsaved_confirmation_->present(QtUnsavedConfirmationPresentation{
+          .object_name =
+              QStringLiteral("project_unsaved_confirmation"),
+          .title = QString::fromStdString(localization_.text(
+              "ui.project.unsaved.title", "Unsaved Changes")),
+          .message = QString::fromStdString(localization_.text(
+              opening   ? "ui.project.unsaved.open"
+              : closing ? "ui.project.unsaved.close"
+                        : "ui.project.unsaved.new",
+              opening   ? "Save changes before opening another project?"
+              : closing ? "Save changes before closing Quader?"
+                        : "Save changes before creating a new project?")),
+          .save_label = QString::fromStdString(
+              localization_.text("ui.project.unsaved.save", "Save")),
+          .discard_label = QString::fromStdString(localization_.text(
+              "ui.project.unsaved.discard", "Discard")),
+          .cancel_label = QString::fromStdString(
+              localization_.text("ui.project.unsaved.cancel", "Cancel")),
+      });
+  if (decision == QtUnsavedConfirmationDecision::Save) {
     return QuaderDirtyProjectDecision::Save;
   }
-  if (confirmation.clickedButton() == discard) {
+  if (decision == QtUnsavedConfirmationDecision::Discard) {
     return QuaderDirtyProjectDecision::Discard;
   }
   return QuaderDirtyProjectDecision::Cancel;
@@ -1361,32 +1380,27 @@ QuaderDirtySceneDecision
 UISystem::confirm_dirty_scene(const QuaderSceneDocumentInfo &scene,
                               std::string_view action_id) {
   (void)action_id;
-  QMessageBox confirmation(
-      QMessageBox::Warning,
-      QString::fromStdString(localization_.text(
-          "ui.scene.unsaved.title", "Unsaved Scene")),
-      QString::fromStdString(scene.name + " has unsaved changes. Save it?"),
-      QMessageBox::NoButton, main_window_.get());
-  confirmation.setObjectName(QStringLiteral("scene_unsaved_confirmation"));
-  confirmation.setWindowModality(Qt::WindowModal);
-  QPushButton *save = confirmation.addButton(
-      QString::fromStdString(
-          localization_.text("ui.scene.unsaved.save", "Save")),
-      QMessageBox::AcceptRole);
-  QPushButton *discard = confirmation.addButton(
-      QString::fromStdString(
-          localization_.text("ui.scene.unsaved.discard", "Discard")),
-      QMessageBox::DestructiveRole);
-  QPushButton *cancel = confirmation.addButton(
-      QString::fromStdString(
-          localization_.text("ui.scene.unsaved.cancel", "Cancel")),
-      QMessageBox::RejectRole);
-  confirmation.setEscapeButton(cancel);
-  confirmation.exec();
-  if (confirmation.clickedButton() == save) {
+  if (unsaved_confirmation_ == nullptr) {
+    return QuaderDirtySceneDecision::Cancel;
+  }
+  const QtUnsavedConfirmationDecision decision =
+      unsaved_confirmation_->present(QtUnsavedConfirmationPresentation{
+          .object_name = QStringLiteral("scene_unsaved_confirmation"),
+          .title = QString::fromStdString(localization_.text(
+              "ui.scene.unsaved.title", "Unsaved Scene")),
+          .message = QString::fromStdString(
+              scene.name + " has unsaved changes. Save it?"),
+          .save_label = QString::fromStdString(
+              localization_.text("ui.scene.unsaved.save", "Save")),
+          .discard_label = QString::fromStdString(localization_.text(
+              "ui.scene.unsaved.discard", "Discard")),
+          .cancel_label = QString::fromStdString(
+              localization_.text("ui.scene.unsaved.cancel", "Cancel")),
+      });
+  if (decision == QtUnsavedConfirmationDecision::Save) {
     return QuaderDirtySceneDecision::Save;
   }
-  if (confirmation.clickedButton() == discard) {
+  if (decision == QtUnsavedConfirmationDecision::Discard) {
     return QuaderDirtySceneDecision::Discard;
   }
   return QuaderDirtySceneDecision::Cancel;
@@ -1415,7 +1429,36 @@ void UISystem::show() {
       prepare_startup_presentation();
     }
     main_window_->show();
+    schedule_retained_message_box_prewarm();
   }
+}
+
+void UISystem::schedule_retained_message_box_prewarm() {
+  if (main_window_ == nullptr || retained_message_box_prewarm_scheduled_) {
+    return;
+  }
+  retained_message_box_prewarm_scheduled_ = true;
+  const std::array<QPointer<QtRetainedMessageBox>, 4u> message_boxes{
+      QPointer<QtRetainedMessageBox>(unsaved_confirmation_),
+      QPointer<QtRetainedMessageBox>(standard_material_unsaved_confirmation_),
+      QPointer<QtRetainedMessageBox>(lifecycle_message_box_),
+      QPointer<QtRetainedMessageBox>(standard_material_error_message_box_),
+  };
+  QTimer::singleShot(0, main_window_.get(), [this, message_boxes]() {
+    retained_message_box_prewarm_scheduled_ = false;
+    if (main_window_ == nullptr || !main_window_->isVisible() ||
+        !main_window_->updatesEnabled()) {
+      return;
+    }
+    for (const QPointer<QtRetainedMessageBox> &message_box : message_boxes) {
+      if (message_box != nullptr) {
+        message_box->prewarm();
+      }
+    }
+    if (viewport_panel_ != nullptr) {
+      viewport_panel_->prewarm_retained_dialogs();
+    }
+  });
 }
 
 void UISystem::shutdown() {
@@ -1465,6 +1508,10 @@ void UISystem::shutdown() {
   material_preview_surface_ = nullptr;
   standard_material_editor_window_ = nullptr;
   tool_settings_panel_ = nullptr;
+  unsaved_confirmation_ = nullptr;
+  standard_material_unsaved_confirmation_ = nullptr;
+  lifecycle_message_box_ = nullptr;
+  standard_material_error_message_box_ = nullptr;
   status_message_ = nullptr;
   status_version_ = nullptr;
   auxiliary_window_save_timer_ = nullptr;
@@ -1479,6 +1526,7 @@ void UISystem::shutdown() {
   radial_array_ = nullptr;
   point_placement_ = nullptr;
   initialized_ = false;
+  retained_message_box_prewarm_scheduled_ = false;
   viewport_initialized_ = false;
   home_visible_ = false;
   project_workspace_instance_edit_revision_ = 0;
@@ -1500,6 +1548,9 @@ void UISystem::refresh(const FrameTiming &frame_timing,
   render_performance_ = render_performance;
   const bool transform_drag_active =
       modeling_ != nullptr && modeling_->transform_drag_active();
+  const bool numeric_interaction_active =
+      tool_settings_panel_ != nullptr &&
+      tool_settings_panel_->numeric_interaction_active();
   const std::uint64_t frame_tool_settings_revision =
       editor_ != nullptr ? editor_->tools().active_settings_revision() : 0u;
   const std::uint64_t frame_active_tool_revision =
@@ -1509,7 +1560,7 @@ void UISystem::refresh(const FrameTiming &frame_timing,
     refresh_project_workspace(false);
   }
   if (editor_ != nullptr) {
-    if (!transform_drag_active) {
+    if (!transform_drag_active && !numeric_interaction_active) {
       QDR_PROFILE_SCOPE("UI refresh retained toolbars");
       const bool owner_available =
           document_ != nullptr && modeling_ != nullptr;
@@ -1635,7 +1686,8 @@ void UISystem::refresh(const FrameTiming &frame_timing,
       layers_locale_ = current_locale;
       layers_refresh_valid_ = true;
     }
-    if (!transform_drag_active && panel_presented(UIPanelId::Inspector)) {
+    if (!transform_drag_active && !numeric_interaction_active &&
+        panel_presented(UIPanelId::Inspector)) {
       const std::uint64_t modeling_content_revision =
           modeling_->content_revision();
       const std::uint64_t modeling_selection_revision =
@@ -2019,6 +2071,7 @@ void UISystem::finish_startup_presentation(bool forced_fallback) {
   }
   main_window_->setUpdatesEnabled(true);
   main_window_->repaint();
+  schedule_retained_message_box_prewarm();
   if (auxiliary_window_state_.settings_dialog_visible &&
       settings_dialog_ != nullptr && !settings_dialog_->isVisible()) {
     show_settings_dialog();
@@ -2157,7 +2210,7 @@ void UISystem::bind_project_workspace_events(QuaderEditorApi &editor) {
   project_workspace_refresh_signal_ =
       std::make_shared<std::atomic_bool>(true);
   project_workspace_events_editor_ = &editor;
-  constexpr std::array<std::string_view, 8> kWorkspaceEvents{
+  constexpr std::array<std::string_view, 12> kWorkspaceEvents{
       quader_event::kProjectOpened,
       quader_event::kProjectClosed,
       quader_event::kProjectAssetsChanged,
@@ -2166,6 +2219,10 @@ void UISystem::bind_project_workspace_events(QuaderEditorApi &editor) {
       quader_event::kActiveSceneChanged,
       quader_event::kSceneDirtyChanged,
       quader_event::kSceneSaved,
+      quader_event::kStandardMaterialOpened,
+      quader_event::kStandardMaterialDirtyChanged,
+      quader_event::kStandardMaterialSaved,
+      quader_event::kStandardMaterialClosed,
   };
   project_workspace_event_subscriptions_.reserve(kWorkspaceEvents.size() +
                                                   1u);
@@ -2260,32 +2317,69 @@ void UISystem::present_lifecycle_result(const QuaderApiStatus &result) {
     return;
   }
 
-  QMessageBox::warning(
-      main_window_.get(),
-      QString::fromStdString(localization_.text(
+  if (lifecycle_message_box_ == nullptr) {
+    return;
+  }
+  (void)lifecycle_message_box_->present(QtRetainedMessageBoxPresentation{
+      .icon = QMessageBox::Warning,
+      .object_name =
+          restored_scene_warning
+              ? QStringLiteral("project_open_warning_message_box")
+              : QStringLiteral("lifecycle_error_message_box"),
+      .title = QString::fromStdString(localization_.text(
           restored_scene_warning ? "ui.project.open_warning.title"
                                  : "ui.lifecycle.error.title",
           restored_scene_warning ? "Project Opened with Warnings"
                                  : "Quader Operation Failed")),
-      QString::fromStdString(
+      .text = QString::fromStdString(
           result.message.empty()
               ? localization_.text("ui.status.command_failed",
                                    "Command failed.")
-              : result.message));
+              : result.message),
+      .buttons =
+          {{
+              .button = QtRetainedMessageBoxButton::Primary,
+              .object_name = QStringLiteral("lifecycleMessageBox.ok"),
+              .label = QString::fromStdString(
+                  localization_.text("ui.action.ok", "OK")),
+              .role = QMessageBox::AcceptRole,
+          }},
+      .default_button = QtRetainedMessageBoxButton::Primary,
+      .escape_button = QtRetainedMessageBoxButton::Primary,
+      .close_button = QtRetainedMessageBoxButton::Primary,
+  });
 }
 
 void UISystem::present_standard_material_error(std::string_view message) {
   if (message.empty()) {
     return;
   }
-  QMessageBox::warning(
-      standard_material_editor_window_ != nullptr
-          ? static_cast<QWidget *>(standard_material_editor_window_)
-          : static_cast<QWidget *>(main_window_.get()),
-      QString::fromStdString(localization_.text(
-          "ui.standard_material_editor.error_title",
-          "Standard Material Operation Failed")),
-      QString::fromUtf8(message.data(), static_cast<qsizetype>(message.size())));
+  if (standard_material_error_message_box_ == nullptr) {
+    return;
+  }
+  (void)standard_material_error_message_box_->present(
+      QtRetainedMessageBoxPresentation{
+          .icon = QMessageBox::Warning,
+          .object_name =
+              QStringLiteral("standard_material_error_message_box"),
+          .title = QString::fromStdString(localization_.text(
+              "ui.standard_material_editor.error_title",
+              "Standard Material Operation Failed")),
+          .text = QString::fromUtf8(
+              message.data(), static_cast<qsizetype>(message.size())),
+          .buttons =
+              {{
+                  .button = QtRetainedMessageBoxButton::Primary,
+                  .object_name =
+                      QStringLiteral("standardMaterialErrorMessageBox.ok"),
+                  .label = QString::fromStdString(
+                      localization_.text("ui.action.ok", "OK")),
+                  .role = QMessageBox::AcceptRole,
+              }},
+          .default_button = QtRetainedMessageBoxButton::Primary,
+          .escape_button = QtRetainedMessageBoxButton::Primary,
+          .close_button = QtRetainedMessageBoxButton::Primary,
+      });
 }
 
 void UISystem::refresh_standard_material_editor() {
@@ -2721,37 +2815,31 @@ bool UISystem::resolve_standard_material_document(bool close_after) {
         token != std::string::npos) {
       message.replace(token, kNameToken.size(), current.value().name);
     }
-    QMessageBox confirmation(
-        QMessageBox::Warning,
-        QString::fromStdString(localization_.text(
-            "ui.standard_material_editor.unsaved_title",
-            "Unsaved Standard Material")),
-        QString::fromStdString(message), QMessageBox::NoButton,
-        standard_material_editor_window_ != nullptr
-            ? static_cast<QWidget *>(standard_material_editor_window_)
-            : static_cast<QWidget *>(main_window_.get()));
-    confirmation.setObjectName(
-        QStringLiteral("standard_material_unsaved_confirmation"));
-    confirmation.setWindowModality(Qt::WindowModal);
-    QPushButton *save = confirmation.addButton(
-        QString::fromStdString(localization_.text(
-            "ui.standard_material_editor.unsaved_save", "Save")),
-        QMessageBox::AcceptRole);
-    QPushButton *discard_button = confirmation.addButton(
-        QString::fromStdString(localization_.text(
-            "ui.standard_material_editor.unsaved_discard", "Discard")),
-        QMessageBox::DestructiveRole);
-    QPushButton *cancel = confirmation.addButton(
-        QString::fromStdString(localization_.text(
-            "ui.standard_material_editor.unsaved_cancel", "Cancel")),
-        QMessageBox::RejectRole);
-    confirmation.setEscapeButton(cancel);
-    confirmation.exec();
-    if (confirmation.clickedButton() == save) {
+    if (standard_material_unsaved_confirmation_ == nullptr) {
+      return false;
+    }
+    const QtUnsavedConfirmationDecision decision =
+        standard_material_unsaved_confirmation_->present(
+            QtUnsavedConfirmationPresentation{
+                .object_name = QStringLiteral(
+                    "standard_material_unsaved_confirmation"),
+                .title = QString::fromStdString(localization_.text(
+                    "ui.standard_material_editor.unsaved_title",
+                    "Unsaved Standard Material")),
+                .message = QString::fromStdString(message),
+                .save_label = QString::fromStdString(localization_.text(
+                    "ui.standard_material_editor.unsaved_save", "Save")),
+                .discard_label = QString::fromStdString(localization_.text(
+                    "ui.standard_material_editor.unsaved_discard",
+                    "Discard")),
+                .cancel_label = QString::fromStdString(localization_.text(
+                    "ui.standard_material_editor.unsaved_cancel", "Cancel")),
+            });
+    if (decision == QtUnsavedConfirmationDecision::Save) {
       if (!save_standard_material(false)) {
         return false;
       }
-    } else if (confirmation.clickedButton() == discard_button) {
+    } else if (decision == QtUnsavedConfirmationDecision::Discard) {
       discard = true;
     } else {
       return false;
@@ -2868,20 +2956,29 @@ void UISystem::refresh_localized_chrome() {
   }
   if (project_home_page_ != nullptr) {
     project_home_page_->set_labels(QtProjectHomeLabels{
-        .new_project =
-            text("ui.home.new_project", "New Quader Project"),
-        .open_project = text("ui.home.open_project", "Open Project"),
+        .new_project = text("ui.home.new_project", "New"),
+        .open_project = text("ui.home.open_project", "Open"),
         .recent_projects =
-            text("ui.home.recent_projects", "Recent Projects"),
+            text("ui.home.recent_projects", "Recent"),
         .recent_name_column = text("ui.home.recent_name", "Name"),
-        .recent_location_column =
-            text("ui.home.recent_location", "Location"),
+        .recent_last_modified_column = text(
+            "ui.home.recent_last_modified", "Last modified"),
+        .recent_size_column = text("ui.home.recent_size", "Size"),
+        .recent_actions_column =
+            text("ui.home.recent_actions", "Actions"),
         .no_recent_projects =
             text("ui.home.no_recent_projects", "No recent projects"),
         .unavailable_project =
             text("ui.home.unavailable_project", "Project is unavailable"),
-        .remove_recent_project = text("ui.home.remove_recent_project",
-                                      "Remove from Recent"),
+        .open_recent_project =
+            text("ui.home.recent_action.open", "Open"),
+        .open_recent_project_location = text(
+            "ui.home.recent_action.open_file_location",
+            "Open file location"),
+        .copy_recent_project_path =
+            text("ui.home.recent_action.copy_path", "Copy path"),
+        .remove_recent_project = text(
+            "ui.home.recent_action.remove", "Remove from recent"),
     });
   }
   if (scene_workspace_ != nullptr) {
@@ -3145,6 +3242,7 @@ void UISystem::show_material_browser() {
     return;
   }
   material_browser_window_->show();
+  refresh_project_workspace();
   material_browser_window_->raise();
   material_browser_window_->activateWindow();
 }

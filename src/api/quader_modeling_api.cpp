@@ -935,6 +935,27 @@ QuaderApiVoidResult QuaderMeshMaterials::assign_to_face(
       .assign_material_slot_to_face(object_, face, material_slot);
 }
 
+QuaderApiResult<QuaderFaceProjectMaterial>
+QuaderMeshMaterials::project_material_for_face(QuaderElementId face) const {
+  if (mutations_ == nullptr || !session_.has_value() ||
+      !mutations_->belongs_to_active_scene(object_.scene_session_id)) {
+    return quader_api_result_from_status<QuaderFaceProjectMaterial>(
+        invalid_api_status(session_, "Invalid or stale mesh handle."));
+  }
+  return QuaderModelingApi(*session_, *mutations_)
+      .project_material_for_face(object_.modeling_object_id, face);
+}
+
+QuaderApiVoidResult QuaderMeshMaterials::apply_face_material_to_mesh(
+    QuaderElementId face) const {
+  if (mutations_ == nullptr || !session_.has_value() ||
+      !mutations_->belongs_to_active_scene(object_.scene_session_id)) {
+    return invalid_api_status(session_, "Invalid or stale mesh handle.");
+  }
+  return QuaderModelingApi(*session_, *mutations_)
+      .apply_face_material_to_mesh(object_.modeling_object_id, face);
+}
+
 QuaderMeshHandle::QuaderMeshHandle(std::optional<QuaderApiSession> session,
                                    QuaderApiMutationRunner &mutations,
                                    QuaderModelingObjectRef ref)
@@ -2016,6 +2037,26 @@ QuaderModelingApi::apply_active_material(std::uint32_t material_slot) {
       std::make_unique<ApplyActiveMaterialHistoryCommand>(
           scene_session(session_).modeling(), material_slot),
       "Apply Active Material");
+}
+
+QuaderApiResult<QuaderFaceProjectMaterial>
+QuaderModelingApi::project_material_for_face(
+    QuaderModelingObjectId object_id, QuaderElementId face_id) const {
+  ModelingProjectMaterialQueryResult query =
+      scene_session(session_).modeling().project_material_for_face(object_id,
+                                                                  face_id);
+  const QuaderApiVoidResult status = mutations_.run_modeling_result(
+      std::move(query.command), "Resolve Face Material");
+  return quader_api_result_from_status(
+      status, QuaderFaceProjectMaterial{.id = query.material});
+}
+
+QuaderApiVoidResult QuaderModelingApi::apply_face_material_to_mesh(
+    QuaderModelingObjectId object_id, QuaderElementId face_id) {
+  return mutations_.run_modeling_command(
+      std::make_unique<ApplyFaceMaterialToMeshHistoryCommand>(
+          scene_session(session_).modeling(), object_id, face_id),
+      "Apply Face Material to Mesh");
 }
 
 QuaderApiVoidResult QuaderModelingApi::assign_material_slot_to_selection(

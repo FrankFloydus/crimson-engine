@@ -604,6 +604,99 @@ TEST(AppLoopTests,
   EXPECT_EQ(app_source.find("activePopupWidget"), std::string::npos);
 }
 
+TEST(AppLoopTests, UISystemRetainsAndPrewarmsEveryMessageBoxOwner) {
+  const std::string ui_header = read_source_file("src/ui/ui_system.hpp");
+  const std::string ui_source = read_source_file("src/ui/ui_system.cpp");
+  const std::string message_box_source =
+      read_source_file("src/ui/qt_retained_message_box.cpp");
+
+  EXPECT_NE(ui_header.find(
+                "QtUnsavedConfirmationDialog *unsaved_confirmation_"),
+            std::string::npos);
+  EXPECT_NE(ui_header.find(
+                "QtUnsavedConfirmationDialog "
+                "*standard_material_unsaved_confirmation_"),
+            std::string::npos);
+  EXPECT_NE(ui_header.find("QtRetainedMessageBox *lifecycle_message_box_"),
+            std::string::npos);
+  EXPECT_NE(ui_header.find(
+                "QtRetainedMessageBox *standard_material_error_message_box_"),
+            std::string::npos);
+  EXPECT_NE(ui_source.find("new QtUnsavedConfirmationDialog("),
+            std::string::npos);
+  EXPECT_NE(ui_source.find(
+                "new QtUnsavedConfirmationDialog("
+                "standard_material_editor_window_)"),
+            std::string::npos);
+  EXPECT_NE(ui_source.find("new QtRetainedMessageBox(main_window_.get())"),
+            std::string::npos);
+  EXPECT_NE(ui_source.find(
+                "new QtRetainedMessageBox("
+                "standard_material_editor_window_)"),
+            std::string::npos);
+  EXPECT_NE(ui_source.find("schedule_retained_message_box_prewarm()"),
+            std::string::npos);
+  EXPECT_NE(ui_source.find("QTimer::singleShot(0, main_window_.get()"),
+            std::string::npos);
+  EXPECT_NE(ui_source.find(
+                "QPointer<QtRetainedMessageBox>(unsaved_confirmation_)"),
+            std::string::npos);
+  EXPECT_NE(ui_source.find("QPointer<QtRetainedMessageBox>("
+                           "standard_material_unsaved_confirmation_)"),
+            std::string::npos);
+  EXPECT_NE(ui_source.find(
+                "QPointer<QtRetainedMessageBox>(lifecycle_message_box_)"),
+            std::string::npos);
+  EXPECT_NE(ui_source.find("QPointer<QtRetainedMessageBox>("
+                           "standard_material_error_message_box_)"),
+            std::string::npos);
+  EXPECT_NE(ui_source.find("viewport_panel_->prewarm_retained_dialogs()"),
+            std::string::npos);
+  EXPECT_EQ(ui_source.find("QMessageBox::warning("), std::string::npos);
+  EXPECT_EQ(ui_source.find("QMessageBox confirmation("), std::string::npos);
+
+  EXPECT_NE(message_box_source.find("QStyle::SP_MessageBoxCritical"),
+            std::string::npos);
+  EXPECT_NE(message_box_source.find("QStyle::SP_MessageBoxWarning"),
+            std::string::npos);
+  EXPECT_NE(message_box_source.find("QStyle::SP_MessageBoxQuestion"),
+            std::string::npos);
+  EXPECT_NE(message_box_source.find("QStyle::SP_MessageBoxInformation"),
+            std::string::npos);
+  EXPECT_NE(message_box_source.find("(void)winId()"), std::string::npos);
+  EXPECT_NE(message_box_source.find("if (prewarmed_ || isVisible())"),
+            std::string::npos);
+  EXPECT_EQ(message_box_source.find("show()"), std::string::npos);
+}
+
+TEST(QtViewportDeletePopupTests,
+     ObjectConfirmationStaysRetainedWhileComponentMenuStaysTransient) {
+  const std::string popup_header =
+      read_source_file("src/ui/qt_viewport_delete_popup.hpp");
+  const std::string popup_source =
+      read_source_file("src/ui/qt_viewport_delete_popup.cpp");
+  const std::string panel_source =
+      read_source_file("src/ui/qt_viewport_panel.cpp");
+
+  EXPECT_NE(popup_header.find(
+                "std::unique_ptr<QtRetainedMessageBox> "
+                "object_confirmation_"),
+            std::string::npos);
+  EXPECT_NE(popup_source.find(
+                "std::make_unique<QtRetainedMessageBox>(&owner)"),
+            std::string::npos);
+  EXPECT_NE(popup_source.find("object_confirmation_->prewarm()"),
+            std::string::npos);
+  EXPECT_EQ(popup_source.find("QMessageBox confirmation("),
+            std::string::npos);
+  EXPECT_NE(popup_source.find("QMenu menu(&parent)"), std::string::npos);
+  EXPECT_TRUE(source_contains_compact(
+      panel_source,
+      ": QWidget(parent), delete_popup_presenter_(*this)"));
+  EXPECT_NE(panel_source.find("delete_popup_presenter_.prewarm()"),
+            std::string::npos);
+}
+
 TEST(ViewportWorkspaceServiceTests,
      WorkspaceFocusDistancesUseHostViewportDefaults) {
   const std::string source =

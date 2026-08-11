@@ -121,6 +121,7 @@ deserialize_owned_project_document(std::vector<std::byte> bytes) {
       .scene_uuid = scene_uuid,
       .project_asset_dependencies =
           std::move(decoded.project_asset_dependencies),
+      .viewport_camera_pose = std::move(decoded.viewport_camera_pose),
       .stats = stats,
   };
 }

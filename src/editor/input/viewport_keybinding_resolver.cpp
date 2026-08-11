@@ -13,6 +13,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <optional>
 #include <span>
 #include <string_view>
 
@@ -94,6 +95,15 @@ void mark_action_pressed(ViewportInputFrame &input,
     break;
   case ViewportInputActionKind::RadialArrayDecreaseCopies:
     --input.radial_array_copy_delta;
+    break;
+  case ViewportInputActionKind::SampleFaceMaterial:
+    input.sample_face_material_pressed = true;
+    break;
+  case ViewportInputActionKind::ApplyActiveMaterialToSelection:
+    input.apply_active_material_to_selection_pressed = true;
+    break;
+  case ViewportInputActionKind::ApplyFaceMaterialToMesh:
+    input.apply_face_material_to_mesh_pressed = true;
     break;
   default:
     mark_navigation_pressed(input.navigation_bindings, action);
@@ -217,6 +227,68 @@ bool resolve_action(QuaderEditorApi &editor, const ViewportToolState &state,
       keybinding_context(input));
 }
 
+bool is_material_action(ViewportInputActionKind action) {
+  return action == ViewportInputActionKind::SampleFaceMaterial ||
+         action ==
+             ViewportInputActionKind::ApplyActiveMaterialToSelection ||
+         action == ViewportInputActionKind::ApplyFaceMaterialToMesh;
+}
+
+bool is_mouse_click(const QuaderInputChord &chord) {
+  return chord.device == QuaderInputDevice::Mouse &&
+         chord.mouse_button != QuaderMouseButton::None &&
+         chord.gesture == QuaderInputGesture::Click;
+}
+
+std::optional<ViewportInputActionKind> paired_mouse_double_click_action(
+    QuaderEditorApi &editor, const ViewportToolState &state,
+    const ViewportInputFrame &input, const QuaderInputChord &chord) {
+  if (!is_mouse_click(chord)) {
+    return std::nullopt;
+  }
+
+  QuaderInputChord paired_double_click = chord;
+  paired_double_click.gesture = QuaderInputGesture::DoubleClick;
+  ViewportInputActionKind paired_action = ViewportInputActionKind::None;
+  if (!resolve_action(editor, state, input, paired_double_click,
+                      paired_action)) {
+    return std::nullopt;
+  }
+  return paired_action;
+}
+
+bool apply_active_material_needs_double_click_delay(
+    QuaderEditorApi &editor, const ViewportToolState &state,
+    const ViewportInputFrame &input, const QuaderInputChord &chord) {
+  if (!is_mouse_click(chord)) {
+    return false;
+  }
+  const std::optional<ViewportInputActionKind> paired_action =
+      paired_mouse_double_click_action(editor, state, input, chord);
+  return paired_action == ViewportInputActionKind::ApplyFaceMaterialToMesh;
+}
+
+void record_material_action_provenance(
+    QuaderEditorApi &editor, const ViewportToolState &state,
+    ViewportInputFrame &input, const QuaderInputChord &chord,
+    ViewportInputActionKind action) {
+  if (!is_material_action(action)) {
+    return;
+  }
+
+  if (action ==
+      ViewportInputActionKind::ApplyActiveMaterialToSelection) {
+    const bool requires_delay =
+        apply_active_material_needs_double_click_delay(editor, state, input,
+                                                       chord);
+    input.apply_active_material_delay_for_double_click =
+        input.apply_active_material_to_selection_pressed
+            ? input.apply_active_material_delay_for_double_click &&
+                  requires_delay
+            : requires_delay;
+  }
+}
+
 void log_command_failure(std::string_view source,
                          const QuaderApiVoidResult &result) {
   if (!result.ok) {
@@ -284,6 +356,10 @@ void ViewportKeybindingResolver::resolve(QuaderEditorApi &editor,
   input.navigation_bindings = {};
   input.linear_array_copy_delta = 0;
   input.radial_array_copy_delta = 0;
+  input.sample_face_material_pressed = false;
+  input.apply_active_material_to_selection_pressed = false;
+  input.apply_active_material_delay_for_double_click = false;
+  input.apply_face_material_to_mesh_pressed = false;
   input.mouse_wheel = 0.0f;
   const bool array_wheel_context_active =
       input.viewport_focused && !input.text_input_active &&
@@ -360,6 +436,8 @@ void ViewportKeybindingResolver::resolve(QuaderEditorApi &editor,
                   }
                 }
               } else {
+                record_material_action_provenance(editor, state, input,
+                                                  candidate, action);
                 mark_action_pressed(input, action);
               }
               return true;

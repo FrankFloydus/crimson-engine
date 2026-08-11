@@ -8,6 +8,7 @@
 #include "api/quader_polygon_document_internal_access.hpp"
 #include "core/public_command_targets.hpp"
 #include "editor/input/quader_keybinding_service.hpp"
+#include "editor/input/viewport_keybinding_resolver.hpp"
 #include "editor/input/viewport_input_binding_adapter.hpp"
 #include "editor/viewport/quader_viewport_api_runtime_access.hpp"
 #include "support/behavior_scenario.hpp"
@@ -3703,6 +3704,331 @@ TEST(EditorApiTests, ViewportNavigationActionCatalogDrivesDefaultsAndResolution)
         << descriptor.target_id;
     EXPECT_EQ(resolved_action, descriptor.action) << descriptor.target_id;
   }
+}
+
+TEST(EditorApiTests,
+     MaterialMouseActionsUseDistinctScopedEditableClickBindings) {
+  const std::filesystem::path path =
+      keybinding_test_path("material-mouse-actions");
+  CommandTestHarness harness;
+  quader::QuaderEditorApi &editor = harness.editor;
+  ASSERT_TRUE(editor.commands().set_keybinding_storage_path(path).ok());
+
+  constexpr std::string_view kSampleTarget =
+      "viewport.material.sample_face";
+  constexpr std::string_view kApplyActiveTarget =
+      "viewport.material.apply_active_to_selection";
+  constexpr std::string_view kApplyFaceTarget =
+      "viewport.material.apply_face_to_mesh";
+  const std::vector<quader::QuaderKeybindingCatalogEntry> catalog =
+      editor.commands().keybinding_catalog();
+  const quader::QuaderKeybindingCatalogEntry *sample =
+      find_keybinding_catalog_entry(catalog, kSampleTarget);
+  const quader::QuaderKeybindingCatalogEntry *apply_active =
+      find_keybinding_catalog_entry(catalog, kApplyActiveTarget);
+  const quader::QuaderKeybindingCatalogEntry *apply_face =
+      find_keybinding_catalog_entry(catalog, kApplyFaceTarget);
+  ASSERT_NE(sample, nullptr);
+  ASSERT_NE(apply_active, nullptr);
+  ASSERT_NE(apply_face, nullptr);
+
+  EXPECT_EQ(sample->action_id, kSampleTarget);
+  EXPECT_EQ(apply_active->action_id, kApplyActiveTarget);
+  EXPECT_EQ(apply_face->action_id, kApplyFaceTarget);
+  EXPECT_NE(apply_active->action_id,
+            quader::quader_command::kApplyMaterial.string());
+  EXPECT_EQ(sample->shortcut, "Shift+RightMouseClick");
+  EXPECT_EQ(apply_active->shortcut, "Ctrl+RightMouseClick");
+  EXPECT_EQ(apply_face->shortcut, "Ctrl+RightMouseDoubleClick");
+  EXPECT_EQ(sample->scope_id, "viewport.selection.any");
+  EXPECT_EQ(apply_active->scope_id,
+            "viewport.selection.object_or_face");
+  EXPECT_EQ(apply_face->scope_id, "viewport.selection.any");
+  EXPECT_NE(sample->when.find("selectionMode.vertex"), std::string::npos);
+  EXPECT_NE(sample->when.find("selectionMode.edge"), std::string::npos);
+  EXPECT_NE(sample->when.find("selectionMode.face"), std::string::npos);
+  EXPECT_NE(sample->when.find("selectionMode.object"), std::string::npos);
+  EXPECT_NE(sample->when.find("selectionMode.group"), std::string::npos);
+  EXPECT_NE(apply_face->when.find("selectionMode.group"),
+            std::string::npos);
+  EXPECT_EQ(apply_active->when.find("selectionMode.vertex"),
+            std::string::npos);
+  EXPECT_EQ(apply_active->when.find("selectionMode.edge"),
+            std::string::npos);
+  EXPECT_NE(apply_active->when.find("selectionMode.face"),
+            std::string::npos);
+  EXPECT_NE(apply_active->when.find("selectionMode.object"),
+            std::string::npos);
+  EXPECT_EQ(apply_active->when.find("selectionMode.group"),
+            std::string::npos);
+
+  const quader::QuaderKeybindingCatalogEntry *keyboard_apply =
+      find_keybinding_catalog_entry(
+          catalog, quader::quader_command::kApplyMaterial.string());
+  ASSERT_NE(keyboard_apply, nullptr);
+  EXPECT_EQ(keyboard_apply->shortcut, "Shift+T");
+  EXPECT_NE(keyboard_apply->action_id, apply_active->action_id);
+
+  const auto resolve = [&](std::string_view shortcut,
+                           quader::ViewportSelectionMode mode) {
+    quader::ViewportToolState state;
+    state.selection_mode = mode;
+    quader::ViewportInputActionKind action =
+        quader::ViewportInputActionKind::None;
+    const bool matched = editor.commands().resolve_viewport_input_action(
+        single_input_chord(shortcut), state, true, false, action);
+    return std::pair{matched, action};
+  };
+
+  EXPECT_EQ(resolve("Shift+RightMouseClick",
+                    quader::ViewportSelectionMode::Vertex),
+            (std::pair{true,
+                       quader::ViewportInputActionKind::SampleFaceMaterial}));
+  EXPECT_EQ(resolve("Ctrl+RightMouseClick",
+                    quader::ViewportSelectionMode::Face),
+            (std::pair{
+                true, quader::ViewportInputActionKind::
+                          ApplyActiveMaterialToSelection}));
+  EXPECT_EQ(resolve("Ctrl+RightMouseDoubleClick",
+                    quader::ViewportSelectionMode::Edge),
+            (std::pair{true,
+                       quader::ViewportInputActionKind::
+                           ApplyFaceMaterialToMesh}));
+  EXPECT_FALSE(resolve("Ctrl+RightMouseClick",
+                       quader::ViewportSelectionMode::Edge)
+                   .first);
+  EXPECT_EQ(resolve("Shift+RightMouseClick",
+                    quader::ViewportSelectionMode::Group),
+            (std::pair{true,
+                       quader::ViewportInputActionKind::SampleFaceMaterial}));
+  EXPECT_EQ(resolve("Ctrl+RightMouseDoubleClick",
+                    quader::ViewportSelectionMode::Group),
+            (std::pair{true,
+                       quader::ViewportInputActionKind::
+                           ApplyFaceMaterialToMesh}));
+  EXPECT_FALSE(resolve("RightMouseClick",
+                       quader::ViewportSelectionMode::Face)
+                   .first);
+  EXPECT_FALSE(resolve("Ctrl+Shift+RightMouseClick",
+                       quader::ViewportSelectionMode::Face)
+                   .first);
+  EXPECT_EQ(resolve("Ctrl+RightMouseClick",
+                    quader::ViewportSelectionMode::Object)
+                .second,
+            quader::ViewportInputActionKind::ApplyActiveMaterialToSelection);
+  EXPECT_EQ(resolve("Ctrl+RightMouseDoubleClick",
+                    quader::ViewportSelectionMode::Object)
+                .second,
+            quader::ViewportInputActionKind::ApplyFaceMaterialToMesh);
+
+  const quader::QuaderKeybindingAssignmentAnalysis conflict =
+      editor.commands().analyze_shortcut_assignment(
+          sample->key, "Ctrl+RightMouseClick");
+  ASSERT_TRUE(conflict.ok);
+  EXPECT_NE(std::find_if(conflict.conflicts.begin(), conflict.conflicts.end(),
+                         [&](const auto &entry) {
+                           return entry.action == apply_active->key;
+                         }),
+            conflict.conflicts.end());
+
+  const quader::QuaderKeybindingActionKey sample_key = sample->key;
+  ASSERT_TRUE(editor.preferences()
+                  .set_action_shortcut(sample_key, "Alt+RightMouseClick")
+                  .ok());
+  EXPECT_FALSE(resolve("Shift+RightMouseClick",
+                       quader::ViewportSelectionMode::Face)
+                   .first);
+  EXPECT_EQ(resolve("Alt+RightMouseClick",
+                    quader::ViewportSelectionMode::Face),
+            (std::pair{true,
+                       quader::ViewportInputActionKind::SampleFaceMaterial}));
+  const std::vector<quader::QuaderKeybindingCatalogEntry> updated_catalog =
+      editor.commands().keybinding_catalog();
+  const quader::QuaderKeybindingCatalogEntry *updated_sample =
+      find_keybinding_catalog_entry(updated_catalog, kSampleTarget);
+  ASSERT_NE(updated_sample, nullptr);
+  EXPECT_EQ(updated_sample->shortcut, "Alt+RightMouseClick");
+}
+
+TEST(EditorApiTests,
+     MaterialMouseActionsRejectReservedBareRmbButAcceptEditablePairs) {
+  CommandTestHarness harness;
+  quader::QuaderEditorApi &editor = harness.editor;
+  ASSERT_TRUE(editor.commands()
+                  .set_keybinding_storage_path(
+                      keybinding_test_path("material-mouse-reservations"))
+                  .ok());
+
+  constexpr std::array<std::string_view, 3> kMaterialTargets{
+      "viewport.material.sample_face",
+      "viewport.material.apply_active_to_selection",
+      "viewport.material.apply_face_to_mesh",
+  };
+  const std::vector<quader::QuaderKeybindingCatalogEntry> catalog =
+      editor.commands().keybinding_catalog();
+  std::array<quader::QuaderKeybindingActionKey, 3> actions;
+  for (std::size_t index = 0u; index < kMaterialTargets.size(); ++index) {
+    const quader::QuaderKeybindingCatalogEntry *entry =
+        find_keybinding_catalog_entry(catalog, kMaterialTargets[index]);
+    ASSERT_NE(entry, nullptr);
+    actions[index] = entry->key;
+  }
+
+  constexpr std::array<std::string_view, 4> kReservedBareRmbGestures{
+      "RightMouse",
+      "RightMouseClick",
+      "RightMouseDoubleClick",
+      "RightMouseDrag",
+  };
+  for (const quader::QuaderKeybindingActionKey &action : actions) {
+    for (const std::string_view shortcut : kReservedBareRmbGestures) {
+      const quader::QuaderKeybindingAssignmentAnalysis analysis =
+          editor.commands().analyze_shortcut_assignment(action, shortcut);
+      EXPECT_FALSE(analysis.ok) << shortcut;
+      EXPECT_NE(analysis.message.find("reserved"), std::string::npos)
+          << shortcut;
+      const quader::QuaderApiVoidResult rejected =
+          editor.preferences().set_action_shortcut(
+              action, std::string(shortcut),
+              quader::QuaderKeybindingConflictPolicy::Replace);
+      EXPECT_FALSE(rejected.ok()) << shortcut;
+    }
+  }
+
+  const quader::QuaderKeybindingAssignmentAnalysis modified_rmb =
+      editor.commands().analyze_shortcut_assignment(
+          actions[0], "Alt+RightMouseClick");
+  EXPECT_TRUE(modified_rmb.ok) << modified_rmb.message;
+  ASSERT_TRUE(editor.preferences()
+                  .set_action_shortcut(actions[0], "Alt+RightMouseClick")
+                  .ok());
+
+  const quader::QuaderKeybindingAssignmentAnalysis left_click =
+      editor.commands().analyze_shortcut_assignment(
+          actions[1], "Alt+LeftMouseClick");
+  const quader::QuaderKeybindingAssignmentAnalysis left_double =
+      editor.commands().analyze_shortcut_assignment(
+          actions[2], "Alt+LeftMouseDoubleClick");
+  EXPECT_TRUE(left_click.ok) << left_click.message;
+  EXPECT_TRUE(left_double.ok) << left_double.message;
+  ASSERT_TRUE(editor.preferences()
+                  .set_action_shortcut(actions[1], "Alt+LeftMouseClick")
+                  .ok());
+  ASSERT_TRUE(editor.preferences()
+                  .set_action_shortcut(actions[2],
+                                       "Alt+LeftMouseDoubleClick")
+                  .ok());
+}
+
+TEST(EditorApiTests, MaterialMouseActionResolverMarksOnlyOneShotFlags) {
+  CommandTestHarness harness;
+  quader::QuaderEditorApi &editor = harness.editor;
+  ASSERT_TRUE(editor.commands()
+                  .set_keybinding_storage_path(
+                      keybinding_test_path("material-mouse-action-flags"))
+                  .ok());
+  constexpr std::string_view kApplyActiveTarget =
+      "viewport.material.apply_active_to_selection";
+  constexpr std::string_view kApplyFaceTarget =
+      "viewport.material.apply_face_to_mesh";
+  const std::vector<quader::QuaderKeybindingCatalogEntry> catalog =
+      editor.commands().keybinding_catalog();
+  const quader::QuaderKeybindingCatalogEntry *apply_active =
+      find_keybinding_catalog_entry(catalog, kApplyActiveTarget);
+  const quader::QuaderKeybindingCatalogEntry *apply_face =
+      find_keybinding_catalog_entry(catalog, kApplyFaceTarget);
+  ASSERT_NE(apply_active, nullptr);
+  ASSERT_NE(apply_face, nullptr);
+  const quader::QuaderKeybindingActionKey apply_active_key =
+      apply_active->key;
+  const quader::QuaderKeybindingActionKey apply_face_key = apply_face->key;
+
+  quader::ViewportToolState state;
+  state.selection_mode = quader::ViewportSelectionMode::Face;
+  std::vector<quader::QuaderInputChord> suppressed_chords;
+  double linear_array_wheel_remainder = 0.0;
+  double radial_array_wheel_remainder = 0.0;
+  const auto resolved_frame = [&](std::string_view shortcut) {
+    quader::ViewportInputFrame input;
+    input.viewport_focused = true;
+    input.pressed_input_chords.push_back(single_input_chord(shortcut));
+    quader::ViewportKeybindingResolver::resolve(
+        editor, state, input, suppressed_chords,
+        linear_array_wheel_remainder, radial_array_wheel_remainder);
+    return input;
+  };
+
+  quader::ViewportInputFrame input =
+      resolved_frame("Shift+RightMouseClick");
+  EXPECT_TRUE(input.sample_face_material_pressed);
+  EXPECT_FALSE(input.apply_active_material_to_selection_pressed);
+  EXPECT_FALSE(input.apply_active_material_delay_for_double_click);
+  EXPECT_FALSE(input.apply_face_material_to_mesh_pressed);
+
+  input = resolved_frame("Ctrl+RightMouseClick");
+  EXPECT_FALSE(input.sample_face_material_pressed);
+  EXPECT_TRUE(input.apply_active_material_to_selection_pressed);
+  EXPECT_TRUE(input.apply_active_material_delay_for_double_click);
+  EXPECT_FALSE(input.apply_face_material_to_mesh_pressed);
+
+  input = resolved_frame("Ctrl+RightMouseDoubleClick");
+  EXPECT_FALSE(input.sample_face_material_pressed);
+  EXPECT_FALSE(input.apply_active_material_to_selection_pressed);
+  EXPECT_FALSE(input.apply_active_material_delay_for_double_click);
+  EXPECT_TRUE(input.apply_face_material_to_mesh_pressed);
+
+  ASSERT_TRUE(editor.preferences()
+                  .set_action_shortcut(apply_active_key, "Ctrl+Alt+F18")
+                  .ok());
+  input = resolved_frame("Ctrl+Alt+F18");
+  EXPECT_TRUE(input.apply_active_material_to_selection_pressed);
+  EXPECT_FALSE(input.apply_active_material_delay_for_double_click);
+
+  ASSERT_TRUE(editor.preferences()
+                  .reset_action_shortcut(apply_active_key)
+                  .ok());
+  ASSERT_TRUE(editor.preferences()
+                  .set_action_shortcut(
+                      apply_face_key, "Alt+RightMouseDoubleClick")
+                  .ok());
+  input = resolved_frame("Ctrl+RightMouseClick");
+  EXPECT_TRUE(input.apply_active_material_to_selection_pressed);
+  EXPECT_FALSE(input.apply_active_material_delay_for_double_click)
+      << "an unmatched mouse double-click binding must not delay the action";
+
+  ASSERT_TRUE(editor.preferences()
+                  .set_action_shortcut(apply_active_key,
+                                       "Alt+LeftMouseClick")
+                  .ok());
+  ASSERT_TRUE(editor.preferences()
+                  .set_action_shortcut(apply_face_key,
+                                       "Alt+LeftMouseDoubleClick")
+                  .ok());
+  input = resolved_frame("Alt+LeftMouseClick");
+  EXPECT_TRUE(input.apply_active_material_to_selection_pressed);
+  EXPECT_TRUE(input.apply_active_material_delay_for_double_click)
+      << "matching editable mouse click/double-click pairs need disambiguation";
+
+  ASSERT_TRUE(editor.preferences()
+                  .set_action_shortcut(apply_active_key, "Mouse4Click")
+                  .ok());
+  ASSERT_TRUE(editor.preferences()
+                  .set_action_shortcut(apply_face_key,
+                                       "Mouse4DoubleClick")
+                  .ok());
+  input = resolved_frame("Mouse4Click");
+  EXPECT_TRUE(input.apply_active_material_to_selection_pressed);
+  EXPECT_TRUE(input.apply_active_material_delay_for_double_click)
+      << "auxiliary mouse click/double-click pairs need disambiguation";
+
+  input.pressed_input_chords.clear();
+  quader::ViewportKeybindingResolver::resolve(
+      editor, state, input, suppressed_chords, linear_array_wheel_remainder,
+      radial_array_wheel_remainder);
+  EXPECT_FALSE(input.sample_face_material_pressed);
+  EXPECT_FALSE(input.apply_active_material_to_selection_pressed);
+  EXPECT_FALSE(input.apply_active_material_delay_for_double_click);
+  EXPECT_FALSE(input.apply_face_material_to_mesh_pressed);
 }
 
 TEST(EditorApiTests,
@@ -11427,7 +11753,7 @@ TEST(EditorApiTests,
           [&](const std::string &target_id) {
             return !command_ids.contains(target_id);
           }));
-  EXPECT_EQ(non_command_target_count, 40u);
+  EXPECT_EQ(non_command_target_count, 43u);
 
   for (const std::string &typed_id : typed_command_ids()) {
     EXPECT_TRUE(actual_target_ids.contains(typed_id)) << typed_id;

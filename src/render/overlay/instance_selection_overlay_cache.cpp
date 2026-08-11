@@ -32,9 +32,11 @@
 
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <limits>
 #include <span>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -44,7 +46,6 @@ namespace {
 using AttributeType = filament::backend::ElementType;
 
 constexpr std::uint64_t kFillMaterialPayload = 0x6f7665726c617901ULL;
-constexpr std::uint64_t kWireMaterialPayload = 0x6f7665726c617902ULL;
 
 /// Stores one shader-expanded semantic edge-ribbon vertex for instance wires.
 struct InstanceSelectionWireVertex final {
@@ -127,10 +128,12 @@ RenderInstancePrimitiveKey wire_key(
           : 0u;
   return {
       .geometry_payload = wire_geometry,
-      .material_payload = RenderSignatureBuilder{}
-                               .add_value(kWireMaterialPayload)
-                               .add_value(wire_geometry)
-                               .value(),
+      // Keep every style field exact in the key. RenderSignatureBuilder is
+      // still suitable for the unordered-map hash, but a hash must never be
+      // the equality identity that decides which record drives a batch.
+      .material_payload =
+          std::bit_cast<std::uint32_t>(record.wire_width_pixels),
+      .index_offset = record.wire_color,
       .index_count = static_cast<std::uint32_t>(record.wire_segments.size()),
       .layer_mask = kViewportOverlayLayerMask,
       .channel = kViewportDefaultRenderableChannel,
@@ -347,6 +350,7 @@ struct InstanceSelectionOverlayCache::PreparedPlans final {
 struct InstanceSelectionOverlayCache::WireGeometryResource final {
   std::uint64_t signature = 0u;
   std::shared_ptr<const MeshWireGeometryPayload> wire_geometry;
+  std::uint32_t wire_color = 0u;
   filament::VertexBuffer *vertex_buffer = nullptr;
   filament::IndexBuffer *index_buffer = nullptr;
   std::uint32_t index_count = 0u;
@@ -551,6 +555,7 @@ bool InstanceSelectionOverlayCache::rebuild(
       for (MeshRenderableProxy &proxy : new_fills) {
         mesh_factory_->destroy(proxy);
       }
+      prune_unused_wire_resources();
       return false;
     }
     WireBatchProxy proxy =
@@ -563,6 +568,7 @@ bool InstanceSelectionOverlayCache::rebuild(
       for (MeshRenderableProxy &fill : new_fills) {
         mesh_factory_->destroy(fill);
       }
+      prune_unused_wire_resources();
       return false;
     }
     new_wires.push_back(std::move(proxy));
@@ -584,6 +590,7 @@ bool InstanceSelectionOverlayCache::rebuild(
   stats_.fill_chunk_count = fill_proxies_.size();
   stats_.wire_chunk_count = wire_proxies_.size();
   stats_.selected_member_count = snapshot.instance_selection_fills.size();
+  prune_unused_wire_resources();
   return true;
 }
 
@@ -614,15 +621,19 @@ InstanceSelectionOverlayCache::WireGeometryResource *
 InstanceSelectionOverlayCache::acquire_wire_geometry(
     const RenderOverlayInstanceSelectionWireRecord &record) {
   const std::uint64_t signature =
-      record.wire_geometry_payload != nullptr
-          ? record.wire_geometry_payload->content_id
-          : 0u;
+      RenderSignatureBuilder{}
+          .add_value(record.wire_geometry_payload != nullptr
+                         ? record.wire_geometry_payload->content_id
+                         : 0u)
+          .add_value(record.wire_color)
+          .value();
   auto &bucket = wire_resources_[signature];
   for (const std::unique_ptr<WireGeometryResource> &resource : bucket) {
     if (resource->wire_geometry != nullptr &&
         record.wire_geometry_payload != nullptr &&
         resource->wire_geometry->content_id ==
-            record.wire_geometry_payload->content_id) {
+            record.wire_geometry_payload->content_id &&
+        resource->wire_color == record.wire_color) {
       ++stats_.wire_geometry_reuse_count;
       return resource.get();
     }
@@ -633,7 +644,7 @@ InstanceSelectionOverlayCache::acquire_wire_geometry(
   for (const InstanceSelectionWireEdge &edge :
        instance_selection_wire_edges(record)) {
     append_line_quad(vertices, indices, edge.start, edge.end,
-                     kOverlaySelectionWireColor);
+                     record.wire_color);
   }
   if (vertices.empty() || indices.empty()) {
     return nullptr;
@@ -641,6 +652,7 @@ InstanceSelectionOverlayCache::acquire_wire_geometry(
   auto resource = std::make_unique<WireGeometryResource>();
   resource->signature = signature;
   resource->wire_geometry = record.wire_geometry_payload;
+  resource->wire_color = record.wire_color;
   resource->index_count = static_cast<std::uint32_t>(indices.size());
   resource->vertex_bytes =
       vertices.size() * sizeof(InstanceSelectionWireVertex);
@@ -715,7 +727,7 @@ InstanceSelectionOverlayCache::create_wire_batch(
   proxy.material_instance->setCullingMode(
       filament::MaterialInstance::CullingMode::NONE);
   proxy.material_instance->setParameter("lineWidth",
-                                        kOverlaySelectionWireLineWidthPixels);
+                                        record.wire_width_pixels);
   proxy.material_instance->setParameter("featherPixels",
                                         kOverlayLineFeatherPixels);
   proxy.material_instance->setParameter("nearPlane", clip_planes.near_plane);
@@ -822,6 +834,42 @@ void InstanceSelectionOverlayCache::destroy_wire_resources() {
   stats_.unique_wire_geometry_resource_count = 0u;
   stats_.wire_derived_vertex_bytes = 0u;
   stats_.wire_derived_index_bytes = 0u;
+}
+
+void InstanceSelectionOverlayCache::prune_unused_wire_resources() {
+  std::unordered_set<const WireGeometryResource *> live;
+  live.reserve(wire_proxies_.size());
+  for (const WireBatchProxy &proxy : wire_proxies_) {
+    if (proxy.geometry != nullptr) {
+      live.insert(proxy.geometry);
+    }
+  }
+  for (auto bucket_it = wire_resources_.begin();
+       bucket_it != wire_resources_.end();) {
+    auto &bucket = bucket_it->second;
+    for (auto it = bucket.begin(); it != bucket.end();) {
+      WireGeometryResource &resource = **it;
+      if (live.contains(&resource)) {
+        ++it;
+        continue;
+      }
+      if (resource.vertex_buffer != nullptr) {
+        engine_->destroy(resource.vertex_buffer);
+      }
+      if (resource.index_buffer != nullptr) {
+        engine_->destroy(resource.index_buffer);
+      }
+      stats_.wire_derived_vertex_bytes -= resource.vertex_bytes;
+      stats_.wire_derived_index_bytes -= resource.index_bytes;
+      --stats_.unique_wire_geometry_resource_count;
+      it = bucket.erase(it);
+    }
+    if (bucket.empty()) {
+      bucket_it = wire_resources_.erase(bucket_it);
+    } else {
+      ++bucket_it;
+    }
+  }
 }
 
 void InstanceSelectionOverlayCache::update_wire_clip_planes(

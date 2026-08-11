@@ -9,6 +9,7 @@
 #include "math/types.hpp"
 #include "viewport/viewport_navigation_defaults.hpp"
 
+#include <cstdint>
 #include <optional>
 
 namespace quader {
@@ -72,6 +73,12 @@ struct ViewportCameraPose {
     QVec3 target;
     QVec3 up;
 };
+
+[[nodiscard]] bool
+viewport_camera_pose_is_valid(const ViewportCameraPose &pose) noexcept;
+[[nodiscard]] std::uint64_t
+viewport_camera_pose_persistence_signature(
+    const ViewportCameraPose &pose) noexcept;
 
 /**
  * Represents a Viewport Ray value used by the viewport input, layout, and camera layer.
@@ -137,6 +144,7 @@ public:
     bool set_default_fly_speed(float speed);
     void reset_fly_speed();
     void set_clip_planes(float near_plane, float far_plane);
+    bool restore_perspective_pose(const ViewportCameraPose &pose);
 
     const ViewportCameraState& state() const { return state_; }
     QVec2 viewport_size() const { return {viewport_width_, viewport_height_}; }

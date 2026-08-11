@@ -2039,8 +2039,10 @@ TEST(ViewportOverlayPolicyTests,
      PersistentObjectSelectionCacheOwnsFaceFillsOnly) {
   EXPECT_FALSE(selected_object_face_fills_enabled_for_selection_count(0u));
   EXPECT_TRUE(selected_object_face_fills_enabled_for_selection_count(1u));
-  EXPECT_FALSE(selected_object_face_fills_enabled_for_selection_count(2u));
-  EXPECT_FALSE(selected_object_face_fills_enabled_for_selection_count(64u));
+  EXPECT_TRUE(selected_object_face_fills_enabled_for_selection_count(2u));
+  EXPECT_TRUE(selected_object_face_fills_enabled_for_selection_count(64u));
+  EXPECT_TRUE(
+      selected_object_face_fills_enabled_for_selection_count(1'000'000u));
 }
 
 
@@ -5072,7 +5074,50 @@ TEST(ViewportWorkspaceServiceTests,
   expect_vec3_near(camera.pose().up, canonical.pose().up);
   EXPECT_NE(actual.distance,
             static_cast<float>(
-                viewport_host_defaults().focus_origin_distance));
+            viewport_host_defaults().focus_origin_distance));
+}
+
+TEST(ViewportCameraTests,
+     RestoresValidatedPerspectivePoseAndRejectsDegenerateBasis) {
+  ViewportCameraController camera;
+  const ViewportCameraPose restored{
+      .eye = {9.0f, 7.0f, 5.0f},
+      .target = {1.0f, 2.0f, 3.0f},
+      .up = {-0.25f, 0.95f, -0.1f},
+  };
+
+  ASSERT_TRUE(camera.restore_perspective_pose(restored));
+  EXPECT_EQ(camera.state().projection, ViewportProjection::Perspective);
+  expect_vec3_near(camera.pose().eye, restored.eye);
+  expect_vec3_near(camera.pose().target, restored.target);
+  EXPECT_NEAR(length(camera.pose().up), 1.0f, 0.00001f);
+  EXPECT_NEAR(dot(camera.pose().up,
+                  normalize(restored.target - restored.eye)),
+              0.0f, 0.00001f);
+  const std::uint64_t signature =
+      viewport_camera_pose_persistence_signature(camera.pose());
+  EXPECT_EQ(signature,
+            viewport_camera_pose_persistence_signature(camera.pose()));
+
+  ASSERT_TRUE(camera.restore_perspective_pose({
+      .eye = {0.0f, 0.0f, 3.0f},
+      .target = {0.0f, 0.0f, 0.0f},
+      .up = {std::numeric_limits<float>::max(),
+             std::numeric_limits<float>::max() * 0.5f, 0.0f},
+  }));
+  EXPECT_NEAR(camera.pose().up.x, 0.8944272f, 0.00001f);
+  EXPECT_NEAR(camera.pose().up.y, 0.4472136f, 0.00001f);
+  EXPECT_NEAR(camera.pose().up.z, 0.0f, 0.00001f);
+
+  const ViewportCameraPose before_invalid = camera.pose();
+  EXPECT_FALSE(camera.restore_perspective_pose({
+      .eye = {1.0f, 2.0f, 3.0f},
+      .target = {1.0f, 2.0f, 3.0f},
+      .up = {0.0f, 1.0f, 0.0f},
+  }));
+  expect_vec3_near(camera.pose().eye, before_invalid.eye);
+  expect_vec3_near(camera.pose().target, before_invalid.target);
+  expect_vec3_near(camera.pose().up, before_invalid.up);
 }
 
 TEST(ViewportWorkspaceServiceTests,
@@ -8367,6 +8412,108 @@ TEST(SceneSessionTests,
   EXPECT_TRUE(committed.changed());
   EXPECT_TRUE(editor.project().dirty());
   EXPECT_NE(session.content_revision_stamp(), clean_stamp);
+}
+
+TEST(SceneSessionTests,
+     PerspectiveCameraPoseParticipatesInDirtyStateWhileLocalVisibilityUsesPreEntryPose) {
+  SceneSession session;
+  ViewportWorkspaceService &workspace = session.viewport_workspace();
+  ViewportCameraController &camera =
+      workspace.camera(ViewportPaneId::Perspective);
+  session.mark_clean();
+  const SceneContentRevisionStamp canonical_stamp =
+      session.content_revision_stamp();
+
+  camera.focus_origin(27.0f);
+  EXPECT_TRUE(session.dirty());
+  EXPECT_NE(session.content_revision_stamp(), canonical_stamp);
+  session.mark_clean();
+  const ViewportCameraPose pre_local_visibility =
+      session.persisted_viewport_camera_pose();
+  const SceneContentRevisionStamp saved_stamp =
+      session.content_revision_stamp();
+
+  const std::array<ViewportLocalVisibilityEntityId, 1> members{1u};
+  ASSERT_TRUE(workspace.enter_local_visibility(members, members));
+  camera.focus_origin(83.0f);
+  EXPECT_EQ(session.content_revision_stamp(), saved_stamp);
+  EXPECT_FALSE(session.dirty());
+  expect_vec3_near(session.persisted_viewport_camera_pose().eye,
+                   pre_local_visibility.eye);
+  expect_vec3_near(session.persisted_viewport_camera_pose().target,
+                   pre_local_visibility.target);
+  expect_vec3_near(session.persisted_viewport_camera_pose().up,
+                   pre_local_visibility.up);
+
+  ASSERT_TRUE(workspace.exit_local_visibility());
+  EXPECT_EQ(session.content_revision_stamp(), saved_stamp);
+  EXPECT_FALSE(session.dirty());
+  expect_vec3_near(camera.pose().eye, pre_local_visibility.eye);
+}
+
+TEST(SceneSessionTests,
+     StandaloneSceneDocumentsApiRoundTripsPerspectiveCameraPoseCleanly) {
+  const auto tick = static_cast<std::uint64_t>(
+      std::chrono::steady_clock::now().time_since_epoch().count());
+  const std::filesystem::path path =
+      std::filesystem::temp_directory_path() /
+      ("quader-camera-pose-" + std::to_string(tick) + ".qdr");
+  std::error_code ignored;
+  std::filesystem::remove(path, ignored);
+
+  SceneSession source;
+  QuaderEditorApi source_editor(
+      QuaderApiSessionInternalAccess::from_scene_session(source));
+  ViewportCameraController &source_camera =
+      source.viewport_workspace().camera(ViewportPaneId::Perspective);
+  source_camera.focus_origin(43.0f);
+  source_camera.set_view_direction({-0.5f, -0.25f, -1.0f});
+  const ViewportCameraPose expected = source_camera.pose();
+  ASSERT_TRUE(source.dirty());
+  const std::optional<SceneSessionId> source_id =
+      source_editor.scene_documents().active_scene_id();
+  ASSERT_TRUE(source_id.has_value());
+  const QuaderApiVoidResult saved =
+      source_editor.scene_documents().save_as_native_path(*source_id, path);
+  ASSERT_TRUE(saved.ok()) << saved.error_message();
+  EXPECT_FALSE(source.dirty());
+
+  SceneSession restored;
+  QuaderEditorApi restored_editor(
+      QuaderApiSessionInternalAccess::from_scene_session(restored));
+  const QuaderApiResult<SceneSessionId> opened =
+      restored_editor.scene_documents().open_native_path(path);
+  ASSERT_TRUE(opened.ok()) << opened.error_message();
+  const ViewportCameraPose actual =
+      restored.viewport_workspace()
+          .camera(ViewportPaneId::Perspective)
+          .pose();
+  expect_vec3_near(actual.eye, expected.eye);
+  expect_vec3_near(actual.target, expected.target);
+  expect_vec3_near(actual.up, expected.up);
+  EXPECT_FALSE(restored.dirty());
+
+  ignored.clear();
+  std::filesystem::remove(path, ignored);
+}
+
+TEST(SceneSessionTests,
+     ReplacingDocumentWithoutStoredCameraResetsCanonicalPoseBeforeCleanStamp) {
+  SceneSession session;
+  ViewportCameraController &camera =
+      session.viewport_workspace().camera(ViewportPaneId::Perspective);
+  camera.focus_origin(54.0f);
+  camera.set_view_direction({1.0f, -0.5f, 0.25f});
+  ASSERT_TRUE(session.dirty());
+
+  session.replace_document(SceneContentDocument(
+      SceneContentDocumentRecord{.id = 9u, .name = "Replacement"}));
+
+  const ViewportCameraController canonical;
+  expect_vec3_near(camera.pose().eye, canonical.pose().eye);
+  expect_vec3_near(camera.pose().target, canonical.pose().target);
+  expect_vec3_near(camera.pose().up, canonical.pose().up);
+  EXPECT_FALSE(session.dirty());
 }
 
 TEST(SceneSessionTests,
@@ -13610,10 +13757,22 @@ TEST(ModelingSessionServiceTests,
 
   const ModelingCreateBoxResult box = service.create_box_from_bounds({
       .bounds = {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
-      .name = "Object Selection Wire Source",
+      .name = "First Object Selection Wire Source",
   });
   ASSERT_TRUE(box.ok) << box.message;
+  const ModelingCreateBoxResult second_box = service.create_box_from_bounds({
+      .bounds = {.min = {3.0f, -1.0f, -1.0f}, .max = {5.0f, 1.0f, 1.0f}},
+      .name = "Second Object Selection Wire Source",
+  });
+  ASSERT_TRUE(second_box.ok) << second_box.message;
   ASSERT_EQ(service.selection_mode(), ModelingSelectionMode::Object);
+  const std::array<EntityId, 2> selected_entities = {
+      box.object.entity,
+      second_box.object.entity,
+  };
+  const ModelingCommandResult selected =
+      service.set_object_selection(selected_entities, second_box.object.entity);
+  ASSERT_TRUE(selected.ok) << selected.message;
 
   const auto selected_face_fill_count = [](const ViewportOverlayFrame &frame) {
     return static_cast<std::size_t>(std::count_if(
@@ -13636,6 +13795,20 @@ TEST(ModelingSessionServiceTests,
   const ViewportOverlayFrame full_frame = service.selection_overlay_frame();
   EXPECT_GT(selected_face_fill_count(full_frame), 0u);
   EXPECT_GT(selected_wire_count(full_frame), 0u);
+  const std::unordered_set<int> filled_object_ids = [&]() {
+    std::unordered_set<int> ids;
+    for (const ViewportOverlayTriangle &triangle : full_frame.triangles) {
+      if (triangle.layer == ViewportOverlayLayer::SelectedVisibleFace ||
+          triangle.layer == ViewportOverlayLayer::SelectedXrayFace ||
+          triangle.layer == ViewportOverlayLayer::SelectedFaceMask) {
+        ids.insert(triangle.element.object_id);
+      }
+    }
+    return ids;
+  }();
+  EXPECT_EQ(filled_object_ids,
+            (std::unordered_set<int>{box.object.modeling_object_id,
+                                     second_box.object.modeling_object_id}));
 
   const ModelingSelectionOverlayOptions overlay_options{
       .suppress_persistent_object_selection = true,
@@ -13644,6 +13817,16 @@ TEST(ModelingSessionServiceTests,
       service.selection_overlay_frame(overlay_options);
   EXPECT_EQ(selected_face_fill_count(transient_wire_frame), 0u);
   EXPECT_GT(selected_wire_count(transient_wire_frame), 0u);
+  std::unordered_set<int> wired_object_ids;
+  for (const ViewportOverlayLine &line : transient_wire_frame.lines) {
+    if (line.layer == ViewportOverlayLayer::SelectedFaceEdge ||
+        line.layer == ViewportOverlayLayer::SelectedEdge) {
+      wired_object_ids.insert(line.element.object_id);
+    }
+  }
+  EXPECT_EQ(wired_object_ids,
+            (std::unordered_set<int>{box.object.modeling_object_id,
+                                     second_box.object.modeling_object_id}));
 }
 
 TEST(ModelingSessionServiceTests, CutAndMirrorEmitDrawnPlaneOverlay) {

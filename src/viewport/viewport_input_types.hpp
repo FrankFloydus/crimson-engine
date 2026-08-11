@@ -66,6 +66,10 @@ struct ViewportInputFrame {
   bool tool_constraint_z_pressed = false;
   int linear_array_copy_delta = 0;
   int radial_array_copy_delta = 0;
+  bool sample_face_material_pressed = false;
+  bool apply_active_material_to_selection_pressed = false;
+  bool apply_active_material_delay_for_double_click = false;
+  bool apply_face_material_to_mesh_pressed = false;
   bool middle_pressed = false;
   bool middle_down = false;
   bool middle_released = false;

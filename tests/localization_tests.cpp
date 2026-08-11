@@ -367,6 +367,154 @@ TEST(LocalizationResourceTests, ModelingActionCatalogHasLocaleKeys) {
     }
 }
 
+TEST(LocalizationResourceTests,
+     ViewportContextMenuLabelsStayCompactAndPopupScoped) {
+  /// One concise popup label expected in both shipped locale catalogs.
+  struct LabelExpectation {
+    std::string_view action_id;
+    std::string_view english;
+    std::string_view italian;
+  };
+  constexpr std::array<LabelExpectation, 40> kExpectedLabels{{
+      {"delete_selection", "Delete", "Elimina"},
+      {"duplicate_meshes", "Duplicate", "Duplica"},
+      {"invert_mesh", "Flip Mesh Normals", "Inverti normali mesh"},
+      {"shade_smooth_mesh", "Shade Smooth", "Ombreggiatura morbida"},
+      {"shade_flat_mesh", "Shade Flat", "Ombreggiatura piatta"},
+      {"combine_mesh", "Combine Mesh", "Combina mesh"},
+      {"half_cut", "Half-Cut", "Taglio a metà"},
+      {"create_outer_hull", "Create Outer Hull", "Crea guscio esterno"},
+      {"copy_pivot_from_active", "Copy Pivot From Active",
+       "Copia pivot dall'elemento attivo"},
+      {"snap_vertices_to_active", "Snap to Vertex", "Aggancia al vertice"},
+      {"merge_vertices", "Merge", "Unisci"},
+      {"merge_vertices_at_center", "Merge at Center", "Unisci al centro"},
+      {"merge_by_distance", "Merge by Distance", "Unisci per distanza"},
+      {"bevel_vertices", "Bevel Vertex", "Smussa vertice"},
+      {"connect_vertices", "Connect", "Connetti"},
+      {"dissolve_vertices", "Dissolve Vertex", "Dissolvi vertice"},
+      {"radial_align_vertices", "Radial Align", "Allinea radialmente"},
+      {"snap_edges_to_active", "Snap to Edge", "Aggancia allo spigolo"},
+      {"connect_edges", "Connect Edges", "Connetti spigoli"},
+      {"split_edges", "Edge Split", "Dividi spigolo"},
+      {"harden_edge_normals", "Hard Normal", "Normale dura"},
+      {"soften_edge_normals", "Soft Normal", "Normale morbida"},
+      {"bevel_edges", "Bevel Edges", "Smussa spigoli"},
+      {"bridge_edges", "Bridge", "Bridge"},
+      {"interpolated_bridge_edges", "Interpolated Bridge",
+       "Bridge interpolato"},
+      {"dissolve_edges", "Dissolve", "Dissolvi"},
+      {"merge_edges", "Merge Edges", "Unisci spigoli"},
+      {"collapse_edges", "Collapse", "Collassa"},
+      {"fill_hole", "Fill Hole", "Riempi foro"},
+      {"radial_align_edges", "Radial Align", "Allinea radialmente"},
+      {"bridge_faces", "Bridge Faces", "Bridge facce"},
+      {"interpolated_bridge_faces", "Interpolated Bridge",
+       "Bridge interpolato"},
+      {"invert_faces", "Invert Face", "Inverti faccia"},
+      {"combine_faces", "Combine Faces", "Combina facce"},
+      {"collapse_faces", "Collapse Faces", "Collassa facce"},
+      {"radial_align_faces", "Radial Align", "Allinea radialmente"},
+      {"slice_quad", "Slice Quad", "Suddividi quad"},
+      {"thicken_faces", "Thicken Faces", "Ispessisci facce"},
+      {"extract_faces", "Extract Faces", "Estrai facce"},
+      {"detach_faces", "Detach Faces", "Stacca facce"},
+  }};
+
+  const std::vector<std::pair<std::string, LocalizationService::Catalog>>
+      catalogs = load_resource_locale_catalogs();
+  const auto find_catalog = [&](std::string_view locale)
+      -> const LocalizationService::Catalog * {
+    const auto found = std::find_if(
+        catalogs.begin(), catalogs.end(), [&](const auto &entry) {
+          return entry.first == locale;
+        });
+    return found == catalogs.end() ? nullptr : &found->second;
+  };
+  const LocalizationService::Catalog *english = find_catalog("en-US");
+  const LocalizationService::Catalog *italian = find_catalog("it-IT");
+  ASSERT_NE(english, nullptr);
+  ASSERT_NE(italian, nullptr);
+
+  constexpr std::string_view kPrefix =
+      "ui.viewport.context_menu.action.";
+  for (const LabelExpectation &expected : kExpectedLabels) {
+    std::string key(kPrefix);
+    key.append(expected.action_id);
+    key.append(".label");
+
+    const auto english_label = english->find(key);
+    ASSERT_NE(english_label, english->end()) << key;
+    EXPECT_EQ(english_label->second, expected.english) << key;
+    const auto italian_label = italian->find(key);
+    ASSERT_NE(italian_label, italian->end()) << key;
+    EXPECT_EQ(italian_label->second, expected.italian) << key;
+  }
+
+  for (const auto &[locale, catalog] : catalogs) {
+    const std::size_t popup_label_count =
+        static_cast<std::size_t>(std::count_if(
+            catalog.begin(), catalog.end(), [&](const auto &entry) {
+              return entry.first.rfind(kPrefix, 0) == 0;
+            }));
+    EXPECT_EQ(popup_label_count, kExpectedLabels.size())
+        << locale << " must expose exactly the popup action label set";
+  }
+
+  EXPECT_EQ(english->at("modeling.action.snap_edges_to_active.label"),
+            "Snap Selected Edges to Active Edge");
+  EXPECT_EQ(italian->at("modeling.action.snap_edges_to_active.label"),
+            "Aggancia spigoli selezionati allo spigolo attivo");
+}
+
+TEST(LocalizationResourceTests,
+     ProjectHomeUsesTerseRailAndLocalizedRecentActions) {
+  const std::vector<std::pair<std::string, LocalizationService::Catalog>>
+      catalogs = load_resource_locale_catalogs();
+  const auto find_catalog = [&](std::string_view locale)
+      -> const LocalizationService::Catalog * {
+    const auto found = std::find_if(
+        catalogs.begin(), catalogs.end(), [&](const auto &entry) {
+          return entry.first == locale;
+        });
+    return found == catalogs.end() ? nullptr : &found->second;
+  };
+  const LocalizationService::Catalog *english = find_catalog("en-US");
+  const LocalizationService::Catalog *italian = find_catalog("it-IT");
+  ASSERT_NE(english, nullptr);
+  ASSERT_NE(italian, nullptr);
+
+  EXPECT_EQ(english->at("ui.home.new_project"), "New");
+  EXPECT_EQ(english->at("ui.home.open_project"), "Open");
+  EXPECT_EQ(english->at("ui.home.recent_projects"), "Recent");
+  EXPECT_EQ(english->at("ui.home.recent_last_modified"), "Last modified");
+  EXPECT_EQ(english->at("ui.home.recent_size"), "Size");
+  EXPECT_EQ(english->at("ui.home.recent_actions"), "Actions");
+  EXPECT_EQ(english->at("ui.home.recent_action.open"), "Open");
+  EXPECT_EQ(english->at("ui.home.recent_action.open_file_location"),
+            "Open file location");
+  EXPECT_EQ(english->at("ui.home.recent_action.copy_path"), "Copy path");
+  EXPECT_EQ(english->at("ui.home.recent_action.remove"),
+            "Remove from recent");
+
+  EXPECT_EQ(italian->at("ui.home.new_project"), "Nuovo");
+  EXPECT_EQ(italian->at("ui.home.open_project"), "Apri");
+  EXPECT_EQ(italian->at("ui.home.recent_projects"), "Recenti");
+  EXPECT_EQ(italian->at("ui.home.recent_last_modified"), "Ultima modifica");
+  EXPECT_EQ(italian->at("ui.home.recent_size"), "Dimensione");
+  EXPECT_EQ(italian->at("ui.home.recent_actions"), "Azioni");
+  EXPECT_EQ(italian->at("ui.home.recent_action.open"), "Apri");
+  EXPECT_EQ(italian->at("ui.home.recent_action.open_file_location"),
+            "Apri percorso file");
+  EXPECT_EQ(italian->at("ui.home.recent_action.copy_path"), "Copia percorso");
+  EXPECT_EQ(italian->at("ui.home.recent_action.remove"),
+            "Rimuovi dai recenti");
+  EXPECT_FALSE(english->contains("ui.home.recent_location"));
+  EXPECT_FALSE(italian->contains("ui.home.recent_location"));
+  EXPECT_FALSE(english->contains("ui.home.remove_recent_project"));
+  EXPECT_FALSE(italian->contains("ui.home.remove_recent_project"));
+}
+
 TEST(LocalizationResourceTests, ModelingShelfLocaleKeysDoNotMirrorActionLabels) {
   const std::vector<std::pair<std::string, LocalizationService::Catalog>>
       catalogs = load_resource_locale_catalogs();

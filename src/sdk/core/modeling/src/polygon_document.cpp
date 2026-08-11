@@ -1837,6 +1837,29 @@ PolygonDocument::assign_selected_face_material_slot(std::uint32_t material_slot)
 }
 
 Result<OperationResult>
+PolygonDocument::assign_all_face_material_slot(std::uint32_t material_slot) {
+  return apply_operation(
+      *impl_,
+      [material_slot](quader_poly::Document &document,
+                      quader_poly::Selection &) {
+        bool changed = false;
+        for (quader_poly::Face &face : document.faces) {
+          if (face.material_slot == material_slot) {
+            continue;
+          }
+          face.material_slot = material_slot;
+          changed = true;
+        }
+        return quader_poly::OperationResult{
+            .changed = changed,
+            .message = changed ? "Material assigned."
+                               : "All faces already use that material slot.",
+        };
+      },
+      true);
+}
+
+Result<OperationResult>
 PolygonDocument::assign_face_material_slot(FaceId id,
                                            std::uint32_t material_slot) {
   Result<OperationResult> validation = validate_face_id(*impl_->document, id);

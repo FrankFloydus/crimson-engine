@@ -1047,6 +1047,80 @@ TEST(BuildGuardrailTests,
                   "Release is the only shipping artifact");
 }
 
+TEST(BuildGuardrailTests,
+     ProfileGTestTargetsDeployMappedRuntimeDllsWithoutAppCleanupLoss) {
+  const std::string root_c_make = read_source_file("CMakeLists.txt");
+  const std::string modeling =
+      read_source_file("cmake/QuaderModeling.cmake");
+  const std::string presets = read_source_file("CMakePresets.json");
+  const std::string sdk_only_check =
+      read_source_file("cmake/QuaderSdkOnlyBuildCheck.cmake");
+
+  expect_contains(presets, "\"VCPKG_APPLOCAL_DEPS\": \"OFF\"");
+  expect_contains(sdk_only_check, "-DVCPKG_APPLOCAL_DEPS=OFF");
+
+  const std::string deployment_helper = source_slice(
+      root_c_make,
+      "function(quader_deploy_test_runtime_dlls target)",
+      "endfunction()");
+  expect_contains(deployment_helper,
+                  "$<TARGET_RUNTIME_DLLS:${target}>");
+  expect_contains(deployment_helper, "copy_if_different");
+  expect_contains(deployment_helper, "COMMAND_EXPAND_LISTS");
+
+  const std::string guardrail_target = source_slice(
+      root_c_make, "add_executable(quader_guardrail_tests",
+      "add_test(NAME quader_guardrail_tests");
+  expect_contains(
+      guardrail_target,
+      "quader_deploy_test_runtime_dlls(quader_guardrail_tests)");
+
+  const std::string app_target =
+      source_slice(root_c_make, "add_executable(quader_tests",
+                   "add_test(NAME quader_tests");
+  expect_contains(app_target,
+                  "quader_deploy_test_runtime_dlls(quader_tests)");
+
+  const std::string parity_target = source_slice(
+      root_c_make, "add_executable(quader_modeling_sdk_parity_tests",
+      "add_test(NAME quader_modeling_sdk_parity_tests");
+  expect_contains(
+      parity_target,
+      "quader_deploy_test_runtime_dlls("
+      "quader_modeling_sdk_parity_tests)");
+
+  const std::string domain_target_helper = source_slice(
+      modeling,
+      "function(quader_add_modeling_domain_gtest_target target)",
+      "endfunction()");
+  expect_contains(domain_target_helper,
+                  "quader_deploy_test_runtime_dlls(${target})");
+
+  const std::string loop_target_helper = source_slice(
+      modeling,
+      "function(quader_add_modeling_domain_loop_target target)",
+      "endfunction()");
+  expect_contains(loop_target_helper,
+                  "quader_deploy_test_runtime_dlls(${target})");
+
+  const std::string consumer_target = source_slice(
+      modeling,
+      "add_executable(quader_modeling_sdk_consumer_tests",
+      "add_test(NAME quader_modeling_sdk_consumer_tests");
+  expect_contains(
+      consumer_target,
+      "quader_deploy_test_runtime_dlls("
+      "quader_modeling_sdk_consumer_tests)");
+
+  const std::string stale_runtime_policy = source_slice(
+      root_c_make, "set(_QUADER_VCPKG_RUNTIME_DLLS",
+      "set(_QUADER_STALE_RUNTIME_PATHS)");
+  expect_contains(stale_runtime_policy,
+                  "list(REMOVE_ITEM _QUADER_VCPKG_RUNTIME_DLLS");
+  expect_contains(stale_runtime_policy, "gtest.dll");
+  expect_contains(stale_runtime_policy, "gtest_main.dll");
+}
+
 TEST(BuildGuardrailTests, RootQuaderTestsListsEveryRootTestSource) {
   const std::string root_c_make = read_source_file("CMakeLists.txt");
   const std::string modeling_c_make =
@@ -2986,8 +3060,8 @@ TEST(BuildGuardrailTests, QtFrameRefreshKeepsExpensiveChromeEventDriven) {
                   "layers_scene_revision_ != document_->layer_revision()");
   expect_missing(frame_refresh, "editor_->revisions()");
   expect_contains(frame_refresh,
-                  "!transform_drag_active && "
-                  "panel_presented(UIPanelId::Inspector)");
+                  "!transform_drag_active && !numeric_interaction_active &&");
+  expect_contains(frame_refresh, "panel_presented(UIPanelId::Inspector)");
   expect_contains(frame_refresh, "panel_presented(UIPanelId::Console)");
   expect_contains(frame_refresh,
                   "panel_visible(UIPanelId::ToolSettings)");
@@ -3035,15 +3109,47 @@ TEST(BuildGuardrailTests, QtFrameRefreshKeepsExpensiveChromeEventDriven) {
       workspace_refresh.find("instance_edit_revision()");
   const std::size_t workspace_gate = workspace_refresh.find(
       "project_workspace_refresh_signal_->exchange(");
+  const std::size_t standard_material_refresh =
+      workspace_refresh.find("refresh_standard_material_editor()");
   ASSERT_NE(instance_edit_revision, std::string::npos);
   ASSERT_NE(workspace_gate, std::string::npos);
+  ASSERT_NE(standard_material_refresh, std::string::npos);
   EXPECT_LT(instance_edit_revision, workspace_gate);
+  EXPECT_LT(workspace_gate, standard_material_refresh);
   for (std::string_view broad_workspace_query :
        {"recent_projects()", "open_scenes()", ".materials()",
         ".active_material()", ".metadata()", ".material_preview("}) {
     const std::size_t query = workspace_refresh.find(broad_workspace_query);
     ASSERT_NE(query, std::string::npos) << broad_workspace_query;
     EXPECT_LT(workspace_gate, query) << broad_workspace_query;
+  }
+  const std::size_t material_browser_visibility = workspace_refresh.find(
+      "material_browser_window_->isVisible()");
+  const std::size_t material_catalog = workspace_refresh.find(".materials()");
+  const std::size_t material_preview =
+      workspace_refresh.find(".material_preview(");
+  ASSERT_NE(material_browser_visibility, std::string::npos);
+  ASSERT_NE(material_catalog, std::string::npos);
+  ASSERT_NE(material_preview, std::string::npos);
+  EXPECT_LT(material_browser_visibility, material_catalog);
+  EXPECT_LT(material_browser_visibility, material_preview);
+  const std::string show_material_browser = source_slice(
+      ui_system_source, "void UISystem::show_material_browser()",
+      "bool UISystem::panel_visible(");
+  const std::size_t browser_show =
+      show_material_browser.find("material_browser_window_->show()");
+  const std::size_t browser_refresh =
+      show_material_browser.find("refresh_project_workspace()");
+  ASSERT_NE(browser_show, std::string::npos);
+  ASSERT_NE(browser_refresh, std::string::npos);
+  EXPECT_LT(browser_show, browser_refresh);
+  const std::string workspace_event_bindings = source_slice(
+      ui_system_source, "void UISystem::bind_project_workspace_events(",
+      "void UISystem::clear_project_workspace_events(");
+  for (const std::string &material_event :
+       {"kStandardMaterialOpened", "kStandardMaterialDirtyChanged",
+        "kStandardMaterialSaved", "kStandardMaterialClosed"}) {
+    expect_contains(workspace_event_bindings, material_event);
   }
   expect_contains(ui_system_source, "bind_project_workspace_events(editor)");
   expect_contains(ui_system_source,

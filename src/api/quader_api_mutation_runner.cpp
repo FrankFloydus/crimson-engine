@@ -56,15 +56,38 @@ bool scene_selection_contains_non_modeling_entity(
   return false;
 }
 
+bool scene_selection_contains_modeling_entity(const SceneSession &session) {
+  for (const EntityId entity : session.scene().selected_entities()) {
+    if (session.scene().modeling_object(entity) != nullptr) {
+      return true;
+    }
+  }
+  return false;
+}
+
 void project_object_selection_after_history_selection_change(
     SceneSession &session, const SceneSelectionSnapshot &before,
-    const CommandResult &result) {
+    ModelingSelectionMode selection_mode_before, const CommandResult &result) {
   if (!result.ok || !result.changed ||
       !scene_selection_changed(before, session)) {
     return;
   }
 
+  if (is_component_selection_mode(selection_mode_before)) {
+    return;
+  }
+  if (selection_mode_before == ModelingSelectionMode::Group) {
+    session.modeling()
+        .clear_runtime_object_selection_for_scene_owned_selection();
+    return;
+  }
+
   if (scene_selection_contains_non_modeling_entity(session)) {
+    if (!scene_selection_contains_modeling_entity(session)) {
+      session.modeling()
+          .clear_runtime_object_selection_for_scene_owned_selection();
+      return;
+    }
     session.modeling().project_object_selection_from_scene(true);
     return;
   }
@@ -502,9 +525,12 @@ QuaderApiVoidResult QuaderApiMutationRunner::undo() {
     }
   }
   const SceneSelectionSnapshot before = capture_scene_selection(session);
+  const ModelingSelectionMode selection_mode_before =
+      session.modeling().selection_mode();
   EditorCommandService commands = editor_commands();
   CommandResult result = commands.undo();
   project_object_selection_after_history_selection_change(session, before,
+                                                          selection_mode_before,
                                                           result);
   return status_from(std::move(result), QuaderMutationKind::Document, "Undo");
 }
@@ -519,9 +545,12 @@ QuaderApiVoidResult QuaderApiMutationRunner::redo() {
   }
   SceneSession &session = scene_session();
   const SceneSelectionSnapshot before = capture_scene_selection(session);
+  const ModelingSelectionMode selection_mode_before =
+      session.modeling().selection_mode();
   EditorCommandService commands = editor_commands();
   CommandResult result = commands.redo();
   project_object_selection_after_history_selection_change(session, before,
+                                                          selection_mode_before,
                                                           result);
   return status_from(std::move(result), QuaderMutationKind::Document, "Redo");
 }

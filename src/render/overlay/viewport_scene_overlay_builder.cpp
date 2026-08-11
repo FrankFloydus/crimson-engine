@@ -15,6 +15,7 @@
 #include <array>
 #include <cmath>
 #include <cstdint>
+#include <optional>
 #include <unordered_map>
 #include <utility>
 
@@ -112,6 +113,20 @@ void append_mesh_selection_wire(
         ViewportOverlayStyleRole::SelectedSourceWire,
     ViewportOverlaySource source = ViewportOverlaySource::Selection) {
   QDR_PROFILE_FUNCTION();
+  if (mesh.has_wire_geometry()) {
+    for (const MeshWireSegment &segment : mesh.wire_segments) {
+      frame.lines.push_back(ViewportOverlayLine{
+          .layer = layer,
+          .start = transform_point(mesh.world_transform, segment.start),
+          .end = transform_point(mesh.world_transform, segment.end),
+          .color = color,
+          .width_pixels = 0.0f,
+          .style_role = style_role,
+          .source = source,
+      });
+    }
+    return;
+  }
   if (!mesh.has_triangle_geometry()) {
     return;
   }
@@ -206,10 +221,11 @@ void append_hierarchy_selection_wires(ViewportOverlayFrame &frame,
                                           &snapshot) {
   for (const RenderOverlayMeshSnapshot &mesh :
        snapshot.hierarchy_selection_wires) {
-    append_mesh_selection_wire(frame, mesh, kOverlaySelectionWireColor,
-                               ViewportOverlayLayer::SourceWire,
-                               ViewportOverlayStyleRole::SelectedSourceWire,
-                               ViewportOverlaySource::HierarchySelection);
+    append_mesh_selection_wire(
+        frame, mesh, kOverlaySelectionWireColor,
+        ViewportOverlayLayer::SelectedEdge,
+        ViewportOverlayStyleRole::SelectionWire,
+        ViewportOverlaySource::HierarchySelection);
   }
 }
 
@@ -252,26 +268,17 @@ void append_bounds_cage(ViewportOverlayFrame &frame,
   }
 }
 
-void append_group_selection_cages(ViewportOverlayFrame &frame,
-                                  const RenderOverlaySelectionSnapshot
-                                      &snapshot) {
-  for (const RenderOverlayBoundsSnapshot &bounds : snapshot.group_bounds) {
-    append_bounds_cage(frame, bounds);
-  }
-}
-
 bool selection_mode_uses_selected_mesh_bounds(RenderOverlaySelectionMode mode) {
   return mode == RenderOverlaySelectionMode::Object ||
          mode == RenderOverlaySelectionMode::Group;
 }
 
-void append_selected_mesh_bounds_cages(ViewportOverlayFrame &frame,
-                                       const RenderOverlaySelectionSnapshot
-                                           &snapshot,
-                                       RenderOverlaySelectionMode selection_mode) {
+std::optional<RenderOverlayBoundsSnapshot> combined_selected_mesh_bounds(
+    const RenderOverlaySelectionSnapshot &snapshot,
+    RenderOverlaySelectionMode selection_mode) {
   if (!selection_mode_uses_selected_mesh_bounds(selection_mode) ||
       snapshot.selected_mesh_bounds.empty()) {
-    return;
+    return std::nullopt;
   }
 
   RenderOverlayBoundsSnapshot combined = snapshot.selected_mesh_bounds.front();
@@ -286,7 +293,34 @@ void append_selected_mesh_bounds_cages(ViewportOverlayFrame &frame,
     combined.max.y = std::max(combined.max.y, bounds.max.y);
     combined.max.z = std::max(combined.max.z, bounds.max.z);
   }
-  append_bounds_cage(frame, combined);
+  return combined;
+}
+
+bool same_bounds(const RenderOverlayBoundsSnapshot &lhs,
+                 const RenderOverlayBoundsSnapshot &rhs) {
+  return lhs.min.x == rhs.min.x && lhs.min.y == rhs.min.y &&
+         lhs.min.z == rhs.min.z && lhs.max.x == rhs.max.x &&
+         lhs.max.y == rhs.max.y && lhs.max.z == rhs.max.z;
+}
+
+void append_group_selection_cages(
+    ViewportOverlayFrame &frame,
+    const RenderOverlaySelectionSnapshot &snapshot,
+    RenderOverlaySelectionMode selection_mode) {
+  const std::optional<RenderOverlayBoundsSnapshot> selected_mesh_bounds =
+      combined_selected_mesh_bounds(snapshot, selection_mode);
+  bool selected_mesh_bounds_merged = false;
+  for (const RenderOverlayBoundsSnapshot &group_bounds :
+       snapshot.group_bounds) {
+    if (!selected_mesh_bounds_merged && selected_mesh_bounds.has_value() &&
+        same_bounds(group_bounds, *selected_mesh_bounds)) {
+      selected_mesh_bounds_merged = true;
+    }
+    append_bounds_cage(frame, group_bounds);
+  }
+  if (selected_mesh_bounds.has_value() && !selected_mesh_bounds_merged) {
+    append_bounds_cage(frame, *selected_mesh_bounds);
+  }
 }
 
 void append_selected_light_markers(ViewportOverlayFrame &frame,
@@ -388,15 +422,12 @@ void append_scene_wireframe_overlay(ViewportOverlayFrame &frame,
                       : ViewportOverlayLayer::WireframeXray;
     constexpr std::uint8_t kWireframeAlpha = static_cast<std::uint8_t>(
         (kOverlayWireframeXrayColor >> 24u) & 0xffu);
-    const std::uint32_t color = mesh.selected
-                                    ? snapshot.style.selection_wire_color
-                                    : rgba8(normalized_to_byte(
-                                                mesh.wireframe_tint.x),
-                                            normalized_to_byte(
-                                                mesh.wireframe_tint.y),
-                                            normalized_to_byte(
-                                                mesh.wireframe_tint.z),
-                                            kWireframeAlpha);
+    const std::uint32_t color =
+        mesh.selected ? snapshot.style.selection_wire_color
+                      : rgba8(normalized_to_byte(mesh.wireframe_tint.x),
+                              normalized_to_byte(mesh.wireframe_tint.y),
+                              normalized_to_byte(mesh.wireframe_tint.z),
+                              kWireframeAlpha);
     const float width_pixels =
         mesh.selected ? snapshot.style.selection_edge_line_width_pixels : 0.0f;
     const ViewportOverlayStyleRole style_role =
@@ -452,17 +483,19 @@ ViewportOverlayFrame ViewportSceneOverlayBuilder::build_selection_frame(
     const RenderOverlaySelectionSnapshot &snapshot,
     bool point_light_gizmos_visible,
     RenderOverlaySelectionMode selection_mode,
-    bool include_tool_overlays) {
+    bool include_tool_overlays,
+    bool selection_overlays_visible) {
   QDR_PROFILE_FUNCTION();
-  if (selection_mode == RenderOverlaySelectionMode::Object &&
-      snapshot.selected_mesh_bounds.size() > 1u) {
-    base_frame = strip_persistent_object_selection_fills(
-        std::move(base_frame), selection_mode);
+  if (selection_overlays_visible) {
+    if (selection_mode == RenderOverlaySelectionMode::Object &&
+        snapshot.selected_mesh_bounds.size() > 1u) {
+      base_frame = strip_persistent_object_selection_fills(
+          std::move(base_frame), selection_mode);
+    }
+    append_hierarchy_selection_wires(base_frame, snapshot);
+    append_group_selection_cages(base_frame, snapshot, selection_mode);
+    append_selected_light_markers(base_frame, snapshot);
   }
-  append_hierarchy_selection_wires(base_frame, snapshot);
-  append_group_selection_cages(base_frame, snapshot);
-  append_selected_mesh_bounds_cages(base_frame, snapshot, selection_mode);
-  append_selected_light_markers(base_frame, snapshot);
   if (point_light_gizmos_visible) {
     append_point_light_gizmos(base_frame, snapshot);
   }

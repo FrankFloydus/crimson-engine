@@ -179,6 +179,37 @@ RecentProjectStore::load() const {
       const bool available =
           std::filesystem::is_regular_file(manifest_path, availability_error) &&
           !availability_error;
+      std::optional<std::uint64_t> manifest_last_modified_unix_ms;
+      std::optional<std::uintmax_t> manifest_size_bytes;
+      if (available) {
+        std::error_code metadata_error;
+        const std::uintmax_t manifest_size =
+            std::filesystem::file_size(manifest_path, metadata_error);
+        if (!metadata_error) {
+          manifest_size_bytes = manifest_size;
+        }
+
+        metadata_error.clear();
+        const std::filesystem::file_time_type last_modified =
+            std::filesystem::last_write_time(manifest_path, metadata_error);
+        if (!metadata_error) {
+          const auto file_clock_now =
+              std::filesystem::file_time_type::clock::now();
+          const auto system_clock_now = std::chrono::system_clock::now();
+          const auto system_time =
+              last_modified - file_clock_now + system_clock_now;
+          const auto stable_seconds =
+              std::chrono::round<std::chrono::seconds>(system_time);
+          const std::int64_t unix_milliseconds =
+              std::chrono::duration_cast<std::chrono::milliseconds>(
+                  stable_seconds.time_since_epoch())
+                  .count();
+          if (unix_milliseconds >= 0) {
+            manifest_last_modified_unix_ms =
+                static_cast<std::uint64_t>(unix_milliseconds);
+          }
+        }
+      }
       entries.push_back(RecentProjectEntry{
           .project_id = std::move(parsed_id),
           .name = entry_json["name"].get<std::string>(),
@@ -186,6 +217,9 @@ RecentProjectStore::load() const {
           .last_opened_unix_ms =
               entry_json["lastOpenedUnixMs"].get<std::uint64_t>(),
           .available = available,
+          .manifest_last_modified_unix_ms =
+              manifest_last_modified_unix_ms,
+          .manifest_size_bytes = manifest_size_bytes,
       });
     }
     return ProjectIoResult<std::vector<RecentProjectEntry>>::success(

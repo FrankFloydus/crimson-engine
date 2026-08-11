@@ -54,8 +54,10 @@ class QtSettingsDialog;
 class QtCommandEventFilter;
 class QtMaterialBrowserWindow;
 class QtMaterialPreviewSurface;
+class QtRetainedMessageBox;
 class QtStandardMaterialEditorWindow;
 class QtToolSettingsPanel;
+class QtUnsavedConfirmationDialog;
 class QtViewportPanel;
 class QtProjectHomePage;
 class QtSceneWorkspace;
@@ -145,6 +147,7 @@ private:
   void prepare_startup_presentation();
   void advance_startup_presentation();
   void finish_startup_presentation(bool forced_fallback);
+  void schedule_retained_message_box_prewarm();
   [[nodiscard]] bool startup_layout_ready() const;
   [[nodiscard]] std::uint64_t startup_layout_geometry_signature(
       int native_client_width_pixels,
@@ -203,6 +206,11 @@ private:
   QtMaterialPreviewSurface *material_preview_surface_ = nullptr;
   QtStandardMaterialEditorWindow *standard_material_editor_window_ = nullptr;
   QtToolSettingsPanel *tool_settings_panel_ = nullptr;
+  QtUnsavedConfirmationDialog *unsaved_confirmation_ = nullptr;
+  QtUnsavedConfirmationDialog *standard_material_unsaved_confirmation_ =
+      nullptr;
+  QtRetainedMessageBox *lifecycle_message_box_ = nullptr;
+  QtRetainedMessageBox *standard_material_error_message_box_ = nullptr;
   QLabel *status_message_ = nullptr;
   QLabel *status_version_ = nullptr;
   QTimer *auxiliary_window_save_timer_ = nullptr;
@@ -228,6 +236,7 @@ private:
   QtStartupPresentationState startup_presentation_;
   std::chrono::steady_clock::time_point startup_presentation_started_{};
   bool startup_expected_maximized_ = false;
+  bool retained_message_box_prewarm_scheduled_ = false;
   bool initialized_ = false;
   bool ui_settings_changed_ = false;
   std::string localized_locale_;

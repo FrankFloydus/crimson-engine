@@ -530,6 +530,14 @@ MeshExpect &MeshExpect::bounds_center_near(QVec3 expected, float epsilon) {
   return *this;
 }
 
+OverlayExpect &OverlayExpect::empty() {
+  const ViewportOverlayFrame frame = scenario_.selection_overlay_frame();
+  EXPECT_TRUE(frame.lines.empty());
+  EXPECT_TRUE(frame.points.empty());
+  EXPECT_TRUE(frame.triangles.empty());
+  return *this;
+}
+
 OverlayExpect &OverlayExpect::has_line(ViewportOverlayLayer layer) {
   EXPECT_GT(count_for_layer(scenario_.snapshot().overlay.lines_by_layer, layer),
             0u);

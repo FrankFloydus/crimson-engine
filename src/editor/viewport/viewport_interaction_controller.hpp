@@ -11,6 +11,10 @@
 #include "editor/viewport/viewport_native_tool_interaction.hpp"
 #include "editor/viewport/viewport_selection_interaction.hpp"
 
+#include <cstdint>
+#include <optional>
+#include <string>
+
 namespace quader {
 
 class QuaderEditorApi;
@@ -21,6 +25,14 @@ class ViewportToolHoverPort;
  */
 class ViewportInteractionController {
 public:
+  /// Cheap counters proving idle frames avoid material interaction work.
+  struct MaterialInteractionWorkStats final {
+    std::uint64_t face_pick_count = 0;
+    std::uint64_t sample_request_count = 0;
+    std::uint64_t apply_selection_command_count = 0;
+    std::uint64_t apply_face_to_mesh_request_count = 0;
+  };
+
   [[nodiscard]] ViewportBeforeToolInteractionResult
   handle_before_active_tool(QuaderEditorApi &editor,
                             const ViewportInteractionFrame &frame);
@@ -34,6 +46,7 @@ public:
                            const ViewportInteractionFrame &frame);
   [[nodiscard]] bool cancel_active_drag(QuaderEditorApi &editor);
   [[nodiscard]] bool dragging() const;
+  void cancel_pending_material_interaction();
   void reset(QuaderEditorApi *editor = nullptr);
 
   [[nodiscard]] const quader_editor_core::TransformGizmoFrame *
@@ -41,6 +54,8 @@ public:
   [[nodiscard]] const TransformGizmoSelectionCacheStats &
   transform_gizmo_selection_cache_stats() const;
   [[nodiscard]] ViewportSelectionMarquee selection_marquee() const;
+  [[nodiscard]] const MaterialInteractionWorkStats &
+  material_interaction_work_stats() const;
 
   [[nodiscard]] bool active_tool_owns_viewport(ViewportToolId tool);
   [[nodiscard]] bool active_tool_blocks_viewport_focus_shortcuts(
@@ -72,12 +87,26 @@ public:
   [[nodiscard]] bool native_tool_dragging() const;
 
 private:
+  /// User intent retained only while disambiguating click from double-click.
+  struct PendingApplyActiveMaterial final {
+    double deadline_seconds = 0.0;
+    std::uint64_t scene_session_id = 0;
+    std::uint64_t selection_revision = 0;
+    std::string active_material_id;
+  };
+
+  void handle_material_interactions(
+      QuaderEditorApi &editor, const ViewportInteractionFrame &frame,
+      const ViewportToolResult &tool_result,
+      const ViewportBeforeToolInteractionResult &before_tool);
   void sync_tool_runtime(ViewportToolId tool);
 
   ViewportToolRuntime tool_runtime_;
   ViewportNativeToolInteraction native_tools_;
   TransformGizmoInteraction transform_gizmo_;
   ViewportSelectionInteraction selection_;
+  std::optional<PendingApplyActiveMaterial> pending_apply_active_material_;
+  MaterialInteractionWorkStats material_interaction_work_stats_;
 };
 
 } // namespace quader

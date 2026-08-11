@@ -12,6 +12,7 @@
 #include <array>
 #include <cstddef>
 #include <filesystem>
+#include <optional>
 #include <span>
 #include <string>
 #include <vector>
@@ -55,6 +56,10 @@ public:
   [[nodiscard]] static QdrProjectWriteResult
   write_project_document_atomic(const std::filesystem::path &path,
                                 const SceneContentDocument &document);
+  [[nodiscard]] static QdrProjectWriteResult write_project_document_atomic(
+      const std::filesystem::path &path,
+      const SceneContentDocument &document,
+      std::optional<QdrSceneViewportCameraPose> viewport_camera_pose);
   [[nodiscard]] static QdrProjectWriteResult write_project_document_atomic(
       const std::filesystem::path &path, const SceneContentDocument &document,
       std::array<std::byte, 16> scene_uuid);

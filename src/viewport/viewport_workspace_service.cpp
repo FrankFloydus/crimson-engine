@@ -231,6 +231,43 @@ ViewportWorkspaceService::camera(ViewportPaneId pane_id) const {
   return pane(pane_id).camera;
 }
 
+ViewportCameraPose
+ViewportWorkspaceService::persisted_perspective_camera_pose() const {
+  const std::size_t index =
+      viewport_pane_index(ViewportPaneId::Perspective);
+  const ViewportCameraController &camera =
+      local_visibility_active()
+          ? local_visibility_pane_camera_backups_[index]
+          : panes_[index].camera;
+  return camera.pose();
+}
+
+std::uint64_t
+ViewportWorkspaceService::persisted_perspective_camera_pose_signature() const {
+  return viewport_camera_pose_persistence_signature(
+      persisted_perspective_camera_pose());
+}
+
+bool ViewportWorkspaceService::restore_persisted_perspective_camera_pose(
+    const std::optional<ViewportCameraPose> &camera_pose) {
+  const std::size_t index =
+      viewport_pane_index(ViewportPaneId::Perspective);
+  ViewportCameraController &current =
+      local_visibility_active()
+          ? local_visibility_pane_camera_backups_[index]
+          : panes_[index].camera;
+  if (camera_pose.has_value()) {
+    return current.restore_perspective_pose(*camera_pose);
+  }
+
+  ViewportCameraController restored;
+  (void)restored.set_default_fly_speed(default_fly_speed_);
+  const QVec2 render_size = panes_[index].render_size;
+  restored.set_viewport_size(render_size.x, render_size.y);
+  current = std::move(restored);
+  return true;
+}
+
 bool ViewportWorkspaceService::set_default_fly_speed(float speed) {
   const float sanitized = viewport_sanitize_fly_navigation_speed(speed);
   const bool changed =

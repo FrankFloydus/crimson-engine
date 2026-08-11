@@ -414,6 +414,7 @@ function(quader_add_modeling_domain_gtest_target target)
     find_package(GTest CONFIG REQUIRED)
     add_executable(${target} ${ARGN})
     quader_link_modeling_domain_test(${target})
+    quader_deploy_test_runtime_dlls(${target})
     add_test(NAME ${target} COMMAND ${target})
 endfunction()
 
@@ -421,6 +422,7 @@ function(quader_add_modeling_domain_loop_target target)
     find_package(GTest CONFIG REQUIRED)
     add_executable(${target} EXCLUDE_FROM_ALL ${ARGN})
     target_link_libraries(${target} PRIVATE GTest::gtest GTest::gtest_main)
+    quader_deploy_test_runtime_dlls(${target})
 endfunction()
 endif()
 
@@ -606,6 +608,7 @@ if(QUADER_BUILD_TESTS)
             quader_modeling_sdk
             GTest::gtest
             GTest::gtest_main)
+    quader_deploy_test_runtime_dlls(quader_modeling_sdk_consumer_tests)
     add_test(NAME quader_modeling_sdk_consumer_tests
         COMMAND quader_modeling_sdk_consumer_tests)
 

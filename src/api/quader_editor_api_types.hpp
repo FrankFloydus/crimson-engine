@@ -59,6 +59,8 @@ struct QuaderRecentProject final {
   std::string name;
   std::filesystem::path manifest_path;
   bool available = false;
+  std::optional<std::uint64_t> manifest_last_modified_unix_ms;
+  std::optional<std::uintmax_t> manifest_size_bytes;
 };
 
 /**

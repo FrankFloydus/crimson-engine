@@ -107,6 +107,7 @@ public:
 
 private:
     void rebind(QuaderApiSession session);
+    void attach_viewport_camera_dirty_observer();
     void set_scene_binding_changed_callback(
         std::function<void(QuaderApiSession)> callback);
 

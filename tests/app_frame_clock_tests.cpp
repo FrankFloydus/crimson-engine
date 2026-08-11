@@ -6,14 +6,18 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "app/app_frame_clock.hpp"
 #include "app/app_frame_presentation.hpp"
+#include "ui/qt_unsaved_confirmation_dialog.hpp"
 
 #include <gtest/gtest.h>
 
 #include <QApplication>
 #include <QCoreApplication>
 #include <QDialog>
+#include <QEvent>
 #include <QMenu>
 #include <QPaintEvent>
+#include <QPushButton>
+#include <QTimer>
 #include <QWidget>
 
 #include <chrono>
@@ -46,6 +50,34 @@ private:
   bool gate_blocked_during_paint_ = false;
 };
 
+/// Records the first real paint while allowing the modal loop to continue.
+class FirstPaintEventProbe final : public QObject {
+public:
+  explicit FirstPaintEventProbe(AppFramePresentationGate &gate)
+      : gate_(&gate) {}
+
+  [[nodiscard]] bool paint_seen() const noexcept { return paint_seen_; }
+  [[nodiscard]] bool gate_blocked_during_paint() const noexcept {
+    return gate_blocked_during_paint_;
+  }
+
+protected:
+  bool eventFilter(QObject *watched, QEvent *event) override {
+    (void)watched;
+    if (!paint_seen_ && event != nullptr &&
+        event->type() == QEvent::Paint) {
+      paint_seen_ = true;
+      gate_blocked_during_paint_ = gate_->blocks_frame_submission();
+    }
+    return false;
+  }
+
+private:
+  AppFramePresentationGate *gate_ = nullptr;
+  bool paint_seen_ = false;
+  bool gate_blocked_during_paint_ = false;
+};
+
 void deliver_first_paint(QWidget &widget) {
   QPaintEvent paint_event(widget.rect());
   QCoreApplication::sendEvent(&widget, &paint_event);
@@ -72,6 +104,153 @@ TEST(AppFrameClockTests, ProducesClampedFrameTimingAndMonotonicFrameIndex) {
     EXPECT_NEAR(clamped.delta_seconds, AppFrameClock::kMaxDeltaSeconds,
                 0.000001);
     EXPECT_NEAR(clamped.elapsed_seconds, 2.0, 0.000001);
+}
+
+TEST(QtUnsavedConfirmationDialogTests,
+     ReusesNativeDialogAndButtonsWhileRefreshingEachPresentation) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-unsaved-confirmation-tests";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+  application.setStyle(QStringLiteral("Fusion"));
+
+  QWidget main_window;
+  main_window.resize(640, 480);
+  main_window.show();
+  QCoreApplication::processEvents();
+
+  QtUnsavedConfirmationDialog confirmation(&main_window);
+  QMessageBox *const retained_dialog = &confirmation;
+  QPushButton *const save_button = confirmation.findChild<QPushButton *>(
+      QStringLiteral("unsavedConfirmation.save"));
+  QPushButton *const discard_button = confirmation.findChild<QPushButton *>(
+      QStringLiteral("unsavedConfirmation.discard"));
+  QPushButton *const cancel_button = confirmation.findChild<QPushButton *>(
+      QStringLiteral("unsavedConfirmation.cancel"));
+  ASSERT_NE(save_button, nullptr);
+  ASSERT_NE(discard_button, nullptr);
+  ASSERT_NE(cancel_button, nullptr);
+
+  confirmation.prewarm();
+  EXPECT_FALSE(confirmation.isVisible());
+  EXPECT_TRUE(confirmation.testAttribute(Qt::WA_WState_Created));
+  EXPECT_EQ(confirmation.presented_icon(), QMessageBox::Warning);
+
+  const QtUnsavedConfirmationPresentation project_presentation{
+      .object_name = QStringLiteral("project_unsaved_confirmation"),
+      .title = QStringLiteral("Unsaved Changes"),
+      .message = QStringLiteral("Save the project before closing?"),
+      .save_label = QStringLiteral("Save Project"),
+      .discard_label = QStringLiteral("Discard Project"),
+      .cancel_label = QStringLiteral("Keep Editing"),
+  };
+  QTimer::singleShot(0, &confirmation, [&]() {
+    EXPECT_EQ(confirmation.windowTitle(), project_presentation.title);
+    EXPECT_EQ(confirmation.text(), project_presentation.message);
+    EXPECT_EQ(save_button->text(), project_presentation.save_label);
+    EXPECT_EQ(discard_button->text(), project_presentation.discard_label);
+    EXPECT_EQ(cancel_button->text(), project_presentation.cancel_label);
+    EXPECT_EQ(confirmation.defaultButton(), save_button);
+    EXPECT_EQ(confirmation.escapeButton(), cancel_button);
+    discard_button->click();
+  });
+  EXPECT_EQ(confirmation.present(project_presentation),
+            QtUnsavedConfirmationDecision::Discard);
+
+  const QtUnsavedConfirmationPresentation scene_presentation{
+      .object_name = QStringLiteral("scene_unsaved_confirmation"),
+      .title = QStringLiteral("Unsaved Scene"),
+      .message = QStringLiteral("A different scene is dirty."),
+      .save_label = QStringLiteral("Save Scene"),
+      .discard_label = QStringLiteral("Discard Scene"),
+      .cancel_label = QStringLiteral("Cancel"),
+  };
+  QTimer::singleShot(0, &confirmation, [&]() {
+    EXPECT_EQ(&confirmation, retained_dialog);
+    EXPECT_EQ(confirmation.objectName(), scene_presentation.object_name);
+    EXPECT_EQ(confirmation.windowTitle(), scene_presentation.title);
+    EXPECT_EQ(confirmation.text(), scene_presentation.message);
+    EXPECT_EQ(save_button->text(), scene_presentation.save_label);
+    EXPECT_EQ(discard_button->text(), scene_presentation.discard_label);
+    EXPECT_EQ(cancel_button->text(), scene_presentation.cancel_label);
+    EXPECT_EQ(confirmation.defaultButton(), save_button);
+    EXPECT_EQ(confirmation.escapeButton(), cancel_button);
+    EXPECT_EQ(confirmation.findChild<QPushButton *>(
+                  QStringLiteral("unsavedConfirmation.save")),
+              save_button);
+    EXPECT_EQ(confirmation.findChild<QPushButton *>(
+                  QStringLiteral("unsavedConfirmation.discard")),
+              discard_button);
+    EXPECT_EQ(confirmation.findChild<QPushButton *>(
+                  QStringLiteral("unsavedConfirmation.cancel")),
+              cancel_button);
+    cancel_button->click();
+  });
+  EXPECT_EQ(confirmation.present(scene_presentation),
+            QtUnsavedConfirmationDecision::Cancel);
+}
+
+TEST(AppFramePresentationTests,
+     RealMessageBoxPaintReleasesFramesWhileModalRemainsVisible) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-real-message-box-presentation-tests";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+  application.setStyle(QStringLiteral("Fusion"));
+  AppFramePresentationGate gate(application);
+
+  QWidget main_window;
+  main_window.resize(640, 480);
+  main_window.show();
+  QCoreApplication::processEvents();
+  ASSERT_FALSE(gate.blocks_frame_submission());
+
+  QtUnsavedConfirmationDialog confirmation(&main_window);
+  confirmation.prewarm();
+  FirstPaintEventProbe paint_probe(gate);
+  confirmation.installEventFilter(&paint_probe);
+  QPushButton *const cancel_button = confirmation.findChild<QPushButton *>(
+      QStringLiteral("unsavedConfirmation.cancel"));
+  ASSERT_NE(cancel_button, nullptr);
+
+  int submitted_frames = 0;
+  bool resumed_while_visible = false;
+  QTimer frame_surrogate;
+  frame_surrogate.setInterval(1);
+  QObject::connect(&frame_surrogate, &QTimer::timeout, &confirmation, [&]() {
+    if (!paint_probe.paint_seen() || gate.blocks_frame_submission()) {
+      return;
+    }
+    resumed_while_visible = confirmation.isVisible();
+    if (resumed_while_visible) {
+      ++submitted_frames;
+    }
+    cancel_button->click();
+  });
+  frame_surrogate.start();
+  QTimer::singleShot(2000, &confirmation,
+                     [cancel_button]() { cancel_button->click(); });
+
+  EXPECT_EQ(confirmation.present(QtUnsavedConfirmationPresentation{
+                .object_name =
+                    QStringLiteral("project_unsaved_confirmation"),
+                .title = QStringLiteral("Unsaved Changes"),
+                .message = QStringLiteral("Save before closing?"),
+                .save_label = QStringLiteral("Save"),
+                .discard_label = QStringLiteral("Discard"),
+                .cancel_label = QStringLiteral("Cancel"),
+            }),
+            QtUnsavedConfirmationDecision::Cancel);
+  frame_surrogate.stop();
+
+  EXPECT_TRUE(paint_probe.paint_seen());
+  EXPECT_TRUE(paint_probe.gate_blocked_during_paint());
+  EXPECT_TRUE(resumed_while_visible);
+  EXPECT_EQ(submitted_frames, 1);
 }
 
 TEST(AppFramePresentationTests,

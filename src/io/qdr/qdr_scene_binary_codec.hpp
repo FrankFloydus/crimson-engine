@@ -8,10 +8,12 @@
 
 #include "io/qdr/qdr_binary_container.hpp"
 #include "io/qdr/qdr_project_write_snapshot.hpp"
+#include "io/qdr/qdr_scene_viewport_camera.hpp"
 #include "scene/document/scene_content_document.hpp"
 
 #include <array>
 #include <cstddef>
+#include <optional>
 #include <vector>
 
 namespace quader {
@@ -46,6 +48,7 @@ struct QdrSceneBinaryDecodeStats final {
 struct QdrSceneBinaryDecodeResult final {
   SceneContentDocument document;
   std::vector<ProjectAssetReference> project_asset_dependencies;
+  std::optional<QdrSceneViewportCameraPose> viewport_camera_pose;
   QdrSceneBinaryDecodeStats stats;
 };
 

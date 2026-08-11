@@ -41,6 +41,12 @@ struct ModelingOperationPreviewCheckpointHooks {
   std::function<void(bool restored_by_cancel)> finish;
 };
 
+/// Returns one face's resolved project-owned material without mutating state.
+struct ModelingProjectMaterialQueryResult final {
+  ModelingCommandResult command;
+  ProjectAssetId material;
+};
+
 /**
  * Stores an opaque Modeling Session Memento restore point for editor-owned
  * history commands.
@@ -181,6 +187,10 @@ public:
   ModelingCommandResult flip_selection(ModelingFlipOrientation orientation);
   ModelingCommandResult apply_active_material(std::uint32_t material_slot = 0);
   ModelingCommandResult apply_active_material(MaterialReference material);
+  [[nodiscard]] ModelingProjectMaterialQueryResult
+  project_material_for_face(int modeling_object_id, int face_id) const;
+  ModelingCommandResult apply_face_material_to_mesh(int modeling_object_id,
+                                                    int face_id);
   [[nodiscard]] bool modal_tool_owns_viewport() const;
   [[nodiscard]] bool transform_drag_active() const;
   [[nodiscard]] bool can_cancel_active_tool_or_preview() const;
@@ -303,6 +313,7 @@ public:
   ModelingRadialArrayResult
   create_radial_array(const ModelingRadialArrayRequest &request);
   void project_object_selection_from_scene(bool force_object_mode = false);
+  void clear_runtime_object_selection_for_scene_owned_selection();
   ModelingCommandResult
   set_object_selection(std::span<const EntityId> entities,
                        EntityId active = kInvalidEntityId);

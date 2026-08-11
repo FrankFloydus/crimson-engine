@@ -156,6 +156,22 @@ endif()
 
 if(QUADER_BUILD_TESTS)
     enable_testing()
+
+    # The canonical Debug configuration maps imported dependencies to Release,
+    # while vcpkg's default app-local hook chooses its runtime directory from
+    # the configuration name alone. Deploy each test's mapped runtime targets
+    # explicitly so Profile tests receive Release DLLs.
+    function(quader_deploy_test_runtime_dlls target)
+        if(WIN32)
+            add_custom_command(TARGET ${target} POST_BUILD
+                COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+                        $<TARGET_RUNTIME_DLLS:${target}>
+                        "$<TARGET_FILE_DIR:${target}>"
+                COMMENT "Deploying mapped runtime DLLs for ${target}"
+                COMMAND_EXPAND_LISTS
+                VERBATIM)
+        endif()
+    endfunction()
 endif()
 
 set(QUADER_MODELING_TOOL_SOURCES
@@ -635,6 +651,7 @@ quader_register_filament_material(ground_grid_material resources/materials/groun
 add_library(quader_platform STATIC
     src/platform/fatal_error_handler.cpp
     src/platform/platform_file_dialog.cpp
+    src/platform/platform_shell.cpp
     src/platform/raw_mouse_input.cpp
     src/platform/sentry_client.cpp
     src/platform/window_placement.cpp
@@ -655,6 +672,8 @@ if(WIN32)
         PRIVATE
             Dbghelp
             Comdlg32
+            Ole32
+            Shell32
             User32)
 endif()
 
@@ -791,6 +810,7 @@ add_library(quader_ui STATIC
     src/ui/qt_navigation_gizmo.cpp
     src/ui/qt_project_home_page.cpp
     src/ui/qt_relative_pointer_input.cpp
+    src/ui/qt_retained_message_box.cpp
     src/ui/qt_scene_workspace.cpp
     src/ui/qt_selection_toolbar.cpp
     src/ui/qt_snapping_toolbar.cpp
@@ -803,6 +823,7 @@ add_library(quader_ui STATIC
     src/ui/qt_settings_controller.cpp
     src/ui/qt_tool_settings_number_slider.cpp
     src/ui/qt_tool_settings_panel.cpp
+    src/ui/qt_unsaved_confirmation_dialog.cpp
     src/ui/qt_viewport_context_menu.cpp
     src/ui/qt_viewport_delete_popup.cpp
     src/ui/qt_viewport_fly_navigation_hud.cpp
@@ -1046,6 +1067,13 @@ if(WIN32)
         ${_QUADER_VCPKG_RELEASE_DLLS}
         ${_QUADER_VCPKG_DEBUG_DLLS})
     list(REMOVE_DUPLICATES _QUADER_VCPKG_RUNTIME_DLLS)
+    if(QUADER_BUILD_TESTS)
+        # Test targets share this configuration output directory with quader
+        # and own these explicitly deployed runtimes.
+        list(REMOVE_ITEM _QUADER_VCPKG_RUNTIME_DLLS
+            gtest.dll
+            gtest_main.dll)
+    endif()
     set(_QUADER_STALE_RUNTIME_PATHS)
     foreach(_quader_runtime_dll IN LISTS _QUADER_VCPKG_RUNTIME_DLLS)
         list(APPEND _QUADER_STALE_RUNTIME_PATHS
@@ -1242,6 +1270,7 @@ if(QUADER_BUILD_TESTS)
         PRIVATE
             QUADER_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
     target_link_libraries(quader_guardrail_tests PRIVATE GTest::gtest GTest::gtest_main)
+    quader_deploy_test_runtime_dlls(quader_guardrail_tests)
     add_test(NAME quader_guardrail_tests COMMAND quader_guardrail_tests)
 
     if(QUADER_BUILD_NATIVE_APP)
@@ -1272,6 +1301,7 @@ if(QUADER_BUILD_TESTS)
         tests/qt_navigation_gizmo_tests.cpp
         tests/qt_project_workspace_tests.cpp
         tests/qt_relative_pointer_input_tests.cpp
+        tests/qt_retained_message_box_tests.cpp
         tests/qt_settings_controller_tests.cpp
         tests/qt_settings_dialog_tests.cpp
         tests/qt_startup_presentation_tests.cpp
@@ -1311,6 +1341,7 @@ if(QUADER_BUILD_TESTS)
         tests/support/command_observable_state.cpp
         tests/support/guardrail_file_scan.cpp
         tests/support/modeling_test_events.cpp
+        tests/support/project_material_fixture.cpp
     )
     quader_enable_common_pch(quader_tests)
     if(MSVC)
@@ -1323,6 +1354,7 @@ if(QUADER_BUILD_TESTS)
         PRIVATE
             QUADER_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
     target_link_libraries(quader_tests PRIVATE quader_runtime GTest::gtest)
+    quader_deploy_test_runtime_dlls(quader_tests)
     add_dependencies(quader_tests quader_runtime_resources)
     add_test(NAME quader_tests COMMAND quader_tests)
 
@@ -1336,6 +1368,7 @@ if(QUADER_BUILD_TESTS)
             quader_modeling_sdk
             GTest::gtest
             GTest::gtest_main)
+    quader_deploy_test_runtime_dlls(quader_modeling_sdk_parity_tests)
     add_test(NAME quader_modeling_sdk_parity_tests
         COMMAND quader_modeling_sdk_parity_tests)
     endif()

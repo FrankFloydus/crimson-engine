@@ -13,15 +13,13 @@
 #include "diagnostics/profile.hpp"
 #include "editor/modeling/services/modeling_session_service.hpp"
 #include "editor/modeling/services/selection_mode_adapter.hpp"
+#include "ui/qt_retained_message_box.hpp"
 #include "viewport/viewport_input_router.hpp"
 
 #include <QAction>
-#include <QAbstractButton>
 #include <QMenu>
-#include <QMessageBox>
 #include <QPointer>
 #include <QPoint>
-#include <QPushButton>
 #include <QString>
 #include <QWidget>
 
@@ -37,6 +35,51 @@ QString localized(const LocalizationService &localization,
                   std::string_view key, std::string_view fallback) {
   return QString::fromStdString(localization.text(std::string(key),
                                                    std::string(fallback)));
+}
+
+QString localized(const LocalizationService *localization,
+                  std::string_view key, std::string_view fallback) {
+  return localization != nullptr
+             ? localized(*localization, key, fallback)
+             : QString::fromUtf8(fallback.data(),
+                                 static_cast<qsizetype>(fallback.size()));
+}
+
+QtRetainedMessageBoxPresentation object_confirmation_presentation(
+    const LocalizationService *localization) {
+  return {
+      .icon = QMessageBox::NoIcon,
+      .object_name =
+          QStringLiteral("viewport_delete_objects_confirmation"),
+      .title = localized(localization,
+                         "ui.viewport.delete_popup.window_title", "Delete"),
+      .text = localized(localization, "ui.viewport.delete_popup.title",
+                        "Delete Selected Objects"),
+      .buttons =
+          {
+              {
+                  .button = QtRetainedMessageBoxButton::Primary,
+                  .object_name =
+                      QStringLiteral("viewportDeleteConfirmation.delete"),
+                  .label = localized(localization,
+                                     "ui.viewport.delete_popup.delete",
+                                     "Delete"),
+                  .role = QMessageBox::AcceptRole,
+              },
+              {
+                  .button = QtRetainedMessageBoxButton::Tertiary,
+                  .object_name =
+                      QStringLiteral("viewportDeleteConfirmation.cancel"),
+                  .label = localized(localization,
+                                     "ui.viewport.delete_popup.cancel",
+                                     "Cancel"),
+                  .role = QMessageBox::RejectRole,
+              },
+          },
+      .default_button = QtRetainedMessageBoxButton::Primary,
+      .escape_button = QtRetainedMessageBoxButton::Tertiary,
+      .close_button = QtRetainedMessageBoxButton::Tertiary,
+  };
 }
 
 QuaderApiVoidResult execute_delete_popup_command(
@@ -60,37 +103,17 @@ void restore_viewport_focus(const QPointer<QWidget> &focus_parent) {
   }
 }
 
-bool show_object_confirmation(QWidget &parent, QuaderEditorApi &editor,
+bool show_object_confirmation(QtRetainedMessageBox &confirmation,
+                              QuaderEditorApi &editor,
                               ViewportInputRouter &input_router,
                               LocalizationService &localization) {
   QDR_PROFILE_SCOPE("Qt viewport delete confirmation show");
-  QMessageBox confirmation(QMessageBox::NoIcon,
-                           localized(localization,
-                                     "ui.viewport.delete_popup.window_title",
-                                     "Delete"),
-                           localized(localization,
-                                     "ui.viewport.delete_popup.title",
-                                     "Delete Selected Objects"),
-                           QMessageBox::NoButton, &parent);
-  QPushButton *delete_button = nullptr;
-  {
-    QDR_PROFILE_SCOPE("Qt viewport delete confirmation build");
-    confirmation.setObjectName(
-        QStringLiteral("viewport_delete_objects_confirmation"));
-    confirmation.setWindowModality(Qt::WindowModal);
-    delete_button = confirmation.addButton(
-        localized(localization, "ui.viewport.delete_popup.delete", "Delete"),
-        QMessageBox::AcceptRole);
-    QPushButton *cancel_button = confirmation.addButton(
-        localized(localization, "ui.viewport.delete_popup.cancel", "Cancel"),
-        QMessageBox::RejectRole);
-    confirmation.setEscapeButton(cancel_button);
-  }
-  {
+  const QtRetainedMessageBoxButton selected = [&]() {
     QDR_PROFILE_SCOPE("Qt viewport delete confirmation exec");
-    confirmation.exec();
-  }
-  if (confirmation.clickedButton() != delete_button) {
+    return confirmation.present(
+        object_confirmation_presentation(&localization));
+  }();
+  if (selected != QtRetainedMessageBoxButton::Primary) {
     return false;
   }
   return execute_delete_popup_command(editor, input_router,
@@ -147,6 +170,18 @@ bool show_component_menu(QWidget &parent, const QPoint &global_point,
 
 } // namespace
 
+QtViewportDeletePopupPresenter::QtViewportDeletePopupPresenter(QWidget &owner)
+    : object_confirmation_(std::make_unique<QtRetainedMessageBox>(&owner)) {
+  (void)object_confirmation_->set_presentation(
+      object_confirmation_presentation(nullptr));
+}
+
+QtViewportDeletePopupPresenter::~QtViewportDeletePopupPresenter() = default;
+
+void QtViewportDeletePopupPresenter::prewarm() {
+  object_confirmation_->prewarm();
+}
+
 QtViewportDeletePopupKind qt_viewport_delete_popup_kind(
     ModelingSelectionMode mode, bool has_selected_scene_root) {
   if (mode == ModelingSelectionMode::Object ||
@@ -197,7 +232,7 @@ bool QtViewportDeletePopupPresenter::show(
     QWidget &focus_parent, const QPoint &global_point,
     QuaderEditorApi &editor, ModelingSessionService &modeling,
     ViewportInputRouter &input_router,
-    LocalizationService &localization) const {
+    LocalizationService &localization) {
   QDR_PROFILE_SCOPE("Qt viewport delete popup show");
   const QPointer<QWidget> guarded_focus_parent(&focus_parent);
   const ModelingSelectionSummary summary = [&]() {
@@ -210,9 +245,9 @@ bool QtViewportDeletePopupPresenter::show(
         summary.mode, modeling.has_selected_scene_aware_delete_root());
   }();
   const bool changed = kind == QtViewportDeletePopupKind::ObjectConfirmation
-                           ? show_object_confirmation(focus_parent, editor,
-                                                      input_router,
-                                                      localization)
+                           ? show_object_confirmation(
+                                 *object_confirmation_, editor, input_router,
+                                 localization)
                            : show_component_menu(focus_parent, global_point,
                                                  editor, input_router,
                                                  localization);

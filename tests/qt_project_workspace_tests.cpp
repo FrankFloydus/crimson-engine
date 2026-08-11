@@ -26,8 +26,11 @@
 #include <QComboBox>
 #include <QCoreApplication>
 #include <QGuiApplication>
+#include <QHeaderView>
+#include <QIcon>
 #include <QKeyEvent>
 #include <QMainWindow>
+#include <QMenu>
 #include <QMetaObject>
 #include <QModelIndex>
 #include <QItemSelectionModel>
@@ -36,6 +39,7 @@
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPushButton>
+#include <QPixmap>
 #include <QScreen>
 #include <QStackedWidget>
 #include <QStyleOption>
@@ -47,6 +51,7 @@
 #include <filesystem>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -662,25 +667,28 @@ TEST(QtProjectWorkspaceTests,
   char application_name[] = "quader_ui_test";
   char *argv[] = {application_name, nullptr};
   QApplication application(argc, argv);
+  QPixmap application_icon_pixmap(16, 16);
+  application_icon_pixmap.fill(Qt::cyan);
+  QApplication::setWindowIcon(QIcon(application_icon_pixmap));
 
   quader::QtProjectHomePage home;
   int new_project_requests = 0;
   int open_project_requests = 0;
-  QString recent_manifest;
-  QString removed_manifest;
+  std::vector<std::pair<quader::QtRecentProjectAction, QString>>
+      recent_actions;
   home.set_new_project_requested_callback(
       [&new_project_requests]() { ++new_project_requests; });
   home.set_open_project_requested_callback(
       [&open_project_requests]() { ++open_project_requests; });
-  home.set_open_recent_project_requested_callback(
-      [&recent_manifest](QString path) { recent_manifest = std::move(path); });
-  home.set_remove_recent_project_requested_callback(
-      [&removed_manifest](QString path) {
-        removed_manifest = std::move(path);
+  home.set_recent_project_action_requested_callback(
+      [&recent_actions](quader::QtRecentProjectAction action, QString path) {
+        recent_actions.emplace_back(action, std::move(path));
       });
   const std::vector<quader::QtRecentProjectItem> recent_projects{
       {.name = QStringLiteral("Available"),
-       .manifest_path = QStringLiteral("C:/Projects/Available/Available.qproj")},
+       .manifest_path = QStringLiteral("C:/Projects/Available/Available.qproj"),
+       .manifest_last_modified_unix_ms = 1704067200000,
+       .manifest_size_bytes = 2048u},
       {.name = QStringLiteral("Missing"),
        .manifest_path = QStringLiteral("C:/Projects/Missing/Missing.qproj"),
        .available = false},
@@ -695,6 +703,37 @@ TEST(QtProjectWorkspaceTests,
   EXPECT_NE(home.findChild<QLabel *>(
                 QStringLiteral("projectHome.recentProjects.label")),
             nullptr);
+  auto *left_rail = home.findChild<QWidget *>(
+      QStringLiteral("projectHome.leftRail"));
+  ASSERT_NE(left_rail, nullptr);
+  EXPECT_EQ(left_rail->minimumWidth(), left_rail->maximumWidth());
+  auto *brand_icon = home.findChild<QLabel *>(
+      QStringLiteral("projectHome.brand.icon"));
+  ASSERT_NE(brand_icon, nullptr);
+  EXPECT_FALSE(brand_icon->pixmap().isNull());
+  EXPECT_EQ(brand_icon->accessibleName(), QStringLiteral("Quader"));
+  EXPECT_NE(home.findChild<QLabel *>(
+                QStringLiteral("projectHome.brand.name")),
+            nullptr);
+  auto *recent_navigation = home.findChild<QPushButton *>(
+      QStringLiteral("projectHome.navigation.recent"));
+  ASSERT_NE(recent_navigation, nullptr);
+  EXPECT_TRUE(recent_navigation->isChecked());
+  auto *actions_menu = home.findChild<QMenu *>(
+      QStringLiteral("projectHome.recentProjects.actionsMenu"));
+  ASSERT_NE(actions_menu, nullptr)
+      << "the recent actions menu must be built with the Home page";
+  ASSERT_EQ(actions_menu->actions().size(), 4);
+  QAction *open_recent = actions_menu->actions()[0];
+  QAction *open_location = actions_menu->actions()[1];
+  QAction *copy_path = actions_menu->actions()[2];
+  QAction *remove_recent = actions_menu->actions()[3];
+  EXPECT_EQ(open_recent->text(), QStringLiteral("Open"));
+  EXPECT_EQ(open_location->text(),
+            QStringLiteral("Open file location"));
+  EXPECT_EQ(copy_path->text(), QStringLiteral("Copy path"));
+  EXPECT_EQ(remove_recent->text(),
+            QStringLiteral("Remove from recent"));
 
   home.findChild<QPushButton *>(
           QStringLiteral("projectHome.newProject"))
@@ -705,6 +744,54 @@ TEST(QtProjectWorkspaceTests,
   auto *recent_view = home.findChild<QTableView *>(
       QStringLiteral("projectHome.recentProjects.view"));
   ASSERT_NE(recent_view, nullptr);
+  ASSERT_EQ(recent_view->model()->columnCount(),
+            quader::QtRecentProjectsModel::ColumnCount);
+  EXPECT_EQ(recent_view->model()
+                ->headerData(quader::QtRecentProjectsModel::NameColumn,
+                             Qt::Horizontal)
+                .toString(),
+            QStringLiteral("Name"));
+  EXPECT_EQ(recent_view->model()
+                ->headerData(
+                    quader::QtRecentProjectsModel::LastModifiedColumn,
+                    Qt::Horizontal)
+                .toString(),
+            QStringLiteral("Last modified"));
+  EXPECT_EQ(recent_view->model()
+                ->headerData(quader::QtRecentProjectsModel::SizeColumn,
+                             Qt::Horizontal)
+                .toString(),
+            QStringLiteral("Size"));
+  EXPECT_EQ(recent_view->model()
+                ->index(0, quader::QtRecentProjectsModel::NameColumn)
+                .data()
+                .toString(),
+            QStringLiteral(
+                "Available\nC:/Projects/Available/Available.qproj"));
+  EXPECT_FALSE(recent_view->model()
+                   ->index(0,
+                           quader::QtRecentProjectsModel::LastModifiedColumn)
+                   .data()
+                   .toString()
+                   .isEmpty());
+  EXPECT_NE(recent_view->model()
+                ->index(0, quader::QtRecentProjectsModel::SizeColumn)
+                .data()
+                .toString(),
+            QStringLiteral("\u2014"));
+  EXPECT_EQ(recent_view->model()
+                ->index(1,
+                        quader::QtRecentProjectsModel::LastModifiedColumn)
+                .data()
+                .toString(),
+            QStringLiteral("\u2014"));
+  EXPECT_TRUE(recent_view->wordWrap());
+  EXPECT_GE(recent_view->verticalHeader()->defaultSectionSize(), 48);
+  EXPECT_EQ(recent_view->model()
+                ->index(0, quader::QtRecentProjectsModel::ActionsColumn)
+                .data()
+                .toString(),
+            QStringLiteral("\u2026"));
   QTableView stock_table;
   EXPECT_EQ(recent_view->selectionMode(),
             QAbstractItemView::SingleSelection);
@@ -723,38 +810,71 @@ TEST(QtProjectWorkspaceTests,
   send_key(*recent_view, Qt::Key_Return);
   EXPECT_EQ(new_project_requests, 1);
   EXPECT_EQ(open_project_requests, 1);
-  EXPECT_EQ(recent_manifest,
+  ASSERT_EQ(recent_actions.size(), 1u);
+  EXPECT_EQ(recent_actions.back().first,
+            quader::QtRecentProjectAction::Open);
+  EXPECT_EQ(recent_actions.back().second,
             QStringLiteral("C:/Projects/Available/Available.qproj"));
-  recent_manifest.clear();
+  recent_actions.clear();
   const QModelIndex missing_index = recent_view->model()->index(1, 0);
   const QRect missing_rect = recent_view->visualRect(missing_index);
   ASSERT_TRUE(missing_rect.isValid());
   click_widget(*recent_view->viewport(), missing_rect.center());
   EXPECT_EQ(recent_view->currentIndex().row(), 1);
   send_key(*recent_view, Qt::Key_Return);
-  EXPECT_TRUE(recent_manifest.isEmpty());
-  auto *remove_recent = home.findChild<QPushButton *>(
-      QStringLiteral("projectHome.removeRecent"));
-  ASSERT_NE(remove_recent, nullptr);
-  ASSERT_TRUE(remove_recent->isEnabled());
-  remove_recent->click();
-  EXPECT_EQ(removed_manifest,
-            QStringLiteral("C:/Projects/Missing/Missing.qproj"));
+  EXPECT_TRUE(recent_actions.empty());
 
-  removed_manifest.clear();
-  recent_view->selectionModel()->clearSelection();
+  const QModelIndex missing_actions_index = recent_view->model()->index(
+      1, quader::QtRecentProjectsModel::ActionsColumn);
+  const QRect missing_actions_rect =
+      recent_view->visualRect(missing_actions_index);
+  ASSERT_TRUE(missing_actions_rect.isValid());
+  click_widget(*recent_view->viewport(), missing_actions_rect.center());
   QCoreApplication::processEvents();
-  ASSERT_TRUE(recent_view->currentIndex().isValid())
-      << "clearing a Qt selection must not be mistaken for clearing its "
-         "independent current index";
-  EXPECT_EQ(recent_view->currentIndex().row(), 1);
-  EXPECT_TRUE(recent_view->selectionModel()->selectedRows().isEmpty());
-  EXPECT_FALSE(remove_recent->isEnabled());
+  EXPECT_FALSE(open_recent->isEnabled());
+  EXPECT_TRUE(open_location->isEnabled());
+  EXPECT_TRUE(copy_path->isEnabled());
+  EXPECT_TRUE(remove_recent->isEnabled());
+  for (int row = 0; row < recent_view->model()->rowCount(); ++row) {
+    EXPECT_EQ(recent_view->indexWidget(recent_view->model()->index(
+                  row, quader::QtRecentProjectsModel::ActionsColumn)),
+              nullptr)
+        << "the shared menu must not create a widget for each row";
+  }
 
-  remove_recent->setEnabled(true);
-  remove_recent->click();
-  EXPECT_TRUE(removed_manifest.isEmpty())
-      << "the removal action must be a no-op without an actual selection";
+  open_recent->trigger();
+  EXPECT_TRUE(recent_actions.empty());
+  open_location->trigger();
+  copy_path->trigger();
+  remove_recent->trigger();
+  ASSERT_EQ(recent_actions.size(), 3u);
+  EXPECT_EQ(recent_actions[0].first,
+            quader::QtRecentProjectAction::OpenFileLocation);
+  EXPECT_EQ(recent_actions[1].first,
+            quader::QtRecentProjectAction::CopyPath);
+  EXPECT_EQ(recent_actions[2].first,
+            quader::QtRecentProjectAction::RemoveFromRecent);
+  for (const auto &[action, path] : recent_actions) {
+    (void)action;
+    EXPECT_EQ(path,
+              QStringLiteral("C:/Projects/Missing/Missing.qproj"));
+  }
+
+  actions_menu->hide();
+  const QModelIndex available_actions_index = recent_view->model()->index(
+      0, quader::QtRecentProjectsModel::ActionsColumn);
+  click_widget(*recent_view->viewport(),
+               recent_view->visualRect(available_actions_index).center());
+  QCoreApplication::processEvents();
+  EXPECT_EQ(home.findChild<QMenu *>(
+                QStringLiteral("projectHome.recentProjects.actionsMenu")),
+            actions_menu)
+      << "every row must reuse the menu built with the Home page";
+  EXPECT_TRUE(open_recent->isEnabled());
+  EXPECT_EQ(home.findChild<QPushButton *>(
+                QStringLiteral("projectHome.removeRecent")),
+            nullptr);
+  actions_menu->hide();
 
   QWidget viewport;
   quader::QtSceneWorkspace workspace;

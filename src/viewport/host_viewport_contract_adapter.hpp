@@ -9,6 +9,7 @@
 #include "viewport/viewport_input_types.hpp"
 #include "viewport/viewport_navigation_defaults.hpp"
 
+#include <cstdint>
 #include <optional>
 #include <span>
 #include <string>
@@ -82,6 +83,7 @@ struct ViewportInputActionBindingDescriptor {
       ViewportInputBindingContext::Navigation;
   std::string shortcut;
   std::string_view when;
+  std::uint32_t selection_mode_mask = 0u;
   int weight = 20;
   ViewportInputActionKind action = ViewportInputActionKind::None;
 };

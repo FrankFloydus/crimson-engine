@@ -9,6 +9,8 @@
 #include "api/quader_viewport_api.hpp"
 #include "viewport/viewport_workspace_service.hpp"
 
+#include <functional>
+
 namespace quader {
 
 class ViewportLocalVisibilityService;
@@ -24,6 +26,9 @@ public:
                                      ViewportWorkspaceService &workspace);
     static void bind_scene_local_visibility(
         QuaderViewportApi &api, ViewportLocalVisibilityService &service);
+    static void set_persisted_camera_change_observer(
+        QuaderViewportApi &api, std::function<void()> observer);
+    static void observe_persisted_camera_change(QuaderViewportApi &api);
 };
 
 } // namespace quader

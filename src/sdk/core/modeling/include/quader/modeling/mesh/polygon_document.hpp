@@ -238,6 +238,8 @@ public:
   [[nodiscard]] Result<OperationResult>
   assign_selected_face_material_slot(std::uint32_t material_slot);
   [[nodiscard]] Result<OperationResult>
+  assign_all_face_material_slot(std::uint32_t material_slot);
+  [[nodiscard]] Result<OperationResult>
   assign_face_material_slot(FaceId face_id, std::uint32_t material_slot);
   [[nodiscard]] Result<OperationResult> snap_selected_vertices_to_active();
   [[nodiscard]] Result<OperationResult> merge_selected_vertices_to_active();

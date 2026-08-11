@@ -15,12 +15,15 @@
 #include <gtest/gtest.h>
 #include <quader/modeling/neutral/polygon/document.hpp>
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
-#include <memory>
+#include <cstring>
+#include <iterator>
 #include <limits>
+#include <memory>
 #include <ranges>
 #include <span>
 #include <stdexcept>
@@ -163,7 +166,150 @@ TEST(QdrBinarySceneCodecTests, RoundTripPreservesExplicitUuidAndSceneData) {
 }
 
 TEST(QdrBinarySceneCodecTests,
-     SchemaFourRoundTripPreservesLayersMembershipVisibilityColorAndLock) {
+     SchemaFiveRoundTripPreservesViewportCameraPose) {
+  QdrProjectWriteSnapshot snapshot =
+      required_write_snapshot(simple_scene());
+  snapshot.viewport_camera_pose = QdrSceneViewportCameraPose{
+      .eye = {8.0f, 6.0f, 4.0f},
+      .target = {1.0f, 2.0f, 3.0f},
+      .up = {-0.2f, 0.95f, -0.1f},
+  };
+
+  const QdrProjectReadResult read =
+      QdrDocumentReader::deserialize_project_document(
+          QdrDocumentWriter::serialize_project_document_bytes(
+              snapshot, test_uuid()));
+
+  ASSERT_TRUE(read.ok) << read.message;
+  ASSERT_TRUE(read.viewport_camera_pose.has_value());
+  EXPECT_FLOAT_EQ(read.viewport_camera_pose->eye.x,
+                  snapshot.viewport_camera_pose->eye.x);
+  EXPECT_FLOAT_EQ(read.viewport_camera_pose->eye.y,
+                  snapshot.viewport_camera_pose->eye.y);
+  EXPECT_FLOAT_EQ(read.viewport_camera_pose->eye.z,
+                  snapshot.viewport_camera_pose->eye.z);
+  EXPECT_FLOAT_EQ(read.viewport_camera_pose->target.x,
+                  snapshot.viewport_camera_pose->target.x);
+  EXPECT_FLOAT_EQ(read.viewport_camera_pose->target.y,
+                  snapshot.viewport_camera_pose->target.y);
+  EXPECT_FLOAT_EQ(read.viewport_camera_pose->target.z,
+                  snapshot.viewport_camera_pose->target.z);
+  EXPECT_FLOAT_EQ(read.viewport_camera_pose->up.x,
+                  snapshot.viewport_camera_pose->up.x);
+  EXPECT_FLOAT_EQ(read.viewport_camera_pose->up.y,
+                  snapshot.viewport_camera_pose->up.y);
+  EXPECT_FLOAT_EQ(read.viewport_camera_pose->up.z,
+                  snapshot.viewport_camera_pose->up.z);
+}
+
+TEST(QdrBinarySceneCodecTests,
+     SchemaFourIgnoresAppendedViewportCameraPose) {
+  QdrProjectWriteSnapshot snapshot =
+      required_write_snapshot(simple_scene());
+  snapshot.viewport_camera_pose = QdrSceneViewportCameraPose{
+      .eye = {8.0f, 6.0f, 4.0f},
+      .target = {1.0f, 2.0f, 3.0f},
+      .up = {-0.2f, 0.95f, -0.1f},
+  };
+  const quader_io::QdrBinaryContainerReadResult parsed =
+      quader_io::read_qdr_binary_container(
+          QdrDocumentWriter::serialize_project_document_bytes(
+              snapshot, test_uuid()));
+  ASSERT_TRUE(parsed.ok) << parsed.message;
+  std::vector<quader_io::QdrBinaryChunkInput> chunks = copy_chunks(parsed);
+  const auto metadata = std::ranges::find_if(
+      chunks, [](const quader_io::QdrBinaryChunkInput &chunk) {
+        return chunk.type == quader_io::QdrBinaryChunkType::SceneMetadata;
+      });
+  ASSERT_NE(metadata, chunks.end());
+  metadata->schema_version = 4u;
+
+  const QdrProjectReadResult read =
+      QdrDocumentReader::deserialize_project_document(
+          quader_io::build_qdr_binary_container(test_uuid(),
+                                                std::move(chunks)));
+
+  ASSERT_TRUE(read.ok) << read.message;
+  EXPECT_FALSE(read.viewport_camera_pose.has_value());
+}
+
+TEST(QdrBinarySceneCodecTests, RejectsInvalidViewportCameraPoses) {
+  for (const QdrSceneViewportCameraPose invalid : {
+           QdrSceneViewportCameraPose{
+               .eye = {1.0f, 2.0f, 3.0f},
+               .target = {1.0f, 2.0f, 3.0f},
+               .up = {0.0f, 1.0f, 0.0f},
+           },
+           QdrSceneViewportCameraPose{
+               .eye = {0.0f, 0.0f, 3.0f},
+               .target = {0.0f, 0.0f, 0.0f},
+               .up = {0.0f, 0.0f, 1.0f},
+           },
+           QdrSceneViewportCameraPose{
+               .eye = {std::numeric_limits<float>::quiet_NaN(), 0.0f, 3.0f},
+               .target = {0.0f, 0.0f, 0.0f},
+               .up = {0.0f, 1.0f, 0.0f},
+           },
+       }) {
+    QdrProjectWriteSnapshot snapshot =
+        required_write_snapshot(simple_scene());
+    snapshot.viewport_camera_pose = invalid;
+    EXPECT_THROW(
+        (void)QdrDocumentWriter::serialize_project_document_bytes(
+            snapshot, test_uuid()),
+        std::runtime_error);
+  }
+}
+
+TEST(QdrBinarySceneCodecTests,
+     RejectsStructurallyValidFilesWithInvalidViewportCameraPoses) {
+  QdrProjectWriteSnapshot snapshot =
+      required_write_snapshot(simple_scene());
+  snapshot.viewport_camera_pose = QdrSceneViewportCameraPose{
+      .eye = {8.0f, 6.0f, 4.0f},
+      .target = {1.0f, 2.0f, 3.0f},
+      .up = {0.0f, 1.0f, 0.0f},
+  };
+  const quader_io::QdrBinaryContainerReadResult parsed =
+      quader_io::read_qdr_binary_container(
+          QdrDocumentWriter::serialize_project_document_bytes(
+              snapshot, test_uuid()));
+  ASSERT_TRUE(parsed.ok) << parsed.message;
+  std::vector<quader_io::QdrBinaryChunkInput> chunks = copy_chunks(parsed);
+  const auto metadata = std::ranges::find_if(
+      chunks, [](const quader_io::QdrBinaryChunkInput &chunk) {
+        return chunk.type == quader_io::QdrBinaryChunkType::SceneMetadata;
+  });
+  ASSERT_NE(metadata, chunks.end());
+
+  const std::array<float, 3> stored_eye = {8.0f, 6.0f, 4.0f};
+  const std::span<const std::byte> stored_eye_bytes =
+      std::as_bytes(std::span(stored_eye));
+  const auto eye = std::search(
+      metadata->bytes.begin(), metadata->bytes.end(),
+      stored_eye_bytes.begin(), stored_eye_bytes.end());
+  ASSERT_NE(eye, metadata->bytes.end());
+  EXPECT_EQ(std::search(std::next(eye), metadata->bytes.end(),
+                        stored_eye_bytes.begin(), stored_eye_bytes.end()),
+            metadata->bytes.end())
+      << "the test camera eye must be a unique serialized byte pattern";
+  const float invalid = std::numeric_limits<float>::quiet_NaN();
+  std::memcpy(std::addressof(*eye), std::addressof(invalid),
+              sizeof(invalid));
+  metadata->content_hash =
+      quader_io::qdr_binary_content_hash(metadata->bytes);
+
+  const QdrProjectReadResult read =
+      QdrDocumentReader::deserialize_project_document(
+          quader_io::build_qdr_binary_container(test_uuid(),
+                                                std::move(chunks)));
+  ASSERT_FALSE(read.ok);
+  EXPECT_NE(read.message.find("invalid viewport camera pose"),
+            std::string::npos);
+}
+
+TEST(QdrBinarySceneCodecTests,
+     CurrentSchemaRoundTripPreservesLayersMembershipVisibilityColorAndLock) {
   SceneContentDocument document = simple_scene();
   SceneDocument &scene = document.scene();
   const SceneLayerId layer = scene.create_layer_with_id(
@@ -808,7 +954,7 @@ TEST(QdrBinarySceneCodecTests, RejectsUnsupportedMetadataSchema) {
   ASSERT_TRUE(parsed.ok) << parsed.message;
   std::vector<quader_io::QdrBinaryChunkInput> chunks = copy_chunks(parsed);
   ASSERT_FALSE(chunks.empty());
-  chunks.front().schema_version = 5u;
+  chunks.front().schema_version = 6u;
 
   const QdrProjectReadResult read =
       QdrDocumentReader::deserialize_project_document(

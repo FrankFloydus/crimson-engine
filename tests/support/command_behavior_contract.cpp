@@ -39,18 +39,23 @@ constexpr Domain kPreviewDomains =
     Domain::ModelingContent | Domain::Selection | Domain::Overlay |
     Domain::Tool | Domain::Revisions;
 constexpr Domain kViewportDomains = Domain::Viewport | Domain::Revisions;
+constexpr Domain kPersistedCameraDomains =
+    Domain::Document | kViewportDomains;
 constexpr Domain kToolDomains =
     Domain::Tool | Domain::Viewport | Domain::History | Domain::Revisions;
 constexpr Domain kExternalViewportDomains =
     Domain::Viewport | Domain::Revisions | Domain::ExternalRuntime;
+constexpr Domain kExternalPersistedCameraDomains =
+    kPersistedCameraDomains | Domain::ExternalRuntime;
 constexpr Domain kProjectLifecycleDomains =
     Domain::Project | Domain::SceneDocuments | Domain::Document |
     Domain::SceneGraph | Domain::ModelingContent | Domain::Selection |
-    Domain::Overlay | Domain::Assets | Domain::History | Domain::Revisions;
+    Domain::Overlay | Domain::Assets | Domain::History | Domain::Viewport |
+    Domain::Revisions;
 constexpr Domain kSceneDocumentDomains =
     Domain::SceneDocuments | Domain::Document | Domain::SceneGraph |
     Domain::ModelingContent | Domain::Selection | Domain::Overlay |
-    Domain::Assets | Domain::History | Domain::Revisions;
+    Domain::Assets | Domain::History | Domain::Viewport | Domain::Revisions;
 
 constexpr Flags kExternal =
     Flags::ExternalRuntimeHookOnly | Flags::MayRejectWhenAvailable;
@@ -196,11 +201,13 @@ std::span<const CommandBehaviorContract> command_behavior_contracts() {
                UndoRepeat::None),
       contract(quader_command::kSceneDocumentNext, Fixture::TwoScenes,
                Domain::SceneDocuments | Domain::Document |
-                   Domain::Selection | Domain::Overlay | Domain::Revisions,
+                   Domain::Selection | Domain::Overlay | Domain::Viewport |
+                   Domain::Revisions,
                Outcome::ChangeRequired),
       contract(quader_command::kSceneDocumentPrevious, Fixture::TwoScenes,
                Domain::SceneDocuments | Domain::Document |
-                   Domain::Selection | Domain::Overlay | Domain::Revisions,
+                   Domain::Selection | Domain::Overlay | Domain::Viewport |
+                   Domain::Revisions,
                Outcome::ChangeRequired),
       contract(quader_command::kSceneCreatePointLight,
                Fixture::ProjectWithScene, kSceneMutationDomains,
@@ -224,13 +231,13 @@ std::span<const CommandBehaviorContract> command_behavior_contracts() {
                    Domain::Revisions,
                Outcome::ChangeRequired, UndoRepeat::Undoable),
       contract(quader_command::kViewportFrameSelection,
-               Fixture::ExternalRuntime, kExternalViewportDomains,
+               Fixture::ExternalRuntime, kExternalPersistedCameraDomains,
                Outcome::MayReject, UndoRepeat::None, kExternal),
       contract(quader_command::kViewportFocusAll,
-               Fixture::ExternalRuntime, kExternalViewportDomains,
+               Fixture::ExternalRuntime, kExternalPersistedCameraDomains,
                Outcome::MayReject, UndoRepeat::None, kExternal),
       contract(quader_command::kViewportFocusOrigin, Fixture::Viewport,
-               kViewportDomains, Outcome::SuccessRequired),
+               kPersistedCameraDomains, Outcome::SuccessRequired),
       contract(quader_command::kViewportSpawnWindow,
                Fixture::ExternalRuntime, kExternalViewportDomains,
                Outcome::MayReject, UndoRepeat::None, kExternal),
@@ -240,19 +247,19 @@ std::span<const CommandBehaviorContract> command_behavior_contracts() {
                    Domain::Overlay,
                Outcome::MayReject, UndoRepeat::None, kExternal),
       contract(quader_command::kViewportViewPerspective, Fixture::Viewport,
-               kViewportDomains, Outcome::SuccessRequired),
+               kPersistedCameraDomains, Outcome::SuccessRequired),
       contract(quader_command::kViewportViewTop, Fixture::Viewport,
-               kViewportDomains, Outcome::ChangeRequired),
+               kPersistedCameraDomains, Outcome::ChangeRequired),
       contract(quader_command::kViewportViewBottom, Fixture::Viewport,
-               kViewportDomains, Outcome::ChangeRequired),
+               kPersistedCameraDomains, Outcome::ChangeRequired),
       contract(quader_command::kViewportViewLeft, Fixture::Viewport,
-               kViewportDomains, Outcome::ChangeRequired),
+               kPersistedCameraDomains, Outcome::ChangeRequired),
       contract(quader_command::kViewportViewRight, Fixture::Viewport,
-               kViewportDomains, Outcome::ChangeRequired),
+               kPersistedCameraDomains, Outcome::ChangeRequired),
       contract(quader_command::kViewportViewFront, Fixture::Viewport,
-               kViewportDomains, Outcome::ChangeRequired),
+               kPersistedCameraDomains, Outcome::ChangeRequired),
       contract(quader_command::kViewportViewBack, Fixture::Viewport,
-               kViewportDomains, Outcome::ChangeRequired),
+               kPersistedCameraDomains, Outcome::ChangeRequired),
       contract(quader_command::kViewportToggleGrid, Fixture::Viewport,
                Domain::Preferences | Domain::Viewport | Domain::Overlay |
                    Domain::Revisions,

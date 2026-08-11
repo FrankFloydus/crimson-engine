@@ -12,6 +12,7 @@
 #include <cstdint>
 #include <cstddef>
 #include <filesystem>
+#include <optional>
 #include <span>
 #include <string>
 #include <utility>
@@ -26,6 +27,8 @@ struct RecentProjectEntry {
   std::filesystem::path manifest_path;
   std::uint64_t last_opened_unix_ms = 0u;
   bool available = false;
+  std::optional<std::uint64_t> manifest_last_modified_unix_ms;
+  std::optional<std::uintmax_t> manifest_size_bytes;
 };
 
 /**

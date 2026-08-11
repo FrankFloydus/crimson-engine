@@ -549,6 +549,7 @@ struct ModelingSelectionExport {
  */
 struct ModelingSelectionOverlayOptions {
   bool suppress_persistent_object_selection = false;
+  bool suppress_persistent_selection = false;
 };
 
 /**

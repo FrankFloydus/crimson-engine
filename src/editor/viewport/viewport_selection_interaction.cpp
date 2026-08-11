@@ -425,6 +425,7 @@ void ViewportSelectionInteraction::handle_frame(
   }
 
   if (!box_state_.active && can_pick && frame.input.modifiers.alt &&
+      !frame.input.modifiers.primary && !frame.input.modifiers.shift &&
       frame.right_pressed) {
     QDR_PROFILE_SCOPE("Viewport face plane cut");
     const QuaderApiResult<QuaderHoverSummary> hover = editor.selection().hover(
