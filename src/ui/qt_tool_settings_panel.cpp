@@ -56,9 +56,9 @@ namespace quader {
 namespace {
 
 // Geometry previews can be substantially slower than raw pointer delivery.
-// Keep visual controls immediate and dispatch only after the latest input has
-// paused. Release/edit completion still flushes the exact latest value.
-constexpr int kTrailingNumberDispatchDelayMs = 50;
+// Pointer drags publish the latest value at this bounded cadence; keyboard,
+// wheel, and spin edits use it as a trailing coalescing window.
+constexpr int kNumberDispatchIntervalMs = 50;
 constexpr std::string_view kPrimitiveTypeSettingId = "primitive.type";
 
 QString qtext(std::string_view text) {
@@ -609,9 +609,14 @@ private:
     }
     binding.pending_number_value = value;
     if (binding.number_dispatch_timer != nullptr) {
-      // QTimer::start restarts an active single-shot timer. This gives every
-      // pointer/key/wheel update one latest-value trailing dispatch window.
-      binding.number_dispatch_timer->start();
+      const bool pointer_drag = binding.number_slider != nullptr &&
+                                binding.number_slider->isSliderDown();
+      // Pointer drags publish the latest value at a bounded cadence so live
+      // geometry remains visible without compiling once per mouse event.
+      // Keyboard, wheel, and spin edits retain one trailing dispatch window.
+      if (!pointer_drag || !binding.number_dispatch_timer->isActive()) {
+        binding.number_dispatch_timer->start();
+      }
     }
   }
 
@@ -836,7 +841,7 @@ private:
           };
       auto *dispatch_timer = new QTimer(row);
       dispatch_timer->setSingleShot(true);
-      dispatch_timer->setInterval(kTrailingNumberDispatchDelayMs);
+      dispatch_timer->setInterval(kNumberDispatchIntervalMs);
       binding.number_dispatch_timer = dispatch_timer;
       binding.number_dispatch = send_number_to_editor;
       QObject::connect(dispatch_timer, &QTimer::timeout, &panel_,

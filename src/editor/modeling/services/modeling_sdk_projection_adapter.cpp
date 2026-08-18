@@ -328,7 +328,8 @@ private:
     QMat4 world_transform;
     std::uint64_t layout_key = 0u;
     std::uint64_t position_revision = 0u;
-    MeshAsset base_mesh;
+    PolygonDocument preview_document;
+    MeshAsset preview_mesh;
     std::vector<QVec3> base_mesh_positions;
     std::vector<WorkspaceTransformSelectedVertex> selected_vertices;
     std::unordered_map<std::uint32_t, std::size_t> selected_vertex_lookup;
@@ -3346,12 +3347,26 @@ public:
     }
 
     const std::size_t undo_mark = session_.undo_depth();
+    const ModelingSelectionMode selection_mode_before = selection_mode_;
     const std::array<ObjectId, 1> objects{*object};
     ModelingCommandResult result = mutate_documents(
         objects,
         [sdk_points = std::move(sdk_points),
-         sdk_segments = std::move(sdk_segments)](PolygonDocument &document) {
-          return document.knife_stroke(sdk_points, sdk_segments);
+         sdk_segments = std::move(sdk_segments),
+         selection_mode_before](PolygonDocument &document) {
+          Result<OperationResult> cut =
+              document.knife_stroke(sdk_points, sdk_segments);
+          if (!cut.ok() || !cut.value().success || !cut.value().changed ||
+              (selection_mode_before != ModelingSelectionMode::Edge &&
+               selection_mode_before != ModelingSelectionMode::Face)) {
+            return cut;
+          }
+          Result<OperationResult> restored = document.set_selection_mode(
+              to_sdk_component_mode(selection_mode_before));
+          if (!restored.ok()) {
+            return restored;
+          }
+          return cut;
         },
         "Could not apply the knife stroke.");
     if (!result.ok || !result.changed) {
@@ -3363,7 +3378,7 @@ public:
       return failure(selected.error_message());
     }
     (void)session_.squash_undo_since(undo_mark);
-    selection_mode_ = ModelingSelectionMode::Vertex;
+    selection_mode_ = selection_mode_before;
     active_native_object_id_ = modeling_object_id;
     add_selection_to_scene();
     return result;
@@ -3523,7 +3538,8 @@ public:
           .layout_key = transform_mesh_layout_key(
               object, base_mesh.geometry().vertices),
           .position_revision = workspace_transform_preview_revision_,
-          .base_mesh = std::move(base_mesh),
+          .preview_document = document,
+          .preview_mesh = std::move(base_mesh),
           .base_mesh_positions = std::move(base_mesh_positions),
           .selected_vertices = std::move(selected_transform_vertices),
           .selected_vertex_lookup = std::move(selected_vertex_lookup),
@@ -3626,17 +3642,45 @@ public:
           participant.position_buffers.push_back(
               std::make_shared<std::vector<QVec3>>());
         }
-        std::vector<QVec3> &packed_positions =
-            *participant.position_buffers[buffer_index];
-        packed_positions.assign(participant.base_mesh_positions.begin(),
-                                participant.base_mesh_positions.end());
+
+        std::vector<VertexPositionUpdate> updates;
+        updates.reserve(participant.selected_vertices.size());
         for (const WorkspaceTransformSelectedVertex &vertex :
              participant.selected_vertices) {
-          for (const std::size_t compiled_index :
-               vertex.compiled_vertex_indices) {
-            packed_positions[compiled_index] = vertex.preview_position;
-          }
+          updates.push_back({
+              .vertex = quader::modeling::make_id<
+                  quader::modeling::VertexTag>(vertex.source_vertex_id),
+              .position = to_sdk(vertex.preview_position),
+          });
         }
+        Result<OperationResult> positioned =
+            participant.preview_document.set_vertex_positions(updates);
+        if (!positioned.ok()) {
+          return failure(positioned.error_message());
+        }
+        std::optional<MeshAsset> projected =
+            MeshProjectionService::update_sdk_document_mesh_positions(
+                participant.preview_document, participant.preview_mesh);
+        if (!projected.has_value()) {
+          projected = MeshProjectionService::compile_sdk_document_mesh(
+              participant.preview_document);
+        }
+        if (!projected.has_value() ||
+            projected->geometry().vertices.size() !=
+                participant.base_mesh_positions.size()) {
+          return failure(
+              "Could not derive the transient transform mesh attributes.");
+        }
+        projected->name = participant.preview_mesh.name;
+
+        std::vector<QVec3> &packed_positions =
+            *participant.position_buffers[buffer_index];
+        packed_positions.clear();
+        packed_positions.reserve(projected->geometry().vertices.size());
+        for (const MeshVertex &vertex : projected->geometry().vertices) {
+          packed_positions.push_back(vertex.position);
+        }
+        participant.preview_mesh = std::move(*projected);
         participant.published_position_buffer = buffer_index;
       }
     }
@@ -3675,7 +3719,7 @@ public:
           .source_object_id = participant.native_object_id,
           .source_entity = participant.entity,
           .material = participant.material,
-          .mesh = participant.base_mesh,
+          .mesh = participant.preview_mesh,
           .transform = participant.world_transform,
           .dynamic_positions = true,
           .suppress_source = true,

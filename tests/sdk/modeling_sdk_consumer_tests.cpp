@@ -321,6 +321,61 @@ TEST(ModelingSdkConsumerTests,
 }
 
 TEST(ModelingSdkConsumerTests,
+     PositionChangingOperationsRestoreProceduralFaceUvs) {
+  for (int operation = 0; operation < 3; ++operation) {
+    SCOPED_TRACE(operation);
+    Result<PolygonDocument> box = PolygonDocument::make_box({});
+    ASSERT_TRUE(box.ok()) << box.error_message();
+    Result<AuthoredTopology> authored = box.value().authored_topology();
+    ASSERT_TRUE(authored.ok()) << authored.error_message();
+    for (AuthoredTopologyFace &face : authored.value().faces) {
+      face.uvs.resize(face.vertices.size());
+      for (std::size_t index = 0u; index < face.uvs.size(); ++index) {
+        face.uvs[index] = {static_cast<float>(index),
+                           static_cast<float>(face.id.index)};
+      }
+    }
+    Result<PolygonDocument> imported =
+        PolygonDocument::from_authored_topology(authored.value());
+    ASSERT_TRUE(imported.ok()) << imported.error_message();
+    PolygonDocument document = std::move(imported).value();
+    const VertexId vertex = document.vertex_ids().front();
+
+    Result<OperationResult> changed;
+    if (operation == 0) {
+      ASSERT_TRUE(document.select_vertex(vertex).ok());
+      changed = document.translate_selection({0.5f, 0.25f, 0.0f});
+    } else if (operation == 1) {
+      ASSERT_TRUE(document.select_vertex(vertex).ok());
+      Transform3 transform;
+      transform.origin = {0.5f, 0.25f, 0.0f};
+      changed = document.transform_selection(transform);
+    } else {
+      const Result<AuthoredTopology> before = document.authored_topology();
+      ASSERT_TRUE(before.ok()) << before.error_message();
+      const auto found = std::ranges::find(
+          before.value().vertices, vertex,
+          &AuthoredTopologyVertex::id);
+      ASSERT_NE(found, before.value().vertices.end());
+      const std::array<VertexPositionUpdate, 1> updates{VertexPositionUpdate{
+          .vertex = vertex,
+          .position = {found->position.x + 0.5f, found->position.y + 0.25f,
+                       found->position.z},
+      }};
+      changed = document.set_vertex_positions(updates);
+    }
+    ASSERT_TRUE(changed.ok()) << changed.error_message();
+    ASSERT_TRUE(changed.value().changed);
+
+    Result<AuthoredTopology> result = document.authored_topology();
+    ASSERT_TRUE(result.ok()) << result.error_message();
+    EXPECT_TRUE(std::ranges::all_of(
+        result.value().faces,
+        [](const AuthoredTopologyFace &face) { return face.uvs.empty(); }));
+  }
+}
+
+TEST(ModelingSdkConsumerTests,
      BinaryQdrSupportsEmptyDocumentsAndEmptyAuthoredTopology) {
   const QdrDocumentDto empty_document;
   Result<std::vector<std::byte>> encoded_document =

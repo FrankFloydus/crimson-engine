@@ -122,7 +122,8 @@ public:
       const SceneDocument &scene,
       const ModelingObjectRuntimeMap &object_registry,
       const ModelingSelectionService &selection_service,
-      const ModelingSdkProjectionAdapter &sdk_projection) const;
+      const ModelingSdkProjectionAdapter &sdk_projection,
+      int persistent_source_wire_object_id) const;
   [[nodiscard]] std::vector<ModelingToolPreviewMesh>
   tool_preview_meshes(
       const quader_editor_core::EditorRuntime &runtime,
@@ -140,6 +141,7 @@ private:
       bool selected = false;
       bool component_edit_target = false;
       bool active_source_wire_object = false;
+      bool tool_source_wire_object = false;
       quader_poly::Selection selection;
       quader_editor_core::SelectionOverlayFrame frame;
     };
@@ -152,9 +154,11 @@ private:
         std::uint64_t content_revision = 0;
         std::uint64_t selection_revision = 0;
         int active_object_id = -1;
+        int persistent_source_wire_object_id = -1;
         quader_editor_core::SelectionMode selection_mode =
             quader_editor_core::SelectionMode::Object;
         bool suppress_persistent_object_selection = false;
+        bool suppress_persistent_selection = false;
         quader_editor_core::SelectionOverlayFrame frame;
         std::vector<OverlayBaseObjectCacheEntry> object_entries;
     };
@@ -171,6 +175,8 @@ private:
           quader_editor_core::SelectionMode::Object;
       ModelingInstanceEditScope instance_edit_scope;
       bool suppress_persistent_object_selection = false;
+      bool suppress_persistent_selection = false;
+      int persistent_source_wire_object_id = -1;
       ViewportOverlayFrame frame;
     };
 

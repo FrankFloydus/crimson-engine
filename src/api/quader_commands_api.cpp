@@ -2222,8 +2222,12 @@ void QuaderCommandsApi::Impl::register_commands() {
           return viewport_tool_available(tool_kind) &&
                  tools_.can_activate(tool_kind);
         });
-    set_keybinding_selection_modes_for_modeling_action(activation_command,
-                                                       tool->id());
+    if (tool->viewport_tool() == ViewportToolId::Knife) {
+      set_keybinding_selection_modes(activation_command, kSelectionModeAny);
+    } else {
+      set_keybinding_selection_modes_for_modeling_action(activation_command,
+                                                         tool->id());
+    }
   }
 }
 

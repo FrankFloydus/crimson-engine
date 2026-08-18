@@ -1715,8 +1715,16 @@ Result<OperationResult> PolygonDocument::translate_selection(Vec3 delta) {
   return apply_operation(
       *impl_, [delta](quader_poly::Document &document,
                       quader_poly::Selection &selection) {
-        return quader_poly::translate_selection(document, selection,
-                                                to_native(delta));
+        quader_poly::OperationResult result =
+            quader_poly::translate_selection(document, selection,
+                                             to_native(delta));
+        if (result.changed) {
+          // Component transforms preserve procedural mapping. Authored loop
+          // UVs are a materialized snapshot of the previous vertex layout and
+          // must not survive a geometry deformation.
+          quader_poly::clear_face_uvs(document);
+        }
+        return result;
       });
 }
 
@@ -1724,8 +1732,13 @@ Result<OperationResult>
 PolygonDocument::transform_selection(Transform3 transform) {
   return apply_operation(*impl_, [&](quader_poly::Document &document,
                                      quader_poly::Selection &selection) {
-    return quader_poly::transform_selection(document, selection,
-                                            to_native(transform));
+    quader_poly::OperationResult result =
+        quader_poly::transform_selection(document, selection,
+                                         to_native(transform));
+    if (result.changed) {
+      quader_poly::clear_face_uvs(document);
+    }
+    return result;
   });
 }
 
@@ -1819,6 +1832,10 @@ Result<OperationResult> PolygonDocument::set_vertex_positions(
   result.message = "Vertex positions changed.";
   result.modified = result.affected;
   result.dirty.geometry = true;
+  // Absolute position updates are the retained transform-preview/commit
+  // route. Keep their UV semantics identical to translate/transform so a
+  // preview and its committed canonical compilation cannot diverge.
+  quader_poly::clear_face_uvs(document);
   impl_->document =
       std::make_shared<const quader_poly::Document>(std::move(document));
   bump_content(*impl_, true);

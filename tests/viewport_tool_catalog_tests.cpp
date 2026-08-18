@@ -19,10 +19,12 @@
 #include "editor/tools/viewport_tool_runtime.hpp"
 #include "support/viewport_overlay_test_helpers.hpp"
 #include "viewport/host_viewport_contract_adapter.hpp"
+#include "viewport/viewport_input_router.hpp"
 
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <array>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -387,6 +389,51 @@ TEST(ViewportToolRuntimeTests, RuntimeDispatchesShortcutStateChanges) {
     ASSERT_TRUE(runtime.set_active_tool(state, ViewportToolId::Mirror));
     EXPECT_FALSE(runtime.handle_shortcut(shortcut, state, camera, result));
     EXPECT_FALSE(result.focus_document_requested);
+}
+
+TEST(ViewportToolRuntimeTests,
+     KnifeShortcutPreservesSelectionModeInRuntimeAndInputRouter) {
+  constexpr std::array kModes{
+      ViewportSelectionMode::Vertex,
+      ViewportSelectionMode::Edge,
+      ViewportSelectionMode::Face,
+      ViewportSelectionMode::Object,
+      ViewportSelectionMode::Group,
+  };
+  const ViewportShortcut shortcut{
+      .kind = ViewportShortcutKind::ActivateTool,
+      .tool = ViewportToolId::Knife,
+  };
+
+  for (const ViewportSelectionMode mode : kModes) {
+    SCOPED_TRACE(static_cast<int>(mode));
+
+    ViewportToolRuntime runtime;
+    ViewportToolState runtime_state;
+    runtime_state.selection_mode = mode;
+    ViewportCameraController runtime_camera;
+    ViewportInputResult runtime_result;
+    ASSERT_TRUE(runtime.handle_shortcut(shortcut, runtime_state,
+                                        runtime_camera, runtime_result));
+    EXPECT_EQ(runtime_state.active_tool, ViewportToolId::Knife);
+    EXPECT_EQ(runtime_state.selection_mode, mode);
+    EXPECT_FALSE(runtime_result.selection_mode_changed);
+
+    ViewportInputRouter router;
+    router.set_selection_mode(mode);
+    ViewportCameraController router_camera;
+    ViewportInputFrame input;
+    input.viewport_hovered = true;
+    input.viewport_focused = true;
+    input.viewport_size = {800.0f, 600.0f};
+    input.resolved_shortcuts.push_back(shortcut);
+    const ViewportInputResult router_result =
+        router.handle_frame(input, router_camera);
+    EXPECT_TRUE(router_result.shortcut_handled);
+    EXPECT_EQ(router.state().active_tool, ViewportToolId::Knife);
+    EXPECT_EQ(router.state().selection_mode, mode);
+    EXPECT_FALSE(router_result.selection_mode_changed);
+  }
 }
 
 TEST(ViewportToolRuntimeTests,

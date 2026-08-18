@@ -2580,6 +2580,254 @@ TEST(ModelingSessionServiceSplitTests,
                                                   "__missing__", 1.0));
 }
 
+TEST(ModelingSessionServiceSplitTests,
+     KnifeActivationCancelAndCommitPreserveEveryPersistentSelectionMode) {
+  constexpr std::array kModes{
+      ModelingSelectionMode::Vertex,
+      ModelingSelectionMode::Edge,
+      ModelingSelectionMode::Face,
+      ModelingSelectionMode::Object,
+      ModelingSelectionMode::Group,
+  };
+  const auto knife_event = [](float y) {
+    ModelingToolRayEvent event;
+    event.ray = {
+        .origin = {0.0f, y, 6.0f},
+        .direction = {0.0f, 0.0f, -1.0f},
+    };
+    event.camera = {
+        .orthographic = true,
+        .origin = event.ray.origin,
+        .viewport_size = {800.0f, 600.0f},
+        .orthographic_size = 4.0,
+    };
+    event.grid_size = 0.5;
+    event.vertex_radius = 0.001;
+    event.edge_radius = 0.12;
+    event.snap_enabled = false;
+    return event;
+  };
+  const auto source_wire_segments = [](const ViewportOverlayFrame &frame,
+                                       int object_id) {
+    std::vector<std::array<float, 6U>> segments;
+    for (const ViewportOverlayLine &line : frame.lines) {
+      if (line.layer != ViewportOverlayLayer::SourceWire ||
+          line.element.object_id != object_id) {
+        continue;
+      }
+      segments.push_back({line.start.x, line.start.y, line.start.z, line.end.x,
+                          line.end.y, line.end.z});
+    }
+    return segments;
+  };
+  const auto source_wire_depth_stamps = [](const ViewportOverlayFrame &frame,
+                                            int object_id) {
+    std::vector<std::array<float, 9U>> triangles;
+    for (const ViewportOverlayTriangle &triangle : frame.triangles) {
+      if (triangle.layer != ViewportOverlayLayer::SourceWireDepthStamp ||
+          triangle.element.object_id != object_id) {
+        continue;
+      }
+      triangles.push_back({triangle.a.x, triangle.a.y, triangle.a.z,
+                           triangle.b.x, triangle.b.y, triangle.b.z,
+                           triangle.c.x, triangle.c.y, triangle.c.z});
+    }
+    return triangles;
+  };
+  const auto tool_preview_line_count = [](const ViewportOverlayFrame &frame) {
+    return std::ranges::count_if(
+        frame.lines, [](const ViewportOverlayLine &line) {
+          return line.source == ViewportOverlaySource::Tool &&
+                 line.layer == ViewportOverlayLayer::ToolPreviewLine;
+        });
+  };
+  const auto tool_handle_count = [](const ViewportOverlayFrame &frame) {
+    return std::ranges::count_if(
+        frame.points, [](const ViewportOverlayPoint &point) {
+          return point.source == ViewportOverlaySource::Tool &&
+                 point.layer == ViewportOverlayLayer::ToolHandle;
+        });
+  };
+
+  for (const ModelingSelectionMode mode : kModes) {
+    SCOPED_TRACE(static_cast<int>(mode));
+    SceneDocument scene;
+    AssetRegistry assets;
+    ModelingSessionService service(scene, assets);
+    const ModelingCreateBoxResult box = service.create_box_from_bounds({
+        .bounds = {.min = {-1.0f, -1.0f, -1.0f},
+                   .max = {1.0f, 1.0f, 1.0f}},
+        .name = "Knife Persistent Mode Source",
+    });
+    ASSERT_TRUE(box.ok) << box.message;
+    ASSERT_TRUE(service.set_selection_mode(mode).ok);
+
+    ModelingCommandResult command =
+        service.activate_viewport_tool(ModelingViewportTool::Knife);
+    ASSERT_TRUE(command.ok) << command.message;
+    EXPECT_EQ(service.selection_mode(), mode);
+    EXPECT_EQ(service.selection_summary().mode, mode);
+
+    const int object_id = box.object.modeling_object_id;
+    const ViewportOverlayFrame activated_persistent =
+        service.selection_overlay_frame();
+    const auto activated_source_wire =
+        source_wire_segments(activated_persistent, object_id);
+    const auto activated_depth_stamps =
+        source_wire_depth_stamps(activated_persistent, object_id);
+    EXPECT_EQ(activated_source_wire.size(), 12U);
+    EXPECT_FALSE(activated_depth_stamps.empty());
+    const std::uint64_t activated_signature =
+        service.selection_overlay_signature();
+
+    command = service.update_knife_hover(knife_event(0.0f));
+    ASSERT_TRUE(command.ok) << command.message;
+    EXPECT_FALSE(service.tool_status().knife_has_current);
+    EXPECT_TRUE(std::ranges::none_of(
+        service.volatile_overlay_frame().points,
+        [](const ViewportOverlayPoint &point) {
+          return point.source == ViewportOverlaySource::Tool &&
+                 point.layer == ViewportOverlayLayer::ToolHandle;
+        }));
+    const ViewportOverlayFrame missed_persistent =
+        service.selection_overlay_frame();
+    EXPECT_EQ(source_wire_segments(missed_persistent, object_id),
+              activated_source_wire);
+    EXPECT_EQ(source_wire_depth_stamps(missed_persistent, object_id),
+              activated_depth_stamps);
+    EXPECT_EQ(service.selection_overlay_signature(), activated_signature);
+
+    command = service.update_knife_hover(knife_event(-1.0f));
+    ASSERT_TRUE(command.ok) << command.message;
+    EXPECT_TRUE(service.tool_status().knife_has_current);
+    EXPECT_TRUE(std::ranges::any_of(
+        service.volatile_overlay_frame().points,
+        [](const ViewportOverlayPoint &point) {
+          return point.source == ViewportOverlaySource::Tool &&
+                 point.layer == ViewportOverlayLayer::ToolHandle &&
+                 length_squared(point.position - QVec3{0.0f, -1.0f, 1.0f}) <
+                     0.0001f;
+        }));
+
+    command = service.cancel_active_modal_tool();
+    ASSERT_TRUE(command.ok) << command.message;
+    EXPECT_EQ(service.selection_mode(), mode);
+
+    command = service.activate_viewport_tool(ModelingViewportTool::Knife);
+    ASSERT_TRUE(command.ok) << command.message;
+    ASSERT_EQ(service.selection_mode(), mode);
+    command = service.accept_knife_point(knife_event(-1.0f));
+    ASSERT_TRUE(command.ok) << command.message;
+    ASSERT_TRUE(command.changed);
+    command = service.accept_knife_point(knife_event(1.0f));
+    ASSERT_TRUE(command.ok) << command.message;
+    ASSERT_TRUE(command.changed);
+    ASSERT_TRUE(service.tool_status().knife_can_commit);
+
+    const ViewportOverlayFrame locked_persistent =
+        service.selection_overlay_frame();
+    const auto locked_source_wire =
+        source_wire_segments(locked_persistent, object_id);
+    const auto locked_depth_stamps =
+        source_wire_depth_stamps(locked_persistent, object_id);
+    ASSERT_EQ(locked_source_wire.size(), 12U);
+    ASSERT_FALSE(locked_depth_stamps.empty());
+    const std::uint64_t locked_signature =
+        service.selection_overlay_signature();
+
+    command = service.update_knife_hover(knife_event(0.0f));
+    ASSERT_TRUE(command.ok) << command.message;
+    ASSERT_TRUE(service.tool_status().knife_has_current);
+    const ViewportOverlayFrame valid_hover =
+        service.volatile_overlay_frame();
+    EXPECT_EQ(tool_preview_line_count(valid_hover), 2);
+    EXPECT_EQ(tool_handle_count(valid_hover), 3);
+
+    command = service.update_knife_hover(knife_event(3.0f));
+    ASSERT_TRUE(command.ok) << command.message;
+    EXPECT_FALSE(service.tool_status().knife_has_current);
+    const ViewportOverlayFrame invalid_hover =
+        service.volatile_overlay_frame();
+    EXPECT_EQ(tool_preview_line_count(invalid_hover), 1);
+    EXPECT_EQ(tool_handle_count(invalid_hover), 2);
+    EXPECT_TRUE(std::ranges::none_of(
+        invalid_hover.lines, [](const ViewportOverlayLine &line) {
+          return line.source == ViewportOverlaySource::ComponentHover;
+        }));
+
+    const ViewportOverlayFrame invalid_hover_persistent =
+        service.selection_overlay_frame();
+    EXPECT_EQ(source_wire_segments(invalid_hover_persistent, object_id),
+              locked_source_wire);
+    EXPECT_EQ(source_wire_depth_stamps(invalid_hover_persistent, object_id),
+              locked_depth_stamps);
+    EXPECT_EQ(service.selection_overlay_signature(), locked_signature);
+    EXPECT_EQ(service.selection_mode(), mode);
+
+    command = service.commit_knife_tool();
+    ASSERT_TRUE(command.ok) << command.message;
+    EXPECT_TRUE(command.changed);
+    EXPECT_EQ(service.selection_mode(), mode);
+    EXPECT_EQ(service.selection_summary().mode, mode);
+  }
+}
+
+TEST(ModelingSessionServiceSplitTests,
+     KnifePrelockSourceWireCacheTracksActiveSelectedObject) {
+  SceneDocument scene;
+  AssetRegistry assets;
+  ModelingSessionService service(scene, assets);
+  const ModelingCreateBoxResult first = service.create_box_from_bounds({
+      .bounds = {.min = {-3.0f, -1.0f, -1.0f},
+                 .max = {-1.0f, 1.0f, 1.0f}},
+      .name = "Knife First Selected Source",
+  });
+  const ModelingCreateBoxResult second = service.create_box_from_bounds({
+      .bounds = {.min = {1.0f, -1.0f, -1.0f},
+                 .max = {3.0f, 1.0f, 1.0f}},
+      .name = "Knife Second Selected Source",
+  });
+  ASSERT_TRUE(first.ok) << first.message;
+  ASSERT_TRUE(second.ok) << second.message;
+  const std::array selected{first.object.entity, second.object.entity};
+  ASSERT_TRUE(service.set_object_selection(selected, first.object.entity).ok);
+  ASSERT_TRUE(
+      service.activate_viewport_tool(ModelingViewportTool::Knife).ok);
+
+  const auto source_wire_count = [](const ViewportOverlayFrame &frame,
+                                    int object_id) {
+    return std::ranges::count_if(
+        frame.lines, [object_id](const ViewportOverlayLine &line) {
+          return line.layer == ViewportOverlayLayer::SourceWire &&
+                 line.element.object_id == object_id;
+        });
+  };
+  const std::uint64_t first_signature =
+      service.selection_overlay_signature();
+  const ViewportOverlayFrame first_frame = service.selection_overlay_frame();
+  EXPECT_EQ(source_wire_count(first_frame,
+                              first.object.modeling_object_id),
+            12);
+  EXPECT_EQ(source_wire_count(first_frame,
+                              second.object.modeling_object_id),
+            0);
+
+  const ModelingCommandResult switched =
+      service.set_object_selection(selected, second.object.entity);
+  ASSERT_TRUE(switched.ok) << switched.message;
+  ASSERT_TRUE(switched.changed);
+  const std::uint64_t second_signature =
+      service.selection_overlay_signature();
+  EXPECT_NE(second_signature, first_signature);
+  const ViewportOverlayFrame second_frame = service.selection_overlay_frame();
+  EXPECT_EQ(source_wire_count(second_frame,
+                              first.object.modeling_object_id),
+            0);
+  EXPECT_EQ(source_wire_count(second_frame,
+                              second.object.modeling_object_id),
+            12);
+}
+
 
 
 TEST(ModelingSessionServiceSplitTests,

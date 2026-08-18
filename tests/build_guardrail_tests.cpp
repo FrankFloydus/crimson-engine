@@ -4462,3 +4462,19 @@ TEST(BuildGuardrailTests,
   expect_contains(cache,
                   ".instances(transforms.size(), proxy.instance_buffer)");
 }
+
+TEST(BuildGuardrailTests,
+     DynamicToolPreviewUpdatesEveryDeformationDerivedGpuStream) {
+  const std::string source =
+      read_source_file("src/render/mesh_renderable_factory.cpp");
+  const std::string update = source_slice(
+      source, "bool MeshRenderableFactory::update_dynamic_geometry(",
+      "template <typename Resource>");
+
+  expect_contains(update, "build_render_vertices(mesh)");
+  expect_contains(update, "setBufferAt(");
+  expect_contains(update, "*engine_, 0");
+  expect_contains(update, "*engine_, 1");
+  expect_contains(update, "proxy.index_buffer->setBuffer(");
+  expect_contains(update, "FilamentBufferDescriptorFactory::span(mesh.indices)");
+}

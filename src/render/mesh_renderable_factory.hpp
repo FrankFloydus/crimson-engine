@@ -121,6 +121,10 @@ public:
                              const ViewportSettings &settings);
     void update_shaded_lighting(const MeshRenderableProxy &proxy,
                                 const ViewportSettings &settings);
+    /// Refreshes every mutable stream of a topology-retained preview. The
+    /// vertex/index counts stay fixed, while deformation-derived normals,
+    /// tangent frames, UVs, surface-grid projections, and triangulation may
+    /// change together with positions.
     bool update_dynamic_geometry(const MeshRenderableProxy &proxy,
                                  const RenderMeshAssetSnapshot &mesh,
                                  std::span<const QVec3> dynamic_positions = {},

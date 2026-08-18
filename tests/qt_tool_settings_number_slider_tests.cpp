@@ -796,6 +796,205 @@ TEST(QtToolSettingsNumberSliderTests,
 }
 
 TEST(QtToolSettingsNumberSliderTests,
+     PrimitiveSubdivisionPointerDragPublishesBoundedLiveGeometry) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char executable[] = "quader-primitive-slider-preview-tests";
+  char *argv[] = {executable, nullptr};
+  QApplication application(argc, argv);
+  QApplication::setStyle(QStringLiteral("Fusion"));
+
+  quader::SceneSession session;
+  quader::QuaderEditorApi editor(
+      quader::QuaderApiSessionInternalAccess::from_scene_session(session));
+  ASSERT_TRUE(
+      editor.tools().activate(quader::ViewportToolId::CreatePrimitive).ok());
+  ASSERT_TRUE(session.primitive_creation()
+                  .accept_preview(tool_settings_primitive_preview(),
+                                  "Live Slider Box")
+                  .ok);
+
+  const std::vector<quader::ModelingObjectRecord> objects =
+      session.modeling().objects();
+  ASSERT_EQ(objects.size(), 1u);
+  const quader::ModelingObjectRecord &live_box = objects.front();
+  const std::optional<quader::QuaderEntitySnapshot> entity_before =
+      editor.query().entity(live_box.entity);
+  ASSERT_TRUE(entity_before.has_value());
+  ASSERT_TRUE(entity_before->has_mesh);
+  ASSERT_EQ(entity_before->mesh, live_box.mesh);
+  const std::optional<quader::QuaderMeshSnapshot> mesh_before =
+      editor.query().mesh(live_box.mesh);
+  ASSERT_TRUE(mesh_before.has_value());
+  ASSERT_EQ(mesh_before->index_count, 36u);
+
+  quader::QtToolSettingsPanel window;
+  window.setAttribute(Qt::WA_DontShowOnScreen, true);
+  window.bind(editor);
+  window.show();
+  window.activateWindow();
+  QCoreApplication::processEvents();
+
+  auto *subdivisions_slider = window.findChild<QSlider *>(QStringLiteral(
+      "tool_settings.control.primitive.box.subdivisions_x.slider"));
+  auto *subdivisions_spin = window.findChild<QSpinBox *>(QStringLiteral(
+      "tool_settings.control.primitive.box.subdivisions_x"));
+  ASSERT_NE(subdivisions_slider, nullptr);
+  ASSERT_NE(subdivisions_spin, nullptr);
+  const QRect groove = slider_groove(*subdivisions_slider);
+  const QPoint press = slider_handle(*subdivisions_slider).center();
+  ASSERT_FALSE(groove.isEmpty());
+  ASSERT_FALSE(slider_handle(*subdivisions_slider).isEmpty());
+  const int delta = std::max(4, groove.width() / 16);
+  const std::array<QPoint, 5> moves{
+      QPoint(std::min(groove.right(), press.x() + delta), groove.center().y()),
+      QPoint(std::min(groove.right(), press.x() + delta * 2),
+             groove.center().y()),
+      QPoint(std::min(groove.right(), press.x() + delta * 3),
+             groove.center().y()),
+      QPoint(std::min(groove.right(), press.x() + delta * 4),
+             groove.center().y()),
+      QPoint(std::min(groove.right(), press.x() + delta * 5),
+             groove.center().y()),
+  };
+  ASSERT_NE(moves.front().x(), press.x());
+  ASSERT_LT(moves.front().x(), moves.back().x());
+
+  const quader::QuaderRevisionStamp revisions_before = editor.revisions();
+  const std::uint64_t settings_revision_before =
+      editor.tools().active_settings_revision();
+  const quader::ModelingSdkProjectionStats projection_before =
+      session.modeling().modeling_sdk_projection_stats_for_tests();
+  send_mouse_event(*subdivisions_slider, QEvent::MouseButtonPress, press,
+                   Qt::LeftButton, Qt::LeftButton);
+  ASSERT_TRUE(subdivisions_slider->isSliderDown());
+  for (std::size_t index = 0; index < 3; ++index) {
+    send_mouse_event(*subdivisions_slider, QEvent::MouseMove, moves[index],
+                     Qt::NoButton, Qt::LeftButton);
+  }
+  const int first_pending_subdivisions = subdivisions_spin->value();
+  ASSERT_GT(first_pending_subdivisions, 1);
+  EXPECT_EQ(session.primitive_creation().box_settings().subdivisions_x, 1);
+  EXPECT_EQ(editor.tools().active_settings_revision(),
+            settings_revision_before);
+  const std::optional<quader::QuaderMeshSnapshot> mesh_before_live_tick =
+      editor.query().mesh(live_box.mesh);
+  ASSERT_TRUE(mesh_before_live_tick.has_value());
+  EXPECT_EQ(mesh_before_live_tick->revision, mesh_before->revision);
+  EXPECT_EQ(mesh_before_live_tick->index_count, mesh_before->index_count);
+
+  // Rapid pointer motion publishes one latest-value primitive rebuild at the
+  // fixed preview cadence while the slider remains held.
+  process_events_for(75);
+  ASSERT_TRUE(subdivisions_slider->isSliderDown());
+  EXPECT_EQ(session.primitive_creation().box_settings().subdivisions_x,
+            first_pending_subdivisions);
+  EXPECT_EQ(editor.tools().active_settings_revision(),
+            settings_revision_before + 1u);
+  const quader::ModelingSdkProjectionStats projection_after_live_tick =
+      session.modeling().modeling_sdk_projection_stats_for_tests();
+  EXPECT_EQ(projection_after_live_tick.mesh_compile_count,
+            projection_before.mesh_compile_count + 1u);
+  EXPECT_EQ(projection_after_live_tick.asset_publication_count,
+            projection_before.asset_publication_count + 1u);
+  EXPECT_EQ(projection_after_live_tick.scene_publication_count,
+            projection_before.scene_publication_count + 1u);
+  const quader::QuaderRevisionStamp revisions_after_live_tick =
+      editor.revisions();
+  EXPECT_GT(revisions_after_live_tick.asset_revision,
+            revisions_before.asset_revision);
+  EXPECT_GT(revisions_after_live_tick.modeling_content_revision,
+            revisions_before.modeling_content_revision);
+  const std::optional<quader::QuaderEntitySnapshot> entity_after_live_tick =
+      editor.query().entity(live_box.entity);
+  ASSERT_TRUE(entity_after_live_tick.has_value());
+  EXPECT_EQ(entity_after_live_tick->mesh, live_box.mesh);
+  const std::optional<quader::QuaderMeshSnapshot> mesh_after_live_tick =
+      editor.query().mesh(live_box.mesh);
+  ASSERT_TRUE(mesh_after_live_tick.has_value());
+  EXPECT_GT(mesh_after_live_tick->revision, mesh_before->revision);
+  EXPECT_GT(mesh_after_live_tick->index_count, mesh_before->index_count);
+
+  const quader::QuaderToolSettingControl *live_setting = find_setting(
+      editor.tools().active_settings(), "primitive.box.subdivisions_x");
+  ASSERT_NE(live_setting, nullptr);
+  EXPECT_DOUBLE_EQ(live_setting->number_value,
+                   static_cast<double>(first_pending_subdivisions));
+
+  // An idle held slider performs no further owner, projection, or geometry
+  // work until another value arrives.
+  process_events_for(75);
+  EXPECT_EQ(editor.tools().active_settings_revision(),
+            settings_revision_before + 1u);
+  const quader::ModelingSdkProjectionStats projection_after_idle =
+      session.modeling().modeling_sdk_projection_stats_for_tests();
+  EXPECT_EQ(projection_after_idle.mesh_compile_count,
+            projection_after_live_tick.mesh_compile_count);
+  EXPECT_EQ(projection_after_idle.asset_publication_count,
+            projection_after_live_tick.asset_publication_count);
+  EXPECT_EQ(projection_after_idle.scene_publication_count,
+            projection_after_live_tick.scene_publication_count);
+  const std::optional<quader::QuaderMeshSnapshot> mesh_after_idle =
+      editor.query().mesh(live_box.mesh);
+  ASSERT_TRUE(mesh_after_idle.has_value());
+  EXPECT_EQ(mesh_after_idle->revision, mesh_after_live_tick->revision);
+  EXPECT_EQ(mesh_after_idle->index_count, mesh_after_live_tick->index_count);
+
+  // Release before the next cadence tick: it must publish the exact final
+  // slider value once, then leave no delayed publication behind.
+  for (std::size_t index = 3; index < moves.size(); ++index) {
+    send_mouse_event(*subdivisions_slider, QEvent::MouseMove, moves[index],
+                     Qt::NoButton, Qt::LeftButton);
+  }
+  const int final_pending_subdivisions = subdivisions_spin->value();
+  ASSERT_GT(final_pending_subdivisions, first_pending_subdivisions);
+  EXPECT_EQ(session.primitive_creation().box_settings().subdivisions_x,
+            first_pending_subdivisions);
+  send_mouse_event(*subdivisions_slider, QEvent::MouseButtonRelease,
+                   moves.back(), Qt::LeftButton, Qt::NoButton);
+  EXPECT_FALSE(subdivisions_slider->isSliderDown());
+  EXPECT_EQ(session.primitive_creation().box_settings().subdivisions_x,
+            final_pending_subdivisions);
+  EXPECT_EQ(editor.tools().active_settings_revision(),
+            settings_revision_before + 2u);
+  const quader::ModelingSdkProjectionStats projection_after_release =
+      session.modeling().modeling_sdk_projection_stats_for_tests();
+  EXPECT_EQ(projection_after_release.mesh_compile_count,
+            projection_before.mesh_compile_count + 2u);
+  EXPECT_EQ(projection_after_release.asset_publication_count,
+            projection_before.asset_publication_count + 2u);
+  EXPECT_EQ(projection_after_release.scene_publication_count,
+            projection_before.scene_publication_count + 2u);
+  const std::optional<quader::QuaderMeshSnapshot> mesh_after_release =
+      editor.query().mesh(live_box.mesh);
+  ASSERT_TRUE(mesh_after_release.has_value());
+  EXPECT_GT(mesh_after_release->revision, mesh_after_live_tick->revision);
+  EXPECT_GT(mesh_after_release->index_count,
+            mesh_after_live_tick->index_count);
+
+  process_events_for(75);
+  EXPECT_EQ(editor.tools().active_settings_revision(),
+            settings_revision_before + 2u);
+  const quader::ModelingSdkProjectionStats projection_after_release_idle =
+      session.modeling().modeling_sdk_projection_stats_for_tests();
+  EXPECT_EQ(projection_after_release_idle.mesh_compile_count,
+            projection_after_release.mesh_compile_count);
+  EXPECT_EQ(projection_after_release_idle.asset_publication_count,
+            projection_after_release.asset_publication_count);
+  EXPECT_EQ(projection_after_release_idle.scene_publication_count,
+            projection_after_release.scene_publication_count);
+  const std::optional<quader::QuaderMeshSnapshot>
+      mesh_after_release_idle = editor.query().mesh(live_box.mesh);
+  ASSERT_TRUE(mesh_after_release_idle.has_value());
+  EXPECT_EQ(mesh_after_release_idle->revision, mesh_after_release->revision);
+  EXPECT_EQ(mesh_after_release_idle->index_count,
+            mesh_after_release->index_count);
+
+  window.unbind();
+  window.hide();
+}
+
+TEST(QtToolSettingsNumberSliderTests,
      BevelPointerMovesCoalesceAndFrameSyncRetainsEditors) {
   ASSERT_EQ(QCoreApplication::instance(), nullptr);
   int argc = 1;
@@ -982,6 +1181,10 @@ TEST(QtToolSettingsNumberSliderTests,
   segments_spin_changes = 0;
   const quader::QuaderRevisionStamp segments_revisions_before =
       editor.revisions();
+  const std::uint64_t segments_settings_revision_before =
+      editor.tools().active_settings_revision();
+  const quader::ModelingSdkProjectionStats segments_projection_before =
+      session.modeling().modeling_sdk_projection_stats_for_tests();
   const auto segments_start = std::chrono::steady_clock::now();
   for (std::size_t index = 0; index < 3; ++index) {
     send_mouse_event(*segments_slider, QEvent::MouseMove,
@@ -1028,6 +1231,12 @@ TEST(QtToolSettingsNumberSliderTests,
       editor.revisions();
   EXPECT_GT(segments_revisions_after_live_update.asset_revision,
             segments_revisions_before.asset_revision);
+  EXPECT_EQ(editor.tools().active_settings_revision(),
+            segments_settings_revision_before + 1u);
+  EXPECT_EQ(session.modeling()
+                .modeling_sdk_projection_stats_for_tests()
+                .preview_publication_count,
+            segments_projection_before.preview_publication_count + 1u);
   const quader::QuaderToolSettingsTarget live_segments_settings =
       editor.tools().active_settings();
   const quader::QuaderToolSettingControl *live_segments_setting =
@@ -1038,14 +1247,20 @@ TEST(QtToolSettingsNumberSliderTests,
                    static_cast<double>(pending_segments));
   EXPECT_TRUE(window.numeric_interaction_active());
 
-  // A trailing pause dispatches once. Keeping the pointer down without new
-  // input must not continuously rebuild the preview.
+  // Holding the pointer idle after the fixed live-preview tick must not
+  // continuously rebuild the same topology.
   process_events_for(75);
   EXPECT_EQ(editor.revisions().asset_revision,
             segments_revisions_after_live_update.asset_revision);
+  EXPECT_EQ(editor.tools().active_settings_revision(),
+            segments_settings_revision_before + 1u);
+  EXPECT_EQ(session.modeling()
+                .modeling_sdk_projection_stats_for_tests()
+                .preview_publication_count,
+            segments_projection_before.preview_publication_count + 1u);
 
-  // Continued movement starts a new trailing window, but release owns the
-  // exact final flush and cancels that timer.
+  // Continued movement starts the next fixed window. Releasing before it
+  // expires flushes the exact latest value once and cancels the timer.
   for (std::size_t index = 3; index < segments_moves.size(); ++index) {
     send_mouse_event(*segments_slider, QEvent::MouseMove,
                      segments_moves[index], Qt::NoButton, Qt::LeftButton);
@@ -1069,6 +1284,12 @@ TEST(QtToolSettingsNumberSliderTests,
   EXPECT_EQ(segments_spin_changes, 0);
   EXPECT_GT(editor.revisions().asset_revision,
             segments_revisions_after_live_update.asset_revision);
+  EXPECT_EQ(editor.tools().active_settings_revision(),
+            segments_settings_revision_before + 2u);
+  EXPECT_EQ(session.modeling()
+                .modeling_sdk_projection_stats_for_tests()
+                .preview_publication_count,
+            segments_projection_before.preview_publication_count + 2u);
   const quader::QuaderToolSettingsTarget applied_segments_settings =
       editor.tools().active_settings();
   const quader::QuaderToolSettingControl *applied_segments_setting =
@@ -1082,6 +1303,12 @@ TEST(QtToolSettingsNumberSliderTests,
   process_events_for(75);
   EXPECT_EQ(editor.revisions().asset_revision,
             segments_revisions_after_release.asset_revision);
+  EXPECT_EQ(editor.tools().active_settings_revision(),
+            segments_settings_revision_before + 2u);
+  EXPECT_EQ(session.modeling()
+                .modeling_sdk_projection_stats_for_tests()
+                .preview_publication_count,
+            segments_projection_before.preview_publication_count + 2u);
 
   // Spin arrows, wheel, and keyboard input all arrive through valueChanged.
   // Several synchronous changes stay presentation-local until editing ends.

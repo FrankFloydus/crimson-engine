@@ -9,6 +9,42 @@ affected owners/files, resolved approach, and verification. Do not record routin
 private user data, guesses, or unresolved issues. Prefer updating a related existing entry over
 adding a duplicate.
 
+## 2026-08-18 - Transform Preview, Knife, Slider, And Shift-Duplicate Continuity
+
+Task/context: component transforms temporarily distorted generated texture mapping, Tool Settings
+slider drags published avoidable live work, Knife depended on Edge selection and lost its cyan
+topology context outside valid hover, Shift-gizmo duplicate applied object transforms twice, and
+Repeat lost the duplicate-plus-transform action after replay.
+
+Invariant:
+
+- Vertex/Edge/Face transform previews derive the same canonical positions, normals, generated UVs,
+  static vertex stream, and indices as commit. Dynamic preview rendering refreshes both vertex
+  streams plus the index buffer; position-changing polygon operations invalidate authored loop UVs
+  so generated mapping remains the single procedural result.
+- A pointer-held Tool Settings slider publishes only the latest value at a bounded 50 ms cadence.
+  Holding it idle performs no owner work, release flushes an exact newer final value once, and
+  keyboard, wheel, and spin edits retain their trailing dispatch behavior.
+- Knife (`C`) activates and targets topology in every persistent selection mode without changing
+  that mode. Its locked-target cyan source wire/depth stamp is persistent even when hover misses;
+  only the valid edge/vertex highlight is volatile, and a face-interior start remains invalid.
+- A direct object Shift-gizmo duplicate has one placement owner: the portable transaction owns
+  duplication/history while the scene transform owns placement. Record repeat only after every
+  transaction commits, and preserve the duplicate-plus-transform repeat descriptor across its
+  internal duplicate command so successive Ctrl+R operations each duplicate and transform once.
+
+Owners: SDK polygon position mutation, the modeling projection/transform/session services, dynamic
+tool-preview render cache/factory, Knife command/runtime/input policy, and the retained Qt Tool
+Settings panel.
+
+Verification: task-focused SDK, modeling, render-cache, Knife, Qt slider, Shift Move/Rotate/Scale,
+repeat/undo/redo, and source-guardrail tests pass. The primitive slider regression measures one
+mesh compile/asset/scene publication during a held cadence window, zero while held idle, and one
+newer exact publication on release, with no delayed duplicate. The mandatory gate
+still reports the recorded unrelated command-baseline, Linear Array, source-wire overlay, and root
+instruction/CMake failures; its SDK-only wrapper inherits the same guardrail failures. Both
+canonical Debug/Profile and Release app builds succeeded.
+
 ## 2026-07-26 - Large-Scene Work Is Bulk, Indexed, And Revision-Gated
 
 Task/context: applying Pivot in a 6,276-entity stress scene froze the UI for about ten seconds,
@@ -5261,9 +5297,10 @@ Invariant:
   that constrained topology. Grid snap quantizes only the scalar distance along the chosen Shift
   direction, while an edge intersection remains the exact topology boundary. It never lets a
   lower-priority pick bypass the constraint.
-- Activating Knife (`C`) changes both app and runtime selection to Edge. A new stroke may begin on
-  an existing edge or an existing topology vertex, including a high-valence junction, but never in
-  a face interior. A vertex seed keeps every incident face available until the next target resolves
+- Activating Knife (`C`) preserves the persistent app/runtime selection mode across activation,
+  cancel, and commit. Its topology picker remains mode-independent: a new stroke may begin on an
+  existing edge or an existing topology vertex, including a high-valence junction, but never in a
+  face interior. A vertex seed keeps every incident face available until the next target resolves
   the segment's shared face. Grid snaps that land on endpoints or face boundaries become exact
   canonical vertex/edge targets immediately; they never retain a 1% endpoint offset.
 - Knife picking is two-sided and nearest-surface driven. Reversed face winding must not disable
@@ -5299,8 +5336,9 @@ Owners:
 - `src/editor/interactions/knife_tool.cpp` owns segment-local shared-face interaction policy;
   shared tool snapping owns edge-distance and face-lattice quantization; `ModelingSessionService`
   owns authoritative scene-aware candidate ordering, world-space resolution, and topology-derived
-  straight constraints; tool activation policy owns the persistent Edge-mode transition; the
-  polygon Knife Stroke operation enforces the same one-face boundary.
+  straight constraints; tool activation and shortcut policy preserve the persistent selection
+  mode while Knife owns its independent topology targets; the polygon Knife Stroke operation
+  enforces the same one-face boundary.
 
 Verification:
 

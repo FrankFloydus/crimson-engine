@@ -818,10 +818,6 @@ ModelingTransformDragService::commit_transform_drag(
         };
       }
     }
-    if (was_preview_driven && changed && repeat_drag.active) {
-      context.port.record_portable_transform(
-          repeat_drag, controller_.duplicate_selected());
-    }
   }
 
   if (scene_transform_drag_service_.preview_active()) {
@@ -866,6 +862,16 @@ ModelingTransformDragService::commit_transform_drag(
       };
     }
     changed = changed || transaction_commit.changed;
+  }
+
+  // Record only after every portable, scene, and enclosing duplicate
+  // transaction has committed. Direct object duplication is scene-driven,
+  // while component transforms are preview-driven; other scene-only drags do
+  // not have a portable replay contract.
+  if ((was_preview_driven || portable_scene_duplicate_active_) && changed &&
+      repeat_drag.active) {
+    context.port.record_portable_transform(
+        repeat_drag, controller_.duplicate_selected());
   }
 
   ModelingTransformDragPreview preview =
@@ -1077,7 +1083,8 @@ ModelingTransformDragService::apply_transform_drag_preview(
   }
 
   bool changed = result.changed;
-  if (portable_modeling_preview && result.changed) {
+  if (portable_modeling_preview && controller_.preview_driven() &&
+      result.changed) {
     const ModelingCommandResult portable_result = [&]() {
       QDR_PROFILE_SCOPE("Modeling transform drag update portable preview");
       return context.port.update_portable_transform_preview(

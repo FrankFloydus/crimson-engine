@@ -2724,6 +2724,201 @@ TEST(ViewportInteractionControllerTests, MoveRotateAndScaleGizmosDragSelectedObj
 }
 
 TEST(ViewportInteractionControllerTests,
+     ShiftMoveRotateAndScaleDuplicateCommitOnceAndRepeatTwice) {
+  /// Names one scene-owned duplicate transform routed through the same gizmo
+  /// transaction and repeat contract.
+  struct ToolCase {
+    quader::ViewportToolId tool = quader::ViewportToolId::Move;
+    const char *label = "";
+  };
+
+  for (const ToolCase tool_case : {
+           ToolCase{quader::ViewportToolId::Move, "move"},
+           ToolCase{quader::ViewportToolId::Rotate, "rotate"},
+           ToolCase{quader::ViewportToolId::Scale, "scale"},
+       }) {
+    SCOPED_TRACE(tool_case.label);
+    ViewportInteractionHarness harness;
+    ASSERT_TRUE(harness.settings.set_bool_value(
+        quader::ViewportBoolSettingId::GridSnap, false));
+    ASSERT_TRUE(harness.settings.set_bool_value(
+        quader::ViewportBoolSettingId::VertexSnap, false));
+    const quader::QuaderModelingObjectRef source = create_unit_box(harness);
+    quader::TransformComponent source_transform;
+    source_transform.position = {0.75f, -0.5f, 0.25f};
+    source_transform.rotation_euler = {0.15f, 0.25f, -0.2f};
+    source_transform.scale = {1.1f, 0.9f, 1.2f};
+    ASSERT_TRUE(harness.session.scene().set_transform(source.entity,
+                                                      source_transform));
+    ASSERT_TRUE(harness.editor.selection().select_object(source).ok);
+    const std::size_t entity_count_before =
+        harness.session.scene().entities().size();
+
+    const quader::MeshComponent *source_binding =
+        harness.session.scene().mesh(source.entity);
+    ASSERT_NE(source_binding, nullptr);
+    const quader::AssetId source_mesh_id = source_binding->mesh;
+    const quader::MeshAsset *source_mesh =
+        harness.session.assets().mesh(source_mesh_id);
+    ASSERT_NE(source_mesh, nullptr);
+    const quader::MeshGeometryContentId source_geometry =
+        source_mesh->geometry_content_id();
+
+    ASSERT_TRUE(harness.editor.tools().activate(tool_case.tool).ok);
+    harness.router.set_active_tool(tool_case.tool);
+    harness.input.modifiers.shift = true;
+    const quader::ViewportBeforeToolInteractionResult warmup =
+        harness.controller.handle_before_active_tool(harness.editor,
+                                                     harness.frame());
+    ASSERT_FALSE(warmup.gizmo_consumed);
+    const quader_editor_core::TransformGizmoFrame *gizmo =
+        harness.controller.transform_gizmo_frame();
+    ASSERT_NE(gizmo, nullptr);
+
+    quader::QVec2 start{};
+    quader::QVec2 update{};
+    if (tool_case.tool == quader::ViewportToolId::Rotate) {
+      const quader_editor_core::TransformGizmoRingSegmentPrimitive *ring =
+          find_ring(*gizmo, quader_editor_core::TransformAxis::Z);
+      ASSERT_NE(ring, nullptr);
+      start = ring->screen_start;
+      update = rotated_point(gizmo->info.screen_pivot, start, 0.6f);
+    } else if (tool_case.tool == quader::ViewportToolId::Scale) {
+      start = gizmo->info.screen_pivot;
+      update = start + quader::QVec2{120.0f, 0.0f};
+    } else {
+      const quader_editor_core::TransformGizmoAxisPrimitive *axis =
+          find_axis(*gizmo, quader_editor_core::TransformAxis::X);
+      ASSERT_NE(axis, nullptr);
+      start = axis->screen_tip;
+      update = start + quader::QVec2{120.0f, 0.0f};
+    }
+
+    harness.input.mouse_local = start;
+    harness.input.mouse_screen = start;
+    const quader::ViewportBeforeToolInteractionResult press =
+        harness.controller.handle_before_active_tool(
+            harness.editor, harness.frame(true, true, false, start));
+    ASSERT_TRUE(press.gizmo_consumed);
+
+    harness.input.mouse_local = update;
+    harness.input.mouse_screen = update;
+    const quader::ViewportBeforeToolInteractionResult drag =
+        harness.controller.handle_before_active_tool(
+            harness.editor, harness.frame(false, true, false, start));
+    ASSERT_TRUE(drag.gizmo_consumed);
+    ASSERT_EQ(harness.session.scene().entities().size(),
+              entity_count_before + 1u);
+    const std::vector<quader::EntityId> preview_selection =
+        harness.session.scene().selected_entities();
+    ASSERT_EQ(preview_selection.size(), 1u);
+    const quader::EntityId preview_duplicate = preview_selection.front();
+    const quader::TransformComponent *preview_transform_ptr =
+        harness.session.scene().transform(preview_duplicate);
+    ASSERT_NE(preview_transform_ptr, nullptr);
+    const quader::TransformComponent preview_transform =
+        *preview_transform_ptr;
+
+    const quader::ViewportBeforeToolInteractionResult release =
+        harness.controller.handle_before_active_tool(
+            harness.editor, harness.frame(false, false, true, start));
+    ASSERT_TRUE(release.gizmo_consumed);
+    harness.input.modifiers.shift = false;
+    ASSERT_EQ(harness.session.scene().entities().size(),
+              entity_count_before + 1u);
+    const std::vector<quader::EntityId> selected_after_drag =
+        harness.session.scene().selected_entities();
+    ASSERT_EQ(selected_after_drag.size(), 1u);
+    const quader::EntityId duplicate = selected_after_drag.front();
+    ASSERT_NE(duplicate, source.entity);
+    EXPECT_EQ(duplicate, preview_duplicate);
+    ASSERT_NE(harness.session.scene().transform(duplicate), nullptr);
+    expect_transform_near(*harness.session.scene().transform(duplicate),
+                          preview_transform);
+    const quader::MeshComponent *duplicate_binding =
+        harness.session.scene().mesh(duplicate);
+    ASSERT_NE(duplicate_binding, nullptr);
+    const quader::MeshAsset *duplicate_mesh =
+        harness.session.assets().mesh(duplicate_binding->mesh);
+    ASSERT_NE(duplicate_mesh, nullptr);
+    EXPECT_EQ(duplicate_mesh->geometry_content_id(), source_geometry);
+
+    const quader::TransformComponent *duplicate_transform =
+        harness.session.scene().transform(duplicate);
+    ASSERT_NE(duplicate_transform, nullptr);
+    if (tool_case.tool == quader::ViewportToolId::Move) {
+      EXPECT_GT(length(duplicate_transform->position -
+                       source_transform.position),
+                0.001f);
+    } else if (tool_case.tool == quader::ViewportToolId::Rotate) {
+      EXPECT_GT(length(duplicate_transform->rotation_euler -
+                       source_transform.rotation_euler),
+                0.001f);
+    } else {
+      EXPECT_GT(length(duplicate_transform->scale - source_transform.scale),
+                0.001f);
+    }
+    expect_transform_near(
+        *harness.session.scene().transform(source.entity), source_transform);
+
+    quader::TransformComponent previous_repeat_transform =
+        *duplicate_transform;
+    const quader::QVec3 original_move_step =
+        duplicate_transform->position - source_transform.position;
+    for (std::size_t repeat_index = 0u; repeat_index < 2u; ++repeat_index) {
+      const quader::QuaderApiVoidResult repeated =
+          harness.editor.commands().execute(
+              quader::quader_command::kEditRepeatLastAction);
+      ASSERT_TRUE(repeated.ok()) << repeated.error_message();
+      EXPECT_TRUE(repeated.changed());
+      EXPECT_EQ(harness.session.scene().entities().size(),
+                entity_count_before + 2u + repeat_index);
+      const std::vector<quader::EntityId> repeated_selection =
+          harness.session.scene().selected_entities();
+      ASSERT_EQ(repeated_selection.size(), 1u);
+      const quader::MeshComponent *repeated_binding =
+          harness.session.scene().mesh(repeated_selection.front());
+      ASSERT_NE(repeated_binding, nullptr);
+      const quader::MeshAsset *repeated_mesh =
+          harness.session.assets().mesh(repeated_binding->mesh);
+      ASSERT_NE(repeated_mesh, nullptr);
+      EXPECT_EQ(repeated_mesh->geometry_content_id(), source_geometry);
+      const quader::TransformComponent *repeated_transform =
+          harness.session.scene().transform(repeated_selection.front());
+      ASSERT_NE(repeated_transform, nullptr);
+      if (tool_case.tool == quader::ViewportToolId::Move) {
+        const quader::QVec3 repeat_step =
+            repeated_transform->position - previous_repeat_transform.position;
+        EXPECT_NEAR(repeat_step.x, original_move_step.x, 0.001f);
+        EXPECT_NEAR(repeat_step.y, original_move_step.y, 0.001f);
+        EXPECT_NEAR(repeat_step.z, original_move_step.z, 0.001f);
+      } else if (tool_case.tool == quader::ViewportToolId::Rotate) {
+        EXPECT_GT(length(repeated_transform->rotation_euler -
+                         previous_repeat_transform.rotation_euler),
+                  0.001f);
+      } else {
+        EXPECT_GT(length(repeated_transform->scale -
+                         previous_repeat_transform.scale),
+                  0.001f);
+      }
+      previous_repeat_transform = *repeated_transform;
+    }
+
+    ASSERT_TRUE(harness.editor.history().undo().ok());
+    EXPECT_EQ(harness.session.scene().entities().size(),
+              entity_count_before + 2u);
+    ASSERT_TRUE(harness.editor.history().undo().ok());
+    EXPECT_EQ(harness.session.scene().entities().size(),
+              entity_count_before + 1u);
+    ASSERT_TRUE(harness.editor.history().undo().ok());
+    EXPECT_EQ(harness.session.scene().entities().size(), entity_count_before);
+    ASSERT_TRUE(harness.editor.history().redo().ok());
+    EXPECT_EQ(harness.session.scene().entities().size(),
+              entity_count_before + 1u);
+  }
+}
+
+TEST(ViewportInteractionControllerTests,
      ShiftOrAltMoveGizmoDragCreatesAndSelectsOneLinkedInstanceOccurrence) {
   for (const bool use_shift : {true, false}) {
     SCOPED_TRACE(use_shift ? "Shift" : "Alt");

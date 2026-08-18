@@ -3264,6 +3264,42 @@ TEST(EditorApiTests, ViewportSelectionModeShortcutsResolveAsRouterIntents) {
     }
 }
 
+TEST(EditorApiTests,
+     KnifeShortcutResolvesAcrossEveryPersistentSelectionMode) {
+  constexpr std::array kModes{
+      quader::ViewportSelectionMode::Vertex,
+      quader::ViewportSelectionMode::Edge,
+      quader::ViewportSelectionMode::Face,
+      quader::ViewportSelectionMode::Object,
+      quader::ViewportSelectionMode::Group,
+  };
+  const std::filesystem::path path =
+      keybinding_test_path("knife-all-selection-modes");
+  CommandTestHarness harness;
+  quader::QuaderEditorApi &editor = harness.editor;
+  ASSERT_TRUE(editor.commands().set_keybinding_storage_path(path).ok());
+  (void)create_selected_box(editor, "Knife Shortcut Box");
+  EXPECT_EQ(editor.commands().shortcut_for(
+                quader::quader_command::kToolsActivateKnife),
+            "C");
+
+  for (const quader::ViewportSelectionMode mode : kModes) {
+    SCOPED_TRACE(static_cast<int>(mode));
+    quader::ViewportToolState state;
+    state.selection_mode = mode;
+    const quader::QuaderViewportKeybindingDispatch dispatch =
+        editor.commands().dispatch_viewport_input_binding(
+            single_input_chord("C"), state, true, false);
+
+    ASSERT_EQ(
+        dispatch.kind,
+        quader::QuaderViewportKeybindingDispatch::Kind::ViewportShortcut);
+    EXPECT_EQ(dispatch.shortcut.kind,
+              quader::ViewportShortcutKind::ActivateTool);
+    EXPECT_EQ(dispatch.shortcut.tool, quader::ViewportToolId::Knife);
+  }
+}
+
 TEST(EditorApiTests, InputBindingsSupportPunctuationAndMouseChords) {
   const std::filesystem::path path = keybinding_test_path("input-chords");
   CommandTestHarness harness;

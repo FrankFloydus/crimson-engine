@@ -884,11 +884,11 @@ TEST(UiLayoutGuardrailTests,
   expect_contains(tool, "const QSignalBlocker slider_blocker(slider)");
   expect_contains(tool,
                   "std::max(4, decimal_places_for_step(control.step))");
-  expect_contains(tool,
-                  "constexpr int kTrailingNumberDispatchDelayMs = 50");
+  expect_contains(tool, "constexpr int kNumberDispatchIntervalMs = 50");
   expect_contains(tool, "binding.pending_number_value = value");
+  expect_contains(tool, "const bool pointer_drag =");
+  expect_contains(tool, "!binding.number_dispatch_timer->isActive()");
   expect_contains(tool, "binding.number_dispatch_timer->start()");
-  expect_missing(tool, "!binding.number_dispatch_timer->isActive()");
   expect_contains(tool, "flush_number_dispatch(control_index)");
   expect_contains(tool, "queue_number_dispatch(control_index, spin->value())");
   expect_contains(tool, "&QSpinBox::editingFinished");

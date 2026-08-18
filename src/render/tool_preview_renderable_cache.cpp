@@ -108,6 +108,26 @@ bool same_geometry_payload(
   return true;
 }
 
+bool same_dynamic_geometry_layout(
+    const std::shared_ptr<const MeshGeometryPayload> &left,
+    const std::shared_ptr<const MeshGeometryPayload> &right) {
+  if (left.get() == right.get()) {
+    return true;
+  }
+  if (!left || !right || left->vertices.size() != right->vertices.size() ||
+      left->indices.size() != right->indices.size() ||
+      left->primitives != right->primitives) {
+    return false;
+  }
+  for (std::size_t index = 0u; index < left->vertices.size(); ++index) {
+    if (left->vertices[index].source_vertex_id !=
+        right->vertices[index].source_vertex_id) {
+      return false;
+    }
+  }
+  return true;
+}
+
 std::uint64_t exact_reuse_signature(std::uint64_t base_signature,
                                     bool wildcard_dynamic_layout,
                                     std::uint64_t dynamic_layout_key) {
@@ -1059,13 +1079,17 @@ std::uint64_t ToolPreviewRenderableCache::preview_topology_signature(
   signature.add_size(geometry.vertices.size())
       .add_size(geometry.indices.size());
   for (const MeshVertex &vertex : geometry.vertices) {
-    signature.add_value(vertex.source_vertex_id)
-        .add_vec3(vertex.normal)
-        .add_vec2(vertex.uv)
-        .add_value(vertex.rgba);
+    signature.add_value(vertex.source_vertex_id);
+    if (!preview_mesh.dynamic_positions) {
+      signature.add_vec3(vertex.normal)
+          .add_vec2(vertex.uv)
+          .add_value(vertex.rgba);
+    }
   }
-  for (const std::uint32_t index : geometry.indices) {
-    signature.add_value(index);
+  if (!preview_mesh.dynamic_positions) {
+    for (const std::uint32_t index : geometry.indices) {
+      signature.add_value(index);
+    }
   }
   signature.add_size(geometry.primitives.size());
   for (const MeshPrimitiveSpan primitive : geometry.primitives) {
@@ -1180,6 +1204,10 @@ bool ToolPreviewRenderableCache::group_matches_structure(
 bool ToolPreviewRenderableCache::group_topology_equals(
     const PreviewGroup &group,
     const RenderToolPreviewMeshRecord &preview_mesh) {
+  if (preview_mesh.dynamic_positions) {
+    return same_dynamic_geometry_layout(
+        group.topology_payload, preview_mesh.mesh.geometry_payload());
+  }
   return same_geometry_payload(group.topology_payload,
                                preview_mesh.mesh.geometry_payload(), false);
 }
@@ -1215,6 +1243,7 @@ bool ToolPreviewRenderableCache::group_dynamic_update_is_valid(
   return factory_ != nullptr && factory_->initialized() &&
          group.rendered_prototype.dynamic_geometry &&
          group.rendered_prototype.vertex_buffer != nullptr &&
+         group.rendered_prototype.index_buffer != nullptr &&
          group.rendered_prototype.vertex_count == geometry.vertices.size() &&
          group.rendered_prototype.index_count == geometry.indices.size() &&
          (positions.empty() || positions.size() == geometry.vertices.size());

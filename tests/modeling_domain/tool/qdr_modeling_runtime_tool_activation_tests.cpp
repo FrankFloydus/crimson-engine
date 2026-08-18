@@ -12,6 +12,7 @@
 #include <editor/interactions/interaction_api.hpp>
 #include <quader/modeling/neutral/polygon/document.hpp>
 
+#include <array>
 #include <string>
 #include <utility>
 
@@ -287,6 +288,33 @@ TEST(QdrModelingRuntimeToolActivationTests, ToolActivationPolicyResetsConflictin
             quader_editor_core::ViewportInteractionTool::Extrude));
         EXPECT_FALSE(quader_editor_core::viewport_tool_uses_transform_gizmo(
             quader_editor_core::ViewportInteractionTool::Extrude));
+}
+
+TEST(QdrModelingRuntimeToolActivationTests,
+     KnifeActivationPreservesThePersistentSelectionMode) {
+  constexpr std::array kModes{
+      quader_editor_core::SelectionMode::Vertex,
+      quader_editor_core::SelectionMode::Edge,
+      quader_editor_core::SelectionMode::Face,
+      quader_editor_core::SelectionMode::Object,
+  };
+
+  for (const quader_editor_core::SelectionMode mode : kModes) {
+    SCOPED_TRACE(static_cast<int>(mode));
+    quader_editor_core::ViewportToolActivationRequest request;
+    request.current_tool = quader_editor_core::ViewportInteractionTool::Select;
+    request.requested_tool = quader_editor_core::ViewportInteractionTool::Knife;
+    request.selection_mode = mode;
+
+    const quader_editor_core::ViewportToolActivationPlan plan =
+        quader_editor_core::plan_viewport_tool_activation(request);
+
+    EXPECT_EQ(plan.active_tool,
+              quader_editor_core::ViewportInteractionTool::Knife);
+    EXPECT_TRUE(plan.knife_tool_active);
+    EXPECT_EQ(plan.selection_mode, mode);
+    EXPECT_FALSE(plan.selection_mode_changed);
+  }
 }
 
 TEST(QdrModelingRuntimeToolActivationTests, ToolActivationPolicyResetsConflictingRuntimeOwnersBoxActivationPreservesBoxStateWhileClearingCutState) {

@@ -1453,6 +1453,8 @@ public:
     options.suppress_persistent_selection =
         options.suppress_persistent_selection ||
         active_scene_selection_is_owned_outside_modeling();
+    options.persistent_source_wire_object_id =
+        persistent_tool_source_wire_object_id(selection_projection_view());
     return overlay_service_.selection_overlay_signature(runtime_, options);
   }
 
@@ -1463,6 +1465,8 @@ public:
         active_scene_selection_is_owned_outside_modeling();
     const quader_editor_core::EditorSession &projected =
         selection_projection_view();
+    options.persistent_source_wire_object_id =
+        persistent_tool_source_wire_object_id(projected);
     return overlay_service_.selection_overlay_frame(
         projected, runtime_, scene_, object_registry_, selection_service_,
         sdk_projection_adapter_, options);
@@ -1508,7 +1512,8 @@ public:
         selection_projection_view();
     ViewportOverlayFrame frame = overlay_service_.volatile_overlay_frame(
         projected, runtime_, scene_, object_registry_, selection_service_,
-        sdk_projection_adapter_);
+        sdk_projection_adapter_,
+        persistent_tool_source_wire_object_id(projected));
     if (cache_key.has_value()) {
       volatile_cut_overlay_cache_.key = *cache_key;
       volatile_cut_overlay_cache_.frame = frame;
@@ -3206,7 +3211,18 @@ public:
       if (!repeat.last_transform.has_value()) {
         return {false, false, "No repeatable transform is available."};
       }
-      return execute_repeat_transform_scene_aware(*repeat.last_transform);
+      // Replaying a duplicate transform executes DuplicateMeshes internally.
+      // That operation is independently repeatable and would otherwise
+      // replace this richer "duplicate + transform" action with a plain
+      // duplicate after the first Ctrl+R. Repeat must remain idempotent with
+      // respect to the action it is replaying.
+      const quader_editor_core::RepeatLastActionState repeated_action = repeat;
+      const quader_editor_core::RepeatTransformAction transform_action =
+          *repeat.last_transform;
+      const quader_editor_core::CommandResult result =
+          execute_repeat_transform_scene_aware(transform_action);
+      repeat = repeated_action;
+      return result;
     }
     if (repeat.last_action_kind ==
             quader_editor_core::RepeatableActionKind::Operation &&
@@ -3671,8 +3687,7 @@ public:
     bool selection_mode_changed = false;
     std::string selection_mode_message;
     std::optional<ModelingSelectionMode> required_selection_mode;
-    if (tool == ModelingViewportTool::InsertEdgeLoop ||
-        tool == ModelingViewportTool::Knife) {
+    if (tool == ModelingViewportTool::InsertEdgeLoop) {
       required_selection_mode = ModelingSelectionMode::Edge;
     } else if (tool == ModelingViewportTool::Mirror) {
       required_selection_mode = ModelingSelectionMode::Object;
@@ -4551,7 +4566,7 @@ public:
         overlay_signature_before !=
         overlay_service_.volatile_overlay_signature(runtime_);
     if (changed) {
-      invalidate_selection_overlay_caches();
+      overlay_service_.invalidate_composed_frame();
     }
     return {.ok = true, .changed = changed};
   }
@@ -4564,7 +4579,7 @@ public:
           overlay_signature_before !=
           overlay_service_.volatile_overlay_signature(runtime_);
       if (changed) {
-        invalidate_selection_overlay_caches();
+        overlay_service_.invalidate_composed_frame();
       }
       return ModelingCommandResult{
           .ok = ok,
@@ -4625,10 +4640,17 @@ public:
       return {.ok = false,
               .message = "Knife target transform is not invertible."};
     }
+    const int previous_target_object_id =
+        runtime_.knife_state().target_object_id;
     const bool changed =
         runtime_.accept_knife_current_point(local_event->grid_size);
     if (changed) {
-      invalidate_selection_overlay_caches();
+      if (runtime_.knife_state().target_object_id !=
+          previous_target_object_id) {
+        invalidate_selection_overlay_caches();
+      } else {
+        overlay_service_.invalidate_composed_frame();
+      }
     }
     return {.ok = true, .changed = resolved.changed || changed};
   }
@@ -5840,6 +5862,19 @@ public:
   }
 
 private:
+  [[nodiscard]] int persistent_tool_source_wire_object_id(
+      const quader_editor_core::EditorSession &projected) const {
+    const quader_editor_core::KnifeToolState &knife = runtime_.knife_state();
+    if (runtime_.active_tool() !=
+            quader_editor_core::ViewportInteractionTool::Knife ||
+        !knife.active) {
+      return -1;
+    }
+    return knife.target_object_id > 0
+               ? knife.target_object_id
+               : projected.active_object_id();
+  }
+
   void apply_app_selection_mode_to_projection(
       quader_editor_core::EditorSession &projection) const {
     switch (app_selection_mode_) {

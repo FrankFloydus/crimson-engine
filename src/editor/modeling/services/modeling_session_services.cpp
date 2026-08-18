@@ -308,6 +308,26 @@ const quader_editor_core::PolygonObject *find_polygon_object_by_id(
   return found == objects.end() ? nullptr : &*found;
 }
 
+bool has_complete_source_wire_for_object(
+    const quader_editor_core::SelectionOverlayFrame &frame, int object_id) {
+  const bool has_wire = std::any_of(
+      frame.lines.begin(), frame.lines.end(),
+      [object_id](const quader_editor_core::SelectionOverlayLine &line) {
+        return line.object_id == object_id &&
+               line.layer ==
+                   quader_editor_core::SelectionOverlayLayer::SourceWire;
+      });
+  const bool has_depth_stamp = std::any_of(
+      frame.triangles.begin(), frame.triangles.end(),
+      [object_id](
+          const quader_editor_core::SelectionOverlayTriangle &triangle) {
+        return triangle.object_id == object_id &&
+               triangle.layer == quader_editor_core::SelectionOverlayLayer::
+                                     SourceWireDepthStamp;
+      });
+  return has_wire && has_depth_stamp;
+}
+
 bool component_hover_replaces_fallback_active_source_wire(
     const quader_editor_core::EditorSession &session,
     const quader_editor_core::SelectionHoverState &hover) {
@@ -2793,13 +2813,14 @@ std::uint64_t ModelingOverlayService::selection_overlay_signature(
     const quader_editor_core::EditorRuntime &runtime,
     ModelingSelectionOverlayOptions options) const {
   // The retained selection frame depends only on persistent selection
-  // presentation. Hover, snap, and active-tool state live in the volatile
-  // overlay stream and must never invalidate this signature.
-  (void)runtime;
+  // presentation. Hover and snap state live in the volatile overlay stream;
+  // only a tool's stable topology context participates here.
   std::uint64_t hash = 1469598103934665603ULL;
   mix_overlay_signature_hash(hash,
                              options.suppress_persistent_object_selection);
   mix_overlay_signature_hash(hash, options.suppress_persistent_selection);
+  (void)runtime;
+  mix_overlay_signature_hash(hash, options.persistent_source_wire_object_id);
   return hash;
 }
 
@@ -3064,14 +3085,20 @@ ModelingOverlayService::selection_overlay_base_frame(
       overlay_base_cache_.content_revision == content_revision &&
       overlay_base_cache_.selection_revision == selection_revision &&
       overlay_base_cache_.active_object_id == active_object_id &&
+      overlay_base_cache_.persistent_source_wire_object_id ==
+          options.persistent_source_wire_object_id &&
       overlay_base_cache_.selection_mode == selection_mode &&
       overlay_base_cache_.suppress_persistent_object_selection ==
-          options.suppress_persistent_object_selection) {
+          options.suppress_persistent_object_selection &&
+      overlay_base_cache_.suppress_persistent_selection ==
+          options.suppress_persistent_selection) {
     return overlay_base_cache_.frame;
   }
 
   const bool previous_suppressed_persistent_object_selection =
       overlay_base_cache_.suppress_persistent_object_selection;
+  const bool previous_suppressed_persistent_selection =
+      overlay_base_cache_.suppress_persistent_selection;
   std::vector<OverlayBaseObjectCacheEntry> previous_entries =
       std::move(overlay_base_cache_.object_entries);
   std::unordered_map<int, std::size_t> previous_entry_by_object_id;
@@ -3085,9 +3112,12 @@ ModelingOverlayService::selection_overlay_base_frame(
   next.content_revision = content_revision;
   next.selection_revision = selection_revision;
   next.active_object_id = active_object_id;
+  next.persistent_source_wire_object_id =
+      options.persistent_source_wire_object_id;
   next.selection_mode = selection_mode;
   next.suppress_persistent_object_selection =
       options.suppress_persistent_object_selection;
+  next.suppress_persistent_selection = options.suppress_persistent_selection;
   next.object_entries.reserve(session.objects().size());
   std::unordered_multimap<std::uint64_t, std::size_t>
       current_entry_by_geometry_signature;
@@ -3123,6 +3153,9 @@ ModelingOverlayService::selection_overlay_base_frame(
             quader_editor_core::component_selection_has_any_components(
                 object.selection) ||
            (!has_component_source_targets && object.id == active_object_id));
+      const bool tool_source_wire_object =
+          object.id > 0 &&
+          object.id == options.persistent_source_wire_object_id;
 
       OverlayBaseObjectCacheEntry entry;
       if (reusable != previous_entry_by_object_id.end() &&
@@ -3133,8 +3166,12 @@ ModelingOverlayService::selection_overlay_base_frame(
               object.component_edit_target &&
           previous_entries[reusable->second].active_source_wire_object ==
               active_source_wire_object &&
+          previous_entries[reusable->second].tool_source_wire_object ==
+              tool_source_wire_object &&
           previous_suppressed_persistent_object_selection ==
               options.suppress_persistent_object_selection &&
+          previous_suppressed_persistent_selection ==
+              options.suppress_persistent_selection &&
           ModelingSelectionService::selection_matches(
               previous_entries[reusable->second].selection, object.selection)) {
         entry = std::move(previous_entries[reusable->second]);
@@ -3155,6 +3192,8 @@ ModelingOverlayService::selection_overlay_base_frame(
                   object.component_edit_target &&
               candidate_entry.active_source_wire_object ==
                   active_source_wire_object &&
+              candidate_entry.tool_source_wire_object ==
+                  tool_source_wire_object &&
               ModelingSelectionService::selection_matches(
                   candidate_entry.selection, object.selection) &&
               same_overlay_document_layout(candidate_object.document,
@@ -3178,10 +3217,14 @@ ModelingOverlayService::selection_overlay_base_frame(
           entry.selected = object.selected;
           entry.component_edit_target = object.component_edit_target;
           entry.active_source_wire_object = active_source_wire_object;
+          entry.tool_source_wire_object = tool_source_wire_object;
           entry.selection = object.selection;
-          if (options.suppress_persistent_object_selection &&
-              selection_mode == quader_editor_core::SelectionMode::Object &&
-              object.selected) {
+          if (options.suppress_persistent_selection) {
+            entry.frame = {};
+          } else if (options.suppress_persistent_object_selection &&
+                     selection_mode ==
+                         quader_editor_core::SelectionMode::Object &&
+                     object.selected) {
             entry.frame =
                 quader_editor_core::build_object_selection_wire_overlay_frame(
                     object, {});
@@ -3193,8 +3236,15 @@ ModelingOverlayService::selection_overlay_base_frame(
           }
         }
         if (selection_mode != quader_editor_core::SelectionMode::Object &&
-            !active_source_wire_object) {
+            !active_source_wire_object && !tool_source_wire_object) {
           remove_source_wire_for_object(entry.frame, object.id);
+        }
+        if (tool_source_wire_object &&
+            !has_complete_source_wire_for_object(entry.frame, object.id)) {
+          remove_source_wire_for_object(entry.frame, object.id);
+          append_overlay_frame(
+              entry.frame,
+              quader_editor_core::build_source_wire_overlay_frame(object, {}));
         }
       }
       if (options.suppress_persistent_object_selection &&
@@ -3247,6 +3297,10 @@ ModelingOverlayService::selection_overlay_current_frame(
   quader_editor_core::SelectionOverlayFrame hover_frame =
       quader_editor_core::build_selection_hover_overlay_frame(
           session.objects(), session.selection_mode(), hover, {});
+  if (options.persistent_source_wire_object_id > 0) {
+    remove_source_wire_for_object(
+        hover_frame, options.persistent_source_wire_object_id);
+  }
   const auto append_runtime_tool_overlay =
       [&](quader_editor_core::SelectionOverlayFrame &frame) {
         const quader_editor_core::InsertEdgeLoopToolState &insert_loop =
@@ -3272,7 +3326,9 @@ ModelingOverlayService::selection_overlay_current_frame(
   }
 
   quader_editor_core::SelectionOverlayFrame frame = base;
-  if (component_hover_replaces_fallback_active_source_wire(session, hover)) {
+  if (component_hover_replaces_fallback_active_source_wire(session, hover) &&
+      session.active_object_id() !=
+          options.persistent_source_wire_object_id) {
     remove_source_wire_for_object(frame, session.active_object_id());
   }
   append_overlay_frame(frame, hover_frame);
@@ -3287,9 +3343,6 @@ ViewportOverlayFrame ModelingOverlayService::selection_overlay_frame(
     const ModelingSelectionService &selection_service,
     const ModelingSdkProjectionAdapter &sdk_projection,
     ModelingSelectionOverlayOptions options) const {
-  if (options.suppress_persistent_selection) {
-    return {};
-  }
   const quader_editor_core::SelectionHoverState persistent_hover;
   (void)sdk_projection;
   const std::uint64_t content_revision = session.state().content_revision;
@@ -3340,7 +3393,11 @@ ViewportOverlayFrame ModelingOverlayService::selection_overlay_frame(
       projected_overlay_base_cache_.instance_edit_scope !=
           instance_edit_scope ||
       projected_overlay_base_cache_.suppress_persistent_object_selection !=
-          options.suppress_persistent_object_selection) {
+          options.suppress_persistent_object_selection ||
+      projected_overlay_base_cache_.suppress_persistent_selection !=
+          options.suppress_persistent_selection ||
+      projected_overlay_base_cache_.persistent_source_wire_object_id !=
+          options.persistent_source_wire_object_id) {
     QDR_PROFILE_SCOPE("Selection overlay project persistent base");
     projected_overlay_base_cache_.frame =
         SelectionOverlayProjection::project_selection_overlay_frame(
@@ -3356,6 +3413,10 @@ ViewportOverlayFrame ModelingOverlayService::selection_overlay_frame(
     projected_overlay_base_cache_.instance_edit_scope = instance_edit_scope;
     projected_overlay_base_cache_.suppress_persistent_object_selection =
         options.suppress_persistent_object_selection;
+    projected_overlay_base_cache_.suppress_persistent_selection =
+        options.suppress_persistent_selection;
+    projected_overlay_base_cache_.persistent_source_wire_object_id =
+        options.persistent_source_wire_object_id;
     projected_overlay_base_cache_.valid = true;
   }
 
@@ -3375,7 +3436,8 @@ ViewportOverlayFrame ModelingOverlayService::volatile_overlay_frame(
     const quader_editor_core::EditorRuntime &runtime,
     const SceneDocument &scene, const ModelingObjectRuntimeMap &object_registry,
     const ModelingSelectionService &selection_service,
-    const ModelingSdkProjectionAdapter &sdk_projection) const {
+    const ModelingSdkProjectionAdapter &sdk_projection,
+    int persistent_source_wire_object_id) const {
   QDR_PROFILE_FUNCTION();
   const quader_editor_core::SelectionMode selection_mode =
       session.selection_mode();
@@ -3407,6 +3469,10 @@ ViewportOverlayFrame ModelingOverlayService::volatile_overlay_frame(
     append_hover_object(hover.candidate_object_id);
     if (hover.object_id != hover.candidate_object_id) {
       append_hover_object(hover.object_id);
+    }
+    if (persistent_source_wire_object_id > 0) {
+      remove_source_wire_for_object(hover_frame,
+                                    persistent_source_wire_object_id);
     }
     frame = SelectionOverlayProjection::project_selection_overlay_frame(
         hover_frame, object_registry, scene, selection_mode,

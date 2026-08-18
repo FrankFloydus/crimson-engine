@@ -550,6 +550,9 @@ struct ModelingSelectionExport {
 struct ModelingSelectionOverlayOptions {
   bool suppress_persistent_object_selection = false;
   bool suppress_persistent_selection = false;
+  // Tool-owned topology context is retained with the persistent overlay, not
+  // rebuilt from the volatile selection hover stream.
+  int persistent_source_wire_object_id = -1;
 };
 
 /**

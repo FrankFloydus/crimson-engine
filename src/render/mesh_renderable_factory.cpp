@@ -221,6 +221,21 @@ build_render_vertices(const RenderMeshAssetSnapshot &mesh) {
   return vertices;
 }
 
+std::vector<DynamicRenderVertexStatic>
+pack_dynamic_static_vertices(std::span<const RenderVertex> vertices) {
+  std::vector<DynamicRenderVertexStatic> packed;
+  packed.reserve(vertices.size());
+  for (const RenderVertex &vertex : vertices) {
+    packed.push_back({
+        .tangent_frame = vertex.tangent_frame,
+        .uv = vertex.uv,
+        .surface_grid_projection = vertex.surface_grid_projection,
+        .color = vertex.color,
+    });
+  }
+  return packed;
+}
+
 RenderInstanceBounds
 compute_local_bounds_impl(const RenderMeshAssetSnapshot &mesh) {
   if (mesh.vertices.empty()) {
@@ -535,23 +550,16 @@ bool MeshRenderableFactory::acquire_dynamic_geometry(
        dynamic_positions.size() != mesh.vertices.size())) {
     return false;
   }
-  std::vector<RenderVertex> vertices = build_render_vertices(mesh);
+  const std::vector<RenderVertex> vertices = build_render_vertices(mesh);
   std::vector<filament::math::float3> positions;
-  std::vector<DynamicRenderVertexStatic> static_vertices;
   positions.reserve(vertices.size());
-  static_vertices.reserve(vertices.size());
   for (std::size_t index = 0u; index < vertices.size(); ++index) {
     positions.push_back(dynamic_positions.empty()
                             ? vertices[index].position
                             : to_filament(dynamic_positions[index]));
-    const RenderVertex &vertex = vertices[index];
-    static_vertices.push_back({
-        .tangent_frame = vertex.tangent_frame,
-        .uv = vertex.uv,
-        .surface_grid_projection = vertex.surface_grid_projection,
-        .color = vertex.color,
-    });
   }
+  std::vector<DynamicRenderVertexStatic> static_vertices =
+      pack_dynamic_static_vertices(vertices);
   proxy.vertex_buffer =
       filament::VertexBuffer::Builder()
           .vertexCount(static_cast<std::uint32_t>(positions.size()))
@@ -725,7 +733,7 @@ bool MeshRenderableFactory::update_dynamic_geometry(
     std::span<const QVec3> dynamic_positions,
     const RenderInstanceBounds *local_bounds_override) {
   if (engine_ == nullptr || !proxy.dynamic_geometry ||
-      proxy.vertex_buffer == nullptr ||
+      proxy.vertex_buffer == nullptr || proxy.index_buffer == nullptr ||
       proxy.vertex_count != mesh.vertices.size() ||
       proxy.index_count != mesh.indices.size() ||
       (!dynamic_positions.empty() &&
@@ -751,6 +759,21 @@ bool MeshRenderableFactory::update_dynamic_geometry(
     proxy.vertex_buffer->setBufferAt(
         *engine_, 0,
         FilamentBufferDescriptorFactory::vector(std::move(positions)));
+  }
+  {
+    QDR_PROFILE_SCOPE("Mesh dynamic derived attributes pack");
+    const std::vector<RenderVertex> render_vertices =
+        build_render_vertices(mesh);
+    std::vector<DynamicRenderVertexStatic> static_vertices =
+        pack_dynamic_static_vertices(render_vertices);
+    proxy.vertex_buffer->setBufferAt(
+        *engine_, 1,
+        FilamentBufferDescriptorFactory::vector(std::move(static_vertices)));
+  }
+  {
+    QDR_PROFILE_SCOPE("Mesh dynamic index upload submit");
+    proxy.index_buffer->setBuffer(
+        *engine_, FilamentBufferDescriptorFactory::span(mesh.indices));
   }
   {
     QDR_PROFILE_SCOPE("Mesh dynamic position update bounds");

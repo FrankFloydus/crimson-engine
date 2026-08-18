@@ -1235,6 +1235,17 @@ SelectionOverlayFrame build_selection_hover_overlay_frame(
 	return frame;
 }
 
+SelectionOverlayFrame build_source_wire_overlay_frame(
+		const PolygonObject& object,
+		const SelectionOverlayStyle& style)
+{
+	QDR_PROFILE_SCOPE("qdr_editor_core.build_source_wire_overlay_frame");
+	SelectionOverlayFrame frame;
+	const SelectionOverlayDocumentLookup lookup(object.document);
+	append_hover_source_wire(frame, object, lookup, style, true);
+	return frame;
+}
+
 SelectionOverlayFrame build_selection_hover_overlay_frame(
 		const std::vector<PolygonObject>& objects,
 		SelectionMode mode,

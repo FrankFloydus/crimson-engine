@@ -3400,6 +3400,28 @@ TEST(ToolPreviewRenderableCacheTests,
 }
 
 TEST(ToolPreviewRenderableCacheTests,
+     DynamicLayoutReusesGroupWhenDerivedAttributesAndIndicesChange) {
+  RenderToolPreviewMeshRecord retained = preview_match_test_record(true);
+  RenderToolPreviewMeshRecord submitted = retained;
+  MeshGeometryPayload &geometry = submitted.mesh.edit_geometry();
+  geometry.vertices[0].position = {0.25f, 0.0f, 0.5f};
+  geometry.vertices[0].normal = {0.0f, 1.0f, 0.0f};
+  geometry.vertices[0].uv = {0.25f, 0.5f};
+  geometry.indices = {0u, 2u, 1u};
+  submitted.position_revision = retained.position_revision + 1u;
+
+  const auto outcome = ToolPreviewRenderableCacheTestPeer::match(
+      std::vector<RenderToolPreviewMeshRecord>{retained},
+      std::vector<RenderToolPreviewMeshRecord>{submitted});
+
+  ASSERT_EQ(outcome.kind,
+            ToolPreviewRenderableCacheTestPeer::MatchKind::Exact);
+  EXPECT_EQ(outcome.candidate_indices,
+            (std::vector<std::size_t>{0u}));
+  EXPECT_EQ(outcome.counters.structural_match_candidate_visits, 0u);
+}
+
+TEST(ToolPreviewRenderableCacheTests,
      StructuralClaimBucketsScaleLinearlyAndPreserveReuseOrder) {
   const auto run = [](std::size_t group_count) {
     const RenderToolPreviewMeshRecord prototype =
@@ -15515,6 +15537,15 @@ std::unordered_set<std::uint32_t> expect_streamed_transform_delta(
   for (const ModelingToolPreviewMesh &mesh : meshes) {
     EXPECT_TRUE(mesh.dynamic_positions);
     EXPECT_TRUE(mesh.suppress_source);
+    const std::optional<MeshAsset> committed =
+        service.compile_object_mesh(mesh.source_object_id);
+    if (!committed.has_value() ||
+        committed->geometry().vertices.size() !=
+            mesh.mesh.geometry().vertices.size()) {
+      ADD_FAILURE() << "Transient transform topology must match its committed "
+                       "source object.";
+      continue;
+    }
     if (!mesh.dynamic_position_payload ||
         mesh.dynamic_position_payload->size() !=
             mesh.mesh.geometry().vertices.size()) {
@@ -15524,7 +15555,7 @@ std::unordered_set<std::uint32_t> expect_streamed_transform_delta(
     }
     for (std::size_t index = 0;
          index < mesh.dynamic_position_payload->size(); ++index) {
-      const MeshVertex &base = mesh.mesh.geometry().vertices[index];
+      const MeshVertex &base = committed->geometry().vertices[index];
       const QVec3 streamed = (*mesh.dynamic_position_payload)[index];
       const QVec3 delta = streamed - base.position;
       if (std::abs(delta.x) <= 0.0001f &&
@@ -15540,6 +15571,115 @@ std::unordered_set<std::uint32_t> expect_streamed_transform_delta(
   }
   EXPECT_FALSE(moved_source_vertices.empty());
   return moved_source_vertices;
+}
+
+void expect_mesh_geometry_near(const MeshGeometryPayload &actual,
+                               const MeshGeometryPayload &expected) {
+  ASSERT_EQ(actual.vertices.size(), expected.vertices.size());
+  ASSERT_EQ(actual.indices, expected.indices);
+  ASSERT_EQ(actual.primitives, expected.primitives);
+  for (std::size_t index = 0u; index < actual.vertices.size(); ++index) {
+    const MeshVertex &left = actual.vertices[index];
+    const MeshVertex &right = expected.vertices[index];
+    SCOPED_TRACE(index);
+    expect_vec3_near(left.position, right.position);
+    expect_vec3_near(left.normal, right.normal);
+    EXPECT_NEAR(left.uv.x, right.uv.x, 0.0001f);
+    EXPECT_NEAR(left.uv.y, right.uv.y, 0.0001f);
+    EXPECT_EQ(left.rgba, right.rgba);
+    EXPECT_EQ(left.source_vertex_id, right.source_vertex_id);
+  }
+}
+
+TEST(ModelingSessionServiceTests,
+     ComponentTransformPreviewMatchesCanonicalDerivedMeshInEveryMode) {
+  constexpr std::array<ModelingSelectionMode, 3> kModes{
+      ModelingSelectionMode::Vertex,
+      ModelingSelectionMode::Edge,
+      ModelingSelectionMode::Face,
+  };
+  for (const ModelingSelectionMode mode : kModes) {
+    SCOPED_TRACE(static_cast<int>(mode));
+    SceneDocument scene;
+    AssetRegistry assets;
+    ModelingSessionService service(scene, assets);
+    const ModelingCreateBoxResult box = service.create_box_from_bounds({
+        .bounds = {.min = {-1.0f, -1.0f, -1.0f},
+                   .max = {1.0f, 1.0f, 1.0f}},
+        .name = "Derived Preview Box",
+    });
+    ASSERT_TRUE(box.ok) << box.message;
+    ASSERT_TRUE(service.set_selection_mode(mode).ok);
+    ASSERT_TRUE(seed_component_bulk_selection_scope(
+                    service, box.object.modeling_object_id, mode,
+                    ModelingSelectionEdit::Replace)
+                    .ok);
+
+    const MeshComponent *binding = scene.mesh(box.object.entity);
+    ASSERT_NE(binding, nullptr);
+    const AssetId mesh_id = binding->mesh;
+    const MeshAsset *source = assets.mesh(mesh_id);
+    ASSERT_NE(source, nullptr);
+    const MeshGeometryPayload source_geometry = source->geometry();
+    const std::uint64_t mesh_revision_before =
+        assets.mesh_revision(mesh_id).value;
+    const std::uint64_t asset_revision_before = assets.revision();
+    const std::uint64_t scene_revision_before = scene.revision();
+    const ModelingSdkProjectionStats stats_before =
+        service.modeling_sdk_projection_stats_for_tests();
+
+    ASSERT_TRUE(service.begin_transform_preview(false).ok);
+    const ModelingCommandResult update =
+        service.update_transform_translate_preview({0.75f, 0.25f, 0.5f});
+    ASSERT_TRUE(update.ok) << update.message;
+    ASSERT_TRUE(update.changed);
+    const std::vector<ModelingToolPreviewMesh> previews =
+        service.tool_preview_meshes();
+    ASSERT_EQ(previews.size(), 1u);
+    const ModelingToolPreviewMesh &preview = previews.front();
+    ASSERT_TRUE(preview.dynamic_positions);
+    ASSERT_NE(preview.dynamic_position_payload, nullptr);
+    ASSERT_EQ(preview.dynamic_position_payload->size(),
+              preview.mesh.geometry().vertices.size());
+    bool derived_attribute_changed = false;
+    ASSERT_EQ(preview.mesh.geometry().vertices.size(),
+              source_geometry.vertices.size());
+    for (std::size_t index = 0u;
+         index < preview.mesh.geometry().vertices.size(); ++index) {
+      const MeshVertex &derived = preview.mesh.geometry().vertices[index];
+      const MeshVertex &base = source_geometry.vertices[index];
+      expect_vec3_near((*preview.dynamic_position_payload)[index],
+                       derived.position);
+      derived_attribute_changed =
+          derived_attribute_changed ||
+          std::abs(derived.normal.x - base.normal.x) > 0.0001f ||
+          std::abs(derived.normal.y - base.normal.y) > 0.0001f ||
+          std::abs(derived.normal.z - base.normal.z) > 0.0001f ||
+          std::abs(derived.uv.x - base.uv.x) > 0.0001f ||
+          std::abs(derived.uv.y - base.uv.y) > 0.0001f;
+    }
+    EXPECT_TRUE(derived_attribute_changed);
+
+    const ModelingSdkProjectionStats stats_after =
+        service.modeling_sdk_projection_stats_for_tests();
+    EXPECT_EQ(stats_after.mesh_compile_count, stats_before.mesh_compile_count);
+    EXPECT_EQ(stats_after.asset_publication_count,
+              stats_before.asset_publication_count);
+    EXPECT_EQ(stats_after.scene_publication_count,
+              stats_before.scene_publication_count);
+    EXPECT_EQ(stats_after.preview_publication_count,
+              stats_before.preview_publication_count);
+    EXPECT_EQ(assets.mesh_revision(mesh_id).value, mesh_revision_before);
+    EXPECT_EQ(assets.revision(), asset_revision_before);
+    EXPECT_EQ(scene.revision(), scene_revision_before);
+
+    const ModelingCommandResult commit = service.commit_transform_preview();
+    ASSERT_TRUE(commit.ok) << commit.message;
+    ASSERT_TRUE(commit.changed);
+    const MeshAsset *committed = assets.mesh(mesh_id);
+    ASSERT_NE(committed, nullptr);
+    expect_mesh_geometry_near(preview.mesh.geometry(), committed->geometry());
+  }
 }
 
 TEST(ModelingSessionServiceTests,
@@ -16225,7 +16365,16 @@ TEST(ModelingSessionServiceTests,
   const ModelingToolPreviewMesh &second_mesh = second_meshes.front();
   EXPECT_EQ(second_mesh.layout_key, first_mesh.layout_key);
   EXPECT_GT(second_mesh.position_revision, first_mesh.position_revision);
-  EXPECT_EQ(second_mesh.mesh.geometry_payload().get(), retained_geometry.get());
+  EXPECT_NE(second_mesh.mesh.geometry_payload().get(), retained_geometry.get());
+  ASSERT_EQ(second_mesh.mesh.geometry().vertices.size(),
+            retained_geometry->vertices.size());
+  ASSERT_EQ(second_mesh.mesh.geometry().indices.size(),
+            retained_geometry->indices.size());
+  for (std::size_t index = 0u;
+       index < second_mesh.mesh.geometry().vertices.size(); ++index) {
+    EXPECT_EQ(second_mesh.mesh.geometry().vertices[index].source_vertex_id,
+              retained_geometry->vertices[index].source_vertex_id);
+  }
   ASSERT_NE(second_mesh.dynamic_position_payload, nullptr);
   EXPECT_NE(second_mesh.dynamic_position_payload.get(),
             retained_first_positions.get());
@@ -16234,6 +16383,11 @@ TEST(ModelingSessionServiceTests,
             retained_first_positions->size());
   EXPECT_NEAR(second_mesh.dynamic_position_payload->front().x,
               retained_first_positions->front().x + 2.0f, 0.001f);
+  for (std::size_t index = 0u;
+       index < second_mesh.dynamic_position_payload->size(); ++index) {
+    expect_vec3_near((*second_mesh.dynamic_position_payload)[index],
+                     second_mesh.mesh.geometry().vertices[index].position);
+  }
 
   const ModelingSdkProjectionStats after_samples =
       service.modeling_sdk_projection_stats_for_tests();
@@ -16569,7 +16723,7 @@ TEST(ModelingSessionServiceTests,
 }
 
 TEST(ModelingSessionServiceTests,
-     TransformDragShiftDuplicateUsesScenePreviewForRotatedObject) {
+     TransformDragShiftDuplicateCommitsAtPreviewAndRemainsRepeatable) {
   SceneDocument scene;
   AssetRegistry assets;
   ModelingSessionService service(scene, assets);
@@ -16615,9 +16769,57 @@ TEST(ModelingSessionServiceTests,
   EXPECT_NEAR(update.move_delta.x, 2.0f, 0.001f);
   EXPECT_NEAR(update.scene_preview_transform.origin.x, 2.0f, 0.001f);
 
-  const ModelingCommandResult cancel = service.cancel_transform_drag();
-  ASSERT_TRUE(cancel.ok) << cancel.message;
-  EXPECT_EQ(scene.entities().size(), 1u);
+  const std::optional<SceneBounds> preview_bounds =
+      selected_world_bounds(scene, assets);
+  ASSERT_TRUE(preview_bounds.has_value());
+  EXPECT_NEAR(bounds_center(*preview_bounds).x, 2.0f, 0.001f);
+
+  const ModelingTransformDragPreview commit = service.commit_transform_drag();
+  ASSERT_TRUE(commit.ok) << commit.message;
+  EXPECT_TRUE(commit.changed);
+  ASSERT_EQ(scene.entities().size(), 2u);
+  ASSERT_EQ(scene.selected_entities().size(), 1u);
+  EXPECT_EQ(scene.selected_entities().front(), duplicate_entity);
+
+  const std::optional<SceneBounds> committed_bounds =
+      selected_world_bounds(scene, assets);
+  ASSERT_TRUE(committed_bounds.has_value());
+  expect_vec3_near(committed_bounds->min, preview_bounds->min);
+  expect_vec3_near(committed_bounds->max, preview_bounds->max);
+
+  const MeshComponent *committed_duplicate_mesh =
+      scene.mesh(duplicate_entity);
+  ASSERT_NE(committed_duplicate_mesh, nullptr);
+  const MeshAsset *source_asset = assets.mesh(source_mesh_settings.mesh);
+  const MeshAsset *duplicate_asset =
+      assets.mesh(committed_duplicate_mesh->mesh);
+  ASSERT_NE(source_asset, nullptr);
+  ASSERT_NE(duplicate_asset, nullptr);
+  const std::optional<SceneBounds> source_local_bounds =
+      local_mesh_bounds(*source_asset);
+  const std::optional<SceneBounds> duplicate_local_bounds =
+      local_mesh_bounds(*duplicate_asset);
+  ASSERT_TRUE(source_local_bounds.has_value());
+  ASSERT_TRUE(duplicate_local_bounds.has_value());
+  expect_vec3_near(duplicate_local_bounds->min, source_local_bounds->min);
+  expect_vec3_near(duplicate_local_bounds->max, source_local_bounds->max);
+
+  ModelingCommandResult repeated = service.repeat_last_action();
+  ASSERT_TRUE(repeated.ok) << repeated.message;
+  EXPECT_TRUE(repeated.changed);
+  EXPECT_EQ(scene.entities().size(), 3u);
+  std::optional<SceneBounds> repeated_bounds =
+      selected_world_bounds(scene, assets);
+  ASSERT_TRUE(repeated_bounds.has_value());
+  EXPECT_NEAR(bounds_center(*repeated_bounds).x, 4.0f, 0.001f);
+
+  repeated = service.repeat_last_action();
+  ASSERT_TRUE(repeated.ok) << repeated.message;
+  EXPECT_TRUE(repeated.changed);
+  EXPECT_EQ(scene.entities().size(), 4u);
+  repeated_bounds = selected_world_bounds(scene, assets);
+  ASSERT_TRUE(repeated_bounds.has_value());
+  EXPECT_NEAR(bounds_center(*repeated_bounds).x, 6.0f, 0.001f);
 }
 
 TEST(ModelingSessionServiceTests,

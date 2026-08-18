@@ -1134,6 +1134,8 @@ SelectionOverlayFrame build_selection_overlay_frame(
     const SelectionOverlayStyle &style = {});
 SelectionOverlayFrame build_object_selection_wire_overlay_frame(
     const PolygonObject &object, const SelectionOverlayStyle &style = {});
+SelectionOverlayFrame build_source_wire_overlay_frame(
+    const PolygonObject &object, const SelectionOverlayStyle &style = {});
 SelectionOverlayFrame build_selection_hover_overlay_frame(
     std::span<const PolygonObject> objects, SelectionMode mode,
     const SelectionHoverState &hover, const SelectionOverlayStyle &style = {});
