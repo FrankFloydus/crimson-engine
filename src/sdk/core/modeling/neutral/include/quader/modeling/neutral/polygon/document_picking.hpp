@@ -27,6 +27,7 @@ struct PickOptions {
   std::uint32_t hidden_material_slot = 0;
   bool pick_backfaces = false;
   bool prefer_front_facing_faces = true;
+  bool reverse_face_winding = false;
 
   [[nodiscard]] bool hides_material_slot(std::uint32_t material_slot) const {
     return has_hidden_material_slot && material_slot == hidden_material_slot;

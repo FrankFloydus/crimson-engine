@@ -505,6 +505,7 @@ struct QuaderPickSelectRequest {
     bool preserve_existing_component_selection_on_hit = false;
     double vertex_radius = 0.3;
     double edge_radius = 0.2;
+    bool select_backfaces = true;
 };
 
 /**
@@ -516,6 +517,7 @@ struct QuaderBoxSelectRequest {
     QVec2 end = {};
     QuaderSelectionEdit edit = QuaderSelectionEdit::Replace;
     QuaderBoxSelectionRule rule = QuaderBoxSelectionRule::DragDirection;
+    bool select_backfaces = true;
 };
 
 /**
@@ -527,6 +529,7 @@ struct QuaderHoverRequest {
     bool face_plane_hover = false;
     double vertex_radius = 0.3;
     double edge_radius = 0.2;
+    bool select_backfaces = true;
 };
 
 /**

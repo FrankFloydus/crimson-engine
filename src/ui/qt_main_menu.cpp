@@ -476,6 +476,12 @@ struct QtMainMenu::Impl {
                        "ui.menu.select.all", "Select All");
     add_command_action(*menu, quader_command::kSelectInverse,
                        "ui.menu.select.inverse", "Select Inverse");
+    add_command_action(
+        *menu, quader_command::kSelectToggleBackfaceSelection,
+        "ui.menu.select.toggle_backface_selection",
+        "Toggle Backface Selection", [this]() {
+          return context.editor.preferences().backface_selection_enabled();
+        });
     add_selection_mode_separator(*menu, kNonGroupSelectionModes);
     add_selection_mode_action(
         *menu, quader_command::kSelectEdgeDirection,

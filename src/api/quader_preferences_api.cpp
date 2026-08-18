@@ -114,6 +114,19 @@ bool QuaderPreferencesApi::snapping_enabled() const {
   return hooks_.snapping_enabled ? hooks_.snapping_enabled() : false;
 }
 
+QuaderApiVoidResult
+QuaderPreferencesApi::set_backface_selection_enabled(bool enabled) {
+  return hooks_.set_backface_selection_enabled
+             ? hooks_.set_backface_selection_enabled(enabled)
+             : unavailable("Preferences runtime is not attached.");
+}
+
+bool QuaderPreferencesApi::backface_selection_enabled() const {
+  return hooks_.backface_selection_enabled
+             ? hooks_.backface_selection_enabled()
+             : false;
+}
+
 QuaderApiVoidResult QuaderPreferencesApi::set_grid_visible(bool visible) {
   return hooks_.set_grid_visible
              ? hooks_.set_grid_visible(visible)

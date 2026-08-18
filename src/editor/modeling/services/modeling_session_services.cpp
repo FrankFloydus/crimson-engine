@@ -47,6 +47,7 @@
 #include <editor/modeling/runtime/runtime_command.hpp>
 #include <quader/modeling/neutral/polygon/document.hpp>
 #include <quader/modeling/neutral/polygon/document_selection.hpp>
+#include <quader/modeling/neutral/polygon/internal/quader_poly_document_picking_helpers.hpp>
 
 namespace quader {
 namespace {
@@ -73,6 +74,24 @@ bool same_vector(QVec3 left, QVec3 right) {
 
 bool same_matrix(const QMat4 &left, const QMat4 &right) {
   return left.values == right.values;
+}
+
+quader_poly::Ray rectangle_local_pick_ray(
+    const quader_editor_core::ViewportCameraState &camera,
+    QVec2 screen_position,
+    const quader_editor_core::PickObjectTransform *transform) {
+  const quader_poly::Ray world_ray =
+      quader_editor_core::ray_from_viewport_screen_point(camera,
+                                                         screen_position);
+  if (transform == nullptr) {
+    return world_ray;
+  }
+  return {
+      .origin = transform_point(transform->object_from_world,
+                                world_ray.origin),
+      .direction = quader::normalize_or_zero(transform_vector(
+          transform->object_from_world, world_ray.direction)),
+  };
 }
 
 quader_poly::Transform3 polygon_transform_from_matrix(const QMat4 &matrix) {
@@ -503,7 +522,7 @@ quader_poly::Ray to_runtime_ray(const ModelingRay &ray) {
 quader_poly::PickOptions
 pick_options_from_request(const ModelingPickSelectRequest &request) {
   return quader_editor_core::selection_pick_options_from_radii(
-      request.vertex_radius, request.edge_radius);
+      request.vertex_radius, request.edge_radius, request.select_backfaces);
 }
 
 quader_editor_core::SelectionEditOperation
@@ -1473,6 +1492,7 @@ std::optional<int> ModelingSelectionService::pick_object_id(
       cached_local_picking_objects(session, scene, object_registry);
   quader_poly::PickOptions pick_options = pick_options_from_request(request);
   pick_options.mode = quader_poly::SelectionMode::Face;
+  pick_options.pick_backfaces = true;
   const std::optional<quader_editor_core::PickHitRecord> hit =
       quader_editor_core::pick_nearest(
           cached_objects,
@@ -1520,7 +1540,8 @@ ModelingSelectionService::selection_hover(
   const ModelingHoverRequest &request) const {
   const quader_poly::PickOptions pick_options =
       quader_editor_core::selection_pick_options_from_radii(
-          request.vertex_radius, request.edge_radius);
+          request.vertex_radius, request.edge_radius,
+          request.select_backfaces);
   return quader_editor_core::update_selection_hover(
       cached_local_picking_objects(session, scene, object_map),
       session.selection_mode(), current_hover, to_runtime_ray(request.ray),
@@ -2054,6 +2075,7 @@ ModelingSelectionService::rectangle_projected_hits_request(
       rectangle_selection_match(request.rule, request.start, request.end);
   hits_request.rect =
       quader_editor_core::normalized_screen_rect(request.start, request.end);
+  hits_request.select_backfaces = request.select_backfaces;
 
   if (selection_mode == quader_editor_core::SelectionMode::Object) {
     hits_request.objects.reserve(picking_objects.size());
@@ -2081,6 +2103,8 @@ ModelingSelectionService::rectangle_projected_hits_request(
 
   std::vector<QVec2> projected_vertices;
   std::vector<std::uint8_t> projected_vertex_valid;
+  std::vector<QVec3> world_vertices;
+  std::vector<std::uint8_t> world_vertex_valid;
   for (std::size_t object_index = 0;
        object_index < picking_objects.size(); ++object_index) {
     const quader_editor_core::PolygonObject &object =
@@ -2090,6 +2114,18 @@ ModelingSelectionService::rectangle_projected_hits_request(
                 object_transforms[object_index].object_id == object.id
             ? &object_transforms[object_index]
             : nullptr;
+    quader_poly::PickOptions facing_options;
+    facing_options.reverse_face_winding =
+        object_transform != nullptr &&
+        quader_editor_core::pick_object_transform_reverses_face_winding(
+            *object_transform);
+    std::unique_ptr<quader_poly::document_internal::DocumentPickFacts>
+        pick_facts;
+    if (selection_mode != quader_editor_core::SelectionMode::Object) {
+      pick_facts = std::make_unique<
+          quader_poly::document_internal::DocumentPickFacts>(
+          object.document, facing_options);
+    }
     std::size_t projected_vertex_capacity =
         static_cast<std::size_t>(object.document.read().next_vertex_id);
     for (const quader_poly::Vertex &vertex : object.document.vertices) {
@@ -2099,6 +2135,8 @@ ModelingSelectionService::rectangle_projected_hits_request(
     }
     projected_vertices.resize(projected_vertex_capacity);
     projected_vertex_valid.assign(projected_vertex_capacity, 0U);
+    world_vertices.resize(projected_vertex_capacity);
+    world_vertex_valid.assign(projected_vertex_capacity, 0U);
     const auto projected_position =
         [&projected_vertices,
          &projected_vertex_valid](quader_poly::ElementId vertex_id)
@@ -2107,6 +2145,16 @@ ModelingSelectionService::rectangle_projected_hits_request(
       return index < projected_vertex_valid.size() &&
                      projected_vertex_valid[index] != 0U
                  ? &projected_vertices[index]
+                 : nullptr;
+    };
+    const auto cached_world_position =
+        [&world_vertices,
+         &world_vertex_valid](quader_poly::ElementId vertex_id)
+        -> const QVec3 * {
+      const std::size_t index = static_cast<std::size_t>(vertex_id);
+      return index < world_vertex_valid.size() &&
+                     world_vertex_valid[index] != 0U
+                 ? &world_vertices[index]
                  : nullptr;
     };
     quader_editor_core::RectangleProjectedObject projected_object{
@@ -2122,12 +2170,14 @@ ModelingSelectionService::rectangle_projected_hits_request(
               ? vertex.position
               : transform_point(object_transform->world_from_object,
                                 vertex.position);
+      const std::size_t vertex_index = static_cast<std::size_t>(vertex.id);
+      world_vertices[vertex_index] = world_position;
+      world_vertex_valid[vertex_index] = 1U;
       QVec2 screen;
       if (!quader_editor_core::project_viewport_point(camera, world_position,
                                                       screen)) {
         continue;
       }
-      const std::size_t vertex_index = static_cast<std::size_t>(vertex.id);
       projected_vertices[vertex_index] = screen;
       projected_vertex_valid[vertex_index] = 1U;
       if (selection_mode == quader_editor_core::SelectionMode::Object) {
@@ -2186,11 +2236,17 @@ ModelingSelectionService::rectangle_projected_hits_request(
         projected_face.vertex_indices.reserve(face.vertices.size());
         projected_face.screen_vertices.reserve(face.vertices.size());
         QVec2 center{};
+        QVec3 world_center{};
+        std::size_t world_center_count = 0U;
         bool all_projected = !face.vertices.empty();
         for (const quader_poly::ElementId vertex_id : face.vertices) {
           projected_face.vertex_indices.push_back(
               static_cast<int>(vertex_id));
           const QVec2 *found = projected_position(vertex_id);
+          if (const QVec3 *world = cached_world_position(vertex_id)) {
+            world_center = world_center + *world;
+            ++world_center_count;
+          }
           if (found == nullptr) {
             all_projected = false;
             continue;
@@ -2222,6 +2278,23 @@ ModelingSelectionService::rectangle_projected_hits_request(
           projected_face.screen_vertices.clear();
           projected_face.has_screen_bounds = false;
         }
+        if (world_center_count > 0U) {
+          QVec2 facing_screen;
+          world_center = world_center /
+                         static_cast<float>(world_center_count);
+          if (quader_editor_core::project_viewport_point(
+                  camera, world_center, facing_screen)) {
+            projected_face.front_facing =
+                pick_facts->face_is_front_facing_pickable(
+                    face.id,
+                    rectangle_local_pick_ray(camera, facing_screen,
+                                             object_transform));
+          } else {
+            projected_face.front_facing = false;
+          }
+        } else {
+          projected_face.front_facing = false;
+        }
         hits_request.faces.push_back(std::move(projected_face));
       }
       continue;
@@ -2243,6 +2316,24 @@ ModelingSelectionService::rectangle_projected_hits_request(
           projected_edge.has_screen_position = true;
           projected_edge.screen_position = (*a + *b) * 0.5f;
         }
+        const QVec3 *world_a = cached_world_position(edge.a);
+        const QVec3 *world_b = cached_world_position(edge.b);
+        if (world_a != nullptr && world_b != nullptr) {
+          QVec2 facing_screen;
+          if (quader_editor_core::project_viewport_point(
+                  camera, (*world_a + *world_b) * 0.5F, facing_screen)) {
+            projected_edge.front_facing =
+                !pick_facts->edge_has_incident_face(edge) ||
+                pick_facts->edge_has_front_facing_pickable_face(
+                    edge,
+                    rectangle_local_pick_ray(camera, facing_screen,
+                                             object_transform));
+          } else {
+            projected_edge.front_facing = false;
+          }
+        } else {
+          projected_edge.front_facing = false;
+        }
         hits_request.edges.push_back(projected_edge);
       }
       continue;
@@ -2256,6 +2347,13 @@ ModelingSelectionService::rectangle_projected_hits_request(
       if (found != nullptr) {
         projected_vertex.has_screen_position = true;
         projected_vertex.screen_position = *found;
+        projected_vertex.front_facing =
+            !pick_facts->vertex_has_incident_face(vertex.id) ||
+            pick_facts->vertex_has_front_facing_pickable_face(
+                vertex.id,
+                rectangle_local_pick_ray(camera, *found, object_transform));
+      } else {
+        projected_vertex.front_facing = false;
       }
       hits_request.vertices.push_back(projected_vertex);
     }
@@ -2344,6 +2442,8 @@ ModelingSelectionService::cached_rectangle_projected_hits_request(
       rectangle_selection_match(request.rule, request.start, request.end);
   rectangle_projection_cache_.request.rect =
       quader_editor_core::normalized_screen_rect(request.start, request.end);
+  rectangle_projection_cache_.request.select_backfaces =
+      request.select_backfaces;
   return rectangle_projection_cache_.request;
 }
 

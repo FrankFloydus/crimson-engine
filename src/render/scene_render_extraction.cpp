@@ -1397,6 +1397,7 @@ std::vector<RenderToolPreviewMeshRecord> build_render_tool_preview_snapshot(
         .material_revision = 0u,
         .transform = mesh.transform,
         .instance_transforms = std::move(mesh.instance_transforms),
+        .double_sided = mesh.double_sided,
         .dynamic_positions = mesh.dynamic_positions,
         .suppress_source = mesh.suppress_source,
         .layout_key = mesh.layout_key,

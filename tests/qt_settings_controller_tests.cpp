@@ -101,18 +101,22 @@ TEST(QtSettingsControllerTests,
             "Mostra griglia a terra");
   EXPECT_EQ(italian.text("viewport.settings.ShowMeshGrid.label", ""),
             "Mostra griglia superficie mesh");
+  EXPECT_EQ(english.text("viewport.settings.BackfaceSelection.label", ""),
+            "Backface Selection");
+  EXPECT_EQ(italian.text("viewport.settings.BackfaceSelection.label", ""),
+            "Selezione facce posteriori");
   EXPECT_EQ(english.text("ui.settings.color.opacity", ""), "Opacity: %1%");
   EXPECT_EQ(italian.text("ui.settings.color.opacity", ""), "Opacità: %1%");
 }
 
 TEST(QtSettingsControllerTests,
-     EveryOneOfTheFiftyNineControlsMutatesItsOwnerAndNotifiesItsPhase) {
+     EveryOneOfTheSixtyControlsMutatesItsOwnerAndNotifiesItsPhase) {
   static_assert(kViewportColorSettingCount == 23u);
   static_assert(kViewportFloatSettingCount == 26u);
-  static_assert(kViewportBoolSettingCount == 9u);
+  static_assert(kViewportBoolSettingCount == 10u);
   static_assert(1u + kViewportColorSettingCount + kViewportFloatSettingCount +
                     kViewportBoolSettingCount ==
-                59u);
+                60u);
 
   UISettings ui_settings = UISettings::defaults();
   ViewportSettings viewport_settings = ViewportSettings::defaults();

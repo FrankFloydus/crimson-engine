@@ -906,6 +906,20 @@ void UISystem::install_runtime_hooks(
             }
             return runtime_status(changed);
           },
+      .backface_selection_enabled = [this]() {
+        return viewport_settings_.bool_value(
+            ViewportBoolSettingId::BackfaceSelection);
+      },
+      .set_backface_selection_enabled =
+          [this](bool enabled) {
+            const bool changed = viewport_settings_.set_bool_value(
+                ViewportBoolSettingId::BackfaceSelection, enabled);
+            if (changed) {
+              (void)save_viewport_settings();
+              synchronize_settings_surfaces(true);
+            }
+            return runtime_status(changed);
+          },
       .grid_visible = [this]() {
         return viewport_settings_.bool_value(ViewportBoolSettingId::ShowGrid);
       },

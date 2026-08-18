@@ -1699,6 +1699,17 @@ void QuaderCommandsApi::Impl::register_commands() {
   set_keybinding_selection_modes(quader_command::kSelectInverse.string(),
                                  kSelectionModeAny);
   register_command(
+      quader_command::kSelectToggleBackfaceSelection,
+      "Toggle Backface Selection",
+      [this] {
+        return preferences_.set_backface_selection_enabled(
+            !preferences_.backface_selection_enabled());
+      },
+      "Ctrl+Shift+F9");
+  set_keybinding_selection_modes(
+      quader_command::kSelectToggleBackfaceSelection.string(),
+      kSelectionModeAny);
+  register_command(
       quader_command::kSelectEdgeDirection, "Select Direction",
       [this] { return api_.selection().select_edge_direction(); }, {},
       [this] {

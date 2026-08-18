@@ -110,6 +110,8 @@ QuaderPickSelectRequest make_pick_select_request(
           settings.float_value(ViewportFloatSettingId::PickVertexRadius),
       .edge_radius =
           settings.float_value(ViewportFloatSettingId::PickEdgeRadius),
+      .select_backfaces =
+          settings.bool_value(ViewportBoolSettingId::BackfaceSelection),
   };
 }
 
@@ -130,11 +132,14 @@ QuaderHoverRequest make_hover_request(const ViewportCameraController &camera,
           settings.float_value(ViewportFloatSettingId::PickVertexRadius),
       .edge_radius =
           settings.float_value(ViewportFloatSettingId::PickEdgeRadius),
+      .select_backfaces =
+          settings.bool_value(ViewportBoolSettingId::BackfaceSelection),
   };
 }
 
 QuaderBoxSelectRequest
 make_box_select_request(const ViewportCameraController &camera,
+                        const ViewportSettings &settings,
                         QVec2 viewport_size, QVec2 start, QVec2 end,
                         QuaderSelectionEdit edit) {
   return {
@@ -144,6 +149,8 @@ make_box_select_request(const ViewportCameraController &camera,
       .end = end,
       .edit = edit,
       .rule = QuaderBoxSelectionRule::DragDirection,
+      .select_backfaces =
+          settings.bool_value(ViewportBoolSettingId::BackfaceSelection),
   };
 }
 
@@ -272,7 +279,8 @@ box_selection(QuaderEditorApi &editor, ViewportInputRouter &input_router,
               const QuaderSelectionBoxBaseline *baseline = nullptr) {
   QDR_PROFILE_FUNCTION();
   const QuaderBoxSelectRequest request = make_box_select_request(
-      frame.camera, frame.input.viewport_size, start, end, edit);
+      frame.camera, frame.settings, frame.input.viewport_size, start, end,
+      edit);
   const QuaderApiResult<QuaderSelectionSummary> result =
       baseline != nullptr && baseline->valid()
           ? editor.selection().box_select(request, *baseline)

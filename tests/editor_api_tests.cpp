@@ -1628,6 +1628,7 @@ TEST(EditorApiTests, ViewportDisplayAndSnappingPreferencesUseRuntimeHooks) {
   CommandTestHarness harness;
   quader::QuaderEditorApi &editor = harness.editor;
   bool snapping_enabled = true;
+  bool backface_selection_enabled = false;
   bool grid_visible = true;
   bool gizmos_visible = true;
   bool mesh_grid_visible = true;
@@ -1650,6 +1651,14 @@ TEST(EditorApiTests, ViewportDisplayAndSnappingPreferencesUseRuntimeHooks) {
           [&](bool enabled) {
             const bool changed = snapping_enabled != enabled;
             snapping_enabled = enabled;
+            return runtime_result(changed);
+          },
+      .backface_selection_enabled =
+          [&]() { return backface_selection_enabled; },
+      .set_backface_selection_enabled =
+          [&](bool enabled) {
+            const bool changed = backface_selection_enabled != enabled;
+            backface_selection_enabled = enabled;
             return runtime_result(changed);
           },
       .grid_visible = [&]() { return grid_visible; },
@@ -1711,6 +1720,7 @@ TEST(EditorApiTests, ViewportDisplayAndSnappingPreferencesUseRuntimeHooks) {
   });
 
   EXPECT_TRUE(editor.preferences().snapping_enabled());
+  EXPECT_FALSE(editor.preferences().backface_selection_enabled());
   EXPECT_TRUE(editor.preferences().grid_visible());
   EXPECT_TRUE(editor.preferences().gizmos_visible());
   EXPECT_TRUE(editor.preferences().mesh_grid_visible());
@@ -1721,6 +1731,9 @@ TEST(EditorApiTests, ViewportDisplayAndSnappingPreferencesUseRuntimeHooks) {
   EXPECT_DOUBLE_EQ(editor.preferences().rotation_snap_degrees(), 15.0);
 
   EXPECT_TRUE(editor.preferences().set_snapping_enabled(false).changed());
+  EXPECT_TRUE(editor.preferences()
+                  .set_backface_selection_enabled(true)
+                  .changed());
   EXPECT_TRUE(editor.preferences().set_grid_visible(false).changed());
   EXPECT_TRUE(editor.preferences().set_gizmos_visible(false).changed());
   EXPECT_TRUE(editor.preferences().set_mesh_grid_visible(false).changed());
@@ -1731,6 +1744,7 @@ TEST(EditorApiTests, ViewportDisplayAndSnappingPreferencesUseRuntimeHooks) {
   EXPECT_TRUE(
       editor.preferences().set_rotation_snap_degrees(22.5).changed());
   EXPECT_FALSE(editor.preferences().snapping_enabled());
+  EXPECT_TRUE(editor.preferences().backface_selection_enabled());
   EXPECT_FALSE(editor.preferences().grid_visible());
   EXPECT_FALSE(editor.preferences().gizmos_visible());
   EXPECT_FALSE(editor.preferences().mesh_grid_visible());
@@ -1753,10 +1767,15 @@ TEST(EditorApiTests, ViewportDisplayAndSnappingPreferencesUseRuntimeHooks) {
   EXPECT_TRUE(editor.commands()
                   .execute(quader::quader_command::kViewportToggleOverlays)
                   .changed());
+  EXPECT_TRUE(editor.commands()
+                  .execute(
+                      quader::quader_command::kSelectToggleBackfaceSelection)
+                  .changed());
   EXPECT_TRUE(editor.preferences().grid_visible());
   EXPECT_TRUE(editor.preferences().gizmos_visible());
   EXPECT_TRUE(editor.preferences().mesh_grid_visible());
   EXPECT_TRUE(editor.preferences().overlays_visible());
+  EXPECT_FALSE(editor.preferences().backface_selection_enabled());
 }
 
 TEST(EditorApiTests, KeybindingConflictsAndRemovalSupportRebindingUi) {
@@ -4379,6 +4398,7 @@ TEST(EditorApiTests,
   constexpr std::array kCanonicalCommands{
       quader::quader_command::kSelectAll,
       quader::quader_command::kSelectInverse,
+      quader::quader_command::kSelectToggleBackfaceSelection,
       quader::quader_command::kSelectEdgeDirection,
       quader::quader_command::kSelectEdgeLoops,
       quader::quader_command::kSelectEdgeRing,
@@ -4401,6 +4421,15 @@ TEST(EditorApiTests,
     EXPECT_TRUE(command_descriptor(editor, command).has_value())
         << command.string();
   }
+  ASSERT_TRUE(command_descriptor(
+                  editor,
+                  quader::quader_command::kSelectToggleBackfaceSelection)
+                  .has_value());
+  EXPECT_EQ(command_descriptor(
+                editor,
+                quader::quader_command::kSelectToggleBackfaceSelection)
+                ->label,
+            "Toggle Backface Selection");
   for (const std::string_view retired : {
            std::string_view{"edit.select_all"},
            std::string_view{"edit.invert_selection"},
@@ -4428,6 +4457,9 @@ TEST(EditorApiTests,
                        "viewport.selection.any", false},
       ScopeExpectation{quader::quader_command::kSelectInverse,
                        "viewport.selection.any", false},
+      ScopeExpectation{
+          quader::quader_command::kSelectToggleBackfaceSelection,
+          "viewport.selection.any", false},
       ScopeExpectation{
           quader::quader_command::kSelectEdgeDirection,
           "viewport.selection.edge"},
@@ -4471,6 +4503,27 @@ TEST(EditorApiTests,
   EXPECT_EQ(editor.commands().shortcut_for(
                 quader::quader_command::kSelectInverse),
             "Ctrl+I");
+  EXPECT_EQ(editor.commands().shortcut_for(
+                quader::quader_command::kSelectToggleBackfaceSelection),
+            "Ctrl+Shift+F9");
+  quader::ViewportToolState keybinding_state;
+  for (const quader::ViewportSelectionMode mode : {
+           quader::ViewportSelectionMode::Vertex,
+           quader::ViewportSelectionMode::Edge,
+           quader::ViewportSelectionMode::Face,
+           quader::ViewportSelectionMode::Object,
+           quader::ViewportSelectionMode::Group,
+       }) {
+    keybinding_state.selection_mode = mode;
+    const quader::QuaderViewportKeybindingDispatch dispatch =
+        editor.commands().dispatch_viewport_input_binding(
+            single_input_chord("Ctrl+Shift+F9"), keybinding_state, true,
+            false);
+    ASSERT_EQ(dispatch.kind,
+              quader::QuaderViewportKeybindingDispatch::Kind::Command);
+    EXPECT_EQ(dispatch.command_id,
+              quader::quader_command::kSelectToggleBackfaceSelection.string());
+  }
 
   const auto expect_enabled = [&](quader::QuaderCommandId command,
                                   bool expected) {
@@ -4481,13 +4534,15 @@ TEST(EditorApiTests,
   };
   const auto expect_specialized_disabled = [&] {
     for (const quader::QuaderCommandId command :
-         std::span{kCanonicalCommands}.subspan(2U)) {
+         std::span{kCanonicalCommands}.subspan(3U)) {
       expect_enabled(command, false);
     }
   };
 
   expect_enabled(quader::quader_command::kSelectAll, true);
   expect_enabled(quader::quader_command::kSelectInverse, true);
+  expect_enabled(quader::quader_command::kSelectToggleBackfaceSelection,
+                 true);
   expect_specialized_disabled();
 
   const quader::QuaderModelingObjectRef box =
@@ -11721,9 +11776,9 @@ TEST(EditorApiTests,
       editor.commands().keybinding_catalog();
 
 #ifndef NDEBUG
-  EXPECT_EQ(commands.size(), 157u);
+  EXPECT_EQ(commands.size(), 158u);
 #else
-  EXPECT_EQ(commands.size(), 156u);
+  EXPECT_EQ(commands.size(), 157u);
 #endif
 
   std::unordered_set<std::string> expected_target_ids;
@@ -11802,6 +11857,10 @@ TEST(EditorApiTests,
       "Ctrl+Shift+Z"));
   EXPECT_TRUE(has_keybinding_catalog_entry(
       catalog, quader::quader_command::kDeleteSelection.string(), "Delete"));
+  EXPECT_TRUE(has_keybinding_catalog_entry(
+      catalog,
+      quader::quader_command::kSelectToggleBackfaceSelection.string(),
+      "Ctrl+Shift+F9"));
   EXPECT_FALSE(has_keybinding_catalog_entry(
       catalog, quader::quader_command::kDeleteSelection.string(),
       "Backspace"));

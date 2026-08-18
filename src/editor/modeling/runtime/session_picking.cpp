@@ -64,6 +64,19 @@ quader::QVec3 affine_transform_covector(const quader::QMat4 &matrix,
   };
 }
 
+double affine_orientation_determinant(const quader::QMat4 &matrix) {
+  const auto &m = matrix.values;
+  return static_cast<double>(m[0]) *
+             (static_cast<double>(m[5]) * m[10] -
+              static_cast<double>(m[9]) * m[6]) -
+         static_cast<double>(m[4]) *
+             (static_cast<double>(m[1]) * m[10] -
+              static_cast<double>(m[9]) * m[2]) +
+         static_cast<double>(m[8]) *
+             (static_cast<double>(m[1]) * m[6] -
+              static_cast<double>(m[5]) * m[2]);
+}
+
 const PickObjectTransform *cached_transform_for_object(
     std::span<const PickObjectTransform> object_transforms, int object_index,
     const PolygonObject &object) {
@@ -129,9 +142,14 @@ quader::QVec3 pick_world_normal(
   if (object_transform == nullptr) {
     return local_normal;
   }
-  return quader::normalize_or_zero(
+  quader::QVec3 world_normal = quader::normalize_or_zero(
       affine_transform_covector(object_transform->object_from_world,
                                 local_normal));
+  if (object_transform != nullptr &&
+      pick_object_transform_reverses_face_winding(*object_transform)) {
+    world_normal = world_normal * -1.0F;
+  }
+  return world_normal;
 }
 
 void apply_world_pick_metrics(quader_poly::PickResult &hit,
@@ -459,12 +477,18 @@ std::optional<SourceWireComponentPick> pick_active_source_wire_component(
                                                 object_index, object);
                 const quader_poly::Ray pick_ray =
                     object_space_pick_ray(world_pick_ray, object_transform);
+                quader_poly::PickOptions local_options = options;
+                local_options.reverse_face_winding =
+                    local_options.reverse_face_winding !=
+                    (object_transform != nullptr &&
+                     pick_object_transform_reverses_face_winding(
+                         *object_transform));
 		const quader_geometry::QRay3<float> geometry_pick_ray =
                     to_geometry_ray(pick_ray);
                 const float local_radius =
                     object_space_pick_radius(radius, object_transform);
                 quader_poly::document_internal::DocumentPickFacts pick_facts(
-                    object.document, options);
+                    object.document, local_options);
                 const SourceWireSelectionIndex selection_index(object);
                 bool surface_hit_computed = false;
                 std::optional<quader_poly::PickResult> surface_hit;
@@ -479,7 +503,8 @@ std::optional<SourceWireComponentPick> pick_active_source_wire_component(
                           cached_face_geometry_for_object(
                               face_geometry, object_index, object)) {
                     hit = quader_poly::pick_face_geometry(
-                        cached_geometry->triangle_span(), pick_ray, options);
+                        cached_geometry->triangle_span(), pick_ray,
+                        local_options);
                   } else {
                     hit = pick_facts.surface_hit(pick_ray);
                   }
@@ -493,6 +518,12 @@ std::optional<SourceWireComponentPick> pick_active_source_wire_component(
                   for (const quader_poly::Vertex &vertex :
                        object.document.vertices) {
                     if (!pick_facts.vertex_can_be_picked(vertex.id)) {
+                      continue;
+                    }
+                    if (!local_options.pick_backfaces &&
+                        pick_facts.vertex_has_incident_face(vertex.id) &&
+                        !pick_facts.vertex_has_front_facing_pickable_face(
+                            vertex.id, pick_ray)) {
                       continue;
                     }
 
@@ -553,6 +584,11 @@ std::optional<SourceWireComponentPick> pick_active_source_wire_component(
                 }
                 for (const quader_poly::Edge edge : pick_facts.edges()) {
 			if (!pick_facts.edge_can_be_picked(edge)) {
+				continue;
+			}
+			if (!local_options.pick_backfaces &&
+				pick_facts.edge_has_incident_face(edge) &&
+				!pick_facts.edge_has_front_facing_pickable_face(edge, pick_ray)) {
 				continue;
 			}
 			const quader_poly::Vertex* a = quader_poly::find_vertex(object.document, edge.a);
@@ -670,6 +706,10 @@ quader_poly::PickResult pick_object_element(
   const quader_poly::Ray ray =
       object_space_pick_ray(world_ray, object_transform);
   quader_poly::PickOptions local_options = options;
+  local_options.reverse_face_winding =
+      local_options.reverse_face_winding !=
+      (object_transform != nullptr &&
+       pick_object_transform_reverses_face_winding(*object_transform));
   local_options.vertex_radius =
       object_space_pick_radius(options.vertex_radius, object_transform);
   local_options.edge_radius =
@@ -723,7 +763,6 @@ double normalize_pick_radius(double value, double fallback)
 
 void apply_editor_surface_pick_policy(quader_poly::PickOptions& options)
 {
-	options.pick_backfaces = true;
 	options.prefer_front_facing_faces = false;
 }
 
@@ -808,21 +847,8 @@ quader_poly::ElementId best_edge_context_face_id(
 		const quader_poly::Ray& ray,
 		const quader_poly::PickOptions& options)
 {
-	quader_poly::ElementId best_face_id = quader_poly::kInvalidElementId;
-	float best_score = -std::numeric_limits<float>::infinity();
-	for (const quader_poly::Face& face : document.faces) {
-		if (!face_contains_edge(face, edge) ||
-				options.hides_material_slot(face.material_slot)) {
-			continue;
-		}
-		const float score = -quader::dot(quader_poly::face_normal(document, face), ray.direction);
-		if (best_face_id == quader_poly::kInvalidElementId ||
-				score > best_score + kTransformPointEpsilon) {
-			best_face_id = face.id;
-			best_score = score;
-		}
-	}
-	return best_face_id;
+	return quader_poly::document_internal::DocumentPickFacts(document, options)
+		.best_edge_context_face_id(edge, ray);
 }
 
 quader_poly::ElementId edge_loop_context_face_id(
@@ -1140,15 +1166,23 @@ ClickPickPlan plan_click_pick_for_hits(
 
 } // namespace
 
-quader_poly::PickOptions selection_pick_options_from_radii(double vertex_radius, double edge_radius)
-{
-	quader_poly::PickOptions options;
-        options.vertex_radius = static_cast<float>(
-            normalize_pick_radius(vertex_radius, kDefaultVertexPickRadius));
-        options.edge_radius = static_cast<float>(
-            normalize_pick_radius(edge_radius, kDefaultEdgePickRadius));
-        apply_editor_surface_pick_policy(options);
-	return options;
+bool pick_object_transform_reverses_face_winding(
+    const PickObjectTransform &transform) {
+  const double determinant =
+      affine_orientation_determinant(transform.world_from_object);
+  return std::isfinite(determinant) && determinant < 0.0;
+}
+
+quader_poly::PickOptions selection_pick_options_from_radii(
+    double vertex_radius, double edge_radius, bool pick_backfaces) {
+  quader_poly::PickOptions options;
+  options.vertex_radius = static_cast<float>(
+      normalize_pick_radius(vertex_radius, kDefaultVertexPickRadius));
+  options.edge_radius = static_cast<float>(
+      normalize_pick_radius(edge_radius, kDefaultEdgePickRadius));
+  options.pick_backfaces = pick_backfaces;
+  apply_editor_surface_pick_policy(options);
+  return options;
 }
 
 std::vector<PickObjectFaceGeometry> build_pick_face_geometry(const std::vector<PolygonObject>& objects)
@@ -1287,6 +1321,10 @@ std::optional<PickHitRecord> pick_nearest_priority(
     const quader_poly::Ray local_ray =
         object_space_pick_ray(request.ray, object_transform);
     quader_poly::PickOptions local_options = request.options;
+    local_options.reverse_face_winding =
+        local_options.reverse_face_winding !=
+        (object_transform != nullptr &&
+         pick_object_transform_reverses_face_winding(*object_transform));
     local_options.vertex_radius = object_space_pick_radius(
         request.options.vertex_radius, object_transform);
     local_options.edge_radius = object_space_pick_radius(
@@ -1961,6 +1999,7 @@ SelectionHoverUpdateResult update_selection_hover(
           quader_poly::PickResult hit;
           quader_poly::PickOptions options = pick_options;
           options.mode = quader_poly::SelectionMode::Face;
+          options.pick_backfaces = true;
           if (pick_nearest_object(objects, ray, options, hit_index, hit,
                                   object_bounds, face_geometry, -1,
                                   object_transforms) &&
@@ -2111,6 +2150,9 @@ bool pick_select(
                            ? quader_poly::SelectionMode::Face
                            : component_selection_mode(mode);
         const bool component_mode = mode != SelectionMode::Object;
+        if (!component_mode) {
+          options.pick_backfaces = true;
+        }
         bool component_hit = false;
 	if (component_mode) {
 		if (const std::optional<SourceWireComponentPick> source_wire_hit =
@@ -2416,12 +2458,19 @@ bool pick_select_edge_loop(
     }
     return false;
   }
-        const quader_poly::Ray local_ray = object_space_pick_ray(
-            ray, cached_transform_for_object(object_transforms, hit_index,
-                                             objects[hit_index]));
+        const PickObjectTransform *object_transform =
+            cached_transform_for_object(object_transforms, hit_index,
+                                        objects[hit_index]);
+        const quader_poly::Ray local_ray =
+            object_space_pick_ray(ray, object_transform);
+        quader_poly::PickOptions context_options = options;
+        context_options.reverse_face_winding =
+            context_options.reverse_face_winding !=
+            (object_transform != nullptr &&
+             pick_object_transform_reverses_face_winding(*object_transform));
         const quader_poly::ElementId context_face_id =
             edge_loop_context_face_id(objects[hit_index].document, hit,
-                                      local_ray, options);
+                                      local_ray, context_options);
         const std::vector<quader_poly::Edge> loop_edges =
             quader_poly::edge_loop_edges(objects[hit_index].document, hit.edge,
                                          context_face_id);

@@ -1400,7 +1400,7 @@ TEST(ViewportSettingsTests, DefaultsMatchNativeViewportSettingsState) {
       15.0f);
   ASSERT_EQ(viewport_color_settings().size(), 23u);
   ASSERT_EQ(viewport_float_settings().size(), 26u);
-  ASSERT_EQ(viewport_bool_settings().size(), 9u);
+  ASSERT_EQ(viewport_bool_settings().size(), 10u);
   EXPECT_TRUE(settings.bool_value(ViewportBoolSettingId::ShowGrid));
   EXPECT_FALSE(settings.bool_value(ViewportBoolSettingId::ShowMeshGrid));
   EXPECT_TRUE(settings.bool_value(ViewportBoolSettingId::ShowGizmos));
@@ -1410,6 +1410,14 @@ TEST(ViewportSettingsTests, DefaultsMatchNativeViewportSettingsState) {
   EXPECT_TRUE(settings.bool_value(ViewportBoolSettingId::GridSnap));
   EXPECT_TRUE(settings.bool_value(ViewportBoolSettingId::VertexSnap));
   EXPECT_TRUE(settings.bool_value(ViewportBoolSettingId::RotationSnap));
+  EXPECT_FALSE(
+      settings.bool_value(ViewportBoolSettingId::BackfaceSelection));
+  const ViewportBoolSettingDescriptor &backface_selection =
+      viewport_bool_settings()[static_cast<std::size_t>(
+          ViewportBoolSettingId::BackfaceSelection)];
+  EXPECT_EQ(backface_selection.section, ViewportSettingsSectionId::Selection);
+  EXPECT_EQ(backface_selection.key, "BackfaceSelection");
+  EXPECT_FALSE(backface_selection.default_value);
 }
 
 TEST(ViewportSettingsTests,
@@ -1613,6 +1621,8 @@ TEST(ViewportSettingsTests, SavesLoadsAndClampsViewportPreferenceKeys) {
       settings.set_bool_value(ViewportBoolSettingId::VertexSnap, false));
   EXPECT_TRUE(
       settings.set_bool_value(ViewportBoolSettingId::RotationSnap, false));
+  EXPECT_TRUE(settings.set_bool_value(
+      ViewportBoolSettingId::BackfaceSelection, true));
   EXPECT_TRUE(settings.set_float_value(
       ViewportFloatSettingId::RotationSnapDegrees, 12.0f));
   ASSERT_TRUE(settings.save(path));
@@ -1642,6 +1652,8 @@ TEST(ViewportSettingsTests, SavesLoadsAndClampsViewportPreferenceKeys) {
   EXPECT_FALSE(loaded.bool_value(ViewportBoolSettingId::GridSnap));
   EXPECT_FALSE(loaded.bool_value(ViewportBoolSettingId::VertexSnap));
   EXPECT_FALSE(loaded.bool_value(ViewportBoolSettingId::RotationSnap));
+  EXPECT_TRUE(
+      loaded.bool_value(ViewportBoolSettingId::BackfaceSelection));
   EXPECT_FLOAT_EQ(
       loaded.float_value(ViewportFloatSettingId::RotationSnapDegrees),
       11.25f);
@@ -3419,6 +3431,21 @@ TEST(ToolPreviewRenderableCacheTests,
   EXPECT_EQ(outcome.candidate_indices,
             (std::vector<std::size_t>{0u}));
   EXPECT_EQ(outcome.counters.structural_match_candidate_visits, 0u);
+}
+
+TEST(ToolPreviewRenderableCacheTests,
+     CullingChangeCannotReuseAStalePreviewMaterial) {
+  RenderToolPreviewMeshRecord retained = preview_match_test_record(true);
+  retained.double_sided = false;
+  RenderToolPreviewMeshRecord submitted = retained;
+  submitted.double_sided = true;
+
+  const auto outcome = ToolPreviewRenderableCacheTestPeer::match(
+      std::vector<RenderToolPreviewMeshRecord>{retained},
+      std::vector<RenderToolPreviewMeshRecord>{submitted});
+
+  EXPECT_EQ(outcome.kind, ToolPreviewRenderableCacheTestPeer::MatchKind::None);
+  EXPECT_TRUE(outcome.candidate_indices.empty());
 }
 
 TEST(ToolPreviewRenderableCacheTests,
@@ -11970,6 +11997,88 @@ TEST(ModelingSessionServiceTests,
 }
 
 TEST(ModelingSessionServiceTests,
+     BoxBackfacePolicyUsesAuthoredWindingThroughReflectedTinyTransform) {
+  SceneDocument scene;
+  AssetRegistry assets;
+  ModelingSessionService service(scene, assets);
+
+  quader_poly::Document document;
+  const quader_poly::ElementId v0 =
+      quader_poly::add_vertex(document, {-1.0f, -1.0f, 0.0f});
+  const quader_poly::ElementId v1 =
+      quader_poly::add_vertex(document, {1.0f, -1.0f, 0.0f});
+  const quader_poly::ElementId v2 =
+      quader_poly::add_vertex(document, {1.0f, 1.0f, 0.0f});
+  const quader_poly::ElementId v3 =
+      quader_poly::add_vertex(document, {-1.0f, 1.0f, 0.0f});
+  [[maybe_unused]] const quader_poly::ElementId loose_vertex =
+      quader_poly::add_vertex(document, {0.0f, 0.0f, 0.0f});
+  [[maybe_unused]] const quader_poly::ElementId face =
+      quader_poly::add_face(document, std::array{v0, v1, v2, v3}, 0U);
+  const ModelingCreateBoxResult mesh = service.create_mesh({
+      .document = std::move(document),
+      .name = "Reflected Box Backface Source",
+  });
+  ASSERT_TRUE(mesh.ok) << mesh.message;
+
+  TransformComponent transform;
+  ModelingBoxSelectRequest request{
+      .camera = test_orthographic_viewport_camera(),
+      .start = {49.0f, 49.0f},
+      .end = {51.0f, 51.0f},
+      .edit = ModelingSelectionEdit::Replace,
+      .rule = ModelingBoxSelectionRule::Contain,
+      .select_backfaces = false,
+  };
+  struct ModeExpectation {
+    ModelingSelectionMode mode;
+    std::size_t front_count;
+    std::size_t reflected_front_only_count;
+    std::size_t reflected_two_sided_count;
+  };
+  const std::array expectations{
+      ModeExpectation{ModelingSelectionMode::Face, 1U, 0U, 1U},
+      ModeExpectation{ModelingSelectionMode::Edge, 4U, 0U, 4U},
+      ModeExpectation{ModelingSelectionMode::Vertex, 5U, 1U, 5U},
+  };
+  const auto selected_count = [](const ModelingSelectionSummary &summary,
+                                 ModelingSelectionMode mode) -> std::size_t {
+    switch (mode) {
+    case ModelingSelectionMode::Face:
+      return summary.selected_face_count;
+    case ModelingSelectionMode::Edge:
+      return summary.selected_edge_count;
+    case ModelingSelectionMode::Vertex:
+      return summary.selected_vertex_count;
+    default:
+      return std::size_t{0U};
+    }
+  };
+
+  for (const ModeExpectation &expectation : expectations) {
+    ASSERT_TRUE(service.set_selection_mode(expectation.mode).ok);
+    transform.scale = {0.001f, 0.002f, 0.004f};
+    ASSERT_TRUE(scene.set_transform(mesh.object.entity, transform));
+    request.select_backfaces = false;
+    EXPECT_EQ(selected_count(service.box_select(request), expectation.mode),
+              expectation.front_count);
+
+    transform.scale.x = -0.001f;
+    ASSERT_TRUE(scene.set_transform(mesh.object.entity, transform));
+    EXPECT_EQ(selected_count(service.box_select(request), expectation.mode),
+              expectation.reflected_front_only_count);
+    const std::uint64_t front_only_projection_builds =
+        service.rectangle_picking_projection_build_count();
+
+    request.select_backfaces = true;
+    EXPECT_EQ(selected_count(service.box_select(request), expectation.mode),
+              expectation.reflected_two_sided_count);
+    EXPECT_EQ(service.rectangle_picking_projection_build_count(),
+              front_only_projection_builds);
+  }
+}
+
+TEST(ModelingSessionServiceTests,
      LayerLockRevisionInvalidatesWarmPointAndRectanglePickingCaches) {
   SceneDocument scene;
   AssetRegistry assets;
@@ -15638,6 +15747,7 @@ TEST(ModelingSessionServiceTests,
     ASSERT_EQ(previews.size(), 1u);
     const ModelingToolPreviewMesh &preview = previews.front();
     ASSERT_TRUE(preview.dynamic_positions);
+    EXPECT_EQ(preview.double_sided, binding->double_sided);
     ASSERT_NE(preview.dynamic_position_payload, nullptr);
     ASSERT_EQ(preview.dynamic_position_payload->size(),
               preview.mesh.geometry().vertices.size());
@@ -15679,6 +15789,102 @@ TEST(ModelingSessionServiceTests,
     const MeshAsset *committed = assets.mesh(mesh_id);
     ASSERT_NE(committed, nullptr);
     expect_mesh_geometry_near(preview.mesh.geometry(), committed->geometry());
+  }
+}
+
+TEST(ModelingSessionServiceTests,
+     InvertedComponentDragPreservesSourceCullingInEveryMode) {
+  constexpr std::array<ModelingSelectionMode, 3> kModes{
+      ModelingSelectionMode::Vertex,
+      ModelingSelectionMode::Edge,
+      ModelingSelectionMode::Face,
+  };
+  constexpr std::array<bool, 2> kSidedness{false, true};
+  for (const bool double_sided : kSidedness) {
+    for (const ModelingSelectionMode mode : kModes) {
+      SCOPED_TRACE(std::string("double_sided=") +
+                   (double_sided ? "true" : "false") +
+                   ", mode=" + std::to_string(static_cast<int>(mode)));
+      SceneDocument scene;
+      AssetRegistry assets;
+      ModelingSessionService service(scene, assets);
+      const ModelingCreateBoxResult box = service.create_box_from_bounds({
+          .bounds = {.min = {-1.0f, -1.0f, -1.0f},
+                     .max = {1.0f, 1.0f, 1.0f}},
+          .name = "Inverted Drag Preview Box",
+      });
+      ASSERT_TRUE(box.ok) << box.message;
+      const MeshComponent *binding = scene.mesh(box.object.entity);
+      ASSERT_NE(binding, nullptr);
+      const AssetId mesh_id = binding->mesh;
+      const MeshAsset *outward = assets.mesh(mesh_id);
+      ASSERT_NE(outward, nullptr);
+      std::vector<QVec3> outward_normals;
+      outward_normals.reserve(outward->geometry().vertices.size());
+      for (const MeshVertex &vertex : outward->geometry().vertices) {
+        outward_normals.push_back(vertex.normal);
+      }
+
+      const ModelingCommandResult inverted = service.execute_instant_operation(
+          ModelingInstantOperationId::FlipFaceNormals);
+      ASSERT_TRUE(inverted.ok) << inverted.message;
+      ASSERT_TRUE(inverted.changed);
+      const MeshAsset *inverted_source = assets.mesh(mesh_id);
+      ASSERT_NE(inverted_source, nullptr);
+      const MeshGeometryPayload inverted_source_geometry =
+          inverted_source->geometry();
+      ASSERT_EQ(inverted_source->geometry().vertices.size(),
+                outward_normals.size());
+      bool has_reversed_normal = false;
+      for (std::size_t index = 0u; index < outward_normals.size(); ++index) {
+        has_reversed_normal =
+            has_reversed_normal ||
+            dot(outward_normals[index],
+                inverted_source->geometry().vertices[index].normal) < -0.99f;
+      }
+      ASSERT_TRUE(has_reversed_normal);
+
+      MeshComponent presented = *scene.mesh(box.object.entity);
+      presented.double_sided = double_sided;
+      ASSERT_TRUE(scene.set_mesh(box.object.entity, presented));
+      ASSERT_TRUE(service.set_selection_mode(mode).ok);
+      ASSERT_TRUE(seed_component_bulk_selection_scope(
+                      service, box.object.modeling_object_id, mode,
+                      ModelingSelectionEdit::Replace)
+                      .ok);
+
+      const ModelingTransformDragPreview begin =
+          service.begin_transform_drag(test_x_move_drag_begin_request());
+      ASSERT_TRUE(begin.ok) << begin.message;
+      ASSERT_TRUE(begin.preview_driven);
+      const ModelingTransformDragPreview update =
+          service.update_transform_drag(test_x_move_drag_update_request(1.0f));
+      ASSERT_TRUE(update.ok) << update.message;
+      ASSERT_TRUE(update.changed);
+      ASSERT_TRUE(update.preview_driven);
+
+      const std::vector<ModelingToolPreviewMesh> previews =
+          service.tool_preview_meshes();
+      ASSERT_EQ(previews.size(), 1u);
+      EXPECT_TRUE(previews.front().dynamic_positions);
+      EXPECT_TRUE(previews.front().suppress_source);
+      EXPECT_EQ(previews.front().double_sided, double_sided);
+      const MeshGeometryPayload preview_geometry =
+          previews.front().mesh.geometry();
+      const MeshAsset *durable_during_preview = assets.mesh(mesh_id);
+      ASSERT_NE(durable_during_preview, nullptr);
+      expect_mesh_geometry_near(durable_during_preview->geometry(),
+                                inverted_source_geometry);
+
+      const ModelingTransformDragPreview committed =
+          service.commit_transform_drag();
+      ASSERT_TRUE(committed.ok) << committed.message;
+      ASSERT_TRUE(committed.changed);
+      const MeshAsset *committed_mesh = assets.mesh(mesh_id);
+      ASSERT_NE(committed_mesh, nullptr);
+      expect_mesh_geometry_near(preview_geometry,
+                                committed_mesh->geometry());
+    }
   }
 }
 

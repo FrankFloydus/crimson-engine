@@ -84,6 +84,9 @@ struct PickObjectTransform {
   quader::QMat4 object_from_world;
 };
 
+bool pick_object_transform_reverses_face_winding(
+    const PickObjectTransform &transform);
+
 /**
  * Represents a Pick Object Face Geometry value used by the modeling runtime
  * domain.
@@ -934,8 +937,10 @@ pick_all(const std::vector<PolygonObject> &objects, const PickRequest &request,
          std::span<const PickObjectBounds> object_bounds,
          std::span<const PickObjectFaceGeometry> face_geometry,
          std::span<const PickObjectTransform> object_transforms = {});
-quader_poly::PickOptions selection_pick_options_from_radii(double vertex_radius,
-                                                           double edge_radius);
+quader_poly::PickOptions selection_pick_options_from_radii(
+    double vertex_radius,
+    double edge_radius,
+    bool pick_backfaces = true);
 std::vector<PickObjectFaceGeometry>
 build_pick_face_geometry(const std::vector<PolygonObject> &objects);
 std::vector<PickObjectFaceGeometry>

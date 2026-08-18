@@ -261,6 +261,7 @@ QuaderRenderApiRuntimeAccess::sync_tool_previews(QuaderRenderApi &api,
         .transform = preview_mesh.transform,
         .instance_transforms =
             std::move(preview_mesh.instance_transforms),
+        .double_sided = preview_mesh.double_sided,
         .dynamic_positions = preview_mesh.dynamic_positions,
         .suppress_source = preview_mesh.suppress_source,
         .layout_key = preview_mesh.layout_key,

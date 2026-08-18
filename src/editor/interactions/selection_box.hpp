@@ -67,6 +67,7 @@ struct RectangleProjectedFace {
 	quader::QVec2 screen_min;
 	quader::QVec2 screen_max;
 	std::vector<quader::QVec2> screen_vertices;
+	bool front_facing = true;
 };
 
 /**
@@ -82,6 +83,7 @@ struct RectangleProjectedEdge {
 	quader::QVec2 screen_start;
 	bool has_screen_end = false;
 	quader::QVec2 screen_end;
+	bool front_facing = true;
 };
 
 /**
@@ -92,6 +94,7 @@ struct RectangleProjectedVertex {
 	int vertex_index = -1;
 	bool has_screen_position = false;
 	quader::QVec2 screen_position;
+	bool front_facing = true;
 };
 
 /**
@@ -101,6 +104,7 @@ struct RectangleProjectedHitsRequest {
   SelectionMode mode = SelectionMode::Object;
   RectangleSelectionMatch match = RectangleSelectionMatch::Crossing;
   ScreenRect rect;
+  bool select_backfaces = true;
   std::vector<RectangleProjectedObject> objects;
   std::vector<RectangleProjectedFace> faces;
   std::vector<RectangleProjectedEdge> edges;

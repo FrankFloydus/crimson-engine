@@ -1014,6 +1014,27 @@ TEST(SceneRenderBridgeTests,
 }
 
 TEST(SceneRenderBridgeTests,
+     ToolPreviewRenderablesUseTheSubmittedCullingPolicy) {
+  const std::string cache_source =
+      read_source_file("src/render/tool_preview_renderable_cache.cpp");
+
+  EXPECT_TRUE(source_contains_compact(
+      cache_source,
+      "transforms.front(), false, preview_mesh.double_sided, 0u, false, "
+      "false"));
+  EXPECT_TRUE(source_contains_compact(
+      cache_source,
+      "rendered_prototype, transforms.front(), preview_mesh.double_sided, "
+      "0u, true, false"));
+  EXPECT_TRUE(source_contains_compact(
+      cache_source,
+      "rendered_prototype, transforms.front(), preview_mesh.double_sided, "
+      "0u, true, true"));
+  EXPECT_EQ(cache_source.find("transforms.front(), false, true, 0u"),
+            std::string::npos);
+}
+
+TEST(SceneRenderBridgeTests,
      ToolPreviewRetirementAndClaimIndexesKeepIdleWorkLinear) {
   const std::string cache_header =
       read_source_file("src/render/tool_preview_renderable_cache.hpp");

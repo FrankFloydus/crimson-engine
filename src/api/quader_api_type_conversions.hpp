@@ -687,6 +687,7 @@ to_modeling_pick_select_request(const QuaderPickSelectRequest &request) {
           request.preserve_existing_component_selection_on_hit,
       .vertex_radius = request.vertex_radius,
       .edge_radius = request.edge_radius,
+      .select_backfaces = request.select_backfaces,
   };
 }
 
@@ -698,6 +699,7 @@ to_modeling_box_select_request(const QuaderBoxSelectRequest &request) {
       .end = request.end,
       .edit = to_modeling_selection_edit(request.edit),
       .rule = to_modeling_box_selection_rule(request.rule),
+      .select_backfaces = request.select_backfaces,
   };
 }
 
@@ -709,6 +711,7 @@ to_modeling_hover_request(const QuaderHoverRequest &request) {
       .face_plane_hover = request.face_plane_hover,
       .vertex_radius = request.vertex_radius,
       .edge_radius = request.edge_radius,
+      .select_backfaces = request.select_backfaces,
   };
 }
 
@@ -720,6 +723,7 @@ to_api_hover_request(const ModelingHoverRequest &request) {
       .face_plane_hover = request.face_plane_hover,
       .vertex_radius = request.vertex_radius,
       .edge_radius = request.edge_radius,
+      .select_backfaces = request.select_backfaces,
   };
 }
 

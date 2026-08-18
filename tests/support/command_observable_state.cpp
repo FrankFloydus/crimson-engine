@@ -1457,6 +1457,8 @@ std::string capture_preferences(const CaptureData &data) {
   // baselines remain identical across developer machines.
   writer.line("preferences.snapping",
               bool_text(preferences.snapping_enabled()));
+  writer.line("preferences.backface_selection",
+              bool_text(preferences.backface_selection_enabled()));
   writer.line("preferences.grid_visible",
               bool_text(preferences.grid_visible()));
   writer.line("preferences.gizmos_visible",

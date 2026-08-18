@@ -165,6 +165,7 @@ TEST(ViewportSettingsTests, EveryDescriptorHasARuntimeConsumer) {
           "ViewportBoolSettingId::GridSnap",
           "ViewportBoolSettingId::VertexSnap",
           "ViewportBoolSettingId::RotationSnap",
+          "ViewportBoolSettingId::BackfaceSelection",
       };
 
   const auto expect_consumed = [&](const auto &tokens) {
@@ -175,6 +176,22 @@ TEST(ViewportSettingsTests, EveryDescriptorHasARuntimeConsumer) {
   expect_consumed(kColorConsumers);
   expect_consumed(kFloatConsumers);
   expect_consumed(kBoolConsumers);
+}
+
+TEST(ViewportSettingsTests,
+     BackfaceSelectionPreferenceUsesThePersistedRuntimeHook) {
+  const std::string ui_source = read_source_file("src/ui/ui_system.cpp");
+  const std::string hook = source_slice(
+      ui_source, ".backface_selection_enabled =",
+      ".grid_visible =");
+
+  EXPECT_NE(hook.find("ViewportBoolSettingId::BackfaceSelection"),
+            std::string::npos);
+  EXPECT_NE(hook.find(".set_backface_selection_enabled ="),
+            std::string::npos);
+  EXPECT_NE(hook.find("save_viewport_settings()"), std::string::npos);
+  EXPECT_NE(hook.find("synchronize_settings_surfaces(true)"),
+            std::string::npos);
 }
 
 TEST(PolygonOperationRegistryTests, MetadataComesFromDescriptorOwner) {

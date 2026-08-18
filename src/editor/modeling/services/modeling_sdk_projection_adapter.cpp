@@ -326,6 +326,7 @@ private:
     EntityId entity = kInvalidEntityId;
     MaterialComponent material;
     QMat4 world_transform;
+    bool double_sided = false;
     std::uint64_t layout_key = 0u;
     std::uint64_t position_revision = 0u;
     PolygonDocument preview_document;
@@ -3535,6 +3536,7 @@ public:
                   ? modeling_object_world_transform_resolver_(*native)
                         .value_or(scene_.world_transform_matrix(*entity))
                   : scene_.world_transform_matrix(*entity),
+          .double_sided = binding->double_sided,
           .layout_key = transform_mesh_layout_key(
               object, base_mesh.geometry().vertices),
           .position_revision = workspace_transform_preview_revision_,
@@ -3721,6 +3723,7 @@ public:
           .material = participant.material,
           .mesh = participant.preview_mesh,
           .transform = participant.world_transform,
+          .double_sided = participant.double_sided,
           .dynamic_positions = true,
           .suppress_source = true,
           .layout_key = participant.layout_key,

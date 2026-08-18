@@ -117,6 +117,7 @@ enum class ViewportBoolSettingId {
     GridSnap,
     VertexSnap,
     RotationSnap,
+    BackfaceSelection,
     Count,
 };
 

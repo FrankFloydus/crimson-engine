@@ -2064,6 +2064,24 @@ TEST(QtMainMenuTests, SelectMenuTracksSelectionModeAndOwnsSelectionCommands) {
   ASSERT_TRUE(editor.selection().select_object(box.value()).ok());
 
   ViewportSettings viewport_settings = ViewportSettings::defaults();
+  const auto runtime_result = [](bool changed) {
+    return QuaderApiVoidResult{
+        .ok = true,
+        .changed = changed,
+        .message = {},
+        .mutation_kind = QuaderMutationKind::Runtime,
+    };
+  };
+  editor.preferences().set_runtime_hooks(QuaderPreferencesRuntimeHooks{
+      .backface_selection_enabled = [&] {
+        return viewport_settings.bool_value(
+            ViewportBoolSettingId::BackfaceSelection);
+      },
+      .set_backface_selection_enabled = [&](bool enabled) {
+        return runtime_result(viewport_settings.set_bool_value(
+            ViewportBoolSettingId::BackfaceSelection, enabled));
+      },
+  });
   LocalizationService localization = loaded_localization();
   QMenuBar menu_bar;
   QtMainMenu menu;
@@ -2095,6 +2113,8 @@ TEST(QtMainMenuTests, SelectMenuTracksSelectionModeAndOwnsSelectionCommands) {
       QStringLiteral("command_select_all"));
   auto *select_inverse = menu_bar.findChild<QAction *>(
       QStringLiteral("command_select_inverse"));
+  auto *toggle_backface_selection = menu_bar.findChild<QAction *>(
+      QStringLiteral("command_select_toggle_backface_selection"));
   auto *select_direction = menu_bar.findChild<QAction *>(
       QStringLiteral("command_select_edge_direction"));
   auto *select_loops = menu_bar.findChild<QAction *>(
@@ -2118,12 +2138,12 @@ TEST(QtMainMenuTests, SelectMenuTracksSelectionModeAndOwnsSelectionCommands) {
   auto *clear_selection = menu_bar.findChild<QAction *>(
       QStringLiteral("command_edit_clear_selection"));
 
-  const std::array<QAction *, 12> select_actions{
-      select_all,           select_inverse,  select_direction,
-      select_loops,         select_ring,     select_same_material,
-      select_coplanar,      select_normal,   select_ngons,
-      select_similar,
-      grow,                 shrink,
+  const std::array<QAction *, 13> select_actions{
+      select_all,          select_inverse,       toggle_backface_selection,
+      select_direction,    select_loops,         select_ring,
+      select_same_material, select_coplanar,     select_normal,
+      select_ngons,        select_similar,       grow,
+      shrink,
   };
   for (QAction *action : select_actions) {
     ASSERT_NE(action, nullptr);
@@ -2149,6 +2169,7 @@ TEST(QtMainMenuTests, SelectMenuTracksSelectionModeAndOwnsSelectionCommands) {
         const std::set<QAction *> visible(expected_visible);
         EXPECT_TRUE(select_all->isVisible());
         EXPECT_TRUE(select_inverse->isVisible());
+        EXPECT_TRUE(toggle_backface_selection->isVisible());
         for (QAction *action : mode_specific_actions) {
           EXPECT_EQ(action->isVisible(), visible.contains(action));
         }
@@ -2164,6 +2185,15 @@ TEST(QtMainMenuTests, SelectMenuTracksSelectionModeAndOwnsSelectionCommands) {
       {select_same_material, select_coplanar, select_normal, grow, shrink});
   expect_visible_for_mode(QuaderSelectionMode::Vertex, {grow, shrink});
   expect_visible_for_mode(QuaderSelectionMode::Group, {});
+
+  EXPECT_TRUE(toggle_backface_selection->isCheckable());
+  EXPECT_FALSE(toggle_backface_selection->isChecked());
+  EXPECT_EQ(toggle_backface_selection->text(),
+            QStringLiteral("Toggle Backface Selection\tCtrl+Shift+F9"));
+  toggle_backface_selection->trigger();
+  EXPECT_TRUE(viewport_settings.bool_value(
+      ViewportBoolSettingId::BackfaceSelection));
+  EXPECT_TRUE(toggle_backface_selection->isChecked());
 }
 
 TEST(QtMainMenuTests,

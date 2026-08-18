@@ -79,6 +79,8 @@ inline constexpr QuaderCommandId kSceneUnhideHiddenObjects{
 
 inline constexpr QuaderCommandId kSelectAll{"select.all"};
 inline constexpr QuaderCommandId kSelectInverse{"select.inverse"};
+inline constexpr QuaderCommandId kSelectToggleBackfaceSelection{
+    "select.toggle_backface_selection"};
 inline constexpr QuaderCommandId kSelectEdgeDirection{
     "select.edge.direction"};
 inline constexpr QuaderCommandId kSelectEdgeLoops{"select.edge.loops"};
@@ -304,6 +306,7 @@ inline constexpr QuaderCommandId kTypedCommandIds[] = {
     kEditClearSelection,
     kSelectAll,
     kSelectInverse,
+    kSelectToggleBackfaceSelection,
     kSelectEdgeDirection,
     kSelectEdgeLoops,
     kSelectEdgeRing,

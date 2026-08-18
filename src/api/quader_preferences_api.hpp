@@ -49,6 +49,8 @@ public:
     QuaderApiVoidResult reset_all_shortcuts();
     QuaderApiVoidResult set_snapping_enabled(bool enabled);
     [[nodiscard]] bool snapping_enabled() const;
+    QuaderApiVoidResult set_backface_selection_enabled(bool enabled);
+    [[nodiscard]] bool backface_selection_enabled() const;
     QuaderApiVoidResult set_grid_visible(bool visible);
     [[nodiscard]] bool grid_visible() const;
     QuaderApiVoidResult set_gizmos_visible(bool visible);

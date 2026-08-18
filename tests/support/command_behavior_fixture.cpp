@@ -444,6 +444,12 @@ private:
             [this](bool value) {
               return set_preference(snapping_enabled_, value);
             },
+        .backface_selection_enabled =
+            [this] { return backface_selection_enabled_; },
+        .set_backface_selection_enabled =
+            [this](bool value) {
+              return set_preference(backface_selection_enabled_, value);
+            },
         .grid_visible = [this] { return grid_visible_; },
         .set_grid_visible =
             [this](bool value) { return set_preference(grid_visible_, value); },
@@ -1175,6 +1181,7 @@ private:
   std::string clipboard_text_;
   std::string locale_ = "en";
   bool snapping_enabled_ = true;
+  bool backface_selection_enabled_ = false;
   bool grid_visible_ = true;
   bool gizmos_visible_ = true;
   bool mesh_grid_visible_ = true;

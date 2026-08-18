@@ -70,6 +70,11 @@ public:
 
     [[nodiscard]] bool vertex_can_be_picked(ElementId vertex_id) const;
     [[nodiscard]] bool edge_can_be_picked(Edge edge) const;
+    [[nodiscard]] bool vertex_has_incident_face(ElementId vertex_id) const;
+    [[nodiscard]] bool edge_has_incident_face(Edge edge) const;
+    [[nodiscard]] bool face_is_front_facing_pickable(
+        ElementId face_id,
+        const Ray& ray) const;
     [[nodiscard]] bool vertex_has_front_facing_pickable_face(
         ElementId vertex_id,
         const Ray& ray) const;

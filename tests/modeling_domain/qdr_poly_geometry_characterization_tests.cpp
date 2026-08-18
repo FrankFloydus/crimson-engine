@@ -390,6 +390,7 @@ void characterizes_edge_pick_radius_and_tie_break()
     PickOptions options;
     options.mode = SelectionMode::Edge;
     options.edge_radius = 0.04F;
+    options.pick_backfaces = true;
 
     const Ray ray { { 0.05F, 0.0F, -2.0F }, { 0.0F, 0.0F, 1.0F } };
     PickResult pick = pick_element(document, ray, options);

@@ -500,6 +500,8 @@ TEST(ProgrammaticApiGuardrailTests,
 
   EXPECT_EQ(ids.at("kSelectAll"), "select.all");
   EXPECT_EQ(ids.at("kSelectInverse"), "select.inverse");
+  EXPECT_EQ(ids.at("kSelectToggleBackfaceSelection"),
+            "select.toggle_backface_selection");
   EXPECT_EQ(command_header.find("edit.select_all"), std::string::npos);
   EXPECT_EQ(command_header.find("edit.invert_selection"), std::string::npos);
   EXPECT_EQ(command_header.find("selection.select_all"), std::string::npos);

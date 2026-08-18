@@ -58,6 +58,8 @@ QuaderHoverRequest material_face_hover_request(
           ViewportFloatSettingId::PickVertexRadius),
       .edge_radius = frame.settings.float_value(
           ViewportFloatSettingId::PickEdgeRadius),
+      .select_backfaces = frame.settings.bool_value(
+          ViewportBoolSettingId::BackfaceSelection),
   };
 }
 

@@ -1040,6 +1040,31 @@ TEST(RenderSceneSnapshotTests,
             records.front().material.revision);
 }
 
+TEST(RenderSceneSnapshotTests, ToolPreviewSnapshotsPreserveCullingPolicy) {
+  AssetRegistry assets;
+  const std::vector<RenderToolPreviewMeshRecord> records =
+      build_render_tool_preview_snapshot(
+          {
+              ToolPreviewMesh{.source_entity = 7u,
+                              .mesh = make_overlay_triangle_mesh(),
+                              .double_sided = false,
+                              .suppress_source = true},
+              ToolPreviewMesh{.source_entity = 8u,
+                              .mesh = make_overlay_triangle_mesh(),
+                              .double_sided = true,
+                              .suppress_source = true},
+              ToolPreviewMesh{.source_entity = kInvalidEntityId,
+                              .mesh = make_overlay_triangle_mesh()},
+          },
+          assets);
+
+  ASSERT_EQ(records.size(), 3u);
+  EXPECT_FALSE(records[0].double_sided);
+  EXPECT_TRUE(records[1].double_sided);
+  EXPECT_TRUE(records[2].double_sided)
+      << "source-less generated previews retain their two-sided default";
+}
+
 TEST(RenderSceneSnapshotTests,
      ToolPreviewSnapshotsPreserveProjectMaterialsAndSlotOverrides) {
   AssetRegistry assets;

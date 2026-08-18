@@ -76,6 +76,7 @@ ui.menu.edit.settings=Settings
 ui.menu.select=&Select
 ui.menu.select.all=Select All
 ui.menu.select.inverse=Select Inverse
+ui.menu.select.toggle_backface_selection=Toggle Backface Selection
 ui.menu.select.edge.direction=Select Direction
 ui.menu.select.edge.loops=Select Edge Loops
 ui.menu.select.edge.ring=Select Edge Ring
@@ -718,6 +719,7 @@ viewport.settings.ShowOverlays.label=Show Overlays
 viewport.settings.ShowInfo.label=Show Info
 viewport.settings.GridSnap.label=Grid Snap
 viewport.settings.VertexSnap.label=Vertex Snap
+viewport.settings.BackfaceSelection.label=Backface Selection
 
 tool_settings.target.cut=Cut
 tool_settings.target.mirror=Mirror

@@ -283,6 +283,8 @@ private:
               .edge_radius =
                   settings.float_value(
                       quader::ViewportFloatSettingId::PickEdgeRadius),
+              .select_backfaces = settings.bool_value(
+                  quader::ViewportBoolSettingId::BackfaceSelection),
               .scene_revision = harness.session.scene().revision(),
               .asset_revision = harness.session.assets().revision(),
               .local_visibility_revision = local_visibility_revision,
@@ -3794,6 +3796,32 @@ TEST(ViewportHoverControllerTests,
   EXPECT_FALSE(unsnapped.matches(local_visibility_changed));
   EXPECT_TRUE(controller.claim(local_visibility_changed));
   EXPECT_FALSE(controller.claim(local_visibility_changed));
+}
+
+TEST(ViewportHoverControllerTests,
+     BackfaceSelectionToggleInvalidatesStationarySelectionHover) {
+  quader::ViewportHoverController controller;
+  quader::ViewportCameraController camera;
+  camera.set_viewport_size(800.0f, 600.0f);
+  quader::ViewportHoverWorkRequest request{
+      .active_tool = quader::ViewportToolId::Select,
+      .selection_mode = quader::ViewportSelectionMode::Face,
+      .mouse_local = {320.0f, 240.0f},
+      .viewport_size = {800.0f, 600.0f},
+      .select_backfaces = false,
+  };
+
+  const quader::ViewportHoverWorkKey front_only =
+      controller.make_key(camera, request);
+  EXPECT_TRUE(controller.claim(front_only));
+  EXPECT_FALSE(controller.claim(front_only));
+
+  request.select_backfaces = true;
+  const quader::ViewportHoverWorkKey two_sided =
+      controller.make_key(camera, request);
+  EXPECT_FALSE(front_only.matches(two_sided));
+  EXPECT_TRUE(controller.claim(two_sided));
+  EXPECT_FALSE(controller.claim(two_sided));
 }
 
 TEST(ViewportHostInteractionPolicyTests,

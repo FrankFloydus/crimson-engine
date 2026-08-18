@@ -119,6 +119,43 @@ quader_editor_core::PolygonObject adjacent_face_object()
         return object;
 }
 
+quader_editor_core::PolygonObject single_quad_object(int id, bool backfacing)
+{
+	quader_editor_core::PolygonObject object;
+	object.id = id;
+	quader_poly::Document& document = object.document;
+	const quader_poly::ElementId v0 = quader_poly::add_vertex(document, { -1.0F, -1.0F, 0.0F });
+	const quader_poly::ElementId v1 = quader_poly::add_vertex(document, { 1.0F, -1.0F, 0.0F });
+	const quader_poly::ElementId v2 = quader_poly::add_vertex(document, { 1.0F, 1.0F, 0.0F });
+	const quader_poly::ElementId v3 = quader_poly::add_vertex(document, { -1.0F, 1.0F, 0.0F });
+	if (backfacing) {
+		[[maybe_unused]] const quader_poly::ElementId face =
+			quader_poly::add_face(document, std::array { v0, v3, v2, v1 }, 0U);
+	} else {
+		[[maybe_unused]] const quader_poly::ElementId face =
+			quader_poly::add_face(document, std::array { v0, v1, v2, v3 }, 0U);
+	}
+	object.selected = true;
+	return object;
+}
+
+quader_editor_core::PickObjectTransform scaled_pick_transform(
+		int object_id,
+		float x,
+		float y,
+		float z)
+{
+	quader_editor_core::PickObjectTransform transform;
+	transform.object_id = object_id;
+	transform.world_from_object.values[0] = x;
+	transform.world_from_object.values[5] = y;
+	transform.world_from_object.values[10] = z;
+	transform.object_from_world.values[0] = 1.0F / x;
+	transform.object_from_world.values[5] = 1.0F / y;
+	transform.object_from_world.values[10] = 1.0F / z;
+	return transform;
+}
+
 quader_editor_core::PolygonObject occluded_back_edge_object()
 {
 	quader_editor_core::PolygonObject object;
@@ -668,6 +705,13 @@ void selection_pick_options_normalize_host_radius_inputs()
 		"selection pick options should default non-finite vertex radii"));
 	ASSERT_TRUE(require_test(nearly_equal(defaulted.edge_radius, 0.10F),
 		"selection pick options should default non-finite edge radii"));
+	ASSERT_TRUE(require_test(defaulted.pick_backfaces,
+		"selection pick options should keep non-selection tool callers two-sided by default"));
+
+	const quader_poly::PickOptions front_only =
+		quader_editor_core::selection_pick_options_from_radii(0.12, 0.10, false);
+	ASSERT_TRUE(require_test(!front_only.pick_backfaces,
+		"selection pick options should preserve an explicit front-facing-only request"));
 
 	const quader_poly::PickOptions clamped =
 		quader_editor_core::selection_pick_options_from_radii(-4.0, 50.0);
@@ -682,6 +726,146 @@ void selection_pick_options_normalize_host_radius_inputs()
 		"selection pick options should preserve finite in-range vertex radii"));
 	ASSERT_TRUE(require_test(nearly_equal(preserved.edge_radius, 0.75F),
 		"selection pick options should preserve finite in-range edge radii"));
+}
+
+void backface_policy_filters_face_edge_and_vertex_clicks_and_hover()
+{
+	const std::array modes {
+		quader_poly::SelectionMode::Face,
+		quader_poly::SelectionMode::Edge,
+		quader_poly::SelectionMode::Vertex,
+	};
+	const std::array editor_modes {
+		quader_editor_core::SelectionMode::Face,
+		quader_editor_core::SelectionMode::Edge,
+		quader_editor_core::SelectionMode::Vertex,
+	};
+	const std::array rays {
+		quader_poly::Ray { { 0.0F, 0.0F, 5.0F }, { 0.0F, 0.0F, -1.0F } },
+		quader_poly::Ray { { 0.0F, -1.0F, 5.0F }, { 0.0F, 0.0F, -1.0F } },
+		quader_poly::Ray { { -1.0F, -1.0F, 5.0F }, { 0.0F, 0.0F, -1.0F } },
+	};
+
+	for (std::size_t index = 0U; index < modes.size(); ++index) {
+		quader_poly::PickOptions options;
+		options.mode = modes[index];
+		options.vertex_radius = 0.05F;
+		options.edge_radius = 0.05F;
+		options.pick_backfaces = false;
+
+		std::vector<quader_editor_core::PolygonObject> backfacing {
+			single_quad_object(7, true),
+		};
+		ASSERT_TRUE(require_test(
+			!quader_editor_core::pick_nearest(backfacing, { rays[index], options }).has_value(),
+			"front-facing-only click picking should reject a solely back-facing component"));
+		const quader_editor_core::SelectionHoverUpdateResult rejected_hover =
+			quader_editor_core::update_selection_hover(
+				backfacing, editor_modes[index],
+				{}, rays[index], false, options);
+		ASSERT_TRUE(require_test(
+			rejected_hover.hover.object_id < 0,
+			"front-facing-only hover should reject a solely back-facing component"));
+
+		options.pick_backfaces = true;
+		ASSERT_TRUE(require_test(
+			quader_editor_core::pick_nearest(backfacing, { rays[index], options }).has_value(),
+			"two-sided click picking should accept a back-facing component"));
+		const quader_editor_core::SelectionHoverUpdateResult accepted_hover =
+			quader_editor_core::update_selection_hover(
+				backfacing, editor_modes[index],
+				{}, rays[index], false, options);
+		ASSERT_TRUE(require_test(
+			accepted_hover.hover.object_id == 7,
+			"two-sided hover should accept a back-facing component"));
+
+		options.pick_backfaces = false;
+		std::vector<quader_editor_core::PolygonObject> frontfacing {
+			single_quad_object(8, false),
+		};
+		ASSERT_TRUE(require_test(
+			quader_editor_core::pick_nearest(frontfacing, { rays[index], options }).has_value(),
+			"front-facing-only click picking should retain front-facing components"));
+	}
+
+	quader_editor_core::PolygonObject loose;
+	loose.id = 9;
+	[[maybe_unused]] const quader_poly::ElementId loose_vertex =
+		quader_poly::add_vertex(loose.document, {});
+	quader_poly::PickOptions loose_options;
+	loose_options.mode = quader_poly::SelectionMode::Vertex;
+	loose_options.vertex_radius = 0.05F;
+	loose_options.pick_backfaces = false;
+	ASSERT_TRUE(require_test(
+		quader_editor_core::pick_nearest(
+			std::vector<quader_editor_core::PolygonObject> { loose },
+			{ front_center_ray(), loose_options }).has_value(),
+		"front-facing-only picking should retain loose vertices"));
+}
+
+void reflected_tiny_nonuniform_transforms_reverse_authored_facing()
+{
+	const std::vector<quader_editor_core::PolygonObject> objects {
+		single_quad_object(7, false),
+	};
+	const std::vector<quader_editor_core::PickObjectFaceGeometry> face_geometry =
+		quader_editor_core::build_pick_face_geometry(objects);
+	const std::array positive_transform {
+		scaled_pick_transform(7, 0.001F, 0.002F, 0.004F),
+	};
+	const std::array reflected_transform {
+		scaled_pick_transform(7, -0.001F, 0.002F, 0.004F),
+	};
+	const std::array modes {
+		quader_poly::SelectionMode::Face,
+		quader_poly::SelectionMode::Edge,
+		quader_poly::SelectionMode::Vertex,
+	};
+	const std::array priority_modes {
+		quader_editor_core::SelectionMode::Face,
+		quader_editor_core::SelectionMode::Edge,
+		quader_editor_core::SelectionMode::Vertex,
+	};
+	const std::array positive_rays {
+		quader_poly::Ray { { 0.0F, 0.0F, 0.02F }, { 0.0F, 0.0F, -1.0F } },
+		quader_poly::Ray { { 0.0F, -0.002F, 0.02F }, { 0.0F, 0.0F, -1.0F } },
+		quader_poly::Ray { { -0.001F, -0.002F, 0.02F }, { 0.0F, 0.0F, -1.0F } },
+	};
+	const std::array reflected_rays {
+		positive_rays[0],
+		positive_rays[1],
+		quader_poly::Ray { { 0.001F, -0.002F, 0.02F }, { 0.0F, 0.0F, -1.0F } },
+	};
+
+	for (std::size_t index = 0U; index < modes.size(); ++index) {
+		quader_poly::PickOptions options;
+		options.mode = modes[index];
+		options.vertex_radius = 0.00005F;
+		options.edge_radius = 0.00005F;
+		options.pick_backfaces = false;
+		ASSERT_TRUE(require_test(
+			quader_editor_core::pick_nearest(
+				objects, { positive_rays[index], options }, {}, face_geometry,
+				positive_transform).has_value(),
+			"tiny nonuniform positive transforms should preserve authored front-facing selection"));
+		ASSERT_TRUE(require_test(
+			!quader_editor_core::pick_nearest(
+				objects, { reflected_rays[index], options }, {}, face_geometry,
+				reflected_transform).has_value(),
+			"tiny reflected transforms should reverse authored component facing"));
+		const std::array priority { priority_modes[index] };
+		ASSERT_TRUE(require_test(
+			!quader_editor_core::pick_nearest_priority(
+				objects, { reflected_rays[index], options }, priority, {},
+				face_geometry, reflected_transform).has_value(),
+			"priority picking should apply the same reflected winding policy"));
+		options.pick_backfaces = true;
+		ASSERT_TRUE(require_test(
+			quader_editor_core::pick_nearest(
+				objects, { reflected_rays[index], options }, {}, face_geometry,
+				reflected_transform).has_value(),
+			"two-sided picking should retain reflected back-facing components"));
+	}
 }
 
 void component_pick_distance_uses_geometry_ray_distance()
@@ -836,6 +1020,16 @@ TEST(QdrModelingRuntimePickingTests, DefaultComponentPickingHasEditorLeeway) {
 TEST(QdrModelingRuntimePickingTests,
 	SelectionPickOptionsNormalizeHostRadiusInputs) {
 	selection_pick_options_normalize_host_radius_inputs();
+}
+
+TEST(QdrModelingRuntimePickingTests,
+	BackfacePolicyFiltersFaceEdgeAndVertexClicksAndHover) {
+	backface_policy_filters_face_edge_and_vertex_clicks_and_hover();
+}
+
+TEST(QdrModelingRuntimePickingTests,
+	ReflectedTinyNonuniformTransformsReverseAuthoredFacing) {
+	reflected_tiny_nonuniform_transforms_reverse_authored_facing();
 }
 
 TEST(QdrModelingRuntimePickingTests,

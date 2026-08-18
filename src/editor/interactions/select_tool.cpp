@@ -594,7 +594,8 @@ public:
                 }
                 if (request.mode == SelectionMode::Face) {
                   for (const RectangleProjectedFace &face : request.faces) {
-                    if (face.object_id >= 0 && face.face_index >= 0 &&
+                    if ((request.select_backfaces || face.front_facing) &&
+                        face.object_id >= 0 && face.face_index >= 0 &&
                         projected_face_matches(face, request)) {
                       hits.faces.push_back(
                           {face.object_id, face.face_index, {}});
@@ -604,7 +605,8 @@ public:
                 }
                 if (request.mode == SelectionMode::Edge) {
                   for (const RectangleProjectedEdge &edge : request.edges) {
-                    if (edge.object_id >= 0 && edge.a_index >= 0 &&
+                    if ((request.select_backfaces || edge.front_facing) &&
+                        edge.object_id >= 0 && edge.a_index >= 0 &&
                         edge.b_index >= 0 &&
                         projected_edge_matches(edge, request)) {
                       hits.edges.push_back(
@@ -616,7 +618,8 @@ public:
                 if (request.mode == SelectionMode::Vertex) {
                   for (const RectangleProjectedVertex &vertex :
                        request.vertices) {
-                    if (vertex.object_id >= 0 && vertex.vertex_index >= 0 &&
+                    if ((request.select_backfaces || vertex.front_facing) &&
+                        vertex.object_id >= 0 && vertex.vertex_index >= 0 &&
                         vertex.has_screen_position &&
                         rect_contains(request.rect, vertex.screen_position)) {
                       hits.vertices.push_back(

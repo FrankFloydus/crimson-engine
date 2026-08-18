@@ -34,6 +34,9 @@ struct ToolPreviewMesh {
   MeshAsset mesh;
   QMat4 transform;
   std::vector<QMat4> instance_transforms;
+  // Source-replacing previews carry source culling; generated previews keep
+  // the historical two-sided default.
+  bool double_sided = true;
   bool dynamic_positions = false;
   bool suppress_source = false;
   std::uint64_t layout_key = 0u;

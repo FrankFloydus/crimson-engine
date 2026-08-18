@@ -275,6 +275,8 @@ struct RenderToolPreviewMeshRecord {
   std::uint64_t material_revision = 0;
   QMat4 transform;
   std::vector<QMat4> instance_transforms;
+  // Material-instance culling policy retained with the preview snapshot.
+  bool double_sided = true;
   bool dynamic_positions = false;
   bool suppress_source = false;
   std::uint64_t layout_key = 0u;

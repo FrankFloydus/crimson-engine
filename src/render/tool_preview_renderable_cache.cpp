@@ -377,7 +377,7 @@ ToolPreviewRenderableCache::build_generation(
         preview_mesh.dynamic_positions ? &local_bounds : nullptr;
     MeshRenderableProxy rendered_prototype = factory_->create(
         preview_mesh.source_entity, mesh_snapshot, &preview_mesh.material,
-        transforms.front(), false, true, 0u, false, false,
+        transforms.front(), false, preview_mesh.double_sided, 0u, false, false,
         kViewportDefaultRenderableChannel, preview_mesh.dynamic_positions,
         positions, bounds_override);
     if (!rendered_prototype.entity) {
@@ -387,7 +387,8 @@ ToolPreviewRenderableCache::build_generation(
 
     MeshRenderableProxy shaded_prototype = factory_->create_shared_geometry(
         preview_mesh.source_entity, mesh_snapshot, &preview_mesh.material,
-        rendered_prototype, transforms.front(), true, 0u, true, false,
+        rendered_prototype, transforms.front(), preview_mesh.double_sided, 0u,
+        true, false,
         kViewportDefaultRenderableChannel, bounds_override);
     const auto make_group = [&](MeshRenderableProxy rendered,
                                 MeshRenderableProxy shaded = {},
@@ -425,8 +426,8 @@ ToolPreviewRenderableCache::build_generation(
     MeshRenderableProxy overlay_depth_prototype =
         factory_->create_shared_geometry(
             preview_mesh.source_entity, mesh_snapshot, &preview_mesh.material,
-            rendered_prototype, transforms.front(), true, 0u, true, true,
-            kViewportOverlayDepthChannel, bounds_override);
+            rendered_prototype, transforms.front(), preview_mesh.double_sided,
+            0u, true, true, kViewportOverlayDepthChannel, bounds_override);
     if (!overlay_depth_prototype.entity) {
       generation->groups.push_back(make_group(
           std::move(rendered_prototype), std::move(shaded_prototype)));
@@ -1050,6 +1051,7 @@ std::uint64_t ToolPreviewRenderableCache::preview_material_signature(
   RenderSignatureBuilder signature(
       render_material_binding_signature(preview_mesh.material));
   signature.add_value(preview_mesh.material_revision)
+      .add_bool(preview_mesh.double_sided)
       .add_value(static_cast<std::uint64_t>(
           preview_mesh.material_reference.kind()));
   if (preview_mesh.material_reference.project_owned()) {

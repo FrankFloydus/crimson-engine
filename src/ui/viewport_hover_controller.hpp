@@ -46,6 +46,7 @@ struct ViewportHoverWorkKey {
     bool gizmo_consumed = false;
     double vertex_radius = 0.3;
     double edge_radius = 0.2;
+    bool select_backfaces = false;
     std::uint64_t scene_revision = 0;
     std::uint64_t asset_revision = 0;
     std::uint64_t local_visibility_revision = 0;
@@ -71,6 +72,7 @@ struct ViewportHoverWorkRequest {
   bool gizmo_consumed = false;
   double vertex_radius = 0.3;
   double edge_radius = 0.2;
+  bool select_backfaces = false;
   std::uint64_t scene_revision = 0;
   std::uint64_t asset_revision = 0;
   std::uint64_t local_visibility_revision = 0;

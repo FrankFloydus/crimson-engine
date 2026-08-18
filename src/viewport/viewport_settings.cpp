@@ -153,6 +153,7 @@ const std::array<ViewportBoolSettingDescriptor, kViewportBoolSettingCount> kBool
         {ViewportBoolSettingId::GridSnap, ViewportSettingsSectionId::Grid, "Grid Snap", key("GridSnap"), true},
         {ViewportBoolSettingId::VertexSnap, ViewportSettingsSectionId::Picking, "Vertex Snap", key("VertexSnap"), true},
         {ViewportBoolSettingId::RotationSnap, ViewportSettingsSectionId::Grid, "Rotation Snap", key("RotationSnap"), true},
+        {ViewportBoolSettingId::BackfaceSelection, ViewportSettingsSectionId::Selection, "Backface Selection", key("BackfaceSelection"), false},
 }};
 
 std::string full_key(std::string_view suffix) {

@@ -268,6 +268,81 @@ TEST(QdrModelingRuntimeToolSelectTests, ProjectedRectangleVertexHitsRequirePoint
 	EXPECT_TRUE(hits.vertices[0].vertex_index == 4);
 }
 
+TEST(QdrModelingRuntimeToolSelectTests,
+	ProjectedRectangleBackfacePolicyFiltersOnlyComponentCandidates) {
+	quader_editor_core::RectangleProjectedHitsRequest face_request;
+	face_request.mode = quader_editor_core::SelectionMode::Face;
+	face_request.match = quader_editor_core::RectangleSelectionMatch::Contain;
+	face_request.rect = { 0.0, 0.0, 10.0, 10.0 };
+	face_request.select_backfaces = false;
+	face_request.faces = {
+		{ .object_id = 1, .face_index = 10, .has_screen_position = true,
+		  .screen_position = { 4.0F, 4.0F }, .front_facing = true },
+		{ .object_id = 1, .face_index = 11, .has_screen_position = true,
+		  .screen_position = { 6.0F, 6.0F }, .front_facing = false },
+	};
+	EXPECT_TRUE(
+		quader_editor_core::rectangle_hits_from_projected_candidates(face_request)
+			.faces.size() == 1U);
+	face_request.select_backfaces = true;
+	EXPECT_TRUE(
+		quader_editor_core::rectangle_hits_from_projected_candidates(face_request)
+			.faces.size() == 2U);
+
+	quader_editor_core::RectangleProjectedHitsRequest edge_request;
+	edge_request.mode = quader_editor_core::SelectionMode::Edge;
+	edge_request.match = quader_editor_core::RectangleSelectionMatch::Contain;
+	edge_request.rect = face_request.rect;
+	edge_request.select_backfaces = false;
+	edge_request.edges = {
+		{ .object_id = 1, .a_index = 0, .b_index = 1,
+		  .has_screen_position = true, .screen_position = { 4.0F, 4.0F },
+		  .front_facing = true },
+		{ .object_id = 1, .a_index = 2, .b_index = 3,
+		  .has_screen_position = true, .screen_position = { 6.0F, 6.0F },
+		  .front_facing = false },
+	};
+	EXPECT_TRUE(
+		quader_editor_core::rectangle_hits_from_projected_candidates(edge_request)
+			.edges.size() == 1U);
+	edge_request.select_backfaces = true;
+	EXPECT_TRUE(
+		quader_editor_core::rectangle_hits_from_projected_candidates(edge_request)
+			.edges.size() == 2U);
+
+	quader_editor_core::RectangleProjectedHitsRequest vertex_request;
+	vertex_request.mode = quader_editor_core::SelectionMode::Vertex;
+	vertex_request.match = quader_editor_core::RectangleSelectionMatch::Contain;
+	vertex_request.rect = face_request.rect;
+	vertex_request.select_backfaces = false;
+	vertex_request.vertices = {
+		{ .object_id = 1, .vertex_index = 0, .has_screen_position = true,
+		  .screen_position = { 4.0F, 4.0F }, .front_facing = true },
+		{ .object_id = 1, .vertex_index = 1, .has_screen_position = true,
+		  .screen_position = { 6.0F, 6.0F }, .front_facing = false },
+	};
+	EXPECT_TRUE(
+		quader_editor_core::rectangle_hits_from_projected_candidates(vertex_request)
+			.vertices.size() == 1U);
+	vertex_request.select_backfaces = true;
+	EXPECT_TRUE(
+		quader_editor_core::rectangle_hits_from_projected_candidates(vertex_request)
+			.vertices.size() == 2U);
+
+	quader_editor_core::RectangleProjectedHitsRequest object_request;
+	object_request.mode = quader_editor_core::SelectionMode::Object;
+	object_request.match = quader_editor_core::RectangleSelectionMatch::Contain;
+	object_request.rect = face_request.rect;
+	object_request.select_backfaces = false;
+	object_request.objects = {
+		{ .object_id = 1, .has_screen_center = true,
+		  .screen_center = { 5.0F, 5.0F } },
+	};
+	EXPECT_TRUE(
+		quader_editor_core::rectangle_hits_from_projected_candidates(object_request)
+			.object_ids.size() == 1U);
+}
+
 TEST(QdrModelingRuntimeToolSelectTests, HandleSelectionPolicyTogglesGroupedEdgeAndFaceHandles) {
 	quader_editor_core::SelectionHandleRequest request;
         request.current_selection.mode =

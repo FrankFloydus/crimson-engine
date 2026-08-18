@@ -2676,6 +2676,8 @@ void QtViewportPanel::process_viewport_input(
                 settings.float_value(ViewportFloatSettingId::PickVertexRadius),
             .edge_radius =
                 settings.float_value(ViewportFloatSettingId::PickEdgeRadius),
+            .select_backfaces = settings.bool_value(
+                ViewportBoolSettingId::BackfaceSelection),
             .scene_revision = document.revision(),
             .asset_revision = assets.revision(),
             .local_visibility_revision = local_visibility.revision(),

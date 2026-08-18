@@ -63,9 +63,13 @@ quader_geometry::QAabb3<float> triangle_pick_bounds(const PickFaceTriangle& tria
     };
 }
 
-bool face_is_front_facing_from_ray(quader::QVec3 normal, const Ray& ray)
+bool face_is_front_facing_from_ray(
+    quader::QVec3 normal,
+    const Ray& ray,
+    bool reverse_face_winding = false)
 {
-  return dot(normal, ray.direction) < -kEpsilon;
+  const float facing = dot(normal, ray.direction);
+  return reverse_face_winding ? facing > kEpsilon : facing < -kEpsilon;
 }
 
 bool face_hit_is_better(const FaceRayHit& candidate, const std::optional<FaceRayHit>& nearest, const PickOptions& options)
@@ -105,7 +109,8 @@ std::optional<FaceRayHit> nearest_face_ray_hit(std::span<const PickFaceTriangle>
     const quader_geometry::QRay3<float> geometry_pick_ray = geometry_ray(ray);
     const float picking_epsilon = std::nextafter(kEpsilon, 0.0F);
     for (const PickFaceTriangle& triangle : triangles) {
-        const bool front_facing = face_is_front_facing_from_ray(triangle.normal, ray);
+        const bool front_facing = face_is_front_facing_from_ray(
+            triangle.normal, ray, options.reverse_face_winding);
         if (!front_facing && !options.pick_backfaces) {
             continue;
         }
@@ -360,8 +365,8 @@ PickResult DocumentPickFacts::normalized_surface_hit(const Ray& ray)
             continue;
         }
 
-        const bool front_facing =
-            face_is_front_facing_from_ray(fact.normal, ray);
+        const bool front_facing = face_is_front_facing_from_ray(
+            fact.normal, ray, options_.reverse_face_winding);
         if (!front_facing && !options_.pick_backfaces) {
             continue;
         }
@@ -453,6 +458,26 @@ bool DocumentPickFacts::edge_can_be_picked(Edge edge) const
     return faces.empty();
 }
 
+bool DocumentPickFacts::vertex_has_incident_face(ElementId vertex_id) const
+{
+    return !incident_faces(vertex_id).empty();
+}
+
+bool DocumentPickFacts::edge_has_incident_face(Edge edge) const
+{
+    return !incident_faces(edge).empty();
+}
+
+bool DocumentPickFacts::face_is_front_facing_pickable(
+    ElementId face_id,
+    const Ray& ray) const
+{
+    const FaceFact* fact = face_fact(face_id);
+    return fact != nullptr && fact->pickable &&
+        face_is_front_facing_from_ray(
+            fact->normal, ray, options_.reverse_face_winding);
+}
+
 bool DocumentPickFacts::vertex_has_front_facing_pickable_face(
     ElementId vertex_id,
     const Ray& ray) const
@@ -466,7 +491,8 @@ bool DocumentPickFacts::vertex_has_front_facing_pickable_face(
         }
         const FaceFact& fact = face_facts_[face_index];
         if (fact.pickable &&
-            face_is_front_facing_from_ray(fact.normal, ray)) {
+            face_is_front_facing_from_ray(
+                fact.normal, ray, options_.reverse_face_winding)) {
             return true;
         }
     }
@@ -486,7 +512,8 @@ bool DocumentPickFacts::edge_has_front_facing_pickable_face(
         }
         const FaceFact& fact = face_facts_[face_index];
         if (fact.pickable &&
-            face_is_front_facing_from_ray(fact.normal, ray)) {
+            face_is_front_facing_from_ray(
+                fact.normal, ray, options_.reverse_face_winding)) {
             return true;
         }
     }
@@ -510,7 +537,9 @@ ElementId DocumentPickFacts::best_edge_context_face_id(
         if (!fact.pickable || fact.face == nullptr) {
             continue;
         }
-        const float score = -dot(fact.normal, ray.direction);
+        const float score = options_.reverse_face_winding
+            ? dot(fact.normal, ray.direction)
+            : -dot(fact.normal, ray.direction);
         if (best_face_id == kInvalidElementId ||
             score > best_score + kEpsilon) {
             best_face_id = fact.face->id;
@@ -604,6 +633,10 @@ PickResult DocumentPickFacts::pick_element(
             }
             const bool front_facing =
                 vertex_has_front_facing_pickable_face(vertex.id, ray);
+            if (!options_.pick_backfaces && !front_facing &&
+                !incident_faces(vertex.id).empty()) {
+                continue;
+            }
             if (!vertex_pick_is_occluded(
                     document_,
                     vertex.id,
@@ -660,6 +693,10 @@ PickResult DocumentPickFacts::pick_element(
         }
         const bool front_facing =
             edge_has_front_facing_pickable_face(edge, ray);
+        if (!options_.pick_backfaces && !front_facing &&
+            !incident_faces(edge).empty()) {
+            continue;
+        }
         if (!edge_pick_is_occluded(
                 document_,
                 edge,

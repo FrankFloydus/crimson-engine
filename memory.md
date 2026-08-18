@@ -9,6 +9,45 @@ affected owners/files, resolved approach, and verification. Do not record routin
 private user data, guesses, or unresolved issues. Prefer updating a related existing entry over
 adding a duplicate.
 
+## 2026-08-18 - Hammer-Style Toggle Backface Selection
+
+Task/context: ordinary component selection was permanently two-sided, with no persisted Hammer-style
+control for excluding away-facing topology.
+
+Invariant:
+
+- `select.toggle_backface_selection` is an always-visible, checkable Select-menu command with the
+  Source 2 Hammer default binding `Ctrl+Shift+F9`. `ViewportSettings::BackfaceSelection` is the
+  persisted source of truth and defaults off for interactive viewport selection.
+- Backface selection is only an orientation filter. It does not change render culling, marquee
+  contain/crossing rules, or depth/select-through policy. Face candidates require front-facing
+  authored winding when disabled; edges and vertices remain eligible when any incident pickable
+  face is front-facing, and loose components remain eligible. Object and Group selection are
+  unchanged.
+- Click, hover, and marquee requests all carry the same policy. Stationary hover keys include it,
+  and rectangle projections retain per-candidate facing so toggling re-resolves hits without
+  rebuilding geometry or topology universes.
+- Facing is evaluated in object space and XORed with the sign of the world-transform determinant;
+  use a double-precision sign check so tiny valid reflected scales remain correct. Edge-loop
+  context and priority picking use the same handedness rule.
+- Public/modeling request defaults remain two-sided for backward-compatible automation and
+  tool-specific callers. Viewport request builders explicitly inject the persisted default-off
+  preference. Knife and other independent topology tools retain their explicit two-sided picking.
+  This supersedes the older blanket invariant that all ordinary editor selection always picks
+  backfaces.
+
+Owners: command/preferences public APIs, `ViewportSettings`, Qt Select menu and viewport request
+builders, modeling selection/picking services, neutral polygon picking facts, selection-box policy,
+and hover/projection caches.
+
+Verification: focused runtime picking/selection tests pass 30/30; focused command, settings, menu,
+localization, API, service, hover, and contract tests pass 21/21; focused source/persistence
+guardrails pass 5/5; the complete modeling-domain suite passes 442/442; and the intentionally
+regenerated 157-command behavior baseline passes. The mandatory gate still reports the recorded
+unrelated six repository guardrails, two Linear Array preview tests, and three source-wire overlay
+tests; its SDK-only wrapper passes the consumer suite and inherits those same guardrail failures.
+Both canonical Debug/Profile and Release app builds succeed.
+
 ## 2026-08-18 - Transform Preview, Knife, Slider, And Shift-Duplicate Continuity
 
 Task/context: component transforms temporarily distorted generated texture mapping, Tool Settings
@@ -21,7 +60,11 @@ Invariant:
 - Vertex/Edge/Face transform previews derive the same canonical positions, normals, generated UVs,
   static vertex stream, and indices as commit. Dynamic preview rendering refreshes both vertex
   streams plus the index buffer; position-changing polygon operations invalidate authored loop UVs
-  so generated mapping remains the single procedural result.
+  so generated mapping remains the single procedural result. A source-suppressing component
+  preview also inherits `MeshComponent::double_sided`; source-less generated previews retain their
+  two-sided default, and preview cache identity includes sidedness because Filament culling is
+  material-instance state. Backface selection remains a picking policy and never changes preview
+  winding, normals, or culling.
 - A pointer-held Tool Settings slider publishes only the latest value at a bounded 50 ms cadence.
   Holding it idle performs no owner work, release flushes an exact newer final value once, and
   keyboard, wheel, and spin edits retain their trailing dispatch behavior.
@@ -40,7 +83,10 @@ Settings panel.
 Verification: task-focused SDK, modeling, render-cache, Knife, Qt slider, Shift Move/Rotate/Scale,
 repeat/undo/redo, and source-guardrail tests pass. The primitive slider regression measures one
 mesh compile/asset/scene publication during a held cadence window, zero while held idle, and one
-newer exact publication on release, with no delayed duplicate. The mandatory gate
+newer exact publication on release, with no delayed duplicate. An actual inward-wound gizmo drag
+regression covers single- and double-sided sources in Vertex, Edge, and Face modes, with exact
+preview-to-commit geometry, render-extraction culling propagation, and stale preview-cache
+rejection. The mandatory gate
 still reports the recorded unrelated command-baseline, Linear Array, source-wire overlay, and root
 instruction/CMake failures; its SDK-only wrapper inherits the same guardrail failures. Both
 canonical Debug/Profile and Release app builds succeeded.

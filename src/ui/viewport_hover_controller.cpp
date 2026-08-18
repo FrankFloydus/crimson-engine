@@ -43,6 +43,7 @@ bool ViewportHoverWorkKey::matches(const ViewportHoverWorkKey& other) const {
          gizmo_consumed == other.gizmo_consumed &&
          vertex_radius == other.vertex_radius &&
          edge_radius == other.edge_radius &&
+         select_backfaces == other.select_backfaces &&
          scene_revision == other.scene_revision &&
          asset_revision == other.asset_revision &&
          local_visibility_revision == other.local_visibility_revision &&
@@ -80,6 +81,7 @@ ViewportHoverWorkKey ViewportHoverController::make_key(
       .gizmo_consumed = request.gizmo_consumed,
       .vertex_radius = request.vertex_radius,
       .edge_radius = request.edge_radius,
+      .select_backfaces = request.select_backfaces,
       .scene_revision = request.scene_revision,
       .asset_revision = request.asset_revision,
       .local_visibility_revision = request.local_visibility_revision,
