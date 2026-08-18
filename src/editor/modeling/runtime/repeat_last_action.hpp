@@ -38,6 +38,7 @@ struct RepeatTransformAction {
   TransformDragOperation operation = TransformDragOperation::Transform;
   TransformAxis axis = TransformAxis::None;
   bool duplicate_selected = false;
+  quader::QVec3 pivot;
   quader::QVec3 move_delta;
   double rotate_angle_degrees = 0.0;
   quader::QVec3 scale{1.0F, 1.0F, 1.0F};

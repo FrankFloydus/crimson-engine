@@ -3083,7 +3083,6 @@ public:
         transformed = translate_scene_selection_by_world_delta(
             action.move_delta, "Repeat Move");
       } else {
-        const QVec3 pivot = selection_center().value_or(QVec3{});
         if (action.tool ==
             quader_editor_core::ViewportInteractionTool::Rotate) {
           const quader_poly::Transform3 rotation =
@@ -3091,12 +3090,14 @@ public:
                   action.axis,
                   action.rotate_angle_degrees * std::acos(-1.0) / 180.0);
           transformed = transform_scene_selection_by_world_delta(
-              world_affine_from_transform(rotation, pivot), "Repeat Rotate");
+              world_affine_from_transform(rotation, action.pivot),
+              "Repeat Rotate");
         } else if (action.tool ==
                    quader_editor_core::ViewportInteractionTool::Scale) {
           transformed = transform_scene_selection_by_world_delta(
               world_affine_from_transform(
-                  quader_editor_core::scale_transform(action.scale), pivot),
+                  quader_editor_core::scale_transform(action.scale),
+                  action.pivot),
               "Repeat Scale");
         } else {
           transformed = document_command_invalid_request_result(
@@ -3113,14 +3114,14 @@ public:
       return {true, duplicated || transformed.changed, {}};
     }
 
-    const ModelingCommandResult begun =
-        begin_transform_preview(action.duplicate_selected);
-    if (!begun.ok) {
-      return {begun.ok, begun.changed, begun.message};
-    }
-
-    std::string message;
     if (action.tool == quader_editor_core::ViewportInteractionTool::Move) {
+      const ModelingCommandResult begun =
+          begin_transform_preview(action.duplicate_selected);
+      if (!begun.ok) {
+        return {begun.ok, begun.changed, begun.message};
+      }
+
+      std::string message;
       const std::vector<quader_editor_core::ObjectLocalOffset> offsets =
           local_offsets_for_selected_objects(action.move_delta, message);
       if (offsets.empty()) {
@@ -3142,65 +3143,50 @@ public:
       return {committed.ok, committed.changed, committed.message};
     }
 
-    const QVec3 pivot = selection_center().value_or(QVec3{});
-    if (action.tool == quader_editor_core::ViewportInteractionTool::Rotate) {
-      const quader_poly::Transform3 world_transform =
-          quader_editor_core::rotation_transform(
-              action.axis,
-              action.rotate_angle_degrees * std::acos(-1.0) / 180.0);
-      const std::vector<quader_editor_core::ObjectLocalTransform> transforms =
-          local_transforms_for_selected_objects(
-              world_affine_from_transform(world_transform, pivot), message);
-      if (transforms.empty()) {
-        (void)cancel_transform_preview();
-        return {false, false, message};
-      }
-      ModelingCommandResult update;
-      if (action.operation ==
-          quader_editor_core::TransformDragOperation::Extrude) {
-        update = update_transform_extrude_preview(
-            transforms.front().transform.origin, 0.0F);
-      } else {
-        update = update_transform_matrix_preview(
-            from_runtime(transforms.front().transform), {});
-      }
-      if (!update.ok) {
-        (void)cancel_transform_preview();
-        return {false, update.changed, update.message};
-      }
-      const ModelingCommandResult committed = commit_transform_preview();
-      return {committed.ok, committed.changed, committed.message};
+    if (action.tool != quader_editor_core::ViewportInteractionTool::Rotate &&
+        action.tool != quader_editor_core::ViewportInteractionTool::Scale) {
+      return {false, false, "Unsupported repeat transform tool."};
     }
 
-    if (action.tool == quader_editor_core::ViewportInteractionTool::Scale) {
-      const quader_poly::Transform3 world_transform =
-          quader_editor_core::scale_transform(action.scale);
-      const std::vector<quader_editor_core::ObjectLocalTransform> transforms =
-          local_transforms_for_selected_objects(
-              world_affine_from_transform(world_transform, pivot), message);
-      if (transforms.empty()) {
-        (void)cancel_transform_preview();
-        return {false, false, message};
-      }
-      ModelingCommandResult update;
-      if (action.operation ==
-          quader_editor_core::TransformDragOperation::Inset) {
-        update = update_transform_inset_preview(
-            from_runtime(transforms.front().transform), {});
-      } else {
-        update = update_transform_matrix_preview(
-            from_runtime(transforms.front().transform), {});
-      }
-      if (!update.ok) {
-        (void)cancel_transform_preview();
-        return {false, update.changed, update.message};
-      }
-      const ModelingCommandResult committed = commit_transform_preview();
-      return {committed.ok, committed.changed, committed.message};
+    // Re-enter the same per-object preview path used by the original drag.
+    // This preserves the recorded world pivot, converts the complete affine
+    // into each selected object's local basis, and retains TransformExtrude
+    // for Shift+Rotate rather than reducing the rotation to an offset.
+    const ModelingCommandResult begun = begin_portable_transform_preview(
+        action.duplicate_selected,
+        action.operation ==
+                quader_editor_core::TransformDragOperation::Transform &&
+            !action.duplicate_selected);
+    if (!begun.ok) {
+      clear_transform_drag_caches();
+      return {begun.ok, begun.changed, begun.message};
     }
 
-    (void)cancel_transform_preview();
-    return {false, false, "Unsupported repeat transform tool."};
+    quader_editor_core::TransformDragState replay_drag;
+    replay_drag.active = true;
+    replay_drag.tool = action.tool;
+    replay_drag.operation = action.operation;
+    replay_drag.axis = action.axis;
+    replay_drag.pivot = action.pivot;
+    replay_drag.rotate.active =
+        action.tool == quader_editor_core::ViewportInteractionTool::Rotate;
+    replay_drag.rotate.axis = action.axis;
+    replay_drag.rotate.preview_angle_degrees = action.rotate_angle_degrees;
+    replay_drag.scale.active =
+        action.tool == quader_editor_core::ViewportInteractionTool::Scale;
+    replay_drag.scale.axis = action.axis;
+    replay_drag.scale.preview_scale = action.scale;
+
+    const ModelingCommandResult update =
+        update_portable_transform_preview(replay_drag, 0.0);
+    if (!update.ok) {
+      (void)cancel_transform_preview();
+      clear_transform_drag_caches();
+      return {false, update.changed, update.message};
+    }
+    const ModelingCommandResult committed = commit_transform_preview();
+    clear_transform_drag_caches();
+    return {committed.ok, committed.changed, committed.message};
   }
 
   quader_editor_core::CommandResult execute_repeat_last_action_scene_aware() {
@@ -3479,6 +3465,7 @@ public:
     drag.tool = to_runtime(transform.tool);
     drag.operation = to_runtime(transform.operation);
     drag.axis = to_runtime(transform.axis);
+    drag.pivot = to_runtime(transform.pivot);
     drag.move.active = transform.tool == ModelingTransformTool::Move;
     drag.move.axis = drag.axis;
     drag.move.preview_delta = to_runtime(transform.move_delta);

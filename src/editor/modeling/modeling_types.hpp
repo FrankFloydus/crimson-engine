@@ -578,6 +578,7 @@ struct ModelingRepeatTransform {
   ModelingTransformOperation operation = ModelingTransformOperation::Transform;
   ModelingTransformAxis axis = ModelingTransformAxis::None;
   bool duplicate_selected = false;
+  QVec3 pivot = {};
   QVec3 move_delta = {};
   double rotate_angle_degrees = 0.0;
   QVec3 scale = {1.0f, 1.0f, 1.0f};

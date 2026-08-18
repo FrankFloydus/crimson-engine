@@ -28,6 +28,15 @@ struct ComponentPickCase {
     quader::ModelingTransformTool tool = quader::ModelingTransformTool::Move;
 };
 
+/// Describes one repeat-rotation workflow across component and object modes.
+struct RepeatRotationCase {
+  quader::QuaderSelectionMode mode = quader::QuaderSelectionMode::Face;
+  quader::QVec3 ray_origin = {};
+  const char *label = "";
+};
+
+constexpr quader::QVec3 kRepeatRotationWorldPivot{4.0f, -3.0f, 0.25f};
+
 using PointKey = std::array<int, 3>;
 using EdgeKey = std::array<int, 6>;
 
@@ -74,6 +83,87 @@ void expect_vec3_near(quader::QVec3 actual, quader::QVec3 expected,
   EXPECT_NEAR(actual.x, expected.x, epsilon);
   EXPECT_NEAR(actual.y, expected.y, epsilon);
   EXPECT_NEAR(actual.z, expected.z, epsilon);
+}
+
+quader::QVec3 rotate_positive_quarter_turn_about(quader::QVec3 point,
+                                                  quader::QVec3 pivot) {
+  const quader::QVec3 relative = point - pivot;
+  return {
+      pivot.x - relative.y,
+      pivot.y + relative.x,
+      point.z,
+  };
+}
+
+float rotation_radius_xy(quader::QVec3 point, quader::QVec3 pivot) {
+  const float x = point.x - pivot.x;
+  const float y = point.y - pivot.y;
+  return std::sqrt(x * x + y * y);
+}
+
+void expect_positive_quarter_turn_step(quader::QVec3 before,
+                                       quader::QVec3 after,
+                                       quader::QVec3 pivot) {
+  expect_vec3_near(after, rotate_positive_quarter_turn_about(before, pivot));
+  EXPECT_NEAR(rotation_radius_xy(after, pivot),
+              rotation_radius_xy(before, pivot), 0.001f);
+
+  const quader::QVec3 before_relative = before - pivot;
+  const quader::QVec3 after_relative = after - pivot;
+  EXPECT_NEAR(before_relative.x * after_relative.x +
+                  before_relative.y * after_relative.y,
+              0.0f, 0.001f);
+  EXPECT_GT(before_relative.x * after_relative.y -
+                before_relative.y * after_relative.x,
+            0.0f);
+}
+
+quader::test::DragBeginOptions
+repeat_rotation_drag_options(quader::ModelingTransformOperation operation,
+                             bool duplicate_selected = false) {
+  return {
+      .tool = quader::ModelingTransformTool::Rotate,
+      .axis = quader::ModelingTransformAxis::Z,
+      .operation = operation,
+      .pivot = kRepeatRotationWorldPivot,
+      .use_selection_center = false,
+      .screen_position = {120.0f, 100.0f},
+      .screen_pivot = {100.0f, 100.0f},
+      .screen_tip = {120.0f, 100.0f},
+      .world_direction = {0.0f, 0.0f, 1.0f},
+      .grid_snap_enabled = false,
+      .duplicate_selected = duplicate_selected,
+  };
+}
+
+void select_repeat_rotation_target(quader::test::BehaviorScenario &s,
+                                   const RepeatRotationCase &test_case) {
+  if (test_case.mode == quader::QuaderSelectionMode::Object) {
+    s.given().selection_mode(test_case.mode).selected("box");
+    return;
+  }
+  s.given().selection_mode(test_case.mode);
+  s.when().pick(test_case.ray_origin);
+}
+
+void expect_repeat_rotation_selection(quader::test::BehaviorScenario &s,
+                                      quader::QuaderSelectionMode mode) {
+  s.then().selection().mode(mode);
+  switch (mode) {
+  case quader::QuaderSelectionMode::Edge:
+    s.then().selection().edge_count(1).active_alias("box");
+    break;
+  case quader::QuaderSelectionMode::Face:
+    s.then().selection().face_count(1).active_alias("box");
+    break;
+  case quader::QuaderSelectionMode::Object:
+    s.then().selection().object_count(1);
+    break;
+  case quader::QuaderSelectionMode::Vertex:
+  case quader::QuaderSelectionMode::Group:
+    ADD_FAILURE() << "repeat rotation test received an unsupported mode";
+    break;
+  }
 }
 
 int quantized_component(float value) {
@@ -335,6 +425,180 @@ TEST(ProgrammaticBehaviorScenarioTests, ComponentGizmoMoveRotateScaleKeepCompone
            },
        }) {
     run_component_transform_drag_case(test_case);
+  }
+}
+
+TEST(ProgrammaticBehaviorScenarioTests,
+     RepeatRotateReusesRecordedWorldPivotForEdgeFaceAndObjectSelections) {
+  for (const RepeatRotationCase test_case : {
+           RepeatRotationCase{
+               .mode = quader::QuaderSelectionMode::Edge,
+               .ray_origin = {0.0f, 1.0f, 5.0f},
+               .label = "edge",
+           },
+           RepeatRotationCase{
+               .mode = quader::QuaderSelectionMode::Face,
+               .ray_origin = {0.0f, 0.0f, 5.0f},
+               .label = "face",
+           },
+           RepeatRotationCase{
+               .mode = quader::QuaderSelectionMode::Object,
+               .label = "object",
+           },
+       }) {
+    SCOPED_TRACE(test_case.label);
+    auto s = quader::test::BehaviorScenario::new_project();
+    s.given().unit_box("box", "Repeat Rotate Box");
+    select_repeat_rotation_target(s, test_case);
+    expect_repeat_rotation_selection(s, test_case.mode);
+
+    const std::optional<quader::QVec3> center_before =
+        s.api().query().selection_center();
+    ASSERT_TRUE(center_before.has_value());
+    const quader::test::BehaviorSnapshot topology_before =
+        s.snapshot("before repeat rotate");
+    const quader::test::MeshSnapshot *mesh_before =
+        mesh_snapshot_for_alias(topology_before, "box");
+    ASSERT_NE(mesh_before, nullptr);
+
+    s.when()
+        .begin_transform_drag(repeat_rotation_drag_options(
+            quader::ModelingTransformOperation::Transform))
+        .update_transform_drag({100.0f, 80.0f})
+        .commit_drag();
+
+    s.then().command().ok_changed();
+    expect_repeat_rotation_selection(s, test_case.mode);
+    s.then().scene().entity_count(1);
+    const std::optional<quader::QVec3> center_after_drag =
+        s.api().query().selection_center();
+    ASSERT_TRUE(center_after_drag.has_value());
+    expect_positive_quarter_turn_step(*center_before, *center_after_drag,
+                                      kRepeatRotationWorldPivot);
+
+    const quader::test::BehaviorSnapshot topology_after_drag =
+        s.snapshot("after rotate drag");
+    const quader::test::MeshSnapshot *mesh_after_drag =
+        mesh_snapshot_for_alias(topology_after_drag, "box");
+    ASSERT_NE(mesh_after_drag, nullptr);
+    if (test_case.mode != quader::QuaderSelectionMode::Object) {
+      EXPECT_EQ(mesh_after_drag->vertex_count, mesh_before->vertex_count);
+      EXPECT_EQ(mesh_after_drag->index_count, mesh_before->index_count);
+    }
+
+    s.when().execute(quader::quader_command::kEditRepeatLastAction);
+
+    s.then().command().ok_changed();
+    expect_repeat_rotation_selection(s, test_case.mode);
+    s.then().scene().entity_count(1);
+    const std::optional<quader::QVec3> center_after_repeat =
+        s.api().query().selection_center();
+    ASSERT_TRUE(center_after_repeat.has_value());
+    expect_positive_quarter_turn_step(*center_after_drag, *center_after_repeat,
+                                      kRepeatRotationWorldPivot);
+
+    const quader::test::BehaviorSnapshot topology_after_repeat =
+        s.snapshot("after repeated rotate");
+    const quader::test::MeshSnapshot *mesh_after_repeat =
+        mesh_snapshot_for_alias(topology_after_repeat, "box");
+    ASSERT_NE(mesh_after_repeat, nullptr);
+    if (test_case.mode != quader::QuaderSelectionMode::Object) {
+      EXPECT_EQ(mesh_after_repeat->vertex_count, mesh_before->vertex_count);
+      EXPECT_EQ(mesh_after_repeat->index_count, mesh_before->index_count);
+    }
+  }
+}
+
+TEST(ProgrammaticBehaviorScenarioTests,
+     RepeatShiftRotateReusesRecordedWorldPivotAndRepeatsExtrudeOrDuplicate) {
+  for (const RepeatRotationCase test_case : {
+           RepeatRotationCase{
+               .mode = quader::QuaderSelectionMode::Edge,
+               .ray_origin = {0.0f, 1.0f, 5.0f},
+               .label = "edge extrude",
+           },
+           RepeatRotationCase{
+               .mode = quader::QuaderSelectionMode::Face,
+               .ray_origin = {0.0f, 0.0f, 5.0f},
+               .label = "face extrude",
+           },
+           RepeatRotationCase{
+               .mode = quader::QuaderSelectionMode::Object,
+               .label = "object duplicate",
+           },
+       }) {
+    SCOPED_TRACE(test_case.label);
+    auto s = quader::test::BehaviorScenario::new_project();
+    s.given().unit_box("box", "Repeat Shift Rotate Box");
+    select_repeat_rotation_target(s, test_case);
+    expect_repeat_rotation_selection(s, test_case.mode);
+
+    const bool object_mode =
+        test_case.mode == quader::QuaderSelectionMode::Object;
+    const std::optional<quader::QVec3> center_before =
+        s.api().query().selection_center();
+    ASSERT_TRUE(center_before.has_value());
+    const quader::test::BehaviorSnapshot topology_before =
+        s.snapshot("before shift rotate");
+    const quader::test::MeshSnapshot *mesh_before =
+        mesh_snapshot_for_alias(topology_before, "box");
+    ASSERT_NE(mesh_before, nullptr);
+
+    s.when()
+        .begin_transform_drag(repeat_rotation_drag_options(
+            object_mode ? quader::ModelingTransformOperation::Transform
+                        : quader::ModelingTransformOperation::Extrude,
+            object_mode))
+        .update_transform_drag({100.0f, 80.0f})
+        .commit_drag();
+
+    s.then().command().ok_changed();
+    expect_repeat_rotation_selection(s, test_case.mode);
+    if (object_mode) {
+      EXPECT_EQ(s.modeling_object_count(), 2u);
+    } else {
+      s.then().scene().entity_count(1u);
+    }
+    const std::optional<quader::QVec3> center_after_drag =
+        s.api().query().selection_center();
+    ASSERT_TRUE(center_after_drag.has_value());
+    expect_positive_quarter_turn_step(*center_before, *center_after_drag,
+                                      kRepeatRotationWorldPivot);
+
+    const quader::test::BehaviorSnapshot topology_after_drag =
+        s.snapshot("after shift rotate");
+    const quader::test::MeshSnapshot *mesh_after_drag =
+        mesh_snapshot_for_alias(topology_after_drag, "box");
+    ASSERT_NE(mesh_after_drag, nullptr);
+    if (!object_mode) {
+      EXPECT_GT(mesh_after_drag->vertex_count, mesh_before->vertex_count);
+      EXPECT_GT(mesh_after_drag->index_count, mesh_before->index_count);
+    }
+
+    s.when().execute(quader::quader_command::kEditRepeatLastAction);
+
+    s.then().command().ok_changed();
+    expect_repeat_rotation_selection(s, test_case.mode);
+    if (object_mode) {
+      EXPECT_EQ(s.modeling_object_count(), 3u);
+    } else {
+      s.then().scene().entity_count(1u);
+    }
+    const std::optional<quader::QVec3> center_after_repeat =
+        s.api().query().selection_center();
+    ASSERT_TRUE(center_after_repeat.has_value());
+    expect_positive_quarter_turn_step(*center_after_drag, *center_after_repeat,
+                                      kRepeatRotationWorldPivot);
+
+    const quader::test::BehaviorSnapshot topology_after_repeat =
+        s.snapshot("after repeated shift rotate");
+    const quader::test::MeshSnapshot *mesh_after_repeat =
+        mesh_snapshot_for_alias(topology_after_repeat, "box");
+    ASSERT_NE(mesh_after_repeat, nullptr);
+    if (!object_mode) {
+      EXPECT_GT(mesh_after_repeat->vertex_count, mesh_after_drag->vertex_count);
+      EXPECT_GT(mesh_after_repeat->index_count, mesh_after_drag->index_count);
+    }
   }
 }
 

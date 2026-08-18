@@ -699,6 +699,9 @@ ModelingTransformDragService::commit_transform_drag(
        !scene_duplicate_transaction_active);
   const quader_editor_core::TransformDragState repeat_drag =
       context.runtime.transform_drag_state();
+  const bool repeatable_scene_modeling_transform =
+      repeat_drag.scene_transform_preview_eligible &&
+      selected_scene_targets_are_sdk_modeling_objects(context.scene);
   const bool sparse_transform_history =
       finish_preview_transaction && history != nullptr &&
       context.port.transient_transform_preview_active() &&
@@ -865,11 +868,12 @@ ModelingTransformDragService::commit_transform_drag(
   }
 
   // Record only after every portable, scene, and enclosing duplicate
-  // transaction has committed. Direct object duplication is scene-driven,
-  // while component transforms are preview-driven; other scene-only drags do
-  // not have a portable replay contract.
-  if ((was_preview_driven || portable_scene_duplicate_active_) && changed &&
-      repeat_drag.active) {
+  // transaction has committed. Component transforms are preview-driven;
+  // direct SDK modeling-object transforms are scene-driven. Other scene-only
+  // targets, such as lights, do not have a portable replay contract.
+  if ((was_preview_driven || portable_scene_duplicate_active_ ||
+       repeatable_scene_modeling_transform) &&
+      changed && repeat_drag.active) {
     context.port.record_portable_transform(
         repeat_drag, controller_.duplicate_selected());
   }

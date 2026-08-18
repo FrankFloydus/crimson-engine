@@ -53,7 +53,7 @@ Both canonical Debug/Profile and Release app builds succeed.
 Task/context: component transforms temporarily distorted generated texture mapping, Tool Settings
 slider drags published avoidable live work, Knife depended on Edge selection and lost its cyan
 topology context outside valid hover, Shift-gizmo duplicate applied object transforms twice, and
-Repeat lost the duplicate-plus-transform action after replay.
+Repeat lost the duplicate-plus-transform action or reconstructed rotations around a moving pivot.
 
 Invariant:
 
@@ -75,6 +75,12 @@ Invariant:
   duplication/history while the scene transform owns placement. Record repeat only after every
   transaction commits, and preserve the duplicate-plus-transform repeat descriptor across its
   internal duplicate command so successive Ctrl+R operations each duplicate and transform once.
+- A repeatable Rotate/Scale records the original world pivot and reapplies the same world affine on
+  every Ctrl+R; it must never substitute the post-operation selection center. Component replay
+  re-enters the canonical per-object preview path so each object receives `W^-1 * A * W`, and
+  Shift+Rotate retains the full `TransformExtrude` matrix instead of reducing it to the affine
+  origin. Ordinary scene-driven transforms of direct SDK modeling objects are repeatable too;
+  lights, instances, groups without a direct modeling object, and mixed scene selections are not.
 
 Owners: SDK polygon position mutation, the modeling projection/transform/session services, dynamic
 tool-preview render cache/factory, Knife command/runtime/input policy, and the retained Qt Tool
@@ -86,7 +92,9 @@ mesh compile/asset/scene publication during a held cadence window, zero while he
 newer exact publication on release, with no delayed duplicate. An actual inward-wound gizmo drag
 regression covers single- and double-sided sources in Vertex, Edge, and Face modes, with exact
 preview-to-commit geometry, render-extraction culling propagation, and stale preview-cache
-rejection. The mandatory gate
+rejection. Repeat rotation regressions cover ordinary and Shift+drag in Edge, Face, and Object
+modes with exact successive 90-degree world-pivot steps; component Shift grows topology twice and
+Object Shift grows the modeling-object count from one to two to three. The mandatory gate
 still reports the recorded unrelated command-baseline, Linear Array, source-wire overlay, and root
 instruction/CMake failures; its SDK-only wrapper inherits the same guardrail failures. Both
 canonical Debug/Profile and Release app builds succeeded.
