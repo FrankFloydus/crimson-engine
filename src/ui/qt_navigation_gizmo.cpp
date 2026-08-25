@@ -344,7 +344,9 @@ void QtNavigationGizmo::paintEvent(QPaintEvent *event) {
     painter.setPen(QPen(colors.shadow().color(), 1.2));
     painter.setBrush(qt_semantic_axis_color(marker.axis));
     painter.drawEllipse(center, kAxisMarkerRadius, kAxisMarkerRadius);
-    painter.setPen(colors.windowText().color());
+    // Axis fills are deliberately bright semantic colors. The palette shadow
+    // keeps their compact labels readable in both light and dark themes.
+    painter.setPen(colors.shadow().color());
     const std::string_view label =
         quader_editor_core::view_axis_label(marker.axis, marker.sign);
     const QRectF label_rect(center.x() - kAxisMarkerRadius,

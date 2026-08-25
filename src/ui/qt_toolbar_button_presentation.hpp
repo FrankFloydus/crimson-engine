@@ -6,11 +6,17 @@
 ////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
+#include <QPalette>
+#include <QStyle>
+
 class QAction;
-class QStyle;
 class QToolBar;
 
 namespace quader {
+
+/** Resolves the palette group used to paint one toolbar-button state. */
+[[nodiscard]] QPalette::ColorGroup
+qt_toolbar_button_color_group(QStyle::State state);
 
 /**
  * Creates one toolbar-scoped Fusion presentation shared by its action buttons.

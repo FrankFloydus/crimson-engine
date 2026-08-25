@@ -26,6 +26,7 @@
 #include "ui/layer_panel.hpp"
 #include "ui/outliner_panel.hpp"
 #include "ui/qt_command_event_filter.hpp"
+#include "ui/qt_dock_title_presentation.hpp"
 #include "ui/qt_main_window.hpp"
 #include "ui/qt_material_browser_window.hpp"
 #include "ui/qt_material_preview_surface.hpp"
@@ -66,7 +67,6 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
-#include <cmath>
 #include <cstdint>
 #include <filesystem>
 #include <limits>
@@ -85,47 +85,6 @@ namespace quader {
 namespace {
 
 constexpr int kQtWindowStateVersion = 1;
-
-/// Keeps dock chrome distinct from panel content while preserving Fusion's
-/// native dock layout, dragging, double-click, and accessibility behavior.
-void apply_dark_dock_title_presentation(QDockWidget &dock) {
-  dock.setStyleSheet(QStringLiteral(R"QUADER(
-QDockWidget {
-  titlebar-close-icon: url(:/quader/icons/dock_close.png);
-  titlebar-normal-icon: url(:/quader/icons/dock_float.png);
-}
-QDockWidget::title {
-  background-color: #202020;
-  color: #d0d0d0;
-  border-bottom: 1px solid #3a3a3a;
-  padding: 0 4px;
-  text-align: left;
-}
-QDockWidget::title:active {
-  background-color: #181818;
-  color: #eeeeee;
-}
-QDockWidget::close-button,
-QDockWidget::float-button {
-  background-color: transparent;
-  border: 1px solid transparent;
-  padding: 0;
-  width: 18px;
-  height: 18px;
-  icon-size: 24px;
-}
-QDockWidget::close-button:hover,
-QDockWidget::float-button:hover {
-  background-color: transparent;
-  border-color: #8a8a8a;
-}
-QDockWidget::close-button:pressed,
-QDockWidget::float-button:pressed {
-  background-color: #0f0f0f;
-  border-color: #b5b5b5;
-}
-)QUADER"));
-}
 
 constexpr std::array<QuaderStandardMaterialTextureSlot, 4>
     kMaterialTextureSlots{
@@ -1940,7 +1899,7 @@ QDockWidget &UISystem::create_dock(UIPanelId id, QWidget &content,
   dock->setFeatures(QDockWidget::DockWidgetClosable |
                     QDockWidget::DockWidgetMovable |
                     QDockWidget::DockWidgetFloatable);
-  apply_dark_dock_title_presentation(*dock);
+  install_palette_aware_dock_title_presentation(*dock);
   content.setMinimumWidth(std::max(220, content.minimumWidth()));
   dock->setWidget(&content);
   main_window_->addDockWidget(static_cast<Qt::DockWidgetArea>(default_area),

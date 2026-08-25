@@ -6514,3 +6514,71 @@ eight pre-existing unrelated instruction/build, linear-array, and overlay failur
 an immediately filled viewport, and Align remaining visible with File open in Edge mode. On the same
 dense scene, the steady sample stayed effectively flat: 57.6 FPS / 1.25 ms CPU / 0.34 ms GPU before,
 versus 58.7-58.8 FPS / 1.09-1.30 ms CPU / 0.34 ms GPU after.
+
+## 2026-08-25 - Accessibility-Aware Obsidian Qt Palette
+
+Task/context: the user explicitly requested a modern, original, Obsidian-like application color
+scheme while retaining the native Qt Widgets shell and later required verification without visual
+inspection.
+
+Invariant:
+
+- This entry supersedes the current-sounding palette restrictions in the 2026-07-12 Stock Fusion
+  and Qt Widgets/ImGui parity entries. `Fusion` remains the single application style, but its
+  unmodified `standardPalette()` is now only the input to the app-owned palette factory, not the
+  final application palette. The prohibition on an application-wide stylesheet remains.
+- `qt_application_theme.*` is the one normal-contrast theme owner. It defines layered warm
+  near-black surfaces, warm neutral text, restrained borders, and amethyst interaction roles for
+  active, inactive, and disabled groups. Normal text, selection text, focus/selection accents,
+  semantic axis labels, and relevant control-state boundaries retain explicit contrast tests.
+- A Windows High Contrast transition unsets Quader's forced dark color scheme and installs an
+  unresolved `QPalette` so Qt continues resolving live system colors. Returning to normal contrast
+  restores the deterministic Obsidian palette. The transition is signal-driven and does not poll
+  from the UI frame loop.
+- Toolbar hover, checked, pressed, inactive, disabled, and keyboard-focus presentation derives from
+  inherited palette roles. Dock-title styling is scoped to each dock and equality-gated on palette
+  events; packaged light/dark PNG glyphs remain readable across both title states, with a
+  contrasting button tile for mixed system surfaces, and a palette fingerprint invalidates Qt's
+  cached stylesheet brushes even when glyph URLs stay the same. Pressed dock borders use the
+  contrasting `Highlight` role. Project Home and
+  navigation-gizmo chrome consume inherited palette roles rather than copying app colors.
+- The fly-navigation crosshair keeps its pre-theme white inner stroke over the dark outline by
+  consuming `BrightText`. It must not use `HighlightedText`, which is intentionally dark for
+  readable selection text over the amethyst highlight.
+
+Owners: `qt_application_theme.*`, `qt_dock_title_presentation.*`,
+`qt_toolbar_button_presentation.*`, `UISystem`, `QtProjectHomePage`, and `QtNavigationGizmo`.
+
+Verification: the focused theme, palette-transition, dock-resource, toolbar, Home, and navigation
+tests pass 19/19; the focused UI/build guardrails pass 50/50. The affected-check full CTest matrix
+still reports only the repository's pre-existing instruction/build, linear-array preview, and
+overlay failures. Both canonical `quader` Debug/Profile and Release builds succeed. No visual
+inspection was performed at the user's request.
+
+## 2026-08-25 - Shift Extrusion Closes Poly-Created Open Face Regions
+
+Task/context: Shift+Move extrusion of the single face created by the Poly tool moved the face and
+created its perimeter walls, but left the original footprint open.
+
+Invariant:
+
+- Move/rotate extrusion through `extrude_selected_faces_with_copied_vertices` retains a
+  reverse-wound source cap when the selected region has a non-empty boundary and every boundary
+  edge had exactly one incident document face before mutation. This closes free face regions such
+  as Poly output.
+- The original selected face ID remains the moved cap, so selection, preview, and undo/redo
+  identity remain stable. The added source cap preserves the original material, normal-shading,
+  and reversed loop UV metadata.
+- A face extruded from a closed mesh must not gain an overlapping internal source cap, and inset
+  continues to discard its source region.
+
+Owner: `src/sdk/core/modeling/internal/mesh/polygon/quader_poly_document_surface_operations.cpp`.
+
+Verification: direct polygon tests cover the closed 8-vertex/6-face result, coherent winding,
+metadata, transform extrusion, and the closed-mesh exclusion; the SDK consumer test starts from
+the public Poly tool and reports zero open authored edges; the BehaviorScenario test exercises the
+semantic Shift+Move drag and verifies closed compiled geometry plus undo/redo and selected-cap
+identity. The polygon loop (212 tests), SDK consumer (76 tests), SDK parity (4 tests), and focused
+BehaviorScenario pass. Both canonical Debug/Profile and Release `quader` builds succeed. The full
+regression gate remains red only on the repository's unrelated instruction/build guardrails,
+linear-array preview, and overlay tests. No visual inspection was performed.

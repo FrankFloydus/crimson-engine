@@ -10,10 +10,12 @@
 #include "api/quader_editor_api.hpp"
 #include "core/localization_service.hpp"
 #include "editor/session/scene_session.hpp"
+#include "ui/qt_application_theme.hpp"
 #include "ui/qt_project_home_page.hpp"
 #include "ui/qt_scene_workspace.hpp"
 #include "ui/qt_selection_toolbar.hpp"
 #include "ui/qt_snapping_toolbar.hpp"
+#include "ui/qt_toolbar_button_presentation.hpp"
 #include "ui/qt_tool_toolbar.hpp"
 #include "ui/qt_viewport_display_toolbar.hpp"
 #include "viewport/host_viewport_contract_adapter.hpp"
@@ -165,6 +167,10 @@ TEST(QtProjectWorkspaceTests,
 
   quader::QtSelectionToolbar selection_toolbar;
   quader::QtToolToolbar tool_toolbar;
+  const QPalette theme =
+      quader::qt_obsidian_application_palette(application.palette());
+  selection_toolbar.setPalette(theme);
+  tool_toolbar.setPalette(theme);
 
   EXPECT_EQ(selection_toolbar.iconSize(), QSize(32, 32));
   EXPECT_EQ(tool_toolbar.iconSize(), QSize(32, 32));
@@ -189,19 +195,37 @@ TEST(QtProjectWorkspaceTests,
   ASSERT_NE(button, nullptr);
   const QStyle::State default_state =
       QStyle::State_Active | QStyle::State_Enabled | QStyle::State_Raised;
+  EXPECT_EQ(quader::qt_toolbar_button_color_group(default_state),
+            QPalette::Active);
+  EXPECT_EQ(quader::qt_toolbar_button_color_group(
+                QStyle::State_Enabled | QStyle::State_Raised),
+            QPalette::Inactive);
+  EXPECT_EQ(quader::qt_toolbar_button_color_group(QStyle::State_Raised),
+            QPalette::Disabled);
   const QImage default_face =
       render_toolbar_button_face(*button, default_state);
   const QImage hover_face = render_toolbar_button_face(
       *button, default_state | QStyle::State_MouseOver);
   const QImage selected_face = render_toolbar_button_face(
       *button, default_state | QStyle::State_On);
+  const QImage focused_face = render_toolbar_button_face(
+      *button, default_state | QStyle::State_HasFocus |
+                   QStyle::State_KeyboardFocusChange);
+  const QImage inactive_selected_face = render_toolbar_button_face(
+      *button, QStyle::State_Enabled | QStyle::State_Raised |
+                   QStyle::State_On);
+  const QImage disabled_selected_face = render_toolbar_button_face(
+      *button, QStyle::State_Raised | QStyle::State_On);
   const QImage pressed_face = render_toolbar_button_face(
       *button, QStyle::State_Active | QStyle::State_Enabled |
                    QStyle::State_Sunken);
 
   EXPECT_NE(default_face, hover_face);
   EXPECT_NE(default_face, selected_face);
+  EXPECT_NE(default_face, focused_face);
   EXPECT_NE(hover_face, selected_face);
+  EXPECT_NE(selected_face, inactive_selected_face);
+  EXPECT_NE(selected_face, disabled_selected_face);
   EXPECT_NE(default_face, pressed_face);
 
   QAction *action = button->defaultAction();
@@ -707,6 +731,13 @@ TEST(QtProjectWorkspaceTests,
       QStringLiteral("projectHome.leftRail"));
   ASSERT_NE(left_rail, nullptr);
   EXPECT_EQ(left_rail->minimumWidth(), left_rail->maximumWidth());
+  EXPECT_EQ(left_rail->backgroundRole(), QPalette::AlternateBase);
+  QPalette updated_palette = application.palette();
+  updated_palette.setColor(QPalette::AlternateBase, QColor(57, 43, 68));
+  QApplication::setPalette(updated_palette);
+  QCoreApplication::processEvents();
+  EXPECT_EQ(left_rail->palette().color(left_rail->backgroundRole()),
+            QColor(57, 43, 68));
   auto *brand_icon = home.findChild<QLabel *>(
       QStringLiteral("projectHome.brand.icon"));
   ASSERT_NE(brand_icon, nullptr);

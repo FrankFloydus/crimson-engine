@@ -2561,6 +2561,7 @@ TEST(BuildGuardrailTests, QtWidgetsRuntimeAndLicenseEvidenceAreConfigured) {
   expect_contains(root_c_make, "Qt6::Widgets");
   expect_contains(root_c_make, "src/ui/qt_viewport_panel.cpp");
   expect_contains(root_c_make, "src/ui/qt_viewport_surface.cpp");
+  expect_contains(root_c_make, "src/ui/qt_application_theme.cpp");
   expect_contains(root_c_make, "src/ui/qt_color_swatch_button.cpp");
   expect_contains(root_c_make, "src/ui/qt_auxiliary_window_state.cpp");
   expect_contains(root_c_make, "src/ui/qt_settings_dialog.cpp");
@@ -2572,8 +2573,8 @@ TEST(BuildGuardrailTests, QtWidgetsRuntimeAndLicenseEvidenceAreConfigured) {
                   "licenses/qtbase-LGPL-3.0-only.txt");
   expect_contains(qt_license, "GNU LESSER GENERAL PUBLIC LICENSE");
 
-  // Fusion supplies the complete widget appearance. The app must not package
-  // the retired ImGui material or UI fonts that override the stock theme.
+  // Fusion supplies widget mechanics. The app must not package the retired
+  // ImGui material or UI fonts as a second presentation system.
   expect_missing(root_c_make, "resources/materials/imgui.mat");
   expect_missing(root_c_make, "resources/fonts/Inter.ttf");
   expect_missing(root_c_make, "resources/fonts/Phosphor.ttf");
@@ -2726,14 +2727,19 @@ TEST(BuildGuardrailTests, DockChromeIconsAreEmbeddedQtResources) {
                   "qt_add_resources(quader \"quader_dock_chrome_icons\"");
   expect_contains(root_c_make, "PREFIX \"/quader/icons\"");
   for (const std::string_view icon : {"close", "float"}) {
-    const std::string relative_path =
-        std::string{"resources/icons/dock_"} + std::string{icon} + ".png";
-    ASSERT_TRUE(std::filesystem::exists(source_path(relative_path)))
-        << relative_path;
-    EXPECT_GT(std::filesystem::file_size(source_path(relative_path)), 512u)
-        << relative_path;
-    expect_contains(root_c_make, relative_path);
+    for (const std::string_view suffix : {".png", "_dark.png"}) {
+      const std::string relative_path =
+          std::string{"resources/icons/dock_"} + std::string{icon} +
+          std::string{suffix};
+      ASSERT_TRUE(std::filesystem::exists(source_path(relative_path)))
+          << relative_path;
+      EXPECT_GT(std::filesystem::file_size(source_path(relative_path)), 512u)
+          << relative_path;
+      expect_contains(root_c_make, relative_path);
+    }
   }
+  expect_missing(root_c_make, "dock_close_dark.svg");
+  expect_missing(root_c_make, "dock_float_dark.svg");
 }
 
 TEST(BuildGuardrailTests, SentryNativeRuntimeIsPackagedWithCrashpad) {
@@ -3347,6 +3353,8 @@ TEST(BuildGuardrailTests, RuntimeUiUsesQtWidgetsWithFusionBaseline) {
   const std::string third_party_manifest =
       read_source_file("thirdparty/THIRD_PARTY_MANIFEST.md");
   const std::string main_source = read_source_file("src/main.cpp");
+  const std::string theme_source =
+      read_source_file("src/ui/qt_application_theme.cpp");
 
   expect_contains(root_c_make,
                   "find_package(Qt6 CONFIG REQUIRED COMPONENTS Core Gui "
@@ -3357,6 +3365,16 @@ TEST(BuildGuardrailTests, RuntimeUiUsesQtWidgetsWithFusionBaseline) {
   expect_contains(main_source,
                   "QStyleFactory::create(QStringLiteral(\"Fusion\"))");
   expect_contains(main_source, "QApplication::setStyle(fusion_style)");
+  expect_contains(main_source,
+                  "quader::apply_qt_obsidian_application_theme(");
+  expect_contains(theme_source, "QApplication::setPalette(");
+  expect_contains(theme_source,
+                  "qt_application_palette_for_contrast_preference(");
+  expect_contains(theme_source,
+                  "style_hints.setColorScheme(Qt::ColorScheme::Dark)");
+  expect_contains(theme_source, "style_hints.unsetColorScheme()");
+  expect_contains(theme_source,
+                  "QAccessibilityHints::contrastPreferenceChanged");
 
   for (const std::string &retired_dependency :
        {"find_package(SDL3", "SDL3::SDL3", "find_package(imgui",
@@ -3477,7 +3495,16 @@ TEST(BuildGuardrailTests, RuntimeUiUsesQtWidgetsWithFusionBaseline) {
   EXPECT_EQ(count_occurrences(app_ui_source_text,
                               "QApplication::setPalette("),
             1u);
-  EXPECT_EQ(count_occurrences(app_ui_source_text, "standardPalette()"), 1u);
+  EXPECT_EQ(count_occurrences(main_source, "standardPalette()"), 1u);
+  EXPECT_EQ(count_occurrences(theme_source, "standardPalette()"), 1u);
+  EXPECT_EQ(count_occurrences(app_ui_source_text, "standardPalette()"), 2u);
+  for (const char *global_stylesheet_call : {
+           "QApplication::setStyleSheet(",
+           "qApp->setStyleSheet(",
+           "qt_application.setStyleSheet(",
+       }) {
+    expect_missing(app_ui_source_text, global_stylesheet_call);
+  }
   for (const std::string &retired_ui_token :
        {"#include <SDL", "SDL_", "#include <imgui", "ImGui::",
         "ImGui_Impl"}) {

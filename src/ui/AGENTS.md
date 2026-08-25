@@ -33,4 +33,4 @@ Also follow root `AGENTS.md` UI, localization, API, input, and test rules.
 - User-facing labels, menu text, panel titles, settings names, and status text use localization.
 - Update owner tests for changed chrome, panels, layouts, input, settings, or resources.
 - Rebuild `quader` and tests for runtime logos, overlay icons, locales, or materials. Stock Qt
-  visuals do not use packaged theme fonts or icons.
+  visuals use no theme assets except a documented, palette-aware widget-local accessibility fix.

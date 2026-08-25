@@ -53,6 +53,8 @@ const std::vector<std::string_view> &qt_shell_source_paths() {
       "src/ui/layer_panel.cpp",
       "src/ui/console_panel.hpp",
       "src/ui/console_panel.cpp",
+      "src/ui/qt_application_theme.hpp",
+      "src/ui/qt_application_theme.cpp",
       "src/ui/qt_color_swatch_button.hpp",
       "src/ui/qt_color_swatch_button.cpp",
       "src/ui/qt_settings_dialog.hpp",
@@ -137,21 +139,60 @@ TEST(UiLayoutGuardrailTests, RetiredImGuiPresentationFilesStayRemoved) {
   }
 }
 
-TEST(UiLayoutGuardrailTests, QtShellSelectsFusionAsDefaultBaseline) {
+TEST(UiLayoutGuardrailTests,
+     QtShellSelectsFusionAndAppliesObsidianThemeOnce) {
   const std::string main_source = read_source_file("src/main.cpp");
+  const std::string theme_header =
+      read_source_file("src/ui/qt_application_theme.hpp");
+  const std::string theme_source =
+      read_source_file("src/ui/qt_application_theme.cpp");
   const std::string shell_sources = joined_sources(qt_shell_source_paths());
 
   expect_contains(main_source, "#include <QApplication>");
+  expect_contains(main_source,
+                  "#include \"ui/qt_application_theme.hpp\"");
   expect_contains(main_source, "QApplication qt_application(argc, argv)");
   expect_contains(main_source,
                    "QStyleFactory::create(QStringLiteral(\"Fusion\"))");
   expect_contains(main_source, "QApplication::setStyle(fusion_style)");
-  expect_contains(
-      main_source,
-      "QApplication::setPalette(fusion_style->standardPalette())");
+  expect_contains(main_source,
+                  "quader::apply_qt_obsidian_application_theme(");
+  expect_contains(main_source, "fusion_style->standardPalette())");
+  expect_contains(theme_header, "qt_obsidian_application_palette(");
+  expect_contains(theme_header,
+                  "qt_application_palette_for_contrast_preference(");
+  expect_contains(theme_header,
+                  "apply_qt_application_theme_for_contrast_preference(");
+  expect_contains(theme_header, "apply_qt_obsidian_application_theme(");
+  expect_contains(theme_source,
+                  "style_hints.setColorScheme(Qt::ColorScheme::Dark)");
+  expect_contains(theme_source, "style_hints.unsetColorScheme()");
+  expect_contains(theme_source,
+                  "QAccessibilityHints::contrastPreferenceChanged");
+  expect_contains(theme_source, "QApplication::setPalette(");
+  expect_missing(main_source, "QApplication::setPalette(");
   EXPECT_EQ(count_occurrences(shell_sources, "QStyleFactory::create("), 1u);
   EXPECT_EQ(count_occurrences(shell_sources, "QApplication::setStyle("), 1u);
-  EXPECT_EQ(count_occurrences(shell_sources, "standardPalette()"), 1u);
+  EXPECT_EQ(count_occurrences(shell_sources, "QApplication::setPalette("),
+            1u);
+  EXPECT_EQ(count_occurrences(main_source, "standardPalette()"), 1u);
+  EXPECT_EQ(count_occurrences(theme_source, "standardPalette()"), 1u);
+  EXPECT_EQ(count_occurrences(shell_sources, "standardPalette()"), 2u);
+  for (const char *global_stylesheet_call : {
+           "QApplication::setStyleSheet(",
+           "qApp->setStyleSheet(",
+           "qt_application.setStyleSheet(",
+       }) {
+    expect_missing(shell_sources, global_stylesheet_call);
+  }
+
+  const std::size_t style_position =
+      main_source.find("QApplication::setStyle(fusion_style)");
+  const std::size_t theme_position =
+      main_source.find("quader::apply_qt_obsidian_application_theme(");
+  ASSERT_NE(style_position, std::string::npos);
+  ASSERT_NE(theme_position, std::string::npos);
+  EXPECT_LT(style_position, theme_position);
 
   expect_sources_missing(qt_shell_source_paths(),
                          {"ImGui::", "#include <imgui", "#include <SDL",
@@ -233,8 +274,10 @@ TEST(UiLayoutGuardrailTests,
 }
 
 TEST(UiLayoutGuardrailTests,
-     DockPanelTitleBarsUseScopedDarkAccessibleChrome) {
+     DockPanelTitleBarsUseScopedPaletteAwareAccessibleChrome) {
   const std::string ui_source = read_source_file("src/ui/ui_system.cpp");
+  const std::string dock_source =
+      read_source_file("src/ui/qt_dock_title_presentation.cpp");
   const std::string create_dock = source_slice(
       ui_source, "QDockWidget &UISystem::create_dock(",
       "void UISystem::restore_window_state()");
@@ -242,29 +285,47 @@ TEST(UiLayoutGuardrailTests,
       ui_source, "void UISystem::refresh(",
       "void UISystem::process_viewport_input()");
 
-  expect_contains(ui_source,
-                  "void apply_dark_dock_title_presentation(QDockWidget &dock)");
-  expect_contains(ui_source,
-                  "titlebar-close-icon: url(:/quader/icons/dock_close.png)");
-  expect_contains(ui_source,
-                  "titlebar-normal-icon: url(:/quader/icons/dock_float.png)");
-  expect_contains(ui_source, "QDockWidget::title");
-  expect_contains(ui_source, "QDockWidget::title:active");
-  expect_contains(ui_source, "background-color: #181818");
-  expect_contains(ui_source, "color: #eeeeee");
-  expect_contains(ui_source, "width: 18px");
-  expect_contains(ui_source, "height: 18px");
-  expect_contains(ui_source, "icon-size: 24px");
-  expect_contains(ui_source, "QDockWidget::close-button:hover");
-  expect_contains(ui_source, "QDockWidget::float-button:hover");
-  expect_contains(ui_source, "border-color: #8a8a8a");
-  expect_contains(ui_source, "QDockWidget::close-button:pressed");
-  expect_contains(ui_source, "QDockWidget::float-button:pressed");
-  expect_contains(ui_source, "background-color: #0f0f0f");
-  expect_contains(ui_source, "border-color: #b5b5b5");
+  expect_contains(dock_source,
+                  "void install_palette_aware_dock_title_presentation("
+                  "QDockWidget &dock)");
+  expect_contains(dock_source, "titlebar-close-icon: url(%1)");
+  expect_contains(dock_source, "titlebar-normal-icon: url(%2)");
+  expect_contains(dock_source, ":/quader/icons/dock_close.png");
+  expect_contains(dock_source, ":/quader/icons/dock_float.png");
+  expect_contains(dock_source, ":/quader/icons/dock_close_dark.png");
+  expect_contains(dock_source, ":/quader/icons/dock_float_dark.png");
+  expect_contains(dock_source,
+                  "qt_dock_title_surface_uses_packaged_light_glyphs(");
+  expect_contains(dock_source, "quader-dock-palette");
+  expect_contains(dock_source, "QApplication::palette()");
+  expect_contains(dock_source, "QDockWidget::title");
+  expect_contains(dock_source, "QDockWidget::title:active");
+  expect_contains(dock_source,
+                  "palette.color(QPalette::Inactive, QPalette::AlternateBase)");
+  expect_contains(dock_source,
+                  "palette.color(QPalette::Inactive, QPalette::Text)");
+  expect_contains(dock_source,
+                  "palette.color(QPalette::Active, QPalette::Button)");
+  expect_contains(dock_source,
+                  "palette.color(QPalette::Active, QPalette::ButtonText)");
+  expect_contains(dock_source, "width: 18px");
+  expect_contains(dock_source, "height: 18px");
+  expect_contains(dock_source, "icon-size: 24px");
+  expect_contains(dock_source, "QDockWidget::close-button:hover");
+  expect_contains(dock_source, "QDockWidget::float-button:hover");
+  expect_contains(dock_source,
+                  "palette.color(QPalette::Active, QPalette::Highlight)");
+  expect_contains(dock_source, "QDockWidget::close-button:pressed");
+  expect_contains(dock_source, "QDockWidget::float-button:pressed");
+  expect_contains(dock_source, "border: 2px solid %10");
   expect_contains(create_dock,
-                  "apply_dark_dock_title_presentation(*dock)");
-  expect_missing(frame_refresh, "apply_dark_dock_title_presentation");
+                  "install_palette_aware_dock_title_presentation(*dock)");
+  expect_contains(dock_source, "QGuiApplication::paletteChanged");
+  expect_contains(dock_source, "needs_contrast_tile");
+  expect_contains(dock_source,
+                  "if (dock.styleSheet() != style_sheet)");
+  expect_missing(frame_refresh,
+                 "install_palette_aware_dock_title_presentation");
   expect_missing(frame_refresh, "setStyleSheet(");
 }
 
@@ -771,6 +832,9 @@ TEST(UiLayoutGuardrailTests,
                   "qt_semantic_axis_color(edge.axis)");
   expect_contains(navigation_gizmo,
                   "qt_semantic_axis_color(marker.axis)");
+  expect_contains(navigation_gizmo,
+                  "painter.setPen(colors.shadow().color())");
+  expect_missing(navigation_gizmo, "colors.windowText().color()");
   expect_missing(navigation_gizmo, "QColor axis_color(");
 }
 
@@ -1343,7 +1407,17 @@ TEST(UiLayoutGuardrailTests,
   expect_contains(button_presentation, "button->setAutoRaise(false)");
   expect_contains(button_presentation,
                   "button->setAttribute(Qt::WA_Hover, true)");
-  expect_contains(button_presentation, "kToolbarAccentRgb = 0xFFF68F18");
+  expect_contains(button_presentation,
+                  "face.palette.color(color_group, QPalette::Highlight)");
+  expect_contains(button_presentation,
+                  "qt_toolbar_button_color_group(face.state)");
+  expect_contains(button_presentation, "const bool keyboard_focused");
+  expect_contains(button_presentation,
+                  "QPen outline(accent, keyboard_focused ? 2.0 : 1.0)");
+  expect_contains(button_presentation,
+                  "state.testFlag(QStyle::State_Active) ? QPalette::Active");
+  expect_contains(button_presentation, "return QPalette::Disabled");
+  expect_missing(button_presentation, "kToolbarAccentRgb");
   expect_contains(button_presentation, "face.state.setFlag(State_On, false)");
   expect_contains(button_presentation, "button->setMinimumSize(40, 40)");
   expect_contains(button_presentation, "button->setFocusPolicy(Qt::StrongFocus)");
@@ -1414,7 +1488,8 @@ TEST(UiLayoutGuardrailTests,
                   "configure_native_toolbar_button_face(*this, *entry.action,");
   expect_contains(button_presentation, "button->setAutoRaise(false)");
   expect_contains(button_presentation, "kHoverHighlightMix = 0.22");
-  expect_contains(button_presentation, "QPen outline(accent, 1.0)");
+  expect_contains(button_presentation,
+                  "QPen outline(accent, keyboard_focused ? 2.0 : 1.0)");
   expect_missing(button_presentation, "marker_rect");
   expect_missing(button_presentation, "setDown(");
   expect_contains(toolbar, "if (!force && synchronization_valid_");
@@ -1684,6 +1759,9 @@ TEST(UiLayoutGuardrailTests,
   expect_missing(home_header, "QLabel *title_label_");
   expect_missing(home_source, "projectHome.title");
   expect_missing(home_source, "projectHome.separator");
+  expect_contains(home_source,
+                  "left_rail_->setBackgroundRole(QPalette::AlternateBase)");
+  expect_missing(home_source, "left_rail_->setPalette(");
 }
 
 TEST(UiLayoutGuardrailTests,
@@ -1814,7 +1892,8 @@ TEST(UiLayoutGuardrailTests,
   expect_contains(hud,
                   "viewport.fly_navigation.speed_with_reset");
   expect_contains(hud, "colors.shadow().color()");
-  expect_contains(hud, "colors.highlightedText().color()");
+  expect_contains(hud, "colors.brightText().color()");
+  expect_missing(hud, "colors.highlightedText().color()");
   expect_contains(hud, "setAttribute(Qt::WA_NativeWindow)");
   const std::size_t raw_input_gate =
       hud.find("if (input_valid_ && input_fly_hud_active_");

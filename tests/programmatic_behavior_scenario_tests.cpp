@@ -7,6 +7,8 @@
 #include "support/behavior_expect.hpp"
 #include "support/behavior_scenario.hpp"
 
+#include "api/quader_polygon_document_internal_access.hpp"
+
 #include <gtest/gtest.h>
 
 #include <algorithm>
@@ -16,6 +18,7 @@
 #include <map>
 #include <optional>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -189,7 +192,7 @@ EdgeKey edge_key(PointKey first, PointKey second) {
 }
 
 bool shared_triangle_edges_have_opposite_winding(
-    const quader::QuaderMeshAsset &mesh) {
+    const quader::QuaderMeshAsset &mesh, bool require_closed = false) {
   if (mesh.indices.size() % 3U != 0U) {
     return false;
   }
@@ -218,6 +221,9 @@ bool shared_triangle_edges_have_opposite_winding(
   for (const auto &[edge, uses] : uses_by_edge) {
     (void)edge;
     if (uses.size() == 1U) {
+      if (require_closed) {
+        return false;
+      }
       continue;
     }
     if (uses.size() != 2U) {
@@ -236,6 +242,14 @@ void expect_compiled_mesh_winding_coherent(quader::test::BehaviorScenario &s,
       s.api().query().compiled_object_mesh(s.object(alias));
   ASSERT_TRUE(mesh.has_value());
   EXPECT_TRUE(shared_triangle_edges_have_opposite_winding(*mesh));
+}
+
+void expect_compiled_mesh_closed_and_winding_coherent(
+    quader::test::BehaviorScenario &s, std::string_view alias) {
+  const std::optional<quader::QuaderMeshAsset> mesh =
+      s.api().query().compiled_object_mesh(s.object(alias));
+  ASSERT_TRUE(mesh.has_value());
+  EXPECT_TRUE(shared_triangle_edges_have_opposite_winding(*mesh, true));
 }
 
 void run_shift_rotate_extrude_stability_case(
@@ -713,6 +727,94 @@ TEST(ProgrammaticBehaviorScenarioTests, ShiftFaceMoveAndRotateExtrudeAndShiftFac
           .active_alias("box");
       s.then().mesh("box").vertices_greater_than(before.meshes.front());
     }
+}
+
+TEST(ProgrammaticBehaviorScenarioTests,
+     ShiftMoveExtrudesPolyToolFaceIntoClosedPrismAndUndoRedoPreservesIt) {
+  quader_poly::Document document;
+  const std::array vertices{
+      quader_poly::add_vertex(document, {-1.0f, 0.0f, -1.0f}),
+      quader_poly::add_vertex(document, {-1.0f, 0.0f, 1.0f}),
+      quader_poly::add_vertex(document, {1.0f, 0.0f, 1.0f}),
+      quader_poly::add_vertex(document, {1.0f, 0.0f, -1.0f}),
+  };
+  const quader_poly::ElementId face =
+      quader_poly::add_face(document, vertices);
+  ASSERT_NE(face, quader_poly::kInvalidElementId);
+
+  auto s = quader::test::BehaviorScenario::new_project();
+  s.given()
+      .mesh("poly",
+            quader::QuaderPolygonDocumentInternalAccess::from_backend(
+                std::move(document)),
+            "Poly Shift Extrude")
+      .selection_mode(quader::QuaderSelectionMode::Face)
+      .face_selected("poly", static_cast<int>(face));
+
+  const quader::test::BehaviorSnapshot before =
+      s.snapshot("before poly shift extrude");
+  const quader::test::MeshSnapshot *before_mesh =
+      mesh_snapshot_for_alias(before, "poly");
+  ASSERT_NE(before_mesh, nullptr);
+  EXPECT_EQ(before_mesh->index_count, 6u);
+
+  s.when()
+      .begin_transform_drag({
+          .tool = quader::ModelingTransformTool::Move,
+          .axis = quader::ModelingTransformAxis::Y,
+          .operation = quader::ModelingTransformOperation::Extrude,
+          .world_direction = {0.0f, 1.0f, 0.0f},
+      })
+      .update_transform_drag(120.0f)
+      .commit_drag();
+
+  s.then().command().ok_changed();
+  s.then()
+      .selection()
+      .mode(quader::QuaderSelectionMode::Face)
+      .face_count(1)
+      .active_alias("poly")
+      .active_face(static_cast<int>(face));
+  s.then()
+      .mesh("poly")
+      .index_count(36u)
+      .bounds_min_near({-1.0f, 0.0f, -1.0f});
+  const quader::test::BehaviorSnapshot after_extrude =
+      s.snapshot("after poly shift extrude");
+  const quader::test::MeshSnapshot *extruded_mesh =
+      mesh_snapshot_for_alias(after_extrude, "poly");
+  ASSERT_NE(extruded_mesh, nullptr);
+  EXPECT_GT(extruded_mesh->bounds.max.y, 0.0f);
+  expect_compiled_mesh_closed_and_winding_coherent(s, "poly");
+
+  s.when().undo();
+
+  s.then().command().ok_changed();
+  s.then()
+      .selection()
+      .mode(quader::QuaderSelectionMode::Face)
+      .face_count(1)
+      .active_alias("poly")
+      .active_face(static_cast<int>(face));
+  const quader::test::BehaviorSnapshot after_undo =
+      s.snapshot("after poly shift extrude undo");
+  const quader::test::MeshSnapshot *undo_mesh =
+      mesh_snapshot_for_alias(after_undo, "poly");
+  ASSERT_NE(undo_mesh, nullptr);
+  EXPECT_EQ(undo_mesh->index_count, before_mesh->index_count);
+  expect_mesh_bounds_near(*undo_mesh, *before_mesh);
+
+  s.when().redo();
+
+  s.then().command().ok_changed();
+  s.then()
+      .selection()
+      .mode(quader::QuaderSelectionMode::Face)
+      .face_count(1)
+      .active_alias("poly")
+      .active_face(static_cast<int>(face));
+  s.then().mesh("poly").index_count(36u);
+  expect_compiled_mesh_closed_and_winding_coherent(s, "poly");
 }
 
 TEST(ProgrammaticBehaviorScenarioTests, ShiftRotateExtrudeUsesWorldPivotForTransformedComponentSelection) {

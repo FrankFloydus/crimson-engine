@@ -8,7 +8,7 @@ file except through prior written authorization from Francesco Di Blasi.
 -->
 # Quader Architecture Review Against The Portable Modeling SDK Guide
 
-Updated: 2026-07-18
+Updated: 2026-08-25
 
 Historical provenance: `modeling_app_architecture_guide.md` was an external audit input. It is not
 repository authority and is not required to execute the migration.
@@ -39,8 +39,8 @@ QDR project save/open remains correctly split: portable document IO is SDK-owned
 dialogs, durable native writes, and project-session state remain native.
 
 The current native host shell is retained Qt Widgets: `QApplication` owns the event loop,
-`UISystem` composes a `QMainWindow` with `QDockWidget` panels under the stock `Fusion` style, and
-the central
+`UISystem` composes a `QMainWindow` with `QDockWidget` panels under the `Fusion` style and Quader's
+application-owned Obsidian palette, and the central
 `QtViewportPanel` embeds one to four native-child `QWindow` Filament surfaces. This is the host
 boundary around the completed SDK ownership model; it does not move UI or renderer concepts into
 the portable core.
@@ -96,11 +96,19 @@ CI matrix protect the completed boundary.
 16. Documentation policy: root `AGENTS.md` and this review hold fixed architecture guidance;
     `REFACTORING_PLAN.md` alone holds executable refactoring tasks and progress. New local owner
     guidance belongs in the nearest nested `AGENTS.md` file.
-17. Native UI baseline: keep the `QApplication`/`QMainWindow`/`QDockWidget` shell on stock Qt
-    `Fusion` with `fusion_style->standardPalette()` and no QSS, app-authored global palette, font,
-    or custom-chrome theme overrides. A local `QPalette::Button` role is reserved for semantic
-    color swatches, and semantic X/Y/Z labels may set only local `QPalette::WindowText`; Fusion
-    still draws native control frames and states. The one-to-four pane workspace remains owned by
+17. Native UI baseline: keep the `QApplication`/`QMainWindow`/`QDockWidget` shell on Qt `Fusion`,
+    with exactly one application-owned Obsidian palette derived from
+    `fusion_style->standardPalette()`. The palette deliberately defines active, inactive, and
+    disabled surfaces, text, borders, links, and interaction colors. Fusion supplies native
+    control frames and state mechanics; the scoped toolbar proxy adapts only palette-derived hover
+    and checked face colors plus checked and keyboard-focus outlines. An explicit Windows high-contrast preference
+    bypasses the Obsidian colors and clears Quader's explicit palette so Qt keeps resolving live
+    Windows system colors. Do not add an application-wide stylesheet, custom font, or frameless
+    chrome. The scoped dock-title QSS uses palette roles and switches between matching packaged
+    light and dark PNG glyphs when the inherited palette changes. A local `QPalette::Button`
+    override remains
+    reserved for semantic color swatches, and semantic X/Y/Z labels may set only local
+    `QPalette::WindowText`. The one-to-four pane workspace remains owned by
     `ViewportWorkspaceService`; Qt widgets only adapt and present it.
 
 ## Reference Guide Constraints

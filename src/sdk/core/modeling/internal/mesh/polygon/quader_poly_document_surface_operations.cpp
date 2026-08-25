@@ -19,6 +19,14 @@ using namespace document_internal;
 
 namespace {
 
+/**
+ * Controls whether copied-face extrusion retains an open source region as a closing cap.
+ */
+enum class FaceExtrudeSourcePolicy {
+    Discard,
+    RetainFullyOpenRegion,
+};
+
 quader::QVec3 basis_transform_point(const Transform3& transform, quader::QVec3 point)
 {
     return {
@@ -302,6 +310,7 @@ OperationResult extrude_selected_faces_with_copied_vertices(
     Document& document,
     Selection& selection,
     CopyVertex&& copy_vertex,
+    FaceExtrudeSourcePolicy source_policy,
     std::string_view empty_message,
     std::string_view missing_message,
     std::string_view unchanged_message)
@@ -321,6 +330,28 @@ OperationResult extrude_selected_faces_with_copied_vertices(
         for (const Edge& edge : face_edges(face)) {
             ++selected_edge_counts[{ edge.a, edge.b }];
         }
+    }
+
+    bool retain_source_region = false;
+    if (source_policy == FaceExtrudeSourcePolicy::RetainFullyOpenRegion) {
+        // A free surface has no surrounding shell to close the extrusion at its source. Retain
+        // that region only when every selected boundary edge was open before topology mutation.
+        const auto document_faces_by_edge = face_indices_by_edge(document);
+        bool has_boundary = false;
+        retain_source_region = true;
+        for (const auto& [edge, selected_count] : selected_edge_counts) {
+            if (selected_count != 1) {
+                continue;
+            }
+
+            has_boundary = true;
+            const auto document_edge = document_faces_by_edge.find(edge);
+            if (document_edge == document_faces_by_edge.end() || document_edge->second.size() != 1U) {
+                retain_source_region = false;
+                break;
+            }
+        }
+        retain_source_region = retain_source_region && has_boundary;
     }
 
     std::map<ElementId, ElementId> copied_vertices;
@@ -387,6 +418,27 @@ OperationResult extrude_selected_faces_with_copied_vertices(
                 copied_from->second,
             };
             [[maybe_unused]] const ElementId side_face_id = add_face(document, side, original_face.material_slot);
+        }
+    }
+
+    if (retain_source_region) {
+        for (const Face& original_face : faces) {
+            if (!contains_id(selected_faces, original_face.id)) {
+                continue;
+            }
+
+            std::vector<ElementId> source_vertices(
+                original_face.vertices.rbegin(), original_face.vertices.rend());
+            const ElementId source_face_id = add_face(document, source_vertices, original_face.material_slot);
+            Face* source_face = find_face(document, source_face_id);
+            if (source_face == nullptr) {
+                continue;
+            }
+
+            source_face->normal_shading = original_face.normal_shading;
+            if (original_face.uvs.size() == original_face.vertices.size()) {
+                source_face->uvs.assign(original_face.uvs.rbegin(), original_face.uvs.rend());
+            }
         }
     }
 
@@ -510,6 +562,7 @@ OperationResult extrude_selected_elements_impl(Document& document, Selection& se
             return copied_vertex_with_offset(document, copied_vertices,
                                              source_id, offset);
           },
+          FaceExtrudeSourcePolicy::RetainFullyOpenRegion,
           "Select one or more faces to extrude.",
           "No selected faces were found.", "No selected faces were extruded.");
     }
@@ -542,6 +595,7 @@ OperationResult transform_extrude_selected_elements_impl(Document& document, Sel
             return copied_vertex_with_transform(document, copied_vertices,
                                                 source_id, transform, pivot);
           },
+          FaceExtrudeSourcePolicy::RetainFullyOpenRegion,
           "Select one or more faces to extrude.",
           "No selected faces were found.", "No selected faces were extruded.");
     }
@@ -575,6 +629,7 @@ OperationResult inset_selected_elements_impl(Document& document, Selection& sele
             return copied_vertex_with_transform(document, copied_vertices,
                                                 source_id, transform, pivot);
           },
+          FaceExtrudeSourcePolicy::Discard,
           "Select one or more faces to inset.", "No selected faces were found.",
           "No selected faces were inset.");
     }

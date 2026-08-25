@@ -174,6 +174,32 @@ authored_position(const AuthoredPolygonPayload &payload, VertexId vertex) {
   return std::nullopt;
 }
 
+[[nodiscard]] std::size_t
+authored_open_edge_count(const AuthoredPolygonPayload &payload) {
+  std::vector<EdgeKey> edges;
+  for (const AuthoredPolygonFacePayload &face : payload.faces) {
+    for (std::size_t index = 0; index < face.vertices.size(); ++index) {
+      edges.push_back(make_edge_key(
+          face.vertices[index],
+          face.vertices[(index + 1U) % face.vertices.size()]));
+    }
+  }
+  std::ranges::sort(edges);
+
+  std::size_t open_edges = 0;
+  for (std::size_t first = 0; first < edges.size();) {
+    std::size_t after = first + 1U;
+    while (after < edges.size() && edges[after] == edges[first]) {
+      ++after;
+    }
+    if (after - first == 1U) {
+      ++open_edges;
+    }
+    first = after;
+  }
+  return open_edges;
+}
+
 void write_u32_le(std::vector<std::byte> &bytes, std::size_t offset,
                   std::uint32_t value) {
   ASSERT_LE(offset + 4U, bytes.size());
@@ -2727,6 +2753,50 @@ TEST(ModelingSdkConsumerTests, ModelingApiPolyToolCreatesSingleFaceMesh) {
   const AuthoredPolygonPayload payload = selected.front().payloads().authored_polygon();
   EXPECT_EQ(payload.vertices.size(), 4U);
   EXPECT_EQ(payload.faces.size(), 1U);
+}
+
+TEST(ModelingSdkConsumerTests,
+     PolyToolFaceElementExtrudeKeepsTheStartingFaceClosed) {
+  ModelingApi quader = ModelingApi::create();
+
+  OperationReceipt created =
+      quader.tools()
+          .activate_poly_tool()
+          .add_point({0.0F, 0.0F, 0.0F})
+          .add_point({2.0F, 0.0F, 0.0F})
+          .add_point({2.0F, 0.0F, 2.0F})
+          .add_point({0.0F, 0.0F, 2.0F})
+          .commit();
+  ASSERT_TRUE(created.success) << created.error.message;
+
+  const std::vector<MeshHandle> selected = quader.selected_meshes();
+  ASSERT_EQ(selected.size(), 1U);
+  Result<std::vector<std::byte>> encoded =
+      quader.checked().io().serialize_qdr(selected.front().id());
+  ASSERT_TRUE(encoded.ok()) << encoded.error_message();
+  Result<QdrDocumentDto> decoded =
+      deserialize_qdr_document(encoded.value());
+  ASSERT_TRUE(decoded.ok()) << decoded.error_message();
+  ASSERT_EQ(decoded.value().objects.size(), 1U);
+
+  PolygonDocument document =
+      std::move(decoded).value().objects.front().document;
+  const std::vector<FaceId> source_faces = document.face_ids();
+  ASSERT_EQ(source_faces.size(), 1U);
+  Result<OperationResult> face_selected =
+      document.select_face(source_faces.front());
+  ASSERT_TRUE(face_selected.ok()) << face_selected.error_message();
+
+  Result<OperationResult> extruded =
+      document.extrude_selected_elements({0.0F, 1.0F, 0.0F});
+  ASSERT_TRUE(extruded.ok()) << extruded.error_message();
+  ASSERT_TRUE(extruded.value().changed);
+
+  Result<AuthoredPolygonPayload> payload = document.authored_payload();
+  ASSERT_TRUE(payload.ok()) << payload.error_message();
+  EXPECT_EQ(payload.value().vertices.size(), 8U);
+  EXPECT_EQ(payload.value().faces.size(), 6U);
+  EXPECT_EQ(authored_open_edge_count(payload.value()), 0U);
 }
 
 TEST(ModelingSdkConsumerTests, ModelingApiPlaneCutKeepsBothHalves) {

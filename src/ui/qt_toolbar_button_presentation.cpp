@@ -26,8 +26,6 @@ QColor blend(const QColor &from, const QColor &to, qreal amount) {
       from.alphaF() + ((to.alphaF() - from.alphaF()) * amount));
 }
 
-constexpr QRgb kToolbarAccentRgb = 0xFFF68F18;
-
 /**
  * Adapts only the semantic face state; the stock Fusion base style still draws
  * the complete button, label, focus rectangle, disabled state, and press.
@@ -53,10 +51,12 @@ public:
     const bool selected = face.state.testFlag(State_On);
     const bool hovered = face.state.testFlag(State_MouseOver);
     const bool physically_pressed = face.state.testFlag(State_Sunken);
+    const bool keyboard_focused = face.state.testFlag(State_HasFocus) &&
+                                  face.state.testFlag(State_KeyboardFocusChange);
     const QPalette::ColorGroup color_group =
-        face.state.testFlag(State_Enabled) ? QPalette::Active
-                                           : QPalette::Disabled;
-    const QColor accent = QColor::fromRgba(kToolbarAccentRgb);
+        qt_toolbar_button_color_group(face.state);
+    const QColor accent =
+        face.palette.color(color_group, QPalette::Highlight);
 
     if (selected) {
       constexpr qreal kSelectedAccentMix = 0.30;
@@ -78,13 +78,15 @@ public:
 
     QProxyStyle::drawPrimitive(element, &face, painter, widget);
 
-    if (!selected) {
+    if (!selected && !keyboard_focused) {
       return;
     }
 
     painter->save();
     painter->setRenderHint(QPainter::Antialiasing, true);
-    QPen outline(accent, 1.0);
+    // Fusion's generic focus wash is deliberately subtle. Toolbar actions use
+    // a full-opacity palette accent so keyboard focus stays unambiguous.
+    QPen outline(accent, keyboard_focused ? 2.0 : 1.0);
     outline.setJoinStyle(Qt::RoundJoin);
     painter->setPen(outline);
     painter->setBrush(Qt::NoBrush);
@@ -101,6 +103,14 @@ void synchronize_accessibility(QToolButton &button, const QAction &action) {
 }
 
 } // namespace
+
+QPalette::ColorGroup qt_toolbar_button_color_group(QStyle::State state) {
+  if (!state.testFlag(QStyle::State_Enabled)) {
+    return QPalette::Disabled;
+  }
+  return state.testFlag(QStyle::State_Active) ? QPalette::Active
+                                               : QPalette::Inactive;
+}
 
 QStyle &install_native_toolbar_button_presentation(QToolBar &toolbar) {
   return *new QtToolbarButtonPresentationStyle(&toolbar);

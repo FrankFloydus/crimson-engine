@@ -799,8 +799,10 @@ add_library(quader_ui STATIC
     src/ui/inspector_panel.cpp
     src/ui/layer_panel.cpp
     src/ui/outliner_panel.cpp
+    src/ui/qt_application_theme.cpp
     src/ui/qt_command_event_filter.cpp
     src/ui/qt_color_swatch_button.cpp
+    src/ui/qt_dock_title_presentation.cpp
     src/ui/qt_input_adapter.cpp
     src/ui/qt_main_menu.cpp
     src/ui/qt_material_browser_window.cpp
@@ -973,7 +975,9 @@ set(QUADER_VIEWPORT_DISPLAY_TOOLBAR_ICON_FILES
 
 set(QUADER_DOCK_CHROME_ICON_FILES
     "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/dock_close.png"
-    "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/dock_float.png")
+    "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/dock_float.png"
+    "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/dock_close_dark.png"
+    "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/dock_float_dark.png")
 
 set(QUADER_LAYER_PANEL_ICON_FILES
     "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/layer_add.png"
@@ -1292,6 +1296,7 @@ if(QUADER_BUILD_TESTS)
         tests/outliner_panel_tests.cpp
         tests/ui_panel_manager_tests.cpp
         tests/qt_auxiliary_window_state_tests.cpp
+        tests/qt_application_theme_tests.cpp
         tests/qt_command_event_filter_tests.cpp
         tests/qt_input_adapter_tests.cpp
         tests/qt_material_browser_window_tests.cpp

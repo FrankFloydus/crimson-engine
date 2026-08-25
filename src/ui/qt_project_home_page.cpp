@@ -226,10 +226,7 @@ QtProjectHomePage::QtProjectHomePage(QWidget *parent) : QWidget(parent) {
   left_rail_->setObjectName(QStringLiteral("projectHome.leftRail"));
   left_rail_->setFrameShape(QFrame::StyledPanel);
   left_rail_->setFixedWidth(248);
-  QPalette rail_palette = left_rail_->palette();
-  rail_palette.setColor(QPalette::Window,
-                        rail_palette.color(QPalette::AlternateBase));
-  left_rail_->setPalette(rail_palette);
+  left_rail_->setBackgroundRole(QPalette::AlternateBase);
   left_rail_->setAutoFillBackground(true);
   auto *rail_layout = new QVBoxLayout(left_rail_);
   rail_layout->setContentsMargins(28, 32, 28, 28);

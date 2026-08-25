@@ -81,7 +81,7 @@ protected:
         QPen(colors.shadow().color(), 3.0, Qt::SolidLine, Qt::RoundCap));
     draw_crosshair_segments(
         painter, size(),
-        QPen(colors.highlightedText().color(), 1.0, Qt::SolidLine,
+        QPen(colors.brightText().color(), 1.0, Qt::SolidLine,
              Qt::RoundCap));
   }
 };

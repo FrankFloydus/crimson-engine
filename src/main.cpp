@@ -10,6 +10,7 @@
 #include "platform/fatal_error_handler.hpp"
 #include "platform/sentry_client.hpp"
 #include "quader_app_version.hpp"
+#include "ui/qt_application_theme.hpp"
 
 #include <QApplication>
 #include <QIcon>
@@ -134,10 +135,10 @@ int main(int argc, char** argv) {
     return 1;
   }
   QApplication::setStyle(fusion_style);
-  // Fusion's standard palette is the uncustomized theme contract. Applying it
-  // explicitly prevents the Windows accent color from replacing Fusion's
-  // neutral highlight and alternating-row roles.
-  QApplication::setPalette(fusion_style->standardPalette());
+  // Fusion keeps native widget metrics and interaction behavior while the
+  // application palette provides Quader's deterministic dark presentation.
+  quader::apply_qt_obsidian_application_theme(
+      fusion_style->standardPalette());
   const QIcon application_icon = quader_application_icon();
   if (application_icon.isNull()) {
     return 1;
@@ -165,7 +166,7 @@ int main(int argc, char** argv) {
   }
 #endif
   LOG_INFO("Booting Quader from {}", exe.string());
-  LOG_INFO("Qt Widgets style: Fusion");
+  LOG_INFO("Qt Widgets style: Fusion with accessibility-aware Obsidian palette");
   LOG_INFO("Render backend: {}",
            quader::to_string(command_line.render_backend));
 

@@ -18,9 +18,11 @@ before changing resources.
   custom fonts, palettes, stylesheets, and icon sets may be added or changed when the user's
   current request explicitly directs that styling work; keep ownership, packaging, and licensing
   evidence explicit.
-- Runtime presentation resources are limited to localization plus assets with non-theme purposes,
-  such as the application logo and renderer-owned overlay icons. After changing them, rebuild
-  `quader`; tests alone do not refresh `build/vs2026/Debug`.
+- Runtime presentation resources are normally limited to localization plus assets with non-theme
+  purposes, such as the application logo and renderer-owned overlay icons. An explicitly requested
+  theme may add a narrow app-owned asset when Qt cannot express that state accessibly; document the
+  scope and keep platform-owned alternatives for accessibility modes. After changing resources,
+  rebuild `quader`; tests alone do not refresh `build/vs2026/Debug`.
 - If the running UI differs from source, inspect copied runtime files under `build/vs2026/Debug`.
 - Keep logos, renderer-owned icons, textures, and material assets license-backed. Do not add
   third-party assets without license evidence under `thirdparty/`.
