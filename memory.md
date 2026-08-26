@@ -9,6 +9,27 @@ affected owners/files, resolved approach, and verification. Do not record routin
 private user data, guesses, or unresolved issues. Prefer updating a related existing entry over
 adding a duplicate.
 
+## 2026-08-26 - Filament Normal Inputs Precede Material Preparation
+
+Task/context: assigning a Normal texture in the Standard Material editor updated the draft and
+preview texture but produced no lighting change in the isolated material preview.
+
+Invariant:
+
+- `quader_mesh_lit.mat` samples, scales, normalizes, and assigns `material.normal` before calling
+  Filament's `prepareMaterial(material)`. Filament consumes tangent-space normal inputs during that
+  call; assigning the field afterward leaves both the material preview and Rendered viewport on the
+  geometric normal.
+- Texture import, draft revisioning, render snapshots, texture upload/binding, preview tangent
+  frames, OpenGL/DirectX Y convention, and signed normal strength remain shared existing paths and
+  require no parallel normal-map implementation.
+
+Owners: `resources/materials/quader_mesh_lit.mat` and the render material source-policy guardrail.
+
+Verification: the focused guardrail compiles the material through the normal build dependency and
+asserts that the normal assignment remains before Filament preparation; both canonical native app
+configurations rebuild the corrected `.filamat`.
+
 ## 2026-08-18 - Hammer-Style Toggle Backface Selection
 
 Task/context: ordinary component selection was permanently two-sided, with no persisted Hammer-style

@@ -231,6 +231,20 @@ TEST(QuaderMeshMaterialTests, UsesLitTextureTransformTimesColorAndPbrFactors) {
 }
 
 TEST(QuaderMeshMaterialTests,
+     AssignsNormalMapBeforeFilamentPreparesTheLitMaterial) {
+  const std::string source =
+      read_source_file("resources/materials/quader_mesh_lit.mat");
+
+  const std::size_t normal_assignment =
+      source.find("material.normal = normalSample");
+  const std::size_t prepare_material =
+      source.find("prepareMaterial(material)");
+  ASSERT_NE(normal_assignment, std::string::npos);
+  ASSERT_NE(prepare_material, std::string::npos);
+  EXPECT_LT(normal_assignment, prepare_material);
+}
+
+TEST(QuaderMeshMaterialTests,
      RenderedMaterialSupportsPerViewportPbrDebugViews) {
   const std::string source =
       read_source_file("resources/materials/quader_mesh_lit.mat");
