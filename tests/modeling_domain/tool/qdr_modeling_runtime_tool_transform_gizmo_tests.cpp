@@ -45,6 +45,14 @@ const quader_editor_core::TransformGizmoAxisPrimitive* find_axis(
 	return found == frame.axes.end() ? nullptr : &*found;
 }
 
+quader_poly::Transform3 quarter_turn_z_orientation()
+{
+	quader_poly::Transform3 orientation;
+	orientation.x_axis = {0.0F, 1.0F, 0.0F};
+	orientation.y_axis = {-1.0F, 0.0F, 0.0F};
+	return orientation;
+}
+
 TEST(QdrModelingRuntimeToolTransformGizmoTests, TransformGizmoHoverHelperPromotesHitsAndClearsMisses) {
 	quader_editor_core::EditorRuntimeState runtime;
 	quader_editor_core::TransformGizmoPickHit hit;
@@ -156,4 +164,92 @@ TEST(QdrModelingRuntimeToolTransformGizmoTests, TransformGizmoBuildsFramesOnlyFo
 	EXPECT_TRUE(extrude_frame.planes.empty());
 	EXPECT_TRUE(extrude_frame.ring_segments.empty());
 	EXPECT_TRUE(extrude_frame.trackball_segments.empty());
+}
+
+TEST(QdrModelingRuntimeToolTransformGizmoTests,
+     TransformGizmoBuildsAndPicksHandlesInTheProvidedOrientation) {
+	quader_editor_core::TransformGizmoFrameInput input;
+	input.tool = quader_editor_core::ViewportInteractionTool::Move;
+	input.has_selection = true;
+	input.has_pivot = true;
+	input.pivot = {};
+	input.orientation = quarter_turn_z_orientation();
+	input.camera = front_camera();
+	input.gizmo_size_pixels = 80.0;
+	input.pick_radius_pixels = 6.0;
+
+	const quader_editor_core::TransformGizmoFrame move_frame =
+		quader_editor_core::build_transform_gizmo_frame(input);
+	const quader_editor_core::TransformGizmoAxisPrimitive* x_axis =
+		find_axis(move_frame, quader_editor_core::TransformAxis::X);
+	ASSERT_TRUE(x_axis != nullptr);
+	EXPECT_NEAR(x_axis->world_tip.x, 0.0F, 0.0001F);
+	EXPECT_TRUE(x_axis->world_tip.y > 0.0F);
+	EXPECT_NEAR(x_axis->world_tip.z, 0.0F, 0.0001F);
+
+	const quader_editor_core::TransformGizmoPickHit axis_hit =
+		quader_editor_core::pick_transform_gizmo(input, x_axis->screen_tip);
+	ASSERT_TRUE(axis_hit.hit);
+	EXPECT_TRUE(axis_hit.axis == quader_editor_core::TransformAxis::X);
+	EXPECT_NEAR(axis_hit.world_direction.x, 0.0F, 0.0001F);
+	EXPECT_NEAR(axis_hit.world_direction.y, 1.0F, 0.0001F);
+	EXPECT_NEAR(axis_hit.world_direction.z, 0.0F, 0.0001F);
+
+	const auto xy_plane = std::find_if(
+		move_frame.planes.begin(), move_frame.planes.end(),
+		[](const quader_editor_core::TransformGizmoPlanePrimitive& plane) {
+			return plane.axis == quader_editor_core::TransformAxis::Xy;
+		});
+	ASSERT_TRUE(xy_plane != move_frame.planes.end());
+	const quader::QVec2 plane_center {
+		(xy_plane->screen0.x + xy_plane->screen1.x + xy_plane->screen2.x +
+		 xy_plane->screen3.x) * 0.25F,
+		(xy_plane->screen0.y + xy_plane->screen1.y + xy_plane->screen2.y +
+		 xy_plane->screen3.y) * 0.25F,
+	};
+	const quader_editor_core::TransformGizmoPickHit plane_hit =
+		quader_editor_core::pick_transform_gizmo(input, plane_center);
+	ASSERT_TRUE(plane_hit.hit);
+	EXPECT_TRUE(plane_hit.axis == quader_editor_core::TransformAxis::Xy);
+	EXPECT_NEAR(plane_hit.world_direction.x, -1.0F, 0.0001F);
+	EXPECT_NEAR(plane_hit.world_direction.y, 1.0F, 0.0001F);
+	EXPECT_NEAR(plane_hit.world_direction.z, 0.0F, 0.0001F);
+
+	input.tool = quader_editor_core::ViewportInteractionTool::Rotate;
+	const quader_editor_core::TransformGizmoFrame rotate_frame =
+		quader_editor_core::build_transform_gizmo_frame(input);
+	bool saw_oriented_x_ring = false;
+	for (const quader_editor_core::TransformGizmoRingSegmentPrimitive& segment :
+		 rotate_frame.ring_segments) {
+		if (segment.axis != quader_editor_core::TransformAxis::X) {
+			continue;
+		}
+		saw_oriented_x_ring = true;
+		EXPECT_NEAR(segment.world_start.y, input.pivot.y, 0.0001F);
+		EXPECT_NEAR(segment.world_end.y, input.pivot.y, 0.0001F);
+	}
+	EXPECT_TRUE(saw_oriented_x_ring);
+
+	bool picked_oriented_x_ring = false;
+	for (const quader_editor_core::TransformGizmoRingSegmentPrimitive& segment :
+		 rotate_frame.ring_segments) {
+		if (segment.axis != quader_editor_core::TransformAxis::X) {
+			continue;
+		}
+		const quader::QVec2 midpoint {
+			(segment.screen_start.x + segment.screen_end.x) * 0.5F,
+			(segment.screen_start.y + segment.screen_end.y) * 0.5F,
+		};
+		const quader_editor_core::TransformGizmoPickHit ring_hit =
+			quader_editor_core::pick_transform_gizmo(input, midpoint);
+		if (!ring_hit.hit || ring_hit.axis != quader_editor_core::TransformAxis::X) {
+			continue;
+		}
+		picked_oriented_x_ring = true;
+		EXPECT_NEAR(ring_hit.world_direction.x, 0.0F, 0.0001F);
+		EXPECT_NEAR(ring_hit.world_direction.y, 1.0F, 0.0001F);
+		EXPECT_NEAR(ring_hit.world_direction.z, 0.0F, 0.0001F);
+		break;
+	}
+	EXPECT_TRUE(picked_oriented_x_ring);
 }

@@ -233,6 +233,7 @@ add_library(quader_modeling STATIC
     src/editor/modeling/services/modeling_action_catalog.cpp
     src/editor/modeling/services/modeling_hierarchy_duplicate_service.cpp
     src/editor/modeling/services/modeling_instant_operation_catalog.cpp
+    src/editor/modeling/services/modeling_legacy_local_frame_upgrade.cpp
     src/editor/modeling/services/modeling_mesh_sync_service.cpp
     src/editor/modeling/services/modeling_operation_settings.cpp
     src/editor/modeling/services/modeling_sdk_projection_adapter.cpp
@@ -951,6 +952,7 @@ set(QUADER_TOOL_TOOLBAR_ICON_FILES
     "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/tool_rotate.png"
     "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/tool_scale.png"
     "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/tool_pivot.png"
+    "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/tool_transform_local.png"
     "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/tool_create_primitive.png"
     "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/tool_extrude.png"
     "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/tool_insert_edge_loop.png"
@@ -1334,8 +1336,10 @@ if(QUADER_BUILD_TESTS)
         tests/qdr_binary_container_tests.cpp
         tests/qdr_binary_scene_codec_tests.cpp
         tests/modeling_session_service_split_tests.cpp
+        tests/modeling_legacy_local_frame_upgrade_tests.cpp
         tests/modeling_tool_catalog_tests.cpp
         tests/render_extraction_tests.cpp
+        tests/scene_transform_tests.cpp
         tests/selection_mode_adapter_tests.cpp
         tests/viewport_interaction_controller_tests.cpp
         tests/viewport_tool_catalog_tests.cpp

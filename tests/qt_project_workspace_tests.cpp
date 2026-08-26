@@ -175,7 +175,7 @@ TEST(QtProjectWorkspaceTests,
   EXPECT_EQ(selection_toolbar.iconSize(), QSize(32, 32));
   EXPECT_EQ(tool_toolbar.iconSize(), QSize(32, 32));
   EXPECT_EQ(expect_persistent_button_faces(selection_toolbar, 30), 5);
-  EXPECT_EQ(expect_persistent_button_faces(tool_toolbar, 40), 14);
+  EXPECT_EQ(expect_persistent_button_faces(tool_toolbar, 40), 15);
   for (QToolButton *button :
        selection_toolbar.findChildren<QToolButton *>()) {
     if (button->defaultAction() != nullptr &&
@@ -252,6 +252,24 @@ TEST(QtProjectWorkspaceTests,
   auto *move = tool_toolbar.findChild<QAction *>(QStringLiteral("tool_move"));
   ASSERT_NE(move, nullptr);
   EXPECT_TRUE(move->toolTip().contains(QStringLiteral("[W]")));
+  auto *transform_space = tool_toolbar.findChild<QAction *>(
+      QStringLiteral("toggle_transform_space"));
+  ASSERT_NE(transform_space, nullptr);
+  EXPECT_EQ(transform_space->actionGroup(), nullptr);
+  EXPECT_FALSE(transform_space->isChecked());
+  EXPECT_TRUE(transform_space->toolTip().contains(QStringLiteral("[T]")));
+
+  ASSERT_TRUE(editor.viewports()
+                  .set_transform_space(quader::QuaderTransformSpace::Local)
+                  .ok());
+  tool_toolbar.synchronize(editor, selection);
+  EXPECT_TRUE(transform_space->isChecked());
+
+  int transform_space_toggle_requests = 0;
+  tool_toolbar.set_transform_space_toggle_requested_callback(
+      [&]() { ++transform_space_toggle_requests; });
+  transform_space->trigger();
+  EXPECT_EQ(transform_space_toggle_requests, 1);
 
   ASSERT_TRUE(editor.preferences()
                   .set_shortcut(quader::quader_command::kToolsActivateMove,

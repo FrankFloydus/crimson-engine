@@ -1458,13 +1458,15 @@ TEST(UiLayoutGuardrailTests,
   for (std::string_view icon :
        {"tool_select.png", "tool_move.png", "tool_rotate.png",
         "tool_scale.png", "tool_pivot.png", "tool_create_primitive.png",
-        "tool_extrude.png", "tool_insert_edge_loop.png", "tool_knife.png",
-        "tool_cut.png", "tool_poly.png", "tool_mirror.png",
-        "tool_linear_array.png", "tool_radial_array.png"}) {
+        "tool_extrude.png",
+        "tool_insert_edge_loop.png", "tool_knife.png", "tool_cut.png",
+        "tool_poly.png", "tool_mirror.png", "tool_linear_array.png",
+        "tool_radial_array.png"}) {
     const std::size_t icon_position = toolbar.find(icon, previous_icon);
     EXPECT_NE(icon_position, std::string::npos) << icon;
     previous_icon = icon_position + icon.size();
   }
+  expect_contains(toolbar, "tool_transform_local.png");
 
   expect_contains(ui_system,
                   "addToolBar(Qt::LeftToolBarArea, tool_toolbar_)");
@@ -1482,6 +1484,14 @@ TEST(UiLayoutGuardrailTests,
   expect_contains(ui_system,
                   "toolbar_owner_available_ != owner_available");
   expect_contains(toolbar, "editor.tools().active_tool()");
+  expect_contains(toolbar, "editor.viewports().transform_space_revision()");
+  expect_contains(toolbar,
+                  "quader_command::kViewportToggleTransformSpace");
+  expect_contains(toolbar, "QSignalBlocker blocker(transform_space_action_)");
+  expect_contains(toolbar,
+                  "if (spec.tool == ViewportToolId::Pivot)");
+  expect_missing(toolbar,
+                 "action_group->addAction(transform_space_action_)");
   expect_contains(toolbar,
                   "command_id_for_tool_activation(entry.tool_id)");
   expect_contains(toolbar,
@@ -1507,6 +1517,11 @@ TEST(UiLayoutGuardrailTests,
   ASSERT_NE(shortcut_lookup, std::string::npos);
   EXPECT_LT(unchanged_state_gate, command_lookup);
   EXPECT_LT(unchanged_state_gate, shortcut_lookup);
+  const std::size_t transform_command_lookup = toolbar.find(
+      "editor.commands().descriptor(\n"
+      "          quader_command::kViewportToggleTransformSpace)");
+  ASSERT_NE(transform_command_lookup, std::string::npos);
+  EXPECT_LT(unchanged_state_gate, transform_command_lookup);
   expect_contains(toolbar, "QStringLiteral(\" [%1]\")");
   expect_contains(menu_header, "tool_toolbar_visible");
   expect_contains(menu_header, "set_tool_toolbar_visible");
@@ -1709,21 +1724,28 @@ TEST(UiLayoutGuardrailTests,
 
   const std::size_t revision_gate =
       refresh.find("if (owner_state_changed || "
-                   "active_tool_revision_changed)");
+                   "active_tool_revision_changed ||\n"
+                   "          transform_space_revision_changed)");
   const std::size_t selection_summary =
       refresh.find("editor_->selection().summary()");
   const std::size_t active_tool_revision =
       refresh.find("editor_->tools().active_tool_revision()");
   const std::size_t active_tool_revision_gate =
       refresh.find("if (owner_state_changed || "
-                   "active_tool_revision_changed)");
+                   "active_tool_revision_changed ||\n"
+                   "          transform_space_revision_changed)");
+  const std::size_t transform_space_revision =
+      refresh.find("editor_->viewports().transform_space_revision()");
   ASSERT_NE(revision_gate, std::string::npos);
   ASSERT_NE(selection_summary, std::string::npos);
   ASSERT_NE(active_tool_revision, std::string::npos);
   ASSERT_NE(active_tool_revision_gate, std::string::npos);
+  ASSERT_NE(transform_space_revision, std::string::npos);
   EXPECT_LT(revision_gate, selection_summary);
   EXPECT_LT(active_tool_revision, active_tool_revision_gate);
+  EXPECT_LT(transform_space_revision, active_tool_revision_gate);
   expect_contains(refresh, "toolbar_active_tool_revision_ !=");
+  expect_contains(refresh, "toolbar_transform_space_revision_ !=");
   expect_missing(refresh, "editor_->tools().active_tool()");
   expect_contains(refresh, "modeling_->content_revision()");
   expect_contains(refresh, "modeling_->selection_revision()");

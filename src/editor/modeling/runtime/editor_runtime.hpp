@@ -138,6 +138,14 @@ void begin_editor_runtime_transform_drag_state(
 		TransformDragOperation operation,
 		TransformAxis axis,
 		quader::QVec3 pivot);
+void begin_editor_runtime_transform_drag_state(
+		EditorRuntimeState& runtime,
+		ViewportInteractionTool tool,
+		TransformDragOperation operation,
+		TransformAxis axis,
+		TransformSpace space,
+		quader_poly::Transform3 orientation,
+		quader::QVec3 pivot);
 const TransformDragState& editor_runtime_transform_drag_state(const EditorRuntimeState& runtime);
 bool editor_runtime_transform_drag_active(const EditorRuntimeState& runtime);
 void set_editor_runtime_transform_drag_move_state(EditorRuntimeState& runtime, MoveToolState state);
@@ -262,10 +270,17 @@ public:
 	bool discard_transient_state();
 	void set_transform_drag_state(TransformDragState state);
 	void begin_transform_drag_state(
-			ViewportInteractionTool tool,
-			TransformDragOperation operation,
-			TransformAxis axis,
-			quader::QVec3 pivot);
+		ViewportInteractionTool tool,
+		TransformDragOperation operation,
+		TransformAxis axis,
+		quader::QVec3 pivot);
+	void begin_transform_drag_state(
+		ViewportInteractionTool tool,
+		TransformDragOperation operation,
+		TransformAxis axis,
+		TransformSpace space,
+		quader_poly::Transform3 orientation,
+		quader::QVec3 pivot);
 	void set_transform_drag_move_state(MoveToolState state);
 	void set_transform_drag_rotate_state(RotateToolState state);
 	void set_transform_drag_scale_state(ScaleToolState state);

@@ -100,6 +100,16 @@ enum class ViewportWorkspaceLayoutPolicy {
 };
 
 /**
+ * Selects whether transform tools use world axes or selection-local axes.
+ * This is transient viewport workspace state and is intentionally not part of
+ * persisted viewport preferences.
+ */
+enum class ViewportTransformSpace {
+  Global,
+  Local,
+};
+
+/**
  * Stores the Viewport Workspace Pane State data contract used by the viewport input, layout, and camera layer.
  */
 struct ViewportWorkspacePaneState {
@@ -153,6 +163,15 @@ public:
 
   [[nodiscard]] int grid_preset() const { return grid_preset_; }
   bool set_grid_preset(int preset);
+
+  [[nodiscard]] ViewportTransformSpace transform_space() const {
+    return transform_space_;
+  }
+  bool set_transform_space(ViewportTransformSpace space);
+  bool toggle_transform_space();
+  [[nodiscard]] std::uint64_t transform_space_revision() const {
+    return transform_space_revision_;
+  }
 
   [[nodiscard]] ViewportShadingMode shading_mode(ViewportPaneId pane) const;
   bool set_shading_mode(ViewportPaneId pane, ViewportShadingMode mode);
@@ -251,6 +270,8 @@ private:
   ViewportPaneId focused_pane_ = ViewportPaneId::Perspective;
   bool focused_pane_maximized_ = false;
   int grid_preset_ = 0;
+  ViewportTransformSpace transform_space_ = ViewportTransformSpace::Global;
+  std::uint64_t transform_space_revision_ = 0u;
   float default_fly_speed_ = kDefaultViewportFlyNavigationSpeed;
   std::vector<ViewportWorkspaceAuxiliaryViewportState> auxiliary_viewports_;
   ViewportLocalVisibilitySnapshot local_visibility_snapshot_;

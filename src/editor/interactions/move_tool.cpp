@@ -52,87 +52,113 @@ double axis_coordinate(quader::QVec3 position, TransformAxis axis)
 	}
 }
 
-quader::QVec3 transform_plane_normal(TransformAxis axis)
+quader::QVec3 oriented_axis(
+		const quader_poly::Transform3& orientation,
+		TransformAxis axis)
 {
-  if (axis == TransformAxis::Xy) {
-    return {0.0F, 0.0F, 1.0F};
-  }
-  if (axis == TransformAxis::Xz) {
-    return {0.0F, 1.0F, 0.0F};
-  }
-  if (axis == TransformAxis::Yz) {
-    return {1.0F, 0.0F, 0.0F};
-  }
-        return {};
+	const quader::QVec3 direction =
+		normalized_axis(transform_vector(orientation, rotation_axis_vector(axis)));
+	return vec3_is_tiny(direction) ? rotation_axis_vector(axis) : direction;
 }
 
-quader::QVec3 plane_drag_delta(TransformAxis axis, quader::QVec3 raw_delta, double grid_size, bool grid_enabled)
+quader::QVec3 transform_plane_normal(
+		TransformAxis axis,
+		const quader_poly::Transform3& orientation)
 {
-	quader::QVec3 delta;
-        if (axis == TransformAxis::Xy) {
-          delta.x = static_cast<float>(
-              maybe_snap_world_value(raw_delta.x, grid_size, grid_enabled));
-          delta.y = static_cast<float>(
-              maybe_snap_world_value(raw_delta.y, grid_size, grid_enabled));
-        } else if (axis == TransformAxis::Xz) {
-          delta.x = static_cast<float>(
-              maybe_snap_world_value(raw_delta.x, grid_size, grid_enabled));
-          delta.z = static_cast<float>(
-              maybe_snap_world_value(raw_delta.z, grid_size, grid_enabled));
-        } else if (axis == TransformAxis::Yz) {
-          delta.y = static_cast<float>(
-              maybe_snap_world_value(raw_delta.y, grid_size, grid_enabled));
-          delta.z = static_cast<float>(
-              maybe_snap_world_value(raw_delta.z, grid_size, grid_enabled));
-        }
-        return delta;
+	if (axis == TransformAxis::Xy) {
+		const quader::QVec3 normal = vec3_cross(
+			oriented_axis(orientation, TransformAxis::X),
+			oriented_axis(orientation, TransformAxis::Y));
+		return vec3_is_tiny(normal)
+			? oriented_axis(orientation, TransformAxis::Z)
+			: normalized_axis(normal);
+	}
+	if (axis == TransformAxis::Xz) {
+		const quader::QVec3 normal = vec3_cross(
+			oriented_axis(orientation, TransformAxis::Z),
+			oriented_axis(orientation, TransformAxis::X));
+		return vec3_is_tiny(normal)
+			? oriented_axis(orientation, TransformAxis::Y)
+			: normalized_axis(normal);
+	}
+	if (axis == TransformAxis::Yz) {
+		const quader::QVec3 normal = vec3_cross(
+			oriented_axis(orientation, TransformAxis::Y),
+			oriented_axis(orientation, TransformAxis::Z));
+		return vec3_is_tiny(normal)
+			? oriented_axis(orientation, TransformAxis::X)
+			: normalized_axis(normal);
+	}
+	return {};
 }
 
-quader::QVec3 snap_center_drag_delta(TransformAxis axis, quader::QVec3 center_world, quader::QVec3 raw_delta, double grid_size)
+bool transform_axis_includes_basis_axis(TransformAxis axis, int component)
 {
-	quader::QVec3 delta;
-        if (axis == TransformAxis::X || axis == TransformAxis::Xy ||
-            axis == TransformAxis::Xz) {
-          delta.x = static_cast<float>(
-              snap_world_value(
-                  static_cast<double>(center_world.x + raw_delta.x),
-                  grid_size) -
-              center_world.x);
-        }
-        if (axis == TransformAxis::Y || axis == TransformAxis::Xy ||
-            axis == TransformAxis::Yz) {
-          delta.y = static_cast<float>(
-              snap_world_value(
-                  static_cast<double>(center_world.y + raw_delta.y),
-                  grid_size) -
-              center_world.y);
-        }
-        if (axis == TransformAxis::Z || axis == TransformAxis::Xz ||
-            axis == TransformAxis::Yz) {
-          delta.z = static_cast<float>(
-              snap_world_value(
-                  static_cast<double>(center_world.z + raw_delta.z),
-                  grid_size) -
-              center_world.z);
-        }
-        if (axis == TransformAxis::All) {
-          delta.x = static_cast<float>(
-              snap_world_value(
-                  static_cast<double>(center_world.x + raw_delta.x),
-                  grid_size) -
-              center_world.x);
-          delta.y = static_cast<float>(
-              snap_world_value(
-                  static_cast<double>(center_world.y + raw_delta.y),
-                  grid_size) -
-              center_world.y);
-          delta.z = static_cast<float>(
-              snap_world_value(
-                  static_cast<double>(center_world.z + raw_delta.z),
-                  grid_size) -
-              center_world.z);
-        }
-        return delta;
+	if (axis == TransformAxis::All) {
+		return true;
+	}
+	if (component == 0) {
+		return axis == TransformAxis::X || axis == TransformAxis::Xy ||
+			axis == TransformAxis::Xz;
+	}
+	if (component == 1) {
+		return axis == TransformAxis::Y || axis == TransformAxis::Xy ||
+			axis == TransformAxis::Yz;
+	}
+	return component == 2 &&
+		(axis == TransformAxis::Z || axis == TransformAxis::Xz ||
+		 axis == TransformAxis::Yz);
+}
+
+quader::QVec3 plane_drag_delta(
+		TransformAxis axis,
+		quader::QVec3 raw_delta,
+		const quader_poly::Transform3& orientation,
+		double grid_size,
+		bool grid_enabled)
+{
+	quader::QVec3 logical_delta =
+		inverse_transform_vector(orientation, raw_delta);
+	logical_delta.x = transform_axis_includes_basis_axis(axis, 0)
+		? static_cast<float>(maybe_snap_world_value(
+			logical_delta.x, grid_size, grid_enabled))
+		: 0.0F;
+	logical_delta.y = transform_axis_includes_basis_axis(axis, 1)
+		? static_cast<float>(maybe_snap_world_value(
+			logical_delta.y, grid_size, grid_enabled))
+		: 0.0F;
+	logical_delta.z = transform_axis_includes_basis_axis(axis, 2)
+		? static_cast<float>(maybe_snap_world_value(
+			logical_delta.z, grid_size, grid_enabled))
+		: 0.0F;
+	return transform_vector(orientation, logical_delta);
+}
+
+quader::QVec3 snap_center_drag_delta(
+		TransformAxis axis,
+		quader::QVec3 center_world,
+		quader::QVec3 raw_delta,
+		const quader_poly::Transform3& orientation,
+		double grid_size)
+{
+	const quader::QVec3 logical_center =
+		inverse_transform_vector(orientation, center_world);
+	const quader::QVec3 logical_target =
+		inverse_transform_vector(orientation, center_world + raw_delta);
+	quader::QVec3 logical_delta;
+	if (transform_axis_includes_basis_axis(axis, 0)) {
+		logical_delta.x = static_cast<float>(
+			snap_world_value(logical_target.x, grid_size) - logical_center.x);
+	}
+	if (transform_axis_includes_basis_axis(axis, 1)) {
+		logical_delta.y = static_cast<float>(
+			snap_world_value(logical_target.y, grid_size) - logical_center.y);
+	}
+	if (transform_axis_includes_basis_axis(axis, 2)) {
+		logical_delta.z = static_cast<float>(
+			snap_world_value(logical_target.z, grid_size) - logical_center.z);
+	}
+	return transform_vector(orientation, logical_delta);
 }
 
 bool edge_uses_vertex(quader_poly::Edge edge, quader_poly::ElementId vertex_id)
@@ -265,9 +291,14 @@ public:
 
 	[[nodiscard]] MoveBeginResult begin_move_drag(const MoveBeginInput& input) const
 	{
-		quader::QVec3 next_world_axis = input.has_world_direction ? input.world_direction : axis_vector(input.axis);
+		quader::QVec3 next_world_axis = input.has_world_direction
+			? input.world_direction
+			: transform_vector(input.orientation, axis_vector(input.axis));
 		if (vec3_is_tiny(next_world_axis)) {
-			next_world_axis = axis_vector(input.axis);
+			next_world_axis = transform_vector(input.orientation, axis_vector(input.axis));
+			if (vec3_is_tiny(next_world_axis)) {
+				next_world_axis = axis_vector(input.axis);
+			}
 			if (vec3_is_tiny(next_world_axis)) {
 				return { false, "Invalid move axis.", {} };
 			}
@@ -281,6 +312,8 @@ public:
 		MoveToolState state;
 		state.active = true;
 		state.axis = input.axis;
+		state.orientation = input.orientation;
+		state.model_transform = input.model_transform;
 		state.world_axis = normalized_axis(next_world_axis);
 		state.local_axis = normalized_axis(next_local_axis);
 		state.center_local = input.center_local;
@@ -289,7 +322,10 @@ public:
 		state.plane_start_point = state.center_world;
 		if (transform_axis_is_plane(input.axis) && input.has_start_ray) {
 			const DragPointResult plane_hit =
-				drag_point_on_plane(input.start_ray, state.center_world, transform_plane_normal(input.axis));
+				drag_point_on_plane(
+					input.start_ray,
+					state.center_world,
+					transform_plane_normal(input.axis, state.orientation));
 			if (plane_hit.ok) {
 				state.plane_start_point = plane_hit.point;
 			}
@@ -397,13 +433,21 @@ public:
 		double distance = 0.0;
 		if (transform_axis_is_plane(state.axis)) {
 			const DragPointResult current_plane_point =
-				drag_point_on_plane(ray, state.center_world, transform_plane_normal(state.axis));
+				drag_point_on_plane(
+					ray,
+					state.center_world,
+					transform_plane_normal(state.axis, state.orientation));
 			if (current_plane_point.ok) {
 				const quader::QVec3 raw_delta = current_plane_point.point - state.plane_start_point;
-				delta = snap_center_to_grid && grid_enabled
-					? snap_center_drag_delta(state.axis, state.center_world, raw_delta, grid_size)
-					: plane_drag_delta(state.axis, raw_delta, grid_size, grid_enabled);
-				distance = quader::length(delta);
+				const quader::QVec3 world_delta = snap_center_to_grid && grid_enabled
+					? snap_center_drag_delta(
+						state.axis, state.center_world, raw_delta,
+						state.orientation, grid_size)
+					: plane_drag_delta(
+						state.axis, raw_delta, state.orientation,
+						grid_size, grid_enabled);
+				delta = inverse_transform_vector(state.model_transform, world_delta);
+				distance = quader::length(world_delta);
 			}
 		} else {
 			const quader::QVec2 screen_delta = vec2_sub(screen_position, state.start_screen);
@@ -419,8 +463,11 @@ public:
                         }
 			if (snap_center_to_grid && grid_enabled) {
 				const quader::QVec3 raw_delta = vec3_scale(state.world_axis, raw_distance);
-				delta = snap_center_drag_delta(state.axis, state.center_world, raw_delta, grid_size);
-				distance = vec3_dot(delta, state.world_axis);
+				const quader::QVec3 world_delta = snap_center_drag_delta(
+					state.axis, state.center_world, raw_delta,
+					state.orientation, grid_size);
+				delta = inverse_transform_vector(state.model_transform, world_delta);
+				distance = vec3_dot(world_delta, state.world_axis);
 			} else {
 				distance = maybe_snap_world_value(raw_distance, grid_size, grid_enabled);
 				delta = vec3_scale(state.local_axis, distance);

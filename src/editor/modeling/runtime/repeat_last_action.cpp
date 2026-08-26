@@ -193,6 +193,8 @@ void record_repeatable_transform(
 	action.tool = drag.tool;
 	action.operation = drag.operation;
 	action.axis = drag.axis;
+	action.space = drag.space;
+	action.orientation = drag.orientation;
 	action.duplicate_selected = duplicate_selected;
 	action.pivot = drag.pivot;
 	action.move_delta = drag.move.preview_delta;

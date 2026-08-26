@@ -253,6 +253,7 @@ private:
   std::uint64_t toolbar_modeling_content_revision_ = 0;
   std::uint64_t toolbar_modeling_selection_revision_ = 0;
   std::uint64_t toolbar_active_tool_revision_ = 0;
+  std::uint64_t toolbar_transform_space_revision_ = 0;
   std::uint64_t tool_settings_revision_ = 0;
   bool tool_settings_refresh_valid_ = false;
   QuaderEditorApi *project_workspace_events_editor_ = nullptr;

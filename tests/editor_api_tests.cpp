@@ -538,7 +538,7 @@ void setup_selection_for_mode(quader::QuaderEditorApi &editor,
     return;
   }
   if (mode == quader::QuaderSelectionMode::Face) {
-    ASSERT_TRUE(editor.selection().select_face(object, 0).ok());
+    ASSERT_TRUE(editor.selection().select_face(object, 1).ok());
   } else if (mode == quader::QuaderSelectionMode::Edge) {
     ASSERT_TRUE(editor.selection().select_edge(object, 1, 2).ok());
   } else if (mode == quader::QuaderSelectionMode::Vertex) {
@@ -831,6 +831,9 @@ TEST(EditorApiTests, AggregatesDocumentApisAndCommandRouting) {
     EXPECT_EQ(editor.commands().shortcut_for(
                   quader::quader_command::kViewportToggleLocalVisibility),
               "Backslash");
+    EXPECT_EQ(editor.commands().shortcut_for(
+                  quader::quader_command::kViewportToggleTransformSpace),
+              "T");
     const std::optional<quader::QuaderCommandDescriptor> spawn_window =
         command_descriptor(editor,
                            quader::quader_command::kViewportSpawnWindow);
@@ -5582,6 +5585,87 @@ TEST(EditorApiTests, BoxSelectApiPreservesActiveFaceFromBaseline) {
     EXPECT_EQ(selected.value().selected_face_count, 1u);
 }
 
+TEST(EditorApiTests,
+     ComponentBoxSelectionPublishesActiveEdgeAndVertexForLocalOrientation) {
+    CommandTestHarness harness;
+    quader::QuaderEditorApi &editor = harness.editor;
+    const quader::QuaderModelingObjectRef object =
+        create_polygon_mesh(editor, 3U, "Local Rectangle Triangle");
+    ASSERT_TRUE(editor.selection().select_object(object).ok());
+    ASSERT_TRUE(editor.viewports()
+                    .set_transform_space(quader::QuaderTransformSpace::Local)
+                    .ok());
+
+    const auto expect_same_orientation =
+        [](const quader::QuaderTransform3 &actual,
+           const quader::QuaderTransform3 &expected) {
+          EXPECT_NEAR(actual.x_axis.x, expected.x_axis.x, 1.0e-5f);
+          EXPECT_NEAR(actual.x_axis.y, expected.x_axis.y, 1.0e-5f);
+          EXPECT_NEAR(actual.x_axis.z, expected.x_axis.z, 1.0e-5f);
+          EXPECT_NEAR(actual.y_axis.x, expected.y_axis.x, 1.0e-5f);
+          EXPECT_NEAR(actual.y_axis.y, expected.y_axis.y, 1.0e-5f);
+          EXPECT_NEAR(actual.y_axis.z, expected.y_axis.z, 1.0e-5f);
+          EXPECT_NEAR(actual.z_axis.x, expected.z_axis.x, 1.0e-5f);
+          EXPECT_NEAR(actual.z_axis.y, expected.z_axis.y, 1.0e-5f);
+          EXPECT_NEAR(actual.z_axis.z, expected.z_axis.z, 1.0e-5f);
+        };
+
+    quader::QuaderBoxSelectRequest request;
+    request.camera = api_orthographic_camera();
+    request.start = {48.0f, 48.0f};
+    request.end = {52.0f, 52.0f};
+    request.edit = quader::QuaderSelectionEdit::Add;
+    request.rule = quader::QuaderBoxSelectionRule::Contain;
+
+    ASSERT_TRUE(
+        editor.selection().set_mode(quader::QuaderSelectionMode::Edge).ok());
+    ASSERT_TRUE(editor.selection().clear().ok());
+    ASSERT_TRUE(editor.selection().select_edge(object, 1, 2).ok());
+    const quader::QuaderApiResult<quader::QuaderSelectionSummary>
+        rectangle_edge = editor.selection().box_select(request);
+    ASSERT_TRUE(rectangle_edge.ok()) << rectangle_edge.error_message();
+    EXPECT_EQ(rectangle_edge.value().selected_edge_count, 3u);
+    EXPECT_EQ(rectangle_edge.value().active_kind,
+              quader::QuaderActiveSelectionKind::Edge);
+    EXPECT_EQ(rectangle_edge.value().active_edge_a, 1);
+    EXPECT_EQ(rectangle_edge.value().active_edge_b, 2);
+    const std::optional<quader::QuaderTransform3> rectangle_edge_orientation =
+        editor.query().selection_transform_orientation();
+    ASSERT_TRUE(rectangle_edge_orientation.has_value());
+    EXPECT_GT(std::abs(rectangle_edge_orientation->x_axis.y), 0.25f);
+
+    ASSERT_TRUE(editor.selection().select_edge(object, 1, 2).ok());
+    const std::optional<quader::QuaderTransform3> direct_edge_orientation =
+        editor.query().selection_transform_orientation();
+    ASSERT_TRUE(direct_edge_orientation.has_value());
+    expect_same_orientation(*rectangle_edge_orientation,
+                            *direct_edge_orientation);
+
+    ASSERT_TRUE(
+        editor.selection().set_mode(quader::QuaderSelectionMode::Vertex).ok());
+    ASSERT_TRUE(editor.selection().clear().ok());
+    ASSERT_TRUE(editor.selection().select_vertex(object, 1).ok());
+    const quader::QuaderApiResult<quader::QuaderSelectionSummary>
+        rectangle_vertex = editor.selection().box_select(request);
+    ASSERT_TRUE(rectangle_vertex.ok()) << rectangle_vertex.error_message();
+    EXPECT_EQ(rectangle_vertex.value().selected_vertex_count, 3u);
+    EXPECT_EQ(rectangle_vertex.value().active_kind,
+              quader::QuaderActiveSelectionKind::Vertex);
+    EXPECT_EQ(rectangle_vertex.value().active_vertex_id, 1);
+    const std::optional<quader::QuaderTransform3>
+        rectangle_vertex_orientation =
+            editor.query().selection_transform_orientation();
+    ASSERT_TRUE(rectangle_vertex_orientation.has_value());
+    EXPECT_GT(std::abs(rectangle_vertex_orientation->x_axis.y), 0.25f);
+
+    ASSERT_TRUE(editor.selection().select_vertex(object, 1).ok());
+    const std::optional<quader::QuaderTransform3> direct_vertex_orientation =
+        editor.query().selection_transform_orientation();
+    ASSERT_TRUE(direct_vertex_orientation.has_value());
+    expect_same_orientation(*rectangle_vertex_orientation,
+                            *direct_vertex_orientation);
+}
+
 TEST(EditorApiTests, ComponentPickSelectionRemainsRuntimeOwned) {
     CommandTestHarness harness;
     quader::QuaderEditorApi& editor = harness.editor;
@@ -5815,6 +5899,29 @@ TEST(EditorApiTests, ViewportHandlesUseWorkspaceWithoutRuntimeHooks) {
     EXPECT_EQ(editor.viewports().grid_preset(), 10);
     EXPECT_TRUE(editor.viewports().set_grid_preset(-5).ok());
     EXPECT_EQ(editor.viewports().grid_preset(), 1);
+
+    EXPECT_EQ(editor.viewports().transform_space(),
+              quader::QuaderTransformSpace::Global);
+    EXPECT_EQ(editor.viewports().transform_space_revision(), 0u);
+    const quader::QuaderApiVoidResult unchanged_space =
+        editor.viewports().set_transform_space(
+            quader::QuaderTransformSpace::Global);
+    EXPECT_TRUE(unchanged_space.ok());
+    EXPECT_FALSE(unchanged_space.changed());
+    EXPECT_EQ(editor.viewports().transform_space_revision(), 0u);
+    const quader::QuaderApiVoidResult local_space =
+        editor.viewports().set_transform_space(
+            quader::QuaderTransformSpace::Local);
+    EXPECT_TRUE(local_space.ok());
+    EXPECT_TRUE(local_space.changed());
+    EXPECT_EQ(local_space.mutation_kind, quader::QuaderMutationKind::Runtime);
+    EXPECT_EQ(editor.viewports().transform_space(),
+              quader::QuaderTransformSpace::Local);
+    EXPECT_EQ(editor.viewports().transform_space_revision(), 1u);
+    EXPECT_TRUE(editor.viewports().toggle_transform_space().changed());
+    EXPECT_EQ(editor.viewports().transform_space(),
+              quader::QuaderTransformSpace::Global);
+    EXPECT_EQ(editor.viewports().transform_space_revision(), 2u);
 
     auto viewport = editor.viewports().main();
     EXPECT_TRUE(
@@ -8020,6 +8127,43 @@ TEST(EditorApiTests, SelectionApiExposesTypedTargetsThroughPublicQueries) {
     ASSERT_TRUE(group_snapshot.has_value());
     EXPECT_TRUE(group_snapshot->active);
     EXPECT_TRUE(group_snapshot->selected);
+}
+
+TEST(EditorApiTests,
+     ComponentSelectionPreservesExplicitActiveElementAcrossIncrementalEdits) {
+    CommandTestHarness harness;
+    quader::QuaderEditorApi& editor = harness.editor;
+    const quader::QuaderModelingObjectRef object =
+        create_selected_box(editor, "Active Component Box");
+    ASSERT_TRUE(
+        editor.selection().set_mode(quader::QuaderSelectionMode::Vertex).ok());
+
+    ASSERT_TRUE(editor.selection().select_vertices(object, {1, 2, 3}).ok());
+    quader::QuaderSelectionSummary summary = editor.selection().summary();
+    ASSERT_EQ(summary.selected_vertex_count, 3u);
+    EXPECT_EQ(summary.active_kind, quader::QuaderActiveSelectionKind::Vertex);
+    EXPECT_EQ(summary.active_vertex_id, 3);
+
+    ASSERT_TRUE(editor.selection()
+                    .select_vertex(object, 4, quader::QuaderSelectionEdit::Add)
+                    .ok());
+    summary = editor.selection().summary();
+    EXPECT_EQ(summary.active_vertex_id, 4);
+
+    ASSERT_TRUE(
+        editor.selection()
+            .select_vertex(object, 1, quader::QuaderSelectionEdit::Remove)
+            .ok());
+    summary = editor.selection().summary();
+    EXPECT_EQ(summary.active_vertex_id, 4);
+
+    ASSERT_TRUE(
+        editor.selection()
+            .select_vertex(object, 4, quader::QuaderSelectionEdit::Toggle)
+            .ok());
+    summary = editor.selection().summary();
+    EXPECT_EQ(summary.selected_vertex_count, 2u);
+    EXPECT_EQ(summary.active_vertex_id, 2);
 }
 
 TEST(EditorApiTests, MixedModelingAndSceneHistoryReplaysChronologicallyThroughPublicHistory) {
@@ -11678,6 +11822,50 @@ TEST(EditorApiTests,
                   .kind,
               quader::QuaderViewportKeybindingDispatch::Kind::NoMatch);
   }
+
+  EXPECT_EQ(editor.commands().shortcut_for(
+                quader::quader_command::kViewportToggleTransformSpace),
+            "T");
+  EXPECT_EQ(editor.commands().shortcut_for(
+                quader::quader_command::kApplyMaterial),
+            "Shift+T");
+  EXPECT_EQ(editor.viewports().transform_space(),
+            quader::QuaderTransformSpace::Global);
+  dispatch_and_execute(
+      "T", quader::quader_command::kViewportToggleTransformSpace);
+  EXPECT_EQ(editor.viewports().transform_space(),
+            quader::QuaderTransformSpace::Local);
+  dispatch_and_execute(
+      "T", quader::quader_command::kViewportToggleTransformSpace);
+  EXPECT_EQ(editor.viewports().transform_space(),
+            quader::QuaderTransformSpace::Global);
+  EXPECT_EQ(editor.commands()
+                .dispatch_viewport_input_binding(single_input_chord("T"),
+                                                 state, false, false)
+                .kind,
+            quader::QuaderViewportKeybindingDispatch::Kind::NoMatch);
+  EXPECT_EQ(editor.commands()
+                .dispatch_viewport_input_binding(single_input_chord("T"),
+                                                 state, true, true)
+                .kind,
+            quader::QuaderViewportKeybindingDispatch::Kind::NoMatch);
+  for (const quader::QuaderViewportKeybindingContext blocked_context : {
+           quader::QuaderViewportKeybindingContext{.navigation_active = true},
+           quader::QuaderViewportKeybindingContext{.modal_tool_active = true},
+           quader::QuaderViewportKeybindingContext{
+               .active_tool_owns_viewport = true},
+           quader::QuaderViewportKeybindingContext{
+               .active_transform_drag = true},
+           quader::QuaderViewportKeybindingContext{
+               .operation_preview_active = true},
+       }) {
+    EXPECT_EQ(editor.commands()
+                  .dispatch_viewport_input_binding(single_input_chord("T"),
+                                                   state, true, false,
+                                                   blocked_context)
+                  .kind,
+              quader::QuaderViewportKeybindingDispatch::Kind::NoMatch);
+  }
   EXPECT_TRUE(editor.query().entity(third.entity).has_value());
 
   dispatch_and_execute("H", quader::quader_command::kSceneHideSelection);
@@ -11776,9 +11964,9 @@ TEST(EditorApiTests,
       editor.commands().keybinding_catalog();
 
 #ifndef NDEBUG
-  EXPECT_EQ(commands.size(), 158u);
+  EXPECT_EQ(commands.size(), 159u);
 #else
-  EXPECT_EQ(commands.size(), 157u);
+  EXPECT_EQ(commands.size(), 158u);
 #endif
 
   std::unordered_set<std::string> expected_target_ids;
@@ -11893,6 +12081,9 @@ TEST(EditorApiTests,
       catalog,
       quader::quader_command::kViewportToggleLocalVisibility.string(),
       "Backslash"));
+  EXPECT_TRUE(has_keybinding_catalog_entry(
+      catalog,
+      quader::quader_command::kViewportToggleTransformSpace.string(), "T"));
   EXPECT_TRUE(has_keybinding_catalog_entry(
       catalog, quader::quader_command::kViewportShadingWireframe.string(),
       "F5"));

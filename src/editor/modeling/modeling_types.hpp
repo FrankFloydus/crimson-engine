@@ -117,6 +117,14 @@ enum class ModelingTransformTool {
 };
 
 /**
+ * Enumerates the coordinate space used by interactive transforms.
+ */
+enum class ModelingTransformSpace {
+  Global,
+  Local,
+};
+
+/**
  * Enumerates ModelingViewportTool values used by the modeling layer.
  */
 enum class ModelingViewportTool {
@@ -348,6 +356,8 @@ struct ModelingCreateBoxRequest {
   };
   std::string name = "Box";
   MaterialReference material;
+  // Optional scene-local placement for the bounds-authored document.
+  std::optional<ModelingTransform3> initial_scene_transform;
 };
 
 /**
@@ -359,6 +369,9 @@ struct ModelingCreateMeshRequest {
   std::string name = "Mesh";
   std::uint32_t material_slot = 0;
   MaterialReference material;
+  // Optional scene-local placement for already-local document geometry. Most
+  // callers omit this and retain the established identity projection.
+  std::optional<ModelingTransform3> initial_scene_transform;
 };
 
 /**
@@ -577,6 +590,8 @@ struct ModelingRepeatTransform {
   ModelingTransformTool tool = ModelingTransformTool::Move;
   ModelingTransformOperation operation = ModelingTransformOperation::Transform;
   ModelingTransformAxis axis = ModelingTransformAxis::None;
+  ModelingTransformSpace space = ModelingTransformSpace::Global;
+  ModelingTransform3 orientation = {};
   bool duplicate_selected = false;
   QVec3 pivot = {};
   QVec3 move_delta = {};
@@ -701,6 +716,8 @@ struct ModelingTransformDragBeginRequest {
   ModelingTransformTool tool = ModelingTransformTool::Move;
   ModelingTransformOperation operation = ModelingTransformOperation::Transform;
   ModelingTransformAxis axis = ModelingTransformAxis::None;
+  ModelingTransformSpace space = ModelingTransformSpace::Global;
+  ModelingTransform3 orientation = {};
   QVec3 pivot = {};
   QVec2 screen_position = {};
   QVec2 screen_pivot = {};

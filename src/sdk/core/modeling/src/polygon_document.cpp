@@ -21,6 +21,7 @@
 #include <cmath>
 #include <memory>
 #include <numeric>
+#include <optional>
 #include <ranges>
 #include <span>
 #include <string>
@@ -217,6 +218,31 @@ same_native_selection(const quader_poly::Selection &left,
          left.active_face == right.active_face;
 }
 
+[[nodiscard]] bool native_active_selection_matches_snapshot(
+    const quader_poly::Selection &selection,
+    const PolygonSelectionSnapshot &snapshot) {
+  if (selection.has_active != snapshot.has_active) {
+    return false;
+  }
+  if (!selection.has_active) {
+    return true;
+  }
+  switch (snapshot.kind) {
+  case SelectionKind::Vertex:
+    return selection.active_kind == quader_poly::ElementKind::Vertex &&
+           vertex_id(selection.active_vertex) == snapshot.active_vertex;
+  case SelectionKind::Edge:
+    return selection.active_kind == quader_poly::ElementKind::Edge &&
+           edge_id(selection.active_edge) == snapshot.active_edge;
+  case SelectionKind::Face:
+    return selection.active_kind == quader_poly::ElementKind::Face &&
+           face_id(selection.active_face) == snapshot.active_face;
+  case SelectionKind::Object:
+    return true;
+  }
+  return false;
+}
+
 [[nodiscard]] bool native_selection_matches_snapshot(
     const quader_poly::Selection &selection,
     const PolygonSelectionSnapshot &snapshot) {
@@ -224,7 +250,7 @@ same_native_selection(const quader_poly::Selection &left,
       selection.vertices.size() != snapshot.vertices.size() ||
       selection.edges.size() != snapshot.edges.size() ||
       selection.faces.size() != snapshot.faces.size() ||
-      selection.has_active != snapshot.has_active) {
+      !native_active_selection_matches_snapshot(selection, snapshot)) {
     return false;
   }
   for (std::size_t index = 0; index < selection.vertices.size(); ++index) {
@@ -242,20 +268,7 @@ same_native_selection(const quader_poly::Selection &left,
       return false;
     }
   }
-  if (!selection.has_active) {
-    return true;
-  }
-  switch (snapshot.kind) {
-  case SelectionKind::Vertex:
-    return vertex_id(selection.active_vertex) == snapshot.active_vertex;
-  case SelectionKind::Edge:
-    return edge_id(selection.active_edge) == snapshot.active_edge;
-  case SelectionKind::Face:
-    return face_id(selection.active_face) == snapshot.active_face;
-  case SelectionKind::Object:
-    return true;
-  }
-  return false;
+  return true;
 }
 
 [[nodiscard]] OperationResult selection_only_result(bool changed,
@@ -440,8 +453,68 @@ void apply_edit(std::vector<T> &target, std::span<const T> values,
   }
 }
 
-void update_active_selection(quader_poly::Selection &selection) {
+[[nodiscard]] bool active_selection_is_selected(
+    const quader_poly::Selection &selection,
+    const quader_poly::Selection &candidate) {
+  if (!candidate.has_active || selection.mode != candidate.mode) {
+    return false;
+  }
+  switch (selection.mode) {
+  case quader_poly::SelectionMode::Vertex:
+    return candidate.active_kind == quader_poly::ElementKind::Vertex &&
+           std::ranges::find(selection.vertices, candidate.active_vertex) !=
+               selection.vertices.end();
+  case quader_poly::SelectionMode::Edge:
+    return candidate.active_kind == quader_poly::ElementKind::Edge &&
+           std::ranges::find(selection.edges,
+                             quader_poly::make_edge(candidate.active_edge.a,
+                                                    candidate.active_edge.b)) !=
+               selection.edges.end();
+  case quader_poly::SelectionMode::Face:
+    return candidate.active_kind == quader_poly::ElementKind::Face &&
+           std::ranges::find(selection.faces, candidate.active_face) !=
+               selection.faces.end();
+  }
+  return false;
+}
+
+void copy_active_selection(quader_poly::Selection &selection,
+                           const quader_poly::Selection &source) {
+  selection.has_active = true;
+  selection.active_kind = source.active_kind;
+  switch (source.active_kind) {
+  case quader_poly::ElementKind::Vertex:
+    selection.active_vertex = source.active_vertex;
+    break;
+  case quader_poly::ElementKind::Edge:
+    selection.active_edge = quader_poly::make_edge(source.active_edge.a,
+                                                   source.active_edge.b);
+    break;
+  case quader_poly::ElementKind::Face:
+    selection.active_face = source.active_face;
+    break;
+  }
+}
+
+void update_active_selection(
+    quader_poly::Selection &selection,
+    const quader_poly::Selection *requested = nullptr,
+    const quader_poly::Selection *previous = nullptr) {
   selection.has_active = false;
+  selection.active_kind = quader_poly::ElementKind::Vertex;
+  selection.active_vertex = quader_poly::kInvalidElementId;
+  selection.active_edge = {};
+  selection.active_face = quader_poly::kInvalidElementId;
+  if (requested != nullptr &&
+      active_selection_is_selected(selection, *requested)) {
+    copy_active_selection(selection, *requested);
+    return;
+  }
+  if (previous != nullptr &&
+      active_selection_is_selected(selection, *previous)) {
+    copy_active_selection(selection, *previous);
+    return;
+  }
   if (selection.mode == quader_poly::SelectionMode::Vertex &&
       !selection.vertices.empty()) {
     selection.has_active = true;
@@ -462,6 +535,54 @@ void update_active_selection(quader_poly::Selection &selection) {
     selection.active_kind = quader_poly::ElementKind::Face;
     selection.active_face = selection.faces.front();
   }
+}
+
+[[nodiscard]] quader_poly::Selection active_selection_from_snapshot(
+    const PolygonSelectionSnapshot &snapshot) {
+  quader_poly::Selection active;
+  active.has_active = snapshot.has_active;
+  switch (snapshot.kind) {
+  case SelectionKind::Vertex:
+    active.mode = quader_poly::SelectionMode::Vertex;
+    active.active_kind = quader_poly::ElementKind::Vertex;
+    active.active_vertex = snapshot.active_vertex.index;
+    break;
+  case SelectionKind::Edge:
+    active.mode = quader_poly::SelectionMode::Edge;
+    active.active_kind = quader_poly::ElementKind::Edge;
+    active.active_edge = quader_poly::make_edge(snapshot.active_edge.a.index,
+                                                snapshot.active_edge.b.index);
+    break;
+  case SelectionKind::Face:
+    active.mode = quader_poly::SelectionMode::Face;
+    active.active_kind = quader_poly::ElementKind::Face;
+    active.active_face = snapshot.active_face.index;
+    break;
+  case SelectionKind::Object:
+    break;
+  }
+  return active;
+}
+
+[[nodiscard]] bool snapshot_active_is_member(
+    const PolygonSelectionSnapshot &snapshot) {
+  if (!snapshot.has_active) {
+    return false;
+  }
+  switch (snapshot.kind) {
+  case SelectionKind::Vertex:
+    return std::ranges::find(snapshot.vertices, snapshot.active_vertex) !=
+           snapshot.vertices.end();
+  case SelectionKind::Edge:
+    return std::ranges::find(snapshot.edges, snapshot.active_edge) !=
+           snapshot.edges.end();
+  case SelectionKind::Face:
+    return std::ranges::find(snapshot.faces, snapshot.active_face) !=
+           snapshot.faces.end();
+  case SelectionKind::Object:
+    return false;
+  }
+  return false;
 }
 
 [[nodiscard]] quader_poly::Edge native_edge(EdgeKey edge) {
@@ -978,6 +1099,16 @@ PolygonDocumentNativeAccess::prepare_selection_replacement(
     const PolygonDocument &document,
     const PolygonSelectionSnapshot &snapshot) {
   QDR_PROFILE_SCOPE("SDK polygon prepare direct selection replacement");
+  if (snapshot.kind == SelectionKind::Object) {
+    return Result<PolygonDocumentSelectionReplacement>::failure(make_error(
+        ErrorCode::InvalidArgument,
+        "A component selection batch requires component selections."));
+  }
+  if (snapshot.has_active && !snapshot_active_is_member(snapshot)) {
+    return Result<PolygonDocumentSelectionReplacement>::failure(make_error(
+        ErrorCode::InvalidArgument,
+        "The active component must belong to the replacement selection."));
+  }
   if (native_selection_matches_snapshot(*document.impl_->selection,
                                         snapshot)) {
     return Result<PolygonDocumentSelectionReplacement>::success({
@@ -986,12 +1117,6 @@ PolygonDocumentNativeAccess::prepare_selection_replacement(
         .changed = false,
     });
   }
-  if (snapshot.kind == SelectionKind::Object) {
-    return Result<PolygonDocumentSelectionReplacement>::failure(make_error(
-        ErrorCode::InvalidArgument,
-        "A component selection batch requires component selections."));
-  }
-
   quader_poly::Selection replacement;
   std::string message;
   {
@@ -1079,7 +1204,16 @@ PolygonDocumentNativeAccess::prepare_selection_replacement(
     case SelectionKind::Object:
       break;
     }
-    update_active_selection(replacement);
+    const quader_poly::Selection requested_active =
+        active_selection_from_snapshot(snapshot);
+    if (snapshot.has_active &&
+        !active_selection_is_selected(replacement, requested_active)) {
+      return Result<PolygonDocumentSelectionReplacement>::failure(make_error(
+          ErrorCode::InvalidArgument,
+          "The active component must belong to the replacement selection."));
+    }
+    update_active_selection(
+        replacement, snapshot.has_active ? &requested_active : nullptr);
     if (!native_selection_matches_snapshot(replacement, snapshot)) {
       return Result<PolygonDocumentSelectionReplacement>::failure(make_error(
           ErrorCode::InvalidArgument,
@@ -1122,7 +1256,8 @@ PolygonDocumentNativeAccess::prepare_selection_replacement_reusing(
       canonical_selection->vertices.size() != snapshot.vertices.size() ||
       canonical_selection->edges.size() != snapshot.edges.size() ||
       canonical_selection->faces.size() != snapshot.faces.size() ||
-      canonical_selection->has_active != snapshot.has_active) {
+      !native_active_selection_matches_snapshot(*canonical_selection,
+                                                snapshot)) {
     return Result<PolygonDocumentSelectionReplacement>::failure(make_error(
         ErrorCode::InvalidArgument,
         "A component selection batch requires canonical exact snapshots."));
@@ -1509,27 +1644,45 @@ Result<OperationResult> PolygonDocument::clear_selection() {
   return operation_success(selection_only_result(changed, "Selection cleared."));
 }
 
-Result<OperationResult>
-PolygonDocument::select_vertices(std::span<const VertexId> ids,
-                                 SelectionEdit edit) {
+namespace {
+
+[[nodiscard]] Result<OperationResult> apply_vertex_selection_edit(
+    PolygonDocumentImpl &impl, std::span<const VertexId> ids,
+    SelectionEdit edit, std::optional<VertexId> requested_active) {
   std::unordered_set<quader_poly::ElementId> live_ids;
   const bool use_live_index = selection_validation_uses_index(
-      ids.size(), impl_->document->vertices.size());
+      ids.size() + (requested_active.has_value() ? 1U : 0U),
+      impl.document->vertices.size());
   if (use_live_index) {
-    live_ids.reserve(impl_->document->vertices.size());
-    for (const quader_poly::Vertex &vertex : impl_->document->vertices) {
+    live_ids.reserve(impl.document->vertices.size());
+    for (const quader_poly::Vertex &vertex : impl.document->vertices) {
       live_ids.emplace(vertex.id);
     }
   }
   for (const VertexId id : ids) {
-    Result<OperationResult> validation =
-        validate_vertex_id(*impl_->document, id,
-                           use_live_index ? &live_ids : nullptr);
+    Result<OperationResult> validation = validate_vertex_id(
+        *impl.document, id, use_live_index ? &live_ids : nullptr);
     if (!validation.ok()) {
       return validation;
     }
   }
-  quader_poly::Selection selection = *impl_->selection;
+  if (requested_active.has_value()) {
+    Result<OperationResult> validation = validate_vertex_id(
+        *impl.document, *requested_active,
+        use_live_index ? &live_ids : nullptr);
+    if (!validation.ok()) {
+      return validation;
+    }
+    if (edit == SelectionEdit::Replace &&
+        std::ranges::find(ids, *requested_active) == ids.end()) {
+      return Result<OperationResult>::failure(make_error(
+          ErrorCode::InvalidArgument,
+          "The active vertex must belong to the replacement selection."));
+    }
+  }
+
+  const quader_poly::Selection previous = *impl.selection;
+  quader_poly::Selection selection = previous;
   if (edit == SelectionEdit::Replace ||
       selection.mode != quader_poly::SelectionMode::Vertex) {
     selection.clear();
@@ -1544,34 +1697,61 @@ PolygonDocument::select_vertices(std::span<const VertexId> ids,
              std::span<const quader_poly::ElementId>(native_ids.data(),
                                                      native_ids.size()),
              edit);
-  update_active_selection(selection);
-  commit_selection(*impl_, std::move(selection), true);
+
+  quader_poly::Selection requested;
+  if (requested_active.has_value()) {
+    requested.mode = quader_poly::SelectionMode::Vertex;
+    requested.has_active = true;
+    requested.active_kind = quader_poly::ElementKind::Vertex;
+    requested.active_vertex = requested_active->index;
+  }
+  update_active_selection(
+      selection, requested_active.has_value() ? &requested : nullptr,
+      edit == SelectionEdit::Replace ? nullptr : &previous);
+  commit_selection(impl, std::move(selection), true);
   return operation_success(selection_only_result(true, "Vertices selected."));
 }
 
-Result<OperationResult>
-PolygonDocument::select_edges(std::span<const EdgeKey> edges,
-                              SelectionEdit edit) {
+[[nodiscard]] Result<OperationResult> apply_edge_selection_edit(
+    PolygonDocumentImpl &impl, std::span<const EdgeKey> edges,
+    SelectionEdit edit, std::optional<EdgeKey> requested_active) {
   const std::vector<quader_poly::Edge> &live_edges =
-      cached_document_edges(*impl_);
+      cached_document_edges(impl);
   std::unordered_set<quader_poly::ElementId> live_vertex_ids;
   const bool use_live_index = selection_validation_uses_index(
-      edges.size(), impl_->document->vertices.size());
+      edges.size() + (requested_active.has_value() ? 1U : 0U),
+      impl.document->vertices.size());
   if (use_live_index) {
-    live_vertex_ids.reserve(impl_->document->vertices.size());
-    for (const quader_poly::Vertex &vertex : impl_->document->vertices) {
+    live_vertex_ids.reserve(impl.document->vertices.size());
+    for (const quader_poly::Vertex &vertex : impl.document->vertices) {
       live_vertex_ids.emplace(vertex.id);
     }
   }
   for (const EdgeKey edge : edges) {
-    Result<OperationResult> validation =
-        validate_edge_key(*impl_->document, edge, live_edges,
-                          use_live_index ? &live_vertex_ids : nullptr);
+    Result<OperationResult> validation = validate_edge_key(
+        *impl.document, edge, live_edges,
+        use_live_index ? &live_vertex_ids : nullptr);
     if (!validation.ok()) {
       return validation;
     }
   }
-  quader_poly::Selection selection = *impl_->selection;
+  if (requested_active.has_value()) {
+    Result<OperationResult> validation = validate_edge_key(
+        *impl.document, *requested_active, live_edges,
+        use_live_index ? &live_vertex_ids : nullptr);
+    if (!validation.ok()) {
+      return validation;
+    }
+    if (edit == SelectionEdit::Replace &&
+        std::ranges::find(edges, *requested_active) == edges.end()) {
+      return Result<OperationResult>::failure(make_error(
+          ErrorCode::InvalidArgument,
+          "The active edge must belong to the replacement selection."));
+    }
+  }
+
+  const quader_poly::Selection previous = *impl.selection;
+  quader_poly::Selection selection = previous;
   if (edit == SelectionEdit::Replace ||
       selection.mode != quader_poly::SelectionMode::Edge) {
     selection.clear();
@@ -1586,32 +1766,58 @@ PolygonDocument::select_edges(std::span<const EdgeKey> edges,
              std::span<const quader_poly::Edge>(native_edges.data(),
                                                 native_edges.size()),
              edit);
-  update_active_selection(selection);
-  commit_selection(*impl_, std::move(selection), true);
+
+  quader_poly::Selection requested;
+  if (requested_active.has_value()) {
+    requested.mode = quader_poly::SelectionMode::Edge;
+    requested.has_active = true;
+    requested.active_kind = quader_poly::ElementKind::Edge;
+    requested.active_edge = native_edge(*requested_active);
+  }
+  update_active_selection(
+      selection, requested_active.has_value() ? &requested : nullptr,
+      edit == SelectionEdit::Replace ? nullptr : &previous);
+  commit_selection(impl, std::move(selection), true);
   return operation_success(selection_only_result(true, "Edges selected."));
 }
 
-Result<OperationResult>
-PolygonDocument::select_faces(std::span<const FaceId> ids,
-                              SelectionEdit edit) {
+[[nodiscard]] Result<OperationResult> apply_face_selection_edit(
+    PolygonDocumentImpl &impl, std::span<const FaceId> ids,
+    SelectionEdit edit, std::optional<FaceId> requested_active) {
   std::unordered_set<quader_poly::ElementId> live_ids;
   const bool use_live_index = selection_validation_uses_index(
-      ids.size(), impl_->document->faces.size());
+      ids.size() + (requested_active.has_value() ? 1U : 0U),
+      impl.document->faces.size());
   if (use_live_index) {
-    live_ids.reserve(impl_->document->faces.size());
-    for (const quader_poly::Face &face : impl_->document->faces) {
+    live_ids.reserve(impl.document->faces.size());
+    for (const quader_poly::Face &face : impl.document->faces) {
       live_ids.emplace(face.id);
     }
   }
   for (const FaceId id : ids) {
-    Result<OperationResult> validation =
-        validate_face_id(*impl_->document, id,
-                         use_live_index ? &live_ids : nullptr);
+    Result<OperationResult> validation = validate_face_id(
+        *impl.document, id, use_live_index ? &live_ids : nullptr);
     if (!validation.ok()) {
       return validation;
     }
   }
-  quader_poly::Selection selection = *impl_->selection;
+  if (requested_active.has_value()) {
+    Result<OperationResult> validation = validate_face_id(
+        *impl.document, *requested_active,
+        use_live_index ? &live_ids : nullptr);
+    if (!validation.ok()) {
+      return validation;
+    }
+    if (edit == SelectionEdit::Replace &&
+        std::ranges::find(ids, *requested_active) == ids.end()) {
+      return Result<OperationResult>::failure(make_error(
+          ErrorCode::InvalidArgument,
+          "The active face must belong to the replacement selection."));
+    }
+  }
+
+  const quader_poly::Selection previous = *impl.selection;
+  quader_poly::Selection selection = previous;
   if (edit == SelectionEdit::Replace ||
       selection.mode != quader_poly::SelectionMode::Face) {
     selection.clear();
@@ -1626,9 +1832,39 @@ PolygonDocument::select_faces(std::span<const FaceId> ids,
              std::span<const quader_poly::ElementId>(native_ids.data(),
                                                      native_ids.size()),
              edit);
-  update_active_selection(selection);
-  commit_selection(*impl_, std::move(selection), true);
+
+  quader_poly::Selection requested;
+  if (requested_active.has_value()) {
+    requested.mode = quader_poly::SelectionMode::Face;
+    requested.has_active = true;
+    requested.active_kind = quader_poly::ElementKind::Face;
+    requested.active_face = requested_active->index;
+  }
+  update_active_selection(
+      selection, requested_active.has_value() ? &requested : nullptr,
+      edit == SelectionEdit::Replace ? nullptr : &previous);
+  commit_selection(impl, std::move(selection), true);
   return operation_success(selection_only_result(true, "Faces selected."));
+}
+
+} // namespace
+
+Result<OperationResult>
+PolygonDocument::select_vertices(std::span<const VertexId> ids,
+                                 SelectionEdit edit) {
+  return apply_vertex_selection_edit(*impl_, ids, edit, std::nullopt);
+}
+
+Result<OperationResult>
+PolygonDocument::select_edges(std::span<const EdgeKey> edges,
+                              SelectionEdit edit) {
+  return apply_edge_selection_edit(*impl_, edges, edit, std::nullopt);
+}
+
+Result<OperationResult>
+PolygonDocument::select_faces(std::span<const FaceId> ids,
+                              SelectionEdit edit) {
+  return apply_face_selection_edit(*impl_, ids, edit, std::nullopt);
 }
 
 Result<OperationResult> PolygonDocument::select_vertex(VertexId id) {
@@ -1698,13 +1934,22 @@ Result<OperationResult>
 PolygonDocument::apply_selection(const PolygonSelectionSnapshot &selection,
                                  SelectionEdit edit) {
   if (selection.kind == SelectionKind::Vertex) {
-    return select_vertices(selection.vertices, edit);
+    return apply_vertex_selection_edit(
+        *impl_, selection.vertices, edit,
+        selection.has_active ? std::optional{selection.active_vertex}
+                             : std::nullopt);
   }
   if (selection.kind == SelectionKind::Edge) {
-    return select_edges(selection.edges, edit);
+    return apply_edge_selection_edit(
+        *impl_, selection.edges, edit,
+        selection.has_active ? std::optional{selection.active_edge}
+                             : std::nullopt);
   }
   if (selection.kind == SelectionKind::Face) {
-    return select_faces(selection.faces, edit);
+    return apply_face_selection_edit(
+        *impl_, selection.faces, edit,
+        selection.has_active ? std::optional{selection.active_face}
+                             : std::nullopt);
   }
   return Result<OperationResult>::failure(
       make_error(ErrorCode::InvalidArgument,

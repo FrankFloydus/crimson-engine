@@ -142,7 +142,8 @@ bool same_modeling_object(const ModelingObjectComponent &left,
                           const ModelingObjectComponent &right) {
   return left.object_id == right.object_id &&
          left.material_slot == right.material_slot &&
-         left.sdk_owned == right.sdk_owned;
+         left.sdk_owned == right.sdk_owned &&
+         left.local_frame_version == right.local_frame_version;
 }
 
 bool valid_layer_color(QVec3 color) {

@@ -40,6 +40,11 @@ public:
     [[nodiscard]] int grid_preset() const;
     QuaderApiVoidResult set_grid_preset(int preset);
 
+    [[nodiscard]] QuaderTransformSpace transform_space() const;
+    QuaderApiVoidResult set_transform_space(QuaderTransformSpace space);
+    QuaderApiVoidResult toggle_transform_space();
+    [[nodiscard]] std::uint64_t transform_space_revision() const;
+
     [[nodiscard]] QuaderShadingMode shading_mode(ViewportPaneId pane) const;
     QuaderApiVoidResult set_shading_mode(ViewportPaneId pane,
                                          QuaderShadingMode mode);

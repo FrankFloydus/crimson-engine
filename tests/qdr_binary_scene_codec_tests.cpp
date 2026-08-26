@@ -233,6 +233,74 @@ TEST(QdrBinarySceneCodecTests,
   EXPECT_FALSE(read.viewport_camera_pose.has_value());
 }
 
+TEST(QdrBinarySceneCodecTests,
+     SchemaSixRoundTripPreservesModelingObjectLocalFrameVersion) {
+  SceneContentDocument document = simple_scene();
+  ASSERT_TRUE(document.scene().set_modeling_object(
+      100u, ModelingObjectComponent{
+                .object_id = 42,
+                .material_slot = 3u,
+                .sdk_owned = true,
+                .local_frame_version =
+                    kCanonicalModelingObjectLocalFrameVersion,
+            }));
+
+  const quader_io::QdrBinaryContainerReadResult parsed =
+      parse_written_scene(document);
+  ASSERT_TRUE(parsed.ok) << parsed.message;
+  const auto metadata = std::ranges::find_if(
+      parsed.chunks, [](const quader_io::QdrBinaryChunk &chunk) {
+        return chunk.type == static_cast<std::uint32_t>(
+                                 quader_io::QdrBinaryChunkType::SceneMetadata);
+      });
+  ASSERT_NE(metadata, parsed.chunks.end());
+  EXPECT_EQ(metadata->schema_version, 6u);
+
+  const QdrProjectReadResult read =
+      QdrDocumentReader::deserialize_project_document(
+          QdrDocumentWriter::serialize_project_document_bytes(
+              required_write_snapshot(document), test_uuid()));
+  ASSERT_TRUE(read.ok) << read.message;
+  const ModelingObjectComponent *modeling_object =
+      read.document.scene().modeling_object(100u);
+  ASSERT_NE(modeling_object, nullptr);
+  EXPECT_EQ(modeling_object->local_frame_version,
+            kCanonicalModelingObjectLocalFrameVersion);
+}
+
+TEST(QdrBinarySceneCodecTests,
+     SchemaFiveTreatsAppendedModelingObjectFrameAsLegacyUnknown) {
+  SceneContentDocument document = simple_scene();
+  ASSERT_TRUE(document.scene().set_modeling_object(
+      100u, ModelingObjectComponent{
+                .object_id = 42,
+                .sdk_owned = true,
+                .local_frame_version =
+                    kCanonicalModelingObjectLocalFrameVersion,
+            }));
+  const quader_io::QdrBinaryContainerReadResult parsed =
+      parse_written_scene(document);
+  ASSERT_TRUE(parsed.ok) << parsed.message;
+  std::vector<quader_io::QdrBinaryChunkInput> chunks = copy_chunks(parsed);
+  const auto metadata = std::ranges::find_if(
+      chunks, [](const quader_io::QdrBinaryChunkInput &chunk) {
+        return chunk.type == quader_io::QdrBinaryChunkType::SceneMetadata;
+      });
+  ASSERT_NE(metadata, chunks.end());
+  metadata->schema_version = 5u;
+
+  const QdrProjectReadResult read =
+      QdrDocumentReader::deserialize_project_document(
+          quader_io::build_qdr_binary_container(test_uuid(),
+                                                std::move(chunks)));
+  ASSERT_TRUE(read.ok) << read.message;
+  const ModelingObjectComponent *modeling_object =
+      read.document.scene().modeling_object(100u);
+  ASSERT_NE(modeling_object, nullptr);
+  EXPECT_EQ(modeling_object->local_frame_version,
+            kLegacyUnknownModelingObjectLocalFrameVersion);
+}
+
 TEST(QdrBinarySceneCodecTests, RejectsInvalidViewportCameraPoses) {
   for (const QdrSceneViewportCameraPose invalid : {
            QdrSceneViewportCameraPose{
@@ -954,7 +1022,7 @@ TEST(QdrBinarySceneCodecTests, RejectsUnsupportedMetadataSchema) {
   ASSERT_TRUE(parsed.ok) << parsed.message;
   std::vector<quader_io::QdrBinaryChunkInput> chunks = copy_chunks(parsed);
   ASSERT_FALSE(chunks.empty());
-  chunks.front().schema_version = 6u;
+  chunks.front().schema_version = 7u;
 
   const QdrProjectReadResult read =
       QdrDocumentReader::deserialize_project_document(

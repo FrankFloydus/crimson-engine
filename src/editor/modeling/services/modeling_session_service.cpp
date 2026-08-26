@@ -61,6 +61,7 @@
 #include <editor/interactions/viewport_projection.hpp>
 #include <editor/metadata/host_contract.hpp>
 #include <editor/modeling/operations/operation_command.hpp>
+#include <editor/modeling/runtime/component_orientation.hpp>
 #include <editor/modeling/runtime/repeat_last_action.hpp>
 #include <editor/modeling/runtime/runtime_command.hpp>
 #include <editor/modeling/runtime/session.hpp>
@@ -103,6 +104,145 @@ quader_poly::Transform3 to_runtime(const ModelingTransform3 &transform) {
       .y_axis = to_runtime(transform.y_axis),
       .z_axis = to_runtime(transform.z_axis),
       .origin = to_runtime(transform.origin),
+  };
+}
+
+std::optional<glm::dmat3> normalized_orientation_basis(
+    const quader_poly::Transform3 &orientation) {
+  constexpr double kOrientationEpsilon = 0.000001;
+  glm::dmat3 basis{1.0};
+  const std::array<QVec3, 3> axes{
+      orientation.x_axis,
+      orientation.y_axis,
+      orientation.z_axis,
+  };
+  for (glm::length_t column = 0; column < 3; ++column) {
+    const QVec3 axis = axes[static_cast<std::size_t>(column)];
+    const glm::dvec3 exact_axis{axis.x, axis.y, axis.z};
+    const double axis_length = glm::length(exact_axis);
+    if (!std::isfinite(axis_length) || axis_length <= kOrientationEpsilon) {
+      return std::nullopt;
+    }
+    basis[column] = exact_axis / axis_length;
+  }
+
+  const double determinant = glm::determinant(basis);
+  if (!std::isfinite(determinant) ||
+      std::abs(determinant) <= kOrientationEpsilon) {
+    return std::nullopt;
+  }
+  return basis;
+}
+
+std::optional<ModelingTransform3>
+modeling_orientation_from_world_matrix(const QMat4 &world_matrix) {
+  if (!scene_matrix_is_finite(world_matrix)) {
+    return std::nullopt;
+  }
+
+  const glm::mat4 world = to_glm(world_matrix);
+  const quader_poly::Transform3 exact_world_basis{
+      .x_axis = from_glm(glm::vec3{world[0]}),
+      .y_axis = from_glm(glm::vec3{world[1]}),
+      .z_axis = from_glm(glm::vec3{world[2]}),
+  };
+  const std::optional<glm::dmat3> normalized =
+      normalized_orientation_basis(exact_world_basis);
+  if (!normalized.has_value()) {
+    return std::nullopt;
+  }
+  return ModelingTransform3{
+      .x_axis = from_glm(glm::vec3{(*normalized)[0]}),
+      .y_axis = from_glm(glm::vec3{(*normalized)[1]}),
+      .z_axis = from_glm(glm::vec3{(*normalized)[2]}),
+  };
+}
+
+std::optional<QVec3> remap_local_move_delta(
+    QVec3 recorded_world_delta,
+    const quader_poly::Transform3 &recorded_orientation,
+    const ModelingTransform3 &current_orientation) {
+  const std::optional<glm::dmat3> recorded_basis =
+      normalized_orientation_basis(recorded_orientation);
+  const std::optional<glm::dmat3> current_basis =
+      normalized_orientation_basis(to_runtime(current_orientation));
+  if (!recorded_basis.has_value() || !current_basis.has_value()) {
+    return std::nullopt;
+  }
+
+  // Exact displayed local directions need not be orthogonal after a rotated
+  // child is composed through non-uniform scale. Recover logical coordinates
+  // with the full inverse rather than treating dot products as an inverse.
+  const glm::dvec3 world_delta{recorded_world_delta.x,
+                               recorded_world_delta.y,
+                               recorded_world_delta.z};
+  const glm::dvec3 logical_local_delta =
+      glm::inverse(*recorded_basis) * world_delta;
+  const glm::dvec3 next_world_delta =
+      *current_basis * logical_local_delta;
+  const QVec3 remapped{static_cast<float>(next_world_delta.x),
+                       static_cast<float>(next_world_delta.y),
+                       static_cast<float>(next_world_delta.z)};
+  return std::isfinite(remapped.x) && std::isfinite(remapped.y) &&
+                 std::isfinite(remapped.z)
+             ? std::optional<QVec3>{remapped}
+             : std::nullopt;
+}
+
+std::optional<ModelingTransform3> modeling_component_world_orientation(
+    const quader_poly::Transform3 &local_orientation,
+    const QMat4 &world_matrix) {
+  constexpr float kOrientationEpsilon = 0.000001F;
+  if (!scene_matrix_is_finite(world_matrix)) {
+    return std::nullopt;
+  }
+
+  const glm::mat3 linear{to_glm(world_matrix)};
+  const float determinant = glm::determinant(linear);
+  if (!std::isfinite(determinant) ||
+      std::abs(determinant) <= kOrientationEpsilon) {
+    return std::nullopt;
+  }
+
+  glm::vec3 z_axis = glm::transpose(glm::inverse(linear)) *
+                     to_glm(local_orientation.z_axis);
+  if (determinant < 0.0F) {
+    z_axis = -z_axis;
+  }
+  const float z_length = glm::length(z_axis);
+  if (!std::isfinite(z_length) || z_length <= kOrientationEpsilon) {
+    return std::nullopt;
+  }
+  z_axis /= z_length;
+
+  glm::vec3 x_axis = linear * to_glm(local_orientation.x_axis);
+  x_axis -= z_axis * glm::dot(x_axis, z_axis);
+  float x_length = glm::length(x_axis);
+  if (!std::isfinite(x_length) || x_length <= kOrientationEpsilon) {
+    if (const std::optional<glm::mat3> object_basis =
+            try_scene_pure_world_rotation_basis(world_matrix)) {
+      x_axis = (*object_basis)[0] -
+               z_axis * glm::dot((*object_basis)[0], z_axis);
+      x_length = glm::length(x_axis);
+    }
+  }
+  if (!std::isfinite(x_length) || x_length <= kOrientationEpsilon) {
+    return std::nullopt;
+  }
+  x_axis /= x_length;
+
+  glm::vec3 y_axis = glm::cross(z_axis, x_axis);
+  const float y_length = glm::length(y_axis);
+  if (!std::isfinite(y_length) || y_length <= kOrientationEpsilon) {
+    return std::nullopt;
+  }
+  y_axis /= y_length;
+  x_axis = glm::normalize(glm::cross(y_axis, z_axis));
+
+  return ModelingTransform3{
+      .x_axis = from_glm(x_axis),
+      .y_axis = from_glm(y_axis),
+      .z_axis = from_glm(z_axis),
   };
 }
 
@@ -662,6 +802,12 @@ to_runtime(ModelingTransformOperation operation) {
     return quader_editor_core::TransformDragOperation::Inset;
   }
   return quader_editor_core::TransformDragOperation::Transform;
+}
+
+quader_editor_core::TransformSpace to_runtime(ModelingTransformSpace space) {
+  return space == ModelingTransformSpace::Local
+             ? quader_editor_core::TransformSpace::Local
+             : quader_editor_core::TransformSpace::Global;
 }
 
 quader_editor_core::ViewportFlipOrientation
@@ -1338,6 +1484,46 @@ public:
     return placement.accept();
   }
 
+  DocumentCommandResult rotate_scene_selection_by_local_delta(
+      quader_editor_core::TransformAxis axis, double angle_degrees,
+      std::string label) {
+    SceneTransformDragService placement;
+    if (!placement.begin(scene_, selection_center().value_or(QVec3{}), true,
+                         std::move(label),
+                         scene_selection_display_from_scene(), &assets_)) {
+      return document_command_invalid_request_result(
+          "Scene local rotation could not begin.");
+    }
+    const double angle_radians = angle_degrees * std::acos(-1.0) / 180.0;
+    const DocumentCommandResult transformed =
+        placement.preview_local_rotation_delta(
+            scene_, quader_editor_core::rotation_axis_vector(axis) *
+                        static_cast<float>(angle_radians));
+    if (!transformed.ok) {
+      (void)placement.cancel();
+      return transformed;
+    }
+    return placement.accept();
+  }
+
+  DocumentCommandResult scale_scene_selection_by_local_delta(
+      QVec3 scale, std::string label) {
+    SceneTransformDragService placement;
+    if (!placement.begin(scene_, selection_center().value_or(QVec3{}), true,
+                         std::move(label),
+                         scene_selection_display_from_scene(), &assets_)) {
+      return document_command_invalid_request_result(
+          "Scene local scale could not begin.");
+    }
+    const DocumentCommandResult transformed =
+        placement.preview_local_scale_delta(scene_, scale);
+    if (!transformed.ok) {
+      (void)placement.cancel();
+      return transformed;
+    }
+    return placement.accept();
+  }
+
   [[nodiscard]] ModelingSelectionMode selection_mode() const {
     if (sdk_selection_active()) {
       return sdk_projection_adapter_.selection_mode();
@@ -1456,6 +1642,83 @@ public:
     options.persistent_source_wire_object_id =
         persistent_tool_source_wire_object_id(selection_projection_view());
     return overlay_service_.selection_overlay_signature(runtime_, options);
+  }
+
+  [[nodiscard]] std::optional<ModelingTransform3>
+  selection_transform_orientation() const {
+    const ModelingSelectionMode mode = selection_mode();
+    if (mode == ModelingSelectionMode::Object ||
+        mode == ModelingSelectionMode::Group) {
+      const EntityId active = scene_.primary_selection();
+      if (active == kInvalidEntityId || !scene_.exists(active)) {
+        return std::nullopt;
+      }
+      if (const std::optional<int> object_id =
+              object_registry_.modeling_object_for_entity(active)) {
+        const std::optional<QMat4> display_world =
+            modeling_object_world_transform(*object_id);
+        return display_world.has_value()
+                   ? modeling_orientation_from_world_matrix(*display_world)
+                   : std::nullopt;
+      }
+
+      QMat4 display_world = scene_.world_transform_matrix(active);
+      const ModelingInstanceEditScope edit_scope =
+          instance_edit_scope_provider_ ? instance_edit_scope_provider_()
+                                        : ModelingInstanceEditScope{};
+      if (edit_scope.definition != kInvalidEntityId &&
+          scene_.containing_instance_definition(active) ==
+              edit_scope.definition) {
+        display_world = scene_transform_multiply(
+            scene_selection_display_from_scene(), display_world);
+      }
+      return modeling_orientation_from_world_matrix(display_world);
+    }
+
+    const quader_editor_core::EditorSession &projection =
+        selection_projection_view();
+    const quader_editor_core::ActiveSelection active =
+        projection.active_selection();
+    if (!active.has_active || active.object_id < 0) {
+      return std::nullopt;
+    }
+    const auto object = std::ranges::find_if(
+        projection.objects(), [&](const quader_editor_core::PolygonObject &item) {
+          return item.id == active.object_id;
+        });
+    if (object == projection.objects().end()) {
+      return std::nullopt;
+    }
+
+    std::optional<quader_poly::Transform3> local_orientation;
+    switch (active.kind) {
+    case quader_editor_core::ActiveSelectionKind::Vertex:
+      local_orientation =
+          quader_editor_core::component_vertex_local_orientation(
+              object->document.read(), active.vertex_id);
+      break;
+    case quader_editor_core::ActiveSelectionKind::Edge:
+      local_orientation = quader_editor_core::component_edge_local_orientation(
+          object->document.read(), active.edge);
+      break;
+    case quader_editor_core::ActiveSelectionKind::Face:
+      local_orientation = quader_editor_core::component_face_local_orientation(
+          object->document.read(), active.face_id);
+      break;
+    case quader_editor_core::ActiveSelectionKind::Object:
+    case quader_editor_core::ActiveSelectionKind::None:
+      return std::nullopt;
+    }
+    if (!local_orientation.has_value()) {
+      return std::nullopt;
+    }
+
+    const std::optional<QMat4> world =
+        modeling_object_world_transform(active.object_id);
+    return world.has_value()
+               ? modeling_component_world_orientation(*local_orientation,
+                                                       *world)
+               : std::nullopt;
   }
 
   [[nodiscard]] ViewportOverlayFrame
@@ -3061,6 +3324,22 @@ public:
       return {false, false,
               "Select something before repeating the last transform."};
     }
+    QVec3 replay_move_delta = action.move_delta;
+    if (action.tool == quader_editor_core::ViewportInteractionTool::Move &&
+        action.space == quader_editor_core::TransformSpace::Local) {
+      const std::optional<ModelingTransform3> current_orientation =
+          selection_transform_orientation();
+      const std::optional<QVec3> remapped =
+          current_orientation.has_value()
+              ? remap_local_move_delta(action.move_delta, action.orientation,
+                                       *current_orientation)
+              : std::nullopt;
+      if (!remapped.has_value()) {
+        return {false, false,
+                "Could not resolve the active local transform orientation."};
+      }
+      replay_move_delta = *remapped;
+    }
     if (selection_mode() == ModelingSelectionMode::Object ||
         selection_mode() == ModelingSelectionMode::Group) {
       bool duplicated = false;
@@ -3081,24 +3360,33 @@ public:
       if (action.tool ==
           quader_editor_core::ViewportInteractionTool::Move) {
         transformed = translate_scene_selection_by_world_delta(
-            action.move_delta, "Repeat Move");
+            replay_move_delta, "Repeat Move");
       } else {
         if (action.tool ==
             quader_editor_core::ViewportInteractionTool::Rotate) {
-          const quader_poly::Transform3 rotation =
-              quader_editor_core::rotation_transform(
-                  action.axis,
-                  action.rotate_angle_degrees * std::acos(-1.0) / 180.0);
-          transformed = transform_scene_selection_by_world_delta(
-              world_affine_from_transform(rotation, action.pivot),
-              "Repeat Rotate");
+          if (action.space == quader_editor_core::TransformSpace::Local) {
+            transformed = rotate_scene_selection_by_local_delta(
+                action.axis, action.rotate_angle_degrees, "Repeat Rotate");
+          } else {
+            const quader_poly::Transform3 rotation =
+                quader_editor_core::rotation_transform(
+                    action.axis,
+                    action.rotate_angle_degrees * std::acos(-1.0) / 180.0);
+            transformed = transform_scene_selection_by_world_delta(
+                world_affine_from_transform(rotation, action.pivot),
+                "Repeat Rotate");
+          }
         } else if (action.tool ==
                    quader_editor_core::ViewportInteractionTool::Scale) {
-          transformed = transform_scene_selection_by_world_delta(
-              world_affine_from_transform(
-                  quader_editor_core::scale_transform(action.scale),
-                  action.pivot),
-              "Repeat Scale");
+          transformed = action.space == quader_editor_core::TransformSpace::Local
+                            ? scale_scene_selection_by_local_delta(
+                                  action.scale, "Repeat Scale")
+                            : transform_scene_selection_by_world_delta(
+                                  world_affine_from_transform(
+                                      quader_editor_core::scale_transform(
+                                          action.scale),
+                                      action.pivot),
+                                  "Repeat Scale");
         } else {
           transformed = document_command_invalid_request_result(
               "Unsupported repeat transform tool.");
@@ -3123,7 +3411,7 @@ public:
 
       std::string message;
       const std::vector<quader_editor_core::ObjectLocalOffset> offsets =
-          local_offsets_for_selected_objects(action.move_delta, message);
+          local_offsets_for_selected_objects(replay_move_delta, message);
       if (offsets.empty()) {
         (void)cancel_transform_preview();
         return {false, false, message};
@@ -3167,14 +3455,18 @@ public:
     replay_drag.tool = action.tool;
     replay_drag.operation = action.operation;
     replay_drag.axis = action.axis;
+    replay_drag.space = action.space;
+    replay_drag.orientation = action.orientation;
     replay_drag.pivot = action.pivot;
     replay_drag.rotate.active =
         action.tool == quader_editor_core::ViewportInteractionTool::Rotate;
     replay_drag.rotate.axis = action.axis;
+    replay_drag.rotate.orientation = action.orientation;
     replay_drag.rotate.preview_angle_degrees = action.rotate_angle_degrees;
     replay_drag.scale.active =
         action.tool == quader_editor_core::ViewportInteractionTool::Scale;
     replay_drag.scale.axis = action.axis;
+    replay_drag.scale.orientation = action.orientation;
     replay_drag.scale.preview_scale = action.scale;
 
     const ModelingCommandResult update =
@@ -3465,15 +3757,20 @@ public:
     drag.tool = to_runtime(transform.tool);
     drag.operation = to_runtime(transform.operation);
     drag.axis = to_runtime(transform.axis);
+    drag.space = to_runtime(transform.space);
+    drag.orientation = to_runtime(transform.orientation);
     drag.pivot = to_runtime(transform.pivot);
     drag.move.active = transform.tool == ModelingTransformTool::Move;
     drag.move.axis = drag.axis;
+    drag.move.orientation = drag.orientation;
     drag.move.preview_delta = to_runtime(transform.move_delta);
     drag.rotate.active = transform.tool == ModelingTransformTool::Rotate;
     drag.rotate.axis = drag.axis;
+    drag.rotate.orientation = drag.orientation;
     drag.rotate.preview_angle_degrees = transform.rotate_angle_degrees;
     drag.scale.active = transform.tool == ModelingTransformTool::Scale;
     drag.scale.axis = drag.axis;
+    drag.scale.orientation = drag.orientation;
     drag.scale.preview_scale = to_runtime(transform.scale);
 
     const quader_editor_core::EditorSession projection =
@@ -6001,9 +6298,10 @@ private:
     } else if (drag.tool ==
                quader_editor_core::ViewportInteractionTool::Rotate) {
       const quader_poly::Transform3 transform =
-          quader_editor_core::rotation_transform(
+          quader_editor_core::oriented_rotation_transform(
               drag.axis, drag.rotate.preview_angle_degrees *
-                             std::acos(-1.0) / 180.0);
+                             std::acos(-1.0) / 180.0,
+              drag.orientation);
       world_affine = world_affine_from_transform(
           transform, from_runtime(drag.pivot));
       if (drag.operation ==
@@ -6013,7 +6311,8 @@ private:
     } else if (drag.tool ==
                quader_editor_core::ViewportInteractionTool::Scale) {
       world_affine = world_affine_from_transform(
-          quader_editor_core::scale_transform(drag.scale.preview_scale),
+          quader_editor_core::oriented_scale_transform(
+              drag.scale.preview_scale, drag.orientation),
           from_runtime(drag.pivot));
       if (drag.operation ==
           quader_editor_core::TransformDragOperation::Inset) {
@@ -6348,6 +6647,11 @@ std::vector<EntityId> ModelingSessionService::box_pick_object_entities(
 
 std::optional<QVec3> ModelingSessionService::selection_center() const {
   return impl_->selection_center();
+}
+
+std::optional<ModelingTransform3>
+ModelingSessionService::selection_transform_orientation() const {
+  return impl_->selection_transform_orientation();
 }
 
 std::optional<SceneBounds> ModelingSessionService::selection_bounds() const {

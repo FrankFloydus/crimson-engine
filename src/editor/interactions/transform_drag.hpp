@@ -81,6 +81,14 @@ enum class TransformDragOperation {
 };
 
 /**
+ * Enumerates the coordinate space used by an interactive transform.
+ */
+enum class TransformSpace {
+  Global,
+  Local,
+};
+
+/**
  * Enumerates TransformSnapLandmarkKind values used by the modeling layer.
  */
 enum class TransformSnapLandmarkKind {
@@ -106,6 +114,8 @@ struct TransformDragState {
         ViewportInteractionTool tool = ViewportInteractionTool::Select;
         TransformDragOperation operation = TransformDragOperation::Transform;
         TransformAxis axis = TransformAxis::None;
+        TransformSpace space = TransformSpace::Global;
+        quader_poly::Transform3 orientation;
         quader::QVec3 pivot;
 	bool scene_transform_preview_eligible = false;
 	TransformSnapTarget snap_target;

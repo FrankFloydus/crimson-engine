@@ -221,6 +221,10 @@ example, `Align X Center`, `Activate Move Tool`, and `Bridge Selected Edges`).
 
 Current compiled defaults added with the scoped editor are:
 
+- `T` toggles transform tools between global and local orientation while the
+  viewport is focused and no navigation, modal tool, transform drag, or
+  operation preview owns the interaction. `Shift+T` remains Apply Active
+  Material.
 - `H` hides selected visible objects/groups and `Alt+H` unhides hidden objects while an object/group
   selection scope is active. Quader does not yet own persistent component-hide state, so these do
   not pretend to hide individual vertices, edges, or faces.

@@ -43,6 +43,7 @@
 #include <span>
 #include <string>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -432,6 +433,138 @@ void expect_transform_near(const quader::TransformComponent &actual,
   EXPECT_NEAR(actual.scale.x, expected.scale.x, 0.001f);
   EXPECT_NEAR(actual.scale.y, expected.scale.y, 0.001f);
   EXPECT_NEAR(actual.scale.z, expected.scale.z, 0.001f);
+}
+
+void expect_vec3_near(quader::QVec3 actual, quader::QVec3 expected,
+                      float epsilon = 0.001f) {
+  EXPECT_NEAR(actual.x, expected.x, epsilon);
+  EXPECT_NEAR(actual.y, expected.y, epsilon);
+  EXPECT_NEAR(actual.z, expected.z, epsilon);
+}
+
+quader::QQuat canonical_quaternion(quader::QQuat value) {
+  value = quader::normalize(value);
+  if (value.w < 0.0f) {
+    value.x = -value.x;
+    value.y = -value.y;
+    value.z = -value.z;
+    value.w = -value.w;
+  }
+  return value;
+}
+
+quader::QQuat local_rotation_delta(const quader::TransformComponent &before,
+                                   const quader::TransformComponent &after) {
+  const quader::QQuat before_rotation =
+      quader::normalize(quader::quat_from_euler_radians(before.rotation_euler));
+  const quader::QQuat after_rotation =
+      quader::normalize(quader::quat_from_euler_radians(after.rotation_euler));
+  const quader::QQuat inverse_before{-before_rotation.x, -before_rotation.y,
+                                     -before_rotation.z, before_rotation.w};
+  return canonical_quaternion(inverse_before * after_rotation);
+}
+
+void expect_quaternion_near(quader::QQuat actual, quader::QQuat expected,
+                            float epsilon = 0.001f) {
+  actual = canonical_quaternion(actual);
+  expected = canonical_quaternion(expected);
+  EXPECT_NEAR(actual.x, expected.x, epsilon);
+  EXPECT_NEAR(actual.y, expected.y, epsilon);
+  EXPECT_NEAR(actual.z, expected.z, epsilon);
+  EXPECT_NEAR(actual.w, expected.w, epsilon);
+}
+
+quader::QVec3 gizmo_axis_world_direction(
+    const quader_editor_core::TransformGizmoAxisPrimitive &axis) {
+  return quader::normalize_or_zero(axis.world_tip - axis.world_start);
+}
+
+quader::QuaderViewportCamera transform_drag_test_camera() {
+  return {
+      .orthographic = true,
+      .origin = {0.0f, 0.0f, 10.0f},
+      .x_axis = {1.0f, 0.0f, 0.0f},
+      .y_axis = {0.0f, 1.0f, 0.0f},
+      .z_axis = {0.0f, 0.0f, 1.0f},
+      .viewport_size = {800.0f, 600.0f},
+      .orthographic_size = 12.0,
+      .fov_degrees = 60.0,
+  };
+}
+
+quader::QuaderRay transform_drag_test_ray() {
+  return {
+      .origin = {0.0f, 0.0f, 10.0f},
+      .direction = {0.0f, 0.0f, -1.0f},
+  };
+}
+
+quader::QuaderTransformDragPreview perform_local_x_scene_drag(
+    ViewportInteractionHarness &harness, quader::QuaderTransformTool tool,
+    quader::QVec2 update_position) {
+  const std::optional<quader::QuaderTransform3> orientation =
+      harness.editor.query().selection_transform_orientation();
+  const std::optional<quader::QVec3> pivot =
+      harness.editor.query().selection_transform_pivot();
+  EXPECT_TRUE(orientation.has_value());
+  EXPECT_TRUE(pivot.has_value());
+  if (!orientation.has_value() || !pivot.has_value()) {
+    return {};
+  }
+
+  const bool scale = tool == quader::QuaderTransformTool::Scale;
+  const quader::QVec2 screen_pivot{100.0f, 100.0f};
+  const quader::QVec2 screen_position =
+      scale ? screen_pivot : quader::QVec2{120.0f, 100.0f};
+  const quader::QVec2 screen_tip =
+      scale ? quader::QVec2{160.0f, 100.0f}
+            : quader::QVec2{120.0f, 100.0f};
+  const quader::QuaderViewportCamera camera = transform_drag_test_camera();
+  const quader::QuaderRay ray = transform_drag_test_ray();
+  const quader::QuaderApiResult<quader::QuaderTransformDragPreview> begin =
+      harness.editor.modeling().begin_transform_drag({
+          .tool = tool,
+          .operation = quader::QuaderTransformOperation::Transform,
+          .axis = quader::QuaderTransformAxis::X,
+          .space = quader::QuaderTransformSpace::Local,
+          .orientation = *orientation,
+          .pivot = *pivot,
+          .screen_position = screen_position,
+          .screen_pivot = screen_pivot,
+          .screen_tip = screen_tip,
+          .has_world_direction = true,
+          .world_direction = orientation->x_axis,
+          .ray = ray,
+          .camera = camera,
+          .grid_size = 1.0,
+          .vertex_snap_radius = 0.0,
+          .grid_snap_enabled = false,
+          .rotation_snap_degrees = 0.0,
+      });
+  EXPECT_TRUE(begin.ok()) << begin.error_message();
+  if (!begin.ok()) {
+    return {};
+  }
+
+  const quader::QuaderApiResult<quader::QuaderTransformDragPreview> update =
+      harness.editor.modeling().update_transform_drag({
+          .screen_position = update_position,
+          .ray = ray,
+          .camera = camera,
+          .grid_size = 1.0,
+          .vertex_snap_radius = 0.0,
+          .grid_snap_enabled = false,
+          .rotation_snap_degrees = 0.0,
+      });
+  EXPECT_TRUE(update.ok()) << update.error_message();
+  if (!update.ok()) {
+    return {};
+  }
+  const quader::QuaderApiResult<quader::QuaderTransformDragPreview> commit =
+      harness.editor.modeling().commit_transform_drag();
+  EXPECT_TRUE(commit.ok()) << commit.error_message();
+  EXPECT_TRUE(commit.changed());
+  return update.value();
 }
 
 quader_editor_core::TransformGizmoFrameInput
@@ -2726,6 +2859,528 @@ TEST(ViewportInteractionControllerTests, MoveRotateAndScaleGizmosDragSelectedObj
 }
 
 TEST(ViewportInteractionControllerTests,
+     UniformScaleGizmoShrinksFreshGridSizedMeshBelowCreationSize) {
+  ViewportInteractionHarness harness;
+  const quader::QuaderApiResult<quader::QuaderModelingObjectRef> created =
+      harness.editor.modeling().create_box(
+          quader::QuaderBounds{
+              .min = {-0.5f, -0.5f, -0.5f},
+              .max = {0.5f, 0.5f, 0.5f},
+          },
+          "Grid Sized Scale Regression Box");
+  ASSERT_TRUE(created.ok()) << created.error_message();
+  const quader::QuaderModelingObjectRef box = created.value();
+  ASSERT_TRUE(harness.editor.selection().select_object(box).ok());
+  ASSERT_TRUE(
+      harness.editor.tools().activate(quader::ViewportToolId::Scale).ok());
+  harness.router.set_active_tool(quader::ViewportToolId::Scale);
+
+  (void)harness.controller.handle_before_active_tool(harness.editor,
+                                                     harness.frame());
+  const quader_editor_core::TransformGizmoFrame *frame =
+      harness.controller.transform_gizmo_frame();
+  ASSERT_NE(frame, nullptr);
+
+  const quader::TransformComponent before =
+      *harness.session.scene().transform(box.entity);
+  const quader::QVec2 center_handle = frame->info.screen_pivot;
+  press_update_release_gizmo(harness, center_handle,
+                             center_handle + quader::QVec2{-48.0f, 0.0f});
+
+  const quader::TransformComponent after =
+      *harness.session.scene().transform(box.entity);
+  EXPECT_LT(after.scale.x, before.scale.x);
+  EXPECT_LT(after.scale.y, before.scale.y);
+  EXPECT_LT(after.scale.z, before.scale.z);
+  EXPECT_NEAR(after.scale.x, after.scale.y, 0.001f);
+  EXPECT_NEAR(after.scale.y, after.scale.z, 0.001f);
+}
+
+TEST(ViewportInteractionControllerTests,
+     GlobalAndLocalMoveGizmosUseWorldSingleMeshAndActiveMeshAxes) {
+  ViewportInteractionHarness harness;
+  ASSERT_TRUE(harness.settings.set_bool_value(
+      quader::ViewportBoolSettingId::GridSnap, false));
+  ASSERT_TRUE(harness.settings.set_bool_value(
+      quader::ViewportBoolSettingId::VertexSnap, false));
+
+  const quader::QuaderModelingObjectRef active =
+      create_box_at(harness, {-2.0f, 0.0f, 0.0f});
+  const quader::QuaderModelingObjectRef other =
+      create_box_at(harness, {3.0f, 0.0f, 0.0f});
+  quader::TransformComponent active_transform;
+  active_transform.position = {-2.0f, 0.0f, 0.0f};
+  active_transform.rotation_euler = {0.0f, 0.0f, 1.57079632679f};
+  quader::TransformComponent other_transform;
+  other_transform.position = {3.0f, 0.0f, 0.0f};
+  other_transform.rotation_euler = {0.25f, -0.4f, -0.65f};
+  ASSERT_TRUE(
+      harness.session.scene().set_transform(active.entity, active_transform));
+  ASSERT_TRUE(
+      harness.session.scene().set_transform(other.entity, other_transform));
+  ASSERT_TRUE(harness.editor.selection().select_object(active).ok());
+  ASSERT_TRUE(
+      harness.editor.tools().activate(quader::ViewportToolId::Move).ok());
+  harness.router.set_active_tool(quader::ViewportToolId::Move);
+
+  ASSERT_EQ(harness.editor.viewports().transform_space(),
+            quader::QuaderTransformSpace::Global);
+  (void)harness.controller.handle_before_active_tool(harness.editor,
+                                                     harness.frame());
+  const quader_editor_core::TransformGizmoFrame *frame =
+      harness.controller.transform_gizmo_frame();
+  ASSERT_NE(frame, nullptr);
+  const quader_editor_core::TransformGizmoAxisPrimitive *x_axis =
+      find_axis(*frame, quader_editor_core::TransformAxis::X);
+  ASSERT_NE(x_axis, nullptr);
+  expect_vec3_near(gizmo_axis_world_direction(*x_axis),
+                   {1.0f, 0.0f, 0.0f});
+
+  const quader::QuaderApiVoidResult local_space =
+      harness.editor.viewports().set_transform_space(
+          quader::QuaderTransformSpace::Local);
+  ASSERT_TRUE(local_space.ok()) << local_space.error_message();
+  ASSERT_TRUE(local_space.changed());
+  const std::optional<quader::QuaderTransform3> active_orientation =
+      harness.editor.query().selection_transform_orientation();
+  ASSERT_TRUE(active_orientation.has_value());
+
+  (void)harness.controller.handle_before_active_tool(harness.editor,
+                                                     harness.frame());
+  frame = harness.controller.transform_gizmo_frame();
+  ASSERT_NE(frame, nullptr);
+  x_axis = find_axis(*frame, quader_editor_core::TransformAxis::X);
+  ASSERT_NE(x_axis, nullptr);
+  expect_vec3_near(gizmo_axis_world_direction(*x_axis),
+                   active_orientation->x_axis);
+  EXPECT_GT(std::abs(active_orientation->x_axis.y), 0.999f);
+  EXPECT_NEAR(active_orientation->x_axis.x, 0.0f, 0.001f);
+
+  const auto drag_along_axis = [&](const auto &axis) {
+    const quader::QVec2 projected = axis.screen_tip - axis.screen_start;
+    const float projected_length =
+        std::sqrt(projected.x * projected.x + projected.y * projected.y);
+    ASSERT_GT(projected_length, 1.0f);
+    const quader::QVec2 screen_direction = projected * (1.0f / projected_length);
+    press_update_release_gizmo(harness, axis.screen_tip,
+                               axis.screen_tip + screen_direction * 120.0f);
+  };
+
+  const quader::TransformComponent single_before =
+      *harness.session.scene().transform(active.entity);
+  drag_along_axis(*x_axis);
+  const quader::TransformComponent single_after =
+      *harness.session.scene().transform(active.entity);
+  const quader::QVec3 single_delta =
+      single_after.position - single_before.position;
+  ASSERT_GT(quader::length(single_delta), 0.01f);
+  EXPECT_GT(quader::dot(quader::normalize(single_delta),
+                        active_orientation->x_axis),
+            0.999f);
+  ASSERT_TRUE(harness.editor.history().undo().ok());
+  expect_transform_near(*harness.session.scene().transform(active.entity),
+                        single_before);
+
+  ASSERT_TRUE(harness.editor.selection()
+                  .select_objects({other.entity, active.entity}, active.entity)
+                  .ok());
+  ASSERT_EQ(harness.session.scene().primary_selection(), active.entity);
+  const std::vector<quader::EntityId> selected_before =
+      harness.session.scene().selected_entities();
+  const quader::TransformComponent active_multi_before =
+      *harness.session.scene().transform(active.entity);
+  const quader::TransformComponent other_multi_before =
+      *harness.session.scene().transform(other.entity);
+
+  (void)harness.controller.handle_before_active_tool(harness.editor,
+                                                     harness.frame());
+  frame = harness.controller.transform_gizmo_frame();
+  ASSERT_NE(frame, nullptr);
+  x_axis = find_axis(*frame, quader_editor_core::TransformAxis::X);
+  ASSERT_NE(x_axis, nullptr);
+  expect_vec3_near(gizmo_axis_world_direction(*x_axis),
+                   active_orientation->x_axis);
+  drag_along_axis(*x_axis);
+
+  const quader::TransformComponent active_multi_after =
+      *harness.session.scene().transform(active.entity);
+  const quader::TransformComponent other_multi_after =
+      *harness.session.scene().transform(other.entity);
+  const quader::QVec3 active_delta =
+      active_multi_after.position - active_multi_before.position;
+  const quader::QVec3 other_delta =
+      other_multi_after.position - other_multi_before.position;
+  ASSERT_GT(quader::length(active_delta), 0.01f);
+  expect_vec3_near(other_delta, active_delta);
+  EXPECT_GT(quader::dot(quader::normalize(active_delta),
+                        active_orientation->x_axis),
+            0.999f);
+  EXPECT_EQ(harness.session.scene().selected_entities(), selected_before);
+  EXPECT_EQ(harness.session.scene().primary_selection(), active.entity);
+  EXPECT_EQ(harness.editor.selection().summary().active_object_id,
+            active.modeling_object_id);
+
+  ASSERT_TRUE(harness.editor.history().undo().ok());
+  expect_transform_near(*harness.session.scene().transform(active.entity),
+                        active_multi_before);
+  expect_transform_near(*harness.session.scene().transform(other.entity),
+                        other_multi_before);
+  EXPECT_EQ(harness.session.scene().selected_entities(), selected_before);
+  EXPECT_EQ(harness.session.scene().primary_selection(), active.entity);
+
+  ASSERT_TRUE(harness.editor.history().redo().ok());
+  expect_transform_near(*harness.session.scene().transform(active.entity),
+                        active_multi_after);
+  expect_transform_near(*harness.session.scene().transform(other.entity),
+                        other_multi_after);
+  EXPECT_EQ(harness.session.scene().selected_entities(), selected_before);
+  EXPECT_EQ(harness.session.scene().primary_selection(), active.entity);
+}
+
+TEST(ViewportInteractionControllerTests,
+     LocalMeshGizmoAxesFollowExactRenderedDirectionsThroughScaledHierarchy) {
+  ViewportInteractionHarness harness;
+  const quader::QuaderModelingObjectRef box = create_unit_box(harness);
+  const quader::QuaderApiResult<quader::QuaderEntityRef> parent =
+      harness.editor.scene().create_entity({
+          .name = "Nonuniform Local Transform Parent",
+          .kind = quader::QuaderEntityKind::Generic,
+          .transform = {
+              .rotation_euler = {0.31f, -0.27f, 0.42f},
+              .scale = {2.75f, 0.65f, 1.8f},
+          },
+      });
+  ASSERT_TRUE(parent.ok()) << parent.error_message();
+  ASSERT_TRUE(
+      harness.editor.scene().reparent(box.entity, parent.value().id, false).ok());
+  ASSERT_TRUE(harness.editor.scene()
+                  .set_transform(box.entity,
+                                 {
+                                     .rotation_euler = {0.18f, -0.23f, 0.71f},
+                                     .scale = {1.4f, 0.8f, 2.1f},
+                                 })
+                  .ok());
+  ASSERT_TRUE(harness.editor.selection().select_object(box).ok());
+  ASSERT_TRUE(harness.editor.viewports()
+                  .set_transform_space(quader::QuaderTransformSpace::Local)
+                  .ok());
+  ASSERT_TRUE(
+      harness.editor.tools().activate(quader::ViewportToolId::Move).ok());
+  harness.router.set_active_tool(quader::ViewportToolId::Move);
+
+  const quader::QMat4 rendered_world =
+      harness.session.scene().world_transform_matrix(box.entity);
+  const std::array expected_directions{
+      std::pair{quader_editor_core::TransformAxis::X,
+                quader::normalize_or_zero(quader::transform_vector(
+                    rendered_world, {1.0f, 0.0f, 0.0f}))},
+      std::pair{quader_editor_core::TransformAxis::Y,
+                quader::normalize_or_zero(quader::transform_vector(
+                    rendered_world, {0.0f, 1.0f, 0.0f}))},
+      std::pair{quader_editor_core::TransformAxis::Z,
+                quader::normalize_or_zero(quader::transform_vector(
+                    rendered_world, {0.0f, 0.0f, 1.0f}))},
+  };
+  EXPECT_GT(std::abs(quader::dot(expected_directions[0].second,
+                                 expected_directions[1].second)),
+            0.1f);
+
+  (void)harness.controller.handle_before_active_tool(harness.editor,
+                                                     harness.frame());
+  const quader_editor_core::TransformGizmoFrame *frame =
+      harness.controller.transform_gizmo_frame();
+  ASSERT_NE(frame, nullptr);
+  for (const auto &[axis, expected] : expected_directions) {
+    const quader_editor_core::TransformGizmoAxisPrimitive *primitive =
+        find_axis(*frame, axis);
+    ASSERT_NE(primitive, nullptr);
+    expect_vec3_near(gizmo_axis_world_direction(*primitive), expected);
+  }
+
+  ASSERT_TRUE(
+      harness.editor.tools().activate(quader::ViewportToolId::Rotate).ok());
+  harness.router.set_active_tool(quader::ViewportToolId::Rotate);
+  (void)harness.controller.handle_before_active_tool(harness.editor,
+                                                     harness.frame());
+  frame = harness.controller.transform_gizmo_frame();
+  ASSERT_NE(frame, nullptr);
+  for (const auto &[axis, expected] : expected_directions) {
+    const quader_editor_core::TransformGizmoRingSegmentPrimitive *ring =
+        find_ring(*frame, axis);
+    ASSERT_NE(ring, nullptr);
+    const quader::QVec3 ring_radius =
+        quader::normalize_or_zero(ring->world_start - frame->info.pivot);
+    EXPECT_NEAR(quader::dot(ring_radius, expected), 0.0f, 0.001f);
+  }
+}
+
+TEST(ViewportInteractionControllerTests,
+     LocalMeshGizmoUsesEditedInstanceOccurrenceDisplayDirections) {
+  constexpr float kHalfPi = 1.57079632679f;
+  ViewportInteractionHarness harness;
+  const quader::QuaderModelingObjectRef member = create_unit_box(harness);
+  const quader::QuaderApiResult<quader::QuaderInstanceCreateResult> instance =
+      harness.editor.modeling().create_instance_from_selection();
+  ASSERT_TRUE(instance.ok()) << instance.error_message();
+  const quader::EntityId occurrence = instance.value().occurrence.root.id;
+  const quader::EntityId definition = instance.value().definition.root.id;
+  ASSERT_NE(occurrence, quader::kInvalidEntityId);
+  ASSERT_NE(definition, quader::kInvalidEntityId);
+
+  quader::TransformComponent definition_transform;
+  definition_transform.rotation_euler = {0.0f, 0.0f, kHalfPi};
+  definition_transform.scale = {2.0f, -3.0f, 0.5f};
+  quader::TransformComponent occurrence_transform;
+  occurrence_transform.rotation_euler = {0.0f, kHalfPi, 0.0f};
+  occurrence_transform.scale = {-1.5f, 4.0f, 2.0f};
+  quader::TransformComponent member_transform;
+  member_transform.rotation_euler = {kHalfPi, 0.0f, 0.0f};
+  member_transform.scale = {3.0f, 0.75f, -2.0f};
+  ASSERT_TRUE(harness.session.scene().set_transform(definition,
+                                                     definition_transform));
+  ASSERT_TRUE(harness.session.scene().set_transform(occurrence,
+                                                     occurrence_transform));
+  ASSERT_TRUE(
+      harness.session.scene().set_transform(member.entity, member_transform));
+  ASSERT_TRUE(harness.editor.modeling().enter_instance_edit(occurrence).ok());
+  ASSERT_TRUE(harness.editor.selection().select_object(member).ok());
+  ASSERT_TRUE(harness.editor.viewports()
+                  .set_transform_space(quader::QuaderTransformSpace::Local)
+                  .ok());
+  ASSERT_TRUE(
+      harness.editor.tools().activate(quader::ViewportToolId::Move).ok());
+  harness.router.set_active_tool(quader::ViewportToolId::Move);
+
+  const std::optional<quader::QuaderTransform3> orientation =
+      harness.editor.query().selection_transform_orientation();
+  ASSERT_TRUE(orientation.has_value());
+  const std::optional<quader::QMat4> inverse_definition =
+      quader::try_scene_matrix_inverse(
+          harness.session.scene().world_transform_matrix(definition));
+  ASSERT_TRUE(inverse_definition.has_value());
+  const quader::QMat4 display_world = quader::scene_transform_multiply(
+      harness.session.scene().world_transform_matrix(occurrence),
+      quader::scene_transform_multiply(
+          *inverse_definition,
+          harness.session.scene().world_transform_matrix(member.entity)));
+  const quader::QVec3 expected_y = quader::normalize_or_zero(
+      quader::transform_vector(display_world, {0.0f, 1.0f, 0.0f}));
+  expect_vec3_near(orientation->y_axis, expected_y);
+
+  (void)harness.controller.handle_before_active_tool(harness.editor,
+                                                     harness.frame());
+  const quader_editor_core::TransformGizmoFrame *frame =
+      harness.controller.transform_gizmo_frame();
+  ASSERT_NE(frame, nullptr);
+  const quader_editor_core::TransformGizmoAxisPrimitive *y_axis =
+      find_axis(*frame, quader_editor_core::TransformAxis::Y);
+  ASSERT_NE(y_axis, nullptr);
+  expect_vec3_near(gizmo_axis_world_direction(*y_axis), expected_y);
+}
+
+TEST(ViewportInteractionControllerTests,
+     RepeatLocalMoveUsesTrueInverseForNonorthogonalRecordedBasis) {
+  constexpr float kHalfPi = 1.57079632679f;
+  ViewportInteractionHarness harness;
+  const quader::QuaderModelingObjectRef recorded = create_unit_box(harness);
+  const quader::QuaderModelingObjectRef replayed = create_unit_box(harness);
+  const quader::QuaderApiResult<quader::QuaderEntityRef> recorded_parent =
+      harness.editor.scene().create_entity({
+          .name = "Repeat Nonorthogonal Parent",
+          .kind = quader::QuaderEntityKind::Generic,
+          .transform = {
+              .rotation_euler = {0.0f, 0.0f, 0.25f},
+              .scale = {3.0f, 0.5f, 1.0f},
+          },
+      });
+  ASSERT_TRUE(recorded_parent.ok()) << recorded_parent.error_message();
+  ASSERT_TRUE(harness.editor.scene()
+                  .reparent(recorded.entity, recorded_parent.value().id, false)
+                  .ok());
+  ASSERT_TRUE(harness.editor.scene()
+                  .set_transform(recorded.entity,
+                                 {
+                                     .position = {-1.0f, 0.0f, 0.0f},
+                                     .rotation_euler = {0.0f, 0.0f, 0.65f},
+                                 })
+                  .ok());
+  ASSERT_TRUE(harness.editor.scene()
+                  .set_transform(replayed.entity,
+                                 {
+                                     .position = {3.0f, 0.0f, 0.0f},
+                                     .rotation_euler = {0.0f, 0.0f, kHalfPi},
+                                 })
+                  .ok());
+  ASSERT_TRUE(harness.editor.selection().select_object(recorded).ok());
+  ASSERT_TRUE(harness.editor.viewports()
+                  .set_transform_space(quader::QuaderTransformSpace::Local)
+                  .ok());
+  const std::optional<quader::QuaderTransform3> recorded_orientation =
+      harness.editor.query().selection_transform_orientation();
+  ASSERT_TRUE(recorded_orientation.has_value());
+  EXPECT_GT(std::abs(quader::dot(recorded_orientation->x_axis,
+                                 recorded_orientation->y_axis)),
+            0.1f);
+
+  const quader::QuaderTransformDragPreview recorded_preview =
+      perform_local_x_scene_drag(harness, quader::QuaderTransformTool::Move,
+                                 {220.0f, 100.0f});
+  ASSERT_GT(quader::length(recorded_preview.move_delta), 0.01f);
+
+  ASSERT_TRUE(harness.editor.selection().select_object(replayed).ok());
+  const std::optional<quader::QuaderTransform3> replay_orientation =
+      harness.editor.query().selection_transform_orientation();
+  ASSERT_TRUE(replay_orientation.has_value());
+  const quader::TransformComponent before =
+      *harness.session.scene().transform(replayed.entity);
+  const quader::QuaderApiVoidResult repeated = harness.editor.commands().execute(
+      quader::quader_command::kEditRepeatLastAction);
+  ASSERT_TRUE(repeated.ok()) << repeated.error_message();
+  ASSERT_TRUE(repeated.changed());
+  const quader::TransformComponent after =
+      *harness.session.scene().transform(replayed.entity);
+
+  const float recorded_local_x_distance =
+      quader::dot(recorded_preview.move_delta, recorded_orientation->x_axis);
+  const quader::QVec3 expected_delta =
+      replay_orientation->x_axis * recorded_local_x_distance;
+  expect_vec3_near(after.position - before.position, expected_delta);
+  EXPECT_GT(std::abs(expected_delta.y), 0.01f);
+  EXPECT_NEAR(expected_delta.x, 0.0f, 0.001f);
+}
+
+TEST(ViewportInteractionControllerTests,
+     LocalMultiOffOriginMeshesRotateAndScaleInPlaceAlongEachAuthoredFrame) {
+  for (const quader::QuaderTransformTool tool : {
+           quader::QuaderTransformTool::Rotate,
+           quader::QuaderTransformTool::Scale,
+       }) {
+    SCOPED_TRACE(tool == quader::QuaderTransformTool::Rotate ? "rotate"
+                                                             : "scale");
+    ViewportInteractionHarness harness;
+    const quader::QuaderModelingObjectRef active =
+        create_box_at(harness, {-3.0f, 1.0f, 0.0f});
+    const quader::QuaderModelingObjectRef other =
+        create_box_at(harness, {4.0f, -2.0f, 0.0f});
+    quader::TransformComponent active_before;
+    active_before.position = {-3.0f, 1.0f, 0.0f};
+    active_before.rotation_euler = {0.0f, 0.0f, 1.57079632679f};
+    active_before.scale = {1.25f, 0.75f, 1.5f};
+    quader::TransformComponent other_before;
+    other_before.position = {4.0f, -2.0f, 0.0f};
+    other_before.rotation_euler = {0.35f, -0.5f, -0.7f};
+    other_before.scale = {0.6f, 1.4f, 2.0f};
+    ASSERT_TRUE(
+        harness.session.scene().set_transform(active.entity, active_before));
+    ASSERT_TRUE(
+        harness.session.scene().set_transform(other.entity, other_before));
+    const std::optional<quader::SceneBounds> active_bounds_before =
+        quader::entity_world_bounds(harness.session.scene(),
+                                    harness.session.assets(), active.entity);
+    const std::optional<quader::SceneBounds> other_bounds_before =
+        quader::entity_world_bounds(harness.session.scene(),
+                                    harness.session.assets(), other.entity);
+    ASSERT_TRUE(active_bounds_before.has_value());
+    ASSERT_TRUE(other_bounds_before.has_value());
+    const quader::QVec3 active_visible_pivot_before =
+        quader::bounds_center(*active_bounds_before);
+    const quader::QVec3 other_visible_pivot_before =
+        quader::bounds_center(*other_bounds_before);
+    EXPECT_GT(quader::length(active_visible_pivot_before -
+                             active_before.position),
+              0.1f);
+    EXPECT_GT(
+        quader::length(other_visible_pivot_before - other_before.position),
+        0.1f);
+    ASSERT_TRUE(harness.editor.selection()
+                    .select_objects({other.entity, active.entity}, active.entity)
+                    .ok());
+    ASSERT_TRUE(harness.editor.viewports()
+                    .set_transform_space(quader::QuaderTransformSpace::Local)
+                    .ok());
+    const std::vector<quader::EntityId> selected_before =
+        harness.session.scene().selected_entities();
+    ASSERT_EQ(harness.session.scene().primary_selection(), active.entity);
+
+    const quader::QuaderTransformDragPreview preview =
+        perform_local_x_scene_drag(
+            harness, tool,
+            tool == quader::QuaderTransformTool::Rotate
+                ? quader::QVec2{100.0f, 130.0f}
+                : quader::QVec2{220.0f, 100.0f});
+    const quader::TransformComponent active_after =
+        *harness.session.scene().transform(active.entity);
+    const quader::TransformComponent other_after =
+        *harness.session.scene().transform(other.entity);
+    const std::optional<quader::SceneBounds> active_bounds_after =
+        quader::entity_world_bounds(harness.session.scene(),
+                                    harness.session.assets(), active.entity);
+    const std::optional<quader::SceneBounds> other_bounds_after =
+        quader::entity_world_bounds(harness.session.scene(),
+                                    harness.session.assets(), other.entity);
+    ASSERT_TRUE(active_bounds_after.has_value());
+    ASSERT_TRUE(other_bounds_after.has_value());
+
+    expect_vec3_near(quader::bounds_center(*active_bounds_after),
+                     active_visible_pivot_before);
+    expect_vec3_near(quader::bounds_center(*other_bounds_after),
+                     other_visible_pivot_before);
+    if (tool == quader::QuaderTransformTool::Rotate) {
+      EXPECT_GT(std::abs(preview.rotate_angle_degrees), 1.0);
+      const quader::QQuat active_local_delta =
+          local_rotation_delta(active_before, active_after);
+      const quader::QQuat other_local_delta =
+          local_rotation_delta(other_before, other_after);
+      EXPECT_GT(std::abs(active_local_delta.x), 0.01f);
+      EXPECT_NEAR(active_local_delta.y, 0.0f, 0.001f);
+      EXPECT_NEAR(active_local_delta.z, 0.0f, 0.001f);
+      expect_quaternion_near(other_local_delta, active_local_delta);
+      expect_vec3_near(active_after.scale, active_before.scale);
+      expect_vec3_near(other_after.scale, other_before.scale);
+    } else {
+      ASSERT_GT(preview.scale.x, 1.01f);
+      EXPECT_NEAR(preview.scale.y, 1.0f, 0.001f);
+      EXPECT_NEAR(preview.scale.z, 1.0f, 0.001f);
+      expect_vec3_near(
+          active_after.scale,
+          {active_before.scale.x * preview.scale.x, active_before.scale.y,
+           active_before.scale.z});
+      expect_vec3_near(
+          other_after.scale,
+          {other_before.scale.x * preview.scale.x, other_before.scale.y,
+           other_before.scale.z});
+      expect_quaternion_near(
+          quader::quat_from_euler_radians(active_after.rotation_euler),
+          quader::quat_from_euler_radians(active_before.rotation_euler));
+      expect_quaternion_near(
+          quader::quat_from_euler_radians(other_after.rotation_euler),
+          quader::quat_from_euler_radians(other_before.rotation_euler));
+    }
+
+    EXPECT_EQ(harness.session.scene().selected_entities(), selected_before);
+    EXPECT_EQ(harness.session.scene().primary_selection(), active.entity);
+    EXPECT_EQ(harness.editor.selection().summary().active_object_id,
+              active.modeling_object_id);
+
+    ASSERT_TRUE(harness.editor.history().undo().ok());
+    expect_transform_near(*harness.session.scene().transform(active.entity),
+                          active_before);
+    expect_transform_near(*harness.session.scene().transform(other.entity),
+                          other_before);
+    EXPECT_EQ(harness.session.scene().selected_entities(), selected_before);
+    EXPECT_EQ(harness.session.scene().primary_selection(), active.entity);
+
+    ASSERT_TRUE(harness.editor.history().redo().ok());
+    expect_transform_near(*harness.session.scene().transform(active.entity),
+                          active_after);
+    expect_transform_near(*harness.session.scene().transform(other.entity),
+                          other_after);
+    EXPECT_EQ(harness.session.scene().selected_entities(), selected_before);
+    EXPECT_EQ(harness.session.scene().primary_selection(), active.entity);
+  }
+}
+
+TEST(ViewportInteractionControllerTests,
      ShiftMoveRotateAndScaleDuplicateCommitOnceAndRepeatTwice) {
   /// Names one scene-owned duplicate transform routed through the same gizmo
   /// transaction and repeat contract.
@@ -3143,6 +3798,107 @@ TEST(ViewportInteractionControllerTests,
     EXPECT_EQ(selection.mode, quader::QuaderSelectionMode::Face);
     EXPECT_EQ(selection.selected_face_count, 1u);
     EXPECT_EQ(selection.selected_object_count, 1u);
+}
+
+TEST(ViewportInteractionControllerTests,
+     LocalComponentGizmoFollowsExplicitActiveVertexEdgeAndFaceOrientation) {
+  for (const quader::QuaderSelectionMode mode : {
+           quader::QuaderSelectionMode::Vertex,
+           quader::QuaderSelectionMode::Edge,
+           quader::QuaderSelectionMode::Face,
+       }) {
+    SCOPED_TRACE(static_cast<int>(mode));
+    ViewportInteractionHarness harness;
+    harness.camera.set_view_direction({-0.45f, -0.35f, -0.82f});
+    const quader::QuaderModelingObjectRef box = create_unit_box(harness);
+    quader::TransformComponent transform;
+    transform.rotation_euler = {0.37f, -0.51f, 0.29f};
+    transform.scale = {1.4f, 0.8f, 1.9f};
+    ASSERT_TRUE(harness.session.scene().set_transform(box.entity, transform));
+    select_single_component(harness, box, mode);
+    ASSERT_TRUE(harness.editor.viewports()
+                    .set_transform_space(quader::QuaderTransformSpace::Local)
+                    .ok());
+    ASSERT_TRUE(
+        harness.editor.tools().activate(quader::ViewportToolId::Move).ok());
+    harness.router.set_active_tool(quader::ViewportToolId::Move);
+
+    const std::optional<quader::QuaderTransform3> first_orientation =
+        harness.editor.query().selection_transform_orientation();
+    ASSERT_TRUE(first_orientation.has_value());
+    (void)harness.controller.handle_before_active_tool(harness.editor,
+                                                       harness.frame());
+    const auto expect_frame_orientation = [&](const auto &orientation) {
+      const quader_editor_core::TransformGizmoFrame *frame =
+          harness.controller.transform_gizmo_frame();
+      ASSERT_NE(frame, nullptr);
+      for (const auto &[axis, expected] :
+           std::array{
+               std::pair{quader_editor_core::TransformAxis::X,
+                         orientation.x_axis},
+               std::pair{quader_editor_core::TransformAxis::Y,
+                         orientation.y_axis},
+               std::pair{quader_editor_core::TransformAxis::Z,
+                         orientation.z_axis},
+           }) {
+        const quader_editor_core::TransformGizmoAxisPrimitive *primitive =
+            find_axis(*frame, axis);
+        ASSERT_NE(primitive, nullptr);
+        expect_vec3_near(gizmo_axis_world_direction(*primitive), expected);
+      }
+    };
+    expect_frame_orientation(*first_orientation);
+
+    switch (mode) {
+    case quader::QuaderSelectionMode::Vertex:
+      ASSERT_TRUE(harness.editor.selection()
+                      .select_vertex(box, 2,
+                                     quader::QuaderSelectionEdit::Add)
+                      .ok());
+      break;
+    case quader::QuaderSelectionMode::Edge:
+      ASSERT_TRUE(harness.editor.selection()
+                      .select_edge(box, 1, 4,
+                                   quader::QuaderSelectionEdit::Add)
+                      .ok());
+      break;
+    case quader::QuaderSelectionMode::Face:
+      ASSERT_TRUE(harness.editor.selection()
+                      .select_face(box, 3, quader::QuaderSelectionEdit::Add)
+                      .ok());
+      break;
+    case quader::QuaderSelectionMode::Object:
+    case quader::QuaderSelectionMode::Group:
+      FAIL() << "Local component gizmo received a non-component mode";
+      break;
+    }
+
+    const quader::QuaderSelectionSummary summary =
+        harness.editor.selection().summary();
+    const std::optional<quader::QuaderTransform3> active_orientation =
+        harness.editor.query().selection_transform_orientation();
+    ASSERT_TRUE(active_orientation.has_value());
+    EXPECT_GT(quader::length(first_orientation->x_axis -
+                             active_orientation->x_axis) +
+                  quader::length(first_orientation->z_axis -
+                                 active_orientation->z_axis),
+              0.1f);
+    (void)harness.controller.handle_before_active_tool(harness.editor,
+                                                       harness.frame());
+    expect_frame_orientation(*active_orientation);
+
+    if (mode == quader::QuaderSelectionMode::Vertex) {
+      EXPECT_EQ(summary.selected_vertex_count, 2u);
+      EXPECT_EQ(summary.active_vertex_id, 2u);
+    } else if (mode == quader::QuaderSelectionMode::Edge) {
+      EXPECT_EQ(summary.selected_edge_count, 2u);
+      EXPECT_EQ(summary.active_edge_a, 1u);
+      EXPECT_EQ(summary.active_edge_b, 4u);
+    } else {
+      EXPECT_EQ(summary.selected_face_count, 2u);
+      EXPECT_EQ(summary.active_face_id, 3u);
+    }
+  }
 }
 
 TEST(ViewportInteractionControllerTests, MoveGizmoComponentAxisDragKeepsPickedAxisUnderMouse) {

@@ -39,6 +39,8 @@ public:
                    bool force = false);
   void set_tool_requested_callback(
       std::function<void(std::string_view)> callback);
+  void set_transform_space_toggle_requested_callback(
+      std::function<void()> callback);
 
 private:
   /// Binds one canonical viewport tool identity to its retained Qt action.
@@ -49,12 +51,17 @@ private:
   };
 
   std::array<ToolAction, 14> tool_actions_{};
+  QAction *transform_space_action_ = nullptr;
   bool synchronization_valid_ = false;
   std::string synchronized_active_tool_;
   QuaderSelectionMode synchronized_selection_mode_ =
       QuaderSelectionMode::Object;
   std::uint64_t synchronized_selection_revision_ = 0;
+  QuaderTransformSpace synchronized_transform_space_ =
+      QuaderTransformSpace::Global;
+  std::uint64_t synchronized_transform_space_revision_ = 0;
   std::function<void(std::string_view)> tool_requested_;
+  std::function<void()> transform_space_toggle_requested_;
 };
 
 } // namespace quader

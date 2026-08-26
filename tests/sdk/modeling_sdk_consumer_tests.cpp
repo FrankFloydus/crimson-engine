@@ -649,6 +649,102 @@ TEST(ModelingSdkConsumerTests,
   EXPECT_EQ(document.selection_revision(), selection_revision_before);
 }
 
+TEST(ModelingSdkConsumerTests,
+     PolygonSelectionPreservesExplicitAndPreviousActiveComponents) {
+  Result<PolygonDocument> document_result = PolygonDocument::make_box({});
+  ASSERT_TRUE(document_result.ok()) << document_result.error_message();
+  PolygonDocument document = std::move(document_result).value();
+
+  const std::vector<VertexId> vertices = document.vertex_ids();
+  const std::vector<EdgeKey> edges = document.edge_ids();
+  const std::vector<FaceId> faces = document.face_ids();
+  ASSERT_GE(vertices.size(), 4U);
+  ASSERT_GE(edges.size(), 3U);
+  ASSERT_GE(faces.size(), 4U);
+
+  const PolygonSelectionSnapshot vertex_replacement{
+      .kind = SelectionKind::Vertex,
+      .vertices = {vertices[0], vertices[1], vertices[2]},
+      .has_active = true,
+      .active_vertex = vertices[2],
+  };
+  ASSERT_TRUE(document
+                  .apply_selection(vertex_replacement, SelectionEdit::Replace)
+                  .ok());
+  EXPECT_EQ(document.selection().vertices, vertex_replacement.vertices);
+  EXPECT_EQ(document.selection().active_vertex, vertices[2]);
+
+  const PolygonSelectionSnapshot edge_replacement{
+      .kind = SelectionKind::Edge,
+      .edges = {edges[0], edges[1], edges[2]},
+      .has_active = true,
+      .active_edge = edges[2],
+  };
+  ASSERT_TRUE(document
+                  .apply_selection(edge_replacement, SelectionEdit::Replace)
+                  .ok());
+  EXPECT_EQ(document.selection().edges, edge_replacement.edges);
+  EXPECT_EQ(document.selection().active_edge, edges[2]);
+
+  const PolygonSelectionSnapshot face_replacement{
+      .kind = SelectionKind::Face,
+      .faces = {faces[0], faces[1]},
+      .has_active = true,
+      .active_face = faces[1],
+  };
+  ASSERT_TRUE(document
+                  .apply_selection(face_replacement, SelectionEdit::Replace)
+                  .ok());
+  EXPECT_EQ(document.selection().faces, face_replacement.faces);
+  EXPECT_EQ(document.selection().active_face, faces[1]);
+
+  const PolygonSelectionSnapshot add_face{
+      .kind = SelectionKind::Face,
+      .faces = {faces[2]},
+      .has_active = true,
+      .active_face = faces[2],
+  };
+  ASSERT_TRUE(document.apply_selection(add_face, SelectionEdit::Add).ok());
+  EXPECT_EQ(document.selection().active_face, faces[2]);
+
+  const PolygonSelectionSnapshot remove_non_active{
+      .kind = SelectionKind::Face,
+      .faces = {faces[0]},
+      .has_active = true,
+      .active_face = faces[0],
+  };
+  ASSERT_TRUE(
+      document.apply_selection(remove_non_active, SelectionEdit::Remove).ok());
+  EXPECT_EQ(document.selection().active_face, faces[2]);
+
+  const PolygonSelectionSnapshot toggle_active{
+      .kind = SelectionKind::Face,
+      .faces = {faces[2]},
+      .has_active = true,
+      .active_face = faces[2],
+  };
+  ASSERT_TRUE(
+      document.apply_selection(toggle_active, SelectionEdit::Toggle).ok());
+  ASSERT_EQ(document.selection().faces.size(), 1U);
+  EXPECT_EQ(document.selection().active_face, faces[1]);
+
+  const PolygonSelectionSnapshot before_invalid = document.selection();
+  const std::uint64_t revision_before_invalid = document.selection_revision();
+  const PolygonSelectionSnapshot invalid_replacement{
+      .kind = SelectionKind::Face,
+      .faces = {faces[0], faces[1]},
+      .has_active = true,
+      .active_face = faces[3],
+  };
+  const Result<OperationResult> invalid = document.apply_selection(
+      invalid_replacement, SelectionEdit::Replace);
+  ASSERT_FALSE(invalid.ok());
+  EXPECT_EQ(invalid.error().code, ErrorCode::InvalidArgument);
+  EXPECT_EQ(document.selection().faces, before_invalid.faces);
+  EXPECT_EQ(document.selection().active_face, before_invalid.active_face);
+  EXPECT_EQ(document.selection_revision(), revision_before_invalid);
+}
+
 TEST(ModelingSdkConsumerTests, GoldenBoxMeshFixtureStaysDeterministic) {
   Result<PolygonDocument> document_result =
       PolygonDocument::make_box({.min = {0.0F, 0.0F, 0.0F},
@@ -1400,6 +1496,68 @@ TEST(ModelingSdkConsumerTests,
   expect_session_face_selection(session, second.value(), second_face);
   expect_session_object_selected(session, first.value(), true);
   expect_session_object_selected(session, second.value(), true);
+}
+
+TEST(ModelingSdkConsumerTests,
+     SessionComponentSelectionHistoryPreservesNonFrontActiveFace) {
+  Result<PolygonDocument> document_result = PolygonDocument::make_box({});
+  ASSERT_TRUE(document_result.ok()) << document_result.error_message();
+  const std::vector<FaceId> faces = document_result.value().face_ids();
+  ASSERT_GE(faces.size(), 3U);
+
+  ModelingSession session;
+  Result<ObjectId> object =
+      session.add_document(std::move(document_result).value(), "Box");
+  ASSERT_TRUE(object.ok()) << object.error_message();
+
+  const PolygonSelectionSnapshot replacement{
+      .kind = SelectionKind::Face,
+      .faces = {faces[0], faces[1]},
+      .has_active = true,
+      .active_face = faces[1],
+  };
+  const std::array<SessionComponentSelectionUpdate, 1> updates{{
+      {.object = object.value(), .selection = replacement},
+  }};
+  const std::array<ObjectId, 1> selected_objects{object.value()};
+
+  PolygonSelectionSnapshot invalid_replacement = replacement;
+  invalid_replacement.active_face = faces[2];
+  const std::array<SessionComponentSelectionUpdate, 1> invalid_updates{{
+      {.object = object.value(), .selection = invalid_replacement},
+  }};
+  const std::size_t undo_depth_before = session.undo_depth();
+  const std::uint64_t selection_revision_before =
+      session.selection_revision();
+  Result<OperationResult> invalid = session.commit_component_selection_batch(
+      invalid_updates, selected_objects, object.value());
+  ASSERT_FALSE(invalid.ok());
+  EXPECT_EQ(invalid.error().code, ErrorCode::InvalidArgument);
+  EXPECT_EQ(session.undo_depth(), undo_depth_before);
+  EXPECT_EQ(session.selection_revision(), selection_revision_before);
+  Result<PolygonDocument> selected = session.document_copy(object.value());
+  ASSERT_TRUE(selected.ok()) << selected.error_message();
+  EXPECT_TRUE(selected.value().selection().faces.empty());
+
+  Result<OperationResult> committed = session.commit_component_selection_batch(
+      updates, selected_objects, object.value());
+  ASSERT_TRUE(committed.ok()) << committed.error_message();
+  selected = session.document_copy(object.value());
+  ASSERT_TRUE(selected.ok()) << selected.error_message();
+  EXPECT_EQ(selected.value().selection().faces, replacement.faces);
+  EXPECT_EQ(selected.value().selection().active_face, faces[1]);
+
+  ASSERT_TRUE(session.undo().ok());
+  selected = session.document_copy(object.value());
+  ASSERT_TRUE(selected.ok()) << selected.error_message();
+  EXPECT_TRUE(selected.value().selection().faces.empty());
+  EXPECT_FALSE(selected.value().selection().has_active);
+
+  ASSERT_TRUE(session.redo().ok());
+  selected = session.document_copy(object.value());
+  ASSERT_TRUE(selected.ok()) << selected.error_message();
+  EXPECT_EQ(selected.value().selection().faces, replacement.faces);
+  EXPECT_EQ(selected.value().selection().active_face, faces[1]);
 }
 
 TEST(ModelingSdkConsumerTests,

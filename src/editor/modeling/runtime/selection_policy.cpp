@@ -366,10 +366,52 @@ RectangleSelectionResult rectangle_select_edges(const RectangleSelectionRequest&
 			result.selection.selected_edges.push_back(edge);
 		}
 	}
-	if (!result.selection.selected_edges.empty()) {
-		result.selection.active_object_id = result.selection.selected_edges.back().object_id;
-	} else if (!result.selection.selected_edge_full_object_ids.empty()) {
-		result.selection.active_object_id = result.selection.selected_edge_full_object_ids.back();
+	const bool preserved_active = [&]() {
+		if (!rectangle_preserves_existing(request.operation) ||
+			request.current_selection.active_object_id < 0 ||
+			request.current_selection.active_edge_vertex_indices.size() < 2U) {
+			return false;
+		}
+		const RectangleObjectEdgeKey active_key{
+			request.current_selection.active_object_id,
+			std::min(request.current_selection.active_edge_vertex_indices[0],
+				request.current_selection.active_edge_vertex_indices[1]),
+			std::max(request.current_selection.active_edge_vertex_indices[0],
+				request.current_selection.active_edge_vertex_indices[1]),
+		};
+		if (!std::binary_search(selected_edges.begin(), selected_edges.end(),
+			active_key)) {
+			return false;
+		}
+		result.selection.active_object_id = std::get<0>(active_key);
+		result.selection.active_edge_vertex_indices = {
+			std::get<1>(active_key),
+			std::get<2>(active_key),
+		};
+		return true;
+	}();
+	if (!preserved_active) {
+		if (!result.selection.selected_edges.empty()) {
+			result.selection.active_object_id =
+				result.selection.selected_edges.back().object_id;
+		} else if (!result.selection.selected_edge_full_object_ids.empty()) {
+			result.selection.active_object_id =
+				result.selection.selected_edge_full_object_ids.back();
+		}
+		const auto active_edge = std::find_if(
+			universe.edges.rbegin(), universe.edges.rend(),
+			[&](RectangleSelectionEdge edge) {
+				return rectangle_edge_is_valid(edge) &&
+					edge.object_id == result.selection.active_object_id &&
+					std::binary_search(selected_edges.begin(),
+						selected_edges.end(), edge_key(edge));
+			});
+		if (active_edge != universe.edges.rend()) {
+			result.selection.active_edge_vertex_indices = {
+				active_edge->a_index,
+				active_edge->b_index,
+			};
+		}
 	}
 	return result;
 }
@@ -461,10 +503,47 @@ RectangleSelectionResult rectangle_select_vertices(const RectangleSelectionReque
 			result.selection.selected_vertices.push_back(vertex);
 		}
 	}
-	if (!result.selection.selected_vertices.empty()) {
-		result.selection.active_object_id = result.selection.selected_vertices.back().object_id;
-	} else if (!result.selection.selected_vertex_full_object_ids.empty()) {
-		result.selection.active_object_id = result.selection.selected_vertex_full_object_ids.back();
+	const bool preserved_active = [&]() {
+		if (!rectangle_preserves_existing(request.operation) ||
+			request.current_selection.active_object_id < 0 ||
+			request.current_selection.active_vertex_indices.empty()) {
+			return false;
+		}
+		const RectangleElementKey active_key{
+			request.current_selection.active_object_id,
+			request.current_selection.active_vertex_indices.front(),
+		};
+		if (!std::binary_search(selected_vertices.begin(),
+			selected_vertices.end(), active_key)) {
+			return false;
+		}
+		result.selection.active_object_id = active_key.first;
+		result.selection.active_vertex_indices = {active_key.second};
+		return true;
+	}();
+	if (!preserved_active) {
+		if (!result.selection.selected_vertices.empty()) {
+			result.selection.active_object_id =
+				result.selection.selected_vertices.back().object_id;
+		} else if (!result.selection.selected_vertex_full_object_ids.empty()) {
+			result.selection.active_object_id =
+				result.selection.selected_vertex_full_object_ids.back();
+		}
+		const auto active_vertex = std::find_if(
+			universe.vertices.rbegin(), universe.vertices.rend(),
+			[&](RectangleSelectionVertex vertex) {
+				return rectangle_vertex_is_valid(vertex) &&
+					vertex.object_id == result.selection.active_object_id &&
+					std::binary_search(
+						selected_vertices.begin(), selected_vertices.end(),
+						RectangleElementKey{vertex.object_id,
+							vertex.vertex_index});
+			});
+		if (active_vertex != universe.vertices.rend()) {
+			result.selection.active_vertex_indices = {
+				active_vertex->vertex_index,
+			};
+		}
 	}
 	return result;
 }
@@ -643,6 +722,24 @@ RectangleSelectionResult rectangle_result_from_edge_set(
 	} else if (!result.selection.selected_edge_full_object_ids.empty()) {
 		result.selection.active_object_id = first_full_object_is_active ? result.selection.selected_edge_full_object_ids.front() : result.selection.selected_edge_full_object_ids.back();
 	}
+	const auto found_active_edges =
+		selected_edges_by_object.find(result.selection.active_object_id);
+	if (found_active_edges != selected_edges_by_object.end()) {
+		const auto active_edge = std::find_if(
+			universe.edges.rbegin(), universe.edges.rend(),
+			[&](RectangleSelectionEdge edge) {
+				return rectangle_edge_is_valid(edge) &&
+					edge.object_id == result.selection.active_object_id &&
+					found_active_edges->second.find(rectangle_edge_key(edge)) !=
+						found_active_edges->second.end();
+			});
+		if (active_edge != universe.edges.rend()) {
+			result.selection.active_edge_vertex_indices = {
+				active_edge->a_index,
+				active_edge->b_index,
+			};
+		}
+	}
 	return result;
 }
 
@@ -689,6 +786,23 @@ RectangleSelectionResult rectangle_result_from_vertex_set(
 		result.selection.active_object_id = result.selection.selected_vertices.back().object_id;
 	} else if (!result.selection.selected_vertex_full_object_ids.empty()) {
 		result.selection.active_object_id = first_full_object_is_active ? result.selection.selected_vertex_full_object_ids.front() : result.selection.selected_vertex_full_object_ids.back();
+	}
+	const auto found_active_vertices =
+		selected_vertices_by_object.find(result.selection.active_object_id);
+	if (found_active_vertices != selected_vertices_by_object.end()) {
+		const auto active_vertex = std::find_if(
+			universe.vertices.rbegin(), universe.vertices.rend(),
+			[&](RectangleSelectionVertex vertex) {
+				return rectangle_vertex_is_valid(vertex) &&
+					vertex.object_id == result.selection.active_object_id &&
+					found_active_vertices->second.find(vertex.vertex_index) !=
+						found_active_vertices->second.end();
+			});
+		if (active_vertex != universe.vertices.rend()) {
+			result.selection.active_vertex_indices = {
+				active_vertex->vertex_index,
+			};
+		}
 	}
 	return result;
 }
@@ -1361,6 +1475,28 @@ RectangleSelectionResult apply_selection_set_command(const SelectionSetCommandRe
               result.selection.active_object_id =
                   result.selection.selected_edge_full_object_ids.front();
             }
+            auto active_edge = std::find_if(
+                request.universe.edges.rbegin(),
+                request.universe.edges.rend(),
+                [&](RectangleSelectionEdge edge) {
+                  return rectangle_edge_is_valid(edge) &&
+                         edge.object_id ==
+                             result.selection.active_object_id;
+                });
+            if (active_edge == request.universe.edges.rend()) {
+              active_edge = std::find_if(
+                  request.universe.edges.rbegin(),
+                  request.universe.edges.rend(), rectangle_edge_is_valid);
+              if (active_edge != request.universe.edges.rend()) {
+                result.selection.active_object_id = active_edge->object_id;
+              }
+            }
+            if (active_edge != request.universe.edges.rend()) {
+              result.selection.active_edge_vertex_indices = {
+                  active_edge->a_index,
+                  active_edge->b_index,
+              };
+            }
             return result;
           }
           const auto selected_edges = rectangle_edge_set_from_selection(
@@ -1398,6 +1534,28 @@ RectangleSelectionResult apply_selection_set_command(const SelectionSetCommandRe
             if (!result.selection.selected_vertex_full_object_ids.empty()) {
               result.selection.active_object_id =
                   result.selection.selected_vertex_full_object_ids.front();
+            }
+            auto active_vertex = std::find_if(
+                request.universe.vertices.rbegin(),
+                request.universe.vertices.rend(),
+                [&](RectangleSelectionVertex vertex) {
+                  return rectangle_vertex_is_valid(vertex) &&
+                         vertex.object_id ==
+                             result.selection.active_object_id;
+                });
+            if (active_vertex == request.universe.vertices.rend()) {
+              active_vertex = std::find_if(
+                  request.universe.vertices.rbegin(),
+                  request.universe.vertices.rend(),
+                  rectangle_vertex_is_valid);
+              if (active_vertex != request.universe.vertices.rend()) {
+                result.selection.active_object_id = active_vertex->object_id;
+              }
+            }
+            if (active_vertex != request.universe.vertices.rend()) {
+              result.selection.active_vertex_indices = {
+                  active_vertex->vertex_index,
+              };
             }
             return result;
           }

@@ -66,6 +66,12 @@ double vec3_dot(quader::QVec3 left, quader::QVec3 right)
 	return quader_geometry::dot(tool_geometry_vec3(left), tool_geometry_vec3(right));
 }
 
+quader::QVec3 vec3_cross(quader::QVec3 left, quader::QVec3 right)
+{
+	return tool_poly_vec3(quader_geometry::cross(
+		tool_geometry_vec3(left), tool_geometry_vec3(right)));
+}
+
 quader::QVec3 normalized_axis(quader::QVec3 value)
 {
 	return tool_poly_vec3(quader_geometry::normalize_or_zero(tool_geometry_vec3(value), 0.000001F));
@@ -92,11 +98,41 @@ TransformGizmoAxisBasis transform_gizmo_axis_basis(TransformAxis axis, const qua
           basis.ring_world_a = {1.0F, 0.0F, 0.0F};
           basis.ring_world_b = {0.0F, 1.0F, 0.0F};
         }
-        basis.world_direction = normalized_axis(transform_vector(global_transform, basis.local_direction));
-	basis.ring_world_a = normalized_axis(transform_vector(global_transform, basis.ring_world_a));
-	basis.ring_world_b = normalized_axis(transform_vector(global_transform, basis.ring_world_b));
+	const quader::QVec3 transformed_ring_a = normalized_axis(
+		transform_vector(global_transform, basis.ring_world_a));
+	const quader::QVec3 transformed_ring_b = normalized_axis(
+		transform_vector(global_transform, basis.ring_world_b));
+	basis.world_direction = normalized_axis(
+		transform_vector(global_transform, basis.local_direction));
 	if (vec3_is_tiny(basis.world_direction)) {
 		basis.world_direction = basis.local_direction;
+	}
+
+	// A rendered local basis can be non-orthogonal after a rotated object is
+	// composed through non-uniform parent or instance scale. Keep the axis on
+	// the exact rendered local direction, but draw its rotation ring as a true
+	// circle in the plane perpendicular to that direction.
+	basis.ring_world_a = transformed_ring_a -
+		vec3_scale(basis.world_direction,
+			vec3_dot(transformed_ring_a, basis.world_direction));
+	if (vec3_is_tiny(basis.ring_world_a)) {
+		basis.ring_world_a = transformed_ring_b -
+			vec3_scale(basis.world_direction,
+				vec3_dot(transformed_ring_b, basis.world_direction));
+	}
+	if (vec3_is_tiny(basis.ring_world_a)) {
+		basis.axis = TransformAxis::None;
+		return basis;
+	}
+	basis.ring_world_a = normalized_axis(basis.ring_world_a);
+	basis.ring_world_b = normalized_axis(
+		vec3_cross(basis.world_direction, basis.ring_world_a));
+	if (vec3_is_tiny(basis.ring_world_b)) {
+		basis.axis = TransformAxis::None;
+		return basis;
+	}
+	if (vec3_dot(basis.ring_world_b, transformed_ring_b) < 0.0) {
+		basis.ring_world_b = vec3_scale(basis.ring_world_b, -1.0);
 	}
 	return basis;
 }
@@ -192,9 +228,16 @@ double viewport_world_units_per_pixel_impl(const ViewportCameraState& camera, qu
 	return drag_world_units_per_pixel(drag, anchor);
 }
 
-void add_gizmo_axis(TransformGizmoFrame& frame, const ViewportCameraState& camera, TransformAxis axis, quader::QVec3 center, double axis_length)
+void add_gizmo_axis(
+		TransformGizmoFrame& frame,
+		const ViewportCameraState& camera,
+		TransformAxis axis,
+		quader::QVec3 center,
+		double axis_length,
+		const quader_poly::Transform3& orientation)
 {
-	const quader::QVec3 direction = axis_vector(axis);
+	const quader::QVec3 direction =
+		transform_gizmo_axis_basis(axis, orientation).world_direction;
 	if (vec3_is_tiny(direction)) {
 		return;
 	}
@@ -261,9 +304,17 @@ double screen_sized_world_radius(const ViewportCameraState& camera, quader::QVec
 	return std::max(0.001, pixel_world * std::max(24.0, screen_size));
 }
 
-void add_gizmo_ring(TransformGizmoFrame& frame, const ViewportCameraState& camera, TransformAxis axis, quader::QVec3 center, double screen_size, int ring_segment_count)
+void add_gizmo_ring(
+		TransformGizmoFrame& frame,
+		const ViewportCameraState& camera,
+		TransformAxis axis,
+		quader::QVec3 center,
+		double screen_size,
+		int ring_segment_count,
+		const quader_poly::Transform3& orientation)
 {
-	const TransformGizmoAxisBasis basis = transform_gizmo_axis_basis(axis);
+	const TransformGizmoAxisBasis basis =
+		transform_gizmo_axis_basis(axis, orientation);
         if (basis.axis == TransformAxis::None) {
           return;
         }
@@ -408,11 +459,14 @@ TransformGizmoFrame build_transform_gizmo_frame(const TransformGizmoFrameInput& 
           add_gizmo_trackball_ring(frame, input.camera, input.pivot,
                                    ring_screen_size, input.ring_segments);
           add_gizmo_ring(frame, input.camera, TransformAxis::X, input.pivot,
-                         ring_screen_size, input.ring_segments);
+                         ring_screen_size, input.ring_segments,
+                         input.orientation);
           add_gizmo_ring(frame, input.camera, TransformAxis::Y, input.pivot,
-                         ring_screen_size, input.ring_segments);
+                         ring_screen_size, input.ring_segments,
+                         input.orientation);
           add_gizmo_ring(frame, input.camera, TransformAxis::Z, input.pivot,
-                         ring_screen_size, input.ring_segments);
+                         ring_screen_size, input.ring_segments,
+                         input.orientation);
           return frame;
         }
 
@@ -427,20 +481,26 @@ TransformGizmoFrame build_transform_gizmo_frame(const TransformGizmoFrameInput& 
         const double plane_half_size =
             pixel_world * unit_screen_size * (kGizmoPlaneSize * 0.5);
         add_gizmo_axis(frame, input.camera, TransformAxis::X, input.pivot,
-                       axis_length);
+                       axis_length, input.orientation);
         add_gizmo_axis(frame, input.camera, TransformAxis::Y, input.pivot,
-                       axis_length);
+                       axis_length, input.orientation);
         add_gizmo_axis(frame, input.camera, TransformAxis::Z, input.pivot,
-                       axis_length);
+                       axis_length, input.orientation);
+        const TransformGizmoAxisBasis x_basis =
+			transform_gizmo_axis_basis(TransformAxis::X, input.orientation);
+        const TransformGizmoAxisBasis y_basis =
+			transform_gizmo_axis_basis(TransformAxis::Y, input.orientation);
+        const TransformGizmoAxisBasis z_basis =
+			transform_gizmo_axis_basis(TransformAxis::Z, input.orientation);
         add_gizmo_plane(frame, input.camera, TransformAxis::Xy, input.pivot,
-                        {1.0F, 0.0F, 0.0F}, {0.0F, 1.0F, 0.0F}, plane_offset,
-                        plane_half_size);
+                        x_basis.world_direction, y_basis.world_direction,
+                        plane_offset, plane_half_size);
         add_gizmo_plane(frame, input.camera, TransformAxis::Xz, input.pivot,
-                        {1.0F, 0.0F, 0.0F}, {0.0F, 0.0F, 1.0F}, plane_offset,
-                        plane_half_size);
+                        x_basis.world_direction, z_basis.world_direction,
+                        plane_offset, plane_half_size);
         add_gizmo_plane(frame, input.camera, TransformAxis::Yz, input.pivot,
-                        {0.0F, 1.0F, 0.0F}, {0.0F, 0.0F, 1.0F}, plane_offset,
-                        plane_half_size);
+                        y_basis.world_direction, z_basis.world_direction,
+                        plane_offset, plane_half_size);
         return frame;
 }
 
@@ -465,7 +525,8 @@ TransformGizmoPickHit pick_transform_gizmo(const TransformGizmoFrameInput& input
             TransformGizmoPickCandidate candidate;
             candidate.axis = axis.axis;
             candidate.local_direction = axis_vector(axis.axis);
-            candidate.world_direction = candidate.local_direction;
+            candidate.world_direction = transform_gizmo_axis_basis(
+				axis.axis, input.orientation).world_direction;
             candidate.screen_tip = axis.screen_tip;
             candidate.visible = true;
             candidates.push_back(candidate);
@@ -496,7 +557,8 @@ TransformGizmoPickHit pick_transform_gizmo(const TransformGizmoFrameInput& input
             result.hit = true;
             result.axis = plane.axis;
             result.local_direction = axis_vector(plane.axis);
-            result.world_direction = result.local_direction;
+            result.world_direction = transform_vector(
+				input.orientation, result.local_direction);
             result.screen_tip = plane_centroid(plane);
             return result;
           }
@@ -511,7 +573,8 @@ TransformGizmoPickHit pick_transform_gizmo(const TransformGizmoFrameInput& input
             TransformGizmoRingPickCandidate candidate;
             candidate.axis = segment.axis;
             candidate.local_direction = rotation_axis_vector(segment.axis);
-            candidate.world_direction = candidate.local_direction;
+            candidate.world_direction = transform_gizmo_axis_basis(
+				segment.axis, input.orientation).world_direction;
             candidate.a = segment.screen_start;
             candidate.b = segment.screen_end;
             candidates.push_back(candidate);

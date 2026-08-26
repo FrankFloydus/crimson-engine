@@ -65,6 +65,87 @@ quader_editor_core::MoveToolState begin_axis_move(
 	return begin.state;
 }
 
+quader_poly::Transform3 nonorthogonal_orientation()
+{
+	return {
+		.x_axis = {1.0F, 0.0F, 0.0F},
+		.y_axis = {0.6F, 0.8F, 0.0F},
+		.z_axis = {0.6F, 0.0F, 0.8F},
+	};
+}
+
+quader::QVec3 transformed_vector(
+		const quader_poly::Transform3& transform,
+		quader::QVec3 value)
+{
+	return {
+		transform.x_axis.x * value.x + transform.y_axis.x * value.y +
+			transform.z_axis.x * value.z,
+		transform.x_axis.y * value.x + transform.y_axis.y * value.y +
+			transform.z_axis.y * value.z,
+		transform.x_axis.z * value.x + transform.y_axis.z * value.y +
+			transform.z_axis.z * value.z,
+	};
+}
+
+quader::QVec3 cross_vector(quader::QVec3 left, quader::QVec3 right)
+{
+	return {
+		left.y * right.z - left.z * right.y,
+		left.z * right.x - left.x * right.z,
+		left.x * right.y - left.y * right.x,
+	};
+}
+
+quader::QVec3 included_plane_normal(
+		const quader_poly::Transform3& orientation,
+		quader_editor_core::TransformAxis axis)
+{
+	if (axis == quader_editor_core::TransformAxis::Xy) {
+		return cross_vector(orientation.x_axis, orientation.y_axis);
+	}
+	if (axis == quader_editor_core::TransformAxis::Xz) {
+		return cross_vector(orientation.z_axis, orientation.x_axis);
+	}
+	return cross_vector(orientation.y_axis, orientation.z_axis);
+}
+
+quader_poly::Ray ray_through_plane_point(
+		quader::QVec3 point,
+		quader::QVec3 plane_normal)
+{
+	return {
+		{
+			point.x + plane_normal.x * 5.0F,
+			point.y + plane_normal.y * 5.0F,
+			point.z + plane_normal.z * 5.0F,
+		},
+		{-plane_normal.x, -plane_normal.y, -plane_normal.z},
+	};
+}
+
+quader_editor_core::MoveToolState begin_plane_move(
+		quader_editor_core::TransformAxis axis,
+		const quader_poly::Transform3& orientation,
+		quader::QVec3 center)
+{
+	const quader::QVec3 plane_normal = included_plane_normal(orientation, axis);
+	quader_editor_core::MoveBeginInput input;
+	input.axis = axis;
+	input.orientation = orientation;
+	input.center_local = center;
+	input.has_world_center = true;
+	input.world_center = center;
+	input.screen_position = {100.0F, 100.0F};
+	input.has_start_ray = true;
+	input.start_ray = ray_through_plane_point(center, plane_normal);
+
+	const quader_editor_core::MoveBeginResult begin =
+		quader_editor_core::begin_move_drag(input);
+	EXPECT_TRUE(begin.ok);
+	return begin.state;
+}
+
 } // namespace
 
 TEST(QdrModelingRuntimeToolMoveTests, MoveDragBeginsWithLocalAndScreenAxisState) {
@@ -93,6 +174,137 @@ TEST(QdrModelingRuntimeToolMoveTests, MoveDragBeginsWithLocalAndScreenAxisState)
 	EXPECT_NEAR(preview.preview_distance, 0.5, 0.0001);
 	EXPECT_NEAR(preview.preview_delta.x, 0.5F, 0.0001);
 	EXPECT_NEAR(preview.preview_delta.y, 0.0F, 0.0001);
+}
+
+TEST(QdrModelingRuntimeToolMoveTests,
+     MoveDragProjectsAndSnapsPlaneMotionInTheProvidedOrientation) {
+	quader_editor_core::MoveBeginInput input;
+	input.axis = quader_editor_core::TransformAxis::Xy;
+	input.orientation.x_axis = {0.0F, 1.0F, 0.0F};
+	input.orientation.y_axis = {0.0F, 0.0F, 1.0F};
+	input.orientation.z_axis = {1.0F, 0.0F, 0.0F};
+	input.center_local = {};
+	input.has_world_center = true;
+	input.world_center = {};
+	input.screen_position = {100.0F, 100.0F};
+	input.has_start_ray = true;
+	input.start_ray = {{5.0F, 0.25F, 0.25F}, {-1.0F, 0.0F, 0.0F}};
+
+	const quader_editor_core::MoveBeginResult begin =
+		quader_editor_core::begin_move_drag(input);
+	ASSERT_TRUE(begin.ok);
+	quader_editor_core::MoveToolState state = begin.state;
+	const quader_editor_core::MovePreviewResult preview =
+		quader_editor_core::preview_move_from_viewport(
+			state, {100.0F, 100.0F},
+			{{5.0F, 1.45F, 2.35F}, {-1.0F, 0.0F, 0.0F}},
+			front_camera(), false, true, 1.0);
+
+	ASSERT_TRUE(preview.ok);
+	EXPECT_NEAR(preview.preview_delta.x, 0.0F, 0.0001F);
+	EXPECT_NEAR(preview.preview_delta.y, 1.0F, 0.0001F);
+	EXPECT_NEAR(preview.preview_delta.z, 2.0F, 0.0001F);
+}
+
+TEST(QdrModelingRuntimeToolMoveTests,
+     LocalXyPlaneMoveUsesTheFullNonorthogonalOrientationBasis) {
+	const quader_poly::Transform3 orientation = nonorthogonal_orientation();
+	quader_editor_core::MoveToolState state = begin_plane_move(
+		quader_editor_core::TransformAxis::Xy, orientation, {});
+	const quader::QVec3 expected =
+		transformed_vector(orientation, {1.25F, -0.75F, 0.0F});
+
+	const quader_editor_core::MovePreviewResult preview =
+		quader_editor_core::preview_move_from_viewport(
+			state, {100.0F, 100.0F},
+			ray_through_plane_point(
+				expected,
+				included_plane_normal(
+					orientation, quader_editor_core::TransformAxis::Xy)),
+			front_camera(), false, false, 1.0);
+
+	ASSERT_TRUE(preview.ok);
+	EXPECT_NEAR(preview.preview_delta.x, expected.x, 0.0001F);
+	EXPECT_NEAR(preview.preview_delta.y, expected.y, 0.0001F);
+	EXPECT_NEAR(preview.preview_delta.z, expected.z, 0.0001F);
+}
+
+TEST(QdrModelingRuntimeToolMoveTests,
+     LocalXzPlaneMoveUsesTheFullNonorthogonalOrientationBasis) {
+	const quader_poly::Transform3 orientation = nonorthogonal_orientation();
+	quader_editor_core::MoveToolState state = begin_plane_move(
+		quader_editor_core::TransformAxis::Xz, orientation, {});
+	const quader::QVec3 expected =
+		transformed_vector(orientation, {-0.5F, 0.0F, 1.5F});
+
+	const quader_editor_core::MovePreviewResult preview =
+		quader_editor_core::preview_move_from_viewport(
+			state, {100.0F, 100.0F},
+			ray_through_plane_point(
+				expected,
+				included_plane_normal(
+					orientation, quader_editor_core::TransformAxis::Xz)),
+			front_camera(), false, false, 1.0);
+
+	ASSERT_TRUE(preview.ok);
+	EXPECT_NEAR(preview.preview_delta.x, expected.x, 0.0001F);
+	EXPECT_NEAR(preview.preview_delta.y, expected.y, 0.0001F);
+	EXPECT_NEAR(preview.preview_delta.z, expected.z, 0.0001F);
+}
+
+TEST(QdrModelingRuntimeToolMoveTests,
+     LocalYzPlaneMoveUsesTheFullNonorthogonalOrientationBasis) {
+	const quader_poly::Transform3 orientation = nonorthogonal_orientation();
+	quader_editor_core::MoveToolState state = begin_plane_move(
+		quader_editor_core::TransformAxis::Yz, orientation, {});
+	const quader::QVec3 expected =
+		transformed_vector(orientation, {0.0F, 0.75F, -1.25F});
+
+	const quader_editor_core::MovePreviewResult preview =
+		quader_editor_core::preview_move_from_viewport(
+			state, {100.0F, 100.0F},
+			ray_through_plane_point(
+				expected,
+				included_plane_normal(
+					orientation, quader_editor_core::TransformAxis::Yz)),
+			front_camera(), false, false, 1.0);
+
+	ASSERT_TRUE(preview.ok);
+	EXPECT_NEAR(preview.preview_delta.x, expected.x, 0.0001F);
+	EXPECT_NEAR(preview.preview_delta.y, expected.y, 0.0001F);
+	EXPECT_NEAR(preview.preview_delta.z, expected.z, 0.0001F);
+}
+
+TEST(QdrModelingRuntimeToolMoveTests,
+     LocalPlaneMoveSnapsTheCenterInNonorthogonalLogicalCoordinates) {
+	const quader_poly::Transform3 orientation = nonorthogonal_orientation();
+	const quader::QVec3 center =
+		transformed_vector(orientation, {0.2F, -0.3F, 1.1F});
+	quader_editor_core::MoveToolState state = begin_plane_move(
+		quader_editor_core::TransformAxis::Xy, orientation, center);
+	const quader::QVec3 raw_delta =
+		transformed_vector(orientation, {0.55F, 0.9F, 0.0F});
+	const quader::QVec3 target{
+		center.x + raw_delta.x,
+		center.y + raw_delta.y,
+		center.z + raw_delta.z,
+	};
+	const quader::QVec3 expected =
+		transformed_vector(orientation, {0.8F, 0.8F, 0.0F});
+
+	const quader_editor_core::MovePreviewResult preview =
+		quader_editor_core::preview_move_from_viewport(
+			state, {100.0F, 100.0F},
+			ray_through_plane_point(
+				target,
+				included_plane_normal(
+					orientation, quader_editor_core::TransformAxis::Xy)),
+			front_camera(), false, true, 0.5, true);
+
+	ASSERT_TRUE(preview.ok);
+	EXPECT_NEAR(preview.preview_delta.x, expected.x, 0.0001F);
+	EXPECT_NEAR(preview.preview_delta.y, expected.y, 0.0001F);
+	EXPECT_NEAR(preview.preview_delta.z, expected.z, 0.0001F);
 }
 
 TEST(QdrModelingRuntimeToolMoveTests, ObjectMoveDragSnapsSelectionCenterToGridIntersections) {

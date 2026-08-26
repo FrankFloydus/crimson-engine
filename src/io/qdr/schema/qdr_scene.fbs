@@ -196,6 +196,7 @@ table ModelingObjectComponent {
   object_id:int = -1;
   material_slot:uint;
   sdk_owned:bool = false;
+  local_frame_version:uint = 0;
 }
 
 table MeshComponent {

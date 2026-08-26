@@ -608,6 +608,14 @@ void UISystem::install_runtime_hooks(
         tool_toolbar_->synchronize(*editor_, editor_->selection().summary(),
                                    true);
       });
+  tool_toolbar_->set_transform_space_toggle_requested_callback([this]() {
+    if (editor_ == nullptr) {
+      return;
+    }
+    present_lifecycle_result(editor_->commands().execute(
+        quader_command::kViewportToggleTransformSpace));
+    tool_toolbar_->synchronize(*editor_, editor_->selection().summary(), true);
+  });
   snapping_toolbar_->set_grid_preset_requested_callback(
       [this](int preset) {
         if (editor_ == nullptr) {
@@ -1528,6 +1536,9 @@ void UISystem::refresh(const FrameTiming &frame_timing,
       editor_ != nullptr ? editor_->tools().active_settings_revision() : 0u;
   const std::uint64_t frame_active_tool_revision =
       editor_ != nullptr ? editor_->tools().active_tool_revision() : 0u;
+  const std::uint64_t frame_transform_space_revision =
+      editor_ != nullptr ? editor_->viewports().transform_space_revision()
+                         : 0u;
   {
     QDR_PROFILE_SCOPE("UI refresh project workspace");
     refresh_project_workspace(false);
@@ -1553,7 +1564,11 @@ void UISystem::refresh(const FrameTiming &frame_timing,
       const bool active_tool_revision_changed =
           !toolbar_refresh_valid_ ||
           toolbar_active_tool_revision_ != frame_active_tool_revision;
-      if (owner_state_changed || active_tool_revision_changed) {
+      const bool transform_space_revision_changed =
+          !toolbar_refresh_valid_ || toolbar_transform_space_revision_ !=
+                                         frame_transform_space_revision;
+      if (owner_state_changed || active_tool_revision_changed ||
+          transform_space_revision_changed) {
         const QuaderSelectionSummary selection = [&]() {
           QDR_PROFILE_SCOPE("UI toolbar query selection summary");
           return editor_->selection().summary();
@@ -1580,6 +1595,9 @@ void UISystem::refresh(const FrameTiming &frame_timing,
       }
       if (active_tool_revision_changed) {
         toolbar_active_tool_revision_ = frame_active_tool_revision;
+      }
+      if (transform_space_revision_changed) {
+        toolbar_transform_space_revision_ = frame_transform_space_revision;
       }
     }
     if (snapping_toolbar_ != nullptr) {

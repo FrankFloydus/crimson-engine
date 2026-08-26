@@ -11,6 +11,8 @@
 #include "editor/array/radial_array_tool_service.hpp"
 #include "editor/commands/asset_command_service.hpp"
 #include "editor/instances/scene_instance_service.hpp"
+#include "editor/modeling/services/modeling_legacy_local_frame_upgrade.hpp"
+#include "editor/modeling/services/modeling_mesh_sync_service.hpp"
 #include "editor/modeling/services/modeling_session_service.hpp"
 #include "editor/pivot/pivot_tool_service.hpp"
 #include "editor/placement/viewport_point_placement_service.hpp"
@@ -22,6 +24,15 @@
 #include <utility>
 
 namespace quader {
+namespace {
+
+void upgrade_legacy_modeling_local_frames(SceneContentDocument &document) {
+  ModelingMeshSyncService mesh_sync;
+  (void)ModelingLegacyLocalFrameUpgradeService::upgrade_scene(
+      document.scene(), document.assets(), mesh_sync);
+}
+
+} // namespace
 
 SceneSession::SceneSession() {
   (void)document_.ensure_scene_root();
@@ -143,6 +154,7 @@ void SceneSession::rebuild_services() {
   // document supplied by project/QDR loading is pickable on its first frame.
   // Empty/new documents take the same path and simply produce an empty
   // modeling session.
+  upgrade_legacy_modeling_local_frames(document_);
   modeling_->reset_from_scene();
 }
 
@@ -277,6 +289,7 @@ void SceneSession::replace_document_impl(
   }
   {
     QDR_PROFILE_SCOPE("SceneSession replace reset modeling from scene");
+    upgrade_legacy_modeling_local_frames(document_);
     modeling_->reset_from_scene();
   }
   if (document_replacement_finalizer_) {

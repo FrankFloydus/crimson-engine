@@ -776,6 +776,10 @@ to_modeling_transform_drag_begin_request(
       .tool = to_modeling_transform_tool(request.tool),
       .operation = to_modeling_transform_operation(request.operation),
       .axis = to_modeling_transform_axis(request.axis),
+      .space = request.space == QuaderTransformSpace::Local
+                   ? ModelingTransformSpace::Local
+                   : ModelingTransformSpace::Global,
+      .orientation = to_modeling_transform3(request.orientation),
       .pivot = request.pivot,
       .screen_position = request.screen_position,
       .screen_pivot = request.screen_pivot,

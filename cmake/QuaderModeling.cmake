@@ -142,6 +142,7 @@ endif()
 target_link_libraries(quader_modeling_polygon PRIVATE quader_geometry quader_modeling_profile)
 
 set(QUADER_MODELING_RUNTIME_SOURCES
+    src/editor/modeling/runtime/component_orientation.cpp
     src/editor/modeling/runtime/overlay_visibility.cpp
     src/editor/modeling/runtime/repeat_last_action.cpp
     src/editor/modeling/runtime/selection_policy.cpp
@@ -530,6 +531,7 @@ if(QUADER_BUILD_TESTS AND QUADER_BUILD_NATIVE_APP)
     endforeach()
 
     set(QUADER_RUNTIME_TOOL_TEST_SOURCES
+        tests/modeling_domain/tool/qdr_modeling_runtime_component_orientation_tests.cpp
         tests/modeling_domain/tool/qdr_modeling_runtime_tool_activation_tests.cpp
         tests/modeling_domain/tool/qdr_modeling_runtime_tool_box_tests.cpp
         tests/modeling_domain/tool/qdr_modeling_runtime_tool_cut_tests.cpp

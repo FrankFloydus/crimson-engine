@@ -219,6 +219,113 @@ sdk_operation_id(quader_editor_core::EditorOperationId operation) {
          std::isfinite(value.z);
 }
 
+constexpr float kCreationFrameEpsilonSquared = 0.0000000001F;
+
+/// Carries one rigid scene placement and its world-to-local point projection.
+struct CreationFrame {
+  ModelingTransform3 transform;
+
+  [[nodiscard]] QVec3 local_point(QVec3 world_point) const {
+    const QVec3 offset = world_point - transform.origin;
+    return {
+        dot(offset, transform.x_axis),
+        dot(offset, transform.y_axis),
+        dot(offset, transform.z_axis),
+    };
+  }
+};
+
+[[nodiscard]] std::optional<CreationFrame>
+creation_frame_from_xy(QVec3 origin, QVec3 x_hint, QVec3 y_hint) {
+  if (!finite(origin) || !finite(x_hint) || !finite(y_hint) ||
+      length_squared(x_hint) <= kCreationFrameEpsilonSquared) {
+    return std::nullopt;
+  }
+  const QVec3 x_axis = normalize(x_hint);
+  const QVec3 rejected_y = y_hint - x_axis * dot(y_hint, x_axis);
+  if (length_squared(rejected_y) <= kCreationFrameEpsilonSquared) {
+    return std::nullopt;
+  }
+  const QVec3 y_axis = normalize(rejected_y);
+  const QVec3 z_axis = normalize(cross(x_axis, y_axis));
+  if (!finite(x_axis) || !finite(y_axis) || !finite(z_axis) ||
+      length_squared(z_axis) <= kCreationFrameEpsilonSquared) {
+    return std::nullopt;
+  }
+  return CreationFrame{.transform = {
+                           .x_axis = x_axis,
+                           .y_axis = y_axis,
+                           .z_axis = z_axis,
+                           .origin = origin,
+                       }};
+}
+
+[[nodiscard]] std::optional<CreationFrame>
+creation_frame_from_xz(QVec3 origin, QVec3 x_hint, QVec3 z_hint) {
+  if (!finite(origin) || !finite(x_hint) || !finite(z_hint) ||
+      length_squared(z_hint) <= kCreationFrameEpsilonSquared) {
+    return std::nullopt;
+  }
+  const QVec3 z_axis = normalize(z_hint);
+  const QVec3 rejected_x = x_hint - z_axis * dot(x_hint, z_axis);
+  if (length_squared(rejected_x) <= kCreationFrameEpsilonSquared) {
+    return std::nullopt;
+  }
+  const QVec3 x_axis = normalize(rejected_x);
+  const QVec3 y_axis = normalize(cross(z_axis, x_axis));
+  if (!finite(x_axis) || !finite(y_axis) || !finite(z_axis) ||
+      length_squared(y_axis) <= kCreationFrameEpsilonSquared) {
+    return std::nullopt;
+  }
+  return CreationFrame{.transform = {
+                           .x_axis = x_axis,
+                           .y_axis = y_axis,
+                           .z_axis = z_axis,
+                           .origin = origin,
+                       }};
+}
+
+[[nodiscard]] std::optional<TransformComponent>
+scene_transform_from_modeling_transform(const ModelingTransform3 &transform) {
+  if (!finite(transform.x_axis) || !finite(transform.y_axis) ||
+      !finite(transform.z_axis) || !finite(transform.origin)) {
+    return std::nullopt;
+  }
+  const QMat4 matrix{.values = {
+                        transform.x_axis.x,
+                        transform.x_axis.y,
+                        transform.x_axis.z,
+                        0.0F,
+                        transform.y_axis.x,
+                        transform.y_axis.y,
+                        transform.y_axis.z,
+                        0.0F,
+                        transform.z_axis.x,
+                        transform.z_axis.y,
+                        transform.z_axis.z,
+                        0.0F,
+                        transform.origin.x,
+                        transform.origin.y,
+                        transform.origin.z,
+                        1.0F,
+                    }};
+  const std::optional<TransformComponent> component =
+      try_transform_component_from_matrix(matrix);
+  if (!component.has_value()) {
+    return std::nullopt;
+  }
+  const QMat4 represented = compose_transform(component->spatial_transform());
+  for (std::size_t index = 0; index < matrix.values.size(); ++index) {
+    const float tolerance =
+        0.0001F * std::max(1.0F, std::abs(matrix.values[index]));
+    if (std::abs(represented.values[index] - matrix.values[index]) >
+        tolerance) {
+      return std::nullopt;
+    }
+  }
+  return component;
+}
+
 [[nodiscard]] ModelingCommandResult failure(std::string message) {
   return {.ok = false, .changed = false, .message = std::move(message)};
 }
@@ -1025,6 +1132,17 @@ public:
               .message = "Box bounds must be finite."};
     }
 
+    std::optional<TransformComponent> initial_scene_transform;
+    if (request.initial_scene_transform.has_value()) {
+      initial_scene_transform = scene_transform_from_modeling_transform(
+          *request.initial_scene_transform);
+      if (!initial_scene_transform.has_value()) {
+        return {.ok = false,
+                .changed = false,
+                .message = "Initial box scene transform is invalid."};
+      }
+    }
+
     const std::size_t undo_mark = session_.undo_depth();
     const quader::modeling::ModelingSession session_before = session_;
     const auto object_ids_before = object_ids_;
@@ -1121,6 +1239,11 @@ public:
         !mesh_sync_.parent_projected_entity(scene_, entity, root)) {
       return rollback("SDK box scene entity could not be parented.");
     }
+    if (initial_scene_transform.has_value() &&
+        !mesh_sync_.set_projected_transform(scene_, entity,
+                                            *initial_scene_transform)) {
+      return rollback("SDK box initial scene transform could not be stored.");
+    }
     const int native_object_id = next_available_native_object_id();
     if (native_object_id == kInvalidModelingObjectId ||
         native_object_id == std::numeric_limits<int>::max()) {
@@ -1197,16 +1320,40 @@ public:
               .message = document.error_message()};
     }
     return create_document(std::move(document).value(), request.name,
-                           request.material_slot, request.material, finalize);
+                           request.material_slot, request.material,
+                           request.initial_scene_transform, finalize);
   }
 
   [[nodiscard]] ModelingCreateBoxResult create_box_from_corners(
       std::span<const QVec3> corners, std::string_view requested_name,
       MaterialReference material, const CreationFinalizer &finalize) {
+    if (corners.size() != 8U) {
+      return {.ok = false,
+              .changed = false,
+              .message = "Box needs eight corner points."};
+    }
+    QVec3 center{};
+    for (const QVec3 corner : corners) {
+      if (!finite(corner)) {
+        return {.ok = false,
+                .changed = false,
+                .message = "Box corners must be finite."};
+      }
+      center += corner;
+    }
+    center = center / static_cast<float>(corners.size());
+    const std::optional<CreationFrame> frame = creation_frame_from_xy(
+        center, corners[3] - corners[0], corners[4] - corners[0]);
+    if (!frame.has_value()) {
+      return {.ok = false,
+              .changed = false,
+              .message = "Box needs finite width, height, and depth."};
+    }
+
     std::vector<Vec3> sdk_corners;
     sdk_corners.reserve(corners.size());
     for (const QVec3 corner : corners) {
-      sdk_corners.push_back(to_sdk(corner));
+      sdk_corners.push_back(to_sdk(frame->local_point(corner)));
     }
     Result<PolygonDocument> document =
         PolygonDocument::make_box_from_corners(sdk_corners);
@@ -1218,7 +1365,7 @@ public:
     return create_document(
         std::move(document).value(),
         requested_name.empty() ? std::string_view{"Box"} : requested_name,
-        0U, material, finalize);
+        0U, material, frame->transform, finalize);
   }
 
   [[nodiscard]] ModelingCreateBoxResult
@@ -1226,28 +1373,54 @@ public:
               std::string_view requested_name, MaterialReference material,
               const CreationFinalizer &finalize) {
     constexpr float kEpsilonSquared = 0.00000001F;
-    std::vector<Vec3> sdk_points;
-    sdk_points.reserve(points.size());
+    std::vector<QVec3> ordered_points;
+    ordered_points.reserve(points.size());
     QVec3 polygon_normal{};
+    QVec3 center{};
     for (std::size_t index = 0; index < points.size(); ++index) {
       const QVec3 point = points[index];
-      if (!std::isfinite(point.x) || !std::isfinite(point.y) ||
-          !std::isfinite(point.z)) {
+      if (!finite(point)) {
         return {.ok = false,
                 .message = "Poly vertices must be finite."};
       }
       const QVec3 next = points[(index + 1U) % points.size()];
       polygon_normal = polygon_normal + cross(point, next);
-      sdk_points.push_back(to_sdk(point));
+      center += point;
+      ordered_points.push_back(point);
     }
-    if (sdk_points.size() < 3U ||
+    if (ordered_points.size() < 3U ||
         length_squared(polygon_normal) <= kEpsilonSquared) {
       return {.ok = false,
               .message = "Poly needs a non-degenerate polygon."};
     }
     if (length_squared(requested_normal) > kEpsilonSquared &&
         dot(polygon_normal, requested_normal) < 0.0F) {
-      std::reverse(sdk_points.begin(), sdk_points.end());
+      std::reverse(ordered_points.begin(), ordered_points.end());
+      polygon_normal = polygon_normal * -1.0F;
+    }
+    center = center / static_cast<float>(ordered_points.size());
+
+    QVec3 x_hint{};
+    for (std::size_t index = 0; index < ordered_points.size(); ++index) {
+      const QVec3 edge =
+          ordered_points[(index + 1U) % ordered_points.size()] -
+          ordered_points[index];
+      if (length_squared(edge) > kCreationFrameEpsilonSquared) {
+        x_hint = edge;
+        break;
+      }
+    }
+    const std::optional<CreationFrame> frame =
+        creation_frame_from_xz(center, x_hint, polygon_normal);
+    if (!frame.has_value()) {
+      return {.ok = false,
+              .message = "Poly needs a non-degenerate local frame."};
+    }
+
+    std::vector<Vec3> sdk_points;
+    sdk_points.reserve(ordered_points.size());
+    for (const QVec3 point : ordered_points) {
+      sdk_points.push_back(to_sdk(frame->local_point(point)));
     }
     Result<PolygonDocument> document = PolygonDocument::make_face(sdk_points);
     if (!document.ok()) {
@@ -1257,13 +1430,25 @@ public:
                              : document.error_message()};
     }
     return create_document(std::move(document).value(), requested_name, 0U,
-                           material, finalize);
+                           material, frame->transform, finalize);
   }
 
   [[nodiscard]] ModelingCreateBoxResult
   create_document(PolygonDocument document, std::string_view requested_name,
                   std::uint32_t material_slot, MaterialReference material,
+                  const std::optional<ModelingTransform3> &initial_transform,
                   const CreationFinalizer &finalize) {
+
+    std::optional<TransformComponent> initial_scene_transform;
+    if (initial_transform.has_value()) {
+      initial_scene_transform =
+          scene_transform_from_modeling_transform(*initial_transform);
+      if (!initial_scene_transform.has_value()) {
+        return {.ok = false,
+                .changed = false,
+                .message = "Initial mesh scene transform is invalid."};
+      }
+    }
 
     const std::size_t undo_mark = session_.undo_depth();
     const quader::modeling::ModelingSession session_before = session_;
@@ -1354,6 +1539,11 @@ public:
     if (root != kInvalidEntityId && scene_.exists(root) &&
         !mesh_sync_.parent_projected_entity(scene_, entity, root)) {
       return rollback("SDK mesh scene entity could not be parented.");
+    }
+    if (initial_scene_transform.has_value() &&
+        !mesh_sync_.set_projected_transform(scene_, entity,
+                                            *initial_scene_transform)) {
+      return rollback("SDK mesh initial scene transform could not be stored.");
     }
     const int native_object_id = next_available_native_object_id();
     if (native_object_id == kInvalidModelingObjectId ||
@@ -2387,21 +2577,29 @@ public:
                   static_cast<std::uint32_t>(id)));
         }
       }
-      selection.has_active =
-          request.active_kind != ModelingActiveSelectionKind::None;
-      if (request.active_vertex > 0) {
+      selection.has_active = false;
+      if (request.mode == ModelingSelectionMode::Vertex &&
+          request.active_kind == ModelingActiveSelectionKind::Vertex &&
+          request.active_vertex > 0) {
+        selection.has_active = true;
         selection.active_vertex =
             quader::modeling::make_id<quader::modeling::VertexTag>(
                 static_cast<std::uint32_t>(request.active_vertex));
       }
-      if (request.active_edge.first > 0 && request.active_edge.second > 0) {
+      if (request.mode == ModelingSelectionMode::Edge &&
+          request.active_kind == ModelingActiveSelectionKind::Edge &&
+          request.active_edge.first > 0 && request.active_edge.second > 0) {
+        selection.has_active = true;
         selection.active_edge = quader::modeling::make_edge_key(
             quader::modeling::make_id<quader::modeling::VertexTag>(
                 static_cast<std::uint32_t>(request.active_edge.first)),
             quader::modeling::make_id<quader::modeling::VertexTag>(
                 static_cast<std::uint32_t>(request.active_edge.second)));
       }
-      if (request.active_face > 0) {
+      if (request.mode == ModelingSelectionMode::Face &&
+          request.active_kind == ModelingActiveSelectionKind::Face &&
+          request.active_face > 0) {
+        selection.has_active = true;
         selection.active_face =
             quader::modeling::make_id<quader::modeling::FaceTag>(
                 static_cast<std::uint32_t>(request.active_face));
@@ -2409,19 +2607,21 @@ public:
 
       StagedSelectionDocument &staged = staged_documents[staged_index];
       if (exact_replace_batch) {
-        // PolygonDocument::apply_selection(Replace) derives the active element
-        // from the first selected component. Mirror that canonical form so the
-        // atomic SDK commit can perform the sole validation/application pass.
-        selection.has_active = false;
-        if (selection.kind == SelectionKind::Vertex &&
+        // Exact SDK snapshots require one canonical active component whenever
+        // the selection is non-empty. Preserve an explicit caller choice and
+        // synthesize only the missing per-object active value used by native
+        // multi-object projections.
+        if (!selection.has_active && selection.kind == SelectionKind::Vertex &&
             !selection.vertices.empty()) {
           selection.has_active = true;
           selection.active_vertex = selection.vertices.front();
-        } else if (selection.kind == SelectionKind::Edge &&
+        } else if (!selection.has_active &&
+                   selection.kind == SelectionKind::Edge &&
                    !selection.edges.empty()) {
           selection.has_active = true;
           selection.active_edge = selection.edges.front();
-        } else if (selection.kind == SelectionKind::Face &&
+        } else if (!selection.has_active &&
+                   selection.kind == SelectionKind::Face &&
                    !selection.faces.empty()) {
           selection.has_active = true;
           selection.active_face = selection.faces.front();
@@ -5072,7 +5272,8 @@ public:
                                                 restored_identity);
       if (!mesh_sync_.bind_projected_object(
               scene_, entity, projected.modeling_object_id,
-              projected.material_slot, true, projected.mesh_id)) {
+              projected.material_slot, true, projected.mesh_id,
+              restored_identity.local_frame_version)) {
         return rollback("SDK history scene binding could not be restored.");
       }
       (void)mesh_sync_.set_projected_material(
@@ -5224,8 +5425,9 @@ private:
     native_id = *allocated_native_id;
     if (native_id == kInvalidModelingObjectId ||
         native_id >= std::numeric_limits<int>::max() ||
-        !mesh_sync_.bind_projected_object(scene_, entity, native_id,
-                                          material_slot, true, mesh_id)) {
+        !mesh_sync_.bind_projected_object(
+            scene_, entity, native_id, material_slot, true, mesh_id,
+            source_identity.local_frame_version)) {
       return false;
     }
     mesh_sync_.apply_scene_identity_to_duplicate_entity(scene_, entity,
@@ -5747,7 +5949,7 @@ private:
           native_id >= std::numeric_limits<int>::max() ||
           !mesh_sync_.bind_projected_object(
               scene_, entity, native_id, source_component->material_slot, true,
-              mesh_id)) {
+              mesh_id, duplicate_identity.local_frame_version)) {
         return rollback("SDK duplicate scene binding could not be installed.");
       }
       mesh_sync_.apply_scene_identity_to_duplicate_entity(
@@ -6361,7 +6563,8 @@ private:
         extracted_native == std::numeric_limits<int>::max() ||
         !mesh_sync_.bind_projected_object(
             scene_, extracted_entity, extracted_native,
-            source_component->material_slot, true, extracted_mesh)) {
+            source_component->material_slot, true, extracted_mesh,
+            source_identity->local_frame_version)) {
       return rollback("SDK extracted scene binding could not be installed.");
     }
     mesh_sync_.apply_scene_identity_to_duplicate_entity(

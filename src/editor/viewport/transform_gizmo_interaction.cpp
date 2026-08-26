@@ -71,10 +71,21 @@ QuaderTransformTool api_transform_tool_for(ViewportToolId tool) {
   return QuaderTransformTool::Move;
 }
 
+quader_poly::Transform3 runtime_orientation(
+    const QuaderTransform3 &orientation) {
+  return {
+      .x_axis = orientation.x_axis,
+      .y_axis = orientation.y_axis,
+      .z_axis = orientation.z_axis,
+      .origin = orientation.origin,
+  };
+}
+
 quader_editor_core::TransformGizmoFrameInput
 make_gizmo_input(const ViewportInteractionFrame &frame, ViewportToolId tool,
-                 QVec3 pivot, quader_editor_core::TransformAxis active_axis,
-                 quader_editor_core::TransformAxis hover_axis) {
+                  QVec3 pivot, quader_poly::Transform3 orientation,
+                  quader_editor_core::TransformAxis active_axis,
+                  quader_editor_core::TransformAxis hover_axis) {
   quader_editor_core::TransformGizmoFrameInput input;
   input.tool = viewport_tool_interaction_tool(tool);
   input.active_axis = active_axis;
@@ -82,6 +93,7 @@ make_gizmo_input(const ViewportInteractionFrame &frame, ViewportToolId tool,
   input.has_selection = true;
   input.has_pivot = true;
   input.pivot = pivot;
+  input.orientation = orientation;
   input.camera = ViewportCameraAdapter::runtime_camera(
       frame.camera, frame.input.viewport_size);
   input.grid_size =
@@ -240,6 +252,9 @@ bool TransformGizmoInteraction::begin_pending_drag(
   active_drag_pivot_ = dragging_ ? begin.value().pivot : QVec3{};
   active_world_direction_ =
       dragging_ ? pending.begin_request.world_direction : QVec3{};
+  active_orientation_ =
+      dragging_ ? runtime_orientation(pending.begin_request.orientation)
+                : quader_poly::Transform3{};
   rotation_indicator_start_direction_ =
       dragging_ && viewport_tool_interaction_tool(pending.tool) ==
                        quader_editor_core::ViewportInteractionTool::Rotate
@@ -283,21 +298,42 @@ TransformGizmoInteraction::handle_frame(QuaderEditorApi &editor,
 
   std::optional<QuaderSelectionSummary> selection;
   QVec3 pivot = {};
+  quader_poly::Transform3 orientation;
   if (dragging_) {
     pivot = active_drag_pivot_;
+    orientation = active_orientation_;
   } else if (pending_drag_.has_value()) {
     pivot = pending_drag_->begin_request.pivot;
+    orientation = runtime_orientation(pending_drag_->begin_request.orientation);
   } else {
     selection = frame.selection_state.summary;
-    if (!cached_selection_state_.has_value() ||
+    const bool selection_changed =
+        !cached_selection_state_.has_value() ||
         !selection_states_match(*cached_selection_state_,
-                                frame.selection_state)) {
+                                frame.selection_state);
+    const std::uint64_t transform_space_revision =
+        editor.viewports().transform_space_revision();
+    const bool transform_space_changed =
+        !has_cached_transform_space_revision_ ||
+        cached_transform_space_revision_ != transform_space_revision;
+    if (selection_changed) {
       cached_selection_state_ = frame.selection_state;
       cached_selection_pivot_.reset();
       if (selection->has_selection) {
         ++selection_cache_stats_.selection_pivot_recompute_count;
         cached_selection_pivot_ =
             editor.query().selection_transform_pivot();
+      }
+    }
+    if (selection_changed || transform_space_changed) {
+      cached_transform_space_revision_ = transform_space_revision;
+      has_cached_transform_space_revision_ = true;
+      cached_selection_orientation_ = {};
+      if (selection->has_selection &&
+          editor.viewports().transform_space() == QuaderTransformSpace::Local) {
+        cached_selection_orientation_ =
+            editor.query().selection_transform_orientation().value_or(
+                QuaderTransform3{});
       }
     } else {
       ++selection_cache_stats_.selection_cache_hit_count;
@@ -308,6 +344,7 @@ TransformGizmoInteraction::handle_frame(QuaderEditorApi &editor,
       return result;
     }
     pivot = *cached_selection_pivot_;
+    orientation = runtime_orientation(cached_selection_orientation_);
   }
 
   const bool suppress_hover =
@@ -316,7 +353,7 @@ TransformGizmoInteraction::handle_frame(QuaderEditorApi &editor,
       frame.input.modal_tool_active || frame.input.active_tool_owns_viewport;
 
   quader_editor_core::TransformGizmoFrameInput gizmo_input = make_gizmo_input(
-      frame, tool, pivot,
+      frame, tool, pivot, orientation,
       dragging_ ? active_axis_
                 : (pending_drag_.has_value()
                        ? pending_drag_->axis
@@ -371,6 +408,8 @@ TransformGizmoInteraction::handle_frame(QuaderEditorApi &editor,
                   .operation = transform_operation_for(
                       tool, selection->mode, frame.input.modifiers),
                   .axis = api_axis_for(hit.axis),
+                  .space = editor.viewports().transform_space(),
+                  .orientation = cached_selection_orientation_,
                   .pivot = pivot,
                   .screen_position = frame.left_click_local,
                   .screen_pivot = current_frame_->info.screen_pivot,
@@ -574,6 +613,9 @@ void TransformGizmoInteraction::reset(QuaderEditorApi* editor) {
     clear_frame();
     cached_selection_state_.reset();
     cached_selection_pivot_.reset();
+    cached_selection_orientation_ = {};
+    cached_transform_space_revision_ = 0;
+    has_cached_transform_space_revision_ = false;
 }
 
 const quader_editor_core::TransformGizmoFrame* TransformGizmoInteraction::frame() const {
@@ -588,6 +630,7 @@ void TransformGizmoInteraction::reset_drag_state() {
   active_axis_ = quader_editor_core::TransformAxis::None;
   active_drag_pivot_ = {};
   active_world_direction_ = {};
+  active_orientation_ = {};
   rotation_indicator_start_direction_.reset();
   last_drag_update_signature_.reset();
   active_rotate_indicator_ = {};

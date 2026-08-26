@@ -86,6 +86,7 @@ private:
         quader_editor_core::TransformAxis::None;
     quader::QVec3 active_drag_pivot_ = {};
     quader::QVec3 active_world_direction_ = {};
+    quader_poly::Transform3 active_orientation_ = {};
     std::optional<quader::QVec3> rotation_indicator_start_direction_;
     std::optional<DragUpdateSignature> last_drag_update_signature_;
     quader_editor_core::TransformGizmoRotateIndicator
@@ -93,6 +94,9 @@ private:
     std::optional<quader_editor_core::TransformGizmoFrame> current_frame_;
     std::optional<ViewportInteractionSelectionState> cached_selection_state_;
     std::optional<quader::QVec3> cached_selection_pivot_;
+    QuaderTransform3 cached_selection_orientation_ = {};
+    std::uint64_t cached_transform_space_revision_ = 0;
+    bool has_cached_transform_space_revision_ = false;
     TransformGizmoSelectionCacheStats selection_cache_stats_;
 };
 

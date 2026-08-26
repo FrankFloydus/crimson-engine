@@ -614,9 +614,9 @@ TEST(CommandBehaviorContractTests,
   EXPECT_EQ(contracted, registered)
       << "The registry and explicit behavior-contract catalog diverged.";
 #ifndef NDEBUG
-  EXPECT_EQ(contracted.size(), 158u);
+  EXPECT_EQ(contracted.size(), 159u);
 #else
-  EXPECT_EQ(contracted.size(), 157u);
+  EXPECT_EQ(contracted.size(), 158u);
 #endif
 }
 

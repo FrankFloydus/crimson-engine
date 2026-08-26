@@ -59,6 +59,17 @@ QVec3 multiply_components(QVec3 left, QVec3 right) {
   return {left.x * right.x, left.y * right.y, left.z * right.z};
 }
 
+QVec3 euler_radians_after_local_rotation_delta(
+    QVec3 current_euler_radians, QVec3 local_rotation_delta_radians) {
+  const glm::quat current =
+      to_glm(quat_from_euler_radians(current_euler_radians));
+  const glm::quat delta =
+      to_glm(quat_from_euler_radians(local_rotation_delta_radians));
+  return equivalent_euler_radians_closest_to(
+      from_glm(glm::eulerAngles(glm::normalize(current * delta))),
+      current_euler_radians);
+}
+
 QVec3 clamp_scale(QVec3 scale) {
   return {
       std::max(scale.x, 0.001f),
@@ -145,7 +156,7 @@ std::optional<TransformComponent> transformed_target_from_world_delta(
 
 void pin_target_local_pivot_to_world_point(
     const SceneDocument &document, const SceneTransformDragTarget &target,
-    TransformComponent &transform, QVec3 world_pivot) {
+    TransformComponent &transform, QVec3 local_pivot, QVec3 world_pivot) {
   QTransform spatial = transform.spatial_transform();
   spatial.position = {};
   const EntityId parent = document.parent(target.entity);
@@ -158,7 +169,7 @@ void pin_target_local_pivot_to_world_point(
       transform_point(inverse(parent_world), scene_pivot);
   transform.position =
       parent_space_pivot -
-      transform_point(compose_transform(spatial), target.local_pivot);
+      transform_point(compose_transform(spatial), local_pivot);
 }
 
 template <typename BuildTransform>
@@ -293,12 +304,14 @@ SceneTransformDragService& SceneTransformDragService::operator=(SceneTransformDr
 bool SceneTransformDragService::begin(SceneDocument &document,
                                       QVec3 world_pivot, bool start_preview,
                                       std::string label,
-                                      QMat4 display_from_scene) {
+                                      QMat4 display_from_scene,
+                                      const AssetRegistry *visible_pivot_assets) {
   reset();
   label_ = std::move(label);
   world_pivot_ = world_pivot;
 
-  if (capture_targets(document, world_pivot, display_from_scene) !=
+  if (capture_targets(document, world_pivot, display_from_scene,
+                      visible_pivot_assets) !=
       CaptureTargetsStatus::Captured) {
     reset();
     return false;
@@ -418,8 +431,8 @@ SceneTransformDragService::preview_selected_to_primary_euler(
         TransformComponent next = target.transform;
         next.rotation_euler = euler_radians_after_world_rotation_delta(
             next.rotation_euler, delta);
-        pin_target_local_pivot_to_world_point(document, target, next,
-                                              world_pivot_);
+        pin_target_local_pivot_to_world_point(
+            document, target, next, target.local_pivot, world_pivot_);
         return next;
       });
   return preview_->preview_transforms(std::move(edits));
@@ -444,8 +457,8 @@ SceneTransformDragService::preview_selected_to_primary_scale(
       document, targets_, [&](const SceneTransformDragTarget &target) {
         TransformComponent next = target.transform;
         next.scale = clamp_scale(multiply_components(next.scale, ratio));
-        pin_target_local_pivot_to_world_point(document, target, next,
-                                              world_pivot_);
+        pin_target_local_pivot_to_world_point(
+            document, target, next, target.local_pivot, world_pivot_);
         return next;
       });
   return preview_->preview_transforms(std::move(edits));
@@ -524,6 +537,81 @@ SceneTransformDragService::preview_world_translation_delta(
   return preview_->preview_transforms(std::move(preview_edits));
 }
 
+DocumentCommandResult SceneTransformDragService::preview_local_rotation_delta(
+    SceneDocument &document, QVec3 local_rotation_delta_radians) {
+  if (!preview_) {
+    return document_command_invalid_request_result(
+        "Transform preview is not active");
+  }
+  if (!finite_vector(local_rotation_delta_radians)) {
+    return document_command_invalid_request_result(
+        "Local rotation delta must be finite");
+  }
+
+  std::vector<DocumentTransformEdit> preview_edits;
+  preview_edits.reserve(targets_.size());
+  for (const SceneTransformDragTarget &target : targets_) {
+    if (!document.exists(target.entity) ||
+        document.is_effectively_locked(target.entity)) {
+      continue;
+    }
+    TransformComponent next = target.transform;
+    next.rotation_euler = euler_radians_after_local_rotation_delta(
+        target.transform.rotation_euler, local_rotation_delta_radians);
+    pin_target_local_pivot_to_world_point(
+        document, target, next, target.local_visible_pivot,
+        target.display_visible_pivot);
+    if (!scene_transform_is_finite(next)) {
+      return document_command_invalid_request_result(
+          "Local rotation cannot be represented by the target transform");
+    }
+    preview_edits.push_back(DocumentTransformEdit{
+        .entity = target.entity,
+        .before = target.transform,
+        .after = next,
+    });
+  }
+  return preview_->preview_transforms(std::move(preview_edits));
+}
+
+DocumentCommandResult SceneTransformDragService::preview_local_scale_delta(
+    SceneDocument &document, QVec3 local_scale_factors) {
+  if (!preview_) {
+    return document_command_invalid_request_result(
+        "Transform preview is not active");
+  }
+  if (!finite_vector(local_scale_factors) || local_scale_factors.x <= 0.0f ||
+      local_scale_factors.y <= 0.0f || local_scale_factors.z <= 0.0f) {
+    return document_command_invalid_request_result(
+        "Local scale factors must be finite and positive");
+  }
+
+  std::vector<DocumentTransformEdit> preview_edits;
+  preview_edits.reserve(targets_.size());
+  for (const SceneTransformDragTarget &target : targets_) {
+    if (!document.exists(target.entity) ||
+        document.is_effectively_locked(target.entity)) {
+      continue;
+    }
+    TransformComponent next = target.transform;
+    next.scale = multiply_components(target.transform.scale,
+                                     local_scale_factors);
+    pin_target_local_pivot_to_world_point(
+        document, target, next, target.local_visible_pivot,
+        target.display_visible_pivot);
+    if (!scene_transform_is_finite(next)) {
+      return document_command_invalid_request_result(
+          "Local scale cannot be represented by the target transform");
+    }
+    preview_edits.push_back(DocumentTransformEdit{
+        .entity = target.entity,
+        .before = target.transform,
+        .after = next,
+    });
+  }
+  return preview_->preview_transforms(std::move(preview_edits));
+}
+
 DocumentCommandResult SceneTransformDragService::accept() {
     if (!preview_) {
         targets_.clear();
@@ -586,7 +674,8 @@ void SceneTransformDragService::reset() {
 SceneTransformDragService::CaptureTargetsStatus
 SceneTransformDragService::capture_targets(SceneDocument &document,
                                            QVec3 world_pivot,
-                                           QMat4 display_from_scene) {
+                                           QMat4 display_from_scene,
+                                           const AssetRegistry *visible_pivot_assets) {
   targets_.clear();
   if (!finite_vector(world_pivot)) {
     return CaptureTargetsStatus::Invalid;
@@ -641,11 +730,32 @@ SceneTransformDragService::capture_targets(SceneDocument &document,
         targets_.clear();
         return CaptureTargetsStatus::Invalid;
       }
+      QVec3 display_visible_pivot = transform_point(world_transform, {});
+      if (visible_pivot_assets != nullptr) {
+        const std::optional<QVec3> scene_visible_pivot =
+            resolve_entity_transform_visible_pivot(
+                document, *visible_pivot_assets, entity);
+        if (scene_visible_pivot.has_value()) {
+          display_visible_pivot =
+              transform_point(display_from_scene, *scene_visible_pivot);
+        }
+      } else if (selected.size() == 1U) {
+        // Preserve the established single-target contract for callers that
+        // already resolved the visible pivot before beginning the drag.
+        display_visible_pivot = world_pivot;
+      }
+      if (!finite_vector(display_visible_pivot)) {
+        targets_.clear();
+        return CaptureTargetsStatus::Invalid;
+      }
       targets_.push_back(SceneTransformDragTarget{
           .entity = entity,
           .transform = *selected_transform,
           .translation_preview_transform = *translation_preview_transform,
           .local_pivot = transform_point(*world_inverse, world_pivot),
+          .local_visible_pivot =
+              transform_point(*world_inverse, display_visible_pivot),
+          .display_visible_pivot = display_visible_pivot,
           .world_transform = world_transform,
           .scene_from_display = *scene_from_display,
           .parent_space_world_x = basis.world_x,
@@ -736,8 +846,8 @@ QuaderApiVoidResult SceneTransformDragService::
         TransformComponent next = target.transform;
         next.rotation_euler = euler_radians_after_world_rotation_delta(
             next.rotation_euler, delta);
-        pin_target_local_pivot_to_world_point(document, target, next,
-                                              world_pivot);
+        pin_target_local_pivot_to_world_point(
+            document, target, next, target.local_pivot, world_pivot);
         return next;
       });
   QuaderApiVoidResult result =
@@ -776,8 +886,8 @@ QuaderApiVoidResult SceneTransformDragService::
       document, targets_, [&](const SceneTransformDragTarget &target) {
         TransformComponent next = target.transform;
         next.scale = clamp_scale(multiply_components(next.scale, ratio));
-        pin_target_local_pivot_to_world_point(document, target, next,
-                                              world_pivot);
+        pin_target_local_pivot_to_world_point(
+            document, target, next, target.local_pivot, world_pivot);
         return next;
       });
   QuaderApiVoidResult result =

@@ -157,6 +157,7 @@ struct TransformGizmoFrameInput {
   bool has_selection = false;
   bool has_pivot = false;
   quader::QVec3 pivot;
+  quader_poly::Transform3 orientation;
   ViewportCameraState camera;
   double grid_size = 1.0;
   double gizmo_size_pixels = 68.0;

@@ -49,6 +49,7 @@ public:
 		ScaleToolState state;
 		state.active = true;
 		state.axis = input.axis;
+		state.orientation = input.orientation;
 		state.object_ids = input.object_ids;
 		state.pivot = input.pivot;
 		state.screen_pivot = input.has_screen_pivot ? input.screen_pivot : input.screen_position;
@@ -84,7 +85,8 @@ public:
 			return { false, "Scale tool is not active.", {}, {}, {}, {} };
 		}
 		state.preview_scale = scale;
-		const quader_poly::Transform3 transform = scale_transform(state.preview_scale);
+		const quader_poly::Transform3 transform = oriented_scale_transform(
+			state.preview_scale, state.orientation);
 		return { true, {}, state.preview_scale, state.preview_scale, transform, pivoted_transform(transform, state.pivot) };
 	}
 

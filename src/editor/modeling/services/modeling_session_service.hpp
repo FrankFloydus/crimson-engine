@@ -105,6 +105,8 @@ public:
   [[nodiscard]] std::vector<EntityId>
   box_pick_object_entities(const ModelingBoxSelectRequest &request) const;
   [[nodiscard]] std::optional<QVec3> selection_center() const;
+  [[nodiscard]] std::optional<ModelingTransform3>
+  selection_transform_orientation() const;
   [[nodiscard]] std::optional<SceneBounds> selection_bounds() const;
   [[nodiscard]] ModelingSelectionMode selection_mode() const;
   [[nodiscard]] ModelingSelectionSummary selection_summary() const;

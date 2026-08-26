@@ -231,6 +231,23 @@ ViewportWorkspaceService::camera(ViewportPaneId pane_id) const {
   return pane(pane_id).camera;
 }
 
+bool ViewportWorkspaceService::set_transform_space(
+    ViewportTransformSpace space) {
+  if (transform_space_ == space) {
+    return false;
+  }
+  transform_space_ = space;
+  ++transform_space_revision_;
+  return true;
+}
+
+bool ViewportWorkspaceService::toggle_transform_space() {
+  return set_transform_space(
+      transform_space_ == ViewportTransformSpace::Global
+          ? ViewportTransformSpace::Local
+          : ViewportTransformSpace::Global);
+}
+
 ViewportCameraPose
 ViewportWorkspaceService::persisted_perspective_camera_pose() const {
   const std::size_t index =

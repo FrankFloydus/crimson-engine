@@ -98,6 +98,21 @@ QtToolToolbar::QtToolToolbar(QWidget *parent) : QToolBar(parent) {
         .tool = spec.tool,
         .tool_id = tool_id,
     };
+    if (spec.tool == ViewportToolId::Pivot) {
+      transform_space_action_ = addAction(
+          QIcon(QStringLiteral(":/quader/icons/tool_transform_local.png")),
+          QStringLiteral("Local Transforms"));
+      transform_space_action_->setObjectName(
+          QStringLiteral("toggle_transform_space"));
+      transform_space_action_->setCheckable(true);
+      QObject::connect(
+          transform_space_action_, &QAction::triggered, this,
+          [this](bool) {
+            if (transform_space_toggle_requested_) {
+              transform_space_toggle_requested_();
+            }
+          });
+    }
   }
   QStyle &button_presentation =
       install_native_toolbar_button_presentation(*this);
@@ -105,6 +120,8 @@ QtToolToolbar::QtToolToolbar(QWidget *parent) : QToolBar(parent) {
     configure_native_toolbar_button_face(*this, *entry.action,
                                          button_presentation);
   }
+  configure_native_toolbar_button_face(
+      *this, *transform_space_action_, button_presentation);
 }
 
 void QtToolToolbar::set_localization(
@@ -117,6 +134,11 @@ void QtToolToolbar::set_localization(
     entry.action->setText(text);
     entry.action->setToolTip(text);
   }
+  const QString transform_space_text = QString::fromStdString(
+      localization.text("ui.toolbar.tools.transform_space",
+                        "Local Transforms"));
+  transform_space_action_->setText(transform_space_text);
+  transform_space_action_->setToolTip(transform_space_text);
   synchronization_valid_ = false;
 }
 
@@ -124,16 +146,24 @@ void QtToolToolbar::synchronize(const QuaderEditorApi &editor,
                                 const QuaderSelectionSummary &selection,
                                 bool force) {
   const std::string active_tool = editor.tools().active_tool();
+  const QuaderTransformSpace transform_space =
+      editor.viewports().transform_space();
+  const std::uint64_t transform_space_revision =
+      editor.viewports().transform_space_revision();
   if (!force && synchronization_valid_ &&
       synchronized_active_tool_ == active_tool &&
       synchronized_selection_mode_ == selection.mode &&
-      synchronized_selection_revision_ == selection.selection_revision) {
+      synchronized_selection_revision_ == selection.selection_revision &&
+      synchronized_transform_space_ == transform_space &&
+      synchronized_transform_space_revision_ == transform_space_revision) {
     return;
   }
   synchronization_valid_ = true;
   synchronized_active_tool_ = active_tool;
   synchronized_selection_mode_ = selection.mode;
   synchronized_selection_revision_ = selection.selection_revision;
+  synchronized_transform_space_ = transform_space;
+  synchronized_transform_space_revision_ = transform_space_revision;
 
   for (const ToolAction &entry : tool_actions_) {
     const bool checked = active_tool == entry.tool_id;
@@ -160,11 +190,42 @@ void QtToolToolbar::synchronize(const QuaderEditorApi &editor,
       entry.action->setToolTip(tooltip);
     }
   }
+
+  const std::optional<QuaderCommandDescriptor> transform_space_command =
+      editor.commands().descriptor(
+          quader_command::kViewportToggleTransformSpace);
+  const bool transform_space_enabled =
+      transform_space_command.has_value() && transform_space_command->enabled;
+  if (transform_space_action_->isEnabled() != transform_space_enabled) {
+    transform_space_action_->setEnabled(transform_space_enabled);
+  }
+  const bool local = transform_space == QuaderTransformSpace::Local;
+  if (transform_space_action_->isChecked() != local) {
+    const QSignalBlocker blocker(transform_space_action_);
+    transform_space_action_->setChecked(local);
+  }
+  QString transform_space_tooltip = transform_space_action_->text();
+  const std::string transform_space_shortcut =
+      transform_space_command.has_value() ? transform_space_command->shortcut
+                                          : std::string{};
+  if (!transform_space_shortcut.empty()) {
+    transform_space_tooltip.append(
+        QStringLiteral(" [%1]")
+            .arg(QString::fromStdString(transform_space_shortcut)));
+  }
+  if (transform_space_action_->toolTip() != transform_space_tooltip) {
+    transform_space_action_->setToolTip(transform_space_tooltip);
+  }
 }
 
 void QtToolToolbar::set_tool_requested_callback(
     std::function<void(std::string_view)> callback) {
   tool_requested_ = std::move(callback);
+}
+
+void QtToolToolbar::set_transform_space_toggle_requested_callback(
+    std::function<void()> callback) {
+  transform_space_toggle_requested_ = std::move(callback);
 }
 
 } // namespace quader

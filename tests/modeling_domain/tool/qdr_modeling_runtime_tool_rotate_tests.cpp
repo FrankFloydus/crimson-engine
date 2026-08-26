@@ -84,6 +84,36 @@ TEST(QdrModelingRuntimeToolRotateTests, RotateDragUsesLinearSensitivityWhenAxisI
 	EXPECT_NEAR(preview.preview_angle_degrees, 90.0, 0.0001);
 }
 
+TEST(QdrModelingRuntimeToolRotateTests,
+     RotateDragConjugatesTheAxisDeltaThroughItsOrientation) {
+	quader_editor_core::RotateBeginInput input;
+	input.axis = quader_editor_core::TransformAxis::X;
+	input.orientation.x_axis = {0.0F, 1.0F, 0.0F};
+	input.orientation.y_axis = {-1.0F, 0.0F, 0.0F};
+	input.pivot = {};
+	input.screen_position = {120.0F, 100.0F};
+	input.has_screen_pivot = true;
+	input.screen_pivot = {100.0F, 100.0F};
+
+	const quader_editor_core::RotateBeginResult begin =
+		quader_editor_core::begin_rotate_drag(input);
+	ASSERT_TRUE(begin.ok);
+	quader_editor_core::RotateToolState state = begin.state;
+	const quader_editor_core::RotatePreviewResult preview =
+		quader_editor_core::preview_rotate_from_angle_degrees(state, 90.0, 0.0);
+
+	ASSERT_TRUE(preview.ok);
+	EXPECT_NEAR(preview.transform.x_axis.x, 0.0F, 0.0001F);
+	EXPECT_NEAR(preview.transform.x_axis.y, 0.0F, 0.0001F);
+	EXPECT_NEAR(preview.transform.x_axis.z, -1.0F, 0.0001F);
+	EXPECT_NEAR(preview.transform.y_axis.x, 0.0F, 0.0001F);
+	EXPECT_NEAR(preview.transform.y_axis.y, 1.0F, 0.0001F);
+	EXPECT_NEAR(preview.transform.y_axis.z, 0.0F, 0.0001F);
+	EXPECT_NEAR(preview.transform.z_axis.x, 1.0F, 0.0001F);
+	EXPECT_NEAR(preview.transform.z_axis.y, 0.0F, 0.0001F);
+	EXPECT_NEAR(preview.transform.z_axis.z, 0.0F, 0.0001F);
+}
+
 TEST(QdrModelingRuntimeToolRotateTests, ModalRotatePlannerClearsTinyDuplicatePreviews) {
 	quader_editor_core::ModalTransformBeginPlan begin =
 		quader_editor_core::plan_modal_transform_drag_begin({ true, false });

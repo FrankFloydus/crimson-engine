@@ -542,10 +542,16 @@ bool reconcile_modeling_object_scene_nodes(
 
     {
       QDR_PROFILE_SCOPE("Modeling mesh sync set modeling object component");
+      const std::uint32_t local_frame_version =
+          identity.has_value()
+              ? identity->local_frame_version
+              : kLegacyUnknownModelingObjectLocalFrameVersion;
       scene.set_modeling_object(entity, ModelingObjectComponent{
-                                            .object_id = object.id,
-                                            .material_slot = material_slot,
-                                        });
+                                             .object_id = object.id,
+                                             .material_slot = material_slot,
+                                             .local_frame_version =
+                                                 local_frame_version,
+                                         });
     }
     if (identity.has_value()) {
       QDR_PROFILE_SCOPE("Modeling mesh sync apply durable scene identity");
@@ -664,12 +670,12 @@ bool project_modeling_meshes_to_scene(
     const std::optional<EntityId> existing =
         object_registry.entity_for_modeling_object(object.id);
     const EntityId entity = *existing;
-    const ModelingObjectComponent next_object{
-        .object_id = object.id,
-        .material_slot = plan->material_slot,
-    };
     const ModelingObjectComponent *current_object =
         scene.modeling_object(entity);
+    ModelingObjectComponent next_object =
+        current_object != nullptr ? *current_object : ModelingObjectComponent{};
+    next_object.object_id = object.id;
+    next_object.material_slot = plan->material_slot;
     if (current_object == nullptr ||
         current_object->object_id != next_object.object_id ||
         current_object->material_slot != next_object.material_slot) {
@@ -761,9 +767,38 @@ bool ModelingMeshSyncService::parent_projected_entity(
   return scene.set_parent(entity, parent, false);
 }
 
+bool ModelingMeshSyncService::set_projected_transform(
+    SceneDocument &scene, EntityId entity,
+    const TransformComponent &transform) const {
+  return scene.set_transform(entity, transform);
+}
+
+bool ModelingMeshSyncService::set_projected_mesh_component(
+    SceneDocument &scene, EntityId entity, const MeshComponent &mesh) const {
+  return scene.set_mesh(entity, mesh);
+}
+
+bool ModelingMeshSyncService::set_projected_modeling_object_component(
+    SceneDocument &scene, EntityId entity,
+    const ModelingObjectComponent &modeling_object) const {
+  return scene.set_modeling_object(entity, modeling_object);
+}
+
 bool ModelingMeshSyncService::bind_projected_object(
     SceneDocument &scene, EntityId entity, int modeling_object_id,
-    std::uint32_t material_slot, bool sdk_owned, AssetId mesh_id) const {
+    std::uint32_t material_slot, bool sdk_owned, AssetId mesh_id,
+    std::optional<std::uint32_t> requested_local_frame_version) const {
+  const ModelingObjectComponent *current_modeling_object =
+      scene.modeling_object(entity);
+  std::uint32_t local_frame_version =
+      kLegacyUnknownModelingObjectLocalFrameVersion;
+  if (requested_local_frame_version.has_value()) {
+    local_frame_version = *requested_local_frame_version;
+  } else if (current_modeling_object != nullptr) {
+    local_frame_version = current_modeling_object->local_frame_version;
+  } else if (sdk_owned) {
+    local_frame_version = kCanonicalModelingObjectLocalFrameVersion;
+  }
   MeshComponent mesh = scene.mesh(entity) != nullptr
                            ? *scene.mesh(entity)
                            : MeshComponent{};
@@ -771,7 +806,8 @@ bool ModelingMeshSyncService::bind_projected_object(
   return scene.set_modeling_object(
              entity, {.object_id = modeling_object_id,
                       .material_slot = material_slot,
-                      .sdk_owned = sdk_owned}) &&
+                       .sdk_owned = sdk_owned,
+                       .local_frame_version = local_frame_version}) &&
          scene.set_mesh(entity, mesh);
 }
 
@@ -920,6 +956,17 @@ void ModelingMeshSyncService::apply_scene_transforms(
     SceneDocument &scene,
     std::span<const SceneTransformAssignment> transforms) const {
   scene.set_transforms(transforms);
+}
+
+bool ModelingMeshSyncService::restore_projected_asset_checkpoint(
+    AssetRegistry &assets,
+    const AssetRegistryProjectionCheckpoint &checkpoint) const {
+  return assets.restore_projection_checkpoint(checkpoint);
+}
+
+bool ModelingMeshSyncService::restore_projected_scene_checkpoint(
+    SceneDocument &scene, const SceneProjectionCheckpoint &checkpoint) const {
+  return scene.restore_projection_checkpoint(checkpoint);
 }
 
 bool ModelingMeshSyncService::place_created_scene_object(

@@ -96,6 +96,32 @@ QuaderApiVoidResult QuaderViewportApi::set_grid_preset(int preset) {
   return runtime_status(impl_->workspace->set_grid_preset(preset));
 }
 
+QuaderTransformSpace QuaderViewportApi::transform_space() const {
+  switch (impl_->workspace->transform_space()) {
+  case ViewportTransformSpace::Global:
+    return QuaderTransformSpace::Global;
+  case ViewportTransformSpace::Local:
+    return QuaderTransformSpace::Local;
+  }
+  return QuaderTransformSpace::Global;
+}
+
+QuaderApiVoidResult
+QuaderViewportApi::set_transform_space(QuaderTransformSpace space) {
+  const ViewportTransformSpace viewport_space =
+      space == QuaderTransformSpace::Local ? ViewportTransformSpace::Local
+                                           : ViewportTransformSpace::Global;
+  return runtime_status(impl_->workspace->set_transform_space(viewport_space));
+}
+
+QuaderApiVoidResult QuaderViewportApi::toggle_transform_space() {
+  return runtime_status(impl_->workspace->toggle_transform_space());
+}
+
+std::uint64_t QuaderViewportApi::transform_space_revision() const {
+  return impl_->workspace->transform_space_revision();
+}
+
 QuaderShadingMode QuaderViewportApi::shading_mode(ViewportPaneId pane) const {
   return quader_api_from_viewport_shading_mode(
       impl_->workspace->shading_mode(pane));

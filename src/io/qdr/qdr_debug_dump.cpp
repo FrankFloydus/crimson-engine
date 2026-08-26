@@ -465,6 +465,7 @@ chunk_codec_name(quader_io::QdrBinaryChunkCodec codec) {
         {"objectId", entity.modeling_object->object_id},
         {"materialSlot", entity.modeling_object->material_slot},
         {"sdkOwned", entity.modeling_object->sdk_owned},
+        {"localFrameVersion", entity.modeling_object->local_frame_version},
     };
   }
   if (entity.mesh) {

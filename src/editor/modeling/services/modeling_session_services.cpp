@@ -2552,7 +2552,21 @@ bool ModelingSelectionService::apply_rectangle_selection(
         }
         if (object.id == selection.active_object_id &&
             !next_selection.edges.empty()) {
-          const quader_poly::Edge active = next_selection.edges.back();
+          quader_poly::Edge active = next_selection.edges.back();
+          if (selection.active_edge_vertex_indices.size() >= 2U &&
+              selection.active_edge_vertex_indices[0] >= 0 &&
+              selection.active_edge_vertex_indices[1] >= 0) {
+            const quader_poly::Edge requested_active = quader_poly::make_edge(
+                static_cast<quader_poly::ElementId>(
+                    selection.active_edge_vertex_indices[0]),
+                static_cast<quader_poly::ElementId>(
+                    selection.active_edge_vertex_indices[1]));
+            if (std::find(next_selection.edges.begin(),
+                          next_selection.edges.end(), requested_active) !=
+                next_selection.edges.end()) {
+              active = requested_active;
+            }
+          }
           next_selection.has_active = true;
           next_selection.active_kind = quader_poly::ElementKind::Edge;
           next_selection.active_edge = active;
@@ -2567,7 +2581,18 @@ bool ModelingSelectionService::apply_rectangle_selection(
         }
         if (object.id == selection.active_object_id &&
             !next_selection.vertices.empty()) {
-          const quader_poly::ElementId active = next_selection.vertices.back();
+          quader_poly::ElementId active = next_selection.vertices.back();
+          if (!selection.active_vertex_indices.empty() &&
+              selection.active_vertex_indices.front() >= 0) {
+            const quader_poly::ElementId requested_active =
+                static_cast<quader_poly::ElementId>(
+                    selection.active_vertex_indices.front());
+            if (std::find(next_selection.vertices.begin(),
+                          next_selection.vertices.end(), requested_active) !=
+                next_selection.vertices.end()) {
+              active = requested_active;
+            }
+          }
           next_selection.has_active = true;
           next_selection.active_kind = quader_poly::ElementKind::Vertex;
           next_selection.active_vertex = active;

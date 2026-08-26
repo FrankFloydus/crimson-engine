@@ -8,9 +8,13 @@
 #include "api/quader_api_session_internal_access.hpp"
 #include "api/quader_editor_api.hpp"
 #include "editor/history/editor_history_service.hpp"
+#include "editor/modeling/runtime/modeling_object_runtime_map.hpp"
+#include "editor/modeling/services/modeling_mesh_sync_service.hpp"
+#include "editor/modeling/services/modeling_sdk_projection_adapter.hpp"
 #include "editor/modeling/services/modeling_session_service.hpp"
 #include "editor/modeling/services/primitive_creation_tool_service.hpp"
 #include "editor/session/scene_session.hpp"
+#include "math/glm_bridge.hpp"
 #include "scene/scene_document.hpp"
 
 #include <gtest/gtest.h>
@@ -36,6 +40,59 @@ struct PrimitiveCreationHarness {
   ModelingSessionService modeling{scene, assets};
   PrimitiveCreationToolService tool{history, modeling};
 };
+
+/// Provides direct coverage of the SDK-to-native creation projection boundary.
+struct CreationProjectionHarness {
+  SceneDocument scene;
+  AssetRegistry assets;
+  ModelingObjectRuntimeMap object_map;
+  ModelingMeshSyncService mesh_sync;
+  ModelingSdkProjectionAdapter projection{scene, assets, object_map,
+                                           mesh_sync};
+};
+
+std::array<QVec3, 8> oriented_box_corners(QVec3 center, QVec3 x_axis,
+                                          QVec3 y_axis, float width,
+                                          float height, float depth) {
+  const QVec3 half_x = x_axis * (width * 0.5f);
+  const QVec3 half_y = y_axis * (height * 0.5f);
+  const QVec3 half_z = normalize(cross(x_axis, y_axis)) * (depth * 0.5f);
+  return {
+      center - half_x - half_y - half_z,
+      center - half_x - half_y + half_z,
+      center + half_x - half_y + half_z,
+      center + half_x - half_y - half_z,
+      center - half_x + half_y - half_z,
+      center - half_x + half_y + half_z,
+      center + half_x + half_y + half_z,
+      center + half_x + half_y - half_z,
+  };
+}
+
+ModelingBoxPreview oriented_primitive_preview(QVec3 center, QVec3 x_axis,
+                                               QVec3 y_axis, float width,
+                                               float height, float depth) {
+  ModelingBoxPreview preview;
+  preview.ok = true;
+  preview.valid = true;
+  preview.drag_state = ModelingBoxDragState::Height;
+  preview.corners = oriented_box_corners(center, x_axis, y_axis, width,
+                                         height, depth);
+  preview.corner_count = preview.corners.size();
+  return preview;
+}
+
+bool near_point(QVec3 left, QVec3 right, float epsilon = 0.0001f) {
+  return length_squared(left - right) <= epsilon * epsilon;
+}
+
+bool mesh_contains_world_point(const MeshAsset &mesh, const QMat4 &world,
+                               QVec3 expected) {
+  return std::ranges::any_of(
+      mesh.geometry().vertices, [&](const MeshVertex &vertex) {
+        return near_point(transform_point(world, vertex.position), expected);
+      });
+}
 
 ModelingBoxPreview valid_primitive_preview(float center_x = 0.0f) {
   ModelingBoxPreview preview;
@@ -97,6 +154,194 @@ std::uint64_t compiled_content_id(const ModelingSessionService &modeling,
     return 0U;
   }
   return mesh->geometry_content_id().value;
+}
+
+TEST(PrimitiveCreationToolServiceTests,
+     OrientedPrimitiveRetainsLocalGeometryAndPlacementThroughHistory) {
+  PrimitiveCreationHarness harness;
+  constexpr float kInvSqrtTwo = 0.70710678f;
+  const QVec3 center{4.0f, 2.0f, -3.0f};
+  const QVec3 x_axis{kInvSqrtTwo, 0.0f, -kInvSqrtTwo};
+  const QVec3 y_axis{0.0f, 1.0f, 0.0f};
+  const QVec3 z_axis = normalize(cross(x_axis, y_axis));
+  const ModelingBoxPreview preview = oriented_primitive_preview(
+      center, x_axis, y_axis, 4.0f, 2.0f, 6.0f);
+
+  ASSERT_TRUE(harness.tool.activate(PrimitiveCreationKind::Box).ok);
+  const CommandResult accepted =
+      harness.tool.accept_preview(preview, "Oriented Primitive");
+  ASSERT_TRUE(accepted.ok) << accepted.message;
+  const std::vector<ModelingObjectRecord> objects = harness.modeling.objects();
+  ASSERT_EQ(objects.size(), 1U);
+  const ModelingObjectRecord &object = objects.front();
+  const ModelingObjectComponent *const modeling_object =
+      harness.scene.modeling_object(object.entity);
+  ASSERT_NE(modeling_object, nullptr);
+  EXPECT_EQ(modeling_object->local_frame_version,
+            kCanonicalModelingObjectLocalFrameVersion);
+  const TransformComponent *const transform =
+      harness.scene.transform(object.entity);
+  ASSERT_NE(transform, nullptr);
+  EXPECT_TRUE(near_point(transform->position, center));
+  EXPECT_TRUE(near_point(transform->scale, {1.0f, 1.0f, 1.0f}));
+  const QMat4 world = harness.scene.world_transform_matrix(object.entity);
+  EXPECT_TRUE(near_point(normalize(transform_vector(world, {1.0f, 0.0f, 0.0f})),
+                         x_axis));
+  EXPECT_TRUE(near_point(normalize(transform_vector(world, {0.0f, 1.0f, 0.0f})),
+                         y_axis));
+  EXPECT_TRUE(near_point(normalize(transform_vector(world, {0.0f, 0.0f, 1.0f})),
+                         z_axis));
+
+  const std::optional<MeshAsset> mesh =
+      harness.modeling.compile_object_mesh(object.modeling_object_id);
+  ASSERT_TRUE(mesh.has_value());
+  ASSERT_FALSE(mesh->geometry().vertices.empty());
+  for (const MeshVertex &vertex : mesh->geometry().vertices) {
+    EXPECT_LE(std::abs(vertex.position.x), 2.0001f);
+    EXPECT_LE(std::abs(vertex.position.y), 1.0001f);
+    EXPECT_LE(std::abs(vertex.position.z), 3.0001f);
+  }
+  for (const QVec3 corner : preview.corners) {
+    EXPECT_TRUE(mesh_contains_world_point(*mesh, world, corner));
+  }
+
+  ASSERT_TRUE(harness.tool.apply().ok);
+  ASSERT_TRUE(harness.history.undo().ok);
+  EXPECT_TRUE(harness.modeling.objects().empty());
+  ASSERT_TRUE(harness.history.redo().ok);
+  const std::vector<ModelingObjectRecord> restored = harness.modeling.objects();
+  ASSERT_EQ(restored.size(), 1U);
+  const ModelingObjectComponent *const restored_modeling_object =
+      harness.scene.modeling_object(restored.front().entity);
+  ASSERT_NE(restored_modeling_object, nullptr);
+  EXPECT_EQ(restored_modeling_object->local_frame_version,
+            kCanonicalModelingObjectLocalFrameVersion);
+  const QMat4 restored_world =
+      harness.scene.world_transform_matrix(restored.front().entity);
+  EXPECT_TRUE(near_point(transform_point(restored_world, {}), center));
+  EXPECT_TRUE(near_point(
+      normalize(transform_vector(restored_world, {1.0f, 0.0f, 0.0f})),
+      x_axis));
+  const std::optional<MeshAsset> restored_mesh =
+      harness.modeling.compile_object_mesh(restored.front().modeling_object_id);
+  ASSERT_TRUE(restored_mesh.has_value());
+  for (const QVec3 corner : preview.corners) {
+    EXPECT_TRUE(
+        mesh_contains_world_point(*restored_mesh, restored_world, corner));
+  }
+}
+
+TEST(ModelingSdkProjectionCreationTests,
+     BoxCornersBecomeLocalGeometryUnderTheirStoredPlacementFrame) {
+  CreationProjectionHarness harness;
+  constexpr float kInvSqrtTwo = 0.70710678f;
+  const QVec3 center{7.0f, 3.0f, -2.0f};
+  const QVec3 x_axis{kInvSqrtTwo, 0.0f, -kInvSqrtTwo};
+  const QVec3 y_axis{0.0f, 1.0f, 0.0f};
+  const QVec3 z_axis = normalize(cross(x_axis, y_axis));
+  const std::array<QVec3, 8> corners =
+      oriented_box_corners(center, x_axis, y_axis, 4.0f, 2.0f, 6.0f);
+
+  const ModelingCreateBoxResult created = harness.projection.create_box_from_corners(
+      corners, "Oriented Box");
+  ASSERT_TRUE(created.ok) << created.message;
+  const ModelingObjectComponent *const modeling_object =
+      harness.scene.modeling_object(created.object.entity);
+  ASSERT_NE(modeling_object, nullptr);
+  EXPECT_EQ(modeling_object->local_frame_version,
+            kCanonicalModelingObjectLocalFrameVersion);
+  const QMat4 world = harness.scene.world_transform_matrix(created.object.entity);
+  EXPECT_TRUE(near_point(transform_point(world, {}), center));
+  EXPECT_TRUE(near_point(normalize(transform_vector(world, {1.0f, 0.0f, 0.0f})),
+                         x_axis));
+  EXPECT_TRUE(near_point(normalize(transform_vector(world, {0.0f, 1.0f, 0.0f})),
+                         y_axis));
+  EXPECT_TRUE(near_point(normalize(transform_vector(world, {0.0f, 0.0f, 1.0f})),
+                         z_axis));
+
+  const std::optional<MeshAsset> mesh = harness.projection.compile_object_mesh(
+      created.object.modeling_object_id);
+  ASSERT_TRUE(mesh.has_value());
+  for (const MeshVertex &vertex : mesh->geometry().vertices) {
+    EXPECT_LE(std::abs(vertex.position.x), 2.0001f);
+    EXPECT_LE(std::abs(vertex.position.y), 1.0001f);
+    EXPECT_LE(std::abs(vertex.position.z), 3.0001f);
+  }
+  for (const QVec3 corner : corners) {
+    EXPECT_TRUE(mesh_contains_world_point(*mesh, world, corner));
+  }
+}
+
+TEST(ModelingSdkProjectionCreationTests,
+     PolyPointsBecomePlanarLocalGeometryUnderTheirStoredComponentFrame) {
+  CreationProjectionHarness harness;
+  constexpr float kInvSqrtTwo = 0.70710678f;
+  const QVec3 center{6.0f, -2.0f, 4.0f};
+  const QVec3 x_axis{1.0f, 0.0f, 0.0f};
+  const QVec3 z_axis{0.0f, kInvSqrtTwo, kInvSqrtTwo};
+  const QVec3 y_axis = normalize(cross(z_axis, x_axis));
+  const std::array<QVec3, 4> points{
+      center - x_axis * 2.0f - y_axis,
+      center + x_axis * 2.0f - y_axis,
+      center + x_axis * 2.0f + y_axis,
+      center - x_axis * 2.0f + y_axis,
+  };
+
+  const ModelingCreateBoxResult created = harness.projection.create_face(
+      points, z_axis, "Oriented Poly");
+  ASSERT_TRUE(created.ok) << created.message;
+  const ModelingObjectComponent *const modeling_object =
+      harness.scene.modeling_object(created.object.entity);
+  ASSERT_NE(modeling_object, nullptr);
+  EXPECT_EQ(modeling_object->local_frame_version,
+            kCanonicalModelingObjectLocalFrameVersion);
+  const QMat4 world = harness.scene.world_transform_matrix(created.object.entity);
+  EXPECT_TRUE(near_point(transform_point(world, {}), center));
+  EXPECT_TRUE(near_point(normalize(transform_vector(world, {1.0f, 0.0f, 0.0f})),
+                         x_axis));
+  EXPECT_TRUE(near_point(normalize(transform_vector(world, {0.0f, 1.0f, 0.0f})),
+                         y_axis));
+  EXPECT_TRUE(near_point(normalize(transform_vector(world, {0.0f, 0.0f, 1.0f})),
+                         z_axis));
+
+  const std::optional<MeshAsset> mesh = harness.projection.compile_object_mesh(
+      created.object.modeling_object_id);
+  ASSERT_TRUE(mesh.has_value());
+  for (const MeshVertex &vertex : mesh->geometry().vertices) {
+    EXPECT_NEAR(vertex.position.z, 0.0f, 0.0001f);
+    EXPECT_LE(std::abs(vertex.position.x), 2.0001f);
+    EXPECT_LE(std::abs(vertex.position.y), 1.0001f);
+  }
+  for (const QVec3 point : points) {
+    EXPECT_TRUE(mesh_contains_world_point(*mesh, world, point));
+  }
+}
+
+TEST(ModelingSdkProjectionCreationTests,
+     FailedProjectionRollsBackAnExplicitInitialSceneTransform) {
+  CreationProjectionHarness harness;
+  quader_poly::Document document = quader_poly::make_cube({});
+  ASSERT_FALSE(document.vertices.empty());
+  const std::vector<EntityId> entities_before = harness.scene.entities();
+  const std::vector<AssetId> assets_before = harness.assets.mesh_ids();
+  harness.projection.set_failure_point_for_tests(
+      ModelingSdkProjectionFailurePoint::AfterSceneBinding);
+
+  const ModelingCreateBoxResult failed = harness.projection.create_mesh({
+      .document = std::move(document),
+      .name = "Rolled Back Oriented Mesh",
+      .initial_scene_transform = ModelingTransform3{
+          .x_axis = {0.0f, 0.0f, -1.0f},
+          .y_axis = {0.0f, 1.0f, 0.0f},
+          .z_axis = {1.0f, 0.0f, 0.0f},
+          .origin = {20.0f, 30.0f, 40.0f},
+      },
+  });
+  EXPECT_FALSE(failed.ok);
+  EXPECT_FALSE(failed.changed);
+  EXPECT_EQ(harness.projection.object_count(), 0U);
+  EXPECT_EQ(harness.scene.entities(), entities_before);
+  EXPECT_EQ(harness.assets.mesh_ids(), assets_before);
 }
 
 TEST(PrimitiveCreationToolServiceTests,

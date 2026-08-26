@@ -332,11 +332,26 @@ void begin_editor_runtime_transform_drag_state(
 		TransformAxis axis,
 		quader::QVec3 pivot)
 {
+	begin_editor_runtime_transform_drag_state(
+			runtime, tool, operation, axis, TransformSpace::Global, {}, pivot);
+}
+
+void begin_editor_runtime_transform_drag_state(
+		EditorRuntimeState& runtime,
+		ViewportInteractionTool tool,
+		TransformDragOperation operation,
+		TransformAxis axis,
+		TransformSpace space,
+		quader_poly::Transform3 orientation,
+		quader::QVec3 pivot)
+{
 	reset_transform_drag(runtime.transform_drag);
 	runtime.transform_drag.active = true;
 	runtime.transform_drag.tool = sanitize_viewport_interaction_tool(tool);
 	runtime.transform_drag.operation = operation;
 	runtime.transform_drag.axis = axis;
+	runtime.transform_drag.space = space;
+	runtime.transform_drag.orientation = orientation;
 	runtime.transform_drag.pivot = pivot;
 }
 
@@ -870,6 +885,18 @@ void EditorRuntime::begin_transform_drag_state(
 		quader::QVec3 pivot)
 {
 	begin_editor_runtime_transform_drag_state(state_, tool, operation, axis, pivot);
+}
+
+void EditorRuntime::begin_transform_drag_state(
+		ViewportInteractionTool tool,
+		TransformDragOperation operation,
+		TransformAxis axis,
+		TransformSpace space,
+		quader_poly::Transform3 orientation,
+		quader::QVec3 pivot)
+{
+	begin_editor_runtime_transform_drag_state(state_, tool, operation, axis, space,
+			std::move(orientation), pivot);
 }
 
 void EditorRuntime::set_transform_drag_move_state(MoveToolState state)

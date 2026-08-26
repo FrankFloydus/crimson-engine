@@ -111,6 +111,8 @@ inline constexpr QuaderCommandId kViewportFocusOrigin{"viewport.focus_origin"};
 inline constexpr QuaderCommandId kViewportSpawnWindow{"viewport.spawn_window"};
 inline constexpr QuaderCommandId kViewportToggleLocalVisibility{
     "viewport.toggle_local_visibility"};
+inline constexpr QuaderCommandId kViewportToggleTransformSpace{
+    "viewport.toggle_transform_space"};
 inline constexpr QuaderCommandId kViewportViewPerspective{
     "viewport.view.perspective"};
 inline constexpr QuaderCommandId kViewportViewTop{"viewport.view.top"};
@@ -352,6 +354,7 @@ inline constexpr QuaderCommandId kTypedCommandIds[] = {
     kViewportFocusOrigin,
     kViewportSpawnWindow,
     kViewportToggleLocalVisibility,
+    kViewportToggleTransformSpace,
     kViewportViewPerspective,
     kViewportViewTop,
     kViewportViewBottom,

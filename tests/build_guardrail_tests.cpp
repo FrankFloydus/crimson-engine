@@ -2669,8 +2669,9 @@ TEST(BuildGuardrailTests, ToolToolbarIconsAreEmbeddedQtResources) {
   expect_contains(root_c_make, "PREFIX \"/quader/icons\"");
   for (const std::string_view tool :
        {"select", "move", "rotate", "scale", "pivot",
-        "create_primitive", "extrude", "insert_edge_loop", "knife", "cut",
-        "poly", "mirror", "linear_array", "radial_array"}) {
+        "transform_local", "create_primitive", "extrude",
+        "insert_edge_loop", "knife", "cut", "poly", "mirror",
+        "linear_array", "radial_array"}) {
     const std::string relative_path =
         std::string{"resources/icons/tool_"} + std::string{tool} + ".png";
     ASSERT_TRUE(std::filesystem::exists(source_path(relative_path)))

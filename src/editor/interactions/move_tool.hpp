@@ -21,6 +21,8 @@ namespace quader_editor_core {
 struct MoveToolState {
 	bool active = false;
         TransformAxis axis = TransformAxis::None;
+        quader_poly::Transform3 orientation;
+	quader_poly::Transform3 model_transform;
         quader::QVec3 world_axis;
 	quader::QVec3 local_axis;
 	quader::QVec3 center_local;
@@ -39,6 +41,7 @@ struct MoveToolState {
  */
 struct MoveBeginInput {
   TransformAxis axis = TransformAxis::None;
+  quader_poly::Transform3 orientation;
   bool has_world_direction = false;
   quader::QVec3 world_direction;
   quader_poly::Transform3 model_transform;

@@ -21,6 +21,7 @@ namespace quader_editor_core {
 struct ScaleToolState {
 	bool active = false;
         TransformAxis axis = TransformAxis::None;
+        quader_poly::Transform3 orientation;
         std::vector<int> object_ids;
 	quader::QVec3 pivot;
 	quader::QVec2 screen_pivot;
@@ -35,6 +36,7 @@ struct ScaleToolState {
  */
 struct ScaleBeginInput {
   TransformAxis axis = TransformAxis::None;
+  quader_poly::Transform3 orientation;
   std::vector<int> object_ids;
   quader::QVec3 pivot;
   quader::QVec2 screen_position;

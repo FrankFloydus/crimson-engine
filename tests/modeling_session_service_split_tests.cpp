@@ -292,6 +292,46 @@ TEST(ModelingSessionServiceSplitTests,
 }
 
 TEST(ModelingSessionServiceSplitTests,
+     ObjectRuntimeMapPreservesLocalFrameVersionAcrossTombstoneRestore) {
+  SceneDocument scene;
+  const EntityId source =
+      scene.create_entity_with_id(77u, "Canonical Source", EntityKind::Mesh);
+  ASSERT_NE(source, kInvalidEntityId);
+  ASSERT_TRUE(scene.set_modeling_object(
+      source, ModelingObjectComponent{
+                  .object_id = 100,
+                  .material_slot = 3u,
+                  .sdk_owned = true,
+                  .local_frame_version =
+                      kCanonicalModelingObjectLocalFrameVersion,
+              }));
+  ASSERT_TRUE(scene.set_mesh(source, MeshComponent{.mesh = 11u}));
+
+  ModelingObjectRuntimeMap object_map;
+  object_map.bind(100, source);
+  object_map.remember_scene_entity(100, scene, source);
+  const std::optional<ModelingObjectSceneIdentity> identity =
+      object_map.scene_identity_for_modeling_object(100);
+  ASSERT_TRUE(identity.has_value());
+  EXPECT_EQ(identity->local_frame_version,
+            kCanonicalModelingObjectLocalFrameVersion);
+
+  ASSERT_TRUE(scene.destroy_entity(source));
+  object_map.unbind_object(100);
+  ModelingMeshSyncService mesh_sync;
+  const EntityId restored =
+      mesh_sync.restore_projected_mesh_entity(scene, *identity);
+  ASSERT_EQ(restored, source);
+  ASSERT_TRUE(mesh_sync.bind_projected_object(
+      scene, restored, 100, identity->material_slot, true, 11u,
+      identity->local_frame_version));
+  const ModelingObjectComponent *component = scene.modeling_object(restored);
+  ASSERT_NE(component, nullptr);
+  EXPECT_EQ(component->local_frame_version,
+            kCanonicalModelingObjectLocalFrameVersion);
+}
+
+TEST(ModelingSessionServiceSplitTests,
      MeshSyncServiceAppliesDuplicateSceneIdentityPreservingMeshAsset) {
   SceneDocument scene;
   const EntityId parent = scene.create_entity("Parent", EntityKind::Empty);

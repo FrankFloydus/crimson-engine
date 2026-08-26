@@ -38,6 +38,8 @@ struct ModelingObjectSceneIdentity {
   std::optional<MeshComponent> mesh;
   std::optional<MaterialComponent> material;
   std::uint32_t material_slot = 0;
+  std::uint32_t local_frame_version =
+      kLegacyUnknownModelingObjectLocalFrameVersion;
   SceneLayerId layer_id = kInvalidSceneLayerId;
 };
 

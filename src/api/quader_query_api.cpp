@@ -358,6 +358,16 @@ std::optional<QVec3> QuaderQueryApi::selection_transform_pivot() const {
   return session.modeling().selection_center();
 }
 
+std::optional<QuaderTransform3>
+QuaderQueryApi::selection_transform_orientation() const {
+  const std::optional<ModelingTransform3> orientation =
+      read_scene_session(session_).modeling().selection_transform_orientation();
+  return orientation.has_value()
+             ? std::optional<QuaderTransform3>{
+                   to_api_transform3(*orientation)}
+             : std::nullopt;
+}
+
 QuaderSelectionSummary QuaderQueryApi::selection() const {
   return to_api_selection_summary(
       read_scene_session(session_).selection().summary());

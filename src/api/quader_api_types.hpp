@@ -284,6 +284,14 @@ enum class QuaderTransformTool {
 };
 
 /**
+ * Selects whether transform tools operate in world or selection-local space.
+ */
+enum class QuaderTransformSpace {
+    Global,
+    Local,
+};
+
+/**
  * Enumerates Quader Transform Operation values used by the public Quader API surface.
  */
 enum class QuaderTransformOperation {
@@ -560,6 +568,8 @@ struct QuaderTransformDragBeginRequest {
     QuaderTransformTool tool = QuaderTransformTool::Move;
     QuaderTransformOperation operation = QuaderTransformOperation::Transform;
     QuaderTransformAxis axis = QuaderTransformAxis::None;
+    QuaderTransformSpace space = QuaderTransformSpace::Global;
+    QuaderTransform3 orientation = {};
     QVec3 pivot = {};
     QVec2 screen_position = {};
     QVec2 screen_pivot = {};

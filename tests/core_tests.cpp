@@ -3892,6 +3892,32 @@ TEST(SceneDocumentTests, IdempotentComponentWritesKeepAllRevisionsStable) {
   EXPECT_GT(scene.render_component_revision(), render_component_revision);
 }
 
+TEST(SceneDocumentTests,
+     ModelingObjectLocalFrameVersionParticipatesInComponentIdentity) {
+  SceneDocument scene;
+  const EntityId entity =
+      scene.create_entity("Versioned Mesh", EntityKind::Mesh);
+  const ModelingObjectComponent canonical{
+      .object_id = 42,
+      .material_slot = 3u,
+      .sdk_owned = true,
+      .local_frame_version = kCanonicalModelingObjectLocalFrameVersion,
+  };
+  ASSERT_TRUE(scene.set_modeling_object(entity, canonical));
+  const std::uint64_t after_initial_write = scene.revision();
+
+  ASSERT_TRUE(scene.set_modeling_object(entity, canonical));
+  EXPECT_EQ(scene.revision(), after_initial_write);
+
+  ModelingObjectComponent legacy = canonical;
+  legacy.local_frame_version = kLegacyUnknownModelingObjectLocalFrameVersion;
+  ASSERT_TRUE(scene.set_modeling_object(entity, legacy));
+  EXPECT_GT(scene.revision(), after_initial_write);
+  ASSERT_NE(scene.modeling_object(entity), nullptr);
+  EXPECT_EQ(scene.modeling_object(entity)->local_frame_version,
+            kLegacyUnknownModelingObjectLocalFrameVersion);
+}
+
 TEST(SceneEntityNamingTests, MeshNamesStartAtBaseNameThenUseOneBasedSuffixes) {
   SceneDocument scene;
 
@@ -4967,6 +4993,27 @@ TEST(ViewportWorkspaceServiceTests, GridPresetIsClampedAtWorkspaceOwner) {
   EXPECT_EQ(
       router.state().grid_preset,
       static_cast<int>(quader_host_contract::grid_preset_catalog().size()));
+}
+
+TEST(ViewportWorkspaceServiceTests,
+     TransformSpaceIsTransientAndRevisionedOnEffectiveChange) {
+  ViewportWorkspaceService workspace;
+
+  EXPECT_EQ(workspace.transform_space(), ViewportTransformSpace::Global);
+  EXPECT_EQ(workspace.transform_space_revision(), 0u);
+  EXPECT_FALSE(
+      workspace.set_transform_space(ViewportTransformSpace::Global));
+  EXPECT_EQ(workspace.transform_space_revision(), 0u);
+
+  EXPECT_TRUE(workspace.set_transform_space(ViewportTransformSpace::Local));
+  EXPECT_EQ(workspace.transform_space(), ViewportTransformSpace::Local);
+  EXPECT_EQ(workspace.transform_space_revision(), 1u);
+  EXPECT_FALSE(workspace.set_transform_space(ViewportTransformSpace::Local));
+  EXPECT_EQ(workspace.transform_space_revision(), 1u);
+
+  EXPECT_TRUE(workspace.toggle_transform_space());
+  EXPECT_EQ(workspace.transform_space(), ViewportTransformSpace::Global);
+  EXPECT_EQ(workspace.transform_space_revision(), 2u);
 }
 
 
@@ -9889,6 +9936,386 @@ TEST(DocumentCommandTests,
   expect_vec3_near(fast_scene.transform(fast_child)->scale, committed.scale);
   EXPECT_EQ(fast_scene.transform(fast_child)->custom_pivot,
             committed.custom_pivot);
+}
+
+TEST(DocumentCommandTests,
+     SceneTransformDragLocalRotateAndScalePreserveAuthoredTransforms) {
+  constexpr float kHalfPi = 1.57079632679f;
+
+  SceneDocument scene;
+  const EntityId first_parent = scene.create_entity("First Parent");
+  const EntityId second_parent = scene.create_entity("Second Parent");
+  const EntityId first = scene.create_entity("First Local Target");
+  const EntityId second = scene.create_entity("Second Local Target");
+
+  TransformComponent first_parent_transform;
+  first_parent_transform.position = {8.0f, 1.0f, -2.0f};
+  first_parent_transform.rotation_euler = {0.1f, 0.2f, 0.3f};
+  first_parent_transform.scale = {2.0f, 0.75f, 1.5f};
+  scene.set_transform(first_parent, first_parent_transform);
+
+  TransformComponent second_parent_transform;
+  second_parent_transform.position = {-4.0f, 3.0f, 9.0f};
+  second_parent_transform.rotation_euler = {-0.2f, 0.45f, -0.35f};
+  second_parent_transform.scale = {-1.25f, 2.5f, 0.5f};
+  scene.set_transform(second_parent, second_parent_transform);
+
+  TransformComponent first_before;
+  first_before.position = {2.0f, -3.0f, 4.0f};
+  first_before.rotation_euler = {0.25f, -0.4f, 0.6f};
+  first_before.scale = {-2.0f, 3.0f, 4.0f};
+  first_before.custom_pivot = true;
+  scene.set_transform(first, first_before);
+
+  TransformComponent second_before;
+  second_before.position = {-5.0f, 6.0f, 7.0f};
+  second_before.rotation_euler = {-0.7f, 0.2f, -0.1f};
+  second_before.scale = {5.0f, -6.0f, 7.0f};
+  scene.set_transform(second, second_before);
+
+  ASSERT_TRUE(scene.set_parent(first, first_parent, false));
+  ASSERT_TRUE(scene.set_parent(second, second_parent, false));
+
+  ASSERT_TRUE(scene.set_selected(first, true));
+  ASSERT_TRUE(scene.set_selected(second, true));
+  ASSERT_TRUE(scene.set_active_selection(first));
+
+  const auto expect_rotation_matches = [](QVec3 actual_euler,
+                                          QQuat expected) {
+    const QQuat actual = normalize(quat_from_euler_radians(actual_euler));
+    const float alignment = std::abs(actual.x * expected.x +
+                                     actual.y * expected.y +
+                                     actual.z * expected.z +
+                                     actual.w * expected.w);
+    EXPECT_NEAR(alignment, 1.0f, 0.001f);
+  };
+
+  SceneTransformDragService service;
+  ASSERT_TRUE(service.begin(scene, {50.0f, 60.0f, 70.0f}, true,
+                            "Local Rotate Preview"));
+  const QVec3 rotation_delta = {kHalfPi, 0.0f, 0.0f};
+  const DocumentCommandResult rotation_preview =
+      service.preview_local_rotation_delta(scene, rotation_delta);
+  ASSERT_TRUE(rotation_preview.ok) << rotation_preview.message;
+  EXPECT_TRUE(rotation_preview.changed);
+
+  const TransformComponent *first_rotated = scene.transform(first);
+  const TransformComponent *second_rotated = scene.transform(second);
+  ASSERT_NE(first_rotated, nullptr);
+  ASSERT_NE(second_rotated, nullptr);
+  expect_rotation_matches(
+      first_rotated->rotation_euler,
+      normalize(quat_from_euler_radians(first_before.rotation_euler) *
+                quat_from_euler_radians(rotation_delta)));
+  expect_rotation_matches(
+      second_rotated->rotation_euler,
+      normalize(quat_from_euler_radians(second_before.rotation_euler) *
+                quat_from_euler_radians(rotation_delta)));
+  expect_vec3_near(first_rotated->position, first_before.position);
+  expect_vec3_near(second_rotated->position, second_before.position);
+  expect_vec3_near(first_rotated->scale, first_before.scale);
+  expect_vec3_near(second_rotated->scale, second_before.scale);
+  EXPECT_EQ(first_rotated->custom_pivot, first_before.custom_pivot);
+  EXPECT_EQ(second_rotated->custom_pivot, second_before.custom_pivot);
+
+  const DocumentCommandResult rotation_cancel = service.cancel();
+  ASSERT_TRUE(rotation_cancel.ok) << rotation_cancel.message;
+  EXPECT_TRUE(rotation_cancel.changed);
+  ASSERT_NE(scene.transform(first), nullptr);
+  ASSERT_NE(scene.transform(second), nullptr);
+  expect_vec3_near(scene.transform(first)->position, first_before.position);
+  expect_vec3_near(scene.transform(first)->rotation_euler,
+                   first_before.rotation_euler);
+  expect_vec3_near(scene.transform(first)->scale, first_before.scale);
+  expect_vec3_near(scene.transform(second)->position, second_before.position);
+  expect_vec3_near(scene.transform(second)->rotation_euler,
+                   second_before.rotation_euler);
+  expect_vec3_near(scene.transform(second)->scale, second_before.scale);
+
+  ASSERT_TRUE(
+      service.begin(scene, {}, true, "Local Scale Preview"));
+  const QVec3 scale_factors = {2.0f, 0.5f, 3.0f};
+  const DocumentCommandResult scale_preview =
+      service.preview_local_scale_delta(scene, scale_factors);
+  ASSERT_TRUE(scale_preview.ok) << scale_preview.message;
+  EXPECT_TRUE(scale_preview.changed);
+
+  const TransformComponent first_scaled = *scene.transform(first);
+  const TransformComponent second_scaled = *scene.transform(second);
+  expect_vec3_near(first_scaled.position, first_before.position);
+  expect_vec3_near(first_scaled.rotation_euler, first_before.rotation_euler);
+  expect_vec3_near(first_scaled.scale, {-4.0f, 1.5f, 12.0f});
+  EXPECT_EQ(first_scaled.custom_pivot, first_before.custom_pivot);
+  expect_vec3_near(second_scaled.position, second_before.position);
+  expect_vec3_near(second_scaled.rotation_euler, second_before.rotation_euler);
+  expect_vec3_near(second_scaled.scale, {10.0f, -3.0f, 21.0f});
+  EXPECT_EQ(second_scaled.custom_pivot, second_before.custom_pivot);
+
+  EditorHistoryService history;
+  const DocumentCommandResult scale_commit = service.commit(history);
+  ASSERT_TRUE(scale_commit.ok) << scale_commit.message;
+  EXPECT_TRUE(scale_commit.changed);
+  ASSERT_NE(history.undo_label(), nullptr);
+  EXPECT_EQ(*history.undo_label(), "Local Scale Preview");
+
+  ASSERT_TRUE(history.undo().ok);
+  expect_vec3_near(scene.transform(first)->position, first_before.position);
+  expect_vec3_near(scene.transform(first)->rotation_euler,
+                   first_before.rotation_euler);
+  expect_vec3_near(scene.transform(first)->scale, first_before.scale);
+  EXPECT_EQ(scene.transform(first)->custom_pivot, first_before.custom_pivot);
+  expect_vec3_near(scene.transform(second)->position, second_before.position);
+  expect_vec3_near(scene.transform(second)->rotation_euler,
+                   second_before.rotation_euler);
+  expect_vec3_near(scene.transform(second)->scale, second_before.scale);
+  EXPECT_EQ(scene.transform(second)->custom_pivot, second_before.custom_pivot);
+
+  ASSERT_TRUE(history.redo().ok);
+  expect_vec3_near(scene.transform(first)->position, first_scaled.position);
+  expect_vec3_near(scene.transform(first)->rotation_euler,
+                   first_scaled.rotation_euler);
+  expect_vec3_near(scene.transform(first)->scale, first_scaled.scale);
+  EXPECT_EQ(scene.transform(first)->custom_pivot, first_scaled.custom_pivot);
+  expect_vec3_near(scene.transform(second)->position, second_scaled.position);
+  expect_vec3_near(scene.transform(second)->rotation_euler,
+                   second_scaled.rotation_euler);
+  expect_vec3_near(scene.transform(second)->scale, second_scaled.scale);
+  EXPECT_EQ(scene.transform(second)->custom_pivot, second_scaled.custom_pivot);
+}
+
+TEST(DocumentCommandTests,
+     SceneTransformDragLocalRotateAndScalePinSingleOffOriginVisiblePivot) {
+  constexpr float kHalfPi = 1.57079632679f;
+
+  SceneSession session;
+  SceneDocument &scene = session.scene();
+  AssetRegistry &assets = session.assets();
+
+  MeshAsset mesh;
+  mesh.edit_geometry().vertices = {
+      {.position = {8.0f, 1.0f, 0.0f}},
+      {.position = {12.0f, 1.0f, 0.0f}},
+      {.position = {12.0f, 5.0f, 0.0f}},
+      {.position = {8.0f, 5.0f, 0.0f}},
+  };
+  const AssetId mesh_id = assets.add_mesh(std::move(mesh));
+
+  const EntityId entity = scene.create_entity("Off-Origin Local Target");
+  TransformComponent before;
+  before.position = {3.0f, -2.0f, 4.0f};
+  before.rotation_euler = {0.0f, 0.0f, 0.35f};
+  before.scale = {1.25f, 0.75f, 2.0f};
+  scene.set_transform(entity, before);
+  scene.set_mesh(entity, MeshComponent{.mesh = mesh_id});
+  ASSERT_TRUE(scene.set_selected(entity, true));
+  ASSERT_TRUE(scene.set_active_selection(entity));
+
+  const auto visible_pivot = [&]() {
+    const std::optional<SceneBounds> bounds =
+        entity_world_bounds(scene, assets, entity);
+    EXPECT_TRUE(bounds.has_value());
+    return bounds ? bounds_center(*bounds) : QVec3{};
+  };
+
+  const QVec3 pivot = visible_pivot();
+  SceneTransformDragService service;
+  ASSERT_TRUE(service.begin(scene, pivot, true, "Local Rotate Preview"));
+  const DocumentCommandResult rotation_preview =
+      service.preview_local_rotation_delta(scene, {0.0f, 0.0f, kHalfPi});
+  ASSERT_TRUE(rotation_preview.ok) << rotation_preview.message;
+  EXPECT_TRUE(rotation_preview.changed);
+  expect_vec3_near(visible_pivot(), pivot);
+  ASSERT_NE(scene.transform(entity), nullptr);
+  EXPECT_GT(length_squared(scene.transform(entity)->position - before.position),
+            0.001f);
+
+  const DocumentCommandResult rotation_cancel = service.cancel();
+  ASSERT_TRUE(rotation_cancel.ok) << rotation_cancel.message;
+  EXPECT_TRUE(rotation_cancel.changed);
+  ASSERT_NE(scene.transform(entity), nullptr);
+  expect_vec3_near(scene.transform(entity)->position, before.position);
+  expect_vec3_near(scene.transform(entity)->rotation_euler,
+                   before.rotation_euler);
+  expect_vec3_near(scene.transform(entity)->scale, before.scale);
+  expect_vec3_near(visible_pivot(), pivot);
+
+  ASSERT_TRUE(service.begin(scene, pivot, true, "Local Scale Preview"));
+  const DocumentCommandResult scale_preview =
+      service.preview_local_scale_delta(scene, {2.0f, 0.5f, 1.5f});
+  ASSERT_TRUE(scale_preview.ok) << scale_preview.message;
+  EXPECT_TRUE(scale_preview.changed);
+  expect_vec3_near(visible_pivot(), pivot);
+  ASSERT_NE(scene.transform(entity), nullptr);
+  EXPECT_GT(length_squared(scene.transform(entity)->position - before.position),
+            0.001f);
+  const TransformComponent scaled = *scene.transform(entity);
+
+  EditorHistoryService history;
+  const DocumentCommandResult scale_commit = service.commit(history);
+  ASSERT_TRUE(scale_commit.ok) << scale_commit.message;
+  EXPECT_TRUE(scale_commit.changed);
+  ASSERT_NE(history.undo_label(), nullptr);
+  EXPECT_EQ(*history.undo_label(), "Local Scale Preview");
+
+  ASSERT_TRUE(history.undo().ok);
+  ASSERT_NE(scene.transform(entity), nullptr);
+  expect_vec3_near(scene.transform(entity)->position, before.position);
+  expect_vec3_near(scene.transform(entity)->rotation_euler,
+                   before.rotation_euler);
+  expect_vec3_near(scene.transform(entity)->scale, before.scale);
+  expect_vec3_near(visible_pivot(), pivot);
+
+  ASSERT_TRUE(history.redo().ok);
+  ASSERT_NE(scene.transform(entity), nullptr);
+  expect_vec3_near(scene.transform(entity)->position, scaled.position);
+  expect_vec3_near(scene.transform(entity)->rotation_euler,
+                   scaled.rotation_euler);
+  expect_vec3_near(scene.transform(entity)->scale, scaled.scale);
+  expect_vec3_near(visible_pivot(), pivot);
+}
+
+TEST(DocumentCommandTests,
+     SceneTransformDragLocalRotateAndScalePreserveSingleCustomPivot) {
+  constexpr float kHalfPi = 1.57079632679f;
+
+  SceneDocument scene;
+  const EntityId parent = scene.create_entity("Custom Pivot Parent");
+  TransformComponent parent_transform;
+  parent_transform.position = {7.0f, -4.0f, 2.0f};
+  parent_transform.rotation_euler = {0.2f, -0.3f, 0.4f};
+  parent_transform.scale = {2.0f, 0.75f, 1.5f};
+  scene.set_transform(parent, parent_transform);
+
+  const EntityId entity = scene.create_entity("Custom Pivot Local Target");
+  TransformComponent before;
+  before.position = {3.0f, 5.0f, -2.0f};
+  before.rotation_euler = {-0.1f, 0.35f, 0.6f};
+  before.scale = {1.5f, 2.0f, 0.5f};
+  before.custom_pivot = true;
+  scene.set_transform(entity, before);
+  ASSERT_TRUE(scene.set_parent(entity, parent, false));
+  ASSERT_TRUE(scene.set_selected(entity, true));
+  ASSERT_TRUE(scene.set_active_selection(entity));
+
+  const QVec3 pivot =
+      transform_point(scene.world_transform_matrix(entity), {});
+  SceneTransformDragService service;
+  ASSERT_TRUE(service.begin(scene, pivot, true, "Custom Pivot Rotate"));
+  ASSERT_TRUE(service
+                  .preview_local_rotation_delta(scene,
+                                                {0.0f, kHalfPi, 0.0f})
+                  .ok);
+  ASSERT_NE(scene.transform(entity), nullptr);
+  expect_vec3_near(scene.transform(entity)->position, before.position);
+  expect_vec3_near(transform_point(scene.world_transform_matrix(entity), {}),
+                   pivot);
+  ASSERT_TRUE(service.cancel().ok);
+
+  ASSERT_TRUE(service.begin(scene, pivot, true, "Custom Pivot Scale"));
+  ASSERT_TRUE(service.preview_local_scale_delta(scene, {2.0f, 0.5f, 3.0f}).ok);
+  ASSERT_NE(scene.transform(entity), nullptr);
+  expect_vec3_near(scene.transform(entity)->position, before.position);
+  expect_vec3_near(transform_point(scene.world_transform_matrix(entity), {}),
+                   pivot);
+  ASSERT_TRUE(service.cancel().ok);
+}
+
+TEST(DocumentCommandTests,
+     SceneTransformDragLocalRotateAndScalePinEachVisiblePivotInBatch) {
+  constexpr float kHalfPi = 1.57079632679f;
+
+  SceneSession session;
+  SceneDocument &scene = session.scene();
+  AssetRegistry &assets = session.assets();
+  const auto expect_transform = [](const TransformComponent &actual,
+                                   const TransformComponent &expected) {
+    expect_vec3_near(actual.position, expected.position);
+    expect_vec3_near(actual.rotation_euler, expected.rotation_euler);
+    expect_vec3_near(actual.scale, expected.scale);
+    EXPECT_EQ(actual.custom_pivot, expected.custom_pivot);
+  };
+
+  MeshAsset mesh;
+  mesh.edit_geometry().vertices = {
+      {.position = {8.0f, 1.0f, 0.0f}},
+      {.position = {12.0f, 1.0f, 0.0f}},
+      {.position = {12.0f, 5.0f, 0.0f}},
+      {.position = {8.0f, 5.0f, 0.0f}},
+  };
+  const AssetId mesh_id = assets.add_mesh(std::move(mesh));
+
+  const EntityId first = scene.create_entity("First Off-Origin Local Target");
+  const EntityId second =
+      scene.create_entity("Second Off-Origin Local Target");
+  TransformComponent first_before;
+  first_before.position = {-4.0f, 1.0f, 0.0f};
+  first_before.rotation_euler = {0.0f, 0.0f, 0.2f};
+  first_before.scale = {1.2f, 0.8f, 1.0f};
+  TransformComponent second_before;
+  second_before.position = {5.0f, -3.0f, 2.0f};
+  second_before.rotation_euler = {0.4f, -0.2f, 0.7f};
+  second_before.scale = {0.6f, 1.4f, 2.0f};
+  ASSERT_TRUE(scene.set_transform(first, first_before));
+  ASSERT_TRUE(scene.set_transform(second, second_before));
+  ASSERT_TRUE(scene.set_mesh(first, MeshComponent{.mesh = mesh_id}));
+  ASSERT_TRUE(scene.set_mesh(second, MeshComponent{.mesh = mesh_id}));
+  ASSERT_TRUE(scene.set_selected(first, true));
+  ASSERT_TRUE(scene.set_selected(second, true));
+  ASSERT_TRUE(scene.set_active_selection(first));
+
+  const auto visible_pivot = [&](EntityId entity) {
+    const std::optional<SceneBounds> bounds =
+        entity_world_bounds(scene, assets, entity);
+    EXPECT_TRUE(bounds.has_value());
+    return bounds ? bounds_center(*bounds) : QVec3{};
+  };
+  const QVec3 first_pivot = visible_pivot(first);
+  const QVec3 second_pivot = visible_pivot(second);
+  const QVec3 shared_pivot = (first_pivot + second_pivot) * 0.5f;
+
+  SceneTransformDragService service;
+  ASSERT_TRUE(service.begin(scene, shared_pivot, true, "Batch Local Rotate",
+                            {}, &assets));
+  const DocumentCommandResult rotation_preview =
+      service.preview_local_rotation_delta(scene, {kHalfPi, 0.0f, 0.0f});
+  ASSERT_TRUE(rotation_preview.ok) << rotation_preview.message;
+  EXPECT_TRUE(rotation_preview.changed);
+  expect_vec3_near(visible_pivot(first), first_pivot);
+  expect_vec3_near(visible_pivot(second), second_pivot);
+  ASSERT_NE(scene.transform(first), nullptr);
+  ASSERT_NE(scene.transform(second), nullptr);
+  EXPECT_GT(length_squared(scene.transform(first)->position -
+                           first_before.position),
+            0.001f);
+  EXPECT_GT(length_squared(scene.transform(second)->position -
+                           second_before.position),
+            0.001f);
+  ASSERT_TRUE(service.cancel().ok);
+
+  ASSERT_TRUE(service.begin(scene, shared_pivot, true, "Batch Local Scale", {},
+                            &assets));
+  const DocumentCommandResult scale_preview =
+      service.preview_local_scale_delta(scene, {1.5f, 0.5f, 2.0f});
+  ASSERT_TRUE(scale_preview.ok) << scale_preview.message;
+  EXPECT_TRUE(scale_preview.changed);
+  expect_vec3_near(visible_pivot(first), first_pivot);
+  expect_vec3_near(visible_pivot(second), second_pivot);
+  const TransformComponent first_scaled = *scene.transform(first);
+  const TransformComponent second_scaled = *scene.transform(second);
+
+  EditorHistoryService history;
+  ASSERT_TRUE(service.commit(history).ok);
+  ASSERT_TRUE(history.undo().ok);
+  expect_transform(*scene.transform(first), first_before);
+  expect_transform(*scene.transform(second), second_before);
+  expect_vec3_near(visible_pivot(first), first_pivot);
+  expect_vec3_near(visible_pivot(second), second_pivot);
+
+  ASSERT_TRUE(history.redo().ok);
+  expect_transform(*scene.transform(first), first_scaled);
+  expect_transform(*scene.transform(second), second_scaled);
+  expect_vec3_near(visible_pivot(first), first_pivot);
+  expect_vec3_near(visible_pivot(second), second_pivot);
 }
 
 TEST(DocumentCommandTests,

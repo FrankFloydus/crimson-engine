@@ -668,6 +668,13 @@ struct QtMainMenu::Impl {
         [this]() {
           return context.editor.viewports().local_visibility_active();
         });
+    add_command_action(
+        *menu, quader_command::kViewportToggleTransformSpace,
+        "ui.menu.view.toggle_transform_space", "Local Transforms",
+        [this]() {
+          return context.editor.viewports().transform_space() ==
+                 QuaderTransformSpace::Local;
+        });
     menu->addSeparator();
     add_command_action(*menu, quader_command::kViewportFocusAll,
                        "ui.menu.view.focus_all", "Focus All");

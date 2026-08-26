@@ -20,6 +20,9 @@ namespace quader {
 
 using ModelingObjectId = std::int32_t;
 inline constexpr ModelingObjectId kInvalidModelingObjectId = -1;
+inline constexpr std::uint32_t
+    kLegacyUnknownModelingObjectLocalFrameVersion = 0u;
+inline constexpr std::uint32_t kCanonicalModelingObjectLocalFrameVersion = 1u;
 
 using EditorObjectId = std::uint64_t;
 inline constexpr EditorObjectId kInvalidEditorObjectId = 0;
@@ -184,6 +187,11 @@ struct ModelingObjectComponent {
   // True when authored topology and interactive modeling state are owned by
   // the portable SDK session rather than the legacy native runtime.
   bool sdk_owned = false;
+  // Identifies whether the authored vertices use Quader's canonical
+  // object-local coordinate frame. Zero deliberately also represents older
+  // files whose local-frame convention was not recorded.
+  std::uint32_t local_frame_version =
+      kLegacyUnknownModelingObjectLocalFrameVersion;
 };
 
 /**

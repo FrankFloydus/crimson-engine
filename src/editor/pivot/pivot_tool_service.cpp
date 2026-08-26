@@ -22,7 +22,6 @@
 #include "scene/scene_transform.hpp"
 
 #include <glm/glm.hpp>
-#include <glm/gtc/quaternion.hpp>
 
 #include <algorithm>
 #include <array>
@@ -600,127 +599,6 @@ struct CopyPivotSelection {
   std::vector<PivotRebaseRequest> requests;
 };
 
-bool finite_value(float value) { return std::isfinite(value); }
-
-bool finite_matrix(const QMat4 &matrix) {
-  return std::all_of(matrix.values.begin(), matrix.values.end(),
-                     [](float value) { return finite_value(value); });
-}
-
-bool finite_quaternion(const glm::dquat &value) {
-  return std::isfinite(value.x) && std::isfinite(value.y) &&
-         std::isfinite(value.z) && std::isfinite(value.w);
-}
-
-std::optional<glm::dquat>
-rotation_quaternion_from_normalized_basis(const glm::dmat3 &basis) {
-  const double m00 = basis[0][0];
-  const double m11 = basis[1][1];
-  const double m22 = basis[2][2];
-  double w = 0.0;
-  double x = 0.0;
-  double y = 0.0;
-  double z = 0.0;
-
-  const auto signed_root = [](double trace, bool negative)
-      -> std::optional<double> {
-    if (!std::isfinite(trace) || trace <= 0.0) {
-      return std::nullopt;
-    }
-    const double root = 2.0 * std::sqrt(trace);
-    return negative ? -root : root;
-  };
-
-  std::optional<double> scale;
-  if (m22 < 0.0) {
-    if (m00 > m11) {
-      scale = signed_root(1.0 + m00 - m11 - m22,
-                          basis[1][2] < basis[2][1]);
-      if (!scale.has_value()) {
-        return std::nullopt;
-      }
-      x = 0.25 * *scale;
-      w = (basis[1][2] - basis[2][1]) / *scale;
-      y = (basis[0][1] + basis[1][0]) / *scale;
-      z = (basis[2][0] + basis[0][2]) / *scale;
-    } else {
-      scale = signed_root(1.0 - m00 + m11 - m22,
-                          basis[2][0] < basis[0][2]);
-      if (!scale.has_value()) {
-        return std::nullopt;
-      }
-      y = 0.25 * *scale;
-      w = (basis[2][0] - basis[0][2]) / *scale;
-      x = (basis[0][1] + basis[1][0]) / *scale;
-      z = (basis[1][2] + basis[2][1]) / *scale;
-    }
-  } else if (m00 < -m11) {
-    scale = signed_root(1.0 - m00 - m11 + m22,
-                        basis[0][1] < basis[1][0]);
-    if (!scale.has_value()) {
-      return std::nullopt;
-    }
-    z = 0.25 * *scale;
-    w = (basis[0][1] - basis[1][0]) / *scale;
-    x = (basis[2][0] + basis[0][2]) / *scale;
-    y = (basis[1][2] + basis[2][1]) / *scale;
-  } else {
-    scale = signed_root(1.0 + m00 + m11 + m22, false);
-    if (!scale.has_value()) {
-      return std::nullopt;
-    }
-    w = 0.25 * *scale;
-    x = (basis[1][2] - basis[2][1]) / *scale;
-    y = (basis[2][0] - basis[0][2]) / *scale;
-    z = (basis[0][1] - basis[1][0]) / *scale;
-  }
-
-  glm::dquat rotation{w, x, y, z};
-  if (!finite_quaternion(rotation) || glm::dot(rotation, rotation) <= 0.0) {
-    return std::nullopt;
-  }
-  return glm::normalize(rotation);
-}
-
-std::optional<glm::mat3> pure_world_rotation(const QMat4 &world_matrix) {
-  if (!finite_matrix(world_matrix)) {
-    return std::nullopt;
-  }
-
-  const glm::mat4 world = to_glm(world_matrix);
-  glm::dmat3 normalized_basis;
-  for (glm::length_t column = 0; column < 3; ++column) {
-    const glm::dvec3 basis_vector{world[column]};
-    const double basis_length = glm::length(basis_vector);
-    if (!std::isfinite(basis_length) || basis_length == 0.0) {
-      return std::nullopt;
-    }
-    normalized_basis[column] = basis_vector / basis_length;
-  }
-  const double determinant = glm::determinant(normalized_basis);
-  if (!std::isfinite(determinant) || determinant == 0.0) {
-    return std::nullopt;
-  }
-  if (determinant < 0.0) {
-    normalized_basis = -normalized_basis;
-  }
-  const std::optional<glm::dquat> orientation =
-      rotation_quaternion_from_normalized_basis(normalized_basis);
-  if (!orientation.has_value()) {
-    return std::nullopt;
-  }
-
-  const glm::mat3 rotation = glm::mat3(glm::mat3_cast(*orientation));
-  for (glm::length_t column = 0; column < 3; ++column) {
-    for (glm::length_t row = 0; row < 3; ++row) {
-      if (!finite_value(rotation[column][row])) {
-        return std::nullopt;
-      }
-    }
-  }
-  return rotation;
-}
-
 std::optional<QVec3> local_mean_vertex(const MeshAsset &mesh) {
   QVec3 sum;
   std::size_t count = 0u;
@@ -786,7 +664,7 @@ pivot_geometry_frame(const SceneDocument &scene, const AssetRegistry &assets,
     return std::nullopt;
   }
   const std::optional<glm::mat3> rotation =
-      pure_world_rotation(world_matrix);
+      try_scene_pure_world_rotation_basis(world_matrix);
   // Copy Pivot deliberately retains the reference add-on's transformed
   // object-local AABB center. Scene and selection bounds use tight transformed
   // vertex extents, but changing this dual-center rule changes pivot transfer.

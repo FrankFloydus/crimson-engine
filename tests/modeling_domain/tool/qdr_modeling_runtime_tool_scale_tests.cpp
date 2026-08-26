@@ -63,6 +63,90 @@ TEST(QdrModelingRuntimeToolScaleTests, ScaleDragSnapsAgainstBoundsAndSupportsUni
         EXPECT_TRUE(center_hit.axis == quader_editor_core::TransformAxis::All);
 }
 
+TEST(QdrModelingRuntimeToolScaleTests,
+     UniformCenterScaleCanShrinkGridSizedBoundsBelowOneGridCell) {
+	quader_editor_core::ScaleBeginInput input;
+	input.axis = quader_editor_core::TransformAxis::All;
+	input.pivot = {};
+	input.screen_position = {200.0F, 200.0F};
+	input.has_screen_pivot = true;
+	input.screen_pivot = input.screen_position;
+	input.has_screen_tip = true;
+	input.screen_tip = {296.0F, 200.0F};
+	input.bounds.has_bounds = true;
+	input.bounds.min = {-0.5F, -0.5F, -0.5F};
+	input.bounds.max = {0.5F, 0.5F, 0.5F};
+
+	const quader_editor_core::ScaleBeginResult begin =
+		quader_editor_core::begin_scale_drag(input);
+	ASSERT_TRUE(begin.ok);
+	quader_editor_core::ScaleToolState state = begin.state;
+	const quader_editor_core::ScalePreviewResult preview =
+		quader_editor_core::preview_scale_from_screen_position(
+			state, {152.0F, 200.0F}, true, 1.0);
+
+	ASSERT_TRUE(preview.ok);
+	EXPECT_NEAR(preview.preview_scale.x, 0.5F, 0.0001F);
+	EXPECT_NEAR(preview.preview_scale.y, 0.5F, 0.0001F);
+	EXPECT_NEAR(preview.preview_scale.z, 0.5F, 0.0001F);
+	EXPECT_NEAR(preview.transform.x_axis.x, 0.5F, 0.0001F);
+	EXPECT_NEAR(preview.transform.y_axis.y, 0.5F, 0.0001F);
+	EXPECT_NEAR(preview.transform.z_axis.z, 0.5F, 0.0001F);
+}
+
+TEST(QdrModelingRuntimeToolScaleTests,
+     OutwardUniformGridSnapNeverShrinksNonAlignedBounds) {
+	quader_editor_core::ScaleBeginInput input;
+	input.axis = quader_editor_core::TransformAxis::All;
+	input.pivot = {};
+	input.screen_position = {200.0F, 200.0F};
+	input.has_screen_pivot = true;
+	input.screen_pivot = input.screen_position;
+	input.has_screen_tip = true;
+	input.screen_tip = {296.0F, 200.0F};
+	input.bounds.has_bounds = true;
+	input.bounds.min = {-1.6F, -1.6F, -1.6F};
+	input.bounds.max = {1.6F, 1.6F, 1.6F};
+
+	const quader_editor_core::ScaleBeginResult begin =
+		quader_editor_core::begin_scale_drag(input);
+	ASSERT_TRUE(begin.ok);
+	quader_editor_core::ScaleToolState state = begin.state;
+	const quader_editor_core::ScalePreviewResult preview =
+		quader_editor_core::preview_scale_from_screen_position(
+			state, {201.0F, 200.0F}, true, 1.0);
+
+	ASSERT_TRUE(preview.ok);
+	EXPECT_GE(preview.preview_scale.x, 1.0F);
+	EXPECT_GE(preview.preview_scale.y, 1.0F);
+	EXPECT_GE(preview.preview_scale.z, 1.0F);
+}
+
+TEST(QdrModelingRuntimeToolScaleTests,
+     ScaleDragConjugatesTheAxisDeltaThroughItsOrientation) {
+	quader_editor_core::ScaleBeginInput input;
+	input.axis = quader_editor_core::TransformAxis::X;
+	input.orientation.x_axis = {0.0F, 1.0F, 0.0F};
+	input.orientation.y_axis = {-1.0F, 0.0F, 0.0F};
+	input.pivot = {};
+	input.screen_position = {200.0F, 200.0F};
+
+	const quader_editor_core::ScaleBeginResult begin =
+		quader_editor_core::begin_scale_drag(input);
+	ASSERT_TRUE(begin.ok);
+	quader_editor_core::ScaleToolState state = begin.state;
+	const quader_editor_core::ScalePreviewResult preview =
+		quader_editor_core::preview_scale_from_scale(
+			state, {2.0F, 1.0F, 1.0F});
+
+	ASSERT_TRUE(preview.ok);
+	EXPECT_NEAR(preview.transform.x_axis.x, 1.0F, 0.0001F);
+	EXPECT_NEAR(preview.transform.x_axis.y, 0.0F, 0.0001F);
+	EXPECT_NEAR(preview.transform.y_axis.x, 0.0F, 0.0001F);
+	EXPECT_NEAR(preview.transform.y_axis.y, 2.0F, 0.0001F);
+	EXPECT_NEAR(preview.transform.z_axis.z, 1.0F, 0.0001F);
+}
+
 TEST(QdrModelingRuntimeToolScaleTests, ModalScalePlannerRoutesNonIdentityPreviewsAndCommitNames) {
   const quader_editor_core::ModalTransformUpdatePlan update =
       quader_editor_core::plan_modal_transform_drag_update({

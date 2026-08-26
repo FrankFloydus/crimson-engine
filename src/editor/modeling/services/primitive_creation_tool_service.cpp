@@ -93,7 +93,13 @@ placement_frame(const ModelingBoxPreview &preview) {
   }
 
   frame.x_axis = normalize(x_edge);
-  frame.y_axis = normalize(y_edge);
+  const QVec3 rejected_y =
+      y_edge - frame.x_axis * dot(y_edge, frame.x_axis);
+  if (length_squared(rejected_y) <=
+      kPrimitivePlacementEpsilon * kPrimitivePlacementEpsilon) {
+    return std::nullopt;
+  }
+  frame.y_axis = normalize(rejected_y);
   // The footprint can be dragged in either direction. Rebuilding Z from X/Y
   // keeps the placement transform right-handed, so authored winding changes
   // only when the explicit Flip Faces setting requests it.
@@ -107,15 +113,6 @@ placement_frame(const ModelingBoxPreview &preview) {
   }
   frame.center = frame.center / static_cast<float>(preview.corners.size());
   return frame;
-}
-
-void transform_document(quader_poly::Document &document,
-                        const PrimitivePlacementFrame &frame) {
-  for (quader_poly::Vertex &vertex : document.vertices) {
-    const QVec3 local = vertex.position;
-    vertex.position = frame.center + frame.x_axis * local.x +
-                      frame.y_axis * local.y + frame.z_axis * local.z;
-  }
 }
 
 quader_poly::Document build_primitive_document(
@@ -181,8 +178,17 @@ quader_poly::Document build_primitive_document(
     });
     break;
   }
-  transform_document(document, frame);
   return document;
+}
+
+ModelingTransform3
+placement_transform(const PrimitivePlacementFrame &frame) {
+  return {
+      .x_axis = frame.x_axis,
+      .y_axis = frame.y_axis,
+      .z_axis = frame.z_axis,
+      .origin = frame.center,
+  };
 }
 
 std::string combined_failure(std::string message, std::string_view suffix) {
@@ -330,6 +336,7 @@ CommandResult PrimitiveCreationToolService::accept_preview(
       .name = std::move(name),
       .material_slot = 0,
       .material = material,
+      .initial_scene_transform = placement_transform(*frame),
   });
   if (!created.ok || !created.changed) {
     return rollback_and_exit(

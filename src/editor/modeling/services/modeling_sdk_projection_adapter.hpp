@@ -249,6 +249,7 @@ public:
   [[nodiscard]] ModelingCreateBoxResult create_box(
       const ModelingCreateBoxRequest &request,
       const CreationFinalizer &finalize = {});
+  /** Localizes oriented world corners beneath a matching native scene frame. */
   [[nodiscard]] ModelingCreateBoxResult create_box_from_corners(
       std::span<const QVec3> corners, std::string_view name,
       MaterialReference material = {},
@@ -256,6 +257,7 @@ public:
   [[nodiscard]] ModelingCreateBoxResult create_mesh(
       const ModelingCreateMeshRequest &request,
       const CreationFinalizer &finalize = {});
+  /** Localizes world points beneath their deterministic polygon frame. */
   [[nodiscard]] ModelingCreateBoxResult create_face(
       std::span<const QVec3> points, QVec3 requested_normal,
       std::string_view name, MaterialReference material = {},

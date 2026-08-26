@@ -1431,6 +1431,8 @@ std::string capture_viewports(const CaptureData &data) {
   writer.line("viewport.grid_preset", std::to_string(viewports.grid_preset()));
   writer.line("viewport.local_visibility",
               bool_text(viewports.local_visibility_active()));
+  writer.line("viewport.transform_space",
+              enum_text(viewports.transform_space()));
   constexpr std::array<ViewportPaneId, 4> kPanes = {
       ViewportPaneId::Perspective,
       ViewportPaneId::Top,
@@ -1545,6 +1547,9 @@ std::string capture_revisions(const CaptureData &data) {
   writer.line("revisions.tool_settings",
               std::to_string(
                   data.editor.tools().active_settings_revision()));
+  writer.line("revisions.transform_space",
+              std::to_string(
+                  data.editor.viewports().transform_space_revision()));
 
   std::vector<std::pair<std::string, std::uint64_t>> mesh_revisions;
   for (const auto &[id, mesh] : data.mesh_snapshots) {

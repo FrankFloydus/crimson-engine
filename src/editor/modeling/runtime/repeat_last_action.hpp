@@ -37,6 +37,8 @@ struct RepeatTransformAction {
   ViewportInteractionTool tool = ViewportInteractionTool::Unknown;
   TransformDragOperation operation = TransformDragOperation::Transform;
   TransformAxis axis = TransformAxis::None;
+  TransformSpace space = TransformSpace::Global;
+  quader_poly::Transform3 orientation;
   bool duplicate_selected = false;
   quader::QVec3 pivot;
   quader::QVec3 move_delta;

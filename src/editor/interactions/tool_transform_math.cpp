@@ -19,6 +19,37 @@ double determinant(const quader_poly::Transform3& transform)
 	return vec3_dot(transform.x_axis, vec3_cross(transform.y_axis, transform.z_axis));
 }
 
+bool linear_basis_is_identity(const quader_poly::Transform3& transform)
+{
+	return transform.x_axis.x == 1.0F && transform.x_axis.y == 0.0F && transform.x_axis.z == 0.0F &&
+		transform.y_axis.x == 0.0F && transform.y_axis.y == 1.0F && transform.y_axis.z == 0.0F &&
+		transform.z_axis.x == 0.0F && transform.z_axis.y == 0.0F && transform.z_axis.z == 1.0F;
+}
+
+quader_poly::Transform3 conjugated_linear_transform(
+		const quader_poly::Transform3& local_transform,
+		const quader_poly::Transform3& orientation)
+{
+	if (linear_basis_is_identity(orientation) ||
+		std::abs(determinant(orientation)) <= kToolEpsilon) {
+		return local_transform;
+	}
+
+	const auto transform_world_direction = [&local_transform, &orientation](quader::QVec3 direction) {
+		return transform_vector(
+			orientation,
+			transform_vector(
+				local_transform,
+				inverse_transform_vector(orientation, direction)));
+	};
+	return {
+		transform_world_direction({1.0F, 0.0F, 0.0F}),
+		transform_world_direction({0.0F, 1.0F, 0.0F}),
+		transform_world_direction({0.0F, 0.0F, 1.0F}),
+		{},
+	};
+}
+
 quader::QVec3 rotate_vector_around_axis(quader::QVec3 value, quader::QVec3 axis, double angle_radians)
 {
 	const quader::QVec3 normal = normalized_axis(axis);
@@ -266,6 +297,22 @@ quader_poly::Transform3 scale_transform(quader::QVec3 scale)
 	};
 }
 
+quader_poly::Transform3 oriented_rotation_transform(
+		TransformAxis axis,
+		double angle_radians,
+		const quader_poly::Transform3& orientation)
+{
+	return conjugated_linear_transform(
+		rotation_transform(axis, angle_radians), orientation);
+}
+
+quader_poly::Transform3 oriented_scale_transform(
+		quader::QVec3 scale,
+		const quader_poly::Transform3& orientation)
+{
+	return conjugated_linear_transform(scale_transform(scale), orientation);
+}
+
 double scale_delta(quader::QVec3 scale)
 {
 	return std::abs(scale.x - 1.0) + std::abs(scale.y - 1.0) + std::abs(scale.z - 1.0);
@@ -308,11 +355,24 @@ double snapped_scale_factor(TransformAxis axis, double factor, const ToolBounds3
         const double grid = safe_grid_size(grid_size, kToolEpsilon);
         const bool shrinking = factor < 1.0;
 	const double snapped_units = shrinking ? std::floor(raw_extent / grid) : std::round(raw_extent / grid);
+	// Grid snapping quantizes dimensions while at least one full grid interval
+	// remains. It must not turn that interval into a hard minimum: freshly
+	// created primitives commonly start exactly one grid cell wide, and the
+	// uniform center handle still needs to scale them smoothly below that size.
+	if (shrinking && snapped_units < 1.0) {
+		return std::max(kMinScaleFactor, factor);
+	}
 	const double snapped_extent = snapped_units * grid;
         const double snapped_factor = snapped_extent <= kScreenEpsilon
                                           ? kMinScaleFactor
                                           : snapped_extent / base_extent;
-        const double minimum_factor = minimum_scale_factor_for_grid(axis, bounds.min, bounds.max, grid, shrinking);
+	const double minimum_factor =
+		shrinking
+			? kMinScaleFactor
+			: std::max(
+				  1.0,
+				  minimum_scale_factor_for_grid(
+					  axis, bounds.min, bounds.max, grid, false));
 	return std::max(minimum_factor, snapped_factor);
 }
 

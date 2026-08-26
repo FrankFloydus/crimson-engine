@@ -117,7 +117,9 @@ struct TorusSpec {
 };
 
 /**
- * Captures polygon component selection state with SDK typed IDs.
+ * Captures polygon component selection state with SDK typed IDs. When
+ * has_active is true, the active ID for kind must belong to the corresponding
+ * selected component list.
  */
 struct PolygonSelectionSnapshot {
   SelectionKind kind = SelectionKind::Vertex;

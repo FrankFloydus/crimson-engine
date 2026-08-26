@@ -47,7 +47,7 @@ namespace {
 namespace fb = ::quader::qdr::fb;
 
 constexpr std::uint16_t kMinimumSceneChunkSchemaVersion = 1u;
-constexpr std::uint16_t kSceneChunkSchemaVersion = 5u;
+constexpr std::uint16_t kSceneChunkSchemaVersion = 6u;
 constexpr std::uint16_t kGeometryChunkSchemaVersion = 1u;
 
 [[nodiscard]] fb::Vec2 to_fb(QVec2 value) {
@@ -867,7 +867,8 @@ encode_scene_settings(flatbuffers::FlatBufferBuilder &builder,
       modeling_object = fb::CreateModelingObjectComponent(
           builder, entity.modeling_object->object_id,
           entity.modeling_object->material_slot,
-          entity.modeling_object->sdk_owned);
+          entity.modeling_object->sdk_owned,
+          entity.modeling_object->local_frame_version);
     }
     flatbuffers::Offset<fb::MeshComponent> mesh;
     if (entity.mesh.has_value()) {
@@ -1791,7 +1792,11 @@ void decode_entities(SceneContentDocument &document,
         document.scene().set_modeling_object(
             entity, {.object_id = value->object_id(),
                      .material_slot = value->material_slot(),
-                     .sdk_owned = value->sdk_owned()});
+                     .sdk_owned = value->sdk_owned(),
+                     .local_frame_version =
+                         schema_version >= 6u
+                             ? value->local_frame_version()
+                             : kLegacyUnknownModelingObjectLocalFrameVersion});
       }
       if (const fb::MeshComponent *value = stored->mesh()) {
         document.scene().set_mesh(

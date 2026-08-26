@@ -126,7 +126,7 @@ constexpr std::string_view viewport_command_keybinding_context() {
   return "viewportFocus && !textInputActive && !navigation.active";
 }
 
-constexpr std::string_view local_visibility_keybinding_context() {
+constexpr std::string_view unobstructed_viewport_keybinding_context() {
   return "viewportFocus && !textInputActive && !navigation.active && "
          "!modalTool.active && !activeTool.ownsViewport && "
          "!transformDrag.active && !operationPreview.active";
@@ -190,8 +190,10 @@ default_keybinding_context_for_command(std::string_view command_id) {
     return redo_command_keybinding_context();
   }
   if (command_id ==
-      quader_command::kViewportToggleLocalVisibility.string()) {
-    return local_visibility_keybinding_context();
+          quader_command::kViewportToggleLocalVisibility.string() ||
+      command_id ==
+          quader_command::kViewportToggleTransformSpace.string()) {
+    return unobstructed_viewport_keybinding_context();
   }
   if (command_semantically_requires_viewport(command_id)) {
     return viewport_command_keybinding_context();
@@ -2063,6 +2065,10 @@ void QuaderCommandsApi::Impl::register_commands() {
       "Toggle Local Visibility",
       [this] { return viewports_.toggle_local_visibility(); }, "Backslash",
       [this] { return viewports_.can_toggle_local_visibility(); });
+  register_command(
+      quader_command::kViewportToggleTransformSpace,
+      "Toggle Global/Local Transforms",
+      [this] { return viewports_.toggle_transform_space(); }, "T");
   register_viewport_view_command(quader_command::kViewportViewPerspective,
                                  "Perspective View",
                                  ViewportView::Perspective, "F4");

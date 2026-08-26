@@ -31,6 +31,8 @@ struct SceneTransformDragTarget {
   TransformComponent transform;
   TransformComponent translation_preview_transform;
   QVec3 local_pivot = {};
+  QVec3 local_visible_pivot = {};
+  QVec3 display_visible_pivot = {};
   QMat4 world_transform;
   QMat4 scene_from_display;
   QVec3 parent_space_world_x = {1.0f, 0.0f, 0.0f};
@@ -52,10 +54,15 @@ public:
     SceneTransformDragService(SceneTransformDragService&&) noexcept;
     SceneTransformDragService& operator=(SceneTransformDragService&&) noexcept;
 
+    /// Captures one scene transform drag. User-facing Local rotate/scale callers
+    /// must provide assets so every target pins its visible mesh pivot; a null
+    /// asset registry deliberately falls back to authored transform origins.
     [[nodiscard]] bool begin(SceneDocument &document, QVec3 world_pivot,
                              bool start_preview,
                              std::string label = "Transform Selection",
-                             QMat4 display_from_scene = {});
+                             QMat4 display_from_scene = {},
+                             const AssetRegistry *visible_pivot_assets =
+                                 nullptr);
     [[nodiscard]] bool begin_move_selected_to_primary_position_preview(
         SceneDocument &document, EntityId primary,
         std::string label = "Transform Selection");
@@ -83,6 +90,14 @@ public:
     DocumentCommandResult
     preview_world_translation_delta(SceneDocument &document,
                                     QVec3 world_translation_delta);
+    /** Applies one logical local-axis delta independently to every target. */
+    DocumentCommandResult
+    preview_local_rotation_delta(SceneDocument &document,
+                                 QVec3 local_rotation_delta_radians);
+    /** Scales every target in its own frame around its captured visible pivot. */
+    DocumentCommandResult
+    preview_local_scale_delta(SceneDocument &document,
+                              QVec3 local_scale_factors);
     DocumentCommandResult accept();
     DocumentCommandResult commit(EditorHistoryService& history);
     QuaderApiVoidResult commit(QuaderEditorApi& editor);
@@ -122,7 +137,8 @@ public:
 
     [[nodiscard]] CaptureTargetsStatus
     capture_targets(SceneDocument &document, QVec3 world_pivot,
-                    QMat4 display_from_scene = {});
+                    QMat4 display_from_scene = {},
+                    const AssetRegistry *visible_pivot_assets = nullptr);
     [[nodiscard]] const TransformComponent *
     captured_primary_transform(const SceneDocument &document,
                                EntityId primary) const;

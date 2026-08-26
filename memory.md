@@ -6582,3 +6582,89 @@ identity. The polygon loop (212 tests), SDK consumer (76 tests), SDK parity (4 t
 BehaviorScenario pass. Both canonical Debug/Profile and Release `quader` builds succeed. The full
 regression gate remains red only on the repository's unrelated instruction/build guardrails,
 linear-array preview, and overlay tests. No visual inspection was performed.
+
+## 2026-08-25 - Global And Local Transform Space
+
+Task/context: the user requested a toolbar control and `T` shortcut for Global/Local transforms,
+with active-mesh axes for multi-mesh Move, each mesh's own axes for multi-mesh Rotate/Scale, and
+active-component orientation in vertex, edge, and face modes.
+
+Invariant:
+
+- `ViewportWorkspaceService` owns one transient, revisioned transform-space value. The public
+  viewport API, `viewport.toggle_transform_space` command, `T` viewport binding, View menu, and
+  checkable toolbar action project that value; `Shift+T` remains Apply Material. UI synchronization
+  is revision-gated before command lookup, string formatting, or Qt setters.
+- A Local mesh frame uses the normalized columns of the exact displayed affine world matrix. This
+  keeps gizmo axes parallel to the rendered mesh through hierarchy scale/shear and instance
+  occurrence transforms. Oriented Box/Poly/primitive creation keeps canonical local geometry and
+  stores its construction frame in the scene transform instead of baking an unqueryable rotation
+  into vertices.
+- Local Move maps one logical delta through the active mesh frame for every selected mesh. Plane
+  movement and repeat use the full basis inverse, rather than dot products that assume an
+  orthogonal frame. Rotate rings remain perpendicular to their exact rendered axes.
+- Local Rotate and Scale apply the same logical-axis delta in each selected mesh's own authored
+  frame. Each target pins its own visible/custom pivot, including off-origin geometry in a
+  multi-selection; the hidden scene position may change to compensate, while the displayed mesh
+  center stays fixed. Cancel, history, signed scale, selection, and repeat semantics are preserved.
+- Component frames are deterministic: face Z is its normal and X its first winding edge; edge X is
+  canonical endpoint order and Z derives from incident normals; vertex Z derives from incident
+  normals and X from its lowest-ID usable neighbor. The explicitly active component drives every
+  selected component, the frame is converted through nonuniform/mirrored and occurrence transforms,
+  and it is frozen when a drag starts.
+- Component selection must preserve a valid explicit active element. Rectangle selection,
+  full-object compression, Select All, and Invert publish active edge/vertex indices; additive box
+  selection keeps the prior active component while it remains selected. Exact multi-object SDK
+  projection preserves explicit actives and synthesizes a per-object canonical active only where a
+  nonempty native selection lacks one.
+- Repeat stores transform space and logical orientation. Local Move remaps its logical delta through
+  the current active mesh/component frame; Local Rotate/Scale replay the recorded frame and affine
+  semantics.
+
+Owners: viewport workspace/public command APIs, Qt tool toolbar/menu, viewport transform-gizmo
+interaction, scene/modeling transform drag services, modeling component-orientation runtime,
+selection policy/projection adapter, and SDK polygon selection/transform operations.
+
+Verification: the corrected Local-transform repro set passes 17/17 across app and modeling-runtime
+tests, including rendered-axis alignment and single/multi off-origin visible-pivot rotation/scale;
+the command behavior contract also passes after its intentional baseline update. In the mandatory
+regression gate, SDK consumer, SDK parity, and modeling-domain suites pass, and the app suite passes
+1328 tests with 3 skipped. The gate remains red only on seven pre-existing instruction/build
+guardrails and five unrelated linear-array/overlay tests.
+
+## 2026-08-26 - Legacy Local Frames And Sub-Grid Uniform Scale
+
+Task/context: saved boxes created before canonical Local transforms could carry the construction
+frame and center in authored vertices as well as a scene rotation. Their rendered outline therefore
+disagreed with the gizmo/texture frame and Local rotation orbited far from the visible mesh. The
+uniform center scale handle also treated one grid interval as a hard minimum.
+
+Invariant:
+
+- QDR scene schema 6 persists `ModelingObjectComponent::local_frame_version`; older schemas decode
+  as unknown/legacy and all newly projected objects are marked canonical. Tombstones, duplication,
+  extraction, mirroring, and SDK history preserve the marker.
+- Legacy migration runs only while `SceneSession` installs or replaces a document, before modeling
+  hydration and the clean baseline. Generic runtime resets never migrate scene/assets outside
+  history. Both legacy `sdk_owned` values are eligible because hydration owns that transition.
+- Automatic recovery accepts only the exact old unsegmented Quader cube topology and a rigid
+  source replay. Old schemas contain no creation provenance, so this exact geometry signature is
+  the deliberate compatibility policy; deformed or unrecognized meshes remain untouched.
+- For recovered frame `B`, authored vertices become `B^-1 p`, the object local matrix becomes
+  `L * B`, and every direct child becomes `B^-1 * C`. Every target/child TRS is validated before
+  mutation, shared assets use clone-on-write, and failure rolls back atomically. Generated UVs are
+  materialized before rebasing so the existing texture mapping does not move.
+- Grid-snapped shrinking remains quantized while a full grid interval fits, then uses the raw
+  positive factor down to the existing safety floor. The center `All` handle can therefore shrink a
+  fresh one-unit box below creation size. Outward snapping is clamped to never reverse direction
+  and shrink non-grid-aligned bounds.
+
+Owners: `SceneSession`, `ModelingLegacyLocalFrameUpgradeService`,
+`ModelingMeshSyncService`, scene/QDR local-frame metadata, and transform-tool math.
+
+Verification: the saved-frame preservation/load regressions pass 4/4, including world geometry,
+texture UVs, children, visible center/pivot, first-load hydration, clean history, marker-only,
+single-reference replacement, and repeated-reset idempotency. Focused Local-transform app tests pass
+17/17; focused runtime orientation/transform/scale tests pass 19/19; command/UI/guardrail and SDK
+consumer/parity filters pass. The mandatory gate remains red only on six pre-existing
+instruction/build guardrails and five unrelated linear-array/overlay tests.

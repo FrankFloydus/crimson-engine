@@ -18,10 +18,13 @@
 namespace quader {
 
 class AssetRegistry;
+class AssetRegistryProjectionCheckpoint;
 struct MaterialComponent;
 struct MeshComponent;
+struct ModelingObjectComponent;
 struct ModelingObjectSceneIdentity;
 class SceneDocument;
+class SceneProjectionCheckpoint;
 struct SceneTransformAssignment;
 class SceneModelingSyncService;
 struct TransformComponent;
@@ -71,9 +74,18 @@ public:
   [[nodiscard]] bool parent_projected_entity(SceneDocument &scene,
                                              EntityId entity,
                                              EntityId parent) const;
+  [[nodiscard]] bool set_projected_transform(
+      SceneDocument &scene, EntityId entity,
+      const TransformComponent &transform) const;
+  [[nodiscard]] bool set_projected_mesh_component(
+      SceneDocument &scene, EntityId entity, const MeshComponent &mesh) const;
+  [[nodiscard]] bool set_projected_modeling_object_component(
+      SceneDocument &scene, EntityId entity,
+      const ModelingObjectComponent &modeling_object) const;
   [[nodiscard]] bool bind_projected_object(
       SceneDocument &scene, EntityId entity, int modeling_object_id,
-      std::uint32_t material_slot, bool sdk_owned, AssetId mesh_id) const;
+      std::uint32_t material_slot, bool sdk_owned, AssetId mesh_id,
+      std::optional<std::uint32_t> local_frame_version = std::nullopt) const;
   [[nodiscard]] bool mark_projected_object_sdk_owned(
       SceneDocument &scene, EntityId entity) const;
   [[nodiscard]] bool set_projected_mesh_binding(SceneDocument &scene,
@@ -102,6 +114,11 @@ public:
   void apply_scene_transforms(
       SceneDocument &scene,
       std::span<const SceneTransformAssignment> transforms) const;
+  [[nodiscard]] bool restore_projected_asset_checkpoint(
+      AssetRegistry &assets,
+      const AssetRegistryProjectionCheckpoint &checkpoint) const;
+  [[nodiscard]] bool restore_projected_scene_checkpoint(
+      SceneDocument &scene, const SceneProjectionCheckpoint &checkpoint) const;
   void establish_loaded_scene_sync_baseline(
       const quader_editor_core::EditorSession &session,
       SceneModelingSyncService &scene_sync) const;

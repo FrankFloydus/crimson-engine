@@ -20,6 +20,7 @@ namespace quader_editor_core {
 struct RotateToolState {
 	bool active = false;
         TransformAxis axis = TransformAxis::None;
+        quader_poly::Transform3 orientation;
         std::vector<int> object_ids;
 	quader::QVec3 pivot;
 	quader::QVec2 screen_pivot;
@@ -39,6 +40,7 @@ struct RotateToolState {
  */
 struct RotateBeginInput {
   TransformAxis axis = TransformAxis::None;
+  quader_poly::Transform3 orientation;
   std::vector<int> object_ids;
   quader::QVec3 pivot;
   quader::QVec2 screen_position;

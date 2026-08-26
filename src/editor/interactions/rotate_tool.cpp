@@ -53,6 +53,7 @@ public:
 		RotateToolState state;
 		state.active = true;
 		state.axis = input.axis;
+		state.orientation = input.orientation;
 		state.object_ids = input.object_ids;
 		state.pivot = input.pivot;
 		state.screen_pivot = input.has_screen_pivot ? input.screen_pivot : input.screen_position;
@@ -140,7 +141,10 @@ public:
 			angle_degrees = std::round(angle_degrees / snap_degrees) * snap_degrees;
 		}
 		state.preview_angle_degrees = angle_degrees;
-		const quader_poly::Transform3 transform = rotation_transform(state.axis, state.preview_angle_degrees * std::acos(-1.0) / 180.0);
+		const quader_poly::Transform3 transform = oriented_rotation_transform(
+			state.axis,
+			state.preview_angle_degrees * std::acos(-1.0) / 180.0,
+			state.orientation);
 		return { true, {}, state.preview_angle_degrees, state.preview_angle_degrees, transform, pivoted_transform(transform, state.pivot) };
 	}
 

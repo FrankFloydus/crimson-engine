@@ -39,6 +39,8 @@ public:
     compiled_object_mesh(QuaderModelingObjectRef object) const;
     [[nodiscard]] std::optional<QVec3> selection_center() const;
     [[nodiscard]] std::optional<QVec3> selection_transform_pivot() const;
+    [[nodiscard]] std::optional<QuaderTransform3>
+    selection_transform_orientation() const;
     [[nodiscard]] QuaderSelectionSummary selection() const;
     [[nodiscard]] QuaderToolStatus tool_status() const;
     [[nodiscard]] QuaderAssetSnapshot assets() const;

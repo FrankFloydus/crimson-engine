@@ -88,6 +88,321 @@ void expect_vec3_near(quader::QVec3 actual, quader::QVec3 expected,
   EXPECT_NEAR(actual.z, expected.z, epsilon);
 }
 
+void expect_orientation_near(const quader::QuaderTransform3 &actual,
+                             const quader::QuaderTransform3 &expected,
+                             float epsilon = 0.001f) {
+  expect_vec3_near(actual.x_axis, expected.x_axis, epsilon);
+  expect_vec3_near(actual.y_axis, expected.y_axis, epsilon);
+  expect_vec3_near(actual.z_axis, expected.z_axis, epsilon);
+}
+
+float orientation_axis_difference(const quader::QuaderTransform3 &first,
+                                  const quader::QuaderTransform3 &second) {
+  return quader::length(first.x_axis - second.x_axis) +
+         quader::length(first.y_axis - second.y_axis) +
+         quader::length(first.z_axis - second.z_axis);
+}
+
+bool orientation_is_slanted(const quader::QuaderTransform3 &orientation) {
+  const std::array axes{
+      orientation.x_axis,
+      orientation.y_axis,
+      orientation.z_axis,
+  };
+  return std::any_of(axes.begin(), axes.end(), [](quader::QVec3 axis) {
+    const std::array magnitudes{
+        std::abs(axis.x),
+        std::abs(axis.y),
+        std::abs(axis.z),
+    };
+    return static_cast<int>(std::count_if(
+               magnitudes.begin(), magnitudes.end(),
+               [](float value) { return value > 0.1f; })) >= 2;
+  });
+}
+
+quader::QuaderComponentSelectionArgs component_orientation_selection(
+    quader::QuaderModelingObjectRef object, quader::QuaderSelectionMode mode,
+    bool include_first, bool include_second, bool second_is_active) {
+  quader::QuaderComponentSelectionArgs args;
+  args.object = object;
+  args.edit = quader::QuaderSelectionEdit::Replace;
+  switch (mode) {
+  case quader::QuaderSelectionMode::Vertex:
+    args.kind = quader::QuaderComponentKind::Vertex;
+    if (include_first) {
+      args.vertices.push_back(1);
+    }
+    if (include_second) {
+      args.vertices.push_back(2);
+    }
+    args.active = {
+        .object = object,
+        .kind = quader::QuaderComponentKind::Vertex,
+        .vertex = second_is_active ? 2 : 1,
+    };
+    break;
+  case quader::QuaderSelectionMode::Edge:
+    args.kind = quader::QuaderComponentKind::Edge;
+    if (include_first) {
+      args.edges.emplace_back(1, 2);
+    }
+    if (include_second) {
+      args.edges.emplace_back(1, 4);
+    }
+    args.active = {
+        .object = object,
+        .kind = quader::QuaderComponentKind::Edge,
+        .edge_a = 1,
+        .edge_b = second_is_active ? 4 : 2,
+    };
+    break;
+  case quader::QuaderSelectionMode::Face:
+    args.kind = quader::QuaderComponentKind::Face;
+    if (include_first) {
+      args.faces.push_back(1);
+    }
+    if (include_second) {
+      args.faces.push_back(3);
+    }
+    args.active = {
+        .object = object,
+        .kind = quader::QuaderComponentKind::Face,
+        .face = second_is_active ? 3 : 1,
+    };
+    break;
+  case quader::QuaderSelectionMode::Object:
+  case quader::QuaderSelectionMode::Group:
+    break;
+  }
+  return args;
+}
+
+const std::array<quader::QVec3, 4> &local_transform_tetrahedron_positions() {
+  static constexpr std::array<quader::QVec3, 4> kPositions{
+      quader::QVec3{0.0f, 0.0f, 0.0f},
+      quader::QVec3{2.0f, 0.0f, 0.0f},
+      quader::QVec3{0.0f, 2.0f, 0.0f},
+      quader::QVec3{0.0f, 0.0f, 2.0f},
+  };
+  return kPositions;
+}
+
+quader::QuaderPolygonDocument local_transform_tetrahedron_document() {
+  quader_poly::Document document;
+  std::array<quader_poly::ElementId, 4> vertices;
+  for (std::size_t index = 0; index < vertices.size(); ++index) {
+    vertices[index] = quader_poly::add_vertex(
+        document, local_transform_tetrahedron_positions()[index]);
+  }
+  (void)quader_poly::add_face(
+      document,
+      std::array{vertices[0], vertices[2], vertices[1]});
+  (void)quader_poly::add_face(
+      document,
+      std::array{vertices[0], vertices[3], vertices[2]});
+  (void)quader_poly::add_face(
+      document,
+      std::array{vertices[0], vertices[1], vertices[3]});
+  (void)quader_poly::add_face(
+      document,
+      std::array{vertices[1], vertices[2], vertices[3]});
+  return quader::QuaderPolygonDocumentInternalAccess::from_backend(
+      std::move(document));
+}
+
+quader::QuaderComponentSelectionArgs tetrahedron_component_selection(
+    quader::QuaderModelingObjectRef object, quader::QuaderSelectionMode mode,
+    bool first_is_active = false) {
+  quader::QuaderComponentSelectionArgs args;
+  args.object = object;
+  args.edit = quader::QuaderSelectionEdit::Replace;
+  switch (mode) {
+  case quader::QuaderSelectionMode::Vertex:
+    args.kind = quader::QuaderComponentKind::Vertex;
+    args.vertices = {1, 2};
+    args.active = {
+        .object = object,
+        .kind = quader::QuaderComponentKind::Vertex,
+        .vertex = first_is_active ? 1 : 2,
+    };
+    break;
+  case quader::QuaderSelectionMode::Edge:
+    args.kind = quader::QuaderComponentKind::Edge;
+    args.edges = {{1, 2}, {2, 3}};
+    args.active = {
+        .object = object,
+        .kind = quader::QuaderComponentKind::Edge,
+        .edge_a = first_is_active ? 1 : 2,
+        .edge_b = first_is_active ? 2 : 3,
+    };
+    break;
+  case quader::QuaderSelectionMode::Face:
+    args.kind = quader::QuaderComponentKind::Face;
+    args.faces = {1, 4};
+    args.active = {
+        .object = object,
+        .kind = quader::QuaderComponentKind::Face,
+        .face = first_is_active ? 1 : 4,
+    };
+    break;
+  case quader::QuaderSelectionMode::Object:
+  case quader::QuaderSelectionMode::Group:
+    break;
+  }
+  return args;
+}
+
+std::vector<std::size_t>
+tetrahedron_selected_vertex_indices(quader::QuaderSelectionMode mode) {
+  switch (mode) {
+  case quader::QuaderSelectionMode::Vertex:
+    return {0u, 1u};
+  case quader::QuaderSelectionMode::Edge:
+    return {0u, 1u, 2u};
+  case quader::QuaderSelectionMode::Face:
+    return {0u, 1u, 2u, 3u};
+  case quader::QuaderSelectionMode::Object:
+  case quader::QuaderSelectionMode::Group:
+    return {};
+  }
+  return {};
+}
+
+bool mesh_contains_position(const quader::QuaderMeshAsset &mesh,
+                            quader::QVec3 expected,
+                            float epsilon = 0.002f) {
+  return std::any_of(mesh.vertices.begin(), mesh.vertices.end(),
+                     [expected, epsilon](const quader::QuaderMeshVertex &vertex) {
+                       return quader::length(vertex.position - expected) <=
+                              epsilon;
+                     });
+}
+
+quader::QuaderViewportCamera local_component_drag_camera() {
+  return {
+      .orthographic = true,
+      .origin = {0.0f, 0.0f, 8.0f},
+      .x_axis = {1.0f, 0.0f, 0.0f},
+      .y_axis = {0.0f, 1.0f, 0.0f},
+      .z_axis = {0.0f, 0.0f, 1.0f},
+      .viewport_size = {800.0f, 600.0f},
+      .orthographic_size = 8.0,
+      .fov_degrees = 60.0,
+  };
+}
+
+quader::QuaderRay local_component_drag_ray() {
+  return {
+      .origin = {0.0f, 0.0f, 8.0f},
+      .direction = {0.0f, 0.0f, -1.0f},
+  };
+}
+
+quader::QuaderTransformDragPreview perform_local_component_drag(
+    quader::test::BehaviorScenario &scenario,
+    quader::QuaderTransformTool tool,
+    const quader::QuaderTransform3 &orientation, quader::QVec3 pivot) {
+  const bool scale = tool == quader::QuaderTransformTool::Scale;
+  const bool rotate = tool == quader::QuaderTransformTool::Rotate;
+  const quader::QVec2 screen_pivot =
+      (scale || rotate) ? quader::QVec2{100.0f, 100.0f}
+                        : quader::QVec2{0.0f, 0.0f};
+  const quader::QVec2 screen_position =
+      scale ? screen_pivot
+            : (rotate ? quader::QVec2{120.0f, 100.0f}
+                      : quader::QVec2{0.0f, 0.0f});
+  const quader::QVec2 screen_tip =
+      scale ? quader::QVec2{160.0f, 100.0f}
+            : (rotate ? quader::QVec2{120.0f, 100.0f}
+                      : quader::QVec2{60.0f, 0.0f});
+  const quader::QVec2 update_position =
+      scale ? quader::QVec2{220.0f, 100.0f}
+            : (rotate ? quader::QVec2{140.0f, 80.0f}
+                      : quader::QVec2{120.0f, 0.0f});
+  const quader::QuaderViewportCamera camera = local_component_drag_camera();
+  const quader::QuaderRay ray = local_component_drag_ray();
+
+  const quader::QuaderApiResult<quader::QuaderTransformDragPreview> begin =
+      scenario.api().modeling().begin_transform_drag({
+          .tool = tool,
+          .operation = quader::QuaderTransformOperation::Transform,
+          .axis = quader::QuaderTransformAxis::X,
+          .space = quader::QuaderTransformSpace::Local,
+          .orientation = orientation,
+          .pivot = pivot,
+          .screen_position = screen_position,
+          .screen_pivot = screen_pivot,
+          .screen_tip = screen_tip,
+          .has_world_direction = true,
+          .world_direction = orientation.x_axis,
+          .ray = ray,
+          .camera = camera,
+          .grid_size = 1.0,
+          .vertex_snap_radius = 0.0,
+          .grid_snap_enabled = false,
+          .rotation_snap_degrees = 0.0,
+      });
+  EXPECT_TRUE(begin.ok()) << begin.error_message();
+  if (!begin.ok()) {
+    return {};
+  }
+  const quader::QuaderApiResult<quader::QuaderTransformDragPreview> update =
+      scenario.api().modeling().update_transform_drag({
+          .screen_position = update_position,
+          .ray = ray,
+          .camera = camera,
+          .grid_size = 1.0,
+          .vertex_snap_radius = 0.0,
+          .grid_snap_enabled = false,
+          .rotation_snap_degrees = 0.0,
+      });
+  EXPECT_TRUE(update.ok()) << update.error_message();
+  if (!update.ok()) {
+    return {};
+  }
+  EXPECT_TRUE(update.changed());
+  const quader::QuaderApiResult<quader::QuaderTransformDragPreview> commit =
+      scenario.api().modeling().commit_transform_drag();
+  EXPECT_TRUE(commit.ok()) << commit.error_message();
+  EXPECT_TRUE(commit.changed());
+  return update.value();
+}
+
+quader::QVec3 rotate_about_axis(quader::QVec3 point, quader::QVec3 pivot,
+                                quader::QVec3 axis,
+                                double angle_degrees) {
+  axis = quader::normalize(axis);
+  const quader::QVec3 relative = point - pivot;
+  const double radians = angle_degrees * std::acos(-1.0) / 180.0;
+  const float cosine = static_cast<float>(std::cos(radians));
+  const float sine = static_cast<float>(std::sin(radians));
+  return pivot + relative * cosine + quader::cross(axis, relative) * sine +
+         axis * (quader::dot(axis, relative) * (1.0f - cosine));
+}
+
+quader::QVec3 expected_local_component_position(
+    quader::QVec3 point, quader::QVec3 pivot,
+    const quader::QuaderTransform3 &orientation,
+    const quader::QuaderTransformDragPreview &preview) {
+  switch (preview.tool) {
+  case quader::QuaderTransformTool::Move:
+    return point + preview.move_delta;
+  case quader::QuaderTransformTool::Rotate:
+    return rotate_about_axis(point, pivot, orientation.x_axis,
+                             preview.rotate_angle_degrees);
+  case quader::QuaderTransformTool::Scale: {
+    const quader::QVec3 relative = point - pivot;
+    return pivot +
+           orientation.x_axis *
+               (quader::dot(relative, orientation.x_axis) * preview.scale.x) +
+           orientation.y_axis * quader::dot(relative, orientation.y_axis) +
+           orientation.z_axis * quader::dot(relative, orientation.z_axis);
+  }
+  }
+  return point;
+}
+
 quader::QVec3 rotate_positive_quarter_turn_about(quader::QVec3 point,
                                                   quader::QVec3 pivot) {
   const quader::QVec3 relative = point - pivot;
@@ -440,6 +755,265 @@ TEST(ProgrammaticBehaviorScenarioTests, ComponentGizmoMoveRotateScaleKeepCompone
        }) {
     run_component_transform_drag_case(test_case);
   }
+}
+
+TEST(ProgrammaticBehaviorScenarioTests,
+     LocalComponentOrientationUsesExplicitActiveVertexEdgeAndFace) {
+  for (const quader::QuaderSelectionMode mode : {
+           quader::QuaderSelectionMode::Vertex,
+           quader::QuaderSelectionMode::Edge,
+           quader::QuaderSelectionMode::Face,
+       }) {
+    SCOPED_TRACE(static_cast<int>(mode));
+    auto s = quader::test::BehaviorScenario::new_project();
+    s.given()
+        .unit_box("box", "Local Component Orientation Box")
+        .transform("box",
+                   {.rotation_euler = {0.37f, -0.51f, 0.29f},
+                    .scale = {1.4f, 0.8f, 1.9f}});
+    const quader::QuaderModelingObjectRef object = s.object("box");
+
+    const quader::QuaderApiVoidResult selected_first =
+        s.api().selection().select_components(component_orientation_selection(
+            object, mode, true, false, false));
+    ASSERT_TRUE(selected_first.ok()) << selected_first.error_message();
+    const std::optional<quader::QuaderTransform3> first_orientation =
+        s.api().query().selection_transform_orientation();
+    ASSERT_TRUE(first_orientation.has_value());
+    EXPECT_TRUE(orientation_is_slanted(*first_orientation));
+
+    const quader::QuaderApiVoidResult selected_second =
+        s.api().selection().select_components(component_orientation_selection(
+            object, mode, false, true, true));
+    ASSERT_TRUE(selected_second.ok()) << selected_second.error_message();
+    const std::optional<quader::QuaderTransform3> second_orientation =
+        s.api().query().selection_transform_orientation();
+    ASSERT_TRUE(second_orientation.has_value());
+    EXPECT_TRUE(orientation_is_slanted(*second_orientation));
+    EXPECT_GT(orientation_axis_difference(*first_orientation,
+                                          *second_orientation),
+              0.1f);
+
+    const quader::QuaderApiVoidResult selected_both =
+        s.api().selection().select_components(component_orientation_selection(
+            object, mode, true, true, true));
+    ASSERT_TRUE(selected_both.ok()) << selected_both.error_message();
+    const quader::QuaderSelectionSummary summary =
+        s.api().selection().summary();
+    const std::optional<quader::QuaderTransform3> multi_orientation =
+        s.api().query().selection_transform_orientation();
+    ASSERT_TRUE(multi_orientation.has_value());
+    expect_orientation_near(*multi_orientation, *second_orientation);
+    EXPECT_EQ(summary.active_object_id, object.modeling_object_id);
+
+    switch (mode) {
+    case quader::QuaderSelectionMode::Vertex:
+      EXPECT_EQ(summary.active_kind,
+                quader::QuaderActiveSelectionKind::Vertex);
+      EXPECT_EQ(summary.selected_vertex_count, 2u);
+      EXPECT_EQ(summary.active_vertex_id, 2u);
+      break;
+    case quader::QuaderSelectionMode::Edge:
+      EXPECT_EQ(summary.active_kind, quader::QuaderActiveSelectionKind::Edge);
+      EXPECT_EQ(summary.selected_edge_count, 2u);
+      EXPECT_EQ(summary.active_edge_a, 1u);
+      EXPECT_EQ(summary.active_edge_b, 4u);
+      break;
+    case quader::QuaderSelectionMode::Face:
+      EXPECT_EQ(summary.active_kind, quader::QuaderActiveSelectionKind::Face);
+      EXPECT_EQ(summary.selected_face_count, 2u);
+      EXPECT_EQ(summary.active_face_id, 3u);
+      break;
+    case quader::QuaderSelectionMode::Object:
+    case quader::QuaderSelectionMode::Group:
+      FAIL() << "Local component orientation received a non-component mode";
+      break;
+    }
+  }
+}
+
+TEST(ProgrammaticBehaviorScenarioTests,
+     LocalComponentMoveRotateScaleTransformThroughExplicitActiveFrames) {
+  /// Names one transform tool case for scoped multi-mode diagnostics.
+  struct TransformCase {
+    quader::QuaderTransformTool tool = quader::QuaderTransformTool::Move;
+    const char *label = "";
+  };
+
+  for (const quader::QuaderSelectionMode mode : {
+           quader::QuaderSelectionMode::Vertex,
+           quader::QuaderSelectionMode::Edge,
+           quader::QuaderSelectionMode::Face,
+       }) {
+    for (const TransformCase transform_case : {
+             TransformCase{quader::QuaderTransformTool::Move, "move"},
+             TransformCase{quader::QuaderTransformTool::Rotate, "rotate"},
+             TransformCase{quader::QuaderTransformTool::Scale, "scale"},
+         }) {
+      SCOPED_TRACE(static_cast<int>(mode));
+      SCOPED_TRACE(transform_case.label);
+      auto s = quader::test::BehaviorScenario::new_project();
+      s.given().mesh("tetra", local_transform_tetrahedron_document(),
+                     "Local Component Transform Tetrahedron");
+      const quader::QuaderModelingObjectRef object = s.object("tetra");
+      const quader::QuaderApiVoidResult selected =
+          s.api().selection().select_components(
+              tetrahedron_component_selection(object, mode));
+      ASSERT_TRUE(selected.ok()) << selected.error_message();
+
+      const std::optional<quader::QuaderTransform3> orientation =
+          s.api().query().selection_transform_orientation();
+      const std::optional<quader::QVec3> pivot =
+          s.api().query().selection_transform_pivot();
+      ASSERT_TRUE(orientation.has_value());
+      ASSERT_TRUE(pivot.has_value());
+      EXPECT_TRUE(orientation_is_slanted(*orientation));
+      EXPECT_LT(std::abs(quader::dot(
+                    quader::normalize(orientation->x_axis),
+                    quader::QVec3{1.0f, 0.0f, 0.0f})),
+                0.99f);
+
+      const std::optional<quader::QuaderMeshAsset> before_mesh =
+          s.api().query().compiled_object_mesh(object);
+      ASSERT_TRUE(before_mesh.has_value());
+      for (const quader::QVec3 position :
+           local_transform_tetrahedron_positions()) {
+        EXPECT_TRUE(mesh_contains_position(*before_mesh, position));
+      }
+
+      const quader::QuaderTransformDragPreview preview =
+          perform_local_component_drag(s, transform_case.tool, *orientation,
+                                       *pivot);
+      if (transform_case.tool == quader::QuaderTransformTool::Move) {
+        ASSERT_GT(quader::length(preview.move_delta), 0.01f);
+        EXPECT_GT(quader::dot(quader::normalize(preview.move_delta),
+                              quader::normalize(orientation->x_axis)),
+                  0.999f);
+      } else if (transform_case.tool ==
+                 quader::QuaderTransformTool::Rotate) {
+        EXPECT_GT(std::abs(preview.rotate_angle_degrees), 1.0);
+      } else {
+        EXPECT_GT(std::abs(preview.scale.x - 1.0f), 0.01f);
+        EXPECT_NEAR(preview.scale.y, 1.0f, 0.001f);
+        EXPECT_NEAR(preview.scale.z, 1.0f, 0.001f);
+      }
+
+      const std::vector<std::size_t> transformed_indices =
+          tetrahedron_selected_vertex_indices(mode);
+      const std::optional<quader::QuaderMeshAsset> after_mesh =
+          s.api().query().compiled_object_mesh(object);
+      ASSERT_TRUE(after_mesh.has_value());
+      EXPECT_EQ(after_mesh->indices.size(), before_mesh->indices.size());
+      bool at_least_one_selected_vertex_moved = false;
+      for (std::size_t index = 0;
+           index < local_transform_tetrahedron_positions().size(); ++index) {
+        const bool transformed =
+            std::find(transformed_indices.begin(), transformed_indices.end(),
+                      index) != transformed_indices.end();
+        const quader::QVec3 source =
+            local_transform_tetrahedron_positions()[index];
+        const quader::QVec3 expected =
+            transformed ? expected_local_component_position(
+                              source, *pivot, *orientation, preview)
+                        : source;
+        EXPECT_TRUE(mesh_contains_position(*after_mesh, expected))
+            << "missing authored vertex " << index + 1u;
+        if (transformed && quader::length(expected - source) > 0.01f) {
+          at_least_one_selected_vertex_moved = true;
+        }
+      }
+      EXPECT_TRUE(at_least_one_selected_vertex_moved);
+
+      const quader::QuaderSelectionSummary summary =
+          s.api().selection().summary();
+      EXPECT_EQ(summary.active_object_id, object.modeling_object_id);
+      if (mode == quader::QuaderSelectionMode::Vertex) {
+        EXPECT_EQ(summary.selected_vertex_count, 2u);
+        EXPECT_EQ(summary.active_vertex_id, 2u);
+      } else if (mode == quader::QuaderSelectionMode::Edge) {
+        EXPECT_EQ(summary.selected_edge_count, 2u);
+        EXPECT_EQ(summary.active_edge_a, 2u);
+        EXPECT_EQ(summary.active_edge_b, 3u);
+      } else {
+        EXPECT_EQ(summary.selected_face_count, 2u);
+        EXPECT_EQ(summary.active_face_id, 4u);
+      }
+    }
+  }
+}
+
+TEST(ProgrammaticBehaviorScenarioTests,
+     RepeatLastComponentTransformKeepsRecordedLocalOrientationAfterActiveFaceChanges) {
+  auto s = quader::test::BehaviorScenario::new_project();
+  s.given().mesh("tetra", local_transform_tetrahedron_document(),
+                 "Repeated Local Component Tetrahedron");
+  const quader::QuaderModelingObjectRef object = s.object("tetra");
+  ASSERT_TRUE(s.api()
+                  .selection()
+                  .select_components(tetrahedron_component_selection(
+                      object, quader::QuaderSelectionMode::Face))
+                  .ok());
+  const std::optional<quader::QuaderTransform3> recorded_orientation =
+      s.api().query().selection_transform_orientation();
+  const std::optional<quader::QVec3> recorded_pivot =
+      s.api().query().selection_transform_pivot();
+  ASSERT_TRUE(recorded_orientation.has_value());
+  ASSERT_TRUE(recorded_pivot.has_value());
+
+  const quader::QuaderTransformDragPreview preview =
+      perform_local_component_drag(s, quader::QuaderTransformTool::Rotate,
+                                   *recorded_orientation, *recorded_pivot);
+  ASSERT_GT(std::abs(preview.rotate_angle_degrees), 1.0);
+  std::array<quader::QVec3, 4> once_transformed;
+  for (std::size_t index = 0; index < once_transformed.size(); ++index) {
+    once_transformed[index] = expected_local_component_position(
+        local_transform_tetrahedron_positions()[index], *recorded_pivot,
+        *recorded_orientation, preview);
+  }
+
+  ASSERT_TRUE(s.api()
+                  .selection()
+                  .select_components(tetrahedron_component_selection(
+                      object, quader::QuaderSelectionMode::Face, true))
+                  .ok());
+  const std::optional<quader::QuaderTransform3> current_active_orientation =
+      s.api().query().selection_transform_orientation();
+  ASSERT_TRUE(current_active_orientation.has_value());
+  EXPECT_GT(orientation_axis_difference(*recorded_orientation,
+                                        *current_active_orientation),
+            0.1f);
+
+  s.when().execute(quader::quader_command::kEditRepeatLastAction);
+  s.then().command().ok_changed();
+  const std::optional<quader::QuaderMeshAsset> repeated_mesh =
+      s.api().query().compiled_object_mesh(object);
+  ASSERT_TRUE(repeated_mesh.has_value());
+  bool recorded_and_current_results_differ = false;
+  bool current_orientation_prediction_missing = false;
+  for (std::size_t index = 0; index < once_transformed.size(); ++index) {
+    const quader::QVec3 expected_recorded =
+        expected_local_component_position(
+            once_transformed[index], *recorded_pivot, *recorded_orientation,
+            preview);
+    const quader::QVec3 would_use_current = expected_local_component_position(
+        once_transformed[index], *recorded_pivot,
+        *current_active_orientation, preview);
+    EXPECT_TRUE(mesh_contains_position(*repeated_mesh, expected_recorded))
+        << "repeat did not reuse recorded orientation for authored vertex "
+        << index + 1u;
+    if (quader::length(expected_recorded - would_use_current) > 0.05f) {
+      recorded_and_current_results_differ = true;
+      current_orientation_prediction_missing =
+          current_orientation_prediction_missing ||
+          !mesh_contains_position(*repeated_mesh, would_use_current, 0.01f);
+    }
+  }
+  EXPECT_TRUE(recorded_and_current_results_differ);
+  EXPECT_TRUE(current_orientation_prediction_missing);
+  const quader::QuaderSelectionSummary summary =
+      s.api().selection().summary();
+  EXPECT_EQ(summary.selected_face_count, 2u);
+  EXPECT_EQ(summary.active_face_id, 1u);
 }
 
 TEST(ProgrammaticBehaviorScenarioTests,

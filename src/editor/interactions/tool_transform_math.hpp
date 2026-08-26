@@ -30,6 +30,13 @@ quader::QVec3 inverse_transform_point(const quader_poly::Transform3& transform, 
 quader_poly::Transform3 pivoted_transform(const quader_poly::Transform3& transform, quader::QVec3 pivot);
 quader_poly::Transform3 rotation_transform(TransformAxis axis, double angle_radians);
 quader_poly::Transform3 scale_transform(quader::QVec3 scale);
+quader_poly::Transform3 oriented_rotation_transform(
+	TransformAxis axis,
+	double angle_radians,
+	const quader_poly::Transform3& orientation);
+quader_poly::Transform3 oriented_scale_transform(
+	quader::QVec3 scale,
+	const quader_poly::Transform3& orientation);
 double scale_delta(quader::QVec3 scale);
 double wrap_radians(double radians);
 double snap_move_distance(double distance, bool precision, bool grid_enabled, double grid_size);

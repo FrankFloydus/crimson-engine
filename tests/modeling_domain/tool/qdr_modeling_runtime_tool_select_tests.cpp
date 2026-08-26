@@ -104,6 +104,118 @@ TEST(QdrModelingRuntimeToolSelectTests, RectangleSelectionPromotesFullEdgeObject
 	EXPECT_TRUE(result.selection.selected_edge_full_object_ids[0] == 1);
 	EXPECT_TRUE(result.selection.selected_edges.empty());
 	EXPECT_TRUE(result.selection.active_object_id == 1);
+	EXPECT_TRUE((result.selection.active_edge_vertex_indices ==
+		std::vector<int> { 1, 2 }));
+}
+
+TEST(QdrModelingRuntimeToolSelectTests,
+	RectangleVertexSelectionPublishesActiveElementForFullObjectCompression) {
+	quader_editor_core::RectangleSelectionRequest request;
+	request.current_selection.mode = quader_editor_core::SelectionMode::Vertex;
+	request.operation = quader_editor_core::SelectionEditOperation::Replace;
+	request.universe = simple_universe();
+	request.hits.vertices = {
+		{ 1, 0 },
+		{ 1, 1 },
+	};
+
+	const quader_editor_core::RectangleSelectionResult result =
+		quader_editor_core::apply_rectangle_selection(request);
+	EXPECT_TRUE(result.selection.mode ==
+		quader_editor_core::SelectionMode::Vertex);
+	EXPECT_TRUE((result.selection.selected_vertex_full_object_ids ==
+		std::vector<int> { 1 }));
+	EXPECT_TRUE(result.selection.selected_vertices.empty());
+	EXPECT_TRUE(result.selection.active_object_id == 1);
+	EXPECT_TRUE((result.selection.active_vertex_indices ==
+		std::vector<int> { 1 }));
+}
+
+TEST(QdrModelingRuntimeToolSelectTests,
+	RectangleAddPreservesSelectedActiveEdgeAndVertexAcrossFullCompression) {
+	quader_editor_core::RectangleSelectionRequest request;
+	request.current_selection.mode = quader_editor_core::SelectionMode::Edge;
+	request.current_selection.active_object_id = 1;
+	request.current_selection.selected_edges = {{ 1, 0, 1 }};
+	request.current_selection.active_edge_vertex_indices = { 0, 1 };
+	request.operation = quader_editor_core::SelectionEditOperation::Add;
+	request.universe = simple_universe();
+	request.hits.edges = {
+		{ 1, 0, 1 },
+		{ 1, 1, 2 },
+	};
+
+	quader_editor_core::RectangleSelectionResult result =
+		quader_editor_core::apply_rectangle_selection(request);
+	EXPECT_TRUE((result.selection.selected_edge_full_object_ids ==
+		std::vector<int> { 1 }));
+	EXPECT_TRUE(result.selection.active_object_id == 1);
+	EXPECT_TRUE((result.selection.active_edge_vertex_indices ==
+		std::vector<int> { 0, 1 }));
+
+	request = {};
+	request.current_selection.mode = quader_editor_core::SelectionMode::Vertex;
+	request.current_selection.active_object_id = 1;
+	request.current_selection.selected_vertices = {{ 1, 0 }};
+	request.current_selection.active_vertex_indices = { 0 };
+	request.operation = quader_editor_core::SelectionEditOperation::Add;
+	request.universe = simple_universe();
+	request.hits.vertices = {
+		{ 1, 0 },
+		{ 1, 1 },
+	};
+
+	result = quader_editor_core::apply_rectangle_selection(request);
+	EXPECT_TRUE((result.selection.selected_vertex_full_object_ids ==
+		std::vector<int> { 1 }));
+	EXPECT_TRUE(result.selection.active_object_id == 1);
+	EXPECT_TRUE((result.selection.active_vertex_indices ==
+		std::vector<int> { 0 }));
+}
+
+TEST(QdrModelingRuntimeToolSelectTests,
+	SelectionSetCommandsPublishActiveElementsForCompressedComponentResults) {
+	quader_editor_core::SelectionSetCommandRequest request;
+	request.universe = simple_universe();
+	request.current_selection.mode = quader_editor_core::SelectionMode::Edge;
+	request.command = quader_editor_core::SelectionSetCommand::SelectAll;
+
+	quader_editor_core::RectangleSelectionResult result =
+		quader_editor_core::apply_selection_set_command(request);
+	EXPECT_TRUE((result.selection.selected_edge_full_object_ids ==
+		std::vector<int> { 1, 2 }));
+	EXPECT_TRUE(result.selection.active_object_id == 1);
+	EXPECT_TRUE((result.selection.active_edge_vertex_indices ==
+		std::vector<int> { 1, 2 }));
+
+	request.current_selection.selected_edge_full_object_ids = { 1 };
+	request.command = quader_editor_core::SelectionSetCommand::Invert;
+	result = quader_editor_core::apply_selection_set_command(request);
+	EXPECT_TRUE((result.selection.selected_edge_full_object_ids ==
+		std::vector<int> { 2 }));
+	EXPECT_TRUE(result.selection.active_object_id == 2);
+	EXPECT_TRUE((result.selection.active_edge_vertex_indices ==
+		std::vector<int> { 0, 1 }));
+
+	request = {};
+	request.universe = simple_universe();
+	request.current_selection.mode = quader_editor_core::SelectionMode::Vertex;
+	request.command = quader_editor_core::SelectionSetCommand::SelectAll;
+	result = quader_editor_core::apply_selection_set_command(request);
+	EXPECT_TRUE((result.selection.selected_vertex_full_object_ids ==
+		std::vector<int> { 1, 2 }));
+	EXPECT_TRUE(result.selection.active_object_id == 1);
+	EXPECT_TRUE((result.selection.active_vertex_indices ==
+		std::vector<int> { 1 }));
+
+	request.current_selection.selected_vertex_full_object_ids = { 1 };
+	request.command = quader_editor_core::SelectionSetCommand::Invert;
+	result = quader_editor_core::apply_selection_set_command(request);
+	EXPECT_TRUE((result.selection.selected_vertex_full_object_ids ==
+		std::vector<int> { 2 }));
+	EXPECT_TRUE(result.selection.active_object_id == 2);
+	EXPECT_TRUE((result.selection.active_vertex_indices ==
+		std::vector<int> { 0 }));
 }
 
 TEST(QdrModelingRuntimeToolSelectTests, RectangleSelectionRemoveEditsExistingFaceSelections) {

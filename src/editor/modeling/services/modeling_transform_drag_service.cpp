@@ -18,6 +18,7 @@
 #include "math/glm_bridge.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <functional>
 #include <memory>
 #include <string>
@@ -65,6 +66,15 @@ bool selected_scene_targets_are_sdk_modeling_objects(
 quader::QVec3 to_runtime(QVec3 value) { return {value.x, value.y, value.z}; }
 
 quader::QVec2 to_runtime(QVec2 value) { return {value.x, value.y}; }
+
+quader_poly::Transform3 to_runtime(const ModelingTransform3 &transform) {
+  return {
+      .x_axis = to_runtime(transform.x_axis),
+      .y_axis = to_runtime(transform.y_axis),
+      .z_axis = to_runtime(transform.z_axis),
+      .origin = to_runtime(transform.origin),
+  };
+}
 
 quader_editor_core::SelectionMode
 to_runtime(ModelingSelectionMode mode) {
@@ -202,6 +212,12 @@ quader_editor_core::TransformAxis to_runtime(ModelingTransformAxis axis) {
     return quader_editor_core::TransformAxis::None;
   }
   return quader_editor_core::TransformAxis::None;
+}
+
+quader_editor_core::TransformSpace to_runtime(ModelingTransformSpace space) {
+  return space == ModelingTransformSpace::Local
+             ? quader_editor_core::TransformSpace::Local
+             : quader_editor_core::TransformSpace::Global;
 }
 
 ModelingTransformAxis from_runtime(quader_editor_core::TransformAxis axis) {
@@ -465,7 +481,9 @@ ModelingTransformDragService::begin_transform_drag(
 
   {
     QDR_PROFILE_SCOPE("Modeling transform drag begin runtime state");
-    context.runtime.begin_transform_drag_state(tool, operation, axis, pivot);
+    context.runtime.begin_transform_drag_state(
+        tool, operation, axis, to_runtime(request.space),
+        to_runtime(request.orientation), pivot);
   }
   {
     QDR_PROFILE_SCOPE("Modeling transform drag configure state");
@@ -532,7 +550,8 @@ ModelingTransformDragService::begin_transform_drag(
             "Modeling transform drag begin scene transform preview");
         return scene_transform_drag_service_.begin(
             context.scene, request.pivot, true, "Transform Selection",
-            context.port.scene_selection_display_from_scene());
+            context.port.scene_selection_display_from_scene(),
+            &context.assets);
       }())) {
     (void)cancel_transform_drag(context);
     return {
@@ -550,6 +569,7 @@ ModelingTransformDragService::begin_transform_drag(
   if (tool == quader_editor_core::ViewportInteractionTool::Move) {
     quader_editor_core::MoveBeginInput begin;
     begin.axis = axis;
+    begin.orientation = to_runtime(request.orientation);
     begin.has_world_direction = request.has_world_direction;
     begin.world_direction = to_runtime(request.world_direction);
     begin.center_local = {};
@@ -578,6 +598,7 @@ ModelingTransformDragService::begin_transform_drag(
   } else if (tool == quader_editor_core::ViewportInteractionTool::Rotate) {
     quader_editor_core::RotateBeginInput begin;
     begin.axis = axis;
+    begin.orientation = to_runtime(request.orientation);
     begin.object_ids = portable_modeling_selection
                            ? selected_modeling_object_ids(context)
                            : context.session.selected_object_ids();
@@ -608,6 +629,7 @@ ModelingTransformDragService::begin_transform_drag(
   } else if (tool == quader_editor_core::ViewportInteractionTool::Scale) {
     quader_editor_core::ScaleBeginInput begin;
     begin.axis = axis;
+    begin.orientation = to_runtime(request.orientation);
     begin.object_ids = portable_modeling_selection
                            ? selected_modeling_object_ids(context)
                            : context.session.selected_object_ids();
@@ -1008,6 +1030,13 @@ bool ModelingTransformDragService::scene_preview_transform_for_drag(
       drag.operation != quader_editor_core::TransformDragOperation::Transform) {
     return false;
   }
+  if (drag.space == quader_editor_core::TransformSpace::Local &&
+      (drag.tool == quader_editor_core::ViewportInteractionTool::Rotate ||
+       drag.tool == quader_editor_core::ViewportInteractionTool::Scale)) {
+    // A local rotate/scale preview is applied independently in every target's
+    // authored frame, so no single world affine represents the whole batch.
+    return false;
+  }
   if (drag.tool == quader_editor_core::ViewportInteractionTool::Move) {
     out_transform.origin = drag.move.preview_delta;
     return true;
@@ -1112,27 +1141,48 @@ ModelingTransformDragService::apply_transform_drag_preview(
     QDR_PROFILE_SCOPE("Modeling transform drag apply scene preview");
     const quader_editor_core::TransformDragState scene_drag =
         context.runtime.transform_drag_state();
-    quader_poly::Transform3 scene_transform;
-    if (scene_preview_transform_for_drag(scene_drag, scene_transform)) {
-      const DocumentCommandResult scene_preview =
-          scene_drag.tool == quader_editor_core::ViewportInteractionTool::Move
-              ? scene_transform_drag_service_.preview_world_translation_delta(
-                    context.scene, scene_transform.origin)
-              : scene_transform_drag_service_.preview_world_transform_delta(
-                    context.scene,
-                    matrix_from_runtime_transform(scene_transform));
-      if (!scene_preview.ok) {
+    const std::optional<DocumentCommandResult> scene_preview = [&]()
+        -> std::optional<DocumentCommandResult> {
+      if (scene_drag.space == quader_editor_core::TransformSpace::Local &&
+          scene_drag.tool ==
+              quader_editor_core::ViewportInteractionTool::Rotate) {
+        const double angle_radians =
+            scene_drag.rotate.preview_angle_degrees * std::acos(-1.0) / 180.0;
+        return scene_transform_drag_service_.preview_local_rotation_delta(
+            context.scene,
+            quader_editor_core::rotation_axis_vector(scene_drag.axis) *
+                static_cast<float>(angle_radians));
+      }
+      if (scene_drag.space == quader_editor_core::TransformSpace::Local &&
+          scene_drag.tool == quader_editor_core::ViewportInteractionTool::Scale) {
+        return scene_transform_drag_service_.preview_local_scale_delta(
+            context.scene, scene_drag.scale.preview_scale);
+      }
+
+      quader_poly::Transform3 scene_transform;
+      if (!scene_preview_transform_for_drag(scene_drag, scene_transform)) {
+        return std::nullopt;
+      }
+      return scene_drag.tool == quader_editor_core::ViewportInteractionTool::Move
+                 ? scene_transform_drag_service_.preview_world_translation_delta(
+                       context.scene, scene_transform.origin)
+                 : scene_transform_drag_service_.preview_world_transform_delta(
+                       context.scene,
+                       matrix_from_runtime_transform(scene_transform));
+    }();
+    if (scene_preview.has_value()) {
+      if (!scene_preview->ok) {
         const bool was_preview_driven = controller_.preview_driven();
         (void)cancel_transform_drag(context);
         return {
             .ok = false,
             .preview_driven = was_preview_driven,
-            .message = scene_preview.message.empty()
+            .message = scene_preview->message.empty()
                            ? "Could not update scene transform preview."
-                           : scene_preview.message,
+                           : scene_preview->message,
         };
       }
-      changed = changed || scene_preview.changed;
+      changed = changed || scene_preview->changed;
     }
   }
 
