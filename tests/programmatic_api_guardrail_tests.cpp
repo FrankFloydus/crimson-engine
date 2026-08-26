@@ -2222,6 +2222,8 @@ TEST(ProgrammaticApiGuardrailTests,
             std::string::npos);
   EXPECT_NE(project_assets_api.find("material_preview("),
             std::string::npos);
+  EXPECT_NE(project_assets_api.find("import_textures_as_materials("),
+            std::string::npos);
 
   EXPECT_NE(ui_system.find("editor_->project_assets().materials()"),
             std::string::npos);
@@ -2229,6 +2231,9 @@ TEST(ProgrammaticApiGuardrailTests,
             std::string::npos);
   EXPECT_NE(ui_system.find("editor_->project_assets().set_active_material("),
             std::string::npos);
+  EXPECT_NE(
+      ui_system.find("editor_->project_assets().import_textures_as_materials("),
+      std::string::npos);
   EXPECT_EQ(ui_system.find("material_catalog()"), std::string::npos);
   EXPECT_EQ(browser.find("ProjectSession"), std::string::npos);
   EXPECT_EQ(browser.find("AssetRegistry"), std::string::npos);

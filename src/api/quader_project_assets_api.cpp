@@ -10,6 +10,7 @@
 #include "api/quader_api_status_internal.hpp"
 #include "api/quader_events_api.hpp"
 #include "api/quader_events_api_internal_access.hpp"
+#include "editor/material/project_material_import_service.hpp"
 #include "editor/session/project_session.hpp"
 
 #include <utility>
@@ -145,6 +146,57 @@ QuaderProjectAssetsApi::material_preview(ProjectAssetId material_id) const {
           .encoded_bytes = std::move(value.encoded_bytes),
           .content_revision = value.content_revision,
       });
+}
+
+QuaderApiResult<QuaderProjectMaterialImportReport>
+QuaderProjectAssetsApi::import_textures_as_materials(
+    std::span<const std::filesystem::path> source_paths) {
+  ProjectSession *project =
+      QuaderApiSessionInternalAccess::project_session(session_);
+  if (project == nullptr || !project->has_project()) {
+    return quader_api_result_from_status<QuaderProjectMaterialImportReport>(
+        status(session_, false, false,
+               "Project materials are unavailable without an open project."));
+  }
+  if (source_paths.empty()) {
+    return quader_api_result_from_status<QuaderProjectMaterialImportReport>(
+        status(session_, false, false,
+               "Choose at least one texture to import."));
+  }
+
+  ProjectMaterialImportService importer(*project);
+  ProjectMaterialImportReport imported =
+      importer.import_textures_as_materials(source_paths);
+  if (!imported.ok) {
+    return quader_api_result_from_status<QuaderProjectMaterialImportReport>(
+        status(session_, false, false, std::move(imported.message)));
+  }
+
+  QuaderProjectMaterialImportReport result;
+  result.imported.reserve(imported.imported.size());
+  result.failed.reserve(imported.failed.size());
+  for (ProjectMaterialImportSuccess &success : imported.imported) {
+    result.imported.push_back(QuaderProjectMaterialImportSuccess{
+        .source_path = std::move(success.source_path),
+        .material = to_public_info(success.catalog_entry),
+    });
+  }
+  for (ProjectMaterialImportFailure &failure : imported.failed) {
+    result.failed.push_back(QuaderProjectMaterialImportFailure{
+        .source_path = std::move(failure.source_path),
+        .error_message = std::move(failure.error_message),
+    });
+  }
+
+  const bool changed = !result.imported.empty();
+  QuaderApiResult<QuaderProjectMaterialImportReport> api_result =
+      quader_api_result_from_status(status(session_, true, changed,
+                                           std::move(imported.message)),
+                                    std::move(result));
+  if (changed) {
+    publish_assets_changed();
+  }
+  return api_result;
 }
 
 void QuaderProjectAssetsApi::publish_assets_changed() {

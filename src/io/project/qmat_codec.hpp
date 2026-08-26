@@ -42,6 +42,11 @@ public:
   write_atomic(const ProjectFileSystem &file_system,
                const ProjectRelativePath &path,
                const ProjectMaterialDocument &material);
+  /// Atomically creates a QMAT and fails rather than replacing any existing file.
+  [[nodiscard]] static ProjectIoResult<void>
+  create_atomic(const ProjectFileSystem &file_system,
+                const ProjectRelativePath &path,
+                const ProjectMaterialDocument &material);
 };
 
 } // namespace quader

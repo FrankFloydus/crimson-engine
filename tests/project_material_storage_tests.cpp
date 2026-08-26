@@ -670,6 +670,33 @@ TEST(ProjectMaterialCatalogTests,
             "Materials/shared.qmat");
 }
 
+TEST(QmatCodecTests, CreateAtomicNeverReplacesAnExistingMaterial) {
+  ScopedMaterialTestDirectory temporary("qmat-create-existing");
+  const std::filesystem::path root =
+      temporary.make_empty_project("QmatCreateExisting");
+  ProjectIoResult<ProjectWorkspaceStorage> workspace =
+      ProjectManifestStore::create_in_empty_directory(root);
+  ASSERT_TRUE(workspace.ok()) << workspace.error().message;
+  ASSERT_TRUE(std::filesystem::create_directory(root / "Materials"));
+  const ProjectRelativePath path = project_path("Materials/existing.qmat");
+  const ProjectMaterialDocument original = material_definition(
+      "a090129e-d254-44b7-bdeb-70147316be72", "Original");
+  ASSERT_TRUE(
+      QmatCodec::write_atomic(workspace.value().file_system, path, original)
+          .ok());
+
+  ProjectMaterialDocument competing = original;
+  competing.name = "Competing";
+  const ProjectIoResult<void> created = QmatCodec::create_atomic(
+      workspace.value().file_system, path, competing);
+
+  EXPECT_FALSE(created.ok());
+  const ProjectIoResult<QmatDecodedFile> retained =
+      QmatCodec::read(workspace.value().file_system, path);
+  ASSERT_TRUE(retained.ok()) << retained.error().message;
+  EXPECT_EQ(retained.value().material, original);
+}
+
 TEST(ProjectMaterialCatalogTests,
      LargeFlatScanIndexesDirectoryCaseEntriesOnce) {
   ScopedMaterialTestDirectory temporary("catalog-scale");

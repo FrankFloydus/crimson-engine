@@ -7,17 +7,13 @@
 #include "editor/material/standard_material_edit_session_service.hpp"
 
 #include "core/qstr.hpp"
+#include "editor/material/project_material_persistence.hpp"
 #include "editor/session/project_session.hpp"
-#include "io/qdr/qdr_atomic_write.hpp"
 
 #include <algorithm>
-#include <cctype>
 #include <cmath>
-#include <fstream>
-#include <string_view>
 #include <system_error>
 #include <utility>
-#include <vector>
 
 namespace quader {
 namespace {
@@ -47,89 +43,6 @@ bool valid_material_path(const ProjectRelativePath &path) {
   const auto first = path.native_path().begin();
   return first != path.native_path().end() &&
          QStr::to_ascii_lower(first->string()) == "materials";
-}
-
-std::string sanitized_stem(std::string_view source) {
-  std::string result;
-  result.reserve(source.size());
-  for (unsigned char character : source) {
-    if (std::isalnum(character) != 0 || character == '-' || character == '_') {
-      result.push_back(static_cast<char>(character));
-    } else if (!result.empty() && result.back() != '_') {
-      result.push_back('_');
-    }
-  }
-  while (!result.empty() && result.back() == '_') {
-    result.pop_back();
-  }
-  return result.empty() ? std::string("texture") : result;
-}
-
-ProjectIoResult<ProjectRelativePath> unique_texture_path(
-    const ProjectFileSystem &file_system, std::string_view source_stem,
-    std::string_view extension, ProjectAssetId id) {
-  std::string suffix(id.str().substr(0u, 8u));
-  std::string path = "Textures/" + sanitized_stem(source_stem) + "_" + suffix;
-  if (!extension.empty()) {
-    path += extension.front() == '.' ? std::string(extension)
-                                     : "." + std::string(extension);
-  }
-  ProjectIoResult<ProjectRelativePath> relative =
-      ProjectRelativePath::parse_portable(path);
-  if (!relative.ok()) {
-    return relative;
-  }
-  ProjectIoResult<std::filesystem::path> absolute =
-      file_system.resolve(relative.value());
-  if (!absolute.ok()) {
-    return ProjectIoResult<ProjectRelativePath>::failure(
-        absolute.error().code, absolute.error().message,
-        absolute.error().path);
-  }
-  std::error_code error;
-  if (std::filesystem::exists(absolute.value(), error) || error) {
-    return ProjectIoResult<ProjectRelativePath>::failure(
-        error ? ProjectIoErrorCode::IoFailure
-              : ProjectIoErrorCode::PathCaseCollision,
-        error ? "Could not inspect imported texture path: " + error.message()
-              : "Imported texture path already exists.",
-        absolute.value());
-  }
-  return relative;
-}
-
-ProjectIoResult<std::string> read_existing_bytes(
-    const std::filesystem::path &path) {
-  std::ifstream input(path, std::ios::binary);
-  if (!input.is_open()) {
-    return ProjectIoResult<std::string>::failure(
-        ProjectIoErrorCode::IoFailure, "Could not back up material file.",
-        path);
-  }
-  return ProjectIoResult<std::string>::success(
-      std::string(std::istreambuf_iterator<char>(input),
-                  std::istreambuf_iterator<char>()));
-}
-
-ProjectIoResult<void> write_bytes_atomic(const std::filesystem::path &path,
-                                         std::span<const std::byte> bytes) {
-  const std::string_view view(reinterpret_cast<const char *>(bytes.data()),
-                              bytes.size());
-  const quader_io::QdrAtomicWriteResult written =
-      quader_io::write_qdr_text_atomic(path, view);
-  return written.ok ? ProjectIoResult<void>::success()
-                    : ProjectIoResult<void>::failure(
-                          ProjectIoErrorCode::IoFailure, written.message, path);
-}
-
-void restore_qmat(const std::filesystem::path &path,
-                  const std::optional<std::string> &backup) {
-  if (backup.has_value()) {
-    (void)quader_io::write_qdr_text_atomic(path, *backup);
-    return;
-  }
-  std::error_code ignored;
-  std::filesystem::remove(path, ignored);
 }
 
 } // namespace
@@ -581,8 +494,8 @@ StandardMaterialEditResult StandardMaterialEditSessionService::save_to(
     return failure("Save As cannot overwrite another project material.");
   }
 
-  std::optional<std::string> qmat_backup;
-  if (!save_as && target_exists) {
+  const bool replace_existing_qmat = !save_as && target_exists;
+  if (replace_existing_qmat) {
     ProjectIoResult<QmatDecodedFile> source = QmatCodec::read(file_system, path);
     if (!source.ok()) {
       return failure(source.error().message);
@@ -591,12 +504,6 @@ StandardMaterialEditResult StandardMaterialEditSessionService::save_to(
         current_->snapshot.source_content_revision) {
       return failure("Standard Material changed on disk; reopen it before saving.");
     }
-    ProjectIoResult<std::string> backup =
-        read_existing_bytes(qmat_absolute.value());
-    if (!backup.ok()) {
-      return failure(backup.error().message);
-    }
-    qmat_backup = backup.take_value();
   }
 
   ProjectMaterialDocument document = current_->snapshot.document;
@@ -608,15 +515,13 @@ StandardMaterialEditResult StandardMaterialEditSessionService::save_to(
     return failure("Only Standard Material drafts can be saved here.");
   }
 
-  std::vector<std::filesystem::path> created_textures;
-  const auto rollback = [&]() {
-    restore_qmat(qmat_absolute.value(), qmat_backup);
-    std::error_code ignored;
-    for (auto iterator = created_textures.rbegin();
-         iterator != created_textures.rend(); ++iterator) {
-      std::filesystem::remove(*iterator, ignored);
-      ignored.clear();
+  ProjectMaterialFileRollback rollback;
+  const auto fail_with_rollback = [&rollback](std::string message) {
+    const std::string rollback_message = rollback.rollback();
+    if (!rollback_message.empty()) {
+      message += "; " + rollback_message;
     }
+    return failure(std::move(message));
   };
   for (std::size_t index = 0u; index < current_->pending.size(); ++index) {
     if (!current_->pending[index].has_value()) {
@@ -625,36 +530,31 @@ StandardMaterialEditResult StandardMaterialEditSessionService::save_to(
     const StandardMaterialTextureSlot slot =
         static_cast<StandardMaterialTextureSlot>(index);
     const ProjectImportedImage &imported = *current_->pending[index];
-    const ProjectAssetId texture_id = ProjectAssetId::generate();
-    ProjectIoResult<ProjectRelativePath> texture_path = unique_texture_path(
-        file_system, imported.source_stem, imported.source_extension,
-        texture_id);
-    if (!texture_path.ok()) {
-      rollback();
-      return failure(texture_path.error().message);
+    ProjectIoResult<ProjectMaterialAssetDestination> destination =
+        make_unique_texture_destination(file_system, imported.source_stem,
+                                        imported.source_extension);
+    if (!destination.ok()) {
+      return fail_with_rollback(destination.error().message);
     }
     ProjectIoResult<std::filesystem::path> texture_absolute =
-        file_system.resolve_for_write(texture_path.value());
+        file_system.resolve_for_write(destination.value().path);
     if (!texture_absolute.ok()) {
-      rollback();
-      return failure(texture_absolute.error().message);
+      return fail_with_rollback(texture_absolute.error().message);
     }
     ProjectIoResult<void> written =
-        write_bytes_atomic(texture_absolute.value(), imported.encoded_bytes);
+        rollback.create_bytes(texture_absolute.value(),
+                              imported.encoded_bytes);
     if (!written.ok()) {
-      rollback();
-      return failure(written.error().message);
+      return fail_with_rollback(written.error().message);
     }
-    created_textures.push_back(texture_absolute.value());
     std::optional<ProjectMaterialTextureSlot> *target = material->texture(slot);
     if (target == nullptr) {
-      rollback();
-      return failure("Unsupported Standard Material texture slot.");
+      return fail_with_rollback(
+          "Unsupported Standard Material texture slot.");
     }
     *target = ProjectMaterialTextureSlot{
-        .id = texture_id,
-        .project_relative_path =
-            texture_path.take_value().portable_string(),
+        .id = destination.value().id,
+        .project_relative_path = destination.value().path.portable_string(),
         .color_space = slot == StandardMaterialTextureSlot::Albedo
                            ? ProjectTextureColorSpace::Srgb
                            : ProjectTextureColorSpace::Linear,
@@ -662,31 +562,31 @@ StandardMaterialEditResult StandardMaterialEditSessionService::save_to(
   }
 
   ProjectIoResult<void> qmat_written =
-      QmatCodec::write_atomic(file_system, path, document);
+      replace_existing_qmat
+          ? rollback.replace_qmat(qmat_absolute.value(), document)
+          : rollback.create_qmat(qmat_absolute.value(), document);
   if (!qmat_written.ok()) {
-    rollback();
-    return failure(qmat_written.error().message);
+    return fail_with_rollback(qmat_written.error().message);
   }
   ProjectIoResult<ProjectMaterialCatalog> scanned =
       ProjectMaterialCatalog::scan(file_system);
   if (!scanned.ok()) {
-    rollback();
-    return failure(scanned.error().message);
+    return fail_with_rollback(scanned.error().message);
   }
   const bool activate = save_as || !current_->snapshot.path.has_value();
   ProjectSessionResult installed = project_->install_material_catalog(
       scanned.take_value(), activate ? std::optional(document.id)
                                      : std::nullopt);
   if (!installed.ok) {
-    rollback();
-    return failure(installed.message);
+    return fail_with_rollback(installed.message);
   }
   const ProjectMaterialCatalogEntry *saved =
       project_->material_catalog().find(document.id);
   if (saved == nullptr) {
-    rollback();
-    return failure("Saved Standard Material is missing from the catalog.");
+    return fail_with_rollback(
+        "Saved Standard Material is missing from the catalog.");
   }
+  rollback.commit();
   current_->snapshot.document = saved->material;
   current_->snapshot.path = saved->path;
   current_->snapshot.source_content_revision = saved->content_revision;

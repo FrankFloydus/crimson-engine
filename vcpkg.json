@@ -18,14 +18,27 @@
           "name": "qtbase",
           "default-features": false,
           "features": [
+            "jpeg",
             "png",
             "widgets"
+          ]
+        },
+        {
+          "name": "qtimageformats",
+          "default-features": false,
+          "features": [
+            "tiff",
+            "webp"
           ]
         },
         "lodepng",
         "sentry-native",
         "spdlog",
         "stduuid",
+        {
+          "name": "tiff",
+          "default-features": false
+        },
         "zstd",
         "zlib"
       ]

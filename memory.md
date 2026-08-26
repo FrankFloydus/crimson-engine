@@ -6668,3 +6668,50 @@ single-reference replacement, and repeated-reset idempotency. Focused Local-tran
 17/17; focused runtime orientation/transform/scale tests pass 19/19; command/UI/guardrail and SDK
 consumer/parity filters pass. The mandatory gate remains red only on six pre-existing
 instruction/build guardrails and five unrelated linear-array/overlay tests.
+
+## 2026-08-26 - Material Browser Presets And Transactional Texture Import
+
+Task/context: the Material Browser's continuous tile slider stopped producing useful preview growth
+at large values and could hide the remaining grid content. The browser also needed a native,
+multi-file texture-import workflow that creates one persistent Standard Material per image without
+disturbing the active material, an open editor draft, or project history.
+
+Invariant:
+
+- Tile size remains persisted in pixels, while the retained `QSlider` exposes indices `0..5` mapped
+  exactly to `16, 32, 64, 128, 256, 512`. Legacy values normalize to the nearest preset, exact ties
+  choose the smaller preset, and the default remains `128`. Tick interval and movement steps are
+  one index, with ticks below the control.
+- Browser previews are decoded into aspect-preserving thumbnails bounded to 512 pixels before icon
+  construction. Grid icon/cell geometry uses the mapped pixel preset and scrolling remains enabled
+  at 512 so labels and later materials stay reachable.
+- The browser remains a parent-owned `Qt::Tool`, implemented as a retained `QMainWindow`, with a
+  localized `File > Import...` menu. The widget emits only one semantic import callback; `UISystem`
+  owns the native picker and public project-assets API call, and catalog refresh remains behind the
+  existing asset event/revision gate rather than frame-loop polling.
+- Batch texture import validates the established 64 MiB, 8192-pixel, still-image, RGBA8 rules,
+  preserves exact encoded bytes, and creates one canonical Standard Material per selected source
+  with an sRGB albedo and UUID-qualified material/texture paths. Repeated source paths are processed
+  independently.
+- Each material/image pair is a retained atomic transaction until the single final catalog
+  scan/install. A per-file failure rolls back that pair and processing continues; a global catalog
+  failure rolls back every pair created by the batch. A successful batch publishes exactly one
+  `project.assets_changed` event and never changes the active material, Standard Material draft, or
+  project/scene history.
+- TGA decoding explicitly prefers TGA when its footer identifies the format because Qt can confuse
+  the leading bytes with CUR, while footerless TGA retains a controlled fallback. Release image
+  plugins and codec closures for GIF, JPEG, TGA, TIFF, and WebP deploy to both app and test runtime
+  outputs; debug-suffixed Qt/plugin DLLs remain rejected and dependency/license evidence stays out
+  of SDK-only builds.
+
+Owners: Material Browser Qt window, `UISystem`, native platform dialogs,
+`QuaderProjectAssetsApi`, `ProjectMaterialImportService`, shared material persistence helpers,
+`ProjectImageDecoder`, project catalog/session owners, and native deployment/license guardrails.
+
+Verification: focused UI, decoder, storage, API, and project-material suites pass, including all six
+tile presets, the TGA regression, partial import/rollback behavior, exact-byte persistence, one-event
+publication, and state preservation. Both canonical Debug/Profile and Release app builds pass, and
+their runtime directories contain the required Release image plugins and codec dependencies with no
+debug-suffixed plugins. The mandatory regression gate and full CTest remain red only on the same six
+pre-existing instruction/build guardrails and five unrelated linear-array/overlay tests; manual UI
+smoke was started but interrupted before visual confirmation.

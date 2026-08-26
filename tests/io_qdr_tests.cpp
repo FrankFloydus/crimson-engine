@@ -287,6 +287,37 @@ TEST(QdrDocumentIoTests, AtomicWriteCatchesThrowingValidatorAndRemovesTemp) {
 }
 
 TEST(QdrAtomicFileTransactionTests,
+     CreateNewWriteRejectsExistingDestinationWithoutChangingIt) {
+  ScopedTempDirectory directory("create-new-existing-target");
+  const std::filesystem::path target = directory.path() / "scene.qdr";
+  constexpr std::string_view kOriginal = "another writer's scene";
+  write_text_file(target, kOriginal);
+
+  const quader_io::QdrAtomicWriteResult written =
+      quader_io::write_qdr_text_atomic(
+          target, "our scene", {},
+          quader_io::QdrAtomicWriteDisposition::CreateNew);
+
+  EXPECT_FALSE(written.ok);
+  EXPECT_EQ(read_file(target), kOriginal);
+  EXPECT_FALSE(contains_temp_qdr_files(directory.path()));
+}
+
+TEST(QdrAtomicFileTransactionTests,
+     DefaultAtomicWriteStillReplacesExistingDestination) {
+  ScopedTempDirectory directory("replace-existing-target");
+  const std::filesystem::path target = directory.path() / "scene.qdr";
+  write_text_file(target, "original scene");
+
+  const quader_io::QdrAtomicWriteResult written =
+      quader_io::write_qdr_text_atomic(target, "replacement scene");
+
+  ASSERT_TRUE(written.ok) << written.message;
+  EXPECT_EQ(read_file(target), "replacement scene");
+  EXPECT_FALSE(contains_temp_qdr_files(directory.path()));
+}
+
+TEST(QdrAtomicFileTransactionTests,
      RollbackPreservesExistingDestinationIdentityAndHardLinks) {
   ScopedTempDirectory directory("staged-rollback-hard-link");
   const std::filesystem::path target = directory.path() / "scene.qdr";
@@ -330,7 +361,8 @@ TEST(QdrAtomicFileTransactionTests,
   const std::filesystem::path target = directory.path() / "scene.qdr";
 
   quader_io::QdrAtomicFileTransaction transaction;
-  const quader_io::QdrAtomicWriteResult prepared = transaction.prepare(target);
+  const quader_io::QdrAtomicWriteResult prepared = transaction.prepare(
+      target, quader_io::QdrAtomicWriteDisposition::CreateNew);
   ASSERT_TRUE(prepared.ok) << prepared.message;
   const std::filesystem::path staging = transaction.staging_path();
   const quader_io::QdrAtomicWriteResult staged =

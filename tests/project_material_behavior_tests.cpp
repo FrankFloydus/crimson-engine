@@ -7,6 +7,7 @@
 #include "api/quader_editor_api.hpp"
 #include "api/quader_polygon_document_internal_access.hpp"
 #include "assets/default_material_catalog.hpp"
+#include "editor/material/project_material_persistence.hpp"
 #include "editor/modeling/modeling_types.hpp"
 #include "editor/session/project_session.hpp"
 #include "io/project/project_manifest.hpp"
@@ -31,6 +32,8 @@
 #include <string_view>
 #include <utility>
 #include <vector>
+
+#include <QString>
 
 namespace quader {
 namespace {
@@ -97,6 +100,41 @@ void write_bytes(const std::filesystem::path &path,
 
 void write_text(const std::filesystem::path &path, std::string_view text) {
   write_bytes(path, std::as_bytes(std::span(text.data(), text.size())));
+}
+
+std::vector<std::filesystem::path>
+regular_files_below(const std::filesystem::path &root) {
+  std::error_code error;
+  if (!std::filesystem::exists(root, error) || error) {
+    return {};
+  }
+  std::vector<std::filesystem::path> files;
+  std::filesystem::recursive_directory_iterator iterator(
+      root, std::filesystem::directory_options::none, error);
+  const std::filesystem::recursive_directory_iterator end;
+  for (; !error && iterator != end; iterator.increment(error)) {
+    if (iterator->is_regular_file(error) && !error) {
+      files.push_back(std::filesystem::relative(iterator->path(), root));
+    }
+  }
+  EXPECT_FALSE(error) << error.message();
+  std::ranges::sort(files);
+  return files;
+}
+
+bool has_uuid8_asset_path_shape(std::string_view portable_path,
+                                std::string_view prefix,
+                                std::string_view extension) {
+  if (!portable_path.starts_with(prefix) ||
+      !portable_path.ends_with(extension) ||
+      portable_path.size() != prefix.size() + 8u + extension.size()) {
+    return false;
+  }
+  const std::string_view suffix = portable_path.substr(prefix.size(), 8u);
+  return std::ranges::all_of(suffix, [](unsigned char character) {
+    return (character >= '0' && character <= '9') ||
+           (character >= 'a' && character <= 'f');
+  });
 }
 
 bool contains_bytes(std::span<const std::byte> haystack,
@@ -484,6 +522,369 @@ TEST(ProjectMaterialPublicApiTests,
                    .project_assets()
                    .set_active_material(amber.material.id)
                    .ok());
+}
+
+TEST(ProjectMaterialPublicApiTests,
+     TextureBatchImportKeepsPartialSuccessesAndPreservesEditorState) {
+  ProjectMaterialBehaviorHarness harness("texture-batch-import");
+  harness.create();
+
+  ASSERT_TRUE(
+      harness.editor().standard_material_documents().new_material().ok());
+  ASSERT_TRUE(harness.editor()
+                  .standard_material_documents()
+                  .set_name("Unrelated Dirty Draft")
+                  .ok());
+  const QuaderApiResult<QuaderStandardMaterialDocumentInfo> draft_before =
+      harness.editor().standard_material_documents().current();
+  ASSERT_TRUE(draft_before.ok()) << draft_before.error_message();
+  ASSERT_TRUE(draft_before.value().dirty);
+  const QuaderHistorySnapshot history_before =
+      harness.editor().query().history();
+  const QuaderApiResult<QuaderProjectMaterialInfo> active_before =
+      harness.editor().project_assets().active_material();
+  ASSERT_TRUE(active_before.ok()) << active_before.error_message();
+  const bool dirty_before = harness.editor().project().dirty();
+
+  const std::vector<std::byte> original =
+      read_bytes(source_resource_root() / "materials" / "default" /
+                 "default_albedo.png");
+  ASSERT_FALSE(original.empty());
+  const std::filesystem::path first_directory = harness.root() / "ImportA";
+  const std::filesystem::path second_directory = harness.root() / "ImportB";
+  std::error_code directory_error;
+  std::filesystem::create_directories(first_directory, directory_error);
+  ASSERT_FALSE(directory_error) << directory_error.message();
+  std::filesystem::create_directories(second_directory, directory_error);
+  ASSERT_FALSE(directory_error) << directory_error.message();
+  const std::filesystem::path first_source = first_directory / "same.png";
+  const std::filesystem::path second_source = second_directory / "same.png";
+  const std::filesystem::path invalid_source = first_directory / "broken.png";
+  write_bytes(first_source, original);
+  write_bytes(second_source, original);
+  write_text(invalid_source, "not an encoded image");
+
+  std::vector<QuaderEvent> assets_events;
+  std::vector<QuaderEvent> active_events;
+  const QuaderEventSubscription assets_subscription =
+      harness.editor().events().subscribe(
+          quader_event::kProjectAssetsChanged,
+          [&](const QuaderEvent &event) { assets_events.push_back(event); });
+  const QuaderEventSubscription active_subscription =
+      harness.editor().events().subscribe(
+          quader_event::kActiveProjectMaterialChanged,
+          [&](const QuaderEvent &event) { active_events.push_back(event); });
+  ASSERT_TRUE(assets_subscription.valid());
+  ASSERT_TRUE(active_subscription.valid());
+
+  const std::array sources{first_source, invalid_source, second_source,
+                           first_source};
+  const QuaderApiResult<QuaderProjectMaterialImportReport> imported =
+      harness.editor().project_assets().import_textures_as_materials(sources);
+  ASSERT_TRUE(imported.ok()) << imported.error_message();
+  ASSERT_TRUE(imported.changed());
+  ASSERT_EQ(imported.value().imported.size(), 3u);
+  ASSERT_EQ(imported.value().failed.size(), 1u);
+  EXPECT_EQ(imported.value().failed.front().source_path, invalid_source);
+  EXPECT_FALSE(imported.value().failed.front().error_message.empty());
+  ASSERT_EQ(assets_events.size(), 1u);
+  EXPECT_EQ(assets_events.front().project_asset_id, active_before.value().id);
+  EXPECT_TRUE(active_events.empty());
+
+  std::vector<ProjectAssetId> imported_ids;
+  imported_ids.reserve(imported.value().imported.size());
+  for (const QuaderProjectMaterialImportSuccess &success :
+       imported.value().imported) {
+    imported_ids.push_back(success.material.id);
+    EXPECT_EQ(success.material.name, "same");
+    EXPECT_EQ(success.material.kind, QuaderProjectMaterialKind::Standard);
+    EXPECT_NE(success.material.project_relative_path.find("Materials/"),
+              std::string::npos);
+    EXPECT_TRUE(has_uuid8_asset_path_shape(
+        success.material.project_relative_path, "Materials/same_", ".qmat"));
+
+    const std::filesystem::path qmat_path =
+        harness.root() /
+        project_path(success.material.project_relative_path).native_path();
+    const std::vector<std::byte> qmat_bytes = read_bytes(qmat_path);
+    ASSERT_FALSE(qmat_bytes.empty());
+    const std::string qmat_text(
+        reinterpret_cast<const char *>(qmat_bytes.data()), qmat_bytes.size());
+    const ProjectIoResult<ProjectMaterialDocument> document =
+        QmatCodec::decode(qmat_text);
+    ASSERT_TRUE(document.ok()) << document.error().message;
+    EXPECT_EQ(document.value().id, success.material.id);
+    const ProjectStandardMaterialDefinition *standard =
+        document.value().standard_material();
+    ASSERT_NE(standard, nullptr);
+    EXPECT_EQ(standard->base_color,
+              (std::array<float, 3>{1.0f, 1.0f, 1.0f}));
+    EXPECT_FLOAT_EQ(standard->roughness, 1.0f);
+    EXPECT_FLOAT_EQ(standard->metallic, 0.0f);
+    ASSERT_TRUE(standard->base_color_texture.has_value());
+    EXPECT_EQ(standard->base_color_texture->color_space,
+              ProjectTextureColorSpace::Srgb);
+    EXPECT_TRUE(has_uuid8_asset_path_shape(
+        standard->base_color_texture->project_relative_path,
+        "Textures/same_", ".png"));
+    EXPECT_EQ(read_bytes(harness.root() /
+                         std::filesystem::path(standard->base_color_texture
+                                                   ->project_relative_path)),
+              original);
+  }
+  ASSERT_EQ(imported_ids.size(), 3u);
+  EXPECT_NE(imported_ids[0], imported_ids[1]);
+  EXPECT_NE(imported_ids[0], imported_ids[2]);
+  EXPECT_NE(imported_ids[1], imported_ids[2]);
+  EXPECT_NE(imported.value().imported[0].material.project_relative_path,
+            imported.value().imported[1].material.project_relative_path);
+  EXPECT_NE(imported.value().imported[0].material.project_relative_path,
+            imported.value().imported[2].material.project_relative_path);
+
+  const QuaderApiResult<QuaderProjectMaterialInfo> active_after =
+      harness.editor().project_assets().active_material();
+  ASSERT_TRUE(active_after.ok()) << active_after.error_message();
+  EXPECT_EQ(active_after.value().id, active_before.value().id);
+  const QuaderApiResult<QuaderStandardMaterialDocumentInfo> draft_after =
+      harness.editor().standard_material_documents().current();
+  ASSERT_TRUE(draft_after.ok()) << draft_after.error_message();
+  EXPECT_EQ(draft_after.value().session_id, draft_before.value().session_id);
+  EXPECT_EQ(draft_after.value().id, draft_before.value().id);
+  EXPECT_EQ(draft_after.value().name, draft_before.value().name);
+  EXPECT_EQ(draft_after.value().draft_revision,
+            draft_before.value().draft_revision);
+  EXPECT_EQ(draft_after.value().clean_revision,
+            draft_before.value().clean_revision);
+  EXPECT_EQ(draft_after.value().pending_texture_sources,
+            draft_before.value().pending_texture_sources);
+  EXPECT_EQ(draft_after.value().dirty, draft_before.value().dirty);
+  EXPECT_EQ(harness.editor().project().dirty(), dirty_before);
+  expect_same_history(harness.editor().query().history(), history_before);
+
+  ASSERT_TRUE(harness.editor()
+                  .standard_material_documents()
+                  .close(true)
+                  .ok());
+  ASSERT_TRUE(harness.editor().project().close().ok());
+  ASSERT_TRUE(harness.editor().project().open(harness.manifest_path()).ok());
+  for (ProjectAssetId material_id : imported_ids) {
+    const ProjectMaterialCatalogEntry *entry =
+        harness.project().material_catalog().find(material_id);
+    ASSERT_NE(entry, nullptr);
+    const QuaderApiResult<QuaderProjectMaterialPreview> preview =
+        harness.editor().project_assets().material_preview(material_id);
+    ASSERT_TRUE(preview.ok()) << preview.error_message();
+    EXPECT_EQ(preview.value().encoded_bytes, original);
+  }
+  const QuaderApiResult<QuaderProjectMaterialInfo> active_after_reopen =
+      harness.editor().project_assets().active_material();
+  ASSERT_TRUE(active_after_reopen.ok()) << active_after_reopen.error_message();
+  EXPECT_EQ(active_after_reopen.value().id, active_before.value().id);
+}
+
+TEST(ProjectMaterialPublicApiTests,
+     TextureImportPreservesUnicodeSourceAndDisplayName) {
+  ProjectMaterialBehaviorHarness harness("texture-import-unicode");
+  harness.create();
+  const std::vector<std::byte> original =
+      read_bytes(source_resource_root() / "materials" / "default" /
+                 "default_albedo.png");
+  ASSERT_FALSE(original.empty());
+
+  const std::filesystem::path source_directory =
+      harness.root() / std::filesystem::path(L"trame-β");
+  std::error_code error;
+  std::filesystem::create_directories(source_directory, error);
+  ASSERT_FALSE(error) << error.message();
+  const std::filesystem::path source =
+      source_directory / std::filesystem::path(L"albedo-β.png");
+  write_bytes(source, original);
+
+  const std::array sources{source};
+  const QuaderApiResult<QuaderProjectMaterialImportReport> imported =
+      harness.editor().project_assets().import_textures_as_materials(sources);
+
+  ASSERT_TRUE(imported.ok()) << imported.error_message();
+  ASSERT_TRUE(imported.changed());
+  ASSERT_EQ(imported.value().imported.size(), 1u);
+  EXPECT_TRUE(imported.value().failed.empty());
+  EXPECT_EQ(imported.value().imported.front().source_path, source);
+  EXPECT_EQ(imported.value().imported.front().material.name,
+            QStringLiteral("albedo-β").toUtf8().toStdString());
+  const QuaderApiResult<QuaderProjectMaterialPreview> preview =
+      harness.editor().project_assets().material_preview(
+          imported.value().imported.front().material.id);
+  ASSERT_TRUE(preview.ok()) << preview.error_message();
+  EXPECT_EQ(preview.value().encoded_bytes, original);
+}
+
+TEST(ProjectMaterialPublicApiTests,
+     MaterialPairPublicationRollsBackTextureWhenQmatCreationFails) {
+  ProjectMaterialBehaviorHarness harness("texture-pair-rollback");
+  harness.create();
+  const std::filesystem::path texture =
+      harness.root() / "Textures" / "pair_deadbeef.png";
+  const std::filesystem::path existing_qmat =
+      harness.root() / kDefaultProjectMaterialPath;
+  const std::vector<std::byte> original_qmat = read_bytes(existing_qmat);
+  ASSERT_FALSE(original_qmat.empty());
+  const std::vector<std::byte> texture_bytes = bytes_from_text("texture");
+
+  ProjectMaterialFileRollback publication;
+  ASSERT_TRUE(publication.create_bytes(texture, texture_bytes).ok());
+  const ProjectMaterialDocument competing = project_material(
+      "6d0f4ab6-969c-402c-ad93-d72c627e4e69", "Competing",
+      {0.25f, 0.5f, 0.75f});
+  const ProjectIoResult<void> qmat =
+      publication.create_qmat(existing_qmat, competing);
+  EXPECT_FALSE(qmat.ok());
+
+  const std::string rollback_message = publication.rollback();
+  EXPECT_TRUE(rollback_message.empty()) << rollback_message;
+  EXPECT_FALSE(std::filesystem::exists(texture));
+  EXPECT_EQ(read_bytes(existing_qmat), original_qmat);
+}
+
+TEST(ProjectMaterialPublicApiTests,
+     TextureBatchImportReportsAllRejectedWithoutMutationOrEvents) {
+  QuaderStandaloneEditor standalone = create_standalone_editor();
+  const std::array<std::filesystem::path, 1> absent{
+      std::filesystem::path("missing.png")};
+  const QuaderApiResult<QuaderProjectMaterialImportReport> no_project =
+      standalone.editor().project_assets().import_textures_as_materials(
+          absent);
+  EXPECT_FALSE(no_project.ok());
+  EXPECT_FALSE(no_project.changed());
+
+  ProjectMaterialBehaviorHarness harness("texture-batch-all-rejected");
+  harness.create();
+  const QuaderApiResult<QuaderProjectMaterialImportReport> empty =
+      harness.editor().project_assets().import_textures_as_materials({});
+  EXPECT_FALSE(empty.ok());
+  EXPECT_FALSE(empty.changed());
+  const std::size_t catalog_size_before =
+      harness.project().material_catalog().entries().size();
+  const QuaderApiResult<QuaderProjectMaterialInfo> active_before =
+      harness.editor().project_assets().active_material();
+  ASSERT_TRUE(active_before.ok()) << active_before.error_message();
+  const QuaderHistorySnapshot history_before =
+      harness.editor().query().history();
+
+  std::size_t assets_events = 0u;
+  const QuaderEventSubscription subscription =
+      harness.editor().events().subscribe(
+          quader_event::kProjectAssetsChanged,
+          [&](const QuaderEvent &) { ++assets_events; });
+  ASSERT_TRUE(subscription.valid());
+  const std::filesystem::path invalid = harness.root() / "invalid.webp";
+  write_text(invalid, "invalid webp payload");
+  const std::array sources{invalid};
+  const QuaderApiResult<QuaderProjectMaterialImportReport> result =
+      harness.editor().project_assets().import_textures_as_materials(sources);
+  ASSERT_TRUE(result.ok()) << result.error_message();
+  EXPECT_FALSE(result.changed());
+  EXPECT_TRUE(result.value().imported.empty());
+  ASSERT_EQ(result.value().failed.size(), 1u);
+  EXPECT_EQ(result.value().failed.front().source_path, invalid);
+  EXPECT_FALSE(result.value().failed.front().error_message.empty());
+  EXPECT_EQ(assets_events, 0u);
+  EXPECT_EQ(harness.project().material_catalog().entries().size(),
+            catalog_size_before);
+  const QuaderApiResult<QuaderProjectMaterialInfo> active_after =
+      harness.editor().project_assets().active_material();
+  ASSERT_TRUE(active_after.ok()) << active_after.error_message();
+  EXPECT_EQ(active_after.value().id, active_before.value().id);
+  EXPECT_FALSE(harness.editor().project().dirty());
+  expect_same_history(harness.editor().query().history(), history_before);
+}
+
+TEST(ProjectMaterialPublicApiTests,
+     TextureBatchGlobalCatalogFailureRollsBackCreatedFiles) {
+  ProjectMaterialBehaviorHarness harness("texture-batch-global-rollback");
+  harness.create();
+  ASSERT_TRUE(
+      harness.editor().standard_material_documents().new_material().ok());
+  ASSERT_TRUE(harness.editor()
+                  .standard_material_documents()
+                  .set_name("Preserved Rollback Draft")
+                  .ok());
+  const QuaderApiResult<QuaderStandardMaterialDocumentInfo> draft_before =
+      harness.editor().standard_material_documents().current();
+  ASSERT_TRUE(draft_before.ok()) << draft_before.error_message();
+  ASSERT_TRUE(draft_before.value().dirty);
+  const QuaderApiResult<QuaderProjectMaterialInfo> active_before =
+      harness.editor().project_assets().active_material();
+  ASSERT_TRUE(active_before.ok()) << active_before.error_message();
+  const QuaderHistorySnapshot history_before =
+      harness.editor().query().history();
+  const bool dirty_before = harness.editor().project().dirty();
+
+  const std::filesystem::path default_qmat =
+      harness.root() / kDefaultProjectMaterialPath;
+  const std::vector<std::byte> default_qmat_bytes = read_bytes(default_qmat);
+  ASSERT_FALSE(default_qmat_bytes.empty());
+  const std::filesystem::path duplicate_qmat =
+      harness.root() / "Materials" / "duplicate_default.qmat";
+  write_bytes(duplicate_qmat, default_qmat_bytes);
+  const std::vector<std::filesystem::path> materials_before =
+      regular_files_below(harness.root() / "Materials");
+  const std::vector<std::filesystem::path> textures_before =
+      regular_files_below(harness.root() / "Textures");
+
+  std::size_t assets_events = 0u;
+  std::size_t active_events = 0u;
+  const QuaderEventSubscription assets_subscription =
+      harness.editor().events().subscribe(
+          quader_event::kProjectAssetsChanged,
+          [&](const QuaderEvent &) { ++assets_events; });
+  const QuaderEventSubscription active_subscription =
+      harness.editor().events().subscribe(
+          quader_event::kActiveProjectMaterialChanged,
+          [&](const QuaderEvent &) { ++active_events; });
+  ASSERT_TRUE(assets_subscription.valid());
+  ASSERT_TRUE(active_subscription.valid());
+
+  const std::filesystem::path source =
+      source_resource_root() / "materials" / "default" /
+      "default_albedo.png";
+  const std::array sources{source};
+  const QuaderApiResult<QuaderProjectMaterialImportReport> result =
+      harness.editor().project_assets().import_textures_as_materials(sources);
+  EXPECT_FALSE(result.ok()) << result.error_message();
+  EXPECT_FALSE(result.changed());
+  EXPECT_TRUE(result.value().imported.empty());
+  EXPECT_TRUE(result.value().failed.empty());
+  EXPECT_EQ(assets_events, 0u);
+  EXPECT_EQ(active_events, 0u);
+  EXPECT_EQ(regular_files_below(harness.root() / "Materials"),
+            materials_before);
+  EXPECT_EQ(regular_files_below(harness.root() / "Textures"),
+            textures_before);
+  EXPECT_EQ(read_bytes(default_qmat), default_qmat_bytes);
+
+  const QuaderApiResult<QuaderProjectMaterialInfo> active_after =
+      harness.editor().project_assets().active_material();
+  ASSERT_TRUE(active_after.ok()) << active_after.error_message();
+  EXPECT_EQ(active_after.value().id, active_before.value().id);
+  const QuaderApiResult<QuaderStandardMaterialDocumentInfo> draft_after =
+      harness.editor().standard_material_documents().current();
+  ASSERT_TRUE(draft_after.ok()) << draft_after.error_message();
+  EXPECT_EQ(draft_after.value().session_id, draft_before.value().session_id);
+  EXPECT_EQ(draft_after.value().id, draft_before.value().id);
+  EXPECT_EQ(draft_after.value().name, draft_before.value().name);
+  EXPECT_EQ(draft_after.value().draft_revision,
+            draft_before.value().draft_revision);
+  EXPECT_EQ(draft_after.value().clean_revision,
+            draft_before.value().clean_revision);
+  EXPECT_EQ(draft_after.value().pending_texture_sources,
+            draft_before.value().pending_texture_sources);
+  EXPECT_EQ(draft_after.value().dirty, draft_before.value().dirty);
+  EXPECT_EQ(harness.editor().project().dirty(), dirty_before);
+  expect_same_history(harness.editor().query().history(), history_before);
+
+  std::error_code remove_error;
+  EXPECT_TRUE(std::filesystem::remove(duplicate_qmat, remove_error));
+  EXPECT_FALSE(remove_error) << remove_error.message();
 }
 
 TEST(ProjectMaterialBehaviorTests,

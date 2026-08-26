@@ -13,6 +13,8 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <filesystem>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -44,6 +46,24 @@ struct QuaderProjectMaterialPreview {
   std::uint64_t content_revision = 0u;
 };
 
+/// One project material created from an imported texture source.
+struct QuaderProjectMaterialImportSuccess {
+  std::filesystem::path source_path;
+  QuaderProjectMaterialInfo material;
+};
+
+/// One independently rejected texture source from a completed import batch.
+struct QuaderProjectMaterialImportFailure {
+  std::filesystem::path source_path;
+  std::string error_message;
+};
+
+/// Per-source outcome of a completed texture-as-material import batch.
+struct QuaderProjectMaterialImportReport {
+  std::vector<QuaderProjectMaterialImportSuccess> imported;
+  std::vector<QuaderProjectMaterialImportFailure> failed;
+};
+
 /// Public project-asset intent surface; standalone sessions are unavailable.
 class QuaderProjectAssetsApi final {
 public:
@@ -56,6 +76,10 @@ public:
   QuaderApiVoidResult set_active_material(ProjectAssetId material_id);
   [[nodiscard]] QuaderApiResult<QuaderProjectMaterialPreview>
   material_preview(ProjectAssetId material_id) const;
+  /// Completes valid sources independently and reports per-file rejections.
+  [[nodiscard]] QuaderApiResult<QuaderProjectMaterialImportReport>
+  import_textures_as_materials(
+      std::span<const std::filesystem::path> source_paths);
 
   void rebind_session(QuaderApiSession session) { session_ = session; }
 

@@ -10,18 +10,20 @@
 #include <QByteArray>
 #include <QColor>
 #include <QIcon>
+#include <QMainWindow>
 #include <QSortFilterProxyModel>
 #include <QString>
-#include <QWidget>
 
 #include <cstdint>
 #include <functional>
 #include <vector>
 
+class QAction;
 class QCloseEvent;
 class QLabel;
 class QLineEdit;
 class QListView;
+class QMenu;
 class QShowEvent;
 class QSlider;
 class QStackedWidget;
@@ -51,6 +53,9 @@ struct QtMaterialBrowserLabels final {
   QString grid = QStringLiteral("Grid");
   QString list = QStringLiteral("List");
   QString tile_size = QStringLiteral("Preview size");
+  QString tile_size_value = QStringLiteral("Preview size: %1 px");
+  QString file = QStringLiteral("File");
+  QString import_textures = QStringLiteral("Import…");
   QString name_column = QStringLiteral("Name");
   QString type_column = QStringLiteral("Type");
   QString size_column = QStringLiteral("Size");
@@ -120,12 +125,13 @@ private:
 
 /**
  * Retained stock-Qt material browser. It presents immutable API snapshots and
- * emits only stable material-ID activation intent.
+ * emits only semantic material activation, opening, and import intent.
  */
-class QtMaterialBrowserWindow final : public QWidget {
+class QtMaterialBrowserWindow final : public QMainWindow {
 public:
   using ActivateMaterialCallback = std::function<void(QString)>;
   using OpenMaterialCallback = std::function<void(QString)>;
+  using ImportTexturesCallback = std::function<void()>;
   using PresentationStateChangedCallback = std::function<void()>;
 
   explicit QtMaterialBrowserWindow(QWidget *parent = nullptr);
@@ -141,6 +147,7 @@ public:
   void clear_materials();
   void set_activate_material_callback(ActivateMaterialCallback callback);
   void set_open_material_callback(OpenMaterialCallback callback);
+  void set_import_textures_callback(ImportTexturesCallback callback);
   void set_presentation_state_changed_callback(
       PresentationStateChangedCallback callback);
 
@@ -156,6 +163,7 @@ protected:
 private:
   void set_view_mode(QtMaterialBrowserViewMode mode, bool notify);
   void set_tile_size(int tile_size);
+  void update_tile_size_text();
   void refresh_content_page();
   void select_material(const QString &stable_id);
   void activate_index(const QModelIndex &index);
@@ -167,6 +175,8 @@ private:
   QToolButton *grid_button_ = nullptr;
   QToolButton *list_button_ = nullptr;
   QSlider *tile_slider_ = nullptr;
+  QMenu *file_menu_ = nullptr;
+  QAction *import_action_ = nullptr;
   QStackedWidget *content_stack_ = nullptr;
   QListView *grid_view_ = nullptr;
   QTableView *list_view_ = nullptr;
@@ -175,6 +185,7 @@ private:
   QtMaterialBrowserViewMode view_mode_ = QtMaterialBrowserViewMode::Grid;
   ActivateMaterialCallback activate_material_;
   OpenMaterialCallback open_material_;
+  ImportTexturesCallback import_textures_;
   PresentationStateChangedCallback presentation_state_changed_;
 };
 

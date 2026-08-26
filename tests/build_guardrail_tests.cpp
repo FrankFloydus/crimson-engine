@@ -529,6 +529,13 @@ third_party_license_expectations() {
       {"entt", "EnTT", "licenses/entt-MIT.txt", true},
       {"glm", "OpenGL Mathematics (GLM)", "licenses/glm-MIT.txt", true},
       {"qtbase", "Qt Base", "licenses/qtbase-LGPL-3.0-only.txt", true},
+      {"qtimageformats", "Qt Image Formats",
+       "licenses/qtimageformats-LGPL-3.0-only.txt", true},
+      {"", "libjpeg-turbo",
+       "licenses/libjpeg-turbo-BSD-3-Clause-IJG.txt", false},
+      {"tiff", "LibTIFF", "licenses/libtiff-libtiff.txt", true},
+      {"", "libwebp", "licenses/libwebp-BSD-3-Clause-and-PATENTS.txt",
+       false},
       {"stduuid", "stduuid", "licenses/stduuid-MIT.txt", true},
       {"gtest", "GoogleTest", "licenses/gtest-BSD-3-Clause.txt", true},
       {"lodepng", "lodepng", "licenses/lodepng-Zlib.txt", true},
@@ -1650,8 +1657,8 @@ TEST(BuildGuardrailTests,
   expect_contains(manifest, "\"tests\"");
   for (std::string_view native_only_dependency : {
            "entt", "flatbuffers", "glm", "lodepng", "qtbase",
-           "sentry-native", "spdlog", "stduuid", "zstd",
-           "zlib",
+           "qtimageformats", "sentry-native", "spdlog", "stduuid", "tiff",
+           "zstd", "zlib",
        }) {
     expect_contains(native_feature,
                     "\"" + std::string(native_only_dependency) + "\"");
@@ -1665,6 +1672,11 @@ TEST(BuildGuardrailTests,
   expect_contains(sdk_only_check, "-DVCPKG_MANIFEST_FEATURES=tests");
   expect_contains(sdk_only_check,
                   "SDK-only configure installed native app package");
+  for (std::string_view native_codec_package : {
+           "libjpeg-turbo", "libwebp", "qtimageformats", "tiff",
+       }) {
+    expect_contains(sdk_only_check, std::string(native_codec_package));
+  }
 }
 
 TEST(BuildGuardrailTests,
@@ -2602,6 +2614,77 @@ TEST(BuildGuardrailTests, QtWidgetsRuntimeAndLicenseEvidenceAreConfigured) {
   EXPECT_GT(std::filesystem::file_size(
                 source_path("resources/icons/point_light.png")),
             512u);
+}
+
+TEST(BuildGuardrailTests,
+     QtTextureCodecPluginsUseReleaseDeploymentAndLicenseEvidence) {
+  const std::string root_c_make = read_source_file("CMakeLists.txt");
+  const std::string vcpkg_manifest = read_source_file("vcpkg.json");
+  const std::string native_feature =
+      source_slice(vcpkg_manifest, "\"native-app\": {", "\"tests\": {");
+  const std::string sdk_only_check =
+      read_source_file("cmake/QuaderSdkOnlyBuildCheck.cmake");
+  const std::string launcher = read_source_file("tools/boot_tracy.ps1");
+  const std::string qt_image_formats_license = read_source_file(
+      "thirdparty/licenses/qtimageformats-LGPL-3.0-only.txt");
+  const std::string jpeg_license = read_source_file(
+      "thirdparty/licenses/libjpeg-turbo-BSD-3-Clause-IJG.txt");
+  const std::string tiff_license =
+      read_source_file("thirdparty/licenses/libtiff-libtiff.txt");
+  const std::string webp_license = read_source_file(
+      "thirdparty/licenses/libwebp-BSD-3-Clause-and-PATENTS.txt");
+
+  for (std::string_view required_manifest_token : {
+           "\"jpeg\"", "\"png\"", "\"qtimageformats\"", "\"tiff\"",
+           "\"webp\"", "\"widgets\"",
+       }) {
+    expect_contains(native_feature, std::string(required_manifest_token));
+  }
+  expect_missing(native_feature, "\"jasper\"");
+  EXPECT_GE(count_occurrences(native_feature, "\"default-features\": false"),
+            2U);
+
+  for (std::string_view plugin_target : {
+           "Qt6::QGifPlugin", "Qt6::QJpegPlugin", "Qt6::QTgaPlugin",
+           "Qt6::QTiffPlugin", "Qt6::QWebpPlugin",
+       }) {
+    expect_contains(root_c_make, std::string(plugin_target));
+  }
+  expect_contains(root_c_make, "--add-plugin-types imageformats");
+  expect_contains(root_c_make,
+                  "--include-plugins qwindows,qgif,qjpeg,qtga,qtiff,qwebp");
+  expect_contains(root_c_make,
+                  "quader_deploy_windows_qt_runtime(quader)");
+  expect_contains(root_c_make,
+                  "quader_deploy_windows_qt_runtime(quader_tests)");
+  expect_contains(root_c_make, "${_QUADER_VCPKG_RELEASE_BIN}");
+  for (std::string_view runtime_dll : {
+           "jpeg62.dll", "libsharpyuv.dll", "libwebp.dll",
+           "libwebpdemux.dll", "libwebpmux.dll", "tiff.dll",
+       }) {
+    expect_contains(root_c_make, std::string(runtime_dll));
+    expect_contains(launcher, std::string(runtime_dll));
+  }
+  for (std::string_view plugin_dll : {
+           "imageformats\\qgif.dll", "imageformats\\qjpeg.dll",
+           "imageformats\\qtga.dll", "imageformats\\qtiff.dll",
+           "imageformats\\qwebp.dll",
+       }) {
+    expect_contains(launcher, std::string(plugin_dll));
+  }
+  for (std::string_view native_codec_package : {
+           "libjpeg-turbo", "libwebp", "qtimageformats", "tiff",
+       }) {
+    expect_contains(sdk_only_check, std::string(native_codec_package));
+  }
+
+  expect_contains(qt_image_formats_license,
+                  "GNU LESSER GENERAL PUBLIC LICENSE");
+  expect_contains(jpeg_license,
+                  "This software is based in part on the work of the ");
+  expect_contains(tiff_license,
+                  "Copyright (c) 1988-1997 Sam Leffler");
+  expect_contains(webp_license, "Additional IP Rights Grant (Patents)");
 }
 
 TEST(BuildGuardrailTests, ApplicationIconIsEmbeddedForWindowsAndQt) {

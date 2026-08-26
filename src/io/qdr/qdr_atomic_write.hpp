@@ -23,6 +23,12 @@ struct QdrAtomicWriteResult {
     std::string message;
 };
 
+/// Controls whether an atomic publication may replace an existing target.
+enum class QdrAtomicWriteDisposition : std::uint8_t {
+  ReplaceExisting,
+  CreateNew,
+};
+
 /**
  * Stages one native QDR file beside its final destination, reversibly publishes
  * it before wider durable state may reference it, and preserves any prior
@@ -41,7 +47,9 @@ public:
   operator=(QdrAtomicFileTransaction &&) = delete;
 
   [[nodiscard]] QdrAtomicWriteResult
-  prepare(const std::filesystem::path &target);
+  prepare(const std::filesystem::path &target,
+          QdrAtomicWriteDisposition disposition =
+              QdrAtomicWriteDisposition::ReplaceExisting);
   [[nodiscard]] QdrAtomicWriteResult publish();
   [[nodiscard]] QdrAtomicWriteResult verify_published() const;
   [[nodiscard]] QdrAtomicWriteResult rollback();
@@ -90,6 +98,8 @@ using QdrAtomicWriteValidator =
 [[nodiscard]] QdrAtomicWriteResult write_qdr_text_atomic(
         const std::filesystem::path& target,
         std::string_view bytes,
-        QdrAtomicWriteValidator validate_temp = {});
+        QdrAtomicWriteValidator validate_temp = {},
+        QdrAtomicWriteDisposition disposition =
+            QdrAtomicWriteDisposition::ReplaceExisting);
 
 } // namespace quader_io

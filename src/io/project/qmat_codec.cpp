@@ -582,10 +582,12 @@ QmatCodec::read(const ProjectFileSystem &file_system,
   });
 }
 
-ProjectIoResult<void>
-QmatCodec::write_atomic(const ProjectFileSystem &file_system,
-                        const ProjectRelativePath &path,
-                        const ProjectMaterialDocument &material) {
+namespace {
+
+ProjectIoResult<void> write_qmat_atomic(
+    const ProjectFileSystem &file_system, const ProjectRelativePath &path,
+    const ProjectMaterialDocument &material,
+    quader_io::QdrAtomicWriteDisposition disposition) {
   if (!path.valid() || !has_qmat_extension(path)) {
     return ProjectIoResult<void>::failure(
         ProjectIoErrorCode::InvalidRelativePath,
@@ -599,7 +601,7 @@ QmatCodec::write_atomic(const ProjectFileSystem &file_system,
         absolute.error().code, absolute.error().message,
         absolute.error().path);
   }
-  ProjectIoResult<std::string> encoded = encode(material);
+  ProjectIoResult<std::string> encoded = QmatCodec::encode(material);
   if (!encoded.ok()) {
     return ProjectIoResult<void>::failure(
         encoded.error().code, encoded.error().message,
@@ -625,13 +627,33 @@ QmatCodec::write_atomic(const ProjectFileSystem &file_system,
                         : verified.ok()
                               ? "Temporary QMAT content changed during write."
                               : verified.error().message};
-          });
+          },
+          disposition);
   if (!written.ok) {
     return ProjectIoResult<void>::failure(ProjectIoErrorCode::IoFailure,
                                           written.message,
                                           absolute.value());
   }
   return ProjectIoResult<void>::success();
+}
+
+} // namespace
+
+ProjectIoResult<void>
+QmatCodec::write_atomic(const ProjectFileSystem &file_system,
+                        const ProjectRelativePath &path,
+                        const ProjectMaterialDocument &material) {
+  return write_qmat_atomic(
+      file_system, path, material,
+      quader_io::QdrAtomicWriteDisposition::ReplaceExisting);
+}
+
+ProjectIoResult<void>
+QmatCodec::create_atomic(const ProjectFileSystem &file_system,
+                         const ProjectRelativePath &path,
+                         const ProjectMaterialDocument &material) {
+  return write_qmat_atomic(file_system, path, material,
+                           quader_io::QdrAtomicWriteDisposition::CreateNew);
 }
 
 } // namespace quader

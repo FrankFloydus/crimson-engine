@@ -60,6 +60,7 @@
 #include <QRect>
 #include <QStatusBar>
 #include <QStackedWidget>
+#include <QStringList>
 #include <QTimer>
 #include <QWidget>
 #include <QWindow>
@@ -441,6 +442,10 @@ bool UISystem::initialize(RenderSystem &render_system,
       [this](QString stable_id) {
         open_standard_material(stable_id.toStdString());
       });
+  material_browser_window_->set_import_textures_callback(
+      [this]() { import_material_textures(); });
+  material_browser_import_message_box_ =
+      new QtRetainedMessageBox(material_browser_window_);
   material_browser_window_->hide();
   standard_material_editor_window_ =
       new QtStandardMaterialEditorWindow(main_window_.get());
@@ -1419,11 +1424,12 @@ void UISystem::schedule_retained_message_box_prewarm() {
     return;
   }
   retained_message_box_prewarm_scheduled_ = true;
-  const std::array<QPointer<QtRetainedMessageBox>, 4u> message_boxes{
+  const std::array<QPointer<QtRetainedMessageBox>, 5u> message_boxes{
       QPointer<QtRetainedMessageBox>(unsaved_confirmation_),
       QPointer<QtRetainedMessageBox>(standard_material_unsaved_confirmation_),
       QPointer<QtRetainedMessageBox>(lifecycle_message_box_),
       QPointer<QtRetainedMessageBox>(standard_material_error_message_box_),
+      QPointer<QtRetainedMessageBox>(material_browser_import_message_box_),
   };
   QTimer::singleShot(0, main_window_.get(), [this, message_boxes]() {
     retained_message_box_prewarm_scheduled_ = false;
@@ -1493,6 +1499,7 @@ void UISystem::shutdown() {
   standard_material_unsaved_confirmation_ = nullptr;
   lifecycle_message_box_ = nullptr;
   standard_material_error_message_box_ = nullptr;
+  material_browser_import_message_box_ = nullptr;
   status_message_ = nullptr;
   status_version_ = nullptr;
   auxiliary_window_save_timer_ = nullptr;
@@ -3000,6 +3007,11 @@ void UISystem::refresh_localized_chrome() {
         .list = text("ui.material_browser.list", "List"),
         .tile_size =
             text("ui.material_browser.tile_size", "Preview size"),
+        .tile_size_value = text("ui.material_browser.tile_size_value",
+                                "Preview size: %1 px"),
+        .file = text("ui.material_browser.file", "File"),
+        .import_textures = text("ui.material_browser.file.import",
+                                "Import…"),
         .name_column = text("ui.material_browser.name", "Name"),
         .type_column = text("ui.material_browser.type", "Type"),
         .size_column = text("ui.material_browser.size", "Size"),
@@ -3236,6 +3248,111 @@ void UISystem::show_material_browser() {
   refresh_project_workspace();
   material_browser_window_->raise();
   material_browser_window_->activateWindow();
+}
+
+void UISystem::import_material_textures() {
+  if (editor_ == nullptr || material_browser_window_ == nullptr ||
+      !editor_->project().has_project()) {
+    return;
+  }
+
+  PlatformFileDialogOptions options;
+  const WId browser_window_id = material_browser_window_->winId();
+  options.owner_window_handle = reinterpret_cast<void *>(
+      static_cast<std::uintptr_t>(browser_window_id));
+  options.initial_directory = editor_->project().root() / "Textures";
+  const std::optional<std::vector<std::filesystem::path>> selected =
+      platform_open_texture_files_dialog(options);
+  if (!selected.has_value() || selected->empty()) {
+    return;
+  }
+
+  const QuaderApiResult<QuaderProjectMaterialImportReport> result =
+      editor_->project_assets().import_textures_as_materials(*selected);
+  const std::size_t imported_count = result.value().imported.size();
+  const std::size_t failed_count = result.value().failed.size();
+
+  const QString status = [&]() {
+    if (!result.ok) {
+      return QString::fromStdString(localization_.text(
+          "ui.material_browser.import.status.failed",
+          "Texture import failed."));
+    }
+    if (failed_count == 0u) {
+      return QString::fromStdString(localization_.text(
+          "ui.material_browser.import.status.success",
+                 "Materials imported: %1."))
+          .arg(static_cast<qulonglong>(imported_count));
+    }
+    return QString::fromStdString(localization_.text(
+               "ui.material_browser.import.status.with_failures",
+               "Materials imported: %1. Failed: %2."))
+        .arg(static_cast<qulonglong>(imported_count))
+        .arg(static_cast<qulonglong>(failed_count));
+  }();
+  if (main_window_ != nullptr && main_window_->statusBar() != nullptr) {
+    main_window_->statusBar()->showMessage(status, 5000);
+  }
+
+  if (result.ok && failed_count == 0u) {
+    return;
+  }
+  if (material_browser_import_message_box_ == nullptr) {
+    return;
+  }
+
+  constexpr std::size_t kVisibleFailureLimit = 10u;
+  QStringList failure_lines;
+  const std::size_t visible_failure_count =
+      std::min(failed_count, kVisibleFailureLimit);
+  failure_lines.reserve(static_cast<qsizetype>(visible_failure_count + 1u));
+  for (std::size_t index = 0u; index < visible_failure_count; ++index) {
+    const QuaderProjectMaterialImportFailure &failure =
+        result.value().failed[index];
+    QString file_name =
+        QString::fromStdWString(failure.source_path.filename().wstring());
+    if (file_name.isEmpty()) {
+      file_name = QString::fromStdWString(failure.source_path.wstring());
+    }
+    failure_lines.push_back(
+        QStringLiteral("%1: %2")
+            .arg(file_name, QString::fromStdString(failure.error_message)));
+  }
+  if (failed_count > visible_failure_count) {
+    failure_lines.push_back(
+        QString::fromStdString(localization_.text(
+            "ui.material_browser.import.warning.remaining",
+            "...and %1 more."))
+            .arg(static_cast<qulonglong>(failed_count -
+                                        visible_failure_count)));
+  }
+  if (!result.ok && !result.message.empty()) {
+    failure_lines.push_back(QString::fromStdString(result.message));
+  }
+
+  (void)material_browser_import_message_box_->present(
+      QtRetainedMessageBoxPresentation{
+          .icon = QMessageBox::Warning,
+          .object_name =
+              QStringLiteral("material_browser_import_warning_message_box"),
+          .title = QString::fromStdString(localization_.text(
+              "ui.material_browser.import.warning.title",
+              "Texture Import Warnings")),
+          .text = status,
+          .informative_text = failure_lines.join(QLatin1Char('\n')),
+          .buttons =
+              {{
+                  .button = QtRetainedMessageBoxButton::Primary,
+                  .object_name = QStringLiteral(
+                      "materialBrowserImportWarningMessageBox.ok"),
+                  .label = QString::fromStdString(
+                      localization_.text("ui.action.ok", "OK")),
+                  .role = QMessageBox::AcceptRole,
+              }},
+          .default_button = QtRetainedMessageBoxButton::Primary,
+          .escape_button = QtRetainedMessageBoxButton::Primary,
+          .close_button = QtRetainedMessageBoxButton::Primary,
+      });
 }
 
 bool UISystem::panel_visible(UIPanelId id) const {

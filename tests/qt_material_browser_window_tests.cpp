@@ -8,14 +8,20 @@
 
 #include "ui/qt_material_browser_window.hpp"
 
+#include <QAction>
 #include <QApplication>
+#include <QBuffer>
 #include <QCoreApplication>
+#include <QImage>
 #include <QItemSelectionModel>
 #include <QKeyEvent>
 #include <QLabel>
 #include <QLineEdit>
 #include <QListView>
+#include <QMainWindow>
 #include <QMetaObject>
+#include <QMenu>
+#include <QScrollBar>
 #include <QSlider>
 #include <QStackedWidget>
 #include <QTableView>
@@ -34,6 +40,23 @@ void send_key(QWidget &target, int key) {
   QCoreApplication::processEvents();
 }
 
+QByteArray encoded_wide_preview() {
+  QImage image(2, 1, QImage::Format_RGBA8888);
+  image.fill(QColor(40, 120, 200));
+  QByteArray encoded;
+  QBuffer buffer(&encoded);
+  EXPECT_TRUE(buffer.open(QIODevice::WriteOnly));
+  EXPECT_TRUE(image.save(&buffer, "PNG"));
+  return encoded;
+}
+
+QByteArray encoded_tga_preview() {
+  return QByteArray::fromBase64(
+      "AAACAAAAAAAAAAAAAgACABgAv18fv18fv18fv18fAAAAAAAAAABUUlVFVklTSU9O"
+      "LVhGSUxFLgA=",
+      QByteArray::AbortOnBase64DecodingErrors);
+}
+
 TEST(QtMaterialBrowserWindowTests,
      PresentsFiltersActivatesAndRetainsOnlyLayoutPreferences) {
   ASSERT_EQ(QCoreApplication::instance(), nullptr);
@@ -47,6 +70,7 @@ TEST(QtMaterialBrowserWindowTests,
   QWidget owner;
   auto *window = new QtMaterialBrowserWindow(&owner);
   window->setAttribute(Qt::WA_DontShowOnScreen, true);
+  EXPECT_NE(qobject_cast<QMainWindow *>(window), nullptr);
   EXPECT_EQ(window->windowType(), Qt::Tool);
   EXPECT_FALSE(window->testAttribute(Qt::WA_DeleteOnClose));
   EXPECT_FALSE(window->windowFlags().testFlag(Qt::WindowMaximizeButtonHint));
@@ -57,6 +81,9 @@ TEST(QtMaterialBrowserWindowTests,
       .grid = QStringLiteral("Tiles"),
       .list = QStringLiteral("Details"),
       .tile_size = QStringLiteral("Tile size"),
+      .tile_size_value = QStringLiteral("Tile size = %1 pixels"),
+      .file = QStringLiteral("Project File"),
+      .import_textures = QStringLiteral("Bring textures in…"),
       .name_column = QStringLiteral("Material name"),
       .type_column = QStringLiteral("Kind"),
       .size_column = QStringLiteral("File size"),
@@ -74,6 +101,7 @@ TEST(QtMaterialBrowserWindowTests,
               QStringLiteral("Materials/Metals/zinc.qmat"),
           .type_display_name = QStringLiteral("Standard Material"),
           .qmat_size_bytes = 2048,
+          .encoded_albedo = encoded_tga_preview(),
           .fallback_color = QColor(120, 125, 130),
           .content_revision = 3,
       },
@@ -83,6 +111,7 @@ TEST(QtMaterialBrowserWindowTests,
           .project_relative_path =
               QStringLiteral("Materials/default_material.qmat"),
           .qmat_size_bytes = 512,
+          .encoded_albedo = encoded_wide_preview(),
           .fallback_color = QColor(240, 240, 240),
           .content_revision = 1,
       },
@@ -106,6 +135,10 @@ TEST(QtMaterialBrowserWindowTests,
       QStringLiteral("materialBrowser.list"));
   auto *slider = window->findChild<QSlider *>(
       QStringLiteral("materialBrowser.tileSize"));
+  auto *file_menu = window->findChild<QMenu *>(
+      QStringLiteral("materialBrowser.fileMenu"));
+  auto *import_action = window->findChild<QAction *>(
+      QStringLiteral("materialBrowser.file.import"));
   ASSERT_NE(grid, nullptr);
   ASSERT_NE(list, nullptr);
   ASSERT_NE(search, nullptr);
@@ -114,6 +147,25 @@ TEST(QtMaterialBrowserWindowTests,
   ASSERT_NE(grid_button, nullptr);
   ASSERT_NE(list_button, nullptr);
   ASSERT_NE(slider, nullptr);
+  ASSERT_NE(file_menu, nullptr);
+  ASSERT_NE(import_action, nullptr);
+  EXPECT_EQ(file_menu->title(), QStringLiteral("Project File"));
+  EXPECT_EQ(import_action->text(), QStringLiteral("Bring textures in…"));
+
+  int import_count = 0;
+  window->set_import_textures_callback(
+      [&import_count]() { ++import_count; });
+  import_action->trigger();
+  EXPECT_EQ(import_count, 1);
+
+  EXPECT_EQ(slider->minimum(), 0);
+  EXPECT_EQ(slider->maximum(), 5);
+  EXPECT_EQ(slider->singleStep(), 1);
+  EXPECT_EQ(slider->pageStep(), 1);
+  EXPECT_EQ(slider->tickInterval(), 1);
+  EXPECT_EQ(slider->tickPosition(), QSlider::TicksBelow);
+  EXPECT_EQ(slider->toolTip(), QStringLiteral("Tile size = 128 pixels"));
+  EXPECT_EQ(slider->accessibleName(), QStringLiteral("Tile size = 128 pixels"));
 
   QListView stock_grid;
   QTableView stock_list;
@@ -130,11 +182,25 @@ TEST(QtMaterialBrowserWindowTests,
                 .data(QtMaterialBrowserModel::StableIdRole)
                 .toString(),
             QStringLiteral("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"));
-  EXPECT_FALSE(grid->model()
-                   ->index(0, 0)
-                   .data(Qt::DecorationRole)
-                   .value<QIcon>()
-                   .isNull());
+  const QIcon preview = grid->model()
+                            ->index(0, 0)
+                            .data(Qt::DecorationRole)
+                            .value<QIcon>();
+  EXPECT_FALSE(preview.isNull());
+  for (const int preset : {16, 32, 64, 128, 256, 512}) {
+    EXPECT_EQ(preview.actualSize(QSize(preset, preset)),
+              QSize(preset, preset / 2));
+  }
+  const QIcon tga_preview = grid->model()
+                                ->index(1, 0)
+                                .data(Qt::DecorationRole)
+                                .value<QIcon>();
+  ASSERT_FALSE(tga_preview.isNull());
+  const QColor tga_color =
+      tga_preview.pixmap(QSize(16, 16)).toImage().pixelColor(8, 8);
+  EXPECT_LT(tga_color.red(), 80)
+      << "the TGA preview must not fall back to the material swatch";
+  EXPECT_GT(tga_color.blue(), 150);
   EXPECT_EQ(grid->model()->index(0, 1).data().toString(),
             QStringLiteral("Material asset"));
   EXPECT_EQ(grid->model()->index(1, 1).data().toString(),
@@ -215,23 +281,48 @@ TEST(QtMaterialBrowserWindowTests,
   EXPECT_TRUE(slider->isHidden());
   grid_button->click();
   EXPECT_FALSE(slider->isHidden());
-  slider->setValue(192);
-  EXPECT_EQ(window->view_mode(), QtMaterialBrowserViewMode::Grid);
-  EXPECT_EQ(window->tile_size(), 192);
-  EXPECT_EQ(grid->iconSize(), QSize(192, 192));
-  EXPECT_EQ(state_changes, 3);
+  const std::vector<int> tile_presets{16, 32, 64, 128, 256, 512};
+  for (int index = 0; index < static_cast<int>(tile_presets.size()); ++index) {
+    slider->setValue(index);
+    const int preset = tile_presets[static_cast<std::size_t>(index)];
+    EXPECT_EQ(window->view_mode(), QtMaterialBrowserViewMode::Grid);
+    EXPECT_EQ(window->tile_size(), preset);
+    EXPECT_EQ(grid->iconSize(), QSize(preset, preset));
+    EXPECT_EQ(grid->gridSize(), QSize(preset + 16, preset + 50));
+    EXPECT_EQ(slider->toolTip(),
+              QStringLiteral("Tile size = %1 pixels").arg(preset));
+    EXPECT_EQ(slider->accessibleName(), slider->toolTip());
+  }
 
+  const int changes_before_restore = state_changes;
+  window->restore_presentation_state(QtMaterialBrowserViewMode::Grid, 24);
+  EXPECT_EQ(window->tile_size(), 16)
+      << "an exact legacy tie must resolve to the smaller preset";
+  window->restore_presentation_state(QtMaterialBrowserViewMode::Grid, 25);
+  EXPECT_EQ(window->tile_size(), 32);
+  window->restore_presentation_state(QtMaterialBrowserViewMode::Grid, 192);
+  EXPECT_EQ(window->tile_size(), 128)
+      << "an exact legacy tie must resolve to the smaller preset";
   window->restore_presentation_state(QtMaterialBrowserViewMode::List, 999);
   EXPECT_EQ(window->view_mode(), QtMaterialBrowserViewMode::List);
-  EXPECT_EQ(window->tile_size(), 256);
-  EXPECT_EQ(state_changes, 3)
+  EXPECT_EQ(window->tile_size(), 512);
+  EXPECT_EQ(state_changes, changes_before_restore)
       << "restoring preferences must not write them back";
 
+  window->restore_presentation_state(QtMaterialBrowserViewMode::Grid, 512);
+  window->resize(440, 520);
   search->setText(QStringLiteral("zinc"));
   window->show();
   QCoreApplication::processEvents();
   EXPECT_TRUE(search->text().isEmpty())
       << "search is transient and resets whenever the browser reopens";
+  EXPECT_EQ(stack->currentWidget(), grid);
+  EXPECT_EQ(grid->model()->rowCount(), 2)
+      << "the largest tile preset must retain the complete catalog";
+  EXPECT_GT(grid->verticalScrollBar()->maximum(), 0)
+      << "large tiles must remain reachable through vertical scrolling";
+  EXPECT_GT(grid->horizontalScrollBar()->maximum(), 0)
+      << "a narrow restored window must not clip a 512px tile permanently";
   EXPECT_TRUE(window->close());
   EXPECT_FALSE(window->isVisible());
   EXPECT_FALSE(window->testAttribute(Qt::WA_DeleteOnClose));

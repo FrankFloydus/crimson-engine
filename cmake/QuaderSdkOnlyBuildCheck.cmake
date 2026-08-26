@@ -200,11 +200,15 @@ set(_quader_sdk_only_vcpkg_share_dir
 foreach(_quader_native_only_package IN ITEMS
         entt
         glm
+        libjpeg-turbo
+        libwebp
         lodepng
         qtbase
+        qtimageformats
         sentry-native
         spdlog
         stduuid
+        tiff
         zlib)
     file(GLOB _quader_native_only_package_dirs
         "${_quader_sdk_only_vcpkg_share_dir}/*/share/${_quader_native_only_package}")

@@ -12,8 +12,10 @@
 #include <QByteArray>
 #include <QImage>
 #include <QImageReader>
+#include <QString>
 
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <cstring>
 #include <fstream>
@@ -22,6 +24,21 @@
 
 namespace quader {
 namespace {
+
+bool has_truevision_tga_footer(
+    std::span<const std::byte> encoded_bytes) noexcept {
+  static constexpr std::array<unsigned char, 18> kSignature{
+      'T', 'R', 'U', 'E', 'V', 'I', 'S', 'I', 'O',
+      'N', '-', 'X', 'F', 'I', 'L', 'E', '.', '\0',
+  };
+  return encoded_bytes.size() >= kSignature.size() &&
+         std::equal(kSignature.begin(), kSignature.end(),
+                    encoded_bytes.end() -
+                        static_cast<std::ptrdiff_t>(kSignature.size()),
+                    [](unsigned char expected, std::byte actual) {
+                      return expected == std::to_integer<unsigned char>(actual);
+                    });
+}
 
 bool unsupported_high_dynamic_range(const QImage &image) noexcept {
   switch (image.format()) {
@@ -123,16 +140,45 @@ ProjectImageDecoder::decode(std::span<const std::byte> encoded_bytes) {
   }
   QByteArray bytes(reinterpret_cast<const char *>(encoded_bytes.data()),
                    static_cast<qsizetype>(encoded_bytes.size()));
-  QBuffer buffer(&bytes);
-  if (!buffer.open(QIODevice::ReadOnly)) {
-    return ProjectIoResult<ProjectDecodedImage>::failure(
-        ProjectIoErrorCode::IoFailure,
-        "Texture decode buffer could not be opened.");
+  const auto decode = [&bytes](const QByteArray &format,
+                               bool decide_from_content) {
+    QBuffer buffer(&bytes);
+    if (!buffer.open(QIODevice::ReadOnly)) {
+      return ProjectIoResult<ProjectDecodedImage>::failure(
+          ProjectIoErrorCode::IoFailure,
+          "Texture decode buffer could not be opened.");
+    }
+    QImageReader reader(&buffer, format);
+    reader.setDecideFormatFromContent(decide_from_content);
+    reader.setAutoTransform(false);
+    return decode_reader(reader);
+  };
+
+  const bool has_tga_footer = has_truevision_tga_footer(encoded_bytes);
+  if (has_tga_footer) {
+    ProjectIoResult<ProjectDecodedImage> tga = decode("tga", false);
+    if (tga.ok()) {
+      return tga;
+    }
   }
-  QImageReader reader(&buffer);
-  reader.setDecideFormatFromContent(true);
-  reader.setAutoTransform(false);
-  return decode_reader(reader);
+
+  ProjectIoResult<ProjectDecodedImage> detected = decode({}, true);
+  if (detected.ok()) {
+    return detected;
+  }
+
+  // Uncompressed true-color TGA begins with the same 00 00 02 00 bytes as a
+  // Windows cursor. Qt's content-only probe can therefore select the CUR
+  // handler first and fail without trying the TGA plugin. A forced TGA retry
+  // remains fully validated by QTgaHandler and makes byte-only project reads
+  // deterministic after import.
+  if (!has_tga_footer) {
+    ProjectIoResult<ProjectDecodedImage> tga = decode("tga", false);
+    if (tga.ok()) {
+      return tga;
+    }
+  }
+  return detected;
 }
 
 ProjectIoResult<ProjectImportedImage>
@@ -175,14 +221,18 @@ ProjectImageDecoder::read_import(const std::filesystem::path &source_path) {
     return ProjectIoResult<ProjectImportedImage>::failure(
         decoded.error().code, decoded.error().message, source_path);
   }
-  std::string extension =
-      QStr::to_ascii_lower(source_path.extension().string());
+  std::string extension = QStr::to_ascii_lower(
+      QString::fromStdWString(source_path.extension().wstring())
+          .toUtf8()
+          .toStdString());
   if (extension.empty()) {
     extension = "." + decoded.value().detected_format;
   }
   return ProjectIoResult<ProjectImportedImage>::success({
       .source_path = source_path,
-      .source_stem = source_path.stem().string(),
+      .source_stem = QString::fromStdWString(source_path.stem().wstring())
+                         .toUtf8()
+                         .toStdString(),
       .source_extension = std::move(extension),
       .encoded_bytes = std::move(bytes),
       .decoded = decoded.take_value(),

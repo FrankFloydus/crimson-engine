@@ -5,12 +5,14 @@
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
 #include "platform/fatal_error_handler.hpp"
+#include "platform/platform_file_dialog.hpp"
 
 #include <gtest/gtest.h>
 
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <initializer_list>
 #include <iterator>
 #include <optional>
 #include <string>
@@ -23,6 +25,17 @@
 #endif
 
 namespace {
+
+std::vector<wchar_t> explorer_selection_buffer(
+    const std::initializer_list<std::wstring_view> segments) {
+  std::vector<wchar_t> buffer;
+  for (const std::wstring_view segment : segments) {
+    buffer.insert(buffer.end(), segment.begin(), segment.end());
+    buffer.push_back(L'\0');
+  }
+  buffer.push_back(L'\0');
+  return buffer;
+}
 
 std::string read_text_file(const std::filesystem::path &path) {
   std::ifstream stream(path, std::ios::binary);
@@ -75,6 +88,77 @@ std::filesystem::path unique_test_directory(std::wstring_view label) {
 #endif
 
 } // namespace
+
+TEST(PlatformFileDialogTests, ParsesSingleUnicodeExplorerSelection) {
+  const std::vector<wchar_t> buffer = explorer_selection_buffer(
+      {L"C:\\Progetti\\trame-\u00E8\\albedo-\u03B2.png"});
+
+  const auto selected =
+      quader::platform_file_dialog_detail::
+          parse_explorer_file_dialog_selection(true, buffer);
+
+  ASSERT_TRUE(selected.has_value());
+  ASSERT_EQ(selected->size(), 1U);
+  EXPECT_EQ(selected->front(),
+            std::filesystem::path(
+                L"C:\\Progetti\\trame-\u00E8\\albedo-\u03B2.png"));
+}
+
+TEST(PlatformFileDialogTests, ParsesMultipleUnicodeExplorerSelections) {
+  const std::vector<wchar_t> buffer = explorer_selection_buffer(
+      {L"C:\\Progetti\\trame-\u00E8", L"albedo-\u03B2.png",
+       L"normal-\u03B3.webp"});
+
+  const auto selected =
+      quader::platform_file_dialog_detail::
+          parse_explorer_file_dialog_selection(true, buffer);
+
+  ASSERT_TRUE(selected.has_value());
+  ASSERT_EQ(selected->size(), 2U);
+  EXPECT_EQ(selected->at(0),
+            std::filesystem::path(
+                L"C:\\Progetti\\trame-\u00E8\\albedo-\u03B2.png"));
+  EXPECT_EQ(selected->at(1),
+            std::filesystem::path(
+                L"C:\\Progetti\\trame-\u00E8\\normal-\u03B3.webp"));
+}
+
+TEST(PlatformFileDialogTests, TreatsCancelledOrMalformedSelectionAsAbsent) {
+  const std::vector<wchar_t> selected =
+      explorer_selection_buffer({L"C:\\Textures\\albedo.png"});
+  EXPECT_FALSE(quader::platform_file_dialog_detail::
+                   parse_explorer_file_dialog_selection(false, selected)
+                   .has_value());
+
+  const std::vector<wchar_t> empty{L'\0', L'\0'};
+  EXPECT_FALSE(quader::platform_file_dialog_detail::
+                   parse_explorer_file_dialog_selection(true, empty)
+                   .has_value());
+
+  const std::vector<wchar_t> unterminated{L'C', L':', L'\\'};
+  EXPECT_FALSE(quader::platform_file_dialog_detail::
+                   parse_explorer_file_dialog_selection(true, unterminated)
+                   .has_value());
+}
+
+TEST(PlatformFileDialogTests, GrowsTooSmallSelectionBuffersSafely) {
+  const auto reported_growth =
+      quader::platform_file_dialog_detail::next_file_dialog_buffer_capacity(
+          32'768U, 40'000U);
+  ASSERT_TRUE(reported_growth.has_value());
+  EXPECT_EQ(*reported_growth, 65'536U);
+
+  const auto repeated_growth =
+      quader::platform_file_dialog_detail::next_file_dialog_buffer_capacity(
+          65'536U, 65'536U);
+  ASSERT_TRUE(repeated_growth.has_value());
+  EXPECT_EQ(*repeated_growth, 131'072U);
+
+  EXPECT_FALSE(
+      quader::platform_file_dialog_detail::next_file_dialog_buffer_capacity(
+          0U, 1U)
+          .has_value());
+}
 
 TEST(FatalErrorHandlerTests, BuildsDeterministicArtifactNamesAndReportText) {
   const quader::FatalArtifactPaths paths = quader::make_fatal_artifact_paths(

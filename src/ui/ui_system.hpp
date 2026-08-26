@@ -181,6 +181,7 @@ private:
   void synchronize_settings_surfaces(bool refresh_dialog);
   void show_settings_dialog();
   void show_material_browser();
+  void import_material_textures();
   [[nodiscard]] bool allow_main_window_close();
   [[nodiscard]] bool panel_visible(UIPanelId id) const;
   [[nodiscard]] bool panel_presented(UIPanelId id) const;
@@ -211,6 +212,7 @@ private:
       nullptr;
   QtRetainedMessageBox *lifecycle_message_box_ = nullptr;
   QtRetainedMessageBox *standard_material_error_message_box_ = nullptr;
+  QtRetainedMessageBox *material_browser_import_message_box_ = nullptr;
   QLabel *status_message_ = nullptr;
   QLabel *status_version_ = nullptr;
   QTimer *auxiliary_window_save_timer_ = nullptr;

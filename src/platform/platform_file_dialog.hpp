@@ -6,8 +6,11 @@
 ////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
+#include <cstddef>
 #include <filesystem>
 #include <optional>
+#include <span>
+#include <vector>
 
 namespace quader {
 
@@ -36,7 +39,23 @@ platform_open_material_file_dialog(const PlatformFileDialogOptions &options);
 platform_save_material_file_dialog(const PlatformFileDialogOptions &options);
 [[nodiscard]] std::optional<std::filesystem::path>
 platform_open_texture_file_dialog(const PlatformFileDialogOptions &options);
+[[nodiscard]] std::optional<std::vector<std::filesystem::path>>
+platform_open_texture_files_dialog(const PlatformFileDialogOptions &options);
 [[nodiscard]] std::optional<std::filesystem::path>
 platform_save_obj_file_dialog(const PlatformFileDialogOptions &options);
+
+namespace platform_file_dialog_detail {
+
+/** Parses the two buffer layouts returned by an Explorer-style open dialog. */
+[[nodiscard]] std::optional<std::vector<std::filesystem::path>>
+parse_explorer_file_dialog_selection(bool accepted,
+                                     std::span<const wchar_t> buffer);
+
+/** Chooses a larger character buffer after FNERR_BUFFERTOOSMALL. */
+[[nodiscard]] std::optional<std::size_t>
+next_file_dialog_buffer_capacity(std::size_t current_capacity,
+                                 std::size_t reported_required_capacity);
+
+} // namespace platform_file_dialog_detail
 
 } // namespace quader

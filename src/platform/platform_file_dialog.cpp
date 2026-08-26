@@ -7,7 +7,11 @@
 #include "platform/platform_file_dialog.hpp"
 
 #include <algorithm>
+#include <cstdint>
+#include <cstring>
+#include <limits>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #if defined(_WIN32)
@@ -18,6 +22,7 @@
 #define NOMINMAX
 #endif
 #include <windows.h>
+#include <cderr.h>
 #include <commdlg.h>
 #include <shobjidl.h>
 #endif
@@ -44,9 +49,12 @@ constexpr wchar_t kObjFileFilter[] =
 constexpr wchar_t kObjDefaultExtension[] = L"obj";
 constexpr std::size_t kPathBufferCharacters = 32768U;
 
-std::vector<wchar_t> path_buffer(const std::filesystem::path &initial_path) {
-  std::vector<wchar_t> buffer(kPathBufferCharacters, L'\0');
+std::vector<wchar_t> path_buffer(const std::filesystem::path &initial_path,
+                                 std::size_t capacity =
+                                     kPathBufferCharacters) {
   const std::wstring text = initial_path.wstring();
+  capacity = std::max(capacity, text.size() + 1U);
+  std::vector<wchar_t> buffer(capacity, L'\0');
   if (!text.empty()) {
     const std::size_t count = std::min(text.size(), buffer.size() - 1U);
     std::copy_n(text.begin(), count, buffer.begin());
@@ -131,6 +139,76 @@ choose_folder(const PlatformFileDialogOptions &options) {
 #endif
 
 } // namespace
+
+namespace platform_file_dialog_detail {
+
+std::optional<std::vector<std::filesystem::path>>
+parse_explorer_file_dialog_selection(const bool accepted,
+                                     const std::span<const wchar_t> buffer) {
+  if (!accepted || buffer.empty() || buffer.front() == L'\0') {
+    return std::nullopt;
+  }
+
+  const auto first_terminator =
+      std::find(buffer.begin(), buffer.end(), L'\0');
+  if (first_terminator == buffer.end()) {
+    return std::nullopt;
+  }
+
+  const std::wstring_view first(buffer.data(),
+                                static_cast<std::size_t>(
+                                    first_terminator - buffer.begin()));
+  const auto next = first_terminator + 1;
+  if (next == buffer.end() || *next == L'\0') {
+    return std::vector<std::filesystem::path>{std::filesystem::path(first)};
+  }
+
+  const std::filesystem::path directory(first);
+  std::vector<std::filesystem::path> selected;
+  auto segment_begin = next;
+  while (segment_begin != buffer.end() && *segment_begin != L'\0') {
+    const auto segment_end =
+        std::find(segment_begin, buffer.end(), L'\0');
+    if (segment_end == buffer.end()) {
+      return std::nullopt;
+    }
+    selected.emplace_back(
+        directory /
+        std::filesystem::path(std::wstring_view(
+            &*segment_begin,
+            static_cast<std::size_t>(segment_end - segment_begin))));
+    segment_begin = segment_end + 1;
+  }
+  if (selected.empty()) {
+    return std::nullopt;
+  }
+  return selected;
+}
+
+std::optional<std::size_t> next_file_dialog_buffer_capacity(
+    const std::size_t current_capacity,
+    const std::size_t reported_required_capacity) {
+  constexpr std::size_t kMaximumDialogCapacity =
+      static_cast<std::size_t>(std::numeric_limits<std::uint32_t>::max());
+  if (current_capacity == 0U ||
+      reported_required_capacity > kMaximumDialogCapacity ||
+      current_capacity >= kMaximumDialogCapacity) {
+    return std::nullopt;
+  }
+
+  const std::size_t doubled =
+      current_capacity > kMaximumDialogCapacity / 2U
+          ? kMaximumDialogCapacity
+          : current_capacity * 2U;
+  const std::size_t next =
+      std::max(doubled, reported_required_capacity);
+  if (next <= current_capacity || next > kMaximumDialogCapacity) {
+    return std::nullopt;
+  }
+  return next;
+}
+
+} // namespace platform_file_dialog_detail
 
 std::optional<std::filesystem::path>
 platform_open_project_file_dialog(const PlatformFileDialogOptions &options) {
@@ -268,6 +346,43 @@ platform_open_texture_file_dialog(const PlatformFileDialogOptions &options) {
     return std::nullopt;
   }
   return std::filesystem::path(buffer.data());
+#else
+  (void)options;
+  return std::nullopt;
+#endif
+}
+
+std::optional<std::vector<std::filesystem::path>>
+platform_open_texture_files_dialog(const PlatformFileDialogOptions &options) {
+#if defined(_WIN32)
+  std::size_t capacity = kPathBufferCharacters;
+  const std::wstring initial_directory = options.initial_directory.wstring();
+  for (;;) {
+    std::vector<wchar_t> buffer =
+        path_buffer(options.initial_file_name, capacity);
+    OPENFILENAMEW dialog = base_open_file_name(
+        options, buffer, initial_directory, kTextureFileFilter, nullptr);
+    dialog.Flags |= OFN_FILEMUSTEXIST | OFN_ALLOWMULTISELECT;
+    if (GetOpenFileNameW(&dialog) != FALSE) {
+      return platform_file_dialog_detail::
+          parse_explorer_file_dialog_selection(true, buffer);
+    }
+
+    if (CommDlgExtendedError() != FNERR_BUFFERTOOSMALL || buffer.empty()) {
+      return std::nullopt;
+    }
+    static_assert(sizeof(wchar_t) >= sizeof(std::uint16_t));
+    std::uint16_t reported_size = 0U;
+    std::memcpy(&reported_size, buffer.data(), sizeof(reported_size));
+    const std::size_t reported_required_capacity = reported_size;
+    const std::optional<std::size_t> next_capacity =
+        platform_file_dialog_detail::next_file_dialog_buffer_capacity(
+            capacity, reported_required_capacity);
+    if (!next_capacity.has_value()) {
+      return std::nullopt;
+    }
+    capacity = *next_capacity;
+  }
 #else
   (void)options;
   return std::nullopt;

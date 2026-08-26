@@ -644,7 +644,8 @@ QdrAtomicFileTransaction::~QdrAtomicFileTransaction() {
 }
 
 QdrAtomicWriteResult QdrAtomicFileTransaction::prepare(
-    const std::filesystem::path &target) {
+    const std::filesystem::path &target,
+    QdrAtomicWriteDisposition disposition) {
   QDR_PROFILE_FUNCTION();
   if (active_) {
     return {false, "QDR file transaction is already active."};
@@ -664,6 +665,10 @@ QdrAtomicWriteResult QdrAtomicFileTransaction::prepare(
   if (error) {
     return {false,
             system_error_message("Could not inspect QDR destination", error)};
+  }
+  if (target_exists &&
+      disposition == QdrAtomicWriteDisposition::CreateNew) {
+    return {false, "QDR destination already exists."};
   }
   if (target_exists && !std::filesystem::is_regular_file(target, error)) {
     return {false, system_error_message(
@@ -1041,7 +1046,8 @@ bool QdrAtomicFileTransaction::preserve_published_for_recovery() noexcept {
 
 QdrAtomicWriteResult write_qdr_text_atomic(
     const std::filesystem::path &target, std::string_view bytes,
-    QdrAtomicWriteValidator validate_temp) {
+    QdrAtomicWriteValidator validate_temp,
+    QdrAtomicWriteDisposition disposition) {
   QDR_PROFILE_FUNCTION();
   QdrAtomicFileTransaction transaction;
   const auto fail_after_rollback =
@@ -1055,7 +1061,7 @@ QdrAtomicWriteResult write_qdr_text_atomic(
     return failure;
   };
 
-  QdrAtomicWriteResult prepared = transaction.prepare(target);
+  QdrAtomicWriteResult prepared = transaction.prepare(target, disposition);
   if (!prepared.ok) {
     return prepared;
   }

@@ -6,6 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "ui/qt_material_browser_window.hpp"
 
+#include <QAction>
 #include <QButtonGroup>
 #include <QCloseEvent>
 #include <QHeaderView>
@@ -17,6 +18,8 @@
 #include <QLineEdit>
 #include <QListView>
 #include <QLocale>
+#include <QMenu>
+#include <QMenuBar>
 #include <QPixmap>
 #include <QScopedValueRollback>
 #include <QShowEvent>
@@ -29,17 +32,45 @@
 #include <QVBoxLayout>
 
 #include <algorithm>
+#include <array>
+#include <iterator>
 #include <utility>
 
 namespace quader {
 namespace {
 
-constexpr int kMinimumTileSize = 64;
-constexpr int kMaximumTileSize = 256;
+constexpr std::array<int, 6> kTileSizes{16, 32, 64, 128, 256, 512};
 constexpr int kDefaultTileSize = 128;
-constexpr int kTileSizeStep = 16;
+constexpr int kMaximumPreviewSize = 512;
 constexpr int kGridLabelHeight = 34;
 constexpr int kGridSpacing = 8;
+
+bool has_truevision_tga_footer(const QByteArray &encoded) {
+  static const QByteArray kSignature("TRUEVISION-XFILE.\0", 18);
+  return encoded.endsWith(kSignature);
+}
+
+int tile_size_for_index(int index) {
+  return kTileSizes[static_cast<std::size_t>(
+      std::clamp(index, 0, static_cast<int>(kTileSizes.size()) - 1))];
+}
+
+int tile_index_for_size(int tile_size) {
+  const auto upper = std::lower_bound(kTileSizes.begin(), kTileSizes.end(),
+                                      tile_size);
+  if (upper == kTileSizes.begin()) {
+    return 0;
+  }
+  if (upper == kTileSizes.end()) {
+    return static_cast<int>(kTileSizes.size()) - 1;
+  }
+
+  const auto lower = std::prev(upper);
+  const int lower_distance = tile_size - *lower;
+  const int upper_distance = *upper - tile_size;
+  const auto nearest = lower_distance <= upper_distance ? lower : upper;
+  return static_cast<int>(std::distance(kTileSizes.begin(), nearest));
+}
 
 /// Distinguishes Qt's keyboard activation from platform-dependent mouse
 /// activation so a mouse click cannot dispatch the same intent twice.
@@ -178,12 +209,25 @@ QIcon QtMaterialBrowserModel::preview_icon(int row) const {
   const QtMaterialBrowserItem &item = items_[offset];
   QImage image;
   if (!item.encoded_albedo.isEmpty()) {
-    (void)image.loadFromData(item.encoded_albedo);
+    const bool has_tga_footer =
+        has_truevision_tga_footer(item.encoded_albedo);
+    if (has_tga_footer) {
+      (void)image.loadFromData(item.encoded_albedo, "TGA");
+    } else {
+      (void)image.loadFromData(item.encoded_albedo);
+    }
+    if (image.isNull()) {
+      // A true-color TGA header can also look like a Windows cursor header,
+      // causing Qt's generic content probe to select CUR first.
+      (void)image.loadFromData(item.encoded_albedo, "TGA");
+    }
   }
   if (image.isNull()) {
     image = QImage(96, 96, QImage::Format_ARGB32_Premultiplied);
     image.fill(item.fallback_color);
   }
+  image = image.scaled(QSize(kMaximumPreviewSize, kMaximumPreviewSize),
+                       Qt::KeepAspectRatio, Qt::SmoothTransformation);
   preview_icons_[offset] = QIcon(QPixmap::fromImage(std::move(image)));
   preview_icons_ready_[offset] = true;
   return preview_icons_[offset];
@@ -263,54 +307,64 @@ bool QtMaterialBrowserProxyModel::lessThan(
 }
 
 QtMaterialBrowserWindow::QtMaterialBrowserWindow(QWidget *parent)
-    : QWidget(parent, Qt::Tool) {
+    : QMainWindow(parent, Qt::Tool) {
   setObjectName(QStringLiteral("materialBrowser.window"));
   setAttribute(Qt::WA_DeleteOnClose, false);
   setWindowFlag(Qt::WindowMaximizeButtonHint, false);
   resize(760, 520);
 
-  auto *root_layout = new QVBoxLayout(this);
+  file_menu_ = menuBar()->addMenu(QString{});
+  file_menu_->setObjectName(QStringLiteral("materialBrowser.fileMenu"));
+  import_action_ = file_menu_->addAction(QString{});
+  import_action_->setObjectName(
+      QStringLiteral("materialBrowser.file.import"));
+
+  auto *central_widget = new QWidget(this);
+  setCentralWidget(central_widget);
+  auto *root_layout = new QVBoxLayout(central_widget);
   auto *toolbar = new QHBoxLayout();
-  search_ = new QLineEdit(this);
+  search_ = new QLineEdit(central_widget);
   search_->setObjectName(QStringLiteral("materialBrowser.search"));
   search_->setClearButtonEnabled(true);
   toolbar->addWidget(search_, 1);
 
-  grid_button_ = new QToolButton(this);
+  grid_button_ = new QToolButton(central_widget);
   grid_button_->setObjectName(QStringLiteral("materialBrowser.grid"));
   grid_button_->setCheckable(true);
   grid_button_->setIcon(style()->standardIcon(QStyle::SP_FileDialogListView));
   grid_button_->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
   toolbar->addWidget(grid_button_);
-  list_button_ = new QToolButton(this);
+  list_button_ = new QToolButton(central_widget);
   list_button_->setObjectName(QStringLiteral("materialBrowser.list"));
   list_button_->setCheckable(true);
   list_button_->setIcon(
       style()->standardIcon(QStyle::SP_FileDialogDetailedView));
   list_button_->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
   toolbar->addWidget(list_button_);
-  auto *view_group = new QButtonGroup(this);
+  auto *view_group = new QButtonGroup(central_widget);
   view_group->setExclusive(true);
   view_group->addButton(grid_button_);
   view_group->addButton(list_button_);
 
-  tile_slider_ = new QSlider(Qt::Horizontal, this);
+  tile_slider_ = new QSlider(Qt::Horizontal, central_widget);
   tile_slider_->setObjectName(QStringLiteral("materialBrowser.tileSize"));
-  tile_slider_->setRange(kMinimumTileSize, kMaximumTileSize);
-  tile_slider_->setSingleStep(kTileSizeStep);
-  tile_slider_->setPageStep(kTileSizeStep);
-  tile_slider_->setValue(kDefaultTileSize);
+  tile_slider_->setRange(0, static_cast<int>(kTileSizes.size()) - 1);
+  tile_slider_->setSingleStep(1);
+  tile_slider_->setPageStep(1);
+  tile_slider_->setTickInterval(1);
+  tile_slider_->setTickPosition(QSlider::TicksBelow);
+  tile_slider_->setValue(tile_index_for_size(kDefaultTileSize));
   tile_slider_->setFixedWidth(150);
   toolbar->addWidget(tile_slider_);
   root_layout->addLayout(toolbar);
 
-  model_ = new QtMaterialBrowserModel(this);
-  proxy_ = new QtMaterialBrowserProxyModel(this);
+  model_ = new QtMaterialBrowserModel(central_widget);
+  proxy_ = new QtMaterialBrowserProxyModel(central_widget);
   proxy_->setSourceModel(model_);
   proxy_->sort(QtMaterialBrowserModel::NameColumn, Qt::AscendingOrder);
-  auto *selection = new QItemSelectionModel(proxy_, this);
+  auto *selection = new QItemSelectionModel(proxy_, central_widget);
 
-  content_stack_ = new QStackedWidget(this);
+  content_stack_ = new QStackedWidget(central_widget);
   content_stack_->setObjectName(QStringLiteral("materialBrowser.content"));
   auto *keyboard_grid =
       new KeyboardActivationView<QListView>(content_stack_);
@@ -326,6 +380,9 @@ QtMaterialBrowserWindow::QtMaterialBrowserWindow(QWidget *parent)
   grid_view_->setWordWrap(true);
   grid_view_->setSpacing(kGridSpacing);
   grid_view_->setSelectionMode(QAbstractItemView::SingleSelection);
+  grid_view_->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+  grid_view_->setVerticalScrollMode(QAbstractItemView::ScrollPerPixel);
+  grid_view_->setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
   content_stack_->addWidget(grid_view_);
 
   auto *keyboard_list =
@@ -369,11 +426,22 @@ QtMaterialBrowserWindow::QtMaterialBrowserWindow(QWidget *parent)
   });
   QObject::connect(tile_slider_, &QSlider::valueChanged, this,
                    [this](int value) {
-                     set_tile_size(value);
+                     const int tile_size = tile_size_for_index(value);
+                     grid_view_->setIconSize(QSize(tile_size, tile_size));
+                     grid_view_->setGridSize(
+                         QSize(tile_size + kGridSpacing * 2,
+                               tile_size + kGridLabelHeight +
+                                   kGridSpacing * 2));
+                     update_tile_size_text();
                      if (presentation_state_changed_) {
                        presentation_state_changed_();
                      }
                    });
+  QObject::connect(import_action_, &QAction::triggered, this, [this]() {
+    if (import_textures_) {
+      import_textures_();
+    }
+  });
   QObject::connect(grid_view_, &QListView::clicked, this,
                    [this](const QModelIndex &index) { activate_index(index); });
   QObject::connect(list_view_, &QTableView::clicked, this,
@@ -413,8 +481,9 @@ void QtMaterialBrowserWindow::set_labels(QtMaterialBrowserLabels labels) {
   list_button_->setText(labels_.list);
   list_button_->setToolTip(labels_.list);
   list_button_->setAccessibleName(labels_.list);
-  tile_slider_->setToolTip(labels_.tile_size);
-  tile_slider_->setAccessibleName(labels_.tile_size);
+  file_menu_->setTitle(labels_.file);
+  import_action_->setText(labels_.import_textures);
+  update_tile_size_text();
   model_->set_labels(labels_);
   refresh_content_page();
 }
@@ -447,6 +516,11 @@ void QtMaterialBrowserWindow::set_open_material_callback(
   open_material_ = std::move(callback);
 }
 
+void QtMaterialBrowserWindow::set_import_textures_callback(
+    ImportTexturesCallback callback) {
+  import_textures_ = std::move(callback);
+}
+
 void QtMaterialBrowserWindow::set_presentation_state_changed_callback(
     PresentationStateChangedCallback callback) {
   presentation_state_changed_ = std::move(callback);
@@ -463,20 +537,20 @@ QtMaterialBrowserViewMode QtMaterialBrowserWindow::view_mode() const {
 }
 
 int QtMaterialBrowserWindow::tile_size() const {
-  return tile_slider_->value();
+  return tile_size_for_index(tile_slider_->value());
 }
 
 void QtMaterialBrowserWindow::closeEvent(QCloseEvent *event) {
   if (presentation_state_changed_) {
     presentation_state_changed_();
   }
-  QWidget::closeEvent(event);
+  QMainWindow::closeEvent(event);
 }
 
 void QtMaterialBrowserWindow::showEvent(QShowEvent *event) {
   // Search is deliberately session-transient: each reopening starts unfiltered.
   search_->clear();
-  QWidget::showEvent(event);
+  QMainWindow::showEvent(event);
 }
 
 void QtMaterialBrowserWindow::set_view_mode(QtMaterialBrowserViewMode mode,
@@ -497,16 +571,24 @@ void QtMaterialBrowserWindow::set_view_mode(QtMaterialBrowserViewMode mode,
 }
 
 void QtMaterialBrowserWindow::set_tile_size(int tile_size) {
-  const int normalized = std::clamp(tile_size, kMinimumTileSize,
-                                    kMaximumTileSize);
+  const int normalized_index = tile_index_for_size(tile_size);
+  const int normalized_size = tile_size_for_index(normalized_index);
   {
     const QSignalBlocker blocker(tile_slider_);
-    tile_slider_->setValue(normalized);
+    tile_slider_->setValue(normalized_index);
   }
-  grid_view_->setIconSize(QSize(normalized, normalized));
+  grid_view_->setIconSize(QSize(normalized_size, normalized_size));
   grid_view_->setGridSize(
-      QSize(normalized + kGridSpacing * 2,
-            normalized + kGridLabelHeight + kGridSpacing * 2));
+      QSize(normalized_size + kGridSpacing * 2,
+            normalized_size + kGridLabelHeight + kGridSpacing * 2));
+  update_tile_size_text();
+}
+
+void QtMaterialBrowserWindow::update_tile_size_text() {
+  const QString value = QLocale().toString(tile_size());
+  const QString text = labels_.tile_size_value.arg(value);
+  tile_slider_->setToolTip(text);
+  tile_slider_->setAccessibleName(text);
 }
 
 void QtMaterialBrowserWindow::refresh_content_page() {

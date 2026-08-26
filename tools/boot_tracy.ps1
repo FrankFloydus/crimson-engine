@@ -175,6 +175,8 @@ function Assert-ProfileRuntimeDeployment {
     $runtimeDirectory = Split-Path -Parent $ExecutablePath
     $buildDirectory = Split-Path -Parent $runtimeDirectory
     $releaseBin = Join-Path $buildDirectory 'vcpkg_installed\x64-windows\bin'
+    $releaseImageFormats = Join-Path $buildDirectory `
+        'vcpkg_installed\x64-windows\Qt6\plugins\imageformats'
     foreach ($required in @(
             'Qt6Core.dll',
             'Qt6Gui.dll',
@@ -182,13 +184,24 @@ function Assert-ProfileRuntimeDeployment {
             'double-conversion.dll',
             'fmt.dll',
             'icuuc.dll',
+            'jpeg62.dll',
+            'libsharpyuv.dll',
             'libpng16.dll',
+            'libwebp.dll',
+            'libwebpdemux.dll',
+            'libwebpmux.dll',
             'md4c.dll',
             'pcre2-16.dll',
             'spdlog.dll',
             'z.dll',
             'zstd.dll',
-            'platforms\qwindows.dll')) {
+            'platforms\qwindows.dll',
+            'imageformats\qgif.dll',
+            'imageformats\qjpeg.dll',
+            'imageformats\qtga.dll',
+            'imageformats\qtiff.dll',
+            'imageformats\qwebp.dll',
+            'tiff.dll')) {
         $requiredPath = Join-Path $runtimeDirectory $required
         if (-not (Test-Path -LiteralPath $requiredPath -PathType Leaf)) {
             throw "The Debug profiling runtime is missing Release Qt file: $requiredPath"
@@ -213,7 +226,11 @@ function Assert-ProfileRuntimeDeployment {
             'crashpad_handler.exe',
             'platforms\qwindowsd.dll',
             'imageformats\qgifd.dll',
-            'imageformats\qicod.dll')) {
+            'imageformats\qicod.dll',
+            'imageformats\qjpegd.dll',
+            'imageformats\qtgad.dll',
+            'imageformats\qtiffd.dll',
+            'imageformats\qwebpd.dll')) {
         $forbiddenPath = Join-Path $runtimeDirectory $forbidden
         if (Test-Path -LiteralPath $forbiddenPath -PathType Leaf) {
             throw "The Debug profiling runtime still contains slow Qt Debug file: $forbiddenPath"
@@ -226,10 +243,16 @@ function Assert-ProfileRuntimeDeployment {
             'Qt6Widgets.dll',
             'double-conversion.dll',
             'fmt.dll',
+            'jpeg62.dll',
+            'libsharpyuv.dll',
             'libpng16.dll',
+            'libwebp.dll',
+            'libwebpdemux.dll',
+            'libwebpmux.dll',
             'md4c.dll',
             'pcre2-16.dll',
             'spdlog.dll',
+            'tiff.dll',
             'z.dll',
             'zstd.dll')) {
         $deployedPath = Join-Path $runtimeDirectory $releaseRuntime
@@ -241,6 +264,24 @@ function Assert-ProfileRuntimeDeployment {
         $releaseHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $releasePath).Hash
         if ($deployedHash -ne $releaseHash) {
             throw "The Debug profiling runtime is not the Release artifact for '$releaseRuntime': $deployedPath"
+        }
+    }
+
+    foreach ($releasePlugin in @(
+            'qgif.dll',
+            'qjpeg.dll',
+            'qtga.dll',
+            'qtiff.dll',
+            'qwebp.dll')) {
+        $deployedPath = Join-Path $runtimeDirectory "imageformats\$releasePlugin"
+        $releasePath = Join-Path $releaseImageFormats $releasePlugin
+        if (-not (Test-Path -LiteralPath $releasePath -PathType Leaf)) {
+            throw "The configured Release image plugin source is missing: $releasePath"
+        }
+        $deployedHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $deployedPath).Hash
+        $releaseHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $releasePath).Hash
+        if ($deployedHash -ne $releaseHash) {
+            throw "The Debug profiling runtime is not the Release image plugin '$releasePlugin': $deployedPath"
         }
     }
 }

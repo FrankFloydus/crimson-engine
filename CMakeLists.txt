@@ -138,6 +138,23 @@ if(QUADER_BUILD_NATIVE_APP)
     find_package(flatbuffers CONFIG REQUIRED)
     find_package(zstd CONFIG REQUIRED)
     find_package(Qt6 CONFIG REQUIRED COMPONENTS Core Gui Widgets)
+    if(WIN32)
+        set(QUADER_REQUIRED_QT_IMAGE_FORMAT_PLUGIN_TARGETS
+            Qt6::QGifPlugin
+            Qt6::QJpegPlugin
+            Qt6::QTgaPlugin
+            Qt6::QTiffPlugin
+            Qt6::QWebpPlugin)
+        foreach(_quader_qt_image_plugin_target IN LISTS
+                QUADER_REQUIRED_QT_IMAGE_FORMAT_PLUGIN_TARGETS)
+            if(NOT TARGET ${_quader_qt_image_plugin_target})
+                message(FATAL_ERROR
+                    "Required Qt image-format plugin target is unavailable: "
+                    "${_quader_qt_image_plugin_target}. Verify the qtbase[jpeg] "
+                    "and qtimageformats[tiff,webp] manifest features.")
+            endif()
+        endforeach()
+    endif()
     if(QUADER_ENABLE_SENTRY)
         find_package(sentry CONFIG REQUIRED)
         if(WIN32 AND TARGET sentry_crashpad::crashpad_wer)
@@ -429,6 +446,8 @@ endif()
 add_library(quader_project_session STATIC
     src/editor/instances/project_clipboard_service.cpp
     src/editor/material/project_image_decoder.cpp
+    src/editor/material/project_material_import_service.cpp
+    src/editor/material/project_material_persistence.cpp
     src/editor/material/standard_material_edit_session_service.cpp
     src/editor/session/project_session.cpp)
 quader_configure_core_module(quader_project_session)
@@ -1060,6 +1079,27 @@ if(WIN32)
             REQUIRED)
     endif()
 
+    set(_QUADER_VCPKG_RELEASE_BIN
+        "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/bin")
+    set(QUADER_REQUIRED_QT_CODEC_RUNTIME_DLLS
+        jpeg62.dll
+        libsharpyuv.dll
+        libwebp.dll
+        libwebpdemux.dll
+        libwebpmux.dll
+        tiff.dll)
+    set(_QUADER_QT_CODEC_RUNTIME_SOURCE_PATHS)
+    foreach(_quader_codec_runtime_dll IN LISTS
+            QUADER_REQUIRED_QT_CODEC_RUNTIME_DLLS)
+        set(_quader_codec_runtime_source
+            "${_QUADER_VCPKG_RELEASE_BIN}/${_quader_codec_runtime_dll}")
+        quader_require_existing_path(
+            "${_quader_codec_runtime_source}"
+            "Release Qt image-codec runtime dependency")
+        list(APPEND _QUADER_QT_CODEC_RUNTIME_SOURCE_PATHS
+            "${_quader_codec_runtime_source}")
+    endforeach()
+
     # Remove every DLL name supplied by either vcpkg runtime before deploying.
     # This prevents a newer stale Debug DLL from surviving app-local's
     # timestamp check when the Debug-named Profile directory is rebuilt.
@@ -1080,43 +1120,55 @@ if(WIN32)
             gtest.dll
             gtest_main.dll)
     endif()
-    set(_QUADER_STALE_RUNTIME_PATHS)
-    foreach(_quader_runtime_dll IN LISTS _QUADER_VCPKG_RUNTIME_DLLS)
-        list(APPEND _QUADER_STALE_RUNTIME_PATHS
-            "$<TARGET_FILE_DIR:quader>/${_quader_runtime_dll}")
-    endforeach()
 
-    add_custom_command(TARGET quader PRE_BUILD
-        COMMAND "${CMAKE_COMMAND}" -E rm -f
-                ${_QUADER_STALE_RUNTIME_PATHS}
-        COMMAND "${CMAKE_COMMAND}" -E remove_directory
-                "$<TARGET_FILE_DIR:quader>/imageformats"
-        COMMAND "${CMAKE_COMMAND}" -E remove_directory
-                "$<TARGET_FILE_DIR:quader>/platforms"
-        COMMENT "Removing stale vcpkg and Qt runtime files from the native output"
-        COMMAND_EXPAND_LISTS
-        VERBATIM)
-    add_custom_command(TARGET quader POST_BUILD
-        COMMAND "$<TARGET_FILE:Qt6::windeployqt>"
-                --force
-                --release
-                --dir "$<TARGET_FILE_DIR:quader>"
-                --no-translations
-                --skip-plugin-types styles
-                --include-plugins qwindows
-                "$<TARGET_FILE:quader>"
-        COMMENT "Deploying the Qt runtime and qwindows platform plugin"
-        VERBATIM)
-    add_custom_command(TARGET quader POST_BUILD
-        COMMAND "${Z_VCPKG_POWERSHELL_PATH}"
-                -NoProfile
-                -ExecutionPolicy Bypass
-                -File "${_QUADER_VCPKG_APPLOCAL_SCRIPT}"
-                -targetBinary "$<TARGET_FILE:quader>"
-                -installedDir
-                "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/bin"
-        COMMENT "Deploying the complete recursive Release runtime dependency closure"
-        VERBATIM)
+    function(quader_deploy_windows_qt_runtime target)
+        set(_QUADER_STALE_RUNTIME_PATHS)
+        foreach(_quader_runtime_dll IN LISTS _QUADER_VCPKG_RUNTIME_DLLS)
+            list(APPEND _QUADER_STALE_RUNTIME_PATHS
+                "$<TARGET_FILE_DIR:${target}>/${_quader_runtime_dll}")
+        endforeach()
+
+        add_custom_command(TARGET ${target} PRE_BUILD
+            COMMAND "${CMAKE_COMMAND}" -E rm -f
+                    ${_QUADER_STALE_RUNTIME_PATHS}
+            COMMAND "${CMAKE_COMMAND}" -E remove_directory
+                    "$<TARGET_FILE_DIR:${target}>/imageformats"
+            COMMAND "${CMAKE_COMMAND}" -E remove_directory
+                    "$<TARGET_FILE_DIR:${target}>/platforms"
+            COMMENT "Removing stale vcpkg and Qt runtime files for ${target}"
+            COMMAND_EXPAND_LISTS
+            VERBATIM)
+        add_custom_command(TARGET ${target} POST_BUILD
+            COMMAND "$<TARGET_FILE:Qt6::windeployqt>"
+                    --force
+                    --release
+                    --dir "$<TARGET_FILE_DIR:${target}>"
+                    --no-translations
+                    --skip-plugin-types styles
+                    --add-plugin-types imageformats
+                    --include-plugins qwindows,qgif,qjpeg,qtga,qtiff,qwebp
+                    "$<TARGET_FILE:${target}>"
+            COMMENT "Deploying Release Qt and required image-format plugins for ${target}"
+            VERBATIM)
+        add_custom_command(TARGET ${target} POST_BUILD
+            COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+                    ${_QUADER_QT_CODEC_RUNTIME_SOURCE_PATHS}
+                    "$<TARGET_FILE_DIR:${target}>"
+            COMMENT "Deploying Release image-codec runtime dependencies for ${target}"
+            COMMAND_EXPAND_LISTS
+            VERBATIM)
+        add_custom_command(TARGET ${target} POST_BUILD
+            COMMAND "${Z_VCPKG_POWERSHELL_PATH}"
+                    -NoProfile
+                    -ExecutionPolicy Bypass
+                    -File "${_QUADER_VCPKG_APPLOCAL_SCRIPT}"
+                    -targetBinary "$<TARGET_FILE:${target}>"
+                    -installedDir "${_QUADER_VCPKG_RELEASE_BIN}"
+            COMMENT "Deploying the complete recursive Release runtime dependency closure for ${target}"
+            VERBATIM)
+    endfunction()
+
+    quader_deploy_windows_qt_runtime(quader)
 endif()
 
 if(MSVC)
@@ -1364,6 +1416,9 @@ if(QUADER_BUILD_TESTS)
             QUADER_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
     target_link_libraries(quader_tests PRIVATE quader_runtime GTest::gtest)
     quader_deploy_test_runtime_dlls(quader_tests)
+    if(WIN32)
+        quader_deploy_windows_qt_runtime(quader_tests)
+    endif()
     add_dependencies(quader_tests quader_runtime_resources)
     add_test(NAME quader_tests COMMAND quader_tests)
 
