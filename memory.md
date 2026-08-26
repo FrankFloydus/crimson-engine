@@ -6838,3 +6838,42 @@ and Release app builds pass. The mandatory regression gate and full Debug CTest 
 seven pre-existing instruction/build/architecture guardrails and five unrelated Linear Array and
 overlay tests; all task-owned tests pass. Native UI smoke was interrupted by the user before visual
 confirmation.
+
+## 2026-08-26 - Snap To Floor Surface Queries
+
+Task/context: object and vertex selections needed deterministic world-down placement against the
+visible authored scene, including shared instances and imported meshes, without introducing a
+simulation dependency for an editor-only geometric query.
+
+Invariant:
+
+- `src/editor/placement/SceneSurfaceQuery` owns native renderer-neutral CPU-triangle surface
+  queries. It freezes one immutable receiver snapshot per operation, shares geometry-keyed local
+  BLAS data across identical payloads and formal occurrences, builds a revision-keyed world TLAS,
+  performs exact two-sided nearest-hit tests with stable identity ties, and reuses one query scratch
+  buffer for a projection batch. Selected source geometry is excluded from the frozen snapshot.
+- `SnapToFloorService` resolves both workflows against that snapshot. Object mode promotes nested
+  sources, samples each visible descendant AABB at its world bottom-center, and commits one atomic
+  transform command. Vertex mode resolves every selected SDK vertex in world space and commits one
+  atomic portable position batch through a captured modeling memento. Exact contact is a no-op;
+  misses use world Y=0; redo restores captured results and never reruns the query.
+- Overlay picking and placement share the neutral `quader::modeling::neutral::Bvh`; do not create a
+  second triangle acceleration implementation. Cache construction stays lazy in command execution,
+  never command availability or UI refresh.
+- Jolt remains deferred until Quader owns persistent rigid bodies, collision response, settling, or
+  simulation-driven placement. A later native physics domain must cache collision shapes from
+  scene/asset geometry and still commit placement through scene transform commands. This geometric
+  feature deliberately makes no Jolt, vcpkg, CMake dependency, or third-party license change.
+
+Owners: native editor placement services and scene/session revisions for query participation and
+caching; the portable modeling core for vertex state mutation; document/modeling history owners for
+atomic undo/redo; render overlay code as a consumer of the shared neutral BVH.
+
+Verification: the focused Snap/API/query/command contract suite passes 30/30. The opt-in dense
+projection benchmark casts 4,096 rays per batch, reports exact brute-force parity, reuses one
+scratch buffer, rebuilds no snapshot/TLAS/BLAS on warm runs, and measured a 1.312 ms warm average
+versus 14.074 ms cold average on this workstation without imposing an absolute-time gate. The
+mandatory regression gate and explicit full Debug CTest keep all modeling-domain, SDK consumer,
+SDK parity, command-contract, and task-owned tests green; they remain red only on the same seven
+pre-existing instruction/build/architecture guardrails and five unrelated Linear Array/overlay
+tests.

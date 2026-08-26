@@ -27,6 +27,7 @@
 #include <cmath>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <optional>
 #include <span>
 #include <string>
@@ -4685,7 +4686,8 @@ TEST(EditorApiTests, ModelingActionSetExposesActiveOperationPanelForSelectionMod
   ASSERT_NE(object_panel, nullptr);
   EXPECT_EQ(object_panel->visibility, quader::QuaderActionVisibility::Enabled);
   ASSERT_FALSE(object_panel->actions.empty());
-  EXPECT_EQ(object_panel->actions.front().action_id, "invert_mesh");
+  EXPECT_EQ(object_panel->actions.front().action_id, "snap_meshes_to_floor");
+  EXPECT_FALSE(object_panel->actions.front().rebuilds_mesh_on_success);
   const quader::QuaderActionItem *combine =
       find_action_item(*object_panel, "combine_mesh");
   ASSERT_NE(combine, nullptr);
@@ -4716,6 +4718,270 @@ TEST(EditorApiTests, ModelingActionSetExposesActiveOperationPanelForSelectionMod
   EXPECT_TRUE(group_harness.editor.modeling()
                   .available_action_set(query)
                   .panels.empty());
+}
+
+TEST(EditorApiTests,
+     SnapToFloorCommandsUseDedicatedIdsUnassignedScopesAndNativeActions) {
+  CommandTestHarness object_harness;
+  setup_selection_for_mode(object_harness.editor,
+                           quader::QuaderSelectionMode::Object);
+
+  constexpr std::array kCommands{
+      quader::quader_command::kModelingSnapMeshesToFloor,
+      quader::quader_command::kModelingSnapVerticesToFloor,
+  };
+  const std::unordered_set<std::string> typed = typed_command_ids();
+  for (const quader::QuaderCommandId command : kCommands) {
+    EXPECT_TRUE(typed.contains(std::string(command.string())));
+    const std::optional<quader::QuaderCommandDescriptor> descriptor =
+        object_harness.editor.commands().descriptor(command);
+    ASSERT_TRUE(descriptor.has_value()) << command.string();
+    EXPECT_TRUE(descriptor->shortcut.empty()) << command.string();
+  }
+
+  EXPECT_EQ(object_harness.editor.commands().command_id_for_modeling_action(
+                "snap_meshes_to_floor"),
+            quader::quader_command::kModelingSnapMeshesToFloor.string());
+  EXPECT_EQ(object_harness.editor.commands().command_id_for_modeling_action(
+                "snap_vertices_to_floor"),
+            quader::quader_command::kModelingSnapVerticesToFloor.string());
+  EXPECT_EQ(object_harness.editor.commands()
+                .descriptor(quader::quader_command::kModelingSnapMeshesToFloor)
+                ->label,
+            "Snap Meshes to Floor");
+  EXPECT_EQ(
+      object_harness.editor.commands()
+          .descriptor(quader::quader_command::kModelingSnapVerticesToFloor)
+          ->label,
+      "Snap Vertices to Floor");
+
+  const std::vector<quader::QuaderKeybindingCatalogEntry> catalog =
+      object_harness.editor.commands().keybinding_catalog();
+  const quader::QuaderKeybindingCatalogEntry *mesh_keybinding =
+      find_keybinding_catalog_entry(
+          catalog,
+          quader::quader_command::kModelingSnapMeshesToFloor.string());
+  const quader::QuaderKeybindingCatalogEntry *vertex_keybinding =
+      find_keybinding_catalog_entry(
+          catalog,
+          quader::quader_command::kModelingSnapVerticesToFloor.string());
+  ASSERT_NE(mesh_keybinding, nullptr);
+  ASSERT_NE(vertex_keybinding, nullptr);
+  EXPECT_EQ(mesh_keybinding->scope_id, "viewport.selection.object");
+  EXPECT_EQ(vertex_keybinding->scope_id, "viewport.selection.vertex");
+  EXPECT_TRUE(mesh_keybinding->default_shortcut.empty());
+  EXPECT_TRUE(vertex_keybinding->default_shortcut.empty());
+  EXPECT_TRUE(mesh_keybinding->unassigned);
+  EXPECT_TRUE(vertex_keybinding->unassigned);
+
+  const quader::QuaderActionQuery operations_query{
+      .surface = quader::QuaderActionSurface::OperationsPanel,
+      .include_disabled = true,
+  };
+  const quader::QuaderActionSet object_actions =
+      object_harness.editor.modeling().available_action_set(operations_query);
+  const quader::QuaderActionPanel *object_panel = find_action_panel(
+      object_actions, "object_operations");
+  ASSERT_NE(object_panel, nullptr);
+  ASSERT_FALSE(object_panel->actions.empty());
+  const quader::QuaderActionItem &mesh_action = object_panel->actions.front();
+  EXPECT_EQ(mesh_action.action_id, "snap_meshes_to_floor");
+  EXPECT_EQ(mesh_action.label, "Snap Meshes to Floor");
+  EXPECT_TRUE(mesh_action.operation_id.empty());
+  EXPECT_EQ(mesh_action.kind, quader::QuaderActionKind::Operation);
+  EXPECT_FALSE(mesh_action.rebuilds_mesh_on_success);
+
+  CommandTestHarness vertex_harness;
+  setup_selection_for_mode(vertex_harness.editor,
+                           quader::QuaderSelectionMode::Vertex);
+  const quader::QuaderActionSet vertex_actions =
+      vertex_harness.editor.modeling().available_action_set(operations_query);
+  const quader::QuaderActionPanel *vertex_panel = find_action_panel(
+      vertex_actions, "vertex_operations");
+  ASSERT_NE(vertex_panel, nullptr);
+  const auto snap_active = std::find_if(
+      vertex_panel->actions.begin(), vertex_panel->actions.end(),
+      [](const auto &action) {
+        return action.action_id == "snap_vertices_to_active";
+      });
+  ASSERT_NE(snap_active, vertex_panel->actions.end());
+  const auto snap_floor = std::find_if(
+      vertex_panel->actions.begin(), vertex_panel->actions.end(),
+      [](const auto &action) {
+        return action.action_id == "snap_vertices_to_floor";
+      });
+  ASSERT_NE(snap_floor, vertex_panel->actions.end());
+  EXPECT_EQ(std::distance(vertex_panel->actions.begin(), snap_floor),
+            std::distance(vertex_panel->actions.begin(), snap_active) + 1);
+  EXPECT_EQ(snap_floor->label, "Snap Vertices to Floor");
+  EXPECT_TRUE(snap_floor->operation_id.empty());
+  EXPECT_TRUE(snap_floor->rebuilds_mesh_on_success);
+
+  const quader::QuaderActionQuery context_query{
+      .surface = quader::QuaderActionSurface::ViewportContextMenu,
+      .include_disabled = true,
+  };
+  const quader::QuaderActionSet object_context =
+      object_harness.editor.modeling().available_action_set(context_query);
+  const quader::QuaderActionPanel *object_context_panel =
+      find_action_panel(object_context, "viewport_context_menu");
+  ASSERT_NE(object_context_panel, nullptr);
+  ASSERT_FALSE(object_context_panel->actions.empty());
+  EXPECT_EQ(object_context_panel->actions.front().action_id,
+            "snap_meshes_to_floor");
+
+  const quader::QuaderActionSet vertex_context =
+      vertex_harness.editor.modeling().available_action_set(context_query);
+  const quader::QuaderActionPanel *vertex_context_panel =
+      find_action_panel(vertex_context, "viewport_context_menu");
+  ASSERT_NE(vertex_context_panel, nullptr);
+  const auto context_snap_active = std::find_if(
+      vertex_context_panel->actions.begin(),
+      vertex_context_panel->actions.end(), [](const auto &action) {
+        return action.action_id == "snap_vertices_to_active";
+      });
+  const auto context_snap_floor = std::find_if(
+      vertex_context_panel->actions.begin(),
+      vertex_context_panel->actions.end(), [](const auto &action) {
+        return action.action_id == "snap_vertices_to_floor";
+      });
+  ASSERT_NE(context_snap_active, vertex_context_panel->actions.end());
+  ASSERT_NE(context_snap_floor, vertex_context_panel->actions.end());
+  EXPECT_EQ(
+      std::distance(vertex_context_panel->actions.begin(),
+                    context_snap_floor),
+      std::distance(vertex_context_panel->actions.begin(),
+                    context_snap_active) +
+          1);
+
+  CommandTestHarness empty_harness;
+  const quader::QuaderActionSet empty_object_actions =
+      empty_harness.editor.modeling().available_action_set(operations_query);
+  const quader::QuaderActionPanel *empty_object_panel =
+      find_action_panel(empty_object_actions, "object_operations");
+  ASSERT_NE(empty_object_panel, nullptr);
+  const quader::QuaderActionItem *disabled_mesh =
+      find_action_item(*empty_object_panel, "snap_meshes_to_floor");
+  ASSERT_NE(disabled_mesh, nullptr);
+  EXPECT_EQ(disabled_mesh->visibility,
+            quader::QuaderActionVisibility::Disabled);
+  EXPECT_EQ(disabled_mesh->disabled_reason_key,
+            "modeling.action.disabled.snap_meshes_to_floor_selection");
+
+  ASSERT_TRUE(empty_harness.editor.selection()
+                  .set_mode(quader::QuaderSelectionMode::Vertex)
+                  .ok());
+  const quader::QuaderActionSet empty_vertex_actions =
+      empty_harness.editor.modeling().available_action_set(operations_query);
+  const quader::QuaderActionPanel *empty_vertex_panel =
+      find_action_panel(empty_vertex_actions, "vertex_operations");
+  ASSERT_NE(empty_vertex_panel, nullptr);
+  const quader::QuaderActionItem *disabled_vertex =
+      find_action_item(*empty_vertex_panel, "snap_vertices_to_floor");
+  ASSERT_NE(disabled_vertex, nullptr);
+  EXPECT_EQ(disabled_vertex->visibility,
+            quader::QuaderActionVisibility::Disabled);
+  EXPECT_EQ(disabled_vertex->disabled_reason_key,
+            "modeling.action.disabled.snap_vertices_to_floor_selection");
+}
+
+TEST(EditorApiTests,
+     SnapToFloorSelectionHandlesReplaceSelectionAndRoutePublicIntent) {
+  {
+    CommandTestHarness harness;
+    const quader::QuaderModelingObjectRef source =
+        create_selected_box(harness.editor, "Object Handle Source");
+    ASSERT_TRUE(harness.editor.modeling()
+                    .mesh(source)
+                    .transform()
+                    .translate({0.0f, 5.0f, 0.0f})
+                    .ok());
+    const quader::QuaderModelingObjectRef receiver =
+        create_selected_box(harness.editor, "Object Handle Receiver");
+    ASSERT_EQ(harness.editor.selection().summary().active_object_id,
+              receiver.modeling_object_id);
+
+    const quader::QuaderApiVoidResult snapped =
+        harness.editor.modeling().mesh(source).select().snap_to_floor();
+    ASSERT_TRUE(snapped.ok()) << snapped.error_message();
+    EXPECT_TRUE(snapped.changed());
+    const quader::QuaderSelectionSummary selection =
+        harness.editor.selection().summary();
+    EXPECT_EQ(selection.mode, quader::QuaderSelectionMode::Object);
+    EXPECT_EQ(selection.selected_object_count, 1u);
+    EXPECT_EQ(selection.active_object_id, source.modeling_object_id);
+  }
+
+  {
+    CommandTestHarness harness;
+    const quader::QuaderModelingObjectRef source =
+        create_selected_box(harness.editor, "Vertex Handle Source");
+    ASSERT_TRUE(harness.editor.modeling()
+                    .mesh(source)
+                    .transform()
+                    .translate({0.0f, 5.0f, 0.0f})
+                    .ok());
+    const quader::QuaderModelingObjectRef receiver =
+        create_selected_box(harness.editor, "Vertex Handle Receiver");
+    ASSERT_EQ(harness.editor.selection().summary().active_object_id,
+              receiver.modeling_object_id);
+
+    constexpr quader::QuaderElementId kVertex = 1;
+    const quader::QuaderApiVoidResult snapped = harness.editor.modeling()
+                                                      .mesh(source)
+                                                      .vertices()
+                                                      .only({kVertex})
+                                                      .snap_to_floor();
+    ASSERT_TRUE(snapped.ok()) << snapped.error_message();
+    EXPECT_TRUE(snapped.changed());
+    const quader::QuaderSelectionSummary selection =
+        harness.editor.selection().summary();
+    EXPECT_EQ(selection.mode, quader::QuaderSelectionMode::Vertex);
+    EXPECT_EQ(selection.selected_vertex_count, 1u);
+    EXPECT_EQ(selection.active_object_id, source.modeling_object_id);
+    EXPECT_EQ(selection.active_vertex_id, kVertex);
+  }
+}
+
+TEST(EditorApiTests,
+     SnapToFloorStaysDisabledWhileAModelingPreviewOwnsMutation) {
+  CommandTestHarness harness;
+  setup_selection_for_mode(harness.editor, quader::QuaderSelectionMode::Object);
+  const std::string preview_command =
+      harness.editor.commands().command_id_for_modeling_action("half_cut");
+  ASSERT_TRUE(harness.editor.commands().execute(preview_command).ok());
+  ASSERT_TRUE(harness.editor.modeling().can_cancel_active_tool_or_preview());
+
+  EXPECT_FALSE(harness.editor.modeling().can_snap_selected_meshes_to_floor());
+  const std::optional<quader::QuaderCommandDescriptor> descriptor =
+      harness.editor.commands().descriptor(
+          quader::quader_command::kModelingSnapMeshesToFloor);
+  ASSERT_TRUE(descriptor.has_value());
+  EXPECT_FALSE(descriptor->enabled);
+
+  const quader::QuaderActionSet actions =
+      harness.editor.modeling().available_action_set({
+          .surface = quader::QuaderActionSurface::OperationsPanel,
+          .include_disabled = true,
+      });
+  const quader::QuaderActionPanel *panel =
+      find_action_panel(actions, "object_operations");
+  ASSERT_NE(panel, nullptr);
+  const quader::QuaderActionItem *snap =
+      find_action_item(*panel, "snap_meshes_to_floor");
+  ASSERT_NE(snap, nullptr);
+  EXPECT_EQ(snap->visibility, quader::QuaderActionVisibility::Disabled);
+  EXPECT_EQ(snap->disabled_reason_key,
+            "modeling.action.disabled.snap_to_floor_active_tool");
+
+  const quader::QuaderApiVoidResult rejected =
+      harness.editor.modeling().snap_selected_meshes_to_floor();
+  EXPECT_FALSE(rejected.ok());
+  EXPECT_FALSE(rejected.changed());
+  EXPECT_EQ(rejected.error_message(),
+            "Apply or cancel the active tool before snapping to floor.");
+  EXPECT_TRUE(harness.editor.modeling().can_cancel_active_tool_or_preview());
+  ASSERT_TRUE(harness.editor.tools().cancel_active_tool_preview().ok());
 }
 
 TEST(EditorApiTests, EnabledContextMenuOperationsExecuteThroughCommandRegistry) {
@@ -11980,7 +12246,7 @@ TEST(EditorApiTests,
 #ifndef NDEBUG
   EXPECT_EQ(commands.size(), 160u);
 #else
-  EXPECT_EQ(commands.size(), 159u);
+  EXPECT_EQ(commands.size(), 161u);
 #endif
 
   std::unordered_set<std::string> expected_target_ids;

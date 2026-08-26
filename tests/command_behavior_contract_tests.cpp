@@ -616,7 +616,7 @@ TEST(CommandBehaviorContractTests,
 #ifndef NDEBUG
   EXPECT_EQ(contracted.size(), 160u);
 #else
-  EXPECT_EQ(contracted.size(), 159u);
+  EXPECT_EQ(contracted.size(), 161u);
 #endif
 }
 

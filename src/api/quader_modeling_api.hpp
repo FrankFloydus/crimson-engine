@@ -204,6 +204,7 @@ public:
   [[nodiscard]] QuaderMeshHandle mesh() const;
   [[nodiscard]] QuaderApiResult<QuaderMeshHandle> duplicate() const;
   QuaderApiVoidResult combine_selected() const;
+  QuaderApiVoidResult snap_to_floor() const;
 
 private:
   friend class QuaderMeshHandle;
@@ -222,6 +223,7 @@ public:
   QuaderVertexSelection() = default;
   [[nodiscard]] std::span<const QuaderElementId> vertices() const;
   QuaderApiVoidResult snap_to_active() const;
+  QuaderApiVoidResult snap_to_floor() const;
   QuaderApiVoidResult merge_to_active() const;
   QuaderApiVoidResult merge_to_center() const;
   QuaderPreviewHandle merge_by_distance(QuaderMergeByDistanceArgs args = {}) const;
@@ -488,6 +490,10 @@ public:
   QuaderApiVoidResult remove_doubles();
   [[nodiscard]] bool can_copy_pivot_from_active() const;
   QuaderApiVoidResult copy_pivot_from_active();
+  [[nodiscard]] bool can_snap_selected_meshes_to_floor() const;
+  QuaderApiVoidResult snap_selected_meshes_to_floor();
+  [[nodiscard]] bool can_snap_selected_vertices_to_floor() const;
+  QuaderApiVoidResult snap_selected_vertices_to_floor();
   [[nodiscard]] bool can_align_selected_meshes() const;
   [[nodiscard]] bool can_distribute_selected_meshes() const;
   QuaderApiVoidResult align_selected_meshes(

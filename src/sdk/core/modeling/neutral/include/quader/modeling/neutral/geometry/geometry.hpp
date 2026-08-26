@@ -1629,11 +1629,12 @@ template<typename T>
 	}
 
 	const T distance = dot(edge2, qvec) * inverse_determinant;
-	if (distance < T(0)) {
+	if (distance < -epsilon) {
 		return {};
 	}
+	const T clamped_distance = std::max(distance, T(0));
 
-	return { true, distance, u, v, T(1) - u - v, ray.origin + ray.direction * distance };
+	return { true, clamped_distance, u, v, T(1) - u - v, ray.origin + ray.direction * clamped_distance };
 }
 
 [[nodiscard]] QRayTriangleHit<double> intersect_ray_triangle(const QRay3<double>& ray, const QTriangle3<double>& triangle,

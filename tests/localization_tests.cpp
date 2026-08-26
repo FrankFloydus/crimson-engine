@@ -238,6 +238,13 @@ TEST(LocalizationResourceTests, ShipsEnglishAndItalianCatalogs) {
     EXPECT_EQ(localization.text("modeling.action.copy_pivot_from_active.label",
                                 "Copy Pivot From Active"),
               "Copia pivot dall'oggetto attivo");
+    EXPECT_EQ(localization.text("modeling.action.snap_meshes_to_floor.label",
+                                "Snap Meshes to Floor"),
+              "Aggancia mesh al pavimento");
+    EXPECT_EQ(localization.text(
+                  "modeling.action.snap_vertices_to_floor.label",
+                  "Snap Vertices to Floor"),
+              "Aggancia vertici al pavimento");
     EXPECT_EQ(localization.text(
                   "modeling.action.disabled.copy_pivot_from_active_selection",
                   "Select an active mesh and at least one other editable mesh."),
@@ -278,6 +285,13 @@ TEST(LocalizationResourceTests, ShipsEnglishAndItalianCatalogs) {
     EXPECT_EQ(localization.text("modeling.action.copy_pivot_from_active.label",
                                 "Copy Pivot From Active"),
               "Copy Pivot from Active Object");
+    EXPECT_EQ(localization.text("modeling.action.snap_meshes_to_floor.label",
+                                "Snap Meshes to Floor"),
+              "Snap Meshes to Floor");
+    EXPECT_EQ(localization.text(
+                  "modeling.action.snap_vertices_to_floor.label",
+                  "Snap Vertices to Floor"),
+              "Snap Vertices to Floor");
     EXPECT_EQ(localization.text(
                   "modeling.action.disabled.copy_pivot_from_active_selection",
                   "Select an active mesh and at least one other editable mesh."),
@@ -393,9 +407,10 @@ TEST(LocalizationResourceTests,
     std::string_view english;
     std::string_view italian;
   };
-  constexpr std::array<LabelExpectation, 40> kExpectedLabels{{
+  constexpr std::array<LabelExpectation, 42> kExpectedLabels{{
       {"delete_selection", "Delete", "Elimina"},
       {"duplicate_meshes", "Duplicate", "Duplica"},
+      {"snap_meshes_to_floor", "Snap to Floor", "Aggancia al pavimento"},
       {"invert_mesh", "Flip Mesh Normals", "Inverti normali mesh"},
       {"shade_smooth_mesh", "Shade Smooth", "Ombreggiatura morbida"},
       {"shade_flat_mesh", "Shade Flat", "Ombreggiatura piatta"},
@@ -405,6 +420,8 @@ TEST(LocalizationResourceTests,
       {"copy_pivot_from_active", "Copy Pivot From Active",
        "Copia pivot dall'elemento attivo"},
       {"snap_vertices_to_active", "Snap to Vertex", "Aggancia al vertice"},
+      {"snap_vertices_to_floor", "Snap to Floor",
+       "Aggancia al pavimento"},
       {"merge_vertices", "Merge", "Unisci"},
       {"merge_vertices_at_center", "Merge at Center", "Unisci al centro"},
       {"merge_by_distance", "Merge by Distance", "Unisci per distanza"},
@@ -617,6 +634,10 @@ TEST(LocalizationResourceTests, ModelingActionDisabledReasonsUseLocaleKeys) {
       "modeling.action.disabled.active_element",
       "modeling.action.disabled.single_object",
       "modeling.action.disabled.copy_pivot_from_active_selection",
+      "modeling.action.disabled.snap_meshes_to_floor_selection",
+      "modeling.action.disabled.snap_vertices_to_floor_selection",
+      "modeling.action.disabled.snap_vertices_to_floor_instance_edit",
+      "modeling.action.disabled.snap_to_floor_active_tool",
   };
 
   ASSERT_GE(catalogs.size(), 2u);

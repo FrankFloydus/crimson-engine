@@ -6,6 +6,8 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "test_support.hpp"
 
+#include <editor/interactions/overlay_visibility.hpp>
+#include <editor/interactions/viewport_projection.hpp>
 #include <editor/modeling/runtime/session.hpp>
 #include <editor/interactions/interaction_api.hpp>
 #include <quader/modeling/neutral/polygon/document.hpp>
@@ -1677,6 +1679,51 @@ void diagnostic_edges_mark_crossing_edges()
 		"diagnostic crossing lines should preserve the owning object ids"));
 }
 
+void overlay_visibility_occluder_preserves_front_face_filtering()
+{
+	const std::array<quader::QVec3, 3> vertices {
+		quader::QVec3 { -1.0F, -1.0F, 0.0F },
+		quader::QVec3 { 1.0F, -1.0F, 0.0F },
+		quader::QVec3 { 0.0F, 1.0F, 0.0F },
+	};
+	const std::array<std::uint32_t, 3> front_indices { 0U, 1U, 2U };
+	const std::array<std::uint32_t, 3> back_indices { 0U, 2U, 1U };
+	quader_editor_core::ViewportCameraState camera;
+	camera.projection = quader_editor_core::CameraProjection::Perspective;
+	camera.transform.origin = { 0.0F, 0.0F, 2.0F };
+
+	quader_editor_core::OverlayVisibilityOccluder occluder;
+	occluder.set_mesh(vertices, front_indices);
+	ASSERT_TRUE(require_test(!occluder.empty(),
+		"overlay visibility occluder should build the shared triangle BVH"));
+	ASSERT_TRUE(require_test(!occluder.line_segment_is_visible(
+				 { -0.1F, 0.0F, -1.0F },
+				 { 0.1F, 0.0F, -1.0F },
+				 camera),
+		"front-facing occluder triangles should continue to hide geometry behind them"));
+	ASSERT_TRUE(require_test(occluder.line_segment_is_visible(
+				 { -0.1F, 0.0F, 1.0F },
+				 { 0.1F, 0.0F, 1.0F },
+				 camera),
+		"overlay geometry before the occluder should remain visible"));
+
+	occluder.set_mesh(vertices, back_indices);
+	ASSERT_TRUE(require_test(occluder.line_segment_is_visible(
+				 { -0.1F, 0.0F, -1.0F },
+				 { 0.1F, 0.0F, -1.0F },
+				 camera),
+		"overlay caller filtering should preserve the legacy front-face-only policy over a two-sided BVH"));
+
+	const std::array<quader::QVec3, 3> degenerate_vertices {
+		quader::QVec3 { 0.0F, 0.0F, 0.0F },
+		quader::QVec3 { 1.0F, 0.0F, 0.0F },
+		quader::QVec3 { 2.0F, 0.0F, 0.0F },
+	};
+	occluder.set_mesh(degenerate_vertices, front_indices);
+	ASSERT_TRUE(require_test(occluder.empty(),
+		"overlay visibility occluder should continue to ignore degenerate triangles"));
+}
+
 } // namespace
 
 TEST(QdrModelingRuntimeOverlayTests,
@@ -1798,4 +1845,9 @@ TEST(QdrModelingRuntimeOverlayTests,
 
 TEST(QdrModelingRuntimeOverlayTests, DiagnosticEdgesMarkCrossingEdges) {
 	diagnostic_edges_mark_crossing_edges();
+}
+
+TEST(QdrModelingRuntimeOverlayTests,
+	OverlayVisibilityOccluderPreservesFrontFaceFiltering) {
+	overlay_visibility_occluder_preserves_front_face_filtering();
 }

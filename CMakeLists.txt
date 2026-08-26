@@ -350,6 +350,8 @@ add_library(quader_editor_services STATIC
     src/editor/material/material_reference_service.cpp
     src/editor/modeling/services/primitive_creation_tool_service.cpp
     src/editor/pivot/pivot_tool_service.cpp
+    src/editor/placement/scene_surface_query.cpp
+    src/editor/placement/snap_to_floor_service.cpp
     src/editor/placement/viewport_point_placement_service.cpp
     src/editor/selection/editor_selection_service.cpp
     src/editor/session/project_asset_bootstrap_service.cpp
@@ -930,6 +932,12 @@ if(QUADER_BUILD_PERFORMANCE_BENCHMARKS)
     target_link_libraries(qdr_scene_workspace_performance
         PRIVATE
             quader_runtime)
+
+    add_executable(qdr_snap_to_floor_performance
+        benchmarks/modeling/qdr_snap_to_floor_performance.cpp)
+    quader_enable_common_pch(qdr_snap_to_floor_performance)
+    target_compile_features(qdr_snap_to_floor_performance PRIVATE cxx_std_20)
+    target_link_libraries(qdr_snap_to_floor_performance PRIVATE quader_runtime)
 endif()
 
 if(QUADER_ENABLE_SENTRY AND WIN32)
@@ -1348,6 +1356,8 @@ if(QUADER_BUILD_TESTS)
         tests/localization_tests.cpp
         tests/math_types_tests.cpp
         tests/mesh_arrangement_tests.cpp
+        tests/snap_to_floor_tests.cpp
+        tests/scene_surface_query_tests.cpp
         tests/copy_pivot_from_active_tests.cpp
         tests/obj_export_tests.cpp
         tests/layer_panel_tests.cpp

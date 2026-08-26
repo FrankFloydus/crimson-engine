@@ -16,6 +16,7 @@
 #include "diagnostics/profile.hpp"
 #include "editor/commands/modeling/commit_box_preview_command.hpp"
 #include "editor/history/modeling_memento_command.hpp"
+#include "editor/placement/snap_vertices_to_floor_history_command.hpp"
 #include "editor/instances/project_clipboard_service.hpp"
 #include "editor/instances/scene_instance_service.hpp"
 #include "editor/modeling/services/modeling_session_service.hpp"
@@ -32,6 +33,9 @@
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/quaternion.hpp>
 
+#include <algorithm>
+#include <array>
+#include <iterator>
 #include <memory>
 #include <span>
 #include <unordered_set>
@@ -219,30 +223,157 @@ bool entity_selection_owns_transforms(SceneSession &session) {
          selection_mode_uses_scene_document(summary.mode);
 }
 
-bool copy_pivot_from_active_is_available(const SceneSession &session) {
+bool native_modeling_action_execution_is_available(
+    const SceneSession &session) {
   return !session.native_tools().has_pending_tool() &&
-         !session.modeling().can_cancel_active_tool_or_preview() &&
+         !session.modeling().can_cancel_active_tool_or_preview();
+}
+
+bool copy_pivot_from_active_is_available(const SceneSession &session) {
+  return native_modeling_action_execution_is_available(session) &&
          session.pivot().can_copy_pivot_from_active(session.selection());
 }
 
-QuaderActionItem copy_pivot_from_active_action(const SceneSession &session) {
-  const ModelingSelectionSummary summary = session.selection().summary();
-  const QuaderActionVisibility visibility =
-      summary.mode != ModelingSelectionMode::Object
-          ? QuaderActionVisibility::Hidden
-          : copy_pivot_from_active_is_available(session)
-                ? QuaderActionVisibility::Enabled
-                : QuaderActionVisibility::Disabled;
+/// Selects the narrow owner predicate used by one native modeling action.
+enum class NativeModelingActionAvailability {
+  SnapMeshesToFloor,
+  CopyPivotFromActive,
+  SnapVerticesToFloor,
+};
+
+/// Defines relative placement inside retained native action collections.
+enum class NativeModelingActionPlacement {
+  First,
+  AfterAnchor,
+  BeforeEditActions,
+  Last,
+};
+
+/// Describes one native action injected beside catalog-generated operations.
+struct NativeModelingActionDescriptor final {
+  std::string_view action_id;
+  std::string_view label;
+  ModelingSelectionMode selection_mode = ModelingSelectionMode::Object;
+  std::string_view panel_id;
+  NativeModelingActionAvailability availability =
+      NativeModelingActionAvailability::SnapMeshesToFloor;
+  NativeModelingActionPlacement operations_placement =
+      NativeModelingActionPlacement::First;
+  NativeModelingActionPlacement context_placement =
+      NativeModelingActionPlacement::First;
+  std::string_view anchor_action_id;
+  std::string_view unavailable_reason_key;
+  std::string_view active_tool_reason_key;
+  std::string_view instance_edit_reason_key;
+  bool rebuilds_mesh_on_success = true;
+};
+
+constexpr std::array<NativeModelingActionDescriptor, 3>
+    kNativeModelingActions{{
+        {
+            .action_id = "snap_meshes_to_floor",
+            .label = "Snap Meshes to Floor",
+            .selection_mode = ModelingSelectionMode::Object,
+            .panel_id = "object_operations",
+            .availability =
+                NativeModelingActionAvailability::SnapMeshesToFloor,
+            .operations_placement = NativeModelingActionPlacement::First,
+            .context_placement = NativeModelingActionPlacement::First,
+            .unavailable_reason_key =
+                "modeling.action.disabled.snap_meshes_to_floor_selection",
+            .active_tool_reason_key =
+                "modeling.action.disabled.snap_to_floor_active_tool",
+            .instance_edit_reason_key = {},
+            .rebuilds_mesh_on_success = false,
+        },
+        {
+            .action_id = "copy_pivot_from_active",
+            .label = "Copy Pivot From Active",
+            .selection_mode = ModelingSelectionMode::Object,
+            .panel_id = "object_operations",
+            .availability =
+                NativeModelingActionAvailability::CopyPivotFromActive,
+            .operations_placement = NativeModelingActionPlacement::Last,
+            .context_placement =
+                NativeModelingActionPlacement::BeforeEditActions,
+            .unavailable_reason_key =
+                "modeling.action.disabled.copy_pivot_from_active_selection",
+            .active_tool_reason_key =
+                "modeling.action.disabled.copy_pivot_from_active_selection",
+            .instance_edit_reason_key = {},
+            .rebuilds_mesh_on_success = true,
+        },
+        {
+            .action_id = "snap_vertices_to_floor",
+            .label = "Snap Vertices to Floor",
+            .selection_mode = ModelingSelectionMode::Vertex,
+            .panel_id = "vertex_operations",
+            .availability =
+                NativeModelingActionAvailability::SnapVerticesToFloor,
+            .operations_placement =
+                NativeModelingActionPlacement::AfterAnchor,
+            .context_placement = NativeModelingActionPlacement::AfterAnchor,
+            .anchor_action_id = "snap_vertices_to_active",
+            .unavailable_reason_key =
+                "modeling.action.disabled.snap_vertices_to_floor_selection",
+            .active_tool_reason_key =
+                "modeling.action.disabled.snap_to_floor_active_tool",
+            .instance_edit_reason_key =
+                "modeling.action.disabled.snap_vertices_to_floor_instance_edit",
+            .rebuilds_mesh_on_success = true,
+        },
+    }};
+
+bool native_modeling_action_is_available(
+    const SceneSession &session,
+    NativeModelingActionAvailability availability) {
+  switch (availability) {
+  case NativeModelingActionAvailability::SnapMeshesToFloor:
+    return session.snap_to_floor().can_snap_selected_meshes_to_floor();
+  case NativeModelingActionAvailability::CopyPivotFromActive:
+    return session.pivot().can_copy_pivot_from_active(session.selection());
+  case NativeModelingActionAvailability::SnapVerticesToFloor:
+    return session.snap_to_floor().can_snap_selected_vertices_to_floor();
+  }
+  return false;
+}
+
+QuaderActionItem native_modeling_action(
+    const SceneSession &session, const ModelingSelectionSummary &summary,
+    bool execution_is_available,
+    const NativeModelingActionDescriptor &descriptor) {
+  QuaderActionVisibility visibility = QuaderActionVisibility::Hidden;
+  if (summary.mode == descriptor.selection_mode) {
+    visibility = execution_is_available &&
+                         native_modeling_action_is_available(
+                             session, descriptor.availability)
+                     ? QuaderActionVisibility::Enabled
+                     : QuaderActionVisibility::Disabled;
+  }
+  const bool blocked_by_active_tool =
+      visibility == QuaderActionVisibility::Disabled &&
+      !execution_is_available;
+  const bool blocked_by_instance_edit =
+      visibility == QuaderActionVisibility::Disabled &&
+      !descriptor.instance_edit_reason_key.empty() &&
+      session.instances().instance_edit_state().active;
+  std::string disabled_reason_key;
+  if (visibility == QuaderActionVisibility::Disabled) {
+    if (blocked_by_active_tool) {
+      disabled_reason_key = descriptor.active_tool_reason_key;
+    } else if (blocked_by_instance_edit) {
+      disabled_reason_key = descriptor.instance_edit_reason_key;
+    } else {
+      disabled_reason_key = descriptor.unavailable_reason_key;
+    }
+  }
   return {
-      .action_id = "copy_pivot_from_active",
-      .label = "Copy Pivot From Active",
+      .action_id = std::string(descriptor.action_id),
+      .label = std::string(descriptor.label),
       .kind = QuaderActionKind::Operation,
       .visibility = visibility,
-      .disabled_reason_key =
-          visibility == QuaderActionVisibility::Disabled
-              ? "modeling.action.disabled.copy_pivot_from_active_selection"
-              : std::string{},
-      .rebuilds_mesh_on_success = true,
+      .disabled_reason_key = std::move(disabled_reason_key),
+      .rebuilds_mesh_on_success = descriptor.rebuilds_mesh_on_success,
   };
 }
 
@@ -257,36 +388,71 @@ bool action_is_included(const QuaderActionItem &action,
   return true;
 }
 
-void inject_copy_pivot_from_active(QuaderActionSet &action_set,
-                                   const QuaderActionQuery &query,
-                                   const SceneSession &session) {
-  QuaderActionItem action = copy_pivot_from_active_action(session);
-  if (!action_is_included(action, query)) {
+void insert_native_modeling_action(
+    QuaderActionPanel &panel, QuaderActionItem action,
+    const NativeModelingActionDescriptor &descriptor,
+    NativeModelingActionPlacement placement) {
+  auto insertion = panel.actions.end();
+  switch (placement) {
+  case NativeModelingActionPlacement::First:
+    insertion = panel.actions.begin();
+    break;
+  case NativeModelingActionPlacement::AfterAnchor: {
+    const auto anchor = std::find_if(
+        panel.actions.begin(), panel.actions.end(), [&](const auto &candidate) {
+          return candidate.action_id == descriptor.anchor_action_id;
+        });
+    insertion = anchor == panel.actions.end() ? panel.actions.begin()
+                                               : std::next(anchor);
+    break;
+  }
+  case NativeModelingActionPlacement::BeforeEditActions:
+    insertion = std::find_if(
+        panel.actions.begin(), panel.actions.end(), [](const auto &candidate) {
+          return candidate.action_id == "delete_selection" ||
+                 candidate.action_id == "duplicate_meshes";
+        });
+    break;
+  case NativeModelingActionPlacement::Last:
+    break;
+  }
+  panel.actions.insert(insertion, std::move(action));
+}
+
+void inject_native_modeling_actions(QuaderActionSet &action_set,
+                                    const QuaderActionQuery &query,
+                                    const SceneSession &session) {
+  if (action_set.panels.empty()) {
     return;
   }
-
-  if (query.surface == QuaderActionSurface::OperationsPanel) {
-    for (QuaderActionPanel &panel : action_set.panels) {
-      if (panel.panel_id == "object_operations") {
-        panel.actions.push_back(std::move(action));
-        return;
-      }
-    }
-    return;
-  }
-
-  for (QuaderActionPanel &panel : action_set.panels) {
-    if (panel.panel_id != "viewport_context_menu") {
+  const ModelingSelectionSummary summary = session.selection().summary();
+  const bool execution_is_available =
+      native_modeling_action_execution_is_available(session);
+  for (const NativeModelingActionDescriptor &descriptor :
+       kNativeModelingActions) {
+    QuaderActionItem action = native_modeling_action(
+        session, summary, execution_is_available, descriptor);
+    if (!action_is_included(action, query)) {
       continue;
     }
-    auto insertion = panel.actions.begin();
-    while (insertion != panel.actions.end() &&
-           insertion->action_id != "delete_selection" &&
-           insertion->action_id != "duplicate_meshes") {
-      ++insertion;
+
+    const std::string_view target_panel_id =
+        query.surface == QuaderActionSurface::OperationsPanel
+            ? descriptor.panel_id
+            : std::string_view{"viewport_context_menu"};
+    const auto panel = std::find_if(
+        action_set.panels.begin(), action_set.panels.end(),
+        [&](const QuaderActionPanel &candidate) {
+          return candidate.panel_id == target_panel_id;
+        });
+    if (panel != action_set.panels.end()) {
+      const NativeModelingActionPlacement placement =
+          query.surface == QuaderActionSurface::OperationsPanel
+              ? descriptor.operations_placement
+              : descriptor.context_placement;
+      insert_native_modeling_action(*panel, std::move(action), descriptor,
+                                    placement);
     }
-    panel.actions.insert(insertion, std::move(action));
-    return;
   }
 }
 
@@ -594,6 +760,15 @@ QuaderApiVoidResult QuaderObjectSelection::combine_selected() const {
   return QuaderModelingApi(*session_, *mutations_).combine_meshes();
 }
 
+QuaderApiVoidResult QuaderObjectSelection::snap_to_floor() const {
+  QuaderApiVoidResult selected = replace();
+  if (!selected.ok()) {
+    return selected;
+  }
+  return QuaderModelingApi(*session_, *mutations_)
+      .snap_selected_meshes_to_floor();
+}
+
 QuaderVertexSelection::QuaderVertexSelection(
     std::optional<QuaderApiSession> session, QuaderApiMutationRunner &mutations,
     QuaderModelingObjectRef object, std::vector<QuaderElementId> vertices)
@@ -608,6 +783,15 @@ std::span<const QuaderElementId> QuaderVertexSelection::vertices() const {
 
 QuaderApiVoidResult QuaderVertexSelection::snap_to_active() const {
   return execute_after_replace("snap_vertices_to_active");
+}
+
+QuaderApiVoidResult QuaderVertexSelection::snap_to_floor() const {
+  QuaderApiVoidResult selected = replace();
+  if (!selected.ok()) {
+    return selected;
+  }
+  return QuaderModelingApi(*session_, *mutations_)
+      .snap_selected_vertices_to_floor();
 }
 
 QuaderApiVoidResult QuaderVertexSelection::merge_to_active() const {
@@ -1425,6 +1609,43 @@ QuaderApiVoidResult QuaderModelingApi::copy_pivot_from_active() {
       "Copy Pivot From Active");
 }
 
+bool QuaderModelingApi::can_snap_selected_meshes_to_floor() const {
+  const SceneSession &session = scene_session(session_);
+  return native_modeling_action_execution_is_available(session) &&
+         session.snap_to_floor().can_snap_selected_meshes_to_floor();
+}
+
+QuaderApiVoidResult QuaderModelingApi::snap_selected_meshes_to_floor() {
+  SceneSession &session = scene_session(session_);
+  if (!native_modeling_action_execution_is_available(session)) {
+    return invalid_api_status(
+        session_,
+        "Apply or cancel the active tool before snapping to floor.");
+  }
+  return mutations_.run_document_result(
+      session.snap_to_floor().snap_selected_meshes_to_floor(),
+      "Snap Meshes to Floor");
+}
+
+bool QuaderModelingApi::can_snap_selected_vertices_to_floor() const {
+  const SceneSession &session = scene_session(session_);
+  return native_modeling_action_execution_is_available(session) &&
+         session.snap_to_floor().can_snap_selected_vertices_to_floor();
+}
+
+QuaderApiVoidResult QuaderModelingApi::snap_selected_vertices_to_floor() {
+  SceneSession &session = scene_session(session_);
+  if (!native_modeling_action_execution_is_available(session)) {
+    return invalid_api_status(
+        session_,
+        "Apply or cancel the active tool before snapping to floor.");
+  }
+  return mutations_.run_modeling_command(
+      std::make_unique<SnapVerticesToFloorHistoryCommand>(
+          session.modeling(), session.snap_to_floor()),
+      "Snap Vertices to Floor");
+}
+
 const QuaderModelingApi::MeshArrangementAvailabilityCache &
 QuaderModelingApi::mesh_arrangement_availability() const {
   QDR_PROFILE_SCOPE("Quader modeling arrangement availability");
@@ -2131,7 +2352,7 @@ QuaderModelingApi::available_action_set(const QuaderActionQuery &query) const {
   QuaderActionSet result = to_api_action_set(
       scene_session(session_).modeling().context_action_set(
           to_modeling_action_query(query)));
-  inject_copy_pivot_from_active(result, query, scene_session(session_));
+  inject_native_modeling_actions(result, query, scene_session(session_));
   return result;
 }
 

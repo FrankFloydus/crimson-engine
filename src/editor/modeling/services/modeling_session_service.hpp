@@ -115,6 +115,8 @@ public:
   [[nodiscard]] std::uint64_t content_revision() const;
   [[nodiscard]] std::uint64_t selection_revision() const;
   [[nodiscard]] ModelingSelectionExport export_selection() const;
+  [[nodiscard]] ModelingSelectedVerticesSnapshot
+  selected_vertices_snapshot() const;
   [[nodiscard]] std::uint64_t selection_overlay_signature(
       ModelingSelectionOverlayOptions options = {}) const;
   [[nodiscard]] ViewportOverlayFrame
@@ -331,6 +333,8 @@ public:
   ModelingCommandResult move_selection(QVec3 delta);
   ModelingCommandResult transform_selection(const ModelingTransform3 &transform,
                                             QVec3 pivot);
+  ModelingCommandResult apply_resolved_vertex_positions(
+      std::span<const ModelingResolvedVertexPositionBatch> batches);
   ModelingCommandResult
   assign_material_slot_to_selection(std::uint32_t material_slot);
   ModelingCommandResult

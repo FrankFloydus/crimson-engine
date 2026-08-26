@@ -29,6 +29,7 @@ class PivotToolService;
 class PrimitiveCreationToolService;
 class RadialArrayToolService;
 class SceneInstanceService;
+class SnapToFloorService;
 class ViewportLocalVisibilityService;
 class ViewportPointPlacementService;
 
@@ -140,6 +141,8 @@ public:
   const ViewportLocalVisibilityService &viewport_local_visibility() const {
     return *viewport_local_visibility_;
   }
+  SnapToFloorService &snap_to_floor() { return *snap_to_floor_; }
+  const SnapToFloorService &snap_to_floor() const { return *snap_to_floor_; }
 
   [[nodiscard]] SceneSessionReadView read_view() const;
   [[nodiscard]] SceneContentRevisionStamp content_revision_stamp() const;
@@ -193,6 +196,7 @@ private:
   ViewportWorkspaceService viewport_workspace_{
       ViewportWorkspaceLayoutPolicy::MultiPane};
   std::unique_ptr<ViewportLocalVisibilityService> viewport_local_visibility_;
+  std::unique_ptr<SnapToFloorService> snap_to_floor_;
   std::function<void(SceneSession &)> document_replacement_finalizer_;
 };
 

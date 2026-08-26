@@ -44,10 +44,30 @@
 namespace quader {
 namespace {
 
+/// Maps one native modeling action token to its dedicated public command.
+struct NativeModelingActionCommand final {
+  std::string_view action_id;
+  QuaderCommandId command_id;
+};
+
+constexpr std::array<NativeModelingActionCommand, 3>
+    kNativeModelingActionCommands{{
+        {"snap_meshes_to_floor",
+         quader_command::kModelingSnapMeshesToFloor},
+        {"copy_pivot_from_active",
+         quader_command::kModelingCopyPivotFromActive},
+        {"snap_vertices_to_floor",
+         quader_command::kModelingSnapVerticesToFloor},
+    }};
+
 std::string command_id_for_modeling_action(std::string_view action_id) {
-  if (action_id == "copy_pivot_from_active") {
-    return std::string(
-        quader_command::kModelingCopyPivotFromActive.string());
+  const auto native_action = std::find_if(
+      kNativeModelingActionCommands.begin(),
+      kNativeModelingActionCommands.end(), [&](const auto &candidate) {
+        return candidate.action_id == action_id;
+      });
+  if (native_action != kNativeModelingActionCommands.end()) {
+    return std::string(native_action->command_id.string());
   }
   if (const CommandTool *tool = find_modeling_command_tool(action_id)) {
     return tool->public_command_target_id();
@@ -1872,6 +1892,26 @@ void QuaderCommandsApi::Impl::register_commands() {
   register_modeling_tool_public_command(quader_command::kApplyMaterial,
                                         "assign_material",
                                         "Apply Material");
+  register_command(
+      quader_command::kModelingSnapMeshesToFloor,
+      "Snap Meshes to Floor",
+      [this] { return api_.modeling().snap_selected_meshes_to_floor(); }, {},
+      [this] {
+        return api_.modeling().can_snap_selected_meshes_to_floor();
+      });
+  set_keybinding_selection_modes(
+      quader_command::kModelingSnapMeshesToFloor.string(),
+      kSelectionModeObject);
+  register_command(
+      quader_command::kModelingSnapVerticesToFloor,
+      "Snap Vertices to Floor",
+      [this] { return api_.modeling().snap_selected_vertices_to_floor(); }, {},
+      [this] {
+        return api_.modeling().can_snap_selected_vertices_to_floor();
+      });
+  set_keybinding_selection_modes(
+      quader_command::kModelingSnapVerticesToFloor.string(),
+      kSelectionModeVertex);
   register_command(
       quader_command::kModelingCopyPivotFromActive, "Copy Pivot From Active",
       [this] { return api_.modeling().copy_pivot_from_active(); }, {},

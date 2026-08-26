@@ -10,6 +10,8 @@
 #include "editor/modeling/operations/editor_operation.hpp"
 #include "scene/scene_bounds.hpp"
 
+#include <quader/modeling/payloads.hpp>
+
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -17,6 +19,7 @@
 #include <memory>
 #include <optional>
 #include <span>
+#include <string>
 #include <string_view>
 #include <vector>
 
@@ -73,6 +76,37 @@ struct ModelingMaterialSlotAssignment {
   int modeling_object_id = kInvalidModelingObjectId;
   int face_id = 0;
   std::uint32_t material_slot = 0;
+};
+
+/// Stores one selected authored vertex in its polygon-document frame.
+struct ModelingSelectedVertexSnapshot final {
+  quader::modeling::VertexId vertex{};
+  QVec3 local_position{};
+};
+
+/**
+ * Stores the immutable host projection needed to resolve selected vertices in
+ * world space without exposing an SDK document to native coordinators.
+ */
+struct ModelingSelectedVertexObjectSnapshot final {
+  int modeling_object_id = kInvalidModelingObjectId;
+  EntityId entity = kInvalidEntityId;
+  QMat4 world_from_object{};
+  QMat4 object_from_world{};
+  std::vector<ModelingSelectedVertexSnapshot> vertices;
+};
+
+/// Reports one all-or-nothing selected-vertex projection snapshot.
+struct ModelingSelectedVerticesSnapshot final {
+  bool ok = false;
+  std::string message;
+  std::vector<ModelingSelectedVertexObjectSnapshot> objects;
+};
+
+/// Carries host-resolved local vertex targets back to the SDK owner.
+struct ModelingResolvedVertexPositionBatch final {
+  int modeling_object_id = kInvalidModelingObjectId;
+  std::vector<quader::modeling::VertexPositionUpdate> positions;
 };
 
 /// Selects the portable mutation used to produce an interactive transform preview.
@@ -345,6 +379,10 @@ public:
       int modeling_object_id, int face_id, std::uint32_t material_slot);
   [[nodiscard]] ModelingCommandResult assign_material_slots_to_faces(
       std::span<const ModelingMaterialSlotAssignment> assignments);
+  [[nodiscard]] ModelingSelectedVerticesSnapshot
+  selected_vertices_snapshot() const;
+  [[nodiscard]] ModelingCommandResult apply_resolved_vertex_positions(
+      std::span<const ModelingResolvedVertexPositionBatch> batches);
 
   [[nodiscard]] ModelingCommandResult
   begin_translate_preview(bool duplicate_selected = false,

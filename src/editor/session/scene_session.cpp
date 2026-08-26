@@ -15,6 +15,7 @@
 #include "editor/modeling/services/modeling_mesh_sync_service.hpp"
 #include "editor/modeling/services/modeling_session_service.hpp"
 #include "editor/pivot/pivot_tool_service.hpp"
+#include "editor/placement/snap_to_floor_service.hpp"
 #include "editor/placement/viewport_point_placement_service.hpp"
 #include "editor/selection/editor_selection_service.hpp"
 #include "editor/tools/native_viewport_tool_coordinator.hpp"
@@ -130,6 +131,9 @@ void SceneSession::rebuild_services() {
       std::make_unique<ViewportLocalVisibilityService>(
           document_.scene(), document_.assets(), *modeling_, *instances_,
           *native_tools_, viewport_workspace_);
+  snap_to_floor_ = std::make_unique<SnapToFloorService>(
+      document_.scene(), document_.assets(), *document_commands_, *modeling_,
+      *instances_, *native_tools_, *viewport_local_visibility_);
   history_->set_change_observer([this]() {
     if (viewport_local_visibility_) {
       viewport_local_visibility_->synchronize_scene_lifecycle();
@@ -270,6 +274,7 @@ void SceneSession::replace_document_impl(
   instance_edit_context_.clear();
   preview_content_checkpoint_.reset();
   document_ = std::move(document);
+  snap_to_floor_->invalidate_surface_cache();
   {
     QDR_PROFILE_SCOPE("SceneSession replace ensure scene root");
     (void)document_.ensure_scene_root();

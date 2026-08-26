@@ -6143,6 +6143,153 @@ private:
     return selected;
   }
 
+  [[nodiscard]] ModelingSelectedVerticesSnapshot
+  selected_vertices_snapshot() const {
+    if (selection_mode_ != ModelingSelectionMode::Vertex) {
+      return {.message =
+                  "Snap Vertices to Floor only works in vertex mode."};
+    }
+    if (preview_active()) {
+      return {.message = "Commit or cancel the active preview first."};
+    }
+
+    const std::vector<ObjectId> selected = selected_sdk_objects();
+    if (selected.empty()) {
+      return {.message = "Select one or more vertices first."};
+    }
+    Result<std::vector<PolygonDocument>> documents =
+        session_.document_copies(selected);
+    if (!documents.ok() || documents.value().size() != selected.size()) {
+      return {.message = documents.error_message().empty()
+                             ? "Selected vertex documents are unavailable."
+                             : documents.error_message()};
+    }
+
+    ModelingSelectedVerticesSnapshot result;
+    result.objects.reserve(selected.size());
+    for (std::size_t index = 0; index < selected.size(); ++index) {
+      const ObjectId object = selected[index];
+      const std::optional<int> native = native_object(object);
+      const std::optional<EntityId> entity =
+          native.has_value()
+              ? object_map_.entity_for_modeling_object(*native)
+              : std::nullopt;
+      if (!native.has_value() || !entity.has_value() ||
+          !scene_.exists(*entity)) {
+        return {.message = "A selected modeling object is no longer live."};
+      }
+
+      PolygonDocument &document = documents.value()[index];
+      const PolygonSelectionSnapshot selection = document.selection();
+      if (selection.vertices.empty()) {
+        continue;
+      }
+      Result<AuthoredTopology> authored = document.authored_topology();
+      if (!authored.ok()) {
+        return {.message = authored.error_message().empty()
+                               ? "Selected vertex geometry is unavailable."
+                               : authored.error_message()};
+      }
+      const std::optional<QMat4> world =
+          modeling_object_world_transform_resolver_
+              ? modeling_object_world_transform_resolver_(*native)
+              : std::optional<QMat4>{scene_.world_transform_matrix(*entity)};
+      const std::optional<QMat4> world_inverse =
+          world.has_value() ? try_scene_matrix_inverse(*world) : std::nullopt;
+      if (!world.has_value() || !world_inverse.has_value()) {
+        return {.message =
+                    "A selected mesh has a non-invertible world transform."};
+      }
+
+      ModelingSelectedVertexObjectSnapshot object_snapshot{
+          .modeling_object_id = *native,
+          .entity = *entity,
+          .world_from_object = *world,
+          .object_from_world = *world_inverse,
+      };
+      object_snapshot.vertices.reserve(selection.vertices.size());
+      for (const VertexId selected_vertex : selection.vertices) {
+        const auto authored_vertex = std::ranges::find(
+            authored.value().vertices, selected_vertex,
+            &quader::modeling::AuthoredTopologyVertex::id);
+        if (authored_vertex == authored.value().vertices.end()) {
+          return {.message = "A selected vertex is no longer live."};
+        }
+        object_snapshot.vertices.push_back({
+            .vertex = selected_vertex,
+            .local_position = {authored_vertex->position.x,
+                               authored_vertex->position.y,
+                               authored_vertex->position.z},
+        });
+      }
+      result.objects.push_back(std::move(object_snapshot));
+    }
+    if (result.objects.empty()) {
+      return {.message = "Select one or more vertices first."};
+    }
+    result.ok = true;
+    return result;
+  }
+
+  [[nodiscard]] ModelingCommandResult apply_resolved_vertex_positions(
+      std::span<const ModelingResolvedVertexPositionBatch> batches) {
+    if (selection_mode_ != ModelingSelectionMode::Vertex) {
+      return failure("Snap Vertices to Floor only works in vertex mode.");
+    }
+    if (batches.empty()) {
+      return {.ok = true,
+              .changed = false,
+              .message = "Selected vertices are already on the floor."};
+    }
+
+    auto retained =
+        std::make_shared<std::vector<ModelingResolvedVertexPositionBatch>>(
+            batches.begin(), batches.end());
+    auto batch_by_object =
+        std::make_shared<std::unordered_map<std::uint64_t, std::size_t>>();
+    std::vector<ObjectId> objects;
+    objects.reserve(retained->size());
+    batch_by_object->reserve(retained->size());
+    for (std::size_t index = 0; index < retained->size(); ++index) {
+      const ModelingResolvedVertexPositionBatch &batch = (*retained)[index];
+      const std::optional<ObjectId> object =
+          sdk_object(batch.modeling_object_id);
+      if (!object.has_value() || batch.positions.empty() ||
+          !batch_by_object->emplace(sdk_object_key(*object), index).second) {
+        return failure(
+            "Resolved vertex positions contain an invalid object batch.");
+      }
+      objects.push_back(*object);
+    }
+
+    return mutate_documents_by_object(
+        objects,
+        [retained, batch_by_object](ObjectId object,
+                                    PolygonDocument &document) {
+          const auto found = batch_by_object->find(sdk_object_key(object));
+          if (found == batch_by_object->end()) {
+            return Result<OperationResult>::failure(
+                quader::modeling::make_error(
+                    quader::modeling::ErrorCode::InvalidId,
+                    "Resolved vertex position object is not live."));
+          }
+          const ModelingResolvedVertexPositionBatch &batch =
+              (*retained)[found->second];
+          const PolygonSelectionSnapshot selection = document.selection();
+          for (const VertexPositionUpdate &update : batch.positions) {
+            if (std::ranges::find(selection.vertices, update.vertex) ==
+                selection.vertices.end()) {
+              return Result<OperationResult>::failure(
+                  quader::modeling::make_error(
+                      quader::modeling::ErrorCode::ValidationFailed,
+                      "Resolved vertex position is not currently selected."));
+            }
+          }
+          return document.set_vertex_positions(batch.positions);
+        },
+        "Snap vertices to floor failed.", false, true, true, true);
+  }
+
   [[nodiscard]] ModelingCommandResult bridge_selected_components(
       int steps, bool preview_publication = false) {
     if (selection_mode_ != ModelingSelectionMode::Edge &&
@@ -8259,6 +8406,17 @@ ModelingCommandResult
 ModelingSdkProjectionAdapter::assign_material_slots_to_faces(
     std::span<const ModelingMaterialSlotAssignment> assignments) {
   return impl_->assign_material_slots_to_faces(assignments);
+}
+
+ModelingSelectedVerticesSnapshot
+ModelingSdkProjectionAdapter::selected_vertices_snapshot() const {
+  return impl_->selected_vertices_snapshot();
+}
+
+ModelingCommandResult
+ModelingSdkProjectionAdapter::apply_resolved_vertex_positions(
+    std::span<const ModelingResolvedVertexPositionBatch> batches) {
+  return impl_->apply_resolved_vertex_positions(batches);
 }
 
 ModelingCommandResult ModelingSdkProjectionAdapter::insert_edge_loop(

@@ -6,6 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "test_support.hpp"
 
+#include <quader/modeling/neutral/geometry/bvh.hpp>
 #include <quader/modeling/neutral/geometry/geometry.hpp>
 
 #include <array>
@@ -732,6 +733,169 @@ void projected_polygon_triangulation_is_stable()
 		"degenerate projected polygon should not triangulate"));
 }
 
+void ray_triangle_contact_tolerance_clamps_small_negative_distance()
+{
+	const quader_geometry::QTriangle3<double> triangle {
+		{ -1.0, -1.0, 0.0 },
+		{ 1.0, -1.0, 0.0 },
+		{ 0.0, 1.0, 0.0 },
+	};
+	const quader_geometry::QRayTriangleHit<double> contact =
+		quader_geometry::intersect_ray_triangle(
+			{ { 0.0, 0.0, -0.0000005 }, { 0.0, 0.0, -1.0 } },
+			triangle,
+			0.000001);
+	ASSERT_TRUE(require_test(contact.hit && nearly_equal(contact.distance, 0.0),
+		"ray-triangle contact should clamp a negative distance inside epsilon to zero"));
+	ASSERT_TRUE(require_test(vec3_nearly_equal(contact.point, { 0.0, 0.0, -0.0000005 }),
+		"clamped ray-triangle contact should remain at the ray origin"));
+	ASSERT_TRUE(require_test(!quader_geometry::intersect_ray_triangle(
+				 { { 0.0, 0.0, -0.000002 }, { 0.0, 0.0, -1.0 } },
+				 triangle,
+				 0.000001)
+				 .hit,
+		"ray-triangle contact should reject a negative distance outside epsilon"));
+
+	const quader_geometry::QTriangle3<float> float_triangle {
+		{ -1.0F, -1.0F, 0.0F },
+		{ 1.0F, -1.0F, 0.0F },
+		{ 0.0F, 1.0F, 0.0F },
+	};
+	const quader_geometry::QRayTriangleHit<float> float_contact =
+		quader_geometry::intersect_ray_triangle<float>(
+			{ { 0.0F, 0.0F, -0.0000005F }, { 0.0F, 0.0F, -1.0F } },
+			float_triangle,
+			0.000001F);
+	ASSERT_TRUE(require_test(float_contact.hit && nearly_equal(float_contact.distance, 0.0),
+		"float ray-triangle contact should share the negative-distance clamp"));
+}
+
+void bounds_bvh_visits_caller_primitives_without_reallocating_warm_scratch()
+{
+	const std::array<quader_geometry::QAabb3d, 10> bounds {
+		quader_geometry::QAabb3d { { -1.0, -1.0, 0.0 }, { 1.0, 1.0, 0.5 } },
+		quader_geometry::QAabb3d { { -1.0, -1.0, 1.0 }, { 1.0, 1.0, 1.5 } },
+		quader_geometry::QAabb3d { { -1.0, -1.0, 2.0 }, { 1.0, 1.0, 2.5 } },
+		quader_geometry::QAabb3d { { -1.0, -1.0, 3.0 }, { 1.0, 1.0, 3.5 } },
+		quader_geometry::QAabb3d { { -1.0, -1.0, 4.0 }, { 1.0, 1.0, 4.5 } },
+		quader_geometry::QAabb3d { { -1.0, -1.0, 5.0 }, { 1.0, 1.0, 5.5 } },
+		quader_geometry::QAabb3d { { -1.0, -1.0, 6.0 }, { 1.0, 1.0, 6.5 } },
+		quader_geometry::QAabb3d { { -1.0, -1.0, 7.0 }, { 1.0, 1.0, 7.5 } },
+		quader_geometry::QAabb3d { { -1.0, -1.0, 8.0 }, { 1.0, 1.0, 8.5 } },
+		quader_geometry::QAabb3d { { -1.0, -1.0, 9.0 }, { 1.0, 1.0, 9.5 } },
+	};
+	const std::array<std::size_t, 10> primitive_indices { 90U, 80U, 70U, 60U, 50U, 40U, 30U, 20U, 10U, 0U };
+	quader_geometry::QBoundsBvh<double> bvh;
+	ASSERT_TRUE(require_test(bvh.build(bounds, primitive_indices, 2U),
+		"bounds BVH should accept caller bounds and primitive indices"));
+	ASSERT_TRUE(require_test(bvh.primitive_count() == bounds.size() && bvh.node_count() > 1U,
+		"bounds BVH should partition a multi-leaf input"));
+
+	quader_geometry::QBvhTraversalScratch scratch;
+	scratch.reserve(bvh.required_traversal_capacity());
+	const std::size_t warm_capacity = scratch.capacity();
+	std::vector<std::size_t> visited;
+	std::vector<std::size_t> source_indices;
+	const quader_geometry::QRay3<double> ray { { 0.0, 0.0, 12.0 }, { 0.0, 0.0, -1.0 } };
+	ASSERT_TRUE(require_test(bvh.for_each_ray_candidate(
+			ray,
+			{},
+			scratch,
+			[&visited, &source_indices](
+				std::size_t primitive_index,
+				std::size_t source_index,
+				const quader_geometry::QRayAabbHit<double>&,
+				double&) {
+				visited.push_back(primitive_index);
+				source_indices.push_back(source_index);
+				return true;
+			}),
+		"bounds BVH traversal should complete when the visitor accepts every candidate"));
+	ASSERT_TRUE(require_test(visited.size() == bounds.size(),
+		"bounds BVH traversal should visit every overlapping primitive exactly once"));
+	for (std::size_t index = 0; index < visited.size(); ++index) {
+		ASSERT_TRUE(require_test(
+			source_indices[index] < primitive_indices.size() &&
+				primitive_indices[source_indices[index]] == visited[index],
+			"bounds BVH traversal should retain the caller primitive/source-index mapping"));
+	}
+
+	for (int iteration = 0; iteration < 16; ++iteration) {
+		ASSERT_TRUE(require_test(bvh.for_each_ray_candidate(
+				ray,
+				{},
+				scratch,
+				[](std::size_t, std::size_t, const quader_geometry::QRayAabbHit<double>&, double&) {
+					return true;
+				}),
+			"warm bounds BVH traversal should continue to complete"));
+	}
+	ASSERT_TRUE(require_test(scratch.capacity() == warm_capacity,
+		"pre-reserved BVH traversal scratch should not grow after warmup"));
+}
+
+void triangle_bvh_queries_are_two_sided_filtered_and_deterministic()
+{
+	const std::array<quader_geometry::QTriangle3<double>, 5> triangles {
+		quader_geometry::QTriangle3<double> { { -1.0, -1.0, 4.0 }, { 0.0, 1.0, 4.0 }, { 1.0, -1.0, 4.0 } },
+		quader_geometry::QTriangle3<double> { { -1.0, -1.0, 3.0 }, { 1.0, -1.0, 3.0 }, { 0.0, 1.0, 3.0 } },
+		quader_geometry::QTriangle3<double> { { -1.0, -1.0, 3.0 }, { 1.0, -1.0, 3.0 }, { 0.0, 1.0, 3.0 } },
+		quader_geometry::QTriangle3<double> { { -1.0, -1.0, 1.0 }, { 1.0, -1.0, 1.0 }, { 0.0, 1.0, 1.0 } },
+		quader_geometry::QTriangle3<double> { { 0.0, 0.0, 2.0 }, { 1.0, 0.0, 2.0 }, { 2.0, 0.0, 2.0 } },
+	};
+	const std::array<std::size_t, 5> primitive_indices { 40U, 9U, 3U, 1U, 999U };
+	quader_geometry::QTriangleBvh<double> bvh;
+	ASSERT_TRUE(require_test(bvh.build(triangles, primitive_indices, 1U),
+		"triangle BVH should build from caller triangles and primitive indices"));
+	ASSERT_TRUE(require_test(bvh.primitive_count() == 4U,
+		"triangle BVH should omit finite degenerate triangles from the index"));
+
+	quader_geometry::QBvhTraversalScratch scratch;
+	const quader_geometry::QRay3<double> ray { { 0.0, 0.0, 5.0 }, { 0.0, 0.0, -1.0 } };
+	const quader_geometry::QTriangleBvhHit<double> two_sided = bvh.nearest_hit(ray, scratch);
+	ASSERT_TRUE(require_test(two_sided.hit && two_sided.primitive_index == 40U,
+		"triangle BVH should hit the nearest reversed-winding triangle in two-sided mode"));
+	ASSERT_TRUE(require_test(nearly_equal(two_sided.triangle_hit.distance, 1.0),
+		"triangle BVH should preserve the nearest triangle distance"));
+
+	quader_geometry::QTriangleBvhQueryOptions<double> skip_nearest;
+	skip_nearest.min_distance = 1.5;
+	const quader_geometry::QTriangleBvhHit<double> stable_tie =
+		bvh.nearest_hit(ray, skip_nearest, scratch);
+	ASSERT_TRUE(require_test(stable_tie.hit && stable_tie.primitive_index == 3U && stable_tie.triangle_index == 2U,
+		"equal-distance triangle hits should choose the smaller caller index then preserve the source index"));
+
+	const quader_geometry::QTriangleBvhHit<double> filtered = bvh.nearest_hit(
+		ray,
+		skip_nearest,
+		scratch,
+		[](std::size_t primitive_index, const quader_geometry::QTriangle3<double>&) {
+			return primitive_index != 3U;
+		});
+	ASSERT_TRUE(require_test(filtered.hit && filtered.primitive_index == 9U,
+		"triangle BVH primitive filters should be able to skip the nearest stable-index candidate"));
+
+	quader_geometry::QTriangleBvhQueryOptions<double> near_window;
+	near_window.max_distance = 1.0;
+	ASSERT_TRUE(require_test(bvh.any_hit(ray, near_window, scratch),
+		"triangle BVH any-hit should include an exact maximum-distance boundary"));
+	near_window.min_distance = 1.1;
+	near_window.max_distance = 1.9;
+	ASSERT_TRUE(require_test(!bvh.any_hit(ray, near_window, scratch),
+		"triangle BVH any-hit should honor a bounded miss interval"));
+
+	const std::array<quader_geometry::QTriangle3<double>, 2> tolerance_triangles {
+		quader_geometry::QTriangle3<double> { { -1.0, -1.0, 3.0 }, { 1.0, -1.0, 3.0 }, { 0.0, 1.0, 3.0 } },
+		quader_geometry::QTriangle3<double> { { -1.0, -1.0, 2.9999995 }, { 1.0, -1.0, 2.9999995 }, { 0.0, 1.0, 2.9999995 } },
+	};
+	const std::array<std::size_t, 2> tolerance_indices { 9U, 1U };
+	ASSERT_TRUE(require_test(bvh.build(tolerance_triangles, tolerance_indices, 1U),
+		"triangle BVH should rebuild deterministically for tolerance ties"));
+	const quader_geometry::QTriangleBvhHit<double> tolerance_tie = bvh.nearest_hit(ray, scratch);
+	ASSERT_TRUE(require_test(tolerance_tie.hit && tolerance_tie.primitive_index == 1U,
+		"hits within tie tolerance should choose the smaller caller primitive index independently of traversal order"));
+}
+
 } // namespace
 
 TEST(QdrGeometryTests, RayPlaneAndProjectionAreStable) {
@@ -832,4 +996,16 @@ TEST(QdrGeometryTests, LineLineClosestPointsAreStable) {
 
 TEST(QdrGeometryTests, ProjectedPolygonTriangulationIsStable) {
 	projected_polygon_triangulation_is_stable();
+}
+
+TEST(QdrGeometryTests, RayTriangleContactToleranceClampsSmallNegativeDistance) {
+	ray_triangle_contact_tolerance_clamps_small_negative_distance();
+}
+
+TEST(QdrGeometryTests, BoundsBvhVisitsCallerPrimitivesWithoutReallocatingWarmScratch) {
+	bounds_bvh_visits_caller_primitives_without_reallocating_warm_scratch();
+}
+
+TEST(QdrGeometryTests, TriangleBvhQueriesAreTwoSidedFilteredAndDeterministic) {
+	triangle_bvh_queries_are_two_sided_filtered_and_deterministic();
 }

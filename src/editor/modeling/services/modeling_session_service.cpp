@@ -1618,6 +1618,16 @@ public:
     return exported;
   }
 
+  [[nodiscard]] ModelingSelectedVerticesSnapshot
+  selected_vertices_snapshot() const {
+    return sdk_projection_adapter_.selected_vertices_snapshot();
+  }
+
+  ModelingCommandResult apply_resolved_vertex_positions(
+      std::span<const ModelingResolvedVertexPositionBatch> batches) {
+    return sdk_projection_adapter_.apply_resolved_vertex_positions(batches);
+  }
+
   [[nodiscard]] ModelingSelectionBoxBaseline
   capture_box_selection_baseline() const {
     QDR_PROFILE_SCOPE("Modeling session capture box selection baseline");
@@ -6863,6 +6873,11 @@ ModelingSelectionExport ModelingSessionService::export_selection() const {
   return impl_->export_selection();
 }
 
+ModelingSelectedVerticesSnapshot
+ModelingSessionService::selected_vertices_snapshot() const {
+  return impl_->selected_vertices_snapshot();
+}
+
 ModelingSelectionBoxBaseline
 ModelingSessionService::capture_box_selection_baseline() const {
   QDR_PROFILE_SCOPE("Modeling session box baseline entry");
@@ -7566,6 +7581,11 @@ ModelingCommandResult
 ModelingSessionService::transform_selection(const ModelingTransform3 &transform,
                                             QVec3 pivot) {
   return impl_->transform_selection(transform, pivot);
+}
+
+ModelingCommandResult ModelingSessionService::apply_resolved_vertex_positions(
+    std::span<const ModelingResolvedVertexPositionBatch> batches) {
+  return impl_->apply_resolved_vertex_positions(batches);
 }
 
 ModelingCommandResult ModelingSessionService::assign_material_slot_to_selection(

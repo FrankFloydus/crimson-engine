@@ -7,6 +7,7 @@
 #pragma once
 
 #include <editor/modeling/runtime/selection_types.hpp>
+#include <quader/modeling/neutral/geometry/bvh.hpp>
 #include <quader/modeling/neutral/polygon/document.hpp>
 
 #include <cstddef>
@@ -18,38 +19,6 @@ namespace quader_editor_core {
 
 struct PolygonObject;
 struct ViewportCameraState;
-
-/**
- * Represents an Overlay Visibility Bounds value used by the modal modeling interaction layer.
- */
-struct OverlayVisibilityBounds {
-	bool empty = true;
-	quader::QVec3 min;
-	quader::QVec3 max;
-};
-
-/**
- * Represents an Overlay Visibility Triangle value used by the modal modeling interaction layer.
- */
-struct OverlayVisibilityTriangle {
-	std::uint32_t a = 0;
-	std::uint32_t b = 0;
-	std::uint32_t c = 0;
-	quader::QVec3 normal;
-	quader::QVec3 centroid;
-	OverlayVisibilityBounds bounds;
-};
-
-/**
- * Represents an Overlay Visibility Node value used by the modal modeling interaction layer.
- */
-struct OverlayVisibilityNode {
-	OverlayVisibilityBounds bounds;
-	std::size_t start = 0;
-	std::size_t count = 0;
-	int left = -1;
-	int right = -1;
-};
 
 /**
  * Owns Overlay Visibility Occluder behavior within the modal modeling interaction layer.
@@ -68,15 +37,12 @@ public:
 
 private:
 	void build_triangles(std::span<const quader::QVec3> vertices, std::span<const std::uint32_t> indices);
-	int build_node(std::size_t start, std::size_t count);
 	[[nodiscard]] bool point_is_visible(quader::QVec3 point, const ViewportCameraState& camera) const;
 	[[nodiscard]] bool hits_before_target(quader_poly::Ray ray, double target_distance, double tolerance) const;
 
-	std::vector<quader::QVec3> vertices_;
-	std::vector<OverlayVisibilityTriangle> triangles_;
-	std::vector<std::size_t> order_;
-	std::vector<OverlayVisibilityNode> nodes_;
-	mutable std::vector<int> stack_;
+	std::vector<quader_geometry::QVec3d> triangle_normals_;
+	quader_geometry::QTriangleBvh<double> triangle_bvh_;
+	mutable quader_geometry::QBvhTraversalScratch traversal_scratch_;
 };
 
 [[nodiscard]] bool selection_overlay_lines_use_visibility(std::span<const SelectionOverlayLine> lines);
