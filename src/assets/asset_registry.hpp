@@ -194,6 +194,14 @@ public:
   std::vector<AssetId> material_ids() const { return materials_.ids(); }
   std::vector<AssetId> texture_ids() const { return textures_.ids(); }
   std::uint64_t revision() const { return revision_; }
+  /// Advances only when the embedded-material catalog or payload changes.
+  std::uint64_t material_catalog_revision() const {
+    return material_catalog_revision_;
+  }
+  /// Advances when mesh payloads that can change resolved face slots change.
+  std::uint64_t mesh_material_usage_revision() const {
+    return mesh_material_usage_revision_;
+  }
   void advance_revision_for_replacement(std::uint64_t previous_revision);
 
   /** Captures all asset state before one staged editor projection. */
@@ -221,9 +229,14 @@ private:
   void assert_owner_thread() const;
   void intern_mesh_payload(MeshAsset &mesh) const;
   void mark_dirty();
+  void mark_material_dirty();
+  void mark_mesh_material_usage_dirty();
+  [[nodiscard]] bool material_references_texture(AssetId texture) const;
 
   AssetId next_id_ = 1;
   std::uint64_t revision_ = 0;
+  std::uint64_t material_catalog_revision_ = 0;
+  std::uint64_t mesh_material_usage_revision_ = 0;
   mutable MeshAssetStore meshes_;
   mutable std::unordered_map<AssetId, DeferredMesh> deferred_meshes_;
   mutable std::unordered_map<

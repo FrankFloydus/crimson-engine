@@ -9,6 +9,7 @@
 #include "editor/commands/modeling/scene_aware_delete_selection_command.hpp"
 #include "editor/history/editor_history_service.hpp"
 #include "editor/history/modeling_memento_command.hpp"
+#include "editor/material/material_reference_service.hpp"
 #include "editor/modeling/services/modeling_instant_operation_catalog.hpp"
 #include "editor/modeling/services/modeling_operation_settings.hpp"
 #include "editor/modeling/services/modeling_session_service.hpp"
@@ -33,6 +34,7 @@
 
 #include <editor/interactions/cut_tool.hpp>
 #include <editor/modeling/runtime/session.hpp>
+#include <quader/modeling/neutral/polygon/document.hpp>
 
 namespace quader {
 namespace {
@@ -395,6 +397,21 @@ TEST(ModelingSessionServiceSplitTests,
   EXPECT_EQ(scene.material(duplicate)->material.embedded_asset(),
             AssetId{44u});
   EXPECT_EQ(scene.entity_layer(duplicate), layer);
+}
+
+TEST(ModelingSessionServiceSplitTests,
+     MeshSyncEntityMaterialReportsNoOpMutationAndOwnerFailure) {
+  SceneDocument scene;
+  ModelingMeshSyncService mesh_sync;
+  const EntityId entity =
+      scene.create_entity("Material Result Mesh", EntityKind::Mesh);
+  ASSERT_NE(entity, kInvalidEntityId);
+  const MaterialComponent material{.material = MaterialReference(91u)};
+
+  EXPECT_TRUE(mesh_sync.set_entity_material(scene, entity, material));
+  EXPECT_FALSE(mesh_sync.set_entity_material(scene, entity, material));
+  EXPECT_FALSE(
+      mesh_sync.set_entity_material(scene, kInvalidEntityId, material));
 }
 
 TEST(ModelingSessionServiceSplitTests,
@@ -2300,6 +2317,87 @@ TEST(ModelingSessionServiceSplitTests, ServicesOwnIndependentModelingState) {
   EXPECT_GT(interaction_settings.revision(), cut_mode_revision);
   EXPECT_EQ(interaction_settings.settings().cut_mode,
             ModelingCutMode::DiscardRight);
+}
+
+TEST(MaterialReferenceServiceTests,
+     SelectedFaceFailureRollsBackTopologyBindingAndSelectionExactly) {
+  SceneDocument scene;
+  AssetRegistry assets;
+  ModelingSessionService modeling(scene, assets);
+  const ModelingCreateBoxResult created = modeling.create_box_from_bounds({
+      .bounds = {.min = {-1.0f, -1.0f, -1.0f},
+                 .max = {1.0f, 1.0f, 1.0f}},
+      .name = "Material Reference Rollback Box",
+  });
+  ASSERT_TRUE(created.ok) << created.message;
+  constexpr quader_poly::ElementId kSelectedFace = 1;
+  const MaterialReference source(101u);
+  const MaterialReference replacement(202u);
+  const MaterialComponent component_before{.material = source};
+  ASSERT_TRUE(scene.set_material(created.object.entity, component_before));
+  ASSERT_TRUE(modeling.set_selection_mode(ModelingSelectionMode::Face).ok);
+  ASSERT_TRUE(modeling
+                  .set_component_selection({
+                      .modeling_object_id = created.object.modeling_object_id,
+                      .mode = ModelingSelectionMode::Face,
+                      .faces = {kSelectedFace},
+                      .edit = ModelingSelectionEdit::Replace,
+                      .active_kind = ModelingActiveSelectionKind::Face,
+                      .active_face = kSelectedFace,
+                  })
+                  .ok);
+
+  const MeshComponent *mesh_component = scene.mesh(created.object.entity);
+  ASSERT_NE(mesh_component, nullptr);
+  const MeshAsset *mesh_before = assets.mesh(mesh_component->mesh);
+  ASSERT_NE(mesh_before, nullptr);
+  ASSERT_TRUE(mesh_before->has_authored_polygon_document);
+  ASSERT_NE(mesh_before->authored_polygon_document, nullptr);
+  const quader_poly::Face *face_before = quader_poly::find_face(
+      *mesh_before->authored_polygon_document, kSelectedFace);
+  ASSERT_NE(face_before, nullptr);
+  const std::uint32_t slot_before = face_before->material_slot;
+  const ModelingSelectionExport selection_before = modeling.export_selection();
+
+  MaterialReferenceService references(scene, assets, modeling);
+  MaterialReferenceReplacementPreparation prepared =
+      references.prepare_replacement(
+          source, replacement, MaterialReferenceUsageScope::Selection,
+          [](const MaterialReference &) { return true; });
+  ASSERT_TRUE(prepared.ok) << prepared.message;
+  ASSERT_TRUE(prepared.changed);
+  ASSERT_NE(prepared.command, nullptr);
+
+  modeling.set_modeling_sdk_projection_failure_for_tests(
+      ModelingSdkProjectionFailurePoint::CommittedAssetReplace);
+  const CommandResult failed = prepared.command->redo();
+  modeling.set_modeling_sdk_projection_failure_for_tests(
+      ModelingSdkProjectionFailurePoint::None);
+  EXPECT_FALSE(failed.ok);
+  EXPECT_FALSE(failed.changed);
+  ASSERT_NE(scene.material(created.object.entity), nullptr);
+  EXPECT_EQ(*scene.material(created.object.entity), component_before);
+
+  mesh_component = scene.mesh(created.object.entity);
+  ASSERT_NE(mesh_component, nullptr);
+  const MeshAsset *mesh_after = assets.mesh(mesh_component->mesh);
+  ASSERT_NE(mesh_after, nullptr);
+  ASSERT_NE(mesh_after->authored_polygon_document, nullptr);
+  const quader_poly::Face *face_after = quader_poly::find_face(
+      *mesh_after->authored_polygon_document, kSelectedFace);
+  ASSERT_NE(face_after, nullptr);
+  EXPECT_EQ(face_after->material_slot, slot_before);
+
+  const ModelingSelectionExport selection_after = modeling.export_selection();
+  EXPECT_EQ(selection_after.summary.mode, selection_before.summary.mode);
+  ASSERT_EQ(selection_after.objects.size(), selection_before.objects.size());
+  ASSERT_EQ(selection_after.objects.size(), 1u);
+  EXPECT_EQ(selection_after.objects.front().modeling_object_id,
+            selection_before.objects.front().modeling_object_id);
+  ASSERT_EQ(selection_after.objects.front().selected_faces.size(), 1u);
+  ASSERT_EQ(selection_before.objects.front().selected_faces.size(), 1u);
+  EXPECT_EQ(selection_after.objects.front().selected_faces.front().id,
+            selection_before.objects.front().selected_faces.front().id);
 }
 
 TEST(ModelingSessionServiceSplitTests,

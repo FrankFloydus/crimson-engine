@@ -2947,6 +2947,95 @@ public:
     return modeling_result;
   }
 
+  ModelingCommandResult replace_material_references_on_faces(
+      std::span<const ModelingFaceMaterialReplacementTarget> targets,
+      MaterialReference source, MaterialReference replacement) {
+    if (!source.valid() || !replacement.valid()) {
+      return {
+          .ok = false,
+          .changed = false,
+          .message = "Material references are unavailable.",
+      };
+    }
+    if (source == replacement || targets.empty()) {
+      return {.ok = true, .changed = false};
+    }
+
+    struct MaterialProjection final {
+      EntityId entity = kInvalidEntityId;
+      MaterialComponent material;
+      std::uint32_t destination_slot = 0u;
+    };
+    std::vector<MaterialProjection> projections;
+    std::unordered_map<EntityId, std::size_t> projection_by_entity;
+    std::vector<ModelingMaterialSlotAssignment> assignments;
+    projections.reserve(targets.size());
+    projection_by_entity.reserve(targets.size());
+    assignments.reserve(targets.size());
+
+    for (const ModelingFaceMaterialReplacementTarget &requested : targets) {
+      const FaceTarget target =
+          resolve_face_target(requested.modeling_object_id, requested.face_id);
+      if (!target.command.ok) {
+        return target.command;
+      }
+      const MaterialComponent *existing = scene_.material(target.entity);
+      if (existing == nullptr ||
+          existing->material_for_slot(target.material_slot) != source) {
+        continue;
+      }
+
+      std::size_t projection_index = 0u;
+      const auto found = projection_by_entity.find(target.entity);
+      if (found == projection_by_entity.end()) {
+        MaterialComponent desired = *existing;
+        const std::uint32_t destination_slot =
+            stage_material_slot(desired, replacement);
+        projection_index = projections.size();
+        projection_by_entity.emplace(target.entity, projection_index);
+        projections.push_back({
+            .entity = target.entity,
+            .material = std::move(desired),
+            .destination_slot = destination_slot,
+        });
+      } else {
+        projection_index = found->second;
+      }
+      assignments.push_back({
+          .modeling_object_id = requested.modeling_object_id,
+          .face_id = requested.face_id,
+          .material_slot = projections[projection_index].destination_slot,
+      });
+    }
+
+    if (assignments.empty()) {
+      return {.ok = true, .changed = false};
+    }
+    ModelingCommandResult modeling_result =
+        sdk_projection_adapter_.assign_material_slots_to_faces(assignments);
+    if (!modeling_result.ok) {
+      return modeling_result;
+    }
+    bool component_changed = false;
+    for (MaterialProjection &projection : projections) {
+      const MaterialComponent *current = scene_.material(projection.entity);
+      if (current != nullptr && *current == projection.material) {
+        continue;
+      }
+      if (!mesh_sync_service_.set_entity_material(
+              scene_, projection.entity, std::move(projection.material))) {
+        return {
+            .ok = false,
+            .changed = modeling_result.changed,
+            .message = "A face material binding could not be replaced.",
+        };
+      }
+      component_changed = true;
+    }
+    modeling_result.changed = modeling_result.changed || component_changed;
+    return modeling_result;
+  }
+
   ModelingCommandResult apply_active_material(MaterialReference material) {
     if (!material.valid()) {
       return {
@@ -7014,6 +7103,13 @@ ModelingCommandResult ModelingSessionService::apply_material_to_mesh_at_face(
 ModelingCommandResult ModelingSessionService::apply_material_to_face(
     int modeling_object_id, int face_id, MaterialReference material) {
   return impl_->apply_material_to_face(modeling_object_id, face_id, material);
+}
+
+ModelingCommandResult ModelingSessionService::replace_material_references_on_faces(
+    std::span<const ModelingFaceMaterialReplacementTarget> targets,
+    MaterialReference source, MaterialReference replacement) {
+  return impl_->replace_material_references_on_faces(targets, source,
+                                                     replacement);
 }
 
 ModelingProjectMaterialQueryResult

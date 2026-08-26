@@ -2437,6 +2437,71 @@ TEST(QtMainMenuTests, ToolActionsUseEffectiveKeybindingsAndCommandRouting) {
   std::filesystem::remove(keybindings);
 }
 
+TEST(QtMainMenuTests,
+     FindReplaceIsPresentationOnlyAndTracksAvailabilityAndLocale) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-main-menu-find-replace-tests";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+
+  SceneSession session;
+  QuaderEditorApi editor(
+      QuaderApiSessionInternalAccess::from_scene_session(session));
+  ViewportSettings viewport_settings = ViewportSettings::defaults();
+  LocalizationService localization = loaded_localization();
+  QMenuBar menu_bar;
+  QtMainMenu menu;
+  bool available = false;
+  int presentation_requests = 0;
+  menu.initialize(
+      menu_bar,
+      QtMainMenuContext{
+          .editor = editor,
+          .modeling = session.modeling(),
+          .viewport_settings = viewport_settings,
+          .localization = localization,
+          .show_material_find_replace =
+              [&presentation_requests]() { ++presentation_requests; },
+          .material_find_replace_available =
+              [&available]() { return available; },
+      });
+
+  auto *edit_menu =
+      menu_bar.findChild<QMenu *>(QStringLiteral("menu_edit"));
+  auto *find_replace = menu_bar.findChild<QAction *>(
+      QStringLiteral("action_material_find_replace"));
+  ASSERT_NE(edit_menu, nullptr);
+  ASSERT_NE(find_replace, nullptr);
+  EXPECT_TRUE(edit_menu->actions().contains(find_replace));
+  EXPECT_TRUE(find_replace->shortcut().isEmpty());
+  EXPECT_FALSE(find_replace->isEnabled());
+  find_replace->trigger();
+  EXPECT_EQ(presentation_requests, 0);
+  EXPECT_FALSE(editor.commands().last_status().has_value());
+
+  available = true;
+  ASSERT_TRUE(QMetaObject::invokeMethod(edit_menu, "aboutToShow",
+                                        Qt::DirectConnection));
+  EXPECT_TRUE(find_replace->isEnabled());
+  EXPECT_EQ(find_replace->text(), QString::fromUtf8("Find/Replace…"));
+  find_replace->trigger();
+  EXPECT_EQ(presentation_requests, 1);
+  EXPECT_FALSE(editor.commands().last_status().has_value());
+
+  ASSERT_TRUE(localization.select_locale("it-IT"));
+  ASSERT_TRUE(QMetaObject::invokeMethod(edit_menu, "aboutToShow",
+                                        Qt::DirectConnection));
+  EXPECT_EQ(find_replace->text(),
+            QString::fromUtf8("Trova/Sostituisci…"));
+
+  available = false;
+  ASSERT_TRUE(QMetaObject::invokeMethod(edit_menu, "aboutToShow",
+                                        Qt::DirectConnection));
+  EXPECT_FALSE(find_replace->isEnabled());
+}
+
 TEST(QtMainMenuTests, RebuildAndDestructionReleaseOwnedHierarchy) {
   ASSERT_EQ(QCoreApplication::instance(), nullptr);
   int argc = 1;

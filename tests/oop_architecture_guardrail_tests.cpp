@@ -572,6 +572,79 @@ TEST(OopArchitectureGuardrailTests, UiShellDoesNotOwnToolImplementations) {
 }
 
 TEST(OopArchitectureGuardrailTests,
+     MaterialReferenceReplacementTopologyStaysEditorOwned) {
+  const std::filesystem::path root = source_root();
+  const std::string service_header = read_file(
+      root / "src/editor/material/material_reference_service.hpp");
+  const std::string service = read_file(
+      root / "src/editor/material/material_reference_service.cpp");
+  const std::string api =
+      read_file(root / "src/api/quader_materials_api.cpp");
+
+  EXPECT_NE(service_header.find("class MaterialReferenceService final"),
+            std::string::npos);
+  EXPECT_NE(service_header.find("prepare_replacement("), std::string::npos);
+  for (std::string_view owner_behavior : {
+           "live_material_slots(",
+           "scene.descendants(",
+           "quader_poly::find_face(",
+           "desired.material_slots",
+           "scene.set_material(",
+           "scene.clear_material(",
+           "class ReplaceMaterialReferencesCommand final",
+           "modeling_.capture_history_memento()",
+           "document_command_capture_selection(scene_)",
+           "modeling_.replace_material_references_on_faces(",
+           "rollback_initial(",
+       }) {
+    EXPECT_NE(service.find(owner_behavior), std::string::npos)
+        << owner_behavior;
+  }
+  EXPECT_NE(api.find("MaterialReferenceService service("),
+            std::string::npos);
+  EXPECT_NE(api.find("service.prepare_replacement("), std::string::npos);
+
+  const std::vector<std::filesystem::path> material_ui_files = {
+      root / "src/ui/inspector_panel.cpp",
+      root / "src/ui/qt_material_browser_window.cpp",
+      root / "src/ui/qt_material_find_replace_dialog.cpp",
+      root / "src/ui/ui_system.cpp",
+  };
+  for (const std::filesystem::path &file : material_ui_files) {
+    const std::string source = read_file(file);
+    for (std::string_view forbidden : {
+             "editor/material/material_reference_service.hpp",
+             "assets/material_reference.hpp",
+             "authored_polygon_document",
+             "quader_poly::find_face(",
+             "material_slots",
+             "replace_material_references_on_faces(",
+             "prepare_replacement(",
+             "scene.set_material(",
+             "scene.clear_material(",
+         }) {
+      EXPECT_EQ(source.find(forbidden), std::string::npos)
+          << file.string() << ": " << forbidden;
+    }
+  }
+
+  const std::string inspector_header =
+      read_file(root / "src/ui/inspector_panel.hpp");
+  EXPECT_NE(inspector_header.find(
+                "struct InspectorMaterialPresentationSnapshot final"),
+            std::string::npos);
+  EXPECT_NE(inspector_header.find(
+                "std::vector<QtMaterialPresentationItem> materials"),
+            std::string::npos);
+  EXPECT_NE(inspector_header.find(
+                "std::function<void(QuaderMaterialReference)> "
+                "replace_material"),
+            std::string::npos);
+  EXPECT_EQ(inspector_header.find("SceneDocument"), std::string::npos);
+  EXPECT_EQ(inspector_header.find("AssetRegistry"), std::string::npos);
+}
+
+TEST(OopArchitectureGuardrailTests,
      UIContextSplitsIntentPresentationAndViewportSurfaces) {
   const std::string header = read_file(source_root() / "src/ui/ui_context.hpp");
   const std::string context =

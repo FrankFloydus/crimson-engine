@@ -443,6 +443,15 @@ struct ModelingPickSelectRequest {
   bool select_backfaces = true;
 };
 
+/// Identifies one live polygon face for a host-coordinated material rewrite.
+struct ModelingFaceMaterialReplacementTarget final {
+  int modeling_object_id = kInvalidModelingObjectId;
+  int face_id = quader_poly::kInvalidElementId;
+
+  [[nodiscard]] bool operator==(
+      const ModelingFaceMaterialReplacementTarget &) const = default;
+};
+
 /**
  * Stores the Modeling Box Select Request data contract used by the modeling
  * domain.

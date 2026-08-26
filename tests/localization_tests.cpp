@@ -222,6 +222,15 @@ TEST(LocalizationResourceTests, ShipsEnglishAndItalianCatalogs) {
 
     EXPECT_EQ(localization.current_locale(), "it-IT");
     EXPECT_EQ(localization.text("ui.menu.edit", "Edit"), "&Modifica");
+    EXPECT_EQ(localization.text("ui.menu.edit.find_replace", "Find/Replace..."),
+              "Trova/Sostituisci…");
+    EXPECT_EQ(localization.text("ui.material_browser.accept", "Accept"),
+              "Accetta");
+    EXPECT_EQ(localization.text("ui.material_find_replace.title",
+                                "Find/Replace Materials"),
+              "Trova/Sostituisci materiali");
+    EXPECT_EQ(localization.text("ui.inspector.material", "Material"),
+              "Materiale");
     EXPECT_EQ(localization.text("viewport.tool.move.label", "Move"), "Sposta");
     EXPECT_EQ(localization.text("modeling.action.bridge_faces.label",
                                 "Bridge Selected Faces"),
@@ -257,6 +266,15 @@ TEST(LocalizationResourceTests, ShipsEnglishAndItalianCatalogs) {
     EXPECT_EQ(localization.text("ui.action.cancel", "Cancel"), "Annulla");
     EXPECT_TRUE(localization.select_locale("en-US"));
     EXPECT_EQ(localization.text("ui.menu.edit", "Edit"), "&Edit");
+    EXPECT_EQ(localization.text("ui.menu.edit.find_replace", "Find/Replace..."),
+              "Find/Replace…");
+    EXPECT_EQ(localization.text("ui.material_browser.accept", "Accept"),
+              "Accept");
+    EXPECT_EQ(localization.text("ui.material_find_replace.title",
+                                "Find/Replace Materials"),
+              "Find/Replace Materials");
+    EXPECT_EQ(localization.text("ui.inspector.material", "Material"),
+              "Material");
     EXPECT_EQ(localization.text("modeling.action.copy_pivot_from_active.label",
                                 "Copy Pivot From Active"),
               "Copy Pivot from Active Object");

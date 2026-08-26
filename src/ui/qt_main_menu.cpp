@@ -215,9 +215,11 @@ struct QtMainMenu::Impl {
     panel_actions.clear();
     tool_actions.clear();
     selection_mode_actions.clear();
+    edit_menu = nullptr;
     view_menu = nullptr;
     navigation_gizmo_action = nullptr;
     material_browser_action = nullptr;
+    material_find_replace_action = nullptr;
     selection_toolbar_action = nullptr;
     snapping_toolbar_action = nullptr;
     viewport_display_toolbar_action = nullptr;
@@ -249,9 +251,11 @@ struct QtMainMenu::Impl {
   QtMainMenuContext context;
   std::unique_ptr<QObject> connection_context = std::make_unique<QObject>();
   std::vector<QPointer<QMenu>> top_level_menus;
+  QMenu *edit_menu = nullptr;
   QMenu *view_menu = nullptr;
   QAction *navigation_gizmo_action = nullptr;
   QAction *material_browser_action = nullptr;
+  QAction *material_find_replace_action = nullptr;
   QAction *selection_toolbar_action = nullptr;
   QAction *snapping_toolbar_action = nullptr;
   QAction *viewport_display_toolbar_action = nullptr;
@@ -412,6 +416,7 @@ struct QtMainMenu::Impl {
 
   void build_edit_menu() {
     QMenu *menu = add_top_level_menu("ui.menu.edit", "&Edit");
+    edit_menu = menu;
     menu->setObjectName(QStringLiteral("menu_edit"));
     add_command_action(*menu, quader_command::kEditUndo, "ui.menu.edit.undo",
                        "Undo");
@@ -458,6 +463,23 @@ struct QtMainMenu::Impl {
                             "ui.menu.edit.snap.grid", "Grid");
     add_bool_setting_action(*snap, ViewportBoolSettingId::VertexSnap,
                             "ui.menu.edit.snap.vertex", "Vertex");
+    menu->addSeparator();
+    material_find_replace_action = menu->addAction(qtext(
+        context.localization, "ui.menu.edit.find_replace", "Find/Replace..."));
+    material_find_replace_action->setObjectName(
+        QStringLiteral("action_material_find_replace"));
+    material_find_replace_action->setEnabled(
+        context.material_find_replace_available
+            ? context.material_find_replace_available()
+            : false);
+    QObject::connect(material_find_replace_action, &QAction::triggered,
+                     connection_context.get(), [this]() {
+                       QDR_PROFILE_SCOPE(
+                           "Qt main menu dispatch presentation action");
+                       if (context.show_material_find_replace) {
+                         context.show_material_find_replace();
+                       }
+                     });
     menu->addSeparator();
     QAction *settings = menu->addAction(qtext(
         context.localization, "ui.menu.edit.settings", "Settings"));
@@ -986,6 +1008,17 @@ struct QtMainMenu::Impl {
                             ? context.material_browser_available()
                             : false);
       }
+    }
+
+    if (&menu == edit_menu && material_find_replace_action != nullptr) {
+      QDR_PROFILE_SCOPE("Qt main menu sync edit presentation actions");
+      present_text(*material_find_replace_action,
+                   qtext(context.localization,
+                         "ui.menu.edit.find_replace", "Find/Replace..."));
+      present_enabled(*material_find_replace_action,
+                      context.material_find_replace_available
+                          ? context.material_find_replace_available()
+                          : false);
     }
 
     {

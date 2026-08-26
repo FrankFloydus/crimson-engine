@@ -3770,12 +3770,15 @@ TEST(SceneDocumentTests, TracksDomainRevisionsForOverlayCacheInvalidation) {
   const std::uint64_t transform_before = scene.transform_revision();
   const std::uint64_t visibility_before = scene.visibility_revision();
   const std::uint64_t mesh_before = scene.mesh_binding_revision();
+  const std::uint64_t material_before =
+      scene.material_binding_revision();
 
   ASSERT_TRUE(scene.set_selected(entity, true));
   EXPECT_GT(scene.selection_revision(), selection_before);
   EXPECT_EQ(scene.transform_revision(), transform_before);
   EXPECT_EQ(scene.visibility_revision(), visibility_before);
   EXPECT_EQ(scene.mesh_binding_revision(), mesh_before);
+  EXPECT_EQ(scene.material_binding_revision(), material_before);
 
   const std::uint64_t transform_selection = scene.selection_revision();
   TransformComponent moved;
@@ -3802,6 +3805,18 @@ TEST(SceneDocumentTests, TracksDomainRevisionsForOverlayCacheInvalidation) {
 
   scene.set_mesh(entity, MeshComponent{.mesh = 7});
   EXPECT_GT(scene.mesh_binding_revision(), mesh_before);
+  EXPECT_EQ(scene.material_binding_revision(), material_before);
+
+  ASSERT_TRUE(
+      scene.set_material(entity, MaterialComponent{.material = 11u}));
+  EXPECT_GT(scene.material_binding_revision(), material_before);
+  const std::uint64_t material_written =
+      scene.material_binding_revision();
+  ASSERT_TRUE(
+      scene.set_material(entity, MaterialComponent{.material = 11u}));
+  EXPECT_EQ(scene.material_binding_revision(), material_written);
+  ASSERT_TRUE(scene.clear_material(entity));
+  EXPECT_GT(scene.material_binding_revision(), material_written);
 
   const std::uint64_t clear_selection_before = scene.selection_revision();
   scene.clear_selection();
@@ -3915,6 +3930,8 @@ TEST(SceneDocumentTests, IdempotentComponentWritesKeepAllRevisionsStable) {
   const std::uint64_t transform_revision = scene.transform_revision();
   const std::uint64_t mesh_binding_revision =
       scene.mesh_binding_revision();
+  const std::uint64_t material_binding_revision =
+      scene.material_binding_revision();
   const std::uint64_t render_component_revision =
       scene.render_component_revision();
 
@@ -3935,12 +3952,48 @@ TEST(SceneDocumentTests, IdempotentComponentWritesKeepAllRevisionsStable) {
   EXPECT_EQ(scene.visibility_revision(), visibility_revision);
   EXPECT_EQ(scene.transform_revision(), transform_revision);
   EXPECT_EQ(scene.mesh_binding_revision(), mesh_binding_revision);
+  EXPECT_EQ(scene.material_binding_revision(),
+            material_binding_revision);
   EXPECT_EQ(scene.render_component_revision(), render_component_revision);
 
   ASSERT_TRUE(scene.notify_mesh_payload_changed(mesh_entity));
   EXPECT_GT(scene.revision(), revision);
   EXPECT_GT(scene.mesh_binding_revision(), mesh_binding_revision);
   EXPECT_GT(scene.render_component_revision(), render_component_revision);
+}
+
+TEST(SceneDocumentTests,
+     MaterialBindingRevisionTracksDestroyRollbackAndReplacement) {
+  SceneDocument scene;
+  const EntityId mesh =
+      scene.create_entity("Material Mesh", EntityKind::Mesh);
+  ASSERT_TRUE(scene.set_mesh(mesh, MeshComponent{.mesh = 7u}));
+  const std::uint64_t before_binding =
+      scene.material_binding_revision();
+  ASSERT_TRUE(scene.set_material(mesh, MaterialComponent{.material = 11u}));
+  EXPECT_GT(scene.material_binding_revision(), before_binding);
+
+  const std::uint64_t before_destroy =
+      scene.material_binding_revision();
+  ASSERT_TRUE(scene.destroy_entity(mesh));
+  EXPECT_GT(scene.material_binding_revision(), before_destroy);
+
+  const SceneProjectionCheckpoint checkpoint =
+      scene.capture_projection_checkpoint();
+  const std::uint64_t checkpoint_revision =
+      scene.material_binding_revision();
+  const EntityId staged =
+      scene.create_entity("Staged Material Mesh", EntityKind::Mesh);
+  ASSERT_TRUE(scene.set_material(staged,
+                                 MaterialComponent{.material = 12u}));
+  ASSERT_GT(scene.material_binding_revision(), checkpoint_revision);
+  ASSERT_TRUE(scene.restore_projection_checkpoint(
+      checkpoint, std::span<const EntityId>(&staged, 1u)));
+  EXPECT_EQ(scene.material_binding_revision(), checkpoint_revision);
+  EXPECT_FALSE(scene.exists(staged));
+
+  scene.advance_revision_for_replacement(100u);
+  EXPECT_GT(scene.material_binding_revision(), 100u);
 }
 
 TEST(SceneDocumentTests,
@@ -4228,6 +4281,35 @@ TEST(SceneDocumentTests, TracksHierarchyTreeOrderAndInheritedState) {
   EXPECT_FALSE(scene.is_effectively_visible(child));
   ASSERT_TRUE(scene.set_locked(group, true));
   EXPECT_TRUE(scene.is_effectively_locked(grandchild));
+}
+
+TEST(SceneDocumentTests,
+     InstanceDefinitionRetargetAdvancesMaterialUseHierarchyRevision) {
+  SceneDocument scene;
+  const EntityId first_definition = scene.create_empty("First Definition");
+  const EntityId second_definition = scene.create_empty("Second Definition");
+  ASSERT_TRUE(scene.set_instance_definition(first_definition));
+  ASSERT_TRUE(scene.set_instance_definition(second_definition));
+  const EntityId occurrence =
+      scene.create_entity("Retargeted Occurrence", EntityKind::Instance);
+  const InstanceOccurrenceComponent first{
+      .definition = first_definition,
+  };
+  const InstanceOccurrenceComponent second{
+      .definition = second_definition,
+  };
+  ASSERT_TRUE(scene.set_instance_occurrence(occurrence, first));
+
+  const std::uint64_t before_idempotent =
+      scene.hierarchy_presentation_revision();
+  ASSERT_TRUE(scene.set_instance_occurrence(occurrence, first));
+  EXPECT_EQ(scene.hierarchy_presentation_revision(), before_idempotent);
+
+  ASSERT_TRUE(scene.set_instance_occurrence(occurrence, second));
+  EXPECT_GT(scene.hierarchy_presentation_revision(), before_idempotent);
+  ASSERT_NE(scene.instance_occurrence(occurrence), nullptr);
+  EXPECT_EQ(scene.instance_occurrence(occurrence)->definition,
+            second_definition);
 }
 
 TEST(SceneDocumentTests,
@@ -7317,6 +7399,8 @@ TEST(AssetRegistryTests, TracksTypedRevisionsAndScopedUpdates) {
   EXPECT_EQ(registry.material_revision(material).value, 1u);
   EXPECT_EQ(registry.texture_revision(texture).value, 1u);
   EXPECT_EQ(registry.revision(), 3u);
+  EXPECT_EQ(registry.material_catalog_revision(), 1u);
+  EXPECT_EQ(registry.mesh_material_usage_revision(), 1u);
 
   MeshAsset replacement = make_test_triangle_mesh();
   replacement.id = 999;
@@ -7330,6 +7414,8 @@ TEST(AssetRegistryTests, TracksTypedRevisionsAndScopedUpdates) {
   EXPECT_EQ(replaced_mesh->revision.value, 2u);
   EXPECT_EQ(replaced_mesh->name, "Replacement");
   EXPECT_EQ(registry.revision(), 4u);
+  EXPECT_EQ(registry.material_catalog_revision(), 1u);
+  EXPECT_EQ(registry.mesh_material_usage_revision(), 2u);
 
   ASSERT_TRUE(registry.update_mesh(mesh, [](MeshAsset &asset) {
     asset.id = 999;
@@ -7358,8 +7444,130 @@ TEST(AssetRegistryTests, TracksTypedRevisionsAndScopedUpdates) {
   EXPECT_EQ(registry.texture(texture)->revision.value, 2u);
   EXPECT_EQ(registry.texture(texture)->width, 32u);
   EXPECT_EQ(registry.revision(), 7u);
+  EXPECT_EQ(registry.material_catalog_revision(), 2u);
+  EXPECT_EQ(registry.mesh_material_usage_revision(), 3u);
   EXPECT_FALSE(registry.update_mesh(kInvalidAssetId, [](MeshAsset &) {}));
   EXPECT_EQ(registry.mesh_revision(kInvalidAssetId).value, 0u);
+  EXPECT_EQ(registry.material_catalog_revision(), 2u);
+  EXPECT_EQ(registry.mesh_material_usage_revision(), 3u);
+  ASSERT_TRUE(registry.remove_mesh(mesh));
+  EXPECT_EQ(registry.mesh_material_usage_revision(), 4u);
+}
+
+TEST(AssetRegistryTests,
+     MaterialCatalogRevisionTracksOnlyMaterialsAndRestoresExactly) {
+  AssetRegistry registry;
+  const AssetId mesh =
+      registry.add_mesh(make_test_triangle_mesh("Unrelated Mesh"));
+  TextureAsset texture;
+  texture.name = "Unrelated Texture";
+  const AssetId texture_id = registry.add_texture(std::move(texture));
+  ASSERT_NE(mesh, kInvalidAssetId);
+  ASSERT_NE(texture_id, kInvalidAssetId);
+  EXPECT_EQ(registry.material_catalog_revision(), 0u);
+  EXPECT_EQ(registry.mesh_material_usage_revision(), 1u);
+
+  const AssetId material =
+      registry.add_material(make_default_quader_material("Tracked"));
+  ASSERT_NE(material, kInvalidAssetId);
+  EXPECT_EQ(registry.material_catalog_revision(), 1u);
+  const AssetRegistryProjectionCheckpoint checkpoint =
+      registry.capture_projection_checkpoint();
+
+  ASSERT_TRUE(registry.update_mesh(mesh, [](MeshAsset &asset) {
+    asset.name = "Still Unrelated";
+  }));
+  ASSERT_TRUE(registry.update_texture(texture_id, [](TextureAsset &asset) {
+    asset.width = 32u;
+  }));
+  EXPECT_EQ(registry.material_catalog_revision(), 1u);
+  EXPECT_EQ(registry.mesh_material_usage_revision(), 2u);
+
+  ASSERT_TRUE(registry.update_material(material, [](MaterialDocument &asset) {
+    asset.name = "Updated";
+  }));
+  EXPECT_EQ(registry.material_catalog_revision(), 2u);
+  EXPECT_FALSE(registry.remove_material(kInvalidAssetId));
+  EXPECT_EQ(registry.material_catalog_revision(), 2u);
+  ASSERT_TRUE(registry.remove_material(material));
+  EXPECT_EQ(registry.material_catalog_revision(), 3u);
+
+  ASSERT_TRUE(registry.restore_projection_checkpoint(checkpoint));
+  EXPECT_EQ(registry.material_catalog_revision(), 1u);
+  EXPECT_EQ(registry.mesh_material_usage_revision(), 1u);
+  ASSERT_NE(registry.material(material), nullptr);
+
+  AssetRegistry copied = registry;
+  EXPECT_EQ(copied.material_catalog_revision(), 1u);
+  EXPECT_EQ(copied.mesh_material_usage_revision(), 1u);
+  AssetRegistry moved = std::move(copied);
+  EXPECT_EQ(moved.material_catalog_revision(), 1u);
+  EXPECT_EQ(moved.mesh_material_usage_revision(), 1u);
+  moved.advance_revision_for_replacement(100u);
+  EXPECT_GT(moved.material_catalog_revision(), 100u);
+  EXPECT_GT(moved.mesh_material_usage_revision(), 100u);
+}
+
+TEST(AssetRegistryTests,
+     ReferencedTextureMutationsAdvanceMaterialCatalogRevision) {
+  AssetRegistry registry;
+  TextureAsset referenced_texture;
+  referenced_texture.name = "Referenced";
+  const AssetId referenced =
+      registry.add_texture(std::move(referenced_texture));
+  TextureAsset unrelated_texture;
+  unrelated_texture.name = "Unrelated";
+  const AssetId unrelated =
+      registry.add_texture(std::move(unrelated_texture));
+  ASSERT_NE(referenced, kInvalidAssetId);
+  ASSERT_NE(unrelated, kInvalidAssetId);
+
+  const AssetId material = registry.add_material(
+      make_default_quader_material("Textured", referenced, referenced));
+  ASSERT_NE(material, kInvalidAssetId);
+  const std::uint64_t after_material =
+      registry.material_catalog_revision();
+
+  TextureAsset unrelated_replacement;
+  unrelated_replacement.name = "Unrelated Replacement";
+  ASSERT_TRUE(registry.replace_texture(unrelated,
+                                       std::move(unrelated_replacement)));
+  EXPECT_EQ(registry.material_catalog_revision(), after_material);
+  ASSERT_TRUE(registry.update_texture(unrelated, [](TextureAsset &texture) {
+    texture.width = 8u;
+  }));
+  EXPECT_EQ(registry.material_catalog_revision(), after_material);
+  ASSERT_TRUE(registry.remove_texture(unrelated));
+  EXPECT_EQ(registry.material_catalog_revision(), after_material);
+
+  TextureAsset referenced_replacement;
+  referenced_replacement.name = "Referenced Replacement";
+  ASSERT_TRUE(registry.replace_texture(referenced,
+                                       std::move(referenced_replacement)));
+  EXPECT_EQ(registry.material_catalog_revision(), after_material + 1u);
+  ASSERT_TRUE(registry.update_texture(referenced, [](TextureAsset &texture) {
+    texture.height = 16u;
+  }));
+  EXPECT_EQ(registry.material_catalog_revision(), after_material + 2u);
+  const AssetRegistryProjectionCheckpoint checkpoint =
+      registry.capture_projection_checkpoint();
+  ASSERT_TRUE(registry.remove_texture(referenced));
+  EXPECT_EQ(registry.material_catalog_revision(), after_material + 3u);
+  ASSERT_NE(registry.material(material), nullptr);
+  EXPECT_FALSE(registry.validate_material(*registry.material(material)).ok);
+
+  TextureAsset restored_texture;
+  restored_texture.name = "Restored Referenced Texture";
+  EXPECT_EQ(registry.add_texture(referenced, std::move(restored_texture)),
+            referenced);
+  EXPECT_EQ(registry.material_catalog_revision(), after_material + 4u);
+  ASSERT_NE(registry.material(material), nullptr);
+  EXPECT_TRUE(registry.validate_material(*registry.material(material)).ok);
+
+  ASSERT_TRUE(registry.restore_projection_checkpoint(checkpoint));
+  EXPECT_EQ(registry.material_catalog_revision(), after_material + 2u);
+  ASSERT_NE(registry.material(material), nullptr);
+  EXPECT_TRUE(registry.validate_material(*registry.material(material)).ok);
 }
 
 TEST(AssetRegistryTests,

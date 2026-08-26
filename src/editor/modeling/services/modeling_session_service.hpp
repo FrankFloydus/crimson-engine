@@ -193,6 +193,9 @@ public:
       int modeling_object_id, int face_id, MaterialReference material);
   ModelingCommandResult apply_material_to_face(
       int modeling_object_id, int face_id, MaterialReference material);
+  ModelingCommandResult replace_material_references_on_faces(
+      std::span<const ModelingFaceMaterialReplacementTarget> targets,
+      MaterialReference source, MaterialReference replacement);
   [[nodiscard]] ModelingProjectMaterialQueryResult
   project_material_for_face(int modeling_object_id, int face_id) const;
   ModelingCommandResult apply_face_material_to_mesh(int modeling_object_id,

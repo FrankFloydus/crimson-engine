@@ -44,6 +44,7 @@ class QuaderEditorApi::Impl final {
 public:
     explicit Impl(QuaderApiSession session)
         : api(session)
+        , materials(session, api.mutations())
         , project(session)
         , project_assets(session)
         , standard_material_documents(session)
@@ -68,6 +69,7 @@ public:
     explicit Impl(ProjectSession &project_session)
         : project_session_owner(&project_session)
         , api(project_api_session(project_session))
+        , materials(project_api_session(project_session), api.mutations())
         , project(project_session)
         , project_assets(project_api_session(project_session))
         , standard_material_documents(project_api_session(project_session))
@@ -157,6 +159,7 @@ public:
         }
       }
       api.rebind(session, binding_identity);
+      materials.rebind_session(session);
       project.rebind_session(session);
       project_assets.rebind_session(session);
       standard_material_documents.rebind_session(session);
@@ -177,6 +180,7 @@ public:
 
     ProjectSession *project_session_owner = nullptr;
     QuaderApi api;
+    QuaderMaterialsApi materials;
     QuaderProjectApi project;
     QuaderProjectAssetsApi project_assets;
     QuaderStandardMaterialDocumentsApi standard_material_documents;
@@ -251,6 +255,14 @@ QuaderProjectAssetsApi &QuaderEditorApi::project_assets() {
 
 const QuaderProjectAssetsApi &QuaderEditorApi::project_assets() const {
   return impl_->project_assets;
+}
+
+QuaderMaterialsApi &QuaderEditorApi::materials() {
+  return impl_->materials;
+}
+
+const QuaderMaterialsApi &QuaderEditorApi::materials() const {
+  return impl_->materials;
 }
 
 QuaderStandardMaterialDocumentsApi &

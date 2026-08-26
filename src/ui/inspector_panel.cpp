@@ -28,6 +28,7 @@
 #include <QDialog>
 #include <QDoubleSpinBox>
 #include <QFocusEvent>
+#include <QFrame>
 #include <QGridLayout>
 #include <QHeaderView>
 #include <QHBoxLayout>
@@ -35,8 +36,11 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QPainter>
+#include <QPalette>
 #include <QPen>
 #include <QPointer>
+#include <QPushButton>
+#include <QResizeEvent>
 #include <QScrollBar>
 #include <QSizePolicy>
 #include <QStyledItemDelegate>
@@ -71,6 +75,9 @@ constexpr float kDegToRad = 0.017453292519943295f;
 constexpr float kInspectorLightRangeMin = 0.1f;
 constexpr float kInspectorLightRangeSliderMax = 100.0f;
 constexpr int kInspectorMinimumValueColumnWidth = 96;
+constexpr int kInspectorMaterialPreviewSize = 56;
+constexpr int kInspectorMaterialActionSize = 24;
+constexpr int kInspectorMaterialActionIconSize = 16;
 
 QString qt_text(std::string_view text) {
   return QString::fromUtf8(text.data(), static_cast<qsizetype>(text.size()));
@@ -248,6 +255,74 @@ protected:
   }
 };
 
+/// Retains the complete accessible name while painting a compact elided row.
+class InspectorElidedLabel final : public QLabel {
+public:
+  explicit InspectorElidedLabel(QString text, QWidget *parent = nullptr)
+      : QLabel(parent), full_text_(std::move(text)) {
+    setTextFormat(Qt::PlainText);
+    setAccessibleName(full_text_);
+    update_elided_text();
+  }
+
+protected:
+  void resizeEvent(QResizeEvent *event) override {
+    QLabel::resizeEvent(event);
+    update_elided_text();
+  }
+
+private:
+  void update_elided_text() {
+    const QString elided =
+        fontMetrics().elidedText(full_text_, Qt::ElideRight, width());
+    QLabel::setText(elided);
+    setToolTip(elided == full_text_ ? QString{} : full_text_);
+  }
+
+  QString full_text_;
+};
+
+enum class InspectorMaterialActionIcon { Edit, Replace };
+
+QPixmap material_action_pixmap(InspectorMaterialActionIcon action,
+                               const QColor &color) {
+  QPixmap pixmap(kInspectorMaterialActionIconSize,
+                 kInspectorMaterialActionIconSize);
+  pixmap.fill(Qt::transparent);
+
+  QPainter painter(&pixmap);
+  painter.setRenderHint(QPainter::Antialiasing, true);
+  QPen pen(color);
+  pen.setWidthF(1.6);
+  pen.setCapStyle(Qt::RoundCap);
+  pen.setJoinStyle(Qt::RoundJoin);
+  painter.setPen(pen);
+
+  if (action == InspectorMaterialActionIcon::Edit) {
+    painter.drawLine(QPointF(4.0, 12.0), QPointF(11.5, 4.5));
+    painter.drawLine(QPointF(5.7, 13.0), QPointF(13.0, 5.7));
+    painter.drawLine(QPointF(3.5, 12.4), QPointF(3.0, 14.0));
+    painter.drawLine(QPointF(3.0, 14.0), QPointF(4.6, 13.5));
+    painter.drawLine(QPointF(10.9, 4.0), QPointF(13.5, 6.6));
+  } else {
+    // Two overlapping swatches communicate substitution without arrows.
+    painter.drawRoundedRect(QRectF(2.5, 2.5, 8.0, 8.0), 1.0, 1.0);
+    painter.drawRoundedRect(QRectF(5.5, 5.5, 8.0, 8.0), 1.0, 1.0);
+  }
+  return pixmap;
+}
+
+QIcon material_action_icon(InspectorMaterialActionIcon action,
+                            const QPalette &palette) {
+  QIcon icon;
+  icon.addPixmap(material_action_pixmap(action,
+                                        palette.color(QPalette::ButtonText)),
+                 QIcon::Normal, QIcon::Off);
+  icon.addPixmap(material_action_pixmap(action, palette.color(QPalette::Mid)),
+                 QIcon::Disabled, QIcon::Off);
+  return icon;
+}
+
 /// Extends the stock spin box with an explicit cancel callback for previews.
 class InspectorDoubleSpinBox final : public QDoubleSpinBox {
 public:
@@ -378,6 +453,27 @@ struct InspectorPanel::Impl {
                      [this]() { clamp_label_column_width(); });
   }
 
+  void set_material_presentation(
+      InspectorMaterialPresentationSnapshot snapshot) {
+    const bool presentation_changed =
+        material_presentation_.revision != snapshot.revision ||
+        material_presentation_.section_visible != snapshot.section_visible ||
+        static_cast<bool>(material_presentation_.edit_material) !=
+            static_cast<bool>(snapshot.edit_material) ||
+        static_cast<bool>(material_presentation_.replace_material) !=
+            static_cast<bool>(snapshot.replace_material);
+    if (!presentation_changed) {
+      // Callback rebinding does not require rebuilding immutable controls.
+      material_presentation_.edit_material =
+          std::move(snapshot.edit_material);
+      material_presentation_.replace_material =
+          std::move(snapshot.replace_material);
+      return;
+    }
+    material_presentation_ = std::move(snapshot);
+    force_rebuild_ = true;
+  }
+
   void refresh(UIContext &context) {
     const SceneDocument *next_document = &context.scene.document;
     const ModelingSessionService *next_modeling = &context.scene.modeling;
@@ -422,6 +518,8 @@ struct InspectorPanel::Impl {
         force_rebuild_ || built_scene_revision_ != document_->revision() ||
         built_modeling_content_revision_ != summary.content_revision ||
         built_modeling_selection_revision_ != summary.selection_revision ||
+        built_material_presentation_revision_ !=
+            material_presentation_.revision ||
         built_locale_ != localization_->current_locale();
     if (!presentation_changed) {
       return;
@@ -481,14 +579,17 @@ private:
         {localized("ui.inspector.property", "Property"),
          localized("ui.inspector.value", "Value")});
 
-    if (selection_.empty()) {
+    if (summary.mode == ModelingSelectionMode::Vertex ||
+        summary.mode == ModelingSelectionMode::Edge) {
+      // Vertex and Edge modes intentionally present no Inspector properties.
+    } else if (summary.mode == ModelingSelectionMode::Face) {
+      build_material_section();
+    } else if (selection_.empty()) {
       build_empty_selection(summary);
     } else {
-      if (is_component_selection_mode(summary.mode)) {
-        build_component_selection_summary(summary);
-      }
       build_general_section();
       build_transform_section();
+      build_material_section();
 
       if (selection_.size() == 1u && document_->is_scene_root(primary_)) {
         build_scene_settings_sections();
@@ -504,6 +605,7 @@ private:
     built_scene_revision_ = document_->revision();
     built_modeling_content_revision_ = summary.content_revision;
     built_modeling_selection_revision_ = summary.selection_revision;
+    built_material_presentation_revision_ = material_presentation_.revision;
     built_locale_ = localization_->current_locale();
     force_rebuild_ = false;
     rebuilding_ = false;
@@ -584,8 +686,10 @@ private:
     }
   }
 
-  Section add_section(std::string stable_id, const QString &title) {
-    const auto state = expanded_sections_.try_emplace(stable_id, false).first;
+  Section add_section(std::string stable_id, const QString &title,
+                      bool default_expanded = false) {
+    const auto state =
+        expanded_sections_.try_emplace(stable_id, default_expanded).first;
     auto *item = new QTreeWidgetItem(tree_);
     item->setText(0, title);
     item->setData(0, Qt::UserRole, qt_text(stable_id));
@@ -608,6 +712,114 @@ private:
     policy.setHorizontalStretch(1);
     field->setSizePolicy(policy);
     tree_->setItemWidget(item, 1, field);
+  }
+
+  void build_material_section() {
+    if (!material_presentation_.section_visible) {
+      return;
+    }
+
+    Section section = add_section(
+        "material", localized("ui.inspector.material", "Material"), true);
+    std::vector<QuaderMaterialReference> presented_references;
+    presented_references.reserve(material_presentation_.materials.size());
+
+    std::size_t row_index = 0;
+    for (const QtMaterialPresentationItem &material :
+         material_presentation_.materials) {
+      if (std::find(presented_references.begin(), presented_references.end(),
+                    material.reference) != presented_references.end()) {
+        continue;
+      }
+      presented_references.push_back(material.reference);
+
+      const std::string stable_id =
+          "material." + std::to_string(row_index++);
+      auto *item = new QTreeWidgetItem(section.item);
+      item->setData(0, Qt::UserRole, stable_name(stable_id));
+      item->setFlags(Qt::ItemIsEnabled);
+      item->setFirstColumnSpanned(true);
+      item->setSizeHint(
+          0, QSize(0, kInspectorMaterialPreviewSize + 8));
+
+      auto *row = new QWidget(section.editor_parent);
+      row->setObjectName(stable_name(stable_id + ".row"));
+      auto *layout = new QHBoxLayout(row);
+      layout->setContentsMargins(4, 4, 4, 4);
+      layout->setSpacing(6);
+
+      auto *preview = new QLabel(row);
+      preview->setObjectName(stable_name(stable_id + ".preview"));
+      preview->setFixedSize(kInspectorMaterialPreviewSize,
+                            kInspectorMaterialPreviewSize);
+      preview->setAlignment(Qt::AlignCenter);
+      preview->setFrameShape(QFrame::StyledPanel);
+      preview->setPixmap(qt_material_preview_pixmap(
+          material, QSize(kInspectorMaterialPreviewSize,
+                          kInspectorMaterialPreviewSize),
+          preview->devicePixelRatioF()));
+      layout->addWidget(preview);
+
+      const QString display_name =
+          material.name.isEmpty()
+              ? localized("ui.inspector.material.missing", "Missing material")
+              : material.name;
+      auto *name = new InspectorElidedLabel(display_name, row);
+      name->setObjectName(stable_name(stable_id + ".name"));
+      name->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
+      layout->addWidget(name, 1);
+
+      auto *edit = new QPushButton(row);
+      edit->setObjectName(stable_name(stable_id + ".edit"));
+      edit->setFixedSize(kInspectorMaterialActionSize,
+                         kInspectorMaterialActionSize);
+      edit->setIcon(material_action_icon(InspectorMaterialActionIcon::Edit,
+                                         edit->palette()));
+      edit->setIconSize(QSize(kInspectorMaterialActionIconSize,
+                              kInspectorMaterialActionIconSize));
+      const QString edit_label =
+          localized("ui.inspector.material.edit", "Edit material");
+      edit->setAccessibleName(edit_label);
+      edit->setToolTip(edit_label);
+      edit->setEnabled(material.reference.project_owned() &&
+                       material.editable && material.available &&
+                       material.valid() &&
+                       static_cast<bool>(material_presentation_.edit_material));
+      layout->addWidget(edit, 0, Qt::AlignVCenter);
+
+      auto *replace = new QPushButton(row);
+      replace->setObjectName(stable_name(stable_id + ".replace"));
+      replace->setFixedSize(kInspectorMaterialActionSize,
+                            kInspectorMaterialActionSize);
+      replace->setIcon(material_action_icon(
+          InspectorMaterialActionIcon::Replace, replace->palette()));
+      replace->setIconSize(QSize(kInspectorMaterialActionIconSize,
+                                 kInspectorMaterialActionIconSize));
+      const QString replace_label =
+          localized("ui.inspector.material.replace", "Replace material");
+      replace->setAccessibleName(replace_label);
+      replace->setToolTip(replace_label);
+      replace->setEnabled(
+          material.reference.valid() &&
+          static_cast<bool>(material_presentation_.replace_material));
+      layout->addWidget(replace, 0, Qt::AlignVCenter);
+
+      const QuaderMaterialReference reference = material.reference;
+      QObject::connect(edit, &QPushButton::clicked, &panel_,
+                       [this, reference]() {
+                         if (material_presentation_.edit_material) {
+                           material_presentation_.edit_material(reference);
+                         }
+                       });
+      QObject::connect(replace, &QPushButton::clicked, &panel_,
+                       [this, reference]() {
+                         if (material_presentation_.replace_material) {
+                           material_presentation_.replace_material(reference);
+                         }
+                       });
+
+      tree_->setItemWidget(item, 0, row);
+    }
   }
 
   QCheckBox *add_checkbox(Section &section, std::string stable_id,
@@ -1642,6 +1854,7 @@ private:
   LocalizationService *localization_ = nullptr;
   SceneDocument *preview_document_ = nullptr;
   const AssetRegistry *preview_assets_ = nullptr;
+  InspectorMaterialPresentationSnapshot material_presentation_;
   SceneTransformDragService active_transform_preview_;
   std::optional<TransformEditState> active_transform_edit_;
   UIContinuousEditTracker active_continuous_edit_;
@@ -1655,6 +1868,8 @@ private:
       std::numeric_limits<std::uint64_t>::max();
   std::uint64_t built_modeling_selection_revision_ =
       std::numeric_limits<std::uint64_t>::max();
+  std::uint64_t built_material_presentation_revision_ =
+      std::numeric_limits<std::uint64_t>::max();
   std::string built_locale_;
   std::string active_continuous_id_;
   bool continuous_edit_active_ = false;
@@ -1667,6 +1882,11 @@ InspectorPanel::InspectorPanel(QWidget *parent)
     : QWidget(parent), impl_(std::make_unique<Impl>(*this)) {}
 
 InspectorPanel::~InspectorPanel() = default;
+
+void InspectorPanel::set_material_presentation(
+    InspectorMaterialPresentationSnapshot snapshot) {
+  impl_->set_material_presentation(std::move(snapshot));
+}
 
 void InspectorPanel::refresh(UIContext &context) { impl_->refresh(context); }
 

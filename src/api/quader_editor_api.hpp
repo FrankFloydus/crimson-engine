@@ -12,6 +12,7 @@
 #include "api/quader_dev_tools_api.hpp"
 #endif
 #include "api/quader_events_api.hpp"
+#include "api/quader_materials_api.hpp"
 #include "api/quader_object_handle.hpp"
 #include "api/quader_preferences_api.hpp"
 #include "api/quader_project_api.hpp"
@@ -59,6 +60,8 @@ public:
     [[nodiscard]] const QuaderProjectApi& project() const;
     [[nodiscard]] QuaderProjectAssetsApi &project_assets();
     [[nodiscard]] const QuaderProjectAssetsApi &project_assets() const;
+    [[nodiscard]] QuaderMaterialsApi &materials();
+    [[nodiscard]] const QuaderMaterialsApi &materials() const;
     [[nodiscard]] QuaderStandardMaterialDocumentsApi &
     standard_material_documents();
     [[nodiscard]] const QuaderStandardMaterialDocumentsApi &

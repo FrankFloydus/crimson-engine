@@ -11,7 +11,6 @@
 #include <QCloseEvent>
 #include <QHeaderView>
 #include <QHBoxLayout>
-#include <QImage>
 #include <QItemSelectionModel>
 #include <QKeyEvent>
 #include <QLabel>
@@ -20,7 +19,7 @@
 #include <QLocale>
 #include <QMenu>
 #include <QMenuBar>
-#include <QPixmap>
+#include <QPushButton>
 #include <QScopedValueRollback>
 #include <QShowEvent>
 #include <QSignalBlocker>
@@ -41,14 +40,8 @@ namespace {
 
 constexpr std::array<int, 6> kTileSizes{16, 32, 64, 128, 256, 512};
 constexpr int kDefaultTileSize = 128;
-constexpr int kMaximumPreviewSize = 512;
 constexpr int kGridLabelHeight = 34;
 constexpr int kGridSpacing = 8;
-
-bool has_truevision_tga_footer(const QByteArray &encoded) {
-  static const QByteArray kSignature("TRUEVISION-XFILE.\0", 18);
-  return encoded.endsWith(kSignature);
-}
 
 int tile_size_for_index(int index) {
   return kTileSizes[static_cast<std::size_t>(
@@ -181,8 +174,6 @@ bool QtMaterialBrowserModel::set_items(
   }
   beginResetModel();
   items_ = std::move(items);
-  preview_icons_.assign(items_.size(), {});
-  preview_icons_ready_.assign(items_.size(), false);
   endResetModel();
   return true;
 }
@@ -202,35 +193,11 @@ QIcon QtMaterialBrowserModel::preview_icon(int row) const {
     return {};
   }
   const std::size_t offset = static_cast<std::size_t>(row);
-  if (preview_icons_ready_[offset]) {
-    return preview_icons_[offset];
-  }
-
   const QtMaterialBrowserItem &item = items_[offset];
-  QImage image;
-  if (!item.encoded_albedo.isEmpty()) {
-    const bool has_tga_footer =
-        has_truevision_tga_footer(item.encoded_albedo);
-    if (has_tga_footer) {
-      (void)image.loadFromData(item.encoded_albedo, "TGA");
-    } else {
-      (void)image.loadFromData(item.encoded_albedo);
-    }
-    if (image.isNull()) {
-      // A true-color TGA header can also look like a Windows cursor header,
-      // causing Qt's generic content probe to select CUR first.
-      (void)image.loadFromData(item.encoded_albedo, "TGA");
-    }
+  if (item.thumbnail) {
+    return item.thumbnail->icon;
   }
-  if (image.isNull()) {
-    image = QImage(96, 96, QImage::Format_ARGB32_Premultiplied);
-    image.fill(item.fallback_color);
-  }
-  image = image.scaled(QSize(kMaximumPreviewSize, kMaximumPreviewSize),
-                       Qt::KeepAspectRatio, Qt::SmoothTransformation);
-  preview_icons_[offset] = QIcon(QPixmap::fromImage(std::move(image)));
-  preview_icons_ready_[offset] = true;
-  return preview_icons_[offset];
+  return make_qt_material_thumbnail(item)->icon;
 }
 
 QtMaterialBrowserProxyModel::QtMaterialBrowserProxyModel(QObject *parent)
@@ -413,10 +380,19 @@ QtMaterialBrowserWindow::QtMaterialBrowserWindow(QWidget *parent)
   content_stack_->addWidget(empty_label_);
   root_layout->addWidget(content_stack_, 1);
 
+  auto *footer = new QHBoxLayout();
+  footer->addStretch(1);
+  accept_button_ = new QPushButton(central_widget);
+  accept_button_->setObjectName(QStringLiteral("materialBrowser.accept"));
+  accept_button_->setEnabled(false);
+  footer->addWidget(accept_button_);
+  root_layout->addLayout(footer);
+
   QObject::connect(search_, &QLineEdit::textChanged, this,
                    [this](const QString &text) {
                      proxy_->set_search_text(text);
                      refresh_content_page();
+                     update_accept_enabled();
                    });
   QObject::connect(grid_button_, &QToolButton::clicked, this, [this]() {
     set_view_mode(QtMaterialBrowserViewMode::Grid, true);
@@ -462,6 +438,10 @@ QtMaterialBrowserWindow::QtMaterialBrowserWindow(QWidget *parent)
                    [this](const QModelIndex &index) { open_index(index); });
   QObject::connect(list_view_, &QTableView::doubleClicked, this,
                    [this](const QModelIndex &index) { open_index(index); });
+  QObject::connect(selection, &QItemSelectionModel::currentChanged, this,
+                   [this]() { update_accept_enabled(); });
+  QObject::connect(accept_button_, &QPushButton::clicked, this,
+                   [this]() { accept_selected_material(); });
 
   set_labels(labels_);
   set_view_mode(QtMaterialBrowserViewMode::Grid, false);
@@ -483,27 +463,49 @@ void QtMaterialBrowserWindow::set_labels(QtMaterialBrowserLabels labels) {
   list_button_->setAccessibleName(labels_.list);
   file_menu_->setTitle(labels_.file);
   import_action_->setText(labels_.import_textures);
+  accept_button_->setText(labels_.accept);
+  accept_button_->setAccessibleName(labels_.accept);
   update_tile_size_text();
   model_->set_labels(labels_);
+  update_purpose_presentation();
   refresh_content_page();
 }
 
 void QtMaterialBrowserWindow::set_materials(
     std::vector<QtMaterialBrowserItem> materials,
-    QString active_material_id) {
+    QuaderMaterialReference selected_material) {
+  // Picker search is session-transient. UISystem rebinds candidates before the
+  // hidden window receives showEvent(), so clear the old session's filter now
+  // or the requested preselection may not exist in the proxy model.
+  if (purpose_ == QtMaterialBrowserPurpose::Picker && !isVisible() &&
+      !search_->text().isEmpty()) {
+    search_->clear();
+  }
   (void)model_->set_items(std::move(materials));
   proxy_->sort(proxy_->sortColumn(), proxy_->sortOrder());
-  select_material(active_material_id);
+  select_material(selected_material);
   refresh_content_page();
+  update_accept_enabled();
 }
 
 void QtMaterialBrowserWindow::set_active_material(
-    QString active_material_id) {
-  select_material(active_material_id);
+    QuaderMaterialReference active_material) {
+  select_material(active_material);
 }
 
 void QtMaterialBrowserWindow::clear_materials() {
   set_materials({});
+}
+
+void QtMaterialBrowserWindow::set_purpose(QtMaterialBrowserPurpose purpose) {
+  purpose_ = purpose;
+  update_purpose_presentation();
+}
+
+QuaderMaterialReference QtMaterialBrowserWindow::selected_material() const {
+  const QtMaterialBrowserItem *item =
+      item_for_index(grid_view_->selectionModel()->currentIndex());
+  return item != nullptr ? item->reference : QuaderMaterialReference{};
 }
 
 void QtMaterialBrowserWindow::set_activate_material_callback(
@@ -514,6 +516,11 @@ void QtMaterialBrowserWindow::set_activate_material_callback(
 void QtMaterialBrowserWindow::set_open_material_callback(
     OpenMaterialCallback callback) {
   open_material_ = std::move(callback);
+}
+
+void QtMaterialBrowserWindow::set_accept_material_callback(
+    AcceptMaterialCallback callback) {
+  accept_material_ = std::move(callback);
 }
 
 void QtMaterialBrowserWindow::set_import_textures_callback(
@@ -607,43 +614,91 @@ void QtMaterialBrowserWindow::refresh_content_page() {
           : static_cast<QWidget *>(list_view_));
 }
 
-void QtMaterialBrowserWindow::select_material(const QString &stable_id) {
+void QtMaterialBrowserWindow::update_purpose_presentation() {
+  const bool normal =
+      purpose_ == QtMaterialBrowserPurpose::ActiveMaterial;
+  setWindowTitle(normal ? labels_.window_title : labels_.picker_window_title);
+  file_menu_->menuAction()->setVisible(normal);
+  update_accept_enabled();
+}
+
+void QtMaterialBrowserWindow::update_accept_enabled() {
+  if (accept_button_ == nullptr || grid_view_ == nullptr) {
+    return;
+  }
+  const QtMaterialBrowserItem *item =
+      item_for_index(grid_view_->selectionModel()->currentIndex());
+  accept_button_->setEnabled(item != nullptr && item->valid());
+}
+
+void QtMaterialBrowserWindow::select_material(
+    const QuaderMaterialReference &reference) {
   QItemSelectionModel *selection = grid_view_->selectionModel();
   selection->clearSelection();
   selection->setCurrentIndex({}, QItemSelectionModel::NoUpdate);
-  if (stable_id.isEmpty()) {
+  if (!reference.valid()) {
+    update_accept_enabled();
     return;
   }
   for (int row = 0; row < proxy_->rowCount(); ++row) {
     const QModelIndex index = proxy_->index(row, 0);
-    if (index.data(QtMaterialBrowserModel::StableIdRole).toString() ==
-        stable_id) {
+    const QtMaterialBrowserItem *item = item_for_index(index);
+    if (item != nullptr && item->reference == reference) {
       selection->setCurrentIndex(
           index, QItemSelectionModel::ClearAndSelect |
                      QItemSelectionModel::Rows);
       return;
     }
   }
+  update_accept_enabled();
+}
+
+const QtMaterialBrowserItem *QtMaterialBrowserWindow::item_for_index(
+    const QModelIndex &proxy_index) const {
+  if (!proxy_index.isValid() || proxy_ == nullptr || model_ == nullptr) {
+    return nullptr;
+  }
+  const QModelIndex source_index = proxy_->mapToSource(
+      proxy_index.siblingAtColumn(QtMaterialBrowserModel::NameColumn));
+  if (!source_index.isValid() || source_index.row() < 0 ||
+      source_index.row() >= static_cast<int>(model_->items().size())) {
+    return nullptr;
+  }
+  return &model_->items()[static_cast<std::size_t>(source_index.row())];
 }
 
 void QtMaterialBrowserWindow::activate_index(const QModelIndex &index) {
-  if (!index.isValid() || !activate_material_) {
+  const QtMaterialBrowserItem *item = item_for_index(index);
+  if (purpose_ != QtMaterialBrowserPurpose::ActiveMaterial ||
+      item == nullptr || !item->valid() || !activate_material_) {
     return;
   }
-  activate_material_(
-      index.siblingAtColumn(QtMaterialBrowserModel::NameColumn)
-          .data(QtMaterialBrowserModel::StableIdRole)
-          .toString());
+  activate_material_(item->reference);
 }
 
 void QtMaterialBrowserWindow::open_index(const QModelIndex &index) {
-  if (!index.isValid() || !open_material_) {
+  const QtMaterialBrowserItem *item = item_for_index(index);
+  if (purpose_ != QtMaterialBrowserPurpose::ActiveMaterial ||
+      item == nullptr || !item->valid() || !open_material_) {
     return;
   }
-  open_material_(
-      index.siblingAtColumn(QtMaterialBrowserModel::NameColumn)
-          .data(QtMaterialBrowserModel::StableIdRole)
-          .toString());
+  open_material_(item->reference);
+}
+
+void QtMaterialBrowserWindow::accept_selected_material() {
+  const QtMaterialBrowserItem *item =
+      item_for_index(grid_view_->selectionModel()->currentIndex());
+  if (item == nullptr || !item->valid()) {
+    return;
+  }
+  if (purpose_ == QtMaterialBrowserPurpose::ActiveMaterial) {
+    if (activate_material_) {
+      activate_material_(item->reference);
+    }
+  } else if (accept_material_) {
+    accept_material_(item->reference);
+  }
+  close();
 }
 
 } // namespace quader

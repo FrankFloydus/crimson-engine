@@ -347,6 +347,7 @@ add_library(quader_editor_services STATIC
     src/editor/commands/modeling_command_execution_service.cpp
     src/editor/history/editor_history_service.cpp
     src/editor/input/quader_keybinding_target_catalog.cpp
+    src/editor/material/material_reference_service.cpp
     src/editor/modeling/services/primitive_creation_tool_service.cpp
     src/editor/pivot/pivot_tool_service.cpp
     src/editor/placement/viewport_point_placement_service.cpp
@@ -518,6 +519,7 @@ add_library(quader_api STATIC
     src/api/quader_events_api.cpp
     src/api/quader_history_api.cpp
     src/api/quader_layers_api.cpp
+    src/api/quader_materials_api.cpp
     src/api/quader_modeling_api.cpp
     src/api/quader_object_handle.cpp
     src/api/quader_preferences_api.cpp
@@ -826,6 +828,8 @@ add_library(quader_ui STATIC
     src/ui/qt_input_adapter.cpp
     src/ui/qt_main_menu.cpp
     src/ui/qt_material_browser_window.cpp
+    src/ui/qt_material_find_replace_dialog.cpp
+    src/ui/qt_material_presentation.cpp
     src/ui/qt_material_preview_surface.cpp
     src/ui/qt_standard_material_preview_image_cache.cpp
     src/ui/qt_standard_material_editor_window.cpp
@@ -1354,6 +1358,7 @@ if(QUADER_BUILD_TESTS)
         tests/qt_command_event_filter_tests.cpp
         tests/qt_input_adapter_tests.cpp
         tests/qt_material_browser_window_tests.cpp
+        tests/qt_material_find_replace_dialog_tests.cpp
         tests/qt_material_preview_surface_tests.cpp
         tests/qt_standard_material_preview_image_cache_tests.cpp
         tests/qt_standard_material_editor_window_tests.cpp
@@ -1377,6 +1382,7 @@ if(QUADER_BUILD_TESTS)
         tests/programmatic_behavior_scenario_tests.cpp
         tests/grouping_public_api_tests.cpp
         tests/io_qdr_tests.cpp
+        tests/inspector_material_tests.cpp
         tests/project_material_behavior_tests.cpp
         tests/project_material_manifest_tests.cpp
         tests/project_material_storage_tests.cpp

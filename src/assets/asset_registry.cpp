@@ -21,6 +21,8 @@ AssetRegistry::AssetRegistry() : owner_thread_(std::this_thread::get_id()) {}
 
 AssetRegistry::AssetRegistry(const AssetRegistry &other)
     : next_id_(other.next_id_), revision_(other.revision_),
+      material_catalog_revision_(other.material_catalog_revision_),
+      mesh_material_usage_revision_(other.mesh_material_usage_revision_),
       meshes_(other.meshes_), deferred_meshes_(other.deferred_meshes_),
       mesh_geometry_pool_(other.mesh_geometry_pool_),
       authored_topology_pool_(other.authored_topology_pool_),
@@ -34,6 +36,8 @@ AssetRegistry &AssetRegistry::operator=(const AssetRegistry &other) {
   assert_owner_thread();
   next_id_ = other.next_id_;
   revision_ = other.revision_;
+  material_catalog_revision_ = other.material_catalog_revision_;
+  mesh_material_usage_revision_ = other.mesh_material_usage_revision_;
   meshes_ = other.meshes_;
   deferred_meshes_ = other.deferred_meshes_;
   mesh_geometry_pool_ = other.mesh_geometry_pool_;
@@ -46,6 +50,8 @@ AssetRegistry &AssetRegistry::operator=(const AssetRegistry &other) {
 
 AssetRegistry::AssetRegistry(AssetRegistry &&other) noexcept
     : next_id_(other.next_id_), revision_(other.revision_),
+      material_catalog_revision_(other.material_catalog_revision_),
+      mesh_material_usage_revision_(other.mesh_material_usage_revision_),
       meshes_(std::move(other.meshes_)),
       deferred_meshes_(std::move(other.deferred_meshes_)),
       mesh_geometry_pool_(std::move(other.mesh_geometry_pool_)),
@@ -60,6 +66,8 @@ AssetRegistry &AssetRegistry::operator=(AssetRegistry &&other) noexcept {
   }
   next_id_ = other.next_id_;
   revision_ = other.revision_;
+  material_catalog_revision_ = other.material_catalog_revision_;
+  mesh_material_usage_revision_ = other.mesh_material_usage_revision_;
   meshes_ = std::move(other.meshes_);
   deferred_meshes_ = std::move(other.deferred_meshes_);
   mesh_geometry_pool_ = std::move(other.mesh_geometry_pool_);
@@ -124,7 +132,7 @@ AssetId AssetRegistry::add_mesh(MeshAsset mesh) {
   mesh = isolate_mesh_asset_payload(std::move(mesh));
   intern_mesh_payload(mesh);
   meshes_.add(id, std::move(mesh));
-  mark_dirty();
+  mark_mesh_material_usage_dirty();
   return id;
 }
 
@@ -140,7 +148,7 @@ AssetId AssetRegistry::add_mesh(AssetId id, MeshAsset mesh) {
   mesh = isolate_mesh_asset_payload(std::move(mesh));
   intern_mesh_payload(mesh);
   meshes_.add(id, std::move(mesh));
-  mark_dirty();
+  mark_mesh_material_usage_dirty();
   return id;
 }
 
@@ -163,7 +171,7 @@ AssetId AssetRegistry::add_mesh_payload_alias(
     return kInvalidAssetId;
   }
   next_id_ = std::max(next_id_, id + 1u);
-  mark_dirty();
+  mark_mesh_material_usage_dirty();
   return id;
 }
 
@@ -191,7 +199,7 @@ AssetId AssetRegistry::add_deferred_mesh(
               .encoded_geometry_loader = std::move(encoded_geometry_loader),
           });
   next_id_ = std::max(next_id_, id + 1u);
-  mark_dirty();
+  mark_mesh_material_usage_dirty();
   return id;
 }
 
@@ -203,7 +211,7 @@ AssetId AssetRegistry::add_material(MaterialDocument material) {
   const AssetId id = next_id_++;
   normalize_material_texture_slots(material);
   materials_.add(id, std::move(material));
-  mark_dirty();
+  mark_material_dirty();
   return id;
 }
 
@@ -218,7 +226,7 @@ AssetId AssetRegistry::add_material(AssetId id, MaterialDocument material) {
   next_id_ = std::max(next_id_, id + 1u);
   normalize_material_texture_slots(material);
   materials_.add(id, std::move(material));
-  mark_dirty();
+  mark_material_dirty();
   return id;
 }
 
@@ -241,9 +249,14 @@ AssetId AssetRegistry::add_texture(AssetId id, TextureAsset texture) {
   if (textures_.contains(id)) {
     return kInvalidAssetId;
   }
+  const bool restores_material = material_references_texture(id);
   next_id_ = std::max(next_id_, id + 1u);
   textures_.add(id, std::move(texture));
-  mark_dirty();
+  if (restores_material) {
+    mark_material_dirty();
+  } else {
+    mark_dirty();
+  }
   return id;
 }
 
@@ -253,7 +266,7 @@ bool AssetRegistry::remove_mesh(AssetId id) {
     return false;
   }
   deferred_meshes_.erase(id);
-  mark_dirty();
+  mark_mesh_material_usage_dirty();
   return true;
 }
 
@@ -262,16 +275,21 @@ bool AssetRegistry::remove_material(AssetId id) {
   if (!materials_.remove(id)) {
     return false;
   }
-  mark_dirty();
+  mark_material_dirty();
   return true;
 }
 
 bool AssetRegistry::remove_texture(AssetId id) {
   assert_owner_thread();
+  const bool invalidates_material = material_references_texture(id);
   if (!textures_.remove(id)) {
     return false;
   }
-  mark_dirty();
+  if (invalidates_material) {
+    mark_material_dirty();
+  } else {
+    mark_dirty();
+  }
   return true;
 }
 
@@ -316,7 +334,7 @@ bool AssetRegistry::replace_meshes(
     }
     deferred_meshes_.erase(replacement.id);
   }
-  mark_dirty();
+  mark_mesh_material_usage_dirty();
   return true;
 }
 
@@ -329,16 +347,21 @@ bool AssetRegistry::replace_material(AssetId id, MaterialDocument material) {
   if (!materials_.replace(id, std::move(material))) {
     return false;
   }
-  mark_dirty();
+  mark_material_dirty();
   return true;
 }
 
 bool AssetRegistry::replace_texture(AssetId id, TextureAsset texture) {
   assert_owner_thread();
+  const bool affects_material = material_references_texture(id);
   if (!textures_.replace(id, std::move(texture))) {
     return false;
   }
-  mark_dirty();
+  if (affects_material) {
+    mark_material_dirty();
+  } else {
+    mark_dirty();
+  }
   return true;
 }
 
@@ -359,7 +382,7 @@ bool AssetRegistry::update_mesh(
   if (!meshes_.replace(id, std::move(updated))) {
     return false;
   }
-  mark_dirty();
+  mark_mesh_material_usage_dirty();
   return true;
 }
 
@@ -379,7 +402,7 @@ bool AssetRegistry::update_material(
   if (!materials_.replace(id, std::move(updated))) {
     return false;
   }
-  mark_dirty();
+  mark_material_dirty();
   return true;
 }
 
@@ -511,10 +534,15 @@ AssetRegistry::validate_material(const MaterialDocument &material) const {
 bool AssetRegistry::update_texture(
     AssetId id, const std::function<void(TextureAsset &)> &update) {
   assert_owner_thread();
+  const bool affects_material = material_references_texture(id);
   if (!textures_.update(id, update)) {
     return false;
   }
-  mark_dirty();
+  if (affects_material) {
+    mark_material_dirty();
+  } else {
+    mark_dirty();
+  }
   return true;
 }
 
@@ -737,11 +765,45 @@ void AssetRegistry::advance_revision_for_replacement(
   materials_.restamp_after(MaterialAssetRevision{previous_revision});
   textures_.restamp_after(TextureAssetRevision{previous_revision});
   revision_ = std::max(revision_, previous_revision) + 1u;
+  material_catalog_revision_ =
+      std::max(material_catalog_revision_, previous_revision) + 1u;
+  mesh_material_usage_revision_ =
+      std::max(mesh_material_usage_revision_, previous_revision) + 1u;
 }
 
 void AssetRegistry::mark_dirty() {
   assert_owner_thread();
   ++revision_;
+}
+
+void AssetRegistry::mark_material_dirty() {
+  assert_owner_thread();
+  ++material_catalog_revision_;
+  mark_dirty();
+}
+
+void AssetRegistry::mark_mesh_material_usage_dirty() {
+  assert_owner_thread();
+  ++mesh_material_usage_revision_;
+  mark_dirty();
+}
+
+bool AssetRegistry::material_references_texture(AssetId texture) const {
+  if (texture == kInvalidAssetId) {
+    return false;
+  }
+  for (const AssetId material_id : materials_.ids()) {
+    const MaterialDocument *material = materials_.get(material_id);
+    if (material == nullptr) {
+      continue;
+    }
+    if (std::ranges::any_of(
+            material->texture_slots,
+            [texture](const auto &slot) { return slot.second == texture; })) {
+      return true;
+    }
+  }
+  return false;
 }
 
 } // namespace quader

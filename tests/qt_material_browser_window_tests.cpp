@@ -21,12 +21,15 @@
 #include <QMainWindow>
 #include <QMetaObject>
 #include <QMenu>
+#include <QPushButton>
 #include <QScrollBar>
 #include <QSlider>
 #include <QStackedWidget>
 #include <QTableView>
 #include <QToolButton>
 
+#include <optional>
+#include <string_view>
 #include <vector>
 
 namespace quader {
@@ -55,6 +58,12 @@ QByteArray encoded_tga_preview() {
       "AAACAAAAAAAAAAAAAgACABgAv18fv18fv18fv18fAAAAAAAAAABUUlVFVklTSU9O"
       "LVhGSUxFLgA=",
       QByteArray::AbortOnBase64DecodingErrors);
+}
+
+ProjectAssetId required_project_id(std::string_view text) {
+  const std::optional<ProjectAssetId> parsed = ProjectAssetId::parse(text);
+  EXPECT_TRUE(parsed.has_value());
+  return parsed.value_or(ProjectAssetId{});
 }
 
 TEST(QtMaterialBrowserWindowTests,
@@ -90,12 +99,21 @@ TEST(QtMaterialBrowserWindowTests,
       .material_type = QStringLiteral("Material asset"),
       .empty_catalog = QStringLiteral("Empty catalog"),
       .no_results = QStringLiteral("No matches"),
+      .accept = QStringLiteral("Choose"),
+      .picker_window_title = QStringLiteral("Choose replacement"),
   });
   EXPECT_EQ(window->windowTitle(), QStringLiteral("Materials"));
 
-  const std::vector<QtMaterialBrowserItem> materials{
+  const QuaderMaterialReference zinc_reference =
+      QuaderMaterialReference::project(required_project_id(
+          "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"));
+  const QuaderMaterialReference default_reference =
+      QuaderMaterialReference::project(required_project_id(
+          "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"));
+  std::vector<QtMaterialBrowserItem> materials{
       {
-          .stable_id = QStringLiteral("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"),
+          .reference = zinc_reference,
+          .stable_id = qt_material_reference_stable_id(zinc_reference),
           .name = QStringLiteral("Zinc"),
           .project_relative_path =
               QStringLiteral("Materials/Metals/zinc.qmat"),
@@ -106,7 +124,8 @@ TEST(QtMaterialBrowserWindowTests,
           .content_revision = 3,
       },
       {
-          .stable_id = QStringLiteral("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"),
+          .reference = default_reference,
+          .stable_id = qt_material_reference_stable_id(default_reference),
           .name = QStringLiteral("Default Material"),
           .project_relative_path =
               QStringLiteral("Materials/default_material.qmat"),
@@ -116,8 +135,10 @@ TEST(QtMaterialBrowserWindowTests,
           .content_revision = 1,
       },
   };
-  window->set_materials(materials,
-                        QStringLiteral("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"));
+  for (QtMaterialBrowserItem &material : materials) {
+    material.thumbnail = make_qt_material_thumbnail(material);
+  }
+  window->set_materials(materials, default_reference);
 
   auto *grid = window->findChild<QListView *>(
       QStringLiteral("materialBrowser.gridView"));
@@ -139,6 +160,8 @@ TEST(QtMaterialBrowserWindowTests,
       QStringLiteral("materialBrowser.fileMenu"));
   auto *import_action = window->findChild<QAction *>(
       QStringLiteral("materialBrowser.file.import"));
+  auto *accept_button = window->findChild<QPushButton *>(
+      QStringLiteral("materialBrowser.accept"));
   ASSERT_NE(grid, nullptr);
   ASSERT_NE(list, nullptr);
   ASSERT_NE(search, nullptr);
@@ -149,8 +172,12 @@ TEST(QtMaterialBrowserWindowTests,
   ASSERT_NE(slider, nullptr);
   ASSERT_NE(file_menu, nullptr);
   ASSERT_NE(import_action, nullptr);
+  ASSERT_NE(accept_button, nullptr);
   EXPECT_EQ(file_menu->title(), QStringLiteral("Project File"));
   EXPECT_EQ(import_action->text(), QStringLiteral("Bring textures in…"));
+  EXPECT_EQ(accept_button->text(), QStringLiteral("Choose"));
+  EXPECT_EQ(accept_button->accessibleName(), QStringLiteral("Choose"));
+  EXPECT_TRUE(accept_button->isEnabled());
 
   int import_count = 0;
   window->set_import_textures_callback(
@@ -181,7 +208,7 @@ TEST(QtMaterialBrowserWindowTests,
   EXPECT_EQ(grid->currentIndex()
                 .data(QtMaterialBrowserModel::StableIdRole)
                 .toString(),
-            QStringLiteral("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"));
+            qt_material_reference_stable_id(default_reference));
   const QIcon preview = grid->model()
                             ->index(0, 0)
                             .data(Qt::DecorationRole)
@@ -218,18 +245,17 @@ TEST(QtMaterialBrowserWindowTests,
   list->sortByColumn(QtMaterialBrowserModel::NameColumn,
                      Qt::AscendingOrder);
 
-  QString activated;
+  QuaderMaterialReference activated;
   int activation_count = 0;
   window->set_activate_material_callback(
-      [&activated, &activation_count](QString stable_id) {
-        activated = std::move(stable_id);
+      [&activated, &activation_count](QuaderMaterialReference reference) {
+        activated = reference;
         ++activation_count;
       });
   const QModelIndex zinc = grid->model()->index(1, 0);
   ASSERT_TRUE(QMetaObject::invokeMethod(
       grid, "clicked", Qt::DirectConnection, Q_ARG(QModelIndex, zinc)));
-  EXPECT_EQ(activated,
-            QStringLiteral("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"));
+  EXPECT_EQ(activated, zinc_reference);
   EXPECT_EQ(activation_count, 1);
   ASSERT_TRUE(QMetaObject::invokeMethod(
       grid, "activated", Qt::DirectConnection, Q_ARG(QModelIndex, zinc)));
@@ -237,32 +263,29 @@ TEST(QtMaterialBrowserWindowTests,
       << "a platform mouse activation following clicked must not dispatch "
          "the material intent twice";
 
-  activated.clear();
+  activated = {};
   grid->selectionModel()->setCurrentIndex(
       zinc, QItemSelectionModel::ClearAndSelect);
   send_key(*grid, Qt::Key_Return);
-  EXPECT_EQ(activated,
-            QStringLiteral("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"))
+  EXPECT_EQ(activated, zinc_reference)
       << "keyboard activation must dispatch the same intent as a click";
   EXPECT_EQ(activation_count, 2);
 
-  activated.clear();
+  activated = {};
   list->selectionModel()->setCurrentIndex(
       zinc, QItemSelectionModel::ClearAndSelect | QItemSelectionModel::Rows);
   send_key(*list, Qt::Key_Return);
-  EXPECT_EQ(activated,
-            QStringLiteral("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"))
+  EXPECT_EQ(activated, zinc_reference)
       << "both material views must honor QAbstractItemView::activated";
   EXPECT_EQ(activation_count, 3);
 
-  QString opened;
+  QuaderMaterialReference opened;
   window->set_open_material_callback(
-      [&opened](QString stable_id) { opened = std::move(stable_id); });
+      [&opened](QuaderMaterialReference reference) { opened = reference; });
   ASSERT_TRUE(QMetaObject::invokeMethod(
       grid, "doubleClicked", Qt::DirectConnection,
       Q_ARG(QModelIndex, zinc)));
-  EXPECT_EQ(opened,
-            QStringLiteral("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"));
+  EXPECT_EQ(opened, zinc_reference);
 
   search->setText(QStringLiteral("metals/"));
   EXPECT_EQ(grid->model()->rowCount(), 1);
@@ -323,13 +346,106 @@ TEST(QtMaterialBrowserWindowTests,
       << "large tiles must remain reachable through vertical scrolling";
   EXPECT_GT(grid->horizontalScrollBar()->maximum(), 0)
       << "a narrow restored window must not clip a 512px tile permanently";
+  window->set_active_material(zinc_reference);
+  EXPECT_EQ(window->selected_material(), zinc_reference);
+  EXPECT_TRUE(accept_button->isEnabled());
+  accept_button->click();
+  EXPECT_EQ(activation_count, 4)
+      << "normal Accept must reaffirm the live active selection";
+  EXPECT_EQ(activated, zinc_reference);
+  EXPECT_FALSE(window->isVisible());
+
+  window->show();
+  QCoreApplication::processEvents();
   EXPECT_TRUE(window->close());
   EXPECT_FALSE(window->isVisible());
+  EXPECT_EQ(activation_count, 4)
+      << "closing with X must not roll back or redispatch live activation";
   EXPECT_FALSE(window->testAttribute(Qt::WA_DeleteOnClose));
 
   window->clear_materials();
   EXPECT_EQ(stack->currentWidget(), empty);
   EXPECT_EQ(empty->text(), QStringLiteral("Empty catalog"));
+
+  auto *picker = new QtMaterialBrowserWindow(&owner);
+  picker->setAttribute(Qt::WA_DontShowOnScreen, true);
+  picker->set_purpose(QtMaterialBrowserPurpose::Picker);
+  picker->set_materials(materials);
+  EXPECT_EQ(picker->purpose(), QtMaterialBrowserPurpose::Picker);
+  EXPECT_EQ(picker->windowTitle(), QStringLiteral("Replace Material Browser"));
+  auto *picker_grid = picker->findChild<QListView *>(
+      QStringLiteral("materialBrowser.gridView"));
+  auto *picker_accept = picker->findChild<QPushButton *>(
+      QStringLiteral("materialBrowser.accept"));
+  auto *picker_file_menu = picker->findChild<QMenu *>(
+      QStringLiteral("materialBrowser.fileMenu"));
+  auto *picker_search = picker->findChild<QLineEdit *>(
+      QStringLiteral("materialBrowser.search"));
+  ASSERT_NE(picker_grid, nullptr);
+  ASSERT_NE(picker_accept, nullptr);
+  ASSERT_NE(picker_file_menu, nullptr);
+  ASSERT_NE(picker_search, nullptr);
+  EXPECT_FALSE(picker_file_menu->menuAction()->isVisible());
+  EXPECT_FALSE(picker_accept->isEnabled());
+
+  int picker_activation_count = 0;
+  int picker_open_count = 0;
+  int picker_accept_count = 0;
+  QuaderMaterialReference picked;
+  picker->set_activate_material_callback(
+      [&picker_activation_count](QuaderMaterialReference) {
+        ++picker_activation_count;
+      });
+  picker->set_open_material_callback(
+      [&picker_open_count](QuaderMaterialReference) {
+        ++picker_open_count;
+      });
+  picker->set_accept_material_callback(
+      [&picker_accept_count, &picked](QuaderMaterialReference reference) {
+        ++picker_accept_count;
+        picked = reference;
+      });
+
+  const QModelIndex picker_zinc = picker_grid->model()->index(1, 0);
+  picker_grid->selectionModel()->setCurrentIndex(
+      picker_zinc, QItemSelectionModel::ClearAndSelect);
+  ASSERT_TRUE(QMetaObject::invokeMethod(
+      picker_grid, "clicked", Qt::DirectConnection,
+      Q_ARG(QModelIndex, picker_zinc)));
+  send_key(*picker_grid, Qt::Key_Return);
+  ASSERT_TRUE(QMetaObject::invokeMethod(
+      picker_grid, "doubleClicked", Qt::DirectConnection,
+      Q_ARG(QModelIndex, picker_zinc)));
+  EXPECT_EQ(picker_activation_count, 0);
+  EXPECT_EQ(picker_open_count, 0);
+  EXPECT_EQ(picker_accept_count, 0)
+      << "picker clicks, Enter, and double-click must remain isolated";
+  EXPECT_TRUE(picker_accept->isEnabled());
+
+  picker->set_materials({materials[1]}, zinc_reference);
+  EXPECT_FALSE(picker->selected_material().valid());
+  EXPECT_FALSE(picker_accept->isEnabled())
+      << "rebinding after a candidate is deleted must clear stale picker "
+         "selection";
+  picker->set_materials(materials, zinc_reference);
+  EXPECT_EQ(picker->selected_material(), zinc_reference);
+  EXPECT_TRUE(picker_accept->isEnabled());
+
+  picker_search->setText(QStringLiteral("default"));
+  EXPECT_EQ(picker_grid->model()->rowCount(), 1);
+  picker->set_materials(materials, zinc_reference);
+  EXPECT_TRUE(picker_search->text().isEmpty())
+      << "a hidden picker rebind must clear the previous session's filter "
+         "before restoring its requested material";
+  EXPECT_EQ(picker->selected_material(), zinc_reference);
+  EXPECT_TRUE(picker_accept->isEnabled());
+
+  picker->show();
+  QCoreApplication::processEvents();
+  picker_accept->click();
+  EXPECT_EQ(picker_accept_count, 1);
+  EXPECT_EQ(picked, zinc_reference);
+  EXPECT_FALSE(picker->isVisible());
 }
 
 } // namespace

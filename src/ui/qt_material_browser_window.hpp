@@ -6,9 +6,9 @@
 ////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
+#include "ui/qt_material_presentation.hpp"
+
 #include <QAbstractTableModel>
-#include <QByteArray>
-#include <QColor>
 #include <QIcon>
 #include <QMainWindow>
 #include <QSortFilterProxyModel>
@@ -24,6 +24,7 @@ class QLabel;
 class QLineEdit;
 class QListView;
 class QMenu;
+class QPushButton;
 class QShowEvent;
 class QSlider;
 class QStackedWidget;
@@ -32,19 +33,7 @@ class QToolButton;
 
 namespace quader {
 
-/// Immutable project-material presentation data supplied by the public API.
-struct QtMaterialBrowserItem final {
-  QString stable_id;
-  QString name;
-  QString project_relative_path;
-  QString type_display_name;
-  qint64 qmat_size_bytes = 0;
-  QByteArray encoded_albedo;
-  QColor fallback_color = Qt::white;
-  std::uint64_t content_revision = 0;
-
-  bool operator==(const QtMaterialBrowserItem &) const = default;
-};
+using QtMaterialBrowserItem = QtMaterialPresentationItem;
 
 /// Localized text used by the material-browser presentation.
 struct QtMaterialBrowserLabels final {
@@ -62,9 +51,15 @@ struct QtMaterialBrowserLabels final {
   QString material_type = QStringLiteral("Standard Material");
   QString empty_catalog = QStringLiteral("No materials in this project");
   QString no_results = QStringLiteral("No materials match this search");
+  QString accept = QStringLiteral("Accept");
+  QString picker_window_title = QStringLiteral("Replace Material Browser");
 };
 
 enum class QtMaterialBrowserViewMode : std::uint8_t { Grid, List };
+enum class QtMaterialBrowserPurpose : std::uint8_t {
+  ActiveMaterial,
+  Picker,
+};
 
 /// Shared source model used by both material-browser views.
 class QtMaterialBrowserModel final : public QAbstractTableModel {
@@ -101,8 +96,6 @@ private:
 
   std::vector<QtMaterialBrowserItem> items_;
   QtMaterialBrowserLabels labels_;
-  mutable std::vector<QIcon> preview_icons_;
-  mutable std::vector<bool> preview_icons_ready_;
 };
 
 /// Case-insensitive name/path filter with deterministic typed sorting.
@@ -129,8 +122,10 @@ private:
  */
 class QtMaterialBrowserWindow final : public QMainWindow {
 public:
-  using ActivateMaterialCallback = std::function<void(QString)>;
-  using OpenMaterialCallback = std::function<void(QString)>;
+  using ActivateMaterialCallback =
+      std::function<void(QuaderMaterialReference)>;
+  using OpenMaterialCallback = std::function<void(QuaderMaterialReference)>;
+  using AcceptMaterialCallback = std::function<void(QuaderMaterialReference)>;
   using ImportTexturesCallback = std::function<void()>;
   using PresentationStateChangedCallback = std::function<void()>;
 
@@ -142,11 +137,17 @@ public:
 
   void set_labels(QtMaterialBrowserLabels labels);
   void set_materials(std::vector<QtMaterialBrowserItem> materials,
-                     QString active_material_id = {});
-  void set_active_material(QString active_material_id);
+                     QuaderMaterialReference selected_material = {});
+  void set_active_material(QuaderMaterialReference active_material);
   void clear_materials();
+  void set_purpose(QtMaterialBrowserPurpose purpose);
+  [[nodiscard]] QtMaterialBrowserPurpose purpose() const noexcept {
+    return purpose_;
+  }
+  [[nodiscard]] QuaderMaterialReference selected_material() const;
   void set_activate_material_callback(ActivateMaterialCallback callback);
   void set_open_material_callback(OpenMaterialCallback callback);
+  void set_accept_material_callback(AcceptMaterialCallback callback);
   void set_import_textures_callback(ImportTexturesCallback callback);
   void set_presentation_state_changed_callback(
       PresentationStateChangedCallback callback);
@@ -165,9 +166,14 @@ private:
   void set_tile_size(int tile_size);
   void update_tile_size_text();
   void refresh_content_page();
-  void select_material(const QString &stable_id);
+  void update_purpose_presentation();
+  void update_accept_enabled();
+  void select_material(const QuaderMaterialReference &reference);
+  [[nodiscard]] const QtMaterialBrowserItem *
+  item_for_index(const QModelIndex &proxy_index) const;
   void activate_index(const QModelIndex &index);
   void open_index(const QModelIndex &index);
+  void accept_selected_material();
 
   QtMaterialBrowserModel *model_ = nullptr;
   QtMaterialBrowserProxyModel *proxy_ = nullptr;
@@ -181,10 +187,14 @@ private:
   QListView *grid_view_ = nullptr;
   QTableView *list_view_ = nullptr;
   QLabel *empty_label_ = nullptr;
+  QPushButton *accept_button_ = nullptr;
   QtMaterialBrowserLabels labels_;
   QtMaterialBrowserViewMode view_mode_ = QtMaterialBrowserViewMode::Grid;
+  QtMaterialBrowserPurpose purpose_ =
+      QtMaterialBrowserPurpose::ActiveMaterial;
   ActivateMaterialCallback activate_material_;
   OpenMaterialCallback open_material_;
+  AcceptMaterialCallback accept_material_;
   ImportTexturesCallback import_textures_;
   PresentationStateChangedCallback presentation_state_changed_;
 };

@@ -6793,3 +6793,48 @@ passes 1359 tests with 3 skipped and remains red only on two unrelated Linear Ar
 overlay tests; guardrails pass 368/374 and retain the same six pre-existing failures, including in
 the SDK-only wrapper. Both canonical Debug/Profile and Release `quader` builds pass. No manual GPU
 or popup visual smoke was performed.
+
+## 2026-08-26 - Inspector Materials And Find/Replace
+
+Task/context: Mesh, Group, and Face selections needed a material-focused Inspector surface, while
+material-reference replacement also needed a standalone active-scene workflow that handled native,
+Graph, and embedded identities without moving mutation or topology traversal into Qt UI code.
+
+Invariant:
+
+- `QuaderMaterialsApi` is the public user-intent boundary. `used_materials()` returns distinct
+  live-face references for a typed selection or active-scene scope, and
+  `replace_material_references()` performs one preflighted history operation. Mesh replacement
+  follows selected meshes, Group follows recursive descendants and deduplicated canonical linked
+  definitions, Face rewrites only selected matching faces, and Active Scene includes hidden meshes
+  and canonical definitions.
+- Object, Group, and scene replacement update matching primary and slot bindings. Face replacement
+  reuses or allocates a destination slot without disturbing unrelated faces. Any effectively locked
+  or read-only match rejects the complete operation; missing/identical matches are history-free
+  no-ops, and invalid destinations fail before mutation.
+- One editor-owned history command restores exact modeling face slots, native material components,
+  selection, and active component state. Replacement preserves the active material and any retained
+  Standard Material Editor draft.
+- Inspector Material rows are presentation-only: Object/Mesh and Group retain their normal
+  properties plus a default-expanded Material category; Face presents only Material; Vertex and
+  Edge present no property rows. Each distinct material uses a 56-pixel square preview, elided name,
+  and fixed-square Edit/Replace buttons. Unsupported material kinds keep Edit visible but disabled.
+- The retained Find/Replace dialog has two arrow-free 128-pixel preview columns. Inspector launches
+  pin the selection context and preload Find; Edit-menu launches use Active Scene and start empty.
+  The reusable browser keeps live activation in normal mode, while picker mode never changes the
+  active material and commits only through Accept.
+- Inspector, browser, and dialog share one presentation/thumbnail cache. Asset material-catalog and
+  mesh-usage revisions plus scene material-binding, hierarchy, object-map, and modeling-content
+  revisions gate refresh before any catalog, topology, or preview work. Project, scene, and pinned
+  contextual-selection changes clear retained Find/Replace state.
+
+Owners: `QuaderMaterialsApi`, `MaterialReferenceService`, modeling session/mesh-sync history owners,
+`AssetRegistry` and `SceneDocument` narrow revisions, Inspector presentation, reusable Qt Material
+Browser, retained Qt Find/Replace dialog, `UISystem`, and localization/menu presentation.
+
+Verification: focused material/API/modeling/Qt/localization suites pass 96/96 and the new ownership,
+layout, public-API, localization, and frame-loop guardrails pass 6/6. Both canonical Debug/Profile
+and Release app builds pass. The mandatory regression gate and full Debug CTest remain red only on
+seven pre-existing instruction/build/architecture guardrails and five unrelated Linear Array and
+overlay tests; all task-owned tests pass. Native UI smoke was interrupted by the user before visual
+confirmation.

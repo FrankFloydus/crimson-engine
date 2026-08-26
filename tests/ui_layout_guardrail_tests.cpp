@@ -771,8 +771,9 @@ TEST(UiLayoutGuardrailTests,
   expect_contains(inspector, "&QHeaderView::sectionResized");
   expect_contains(inspector, "&QHeaderView::geometriesChanged");
   expect_contains(inspector, "clamp_label_column_width()");
-  expect_contains(inspector,
-                  "expanded_sections_.try_emplace(stable_id, false)");
+  expect_contains(
+      inspector,
+      "expanded_sections_.try_emplace(stable_id, default_expanded)");
   expect_contains(inspector, "&QTreeWidget::itemExpanded");
   expect_contains(inspector, "&QTreeWidget::itemCollapsed");
 
@@ -795,6 +796,97 @@ TEST(UiLayoutGuardrailTests,
   expect_missing(inspector, "setStyleSheet(");
   expect_missing(inspector, "setPalette(");
   expect_missing(inspector, "setFont(");
+}
+
+TEST(UiLayoutGuardrailTests,
+     InspectorMaterialRowsAndComponentModeMatrixStayPurposeBuilt) {
+  const std::string inspector =
+      read_source_file("src/ui/inspector_panel.cpp");
+  const std::string rebuild = source_slice(
+      inspector, "void rebuild(const ModelingSelectionSummary &summary)",
+      "QTreeWidgetItem *add_summary_label(");
+  ASSERT_FALSE(rebuild.empty());
+
+  const std::size_t component_blank = rebuild.find(
+      "if (summary.mode == ModelingSelectionMode::Vertex");
+  const std::size_t face_only = rebuild.find(
+      "} else if (summary.mode == ModelingSelectionMode::Face)",
+      component_blank);
+  const std::size_t ordinary_selection =
+      rebuild.find("} else if (selection_.empty())", face_only);
+  ASSERT_NE(component_blank, std::string::npos);
+  ASSERT_NE(face_only, std::string::npos);
+  ASSERT_NE(ordinary_selection, std::string::npos);
+  EXPECT_LT(component_blank, face_only);
+  EXPECT_LT(face_only, ordinary_selection);
+
+  const std::string vertex_edge_branch =
+      rebuild.substr(component_blank, face_only - component_blank);
+  expect_contains(vertex_edge_branch, "ModelingSelectionMode::Vertex");
+  expect_contains(vertex_edge_branch, "ModelingSelectionMode::Edge");
+  expect_missing(vertex_edge_branch, "build_general_section(");
+  expect_missing(vertex_edge_branch, "build_transform_section(");
+  expect_missing(vertex_edge_branch, "build_material_section(");
+  expect_missing(vertex_edge_branch, "build_empty_selection(");
+
+  const std::string face_branch =
+      rebuild.substr(face_only, ordinary_selection - face_only);
+  EXPECT_EQ(count_occurrences(face_branch, "build_material_section()"), 1u);
+  expect_missing(face_branch, "build_general_section(");
+  expect_missing(face_branch, "build_transform_section(");
+  expect_missing(face_branch, "build_empty_selection(");
+  expect_missing(face_branch, "build_component_selection_summary(");
+
+  const std::string material_rows = source_slice(
+      inspector, "void build_material_section()",
+      "QCheckBox *add_checkbox(");
+  ASSERT_FALSE(material_rows.empty());
+  expect_contains(inspector, "constexpr int kInspectorMaterialPreviewSize = 56");
+  expect_contains(material_rows,
+                  "localized(\"ui.inspector.material\", \"Material\"), true");
+  expect_contains(material_rows, "item->setFirstColumnSpanned(true)");
+  expect_contains(material_rows, "new InspectorElidedLabel(");
+  EXPECT_EQ(count_occurrences(material_rows, "new QPushButton(row)"), 2u);
+  EXPECT_EQ(count_occurrences(material_rows, "->setFixedSize("), 3u);
+  expect_contains(material_rows,
+                  "InspectorMaterialActionIcon::Edit");
+  expect_contains(material_rows,
+                  "InspectorMaterialActionIcon::Replace");
+  expect_missing(material_rows, "new QToolButton");
+  expect_missing(material_rows, "QStyle::SP_Arrow");
+  expect_missing(material_rows, "drawLine(QPointF(0");
+
+  const std::string replacement_icon = source_slice(
+      inspector, "QPixmap material_action_pixmap(",
+      "QIcon material_action_icon(");
+  ASSERT_FALSE(replacement_icon.empty());
+  expect_contains(replacement_icon, "drawRoundedRect(");
+  expect_missing(replacement_icon, "drawPolygon(");
+  expect_missing(replacement_icon, "drawPolyline(");
+}
+
+TEST(UiLayoutGuardrailTests,
+     MaterialFindReplaceUsesTwoSquareColumnsWithoutTransferArrows) {
+  const std::string dialog =
+      read_source_file("src/ui/qt_material_find_replace_dialog.cpp");
+  const std::string dialog_header =
+      read_source_file("src/ui/qt_material_find_replace_dialog.hpp");
+
+  expect_contains(dialog, "constexpr int kPreviewSize = 128");
+  EXPECT_EQ(count_occurrences(dialog,
+                              "build_column(QtMaterialFindReplaceColumn::"),
+            2u);
+  expect_contains(dialog, "result.preview->setFixedSize(kPreviewSize,");
+  expect_contains(dialog, "result.name->setFixedWidth(kPreviewSize)");
+  expect_contains(dialog, "result.browse = new QPushButton(this)");
+  expect_contains(dialog, "replace_button_ = new QPushButton(this)");
+  expect_contains(dialog, "cancel_button_ = new QPushButton(this)");
+  expect_contains(dialog, "setWindowModality(Qt::WindowModal)");
+  expect_missing(dialog, "QToolButton");
+  expect_missing(dialog, "SP_Arrow");
+  expect_missing(dialog, "drawPolygon(");
+  expect_missing(dialog, "drawPolyline(");
+  expect_missing(dialog_header, "arrow");
 }
 
 TEST(UiLayoutGuardrailTests,

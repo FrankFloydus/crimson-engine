@@ -6,13 +6,33 @@
 ////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
+#include "ui/qt_material_presentation.hpp"
+
 #include <QWidget>
 
+#include <cstdint>
+#include <functional>
 #include <memory>
+#include <vector>
 
 namespace quader {
 
 struct UIContext;
+
+/**
+ * Event-driven material presentation supplied by UISystem.
+ *
+ * The Inspector deliberately receives owner-projected identities, names, and
+ * cached thumbnails. It never traverses modeling topology or enumerates asset
+ * catalogs while refreshing retained controls.
+ */
+struct InspectorMaterialPresentationSnapshot final {
+  std::uint64_t revision = 0;
+  bool section_visible = false;
+  std::vector<QtMaterialPresentationItem> materials;
+  std::function<void(QuaderMaterialReference)> edit_material;
+  std::function<void(QuaderMaterialReference)> replace_material;
+};
 
 /**
  * Presents scene, component-selection, transform, and component properties
@@ -23,6 +43,8 @@ public:
   explicit InspectorPanel(QWidget *parent = nullptr);
   ~InspectorPanel() override;
 
+  void set_material_presentation(
+      InspectorMaterialPresentationSnapshot snapshot);
   void refresh(UIContext &context);
 
 private:

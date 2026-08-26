@@ -48,6 +48,7 @@ SceneProjectionCheckpoint SceneDocument::capture_projection_checkpoint() const {
   checkpoint.visibility_revision_ = visibility_revision_;
   checkpoint.transform_revision_ = transform_revision_;
   checkpoint.mesh_binding_revision_ = mesh_binding_revision_;
+  checkpoint.material_binding_revision_ = material_binding_revision_;
   checkpoint.render_component_revision_ = render_component_revision_;
   checkpoint.layer_revision_ = layer_revision_;
   return checkpoint;
@@ -82,6 +83,7 @@ bool SceneDocument::restore_projection_checkpoint(
   visibility_revision_ = checkpoint.visibility_revision_;
   transform_revision_ = checkpoint.transform_revision_;
   mesh_binding_revision_ = checkpoint.mesh_binding_revision_;
+  material_binding_revision_ = checkpoint.material_binding_revision_;
   render_component_revision_ = checkpoint.render_component_revision_;
   layer_revision_ = checkpoint.layer_revision_;
   return true;
@@ -412,6 +414,11 @@ bool SceneDocument::destroy_entities(std::span<const EntityId> ids) {
                   [this](EntityId entity) {
                     return entity_layer(entity) != kInvalidSceneLayerId;
                   });
+  const bool material_binding_destroyed =
+      std::any_of(to_destroy.begin(), to_destroy.end(),
+                  [this](EntityId entity) {
+                    return material(entity) != nullptr;
+                  });
 
   std::unordered_set<EntityId> surviving_parents;
   surviving_parents.reserve(to_destroy.size());
@@ -457,6 +464,9 @@ bool SceneDocument::destroy_entities(std::span<const EntityId> ids) {
   ++visibility_revision_;
   ++transform_revision_;
   ++mesh_binding_revision_;
+  if (material_binding_destroyed) {
+    ++material_binding_revision_;
+  }
   ++render_component_revision_;
   if (layer_membership_destroyed) {
     ++layer_revision_;
@@ -1074,14 +1084,13 @@ bool SceneDocument::set_instance_occurrence(
       kind(id) == EntityKind::Instance) {
     return true;
   }
-  const bool kind_changed = kind(id) != EntityKind::Instance;
   registry_.emplace_or_replace<InstanceOccurrenceComponent>(entity,
                                                              occurrence);
   registry_.emplace_or_replace<EntityKindComponent>(
       entity, EntityKindComponent{.kind = EntityKind::Instance});
-  if (kind_changed) {
-    ++hierarchy_presentation_revision_;
-  }
+  // Definition retargeting changes the recursive material-use projection even
+  // when the entity was already an instance occurrence.
+  ++hierarchy_presentation_revision_;
   ++render_component_revision_;
   mark_dirty();
   return true;
@@ -1168,6 +1177,7 @@ bool SceneDocument::set_material(EntityId id, MaterialComponent material) {
     return true;
   }
   registry_.emplace_or_replace<MaterialComponent>(entity, material);
+  ++material_binding_revision_;
   ++render_component_revision_;
   mark_dirty();
   return true;
@@ -1179,6 +1189,7 @@ bool SceneDocument::clear_material(EntityId id) {
     return false;
   }
   registry_.remove<MaterialComponent>(entity);
+  ++material_binding_revision_;
   ++render_component_revision_;
   mark_dirty();
   return true;
@@ -2236,6 +2247,8 @@ void SceneDocument::advance_revision_for_replacement(
   visibility_revision_ = std::max(visibility_revision_ + 1u, revision_);
   transform_revision_ = std::max(transform_revision_ + 1u, revision_);
   mesh_binding_revision_ = std::max(mesh_binding_revision_ + 1u, revision_);
+  material_binding_revision_ =
+      std::max(material_binding_revision_ + 1u, revision_);
   render_component_revision_ =
       std::max(render_component_revision_ + 1u, revision_);
   layer_revision_ = std::max(layer_revision_ + 1u, revision_);

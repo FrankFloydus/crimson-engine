@@ -3307,6 +3307,323 @@ TEST(BuildGuardrailTests, QtFrameRefreshKeepsExpensiveChromeEventDriven) {
   expect_contains(settings_show, "settings_dialog_->refresh()");
 }
 
+TEST(BuildGuardrailTests,
+     MaterialPresentationCatalogAndThumbnailsStayRevisionGated) {
+  const std::string ui_system = read_source_file("src/ui/ui_system.cpp");
+  const std::string ui_system_header =
+      read_source_file("src/ui/ui_system.hpp");
+  const std::string asset_registry =
+      read_source_file("src/assets/asset_registry.cpp");
+  const std::string asset_registry_header =
+      read_source_file("src/assets/asset_registry.hpp");
+  const std::string scene_document =
+      read_source_file("src/scene/scene_document.cpp");
+  const std::string scene_document_header =
+      read_source_file("src/scene/scene_document.hpp");
+  const std::string inspector =
+      read_source_file("src/ui/inspector_panel.cpp");
+  const std::string inspector_header =
+      read_source_file("src/ui/inspector_panel.hpp");
+  const std::string browser_header =
+      read_source_file("src/ui/qt_material_browser_window.hpp");
+  const std::string presentation_header =
+      read_source_file("src/ui/qt_material_presentation.hpp");
+
+  const std::string cache_refresh = source_slice(
+      ui_system, "void UISystem::refresh_material_presentation_cache(",
+      "void UISystem::revalidate_material_find_replace_presentations()");
+  ASSERT_FALSE(cache_refresh.empty());
+  const std::size_t material_catalog_revision =
+      cache_refresh.find("assets_->material_catalog_revision()");
+  const std::size_t material_binding_revision =
+      cache_refresh.find("document_->material_binding_revision()");
+  const std::size_t mesh_binding_revision =
+      cache_refresh.find("document_->mesh_binding_revision()");
+  const std::size_t mesh_material_usage_revision =
+      cache_refresh.find("assets_->mesh_material_usage_revision()");
+  const std::size_t modeling_content_revision =
+      cache_refresh.find("modeling_->content_revision()");
+  const std::size_t modeling_object_map_revision =
+      cache_refresh.find("modeling_->modeling_object_map_revision()");
+  const std::size_t unchanged_gate = cache_refresh.find(
+      "material_presentation_catalog_attempt_.has_value()");
+  const std::size_t record_attempt = cache_refresh.find(
+      "material_presentation_catalog_attempt_ = catalog_stamp");
+  const std::size_t catalog_query =
+      cache_refresh.find("editor_->project_assets().materials()");
+  const std::size_t embedded_catalog_query =
+      cache_refresh.find("assets_->material_ids()");
+  const std::size_t preview_query = cache_refresh.find(
+      "editor_->project_assets().material_preview(");
+  const std::size_t thumbnail_decode =
+      cache_refresh.find("make_qt_material_thumbnail(");
+  ASSERT_NE(material_catalog_revision, std::string::npos);
+  ASSERT_NE(material_binding_revision, std::string::npos);
+  ASSERT_NE(mesh_binding_revision, std::string::npos);
+  ASSERT_NE(mesh_material_usage_revision, std::string::npos);
+  ASSERT_NE(modeling_content_revision, std::string::npos);
+  ASSERT_NE(modeling_object_map_revision, std::string::npos);
+  ASSERT_NE(unchanged_gate, std::string::npos);
+  ASSERT_NE(record_attempt, std::string::npos);
+  ASSERT_NE(catalog_query, std::string::npos);
+  ASSERT_NE(embedded_catalog_query, std::string::npos);
+  ASSERT_NE(preview_query, std::string::npos);
+  ASSERT_NE(thumbnail_decode, std::string::npos);
+  EXPECT_LT(material_catalog_revision, unchanged_gate);
+  EXPECT_LT(material_binding_revision, unchanged_gate);
+  EXPECT_LT(mesh_binding_revision, unchanged_gate);
+  EXPECT_LT(mesh_material_usage_revision, unchanged_gate);
+  EXPECT_LT(modeling_content_revision, unchanged_gate);
+  EXPECT_LT(modeling_object_map_revision, unchanged_gate);
+  EXPECT_LT(unchanged_gate, catalog_query);
+  EXPECT_LT(record_attempt, catalog_query)
+      << "failed catalog reads must retain the attempted input stamp";
+  EXPECT_LT(catalog_query, embedded_catalog_query);
+  EXPECT_LT(unchanged_gate, preview_query);
+  EXPECT_LT(unchanged_gate, thumbnail_decode);
+  expect_missing(cache_refresh, "assets_->revision()");
+  expect_missing(cache_refresh, "document_->revision()");
+  expect_missing(cache_refresh,
+                 "editor_->materials().used_materials(");
+  expect_contains(cache_refresh,
+                  "material_presentation_signature_");
+  expect_contains(cache_refresh,
+                  "material_presentation_items_ = std::move(next)");
+  expect_contains(cache_refresh, "++material_presentation_revision_");
+  expect_contains(cache_refresh,
+                  "synchronize_material_presentation_consumers()");
+
+  for (std::string_view cache_field : {
+           "material_presentation_items_",
+           "material_presentation_signature_",
+           "material_presentation_revision_",
+           "material_presentation_catalog_revision_",
+           "material_presentation_catalog_attempt_",
+           "material_presentation_context_observation_",
+           "material_presentation_event_generation_signal_",
+           "material_presentation_cache_valid_",
+       }) {
+    expect_contains(ui_system_header, std::string(cache_field));
+  }
+  expect_contains(presentation_header,
+                  "std::shared_ptr<const QtMaterialThumbnail> thumbnail");
+  expect_contains(inspector_header,
+                  "std::vector<QtMaterialPresentationItem> materials");
+  expect_contains(browser_header,
+                  "using QtMaterialBrowserItem = QtMaterialPresentationItem");
+  expect_missing(inspector, ".material_preview(");
+  expect_missing(inspector, "project_assets().materials(");
+  expect_missing(read_source_file("src/ui/qt_material_browser_window.cpp"),
+                 ".material_preview(");
+  expect_contains(asset_registry_header, "material_catalog_revision() const");
+  expect_contains(asset_registry_header,
+                  "mesh_material_usage_revision() const");
+  expect_contains(asset_registry, "void AssetRegistry::mark_material_dirty()");
+  expect_contains(
+      asset_registry,
+      "void AssetRegistry::mark_mesh_material_usage_dirty()");
+  expect_contains(asset_registry,
+                  "bool AssetRegistry::material_references_texture(");
+  for (const std::pair<std::string_view, std::string_view> mesh_mutator : {
+           std::pair{"AssetId AssetRegistry::add_mesh(MeshAsset mesh)",
+                     "AssetId AssetRegistry::add_mesh(AssetId id"},
+           std::pair{"bool AssetRegistry::remove_mesh(",
+                     "bool AssetRegistry::remove_material("},
+           std::pair{"bool AssetRegistry::replace_meshes(",
+                     "bool AssetRegistry::replace_material("},
+           std::pair{"bool AssetRegistry::update_mesh(",
+                     "bool AssetRegistry::update_material("},
+       }) {
+    expect_contains(source_slice(asset_registry, mesh_mutator.first,
+                                 mesh_mutator.second),
+                    "mark_mesh_material_usage_dirty()");
+  }
+  for (const std::pair<std::string_view, std::string_view> texture_mutator : {
+           std::pair{"bool AssetRegistry::remove_texture(",
+                     "bool AssetRegistry::replace_mesh("},
+           std::pair{"bool AssetRegistry::replace_texture(",
+                     "bool AssetRegistry::update_mesh("},
+           std::pair{"bool AssetRegistry::update_texture(",
+                     "const MeshAsset* AssetRegistry::mesh("},
+       }) {
+    const std::string mutation = source_slice(
+        asset_registry, texture_mutator.first, texture_mutator.second);
+    expect_contains(mutation, "material_references_texture(id)");
+    expect_contains(mutation, "mark_material_dirty()");
+  }
+  expect_contains(scene_document_header,
+                  "material_binding_revision() const");
+  expect_contains(scene_document,
+                  "++material_binding_revision_");
+  const std::string instance_retarget = source_slice(
+      scene_document, "bool SceneDocument::set_instance_occurrence(",
+      "bool SceneDocument::clear_instance_occurrence(");
+  const std::size_t instance_idempotent =
+      instance_retarget.find("current != nullptr && *current == occurrence");
+  const std::size_t instance_hierarchy_revision =
+      instance_retarget.find("++hierarchy_presentation_revision_");
+  ASSERT_NE(instance_idempotent, std::string::npos);
+  ASSERT_NE(instance_hierarchy_revision, std::string::npos);
+  EXPECT_LT(instance_idempotent, instance_hierarchy_revision);
+  expect_missing(instance_retarget, "if (kind_changed)");
+
+  const std::string workspace_events = source_slice(
+      ui_system, "void UISystem::bind_project_workspace_events(",
+      "void UISystem::clear_project_workspace_events(");
+  const std::string workspace_refresh = source_slice(
+      ui_system, "void UISystem::refresh_project_workspace(",
+      "void UISystem::refresh_material_presentation_cache(");
+  expect_contains(workspace_events, "kProjectOpened");
+  expect_contains(workspace_events, "kProjectClosed");
+  expect_contains(workspace_events, "kProjectAssetsChanged");
+  expect_contains(workspace_events, "kActiveProjectMaterialChanged");
+  expect_contains(workspace_events, "kActiveSceneChanged");
+  expect_contains(workspace_events,
+                  "refresh_signal->store(true, std::memory_order_relaxed)");
+  expect_contains(workspace_events,
+                  "material_signal->fetch_add(1u");
+  const std::size_t workspace_gate = workspace_refresh.find(
+      "project_workspace_refresh_signal_->exchange(");
+  const std::size_t hidden_event_observation = workspace_refresh.find(
+      "observe_material_presentation_events()");
+  const std::size_t cache_refresh_call = workspace_refresh.find(
+      "refresh_material_presentation_cache()");
+  ASSERT_NE(workspace_gate, std::string::npos);
+  ASSERT_NE(hidden_event_observation, std::string::npos);
+  ASSERT_NE(cache_refresh_call, std::string::npos);
+  EXPECT_LT(hidden_event_observation, workspace_gate)
+      << "material invalidation must be observed even while consumers are "
+         "hidden";
+  EXPECT_LT(workspace_gate, cache_refresh_call);
+  expect_missing(workspace_refresh,
+                 "refresh_material_presentation_cache(true)");
+
+  const std::string frame_refresh = source_slice(
+      ui_system, "void UISystem::refresh(",
+      "void UISystem::prepare_viewports(");
+  const std::size_t inspector_presented = frame_refresh.find(
+      "panel_presented(UIPanelId::Inspector)");
+  const std::size_t outer_material_gate = frame_refresh.find(
+      "inspector_material_presentation_revision_ !=",
+      inspector_presented);
+  const std::size_t outer_inspector_refresh =
+      frame_refresh.find("inspector_panel_->refresh(context)",
+                         inspector_presented);
+  ASSERT_NE(inspector_presented, std::string::npos);
+  ASSERT_NE(outer_material_gate, std::string::npos);
+  ASSERT_NE(outer_inspector_refresh, std::string::npos);
+  EXPECT_LT(inspector_presented, outer_material_gate);
+  EXPECT_LT(outer_material_gate, outer_inspector_refresh);
+  expect_contains(frame_refresh,
+                  "inspector_material_presentation_revision_ =");
+  expect_missing(frame_refresh, "project_assets().materials()");
+  expect_missing(frame_refresh, ".material_preview(");
+
+  const std::string inspector_material_refresh = source_slice(
+      ui_system, "void UISystem::refresh_inspector_material_presentation()",
+      "void UISystem::show_home()");
+  const std::size_t inspector_material_gate =
+      inspector_material_refresh.find("if (inspector_material_query_valid_");
+  const std::size_t selection_usage_query = inspector_material_refresh.find(
+      "editor_->materials().used_materials(");
+  ASSERT_NE(inspector_material_gate, std::string::npos);
+  ASSERT_NE(selection_usage_query, std::string::npos);
+  EXPECT_LT(inspector_material_gate, selection_usage_query);
+  expect_contains(inspector_material_refresh,
+                  "document_->hierarchy_presentation_revision()");
+  expect_contains(inspector_material_refresh,
+                  "document_->material_binding_revision()");
+  expect_contains(inspector_material_refresh,
+                  "document_->mesh_binding_revision()");
+  expect_contains(inspector_material_refresh,
+                  "assets_->mesh_material_usage_revision()");
+  expect_contains(inspector_material_refresh,
+                  "modeling_->modeling_object_map_revision()");
+
+  const std::string inspector_refresh = source_slice(
+      inspector, "void refresh(UIContext &context)", "private:");
+  const std::size_t inner_material_gate = inspector_refresh.find(
+      "built_material_presentation_revision_ !=");
+  const std::size_t inner_rebuild = inspector_refresh.find("rebuild(summary)");
+  ASSERT_NE(inner_material_gate, std::string::npos);
+  ASSERT_NE(inner_rebuild, std::string::npos);
+  EXPECT_LT(inner_material_gate, inner_rebuild);
+  expect_contains(inspector,
+                  "built_material_presentation_revision_ = "
+                  "material_presentation_.revision");
+}
+
+TEST(BuildGuardrailTests,
+     MaterialFindReplaceRevalidatesContextAndRetainedPresentations) {
+  const std::string ui_system = read_source_file("src/ui/ui_system.cpp");
+  const std::string initialize = source_slice(
+      ui_system, "bool UISystem::initialize(",
+      "void UISystem::install_runtime_hooks(");
+  const std::string revalidate = source_slice(
+      ui_system,
+      "void UISystem::revalidate_material_find_replace_presentations()",
+      "void UISystem::refresh_material_picker_presentations()");
+  const std::string picker_refresh = source_slice(
+      ui_system, "void UISystem::refresh_material_picker_presentations()",
+      "void UISystem::synchronize_material_presentation_consumers()");
+  const std::string validate = source_slice(
+      ui_system, "void UISystem::validate_material_find_replace_context()",
+      "void UISystem::import_material_textures()");
+  ASSERT_FALSE(initialize.empty());
+  ASSERT_FALSE(revalidate.empty());
+  ASSERT_FALSE(picker_refresh.empty());
+  ASSERT_FALSE(validate.empty());
+
+  const std::size_t final_context_validation = initialize.find(
+      "validate_material_find_replace_context();",
+      initialize.find("set_replace_materials_callback("));
+  const std::size_t final_replace = initialize.find(
+      "replace_material_references(", final_context_validation);
+  ASSERT_NE(final_context_validation, std::string::npos);
+  ASSERT_NE(final_replace, std::string::npos);
+  EXPECT_LT(final_context_validation, final_replace);
+
+  const std::size_t picker_context_validation = initialize.find(
+      "validate_material_find_replace_context();",
+      initialize.find("set_accept_material_callback("));
+  const std::size_t picker_dialog_write = initialize.find(
+      "material_find_replace_dialog_->set_material(",
+      picker_context_validation);
+  ASSERT_NE(picker_context_validation, std::string::npos);
+  ASSERT_NE(picker_dialog_write, std::string::npos);
+  EXPECT_LT(picker_context_validation, picker_dialog_write);
+
+  expect_contains(revalidate,
+                  "material_find_replace_presentation_revision_");
+  expect_contains(revalidate,
+                  "material_presentation_for(current_find->reference, true)");
+  expect_contains(
+      revalidate,
+      "material_presentation_for(current_replacement->reference, true)");
+  expect_missing(revalidate, "used_materials(");
+  expect_missing(revalidate, "project_assets().materials(");
+
+  expect_contains(picker_refresh,
+                  "material_picker_presentation_revision_");
+  expect_contains(picker_refresh,
+                  "material_picker_window_->selected_material()");
+  expect_contains(picker_refresh,
+                  "material_picker_window_->set_materials(");
+  expect_contains(picker_refresh, "replacement_material_presentations()");
+
+  expect_contains(validate, "material_find_replace_project_identity_");
+  expect_contains(validate, "material_find_replace_scene_id_");
+  expect_contains(validate,
+                  "material_find_replace_scope_ == "
+                  "QuaderMaterialUsageScope::Selection");
+  expect_contains(validate, "document_->selection_revision()");
+  expect_contains(validate, "modeling_->selection_revision()");
+  expect_contains(validate, "modeling_->modeling_object_map_revision()");
+  expect_contains(ui_system,
+                  "material_find_replace_modeling_object_map_revision_ =");
+  expect_contains(validate, "close_material_find_replace()");
+}
+
 TEST(BuildGuardrailTests, QtViewportKeepsMultiPaneLayoutWorkspace) {
   const std::string viewport_api_source =
       read_source_file("src/api/quader_viewport_api.cpp");

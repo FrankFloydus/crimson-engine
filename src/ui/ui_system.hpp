@@ -7,6 +7,7 @@
 #pragma once
 
 #include "api/quader_events_api.hpp"
+#include "api/quader_materials_api.hpp"
 #include "api/quader_standard_material_documents_api.hpp"
 #include "core/frame_timing.hpp"
 #include "core/localization_service.hpp"
@@ -14,6 +15,7 @@
 #include "render/render_performance_stats.hpp"
 #include "ui/qt_auxiliary_window_state.hpp"
 #include "ui/qt_main_menu.hpp"
+#include "ui/qt_material_presentation.hpp"
 #include "ui/qt_standard_material_preview_image_cache.hpp"
 #include "ui/qt_startup_presentation.hpp"
 #include "ui/ui_panel_manager.hpp"
@@ -26,6 +28,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -52,6 +55,7 @@ class RadialArrayToolService;
 class ViewportPointPlacementService;
 class QtSettingsDialog;
 class QtCommandEventFilter;
+class QtMaterialFindReplaceDialog;
 class QtMaterialBrowserWindow;
 class QtMaterialPreviewSurface;
 class QtRetainedMessageBox;
@@ -181,6 +185,27 @@ private:
   void synchronize_settings_surfaces(bool refresh_dialog);
   void show_settings_dialog();
   void show_material_browser();
+  void show_material_find_replace();
+  void show_material_find_replace(QuaderMaterialReference source);
+  void show_material_picker(bool replacement_column);
+  void close_material_find_replace();
+  void invalidate_material_presentation_cache();
+  void observe_material_presentation_events();
+  void refresh_material_presentation_cache();
+  void synchronize_material_presentation_consumers();
+  void refresh_material_picker_presentations();
+  void revalidate_material_find_replace_presentations();
+  void refresh_inspector_material_presentation();
+  [[nodiscard]] std::vector<QtMaterialPresentationItem>
+  material_presentations_for(
+      const std::vector<QuaderMaterialReference> &references,
+      bool include_missing) const;
+  [[nodiscard]] std::optional<QtMaterialPresentationItem>
+  material_presentation_for(QuaderMaterialReference reference,
+                            bool include_missing) const;
+  [[nodiscard]] std::vector<QtMaterialPresentationItem>
+  replacement_material_presentations() const;
+  void validate_material_find_replace_context();
   void import_material_textures();
   [[nodiscard]] bool allow_main_window_close();
   [[nodiscard]] bool panel_visible(UIPanelId id) const;
@@ -204,6 +229,8 @@ private:
   ConsolePanel *console_panel_ = nullptr;
   QtSettingsDialog *settings_dialog_ = nullptr;
   QtMaterialBrowserWindow *material_browser_window_ = nullptr;
+  QtMaterialBrowserWindow *material_picker_window_ = nullptr;
+  QtMaterialFindReplaceDialog *material_find_replace_dialog_ = nullptr;
   QtMaterialPreviewSurface *material_preview_surface_ = nullptr;
   QtStandardMaterialEditorWindow *standard_material_editor_window_ = nullptr;
   QtToolSettingsPanel *tool_settings_panel_ = nullptr;
@@ -250,6 +277,7 @@ private:
   std::uint64_t inspector_scene_revision_ = 0;
   std::uint64_t inspector_modeling_content_revision_ = 0;
   std::uint64_t inspector_modeling_selection_revision_ = 0;
+  std::uint64_t inspector_material_presentation_revision_ = 0;
   std::uint64_t toolbar_scene_revision_ = 0;
   std::uint64_t toolbar_scene_selection_revision_ = 0;
   std::uint64_t toolbar_modeling_content_revision_ = 0;
@@ -265,8 +293,73 @@ private:
   bool project_workspace_instance_edit_revision_valid_ = false;
   std::shared_ptr<std::atomic_bool> project_workspace_refresh_signal_ =
       std::make_shared<std::atomic_bool>(true);
+  std::shared_ptr<std::atomic_uint64_t>
+      material_presentation_event_generation_signal_ =
+          std::make_shared<std::atomic_uint64_t>(1u);
+  std::uint64_t material_presentation_observed_event_generation_ = 0;
+  std::uint64_t material_presentation_invalidation_generation_ = 1;
   std::uint64_t material_browser_catalog_signature_ = 0;
-  std::string material_browser_active_id_;
+  QuaderMaterialReference material_browser_active_reference_;
+
+  struct MaterialPresentationCatalogStamp final {
+    const QuaderEditorApi *editor = nullptr;
+    const SceneDocument *document = nullptr;
+    const AssetRegistry *assets = nullptr;
+    std::uint64_t active_scene_id = 0;
+    std::uint64_t material_catalog_revision = 0;
+    std::uint64_t event_generation = 0;
+    std::uint64_t invalidation_generation = 0;
+    std::string locale;
+
+    bool operator==(const MaterialPresentationCatalogStamp &) const =
+        default;
+  };
+
+  struct MaterialPresentationContextStamp final {
+    const SceneDocument *document = nullptr;
+    const ModelingSessionService *modeling = nullptr;
+    const AssetRegistry *assets = nullptr;
+    std::uint64_t active_scene_id = 0;
+    std::uint64_t material_binding_revision = 0;
+    std::uint64_t mesh_binding_revision = 0;
+    std::uint64_t mesh_material_usage_revision = 0;
+    std::uint64_t hierarchy_revision = 0;
+    std::uint64_t modeling_content_revision = 0;
+    std::uint64_t modeling_object_map_revision = 0;
+
+    bool operator==(const MaterialPresentationContextStamp &) const =
+        default;
+  };
+
+  std::vector<QtMaterialPresentationItem> material_presentation_items_;
+  std::uint64_t material_presentation_signature_ = 0;
+  std::uint64_t material_presentation_revision_ = 0;
+  std::uint64_t material_presentation_catalog_revision_ = 0;
+  std::optional<MaterialPresentationCatalogStamp>
+      material_presentation_catalog_attempt_;
+  std::optional<MaterialPresentationContextStamp>
+      material_presentation_context_observation_;
+  bool material_presentation_cache_valid_ = false;
+  bool inspector_material_query_valid_ = false;
+  std::uint64_t inspector_material_query_presentation_revision_ = 0;
+  std::uint64_t inspector_material_query_scene_selection_revision_ = 0;
+  std::uint64_t inspector_material_query_hierarchy_revision_ = 0;
+  std::uint64_t inspector_material_query_material_binding_revision_ = 0;
+  std::uint64_t inspector_material_query_mesh_binding_revision_ = 0;
+  std::uint64_t inspector_material_query_mesh_material_usage_revision_ = 0;
+  std::uint64_t inspector_material_query_modeling_content_revision_ = 0;
+  std::uint64_t inspector_material_query_modeling_selection_revision_ = 0;
+  std::uint64_t inspector_material_query_modeling_object_map_revision_ = 0;
+  QuaderMaterialUsageScope material_find_replace_scope_ =
+      QuaderMaterialUsageScope::ActiveScene;
+  std::string material_find_replace_project_identity_;
+  std::uint64_t material_find_replace_scene_id_ = 0;
+  std::uint64_t material_find_replace_scene_selection_revision_ = 0;
+  std::uint64_t material_find_replace_modeling_selection_revision_ = 0;
+  std::uint64_t material_find_replace_modeling_object_map_revision_ = 0;
+  std::uint64_t material_find_replace_presentation_revision_ = 0;
+  bool material_picker_replacement_column_ = false;
+  std::uint64_t material_picker_presentation_revision_ = 0;
   QtStandardMaterialPreviewImageCache
       standard_material_preview_image_cache_;
   MaterialEditSessionId standard_material_editor_session_id_;

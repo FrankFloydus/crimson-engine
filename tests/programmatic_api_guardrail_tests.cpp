@@ -2240,6 +2240,93 @@ TEST(ProgrammaticApiGuardrailTests,
 }
 
 TEST(ProgrammaticApiGuardrailTests,
+     MaterialReferenceIntentUsesTypedPublicApiAndMenuOnlyPresentation) {
+  const std::filesystem::path root = source_root();
+  const std::string editor_api =
+      read_file(root / "src/api/quader_editor_api.hpp");
+  const std::string materials_api =
+      read_file(root / "src/api/quader_materials_api.hpp");
+  const std::string materials_api_source =
+      read_file(root / "src/api/quader_materials_api.cpp");
+  const std::string ui_system =
+      read_file(root / "src/ui/ui_system.cpp");
+  const std::string main_menu =
+      read_file(root / "src/ui/qt_main_menu.cpp");
+
+  EXPECT_NE(editor_api.find("#include \"api/quader_materials_api.hpp\""),
+            std::string::npos);
+  EXPECT_NE(editor_api.find("QuaderMaterialsApi &materials()"),
+            std::string::npos);
+  EXPECT_NE(editor_api.find("const QuaderMaterialsApi &materials() const"),
+            std::string::npos);
+
+  for (std::string_view typed_surface : {
+           "enum class QuaderMaterialReferenceKind",
+           "struct QuaderMaterialReference final",
+           "enum class QuaderMaterialUsageScope",
+           "class QuaderMaterialsApi final",
+           "used_materials(QuaderMaterialUsageScope scope) const",
+           "replace_material_references(",
+       }) {
+    EXPECT_NE(materials_api.find(typed_surface), std::string::npos)
+        << typed_surface;
+  }
+  EXPECT_NE(materials_api.find("QuaderApiResult<std::vector<"
+                               "QuaderMaterialReference>>"),
+            std::string::npos);
+  EXPECT_NE(materials_api.find("QuaderApiVoidResult"), std::string::npos);
+  EXPECT_EQ(materials_api.find("assets/material_reference.hpp"),
+            std::string::npos);
+  EXPECT_EQ(materials_api.find("ProjectMaterialCatalog"),
+            std::string::npos);
+  EXPECT_EQ(materials_api.find("MaterialDocument"), std::string::npos);
+
+  EXPECT_NE(materials_api_source.find("MaterialReferenceService service("),
+            std::string::npos);
+  EXPECT_NE(materials_api_source.find("service.used_materials("),
+            std::string::npos);
+  EXPECT_NE(materials_api_source.find("service.prepare_replacement("),
+            std::string::npos);
+  EXPECT_NE(materials_api_source.find("run_modeling_undoable_command("),
+            std::string::npos);
+  EXPECT_NE(ui_system.find("editor_->materials().used_materials("),
+            std::string::npos);
+  EXPECT_NE(
+      ui_system.find("editor_->materials().replace_material_references("),
+      std::string::npos);
+
+  const std::string find_replace_action = source_slice(
+      main_menu, "material_find_replace_action = menu->addAction(",
+      "QAction *settings = menu->addAction(");
+  ASSERT_FALSE(find_replace_action.empty());
+  EXPECT_NE(find_replace_action.find("ui.menu.edit.find_replace"),
+            std::string::npos);
+  EXPECT_NE(find_replace_action.find("context.show_material_find_replace"),
+            std::string::npos);
+  EXPECT_EQ(find_replace_action.find("add_command_action("),
+            std::string::npos);
+  EXPECT_EQ(find_replace_action.find("quader_command::"),
+            std::string::npos);
+  EXPECT_EQ(find_replace_action.find("commands()."), std::string::npos);
+
+  for (const std::filesystem::path &command_surface : {
+           root / "src/api/quader_command_ids.hpp",
+           root / "src/api/quader_commands_api.cpp",
+           root / "src/editor/commands/editor_command_registry.cpp",
+           root / "tests/support/command_behavior_contract.cpp",
+           root / "tests/baselines/command_behavior.json",
+       }) {
+    const std::string source = read_file(command_surface);
+    EXPECT_EQ(source.find("material.find_replace"), std::string::npos)
+        << command_surface.string();
+    EXPECT_EQ(source.find("material_find_replace"), std::string::npos)
+        << command_surface.string();
+    EXPECT_EQ(source.find("kEditFindReplace"), std::string::npos)
+        << command_surface.string();
+  }
+}
+
+TEST(ProgrammaticApiGuardrailTests,
      StandardMaterialEditorUsesTypedPublicDocumentApi) {
   const std::string editor_api =
       read_file(source_root() / "src/api/quader_editor_api.hpp");

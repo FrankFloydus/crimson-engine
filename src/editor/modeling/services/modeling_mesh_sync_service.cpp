@@ -855,8 +855,7 @@ bool ModelingMeshSyncService::set_entity_material(
   if (current != nullptr && *current == material) {
     return false;
   }
-  scene.set_material(entity, material);
-  return true;
+  return scene.set_material(entity, material);
 }
 
 bool ModelingMeshSyncService::restore_history_mesh_assets(

@@ -1830,6 +1830,726 @@ TEST(ProjectMaterialBehaviorTests,
                    .ok());
 }
 
+TEST(ProjectMaterialReferenceBehaviorTests,
+     SelectionAndActiveSceneReplacementDeduplicateAndRestoreExactState) {
+  ProjectMaterialBehaviorHarness harness("material-reference-selection");
+  harness.create();
+  const InstalledMaterial amber{
+      .path = project_path("Materials/amber.qmat"),
+      .material = project_material(kAmberMaterialId, "Amber",
+                                   {1.0f, 0.5f, 0.1f}),
+  };
+  const InstalledMaterial blue{
+      .path = project_path("Materials/blue.qmat"),
+      .material = project_material(kBlueMaterialId, "Blue",
+                                   {0.1f, 0.25f, 1.0f}),
+  };
+  const std::array installed{amber, blue};
+  harness.install_and_reopen(installed);
+  ASSERT_TRUE(harness.editor()
+                  .project_assets()
+                  .set_active_material(amber.material.id)
+                  .ok());
+
+  const QuaderApiResult<QuaderModelingObjectRef> first =
+      harness.editor().modeling().create_box(
+          {.min = {-3.0f, -1.0f, -1.0f},
+           .max = {-1.0f, 1.0f, 1.0f}},
+          "First Material Reference Mesh");
+  const QuaderApiResult<QuaderModelingObjectRef> second =
+      harness.editor().modeling().create_box(
+          {.min = {1.0f, -1.0f, -1.0f},
+           .max = {3.0f, 1.0f, 1.0f}},
+          "Second Material Reference Mesh");
+  ASSERT_TRUE(first.ok()) << first.error_message();
+  ASSERT_TRUE(second.ok()) << second.error_message();
+
+  const quader_poly::Document *first_document =
+      authored_document(harness.project(), first.value().entity);
+  ASSERT_NE(first_document, nullptr);
+  ASSERT_FALSE(first_document->faces.empty());
+  const quader_poly::ElementId blue_face = first_document->faces.front().id;
+  MaterialComponent first_component;
+  first_component.material = MaterialReference::project(amber.material.id);
+  first_component.material_slots.emplace(
+      7u, MaterialReference::project(blue.material.id));
+  first_component.material_slots.emplace(
+      9u, MaterialReference::project(amber.material.id));
+  constexpr AssetId kUnusedMissingMaterial = 0x7130u;
+  first_component.material_slots.emplace(
+      11u, MaterialReference(kUnusedMissingMaterial));
+  const ProjectMaterialFixture fixture(harness.project());
+  ASSERT_TRUE(fixture.set_material(first.value().entity, first_component));
+  ASSERT_TRUE(harness.editor()
+                  .modeling()
+                  .mesh(first.value())
+                  .materials()
+                  .assign_to_face(blue_face, 7u)
+                  .ok());
+  ASSERT_TRUE(harness.editor().selection().set_mode(QuaderSelectionMode::Object)
+                  .ok());
+  ASSERT_TRUE(harness.editor()
+                  .selection()
+                  .select_objects({first.value(), second.value()},
+                                  QuaderSelectionEdit::Replace)
+                  .ok());
+
+  const QuaderApiResult<std::vector<QuaderMaterialReference>> used =
+      harness.editor().materials().used_materials(
+          QuaderMaterialUsageScope::Selection);
+  ASSERT_TRUE(used.ok()) << used.error_message();
+  ASSERT_EQ(used.value().size(), 2u);
+  EXPECT_NE(std::ranges::find(
+                used.value(),
+                QuaderMaterialReference::project(amber.material.id)),
+            used.value().end());
+  EXPECT_NE(std::ranges::find(
+                used.value(),
+                QuaderMaterialReference::project(blue.material.id)),
+            used.value().end());
+
+  const auto opened_draft =
+      harness.editor().standard_material_documents().open(amber.material.id);
+  ASSERT_TRUE(opened_draft.ok()) << opened_draft.error_message();
+  ASSERT_TRUE(harness.editor()
+                  .standard_material_documents()
+                  .set_roughness(0.37f)
+                  .ok());
+  const auto draft_before =
+      harness.editor().standard_material_documents().current_revision();
+  ASSERT_TRUE(draft_before.ok()) << draft_before.error_message();
+  ASSERT_TRUE(draft_before.value().dirty);
+
+  const MaterialComponent first_before =
+      *scene_material(harness.project(), first.value().entity);
+  const MaterialComponent second_before =
+      *scene_material(harness.project(), second.value().entity);
+  const std::vector<std::pair<quader_poly::ElementId, std::uint32_t>>
+      first_slots_before =
+          face_slot_snapshot(harness.project(), first.value().entity);
+  const ModelingSelectionExport selection_before =
+      exact_selection(harness.project());
+  const QuaderApiResult<QuaderProjectMaterialInfo> active_before =
+      harness.editor().project_assets().active_material();
+  ASSERT_TRUE(active_before.ok()) << active_before.error_message();
+
+  const QuaderApiVoidResult replaced =
+      harness.editor().materials().replace_material_references(
+          QuaderMaterialReference::project(amber.material.id),
+          QuaderMaterialReference::project(blue.material.id),
+          QuaderMaterialUsageScope::Selection);
+  ASSERT_TRUE(replaced.ok()) << replaced.error_message();
+  ASSERT_TRUE(replaced.changed());
+  ASSERT_NE(scene_material(harness.project(), first.value().entity), nullptr);
+  ASSERT_NE(scene_material(harness.project(), second.value().entity), nullptr);
+  EXPECT_EQ(scene_material(harness.project(), first.value().entity)->material,
+            MaterialReference::project(blue.material.id));
+  EXPECT_EQ(scene_material(harness.project(), second.value().entity)->material,
+            MaterialReference::project(blue.material.id));
+  EXPECT_EQ(scene_material(harness.project(), first.value().entity)
+                ->material_slots.at(9u),
+            MaterialReference::project(blue.material.id));
+  EXPECT_EQ(scene_material(harness.project(), first.value().entity)
+                ->material_slots.at(11u),
+            MaterialReference(kUnusedMissingMaterial));
+  EXPECT_EQ(face_slot_snapshot(harness.project(), first.value().entity),
+            first_slots_before);
+  expect_same_selection_identity(exact_selection(harness.project()),
+                                 selection_before);
+  ASSERT_TRUE(harness.editor().project_assets().active_material().ok());
+  EXPECT_EQ(harness.editor().project_assets().active_material().value().id,
+            active_before.value().id);
+  const auto draft_after_replace =
+      harness.editor().standard_material_documents().current_revision();
+  ASSERT_TRUE(draft_after_replace.ok())
+      << draft_after_replace.error_message();
+  EXPECT_EQ(draft_after_replace.value().session_id,
+            draft_before.value().session_id);
+  EXPECT_EQ(draft_after_replace.value().id, draft_before.value().id);
+  EXPECT_EQ(draft_after_replace.value().draft_revision,
+            draft_before.value().draft_revision);
+  EXPECT_EQ(draft_after_replace.value().clean_revision,
+            draft_before.value().clean_revision);
+  EXPECT_EQ(draft_after_replace.value().dirty, draft_before.value().dirty);
+  const MaterialComponent first_after =
+      *scene_material(harness.project(), first.value().entity);
+  const MaterialComponent second_after =
+      *scene_material(harness.project(), second.value().entity);
+
+  ASSERT_TRUE(harness.editor().history().undo().ok());
+  EXPECT_EQ(*scene_material(harness.project(), first.value().entity),
+            first_before);
+  EXPECT_EQ(*scene_material(harness.project(), second.value().entity),
+            second_before);
+  EXPECT_EQ(face_slot_snapshot(harness.project(), first.value().entity),
+            first_slots_before);
+  expect_same_selection_identity(exact_selection(harness.project()),
+                                 selection_before);
+  ASSERT_TRUE(harness.editor().history().redo().ok());
+  EXPECT_EQ(*scene_material(harness.project(), first.value().entity),
+            first_after);
+  EXPECT_EQ(*scene_material(harness.project(), second.value().entity),
+            second_after);
+  const auto draft_after_redo =
+      harness.editor().standard_material_documents().current_revision();
+  ASSERT_TRUE(draft_after_redo.ok()) << draft_after_redo.error_message();
+  EXPECT_EQ(draft_after_redo.value().session_id,
+            draft_before.value().session_id);
+  EXPECT_EQ(draft_after_redo.value().draft_revision,
+            draft_before.value().draft_revision);
+  EXPECT_EQ(draft_after_redo.value().dirty, draft_before.value().dirty);
+
+  const QuaderHistorySnapshot history_before_same =
+      harness.editor().query().history();
+  const QuaderApiVoidResult same =
+      harness.editor().materials().replace_material_references(
+          QuaderMaterialReference::project(blue.material.id),
+          QuaderMaterialReference::project(blue.material.id),
+          QuaderMaterialUsageScope::Selection);
+  ASSERT_TRUE(same.ok()) << same.error_message();
+  EXPECT_FALSE(same.changed());
+  expect_same_history(harness.editor().query().history(), history_before_same);
+
+  const QuaderHistorySnapshot history_before_missing =
+      harness.editor().query().history();
+  const QuaderApiVoidResult missing =
+      harness.editor().materials().replace_material_references(
+          QuaderMaterialReference::project(ProjectAssetId::generate()),
+          QuaderMaterialReference::project(blue.material.id),
+          QuaderMaterialUsageScope::Selection);
+  ASSERT_TRUE(missing.ok()) << missing.error_message();
+  EXPECT_FALSE(missing.changed());
+  expect_same_history(harness.editor().query().history(),
+                      history_before_missing);
+
+  ASSERT_TRUE(harness.editor().history().undo().ok());
+  ASSERT_TRUE(fixture.set_locked(second.value().entity, true));
+  const QuaderHistorySnapshot history_before_locked =
+      harness.editor().query().history();
+  const QuaderApiVoidResult locked =
+      harness.editor().materials().replace_material_references(
+          QuaderMaterialReference::project(amber.material.id),
+          QuaderMaterialReference::project(blue.material.id),
+          QuaderMaterialUsageScope::Selection);
+  EXPECT_FALSE(locked.ok());
+  EXPECT_FALSE(locked.changed());
+  EXPECT_EQ(*scene_material(harness.project(), first.value().entity),
+            first_before);
+  EXPECT_EQ(*scene_material(harness.project(), second.value().entity),
+            second_before);
+  expect_same_history(harness.editor().query().history(),
+                      history_before_locked);
+  ASSERT_TRUE(fixture.set_locked(second.value().entity, false));
+
+  ASSERT_TRUE(fixture.set_selectable(second.value().entity, false));
+  const QuaderHistorySnapshot history_before_unselectable =
+      harness.editor().query().history();
+  const QuaderApiVoidResult unselectable =
+      harness.editor().materials().replace_material_references(
+          QuaderMaterialReference::project(amber.material.id),
+          QuaderMaterialReference::project(blue.material.id),
+          QuaderMaterialUsageScope::Selection);
+  EXPECT_FALSE(unselectable.ok());
+  EXPECT_FALSE(unselectable.changed());
+  EXPECT_EQ(*scene_material(harness.project(), first.value().entity),
+            first_before);
+  EXPECT_EQ(*scene_material(harness.project(), second.value().entity),
+            second_before);
+  expect_same_history(harness.editor().query().history(),
+                      history_before_unselectable);
+  ASSERT_TRUE(fixture.set_selectable(second.value().entity, true));
+
+  ASSERT_TRUE(fixture.set_visible(second.value().entity, false));
+  ASSERT_TRUE(harness.editor().selection().select_object(first.value()).ok());
+  const QuaderApiVoidResult scene_replaced =
+      harness.editor().materials().replace_material_references(
+          QuaderMaterialReference::project(amber.material.id),
+          QuaderMaterialReference::project(blue.material.id),
+          QuaderMaterialUsageScope::ActiveScene);
+  ASSERT_TRUE(scene_replaced.ok()) << scene_replaced.error_message();
+  ASSERT_TRUE(scene_replaced.changed());
+  EXPECT_EQ(scene_material(harness.project(), first.value().entity)->material,
+            MaterialReference::project(blue.material.id));
+  EXPECT_EQ(scene_material(harness.project(), second.value().entity)->material,
+            MaterialReference::project(blue.material.id));
+}
+
+TEST(ProjectMaterialReferenceBehaviorTests,
+     FaceScopeIncludesMissingReferencesAndChangesOnlyMatchingSelectedFaces) {
+  ProjectMaterialBehaviorHarness harness("material-reference-face");
+  harness.create();
+  const InstalledMaterial blue{
+      .path = project_path("Materials/blue.qmat"),
+      .material = project_material(kBlueMaterialId, "Blue",
+                                   {0.1f, 0.25f, 1.0f}),
+  };
+  const std::array installed{blue};
+  harness.install_and_reopen(installed);
+  const QuaderApiResult<QuaderModelingObjectRef> box =
+      harness.editor().modeling().create_box(
+          {.min = {-1.0f, -1.0f, -1.0f},
+           .max = {1.0f, 1.0f, 1.0f}},
+          "Missing Material Face Mesh");
+  ASSERT_TRUE(box.ok()) << box.error_message();
+  const quader_poly::Document *document =
+      authored_document(harness.project(), box.value().entity);
+  ASSERT_NE(document, nullptr);
+  ASSERT_GE(document->faces.size(), 3u);
+  const QuaderElementId first_face = document->faces[0].id;
+  const QuaderElementId second_face = document->faces[1].id;
+  const QuaderElementId unselected_face = document->faces[2].id;
+  constexpr AssetId kMissingEmbeddedMaterial = 0x7f31u;
+  const ProjectMaterialFixture fixture(harness.project());
+  MaterialComponent missing_component{
+      .material = MaterialReference(kMissingEmbeddedMaterial),
+  };
+  missing_component.material_slots.emplace(
+      7u, MaterialReference::project(blue.material.id));
+  ASSERT_TRUE(fixture.set_material(box.value().entity, missing_component));
+  ASSERT_TRUE(harness.editor()
+                  .modeling()
+                  .mesh(box.value())
+                  .materials()
+                  .assign_to_face(second_face, 7u)
+                  .ok());
+  ASSERT_TRUE(harness.editor().selection().set_mode(QuaderSelectionMode::Face)
+                  .ok());
+  ASSERT_TRUE(harness.editor()
+                  .selection()
+                  .select_faces(box.value(), {first_face, second_face})
+                  .ok());
+
+  const QuaderApiResult<std::vector<QuaderMaterialReference>> used =
+      harness.editor().materials().used_materials(
+          QuaderMaterialUsageScope::Selection);
+  ASSERT_TRUE(used.ok()) << used.error_message();
+  ASSERT_EQ(used.value().size(), 2u);
+  EXPECT_NE(std::ranges::find(
+                used.value(), QuaderMaterialReference::embedded(
+                                  kMissingEmbeddedMaterial)),
+            used.value().end());
+  EXPECT_NE(std::ranges::find(
+                used.value(),
+                QuaderMaterialReference::project(blue.material.id)),
+            used.value().end());
+  const MaterialComponent component_before =
+      *scene_material(harness.project(), box.value().entity);
+  const std::vector<std::pair<quader_poly::ElementId, std::uint32_t>>
+      slots_before = face_slot_snapshot(harness.project(), box.value().entity);
+  const ModelingSelectionExport selection_before =
+      exact_selection(harness.project());
+
+  const ProjectAssetId invalid_destination = ProjectAssetId::generate();
+  const QuaderHistorySnapshot history_before_invalid =
+      harness.editor().query().history();
+  const QuaderApiVoidResult invalid =
+      harness.editor().materials().replace_material_references(
+          QuaderMaterialReference::embedded(kMissingEmbeddedMaterial),
+          QuaderMaterialReference::project(invalid_destination),
+          QuaderMaterialUsageScope::Selection);
+  EXPECT_FALSE(invalid.ok());
+  EXPECT_FALSE(invalid.changed());
+  expect_same_history(harness.editor().query().history(),
+                      history_before_invalid);
+
+  const QuaderApiVoidResult replaced =
+      harness.editor().materials().replace_material_references(
+          QuaderMaterialReference::embedded(kMissingEmbeddedMaterial),
+          QuaderMaterialReference::project(blue.material.id),
+          QuaderMaterialUsageScope::Selection);
+  ASSERT_TRUE(replaced.ok()) << replaced.error_message();
+  ASSERT_TRUE(replaced.changed());
+  const MaterialComponent *changed =
+      scene_material(harness.project(), box.value().entity);
+  ASSERT_NE(changed, nullptr);
+  EXPECT_EQ(changed->material,
+            MaterialReference(kMissingEmbeddedMaterial));
+  ASSERT_EQ(changed->material_slots.size(), 1u);
+  EXPECT_EQ(changed->material_slots.begin()->second,
+            MaterialReference::project(blue.material.id));
+  const quader_poly::Document *changed_document =
+      authored_document(harness.project(), box.value().entity);
+  ASSERT_NE(changed_document, nullptr);
+  const quader_poly::Face *first_changed =
+      quader_poly::find_face(*changed_document, first_face);
+  const quader_poly::Face *second_changed =
+      quader_poly::find_face(*changed_document, second_face);
+  const quader_poly::Face *unselected =
+      quader_poly::find_face(*changed_document, unselected_face);
+  ASSERT_NE(first_changed, nullptr);
+  ASSERT_NE(second_changed, nullptr);
+  ASSERT_NE(unselected, nullptr);
+  EXPECT_NE(first_changed->material_slot, 0u);
+  EXPECT_EQ(second_changed->material_slot, 7u);
+  EXPECT_EQ(second_changed->material_slot, first_changed->material_slot);
+  EXPECT_EQ(unselected->material_slot, 0u);
+  expect_same_selection_identity(exact_selection(harness.project()),
+                                 selection_before);
+  const MaterialComponent component_after = *changed;
+  const auto slots_after =
+      face_slot_snapshot(harness.project(), box.value().entity);
+
+  ASSERT_TRUE(harness.editor().history().undo().ok());
+  EXPECT_EQ(*scene_material(harness.project(), box.value().entity),
+            component_before);
+  EXPECT_EQ(face_slot_snapshot(harness.project(), box.value().entity),
+            slots_before);
+  expect_same_selection_identity(exact_selection(harness.project()),
+                                 selection_before);
+  ASSERT_TRUE(harness.editor().history().redo().ok());
+  changed_document = authored_document(harness.project(), box.value().entity);
+  ASSERT_NE(changed_document, nullptr);
+  EXPECT_EQ(*scene_material(harness.project(), box.value().entity),
+            component_after);
+  EXPECT_EQ(face_slot_snapshot(harness.project(), box.value().entity),
+            slots_after);
+  expect_same_selection_identity(exact_selection(harness.project()),
+                                 selection_before);
+}
+
+TEST(ProjectMaterialReferenceBehaviorTests,
+     GroupScopeTraversesNestedGroupsAndDeduplicatesLinkedDefinitions) {
+  ProjectMaterialBehaviorHarness harness("material-reference-instances");
+  harness.create();
+  const InstalledMaterial amber{
+      .path = project_path("Materials/amber.qmat"),
+      .material = project_material(kAmberMaterialId, "Amber",
+                                   {1.0f, 0.5f, 0.1f}),
+  };
+  const InstalledMaterial blue{
+      .path = project_path("Materials/blue.qmat"),
+      .material = project_material(kBlueMaterialId, "Blue",
+                                   {0.1f, 0.25f, 1.0f}),
+  };
+  const std::array installed{amber, blue};
+  harness.install_and_reopen(installed);
+  ASSERT_TRUE(harness.editor()
+                  .project_assets()
+                  .set_active_material(amber.material.id)
+                  .ok());
+  const QuaderApiResult<QuaderModelingObjectRef> member =
+      harness.editor().modeling().create_box(
+          {.min = {-1.0f, -1.0f, -1.0f},
+           .max = {1.0f, 1.0f, 1.0f}},
+          "Nested Instance Material Member");
+  ASSERT_TRUE(member.ok()) << member.error_message();
+  const QuaderApiResult<QuaderEntityRef> inner_group =
+      harness.editor().scene().group_selection("Inner Material Group");
+  ASSERT_TRUE(inner_group.ok()) << inner_group.error_message();
+  const QuaderApiResult<QuaderEntityRef> outer_group =
+      harness.editor().scene().group_selection("Outer Material Group");
+  ASSERT_TRUE(outer_group.ok()) << outer_group.error_message();
+  const QuaderApiResult<QuaderInstanceCreateResult> instance =
+      harness.editor().modeling().create_instance_from_selection();
+  ASSERT_TRUE(instance.ok()) << instance.error_message();
+  const EntityId first_occurrence = instance.value().occurrence.root.id;
+  ASSERT_TRUE(harness.editor()
+                  .modeling()
+                  .duplicate_selected_entity_hierarchy()
+                  .ok());
+  OpenSceneSession *active_scene = harness.project().active_scene();
+  ASSERT_NE(active_scene, nullptr);
+  ASSERT_NE(active_scene->session, nullptr);
+  const std::vector<EntityId> selected_after_duplicate =
+      active_scene->session->scene().selected_entities();
+  ASSERT_EQ(selected_after_duplicate.size(), 1u);
+  const EntityId second_occurrence = selected_after_duplicate.front();
+  EXPECT_NE(second_occurrence, first_occurrence);
+  ASSERT_TRUE(harness.editor()
+                  .selection()
+                  .select_objects({first_occurrence, second_occurrence},
+                                  second_occurrence)
+                  .ok());
+  const QuaderApiResult<QuaderEntityRef> linked_group =
+      harness.editor().scene().group_selection("Linked Material Group");
+  ASSERT_TRUE(linked_group.ok()) << linked_group.error_message();
+  ASSERT_TRUE(harness.editor().selection().set_mode(QuaderSelectionMode::Group)
+                  .ok());
+  ASSERT_TRUE(harness.editor()
+                  .selection()
+                  .select_object(linked_group.value().id)
+                  .ok());
+
+  const QuaderApiResult<std::vector<QuaderMaterialReference>> used =
+      harness.editor().materials().used_materials(
+          QuaderMaterialUsageScope::Selection);
+  ASSERT_TRUE(used.ok()) << used.error_message();
+  ASSERT_EQ(used.value().size(), 1u);
+  EXPECT_EQ(used.value().front(),
+            QuaderMaterialReference::project(amber.material.id));
+  const QuaderApiVoidResult replaced =
+      harness.editor().materials().replace_material_references(
+          QuaderMaterialReference::project(amber.material.id),
+          QuaderMaterialReference::project(blue.material.id),
+          QuaderMaterialUsageScope::Selection);
+  ASSERT_TRUE(replaced.ok()) << replaced.error_message();
+  ASSERT_TRUE(replaced.changed());
+  EXPECT_EQ(scene_material(harness.project(), member.value().entity)->material,
+            MaterialReference::project(blue.material.id));
+  ASSERT_TRUE(harness.editor().history().undo().ok());
+  EXPECT_EQ(scene_material(harness.project(), member.value().entity)->material,
+            MaterialReference::project(amber.material.id));
+
+  const ProjectMaterialFixture fixture(harness.project());
+  ASSERT_TRUE(fixture.set_locked(second_occurrence, true));
+  const QuaderHistorySnapshot history_before_locked =
+      harness.editor().query().history();
+  const QuaderApiVoidResult locked =
+      harness.editor().materials().replace_material_references(
+          QuaderMaterialReference::project(amber.material.id),
+          QuaderMaterialReference::project(blue.material.id),
+          QuaderMaterialUsageScope::Selection);
+  EXPECT_FALSE(locked.ok());
+  EXPECT_FALSE(locked.changed());
+  EXPECT_EQ(scene_material(harness.project(), member.value().entity)->material,
+            MaterialReference::project(amber.material.id));
+  expect_same_history(harness.editor().query().history(),
+                      history_before_locked);
+  ASSERT_TRUE(fixture.set_locked(second_occurrence, false));
+
+  ASSERT_TRUE(fixture.set_selectable(linked_group.value().id, false));
+  const QuaderHistorySnapshot history_before_unselectable_ancestor =
+      harness.editor().query().history();
+  const QuaderApiVoidResult unselectable_ancestor =
+      harness.editor().materials().replace_material_references(
+          QuaderMaterialReference::project(amber.material.id),
+          QuaderMaterialReference::project(blue.material.id),
+          QuaderMaterialUsageScope::Selection);
+  EXPECT_FALSE(unselectable_ancestor.ok());
+  EXPECT_FALSE(unselectable_ancestor.changed());
+  EXPECT_EQ(scene_material(harness.project(), member.value().entity)->material,
+            MaterialReference::project(amber.material.id));
+  expect_same_history(harness.editor().query().history(),
+                      history_before_unselectable_ancestor);
+  ASSERT_TRUE(fixture.set_selectable(linked_group.value().id, true));
+}
+
+TEST(ProjectMaterialReferenceBehaviorTests,
+     FaceScopeRejectsWhenAnyLinkedOccurrenceIsLocked) {
+  ProjectMaterialBehaviorHarness harness("material-reference-face-instance");
+  harness.create();
+  const InstalledMaterial amber{
+      .path = project_path("Materials/amber.qmat"),
+      .material = project_material(kAmberMaterialId, "Amber",
+                                   {1.0f, 0.5f, 0.1f}),
+  };
+  const InstalledMaterial blue{
+      .path = project_path("Materials/blue.qmat"),
+      .material = project_material(kBlueMaterialId, "Blue",
+                                   {0.1f, 0.25f, 1.0f}),
+  };
+  const std::array installed{amber, blue};
+  harness.install_and_reopen(installed);
+  ASSERT_TRUE(harness.editor()
+                  .project_assets()
+                  .set_active_material(amber.material.id)
+                  .ok());
+  const QuaderApiResult<QuaderModelingObjectRef> member =
+      harness.editor().modeling().create_box(
+          {.min = {-1.0f, -1.0f, -1.0f},
+           .max = {1.0f, 1.0f, 1.0f}},
+          "Linked Face Material Member");
+  ASSERT_TRUE(member.ok()) << member.error_message();
+  const QuaderApiResult<QuaderInstanceCreateResult> instance =
+      harness.editor().modeling().create_instance_from_selection();
+  ASSERT_TRUE(instance.ok()) << instance.error_message();
+  const EntityId first_occurrence = instance.value().occurrence.root.id;
+  ASSERT_TRUE(harness.editor()
+                  .modeling()
+                  .duplicate_selected_entity_hierarchy()
+                  .ok());
+  OpenSceneSession *active_scene = harness.project().active_scene();
+  ASSERT_NE(active_scene, nullptr);
+  ASSERT_NE(active_scene->session, nullptr);
+  const std::vector<EntityId> duplicate_selection =
+      active_scene->session->scene().selected_entities();
+  ASSERT_EQ(duplicate_selection.size(), 1u);
+  const EntityId second_occurrence = duplicate_selection.front();
+  ASSERT_NE(second_occurrence, first_occurrence);
+  ASSERT_TRUE(
+      harness.editor().selection().select_object(first_occurrence).ok());
+  ASSERT_TRUE(
+      harness.editor().modeling().enter_instance_edit(first_occurrence).ok());
+  ASSERT_TRUE(harness.editor().selection().select_object(member.value()).ok());
+  ASSERT_TRUE(harness.editor().selection().set_mode(QuaderSelectionMode::Face)
+                  .ok());
+  QuaderPickSelectRequest pick_request;
+  pick_request.ray = {
+      .origin = {0.0f, 0.0f, 5.0f},
+      .direction = {0.0f, 0.0f, -1.0f},
+  };
+  const QuaderApiResult<QuaderSelectionSummary> select_face =
+      harness.editor().selection().pick_select(pick_request);
+  ASSERT_TRUE(select_face.ok()) << select_face.error_message();
+  ASSERT_EQ(select_face.value().selected_face_count, 1u);
+  const ModelingSelectionExport selection_before =
+      exact_selection(harness.project());
+  const quader_poly::ElementId selected_face =
+      selection_before.summary.active_face_id;
+  ASSERT_NE(selected_face, quader_poly::kInvalidElementId);
+  const MaterialComponent component_before =
+      *scene_material(harness.project(), member.value().entity);
+  const auto slots_before =
+      face_slot_snapshot(harness.project(), member.value().entity);
+
+  const ProjectMaterialFixture fixture(harness.project());
+  ASSERT_TRUE(fixture.set_locked(second_occurrence, true));
+  const QuaderHistorySnapshot history_before =
+      harness.editor().query().history();
+  const QuaderApiVoidResult locked =
+      harness.editor().materials().replace_material_references(
+          QuaderMaterialReference::project(amber.material.id),
+          QuaderMaterialReference::project(blue.material.id),
+          QuaderMaterialUsageScope::Selection);
+  EXPECT_FALSE(locked.ok());
+  EXPECT_FALSE(locked.changed());
+  EXPECT_EQ(*scene_material(harness.project(), member.value().entity),
+            component_before);
+  EXPECT_EQ(face_slot_snapshot(harness.project(), member.value().entity),
+            slots_before);
+  expect_same_selection_identity(exact_selection(harness.project()),
+                                 selection_before);
+  expect_same_history(harness.editor().query().history(), history_before);
+
+  ASSERT_TRUE(fixture.set_locked(second_occurrence, false));
+  ASSERT_TRUE(fixture.set_selectable(second_occurrence, false));
+  const QuaderHistorySnapshot history_before_unselectable =
+      harness.editor().query().history();
+  const QuaderApiVoidResult unselectable =
+      harness.editor().materials().replace_material_references(
+          QuaderMaterialReference::project(amber.material.id),
+          QuaderMaterialReference::project(blue.material.id),
+          QuaderMaterialUsageScope::Selection);
+  EXPECT_FALSE(unselectable.ok());
+  EXPECT_FALSE(unselectable.changed());
+  EXPECT_EQ(*scene_material(harness.project(), member.value().entity),
+            component_before);
+  EXPECT_EQ(face_slot_snapshot(harness.project(), member.value().entity),
+            slots_before);
+  expect_same_selection_identity(exact_selection(harness.project()),
+                                 selection_before);
+  expect_same_history(harness.editor().query().history(),
+                      history_before_unselectable);
+  ASSERT_TRUE(fixture.set_selectable(second_occurrence, true));
+
+  const QuaderApiVoidResult replaced =
+      harness.editor().materials().replace_material_references(
+          QuaderMaterialReference::project(amber.material.id),
+          QuaderMaterialReference::project(blue.material.id),
+          QuaderMaterialUsageScope::Selection);
+  ASSERT_TRUE(replaced.ok()) << replaced.error_message();
+  ASSERT_TRUE(replaced.changed());
+  const MaterialComponent *changed =
+      scene_material(harness.project(), member.value().entity);
+  ASSERT_NE(changed, nullptr);
+  const quader_poly::Document *document =
+      authored_document(harness.project(), member.value().entity);
+  ASSERT_NE(document, nullptr);
+  const quader_poly::Face *changed_face =
+      quader_poly::find_face(*document, selected_face);
+  ASSERT_NE(changed_face, nullptr);
+  EXPECT_EQ(changed->material_for_slot(changed_face->material_slot),
+            MaterialReference::project(blue.material.id));
+}
+
+TEST(ProjectMaterialReferenceBehaviorTests,
+     MissingProjectSourceRemainsDiscoverableAndReplaceable) {
+  ProjectMaterialBehaviorHarness harness("material-reference-missing-project");
+  harness.create();
+  const InstalledMaterial blue{
+      .path = project_path("Materials/blue.qmat"),
+      .material = project_material(kBlueMaterialId, "Blue",
+                                   {0.1f, 0.25f, 1.0f}),
+  };
+  const std::array installed{blue};
+  harness.install_and_reopen(installed);
+  const QuaderApiResult<QuaderModelingObjectRef> box =
+      harness.editor().modeling().create_box(
+          {.min = {-1.0f, -1.0f, -1.0f},
+           .max = {1.0f, 1.0f, 1.0f}},
+          "Missing Project Material Mesh");
+  ASSERT_TRUE(box.ok()) << box.error_message();
+  const ProjectAssetId missing_project = ProjectAssetId::generate();
+  const ProjectMaterialFixture fixture(harness.project());
+  ASSERT_TRUE(fixture.set_material(
+      box.value().entity,
+      MaterialComponent{.material = MaterialReference::project(
+                            missing_project)}));
+  ASSERT_TRUE(harness.editor().selection().set_mode(QuaderSelectionMode::Object)
+                  .ok());
+  ASSERT_TRUE(harness.editor().selection().select_object(box.value()).ok());
+
+  const QuaderApiResult<std::vector<QuaderMaterialReference>> used =
+      harness.editor().materials().used_materials(
+          QuaderMaterialUsageScope::Selection);
+  ASSERT_TRUE(used.ok()) << used.error_message();
+  ASSERT_EQ(used.value().size(), 1u);
+  EXPECT_EQ(used.value().front(),
+            QuaderMaterialReference::project(missing_project));
+  const QuaderApiVoidResult replaced =
+      harness.editor().materials().replace_material_references(
+          QuaderMaterialReference::project(missing_project),
+          QuaderMaterialReference::project(blue.material.id),
+          QuaderMaterialUsageScope::Selection);
+  ASSERT_TRUE(replaced.ok()) << replaced.error_message();
+  ASSERT_TRUE(replaced.changed());
+  EXPECT_EQ(scene_material(harness.project(), box.value().entity)->material,
+            MaterialReference::project(blue.material.id));
+  ASSERT_TRUE(harness.editor().history().undo().ok());
+  EXPECT_EQ(scene_material(harness.project(), box.value().entity)->material,
+            MaterialReference::project(missing_project));
+}
+
+TEST(ProjectMaterialReferenceBehaviorTests,
+     EmbeddedReferencesRoundTripThroughPublicReplacement) {
+  ProjectMaterialBehaviorHarness harness("material-reference-embedded");
+  harness.create();
+  const QuaderApiResult<QuaderAssetRef> source =
+      harness.editor().assets().add_material(
+          QuaderMaterialArgs{.name = "Embedded Replacement Source"});
+  const QuaderApiResult<QuaderAssetRef> replacement =
+      harness.editor().assets().add_material(
+          QuaderMaterialArgs{.name = "Embedded Replacement Destination"});
+  ASSERT_TRUE(source.ok()) << source.error_message();
+  ASSERT_TRUE(replacement.ok()) << replacement.error_message();
+  const QuaderApiResult<QuaderModelingObjectRef> box =
+      harness.editor().modeling().create_box(
+          {.min = {-1.0f, -1.0f, -1.0f},
+           .max = {1.0f, 1.0f, 1.0f}},
+          "Embedded Reference Mesh");
+  ASSERT_TRUE(box.ok()) << box.error_message();
+  const ProjectMaterialFixture fixture(harness.project());
+  ASSERT_TRUE(fixture.set_material(
+      box.value().entity,
+      MaterialComponent{.material = MaterialReference(source.value().id)}));
+  ASSERT_TRUE(harness.editor().selection().set_mode(QuaderSelectionMode::Object)
+                  .ok());
+  ASSERT_TRUE(harness.editor().selection().select_object(box.value()).ok());
+
+  const QuaderApiResult<std::vector<QuaderMaterialReference>> used =
+      harness.editor().materials().used_materials(
+          QuaderMaterialUsageScope::Selection);
+  ASSERT_TRUE(used.ok()) << used.error_message();
+  ASSERT_EQ(used.value().size(), 1u);
+  EXPECT_EQ(used.value().front(),
+            QuaderMaterialReference::embedded(source.value().id));
+  const QuaderApiVoidResult replaced =
+      harness.editor().materials().replace_material_references(
+          QuaderMaterialReference::embedded(source.value().id),
+          QuaderMaterialReference::embedded(replacement.value().id),
+          QuaderMaterialUsageScope::Selection);
+  ASSERT_TRUE(replaced.ok()) << replaced.error_message();
+  ASSERT_TRUE(replaced.changed());
+  EXPECT_EQ(scene_material(harness.project(), box.value().entity)->material,
+            MaterialReference(replacement.value().id));
+  ASSERT_TRUE(harness.editor().history().undo().ok());
+  EXPECT_EQ(scene_material(harness.project(), box.value().entity)->material,
+            MaterialReference(source.value().id));
+  ASSERT_TRUE(harness.editor().history().redo().ok());
+  EXPECT_EQ(scene_material(harness.project(), box.value().entity)->material,
+            MaterialReference(replacement.value().id));
+}
+
 TEST(ProjectMaterialPersistenceTests,
      Qdr11StoresStableReferencesAndDependenciesWithoutMaterialPayloads) {
   ProjectMaterialBehaviorHarness harness("qdr-project-reference");
