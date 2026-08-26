@@ -29,7 +29,7 @@ public:
   struct MaterialInteractionWorkStats final {
     std::uint64_t face_pick_count = 0;
     std::uint64_t sample_request_count = 0;
-    std::uint64_t apply_selection_command_count = 0;
+    std::uint64_t apply_target_request_count = 0;
     std::uint64_t apply_face_to_mesh_request_count = 0;
   };
 
@@ -44,6 +44,9 @@ public:
   [[nodiscard]] QuaderSelectionSummary
   pick_context_menu_target(QuaderEditorApi &editor,
                            const ViewportInteractionFrame &frame);
+  [[nodiscard]] std::optional<QuaderHoverTarget>
+  pick_material_face_target(QuaderEditorApi &editor,
+                            const ViewportInteractionFrame &frame);
   [[nodiscard]] bool cancel_active_drag(QuaderEditorApi &editor);
   [[nodiscard]] bool dragging() const;
   void cancel_pending_material_interaction();
@@ -91,7 +94,9 @@ private:
   struct PendingApplyActiveMaterial final {
     double deadline_seconds = 0.0;
     std::uint64_t scene_session_id = 0;
-    std::uint64_t selection_revision = 0;
+    ViewportSelectionMode selection_mode = ViewportSelectionMode::Object;
+    int modeling_object_id = -1;
+    int face_id = -1;
     std::string active_material_id;
   };
 

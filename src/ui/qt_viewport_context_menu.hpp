@@ -6,6 +6,11 @@
 ////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
+#include "api/quader_api_types.hpp"
+
+#include <functional>
+#include <optional>
+
 class QPoint;
 class QWidget;
 
@@ -25,7 +30,11 @@ public:
   void show(QWidget &parent, const QPoint &global_point,
             QuaderEditorApi &editor, ViewportInputRouter &input_router,
             LocalizationService &localization,
-            bool modal_tool_owns_viewport) const;
+            const QuaderActionSet &action_set,
+            QuaderSelectionMode selection_mode,
+            const std::optional<ProjectAssetId> &material_under_mouse,
+            const std::function<void(ProjectAssetId)> &open_material_editor)
+      const;
 };
 
 } // namespace quader

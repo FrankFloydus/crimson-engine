@@ -45,6 +45,10 @@ namespace quader {
 namespace {
 
 std::string command_id_for_modeling_action(std::string_view action_id) {
+  if (action_id == "copy_pivot_from_active") {
+    return std::string(
+        quader_command::kModelingCopyPivotFromActive.string());
+  }
   if (const CommandTool *tool = find_modeling_command_tool(action_id)) {
     return tool->public_command_target_id();
   }
@@ -170,6 +174,7 @@ bool command_semantically_requires_viewport(std::string_view command_id) {
          command_id.starts_with("viewport.") ||
          command_id == quader_command::kEditClearSelection.string() ||
          command_id == quader_command::kDeleteSelection.string() ||
+         command_id == quader_command::kCutSelection.string() ||
          command_id == quader_command::kCopySelection.string() ||
          command_id == quader_command::kPasteSelection.string() ||
          command_id == quader_command::kDuplicateSelection.string() ||
@@ -363,6 +368,9 @@ std::string explicit_keybinding_label(std::string_view command_id,
   if (is(quader_command::kCopySelection)) {
     return "Copy Selection";
   }
+  if (is(quader_command::kCutSelection)) {
+    return "Cut Selection";
+  }
   if (is(quader_command::kPasteSelection)) {
     return "Paste Selection";
   }
@@ -472,6 +480,9 @@ std::string command_keybinding_localization_key(std::string_view command_id) {
     return "ui.menu.edit.repeat_last_action";
   }
   if (command_id == quader_command::kCopySelection.string()) {
+    return stable();
+  }
+  if (command_id == quader_command::kCutSelection.string()) {
     return stable();
   }
   if (command_id == quader_command::kPasteSelection.string()) {
@@ -1819,6 +1830,12 @@ void QuaderCommandsApi::Impl::register_commands() {
                                  kSelectionModeComponent);
   register_modeling_tool_public_command(quader_command::kDeleteSelection,
                                         "delete_selection", "Delete Selection");
+  register_command(
+      quader_command::kCutSelection, "Cut Selection",
+      [this] { return api_.modeling().cut_selection(); }, "Ctrl+X",
+      [this] { return api_.modeling().can_cut_selection(); });
+  set_keybinding_selection_modes_for_modeling_action(
+      quader_command::kCutSelection.string(), "copy_selection");
   register_modeling_tool_public_command(quader_command::kCopySelection,
                                         "copy_selection", "Copy Selection",
                                         "Ctrl+C");

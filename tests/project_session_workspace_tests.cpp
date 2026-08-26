@@ -1647,6 +1647,44 @@ TEST(ProjectSessionWorkspace,
 }
 
 TEST(ProjectSessionWorkspace,
+     ProjectClipboardCutDeletesOnceAndSurvivesUndoRedoForPaste) {
+  ScopedProjectSessionDirectory temporary("ordinary-modeling-cut");
+  ProjectSession project;
+  const ProjectSessionResult created =
+      project.create(temporary.make_empty_child("OrdinaryModelingCut"));
+  ASSERT_TRUE(created.ok) << created.message;
+
+  QuaderEditorApi editor(project);
+  ASSERT_TRUE(editor.modeling()
+                  .create_box(QuaderBounds{.min = {-1.0f, -1.0f, -1.0f},
+                                           .max = {1.0f, 1.0f, 1.0f}},
+                              "Ordinary Cut Mesh")
+                  .ok());
+  OpenSceneSession *scene = project.active_scene();
+  ASSERT_NE(scene, nullptr);
+  ASSERT_EQ(scene->session->modeling().objects().size(), 1u);
+
+  const QuaderApiVoidResult cut =
+      editor.commands().execute(quader_command::kCutSelection);
+  ASSERT_TRUE(cut.ok()) << cut.error_message();
+  ASSERT_TRUE(cut.changed());
+  EXPECT_EQ(scene->session->modeling().objects().size(), 0u);
+
+  ASSERT_TRUE(editor.history().undo().ok());
+  EXPECT_EQ(scene->session->modeling().objects().size(), 1u);
+  ASSERT_TRUE(editor.history().redo().ok());
+  EXPECT_EQ(scene->session->modeling().objects().size(), 0u);
+  ASSERT_TRUE(editor.history().undo().ok());
+  EXPECT_EQ(scene->session->modeling().objects().size(), 1u);
+
+  const QuaderApiVoidResult pasted =
+      editor.commands().execute(quader_command::kPasteSelection);
+  ASSERT_TRUE(pasted.ok()) << pasted.error_message();
+  ASSERT_TRUE(pasted.changed());
+  EXPECT_EQ(scene->session->modeling().objects().size(), 2u);
+}
+
+TEST(ProjectSessionWorkspace,
      SceneInstanceEditContextsPersistPerTabAndCleanUpWithTheirScene) {
   ScopedProjectSessionDirectory temporary("instance-edit-tab-context");
   const std::filesystem::path original_project =

@@ -1020,6 +1020,149 @@ TEST(ProjectMaterialBehaviorTests,
 }
 
 TEST(ProjectMaterialBehaviorTests,
+     DirectHoverTargetsAssignFaceOrWholeMeshWithoutChangingSelection) {
+  ProjectMaterialBehaviorHarness harness("direct-hover-material-targets");
+  harness.create();
+  const InstalledMaterial amber{
+      .path = project_path("Materials/amber.qmat"),
+      .material = project_material(kAmberMaterialId, "Amber",
+                                   {1.0f, 0.5f, 0.1f}),
+  };
+  const InstalledMaterial blue{
+      .path = project_path("Materials/blue.qmat"),
+      .material = project_material(kBlueMaterialId, "Blue",
+                                   {0.1f, 0.2f, 1.0f}),
+  };
+  const std::array installed{amber, blue};
+  harness.install_and_reopen(installed);
+  ASSERT_TRUE(harness.editor()
+                  .project_assets()
+                  .set_active_material(amber.material.id)
+                  .ok());
+  const QuaderApiResult<QuaderModelingObjectRef> target =
+      harness.editor().modeling().create_box(
+          {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
+          "Hover Target");
+  const QuaderApiResult<QuaderModelingObjectRef> selected =
+      harness.editor().modeling().create_box(
+          {.min = {3.0f, -1.0f, -1.0f}, .max = {5.0f, 1.0f, 1.0f}},
+          "Unrelated Selection");
+  ASSERT_TRUE(target.ok()) << target.error_message();
+  ASSERT_TRUE(selected.ok()) << selected.error_message();
+  const quader_poly::Document *document =
+      authored_document(harness.project(), target.value().entity);
+  ASSERT_NE(document, nullptr);
+  ASSERT_GE(document->faces.size(), 2u);
+  const QuaderElementId first_face = document->faces[0].id;
+  const QuaderElementId second_face = document->faces[1].id;
+  ASSERT_TRUE(harness.editor()
+                  .selection()
+                  .set_mode(QuaderSelectionMode::Object)
+                  .ok());
+  ASSERT_TRUE(
+      harness.editor().selection().select_object(selected.value()).ok());
+  const ModelingSelectionExport selection_before =
+      exact_selection(harness.project());
+  ASSERT_TRUE(harness.editor()
+                  .project_assets()
+                  .set_active_material(blue.material.id)
+                  .ok());
+
+  const QuaderApiVoidResult face_applied =
+      harness.editor().modeling().apply_active_material_to_face(
+          target.value().modeling_object_id, first_face);
+  ASSERT_TRUE(face_applied.ok()) << face_applied.error_message();
+  EXPECT_TRUE(face_applied.changed());
+  EXPECT_EQ(harness.editor().query().history().undo_label,
+            "Apply Material to Face");
+  const auto first_material =
+      harness.editor().modeling().project_material_for_face(
+          target.value().modeling_object_id, first_face);
+  const auto second_material =
+      harness.editor().modeling().project_material_for_face(
+          target.value().modeling_object_id, second_face);
+  ASSERT_TRUE(first_material.ok()) << first_material.error_message();
+  ASSERT_TRUE(second_material.ok()) << second_material.error_message();
+  EXPECT_EQ(first_material.value().id, blue.material.id);
+  EXPECT_EQ(second_material.value().id, amber.material.id);
+  expect_same_selection_identity(exact_selection(harness.project()),
+                                 selection_before);
+
+  ASSERT_TRUE(harness.editor().history().undo().ok());
+  ASSERT_TRUE(harness.editor().history().redo().ok());
+  ASSERT_TRUE(harness.editor().history().undo().ok());
+  const QuaderApiVoidResult mesh_applied =
+      harness.editor().modeling().apply_active_material_to_mesh(
+          target.value().modeling_object_id, first_face);
+  ASSERT_TRUE(mesh_applied.ok()) << mesh_applied.error_message();
+  EXPECT_TRUE(mesh_applied.changed());
+  EXPECT_EQ(harness.editor().query().history().undo_label,
+            "Apply Material to Mesh");
+  expect_primary_material(harness.project(), target.value().entity,
+                          blue.material.id);
+  expect_all_face_slots(harness.project(), target.value().entity, 0u);
+  expect_primary_material(harness.project(), selected.value().entity,
+                          amber.material.id);
+  expect_same_selection_identity(exact_selection(harness.project()),
+                                 selection_before);
+  ASSERT_TRUE(harness.editor().history().undo().ok());
+  expect_primary_material(harness.project(), target.value().entity,
+                          amber.material.id);
+  expect_same_selection_identity(exact_selection(harness.project()),
+                                 selection_before);
+}
+
+TEST(ProjectMaterialBehaviorTests,
+     DirectHoverTargetsCanAssignWhenTheFaceHasNoCurrentMaterial) {
+  ProjectMaterialBehaviorHarness harness("direct-hover-missing-material");
+  harness.create();
+  const QuaderApiResult<QuaderModelingObjectRef> box =
+      harness.editor().modeling().create_box(
+          {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
+          "Hover Target Without Material");
+  ASSERT_TRUE(box.ok()) << box.error_message();
+  const quader_poly::Document *document =
+      authored_document(harness.project(), box.value().entity);
+  ASSERT_NE(document, nullptr);
+  ASSERT_FALSE(document->faces.empty());
+  const QuaderElementId face = document->faces.front().id;
+  const auto slots_before =
+      face_slot_snapshot(harness.project(), box.value().entity);
+
+  const ProjectMaterialFixture fixture(harness.project());
+  ASSERT_TRUE(fixture.clear_material(box.value().entity));
+
+  const QuaderApiVoidResult face_applied =
+      harness.editor().modeling().apply_active_material_to_face(
+          box.value().modeling_object_id, face);
+  ASSERT_TRUE(face_applied.ok()) << face_applied.error_message();
+  ASSERT_TRUE(face_applied.changed());
+  const auto face_material =
+      harness.editor().modeling().project_material_for_face(
+          box.value().modeling_object_id, face);
+  ASSERT_TRUE(face_material.ok()) << face_material.error_message();
+  EXPECT_EQ(face_material.value().id,
+            project_asset_id(kDefaultProjectMaterialId));
+  ASSERT_TRUE(harness.editor().history().undo().ok());
+  EXPECT_EQ(scene_material(harness.project(), box.value().entity), nullptr);
+  EXPECT_EQ(face_slot_snapshot(harness.project(), box.value().entity),
+            slots_before);
+
+  const QuaderApiVoidResult mesh_applied =
+      harness.editor().modeling().apply_active_material_to_mesh(
+          box.value().modeling_object_id, face);
+  ASSERT_TRUE(mesh_applied.ok()) << mesh_applied.error_message();
+  ASSERT_TRUE(mesh_applied.changed());
+  expect_primary_material(harness.project(), box.value().entity,
+                          project_asset_id(kDefaultProjectMaterialId));
+  expect_all_face_slots(harness.project(), box.value().entity, 0u);
+  ASSERT_TRUE(harness.editor().history().undo().ok());
+  EXPECT_EQ(scene_material(harness.project(), box.value().entity), nullptr);
+  EXPECT_EQ(face_slot_snapshot(harness.project(), box.value().entity),
+            slots_before);
+}
+
+TEST(ProjectMaterialBehaviorTests,
      PublicApplyMaterialCommandIsAvailableInObjectMode) {
   ProjectMaterialBehaviorHarness harness("public-object-apply");
   harness.create();
@@ -1473,6 +1616,16 @@ TEST(ProjectMaterialBehaviorTests,
                    .apply_face_material_to_mesh(
                        box.value().modeling_object_id, face)
                    .ok());
+  EXPECT_FALSE(harness.editor()
+                   .modeling()
+                   .apply_active_material_to_mesh(
+                       box.value().modeling_object_id, face)
+                   .ok());
+  EXPECT_FALSE(harness.editor()
+                   .modeling()
+                   .apply_active_material_to_face(
+                       box.value().modeling_object_id, face)
+                   .ok());
   ASSERT_TRUE(fixture.set_visible(box.value().entity, true));
 
   ASSERT_TRUE(fixture.set_locked(box.value().entity, true));
@@ -1484,6 +1637,16 @@ TEST(ProjectMaterialBehaviorTests,
   EXPECT_FALSE(harness.editor()
                    .modeling()
                    .apply_face_material_to_mesh(
+                       box.value().modeling_object_id, face)
+                   .ok());
+  EXPECT_FALSE(harness.editor()
+                   .modeling()
+                   .apply_active_material_to_mesh(
+                       box.value().modeling_object_id, face)
+                   .ok());
+  EXPECT_FALSE(harness.editor()
+                   .modeling()
+                   .apply_active_material_to_face(
                        box.value().modeling_object_id, face)
                    .ok());
   ASSERT_TRUE(fixture.set_locked(box.value().entity, false));

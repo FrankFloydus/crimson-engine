@@ -3504,27 +3504,78 @@ TEST(ViewportContextMenuPolicyTests,
 TEST(ViewportContextMenuPolicyTests,
      NonModelingActionsKeepRightClickMenuAvailable) {
   const auto opens_with = [](bool has_modeling_actions,
-                             bool can_create_instance,
-                             bool can_flatten_instance,
-                             bool can_remove_selection_from_layers) {
+                             bool has_object_actions, bool has_selection,
+                             bool has_material_under_mouse,
+                             bool has_fixed_command_actions) {
     return should_open_viewport_context_menu({
         .right_press_tracked = true,
         .right_released = true,
         .release_inside_viewport = true,
         .target_hit = true,
         .has_actions = viewport_context_menu_has_available_actions(
-            has_modeling_actions, can_create_instance, can_flatten_instance,
-            can_remove_selection_from_layers),
+            has_modeling_actions, has_object_actions, has_selection,
+            has_material_under_mouse, has_fixed_command_actions),
         .press_screen = {200.0f, 180.0f},
         .release_screen = {201.0f, 181.0f},
     });
   };
 
-  EXPECT_FALSE(opens_with(false, false, false, false));
-  EXPECT_TRUE(opens_with(false, true, false, false));
-  EXPECT_TRUE(opens_with(false, false, true, false));
-  EXPECT_TRUE(opens_with(false, false, false, true));
-  EXPECT_TRUE(opens_with(true, false, false, false));
+  EXPECT_FALSE(opens_with(false, false, false, false, false));
+  EXPECT_TRUE(opens_with(false, true, false, false, false));
+  EXPECT_TRUE(opens_with(false, false, true, false, false));
+  EXPECT_TRUE(opens_with(false, false, false, true, false));
+  EXPECT_TRUE(opens_with(false, false, false, false, true));
+  EXPECT_TRUE(opens_with(true, false, false, false, false));
+}
+
+TEST(ViewportContextMenuPolicyTests,
+     TargetIndependentCommandsAllowPasteOnEmptyViewport) {
+  EXPECT_TRUE(should_open_viewport_context_menu({
+      .right_press_tracked = true,
+      .right_released = true,
+      .release_inside_viewport = true,
+      .target_hit = false,
+      .has_target_independent_actions = true,
+      .has_actions = viewport_context_menu_has_available_actions(
+          false, false, false, false, true),
+      .press_screen = {200.0f, 180.0f},
+      .release_screen = {201.0f, 181.0f},
+  }));
+}
+
+TEST(ViewportContextMenuPolicyTests,
+     SeparatesTopologyActionsFromObjectAndGroupIntent) {
+  EXPECT_EQ(viewport_context_menu_modeling_section(
+                QuaderSelectionMode::Object),
+            ViewportContextMenuModelingSection::Mesh);
+  EXPECT_EQ(viewport_context_menu_modeling_section(
+                QuaderSelectionMode::Vertex),
+            ViewportContextMenuModelingSection::Vertex);
+  EXPECT_EQ(viewport_context_menu_modeling_section(
+                QuaderSelectionMode::Edge),
+            ViewportContextMenuModelingSection::Edge);
+  EXPECT_EQ(viewport_context_menu_modeling_section(
+                QuaderSelectionMode::Face),
+            ViewportContextMenuModelingSection::Face);
+  EXPECT_FALSE(viewport_context_menu_modeling_section(
+                   QuaderSelectionMode::Group)
+                   .has_value());
+
+  EXPECT_EQ(viewport_context_menu_action_bucket(
+                QuaderSelectionMode::Object, "duplicate_meshes"),
+            ViewportContextMenuActionBucket::Modeling);
+  EXPECT_EQ(viewport_context_menu_action_bucket(
+                QuaderSelectionMode::Object, "copy_pivot_from_active"),
+            ViewportContextMenuActionBucket::Object);
+  EXPECT_EQ(viewport_context_menu_action_bucket(
+                QuaderSelectionMode::Object, "delete_selection"),
+            ViewportContextMenuActionBucket::Object);
+  EXPECT_EQ(viewport_context_menu_action_bucket(
+                QuaderSelectionMode::Face, "delete_selection"),
+            ViewportContextMenuActionBucket::Modeling);
+  EXPECT_EQ(viewport_context_menu_action_bucket(
+                QuaderSelectionMode::Group, "delete_selection"),
+            ViewportContextMenuActionBucket::Object);
 }
 
 TEST(ViewportContextMenuPolicyTests, BlocksModalToolsMissingActionsAndDrags) {

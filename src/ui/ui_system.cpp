@@ -310,6 +310,8 @@ bool UISystem::initialize(RenderSystem &render_system,
   viewport_panel_ = new QtViewportPanel(scene_workspace_);
   viewport_panel_->set_viewport_settings(viewport_settings_);
   viewport_panel_->set_localization(localization_);
+  viewport_panel_->set_open_material_editor_callback(
+      [this](ProjectAssetId id) { open_standard_material(id.str()); });
   scene_workspace_->set_viewport_widget(viewport_panel_);
   central_stack_->addWidget(project_home_page_);
   central_stack_->addWidget(scene_workspace_);

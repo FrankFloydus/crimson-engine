@@ -465,6 +465,53 @@ TEST(LocalizationResourceTests,
             "Snap Selected Edges to Active Edge");
   EXPECT_EQ(italian->at("modeling.action.snap_edges_to_active.label"),
             "Aggancia spigoli selezionati allo spigolo attivo");
+
+  EXPECT_EQ(english->at("ui.viewport.context_menu.section.mesh"), "Mesh");
+  EXPECT_EQ(italian->at("ui.viewport.context_menu.section.mesh"), "Mesh");
+  EXPECT_EQ(english->at("ui.viewport.context_menu.section.object"),
+            "Object");
+  EXPECT_EQ(italian->at("ui.viewport.context_menu.section.object"),
+            "Oggetto");
+  EXPECT_EQ(english->at("ui.viewport.context_menu.section.face"), "Face");
+  EXPECT_EQ(italian->at("ui.viewport.context_menu.section.face"), "Faccia");
+  EXPECT_EQ(english->at("ui.viewport.context_menu.section.edge"), "Edge");
+  EXPECT_EQ(italian->at("ui.viewport.context_menu.section.edge"), "Spigolo");
+  EXPECT_EQ(english->at("ui.viewport.context_menu.section.vertex"),
+            "Vertex");
+  EXPECT_EQ(italian->at("ui.viewport.context_menu.section.vertex"),
+            "Vertice");
+  EXPECT_EQ(
+      english->at("ui.viewport.context_menu.command.center_selection"),
+      "Center View on Selection");
+  EXPECT_EQ(
+      italian->at("ui.viewport.context_menu.command.center_selection"),
+      "Centra la vista sulla selezione");
+  EXPECT_EQ(english->at(
+                "ui.viewport.context_menu.command.set_material_under_mouse"),
+            "Set Material under Mouse as Active");
+  EXPECT_EQ(italian->at(
+                "ui.viewport.context_menu.command.set_material_under_mouse"),
+            "Imposta come attivo il materiale sotto il mouse");
+  EXPECT_EQ(english->at(
+                "ui.viewport.context_menu.command.edit_material_under_mouse"),
+            "Edit Material under Mouse");
+  EXPECT_EQ(italian->at(
+                "ui.viewport.context_menu.command.edit_material_under_mouse"),
+            "Modifica il materiale sotto il mouse");
+  EXPECT_EQ(english->at("ui.menu.edit.cut"), "Cut");
+  EXPECT_EQ(italian->at("ui.menu.edit.cut"), "Taglia");
+  EXPECT_EQ(english->at("keybindings.target.edit.cut.label"),
+            "Cut Selection");
+  EXPECT_EQ(italian->at("keybindings.target.edit.cut.label"),
+            "Taglia selezione");
+  EXPECT_EQ(english->at(
+                "keybindings.target.viewport.material."
+                "apply_active_to_selection.label"),
+            "Apply Active Material under Mouse");
+  EXPECT_EQ(italian->at(
+                "keybindings.target.viewport.material."
+                "apply_active_to_selection.label"),
+            "Applica il materiale attivo sotto il mouse");
 }
 
 TEST(LocalizationResourceTests,

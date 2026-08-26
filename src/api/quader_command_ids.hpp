@@ -32,6 +32,7 @@ inline constexpr QuaderCommandId kEditRepeatLastAction{
     "edit.repeat_last_action"};
 inline constexpr QuaderCommandId kEditClearSelection{"edit.clear_selection"};
 inline constexpr QuaderCommandId kDeleteSelection{"edit.delete"};
+inline constexpr QuaderCommandId kCutSelection{"edit.cut"};
 inline constexpr QuaderCommandId kCopySelection{"edit.copy"};
 inline constexpr QuaderCommandId kPasteSelection{"edit.paste"};
 inline constexpr QuaderCommandId kDuplicateSelection{"edit.duplicate"};
@@ -320,6 +321,7 @@ inline constexpr QuaderCommandId kTypedCommandIds[] = {
     kSelectGrow,
     kSelectShrink,
     kDeleteSelection,
+    kCutSelection,
     kCopySelection,
     kPasteSelection,
     kDuplicateSelection,

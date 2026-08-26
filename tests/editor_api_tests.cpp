@@ -2599,6 +2599,14 @@ TEST(EditorApiTests, GlobalCommandKeybindingsResolveWithAndWithoutViewportFocus)
   EXPECT_NE(focused_copy_dispatch.command_id,
             quader::quader_command::kViewportFrameSelection.string());
 
+  const quader::QuaderViewportKeybindingDispatch focused_cut_dispatch =
+      editor.commands().dispatch_viewport_input_binding(
+          single_input_chord("Ctrl+X"), state, true, false);
+  ASSERT_EQ(focused_cut_dispatch.kind,
+            quader::QuaderViewportKeybindingDispatch::Kind::Command);
+  EXPECT_EQ(focused_cut_dispatch.command_id,
+            quader::quader_command::kCutSelection.string());
+
 #ifndef NDEBUG
   const quader::QuaderViewportKeybindingDispatch dev_copy_dispatch =
       editor.commands().dispatch_viewport_input_binding(
@@ -3799,8 +3807,7 @@ TEST(EditorApiTests,
   EXPECT_EQ(apply_active->shortcut, "Ctrl+RightMouseClick");
   EXPECT_EQ(apply_face->shortcut, "Ctrl+RightMouseDoubleClick");
   EXPECT_EQ(sample->scope_id, "viewport.selection.any");
-  EXPECT_EQ(apply_active->scope_id,
-            "viewport.selection.object_or_face");
+  EXPECT_EQ(apply_active->scope_id, "viewport.selection.any");
   EXPECT_EQ(apply_face->scope_id, "viewport.selection.any");
   EXPECT_NE(sample->when.find("selectionMode.vertex"), std::string::npos);
   EXPECT_NE(sample->when.find("selectionMode.edge"), std::string::npos);
@@ -3809,15 +3816,15 @@ TEST(EditorApiTests,
   EXPECT_NE(sample->when.find("selectionMode.group"), std::string::npos);
   EXPECT_NE(apply_face->when.find("selectionMode.group"),
             std::string::npos);
-  EXPECT_EQ(apply_active->when.find("selectionMode.vertex"),
+  EXPECT_NE(apply_active->when.find("selectionMode.vertex"),
             std::string::npos);
-  EXPECT_EQ(apply_active->when.find("selectionMode.edge"),
+  EXPECT_NE(apply_active->when.find("selectionMode.edge"),
             std::string::npos);
   EXPECT_NE(apply_active->when.find("selectionMode.face"),
             std::string::npos);
   EXPECT_NE(apply_active->when.find("selectionMode.object"),
             std::string::npos);
-  EXPECT_EQ(apply_active->when.find("selectionMode.group"),
+  EXPECT_NE(apply_active->when.find("selectionMode.group"),
             std::string::npos);
 
   const quader::QuaderKeybindingCatalogEntry *keyboard_apply =
@@ -3852,9 +3859,11 @@ TEST(EditorApiTests,
             (std::pair{true,
                        quader::ViewportInputActionKind::
                            ApplyFaceMaterialToMesh}));
-  EXPECT_FALSE(resolve("Ctrl+RightMouseClick",
-                       quader::ViewportSelectionMode::Edge)
-                   .first);
+  EXPECT_EQ(resolve("Ctrl+RightMouseClick",
+                    quader::ViewportSelectionMode::Edge),
+            (std::pair{
+                true, quader::ViewportInputActionKind::
+                          ApplyActiveMaterialToSelection}));
   EXPECT_EQ(resolve("Shift+RightMouseClick",
                     quader::ViewportSelectionMode::Group),
             (std::pair{true,
@@ -3864,6 +3873,11 @@ TEST(EditorApiTests,
             (std::pair{true,
                        quader::ViewportInputActionKind::
                            ApplyFaceMaterialToMesh}));
+  EXPECT_EQ(resolve("Ctrl+RightMouseClick",
+                    quader::ViewportSelectionMode::Group),
+            (std::pair{
+                true, quader::ViewportInputActionKind::
+                          ApplyActiveMaterialToSelection}));
   EXPECT_FALSE(resolve("RightMouseClick",
                        quader::ViewportSelectionMode::Face)
                    .first);
@@ -11964,9 +11978,9 @@ TEST(EditorApiTests,
       editor.commands().keybinding_catalog();
 
 #ifndef NDEBUG
-  EXPECT_EQ(commands.size(), 159u);
+  EXPECT_EQ(commands.size(), 160u);
 #else
-  EXPECT_EQ(commands.size(), 158u);
+  EXPECT_EQ(commands.size(), 159u);
 #endif
 
   std::unordered_set<std::string> expected_target_ids;

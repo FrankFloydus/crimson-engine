@@ -189,6 +189,10 @@ public:
   ModelingCommandResult flip_selection(ModelingFlipOrientation orientation);
   ModelingCommandResult apply_active_material(std::uint32_t material_slot = 0);
   ModelingCommandResult apply_active_material(MaterialReference material);
+  ModelingCommandResult apply_material_to_mesh_at_face(
+      int modeling_object_id, int face_id, MaterialReference material);
+  ModelingCommandResult apply_material_to_face(
+      int modeling_object_id, int face_id, MaterialReference material);
   [[nodiscard]] ModelingProjectMaterialQueryResult
   project_material_for_face(int modeling_object_id, int face_id) const;
   ModelingCommandResult apply_face_material_to_mesh(int modeling_object_id,

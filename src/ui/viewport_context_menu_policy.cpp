@@ -6,6 +6,8 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "ui/viewport_context_menu_policy.hpp"
 
+#include "api/quader_api_types.hpp"
+
 namespace quader {
 
 bool is_viewport_context_menu_click_gesture(
@@ -25,16 +27,50 @@ bool is_viewport_context_menu_click_gesture(
 }
 
 bool viewport_context_menu_has_available_actions(
-    bool has_modeling_actions, bool can_create_instance,
-    bool can_flatten_instance, bool can_remove_selection_from_layers) {
-  return has_modeling_actions || can_create_instance || can_flatten_instance ||
-         can_remove_selection_from_layers;
+    bool has_modeling_actions, bool has_object_actions, bool has_selection,
+    bool has_material_under_mouse, bool has_fixed_command_actions) {
+  return has_modeling_actions || has_object_actions || has_selection ||
+         has_material_under_mouse || has_fixed_command_actions;
+}
+
+std::optional<ViewportContextMenuModelingSection>
+viewport_context_menu_modeling_section(QuaderSelectionMode mode) {
+  switch (mode) {
+  case QuaderSelectionMode::Object:
+    return ViewportContextMenuModelingSection::Mesh;
+  case QuaderSelectionMode::Vertex:
+    return ViewportContextMenuModelingSection::Vertex;
+  case QuaderSelectionMode::Edge:
+    return ViewportContextMenuModelingSection::Edge;
+  case QuaderSelectionMode::Face:
+    return ViewportContextMenuModelingSection::Face;
+  case QuaderSelectionMode::Group:
+    return std::nullopt;
+  }
+  return std::nullopt;
+}
+
+ViewportContextMenuActionBucket
+viewport_context_menu_action_bucket(QuaderSelectionMode mode,
+                                    std::string_view action_id) {
+  if (action_id == "copy_pivot_from_active") {
+    return mode == QuaderSelectionMode::Object
+               ? ViewportContextMenuActionBucket::Object
+               : ViewportContextMenuActionBucket::Suppressed;
+  }
+  if (action_id == "delete_selection" &&
+      (mode == QuaderSelectionMode::Object ||
+       mode == QuaderSelectionMode::Group)) {
+    return ViewportContextMenuActionBucket::Object;
+  }
+  return ViewportContextMenuActionBucket::Modeling;
 }
 
 bool should_open_viewport_context_menu(
     const ViewportContextMenuOpenRequest &request) {
   return is_viewport_context_menu_click_gesture(request) &&
-         request.target_hit && request.has_actions;
+         (request.target_hit || request.has_target_independent_actions) &&
+         request.has_actions;
 }
 
 bool should_preserve_viewport_context_menu_hover(

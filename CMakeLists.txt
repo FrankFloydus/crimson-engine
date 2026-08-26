@@ -1369,6 +1369,7 @@ if(QUADER_BUILD_TESTS)
         tests/qt_viewport_render_submission_policy_tests.cpp
         tests/qt_viewport_fly_navigation_hud_tests.cpp
         tests/qt_viewport_delete_popup_tests.cpp
+        tests/qt_viewport_context_menu_tests.cpp
         tests/qstr_tests.cpp
         tests/editor_api_tests.cpp
         tests/quader_events_api_tests.cpp

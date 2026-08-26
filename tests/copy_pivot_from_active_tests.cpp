@@ -1471,6 +1471,10 @@ TEST(CopyPivotFromActiveTests,
   EXPECT_EQ(command->label, "Copy Pivot From Active");
   EXPECT_TRUE(command->shortcut.empty());
   EXPECT_FALSE(command->enabled);
+  EXPECT_EQ(
+      harness.editor.commands().command_id_for_modeling_action(
+          "copy_pivot_from_active"),
+      quader::quader_command::kModelingCopyPivotFromActive.string());
 
   quader::QuaderActionSet operations =
       harness.editor.modeling().available_action_set({

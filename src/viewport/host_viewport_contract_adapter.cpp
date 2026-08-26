@@ -115,8 +115,7 @@ constexpr std::uint32_t kMaterialSourceSelectionModes =
     viewport_selection_mode_mask(ViewportSelectionMode::Object) |
     viewport_selection_mode_mask(ViewportSelectionMode::Group);
 constexpr std::uint32_t kMaterialTargetSelectionModes =
-    viewport_selection_mode_mask(ViewportSelectionMode::Face) |
-    viewport_selection_mode_mask(ViewportSelectionMode::Object);
+    kMaterialSourceSelectionModes;
 
 } // namespace
 
@@ -371,7 +370,7 @@ viewport_input_action_binding_catalog() {
           .target_id = viewport_input_action_target_id(
               "material.apply_active_to_selection"),
           .action_id = "viewport.material.apply_active_to_selection",
-          .label = "Apply Active Material to Selection",
+          .label = "Apply Active Material Under Mouse",
           .localization_key = "keybindings.target.viewport.material."
                               "apply_active_to_selection.label",
           .context = ViewportInputBindingContext::Viewport,

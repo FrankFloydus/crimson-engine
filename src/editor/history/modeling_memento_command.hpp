@@ -438,6 +438,42 @@ private:
 };
 
 /**
+ * Applies the active material directly to geometry identified by a viewport
+ * face hit without changing or consulting the editor selection.
+ */
+class ApplyActiveMaterialToTargetHistoryCommand final
+    : public ModelingMementoCommand {
+public:
+  enum class Scope {
+    Mesh,
+    Face,
+  };
+
+  ApplyActiveMaterialToTargetHistoryCommand(
+      ModelingSessionService &modeling, int modeling_object_id, int face_id,
+      MaterialReference material, Scope scope)
+      : ModelingMementoCommand(
+            modeling, scope == Scope::Mesh ? "Apply Material to Mesh"
+                                           : "Apply Material to Face"),
+        modeling_object_id_(modeling_object_id), face_id_(face_id),
+        material_(material), scope_(scope) {}
+
+private:
+  ModelingCommandResult execute_initial() override {
+    return scope_ == Scope::Mesh
+               ? modeling().apply_material_to_mesh_at_face(
+                     modeling_object_id_, face_id_, material_)
+               : modeling().apply_material_to_face(modeling_object_id_,
+                                                   face_id_, material_);
+  }
+
+  int modeling_object_id_ = kInvalidModelingObjectId;
+  int face_id_ = quader_poly::kInvalidElementId;
+  MaterialReference material_;
+  Scope scope_ = Scope::Mesh;
+};
+
+/**
  * Normalizes one mesh to the resolved material sampled from one of its faces.
  * Redo restores the captured post-execution memento and therefore never
  * resamples material state that may have changed since the initial gesture.

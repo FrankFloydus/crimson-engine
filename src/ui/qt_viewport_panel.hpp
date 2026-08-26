@@ -29,6 +29,7 @@
 #include <array>
 #include <chrono>
 #include <cstdint>
+#include <functional>
 #include <vector>
 
 class QAction;
@@ -84,6 +85,8 @@ public:
   void set_viewport_settings(const ViewportSettings &settings);
   void set_render_performance_stats(RenderFramePerformanceStats stats);
   void set_localization(LocalizationService &localization);
+  void set_open_material_editor_callback(
+      std::function<void(ProjectAssetId)> callback);
   void refresh_keybinding_presentation(QuaderEditorApi &editor);
   void prewarm_retained_dialogs();
   void set_startup_presentation_blocked(bool blocked);
@@ -248,6 +251,7 @@ private:
   bool persisted_camera_signature_valid_ = false;
   const ViewportSettings *viewport_settings_ = nullptr;
   LocalizationService *localization_ = nullptr;
+  std::function<void(ProjectAssetId)> open_material_editor_callback_;
   RenderFramePerformanceStats render_performance_ = {};
   ViewportSettings fallback_settings_ = ViewportSettings::defaults();
   ViewportLayoutId displayed_layout_ = ViewportLayoutId::Single;

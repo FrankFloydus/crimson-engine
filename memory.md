@@ -6510,13 +6510,15 @@ Invariant:
   per-row widgets or filesystem polling. The recent-project store captures stable manifest size and
   timestamp metadata; platform-owned reveal selects the manifest or falls back to its nearest
   existing parent.
-- Material RMB actions are canonical viewport input targets: Shift+Click samples a project-backed
-  face material, Ctrl+Click applies the active material in Object/Face selection, and Ctrl+Double
-  Click normalizes the clicked face's material across its mesh. Single/double disambiguation follows
-  the effective editable click pair and a steady-clock deadline. A pending single captures scene,
-  selection revision, and active project material and revalidates them only at expiry. Bare RMB is
-  reserved by fly navigation and the viewport popup and must be rejected by keybinding assignment,
-  not silently accepted.
+- Material RMB actions are canonical hover-owned viewport input targets: Shift+Click samples the
+  project-backed material under the pointer; Ctrl+Click captures the hovered object and face at
+  click time, then assigns the active material to that face in Face mode or the whole hovered mesh
+  in Vertex, Edge, Object, and Group modes without requiring or changing selection. Ctrl+Double
+  Click normalizes the clicked face's existing material across its mesh. Single/double
+  disambiguation follows the effective editable click pair and a steady-clock deadline. A pending
+  single captures scene, mode, object, face, and active project material and revalidates scene,
+  mode, target, and material at expiry. Bare RMB is reserved by fly navigation and the viewport
+  popup and must be rejected by keybinding assignment, not silently accepted.
 - Whole-mesh material normalization is one SDK mutation, not repeated immutable per-face edits. It
   preserves object/component selection, publishes one content revision, and records one exact
   undo/redo memento. Embedded references are valid for clicked-face normalization; only project
@@ -6736,3 +6738,58 @@ their runtime directories contain the required Release image plugins and codec d
 debug-suffixed plugins. The mandatory regression gate and full CTest remain red only on the same six
 pre-existing instruction/build guardrails and five unrelated linear-array/overlay tests; manual UI
 smoke was started but interrupted before visual confirmation.
+
+## 2026-08-26 - Hover-Target Materials And Structured Viewport Context Menu
+
+Task/context: material sampling and assignment needed to act on the mesh under the pointer without a
+selection, while the viewport RMB menu needed to separate mode-compatible modeling operations from
+scene/object and general editor commands.
+
+Invariant:
+
+- Shift+RMB samples the project material on the hovered face without requiring or changing
+  selection. Ctrl+RMB captures the hovered object/face at click time; Face mode assigns only that
+  face, while Vertex, Edge, Object, and Group modes assign the whole hovered mesh. The delayed
+  single-click intent never retargets to a later hover or selection change, and Ctrl+double-click
+  still normalizes the clicked face's existing material across its mesh.
+- Direct active-material assignment validates a live, editable object and face independently from
+  whether the face already has a material. It stages a missing native material component when
+  necessary, preserves unrelated object/component selection, and records one exact modeling
+  memento for undo/redo.
+- A qualifying RMB release evaluates `available_action_set()` exactly once. Object mode presents
+  mesh-compatible modeling commands under `Mesh`; component modes use `Vertex`, `Edge`, or `Face`;
+  scene/hierarchy intent lives under `Object`. Group mode has no modeling submenu. Utility material
+  and framing actions and the Cut/Copy/Paste block remain separated by top-level dividers.
+- The material under the pointer is captured before the context-menu selection pick. Set Material
+  uses that captured project identity; Edit Material passes it to the UI-owned retained-document
+  lifecycle that opens or raises the Material Editor, without changing the active material.
+- Context-menu shortcut text comes from the current command/keybinding owner and is appended as
+  display-only `\t` text. Exact click tokens are abbreviated there as `RMouse` and `LMouse`, while
+  canonical `RightMouseClick` and `LeftMouseClick` binding/persistence strings remain unchanged.
+  The popup never installs `QAction` shortcuts or enumerates the broad command catalog.
+- Top-level dividers use a menu-local `palette(mid)` separator rule. This makes them visible with
+  the Obsidian/Fusion palette while preserving normal item, hover, selected, disabled, focus, and
+  submenu styling and remaining compatible with alternate/high-contrast palettes.
+- `edit.cut` is the typed Ctrl+X clipboard command. It preflights both copy and deletion, copies
+  through the project/instance-aware clipboard path, then delegates deletion to the existing
+  scene-aware/component command path. Undo/redo owns the deletion while the copied clipboard
+  payload remains pasteable.
+
+Owners: viewport input/controller picking, public modeling and command APIs, modeling session and
+history services, Qt viewport panel/context-menu presenter, `UISystem` Material Editor document
+lifecycle, localization/keybinding owners, and command behavior contracts.
+
+Verification: the focused integrated material/API/input/context/localization suite passes 26/26;
+the focused UI source guardrails pass 2/2; and the complete command behavior contract passes 4/4.
+The final affected UI/viewport workflow passes 410/410. Its live Fusion/Obsidian popup regression
+renders the menu and verifies both divider regions contain the `QPalette::Mid` separator color,
+checks the exact `Shift+RMouse` display label with an empty `QAction` shortcut, and selects Edit
+Material through Qt's popup event path to verify the hovered project ID reaches the Material Editor
+callback.
+The intentionally regenerated baseline adds only `edit.cut` (158 -> 159 commands); existing entries
+change only aggregate/preference fingerprints from the new default Ctrl+X binding. In the mandatory
+gate, modeling-domain, SDK consumer/parity, and all task-owned app tests pass. The complete app suite
+passes 1359 tests with 3 skipped and remains red only on two unrelated Linear Array plus three
+overlay tests; guardrails pass 368/374 and retain the same six pre-existing failures, including in
+the SDK-only wrapper. Both canonical Debug/Profile and Release `quader` builds pass. No manual GPU
+or popup visual smoke was performed.

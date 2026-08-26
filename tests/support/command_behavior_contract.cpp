@@ -131,6 +131,9 @@ std::span<const CommandBehaviorContract> command_behavior_contracts() {
       contract(quader_command::kDeleteSelection, Fixture::ObjectSelection,
                kTopologySceneDomains, Outcome::ChangeRequired,
                UndoRepeat::UndoableAndRepeatable),
+      contract(quader_command::kCutSelection, Fixture::ObjectSelection,
+               kTopologySceneDomains | Domain::Clipboard,
+               Outcome::ChangeRequired, UndoRepeat::Undoable),
       contract(quader_command::kCopySelection, Fixture::ObjectSelection,
                Domain::Clipboard, Outcome::SuccessRequired, UndoRepeat::None),
       contract(quader_command::kPasteSelection, Fixture::ClipboardObject,
@@ -577,9 +580,9 @@ std::span<const CommandBehaviorContract> command_behavior_contracts() {
   };
 
 #ifndef NDEBUG
-  static_assert(std::size(kContracts) == 159U);
+  static_assert(std::size(kContracts) == 160U);
 #else
-  static_assert(std::size(kContracts) == 158U);
+  static_assert(std::size(kContracts) == 159U);
 #endif
   return std::span<const CommandBehaviorContract>{kContracts};
 }

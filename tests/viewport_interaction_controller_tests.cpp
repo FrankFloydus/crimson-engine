@@ -4752,7 +4752,7 @@ TEST(ViewportInteractionControllerMaterialTests,
   const auto &stats = harness.controller.material_interaction_work_stats();
   EXPECT_EQ(stats.face_pick_count, 1u);
   EXPECT_EQ(stats.sample_request_count, 1u);
-  EXPECT_EQ(stats.apply_selection_command_count, 0u);
+  EXPECT_EQ(stats.apply_target_request_count, 0u);
   EXPECT_EQ(stats.apply_face_to_mesh_request_count, 0u);
 
   const std::vector<quader::QuaderElementId> faces =
@@ -4765,22 +4765,24 @@ TEST(ViewportInteractionControllerMaterialTests,
 }
 
 TEST(ViewportInteractionControllerMaterialTests,
-     CtrlSingleWaitsForDoubleClickWindowThenAppliesOnceToMultiSelection) {
+     CtrlSingleCapturesHoveredMeshAndLeavesUnrelatedSelectionUntouched) {
   ProjectViewportInteractionHarness harness;
   harness.initialize_with_second_material();
-  const quader::QuaderModelingObjectRef left =
-      create_project_box_at(harness, {-3.0f, 0.0f, 0.0f}, "Left");
-  const quader::QuaderModelingObjectRef right =
-      create_project_box_at(harness, {3.0f, 0.0f, 0.0f}, "Right");
+  const quader::QuaderModelingObjectRef hovered =
+      create_project_box_at(harness, {}, "Hovered");
+  const quader::QuaderModelingObjectRef selected =
+      create_project_box_at(harness, {4.0f, 0.0f, 0.0f}, "Selected");
   ASSERT_TRUE(harness.editor.project_assets()
                   .set_active_material(harness.second_material())
                   .ok());
   ASSERT_TRUE(harness.editor.selection()
                   .set_mode(quader::QuaderSelectionMode::Object)
                   .ok());
-  ASSERT_TRUE(harness.editor.selection().select_objects({left, right}).ok());
+  ASSERT_TRUE(harness.editor.selection().select_object(selected).ok());
   harness.router.set_selection_mode(quader::ViewportSelectionMode::Object);
   harness.scene_session().history().clear();
+  const quader::QuaderSelectionSummary selection_before =
+      harness.editor.selection().summary();
 
   harness.monotonic_time_seconds = 10.0;
   harness.input.apply_active_material_to_selection_pressed = true;
@@ -4791,51 +4793,76 @@ TEST(ViewportInteractionControllerMaterialTests,
       quader::ViewportBeforeToolInteractionResult{});
   harness.input.apply_active_material_to_selection_pressed = false;
   EXPECT_EQ(harness.controller.material_interaction_work_stats()
-                .apply_selection_command_count,
+                .apply_target_request_count,
             0u);
   EXPECT_FALSE(harness.editor.history().can_undo());
 
   harness.monotonic_time_seconds = 10.299;
   harness.input.delta_seconds = 20.0f;
+  const quader::ViewportScreenPoint selected_screen =
+      harness.camera.project_world_point({4.0f, 0.0f, 0.0f});
+  ASSERT_TRUE(selected_screen.visible);
   harness.controller.handle_after_active_tool(
-      harness.editor, harness.frame(), quader::ViewportToolResult{},
+      harness.editor, harness.frame(selected_screen.position),
+      quader::ViewportToolResult{},
       quader::ViewportBeforeToolInteractionResult{});
   EXPECT_EQ(harness.controller.material_interaction_work_stats()
-                .apply_selection_command_count,
+                .apply_target_request_count,
             0u);
   harness.monotonic_time_seconds = 25.0;
   harness.input.delta_seconds = 0.0f;
   harness.controller.handle_after_active_tool(
-      harness.editor, harness.frame(), quader::ViewportToolResult{},
+      harness.editor, harness.frame(selected_screen.position),
+      quader::ViewportToolResult{},
       quader::ViewportBeforeToolInteractionResult{});
   EXPECT_EQ(harness.controller.material_interaction_work_stats()
-                .apply_selection_command_count,
+                .apply_target_request_count,
             1u);
   ASSERT_TRUE(harness.editor.history().can_undo());
-  EXPECT_EQ(harness.editor.query().history().undo_label, "Assign Material");
-  EXPECT_EQ(harness.editor.selection().summary().selected_object_count, 2u);
+  EXPECT_EQ(harness.editor.query().history().undo_label,
+            "Apply Material to Mesh");
+  const quader::QuaderSelectionSummary selection_after =
+      harness.editor.selection().summary();
+  EXPECT_EQ(selection_after.selected_object_count,
+            selection_before.selected_object_count);
+  EXPECT_EQ(selection_after.active_object_id,
+            selection_before.active_object_id);
 
-  for (const quader::QuaderModelingObjectRef object : {left, right}) {
+  for (const quader::QuaderModelingObjectRef object : {hovered, selected}) {
     const std::vector<quader::QuaderElementId> faces =
         authored_face_ids(harness, object);
     ASSERT_FALSE(faces.empty());
     const auto material = harness.editor.modeling().project_material_for_face(
         object.modeling_object_id, faces.front());
     ASSERT_TRUE(material.ok()) << material.error_message();
-    EXPECT_EQ(material.value().id, harness.second_material());
+    EXPECT_EQ(material.value().id,
+              object.modeling_object_id == hovered.modeling_object_id
+                  ? harness.second_material()
+                  : default_project_material_id());
   }
+
+  ASSERT_TRUE(harness.editor.history().undo().ok());
+  const auto undone = harness.editor.modeling().project_material_for_face(
+      hovered.modeling_object_id, authored_face_ids(harness, hovered).front());
+  ASSERT_TRUE(undone.ok()) << undone.error_message();
+  EXPECT_EQ(undone.value().id, default_project_material_id());
+  ASSERT_TRUE(harness.editor.history().redo().ok());
+  const auto redone = harness.editor.modeling().project_material_for_face(
+      hovered.modeling_object_id, authored_face_ids(harness, hovered).front());
+  ASSERT_TRUE(redone.ok()) << redone.error_message();
+  EXPECT_EQ(redone.value().id, harness.second_material());
 
   harness.monotonic_time_seconds = 50.0;
   harness.controller.handle_after_active_tool(
       harness.editor, harness.frame(), quader::ViewportToolResult{},
       quader::ViewportBeforeToolInteractionResult{});
   EXPECT_EQ(harness.controller.material_interaction_work_stats()
-                .apply_selection_command_count,
+                .apply_target_request_count,
             1u);
 }
 
 TEST(ViewportInteractionControllerMaterialTests,
-     NonMouseApplyBindingExecutesImmediatelyWithoutDoubleClickDelay) {
+     ImmediateApplyUsesHoveredMeshWithoutSelection) {
   ProjectViewportInteractionHarness harness;
   harness.initialize_with_second_material();
   const quader::QuaderModelingObjectRef box =
@@ -4846,9 +4873,10 @@ TEST(ViewportInteractionControllerMaterialTests,
   ASSERT_TRUE(harness.editor.selection()
                   .set_mode(quader::QuaderSelectionMode::Object)
                   .ok());
-  ASSERT_TRUE(harness.editor.selection().select_object(box).ok());
+  ASSERT_TRUE(harness.editor.selection().clear().ok());
   harness.router.set_selection_mode(quader::ViewportSelectionMode::Object);
   harness.scene_session().history().clear();
+  EXPECT_FALSE(harness.editor.selection().summary().has_selection);
 
   harness.input.apply_active_material_to_selection_pressed = true;
   harness.input.apply_active_material_delay_for_double_click = false;
@@ -4858,9 +4886,11 @@ TEST(ViewportInteractionControllerMaterialTests,
   harness.input.apply_active_material_to_selection_pressed = false;
 
   EXPECT_EQ(harness.controller.material_interaction_work_stats()
-                .apply_selection_command_count,
+                .apply_target_request_count,
             1u);
   ASSERT_TRUE(harness.editor.history().can_undo());
+  EXPECT_EQ(harness.editor.query().history().undo_label,
+            "Apply Material to Mesh");
   const std::vector<quader::QuaderElementId> faces =
       authored_face_ids(harness, box);
   ASSERT_FALSE(faces.empty());
@@ -4868,6 +4898,86 @@ TEST(ViewportInteractionControllerMaterialTests,
       box.modeling_object_id, faces.front());
   ASSERT_TRUE(material.ok()) << material.error_message();
   EXPECT_EQ(material.value().id, harness.second_material());
+  EXPECT_FALSE(harness.editor.selection().summary().has_selection);
+}
+
+TEST(ViewportInteractionControllerMaterialTests,
+     CtrlSingleUsesFaceScopeOnlyInFaceModeAndMeshScopeInEveryOtherMode) {
+  ProjectViewportInteractionHarness harness;
+  harness.initialize_with_second_material();
+  const quader::QuaderModelingObjectRef box =
+      create_project_box_at(harness, {});
+  const quader::ViewportRay ray =
+      harness.camera.ray_from_viewport_point({400.0f, 300.0f});
+  const quader::QuaderHoverSummary hover =
+      harness.editor.selection().preview_hover({
+          .ray = {.origin = ray.origin, .direction = ray.direction},
+          .face_plane_hover = true,
+      });
+  ASSERT_EQ(hover.target.kind, quader::QuaderActiveSelectionKind::Face);
+  const std::vector<quader::QuaderElementId> faces =
+      authored_face_ids(harness, box);
+  ASSERT_GE(faces.size(), 2u);
+
+  struct ModeCase final {
+    quader::QuaderSelectionMode api;
+    quader::ViewportSelectionMode viewport;
+    bool face_only = false;
+  };
+  const std::array modes{
+      ModeCase{quader::QuaderSelectionMode::Vertex,
+               quader::ViewportSelectionMode::Vertex},
+      ModeCase{quader::QuaderSelectionMode::Edge,
+               quader::ViewportSelectionMode::Edge},
+      ModeCase{quader::QuaderSelectionMode::Face,
+               quader::ViewportSelectionMode::Face, true},
+      ModeCase{quader::QuaderSelectionMode::Object,
+               quader::ViewportSelectionMode::Object},
+      ModeCase{quader::QuaderSelectionMode::Group,
+               quader::ViewportSelectionMode::Group},
+  };
+
+  for (const ModeCase &mode : modes) {
+    ASSERT_TRUE(harness.editor.project_assets()
+                    .set_active_material(harness.second_material())
+                    .ok());
+    ASSERT_TRUE(harness.editor.selection().set_mode(mode.api).ok());
+    ASSERT_TRUE(harness.editor.selection().clear().ok());
+    harness.router.set_selection_mode(mode.viewport);
+    harness.scene_session().history().clear();
+
+    harness.input.apply_active_material_to_selection_pressed = true;
+    harness.input.apply_active_material_delay_for_double_click = false;
+    harness.controller.handle_after_active_tool(
+        harness.editor, harness.frame(), quader::ViewportToolResult{},
+        quader::ViewportBeforeToolInteractionResult{});
+    harness.input.apply_active_material_to_selection_pressed = false;
+
+    ASSERT_TRUE(harness.editor.history().can_undo());
+    EXPECT_FALSE(harness.editor.selection().summary().has_selection);
+    for (const quader::QuaderElementId face : faces) {
+      const auto material =
+          harness.editor.modeling().project_material_for_face(
+              box.modeling_object_id, face);
+      ASSERT_TRUE(material.ok()) << material.error_message();
+      EXPECT_EQ(material.value().id,
+                !mode.face_only || face == hover.target.face_id
+                    ? harness.second_material()
+                    : default_project_material_id());
+    }
+
+    ASSERT_TRUE(harness.editor.history().undo().ok());
+    for (const quader::QuaderElementId face : faces) {
+      const auto material =
+          harness.editor.modeling().project_material_for_face(
+              box.modeling_object_id, face);
+      ASSERT_TRUE(material.ok()) << material.error_message();
+      EXPECT_EQ(material.value().id, default_project_material_id());
+    }
+  }
+  EXPECT_EQ(harness.controller.material_interaction_work_stats()
+                .apply_target_request_count,
+            modes.size());
 }
 
 TEST(ViewportInteractionControllerMaterialTests,
@@ -4923,9 +5033,9 @@ TEST(ViewportInteractionControllerMaterialTests,
       quader::ViewportBeforeToolInteractionResult{});
 
   const auto &stats = harness.controller.material_interaction_work_stats();
-  EXPECT_EQ(stats.apply_selection_command_count, 0u);
+  EXPECT_EQ(stats.apply_target_request_count, 0u);
   EXPECT_EQ(stats.apply_face_to_mesh_request_count, 1u);
-  EXPECT_EQ(stats.face_pick_count, 1u);
+  EXPECT_EQ(stats.face_pick_count, 2u);
   ASSERT_TRUE(harness.editor.history().can_undo());
   EXPECT_EQ(harness.editor.query().history().undo_label,
             "Apply Face Material to Mesh");
@@ -4967,7 +5077,7 @@ TEST(ViewportInteractionControllerMaterialTests,
       harness.editor, harness.frame(), quader::ViewportToolResult{},
       quader::ViewportBeforeToolInteractionResult{});
   EXPECT_EQ(harness.controller.material_interaction_work_stats()
-                .apply_selection_command_count,
+                .apply_target_request_count,
             0u)
       << "a click and double-click delivered in one frame still prefer double";
   EXPECT_EQ(harness.controller.material_interaction_work_stats()
@@ -5011,7 +5121,7 @@ TEST(ViewportInteractionControllerMaterialTests,
     harness.monotonic_time_seconds += 1.0;
     run_idle();
     EXPECT_EQ(harness.controller.material_interaction_work_stats()
-                  .apply_selection_command_count,
+                  .apply_target_request_count,
               0u);
     harness.controller.reset(&harness.editor);
   };
@@ -5069,7 +5179,7 @@ TEST(ViewportInteractionControllerMaterialTests,
 }
 
 TEST(ViewportInteractionControllerMaterialTests,
-     PendingSingleCancelsWhenSelectionIntentChanges) {
+     PendingSingleIgnoresSelectionChangesAndUsesCapturedHoverTarget) {
   ProjectViewportInteractionHarness harness;
   harness.initialize_with_second_material();
   const quader::QuaderModelingObjectRef box =
@@ -5099,16 +5209,17 @@ TEST(ViewportInteractionControllerMaterialTests,
       quader::ViewportBeforeToolInteractionResult{});
 
   EXPECT_EQ(harness.controller.material_interaction_work_stats()
-                .apply_selection_command_count,
-            0u);
-  EXPECT_FALSE(harness.editor.history().can_undo());
+                .apply_target_request_count,
+            1u);
+  EXPECT_TRUE(harness.editor.history().can_undo());
+  EXPECT_FALSE(harness.editor.selection().summary().has_selection);
   const std::vector<quader::QuaderElementId> faces =
       authored_face_ids(harness, box);
   ASSERT_FALSE(faces.empty());
   const auto material = harness.editor.modeling().project_material_for_face(
       box.modeling_object_id, faces.front());
   ASSERT_TRUE(material.ok()) << material.error_message();
-  EXPECT_EQ(material.value().id, default_project_material_id());
+  EXPECT_EQ(material.value().id, harness.second_material());
 }
 
 TEST(ViewportInteractionControllerMaterialTests,
@@ -5143,7 +5254,7 @@ TEST(ViewportInteractionControllerMaterialTests,
       quader::ViewportBeforeToolInteractionResult{});
 
   EXPECT_EQ(harness.controller.material_interaction_work_stats()
-                .apply_selection_command_count,
+                .apply_target_request_count,
             0u);
   EXPECT_FALSE(harness.editor.history().can_undo());
   const std::vector<quader::QuaderElementId> faces =
@@ -5192,7 +5303,7 @@ TEST(ViewportInteractionControllerMaterialTests,
       quader::ViewportBeforeToolInteractionResult{});
 
   EXPECT_EQ(harness.controller.material_interaction_work_stats()
-                .apply_selection_command_count,
+                .apply_target_request_count,
             0u);
   EXPECT_FALSE(harness.editor.history().can_undo());
 }
@@ -5210,7 +5321,7 @@ TEST(ViewportInteractionControllerMaterialTests,
   const auto idle = harness.controller.material_interaction_work_stats();
   EXPECT_EQ(idle.face_pick_count, 0u);
   EXPECT_EQ(idle.sample_request_count, 0u);
-  EXPECT_EQ(idle.apply_selection_command_count, 0u);
+  EXPECT_EQ(idle.apply_target_request_count, 0u);
 
   harness.input.mouse_local = {0.0f, 0.0f};
   harness.input.mouse_screen = harness.input.mouse_local;
@@ -5226,6 +5337,21 @@ TEST(ViewportInteractionControllerMaterialTests,
             1u);
   EXPECT_EQ(harness.controller.material_interaction_work_stats()
                 .sample_request_count,
+            0u);
+  harness.input.apply_active_material_to_selection_pressed = true;
+  harness.input.apply_active_material_delay_for_double_click = false;
+  harness.controller.handle_after_active_tool(
+      harness.editor,
+      harness.frame(false, false, false, {}, false, false, false,
+                    harness.input.mouse_local),
+      quader::ViewportToolResult{},
+      quader::ViewportBeforeToolInteractionResult{});
+  harness.input.apply_active_material_to_selection_pressed = false;
+  EXPECT_EQ(harness.controller.material_interaction_work_stats()
+                .face_pick_count,
+            2u);
+  EXPECT_EQ(harness.controller.material_interaction_work_stats()
+                .apply_target_request_count,
             0u);
   EXPECT_FALSE(harness.editor.history().can_undo());
 }

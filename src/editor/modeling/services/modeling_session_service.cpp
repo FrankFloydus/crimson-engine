@@ -2641,17 +2641,24 @@ public:
         from_runtime_viewport_tool(runtime_.active_tool()));
   }
 
-  /// Stages every topology and host-component fact needed to resolve a face
-  /// material without retaining pointers across a modeling mutation.
+  /// Validates and stages a live editable face without retaining pointers
+  /// across a modeling mutation.
+  struct FaceTarget final {
+    ModelingCommandResult command;
+    EntityId entity = kInvalidEntityId;
+    std::uint32_t material_slot = 0u;
+  };
+
   struct FaceMaterialTarget final {
     ModelingCommandResult command;
+    EntityId entity = kInvalidEntityId;
     MaterialReference material;
   };
 
-  [[nodiscard]] FaceMaterialTarget
-  resolve_face_material(int modeling_object_id, int face_id) const {
+  [[nodiscard]] FaceTarget resolve_face_target(int modeling_object_id,
+                                               int face_id) const {
     const auto rejected = [](std::string message) {
-      return FaceMaterialTarget{
+      return FaceTarget{
           .command = {
               .ok = false,
               .changed = false,
@@ -2725,19 +2732,76 @@ public:
       return rejected("The material target face is not live.");
     }
 
-    const MaterialComponent *component = scene_.material(*entity);
+    return {
+        .command = {.ok = true, .changed = false},
+        .entity = *entity,
+        .material_slot = face->material_slot,
+    };
+  }
+
+  [[nodiscard]] FaceMaterialTarget
+  resolve_face_material(int modeling_object_id, int face_id) const {
+    const FaceTarget target =
+        resolve_face_target(modeling_object_id, face_id);
+    if (!target.command.ok) {
+      return {.command = target.command, .entity = target.entity};
+    }
+
+    const MaterialComponent *component = scene_.material(target.entity);
     if (component == nullptr) {
-      return rejected("The target face has no material.");
+      return {
+          .command = {
+              .ok = false,
+              .changed = false,
+              .message = "The target face has no material.",
+          },
+          .entity = target.entity,
+      };
     }
     const MaterialReference reference =
-        component->material_for_slot(face->material_slot);
+        component->material_for_slot(target.material_slot);
     if (!reference.valid()) {
-      return rejected("The target face material is unavailable.");
+      return {
+          .command = {
+              .ok = false,
+              .changed = false,
+              .message = "The target face material is unavailable.",
+          },
+          .entity = target.entity,
+      };
     }
     return {
         .command = {.ok = true, .changed = false},
+        .entity = target.entity,
         .material = reference,
     };
+  }
+
+  static std::uint32_t stage_material_slot(MaterialComponent &component,
+                                           MaterialReference material) {
+    if (component.material == material) {
+      return 0u;
+    }
+    const auto bound = std::min_element(
+        component.material_slots.begin(), component.material_slots.end(),
+        [&](const auto &left, const auto &right) {
+          const bool left_matches = left.second == material;
+          const bool right_matches = right.second == material;
+          if (left_matches != right_matches) {
+            return left_matches;
+          }
+          return left.first < right.first;
+        });
+    if (bound != component.material_slots.end() &&
+        bound->second == material) {
+      return bound->first;
+    }
+    std::uint32_t slot = 1u;
+    while (component.material_slots.contains(slot)) {
+      ++slot;
+    }
+    component.material_slots.emplace(slot, material);
+    return slot;
   }
 
   ModelingCommandResult normalize_whole_object_materials(
@@ -2834,6 +2898,55 @@ public:
     return normalize_whole_object_materials(object_ids, target.material);
   }
 
+  ModelingCommandResult apply_material_to_mesh_at_face(
+      int modeling_object_id, int face_id, MaterialReference material) {
+    if (!material.valid()) {
+      return {
+          .ok = false,
+          .changed = false,
+          .message = "The active material is unavailable.",
+      };
+    }
+    const FaceTarget target = resolve_face_target(modeling_object_id, face_id);
+    if (!target.command.ok) {
+      return target.command;
+    }
+    const std::array object_ids{modeling_object_id};
+    return normalize_whole_object_materials(object_ids, material);
+  }
+
+  ModelingCommandResult apply_material_to_face(
+      int modeling_object_id, int face_id, MaterialReference material) {
+    if (!material.valid()) {
+      return {
+          .ok = false,
+          .changed = false,
+          .message = "The active material is unavailable.",
+      };
+    }
+    const FaceTarget target = resolve_face_target(modeling_object_id, face_id);
+    if (!target.command.ok) {
+      return target.command;
+    }
+
+    const MaterialComponent *existing = scene_.material(target.entity);
+    MaterialComponent desired;
+    if (existing != nullptr) {
+      desired = *existing;
+    }
+    const std::uint32_t slot = stage_material_slot(desired, material);
+    ModelingCommandResult modeling_result =
+        sdk_projection_adapter_.assign_material_slot_to_face(
+            modeling_object_id, face_id, slot);
+    if (!modeling_result.ok) {
+      return modeling_result;
+    }
+    const bool component_changed = mesh_sync_service_.set_entity_material(
+        scene_, target.entity, std::move(desired));
+    modeling_result.changed = modeling_result.changed || component_changed;
+    return modeling_result;
+  }
+
   ModelingCommandResult apply_active_material(MaterialReference material) {
     if (!material.valid()) {
       return {
@@ -2900,29 +3013,7 @@ public:
         desired = *existing;
       }
 
-      std::uint32_t slot = 0u;
-      if (desired.material != material) {
-        const auto bound = std::min_element(
-            desired.material_slots.begin(), desired.material_slots.end(),
-            [&](const auto &left, const auto &right) {
-              const bool left_matches = left.second == material;
-              const bool right_matches = right.second == material;
-              if (left_matches != right_matches) {
-                return left_matches;
-              }
-              return left.first < right.first;
-            });
-        if (bound != desired.material_slots.end() &&
-            bound->second == material) {
-          slot = bound->first;
-        } else {
-          slot = 1u;
-          while (desired.material_slots.contains(slot)) {
-            ++slot;
-          }
-          desired.material_slots.emplace(slot, material);
-        }
-      }
+      const std::uint32_t slot = stage_material_slot(desired, material);
 
       for (const ModelingSelectionExportFace &face : object.selected_faces) {
         assignments.push_back({
@@ -6912,6 +7003,17 @@ ModelingSessionService::apply_active_material(std::uint32_t material_slot) {
 ModelingCommandResult
 ModelingSessionService::apply_active_material(MaterialReference material) {
   return impl_->apply_active_material(material);
+}
+
+ModelingCommandResult ModelingSessionService::apply_material_to_mesh_at_face(
+    int modeling_object_id, int face_id, MaterialReference material) {
+  return impl_->apply_material_to_mesh_at_face(modeling_object_id, face_id,
+                                               material);
+}
+
+ModelingCommandResult ModelingSessionService::apply_material_to_face(
+    int modeling_object_id, int face_id, MaterialReference material) {
+  return impl_->apply_material_to_face(modeling_object_id, face_id, material);
 }
 
 ModelingProjectMaterialQueryResult

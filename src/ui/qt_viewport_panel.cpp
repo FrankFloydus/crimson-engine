@@ -600,6 +600,11 @@ void QtViewportPanel::process_input(
   }
 }
 
+void QtViewportPanel::set_open_material_editor_callback(
+    std::function<void(ProjectAssetId)> callback) {
+  open_material_editor_callback_ = std::move(callback);
+}
+
 void QtViewportPanel::observe_persisted_camera_change(
     QuaderEditorApi &editor) {
   if (workspace_ == nullptr) {
@@ -2871,6 +2876,10 @@ void QtViewportPanel::process_viewport_input(
 
   bool show_context_menu = false;
   QPoint context_menu_global_point;
+  QuaderActionSet context_menu_action_set;
+  QuaderSelectionMode context_menu_selection_mode =
+      QuaderSelectionMode::Object;
+  std::optional<ProjectAssetId> context_menu_material_under_mouse;
   const bool selection_fallback_active =
       interaction_controller_.active_tool_allows_selection_fallback(
           input_router_.state().active_tool);
@@ -2884,29 +2893,57 @@ void QtViewportPanel::process_viewport_input(
         .settings = active_viewport_settings(),
         .input = context_input,
         .input_result = result,
+        .right_click_local = pending_context_menu_local_mouse,
         .active_tool_allows_selection_fallback = selection_fallback_active,
         .scene_billboard_pick_candidates = billboards,
     };
+    const std::optional<QuaderHoverTarget> material_face_target =
+        interaction_controller_.pick_material_face_target(editor,
+                                                          context_frame);
+    if (material_face_target.has_value() &&
+        material_face_target->kind == QuaderActiveSelectionKind::Face) {
+      const QuaderApiResult<QuaderFaceProjectMaterial> material =
+          editor.modeling().project_material_for_face(
+              static_cast<QuaderModelingObjectId>(
+                  material_face_target->object_id),
+              static_cast<QuaderElementId>(material_face_target->face_id));
+      if (material.ok()) {
+        context_menu_material_under_mouse = material.value().id;
+      }
+    }
     const QuaderSelectionSummary summary =
         interaction_controller_.pick_context_menu_target(editor,
                                                          context_frame);
+    context_menu_selection_mode = summary.mode;
     const QuaderActionQuery query{
         .surface = QuaderActionSurface::ViewportContextMenu,
         .modal_tool_owns_viewport = modal_tool_owns_viewport(),
         .include_disabled = true,
         .include_hidden = false,
     };
-    const std::vector<QuaderActionItem> actions =
-        summary.has_selection ? editor.modeling().available_actions(query)
-                              : std::vector<QuaderActionItem>{};
-    pending_context_menu_request.target_hit = summary.has_selection;
+    context_menu_action_set = editor.modeling().available_action_set(query);
+    const bool has_modeling_actions = std::any_of(
+        context_menu_action_set.panels.begin(),
+        context_menu_action_set.panels.end(),
+        [](const QuaderActionPanel &panel) {
+          return std::any_of(
+              panel.actions.begin(), panel.actions.end(),
+              [](const QuaderActionItem &action) {
+                return action.visibility != QuaderActionVisibility::Hidden;
+              });
+        });
+    pending_context_menu_request.target_hit =
+        summary.has_selection || context_menu_material_under_mouse.has_value();
+    // Cut/Copy/Paste remain useful target-independent context actions. Keeping
+    // this explicit also lets Paste open from an empty viewport.
+    pending_context_menu_request.has_target_independent_actions = true;
     pending_context_menu_request.has_actions =
-        summary.has_selection && viewport_context_menu_has_available_actions(
-                                     !actions.empty(),
-                                     editor.modeling().can_create_instance(),
-                                     editor.modeling().can_flatten_instance(),
-                                     editor.layers()
-                                         .can_remove_selection_from_all_layers());
+        viewport_context_menu_has_available_actions(
+            has_modeling_actions,
+            summary.mode == QuaderSelectionMode::Object ||
+                summary.mode == QuaderSelectionMode::Group,
+            summary.has_selection,
+            context_menu_material_under_mouse.has_value(), true);
     show_context_menu =
         should_open_viewport_context_menu(pending_context_menu_request) &&
         localization_ != nullptr;
@@ -2936,7 +2973,9 @@ void QtViewportPanel::process_viewport_input(
   if (show_context_menu) {
     context_menu_presenter_.show(
         *pane_state.surface_container, context_menu_global_point, editor,
-        input_router_, *localization_, modal_tool_owns_viewport());
+        input_router_, *localization_, context_menu_action_set,
+        context_menu_selection_mode, context_menu_material_under_mouse,
+        open_material_editor_callback_);
   }
   if (show_delete_popup &&
       delete_popup_presenter_.show(

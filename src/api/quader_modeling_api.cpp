@@ -1335,6 +1335,23 @@ QuaderApiVoidResult QuaderModelingApi::delete_selection() {
   return mutations_.run_tracked_modeling_tool("delete_selection");
 }
 
+bool QuaderModelingApi::can_cut_selection() const {
+  return can_execute_tool("copy_selection") &&
+         can_execute_tool("delete_selection");
+}
+
+QuaderApiVoidResult QuaderModelingApi::cut_selection() {
+  if (!can_cut_selection()) {
+    return invalid_api_status(
+        session_, "Cut needs a selection that can be copied and deleted.");
+  }
+  QuaderApiVoidResult copied = copy_selection();
+  if (!copied.ok()) {
+    return copied;
+  }
+  return delete_selection();
+}
+
 QuaderApiVoidResult QuaderModelingApi::copy_selection() {
   ProjectSession *project =
       QuaderApiSessionInternalAccess::project_session(session_);
@@ -2037,6 +2054,26 @@ QuaderModelingApi::apply_active_material(std::uint32_t material_slot) {
       std::make_unique<ApplyActiveMaterialHistoryCommand>(
           scene_session(session_).modeling(), material_slot),
       "Apply Active Material");
+}
+
+QuaderApiVoidResult QuaderModelingApi::apply_active_material_to_mesh(
+    QuaderModelingObjectId object_id, QuaderElementId face_id) {
+  return mutations_.run_modeling_command(
+      std::make_unique<ApplyActiveMaterialToTargetHistoryCommand>(
+          scene_session(session_).modeling(), object_id, face_id,
+          active_project_material(session_),
+          ApplyActiveMaterialToTargetHistoryCommand::Scope::Mesh),
+      "Apply Active Material to Mesh");
+}
+
+QuaderApiVoidResult QuaderModelingApi::apply_active_material_to_face(
+    QuaderModelingObjectId object_id, QuaderElementId face_id) {
+  return mutations_.run_modeling_command(
+      std::make_unique<ApplyActiveMaterialToTargetHistoryCommand>(
+          scene_session(session_).modeling(), object_id, face_id,
+          active_project_material(session_),
+          ApplyActiveMaterialToTargetHistoryCommand::Scope::Face),
+      "Apply Active Material to Face");
 }
 
 QuaderApiResult<QuaderFaceProjectMaterial>

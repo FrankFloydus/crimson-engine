@@ -478,6 +478,8 @@ public:
   [[nodiscard]] bool can_execute_tool(std::string_view tool_id) const;
   QuaderApiVoidResult execute_tool(std::string_view tool_id);
   QuaderApiVoidResult delete_selection();
+  [[nodiscard]] bool can_cut_selection() const;
+  QuaderApiVoidResult cut_selection();
   QuaderApiVoidResult copy_selection();
   QuaderApiVoidResult paste_selection();
   QuaderApiVoidResult repeat_last_action();
@@ -547,6 +549,10 @@ public:
   [[nodiscard]] QuaderInstanceEditState instance_edit_state() const;
 
   QuaderApiVoidResult apply_active_material(std::uint32_t material_slot = 0);
+  QuaderApiVoidResult apply_active_material_to_mesh(
+      QuaderModelingObjectId object_id, QuaderElementId face_id);
+  QuaderApiVoidResult apply_active_material_to_face(
+      QuaderModelingObjectId object_id, QuaderElementId face_id);
   [[nodiscard]] QuaderApiResult<QuaderFaceProjectMaterial>
   project_material_for_face(QuaderModelingObjectId object_id,
                             QuaderElementId face_id) const;

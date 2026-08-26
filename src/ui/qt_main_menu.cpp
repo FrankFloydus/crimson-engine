@@ -421,6 +421,8 @@ struct QtMainMenu::Impl {
                        "ui.menu.edit.repeat_last_action",
                        "Repeat Last Action");
     menu->addSeparator();
+    add_command_action(*menu, quader_command::kCutSelection,
+                       "ui.menu.edit.cut", "Cut");
     add_command_action(*menu, quader_command::kCopySelection,
                        "ui.menu.edit.copy", "Copy");
     add_command_action(*menu, quader_command::kPasteSelection,
