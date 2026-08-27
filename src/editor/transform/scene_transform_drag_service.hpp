@@ -62,16 +62,20 @@ public:
                              std::string label = "Transform Selection",
                              QMat4 display_from_scene = {},
                              const AssetRegistry *visible_pivot_assets =
-                                 nullptr);
+                                 nullptr,
+                             TextureLockSettings texture_locks = {});
     [[nodiscard]] bool begin_move_selected_to_primary_position_preview(
         SceneDocument &document, EntityId primary,
-        std::string label = "Transform Selection");
+        std::string label = "Transform Selection",
+        TextureLockSettings texture_locks = {});
     [[nodiscard]] bool begin_rotate_selected_to_primary_euler_preview(
         SceneDocument &document, const AssetRegistry &assets, EntityId primary,
-        std::string label = "Transform Selection");
+        std::string label = "Transform Selection",
+        TextureLockSettings texture_locks = {});
     [[nodiscard]] bool begin_scale_selected_to_primary_scale_preview(
         SceneDocument &document, const AssetRegistry &assets, EntityId primary,
-        std::string label = "Transform Selection");
+        std::string label = "Transform Selection",
+        TextureLockSettings texture_locks = {});
     [[nodiscard]] bool preview_active() const;
     [[nodiscard]] const std::vector<SceneTransformDragTarget>& targets() const;
 
@@ -86,7 +90,8 @@ public:
         SceneDocument &document, EntityId primary, QVec3 next_primary_scale);
     DocumentCommandResult
     preview_world_transform_delta(SceneDocument &document,
-                                  const QMat4 &world_transform_delta);
+                                  const QMat4 &world_transform_delta,
+                                  SceneTextureTransformKind kind = SceneTextureTransformKind::Combined);
     DocumentCommandResult
     preview_world_translation_delta(SceneDocument &document,
                                     QVec3 world_translation_delta);
@@ -125,7 +130,8 @@ public:
         DocumentCommandService &document_commands, SceneDocument &document,
         const QMat4 &world_transform_delta,
         std::string label = "Transform Selection",
-        QMat4 display_from_scene = {});
+        QMat4 display_from_scene = {},
+        SceneTextureTransformKind kind = SceneTextureTransformKind::Combined);
 
   private:
     /// Distinguishes an empty selection from an unsafe transform capture.
@@ -142,6 +148,10 @@ public:
     [[nodiscard]] const TransformComponent *
     captured_primary_transform(const SceneDocument &document,
                                EntityId primary) const;
+    QuaderApiVoidResult commit_edits(
+        QuaderEditorApi &editor, SceneDocument &document,
+        std::vector<DocumentTransformEdit> edits,
+        SceneTextureTransformKind kind);
 
     std::optional<SceneTransformPreviewTransaction> preview_;
     std::vector<SceneTransformDragTarget> targets_;

@@ -34,6 +34,8 @@ struct ToolPreviewMesh {
   MeshAsset mesh;
   QMat4 transform;
   std::vector<QMat4> instance_transforms;
+  QMat4 sampling_from_local;
+  std::vector<QMat4> instance_sampling_from_local;
   // Source-replacing previews carry source culling; generated previews keep
   // the historical two-sided default.
   bool double_sided = true;

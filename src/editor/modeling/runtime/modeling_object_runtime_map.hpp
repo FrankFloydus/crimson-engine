@@ -37,6 +37,7 @@ struct ModelingObjectSceneIdentity {
   LockComponent lock;
   std::optional<MeshComponent> mesh;
   std::optional<MaterialComponent> material;
+  std::optional<TextureMappingComponent> texture_mapping;
   std::uint32_t material_slot = 0;
   std::uint32_t local_frame_version =
       kLegacyUnknownModelingObjectLocalFrameVersion;

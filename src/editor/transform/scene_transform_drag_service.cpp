@@ -9,6 +9,7 @@
 #include "api/quader_editor_api.hpp"
 #include "api/quader_api_type_conversions.hpp"
 #include "api/quader_scene_api.hpp"
+#include "api/quader_preferences_api.hpp"
 #include "assets/asset_registry.hpp"
 #include "editor/commands/document_command_service.hpp"
 #include "editor/commands/document/document_command_edits.hpp"
@@ -215,64 +216,6 @@ QuaderApiVoidResult invalid_transform_api_result(QuaderEditorApi &editor,
   };
 }
 
-QuaderApiVoidResult commit_scene_transform_edits_through_api(
-    QuaderEditorApi &editor, std::span<const DocumentTransformEdit> edits,
-    const std::string &label) {
-  std::vector<DocumentTransformEdit> changed_edits;
-  changed_edits.reserve(edits.size());
-  for (const DocumentTransformEdit &edit : edits) {
-    if (!document_command_same_transform(edit.before, edit.after)) {
-      changed_edits.push_back(edit);
-    }
-  }
-  if (changed_edits.empty()) {
-    return unchanged_transform_api_result(editor, label);
-  }
-
-  QuaderSceneBatch batch = editor.scene().batch(label);
-  for (const DocumentTransformEdit &edit : changed_edits) {
-    batch.set_transform(edit.entity, to_api_transform(edit.after));
-  }
-  return batch.commit();
-}
-
-QuaderApiVoidResult commit_scene_transform_preview_through_api(
-    QuaderEditorApi &editor, SceneTransformPreviewTransaction &transaction,
-    const std::string &label) {
-  std::vector<DocumentTransformEdit> changed_edits;
-  changed_edits.reserve(transaction.edits().size());
-  for (const DocumentTransformEdit &edit : transaction.edits()) {
-    if (!document_command_same_transform(edit.before, edit.after)) {
-      changed_edits.push_back(edit);
-    }
-  }
-
-  const DocumentCommandResult reset = transaction.cancel();
-  if (!reset.ok) {
-    return {
-        .ok = false,
-        .changed = false,
-        .message = reset.message,
-        .mutation_kind = QuaderMutationKind::None,
-    };
-  }
-  if (changed_edits.empty()) {
-    return {
-        .ok = true,
-        .changed = false,
-        .message = label,
-        .mutation_kind = QuaderMutationKind::None,
-        .revisions = editor.revisions(),
-    };
-  }
-
-  QuaderSceneBatch batch = editor.scene().batch(label);
-  for (const DocumentTransformEdit &edit : changed_edits) {
-    batch.set_transform(edit.entity, to_api_transform(edit.after));
-  }
-  return batch.commit();
-}
-
 } // namespace
 
 SceneTransformDragService::SceneTransformDragService() = default;
@@ -305,7 +248,8 @@ bool SceneTransformDragService::begin(SceneDocument &document,
                                       QVec3 world_pivot, bool start_preview,
                                       std::string label,
                                       QMat4 display_from_scene,
-                                      const AssetRegistry *visible_pivot_assets) {
+                                      const AssetRegistry *visible_pivot_assets,
+                                      TextureLockSettings texture_locks) {
   reset();
   label_ = std::move(label);
   world_pivot_ = world_pivot;
@@ -323,7 +267,7 @@ bool SceneTransformDragService::begin(SceneDocument &document,
     for (const SceneTransformDragTarget &target : targets_) {
       preview_entities.push_back(target.entity);
     }
-    preview_.emplace(document, std::move(preview_entities), label_);
+    preview_.emplace(document, std::move(preview_entities), label_, texture_locks);
     if (preview_->empty()) {
       reset();
       return false;
@@ -333,17 +277,18 @@ bool SceneTransformDragService::begin(SceneDocument &document,
 }
 
 bool SceneTransformDragService::begin_move_selected_to_primary_position_preview(
-    SceneDocument &document, EntityId primary, std::string label) {
+    SceneDocument &document, EntityId primary, std::string label,
+    TextureLockSettings texture_locks) {
   if (document.transform(primary) == nullptr) {
     reset();
     return false;
   }
-  return begin(document, {}, true, std::move(label));
+  return begin(document, {}, true, std::move(label), {}, nullptr, texture_locks);
 }
 
 bool SceneTransformDragService::begin_rotate_selected_to_primary_euler_preview(
     SceneDocument &document, const AssetRegistry &assets, EntityId primary,
-    std::string label) {
+    std::string label, TextureLockSettings texture_locks) {
   const TransformComponent *primary_transform = document.transform(primary);
   if (primary_transform == nullptr) {
     reset();
@@ -352,12 +297,12 @@ bool SceneTransformDragService::begin_rotate_selected_to_primary_euler_preview(
   return begin(document,
                selected_transform_pivot(document, assets, primary,
                                         *primary_transform),
-               true, std::move(label));
+               true, std::move(label), {}, nullptr, texture_locks);
 }
 
 bool SceneTransformDragService::begin_scale_selected_to_primary_scale_preview(
     SceneDocument &document, const AssetRegistry &assets, EntityId primary,
-    std::string label) {
+    std::string label, TextureLockSettings texture_locks) {
   const TransformComponent *primary_transform = document.transform(primary);
   if (primary_transform == nullptr) {
     reset();
@@ -366,7 +311,7 @@ bool SceneTransformDragService::begin_scale_selected_to_primary_scale_preview(
   return begin(document,
                selected_transform_pivot(document, assets, primary,
                                         *primary_transform),
-               true, std::move(label));
+               true, std::move(label), {}, nullptr, texture_locks);
 }
 
 bool SceneTransformDragService::preview_active() const {
@@ -407,7 +352,7 @@ SceneTransformDragService::preview_selected_to_primary_position(
         next.position = next.position + delta;
         return next;
       });
-  return preview_->preview_transforms(std::move(edits));
+  return preview_->preview_transforms(std::move(edits), SceneTextureTransformKind::Translation);
 }
 
 DocumentCommandResult
@@ -435,7 +380,7 @@ SceneTransformDragService::preview_selected_to_primary_euler(
             document, target, next, target.local_pivot, world_pivot_);
         return next;
       });
-  return preview_->preview_transforms(std::move(edits));
+  return preview_->preview_transforms(std::move(edits), SceneTextureTransformKind::Rotation);
 }
 
 DocumentCommandResult
@@ -461,11 +406,12 @@ SceneTransformDragService::preview_selected_to_primary_scale(
             document, target, next, target.local_pivot, world_pivot_);
         return next;
       });
-  return preview_->preview_transforms(std::move(edits));
+  return preview_->preview_transforms(std::move(edits), SceneTextureTransformKind::Scale);
 }
 
 DocumentCommandResult SceneTransformDragService::preview_world_transform_delta(
-    SceneDocument &document, const QMat4 &world_transform_delta) {
+    SceneDocument &document, const QMat4 &world_transform_delta,
+    SceneTextureTransformKind kind) {
   if (!preview_) {
     return document_command_invalid_request_result(
         "Transform preview is not active");
@@ -490,7 +436,7 @@ DocumentCommandResult SceneTransformDragService::preview_world_transform_delta(
         .after = *transformed,
     });
   }
-  return preview_->preview_transforms(std::move(preview_edits));
+  return preview_->preview_transforms(std::move(preview_edits), kind);
 }
 
 DocumentCommandResult
@@ -534,7 +480,7 @@ SceneTransformDragService::preview_world_translation_delta(
         .after = preview_transform,
     });
   }
-  return preview_->preview_transforms(std::move(preview_edits));
+  return preview_->preview_transforms(std::move(preview_edits), SceneTextureTransformKind::Translation);
 }
 
 DocumentCommandResult SceneTransformDragService::preview_local_rotation_delta(
@@ -571,7 +517,7 @@ DocumentCommandResult SceneTransformDragService::preview_local_rotation_delta(
         .after = next,
     });
   }
-  return preview_->preview_transforms(std::move(preview_edits));
+  return preview_->preview_transforms(std::move(preview_edits), SceneTextureTransformKind::Rotation);
 }
 
 DocumentCommandResult SceneTransformDragService::preview_local_scale_delta(
@@ -609,7 +555,7 @@ DocumentCommandResult SceneTransformDragService::preview_local_scale_delta(
         .after = next,
     });
   }
-  return preview_->preview_transforms(std::move(preview_edits));
+  return preview_->preview_transforms(std::move(preview_edits), SceneTextureTransformKind::Scale);
 }
 
 DocumentCommandResult SceneTransformDragService::accept() {
@@ -647,7 +593,7 @@ QuaderApiVoidResult SceneTransformDragService::commit(QuaderEditorApi& editor) {
     }
 
     QuaderApiVoidResult result =
-        commit_scene_transform_preview_through_api(editor, *preview_, label_);
+        editor.scene().commit_transform_preview(*preview_, label_);
     reset();
     return result;
 }
@@ -809,7 +755,7 @@ SceneTransformDragService::move_selected_to_primary_position(
         return next;
       });
   QuaderApiVoidResult result =
-      commit_scene_transform_edits_through_api(editor, edits, label_);
+      commit_edits(editor, document, edits, SceneTextureTransformKind::Translation);
   reset();
   return result;
 }
@@ -851,7 +797,7 @@ QuaderApiVoidResult SceneTransformDragService::
         return next;
       });
   QuaderApiVoidResult result =
-      commit_scene_transform_edits_through_api(editor, edits, label_);
+      commit_edits(editor, document, edits, SceneTextureTransformKind::Rotation);
   reset();
   return result;
 }
@@ -891,7 +837,7 @@ QuaderApiVoidResult SceneTransformDragService::
         return next;
       });
   QuaderApiVoidResult result =
-      commit_scene_transform_edits_through_api(editor, edits, label_);
+      commit_edits(editor, document, edits, SceneTextureTransformKind::Scale);
   reset();
   return result;
 }
@@ -903,14 +849,14 @@ DocumentCommandResult SceneTransformDragService::move_selected_by_world_delta(
       from_glm(glm::translate(glm::mat4{1.0f}, to_glm(world_delta)));
   return transform_selected_by_world_delta(
       document_commands, document, world_transform_delta, std::move(label),
-      display_from_scene);
+      display_from_scene, SceneTextureTransformKind::Translation);
 }
 
 DocumentCommandResult
 SceneTransformDragService::transform_selected_by_world_delta(
     DocumentCommandService &document_commands, SceneDocument &document,
     const QMat4 &world_transform_delta, std::string label,
-    QMat4 display_from_scene) {
+    QMat4 display_from_scene, SceneTextureTransformKind kind) {
   reset();
   label_ = label.empty() ? "Transform Selection" : std::move(label);
   const CaptureTargetsStatus capture =
@@ -946,9 +892,29 @@ SceneTransformDragService::transform_selected_by_world_delta(
     });
   }
   DocumentCommandResult result =
-      document_commands.set_transforms(std::move(edits), label_);
+      document_commands.set_transforms(std::move(edits), label_, kind);
   reset();
   return result;
+}
+
+QuaderApiVoidResult SceneTransformDragService::commit_edits(
+    QuaderEditorApi &editor, SceneDocument &document,
+    std::vector<DocumentTransformEdit> edits, SceneTextureTransformKind kind) {
+  std::vector<EntityId> entities;
+  entities.reserve(edits.size());
+  for (const DocumentTransformEdit &edit : edits) {
+    entities.push_back(edit.entity);
+  }
+  const TextureLockSettings settings{
+      .texture_lock = editor.preferences().texture_lock_enabled(),
+      .texture_lock_scale = editor.preferences().texture_lock_scale_enabled()};
+  SceneTransformPreviewTransaction transaction(document, std::move(entities),
+                                                label_, settings);
+  const DocumentCommandResult preview = transaction.preview_transforms(std::move(edits), kind);
+  if (!preview.ok) {
+    return invalid_transform_api_result(editor, preview.message);
+  }
+  return editor.scene().commit_transform_preview(transaction, label_);
 }
 
 } // namespace quader

@@ -468,6 +468,15 @@ private:
             [this](bool value) {
               return set_preference(overlays_visible_, value);
             },
+        .texture_lock_enabled = [this] { return texture_lock_enabled_; },
+        .set_texture_lock_enabled = [this](bool value) {
+          return set_preference(texture_lock_enabled_, value);
+        },
+        .texture_lock_scale_enabled =
+            [this] { return texture_lock_scale_enabled_; },
+        .set_texture_lock_scale_enabled = [this](bool value) {
+          return set_preference(texture_lock_scale_enabled_, value);
+        },
         .grid_snap_enabled = [this] { return grid_snap_enabled_; },
         .set_grid_snap_enabled =
             [this](bool value) {
@@ -1182,6 +1191,8 @@ private:
   std::string locale_ = "en";
   bool snapping_enabled_ = true;
   bool backface_selection_enabled_ = false;
+  bool texture_lock_enabled_ = true;
+  bool texture_lock_scale_enabled_ = false;
   bool grid_visible_ = true;
   bool gizmos_visible_ = true;
   bool mesh_grid_visible_ = true;

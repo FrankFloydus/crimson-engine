@@ -11,7 +11,7 @@
 #include "core/logger.hpp"
 #include "diagnostics/profile.hpp"
 #include "editor/render/quader_render_api_runtime_access.hpp"
-#include "editor/material/project_image_decoder.hpp"
+#include "editor/material/project_material_texture_snapshot.hpp"
 #include "editor/session/project_asset_bootstrap_service.hpp"
 #include "editor/session/quader_editor_api_session_access.hpp"
 #include "platform/platform_file_dialog.hpp"
@@ -169,14 +169,7 @@ public:
         project_->manifest() == nullptr) {
       return 0u;
     }
-    std::uint64_t hash = 1469598103934665603ull;
-    for (const char character : project_->manifest()->id().str()) {
-      hash ^= static_cast<unsigned char>(character);
-      hash *= 1099511628211ull;
-    }
-    hash ^= project_->material_catalog().content_revision();
-    hash *= 1099511628211ull;
-    return hash;
+    return project_->material_texture_revision();
   }
 
   [[nodiscard]] std::optional<RenderProjectMaterialSnapshot>
@@ -238,11 +231,6 @@ public:
       return std::nullopt;
     }
 
-    const std::uint64_t resolver_revision = revision();
-    if (cached_revision_ != resolver_revision) {
-      texture_cache_.clear();
-      cached_revision_ = resolver_revision;
-    }
     /// Maps one typed Standard Material dependency to its render sampler.
     struct SlotBinding final {
       StandardMaterialTextureSlot slot;
@@ -268,34 +256,8 @@ public:
         continue;
       }
       const ProjectMaterialTextureSlot &definition = **binding.texture;
-      auto cached = texture_cache_.find(definition.id);
-      if (cached == texture_cache_.end()) {
-        const ProjectIoResult<ProjectMaterialTextureData> texture =
-            project_->material_texture(id, binding.slot);
-        if (texture.ok()) {
-          const ProjectIoResult<ProjectDecodedImage> decoded =
-              ProjectImageDecoder::decode(texture.value().encoded_bytes);
-          if (decoded.ok()) {
-            cached = texture_cache_
-                         .emplace(
-                             definition.id,
-                             CachedTexture{
-                                 .content_revision =
-                                     texture.value().content_revision,
-                                 .encoded = std::make_shared<
-                                     const std::vector<std::byte>>(
-                                     texture.value().encoded_bytes),
-                                 .decoded = std::make_shared<
-                                     const std::vector<std::byte>>(
-                                     decoded.value().rgba8),
-                                 .width = decoded.value().width,
-                                 .height = decoded.value().height,
-                             })
-                         .first;
-          }
-        }
-      }
-      if (cached == texture_cache_.end()) {
+      const auto cached = project_->material_texture_image(id, binding.slot);
+      if (cached == nullptr) {
         continue;
       }
       render_standard->textures[static_cast<std::size_t>(
@@ -304,35 +266,22 @@ public:
           .identity_revision =
               revision() ^
               render_project_asset_identity_revision(definition.id),
-          .content_revision = cached->second.content_revision,
+          .content_revision = cached->content_revision,
           .color_space = definition.color_space ==
                                  ProjectTextureColorSpace::Srgb
                              ? TextureColorSpace::Srgb
                              : TextureColorSpace::Linear,
-          .encoded_file_bytes = cached->second.encoded,
-          .decoded_rgba8 = cached->second.decoded,
-          .width = cached->second.width,
-          .height = cached->second.height,
+          .encoded_file_bytes = cached->encoded,
+          .decoded_rgba8 = cached->decoded,
+          .width = cached->width,
+          .height = cached->height,
       };
     }
     return result;
   }
 
 private:
-  /// Retains immutable encoded texture bytes for one catalog revision.
-  struct CachedTexture final {
-    std::uint64_t content_revision = 0u;
-    std::shared_ptr<const std::vector<std::byte>> encoded;
-    std::shared_ptr<const std::vector<std::byte>> decoded;
-    std::uint32_t width = 0u;
-    std::uint32_t height = 0u;
-  };
-
   ProjectSession *project_ = nullptr;
-  mutable std::uint64_t cached_revision_ = 0u;
-  mutable std::unordered_map<ProjectAssetId, CachedTexture,
-                             ProjectAssetIdHash>
-      texture_cache_;
 };
 
 int presentation_frame_interval_ms(const QMainWindow *window) {

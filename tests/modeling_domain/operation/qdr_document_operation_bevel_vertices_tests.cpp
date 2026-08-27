@@ -31,6 +31,10 @@ TEST(QdrDocumentOperationBevelVerticesTests, BevelVerticesTrimsTheSourceCornerAn
 
 TEST(QdrDocumentOperationBevelVerticesTests, BevelVerticesOnACubeCreatesAnOutwardCapAndKeepsTheHullClosed) {
 	Document document = make_cube({});
+	const FaceTextureTransform texture{{2.0F, -0.5F}, {0.25F, 0.75F}, 55.0F};
+	for (Face& face : document.faces) {
+		face.texture_transform = texture;
+	}
 	const ElementId vertex_id = document.vertices.front().id;
 	const quader::QVec3 vertex_position = document.vertices.front().position;
 	const std::size_t vertex_count_before = document.vertices.size();
@@ -43,6 +47,9 @@ TEST(QdrDocumentOperationBevelVerticesTests, BevelVerticesOnACubeCreatesAnOutwar
 	qdr_test::expect_valid_polygon_document_after_success(document, result);
 	EXPECT_TRUE(document.vertices.size() == vertex_count_before + 2U);
 	EXPECT_TRUE(document.faces.size() == face_count_before + 1U);
+	for (const Face& face : document.faces) {
+		EXPECT_EQ(face.texture_transform, texture);
+	}
 	EXPECT_TRUE(find_vertex(document, vertex_id) == nullptr);
         EXPECT_TRUE(selection.mode == SelectionMode::Vertex);
         EXPECT_TRUE(selection.vertices.size() == 3U);

@@ -844,12 +844,19 @@ TEST(DocumentCommandTests,
       source.find(
           "std::unordered_map<EntityId, std::size_t> edit_index_by_entity_"),
       std::string::npos);
-  EXPECT_NE(source.find("edit_index_by_entity_.emplace(entity, edit_index)"),
+  EXPECT_NE(source.find("edit_index_by_entity_.emplace(entity, edits_.size())"),
             std::string::npos);
-  EXPECT_NE(source.find("edit_index_by_entity_.find(entity)"),
+  EXPECT_NE(source.find("edit_index_by_entity_.find(edit.entity)"),
             std::string::npos);
-  EXPECT_NE(source.find("scene_.set_transforms(assignments)"),
+  EXPECT_NE(source.find("scene_.set_transforms_and_texture_mappings(assignments"),
             std::string::npos);
+  EXPECT_NE(source.find("mapping_plan_->evaluate(staged, kind)"), std::string::npos);
+  const std::size_t update_begin = source.find("DocumentCommandResult preview_transforms(");
+  ASSERT_NE(update_begin, std::string::npos);
+  const std::string update = source.substr(update_begin,
+      source.find("DocumentCommandResult cancel()", update_begin) - update_begin);
+  EXPECT_EQ(update.find("hierarchy_projection_snapshot"), std::string::npos);
+  EXPECT_EQ(update.find("SceneTextureMappingPlan::capture"), std::string::npos);
   EXPECT_EQ(source.find("std::find_if(edits_.begin()"), std::string::npos);
 }
 

@@ -37,7 +37,10 @@ void add_unordered_connect_region_paths( const Document& document, const std::ma
 ElementId duplicate_vertex_for_face( Document& document, std::map<std::pair<ElementId, ElementId>, ElementId>& duplicate_vertices, ElementId face_id, ElementId vertex_id);
 std::optional<std::vector<ElementId>> closed_edge_loop_from_edges(std::span<const Edge> selected_edges);
 bool orient_face_against_adjacent_winding(const Document& document, Face& face);
+const Face* face_for_open_edge(const Document& document, Edge edge);
 std::uint32_t material_slot_for_open_edge(const Document& document, Edge edge);
+ElementId add_face_with_texture_transform(Document& document, std::span<const ElementId> vertices, std::uint32_t material_slot, const FaceTextureTransform& texture_transform);
+bool inherit_merged_face_texture(const Document& source_document, std::span<const ElementId> source_face_ids, Face& merged_face);
 std::vector<ElementId> face_vertices_between(const Face& face, std::size_t start_index, std::size_t end_index);
 std::vector<ElementId> unique_valid_face_loop(std::vector<ElementId> vertices);
 std::optional<std::size_t> directed_face_edge_index(const Face& face, ElementId from_id, ElementId to_id);
@@ -72,7 +75,7 @@ quader::QVec3 edge_bevel_profile_middle_on_edge(quader::QVec3 edge_start, quader
 void edge_bevel_set_component(quader::QVec3& value, int axis, float component);
 quader::QVec3 edge_bevel_snap_to_superellipsoid(quader::QVec3 point, float exponent);
 quader::QVec3 edge_bevel_map_unit_cube_corner(quader::QVec3 axis0, quader::QVec3 axis1, quader::QVec3 axis2, quader::QVec3 source, quader::QVec3 point);
-bool append_edge_bevel_face( Document& document, std::vector<Face>& faces, std::vector<ElementId>& generated_face_ids, std::vector<ElementId> vertices, std::uint32_t material_slot, quader::QVec3 expected_normal);
+bool append_edge_bevel_face( Document& document, std::vector<Face>& faces, std::vector<ElementId>& generated_face_ids, std::vector<ElementId> vertices, std::uint32_t material_slot, quader::QVec3 expected_normal, const FaceTextureTransform& texture_transform = {});
 EdgeBevelTriCornerKey edge_bevel_tri_corner_canonical_key(int side, int ring, int segment, int segments);
 std::optional<std::vector<ElementId>> ordered_tri_corner_boundary_ring( const Document& document, ElementId source_vertex_id, std::vector<ElementId> patch_vertices, int segments);
 bool append_edge_bevel_tri_corner_patch_faces( Document& document, std::vector<Face>& faces, std::vector<ElementId>& generated_face_ids, const std::vector<ElementId>& patch_vertices, ElementId source_vertex_id, std::uint32_t material_slot, quader::QVec3 expected_normal, int segments, float profile, BevelProfileType profile_type);
@@ -132,7 +135,7 @@ float loop_alignment_score( const Document& document, std::span<const ElementId>
 std::vector<ElementId> aligned_loop_vertices( const Document& document, std::span<const ElementId> first_vertices, std::span<const ElementId> second_vertices);
 quader::QVec3 vertex_position_or_zero(const Document& document, ElementId vertex_id);
 quader::QVec3 vertex_loop_centroid(const Document& document, std::span<const ElementId> vertex_ids);
-bool append_bridge_face(Document& document, std::vector<ElementId> vertices, std::uint32_t material_slot, quader::QVec3 expected_normal, std::vector<ElementId>& bridge_face_ids);
-bool append_bridge_faces_between_loops( Document& document, std::span<const ElementId> first_vertices, std::span<const ElementId> second_vertices, quader::QVec3 first_normal, quader::QVec3 second_normal, std::uint32_t material_slot, int steps, std::vector<ElementId>& bridge_face_ids, bool skip_degenerate_faces);
+bool append_bridge_face(Document& document, std::vector<ElementId> vertices, std::uint32_t material_slot, quader::QVec3 expected_normal, std::vector<ElementId>& bridge_face_ids, const FaceTextureTransform& texture_transform = {});
+bool append_bridge_faces_between_loops( Document& document, std::span<const ElementId> first_vertices, std::span<const ElementId> second_vertices, quader::QVec3 first_normal, quader::QVec3 second_normal, std::uint32_t material_slot, int steps, std::vector<ElementId>& bridge_face_ids, bool skip_degenerate_faces, const FaceTextureTransform& texture_transform = {});
 quader::QVec3 face_centroid(const Document& document, const Face& face);
 } // namespace quader_poly::document_internal

@@ -36,6 +36,10 @@ QuaderApiVoidResult QuaderPreferencesApi::set_locale(std::string locale) {
              : unavailable("Preferences runtime is not attached.");
 }
 
+std::uint64_t QuaderPreferencesApi::keybindings_revision() const noexcept {
+  return commands_ != nullptr ? commands_->keybindings_revision() : 0;
+}
+
 QuaderApiVoidResult
 QuaderPreferencesApi::set_shortcut(std::string_view command_id,
                                    std::string shortcut) {
@@ -166,6 +170,29 @@ QuaderApiVoidResult QuaderPreferencesApi::set_overlays_visible(bool visible) {
 
 bool QuaderPreferencesApi::overlays_visible() const {
   return hooks_.overlays_visible ? hooks_.overlays_visible() : false;
+}
+
+QuaderApiVoidResult
+QuaderPreferencesApi::set_texture_lock_enabled(bool enabled) {
+  return hooks_.set_texture_lock_enabled
+             ? hooks_.set_texture_lock_enabled(enabled)
+             : unavailable("Preferences runtime is not attached.");
+}
+
+bool QuaderPreferencesApi::texture_lock_enabled() const {
+  return hooks_.texture_lock_enabled ? hooks_.texture_lock_enabled() : true;
+}
+
+QuaderApiVoidResult
+QuaderPreferencesApi::set_texture_lock_scale_enabled(bool enabled) {
+  return hooks_.set_texture_lock_scale_enabled
+             ? hooks_.set_texture_lock_scale_enabled(enabled)
+             : unavailable("Preferences runtime is not attached.");
+}
+
+bool QuaderPreferencesApi::texture_lock_scale_enabled() const {
+  return hooks_.texture_lock_scale_enabled ? hooks_.texture_lock_scale_enabled()
+                                         : false;
 }
 
 QuaderApiVoidResult

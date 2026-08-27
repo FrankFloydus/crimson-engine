@@ -209,6 +209,10 @@ struct QuaderPreferencesRuntimeHooks {
     std::function<QuaderApiVoidResult(bool)> set_mesh_grid_visible;
     std::function<bool()> overlays_visible;
     std::function<QuaderApiVoidResult(bool)> set_overlays_visible;
+    std::function<bool()> texture_lock_enabled;
+    std::function<QuaderApiVoidResult(bool)> set_texture_lock_enabled;
+    std::function<bool()> texture_lock_scale_enabled;
+    std::function<QuaderApiVoidResult(bool)> set_texture_lock_scale_enabled;
     std::function<bool()> grid_snap_enabled;
     std::function<QuaderApiVoidResult(bool)> set_grid_snap_enabled;
     std::function<bool()> vertex_snap_enabled;

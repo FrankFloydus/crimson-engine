@@ -12,6 +12,10 @@ using namespace quader_poly;
 
 TEST(QdrDocumentOperationThickenFacesTests, ThickenFacesTurnsOneOpenFaceIntoAClosedThinVolume) {
 	qdr_test::QuadFixture fixture = qdr_test::make_quad_document();
+	const FaceTextureTransform texture{{2.0F, -0.5F}, {0.25F, 0.75F}, 70.0F};
+	fixture.document.faces.front().texture_transform = texture;
+	ensure_face_uvs(fixture.document);
+	const std::vector<quader::QVec2> source_uvs = fixture.document.faces.front().uvs;
 	Selection selection = qdr_test::face_selection({ fixture.face }, fixture.face);
 
 	const OperationResult result = thicken_selected_faces(fixture.document, selection, 0.5F, false);
@@ -29,6 +33,18 @@ TEST(QdrDocumentOperationThickenFacesTests, ThickenFacesTurnsOneOpenFaceIntoAClo
 	EXPECT_TRUE(result.affected.faces.size() == 1U);
 	EXPECT_TRUE(result.affected.faces.front() == fixture.face);
 	EXPECT_TRUE(fixture.document.faces.size() == 6U);
+	for (const Face& face : fixture.document.faces) {
+		EXPECT_EQ(face.texture_transform, texture);
+	}
+	ASSERT_FALSE(result.created.faces.empty());
+	const Face* offset_cap = find_face(fixture.document, result.created.faces.front());
+	ASSERT_NE(offset_cap, nullptr);
+	ASSERT_EQ(offset_cap->uvs.size(), source_uvs.size());
+	for (std::size_t index = 0U; index < source_uvs.size(); ++index) {
+		const auto &expected = source_uvs[source_uvs.size() - 1U - index];
+		EXPECT_EQ(offset_cap->uvs[index].x, expected.x);
+		EXPECT_EQ(offset_cap->uvs[index].y, expected.y);
+	}
         EXPECT_TRUE(selection.mode == SelectionMode::Face);
         EXPECT_TRUE(selection.faces.size() == 6U);
 	EXPECT_TRUE(selection.has_active);

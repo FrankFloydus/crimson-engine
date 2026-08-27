@@ -10,6 +10,7 @@
 #include "core/types.hpp"
 #include "math/types.hpp"
 
+#include <array>
 #include <atomic>
 #include <bit>
 #include <cstddef>
@@ -39,6 +40,10 @@ struct MeshVertex {
     // corner may duplicate an authored vertex, but every duplicate carries the
     // same ID so topology and indices can remain retained during a drag.
     std::uint32_t source_vertex_id = 0u;
+    // Affine UV carrier plus the canonical geometric normal. Occurrence
+    // placement corrections reuse these without duplicating mesh geometry.
+    std::array<float, 4> uv_carrier{};
+    QVec3 uv_geometric_normal{0.0f, 1.0f, 0.0f};
 };
 
 /**
@@ -153,6 +158,12 @@ struct MeshGeometryPayload final {
       hash_float(vertex.uv.y);
       hash_u32(vertex.rgba);
       hash_u32(vertex.source_vertex_id);
+      for (const float value : vertex.uv_carrier) {
+        hash_float(value);
+      }
+      hash_float(vertex.uv_geometric_normal.x);
+      hash_float(vertex.uv_geometric_normal.y);
+      hash_float(vertex.uv_geometric_normal.z);
     }
     hash_size(indices.size());
     for (const std::uint32_t index : indices) {

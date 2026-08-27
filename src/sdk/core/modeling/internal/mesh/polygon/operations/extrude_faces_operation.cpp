@@ -96,7 +96,8 @@ OperationResult extrude_selected_faces_impl(Document& document, Selection& selec
                 cap_vertices[(index + 1U) % cap_vertices.size()],
                 cap_vertices[index],
             };
-            const ElementId side_face_id = add_face(document, side, original_face.material_slot);
+            const ElementId side_face_id = add_face_with_texture_transform(
+                document, side, original_face.material_slot, original_face.texture_transform);
             if (side_face_id != kInvalidElementId) {
                 result.created.faces.push_back(side_face_id);
             }

@@ -100,6 +100,7 @@ struct FaceUvProjectionAssignment {
     FaceUvBasis basis;
     ElementId source_face_id = kInvalidElementId;
     bool inherited_loop_basis = false;
+    FaceTextureTransform texture_transform{};
 };
 
 /**

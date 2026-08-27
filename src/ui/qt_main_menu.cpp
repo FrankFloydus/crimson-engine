@@ -223,6 +223,7 @@ struct QtMainMenu::Impl {
     selection_toolbar_action = nullptr;
     snapping_toolbar_action = nullptr;
     viewport_display_toolbar_action = nullptr;
+    texture_toolbar_action = nullptr;
     tool_toolbar_action = nullptr;
   }
 
@@ -259,6 +260,7 @@ struct QtMainMenu::Impl {
   QAction *selection_toolbar_action = nullptr;
   QAction *snapping_toolbar_action = nullptr;
   QAction *viewport_display_toolbar_action = nullptr;
+  QAction *texture_toolbar_action = nullptr;
   QAction *tool_toolbar_action = nullptr;
   std::vector<CommandAction> command_actions;
   std::vector<BoolSettingAction> bool_setting_actions;
@@ -777,6 +779,18 @@ struct QtMainMenu::Impl {
                          context.set_viewport_display_toolbar_visible(visible);
                        }
                      });
+    texture_toolbar_action = panels->addAction(qtext(
+        context.localization, "ui.toolbar.texture.title", "Texturing"));
+    texture_toolbar_action->setObjectName(QStringLiteral("toolbar_texture"));
+    texture_toolbar_action->setCheckable(true);
+    QObject::connect(texture_toolbar_action, &QAction::toggled,
+                     connection_context.get(), [this](bool visible) {
+                       QDR_PROFILE_SCOPE(
+                           "Qt main menu dispatch toolbar visibility");
+                       if (context.set_texture_toolbar_visible) {
+                         context.set_texture_toolbar_visible(visible);
+                       }
+                     });
     tool_toolbar_action = panels->addAction(qtext(
         context.localization, "ui.toolbar.tools.title", "Tools"));
     tool_toolbar_action->setObjectName(QStringLiteral("toolbar_tools"));
@@ -991,6 +1005,15 @@ struct QtMainMenu::Impl {
         present_checked(*viewport_display_toolbar_action,
                         context.viewport_display_toolbar_visible
                             ? context.viewport_display_toolbar_visible()
+                            : false);
+      }
+      if (texture_toolbar_action != nullptr) {
+        present_text(*texture_toolbar_action,
+                     qtext(context.localization, "ui.toolbar.texture.title",
+                           "Texturing"));
+        present_checked(*texture_toolbar_action,
+                        context.texture_toolbar_visible
+                            ? context.texture_toolbar_visible()
                             : false);
       }
       if (navigation_gizmo_action != nullptr) {

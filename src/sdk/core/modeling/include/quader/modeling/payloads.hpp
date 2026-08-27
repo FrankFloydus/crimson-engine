@@ -10,6 +10,8 @@
 #include <quader/modeling/types.hpp>
 
 #include <cstdint>
+#include <array>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -56,6 +58,8 @@ struct MeshVertexPayload {
   Vec2 uv0{};
   std::uint32_t color = 0xff9f9f9fU;
   VertexId source_vertex{};
+  std::array<float, 4> uv_carrier{};
+  Vec3 uv_geometric_normal{0.0F, 1.0F, 0.0F};
 };
 
 /**
@@ -125,6 +129,48 @@ struct AuthoredTopologyVertex {
 };
 
 /**
+ * Transforms base face UVs around the projection origin: rotate, divide by
+ * the signed scale, then add the normalized shift. Base UVs remain authored
+ * or procedural independently of these persistent settings.
+ */
+struct FaceTextureTransform {
+  Vec2 scale{1.0F, 1.0F};
+  Vec2 shift_uv{};
+  float rotation_degrees = 0.0F;
+
+  friend bool operator==(const FaceTextureTransform &left,
+                         const FaceTextureTransform &right) noexcept {
+    return left.scale.x == right.scale.x && left.scale.y == right.scale.y &&
+           left.shift_uv.x == right.shift_uv.x &&
+           left.shift_uv.y == right.shift_uv.y &&
+           left.rotation_degrees == right.rotation_degrees;
+  }
+};
+
+/**
+ * Reads one face's texture settings and material slot without exporting its
+ * authored topology or compiled mesh.
+ */
+struct FaceTextureSettings {
+  FaceId face{};
+  FaceTextureTransform texture_transform{};
+  std::uint32_t material_slot = 0;
+};
+
+/**
+ * Patches only the supplied properties on one typed face. Shift values use
+ * normalized UVs; absent fields retain their current values.
+ */
+struct FaceTextureTransformUpdate {
+  FaceId face{};
+  std::optional<float> scale_x;
+  std::optional<float> scale_y;
+  std::optional<float> shift_x;
+  std::optional<float> shift_y;
+  std::optional<float> rotation_degrees;
+};
+
+/**
  * Stores one exact authored face record for import/export.
  */
 struct AuthoredTopologyFace {
@@ -133,6 +179,7 @@ struct AuthoredTopologyFace {
   std::vector<Vec2> uvs;
   std::uint32_t material_slot = 0;
   AuthoredSurfaceShading shading = AuthoredSurfaceShading::Flat;
+  FaceTextureTransform texture_transform{};
 };
 
 /**

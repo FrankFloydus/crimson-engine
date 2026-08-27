@@ -12,6 +12,8 @@ using namespace quader_poly;
 
 TEST(QdrDocumentOperationDissolveEdgesTests, DissolveEdgesRemovesARedundantSupportCutAndRestoresOneQuad) {
 	qdr_test::QuadFixture fixture = qdr_test::make_quad_document();
+	const FaceTextureTransform texture{{-2.0F, 0.5F}, {0.25F, 0.75F}, 25.0F};
+	fixture.document.faces.front().texture_transform = texture;
 	Selection connect_selection = qdr_test::edge_selection({
 		make_edge(fixture.bottom_left, fixture.bottom_right),
 		make_edge(fixture.top_right, fixture.top_left),
@@ -29,6 +31,8 @@ TEST(QdrDocumentOperationDissolveEdgesTests, DissolveEdgesRemovesARedundantSuppo
 	EXPECT_TRUE(fixture.document.vertices.size() == 4U);
 	EXPECT_TRUE(fixture.document.faces.size() == 1U);
 	EXPECT_TRUE(fixture.document.faces.front().vertices.size() == 4U);
+	EXPECT_EQ(fixture.document.faces.front().texture_transform, texture);
+	EXPECT_TRUE(fixture.document.faces.front().uvs.empty());
 	EXPECT_TRUE(qdr_test::every_face_compiles_to_triangles(fixture.document));
 }
 

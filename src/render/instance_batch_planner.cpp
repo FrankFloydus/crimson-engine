@@ -193,6 +193,7 @@ void morton_sort_group(PrimitiveGroup &group) {
 
 std::uint64_t transform_signature(
     std::span<const QMat4> world_transforms,
+    std::span<const QMat4> sampling_from_local,
     std::span<const std::uint8_t> visibility) {
   RenderSignatureBuilder signature;
   signature.add_size(world_transforms.size());
@@ -201,6 +202,7 @@ std::uint64_t transform_signature(
     signature.add_bool(visible);
     if (visible) {
       signature.add_mat4(world_transforms[index]);
+      signature.add_mat4(sampling_from_local[index]);
     }
   }
   return signature.value();
@@ -218,6 +220,7 @@ void append_occurrence(RenderInstanceBatchChunk &chunk,
   const RenderInstancePrimitiveOccurrence &occurrence = *planned.source;
   chunk.occurrences.push_back(occurrence.occurrence);
   chunk.world_transforms.push_back(occurrence.world_transform);
+  chunk.sampling_from_local.push_back(occurrence.sampling_from_local);
   chunk.visibility.push_back(occurrence.visible ? 1u : 0u);
   if (occurrence.visible) {
     ++chunk.visible_occurrence_count;
@@ -230,7 +233,8 @@ void append_occurrence(RenderInstanceBatchChunk &chunk,
 
 void finish_chunk(RenderInstanceBatchChunk &chunk) {
   chunk.transform_signature =
-      transform_signature(chunk.world_transforms, chunk.visibility);
+      transform_signature(chunk.world_transforms, chunk.sampling_from_local,
+                          chunk.visibility);
 }
 
 bool try_retain_layout(const std::vector<PrimitiveGroup> &groups,
@@ -280,6 +284,7 @@ bool try_retain_layout(const std::vector<PrimitiveGroup> &groups,
     RenderInstanceBatchChunk chunk;
     chunk.occurrences.reserve(before.occurrences.size());
     chunk.world_transforms.reserve(before.occurrences.size());
+    chunk.sampling_from_local.reserve(before.occurrences.size());
     chunk.visibility.reserve(before.occurrences.size());
     bool has_key = false;
     for (const std::uint64_t occurrence_id : before.occurrences) {
@@ -375,6 +380,7 @@ RenderInstanceBatchPlan plan_render_instance_batches(
         chunk.key = group.key;
         chunk.occurrences.reserve(end - offset);
         chunk.world_transforms.reserve(end - offset);
+        chunk.sampling_from_local.reserve(end - offset);
         chunk.visibility.reserve(end - offset);
         for (std::size_t index = offset; index < end; ++index) {
           const PrimitiveGroup::Occurrence &planned =

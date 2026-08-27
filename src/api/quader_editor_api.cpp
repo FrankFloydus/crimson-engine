@@ -12,6 +12,9 @@
 #include "api/quader_project_assets_api_internal_access.hpp"
 #include "api/quader_scene_documents_api_internal_access.hpp"
 #include "api/quader_standard_material_documents_api_internal_access.hpp"
+#include "editor/commands/document_command_service.hpp"
+#include "editor/material/project_material_texture_snapshot.hpp"
+#include "editor/modeling/services/modeling_session_service.hpp"
 #include "editor/session/project_session.hpp"
 #include "editor/session/scene_session.hpp"
 #include "editor/viewport/quader_viewport_api_runtime_access.hpp"
@@ -42,6 +45,11 @@ QuaderApiSession project_api_session(ProjectSession &project_session) {
  */
 class QuaderEditorApi::Impl final {
 public:
+    /// Weakly held by scene services, so they remain safe after facade teardown.
+    struct TextureRuntimeBinding final {
+      QuaderPreferencesApi *preferences = nullptr;
+    };
+
     explicit Impl(QuaderApiSession session)
         : api(session)
         , materials(session, api.mutations())
@@ -89,6 +97,50 @@ public:
       attach_document_lifecycle();
       rebind(project_api_session(project_session));
       install_tool_hooks();
+    }
+
+    ~Impl() { texture_runtime_binding.reset(); }
+
+    void install_texture_hooks(SceneSession &scene, QuaderApiSession session) {
+      scene.modeling().invalidate_face_texture_edit_state();
+      texture_runtime_binding->preferences = &preferences;
+      const std::weak_ptr<TextureRuntimeBinding> lifetime =
+          texture_runtime_binding;
+      const auto texture_locks = [lifetime] {
+        if (const auto binding = lifetime.lock(); binding != nullptr) {
+          return TextureLockSettings{
+              .texture_lock = binding->preferences->texture_lock_enabled(),
+              .texture_lock_scale =
+                  binding->preferences->texture_lock_scale_enabled(),
+          };
+        }
+        return TextureLockSettings{};
+      };
+      scene.document_commands().set_texture_lock_settings_provider(texture_locks);
+      scene.modeling().set_texture_lock_settings_provider(texture_locks);
+
+      ProjectSession *project_owner =
+          QuaderApiSessionInternalAccess::project_session(session);
+      scene.modeling().set_face_texture_extent_provider(
+          [lifetime, project_owner](MaterialReference material)
+              -> std::optional<QVec2> {
+            if (lifetime.expired() || project_owner == nullptr ||
+                !material.project_owned()) {
+              return std::nullopt;
+            }
+            const auto texture = project_owner->material_texture_image(
+                material.project_asset(), StandardMaterialTextureSlot::Albedo);
+            if (texture == nullptr) {
+              return std::nullopt;
+            }
+            return QVec2{static_cast<float>(texture->width),
+                         static_cast<float>(texture->height)};
+          },
+          [lifetime, project_owner] {
+            return !lifetime.expired() && project_owner != nullptr
+                       ? project_owner->material_texture_revision()
+                       : std::uint64_t{0};
+          });
     }
 
     void install_tool_hooks() {
@@ -159,6 +211,7 @@ public:
         }
       }
       api.rebind(session, binding_identity);
+      install_texture_hooks(scene, session);
       materials.rebind_session(session);
       project.rebind_session(session);
       project_assets.rebind_session(session);
@@ -199,6 +252,8 @@ public:
     QuaderEventSubscription project_assets_close_subscription;
     QuaderRenderApi render;
     std::function<void(QuaderApiSession)> host_scene_binding_changed;
+    std::shared_ptr<TextureRuntimeBinding> texture_runtime_binding =
+        std::make_shared<TextureRuntimeBinding>();
 };
 
 QuaderEditorApi::QuaderEditorApi(QuaderApiSession session)

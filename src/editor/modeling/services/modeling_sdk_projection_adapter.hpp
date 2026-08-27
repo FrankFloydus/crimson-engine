@@ -7,6 +7,7 @@
 #pragma once
 
 #include "editor/modeling/modeling_types.hpp"
+#include "editor/modeling/modeling_face_texture_settings.hpp"
 #include "editor/modeling/operations/editor_operation.hpp"
 #include "scene/scene_bounds.hpp"
 
@@ -61,6 +62,7 @@ struct ModelingSdkProjectionStats {
   std::uint64_t scene_publication_count = 0;
   std::uint64_t preview_publication_count = 0;
   std::uint64_t selection_summary_build_count = 0;
+  std::uint64_t face_texture_summary_build_count = 0;
   std::uint64_t full_scene_reset_count = 0;
   std::uint64_t scene_import_document_count = 0;
   std::uint64_t targeted_scene_sync_count = 0;
@@ -417,6 +419,10 @@ public:
   [[nodiscard]] std::span<const EntityId>
   selected_component_entities() const;
   [[nodiscard]] ModelingSelectionExport export_selection() const;
+  [[nodiscard]] ModelingSelectedFaceTextureSnapshot
+  selected_face_texture_settings() const;
+  [[nodiscard]] ModelingCommandResult apply_face_texture_updates(
+      std::span<const ModelingFaceTextureUpdateBatch> batches);
   [[nodiscard]] std::optional<SceneBounds> selection_bounds() const;
   [[nodiscard]] std::vector<EntityId> selected_entities() const;
   [[nodiscard]] EntityId active_selected_entity() const;

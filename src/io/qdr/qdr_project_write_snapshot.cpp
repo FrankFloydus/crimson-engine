@@ -43,6 +43,9 @@ entity_write_snapshot(const SceneDocument &scene, EntityId entity) {
   if (const TransformComponent *transform = scene.transform(entity)) {
     snapshot.transform = *transform;
   }
+  if (const TextureMappingComponent *mapping = scene.texture_mapping(entity)) {
+    snapshot.texture_mapping = *mapping;
+  }
   if (const VisibilityComponent *visibility = scene.visibility(entity)) {
     snapshot.visibility = *visibility;
   }

@@ -1066,7 +1066,7 @@ TEST(OopArchitectureGuardrailTests, SceneTransformDragServiceOwnsTransformPrevie
   EXPECT_NE(service_source.find("selected_transform_pivot("), std::string::npos);
   EXPECT_NE(service_source.find("pin_target_local_pivot_to_world_point("),
             std::string::npos);
-  EXPECT_NE(service_source.find("editor.scene().batch(label)"),
+  EXPECT_NE(service_source.find("editor.scene().commit_transform_preview("),
             std::string::npos);
   EXPECT_NE(transform_drag_source.find("scene_transform_drag_service_.begin("),
             std::string::npos);
@@ -1393,10 +1393,23 @@ TEST(OopArchitectureGuardrailTests,
   EXPECT_EQ(resolver.find("#include \"io/project/"), std::string::npos);
   EXPECT_NE(extraction.find("material.project_catalog_revision"),
             std::string::npos);
-  EXPECT_NE(app.find("texture_cache_.find(definition.id)"),
+  EXPECT_NE(app.find("project_->material_texture_image(id, binding.slot)"),
             std::string::npos);
-  EXPECT_NE(app.find(".emplace(\n                             definition.id,"),
-            std::string::npos);
+  EXPECT_EQ(app.find("texture_cache_"), std::string::npos);
+  EXPECT_EQ(app.find("ProjectImageDecoder::decode"), std::string::npos);
+  const std::string project_session =
+      read_file(source_root() / "src/editor/session/project_session.cpp");
+  const std::string cached_texture = source_slice(
+      project_session, "ProjectSession::material_texture_image(",
+      "OpenSceneSession *ProjectSession::find(");
+  const auto cache_lookup = cached_texture.find("material_texture_images_.find");
+  const auto texture_read = cached_texture.find("material_texture(material_id, slot)");
+  const auto image_decode = cached_texture.find("ProjectImageDecoder::decode");
+  ASSERT_NE(cache_lookup, std::string::npos);
+  ASSERT_NE(texture_read, std::string::npos);
+  ASSERT_NE(image_decode, std::string::npos);
+  EXPECT_LT(cache_lookup, texture_read);
+  EXPECT_LT(texture_read, image_decode);
   EXPECT_NE(ui_system.find("project_identity"), std::string::npos);
   EXPECT_NE(ui_system.find("manifest_path().generic_string()"),
             std::string::npos);

@@ -12,10 +12,14 @@
 #include "viewport/viewport_settings.hpp"
 
 #include <filament/TextureSampler.h>
+#include <math/mat3.h>
+#include <math/mat4.h>
 #include <math/vec2.h>
 #include <math/vec4.h>
 
 #include <algorithm>
+#include <array>
+#include <cassert>
 #include <cmath>
 #include <numbers>
 
@@ -84,6 +88,42 @@ void bind_shaded_lighting_parameters(
 }
 
 } // namespace
+
+void bind_mesh_texture_mappings(
+    filament::MaterialInstance &material_instance,
+    std::span<const QMat4> sampling_from_local) {
+  assert(sampling_from_local.size() <= kMeshTextureMappingCapacity);
+  if (sampling_from_local.size() > kMeshTextureMappingCapacity) {
+    return;
+  }
+  std::array<filament::math::mat4f, kMeshTextureMappingCapacity> matrices;
+  std::array<filament::math::mat3f, kMeshTextureMappingCapacity> cofactors;
+  const std::size_t count =
+      std::max(sampling_from_local.size(), std::size_t{1u});
+  for (std::size_t index = 0u; index < count; ++index) {
+    const QMat4 source = sampling_from_local.empty()
+                            ? QMat4{}
+                            : sampling_from_local[index];
+    for (std::size_t column = 0u; column < 4u; ++column) {
+      for (std::size_t row = 0u; row < 4u; ++row) {
+        matrices[index][column][row] = source.values[column * 4u + row];
+      }
+    }
+    const QVec3 first{source.values[0], source.values[1], source.values[2]};
+    const QVec3 second{source.values[4], source.values[5], source.values[6]};
+    const QVec3 third{source.values[8], source.values[9], source.values[10]};
+    const std::array<QVec3, 3u> columns{
+        cross(second, third), cross(third, first), cross(first, second)};
+    for (std::size_t column = 0u; column < columns.size(); ++column) {
+      cofactors[index][column] = {columns[column].x, columns[column].y,
+                                 columns[column].z};
+    }
+  }
+  material_instance.setParameter("textureSamplingFromLocal", matrices.data(),
+                                 count);
+  material_instance.setParameter("textureSamplingCofactor", cofactors.data(),
+                                 count);
+}
 
 void bind_standard_material_texture_transform(
     filament::MaterialInstance &material_instance,
@@ -212,6 +252,7 @@ MaterialBindingService::create_mesh_material_instance(
       editor_unlit ? *shaded_mesh_material_ : *rendered_mesh_material_;
   filament::MaterialInstance *material_instance =
       mesh_material.createInstance();
+  bind_mesh_texture_mappings(*material_instance);
   material_instance->setCullingMode(
       double_sided ? filament::MaterialInstance::CullingMode::NONE
                    : filament::MaterialInstance::CullingMode::BACK);
@@ -280,6 +321,7 @@ MaterialBindingService::create_mesh_material_instance(
       editor_unlit ? *shaded_mesh_material_ : *rendered_mesh_material_;
   filament::MaterialInstance *material_instance =
       mesh_material.createInstance();
+  bind_mesh_texture_mappings(*material_instance);
   material_instance->setCullingMode(
       double_sided ? filament::MaterialInstance::CullingMode::NONE
                    : filament::MaterialInstance::CullingMode::BACK);

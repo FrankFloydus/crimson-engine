@@ -551,7 +551,10 @@ ModelingTransformDragService::begin_transform_drag(
         return scene_transform_drag_service_.begin(
             context.scene, request.pivot, true, "Transform Selection",
             context.port.scene_selection_display_from_scene(),
-            &context.assets);
+            &context.assets,
+            context.document_commands != nullptr
+                ? context.document_commands->texture_lock_settings()
+                : TextureLockSettings{});
       }())) {
     (void)cancel_transform_drag(context);
     return {
@@ -1168,7 +1171,10 @@ ModelingTransformDragService::apply_transform_drag_preview(
                        context.scene, scene_transform.origin)
                  : scene_transform_drag_service_.preview_world_transform_delta(
                        context.scene,
-                       matrix_from_runtime_transform(scene_transform));
+                       matrix_from_runtime_transform(scene_transform),
+                       scene_drag.tool == quader_editor_core::ViewportInteractionTool::Scale
+                           ? SceneTextureTransformKind::Scale
+                           : SceneTextureTransformKind::Rotation);
     }();
     if (scene_preview.has_value()) {
       if (!scene_preview->ok) {

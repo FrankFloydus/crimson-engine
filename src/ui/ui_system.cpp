@@ -38,6 +38,7 @@
 #include "ui/qt_selection_toolbar.hpp"
 #include "ui/qt_settings_dialog.hpp"
 #include "ui/qt_snapping_toolbar.hpp"
+#include "ui/qt_texture_toolbar.hpp"
 #include "ui/qt_standard_material_editor_window.hpp"
 #include "ui/qt_tool_toolbar.hpp"
 #include "ui/qt_tool_settings_panel.hpp"
@@ -299,6 +300,11 @@ bool UISystem::initialize(RenderSystem &render_system,
   viewport_display_toolbar_->set_localization(localization_);
   viewport_display_toolbar_->setEnabled(false);
   main_window_->addToolBar(Qt::TopToolBarArea, viewport_display_toolbar_);
+
+  texture_toolbar_ = new QtTextureToolbar(main_window_.get());
+  texture_toolbar_->set_localization(localization_);
+  texture_toolbar_->setEnabled(false);
+  main_window_->addToolBar(Qt::TopToolBarArea, texture_toolbar_);
 
   tool_toolbar_ = new QtToolToolbar(main_window_.get());
   tool_toolbar_->set_localization(localization_);
@@ -677,6 +683,7 @@ void UISystem::install_runtime_hooks(
   inspector_material_query_valid_ = false;
   toolbar_refresh_valid_ = false;
   tool_settings_refresh_valid_ = false;
+  face_texture_settings_revision_.reset();
   status_refresh_valid_ = false;
   project_workspace_instance_edit_revision_ = 0;
   project_workspace_instance_edit_revision_valid_ = false;
@@ -735,6 +742,14 @@ void UISystem::install_runtime_hooks(
         }
         present_lifecycle_result(editor_->commands().execute(command_id));
         viewport_display_toolbar_->synchronize(*editor_, true);
+      });
+  texture_toolbar_->set_command_requested_callback(
+      [this](QuaderCommandId command_id) {
+        if (editor_ == nullptr) {
+          return;
+        }
+        present_lifecycle_result(editor_->commands().execute(command_id));
+        texture_toolbar_->synchronize(*editor_, true);
       });
   snapping_toolbar_->set_snapping_enabled_requested_callback(
       [this](bool enabled) {
@@ -826,6 +841,16 @@ void UISystem::install_runtime_hooks(
               [this](bool visible) {
                 if (viewport_display_toolbar_ != nullptr) {
                   viewport_display_toolbar_->setVisible(visible);
+                }
+              },
+          .texture_toolbar_visible =
+              [this]() {
+                return texture_toolbar_ != nullptr && texture_toolbar_->isVisible();
+              },
+          .set_texture_toolbar_visible =
+              [this](bool visible) {
+                if (texture_toolbar_ != nullptr) {
+                  texture_toolbar_->setVisible(visible);
                 }
               },
           .tool_toolbar_visible =
@@ -1040,6 +1065,32 @@ void UISystem::install_runtime_hooks(
           [this](bool visible) {
             const bool changed = viewport_settings_.set_bool_value(
                 ViewportBoolSettingId::ShowOverlays, visible);
+            if (changed) {
+              (void)save_viewport_settings();
+              synchronize_settings_surfaces(true);
+            }
+            return runtime_status(changed);
+          },
+      .texture_lock_enabled = [this]() {
+        return viewport_settings_.bool_value(ViewportBoolSettingId::TextureLock);
+      },
+      .set_texture_lock_enabled =
+          [this](bool enabled) {
+            const bool changed = viewport_settings_.set_bool_value(
+                ViewportBoolSettingId::TextureLock, enabled);
+            if (changed) {
+              (void)save_viewport_settings();
+              synchronize_settings_surfaces(true);
+            }
+            return runtime_status(changed);
+          },
+      .texture_lock_scale_enabled = [this]() {
+        return viewport_settings_.bool_value(ViewportBoolSettingId::TextureLockScale);
+      },
+      .set_texture_lock_scale_enabled =
+          [this](bool enabled) {
+            const bool changed = viewport_settings_.set_bool_value(
+                ViewportBoolSettingId::TextureLockScale, enabled);
             if (changed) {
               (void)save_viewport_settings();
               synchronize_settings_surfaces(true);
@@ -1806,6 +1857,10 @@ void UISystem::show_home() {
     viewport_display_toolbar_->setEnabled(false);
     viewport_display_toolbar_->hide();
   }
+  if (texture_toolbar_ != nullptr) {
+    texture_toolbar_->setEnabled(false);
+    texture_toolbar_->hide();
+  }
   if (tool_toolbar_ != nullptr) {
     tool_toolbar_->setEnabled(false);
     tool_toolbar_->hide();
@@ -1859,6 +1914,10 @@ void UISystem::show_workspace() {
     viewport_display_toolbar_->setVisible(
         viewport_display_toolbar_workspace_visible_);
   }
+  if (texture_toolbar_ != nullptr) {
+    texture_toolbar_->setEnabled(true);
+    texture_toolbar_->setVisible(texture_toolbar_workspace_visible_);
+  }
   if (tool_toolbar_ != nullptr) {
     tool_toolbar_->setEnabled(true);
     tool_toolbar_->setVisible(tool_toolbar_workspace_visible_);
@@ -1873,6 +1932,9 @@ void UISystem::show_workspace() {
     }
     if (viewport_display_toolbar_ != nullptr) {
       viewport_display_toolbar_->synchronize(*editor_, true);
+    }
+    if (texture_toolbar_ != nullptr) {
+      texture_toolbar_->synchronize(*editor_, true);
     }
     if (tool_toolbar_ != nullptr) {
       tool_toolbar_->synchronize(*editor_, selection, true);
@@ -2042,6 +2104,7 @@ void UISystem::shutdown() {
   selection_toolbar_ = nullptr;
   snapping_toolbar_ = nullptr;
   viewport_display_toolbar_ = nullptr;
+  texture_toolbar_ = nullptr;
   tool_toolbar_ = nullptr;
   workspace_window_state_.clear();
   outliner_panel_ = nullptr;
@@ -2103,6 +2166,7 @@ void UISystem::shutdown() {
   material_picker_presentation_revision_ = 0;
   tool_settings_revision_ = 0;
   tool_settings_refresh_valid_ = false;
+  face_texture_settings_revision_.reset();
   status_command_revision_ = 0;
   status_live_count_ = 0;
   status_live_kind_ = 0;
@@ -2206,6 +2270,10 @@ void UISystem::refresh(const FrameTiming &frame_timing,
     if (viewport_display_toolbar_ != nullptr) {
       QDR_PROFILE_SCOPE("UI synchronize viewport display toolbar");
       viewport_display_toolbar_->synchronize(*editor_);
+    }
+    if (texture_toolbar_ != nullptr) {
+      QDR_PROFILE_SCOPE("UI synchronize texture toolbar");
+      texture_toolbar_->synchronize(*editor_);
     }
   }
   if (viewport_panel_ != nullptr) {
@@ -2323,6 +2391,18 @@ void UISystem::refresh(const FrameTiming &frame_timing,
     }
     tool_settings_revision_ = frame_tool_settings_revision;
     tool_settings_refresh_valid_ = true;
+  }
+  if (panel_visible(UIPanelId::ToolSettings)) {
+    const QuaderFaceTextureRevision revision =
+        editor_->modeling().face_texture_settings_revision();
+    if (!face_texture_settings_revision_.has_value() ||
+        *face_texture_settings_revision_ != revision) {
+      QDR_PROFILE_SCOPE("UI refresh face texture settings presentation");
+      // Selection/scene changes must invalidate stale text even while a numeric
+      // control owns focus. The panel preserves edits for unchanged targets.
+      tool_settings_panel_->refresh_texture_settings();
+      face_texture_settings_revision_ = revision;
+    }
   }
   {
     QDR_PROFILE_SCOPE("UI synchronize status bar");
@@ -2475,6 +2555,8 @@ void UISystem::capture_workspace_window_state() {
   viewport_display_toolbar_workspace_visible_ =
       viewport_display_toolbar_ != nullptr &&
       !viewport_display_toolbar_->isHidden();
+  texture_toolbar_workspace_visible_ =
+      texture_toolbar_ != nullptr && !texture_toolbar_->isHidden();
   tool_toolbar_workspace_visible_ =
       tool_toolbar_ != nullptr && !tool_toolbar_->isHidden();
 }
@@ -2700,6 +2782,7 @@ bool UISystem::startup_layout_ready() const {
        {static_cast<const QToolBar *>(selection_toolbar_),
         static_cast<const QToolBar *>(snapping_toolbar_),
         static_cast<const QToolBar *>(viewport_display_toolbar_),
+        static_cast<const QToolBar *>(texture_toolbar_),
         static_cast<const QToolBar *>(tool_toolbar_)}) {
     if (toolbar != nullptr && toolbar->isVisible() &&
         !geometry_ready(toolbar)) {
@@ -2755,6 +2838,7 @@ std::uint64_t UISystem::startup_layout_geometry_signature(
   mix_toolbar(selection_toolbar_);
   mix_toolbar(snapping_toolbar_);
   mix_toolbar(viewport_display_toolbar_);
+  mix_toolbar(texture_toolbar_);
   mix_toolbar(tool_toolbar_);
   return signature;
 }
@@ -3578,6 +3662,9 @@ void UISystem::refresh_localized_chrome() {
   if (viewport_display_toolbar_ != nullptr) {
     viewport_display_toolbar_->set_localization(localization_);
   }
+  if (texture_toolbar_ != nullptr) {
+    texture_toolbar_->set_localization(localization_);
+  }
   if (tool_toolbar_ != nullptr) {
     tool_toolbar_->set_localization(localization_);
   }
@@ -3843,6 +3930,9 @@ void UISystem::handle_settings_dialog_change(QtSettingsChangeKind kind) {
       if (viewport_display_toolbar_ != nullptr) {
         viewport_display_toolbar_->synchronize(*editor_, true);
       }
+      if (texture_toolbar_ != nullptr) {
+        texture_toolbar_->synchronize(*editor_, true);
+      }
       if (viewport_panel_ != nullptr) {
         viewport_panel_->refresh_keybinding_presentation(*editor_);
       }
@@ -3872,6 +3962,9 @@ void UISystem::synchronize_settings_surfaces(bool refresh_dialog) {
   }
   if (viewport_display_toolbar_ != nullptr && editor_ != nullptr) {
     viewport_display_toolbar_->synchronize(*editor_, true);
+  }
+  if (texture_toolbar_ != nullptr && editor_ != nullptr) {
+    texture_toolbar_->synchronize(*editor_, true);
   }
   if (main_menu_ != nullptr) {
     main_menu_->refresh();

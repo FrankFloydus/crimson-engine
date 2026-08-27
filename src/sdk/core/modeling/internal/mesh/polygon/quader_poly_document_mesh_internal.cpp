@@ -5,6 +5,7 @@
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
 #include <quader/modeling/neutral/polygon/internal/quader_poly_document_mesh_internal.hpp>
+#include <quader/modeling/neutral/polygon/document_texture.hpp>
 
 #include <diagnostics/profile.hpp>
 #include <quader/modeling/neutral/geometry/geometry.hpp>
@@ -734,3 +735,16 @@ bool ensure_face_loop_uvs(Document& document, Face& face)
 }
 
 } // namespace quader_poly::document_internal
+
+namespace quader_poly {
+
+quader::QVec2 generated_texture_uv(quader::QVec3 position,
+                                  quader::QVec3 geometric_normal) {
+  const document_internal::FaceUvBasis basis =
+      document_internal::generated_face_uv_basis_for_normal(geometric_normal);
+  return document_internal::generated_uv_for_position(
+      position, basis,
+      document_internal::dropped_axis_for_normal(geometric_normal));
+}
+
+} // namespace quader_poly

@@ -1294,31 +1294,37 @@ private:
         active_transform_preview_.preview_active()) {
       return true;
     }
-    if (preview_document_ == nullptr) {
+    if (preview_document_ == nullptr || editor_ == nullptr) {
       return false;
     }
 
     cancel_active_transform_edit();
+    const TextureLockSettings texture_locks{
+        .texture_lock = editor_->preferences().texture_lock_enabled(),
+        .texture_lock_scale =
+            editor_->preferences().texture_lock_scale_enabled(),
+    };
     bool began = false;
     switch (kind) {
     case TransformEditKind::Position:
       began = active_transform_preview_
                   .begin_move_selected_to_primary_position_preview(
-                      *preview_document_, primary_, "Set Transform");
+                      *preview_document_, primary_, "Set Transform",
+                      texture_locks);
       break;
     case TransformEditKind::Rotation:
       began = preview_assets_ != nullptr &&
               active_transform_preview_
                   .begin_rotate_selected_to_primary_euler_preview(
                       *preview_document_, *preview_assets_, primary_,
-                      "Set Transform");
+                      "Set Transform", texture_locks);
       break;
     case TransformEditKind::Scale:
       began = preview_assets_ != nullptr &&
               active_transform_preview_
                   .begin_scale_selected_to_primary_scale_preview(
                       *preview_document_, *preview_assets_, primary_,
-                      "Set Transform");
+                      "Set Transform", texture_locks);
       break;
     }
     if (!began) {

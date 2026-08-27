@@ -380,6 +380,15 @@ TEST(RenderSignatureBuilderTests, CentralizesMaterialMeshAndOverlaySignatures) {
     EXPECT_EQ(
         MeshRenderableFactory::mesh_asset_signature(mesh_seed.value(), mesh),
         RenderSignatureBuilder::mesh_asset_signature(mesh_seed.value(), mesh));
+    const std::uint64_t original_mesh_signature =
+        RenderSignatureBuilder::mesh_asset_signature(mesh_seed.value(), mesh);
+    mesh.edit_geometry().vertices.front().uv_carrier[0] = 2.0f;
+    const std::uint64_t carrier_signature =
+        RenderSignatureBuilder::mesh_asset_signature(mesh_seed.value(), mesh);
+    EXPECT_NE(carrier_signature, original_mesh_signature);
+    mesh.edit_geometry().vertices.front().uv_geometric_normal = {1.0f, 0.0f, 0.0f};
+    EXPECT_NE(RenderSignatureBuilder::mesh_asset_signature(mesh_seed.value(), mesh),
+              carrier_signature);
 
     ViewportOverlayFrame frame;
     frame.lines.push_back({
@@ -1042,15 +1051,20 @@ TEST(RenderSceneSnapshotTests,
 
 TEST(RenderSceneSnapshotTests, ToolPreviewSnapshotsPreserveCullingPolicy) {
   AssetRegistry assets;
+  QMat4 mapping;
+  mapping.values[12] = 3.0f;
   const std::vector<RenderToolPreviewMeshRecord> records =
       build_render_tool_preview_snapshot(
           {
               ToolPreviewMesh{.source_entity = 7u,
                               .mesh = make_overlay_triangle_mesh(),
+                              .sampling_from_local = mapping,
                               .double_sided = false,
                               .suppress_source = true},
               ToolPreviewMesh{.source_entity = 8u,
                               .mesh = make_overlay_triangle_mesh(),
+                              .instance_transforms = {QMat4{}, QMat4{}},
+                              .instance_sampling_from_local = {mapping, QMat4{}},
                               .double_sided = true,
                               .suppress_source = true},
               ToolPreviewMesh{.source_entity = kInvalidEntityId,
@@ -1063,6 +1077,10 @@ TEST(RenderSceneSnapshotTests, ToolPreviewSnapshotsPreserveCullingPolicy) {
   EXPECT_TRUE(records[1].double_sided);
   EXPECT_TRUE(records[2].double_sided)
       << "source-less generated previews retain their two-sided default";
+  EXPECT_EQ(records[0].sampling_from_local.values, mapping.values);
+  ASSERT_EQ(records[1].instance_sampling_from_local.size(), 2u);
+  EXPECT_EQ(records[1].instance_sampling_from_local[0].values, mapping.values);
+  EXPECT_EQ(records[1].instance_sampling_from_local[1].values, QMat4{}.values);
 }
 
 TEST(RenderSceneSnapshotTests,
@@ -2692,6 +2710,122 @@ TEST(RenderSceneSnapshotTests,
       second, second_document, second_assets, 2u, first_binding));
   EXPECT_TRUE(try_refresh_render_scene_snapshot_transforms(
       second, second_document, second_assets, 2u, second_binding));
+}
+
+TEST(RenderSceneSnapshotTests,
+     TextureMappingOnlyRefreshRetainsGeometryAndMaterialSnapshots) {
+  SceneDocument document;
+  AssetRegistry assets;
+  const AssetId mesh = assets.add_mesh(make_overlay_triangle_mesh());
+  const EntityId entity = document.create_entity("Mapped", EntityKind::Mesh);
+  document.set_mesh(entity, MeshComponent{.mesh = mesh});
+  RenderSceneSnapshot snapshot = build_render_scene_snapshot(document, assets);
+  ASSERT_EQ(snapshot.meshes.size(), 1u);
+  const auto geometry = snapshot.meshes.front().mesh.geometry_payload;
+  const std::uint64_t transform_revision = document.transform_revision();
+  const std::uint64_t render_revision = document.render_component_revision();
+  QMat4 mapping;
+  mapping.values[0] = 2.0f;
+  mapping.values[12] = 3.0f;
+  ASSERT_TRUE(document.set_texture_mapping(entity, {mapping}));
+
+  EXPECT_EQ(document.transform_revision(), transform_revision);
+  EXPECT_EQ(document.render_component_revision(), render_revision);
+  EXPECT_FALSE(render_scene_snapshot_matches_sources(snapshot, document, assets));
+  EXPECT_FALSE(try_refresh_render_scene_snapshot_selection(snapshot, document, assets));
+  ASSERT_TRUE(try_refresh_render_scene_snapshot_transforms(snapshot, document, assets));
+  EXPECT_EQ(snapshot.meshes.front().mesh.geometry_payload, geometry);
+  EXPECT_EQ(snapshot.meshes.front().sampling_from_local.values, mapping.values);
+  EXPECT_TRUE(snapshot.meshes.front().texture_mapping_dirty);
+  EXPECT_FALSE(snapshot.meshes.front().mesh_dirty);
+  EXPECT_FALSE(snapshot.meshes.front().material_dirty);
+  EXPECT_FALSE(snapshot.meshes.front().transform_dirty);
+  EXPECT_TRUE(snapshot.dirty.texture_mappings_changed);
+  EXPECT_FALSE(snapshot.dirty.transforms_changed);
+  EXPECT_TRUE(render_scene_snapshot_matches_sources(snapshot, document, assets));
+  EXPECT_FALSE(try_refresh_render_scene_snapshot_transforms(snapshot, document, assets));
+
+  const RenderSceneSnapshot idle = build_render_scene_snapshot(
+      document, assets, {.previous = &snapshot});
+  EXPECT_TRUE(idle.reused_previous_records);
+  EXPECT_FALSE(idle.dirty.any_dirty());
+  EXPECT_FALSE(idle.meshes.front().texture_mapping_dirty);
+}
+
+TEST(RenderSceneSnapshotTests,
+     OrdinaryObjectsWithDifferentTextureMappingsKeepOneSharedBatch) {
+  SceneDocument document;
+  AssetRegistry assets;
+  const AssetId mesh = assets.add_mesh(make_overlay_triangle_mesh());
+  const EntityId first = document.create_entity("First", EntityKind::Mesh);
+  const EntityId second = document.create_entity("Second", EntityKind::Mesh);
+  document.set_mesh(first, MeshComponent{.mesh = mesh});
+  document.set_mesh(second, MeshComponent{.mesh = mesh});
+  QMat4 mapping;
+  mapping.values[5] = 3.0f;
+  ASSERT_TRUE(document.set_texture_mapping(first, {mapping}));
+  RenderSceneSnapshot snapshot = build_render_scene_snapshot(document, assets);
+  EXPECT_TRUE(snapshot.meshes.empty());
+  ASSERT_EQ(snapshot.instance_primitives.size(), 1u);
+  const auto geometry = snapshot.instance_primitives.front().mesh.geometry_payload;
+  const auto &before = snapshot.instance_primitives.front().occurrences;
+  ASSERT_EQ(before.size(), 2u);
+  const auto mapped = std::ranges::find(before, first,
+                                      &RenderSceneInstanceOccurrenceRecord::entity_id);
+  ASSERT_NE(mapped, before.end());
+  EXPECT_EQ(mapped->sampling_from_local.values, mapping.values);
+  mapping.values[13] = 8.0f;
+  ASSERT_TRUE(document.set_texture_mapping(first, {mapping}));
+  ASSERT_TRUE(try_refresh_render_scene_snapshot_transforms(snapshot, document, assets));
+  ASSERT_EQ(snapshot.instance_primitives.size(), 1u);
+  EXPECT_EQ(snapshot.instance_primitives.front().mesh.geometry_payload, geometry);
+  for (const auto &occurrence : snapshot.instance_primitives.front().occurrences) {
+    EXPECT_EQ(occurrence.sampling_from_local.values,
+              occurrence.entity_id == first ? mapping.values : QMat4{}.values);
+  }
+}
+
+TEST(RenderSceneSnapshotTests,
+     FormalInstanceTextureMappingComposesPerOccurrenceInMemberCoordinates) {
+  SceneDocument document;
+  AssetRegistry assets;
+  const AssetId mesh = assets.add_mesh(make_overlay_triangle_mesh());
+  const EntityId definition = document.create_entity("Definition", EntityKind::Empty);
+  ASSERT_TRUE(document.set_instance_definition(definition));
+  ASSERT_TRUE(document.set_visible(definition, false));
+  const EntityId member = document.create_entity("Member", EntityKind::Mesh);
+  document.set_mesh(member, MeshComponent{.mesh = mesh});
+  ASSERT_TRUE(document.set_parent(member, definition, false));
+  ASSERT_TRUE(document.set_transform(member, {.position = {2.0f, 0.0f, 0.0f}}));
+  QMat4 member_mapping;
+  member_mapping.values[12] = 1.0f;
+  ASSERT_TRUE(document.set_texture_mapping(member, {member_mapping}));
+  const EntityId first = document.create_entity("First", EntityKind::Instance);
+  const EntityId second = document.create_entity("Second", EntityKind::Instance);
+  ASSERT_TRUE(document.set_instance_occurrence(first, {.definition = definition}));
+  ASSERT_TRUE(document.set_instance_occurrence(second, {.definition = definition}));
+  QMat4 occurrence_mapping;
+  occurrence_mapping.values[0] = 2.0f;
+  ASSERT_TRUE(document.set_texture_mapping(first, {occurrence_mapping}));
+  RenderSceneSnapshot snapshot = build_render_scene_snapshot(document, assets);
+  ASSERT_EQ(snapshot.instance_primitives.size(), 1u);
+  const auto geometry = snapshot.instance_primitives.front().mesh.geometry_payload;
+  for (const auto &occurrence : snapshot.instance_primitives.front().occurrences) {
+    EXPECT_FLOAT_EQ(occurrence.sampling_from_local.values[0],
+                    occurrence.entity_id == first ? 2.0f : 1.0f);
+    EXPECT_FLOAT_EQ(occurrence.sampling_from_local.values[12],
+                    occurrence.entity_id == first ? 3.0f : 1.0f);
+  }
+  occurrence_mapping.values[0] = 3.0f;
+  ASSERT_TRUE(document.set_texture_mapping(first, {occurrence_mapping}));
+  ASSERT_TRUE(try_refresh_render_scene_snapshot_transforms(snapshot, document, assets));
+  EXPECT_EQ(snapshot.instance_primitives.front().mesh.geometry_payload, geometry);
+  for (const auto &occurrence : snapshot.instance_primitives.front().occurrences) {
+    EXPECT_FLOAT_EQ(occurrence.sampling_from_local.values[0],
+                    occurrence.entity_id == first ? 3.0f : 1.0f);
+    EXPECT_FLOAT_EQ(occurrence.sampling_from_local.values[12],
+                    occurrence.entity_id == first ? 5.0f : 1.0f);
+  }
 }
 
 TEST(RenderSceneSnapshotTests,
@@ -4799,10 +4933,13 @@ TEST(RenderInstanceBatchPlannerTests,
   for (std::uint64_t index = 0u; index < 200u; ++index) {
     QMat4 transform;
     transform.values[12] = static_cast<float>(index * 2u);
+    QMat4 mapping;
+    mapping.values[13] = static_cast<float>(index) + 0.5f;
     occurrences.push_back({
         .key = key,
         .occurrence = 1'000u + index,
         .world_transform = transform,
+        .sampling_from_local = mapping,
         .local_bounds = local_bounds,
     });
   }
@@ -4816,6 +4953,13 @@ TEST(RenderInstanceBatchPlannerTests,
   EXPECT_EQ(plan.chunks[1].world_transforms.size(), 64u);
   EXPECT_EQ(plan.chunks[2].world_transforms.size(), 64u);
   EXPECT_EQ(plan.chunks[3].world_transforms.size(), 8u);
+  for (const RenderInstanceBatchChunk &chunk : plan.chunks) {
+    ASSERT_EQ(chunk.sampling_from_local.size(), chunk.occurrences.size());
+    for (std::size_t slot = 0u; slot < chunk.occurrences.size(); ++slot) {
+      EXPECT_FLOAT_EQ(chunk.sampling_from_local[slot].values[13],
+                      static_cast<float>(chunk.occurrences[slot] - 1'000u) + 0.5f);
+    }
+  }
   EXPECT_EQ(plan.chunks[0].occurrences.front(), 1'000u);
   EXPECT_EQ(plan.chunks[3].occurrences.back(), 1'199u);
   ASSERT_TRUE(plan.chunks[0].world_bounds.present);
@@ -4854,6 +4998,15 @@ TEST(RenderInstanceBatchPlannerTests,
             (std::vector<std::uint64_t>{9u}));
   EXPECT_EQ(classify_instance_batch_update(before, before),
             RenderInstanceBatchUpdateKind::Unchanged);
+
+  occurrences[2].sampling_from_local.values[12] = 9.0f;
+  const RenderInstanceBatchPlan mapped =
+      plan_render_instance_batches(occurrences, 64u, &before);
+  EXPECT_EQ(classify_instance_batch_update(before, mapped),
+            RenderInstanceBatchUpdateKind::TransformsOnly);
+  EXPECT_EQ(mapped.chunks.front().occurrences, before.chunks.front().occurrences);
+  EXPECT_EQ(mapped.chunks.front().key, before.chunks.front().key);
+  EXPECT_FLOAT_EQ(mapped.chunks.front().sampling_from_local.back().values[12], 9.0f);
 
   occurrences[2].world_transform.values[13] = 5.0f;
   const RenderInstanceBatchPlan moved =
@@ -4914,6 +5067,21 @@ TEST(RenderInstanceBatchPlannerTests,
   EXPECT_FLOAT_EQ(after.world_bounds.max.x, 11.0f);
   EXPECT_EQ(classify_instance_batch_update(visible, partially_hidden),
             RenderInstanceBatchUpdateKind::TransformsOnly);
+
+  occurrences[2].sampling_from_local.values[12] = 52.0f;
+  const RenderInstanceBatchPlan hidden_mapping_changed =
+      plan_render_instance_batches(occurrences, 64u, &partially_hidden);
+  EXPECT_EQ(classify_instance_batch_update(partially_hidden, hidden_mapping_changed),
+            RenderInstanceBatchUpdateKind::Unchanged)
+      << "A hidden slot is retained without rewriting a visible GPU prefix";
+  EXPECT_FLOAT_EQ(hidden_mapping_changed.chunks.front()
+                      .sampling_from_local[2].values[12], 52.0f);
+  occurrences[2].visible = true;
+  const RenderInstanceBatchPlan revealed =
+      plan_render_instance_batches(occurrences, 64u, &hidden_mapping_changed);
+  EXPECT_EQ(classify_instance_batch_update(hidden_mapping_changed, revealed),
+            RenderInstanceBatchUpdateKind::TransformsOnly);
+  EXPECT_FLOAT_EQ(revealed.chunks.front().sampling_from_local[2].values[12], 52.0f);
 
   for (RenderInstancePrimitiveOccurrence &occurrence : occurrences) {
     occurrence.visible = false;

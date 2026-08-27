@@ -39,6 +39,9 @@ ModelingObjectSceneIdentity capture_scene_identity(const SceneDocument &scene,
   if (const MaterialComponent *material = scene.material(entity)) {
     identity.material = *material;
   }
+  if (const TextureMappingComponent *mapping = scene.texture_mapping(entity)) {
+    identity.texture_mapping = *mapping;
+  }
   if (const ModelingObjectComponent *modeling = scene.modeling_object(entity)) {
     identity.material_slot = modeling->material_slot;
     identity.local_frame_version = modeling->local_frame_version;

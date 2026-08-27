@@ -333,7 +333,8 @@ QuaderApiMutationRunner::run_runtime_result(CommandResult result,
 }
 
 QuaderApiVoidResult QuaderApiMutationRunner::run_modeling_undoable_command(
-    std::unique_ptr<IUndoableCommand> command, std::string_view label) {
+    std::unique_ptr<IUndoableCommand> command, std::string_view label,
+    UndoRedoExecuteOptions options) {
   QDR_PROFILE_FUNCTION();
   if (!available()) {
     return quader_api_failure_status(scene_session(), "No scene is active.");
@@ -342,7 +343,7 @@ QuaderApiVoidResult QuaderApiMutationRunner::run_modeling_undoable_command(
     return modeling_content_blocked_status(label);
   }
   EditorCommandService commands = editor_commands();
-  return status_from(commands.execute(std::move(command)),
+  return status_from(commands.history().execute(std::move(command), std::move(options)),
                      QuaderMutationKind::Modeling, label);
 }
 

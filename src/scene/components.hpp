@@ -195,6 +195,20 @@ struct ModelingObjectComponent {
 };
 
 /**
+ * Maps an occurrence's local positions into its texture sampling frame.
+ *
+ * Missing components mean identity. Face-owned UV settings remain in the
+ * modeling document; this component only compensates scene placement edits.
+ */
+struct TextureMappingComponent {
+  QMat4 sampling_from_local;
+
+  [[nodiscard]] bool operator==(const TextureMappingComponent &other) const {
+    return sampling_from_local.values == other.sampling_from_local.values;
+  }
+};
+
+/**
  * Marks an internal, scene-local instance definition root.
  *
  * Canonical definition members are derived from this entity's hierarchy

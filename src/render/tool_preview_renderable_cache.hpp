@@ -100,6 +100,7 @@ public:
       std::uint64_t position_revision = 0u;
       std::shared_ptr<const MeshGeometryPayload> topology_payload;
       std::vector<QMat4> transforms;
+      std::vector<QMat4> sampling_from_local;
       bool dynamic_positions = false;
       bool visible = false;
       bool material_uniforms_initialized = false;
@@ -138,6 +139,8 @@ public:
       std::shared_ptr<const MeshGeometryPayload> geometry_payload;
       QMat4 transform;
       std::vector<QMat4> instance_transforms;
+      QMat4 sampling_from_local;
+      std::vector<QMat4> instance_sampling_from_local;
       bool dynamic_positions = false;
       bool suppress_source = false;
     };

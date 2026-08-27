@@ -113,6 +113,11 @@ OperationResult DissolveEdgesOperation::apply(Document& document, Selection& sel
         [[maybe_unused]] const bool removed_second_endpoint = remove_redundant_vertex_from_all_face_loops(next_candidate, edge.b);
         prune_invalid_faces(next_candidate);
         prune_unused_vertices(next_candidate);
+        if (Face* result_face = find_face(next_candidate, first_face.id);
+            result_face != nullptr && !inherit_merged_face_texture(
+                candidate, std::array<ElementId, 2>{first_face.id, second_face.id}, *result_face)) {
+            return { false, "Dissolve could not preserve the source texture mapping." };
+        }
         if (!every_face_triangulates(next_candidate)) {
             return { false, "Dissolve would create invalid face geometry." };
         }

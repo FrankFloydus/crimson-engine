@@ -139,6 +139,9 @@ QuaderEntitySnapshot entity_snapshot_for(const SceneSession &session,
     snapshot.has_mesh = true;
     snapshot.mesh = mesh->mesh;
   }
+  if (const TextureMappingComponent *mapping = scene.texture_mapping(entity)) {
+    snapshot.texture_sampling_from_local = mapping->sampling_from_local;
+  }
   if (const MaterialComponent *material = scene.material(entity)) {
     snapshot.has_material = true;
     snapshot.material = material->material;

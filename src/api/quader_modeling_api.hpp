@@ -57,6 +57,60 @@ struct QuaderFaceProjectMaterial {
   ProjectAssetId id;
 };
 
+/// Names one independently editable selected-face texture property.
+enum class QuaderFaceTextureField {
+  ScaleX,
+  ScaleY,
+  ShiftX,
+  ShiftY,
+  Rotate,
+};
+
+/// UI-localizable reason why selected face texture editing is unavailable.
+enum class QuaderFaceTextureBlockReason {
+  None,
+  NoSelection,
+  PreviewActive,
+  TargetUnavailable,
+};
+
+/// Cheap retained-presentation key; querying it never exports mesh geometry.
+struct QuaderFaceTextureRevision final {
+  SceneSessionId scene_session_id;
+  std::uint64_t content_revision = 0;
+  std::uint64_t selection_revision = 0;
+  std::uint64_t scene_revision = 0;
+  std::uint64_t asset_revision = 0;
+  std::uint64_t interaction_revision = 0;
+
+  friend bool operator==(const QuaderFaceTextureRevision &,
+                         const QuaderFaceTextureRevision &) = default;
+};
+
+/// Presents shared scales, pixel shifts, and selection-relative rotation.
+struct QuaderFaceTextureSettings final {
+  std::size_t selected_face_count = 0;
+  bool editable = false;
+  QuaderFaceTextureBlockReason block_reason =
+      QuaderFaceTextureBlockReason::NoSelection;
+  std::string disabled_reason;
+  std::optional<double> scale_x;
+  std::optional<double> scale_y;
+  double shift_x = 0.0;
+  double shift_y = 0.0;
+  double rotation_degrees = 0.0;
+  std::uint64_t selection_token = 0;
+};
+
+/// A captured selection token rejects edits queued before selection changed.
+/// Reuse a nonempty merge_key only for one continuous numeric editing gesture.
+struct QuaderFaceTextureEdit final {
+  QuaderFaceTextureField field = QuaderFaceTextureField::ScaleX;
+  double value = 1.0;
+  std::uint64_t selection_token = 0;
+  std::string merge_key;
+};
+
 /**
  * Configures native public face thickening previews.
  */
@@ -477,6 +531,10 @@ public:
   mesh(QuaderModelingObjectId object_id) const;
 
   QuaderApiVoidResult set_selection_mode(QuaderSelectionMode mode);
+  [[nodiscard]] QuaderFaceTextureRevision face_texture_settings_revision() const;
+  [[nodiscard]] QuaderFaceTextureSettings face_texture_settings() const;
+  QuaderApiVoidResult
+  set_face_texture_setting(const QuaderFaceTextureEdit &edit);
   [[nodiscard]] bool can_execute_tool(std::string_view tool_id) const;
   QuaderApiVoidResult execute_tool(std::string_view tool_id);
   QuaderApiVoidResult delete_selection();

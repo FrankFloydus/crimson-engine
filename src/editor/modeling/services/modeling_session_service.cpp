@@ -5,6 +5,7 @@
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
 #include "editor/modeling/services/modeling_session_service.hpp"
+#include "editor/modeling/services/face_texture_edit_context.hpp"
 
 #include "editor/modeling/modeling_viewport_camera_adapter.hpp"
 
@@ -26,6 +27,7 @@
 #include "editor/modeling/services/selection_mode_adapter.hpp"
 #include "editor/selection/selection_projection_service.hpp"
 #include "editor/tools/viewport_tool_descriptor_catalog.hpp"
+#include "editor/commands/document/scene_texture_mapping_plan.hpp"
 #include "math/glm_bridge.hpp"
 #include "scene/scene_bounds.hpp"
 #include "scene/scene_document.hpp"
@@ -1088,6 +1090,23 @@ class ModelingSessionService::Impl : private ModelingTransformDragPort {
     ViewportOverlayFrame frame;
   };
 
+  /// All inputs that can change retained face texture presentation or validity.
+  struct FaceTextureCacheKey final {
+    std::uint64_t content_revision = 0;
+    std::uint64_t selection_revision = 0;
+    std::uint64_t scene_revision = 0;
+    std::uint64_t layer_revision = 0;
+    std::uint64_t asset_revision = 0;
+    std::uint64_t visibility_revision = 0;
+    std::uint64_t extent_revision = 0;
+    std::uint64_t context_revision = 0;
+    ModelingInstanceEditScope instance_scope;
+    bool preview_active = false;
+
+    friend bool operator==(const FaceTextureCacheKey &,
+                           const FaceTextureCacheKey &) = default;
+  };
+
 public:
   Impl(SceneDocument &scene, AssetRegistry &assets,
        ModelingOperationPreviewCheckpointHooks preview_checkpoint_hooks)
@@ -1453,7 +1472,8 @@ public:
     SceneTransformDragService placement;
     if (!placement.begin(scene_, selection_center().value_or(QVec3{}), true,
                          std::move(label),
-                         scene_selection_display_from_scene())) {
+                         scene_selection_display_from_scene(), &assets_,
+                         texture_lock_settings())) {
       return document_command_invalid_request_result(
           "Scene placement could not begin.");
     }
@@ -1467,16 +1487,18 @@ public:
   }
 
   DocumentCommandResult transform_scene_selection_by_world_delta(
-      const QMat4 &world_delta, std::string label) {
+      const QMat4 &world_delta, std::string label,
+      SceneTextureTransformKind kind) {
     SceneTransformDragService placement;
     if (!placement.begin(scene_, selection_center().value_or(QVec3{}), true,
                          std::move(label),
-                         scene_selection_display_from_scene())) {
+                         scene_selection_display_from_scene(), &assets_,
+                         texture_lock_settings())) {
       return document_command_invalid_request_result(
           "Scene transform could not begin.");
     }
     const DocumentCommandResult transformed =
-        placement.preview_world_transform_delta(scene_, world_delta);
+        placement.preview_world_transform_delta(scene_, world_delta, kind);
     if (!transformed.ok) {
       (void)placement.cancel();
       return transformed;
@@ -1490,7 +1512,8 @@ public:
     SceneTransformDragService placement;
     if (!placement.begin(scene_, selection_center().value_or(QVec3{}), true,
                          std::move(label),
-                         scene_selection_display_from_scene(), &assets_)) {
+                         scene_selection_display_from_scene(), &assets_,
+                         texture_lock_settings())) {
       return document_command_invalid_request_result(
           "Scene local rotation could not begin.");
     }
@@ -1511,7 +1534,8 @@ public:
     SceneTransformDragService placement;
     if (!placement.begin(scene_, selection_center().value_or(QVec3{}), true,
                          std::move(label),
-                         scene_selection_display_from_scene(), &assets_)) {
+                         scene_selection_display_from_scene(), &assets_,
+                         texture_lock_settings())) {
       return document_command_invalid_request_result(
           "Scene local scale could not begin.");
     }
@@ -1558,6 +1582,166 @@ public:
 
   [[nodiscard]] std::uint64_t selection_revision() const {
     return sdk_projection_adapter_.selection_revision();
+  }
+
+  [[nodiscard]] std::uint64_t face_texture_settings_revision() const {
+    const FaceTextureCacheKey key{
+        .content_revision = content_revision(),
+        .selection_revision = selection_revision(),
+        .scene_revision = scene_.revision(),
+        .layer_revision = scene_.layer_revision(),
+        .asset_revision = assets_.revision(),
+        .visibility_revision = selection_service_.viewport_visibility_revision(),
+        .extent_revision = face_texture_extent_revision_provider_
+                               ? face_texture_extent_revision_provider_()
+                               : 0,
+        .context_revision = face_texture_context_.revision(),
+        .instance_scope = instance_edit_scope_provider_
+                              ? instance_edit_scope_provider_()
+                              : ModelingInstanceEditScope{},
+        .preview_active = sdk_projection_adapter_.preview_active() ||
+                          transform_drag_active() || modal_tool_owns_viewport(),
+    };
+    if (!face_texture_cache_key_.has_value() || *face_texture_cache_key_ != key) {
+      face_texture_cache_key_ = key;
+      ++face_texture_revision_;
+    }
+    return face_texture_revision_;
+  }
+
+  [[nodiscard]] QVec2 face_texture_extent(
+      const ModelingSelectedFaceTextureSnapshot &snapshot) const {
+    constexpr QVec2 kFallback{64.0f, 64.0f};
+    if (snapshot.objects.size() != 1u ||
+        snapshot.objects.front().faces.size() != 1u) {
+      return kFallback;
+    }
+    const auto &object = snapshot.objects.front();
+    const MaterialComponent *component = scene_.material(object.entity);
+    if (component == nullptr) {
+      return kFallback;
+    }
+    const MaterialReference reference = component->material_for_slot(
+        object.faces.front().material_slot);
+    std::optional<QVec2> extent;
+    if (reference.embedded()) {
+      const MaterialDocument *material = assets_.material(reference.embedded_asset());
+      const std::optional<AssetId> texture_id =
+          material != nullptr
+              ? material_texture_slot_asset(*material,
+                                             material_texture_slot::kBaseColor)
+              : std::nullopt;
+      const TextureAsset *texture =
+          texture_id.has_value() ? assets_.texture(*texture_id) : nullptr;
+      if (texture != nullptr && texture->width != 0u && texture->height != 0u) {
+        extent = QVec2{static_cast<float>(texture->width),
+                       static_cast<float>(texture->height)};
+      }
+    } else if (reference.project_owned() && face_texture_extent_provider_) {
+      extent = face_texture_extent_provider_(reference);
+    }
+    return extent.has_value() && std::isfinite(extent->x) &&
+                   std::isfinite(extent->y) && extent->x > 0.0f && extent->y > 0.0f
+               ? *extent
+               : kFallback;
+  }
+
+  [[nodiscard]] ModelingFaceTextureSettings face_texture_settings() const {
+    const std::uint64_t revision = face_texture_settings_revision();
+    if (face_texture_presented_revision_ == revision) {
+      return face_texture_settings_cache_;
+    }
+    ModelingSelectedFaceTextureSnapshot snapshot =
+        sdk_projection_adapter_.selected_face_texture_settings();
+    std::string target_error;
+    if (!snapshot.command.ok) {
+      target_error = snapshot.command.message;
+    } else {
+      for (const auto &object : snapshot.objects) {
+        const FaceTarget target =
+            resolve_face_object_target(object.modeling_object_id);
+        if (!target.command.ok) {
+          target_error = target.command.message;
+          break;
+        }
+      }
+    }
+    face_texture_extent_cache_ = face_texture_extent(snapshot);
+    ModelingFaceTextureSettings settings = face_texture_context_.synchronize(
+        snapshot, selection_revision(), face_texture_extent_cache_);
+    if (!target_error.empty()) {
+      settings.editable = false;
+      settings.block_reason = ModelingFaceTextureBlockReason::TargetUnavailable;
+      settings.disabled_reason = std::move(target_error);
+    } else if (settings.selected_face_count != 0u &&
+               face_texture_cache_key_->preview_active) {
+      settings.editable = false;
+      settings.block_reason = ModelingFaceTextureBlockReason::PreviewActive;
+      settings.disabled_reason =
+          "Commit or cancel the active tool or preview before editing textures.";
+    }
+    face_texture_selection_cache_ = std::move(snapshot);
+    face_texture_settings_cache_ = std::move(settings);
+    face_texture_presented_revision_ = face_texture_settings_revision();
+    return face_texture_settings_cache_;
+  }
+
+  ModelingCommandResult set_face_texture_setting(
+      const ModelingFaceTextureEdit &edit) {
+    const ModelingFaceTextureSettings settings = face_texture_settings();
+    if (!settings.editable) {
+      return {.ok = false,
+              .changed = false,
+              .message = settings.disabled_reason.empty()
+                             ? "Select one or more editable faces first."
+                             : settings.disabled_reason};
+    }
+    std::vector<ModelingFaceTextureUpdateBatch> batches;
+    const ModelingCommandResult prepared = face_texture_context_.prepare_edit(
+        edit, face_texture_selection_cache_, face_texture_extent_cache_, batches);
+    if (!prepared.ok) {
+      return prepared;
+    }
+    ModelingCommandResult result =
+        sdk_projection_adapter_.apply_face_texture_updates(batches);
+    if (result.ok && result.changed) {
+      face_texture_context_.record_applied_edit(edit);
+      invalidate_selection_overlay_caches();
+    }
+    return result;
+  }
+
+  [[nodiscard]] ModelingFaceTextureEditState
+  capture_face_texture_edit_state() const {
+    (void)face_texture_settings();
+    return face_texture_context_.capture();
+  }
+
+  void restore_face_texture_edit_state(const ModelingFaceTextureEditState &state) {
+    const auto snapshot = sdk_projection_adapter_.selected_face_texture_settings();
+    face_texture_context_.restore(state, snapshot, selection_revision());
+  }
+
+  void invalidate_face_texture_edit_state() {
+    face_texture_context_.invalidate();
+  }
+
+  void set_face_texture_extent_provider(
+      std::function<std::optional<QVec2>(MaterialReference)> provider,
+      std::function<std::uint64_t()> revision_provider) {
+    face_texture_extent_provider_ = std::move(provider);
+    face_texture_extent_revision_provider_ = std::move(revision_provider);
+    face_texture_cache_key_.reset();
+  }
+
+  void set_texture_lock_settings_provider(
+      std::function<TextureLockSettings()> provider) {
+    texture_lock_settings_provider_ = std::move(provider);
+  }
+
+  [[nodiscard]] TextureLockSettings texture_lock_settings() const {
+    return texture_lock_settings_provider_ ? texture_lock_settings_provider_()
+                                           : TextureLockSettings{};
   }
 
   [[nodiscard]] ModelingSelectionExport export_selection() const {
@@ -1910,6 +2094,7 @@ public:
                          : sdk_restored.message,
       };
     }
+    face_texture_context_.invalidate();
     invalidate_selection_overlay_caches();
     return {
         .ok = true,
@@ -1929,6 +2114,7 @@ public:
   }
 
   void clear_transient_state_for_document_replacement() {
+    face_texture_context_.invalidate();
     if (sdk_projection_adapter_.preview_active()) {
       (void)sdk_projection_adapter_.cancel_translate_preview();
     }
@@ -1943,6 +2129,7 @@ public:
   }
 
   void reset_from_scene() {
+    face_texture_context_.invalidate();
     // Group selection is scene-owned even though the polygon runtime represents
     // its mode as Object. Keep that runtime projection empty so reset cannot
     // introduce a second selection source of truth.
@@ -2665,8 +2852,7 @@ public:
     MaterialReference material;
   };
 
-  [[nodiscard]] FaceTarget resolve_face_target(int modeling_object_id,
-                                               int face_id) const {
+  [[nodiscard]] FaceTarget resolve_face_object_target(int modeling_object_id) const {
     const auto rejected = [](std::string message) {
       return FaceTarget{
           .command = {
@@ -2676,7 +2862,7 @@ public:
           },
       };
     };
-    if (modeling_object_id <= 0 || face_id <= 0 ||
+    if (modeling_object_id <= 0 ||
         !sdk_projection_adapter_.owns_object(modeling_object_id)) {
       return rejected("The material target mesh is not live.");
     }
@@ -2726,6 +2912,23 @@ public:
       }
     }
 
+    return {
+        .command = {.ok = true, .changed = false},
+        .entity = *entity,
+    };
+  }
+
+  [[nodiscard]] FaceTarget resolve_face_target(int modeling_object_id,
+                                               int face_id) const {
+    FaceTarget target = resolve_face_object_target(modeling_object_id);
+    if (!target.command.ok) {
+      return target;
+    }
+    const auto rejected = [](std::string message) {
+      return FaceTarget{.command = {.ok = false,
+                                    .changed = false,
+                                    .message = std::move(message)}};
+    };
     const quader_editor_core::EditorSession &projection =
         selection_projection_view();
     const auto object = std::find_if(
@@ -2742,11 +2945,8 @@ public:
       return rejected("The material target face is not live.");
     }
 
-    return {
-        .command = {.ok = true, .changed = false},
-        .entity = *entity,
-        .material_slot = face->material_slot,
-    };
+    target.material_slot = face->material_slot;
+    return target;
   }
 
   [[nodiscard]] FaceMaterialTarget
@@ -3564,7 +3764,7 @@ public:
                     action.rotate_angle_degrees * std::acos(-1.0) / 180.0);
             transformed = transform_scene_selection_by_world_delta(
                 world_affine_from_transform(rotation, action.pivot),
-                "Repeat Rotate");
+                "Repeat Rotate", SceneTextureTransformKind::Rotation);
           }
         } else if (action.tool ==
                    quader_editor_core::ViewportInteractionTool::Scale) {
@@ -3576,7 +3776,7 @@ public:
                                       quader_editor_core::scale_transform(
                                           action.scale),
                                       action.pivot),
-                                  "Repeat Scale");
+                                  "Repeat Scale", SceneTextureTransformKind::Scale);
         } else {
           transformed = document_command_invalid_request_result(
               "Unsupported repeat transform tool.");
@@ -6740,6 +6940,16 @@ private:
   ModelingObjectRuntimeMap object_registry_;
   ModelingMeshSyncService mesh_sync_service_;
   ModelingSdkProjectionAdapter sdk_projection_adapter_;
+  mutable FaceTextureEditContext face_texture_context_;
+  mutable std::optional<FaceTextureCacheKey> face_texture_cache_key_;
+  mutable std::uint64_t face_texture_revision_ = 0;
+  mutable std::uint64_t face_texture_presented_revision_ = 0;
+  mutable ModelingSelectedFaceTextureSnapshot face_texture_selection_cache_;
+  mutable ModelingFaceTextureSettings face_texture_settings_cache_;
+  mutable QVec2 face_texture_extent_cache_{64.0f, 64.0f};
+  std::function<std::optional<QVec2>(MaterialReference)> face_texture_extent_provider_;
+  std::function<std::uint64_t()> face_texture_extent_revision_provider_;
+  std::function<TextureLockSettings()> texture_lock_settings_provider_;
   ModelingHierarchyDuplicateService hierarchy_duplicate_service_;
   ModelingSelectionService selection_service_;
   SelectionProjectionService selection_projection_service_;
@@ -6867,6 +7077,45 @@ std::uint64_t ModelingSessionService::content_revision() const {
 
 std::uint64_t ModelingSessionService::selection_revision() const {
   return impl_->selection_revision();
+}
+
+std::uint64_t ModelingSessionService::face_texture_settings_revision() const {
+  return impl_->face_texture_settings_revision();
+}
+
+ModelingFaceTextureSettings ModelingSessionService::face_texture_settings() const {
+  return impl_->face_texture_settings();
+}
+
+ModelingCommandResult ModelingSessionService::set_face_texture_setting(
+    const ModelingFaceTextureEdit &edit) {
+  return impl_->set_face_texture_setting(edit);
+}
+
+ModelingFaceTextureEditState
+ModelingSessionService::capture_face_texture_edit_state() const {
+  return impl_->capture_face_texture_edit_state();
+}
+
+void ModelingSessionService::restore_face_texture_edit_state(
+    const ModelingFaceTextureEditState &state) {
+  impl_->restore_face_texture_edit_state(state);
+}
+
+void ModelingSessionService::invalidate_face_texture_edit_state() {
+  impl_->invalidate_face_texture_edit_state();
+}
+
+void ModelingSessionService::set_face_texture_extent_provider(
+    std::function<std::optional<QVec2>(MaterialReference)> provider,
+    std::function<std::uint64_t()> revision_provider) {
+  impl_->set_face_texture_extent_provider(std::move(provider),
+                                         std::move(revision_provider));
+}
+
+void ModelingSessionService::set_texture_lock_settings_provider(
+    std::function<TextureLockSettings()> provider) {
+  impl_->set_texture_lock_settings_provider(std::move(provider));
 }
 
 ModelingSelectionExport ModelingSessionService::export_selection() const {

@@ -12,12 +12,17 @@
 #include "editor/history/editor_history_service.hpp"
 #include "editor/modeling/modeling_types.hpp"
 #include "editor/modeling/services/modeling_session_service.hpp"
+#include "editor/projection/mesh_projection_service.hpp"
 #include "editor/selection/editor_selection_service.hpp"
 #include "editor/selection/scene_selection_application.hpp"
 #include "math/glm_bridge.hpp"
 #include "quader/modeling/neutral/polygon/document_model.hpp"
+#include "quader/modeling/neutral/polygon/document_operations.hpp"
+#include "quader/modeling/neutral/polygon/document_texture.hpp"
+#include "quader/modeling/neutral/polygon/document_topology.hpp"
 #include "scene/scene_bounds.hpp"
 #include "scene/scene_document.hpp"
+#include "scene/scene_texture_mapping.hpp"
 #include "scene/scene_transform_pivot.hpp"
 #include "scene/scene_transform.hpp"
 
@@ -124,6 +129,8 @@ struct PivotMeshEdit {
     MeshComponent before_component;
     MeshAsset before_asset;
     MeshAsset after_asset;
+    std::optional<TextureMappingComponent> before_texture_mapping;
+    std::optional<TextureMappingComponent> after_texture_mapping;
 };
 
 /**
@@ -143,13 +150,66 @@ struct PivotRebaseRequest {
   std::size_t hierarchy_depth = 0u;
 };
 
-void offset_mesh_vertices(MeshAsset &mesh, QVec3 local_delta) {
+QVec2 pivot_texture_correction_delta(
+    QVec3 normal, const std::array<float, 4> &carrier, QVec3 local_delta,
+    const quader_poly::Transform3 &mapping_before,
+    const quader_poly::Transform3 &mapping_after) {
+  // Conjugating the placement correction also translates its sampling frame.
+  // The two normal-dependent projection charts need not share the same axes,
+  // so preserve their offset difference in the base UVs, not face settings.
+  return quader_poly::evaluate_texture_mapping({}, {}, normal, carrier,
+                                               mapping_before) -
+         quader_poly::evaluate_texture_mapping({}, QVec3{} - local_delta, normal,
+                                               carrier, mapping_after);
+}
+
+void offset_mesh_vertices(MeshAsset &mesh, QVec3 local_delta,
+                          const PivotMeshEdit &edit) {
+  const bool correct_mapping = edit.before_texture_mapping.has_value();
+  const quader_poly::Transform3 mapping_before =
+      MeshProjectionService::texture_mapping_transform(
+          correct_mapping ? edit.before_texture_mapping->sampling_from_local
+                          : QMat4{});
+  const quader_poly::Transform3 mapping_after =
+      MeshProjectionService::texture_mapping_transform(
+          correct_mapping ? edit.after_texture_mapping->sampling_from_local
+                          : QMat4{});
   for (MeshVertex &vertex : mesh.edit_geometry().vertices) {
+    if (correct_mapping) {
+      vertex.uv += pivot_texture_correction_delta(
+          vertex.uv_geometric_normal, vertex.uv_carrier, local_delta,
+          mapping_before, mapping_after);
+    }
     vertex.position = vertex.position - local_delta;
   }
   if (mesh.authored_polygon_document != nullptr) {
-    for (quader_poly::Vertex &vertex :
-         mesh.edit_authored_polygon_document().vertices) {
+    quader_poly::Document &document = mesh.edit_authored_polygon_document();
+    std::vector<QVec2> base_uv_deltas;
+    if (correct_mapping) {
+      base_uv_deltas.reserve(document.faces.size());
+      for (const quader_poly::Face &face : document.faces) {
+        const QVec3 normal = quader_poly::face_normal(document, face);
+        const QVec2 final_delta = pivot_texture_correction_delta(
+            normal, quader_poly::face_texture_carrier(document, face, normal),
+            local_delta, mapping_before, mapping_after);
+        quader_poly::FaceTextureTransform linear = face.texture_transform;
+        linear.shift_uv = {};
+        base_uv_deltas.push_back(
+            quader_poly::unapply_face_texture_transform(final_delta, linear));
+      }
+    }
+    // Origin rebasing changes coordinates without deforming geometry. Preserve
+    // generated BASE UVs before moving those coordinates; authored face
+    // transforms remain separate and are applied once by mesh compilation.
+    quader_poly::ensure_face_uvs(document);
+    if (correct_mapping) {
+      for (std::size_t index = 0; index < document.faces.size(); ++index) {
+        for (QVec2 &uv : document.faces[index].uvs) {
+          uv += base_uv_deltas[index];
+        }
+      }
+    }
+    for (quader_poly::Vertex &vertex : document.vertices) {
       vertex.position = vertex.position - local_delta;
     }
   }
@@ -234,7 +294,23 @@ prepare_mesh_edit(const SceneDocument &scene, const AssetRegistry &assets,
   edit.before_component = *component;
   edit.before_asset = *mesh;
   edit.after_asset = *mesh;
-  offset_mesh_vertices(edit.after_asset, local_delta);
+  if (const TextureMappingComponent *mapping = scene.texture_mapping(target)) {
+    edit.before_texture_mapping = *mapping;
+    QMat4 old_local_from_new;
+    old_local_from_new.values[12] = local_delta.x;
+    old_local_from_new.values[13] = local_delta.y;
+    old_local_from_new.values[14] = local_delta.z;
+    edit.after_texture_mapping = TextureMappingComponent{
+        .sampling_from_local = scene_transform_multiply(
+            inverse(old_local_from_new),
+            scene_transform_multiply(mapping->sampling_from_local,
+                                     old_local_from_new)),
+    };
+    if (!texture_mapping_is_valid(*edit.after_texture_mapping)) {
+      return std::string("Pivot target texture mapping would become invalid.");
+    }
+  }
+  offset_mesh_vertices(edit.after_asset, local_delta, edit);
   edit.clone_on_write =
       mesh_references.reference_count(component->mesh) > 1u;
   edit.after_mesh = edit.clone_on_write ? kInvalidAssetId : component->mesh;
@@ -348,7 +424,7 @@ make_rebase_plan(const SceneDocument &scene, const AssetRegistry &assets,
   return plan;
 }
 
-void apply_transforms_before(SceneDocument &scene,
+bool apply_transforms_before(SceneDocument &scene,
                              const PivotRebasePlan &plan) {
   std::vector<SceneTransformAssignment> assignments;
   assignments.reserve(plan.transforms.size());
@@ -358,10 +434,15 @@ void apply_transforms_before(SceneDocument &scene,
         .transform = edit.before,
     });
   }
-  scene.set_transforms(assignments);
+  std::vector<SceneTextureMappingAssignment> mappings;
+  if (plan.mesh.before_texture_mapping.has_value()) {
+    mappings.push_back({.entity = plan.mesh.entity,
+                        .mapping = plan.mesh.before_texture_mapping});
+  }
+  return scene.set_transforms_and_texture_mappings(assignments, mappings);
 }
 
-void apply_transforms_after(SceneDocument &scene,
+bool apply_transforms_after(SceneDocument &scene,
                             const PivotRebasePlan &plan) {
   std::vector<SceneTransformAssignment> assignments;
   assignments.reserve(plan.transforms.size());
@@ -371,7 +452,12 @@ void apply_transforms_after(SceneDocument &scene,
         .transform = edit.after,
     });
   }
-  scene.set_transforms(assignments);
+  std::vector<SceneTextureMappingAssignment> mappings;
+  if (plan.mesh.after_texture_mapping.has_value()) {
+    mappings.push_back({.entity = plan.mesh.entity,
+                        .mapping = plan.mesh.after_texture_mapping});
+  }
+  return scene.set_transforms_and_texture_mappings(assignments, mappings);
 }
 
 bool apply_mesh_before(SceneDocument &scene, AssetRegistry &assets,
@@ -424,7 +510,10 @@ bool apply_plan_before(SceneDocument &scene, AssetRegistry &assets,
   if (!apply_mesh_before(scene, assets, plan)) {
     return false;
   }
-  apply_transforms_before(scene, plan);
+  if (!apply_transforms_before(scene, plan)) {
+    (void)apply_mesh_after(scene, assets, plan);
+    return false;
+  }
   return true;
 }
 
@@ -433,7 +522,10 @@ bool apply_plan_after(SceneDocument &scene, AssetRegistry &assets,
   if (!apply_mesh_after(scene, assets, plan)) {
     return false;
   }
-  apply_transforms_after(scene, plan);
+  if (!apply_transforms_after(scene, plan)) {
+    (void)apply_mesh_before(scene, assets, plan);
+    return false;
+  }
   return true;
 }
 

@@ -12,12 +12,15 @@
 #include "editor/history/modeling_memento_command.hpp"
 #include "editor/instances/instance_edit_context.hpp"
 #include "editor/modeling/services/modeling_session_service.hpp"
+#include "editor/projection/mesh_projection_service.hpp"
 #include "editor/selection/scene_selection_application.hpp"
 #include "scene/scene_bounds.hpp"
 #include "scene/scene_entity_naming.hpp"
 #include "scene/scene_transform.hpp"
+#include "scene/scene_texture_mapping.hpp"
 
 #include <algorithm>
+#include <exception>
 #include <memory>
 #include <optional>
 #include <span>
@@ -66,6 +69,13 @@ struct MemberPlacement final {
   EntityId entity = kInvalidEntityId;
   DocumentEntityPlacement before;
   DocumentEntityPlacement after;
+};
+
+/// Identifies a mesh within a member hierarchy before its occurrence is removed.
+struct FlattenTextureMapping final {
+  std::size_t member_index = 0;
+  std::size_t descendant_index = 0;
+  QMat4 sampling_from_local;
 };
 
 inline CommandResult restore_placements(
@@ -501,7 +511,7 @@ public:
       return from_status(failure);
     };
 
-    bool duplicated_modeling = false;
+    bool changed_modeling = false;
     bool definitions_are_common = true;
     EntityId common_definition = kInvalidEntityId;
     std::vector<EntityId> flattened_entities;
@@ -525,6 +535,12 @@ public:
 
       const std::vector<EntityId> remaining =
           scene_.instance_occurrences_for_definition(definition);
+      const auto texture_mappings =
+          capture_flatten_texture_mappings(occurrence, definition);
+      if (!texture_mappings.has_value()) {
+        return rollback(command_invalid_result(
+            "Instance texture mapping could not be resolved."));
+      }
       const bool adopts_canonical_members = remaining.size() == 1u;
       SceneInstanceMutationResult flattened =
           adopts_canonical_members
@@ -536,6 +552,11 @@ public:
                                       .changed = flattened.changed,
                                       .message = flattened.message});
       }
+      const ModelingCommandResult baked =
+          bake_flatten_texture_mappings(flattened.entities, *texture_mappings);
+      if (!baked.ok) {
+        return rollback(modeling_memento_command_result(baked));
+      }
       if (occurrence_name.has_value() && flattened.entities.size() == 1u) {
         const CommandResult renamed = document_commands_.rename_entity(
             flattened.entities.front(), *occurrence_name);
@@ -543,7 +564,8 @@ public:
           return rollback(renamed);
         }
       }
-      duplicated_modeling = duplicated_modeling || !adopts_canonical_members;
+      changed_modeling = changed_modeling || !adopts_canonical_members ||
+                         baked.changed;
       flattened_entities.insert(flattened_entities.end(),
                                  flattened.entities.begin(),
                                 flattened.entities.end());
@@ -561,7 +583,7 @@ public:
     }
     modeling_.project_object_selection_from_scene(true);
 
-    if (duplicated_modeling) {
+    if (changed_modeling) {
       const CommandResult recorded =
           transaction.record_executed_before_existing(
               std::make_unique<RecordedModelingMementoCommand>(
@@ -985,6 +1007,88 @@ private:
     }
     return scene_transform_multiply(*inverse_definition,
                                     scene_.world_transform_matrix(member));
+  }
+
+  [[nodiscard]] std::optional<
+      std::vector<scene_instance_detail::FlattenTextureMapping>>
+  capture_flatten_texture_mappings(EntityId occurrence,
+                                    EntityId definition) const {
+    std::vector<scene_instance_detail::FlattenTextureMapping> mappings;
+    const std::vector<EntityId> members = scene_.children(definition);
+    for (std::size_t member_index = 0; member_index < members.size();
+         ++member_index) {
+      const std::vector<EntityId> hierarchy =
+          scene_.descendants(members[member_index], true);
+      for (std::size_t index = 0; index < hierarchy.size(); ++index) {
+        const EntityId entity = hierarchy[index];
+        if (scene_.mesh(entity) == nullptr) {
+          continue;
+        }
+        const auto mapping =
+            effective_texture_sampling_from_local(scene_, entity, occurrence);
+        if (!mapping.has_value()) {
+          return std::nullopt;
+        }
+        if (mapping->values != QMat4{}.values ||
+            scene_.texture_mapping(entity) != nullptr) {
+          mappings.push_back({.member_index = member_index,
+                              .descendant_index = index,
+                              .sampling_from_local = *mapping});
+        }
+      }
+    }
+    return mappings;
+  }
+
+  ModelingCommandResult bake_flatten_texture_mappings(
+      std::span<const EntityId> members,
+      std::span<const scene_instance_detail::FlattenTextureMapping> mappings) {
+    bool changed = false;
+    for (const auto &mapping : mappings) {
+      if (mapping.member_index >= members.size()) {
+        return {.ok = false, .message = "Flattened texture member is missing."};
+      }
+      const std::vector<EntityId> hierarchy =
+          scene_.descendants(members[mapping.member_index], true);
+      if (mapping.descendant_index >= hierarchy.size()) {
+        return {.ok = false,
+                .message = "Flattened texture hierarchy does not match."};
+      }
+      const EntityId entity = hierarchy[mapping.descendant_index];
+      const ModelingObjectComponent *object = scene_.modeling_object(entity);
+      if (object == nullptr) {
+        return {.ok = false,
+                .message = "Flattened texture mesh is not editable."};
+      }
+      const int object_id = object->object_id;
+      const std::optional<MeshAsset> mesh = modeling_.compile_object_mesh(object_id);
+      if (!mesh.has_value() || !mesh->authored_polygon_document) {
+        return {.ok = false,
+                .message = "Flattened texture topology is unavailable."};
+      }
+      quader_poly::Document document = *mesh->authored_polygon_document;
+      try {
+        if (MeshProjectionService::bake_polygon_texture_mapping(
+                document, mapping.sampling_from_local)) {
+          const ModelingCommandResult replaced =
+              modeling_.replace_mesh_document(object_id, std::move(document));
+          if (!replaced.ok) {
+            return replaced;
+          }
+          changed = changed || replaced.changed;
+        }
+      } catch (const std::exception &error) {
+        return {.ok = false, .message = error.what()};
+      }
+      if (scene_.texture_mapping(entity) != nullptr) {
+        if (!scene_.clear_texture_mapping(entity)) {
+          return {.ok = false,
+                  .message = "Flattened texture placement could not be cleared."};
+        }
+        changed = true;
+      }
+    }
+    return {.ok = true, .changed = changed};
   }
 
   [[nodiscard]] std::optional<scene_instance_detail::MemberPlacement>

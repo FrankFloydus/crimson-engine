@@ -5,6 +5,8 @@
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
 #include "assets/mesh_asset.hpp"
+#include "editor/projection/mesh_projection_service.hpp"
+#include "io/mesh/obj_writer.hpp"
 #include "io/qdr/qdr_binary_container.hpp"
 #include "io/qdr/qdr_document_reader.hpp"
 #include "io/qdr/qdr_document_writer.hpp"
@@ -127,6 +129,33 @@ copy_chunks(const quader_io::QdrBinaryContainerReadResult &container) {
     });
   }
   return chunks;
+}
+
+// Erase an appended optional field while retaining the legacy packed layout.
+// FlatBuffers permits unreachable bytes, so this simulates an older producer
+// without depending on build-generated schema headers in the test target.
+void erase_flatbuffer_root_field(std::vector<std::byte> &bytes,
+                                 std::size_t field_index) {
+  ASSERT_GE(bytes.size(), sizeof(std::uint32_t));
+  std::uint32_t root_offset = 0;
+  std::memcpy(&root_offset, bytes.data(), sizeof(root_offset));
+  ASSERT_LE(root_offset + sizeof(std::int32_t), bytes.size());
+  std::int32_t vtable_distance = 0;
+  std::memcpy(&vtable_distance, bytes.data() + root_offset,
+              sizeof(vtable_distance));
+  const std::int64_t vtable_offset =
+      static_cast<std::int64_t>(root_offset) - vtable_distance;
+  ASSERT_GE(vtable_offset, 0);
+  const std::size_t field_offset = 4u + field_index * sizeof(std::uint16_t);
+  ASSERT_LE(static_cast<std::size_t>(vtable_offset) + field_offset +
+                sizeof(std::uint16_t),
+            bytes.size());
+  std::uint16_t vtable_size = 0;
+  std::memcpy(&vtable_size, bytes.data() + vtable_offset, sizeof(vtable_size));
+  ASSERT_GE(vtable_size, field_offset + sizeof(std::uint16_t));
+  const std::uint16_t absent = 0;
+  std::memcpy(bytes.data() + vtable_offset + field_offset, &absent,
+              sizeof(absent));
 }
 
 [[nodiscard]] quader_io::QdrBinaryContainerReadResult
@@ -254,7 +283,7 @@ TEST(QdrBinarySceneCodecTests,
                                  quader_io::QdrBinaryChunkType::SceneMetadata);
       });
   ASSERT_NE(metadata, parsed.chunks.end());
-  EXPECT_EQ(metadata->schema_version, 6u);
+  EXPECT_EQ(metadata->schema_version, 7u);
 
   const QdrProjectReadResult read =
       QdrDocumentReader::deserialize_project_document(
@@ -454,6 +483,15 @@ TEST(QdrBinarySceneCodecTests,
   ASSERT_TRUE(scene.set_instance_occurrence(
       occurrence, InstanceOccurrenceComponent{.definition = definition}));
 
+  TextureMappingComponent member_mapping;
+  member_mapping.sampling_from_local.values[0] = 2.0f;
+  member_mapping.sampling_from_local.values[13] = -0.25f;
+  TextureMappingComponent occurrence_mapping;
+  occurrence_mapping.sampling_from_local.values[12] = 3.0f;
+  ASSERT_TRUE(scene.set_texture_mapping(member, member_mapping));
+  ASSERT_TRUE(scene.set_texture_mapping(occurrence, occurrence_mapping));
+  ASSERT_TRUE(scene.set_texture_mapping(100u, member_mapping));
+
   const QdrProjectReadResult read =
       QdrDocumentReader::deserialize_project_document(
           QdrDocumentWriter::serialize_project_document_bytes(
@@ -471,6 +509,190 @@ TEST(QdrBinarySceneCodecTests,
   ASSERT_NE(read.document.scene().transform(occurrence), nullptr);
   EXPECT_FLOAT_EQ(
       read.document.scene().transform(occurrence)->position.x, 3.0f);
+  for (const EntityId entity : std::array<EntityId, 2>{100u, member}) {
+    ASSERT_NE(read.document.scene().texture_mapping(entity), nullptr);
+    EXPECT_EQ(*read.document.scene().texture_mapping(entity), member_mapping);
+  }
+  ASSERT_NE(read.document.scene().texture_mapping(occurrence), nullptr);
+  EXPECT_EQ(*read.document.scene().texture_mapping(occurrence),
+            occurrence_mapping);
+}
+
+TEST(QdrBinarySceneCodecTests, SchemaSixIgnoresAppendedTextureMapping) {
+  SceneContentDocument document = simple_scene();
+  TextureMappingComponent mapping;
+  mapping.sampling_from_local.values[0] = 2.0f;
+  ASSERT_TRUE(document.scene().set_texture_mapping(100u, mapping));
+  const auto parsed = parse_written_scene(document);
+  ASSERT_TRUE(parsed.ok) << parsed.message;
+  auto chunks = copy_chunks(parsed);
+  const auto metadata = std::ranges::find_if(chunks, [](const auto &chunk) {
+    return chunk.type == quader_io::QdrBinaryChunkType::SceneMetadata;
+  });
+  ASSERT_NE(metadata, chunks.end());
+  metadata->schema_version = 6u;
+  const QdrProjectReadResult read =
+      QdrDocumentReader::deserialize_project_document(
+          quader_io::build_qdr_binary_container(test_uuid(), std::move(chunks)));
+  ASSERT_TRUE(read.ok) << read.message;
+  EXPECT_EQ(read.document.scene().texture_mapping(100u), nullptr);
+}
+
+TEST(QdrBinarySceneCodecTests, RejectsInvalidTextureMappingSnapshots) {
+  for (const float invalid : {0.0f, std::numeric_limits<float>::infinity()}) {
+    auto snapshot = required_write_snapshot(simple_scene());
+    const auto entity = std::ranges::find_if(snapshot.entities, [](const auto &v) {
+      return v.id == 100u;
+    });
+    ASSERT_NE(entity, snapshot.entities.end());
+    TextureMappingComponent mapping;
+    mapping.sampling_from_local.values[0] = invalid;
+    entity->texture_mapping = mapping;
+    EXPECT_THROW((void)QdrDocumentWriter::serialize_project_document_bytes(
+                     snapshot, test_uuid()),
+                 std::runtime_error);
+  }
+}
+
+TEST(QdrBinarySceneCodecTests, RoundTripPreservesFaceSettingsAndCompiledCarriers) {
+  SceneContentDocument document = simple_scene();
+  MeshAsset authored = authored_triangle_mesh("Textured Triangle", 0.0f);
+  quader_poly::Document topology = *authored.authored_polygon_document;
+  topology.faces.front().texture_transform = {
+      .scale = {2.0f, -0.5f},
+      .shift_uv = {0.25f, -0.125f},
+      .rotation_degrees = 30.0f,
+  };
+  authored = MeshProjectionService::compile_polygon_document_mesh(topology);
+  authored.replace_authored_polygon_document(topology);
+  ASSERT_TRUE(document.assets().replace_mesh(10u, authored));
+
+  MeshAsset compiled = triangle_mesh("Compiled Texture Carrier");
+  for (MeshVertex &vertex : compiled.edit_geometry().vertices) {
+    vertex.uv_carrier = {2.0f, -1.0f, 0.25f, 3.0f};
+    vertex.uv_geometric_normal = {0.0f, 0.0f, 1.0f};
+  }
+  ASSERT_EQ(document.assets().add_mesh(11u, compiled), 11u);
+  const QdrProjectReadResult read =
+      QdrDocumentReader::deserialize_project_document(
+          QdrDocumentWriter::serialize_project_document_bytes(
+              required_write_snapshot(document), test_uuid()));
+  ASSERT_TRUE(read.ok) << read.message;
+  const MeshAsset *loaded = read.document.assets().mesh(10u);
+  ASSERT_NE(loaded, nullptr);
+  ASSERT_TRUE(loaded->authored_polygon_document);
+  const auto &settings =
+      loaded->authored_polygon_document->faces.front().texture_transform;
+  EXPECT_FLOAT_EQ(settings.scale.x, 2.0f);
+  EXPECT_FLOAT_EQ(settings.scale.y, -0.5f);
+  EXPECT_FLOAT_EQ(settings.shift_uv.x, 0.25f);
+  EXPECT_FLOAT_EQ(settings.shift_uv.y, -0.125f);
+  EXPECT_FLOAT_EQ(settings.rotation_degrees, 30.0f);
+  ASSERT_EQ(loaded->geometry().vertices.size(), authored.geometry().vertices.size());
+  for (std::size_t i = 0; i < loaded->geometry().vertices.size(); ++i) {
+    EXPECT_EQ(loaded->geometry().vertices[i].uv_carrier,
+              authored.geometry().vertices[i].uv_carrier);
+    EXPECT_FLOAT_EQ(loaded->geometry().vertices[i].uv.x,
+                    authored.geometry().vertices[i].uv.x);
+    EXPECT_FLOAT_EQ(loaded->geometry().vertices[i].uv.y,
+                    authored.geometry().vertices[i].uv.y);
+  }
+  loaded = read.document.assets().mesh(11u);
+  ASSERT_NE(loaded, nullptr);
+  for (const MeshVertex &vertex : loaded->geometry().vertices) {
+    EXPECT_EQ(vertex.uv_carrier, (std::array<float, 4>{2.0f, -1.0f, 0.25f, 3.0f}));
+    EXPECT_FLOAT_EQ(vertex.uv_geometric_normal.z, 1.0f);
+  }
+}
+
+TEST(QdrBinarySceneCodecTests,
+     LegacyCompiledMeshRebuildsCarriersForUnlockedSamplingAndObjExport) {
+  const auto parsed = parse_written_scene(simple_scene());
+  ASSERT_TRUE(parsed.ok) << parsed.message;
+  auto chunks = copy_chunks(parsed);
+  for (auto &chunk : chunks) {
+    if (chunk.type == quader_io::QdrBinaryChunkType::SceneMetadata) {
+      chunk.schema_version = 6u;
+    } else if (chunk.type == quader_io::QdrBinaryChunkType::Geometry) {
+      // GeometryPayload.mesh_texture_mapping is the appended field 16.
+      erase_flatbuffer_root_field(chunk.bytes, 16u);
+      chunk.content_hash = quader_io::qdr_binary_content_hash(chunk.bytes);
+    }
+  }
+  const auto read = QdrDocumentReader::deserialize_project_document(
+      quader_io::build_qdr_binary_container(test_uuid(), std::move(chunks)));
+  ASSERT_TRUE(read.ok) << read.message;
+  const MeshAsset *loaded = read.document.assets().mesh(10u);
+  ASSERT_NE(loaded, nullptr);
+  EXPECT_FALSE(loaded->has_authored_polygon_document);
+  ASSERT_EQ(loaded->geometry().vertices.size(), 3u);
+  for (const MeshVertex &vertex : loaded->geometry().vertices) {
+    EXPECT_NE(vertex.uv_carrier, (std::array<float, 4>{}));
+    EXPECT_FLOAT_EQ(vertex.uv_geometric_normal.z, 1.0f);
+  }
+  EXPECT_FLOAT_EQ(loaded->geometry().vertices[1].uv.x, 1.0f);
+
+  MeshAsset exported = *loaded;
+  QMat4 sampling;
+  sampling.values[0] = 2.0f;
+  sampling.values[5] = 3.0f;
+  sampling.values[12] = 1.0f;
+  MeshProjectionService::apply_mesh_texture_mapping(exported, sampling);
+  const std::string obj = ObjMeshWriter::serialize_mesh(exported, "Legacy");
+  EXPECT_NE(obj.find("\nvt 1 0\n"), std::string::npos);
+  EXPECT_NE(obj.find("\nvt 3 0\n"), std::string::npos);
+  EXPECT_NE(obj.find("\nvt 1 3\n"), std::string::npos);
+  EXPECT_NE(obj.find("\nv 1 0 0\n"), std::string::npos);
+  EXPECT_FLOAT_EQ(loaded->geometry().vertices[1].uv.x, 1.0f);
+}
+
+TEST(QdrBinarySceneCodecTests,
+     CompiledChartReconstructionSplitsConflictingCornersWithoutChangingShading) {
+  MeshAsset mesh = triangle_mesh("Shared corners");
+  auto &geometry = mesh.edit_geometry();
+  geometry.vertices.push_back({.position = {0.0f, 0.0f, 1.0f},
+                               .normal = {0.0f, 0.0f, 1.0f},
+                               .uv = {1.0f, 0.0f}});
+  geometry.indices = {0u, 1u, 2u, 0u, 2u, 3u};
+  geometry.primitives.front().index_count = 6u;
+  ASSERT_TRUE(MeshProjectionService::initialize_compiled_texture_mapping(mesh));
+  const auto &projected = mesh.geometry();
+  ASSERT_EQ(projected.indices.size(), 6u);
+  EXPECT_NE(projected.indices[0], projected.indices[3]);
+  EXPECT_NE(projected.indices[2], projected.indices[4]);
+  EXPECT_FLOAT_EQ(projected.vertices[projected.indices[0]].uv_geometric_normal.z,
+                  1.0f);
+  EXPECT_FLOAT_EQ(projected.vertices[projected.indices[3]].uv_geometric_normal.x,
+                  1.0f);
+  for (const MeshVertex &vertex : projected.vertices) {
+    EXPECT_FLOAT_EQ(vertex.normal.z, 1.0f);
+  }
+  EXPECT_FALSE(mesh.has_authored_polygon_document);
+}
+
+TEST(QdrBinarySceneCodecTests,
+     CompiledChartReconstructionPreservesEmptyAndDegeneratePayloads) {
+  MeshAsset empty;
+  ASSERT_TRUE(MeshProjectionService::initialize_compiled_texture_mapping(empty));
+  EXPECT_TRUE(empty.geometry().vertices.empty());
+  EXPECT_TRUE(empty.geometry().indices.empty());
+
+  MeshAsset mesh = triangle_mesh("Degenerate");
+  auto &geometry = mesh.edit_geometry();
+  for (MeshVertex &vertex : geometry.vertices) {
+    vertex.position = {};
+  }
+  geometry.indices = {0u, 1u, 2u, 0u, 1u};
+  geometry.primitives.front().index_count = 5u;
+  const auto indices = geometry.indices;
+  const auto primitives = geometry.primitives;
+  ASSERT_TRUE(MeshProjectionService::initialize_compiled_texture_mapping(mesh));
+  EXPECT_EQ(mesh.geometry().indices, indices);
+  EXPECT_EQ(mesh.geometry().primitives, primitives);
+  for (const MeshVertex &vertex : mesh.geometry().vertices) {
+    EXPECT_EQ(vertex.uv_carrier, (std::array<float, 4>{}));
+    EXPECT_FLOAT_EQ(vertex.normal.z, 1.0f);
+  }
 }
 
 TEST(QdrBinarySceneCodecTests, ReadsSchemasOneThroughThreeWithoutLayers) {
@@ -1022,7 +1244,7 @@ TEST(QdrBinarySceneCodecTests, RejectsUnsupportedMetadataSchema) {
   ASSERT_TRUE(parsed.ok) << parsed.message;
   std::vector<quader_io::QdrBinaryChunkInput> chunks = copy_chunks(parsed);
   ASSERT_FALSE(chunks.empty());
-  chunks.front().schema_version = 7u;
+  chunks.front().schema_version = 8u;
 
   const QdrProjectReadResult read =
       QdrDocumentReader::deserialize_project_document(

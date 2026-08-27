@@ -14,6 +14,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -56,6 +57,15 @@ struct EntityRecord {
 struct SceneTransformAssignment {
   EntityId entity = kInvalidEntityId;
   TransformComponent transform;
+};
+
+/**
+ * Assigns an occurrence's exact optional texture mapping during an atomic update.
+ * An absent mapping removes the component and restores identity sampling.
+ */
+struct SceneTextureMappingAssignment {
+  EntityId entity = kInvalidEntityId;
+  std::optional<TextureMappingComponent> mapping;
 };
 
 /**
@@ -138,6 +148,7 @@ private:
   std::uint64_t hierarchy_presentation_revision_ = 0;
   std::uint64_t visibility_revision_ = 0;
   std::uint64_t transform_revision_ = 0;
+  std::uint64_t texture_mapping_revision_ = 0;
   std::uint64_t mesh_binding_revision_ = 0;
   std::uint64_t material_binding_revision_ = 0;
   std::uint64_t render_component_revision_ = 0;
@@ -224,6 +235,15 @@ public:
     bool notify_mesh_payloads_changed(std::span<const EntityId> ids);
     bool set_material(EntityId id, MaterialComponent material);
     bool clear_material(EntityId id);
+    bool set_texture_mapping(EntityId id, TextureMappingComponent mapping);
+    bool clear_texture_mapping(EntityId id);
+    /**
+     * Validates and publishes placement and texture compensation together.
+     * This is a data assignment, not a texture-lock policy hook.
+     */
+    bool set_transforms_and_texture_mappings(
+        std::span<const SceneTransformAssignment> transforms,
+        std::span<const SceneTextureMappingAssignment> mappings);
     bool set_light(EntityId id, LightComponent light);
     bool set_scene_settings(EntityId id, SceneSettingsComponent settings);
 
@@ -261,6 +281,7 @@ public:
     const InstanceOccurrenceComponent *instance_occurrence(EntityId id) const;
     const MeshComponent* mesh(EntityId id) const;
     const MaterialComponent* material(EntityId id) const;
+    const TextureMappingComponent *texture_mapping(EntityId id) const;
     const LightComponent* light(EntityId id) const;
     const SceneSettingsComponent *scene_settings(EntityId id) const;
     const SceneLayerMembershipComponent *layer_membership(EntityId id) const;
@@ -336,6 +357,9 @@ public:
     }
     std::uint64_t visibility_revision() const { return visibility_revision_; }
     std::uint64_t transform_revision() const { return transform_revision_; }
+    std::uint64_t texture_mapping_revision() const {
+      return texture_mapping_revision_;
+    }
     std::uint64_t mesh_binding_revision() const {
       return mesh_binding_revision_;
     }
@@ -389,6 +413,7 @@ private:
   std::uint64_t hierarchy_presentation_revision_ = 0;
   std::uint64_t visibility_revision_ = 0;
   std::uint64_t transform_revision_ = 0;
+  std::uint64_t texture_mapping_revision_ = 0;
   std::uint64_t mesh_binding_revision_ = 0;
   std::uint64_t material_binding_revision_ = 0;
   std::uint64_t render_component_revision_ = 0;

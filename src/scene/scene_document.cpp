@@ -7,6 +7,7 @@
 #include "scene/scene_document.hpp"
 
 #include "scene/scene_transform.hpp"
+#include "scene/scene_texture_mapping.hpp"
 
 #include <stduuid/uuid.h>
 
@@ -47,6 +48,7 @@ SceneProjectionCheckpoint SceneDocument::capture_projection_checkpoint() const {
       hierarchy_presentation_revision_;
   checkpoint.visibility_revision_ = visibility_revision_;
   checkpoint.transform_revision_ = transform_revision_;
+  checkpoint.texture_mapping_revision_ = texture_mapping_revision_;
   checkpoint.mesh_binding_revision_ = mesh_binding_revision_;
   checkpoint.material_binding_revision_ = material_binding_revision_;
   checkpoint.render_component_revision_ = render_component_revision_;
@@ -82,6 +84,7 @@ bool SceneDocument::restore_projection_checkpoint(
       checkpoint.hierarchy_presentation_revision_;
   visibility_revision_ = checkpoint.visibility_revision_;
   transform_revision_ = checkpoint.transform_revision_;
+  texture_mapping_revision_ = checkpoint.texture_mapping_revision_;
   mesh_binding_revision_ = checkpoint.mesh_binding_revision_;
   material_binding_revision_ = checkpoint.material_binding_revision_;
   render_component_revision_ = checkpoint.render_component_revision_;
@@ -566,6 +569,10 @@ bool SceneDocument::set_editor_object_id(EntityId id,
 }
 
 bool SceneDocument::set_entity_kind(EntityId id, EntityKind kind) {
+  if (texture_mapping(id) != nullptr && kind != EntityKind::Mesh &&
+      kind != EntityKind::Instance) {
+    return false;
+  }
   if (instance_occurrence(id) != nullptr && kind != EntityKind::Instance) {
     return false;
   }
@@ -1017,13 +1024,87 @@ bool SceneDocument::set_modeling_object(EntityId id,
   return true;
 }
 
+bool SceneDocument::set_texture_mapping(EntityId id,
+                                       TextureMappingComponent mapping) {
+  const SceneTextureMappingAssignment assignment{.entity = id,
+                                                .mapping = mapping};
+  return set_transforms_and_texture_mappings({}, {&assignment, 1u});
+}
+
+bool SceneDocument::clear_texture_mapping(EntityId id) {
+  const SceneTextureMappingAssignment assignment{.entity = id,
+                                                .mapping = std::nullopt};
+  return set_transforms_and_texture_mappings({}, {&assignment, 1u});
+}
+
+bool SceneDocument::set_transforms_and_texture_mappings(
+    std::span<const SceneTransformAssignment> transforms,
+    std::span<const SceneTextureMappingAssignment> mappings) {
+  // Validate the entire publication before touching the registry or revisions.
+  for (const SceneTransformAssignment &assignment : transforms) {
+    if (!exists(assignment.entity) ||
+        !scene_transform_is_finite(assignment.transform)) {
+      return false;
+    }
+  }
+  for (const SceneTextureMappingAssignment &assignment : mappings) {
+    if (!exists(assignment.entity) ||
+        (assignment.mapping.has_value() &&
+         ((kind(assignment.entity) != EntityKind::Mesh &&
+           instance_occurrence(assignment.entity) == nullptr) ||
+          !texture_mapping_is_valid(*assignment.mapping)))) {
+      return false;
+    }
+  }
+
+  bool transforms_changed = false;
+  bool mappings_changed = false;
+  for (const SceneTransformAssignment &assignment : transforms) {
+    const entt::entity entity = require_entity(assignment.entity);
+    const TransformComponent *current =
+        registry_.try_get<TransformComponent>(entity);
+    if (current != nullptr && same_transform(*current, assignment.transform)) {
+      continue;
+    }
+    registry_.emplace_or_replace<TransformComponent>(entity,
+                                                     assignment.transform);
+    transforms_changed = true;
+  }
+  for (const SceneTextureMappingAssignment &assignment : mappings) {
+    const entt::entity entity = require_entity(assignment.entity);
+    const TextureMappingComponent *current =
+        registry_.try_get<TextureMappingComponent>(entity);
+    if (!assignment.mapping.has_value()) {
+      if (current != nullptr) {
+        registry_.remove<TextureMappingComponent>(entity);
+        mappings_changed = true;
+      }
+    } else if (current == nullptr || *current != *assignment.mapping) {
+      registry_.emplace_or_replace<TextureMappingComponent>(entity,
+                                                            *assignment.mapping);
+      mappings_changed = true;
+    }
+  }
+  if (transforms_changed) {
+    ++transform_revision_;
+  }
+  if (mappings_changed) {
+    ++texture_mapping_revision_;
+  }
+  if (transforms_changed || mappings_changed) {
+    mark_dirty();
+  }
+  return true;
+}
+
 bool SceneDocument::set_instance_definition(EntityId id) {
   const entt::entity entity = require_entity(id);
   if (entity == entt::null || is_scene_root(id) ||
       instance_occurrence(id) != nullptr ||
       containing_instance_definition(parent(id)) != kInvalidEntityId ||
       mesh(id) != nullptr || modeling_object(id) != nullptr ||
-      material(id) != nullptr || light(id) != nullptr) {
+      material(id) != nullptr || light(id) != nullptr ||
+      texture_mapping(id) != nullptr) {
     return false;
   }
   for (const EntityId child : children(id)) {
@@ -1103,6 +1184,9 @@ bool SceneDocument::clear_instance_occurrence(EntityId id) {
     return false;
   }
   registry_.remove<InstanceOccurrenceComponent>(entity);
+  if (registry_.remove<TextureMappingComponent>(entity) > 0u) {
+    ++texture_mapping_revision_;
+  }
   registry_.emplace_or_replace<EntityKindComponent>(
       entity, EntityKindComponent{.kind = EntityKind::Generic});
   ++hierarchy_presentation_revision_;
@@ -1776,6 +1860,14 @@ const MaterialComponent* SceneDocument::material(EntityId id) const {
                               : registry_.try_get<MaterialComponent>(entity);
 }
 
+const TextureMappingComponent *
+SceneDocument::texture_mapping(EntityId id) const {
+  const entt::entity entity = require_entity(id);
+  return entity == entt::null
+             ? nullptr
+             : registry_.try_get<TextureMappingComponent>(entity);
+}
+
 const LightComponent* SceneDocument::light(EntityId id) const {
   const entt::entity entity = require_entity(id);
   return entity == entt::null ? nullptr
@@ -2246,6 +2338,8 @@ void SceneDocument::advance_revision_for_replacement(
   selection_revision_ = std::max(selection_revision_ + 1u, revision_);
   visibility_revision_ = std::max(visibility_revision_ + 1u, revision_);
   transform_revision_ = std::max(transform_revision_ + 1u, revision_);
+  texture_mapping_revision_ =
+      std::max(texture_mapping_revision_ + 1u, revision_);
   mesh_binding_revision_ = std::max(mesh_binding_revision_ + 1u, revision_);
   material_binding_revision_ =
       std::max(material_binding_revision_ + 1u, revision_);

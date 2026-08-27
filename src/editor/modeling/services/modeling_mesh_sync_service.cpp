@@ -107,6 +107,10 @@ projected_mesh_signature(const quader_editor_core::PolygonObject &object) {
     hash = mix_projected_mesh_signature(hash, face.material_slot);
     hash = mix_projected_mesh_signature(hash,
                                         static_cast<int>(face.normal_shading));
+    hash = mix_projected_mesh_signature(hash, face.texture_transform.scale);
+    hash = mix_projected_mesh_signature(hash, face.texture_transform.shift_uv);
+    hash = mix_projected_mesh_signature(
+        hash, face.texture_transform.rotation_degrees);
     for (const quader_poly::ElementId vertex_id : face.vertices) {
       hash = mix_projected_mesh_signature(hash, vertex_id);
     }
@@ -441,6 +445,11 @@ void apply_durable_scene_identity_to_entity(
   {
     QDR_PROFILE_SCOPE("Modeling mesh sync apply identity transform");
     scene.set_transform(entity, identity.transform);
+  }
+  if (identity.texture_mapping.has_value()) {
+    (void)scene.set_texture_mapping(entity, *identity.texture_mapping);
+  } else {
+    (void)scene.clear_texture_mapping(entity);
   }
   const EntityId parent =
       identity.parent != kInvalidEntityId && scene.exists(identity.parent)

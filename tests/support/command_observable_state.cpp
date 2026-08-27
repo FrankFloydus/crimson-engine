@@ -89,6 +89,23 @@ std::string vec3_text(QVec3 value) {
          float_bits(value.z) + ")";
 }
 
+std::string texture_chart_text(const QuaderMeshVertex &vertex) {
+  std::string result = "carrier:(";
+  for (std::size_t index = 0; index < vertex.uv_carrier.size(); ++index) {
+    if (index != 0u) {
+      result += ',';
+    }
+    result += float_bits(vertex.uv_carrier[index]);
+  }
+  return result + "),geometric_normal:" + vec3_text(vertex.uv_geometric_normal);
+}
+
+std::string face_texture_text(const QuaderMeshFaceTexture &face) {
+  return "face:" + std::to_string(face.face) + ",scale:" + vec2_text(face.scale) +
+         ",shift_uv:" + vec2_text(face.shift_uv) +
+         ",rotation_degrees:" + float_bits(face.rotation_degrees);
+}
+
 std::string transform_text(const QuaderTransform &value) {
   return "position:" + vec3_text(value.position) + ",rotation:" +
          vec3_text(value.rotation_euler) + ",scale:" +
@@ -215,12 +232,17 @@ std::string mesh_content_key(const QuaderMeshAsset &mesh) {
   writer.line("stable_cpu_topology", bool_text(mesh.has_stable_cpu_topology));
   writer.line("authored_polygon_document",
               bool_text(mesh.has_authored_polygon_document));
+  for (std::size_t index = 0; index < mesh.face_textures.size(); ++index) {
+    writer.line("face_texture[" + std::to_string(index) + "]",
+                face_texture_text(mesh.face_textures[index]));
+  }
   for (std::size_t index = 0; index < mesh.vertices.size(); ++index) {
     const QuaderMeshVertex &vertex = mesh.vertices[index];
     writer.line("v[" + std::to_string(index) + "]",
                 "p:" + vec3_text(vertex.position) + ",n:" +
                     vec3_text(vertex.normal) + ",uv:" + vec2_text(vertex.uv) +
-                    ",rgba:" + fixed_hex(vertex.rgba));
+                    ",rgba:" + fixed_hex(vertex.rgba) + "," +
+                    texture_chart_text(vertex));
   }
   for (std::size_t index = 0; index < mesh.indices.size(); ++index) {
     writer.line("i[" + std::to_string(index) + "]",
@@ -763,6 +785,10 @@ std::string capture_scene(const CaptureData &data) {
     writer.line(prefix + ".kind", enum_text(entity->kind));
     writer.line(prefix + ".parent", data.entity_label(entity->parent));
     writer.line(prefix + ".transform", transform_text(entity->transform));
+    writer.line(prefix + ".texture_sampling_from_local",
+                entity->texture_sampling_from_local.has_value()
+                    ? matrix_text(*entity->texture_sampling_from_local)
+                    : "identity");
     writer.line(prefix + ".visible", bool_text(entity->visible));
     writer.line(prefix + ".selectable", bool_text(entity->selectable));
     writer.line(prefix + ".locked", bool_text(entity->locked));
@@ -858,6 +884,11 @@ std::string capture_scene(const CaptureData &data) {
 
 void write_mesh_geometry(CanonicalWriter &writer, std::string_view prefix,
                          const QuaderMeshAsset &mesh) {
+  for (std::size_t index = 0; index < mesh.face_textures.size(); ++index) {
+    writer.line(std::string(prefix) + ".face_texture[" +
+                    std::to_string(index) + "]",
+                face_texture_text(mesh.face_textures[index]));
+  }
   writer.line(std::string(prefix) + ".name", quote(mesh.name));
   writer.line(std::string(prefix) + ".stable_cpu_topology",
               bool_text(mesh.has_stable_cpu_topology));
@@ -875,7 +906,8 @@ void write_mesh_geometry(CanonicalWriter &writer, std::string_view prefix,
                     std::to_string(index) + "]",
                 "position:" + vec3_text(vertex.position) + ",normal:" +
                     vec3_text(vertex.normal) + ",uv:" + vec2_text(vertex.uv) +
-                    ",rgba:" + fixed_hex(vertex.rgba));
+                    ",rgba:" + fixed_hex(vertex.rgba) + "," +
+                    texture_chart_text(vertex));
   }
   for (std::size_t index = 0; index < mesh.indices.size(); ++index) {
     writer.line(std::string(prefix) + ".index[" + std::to_string(index) +
@@ -1461,6 +1493,10 @@ std::string capture_preferences(const CaptureData &data) {
               bool_text(preferences.snapping_enabled()));
   writer.line("preferences.backface_selection",
               bool_text(preferences.backface_selection_enabled()));
+  writer.line("preferences.texture_lock",
+              bool_text(preferences.texture_lock_enabled()));
+  writer.line("preferences.texture_lock_scale",
+              bool_text(preferences.texture_lock_scale_enabled()));
   writer.line("preferences.grid_visible",
               bool_text(preferences.grid_visible()));
   writer.line("preferences.gizmos_visible",

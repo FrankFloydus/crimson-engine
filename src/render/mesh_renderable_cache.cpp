@@ -143,15 +143,18 @@ void MeshRenderableCache::sync_mesh(const RenderSceneMeshRecord &mesh) {
         mesh.entity_id, mesh.mesh, &mesh.material, mesh.world_transform,
         mesh.cast_shadows(), mesh.double_sided(), kViewportRenderedSceneLayerMask,
         false);
+    factory_->update_texture_mapping(rendered_proxy, mesh.sampling_from_local);
     rendered_mesh_proxies_.emplace(mesh.entity_id, std::move(rendered_proxy));
     MeshRenderableProxy shaded_proxy = factory_->create(
         mesh.entity_id, mesh.mesh, &mesh.material, mesh.world_transform, false,
         mesh.double_sided(), kViewportShadedSceneLayerMask, true);
+    factory_->update_texture_mapping(shaded_proxy, mesh.sampling_from_local);
     shaded_mesh_proxies_.emplace(mesh.entity_id, std::move(shaded_proxy));
     MeshRenderableProxy overlay_depth_proxy = factory_->create(
         mesh.entity_id, mesh.mesh, &mesh.material, mesh.world_transform, false,
         mesh.double_sided(), kViewportOverlayLayerMask, true, true,
         kViewportOverlayDepthChannel);
+    factory_->update_texture_mapping(overlay_depth_proxy, mesh.sampling_from_local);
     overlay_depth_mesh_proxies_.emplace(mesh.entity_id,
                                         std::move(overlay_depth_proxy));
     apply_preview_suppression(mesh.entity_id);
@@ -162,17 +165,32 @@ void MeshRenderableCache::sync_mesh(const RenderSceneMeshRecord &mesh) {
   if (auto existing = rendered_mesh_proxies_.find(mesh.entity_id);
       existing != rendered_mesh_proxies_.end()) {
     QDR_PROFILE_SCOPE("Mesh renderable update rendered transform");
-    factory_->update_transform(existing->second, mesh.world_transform);
+    if (mesh.transform_dirty) {
+      factory_->update_transform(existing->second, mesh.world_transform);
+    }
+    if (mesh.texture_mapping_dirty) {
+      factory_->update_texture_mapping(existing->second, mesh.sampling_from_local);
+    }
   }
   if (auto existing = shaded_mesh_proxies_.find(mesh.entity_id);
       existing != shaded_mesh_proxies_.end()) {
     QDR_PROFILE_SCOPE("Mesh renderable update shaded transform");
-    factory_->update_transform(existing->second, mesh.world_transform);
+    if (mesh.transform_dirty) {
+      factory_->update_transform(existing->second, mesh.world_transform);
+    }
+    if (mesh.texture_mapping_dirty) {
+      factory_->update_texture_mapping(existing->second, mesh.sampling_from_local);
+    }
   }
   if (auto existing = overlay_depth_mesh_proxies_.find(mesh.entity_id);
       existing != overlay_depth_mesh_proxies_.end()) {
     QDR_PROFILE_SCOPE("Mesh renderable update depth transform");
-    factory_->update_transform(existing->second, mesh.world_transform);
+    if (mesh.transform_dirty) {
+      factory_->update_transform(existing->second, mesh.world_transform);
+    }
+    if (mesh.texture_mapping_dirty) {
+      factory_->update_texture_mapping(existing->second, mesh.sampling_from_local);
+    }
   }
 }
 
@@ -206,6 +224,9 @@ bool MeshRenderableCache::try_rebind_topology_stable_geometry(
   factory_->update_transform(rendered, mesh.world_transform);
   factory_->update_transform(shaded, mesh.world_transform);
   factory_->update_transform(overlay_depth, mesh.world_transform);
+  factory_->update_texture_mapping(rendered, mesh.sampling_from_local);
+  factory_->update_texture_mapping(shaded, mesh.sampling_from_local);
+  factory_->update_texture_mapping(overlay_depth, mesh.sampling_from_local);
   apply_preview_suppression(mesh.entity_id);
   return true;
 }

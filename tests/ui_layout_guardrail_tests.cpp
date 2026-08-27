@@ -83,6 +83,8 @@ const std::vector<std::string_view> &qt_shell_source_paths() {
       "src/ui/qt_tool_toolbar.cpp",
       "src/ui/qt_viewport_display_toolbar.hpp",
       "src/ui/qt_viewport_display_toolbar.cpp",
+      "src/ui/qt_texture_toolbar.hpp",
+      "src/ui/qt_texture_toolbar.cpp",
       "src/ui/qt_input_adapter.hpp",
       "src/ui/qt_input_adapter.cpp",
   };
@@ -1119,6 +1121,45 @@ TEST(UiLayoutGuardrailTests,
 }
 
 TEST(UiLayoutGuardrailTests,
+     TextureSettingsRetainMixedControlsBehindOwnerRevisionGate) {
+  const std::string header =
+      read_source_file("src/ui/qt_tool_settings_panel.hpp");
+  const std::string panel =
+      read_source_file("src/ui/qt_tool_settings_panel.cpp");
+  expect_contains(header, "void refresh_texture_settings()");
+  expect_contains(panel,
+                  "QStringLiteral(\"tool_settings.section.texture\")");
+  expect_contains(panel,
+                  "class QtTextureNumberSpinBox final : public QDoubleSpinBox");
+  expect_contains(panel, "QStringLiteral(\"--\")");
+  expect_missing(panel, "setSpecialValueText(");
+  expect_contains(panel, "editor_->modeling().set_face_texture_setting(");
+  expect_contains(panel, ".selection_token = binding.selection_token");
+  expect_contains(panel, ".merge_key = binding.merge_key");
+  expect_contains(panel, "binding.dispatch_timer->setInterval(kNumberDispatchIntervalMs)");
+
+  const std::string refresh = std::string(source_slice(
+      panel, "  void refresh_texture_settings(bool force = false)",
+      "  [[nodiscard]] bool has_active_target() const"));
+  const std::size_t revision = refresh.find("face_texture_settings_revision()");
+  const std::size_t gate = refresh.find("*texture_revision_ == revision");
+  const std::size_t summary = refresh.find("face_texture_settings()");
+  const std::size_t visibility = refresh.find("texture_section_->setVisible");
+  ASSERT_NE(revision, std::string::npos);
+  ASSERT_NE(gate, std::string::npos);
+  ASSERT_NE(summary, std::string::npos);
+  ASSERT_NE(visibility, std::string::npos);
+  EXPECT_LT(revision, gate);
+  EXPECT_LT(gate, summary);
+  EXPECT_LT(summary, visibility);
+  expect_contains(refresh, "if (!binding.editing)");
+  expect_missing(refresh, "commands().available()");
+  expect_missing(refresh, "export_selection()");
+  expect_missing(refresh, "show_panel(");
+  expect_missing(refresh, "raise()");
+}
+
+TEST(UiLayoutGuardrailTests,
      SettingsUsesCategoryPagesAndAlphaAwareColorSwatches) {
   const std::string settings =
       read_source_file("src/ui/qt_settings_dialog.cpp");
@@ -1800,6 +1841,60 @@ TEST(UiLayoutGuardrailTests,
   expect_contains(menu_header, "set_viewport_display_toolbar_visible");
   expect_contains(menu,
                   "QStringLiteral(\"toolbar_viewport_display\")");
+}
+
+TEST(UiLayoutGuardrailTests,
+     TextureToolbarSeparatesLocksAndGatesRetainedCommandPresentation) {
+  const std::string toolbar = read_source_file("src/ui/qt_texture_toolbar.cpp");
+  const std::string ui = read_source_file("src/ui/ui_system.cpp");
+  const std::string menu = read_source_file("src/ui/qt_main_menu.cpp");
+  expect_contains(toolbar, "textureToolbarDivider");
+  expect_contains(toolbar, "kViewportToggleTextureLock,");
+  expect_contains(toolbar, "kViewportToggleTextureLockScale,");
+  expect_contains(toolbar, ":/quader/icons/texture_lock.png");
+  expect_contains(toolbar, ":/quader/icons/texture_lock_scale.png");
+  expect_missing(toolbar, "editor.commands().available()");
+  expect_missing(toolbar, "setShortcut(");
+  expect_missing(toolbar, "QKeySequence");
+  const std::size_t gate =
+      toolbar.find("if (!force && presented_state_.has_value()");
+  const std::size_t binding_revision =
+      toolbar.find("preferences.keybindings_revision()");
+  const std::size_t descriptor = toolbar.find("editor.commands().descriptor(");
+  const std::size_t shortcut = toolbar.find("editor.commands().shortcut_for(");
+  ASSERT_NE(gate, std::string::npos);
+  ASSERT_NE(binding_revision, std::string::npos);
+  ASSERT_NE(descriptor, std::string::npos);
+  ASSERT_NE(shortcut, std::string::npos);
+  EXPECT_LT(gate, descriptor);
+  EXPECT_LT(gate, shortcut);
+  EXPECT_LT(binding_revision, gate);
+  expect_contains(toolbar,
+                  "presented_keybindings_revision_ == keybindings_revision");
+
+  const std::size_t display_add = ui.find(
+      "addToolBar(Qt::TopToolBarArea, viewport_display_toolbar_)");
+  const std::size_t texture_add = ui.find(
+      "addToolBar(Qt::TopToolBarArea, texture_toolbar_)");
+  ASSERT_NE(display_add, std::string::npos);
+  ASSERT_NE(texture_add, std::string::npos);
+  EXPECT_LT(display_add, texture_add);
+  expect_contains(ui, "texture_toolbar_->hide()");
+  expect_contains(ui, "texture_toolbar_workspace_visible_");
+  expect_contains(ui, "mix_toolbar(texture_toolbar_)");
+  expect_contains(menu, "QStringLiteral(\"toolbar_texture\")");
+
+  const std::size_t face_gate = ui.find(
+      "if (!face_texture_settings_revision_.has_value() ||");
+  const std::size_t face_refresh = ui.find(
+      "tool_settings_panel_->refresh_texture_settings()");
+  ASSERT_NE(face_gate, std::string::npos);
+  ASSERT_NE(face_refresh, std::string::npos);
+  EXPECT_LT(face_gate, face_refresh);
+  const std::string face_sync = ui.substr(face_gate, face_refresh - face_gate);
+  expect_missing(face_sync, "numeric_interaction_active");
+  expect_missing(face_sync, "active_settings()");
+  expect_missing(face_sync, "dock->raise()");
 }
 
 TEST(UiLayoutGuardrailTests,

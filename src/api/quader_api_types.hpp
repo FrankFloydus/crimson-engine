@@ -1054,6 +1054,8 @@ struct QuaderMeshVertex {
     QVec3 normal;
     QVec2 uv;
     std::uint32_t rgba = 0xffffffffu;
+    std::array<float, 4> uv_carrier{};
+    QVec3 uv_geometric_normal = {0.0f, 1.0f, 0.0f};
 };
 
 /**
@@ -1066,8 +1068,16 @@ struct QuaderMeshPrimitiveSpan {
 };
 
 /**
- * Represents a Quader Mesh Asset value used by the public Quader API surface.
+ * Read-only authored face texture properties exposed with compiled mesh data.
  */
+struct QuaderMeshFaceTexture {
+  QuaderElementId face = kInvalidQuaderElementId;
+  QVec2 scale = {1.0f, 1.0f};
+  QVec2 shift_uv;
+  float rotation_degrees = 0.0f;
+};
+
+/// Compiled mesh data with read-only authored face texture properties.
 struct QuaderMeshAsset {
   AssetId id = kInvalidAssetId;
   std::uint64_t revision = 0;
@@ -1077,6 +1087,7 @@ struct QuaderMeshAsset {
   std::vector<QuaderMeshPrimitiveSpan> primitives;
   bool has_stable_cpu_topology = true;
   bool has_authored_polygon_document = false;
+  std::vector<QuaderMeshFaceTexture> face_textures;
 };
 
 /**

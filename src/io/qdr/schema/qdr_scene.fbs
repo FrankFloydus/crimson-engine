@@ -103,6 +103,14 @@ struct MeshPrimitive {
   material_slot:uint;
 }
 
+struct MeshTextureMappingVertex {
+  carrier_00:float;
+  carrier_01:float;
+  carrier_10:float;
+  carrier_11:float;
+  geometric_normal:Vec3;
+}
+
 struct PolygonVertex {
   id:uint;
   position:Vec3;
@@ -140,6 +148,7 @@ table GeometryPayload {
   mesh_indices:[uint];
   mesh_primitives:[MeshPrimitive];
   authored_payload:[ubyte];
+  mesh_texture_mapping:[MeshTextureMappingVertex];
 }
 
 table MeshAsset {
@@ -181,6 +190,10 @@ table TransformComponent {
   rotation_euler:Vec3;
   scale:Vec3;
   custom_pivot:bool = false;
+}
+
+table TextureMappingComponent {
+  sampling_from_local:[float];
 }
 
 table VisibilityComponent {
@@ -287,6 +300,7 @@ table Entity {
   instance_definition:InstanceDefinitionComponent;
   instance_occurrence:InstanceOccurrenceComponent;
   layer_id:ulong;
+  texture_mapping:TextureMappingComponent;
 }
 
 table SceneLayer {

@@ -27,6 +27,13 @@ Chunk schema v1 contains:
   `QDRG` wrapper, so the native container delegates durable polygon semantics
   to the portable modeling core.
 
+Current scene metadata uses schema 7. It appends an optional affine texture
+sampling component to mesh and instance-occurrence entities; schemas 1–6 use
+identity sampling. Face scale, normalized shift, and rotation are owned by
+SDK QGEO 1.1, with identity defaults when reading QGEO 1.0. Compiled fallback
+geometry has an optional parallel UV carrier/geometric-normal array; the
+original packed vertex layout and QDRG wrapper version remain unchanged.
+
 Identical geometry is emitted once and referenced by logical mesh assets.
 Geometry chunks of at least 64 KiB use Zstandard level 1 only when it saves at
 least ten percent. Metadata remains directly readable. Selection, hover,

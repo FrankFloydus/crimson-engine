@@ -11,6 +11,8 @@
 #include "editor/session/scene_viewport_camera_persistence.hpp"
 #include "editor/instances/project_clipboard_service.hpp"
 #include "editor/material/standard_material_edit_session_service.hpp"
+#include "editor/material/project_image_decoder.hpp"
+#include "editor/material/project_material_texture_snapshot.hpp"
 #include "editor/selection/editor_selection_service.hpp"
 #include "editor/tools/native_viewport_tool_coordinator.hpp"
 #include "assets/default_material_catalog.hpp"
@@ -334,6 +336,7 @@ ProjectSessionResult ProjectSession::create(const std::filesystem::path &root,
   (void)standard_material_editor_->close(true);
   workspace_ = std::move(candidate);
   material_catalog_ = std::move(candidate_catalog);
+  invalidate_material_textures();
   open_scenes_.push_back(std::move(first_scene));
   active_scene_id_ = first_id;
   ++activation_generation_;
@@ -478,6 +481,7 @@ ProjectSessionResult ProjectSession::close(bool discard_dirty) {
   (void)standard_material_editor_->close(true);
   workspace_.reset();
   material_catalog_ = {};
+  invalidate_material_textures();
   clipboard_->clear();
   ++activation_generation_;
   return success(true, "Project closed.");
@@ -1150,6 +1154,7 @@ ProjectSessionResult ProjectSession::install_material_catalog(
     }
   }
   material_catalog_ = std::move(material_catalog);
+  invalidate_material_textures();
   return success(true, "Project material catalog updated.");
 }
 
@@ -1232,6 +1237,55 @@ ProjectSession::material_texture(ProjectAssetId material_id,
   }
   return material_catalog_.read_texture(workspace_->file_system, material_id,
                                         slot);
+}
+
+void ProjectSession::invalidate_material_textures() {
+  material_texture_images_.clear();
+  ++material_texture_revision_;
+}
+
+std::shared_ptr<const ProjectMaterialTextureSnapshot>
+ProjectSession::material_texture_image(
+    ProjectAssetId material_id, StandardMaterialTextureSlot slot) const {
+  if (!workspace_) {
+    return {};
+  }
+  const ProjectMaterialCatalogEntry *entry = material_catalog_.find(material_id);
+  const ProjectStandardMaterialDefinition *standard =
+      entry != nullptr ? entry->material.standard_material() : nullptr;
+  const auto *definition = standard != nullptr ? standard->texture(slot) : nullptr;
+  if (definition == nullptr || !definition->has_value()) {
+    return {};
+  }
+  const ProjectAssetId texture_id = definition->value().id;
+  if (const auto cached = material_texture_images_.find(texture_id);
+      cached != material_texture_images_.end()) {
+    return cached->second;
+  }
+
+  std::shared_ptr<const ProjectMaterialTextureSnapshot> result;
+  auto texture = material_texture(material_id, slot);
+  if (texture.ok()) {
+    auto decoded = ProjectImageDecoder::decode(texture.value().encoded_bytes);
+    if (decoded.ok()) {
+      auto texture_data = texture.take_value();
+      auto image_data = decoded.take_value();
+      result = std::make_shared<const ProjectMaterialTextureSnapshot>(
+          ProjectMaterialTextureSnapshot{
+              .content_revision = texture_data.content_revision,
+              .encoded = std::make_shared<const std::vector<std::byte>>(
+                  std::move(texture_data.encoded_bytes)),
+              .decoded = std::make_shared<const std::vector<std::byte>>(
+                  std::move(image_data.rgba8)),
+              .width = image_data.width,
+              .height = image_data.height,
+          });
+    }
+  }
+  // Cache failures too: a missing or invalid image must not trigger repeated IO
+  // while a selected face is presented. Catalog replacement retries resolution.
+  material_texture_images_.emplace(texture_id, result);
+  return result;
 }
 
 OpenSceneSession *ProjectSession::find(SceneSessionId id) {
@@ -1365,6 +1419,7 @@ ProjectSessionResult ProjectSession::install_workspace(
   clipboard_->clear();
   workspace_ = std::move(workspace);
   material_catalog_ = std::move(material_catalog);
+  invalidate_material_textures();
   open_scenes_ = std::move(scenes);
   active_scene_id_ = candidate_active;
   ++activation_generation_;

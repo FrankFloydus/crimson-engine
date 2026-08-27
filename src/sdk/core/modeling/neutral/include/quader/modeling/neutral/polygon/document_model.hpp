@@ -67,6 +67,24 @@ enum class SurfaceShading {
 };
 
 /**
+ * Stores the persistent rotation, signed scale, and normalized shift applied
+ * after a face's authored or generated base UVs.
+ */
+struct FaceTextureTransform {
+  quader::QVec2 scale{1.0F, 1.0F};
+  quader::QVec2 shift_uv{};
+  float rotation_degrees = 0.0F;
+
+  friend bool operator==(const FaceTextureTransform &left,
+                         const FaceTextureTransform &right) noexcept {
+    return left.scale.x == right.scale.x && left.scale.y == right.scale.y &&
+           left.shift_uv.x == right.shift_uv.x &&
+           left.shift_uv.y == right.shift_uv.y &&
+           left.rotation_degrees == right.rotation_degrees;
+  }
+};
+
+/**
  * Represents a Face value used by the polygon document and mesh editing core.
  */
 struct Face {
@@ -75,6 +93,7 @@ struct Face {
   std::vector<quader::QVec2> uvs;
   std::uint32_t material_slot = 0;
   SurfaceShading normal_shading = SurfaceShading::Flat;
+  FaceTextureTransform texture_transform{};
 };
 
 /**

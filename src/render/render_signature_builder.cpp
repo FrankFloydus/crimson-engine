@@ -216,7 +216,11 @@ RenderSignatureBuilder::mesh_asset_signature(std::uint64_t seed,
     signature.add_vec3(vertex.position)
         .add_vec3(vertex.normal)
         .add_vec2(vertex.uv)
+        .add_vec3(vertex.uv_geometric_normal)
         .add_value(vertex.rgba);
+    for (const float coefficient : vertex.uv_carrier) {
+      signature.add_float(coefficient);
+    }
   }
   signature.add_size(geometry.indices.size());
   for (const std::uint32_t index : geometry.indices) {

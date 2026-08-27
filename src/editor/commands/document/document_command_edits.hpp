@@ -10,6 +10,7 @@
 #include "scene/components.hpp"
 
 #include <string>
+#include <optional>
 
 namespace quader {
 
@@ -20,6 +21,16 @@ struct DocumentTransformEdit {
   EntityId entity = kInvalidEntityId;
   TransformComponent before;
   TransformComponent after;
+};
+
+/**
+ * Records exact optional placement mappings before and after a scene edit.
+ * History replays these values without consulting current texture lock settings.
+ */
+struct DocumentTextureMappingEdit {
+  EntityId entity = kInvalidEntityId;
+  std::optional<TextureMappingComponent> before;
+  std::optional<TextureMappingComponent> after;
 };
 
 /**

@@ -74,7 +74,8 @@ public:
                        std::string_view label);
   QuaderApiVoidResult
   run_modeling_undoable_command(std::unique_ptr<IUndoableCommand> command,
-                                std::string_view label);
+                                std::string_view label,
+                                UndoRedoExecuteOptions options = {});
   [[nodiscard]] bool
   can_run_tracked_modeling_tool(std::string_view tool_id) const;
   QuaderApiVoidResult run_tracked_modeling_tool(std::string_view tool_id);

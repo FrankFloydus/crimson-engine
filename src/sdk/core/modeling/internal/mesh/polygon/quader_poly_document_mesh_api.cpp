@@ -11,6 +11,7 @@
 
 #include <quader/modeling/neutral/polygon/internal/quader_poly_document_constants.hpp>
 #include <quader/modeling/neutral/polygon/internal/quader_poly_document_mesh_internal.hpp>
+#include <quader/modeling/neutral/polygon/document_texture.hpp>
 
 #include <algorithm>
 #include <cstdint>
@@ -323,6 +324,8 @@ void compile_document_into(const Document &document, CompiledMesh &mesh,
 
     std::vector<std::uint32_t> compiled_face_vertices;
     compiled_face_vertices.reserve(maximum_face_size);
+    std::vector<quader::QVec3> texture_face_positions;
+    texture_face_positions.reserve(maximum_face_size);
 
     for (const Face& face : document.faces) {
         QDR_PROFILE_SCOPE("qdr_document.compile_document.face");
@@ -349,6 +352,20 @@ void compile_document_into(const Document &document, CompiledMesh &mesh,
                       face,
                       normal,
                       vertex_lookup);
+        texture_face_positions.clear();
+        if (use_loop_uvs) {
+          for (const ElementId id : face.vertices) {
+            const Vertex *vertex = vertex_lookup.find(id);
+            if (vertex != nullptr) {
+              texture_face_positions.push_back(vertex->position);
+            }
+          }
+        }
+        const auto uv_carrier = face_texture_carrier(
+            texture_face_positions,
+            use_loop_uvs ? std::span<const quader::QVec2>(face.uvs)
+                         : std::span<const quader::QVec2>{},
+            normal, face.texture_transform);
         for (std::size_t local_index = 0; local_index < face.vertices.size(); ++local_index) {
             const ElementId vertex_id = face.vertices[local_index];
             const Vertex* vertex = vertex_lookup.find(vertex_id);
@@ -377,9 +394,15 @@ void compile_document_into(const Document &document, CompiledMesh &mesh,
             mesh.vertices.push_back({
                 vertex->position,
                 vertex_normal,
-                use_loop_uvs ? face.uvs[local_index] : generated_uv_for_position(vertex->position, uv_basis, dropped_axis),
+                apply_face_texture_transform(
+                    use_loop_uvs ? face.uvs[local_index]
+                                 : generated_uv_for_position(
+                                       vertex->position, uv_basis, dropped_axis),
+                    face.texture_transform),
                 0xff9f9f9f,
                 vertex_id,
+                uv_carrier,
+                normal,
             });
         }
 

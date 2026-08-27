@@ -11,6 +11,7 @@
 #include <quader/modeling/neutral/polygon/document_model.hpp>
 
 #include <cstdint>
+#include <array>
 #include <vector>
 
 namespace quader_poly {
@@ -24,6 +25,9 @@ struct CompiledVertex {
     quader::QVec2 uv0;
     std::uint32_t color = 0xff9f9f9f;
     ElementId source_vertex_id = kInvalidElementId;
+    // Linear authored carrier after face rotation/scale, in row-major order.
+    std::array<float, 4> uv_carrier{};
+    quader::QVec3 uv_geometric_normal { 0.0F, 1.0F, 0.0F };
 };
 
 /**

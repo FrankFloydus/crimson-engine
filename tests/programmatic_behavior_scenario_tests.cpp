@@ -16,12 +16,43 @@
 #include <cmath>
 #include <cstdint>
 #include <map>
+#include <limits>
 #include <optional>
 #include <string_view>
 #include <utility>
 #include <vector>
 
 namespace {
+
+quader::QuaderApiVoidResult edit_face_texture(
+    quader::QuaderApi &api, quader::QuaderFaceTextureField field, double value,
+    std::string merge_key = {}) {
+  const auto settings = api.modeling().face_texture_settings();
+  return api.modeling().set_face_texture_setting({
+      .field = field,
+      .value = value,
+      .selection_token = settings.selection_token,
+      .merge_key = std::move(merge_key),
+  });
+}
+
+quader::QuaderMeshFaceTexture face_texture(
+    const quader::QuaderApi &api, quader::QuaderModelingObjectRef object,
+    quader::QuaderElementId face_id) {
+  const auto mesh = api.query().compiled_object_mesh(object);
+  if (!mesh.has_value()) {
+    ADD_FAILURE() << "Expected a compiled mesh for the modeling object.";
+    return {};
+  }
+  const auto face = std::find_if(
+      mesh->face_textures.begin(), mesh->face_textures.end(),
+      [face_id](const auto &texture) { return texture.face == face_id; });
+  if (face == mesh->face_textures.end()) {
+    ADD_FAILURE() << "Expected authored texture properties for face " << face_id;
+    return {};
+  }
+  return *face;
+}
 
 /// Describes one synthetic component gizmo workflow so the same behavior can be
 /// verified across vertex, edge, and face selection modes.
@@ -677,6 +708,202 @@ void run_component_transform_drag_case(ComponentPickCase test_case) {
 }
 
 } // namespace
+
+TEST(ProgrammaticBehaviorScenarioTests,
+     FaceTextureScaleUsesAbsoluteMixedValuesAcrossSelectedFaces) {
+  auto s = quader::test::BehaviorScenario::new_project();
+  s.given().unit_box("box").selection_mode(quader::QuaderSelectionMode::Face);
+  auto &api = s.api();
+  const auto object = s.object("box");
+  ASSERT_TRUE(api.selection().select_face(object, 1).ok());
+  ASSERT_TRUE(edit_face_texture(api, quader::QuaderFaceTextureField::ScaleY, 2).ok());
+  ASSERT_TRUE(api.selection().select_face(object, 2).ok());
+  ASSERT_TRUE(edit_face_texture(api, quader::QuaderFaceTextureField::ScaleY, 4).ok());
+  ASSERT_TRUE(api.selection().select_faces(object, {1, 2}).ok());
+  auto summary = api.modeling().face_texture_settings();
+  ASSERT_EQ(summary.selected_face_count, 2u);
+  EXPECT_TRUE(summary.editable);
+  ASSERT_TRUE(summary.scale_x.has_value());
+  EXPECT_DOUBLE_EQ(*summary.scale_x, 1);
+  EXPECT_FALSE(summary.scale_y.has_value());
+  const auto selection_revision = api.revisions().modeling_selection_revision;
+  ASSERT_TRUE(edit_face_texture(api, quader::QuaderFaceTextureField::ScaleX, 5).ok());
+  EXPECT_EQ(api.revisions().modeling_selection_revision, selection_revision);
+  ASSERT_TRUE(edit_face_texture(api, quader::QuaderFaceTextureField::ScaleY, 0.5).ok());
+  summary = api.modeling().face_texture_settings();
+  EXPECT_EQ(summary.scale_x, 5.0);
+  EXPECT_EQ(summary.scale_y, 0.5);
+
+  for (const int face : {1, 2}) {
+    ASSERT_TRUE(api.selection().select_face(object, face).ok());
+    summary = api.modeling().face_texture_settings();
+    EXPECT_EQ(summary.scale_x, 5.0);
+    EXPECT_EQ(summary.scale_y, 0.5);
+  }
+  ASSERT_TRUE(api.selection().select_face(object, 3).ok());
+  summary = api.modeling().face_texture_settings();
+  EXPECT_EQ(summary.scale_x, 1.0);
+  EXPECT_EQ(summary.scale_y, 1.0);
+}
+
+TEST(ProgrammaticBehaviorScenarioTests,
+     FaceTextureRotationKeepsPerFaceOriginsAndOneUndoPerGesture) {
+  auto s = quader::test::BehaviorScenario::new_project();
+  auto &api = s.api();
+  const auto created = api.modeling().create_box(
+      {.min = {-1, -1, -1}, .max = {1, 1, 1}}, "Texture Rotation");
+  ASSERT_TRUE(created.ok());
+  const auto object = created.value();
+  ASSERT_TRUE(api.selection().set_mode(quader::QuaderSelectionMode::Face).ok());
+  ASSERT_TRUE(api.selection().select_face(object, 1).ok());
+  ASSERT_TRUE(edit_face_texture(api, quader::QuaderFaceTextureField::Rotate, 30).ok());
+  ASSERT_TRUE(api.selection().select_face(object, 2).ok());
+  ASSERT_TRUE(edit_face_texture(api, quader::QuaderFaceTextureField::Rotate, -15).ok());
+  ASSERT_TRUE(api.selection().select_faces(object, {1, 2}).ok());
+  EXPECT_DOUBLE_EQ(api.modeling().face_texture_settings().rotation_degrees, 0);
+
+  ASSERT_TRUE(edit_face_texture(api, quader::QuaderFaceTextureField::Rotate, 10,
+                               "texture.rotation.gesture").ok());
+  ASSERT_TRUE(edit_face_texture(api, quader::QuaderFaceTextureField::Rotate, 20,
+                               "texture.rotation.gesture").ok());
+  EXPECT_FLOAT_EQ(face_texture(api, object, 1).rotation_degrees, 50);
+  EXPECT_FLOAT_EQ(face_texture(api, object, 2).rotation_degrees, 5);
+  EXPECT_DOUBLE_EQ(api.modeling().face_texture_settings().rotation_degrees, 20);
+  ASSERT_TRUE(api.history().undo().ok());
+  EXPECT_FLOAT_EQ(face_texture(api, object, 1).rotation_degrees, 30);
+  EXPECT_FLOAT_EQ(face_texture(api, object, 2).rotation_degrees, -15);
+  EXPECT_DOUBLE_EQ(api.modeling().face_texture_settings().rotation_degrees, 0);
+  ASSERT_TRUE(api.history().redo().ok());
+  EXPECT_DOUBLE_EQ(api.modeling().face_texture_settings().rotation_degrees, 20);
+
+  ASSERT_TRUE(edit_face_texture(api, quader::QuaderFaceTextureField::ScaleX, 2).ok());
+  EXPECT_DOUBLE_EQ(api.modeling().face_texture_settings().rotation_degrees, 20);
+  ASSERT_TRUE(edit_face_texture(api, quader::QuaderFaceTextureField::Rotate, 25).ok());
+  EXPECT_FLOAT_EQ(face_texture(api, object, 1).rotation_degrees, 55);
+  EXPECT_FLOAT_EQ(face_texture(api, object, 2).rotation_degrees, 10);
+  EXPECT_FLOAT_EQ(face_texture(api, object, 1).scale.x, 2);
+
+  const auto before_selection = api.modeling().face_texture_settings();
+  ASSERT_TRUE(api.selection().select_face(object, 2, quader::QuaderSelectionEdit::Remove).ok());
+  EXPECT_DOUBLE_EQ(api.modeling().face_texture_settings().rotation_degrees, 0);
+  EXPECT_FALSE(api.modeling().set_face_texture_setting({
+      .field = quader::QuaderFaceTextureField::Rotate,
+      .value = 90,
+      .selection_token = before_selection.selection_token,
+  }).ok());
+  EXPECT_FLOAT_EQ(face_texture(api, object, 1).rotation_degrees, 55);
+  ASSERT_TRUE(api.selection().select_face(object, 2, quader::QuaderSelectionEdit::Add).ok());
+  EXPECT_DOUBLE_EQ(api.modeling().face_texture_settings().rotation_degrees, 0);
+  EXPECT_FLOAT_EQ(face_texture(api, object, 2).rotation_degrees, 10);
+  ASSERT_TRUE(api.selection().clear().ok());
+  EXPECT_EQ(api.modeling().face_texture_settings().selected_face_count, 0u);
+
+  // Float storage has much coarser absolute precision at 1000 degrees than at
+  // zero; that must not turn one common fractional offset into a new selection.
+  ASSERT_TRUE(api.selection().select_face(object, 1).ok());
+  ASSERT_TRUE(edit_face_texture(api, quader::QuaderFaceTextureField::Rotate,
+                               -face_texture(api, object, 1).rotation_degrees).ok());
+  ASSERT_TRUE(api.selection().select_face(object, 2).ok());
+  ASSERT_TRUE(edit_face_texture(api, quader::QuaderFaceTextureField::Rotate,
+                               1000.0 - face_texture(api, object, 2).rotation_degrees).ok());
+  ASSERT_TRUE(api.selection().select_faces(object, {1, 2}).ok());
+  const auto fractional_token = api.modeling().face_texture_settings().selection_token;
+  ASSERT_TRUE(edit_face_texture(api, quader::QuaderFaceTextureField::Rotate, 0.1,
+                               "texture.fractional.rotation.gesture").ok());
+  EXPECT_EQ(api.modeling().face_texture_settings().selection_token, fractional_token);
+  EXPECT_DOUBLE_EQ(api.modeling().face_texture_settings().rotation_degrees, 0.1);
+  ASSERT_TRUE(edit_face_texture(api, quader::QuaderFaceTextureField::Rotate, 0.2,
+                               "texture.fractional.rotation.gesture").ok());
+  EXPECT_EQ(api.modeling().face_texture_settings().selection_token, fractional_token);
+  EXPECT_DOUBLE_EQ(api.modeling().face_texture_settings().rotation_degrees, 0.2);
+  EXPECT_FLOAT_EQ(face_texture(api, object, 1).rotation_degrees, 0.2f);
+  EXPECT_FLOAT_EQ(face_texture(api, object, 2).rotation_degrees, 1000.2f);
+  ASSERT_TRUE(api.history().undo().ok());
+  EXPECT_FLOAT_EQ(face_texture(api, object, 1).rotation_degrees, 0.0f);
+  EXPECT_FLOAT_EQ(face_texture(api, object, 2).rotation_degrees, 1000.0f);
+  EXPECT_DOUBLE_EQ(api.modeling().face_texture_settings().rotation_degrees, 0.0);
+  ASSERT_TRUE(api.history().redo().ok());
+  EXPECT_FLOAT_EQ(face_texture(api, object, 1).rotation_degrees, 0.2f);
+  EXPECT_FLOAT_EQ(face_texture(api, object, 2).rotation_degrees, 1000.2f);
+  EXPECT_DOUBLE_EQ(api.modeling().face_texture_settings().rotation_degrees, 0.2);
+}
+
+TEST(ProgrammaticBehaviorScenarioTests,
+     FaceTextureShiftIsSingleFacePixelsAndInvalidEditsPreserveState) {
+  auto s = quader::test::BehaviorScenario::new_project();
+  auto &api = s.api();
+  const auto created = api.modeling().create_box(
+      {.min = {-1, -1, -1}, .max = {1, 1, 1}}, "Texture Shift");
+  ASSERT_TRUE(created.ok());
+  const auto object = created.value();
+  ASSERT_TRUE(api.selection().set_mode(quader::QuaderSelectionMode::Face).ok());
+  ASSERT_TRUE(api.selection().select_face(object, 1).ok());
+  ASSERT_TRUE(edit_face_texture(api, quader::QuaderFaceTextureField::ShiftX, 16).ok());
+  ASSERT_TRUE(edit_face_texture(api, quader::QuaderFaceTextureField::ShiftY, -8).ok());
+  EXPECT_FLOAT_EQ(face_texture(api, object, 1).shift_uv.x, 0.25f);
+  EXPECT_FLOAT_EQ(face_texture(api, object, 1).shift_uv.y, -0.125f);
+  ASSERT_TRUE(edit_face_texture(api, quader::QuaderFaceTextureField::Rotate, 45).ok());
+  ASSERT_TRUE(edit_face_texture(api, quader::QuaderFaceTextureField::ScaleX, -2).ok());
+  const auto texture = face_texture(api, object, 1);
+  EXPECT_FLOAT_EQ(texture.shift_uv.x, 0.25f);
+  EXPECT_FLOAT_EQ(texture.shift_uv.y, -0.125f);
+  EXPECT_DOUBLE_EQ(api.modeling().face_texture_settings().rotation_degrees, 45);
+
+  const auto before = api.revisions();
+  EXPECT_FALSE(edit_face_texture(api, quader::QuaderFaceTextureField::ScaleY, 0).ok());
+  EXPECT_FALSE(edit_face_texture(api, quader::QuaderFaceTextureField::Rotate,
+                                std::numeric_limits<double>::infinity()).ok());
+  EXPECT_FALSE(edit_face_texture(api, quader::QuaderFaceTextureField::ShiftY,
+                                std::numeric_limits<double>::quiet_NaN()).ok());
+  EXPECT_EQ(api.revisions().modeling_content_revision, before.modeling_content_revision);
+  EXPECT_EQ(api.revisions().scene_revision, before.scene_revision);
+  EXPECT_EQ(api.revisions().asset_revision, before.asset_revision);
+  ASSERT_TRUE(api.selection().select_faces(object, {1, 2}).ok());
+  const auto before_shift = api.revisions().modeling_content_revision;
+  EXPECT_FALSE(edit_face_texture(api, quader::QuaderFaceTextureField::ShiftX, 50).ok());
+  EXPECT_EQ(api.revisions().modeling_content_revision, before_shift);
+  EXPECT_FLOAT_EQ(face_texture(api, object, 1).shift_uv.x, 0.25f);
+  EXPECT_FLOAT_EQ(face_texture(api, object, 2).shift_uv.x, 0);
+
+  ASSERT_TRUE(api.modeling().begin_transform_preview().ok());
+  const auto blocked = api.modeling().face_texture_settings();
+  EXPECT_FALSE(blocked.editable);
+  EXPECT_EQ(blocked.block_reason, quader::QuaderFaceTextureBlockReason::PreviewActive);
+  EXPECT_FALSE(edit_face_texture(api, quader::QuaderFaceTextureField::ScaleX, 3).ok());
+  EXPECT_TRUE(api.modeling().can_cancel_active_tool_or_preview());
+  ASSERT_TRUE(api.modeling().cancel_transform_preview().ok());
+  EXPECT_TRUE(api.modeling().face_texture_settings().editable);
+}
+
+TEST(ProgrammaticBehaviorScenarioTests,
+     FaceTexturePublicScalePreservesLockedPivotCompensation) {
+  auto s = quader::test::BehaviorScenario::new_project();
+  auto &api = s.api();
+  s.editor().preferences().set_runtime_hooks(quader::QuaderPreferencesRuntimeHooks{
+      .texture_lock_enabled = [] { return false; },
+      .texture_lock_scale_enabled = [] { return true; },
+  });
+  const auto created = api.modeling().create_box(
+      {.min = {-1, -1, -1}, .max = {1, 1, 1}}, "Locked Pivot Scale");
+  ASSERT_TRUE(created.ok());
+  ASSERT_TRUE(api.selection().select_object(created.value()).ok());
+  ASSERT_TRUE(api.modeling().scale_selection({2, 2, 2}, {5, 3, 0}).ok());
+  const auto transformed = api.query().entity(created.value().entity);
+  ASSERT_TRUE(transformed.has_value());
+  const quader::QMat4 identity{};
+  const auto mapping = transformed->texture_sampling_from_local.value_or(identity);
+  for (std::size_t index = 0; index < identity.values.size(); ++index) {
+    EXPECT_NEAR(mapping.values[index], identity.values[index], 0.00001f);
+  }
+  ASSERT_TRUE(api.history().undo().ok());
+  ASSERT_TRUE(api.history().redo().ok());
+  const auto redone = api.query().entity(created.value().entity);
+  ASSERT_TRUE(redone.has_value());
+  const auto redone_mapping = redone->texture_sampling_from_local.value_or(identity);
+  for (std::size_t index = 0; index < identity.values.size(); ++index) {
+    EXPECT_NEAR(redone_mapping.values[index], identity.values[index], 0.00001f);
+  }
+}
 
 TEST(ProgrammaticBehaviorScenarioTests,
      ShiftDuplicatePreviewKeepsDurableMeshStableUntilAbsoluteDeltaCommit) {

@@ -3,16 +3,30 @@ material {
     blending : transparent,
     depthWrite : true,
     instanced : true,
+    flipUV : true,
     shadingModel : unlit,
     requires : [
         uv0,
         tangents,
-        custom0
+        custom0,
+        custom1,
+        custom2
     ],
     variables : [
-        surfaceGridProjection
+        surfaceGridProjection,
+        textureSamplingCorrection
     ],
     parameters : [
+        {
+            type : mat4[64],
+            name : textureSamplingFromLocal,
+            precision : high
+        },
+        {
+            type : mat3[64],
+            name : textureSamplingCofactor,
+            precision : high
+        },
         {
             type : sampler2d,
             name : baseColorTexture
@@ -109,7 +123,74 @@ material {
 }
 
 vertex {
+    vec2 generatedTextureUv(highp vec3 position, highp vec3 geometricNormal) {
+        // Match the portable generated UV chart, not the surface-grid chart:
+        // Quader -> Source (x, -z, y), with dominant-axis ties X, then Y, then Z.
+        if (any(isnan(geometricNormal)) || any(isinf(geometricNormal))
+                || dot(geometricNormal, geometricNormal) <= 0.000001) {
+            geometricNormal = vec3(0.0, 1.0, 0.0);
+        }
+        highp vec3 sourcePosition = vec3(position.x, -position.z, position.y);
+        highp vec3 sourceNormal = vec3(
+                geometricNormal.x, -geometricNormal.z, geometricNormal.y);
+        highp vec3 dominant = abs(sourceNormal);
+        if (dominant.x >= dominant.y && dominant.x >= dominant.z) {
+            float side = sourceNormal.x >= 0.0 ? 1.0 : -1.0;
+            return vec2(side * sourcePosition.y, -sourcePosition.z) * 0.5;
+        }
+        if (dominant.y >= dominant.z) {
+            float side = sourceNormal.y >= 0.0 ? 1.0 : -1.0;
+            return vec2(-side * sourcePosition.x, -sourcePosition.z) * 0.5;
+        }
+        float side = sourceNormal.z >= 0.0 ? 1.0 : -1.0;
+        return vec2(sourcePosition.x, -side * sourcePosition.y) * 0.5;
+    }
+
+    void applyTextureSampling(inout MaterialVertexInputs material) {
+        int instanceIndex = getInstanceIndex();
+        highp mat4 samplingFromLocal =
+                materialParams.textureSamplingFromLocal[instanceIndex];
+        material.textureSamplingCorrection = vec4(0.0);
+        if (samplingFromLocal == mat4(1.0)) {
+            return;
+        }
+        highp vec4 carrier = getCustom1();
+        if (all(equal(carrier, vec4(0.0)))) {
+            return;
+        }
+
+        highp vec3 position = getPosition().xyz;
+        highp vec3 geometricNormal = getCustom2().xyz;
+        highp vec3 samplingPosition =
+                (samplingFromLocal * vec4(position, 1.0)).xyz;
+        highp vec3 samplingNormal =
+                materialParams.textureSamplingCofactor[instanceIndex]
+                        * geometricNormal;
+        // Cofactor magnitude depends on scale squared. Preserve its direction
+        // before the canonical chart applies its normal-degeneracy threshold.
+        highp float normalMagnitude = max(max(abs(samplingNormal.x),
+                                              abs(samplingNormal.y)),
+                                         abs(samplingNormal.z));
+        samplingNormal = !isnan(normalMagnitude) && !isinf(normalMagnitude)
+                        && normalMagnitude > 0.0
+                ? samplingNormal / normalMagnitude : vec3(0.0, 1.0, 0.0);
+        highp vec2 chartDelta =
+                generatedTextureUv(samplingPosition, samplingNormal)
+                        - generatedTextureUv(position, geometricNormal);
+        highp vec2 uvCorrection = vec2(
+                dot(carrier.xy, chartDelta), dot(carrier.zw, chartDelta));
+        if (any(isnan(uvCorrection)) || any(isinf(uvCorrection))) {
+            return;
+        }
+        // Filament already flipped UV0 before this callback. Negating only the
+        // V delta lets the existing fragment flip recover UV0 + K * chartDelta.
+        material.uv0 += vec2(uvCorrection.x, -uvCorrection.y);
+        material.textureSamplingCorrection.x =
+                mat3(samplingFromLocal) == mat3(1.0) ? 0.0 : 1.0;
+    }
+
     void materialVertex(inout MaterialVertexInputs material) {
+        applyTextureSampling(material);
         vec4 projection = getCustom0();
         vec3 worldNormal = getWorldFromModelNormalMatrix() * projection.xyz;
         float normalLengthSquared = dot(worldNormal, worldNormal);

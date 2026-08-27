@@ -448,6 +448,12 @@ std::string explicit_keybinding_label(std::string_view command_id,
   if (is(quader_command::kViewportToggleOverlays)) {
     return "Toggle Viewport Overlays";
   }
+  if (is(quader_command::kViewportToggleTextureLock)) {
+    return "Toggle Texture Lock";
+  }
+  if (is(quader_command::kViewportToggleTextureLockScale)) {
+    return "Toggle Texture Lock Scale";
+  }
   if (is(quader_command::kViewportShadingWireframe)) {
     return "Set Viewport Shading to Wireframe";
   }
@@ -613,6 +619,12 @@ std::string command_keybinding_localization_key(std::string_view command_id) {
   if (command_id == quader_command::kViewportToggleOverlays.string()) {
     return stable();
   }
+  if (command_id == quader_command::kViewportToggleTextureLock.string()) {
+    return stable();
+  }
+  if (command_id == quader_command::kViewportToggleTextureLockScale.string()) {
+    return stable();
+  }
   if (command_id == quader_command::kViewportShadingWireframe.string()) {
     return stable();
   }
@@ -728,6 +740,7 @@ public:
     keybinding_target_id_for_grid_preset(int preset) const;
     [[nodiscard]] std::string shortcut_for(std::string_view command_id) const;
     [[nodiscard]] std::string shortcut_for(QuaderCommandId command_id) const;
+    [[nodiscard]] std::uint64_t keybindings_revision() const noexcept;
     [[nodiscard]] std::vector<QuaderKeybindingRule> keybindings() const;
     [[nodiscard]] std::vector<QuaderKeybindingCatalogEntry>
     keybinding_catalog() const;
@@ -910,6 +923,10 @@ QuaderCommandsApi::Impl::last_status() const {
 
 std::uint64_t QuaderCommandsApi::Impl::last_status_revision() const {
   return last_status_revision_;
+}
+
+std::uint64_t QuaderCommandsApi::Impl::keybindings_revision() const noexcept {
+  return keybindings_.revision();
 }
 
 std::optional<QuaderCommandDescriptor>
@@ -2199,6 +2216,18 @@ void QuaderCommandsApi::Impl::register_commands() {
                      return preferences_.set_overlays_visible(
                          !preferences_.overlays_visible());
                    });
+  // Texture-lock switches are bindable viewport actions, deliberately unassigned
+  // by default so adding the controls does not claim existing user shortcuts.
+  register_command(quader_command::kViewportToggleTextureLock,
+                   "Texture Lock", [this] {
+                     return preferences_.set_texture_lock_enabled(
+                         !preferences_.texture_lock_enabled());
+                   });
+  register_command(quader_command::kViewportToggleTextureLockScale,
+                   "Texture Lock Scale", [this] {
+                     return preferences_.set_texture_lock_scale_enabled(
+                         !preferences_.texture_lock_scale_enabled());
+                   });
   register_command(
       quader_command::kViewportGridIncrement, "Increase Grid Size",
       [this] {
@@ -2741,6 +2770,10 @@ std::optional<QuaderApiStatus> QuaderCommandsApi::last_status() const {
 
 std::uint64_t QuaderCommandsApi::last_status_revision() const {
   return impl_->last_status_revision();
+}
+
+std::uint64_t QuaderCommandsApi::keybindings_revision() const noexcept {
+  return impl_->keybindings_revision();
 }
 
 std::optional<QuaderCommandDescriptor>

@@ -89,6 +89,8 @@ std::string_view section_stable_id(ViewportSettingsSectionId section) {
     return "picking";
   case ViewportSettingsSectionId::Gizmo:
     return "gizmo";
+  case ViewportSettingsSectionId::Texturing:
+    return "texturing";
   case ViewportSettingsSectionId::Count:
     break;
   }

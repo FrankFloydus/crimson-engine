@@ -675,6 +675,7 @@ Face make_repaired_merge_face(const Face& source_face, std::vector<ElementId> ve
     repaired.id = source_face.id;
     repaired.vertices = std::move(vertices);
     repaired.material_slot = source_face.material_slot;
+    repaired.texture_transform = source_face.texture_transform;
     repaired.uvs.clear();
     return repaired;
 }
@@ -874,6 +875,7 @@ OperationResult build_topology_vertex_merge_candidate(
             repaired_face.id = index == 0 ? face.id : next_repaired_face_id();
             merge_touched_face_ids.insert(repaired_face.id);
             repaired_face.material_slot = face.material_slot;
+            repaired_face.texture_transform = face.texture_transform;
             repaired_face.uvs.clear();
             const std::optional<FaceUvProjectionAssignment> assignment = face_uv_projection_assignment_from_source(
                     candidate,

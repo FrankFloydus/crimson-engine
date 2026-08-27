@@ -1053,6 +1053,8 @@ inline QuaderMeshVertex to_api_mesh_vertex(const MeshVertex &vertex) {
       .normal = vertex.normal,
       .uv = vertex.uv,
       .rgba = vertex.rgba,
+      .uv_carrier = vertex.uv_carrier,
+      .uv_geometric_normal = vertex.uv_geometric_normal,
   };
 }
 
@@ -1062,6 +1064,8 @@ inline MeshVertex to_mesh_vertex(const QuaderMeshVertex &vertex) {
       .normal = vertex.normal,
       .uv = vertex.uv,
       .rgba = vertex.rgba,
+      .uv_carrier = vertex.uv_carrier,
+      .uv_geometric_normal = vertex.uv_geometric_normal,
   };
 }
 
@@ -1100,6 +1104,17 @@ inline QuaderMeshAsset to_api_mesh_asset(const MeshAsset &mesh) {
   }
   result.has_stable_cpu_topology = mesh.has_stable_cpu_topology;
   result.has_authored_polygon_document = mesh.has_authored_polygon_document;
+  if (mesh.authored_polygon_document != nullptr) {
+    result.face_textures.reserve(mesh.authored_polygon_document->faces.size());
+    for (const quader_poly::Face &face : mesh.authored_polygon_document->faces) {
+      result.face_textures.push_back({
+          .face = static_cast<QuaderElementId>(face.id),
+          .scale = face.texture_transform.scale,
+          .shift_uv = face.texture_transform.shift_uv,
+          .rotation_degrees = face.texture_transform.rotation_degrees,
+      });
+    }
+  }
   return result;
 }
 

@@ -257,6 +257,7 @@ add_library(quader_modeling STATIC
     src/editor/modeling/services/runtime_tool_command_service.cpp
     src/editor/modeling/services/modeling_session_services.cpp
     src/editor/modeling/services/modeling_session_service.cpp
+    src/editor/modeling/services/face_texture_edit_context.cpp
     src/editor/modeling/services/modeling_transform_drag_service.cpp
     src/editor/modeling/runtime_state/modal_tool_runtime.cpp
     src/editor/modeling/runtime_state/transform_drag_controller.cpp
@@ -360,6 +361,7 @@ add_library(quader_editor_services STATIC
     src/editor/tools/native_viewport_tool_coordinator.cpp
     src/editor/transform/mesh_arrangement_service.cpp
     src/editor/transform/scene_transform_drag_service.cpp
+    src/editor/commands/document/scene_texture_mapping_plan.cpp
 )
 
 quader_configure_core_module(quader_editor_services)
@@ -844,6 +846,7 @@ add_library(quader_ui STATIC
     src/ui/qt_snapping_toolbar.cpp
     src/ui/qt_tool_toolbar.cpp
     src/ui/qt_viewport_display_toolbar.cpp
+    src/ui/qt_texture_toolbar.cpp
     src/ui/qt_toolbar_button_presentation.cpp
     src/ui/qt_semantic_axis_colors.hpp
     src/ui/qt_auxiliary_window_state.cpp
@@ -1006,6 +1009,10 @@ set(QUADER_VIEWPORT_DISPLAY_TOOLBAR_ICON_FILES
     "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/viewport_mesh_grid.png"
     "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/viewport_overlays.png")
 
+set(QUADER_TEXTURE_TOOLBAR_ICON_FILES
+    "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/texture_lock.png"
+    "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/texture_lock_scale.png")
+
 set(QUADER_DOCK_CHROME_ICON_FILES
     "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/dock_close.png"
     "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/dock_float.png"
@@ -1060,6 +1067,10 @@ qt_add_resources(quader "quader_viewport_display_toolbar_icons"
     PREFIX "/quader/icons"
     BASE "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons"
     FILES ${QUADER_VIEWPORT_DISPLAY_TOOLBAR_ICON_FILES})
+qt_add_resources(quader "quader_texture_toolbar_icons"
+    PREFIX "/quader/icons"
+    BASE "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons"
+    FILES ${QUADER_TEXTURE_TOOLBAR_ICON_FILES})
 qt_add_resources(quader "quader_dock_chrome_icons"
     PREFIX "/quader/icons"
     BASE "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons"

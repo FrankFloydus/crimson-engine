@@ -375,6 +375,7 @@ struct AppendedDocument {
             quader_poly::find_face(target, face_id)) {
       appended_face->uvs = face.uvs;
       appended_face->normal_shading = face.normal_shading;
+      appended_face->texture_transform = face.texture_transform;
     }
   }
 

@@ -2984,5 +2984,162 @@ TEST(ModelingSessionServiceSplitTests,
   EXPECT_EQ(facade.context_action_set().surface_id, "operations_top_bar");
 }
 
+TEST(ModelingSessionServiceSplitTests,
+     FaceTextureSummaryIsRevisionGatedAndUsesTexturePixelDimensions) {
+  SceneDocument scene;
+  AssetRegistry assets;
+  ModelingSessionService service(scene, assets);
+  const auto created = service.create_box_from_bounds({
+      .bounds = {.min = {-1, -1, -1}, .max = {1, 1, 1}},
+      .name = "Pixel Texture Settings",
+  });
+  ASSERT_TRUE(created.ok) << created.message;
+  TextureAsset texture;
+  texture.name = "Reference texture";
+  texture.width = 256;
+  texture.height = 128;
+  const AssetId texture_id = assets.add_texture(std::move(texture));
+  MaterialDocument material = make_default_quader_material("Pixel reference");
+  ASSERT_TRUE(set_material_texture_slot(material, material_texture_slot::kBaseColor,
+                                       texture_id));
+  const AssetId material_id = assets.add_material(std::move(material));
+  ASSERT_TRUE(scene.set_material(created.object.entity, {.material = material_id}));
+  ASSERT_TRUE(service.set_selection_mode(ModelingSelectionMode::Face).ok);
+  ASSERT_TRUE(service.set_component_selection({
+      .modeling_object_id = created.object.modeling_object_id,
+      .mode = ModelingSelectionMode::Face,
+      .faces = {1},
+      .active_kind = ModelingActiveSelectionKind::Face,
+      .active_face = 1,
+  }).ok);
+  const auto summary = service.face_texture_settings();
+  ASSERT_TRUE(summary.editable);
+  ASSERT_TRUE(service.set_face_texture_setting({
+      .field = ModelingFaceTextureField::ShiftX,
+      .value = 128,
+      .selection_token = summary.selection_token,
+  }).ok);
+  EXPECT_DOUBLE_EQ(service.face_texture_settings().shift_x, 128);
+  const MeshAsset *mesh = assets.mesh(scene.mesh(created.object.entity)->mesh);
+  ASSERT_NE(mesh, nullptr);
+  ASSERT_NE(mesh->authored_polygon_document, nullptr);
+  const auto *face = quader_poly::find_face(*mesh->authored_polygon_document, 1);
+  ASSERT_NE(face, nullptr);
+  EXPECT_FLOAT_EQ(face->texture_transform.shift_uv.x, 0.5f);
+
+  const auto before_queries = service.modeling_sdk_projection_stats_for_tests();
+  const auto revision = service.face_texture_settings_revision();
+  for (int index = 0; index < 20; ++index) {
+    EXPECT_EQ(service.face_texture_settings_revision(), revision);
+    EXPECT_DOUBLE_EQ(service.face_texture_settings().shift_x, 128);
+  }
+  const auto after_queries = service.modeling_sdk_projection_stats_for_tests();
+  EXPECT_EQ(after_queries.face_texture_summary_build_count,
+            before_queries.face_texture_summary_build_count);
+  EXPECT_EQ(after_queries.mesh_compile_count, before_queries.mesh_compile_count);
+  EXPECT_EQ(after_queries.asset_publication_count, before_queries.asset_publication_count);
+
+  ASSERT_TRUE(assets.update_texture(texture_id, [](TextureAsset &updated) {
+    updated.width = 512;
+  }));
+  EXPECT_DOUBLE_EQ(service.face_texture_settings().shift_x, 256);
+  const auto before_noop = service.content_revision();
+  const auto unchanged = service.set_face_texture_setting({
+      .field = ModelingFaceTextureField::ShiftX,
+      .value = 256,
+      .selection_token = service.face_texture_settings().selection_token,
+  });
+  EXPECT_TRUE(unchanged.ok);
+  EXPECT_FALSE(unchanged.changed);
+  EXPECT_EQ(service.content_revision(), before_noop);
+
+  ASSERT_TRUE(service.move_selection({0.1f, 0.0f, 0.0f}).ok);
+  EXPECT_DOUBLE_EQ(service.face_texture_settings().shift_x, 256);
+  ASSERT_TRUE(scene.set_locked(created.object.entity, true));
+  const auto locked = service.face_texture_settings();
+  EXPECT_EQ(locked.selected_face_count, 1u);
+  EXPECT_FALSE(locked.editable);
+  EXPECT_EQ(locked.block_reason, ModelingFaceTextureBlockReason::TargetUnavailable);
+  EXPECT_FALSE(service.set_face_texture_setting({
+      .field = ModelingFaceTextureField::ScaleX,
+      .value = 3,
+      .selection_token = locked.selection_token,
+  }).ok);
+}
+
+TEST(ModelingSessionServiceSplitTests,
+     FaceTextureBatchRollsBackSharedBindingsAndPublishesAllObjectsAtomically) {
+  SceneDocument scene;
+  AssetRegistry assets;
+  ModelingSessionService service(scene, assets);
+  const auto first = service.create_box_from_bounds({
+      .bounds = {.min = {-1, -1, -1}, .max = {1, 1, 1}}, .name = "First",
+  });
+  const auto second = service.create_box_from_bounds({
+      .bounds = {.min = {3, -1, -1}, .max = {5, 1, 1}}, .name = "Second",
+  });
+  ASSERT_TRUE(first.ok);
+  ASSERT_TRUE(second.ok);
+  ASSERT_TRUE(service.set_selection_mode(ModelingSelectionMode::Face).ok);
+  for (const auto *created : {&first, &second}) {
+    ASSERT_TRUE(service.set_component_selection({
+        .modeling_object_id = created->object.modeling_object_id,
+        .mode = ModelingSelectionMode::Face,
+        .faces = {1},
+        .edit = created == &first ? ModelingSelectionEdit::Replace
+                                 : ModelingSelectionEdit::Add,
+        .active_kind = ModelingActiveSelectionKind::Face,
+        .active_face = 1,
+    }).ok);
+  }
+  const AssetId shared_mesh = scene.mesh(first.object.entity)->mesh;
+  const EntityId shared_entity = scene.create_entity("Shared consumer", EntityKind::Mesh);
+  ASSERT_TRUE(scene.set_mesh(shared_entity, {.mesh = shared_mesh}));
+  const auto summary = service.face_texture_settings();
+  ASSERT_EQ(summary.selected_face_count, 2u);
+  const auto before_mesh_ids = assets.mesh_ids();
+  const auto before_scene_revision = scene.revision();
+  const auto before_asset_revision = assets.revision();
+  const auto before_content_revision = service.content_revision();
+  const auto before_selection_revision = service.selection_revision();
+
+  service.set_modeling_sdk_projection_failure_for_tests(
+      ModelingSdkProjectionFailurePoint::CommittedSceneNotify);
+  const auto failed = service.set_face_texture_setting({
+      .field = ModelingFaceTextureField::ScaleY,
+      .value = 4,
+      .selection_token = summary.selection_token,
+  });
+  EXPECT_FALSE(failed.ok);
+  EXPECT_FALSE(failed.changed);
+  EXPECT_EQ(scene.revision(), before_scene_revision);
+  EXPECT_EQ(assets.revision(), before_asset_revision);
+  EXPECT_EQ(assets.mesh_ids(), before_mesh_ids);
+  EXPECT_EQ(service.content_revision(), before_content_revision);
+  EXPECT_EQ(service.selection_revision(), before_selection_revision);
+  EXPECT_EQ(scene.mesh(first.object.entity)->mesh, shared_mesh);
+  EXPECT_EQ(scene.mesh(shared_entity)->mesh, shared_mesh);
+  EXPECT_EQ(service.face_texture_settings().scale_y, 1.0);
+
+  service.set_modeling_sdk_projection_failure_for_tests(ModelingSdkProjectionFailurePoint::None);
+  const auto edited = service.set_face_texture_setting({
+      .field = ModelingFaceTextureField::ScaleY,
+      .value = 4,
+      .selection_token = summary.selection_token,
+  });
+  ASSERT_TRUE(edited.ok) << edited.message;
+  EXPECT_TRUE(edited.changed);
+  EXPECT_EQ(service.content_revision(), before_content_revision + 1u);
+  EXPECT_EQ(service.selection_revision(), before_selection_revision);
+  EXPECT_EQ(service.face_texture_settings().selected_face_count, 2u);
+  EXPECT_EQ(service.face_texture_settings().scale_y, 4.0);
+  EXPECT_NE(scene.mesh(first.object.entity)->mesh, shared_mesh);
+  EXPECT_EQ(scene.mesh(shared_entity)->mesh, shared_mesh);
+  const auto *untouched = quader_poly::find_face(
+      *assets.mesh(shared_mesh)->authored_polygon_document, 1);
+  ASSERT_NE(untouched, nullptr);
+  EXPECT_FLOAT_EQ(untouched->texture_transform.scale.y, 1);
+}
+
 } // namespace
 } // namespace quader

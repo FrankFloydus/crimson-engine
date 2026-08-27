@@ -78,6 +78,7 @@ OperationResult combine_selected_faces_impl(Document& document, Selection& selec
         merged_face.id = island.face_ids.front();
         merged_face.vertices = std::move(merged_loop);
         merged_face.material_slot = island.material_slot;
+        merged_face.texture_transform = island.texture_transform;
         orient_face_toward_normal(document, merged_face, island.normal);
 
         for (const ElementId face_id : island.face_ids) {
@@ -115,6 +116,15 @@ OperationResult combine_selected_faces_impl(Document& document, Selection& selec
 
     prune_invalid_faces(candidate);
     prune_unused_vertices(candidate);
+    for (const FaceIslandBoundary& island : islands) {
+        if (island.face_ids.size() < 2U) {
+            continue;
+        }
+        if (Face* merged_face = find_face(candidate, island.face_ids.front());
+            merged_face != nullptr && !inherit_merged_face_texture(document, island.face_ids, *merged_face)) {
+            return { false, "Combine Faces could not preserve the source texture mapping." };
+        }
+    }
     if (!every_face_triangulates(candidate)) {
         return { false, "Combine Faces would create invalid face geometry." };
     }

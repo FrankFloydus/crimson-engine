@@ -188,7 +188,10 @@ OperationResult FillHoleFromEdgesOperation::apply(Document& document, Selection&
         fill_face.id = trial.next_face_id++;
         const ElementId fill_face_id = fill_face.id;
         fill_face.vertices = std::move(*loop);
-        fill_face.material_slot = material_slot_for_open_edge(document, component.front());
+        if (const Face* source_face = face_for_open_edge(document, component.front())) {
+            fill_face.material_slot = source_face->material_slot;
+            fill_face.texture_transform = source_face->texture_transform;
+        }
         if (!orient_face_against_adjacent_winding(document, fill_face)) {
             orient_face_toward_normal(trial, fill_face, face_centroid(trial, fill_face) - document_vertex_centroid(trial));
         }

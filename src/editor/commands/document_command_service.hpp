@@ -11,6 +11,7 @@
 #include "editor/commands/document/document_command_result.hpp"
 #include "editor/history/editor_history_service.hpp"
 #include "editor/selection/scene_selection_application.hpp"
+#include "editor/commands/document/scene_texture_mapping_plan.hpp"
 #include "scene/components.hpp"
 
 #include <functional>
@@ -33,6 +34,9 @@ public:
 
     DocumentCommandService(SceneDocument& scene, EditorHistoryService& history, const AssetRegistry* assets = nullptr);
     void set_entity_mutation_blocker(EntityMutationBlocker blocker);
+    void set_texture_lock_settings_provider(
+        std::function<TextureLockSettings()> provider);
+    [[nodiscard]] TextureLockSettings texture_lock_settings() const;
 
     DocumentCreateEntityResult
     create_entity(std::string name, EntityKind kind = EntityKind::Generic,
@@ -86,7 +90,8 @@ public:
                                         TransformComponent transform);
     DocumentCommandResult
     set_transforms(std::vector<DocumentTransformEdit> edits,
-                   std::string label = "Set Transform");
+                   std::string label = "Set Transform",
+                   SceneTextureTransformKind kind = SceneTextureTransformKind::Combined);
     DocumentCreateLayerResult
     create_layer(std::string name, QVec3 wireframe_color,
                  bool add_selection = false);
@@ -118,6 +123,7 @@ public:
     EditorHistoryService& history_;
     const AssetRegistry* assets_ = nullptr;
     EntityMutationBlocker entity_mutation_blocker_;
+    std::function<TextureLockSettings()> texture_lock_settings_provider_;
 };
 
 } // namespace quader

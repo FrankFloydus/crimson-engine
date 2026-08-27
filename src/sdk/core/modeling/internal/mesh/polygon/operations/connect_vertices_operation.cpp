@@ -86,12 +86,14 @@ OperationResult ConnectVerticesOperation::apply(Document& document, Selection& s
             first_face.id = face.id;
             first_face.vertices = std::move(first_loop);
             first_face.material_slot = face.material_slot;
+            first_face.texture_transform = face.texture_transform;
             replacement_faces.push_back(std::move(first_face));
 
             Face second_face;
             second_face.id = next_face_id++;
             second_face.vertices = std::move(second_loop);
             second_face.material_slot = face.material_slot;
+            second_face.texture_transform = face.texture_transform;
             replacement_faces.push_back(std::move(second_face));
             connected_edges.push_back(make_edge(face.vertices[first], face.vertices[second]));
         } else {
@@ -109,6 +111,7 @@ OperationResult ConnectVerticesOperation::apply(Document& document, Selection& s
             center_face.id = face.id;
             center_face.vertices = std::move(center_loop);
             center_face.material_slot = face.material_slot;
+            center_face.texture_transform = face.texture_transform;
             replacement_faces.push_back(std::move(center_face));
 
             for (std::size_t index = 0; index < selected_indices.size(); ++index) {
@@ -124,6 +127,7 @@ OperationResult ConnectVerticesOperation::apply(Document& document, Selection& s
                 side_face.id = next_face_id++;
                 side_face.vertices = std::move(side_loop);
                 side_face.material_slot = face.material_slot;
+                side_face.texture_transform = face.texture_transform;
                 replacement_faces.push_back(std::move(side_face));
             }
         }

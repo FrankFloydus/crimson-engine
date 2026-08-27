@@ -137,6 +137,79 @@ TEST(QuaderMeshMaterialTests, UsesOverlaySelectionInsteadOfStandaloneTint) {
   EXPECT_EQ(source.find("color,"), std::string::npos);
 }
 
+TEST(QuaderMeshMaterialTests,
+     TextureSamplingUsesPortableChartsAndPerInstanceTransforms) {
+  const std::array<std::string, 2> sources{
+      read_source_file("resources/materials/quader_mesh.mat"),
+      read_source_file("resources/materials/quader_mesh_lit.mat"),
+  };
+  std::array<std::string, 2> vertex_blocks;
+  for (std::size_t index = 0; index < sources.size(); ++index) {
+    const std::string &source = sources[index];
+    EXPECT_TRUE(source_contains_compact(source, "flipUV : true"));
+    EXPECT_TRUE(source_contains_compact(
+        source, "requires : [ uv0, tangents, custom0, custom1, custom2 ]"));
+    EXPECT_TRUE(source_contains_compact(
+        source, "type : mat4[64], name : textureSamplingFromLocal"));
+    EXPECT_TRUE(source_contains_compact(
+        source, "type : mat3[64], name : textureSamplingCofactor"));
+    const std::size_t vertex_begin = source.find("vertex {");
+    const std::size_t vertex_end = source.find("\nfragment {", vertex_begin);
+    ASSERT_NE(vertex_begin, std::string::npos);
+    ASSERT_NE(vertex_end, std::string::npos);
+    const std::string vertex =
+        source.substr(vertex_begin, vertex_end - vertex_begin);
+    vertex_blocks[index] = vertex;
+    EXPECT_NE(vertex.find("int instanceIndex = getInstanceIndex()"),
+              std::string::npos);
+    EXPECT_NE(vertex.find("textureSamplingFromLocal[instanceIndex]"),
+              std::string::npos);
+    EXPECT_NE(vertex.find("textureSamplingCofactor[instanceIndex]"),
+              std::string::npos);
+    EXPECT_NE(vertex.find("geometricNormal = getCustom2().xyz"),
+              std::string::npos);
+    EXPECT_NE(vertex.find("carrier = getCustom1()"), std::string::npos);
+    EXPECT_NE(vertex.find("if (all(equal(carrier, vec4(0.0))))"),
+              std::string::npos);
+    EXPECT_NE(vertex.find("samplingNormal / normalMagnitude"),
+              std::string::npos);
+    EXPECT_LT(vertex.find("samplingNormal / normalMagnitude"),
+              vertex.find("generatedTextureUv(samplingPosition, samplingNormal)"));
+    EXPECT_TRUE(source_contains_compact(
+        vertex, "generatedTextureUv(samplingPosition, samplingNormal)"
+                " - generatedTextureUv(position, geometricNormal)"));
+    EXPECT_TRUE(source_contains_compact(
+        vertex, "dot(carrier.xy, chartDelta), dot(carrier.zw, chartDelta)"));
+    EXPECT_TRUE(source_contains_compact(
+        vertex, "vec3(position.x, -position.z, position.y)"));
+    EXPECT_TRUE(source_contains_compact(
+        vertex, "dominant.x >= dominant.y && dominant.x >= dominant.z"));
+    EXPECT_NE(vertex.find("if (dominant.y >= dominant.z)"),
+              std::string::npos);
+    EXPECT_NE(vertex.find("sourceNormal.x >= 0.0 ? 1.0 : -1.0"),
+              std::string::npos);
+    EXPECT_NE(vertex.find("sourceNormal.y >= 0.0 ? 1.0 : -1.0"),
+              std::string::npos);
+    EXPECT_NE(vertex.find("sourceNormal.z >= 0.0 ? 1.0 : -1.0"),
+              std::string::npos);
+    const std::size_t identity_bypass =
+        vertex.find("if (samplingFromLocal == mat4(1.0))");
+    const std::size_t position_read = vertex.find("position = getPosition()");
+    ASSERT_NE(identity_bypass, std::string::npos);
+    ASSERT_NE(position_read, std::string::npos);
+    EXPECT_LT(identity_bypass, position_read);
+    // Filament's automatic UV flip is already applied at materialVertex entry;
+    // preserve the existing fragment unflip when adding the canonical UV delta.
+    EXPECT_TRUE(source_contains_compact(
+        vertex, "material.uv0 += vec2(uvCorrection.x, -uvCorrection.y)"));
+    EXPECT_NE(source.find("vec2(getUV0().x, 1.0 - getUV0().y)"),
+              std::string::npos);
+    EXPECT_EQ(vertex.find("material.worldPosition ="), std::string::npos);
+    EXPECT_EQ(vertex.find("inverse(samplingFromLocal)"), std::string::npos);
+  }
+  EXPECT_EQ(vertex_blocks[0], vertex_blocks[1]);
+}
+
 TEST(QuaderMeshMaterialTests, UsesLitTextureTransformTimesColorAndPbrFactors) {
   const std::string shaded_source =
       read_source_file("resources/materials/quader_mesh.mat");
@@ -239,9 +312,30 @@ TEST(QuaderMeshMaterialTests,
       source.find("material.normal = normalSample");
   const std::size_t prepare_material =
       source.find("prepareMaterial(material)");
+  const std::size_t normal_orientation =
+      source.find("normalSample = normalForTextureUv(normalSample, uv)");
   ASSERT_NE(normal_assignment, std::string::npos);
   ASSERT_NE(prepare_material, std::string::npos);
+  ASSERT_NE(normal_orientation, std::string::npos);
+  EXPECT_LT(normal_orientation, normal_assignment);
   EXPECT_LT(normal_assignment, prepare_material);
+  EXPECT_NE(source.find("normalSample = safeTextureNormal("),
+            std::string::npos);
+  EXPECT_NE(source.find("uvDx = dFdx(uv)"), std::string::npos);
+  EXPECT_NE(source.find("uvDy = dFdy(uv)"), std::string::npos);
+  EXPECT_NE(source.find("dFdx(getWorldPosition())"), std::string::npos);
+  EXPECT_NE(source.find("dFdy(getWorldPosition())"), std::string::npos);
+  EXPECT_NE(source.find("inverse(worldTangentFrame) * mappedWorldNormal"),
+            std::string::npos);
+  EXPECT_NE(source.find("isnan(frameDeterminant) || isinf(frameDeterminant)"),
+            std::string::npos);
+  const std::size_t unchanged_chart_gate =
+      source.find("if (variable_textureSamplingCorrection.x <= 0.5");
+  ASSERT_NE(unchanged_chart_gate, std::string::npos);
+  EXPECT_LT(unchanged_chart_gate, source.find("uvDx = dFdx(uv)"));
+  EXPECT_TRUE(source_contains_compact(
+      source, "materialParams.textureTransformRotationRadians == 0.0"
+              " && all(equal(materialParams.textureTransformScale, vec2(1.0)))"));
 }
 
 TEST(QuaderMeshMaterialTests,
@@ -309,14 +403,19 @@ TEST(QuaderMeshMaterialTests, SupportsOptionalWorldSpaceSurfaceGrid) {
               std::string::npos);
     EXPECT_EQ(count_occurrences(source, "weights *= weights;"), 2u);
     EXPECT_NE(source.find("return weights / weightSum"), std::string::npos);
-    EXPECT_NE(source.find(
-                  "vec3 surfaceGridFaceProjectionWeights(vec3 normal)"),
-              std::string::npos);
-    EXPECT_NE(source.find(
+    const std::size_t face_chart_begin = source.find(
+        "vec3 surfaceGridFaceProjectionWeights(vec3 normal)");
+    const std::size_t face_chart_end = source.find(
+        "vec3 surfaceGridPlaneLineCoverages(", face_chart_begin);
+    ASSERT_NE(face_chart_begin, std::string::npos);
+    ASSERT_NE(face_chart_end, std::string::npos);
+    const std::string_view face_chart(source.data() + face_chart_begin,
+                                      face_chart_end - face_chart_begin);
+    EXPECT_NE(face_chart.find(
                   "dominant.x > dominant.y && dominant.x > dominant.z"),
               std::string::npos);
-    EXPECT_NE(source.find("dominant.z > dominant.y"), std::string::npos);
-    EXPECT_NE(source.find("return vec3(0.0, 1.0, 0.0)"),
+    EXPECT_NE(face_chart.find("dominant.z > dominant.y"), std::string::npos);
+    EXPECT_NE(face_chart.find("return vec3(0.0, 1.0, 0.0)"),
               std::string::npos);
     EXPECT_NE(source.find(
                   "vec3 surfaceGridPlaneLineCoverages("),
@@ -349,9 +448,9 @@ TEST(QuaderMeshMaterialTests, SupportsOptionalWorldSpaceSurfaceGrid) {
     EXPECT_EQ(source.find("surfaceGridFaceNormal("), std::string::npos);
     EXPECT_EQ(source.find("cross(dFdx("), std::string::npos);
     EXPECT_EQ(source.find("axisTieEpsilon"), std::string::npos);
-    EXPECT_NE(source.find("vec3 dominant = abs(normal)"), std::string::npos);
-    EXPECT_EQ(source.find("dominant.x >= dominant.y"), std::string::npos);
-    EXPECT_EQ(source.find("dominant.y >= dominant.z"), std::string::npos);
+    EXPECT_NE(face_chart.find("vec3 dominant = abs(normal)"), std::string::npos);
+    EXPECT_EQ(face_chart.find("dominant.x >= dominant.y"), std::string::npos);
+    EXPECT_EQ(face_chart.find("dominant.y >= dominant.z"), std::string::npos);
     EXPECT_NE(source.find("surfaceGridFloor("), std::string::npos);
     EXPECT_NE(source.find("surfaceGridLineCoverage("), std::string::npos);
     EXPECT_TRUE(source_contains_compact(
@@ -481,6 +580,50 @@ TEST(QuaderMeshMaterialTests,
             std::string::npos);
   EXPECT_TRUE(source_contains_compact(
       preview_source, "vertex.normal.z, 0.0f"));
+
+  // The same materials are used by static meshes, streaming previews, and the
+  // isolated material preview: each upload must supply all sampling attributes.
+  for (const std::string_view vertex_type :
+       {"RenderVertex", "DynamicRenderVertexStatic"}) {
+    EXPECT_NE(factory_source.find("offsetof(" + std::string(vertex_type) +
+                                  ", uv_carrier)"),
+              std::string::npos);
+    EXPECT_NE(factory_source.find("offsetof(" + std::string(vertex_type) +
+                                  ", uv_geometric_normal)"),
+              std::string::npos);
+  }
+  EXPECT_EQ(count_occurrences(factory_source,
+                              "filament::VertexAttribute::CUSTOM1"),
+            2u);
+  EXPECT_EQ(count_occurrences(factory_source,
+                              "filament::VertexAttribute::CUSTOM2"),
+            2u);
+  EXPECT_NE(preview_source.find("filament::VertexAttribute::CUSTOM1"),
+            std::string::npos);
+  EXPECT_NE(preview_source.find("filament::VertexAttribute::CUSTOM2"),
+            std::string::npos);
+  EXPECT_NE(preview_source.find("offsetof(PreviewGpuVertex, uv_carrier)"),
+            std::string::npos);
+  EXPECT_NE(preview_source.find("offsetof(PreviewGpuVertex, uv_geometric_normal)"),
+            std::string::npos);
+  for (const std::string_view instance :
+       {"shaded_instance", "rendered_instance", "wire_instance"}) {
+    EXPECT_NE(preview_source.find("bind_mesh_texture_mappings(*" +
+                                  std::string(instance) + ")"),
+              std::string::npos);
+  }
+  const std::string binding_source =
+      read_source_file("src/render/material_binding_service.cpp");
+  const std::string binding_header =
+      read_source_file("src/render/material_binding_service.hpp");
+  EXPECT_NE(binding_header.find("kMeshTextureMappingCapacity = 64u"),
+            std::string::npos);
+  EXPECT_TRUE(source_contains_compact(
+      binding_source, "setParameter(\"textureSamplingFromLocal\","
+                      " matrices.data(), count)"));
+  EXPECT_TRUE(source_contains_compact(
+      binding_source, "setParameter(\"textureSamplingCofactor\","
+                      " cofactors.data(), count)"));
 }
 
 TEST(OverlayMaterialTests, PremultipliesVertexAlphaForTransparentFaceFill) {

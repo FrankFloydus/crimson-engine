@@ -12,6 +12,8 @@ using namespace quader_poly;
 
 TEST(QdrDocumentOperationConnectVerticesTests, ConnectVerticesSplitsASharedQuadFaceAndSelectsTheNewEdge) {
 	qdr_test::QuadFixture fixture = qdr_test::make_quad_document();
+	const FaceTextureTransform texture{{2.0F, 0.5F}, {0.25F, -0.75F}, 15.0F};
+	fixture.document.faces.front().texture_transform = texture;
 	Selection selection = qdr_test::vertex_selection({ fixture.bottom_left, fixture.top_right });
 
 	const OperationResult result = connect_selected_vertices(fixture.document, selection);
@@ -19,6 +21,10 @@ TEST(QdrDocumentOperationConnectVerticesTests, ConnectVerticesSplitsASharedQuadF
 	EXPECT_TRUE(result.changed);
 	qdr_test::expect_valid_polygon_document_after_success(fixture.document, result);
 	EXPECT_TRUE(fixture.document.faces.size() == 2U);
+	for (const Face& face : fixture.document.faces) {
+		EXPECT_EQ(face.texture_transform, texture);
+		EXPECT_TRUE(face.uvs.empty());
+	}
         EXPECT_TRUE(selection.mode == SelectionMode::Edge);
         EXPECT_TRUE(selection.edges.size() == 1U);
 	EXPECT_TRUE(selection_contains(selection, make_edge(fixture.bottom_left, fixture.top_right)));

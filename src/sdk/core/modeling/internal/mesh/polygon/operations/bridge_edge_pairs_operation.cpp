@@ -75,7 +75,7 @@ std::vector<OpenBridgeEdgeInfo> bridge_edge_infos(
     for (const Face& face : document.faces) {
         const std::optional<std::pair<ElementId, ElementId>> oriented = oriented_edge_in_face(face, edge);
         if (oriented.has_value()) {
-            infos.push_back({ edge, *oriented, face_normal(document, face), face.material_slot });
+            infos.push_back({ edge, *oriented, face_normal(document, face), face.material_slot, face.texture_transform });
         }
     }
     return infos;
@@ -222,7 +222,7 @@ OperationResult bridge_edge_pairs_impl(Document& document, Selection& selection,
     bridged_face_ids.reserve(edge_pairs.size() * static_cast<std::size_t>(step_count));
     std::map<BridgeRailStepKey, ElementId> rail_step_vertices;
 
-    auto append_bridge_face = [&](std::vector<ElementId> vertices, std::uint32_t material_slot) -> bool {
+    auto append_bridge_face = [&](std::vector<ElementId> vertices, const OpenBridgeEdgeInfo& source) -> bool {
         vertices = unique_valid_face_loop(std::move(vertices));
         if (vertices.size() < 3 || vertices.size() > 4) {
             return false;
@@ -230,7 +230,8 @@ OperationResult bridge_edge_pairs_impl(Document& document, Selection& selection,
         Face bridge_face;
         bridge_face.id = candidate.next_face_id++;
         bridge_face.vertices = std::move(vertices);
-        bridge_face.material_slot = material_slot;
+        bridge_face.material_slot = source.material_slot;
+        bridge_face.texture_transform = source.texture_transform;
         if (triangulate_face_local_indices(candidate, bridge_face).empty()) {
             return false;
         }
@@ -273,7 +274,7 @@ OperationResult bridge_edge_pairs_impl(Document& document, Selection& selection,
     for (const BridgePairInfo& pair_info : pair_infos) {
         if (step_count == 1) {
             const std::optional<std::vector<ElementId>> bridge_loop = bridge_face_loop_from_open_edges(document, pair_info.first, pair_info.second);
-            if (!bridge_loop.has_value() || !append_bridge_face(*bridge_loop, pair_info.first.material_slot)) {
+            if (!bridge_loop.has_value() || !append_bridge_face(*bridge_loop, pair_info.first)) {
                 return { false, "Bridge could not create a valid triangle or quad from the selected edges." };
             }
         } else {
@@ -325,15 +326,15 @@ OperationResult bridge_edge_pairs_impl(Document& document, Selection& selection,
                 }
 
                 if (rail_a_shared) {
-                    if (!append_bridge_face({ first_a, previous_b, current_b }, pair_info.first.material_slot)) {
+                    if (!append_bridge_face({ first_a, previous_b, current_b }, pair_info.first)) {
                         return { false, "Bridge could not create a valid stepped triangle." };
                     }
                 } else if (rail_b_shared) {
-                    if (!append_bridge_face({ previous_a, first_b, current_a }, pair_info.first.material_slot)) {
+                    if (!append_bridge_face({ previous_a, first_b, current_a }, pair_info.first)) {
                         return { false, "Bridge could not create a valid stepped triangle." };
                     }
                 } else {
-                    if (!append_bridge_face({ previous_a, previous_b, current_b, current_a }, pair_info.first.material_slot)) {
+                    if (!append_bridge_face({ previous_a, previous_b, current_b, current_a }, pair_info.first)) {
                         return { false, "Bridge could not create a valid stepped quad." };
                     }
                 }

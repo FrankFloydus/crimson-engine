@@ -5,6 +5,7 @@
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
 #include <quader/modeling/neutral/polygon/internal/quader_poly_document_bridge_surface_helpers.hpp>
+#include <quader/modeling/neutral/polygon/document_texture.hpp>
 
 #include <quader/modeling/neutral/polygon/internal/quader_poly_document_hull_plane_helpers.hpp>
 #include <quader/modeling/neutral/polygon/internal/quader_poly_document_knife_helpers.hpp>
@@ -468,18 +469,107 @@ bool orient_face_against_adjacent_winding(const Document& document, Face& face)
     return true;
 }
 
-std::uint32_t material_slot_for_open_edge(const Document& document, Edge edge)
+const Face* face_for_open_edge(const Document& document, Edge edge)
 {
     edge = make_edge(edge.a, edge.b);
     for (const Face& face : document.faces) {
         for (std::size_t vertex_index = 0; vertex_index < face.vertices.size(); ++vertex_index) {
             const Edge face_edge = make_edge(face.vertices[vertex_index], face.vertices[(vertex_index + 1U) % face.vertices.size()]);
             if (face_edge == edge) {
-                return face.material_slot;
+                return &face;
             }
         }
     }
-    return 0U;
+    return nullptr;
+}
+
+std::uint32_t material_slot_for_open_edge(const Document& document, Edge edge)
+{
+    const Face* face = face_for_open_edge(document, edge);
+    return face == nullptr ? 0U : face->material_slot;
+}
+
+ElementId add_face_with_texture_transform(
+    Document& document,
+    std::span<const ElementId> vertices,
+    std::uint32_t material_slot,
+    const FaceTextureTransform& texture_transform)
+{
+    const FaceTextureTransform inherited_transform = texture_transform;
+    const ElementId id = add_face(document, vertices, material_slot);
+    if (Face* face = find_face(document, id)) {
+        face->texture_transform = inherited_transform;
+    }
+    return id;
+}
+
+bool inherit_merged_face_texture(
+    const Document& source_document,
+    std::span<const ElementId> source_face_ids,
+    Face& merged_face)
+{
+    std::vector<const Face*> sources;
+    sources.reserve(source_face_ids.size());
+    for (const ElementId face_id : source_face_ids) {
+        if (const Face* source = find_face(source_document, face_id)) {
+            sources.push_back(source);
+        }
+    }
+    if (sources.empty()) {
+        return false;
+    }
+
+    merged_face.texture_transform = sources.front()->texture_transform;
+    const bool has_texture_edits = std::ranges::any_of(sources, [](const Face* source) {
+        return source->texture_transform != FaceTextureTransform{};
+    });
+    const bool needs_corner_mapping = std::ranges::any_of(sources, [&merged_face](const Face* source) {
+        return face_has_loop_uvs(*source) || source->texture_transform != merged_face.texture_transform;
+    });
+    if (!has_texture_edits || !needs_corner_mapping) {
+        return true;
+    }
+
+    // One merged face cannot keep an interior UV seam. Preserve each surviving
+    // boundary corner in the first material donor's base space, choosing the
+    // outgoing boundary edge's source deterministically at shared vertices.
+    std::vector<quader::QVec2> inherited_uvs;
+    inherited_uvs.reserve(merged_face.vertices.size());
+    for (std::size_t index = 0; index < merged_face.vertices.size(); ++index) {
+        const ElementId vertex_id = merged_face.vertices[index];
+        const ElementId next_id = merged_face.vertices[(index + 1U) % merged_face.vertices.size()];
+        const Face* source = nullptr;
+        for (const Face* candidate : sources) {
+            if (!contains_id(candidate->vertices, vertex_id)) {
+                continue;
+            }
+            if (source == nullptr) {
+                source = candidate;
+            }
+            if (face_uses_edge(*candidate, make_edge(vertex_id, next_id))) {
+                source = candidate;
+                break;
+            }
+        }
+        const Vertex* vertex = find_vertex(source_document, vertex_id);
+        if (source == nullptr || vertex == nullptr) {
+            return false;
+        }
+        const auto source_corner = std::ranges::find(source->vertices, vertex_id);
+        const std::size_t source_index = static_cast<std::size_t>(std::distance(source->vertices.begin(), source_corner));
+        const quader::QVec2 base_uv = face_has_loop_uvs(*source)
+            ? source->uvs[source_index]
+            : generated_texture_uv(vertex->position, face_normal(source_document, *source));
+        const quader::QVec2 uv = unapply_face_texture_transform(
+            apply_face_texture_transform(base_uv, source->texture_transform),
+            merged_face.texture_transform);
+        if (!std::isfinite(uv.x) || !std::isfinite(uv.y)) {
+            return false;
+        }
+        inherited_uvs.push_back(uv);
+    }
+    merged_face.uvs = std::move(inherited_uvs);
+    return true;
 }
 
 std::vector<ElementId> face_vertices_between(const Face& face, std::size_t start_index, std::size_t end_index)
@@ -568,7 +658,7 @@ std::optional<OpenBridgeEdgeInfo> open_bridge_edge_info(
     for (const Face& face : document.faces) {
         const std::optional<std::pair<ElementId, ElementId>> oriented = oriented_edge_in_face(face, edge);
         if (oriented.has_value()) {
-            return OpenBridgeEdgeInfo { edge, *oriented, face_normal(document, face), face.material_slot };
+            return OpenBridgeEdgeInfo { edge, *oriented, face_normal(document, face), face.material_slot, face.texture_transform };
         }
     }
     return std::nullopt;
@@ -851,6 +941,7 @@ std::optional<EdgeBevelSide> edge_bevel_side_for_face(
     EdgeBevelSide side;
     side.face_id = face.id;
     side.material_slot = face.material_slot;
+    side.texture_transform = face.texture_transform;
     side.normal = normal;
     side.endpoint_positions[from_id] = from_position;
     side.endpoint_positions[to_id] = to_position;
@@ -1291,7 +1382,8 @@ bool append_edge_bevel_face(
     std::vector<ElementId>& generated_face_ids,
     std::vector<ElementId> vertices,
     std::uint32_t material_slot,
-    quader::QVec3 expected_normal)
+    quader::QVec3 expected_normal,
+    const FaceTextureTransform& texture_transform)
 {
     vertices = compact_edge_bevel_face_loop(std::move(vertices));
     if (vertices.size() < 3 || edge_bevel_face_loop_has_repeated_vertices(vertices)) {
@@ -1302,6 +1394,7 @@ bool append_edge_bevel_face(
     face.id = document.next_face_id++;
     face.vertices = std::move(vertices);
     face.material_slot = material_slot;
+    face.texture_transform = texture_transform;
     orient_face_toward_normal(document, face, expected_normal);
 
     generated_face_ids.push_back(face.id);
@@ -3131,6 +3224,7 @@ bool append_copied_face(
         copied_face.uvs = source_face.uvs;
     }
     copied_face.material_slot = source_face.material_slot;
+    copied_face.texture_transform = source_face.texture_transform;
     if (triangulate_face_local_indices(target, copied_face).empty()) {
         return false;
     }
@@ -3211,6 +3305,7 @@ std::vector<FaceIslandBoundary> selected_face_island_boundaries(const Document& 
             boundary.normal += face_normal(document, face->second);
             if (!boundary.has_material_slot) {
                 boundary.material_slot = face->second.material_slot;
+                boundary.texture_transform = face->second.texture_transform;
                 boundary.has_material_slot = true;
             }
         }
@@ -3344,7 +3439,7 @@ quader::QVec3 vertex_loop_centroid(const Document& document, std::span<const Ele
     return count == 0 ? quader::QVec3 {} : centroid / static_cast<float>(count);
 }
 
-bool append_bridge_face(Document& document, std::vector<ElementId> vertices, std::uint32_t material_slot, quader::QVec3 expected_normal, std::vector<ElementId>& bridge_face_ids)
+bool append_bridge_face(Document& document, std::vector<ElementId> vertices, std::uint32_t material_slot, quader::QVec3 expected_normal, std::vector<ElementId>& bridge_face_ids, const FaceTextureTransform& texture_transform)
 {
     vertices = unique_valid_face_loop(std::move(vertices));
     if (vertices.size() < 3 || vertices.size() > 4) {
@@ -3355,6 +3450,7 @@ bool append_bridge_face(Document& document, std::vector<ElementId> vertices, std
     face.id = document.next_face_id++;
     face.vertices = std::move(vertices);
     face.material_slot = material_slot;
+    face.texture_transform = texture_transform;
     if (triangulate_face_local_indices(document, face).empty()) {
         std::ranges::reverse(face.vertices);
         if (triangulate_face_local_indices(document, face).empty()) {
@@ -3379,7 +3475,8 @@ bool append_bridge_faces_between_loops(
     std::uint32_t material_slot,
     int steps,
     std::vector<ElementId>& bridge_face_ids,
-    bool skip_degenerate_faces)
+    bool skip_degenerate_faces,
+    const FaceTextureTransform& texture_transform)
 {
     if (first_vertices.size() < 3 || first_vertices.size() != second_vertices.size()) {
         return false;
@@ -3415,7 +3512,7 @@ bool append_bridge_faces_between_loops(
             Face expected_face;
             expected_face.vertices = quad;
             const quader::QVec3 expected_normal = face_normal(document, expected_face);
-            if (!append_bridge_face(document, std::move(quad), material_slot, expected_normal, bridge_face_ids)) {
+            if (!append_bridge_face(document, std::move(quad), material_slot, expected_normal, bridge_face_ids, texture_transform)) {
                 if (!skip_degenerate_faces) {
                     return false;
                 }

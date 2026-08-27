@@ -111,6 +111,8 @@ TEST(QdrDocumentOperationInsertEdgeLoopTests, InsertEdgeLoopSplitsAQuadThroughTh
 	qdr_test::QuadFixture fixture = qdr_test::make_quad_document(7);
 	Face* face = find_face(fixture.document, fixture.face);
 	EXPECT_TRUE(face != nullptr);
+	const FaceTextureTransform texture{{-2.0F, 0.5F}, {0.25F, 0.75F}, 45.0F};
+	face->texture_transform = texture;
 	face->uvs = {
 		{ 0.0F, 0.0F },
 		{ 1.0F, 0.0F },
@@ -134,6 +136,7 @@ TEST(QdrDocumentOperationInsertEdgeLoopTests, InsertEdgeLoopSplitsAQuadThroughTh
         EXPECT_TRUE(qdr_test::edge_positions_match_unordered(fixture.document, selection.edges.front(), { -0.5F, -1.0F, 0.0F }, { -0.5F, 1.0F, 0.0F }));
 	for (const Face& split_face : fixture.document.faces) {
 		EXPECT_TRUE(split_face.material_slot == 7U);
+		EXPECT_EQ(split_face.texture_transform, texture);
 		EXPECT_TRUE(split_face.uvs.empty());
 	}
 	EXPECT_TRUE(qdr_test::every_face_compiles_to_triangles(fixture.document));

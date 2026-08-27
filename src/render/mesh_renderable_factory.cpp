@@ -46,6 +46,8 @@ struct RenderVertex {
     filament::math::float4 tangent_frame;
     filament::math::float2 uv;
     filament::math::float4 surface_grid_projection;
+    filament::math::float4 uv_carrier;
+    filament::math::float3 uv_geometric_normal;
     std::uint32_t color;
 };
 
@@ -55,6 +57,8 @@ struct DynamicRenderVertexStatic {
     filament::math::float4 tangent_frame;
     filament::math::float2 uv;
     filament::math::float4 surface_grid_projection;
+    filament::math::float4 uv_carrier;
+    filament::math::float3 uv_geometric_normal;
     std::uint32_t color;
 };
 
@@ -215,6 +219,9 @@ build_render_vertices(const RenderMeshAssetSnapshot &mesh) {
         {grid_projection.local_normal.x, grid_projection.local_normal.y,
          grid_projection.local_normal.z,
          grid_projection.face_projected ? 1.0f : 0.0f},
+        {vertex.uv_carrier[0], vertex.uv_carrier[1], vertex.uv_carrier[2],
+         vertex.uv_carrier[3]},
+        to_filament(vertex.uv_geometric_normal),
         vertex.rgba,
     });
   }
@@ -230,6 +237,8 @@ pack_dynamic_static_vertices(std::span<const RenderVertex> vertices) {
         .tangent_frame = vertex.tangent_frame,
         .uv = vertex.uv,
         .surface_grid_projection = vertex.surface_grid_projection,
+        .uv_carrier = vertex.uv_carrier,
+        .uv_geometric_normal = vertex.uv_geometric_normal,
         .color = vertex.color,
     });
   }
@@ -289,7 +298,11 @@ bool same_vertex(const MeshVertex &left, const MeshVertex &right) {
          left.position.z == right.position.z &&
          left.normal.x == right.normal.x && left.normal.y == right.normal.y &&
          left.normal.z == right.normal.z && left.uv.x == right.uv.x &&
-         left.uv.y == right.uv.y && left.rgba == right.rgba;
+         left.uv.y == right.uv.y && left.rgba == right.rgba &&
+         left.uv_carrier == right.uv_carrier &&
+         left.uv_geometric_normal.x == right.uv_geometric_normal.x &&
+         left.uv_geometric_normal.y == right.uv_geometric_normal.y &&
+         left.uv_geometric_normal.z == right.uv_geometric_normal.z;
 }
 
 std::uint64_t geometry_payload_signature(
@@ -303,7 +316,11 @@ std::uint64_t geometry_payload_signature(
     signature.add_vec3(vertex.position)
         .add_vec3(vertex.normal)
         .add_vec2(vertex.uv)
+        .add_vec3(vertex.uv_geometric_normal)
         .add_value(vertex.rgba);
+    for (const float coefficient : vertex.uv_carrier) {
+      signature.add_float(coefficient);
+    }
   }
   signature.add_size(mesh.indices.size());
   for (const std::uint32_t index : mesh.indices) {
@@ -512,6 +529,13 @@ bool MeshRenderableFactory::acquire_geometry(
           .attribute(filament::VertexAttribute::COLOR, 0,
                      AttributeType::UBYTE4, offsetof(RenderVertex, color),
                      sizeof(RenderVertex))
+          .attribute(filament::VertexAttribute::CUSTOM1, 0,
+                     AttributeType::FLOAT4, offsetof(RenderVertex, uv_carrier),
+                     sizeof(RenderVertex))
+          .attribute(filament::VertexAttribute::CUSTOM2, 0,
+                     AttributeType::FLOAT3,
+                     offsetof(RenderVertex, uv_geometric_normal),
+                     sizeof(RenderVertex))
           .normalized(filament::VertexAttribute::COLOR)
           .build(*engine_);
   resource->vertex_buffer->setBufferAt(
@@ -582,6 +606,14 @@ bool MeshRenderableFactory::acquire_dynamic_geometry(
           .attribute(filament::VertexAttribute::COLOR, 1,
                      AttributeType::UBYTE4,
                      offsetof(DynamicRenderVertexStatic, color),
+                     sizeof(DynamicRenderVertexStatic))
+          .attribute(filament::VertexAttribute::CUSTOM1, 1,
+                     AttributeType::FLOAT4,
+                     offsetof(DynamicRenderVertexStatic, uv_carrier),
+                     sizeof(DynamicRenderVertexStatic))
+          .attribute(filament::VertexAttribute::CUSTOM2, 1,
+                     AttributeType::FLOAT3,
+                     offsetof(DynamicRenderVertexStatic, uv_geometric_normal),
                      sizeof(DynamicRenderVertexStatic))
           .normalized(filament::VertexAttribute::COLOR)
           .build(*engine_);
@@ -958,7 +990,6 @@ MeshRenderableProxy MeshRenderableFactory::create_shared_instance(
   QDR_PROFILE_FUNCTION();
   MeshRenderableProxy proxy;
   proxy.owns_mesh_buffers = false;
-  proxy.owns_material_instances = false;
   MeshRenderableCreationGuard creation_guard(*this, proxy);
   proxy.entity = utils::EntityManager::get().create();
   proxy.source_entity = entity_id;
@@ -971,7 +1002,13 @@ MeshRenderableProxy MeshRenderableFactory::create_shared_instance(
   proxy.vertex_buffer = prototype.vertex_buffer;
   proxy.index_buffer = prototype.index_buffer;
   proxy.material_slots = prototype.material_slots;
-  proxy.material_instances = prototype.material_instances;
+  // Preview siblings share geometry, never occurrence-dependent uniforms.
+  proxy.material_instances.reserve(prototype.material_instances.size());
+  for (const filament::MaterialInstance *instance : prototype.material_instances) {
+    proxy.material_instances.push_back(
+        instance != nullptr ? filament::MaterialInstance::duplicate(instance)
+                            : nullptr);
+  }
 
   const std::vector<MeshPrimitiveSpan> primitive_spans =
       coalesced_render_mesh_primitive_spans(mesh);
@@ -1095,6 +1132,7 @@ MeshRenderableProxy MeshRenderableFactory::create_explicit_instances(
   MeshRenderableProxy proxy;
   if (!initialized() || world_transforms.empty() ||
       world_transforms.size() > engine_->getMaxAutomaticInstances() ||
+      world_transforms.size() > kMeshTextureMappingCapacity ||
       primitive.index_count == 0u ||
       static_cast<std::uint64_t>(primitive.index_offset) +
               primitive.index_count >
@@ -1377,6 +1415,21 @@ void MeshRenderableFactory::update_transform(const MeshRenderableProxy &proxy,
     instance = transform_manager.getInstance(proxy.entity);
   }
   transform_manager.setTransform(instance, make_transform(world_transform));
+}
+
+void MeshRenderableFactory::update_texture_mapping(
+    const MeshRenderableProxy &proxy, const QMat4 &sampling_from_local) {
+  update_texture_mappings(proxy, std::span<const QMat4>(&sampling_from_local, 1u));
+}
+
+void MeshRenderableFactory::update_texture_mappings(
+    const MeshRenderableProxy &proxy,
+    std::span<const QMat4> sampling_from_local) {
+  for (filament::MaterialInstance *material : proxy.material_instances) {
+    if (material != nullptr) {
+      bind_mesh_texture_mappings(*material, sampling_from_local);
+    }
+  }
 }
 
 void MeshRenderableFactory::update_layer_mask(

@@ -3341,6 +3341,77 @@ public:
         "Assign material slot failed.");
   }
 
+  [[nodiscard]] ModelingSelectedFaceTextureSnapshot
+  selected_face_texture_settings() const {
+    ++stats_.face_texture_summary_build_count;
+    ModelingSelectedFaceTextureSnapshot result;
+    if (selection_mode_ != ModelingSelectionMode::Face) {
+      return result;
+    }
+    const std::vector<ObjectId> selected = selected_sdk_objects();
+    const Result<std::vector<PolygonDocument>> documents =
+        session_.document_copies(selected);
+    if (!documents.ok()) {
+      result.command = failure(documents.error_message());
+      return result;
+    }
+    for (std::size_t index = 0; index < selected.size(); ++index) {
+      const auto &document = documents.value()[index];
+      const PolygonSelectionSnapshot selection = document.selection();
+      if (selection.faces.empty()) {
+        continue;
+      }
+      const auto native = native_object(selected[index]);
+      const auto entity = native.has_value()
+                              ? object_map_.entity_for_modeling_object(*native)
+                              : std::nullopt;
+      if (!native.has_value() || !entity.has_value() || !scene_.exists(*entity)) {
+        result.command = failure("A selected face mesh is no longer live.");
+        return result;
+      }
+      auto properties = document.face_texture_settings(selection.faces);
+      if (!properties.ok()) {
+        result.command = failure(properties.error_message());
+        return result;
+      }
+      std::ranges::sort(properties.value(), {},
+                        &quader::modeling::FaceTextureSettings::face);
+      result.objects.push_back({
+          .modeling_object_id = *native,
+          .entity = *entity,
+          .faces = std::move(properties).value(),
+      });
+    }
+    std::ranges::sort(result.objects, {},
+                      &ModelingSelectedFaceTextureObject::modeling_object_id);
+    return result;
+  }
+
+  [[nodiscard]] ModelingCommandResult apply_face_texture_updates(
+      std::span<const ModelingFaceTextureUpdateBatch> batches) {
+    if (selection_mode_ != ModelingSelectionMode::Face) {
+      return failure("Texture settings require face selection mode.");
+    }
+    std::vector<ObjectId> objects;
+    objects.reserve(batches.size());
+    for (const auto &batch : batches) {
+      const auto object = sdk_object(batch.modeling_object_id);
+      if (!object.has_value() || batch.updates.empty() ||
+          std::ranges::find(objects, *object) != objects.end()) {
+        return failure("The selected texture targets are no longer valid.");
+      }
+      objects.push_back(*object);
+    }
+    return mutate_documents_by_object(
+        objects,
+        [&objects, batches](ObjectId object, PolygonDocument &document) {
+          const std::size_t index = static_cast<std::size_t>(
+              std::ranges::find(objects, object) - objects.begin());
+          return document.set_face_texture_transforms(batches[index].updates);
+        },
+        "Edit face texture settings failed.", false, false, false, true);
+  }
+
   [[nodiscard]] ModelingCommandResult assign_material_slot_to_objects(
       std::span<const int> modeling_object_ids,
       std::uint32_t material_slot) {
@@ -8387,6 +8458,16 @@ ModelingCommandResult
 ModelingSdkProjectionAdapter::assign_material_slot_to_selection(
     std::uint32_t material_slot) {
   return impl_->assign_material_slot_to_selection(material_slot);
+}
+
+ModelingSelectedFaceTextureSnapshot
+ModelingSdkProjectionAdapter::selected_face_texture_settings() const {
+  return impl_->selected_face_texture_settings();
+}
+
+ModelingCommandResult ModelingSdkProjectionAdapter::apply_face_texture_updates(
+    std::span<const ModelingFaceTextureUpdateBatch> batches) {
+  return impl_->apply_face_texture_updates(batches);
 }
 
 ModelingCommandResult

@@ -26,12 +26,15 @@
 #include <QKeyEvent>
 #include <QLineEdit>
 #include <QLabel>
+#include <QLocale>
 #include <QMouseEvent>
 #include <QMainWindow>
+#include <QMetaObject>
 #include <QPointer>
 #include <QPushButton>
 #include <QRadioButton>
 #include <QRegion>
+#include <QScopeGuard>
 #include <QSignalBlocker>
 #include <QSlider>
 #include <QSpinBox>
@@ -46,6 +49,7 @@
 #include <chrono>
 #include <cmath>
 #include <filesystem>
+#include <optional>
 
 #ifndef QUADER_SOURCE_DIR
 #define QUADER_SOURCE_DIR "."
@@ -133,6 +137,30 @@ const quader::QuaderToolSettingControl *find_setting(
         return control.id == id;
       });
   return found == target.controls.end() ? nullptr : &*found;
+}
+
+quader::QuaderApiVoidResult set_face_texture_field(
+    quader::QuaderEditorApi &editor, quader::QuaderFaceTextureField field,
+    double value) {
+  return editor.modeling().set_face_texture_setting(
+      {.field = field,
+       .value = value,
+       .selection_token =
+           editor.modeling().face_texture_settings().selection_token});
+}
+
+void type_spin_text(QDoubleSpinBox &spin, const QString &text) {
+  spin.setFocus(Qt::OtherFocusReason);
+  spin.selectAll();
+  for (QChar character : text) {
+    QKeyEvent event(QEvent::KeyPress, character.unicode(), Qt::NoModifier,
+                    QString(character));
+    QCoreApplication::sendEvent(&spin, &event);
+  }
+}
+
+void finish_spin_edit(QDoubleSpinBox &spin) {
+  QMetaObject::invokeMethod(&spin, "editingFinished", Qt::DirectConnection);
 }
 
 } // namespace
@@ -541,6 +569,368 @@ TEST(QtToolSettingsPanelTests,
       QStringLiteral("tool_settings.control.linear_array.count.label"));
   ASSERT_NE(linear_count_label, nullptr);
   EXPECT_EQ(linear_count_label->text(), QStringLiteral("Numero di copie"));
+  panel.unbind();
+}
+
+TEST(QtToolSettingsPanelTests,
+     FaceTextureSectionRetainsEditableMixedScalesAndSingleFacePixelShifts) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  // Match main.cpp's numeric editing contract without changing later tests.
+  const QLocale previous_locale;
+  const auto restore_locale =
+      qScopeGuard([previous_locale] { QLocale::setDefault(previous_locale); });
+  QLocale::setDefault(QLocale::c());
+  int argc = 1;
+  char executable[] = "quader-face-texture-settings-tests";
+  char *argv[] = {executable, nullptr};
+  QApplication application(argc, argv);
+  QApplication::setStyle(QStringLiteral("Fusion"));
+  auto standalone = quader::create_standalone_editor();
+  auto &editor = standalone.editor();
+  const auto source = editor.modeling().create_box(
+      quader::QuaderBounds{.min = {-1.0f, -1.0f, -1.0f},
+                           .max = {1.0f, 1.0f, 1.0f}},
+      "Texture Settings Faces");
+  ASSERT_TRUE(source.ok()) << source.error_message();
+
+  quader::QtToolSettingsPanel panel;
+  panel.setAttribute(Qt::WA_DontShowOnScreen, true);
+  panel.bind(editor);
+  panel.show();
+  QCoreApplication::processEvents();
+  auto *section = panel.findChild<QWidget *>(
+      QStringLiteral("tool_settings.section.texture"));
+  auto *header = panel.findChild<QToolButton *>(
+      QStringLiteral("tool_settings.section.texture.header"));
+  auto *content = panel.findChild<QWidget *>(
+      QStringLiteral("tool_settings.section.texture.content"));
+  auto *scale_x = panel.findChild<QDoubleSpinBox *>(
+      QStringLiteral("tool_settings.texture.scale_x"));
+  auto *scale_y = panel.findChild<QDoubleSpinBox *>(
+      QStringLiteral("tool_settings.texture.scale_y"));
+  auto *shift_x = panel.findChild<QDoubleSpinBox *>(
+      QStringLiteral("tool_settings.texture.shift_x"));
+  auto *shift_y = panel.findChild<QDoubleSpinBox *>(
+      QStringLiteral("tool_settings.texture.shift_y"));
+  ASSERT_NE(section, nullptr);
+  ASSERT_NE(header, nullptr);
+  ASSERT_NE(content, nullptr);
+  ASSERT_NE(scale_x, nullptr);
+  ASSERT_NE(scale_y, nullptr);
+  ASSERT_NE(shift_x, nullptr);
+  ASSERT_NE(shift_y, nullptr);
+  EXPECT_EQ(shift_x->accessibleName(), QStringLiteral("Shift X"));
+  EXPECT_EQ(shift_y->accessibleName(), QStringLiteral("Shift Y"));
+  ASSERT_EQ(scale_y->locale().decimalPoint(), QStringLiteral("."));
+  EXPECT_TRUE(section->isHidden());
+  EXPECT_TRUE(header->isChecked());
+  EXPECT_FALSE(panel.has_active_target());
+  EXPECT_TRUE(section->findChildren<QSlider *>().isEmpty());
+  const QPointer<QDoubleSpinBox> retained_scale_y(scale_y);
+
+  ASSERT_TRUE(editor.selection().set_mode(quader::QuaderSelectionMode::Face).ok());
+  ASSERT_TRUE(editor.selection().select_face(source.value(), 1).ok());
+  ASSERT_TRUE(set_face_texture_field(
+                  editor, quader::QuaderFaceTextureField::ScaleY, 2.0).ok());
+  ASSERT_TRUE(editor.selection().select_face(source.value(), 2).ok());
+  ASSERT_TRUE(set_face_texture_field(
+                  editor, quader::QuaderFaceTextureField::ScaleY, 4.0).ok());
+  ASSERT_TRUE(editor.selection().select_faces(source.value(), {1, 2}).ok());
+  panel.refresh_texture_settings();
+  EXPECT_FALSE(section->isHidden());
+  EXPECT_FALSE(panel.has_active_target());
+  EXPECT_DOUBLE_EQ(scale_x->value(), 1.0);
+  EXPECT_EQ(scale_y->text(), QStringLiteral("--"));
+  EXPECT_TRUE(scale_y->isEnabled());
+  EXPECT_EQ(shift_x->text(), QStringLiteral("--"));
+  EXPECT_EQ(shift_y->text(), QStringLiteral("--"));
+  EXPECT_FALSE(shift_x->isEnabled());
+  EXPECT_FALSE(shift_y->isEnabled());
+
+  // Exercise native interpretation and focus traversal, not only the signal:
+  // accepting an untouched mixed field must preserve both original values.
+  panel.activateWindow();
+  scale_y->setFocus(Qt::OtherFocusReason);
+  QCoreApplication::processEvents();
+  ASSERT_TRUE(scale_y->hasFocus() ||
+              (QApplication::focusWidget() != nullptr &&
+               scale_y->isAncestorOf(QApplication::focusWidget())));
+  const auto untouched_revision = editor.revisions();
+  send_key_event(*scale_y, Qt::Key_Return);
+  EXPECT_EQ(scale_y->text(), QStringLiteral("--"));
+  EXPECT_FALSE(editor.modeling().face_texture_settings().scale_y.has_value());
+  send_key_event(*scale_y, Qt::Key_Tab);
+  QCoreApplication::processEvents();
+  EXPECT_FALSE(scale_y->hasFocus());
+  ASSERT_NE(QApplication::focusWidget(), nullptr);
+  EXPECT_FALSE(scale_y->isAncestorOf(QApplication::focusWidget()));
+  process_events_for(75);
+  EXPECT_EQ(scale_y->text(), QStringLiteral("--"));
+  EXPECT_FALSE(editor.modeling().face_texture_settings().scale_y.has_value());
+  EXPECT_EQ(editor.revisions().modeling_content_revision,
+            untouched_revision.modeling_content_revision);
+  EXPECT_EQ(editor.revisions().scene_revision, untouched_revision.scene_revision);
+  EXPECT_EQ(editor.revisions().asset_revision, untouched_revision.asset_revision);
+  EXPECT_FALSE(panel.numeric_interaction_active());
+
+  scale_x->setValue(5.0);
+  finish_spin_edit(*scale_x);
+  auto settings = editor.modeling().face_texture_settings();
+  EXPECT_EQ(settings.scale_x, std::optional<double>(5.0));
+  EXPECT_FALSE(settings.scale_y.has_value());
+
+  type_spin_text(*scale_y, QStringLiteral("0.5"));
+  panel.refresh();
+  EXPECT_EQ(scale_y->text(), QStringLiteral("0.5"));
+  process_events_for(75);
+  settings = editor.modeling().face_texture_settings();
+  EXPECT_EQ(settings.scale_x, std::optional<double>(5.0));
+  EXPECT_EQ(settings.scale_y, std::optional<double>(0.5));
+  EXPECT_EQ(scale_y->text(), QStringLiteral("0.5"));
+  const auto live_revision = editor.revisions().modeling_content_revision;
+  send_key_event(*scale_y, Qt::Key_Return);
+  EXPECT_DOUBLE_EQ(scale_y->value(), 0.5);
+  EXPECT_EQ(editor.revisions().modeling_content_revision, live_revision);
+  EXPECT_FALSE(panel.numeric_interaction_active());
+
+  // Repeat from a mixed value, this time tabbing away before the trailing timer
+  // fires. Focus-out must flush the exact typed value once and cancel the timer.
+  ASSERT_TRUE(editor.history().undo().ok());
+  panel.refresh_texture_settings();
+  EXPECT_EQ(scale_y->text(), QStringLiteral("--"));
+  EXPECT_EQ(editor.modeling().face_texture_settings().scale_x,
+            std::optional<double>(5.0));
+  type_spin_text(*scale_y, QStringLiteral("0.5"));
+  panel.refresh();
+  EXPECT_EQ(scale_y->text(), QStringLiteral("0.5"));
+  EXPECT_FALSE(editor.modeling().face_texture_settings().scale_y.has_value());
+  send_key_event(*scale_y, Qt::Key_Tab);
+  QCoreApplication::processEvents();
+  EXPECT_FALSE(scale_y->hasFocus());
+  settings = editor.modeling().face_texture_settings();
+  EXPECT_EQ(settings.scale_x, std::optional<double>(5.0));
+  EXPECT_EQ(settings.scale_y, std::optional<double>(0.5));
+  EXPECT_DOUBLE_EQ(scale_y->value(), 0.5);
+  const auto tab_revision = editor.revisions().modeling_content_revision;
+  process_events_for(75);
+  EXPECT_EQ(editor.revisions().modeling_content_revision, tab_revision);
+  EXPECT_FALSE(panel.numeric_interaction_active());
+
+  ASSERT_TRUE(editor.selection().select_face(source.value(), 1).ok());
+  panel.refresh_texture_settings();
+  EXPECT_TRUE(shift_x->isEnabled());
+  EXPECT_TRUE(shift_y->isEnabled());
+  EXPECT_DOUBLE_EQ(scale_x->value(), 5.0);
+  EXPECT_DOUBLE_EQ(scale_y->value(), 0.5);
+  shift_x->setValue(32.0);
+  finish_spin_edit(*shift_x);
+  EXPECT_DOUBLE_EQ(editor.modeling().face_texture_settings().shift_x, 32.0);
+  ASSERT_TRUE(editor.selection().select_face(source.value(), 2).ok());
+  panel.refresh_texture_settings();
+  EXPECT_DOUBLE_EQ(shift_x->value(), 0.0);
+  EXPECT_DOUBLE_EQ(scale_x->value(), 5.0);
+  EXPECT_DOUBLE_EQ(scale_y->value(), 0.5);
+
+  header->click();
+  EXPECT_TRUE(content->isHidden());
+  ASSERT_TRUE(editor.selection().clear().ok());
+  panel.refresh_texture_settings();
+  EXPECT_TRUE(section->isHidden());
+  ASSERT_TRUE(editor.selection().select_face(source.value(), 1).ok());
+  panel.refresh_texture_settings();
+  EXPECT_FALSE(section->isHidden());
+  EXPECT_TRUE(content->isHidden());
+  EXPECT_EQ(retained_scale_y.data(), scale_y);
+  EXPECT_FALSE(header->isChecked());
+
+  quader::LocalizationService italian;
+  ASSERT_TRUE(italian.load(
+      std::filesystem::path(QUADER_SOURCE_DIR) / "resources" / "locales",
+      "it-IT"));
+  panel.set_localization(italian);
+  EXPECT_EQ(header->text(), QStringLiteral("Impostazioni texture"));
+  EXPECT_EQ(scale_x->accessibleName(), QStringLiteral("Scala X"));
+  EXPECT_EQ(shift_x->accessibleName(), QStringLiteral("Spostamento X"));
+  EXPECT_EQ(shift_y->accessibleName(), QStringLiteral("Spostamento Y"));
+  EXPECT_EQ(scale_y->locale().decimalPoint(), QStringLiteral("."));
+  EXPECT_TRUE(content->isHidden());
+  ASSERT_TRUE(editor.selection().set_mode(quader::QuaderSelectionMode::Object).ok());
+  panel.refresh_texture_settings();
+  EXPECT_TRUE(section->isHidden());
+  panel.unbind();
+}
+
+TEST(QtToolSettingsPanelTests,
+     FaceTextureRotationUsesSelectionBaselineAndCoalescesOneNumericGesture) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char executable[] = "quader-face-texture-rotation-tests";
+  char *argv[] = {executable, nullptr};
+  QApplication application(argc, argv);
+  QApplication::setStyle(QStringLiteral("Fusion"));
+  auto standalone = quader::create_standalone_editor();
+  auto &editor = standalone.editor();
+  const auto source = editor.modeling().create_box(
+      quader::QuaderBounds{.min = {-1.0f, -1.0f, -1.0f},
+                           .max = {1.0f, 1.0f, 1.0f}},
+      "Texture Rotation Faces");
+  ASSERT_TRUE(source.ok());
+  ASSERT_TRUE(editor.selection().set_mode(quader::QuaderSelectionMode::Face).ok());
+  ASSERT_TRUE(editor.selection().select_face(source.value(), 1).ok());
+  ASSERT_TRUE(set_face_texture_field(
+                  editor, quader::QuaderFaceTextureField::Rotate, 30.0).ok());
+  ASSERT_TRUE(editor.selection().select_face(source.value(), 2).ok());
+  ASSERT_TRUE(set_face_texture_field(
+                  editor, quader::QuaderFaceTextureField::Rotate, -15.0).ok());
+  ASSERT_TRUE(editor.selection().select_faces(source.value(), {1, 2}).ok());
+
+  quader::QtToolSettingsPanel panel;
+  panel.setAttribute(Qt::WA_DontShowOnScreen, true);
+  panel.bind(editor);
+  panel.show();
+  auto *rotate = panel.findChild<QDoubleSpinBox *>(
+      QStringLiteral("tool_settings.texture.rotate"));
+  auto *scale_x = panel.findChild<QDoubleSpinBox *>(
+      QStringLiteral("tool_settings.texture.scale_x"));
+  ASSERT_NE(rotate, nullptr);
+  ASSERT_NE(scale_x, nullptr);
+  EXPECT_DOUBLE_EQ(rotate->value(), 0.0);
+
+  rotate->setValue(10.0);
+  process_events_for(75);
+  EXPECT_DOUBLE_EQ(editor.modeling().face_texture_settings().rotation_degrees,
+                   10.0);
+  rotate->setValue(20.0);
+  process_events_for(75);
+  EXPECT_DOUBLE_EQ(editor.modeling().face_texture_settings().rotation_degrees,
+                   20.0);
+  finish_spin_edit(*rotate);
+  EXPECT_FALSE(panel.numeric_interaction_active());
+  ASSERT_TRUE(editor.history().undo().ok());
+  panel.refresh_texture_settings();
+  EXPECT_DOUBLE_EQ(rotate->value(), 0.0);
+  ASSERT_TRUE(editor.history().redo().ok());
+  panel.refresh_texture_settings();
+
+  // A subsequent gesture is separate; one undo cannot consume both gestures.
+  scale_x->setValue(2.0);
+  finish_spin_edit(*scale_x);
+  scale_x->setValue(3.0);
+  finish_spin_edit(*scale_x);
+  ASSERT_TRUE(editor.history().undo().ok());
+  panel.refresh_texture_settings();
+  EXPECT_DOUBLE_EQ(scale_x->value(), 2.0);
+  ASSERT_TRUE(editor.history().undo().ok());
+  panel.refresh_texture_settings();
+  EXPECT_DOUBLE_EQ(scale_x->value(), 1.0);
+
+  ASSERT_TRUE(editor.selection().select_face(
+                  source.value(), 3, quader::QuaderSelectionEdit::Add).ok());
+  panel.refresh_texture_settings();
+  EXPECT_DOUBLE_EQ(rotate->value(), 0.0);
+  rotate->setValue(8.0);
+  finish_spin_edit(*rotate);
+  ASSERT_TRUE(editor.selection().select_face(
+                  source.value(), 3, quader::QuaderSelectionEdit::Remove).ok());
+  panel.refresh_texture_settings();
+  EXPECT_DOUBLE_EQ(rotate->value(), 0.0);
+  panel.unbind();
+}
+
+TEST(QtToolSettingsPanelTests,
+     FaceTextureQueuedEditsAreDiscardedAcrossSelectionPreviewAndRebinding) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char executable[] = "quader-face-texture-lifecycle-tests";
+  char *argv[] = {executable, nullptr};
+  QApplication application(argc, argv);
+  QApplication::setStyle(QStringLiteral("Fusion"));
+  auto standalone = quader::create_standalone_editor();
+  auto &editor = standalone.editor();
+  const auto source = editor.modeling().create_box(
+      quader::QuaderBounds{.min = {-1.0f, -1.0f, -1.0f},
+                           .max = {1.0f, 1.0f, 1.0f}},
+      "Texture Lifecycle Faces");
+  ASSERT_TRUE(source.ok());
+  ASSERT_TRUE(editor.selection().set_mode(quader::QuaderSelectionMode::Face).ok());
+  ASSERT_TRUE(editor.selection().select_face(source.value(), 1).ok());
+  quader::QtToolSettingsPanel panel;
+  panel.setAttribute(Qt::WA_DontShowOnScreen, true);
+  panel.bind(editor);
+  panel.show();
+  auto *scale_x = panel.findChild<QDoubleSpinBox *>(
+      QStringLiteral("tool_settings.texture.scale_x"));
+  auto *shift_x = panel.findChild<QDoubleSpinBox *>(
+      QStringLiteral("tool_settings.texture.shift_x"));
+  auto *reason = panel.findChild<QLabel *>(
+      QStringLiteral("tool_settings.texture.disabled_reason"));
+  ASSERT_NE(scale_x, nullptr);
+  ASSERT_NE(shift_x, nullptr);
+  ASSERT_NE(reason, nullptr);
+
+  shift_x->setValue(64.0);
+  EXPECT_TRUE(panel.numeric_interaction_active());
+  ASSERT_TRUE(editor.selection().select_face(source.value(), 2).ok());
+  const auto unchanged_revision = editor.revisions().modeling_content_revision;
+  // Even without a panel refresh, the delayed callback validates its owner key.
+  process_events_for(75);
+  EXPECT_EQ(editor.revisions().modeling_content_revision, unchanged_revision);
+  EXPECT_DOUBLE_EQ(editor.modeling().face_texture_settings().shift_x, 0.0);
+  EXPECT_FALSE(panel.numeric_interaction_active());
+
+  scale_x->setValue(7.0);
+  ASSERT_TRUE(editor.selection().select_face(
+                  source.value(), 1, quader::QuaderSelectionEdit::Add).ok());
+  panel.refresh_texture_settings();
+  EXPECT_FALSE(panel.numeric_interaction_active());
+  EXPECT_DOUBLE_EQ(scale_x->value(), 1.0);
+  process_events_for(75);
+  EXPECT_EQ(editor.modeling().face_texture_settings().scale_x,
+            std::optional<double>(1.0));
+
+  scale_x->setValue(0.0);
+  finish_spin_edit(*scale_x);
+  EXPECT_DOUBLE_EQ(scale_x->value(), 1.0);
+  EXPECT_EQ(editor.revisions().modeling_content_revision, unchanged_revision);
+
+  ASSERT_TRUE(editor.modeling().begin_transform_preview().ok());
+  panel.refresh_texture_settings();
+  EXPECT_FALSE(scale_x->isEnabled());
+  EXPECT_FALSE(reason->isHidden());
+  EXPECT_FALSE(reason->text().isEmpty());
+  ASSERT_TRUE(editor.modeling().cancel_transform_preview().ok());
+  panel.refresh_texture_settings();
+  EXPECT_TRUE(scale_x->isEnabled());
+  EXPECT_TRUE(reason->isHidden());
+
+  scale_x->setValue(9.0);
+  EXPECT_TRUE(panel.numeric_interaction_active());
+  panel.unbind();
+  process_events_for(75);
+  EXPECT_FALSE(panel.numeric_interaction_active());
+  EXPECT_EQ(editor.modeling().face_texture_settings().scale_x,
+            std::optional<double>(1.0));
+
+  panel.bind(editor);
+  scale_x->setValue(11.0);
+  auto replacement = quader::create_standalone_editor();
+  auto &replacement_editor = replacement.editor();
+  const auto replacement_source = replacement_editor.modeling().create_box(
+      quader::QuaderBounds{.min = {-1.0f, -1.0f, -1.0f},
+                           .max = {1.0f, 1.0f, 1.0f}},
+      "Replacement Texture Scene");
+  ASSERT_TRUE(replacement_source.ok());
+  ASSERT_TRUE(replacement_editor.selection()
+                  .set_mode(quader::QuaderSelectionMode::Face).ok());
+  ASSERT_TRUE(replacement_editor.selection()
+                  .select_face(replacement_source.value(), 1).ok());
+  panel.bind(replacement_editor);
+  process_events_for(75);
+  EXPECT_DOUBLE_EQ(scale_x->value(), 1.0);
+  EXPECT_EQ(editor.modeling().face_texture_settings().scale_x,
+            std::optional<double>(1.0));
+  EXPECT_EQ(replacement_editor.modeling().face_texture_settings().scale_x,
+            std::optional<double>(1.0));
   panel.unbind();
 }
 

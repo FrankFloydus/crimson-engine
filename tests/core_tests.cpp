@@ -80,6 +80,7 @@
 #include "scene/scene_document.hpp"
 #include "scene/scene_entity_naming.hpp"
 #include "scene/scene_transform.hpp"
+#include "scene/scene_texture_mapping.hpp"
 #include "scene/transform_pivot.hpp"
 #include "ui/console_model.hpp"
 #include "ui/ui_settings.hpp"
@@ -199,6 +200,10 @@ private:
     group.transforms = mesh.instance_transforms.empty()
                            ? std::vector<QMat4>{mesh.transform}
                            : mesh.instance_transforms;
+    group.sampling_from_local = mesh.instance_sampling_from_local.empty()
+                                    ? std::vector<QMat4>(group.transforms.size(),
+                                                        mesh.sampling_from_local)
+                                    : mesh.instance_sampling_from_local;
     group.dynamic_positions = mesh.dynamic_positions;
     return group;
   }
@@ -1322,7 +1327,7 @@ TEST(WindowPlacementTests, PreservesMinimumSizeWithoutConnectedWorkAreas) {
 TEST(ViewportSettingsTests, DefaultsMatchNativeViewportSettingsState) {
   const ViewportSettings settings = ViewportSettings::defaults();
 
-  ASSERT_EQ(viewport_settings_sections().size(), 9u);
+  ASSERT_EQ(viewport_settings_sections().size(), 10u);
   EXPECT_EQ(viewport_settings_sections()[0].label, "Grid");
   EXPECT_FALSE(viewport_settings_sections()[0].default_expanded);
   EXPECT_EQ(viewport_settings_sections()[1].label, "Navigation");
@@ -1333,6 +1338,7 @@ TEST(ViewportSettingsTests, DefaultsMatchNativeViewportSettingsState) {
   EXPECT_EQ(viewport_settings_sections()[6].label, "Vertices");
   EXPECT_EQ(viewport_settings_sections()[7].label, "Picking");
   EXPECT_EQ(viewport_settings_sections()[8].label, "Gizmo");
+  EXPECT_EQ(viewport_settings_sections()[9].label, "Texturing");
 
   expect_color_near(settings.color(ViewportColorSettingId::SelectionWire),
                     overlay_policy_setting_color(kOverlaySelectionWireColor));
@@ -1400,7 +1406,7 @@ TEST(ViewportSettingsTests, DefaultsMatchNativeViewportSettingsState) {
       15.0f);
   ASSERT_EQ(viewport_color_settings().size(), 23u);
   ASSERT_EQ(viewport_float_settings().size(), 26u);
-  ASSERT_EQ(viewport_bool_settings().size(), 10u);
+  ASSERT_EQ(viewport_bool_settings().size(), 12u);
   EXPECT_TRUE(settings.bool_value(ViewportBoolSettingId::ShowGrid));
   EXPECT_FALSE(settings.bool_value(ViewportBoolSettingId::ShowMeshGrid));
   EXPECT_TRUE(settings.bool_value(ViewportBoolSettingId::ShowGizmos));
@@ -1412,6 +1418,8 @@ TEST(ViewportSettingsTests, DefaultsMatchNativeViewportSettingsState) {
   EXPECT_TRUE(settings.bool_value(ViewportBoolSettingId::RotationSnap));
   EXPECT_FALSE(
       settings.bool_value(ViewportBoolSettingId::BackfaceSelection));
+  EXPECT_TRUE(settings.bool_value(ViewportBoolSettingId::TextureLock));
+  EXPECT_FALSE(settings.bool_value(ViewportBoolSettingId::TextureLockScale));
   const ViewportBoolSettingDescriptor &backface_selection =
       viewport_bool_settings()[static_cast<std::size_t>(
           ViewportBoolSettingId::BackfaceSelection)];
@@ -1623,6 +1631,8 @@ TEST(ViewportSettingsTests, SavesLoadsAndClampsViewportPreferenceKeys) {
       settings.set_bool_value(ViewportBoolSettingId::RotationSnap, false));
   EXPECT_TRUE(settings.set_bool_value(
       ViewportBoolSettingId::BackfaceSelection, true));
+  EXPECT_TRUE(settings.set_bool_value(ViewportBoolSettingId::TextureLock, false));
+  EXPECT_TRUE(settings.set_bool_value(ViewportBoolSettingId::TextureLockScale, true));
   EXPECT_TRUE(settings.set_float_value(
       ViewportFloatSettingId::RotationSnapDegrees, 12.0f));
   ASSERT_TRUE(settings.save(path));
@@ -1654,6 +1664,8 @@ TEST(ViewportSettingsTests, SavesLoadsAndClampsViewportPreferenceKeys) {
   EXPECT_FALSE(loaded.bool_value(ViewportBoolSettingId::RotationSnap));
   EXPECT_TRUE(
       loaded.bool_value(ViewportBoolSettingId::BackfaceSelection));
+  EXPECT_FALSE(loaded.bool_value(ViewportBoolSettingId::TextureLock));
+  EXPECT_TRUE(loaded.bool_value(ViewportBoolSettingId::TextureLockScale));
   EXPECT_FLOAT_EQ(
       loaded.float_value(ViewportFloatSettingId::RotationSnapDegrees),
       11.25f);
@@ -1692,6 +1704,10 @@ TEST(ViewportSettingsTests, SavesLoadsAndClampsViewportPreferenceKeys) {
     EXPECT_NE(source.find("QVertexWorks.Quader.Viewport.GridSnap"),
               std::string::npos);
     EXPECT_NE(source.find("QVertexWorks.Quader.Viewport.VertexSnap"),
+              std::string::npos);
+    EXPECT_NE(source.find("QVertexWorks.Quader.Viewport.TextureLock=false"),
+              std::string::npos);
+    EXPECT_NE(source.find("QVertexWorks.Quader.Viewport.TextureLockScale=true"),
               std::string::npos);
     EXPECT_EQ(source.find("QVertexWorks.Quader.Viewport.BackgroundColor"),
               std::string::npos);
@@ -9742,6 +9758,259 @@ TEST(DocumentCommandTests, BatchDocumentCommandRollsBackFailedRedoAndUndo) {
   EXPECT_EQ(second, 2);
   EXPECT_TRUE(undo_redo.can_undo());
   EXPECT_FALSE(undo_redo.can_redo());
+}
+
+namespace {
+
+void expect_texture_matrix_near(const QMat4 &actual, const QMat4 &expected) {
+  for (std::size_t index = 0; index < actual.values.size(); ++index) {
+    EXPECT_NEAR(actual.values[index], expected.values[index], 0.0002f) << index;
+  }
+}
+
+EntityId create_texture_test_mesh(SceneSession &session, std::string name) {
+  const EntityId entity = session.scene().create_entity(name, EntityKind::Mesh);
+  const AssetId mesh = session.assets().add_mesh(make_test_triangle_mesh(std::move(name)));
+  EXPECT_TRUE(session.scene().set_mesh(entity, {.mesh = mesh}));
+  return entity;
+}
+
+QMat4 texture_mapping_or_identity(const SceneDocument &scene, EntityId entity) {
+  const TextureMappingComponent *mapping = scene.texture_mapping(entity);
+  return mapping != nullptr ? mapping->sampling_from_local : QMat4{};
+}
+
+} // namespace
+
+TEST(SceneTextureLockTests, AllFourPoliciesPreserveTheirIndependentTransformScopes) {
+  for (const bool lock : {false, true}) {
+    for (const bool scale_lock : {false, true}) {
+      SCOPED_TRACE(::testing::Message() << "lock=" << lock << " scale=" << scale_lock);
+      SceneSession session;
+      QuaderEditorApi editor(QuaderApiSessionInternalAccess::from_scene_session(session));
+      TextureLockSettings settings{lock, scale_lock};
+      session.document_commands().set_texture_lock_settings_provider([&] { return settings; });
+      const EntityId entity = create_texture_test_mesh(session, "Texture Policies");
+      const std::uint64_t asset_revision = session.assets().revision();
+      const std::uint64_t mesh_revision = session.scene().mesh_binding_revision();
+      QuaderTransform after{.position = {3.0f, -2.0f, 1.0f}};
+      ASSERT_TRUE(editor.scene().set_transform(entity, after).ok());
+      after.rotation_euler = {0.0f, 0.0f, 1.57079632679f};
+      ASSERT_TRUE(editor.scene().set_transform(entity, after).ok());
+      const QMat4 before_scale = session.scene().world_transform_matrix(entity);
+      after.scale = {-2.0f, 3.0f, 0.5f};
+      ASSERT_TRUE(editor.scene().set_transform(entity, after).ok());
+      const QMat4 scale = compose_transform(QTransform{.scale = after.scale});
+      const QMat4 expected = lock
+          ? (scale_lock ? QMat4{} : scale)
+          : (scale_lock ? before_scale : session.scene().world_transform_matrix(entity));
+      expect_texture_matrix_near(texture_mapping_or_identity(session.scene(), entity), expected);
+      EXPECT_EQ(session.assets().revision(), asset_revision);
+      EXPECT_EQ(session.scene().mesh_binding_revision(), mesh_revision);
+
+      const QMat4 recorded = texture_mapping_or_identity(session.scene(), entity);
+      settings = {!lock, !scale_lock};
+      ASSERT_TRUE(editor.history().undo().ok());
+      ASSERT_TRUE(editor.history().redo().ok());
+      EXPECT_EQ(texture_mapping_or_identity(session.scene(), entity).values, recorded.values);
+    }
+  }
+}
+
+TEST(SceneTextureLockTests, CombinedAbsoluteEditUsesScaleThenRotationThenTranslation) {
+  SceneSession session;
+  QuaderEditorApi editor(QuaderApiSessionInternalAccess::from_scene_session(session));
+  session.document_commands().set_texture_lock_settings_provider([] {
+    return TextureLockSettings{false, true};
+  });
+  const EntityId entity = create_texture_test_mesh(session, "Combined TRS");
+  const QuaderTransform after{.position = {4.0f, -1.0f, 2.0f},
+                              .rotation_euler = {0.2f, 0.4f, 0.7f},
+                              .scale = {-2.0f, 3.0f, 0.5f}};
+  ASSERT_TRUE(editor.scene().set_transform(entity, after).ok());
+  const QMat4 scale = compose_transform(QTransform{.scale = after.scale});
+  const QMat4 expected = scene_transform_multiply(
+      *try_scene_matrix_inverse(scale), session.scene().world_transform_matrix(entity));
+  expect_texture_matrix_near(texture_mapping_or_identity(session.scene(), entity), expected);
+}
+
+TEST(SceneTextureLockTests, GroupPreviewIncludesHiddenLeavesAndCapturesSettingsOnce) {
+  SceneSession session;
+  QuaderEditorApi editor(QuaderApiSessionInternalAccess::from_scene_session(session));
+  SceneDocument &scene = session.scene();
+  const EntityId parent = scene.create_empty("Reflected parent");
+  ASSERT_TRUE(scene.set_transform(parent, {.position = {2.0f, -3.0f, 1.0f},
+                                         .rotation_euler = {0.2f, 0.5f, -0.3f},
+                                         .scale = {-2.0f, 0.75f, 3.0f}}));
+  const EntityId group = scene.create_empty("Group");
+  ASSERT_TRUE(scene.set_parent(group, parent, false));
+  const EntityId first = create_texture_test_mesh(session, "Visible leaf");
+  const EntityId hidden = create_texture_test_mesh(session, "Hidden leaf");
+  const EntityId unrelated = create_texture_test_mesh(session, "Other object");
+  ASSERT_TRUE(scene.set_parent(first, group, false));
+  ASSERT_TRUE(scene.set_parent(hidden, group, false));
+  ASSERT_TRUE(scene.set_visible(hidden, false));
+  ASSERT_TRUE(editor.scene().select({group, first}, group).ok());
+  const QMat4 before_first = scene.world_transform_matrix(first);
+  const QMat4 before_hidden = scene.world_transform_matrix(hidden);
+  const std::uint64_t asset_revision = session.assets().revision();
+  TextureLockSettings settings{false, false};
+  SceneTransformDragService drag;
+  ASSERT_TRUE(drag.begin(scene, {}, true, "Unlocked move", {}, &session.assets(), settings));
+  ASSERT_EQ(drag.targets().size(), 1u);
+  settings = {true, true};
+  const std::uint64_t before_revision = scene.content_revision();
+  const std::uint64_t before_mapping_revision = scene.texture_mapping_revision();
+  const std::uint64_t before_render_revision = scene.render_component_revision();
+  ASSERT_TRUE(drag.preview_world_translation_delta(scene, {3.0f, -2.0f, 1.0f}).ok);
+  EXPECT_EQ(scene.content_revision(), before_revision + 1u);
+  EXPECT_EQ(scene.texture_mapping_revision(), before_mapping_revision + 1u);
+  EXPECT_EQ(scene.render_component_revision(), before_render_revision);
+  for (const auto &[entity, before] : std::array<std::pair<EntityId, QMat4>, 2>{
+           std::pair{first, before_first}, std::pair{hidden, before_hidden}}) {
+    expect_texture_matrix_near(texture_mapping_or_identity(scene, entity),
+        scene_transform_multiply(*try_scene_matrix_inverse(before), scene.world_transform_matrix(entity)));
+  }
+  EXPECT_EQ(scene.texture_mapping(group), nullptr);
+  EXPECT_EQ(scene.texture_mapping(unrelated), nullptr);
+  EXPECT_EQ(session.assets().revision(), asset_revision);
+  ASSERT_TRUE(drag.cancel().ok);
+  EXPECT_EQ(scene.texture_mapping(first), nullptr);
+  EXPECT_EQ(scene.texture_mapping(hidden), nullptr);
+  expect_texture_matrix_near(scene.world_transform_matrix(first), before_first);
+
+  ASSERT_TRUE(drag.begin(scene, {}, true, "Captured locks", {}, &session.assets(), {false, false}));
+  ASSERT_TRUE(drag.preview_world_translation_delta(scene, {1.0f, 2.0f, 3.0f}).ok);
+  const QMat4 recorded = texture_mapping_or_identity(scene, hidden);
+  ASSERT_TRUE(drag.commit(editor).ok());
+  ASSERT_TRUE(editor.history().undo().ok());
+  EXPECT_EQ(scene.texture_mapping(hidden), nullptr);
+  ASSERT_TRUE(editor.history().redo().ok());
+  EXPECT_EQ(texture_mapping_or_identity(scene, hidden).values, recorded.values);
+}
+
+TEST(SceneTextureLockTests, ScalePivotTranslationBelongsToScaleLock) {
+  for (const bool scale_lock : {false, true}) {
+    SceneSession session;
+    SceneDocument &scene = session.scene();
+    const EntityId entity = create_texture_test_mesh(session, "Pivot scale");
+    ASSERT_TRUE(scene.set_transform(entity, {.position = {4.0f, 0.0f, 0.0f}}));
+    ASSERT_TRUE(scene.set_selected(entity, true));
+    const QMat4 before = scene.world_transform_matrix(entity);
+    SceneTransformDragService drag;
+    ASSERT_TRUE(drag.begin(scene, {}, true, "Scale around origin", {}, &session.assets(),
+                           {true, scale_lock}));
+    const QMat4 delta = compose_transform(QTransform{.scale = {2.0f, 3.0f, 1.0f}});
+    ASSERT_TRUE(drag.preview_world_transform_delta(scene, delta, SceneTextureTransformKind::Scale).ok);
+    const QMat4 expected = scale_lock ? QMat4{} : scene_transform_multiply(
+        *try_scene_matrix_inverse(before), scene.world_transform_matrix(entity));
+    expect_texture_matrix_near(texture_mapping_or_identity(scene, entity), expected);
+    EXPECT_NEAR(scene.transform(entity)->position.x, 8.0f, 0.0001f);
+    if (!scale_lock) {
+      EXPECT_NEAR(texture_mapping_or_identity(scene, entity).values[12], 4.0f, 0.0001f);
+    }
+  }
+}
+
+TEST(SceneTextureLockTests, InstanceOccurrenceCorrectionDoesNotMutateDefinitionOrOtherCopies) {
+  SceneSession session;
+  QuaderEditorApi editor(QuaderApiSessionInternalAccess::from_scene_session(session));
+  SceneDocument &scene = session.scene();
+  session.document_commands().set_texture_lock_settings_provider([] {
+    return TextureLockSettings{false, false};
+  });
+  const EntityId definition = scene.create_empty("Definition");
+  const EntityId member = create_texture_test_mesh(session, "Definition member");
+  ASSERT_TRUE(scene.set_parent(member, definition, false));
+  ASSERT_TRUE(scene.set_transform(member, {.position = {1.0f, 2.0f, -1.0f},
+                                         .rotation_euler = {0.1f, 0.4f, 0.2f},
+                                         .scale = {-2.0f, 3.0f, 0.5f}}));
+  QMat4 member_mapping;
+  member_mapping.values[12] = 0.25f;
+  ASSERT_TRUE(scene.set_texture_mapping(member, {member_mapping}));
+  ASSERT_TRUE(scene.set_instance_definition(definition));
+  const EntityId first = scene.create_entity("First instance");
+  const EntityId second = scene.create_entity("Second instance");
+  ASSERT_TRUE(scene.set_instance_occurrence(first, {.definition = definition}));
+  ASSERT_TRUE(scene.set_instance_occurrence(second, {.definition = definition}));
+  const std::uint64_t asset_revision = session.assets().revision();
+  ASSERT_TRUE(editor.scene().set_transform(first, {.position = {4.0f, -3.0f, 1.0f}}).ok());
+  ASSERT_NE(scene.texture_mapping(first), nullptr);
+  EXPECT_EQ(scene.texture_mapping(second), nullptr);
+  EXPECT_EQ(scene.texture_mapping(member)->sampling_from_local.values, member_mapping.values);
+  EXPECT_EQ(session.assets().revision(), asset_revision);
+  const QMat4 member_from_definition = *try_scene_matrix_inverse(scene.local_transform_matrix(member));
+  const QMat4 expected = scene_transform_multiply(
+      scene_transform_multiply(member_mapping, member_from_definition),
+      scene_transform_multiply(scene.texture_mapping(first)->sampling_from_local,
+                               scene.local_transform_matrix(member)));
+  const auto effective = effective_texture_sampling_from_local(scene, member, first);
+  ASSERT_TRUE(effective.has_value());
+  expect_texture_matrix_near(*effective, expected);
+  ASSERT_TRUE(editor.history().undo().ok());
+  EXPECT_EQ(scene.texture_mapping(first), nullptr);
+  EXPECT_EQ(scene.texture_mapping(second), nullptr);
+}
+
+TEST(SceneTextureLockTests, MergedPlacementReturningToItsOriginReplaysTextureChanges) {
+  SceneSession session;
+  SceneDocument &scene = session.scene();
+  const EntityId entity = create_texture_test_mesh(session, "Merged texture edits");
+  const TransformComponent before = *scene.transform(entity);
+  const TransformComponent intermediate{.rotation_euler = {0.0f, 0.0f, 1.57079632679f},
+                                         .scale = {2.0f, 1.0f, 1.0f}};
+  const TextureLockSettings settings{false, true};
+  ASSERT_TRUE(session.history().execute(std::make_unique<ApplyEntityTransformCommand>(
+      scene, entity, before, intermediate, "Merged texture", settings),
+      {.merge_key = "texture-transform"}).ok);
+  ASSERT_TRUE(session.history().execute(std::make_unique<ApplyEntityTransformCommand>(
+      scene, entity, intermediate, before, "Merged texture", settings),
+      {.merge_key = "texture-transform"}).ok);
+  ASSERT_NE(scene.texture_mapping(entity), nullptr);
+  const QMat4 recorded = scene.texture_mapping(entity)->sampling_from_local;
+  EXPECT_NEAR(recorded.values[0], 0.5f, 0.0001f);
+  EXPECT_NEAR(recorded.values[5], 2.0f, 0.0001f);
+  ASSERT_TRUE(session.history().undo().ok);
+  EXPECT_EQ(scene.texture_mapping(entity), nullptr);
+  ASSERT_TRUE(session.history().redo().ok);
+  ASSERT_NE(scene.texture_mapping(entity), nullptr);
+  EXPECT_EQ(scene.texture_mapping(entity)->sampling_from_local.values, recorded.values);
+}
+
+TEST(SceneTextureLockTests, MappingAssignmentsAreAtomicAndCopiesRestoreTheirMapping) {
+  SceneSession session;
+  QuaderEditorApi editor(QuaderApiSessionInternalAccess::from_scene_session(session));
+  SceneDocument &scene = session.scene();
+  const EntityId entity = create_texture_test_mesh(session, "Mapping source");
+  QMat4 mapping;
+  mapping.values[0] = -2.0f;
+  mapping.values[12] = 0.25f;
+  ASSERT_TRUE(scene.set_texture_mapping(entity, {mapping}));
+  const std::uint64_t revision = scene.revision();
+  const SceneTransformAssignment transform{.entity = entity, .transform = {.position = {8.0f, 0.0f, 0.0f}}};
+  QMat4 invalid = mapping;
+  invalid.values[15] = 0.0f;
+  const SceneTextureMappingAssignment invalid_mapping{.entity = entity, .mapping = TextureMappingComponent{invalid}};
+  EXPECT_FALSE(scene.set_transforms_and_texture_mappings({&transform, 1u}, {&invalid_mapping, 1u}));
+  EXPECT_EQ(scene.revision(), revision);
+  EXPECT_FLOAT_EQ(scene.transform(entity)->position.x, 0.0f);
+  EXPECT_EQ(scene.texture_mapping(entity)->sampling_from_local.values, mapping.values);
+  ASSERT_TRUE(scene.set_texture_mapping(entity, {mapping}));
+  EXPECT_EQ(scene.revision(), revision);
+  session.document_commands().set_texture_lock_settings_provider([] {
+    return TextureLockSettings{true, true};
+  });
+  EXPECT_FALSE(editor.scene().set_transform(entity, {.scale = {0.0f, 1.0f, 1.0f}}).ok());
+  EXPECT_EQ(scene.revision(), revision);
+  const auto duplicate = editor.scene().duplicate(entity);
+  ASSERT_TRUE(duplicate.ok()) << duplicate.error_message();
+  const EntityId clone = duplicate.value().id;
+  ASSERT_NE(scene.texture_mapping(clone), nullptr);
+  EXPECT_EQ(scene.texture_mapping(clone)->sampling_from_local.values, mapping.values);
+  ASSERT_TRUE(editor.scene().destroy(clone).ok());
+  ASSERT_TRUE(editor.history().undo().ok());
+  ASSERT_NE(scene.texture_mapping(clone), nullptr);
+  EXPECT_EQ(scene.texture_mapping(clone)->sampling_from_local.values, mapping.values);
 }
 
 TEST(DocumentCommandTests,

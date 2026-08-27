@@ -26,6 +26,7 @@ struct EdgeBevelSide {
   quader::QVec3 normal;
   std::map<ElementId, ElementId> endpoint_vertices;
   std::map<ElementId, quader::QVec3> endpoint_positions;
+  FaceTextureTransform texture_transform{};
 };
 
 /**

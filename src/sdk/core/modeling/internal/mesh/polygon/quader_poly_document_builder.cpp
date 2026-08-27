@@ -161,6 +161,7 @@ void append_document(
             continue;
         }
         appended_face->uvs = face.uvs;
+        appended_face->texture_transform = face.texture_transform;
         appended_face->normal_shading = face.normal_shading;
     }
 

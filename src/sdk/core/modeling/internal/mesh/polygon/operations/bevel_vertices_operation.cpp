@@ -76,7 +76,7 @@ OperationResult BevelVerticesOperation::apply(Document& document, Selection& sel
     std::map<std::pair<ElementId, ElementId>, ElementId> split_vertices;
     std::map<ElementId, std::map<ElementId, ElementId>> split_by_vertex_neighbor;
     std::map<ElementId, std::vector<std::pair<ElementId, ElementId>>> neighbor_pairs_by_vertex;
-    std::map<ElementId, std::uint32_t> cap_material_by_vertex;
+    std::map<ElementId, const Face*> cap_source_by_vertex;
     std::vector<Face> rebuilt_faces;
     rebuilt_faces.reserve(original_faces.size() + selected_vertices.size());
     bool changed = false;
@@ -110,7 +110,7 @@ OperationResult BevelVerticesOperation::apply(Document& document, Selection& sel
             split_by_vertex_neighbor[vertex_id][prev_id] = prev_split;
             split_by_vertex_neighbor[vertex_id][next_id] = next_split;
             neighbor_pairs_by_vertex[vertex_id].push_back({ prev_id, next_id });
-            cap_material_by_vertex.try_emplace(vertex_id, face.material_slot);
+            cap_source_by_vertex.try_emplace(vertex_id, &face);
             rebuilt_loop.push_back(prev_split);
             rebuilt_loop.push_back(next_split);
             face_changed = true;
@@ -184,8 +184,10 @@ OperationResult BevelVerticesOperation::apply(Document& document, Selection& sel
         Face cap_face;
         cap_face.id = candidate.next_face_id++;
         cap_face.vertices = std::move(cap_vertices);
-        const auto material = cap_material_by_vertex.find(vertex_id);
-        cap_face.material_slot = material != cap_material_by_vertex.end() ? material->second : 0U;
+        if (const auto source = cap_source_by_vertex.find(vertex_id); source != cap_source_by_vertex.end()) {
+            cap_face.material_slot = source->second->material_slot;
+            cap_face.texture_transform = source->second->texture_transform;
+        }
         const Vertex* removed_vertex = find_vertex(candidate, vertex_id);
         if (removed_vertex != nullptr) {
             orient_face_toward_normal(candidate, cap_face, removed_vertex->position - face_centroid(candidate, cap_face));

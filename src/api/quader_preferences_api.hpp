@@ -10,6 +10,8 @@
 #include "api/quader_editor_api_types.hpp"
 #include "api/quader_keybinding_types.hpp"
 
+#include <cstdint>
+
 namespace quader {
 
 class QuaderCommandsApi;
@@ -27,6 +29,8 @@ public:
 
     [[nodiscard]] std::string locale() const;
     QuaderApiVoidResult set_locale(std::string locale);
+    /** Cheap owner stamp; reads never enumerate or resolve shortcuts. */
+    [[nodiscard]] std::uint64_t keybindings_revision() const noexcept;
     QuaderApiVoidResult set_shortcut(std::string_view command_id,
                                      std::string shortcut);
     QuaderApiVoidResult set_shortcut(QuaderCommandId command_id,
@@ -59,6 +63,10 @@ public:
     [[nodiscard]] bool mesh_grid_visible() const;
     QuaderApiVoidResult set_overlays_visible(bool visible);
     [[nodiscard]] bool overlays_visible() const;
+    QuaderApiVoidResult set_texture_lock_enabled(bool enabled);
+    [[nodiscard]] bool texture_lock_enabled() const;
+    QuaderApiVoidResult set_texture_lock_scale_enabled(bool enabled);
+    [[nodiscard]] bool texture_lock_scale_enabled() const;
     QuaderApiVoidResult set_grid_snap_enabled(bool enabled);
     [[nodiscard]] bool grid_snap_enabled() const;
     QuaderApiVoidResult set_vertex_snap_enabled(bool enabled);

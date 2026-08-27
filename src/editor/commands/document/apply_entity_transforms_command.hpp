@@ -23,7 +23,8 @@ class ApplyEntityTransformsCommand final : public SceneCommand {
 public:
   ApplyEntityTransformsCommand(
       SceneDocument &scene, std::vector<DocumentTransformEdit> edits,
-      std::string label = "Apply Entity Transforms")
+      std::string label = "Apply Entity Transforms",
+      std::vector<DocumentTextureMappingEdit> mappings = {})
       : SceneCommand(scene, std::move(label)) {
     before_.reserve(edits.size());
     after_.reserve(edits.size());
@@ -31,16 +32,21 @@ public:
       before_.push_back({.entity = edit.entity, .transform = edit.before});
       after_.push_back({.entity = edit.entity, .transform = edit.after});
     }
+    for (const DocumentTextureMappingEdit &edit : mappings) {
+      before_mappings_.push_back({.entity = edit.entity, .mapping = edit.before});
+      after_mappings_.push_back({.entity = edit.entity, .mapping = edit.after});
+    }
   }
 
-  DocumentCommandResult undo() override { return apply(before_); }
+  DocumentCommandResult undo() override { return apply(before_, before_mappings_); }
 
-  DocumentCommandResult redo() override { return apply(after_); }
+  DocumentCommandResult redo() override { return apply(after_, after_mappings_); }
 
 private:
   DocumentCommandResult
-  apply(const std::vector<SceneTransformAssignment> &assignments) {
-    if (assignments.empty()) {
+  apply(const std::vector<SceneTransformAssignment> &assignments,
+        const std::vector<SceneTextureMappingAssignment> &mappings) {
+    if (assignments.empty() && mappings.empty()) {
       return document_command_unchanged_result();
     }
     for (const SceneTransformAssignment &assignment : assignments) {
@@ -48,12 +54,17 @@ private:
         return document_command_missing_entity_result();
       }
     }
-    scene().set_transforms(assignments);
+    if (!scene().set_transforms_and_texture_mappings(assignments, mappings)) {
+      return document_command_invalid_request_result(
+          "Transform and texture mapping could not be applied");
+    }
     return document_command_changed_result();
   }
 
   std::vector<SceneTransformAssignment> before_;
   std::vector<SceneTransformAssignment> after_;
+  std::vector<SceneTextureMappingAssignment> before_mappings_;
+  std::vector<SceneTextureMappingAssignment> after_mappings_;
 };
 
 } // namespace quader

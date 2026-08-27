@@ -87,6 +87,7 @@ struct QdrProjectEntityWriteSnapshot final {
   std::optional<InstanceDefinitionComponent> instance_definition;
   std::optional<InstanceOccurrenceComponent> instance_occurrence;
   std::uint64_t layer_id = 0;
+  std::optional<TextureMappingComponent> texture_mapping;
 };
 
 /**

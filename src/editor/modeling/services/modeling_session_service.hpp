@@ -29,6 +29,7 @@ class DocumentCommandService;
 class EditorHistoryService;
 class IUndoableCommand;
 class SceneDocument;
+struct TextureLockSettings;
 
 /**
  * Reports operation-preview projection boundaries to the project checkpoint
@@ -114,6 +115,20 @@ public:
   selected_component_entities() const;
   [[nodiscard]] std::uint64_t content_revision() const;
   [[nodiscard]] std::uint64_t selection_revision() const;
+  [[nodiscard]] std::uint64_t face_texture_settings_revision() const;
+  [[nodiscard]] ModelingFaceTextureSettings face_texture_settings() const;
+  ModelingCommandResult
+  set_face_texture_setting(const ModelingFaceTextureEdit &edit);
+  [[nodiscard]] ModelingFaceTextureEditState
+  capture_face_texture_edit_state() const;
+  void restore_face_texture_edit_state(const ModelingFaceTextureEditState &state);
+  /// Called once on host scene activation; never from a presentation frame loop.
+  void invalidate_face_texture_edit_state();
+  void set_face_texture_extent_provider(
+      std::function<std::optional<QVec2>(MaterialReference)> provider,
+      std::function<std::uint64_t()> revision_provider = {});
+  void set_texture_lock_settings_provider(
+      std::function<TextureLockSettings()> provider);
   [[nodiscard]] ModelingSelectionExport export_selection() const;
   [[nodiscard]] ModelingSelectedVerticesSnapshot
   selected_vertices_snapshot() const;

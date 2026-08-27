@@ -5,12 +5,14 @@
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
 #include <quader/modeling/neutral/polygon/document_validation.hpp>
+#include <quader/modeling/neutral/polygon/document_texture.hpp>
 
 #include <quader/modeling/neutral/polygon/internal/quader_poly_document_constants.hpp>
 #include <quader/modeling/neutral/polygon/internal/quader_poly_document_mesh_internal.hpp>
 
 #include <algorithm>
 #include <cstddef>
+#include <cmath>
 #include <map>
 #include <ranges>
 #include <set>
@@ -77,6 +79,15 @@ void validate_face_ids(const Document& document, PolygonDocumentValidationReport
 {
     std::set<ElementId> face_ids;
     for (const Face& face : document.faces) {
+        if (!valid_face_texture_transform(face.texture_transform)) {
+            add_diagnostic(
+                report,
+                PolygonDocumentDiagnosticCode::InvalidFaceTextureTransform,
+                PolygonDocumentDiagnosticSeverity::Error,
+                "Face " + std::to_string(face.id) +
+                    " has invalid texture transform settings.",
+                kInvalidElementId, face.id);
+        }
         if (!face_ids.insert(face.id).second) {
             add_diagnostic(
                 report,
@@ -211,6 +222,28 @@ void validate_faces(
         }
 
         const bool resolved = face_vertices_are_resolved(face, vertex_ids);
+        if (resolved && valid_face_texture_transform(face.texture_transform) &&
+            face.texture_transform != FaceTextureTransform{}) {
+            const auto normal = face_normal(document, face);
+            for (std::size_t corner = 0; corner < face.vertices.size(); ++corner) {
+                const Vertex *vertex = vertex_lookup.find(face.vertices[corner]);
+                const auto base = face_has_loop_uvs(face)
+                    ? face.uvs[corner]
+                    : generated_texture_uv(vertex->position, normal);
+                const auto uv = apply_face_texture_transform(
+                    base, face.texture_transform);
+                if (!std::isfinite(uv.x) || !std::isfinite(uv.y)) {
+                    add_diagnostic(
+                        report,
+                        PolygonDocumentDiagnosticCode::InvalidFaceTextureTransform,
+                        PolygonDocumentDiagnosticSeverity::Error,
+                        "Face " + std::to_string(face.id) +
+                            " texture settings produce non-finite UVs.",
+                        kInvalidElementId, face.id);
+                    break;
+                }
+            }
+        }
         if (resolved && face_loop_is_degenerate(face, vertex_lookup)) {
             add_diagnostic(
                 report,

@@ -149,6 +149,7 @@ OperationResult ConnectEdgesOperation::apply(Document& document, Selection& sele
             second_face.id = candidate.next_face_id++;
             second_face.vertices = std::move(second_loop);
             second_face.material_slot = face.material_slot;
+            second_face.texture_transform = face.texture_transform;
             rebuilt_faces.push_back(std::move(second_face));
             add_unique_edge(connected_edges, make_edge(expanded_loop[cut_indices[0]], expanded_loop[cut_indices[1]]));
             changed = true;
@@ -158,6 +159,7 @@ OperationResult ConnectEdgesOperation::apply(Document& document, Selection& sele
         Face center_face;
         center_face.id = face.id;
         center_face.material_slot = face.material_slot;
+        center_face.texture_transform = face.texture_transform;
         center_face.vertices.reserve(cut_indices.size());
         for (const std::size_t cut_index : cut_indices) {
             center_face.vertices.push_back(expanded_loop[cut_index]);
@@ -180,6 +182,7 @@ OperationResult ConnectEdgesOperation::apply(Document& document, Selection& sele
             side_face.id = candidate.next_face_id++;
             side_face.vertices = std::move(side_loop);
             side_face.material_slot = face.material_slot;
+            side_face.texture_transform = face.texture_transform;
             rebuilt_faces.push_back(std::move(side_face));
             add_unique_edge(connected_edges, make_edge(expanded_loop[start], expanded_loop[end]));
         }

@@ -1,0 +1,271 @@
+////////////////////////////////////////////////////////////////////////////////
+// Copyright (c) 2026 Francesco Di Blasi. All rights reserved.
+// This file is part of Quader and is protected proprietary source code.
+// No permission is granted to use, copy, modify, distribute, or sublicense this
+// file except through prior written authorization from Francesco Di Blasi.
+////////////////////////////////////////////////////////////////////////////////
+#include "editor/modeling/services/face_texture_edit_context.hpp"
+
+#include <algorithm>
+#include <atomic>
+#include <cmath>
+#include <limits>
+#include <utility>
+
+namespace quader {
+namespace {
+
+std::uint64_t next_selection_token() {
+  // Tokens also distinguish replaced/recreated scene services with equal IDs.
+  static std::atomic<std::uint64_t> next{1};
+  return next.fetch_add(1, std::memory_order_relaxed);
+}
+
+std::size_t selected_face_count(
+    const ModelingSelectedFaceTextureSnapshot &snapshot) {
+  std::size_t count = 0;
+  for (const auto &object : snapshot.objects) {
+    count += object.faces.size();
+  }
+  return count;
+}
+
+double rotation_rounding_error(float value) {
+  const float above = std::nextafter(value, std::numeric_limits<float>::infinity());
+  const float below = std::nextafter(value, -std::numeric_limits<float>::infinity());
+  const double upper_spacing = std::isfinite(above)
+                                   ? static_cast<double>(above) - value
+                                   : static_cast<double>(value) - below;
+  const double lower_spacing = std::isfinite(below)
+                                   ? static_cast<double>(value) - below
+                                   : static_cast<double>(above) - value;
+  return 0.5 * std::max(upper_spacing, lower_spacing);
+}
+
+ModelingCommandResult rejected(std::string message) {
+  return {.ok = false, .changed = false, .message = std::move(message)};
+}
+
+} // namespace
+
+bool FaceTextureEditContext::membership_matches(
+    const ModelingSelectedFaceTextureSnapshot &snapshot) const {
+  if (selected_face_count(snapshot) != state_.rotations.size()) {
+    return false;
+  }
+  std::size_t index = 0;
+  for (const auto &object : snapshot.objects) {
+    for (const auto &face : object.faces) {
+      const auto &baseline = state_.rotations[index++];
+      if (baseline.modeling_object_id != object.modeling_object_id ||
+          baseline.face != face.face) {
+        return false;
+      }
+    }
+  }
+  return true;
+}
+
+void FaceTextureEditContext::reset_baselines(
+    const ModelingSelectedFaceTextureSnapshot &snapshot,
+    std::uint64_t selection_revision) {
+  state_.rotations.clear();
+  state_.rotations.reserve(selected_face_count(snapshot));
+  for (const auto &object : snapshot.objects) {
+    for (const auto &face : object.faces) {
+      state_.rotations.push_back({
+          .modeling_object_id = object.modeling_object_id,
+          .face = face.face,
+          .rotation_degrees = face.texture_transform.rotation_degrees,
+      });
+    }
+  }
+  state_.rotation_degrees = 0.0;
+  selection_revision_ = selection_revision;
+  selection_token_ = next_selection_token();
+  initialized_ = true;
+  ++revision_;
+}
+
+ModelingFaceTextureSettings FaceTextureEditContext::synchronize(
+    const ModelingSelectedFaceTextureSnapshot &snapshot,
+    std::uint64_t selection_revision, QVec2 texture_extent) {
+  if (!initialized_ || selection_revision_ != selection_revision ||
+      !membership_matches(snapshot)) {
+    reset_baselines(snapshot, selection_revision);
+  }
+
+  // Preserve the exact accepted offset when each stored float is its rounded
+  // projection. Subtracting a large absolute baseline would otherwise make a
+  // shared small offset appear mixed (for example 1000 + 0.1 degrees).
+  // External edits may still share an offset when their float rounding intervals
+  // overlap; only disjoint intervals require a new safe editing origin.
+  std::optional<double> offset;
+  double smallest_error = std::numeric_limits<double>::infinity();
+  double lower_offset = -std::numeric_limits<double>::infinity();
+  double upper_offset = std::numeric_limits<double>::infinity();
+  bool expected_offset = true;
+  std::size_t index = 0;
+  for (const auto &object : snapshot.objects) {
+    for (const auto &face : object.faces) {
+      const float rotation = face.texture_transform.rotation_degrees;
+      const float baseline = state_.rotations[index++].rotation_degrees;
+      expected_offset = expected_offset &&
+                        rotation == static_cast<float>(
+                                        baseline + state_.rotation_degrees);
+      const double value = static_cast<double>(rotation) - baseline;
+      const double error = rotation_rounding_error(rotation);
+      lower_offset = std::max(lower_offset, value - error);
+      upper_offset = std::min(upper_offset, value + error);
+      if (!offset.has_value() || error < smallest_error) {
+        offset = value;
+        smallest_error = error;
+      }
+    }
+  }
+  if (!expected_offset && lower_offset > upper_offset) {
+    reset_baselines(snapshot, selection_revision);
+  } else if (!expected_offset) {
+    state_.rotation_degrees =
+        std::clamp(offset.value_or(0.0), lower_offset, upper_offset);
+  }
+
+  ModelingFaceTextureSettings result{
+      .selected_face_count = selected_face_count(snapshot),
+      .editable = snapshot.command.ok && !snapshot.objects.empty(),
+      .block_reason = snapshot.command.ok && !snapshot.objects.empty()
+                          ? ModelingFaceTextureBlockReason::None
+                          : ModelingFaceTextureBlockReason::NoSelection,
+      .disabled_reason = snapshot.command.message,
+      .rotation_degrees = state_.rotation_degrees,
+      .selection_token = selection_token_,
+  };
+  bool first = true;
+  for (const auto &object : snapshot.objects) {
+    for (const auto &face : object.faces) {
+      const auto &transform = face.texture_transform;
+      if (first) {
+        result.scale_x = transform.scale.x;
+        result.scale_y = transform.scale.y;
+        result.shift_x = static_cast<double>(transform.shift_uv.x) *
+                         texture_extent.x;
+        result.shift_y = static_cast<double>(transform.shift_uv.y) *
+                         texture_extent.y;
+        first = false;
+      } else {
+        if (result.scale_x != transform.scale.x) {
+          result.scale_x.reset();
+        }
+        if (result.scale_y != transform.scale.y) {
+          result.scale_y.reset();
+        }
+      }
+    }
+  }
+  return result;
+}
+
+ModelingCommandResult FaceTextureEditContext::prepare_edit(
+    const ModelingFaceTextureEdit &edit,
+    const ModelingSelectedFaceTextureSnapshot &snapshot, QVec2 texture_extent,
+    std::vector<ModelingFaceTextureUpdateBatch> &batches) const {
+  if (!initialized_ || edit.selection_token == 0 ||
+      edit.selection_token != selection_token_ || !membership_matches(snapshot)) {
+    return rejected("The face selection changed before the texture edit.");
+  }
+  if (!snapshot.command.ok || state_.rotations.empty()) {
+    return rejected("Select one or more editable faces first.");
+  }
+  if (!std::isfinite(edit.value) ||
+      std::abs(edit.value) > std::numeric_limits<float>::max()) {
+    return rejected("Texture settings must be finite numbers.");
+  }
+  const float value = static_cast<float>(edit.value);
+  if ((edit.field == ModelingFaceTextureField::ScaleX ||
+       edit.field == ModelingFaceTextureField::ScaleY) &&
+      value == 0.0f) {
+    return rejected("Texture scale must not be zero.");
+  }
+  if ((edit.field == ModelingFaceTextureField::ShiftX ||
+       edit.field == ModelingFaceTextureField::ShiftY) &&
+      state_.rotations.size() != 1u) {
+    return rejected("Texture shift requires exactly one selected face.");
+  }
+
+  batches.clear();
+  batches.reserve(snapshot.objects.size());
+  std::size_t index = 0;
+  for (const auto &object : snapshot.objects) {
+    ModelingFaceTextureUpdateBatch batch{
+        .modeling_object_id = object.modeling_object_id,
+    };
+    batch.updates.reserve(object.faces.size());
+    for (const auto &face : object.faces) {
+      modeling::FaceTextureTransformUpdate update{.face = face.face};
+      const auto &baseline = state_.rotations[index++];
+      switch (edit.field) {
+      case ModelingFaceTextureField::ScaleX:
+        update.scale_x = value;
+        break;
+      case ModelingFaceTextureField::ScaleY:
+        update.scale_y = value;
+        break;
+      case ModelingFaceTextureField::ShiftX:
+        update.shift_x = value / texture_extent.x;
+        break;
+      case ModelingFaceTextureField::ShiftY:
+        update.shift_y = value / texture_extent.y;
+        break;
+      case ModelingFaceTextureField::Rotate: {
+        const double rotation = baseline.rotation_degrees + edit.value;
+        if (!std::isfinite(rotation) ||
+            std::abs(rotation) > std::numeric_limits<float>::max()) {
+          return rejected("Texture rotation is outside the supported range.");
+        }
+        update.rotation_degrees = static_cast<float>(rotation);
+        break;
+      }
+      default:
+        return rejected("Unknown face texture setting.");
+      }
+      batch.updates.push_back(std::move(update));
+    }
+    batches.push_back(std::move(batch));
+  }
+  return {.ok = true, .changed = false};
+}
+
+ModelingFaceTextureEditState FaceTextureEditContext::capture() const {
+  return state_;
+}
+
+void FaceTextureEditContext::record_applied_edit(
+    const ModelingFaceTextureEdit &edit) {
+  if (edit.field == ModelingFaceTextureField::Rotate &&
+      edit.selection_token == selection_token_) {
+    state_.rotation_degrees = edit.value;
+  }
+}
+
+void FaceTextureEditContext::restore(
+    const ModelingFaceTextureEditState &state,
+    const ModelingSelectedFaceTextureSnapshot &snapshot,
+    std::uint64_t selection_revision) {
+  state_ = state;
+  if (!membership_matches(snapshot)) {
+    reset_baselines(snapshot, selection_revision);
+    return;
+  }
+  selection_revision_ = selection_revision;
+  selection_token_ = next_selection_token();
+  initialized_ = true;
+  ++revision_;
+}
+
+void FaceTextureEditContext::invalidate() {
+  initialized_ = false;
+  selection_token_ = next_selection_token();
+  ++revision_;
+}
+
+} // namespace quader

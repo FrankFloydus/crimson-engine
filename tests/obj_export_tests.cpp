@@ -7,10 +7,12 @@
 #include "api/quader_editor_api.hpp"
 #include "api/quader_api_session_internal_access.hpp"
 #include "editor/session/scene_session.hpp"
+#include "editor/projection/mesh_projection_service.hpp"
 #include "io/mesh/obj_writer.hpp"
 #include "scene/components.hpp"
 
 #include <gtest/gtest.h>
+#include <quader/modeling/neutral/polygon/document_texture.hpp>
 
 #include <algorithm>
 #include <cmath>
@@ -156,6 +158,21 @@ std::vector<float> obj_vertex_x_values(std::string_view obj_text) {
   return values;
 }
 
+std::vector<quader::QVec2> obj_texture_coordinates(std::string_view obj_text) {
+  std::vector<quader::QVec2> values;
+  std::istringstream lines{std::string(obj_text)};
+  std::string line;
+  while (std::getline(lines, line)) {
+    if (line.rfind("vt ", 0) == 0) {
+      std::istringstream coordinates(line.substr(3));
+      quader::QVec2 uv;
+      coordinates >> uv.x >> uv.y;
+      values.push_back(uv);
+    }
+  }
+  return values;
+}
+
 } // namespace
 
 TEST(ObjExportTests, SinglePlainMeshSelectionWritesChosenObjPath) {
@@ -276,6 +293,61 @@ TEST(ObjExportTests, ModelingMeshExportUsesLocalMeshSpace) {
   for (const float x : x_values) {
     EXPECT_LE(std::abs(x), 1.001f);
   }
+}
+
+TEST(ObjExportTests, ExportsEffectiveFaceAndPlacementUvsWithoutMutatingMesh) {
+  const std::filesystem::path path =
+      obj_test_root("effective-texture") / "textured.obj";
+  InternalObjExportHarness harness;
+  quader_poly::Document document;
+  document.vertices = {
+      {.id = 1u, .position = {0.0f, 0.0f, 0.0f}},
+      {.id = 2u, .position = {1.0f, 0.0f, 0.0f}},
+      {.id = 3u, .position = {0.0f, 1.0f, 0.0f}},
+  };
+  quader_poly::Face face;
+  face.id = 1u;
+  face.vertices = {1u, 2u, 3u};
+  face.texture_transform = {
+      .scale = {2.0f, -0.5f},
+      .shift_uv = {0.25f, -0.125f},
+      .rotation_degrees = 30.0f,
+  };
+  document.faces.push_back(face);
+  document.next_vertex_id = 4u;
+  document.next_face_id = 2u;
+  quader::MeshAsset mesh =
+      quader::MeshProjectionService::compile_polygon_document_mesh(document);
+  mesh.replace_authored_polygon_document(document);
+  const quader::EntityId entity = create_selected_plain_mesh_with_asset(
+      harness.session, harness.editor, "Textured", std::move(mesh));
+  quader::TextureMappingComponent mapping;
+  mapping.sampling_from_local.values[0] = 2.0f;
+  mapping.sampling_from_local.values[12] = 3.0f;
+  ASSERT_TRUE(harness.session.scene().set_texture_mapping(entity, mapping));
+  const quader::AssetId asset = harness.session.scene().mesh(entity)->mesh;
+  const auto before = harness.session.assets().mesh(asset)->geometry_payload();
+  const auto revisions = harness.editor.revisions();
+
+  const auto result = harness.editor.project().export_selected_meshes_as_obj(path);
+  ASSERT_TRUE(result.ok()) << result.error_message();
+  const auto coordinates = obj_texture_coordinates(read_text_file(path));
+  ASSERT_EQ(coordinates.size(), before->vertices.size());
+  const auto neutral_mapping =
+      quader::MeshProjectionService::texture_mapping_transform(
+          mapping.sampling_from_local);
+  for (std::size_t index = 0; index < coordinates.size(); ++index) {
+    const quader::MeshVertex &vertex = before->vertices[index];
+    const quader::QVec2 expected = quader_poly::evaluate_texture_mapping(
+        vertex.uv, vertex.position, vertex.uv_geometric_normal,
+        vertex.uv_carrier, neutral_mapping);
+    EXPECT_NEAR(coordinates[index].x, expected.x, 0.00001f);
+    EXPECT_NEAR(coordinates[index].y, expected.y, 0.00001f);
+  }
+  EXPECT_EQ(harness.session.assets().mesh(asset)->geometry_payload(), before);
+  expect_same_revisions(harness.editor.revisions(), revisions);
+  EXPECT_EQ(obj_vertex_x_values(read_text_file(path)),
+            (std::vector<float>{0.0f, 1.0f, 0.0f}));
 }
 
 TEST(ObjExportTests, NonObjectMeshSelectionsDisableCommandAndDoNotWriteFiles) {

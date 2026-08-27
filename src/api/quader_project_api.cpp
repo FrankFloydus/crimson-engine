@@ -13,12 +13,15 @@
 #include "api/quader_scene_documents_api.hpp"
 #include "diagnostics/profile.hpp"
 #include "editor/modeling/modeling_types.hpp"
+#include "editor/instances/scene_instance_service.hpp"
+#include "editor/projection/mesh_projection_service.hpp"
 #include "io/mesh/obj_writer.hpp"
 #include "io/qdr/qdr_document_reader.hpp"
 #include "editor/session/scene_session.hpp"
 #include "editor/session/project_session.hpp"
 #include "editor/session/scene_viewport_camera_persistence.hpp"
 #include "scene/components.hpp"
+#include "scene/scene_texture_mapping.hpp"
 #include "io/project/project_manifest.hpp"
 #include "io/project/recent_project_store.hpp"
 
@@ -104,7 +107,8 @@ std::string entity_export_name(const SceneDocument &scene, EntityId entity) {
 }
 
 std::vector<SelectedObjExportMesh>
-selected_obj_export_meshes(const SceneSessionReadView &view) {
+selected_obj_export_meshes(const SceneSession &session) {
+  const SceneSessionReadView view = session.read_view();
   std::vector<SelectedObjExportMesh> result;
   if (view.modeling.selection_summary().mode !=
       ModelingSelectionMode::Object) {
@@ -112,11 +116,23 @@ selected_obj_export_meshes(const SceneSessionReadView &view) {
   }
 
   const std::vector<EntityId> selected = view.scene.selected_entities();
+  const SceneInstanceEditState edit_state =
+      session.instances().instance_edit_state();
   result.reserve(selected.size());
   for (const EntityId entity : selected) {
     std::optional<MeshAsset> mesh = mesh_for_selected_entity(view, entity);
     if (!mesh.has_value()) {
       continue;
+    }
+    const EntityId occurrence =
+        edit_state.active && view.scene.containing_instance_definition(entity) ==
+                                 edit_state.definition
+            ? edit_state.occurrence
+            : kInvalidEntityId;
+    const std::optional<QMat4> mapping =
+        effective_texture_sampling_from_local(view.scene, entity, occurrence);
+    if (mapping.has_value()) {
+      MeshProjectionService::apply_mesh_texture_mapping(*mesh, *mapping);
     }
     result.push_back(SelectedObjExportMesh{
         .entity = entity,
@@ -203,8 +219,8 @@ std::vector<std::filesystem::path> export_paths_for_selection(
   return paths;
 }
 
-bool has_valid_obj_export_mesh(const SceneSessionReadView &view) {
-  for (const SelectedObjExportMesh &mesh : selected_obj_export_meshes(view)) {
+bool has_valid_obj_export_mesh(const SceneSession &session) {
+  for (const SelectedObjExportMesh &mesh : selected_obj_export_meshes(session)) {
     if (ObjMeshWriter::validate_mesh(mesh.mesh).ok) {
       return true;
     }
@@ -490,7 +506,7 @@ QuaderProjectApi::export_selected_meshes_as_obj(
   QDR_PROFILE_FUNCTION();
   SceneSession &session = scene_session(session_);
   const std::vector<SelectedObjExportMesh> meshes =
-      selected_obj_export_meshes(session.read_view());
+      selected_obj_export_meshes(session);
   if (meshes.empty()) {
     return project_obj_export_status(
         session, false,
@@ -575,7 +591,7 @@ bool QuaderProjectApi::can_export_selected_meshes_as_obj() const {
     return false;
   }
   const SceneSession &session = read_scene_session(session_);
-  return has_valid_obj_export_mesh(session.read_view());
+  return has_valid_obj_export_mesh(session);
 }
 
 bool QuaderProjectApi::has_project() const {

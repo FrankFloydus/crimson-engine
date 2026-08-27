@@ -14,6 +14,7 @@
 #include "scene/scene_document.hpp"
 #include "scene/scene_hierarchy_visibility.hpp"
 #include "scene/scene_transform.hpp"
+#include "scene/scene_texture_mapping.hpp"
 
 #include <algorithm>
 #include <bit>
@@ -145,6 +146,8 @@ RenderSceneSnapshotDirtyState scene_snapshot_dirty_state(
                                   snapshot.local_visibility_revision,
       .transforms_changed =
           previous->transform_revision != snapshot.transform_revision,
+      .texture_mappings_changed = previous->texture_mapping_revision !=
+                                  snapshot.texture_mapping_revision,
       .mesh_bindings_changed =
           previous->mesh_binding_revision != snapshot.mesh_binding_revision,
       .render_components_changed = previous->render_component_revision !=
@@ -194,6 +197,8 @@ void mark_mesh_dirty(RenderSceneMeshRecord &record,
       previous->material_revision != record.material_revision;
   record.transform_dirty =
       previous->transform_revision != record.transform_revision;
+  record.texture_mapping_dirty = previous->sampling_from_local.values !=
+                                  record.sampling_from_local.values;
   record.binding_dirty =
       !same_mesh_component(previous->mesh_component, record.mesh_component);
 }
@@ -219,6 +224,8 @@ void mark_light_dirty(RenderSceneLightRecord &record,
          previous->local_visibility_revision ==
              snapshot.local_visibility_revision &&
          previous->transform_revision == snapshot.transform_revision &&
+         previous->texture_mapping_revision ==
+             snapshot.texture_mapping_revision &&
          previous->mesh_binding_revision == snapshot.mesh_binding_revision &&
          previous->render_component_revision ==
              snapshot.render_component_revision &&
@@ -240,6 +247,7 @@ void reuse_previous_render_records(RenderSceneSnapshot &snapshot,
     mesh.mesh_dirty = false;
     mesh.material_dirty = false;
     mesh.transform_dirty = false;
+    mesh.texture_mapping_dirty = false;
     mesh.binding_dirty = false;
   }
   for (RenderSceneLightRecord &light : snapshot.lights) {
@@ -693,6 +701,7 @@ RenderSceneSnapshot build_render_scene_snapshot(
   snapshot.local_visibility_revision =
       local_visibility_revision(options.local_visibility);
   snapshot.transform_revision = document.transform_revision();
+  snapshot.texture_mapping_revision = document.texture_mapping_revision();
   snapshot.mesh_binding_revision = document.mesh_binding_revision();
   snapshot.render_component_revision = document.render_component_revision();
   snapshot.asset_revision = assets.revision();
@@ -790,6 +799,7 @@ RenderSceneSnapshot build_render_scene_snapshot(
           .occurrence = instance_occurrence_token(
               kInvalidEntityId, record.entity_id, record.entity_id),
           .world_transform = record.world_transform,
+          .sampling_from_local = record.sampling_from_local,
           .selected = selected(document, record.entity_id),
           .dimmed = options.instance_edit_scope.active(),
       });
@@ -850,6 +860,9 @@ RenderSceneSnapshot build_render_scene_snapshot(
             .world_transform = scene_transform_multiply(
                 document.world_transform_matrix(occurrence),
                 member_from_definition),
+            .sampling_from_local = effective_texture_sampling_from_local(
+                                       document, member, occurrence)
+                                       .value_or(QMat4{}),
             .selected = selected(document, occurrence),
             .dimmed = options.instance_edit_scope.active() &&
                        occurrence != options.instance_edit_scope.occurrence,
@@ -1030,6 +1043,9 @@ RenderSceneMeshRecord make_render_scene_mesh_record(
                          : kInvalidAssetId,
       .material_revision = material.revision,
       .world_transform = world_transform,
+      .sampling_from_local = effective_texture_sampling_from_local(
+                                 document, entity_id)
+                                 .value_or(QMat4{}),
       .transform_revision =
           RenderSignatureBuilder::light_transform_signature(world_transform),
   };
@@ -1140,6 +1156,8 @@ bool try_refresh_render_scene_snapshot_selection(
       snapshot.instance_edit_scope != instance_edit_scope ||
       snapshot.visibility_revision != document.visibility_revision() ||
       snapshot.transform_revision != document.transform_revision() ||
+      snapshot.texture_mapping_revision !=
+          document.texture_mapping_revision() ||
       snapshot.mesh_binding_revision != document.mesh_binding_revision() ||
       snapshot.render_component_revision !=
           document.render_component_revision() ||
@@ -1162,6 +1180,7 @@ bool try_refresh_render_scene_snapshot_selection(
       .visibility_changed = false,
       .local_visibility_changed = false,
       .transforms_changed = false,
+      .texture_mappings_changed = false,
       .mesh_bindings_changed = false,
       .render_components_changed = false,
       .assets_changed = false,
@@ -1173,6 +1192,7 @@ bool try_refresh_render_scene_snapshot_selection(
     record.mesh_dirty = false;
     record.material_dirty = false;
     record.transform_dirty = false;
+    record.texture_mapping_dirty = false;
     record.binding_dirty = false;
   }
   for (RenderSceneInstancePrimitiveRecord &record :
@@ -1208,7 +1228,9 @@ bool try_refresh_render_scene_snapshot_transforms(
       snapshot.mesh_binding_revision != document.mesh_binding_revision() ||
       snapshot.render_component_revision !=
           document.render_component_revision() ||
-      snapshot.transform_revision == document.transform_revision()) {
+      (snapshot.transform_revision == document.transform_revision() &&
+       snapshot.texture_mapping_revision ==
+           document.texture_mapping_revision())) {
     return false;
   }
 
@@ -1219,6 +1241,8 @@ bool try_refresh_render_scene_snapshot_transforms(
       snapshot.visibility_revision;
   const std::uint64_t previous_transform_revision =
       snapshot.transform_revision;
+  const std::uint64_t previous_texture_mapping_revision =
+      snapshot.texture_mapping_revision;
   const std::uint64_t previous_mesh_binding_revision =
       snapshot.mesh_binding_revision;
   const std::uint64_t previous_render_component_revision =
@@ -1234,6 +1258,7 @@ bool try_refresh_render_scene_snapshot_transforms(
   snapshot.local_visibility_revision =
       local_visibility_revision(local_visibility);
   snapshot.transform_revision = document.transform_revision();
+  snapshot.texture_mapping_revision = document.texture_mapping_revision();
   snapshot.mesh_binding_revision = document.mesh_binding_revision();
   snapshot.render_component_revision = document.render_component_revision();
   snapshot.asset_revision = assets.revision();
@@ -1248,6 +1273,8 @@ bool try_refresh_render_scene_snapshot_transforms(
       .local_visibility_changed = false,
       .transforms_changed =
           previous_transform_revision != snapshot.transform_revision,
+      .texture_mappings_changed = previous_texture_mapping_revision !=
+                                  snapshot.texture_mapping_revision,
       .mesh_bindings_changed =
           previous_mesh_binding_revision != snapshot.mesh_binding_revision,
       .render_components_changed = previous_render_component_revision !=
@@ -1271,6 +1298,11 @@ bool try_refresh_render_scene_snapshot_transforms(
         record.transform_revision != transform_revision;
     record.world_transform = world_transform;
     record.transform_revision = transform_revision;
+    const QMat4 mapping = effective_texture_sampling_from_local(
+                             document, record.entity_id).value_or(QMat4{});
+    record.texture_mapping_dirty =
+        record.sampling_from_local.values != mapping.values;
+    record.sampling_from_local = mapping;
   }
   for (RenderSceneInstancePrimitiveRecord &record :
        snapshot.instance_primitives) {
@@ -1292,6 +1324,13 @@ bool try_refresh_render_scene_snapshot_transforms(
                     document.world_transform_matrix(occurrence.entity_id),
                     record.member_from_definition)
               : document.world_transform_matrix(occurrence.entity_id);
+      occurrence.sampling_from_local =
+          record.definition_entity != kInvalidEntityId
+              ? effective_texture_sampling_from_local(
+                    document, record.member_entity, occurrence.entity_id)
+                    .value_or(QMat4{})
+              : effective_texture_sampling_from_local(
+                    document, occurrence.entity_id).value_or(QMat4{});
     }
   }
   for (RenderSceneLightRecord &record : snapshot.lights) {
@@ -1321,6 +1360,8 @@ bool render_scene_snapshot_matches_sources(
          snapshot.local_visibility_revision ==
              local_visibility_revision(local_visibility) &&
          snapshot.transform_revision == document.transform_revision() &&
+         snapshot.texture_mapping_revision ==
+             document.texture_mapping_revision() &&
          snapshot.mesh_binding_revision == document.mesh_binding_revision() &&
          snapshot.render_component_revision ==
              document.render_component_revision() &&
@@ -1397,6 +1438,9 @@ std::vector<RenderToolPreviewMeshRecord> build_render_tool_preview_snapshot(
         .material_revision = 0u,
         .transform = mesh.transform,
         .instance_transforms = std::move(mesh.instance_transforms),
+        .sampling_from_local = mesh.sampling_from_local,
+        .instance_sampling_from_local =
+            std::move(mesh.instance_sampling_from_local),
         .double_sided = mesh.double_sided,
         .dynamic_positions = mesh.dynamic_positions,
         .suppress_source = mesh.suppress_source,

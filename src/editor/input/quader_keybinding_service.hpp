@@ -13,6 +13,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cstddef>
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <functional>
@@ -765,6 +766,9 @@ public:
     return storage_path_;
   }
 
+  /** Cheap invalidation stamp for default, user, and reloaded bindings. */
+  [[nodiscard]] std::uint64_t revision() const noexcept { return revision_; }
+
   void clear_user_keybindings() {
     user_rules_.clear();
     invalidate_effective_rule_cache();
@@ -1353,6 +1357,7 @@ private:
 
     void invalidate_effective_rule_cache() {
       effective_rule_cache_valid_ = false;
+      ++revision_;
     }
 
     void ensure_effective_rule_cache() const {
@@ -1418,6 +1423,7 @@ private:
     mutable std::unordered_map<std::string, std::size_t>
         effective_rule_index_by_target_;
     mutable bool effective_rule_cache_valid_ = false;
+    std::uint64_t revision_ = 0;
     std::vector<QuaderInputChord> pending_sequence_;
     std::size_t next_order_ = 1u;
 };

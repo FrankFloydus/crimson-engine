@@ -16,6 +16,7 @@
 #include "diagnostics/profile.hpp"
 #include "editor/commands/modeling/commit_box_preview_command.hpp"
 #include "editor/history/modeling_memento_command.hpp"
+#include "editor/history/face_texture_settings_history_command.hpp"
 #include "editor/placement/snap_vertices_to_floor_history_command.hpp"
 #include "editor/instances/project_clipboard_service.hpp"
 #include "editor/instances/scene_instance_service.hpp"
@@ -468,6 +469,29 @@ QMat4 world_transform_delta_from_api_transform(
       glm::translate(glm::mat4{1.0f}, to_glm(pivot)) * local_transform *
       glm::translate(glm::mat4{1.0f}, -to_glm(pivot));
   return from_glm(around_pivot);
+}
+
+QuaderApiVoidResult apply_selection_transform(
+    QuaderApiSession api_session, QuaderApiMutationRunner &mutations,
+    const QuaderTransform3 &transform, QVec3 pivot,
+    SceneTextureTransformKind kind) {
+  SceneSession &session = scene_session(api_session);
+  if (entity_selection_owns_transforms(session)) {
+    SceneTransformDragService transforms;
+    const QMat4 display_from_scene =
+        session.instances().active_edit_display_from_scene().value_or(
+            scene_transform_identity_matrix());
+    return mutations.run_document_result(
+        transforms.transform_selected_by_world_delta(
+            session.document_commands(), session.scene(),
+            world_transform_delta_from_api_transform(transform, pivot),
+            "Transform Selection", display_from_scene, kind),
+        "Transform Selection");
+  }
+  return mutations.run_modeling_command(
+      std::make_unique<TransformSelectionHistoryCommand>(
+          session.modeling(), to_modeling_transform3(transform), pivot),
+      "Transform Selection");
 }
 
 std::optional<MeshArrangementAxis>
@@ -1908,35 +1932,22 @@ QuaderApiVoidResult QuaderModelingApi::move_selection(QVec3 delta) {
 
 QuaderApiVoidResult QuaderModelingApi::rotate_selection(QVec3 euler_radians,
                                                         QVec3 pivot) {
-  return transform_selection(rotation_transform(euler_radians), pivot);
+  return apply_selection_transform(session_, mutations_,
+                                    rotation_transform(euler_radians), pivot,
+                                    SceneTextureTransformKind::Rotation);
 }
 
 QuaderApiVoidResult QuaderModelingApi::scale_selection(QVec3 scale,
                                                        QVec3 pivot) {
-  return transform_selection(scale_transform(scale), pivot);
+  return apply_selection_transform(session_, mutations_, scale_transform(scale),
+                                    pivot, SceneTextureTransformKind::Scale);
 }
 
 QuaderApiVoidResult
 QuaderModelingApi::transform_selection(const QuaderTransform3 &transform,
                                        QVec3 pivot) {
-  SceneSession &session = scene_session(session_);
-  if (entity_selection_owns_transforms(session)) {
-    SceneTransformDragService transforms;
-    const QMat4 display_from_scene =
-        session.instances().active_edit_display_from_scene().value_or(
-            scene_transform_identity_matrix());
-    return mutations_.run_document_result(
-        transforms.transform_selected_by_world_delta(
-            session.document_commands(), session.scene(),
-            world_transform_delta_from_api_transform(transform, pivot),
-            "Transform Selection", display_from_scene),
-        "Transform Selection");
-  }
-
-  return mutations_.run_modeling_command(
-      std::make_unique<TransformSelectionHistoryCommand>(
-          session.modeling(), to_modeling_transform3(transform), pivot),
-      "Transform Selection");
+  return apply_selection_transform(session_, mutations_, transform, pivot,
+                                    SceneTextureTransformKind::Combined);
 }
 
 bool QuaderModelingApi::can_duplicate_selected_entity_hierarchy() const {
@@ -2323,6 +2334,98 @@ QuaderApiVoidResult QuaderModelingApi::assign_material_slot_to_selection(
       std::make_unique<AssignMaterialSlotToSelectionHistoryCommand>(
           scene_session(session_).modeling(), material_slot),
       "Assign Material Slot");
+}
+
+QuaderFaceTextureRevision QuaderModelingApi::face_texture_settings_revision() const {
+  QuaderFaceTextureRevision revision;
+  revision.scene_session_id = mutations_.scene_session_id();
+  if (!mutations_.available()) {
+    return revision;
+  }
+  const SceneSession &session = scene_session(session_);
+  revision.content_revision = session.modeling().content_revision();
+  revision.selection_revision = session.modeling().selection_revision();
+  revision.scene_revision = session.scene().revision();
+  revision.asset_revision = session.assets().revision();
+  revision.interaction_revision =
+      session.modeling().face_texture_settings_revision() * 2u +
+      (session.native_tools().has_pending_tool() ? 1u : 0u);
+  return revision;
+}
+
+QuaderFaceTextureSettings QuaderModelingApi::face_texture_settings() const {
+  if (!mutations_.available()) {
+    return {};
+  }
+  const auto settings = scene_session(session_).modeling().face_texture_settings();
+  QuaderFaceTextureSettings result{
+      .selected_face_count = settings.selected_face_count,
+      .editable = settings.editable,
+      .disabled_reason = settings.disabled_reason,
+      .scale_x = settings.scale_x,
+      .scale_y = settings.scale_y,
+      .shift_x = settings.shift_x,
+      .shift_y = settings.shift_y,
+      .rotation_degrees = settings.rotation_degrees,
+      .selection_token = settings.selection_token,
+  };
+  switch (settings.block_reason) {
+  case ModelingFaceTextureBlockReason::None:
+    result.block_reason = QuaderFaceTextureBlockReason::None;
+    break;
+  case ModelingFaceTextureBlockReason::NoSelection:
+    result.block_reason = QuaderFaceTextureBlockReason::NoSelection;
+    break;
+  case ModelingFaceTextureBlockReason::PreviewActive:
+    result.block_reason = QuaderFaceTextureBlockReason::PreviewActive;
+    break;
+  case ModelingFaceTextureBlockReason::TargetUnavailable:
+    result.block_reason = QuaderFaceTextureBlockReason::TargetUnavailable;
+    break;
+  }
+  if (result.selected_face_count != 0u &&
+      scene_session(session_).native_tools().has_pending_tool()) {
+    result.editable = false;
+    result.block_reason = QuaderFaceTextureBlockReason::PreviewActive;
+    result.disabled_reason =
+        "Apply or cancel the active tool before editing texture settings.";
+  }
+  return result;
+}
+
+QuaderApiVoidResult QuaderModelingApi::set_face_texture_setting(
+    const QuaderFaceTextureEdit &edit) {
+  if (mutations_.available() &&
+      scene_session(session_).native_tools().has_pending_tool()) {
+    return mutations_.modeling_content_blocked_status("editing texture settings.");
+  }
+  ModelingFaceTextureField field;
+  switch (edit.field) {
+  case QuaderFaceTextureField::ScaleX:
+    field = ModelingFaceTextureField::ScaleX;
+    break;
+  case QuaderFaceTextureField::ScaleY:
+    field = ModelingFaceTextureField::ScaleY;
+    break;
+  case QuaderFaceTextureField::ShiftX:
+    field = ModelingFaceTextureField::ShiftX;
+    break;
+  case QuaderFaceTextureField::ShiftY:
+    field = ModelingFaceTextureField::ShiftY;
+    break;
+  case QuaderFaceTextureField::Rotate:
+    field = ModelingFaceTextureField::Rotate;
+    break;
+  default:
+    return invalid_api_status(session_, "Unknown face texture setting.");
+  }
+  return mutations_.run_modeling_undoable_command(
+      std::make_unique<FaceTextureSettingsHistoryCommand>(
+          scene_session(session_).modeling(),
+          ModelingFaceTextureEdit{.field = field,
+                                   .value = edit.value,
+                                   .selection_token = edit.selection_token}),
+      "Edit Texture Settings", {.merge_key = edit.merge_key});
 }
 
 QuaderApiVoidResult

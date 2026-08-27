@@ -59,6 +59,7 @@ struct RenderInstancePrimitiveOccurrence final {
   RenderInstancePrimitiveKey key;
   std::uint64_t occurrence = 0u;
   QMat4 world_transform;
+  QMat4 sampling_from_local;
   RenderInstanceBounds local_bounds;
   /** Retains a stable batch slot while excluding this occurrence from draw. */
   bool visible = true;
@@ -69,6 +70,7 @@ struct RenderInstanceBatchChunk final {
   RenderInstancePrimitiveKey key;
   std::vector<std::uint64_t> occurrences;
   std::vector<QMat4> world_transforms;
+  std::vector<QMat4> sampling_from_local;
   /** One byte per stable occurrence slot; hidden slots are not submitted. */
   std::vector<std::uint8_t> visibility;
   std::size_t visible_occurrence_count = 0u;

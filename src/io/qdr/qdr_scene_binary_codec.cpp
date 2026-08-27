@@ -10,6 +10,7 @@
 #include "assets/material_document.hpp"
 #include "diagnostics/profile.hpp"
 #include "editor/projection/mesh_projection_service.hpp"
+#include "scene/scene_texture_mapping.hpp"
 
 #include <quader/modeling/io/qdr_document.hpp>
 #include <quader/modeling/neutral/polygon/document_validation.hpp>
@@ -47,7 +48,7 @@ namespace {
 namespace fb = ::quader::qdr::fb;
 
 constexpr std::uint16_t kMinimumSceneChunkSchemaVersion = 1u;
-constexpr std::uint16_t kSceneChunkSchemaVersion = 6u;
+constexpr std::uint16_t kSceneChunkSchemaVersion = 7u;
 constexpr std::uint16_t kGeometryChunkSchemaVersion = 1u;
 
 [[nodiscard]] fb::Vec2 to_fb(QVec2 value) {
@@ -131,6 +132,13 @@ sdk_authored_topology(const quader_poly::Document &document) {
         quader::modeling::make_id<quader::modeling::FaceTag>(face.id);
     record.material_slot = face.material_slot;
     record.shading = sdk_shading(face.normal_shading);
+    record.texture_transform = {
+        .scale = {face.texture_transform.scale.x,
+                  face.texture_transform.scale.y},
+        .shift_uv = {face.texture_transform.shift_uv.x,
+                     face.texture_transform.shift_uv.y},
+        .rotation_degrees = face.texture_transform.rotation_degrees,
+    };
     record.vertices.reserve(face.vertices.size());
     for (quader_poly::ElementId id : face.vertices) {
       record.vertices.push_back(
@@ -170,6 +178,13 @@ sdk_authored_topology(const quader_poly::Document &document) {
     record.id = face.id.index;
     record.material_slot = face.material_slot;
     record.normal_shading = native_shading(face.shading);
+    record.texture_transform = {
+        .scale = {face.texture_transform.scale.x,
+                  face.texture_transform.scale.y},
+        .shift_uv = {face.texture_transform.shift_uv.x,
+                     face.texture_transform.shift_uv.y},
+        .rotation_degrees = face.texture_transform.rotation_degrees,
+    };
     record.vertices.reserve(face.vertices.size());
     for (quader::modeling::VertexId id : face.vertices) {
       record.vertices.push_back(id.index);
@@ -550,6 +565,7 @@ verify_geometry_payload(std::span<const std::byte> bytes);
   std::vector<fb::SurfaceShading> face_shading;
   std::vector<fb::PolygonEdge> hard_normal_edges;
   std::vector<fb::MeshVertex> mesh_vertices;
+  std::vector<fb::MeshTextureMappingVertex> mesh_texture_mapping;
   std::vector<std::uint32_t> mesh_indices;
   std::vector<fb::MeshPrimitive> mesh_primitives;
   flatbuffers::Offset<flatbuffers::Vector<std::uint8_t>> authored_payload;
@@ -582,9 +598,13 @@ verify_geometry_payload(std::span<const std::byte> bytes);
         reinterpret_cast<const std::uint8_t *>(bytes.data()), bytes.size());
   } else {
     mesh_vertices.reserve(geometry.vertices.size());
+    mesh_texture_mapping.reserve(geometry.vertices.size());
     for (const MeshVertex &vertex : geometry.vertices) {
       mesh_vertices.emplace_back(to_fb(vertex.position), to_fb(vertex.normal),
                                  to_fb(vertex.uv), vertex.rgba);
+      mesh_texture_mapping.emplace_back(
+          vertex.uv_carrier[0], vertex.uv_carrier[1], vertex.uv_carrier[2],
+          vertex.uv_carrier[3], to_fb(vertex.uv_geometric_normal));
     }
     mesh_indices = geometry.indices;
     const std::vector<MeshPrimitiveSpan> primitives =
@@ -608,7 +628,8 @@ verify_geometry_payload(std::span<const std::byte> bytes);
       builder.CreateVectorOfStructs(hard_normal_edges),
       builder.CreateVectorOfStructs(mesh_vertices),
       builder.CreateVector(mesh_indices),
-      builder.CreateVectorOfStructs(mesh_primitives), authored_payload);
+      builder.CreateVectorOfStructs(mesh_primitives), authored_payload,
+      builder.CreateVectorOfStructs(mesh_texture_mapping));
   builder.Finish(root, "QDRG");
   return flatbuffer_bytes(builder);
 }
@@ -905,12 +926,24 @@ encode_scene_settings(flatbuffers::FlatBufferBuilder &builder,
       instance_occurrence = fb::CreateInstanceOccurrenceComponent(
           builder, entity.instance_occurrence->definition);
     }
+    flatbuffers::Offset<fb::TextureMappingComponent> texture_mapping;
+    if (entity.texture_mapping.has_value()) {
+      if ((entity.kind != EntityKind::Mesh &&
+           entity.kind != EntityKind::Instance) ||
+          !texture_mapping_is_valid(*entity.texture_mapping)) {
+        throw std::runtime_error("QDR entity texture mapping is invalid.");
+      }
+      const auto &values = entity.texture_mapping->sampling_from_local.values;
+      texture_mapping = fb::CreateTextureMappingComponent(
+          builder, builder.CreateVector(values.data(), values.size()));
+    }
     entities.push_back(fb::CreateEntity(
         builder, entity.id, builder.CreateString(entity.uuid),
         entity.editor_object_id, builder.CreateString(entity.name),
         to_fb(entity.kind), entity.parent, transform, visibility, lock,
         modeling_object, mesh, material, light, entity.scene_root, settings,
-        instance_definition, instance_occurrence, entity.layer_id));
+        instance_definition, instance_occurrence, entity.layer_id,
+        texture_mapping));
   }
 
   std::vector<flatbuffers::Offset<fb::ObjectRecord>> objects;
@@ -1183,6 +1216,28 @@ decode_polygon_document(const fb::GeometryPayload &payload) {
   if (const auto *indices = payload.mesh_indices()) {
     geometry.indices.assign(indices->begin(), indices->end());
   }
+  if (const auto *mappings = payload.mesh_texture_mapping();
+      mappings != nullptr && mappings->size() != 0u) {
+    if (mappings->size() != geometry.vertices.size()) {
+      throw std::runtime_error(
+          "QDR compiled geometry has an invalid texture mapping count.");
+    }
+    for (std::size_t index = 0u; index < mappings->size(); ++index) {
+      const fb::MeshTextureMappingVertex *mapping = mappings->Get(index);
+      MeshVertex &vertex = geometry.vertices[index];
+      vertex.uv_carrier = {mapping->carrier_00(), mapping->carrier_01(),
+                           mapping->carrier_10(), mapping->carrier_11()};
+      vertex.uv_geometric_normal = from_fb(mapping->geometric_normal());
+      if (std::ranges::any_of(vertex.uv_carrier, [](float value) {
+            return !std::isfinite(value);
+          }) || !std::isfinite(vertex.uv_geometric_normal.x) ||
+          !std::isfinite(vertex.uv_geometric_normal.y) ||
+          !std::isfinite(vertex.uv_geometric_normal.z)) {
+        throw std::runtime_error(
+            "QDR compiled geometry texture mapping must be finite.");
+      }
+    }
+  }
   for (const std::uint32_t index : geometry.indices) {
     if (index >= geometry.vertices.size()) {
       throw std::runtime_error(
@@ -1215,6 +1270,13 @@ decode_polygon_document(const fb::GeometryPayload &payload) {
         .index_count = static_cast<std::uint32_t>(geometry.indices.size()),
         .material_slot = 0u,
     });
+  }
+  if (payload.mesh_texture_mapping() == nullptr ||
+      payload.mesh_texture_mapping()->size() == 0u) {
+    if (!MeshProjectionService::initialize_compiled_texture_mapping(mesh)) {
+      throw std::runtime_error(
+          "QDR compiled geometry cannot provide valid texture mapping triangles.");
+    }
   }
   return mesh;
 }
@@ -1743,6 +1805,7 @@ void decode_entities(SceneContentDocument &document,
   std::vector<EntityId> instance_definitions;
   std::vector<std::pair<EntityId, EntityId>> instance_occurrences;
   std::vector<SceneLayerAssignment> layer_assignments;
+  std::vector<SceneTextureMappingAssignment> texture_mappings;
   std::set<EntityId> explicit_object_id_entities;
   if (const auto *entities = payload.entities()) {
     parent_links.reserve(entities->size());
@@ -1764,6 +1827,19 @@ void decode_entities(SceneContentDocument &document,
       }
       if (has_editor_object_id) {
         explicit_object_id_entities.insert(entity);
+      }
+      if (schema_version >= 7u && stored->texture_mapping() != nullptr) {
+        const auto *values =
+            stored->texture_mapping()->sampling_from_local();
+        TextureMappingComponent mapping;
+        if (values == nullptr || values->size() !=
+                                     mapping.sampling_from_local.values.size()) {
+          throw std::runtime_error(
+              "QDR entity texture mapping must contain one affine matrix.");
+        }
+        std::copy(values->begin(), values->end(),
+                  mapping.sampling_from_local.values.begin());
+        texture_mappings.push_back({.entity = entity, .mapping = mapping});
       }
       if (schema_version >= 4u &&
           stored->layer_id() != kInvalidSceneLayerId) {
@@ -1903,6 +1979,12 @@ void decode_entities(SceneContentDocument &document,
       throw std::runtime_error(
           "QDR scene contains an invalid instance occurrence.");
     }
+  }
+
+  if (!texture_mappings.empty() &&
+      !document.scene().set_transforms_and_texture_mappings({},
+                                                           texture_mappings)) {
+    throw std::runtime_error("QDR scene contains an invalid texture mapping.");
   }
 
   if (schema_version >= 4u && !layer_assignments.empty()) {

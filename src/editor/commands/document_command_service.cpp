@@ -9,6 +9,7 @@
 #include "assets/asset_registry.hpp"
 #include "diagnostics/profile.hpp"
 #include "editor/commands/document/apply_entity_transform_command.hpp"
+#include "editor/commands/document/apply_entity_transforms_command.hpp"
 #include "editor/commands/document/batch_document_command.hpp"
 #include "editor/commands/document/create_entity_command.hpp"
 #include "editor/commands/document/create_light_command.hpp"
@@ -266,6 +267,16 @@ DocumentCommandService::DocumentCommandService(
 void DocumentCommandService::set_entity_mutation_blocker(
     EntityMutationBlocker blocker) {
   entity_mutation_blocker_ = std::move(blocker);
+}
+
+void DocumentCommandService::set_texture_lock_settings_provider(
+    std::function<TextureLockSettings()> provider) {
+  texture_lock_settings_provider_ = std::move(provider);
+}
+
+TextureLockSettings DocumentCommandService::texture_lock_settings() const {
+  return texture_lock_settings_provider_ ? texture_lock_settings_provider_()
+                                         : TextureLockSettings{};
 }
 
 bool DocumentCommandService::mutation_blocked(EntityId entity) const {
@@ -605,7 +616,8 @@ DocumentCommandService::apply_entity_transform(EntityId entity,
 
   return execute_document_command(
       history_, std::make_unique<ApplyEntityTransformCommand>(
-                    scene_, entity, *current_transform, transform));
+                    scene_, entity, *current_transform, transform,
+                    "Apply Entity Transform", texture_lock_settings()));
 }
 
 DocumentCommandResult DocumentCommandService::rename_entity(EntityId entity,
@@ -849,7 +861,8 @@ DocumentCommandService::set_transform(EntityId entity,
 
 DocumentCommandResult
 DocumentCommandService::set_transforms(std::vector<DocumentTransformEdit> edits,
-                                       std::string label) {
+                                       std::string label,
+                                       SceneTextureTransformKind kind) {
   if (label.empty()) {
     label = "Set Transform";
   }
@@ -870,16 +883,26 @@ DocumentCommandService::set_transforms(std::vector<DocumentTransformEdit> edits,
     return document_command_active_tool_entity_result();
   }
 
-  std::vector<std::unique_ptr<IUndoableCommand>> commands;
-  commands.reserve(edits.size());
+  std::vector<EntityId> targets;
+  targets.reserve(edits.size());
   for (const DocumentTransformEdit &edit : edits) {
-    commands.push_back(std::make_unique<ApplyEntityTransformCommand>(
-        scene_, edit.entity, edit.before, edit.after, label));
+    targets.push_back(edit.entity);
+  }
+  const std::optional<SceneTextureMappingPlan> plan =
+      SceneTextureMappingPlan::capture(scene_, targets, texture_lock_settings());
+  if (!plan.has_value()) {
+    return document_command_invalid_request_result(
+        "Texture mapping cannot be captured for this transform hierarchy");
+  }
+  auto mappings = plan->evaluate(edits, kind);
+  if (!mappings.has_value()) {
+    return document_command_invalid_request_result(
+        "Transform would produce an invalid texture mapping");
   }
 
   return execute_document_command(
-      history_, std::make_unique<BatchDocumentCommand>(std::move(label),
-                                                       std::move(commands)));
+      history_, std::make_unique<ApplyEntityTransformsCommand>(
+                    scene_, std::move(edits), std::move(label), std::move(*mappings)));
 }
 
 DocumentCreateLayerResult DocumentCommandService::create_layer(
@@ -1344,7 +1367,7 @@ DocumentCommandResult DocumentCommandService::apply_scene_batch(
       }
       commands.push_back(std::make_unique<ApplyEntityTransformCommand>(
           scene_, operation.entity, state->get().transform, operation.transform,
-          label));
+          label, texture_lock_settings()));
       state->get().transform = operation.transform;
       break;
     }

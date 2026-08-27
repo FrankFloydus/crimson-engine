@@ -32,7 +32,9 @@ inline bool same_vertex(const MeshVertex &left, const MeshVertex &right) {
   return same_vec3(left.position, right.position) &&
          same_vec3(left.normal, right.normal) && same_vec2(left.uv, right.uv) &&
          left.rgba == right.rgba &&
-         left.source_vertex_id == right.source_vertex_id;
+         left.source_vertex_id == right.source_vertex_id &&
+         left.uv_carrier == right.uv_carrier &&
+         same_vec3(left.uv_geometric_normal, right.uv_geometric_normal);
 }
 
 inline bool same_polygon_vertex(const quader_poly::Vertex &left,
@@ -45,6 +47,11 @@ inline bool same_polygon_face(const quader_poly::Face &left,
   if (left.id != right.id || left.vertices != right.vertices ||
       left.material_slot != right.material_slot ||
       left.normal_shading != right.normal_shading ||
+      !same_vec2(left.texture_transform.scale, right.texture_transform.scale) ||
+      !same_vec2(left.texture_transform.shift_uv,
+                 right.texture_transform.shift_uv) ||
+      left.texture_transform.rotation_degrees !=
+          right.texture_transform.rotation_degrees ||
       left.uvs.size() != right.uvs.size()) {
     return false;
   }
@@ -111,6 +118,16 @@ polygon_document_hash(const quader_poly::Document &document) {
     hash = append_authored_hash(hash, face.material_slot);
     hash = append_authored_hash(
         hash, static_cast<std::uint64_t>(face.normal_shading));
+    hash = append_authored_hash(
+        hash, authored_float_hash_value(face.texture_transform.scale.x));
+    hash = append_authored_hash(
+        hash, authored_float_hash_value(face.texture_transform.scale.y));
+    hash = append_authored_hash(
+        hash, authored_float_hash_value(face.texture_transform.shift_uv.x));
+    hash = append_authored_hash(
+        hash, authored_float_hash_value(face.texture_transform.shift_uv.y));
+    hash = append_authored_hash(
+        hash, authored_float_hash_value(face.texture_transform.rotation_degrees));
   }
   hash = append_authored_hash(hash, document.hard_normal_edges.size());
   for (const quader_poly::Edge edge : document.hard_normal_edges) {

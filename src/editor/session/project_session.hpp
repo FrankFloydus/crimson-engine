@@ -16,6 +16,7 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
@@ -23,6 +24,7 @@ namespace quader {
 
 class StandardMaterialEditSessionService;
 class ProjectClipboardService;
+struct ProjectMaterialTextureSnapshot;
 
 /// Owns one heap-stable scene document resident in the project workspace.
 struct OpenSceneSession final {
@@ -118,6 +120,13 @@ public:
   [[nodiscard]] ProjectIoResult<ProjectMaterialTextureData>
   material_texture(ProjectAssetId material_id,
                    StandardMaterialTextureSlot slot) const;
+  /// Shares one decoded image per texture identity and installed catalog.
+  [[nodiscard]] std::shared_ptr<const ProjectMaterialTextureSnapshot>
+  material_texture_image(ProjectAssetId material_id,
+                         StandardMaterialTextureSlot slot) const;
+  [[nodiscard]] std::uint64_t material_texture_revision() const noexcept {
+    return material_texture_revision_;
+  }
   [[nodiscard]] std::span<const std::unique_ptr<OpenSceneSession>>
   open_scenes() const noexcept {
     return open_scenes_;
@@ -139,6 +148,7 @@ public:
   }
 
 private:
+  void invalidate_material_textures();
   [[nodiscard]] SceneSessionId allocate_session_id();
   void release_session_id(SceneSessionId id);
   void release_open_scene_ids();
@@ -180,6 +190,10 @@ private:
   std::uint64_t activation_generation_ = 0u;
   SceneSession fallback_scene_;
   ProjectMaterialCatalog material_catalog_;
+  std::uint64_t material_texture_revision_ = 0u;
+  mutable std::unordered_map<
+      ProjectAssetId, std::shared_ptr<const ProjectMaterialTextureSnapshot>,
+      ProjectAssetIdHash> material_texture_images_;
   std::unique_ptr<StandardMaterialEditSessionService>
       standard_material_editor_;
   std::unique_ptr<ProjectClipboardService> clipboard_;

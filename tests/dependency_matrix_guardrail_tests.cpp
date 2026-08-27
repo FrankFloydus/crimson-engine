@@ -101,6 +101,8 @@ struct CMakeLinkException {
 };
 
 const std::vector<SourceModulePolicy> &source_module_policies() {
+  // Export, instance flattening, and pivot rebasing share the projection owner's
+  // neutral texture-mapping adapter instead of duplicating UV evaluation.
   static const std::vector<SourceModulePolicy> kPolicies = {
       {"editor_array",
        {"src/editor/array/"},
@@ -118,7 +120,7 @@ const std::vector<SourceModulePolicy> &source_module_policies() {
       {"editor_instances",
        {"src/editor/instances/"},
        {"assets", "core", "editor_commands", "editor_history",
-        "editor_instances", "editor_modeling", "editor_selection",
+        "editor_instances", "editor_modeling", "editor_projection", "editor_selection",
         "editor_session", "editor_tools", "io_project", "mesh_polygon",
         "scene"}},
       {"editor_input",
@@ -153,7 +155,7 @@ const std::vector<SourceModulePolicy> &source_module_policies() {
       {"editor_pivot",
        {"src/editor/pivot/"},
        {"assets", "core", "editor_history", "editor_modeling",
-        "editor_pivot", "editor_selection", "math", "mesh_polygon", "scene"}},
+        "editor_pivot", "editor_projection", "editor_selection", "math", "mesh_polygon", "scene"}},
       {"editor_placement",
        {"src/editor/placement/"},
        {"assets", "core", "diagnostics", "editor_commands",
@@ -222,6 +224,7 @@ const std::vector<SourceModulePolicy> &source_module_policies() {
         "editor_modeling",
         "editor_placement",
         "editor_pivot",
+        "editor_projection",
         "editor_render",
         "editor_selection",
         "editor_session",

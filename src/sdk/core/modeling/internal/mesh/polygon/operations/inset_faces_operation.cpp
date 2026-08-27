@@ -90,7 +90,8 @@ OperationResult inset_selected_faces_impl(Document& document, Selection& selecti
                 inner_vertices[(index + 1U) % inner_vertices.size()],
                 inner_vertices[index],
             };
-            [[maybe_unused]] const ElementId rim_face_id = add_face(document, rim, original_face.material_slot);
+            [[maybe_unused]] const ElementId rim_face_id = add_face_with_texture_transform(
+                document, rim, original_face.material_slot, original_face.texture_transform);
         }
 
         selected_faces.push_back(original_face.id);

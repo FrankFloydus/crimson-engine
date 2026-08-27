@@ -53,6 +53,7 @@ struct OpenMeshTopologyDocument {
     OpenMeshFaceIdProperty face_ids;
     OpenMeshFaceIndexProperty face_indices;
     OpenMeshFaceMaterialProperty face_materials;
+    std::vector<FaceTextureTransform> face_texture_transforms;
     std::map<ElementId, OpenMeshTopologyMesh::VertexHandle> vertices_by_id;
 };
 
@@ -115,6 +116,12 @@ bool build_openmesh_topology_document(const Document& document, OpenMeshTopology
             topology.mesh.property(topology.face_ids, handle) = face.id;
             topology.mesh.property(topology.face_indices, handle) = face_index;
             topology.mesh.property(topology.face_materials, handle) = face.material_slot;
+            if (face.texture_transform != FaceTextureTransform{}) {
+                if (topology.face_texture_transforms.empty()) {
+                    topology.face_texture_transforms.resize(document.faces.size());
+                }
+                topology.face_texture_transforms[face_index] = face.texture_transform;
+            }
         } catch (const std::exception& exception) {
             message = exception.what();
             return false;
@@ -142,6 +149,10 @@ Document document_from_openmesh_topology(OpenMeshTopologyDocument& topology, Ele
     for (const OpenMeshTopologyMesh::FaceHandle face_handle : topology.mesh.faces()) {
         Face face;
         face.id = topology.mesh.property(topology.face_ids, face_handle);
+        const std::size_t source_index = topology.mesh.property(topology.face_indices, face_handle);
+        if (face.id != kInvalidElementId && source_index < topology.face_texture_transforms.size()) {
+            face.texture_transform = topology.face_texture_transforms[source_index];
+        }
         if (face.id == kInvalidElementId) {
           face.id = next_valid_face_id(document);
         }

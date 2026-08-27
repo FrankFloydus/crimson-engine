@@ -44,6 +44,8 @@ TEST(QdrDocumentOperationSliceQuadTests, SliceQuadSubdividesASelectedQuadIntoAnX
 	qdr_test::QuadFixture fixture = qdr_test::make_quad_document(11);
 	Face* face = find_face(fixture.document, fixture.face);
 	EXPECT_TRUE(face != nullptr);
+	const FaceTextureTransform texture{{2.0F, -0.5F}, {0.25F, -0.75F}, 35.0F};
+	face->texture_transform = texture;
 	face->uvs = {
 		{ 0.0F, 0.0F },
 		{ 1.0F, 0.0F },
@@ -68,6 +70,7 @@ TEST(QdrDocumentOperationSliceQuadTests, SliceQuadSubdividesASelectedQuadIntoAnX
 	for (const Face& sliced_face : fixture.document.faces) {
 		EXPECT_TRUE(sliced_face.vertices.size() == 4U);
 		EXPECT_TRUE(sliced_face.material_slot == 11U);
+		EXPECT_EQ(sliced_face.texture_transform, texture);
 		EXPECT_TRUE(sliced_face.uvs.empty());
 		EXPECT_FALSE(qdr_test::face_has_repeated_vertices(sliced_face));
 	}

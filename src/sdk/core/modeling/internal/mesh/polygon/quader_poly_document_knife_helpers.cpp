@@ -1903,6 +1903,7 @@ KnifeSegmentCandidate build_knife_segment_candidate(
     second_face.id = build.document.next_face_id++;
     second_face.vertices = std::move(second_loop);
     second_face.material_slot = source_face.material_slot;
+    second_face.texture_transform = source_face.texture_transform;
     second_face.uvs.clear();
 
     build.document.faces[face_index] = std::move(first_face);

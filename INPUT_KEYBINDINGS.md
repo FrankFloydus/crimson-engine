@@ -248,6 +248,10 @@ delta alone does not cover the native failure.
 Grid preset rows no longer own any `F1`-`F10` shortcut. Redo has one compiled mapping,
 `Ctrl+Shift+Z`.
 
+Texture Lock (`viewport.toggle_texture_lock`) and Texture Lock Scale
+(`viewport.toggle_texture_lock_scale`) are separate bindable viewport commands. Both are
+deliberately unassigned by default; the toolbar buttons do not install private Qt shortcuts.
+
 ## Testing Requirements
 
 Input changes need fast synthetic coverage. Prefer headless tests over manual clicking whenever

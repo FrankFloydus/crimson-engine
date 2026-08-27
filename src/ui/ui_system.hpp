@@ -8,6 +8,7 @@
 
 #include "api/quader_events_api.hpp"
 #include "api/quader_materials_api.hpp"
+#include "api/quader_modeling_api.hpp"
 #include "api/quader_standard_material_documents_api.hpp"
 #include "core/frame_timing.hpp"
 #include "core/localization_service.hpp"
@@ -67,6 +68,7 @@ class QtProjectHomePage;
 class QtSceneWorkspace;
 class QtSelectionToolbar;
 class QtSnappingToolbar;
+class QtTextureToolbar;
 class QtToolToolbar;
 class QtViewportDisplayToolbar;
 enum class QtSettingsChangeKind;
@@ -221,6 +223,7 @@ private:
   QtSelectionToolbar *selection_toolbar_ = nullptr;
   QtSnappingToolbar *snapping_toolbar_ = nullptr;
   QtViewportDisplayToolbar *viewport_display_toolbar_ = nullptr;
+  QtTextureToolbar *texture_toolbar_ = nullptr;
   QtToolToolbar *tool_toolbar_ = nullptr;
   QtViewportPanel *viewport_panel_ = nullptr;
   OutlinerPanel *outliner_panel_ = nullptr;
@@ -285,6 +288,7 @@ private:
   std::uint64_t toolbar_active_tool_revision_ = 0;
   std::uint64_t toolbar_transform_space_revision_ = 0;
   std::uint64_t tool_settings_revision_ = 0;
+  std::optional<QuaderFaceTextureRevision> face_texture_settings_revision_;
   bool tool_settings_refresh_valid_ = false;
   QuaderEditorApi *project_workspace_events_editor_ = nullptr;
   std::vector<QuaderEventSubscription>
@@ -387,6 +391,7 @@ private:
   bool selection_toolbar_workspace_visible_ = true;
   bool snapping_toolbar_workspace_visible_ = true;
   bool viewport_display_toolbar_workspace_visible_ = true;
+  bool texture_toolbar_workspace_visible_ = true;
   bool tool_toolbar_workspace_visible_ = true;
   std::string workspace_window_state_;
 };

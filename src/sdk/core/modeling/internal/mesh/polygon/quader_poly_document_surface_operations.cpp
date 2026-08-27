@@ -90,6 +90,7 @@ struct EdgeExtrudeFaceSource {
   std::pair<ElementId, ElementId> oriented_edge;
   quader::QVec3 source_normal;
   std::uint32_t material_slot = 0;
+  FaceTextureTransform texture_transform{};
 };
 
 /**
@@ -114,6 +115,7 @@ EdgeExtrudeSource edge_extrude_source_for_edge(const Document& document, Edge ed
             *oriented,
             face_normal(document, face),
             face.material_slot,
+            face.texture_transform,
         });
     }
     return source;
@@ -160,7 +162,7 @@ std::pair<const EdgeExtrudeFaceSource*, const EdgeExtrudeFaceSource*> closed_edg
     return { &source.faces[1], &source.faces[0] };
 }
 
-bool append_renderable_face(Document& document, std::span<const ElementId> vertices, std::uint32_t material_slot)
+bool append_renderable_face(Document& document, std::span<const ElementId> vertices, std::uint32_t material_slot, const FaceTextureTransform& texture_transform)
 {
     if (vertices.size() < 3) {
         return false;
@@ -174,11 +176,11 @@ bool append_renderable_face(Document& document, std::span<const ElementId> verti
       return false;
     }
 
-    [[maybe_unused]] const ElementId face_id = add_face(document, vertices, material_slot);
+    [[maybe_unused]] const ElementId face_id = add_face_with_texture_transform(document, vertices, material_slot, texture_transform);
     return true;
 }
 
-bool append_renderable_face_oriented(Document& document, std::span<const ElementId> vertices, std::uint32_t material_slot, quader::QVec3 expected_normal)
+bool append_renderable_face_oriented(Document& document, std::span<const ElementId> vertices, const EdgeExtrudeFaceSource& source, quader::QVec3 expected_normal)
 {
     if (vertices.size() < 3) {
         return false;
@@ -187,7 +189,7 @@ bool append_renderable_face_oriented(Document& document, std::span<const Element
     Face face;
     face.vertices.assign(vertices.begin(), vertices.end());
     orient_face_toward_normal(document, face, expected_normal);
-    return append_renderable_face(document, face.vertices, material_slot);
+    return append_renderable_face(document, face.vertices, source.material_slot, source.texture_transform);
 }
 
 template <typename CopyVertex>
@@ -282,7 +284,7 @@ bool append_closed_edge_ledge_extrusion_with_copied_vertices(
         copied_cap_to,
         copied_cap_from,
     };
-    if (!append_renderable_face_oriented(document, ledge, ledge_source->material_slot, ledge_source->source_normal)) {
+    if (!append_renderable_face_oriented(document, ledge, *ledge_source, ledge_source->source_normal)) {
         return false;
     }
 
@@ -292,14 +294,14 @@ bool append_closed_edge_ledge_extrusion_with_copied_vertices(
         to_inner,
         copied_cap_to,
     };
-    [[maybe_unused]] const bool to_cap_added = append_renderable_face_oriented(document, to_cap, cap_source->material_slot, edge_direction);
+    [[maybe_unused]] const bool to_cap_added = append_renderable_face_oriented(document, to_cap, *cap_source, edge_direction);
 
     const std::array from_cap {
         from_inner,
         root_cap_from,
         copied_cap_from,
     };
-    [[maybe_unused]] const bool from_cap_added = append_renderable_face_oriented(document, from_cap, cap_source->material_slot, edge_direction * -1.0F);
+    [[maybe_unused]] const bool from_cap_added = append_renderable_face_oriented(document, from_cap, *cap_source, edge_direction * -1.0F);
 
     add_unique_edge(selected_edges, make_edge(copied_a, copied_b));
     return true;
@@ -417,7 +419,8 @@ OperationResult extrude_selected_faces_with_copied_vertices(
                 copied_to->second,
                 copied_from->second,
             };
-            [[maybe_unused]] const ElementId side_face_id = add_face(document, side, original_face.material_slot);
+            [[maybe_unused]] const ElementId side_face_id = add_face_with_texture_transform(
+                document, side, original_face.material_slot, original_face.texture_transform);
         }
     }
 
@@ -436,6 +439,7 @@ OperationResult extrude_selected_faces_with_copied_vertices(
             }
 
             source_face->normal_shading = original_face.normal_shading;
+            source_face->texture_transform = original_face.texture_transform;
             if (original_face.uvs.size() == original_face.vertices.size()) {
                 source_face->uvs.assign(original_face.uvs.rbegin(), original_face.uvs.rend());
             }
@@ -526,7 +530,8 @@ OperationResult extrude_selected_edges_with_copied_vertices(
             copied_to,
         };
 
-        [[maybe_unused]] const ElementId side_face_id = add_face(document, side, source.material_slot);
+        [[maybe_unused]] const ElementId side_face_id = add_face_with_texture_transform(
+            document, side, source.material_slot, source.texture_transform);
         add_unique_edge(selected_edges, make_edge(copied_from, copied_to));
         changed = true;
     }

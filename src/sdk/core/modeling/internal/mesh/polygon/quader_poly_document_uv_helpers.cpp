@@ -5,6 +5,7 @@
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
 #include <quader/modeling/neutral/polygon/internal/quader_poly_document_uv_helpers.hpp>
+#include <quader/modeling/neutral/polygon/document_texture.hpp>
 
 #include <quader/modeling/neutral/polygon/internal/quader_poly_document_hull_plane_helpers.hpp>
 #include <quader/modeling/neutral/polygon/internal/quader_poly_document_topology_helpers.hpp>
@@ -19,10 +20,12 @@
 #include <iterator>
 #include <limits>
 #include <map>
+#include <numbers>
 #include <optional>
 #include <ranges>
 #include <set>
 #include <span>
+#include <stdexcept>
 #include <string>
 #include <tuple>
 #include <utility>
@@ -366,6 +369,7 @@ std::optional<FaceUvProjectionAssignment> face_uv_projection_assignment_from_sou
         basis,
         best_source_face->id,
         inherited_loop_basis,
+        best_source_face->texture_transform,
     };
 }
 
@@ -379,6 +383,7 @@ bool assign_face_uvs_from_projection_assignment(
     }
 
     face.material_slot = assignment.material_slot;
+    face.texture_transform = assignment.texture_transform;
     face.uvs.clear();
     face.uvs.reserve(face.vertices.size());
     for (const ElementId vertex_id : face.vertices) {
@@ -499,6 +504,11 @@ void stitch_uv_axis_to_reference_seam(Face& target_face, const Face& reference_f
 
 void stitch_merge_split_uv_pair(const Face& reference_face, Face& target_face, Edge shared_edge)
 {
+  // Stitching base coordinates across different authored transforms would
+  // change the visible scale/rotation instead of repairing a shared seam.
+  if (reference_face.texture_transform != target_face.texture_transform) {
+    return;
+  }
   constexpr float kSeamStretchRatio = 1.25F;
   constexpr float kSeamEndpointEpsilon = 0.01F;
 
@@ -607,3 +617,272 @@ quader::QVec3 transform_point(const Transform3& transform, quader::QVec3 point)
 }
 
 } // namespace quader_poly::document_internal
+
+namespace quader_poly {
+namespace {
+
+[[nodiscard]] std::array<double, 4>
+texture_linear_transform(const FaceTextureTransform &transform) {
+  const double radians = std::remainder(
+      static_cast<double>(transform.rotation_degrees), 360.0) *
+      (std::numbers::pi / 180.0);
+  const double cosine = std::cos(radians);
+  const double sine = std::sin(radians);
+  return {cosine / transform.scale.x, -sine / transform.scale.x,
+          sine / transform.scale.y, cosine / transform.scale.y};
+}
+
+[[nodiscard]] bool is_identity_texture_mapping(const Transform3 &mapping) {
+  return mapping.x_axis.x == 1.0F && mapping.x_axis.y == 0.0F &&
+         mapping.x_axis.z == 0.0F && mapping.y_axis.x == 0.0F &&
+         mapping.y_axis.y == 1.0F && mapping.y_axis.z == 0.0F &&
+         mapping.z_axis.x == 0.0F && mapping.z_axis.y == 0.0F &&
+         mapping.z_axis.z == 1.0F && mapping.origin.x == 0.0F &&
+         mapping.origin.y == 0.0F && mapping.origin.z == 0.0F;
+}
+
+} // namespace
+
+bool valid_face_texture_transform(
+    const FaceTextureTransform &transform) noexcept {
+  return std::isfinite(transform.scale.x) &&
+         std::isfinite(transform.scale.y) && transform.scale.x != 0.0F &&
+         transform.scale.y != 0.0F &&
+         std::isfinite(1.0F / transform.scale.x) &&
+         std::isfinite(1.0F / transform.scale.y) &&
+         std::isfinite(transform.shift_uv.x) &&
+         std::isfinite(transform.shift_uv.y) &&
+         std::isfinite(transform.rotation_degrees);
+}
+
+quader::QVec2 apply_face_texture_transform(
+    quader::QVec2 base_uv, const FaceTextureTransform &transform) {
+  if (transform == FaceTextureTransform{}) {
+    return base_uv;
+  }
+  const auto linear = texture_linear_transform(transform);
+  return {
+      static_cast<float>(linear[0] * base_uv.x + linear[1] * base_uv.y +
+                         transform.shift_uv.x),
+      static_cast<float>(linear[2] * base_uv.x + linear[3] * base_uv.y +
+                         transform.shift_uv.y),
+  };
+}
+
+quader::QVec2 unapply_face_texture_transform(
+    quader::QVec2 uv, const FaceTextureTransform &transform) {
+  if (transform == FaceTextureTransform{}) {
+    return uv;
+  }
+  const double radians = std::remainder(
+      static_cast<double>(transform.rotation_degrees), 360.0) *
+      (std::numbers::pi / 180.0);
+  const double cosine = std::cos(radians);
+  const double sine = std::sin(radians);
+  const double x = (static_cast<double>(uv.x) - transform.shift_uv.x) *
+                   transform.scale.x;
+  const double y = (static_cast<double>(uv.y) - transform.shift_uv.y) *
+                   transform.scale.y;
+  return {static_cast<float>(cosine * x + sine * y),
+          static_cast<float>(-sine * x + cosine * y)};
+}
+
+std::array<float, 4> face_texture_carrier(
+    std::span<const quader::QVec3> positions,
+    std::span<const quader::QVec2> base_uvs,
+    quader::QVec3 geometric_normal, const FaceTextureTransform &transform) {
+  if (!valid_face_texture_transform(transform)) {
+    return {};
+  }
+  const auto linear = texture_linear_transform(transform);
+  std::array<double, 4> carrier{1.0, 0.0, 0.0, 1.0};
+  if (!base_uvs.empty()) {
+    if (positions.size() != base_uvs.size() || positions.size() < 3U) {
+      return {};
+    }
+    double mean_qx = 0.0;
+    double mean_qy = 0.0;
+    double mean_u = 0.0;
+    double mean_v = 0.0;
+    for (std::size_t index = 0; index < positions.size(); ++index) {
+      const auto q = generated_texture_uv(positions[index], geometric_normal);
+      mean_qx += q.x;
+      mean_qy += q.y;
+      mean_u += base_uvs[index].x;
+      mean_v += base_uvs[index].y;
+    }
+    const double inverse_count = 1.0 / static_cast<double>(positions.size());
+    mean_qx *= inverse_count;
+    mean_qy *= inverse_count;
+    mean_u *= inverse_count;
+    mean_v *= inverse_count;
+    double xx = 0.0;
+    double xy = 0.0;
+    double yy = 0.0;
+    double ux = 0.0;
+    double uy = 0.0;
+    double vx = 0.0;
+    double vy = 0.0;
+    for (std::size_t index = 0; index < positions.size(); ++index) {
+      const auto q = generated_texture_uv(positions[index], geometric_normal);
+      const double x = q.x - mean_qx;
+      const double y = q.y - mean_qy;
+      const double u = base_uvs[index].x - mean_u;
+      const double v = base_uvs[index].y - mean_v;
+      xx += x * x;
+      xy += x * y;
+      yy += y * y;
+      ux += u * x;
+      uy += u * y;
+      vx += v * x;
+      vy += v * y;
+    }
+    const double determinant = xx * yy - xy * xy;
+    const double trace = xx + yy;
+    if (!std::isfinite(determinant) ||
+        determinant <= 1.0e-12 * trace * trace) {
+      return {};
+    }
+    carrier = {(ux * yy - uy * xy) / determinant,
+               (uy * xx - ux * xy) / determinant,
+               (vx * yy - vy * xy) / determinant,
+               (vy * xx - vx * xy) / determinant};
+  }
+  const std::array<float, 4> result{
+      static_cast<float>(linear[0] * carrier[0] + linear[1] * carrier[2]),
+      static_cast<float>(linear[0] * carrier[1] + linear[1] * carrier[3]),
+      static_cast<float>(linear[2] * carrier[0] + linear[3] * carrier[2]),
+      static_cast<float>(linear[2] * carrier[1] + linear[3] * carrier[3]),
+  };
+  return std::ranges::all_of(result, [](float value) {
+           return std::isfinite(value);
+         }) ? result : std::array<float, 4>{};
+}
+
+std::array<float, 4> face_texture_carrier(
+    const Document &document, const Face &face,
+    quader::QVec3 geometric_normal) {
+  if (face.uvs.empty()) {
+    return face_texture_carrier({}, {}, geometric_normal,
+                                face.texture_transform);
+  }
+  const document_internal::VertexLookupIndex vertex_lookup(document);
+  std::vector<quader::QVec3> positions;
+  positions.reserve(face.vertices.size());
+  for (const ElementId id : face.vertices) {
+    const Vertex *vertex = vertex_lookup.find(id);
+    if (vertex == nullptr) {
+      return {};
+    }
+    positions.push_back(vertex->position);
+  }
+  return face_texture_carrier(positions, face.uvs, geometric_normal,
+                              face.texture_transform);
+}
+
+quader::QVec2 evaluate_texture_mapping(
+    quader::QVec2 uv0, quader::QVec3 position,
+    quader::QVec3 geometric_normal, const std::array<float, 4> &carrier,
+    const Transform3 &sampling_from_local) {
+  if (is_identity_texture_mapping(sampling_from_local) ||
+      carrier == std::array<float, 4>{}) {
+    return uv0;
+  }
+  const auto cross_product = [](quader::QVec3 a, quader::QVec3 b) {
+    return quader::QVec3{a.y * b.z - a.z * b.y,
+                        a.z * b.x - a.x * b.z,
+                        a.x * b.y - a.y * b.x};
+  };
+  // Cofactor columns retain the winding orientation under reflections.
+  quader::QVec3 mapped_normal =
+      cross_product(sampling_from_local.y_axis, sampling_from_local.z_axis) *
+          geometric_normal.x +
+      cross_product(sampling_from_local.z_axis, sampling_from_local.x_axis) *
+          geometric_normal.y +
+      cross_product(sampling_from_local.x_axis, sampling_from_local.y_axis) *
+          geometric_normal.z;
+  // Cofactor magnitude varies quadratically with scale. Rescale before the
+  // canonical normal's degeneracy test so a small valid transform cannot
+  // turn a side-face chart into the fallback up-face projection.
+  const float normal_scale = std::max(
+      {std::abs(mapped_normal.x), std::abs(mapped_normal.y),
+       std::abs(mapped_normal.z)});
+  if (std::isfinite(normal_scale) && normal_scale > 0.0F) {
+    mapped_normal = mapped_normal / normal_scale;
+  } else {
+    mapped_normal = {0.0F, 1.0F, 0.0F};
+  }
+  const auto mapped_position =
+      document_internal::transform_point(sampling_from_local, position);
+  const auto before = generated_texture_uv(position, geometric_normal);
+  const auto after = generated_texture_uv(mapped_position, mapped_normal);
+  const auto delta = after - before;
+  return {uv0.x + carrier[0] * delta.x + carrier[1] * delta.y,
+          uv0.y + carrier[2] * delta.x + carrier[3] * delta.y};
+}
+
+bool bake_document_texture_mapping(Document &document,
+                                   const Transform3 &sampling_from_local) {
+  if (is_identity_texture_mapping(sampling_from_local)) {
+    return false;
+  }
+  /**
+   * Stages one face's baked base UVs until every face has passed validation.
+   */
+  struct FaceUvUpdate {
+    std::size_t face_index = 0U;
+    std::vector<quader::QVec2> base_uvs;
+  };
+  std::vector<FaceUvUpdate> updates;
+  const document_internal::VertexLookupIndex vertex_lookup(document);
+  std::vector<quader::QVec3> positions;
+  for (std::size_t face_index = 0U; face_index < document.faces.size();
+       ++face_index) {
+    const Face &face = document.faces[face_index];
+    if (!valid_face_texture_transform(face.texture_transform)) {
+      throw std::invalid_argument("Cannot bake invalid face texture settings.");
+    }
+    const auto normal = face_normal(document, face);
+    positions.clear();
+    positions.reserve(face.vertices.size());
+    for (const ElementId id : face.vertices) {
+      const Vertex *vertex = vertex_lookup.find(id);
+      if (vertex == nullptr) {
+        throw std::invalid_argument("Cannot bake an unresolved face vertex.");
+      }
+      positions.push_back(vertex->position);
+    }
+    const auto carrier = face_texture_carrier(
+        positions, face.uvs, normal, face.texture_transform);
+    FaceUvUpdate update{.face_index = face_index};
+    update.base_uvs.reserve(positions.size());
+    bool changed = false;
+    for (std::size_t corner = 0U; corner < positions.size(); ++corner) {
+      const auto base = face.uvs.size() == positions.size()
+                            ? face.uvs[corner]
+                            : generated_texture_uv(positions[corner], normal);
+      const auto original =
+          apply_face_texture_transform(base, face.texture_transform);
+      const auto effective = evaluate_texture_mapping(
+          original, positions[corner], normal, carrier, sampling_from_local);
+      const auto baked = effective.x == original.x && effective.y == original.y
+                             ? base
+                             : unapply_face_texture_transform(
+                                   effective, face.texture_transform);
+      if (!std::isfinite(baked.x) || !std::isfinite(baked.y)) {
+        throw std::invalid_argument("Texture mapping bake is non-finite.");
+      }
+      changed = changed || baked.x != base.x || baked.y != base.y;
+      update.base_uvs.push_back(baked);
+    }
+    if (changed) {
+      updates.push_back(std::move(update));
+    }
+  }
+  for (auto &update : updates) {
+    document.faces[update.face_index].uvs = std::move(update.base_uvs);
+  }
+  return !updates.empty();
+}
+
+} // namespace quader_poly

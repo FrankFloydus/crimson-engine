@@ -72,6 +72,10 @@ authored_polygon_json(const quader_poly::Document &document) {
         {"uvs", std::move(uvs)},
         {"materialSlot", face.material_slot},
         {"normalShading", surface_shading_name(face.normal_shading)},
+        {"textureTransform",
+         {{"scale", vec2_json(face.texture_transform.scale)},
+          {"shiftUv", vec2_json(face.texture_transform.shift_uv)},
+          {"rotationDegrees", face.texture_transform.rotation_degrees}}},
     });
   }
 
@@ -377,6 +381,8 @@ chunk_codec_name(quader_io::QdrBinaryChunkCodec codec) {
           {"position", vec3_json(vertex.position)},
           {"normal", vec3_json(vertex.normal)},
           {"uv", vec2_json(vertex.uv)},
+          {"uvCarrier", vertex.uv_carrier},
+          {"uvGeometricNormal", vec3_json(vertex.uv_geometric_normal)},
           {"rgba", vertex.rgba},
       });
     }
@@ -450,6 +456,12 @@ chunk_codec_name(quader_io::QdrBinaryChunkCodec codec) {
   };
   if (entity.transform) {
     value["transform"] = transform_json(*entity.transform);
+  }
+  if (entity.texture_mapping) {
+    value["textureMapping"] = {
+        {"samplingFromLocal",
+         entity.texture_mapping->sampling_from_local.values},
+    };
   }
   if (entity.visibility) {
     value["visibility"] = {

@@ -214,6 +214,10 @@ Document two_cube_document()
 TEST(QdrDocumentOperationPlaneCutTests, PlaneCutSplitsACubeAndKeepsBothClosedHalves) {
 	Document document = quader_poly::make_cube({});
 	set_all_material_slots(document, 7);
+	const quader_poly::FaceTextureTransform texture{{-2.0F, 0.5F}, {0.25F, 0.75F}, -20.0F};
+	for (Face& face : document.faces) {
+		face.texture_transform = texture;
+	}
 
         const PlaneCutResult result = quader_poly::plane_cut(
             document, center_x_cut(PlaneCutMode::KeepBoth));
@@ -225,6 +229,11 @@ TEST(QdrDocumentOperationPlaneCutTests, PlaneCutSplitsACubeAndKeepsBothClosedHal
 	EXPECT_TRUE(cap_face_count(result.back_selection) == 1);
 	check_closed_manifold(result.front_document);
 	check_closed_manifold(result.back_document);
+	for (const Document* half : {&result.front_document, &result.back_document}) {
+		for (const Face& face : half->faces) {
+			EXPECT_EQ(face.texture_transform, texture);
+		}
+	}
 
 	const ElementId front_cap_id = result.front_selection.faces.front();
 	const Face* front_cap = quader_poly::find_face(result.front_document, front_cap_id);

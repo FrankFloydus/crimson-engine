@@ -13,6 +13,8 @@ TEST(QdrDocumentOperationKnifeSegmentTests, KnifeSegmentSplitsAQuadBetweenTwoBou
 	Face* source_face = find_face(fixture.document, fixture.face);
 	EXPECT_TRUE(source_face != nullptr);
 	source_face->material_slot = 7;
+	const FaceTextureTransform texture{{2.0F, 0.5F}, {-0.25F, 0.75F}, -30.0F};
+	source_face->texture_transform = texture;
 	ensure_face_uvs(fixture.document);
 	const ElementId bottom_right = fixture.bottom_right;
         const KnifePointTarget previous{
@@ -55,6 +57,7 @@ TEST(QdrDocumentOperationKnifeSegmentTests, KnifeSegmentSplitsAQuadBetweenTwoBou
 	EXPECT_TRUE(qdr_test::edge_positions_match_unordered(fixture.document, make_edge(selection.vertices[0], selection.vertices[1]), { -0.5F, -1.0F, 0.0F }, { -0.5F, 1.0F, 0.0F }));
 	for (const Face& face : fixture.document.faces) {
 		EXPECT_TRUE(face.material_slot == 7U);
+		EXPECT_EQ(face.texture_transform, texture);
 		EXPECT_TRUE(face.uvs.empty());
 	}
 	EXPECT_TRUE(qdr_test::every_face_compiles_to_triangles(fixture.document));
@@ -79,6 +82,9 @@ TEST(QdrDocumentOperationKnifeSegmentTests, KnifeSegmentSplitsAQuadBetweenTwoBou
 	EXPECT_TRUE(continued_result.changed);
 	qdr_test::expect_valid_polygon_document_after_success(fixture.document, continued_result);
 	EXPECT_TRUE(fixture.document.faces.size() == 3U);
+	for (const Face& face : fixture.document.faces) {
+		EXPECT_EQ(face.texture_transform, texture);
+	}
 	EXPECT_TRUE(qdr_test::every_face_compiles_to_triangles(fixture.document));
 }
 

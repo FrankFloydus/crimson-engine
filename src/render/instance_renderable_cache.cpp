@@ -76,19 +76,20 @@ const InstanceVariant *variant_for_key(const RenderInstancePrimitiveKey &key) {
   return found == kInstanceVariants.end() ? nullptr : &*found;
 }
 
-std::span<const QMat4> visible_world_transforms(
-    const RenderInstanceBatchChunk &chunk, std::vector<QMat4> &scratch) {
-  if (chunk.visible_occurrence_count == chunk.world_transforms.size()) {
-    return std::span<const QMat4>(chunk.world_transforms);
+std::span<const QMat4> visible_matrices(
+    const RenderInstanceBatchChunk &chunk, std::span<const QMat4> matrices,
+    std::vector<QMat4> &scratch) {
+  if (chunk.visible_occurrence_count == matrices.size()) {
+    return matrices;
   }
   // Compact real transforms into the retained InstanceBuffer capacity. The
   // renderable binds only this active prefix, so suppression needs neither
   // duplicate draws nor singular/far-away sentinel matrices.
   scratch.clear();
   scratch.reserve(chunk.visible_occurrence_count);
-  for (std::size_t index = 0u; index < chunk.world_transforms.size(); ++index) {
+  for (std::size_t index = 0u; index < matrices.size(); ++index) {
     if (index >= chunk.visibility.size() || chunk.visibility[index] != 0u) {
-      scratch.push_back(chunk.world_transforms[index]);
+      scratch.push_back(matrices[index]);
     }
   }
   return std::span<const QMat4>(scratch);
@@ -299,7 +300,7 @@ void InstanceRenderableCache::initialize(
   shutdown();
   factory_ = &factory;
   max_instances_per_chunk_ =
-      std::max<std::size_t>(1u, max_instances_per_chunk);
+      std::clamp(max_instances_per_chunk, std::size_t{1u}, kMeshTextureMappingCapacity);
 }
 
 void InstanceRenderableCache::shutdown() {
@@ -384,6 +385,7 @@ InstanceRenderableCache::PreparedPlan InstanceRenderableCache::prepare(
             .key = variant_key(record, occurrence, variant),
             .occurrence = occurrence.occurrence,
             .world_transform = occurrence.world_transform,
+            .sampling_from_local = occurrence.sampling_from_local,
             .local_bounds = record.local_bounds,
             .visible = visible,
         });
@@ -489,11 +491,12 @@ MeshRenderableProxy InstanceRenderableCache::create_chunk_proxy(
     factory_->destroy(proxy);
     return {};
   }
+  factory_->update_texture_mappings(proxy, chunk.sampling_from_local);
 
   if (chunk.visible_occurrence_count != chunk.world_transforms.size()) {
     std::vector<QMat4> visible_transforms;
     const std::span<const QMat4> active_transforms =
-        visible_world_transforms(chunk, visible_transforms);
+        visible_matrices(chunk, chunk.world_transforms, visible_transforms);
     QDR_PROFILE_SCOPE("Instance create apply retained suppression");
     if (!factory_->rebind_explicit_instances(
             proxy, primitive, active_transforms, chunk.world_bounds,
@@ -503,6 +506,9 @@ MeshRenderableProxy InstanceRenderableCache::create_chunk_proxy(
       factory_->destroy(proxy);
       return {};
     }
+    std::vector<QMat4> visible_mappings;
+    factory_->update_texture_mappings(
+        proxy, visible_matrices(chunk, chunk.sampling_from_local, visible_mappings));
   }
   return proxy;
 }
@@ -521,7 +527,10 @@ bool InstanceRenderableCache::update_chunk_proxy(
 
   std::vector<QMat4> visible_transforms;
   const std::span<const QMat4> active_transforms =
-      visible_world_transforms(after, visible_transforms);
+      visible_matrices(after, after.world_transforms, visible_transforms);
+  std::vector<QMat4> visible_mappings;
+  const std::span<const QMat4> active_mappings =
+      visible_matrices(after, after.sampling_from_local, visible_mappings);
   const bool visibility_changed = before.visibility != after.visibility;
   if (visibility_changed) {
     const InstanceVariant *variant = variant_for_key(after.key);
@@ -534,17 +543,25 @@ bool InstanceRenderableCache::update_chunk_proxy(
     const std::uint8_t layer_mask =
         active_transforms.empty() ? 0u : after.key.layer_mask;
     QDR_PROFILE_SCOPE("Instance suppression update affected chunk");
-    return factory_->rebind_explicit_instances(
+    const bool updated = factory_->rebind_explicit_instances(
         proxy, primitive, active_transforms, after.world_bounds,
         after.key.cast_shadows, after.key.receive_shadows,
         after.key.double_sided, layer_mask, variant->depth_only,
         after.key.channel);
+    if (updated) {
+      factory_->update_texture_mappings(proxy, active_mappings);
+    }
+    return updated;
   }
 
   {
     QDR_PROFILE_SCOPE("Instance transform update affected chunk");
-    return factory_->update_explicit_instances(proxy, active_transforms,
-                                               after.world_bounds);
+    const bool updated = factory_->update_explicit_instances(
+        proxy, active_transforms, after.world_bounds);
+    if (updated) {
+      factory_->update_texture_mappings(proxy, active_mappings);
+    }
+    return updated;
   }
 }
 

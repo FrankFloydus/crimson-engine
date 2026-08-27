@@ -36,6 +36,7 @@ using ByteSpan = std::span<const std::byte>;
 
 constexpr std::uint16_t kFormatMajor = 1;
 constexpr std::uint16_t kFormatMinor = 0;
+constexpr std::uint16_t kQgeoFormatMinor = 1;
 constexpr std::uint32_t kNoFlags = 0;
 constexpr std::size_t kQgeoHeaderSize = 56;
 constexpr std::size_t kQpolHeaderSize = 88;
@@ -425,23 +426,25 @@ constexpr auto kCrc32Table = make_crc32_table();
 
 void write_common_header(ByteWriter &writer,
                          const std::array<std::byte, 4> &magic,
-                         std::uint32_t header_size, std::uint64_t total_size) {
+                         std::uint32_t header_size, std::uint64_t total_size,
+                         std::uint16_t minor = kFormatMinor) {
   writer.write_magic(magic);
   writer.write_u16(kFormatMajor);
-  writer.write_u16(kFormatMinor);
+  writer.write_u16(minor);
   writer.write_u32(header_size);
   writer.write_u32(kNoFlags);
   writer.write_u64(total_size);
 }
 
-void read_common_header(ByteReader &reader,
+std::uint16_t read_common_header(ByteReader &reader,
                         const std::array<std::byte, 4> &magic,
                         std::uint32_t header_size, std::uint64_t total_size,
-                        std::string_view label) {
+                        std::string_view label,
+                        std::uint16_t supported_minor = kFormatMinor) {
   reader.require_magic(magic, label);
   const std::uint16_t major = reader.read_u16("binary major version");
   const std::uint16_t minor = reader.read_u16("binary minor version");
-  if (major != kFormatMajor || minor > kFormatMinor) {
+  if (major != kFormatMajor || minor > supported_minor) {
     unsupported_version(std::string(label) + " version " +
                         std::to_string(major) + "." +
                         std::to_string(minor) + " is unsupported.");
@@ -458,6 +461,7 @@ void read_common_header(ByteReader &reader,
   if (total_size > kMaxPayloadSize) {
     malformed(std::string(label) + " exceeds the binary size limit.");
   }
+  return minor;
 }
 
 [[nodiscard]] std::uint8_t shading_byte(quader_poly::SurfaceShading shading) {
@@ -715,12 +719,16 @@ encode_authored_topology(const PolygonDocument &polygon) {
       total_size,
       require_multiply(hard_edge_count, 8, "Polygon hard edges"),
       "Authored topology");
+  total_size = require_add(
+      total_size, require_multiply(face_count, 20, "Face texture transforms"),
+      "Authored topology");
   if (total_size > kMaxPayloadSize) {
     invalid_document("Authored topology exceeds the binary size limit.");
   }
 
   ByteWriter writer(require_size(total_size, "Authored topology"));
-  write_common_header(writer, kQgeoMagic, kQgeoHeaderSize, total_size);
+  write_common_header(writer, kQgeoMagic, kQgeoHeaderSize, total_size,
+                      kQgeoFormatMinor);
   writer.write_u32(document.next_vertex_id);
   writer.write_u32(document.next_face_id);
   writer.write_u32(vertex_count);
@@ -775,6 +783,13 @@ encode_authored_topology(const PolygonDocument &polygon) {
     writer.write_u32(edge.a);
     writer.write_u32(edge.b);
   }
+  for (const quader_poly::Face &face : document.faces) {
+    writer.write_f32(face.texture_transform.scale.x);
+    writer.write_f32(face.texture_transform.scale.y);
+    writer.write_f32(face.texture_transform.shift_uv.x);
+    writer.write_f32(face.texture_transform.shift_uv.y);
+    writer.write_f32(face.texture_transform.rotation_degrees);
+  }
   if (writer.size() != total_size) {
     throw std::logic_error("Authored topology size calculation drifted.");
   }
@@ -786,8 +801,9 @@ encode_authored_topology(const PolygonDocument &polygon) {
     malformed("Authored topology exceeds the binary size limit.");
   }
   ByteReader reader(bytes);
-  read_common_header(reader, kQgeoMagic, kQgeoHeaderSize, bytes.size(),
-                     "Authored topology");
+  const auto minor = read_common_header(
+      reader, kQgeoMagic, kQgeoHeaderSize, bytes.size(), "Authored topology",
+      kQgeoFormatMinor);
   quader_poly::Document document;
   document.next_vertex_id = reader.read_u32("next vertex ID");
   document.next_face_id = reader.read_u32("next face ID");
@@ -834,6 +850,11 @@ encode_authored_topology(const PolygonDocument &polygon) {
                       "authored topology padding");
   const ByteSpan hard_edges = reader.read_bytes(
       require_multiply(hard_edge_count, 8, "hard edges"), "hard edges");
+  const ByteSpan texture_transforms = minor >= 1U
+      ? reader.read_bytes(require_multiply(face_count, 20,
+                                           "face texture transforms"),
+                          "face texture transforms")
+      : ByteSpan{};
   reader.require_end("Authored topology");
 
   if (read_u32_at(face_offsets, 0, "first face offset") != 0 ||
@@ -888,6 +909,19 @@ encode_authored_topology(const PolygonDocument &polygon) {
         materials, static_cast<std::size_t>(index) * 4U, "material slot");
     face.normal_shading =
         shading_from_byte(std::to_integer<std::uint8_t>(shading[index]));
+    if (minor >= 1U) {
+      const std::size_t offset = static_cast<std::size_t>(index) * 20U;
+      const auto value = [&](std::size_t component) {
+        return std::bit_cast<float>(read_u32_at(
+            texture_transforms, offset + component * 4U,
+            "face texture transform"));
+      };
+      face.texture_transform = {
+          .scale = {value(0U), value(1U)},
+          .shift_uv = {value(2U), value(3U)},
+          .rotation_degrees = value(4U),
+      };
+    }
     face.vertices.reserve(face_corners);
     for (std::uint32_t corner = previous_corner_offset; corner < corner_end;
          ++corner) {

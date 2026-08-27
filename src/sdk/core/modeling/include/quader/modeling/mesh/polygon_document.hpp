@@ -207,6 +207,8 @@ public:
   [[nodiscard]] PolygonSelectionSnapshot selection() const;
   [[nodiscard]] Result<AuthoredPolygonPayload> authored_payload() const;
   [[nodiscard]] Result<AuthoredTopology> authored_topology() const;
+  [[nodiscard]] Result<std::vector<FaceTextureSettings>>
+  face_texture_settings(std::span<const FaceId> faces) const;
   [[nodiscard]] Result<MeshPayload> compile_mesh() const;
   [[nodiscard]] Result<OperationResult> validate() const;
 
@@ -243,6 +245,8 @@ public:
   assign_all_face_material_slot(std::uint32_t material_slot);
   [[nodiscard]] Result<OperationResult>
   assign_face_material_slot(FaceId face_id, std::uint32_t material_slot);
+  [[nodiscard]] Result<OperationResult>
+  set_face_texture_transforms(std::span<const FaceTextureTransformUpdate> updates);
   [[nodiscard]] Result<OperationResult> snap_selected_vertices_to_active();
   [[nodiscard]] Result<OperationResult> merge_selected_vertices_to_active();
   [[nodiscard]] Result<OperationResult> merge_selected_vertices_to_center();

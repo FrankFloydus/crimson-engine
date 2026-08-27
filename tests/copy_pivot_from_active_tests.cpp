@@ -11,10 +11,13 @@
 #include "editor/modeling/services/modeling_sdk_projection_adapter.hpp"
 #include "editor/modeling/services/modeling_session_service.hpp"
 #include "editor/pivot/pivot_tool_service.hpp"
+#include "editor/projection/mesh_projection_service.hpp"
 #include "editor/session/scene_session.hpp"
 #include "math/glm_bridge.hpp"
 #include "quader/modeling/neutral/polygon/document_model.hpp"
+#include "quader/modeling/neutral/polygon/document_texture.hpp"
 #include "scene/scene_bounds.hpp"
+#include "scene/scene_transform.hpp"
 
 #include <gtest/gtest.h>
 
@@ -303,6 +306,213 @@ quader::AssetId mesh_id(const CopyPivotHarness &harness,
   const quader::MeshComponent *mesh = harness.session.scene().mesh(entity);
   EXPECT_NE(mesh, nullptr);
   return mesh == nullptr ? quader::kInvalidAssetId : mesh->mesh;
+}
+
+std::vector<quader::QVec2>
+effective_uvs(const quader::MeshAsset &mesh, const quader::QMat4 &mapping) {
+  const auto sampling =
+      quader::MeshProjectionService::texture_mapping_transform(mapping);
+  std::vector<quader::QVec2> result;
+  result.reserve(mesh.geometry().vertices.size());
+  for (const quader::MeshVertex &vertex : mesh.geometry().vertices) {
+    result.push_back(quader_poly::evaluate_texture_mapping(
+        vertex.uv, vertex.position, vertex.uv_geometric_normal,
+        vertex.uv_carrier, sampling));
+  }
+  return result;
+}
+
+void expect_uvs_near(const std::vector<quader::QVec2> &actual,
+                     const std::vector<quader::QVec2> &expected) {
+  ASSERT_EQ(actual.size(), expected.size());
+  for (std::size_t index = 0; index < actual.size(); ++index) {
+    SCOPED_TRACE(index);
+    EXPECT_NEAR(actual[index].x, expected[index].x, kEpsilon);
+    EXPECT_NEAR(actual[index].y, expected[index].y, kEpsilon);
+  }
+}
+
+quader::QuaderModelingObjectRef
+create_textured_asymmetric_mesh(CopyPivotHarness &harness) {
+  quader_poly::Document document = asymmetric_document();
+  document.faces.front().texture_transform = {
+      .scale = {2.0f, -0.5f},
+      .shift_uv = {0.125f, -0.25f},
+      .rotation_degrees = 35.0f,
+  };
+  const auto created = harness.editor.modeling().create_mesh(
+      quader::QuaderPolygonDocumentInternalAccess::from_backend(document),
+      {.name = "Textured Pivot Target"});
+  EXPECT_TRUE(created.ok()) << created.error_message();
+  return created.value();
+}
+
+TEST(CopyPivotFromActiveTests,
+     PivotRebasePreservesGeneratedUvsAndFaceSettingsThroughHistory) {
+  CopyPivotHarness harness;
+  const auto target = create_textured_asymmetric_mesh(harness);
+  const quader::MeshAsset before =
+      *harness.session.assets().mesh(mesh_id(harness, target.entity));
+  ASSERT_NE(before.authored_polygon_document, nullptr);
+  ASSERT_TRUE(before.authored_polygon_document->faces.front().uvs.empty());
+  const auto before_uvs = effective_uvs(before, {});
+  const auto before_vertices = world_vertices(harness, target.entity);
+  ASSERT_TRUE(harness.editor.selection().select_object(target).ok());
+  ASSERT_TRUE(
+      harness.editor.tools().activate(quader::ViewportToolId::Pivot).ok());
+  ASSERT_TRUE(harness.editor.tools()
+                  .execute_action("pivot", "pivot.align.top_right_back")
+                  .ok());
+  harness.session.history().clear();
+  const auto applied = harness.editor.tools().commit_active_tool_preview();
+  ASSERT_TRUE(applied.ok()) << applied.error_message();
+  ASSERT_TRUE(applied.changed());
+
+  const auto expect_preserved = [&] {
+    const auto *after =
+        harness.session.assets().mesh(mesh_id(harness, target.entity));
+    ASSERT_NE(after, nullptr);
+    ASSERT_NE(after->authored_polygon_document, nullptr);
+    ASSERT_EQ(after->authored_polygon_document->faces.size(),
+              before.authored_polygon_document->faces.size());
+    for (std::size_t index = 0;
+         index < after->authored_polygon_document->faces.size(); ++index) {
+      const auto &face = after->authored_polygon_document->faces[index];
+      EXPECT_EQ(face.uvs.size(), face.vertices.size());
+      EXPECT_EQ(face.texture_transform,
+                before.authored_polygon_document->faces[index].texture_transform);
+    }
+    expect_uvs_near(effective_uvs(*after, {}), before_uvs);
+    const auto recompiled =
+        quader::MeshProjectionService::compile_polygon_document_mesh(
+            *after->authored_polygon_document);
+    expect_uvs_near(effective_uvs(recompiled, {}), before_uvs);
+    expect_vertices_near(world_vertices(harness, target.entity), before_vertices);
+    EXPECT_EQ(harness.session.scene().texture_mapping(target.entity), nullptr);
+  };
+  expect_preserved();
+  ASSERT_TRUE(harness.editor.history().undo().ok());
+  const auto *undone =
+      harness.session.assets().mesh(mesh_id(harness, target.entity));
+  ASSERT_NE(undone, nullptr);
+  ASSERT_NE(undone->authored_polygon_document, nullptr);
+  EXPECT_TRUE(undone->authored_polygon_document->faces.front().uvs.empty());
+  expect_uvs_near(effective_uvs(*undone, {}), before_uvs);
+  ASSERT_TRUE(harness.editor.history().redo().ok());
+  expect_preserved();
+}
+
+TEST(CopyPivotFromActiveTests,
+     ConjugatesTextureMappingWithoutUvDriftThroughUndoAndRedo) {
+  CopyPivotHarness harness;
+  const auto source = create_asymmetric_mesh(harness, "Custom Pivot Source");
+  const auto target = create_textured_asymmetric_mesh(harness);
+  set_transform(harness, source.entity,
+                {.position = {3.0f, -2.0f, 5.0f}, .custom_pivot = true});
+  set_transform(harness, target.entity,
+                {.position = {10.0f, 3.0f, -1.0f},
+                 .rotation_euler = {0.1f, 0.2f, 0.3f},
+                 .scale = {1.2f, 0.7f, 1.4f}});
+  const quader::TransformComponent sampling_transform{
+      .position = {0.3f, -1.0f, 0.5f},
+      .rotation_euler = {0.3f, 1.2f, -0.4f},
+      .scale = {1.3f, 0.7f, -1.1f},
+  };
+  const quader::QMat4 mapping_before =
+      quader::compose_transform(sampling_transform.spatial_transform());
+  ASSERT_TRUE(harness.session.scene().set_texture_mapping(
+      target.entity, {.sampling_from_local = mapping_before}));
+  const quader::MeshAsset before =
+      *harness.session.assets().mesh(mesh_id(harness, target.entity));
+  const auto before_uvs = effective_uvs(before, mapping_before);
+  const auto before_vertices = world_vertices(harness, target.entity);
+  const quader::QMat4 world_before =
+      harness.session.scene().world_transform_matrix(target.entity);
+  ASSERT_TRUE(harness.editor.selection()
+                  .select_objects({source.entity, target.entity}, source.entity)
+                  .ok());
+  harness.session.history().clear();
+  const auto copied = harness.editor.modeling().copy_pivot_from_active();
+  ASSERT_TRUE(copied.ok()) << copied.error_message();
+  ASSERT_TRUE(copied.changed());
+
+  const quader::QMat4 old_local_from_new = quader::scene_transform_multiply(
+      quader::inverse(world_before),
+      harness.session.scene().world_transform_matrix(target.entity));
+  const quader::QMat4 mapping_after = quader::scene_transform_multiply(
+      quader::inverse(old_local_from_new),
+      quader::scene_transform_multiply(mapping_before, old_local_from_new));
+  const auto expect_preserved = [&] {
+    const auto *mapping = harness.session.scene().texture_mapping(target.entity);
+    ASSERT_NE(mapping, nullptr);
+    expect_matrix_near(mapping->sampling_from_local, mapping_after);
+    const auto *after =
+        harness.session.assets().mesh(mesh_id(harness, target.entity));
+    ASSERT_NE(after, nullptr);
+    ASSERT_NE(after->authored_polygon_document, nullptr);
+    expect_uvs_near(effective_uvs(*after, mapping->sampling_from_local), before_uvs);
+    const auto recompiled =
+        quader::MeshProjectionService::compile_polygon_document_mesh(
+            *after->authored_polygon_document);
+    expect_uvs_near(effective_uvs(recompiled, mapping->sampling_from_local),
+                    before_uvs);
+    EXPECT_EQ(after->authored_polygon_document->faces.front().texture_transform,
+              before.authored_polygon_document->faces.front().texture_transform);
+    expect_vertices_near(world_vertices(harness, target.entity), before_vertices);
+  };
+  expect_preserved();
+  ASSERT_TRUE(harness.editor.history().undo().ok());
+  const auto *undone_mapping =
+      harness.session.scene().texture_mapping(target.entity);
+  ASSERT_NE(undone_mapping, nullptr);
+  EXPECT_EQ(undone_mapping->sampling_from_local.values, mapping_before.values);
+  expect_uvs_near(effective_uvs(
+                      *harness.session.assets().mesh(mesh_id(harness, target.entity)),
+                      mapping_before),
+                  before_uvs);
+  ASSERT_TRUE(harness.editor.history().redo().ok());
+  expect_preserved();
+}
+
+TEST(CopyPivotFromActiveTests, GroupPivotRebaseDoesNotChangeChildTextureMapping) {
+  CopyPivotHarness harness;
+  const auto child = create_textured_asymmetric_mesh(harness);
+  ASSERT_TRUE(harness.editor.selection().select_object(child).ok());
+  const auto grouped = harness.editor.scene().group_selection("Textured Group");
+  ASSERT_TRUE(grouped.ok()) << grouped.error_message();
+  const quader::TransformComponent sampling{
+      .position = {1.0f, -2.0f, 3.0f},
+      .rotation_euler = {0.5f, 0.3f, 0.7f},
+  };
+  const quader::QMat4 mapping_before =
+      quader::compose_transform(sampling.spatial_transform());
+  ASSERT_TRUE(harness.session.scene().set_texture_mapping(
+      child.entity, {.sampling_from_local = mapping_before}));
+  const auto world_before =
+      harness.session.scene().world_transform_matrix(child.entity);
+  ASSERT_TRUE(harness.editor.selection().select_object(grouped.value().id).ok());
+  ASSERT_TRUE(
+      harness.editor.tools().activate(quader::ViewportToolId::Pivot).ok());
+  ASSERT_TRUE(harness.editor.tools()
+                  .execute_action("pivot", "pivot.align.top_right_back")
+                  .ok());
+  harness.session.history().clear();
+  const auto applied = harness.editor.tools().commit_active_tool_preview();
+  ASSERT_TRUE(applied.ok()) << applied.error_message();
+  ASSERT_TRUE(applied.changed());
+  const auto expect_preserved = [&] {
+    const auto *mapping = harness.session.scene().texture_mapping(child.entity);
+    ASSERT_NE(mapping, nullptr);
+    EXPECT_EQ(mapping->sampling_from_local.values, mapping_before.values);
+    expect_matrix_near(harness.session.scene().world_transform_matrix(child.entity),
+                       world_before);
+    EXPECT_EQ(harness.session.scene().texture_mapping(grouped.value().id), nullptr);
+  };
+  expect_preserved();
+  ASSERT_TRUE(harness.editor.history().undo().ok());
+  expect_preserved();
+  ASSERT_TRUE(harness.editor.history().redo().ok());
+  expect_preserved();
 }
 
 const quader::QuaderActionPanel *

@@ -123,6 +123,7 @@ struct RenderSceneInstanceOccurrenceRecord final {
   EntityId entity_id = kInvalidEntityId;
   std::uint64_t occurrence = 0u;
   QMat4 world_transform;
+  QMat4 sampling_from_local;
   bool selected = false;
   bool dimmed = false;
 };
@@ -161,10 +162,12 @@ struct RenderSceneMeshRecord {
   AssetId material_id = kInvalidAssetId;
   std::uint64_t material_revision = 0;
   QMat4 world_transform;
+  QMat4 sampling_from_local;
   std::uint64_t transform_revision = 0;
   bool mesh_dirty = true;
   bool material_dirty = true;
   bool transform_dirty = true;
+  bool texture_mapping_dirty = true;
   bool binding_dirty = true;
 
   [[nodiscard]] bool renderable() const { return mesh.renderable(); }
@@ -194,6 +197,7 @@ struct RenderSceneSnapshotDirtyState {
   bool visibility_changed = true;
   bool local_visibility_changed = true;
   bool transforms_changed = true;
+  bool texture_mappings_changed = true;
   bool mesh_bindings_changed = true;
   bool render_components_changed = true;
   bool assets_changed = true;
@@ -202,6 +206,7 @@ struct RenderSceneSnapshotDirtyState {
   [[nodiscard]] bool any_dirty() const {
     return scene_changed || selection_changed || visibility_changed ||
            local_visibility_changed || transforms_changed ||
+           texture_mappings_changed ||
            mesh_bindings_changed ||
            render_components_changed || assets_changed ||
            project_materials_changed;
@@ -231,6 +236,7 @@ struct RenderSceneSnapshot {
   std::uint64_t visibility_revision = 0;
   std::uint64_t local_visibility_revision = 0;
   std::uint64_t transform_revision = 0;
+  std::uint64_t texture_mapping_revision = 0;
   std::uint64_t mesh_binding_revision = 0;
   std::uint64_t render_component_revision = 0;
   std::uint64_t asset_revision = 0;
@@ -275,6 +281,8 @@ struct RenderToolPreviewMeshRecord {
   std::uint64_t material_revision = 0;
   QMat4 transform;
   std::vector<QMat4> instance_transforms;
+  QMat4 sampling_from_local;
+  std::vector<QMat4> instance_sampling_from_local;
   // Material-instance culling policy retained with the preview snapshot.
   bool double_sided = true;
   bool dynamic_positions = false;

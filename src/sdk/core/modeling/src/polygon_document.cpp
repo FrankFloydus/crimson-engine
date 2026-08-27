@@ -14,6 +14,7 @@
 #include <quader/modeling/neutral/polygon/document_operations.hpp>
 #include <quader/modeling/neutral/polygon/document_selection.hpp>
 #include <quader/modeling/neutral/polygon/document_topology.hpp>
+#include <quader/modeling/neutral/polygon/document_texture.hpp>
 #include <quader/modeling/neutral/polygon/document_validation.hpp>
 
 #include <algorithm>
@@ -216,6 +217,20 @@ same_native_selection(const quader_poly::Selection &left,
          left.active_vertex == right.active_vertex &&
          left.active_edge == right.active_edge &&
          left.active_face == right.active_face;
+}
+
+[[nodiscard]] quader_poly::FaceTextureTransform
+to_native(const FaceTextureTransform &value) {
+  return {.scale = to_native(value.scale),
+          .shift_uv = to_native(value.shift_uv),
+          .rotation_degrees = value.rotation_degrees};
+}
+
+[[nodiscard]] FaceTextureTransform
+from_native(const quader_poly::FaceTextureTransform &value) {
+  return {.scale = from_native(value.scale),
+          .shift_uv = from_native(value.shift_uv),
+          .rotation_degrees = value.rotation_degrees};
 }
 
 [[nodiscard]] bool native_active_selection_matches_snapshot(
@@ -951,6 +966,7 @@ PolygonDocument::from_authored_topology(const AuthoredTopology &topology) {
     native_face.id = face.id.index;
     native_face.material_slot = face.material_slot;
     native_face.normal_shading = native_shading(face.shading);
+    native_face.texture_transform = to_native(face.texture_transform);
     native_face.vertices.reserve(face.vertices.size());
     for (VertexId id : face.vertices) {
       if (!id.valid() || id.generation != 1U) {
@@ -1527,6 +1543,7 @@ Result<AuthoredTopology> PolygonDocument::authored_topology() const {
     authored_face.id = face_id(face.id);
     authored_face.material_slot = face.material_slot;
     authored_face.shading = authored_shading(face.normal_shading);
+    authored_face.texture_transform = from_native(face.texture_transform);
     authored_face.vertices.reserve(face.vertices.size());
     for (quader_poly::ElementId id : face.vertices) {
       authored_face.vertices.push_back(vertex_id(id));
@@ -1544,6 +1561,24 @@ Result<AuthoredTopology> PolygonDocument::authored_topology() const {
   return Result<AuthoredTopology>::success(std::move(topology));
 }
 
+Result<std::vector<FaceTextureSettings>> PolygonDocument::face_texture_settings(
+    std::span<const FaceId> faces) const {
+  std::vector<FaceTextureSettings> settings;
+  settings.reserve(faces.size());
+  for (const FaceId id : faces) {
+    const auto validation = validate_face_id(*impl_->document, id);
+    if (!validation.ok()) {
+      return Result<std::vector<FaceTextureSettings>>::failure(
+          validation.error());
+    }
+    const auto *face = quader_poly::find_face(*impl_->document, id.index);
+    settings.push_back({.face = id,
+                        .texture_transform = from_native(face->texture_transform),
+                        .material_slot = face->material_slot});
+  }
+  return Result<std::vector<FaceTextureSettings>>::success(std::move(settings));
+}
+
 Result<MeshPayload> PolygonDocument::compile_mesh() const {
   const quader_poly::CompiledMesh compiled =
       quader_poly::compile_document(*impl_->document);
@@ -1557,6 +1592,8 @@ Result<MeshPayload> PolygonDocument::compile_mesh() const {
         .uv0 = from_native(vertex.uv0),
         .color = vertex.color,
         .source_vertex = vertex_id(vertex.source_vertex_id),
+        .uv_carrier = vertex.uv_carrier,
+        .uv_geometric_normal = from_native(vertex.uv_geometric_normal),
     });
   }
   payload.indices = compiled.indices;
@@ -2136,6 +2173,91 @@ PolygonDocument::assign_face_material_slot(FaceId id,
                                                       material_slot);
       },
       true);
+}
+
+Result<OperationResult> PolygonDocument::set_face_texture_transforms(
+    std::span<const FaceTextureTransformUpdate> updates) {
+  OperationResult result;
+  result.message = "Face texture settings unchanged.";
+  std::unordered_set<std::uint32_t> updated_ids;
+  updated_ids.reserve(updates.size());
+  std::vector<std::pair<std::size_t, quader_poly::FaceTextureTransform>> changes;
+  changes.reserve(updates.size());
+
+  for (const FaceTextureTransformUpdate &update : updates) {
+    const auto validation = validate_face_id(*impl_->document, update.face);
+    if (!validation.ok()) {
+      return validation;
+    }
+    if (!updated_ids.insert(update.face.index).second) {
+      return Result<OperationResult>::failure(make_error(
+          ErrorCode::InvalidArgument,
+          "Face texture updates contain a duplicate face ID."));
+    }
+    const auto *face = quader_poly::find_face(*impl_->document, update.face.index);
+    auto desired = face->texture_transform;
+    if (update.scale_x.has_value()) {
+      desired.scale.x = *update.scale_x;
+    }
+    if (update.scale_y.has_value()) {
+      desired.scale.y = *update.scale_y;
+    }
+    if (update.shift_x.has_value()) {
+      desired.shift_uv.x = *update.shift_x;
+    }
+    if (update.shift_y.has_value()) {
+      desired.shift_uv.y = *update.shift_y;
+    }
+    if (update.rotation_degrees.has_value()) {
+      desired.rotation_degrees = *update.rotation_degrees;
+    }
+    if (!quader_poly::valid_face_texture_transform(desired)) {
+      return Result<OperationResult>::failure(make_error(
+          ErrorCode::InvalidArgument,
+          "Face texture settings require finite values and nonzero scale."));
+    }
+    if (desired == face->texture_transform) {
+      continue;
+    }
+    const auto normal = quader_poly::face_normal(*impl_->document, *face);
+    for (std::size_t corner = 0; corner < face->vertices.size(); ++corner) {
+      const auto *vertex =
+          quader_poly::find_vertex(*impl_->document, face->vertices[corner]);
+      if (vertex == nullptr) {
+        return Result<OperationResult>::failure(make_error(
+            ErrorCode::ValidationFailed,
+            "Face texture update references an invalid vertex."));
+      }
+      const auto base = face->uvs.size() == face->vertices.size()
+                            ? face->uvs[corner]
+                            : quader_poly::generated_texture_uv(
+                                  vertex->position, normal);
+      const auto uv = quader_poly::apply_face_texture_transform(base, desired);
+      if (!std::isfinite(uv.x) || !std::isfinite(uv.y)) {
+        return Result<OperationResult>::failure(make_error(
+            ErrorCode::InvalidArgument,
+            "Face texture settings would produce non-finite coordinates."));
+      }
+    }
+    changes.emplace_back(
+        static_cast<std::size_t>(face - impl_->document->faces.data()), desired);
+    result.affected.faces.push_back(update.face);
+  }
+  if (changes.empty()) {
+    return operation_success(std::move(result));
+  }
+  quader_poly::Document document = *impl_->document;
+  for (const auto &[index, transform] : changes) {
+    document.faces[index].texture_transform = transform;
+  }
+  result.changed = true;
+  result.message = "Face texture settings changed.";
+  result.modified = result.affected;
+  result.dirty.geometry = true;
+  impl_->document =
+      std::make_shared<const quader_poly::Document>(std::move(document));
+  bump_content(*impl_, true);
+  return operation_success(std::move(result));
 }
 
 Result<OperationResult>

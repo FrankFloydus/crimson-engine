@@ -18,6 +18,8 @@ namespace quader {
 
 class QuaderApiMutationRunner;
 class QuaderSceneApi;
+class SceneTransformDragService;
+class SceneTransformPreviewTransaction;
 
 /**
  * Represents a scene transform edit used by the public Quader API surface.
@@ -168,6 +170,10 @@ public:
 
 private:
     friend class QuaderSceneBatch;
+    friend class SceneTransformDragService;
+
+    QuaderApiVoidResult commit_transform_preview(
+        SceneTransformPreviewTransaction &preview, const std::string &label);
 
     QuaderApiVoidResult commit_batch(const QuaderSceneBatch &batch);
 

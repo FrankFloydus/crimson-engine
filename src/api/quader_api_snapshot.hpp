@@ -10,6 +10,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -46,6 +47,8 @@ struct QuaderEntitySnapshot {
   QuaderLightComponent light;
   QuaderSceneSettings scene_settings;
   QuaderModelingObjectId modeling_object_id = kInvalidQuaderModelingObjectId;
+  /// Per-occurrence texture placement; absence denotes the identity mapping.
+  std::optional<QMat4> texture_sampling_from_local;
 };
 
 /**

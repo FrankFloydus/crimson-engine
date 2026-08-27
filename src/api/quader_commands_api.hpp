@@ -117,6 +117,8 @@ public:
     keybinding_target_id_for_grid_preset(int preset) const;
     [[nodiscard]] std::string shortcut_for(std::string_view command_id) const;
     [[nodiscard]] std::string shortcut_for(QuaderCommandId command_id) const;
+    /** Cheap owner stamp for shortcut presentation, including storage reloads. */
+    [[nodiscard]] std::uint64_t keybindings_revision() const noexcept;
     [[nodiscard]] std::vector<QuaderKeybindingRule> keybindings() const;
     [[nodiscard]] std::vector<QuaderKeybindingCatalogEntry>
     keybinding_catalog() const;

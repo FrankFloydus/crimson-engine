@@ -129,6 +129,10 @@ inline constexpr QuaderCommandId kViewportToggleMeshGrid{
     "viewport.toggle_mesh_grid"};
 inline constexpr QuaderCommandId kViewportToggleOverlays{
     "viewport.toggle_overlays"};
+inline constexpr QuaderCommandId kViewportToggleTextureLock{
+    "viewport.toggle_texture_lock"};
+inline constexpr QuaderCommandId kViewportToggleTextureLockScale{
+    "viewport.toggle_texture_lock_scale"};
 inline constexpr QuaderCommandId kViewportShadingWireframe{
     "viewport.shading.wireframe"};
 inline constexpr QuaderCommandId kViewportShadingShaded{
@@ -372,6 +376,8 @@ inline constexpr QuaderCommandId kTypedCommandIds[] = {
     kViewportToggleGizmos,
     kViewportToggleMeshGrid,
     kViewportToggleOverlays,
+    kViewportToggleTextureLock,
+    kViewportToggleTextureLockScale,
     kViewportShadingWireframe,
     kViewportShadingShaded,
     kViewportShadingRendered,

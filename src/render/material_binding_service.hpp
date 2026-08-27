@@ -16,11 +16,21 @@
 #include <filament/MaterialInstance.h>
 
 #include <cstdint>
+#include <span>
 
 namespace quader {
 
 class TextureBindingService;
 class ViewportSettings;
+
+// Matches the shipping Filament instance limit; mappings never split geometry.
+inline constexpr std::size_t kMeshTextureMappingCapacity = 64u;
+
+/** Binds occurrence-local UV placement in the same order as instance transforms.
+ * An empty span initializes the ordinary-renderable identity slot. */
+void bind_mesh_texture_mappings(
+    filament::MaterialInstance &material_instance,
+    std::span<const QMat4> sampling_from_local = {});
 
 /** Binds the shared Standard Material UV transform to a Filament instance. */
 void bind_standard_material_texture_transform(

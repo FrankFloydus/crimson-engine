@@ -7,6 +7,8 @@
 #include "assets/asset_registry.hpp"
 #include "assets/mesh_asset_payload.hpp"
 
+#include <quader/modeling/neutral/polygon/document_texture.hpp>
+
 #include <algorithm>
 #include <cassert>
 #include <cmath>
@@ -466,7 +468,11 @@ AssetRegistry::validate_mesh(const MeshAsset &mesh) const {
   const MeshGeometryPayload &geometry = mesh.geometry();
   for (const MeshVertex &vertex : geometry.vertices) {
     if (!finite_vec3(vertex.position) || !finite_vec3(vertex.normal) ||
-        !finite_vec2(vertex.uv)) {
+        !finite_vec2(vertex.uv) ||
+        !finite_vec3(vertex.uv_geometric_normal) ||
+        std::ranges::any_of(vertex.uv_carrier, [](float value) {
+          return !std::isfinite(value);
+        })) {
       return {.ok = false, .message = "Mesh vertex data must be finite"};
     }
   }
@@ -497,6 +503,10 @@ AssetRegistry::validate_mesh(const MeshAsset &mesh) const {
     }
     for (const quader_poly::Face &face :
          mesh.authored_polygon_document->faces) {
+      if (!quader_poly::valid_face_texture_transform(face.texture_transform)) {
+        return {.ok = false,
+                .message = "Mesh authored face texture transform is invalid"};
+      }
       for (const QVec2 uv : face.uvs) {
         if (!finite_vec2(uv)) {
           return {.ok = false,

@@ -192,7 +192,7 @@ bool SceneRenderSyncService::can_sync_transforms_only(
     const RenderSceneSnapshot &snapshot) const {
   if (!has_synced_ || synced_scene_binding_ != snapshot.scene_binding ||
       synced_instance_edit_scope_ != snapshot.instance_edit_scope ||
-      !snapshot.dirty.transforms_changed ||
+      (!snapshot.dirty.transforms_changed && !snapshot.dirty.texture_mappings_changed) ||
       snapshot.dirty.visibility_changed ||
       snapshot.dirty.local_visibility_changed ||
       snapshot.dirty.mesh_bindings_changed ||
@@ -233,7 +233,7 @@ void SceneRenderSyncService::sync_dirty_transforms(
     filament::TransformManager &transforms = engine_->getTransformManager();
     LocalTransformTransaction transaction(transforms);
     for (const RenderSceneMeshRecord &mesh : snapshot.meshes) {
-      if (mesh.renderable() && mesh.transform_dirty) {
+      if (mesh.renderable() && (mesh.transform_dirty || mesh.texture_mapping_dirty)) {
         QDR_PROFILE_SCOPE("Scene render sync dirty mesh transform");
         mesh_cache_->sync_mesh(mesh);
       }

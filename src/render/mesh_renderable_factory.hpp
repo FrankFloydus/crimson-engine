@@ -108,6 +108,10 @@ public:
         std::uint8_t channel = kViewportDefaultRenderableChannel);
     void update_transform(const MeshRenderableProxy &proxy,
                           const QMat4 &world_transform);
+    void update_texture_mapping(const MeshRenderableProxy &proxy,
+                                const QMat4 &sampling_from_local);
+    void update_texture_mappings(const MeshRenderableProxy &proxy,
+                                 std::span<const QMat4> sampling_from_local);
     void update_layer_mask(const MeshRenderableProxy &proxy,
                            std::uint8_t layer_mask);
     void update_bounds(const MeshRenderableProxy &proxy,

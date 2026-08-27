@@ -89,7 +89,8 @@ OperationResult bridge_selected_faces_impl(Document& document, Selection& select
                 first_face.material_slot,
                 steps,
                 bridge_face_ids,
-                true)) {
+                true,
+                first_face.texture_transform)) {
             return { false, "Bridge Faces could not create valid bridge geometry." };
         }
 
@@ -146,7 +147,8 @@ OperationResult bridge_selected_faces_impl(Document& document, Selection& select
             first.material_slot,
             steps,
             bridge_face_ids,
-            false)) {
+            false,
+            first.texture_transform)) {
         return { false, "Bridge Faces could not create valid bridge geometry." };
     }
 

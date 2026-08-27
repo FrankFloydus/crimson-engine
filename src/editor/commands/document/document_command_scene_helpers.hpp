@@ -44,6 +44,7 @@ struct DocumentEntitySnapshot {
   std::optional<InstanceOccurrenceComponent> instance_occurrence;
   std::optional<MeshComponent> mesh;
   std::optional<MaterialComponent> material;
+  std::optional<TextureMappingComponent> texture_mapping;
   std::optional<LightComponent> light;
   SceneLayerId layer_id = kInvalidSceneLayerId;
   std::vector<DocumentEntitySnapshot> children;
@@ -168,6 +169,9 @@ document_command_capture_entity_snapshot(const SceneDocument &scene,
   if (const MaterialComponent *component = scene.material(entity)) {
     snapshot.material = *component;
   }
+  if (const TextureMappingComponent *component = scene.texture_mapping(entity)) {
+    snapshot.texture_mapping = *component;
+  }
   if (const LightComponent *component = scene.light(entity)) {
     snapshot.light = *component;
   }
@@ -210,6 +214,11 @@ inline void document_command_apply_entity_snapshot_components(
     scene.set_modeling_object(entity, *snapshot.modeling_object);
   }
   scene.set_entity_kind(entity, snapshot.kind);
+  if (snapshot.texture_mapping.has_value()) {
+    (void)scene.set_texture_mapping(entity, *snapshot.texture_mapping);
+  } else {
+    (void)scene.clear_texture_mapping(entity);
+  }
   (void)scene.set_entity_layer(entity, snapshot.layer_id);
 }
 
@@ -222,6 +231,11 @@ inline void document_command_apply_entity_snapshot_common_state(
   scene.set_selectable(entity, snapshot.visibility.selectable);
   scene.set_locked(entity, snapshot.lock.locked);
   scene.set_entity_kind(entity, snapshot.kind);
+  if (snapshot.texture_mapping.has_value()) {
+    (void)scene.set_texture_mapping(entity, *snapshot.texture_mapping);
+  } else {
+    (void)scene.clear_texture_mapping(entity);
+  }
   (void)scene.set_entity_layer(entity, snapshot.layer_id);
 }
 

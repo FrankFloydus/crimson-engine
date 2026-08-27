@@ -108,6 +108,7 @@ struct PlaneCutWork {
     std::vector<Edge> cut_segments;
     ElementId next_vertex_id = 1;
     std::uint32_t cap_material_slot = 0;
+    FaceTextureTransform cap_texture_transform{};
     bool has_cap_material_slot = false;
 };
 
@@ -306,6 +307,7 @@ bool append_face_from_points(
     Face face;
     face.id = face_id.value_or(source_face.id);
     face.material_slot = source_face.material_slot;
+    face.texture_transform = source_face.texture_transform;
     face.normal_shading = source_face.normal_shading;
     face.vertices.reserve(points.size());
     const bool has_uvs = std::ranges::all_of(points, [](const PlaneCutPoint& point) {
@@ -434,6 +436,7 @@ bool split_face_by_plane(
 
     if (!work.has_cap_material_slot) {
         work.cap_material_slot = face.material_slot;
+        work.cap_texture_transform = face.texture_transform;
         work.has_cap_material_slot = true;
     }
 
@@ -750,12 +753,14 @@ bool append_cap_face(
     std::span<const ElementId> loop,
     const std::map<ElementId, quader::QVec3>& positions,
     std::uint32_t material_slot,
+    const FaceTextureTransform& texture_transform,
     quader::QVec3 expected_normal,
     std::string& message)
 {
     Face face;
     face.id = builder.document.next_face_id++;
     face.material_slot = material_slot;
+    face.texture_transform = texture_transform;
     face.vertices.assign(loop.begin(), loop.end());
     for (const ElementId vertex_id : face.vertices) {
         const auto found = positions.find(vertex_id);
@@ -881,9 +886,11 @@ PlaneCutResult plane_cut_impl(const Document& document, const PlaneCutRequest& r
         for (const std::vector<ElementId>& loop : *cap_loops) {
             if (!append_cap_face(front, loop, work.plane_vertex_positions,
                                  work.cap_material_slot,
+                                 work.cap_texture_transform,
                                  poly_vec3(work.plane.normal * -1.0F), message) ||
                 !append_cap_face(back, loop, work.plane_vertex_positions,
                                  work.cap_material_slot,
+                                 work.cap_texture_transform,
                                  poly_vec3(work.plane.normal), message)) {
                 result.message = message.empty()
                                      ? "Cut could not create cap faces."

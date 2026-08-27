@@ -38,6 +38,7 @@ enum class ViewportSettingsSectionId {
     Vertices,
     Picking,
     Gizmo,
+    Texturing,
     Count,
 };
 
@@ -118,6 +119,8 @@ enum class ViewportBoolSettingId {
     VertexSnap,
     RotationSnap,
     BackfaceSelection,
+    TextureLock,
+    TextureLockScale,
     Count,
 };
 

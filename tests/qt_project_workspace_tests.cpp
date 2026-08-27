@@ -11,10 +11,12 @@
 #include "core/localization_service.hpp"
 #include "editor/session/scene_session.hpp"
 #include "ui/qt_application_theme.hpp"
+#include "ui/qt_main_menu.hpp"
 #include "ui/qt_project_home_page.hpp"
 #include "ui/qt_scene_workspace.hpp"
 #include "ui/qt_selection_toolbar.hpp"
 #include "ui/qt_snapping_toolbar.hpp"
+#include "ui/qt_texture_toolbar.hpp"
 #include "ui/qt_toolbar_button_presentation.hpp"
 #include "ui/qt_tool_toolbar.hpp"
 #include "ui/qt_viewport_display_toolbar.hpp"
@@ -25,14 +27,20 @@
 #include <QAbstractItemModel>
 #include <QAbstractItemView>
 #include <QApplication>
+#include <QBuffer>
+#include <QByteArray>
 #include <QComboBox>
 #include <QCoreApplication>
+#include <QDataStream>
+#include <QDockWidget>
 #include <QGuiApplication>
 #include <QHeaderView>
 #include <QIcon>
+#include <QIODevice>
 #include <QKeyEvent>
 #include <QMainWindow>
 #include <QMenu>
+#include <QMenuBar>
 #include <QMetaObject>
 #include <QModelIndex>
 #include <QItemSelectionModel>
@@ -55,6 +63,10 @@
 #include <string>
 #include <utility>
 #include <vector>
+
+#ifndef QUADER_SOURCE_DIR
+#define QUADER_SOURCE_DIR "."
+#endif
 
 namespace {
 
@@ -660,6 +672,413 @@ TEST(QtProjectWorkspaceTests,
     EXPECT_EQ(requested_commands[index], expected_commands[index].string());
   }
   std::filesystem::remove(keybindings);
+}
+
+TEST(QtProjectWorkspaceTests,
+     TextureToolbarKeepsIndependentLocksAndUnchangedRefreshCheap) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader_texture_toolbar_test";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+  ASSERT_NE(QApplication::setStyle(QStringLiteral("Fusion")), nullptr);
+
+  QMainWindow window;
+  quader::QtViewportDisplayToolbar display_toolbar;
+  quader::QtTextureToolbar toolbar;
+  quader::LocalizationService localization;
+  ASSERT_TRUE(localization.load(
+      std::filesystem::path(QUADER_SOURCE_DIR) / "resources" / "locales",
+      "en-US"));
+  toolbar.set_localization(localization);
+  window.addToolBar(Qt::TopToolBarArea, &display_toolbar);
+  window.addToolBar(Qt::TopToolBarArea, &toolbar);
+  window.resize(1000, 400);
+  window.show();
+  application.processEvents();
+  EXPECT_EQ(toolbar.objectName(), QStringLiteral("textureToolbar"));
+  EXPECT_EQ(toolbar.windowTitle(), QStringLiteral("Texturing"));
+  EXPECT_TRUE(toolbar.isMovable());
+  EXPECT_TRUE(toolbar.isFloatable());
+  EXPECT_EQ(toolbar.iconSize(), QSize(32, 32));
+  EXPECT_EQ(expect_persistent_button_faces(toolbar, 30), 2);
+  EXPECT_GE(toolbar.geometry().left(), display_toolbar.geometry().right());
+  const auto actions = toolbar.actions();
+  ASSERT_EQ(actions.size(), 3);
+  EXPECT_TRUE(actions[0]->isSeparator());
+  EXPECT_EQ(actions[0]->objectName(), QStringLiteral("textureToolbarDivider"));
+  EXPECT_EQ(actions[1]->objectName(), QStringLiteral("textureLock"));
+  EXPECT_EQ(actions[2]->objectName(), QStringLiteral("textureLockScale"));
+  EXPECT_EQ(actions[1]->text(), QStringLiteral("Texture Lock"));
+  EXPECT_EQ(actions[2]->text(), QStringLiteral("Texture Lock Scale"));
+
+  quader::SceneSession session;
+  quader::QuaderEditorApi editor(
+      quader::QuaderApiSessionInternalAccess::from_scene_session(session));
+  const auto keybindings = std::filesystem::temp_directory_path() /
+                           "quader-texture-toolbar-keybindings.json";
+  std::filesystem::remove(keybindings);
+  ASSERT_TRUE(editor.commands().set_keybinding_storage_path(keybindings).ok());
+  std::array<bool, 2> owner_state{true, false};
+  const auto set_state = [&](std::size_t index, bool enabled) {
+    const bool changed = owner_state[index] != enabled;
+    owner_state[index] = enabled;
+    return quader::QuaderApiVoidResult{
+        .ok = true,
+        .changed = changed,
+        .mutation_kind = quader::QuaderMutationKind::Runtime,
+    };
+  };
+  editor.preferences().set_runtime_hooks(
+      quader::QuaderPreferencesRuntimeHooks{
+          .texture_lock_enabled = [&] { return owner_state[0]; },
+          .set_texture_lock_enabled = [&](bool value) { return set_state(0, value); },
+          .texture_lock_scale_enabled = [&] { return owner_state[1]; },
+          .set_texture_lock_scale_enabled = [&](bool value) { return set_state(1, value); },
+      });
+  toolbar.synchronize(editor, true);
+  EXPECT_TRUE(actions[1]->isChecked());
+  EXPECT_FALSE(actions[2]->isChecked());
+
+  int presentation_changes = 0;
+  for (QAction *action : actions) {
+    QObject::connect(action, &QAction::changed, &toolbar,
+                     [&] { ++presentation_changes; });
+  }
+  for (int frame = 0; frame < 100; ++frame) {
+    toolbar.synchronize(editor);
+  }
+  EXPECT_EQ(presentation_changes, 0);
+
+  const auto initial_binding_revision =
+      editor.preferences().keybindings_revision();
+  EXPECT_GT(initial_binding_revision, 0u);
+  ASSERT_TRUE(editor.preferences()
+                  .set_shortcut(
+                      quader::quader_command::kViewportToggleTextureLock,
+                      "Ctrl+Alt+F18")
+                  .changed());
+  EXPECT_GT(editor.preferences().keybindings_revision(),
+            initial_binding_revision);
+  EXPECT_EQ(editor.commands().keybindings_revision(),
+            editor.preferences().keybindings_revision());
+  toolbar.synchronize(editor);
+  EXPECT_EQ(actions[1]->toolTip(),
+            QStringLiteral("Texture Lock [Ctrl+Alt+F18]"));
+  EXPECT_EQ(actions[2]->toolTip(), QStringLiteral("Texture Lock Scale"));
+
+  const auto assigned_revision = editor.preferences().keybindings_revision();
+  const int assigned_presentation_changes = presentation_changes;
+  EXPECT_FALSE(editor.preferences()
+                   .set_shortcut(
+                       quader::quader_command::kViewportToggleTextureLock,
+                       "Ctrl+Alt+F18")
+                   .changed());
+  toolbar.synchronize(editor);
+  EXPECT_EQ(editor.preferences().keybindings_revision(), assigned_revision);
+  EXPECT_EQ(presentation_changes, assigned_presentation_changes);
+  ASSERT_TRUE(editor.commands()
+                  .set_shortcut(
+                      quader::quader_command::kViewportToggleTextureLockScale,
+                      "Ctrl+Alt+F19")
+                  .changed());
+  toolbar.synchronize(editor);
+  EXPECT_EQ(actions[2]->toolTip(),
+            QStringLiteral("Texture Lock Scale [Ctrl+Alt+F19]"));
+
+  ASSERT_TRUE(localization.select_locale("it-IT"));
+  toolbar.set_localization(localization);
+  toolbar.synchronize(editor);
+  EXPECT_EQ(toolbar.windowTitle(), QStringLiteral("Texture"));
+  EXPECT_EQ(actions[1]->text(), QStringLiteral("Blocco texture"));
+  EXPECT_EQ(actions[1]->toolTip(),
+            QStringLiteral("Blocco texture [Ctrl+Alt+F18]"));
+  EXPECT_EQ(actions[2]->toolTip(),
+            QStringLiteral("Blocco scala texture [Ctrl+Alt+F19]"));
+  ASSERT_TRUE(editor.preferences()
+                  .reset_shortcut(
+                      quader::quader_command::kViewportToggleTextureLock)
+                  .changed());
+  toolbar.synchronize(editor);
+  EXPECT_EQ(actions[1]->toolTip(), QStringLiteral("Blocco texture"));
+  EXPECT_EQ(actions[2]->toolTip(),
+            QStringLiteral("Blocco scala texture [Ctrl+Alt+F19]"));
+
+  quader::SceneSession saved_session;
+  quader::QuaderEditorApi saved_editor(
+      quader::QuaderApiSessionInternalAccess::from_scene_session(saved_session));
+  ASSERT_TRUE(saved_editor.commands()
+                  .set_keybinding_storage_path(keybindings)
+                  .ok());
+  ASSERT_TRUE(saved_editor.preferences()
+                  .set_shortcut(
+                      quader::quader_command::kViewportToggleTextureLock,
+                      "Ctrl+Alt+F20")
+                  .changed());
+  const auto before_reload_revision =
+      editor.preferences().keybindings_revision();
+  ASSERT_TRUE(editor.commands().set_keybinding_storage_path(keybindings).ok());
+  EXPECT_GT(editor.preferences().keybindings_revision(), before_reload_revision);
+  toolbar.synchronize(editor);
+  EXPECT_EQ(actions[1]->toolTip(),
+            QStringLiteral("Blocco texture [Ctrl+Alt+F20]"));
+  const int reloaded_presentation_changes = presentation_changes;
+  const auto reloaded_revision = editor.preferences().keybindings_revision();
+  for (int frame = 0; frame < 100; ++frame) {
+    toolbar.synchronize(editor);
+  }
+  EXPECT_EQ(editor.preferences().keybindings_revision(), reloaded_revision);
+  EXPECT_EQ(presentation_changes, reloaded_presentation_changes);
+
+  std::vector<quader::QuaderCommandId> requested;
+  toolbar.set_command_requested_callback([&](quader::QuaderCommandId command) {
+    requested.push_back(command);
+    EXPECT_TRUE(editor.commands().execute(command).changed());
+  });
+  actions[1]->trigger();
+  toolbar.synchronize(editor);
+  EXPECT_EQ(owner_state, (std::array<bool, 2>{false, false}));
+  EXPECT_FALSE(actions[1]->isChecked());
+  EXPECT_FALSE(actions[2]->isChecked());
+  actions[2]->trigger();
+  toolbar.synchronize(editor);
+  EXPECT_EQ(owner_state, (std::array<bool, 2>{false, true}));
+  EXPECT_FALSE(actions[1]->isChecked());
+  EXPECT_TRUE(actions[2]->isChecked());
+  ASSERT_EQ(requested.size(), 2u);
+  EXPECT_EQ(requested[0].string(),
+            quader::quader_command::kViewportToggleTextureLock.string());
+  EXPECT_EQ(requested[1].string(),
+            quader::quader_command::kViewportToggleTextureLockScale.string());
+
+  const auto saved_layout = window.saveState();
+  toolbar.hide();
+  ASSERT_TRUE(window.restoreState(saved_layout));
+  EXPECT_FALSE(toolbar.isHidden());
+  toolbar.setEnabled(false);
+  for (std::size_t index = 1; index < 3; ++index) {
+    auto *button = qobject_cast<QToolButton *>(toolbar.widgetForAction(actions[index]));
+    ASSERT_NE(button, nullptr);
+    EXPECT_FALSE(button->isEnabled());
+  }
+  std::filesystem::remove(keybindings);
+}
+
+TEST(QtProjectWorkspaceTests,
+     TextureToolbarRestoredWorkspaceAndMenuKeepBothButtonsVisible) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader_texture_toolbar_restore_test";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+  ASSERT_NE(QApplication::setStyle(QStringLiteral("Fusion")), nullptr);
+
+  const auto populate_workspace = [](QMainWindow &window) {
+    window.setAttribute(Qt::WA_DontShowOnScreen);
+    auto *selection = new quader::QtSelectionToolbar(&window);
+    auto *snapping = new quader::QtSnappingToolbar(&window);
+    auto *display = new quader::QtViewportDisplayToolbar(&window);
+    auto *tools = new quader::QtToolToolbar(&window);
+    window.addToolBar(Qt::TopToolBarArea, selection);
+    window.addToolBar(Qt::TopToolBarArea, snapping);
+    window.addToolBar(Qt::TopToolBarArea, display);
+    window.addToolBar(Qt::LeftToolBarArea, tools);
+    auto *pages = new QStackedWidget(&window);
+    pages->addWidget(new QWidget(pages));
+    pages->addWidget(new QWidget(pages));
+    window.setCentralWidget(pages);
+    auto *closed_dock = new QDockWidget(QStringLiteral("Tool Settings"), &window);
+    closed_dock->setObjectName(QStringLiteral("dock_tool_settings"));
+    closed_dock->setWidget(new QWidget(closed_dock));
+    window.addDockWidget(Qt::RightDockWidgetArea, closed_dock);
+    closed_dock->hide();
+    window.resize(1800, 700);
+    return std::array<QToolBar *, 4>{selection, snapping, display, tools};
+  };
+  const auto toolbar_geometry = [](QToolBar &toolbar) {
+    QString description =
+        QStringLiteral("%1 rect=%2,%3 %4x%5 minimumHint=%6x%7 hint=%8x%9")
+            .arg(toolbar.objectName())
+            .arg(toolbar.x()).arg(toolbar.y())
+            .arg(toolbar.width()).arg(toolbar.height())
+            .arg(toolbar.minimumSizeHint().width())
+            .arg(toolbar.minimumSizeHint().height())
+            .arg(toolbar.sizeHint().width()).arg(toolbar.sizeHint().height());
+    for (QAction *action : toolbar.actions()) {
+      if (QWidget *widget = toolbar.widgetForAction(action)) {
+        description += QStringLiteral("; [%1 visible=%2 rect=%3,%4 %5x%6]")
+                           .arg(action->text()).arg(widget->isVisible())
+                           .arg(widget->x()).arg(widget->y())
+                           .arg(widget->width()).arg(widget->height());
+      }
+    }
+    return description.toStdString();
+  };
+
+  QByteArray legacy_state;
+  QByteArray collapsed_state;
+  {
+    QMainWindow previous_window;
+    (void)populate_workspace(previous_window);
+    previous_window.show();
+    application.processEvents();
+    legacy_state = previous_window.saveState(1);
+
+    // Qt stores a user's dragged toolbar extent as positive preferredSize,
+    // whereas automatic row stretching saves -1. Seed that persisted user
+    // layout explicitly: QString name, shown byte, position, preferred extent.
+    QByteArray display_record_name;
+    QDataStream name_stream(&display_record_name, QIODevice::WriteOnly);
+    name_stream.setVersion(QDataStream::Qt_5_0);
+    name_stream << QStringLiteral("viewportDisplayToolbar");
+    ASSERT_EQ(name_stream.status(), QDataStream::Ok);
+    const qsizetype record_offset = legacy_state.indexOf(display_record_name);
+    ASSERT_GE(record_offset, 0);
+    ASSERT_EQ(legacy_state.lastIndexOf(display_record_name), record_offset);
+    const qsizetype extent_offset =
+        record_offset + display_record_name.size() +
+        static_cast<qsizetype>(sizeof(quint8) + sizeof(qint32));
+    ASSERT_LE(extent_offset + static_cast<qsizetype>(sizeof(qint32)),
+              legacy_state.size());
+    QBuffer state_buffer(&legacy_state);
+    ASSERT_TRUE(state_buffer.open(QIODevice::ReadWrite));
+    ASSERT_TRUE(state_buffer.seek(extent_offset));
+    QDataStream state_stream(&state_buffer);
+    state_stream.setVersion(QDataStream::Qt_5_0);
+    qint32 initial_extent = 0;
+    state_stream >> initial_extent;
+    ASSERT_EQ(state_stream.status(), QDataStream::Ok);
+    ASSERT_EQ(initial_extent, -1);
+    ASSERT_TRUE(state_buffer.seek(extent_offset));
+    state_stream << qint32{10000};
+    ASSERT_EQ(state_stream.status(), QDataStream::Ok);
+    state_buffer.close();
+
+    // The saved display extent consumes the row above other toolbar minima.
+    // Native QToolBar's first-item minimum hides both new lock buttons.
+    auto *previous_texture = new QToolBar(&previous_window);
+    previous_texture->setObjectName(QStringLiteral("textureToolbar"));
+    previous_texture->setIconSize(QSize(32, 32));
+    previous_texture->addSeparator();
+    for (const QString &label : {QStringLiteral("Texture Lock"),
+                                  QStringLiteral("Texture Lock Scale")}) {
+      QAction *action = previous_texture->addAction(label);
+      action->setCheckable(true);
+      auto *button = qobject_cast<QToolButton *>(
+          previous_texture->widgetForAction(action));
+      ASSERT_NE(button, nullptr);
+      button->setMinimumWidth(40);
+      button->setFixedHeight(30);
+    }
+    previous_window.addToolBar(Qt::TopToolBarArea, previous_texture);
+    ASSERT_TRUE(previous_window.restoreState(legacy_state, 1));
+    application.processEvents();
+    ASSERT_TRUE(previous_texture->isVisible());
+    ASSERT_FALSE(previous_texture->widgetForAction(
+        previous_texture->actions()[1])->isVisible())
+        << toolbar_geometry(*previous_texture);
+    ASSERT_FALSE(previous_texture->widgetForAction(
+        previous_texture->actions()[2])->isVisible())
+        << toolbar_geometry(*previous_texture);
+    collapsed_state = previous_window.saveState(1);
+  }
+
+  for (const QByteArray &saved_state : {legacy_state, collapsed_state}) {
+    SCOPED_TRACE(saved_state == legacy_state ? "legacy layout"
+                                             : "previously collapsed layout");
+    QMainWindow window;
+    const auto existing_toolbars = populate_workspace(window);
+    quader::QtTextureToolbar texture(&window);
+    window.addToolBar(Qt::TopToolBarArea, &texture);
+    quader::SceneSession session;
+    quader::QuaderEditorApi editor(
+        quader::QuaderApiSessionInternalAccess::from_scene_session(session));
+    auto settings = quader::ViewportSettings::defaults();
+    quader::LocalizationService localization;
+    quader::QtMainMenu menu;
+    menu.initialize(*window.menuBar(), quader::QtMainMenuContext{
+        .editor = editor,
+        .modeling = session.modeling(),
+        .viewport_settings = settings,
+        .localization = localization,
+        .texture_toolbar_visible = [&] { return texture.isVisible(); },
+        .set_texture_toolbar_visible =
+            [&](bool visible) { texture.setVisible(visible); },
+    });
+    auto *toggle = window.menuBar()->findChild<QAction *>(
+        QStringLiteral("toolbar_texture"));
+    ASSERT_NE(toggle, nullptr);
+    ASSERT_TRUE(window.restoreState(saved_state, 1));
+
+    // Match UISystem: restore the layout before Home, remember workspace
+    // visibility, hide its chrome, then show the retained workspace chrome.
+    const bool texture_visible_in_workspace = !texture.isHidden();
+    std::array<bool, 4> existing_visibility{};
+    for (std::size_t index = 0; index < existing_toolbars.size(); ++index) {
+      existing_visibility[index] = !existing_toolbars[index]->isHidden();
+      existing_toolbars[index]->hide();
+    }
+    texture.hide();
+    window.menuBar()->hide();
+    window.show();
+    application.processEvents();
+    auto *pages = qobject_cast<QStackedWidget *>(window.centralWidget());
+    ASSERT_NE(pages, nullptr);
+    pages->setCurrentIndex(1);
+    window.menuBar()->show();
+    for (std::size_t index = 0; index < existing_toolbars.size(); ++index) {
+      existing_toolbars[index]->setVisible(existing_visibility[index]);
+    }
+    texture.setVisible(texture_visible_in_workspace);
+    application.processEvents();
+    menu.refresh();
+
+    const auto expect_usable_group = [&] {
+      SCOPED_TRACE(toolbar_geometry(texture));
+      EXPECT_TRUE(toggle->isChecked());
+      EXPECT_TRUE(texture.isVisible());
+      const auto actions = texture.actions();
+      ASSERT_EQ(actions.size(), 3);
+      for (QAction *action : actions) {
+        QWidget *widget = texture.widgetForAction(action);
+        ASSERT_NE(widget, nullptr);
+        EXPECT_TRUE(widget->isVisible()) << action->objectName().toStdString();
+        EXPECT_FALSE(widget->geometry().isEmpty());
+        EXPECT_TRUE(texture.rect().contains(widget->geometry()));
+        const QRect window_bounds(widget->mapTo(&window, QPoint()),
+                                   widget->size());
+        EXPECT_TRUE(window.rect().contains(window_bounds));
+      }
+      auto *closed_dock = window.findChild<QDockWidget *>(
+          QStringLiteral("dock_tool_settings"));
+      ASSERT_NE(closed_dock, nullptr);
+      EXPECT_TRUE(closed_dock->isHidden());
+    };
+    expect_usable_group();
+    toggle->trigger();
+    application.processEvents();
+    EXPECT_TRUE(texture.isHidden());
+    const QByteArray user_hidden_state = window.saveState(1);
+    toggle->trigger();
+    application.processEvents();
+    expect_usable_group();
+
+    ASSERT_TRUE(window.restoreState(user_hidden_state, 1));
+    application.processEvents();
+    menu.refresh();
+    EXPECT_FALSE(toggle->isChecked());
+    EXPECT_TRUE(texture.isHidden());
+    toggle->trigger();
+    application.processEvents();
+    expect_usable_group();
+
+    window.addToolBar(Qt::LeftToolBarArea, &texture);
+    application.processEvents();
+    EXPECT_EQ(texture.orientation(), Qt::Vertical);
+    expect_usable_group();
+  }
 }
 
 TEST(QtProjectWorkspaceTests,

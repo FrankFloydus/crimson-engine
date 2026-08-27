@@ -22,6 +22,7 @@
 #include "render/scene_render_extraction.hpp"
 #include "render/scene_render_bridge.hpp"
 #include "editor/session/scene_session.hpp"
+#include "scene/scene_texture_mapping.hpp"
 
 #include <utility>
 
@@ -198,6 +199,7 @@ QuaderRenderApiRuntimeAccess::sync_tool_previews(QuaderRenderApi &api,
           .add_value(project.assets().revision())
           .add_value(project_material_revision)
           .add_value(project.scene().render_component_revision())
+          .add_value(project.scene().texture_mapping_revision())
           .value();
   if (linear_preview.active != radial_preview.active) {
     native_array_kind = linear_preview.active ? 1u : 2u;
@@ -251,16 +253,23 @@ QuaderRenderApiRuntimeAccess::sync_tool_previews(QuaderRenderApi &api,
   std::vector<ToolPreviewMesh> render_preview_meshes;
   render_preview_meshes.reserve(modeling_preview_meshes.size());
   for (ModelingToolPreviewMesh &preview_mesh : modeling_preview_meshes) {
+    const EntityId visibility_entity =
+        preview_visibility_entity(project, preview_mesh.source_entity);
+    const QMat4 mapping = effective_texture_sampling_from_local(
+        session.scene, preview_mesh.source_entity,
+        visibility_entity == preview_mesh.source_entity ? kInvalidEntityId
+                                                       : visibility_entity)
+                              .value_or(QMat4{});
     render_preview_meshes.push_back(ToolPreviewMesh{
         .source_object_id = preview_mesh.source_object_id,
         .source_entity = preview_mesh.source_entity,
-        .visibility_entity =
-            preview_visibility_entity(project, preview_mesh.source_entity),
+        .visibility_entity = visibility_entity,
         .material = std::move(preview_mesh.material),
         .mesh = std::move(preview_mesh.mesh),
         .transform = preview_mesh.transform,
         .instance_transforms =
             std::move(preview_mesh.instance_transforms),
+        .sampling_from_local = mapping,
         .double_sided = preview_mesh.double_sided,
         .dynamic_positions = preview_mesh.dynamic_positions,
         .suppress_source = preview_mesh.suppress_source,

@@ -102,6 +102,8 @@ TEST(QdrDocumentOperationExtrudeElementsTests, ExtrudeSelectedEdgeElementsCreate
 
 TEST(QdrDocumentOperationExtrudeElementsTests, TransformExtrudeSelectedFaceCopiesCapThroughSuppliedTransform) {
 	qdr_test::QuadFixture fixture = qdr_test::make_quad_document();
+	const FaceTextureTransform texture{{-2.0F, 0.5F}, {0.25F, 0.75F}, 40.0F};
+	fixture.document.faces.front().texture_transform = texture;
 	Selection selection = qdr_test::face_selection({ fixture.face }, fixture.face);
 	Transform3 transform;
 	transform.x_axis = { 0.0F, 1.0F, 0.0F };
@@ -110,6 +112,9 @@ TEST(QdrDocumentOperationExtrudeElementsTests, TransformExtrudeSelectedFaceCopie
 
 	const OperationResult result =
 		transform_extrude_selected_elements(fixture.document, selection, transform, {});
+	for (const Face& face : fixture.document.faces) {
+		EXPECT_EQ(face.texture_transform, texture);
+	}
 
 	EXPECT_TRUE(result.changed);
 

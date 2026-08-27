@@ -36,6 +36,22 @@ const QMat4 &preview_transform(const RenderToolPreviewMeshRecord &preview_mesh,
              : preview_mesh.instance_transforms[index];
 }
 
+const QMat4 &preview_texture_mapping(
+    const RenderToolPreviewMeshRecord &preview_mesh, std::size_t index) {
+  return index < preview_mesh.instance_sampling_from_local.size()
+             ? preview_mesh.instance_sampling_from_local[index]
+             : preview_mesh.sampling_from_local;
+}
+
+void copy_preview_texture_mappings(
+    std::vector<QMat4> &destination,
+    const RenderToolPreviewMeshRecord &preview_mesh) {
+  destination.resize(preview_transform_count(preview_mesh));
+  for (std::size_t index = 0u; index < destination.size(); ++index) {
+    destination[index] = preview_texture_mapping(preview_mesh, index);
+  }
+}
+
 void copy_preview_transforms(std::vector<QMat4> &destination,
                              const RenderToolPreviewMeshRecord &preview_mesh) {
   const std::size_t count = preview_transform_count(preview_mesh);
@@ -82,6 +98,20 @@ bool preview_transforms_equal(
   return true;
 }
 
+bool preview_texture_mappings_equal(
+    const std::vector<QMat4> &mappings,
+    const RenderToolPreviewMeshRecord &preview_mesh) {
+  if (mappings.size() != preview_transform_count(preview_mesh)) {
+    return false;
+  }
+  for (std::size_t index = 0u; index < mappings.size(); ++index) {
+    if (!same_mat4(mappings[index], preview_texture_mapping(preview_mesh, index))) {
+      return false;
+    }
+  }
+  return true;
+}
+
 bool same_geometry_payload(
     const std::shared_ptr<const MeshGeometryPayload> &left,
     const std::shared_ptr<const MeshGeometryPayload> &right,
@@ -101,7 +131,9 @@ bool same_geometry_payload(
         a.source_vertex_id != b.source_vertex_id ||
         !same_vec3(a.normal, b.normal) ||
         !same_float_bits(a.uv.x, b.uv.x) ||
-        !same_float_bits(a.uv.y, b.uv.y) || a.rgba != b.rgba) {
+        !same_float_bits(a.uv.y, b.uv.y) || a.rgba != b.rgba ||
+        a.uv_carrier != b.uv_carrier ||
+        !same_vec3(a.uv_geometric_normal, b.uv_geometric_normal)) {
       return false;
     }
   }
@@ -356,6 +388,8 @@ ToolPreviewRenderableCache::build_generation(
 
     std::vector<QMat4> transforms;
     copy_preview_transforms(transforms, preview_mesh);
+    std::vector<QMat4> mappings;
+    copy_preview_texture_mappings(mappings, preview_mesh);
     if (transforms.empty()) {
       if (preview_mesh.suppress_source) {
         return generation;
@@ -384,6 +418,7 @@ ToolPreviewRenderableCache::build_generation(
       return generation;
     }
     retain_entity(rendered_prototype);
+    factory_->update_texture_mapping(rendered_prototype, mappings.front());
 
     MeshRenderableProxy shaded_prototype = factory_->create_shared_geometry(
         preview_mesh.source_entity, mesh_snapshot, &preview_mesh.material,
@@ -405,6 +440,7 @@ ToolPreviewRenderableCache::build_generation(
           .position_revision = preview_mesh.position_revision,
           .topology_payload = preview_mesh.mesh.geometry_payload(),
           .transforms = std::move(transforms),
+          .sampling_from_local = std::move(mappings),
           .dynamic_positions = preview_mesh.dynamic_positions,
           .visible = false,
           .material_uniforms_initialized = false,
@@ -423,6 +459,7 @@ ToolPreviewRenderableCache::build_generation(
       return generation;
     }
     retain_entity(shaded_prototype);
+    factory_->update_texture_mapping(shaded_prototype, mappings.front());
     MeshRenderableProxy overlay_depth_prototype =
         factory_->create_shared_geometry(
             preview_mesh.source_entity, mesh_snapshot, &preview_mesh.material,
@@ -434,6 +471,7 @@ ToolPreviewRenderableCache::build_generation(
       return generation;
     }
     retain_entity(overlay_depth_prototype);
+    factory_->update_texture_mapping(overlay_depth_prototype, mappings.front());
     PreviewGroup group = make_group(
         std::move(rendered_prototype), std::move(shaded_prototype),
         std::move(overlay_depth_prototype));
@@ -450,6 +488,7 @@ ToolPreviewRenderableCache::build_generation(
         return generation;
       }
       retain_entity(rendered_instance);
+      factory_->update_texture_mapping(rendered_instance, group.sampling_from_local[index]);
       group.rendered_instances.push_back(std::move(rendered_instance));
       ++group.live_proxy_count;
 
@@ -462,6 +501,7 @@ ToolPreviewRenderableCache::build_generation(
         return generation;
       }
       retain_entity(shaded_instance);
+      factory_->update_texture_mapping(shaded_instance, group.sampling_from_local[index]);
       group.shaded_instances.push_back(std::move(shaded_instance));
       ++group.live_proxy_count;
 
@@ -475,6 +515,8 @@ ToolPreviewRenderableCache::build_generation(
         return generation;
       }
       retain_entity(overlay_depth_instance);
+      factory_->update_texture_mapping(overlay_depth_instance,
+                                       group.sampling_from_local[index]);
       group.overlay_depth_instances.push_back(
           std::move(overlay_depth_instance));
       ++group.live_proxy_count;
@@ -740,7 +782,26 @@ void ToolPreviewRenderableCache::update_group(
     }
   }
 
+  if (!preview_texture_mappings_equal(group.sampling_from_local, preview_mesh)) {
+    QDR_PROFILE_SCOPE("Tool preview changed texture mappings");
+    copy_preview_texture_mappings(group.sampling_from_local, preview_mesh);
+    factory_->update_texture_mapping(group.rendered_prototype,
+                                     group.sampling_from_local.front());
+    factory_->update_texture_mapping(group.shaded_prototype,
+                                     group.sampling_from_local.front());
+    factory_->update_texture_mapping(group.overlay_depth_prototype,
+                                     group.sampling_from_local.front());
+    for (std::size_t index = 0u; index < group.rendered_instances.size(); ++index) {
+      const QMat4 &mapping = group.sampling_from_local[index + 1u];
+      factory_->update_texture_mapping(group.rendered_instances[index], mapping);
+      factory_->update_texture_mapping(group.shaded_instances[index], mapping);
+      factory_->update_texture_mapping(group.overlay_depth_instances[index], mapping);
+    }
+  }
+
   if (group.source_entity != preview_mesh.source_entity) {
+    // Source changes below are independent of placement; correction-only
+    // previews reuse the same geometry and Filament entity generation.
     const auto update_source = [&](MeshRenderableProxy &proxy) {
       proxy.source_entity = preview_mesh.source_entity;
     };
@@ -864,6 +925,13 @@ void ToolPreviewRenderableCache::update_surface_grid(
         factory_->update_surface_grid(group.shaded_prototype,
                                       grid_world_spacing, settings);
         factory_->update_shaded_lighting(group.shaded_prototype, settings);
+        for (const MeshRenderableProxy &proxy : group.rendered_instances) {
+          factory_->update_surface_grid(proxy, grid_world_spacing, settings);
+        }
+        for (const MeshRenderableProxy &proxy : group.shaded_instances) {
+          factory_->update_surface_grid(proxy, grid_world_spacing, settings);
+          factory_->update_shaded_lighting(proxy, settings);
+        }
         group.material_uniform_signature = signature;
         group.material_uniforms_initialized = true;
       }
@@ -1085,7 +1153,11 @@ std::uint64_t ToolPreviewRenderableCache::preview_topology_signature(
     if (!preview_mesh.dynamic_positions) {
       signature.add_vec3(vertex.normal)
           .add_vec2(vertex.uv)
+          .add_vec3(vertex.uv_geometric_normal)
           .add_value(vertex.rgba);
+      for (const float coefficient : vertex.uv_carrier) {
+        signature.add_float(coefficient);
+      }
     }
   }
   if (!preview_mesh.dynamic_positions) {
@@ -1229,7 +1301,8 @@ bool ToolPreviewRenderableCache::group_submission_unchanged(
          group.topology_payload.get() ==
              preview_mesh.mesh.geometry_payload().get() &&
          group.dynamic_positions == preview_mesh.dynamic_positions &&
-         preview_transforms_equal(group.transforms, preview_mesh);
+         preview_transforms_equal(group.transforms, preview_mesh) &&
+         preview_texture_mappings_equal(group.sampling_from_local, preview_mesh);
 }
 
 bool ToolPreviewRenderableCache::group_dynamic_update_is_valid(
@@ -1272,6 +1345,11 @@ bool ToolPreviewRenderableCache::submitted_meshes_equal(
         !same_geometry_payload(left.geometry_payload,
                                right.mesh.geometry_payload(), true) ||
         !same_mat4(left.transform, right.transform) ||
+        !same_mat4(left.sampling_from_local, right.sampling_from_local) ||
+        left.instance_sampling_from_local.size() != right.instance_sampling_from_local.size() ||
+        !std::equal(left.instance_sampling_from_local.begin(),
+                    left.instance_sampling_from_local.end(),
+                    right.instance_sampling_from_local.begin(), same_mat4) ||
         left.instance_transforms.size() !=
             right.instance_transforms.size() ||
         !std::equal(left.instance_transforms.begin(),
@@ -1307,6 +1385,8 @@ ToolPreviewRenderableCache::capture_submission(
         .geometry_payload = mesh.mesh.geometry_payload(),
         .transform = mesh.transform,
         .instance_transforms = mesh.instance_transforms,
+        .sampling_from_local = mesh.sampling_from_local,
+        .instance_sampling_from_local = mesh.instance_sampling_from_local,
         .dynamic_positions = mesh.dynamic_positions,
         .suppress_source = mesh.suppress_source,
     });
@@ -1346,6 +1426,7 @@ std::uint64_t ToolPreviewRenderableCache::preview_meshes_signature(
     signature.add_size(transform_count);
     for (std::size_t index = 0u; index < transform_count; ++index) {
       signature.add_mat4(preview_transform(preview_mesh, index));
+      signature.add_mat4(preview_texture_mapping(preview_mesh, index));
     }
   }
   return signature.value();

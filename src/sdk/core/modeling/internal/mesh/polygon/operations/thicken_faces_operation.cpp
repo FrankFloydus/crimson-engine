@@ -131,6 +131,7 @@ OperationResult thicken_selected_faces_impl(Document& document, Selection& selec
         Face cap_face;
         cap_face.id = candidate.next_face_id++;
         cap_face.material_slot = source_face.material_slot;
+        cap_face.texture_transform = source_face.texture_transform;
         cap_face.vertices.reserve(source_face.vertices.size());
         for (const ElementId vertex_id : source_face.vertices) {
             const ElementId duplicate_id = duplicate_vertex(vertex_id);
@@ -178,12 +179,14 @@ OperationResult thicken_selected_faces_impl(Document& document, Selection& selec
         Face normal_probe;
         normal_probe.vertices = side_vertices;
         const quader::QVec3 side_outward_normal = face_centroid(candidate, normal_probe) - selected_center;
+        const Face* source_face = face_for_open_edge(document, edge);
         if (!append_bridge_face(
                 candidate,
                 std::move(side_vertices),
-                material_slot_for_open_edge(document, edge),
+                source_face == nullptr ? 0U : source_face->material_slot,
                 flip_normals ? side_outward_normal * -1.0F : side_outward_normal,
-                side_face_ids)) {
+                side_face_ids,
+                source_face == nullptr ? FaceTextureTransform{} : source_face->texture_transform)) {
             return { false, "Thicken Faces could not create valid side wall geometry." };
         }
     }

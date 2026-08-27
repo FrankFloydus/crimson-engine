@@ -22,11 +22,13 @@
 #include <QDoubleSpinBox>
 #include <QFrame>
 #include <QFont>
+#include <QFocusEvent>
 #include <QGridLayout>
 #include <QGroupBox>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QLayoutItem>
+#include <QLineEdit>
 #include <QPushButton>
 #include <QRadioButton>
 #include <QScrollArea>
@@ -40,6 +42,8 @@
 #include <QWindow>
 
 #include <algorithm>
+#include <array>
+#include <atomic>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -296,6 +300,132 @@ private:
   QFrame *content_ = nullptr;
 };
 
+/// A mixed value is presentation state, never a sentinel texture coordinate.
+class QtTextureNumberSpinBox final : public QDoubleSpinBox {
+public:
+  explicit QtTextureNumberSpinBox(double step_origin,
+                                  QWidget *parent = nullptr)
+      : QDoubleSpinBox(parent), step_origin_(step_origin) {
+    setKeyboardTracking(false);
+    setDecimals(6);
+    setRange(-std::numeric_limits<float>::max(),
+             std::numeric_limits<float>::max());
+    setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
+    setMinimumWidth(88);
+    QObject::connect(this, &QDoubleSpinBox::valueChanged, this,
+                     [this](double value) {
+                       const bool was_mixed = mixed_;
+                       mixed_ = false;
+                       if (was_mixed) {
+                         lineEdit()->setText(
+                             QDoubleSpinBox::textFromValue(value));
+                       }
+                       if (edited) {
+                         edited(value);
+                       }
+                     });
+    QObject::connect(lineEdit(), &QLineEdit::textEdited, this,
+                     [this](const QString &text) {
+                       QString candidate = text;
+                       int position = lineEdit()->cursorPosition();
+                       if (QDoubleSpinBox::validate(candidate, position) ==
+                               QValidator::Acceptable &&
+                           text != QStringLiteral("--")) {
+                         mixed_ = false;
+                         if (edited) {
+                           edited(QDoubleSpinBox::valueFromText(text));
+                         }
+                       } else if (edited) {
+                         edited(std::nullopt);
+                       }
+                     });
+  }
+
+  void present(std::optional<double> value) {
+    const QSignalBlocker spin_blocker(this);
+    const QSignalBlocker text_blocker(lineEdit());
+    mixed_ = !value.has_value();
+    if (value.has_value() && this->value() != *value) {
+      setValue(*value);
+    }
+    const QString desired = mixed_ ? QStringLiteral("--")
+                                   : QDoubleSpinBox::textFromValue(this->value());
+    if (lineEdit()->text() != desired) {
+      lineEdit()->setText(desired);
+    }
+  }
+
+  std::function<void(std::optional<double>)> edited;
+
+protected:
+  QString textFromValue(double value) const override {
+    return mixed_ ? QStringLiteral("--")
+                  : QDoubleSpinBox::textFromValue(value);
+  }
+
+  double valueFromText(const QString &text) const override {
+    return text == QStringLiteral("--")
+               ? value()
+               : QDoubleSpinBox::valueFromText(text);
+  }
+
+  QValidator::State validate(QString &text, int &position) const override {
+    return text == QStringLiteral("--")
+               ? QValidator::Intermediate
+               : QDoubleSpinBox::validate(text, position);
+  }
+
+  void focusInEvent(QFocusEvent *event) override {
+    QDoubleSpinBox::focusInEvent(event);
+    if (mixed_) {
+      selectAll();
+    }
+  }
+
+  void stepBy(int steps) override {
+    if (mixed_) {
+      // Arrows on an indeterminate field start from its neutral value.
+      mixed_ = false;
+      const QSignalBlocker blocker(this);
+      setValue(step_origin_);
+    }
+    QDoubleSpinBox::stepBy(steps);
+  }
+
+private:
+  double step_origin_ = 0.0;
+  bool mixed_ = false;
+};
+
+std::string next_texture_edit_merge_key() {
+  static std::atomic<std::uint64_t> next_id{1};
+  return "texture-settings:" +
+         std::to_string(next_id.fetch_add(1, std::memory_order_relaxed));
+}
+
+/// Static presentation metadata for one API-owned face texture property.
+struct TextureControlDescription {
+  QuaderFaceTextureField field;
+  std::string_view id;
+  std::string_view localization_key;
+  std::string_view fallback;
+  double step;
+  double step_origin;
+};
+
+constexpr std::array<TextureControlDescription, 5> kTextureControls{{
+    {QuaderFaceTextureField::ScaleX, "scale_x",
+     "tool_settings.texture_scale_x", "Scale X", 0.1, 1.0},
+    {QuaderFaceTextureField::ScaleY, "scale_y",
+     "tool_settings.texture_scale_y", "Scale Y", 0.1, 1.0},
+    {QuaderFaceTextureField::ShiftX, "shift_x",
+     "tool_settings.texture_shift_x", "Shift X", 1.0, 0.0},
+    {QuaderFaceTextureField::ShiftY, "shift_y",
+     "tool_settings.texture_shift_y", "Shift Y", 1.0, 0.0},
+    {QuaderFaceTextureField::Rotate, "rotate",
+     "tool_settings.texture_rotate", "Rotate (\xC2\xB0)", 1.0, 0.0},
+}};
+
 } // namespace
 
 /// Owns retained controls for the active tool's descriptor-driven settings.
@@ -331,6 +461,20 @@ struct QtToolSettingsPanel::Impl {
     std::optional<NumberDispatchLifecycle> pending_number_lifecycle;
     std::function<void(double)> number_dispatch;
     std::vector<ChoiceWidget> choices;
+  };
+
+  /// Retained input and pending gesture state; the modeling API owns face data.
+  struct TextureControlWidget {
+    QuaderFaceTextureField field = QuaderFaceTextureField::ScaleX;
+    QtTextureNumberSpinBox *spin = nullptr;
+    QLabel *label = nullptr;
+    QTimer *dispatch_timer = nullptr;
+    std::optional<double> pending_value;
+    std::optional<double> last_requested_value;
+    std::optional<QuaderFaceTextureRevision> gesture_revision;
+    std::uint64_t selection_token = 0;
+    std::string merge_key;
+    bool editing = false;
   };
 
   explicit Impl(QtToolSettingsPanel &panel) : panel_(panel) {
@@ -395,6 +539,11 @@ struct QtToolSettingsPanel::Impl {
     controls_layout_->setContentsMargins(8, 6, 8, 6);
     controls_layout_->setSpacing(6);
     content_layout->addWidget(settings_section_);
+    texture_section_ = new QtToolSettingsSection(
+        QStringLiteral("tool_settings.section.texture"), scroll_content);
+    build_texture_controls();
+    texture_section_->hide();
+    content_layout->addWidget(texture_section_);
     content_layout->addStretch(1);
     scroll_area_->setWidget(scroll_content);
     root_layout->addWidget(scroll_area_, 1);
@@ -481,16 +630,21 @@ struct QtToolSettingsPanel::Impl {
 
   void bind(QuaderEditorApi &editor) {
     discard_pending_number_dispatches();
+    discard_texture_dispatches();
     editor_ = &editor;
     last_target_.reset();
+    texture_revision_.reset();
+    texture_settings_.reset();
     refresh();
   }
 
   void unbind() {
     discard_pending_number_dispatches();
+    discard_texture_dispatches();
     editor_ = nullptr;
     last_target_.reset();
     present_inactive_target();
+    refresh_texture_settings();
   }
 
   void set_localization(const LocalizationService &localization) {
@@ -498,12 +652,14 @@ struct QtToolSettingsPanel::Impl {
     // Descriptor controls retain their visible text, so force a rebuild when
     // the selected locale changes instead of updating only the dock title.
     last_target_.reset();
+    texture_revision_.reset();
     refresh_localized_text();
     refresh();
   }
 
   void refresh() {
     refresh_localized_text();
+    refresh_texture_settings();
     if (editor_ == nullptr) {
       if (!inactive_presented_) {
         present_inactive_target();
@@ -528,11 +684,103 @@ struct QtToolSettingsPanel::Impl {
     last_target_ = target;
   }
 
+  void refresh_texture_settings(bool force = false) {
+    if (editor_ == nullptr) {
+      discard_texture_dispatches();
+      texture_settings_.reset();
+      texture_revision_.reset();
+      if (!texture_section_->isHidden()) {
+        texture_section_->hide();
+      }
+      return;
+    }
+
+    QuaderFaceTextureRevision revision =
+        editor_->modeling().face_texture_settings_revision();
+    // Do not query selected faces, allocate descriptions, or touch Qt controls
+    // on an unchanged viewport frame.
+    if (!force && texture_revision_.has_value() &&
+        *texture_revision_ == revision) {
+      return;
+    }
+    QuaderFaceTextureSettings settings =
+        editor_->modeling().face_texture_settings();
+    // Initializing a new selection's rotation baseline can advance its context
+    // revision. Pending edits belong to the context returned by this query.
+    revision = editor_->modeling().face_texture_settings_revision();
+    const bool selection_changed =
+        !texture_settings_.has_value() ||
+        texture_settings_->selection_token != settings.selection_token;
+
+    texture_synchronizing_ = true;
+    for (TextureControlWidget &binding : texture_controls_) {
+      if (selection_changed ||
+          (binding.gesture_revision.has_value() &&
+           *binding.gesture_revision != revision)) {
+        discard_texture_dispatch(binding);
+      }
+    }
+    const bool visible = settings.selected_face_count > 0;
+    if (texture_section_->isHidden() == visible) {
+      texture_section_->setVisible(visible);
+    }
+
+    QString disabled_reason;
+    if (visible && !settings.editable) {
+      disabled_reason =
+          settings.block_reason == QuaderFaceTextureBlockReason::PreviewActive
+              ? localized_text(
+                    localization_, "tool_settings.texture_preview_active",
+                    "Finish or cancel the active preview to edit textures.")
+              : localized_text(
+                    localization_, "tool_settings.texture_target_unavailable",
+                    "The selected faces are unavailable, locked, hidden, or "
+                    "outside the instance edit scope.");
+    }
+    if (texture_disabled_reason_->text() != disabled_reason) {
+      texture_disabled_reason_->setText(disabled_reason);
+    }
+    if (texture_disabled_reason_->isHidden() == !disabled_reason.isEmpty()) {
+      texture_disabled_reason_->setVisible(!disabled_reason.isEmpty());
+    }
+
+    const bool single_face = settings.selected_face_count == 1;
+    const std::array<std::optional<double>, 5> values{
+        settings.scale_x, settings.scale_y,
+        single_face ? std::optional<double>(settings.shift_x) : std::nullopt,
+        single_face ? std::optional<double>(settings.shift_y) : std::nullopt,
+        settings.rotation_degrees};
+    for (std::size_t index = 0; index < texture_controls_.size(); ++index) {
+      TextureControlWidget &binding = texture_controls_[index];
+      const bool shift = binding.field == QuaderFaceTextureField::ShiftX ||
+                         binding.field == QuaderFaceTextureField::ShiftY;
+      const bool enabled = settings.editable && (!shift || single_face);
+      if (binding.spin->isEnabled() != enabled) {
+        binding.spin->setEnabled(enabled);
+      }
+      if (binding.label->isEnabled() != enabled) {
+        binding.label->setEnabled(enabled);
+      }
+      if (!binding.editing) {
+        binding.spin->present(values[index]);
+      }
+    }
+    texture_settings_ = std::move(settings);
+    texture_revision_ = revision;
+    texture_synchronizing_ = false;
+  }
+
   [[nodiscard]] bool has_active_target() const {
     return last_target_.has_value() && last_target_->active;
   }
 
   [[nodiscard]] bool numeric_interaction_active() const {
+    if (std::any_of(texture_controls_.begin(), texture_controls_.end(),
+                    [](const TextureControlWidget &binding) {
+                      return binding.editing || binding.pending_value.has_value();
+                    })) {
+      return true;
+    }
     return std::any_of(
         controls_.begin(), controls_.end(), [](const ControlWidget &binding) {
           return binding.pending_number_value.has_value() ||
@@ -542,6 +790,153 @@ struct QtToolSettingsPanel::Impl {
   }
 
 private:
+  void build_texture_controls() {
+    auto *layout = new QGridLayout(texture_section_->content());
+    layout->setContentsMargins(8, 6, 8, 6);
+    layout->setHorizontalSpacing(8);
+    layout->setVerticalSpacing(6);
+    layout->setColumnStretch(1, 1);
+    for (std::size_t index = 0; index < kTextureControls.size(); ++index) {
+      const TextureControlDescription &description = kTextureControls[index];
+      TextureControlWidget &binding = texture_controls_[index];
+      binding.field = description.field;
+      const QString name =
+          QStringLiteral("tool_settings.texture.%1").arg(qtext(description.id));
+      binding.label = new QLabel(texture_section_->content());
+      binding.label->setObjectName(name + QStringLiteral(".label"));
+      binding.label->setWordWrap(true);
+      binding.spin = new QtTextureNumberSpinBox(description.step_origin,
+                                               texture_section_->content());
+      binding.spin->setObjectName(name);
+      binding.spin->setSingleStep(description.step);
+      binding.label->setBuddy(binding.spin);
+      layout->addWidget(binding.label, static_cast<int>(index), 0);
+      layout->addWidget(binding.spin, static_cast<int>(index), 1);
+      binding.dispatch_timer = new QTimer(binding.spin);
+      binding.dispatch_timer->setSingleShot(true);
+      binding.dispatch_timer->setInterval(kNumberDispatchIntervalMs);
+      QObject::connect(binding.dispatch_timer, &QTimer::timeout, &panel_,
+                       [this, index]() { flush_texture_dispatch(index); });
+      binding.spin->edited = [this, index](std::optional<double> value) {
+        queue_texture_dispatch(index, value);
+      };
+      QObject::connect(binding.spin, &QDoubleSpinBox::editingFinished, &panel_,
+                       [this, index]() {
+                         if (texture_synchronizing_) {
+                           return;
+                         }
+                         flush_texture_dispatch(index);
+                         discard_texture_dispatch(texture_controls_[index]);
+                         refresh_texture_settings(true);
+                       });
+    }
+    texture_disabled_reason_ = new QLabel(texture_section_->content());
+    texture_disabled_reason_->setObjectName(
+        QStringLiteral("tool_settings.texture.disabled_reason"));
+    texture_disabled_reason_->setWordWrap(true);
+    texture_disabled_reason_->hide();
+    layout->addWidget(texture_disabled_reason_,
+                      static_cast<int>(kTextureControls.size()), 0, 1, 2);
+  }
+
+  void queue_texture_dispatch(std::size_t index, std::optional<double> value) {
+    if (editor_ == nullptr || texture_synchronizing_ ||
+        !texture_settings_.has_value() || !texture_settings_->editable ||
+        !texture_revision_.has_value()) {
+      return;
+    }
+    TextureControlWidget &binding = texture_controls_[index];
+    if (!binding.spin->isEnabled()) {
+      return;
+    }
+    binding.editing = true;
+    if (!binding.gesture_revision.has_value()) {
+      binding.gesture_revision = *texture_revision_;
+      binding.selection_token = texture_settings_->selection_token;
+      binding.merge_key = next_texture_edit_merge_key();
+    }
+    const bool scale = binding.field == QuaderFaceTextureField::ScaleX ||
+                       binding.field == QuaderFaceTextureField::ScaleY;
+    if (!value.has_value() || !std::isfinite(*value) ||
+        (scale && *value == 0.0)) {
+      binding.pending_value.reset();
+      binding.last_requested_value.reset();
+      binding.dispatch_timer->stop();
+      return;
+    }
+    if (binding.last_requested_value == value) {
+      return;
+    }
+    binding.last_requested_value = value;
+    binding.pending_value = value;
+    binding.dispatch_timer->start();
+  }
+
+  void flush_texture_dispatch(std::size_t index) {
+    TextureControlWidget &binding = texture_controls_[index];
+    if (!binding.pending_value.has_value()) {
+      return;
+    }
+    binding.dispatch_timer->stop();
+    if (editor_ == nullptr || !binding.gesture_revision.has_value() ||
+        editor_->modeling().face_texture_settings_revision() !=
+            *binding.gesture_revision) {
+      discard_texture_dispatch(binding);
+      schedule_texture_refresh();
+      return;
+    }
+    const QuaderFaceTextureRevision previous_revision =
+        *binding.gesture_revision;
+    const double value = *binding.pending_value;
+    binding.pending_value.reset();
+    const QuaderApiVoidResult result =
+        editor_->modeling().set_face_texture_setting(
+            QuaderFaceTextureEdit{.field = binding.field,
+                                  .value = value,
+                                  .selection_token = binding.selection_token,
+                                  .merge_key = binding.merge_key});
+    log_failure("Face texture settings update", result);
+    if (result.ok()) {
+      const QuaderFaceTextureRevision revision =
+          editor_->modeling().face_texture_settings_revision();
+      for (TextureControlWidget &other : texture_controls_) {
+        if (other.gesture_revision == previous_revision) {
+          other.gesture_revision = revision;
+        }
+      }
+    } else {
+      discard_texture_dispatch(binding);
+    }
+    schedule_texture_refresh();
+  }
+
+  void discard_texture_dispatch(TextureControlWidget &binding) {
+    binding.dispatch_timer->stop();
+    binding.pending_value.reset();
+    binding.last_requested_value.reset();
+    binding.gesture_revision.reset();
+    binding.selection_token = 0;
+    binding.merge_key.clear();
+    binding.editing = false;
+  }
+
+  void discard_texture_dispatches() {
+    for (TextureControlWidget &binding : texture_controls_) {
+      discard_texture_dispatch(binding);
+    }
+  }
+
+  void schedule_texture_refresh() {
+    if (texture_refresh_scheduled_) {
+      return;
+    }
+    texture_refresh_scheduled_ = true;
+    QTimer::singleShot(0, &panel_, [this]() {
+      texture_refresh_scheduled_ = false;
+      refresh_texture_settings();
+    });
+  }
+
   void schedule_refresh() {
     if (refresh_scheduled_) {
       return;
@@ -715,6 +1110,21 @@ private:
         localization_, "tool_settings.section.description", "Description"));
     settings_section_->set_title(localized_text(
         localization_, "tool_settings.section.settings", "Settings"));
+    texture_section_->set_title(localized_text(
+        localization_, "tool_settings.texture_section", "Texture Settings"));
+    for (std::size_t index = 0; index < kTextureControls.size(); ++index) {
+      const TextureControlDescription &description = kTextureControls[index];
+      TextureControlWidget &binding = texture_controls_[index];
+      const QString label = localized_text(localization_,
+                                            description.localization_key,
+                                            description.fallback);
+      if (binding.label->text() != label) {
+        binding.label->setText(label);
+      }
+      if (binding.spin->accessibleName() != label) {
+        binding.spin->setAccessibleName(label);
+      }
+    }
     reset_button_->setText(localized_text(
         localization_, "tool_settings.reset_defaults",
         "Reset to Tool Defaults"));
@@ -1256,6 +1666,8 @@ private:
   QtToolSettingsSection *description_section_ = nullptr;
   QLabel *description_label_ = nullptr;
   QtToolSettingsSection *settings_section_ = nullptr;
+  QtToolSettingsSection *texture_section_ = nullptr;
+  QLabel *texture_disabled_reason_ = nullptr;
   QWidget *controls_container_ = nullptr;
   QVBoxLayout *controls_layout_ = nullptr;
   QLabel *empty_settings_label_ = nullptr;
@@ -1265,10 +1677,15 @@ private:
   QPushButton *apply_button_ = nullptr;
   QPushButton *cancel_button_ = nullptr;
   std::vector<ControlWidget> controls_;
+  std::array<TextureControlWidget, 5> texture_controls_;
+  std::optional<QuaderFaceTextureSettings> texture_settings_;
+  std::optional<QuaderFaceTextureRevision> texture_revision_;
   std::optional<QuaderToolSettingsTarget> last_target_;
   bool synchronizing_ = false;
   bool refresh_scheduled_ = false;
   bool inactive_presented_ = false;
+  bool texture_synchronizing_ = false;
+  bool texture_refresh_scheduled_ = false;
 };
 
 QtToolSettingsPanel::QtToolSettingsPanel(QWidget *parent)
@@ -1289,6 +1706,10 @@ void QtToolSettingsPanel::set_localization(
 }
 
 void QtToolSettingsPanel::refresh() { impl_->refresh(); }
+
+void QtToolSettingsPanel::refresh_texture_settings() {
+  impl_->refresh_texture_settings();
+}
 
 bool QtToolSettingsPanel::has_active_target() const {
   return impl_->has_active_target();

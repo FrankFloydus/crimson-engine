@@ -913,6 +913,7 @@ OperationResult bevel_selected_edges_impl(Document& document, Selection& selecti
       std::vector<ElementId> profile_vertices;
       std::uint32_t material_slot = 0;
       quader::QVec3 expected_normal;
+      FaceTextureTransform texture_transform{};
     };
     std::vector<EdgeBevelTerminalCornerPatch> terminal_corner_patches;
     const auto append_patch_miter_face_arc = [&patch_miter_face_arcs_by_vertex](
@@ -1072,6 +1073,7 @@ OperationResult bevel_selected_edges_impl(Document& document, Selection& selecti
                                   terminal_profile->second,
                                   face.material_slot,
                                   face_normal(document, face),
+                                  face.texture_transform,
                               });
                             }
                         } else if ((terminal_vertex || selected_open_corner_vertex) &&
@@ -1328,7 +1330,8 @@ OperationResult bevel_selected_edges_impl(Document& document, Selection& selecti
                             candidate, bevel_faces, generated_face_ids,
                             {cap_vertex_id, profile->second[profile_index],
                              profile->second[profile_index + 1U]},
-                            build.sides[0].material_slot, expected_normal);
+                            build.sides[0].material_slot, expected_normal,
+                            build.sides[0].texture_transform);
                       }
                       continue;
                     }
@@ -1348,7 +1351,8 @@ OperationResult bevel_selected_edges_impl(Document& document, Selection& selecti
                     generated_face_ids,
                     { *support_vertex_id, profile->second[profile_index], profile->second[profile_index + 1U] },
                     build.sides[0].material_slot,
-                    expected_normal);
+                    expected_normal,
+                    build.sides[0].texture_transform);
             }
         }
     }
@@ -1414,7 +1418,8 @@ OperationResult bevel_selected_edges_impl(Document& document, Selection& selecti
             generated_face_ids,
             patch_loop,
             patch.material_slot,
-            patch.expected_normal);
+            patch.expected_normal,
+            patch.texture_transform);
     }
 
     for (const EdgeBevelBuild& build : builds) {
@@ -1443,7 +1448,8 @@ OperationResult bevel_selected_edges_impl(Document& document, Selection& selecti
                     generated_face_ids,
                     { first[0], first[1], second[1], second[0] },
                     build.sides[0].material_slot,
-                    strip_normal)) {
+                    strip_normal,
+                    build.sides[0].texture_transform)) {
                 continue;
             }
         }
@@ -1467,7 +1473,8 @@ OperationResult bevel_selected_edges_impl(Document& document, Selection& selecti
                         generated_face_ids,
                         { build.edge.a, first[0], second[0] },
                         build.sides[0].material_slot,
-                        edge_direction * -1.0F)) {
+                        edge_direction * -1.0F,
+                        build.sides[0].texture_transform)) {
                     continue;
                 }
                 if (!edge_b_fully_selected && edge_b_terminal &&
@@ -1478,7 +1485,8 @@ OperationResult bevel_selected_edges_impl(Document& document, Selection& selecti
                         generated_face_ids,
                         { build.edge.b, second[1], first[1] },
                         build.sides[0].material_slot,
-                        edge_direction)) {
+                        edge_direction,
+                        build.sides[0].texture_transform)) {
                     continue;
                 }
             }
@@ -1585,7 +1593,8 @@ OperationResult bevel_selected_edges_impl(Document& document, Selection& selecti
                             generated_face_ids,
                             support_face,
                             face.material_slot,
-                            face_normal(document, face))) {
+                            face_normal(document, face),
+                            face.texture_transform)) {
                         record_support_face_edges(support_face);
                     }
                 }
@@ -1651,9 +1660,11 @@ OperationResult bevel_selected_edges_impl(Document& document, Selection& selecti
         }
 
         std::uint32_t material_slot = 0;
+        FaceTextureTransform texture_transform{};
         if (const auto offsets = offsets_by_vertex.find(vertex_id); offsets != offsets_by_vertex.end() && !offsets->second.empty()) {
             if (const Face* face = find_face(document, offsets->second.front().source_face_id)) {
                 material_slot = face->material_slot;
+                texture_transform = face->texture_transform;
             }
         }
 
@@ -1665,7 +1676,8 @@ OperationResult bevel_selected_edges_impl(Document& document, Selection& selecti
             const quader::QVec3 patch_centroid = face_centroid(candidate, patch_face);
             expected_normal = fully_selected ? source_vertex->position - patch_centroid : patch_centroid - source_vertex->position;
         }
-        if (settings.segments > 1 &&
+        const std::size_t first_patch_face = bevel_faces.size();
+        const bool vmesh_appended = settings.segments > 1 &&
             append_edge_bevel_vmesh_corner_patch_faces(
                 candidate,
                 bevel_faces,
@@ -1676,10 +1688,9 @@ OperationResult bevel_selected_edges_impl(Document& document, Selection& selecti
                 expected_normal,
                 settings.segments,
                 settings.profile,
-                settings.profile_type)) {
-            continue;
-        }
-        if (!append_edge_bevel_corner_patch_faces(
+                settings.profile_type);
+        if (!vmesh_appended) {
+            [[maybe_unused]] const bool patch_appended = append_edge_bevel_corner_patch_faces(
                 candidate,
                 bevel_faces,
                 generated_face_ids,
@@ -1690,8 +1701,10 @@ OperationResult bevel_selected_edges_impl(Document& document, Selection& selecti
                 expected_normal,
                 settings.segments,
                 settings.profile,
-                settings.profile_type)) {
-            continue;
+                settings.profile_type);
+        }
+        for (std::size_t index = first_patch_face; index < bevel_faces.size(); ++index) {
+            bevel_faces[index].texture_transform = texture_transform;
         }
     }
 
@@ -1745,9 +1758,11 @@ OperationResult bevel_selected_edges_impl(Document& document, Selection& selecti
             }
 
             std::uint32_t material_slot = 0;
+            FaceTextureTransform texture_transform{};
             for (const EdgeBevelBuild& build : builds) {
                 if (build.edge.a == source_vertex_id || build.edge.b == source_vertex_id) {
                     material_slot = build.sides[0].material_slot;
+                    texture_transform = build.sides[0].texture_transform;
                     break;
                 }
             }
@@ -1773,7 +1788,8 @@ OperationResult bevel_selected_edges_impl(Document& document, Selection& selecti
                     generated_face_ids,
                     loop,
                     material_slot,
-                    expected_normal)) {
+                    expected_normal,
+                    texture_transform)) {
                 return false;
             }
             record_patch_face_edges(loop);

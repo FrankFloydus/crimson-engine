@@ -37,6 +37,7 @@ enum class PolygonDocumentDiagnosticCode {
   InvalidHardNormalEdge,
   UnreferencedVertex,
   TriangulationFailure,
+  InvalidFaceTextureTransform,
 };
 
 /**

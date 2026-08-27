@@ -51,6 +51,7 @@ struct OpenBridgeEdgeInfo {
     std::pair<ElementId, ElementId> oriented_face_edge;
     quader::QVec3 face_normal;
     std::uint32_t material_slot = 0;
+    FaceTextureTransform texture_transform{};
 };
 
 /**
@@ -84,6 +85,7 @@ struct FaceIslandBoundary {
     std::uint32_t material_slot = 0;
     bool has_material_slot = false;
     bool all_open = false;
+    FaceTextureTransform texture_transform{};
 };
 
 } // namespace quader_poly::document_internal

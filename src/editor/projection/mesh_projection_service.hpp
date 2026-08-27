@@ -20,6 +20,9 @@ namespace quader {
  */
 class MeshProjectionService final {
 public:
+  /** Converts a native affine sampling matrix to the neutral modeling form. */
+  [[nodiscard]] static quader_poly::Transform3
+  texture_mapping_transform(const QMat4 &matrix);
   [[nodiscard]] static MeshAsset
   mesh_asset_from_compiled_mesh(const quader_poly::CompiledMesh &compiled);
   [[nodiscard]] static MeshAsset
@@ -42,6 +45,14 @@ public:
   update_sdk_document_mesh_positions(
       const quader::modeling::PolygonDocument &document,
       const MeshAsset &current);
+  /** Bakes occurrence sampling into a detached export-only compiled payload. */
+  static void apply_mesh_texture_mapping(MeshAsset &mesh,
+                                        const QMat4 &sampling_from_local);
+  /** Reconstructs missing charts for legacy compiled-only geometry. */
+  [[nodiscard]] static bool initialize_compiled_texture_mapping(MeshAsset &mesh);
+  /** Bakes placement sampling into base UVs while preserving face settings. */
+  [[nodiscard]] static bool bake_polygon_texture_mapping(
+      quader_poly::Document &document, const QMat4 &sampling_from_local);
 };
 
 } // namespace quader

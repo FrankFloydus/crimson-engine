@@ -86,6 +86,7 @@ const std::array<ViewportSettingsSectionDescriptor, kViewportSettingsSectionCoun
         {ViewportSettingsSectionId::Vertices, "Vertices", false},
         {ViewportSettingsSectionId::Picking, "Picking", false},
         {ViewportSettingsSectionId::Gizmo, "Gizmo", false},
+        {ViewportSettingsSectionId::Texturing, "Texturing", false},
 }};
 
 const std::array<ViewportColorSettingDescriptor, kViewportColorSettingCount> kColorSettings{{
@@ -154,6 +155,8 @@ const std::array<ViewportBoolSettingDescriptor, kViewportBoolSettingCount> kBool
         {ViewportBoolSettingId::VertexSnap, ViewportSettingsSectionId::Picking, "Vertex Snap", key("VertexSnap"), true},
         {ViewportBoolSettingId::RotationSnap, ViewportSettingsSectionId::Grid, "Rotation Snap", key("RotationSnap"), true},
         {ViewportBoolSettingId::BackfaceSelection, ViewportSettingsSectionId::Selection, "Backface Selection", key("BackfaceSelection"), false},
+        {ViewportBoolSettingId::TextureLock, ViewportSettingsSectionId::Texturing, "Texture Lock", key("TextureLock"), true},
+        {ViewportBoolSettingId::TextureLockScale, ViewportSettingsSectionId::Texturing, "Texture Lock Scale", key("TextureLockScale"), false},
 }};
 
 std::string full_key(std::string_view suffix) {

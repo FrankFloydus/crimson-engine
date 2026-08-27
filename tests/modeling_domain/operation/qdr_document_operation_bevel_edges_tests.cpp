@@ -797,6 +797,10 @@ TEST(QdrDocumentOperationBevelEdgesTests, TopEdgeLoopBevelSharesSegmentedCornerC
     spec.depth = 128.0F;
 
     Document document = make_cube(spec);
+    const FaceTextureTransform texture{{2.0F, -0.5F}, {0.25F, 0.75F}, 55.0F};
+    for (Face& face : document.faces) {
+        face.texture_transform = texture;
+    }
     Selection selection = top_face_loop_selection(document);
 
     EdgeBevelSettings settings;
@@ -812,6 +816,9 @@ TEST(QdrDocumentOperationBevelEdgesTests, TopEdgeLoopBevelSharesSegmentedCornerC
     qdr_test::expect_valid_polygon_document_after_success(document, result);
     EXPECT_TRUE(document.vertices.size() == 48U);
     EXPECT_TRUE(document.faces.size() == 46U);
+    for (const Face& face : document.faces) {
+        EXPECT_EQ(face.texture_transform, texture);
+    }
     EXPECT_TRUE(std::all_of(document.faces.begin(), document.faces.end(), [](const Face& face) {
         return face.vertices.size() == 4U;
     }));

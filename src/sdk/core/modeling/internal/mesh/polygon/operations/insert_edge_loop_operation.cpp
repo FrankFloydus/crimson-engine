@@ -107,6 +107,7 @@ OperationResult InsertEdgeLoopOperation::apply(Document& document, Selection& se
         first_split_face.id = face->id;
         first_split_face.vertices = { face->vertices[i1], face->vertices[i2], opposite_vertex, entry_vertex };
         first_split_face.material_slot = face->material_slot;
+        first_split_face.texture_transform = face->texture_transform;
         first_split_face.uvs.clear();
         split_faces.push_back(std::move(first_split_face));
 
@@ -114,6 +115,7 @@ OperationResult InsertEdgeLoopOperation::apply(Document& document, Selection& se
         second_split_face.id = candidate.next_face_id++;
         second_split_face.vertices = { face->vertices[i0], entry_vertex, opposite_vertex, face->vertices[i3] };
         second_split_face.material_slot = face->material_slot;
+        second_split_face.texture_transform = face->texture_transform;
         second_split_face.uvs.clear();
         split_faces.push_back(std::move(second_split_face));
         inserted_edges.push_back(make_edge(entry_vertex, opposite_vertex));

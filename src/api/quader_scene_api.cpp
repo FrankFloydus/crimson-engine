@@ -5,6 +5,7 @@
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
 #include "api/quader_scene_api.hpp"
+#include "editor/history/scene_transform_preview_transaction.hpp"
 #include "api/quader_api_session_internal_access.hpp"
 
 #include "api/quader_api_type_conversions.hpp"
@@ -299,6 +300,12 @@ QuaderApiVoidResult QuaderSceneApi::set_transforms(
       session.document_commands().set_transforms(
           to_document_transform_edits(session, edits)),
       "Set Transform");
+}
+
+QuaderApiVoidResult QuaderSceneApi::commit_transform_preview(
+    SceneTransformPreviewTransaction &preview, const std::string &label) {
+  return mutations_.run_document_result(
+      preview.commit(scene_session(session_).history()), label);
 }
 
 QuaderApiVoidResult QuaderSceneApi::set_visible(EntityId entity, bool visible) {

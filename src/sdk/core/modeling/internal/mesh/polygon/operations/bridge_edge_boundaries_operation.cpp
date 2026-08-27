@@ -184,6 +184,7 @@ OperationResult bridge_edge_boundaries_impl(
     std::vector<quader::QVec3> first_outwards(vertex_count);
     std::vector<quader::QVec3> second_outwards(vertex_count);
     std::vector<std::uint32_t> material_slots(edge_count, 0U);
+    std::vector<FaceTextureTransform> texture_transforms(edge_count);
     std::set<std::pair<ElementId, ElementId>> used_edges;
 
     auto append_outward = [](std::vector<quader::QVec3>& outwards, std::size_t index, quader::QVec3 outward) {
@@ -224,6 +225,7 @@ OperationResult bridge_edge_boundaries_impl(
         append_outward(second_outwards, edge_index, second_outward);
         append_outward(second_outwards, next_index, second_outward);
         material_slots[edge_index] = first_info->material_slot;
+        texture_transforms[edge_index] = first_info->texture_transform;
     }
 
     for (quader::QVec3& outward : first_outwards) {
@@ -267,7 +269,7 @@ OperationResult bridge_edge_boundaries_impl(
             Face expected_face;
             expected_face.vertices = quad;
             const quader::QVec3 expected_normal = face_normal(candidate, expected_face);
-            if (!append_bridge_face(candidate, std::move(quad), material_slots[edge_index], expected_normal, bridge_face_ids)) {
+            if (!append_bridge_face(candidate, std::move(quad), material_slots[edge_index], expected_normal, bridge_face_ids, texture_transforms[edge_index])) {
                 return { false, "Bridge could not create a valid stepped boundary face." };
             }
         }

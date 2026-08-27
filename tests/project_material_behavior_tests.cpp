@@ -8,6 +8,7 @@
 #include "api/quader_polygon_document_internal_access.hpp"
 #include "assets/default_material_catalog.hpp"
 #include "editor/material/project_material_persistence.hpp"
+#include "editor/material/project_material_texture_snapshot.hpp"
 #include "editor/modeling/modeling_types.hpp"
 #include "editor/session/project_session.hpp"
 #include "io/project/project_manifest.hpp"
@@ -33,6 +34,8 @@
 #include <utility>
 #include <vector>
 
+#include <QCoreApplication>
+#include <QImage>
 #include <QString>
 
 namespace quader {
@@ -100,6 +103,12 @@ void write_bytes(const std::filesystem::path &path,
 
 void write_text(const std::filesystem::path &path, std::string_view text) {
   write_bytes(path, std::as_bytes(std::span(text.data(), text.size())));
+}
+
+void write_texture_png(const std::filesystem::path &path, int width, int height) {
+  QImage image(width, height, QImage::Format_RGBA8888);
+  image.fill(0xffb47828u);
+  ASSERT_TRUE(image.save(QString::fromStdWString(path.wstring()), "PNG"));
 }
 
 std::vector<std::filesystem::path>
@@ -329,6 +338,28 @@ const quader_poly::Document *authored_document(ProjectSession &project,
     return nullptr;
   }
   return mesh->authored_polygon_document.get();
+}
+
+quader_poly::FaceTextureTransform face_texture_transform(
+    ProjectSession &project, EntityId entity, quader_poly::ElementId face_id) {
+  const quader_poly::Document *document = authored_document(project, entity);
+  EXPECT_NE(document, nullptr);
+  const quader_poly::Face *face =
+      document != nullptr ? quader_poly::find_face(*document, face_id) : nullptr;
+  EXPECT_NE(face, nullptr);
+  return face != nullptr ? face->texture_transform
+                         : quader_poly::FaceTextureTransform{};
+}
+
+QuaderApiVoidResult edit_selected_face_texture(
+    QuaderEditorApi &editor, QuaderFaceTextureField field, double value) {
+  const QuaderFaceTextureSettings settings =
+      editor.modeling().face_texture_settings();
+  return editor.modeling().set_face_texture_setting({
+      .field = field,
+      .value = value,
+      .selection_token = settings.selection_token,
+  });
 }
 
 void expect_primary_material(ProjectSession &project, EntityId entity,
@@ -1186,6 +1217,203 @@ TEST(ProjectMaterialBehaviorTests,
   const QuaderApiVoidResult applied =
       harness.editor().commands().execute(quader_command::kApplyMaterial);
   EXPECT_TRUE(applied.ok()) << applied.error_message();
+}
+
+TEST(ProjectMaterialBehaviorTests,
+     FaceTexturePixelShiftUsesImageAxesAndPreservesMappingOnReplacement) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-texture-shift-test";
+  char *argv[] = {application_name, nullptr};
+  QCoreApplication application(argc, argv);
+  QCoreApplication::addLibraryPath(QCoreApplication::applicationDirPath());
+  ProjectMaterialBehaviorHarness harness("face-texture-pixel-shift");
+  harness.create();
+  const InstalledMaterial untextured{
+      .path = project_path("Materials/untextured.qmat"),
+      .material = project_material(kBlueMaterialId, "Untextured",
+                                   {0.1f, 0.25f, 1.0f}),
+  };
+  const std::array installed{untextured};
+  harness.install_and_reopen(installed);
+  const std::filesystem::path wide_source = harness.root() / "wide.png";
+  const std::filesystem::path replacement_source = harness.root() / "replacement.png";
+  write_texture_png(wide_source, 128, 32);
+  write_texture_png(replacement_source, 256, 96);
+  const std::array sources{wide_source, replacement_source};
+  const auto imported =
+      harness.editor().project_assets().import_textures_as_materials(sources);
+  ASSERT_TRUE(imported.ok()) << imported.error_message();
+  ASSERT_EQ(imported.value().imported.size(), 2u);
+  ASSERT_TRUE(imported.value().failed.empty());
+  const ProjectAssetId wide = imported.value().imported[0].material.id;
+  const ProjectAssetId replacement = imported.value().imported[1].material.id;
+  ASSERT_TRUE(harness.editor().project_assets().set_active_material(wide).ok());
+  const auto box = harness.editor().modeling().create_box(
+      {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
+      "Pixel Shift Face");
+  ASSERT_TRUE(box.ok()) << box.error_message();
+  const quader_poly::Document *initial =
+      authored_document(harness.project(), box.value().entity);
+  ASSERT_NE(initial, nullptr);
+  ASSERT_FALSE(initial->faces.empty());
+  const quader_poly::ElementId face_id = initial->faces.front().id;
+  ASSERT_TRUE(harness.editor().selection().set_mode(QuaderSelectionMode::Face).ok());
+  ASSERT_TRUE(harness.editor().selection().select_face(box.value(), face_id).ok());
+  ASSERT_TRUE(edit_selected_face_texture(
+                  harness.editor(), QuaderFaceTextureField::ShiftX, 32).ok());
+  ASSERT_TRUE(edit_selected_face_texture(
+                  harness.editor(), QuaderFaceTextureField::ShiftY, -8).ok());
+  const auto original =
+      face_texture_transform(harness.project(), box.value().entity, face_id);
+  EXPECT_FLOAT_EQ(original.shift_uv.x, 0.25f);
+  EXPECT_FLOAT_EQ(original.shift_uv.y, -0.25f);
+  auto settings = harness.editor().modeling().face_texture_settings();
+  EXPECT_DOUBLE_EQ(settings.shift_x, 32);
+  EXPECT_DOUBLE_EQ(settings.shift_y, -8);
+
+  ASSERT_TRUE(harness.editor().materials().replace_material_references(
+                  QuaderMaterialReference::project(wide),
+                  QuaderMaterialReference::project(replacement),
+                  QuaderMaterialUsageScope::Selection).changed());
+  EXPECT_EQ(face_texture_transform(harness.project(), box.value().entity, face_id),
+            original);
+  settings = harness.editor().modeling().face_texture_settings();
+  EXPECT_DOUBLE_EQ(settings.shift_x, 64);
+  EXPECT_DOUBLE_EQ(settings.shift_y, -24);
+  ASSERT_TRUE(harness.editor().history().undo().ok());
+  settings = harness.editor().modeling().face_texture_settings();
+  EXPECT_DOUBLE_EQ(settings.shift_x, 32);
+  EXPECT_DOUBLE_EQ(settings.shift_y, -8);
+  ASSERT_TRUE(harness.editor().history().redo().ok());
+  EXPECT_EQ(face_texture_transform(harness.project(), box.value().entity, face_id),
+            original);
+
+  ASSERT_TRUE(harness.editor().materials().replace_material_references(
+                  QuaderMaterialReference::project(replacement),
+                  QuaderMaterialReference::project(untextured.material.id),
+                  QuaderMaterialUsageScope::Selection).changed());
+  EXPECT_EQ(harness.project().material_texture_image(
+                untextured.material.id, StandardMaterialTextureSlot::Albedo),
+            nullptr);
+  EXPECT_EQ(face_texture_transform(harness.project(), box.value().entity, face_id),
+            original);
+  settings = harness.editor().modeling().face_texture_settings();
+  EXPECT_DOUBLE_EQ(settings.shift_x, 16);
+  EXPECT_DOUBLE_EQ(settings.shift_y, -16);
+  ASSERT_TRUE(edit_selected_face_texture(
+                  harness.editor(), QuaderFaceTextureField::ShiftX, 8).ok());
+  ASSERT_TRUE(edit_selected_face_texture(
+                  harness.editor(), QuaderFaceTextureField::ShiftY, -4).ok());
+  const auto fallback =
+      face_texture_transform(harness.project(), box.value().entity, face_id);
+  EXPECT_FLOAT_EQ(fallback.shift_uv.x, 0.125f);
+  EXPECT_FLOAT_EQ(fallback.shift_uv.y, -0.0625f);
+}
+
+TEST(ProjectMaterialBehaviorTests,
+     TextureImagesShareImmutableSnapshotsAndRefreshAfterMaterialSaveAndReopen) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-texture-cache-test";
+  char *argv[] = {application_name, nullptr};
+  QCoreApplication application(argc, argv);
+  QCoreApplication::addLibraryPath(QCoreApplication::applicationDirPath());
+  ProjectMaterialBehaviorHarness harness("shared-texture-snapshot");
+  harness.create();
+  const std::filesystem::path source = harness.root() / "original.png";
+  const std::filesystem::path replacement_source = harness.root() / "larger.png";
+  write_texture_png(source, 128, 32);
+  write_texture_png(replacement_source, 256, 96);
+  const std::array sources{source};
+  const auto imported =
+      harness.editor().project_assets().import_textures_as_materials(sources);
+  ASSERT_TRUE(imported.ok()) << imported.error_message();
+  ASSERT_EQ(imported.value().imported.size(), 1u);
+  const ProjectAssetId material = imported.value().imported.front().material.id;
+  const auto first = harness.project().material_texture_image(
+      material, StandardMaterialTextureSlot::Albedo);
+  ASSERT_NE(first, nullptr);
+  EXPECT_EQ(first->width, 128u);
+  EXPECT_EQ(first->height, 32u);
+  ASSERT_NE(first->encoded, nullptr);
+  ASSERT_NE(first->decoded, nullptr);
+  EXPECT_FALSE(first->encoded->empty());
+  EXPECT_EQ(first->decoded->size(), 128u * 32u * 4u);
+  EXPECT_NE(first->content_revision, 0u);
+
+  ASSERT_TRUE(harness.editor().project_assets().set_active_material(material).ok());
+  const auto box = harness.editor().modeling().create_box(
+      {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
+      "Texture Cache Face");
+  ASSERT_TRUE(box.ok()) << box.error_message();
+  const quader_poly::Document *document =
+      authored_document(harness.project(), box.value().entity);
+  ASSERT_NE(document, nullptr);
+  ASSERT_FALSE(document->faces.empty());
+  const quader_poly::ElementId face_id = document->faces.front().id;
+  ASSERT_TRUE(harness.editor().selection().set_mode(QuaderSelectionMode::Face).ok());
+  ASSERT_TRUE(harness.editor().selection().select_face(box.value(), face_id).ok());
+  ASSERT_TRUE(edit_selected_face_texture(
+                  harness.editor(), QuaderFaceTextureField::ShiftX, 32).ok());
+  ASSERT_TRUE(edit_selected_face_texture(
+                  harness.editor(), QuaderFaceTextureField::ShiftY, -8).ok());
+  const auto mapping =
+      face_texture_transform(harness.project(), box.value().entity, face_id);
+  const auto scene = harness.editor().scene_documents().active_scene_id();
+  ASSERT_TRUE(scene.has_value());
+  ASSERT_TRUE(harness.editor().scene_documents().save_as(
+                  *scene, project_path("Scenes/texture_cache.qdr")).ok());
+  const auto texture_revision = harness.project().material_texture_revision();
+  const auto face_revision = harness.editor().modeling().face_texture_settings_revision();
+  const auto history = harness.editor().query().history();
+  const bool dirty = harness.editor().project().dirty();
+  for (int frame = 0; frame < 64; ++frame) {
+    EXPECT_EQ(harness.project().material_texture_image(
+                  material, StandardMaterialTextureSlot::Albedo), first);
+    const auto settings = harness.editor().modeling().face_texture_settings();
+    EXPECT_DOUBLE_EQ(settings.shift_x, 32);
+    EXPECT_DOUBLE_EQ(settings.shift_y, -8);
+  }
+  EXPECT_EQ(harness.project().material_texture_revision(), texture_revision);
+  EXPECT_EQ(harness.editor().modeling().face_texture_settings_revision(), face_revision);
+  expect_same_history(harness.editor().query().history(), history);
+  EXPECT_EQ(harness.editor().project().dirty(), dirty);
+
+  auto &material_editor = harness.editor().standard_material_documents();
+  ASSERT_TRUE(material_editor.open(material).ok());
+  ASSERT_TRUE(material_editor.import_texture(
+                  QuaderStandardMaterialTextureSlot::Albedo, replacement_source).ok());
+  ASSERT_TRUE(material_editor.save().ok());
+  EXPECT_GT(harness.project().material_texture_revision(), texture_revision);
+  const auto updated = harness.project().material_texture_image(
+      material, StandardMaterialTextureSlot::Albedo);
+  ASSERT_NE(updated, nullptr);
+  EXPECT_NE(updated, first);
+  EXPECT_EQ(updated->width, 256u);
+  EXPECT_EQ(updated->height, 96u);
+  EXPECT_EQ(first->width, 128u);
+  EXPECT_EQ(first->height, 32u);
+  EXPECT_EQ(first->decoded->size(), 128u * 32u * 4u);
+  const auto settings = harness.editor().modeling().face_texture_settings();
+  EXPECT_DOUBLE_EQ(settings.shift_x, 64);
+  EXPECT_DOUBLE_EQ(settings.shift_y, -24);
+  EXPECT_EQ(face_texture_transform(harness.project(), box.value().entity, face_id), mapping);
+  const auto updated_revision = harness.project().material_texture_revision();
+
+  ASSERT_TRUE(harness.editor().project().close().ok());
+  EXPECT_EQ(harness.project().material_texture_image(
+                material, StandardMaterialTextureSlot::Albedo), nullptr);
+  ASSERT_TRUE(harness.editor().project().open(harness.manifest_path()).ok());
+  EXPECT_GT(harness.project().material_texture_revision(), updated_revision);
+  const auto reopened = harness.project().material_texture_image(
+      material, StandardMaterialTextureSlot::Albedo);
+  ASSERT_NE(reopened, nullptr);
+  EXPECT_NE(reopened, updated);
+  EXPECT_EQ(reopened->width, 256u);
+  EXPECT_EQ(reopened->height, 96u);
+  EXPECT_EQ(harness.project().material_texture_image(
+                material, StandardMaterialTextureSlot::Albedo), reopened);
 }
 
 TEST(ProjectMaterialBehaviorTests,

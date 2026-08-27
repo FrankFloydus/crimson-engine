@@ -10,12 +10,15 @@
 #include "editor/input/quader_keybinding_service.hpp"
 #include "editor/input/viewport_keybinding_resolver.hpp"
 #include "editor/input/viewport_input_binding_adapter.hpp"
+#include "math/glm_bridge.hpp"
 #include "editor/viewport/quader_viewport_api_runtime_access.hpp"
 #include "support/behavior_scenario.hpp"
+#include "support/command_observable_state.hpp"
 #include "ui/viewport_shortcut_controller.hpp"
 #include "viewport/host_viewport_contract_adapter.hpp"
 
 #include <quader/modeling/neutral/polygon/document.hpp>
+#include <quader/modeling/neutral/polygon/document_texture.hpp>
 
 #include <gtest/gtest.h>
 #ifndef NDEBUG
@@ -1780,6 +1783,131 @@ TEST(EditorApiTests, ViewportDisplayAndSnappingPreferencesUseRuntimeHooks) {
   EXPECT_TRUE(editor.preferences().mesh_grid_visible());
   EXPECT_TRUE(editor.preferences().overlays_visible());
   EXPECT_FALSE(editor.preferences().backface_selection_enabled());
+}
+
+TEST(EditorApiTests, TextureLockPreferencesToggleIndependentlyAndRemainBindable) {
+  CommandTestHarness harness;
+  quader::QuaderEditorApi &editor = harness.editor;
+  bool texture_lock = true;
+  bool texture_lock_scale = false;
+  const auto set_state = [](bool &state, bool enabled) {
+    const bool changed = state != enabled;
+    state = enabled;
+    return quader::QuaderApiVoidResult{
+        .ok = true,
+        .changed = changed,
+        .mutation_kind = quader::QuaderMutationKind::Runtime,
+    };
+  };
+  editor.preferences().set_runtime_hooks(quader::QuaderPreferencesRuntimeHooks{
+      .texture_lock_enabled = [&] { return texture_lock; },
+      .set_texture_lock_enabled =
+          [&](bool enabled) { return set_state(texture_lock, enabled); },
+      .texture_lock_scale_enabled = [&] { return texture_lock_scale; },
+      .set_texture_lock_scale_enabled =
+          [&](bool enabled) { return set_state(texture_lock_scale, enabled); },
+  });
+
+  quader_poly::Document topology;
+  const std::array corners{
+      quader_poly::add_vertex(topology, {-1.0f, -1.0f, 0.0f}),
+      quader_poly::add_vertex(topology, {1.0f, -1.0f, 0.0f}),
+      quader_poly::add_vertex(topology, {1.0f, 1.0f, 0.0f}),
+      quader_poly::add_vertex(topology, {-1.0f, 1.0f, 0.0f}),
+  };
+  ASSERT_NE(quader_poly::add_face(topology, corners),
+            quader_poly::kInvalidElementId);
+  topology.faces.front().uvs = {
+      {0.0f, 0.0f}, {2.0f, 0.0f}, {2.0f, 2.0f}, {0.0f, 3.0f}};
+  topology.faces.front().texture_transform = {
+      .scale = {1.5f, -0.75f},
+      .shift_uv = {0.25f, -0.125f},
+      .rotation_degrees = 15.0f,
+  };
+  const auto textured_mesh = editor.modeling().create_mesh(
+      quader::QuaderPolygonDocumentInternalAccess::from_backend(topology),
+      quader::QuaderCreateMeshArgs{.name = "Texture Preference Fixture"});
+  ASSERT_TRUE(textured_mesh.ok()) << textured_mesh.error_message();
+  ASSERT_TRUE(editor.selection().select_object(textured_mesh.value()).ok());
+  ASSERT_TRUE(editor.modeling().create_instance().ok());
+  const auto selection = selected_entities(editor);
+  ASSERT_EQ(selection.size(), 1u);
+  const auto occurrence_before_scale = editor.query().entity(selection.front());
+  ASSERT_TRUE(occurrence_before_scale.has_value());
+  ASSERT_TRUE(occurrence_before_scale->has_instance_occurrence);
+  auto transform = occurrence_before_scale->transform;
+  transform.scale = {2.0f, 3.0f, 1.0f};
+  ASSERT_TRUE(editor.scene().set_transform(selection.front(), transform).ok());
+  const auto occurrence = editor.query().entity(selection.front());
+  ASSERT_TRUE(occurrence.has_value());
+  ASSERT_TRUE(occurrence->texture_sampling_from_local.has_value());
+  EXPECT_NE(occurrence->texture_sampling_from_local->values,
+            quader::QMat4{}.values);
+  const auto before_toggles =
+      quader::test::capture_command_observable_state(editor);
+  const auto expect_document_unchanged = [&] {
+    constexpr auto kUnchangedDomains =
+        quader::test::kAllCommandObservableDomains &
+        ~quader::test::command_observable_domain_mask(
+            quader::test::CommandObservableDomain::Preferences);
+    const auto change = quader::test::diff_command_observable_state(
+        before_toggles, quader::test::capture_command_observable_state(editor),
+        kUnchangedDomains);
+    EXPECT_TRUE(change.empty()) << change.summary;
+  };
+
+  EXPECT_TRUE(editor.preferences().texture_lock_enabled());
+  EXPECT_FALSE(editor.preferences().texture_lock_scale_enabled());
+  EXPECT_FALSE(editor.preferences().set_texture_lock_enabled(true).changed());
+  EXPECT_FALSE(editor.preferences().set_texture_lock_scale_enabled(false).changed());
+  expect_document_unchanged();
+
+  ASSERT_TRUE(editor.commands()
+                  .execute(quader::quader_command::kViewportToggleTextureLock)
+                  .changed());
+  EXPECT_FALSE(editor.preferences().texture_lock_enabled());
+  EXPECT_FALSE(editor.preferences().texture_lock_scale_enabled());
+  expect_document_unchanged();
+  ASSERT_TRUE(editor.commands()
+                  .execute(quader::quader_command::kViewportToggleTextureLockScale)
+                  .changed());
+  EXPECT_FALSE(editor.preferences().texture_lock_enabled());
+  EXPECT_TRUE(editor.preferences().texture_lock_scale_enabled());
+  expect_document_unchanged();
+  ASSERT_TRUE(editor.preferences().set_texture_lock_enabled(true).changed());
+  EXPECT_TRUE(editor.preferences().texture_lock_enabled());
+  EXPECT_TRUE(editor.preferences().texture_lock_scale_enabled());
+  expect_document_unchanged();
+
+  const std::filesystem::path path = keybinding_test_path("texture-locks");
+  ASSERT_TRUE(editor.commands().set_keybinding_storage_path(path).ok());
+  const auto catalog = editor.commands().keybinding_catalog();
+  constexpr std::array kCommands{
+      quader::quader_command::kViewportToggleTextureLock,
+      quader::quader_command::kViewportToggleTextureLockScale,
+  };
+  for (const auto command : kCommands) {
+    const auto *entry = find_keybinding_catalog_entry(catalog, command.string());
+    ASSERT_NE(entry, nullptr);
+    EXPECT_TRUE(entry->default_shortcut.empty());
+    EXPECT_TRUE(entry->unassigned);
+    EXPECT_FALSE(entry->customized);
+    EXPECT_TRUE(editor.commands().shortcut_for(command).empty());
+  }
+  ASSERT_TRUE(editor.preferences()
+                  .set_shortcut(kCommands[0], "Ctrl+Alt+F18")
+                  .ok());
+  ASSERT_TRUE(editor.preferences()
+                  .set_shortcut(kCommands[1], "Ctrl+Alt+F19")
+                  .ok());
+  CommandTestHarness reloaded;
+  ASSERT_TRUE(reloaded.editor.commands().set_keybinding_storage_path(path).ok());
+  EXPECT_EQ(reloaded.editor.commands().shortcut_for(kCommands[0]), "Ctrl+Alt+F18");
+  EXPECT_EQ(reloaded.editor.commands().shortcut_for(kCommands[1]), "Ctrl+Alt+F19");
+  ASSERT_TRUE(reloaded.editor.preferences().reset_shortcut(kCommands[0]).ok());
+  EXPECT_TRUE(reloaded.editor.commands().shortcut_for(kCommands[0]).empty());
+  EXPECT_EQ(reloaded.editor.commands().shortcut_for(kCommands[1]), "Ctrl+Alt+F19");
+  std::filesystem::remove(path);
 }
 
 TEST(EditorApiTests, KeybindingConflictsAndRemovalSupportRebindingUi) {
@@ -10929,6 +11057,133 @@ TEST(EditorApiTests,
   EXPECT_FALSE(editor.query().entity(second_occurrence).has_value());
 }
 
+TEST(EditorApiTests, SceneInstanceFlattenBakesTextureMappingAndPreservesSettings) {
+  for (const bool linked : {false, true}) {
+    SCOPED_TRACE(linked ? "linked" : "final occurrence");
+    CommandTestHarness harness;
+    quader::QuaderEditorApi &editor = harness.editor;
+    quader_poly::Document topology;
+    const std::array corners{
+        quader_poly::add_vertex(topology, {-1.0f, -1.0f, 0.0f}),
+        quader_poly::add_vertex(topology, {1.0f, -1.0f, 0.0f}),
+        quader_poly::add_vertex(topology, {1.0f, 1.0f, 0.0f}),
+        quader_poly::add_vertex(topology, {-1.0f, 1.0f, 0.0f}),
+    };
+    ASSERT_NE(quader_poly::add_face(topology, corners),
+              quader_poly::kInvalidElementId);
+    auto &face = topology.faces.front();
+    face.uvs = {{0.0f, 0.0f}, {2.0f, 0.0f}, {2.0f, 2.0f}, {0.0f, 3.0f}};
+    face.texture_transform = {
+        .scale = {2.0f, -0.5f},
+        .shift_uv = {0.25f, -0.125f},
+        .rotation_degrees = 30.0f,
+    };
+    const auto created = editor.modeling().create_mesh(
+        quader::QuaderPolygonDocumentInternalAccess::from_backend(topology),
+        quader::QuaderCreateMeshArgs{.name = "Textured Instance"});
+    ASSERT_TRUE(created.ok()) << created.error_message();
+    const auto member = created.value();
+    ASSERT_TRUE(editor.selection().select_object(member).ok());
+    ASSERT_TRUE(editor.modeling().create_instance().ok());
+    quader::EntityId occurrence = selected_entities(editor).front();
+    const quader::EntityId definition =
+        editor.query().entity(occurrence)->instance_definition;
+    auto transform = editor.query().entity(occurrence)->transform;
+    transform.scale = {2.0f, 3.0f, 1.0f};
+    ASSERT_TRUE(editor.scene().set_transform(occurrence, transform).ok());
+    ASSERT_TRUE(editor.query().entity(occurrence)->texture_sampling_from_local);
+    const auto occurrence_mapping =
+        *editor.query().entity(occurrence)->texture_sampling_from_local;
+    if (linked) {
+      ASSERT_TRUE(editor.commands()
+                      .execute(quader::quader_command::kDuplicateSelection).ok());
+      occurrence = selected_entities(editor).front();
+      ASSERT_TRUE(editor.query().entity(occurrence)->texture_sampling_from_local);
+      EXPECT_EQ(editor.query().entity(occurrence)
+                    ->texture_sampling_from_local->values,
+                occurrence_mapping.values);
+    }
+
+    const auto member_snapshot = editor.query().entity(member.entity);
+    ASSERT_TRUE(member_snapshot.has_value());
+    ASSERT_EQ(member_snapshot->parent, definition);
+    const auto &member_transform = member_snapshot->transform;
+    const quader::QMat4 definition_from_member = quader::compose_transform({
+        .position = member_transform.position,
+        .rotation = quader::quat_from_euler_radians(
+            member_transform.rotation_euler),
+        .scale = member_transform.scale,
+    });
+    const quader::QMat4 effective = quader::from_glm(
+        quader::to_glm(member_snapshot->texture_sampling_from_local.value_or(
+            quader::QMat4{})) *
+        quader::to_glm(quader::inverse(definition_from_member)) *
+        quader::to_glm(occurrence_mapping) *
+        quader::to_glm(definition_from_member));
+    const auto &matrix = effective.values;
+    const quader_poly::Transform3 sampling{
+        .x_axis = {matrix[0], matrix[1], matrix[2]},
+        .y_axis = {matrix[4], matrix[5], matrix[6]},
+        .z_axis = {matrix[8], matrix[9], matrix[10]},
+        .origin = {matrix[12], matrix[13], matrix[14]},
+    };
+    auto expected = editor.query().compiled_object_mesh(member);
+    ASSERT_TRUE(expected.has_value());
+    const auto original_vertices = expected->vertices;
+    for (auto &vertex : expected->vertices) {
+      vertex.uv = quader_poly::evaluate_texture_mapping(
+          vertex.uv, vertex.position, vertex.uv_geometric_normal,
+          vertex.uv_carrier, sampling);
+    }
+    const auto flattened = editor.modeling().flatten_selected_instances();
+    ASSERT_TRUE(flattened.ok()) << flattened.error_message();
+    ASSERT_EQ(flattened.value().root_entities.size(), 1u);
+    const quader::EntityId output = flattened.value().root_entities.front().id;
+    const auto output_object = editor.query().modeling_object_for_entity(output);
+    ASSERT_TRUE(output_object.has_value());
+    const auto check_output = [&] {
+      const auto actual = editor.query().compiled_object_mesh(*output_object);
+      ASSERT_TRUE(actual.has_value());
+      ASSERT_EQ(actual->face_textures.size(), 1u);
+      const auto &settings = actual->face_textures.front();
+      EXPECT_FLOAT_EQ(settings.scale.x, 2.0f);
+      EXPECT_FLOAT_EQ(settings.scale.y, -0.5f);
+      EXPECT_FLOAT_EQ(settings.shift_uv.x, 0.25f);
+      EXPECT_FLOAT_EQ(settings.shift_uv.y, -0.125f);
+      EXPECT_FLOAT_EQ(settings.rotation_degrees, 30.0f);
+      ASSERT_EQ(actual->vertices.size(), expected->vertices.size());
+      for (std::size_t index = 0; index < actual->vertices.size(); ++index) {
+        EXPECT_NEAR(actual->vertices[index].uv.x,
+                    expected->vertices[index].uv.x, 0.00001f);
+        EXPECT_NEAR(actual->vertices[index].uv.y,
+                    expected->vertices[index].uv.y, 0.00001f);
+      }
+      EXPECT_FALSE(editor.query().entity(output)->texture_sampling_from_local);
+    };
+    check_output();
+    if (linked) {
+      const auto source = editor.query().compiled_object_mesh(member);
+      ASSERT_TRUE(source.has_value());
+      ASSERT_EQ(source->vertices.size(), original_vertices.size());
+      for (std::size_t index = 0; index < source->vertices.size(); ++index) {
+        EXPECT_FLOAT_EQ(source->vertices[index].uv.x,
+                        original_vertices[index].uv.x);
+        EXPECT_FLOAT_EQ(source->vertices[index].uv.y,
+                        original_vertices[index].uv.y);
+      }
+    }
+    EXPECT_EQ(editor.query().history().undo_label, "Flatten Instance");
+    ASSERT_TRUE(editor.history().undo().ok());
+    EXPECT_TRUE(editor.query().entity(definition).has_value());
+    ASSERT_TRUE(editor.query().entity(occurrence)->texture_sampling_from_local);
+    EXPECT_EQ(editor.query().entity(occurrence)
+                  ->texture_sampling_from_local->values,
+              occurrence_mapping.values);
+    ASSERT_TRUE(editor.history().redo().ok());
+    check_output();
+  }
+}
+
 TEST(EditorApiTests, SceneInstanceLastFlattenAndCreateUndoPreservePlacement) {
   CommandTestHarness harness;
   quader::QuaderEditorApi &editor = harness.editor;
@@ -12244,9 +12499,9 @@ TEST(EditorApiTests,
       editor.commands().keybinding_catalog();
 
 #ifndef NDEBUG
-  EXPECT_EQ(commands.size(), 160u);
+  EXPECT_EQ(commands.size(), 162u);
 #else
-  EXPECT_EQ(commands.size(), 161u);
+  EXPECT_EQ(commands.size(), 163u);
 #endif
 
   std::unordered_set<std::string> expected_target_ids;

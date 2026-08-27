@@ -9,10 +9,13 @@
 #include "diagnostics/profile.hpp"
 
 #include <algorithm>
+#include <array>
+#include <limits>
 #include <memory>
 #include <utility>
 
 #include <quader/modeling/neutral/polygon/document.hpp>
+#include <quader/modeling/neutral/polygon/document_texture.hpp>
 #include <quader/modeling/neutral/polygon/internal/quader_poly_document_mesh_internal.hpp>
 
 namespace quader {
@@ -120,6 +123,8 @@ bool try_update_flat_document_mesh_positions(
                                                                    normal);
       const bool use_loop_uvs =
           quader_poly::document_internal::face_has_loop_uvs(face);
+      const auto uv_carrier =
+          quader_poly::face_texture_carrier(next, face, normal);
       for (std::size_t local_index = 0U;
            local_index < face.vertices.size(); ++local_index) {
         const quader_poly::ElementId vertex_id = face.vertices[local_index];
@@ -128,15 +133,20 @@ bool try_update_flat_document_mesh_positions(
         if (vertex == nullptr) {
           return false;
         }
+        const QVec2 base_uv =
+            use_loop_uvs
+                ? face.uvs[local_index]
+                : quader_poly::document_internal::generated_uv_for_position(
+                      vertex->position, uv_basis, dropped_axis);
         geometry.vertices[vertex_offset + local_index] = MeshVertex{
             .position = vertex->position,
             .normal = normal,
-            .uv = use_loop_uvs
-                      ? face.uvs[local_index]
-                      : quader_poly::document_internal::generated_uv_for_position(
-                            vertex->position, uv_basis, dropped_axis),
+            .uv = quader_poly::apply_face_texture_transform(
+                base_uv, face.texture_transform),
             .rgba = 0xff9f9f9fU,
             .source_vertex_id = vertex_id,
+            .uv_carrier = uv_carrier,
+            .uv_geometric_normal = normal,
         };
       }
 
@@ -230,6 +240,13 @@ to_sdk_topology(const quader_poly::Document &document) {
         quader::modeling::make_id<quader::modeling::FaceTag>(face.id);
     converted.material_slot = face.material_slot;
     converted.shading = to_sdk_shading(face.normal_shading);
+    converted.texture_transform = {
+        .scale = {face.texture_transform.scale.x,
+                  face.texture_transform.scale.y},
+        .shift_uv = {face.texture_transform.shift_uv.x,
+                     face.texture_transform.shift_uv.y},
+        .rotation_degrees = face.texture_transform.rotation_degrees,
+    };
     converted.vertices.reserve(face.vertices.size());
     for (const quader_poly::ElementId vertex : face.vertices) {
       converted.vertices.push_back(
@@ -269,6 +286,13 @@ to_native_topology(const quader::modeling::AuthoredTopology &topology) {
     converted.id = face.id.index;
     converted.material_slot = face.material_slot;
     converted.normal_shading = to_native_shading(face.shading);
+    converted.texture_transform = {
+        .scale = {face.texture_transform.scale.x,
+                  face.texture_transform.scale.y},
+        .shift_uv = {face.texture_transform.shift_uv.x,
+                     face.texture_transform.shift_uv.y},
+        .rotation_degrees = face.texture_transform.rotation_degrees,
+    };
     converted.vertices.reserve(face.vertices.size());
     for (const quader::modeling::VertexId vertex : face.vertices) {
       converted.vertices.push_back(vertex.index);
@@ -307,7 +331,13 @@ bool same_topology_layout(const quader_poly::Document &left,
     if (a.id != b.id || a.vertices != b.vertices ||
         a.uvs.size() != b.uvs.size() ||
         a.material_slot != b.material_slot ||
-        a.normal_shading != b.normal_shading) {
+        a.normal_shading != b.normal_shading ||
+        a.texture_transform.scale.x != b.texture_transform.scale.x ||
+        a.texture_transform.scale.y != b.texture_transform.scale.y ||
+        a.texture_transform.shift_uv.x != b.texture_transform.shift_uv.x ||
+        a.texture_transform.shift_uv.y != b.texture_transform.shift_uv.y ||
+        a.texture_transform.rotation_degrees !=
+            b.texture_transform.rotation_degrees) {
       return false;
     }
     for (std::size_t uv = 0; uv < a.uvs.size(); ++uv) {
@@ -351,6 +381,8 @@ void replace_geometry_from_compiled(
         .uv = {vertex.uv0.x, vertex.uv0.y},
         .rgba = vertex.color,
         .source_vertex_id = vertex.source_vertex_id,
+        .uv_carrier = vertex.uv_carrier,
+        .uv_geometric_normal = vertex.uv_geometric_normal,
     };
   }
 
@@ -371,6 +403,17 @@ void replace_geometry_from_compiled(
 }
 
 } // namespace
+
+quader_poly::Transform3 MeshProjectionService::texture_mapping_transform(
+    const QMat4 &matrix) {
+  const auto &value = matrix.values;
+  return {
+      .x_axis = {value[0], value[1], value[2]},
+      .y_axis = {value[4], value[5], value[6]},
+      .z_axis = {value[8], value[9], value[10]},
+      .origin = {value[12], value[13], value[14]},
+  };
+}
 
 MeshAsset MeshProjectionService::mesh_asset_from_compiled_mesh(
     const quader_poly::CompiledMesh &compiled) {
@@ -455,6 +498,86 @@ MeshProjectionService::update_sdk_document_mesh_positions(
   replace_geometry_from_compiled(compiled, geometry);
   projected.replace_authored_polygon_document(std::move(next_authored));
   return projected;
+}
+
+void MeshProjectionService::apply_mesh_texture_mapping(
+    MeshAsset &mesh, const QMat4 &sampling_from_local) {
+  if (sampling_from_local.values == QMat4{}.values) {
+    return;
+  }
+  if (!mesh.has_authored_polygon_document &&
+      std::ranges::all_of(mesh.geometry().vertices, [](const MeshVertex &vertex) {
+        return vertex.uv_carrier == std::array<float, 4>{};
+      })) {
+    if (!initialize_compiled_texture_mapping(mesh)) {
+      return;
+    }
+  }
+  const quader_poly::Transform3 mapping =
+      texture_mapping_transform(sampling_from_local);
+  for (MeshVertex &vertex : mesh.edit_geometry().vertices) {
+    vertex.uv = quader_poly::evaluate_texture_mapping(
+        vertex.uv, vertex.position, vertex.uv_geometric_normal,
+        vertex.uv_carrier, mapping);
+  }
+}
+
+bool MeshProjectionService::initialize_compiled_texture_mapping(MeshAsset &mesh) {
+  if (mesh.has_authored_polygon_document || mesh.geometry().indices.empty()) {
+    return true;
+  }
+  const MeshGeometryPayload &original = mesh.geometry();
+  std::vector<MeshVertex> vertices = original.vertices;
+  std::vector<std::uint32_t> indices = original.indices;
+  std::vector<bool> assigned(original.vertices.size(), false);
+  quader_poly::Document triangle;
+  triangle.vertices = {{.id = 1u}, {.id = 2u}, {.id = 3u}};
+  quader_poly::Face face;
+  face.vertices = {1u, 2u, 3u};
+  for (std::size_t offset = 0; offset + 2u < indices.size(); offset += 3u) {
+    std::array<QVec3, 3> positions;
+    std::array<QVec2, 3> uvs;
+    for (std::size_t corner = 0; corner < 3u; ++corner) {
+      const std::uint32_t index = original.indices[offset + corner];
+      if (index >= original.vertices.size()) {
+        return false;
+      }
+      const MeshVertex &vertex = original.vertices[index];
+      triangle.vertices[corner].position = positions[corner] = vertex.position;
+      uvs[corner] = vertex.uv;
+    }
+    const QVec3 normal = quader_poly::face_normal(triangle, face);
+    const auto carrier =
+        quader_poly::face_texture_carrier(positions, uvs, normal, {});
+    for (std::size_t corner = 0; corner < 3u; ++corner) {
+      const std::uint32_t index = original.indices[offset + corner];
+      if (!assigned[index]) {
+        vertices[index].uv_carrier = carrier;
+        vertices[index].uv_geometric_normal = normal;
+        assigned[index] = true;
+      } else if (vertices[index].uv_carrier != carrier ||
+                 !same_position(vertices[index].uv_geometric_normal, normal)) {
+        if (vertices.size() >= std::numeric_limits<std::uint32_t>::max()) {
+          return false;
+        }
+        MeshVertex vertex = original.vertices[index];
+        vertex.uv_carrier = carrier;
+        vertex.uv_geometric_normal = normal;
+        indices[offset + corner] = static_cast<std::uint32_t>(vertices.size());
+        vertices.push_back(vertex);
+      }
+    }
+  }
+  MeshGeometryPayload &geometry = mesh.edit_geometry();
+  geometry.vertices = std::move(vertices);
+  geometry.indices = std::move(indices);
+  return true;
+}
+
+bool MeshProjectionService::bake_polygon_texture_mapping(
+    quader_poly::Document &document, const QMat4 &sampling_from_local) {
+  return quader_poly::bake_document_texture_mapping(
+      document, texture_mapping_transform(sampling_from_local));
 }
 
 } // namespace quader

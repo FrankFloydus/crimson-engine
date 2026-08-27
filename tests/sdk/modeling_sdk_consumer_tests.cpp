@@ -355,6 +355,10 @@ TEST(ModelingSdkConsumerTests,
     Result<AuthoredTopology> authored = box.value().authored_topology();
     ASSERT_TRUE(authored.ok()) << authored.error_message();
     for (AuthoredTopologyFace &face : authored.value().faces) {
+      face.texture_transform = {
+          .scale = {2.0F, 0.5F}, .shift_uv = {0.25F, -0.5F},
+          .rotation_degrees = 35.0F,
+      };
       face.uvs.resize(face.vertices.size());
       for (std::size_t index = 0u; index < face.uvs.size(); ++index) {
         face.uvs[index] = {static_cast<float>(index),
@@ -398,6 +402,9 @@ TEST(ModelingSdkConsumerTests,
     EXPECT_TRUE(std::ranges::all_of(
         result.value().faces,
         [](const AuthoredTopologyFace &face) { return face.uvs.empty(); }));
+    for (const auto &face : result.value().faces) {
+      EXPECT_EQ(face.texture_transform, authored.value().faces.front().texture_transform);
+    }
   }
 }
 
@@ -3922,6 +3929,213 @@ TEST(ModelingSdkConsumerTests,
           .commit();
   EXPECT_TRUE(recovered.success()) << recovered.receipt.error.message;
   EXPECT_EQ(reentrant.mesh_summaries().size(), 1U);
+}
+
+TEST(ModelingSdkConsumerTests,
+     FaceTexturePatchesSetAbsoluteAxesWithoutTouchingOtherPropertiesOrSelection) {
+  auto created = PolygonDocument::make_box({});
+  ASSERT_TRUE(created.ok()) << created.error_message();
+  PolygonDocument document = std::move(created).value();
+  const auto ids = document.face_ids();
+  const std::array<FaceId, 2> selected{ids[0], ids[1]};
+  ASSERT_TRUE(document.select_faces(selected).ok());
+  const PolygonDocument original = document;
+  const std::array<FaceTextureTransformUpdate, 2> initial{
+      FaceTextureTransformUpdate{.face = ids[0], .scale_y = 2.0F,
+                                 .shift_x = 0.25F, .rotation_degrees = 30.0F},
+      FaceTextureTransformUpdate{.face = ids[1], .scale_y = 4.0F,
+                                 .shift_y = -0.5F, .rotation_degrees = -15.0F},
+  };
+  const auto first = document.set_face_texture_transforms(initial);
+  ASSERT_TRUE(first.ok()) << first.error_message();
+  ASSERT_TRUE(first.value().changed);
+  EXPECT_TRUE(first.value().dirty.geometry);
+  EXPECT_FALSE(first.value().dirty.topology);
+  EXPECT_FALSE(first.value().dirty.materials);
+  EXPECT_FALSE(first.value().dirty.selection);
+  EXPECT_EQ(document.selection_revision(), original.selection_revision());
+  EXPECT_TRUE(document.shares_selection_with(original));
+  EXPECT_TRUE(document.has_same_geometry(original));
+  const auto settings = document.face_texture_settings(selected);
+  ASSERT_TRUE(settings.ok()) << settings.error_message();
+  ASSERT_EQ(settings.value().size(), 2U);
+  EXPECT_EQ(settings.value()[0].texture_transform.scale.x, 1.0F);
+  EXPECT_EQ(settings.value()[1].texture_transform.scale.x, 1.0F);
+  EXPECT_EQ(settings.value()[0].texture_transform.scale.y, 2.0F);
+  EXPECT_EQ(settings.value()[1].texture_transform.scale.y, 4.0F);
+
+  const std::array<FaceTextureTransformUpdate, 2> x_updates{
+      FaceTextureTransformUpdate{.face = ids[0], .scale_x = 5.0F},
+      FaceTextureTransformUpdate{.face = ids[1], .scale_x = 5.0F},
+  };
+  ASSERT_TRUE(document.set_face_texture_transforms(x_updates).ok());
+  const std::array<FaceTextureTransformUpdate, 2> y_updates{
+      FaceTextureTransformUpdate{.face = ids[0], .scale_y = 0.5F},
+      FaceTextureTransformUpdate{.face = ids[1], .scale_y = 0.5F},
+  };
+  ASSERT_TRUE(document.set_face_texture_transforms(y_updates).ok());
+  const auto final = document.face_texture_settings(selected);
+  ASSERT_TRUE(final.ok()) << final.error_message();
+  for (const auto &face : final.value()) {
+    EXPECT_EQ(face.texture_transform.scale.x, 5.0F);
+    EXPECT_EQ(face.texture_transform.scale.y, 0.5F);
+  }
+  EXPECT_EQ(final.value()[0].texture_transform.shift_uv.x, 0.25F);
+  EXPECT_EQ(final.value()[1].texture_transform.shift_uv.y, -0.5F);
+  EXPECT_EQ(final.value()[0].texture_transform.rotation_degrees, 30.0F);
+  EXPECT_EQ(final.value()[1].texture_transform.rotation_degrees, -15.0F);
+  const auto topology = document.authored_topology();
+  ASSERT_TRUE(topology.ok());
+  for (const auto &face : topology.value().faces) {
+    EXPECT_TRUE(face.uvs.empty());
+  }
+  const auto identity = document.content_identity();
+  const auto revision = document.content_revision();
+  const auto noop = document.set_face_texture_transforms(y_updates);
+  ASSERT_TRUE(noop.ok());
+  EXPECT_FALSE(noop.value().changed);
+  EXPECT_EQ(document.content_identity(), identity);
+  EXPECT_EQ(document.content_revision(), revision);
+}
+
+TEST(ModelingSdkConsumerTests,
+     FaceTextureUpdatesRejectInvalidBatchesWithoutPublishingPartialChanges) {
+  auto created = PolygonDocument::make_box({});
+  ASSERT_TRUE(created.ok());
+  auto document = std::move(created).value();
+  const auto ids = document.face_ids();
+  const auto before = serialize_qdr_authored_topology(document);
+  ASSERT_TRUE(before.ok());
+  const auto identity = document.content_identity();
+  const auto revision = document.content_revision();
+  for (const float invalid : {0.0F, -0.0F,
+                             std::numeric_limits<float>::infinity(),
+                             std::numeric_limits<float>::quiet_NaN()}) {
+    const std::array<FaceTextureTransformUpdate, 2> updates{
+        FaceTextureTransformUpdate{.face = ids[0], .scale_x = 2.0F},
+        FaceTextureTransformUpdate{.face = ids[1], .scale_y = invalid},
+    };
+    EXPECT_FALSE(document.set_face_texture_transforms(updates).ok());
+    EXPECT_EQ(document.content_identity(), identity);
+    EXPECT_EQ(document.content_revision(), revision);
+  }
+  const std::array<FaceTextureTransformUpdate, 2> duplicates{
+      FaceTextureTransformUpdate{.face = ids[0], .scale_x = 2.0F},
+      FaceTextureTransformUpdate{.face = ids[0], .scale_x = 3.0F},
+  };
+  EXPECT_FALSE(document.set_face_texture_transforms(duplicates).ok());
+  const std::array<FaceTextureTransformUpdate, 1> stale{
+      FaceTextureTransformUpdate{.face = make_id<FaceTag>(ids[0].index, 2U),
+                                 .scale_x = 2.0F},
+  };
+  EXPECT_FALSE(document.set_face_texture_transforms(stale).ok());
+  const auto after = serialize_qdr_authored_topology(document);
+  ASSERT_TRUE(after.ok());
+  EXPECT_EQ(after.value(), before.value());
+}
+
+TEST(ModelingSdkConsumerTests,
+     Qgeo11PreservesTextureSettingsAndReadsLegacy10IdentityDefaults) {
+  auto created = PolygonDocument::make_box({});
+  ASSERT_TRUE(created.ok());
+  auto document = std::move(created).value();
+  const auto ids = document.face_ids();
+  const std::array<FaceTextureTransformUpdate, 1> updates{
+      FaceTextureTransformUpdate{.face = ids.front(), .scale_x = -2.0F,
+                                 .scale_y = 0.5F, .shift_x = 0.125F,
+                                 .shift_y = -0.25F, .rotation_degrees = 67.5F},
+  };
+  ASSERT_TRUE(document.set_face_texture_transforms(updates).ok());
+  const auto encoded = serialize_qdr_authored_topology(document);
+  ASSERT_TRUE(encoded.ok()) << encoded.error_message();
+  EXPECT_EQ(encoded.value()[6], std::byte{1});
+  const auto decoded = deserialize_qdr_authored_topology(encoded.value());
+  ASSERT_TRUE(decoded.ok()) << decoded.error_message();
+  const auto original = document.face_texture_settings(ids);
+  const auto restored = decoded.value().face_texture_settings(ids);
+  ASSERT_TRUE(original.ok());
+  ASSERT_TRUE(restored.ok());
+  for (std::size_t index = 0U; index < ids.size(); ++index) {
+    EXPECT_EQ(restored.value()[index].texture_transform,
+              original.value()[index].texture_transform);
+  }
+  const auto reencoded = serialize_qdr_authored_topology(decoded.value());
+  ASSERT_TRUE(reencoded.ok());
+  EXPECT_EQ(reencoded.value(), encoded.value());
+
+  // Version 1.0 ended after the hard-edge array and stored no face transforms.
+  auto legacy = encoded.value();
+  legacy.resize(legacy.size() - ids.size() * 20U);
+  legacy[6] = std::byte{0};
+  write_u32_le(legacy, 16U, static_cast<std::uint32_t>(legacy.size()));
+  write_u32_le(legacy, 20U, 0U);
+  const auto migrated = deserialize_qdr_authored_topology(legacy);
+  ASSERT_TRUE(migrated.ok()) << migrated.error_message();
+  const auto defaults = migrated.value().face_texture_settings(ids);
+  ASSERT_TRUE(defaults.ok());
+  for (const auto &face : defaults.value()) {
+    EXPECT_EQ(face.texture_transform, FaceTextureTransform{});
+  }
+
+  auto invalid = encoded.value();
+  write_u32_le(invalid, invalid.size() - ids.size() * 20U, 0U);
+  EXPECT_FALSE(deserialize_qdr_authored_topology(invalid).ok());
+  auto unsupported = encoded.value();
+  unsupported[6] = std::byte{2};
+  EXPECT_FALSE(deserialize_qdr_authored_topology(unsupported).ok());
+}
+
+TEST(ModelingSdkConsumerTests,
+     FaceTextureDocumentBatchPreservesObjectSelectionAndReplaysUndoRedo) {
+  ModelingSession session;
+  auto first = PolygonDocument::make_box({});
+  auto second = PolygonDocument::make_box({});
+  ASSERT_TRUE(first.ok());
+  ASSERT_TRUE(second.ok());
+  const auto first_id = session.add_document(std::move(first).value(), "First");
+  const auto second_id = session.add_document(std::move(second).value(), "Second");
+  ASSERT_TRUE(first_id.ok());
+  ASSERT_TRUE(second_id.ok());
+  const std::array<ObjectId, 2> objects{first_id.value(), second_id.value()};
+  ASSERT_TRUE(session.apply_object_selection(objects).ok());
+  std::vector<SessionDocumentUpdate> updates;
+  for (const auto object : objects) {
+    auto document = session.document_copy(object);
+    ASSERT_TRUE(document.ok());
+    const std::array<FaceTextureTransformUpdate, 1> edit{
+        FaceTextureTransformUpdate{.face = document.value().face_ids().front(),
+                                   .scale_x = 3.0F, .rotation_degrees = 20.0F},
+    };
+    const auto receipt = document.value().set_face_texture_transforms(edit);
+    ASSERT_TRUE(receipt.ok());
+    updates.push_back({.object = object, .document = std::move(document).value(),
+                       .receipt = receipt.value()});
+  }
+  const auto before_revision = session.content_revision();
+  const auto committed = session.commit_documents_batch(std::move(updates), true);
+  ASSERT_TRUE(committed.ok()) << committed.error_message();
+  EXPECT_EQ(session.content_revision(), before_revision + 1U);
+  for (const auto object : objects) {
+    expect_session_object_selected(session, object, true);
+  }
+  ASSERT_TRUE(session.undo().ok());
+  for (const auto object : objects) {
+    const auto document = session.document_copy(object);
+    ASSERT_TRUE(document.ok());
+    const auto settings = document.value().face_texture_settings(document.value().face_ids());
+    ASSERT_TRUE(settings.ok());
+    EXPECT_EQ(settings.value().front().texture_transform, FaceTextureTransform{});
+    expect_session_object_selected(session, object, true);
+  }
+  ASSERT_TRUE(session.redo().ok());
+  for (const auto object : objects) {
+    const auto document = session.document_copy(object);
+    ASSERT_TRUE(document.ok());
+    const auto settings = document.value().face_texture_settings(document.value().face_ids());
+    ASSERT_TRUE(settings.ok());
+    EXPECT_EQ(settings.value().front().texture_transform.scale.x, 3.0F);
+    EXPECT_EQ(settings.value().front().texture_transform.rotation_degrees, 20.0F);
+  }
 }
 
 TEST(ModelingSdkConsumerTests,

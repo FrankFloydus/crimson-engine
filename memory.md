@@ -6877,3 +6877,99 @@ mandatory regression gate and explicit full Debug CTest keep all modeling-domain
 SDK parity, command-contract, and task-owned tests green; they remain red only on the same seven
 pre-existing instruction/build/architecture guardrails and five unrelated Linear Array/overlay
 tests.
+
+## 2026-08-27 - Face Texture Settings And Transform Texture Locks
+
+Task/context: selected faces needed independent texture scale, pixel shift, and relative rotation,
+with persistent texture placement policies for object transforms and linked occurrences.
+
+Invariant:
+
+- The portable SDK owns `FaceTextureTransform`. Authored/generated UVs remain the base; evaluation
+  rotates about the projection origin, divides by signed nonzero scale, then adds normalized shift.
+  Operations that inherit source UV/material data also inherit these settings. Materializing UVs
+  must invert the retained face transform before storing the new base, avoiding double application.
+- `QuaderModelingApi::face_texture_settings()` and `set_face_texture_setting()` are the native
+  user-intent boundary. `FaceTextureEditContext` owns selection tokens and per-face rotation
+  baselines; changing selection resets the displayed offset, while Scale/Shift edits do not.
+  Entering 10 then 20 degrees means 20 total from the baselines. Preserve accepted double offsets
+  through float-backed storage; undo/redo resynchronization uses float rounding intervals rather
+  than a fixed tolerance. Multi-object writes preflight atomically and merge only within a numeric
+  editing gesture, preserving visibility, locking, shared-mesh, and explicit instance scope rules.
+- Shift is stored only in normalized UVs. Its pixel presentation uses the face material's base-color
+  dimensions, or 64x64 when unavailable. Project material rendering and face editing share the
+  immutable, revision-gated `ProjectSession::material_texture_image()` cache; readout changes after
+  replacing a texture never rewrite UV placement or dirty the document.
+- Texture Lock defaults on for translation/rotation; Texture Lock Scale defaults off so scaling
+  preserves density. Scene-owned `TextureMappingComponent` stores sampling-from-local C without
+  modifying shared geometry. `SceneTextureMappingPlan`, owned by document commands, captures
+  hierarchy and preferences once and computes C1 = C0 * inverse(M0) * inverse(L) * M1. Semantic
+  rotation/scale include their pivot translations; combined edits apply scale, rotation, translation.
+  Instance sampling composes member correction D with inverse(B) * Coccurrence * B. Pivot rebases
+  preserve effective UVs, and flattening bakes the mapping before clearing it.
+- The neutral texture evaluator is shared by compilation, rendering adaptation, flattening, and
+  OBJ export. Compiled UV carriers retain authored residuals and use canonical geometric normals,
+  independent of smooth shading. Filament binds mapping/cofactor arrays in instance-transform order,
+  keeps geometry sharing, and derives normal-map frames from effective UV derivatives. Identity
+  mappings bypass correction exactly. Legacy compiled-only assets reconstruct missing triangle
+  carriers on load without adopting authored topology or changing UV/shading data.
+- QGEO 1.1 and native scene schema 7 persist the new data; older records default to identity.
+  Conversion, validation, copy/history snapshots, mesh hashes, and command fingerprints include it.
+- The retained Texture Settings section is independent of the active tool. Mixed scale fields show
+  editable `--`; multiple-face Shift fields show disabled `--`. Refresh preserves drafts and fold
+  state, rejects stale queued edits, and never reopens a user-closed dock. Expensive summaries and
+  Qt setters remain behind revision/value gates. The separate toolbar follows Toggle Overlays with
+  a divider and two generated PNG icons; both commands deliberately have no default shortcut.
+  Keybinding revisions invalidate tooltip caches without broad command-catalog polling. Numeric
+  widget tests must install the same C locale as `main.cpp`; translated labels do not change it.
+
+Owners: portable SDK/neutral polygon texture helpers; native modeling API, edit context, history and
+SDK projection adapter; scene mapping/transform owners; ProjectSession material image cache;
+Filament extraction/material binding; Qt Tool Settings and texture toolbar; native QDR/OBJ adapters.
+
+Verification: 407 focused native/command tests, 50 adjacent material/render tests, all 475 modeling
+domain tests, 82 SDK consumer tests, and 4 SDK parity tests pass. The intentional command baseline
+adds two commands (161 -> 163); existing command outcomes and revision counts stay unchanged, with
+fingerprint changes confined to the added texture state and one compiled-mesh preview. The full
+regression gate and affected-file CTest run remain red only on exactly the same seven guardrails and
+five Linear Array/overlay failures preserved in the pre-task CTest log. Both canonical Debug/Profile
+and Release builds pass, producing `build/vs2026/Debug/quader.exe` and
+`build/vs2026/Release/quader.exe`; the app version is unchanged. Automated Debug/Profile Vulkan
+startup smoke passes with both mesh materials loaded. Interactive UI verification was stopped by
+the user's Escape key, so face-control layout and texture pixel output have no manual verdict.
+
+## 2026-08-27 - Restored Texture Toolbar Visibility
+
+Task/context: Texturing could be checked in View but both texture-lock buttons were invisible;
+the Shift labels also needed to omit the pixel unit text.
+
+Invariant/fix: Qt persists a dragged toolbar's preferred extent. A wide saved Viewport Display
+toolbar could squeeze the following Texturing toolbar to its stock 36-pixel minimum, which reserves
+only its first item (the divider) and overflows both buttons. `QtTextureToolbar::minimumSizeHint()`
+must reserve `QToolBar::sizeHint()` so the complete group remains visible in either orientation.
+This content-derived minimum needs no fixed pixel width, layout reset, visibility override, or
+frame-loop synchronization. Keep user-hidden toolbars and closed docks closed. Shift X/Y labels
+omit `(px)` in English, Italian, and fallback text; their values still represent texture pixels.
+
+Owners: `src/ui/qt_texture_toolbar.*`, retained Tool Settings labels, localization resources, and
+the existing Qt workspace/Tool Settings test suites.
+
+Verification: the native restored-layout regression reproduced both hidden buttons at 36 pixels
+before the fix and passes afterward. It covers legacy and already-collapsed saved layouts,
+Home-to-Workspace transitions, View-menu hide/show, hidden-state restore, vertical docking, and a
+closed Tool Settings dock. All 44 focused workspace/Tool Settings/localization tests and all 490
+affected checks (73 guardrails plus 417 app tests) pass.
+The mandatory regression gate reports exactly the same 12 pre-existing failures as the saved
+pre-follow-up CTest log (seven guardrails, five Linear Array/overlay tests), with no new failures.
+Both canonical Debug/Profile and Release app builds pass; version 0.1.66 is unchanged. Desktop
+interaction was canceled with Escape, so this follow-up has native Qt test verification rather
+than a manual visual verdict.
+
+Pre-commit style verification: seven local constexpr names were corrected without changing values
+or behavior. The full clang-tidy scan of 548 translation units has no remaining naming violations,
+but the gate still reports MSVC `xutility`'s `unexpected size` assertion while analyzing the existing
+`std::_Find_vectorized<EdgeKey>` selection lookup in SDK `polygon_document.cpp`. A read-only Clang
+VFS overlay using that file from commit `734c1350` reproduces the same diagnostic; it is unrelated
+to the texture changes and does not occur in the canonical native builds.
+After the cleanup, all nine UV tests and 202 focused native/API tests pass. The full regression
+gate still has exactly the same 12 failures, and both canonical app configurations build again.
