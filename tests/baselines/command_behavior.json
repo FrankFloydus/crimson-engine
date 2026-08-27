@@ -21732,18 +21732,18 @@
         "mutation_kind": 2,
         "revisions": {
           "project": 0,
-          "scene": 8,
+          "scene": 9,
           "scene_layer": 0,
           "assets": 1,
           "modeling_content": 1,
           "modeling_selection": 2
         }
       },
-      "before": "ad3090c3f20a3fee24e7946f143fcba1",
-      "after": "7bcad49e78952abffc43acf53cb045fa",
+      "before": "91cc16cbb7938d17cdf8511484a58f72",
+      "after": "03d5b7678887764383fb984c5db04d3d",
       "before_domains": {
         "documents": "bf55a0979f4e8f42bf6db8dff9e504ac",
-        "scene": "f975009578328636d19398e209163f7d",
+        "scene": "9fda035648098793fc6832c510d89a13",
         "geometry": "69205bff30f19fb12b049ee364eb8c3c",
         "selection": "9f29687d0ca7dc2df0e0533bd508edfc",
         "overlay": "96adbf7136966877820bd3966f8c56d3",
@@ -21752,11 +21752,11 @@
         "tools": "ea45a299a84933ec15f4eef834f4f808",
         "viewports": "85931245800837283591be73776fa66c",
         "preferences": "fb07c91e94447fb4023592fe0294cd04",
-        "revisions": "07d48a450652e6a131e78f5cda24e850"
+        "revisions": "ad9d87282c9a0b7271cbc55434850763"
       },
       "after_domains": {
         "documents": "c203aebd33ef43901b5476e66d66fde9",
-        "scene": "f975009578328636d19398e209163f7d",
+        "scene": "9fda035648098793fc6832c510d89a13",
         "geometry": "69205bff30f19fb12b049ee364eb8c3c",
         "selection": "9f29687d0ca7dc2df0e0533bd508edfc",
         "overlay": "96adbf7136966877820bd3966f8c56d3",
@@ -21765,7 +21765,7 @@
         "tools": "4f6814a82d727def9299cc506ab85861",
         "viewports": "85931245800837283591be73776fa66c",
         "preferences": "fb07c91e94447fb4023592fe0294cd04",
-        "revisions": "0a4d1ecafb74a1fab62c9f5bc2b364cb"
+        "revisions": "a1a484530472543924f471e4bc96be8b"
       },
       "changed_domains": 1217,
       "external_calls_before": 0,
@@ -21788,18 +21788,18 @@
         "mutation_kind": 4,
         "revisions": {
           "project": 0,
-          "scene": 9,
+          "scene": 10,
           "scene_layer": 0,
           "assets": 2,
           "modeling_content": 2,
           "modeling_selection": 3
         }
       },
-      "before": "ad3090c3f20a3fee24e7946f143fcba1",
-      "after": "4a64017ebb5613521444e79b2b039c51",
+      "before": "91cc16cbb7938d17cdf8511484a58f72",
+      "after": "b1e3a7968cd5234a324678e19d831f32",
       "before_domains": {
         "documents": "bf55a0979f4e8f42bf6db8dff9e504ac",
-        "scene": "f975009578328636d19398e209163f7d",
+        "scene": "9fda035648098793fc6832c510d89a13",
         "geometry": "69205bff30f19fb12b049ee364eb8c3c",
         "selection": "9f29687d0ca7dc2df0e0533bd508edfc",
         "overlay": "96adbf7136966877820bd3966f8c56d3",
@@ -21808,7 +21808,7 @@
         "tools": "ea45a299a84933ec15f4eef834f4f808",
         "viewports": "85931245800837283591be73776fa66c",
         "preferences": "fb07c91e94447fb4023592fe0294cd04",
-        "revisions": "07d48a450652e6a131e78f5cda24e850"
+        "revisions": "ad9d87282c9a0b7271cbc55434850763"
       },
       "after_domains": {
         "documents": "bf55a0979f4e8f42bf6db8dff9e504ac",
@@ -21821,7 +21821,7 @@
         "tools": "4f6814a82d727def9299cc506ab85861",
         "viewports": "85931245800837283591be73776fa66c",
         "preferences": "fb07c91e94447fb4023592fe0294cd04",
-        "revisions": "047c7d6d723382d7d2b964eb4ffdc756"
+        "revisions": "101db8b67704f9b6565e2cbaeb5f3212"
       },
       "changed_domains": 1278,
       "external_calls_before": 0,
@@ -22613,5 +22613,5 @@
       "lifecycle": {}
     }
   },
-  "approved_change_reason": "Fix UV Peel distortion: regular quad strips now share reference arc-length stations and physical transverse widths while retaining exact history and repeat semantics."
+  "approved_change_reason": "Initialize generated primitives in creation-world texture space; Primitive Apply and Cancel capture the initial sampling component and its scene revision while geometry and command outcomes remain unchanged."
 }

@@ -149,6 +149,8 @@ public:
   [[nodiscard]] ViewportOverlayFrame
   selection_overlay_frame(ModelingSelectionOverlayOptions options = {}) const;
   [[nodiscard]] ViewportOverlayFrame volatile_overlay_frame() const;
+  /// Cheap generated-preview state; never materializes SDK or render meshes.
+  [[nodiscard]] std::uint64_t tool_preview_signature() const;
   [[nodiscard]] std::vector<ModelingToolPreviewMesh>
   tool_preview_meshes() const;
   [[nodiscard]] bool transient_transform_preview_active() const;

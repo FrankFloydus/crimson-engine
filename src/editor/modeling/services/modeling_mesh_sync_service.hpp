@@ -28,6 +28,7 @@ class SceneProjectionCheckpoint;
 struct SceneTransformAssignment;
 class SceneModelingSyncService;
 struct TransformComponent;
+struct TextureMappingComponent;
 
 /// Reports sharing and compilation work from the latest mesh projection pass.
 struct ModelingMeshSyncStats final {
@@ -77,6 +78,9 @@ public:
   [[nodiscard]] bool set_projected_transform(
       SceneDocument &scene, EntityId entity,
       const TransformComponent &transform) const;
+  [[nodiscard]] bool set_projected_texture_mapping(
+      SceneDocument &scene, EntityId entity,
+      const TextureMappingComponent &mapping) const;
   [[nodiscard]] bool set_projected_mesh_component(
       SceneDocument &scene, EntityId entity, const MeshComponent &mesh) const;
   [[nodiscard]] bool set_projected_modeling_object_component(

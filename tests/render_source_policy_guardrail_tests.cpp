@@ -1220,13 +1220,70 @@ TEST(SceneRenderBridgeTests,
       "preview_result == ToolPreviewSubmissionResult::Failed",
       api_submission);
   const std::size_t cache_sync_gate = render_api_source.find(
-      "api.idle_tool_preview_sync_bridge_ = &bridge", api_failure);
+      "api.generated_tool_preview_sync_bridge_ = &bridge", api_failure);
   ASSERT_NE(api_submission, std::string::npos);
   ASSERT_NE(api_failure, std::string::npos);
   ASSERT_NE(cache_sync_gate, std::string::npos);
   EXPECT_LT(api_submission, api_failure);
   EXPECT_LT(api_failure, cache_sync_gate)
       << "failed preview publication must return before sync gates advance";
+}
+
+TEST(SceneRenderBridgeTests,
+     GeneratedToolPreviewGateTracksGeometryBeforeCompilingMeshes) {
+  const std::string api_source =
+      read_source_file("src/api/quader_render_api.cpp");
+  const std::size_t key_begin =
+      api_source.find("std::uint64_t generated_tool_preview_signature = 0;");
+  const std::size_t signature =
+      api_source.find("project.modeling().tool_preview_signature()");
+  const std::size_t gate = api_source.find(
+      "api.generated_tool_preview_signature_ == generated_tool_preview_signature",
+      signature);
+  const std::size_t compile =
+      api_source.find("project.modeling().tool_preview_meshes()", gate);
+  ASSERT_NE(key_begin, std::string::npos);
+  ASSERT_NE(signature, std::string::npos);
+  ASSERT_NE(gate, std::string::npos);
+  ASSERT_NE(compile, std::string::npos);
+  EXPECT_LT(signature, gate);
+  EXPECT_LT(gate, compile);
+  const std::string gate_inputs = api_source.substr(key_begin, gate - key_begin);
+  for (const char *dependency : {
+           "project.modeling().content_revision()",
+           "project.modeling().modeling_object_map_revision()",
+           "project.scene().transform_revision()",
+           "project.scene().hierarchy_presentation_revision()",
+           "project.instances().instance_edit_revision()",
+           ".add_value(instance_edit_revision)"}) {
+    EXPECT_NE(gate_inputs.find(dependency), std::string::npos) << dependency;
+  }
+  EXPECT_EQ(gate_inputs.find("instance_edit_state()"), std::string::npos)
+      << "the presentation snapshot copies names before the unchanged gate";
+
+  const std::string service_source =
+      read_source_file("src/editor/modeling/services/modeling_session_services.cpp");
+  const std::size_t begin =
+      service_source.find("ModelingOverlayService::tool_preview_signature(");
+  const std::size_t end =
+      service_source.find("ModelingOverlayService::volatile_overlay_signature(",
+                          begin);
+  ASSERT_NE(begin, std::string::npos);
+  ASSERT_NE(end, std::string::npos);
+  const std::string signature_source = service_source.substr(begin, end - begin);
+  for (const char *expensive_projection : {
+           "box_preview_descriptor(", "mirror_plane_points(",
+           "preview_mirror(", "tool_preview_meshes("}) {
+    EXPECT_EQ(signature_source.find(expensive_projection), std::string::npos)
+        << "preview state hashing must stay ahead of geometry generation: "
+        << expensive_projection;
+  }
+  EXPECT_NE(signature_source.find("BoxDragState::Height"), std::string::npos);
+  EXPECT_NE(signature_source.find("box.height_distance"), std::string::npos);
+  EXPECT_NE(signature_source.find("mirror_has_mesh_preview(mirror)"),
+            std::string::npos);
+  EXPECT_NE(signature_source.find("mirror.target_object_ids"), std::string::npos);
+  EXPECT_NE(signature_source.find("mirror.plane.points"), std::string::npos);
 }
 
 TEST(SceneRenderBridgeTests,

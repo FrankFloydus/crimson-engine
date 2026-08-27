@@ -1425,6 +1425,7 @@ if(QUADER_BUILD_TESTS)
         tests/modeling_legacy_local_frame_upgrade_tests.cpp
         tests/modeling_tool_catalog_tests.cpp
         tests/render_extraction_tests.cpp
+        tests/tool_preview_submission_tests.cpp
         tests/scene_transform_tests.cpp
         tests/selection_mode_adapter_tests.cpp
         tests/viewport_interaction_controller_tests.cpp

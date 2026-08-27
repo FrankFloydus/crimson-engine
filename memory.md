@@ -6907,6 +6907,18 @@ Invariant:
   rotation/scale include their pivot translations; combined edits apply scale, rotation, translation.
   Instance sampling composes member correction D with inverse(B) * Coccurrence * B. Pivot rebases
   preserve effective UVs, and flattening bakes the mapping before clearing it.
+- Newly generated primitives initialize C from their creation-world frame before committing
+  creation. Centered local geometry alone would put the repeat boundary through every new cube's
+  center, independent of its world location; Texture Lock then preserves that wrong initial phase.
+  Primitive, Box, and Poly creation opt in through the SDK projection adapter; generic
+  `ModelingCreateMeshRequest` defaults to preserving authored UV sampling. Keep identity mappings
+  component-free and do not bake the correction into generated UVs, which live primitive rebuilds
+  replace. World-space previews and committed sampling must agree, including one-map-unit offsets.
+- Instance-edit creation captures the desired chart before reparenting, then uses scene-owned
+  inverse composition to compensate the displayed occurrence's existing texture correction.
+  Do not change the definition's other members or other occurrence mappings. History restoration
+  installs the saved MeshComponent before restoring the parent: instance definitions reject bare
+  Mesh entities, so reversing that order silently loses instance membership on redo.
 - The neutral texture evaluator is shared by compilation, rendering adaptation, flattening, and
   OBJ export. Compiled UV carriers retain authored residuals and use canonical geometric normals,
   independent of smooth shading. Filament binds mapping/cofactor arrays in instance-transform order,
@@ -6937,6 +6949,18 @@ and Release builds pass, producing `build/vs2026/Debug/quader.exe` and
 `build/vs2026/Release/quader.exe`; the app version is unchanged. Automated Debug/Profile Vulkan
 startup smoke passes with both mesh materials loaded. Interactive UI verification was stopped by
 the user's Escape key, so face-control layout and texture pixel output have no manual verdict.
+
+Creation-space follow-up verification: all 87 focused creation, texture-lock, and mesh-sync tests
+pass, including the 32-map-unit cube, one-unit offsets, world preview/commit parity, all live
+primitive kinds, authored-UV preservation, failure rollback, and rotated instance Apply/undo/redo.
+The 53 metadata and 168 runtime loop tests pass. Only Primitive Apply/Cancel baseline records
+intentionally change: the initial sampling component and one scene revision; geometry, command
+outcomes, and all other command records stay unchanged. The rerun regression gate matches the
+pre-change log's exact 12 failures (seven guardrails, five Linear Array/overlay tests), with all
+modeling-domain, SDK consumer/parity, and command-contract tests passing. Both canonical app builds
+succeed without a version bump. Startup smoke logs confirm Vulkan/material initialization, but
+its screen capture was occluded; the subsequent targeted visual check was canceled with Escape,
+so the creation texture pixel output has no manual verdict.
 
 ## 2026-08-27 - Restored Texture Toolbar Visibility
 
@@ -7155,3 +7179,72 @@ the correction in lit and unlit views with both overhead and oblique perspective
 a triangle-only control with identical corner UVs.
 This probe creates no HWND or swapchain and performs no desktop capture or focus manipulation.
 Diagnostic sources, logs, and before/after pixels are under `build/vs2026/uv-peel-regression/`.
+
+## 2026-08-27 - Missing Mirror Mesh Preview
+
+- `QuaderRenderApiRuntimeAccess::sync_tool_previews()` incorrectly classified every non-array,
+  non-transform preview as idle. A successful empty submission then hid later Mirror plane and
+  Box Height meshes because those interactions did not change the old scene/asset cache key.
+- `ModelingOverlayService::tool_preview_signature()` hashes only generated-preview inputs:
+  Box Height geometry/grid inputs and valid Mirror target IDs, captured points, and face normal.
+  Read raw scalar state before allocating a Box descriptor or compiling an SDK preview. Inert
+  hover and drag-end state do not invalidate unchanged geometry. Mirror eligibility is shared
+  between the signature and mesh producer.
+- The render submission key also tracks source content/object-map revisions, scene pose/hierarchy,
+  active instance scope, materials, texture mapping, and local visibility. Array/transform fast
+  paths remain separate. Read `instance_edit_revision()` before hashing, not the name-copying
+  `instance_edit_state()` presentation snapshot. Cache only successful publications; failure must
+  retain the old candidate and retry. Cancellation, reactivation, session rebind, and bridge changes invalidate
+  correctly without turning steady-state frames into mesh-compilation work.
+- `ModelingSdkProjectionAdapter::preview_mirror()` must use its installed modeling-object world
+  resolver, matching Mirror finalization. In instance edit, raw scene world addresses the hidden
+  definition instead of the displayed occurrence. Validate the inverse and use the same resolved
+  frame for local plane conversion and the preview transform.
+- `tests/tool_preview_submission_tests.cpp` owns the native render/gesture integration tests;
+  these do not belong in the public-API-only test suite. Ordinary editor intent still uses public
+  APIs. Mirror cancels through `cancel_modal_tool()` and finalizes through the drawn-plane viewport
+  port, not the generic operation-preview Apply/Cancel route.
+- The internal render-access publisher seam lets a stable headless sink acknowledge extracted
+  records and simulate publication failure. Production still publishes through SceneRenderBridge;
+  an uninitialized GPU bridge must not claim success merely to satisfy a headless test.
+
+Verification: the missing Mirror/Box submissions and misplaced instance preview were reproduced
+before their respective fixes. Three render-submission regressions now cover actual geometry and
+material records, plane/height updates, unchanged-frame compile counts, failure/retry, cancellation,
+reactivation, source preservation, and instance preview/commit parity. All 310 focused tests and
+55 render/public-test source-policy checks pass. With a 512-character instance name, five samples
+of 50,000 unchanged headless submissions measured median 219 ns -> 150 ns per call (69 ns / 31.5%
+less) after replacing the presentation snapshot with its scalar revision. Publication and mesh
+compile counts stay unchanged. This is an idle-submission measurement, not a viewport FPS claim.
+Samples are in `build/vs2026/Testing/mirror-preview-key-before-*.xml` and `-after-*.xml`.
+No GPU pixel verdict is claimed.
+
+## 2026-08-27 - Mirror Preview Preserves Flipped Face Visibility
+
+- Mirror preview and commit already use the same SDK reflection operation. Reflecting positions
+  and reversing the existing face loops preserves authored inward/outward winding; it must not
+  normalize an inside-out mesh back to outward faces.
+- The visual mismatch was the generic `ModelingToolPreviewMesh::double_sided = true` default:
+  Mirror omitted the source mesh's culling policy, making inward-facing outer backfaces visible.
+  `ModelingSdkProjectionAdapter::preview_mirror()` now copies `MeshComponent::double_sided` from
+  the source entity. Source-less Box previews retain their existing two-sided default.
+- Extraction and all preview render passes already forward this policy. Scene render-component
+  revision changes invalidate generated submissions, and the preview material signature includes
+  culling, so changing the source setting while Mirror is active must refresh the preview.
+- `ToolPreviewSubmissionTests` checks every inverted-box triangle and compiled vertex normal,
+  source preservation, both culling settings and live toggles, unchanged-frame caching, and exact
+  preview-to-commit positions/normals/indices/culling parity. The pre-fix run failed only the
+  culling assertions; its geometry and normal assertions already passed.
+
+Verification: all 333 focused native tests and 16 render source-policy checks pass. An offscreen
+Vulkan diagnostic uses actual public CreateBox/InvertMesh and native Mirror preview/finalization,
+then renders their extracted records with the production mesh factory and materials. Corrected
+preview and committed output have zero differing pixels in both Shaded/unlit and Rendered/lit.
+The old forced-two-sided control differs at 47,922 pixels in each mode and visibly closes the
+interior. Source, preview, and committed box signed volumes remain -8. The diagnostic creates no
+window or swapchain and captures only its owned render target; it is not a full native UI smoke.
+Sources, logs, six PNGs, and `gpu-comparison.json` are under
+`build/vs2026/mirror-normals-regression/`.
+The full regression gate has the same 12 pre-existing failures as the preceding Mirror-preview
+run, with unchanged diagnostics (including the SDK-only guardrail repeats). Modeling domain,
+SDK consumer/parity, and all command-behavior contracts pass; no baseline was regenerated.

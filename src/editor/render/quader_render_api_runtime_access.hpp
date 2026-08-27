@@ -14,10 +14,14 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <functional>
+#include <vector>
 
 namespace quader {
 
 class SceneRenderBridge;
+enum class ToolPreviewSubmissionResult : std::uint8_t;
+struct RenderToolPreviewMeshRecord;
 struct ViewportSceneOverlayFrameRequest;
 
 /**
@@ -37,10 +41,15 @@ struct QuaderRenderSceneOverlaySyncRequest {
  */
 class QuaderRenderApiRuntimeAccess final {
 public:
+  /// Headless hosts may retain and acknowledge the same extracted preview payload.
+  using ToolPreviewPublisher = std::function<ToolPreviewSubmissionResult(
+      std::vector<RenderToolPreviewMeshRecord>)>;
+
   static QuaderApiVoidResult sync_scene(QuaderRenderApi &api,
                                         SceneRenderBridge &bridge);
-  static QuaderApiVoidResult sync_tool_previews(QuaderRenderApi &api,
-                                                SceneRenderBridge &bridge);
+  static QuaderApiVoidResult sync_tool_previews(
+      QuaderRenderApi &api, SceneRenderBridge &bridge,
+      const ToolPreviewPublisher &publish = {});
   static QuaderApiVoidResult sync_scene_asset_overlays(
       QuaderRenderApi &api, SceneRenderBridge &bridge,
       RenderOverlaySnapshotCache &snapshot_cache,

@@ -2210,6 +2210,10 @@ public:
     return frame;
   }
 
+  [[nodiscard]] std::uint64_t tool_preview_signature() const {
+    return overlay_service_.tool_preview_signature(runtime_);
+  }
+
   [[nodiscard]] std::vector<ModelingToolPreviewMesh>
   tool_preview_meshes() const {
     return overlay_service_.tool_preview_meshes(runtime_,
@@ -5861,13 +5865,22 @@ public:
   }
 
   [[nodiscard]] ModelingSdkProjectionAdapter::CreationFinalizer
-  sdk_creation_finalizer() {
+  sdk_creation_finalizer(bool world_texture_projection) {
     const ModelingInstanceEditScope edit_scope =
         instance_edit_scope_provider_ ? instance_edit_scope_provider_()
                                       : ModelingInstanceEditScope{};
-    return [this, edit_scope](const ModelingObjectRecord &created) {
+    return [this, edit_scope, world_texture_projection](
+               const ModelingObjectRecord &created) {
       if (edit_scope.definition == kInvalidEntityId) {
         return true;
+      }
+      // Capture the construction chart before the entity is placed in the
+      // definition. Its displayed occurrence may already have a lock correction.
+      const std::optional<QMat4> desired_sampling = world_texture_projection
+          ? effective_texture_sampling_from_local(scene_, created.entity)
+          : std::nullopt;
+      if (world_texture_projection && !desired_sampling.has_value()) {
+        return false;
       }
       const InstanceOccurrenceComponent *occurrence =
           scene_.instance_occurrence(edit_scope.occurrence);
@@ -5894,10 +5907,20 @@ public:
               scene_transform_multiply(definition_world,
                                        definition_local_world),
               *created_transform);
-      return member_local.has_value() &&
-             mesh_sync_service_.place_created_scene_object(
-                 scene_, created.entity, edit_scope.definition,
-                 *member_local);
+      if (!member_local.has_value() ||
+          !mesh_sync_service_.place_created_scene_object(
+              scene_, created.entity, edit_scope.definition, *member_local)) {
+        return false;
+      }
+      if (!desired_sampling.has_value()) {
+        return true;
+      }
+      const std::optional<TextureMappingComponent> member_mapping =
+          texture_mapping_for_effective_sampling(
+              scene_, created.entity, *desired_sampling, edit_scope.occurrence);
+      return member_mapping.has_value() &&
+             mesh_sync_service_.set_projected_texture_mapping(
+                 scene_, created.entity, *member_mapping);
     };
   }
 
@@ -5909,7 +5932,7 @@ public:
     }
     ModelingCreateBoxResult created = sdk_projection_adapter_.create_face(
         state.points, state.face_normal, "Poly", material,
-        sdk_creation_finalizer());
+        sdk_creation_finalizer(true));
     invalidate_selection_overlay_caches();
     if (created.ok) {
       runtime_.reset_poly_state();
@@ -5943,7 +5966,7 @@ public:
   ModelingCreateBoxResult
   create_box_from_bounds(const ModelingCreateBoxRequest &request) {
     ModelingCreateBoxResult created =
-        sdk_projection_adapter_.create_box(request, sdk_creation_finalizer());
+        sdk_projection_adapter_.create_box(request, sdk_creation_finalizer(true));
     if (created.ok) {
       invalidate_selection_overlay_caches();
     }
@@ -6007,7 +6030,7 @@ public:
     ModelingCreateBoxResult created =
         sdk_projection_adapter_.create_box_from_corners(
             preview.corners, name.empty() ? std::string_view{"Box"} : name,
-            {}, sdk_creation_finalizer());
+            {}, sdk_creation_finalizer(true));
     if (!created.ok) {
       return created;
     }
@@ -6040,7 +6063,8 @@ public:
   ModelingCreateBoxResult
   create_mesh(const ModelingCreateMeshRequest &request) {
     ModelingCreateBoxResult created =
-        sdk_projection_adapter_.create_mesh(request, sdk_creation_finalizer());
+        sdk_projection_adapter_.create_mesh(
+            request, sdk_creation_finalizer(request.world_texture_projection));
     if (created.ok) {
       invalidate_selection_overlay_caches();
     }
@@ -7464,6 +7488,10 @@ ViewportOverlayFrame ModelingSessionService::selection_overlay_frame(
 
 ViewportOverlayFrame ModelingSessionService::volatile_overlay_frame() const {
   return impl_->volatile_overlay_frame();
+}
+
+std::uint64_t ModelingSessionService::tool_preview_signature() const {
+  return impl_->tool_preview_signature();
 }
 
 std::vector<ModelingToolPreviewMesh>

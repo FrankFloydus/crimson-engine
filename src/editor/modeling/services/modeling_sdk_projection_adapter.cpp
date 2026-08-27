@@ -895,14 +895,24 @@ public:
         return preview;
       }
 
-      const QMat4 world = scene_.world_transform_matrix(*entity);
-      const QMat4 local_from_world = inverse(world);
+      const std::optional<QMat4> world =
+          modeling_object_world_transform_resolver_
+              ? modeling_object_world_transform_resolver_(native_id)
+              : std::optional<QMat4>{scene_.world_transform_matrix(*entity)};
+      const std::optional<QMat4> local_from_world =
+          world.has_value() ? try_scene_matrix_inverse(*world) : std::nullopt;
+      if (!world.has_value() || !local_from_world.has_value()) {
+        preview.command =
+            failure("Mirror target mesh has a non-invertible world transform.");
+        preview.meshes.clear();
+        return preview;
+      }
       const QVec3 first =
-          transform_point(local_from_world, world_plane_points[0]);
+          transform_point(*local_from_world, world_plane_points[0]);
       const QVec3 second =
-          transform_point(local_from_world, world_plane_points[1]);
+          transform_point(*local_from_world, world_plane_points[1]);
       const QVec3 third =
-          transform_point(local_from_world, world_plane_points[2]);
+          transform_point(*local_from_world, world_plane_points[2]);
       const QVec3 normal = cross(second - first, third - first);
       if (!finite(first) || !finite(normal) ||
           length_squared(normal) <= 0.0000001F) {
@@ -934,12 +944,14 @@ public:
         return preview;
       }
       const MaterialComponent *material = scene_.material(*entity);
+      const MeshComponent *source_mesh = scene_.mesh(*entity);
       mesh->name = "Mirror Preview";
       preview.meshes.push_back({
           .source_entity = *entity,
           .material = material != nullptr ? *material : MaterialComponent{},
           .mesh = std::move(*mesh),
-          .transform = world,
+          .transform = *world,
+          .double_sided = source_mesh != nullptr && source_mesh->double_sided,
       });
     }
 
@@ -1244,6 +1256,11 @@ public:
                                             *initial_scene_transform)) {
       return rollback("SDK box initial scene transform could not be stored.");
     }
+    if (!mesh_sync_.set_projected_texture_mapping(
+            scene_, entity,
+            {.sampling_from_local = scene_.world_transform_matrix(entity)})) {
+      return rollback("SDK box initial world texture mapping could not be stored.");
+    }
     const int native_object_id = next_available_native_object_id();
     if (native_object_id == kInvalidModelingObjectId ||
         native_object_id == std::numeric_limits<int>::max()) {
@@ -1321,7 +1338,8 @@ public:
     }
     return create_document(std::move(document).value(), request.name,
                            request.material_slot, request.material,
-                           request.initial_scene_transform, finalize);
+                           request.initial_scene_transform,
+                           request.world_texture_projection, finalize);
   }
 
   [[nodiscard]] ModelingCreateBoxResult create_box_from_corners(
@@ -1365,7 +1383,7 @@ public:
     return create_document(
         std::move(document).value(),
         requested_name.empty() ? std::string_view{"Box"} : requested_name,
-        0U, material, frame->transform, finalize);
+        0U, material, frame->transform, true, finalize);
   }
 
   [[nodiscard]] ModelingCreateBoxResult
@@ -1430,13 +1448,14 @@ public:
                              : document.error_message()};
     }
     return create_document(std::move(document).value(), requested_name, 0U,
-                           material, frame->transform, finalize);
+                           material, frame->transform, true, finalize);
   }
 
   [[nodiscard]] ModelingCreateBoxResult
   create_document(PolygonDocument document, std::string_view requested_name,
                   std::uint32_t material_slot, MaterialReference material,
                   const std::optional<ModelingTransform3> &initial_transform,
+                  bool world_texture_projection,
                   const CreationFinalizer &finalize) {
 
     std::optional<TransformComponent> initial_scene_transform;
@@ -1544,6 +1563,12 @@ public:
         !mesh_sync_.set_projected_transform(scene_, entity,
                                             *initial_scene_transform)) {
       return rollback("SDK mesh initial scene transform could not be stored.");
+    }
+    if (world_texture_projection &&
+        !mesh_sync_.set_projected_texture_mapping(
+            scene_, entity,
+            {.sampling_from_local = scene_.world_transform_matrix(entity)})) {
+      return rollback("SDK mesh initial world texture mapping could not be stored.");
     }
     const int native_object_id = next_available_native_object_id();
     if (native_object_id == kInvalidModelingObjectId ||

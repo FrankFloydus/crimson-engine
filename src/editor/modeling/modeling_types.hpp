@@ -372,6 +372,9 @@ struct ModelingCreateMeshRequest {
   // Optional scene-local placement for already-local document geometry. Most
   // callers omit this and retain the established identity projection.
   std::optional<ModelingTransform3> initial_scene_transform;
+  // Generated primitives opt in to the construction world's texture chart.
+  // Imported/custom documents keep their authored sampling by default.
+  bool world_texture_projection = false;
 };
 
 /**

@@ -8,14 +8,22 @@
 #include "api/quader_api_session_internal_access.hpp"
 #include "api/quader_editor_api.hpp"
 #include "editor/history/editor_history_service.hpp"
+#include "editor/instances/scene_instance_service.hpp"
+#include "editor/interactions/box_tool.hpp"
 #include "editor/modeling/runtime/modeling_object_runtime_map.hpp"
+#include "editor/modeling/runtime/tool_constants.hpp"
 #include "editor/modeling/services/modeling_mesh_sync_service.hpp"
 #include "editor/modeling/services/modeling_sdk_projection_adapter.hpp"
 #include "editor/modeling/services/modeling_session_service.hpp"
 #include "editor/modeling/services/primitive_creation_tool_service.hpp"
+#include "editor/projection/mesh_projection_service.hpp"
+#include "editor/projection/tool_preview_mesh_projection.hpp"
 #include "editor/session/scene_session.hpp"
 #include "math/glm_bridge.hpp"
 #include "scene/scene_document.hpp"
+#include "scene/scene_texture_mapping.hpp"
+
+#include <quader/modeling/neutral/polygon/document_texture.hpp>
 
 #include <gtest/gtest.h>
 
@@ -156,6 +164,481 @@ std::uint64_t compiled_content_id(const ModelingSessionService &modeling,
   return mesh->geometry_content_id().value;
 }
 
+std::vector<QVec2> effective_texture_uvs(const SceneDocument &scene,
+                                       EntityId entity,
+                                       const MeshAsset &mesh,
+                                       EntityId occurrence = kInvalidEntityId) {
+  const std::optional<QMat4> mapping =
+      effective_texture_sampling_from_local(scene, entity, occurrence);
+  if (!mapping.has_value()) {
+    const auto *instance = scene.instance_occurrence(occurrence);
+    ADD_FAILURE() << "Missing texture sampling for entity " << entity
+                  << "; exists=" << scene.exists(entity)
+                  << "; parent=" << scene.parent(entity)
+                  << "; member_definition="
+                  << scene.containing_instance_definition(entity)
+                  << "; occurrence=" << occurrence
+                  << "; occurrence_exists=" << scene.exists(occurrence)
+                  << "; occurrence_definition="
+                  << (instance != nullptr ? instance->definition
+                                          : kInvalidEntityId);
+    return {};
+  }
+  const quader_poly::Transform3 sampling =
+      MeshProjectionService::texture_mapping_transform(*mapping);
+  std::vector<QVec2> result;
+  result.reserve(mesh.geometry().vertices.size());
+  for (const MeshVertex &vertex : mesh.geometry().vertices) {
+    result.push_back(quader_poly::evaluate_texture_mapping(
+        vertex.uv, vertex.position, vertex.uv_geometric_normal,
+        vertex.uv_carrier, sampling));
+  }
+  return result;
+}
+
+void expect_texture_uvs_near(const std::vector<QVec2> &actual,
+                            const std::vector<QVec2> &expected) {
+  ASSERT_EQ(actual.size(), expected.size());
+  for (std::size_t index = 0; index < actual.size(); ++index) {
+    SCOPED_TRACE(index);
+    EXPECT_NEAR(actual[index].x, expected[index].x, 0.0001f);
+    EXPECT_NEAR(actual[index].y, expected[index].y, 0.0001f);
+  }
+}
+
+std::vector<QVec2> world_generated_texture_uvs(const MeshAsset &mesh,
+                                             const QMat4 &world) {
+  std::vector<QVec2> expected;
+  expected.reserve(mesh.geometry().vertices.size());
+  for (const MeshVertex &vertex : mesh.geometry().vertices) {
+    expected.push_back(quader_poly::generated_texture_uv(
+        transform_point(world, vertex.position),
+        normalize(transform_vector(world, vertex.uv_geometric_normal))));
+  }
+  return expected;
+}
+
+void expect_world_generated_texture_uvs(const SceneDocument &scene,
+                                        EntityId entity,
+                                        const MeshAsset &mesh) {
+  expect_texture_uvs_near(
+      effective_texture_uvs(scene, entity, mesh),
+      world_generated_texture_uvs(mesh, scene.world_transform_matrix(entity)));
+}
+
+std::optional<QVec2> top_face_texture_uv_at_world_point(
+    const SceneDocument &scene, EntityId entity, const MeshAsset &mesh,
+    QVec3 point) {
+  const QMat4 world = scene.world_transform_matrix(entity);
+  const std::vector<QVec2> uvs = effective_texture_uvs(scene, entity, mesh);
+  for (std::size_t index = 0; index < uvs.size(); ++index) {
+    const MeshVertex &vertex = mesh.geometry().vertices[index];
+    if (near_point(vertex.uv_geometric_normal, {0.0f, 1.0f, 0.0f}) &&
+        near_point(transform_point(world, vertex.position), point)) {
+      return uvs[index];
+    }
+  }
+  return std::nullopt;
+}
+
+TEST(PrimitiveCreationToolServiceTests,
+     ThirtyTwoMapUnitBoxesStartInSharedWorldTextureSpaceWithEitherLockPolicy) {
+  constexpr float kBoxSize =
+      32.0f / quader_editor_core::kDefaultMapUnitsPerWorldUnit;
+  constexpr float kOneMapUnit =
+      1.0f / quader_editor_core::kDefaultMapUnitsPerWorldUnit;
+  for (const bool texture_lock : {false, true}) {
+    SCOPED_TRACE(::testing::Message() << "texture_lock=" << texture_lock);
+    SceneSession session;
+    QuaderEditorApi editor(
+        QuaderApiSessionInternalAccess::from_scene_session(session));
+    editor.preferences().set_runtime_hooks(QuaderPreferencesRuntimeHooks{
+        .texture_lock_enabled = [texture_lock] { return texture_lock; },
+    });
+    ASSERT_TRUE(editor.tools().activate(ViewportToolId::CreatePrimitive).ok());
+    const std::array<float, 3> offsets{0.0f, kOneMapUnit, kBoxSize};
+    for (const float offset : offsets) {
+      const ModelingBoxPreview preview = oriented_primitive_preview(
+          {0.5f * kBoxSize + offset, 0.5f * kBoxSize, 0.5f * kBoxSize},
+          {1.0f, 0.0f, 0.0f}, {0.0f, 1.0f, 0.0f}, kBoxSize, kBoxSize,
+          kBoxSize);
+      const CommandResult accepted =
+          session.primitive_creation().accept_preview(preview, "World Tile");
+      ASSERT_TRUE(accepted.ok) << accepted.message;
+    }
+    const std::vector<ModelingObjectRecord> objects = session.modeling().objects();
+    ASSERT_EQ(objects.size(), offsets.size());
+    std::array<MeshAsset, 3> meshes;
+    for (std::size_t index = 0; index < objects.size(); ++index) {
+      const auto mesh = session.modeling().compile_object_mesh(
+          objects[index].modeling_object_id);
+      ASSERT_TRUE(mesh.has_value());
+      meshes[index] = *mesh;
+      expect_world_generated_texture_uvs(session.scene(), objects[index].entity,
+                                         meshes[index]);
+      for (const MeshVertex &vertex : meshes[index].geometry().vertices) {
+        EXPECT_LE(std::abs(vertex.position.x), 0.5f * kBoxSize);
+        EXPECT_LE(std::abs(vertex.position.y), 0.5f * kBoxSize);
+        EXPECT_LE(std::abs(vertex.position.z), 0.5f * kBoxSize);
+      }
+    }
+    const auto origin_uv = top_face_texture_uv_at_world_point(
+        session.scene(), objects[0].entity, meshes[0], {0.0f, kBoxSize, 0.0f});
+    const auto offset_uv = top_face_texture_uv_at_world_point(
+        session.scene(), objects[1].entity, meshes[1],
+        {kOneMapUnit, kBoxSize, 0.0f});
+    ASSERT_TRUE(origin_uv.has_value());
+    ASSERT_TRUE(offset_uv.has_value());
+    EXPECT_NEAR(origin_uv->x, 0.0f, 0.00001f);
+    EXPECT_NEAR(origin_uv->y, 0.0f, 0.00001f);
+    EXPECT_NEAR(offset_uv->x - origin_uv->x, 1.0f / 64.0f, 0.00001f);
+    EXPECT_NEAR(offset_uv->y, origin_uv->y, 0.00001f);
+    for (const float z : {0.0f, kBoxSize}) {
+      const QVec3 shared_point{kBoxSize, kBoxSize, z};
+      const auto first_uv = top_face_texture_uv_at_world_point(
+          session.scene(), objects[0].entity, meshes[0], shared_point);
+      const auto adjacent_uv = top_face_texture_uv_at_world_point(
+          session.scene(), objects[2].entity, meshes[2], shared_point);
+      ASSERT_TRUE(first_uv.has_value());
+      ASSERT_TRUE(adjacent_uv.has_value());
+      EXPECT_NEAR(first_uv->x, adjacent_uv->x, 0.00001f);
+      EXPECT_NEAR(first_uv->y, adjacent_uv->y, 0.00001f);
+    }
+    ASSERT_TRUE(editor.tools().cancel_active_tool_preview().ok());
+    EXPECT_TRUE(session.modeling().objects().empty());
+    EXPECT_FALSE(editor.history().can_undo());
+  }
+}
+
+TEST(PrimitiveCreationToolServiceTests,
+     WorldSpaceBoxPreviewMatchesEffectiveCommittedTextureCoordinates) {
+  for (const QVec3 normal : {QVec3{0.0f, 1.0f, 0.0f},
+                             QVec3{0.0f, 0.8660254f, 0.5f}}) {
+    SCOPED_TRACE(::testing::Message() << "normal.y=" << normal.y);
+    PrimitiveCreationHarness harness;
+    ASSERT_TRUE(harness.tool.activate(PrimitiveCreationKind::Box).ok);
+    quader_editor_core::BoxToolState state;
+    const QVec3 start{4.03125f, 2.0f, -3.0f};
+    ASSERT_TRUE(quader_editor_core::set_box_construction_plane(
+                    state, start, normal).ok);
+    ASSERT_TRUE(quader_editor_core::begin_box_footprint(
+                    state, start, start + state.plane.axis_u + state.plane.axis_v,
+                    false, 0.03125).ok);
+    state.drag_state = quader_editor_core::BoxDragState::Height;
+    state.height_distance = 1.0;
+    const auto descriptor =
+        quader_editor_core::box_preview_descriptor(state, false, 0.03125);
+    const auto preview_mesh =
+        ToolPreviewMeshProjection::box_preview_mesh_from_descriptor(descriptor);
+    ASSERT_TRUE(preview_mesh.has_value());
+    const auto corners = quader_editor_core::box_preview_corners(descriptor);
+    ModelingBoxPreview preview;
+    ASSERT_EQ(corners.size(), preview.corners.size());
+    preview.ok = true;
+    preview.valid = true;
+    preview.drag_state = ModelingBoxDragState::Height;
+    std::ranges::copy(corners, preview.corners.begin());
+    preview.corner_count = corners.size();
+    ASSERT_TRUE(harness.tool.accept_preview(preview, "Preview Matched Tile").ok);
+    ASSERT_TRUE(harness.tool.apply().ok);
+    const auto objects = harness.modeling.objects();
+    ASSERT_EQ(objects.size(), 1U);
+    const ModelingObjectRecord object = objects.front();
+    const auto committed_mesh =
+        harness.modeling.compile_object_mesh(object.modeling_object_id);
+    ASSERT_TRUE(committed_mesh.has_value());
+    const QMat4 world = harness.scene.world_transform_matrix(object.entity);
+    const auto committed_uvs =
+        effective_texture_uvs(harness.scene, object.entity, *committed_mesh);
+    ASSERT_EQ(committed_uvs.size(), committed_mesh->geometry().vertices.size());
+    for (std::size_t index = 0; index < committed_uvs.size(); ++index) {
+      SCOPED_TRACE(index);
+      const MeshVertex &vertex = committed_mesh->geometry().vertices[index];
+      const QVec3 world_position = transform_point(world, vertex.position);
+      const QVec3 world_normal =
+          normalize(transform_vector(world, vertex.uv_geometric_normal));
+      const auto preview_vertex = std::ranges::find_if(
+          preview_mesh->geometry().vertices, [&](const MeshVertex &candidate) {
+            return near_point(candidate.position, world_position) &&
+                   near_point(candidate.uv_geometric_normal, world_normal);
+          });
+      ASSERT_NE(preview_vertex, preview_mesh->geometry().vertices.end());
+      EXPECT_NEAR(committed_uvs[index].x, preview_vertex->uv.x, 0.0001f);
+      EXPECT_NEAR(committed_uvs[index].y, preview_vertex->uv.y, 0.0001f);
+    }
+  }
+}
+
+TEST(PrimitiveCreationToolServiceTests,
+     LivePrimitiveKindsRetainWorldTextureSpaceThroughRebuildHistoryAndCancel) {
+  PrimitiveCreationHarness harness;
+  constexpr float kCosThirty = 0.8660254f;
+  const ModelingBoxPreview preview = oriented_primitive_preview(
+      {5.0f, 2.0f, -3.0f}, {1.0f, 0.0f, 0.0f},
+      {0.0f, kCosThirty, 0.5f}, 4.0f, 2.0f, 6.0f);
+  ASSERT_TRUE(harness.tool.activate(PrimitiveCreationKind::Box).ok);
+  ASSERT_TRUE(harness.tool.accept_preview(preview, "Live World Texture").ok);
+  ASSERT_TRUE(harness.tool.set_setting(kBoxSubdivisionsXSetting, 3.0).ok);
+  const auto objects = harness.modeling.objects();
+  ASSERT_EQ(objects.size(), 1U);
+  const ModelingObjectRecord object = objects.front();
+  for (const PrimitiveCreationKind kind : {
+           PrimitiveCreationKind::Box, PrimitiveCreationKind::Cylinder,
+           PrimitiveCreationKind::Sphere, PrimitiveCreationKind::Cone,
+           PrimitiveCreationKind::Torus}) {
+    SCOPED_TRACE(primitive_creation_default_name(kind));
+    ASSERT_TRUE(harness.tool.set_kind(kind).ok);
+    const auto mesh = harness.modeling.compile_object_mesh(object.modeling_object_id);
+    ASSERT_TRUE(mesh.has_value());
+    expect_world_generated_texture_uvs(harness.scene, object.entity, *mesh);
+    EXPECT_EQ(harness.modeling.objects().front().modeling_object_id,
+              object.modeling_object_id);
+    EXPECT_FALSE(harness.history.can_undo());
+  }
+  const auto applied_mesh =
+      harness.modeling.compile_object_mesh(object.modeling_object_id);
+  ASSERT_TRUE(applied_mesh.has_value());
+  const auto applied_uvs = effective_texture_uvs(harness.scene, object.entity,
+                                               *applied_mesh);
+  const auto applied_mapping =
+      effective_texture_sampling_from_local(harness.scene, object.entity);
+  ASSERT_TRUE(applied_mapping.has_value());
+  ASSERT_TRUE(harness.tool.apply().ok);
+  ASSERT_TRUE(harness.history.undo().ok);
+  EXPECT_TRUE(harness.modeling.objects().empty());
+  ASSERT_TRUE(harness.history.redo().ok);
+  ASSERT_TRUE(harness.scene.exists(object.entity));
+  const auto restored_mesh =
+      harness.modeling.compile_object_mesh(object.modeling_object_id);
+  ASSERT_TRUE(restored_mesh.has_value());
+  expect_texture_uvs_near(
+      effective_texture_uvs(harness.scene, object.entity, *restored_mesh),
+      applied_uvs);
+  const auto restored_mapping =
+      effective_texture_sampling_from_local(harness.scene, object.entity);
+  ASSERT_TRUE(restored_mapping.has_value());
+  EXPECT_EQ(restored_mapping->values, applied_mapping->values);
+
+  ASSERT_TRUE(harness.tool.activate(PrimitiveCreationKind::Box).ok);
+  ASSERT_TRUE(harness.tool
+                  .accept_preview(valid_primitive_preview(12.0f), "Canceled Tile")
+                  .ok);
+  ASSERT_TRUE(harness.tool.set_setting(kBoxSubdivisionsYSetting, 2.0).ok);
+  ASSERT_TRUE(harness.tool.cancel().ok);
+  ASSERT_EQ(harness.modeling.objects().size(), 1U);
+  EXPECT_EQ(harness.modeling.objects().front().modeling_object_id,
+            object.modeling_object_id);
+  const auto after_cancel =
+      harness.modeling.compile_object_mesh(object.modeling_object_id);
+  ASSERT_TRUE(after_cancel.has_value());
+  expect_texture_uvs_near(
+      effective_texture_uvs(harness.scene, object.entity, *after_cancel),
+      applied_uvs);
+  const auto mapping_after_cancel =
+      effective_texture_sampling_from_local(harness.scene, object.entity);
+  ASSERT_TRUE(mapping_after_cancel.has_value());
+  EXPECT_EQ(mapping_after_cancel->values, applied_mapping->values);
+  ASSERT_TRUE(harness.history.undo().ok);
+  EXPECT_TRUE(harness.modeling.objects().empty());
+}
+
+TEST(PrimitiveCreationToolServiceTests,
+     AppliedPrimitiveHonorsTextureLockForPublicMoveRotateAndHistory) {
+  for (const bool initial_lock : {false, true}) {
+    SCOPED_TRACE(::testing::Message() << "texture_lock=" << initial_lock);
+    SceneSession session;
+    QuaderEditorApi editor(
+        QuaderApiSessionInternalAccess::from_scene_session(session));
+    bool texture_lock = initial_lock;
+    editor.preferences().set_runtime_hooks(QuaderPreferencesRuntimeHooks{
+        .texture_lock_enabled = [&] { return texture_lock; },
+    });
+    ASSERT_TRUE(editor.tools().activate(ViewportToolId::CreatePrimitive).ok());
+    ASSERT_TRUE(session.primitive_creation()
+                    .accept_preview(valid_primitive_preview(3.0f), "Placed Tile")
+                    .ok);
+    ASSERT_TRUE(editor.tools().commit_active_tool_preview().ok());
+    const auto objects = session.modeling().objects();
+    ASSERT_EQ(objects.size(), 1U);
+    const ModelingObjectRecord object = objects.front();
+    const auto mesh = session.modeling().compile_object_mesh(object.modeling_object_id);
+    ASSERT_TRUE(mesh.has_value());
+    const MeshGeometryContentId initial_content = mesh->geometry_content_id();
+    const auto live_uvs = [&] {
+      const auto current_mesh =
+          session.modeling().compile_object_mesh(object.modeling_object_id);
+      if (!current_mesh.has_value()) {
+        ADD_FAILURE() << "Applied primitive no longer has a compiled mesh.";
+        return std::vector<QVec2>{};
+      }
+      EXPECT_EQ(current_mesh->geometry_content_id(), initial_content)
+          << "Object placement must not rebake authored geometry or UVs.";
+      return effective_texture_uvs(session.scene(), object.entity, *current_mesh);
+    };
+    const auto initial_uvs = effective_texture_uvs(session.scene(), object.entity,
+                                                 *mesh);
+    expect_world_generated_texture_uvs(session.scene(), object.entity, *mesh);
+
+    ASSERT_TRUE(editor.modeling().move_selection({0.03125f, 2.0f, -1.0f}).ok());
+    const auto moved_uvs = live_uvs();
+    if (initial_lock) {
+      expect_texture_uvs_near(moved_uvs, initial_uvs);
+    } else {
+      expect_texture_uvs_near(moved_uvs, world_generated_texture_uvs(
+          *mesh, session.scene().world_transform_matrix(object.entity)));
+    }
+    constexpr float kHalfPi = 1.57079632679f;
+    ASSERT_TRUE(editor.modeling()
+                    .rotate_selection({0.0f, kHalfPi, 0.0f}, {1.0f, -2.0f, 3.0f})
+                    .ok());
+    const auto rotated_uvs = live_uvs();
+    if (initial_lock) {
+      expect_texture_uvs_near(rotated_uvs, initial_uvs);
+    } else {
+      expect_texture_uvs_near(rotated_uvs, world_generated_texture_uvs(
+          *mesh, session.scene().world_transform_matrix(object.entity)));
+    }
+
+    // History restores the captured chart, not the current toolbar preference.
+    texture_lock = !initial_lock;
+    ASSERT_TRUE(editor.history().undo().ok());
+    expect_texture_uvs_near(live_uvs(), moved_uvs);
+    ASSERT_TRUE(editor.history().undo().ok());
+    expect_texture_uvs_near(live_uvs(), initial_uvs);
+    ASSERT_TRUE(editor.history().redo().ok());
+    expect_texture_uvs_near(live_uvs(), moved_uvs);
+    ASSERT_TRUE(editor.history().redo().ok());
+    expect_texture_uvs_near(live_uvs(), rotated_uvs);
+  }
+}
+
+TEST(PrimitiveCreationToolServiceTests,
+     InstanceCreationCompensatesOccurrenceSamplingIncludingAnIdentityWorldFrame) {
+  SceneSession session;
+  QuaderEditorApi editor(
+      QuaderApiSessionInternalAccess::from_scene_session(session));
+  editor.preferences().set_runtime_hooks(QuaderPreferencesRuntimeHooks{
+      .texture_lock_enabled = [] { return false; },
+      .texture_lock_scale_enabled = [] { return false; },
+  });
+  const auto seed = editor.modeling().create_box(
+      {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
+      "Existing Instance Member");
+  ASSERT_TRUE(seed.ok()) << seed.error_message();
+  const auto instance = editor.modeling().create_instance_from_selection();
+  ASSERT_TRUE(instance.ok()) << instance.error_message();
+  const EntityId occurrence = instance.value().occurrence.root.id;
+  const EntityId definition = instance.value().definition.root.id;
+  ASSERT_TRUE(editor.scene().set_transform(occurrence, {
+      .position = {9.0f, 4.0f, -6.0f},
+      .rotation_euler = {0.0f, 0.35f, 0.0f},
+      .scale = {2.0f, 2.0f, 2.0f},
+  }).ok());
+  const auto occurrence_snapshot = editor.query().entity(occurrence);
+  ASSERT_TRUE(occurrence_snapshot.has_value());
+  ASSERT_TRUE(occurrence_snapshot->texture_sampling_from_local.has_value());
+  const QMat4 occurrence_mapping = *occurrence_snapshot->texture_sampling_from_local;
+  EXPECT_NE(occurrence_mapping.values, QMat4{}.values);
+  const auto sibling = editor.scene().duplicate(occurrence);
+  ASSERT_TRUE(sibling.ok()) << sibling.error_message();
+  const auto seed_mesh = session.modeling().compile_object_mesh(
+      seed.value().modeling_object_id);
+  ASSERT_TRUE(seed_mesh.has_value());
+  const auto seed_uvs = effective_texture_uvs(session.scene(), seed.value().entity,
+                                             *seed_mesh, occurrence);
+  ASSERT_TRUE(editor.modeling().enter_instance_edit(occurrence).ok());
+  ASSERT_TRUE(editor.tools().activate(ViewportToolId::CreatePrimitive).ok());
+  constexpr float kInvSqrtTwo = 0.70710678f;
+  const std::array<QVec3, 3> centers{
+      QVec3{}, QVec3{7.0f, 3.0f, -2.0f}, QVec3{4.0f, 1.0f, 2.0f}};
+  const std::array<QVec3, 3> x_axes{
+      QVec3{1.0f, 0.0f, 0.0f}, QVec3{1.0f, 0.0f, 0.0f},
+      QVec3{kInvSqrtTwo, 0.0f, -kInvSqrtTwo}};
+  const std::array<const char *, 3> names{
+      "Origin Instance Tile", "Offset Instance Tile", "Oriented Instance Tile"};
+  std::vector<ModelingObjectRecord> created;
+  std::vector<std::vector<QVec2>> created_uvs;
+  for (std::size_t index = 0; index < centers.size(); ++index) {
+    SCOPED_TRACE(::testing::Message() << "creation: " << names[index]);
+    const ModelingBoxPreview preview = oriented_primitive_preview(
+        centers[index], x_axes[index], {0.0f, 1.0f, 0.0f},
+        1.0f, 1.0f, 1.0f);
+    const CommandResult accepted =
+        session.primitive_creation().accept_preview(preview, names[index]);
+    ASSERT_TRUE(accepted.ok) << accepted.message;
+    const auto objects = session.modeling().objects();
+    const ModelingObjectRecord *const object = find_object(objects, names[index]);
+    ASSERT_NE(object, nullptr);
+    created.push_back(*object);
+    const auto snapshot = editor.query().entity(object->entity);
+    ASSERT_TRUE(snapshot.has_value());
+    EXPECT_EQ(snapshot->parent, definition);
+    const auto world = session.instances().effective_member_world_transform(
+        object->entity, occurrence);
+    ASSERT_TRUE(world.has_value());
+    EXPECT_TRUE(near_point(transform_point(*world, {}), centers[index]));
+    const auto mesh = session.modeling().compile_object_mesh(object->modeling_object_id);
+    ASSERT_TRUE(mesh.has_value());
+    for (const QVec3 corner : preview.corners) {
+      EXPECT_TRUE(mesh_contains_world_point(*mesh, *world, corner));
+    }
+    created_uvs.push_back(effective_texture_uvs(session.scene(), object->entity,
+                                               *mesh, occurrence));
+    expect_texture_uvs_near(created_uvs.back(), world_generated_texture_uvs(*mesh, *world));
+  }
+  const auto verify_created_members = [&](std::string_view phase) {
+    SCOPED_TRACE(phase);
+    ASSERT_TRUE(session.scene().exists(definition));
+    ASSERT_TRUE(session.scene().is_instance_definition_entity(definition));
+    const auto *instance_component = session.scene().instance_occurrence(occurrence);
+    ASSERT_NE(instance_component, nullptr);
+    ASSERT_EQ(instance_component->definition, definition);
+    const auto current_objects = session.modeling().objects();
+    for (std::size_t index = 0; index < created.size(); ++index) {
+      SCOPED_TRACE(::testing::Message() << "member=" << created[index].name
+                                      << "; expected_entity=" << created[index].entity);
+      const auto *current_object = find_object(current_objects, created[index].name);
+      ASSERT_NE(current_object, nullptr);
+      EXPECT_EQ(current_object->entity, created[index].entity);
+      EXPECT_TRUE(session.scene().exists(created[index].entity));
+      EXPECT_EQ(session.scene().parent(created[index].entity), definition);
+      EXPECT_EQ(session.scene().containing_instance_definition(created[index].entity),
+                definition);
+      const auto mesh = session.modeling().compile_object_mesh(created[index].modeling_object_id);
+      ASSERT_TRUE(mesh.has_value());
+      expect_texture_uvs_near(
+          effective_texture_uvs(session.scene(), created[index].entity, *mesh, occurrence),
+          created_uvs[index]);
+    }
+  };
+  ASSERT_TRUE(editor.tools().commit_active_tool_preview().ok());
+  verify_created_members("after Apply");
+  ASSERT_TRUE(editor.history().undo().ok());
+  ASSERT_TRUE(session.scene().exists(definition));
+  ASSERT_TRUE(session.scene().is_instance_definition_entity(definition));
+  ASSERT_TRUE(session.scene().exists(occurrence));
+  for (const ModelingObjectRecord &object : created) {
+    SCOPED_TRACE(::testing::Message() << "after Undo: " << object.name);
+    EXPECT_FALSE(session.scene().exists(object.entity));
+  }
+  ASSERT_TRUE(editor.history().redo().ok());
+  verify_created_members("after Redo");
+  const auto restored_seed_mesh = session.modeling().compile_object_mesh(
+      seed.value().modeling_object_id);
+  ASSERT_TRUE(restored_seed_mesh.has_value());
+  expect_texture_uvs_near(
+      effective_texture_uvs(session.scene(), seed.value().entity, *restored_seed_mesh,
+                            occurrence),
+      seed_uvs);
+  for (const EntityId id : {occurrence, sibling.value().id}) {
+    const auto snapshot = editor.query().entity(id);
+    ASSERT_TRUE(snapshot.has_value());
+    ASSERT_TRUE(snapshot->texture_sampling_from_local.has_value());
+    EXPECT_EQ(snapshot->texture_sampling_from_local->values, occurrence_mapping.values);
+  }
+  ASSERT_TRUE(editor.modeling().exit_instance_edit().ok());
+}
+
 TEST(PrimitiveCreationToolServiceTests,
      OrientedPrimitiveRetainsLocalGeometryAndPlacementThroughHistory) {
   PrimitiveCreationHarness harness;
@@ -204,6 +687,7 @@ TEST(PrimitiveCreationToolServiceTests,
   for (const QVec3 corner : preview.corners) {
     EXPECT_TRUE(mesh_contains_world_point(*mesh, world, corner));
   }
+  expect_world_generated_texture_uvs(harness.scene, object.entity, *mesh);
 
   ASSERT_TRUE(harness.tool.apply().ok);
   ASSERT_TRUE(harness.history.undo().ok);
@@ -229,6 +713,8 @@ TEST(PrimitiveCreationToolServiceTests,
     EXPECT_TRUE(
         mesh_contains_world_point(*restored_mesh, restored_world, corner));
   }
+  expect_world_generated_texture_uvs(harness.scene, restored.front().entity,
+                                     *restored_mesh);
 }
 
 TEST(ModelingSdkProjectionCreationTests,
@@ -270,6 +756,7 @@ TEST(ModelingSdkProjectionCreationTests,
   for (const QVec3 corner : corners) {
     EXPECT_TRUE(mesh_contains_world_point(*mesh, world, corner));
   }
+  expect_world_generated_texture_uvs(harness.scene, created.object.entity, *mesh);
 }
 
 TEST(ModelingSdkProjectionCreationTests,
@@ -314,6 +801,106 @@ TEST(ModelingSdkProjectionCreationTests,
   }
   for (const QVec3 point : points) {
     EXPECT_TRUE(mesh_contains_world_point(*mesh, world, point));
+  }
+  expect_world_generated_texture_uvs(harness.scene, created.object.entity, *mesh);
+}
+
+TEST(ModelingSdkProjectionCreationTests,
+     GenericAuthoredMeshKeepsItsUvChartDespiteInitialScenePlacement) {
+  CreationProjectionHarness harness;
+  quader_poly::Document document = quader_poly::make_cube({});
+  for (quader_poly::Face &face : document.faces) {
+    ASSERT_EQ(face.vertices.size(), 4U);
+    face.uvs = {{0.125f, -0.25f}, {1.25f, -0.375f},
+                {1.375f, 0.75f}, {0.25f, 1.125f}};
+    face.texture_transform = {
+        .scale = {2.0f, -0.5f},
+        .shift_uv = {0.25f, -0.75f},
+        .rotation_degrees = 30.0f,
+    };
+  }
+  const MeshAsset expected =
+      MeshProjectionService::compile_polygon_document_mesh(document);
+  const ModelingCreateBoxResult created = harness.projection.create_mesh({
+      .document = document,
+      .name = "Authored UV Import",
+      .initial_scene_transform = ModelingTransform3{
+          .x_axis = {0.0f, 0.0f, -1.0f},
+          .y_axis = {0.0f, 1.0f, 0.0f},
+          .z_axis = {1.0f, 0.0f, 0.0f},
+          .origin = {7.0f, 3.0f, -2.0f},
+      },
+  });
+  ASSERT_TRUE(created.ok) << created.message;
+  const auto actual = harness.projection.compile_object_mesh(
+      created.object.modeling_object_id);
+  ASSERT_TRUE(actual.has_value());
+  ASSERT_EQ(actual->geometry().vertices.size(), expected.geometry().vertices.size());
+  const std::vector<QVec2> effective =
+      effective_texture_uvs(harness.scene, created.object.entity, *actual);
+  ASSERT_EQ(effective.size(), expected.geometry().vertices.size());
+  for (std::size_t index = 0; index < effective.size(); ++index) {
+    SCOPED_TRACE(index);
+    const MeshVertex &expected_vertex = expected.geometry().vertices[index];
+    EXPECT_TRUE(near_point(actual->geometry().vertices[index].position,
+                           expected_vertex.position));
+    EXPECT_FLOAT_EQ(actual->geometry().vertices[index].uv.x, expected_vertex.uv.x);
+    EXPECT_FLOAT_EQ(actual->geometry().vertices[index].uv.y, expected_vertex.uv.y);
+    EXPECT_FLOAT_EQ(effective[index].x, expected_vertex.uv.x);
+    EXPECT_FLOAT_EQ(effective[index].y, expected_vertex.uv.y);
+  }
+}
+
+TEST(ModelingSdkProjectionCreationTests,
+     FailedGeneratedCreationPreservesExistingSamplingAndProjectionRevisions) {
+  for (const ModelingSdkProjectionFailurePoint failure : {
+           ModelingSdkProjectionFailurePoint::AfterSceneBinding,
+           ModelingSdkProjectionFailurePoint::AfterSelection,
+           ModelingSdkProjectionFailurePoint::BeforeCommit,
+           ModelingSdkProjectionFailurePoint::None}) {
+    SCOPED_TRACE(static_cast<int>(failure));
+    CreationProjectionHarness harness;
+    const auto corners = oriented_box_corners(
+        {4.0f, 2.0f, -3.0f}, {1.0f, 0.0f, 0.0f}, {0.0f, 1.0f, 0.0f},
+        1.0f, 1.0f, 1.0f);
+    const auto baseline = harness.projection.create_box_from_corners(corners, "Baseline Tile");
+    ASSERT_TRUE(baseline.ok) << baseline.message;
+    const auto baseline_mesh = harness.projection.compile_object_mesh(
+        baseline.object.modeling_object_id);
+    ASSERT_TRUE(baseline_mesh.has_value());
+    const auto baseline_uvs = effective_texture_uvs(harness.scene, baseline.object.entity,
+                                                  *baseline_mesh);
+    const auto baseline_mapping =
+        effective_texture_sampling_from_local(harness.scene, baseline.object.entity);
+    ASSERT_TRUE(baseline_mapping.has_value());
+    const auto entities_before = harness.scene.entities();
+    const auto selection_before = harness.scene.selected_entities();
+    const auto meshes_before = harness.assets.mesh_ids();
+    const auto scene_revision_before = harness.scene.revision();
+    const auto texture_revision_before = harness.scene.texture_mapping_revision();
+    const auto asset_revision_before = harness.assets.revision();
+    harness.projection.set_failure_point_for_tests(failure);
+    const auto rejected = harness.projection.create_box_from_corners(
+        corners, "Rejected Tile", {},
+        [failure](const ModelingObjectRecord &) {
+          return failure != ModelingSdkProjectionFailurePoint::None;
+        });
+    EXPECT_FALSE(rejected.ok);
+    EXPECT_FALSE(rejected.changed);
+    EXPECT_EQ(harness.projection.object_count(), 1U);
+    EXPECT_EQ(harness.scene.entities(), entities_before);
+    EXPECT_EQ(harness.scene.selected_entities(), selection_before);
+    EXPECT_EQ(harness.assets.mesh_ids(), meshes_before);
+    EXPECT_EQ(harness.scene.revision(), scene_revision_before);
+    EXPECT_EQ(harness.scene.texture_mapping_revision(), texture_revision_before);
+    EXPECT_EQ(harness.assets.revision(), asset_revision_before);
+    const auto mapping_after =
+        effective_texture_sampling_from_local(harness.scene, baseline.object.entity);
+    ASSERT_TRUE(mapping_after.has_value());
+    EXPECT_EQ(mapping_after->values, baseline_mapping->values);
+    expect_texture_uvs_near(
+        effective_texture_uvs(harness.scene, baseline.object.entity, *baseline_mesh),
+        baseline_uvs);
   }
 }
 

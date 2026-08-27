@@ -82,6 +82,9 @@ public:
       ModelingSelectionOverlayOptions options = {}) const;
   [[nodiscard]] std::uint64_t volatile_overlay_signature(
       const quader_editor_core::EditorRuntime &runtime) const;
+  /// Hashes generated mesh-preview inputs without projecting or compiling them.
+  [[nodiscard]] std::uint64_t tool_preview_signature(
+      const quader_editor_core::EditorRuntime &runtime) const;
 
   [[nodiscard]] bool selection_frame_matches(
       std::uint64_t content_revision, std::uint64_t selection_revision,

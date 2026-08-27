@@ -39,6 +39,7 @@
 #include <unordered_set>
 #include <utility>
 
+#include <editor/interactions/box_tool.hpp>
 #include <editor/interactions/cut_tool.hpp>
 #include <editor/interactions/mirror_tool.hpp>
 #include <editor/interactions/selection_box.hpp>
@@ -445,6 +446,11 @@ void set_overlay_frame_object_id(
   for (quader_editor_core::SelectionOverlayPoint &point : frame.points) {
     point.object_id = object_id;
   }
+}
+
+bool mirror_has_mesh_preview(const quader_editor_core::MirrorToolState &mirror) {
+  return quader_editor_core::mirror_is_active(mirror) &&
+         quader_editor_core::mirror_can_preview(mirror) && mirror.preview_valid;
 }
 
 void mix_overlay_signature_hash(std::uint64_t &hash, std::uint64_t value) {
@@ -2949,6 +2955,44 @@ std::uint64_t ModelingOverlayService::selection_overlay_signature(
   return hash;
 }
 
+std::uint64_t ModelingOverlayService::tool_preview_signature(
+    const quader_editor_core::EditorRuntime &runtime) const {
+  std::uint64_t hash = 1469598103934665603ULL;
+  const quader_editor_core::BoxToolState &box = runtime.box_state();
+  const bool box_has_mesh =
+      box.drag_state == quader_editor_core::BoxDragState::Height;
+  mix_overlay_signature_hash(hash, box_has_mesh);
+  if (box_has_mesh) {
+    // The descriptor allocates footprint geometry. Hash its scalar inputs
+    // before the render submission gate instead of constructing it here.
+    mix_overlay_signature_hash(hash, box.start_point);
+    mix_overlay_signature_hash(hash, box.end_point);
+    mix_overlay_signature_hash(hash, box.plane.axis_u);
+    mix_overlay_signature_hash(hash, box.plane.axis_v);
+    mix_overlay_signature_hash(hash, box.plane.normal);
+    mix_overlay_signature_hash(hash, box.height_distance);
+    mix_overlay_signature_hash(hash, runtime.box_grid_size());
+  }
+
+  const quader_editor_core::MirrorToolState &mirror = runtime.mirror_state();
+  const bool mirror_has_mesh = mirror_has_mesh_preview(mirror);
+  mix_overlay_signature_hash(hash, mirror_has_mesh);
+  if (mirror_has_mesh) {
+    mix_overlay_signature_hash(
+        hash, static_cast<std::uint64_t>(mirror.target_object_ids.size()));
+    for (const int object_id : mirror.target_object_ids) {
+      mix_overlay_signature_hash(hash, object_id);
+    }
+    mix_overlay_signature_hash(
+        hash, static_cast<std::uint64_t>(mirror.plane.points.size()));
+    for (const QVec3 point : mirror.plane.points) {
+      mix_overlay_signature_hash(hash, point);
+    }
+    mix_overlay_signature_hash(hash, mirror.plane.face_normal);
+  }
+  return hash;
+}
+
 std::uint64_t ModelingOverlayService::volatile_overlay_signature(
     const quader_editor_core::EditorRuntime &runtime) const {
   std::uint64_t hash = 1469598103934665603ULL;
@@ -3721,9 +3765,7 @@ ModelingOverlayService::tool_preview_meshes(
     });
   }
   const quader_editor_core::MirrorToolState &mirror = runtime.mirror_state();
-  if (!quader_editor_core::mirror_is_active(mirror) ||
-      !quader_editor_core::mirror_can_preview(mirror) ||
-      !mirror.preview_valid) {
+  if (!mirror_has_mesh_preview(mirror)) {
     return preview_meshes;
   }
   const std::vector<quader::QVec3> plane_points =

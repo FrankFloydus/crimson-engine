@@ -477,10 +477,12 @@ void apply_durable_scene_identity_to_entity(
 void apply_complete_scene_identity_to_entity(
     SceneDocument &scene, EntityId entity,
     const ModelingObjectSceneIdentity &identity) {
-  apply_durable_scene_identity_to_entity(scene, entity, identity);
+  // Instance definitions only accept mesh members after their mesh component
+  // exists. Recreate that binding before restoring the saved parent.
   if (identity.mesh.has_value()) {
     scene.set_mesh(entity, *identity.mesh);
   }
+  apply_durable_scene_identity_to_entity(scene, entity, identity);
   if (identity.material.has_value()) {
     scene.set_material(entity, *identity.material);
   } else {
@@ -780,6 +782,19 @@ bool ModelingMeshSyncService::set_projected_transform(
     SceneDocument &scene, EntityId entity,
     const TransformComponent &transform) const {
   return scene.set_transform(entity, transform);
+}
+
+bool ModelingMeshSyncService::set_projected_texture_mapping(
+    SceneDocument &scene, EntityId entity,
+    const TextureMappingComponent &mapping) const {
+  // An absent mapping already means identity. Do not publish a redundant
+  // component/revision for generated geometry created in the identity frame.
+  if (scene.exists(entity) && scene.kind(entity) == EntityKind::Mesh &&
+      scene.texture_mapping(entity) == nullptr &&
+      mapping.sampling_from_local.values == QMat4{}.values) {
+    return true;
+  }
+  return scene.set_texture_mapping(entity, mapping);
 }
 
 bool ModelingMeshSyncService::set_projected_mesh_component(

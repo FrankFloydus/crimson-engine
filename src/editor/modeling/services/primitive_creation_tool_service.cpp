@@ -337,6 +337,7 @@ CommandResult PrimitiveCreationToolService::accept_preview(
       .material_slot = 0,
       .material = material,
       .initial_scene_transform = placement_transform(*frame),
+      .world_texture_projection = true,
   });
   if (!created.ok || !created.changed) {
     return rollback_and_exit(

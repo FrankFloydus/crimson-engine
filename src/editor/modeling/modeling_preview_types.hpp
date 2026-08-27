@@ -29,9 +29,10 @@ struct ModelingToolPreviewMesh {
   MeshAsset mesh;
   QMat4 transform;
   std::vector<QMat4> instance_transforms;
-  // Generated tool previews remain visible from either side by default.
-  // Source-replacing previews must override this with the source mesh
-  // component's culling policy so transient and committed rendering agree.
+  // Source-less generated previews remain visible from either side by default.
+  // Source-backed previews, including additive Mirror copies, must preserve
+  // the source mesh component's culling policy so transient and committed
+  // rendering agree.
   bool double_sided = true;
   bool dynamic_positions = false;
   bool suppress_source = false;

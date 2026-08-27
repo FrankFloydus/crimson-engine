@@ -22,17 +22,13 @@ inline bool texture_mapping_is_valid(const TextureMappingComponent &mapping) {
          try_scene_matrix_inverse(matrix).has_value();
 }
 
-/** Resolves ordinary or definition-member sampling in one scene owner. */
-inline std::optional<QMat4> effective_texture_sampling_from_local(
+/** Composes a supplied member chart with its occurrence's sampling correction. */
+inline std::optional<QMat4> compose_texture_sampling_from_local(
     const SceneDocument &scene, EntityId member,
-    EntityId occurrence = kInvalidEntityId) {
+    const QMat4 &direct, EntityId occurrence) {
   if (!scene.exists(member)) {
     return std::nullopt;
   }
-  const TextureMappingComponent *member_mapping = scene.texture_mapping(member);
-  const QMat4 direct = member_mapping != nullptr
-                           ? member_mapping->sampling_from_local
-                           : QMat4{};
   if (occurrence == kInvalidEntityId) {
     return direct;
   }
@@ -65,6 +61,47 @@ inline std::optional<QMat4> effective_texture_sampling_from_local(
                                definition_from_member));
   return scene_matrix_is_finite(result) ? std::optional<QMat4>{result}
                                         : std::nullopt;
+}
+
+/** Resolves ordinary or definition-member sampling in one scene owner. */
+inline std::optional<QMat4> effective_texture_sampling_from_local(
+    const SceneDocument &scene, EntityId member,
+    EntityId occurrence = kInvalidEntityId) {
+  const TextureMappingComponent *member_mapping = scene.texture_mapping(member);
+  return compose_texture_sampling_from_local(
+      scene, member,
+      member_mapping != nullptr ? member_mapping->sampling_from_local : QMat4{},
+      occurrence);
+}
+
+/** Solves a stored member chart for a desired effective occurrence chart. */
+inline std::optional<TextureMappingComponent> texture_mapping_for_effective_sampling(
+    const SceneDocument &scene, EntityId member,
+    const QMat4 &desired_sampling_from_local,
+    EntityId occurrence = kInvalidEntityId) {
+  if (!texture_mapping_is_valid({desired_sampling_from_local})) {
+    return std::nullopt;
+  }
+  // Resolve the same occurrence composition with an identity member chart.
+  // Keep the forward evaluator's multiplication order unchanged.
+  const std::optional<QMat4> correction = compose_texture_sampling_from_local(
+      scene, member, QMat4{}, occurrence);
+  if (!correction.has_value()) {
+    return std::nullopt;
+  }
+  if (correction->values == QMat4{}.values) {
+    return TextureMappingComponent{desired_sampling_from_local};
+  }
+  const std::optional<QMat4> correction_inverse =
+      try_scene_matrix_inverse(*correction);
+  if (!correction_inverse.has_value()) {
+    return std::nullopt;
+  }
+  const TextureMappingComponent mapping{
+      .sampling_from_local = scene_transform_multiply(
+          desired_sampling_from_local, *correction_inverse)};
+  return texture_mapping_is_valid(mapping)
+             ? std::optional<TextureMappingComponent>{mapping} : std::nullopt;
 }
 
 } // namespace quader
