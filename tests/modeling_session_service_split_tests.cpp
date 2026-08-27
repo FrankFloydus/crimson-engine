@@ -3141,5 +3141,170 @@ TEST(ModelingSessionServiceSplitTests,
   EXPECT_FLOAT_EQ(untouched->texture_transform.scale.y, 1);
 }
 
+TEST(ModelingSessionServiceSplitTests,
+     FaceTextureActionShiftUsesPerFaceExtentsAndRepeatReadsCurrentTextures) {
+  SceneDocument scene;
+  AssetRegistry assets;
+  ModelingSessionService service(scene, assets);
+  const auto created = service.create_box_from_bounds({
+      .bounds = {.min = {-1, -1, -1}, .max = {1, 1, 1}},
+      .name = "Mixed Texture Dimensions",
+  });
+  ASSERT_TRUE(created.ok) << created.message;
+  constexpr std::array kWidths{256u, 128u, 64u};
+  std::array<AssetId, 2> texture_ids;
+  for (std::size_t index = 0; index < texture_ids.size(); ++index) {
+    TextureAsset texture;
+    texture.name = "Pixel step source";
+    texture.width = kWidths[index];
+    texture.height = 128;
+    texture_ids[index] = assets.add_texture(std::move(texture));
+    MaterialDocument material = make_default_quader_material("Pixel step material");
+    ASSERT_TRUE(set_material_texture_slot(
+        material, material_texture_slot::kBaseColor, texture_ids[index]));
+    const AssetId material_id = assets.add_material(std::move(material));
+    const auto assigned = service.apply_material_to_face(
+        created.object.modeling_object_id, static_cast<int>(index) + 1,
+        material_id);
+    ASSERT_TRUE(assigned.ok) << assigned.message;
+  }
+  ASSERT_TRUE(service.set_selection_mode(ModelingSelectionMode::Face).ok);
+  ASSERT_TRUE(service.set_component_selection({
+      .modeling_object_id = created.object.modeling_object_id,
+      .mode = ModelingSelectionMode::Face,
+      .faces = {1, 2, 3},
+      .active_kind = ModelingActiveSelectionKind::Face,
+      .active_face = 1,
+  }).ok);
+  const auto shifted = service.apply_face_texture_action({
+      .options = {.action = ModelingFaceTextureAction::ShiftRight,
+                  .treat_as_one = true},
+      .selection_token = service.face_texture_settings().selection_token,
+  });
+  ASSERT_TRUE(shifted.ok) << shifted.message;
+  ASSERT_TRUE(shifted.changed);
+  const auto *mesh = assets.mesh(scene.mesh(created.object.entity)->mesh);
+  ASSERT_NE(mesh, nullptr);
+  ASSERT_NE(mesh->authored_polygon_document, nullptr);
+  for (std::size_t index = 0; index < kWidths.size(); ++index) {
+    SCOPED_TRACE(index);
+    const auto *face = quader_poly::find_face(
+        *mesh->authored_polygon_document, static_cast<int>(index) + 1);
+    ASSERT_NE(face, nullptr);
+    EXPECT_FLOAT_EQ(face->texture_transform.shift_uv.x,
+                    -1.0f / static_cast<float>(kWidths[index]));
+    EXPECT_FLOAT_EQ(face->texture_transform.shift_uv.y, 0.0f);
+  }
+
+  ASSERT_TRUE(assets.update_texture(texture_ids[0], [](TextureAsset &texture) {
+    texture.width = 512;
+  }));
+  ASSERT_TRUE(assets.update_texture(texture_ids[1], [](TextureAsset &texture) {
+    texture.width = 32;
+  }));
+  const auto repeated = service.repeat_last_action();
+  ASSERT_TRUE(repeated.ok) << repeated.message;
+  ASSERT_TRUE(repeated.changed);
+  constexpr std::array kRepeatedWidths{512u, 32u, 64u};
+  mesh = assets.mesh(scene.mesh(created.object.entity)->mesh);
+  ASSERT_NE(mesh, nullptr);
+  ASSERT_NE(mesh->authored_polygon_document, nullptr);
+  for (std::size_t index = 0; index < kWidths.size(); ++index) {
+    SCOPED_TRACE(index);
+    const auto *face = quader_poly::find_face(
+        *mesh->authored_polygon_document, static_cast<int>(index) + 1);
+    ASSERT_NE(face, nullptr);
+    EXPECT_FLOAT_EQ(face->texture_transform.shift_uv.x,
+                    -1.0f / static_cast<float>(kWidths[index]) -
+                        1.0f / static_cast<float>(kRepeatedWidths[index]));
+  }
+  EXPECT_EQ(service.face_texture_settings().selected_face_count, 3u);
+  const auto before_numeric_shift = service.content_revision();
+  EXPECT_FALSE(service.set_face_texture_setting({
+      .field = ModelingFaceTextureField::ShiftX,
+      .value = 8.0,
+      .selection_token = service.face_texture_settings().selection_token,
+  }).ok);
+  EXPECT_EQ(service.content_revision(), before_numeric_shift);
+}
+
+TEST(ModelingSessionServiceSplitTests,
+     FaceTextureActionBatchFailurePreservesSharedMeshesAndAllRevisions) {
+  SceneDocument scene;
+  AssetRegistry assets;
+  ModelingSessionService service(scene, assets);
+  const auto first = service.create_box_from_bounds({
+      .bounds = {.min = {-1, -1, -1}, .max = {1, 1, 1}}, .name = "First",
+  });
+  const auto second = service.create_box_from_bounds({
+      .bounds = {.min = {3, -1, -1}, .max = {5, 1, 1}}, .name = "Second",
+  });
+  ASSERT_TRUE(first.ok);
+  ASSERT_TRUE(second.ok);
+  ASSERT_TRUE(service.set_selection_mode(ModelingSelectionMode::Face).ok);
+  for (const auto *created : {&first, &second}) {
+    ASSERT_TRUE(service.set_component_selection({
+        .modeling_object_id = created->object.modeling_object_id,
+        .mode = ModelingSelectionMode::Face,
+        .faces = {1},
+        .edit = created == &first ? ModelingSelectionEdit::Replace
+                                 : ModelingSelectionEdit::Add,
+        .active_kind = ModelingActiveSelectionKind::Face,
+        .active_face = 1,
+    }).ok);
+  }
+  const AssetId shared_mesh = scene.mesh(first.object.entity)->mesh;
+  const AssetId second_mesh = scene.mesh(second.object.entity)->mesh;
+  const EntityId shared_entity =
+      scene.create_entity("Unselected shared consumer", EntityKind::Mesh);
+  ASSERT_TRUE(scene.set_mesh(shared_entity, {.mesh = shared_mesh}));
+  const auto before_first = assets.mesh(shared_mesh)->authored_polygon_document;
+  const auto before_second = assets.mesh(second_mesh)->authored_polygon_document;
+  const auto before_mesh_ids = assets.mesh_ids();
+  const auto before_scene_revision = scene.revision();
+  const auto before_asset_revision = assets.revision();
+  const auto before_content_revision = service.content_revision();
+  const auto before_selection_revision = service.selection_revision();
+  const ModelingFaceTextureActionRequest request{
+      .options = {.action = ModelingFaceTextureAction::ScaleYUp},
+      .selection_token = service.face_texture_settings().selection_token,
+  };
+
+  service.set_modeling_sdk_projection_failure_for_tests(
+      ModelingSdkProjectionFailurePoint::CommittedSceneNotify);
+  const auto failed = service.apply_face_texture_action(request);
+  EXPECT_FALSE(failed.ok);
+  EXPECT_FALSE(failed.changed);
+  EXPECT_EQ(scene.revision(), before_scene_revision);
+  EXPECT_EQ(assets.revision(), before_asset_revision);
+  EXPECT_EQ(assets.mesh_ids(), before_mesh_ids);
+  EXPECT_EQ(service.content_revision(), before_content_revision);
+  EXPECT_EQ(service.selection_revision(), before_selection_revision);
+  EXPECT_EQ(scene.mesh(first.object.entity)->mesh, shared_mesh);
+  EXPECT_EQ(scene.mesh(second.object.entity)->mesh, second_mesh);
+  EXPECT_EQ(scene.mesh(shared_entity)->mesh, shared_mesh);
+  EXPECT_EQ(assets.mesh(shared_mesh)->authored_polygon_document, before_first);
+  EXPECT_EQ(assets.mesh(second_mesh)->authored_polygon_document, before_second);
+
+  service.set_modeling_sdk_projection_failure_for_tests(
+      ModelingSdkProjectionFailurePoint::None);
+  const auto edited = service.apply_face_texture_action(request);
+  ASSERT_TRUE(edited.ok) << edited.message;
+  EXPECT_TRUE(edited.changed);
+  EXPECT_EQ(service.content_revision(), before_content_revision + 1u);
+  EXPECT_EQ(service.selection_revision(), before_selection_revision);
+  EXPECT_NE(scene.mesh(first.object.entity)->mesh, shared_mesh);
+  EXPECT_EQ(scene.mesh(shared_entity)->mesh, shared_mesh);
+  for (const EntityId entity : {first.object.entity, second.object.entity}) {
+    const auto *face = quader_poly::find_face(
+        *assets.mesh(scene.mesh(entity)->mesh)->authored_polygon_document, 1);
+    ASSERT_NE(face, nullptr);
+    EXPECT_FLOAT_EQ(face->texture_transform.scale.y, 1.1f);
+  }
+  const auto *untouched = quader_poly::find_face(*before_first, 1);
+  ASSERT_NE(untouched, nullptr);
+  EXPECT_FLOAT_EQ(untouched->texture_transform.scale.y, 1.0f);
+}
+
 } // namespace
 } // namespace quader

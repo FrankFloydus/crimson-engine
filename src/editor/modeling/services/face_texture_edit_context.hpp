@@ -25,6 +25,9 @@ public:
       std::vector<ModelingFaceTextureUpdateBatch> &batches) const;
   [[nodiscard]] ModelingFaceTextureEditState capture() const;
   void record_applied_edit(const ModelingFaceTextureEdit &edit);
+  void record_applied_rotation_delta(double degrees);
+  [[nodiscard]] bool treat_as_one() const noexcept { return treat_as_one_; }
+  bool set_treat_as_one(bool enabled);
   void restore(const ModelingFaceTextureEditState &state,
                const ModelingSelectedFaceTextureSnapshot &snapshot,
                std::uint64_t selection_revision);
@@ -42,6 +45,7 @@ private:
   std::uint64_t selection_token_ = 0;
   std::uint64_t revision_ = 0;
   bool initialized_ = false;
+  bool treat_as_one_ = false;
 };
 
 } // namespace quader

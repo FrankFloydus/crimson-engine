@@ -278,6 +278,56 @@ inline constexpr QuaderCommandId kModelingFlipHorizontal{
     "modeling.flip_horizontal"};
 inline constexpr QuaderCommandId kModelingFlipVertical{
     "modeling.flip_vertical"};
+inline constexpr QuaderCommandId kModelingTextureAlignToGrid{
+    "modeling.texture.align_to_grid"};
+inline constexpr QuaderCommandId kModelingTextureAlignToFace{
+    "modeling.texture.align_to_face"};
+inline constexpr QuaderCommandId kModelingTextureAlignToView{
+    "modeling.texture.align_to_view"};
+inline constexpr QuaderCommandId kModelingTextureScaleXUp{
+    "modeling.texture.scale_x_up"};
+inline constexpr QuaderCommandId kModelingTextureScaleXDown{
+    "modeling.texture.scale_x_down"};
+inline constexpr QuaderCommandId kModelingTextureScaleYUp{
+    "modeling.texture.scale_y_up"};
+inline constexpr QuaderCommandId kModelingTextureScaleYDown{
+    "modeling.texture.scale_y_down"};
+inline constexpr QuaderCommandId kModelingTextureShiftLeft{
+    "modeling.texture.shift_left"};
+inline constexpr QuaderCommandId kModelingTextureShiftRight{
+    "modeling.texture.shift_right"};
+inline constexpr QuaderCommandId kModelingTextureShiftUp{
+    "modeling.texture.shift_up"};
+inline constexpr QuaderCommandId kModelingTextureShiftDown{
+    "modeling.texture.shift_down"};
+inline constexpr QuaderCommandId kModelingTextureRotateClockwise{
+    "modeling.texture.rotate_clockwise"};
+inline constexpr QuaderCommandId kModelingTextureRotateCounterClockwise{
+    "modeling.texture.rotate_counter_clockwise"};
+inline constexpr QuaderCommandId kModelingTextureFlipTextureHorizontal{
+    "modeling.texture.flip_texture_horizontal"};
+inline constexpr QuaderCommandId kModelingTextureFlipTextureVertical{
+    "modeling.texture.flip_texture_vertical"};
+inline constexpr QuaderCommandId kModelingTextureFlipFaceHorizontal{
+    "modeling.texture.flip_face_horizontal"};
+inline constexpr QuaderCommandId kModelingTextureFlipFaceVertical{
+    "modeling.texture.flip_face_vertical"};
+inline constexpr QuaderCommandId kModelingTextureFitBoth{
+    "modeling.texture.fit_both"};
+inline constexpr QuaderCommandId kModelingTextureFitX{
+    "modeling.texture.fit_x"};
+inline constexpr QuaderCommandId kModelingTextureFitY{
+    "modeling.texture.fit_y"};
+inline constexpr QuaderCommandId kModelingTextureJustifyLeft{
+    "modeling.texture.justify_left"};
+inline constexpr QuaderCommandId kModelingTextureJustifyRight{
+    "modeling.texture.justify_right"};
+inline constexpr QuaderCommandId kModelingTextureJustifyTop{
+    "modeling.texture.justify_top"};
+inline constexpr QuaderCommandId kModelingTextureJustifyBottom{
+    "modeling.texture.justify_bottom"};
+inline constexpr QuaderCommandId kModelingTextureJustifyCenter{
+    "modeling.texture.justify_center"};
 /// Deprecated compatibility spelling. Use kApplyMaterial for new C++ callers.
 inline constexpr QuaderCommandId kModelingApplyActiveMaterial{
     "edit.apply_material"};
@@ -459,6 +509,31 @@ inline constexpr QuaderCommandId kTypedCommandIds[] = {
     kModelingMergeByDistance,
     kModelingFlipHorizontal,
     kModelingFlipVertical,
+    kModelingTextureAlignToGrid,
+    kModelingTextureAlignToFace,
+    kModelingTextureAlignToView,
+    kModelingTextureScaleXUp,
+    kModelingTextureScaleXDown,
+    kModelingTextureScaleYUp,
+    kModelingTextureScaleYDown,
+    kModelingTextureShiftLeft,
+    kModelingTextureShiftRight,
+    kModelingTextureShiftUp,
+    kModelingTextureShiftDown,
+    kModelingTextureRotateClockwise,
+    kModelingTextureRotateCounterClockwise,
+    kModelingTextureFlipTextureHorizontal,
+    kModelingTextureFlipTextureVertical,
+    kModelingTextureFlipFaceHorizontal,
+    kModelingTextureFlipFaceVertical,
+    kModelingTextureFitBoth,
+    kModelingTextureFitX,
+    kModelingTextureFitY,
+    kModelingTextureJustifyLeft,
+    kModelingTextureJustifyRight,
+    kModelingTextureJustifyTop,
+    kModelingTextureJustifyBottom,
+    kModelingTextureJustifyCenter,
     kModelingApplyActivePreview,
     kModelingCancelActivePreview,
     kToolsApplyPrimitiveCreation,

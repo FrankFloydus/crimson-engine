@@ -118,6 +118,11 @@ public:
       };
       scene.document_commands().set_texture_lock_settings_provider(texture_locks);
       scene.modeling().set_texture_lock_settings_provider(texture_locks);
+      scene.modeling().set_face_texture_rotation_step_provider([lifetime] {
+        const auto binding = lifetime.lock();
+        return binding != nullptr ? binding->preferences->rotation_snap_degrees()
+                                   : 15.0;
+      });
 
       ProjectSession *project_owner =
           QuaderApiSessionInternalAccess::project_session(session);

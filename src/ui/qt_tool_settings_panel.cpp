@@ -426,6 +426,110 @@ constexpr std::array<TextureControlDescription, 5> kTextureControls{{
      "tool_settings.texture_rotate", "Rotate (\xC2\xB0)", 1.0, 0.0},
 }};
 
+/// Retained presentation only; each button dispatches the same public action
+/// used by the corresponding command, without interpreting UVs in the panel.
+struct TextureActionDescription {
+  QuaderFaceTextureAction action;
+  QuaderCommandId command;
+  std::string_view id;
+  std::string_view caption;
+};
+
+constexpr std::array<TextureActionDescription, 25> kTextureActions{{
+    {QuaderFaceTextureAction::AlignToGrid,
+     quader_command::kModelingTextureAlignToGrid,
+     "align_to_grid", "Grid"},
+    {QuaderFaceTextureAction::AlignToFace,
+     quader_command::kModelingTextureAlignToFace,
+     "align_to_face", "Face"},
+    {QuaderFaceTextureAction::AlignToView,
+     quader_command::kModelingTextureAlignToView,
+     "align_to_view", "View"},
+    {QuaderFaceTextureAction::ScaleXUp,
+     quader_command::kModelingTextureScaleXUp,
+     "scale_x_up", "X +"},
+    {QuaderFaceTextureAction::ScaleXDown,
+     quader_command::kModelingTextureScaleXDown,
+     "scale_x_down", "X -"},
+    {QuaderFaceTextureAction::ScaleYUp,
+     quader_command::kModelingTextureScaleYUp,
+     "scale_y_up", "Y +"},
+    {QuaderFaceTextureAction::ScaleYDown,
+     quader_command::kModelingTextureScaleYDown,
+     "scale_y_down", "Y -"},
+    {QuaderFaceTextureAction::ShiftLeft,
+     quader_command::kModelingTextureShiftLeft,
+     "shift_left", "Left"},
+    {QuaderFaceTextureAction::ShiftRight,
+     quader_command::kModelingTextureShiftRight,
+     "shift_right", "Right"},
+    {QuaderFaceTextureAction::ShiftUp,
+     quader_command::kModelingTextureShiftUp,
+     "shift_up", "Up"},
+    {QuaderFaceTextureAction::ShiftDown,
+     quader_command::kModelingTextureShiftDown,
+     "shift_down", "Down"},
+    {QuaderFaceTextureAction::RotateClockwise,
+     quader_command::kModelingTextureRotateClockwise,
+     "rotate_clockwise", "CW"},
+    {QuaderFaceTextureAction::RotateCounterClockwise,
+     quader_command::kModelingTextureRotateCounterClockwise,
+     "rotate_counter_clockwise", "CCW"},
+    {QuaderFaceTextureAction::FlipTextureHorizontal,
+     quader_command::kModelingTextureFlipTextureHorizontal,
+     "flip_texture_horizontal", "Flip Tex H"},
+    {QuaderFaceTextureAction::FlipTextureVertical,
+     quader_command::kModelingTextureFlipTextureVertical,
+     "flip_texture_vertical", "Flip Tex V"},
+    {QuaderFaceTextureAction::FlipFaceHorizontal,
+     quader_command::kModelingTextureFlipFaceHorizontal,
+     "flip_face_horizontal", "Flip Face H"},
+    {QuaderFaceTextureAction::FlipFaceVertical,
+     quader_command::kModelingTextureFlipFaceVertical,
+     "flip_face_vertical", "Flip Face V"},
+    {QuaderFaceTextureAction::FitBoth,
+     quader_command::kModelingTextureFitBoth,
+     "fit_both", "Both"},
+    {QuaderFaceTextureAction::FitX,
+     quader_command::kModelingTextureFitX,
+     "fit_x", "X"},
+    {QuaderFaceTextureAction::FitY,
+     quader_command::kModelingTextureFitY,
+     "fit_y", "Y"},
+    {QuaderFaceTextureAction::JustifyLeft,
+     quader_command::kModelingTextureJustifyLeft,
+     "justify_left", "Left"},
+    {QuaderFaceTextureAction::JustifyRight,
+     quader_command::kModelingTextureJustifyRight,
+     "justify_right", "Right"},
+    {QuaderFaceTextureAction::JustifyTop,
+     quader_command::kModelingTextureJustifyTop,
+     "justify_top", "Top"},
+    {QuaderFaceTextureAction::JustifyBottom,
+     quader_command::kModelingTextureJustifyBottom,
+     "justify_bottom", "Bottom"},
+    {QuaderFaceTextureAction::JustifyCenter,
+     quader_command::kModelingTextureJustifyCenter,
+     "justify_center", "Center"},
+}};
+
+/// Groups consecutive texture actions into one compact retained button grid.
+struct TextureActionGroup {
+  std::string_view id;
+  std::string_view label;
+  std::size_t count;
+  int columns;
+};
+
+constexpr std::array<TextureActionGroup, 6> kTextureActionGroups{{
+    {"align", "Align", 3, 3},
+    {"scale", "Scale", 4, 2},
+    {"shift", "Shift", 4, 2},
+    {"rotate", "Rotate", 6, 2},
+    {"fit", "Fit", 3, 3},
+    {"justify", "Justify", 5, 2},
+}};
+
 } // namespace
 
 /// Owns retained controls for the active tool's descriptor-driven settings.
@@ -475,6 +579,7 @@ struct QtToolSettingsPanel::Impl {
     std::uint64_t selection_token = 0;
     std::string merge_key;
     bool editing = false;
+    bool invalid_value = false;
   };
 
   explicit Impl(QtToolSettingsPanel &panel) : panel_(panel) {
@@ -544,6 +649,11 @@ struct QtToolSettingsPanel::Impl {
     build_texture_controls();
     texture_section_->hide();
     content_layout->addWidget(texture_section_);
+    edit_texture_section_ = new QtToolSettingsSection(
+        QStringLiteral("tool_settings.section.edit_texture"), scroll_content);
+    build_texture_actions();
+    edit_texture_section_->hide();
+    content_layout->addWidget(edit_texture_section_);
     content_layout->addStretch(1);
     scroll_area_->setWidget(scroll_content);
     root_layout->addWidget(scroll_area_, 1);
@@ -635,6 +745,7 @@ struct QtToolSettingsPanel::Impl {
     last_target_.reset();
     texture_revision_.reset();
     texture_settings_.reset();
+    texture_action_error_.clear();
     refresh();
   }
 
@@ -653,6 +764,8 @@ struct QtToolSettingsPanel::Impl {
     // the selected locale changes instead of updating only the dock title.
     last_target_.reset();
     texture_revision_.reset();
+    texture_action_error_.clear();
+    localized_text_dirty_ = true;
     refresh_localized_text();
     refresh();
   }
@@ -692,15 +805,24 @@ struct QtToolSettingsPanel::Impl {
       if (!texture_section_->isHidden()) {
         texture_section_->hide();
       }
+      if (!edit_texture_section_->isHidden()) {
+        edit_texture_section_->hide();
+      }
+      texture_action_error_.clear();
       return;
     }
 
     QuaderFaceTextureRevision revision =
         editor_->modeling().face_texture_settings_revision();
+    const std::uint64_t keybindings_revision =
+        editor_->preferences().keybindings_revision();
+    const double rotation_step = editor_->preferences().rotation_snap_degrees();
     // Do not query selected faces, allocate descriptions, or touch Qt controls
     // on an unchanged viewport frame.
     if (!force && texture_revision_.has_value() &&
-        *texture_revision_ == revision) {
+        *texture_revision_ == revision &&
+        texture_keybindings_revision_ == keybindings_revision &&
+        texture_rotation_step_ == rotation_step) {
       return;
     }
     QuaderFaceTextureSettings settings =
@@ -711,6 +833,10 @@ struct QtToolSettingsPanel::Impl {
     const bool selection_changed =
         !texture_settings_.has_value() ||
         texture_settings_->selection_token != settings.selection_token;
+    if (selection_changed ||
+        (texture_revision_.has_value() && *texture_revision_ != revision)) {
+      texture_action_error_.clear();
+    }
 
     texture_synchronizing_ = true;
     for (TextureControlWidget &binding : texture_controls_) {
@@ -723,6 +849,9 @@ struct QtToolSettingsPanel::Impl {
     const bool visible = settings.selected_face_count > 0;
     if (texture_section_->isHidden() == visible) {
       texture_section_->setVisible(visible);
+    }
+    if (edit_texture_section_->isHidden() == visible) {
+      edit_texture_section_->setVisible(visible);
     }
 
     QString disabled_reason;
@@ -743,6 +872,9 @@ struct QtToolSettingsPanel::Impl {
     if (texture_disabled_reason_->isHidden() == !disabled_reason.isEmpty()) {
       texture_disabled_reason_->setVisible(!disabled_reason.isEmpty());
     }
+    present_texture_action_message(disabled_reason.isEmpty()
+                                       ? texture_action_error_
+                                       : disabled_reason);
 
     const bool single_face = settings.selected_face_count == 1;
     const std::array<std::optional<double>, 5> values{
@@ -765,8 +897,20 @@ struct QtToolSettingsPanel::Impl {
         binding.spin->present(values[index]);
       }
     }
+    for (QPushButton *button : texture_action_buttons_) {
+      if (button->isEnabled() != settings.editable) {
+        button->setEnabled(settings.editable);
+      }
+    }
+    if (texture_treat_as_one_->isChecked() != settings.treat_as_one) {
+      const QSignalBlocker blocker(texture_treat_as_one_);
+      texture_treat_as_one_->setChecked(settings.treat_as_one);
+    }
+    refresh_texture_action_tooltips(rotation_step);
     texture_settings_ = std::move(settings);
     texture_revision_ = revision;
+    texture_keybindings_revision_ = keybindings_revision;
+    texture_rotation_step_ = rotation_step;
     texture_synchronizing_ = false;
   }
 
@@ -790,6 +934,120 @@ struct QtToolSettingsPanel::Impl {
   }
 
 private:
+  void build_texture_actions() {
+    auto *layout = new QVBoxLayout(edit_texture_section_->content());
+    layout->setContentsMargins(8, 6, 8, 6);
+    layout->setSpacing(6);
+    std::size_t action_index = 0;
+    for (std::size_t group_index = 0;
+         group_index < kTextureActionGroups.size(); ++group_index) {
+      const TextureActionGroup &group = kTextureActionGroups[group_index];
+      auto *label = new QLabel(edit_texture_section_->content());
+      label->setObjectName(QStringLiteral("tool_settings.edit_texture.group.%1")
+                               .arg(qtext(group.id)));
+      texture_action_group_labels_[group_index] = label;
+      layout->addWidget(label);
+      auto *buttons = new QGridLayout;
+      buttons->setContentsMargins(0, 0, 0, 0);
+      buttons->setHorizontalSpacing(4);
+      buttons->setVerticalSpacing(4);
+      for (std::size_t offset = 0; offset < group.count;
+           ++offset, ++action_index) {
+        const TextureActionDescription &description =
+            kTextureActions[action_index];
+        auto *button = new QPushButton(edit_texture_section_->content());
+        button->setObjectName(QStringLiteral("tool_settings.edit_texture.%1")
+                                  .arg(qtext(description.id)));
+        button->setAutoDefault(false);
+        // Validate the draft before mouse focus-out can replace invalid text
+        // with the spin box's previous value. Keyboard traversal stays native.
+        button->setFocusPolicy(Qt::TabFocus);
+        button->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
+        button->setMinimumWidth(0);
+        const int cell = static_cast<int>(offset);
+        const int span = offset + 1 == group.count &&
+                                 group.count % group.columns == 1
+                             ? group.columns
+                             : 1;
+        buttons->addWidget(button, cell / group.columns, cell % group.columns,
+                           1, span);
+        texture_action_buttons_[action_index] = button;
+        QObject::connect(button, &QPushButton::clicked, &panel_,
+                         [this, action_index]() {
+                           dispatch_texture_action(action_index);
+                         });
+      }
+      for (int column = 0; column < group.columns; ++column) {
+        buttons->setColumnStretch(column, 1);
+      }
+      layout->addLayout(buttons);
+    }
+    texture_treat_as_one_ = new QCheckBox(edit_texture_section_->content());
+    texture_treat_as_one_->setObjectName(
+        QStringLiteral("tool_settings.edit_texture.treat_as_one"));
+    texture_treat_as_one_->setFocusPolicy(Qt::TabFocus);
+    layout->addWidget(texture_treat_as_one_);
+    QObject::connect(texture_treat_as_one_, &QCheckBox::toggled, &panel_,
+                     [this](bool enabled) {
+                       if (editor_ == nullptr || texture_synchronizing_) {
+                         return;
+                       }
+                       const QuaderFaceTextureRevision before =
+                           editor_->modeling().face_texture_settings_revision();
+                       const QuaderApiVoidResult result =
+                           editor_->modeling().set_face_texture_treat_as_one(
+                               enabled);
+                       log_failure("Treat selected faces as one", result);
+                       if (result.ok()) {
+                         // This session option does not commit numeric drafts.
+                         // Rebind only drafts from the same unchanged targets.
+                         const QuaderFaceTextureRevision after =
+                             editor_->modeling().face_texture_settings_revision();
+                         for (TextureControlWidget &binding : texture_controls_) {
+                           if (binding.gesture_revision == before) {
+                             binding.gesture_revision = after;
+                           }
+                         }
+                       }
+                       refresh_texture_settings(true);
+                     });
+    texture_action_message_ = new QLabel(edit_texture_section_->content());
+    texture_action_message_->setObjectName(
+        QStringLiteral("tool_settings.edit_texture.message"));
+    texture_action_message_->setWordWrap(true);
+    texture_action_message_->hide();
+    layout->addWidget(texture_action_message_);
+  }
+
+  void present_texture_action_message(const QString &message) {
+    if (texture_action_message_->text() != message) {
+      texture_action_message_->setText(message);
+    }
+    if (texture_action_message_->isHidden() == !message.isEmpty()) {
+      texture_action_message_->setVisible(!message.isEmpty());
+    }
+  }
+
+  void refresh_texture_action_tooltips(double rotation_step) {
+    for (std::size_t index = 0; index < kTextureActions.size(); ++index) {
+      const TextureActionDescription &description = kTextureActions[index];
+      QPushButton *button = texture_action_buttons_[index];
+      QString tooltip = button->accessibleName();
+      if (description.action == QuaderFaceTextureAction::RotateClockwise ||
+          description.action == QuaderFaceTextureAction::RotateCounterClockwise) {
+        tooltip.append(QStringLiteral(" (%1\u00B0)").arg(rotation_step, 0, 'g', 6));
+      }
+      const std::string shortcut =
+          editor_->commands().shortcut_for(description.command);
+      if (!shortcut.empty()) {
+        tooltip.append(QStringLiteral(" [%1]").arg(qtext(shortcut)));
+      }
+      if (button->toolTip() != tooltip) {
+        button->setToolTip(tooltip);
+      }
+    }
+  }
+
   void build_texture_controls() {
     auto *layout = new QGridLayout(texture_section_->content());
     layout->setContentsMargins(8, 6, 8, 6);
@@ -857,8 +1115,9 @@ private:
     }
     const bool scale = binding.field == QuaderFaceTextureField::ScaleX ||
                        binding.field == QuaderFaceTextureField::ScaleY;
-    if (!value.has_value() || !std::isfinite(*value) ||
-        (scale && *value == 0.0)) {
+    binding.invalid_value = !value.has_value() || !std::isfinite(*value) ||
+                            (scale && *value == 0.0);
+    if (binding.invalid_value) {
       binding.pending_value.reset();
       binding.last_requested_value.reset();
       binding.dispatch_timer->stop();
@@ -872,10 +1131,10 @@ private:
     binding.dispatch_timer->start();
   }
 
-  void flush_texture_dispatch(std::size_t index) {
+  bool flush_texture_dispatch(std::size_t index) {
     TextureControlWidget &binding = texture_controls_[index];
     if (!binding.pending_value.has_value()) {
-      return;
+      return !binding.invalid_value;
     }
     binding.dispatch_timer->stop();
     if (editor_ == nullptr || !binding.gesture_revision.has_value() ||
@@ -883,7 +1142,7 @@ private:
             *binding.gesture_revision) {
       discard_texture_dispatch(binding);
       schedule_texture_refresh();
-      return;
+      return false;
     }
     const QuaderFaceTextureRevision previous_revision =
         *binding.gesture_revision;
@@ -897,6 +1156,10 @@ private:
                                   .merge_key = binding.merge_key});
     log_failure("Face texture settings update", result);
     if (result.ok()) {
+      // Accepted corrections also dismiss a validation error when they restore
+      // the already-stored value and therefore do not advance owner revisions.
+      texture_action_error_.clear();
+      present_texture_action_message({});
       const QuaderFaceTextureRevision revision =
           editor_->modeling().face_texture_settings_revision();
       for (TextureControlWidget &other : texture_controls_) {
@@ -905,9 +1168,86 @@ private:
         }
       }
     } else {
+      texture_action_error_ = qtext(result.error_message());
       discard_texture_dispatch(binding);
     }
     schedule_texture_refresh();
+    return result.ok();
+  }
+
+  bool flush_texture_inputs_for_action() {
+    if (editor_ == nullptr || !texture_settings_.has_value() ||
+        !texture_revision_.has_value() || !texture_settings_->editable) {
+      return false;
+    }
+    const QuaderFaceTextureRevision current =
+        editor_->modeling().face_texture_settings_revision();
+    // A live numeric gesture may have published since the last presentation.
+    // Its exact revision is the only permitted extension of the captured key.
+    const bool current_capture =
+        *texture_revision_ == current ||
+        std::any_of(texture_controls_.begin(), texture_controls_.end(),
+                    [this, &current](const TextureControlWidget &binding) {
+                      return binding.gesture_revision == current &&
+                             binding.selection_token ==
+                                 texture_settings_->selection_token;
+                    });
+    const bool stale_draft = std::any_of(
+        texture_controls_.begin(), texture_controls_.end(),
+        [&current](const TextureControlWidget &binding) {
+          return binding.editing && binding.gesture_revision != current;
+        });
+    if (!current_capture || stale_draft) {
+      discard_texture_dispatches();
+      refresh_texture_settings(true);
+      texture_action_error_ = localized_text(
+          localization_, "tool_settings.edit_texture.stale_selection",
+          "The face selection or texture settings changed. Review the current "
+          "selection and try again.");
+      present_texture_action_message(texture_action_error_);
+      return false;
+    }
+    if (std::any_of(texture_controls_.begin(), texture_controls_.end(),
+                    [](const TextureControlWidget &binding) {
+                      return binding.invalid_value;
+                    })) {
+      texture_action_error_ = localized_text(
+          localization_, "tool_settings.edit_texture.invalid_edit",
+          "Finish a valid texture value before applying an action.");
+      present_texture_action_message(texture_action_error_);
+      return false;
+    }
+    for (std::size_t index = 0; index < texture_controls_.size(); ++index) {
+      if (!flush_texture_dispatch(index)) {
+        present_texture_action_message(texture_action_error_);
+        return false;
+      }
+    }
+    // An action is never part of the preceding numeric merge gesture. Present
+    // accepted text before moving focus so Qt cannot publish the old draft.
+    discard_texture_dispatches();
+    refresh_texture_settings(true);
+    return true;
+  }
+
+  void dispatch_texture_action(std::size_t index) {
+    if (editor_ == nullptr || !texture_settings_.has_value()) {
+      return;
+    }
+    const std::uint64_t selection_token = texture_settings_->selection_token;
+    if (!flush_texture_inputs_for_action()) {
+      return;
+    }
+    const QuaderApiVoidResult result =
+        editor_->modeling().apply_face_texture_action(
+            QuaderFaceTextureActionRequest{
+                .action = kTextureActions[index].action,
+                .selection_token = selection_token});
+    log_failure("Face texture action", result);
+    refresh_texture_settings(true);
+    texture_action_error_ = result.ok() ? QString{} : qtext(result.error_message());
+    present_texture_action_message(texture_action_error_);
+    texture_action_buttons_[index]->setFocus(Qt::MouseFocusReason);
   }
 
   void discard_texture_dispatch(TextureControlWidget &binding) {
@@ -918,6 +1258,7 @@ private:
     binding.selection_token = 0;
     binding.merge_key.clear();
     binding.editing = false;
+    binding.invalid_value = false;
   }
 
   void discard_texture_dispatches() {
@@ -1104,6 +1445,10 @@ private:
   }
 
   void refresh_localized_text() {
+    if (!localized_text_dirty_) {
+      return;
+    }
+    localized_text_dirty_ = false;
     panel_.setWindowTitle(localized_text(
         localization_, "ui.panel.tool_settings", "Tool Settings"));
     description_section_->set_title(localized_text(
@@ -1112,6 +1457,48 @@ private:
         localization_, "tool_settings.section.settings", "Settings"));
     texture_section_->set_title(localized_text(
         localization_, "tool_settings.texture_section", "Texture Settings"));
+    edit_texture_section_->set_title(localized_text(
+        localization_, "tool_settings.edit_texture_section", "Edit Texture"));
+    for (std::size_t index = 0; index < kTextureActionGroups.size(); ++index) {
+      const TextureActionGroup &group = kTextureActionGroups[index];
+      const QString label = localized_text(
+          localization_, std::string("tool_settings.edit_texture.group.") +
+                             std::string(group.id),
+          group.label);
+      if (texture_action_group_labels_[index]->text() != label) {
+        texture_action_group_labels_[index]->setText(label);
+      }
+    }
+    for (std::size_t index = 0; index < kTextureActions.size(); ++index) {
+      const TextureActionDescription &description = kTextureActions[index];
+      QPushButton *button = texture_action_buttons_[index];
+      const QString caption = localized_text(
+          localization_, std::string("tool_settings.edit_texture.") +
+                             std::string(description.id),
+          description.caption);
+      const QString label = localized_text(
+          localization_, std::string("command.modeling.texture.") +
+                             std::string(description.id),
+          quader_face_texture_action_label(description.action));
+      if (button->text() != caption) {
+        button->setText(caption);
+      }
+      if (button->accessibleName() != label) {
+        button->setAccessibleName(label);
+      }
+    }
+    const QString treat_as_one = localized_text(
+        localization_, "tool_settings.edit_texture.treat_as_one", "Treat as One");
+    if (texture_treat_as_one_->text() != treat_as_one) {
+      texture_treat_as_one_->setText(treat_as_one);
+      texture_treat_as_one_->setAccessibleName(treat_as_one);
+    }
+    const QString treat_as_one_tooltip = localized_text(
+        localization_, "tool_settings.edit_texture.treat_as_one_tooltip",
+        "Use combined selected-face bounds for Fit, Justify, and Flip Face.");
+    if (texture_treat_as_one_->toolTip() != treat_as_one_tooltip) {
+      texture_treat_as_one_->setToolTip(treat_as_one_tooltip);
+    }
     for (std::size_t index = 0; index < kTextureControls.size(); ++index) {
       const TextureControlDescription &description = kTextureControls[index];
       TextureControlWidget &binding = texture_controls_[index];
@@ -1668,6 +2055,9 @@ private:
   QtToolSettingsSection *settings_section_ = nullptr;
   QtToolSettingsSection *texture_section_ = nullptr;
   QLabel *texture_disabled_reason_ = nullptr;
+  QtToolSettingsSection *edit_texture_section_ = nullptr;
+  QLabel *texture_action_message_ = nullptr;
+  QCheckBox *texture_treat_as_one_ = nullptr;
   QWidget *controls_container_ = nullptr;
   QVBoxLayout *controls_layout_ = nullptr;
   QLabel *empty_settings_label_ = nullptr;
@@ -1678,14 +2068,20 @@ private:
   QPushButton *cancel_button_ = nullptr;
   std::vector<ControlWidget> controls_;
   std::array<TextureControlWidget, 5> texture_controls_;
+  std::array<QPushButton *, 25> texture_action_buttons_{};
+  std::array<QLabel *, 6> texture_action_group_labels_{};
   std::optional<QuaderFaceTextureSettings> texture_settings_;
   std::optional<QuaderFaceTextureRevision> texture_revision_;
+  std::uint64_t texture_keybindings_revision_ = 0;
+  double texture_rotation_step_ = 0.0;
+  QString texture_action_error_;
   std::optional<QuaderToolSettingsTarget> last_target_;
   bool synchronizing_ = false;
   bool refresh_scheduled_ = false;
   bool inactive_presented_ = false;
   bool texture_synchronizing_ = false;
   bool texture_refresh_scheduled_ = false;
+  bool localized_text_dirty_ = true;
 };
 
 QtToolSettingsPanel::QtToolSettingsPanel(QWidget *parent)

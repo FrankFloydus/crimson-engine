@@ -16,6 +16,7 @@
 #include <quader/modeling/input/viewport_host_input_snapshot.hpp>
 #include <quader/modeling/io/obj_mesh_view.hpp>
 #include <quader/modeling/io/qdr_document.hpp>
+#include <quader/modeling/mesh/face_texture_actions.hpp>
 #include <quader/modeling/mesh/polygon_document.hpp>
 #include <quader/modeling/operations/operation_result.hpp>
 #include <quader/modeling/payloads.hpp>

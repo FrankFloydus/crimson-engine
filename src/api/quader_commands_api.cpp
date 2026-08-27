@@ -60,6 +60,65 @@ constexpr std::array<NativeModelingActionCommand, 3>
          quader_command::kModelingSnapVerticesToFloor},
     }};
 
+/// Connects a typed texture command to the modeling owner action.
+struct FaceTextureCommand final {
+  QuaderCommandId command_id;
+  QuaderFaceTextureAction action;
+};
+
+constexpr std::array<FaceTextureCommand, 25> kFaceTextureCommands{{
+        {quader_command::kModelingTextureAlignToGrid,
+         QuaderFaceTextureAction::AlignToGrid},
+        {quader_command::kModelingTextureAlignToFace,
+         QuaderFaceTextureAction::AlignToFace},
+        {quader_command::kModelingTextureAlignToView,
+         QuaderFaceTextureAction::AlignToView},
+        {quader_command::kModelingTextureScaleXUp,
+         QuaderFaceTextureAction::ScaleXUp},
+        {quader_command::kModelingTextureScaleXDown,
+         QuaderFaceTextureAction::ScaleXDown},
+        {quader_command::kModelingTextureScaleYUp,
+         QuaderFaceTextureAction::ScaleYUp},
+        {quader_command::kModelingTextureScaleYDown,
+         QuaderFaceTextureAction::ScaleYDown},
+        {quader_command::kModelingTextureShiftLeft,
+         QuaderFaceTextureAction::ShiftLeft},
+        {quader_command::kModelingTextureShiftRight,
+         QuaderFaceTextureAction::ShiftRight},
+        {quader_command::kModelingTextureShiftUp,
+         QuaderFaceTextureAction::ShiftUp},
+        {quader_command::kModelingTextureShiftDown,
+         QuaderFaceTextureAction::ShiftDown},
+        {quader_command::kModelingTextureRotateClockwise,
+         QuaderFaceTextureAction::RotateClockwise},
+        {quader_command::kModelingTextureRotateCounterClockwise,
+         QuaderFaceTextureAction::RotateCounterClockwise},
+        {quader_command::kModelingTextureFlipTextureHorizontal,
+         QuaderFaceTextureAction::FlipTextureHorizontal},
+        {quader_command::kModelingTextureFlipTextureVertical,
+         QuaderFaceTextureAction::FlipTextureVertical},
+        {quader_command::kModelingTextureFlipFaceHorizontal,
+         QuaderFaceTextureAction::FlipFaceHorizontal},
+        {quader_command::kModelingTextureFlipFaceVertical,
+         QuaderFaceTextureAction::FlipFaceVertical},
+        {quader_command::kModelingTextureFitBoth,
+         QuaderFaceTextureAction::FitBoth},
+        {quader_command::kModelingTextureFitX,
+         QuaderFaceTextureAction::FitX},
+        {quader_command::kModelingTextureFitY,
+         QuaderFaceTextureAction::FitY},
+        {quader_command::kModelingTextureJustifyLeft,
+         QuaderFaceTextureAction::JustifyLeft},
+        {quader_command::kModelingTextureJustifyRight,
+         QuaderFaceTextureAction::JustifyRight},
+        {quader_command::kModelingTextureJustifyTop,
+         QuaderFaceTextureAction::JustifyTop},
+        {quader_command::kModelingTextureJustifyBottom,
+         QuaderFaceTextureAction::JustifyBottom},
+        {quader_command::kModelingTextureJustifyCenter,
+         QuaderFaceTextureAction::JustifyCenter},
+    }};
+
 std::string command_id_for_modeling_action(std::string_view action_id) {
   const auto native_action = std::find_if(
       kNativeModelingActionCommands.begin(),
@@ -496,6 +555,9 @@ std::string command_keybinding_localization_key(std::string_view command_id) {
     return stable_keybinding_localization_key(command_id);
   };
 
+  if (command_id.starts_with("modeling.texture.")) {
+    return "command." + std::string(command_id);
+  }
   if (command_id == quader_command::kEditUndo.string()) {
     return "ui.menu.edit.undo";
   }
@@ -1933,6 +1995,21 @@ void QuaderCommandsApi::Impl::register_commands() {
       quader_command::kModelingCopyPivotFromActive, "Copy Pivot From Active",
       [this] { return api_.modeling().copy_pivot_from_active(); }, {},
       [this] { return api_.modeling().can_copy_pivot_from_active(); });
+  for (const FaceTextureCommand &command : kFaceTextureCommands) {
+    register_command(
+        command.command_id,
+        std::string(quader_face_texture_action_label(command.action)),
+        [this, action = command.action] {
+          const auto settings = api_.modeling().face_texture_settings();
+          return api_.modeling().apply_face_texture_action(
+              {.action = action, .selection_token = settings.selection_token});
+        },
+        {}, [this] {
+          return api_.modeling().face_texture_settings().editable;
+        });
+    set_keybinding_selection_modes(command.command_id.string(),
+                                   kSelectionModeFace);
+  }
 #ifndef NDEBUG
   register_command(quader_command::kDevCopySelectionJson,
                    "Dev: Copy Selection JSON",

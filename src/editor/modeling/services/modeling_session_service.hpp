@@ -119,6 +119,12 @@ public:
   [[nodiscard]] ModelingFaceTextureSettings face_texture_settings() const;
   ModelingCommandResult
   set_face_texture_setting(const ModelingFaceTextureEdit &edit);
+  ModelingCommandResult
+  apply_face_texture_action(const ModelingFaceTextureActionRequest &request);
+  [[nodiscard]] bool face_texture_treat_as_one() const;
+  ModelingCommandResult set_face_texture_treat_as_one(bool enabled);
+  [[nodiscard]] double face_texture_rotation_step() const;
+  void set_face_texture_rotation_step_provider(std::function<double()> provider);
   [[nodiscard]] ModelingFaceTextureEditState
   capture_face_texture_edit_state() const;
   void restore_face_texture_edit_state(const ModelingFaceTextureEditState &state);
@@ -202,6 +208,7 @@ public:
   ModelingCommandResult copy_selection();
   ModelingCommandResult paste_selection();
   ModelingCommandResult repeat_last_action();
+  [[nodiscard]] bool has_face_texture_repeat() const;
   ModelingCommandResult mirror_selection(ModelingMirrorAxis axis);
   ModelingCommandResult flip_selection(ModelingFlipOrientation orientation);
   ModelingCommandResult apply_active_material(std::uint32_t material_slot = 0);

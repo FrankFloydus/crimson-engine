@@ -252,6 +252,25 @@ Texture Lock (`viewport.toggle_texture_lock`) and Texture Lock Scale
 (`viewport.toggle_texture_lock_scale`) are separate bindable viewport commands. Both are
 deliberately unassigned by default; the toolbar buttons do not install private Qt shortcuts.
 
+The 25 Edit Texture actions are independent bindable commands in `viewport.selection.face`.
+All deliberately have no default mapping; their IDs use the `modeling.texture.` prefix with
+these suffixes:
+
+| Group | Command suffixes |
+| --- | --- |
+| Align | `align_to_grid`, `align_to_face`, `align_to_view` |
+| Scale | `scale_x_up`, `scale_x_down`, `scale_y_up`, `scale_y_down` |
+| Shift | `shift_left`, `shift_right`, `shift_up`, `shift_down` |
+| Rotate | `rotate_clockwise`, `rotate_counter_clockwise`, `flip_texture_horizontal`, `flip_texture_vertical`, `flip_face_horizontal`, `flip_face_vertical` |
+| Fit | `fit_both`, `fit_x`, `fit_y` |
+| Justify | `justify_left`, `justify_right`, `justify_top`, `justify_bottom`, `justify_center` |
+
+Assigned shortcuts require viewport focus, Face mode, no text input, and no active navigation.
+The modeling owner checks editable face selection and preview availability at dispatch. The
+retained Edit Texture buttons call the same public modeling API directly, use the current
+keybinding only for tooltip presentation, and never install private Qt shortcuts. Treat as One
+is scene-session state rather than a separate command or a persisted keybinding preference.
+
 ## Testing Requirements
 
 Input changes need fast synthetic coverage. Prefer headless tests over manual clicking whenever

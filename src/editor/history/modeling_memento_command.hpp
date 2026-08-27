@@ -10,6 +10,7 @@
 #include "editor/modeling/services/modeling_session_service.hpp"
 
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <utility>
 
@@ -36,31 +37,38 @@ public:
           return command_invalid_result(
               "Modeling command has not been executed");
         }
-        return modeling_memento_command_result(
-            modeling_.restore_history_memento(before_));
+        return restore(before_, before_texture_state_);
     }
 
     CommandResult redo() override {
         if (executed_) {
-          return modeling_memento_command_result(
-              modeling_.restore_history_memento(after_));
+          return restore(after_, after_texture_state_);
         }
 
+        if (preserve_texture_edit_state_) {
+          before_texture_state_ = modeling_.capture_face_texture_edit_state();
+        }
         before_ = capture_before_memento();
         CommandResult result =
             modeling_memento_command_result(execute_initial());
         if (result.ok && result.changed) {
           after_ = capture_after_memento();
+          if (preserve_texture_edit_state_) {
+            after_texture_state_ = modeling_.capture_face_texture_edit_state();
+          }
           executed_ = true;
         }
         return result;
     }
 
 protected:
-    ModelingMementoCommand(ModelingSessionService& modeling, std::string label, bool executed = false)
+    ModelingMementoCommand(ModelingSessionService& modeling, std::string label,
+                           bool executed = false,
+                           bool preserve_texture_edit_state = false)
         : modeling_(modeling)
         , label_(std::move(label))
-        , executed_(executed) {}
+        , executed_(executed)
+        , preserve_texture_edit_state_(preserve_texture_edit_state) {}
 
     [[nodiscard]] ModelingSessionService& modeling() { return modeling_; }
     [[nodiscard]] const ModelingSessionService& modeling() const { return modeling_; }
@@ -76,11 +84,25 @@ protected:
 private:
   virtual ModelingCommandResult execute_initial() = 0;
 
+  CommandResult restore(
+      const ModelingSessionMemento &memento,
+      const std::optional<ModelingFaceTextureEditState> &texture_state) {
+    CommandResult result =
+        modeling_memento_command_result(modeling_.restore_history_memento(memento));
+    if (result.ok && texture_state.has_value()) {
+      modeling_.restore_face_texture_edit_state(*texture_state);
+    }
+    return result;
+  }
+
   ModelingSessionService &modeling_;
   std::string label_;
   ModelingSessionMemento before_;
   ModelingSessionMemento after_;
   bool executed_ = false;
+  bool preserve_texture_edit_state_ = false;
+  std::optional<ModelingFaceTextureEditState> before_texture_state_;
+  std::optional<ModelingFaceTextureEditState> after_texture_state_;
 };
 
 /**
@@ -331,7 +353,8 @@ private:
 class RepeatLastActionHistoryCommand final : public ModelingMementoCommand {
 public:
     explicit RepeatLastActionHistoryCommand(ModelingSessionService& modeling)
-        : ModelingMementoCommand(modeling, "Repeat Last Action") {}
+        : ModelingMementoCommand(modeling, "Repeat Last Action", false,
+                                  modeling.has_face_texture_repeat()) {}
 
 private:
   ModelingCommandResult execute_initial() override {

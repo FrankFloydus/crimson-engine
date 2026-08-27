@@ -265,3 +265,120 @@ TEST(QdrDocumentMeshUvTests, BakeMappingPreservesFaceSettingsAndViewportUvs) {
         EXPECT_NEAR(after.vertices[corner].uv0.y, expected.y, 1.0e-5F);
     }
 }
+
+TEST(QdrDocumentMeshUvTests, EffectiveUvInverseRetainsSettingsAndNonlinearCorners) {
+    constexpr std::array<quader::QVec3, 4> kPositions{
+        quader::QVec3{-2, -1, 0}, {3, -1, 0}, {3, 2, 0}, {-2, 2, 0}};
+    constexpr std::array<quader::QVec2, 4> kDesired{
+        quader::QVec2{0.1F, 0.2F}, {1.8F, -0.1F},
+        {1.1F, 1.5F}, {-0.4F, 0.9F}};
+    const FaceTextureTransform settings{
+        .scale = {-2.3F, 0.7F}, .shift_uv = {0.2F, -0.8F},
+        .rotation_degrees = 37.0F};
+    const std::array<Transform3, 5> mappings{
+        Transform3{},
+        Transform3{.origin = {1.4F, -0.8F, 2.0F}},
+        Transform3{.x_axis = {1.7F, 0.2F, 0.0F},
+                   .y_axis = {0.4F, 0.8F, 0.0F},
+                   .origin = {-1.0F, 0.7F, 0.0F}},
+        Transform3{.x_axis = {-1.2F, 0.0F, 0.0F},
+                   .y_axis = {0.0F, 0.75F, 0.0F},
+                   .origin = {0.25F, -0.5F, 0.0F}},
+        Transform3{.x_axis = {0.0F, 0.0F, -1.0F},
+                   .y_axis = {0.0F, 1.0F, 0.0F},
+                   .z_axis = {1.0F, 0.0F, 0.0F},
+                   .origin = {1.0F, 0.5F, -0.25F}},
+    };
+    for (const auto &mapping : mappings) {
+        const auto solved = solve_face_texture_base_uvs(
+            kPositions, kDesired, {0, 0, 1}, settings, mapping);
+        ASSERT_TRUE(solved.has_value());
+        ASSERT_EQ(solved->size(), kDesired.size());
+        const auto carrier = face_texture_carrier(
+            kPositions, *solved, {0, 0, 1}, settings);
+        for (std::size_t corner = 0U; corner < kDesired.size(); ++corner) {
+            const auto actual = evaluate_texture_mapping(
+                apply_face_texture_transform((*solved)[corner], settings),
+                kPositions[corner], {0, 0, 1}, carrier, mapping);
+            EXPECT_NEAR(actual.x, kDesired[corner].x, 1.0e-5F);
+            EXPECT_NEAR(actual.y, kDesired[corner].y, 1.0e-5F);
+        }
+    }
+}
+
+TEST(QdrDocumentMeshUvTests, EffectiveUvInverseAllowsRankOneAndConstantTargets) {
+    constexpr std::array<quader::QVec3, 4> kPositions{
+        quader::QVec3{-1, -1, 0}, {1, -1, 0}, {1, 1, 0}, {-1, 1, 0}};
+    const Transform3 mapping{
+        .x_axis = {-2, 0, 0}, .y_axis = {0, 0.75F, 0},
+        .origin = {0.5F, -1.25F, 0}};
+    const std::array<std::array<quader::QVec2, 4>, 2> targets{
+        std::array<quader::QVec2, 4>{quader::QVec2{1, 3}, {2, 3}, {4, 3}, {5, 3}},
+        std::array<quader::QVec2, 4>{quader::QVec2{2, -1}, {2, -1}, {2, -1}, {2, -1}},
+    };
+    for (const auto &desired : targets) {
+        const auto solved = solve_face_texture_base_uvs(
+            kPositions, desired, {0, 0, 1}, {}, mapping);
+        ASSERT_TRUE(solved.has_value());
+        const auto carrier = face_texture_carrier(kPositions, *solved, {0, 0, 1}, {});
+        for (std::size_t corner = 0U; corner < desired.size(); ++corner) {
+            const auto actual = evaluate_texture_mapping(
+                (*solved)[corner], kPositions[corner], {0, 0, 1}, carrier, mapping);
+            EXPECT_NEAR(actual.x, desired[corner].x, 1.0e-5F);
+            EXPECT_NEAR(actual.y, desired[corner].y, 1.0e-5F);
+        }
+    }
+}
+
+TEST(QdrDocumentMeshUvTests, EffectiveUvInverseRejectsUnrepresentableMappings) {
+    constexpr std::array<quader::QVec3, 4> kPositions{
+        quader::QVec3{-1, -1, 0}, {1, -1, 0}, {1, 1, 0}, {-1, 1, 0}};
+    const std::array<quader::QVec2, 4> desired{
+        quader::QVec2{0, 1}, {1, 1}, {1, 0}, {0, 0}};
+    const Transform3 collapsed{.x_axis = {0, 0, 0}};
+    EXPECT_FALSE(solve_face_texture_base_uvs(
+        kPositions, desired, {0, 0, 1}, {}, collapsed).has_value());
+    auto invalid = desired;
+    invalid.front().x = std::numeric_limits<float>::infinity();
+    EXPECT_FALSE(solve_face_texture_base_uvs(
+        kPositions, invalid, {0, 0, 1}, {}, {}).has_value());
+    EXPECT_FALSE(solve_face_texture_base_uvs(
+        kPositions, std::span<const quader::QVec2>(desired).first(3U),
+        {0, 0, 1}, {}, {}).has_value());
+    EXPECT_EQ(desired.front().x, 0.0F);
+    EXPECT_EQ(kPositions.front().x, -1.0F);
+}
+
+TEST(QdrDocumentMeshUvTests, EffectiveUvInverseCarriesUvsThroughGeometricReflection) {
+    constexpr std::array<quader::QVec3, 4> kOriginal{
+        quader::QVec3{-2, -1, 0}, {3, -1, 0}, {3, 2, 0}, {-2, 2, 0}};
+    const FaceTextureTransform settings{
+        .scale = {1.3F, -0.8F}, .shift_uv = {0.7F, -0.2F},
+        .rotation_degrees = 51.0F};
+    const Transform3 mapping{
+        .x_axis = {1.6F, 0.25F, 0}, .y_axis = {0.2F, 0.9F, 0},
+        .origin = {1.0F, -0.5F, 0}};
+    const auto original_carrier = face_texture_carrier(
+        kOriginal, {}, {0, 0, 1}, settings);
+    std::array<quader::QVec3, 4> reflected;
+    std::array<quader::QVec2, 4> desired;
+    for (std::size_t corner = 0U; corner < kOriginal.size(); ++corner) {
+        const std::size_t reversed = kOriginal.size() - corner - 1U;
+        const auto position = kOriginal[reversed];
+        reflected[corner] = {1.0F - position.x, position.y, position.z};
+        desired[corner] = evaluate_texture_mapping(
+            apply_face_texture_transform(generated_texture_uv(position, {0, 0, 1}), settings),
+            position, {0, 0, 1}, original_carrier, mapping);
+    }
+    const auto solved = solve_face_texture_base_uvs(
+        reflected, desired, {0, 0, 1}, settings, mapping);
+    ASSERT_TRUE(solved.has_value());
+    const auto carrier = face_texture_carrier(reflected, *solved, {0, 0, 1}, settings);
+    for (std::size_t corner = 0U; corner < reflected.size(); ++corner) {
+        const auto actual = evaluate_texture_mapping(
+            apply_face_texture_transform((*solved)[corner], settings),
+            reflected[corner], {0, 0, 1}, carrier, mapping);
+        EXPECT_NEAR(actual.x, desired[corner].x, 1.0e-5F);
+        EXPECT_NEAR(actual.y, desired[corner].y, 1.0e-5F);
+    }
+}

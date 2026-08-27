@@ -9,7 +9,9 @@
 #include <quader/modeling/neutral/polygon/document_model.hpp>
 
 #include <array>
+#include <optional>
 #include <span>
+#include <vector>
 
 namespace quader_poly {
 
@@ -42,6 +44,19 @@ valid_face_texture_transform(const FaceTextureTransform &transform) noexcept;
 [[nodiscard]] quader::QVec2 evaluate_texture_mapping(
     quader::QVec2 uv0, quader::QVec3 position, quader::QVec3 geometric_normal,
     const std::array<float, 4> &carrier,
+    const Transform3 &sampling_from_local);
+
+/**
+ * Solves authored base UVs for desired effective corner UVs while retaining
+ * both face settings and occurrence compensation. Carrier fitting and final
+ * float evaluation use the same rules as rendering. Ill-conditioned or
+ * non-finite mappings return no value without changing the input geometry.
+ */
+[[nodiscard]] std::optional<std::vector<quader::QVec2>>
+solve_face_texture_base_uvs(
+    std::span<const quader::QVec3> positions,
+    std::span<const quader::QVec2> effective_uvs,
+    quader::QVec3 geometric_normal, const FaceTextureTransform &transform,
     const Transform3 &sampling_from_local);
 
 /**

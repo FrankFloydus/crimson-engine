@@ -19,8 +19,8 @@ class LocalizationService;
 class QuaderEditorApi;
 
 /**
- * Presents active tool settings and selected-face texture settings as dock
- * content. Texture settings remain independent of the active tool.
+ * Presents active tool settings, selected-face texture values, and texture
+ * actions as retained dock content, independent of the active tool.
  * Call refresh from the host UI update path so activation, value changes, and
  * preview completion are reflected immediately.
  */
@@ -36,7 +36,7 @@ public:
   void unbind();
   void set_localization(const LocalizationService &localization);
   void refresh();
-  /** Refreshes selected-face controls behind their narrow owner revision gate. */
+  /** Refreshes both face sections behind owner and preference revision gates. */
   void refresh_texture_settings();
   [[nodiscard]] bool has_active_target() const;
   /**

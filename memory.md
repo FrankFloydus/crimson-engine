@@ -6973,3 +6973,67 @@ VFS overlay using that file from commit `734c1350` reproduces the same diagnosti
 to the texture changes and does not occur in the canonical native builds.
 After the cleanup, all nine UV tests and 202 focused native/API tests pass. The full regression
 gate still has exactly the same 12 failures, and both canonical app configurations build again.
+
+## 2026-08-27 - Discrete Edit Texture Actions
+
+Task/context: add the independent, foldable Edit Texture subsection with 25 Hammer-style actions,
+shared-bounds editing, geometric face flips, and repeatable atomic history.
+
+Invariants:
+
+- `QuaderModelingApi::apply_face_texture_action()` is the user-intent boundary for both retained
+  buttons and the 25 `modeling.texture.*` commands. Commands are Face-scoped and deliberately
+  unassigned. Requests carry the selection token; the native host captures Treat as One, the
+  rotation increment even when snapping is disabled, and `ViewportCameraAdapter::basis()`.
+- The scene's `FaceTextureEditContext` owns Treat as One independently of document/history state.
+  It survives selection changes and undo/redo. Each project scene tab has its own `SceneSession`
+  and value; replacing a standalone session's document retains that session's value. A `QuaderApi`
+  stays tied to its session, so use `QuaderEditorApi` when inspecting another activated scene tab.
+- The portable `prepare_face_texture_action()` prepares every candidate before one native batch
+  publication. Per-face dimensions come from native material owners, with the existing 64x64
+  fallback. Shift Right/Down subtract U/V; Left/Up add U/V in Quader's signed texture chart.
+  Scale edits change signed magnitude by 0.1 and reject zero crossings selection-wide.
+- Incremental edits and individual Fit/Justify compose affine UV changes before occurrence C.
+  Grouped Fit/Justify reproject through the active face's world chart and combined bounds,
+  including gaps; missing active references fall back to the smallest object/face ID. A single
+  axis operation preserves the other effective UV axis, and collapsed shared charts fail.
+- Reprojection and geometric flips use the neutral carrier inverse: K(f) = K(E) * inverse(I+K(d)),
+  followed by f_i = E_i - K(f)d_i and inversion of the retained face transform. Keep C unchanged,
+  allow rank-one/constant authored targets, and verify stored float UVs with the real evaluator.
+- Geometric flips use geometric plane axes, not texture rotation, and compute shared destinations
+  from the original snapshot. Conflicts use the fixed geometry epsilon rather than absolute
+  world-position magnitude. Preserve exact stationary vertices, leave their untouched neighbors'
+  generated UVs procedural, reverse only selected winding/corner order, and validate facing,
+  triangulation, loop intersections, and shared-edge orientation before publication.
+- Fit/Justify compare the desired effective corners before writing rounded transform values, so
+  repeated fits do not oscillate between float values or create spurious undo entries. Successful
+  clicks have distinct descriptive history items; failures/no-ops leave history and redo intact.
+  Repeat captures action settings but resolves current selected faces/material dimensions.
+- Texture Settings and Edit Texture share the retained snapshot/revision gate. Locale, keybinding,
+  and rotation-preference changes invalidate presentation narrowly. Flush valid numeric drafts
+  before actions; reject invalid/stale drafts before focus-out, and never reopen a closed dock.
+
+Owners: portable action header/source and neutral UV helper; native modeling API, SDK projection
+adapter, edit context and memento/repeat history; retained Qt Tool Settings; command/localization
+catalogs and explicit command behavior contracts. No format, dependency, or version change.
+
+Behavior references: Valve's [Source 2 Mesh Texturing](https://developer.valvesoftware.com/wiki/Source_2_Docs/Level_Design/Basic_Construction/Mesh_Texturing)
+and [Material Alignment](https://developer.valvesoftware.com/wiki/SteamVR/Environments/Environment_Tutorial:_Materials,_Details_and_Props#Material_Alignment).
+The 0.1 scale step, one-pixel shift, geometric flip axes, and connected-vertex rejection policy
+were explicit task decisions where the manual did not specify the details.
+
+Verification: all 348 tests in the affected native suites, 103 SDK consumer tests, 253 polygon-loop
+tests, and 52 UI source guardrails pass. The reviewed command baseline adds exactly 25 records;
+existing records change only the preference-catalog fingerprint and its composed hashes. The full
+regression gate reproduces exactly the saved 12 pre-existing failures (seven guardrails and five
+Linear Array/overlay tests), with unchanged diagnostics after normalizing locations and addresses.
+The SDK-only build succeeds; its nested test run reports the same seven existing guardrail failures.
+Automated startup logs verify Vulkan initialization, swapchain creation, and material loading.
+Desktop interaction was stopped with Escape before the face controls could be inspected, so there
+is no manual layout or texture-pixel verdict. The temporary deployed diagnostic texture was restored
+and hash-checked against the unchanged source asset; app settings were isolated from user settings.
+
+Pre-commit verification: renamed 40 new local constexpr test constants to the required `kCamelCase`
+style without changing values or behavior. The full scan covered 549 translation units; both
+corrected test files pass their clang-tidy recheck. The only remaining style-gate diagnostic is the
+previously documented MSVC `xutility` `unexpected size` assertion in unchanged `polygon_document.cpp`.

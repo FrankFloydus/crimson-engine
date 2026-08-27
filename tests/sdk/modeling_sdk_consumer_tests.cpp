@@ -3998,6 +3998,1258 @@ TEST(ModelingSdkConsumerTests,
   EXPECT_EQ(document.content_revision(), revision);
 }
 
+[[nodiscard]] Result<PolygonDocument> make_texture_action_face(
+    std::span<const Vec3> positions, std::span<const Vec2> uvs = {},
+    FaceTextureTransform transform = {}) {
+  auto created = PolygonDocument::make_face(positions, make_id<MaterialTag>(7U));
+  if (!created.ok()) {
+    return created;
+  }
+  auto topology = created.value().authored_topology();
+  if (!topology.ok()) {
+    return Result<PolygonDocument>::failure(topology.error());
+  }
+  auto &face = topology.value().faces.front();
+  face.uvs.assign(uvs.begin(), uvs.end());
+  face.texture_transform = transform;
+  auto imported = PolygonDocument::from_authored_topology(topology.value());
+  if (!imported.ok()) {
+    return imported;
+  }
+  const auto selected = imported.value().select_all_faces();
+  if (!selected.ok()) {
+    return Result<PolygonDocument>::failure(selected.error());
+  }
+  return imported;
+}
+
+[[nodiscard]] FaceTextureActionTarget texture_action_target(
+    const PolygonDocument &document, std::uint64_t key = 1U,
+    std::uint32_t width = 64U, std::uint32_t height = 64U) {
+  FaceTextureActionTarget target{.key = key, .document = &document};
+  for (const FaceId face : document.face_ids()) {
+    target.faces.push_back({.face = face, .texture_width = width,
+                            .texture_height = height});
+  }
+  return target;
+}
+
+[[nodiscard]] const PreparedFaceTextureDocument *prepared_texture_document(
+    const PreparedFaceTextureAction &prepared, std::uint64_t key = 1U) {
+  const auto found = std::ranges::find(
+      prepared.documents, key, &PreparedFaceTextureDocument::key);
+  return found == prepared.documents.end() ? nullptr : &*found;
+}
+
+[[nodiscard]] Vec2 expected_texture_uv(
+    Vec2 base, const FaceTextureTransform &transform) {
+  constexpr double kDegreesToRadians = 0.017453292519943295;
+  const double angle = transform.rotation_degrees * kDegreesToRadians;
+  const double cosine = std::cos(angle);
+  const double sine = std::sin(angle);
+  return {
+      static_cast<float>((base.x * cosine - base.y * sine) /
+                            transform.scale.x +
+                        transform.shift_uv.x),
+      static_cast<float>((base.x * sine + base.y * cosine) /
+                            transform.scale.y +
+                        transform.shift_uv.y),
+  };
+}
+
+void expect_vec2_near(Vec2 actual, Vec2 expected, float epsilon = 0.0001F) {
+  EXPECT_NEAR(actual.x, expected.x, epsilon);
+  EXPECT_NEAR(actual.y, expected.y, epsilon);
+}
+
+void expect_compiled_texture_uvs(const PolygonDocument &document,
+                                std::span<const VertexId> vertices,
+                                std::span<const Vec2> expected) {
+  ASSERT_EQ(vertices.size(), expected.size());
+  const auto compiled = document.compile_mesh();
+  ASSERT_TRUE(compiled.ok()) << compiled.error_message();
+  std::vector<bool> found(vertices.size());
+  for (const auto &vertex : compiled.value().vertices) {
+    const auto source = std::ranges::find(vertices, vertex.source_vertex);
+    ASSERT_NE(source, vertices.end());
+    const auto index = static_cast<std::size_t>(source - vertices.begin());
+    found[index] = true;
+    expect_vec2_near(vertex.uv0, expected[index]);
+  }
+  EXPECT_TRUE(std::ranges::all_of(found, [](bool present) { return present; }));
+}
+
+TEST(ModelingSdkConsumerTests,
+     FaceTextureActionsKeepIncrementalEditsRelativeAndRetainEveryBaseCorner) {
+  constexpr std::array<Vec3, 4> kPositions{{
+      {0.0F, 0.0F, 0.0F}, {4.0F, 0.0F, 0.0F},
+      {4.0F, 3.0F, 0.0F}, {0.0F, 3.0F, 0.0F},
+  }};
+  // This quad deliberately has non-affine corner UVs, not a planar chart.
+  constexpr std::array<Vec2, 4> kAuthored{{
+      {0.2F, 0.1F}, {1.8F, 0.35F}, {2.1F, 1.7F}, {0.4F, 1.2F},
+  }};
+  const FaceTextureTransform initial{
+      .scale = {-2.0F, 0.5F}, .shift_uv = {0.25F, -0.375F},
+      .rotation_degrees = 30.0F,
+  };
+  constexpr std::array<FaceTextureAction, 12> kActions{
+      FaceTextureAction::ScaleXUp, FaceTextureAction::ScaleXDown,
+      FaceTextureAction::ScaleYUp, FaceTextureAction::ScaleYDown,
+      FaceTextureAction::ShiftLeft, FaceTextureAction::ShiftRight,
+      FaceTextureAction::ShiftUp, FaceTextureAction::ShiftDown,
+      FaceTextureAction::RotateClockwise,
+      FaceTextureAction::RotateCounterClockwise,
+      FaceTextureAction::FlipTextureHorizontal,
+      FaceTextureAction::FlipTextureVertical,
+  };
+  for (const bool authored_uvs : {false, true}) {
+    SCOPED_TRACE(authored_uvs);
+    auto created = make_texture_action_face(
+        kPositions, authored_uvs ? std::span<const Vec2>(kAuthored)
+                                : std::span<const Vec2>{},
+        initial);
+    ASSERT_TRUE(created.ok()) << created.error_message();
+    const PolygonDocument &original = created.value();
+    const auto topology = original.authored_topology();
+    ASSERT_TRUE(topology.ok());
+    const auto source_identity = original.content_identity();
+    const auto source_revision = original.content_revision();
+    for (const FaceTextureAction action : kActions) {
+      SCOPED_TRACE(static_cast<int>(action));
+      FaceTextureTransform expected = initial;
+      switch (action) {
+      case FaceTextureAction::ScaleXUp: expected.scale.x = -2.1F; break;
+      case FaceTextureAction::ScaleXDown: expected.scale.x = -1.9F; break;
+      case FaceTextureAction::ScaleYUp: expected.scale.y = 0.6F; break;
+      case FaceTextureAction::ScaleYDown: expected.scale.y = 0.4F; break;
+      case FaceTextureAction::ShiftLeft: expected.shift_uv.x += 1.0F / 128.0F; break;
+      case FaceTextureAction::ShiftRight: expected.shift_uv.x -= 1.0F / 128.0F; break;
+      case FaceTextureAction::ShiftUp: expected.shift_uv.y += 1.0F / 32.0F; break;
+      case FaceTextureAction::ShiftDown: expected.shift_uv.y -= 1.0F / 32.0F; break;
+      case FaceTextureAction::RotateClockwise: expected.rotation_degrees = 52.5F; break;
+      case FaceTextureAction::RotateCounterClockwise: expected.rotation_degrees = 7.5F; break;
+      case FaceTextureAction::FlipTextureHorizontal: expected.scale.x = 2.0F; break;
+      case FaceTextureAction::FlipTextureVertical: expected.scale.y = -0.5F; break;
+      default: FAIL() << "Unexpected incremental action";
+      }
+      const std::array targets{texture_action_target(original, 1U, 128U, 32U)};
+      const auto result = prepare_face_texture_action(
+          targets, {.action = action, .treat_as_one = true,
+                    .rotation_degrees = 22.5});
+      ASSERT_TRUE(result.ok()) << result.error_message();
+      ASSERT_TRUE(result.value().changed);
+      const auto *prepared = prepared_texture_document(result.value());
+      ASSERT_NE(prepared, nullptr);
+      EXPECT_TRUE(prepared->receipt.changed);
+      EXPECT_TRUE(prepared->receipt.dirty.geometry);
+      EXPECT_FALSE(prepared->receipt.dirty.topology);
+      EXPECT_FALSE(prepared->receipt.dirty.selection);
+      EXPECT_FALSE(prepared->receipt.dirty.materials);
+      EXPECT_TRUE(prepared->document.has_same_geometry(original));
+      EXPECT_TRUE(prepared->document.shares_selection_with(original));
+      EXPECT_EQ(prepared->document.selection_revision(), original.selection_revision());
+      const auto after = prepared->document.authored_topology();
+      ASSERT_TRUE(after.ok());
+      const auto &face = after.value().faces.front();
+      EXPECT_EQ(face.texture_transform, expected);
+      ASSERT_EQ(face.uvs.size(), topology.value().faces.front().uvs.size());
+      for (std::size_t corner = 0; corner < face.uvs.size(); ++corner) {
+        EXPECT_EQ(face.uvs[corner].x, kAuthored[corner].x);
+        EXPECT_EQ(face.uvs[corner].y, kAuthored[corner].y);
+      }
+      std::array<Vec2, 4> expected_uvs{};
+      for (std::size_t corner = 0; corner < kPositions.size(); ++corner) {
+        const Vec2 base = authored_uvs
+                              ? kAuthored[corner]
+                              : Vec2{kPositions[corner].x * 0.5F,
+                                     -kPositions[corner].y * 0.5F};
+        expected_uvs[corner] = expected_texture_uv(base, expected);
+      }
+      expect_compiled_texture_uvs(prepared->document, face.vertices, expected_uvs);
+      EXPECT_EQ(original.content_identity(), source_identity);
+      EXPECT_EQ(original.content_revision(), source_revision);
+    }
+  }
+}
+
+TEST(ModelingSdkConsumerTests,
+     FaceTextureActionsRejectSignedScaleZeroCrossingsWithoutPartialCandidates) {
+  constexpr std::array<Vec3, 3> kPoints{{
+      {0.0F, 0.0F, 0.0F}, {2.0F, 0.0F, 0.0F}, {0.0F, 2.0F, 0.0F},
+  }};
+  auto first = make_texture_action_face(kPoints);
+  ASSERT_TRUE(first.ok());
+  const auto first_identity = first.value().content_identity();
+  for (const float scale : {0.1F, 0.05F, -0.1F, -0.05F}) {
+    for (const FaceTextureAction action : {FaceTextureAction::ScaleXDown,
+                                           FaceTextureAction::ScaleYDown}) {
+      SCOPED_TRACE(scale);
+      SCOPED_TRACE(static_cast<int>(action));
+      auto second = make_texture_action_face(kPoints, {}, {.scale = {scale, scale}});
+      ASSERT_TRUE(second.ok());
+      const auto second_identity = second.value().content_identity();
+      const auto second_revision = second.value().content_revision();
+      const auto before = serialize_qdr_authored_topology(second.value());
+      ASSERT_TRUE(before.ok());
+      const std::array targets{texture_action_target(first.value(), 1U),
+                               texture_action_target(second.value(), 2U)};
+      const auto result = prepare_face_texture_action(targets, {.action = action});
+      ASSERT_FALSE(result.ok());
+      EXPECT_FALSE(result.error_message().empty());
+      EXPECT_EQ(first.value().content_identity(), first_identity);
+      EXPECT_EQ(second.value().content_identity(), second_identity);
+      EXPECT_EQ(second.value().content_revision(), second_revision);
+      const auto after = serialize_qdr_authored_topology(second.value());
+      ASSERT_TRUE(after.ok());
+      EXPECT_EQ(after.value(), before.value());
+    }
+  }
+}
+
+TEST(ModelingSdkConsumerTests,
+     FaceTextureActionsMoveTheImageOnePixelInTheNamedDirectionPerMaterial) {
+  constexpr std::array<Vec3, 3> kPoints{{
+      {0.0F, 0.0F, 0.0F}, {4.0F, 0.0F, 0.0F}, {0.0F, 4.0F, 0.0F},
+  }};
+  auto first = make_texture_action_face(kPoints);
+  auto second = make_texture_action_face(kPoints);
+  auto fallback = make_texture_action_face(kPoints);
+  ASSERT_TRUE(first.ok());
+  ASSERT_TRUE(second.ok());
+  ASSERT_TRUE(fallback.ok());
+  const std::array targets{
+      texture_action_target(first.value(), 1U, 128U, 32U),
+      texture_action_target(second.value(), 2U, 32U, 256U),
+      texture_action_target(fallback.value(), 3U),
+  };
+  /// Pairs each image-shift action with its expected visible motion direction.
+  struct ShiftCase {
+    FaceTextureAction action;
+    float horizontal;
+    float vertical;
+  };
+  constexpr std::array kCases{
+      ShiftCase{FaceTextureAction::ShiftLeft, -1.0F, 0.0F},
+      ShiftCase{FaceTextureAction::ShiftRight, 1.0F, 0.0F},
+      ShiftCase{FaceTextureAction::ShiftUp, 0.0F, 1.0F},
+      ShiftCase{FaceTextureAction::ShiftDown, 0.0F, -1.0F},
+  };
+  for (const auto &shift : kCases) {
+    SCOPED_TRACE(static_cast<int>(shift.action));
+    const auto result = prepare_face_texture_action(
+        targets, {.action = shift.action, .treat_as_one = true});
+    ASSERT_TRUE(result.ok()) << result.error_message();
+    for (const auto &target : targets) {
+      const auto *prepared = prepared_texture_document(result.value(), target.key);
+      ASSERT_NE(prepared, nullptr);
+      const auto settings = prepared->document.face_texture_settings(
+          prepared->document.face_ids());
+      ASSERT_TRUE(settings.ok());
+      const auto &transform = settings.value().front().texture_transform;
+      const float width = static_cast<float>(target.faces.front().texture_width);
+      const float height = static_cast<float>(target.faces.front().texture_height);
+      // On a +Z wall q=(x/2,-y/2), preserve the marker's sampled UV while
+      // moving its image location by one pixel in world X/up-Y directions.
+      const Vec2 marker_before{0.75F, 0.625F};
+      const Vec2 marker_after{marker_before.x + 2.0F * shift.horizontal / width,
+                              marker_before.y + 2.0F * shift.vertical / height};
+      expect_vec2_near(
+          {marker_after.x * 0.5F + transform.shift_uv.x,
+           -marker_after.y * 0.5F + transform.shift_uv.y},
+          {marker_before.x * 0.5F, -marker_before.y * 0.5F});
+      EXPECT_EQ(transform.scale.x, 1.0F);
+      EXPECT_EQ(transform.scale.y, 1.0F);
+      EXPECT_EQ(transform.rotation_degrees, 0.0F);
+    }
+  }
+}
+
+TEST(ModelingSdkConsumerTests,
+     FaceTextureAlignGridUsesWorldDensityAndSolvesMirroredOccurrenceCompensation) {
+  constexpr std::array<Vec3, 4> kPoints{{
+      {0.0F, 0.0F, 0.0F}, {4.0F, 0.0F, 0.0F},
+      {4.0F, 3.0F, 0.0F}, {0.0F, 3.0F, 0.0F},
+  }};
+  constexpr std::array<Vec2, 4> kAuthored{{
+      {0.2F, 0.1F}, {1.8F, 0.35F}, {2.1F, 1.7F}, {0.4F, 1.2F},
+  }};
+  auto created = make_texture_action_face(
+      kPoints, kAuthored, {.scale = {-2.0F, 0.5F}, .shift_uv = {0.25F, -0.5F},
+                         .rotation_degrees = 37.0F});
+  ASSERT_TRUE(created.ok()) << created.error_message();
+  for (const float world_direction : {-1.0F, 1.0F}) {
+    for (const bool compensated : {false, true}) {
+      SCOPED_TRACE(world_direction);
+      SCOPED_TRACE(compensated);
+      auto target = texture_action_target(created.value());
+      target.world_from_local = {
+          .x_axis = {0.0F, 0.0F, 2.0F * world_direction},
+          .y_axis = {0.0F, 3.0F, 0.0F},
+          .z_axis = {-1.0F, 0.0F, 0.0F}, .origin = {5.0F, 7.0F, 11.0F},
+      };
+      if (compensated) {
+        target.sampling_from_local = {
+            .x_axis = {-1.5F, 0.0F, 0.0F}, .y_axis = {0.0F, 2.0F, 0.0F},
+            .z_axis = {0.0F, 0.0F, 1.0F}, .origin = {3.0F, -4.0F, 1.0F},
+        };
+      }
+      const auto result = prepare_face_texture_action(
+          std::span<const FaceTextureActionTarget>(&target, 1U),
+          {.action = FaceTextureAction::AlignToGrid});
+      ASSERT_TRUE(result.ok()) << result.error_message();
+      const auto *prepared = prepared_texture_document(result.value());
+      ASSERT_NE(prepared, nullptr);
+      EXPECT_TRUE(prepared->document.has_same_geometry(created.value()));
+      const auto settings = prepared->document.face_texture_settings(
+          prepared->document.face_ids());
+      ASSERT_TRUE(settings.ok());
+      EXPECT_EQ(settings.value().front().texture_transform, FaceTextureTransform{});
+      const auto compiled = prepared->document.compile_mesh();
+      ASSERT_TRUE(compiled.ok());
+      for (const auto &vertex : compiled.value().vertices) {
+        Vec2 effective = vertex.uv0;
+        if (compensated) {
+          // The mirrored XY sampling transform flips the geometric normal
+          // to -Z: q(Cp)=(-(3-1.5x)/2, -(2y-4)/2).
+          const Vec2 delta{0.25F * vertex.position.x - 1.5F,
+                            2.0F - 0.5F * vertex.position.y};
+          effective.x += vertex.uv_carrier[0] * delta.x +
+                         vertex.uv_carrier[1] * delta.y;
+          effective.y += vertex.uv_carrier[2] * delta.x +
+                         vertex.uv_carrier[3] * delta.y;
+        }
+        // World +X/-X faces use signed Z and negative Y at .5 tiles/unit.
+        expect_vec2_near(effective,
+                         {world_direction * 5.5F + vertex.position.x,
+                          -3.5F - 1.5F * vertex.position.y});
+      }
+    }
+  }
+}
+
+TEST(ModelingSdkConsumerTests,
+     FaceTextureAlignFaceProjectsOntoTheGeometricPlaneAndRetainsSettings) {
+  constexpr std::array<Vec3, 4> kPoints{{
+      {2.0F, 4.0F, 3.0F}, {4.4F, 4.0F, 6.2F},
+      {4.4F, 7.0F, 6.2F}, {2.0F, 7.0F, 3.0F},
+  }};
+  constexpr std::array<Vec2, 4> kAuthored{{
+      {0.2F, 0.1F}, {1.8F, 0.35F}, {2.1F, 1.7F}, {0.4F, 1.2F},
+  }};
+  const FaceTextureTransform settings{
+      .scale = {2.0F, -0.5F}, .shift_uv = {0.2F, -0.3F},
+      .rotation_degrees = 90.0F,
+  };
+  auto created = make_texture_action_face(kPoints, kAuthored, settings);
+  ASSERT_TRUE(created.ok()) << created.error_message();
+  const std::array targets{texture_action_target(created.value())};
+  const auto result = prepare_face_texture_action(
+      targets, {.action = FaceTextureAction::AlignToFace});
+  ASSERT_TRUE(result.ok()) << result.error_message();
+  const auto *prepared = prepared_texture_document(result.value());
+  ASSERT_NE(prepared, nullptr);
+  const auto topology = prepared->document.authored_topology();
+  ASSERT_TRUE(topology.ok());
+  EXPECT_EQ(topology.value().faces.front().texture_transform, settings);
+  EXPECT_TRUE(prepared->document.has_same_geometry(created.value()));
+  // The face's unit horizontal tangent is (.6,0,.8), anchored at corner 0;
+  // its geometric vertical chart axis is -Y, independent of texture rotation.
+  constexpr std::array<Vec2, 4> kFaceProjection{{
+      {0.0F, 0.0F}, {2.0F, 0.0F}, {2.0F, -1.5F}, {0.0F, -1.5F},
+  }};
+  std::array<Vec2, 4> expected{};
+  for (std::size_t corner = 0; corner < expected.size(); ++corner) {
+    expected[corner] = expected_texture_uv(kFaceProjection[corner], settings);
+  }
+  expect_compiled_texture_uvs(prepared->document,
+                              topology.value().faces.front().vertices, expected);
+}
+
+TEST(ModelingSdkConsumerTests,
+     FaceTextureAlignViewUsesCapturedWorldCameraAxesAndRetainsSettings) {
+  constexpr std::array<Vec3, 4> kPoints{{
+      {0.0F, 0.0F, 0.0F}, {4.0F, 0.0F, 0.0F},
+      {4.0F, 3.0F, 0.0F}, {0.0F, 3.0F, 0.0F},
+  }};
+  const FaceTextureTransform settings{
+      .scale = {-2.0F, 0.5F}, .shift_uv = {0.2F, -0.3F},
+      .rotation_degrees = 90.0F,
+  };
+  auto created = make_texture_action_face(kPoints, {}, settings);
+  ASSERT_TRUE(created.ok());
+  auto target = texture_action_target(created.value());
+  target.world_from_local = {
+      .x_axis = {0.0F, 0.0F, 2.0F}, .y_axis = {0.0F, 1.5F, 0.0F},
+      .z_axis = {-1.0F, 0.0F, 0.0F}, .origin = {7.0F, 3.0F, -5.0F},
+  };
+  const auto result = prepare_face_texture_action(
+      std::span<const FaceTextureActionTarget>(&target, 1U),
+      {.action = FaceTextureAction::AlignToView,
+       .view_right = {0.0F, 0.0F, 1.0F}, .view_up = {0.0F, 1.0F, 0.0F}});
+  ASSERT_TRUE(result.ok()) << result.error_message();
+  const auto *prepared = prepared_texture_document(result.value());
+  ASSERT_NE(prepared, nullptr);
+  const auto topology = prepared->document.authored_topology();
+  ASSERT_TRUE(topology.ok());
+  EXPECT_EQ(topology.value().faces.front().texture_transform, settings);
+  EXPECT_TRUE(prepared->document.has_same_geometry(created.value()));
+  std::array<Vec2, 4> expected{};
+  for (std::size_t corner = 0; corner < kPoints.size(); ++corner) {
+    expected[corner] = expected_texture_uv(
+        {-2.5F + kPoints[corner].x, -1.5F - 0.75F * kPoints[corner].y}, settings);
+  }
+  expect_compiled_texture_uvs(prepared->document,
+                              topology.value().faces.front().vertices, expected);
+}
+
+TEST(ModelingSdkConsumerTests,
+     FaceTextureFitAndJustifyUseCurrentCornerBoundsWithoutChangingOtherAxes) {
+  constexpr std::array<Vec3, 4> kPoints{{
+      {0.0F, 0.0F, 0.0F}, {4.0F, 0.0F, 0.0F},
+      {4.0F, 3.0F, 0.0F}, {0.0F, 3.0F, 0.0F},
+  }};
+  constexpr std::array<Vec2, 4> kAuthored{{
+      {0.2F, 0.1F}, {1.8F, 0.35F}, {2.1F, 1.7F}, {0.4F, 1.2F},
+  }};
+  const FaceTextureTransform settings{
+      .scale = {-2.0F, 0.5F}, .shift_uv = {0.25F, -0.375F},
+      .rotation_degrees = 30.0F,
+  };
+  constexpr std::array kActions{
+      FaceTextureAction::FitBoth, FaceTextureAction::FitX,
+      FaceTextureAction::FitY, FaceTextureAction::JustifyLeft,
+      FaceTextureAction::JustifyRight, FaceTextureAction::JustifyTop,
+      FaceTextureAction::JustifyBottom, FaceTextureAction::JustifyCenter,
+  };
+  for (const bool authored_uvs : {false, true}) {
+    SCOPED_TRACE(authored_uvs);
+    auto created = make_texture_action_face(
+        kPoints, authored_uvs ? std::span<const Vec2>(kAuthored)
+                             : std::span<const Vec2>{}, settings);
+    ASSERT_TRUE(created.ok());
+    const std::array targets{texture_action_target(created.value())};
+    std::array<Vec2, 4> before{};
+    for (std::size_t corner = 0; corner < kPoints.size(); ++corner) {
+      before[corner] = expected_texture_uv(
+          authored_uvs ? kAuthored[corner]
+                       : Vec2{kPoints[corner].x * 0.5F, -kPoints[corner].y * 0.5F},
+          settings);
+    }
+    Vec2 minimum = before.front();
+    Vec2 maximum = before.front();
+    for (const Vec2 uv : before) {
+      minimum.x = std::min(minimum.x, uv.x);
+      minimum.y = std::min(minimum.y, uv.y);
+      maximum.x = std::max(maximum.x, uv.x);
+      maximum.y = std::max(maximum.y, uv.y);
+    }
+    for (const FaceTextureAction action : kActions) {
+      SCOPED_TRACE(static_cast<int>(action));
+      auto expected = before;
+      for (auto &uv : expected) {
+        switch (action) {
+        case FaceTextureAction::FitBoth:
+          uv = {(uv.x - minimum.x) / (maximum.x - minimum.x),
+                (uv.y - minimum.y) / (maximum.y - minimum.y)};
+          break;
+        case FaceTextureAction::FitX:
+          uv.x = (uv.x - minimum.x) / (maximum.x - minimum.x);
+          break;
+        case FaceTextureAction::FitY:
+          uv.y = (uv.y - minimum.y) / (maximum.y - minimum.y);
+          break;
+        case FaceTextureAction::JustifyLeft: uv.x -= minimum.x; break;
+        case FaceTextureAction::JustifyRight: uv.x += 1.0F - maximum.x; break;
+        case FaceTextureAction::JustifyTop: uv.y -= minimum.y; break;
+        case FaceTextureAction::JustifyBottom: uv.y += 1.0F - maximum.y; break;
+        case FaceTextureAction::JustifyCenter:
+          uv.x += 0.5F - (minimum.x + maximum.x) * 0.5F;
+          uv.y += 0.5F - (minimum.y + maximum.y) * 0.5F;
+          break;
+        default: FAIL() << "Unexpected fit/justify action";
+        }
+      }
+      const auto result = prepare_face_texture_action(targets, {.action = action});
+      ASSERT_TRUE(result.ok()) << result.error_message();
+      const auto *prepared = prepared_texture_document(result.value());
+      ASSERT_NE(prepared, nullptr);
+      const auto topology = prepared->document.authored_topology();
+      ASSERT_TRUE(topology.ok());
+      expect_compiled_texture_uvs(prepared->document,
+                                  topology.value().faces.front().vertices, expected);
+      EXPECT_TRUE(prepared->document.has_same_geometry(created.value()));
+      if (action == FaceTextureAction::JustifyLeft ||
+          action == FaceTextureAction::JustifyRight ||
+          action == FaceTextureAction::JustifyTop ||
+          action == FaceTextureAction::JustifyBottom ||
+          action == FaceTextureAction::JustifyCenter) {
+        const auto &after = topology.value().faces.front().texture_transform;
+        EXPECT_EQ(after.scale.x, settings.scale.x);
+        EXPECT_EQ(after.scale.y, settings.scale.y);
+        EXPECT_EQ(after.rotation_degrees, settings.rotation_degrees);
+      }
+    }
+  }
+}
+
+TEST(ModelingSdkConsumerTests,
+     FaceTextureFitAndJustifyNoOpsRetainExactDocumentIdentityAndSelection) {
+  constexpr std::array<Vec3, 4> kPoints{{
+      {0.0F, 0.0F, 0.0F}, {4.0F, 0.0F, 0.0F},
+      {4.0F, 3.0F, 0.0F}, {0.0F, 3.0F, 0.0F},
+  }};
+  constexpr std::array<Vec2, 4> kAuthored{{
+      {0.0F, 0.0F}, {1.0F, 0.0F}, {1.0F, 1.0F}, {0.0F, 1.0F},
+  }};
+  auto created = make_texture_action_face(kPoints, kAuthored);
+  ASSERT_TRUE(created.ok());
+  const std::array targets{texture_action_target(created.value())};
+  for (const FaceTextureAction action : {
+           FaceTextureAction::FitBoth, FaceTextureAction::FitX,
+           FaceTextureAction::FitY, FaceTextureAction::JustifyLeft,
+           FaceTextureAction::JustifyRight, FaceTextureAction::JustifyTop,
+           FaceTextureAction::JustifyBottom, FaceTextureAction::JustifyCenter}) {
+    SCOPED_TRACE(static_cast<int>(action));
+    const auto result = prepare_face_texture_action(targets, {.action = action});
+    ASSERT_TRUE(result.ok()) << result.error_message();
+    EXPECT_FALSE(result.value().changed);
+    const auto *prepared = prepared_texture_document(result.value());
+    ASSERT_NE(prepared, nullptr);
+    EXPECT_FALSE(prepared->receipt.changed);
+    EXPECT_EQ(prepared->document.content_identity(), created.value().content_identity());
+    EXPECT_EQ(prepared->document.content_revision(), created.value().content_revision());
+    EXPECT_EQ(prepared->document.selection_revision(), created.value().selection_revision());
+    EXPECT_TRUE(prepared->document.shares_selection_with(created.value()));
+  }
+}
+
+TEST(ModelingSdkConsumerTests,
+     FaceTextureGridFitAndJustifyBecomeExactNoOpsAfterRotatedAuthoredEdits) {
+  constexpr std::array<Vec3, 4> kPoints{{
+      {0.0F, 0.0F, 0.0F}, {4.0F, 0.0F, 0.0F},
+      {4.0F, 3.0F, 0.0F}, {0.0F, 3.0F, 0.0F},
+  }};
+  constexpr std::array<Vec2, 4> kAuthored{{
+      {0.2F, 0.1F}, {1.8F, 0.35F}, {2.1F, 1.7F}, {0.4F, 1.2F},
+  }};
+  auto created = make_texture_action_face(
+      kPoints, kAuthored, {.scale = {-2.3F, 0.7F}, .shift_uv = {0.25F, -0.375F},
+                         .rotation_degrees = 37.0F});
+  ASSERT_TRUE(created.ok());
+  const std::array targets{texture_action_target(created.value())};
+  for (const FaceTextureAction action : {
+           FaceTextureAction::AlignToGrid, FaceTextureAction::FitBoth,
+           FaceTextureAction::FitX, FaceTextureAction::FitY,
+           FaceTextureAction::JustifyLeft, FaceTextureAction::JustifyRight,
+           FaceTextureAction::JustifyTop, FaceTextureAction::JustifyBottom,
+           FaceTextureAction::JustifyCenter}) {
+    SCOPED_TRACE(static_cast<int>(action));
+    const auto first = prepare_face_texture_action(targets, {.action = action});
+    ASSERT_TRUE(first.ok()) << first.error_message();
+    ASSERT_TRUE(first.value().changed);
+    const auto *prepared = prepared_texture_document(first.value());
+    ASSERT_NE(prepared, nullptr);
+    const std::array repeated_targets{texture_action_target(prepared->document)};
+    const auto repeated = prepare_face_texture_action(repeated_targets, {.action = action});
+    ASSERT_TRUE(repeated.ok()) << repeated.error_message();
+    EXPECT_FALSE(repeated.value().changed);
+    const auto *unchanged = prepared_texture_document(repeated.value());
+    ASSERT_NE(unchanged, nullptr);
+    EXPECT_FALSE(unchanged->receipt.changed);
+    EXPECT_EQ(unchanged->document.content_identity(), prepared->document.content_identity());
+    EXPECT_EQ(unchanged->document.content_revision(), prepared->document.content_revision());
+    EXPECT_TRUE(unchanged->document.shares_selection_with(prepared->document));
+  }
+}
+
+TEST(ModelingSdkConsumerTests,
+     FaceTextureGroupedFitSpansSeparateWallObjectsAndGapsUsingOneChart) {
+  constexpr std::array<Vec3, 4> kPoints{{
+      {0.0F, 0.0F, 0.0F}, {2.0F, 0.0F, 0.0F},
+      {2.0F, 2.0F, 0.0F}, {0.0F, 2.0F, 0.0F},
+  }};
+  constexpr std::array<Vec2, 4> kFirstUvs{{
+      {0.0F, 0.0F}, {1.0F, 0.0F}, {1.0F, 1.0F}, {0.0F, 1.0F},
+  }};
+  constexpr std::array<Vec2, 4> kSecondUvs{{
+      {2.0F, 4.0F}, {6.0F, 4.0F}, {6.0F, 8.0F}, {2.0F, 8.0F},
+  }};
+  auto first = make_texture_action_face(kPoints, kFirstUvs);
+  auto second = make_texture_action_face(kPoints, kSecondUvs);
+  ASSERT_TRUE(first.ok());
+  ASSERT_TRUE(second.ok());
+  std::array targets{texture_action_target(first.value(), 10U),
+                     texture_action_target(second.value(), 20U)};
+  targets[0].world_from_local.origin = {4.0F, 0.0F, 0.0F};
+  targets[1].world_from_local.origin = {10.0F, 0.0F, 0.0F};
+  for (const bool grouped : {false, true}) {
+    for (const FaceTextureAction action : {FaceTextureAction::FitBoth,
+                                           FaceTextureAction::FitX,
+                                           FaceTextureAction::FitY}) {
+      SCOPED_TRACE(grouped);
+      SCOPED_TRACE(static_cast<int>(action));
+      const auto result = prepare_face_texture_action(
+          targets, {.action = action, .treat_as_one = grouped,
+                    .active_target_key = 10U,
+                    .active_face = first.value().face_ids().front()});
+      ASSERT_TRUE(result.ok()) << result.error_message();
+      for (std::size_t index = 0; index < targets.size(); ++index) {
+        const auto *prepared = prepared_texture_document(result.value(), targets[index].key);
+        ASSERT_NE(prepared, nullptr);
+        const auto topology = prepared->document.authored_topology();
+        ASSERT_TRUE(topology.ok());
+        std::array<Vec2, 4> expected = index == 0U ? kFirstUvs : kSecondUvs;
+        for (std::size_t corner = 0; corner < kPoints.size(); ++corner) {
+          if (action != FaceTextureAction::FitY) {
+            expected[corner].x = grouped
+                ? (kPoints[corner].x + targets[index].world_from_local.origin.x - 4.0F) / 8.0F
+                : kPoints[corner].x * 0.5F;
+          }
+          if (action != FaceTextureAction::FitX) {
+            expected[corner].y = kPoints[corner].y * 0.5F;
+          }
+        }
+        expect_compiled_texture_uvs(prepared->document,
+                                    topology.value().faces.front().vertices, expected);
+        EXPECT_TRUE(prepared->document.has_same_geometry(*targets[index].document));
+      }
+      auto repeated_targets = targets;
+      for (auto &target : repeated_targets) {
+        const auto *prepared = prepared_texture_document(result.value(), target.key);
+        ASSERT_NE(prepared, nullptr);
+        target.document = &prepared->document;
+      }
+      const auto repeated = prepare_face_texture_action(
+          repeated_targets, {.action = action, .treat_as_one = grouped,
+                             .active_target_key = 10U,
+                             .active_face = first.value().face_ids().front()});
+      ASSERT_TRUE(repeated.ok()) << repeated.error_message();
+      EXPECT_FALSE(repeated.value().changed);
+      for (const auto &target : repeated_targets) {
+        const auto *unchanged = prepared_texture_document(repeated.value(), target.key);
+        ASSERT_NE(unchanged, nullptr);
+        EXPECT_EQ(unchanged->document.content_identity(), target.document->content_identity());
+      }
+    }
+  }
+}
+
+TEST(ModelingSdkConsumerTests,
+     FaceTextureGroupedJustifyUsesCombinedBoundsWithoutFittingOrTouchingOtherAxis) {
+  constexpr std::array<Vec3, 4> kPoints{{
+      {0.0F, 0.0F, 0.0F}, {2.0F, 0.0F, 0.0F},
+      {2.0F, 3.0F, 0.0F}, {0.0F, 3.0F, 0.0F},
+  }};
+  constexpr std::array<Vec2, 4> kFirstUvs{{
+      {0.25F, 0.375F}, {1.25F, 0.375F},
+      {1.25F, 1.875F}, {0.25F, 1.875F},
+  }};
+  constexpr std::array<Vec2, 4> kSecondUvs{{
+      {2.0F, 4.0F}, {6.0F, 4.0F}, {6.0F, 10.0F}, {2.0F, 10.0F},
+  }};
+  auto first = make_texture_action_face(kPoints, kFirstUvs);
+  auto second = make_texture_action_face(kPoints, kSecondUvs);
+  ASSERT_TRUE(first.ok());
+  ASSERT_TRUE(second.ok());
+  std::array targets{texture_action_target(first.value(), 10U),
+                     texture_action_target(second.value(), 20U)};
+  targets[0].world_from_local.origin = {4.0F, 0.0F, 0.0F};
+  targets[1].world_from_local.origin = {10.0F, 0.0F, 0.0F};
+  /// Describes the axes and offsets expected from shared-chart justification.
+  struct JustifyCase {
+    FaceTextureAction action;
+    bool horizontal;
+    bool vertical;
+    Vec2 offset;
+  };
+  constexpr std::array kCases{
+      JustifyCase{FaceTextureAction::JustifyLeft, true, false, {-0.25F, 0.0F}},
+      JustifyCase{FaceTextureAction::JustifyRight, true, false, {-3.25F, 0.0F}},
+      JustifyCase{FaceTextureAction::JustifyTop, false, true, {0.0F, -0.375F}},
+      JustifyCase{FaceTextureAction::JustifyBottom, false, true, {0.0F, -0.875F}},
+      JustifyCase{FaceTextureAction::JustifyCenter, true, true, {-1.75F, -0.625F}},
+  };
+  for (const auto &test : kCases) {
+    SCOPED_TRACE(static_cast<int>(test.action));
+    const auto result = prepare_face_texture_action(
+        targets, {.action = test.action, .treat_as_one = true,
+                  .active_target_key = 10U,
+                  .active_face = first.value().face_ids().front()});
+    ASSERT_TRUE(result.ok()) << result.error_message();
+    for (std::size_t index = 0; index < targets.size(); ++index) {
+      const auto *prepared = prepared_texture_document(result.value(), targets[index].key);
+      ASSERT_NE(prepared, nullptr);
+      const auto topology = prepared->document.authored_topology();
+      ASSERT_TRUE(topology.ok());
+      std::array<Vec2, 4> expected = index == 0U ? kFirstUvs : kSecondUvs;
+      for (std::size_t corner = 0; corner < kPoints.size(); ++corner) {
+        if (test.horizontal) {
+          expected[corner].x = 0.25F +
+              (kPoints[corner].x + targets[index].world_from_local.origin.x - 4.0F) * 0.5F +
+              test.offset.x;
+        }
+        if (test.vertical) {
+          expected[corner].y = 0.375F + kPoints[corner].y * 0.5F + test.offset.y;
+        }
+      }
+      expect_compiled_texture_uvs(prepared->document,
+                                  topology.value().faces.front().vertices, expected);
+    }
+  }
+}
+
+TEST(ModelingSdkConsumerTests,
+     FaceTextureGroupedFitHonorsActiveReferenceAndDeterministicTargetFallback) {
+  constexpr std::array<Vec3, 4> kPoints{{
+      {0.0F, 0.0F, 0.0F}, {2.0F, 0.0F, 0.0F},
+      {2.0F, 2.0F, 0.0F}, {0.0F, 2.0F, 0.0F},
+  }};
+  constexpr std::array<Vec2, 4> kFirstUvs{{
+      {0.0F, 0.0F}, {1.0F, 0.0F}, {1.0F, 1.0F}, {0.0F, 1.0F},
+  }};
+  constexpr std::array<Vec2, 4> kReverseUvs{{
+      {1.0F, 0.0F}, {0.0F, 0.0F}, {0.0F, 1.0F}, {1.0F, 1.0F},
+  }};
+  auto first = make_texture_action_face(kPoints, kFirstUvs);
+  auto second = make_texture_action_face(kPoints, kReverseUvs);
+  ASSERT_TRUE(first.ok());
+  ASSERT_TRUE(second.ok());
+  for (const bool reverse_targets : {false, true}) {
+    std::array targets{texture_action_target(first.value(), 10U),
+                       texture_action_target(second.value(), 20U)};
+    targets[1].world_from_local.origin = {4.0F, 0.0F, 0.0F};
+    if (reverse_targets) {
+      std::ranges::reverse(targets);
+    }
+    for (const std::uint64_t active : {0U, 20U, 999U}) {
+      SCOPED_TRACE(reverse_targets);
+      SCOPED_TRACE(active);
+      const auto result = prepare_face_texture_action(
+          targets, {.action = FaceTextureAction::FitBoth, .treat_as_one = true,
+                    .active_target_key = active,
+                    .active_face = second.value().face_ids().front()});
+      ASSERT_TRUE(result.ok()) << result.error_message();
+      for (const auto &target : targets) {
+        const auto *prepared = prepared_texture_document(result.value(), target.key);
+        ASSERT_NE(prepared, nullptr);
+        const auto topology = prepared->document.authored_topology();
+        ASSERT_TRUE(topology.ok());
+        std::array<Vec2, 4> expected{};
+        for (std::size_t corner = 0; corner < kPoints.size(); ++corner) {
+          const float world_x = kPoints[corner].x + target.world_from_local.origin.x;
+          expected[corner] = {active == 20U ? 1.0F - world_x / 6.0F : world_x / 6.0F,
+                              kPoints[corner].y * 0.5F};
+        }
+        expect_compiled_texture_uvs(prepared->document,
+                                    topology.value().faces.front().vertices, expected);
+      }
+    }
+  }
+}
+
+TEST(ModelingSdkConsumerTests,
+     FaceTextureGroupedProjectionAcceptsDepthOffsetsButRejectsCollapsedFaces) {
+  constexpr std::array<Vec3, 4> kWall{{
+      {0.0F, 0.0F, 0.0F}, {2.0F, 0.0F, 0.0F},
+      {2.0F, 2.0F, 0.0F}, {0.0F, 2.0F, 0.0F},
+  }};
+  constexpr std::array<Vec3, 4> kPerpendicular{{
+      {0.0F, 0.0F, 0.0F}, {0.0F, 0.0F, 2.0F},
+      {0.0F, 2.0F, 2.0F}, {0.0F, 2.0F, 0.0F},
+  }};
+  constexpr std::array<Vec2, 4> kUvs{{
+      {0.0F, 0.0F}, {1.0F, 0.0F}, {1.0F, 1.0F}, {0.0F, 1.0F},
+  }};
+  auto first = make_texture_action_face(kWall, kUvs);
+  auto depth_offset = make_texture_action_face(kWall, kUvs);
+  auto collapsed = make_texture_action_face(kPerpendicular, kUvs);
+  ASSERT_TRUE(first.ok());
+  ASSERT_TRUE(depth_offset.ok());
+  ASSERT_TRUE(collapsed.ok());
+  std::array targets{texture_action_target(first.value(), 1U),
+                     texture_action_target(depth_offset.value(), 2U)};
+  targets[1].world_from_local.origin = {4.0F, 0.0F, 5.0F};
+  const FaceTextureActionOptions options{
+      .action = FaceTextureAction::FitBoth, .treat_as_one = true,
+      .active_target_key = 1U, .active_face = first.value().face_ids().front(),
+  };
+  const auto accepted = prepare_face_texture_action(targets, options);
+  ASSERT_TRUE(accepted.ok()) << accepted.error_message();
+  for (const auto &target : targets) {
+    const auto *prepared = prepared_texture_document(accepted.value(), target.key);
+    ASSERT_NE(prepared, nullptr);
+    const auto topology = prepared->document.authored_topology();
+    ASSERT_TRUE(topology.ok());
+    std::array<Vec2, 4> expected{};
+    for (std::size_t corner = 0; corner < kWall.size(); ++corner) {
+      expected[corner] = {(kWall[corner].x + target.world_from_local.origin.x) / 6.0F,
+                          kWall[corner].y * 0.5F};
+    }
+    expect_compiled_texture_uvs(prepared->document,
+                                topology.value().faces.front().vertices, expected);
+  }
+  targets[1] = texture_action_target(collapsed.value(), 2U);
+  targets[1].world_from_local.origin = {4.0F, 0.0F, 0.0F};
+  const auto first_identity = first.value().content_identity();
+  const auto second_identity = collapsed.value().content_identity();
+  const auto rejected = prepare_face_texture_action(targets, options);
+  ASSERT_FALSE(rejected.ok());
+  EXPECT_FALSE(rejected.error_message().empty());
+  EXPECT_EQ(first.value().content_identity(), first_identity);
+  EXPECT_EQ(collapsed.value().content_identity(), second_identity);
+  const auto separate = prepare_face_texture_action(
+      targets, {.action = FaceTextureAction::FitBoth});
+  EXPECT_TRUE(separate.ok()) << separate.error_message();
+}
+
+TEST(ModelingSdkConsumerTests,
+     FaceTextureGeometryFlipsCarryUvsAndUseWorldPlaneAxesInsteadOfTextureRotation) {
+  constexpr std::array<Vec3, 4> kPoints{{
+      {0.0F, 0.0F, 0.0F}, {4.0F, 0.0F, 0.0F},
+      {3.0F, 2.0F, 0.0F}, {1.0F, 3.0F, 0.0F},
+  }};
+  constexpr std::array<Vec2, 4> kAuthored{{
+      {0.2F, 0.1F}, {1.8F, 0.35F}, {2.1F, 1.7F}, {0.4F, 1.2F},
+  }};
+  const FaceTextureTransform settings{
+      .scale = {2.0F, -0.5F}, .shift_uv = {0.2F, -0.3F},
+      .rotation_degrees = 37.0F,
+  };
+  for (const bool authored_uvs : {false, true}) {
+    auto created = make_texture_action_face(
+        kPoints, authored_uvs ? std::span<const Vec2>(kAuthored)
+                             : std::span<const Vec2>{}, settings);
+    ASSERT_TRUE(created.ok());
+    const auto before = created.value().authored_topology();
+    ASSERT_TRUE(before.ok());
+    for (const bool turned_object : {false, true}) {
+      auto target = texture_action_target(created.value());
+      if (turned_object) {
+        target.world_from_local = {
+            .x_axis = {0.0F, 2.0F, 0.0F}, .y_axis = {-3.0F, 0.0F, 0.0F},
+            .z_axis = {0.0F, 0.0F, 1.0F}, .origin = {4.0F, 7.0F, 0.0F},
+        };
+      }
+      for (const FaceTextureAction action : {FaceTextureAction::FlipFaceHorizontal,
+                                             FaceTextureAction::FlipFaceVertical}) {
+        SCOPED_TRACE(authored_uvs);
+        SCOPED_TRACE(turned_object);
+        SCOPED_TRACE(static_cast<int>(action));
+        const auto result = prepare_face_texture_action(
+            std::span<const FaceTextureActionTarget>(&target, 1U), {.action = action});
+        ASSERT_TRUE(result.ok()) << result.error_message();
+        ASSERT_TRUE(result.value().changed);
+        const auto *prepared = prepared_texture_document(result.value());
+        ASSERT_NE(prepared, nullptr);
+        const auto topology = prepared->document.authored_topology();
+        ASSERT_TRUE(topology.ok());
+        EXPECT_FALSE(prepared->document.has_same_geometry(created.value()));
+        EXPECT_EQ(prepared->document.vertex_ids(), created.value().vertex_ids());
+        EXPECT_EQ(prepared->document.face_ids(), created.value().face_ids());
+        EXPECT_EQ(prepared->document.selection().faces, created.value().selection().faces);
+        EXPECT_EQ(topology.value().faces.front().texture_transform, settings);
+        EXPECT_EQ(topology.value().faces.front().material_slot,
+                  before.value().faces.front().material_slot);
+        expect_reversed_face_winding(created.value(), prepared->document);
+        const bool flip_local_x =
+            (action == FaceTextureAction::FlipFaceHorizontal) != turned_object;
+        std::array<Vec2, 4> expected_uvs{};
+        for (std::size_t corner = 0; corner < kPoints.size(); ++corner) {
+          const VertexId vertex = before.value().faces.front().vertices[corner];
+          const auto found = std::ranges::find(topology.value().vertices, vertex,
+                                                &AuthoredTopologyVertex::id);
+          ASSERT_NE(found, topology.value().vertices.end());
+          expect_vec3_near(found->position,
+                            {flip_local_x ? 4.0F - kPoints[corner].x : kPoints[corner].x,
+                             flip_local_x ? kPoints[corner].y : 3.0F - kPoints[corner].y,
+                             0.0F});
+          expected_uvs[corner] = expected_texture_uv(
+              authored_uvs ? kAuthored[corner]
+                           : Vec2{kPoints[corner].x * 0.5F, -kPoints[corner].y * 0.5F},
+              settings);
+        }
+        expect_compiled_texture_uvs(prepared->document,
+                                    before.value().faces.front().vertices, expected_uvs);
+        const auto mesh = prepared->document.compile_mesh();
+        ASSERT_TRUE(mesh.ok());
+        for (const auto &vertex : mesh.value().vertices) {
+          expect_vec3_near(vertex.normal, {0.0F, 0.0F, 1.0F});
+        }
+        EXPECT_TRUE(prepared->document.validate().ok());
+      }
+    }
+  }
+}
+
+[[nodiscard]] Result<PolygonDocument> make_connected_texture_wall() {
+  AuthoredTopology topology;
+  topology.vertices = {
+      {make_id<VertexTag>(1U), {0.0F, 0.0F, 0.0F}},
+      {make_id<VertexTag>(2U), {2.0F, 0.0F, 0.0F}},
+      {make_id<VertexTag>(3U), {2.0F, 2.0F, 0.0F}},
+      {make_id<VertexTag>(4U), {0.0F, 2.0F, 0.0F}},
+      {make_id<VertexTag>(5U), {4.0F, 0.0F, 0.0F}},
+      {make_id<VertexTag>(6U), {4.0F, 2.0F, 0.0F}},
+  };
+  topology.faces = {
+      {.id = make_id<FaceTag>(1U),
+       .vertices = {make_id<VertexTag>(1U), make_id<VertexTag>(2U),
+                    make_id<VertexTag>(3U), make_id<VertexTag>(4U)},
+       .material_slot = 3U},
+      {.id = make_id<FaceTag>(2U),
+       .vertices = {make_id<VertexTag>(2U), make_id<VertexTag>(5U),
+                    make_id<VertexTag>(6U), make_id<VertexTag>(3U)},
+       .material_slot = 7U},
+  };
+  topology.hard_normal_edges = {
+      make_edge_key(make_id<VertexTag>(2U), make_id<VertexTag>(3U))};
+  topology.next_vertex_id = 7U;
+  topology.next_face_id = 3U;
+  return PolygonDocument::from_authored_topology(topology);
+}
+
+TEST(ModelingSdkConsumerTests,
+     FaceTextureGroupedReferenceFallsBackToSmallestFaceRatherThanStorageOrder) {
+  auto wall = make_connected_texture_wall();
+  ASSERT_TRUE(wall.ok());
+  auto topology = wall.value().authored_topology();
+  ASSERT_TRUE(topology.ok());
+  topology.value().faces[0].uvs = {
+      {1.0F, 0.0F}, {0.0F, 0.0F}, {0.0F, 1.0F}, {1.0F, 1.0F}};
+  topology.value().faces[1].uvs = {
+      {0.0F, 0.0F}, {1.0F, 0.0F}, {1.0F, 1.0F}, {0.0F, 1.0F}};
+  std::ranges::reverse(topology.value().faces);
+  auto imported = PolygonDocument::from_authored_topology(topology.value());
+  ASSERT_TRUE(imported.ok());
+  auto target = texture_action_target(imported.value());
+  target.faces = {{.face = make_id<FaceTag>(2U)}, {.face = make_id<FaceTag>(1U)}};
+  for (const bool active_second : {false, true}) {
+    SCOPED_TRACE(active_second);
+    const auto result = prepare_face_texture_action(
+        std::span<const FaceTextureActionTarget>(&target, 1U),
+        {.action = FaceTextureAction::FitBoth, .treat_as_one = true,
+         .active_target_key = 1U,
+         .active_face = active_second ? make_id<FaceTag>(2U) : FaceId{}});
+    ASSERT_TRUE(result.ok()) << result.error_message();
+    const auto *prepared = prepared_texture_document(result.value());
+    ASSERT_NE(prepared, nullptr);
+    std::vector<VertexId> vertices;
+    std::vector<Vec2> expected;
+    for (const auto &vertex : topology.value().vertices) {
+      vertices.push_back(vertex.id);
+      expected.push_back({active_second ? vertex.position.x * 0.25F
+                                         : 1.0F - vertex.position.x * 0.25F,
+                           vertex.position.y * 0.5F});
+    }
+    expect_compiled_texture_uvs(prepared->document, vertices, expected);
+  }
+}
+
+TEST(ModelingSdkConsumerTests,
+     FaceTextureGeometryFlipsRejectConflictingSharedVerticesAndPreserveConnectedGroups) {
+  auto created = make_connected_texture_wall();
+  ASSERT_TRUE(created.ok()) << created.error_message();
+  ASSERT_TRUE(created.value().select_all_faces().ok());
+  const auto before = created.value().authored_topology();
+  ASSERT_TRUE(before.ok());
+  const auto identity = created.value().content_identity();
+  const std::array targets{texture_action_target(created.value())};
+  const auto conflicting = prepare_face_texture_action(
+      targets, {.action = FaceTextureAction::FlipFaceHorizontal});
+  ASSERT_FALSE(conflicting.ok());
+  EXPECT_FALSE(conflicting.error_message().empty());
+  EXPECT_EQ(created.value().content_identity(), identity);
+
+  const auto grouped = prepare_face_texture_action(
+      targets, {.action = FaceTextureAction::FlipFaceHorizontal, .treat_as_one = true});
+  ASSERT_TRUE(grouped.ok()) << grouped.error_message();
+  const auto *prepared = prepared_texture_document(grouped.value());
+  ASSERT_NE(prepared, nullptr);
+  EXPECT_EQ(prepared->document.vertex_count(), 6U);
+  EXPECT_EQ(prepared->document.face_count(), 2U);
+  EXPECT_EQ(prepared->document.edge_ids().size(), 7U);
+  EXPECT_EQ(prepared->document.hard_edge_ids(), created.value().hard_edge_ids());
+  EXPECT_EQ(prepared->document.selection().faces, created.value().selection().faces);
+  EXPECT_TRUE(prepared->document.validate().ok());
+  expect_reversed_face_winding(created.value(), prepared->document);
+  const auto after = prepared->document.authored_topology();
+  ASSERT_TRUE(after.ok());
+  std::vector<VertexId> vertices;
+  std::vector<Vec2> expected_uvs;
+  for (const auto &source : before.value().vertices) {
+    const auto found = std::ranges::find(after.value().vertices, source.id,
+                                          &AuthoredTopologyVertex::id);
+    ASSERT_NE(found, after.value().vertices.end());
+    expect_vec3_near(found->position,
+                      {4.0F - source.position.x, source.position.y, source.position.z});
+    vertices.push_back(source.id);
+    expected_uvs.push_back({source.position.x * 0.5F, -source.position.y * 0.5F});
+  }
+  expect_compiled_texture_uvs(prepared->document, vertices, expected_uvs);
+  for (std::size_t face = 0; face < after.value().faces.size(); ++face) {
+    EXPECT_EQ(after.value().faces[face].material_slot, before.value().faces[face].material_slot);
+  }
+
+  auto partial = targets;
+  partial.front().faces.resize(1U);
+  const auto invalid_winding = prepare_face_texture_action(
+      partial, {.action = FaceTextureAction::FlipFaceHorizontal});
+  ASSERT_FALSE(invalid_winding.ok());
+  EXPECT_FALSE(invalid_winding.error_message().empty());
+  EXPECT_EQ(created.value().content_identity(), identity);
+}
+
+TEST(ModelingSdkConsumerTests,
+     FaceTextureGeometryFlipRejectsPartialClosedMeshesButAcceptsWholeConnectedSurface) {
+  auto created = PolygonDocument::make_box({});
+  ASSERT_TRUE(created.ok());
+  ASSERT_TRUE(created.value().select_all_faces().ok());
+  const auto facing = created.value().face_ids_by_normal({0.0F, 0.0F, 1.0F});
+  ASSERT_EQ(facing.size(), 1U);
+  auto target = texture_action_target(created.value());
+  target.faces = {{.face = facing.front()}};
+  const auto identity = created.value().content_identity();
+  const auto partial = prepare_face_texture_action(
+      std::span<const FaceTextureActionTarget>(&target, 1U),
+      {.action = FaceTextureAction::FlipFaceHorizontal});
+  ASSERT_FALSE(partial.ok());
+  EXPECT_EQ(created.value().content_identity(), identity);
+  target = texture_action_target(created.value());
+  const auto complete = prepare_face_texture_action(
+      std::span<const FaceTextureActionTarget>(&target, 1U),
+      {.action = FaceTextureAction::FlipFaceHorizontal, .treat_as_one = true,
+       .active_target_key = 1U, .active_face = facing.front()});
+  ASSERT_TRUE(complete.ok()) << complete.error_message();
+  const auto *prepared = prepared_texture_document(complete.value());
+  ASSERT_NE(prepared, nullptr);
+  EXPECT_EQ(prepared->document.vertex_ids(), created.value().vertex_ids());
+  EXPECT_EQ(prepared->document.face_ids(), created.value().face_ids());
+  EXPECT_EQ(prepared->document.selection().faces, created.value().selection().faces);
+  EXPECT_TRUE(prepared->document.validate().ok());
+  expect_reversed_face_winding(created.value(), prepared->document);
+  const auto payload = prepared->document.authored_payload();
+  ASSERT_TRUE(payload.ok());
+  EXPECT_EQ(authored_open_edge_count(payload.value()), 0U);
+}
+
+TEST(ModelingSdkConsumerTests,
+     FaceTextureSharedVertexConflictsRemainInvalidFarFromTheWorldOrigin) {
+  for (const float origin : {0.0F, 1000000.0F}) {
+    SCOPED_TRACE(origin);
+    AuthoredTopology topology;
+    topology.vertices = {
+        {make_id<VertexTag>(1U), {origin + 1.0F, 1.0F, 0.0F}},
+        {make_id<VertexTag>(2U), {origin + 2.0F, 0.0F, 0.0F}},
+        {make_id<VertexTag>(3U), {origin + 0.875F, 0.0F, 0.0F}},
+        {make_id<VertexTag>(4U), {origin + 2.125F, 2.0F, 0.0F}},
+    };
+    topology.faces = {
+        {.id = make_id<FaceTag>(1U),
+         .vertices = {make_id<VertexTag>(2U), make_id<VertexTag>(1U),
+                      make_id<VertexTag>(3U)}},
+        {.id = make_id<FaceTag>(2U),
+         .vertices = {make_id<VertexTag>(1U), make_id<VertexTag>(2U),
+                      make_id<VertexTag>(4U)}},
+    };
+    topology.next_vertex_id = 5U;
+    topology.next_face_id = 3U;
+    auto document = PolygonDocument::from_authored_topology(topology);
+    ASSERT_TRUE(document.ok()) << document.error_message();
+    const auto identity = document.value().content_identity();
+    const std::array targets{texture_action_target(document.value())};
+    // The two reflections disagree by .25 units at both shared endpoints;
+    // a large world-coordinate magnitude must not make them "near enough".
+    const auto result = prepare_face_texture_action(
+        targets, {.action = FaceTextureAction::FlipFaceHorizontal});
+    ASSERT_FALSE(result.ok());
+    EXPECT_FALSE(result.error_message().empty());
+    EXPECT_EQ(document.value().content_identity(), identity);
+  }
+}
+
+TEST(ModelingSdkConsumerTests,
+     FaceTextureGeometryFlipLeavesAnUnselectedNeighborAtAFixedVertexUntouched) {
+  AuthoredTopology topology;
+  topology.vertices = {
+      {make_id<VertexTag>(1U), {-1.0F, 0.0F, 0.0F}},
+      {make_id<VertexTag>(2U), {1.0F, 0.0F, 0.0F}},
+      {make_id<VertexTag>(3U), {0.0F, 1.0F, 0.0F}},
+      {make_id<VertexTag>(4U), {0.0F, 2.0F, 0.0F}},
+      {make_id<VertexTag>(5U), {0.0F, 1.0F, 1.0F}},
+  };
+  topology.faces = {
+      {.id = make_id<FaceTag>(1U),
+       .vertices = {make_id<VertexTag>(1U), make_id<VertexTag>(2U),
+                    make_id<VertexTag>(3U)}, .material_slot = 3U},
+      {.id = make_id<FaceTag>(2U),
+       .vertices = {make_id<VertexTag>(3U), make_id<VertexTag>(4U),
+                    make_id<VertexTag>(5U)}, .material_slot = 9U,
+       .shading = AuthoredSurfaceShading::Smooth},
+  };
+  topology.next_vertex_id = 6U;
+  topology.next_face_id = 3U;
+  auto document = PolygonDocument::from_authored_topology(topology);
+  ASSERT_TRUE(document.ok()) << document.error_message();
+  ASSERT_TRUE(document.value().select_face(make_id<FaceTag>(1U)).ok());
+  auto target = texture_action_target(document.value());
+  target.faces = {{.face = make_id<FaceTag>(1U)}};
+  const auto result = prepare_face_texture_action(
+      std::span<const FaceTextureActionTarget>(&target, 1U),
+      {.action = FaceTextureAction::FlipFaceHorizontal});
+  ASSERT_TRUE(result.ok()) << result.error_message();
+  const auto *prepared = prepared_texture_document(result.value());
+  ASSERT_NE(prepared, nullptr);
+  const auto after = prepared->document.authored_topology();
+  ASSERT_TRUE(after.ok());
+  const auto neighbor = std::ranges::find(after.value().faces, make_id<FaceTag>(2U),
+                                          &AuthoredTopologyFace::id);
+  ASSERT_NE(neighbor, after.value().faces.end());
+  EXPECT_TRUE(neighbor->uvs.empty());
+  EXPECT_EQ(neighbor->vertices, topology.faces[1].vertices);
+  EXPECT_EQ(neighbor->material_slot, topology.faces[1].material_slot);
+  EXPECT_EQ(neighbor->shading, topology.faces[1].shading);
+  EXPECT_EQ(neighbor->texture_transform, topology.faces[1].texture_transform);
+  for (const VertexId id : neighbor->vertices) {
+    const auto source = std::ranges::find(topology.vertices, id, &AuthoredTopologyVertex::id);
+    const auto current = std::ranges::find(after.value().vertices, id,
+                                            &AuthoredTopologyVertex::id);
+    ASSERT_NE(source, topology.vertices.end());
+    ASSERT_NE(current, after.value().vertices.end());
+    expect_vec3_near(current->position, source->position, 0.0F);
+  }
+  EXPECT_EQ(prepared->receipt.affected.faces,
+            (std::vector<FaceId>{make_id<FaceTag>(1U)}));
+  EXPECT_EQ(prepared->receipt.affected.vertices,
+            (std::vector<VertexId>{make_id<VertexTag>(1U), make_id<VertexTag>(2U)}));
+  EXPECT_EQ(prepared->document.selection().faces, document.value().selection().faces);
+}
+
+TEST(ModelingSdkConsumerTests,
+     FaceTextureActionsRejectInvalidTargetBatchesWithoutChangingAnySource) {
+  constexpr std::array<Vec3, 3> kPoints{{
+      {0.0F, 0.0F, 0.0F}, {4.0F, 0.0F, 0.0F}, {0.0F, 4.0F, 0.0F},
+  }};
+  auto first = make_texture_action_face(kPoints);
+  auto second = make_texture_action_face(kPoints);
+  ASSERT_TRUE(first.ok());
+  ASSERT_TRUE(second.ok());
+  const auto first_identity = first.value().content_identity();
+  const auto second_identity = second.value().content_identity();
+  const auto first_revision = first.value().content_revision();
+  const auto second_revision = second.value().content_revision();
+  for (int invalid_case = 0; invalid_case < 10; ++invalid_case) {
+    SCOPED_TRACE(invalid_case);
+    std::array targets{texture_action_target(first.value(), 1U),
+                       texture_action_target(second.value(), 2U)};
+    FaceTextureActionOptions options{.action = FaceTextureAction::ShiftLeft};
+    switch (invalid_case) {
+    case 0: targets[1].document = nullptr; break;
+    case 1: targets[1].key = 1U; break;
+    case 2: targets[1].faces.push_back(targets[1].faces.front()); break;
+    case 3: targets[1].faces.front().face.generation = 2U; break;
+    case 4:
+      targets[1].world_from_local.origin.x = std::numeric_limits<float>::quiet_NaN();
+      break;
+    case 5: targets[1].world_from_local.z_axis = {}; break;
+    case 6:
+      targets[1].sampling_from_local.origin.y = std::numeric_limits<float>::infinity();
+      break;
+    case 7: targets[1].sampling_from_local.z_axis = {}; break;
+    case 8: options.action = static_cast<FaceTextureAction>(999); break;
+    case 9:
+      options.action = FaceTextureAction::RotateClockwise;
+      options.rotation_degrees = std::numeric_limits<double>::quiet_NaN();
+      break;
+    default: FAIL() << "Unexpected invalid target case";
+    }
+    const auto result = prepare_face_texture_action(targets, options);
+    ASSERT_FALSE(result.ok());
+    EXPECT_FALSE(result.error_message().empty());
+    EXPECT_EQ(first.value().content_identity(), first_identity);
+    EXPECT_EQ(second.value().content_identity(), second_identity);
+    EXPECT_EQ(first.value().content_revision(), first_revision);
+    EXPECT_EQ(second.value().content_revision(), second_revision);
+  }
+}
+
+TEST(ModelingSdkConsumerTests,
+     FaceTexturePreparedActionBatchPreservesSelectionAndExactUndoRedo) {
+  constexpr std::array<Vec3, 4> kPoints{{
+      {0.0F, 0.0F, 0.0F}, {4.0F, 0.0F, 0.0F},
+      {3.0F, 2.0F, 0.0F}, {1.0F, 3.0F, 0.0F},
+  }};
+  constexpr std::array<Vec2, 4> kAuthored{{
+      {0.2F, 0.1F}, {1.8F, 0.35F}, {2.1F, 1.7F}, {0.4F, 1.2F},
+  }};
+  ModelingSession session;
+  std::vector<ObjectId> objects;
+  for (const char *name : {"First", "Second"}) {
+    auto created = make_texture_action_face(kPoints, kAuthored);
+    ASSERT_TRUE(created.ok());
+    const auto added = session.add_document(std::move(created).value(), name);
+    ASSERT_TRUE(added.ok());
+    objects.push_back(added.value());
+  }
+  ASSERT_TRUE(session.apply_object_selection(objects).ok());
+  std::vector<PolygonDocument> originals;
+  std::vector<std::vector<std::byte>> before;
+  for (const ObjectId object : objects) {
+    auto document = session.document_copy(object);
+    ASSERT_TRUE(document.ok());
+    auto bytes = serialize_qdr_authored_topology(document.value());
+    ASSERT_TRUE(bytes.ok());
+    before.push_back(std::move(bytes).value());
+    originals.push_back(std::move(document).value());
+  }
+  std::vector<FaceTextureActionTarget> targets;
+  for (std::size_t index = 0; index < objects.size(); ++index) {
+    targets.push_back(texture_action_target(originals[index], objects[index].index));
+  }
+  const auto prepared = prepare_face_texture_action(
+      targets, {.action = FaceTextureAction::FlipFaceHorizontal});
+  ASSERT_TRUE(prepared.ok()) << prepared.error_message();
+  ASSERT_TRUE(prepared.value().changed);
+  std::vector<SessionDocumentUpdate> updates;
+  std::vector<std::vector<std::byte>> after;
+  for (const ObjectId object : objects) {
+    const auto *replacement = prepared_texture_document(prepared.value(), object.index);
+    ASSERT_NE(replacement, nullptr);
+    const auto bytes = serialize_qdr_authored_topology(replacement->document);
+    ASSERT_TRUE(bytes.ok());
+    after.push_back(bytes.value());
+    updates.push_back({.object = object, .document = replacement->document,
+                       .receipt = replacement->receipt});
+  }
+  const auto revision = session.content_revision();
+  const auto committed = session.commit_documents_batch(std::move(updates), true);
+  ASSERT_TRUE(committed.ok()) << committed.error_message();
+  EXPECT_EQ(session.content_revision(), revision + 1U);
+  for (const ObjectId object : objects) {
+    expect_session_object_selected(session, object, true);
+  }
+  ASSERT_TRUE(session.undo().ok());
+  for (std::size_t index = 0; index < objects.size(); ++index) {
+    const auto document = session.document_copy(objects[index]);
+    ASSERT_TRUE(document.ok());
+    const auto bytes = serialize_qdr_authored_topology(document.value());
+    ASSERT_TRUE(bytes.ok());
+    EXPECT_EQ(bytes.value(), before[index]);
+    EXPECT_EQ(document.value().selection().faces, originals[index].selection().faces);
+    expect_session_object_selected(session, objects[index], true);
+  }
+  ASSERT_TRUE(session.redo().ok());
+  for (std::size_t index = 0; index < objects.size(); ++index) {
+    const auto document = session.document_copy(objects[index]);
+    ASSERT_TRUE(document.ok());
+    const auto bytes = serialize_qdr_authored_topology(document.value());
+    ASSERT_TRUE(bytes.ok());
+    EXPECT_EQ(bytes.value(), after[index]);
+    EXPECT_EQ(document.value().selection().faces, originals[index].selection().faces);
+    expect_session_object_selected(session, objects[index], true);
+  }
+}
+
 TEST(ModelingSdkConsumerTests,
      FaceTextureUpdatesRejectInvalidBatchesWithoutPublishingPartialChanges) {
   auto created = PolygonDocument::make_box({});

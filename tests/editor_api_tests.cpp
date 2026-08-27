@@ -1910,6 +1910,188 @@ TEST(EditorApiTests, TextureLockPreferencesToggleIndependentlyAndRemainBindable)
   std::filesystem::remove(path);
 }
 
+TEST(EditorApiTests,
+     EditTextureCommandsHaveTypedFaceScopesAndUnassignedDefaults) {
+  CommandTestHarness harness;
+  quader::QuaderEditorApi &editor = harness.editor;
+  const std::filesystem::path path =
+      keybinding_test_path("edit-texture-defaults");
+  ASSERT_TRUE(editor.commands().set_keybinding_storage_path(path).ok());
+
+  constexpr std::array kCommands{
+      quader::quader_command::kModelingTextureAlignToGrid,
+      quader::quader_command::kModelingTextureAlignToFace,
+      quader::quader_command::kModelingTextureAlignToView,
+      quader::quader_command::kModelingTextureScaleXUp,
+      quader::quader_command::kModelingTextureScaleXDown,
+      quader::quader_command::kModelingTextureScaleYUp,
+      quader::quader_command::kModelingTextureScaleYDown,
+      quader::quader_command::kModelingTextureShiftLeft,
+      quader::quader_command::kModelingTextureShiftRight,
+      quader::quader_command::kModelingTextureShiftUp,
+      quader::quader_command::kModelingTextureShiftDown,
+      quader::quader_command::kModelingTextureRotateClockwise,
+      quader::quader_command::kModelingTextureRotateCounterClockwise,
+      quader::quader_command::kModelingTextureFlipTextureHorizontal,
+      quader::quader_command::kModelingTextureFlipTextureVertical,
+      quader::quader_command::kModelingTextureFlipFaceHorizontal,
+      quader::quader_command::kModelingTextureFlipFaceVertical,
+      quader::quader_command::kModelingTextureFitBoth,
+      quader::quader_command::kModelingTextureFitX,
+      quader::quader_command::kModelingTextureFitY,
+      quader::quader_command::kModelingTextureJustifyLeft,
+      quader::quader_command::kModelingTextureJustifyRight,
+      quader::quader_command::kModelingTextureJustifyTop,
+      quader::quader_command::kModelingTextureJustifyBottom,
+      quader::quader_command::kModelingTextureJustifyCenter,
+  };
+  const auto typed = typed_command_ids();
+  const auto registered = available_command_ids(editor);
+  const auto catalog = editor.commands().keybinding_catalog();
+  for (const quader::QuaderCommandId command : kCommands) {
+    SCOPED_TRACE(command.string());
+    EXPECT_TRUE(typed.contains(std::string(command.string())));
+    EXPECT_TRUE(registered.contains(std::string(command.string())));
+    const auto descriptor = editor.commands().descriptor(command);
+    ASSERT_TRUE(descriptor.has_value());
+    EXPECT_FALSE(descriptor->enabled);
+    EXPECT_FALSE(descriptor->label.empty());
+
+    const auto *entry =
+        find_keybinding_catalog_entry(catalog, command.string());
+    ASSERT_NE(entry, nullptr);
+    EXPECT_EQ(entry->scope_id, "viewport.selection.face");
+    EXPECT_EQ(entry->localization_key,
+              "command." + std::string(command.string()));
+    EXPECT_TRUE(entry->default_shortcut.empty());
+    EXPECT_TRUE(entry->unassigned);
+    EXPECT_FALSE(entry->customized);
+    EXPECT_TRUE(editor.commands().shortcut_for(command).empty());
+  }
+  EXPECT_EQ(std::count_if(registered.begin(), registered.end(),
+                         [](const std::string &id) {
+                           return id.starts_with("modeling.texture.");
+                         }),
+            kCommands.size());
+
+  const auto object = create_selected_box(editor, "Edit Texture Commands");
+  ASSERT_TRUE(
+      editor.selection().set_mode(quader::QuaderSelectionMode::Face).ok());
+  ASSERT_TRUE(editor.selection().select_face(object, 1).ok());
+  for (const quader::ViewportToolId tool :
+       {quader::ViewportToolId::Select, quader::ViewportToolId::Move,
+        quader::ViewportToolId::Rotate, quader::ViewportToolId::Scale}) {
+    ASSERT_TRUE(editor.tools().activate(tool).ok());
+    for (const quader::QuaderCommandId command : kCommands) {
+      const auto descriptor = editor.commands().descriptor(command);
+      ASSERT_TRUE(descriptor.has_value()) << command.string();
+      EXPECT_TRUE(descriptor->enabled) << command.string();
+    }
+  }
+
+  ASSERT_TRUE(
+      editor.selection().set_mode(quader::QuaderSelectionMode::Object).ok());
+  for (const quader::QuaderCommandId command : kCommands) {
+    EXPECT_FALSE(editor.commands().descriptor(command)->enabled)
+        << command.string();
+  }
+  std::filesystem::remove(path);
+}
+
+TEST(EditorApiTests,
+     EditTextureKeybindingsPersistRespectContextAndReuseExclusiveScopes) {
+  const std::filesystem::path path =
+      keybinding_test_path("edit-texture-rebinding");
+  CommandTestHarness harness;
+  quader::QuaderEditorApi &editor = harness.editor;
+  ASSERT_TRUE(editor.commands().set_keybinding_storage_path(path).ok());
+  constexpr auto kTextureCommand =
+      quader::quader_command::kModelingTextureScaleXUp;
+  constexpr auto kEdgeCommand = quader::quader_command::kSelectEdgeLoops;
+  constexpr std::string_view kShortcut = "Ctrl+Alt+F20";
+  ASSERT_TRUE(editor.preferences()
+                  .set_shortcut(kTextureCommand, std::string(kShortcut))
+                  .ok());
+
+  const auto catalog = editor.commands().keybinding_catalog();
+  const auto *edge =
+      find_keybinding_catalog_entry(catalog, kEdgeCommand.string());
+  ASSERT_NE(edge, nullptr);
+  const auto analysis =
+      editor.commands().analyze_shortcut_assignment(edge->key, kShortcut);
+  ASSERT_TRUE(analysis.ok);
+  EXPECT_TRUE(analysis.conflicts.empty());
+  EXPECT_FALSE(analysis.compatible_reuses.empty());
+  ASSERT_TRUE(editor.preferences()
+                  .set_action_shortcut(edge->key, std::string(kShortcut))
+                  .ok());
+
+  CommandTestHarness reloaded;
+  quader::QuaderEditorApi &loaded_editor = reloaded.editor;
+  ASSERT_TRUE(loaded_editor.commands().set_keybinding_storage_path(path).ok());
+  EXPECT_EQ(loaded_editor.commands().shortcut_for(kTextureCommand), kShortcut);
+  EXPECT_EQ(loaded_editor.commands().shortcut_for(kEdgeCommand), kShortcut);
+  const auto object =
+      create_selected_box(loaded_editor, "Rebound Texture Command");
+  ASSERT_TRUE(
+      loaded_editor.selection().set_mode(quader::QuaderSelectionMode::Face).ok());
+  ASSERT_TRUE(loaded_editor.selection().select_face(object, 1).ok());
+  const auto before = loaded_editor.modeling().face_texture_settings();
+  ASSERT_TRUE(before.editable);
+  ASSERT_TRUE(before.scale_x.has_value());
+
+  quader::ViewportToolState state;
+  state.selection_mode = quader::ViewportSelectionMode::Face;
+  const auto chord = single_input_chord(kShortcut);
+  const auto dispatch = loaded_editor.commands().dispatch_viewport_input_binding(
+      chord, state, true, false);
+  ASSERT_EQ(dispatch.kind,
+            quader::QuaderViewportKeybindingDispatch::Kind::Command);
+  EXPECT_EQ(dispatch.command_id, kTextureCommand.string());
+  const auto result = loaded_editor.commands().execute(dispatch.command_id);
+  ASSERT_TRUE(result.ok()) << result.error_message();
+  EXPECT_TRUE(result.changed());
+  const auto after = loaded_editor.modeling().face_texture_settings();
+  ASSERT_TRUE(after.scale_x.has_value());
+  EXPECT_NEAR(*after.scale_x, *before.scale_x + 0.1, 1.0e-6);
+
+  const auto expect_no_match =
+      [&](bool focused, bool text_input,
+          quader::QuaderViewportKeybindingContext context = {}) {
+    const auto blocked =
+        loaded_editor.commands().dispatch_viewport_input_binding(
+            chord, state, focused, text_input, context);
+    EXPECT_EQ(blocked.kind,
+              quader::QuaderViewportKeybindingDispatch::Kind::NoMatch);
+  };
+  expect_no_match(false, false);
+  expect_no_match(true, true);
+  expect_no_match(true, false, {.navigation_active = true});
+  for (const auto mode :
+       {quader::ViewportSelectionMode::Vertex,
+        quader::ViewportSelectionMode::Object,
+        quader::ViewportSelectionMode::Group}) {
+    state.selection_mode = mode;
+    expect_no_match(true, false);
+  }
+
+  ASSERT_TRUE(
+      loaded_editor.selection().set_mode(quader::QuaderSelectionMode::Edge).ok());
+  ASSERT_TRUE(loaded_editor.selection().select_edge(object, 1, 2).ok());
+  state.selection_mode = quader::ViewportSelectionMode::Edge;
+  const auto edge_dispatch =
+      loaded_editor.commands().dispatch_viewport_input_binding(
+          chord, state, true, false);
+  ASSERT_EQ(edge_dispatch.kind,
+            quader::QuaderViewportKeybindingDispatch::Kind::Command);
+  EXPECT_EQ(edge_dispatch.command_id, kEdgeCommand.string());
+
+  ASSERT_TRUE(loaded_editor.preferences().reset_shortcut(kTextureCommand).ok());
+  EXPECT_TRUE(loaded_editor.commands().shortcut_for(kTextureCommand).empty());
+  EXPECT_EQ(loaded_editor.commands().shortcut_for(kEdgeCommand), kShortcut);
+  std::filesystem::remove(path);
+}
+
 TEST(EditorApiTests, KeybindingConflictsAndRemovalSupportRebindingUi) {
   const std::filesystem::path path = keybinding_test_path("conflicts");
   CommandTestHarness harness;
@@ -12499,9 +12681,9 @@ TEST(EditorApiTests,
       editor.commands().keybinding_catalog();
 
 #ifndef NDEBUG
-  EXPECT_EQ(commands.size(), 162u);
+  EXPECT_EQ(commands.size(), 187u);
 #else
-  EXPECT_EQ(commands.size(), 163u);
+  EXPECT_EQ(commands.size(), 188u);
 #endif
 
   std::unordered_set<std::string> expected_target_ids;

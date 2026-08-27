@@ -205,6 +205,31 @@ PolygonFixture make_dissolvable_vertex_face() {
   return fixture;
 }
 
+PolygonFixture make_texture_face() {
+  PolygonFixture fixture;
+  fixture.vertices = {
+      quader_poly::add_vertex(fixture.document, {0.25f, -1.25f, 0.35f}),
+      quader_poly::add_vertex(fixture.document, {3.25f, -0.75f, 0.35f}),
+      quader_poly::add_vertex(fixture.document, {2.75f, 2.25f, 0.35f}),
+      quader_poly::add_vertex(fixture.document, {-0.25f, 1.5f, 0.35f}),
+  };
+  fixture.faces.push_back(
+      quader_poly::add_face(fixture.document, fixture.vertices));
+  if (fixture.faces.front() == quader_poly::kInvalidElementId) {
+    setup_failure("Create canonical texture face",
+                  "polygon face creation failed");
+  }
+  quader_poly::Face &face = fixture.document.faces.front();
+  face.uvs = {{0.13f, 0.27f}, {1.47f, 0.38f},
+              {1.22f, 1.64f}, {-0.16f, 1.41f}};
+  face.texture_transform = {
+      .scale = {1.3f, -0.8f},
+      .shift_uv = {0.17f, -0.23f},
+      .rotation_degrees = 23.0f,
+  };
+  return fixture;
+}
+
 PolygonFixture make_near_duplicate_triangles(float duplicate_offset) {
   PolygonFixture fixture;
   fixture.vertices = {
@@ -691,6 +716,9 @@ private:
     case CanonicalCommandFixture::FacePairSelection:
       configure_face_selection(true);
       break;
+    case CanonicalCommandFixture::TextureFaceSelection:
+      configure_texture_face();
+      break;
     case CanonicalCommandFixture::HiddenObject:
       configure_hidden_object();
       break;
@@ -1034,6 +1062,15 @@ private:
     require_ok(editor().selection().select_faces(
                    object, {api_element(faces[0]), api_element(faces[1])}),
                "Select canonical face pair");
+  }
+
+  void configure_texture_face() {
+    PolygonFixture polygon = make_texture_face();
+    const quader_poly::ElementId face = polygon.faces.front();
+    const QuaderModelingObjectRef object =
+        create_polygon_object(std::move(polygon), "Texture Action Face");
+    require_ok(editor().selection().select_face(object, api_element(face)),
+               "Select canonical texture face");
   }
 
   void configure_hidden_object() {

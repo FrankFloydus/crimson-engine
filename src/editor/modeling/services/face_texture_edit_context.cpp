@@ -133,6 +133,7 @@ ModelingFaceTextureSettings FaceTextureEditContext::synchronize(
   ModelingFaceTextureSettings result{
       .selected_face_count = selected_face_count(snapshot),
       .editable = snapshot.command.ok && !snapshot.objects.empty(),
+      .treat_as_one = treat_as_one_,
       .block_reason = snapshot.command.ok && !snapshot.objects.empty()
                           ? ModelingFaceTextureBlockReason::None
                           : ModelingFaceTextureBlockReason::NoSelection,
@@ -245,6 +246,19 @@ void FaceTextureEditContext::record_applied_edit(
       edit.selection_token == selection_token_) {
     state_.rotation_degrees = edit.value;
   }
+}
+
+void FaceTextureEditContext::record_applied_rotation_delta(double degrees) {
+  state_.rotation_degrees += degrees;
+}
+
+bool FaceTextureEditContext::set_treat_as_one(bool enabled) {
+  if (treat_as_one_ == enabled) {
+    return false;
+  }
+  treat_as_one_ = enabled;
+  ++revision_;
+  return true;
 }
 
 void FaceTextureEditContext::restore(

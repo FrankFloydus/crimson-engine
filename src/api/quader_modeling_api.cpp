@@ -17,6 +17,7 @@
 #include "editor/commands/modeling/commit_box_preview_command.hpp"
 #include "editor/history/modeling_memento_command.hpp"
 #include "editor/history/face_texture_settings_history_command.hpp"
+#include "editor/history/face_texture_action_history_command.hpp"
 #include "editor/placement/snap_vertices_to_floor_history_command.hpp"
 #include "editor/instances/project_clipboard_service.hpp"
 #include "editor/instances/scene_instance_service.hpp"
@@ -30,6 +31,7 @@
 #include "editor/transform/scene_transform_drag_service.hpp"
 #include "math/glm_bridge.hpp"
 #include "scene/scene_transform.hpp"
+#include "viewport/viewport_camera_adapter.hpp"
 
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/quaternion.hpp>
@@ -47,6 +49,63 @@ namespace {
 
 SceneSession &scene_session(QuaderApiSession session) {
   return QuaderApiSessionInternalAccess::scene_session(session);
+}
+
+std::optional<ModelingFaceTextureAction>
+to_modeling_face_texture_action(QuaderFaceTextureAction action) {
+  switch (action) {
+  case QuaderFaceTextureAction::AlignToGrid:
+    return ModelingFaceTextureAction::AlignToGrid;
+  case QuaderFaceTextureAction::AlignToFace:
+    return ModelingFaceTextureAction::AlignToFace;
+  case QuaderFaceTextureAction::AlignToView:
+    return ModelingFaceTextureAction::AlignToView;
+  case QuaderFaceTextureAction::ScaleXUp:
+    return ModelingFaceTextureAction::ScaleXUp;
+  case QuaderFaceTextureAction::ScaleXDown:
+    return ModelingFaceTextureAction::ScaleXDown;
+  case QuaderFaceTextureAction::ScaleYUp:
+    return ModelingFaceTextureAction::ScaleYUp;
+  case QuaderFaceTextureAction::ScaleYDown:
+    return ModelingFaceTextureAction::ScaleYDown;
+  case QuaderFaceTextureAction::ShiftLeft:
+    return ModelingFaceTextureAction::ShiftLeft;
+  case QuaderFaceTextureAction::ShiftRight:
+    return ModelingFaceTextureAction::ShiftRight;
+  case QuaderFaceTextureAction::ShiftUp:
+    return ModelingFaceTextureAction::ShiftUp;
+  case QuaderFaceTextureAction::ShiftDown:
+    return ModelingFaceTextureAction::ShiftDown;
+  case QuaderFaceTextureAction::RotateClockwise:
+    return ModelingFaceTextureAction::RotateClockwise;
+  case QuaderFaceTextureAction::RotateCounterClockwise:
+    return ModelingFaceTextureAction::RotateCounterClockwise;
+  case QuaderFaceTextureAction::FlipTextureHorizontal:
+    return ModelingFaceTextureAction::FlipTextureHorizontal;
+  case QuaderFaceTextureAction::FlipTextureVertical:
+    return ModelingFaceTextureAction::FlipTextureVertical;
+  case QuaderFaceTextureAction::FlipFaceHorizontal:
+    return ModelingFaceTextureAction::FlipFaceHorizontal;
+  case QuaderFaceTextureAction::FlipFaceVertical:
+    return ModelingFaceTextureAction::FlipFaceVertical;
+  case QuaderFaceTextureAction::FitBoth:
+    return ModelingFaceTextureAction::FitBoth;
+  case QuaderFaceTextureAction::FitX:
+    return ModelingFaceTextureAction::FitX;
+  case QuaderFaceTextureAction::FitY:
+    return ModelingFaceTextureAction::FitY;
+  case QuaderFaceTextureAction::JustifyLeft:
+    return ModelingFaceTextureAction::JustifyLeft;
+  case QuaderFaceTextureAction::JustifyRight:
+    return ModelingFaceTextureAction::JustifyRight;
+  case QuaderFaceTextureAction::JustifyTop:
+    return ModelingFaceTextureAction::JustifyTop;
+  case QuaderFaceTextureAction::JustifyBottom:
+    return ModelingFaceTextureAction::JustifyBottom;
+  case QuaderFaceTextureAction::JustifyCenter:
+    return ModelingFaceTextureAction::JustifyCenter;
+  }
+  return std::nullopt;
 }
 
 QuaderEntityRef instance_entity_ref(const SceneSession &session,
@@ -555,6 +614,12 @@ mesh_arrangement_selection_context(SceneSession &session) {
 }
 
 } // namespace
+
+std::string_view quader_face_texture_action_label(QuaderFaceTextureAction action) {
+  const auto native = to_modeling_face_texture_action(action);
+  return native.has_value() ? modeling_face_texture_action_label(*native)
+                            : std::string_view{};
+}
 
 QuaderPreviewHandle::QuaderPreviewHandle(
     std::optional<QuaderApiSession> session, QuaderApiMutationRunner &mutations,
@@ -2361,6 +2426,7 @@ QuaderFaceTextureSettings QuaderModelingApi::face_texture_settings() const {
   QuaderFaceTextureSettings result{
       .selected_face_count = settings.selected_face_count,
       .editable = settings.editable,
+      .treat_as_one = settings.treat_as_one,
       .disabled_reason = settings.disabled_reason,
       .scale_x = settings.scale_x,
       .scale_y = settings.scale_y,
@@ -2426,6 +2492,54 @@ QuaderApiVoidResult QuaderModelingApi::set_face_texture_setting(
                                    .value = edit.value,
                                    .selection_token = edit.selection_token}),
       "Edit Texture Settings", {.merge_key = edit.merge_key});
+}
+
+QuaderApiVoidResult QuaderModelingApi::apply_face_texture_action(
+    const QuaderFaceTextureActionRequest &request) {
+  if (!mutations_.available()) {
+    return invalid_api_status(session_, "No scene is active.");
+  }
+  SceneSession &session = scene_session(session_);
+  if (session.native_tools().has_pending_tool()) {
+    return mutations_.modeling_content_blocked_status("editing face textures.");
+  }
+  const auto action = to_modeling_face_texture_action(request.action);
+  if (!action.has_value()) {
+    return invalid_api_status(session_, "Unknown face texture action.");
+  }
+  const auto &workspace = session.viewport_workspace();
+  const auto &camera = workspace.camera(workspace.focused_pane());
+  const ViewportCameraBasis basis = ViewportCameraAdapter::basis(camera);
+  ModelingFaceTextureActionRequest native{
+      .options = {
+          .action = *action,
+          .treat_as_one = session.modeling().face_texture_treat_as_one(),
+          .rotation_degrees = session.modeling().face_texture_rotation_step(),
+          .view_right = {basis.right.x, basis.right.y, basis.right.z},
+          .view_up = {basis.up.x, basis.up.y, basis.up.z},
+      },
+      .selection_token = request.selection_token,
+  };
+  return mutations_.run_modeling_command(
+      std::make_unique<FaceTextureActionHistoryCommand>(session.modeling(),
+                                                       std::move(native)),
+      quader_face_texture_action_label(request.action));
+}
+
+bool QuaderModelingApi::face_texture_treat_as_one() const {
+  return mutations_.available() &&
+         scene_session(session_).modeling().face_texture_treat_as_one();
+}
+
+QuaderApiVoidResult QuaderModelingApi::set_face_texture_treat_as_one(bool enabled) {
+  if (!mutations_.available()) {
+    return invalid_api_status(session_, "No scene is active.");
+  }
+  const ModelingCommandResult result =
+      scene_session(session_).modeling().set_face_texture_treat_as_one(enabled);
+  return mutations_.run_runtime_result(
+      modeling_memento_command_result(result),
+      "Treat Selected Faces as One");
 }
 
 QuaderApiVoidResult

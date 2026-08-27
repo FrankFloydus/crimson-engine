@@ -79,6 +79,8 @@ enum class CanonicalCommandFixture : std::uint8_t {
   Viewport,
   /// The owning OS/UI/runtime hook is attached to a deterministic test double.
   ExternalRuntime,
+  /// An isolated asymmetric face with authored UVs and signed texture settings.
+  TextureFaceSelection,
 };
 
 /**

@@ -821,6 +821,108 @@ quader::QVec2 evaluate_texture_mapping(
           uv0.y + carrier[2] * delta.x + carrier[3] * delta.y};
 }
 
+std::optional<std::vector<quader::QVec2>> solve_face_texture_base_uvs(
+    std::span<const quader::QVec3> positions,
+    std::span<const quader::QVec2> effective_uvs,
+    quader::QVec3 geometric_normal, const FaceTextureTransform &transform,
+    const Transform3 &sampling_from_local) {
+  if (positions.size() < 3U || positions.size() != effective_uvs.size() ||
+      !valid_face_texture_transform(transform)) {
+    return std::nullopt;
+  }
+  const auto finite_uv = [](quader::QVec2 uv) {
+    return std::isfinite(uv.x) && std::isfinite(uv.y);
+  };
+  std::vector<quader::QVec2> base_uvs;
+  base_uvs.reserve(positions.size());
+  if (is_identity_texture_mapping(sampling_from_local)) {
+    for (const auto uv : effective_uvs) {
+      const auto base = unapply_face_texture_transform(uv, transform);
+      if (!finite_uv(uv) || !finite_uv(base)) {
+        return std::nullopt;
+      }
+      base_uvs.push_back(base);
+    }
+  } else {
+    std::vector<quader::QVec2> deltas;
+    deltas.reserve(positions.size());
+    constexpr std::array<float, 4> kIdentityCarrier{1.0F, 0.0F, 0.0F, 1.0F};
+    for (std::size_t index = 0U; index < positions.size(); ++index) {
+      const auto position = positions[index];
+      const auto q = generated_texture_uv(position, geometric_normal);
+      const auto mapped = evaluate_texture_mapping(
+          q, position, geometric_normal, kIdentityCarrier, sampling_from_local);
+      if (!finite_uv(mapped) || !finite_uv(effective_uvs[index])) {
+        return std::nullopt;
+      }
+      deltas.push_back(mapped - q);
+    }
+    const auto delta_carrier = face_texture_carrier(
+        positions, deltas, geometric_normal, {});
+    const auto target_carrier = face_texture_carrier(
+        positions, effective_uvs, geometric_normal, {});
+    // K(E) = K(f) * (I + K(d)); solve by RIGHT multiplication. Do not
+    // invert K(E): constant and rank-one authored targets are legitimate.
+    const std::array<double, 4> matrix{
+        1.0 + delta_carrier[0], delta_carrier[1],
+        delta_carrier[2], 1.0 + delta_carrier[3]};
+    const double scale = std::max({std::abs(matrix[0]), std::abs(matrix[1]),
+                                   std::abs(matrix[2]), std::abs(matrix[3])});
+    if (!std::isfinite(scale) || scale == 0.0) {
+      return std::nullopt;
+    }
+    const double a = matrix[0] / scale;
+    const double b = matrix[1] / scale;
+    const double c = matrix[2] / scale;
+    const double d = matrix[3] / scale;
+    const double determinant = a * d - b * c;
+    if (!std::isfinite(determinant) || std::abs(determinant) <= 1.0e-10) {
+      return std::nullopt;
+    }
+    const double inverse = 1.0 / (determinant * scale);
+    const std::array<double, 4> carrier{
+        (target_carrier[0] * d - target_carrier[1] * c) * inverse,
+        (target_carrier[1] * a - target_carrier[0] * b) * inverse,
+        (target_carrier[2] * d - target_carrier[3] * c) * inverse,
+        (target_carrier[3] * a - target_carrier[2] * b) * inverse};
+    for (std::size_t index = 0U; index < positions.size(); ++index) {
+      const auto target = effective_uvs[index];
+      const auto delta = deltas[index];
+      const quader::QVec2 before_compensation{
+          static_cast<float>(target.x - carrier[0] * delta.x -
+                             carrier[1] * delta.y),
+          static_cast<float>(target.y - carrier[2] * delta.x -
+                             carrier[3] * delta.y)};
+      const auto base = unapply_face_texture_transform(before_compensation,
+                                                      transform);
+      if (!finite_uv(base)) {
+        return std::nullopt;
+      }
+      base_uvs.push_back(base);
+    }
+  }
+  const auto actual_carrier = face_texture_carrier(
+      positions, base_uvs, geometric_normal, transform);
+  for (std::size_t index = 0U; index < positions.size(); ++index) {
+    const auto actual = evaluate_texture_mapping(
+        apply_face_texture_transform(base_uvs[index], transform),
+        positions[index], geometric_normal, actual_carrier,
+        sampling_from_local);
+    const auto close = [](float left, float right) {
+      constexpr float kRelativeTolerance =
+          16.0F * std::numeric_limits<float>::epsilon();
+      return std::isfinite(left) && std::isfinite(right) &&
+             std::abs(left - right) <= 2.0e-5F +
+                 kRelativeTolerance * std::max(std::abs(left), std::abs(right));
+    };
+    if (!close(actual.x, effective_uvs[index].x) ||
+        !close(actual.y, effective_uvs[index].y)) {
+      return std::nullopt;
+    }
+  }
+  return base_uvs;
+}
+
 bool bake_document_texture_mapping(Document &document,
                                    const Transform3 &sampling_from_local) {
   if (is_identity_texture_mapping(sampling_from_local)) {

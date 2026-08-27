@@ -11,17 +11,73 @@
 #include "math/types.hpp"
 
 #include <quader/modeling/payloads.hpp>
+#include <quader/modeling/mesh/face_texture_actions.hpp>
 
 #include <cstddef>
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace quader {
 
 /// Native editing intent; normalized UV conversion remains outside the SDK.
 enum class ModelingFaceTextureField { ScaleX, ScaleY, ShiftX, ShiftY, Rotate };
+
+using ModelingFaceTextureAction = modeling::FaceTextureAction;
+
+/// Captures action settings once; repeat resolves the current targets afresh.
+struct ModelingFaceTextureActionRequest final {
+  modeling::FaceTextureActionOptions options;
+  std::uint64_t selection_token = 0;
+};
+
+/// Host-resolved input to the portable selection-wide texture preparation.
+struct ModelingFaceTextureActionTarget final {
+  int modeling_object_id = -1;
+  QMat4 world_from_local;
+  QMat4 sampling_from_local;
+  std::vector<modeling::FaceTextureActionFace> faces;
+};
+
+/// One canonical fallback label for native history and public command catalogs.
+[[nodiscard]] inline std::string_view
+modeling_face_texture_action_label(ModelingFaceTextureAction action) {
+  switch (action) {
+  case ModelingFaceTextureAction::AlignToGrid: return "Align Texture to Grid";
+  case ModelingFaceTextureAction::AlignToFace: return "Align Texture to Face";
+  case ModelingFaceTextureAction::AlignToView: return "Align Texture to View";
+  case ModelingFaceTextureAction::ScaleXUp: return "Increase Texture Scale X";
+  case ModelingFaceTextureAction::ScaleXDown: return "Decrease Texture Scale X";
+  case ModelingFaceTextureAction::ScaleYUp: return "Increase Texture Scale Y";
+  case ModelingFaceTextureAction::ScaleYDown: return "Decrease Texture Scale Y";
+  case ModelingFaceTextureAction::ShiftLeft: return "Shift Texture Left";
+  case ModelingFaceTextureAction::ShiftRight: return "Shift Texture Right";
+  case ModelingFaceTextureAction::ShiftUp: return "Shift Texture Up";
+  case ModelingFaceTextureAction::ShiftDown: return "Shift Texture Down";
+  case ModelingFaceTextureAction::RotateClockwise: return "Rotate Texture Clockwise";
+  case ModelingFaceTextureAction::RotateCounterClockwise:
+    return "Rotate Texture Counterclockwise";
+  case ModelingFaceTextureAction::FlipTextureHorizontal:
+    return "Flip Texture Horizontally";
+  case ModelingFaceTextureAction::FlipTextureVertical:
+    return "Flip Texture Vertically";
+  case ModelingFaceTextureAction::FlipFaceHorizontal:
+    return "Flip Face Horizontally";
+  case ModelingFaceTextureAction::FlipFaceVertical:
+    return "Flip Face Vertically";
+  case ModelingFaceTextureAction::FitBoth: return "Fit Texture Both Axes";
+  case ModelingFaceTextureAction::FitX: return "Fit Texture X";
+  case ModelingFaceTextureAction::FitY: return "Fit Texture Y";
+  case ModelingFaceTextureAction::JustifyLeft: return "Justify Texture Left";
+  case ModelingFaceTextureAction::JustifyRight: return "Justify Texture Right";
+  case ModelingFaceTextureAction::JustifyTop: return "Justify Texture Top";
+  case ModelingFaceTextureAction::JustifyBottom: return "Justify Texture Bottom";
+  case ModelingFaceTextureAction::JustifyCenter: return "Justify Texture Center";
+  }
+  return {};
+}
 
 /// Stable causes that let presentation explain why selected face edits are blocked.
 enum class ModelingFaceTextureBlockReason {
@@ -54,6 +110,7 @@ struct ModelingFaceTextureUpdateBatch final {
 struct ModelingFaceTextureSettings final {
   std::size_t selected_face_count = 0;
   bool editable = false;
+  bool treat_as_one = false;
   ModelingFaceTextureBlockReason block_reason =
       ModelingFaceTextureBlockReason::NoSelection;
   std::string disabled_reason;

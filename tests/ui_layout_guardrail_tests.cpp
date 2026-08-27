@@ -1130,6 +1130,8 @@ TEST(UiLayoutGuardrailTests,
   expect_contains(panel,
                   "QStringLiteral(\"tool_settings.section.texture\")");
   expect_contains(panel,
+                  "QStringLiteral(\"tool_settings.section.edit_texture\")");
+  expect_contains(panel,
                   "class QtTextureNumberSpinBox final : public QDoubleSpinBox");
   expect_contains(panel, "QStringLiteral(\"--\")");
   expect_missing(panel, "setSpecialValueText(");
@@ -1137,6 +1139,10 @@ TEST(UiLayoutGuardrailTests,
   expect_contains(panel, ".selection_token = binding.selection_token");
   expect_contains(panel, ".merge_key = binding.merge_key");
   expect_contains(panel, "binding.dispatch_timer->setInterval(kNumberDispatchIntervalMs)");
+  expect_contains(panel, "editor_->modeling().apply_face_texture_action(");
+  expect_contains(panel, "editor_->modeling().set_face_texture_treat_as_one(");
+  expect_contains(panel, "quader_face_texture_action_label(description.action)");
+  EXPECT_EQ(count_occurrences(panel, "build_texture_actions();"), 1u);
 
   const std::string refresh = std::string(source_slice(
       panel, "  void refresh_texture_settings(bool force = false)",
@@ -1145,18 +1151,51 @@ TEST(UiLayoutGuardrailTests,
   const std::size_t gate = refresh.find("*texture_revision_ == revision");
   const std::size_t summary = refresh.find("face_texture_settings()");
   const std::size_t visibility = refresh.find("texture_section_->setVisible");
+  const std::size_t action_visibility =
+      refresh.find("edit_texture_section_->setVisible");
+  const std::size_t action_tooltips =
+      refresh.find("refresh_texture_action_tooltips(rotation_step)");
   ASSERT_NE(revision, std::string::npos);
   ASSERT_NE(gate, std::string::npos);
   ASSERT_NE(summary, std::string::npos);
   ASSERT_NE(visibility, std::string::npos);
+  ASSERT_NE(action_visibility, std::string::npos);
+  ASSERT_NE(action_tooltips, std::string::npos);
   EXPECT_LT(revision, gate);
   EXPECT_LT(gate, summary);
   EXPECT_LT(summary, visibility);
+  EXPECT_LT(summary, action_visibility);
+  EXPECT_LT(summary, action_tooltips);
+  EXPECT_EQ(count_occurrences(refresh, "face_texture_settings()"), 1u);
+  expect_contains(refresh,
+                  "texture_keybindings_revision_ == keybindings_revision");
+  expect_contains(refresh, "texture_rotation_step_ == rotation_step");
+  expect_contains(refresh, "button->isEnabled() != settings.editable");
+  expect_contains(refresh,
+                  "texture_treat_as_one_->isChecked() != settings.treat_as_one");
   expect_contains(refresh, "if (!binding.editing)");
   expect_missing(refresh, "commands().available()");
   expect_missing(refresh, "export_selection()");
   expect_missing(refresh, "show_panel(");
   expect_missing(refresh, "raise()");
+
+  const std::string dispatch = std::string(source_slice(
+      panel, "  bool flush_texture_inputs_for_action()",
+      "  void discard_texture_dispatch(TextureControlWidget &binding)"));
+  const std::size_t flush = dispatch.find("flush_texture_inputs_for_action()");
+  const std::size_t action = dispatch.find("apply_face_texture_action(");
+  ASSERT_NE(flush, std::string::npos);
+  ASSERT_NE(action, std::string::npos);
+  EXPECT_LT(flush, action);
+  expect_contains(dispatch, "binding.invalid_value");
+  expect_contains(dispatch, "binding.gesture_revision != current");
+  expect_contains(dispatch, ".selection_token = selection_token");
+  expect_contains(dispatch, "discard_texture_dispatches();");
+  expect_missing(dispatch, ".merge_key");
+  expect_missing(dispatch, "commands().execute(");
+  expect_contains(panel, "button->setFocusPolicy(Qt::TabFocus)");
+  expect_contains(panel, "if (!localized_text_dirty_)");
+  expect_missing(panel, "commands().available()");
 }
 
 TEST(UiLayoutGuardrailTests,
@@ -1895,6 +1934,9 @@ TEST(UiLayoutGuardrailTests,
   expect_missing(face_sync, "numeric_interaction_active");
   expect_missing(face_sync, "active_settings()");
   expect_missing(face_sync, "dock->raise()");
+  expect_contains(face_sync,
+                  "face_texture_keybindings_revision_ != keybindings_revision");
+  expect_contains(face_sync, "face_texture_rotation_step_ != rotation_step");
 }
 
 TEST(UiLayoutGuardrailTests,

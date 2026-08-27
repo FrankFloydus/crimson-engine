@@ -2395,13 +2395,20 @@ void UISystem::refresh(const FrameTiming &frame_timing,
   if (panel_visible(UIPanelId::ToolSettings)) {
     const QuaderFaceTextureRevision revision =
         editor_->modeling().face_texture_settings_revision();
+    const std::uint64_t keybindings_revision =
+        editor_->preferences().keybindings_revision();
+    const double rotation_step = editor_->preferences().rotation_snap_degrees();
     if (!face_texture_settings_revision_.has_value() ||
-        *face_texture_settings_revision_ != revision) {
+        *face_texture_settings_revision_ != revision ||
+        face_texture_keybindings_revision_ != keybindings_revision ||
+        face_texture_rotation_step_ != rotation_step) {
       QDR_PROFILE_SCOPE("UI refresh face texture settings presentation");
       // Selection/scene changes must invalidate stale text even while a numeric
       // control owns focus. The panel preserves edits for unchanged targets.
       tool_settings_panel_->refresh_texture_settings();
       face_texture_settings_revision_ = revision;
+      face_texture_keybindings_revision_ = keybindings_revision;
+      face_texture_rotation_step_ = rotation_step;
     }
   }
   {

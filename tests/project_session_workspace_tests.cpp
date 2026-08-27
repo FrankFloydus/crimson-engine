@@ -181,6 +181,8 @@ TEST(ProjectSessionWorkspace, KeepsSceneHistoryAndSelectionIndependent) {
 
   OpenSceneSession *first = project.find(*created.scene_session_id);
   ASSERT_NE(first, nullptr);
+  QuaderEditorApi editor(project);
+  EXPECT_FALSE(editor.modeling().face_texture_treat_as_one());
   const DocumentCreateEntityResult first_entity =
       first->session->document_commands().create_entity("First Entity");
   ASSERT_TRUE(first_entity.ok) << first_entity.message;
@@ -196,12 +198,26 @@ TEST(ProjectSessionWorkspace, KeepsSceneHistoryAndSelectionIndependent) {
   EXPECT_FALSE(first->dirty())
       << "Inspection selection must not dirty persisted scene content.";
 
-  const ProjectSessionResult added = project.new_scene();
-  ASSERT_TRUE(added.ok) << added.message;
-  ASSERT_TRUE(added.scene_session_id.has_value());
-  OpenSceneSession *second = project.find(*added.scene_session_id);
+  const auto first_history_before_toggle = editor.history().snapshot();
+  ASSERT_TRUE(editor.modeling().set_face_texture_treat_as_one(true).changed());
+  EXPECT_TRUE(editor.modeling().face_texture_treat_as_one());
+  EXPECT_FALSE(first->dirty());
+  EXPECT_EQ(editor.history().snapshot().undo_label,
+            first_history_before_toggle.undo_label);
+  EXPECT_EQ(editor.history().snapshot().redo_label,
+            first_history_before_toggle.redo_label);
+
+  const auto added = editor.scene_documents().new_scene();
+  ASSERT_TRUE(added.ok()) << added.error_message();
+  OpenSceneSession *second = project.find(added.value());
   ASSERT_NE(second, nullptr);
+  ASSERT_NE(first->session.get(), second->session.get());
+  EXPECT_FALSE(editor.modeling().face_texture_treat_as_one());
   EXPECT_TRUE(second->session->selection().state().scene_selection.empty());
+  EXPECT_FALSE(second->session->history().can_undo());
+  ASSERT_TRUE(editor.modeling().set_face_texture_treat_as_one(true).changed());
+  ASSERT_TRUE(editor.modeling().set_face_texture_treat_as_one(false).changed());
+  EXPECT_FALSE(second->dirty());
   EXPECT_FALSE(second->session->history().can_undo());
 
   const DocumentCreateEntityResult second_entity =
@@ -210,7 +226,8 @@ TEST(ProjectSessionWorkspace, KeepsSceneHistoryAndSelectionIndependent) {
   EXPECT_TRUE(second->session->history().can_undo());
   EXPECT_TRUE(second->session->scene().exists(second_entity.entity));
 
-  ASSERT_TRUE(project.activate(first->session_id).ok);
+  ASSERT_TRUE(editor.scene_documents().activate(first->session_id).ok());
+  EXPECT_TRUE(editor.modeling().face_texture_treat_as_one());
   ASSERT_EQ(first->session->selection().state().scene_selection.size(), 1u);
   EXPECT_EQ(first->session->selection().state().active_entity,
             first_entity.entity);
@@ -222,6 +239,10 @@ TEST(ProjectSessionWorkspace, KeepsSceneHistoryAndSelectionIndependent) {
   EXPECT_FALSE(first->session->scene().exists(first_entity.entity));
   EXPECT_TRUE(second->session->scene().exists(second_entity.entity));
   EXPECT_TRUE(second->session->history().can_undo());
+  ASSERT_TRUE(editor.scene_documents().activate(second->session_id).ok());
+  EXPECT_FALSE(editor.modeling().face_texture_treat_as_one());
+  ASSERT_TRUE(editor.scene_documents().activate(first->session_id).ok());
+  EXPECT_TRUE(editor.modeling().face_texture_treat_as_one());
 }
 
 TEST(ProjectSessionWorkspace,

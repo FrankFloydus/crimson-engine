@@ -423,6 +423,9 @@ public:
   selected_face_texture_settings() const;
   [[nodiscard]] ModelingCommandResult apply_face_texture_updates(
       std::span<const ModelingFaceTextureUpdateBatch> batches);
+  [[nodiscard]] ModelingCommandResult apply_face_texture_action(
+      std::span<const ModelingFaceTextureActionTarget> targets,
+      const modeling::FaceTextureActionOptions &options);
   [[nodiscard]] std::optional<SceneBounds> selection_bounds() const;
   [[nodiscard]] std::vector<EntityId> selected_entities() const;
   [[nodiscard]] EntityId active_selected_entity() const;

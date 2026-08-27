@@ -66,6 +66,45 @@ enum class QuaderFaceTextureField {
   Rotate,
 };
 
+/// Names one selected-face texture action exposed by the editor and commands.
+enum class QuaderFaceTextureAction {
+  AlignToGrid,
+  AlignToFace,
+  AlignToView,
+  ScaleXUp,
+  ScaleXDown,
+  ScaleYUp,
+  ScaleYDown,
+  ShiftLeft,
+  ShiftRight,
+  ShiftUp,
+  ShiftDown,
+  RotateClockwise,
+  RotateCounterClockwise,
+  FlipTextureHorizontal,
+  FlipTextureVertical,
+  FlipFaceHorizontal,
+  FlipFaceVertical,
+  FitBoth,
+  FitX,
+  FitY,
+  JustifyLeft,
+  JustifyRight,
+  JustifyTop,
+  JustifyBottom,
+  JustifyCenter,
+};
+
+/// The common fallback name used by commands, accessibility, and history.
+[[nodiscard]] std::string_view
+quader_face_texture_action_label(QuaderFaceTextureAction action);
+
+/// Pins a button or command action to the selection that was presented.
+struct QuaderFaceTextureActionRequest final {
+  QuaderFaceTextureAction action = QuaderFaceTextureAction::AlignToGrid;
+  std::uint64_t selection_token = 0;
+};
+
 /// UI-localizable reason why selected face texture editing is unavailable.
 enum class QuaderFaceTextureBlockReason {
   None,
@@ -91,6 +130,7 @@ struct QuaderFaceTextureRevision final {
 struct QuaderFaceTextureSettings final {
   std::size_t selected_face_count = 0;
   bool editable = false;
+  bool treat_as_one = false;
   QuaderFaceTextureBlockReason block_reason =
       QuaderFaceTextureBlockReason::NoSelection;
   std::string disabled_reason;
@@ -535,6 +575,10 @@ public:
   [[nodiscard]] QuaderFaceTextureSettings face_texture_settings() const;
   QuaderApiVoidResult
   set_face_texture_setting(const QuaderFaceTextureEdit &edit);
+  QuaderApiVoidResult
+  apply_face_texture_action(const QuaderFaceTextureActionRequest &request);
+  [[nodiscard]] bool face_texture_treat_as_one() const;
+  QuaderApiVoidResult set_face_texture_treat_as_one(bool enabled);
   [[nodiscard]] bool can_execute_tool(std::string_view tool_id) const;
   QuaderApiVoidResult execute_tool(std::string_view tool_id);
   QuaderApiVoidResult delete_selection();

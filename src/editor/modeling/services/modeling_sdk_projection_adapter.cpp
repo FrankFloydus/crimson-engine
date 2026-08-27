@@ -3412,6 +3412,70 @@ public:
         "Edit face texture settings failed.", false, false, false, true);
   }
 
+  [[nodiscard]] ModelingCommandResult apply_face_texture_action(
+      std::span<const ModelingFaceTextureActionTarget> targets,
+      const modeling::FaceTextureActionOptions &options) {
+    if (selection_mode_ != ModelingSelectionMode::Face) {
+      return failure("Texture actions require face selection mode.");
+    }
+    if (targets.empty()) {
+      return failure("Select one or more editable faces first.");
+    }
+    std::vector<ObjectId> objects;
+    objects.reserve(targets.size());
+    for (const auto &target : targets) {
+      const auto object = sdk_object(target.modeling_object_id);
+      if (!object.has_value() || target.faces.empty() ||
+          std::ranges::find(objects, *object) != objects.end()) {
+        return failure("The selected texture targets are no longer valid.");
+      }
+      objects.push_back(*object);
+    }
+    // These COW copies remain stable throughout the one selection-wide SDK
+    // preparation. No SDK/native scene state is published until every target
+    // has produced its validated replacement and receipt.
+    auto documents = session_.document_copies(objects);
+    if (!documents.ok()) {
+      return failure(documents.error_message());
+    }
+    std::vector<modeling::FaceTextureActionTarget> portable_targets;
+    portable_targets.reserve(targets.size());
+    for (std::size_t index = 0; index < targets.size(); ++index) {
+      const auto &target = targets[index];
+      portable_targets.push_back({
+          .key = static_cast<std::uint64_t>(target.modeling_object_id),
+          .document = &documents.value()[index],
+          .faces = target.faces,
+          .world_from_local = to_sdk(target.world_from_local),
+          .sampling_from_local = to_sdk(target.sampling_from_local),
+      });
+    }
+    auto prepared = modeling::prepare_face_texture_action(portable_targets, options);
+    if (!prepared.ok()) {
+      return failure(prepared.error_message());
+    }
+    if (!prepared.value().changed) {
+      return {.ok = true, .changed = false};
+    }
+    return mutate_documents_by_object(
+        objects,
+        [&](ObjectId object, PolygonDocument &document) {
+          const auto native = native_object(object);
+          const auto entry = std::ranges::find(
+              prepared.value().documents,
+              static_cast<std::uint64_t>(native.value_or(-1)),
+              &modeling::PreparedFaceTextureDocument::key);
+          if (entry == prepared.value().documents.end()) {
+            return Result<OperationResult>::failure(modeling::make_error(
+                modeling::ErrorCode::InvalidId,
+                "A prepared texture target is no longer live."));
+          }
+          document = entry->document;
+          return Result<OperationResult>::success(entry->receipt);
+        },
+        "Edit face texture failed.", false, false, false, true);
+  }
+
   [[nodiscard]] ModelingCommandResult assign_material_slot_to_objects(
       std::span<const int> modeling_object_ids,
       std::uint32_t material_slot) {
@@ -8468,6 +8532,12 @@ ModelingSdkProjectionAdapter::selected_face_texture_settings() const {
 ModelingCommandResult ModelingSdkProjectionAdapter::apply_face_texture_updates(
     std::span<const ModelingFaceTextureUpdateBatch> batches) {
   return impl_->apply_face_texture_updates(batches);
+}
+
+ModelingCommandResult ModelingSdkProjectionAdapter::apply_face_texture_action(
+    std::span<const ModelingFaceTextureActionTarget> targets,
+    const modeling::FaceTextureActionOptions &options) {
+  return impl_->apply_face_texture_action(targets, options);
 }
 
 ModelingCommandResult

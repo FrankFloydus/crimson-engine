@@ -35,6 +35,7 @@
 #include "scene/scene_hierarchy_visibility.hpp"
 #include "scene/scene_transform.hpp"
 #include "scene/scene_transform_pivot.hpp"
+#include "scene/scene_texture_mapping.hpp"
 
 #include <algorithm>
 #include <array>
@@ -1609,20 +1610,14 @@ public:
     return face_texture_revision_;
   }
 
-  [[nodiscard]] QVec2 face_texture_extent(
-      const ModelingSelectedFaceTextureSnapshot &snapshot) const {
+  [[nodiscard]] QVec2 face_texture_extent(EntityId entity,
+                                         std::uint32_t material_slot) const {
     constexpr QVec2 kFallback{64.0f, 64.0f};
-    if (snapshot.objects.size() != 1u ||
-        snapshot.objects.front().faces.size() != 1u) {
-      return kFallback;
-    }
-    const auto &object = snapshot.objects.front();
-    const MaterialComponent *component = scene_.material(object.entity);
+    const MaterialComponent *component = scene_.material(entity);
     if (component == nullptr) {
       return kFallback;
     }
-    const MaterialReference reference = component->material_for_slot(
-        object.faces.front().material_slot);
+    const MaterialReference reference = component->material_for_slot(material_slot);
     std::optional<QVec2> extent;
     if (reference.embedded()) {
       const MaterialDocument *material = assets_.material(reference.embedded_asset());
@@ -1644,6 +1639,16 @@ public:
                    std::isfinite(extent->y) && extent->x > 0.0f && extent->y > 0.0f
                ? *extent
                : kFallback;
+  }
+
+  [[nodiscard]] QVec2 face_texture_extent(
+      const ModelingSelectedFaceTextureSnapshot &snapshot) const {
+    if (snapshot.objects.size() != 1u ||
+        snapshot.objects.front().faces.size() != 1u) {
+      return {64.0f, 64.0f};
+    }
+    const auto &object = snapshot.objects.front();
+    return face_texture_extent(object.entity, object.faces.front().material_slot);
   }
 
   [[nodiscard]] ModelingFaceTextureSettings face_texture_settings() const {
@@ -1709,6 +1714,110 @@ public:
       invalidate_selection_overlay_caches();
     }
     return result;
+  }
+
+  ModelingCommandResult apply_face_texture_action(
+      const ModelingFaceTextureActionRequest &request) {
+    const ModelingFaceTextureSettings settings = face_texture_settings();
+    if (!settings.editable) {
+      return {.ok = false,
+              .changed = false,
+              .message = settings.disabled_reason.empty()
+                             ? "Select one or more editable faces first."
+                             : settings.disabled_reason};
+    }
+    if (request.selection_token == 0 ||
+        request.selection_token != settings.selection_token) {
+      return {.ok = false,
+              .changed = false,
+              .message = "The face selection changed before the texture action."};
+    }
+    if (modeling_face_texture_action_label(request.options.action).empty()) {
+      return {.ok = false, .message = "Unknown face texture action."};
+    }
+
+    const ModelingInstanceEditScope scope =
+        instance_edit_scope_provider_ ? instance_edit_scope_provider_()
+                                      : ModelingInstanceEditScope{};
+    const ModelingSelectionSummary selection = selection_summary();
+    modeling::FaceTextureActionOptions options = request.options;
+    options.active_target_key = 0;
+    options.active_face = {};
+    std::vector<ModelingFaceTextureActionTarget> targets;
+    targets.reserve(face_texture_selection_cache_.objects.size());
+    for (const auto &object : face_texture_selection_cache_.objects) {
+      const auto world = modeling_object_world_transform(object.modeling_object_id);
+      const EntityId occurrence =
+          scope.active() && scene_.containing_instance_definition(object.entity) ==
+                                scope.definition
+              ? scope.occurrence
+              : kInvalidEntityId;
+      const auto sampling =
+          effective_texture_sampling_from_local(scene_, object.entity, occurrence);
+      if (!world.has_value() || !sampling.has_value()) {
+        return {.ok = false,
+                .message = "A selected face has no usable texture mapping frame."};
+      }
+      ModelingFaceTextureActionTarget target{
+          .modeling_object_id = object.modeling_object_id,
+          .world_from_local = *world,
+          .sampling_from_local = *sampling,
+      };
+      target.faces.reserve(object.faces.size());
+      for (const auto &face : object.faces) {
+        const QVec2 extent = face_texture_extent(object.entity, face.material_slot);
+        const auto dimension = [](float value) {
+          return static_cast<std::uint32_t>(std::clamp<double>(
+              value, 1.0, std::numeric_limits<std::uint32_t>::max()));
+        };
+        target.faces.push_back({.face = face.face,
+                                .texture_width = dimension(extent.x),
+                                .texture_height = dimension(extent.y)});
+        if (selection.active_kind == ModelingActiveSelectionKind::Face &&
+            selection.active_object_id == object.modeling_object_id &&
+            selection.active_face_id == static_cast<int>(face.face.index)) {
+          options.active_target_key =
+              static_cast<std::uint64_t>(object.modeling_object_id);
+          options.active_face = face.face;
+        }
+      }
+      targets.push_back(std::move(target));
+    }
+    ModelingCommandResult result =
+        sdk_projection_adapter_.apply_face_texture_action(targets, options);
+    if (result.ok && result.changed) {
+      if (options.action == ModelingFaceTextureAction::RotateClockwise) {
+        face_texture_context_.record_applied_rotation_delta(options.rotation_degrees);
+      } else if (options.action == ModelingFaceTextureAction::RotateCounterClockwise) {
+        face_texture_context_.record_applied_rotation_delta(-options.rotation_degrees);
+      } else if (options.action == ModelingFaceTextureAction::AlignToGrid) {
+        face_texture_context_.invalidate();
+      }
+      auto &repeat = history_bridge_.repeat_last_action();
+      repeat.last_action_kind = quader_editor_core::RepeatableActionKind::FaceTexture;
+      repeat.last_face_texture = options;
+      repeat.pending_preview_operation.reset();
+      invalidate_selection_overlay_caches();
+    }
+    return result;
+  }
+
+  [[nodiscard]] bool face_texture_treat_as_one() const {
+    return face_texture_context_.treat_as_one();
+  }
+
+  ModelingCommandResult set_face_texture_treat_as_one(bool enabled) {
+    return {.ok = true,
+            .changed = face_texture_context_.set_treat_as_one(enabled)};
+  }
+
+  [[nodiscard]] double face_texture_rotation_step() const {
+    return face_texture_rotation_step_provider_ ? face_texture_rotation_step_provider_()
+                                               : 15.0;
+  }
+
+  void set_face_texture_rotation_step_provider(std::function<double()> provider) {
+    face_texture_rotation_step_provider_ = std::move(provider);
   }
 
   [[nodiscard]] ModelingFaceTextureEditState
@@ -2667,6 +2776,13 @@ public:
         .changed = result.changed,
         .message = result.message,
     };
+  }
+
+  [[nodiscard]] bool has_face_texture_repeat() const {
+    const auto &repeat = history_bridge_.repeat_last_action();
+    return repeat.last_action_kind ==
+               quader_editor_core::RepeatableActionKind::FaceTexture &&
+           repeat.last_face_texture.has_value();
   }
 
   ModelingCommandResult mirror_selection(ModelingMirrorAxis axis) {
@@ -3874,6 +3990,19 @@ public:
   quader_editor_core::CommandResult execute_repeat_last_action_scene_aware() {
     quader_editor_core::RepeatLastActionState &repeat =
         history_bridge_.repeat_last_action();
+    if (repeat.last_action_kind ==
+        quader_editor_core::RepeatableActionKind::FaceTexture) {
+      if (!repeat.last_face_texture.has_value()) {
+        return {false, false, "No repeatable texture action is available."};
+      }
+      const quader_editor_core::RepeatLastActionState repeated_action = repeat;
+      const ModelingCommandResult result = apply_face_texture_action({
+          .options = *repeat.last_face_texture,
+          .selection_token = face_texture_settings().selection_token,
+      });
+      repeat = repeated_action;
+      return {.ok = result.ok, .changed = result.changed, .message = result.message};
+    }
     if (repeat.last_action_kind ==
         quader_editor_core::RepeatableActionKind::Transform) {
       if (!repeat.last_transform.has_value()) {
@@ -6949,6 +7078,7 @@ private:
   mutable QVec2 face_texture_extent_cache_{64.0f, 64.0f};
   std::function<std::optional<QVec2>(MaterialReference)> face_texture_extent_provider_;
   std::function<std::uint64_t()> face_texture_extent_revision_provider_;
+  std::function<double()> face_texture_rotation_step_provider_;
   std::function<TextureLockSettings()> texture_lock_settings_provider_;
   ModelingHierarchyDuplicateService hierarchy_duplicate_service_;
   ModelingSelectionService selection_service_;
@@ -7090,6 +7220,29 @@ ModelingFaceTextureSettings ModelingSessionService::face_texture_settings() cons
 ModelingCommandResult ModelingSessionService::set_face_texture_setting(
     const ModelingFaceTextureEdit &edit) {
   return impl_->set_face_texture_setting(edit);
+}
+
+ModelingCommandResult ModelingSessionService::apply_face_texture_action(
+    const ModelingFaceTextureActionRequest &request) {
+  return impl_->apply_face_texture_action(request);
+}
+
+bool ModelingSessionService::face_texture_treat_as_one() const {
+  return impl_->face_texture_treat_as_one();
+}
+
+ModelingCommandResult ModelingSessionService::set_face_texture_treat_as_one(
+    bool enabled) {
+  return impl_->set_face_texture_treat_as_one(enabled);
+}
+
+double ModelingSessionService::face_texture_rotation_step() const {
+  return impl_->face_texture_rotation_step();
+}
+
+void ModelingSessionService::set_face_texture_rotation_step_provider(
+    std::function<double()> provider) {
+  impl_->set_face_texture_rotation_step_provider(std::move(provider));
 }
 
 ModelingFaceTextureEditState
@@ -7336,6 +7489,10 @@ ModelingCommandResult ModelingSessionService::paste_selection() {
 
 ModelingCommandResult ModelingSessionService::repeat_last_action() {
   return impl_->repeat_last_action();
+}
+
+bool ModelingSessionService::has_face_texture_repeat() const {
+  return impl_->has_face_texture_repeat();
 }
 
 ModelingCommandResult
