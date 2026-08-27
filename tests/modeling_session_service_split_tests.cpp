@@ -69,6 +69,23 @@ void expect_vec3_eq(QVec3 actual, QVec3 expected) {
   EXPECT_FLOAT_EQ(actual.z, expected.z);
 }
 
+quader_poly::Document service_uv_peel_strip_document() {
+  quader_poly::Document document;
+  const std::array vertices{
+      quader_poly::add_vertex(document, {-2.0f, -1.0f, 0.0f}),
+      quader_poly::add_vertex(document, {0.0f, -1.0f, 0.0f}),
+      quader_poly::add_vertex(document, {2.0f, -1.0f, 0.0f}),
+      quader_poly::add_vertex(document, {-2.0f, 1.0f, 0.0f}),
+      quader_poly::add_vertex(document, {0.0f, 1.0f, 0.0f}),
+      quader_poly::add_vertex(document, {2.0f, 1.0f, 0.0f}),
+  };
+  (void)quader_poly::add_face(
+      document, std::array{vertices[0], vertices[1], vertices[4], vertices[3]});
+  (void)quader_poly::add_face(
+      document, std::array{vertices[1], vertices[2], vertices[5], vertices[4]});
+  return document;
+}
+
 TEST(ModelingSessionServiceSplitTests,
      RuntimeToolCommandServiceBuildsTypedToolCommands) {
   ModelingToolRayEvent ray_event;
@@ -3304,6 +3321,93 @@ TEST(ModelingSessionServiceSplitTests,
   const auto *untouched = quader_poly::find_face(*before_first, 1);
   ASSERT_NE(untouched, nullptr);
   EXPECT_FLOAT_EQ(untouched->texture_transform.scale.y, 1.0f);
+}
+
+TEST(ModelingSessionServiceSplitTests,
+     UvPeelLatePublicationFailurePreservesSharedBindingsAndAllObjects) {
+  SceneDocument scene;
+  AssetRegistry assets;
+  ModelingSessionService service(scene, assets);
+  const auto first = service.create_mesh({
+      .document = service_uv_peel_strip_document(), .name = "First strip",
+  });
+  const auto second = service.create_mesh({
+      .document = service_uv_peel_strip_document(), .name = "Second strip",
+  });
+  ASSERT_TRUE(first.ok) << first.message;
+  ASSERT_TRUE(second.ok) << second.message;
+  for (const auto *created : {&first, &second}) {
+    const auto selected = service.set_component_selection({
+        .modeling_object_id = created->object.modeling_object_id,
+        .mode = ModelingSelectionMode::Edge,
+        .edges = {{2, 5}},
+        .edit = created == &first ? ModelingSelectionEdit::Replace
+                                 : ModelingSelectionEdit::Add,
+        .active_kind = ModelingActiveSelectionKind::Edge,
+        .active_edge = {2, 5},
+    });
+    ASSERT_TRUE(selected.ok) << selected.message;
+  }
+  const AssetId shared_mesh = scene.mesh(first.object.entity)->mesh;
+  const AssetId second_mesh = scene.mesh(second.object.entity)->mesh;
+  const EntityId shared_entity =
+      scene.create_entity("Unselected shared consumer", EntityKind::Mesh);
+  ASSERT_TRUE(scene.set_mesh(shared_entity, {.mesh = shared_mesh}));
+  const auto before_first = assets.mesh(shared_mesh)->authored_polygon_document;
+  const auto before_second = assets.mesh(second_mesh)->authored_polygon_document;
+  const auto settings = service.uv_peel_settings();
+  ASSERT_TRUE(settings.editable);
+  ASSERT_EQ(settings.selected_edge_count, 2u);
+  const auto before_queries = service.modeling_sdk_projection_stats_for_tests();
+  const auto settings_revision = service.uv_peel_settings_revision();
+  for (int index = 0; index < 20; ++index) {
+    EXPECT_EQ(service.uv_peel_settings_revision(), settings_revision);
+    EXPECT_EQ(service.uv_peel_settings().selection_token, settings.selection_token);
+  }
+  const auto after_queries = service.modeling_sdk_projection_stats_for_tests();
+  EXPECT_EQ(after_queries.uv_peel_summary_build_count,
+            before_queries.uv_peel_summary_build_count);
+  EXPECT_EQ(after_queries.mesh_compile_count, before_queries.mesh_compile_count);
+  EXPECT_EQ(after_queries.asset_publication_count,
+            before_queries.asset_publication_count);
+
+  const auto before_mesh_ids = assets.mesh_ids();
+  const auto before_scene_revision = scene.revision();
+  const auto before_asset_revision = assets.revision();
+  const auto before_content_revision = service.content_revision();
+  const auto before_selection_revision = service.selection_revision();
+  const ModelingUvPeelRequest request{
+      .options = {.world_space = false, .u_offset = 0.25, .v_offset = -0.5},
+      .selection_token = settings.selection_token,
+  };
+  service.set_modeling_sdk_projection_failure_for_tests(
+      ModelingSdkProjectionFailurePoint::CommittedSceneNotify);
+  const auto failed = service.peel_uv(request);
+  EXPECT_FALSE(failed.ok);
+  EXPECT_FALSE(failed.changed);
+  EXPECT_EQ(scene.revision(), before_scene_revision);
+  EXPECT_EQ(assets.revision(), before_asset_revision);
+  EXPECT_EQ(assets.mesh_ids(), before_mesh_ids);
+  EXPECT_EQ(service.content_revision(), before_content_revision);
+  EXPECT_EQ(service.selection_revision(), before_selection_revision);
+  EXPECT_EQ(scene.mesh(first.object.entity)->mesh, shared_mesh);
+  EXPECT_EQ(scene.mesh(second.object.entity)->mesh, second_mesh);
+  EXPECT_EQ(scene.mesh(shared_entity)->mesh, shared_mesh);
+  EXPECT_EQ(assets.mesh(shared_mesh)->authored_polygon_document, before_first);
+  EXPECT_EQ(assets.mesh(second_mesh)->authored_polygon_document, before_second);
+  EXPECT_EQ(service.uv_peel_settings().selection_token, settings.selection_token);
+
+  service.set_modeling_sdk_projection_failure_for_tests(
+      ModelingSdkProjectionFailurePoint::None);
+  const auto peeled = service.peel_uv(request);
+  ASSERT_TRUE(peeled.ok) << peeled.message;
+  EXPECT_TRUE(peeled.changed);
+  EXPECT_EQ(service.content_revision(), before_content_revision + 1u);
+  EXPECT_EQ(service.selection_revision(), before_selection_revision);
+  EXPECT_NE(scene.mesh(first.object.entity)->mesh, shared_mesh);
+  EXPECT_EQ(scene.mesh(shared_entity)->mesh, shared_mesh);
+  EXPECT_EQ(assets.mesh(shared_mesh)->authored_polygon_document, before_first);
+  EXPECT_EQ(service.uv_peel_settings().selected_edge_count, 2u);
 }
 
 } // namespace

@@ -7037,3 +7037,121 @@ Pre-commit verification: renamed 40 new local constexpr test constants to the re
 style without changing values or behavior. The full scan covered 549 translation units; both
 corrected test files pass their clang-tidy recheck. The only remaining style-gate diagnostic is the
 previously documented MSVC `xutility` `unexpected size` assertion in unchanged `polygon_document.cpp`.
+
+## 2026-08-27 - Guided UV Peel
+
+Task/context: implement Source 2 Hammer's UV Peel workflow after researching its meaning and
+appropriate parameterization methods.
+
+Research and scope:
+
+- Valve's [Mesh Texturing / UV Peel](https://developer.valvesoftware.com/wiki/Source_2_Docs/Level_Design/Basic_Construction/Mesh_Texturing#UV_Peel)
+  documents an Edge-mode operation, selected edge loops following an arch/road curve, and World
+  Space to maintain texture repetition relative to the world. Its road example shows parallel
+  flow guides. Selected guide edges are not a request to detach geometry or mark every guide as
+  a UV seam. Valve does not publish the numerical algorithm or complete patch/cut policy there.
+- Unconstrained [LSCM](https://brunolevy.github.io/papers/LSCM_SIGGRAPH_2002.pdf) or
+  [ABF++](https://www.cs.ubc.ca/~sheffa/papers/abf_plus_plus.pdf) would preserve a planar curved
+  road's curved parameterization rather than straighten texture flow. The initial guided LSCM
+  implementation, retained for irregular patches after the follow-up below, constrains flow:
+  the reference guide's U coordinates follow physical arc length and its V is zero; other guide
+  chains share a V unknown. Exact variable elimination preserves these constraints during the
+  area-weighted conformal least-squares solve.
+- Column-scaled [LSQR](https://web.stanford.edu/group/SOL/software/lsqr/) supplies a sparse solve
+  without forming normal equations or adding a dependency. Neither conformal optimization nor
+  angle-based flattening is a substitute for explicit foldover/overlap checks. The more complex
+  [SLIM](https://igl.ethz.ch/projects/slim/SLIM2017.pdf) alternative needs a valid initial map and
+  does not itself choose flow guides or seams; it is not an automatic fallback here.
+- Faces incident to selected guides form independent edge-connected patches. Unselected distant
+  faces, coincident objects, and vertex-only contacts do not join a patch. Open disk patches need
+  no cut; supported annuli/tubes receive a deterministic transverse cut in UV corner identities.
+  Ambiguous branches, closed caps, handles, or cuts that do not produce a usable disk are rejected
+  with an explanation. This bounded patch/cut policy is Quader's choice where Valve is silent.
+- World Space defaults on and uses Quader's existing 0.5 tiles per world unit. Off normalizes each
+  chart to one texture. Axis U/V, positive U/V repeat factors, and finite U/V offsets act after
+  the solve. Disconnected charts are not packed into a texture atlas. These scaling/default
+  choices are explicit Quader behavior, not a claim about undocumented Hammer defaults.
+
+Owners and invariants:
+
+- Portable `prepare_uv_peel()` owns patch construction, canonical triangulation, guide constraints,
+  numerical validation, and all-target preparation. Authored per-corner UVs already represent
+  seams; positions, IDs, connectivity, materials, and selection remain unchanged. Existing face
+  texture settings and occurrence sampling C remain intact through the carrier-based inverse
+  solve. Validate actual effective float UVs again before publishing.
+- `QuaderModelingApi::peel_uv()` is the native user-intent boundary. `UvPeelEditContext` owns only
+  scene-local options and stale-selection tokens; setting options creates no document edit or
+  history entry. The Edge-scoped `modeling.uv_peel` command intentionally has no default shortcut.
+  Atomic publication and instance scope use the same existing SDK adapter owners as texture edits.
+- Each changed operation creates one nonmerged UV Peel undo item. Repeat captures options and
+  resolves current guides and transforms. Failures/no-ops preserve document state and redo.
+- The retained UV Peel section is independent of the active tool and keeps fold/dock state.
+  Snapshot and Qt presentation work stay behind revision/value gates; valid pending numeric
+  settings flush before an action, while stale or invalid drafts cannot edit the document.
+- Validate every stored effective triangle, not only representative shared nodes. Float contact
+  is permitted only at shared chart edges or vertices within the measured, bounded corner error;
+  actual folds and unrelated interior overlaps remain invalid. The four-triangle 100-degree fan
+  regression protects global-overlap rejection even when every triangle keeps its orientation.
+- No-op and continuity tolerances scale with chart extent, without a unit-size floor. Tiny positive
+  repeats remain usable; offsets that collapse a chart in stored float UVs fail atomically.
+
+Verification: all 119 SDK consumer tests pass, including 16 UV Peel cases. The affected workflow
+passes 868 native tests and 162 focused guardrails; the 12 new native UV Peel tests, 53 UI layout
+guardrails, and all five command-contract tests also pass. The intentionally updated baseline adds
+only `modeling.uv_peel`; existing command records change only preference fingerprints and their
+composed hashes. The final full regression gate reproduces exactly the 12 saved pre-existing
+failures (seven guardrails and five Linear Array/overlay tests), with identical diagnostics after
+normalizing source locations and addresses. Modeling-domain and SDK parity tests pass. The
+standalone SDK build and consumer tests pass; its nested guardrail run reports the same seven
+existing failures. Version 0.1.66, dependencies, and file formats remain unchanged.
+
+## 2026-08-27 - UV Peel Curve Distortion
+
+Task/context: the first Peel implementation produced visibly wobbling grid textures on a curved
+quad road. Boundary continuity and guide constraints alone did not test the interior texture shape.
+
+Diagnosis and correction:
+
+- Free side rails in guided LSCM drifted despite a straight selected center guide. Separately,
+  ordinary triangle interpolation kinked a rectangular UV chart across the hidden diagonal of a
+  trapezoid. Direct least-squares comparison ruled out LSQR noise; canonical triangulation, carrier
+  storage, mipmaps, linear filtering, and anisotropy were not the cause.
+- `uv_peel.cpp` now passes authored quad node loops, including UV-only cut copies, to the private
+  solver. `uv_peel_solver.cpp` recognizes only complete quad product strips with consistent row
+  and station topology. Every station follows the reference guide's world arc length; transverse
+  metric equations preserve physical widths and keep other selected guides straight. Irregular,
+  mixed, or triangulated patches retain guided LSCM. No automatic remeshing or geometry edit occurs.
+- LSQR's exact stationarity check includes a computed floating-point evaluation-error bound for
+  `A^T(Ax-b)`. Compatible parallel guides must not fail merely because tiny metric roundoff makes
+  the requested relative gradient tolerance unattainable. Existing tolerances, condition/work
+  limits, explicit breakdown verification, and fold/overlap validation remain in force.
+- The existing-vs-desired UV no-op comparison uses each axis's own span. A large U span must not
+  hide a substantial density error in a thin V span (or vice versa). Exact identical base storage
+  remains a separate repeat no-op gate; no geometry-validation tolerance was relaxed.
+- Render-owned `mesh_quad_uv_interpolation.*` derives inverse bilinear correction for safe planar
+  convex four-corner primitives with non-affine UVs. Original corner values and shared edge spacing
+  remain exact. Affine, triangle, nonplanar, folded, ill-conditioned, or ambiguous input keeps the
+  existing interpolation. SDK documents, compiled topology, and persisted UV storage do not change.
+- `mesh_quad_uv.glsl` is shared by lit/unlit mesh materials. CUSTOM3/CUSTOM4 carry the derived
+  correction; both static and dynamic upload paths populate them, and material previews provide
+  zero defaults. Dynamic preparation uses actual deformed positions. Cache identity includes source
+  vertex IDs because eligibility uses them. Lit normal tangents derive from the final corrected UV;
+  occurrence sampling and material transforms retain their existing order and values.
+
+Algorithm references: [inverse bilinear quad interpolation](https://www.reedbeta.com/blog/quadrilateral-interpolation-part-2/)
+and [GPUOpen's quad interpolation analysis](https://gpuopen.com/learn/bilinear-interpolation-quadrilateral-barycentric-coordinates/).
+The implementation derives its compact correction locally; no dependency or external code import.
+
+Verification: five strengthened/new strip-quality checks fail against the preserved original SDK
+libraries and pass with the correction. A separate long/thin-strip regression reproduces the skipped
+density edit before the per-axis tolerance fix and passes afterward for both U and V orientations.
+The complete 123-test SDK suite, ten render interpolation tests, twelve native Peel tests, ten
+material guardrails, the dynamic-upload guardrail, and five command-contract tests pass.
+The baseline update changes only Peel's UV geometry fingerprints and their composed lifecycle hashes
+relative to the prior Peel baseline; all other command records are unchanged by this correction.
+An offscreen Vulkan probe uses the real SDK compile path, MeshRenderableFactory, and both production
+mesh materials to render an asymmetric grid on the curved-road repro. Actual GPU readbacks confirm
+the correction in lit and unlit views with both overhead and oblique perspective cameras, including
+a triangle-only control with identical corner UVs.
+This probe creates no HWND or swapchain and performs no desktop capture or focus manipulation.
+Diagnostic sources, logs, and before/after pixels are under `build/vs2026/uv-peel-regression/`.

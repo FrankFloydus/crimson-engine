@@ -19,8 +19,8 @@ class LocalizationService;
 class QuaderEditorApi;
 
 /**
- * Presents active tool settings, selected-face texture values, and texture
- * actions as retained dock content, independent of the active tool.
+ * Presents active tool settings plus face and edge texture workflows as
+ * retained dock content, independent of the active tool.
  * Call refresh from the host UI update path so activation, value changes, and
  * preview completion are reflected immediately.
  */
@@ -38,6 +38,8 @@ public:
   void refresh();
   /** Refreshes both face sections behind owner and preference revision gates. */
   void refresh_texture_settings();
+  /** Refreshes selected-edge UV Peel controls behind their owner revision gate. */
+  void refresh_uv_peel_settings();
   [[nodiscard]] bool has_active_target() const;
   /**
    * Returns whether a local numeric edit is still in progress or waiting to

@@ -2092,6 +2092,74 @@ TEST(EditorApiTests,
   std::filesystem::remove(path);
 }
 
+TEST(EditorApiTests, UvPeelCommandUsesTypedEdgeScopeAndUnassignedDefault) {
+  CommandTestHarness harness;
+  quader::QuaderEditorApi &editor = harness.editor;
+  const std::filesystem::path path = keybinding_test_path("uv-peel-command");
+  ASSERT_TRUE(editor.commands().set_keybinding_storage_path(path).ok());
+  constexpr auto kCommand = quader::quader_command::kModelingUvPeel;
+  EXPECT_EQ(kCommand.string(), "modeling.uv_peel");
+  EXPECT_TRUE(typed_command_ids().contains(std::string(kCommand.string())));
+  const auto descriptor = editor.commands().descriptor(kCommand);
+  ASSERT_TRUE(descriptor.has_value());
+  EXPECT_EQ(descriptor->label, "UV Peel");
+  EXPECT_FALSE(descriptor->enabled);
+
+  const auto catalog = editor.commands().keybinding_catalog();
+  const auto *entry = find_keybinding_catalog_entry(catalog, kCommand.string());
+  ASSERT_NE(entry, nullptr);
+  EXPECT_EQ(entry->scope_id, "viewport.selection.edge");
+  EXPECT_EQ(entry->localization_key, "command.modeling.uv_peel");
+  EXPECT_TRUE(entry->default_shortcut.empty());
+  EXPECT_TRUE(entry->unassigned);
+  EXPECT_FALSE(entry->customized);
+  EXPECT_TRUE(editor.commands().shortcut_for(kCommand).empty());
+
+  const auto object = create_polygon_mesh(editor, 4u, "UV Peel Command Quad");
+  ASSERT_TRUE(editor.selection().select_edge(object, 1, 2).ok());
+  ASSERT_TRUE(editor.modeling().uv_peel_settings().editable);
+  EXPECT_TRUE(editor.commands().descriptor(kCommand)->enabled);
+  ASSERT_TRUE(editor.preferences().set_shortcut(kCommand, "Ctrl+Alt+F21").ok());
+  quader::ViewportToolState state;
+  state.selection_mode = quader::ViewportSelectionMode::Edge;
+  const auto chord = single_input_chord("Ctrl+Alt+F21");
+  const auto dispatch = editor.commands().dispatch_viewport_input_binding(
+      chord, state, true, false);
+  ASSERT_EQ(dispatch.kind,
+            quader::QuaderViewportKeybindingDispatch::Kind::Command);
+  EXPECT_EQ(dispatch.command_id, kCommand.string());
+  const auto executed = editor.commands().execute(dispatch.command_id);
+  EXPECT_TRUE(executed.ok()) << executed.error_message();
+
+  EXPECT_EQ(editor.commands()
+                .dispatch_viewport_input_binding(
+                    chord, state, true, false, {.navigation_active = true})
+                .kind,
+            quader::QuaderViewportKeybindingDispatch::Kind::NoMatch);
+  EXPECT_EQ(editor.commands()
+                .dispatch_viewport_input_binding(chord, state, false, false)
+                .kind,
+            quader::QuaderViewportKeybindingDispatch::Kind::NoMatch);
+  EXPECT_EQ(editor.commands()
+                .dispatch_viewport_input_binding(chord, state, true, true)
+                .kind,
+            quader::QuaderViewportKeybindingDispatch::Kind::NoMatch);
+  ASSERT_TRUE(editor.selection().select_face(object, 1).ok());
+  state.selection_mode = quader::ViewportSelectionMode::Face;
+  EXPECT_FALSE(editor.commands().descriptor(kCommand)->enabled);
+  EXPECT_EQ(editor.commands()
+                .dispatch_viewport_input_binding(chord, state, true, false)
+                .kind,
+            quader::QuaderViewportKeybindingDispatch::Kind::NoMatch);
+
+  CommandTestHarness reloaded;
+  ASSERT_TRUE(reloaded.editor.commands().set_keybinding_storage_path(path).ok());
+  EXPECT_EQ(reloaded.editor.commands().shortcut_for(kCommand), "Ctrl+Alt+F21");
+  ASSERT_TRUE(reloaded.editor.preferences().reset_shortcut(kCommand).ok());
+  EXPECT_TRUE(reloaded.editor.commands().shortcut_for(kCommand).empty());
+  std::filesystem::remove(path);
+}
+
 TEST(EditorApiTests, KeybindingConflictsAndRemovalSupportRebindingUi) {
   const std::filesystem::path path = keybinding_test_path("conflicts");
   CommandTestHarness harness;
@@ -12681,9 +12749,9 @@ TEST(EditorApiTests,
       editor.commands().keybinding_catalog();
 
 #ifndef NDEBUG
-  EXPECT_EQ(commands.size(), 187u);
-#else
   EXPECT_EQ(commands.size(), 188u);
+#else
+  EXPECT_EQ(commands.size(), 189u);
 #endif
 
   std::unordered_set<std::string> expected_target_ids;

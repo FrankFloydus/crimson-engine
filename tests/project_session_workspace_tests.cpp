@@ -246,6 +246,72 @@ TEST(ProjectSessionWorkspace, KeepsSceneHistoryAndSelectionIndependent) {
 }
 
 TEST(ProjectSessionWorkspace,
+     UvPeelOptionsAndSelectionTokensStayWithinSceneSessions) {
+  ScopedProjectSessionDirectory temporary("uv-peel-sessions");
+  ProjectSession project;
+  const auto created = project.create(temporary.make_empty_child("UvPeel"));
+  ASSERT_TRUE(created.ok) << created.message;
+  ASSERT_TRUE(created.scene_session_id.has_value());
+  OpenSceneSession *first = project.find(*created.scene_session_id);
+  ASSERT_NE(first, nullptr);
+  QuaderEditorApi editor(project);
+  const QuaderUvPeelOptions first_options{
+      .axis = QuaderUvPeelAxis::V,
+      .world_space = false,
+      .u_repeat = 2.0,
+      .v_repeat = 3.0,
+      .u_offset = -0.25,
+      .v_offset = 0.5,
+  };
+  const auto first_history = editor.history().snapshot();
+  ASSERT_TRUE(editor.modeling().set_uv_peel_options(first_options).changed());
+  EXPECT_FALSE(first->dirty());
+  EXPECT_EQ(editor.history().snapshot().undo_label, first_history.undo_label);
+  const auto first_box = editor.modeling().create_box(
+      {.min = {-1, -1, -1}, .max = {1, 1, 1}}, "First guide");
+  ASSERT_TRUE(first_box.ok()) << first_box.error_message();
+  ASSERT_TRUE(editor.selection().select_edge(first_box.value(), 1, 2).ok());
+  const auto first_token = editor.modeling().uv_peel_settings().selection_token;
+
+  const auto added = editor.scene_documents().new_scene();
+  ASSERT_TRUE(added.ok()) << added.error_message();
+  OpenSceneSession *second = project.find(added.value());
+  ASSERT_NE(second, nullptr);
+  ASSERT_NE(first->session.get(), second->session.get());
+  EXPECT_EQ(editor.modeling().uv_peel_settings().options, QuaderUvPeelOptions{});
+  const QuaderUvPeelOptions second_options{.u_repeat = 4.0, .v_offset = -2.0};
+  ASSERT_TRUE(editor.modeling().set_uv_peel_options(second_options).changed());
+  EXPECT_FALSE(second->dirty());
+  EXPECT_FALSE(editor.history().can_undo());
+  const auto second_box = editor.modeling().create_box(
+      {.min = {-1, -1, -1}, .max = {1, 1, 1}}, "Second guide");
+  ASSERT_TRUE(second_box.ok()) << second_box.error_message();
+  ASSERT_TRUE(editor.selection().select_edge(second_box.value(), 1, 2).ok());
+  EXPECT_NE(editor.modeling().uv_peel_settings().selection_token, first_token);
+  const auto before_content = second->session->modeling().content_revision();
+  const auto before_scene = second->session->scene().revision();
+  const auto before_assets = second->session->assets().revision();
+  const auto before_history = editor.history().snapshot();
+  const auto stale = editor.modeling().peel_uv({
+      .options = first_options, .selection_token = first_token,
+  });
+  EXPECT_FALSE(stale.ok());
+  EXPECT_FALSE(stale.changed());
+  EXPECT_EQ(second->session->modeling().content_revision(), before_content);
+  EXPECT_EQ(second->session->scene().revision(), before_scene);
+  EXPECT_EQ(second->session->assets().revision(), before_assets);
+  EXPECT_EQ(editor.history().snapshot().undo_label, before_history.undo_label);
+  EXPECT_EQ(editor.history().snapshot().redo_label, before_history.redo_label);
+
+  ASSERT_TRUE(editor.scene_documents().activate(first->session_id).ok());
+  EXPECT_EQ(editor.modeling().uv_peel_settings().options, first_options);
+  EXPECT_EQ(editor.modeling().uv_peel_settings().selected_edge_count, 1u);
+  ASSERT_TRUE(editor.scene_documents().activate(second->session_id).ok());
+  EXPECT_EQ(editor.modeling().uv_peel_settings().options, second_options);
+  EXPECT_EQ(editor.modeling().uv_peel_settings().selected_edge_count, 1u);
+}
+
+TEST(ProjectSessionWorkspace,
      NewScenesStartWithIndependentCanonicalPerspectiveCameras) {
   ScopedProjectSessionDirectory temporary("independent-cameras");
   ProjectSession project;

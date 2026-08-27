@@ -12,6 +12,7 @@
 #include "render/filament_buffer_descriptor_factory.hpp"
 #include "render/filament_utils.hpp"
 #include "render/material_binding_service.hpp"
+#include "render/mesh_quad_uv_interpolation.hpp"
 #include "render/mesh_surface_grid_projection.hpp"
 #include "render/render_signature_builder.hpp"
 
@@ -48,6 +49,8 @@ struct RenderVertex {
     filament::math::float4 surface_grid_projection;
     filament::math::float4 uv_carrier;
     filament::math::float3 uv_geometric_normal;
+    filament::math::float4 quad_uv_coordinates;
+    filament::math::float4 quad_uv_correction;
     std::uint32_t color;
 };
 
@@ -59,6 +62,8 @@ struct DynamicRenderVertexStatic {
     filament::math::float4 surface_grid_projection;
     filament::math::float4 uv_carrier;
     filament::math::float3 uv_geometric_normal;
+    filament::math::float4 quad_uv_coordinates;
+    filament::math::float4 quad_uv_correction;
     std::uint32_t color;
 };
 
@@ -200,18 +205,23 @@ mesh_tangent_frames(const RenderMeshAssetSnapshot &mesh) {
 }
 
 std::vector<RenderVertex>
-build_render_vertices(const RenderMeshAssetSnapshot &mesh) {
+build_render_vertices(const RenderMeshAssetSnapshot &mesh,
+                      std::span<const QVec3> positions = {}) {
   const std::vector<filament::math::float4> tangent_frames =
       mesh_tangent_frames(mesh);
   const std::vector<MeshSurfaceGridVertexProjection> grid_projections =
       build_mesh_surface_grid_vertex_projections(
           mesh.vertices, mesh.indices, mesh.primitives);
+  const std::vector<MeshQuadUvInterpolation> quad_interpolations =
+      build_mesh_quad_uv_interpolations(mesh.vertices, mesh.indices,
+                                       mesh.primitives, positions);
   std::vector<RenderVertex> vertices;
   vertices.reserve(mesh.vertices.size());
   for (std::size_t index = 0u; index < mesh.vertices.size(); ++index) {
     const MeshVertex &vertex = mesh.vertices[index];
     const MeshSurfaceGridVertexProjection &grid_projection =
         grid_projections[index];
+    const MeshQuadUvInterpolation &quad = quad_interpolations[index];
     vertices.push_back({
         to_filament(vertex.position),
         tangent_frames[index],
@@ -222,6 +232,10 @@ build_render_vertices(const RenderMeshAssetSnapshot &mesh) {
         {vertex.uv_carrier[0], vertex.uv_carrier[1], vertex.uv_carrier[2],
          vertex.uv_carrier[3]},
         to_filament(vertex.uv_geometric_normal),
+        {quad.coordinates.x, quad.coordinates.y, quad.coordinates.z,
+         quad.enabled ? 1.0f : 0.0f},
+        {quad.geometry_warp.x, quad.geometry_warp.y, quad.uv_correction.x,
+         quad.uv_correction.y},
         vertex.rgba,
     });
   }
@@ -239,6 +253,8 @@ pack_dynamic_static_vertices(std::span<const RenderVertex> vertices) {
         .surface_grid_projection = vertex.surface_grid_projection,
         .uv_carrier = vertex.uv_carrier,
         .uv_geometric_normal = vertex.uv_geometric_normal,
+        .quad_uv_coordinates = vertex.quad_uv_coordinates,
+        .quad_uv_correction = vertex.quad_uv_correction,
         .color = vertex.color,
     });
   }
@@ -299,6 +315,7 @@ bool same_vertex(const MeshVertex &left, const MeshVertex &right) {
          left.normal.x == right.normal.x && left.normal.y == right.normal.y &&
          left.normal.z == right.normal.z && left.uv.x == right.uv.x &&
          left.uv.y == right.uv.y && left.rgba == right.rgba &&
+         left.source_vertex_id == right.source_vertex_id &&
          left.uv_carrier == right.uv_carrier &&
          left.uv_geometric_normal.x == right.uv_geometric_normal.x &&
          left.uv_geometric_normal.y == right.uv_geometric_normal.y &&
@@ -317,6 +334,7 @@ std::uint64_t geometry_payload_signature(
         .add_vec3(vertex.normal)
         .add_vec2(vertex.uv)
         .add_vec3(vertex.uv_geometric_normal)
+        .add_value(vertex.source_vertex_id)
         .add_value(vertex.rgba);
     for (const float coefficient : vertex.uv_carrier) {
       signature.add_float(coefficient);
@@ -536,6 +554,14 @@ bool MeshRenderableFactory::acquire_geometry(
                      AttributeType::FLOAT3,
                      offsetof(RenderVertex, uv_geometric_normal),
                      sizeof(RenderVertex))
+          .attribute(filament::VertexAttribute::CUSTOM3, 0,
+                     AttributeType::FLOAT4,
+                     offsetof(RenderVertex, quad_uv_coordinates),
+                     sizeof(RenderVertex))
+          .attribute(filament::VertexAttribute::CUSTOM4, 0,
+                     AttributeType::FLOAT4,
+                     offsetof(RenderVertex, quad_uv_correction),
+                     sizeof(RenderVertex))
           .normalized(filament::VertexAttribute::COLOR)
           .build(*engine_);
   resource->vertex_buffer->setBufferAt(
@@ -574,7 +600,8 @@ bool MeshRenderableFactory::acquire_dynamic_geometry(
        dynamic_positions.size() != mesh.vertices.size())) {
     return false;
   }
-  const std::vector<RenderVertex> vertices = build_render_vertices(mesh);
+  const std::vector<RenderVertex> vertices =
+      build_render_vertices(mesh, dynamic_positions);
   std::vector<filament::math::float3> positions;
   positions.reserve(vertices.size());
   for (std::size_t index = 0u; index < vertices.size(); ++index) {
@@ -614,6 +641,14 @@ bool MeshRenderableFactory::acquire_dynamic_geometry(
           .attribute(filament::VertexAttribute::CUSTOM2, 1,
                      AttributeType::FLOAT3,
                      offsetof(DynamicRenderVertexStatic, uv_geometric_normal),
+                     sizeof(DynamicRenderVertexStatic))
+          .attribute(filament::VertexAttribute::CUSTOM3, 1,
+                     AttributeType::FLOAT4,
+                     offsetof(DynamicRenderVertexStatic, quad_uv_coordinates),
+                     sizeof(DynamicRenderVertexStatic))
+          .attribute(filament::VertexAttribute::CUSTOM4, 1,
+                     AttributeType::FLOAT4,
+                     offsetof(DynamicRenderVertexStatic, quad_uv_correction),
                      sizeof(DynamicRenderVertexStatic))
           .normalized(filament::VertexAttribute::COLOR)
           .build(*engine_);
@@ -795,7 +830,7 @@ bool MeshRenderableFactory::update_dynamic_geometry(
   {
     QDR_PROFILE_SCOPE("Mesh dynamic derived attributes pack");
     const std::vector<RenderVertex> render_vertices =
-        build_render_vertices(mesh);
+        build_render_vertices(mesh, dynamic_positions);
     std::vector<DynamicRenderVertexStatic> static_vertices =
         pack_dynamic_static_vertices(render_vertices);
     proxy.vertex_buffer->setBufferAt(

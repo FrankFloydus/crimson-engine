@@ -5390,6 +5390,1590 @@ TEST(ModelingSdkConsumerTests,
   }
 }
 
+/// Stores a public authored strip and its ordered longitudinal vertex rails.
+struct UvPeelStripFixture {
+  AuthoredTopology topology;
+  std::vector<std::vector<VertexId>> rails;
+};
+
+[[nodiscard]] UvPeelStripFixture make_uv_peel_strip(
+    const std::vector<std::vector<Vec3>> &rail_positions, bool closed,
+    bool authored_uvs = false, FaceTextureTransform texture_transform = {}) {
+  UvPeelStripFixture fixture;
+  if (rail_positions.size() < 2U || rail_positions.front().size() < 2U) {
+    return fixture;
+  }
+  const std::size_t station_count = rail_positions.front().size();
+  for (const auto &rail : rail_positions) {
+    if (rail.size() != station_count) {
+      return {};
+    }
+  }
+  fixture.rails.resize(rail_positions.size());
+  for (std::size_t rail = 0U; rail < rail_positions.size(); ++rail) {
+    for (std::size_t station = 0U; station < station_count; ++station) {
+      const VertexId id = make_id<VertexTag>(
+          static_cast<std::uint32_t>(fixture.topology.vertices.size() + 1U));
+      fixture.topology.vertices.push_back({id, rail_positions[rail][station]});
+      fixture.rails[rail].push_back(id);
+    }
+  }
+  const std::size_t segment_count = closed ? station_count : station_count - 1U;
+  for (std::size_t rail = 0U; rail + 1U < fixture.rails.size(); ++rail) {
+    for (std::size_t segment = 0U; segment < segment_count; ++segment) {
+      const std::size_t next = (segment + 1U) % station_count;
+      AuthoredTopologyFace face{
+          .id = make_id<FaceTag>(
+              static_cast<std::uint32_t>(fixture.topology.faces.size() + 1U)),
+          .vertices = {fixture.rails[rail][segment],
+                       fixture.rails[rail + 1U][segment],
+                       fixture.rails[rail + 1U][next],
+                       fixture.rails[rail][next]},
+          .material_slot = static_cast<std::uint32_t>(rail * 7U + segment + 1U),
+          .texture_transform = texture_transform,
+      };
+      if (authored_uvs) {
+        const float seed = static_cast<float>(face.id.index) * 0.17F;
+        face.uvs = {{seed + 0.2F, -seed + 0.1F},
+                    {seed + 1.3F, -seed + 0.25F},
+                    {seed + 1.5F, -seed + 2.1F},
+                    {seed - 0.2F, -seed + 1.7F}};
+      }
+      fixture.topology.faces.push_back(std::move(face));
+    }
+  }
+  fixture.topology.next_vertex_id =
+      static_cast<std::uint32_t>(fixture.topology.vertices.size() + 1U);
+  fixture.topology.next_face_id =
+      static_cast<std::uint32_t>(fixture.topology.faces.size() + 1U);
+  return fixture;
+}
+
+[[nodiscard]] std::vector<EdgeKey>
+uv_peel_rail_edges(std::span<const VertexId> rail, bool closed) {
+  std::vector<EdgeKey> edges;
+  if (rail.size() < 2U) {
+    return edges;
+  }
+  edges.reserve(closed ? rail.size() : rail.size() - 1U);
+  for (std::size_t index = 0U; index + 1U < rail.size(); ++index) {
+    edges.push_back(make_edge_key(rail[index], rail[index + 1U]));
+  }
+  if (closed) {
+    edges.push_back(make_edge_key(rail.back(), rail.front()));
+  }
+  return edges;
+}
+
+[[nodiscard]] UvPeelTarget uv_peel_target(
+    const PolygonDocument &document, std::uint64_t key,
+    std::vector<EdgeKey> edges, std::optional<EdgeKey> active = std::nullopt,
+    Transform3 world_from_local = {}, Transform3 sampling_from_local = {}) {
+  return {.key = key, .document = &document, .edges = std::move(edges),
+          .active_edge = active, .world_from_local = world_from_local,
+          .sampling_from_local = sampling_from_local};
+}
+
+[[nodiscard]] const PreparedUvPeelDocument *prepared_uv_peel_document(
+    const PreparedUvPeel &prepared, std::uint64_t key) {
+  const auto found = std::ranges::find(
+      prepared.documents, key, &PreparedUvPeelDocument::key);
+  return found == prepared.documents.end() ? nullptr : &*found;
+}
+
+[[nodiscard]] const AuthoredTopologyFace *uv_peel_face(
+    const AuthoredTopology &topology, FaceId id) {
+  const auto found =
+      std::ranges::find(topology.faces, id, &AuthoredTopologyFace::id);
+  return found == topology.faces.end() ? nullptr : &*found;
+}
+
+[[nodiscard]] std::optional<Vec3>
+uv_peel_position(const AuthoredTopology &topology, VertexId id) {
+  const auto found =
+      std::ranges::find(topology.vertices, id, &AuthoredTopologyVertex::id);
+  return found == topology.vertices.end()
+             ? std::nullopt
+             : std::optional<Vec3>{found->position};
+}
+
+[[nodiscard]] std::optional<Vec2>
+uv_peel_effective_corner(const AuthoredTopologyFace &face, VertexId id) {
+  if (face.uvs.size() != face.vertices.size()) {
+    return std::nullopt;
+  }
+  const auto found = std::ranges::find(face.vertices, id);
+  if (found == face.vertices.end()) {
+    return std::nullopt;
+  }
+  const std::size_t corner =
+      static_cast<std::size_t>(found - face.vertices.begin());
+  return expected_texture_uv(face.uvs[corner], face.texture_transform);
+}
+
+[[nodiscard]] std::vector<Vec2>
+uv_peel_effective_vertex_samples(const AuthoredTopology &topology,
+                                 VertexId id) {
+  std::vector<Vec2> samples;
+  for (const auto &face : topology.faces) {
+    if (const auto uv = uv_peel_effective_corner(face, id)) {
+      samples.push_back(*uv);
+    }
+  }
+  return samples;
+}
+
+[[nodiscard]] Vec3 uv_peel_transform_point(const Transform3 &transform,
+                                           Vec3 point) {
+  return {
+      transform.origin.x + transform.x_axis.x * point.x +
+          transform.y_axis.x * point.y + transform.z_axis.x * point.z,
+      transform.origin.y + transform.x_axis.y * point.x +
+          transform.y_axis.y * point.y + transform.z_axis.y * point.z,
+      transform.origin.z + transform.x_axis.z * point.x +
+          transform.y_axis.z * point.y + transform.z_axis.z * point.z,
+  };
+}
+
+[[nodiscard]] float uv_peel_distance(Vec3 first, Vec3 second) {
+  const double x = static_cast<double>(second.x) - first.x;
+  const double y = static_cast<double>(second.y) - first.y;
+  const double z = static_cast<double>(second.z) - first.z;
+  return static_cast<float>(std::sqrt(x * x + y * y + z * z));
+}
+
+void expect_uv_peel_guide(const AuthoredTopology &topology,
+                          std::span<const VertexId> guide,
+                          const Transform3 &world_from_local,
+                          UvPeelAxis axis, float repeat = 1.0F,
+                          float tolerance = 0.002F) {
+  ASSERT_GE(guide.size(), 2U);
+  std::vector<Vec2> samples;
+  samples.reserve(guide.size());
+  for (const VertexId id : guide) {
+    const auto at_vertex = uv_peel_effective_vertex_samples(topology, id);
+    ASSERT_FALSE(at_vertex.empty());
+    for (const Vec2 uv : at_vertex) {
+      expect_vec2_near(uv, at_vertex.front(), tolerance);
+    }
+    samples.push_back(at_vertex.front());
+  }
+  const auto along = [axis](Vec2 value) {
+    return axis == UvPeelAxis::U ? value.x : value.y;
+  };
+  const auto across = [axis](Vec2 value) {
+    return axis == UvPeelAxis::U ? value.y : value.x;
+  };
+  Transform3 linear_world = world_from_local;
+  linear_world.origin = {};
+  for (std::size_t index = 0U; index + 1U < guide.size(); ++index) {
+    const auto first = uv_peel_position(topology, guide[index]);
+    const auto second = uv_peel_position(topology, guide[index + 1U]);
+    ASSERT_TRUE(first.has_value());
+    ASSERT_TRUE(second.has_value());
+    const float expected = 0.5F * repeat * uv_peel_distance(
+        uv_peel_transform_point(linear_world, *first),
+        uv_peel_transform_point(linear_world, *second));
+    EXPECT_NEAR(along(samples[index + 1U]) - along(samples[index]),
+                expected, tolerance);
+    EXPECT_NEAR(across(samples[index + 1U]), across(samples[index]), tolerance);
+  }
+}
+
+void expect_uv_peel_strip_station_metric(
+    const AuthoredTopology &topology,
+    const std::vector<std::vector<VertexId>> &rails, std::size_t reference,
+    const Transform3 &world_from_local, bool preserve_cross_edge_widths = true) {
+  ASSERT_LT(reference, rails.size());
+  ASSERT_FALSE(rails[reference].empty());
+  for (const auto &rail : rails) {
+    ASSERT_EQ(rail.size(), rails[reference].size());
+  }
+  Transform3 linear_world = world_from_local;
+  linear_world.origin = {};
+  float reference_u = 0.0F;
+  for (std::size_t station = 0U; station < rails[reference].size(); ++station) {
+    SCOPED_TRACE(station);
+    if (station != 0U) {
+      const auto first = uv_peel_position(topology, rails[reference][station - 1U]);
+      const auto second = uv_peel_position(topology, rails[reference][station]);
+      ASSERT_TRUE(first.has_value());
+      ASSERT_TRUE(second.has_value());
+      reference_u += 0.5F * uv_peel_distance(
+          uv_peel_transform_point(linear_world, *first),
+          uv_peel_transform_point(linear_world, *second));
+    }
+    std::optional<Vec2> previous;
+    for (std::size_t rail = 0U; rail < rails.size(); ++rail) {
+      SCOPED_TRACE(rail);
+      const auto samples =
+          uv_peel_effective_vertex_samples(topology, rails[rail][station]);
+      ASSERT_FALSE(samples.empty());
+      for (const Vec2 uv : samples) {
+        EXPECT_NEAR(uv.x, reference_u, 2.0e-5F);
+        expect_vec2_near(uv, samples.front(), 2.0e-5F);
+      }
+      if (previous.has_value() && preserve_cross_edge_widths) {
+        const auto first = uv_peel_position(topology, rails[rail - 1U][station]);
+        const auto second = uv_peel_position(topology, rails[rail][station]);
+        ASSERT_TRUE(first.has_value());
+        ASSERT_TRUE(second.has_value());
+        const float expected_width = 0.5F * uv_peel_distance(
+            uv_peel_transform_point(linear_world, *first),
+            uv_peel_transform_point(linear_world, *second));
+        EXPECT_NEAR(std::abs(samples.front().y - previous->y), expected_width,
+                    2.0e-5F);
+      }
+      previous = samples.front();
+    }
+  }
+}
+
+void expect_uv_peel_preserves_document(const PolygonDocument &source,
+                                       const PreparedUvPeelDocument &prepared) {
+  EXPECT_TRUE(prepared.document.has_same_geometry(source));
+  EXPECT_EQ(prepared.document.vertex_ids(), source.vertex_ids());
+  EXPECT_EQ(prepared.document.edge_ids(), source.edge_ids());
+  EXPECT_EQ(prepared.document.face_ids(), source.face_ids());
+  EXPECT_EQ(prepared.document.hard_edge_ids(), source.hard_edge_ids());
+  EXPECT_EQ(prepared.document.selection_revision(), source.selection_revision());
+  EXPECT_TRUE(prepared.document.shares_selection_with(source));
+  const auto before = source.authored_topology();
+  const auto after = prepared.document.authored_topology();
+  ASSERT_TRUE(before.ok());
+  ASSERT_TRUE(after.ok());
+  ASSERT_EQ(before.value().faces.size(), after.value().faces.size());
+  for (std::size_t index = 0U; index < before.value().faces.size(); ++index) {
+    EXPECT_EQ(after.value().faces[index].id, before.value().faces[index].id);
+    EXPECT_EQ(after.value().faces[index].vertices,
+              before.value().faces[index].vertices);
+    EXPECT_EQ(after.value().faces[index].material_slot,
+              before.value().faces[index].material_slot);
+    EXPECT_EQ(after.value().faces[index].shading,
+              before.value().faces[index].shading);
+    EXPECT_EQ(after.value().faces[index].texture_transform,
+              before.value().faces[index].texture_transform);
+  }
+  EXPECT_TRUE(prepared.receipt.changed);
+  EXPECT_TRUE(prepared.receipt.dirty.geometry);
+  EXPECT_FALSE(prepared.receipt.dirty.topology);
+  EXPECT_FALSE(prepared.receipt.dirty.materials);
+  EXPECT_FALSE(prepared.receipt.dirty.selection);
+}
+
+void expect_uv_peel_relation(const PolygonDocument &source,
+                             const PolygonDocument &transformed,
+                             float uu, float uv, float vu, float vv,
+                             Vec2 offset, float tolerance = 0.002F) {
+  const auto before = source.authored_topology();
+  const auto after = transformed.authored_topology();
+  ASSERT_TRUE(before.ok());
+  ASSERT_TRUE(after.ok());
+  for (const auto &face : before.value().faces) {
+    const auto *changed = uv_peel_face(after.value(), face.id);
+    ASSERT_NE(changed, nullptr);
+    if (face.uvs.empty()) {
+      EXPECT_TRUE(changed->uvs.empty());
+      continue;
+    }
+    ASSERT_EQ(face.vertices.size(), changed->vertices.size());
+    for (const VertexId vertex : face.vertices) {
+      const auto first = uv_peel_effective_corner(face, vertex);
+      const auto second = uv_peel_effective_corner(*changed, vertex);
+      ASSERT_TRUE(first.has_value());
+      ASSERT_TRUE(second.has_value());
+      expect_vec2_near(*second,
+                       {uu * first->x + uv * first->y + offset.x,
+                        vu * first->x + vv * first->y + offset.y},
+                       tolerance);
+    }
+  }
+}
+
+[[nodiscard]] UvPeelStripFixture make_uv_peel_flat_strip(
+    bool authored_uvs = false, FaceTextureTransform transform = {}) {
+  std::vector<std::vector<Vec3>> rails;
+  for (const float y : {2.0F, 1.0F, 0.0F}) {
+    rails.push_back({{0.0F, y, 0.0F}, {2.0F, y, 0.0F}, {4.0F, y, 0.0F}});
+  }
+  return make_uv_peel_strip(rails, false, authored_uvs, transform);
+}
+
+[[nodiscard]] UvPeelStripFixture make_uv_peel_curved_strip(
+    bool authored_uvs = false, FaceTextureTransform transform = {}) {
+  constexpr float kQuarterArcStep = 0.3141592653589793F;
+  std::vector<std::vector<Vec3>> rails;
+  for (const float radius : {2.0F, 3.0F, 4.0F}) {
+    std::vector<Vec3> points;
+    for (int station = 0; station < 6; ++station) {
+      const float angle = static_cast<float>(station) * kQuarterArcStep;
+      points.push_back({radius * std::cos(angle), radius * std::sin(angle), 0.0F});
+    }
+    rails.push_back(std::move(points));
+  }
+  return make_uv_peel_strip(rails, false, authored_uvs, transform);
+}
+
+void expect_uv_peel_unfolded_faces(const AuthoredTopology &topology,
+                                  double minimum_area = 0.00001) {
+  std::optional<double> orientation;
+  for (const auto &face : topology.faces) {
+    if (face.uvs.empty()) {
+      continue;
+    }
+    ASSERT_EQ(face.uvs.size(), face.vertices.size());
+    double area = 0.0;
+    for (std::size_t index = 0U; index < face.vertices.size(); ++index) {
+      const Vec2 first = expected_texture_uv(face.uvs[index], face.texture_transform);
+      const Vec2 second = expected_texture_uv(
+          face.uvs[(index + 1U) % face.uvs.size()], face.texture_transform);
+      ASSERT_TRUE(std::isfinite(first.x));
+      ASSERT_TRUE(std::isfinite(first.y));
+      area += static_cast<double>(first.x) * second.y -
+              static_cast<double>(first.y) * second.x;
+    }
+    EXPECT_GT(std::abs(area), minimum_area);
+    if (orientation.has_value()) {
+      EXPECT_GT(area * *orientation, 0.0);
+    } else {
+      orientation = area;
+    }
+  }
+  EXPECT_TRUE(orientation.has_value());
+}
+
+TEST(ModelingSdkConsumerTests,
+     UvPeelStraightensCurvedRoadGuidesAtPhysicalDensityWithoutAProjectionShortcut) {
+  const FaceTextureTransform transform{
+      .scale = {-2.0F, 0.5F}, .shift_uv = {0.25F, -0.75F},
+      .rotation_degrees = 30.0F,
+  };
+  for (const bool authored : {false, true}) {
+    SCOPED_TRACE(authored);
+    const auto fixture = make_uv_peel_curved_strip(authored, transform);
+    auto document = PolygonDocument::from_authored_topology(fixture.topology);
+    ASSERT_TRUE(document.ok()) << document.error_message();
+    const auto edges = uv_peel_rail_edges(fixture.rails[1], false);
+    ASSERT_TRUE(document.value().select_edges(edges).ok());
+    const std::array targets{uv_peel_target(document.value(), 11U, edges, edges.front())};
+    const auto original_identity = document.value().content_identity();
+    const auto result = prepare_uv_peel(targets, {});
+    ASSERT_TRUE(result.ok()) << result.error_message();
+    ASSERT_TRUE(result.value().changed);
+    const auto *prepared = prepared_uv_peel_document(result.value(), 11U);
+    ASSERT_NE(prepared, nullptr);
+    expect_uv_peel_preserves_document(document.value(), *prepared);
+    const auto topology = prepared->document.authored_topology();
+    ASSERT_TRUE(topology.ok());
+    expect_uv_peel_guide(topology.value(), fixture.rails[1], {}, UvPeelAxis::U);
+    expect_uv_peel_strip_station_metric(topology.value(), fixture.rails, 1U, {});
+    for (const auto &rail : fixture.rails) {
+      const auto start = uv_peel_effective_vertex_samples(topology.value(), rail.front());
+      ASSERT_FALSE(start.empty());
+      for (const VertexId vertex : rail) {
+        const auto samples = uv_peel_effective_vertex_samples(topology.value(), vertex);
+        ASSERT_FALSE(samples.empty());
+        EXPECT_NEAR(samples.front().y, start.front().y, 2.0e-5F);
+      }
+    }
+    expect_uv_peel_unfolded_faces(topology.value());
+    const auto first = uv_peel_position(topology.value(), fixture.rails[1].front());
+    const auto last = uv_peel_position(topology.value(), fixture.rails[1].back());
+    ASSERT_TRUE(first.has_value());
+    ASSERT_TRUE(last.has_value());
+    // A world-axis planar projection changes V along this curved guide;
+    // peeling must instead keep every incident corner on a straight UV line.
+    EXPECT_GT(std::abs(last->y - first->y) * 0.5F, 1.0F);
+    EXPECT_EQ(document.value().content_identity(), original_identity);
+  }
+}
+
+TEST(ModelingSdkConsumerTests,
+     UvPeelSupportsParallelGuidesWithoutCuttingTheirSharedFaceCorners) {
+  const auto fixture = make_uv_peel_curved_strip();
+  auto document = PolygonDocument::from_authored_topology(fixture.topology);
+  ASSERT_TRUE(document.ok());
+  std::vector<EdgeKey> edges;
+  for (const auto &rail : fixture.rails) {
+    const auto rail_edges = uv_peel_rail_edges(rail, false);
+    edges.insert(edges.end(), rail_edges.begin(), rail_edges.end());
+  }
+  const auto reference = make_edge_key(fixture.rails[1][0], fixture.rails[1][1]);
+  const std::array targets{uv_peel_target(document.value(), 1U, edges, reference)};
+  const auto result = prepare_uv_peel(targets, {});
+  ASSERT_TRUE(result.ok()) << result.error_message();
+  const auto *prepared = prepared_uv_peel_document(result.value(), 1U);
+  ASSERT_NE(prepared, nullptr);
+  expect_uv_peel_preserves_document(document.value(), *prepared);
+  const auto topology = prepared->document.authored_topology();
+  ASSERT_TRUE(topology.ok());
+  expect_uv_peel_guide(topology.value(), fixture.rails[1], {}, UvPeelAxis::U);
+  expect_uv_peel_strip_station_metric(topology.value(), fixture.rails, 1U, {});
+  for (const auto &rail : fixture.rails) {
+    std::optional<Vec2> previous;
+    for (const VertexId vertex : rail) {
+      const auto samples = uv_peel_effective_vertex_samples(topology.value(), vertex);
+      ASSERT_FALSE(samples.empty());
+      for (const Vec2 uv : samples) {
+        expect_vec2_near(uv, samples.front(), 0.002F);
+      }
+      if (previous.has_value()) {
+        EXPECT_NEAR(samples.front().y, previous->y, 0.002F);
+        EXPECT_GT(samples.front().x, previous->x);
+      }
+      previous = samples.front();
+    }
+  }
+  const auto inner = uv_peel_effective_vertex_samples(topology.value(), fixture.rails[0][0]);
+  const auto outer = uv_peel_effective_vertex_samples(topology.value(), fixture.rails[2][0]);
+  ASSERT_FALSE(inner.empty());
+  ASSERT_FALSE(outer.empty());
+  EXPECT_GT(std::abs(inner.front().y - outer.front().y), 0.25F);
+  expect_uv_peel_unfolded_faces(topology.value());
+}
+
+TEST(ModelingSdkConsumerTests,
+     UvPeelFollowsBentTwistedRoadArclengthUnderTheObjectWorldTransform) {
+  constexpr std::array<Vec3, 5> kCenters{{
+      {0.0F, 0.0F, 0.0F}, {2.0F, 0.0F, 0.0F}, {4.0F, 0.0F, 1.0F},
+      {6.0F, 0.0F, 2.0F}, {8.0F, 0.0F, 2.0F},
+  }};
+  constexpr std::array<Vec3, 5> kWidths{{
+      {0.0F, 1.0F, 0.0F}, {0.0F, 0.98F, 0.2F}, {0.0F, 0.866F, 0.5F},
+      {0.0F, 0.7F, 0.7F}, {0.0F, 0.5F, 0.866F},
+  }};
+  std::vector<std::vector<Vec3>> rails;
+  for (const float side : {-1.0F, 0.0F, 1.0F}) {
+    std::vector<Vec3> points;
+    for (std::size_t index = 0U; index < kCenters.size(); ++index) {
+      points.push_back({kCenters[index].x + side * kWidths[index].x,
+                        kCenters[index].y + side * kWidths[index].y,
+                        kCenters[index].z + side * kWidths[index].z});
+    }
+    rails.push_back(std::move(points));
+  }
+  const auto fixture = make_uv_peel_strip(rails, false);
+  auto document = PolygonDocument::from_authored_topology(fixture.topology);
+  ASSERT_TRUE(document.ok()) << document.error_message();
+  const auto edges = uv_peel_rail_edges(fixture.rails[1], false);
+  const Transform3 world{
+      .x_axis = {0.0F, 2.0F, 0.0F}, .y_axis = {-1.5F, 0.0F, 0.0F},
+      .z_axis = {0.0F, 0.0F, 0.75F}, .origin = {11.0F, -7.0F, 3.0F},
+  };
+  const std::array targets{
+      uv_peel_target(document.value(), 1U, edges, edges.front(), world)};
+  const auto result = prepare_uv_peel(targets, {});
+  ASSERT_TRUE(result.ok()) << result.error_message();
+  const auto *prepared = prepared_uv_peel_document(result.value(), 1U);
+  ASSERT_NE(prepared, nullptr);
+  expect_uv_peel_preserves_document(document.value(), *prepared);
+  const auto topology = prepared->document.authored_topology();
+  ASSERT_TRUE(topology.ok());
+  expect_uv_peel_guide(topology.value(), fixture.rails[1], world, UvPeelAxis::U);
+  expect_uv_peel_strip_station_metric(topology.value(), fixture.rails, 1U, world);
+  expect_uv_peel_unfolded_faces(topology.value());
+}
+
+TEST(ModelingSdkConsumerTests,
+     UvPeelStructuredRoadMappingIsInvariantToCyclicAuthoredCornerOrder) {
+  const auto fixture = make_uv_peel_curved_strip(
+      true, {.scale = {-1.5F, 0.75F}, .shift_uv = {0.2F, -0.3F},
+             .rotation_degrees = 37.0F});
+  auto source = PolygonDocument::from_authored_topology(fixture.topology);
+  ASSERT_TRUE(source.ok());
+  const auto edges = uv_peel_rail_edges(fixture.rails[1], false);
+  const Transform3 world{
+      .x_axis = {0.0F, 1.5F, 0.25F}, .y_axis = {-2.0F, 0.0F, 0.5F},
+      .z_axis = {0.0F, 0.0F, 1.0F}, .origin = {17.0F, -31.0F, 11.0F}};
+  const std::array source_targets{
+      uv_peel_target(source.value(), 1U, edges, edges.front(), world)};
+  const auto baseline = prepare_uv_peel(source_targets, {});
+  ASSERT_TRUE(baseline.ok()) << baseline.error_message();
+  const auto *baseline_document = prepared_uv_peel_document(baseline.value(), 1U);
+  ASSERT_NE(baseline_document, nullptr);
+  const auto baseline_topology = baseline_document->document.authored_topology();
+  ASSERT_TRUE(baseline_topology.ok());
+  expect_uv_peel_strip_station_metric(baseline_topology.value(), fixture.rails,
+                                      1U, world);
+  for (std::uint32_t rotation = 1U; rotation < 4U; ++rotation) {
+    SCOPED_TRACE(rotation);
+    auto rotated_topology = fixture.topology;
+    for (auto &face : rotated_topology.faces) {
+      const auto offset = static_cast<std::ptrdiff_t>(
+          (face.id.index + rotation) % face.vertices.size());
+      std::rotate(face.vertices.begin(), face.vertices.begin() + offset,
+                   face.vertices.end());
+      std::rotate(face.uvs.begin(), face.uvs.begin() + offset, face.uvs.end());
+    }
+    auto rotated = PolygonDocument::from_authored_topology(rotated_topology);
+    ASSERT_TRUE(rotated.ok()) << rotated.error_message();
+    const std::array targets{
+        uv_peel_target(rotated.value(), 1U, edges, edges.front(), world)};
+    const auto result = prepare_uv_peel(targets, {});
+    ASSERT_TRUE(result.ok()) << result.error_message();
+    const auto *prepared = prepared_uv_peel_document(result.value(), 1U);
+    ASSERT_NE(prepared, nullptr);
+    expect_uv_peel_preserves_document(rotated.value(), *prepared);
+    expect_uv_peel_relation(baseline_document->document, prepared->document,
+                             1.0F, 0.0F, 0.0F, 1.0F, {}, 2.0e-5F);
+  }
+}
+
+TEST(ModelingSdkConsumerTests,
+     UvPeelVariableRoadWidthsRemainPhysicalUnlessExplicitGuidesConstrainThem) {
+  constexpr std::array<float, 6> kInnerWidths{{1.0F, 0.75F, 0.5F, 1.0F, 1.25F, 0.875F}};
+  constexpr std::array<float, 6> kOuterWidths{{0.5F, 0.75F, 1.25F, 1.0F, 0.75F, 1.5F}};
+  auto fixture = make_uv_peel_curved_strip();
+  for (std::size_t station = 0U; station < kInnerWidths.size(); ++station) {
+    auto &inner = fixture.topology.vertices[station].position;
+    auto &outer = fixture.topology.vertices[2U * kInnerWidths.size() + station].position;
+    const float inner_scale = (3.0F - kInnerWidths[station]) / 2.0F;
+    const float outer_scale = (3.0F + kOuterWidths[station]) / 4.0F;
+    inner.x *= inner_scale;
+    inner.y *= inner_scale;
+    outer.x *= outer_scale;
+    outer.y *= outer_scale;
+  }
+  auto document = PolygonDocument::from_authored_topology(fixture.topology);
+  ASSERT_TRUE(document.ok()) << document.error_message();
+  const auto center_edges = uv_peel_rail_edges(fixture.rails[1], false);
+  for (const bool explicit_guides : {false, true}) {
+    SCOPED_TRACE(explicit_guides);
+    auto edges = center_edges;
+    if (explicit_guides) {
+      for (const std::size_t rail : {0U, 2U}) {
+        const auto additions = uv_peel_rail_edges(fixture.rails[rail], false);
+        edges.insert(edges.end(), additions.begin(), additions.end());
+      }
+    }
+    const std::array targets{
+        uv_peel_target(document.value(), 1U, edges, center_edges.front())};
+    const auto result = prepare_uv_peel(targets, {});
+    ASSERT_TRUE(result.ok()) << result.error_message();
+    const auto *prepared = prepared_uv_peel_document(result.value(), 1U);
+    ASSERT_NE(prepared, nullptr);
+    expect_uv_peel_preserves_document(document.value(), *prepared);
+    const auto topology = prepared->document.authored_topology();
+    ASSERT_TRUE(topology.ok());
+    expect_uv_peel_strip_station_metric(topology.value(), fixture.rails, 1U, {},
+                                        !explicit_guides);
+    expect_uv_peel_unfolded_faces(topology.value());
+    if (explicit_guides) {
+      for (const auto &rail : fixture.rails) {
+        const auto start = uv_peel_effective_vertex_samples(topology.value(), rail.front());
+        ASSERT_FALSE(start.empty());
+        for (const VertexId vertex : rail) {
+          const auto samples = uv_peel_effective_vertex_samples(topology.value(), vertex);
+          ASSERT_FALSE(samples.empty());
+          EXPECT_NEAR(samples.front().y, start.front().y, 2.0e-5F);
+        }
+      }
+    }
+  }
+}
+
+TEST(ModelingSdkConsumerTests,
+     UvPeelRetainsConformalFallbackForTriangleAndMixedFacePatches) {
+  constexpr std::array<Vec3, 4> kQuad{{
+      {0.0F, 0.0F, 0.0F}, {2.0F, 0.0F, 0.0F},
+      {2.0F, 1.0F, 0.0F}, {0.0F, 1.0F, 0.0F}}};
+  const auto quad = make_texture_action_face(kQuad);
+  ASSERT_TRUE(quad.ok());
+  const auto authored = quad.value().authored_topology();
+  ASSERT_TRUE(authored.ok());
+  for (const bool triangulated : {false, true}) {
+    SCOPED_TRACE(triangulated);
+    auto topology = authored.value();
+    topology.vertices.push_back({make_id<VertexTag>(5U), {3.0F, 0.5F, 0.0F}});
+    topology.faces.push_back({
+        .id = make_id<FaceTag>(2U),
+        .vertices = {make_id<VertexTag>(3U), make_id<VertexTag>(2U),
+                     make_id<VertexTag>(5U)}});
+    topology.next_vertex_id = 6U;
+    topology.next_face_id = 3U;
+    if (triangulated) {
+      topology.faces.front().vertices = {
+          make_id<VertexTag>(1U), make_id<VertexTag>(2U), make_id<VertexTag>(3U)};
+      topology.faces.push_back({
+          .id = make_id<FaceTag>(3U),
+          .vertices = {make_id<VertexTag>(1U), make_id<VertexTag>(3U),
+                       make_id<VertexTag>(4U)}});
+      topology.next_face_id = 4U;
+    }
+    auto document = PolygonDocument::from_authored_topology(topology);
+    ASSERT_TRUE(document.ok()) << document.error_message();
+    const std::array guide{make_id<VertexTag>(2U), make_id<VertexTag>(3U)};
+    const EdgeKey edge = make_edge_key(guide[0], guide[1]);
+    const std::array targets{uv_peel_target(document.value(), 1U, {edge}, edge)};
+    const auto result = prepare_uv_peel(targets, {});
+    ASSERT_TRUE(result.ok()) << result.error_message();
+    const auto *prepared = prepared_uv_peel_document(result.value(), 1U);
+    ASSERT_NE(prepared, nullptr);
+    expect_uv_peel_preserves_document(document.value(), *prepared);
+    const auto after = prepared->document.authored_topology();
+    ASSERT_TRUE(after.ok());
+    expect_uv_peel_guide(after.value(), guide, {}, UvPeelAxis::U);
+    expect_uv_peel_unfolded_faces(after.value());
+    if (triangulated) {
+      const auto *outside = uv_peel_face(after.value(), make_id<FaceTag>(3U));
+      ASSERT_NE(outside, nullptr);
+      EXPECT_TRUE(outside->uvs.empty());
+    }
+  }
+}
+
+TEST(ModelingSdkConsumerTests,
+     UvPeelAxisRepeatsOffsetsAndNormalizedModeComposeAfterTheGuidedChart) {
+  const auto fixture = make_uv_peel_flat_strip(
+      true, {.scale = {-2.0F, 0.5F}, .shift_uv = {0.25F, -0.75F},
+             .rotation_degrees = 30.0F});
+  auto document = PolygonDocument::from_authored_topology(fixture.topology);
+  ASSERT_TRUE(document.ok());
+  const auto edges = uv_peel_rail_edges(fixture.rails[1], false);
+  const std::array targets{uv_peel_target(document.value(), 1U, edges, edges.front())};
+  const auto baseline = prepare_uv_peel(targets, {});
+  ASSERT_TRUE(baseline.ok()) << baseline.error_message();
+  const auto *baseline_document = prepared_uv_peel_document(baseline.value(), 1U);
+  ASSERT_NE(baseline_document, nullptr);
+  const auto vertical = prepare_uv_peel(targets, {.axis = UvPeelAxis::V});
+  ASSERT_TRUE(vertical.ok()) << vertical.error_message();
+  const auto *vertical_document = prepared_uv_peel_document(vertical.value(), 1U);
+  ASSERT_NE(vertical_document, nullptr);
+  expect_uv_peel_relation(baseline_document->document, vertical_document->document,
+                           0.0F, -1.0F, 1.0F, 0.0F, {});
+  const auto repeated = prepare_uv_peel(
+      targets, {.u_repeat = 2.0, .v_repeat = 3.0,
+                .u_offset = 0.25, .v_offset = -0.4});
+  ASSERT_TRUE(repeated.ok()) << repeated.error_message();
+  const auto *repeated_document = prepared_uv_peel_document(repeated.value(), 1U);
+  ASSERT_NE(repeated_document, nullptr);
+  expect_uv_peel_relation(baseline_document->document, repeated_document->document,
+                           2.0F, 0.0F, 0.0F, 3.0F, {0.25F, -0.4F});
+  for (const UvPeelAxis axis : {UvPeelAxis::U, UvPeelAxis::V}) {
+    const auto normalized = prepare_uv_peel(
+        targets, {.axis = axis, .world_space = false,
+                  .u_repeat = 2.0, .v_repeat = 3.0,
+                  .u_offset = 0.25, .v_offset = -0.4});
+    ASSERT_TRUE(normalized.ok()) << normalized.error_message();
+    const auto *normalized_document = prepared_uv_peel_document(normalized.value(), 1U);
+    ASSERT_NE(normalized_document, nullptr);
+    expect_uv_peel_preserves_document(document.value(), *normalized_document);
+    const auto topology = normalized_document->document.authored_topology();
+    ASSERT_TRUE(topology.ok());
+    Vec2 minimum{std::numeric_limits<float>::infinity(),
+                  std::numeric_limits<float>::infinity()};
+    Vec2 maximum{-std::numeric_limits<float>::infinity(),
+                  -std::numeric_limits<float>::infinity()};
+    for (const auto &face : topology.value().faces) {
+      for (const VertexId vertex : face.vertices) {
+        const auto uv = uv_peel_effective_corner(face, vertex);
+        ASSERT_TRUE(uv.has_value());
+        minimum.x = std::min(minimum.x, uv->x);
+        minimum.y = std::min(minimum.y, uv->y);
+        maximum.x = std::max(maximum.x, uv->x);
+        maximum.y = std::max(maximum.y, uv->y);
+      }
+    }
+    expect_vec2_near(minimum, {0.25F, -0.4F}, 0.002F);
+    expect_vec2_near(maximum, {2.25F, 2.6F}, 0.002F);
+  }
+
+  constexpr double kTinyRepeat = 1.0e-8;
+  auto collapsed_fixture = make_uv_peel_flat_strip(true);
+  for (auto &face : collapsed_fixture.topology.faces) {
+    face.uvs.assign(face.vertices.size(), Vec2{});
+  }
+  auto collapsed =
+      PolygonDocument::from_authored_topology(collapsed_fixture.topology);
+  ASSERT_TRUE(collapsed.ok());
+  const UvPeelOptions tiny_options{
+      .world_space = false, .u_repeat = kTinyRepeat, .v_repeat = kTinyRepeat};
+  const std::array tiny_targets{
+      uv_peel_target(collapsed.value(), 1U, edges, edges.front())};
+  const auto tiny = prepare_uv_peel(tiny_targets, tiny_options);
+  ASSERT_TRUE(tiny.ok()) << tiny.error_message();
+  ASSERT_TRUE(tiny.value().changed);
+  const auto *tiny_document = prepared_uv_peel_document(tiny.value(), 1U);
+  ASSERT_NE(tiny_document, nullptr);
+  expect_uv_peel_preserves_document(collapsed.value(), *tiny_document);
+  const auto tiny_topology = tiny_document->document.authored_topology();
+  ASSERT_TRUE(tiny_topology.ok());
+  expect_uv_peel_unfolded_faces(tiny_topology.value(), 1.0e-18);
+  Vec2 tiny_minimum{std::numeric_limits<float>::infinity(),
+                    std::numeric_limits<float>::infinity()};
+  Vec2 tiny_maximum{-std::numeric_limits<float>::infinity(),
+                    -std::numeric_limits<float>::infinity()};
+  for (const auto &face : tiny_topology.value().faces) {
+    for (const Vec2 uv : face.uvs) {
+      tiny_minimum.x = std::min(tiny_minimum.x, uv.x);
+      tiny_minimum.y = std::min(tiny_minimum.y, uv.y);
+      tiny_maximum.x = std::max(tiny_maximum.x, uv.x);
+      tiny_maximum.y = std::max(tiny_maximum.y, uv.y);
+    }
+  }
+  expect_vec2_near(tiny_minimum, {}, 1.0e-12F);
+  expect_vec2_near(tiny_maximum,
+                    {static_cast<float>(kTinyRepeat),
+                     static_cast<float>(kTinyRepeat)},
+                    1.0e-12F);
+  const std::array tiny_again_targets{
+      uv_peel_target(tiny_document->document, 1U, edges, edges.front())};
+  const auto tiny_again = prepare_uv_peel(tiny_again_targets, tiny_options);
+  ASSERT_TRUE(tiny_again.ok()) << tiny_again.error_message();
+  EXPECT_FALSE(tiny_again.value().changed);
+  const auto *unchanged = prepared_uv_peel_document(tiny_again.value(), 1U);
+  ASSERT_NE(unchanged, nullptr);
+  EXPECT_FALSE(unchanged->receipt.changed);
+  EXPECT_EQ(unchanged->document.content_identity(),
+            tiny_document->document.content_identity());
+  EXPECT_EQ(unchanged->document.content_revision(),
+            tiny_document->document.content_revision());
+}
+
+[[nodiscard]] AuthoredTopology close_uv_peel_strip(
+    const AuthoredTopology &surface, float depth) {
+  AuthoredTopology solid = surface;
+  const std::uint32_t vertex_offset = surface.next_vertex_id - 1U;
+  std::vector<EdgeKey> edges;
+  for (const auto &face : surface.faces) {
+    for (std::size_t index = 0U; index < face.vertices.size(); ++index) {
+      edges.push_back(make_edge_key(face.vertices[index],
+                                    face.vertices[(index + 1U) % face.vertices.size()]));
+    }
+  }
+  for (const auto &vertex : surface.vertices) {
+    solid.vertices.push_back({make_id<VertexTag>(vertex.id.index + vertex_offset),
+                               {vertex.position.x, vertex.position.y,
+                                vertex.position.z - depth}});
+  }
+  for (const auto &face : surface.faces) {
+    AuthoredTopologyFace bottom = face;
+    bottom.id = make_id<FaceTag>(solid.next_face_id++);
+    bottom.vertices.clear();
+    bottom.uvs.clear();
+    for (auto vertex = face.vertices.rbegin(); vertex != face.vertices.rend(); ++vertex) {
+      bottom.vertices.push_back(make_id<VertexTag>(vertex->index + vertex_offset));
+    }
+    solid.faces.push_back(std::move(bottom));
+  }
+  for (const auto &face : surface.faces) {
+    for (std::size_t index = 0U; index < face.vertices.size(); ++index) {
+      const VertexId first = face.vertices[index];
+      const VertexId second = face.vertices[(index + 1U) % face.vertices.size()];
+      if (std::ranges::count(edges, make_edge_key(first, second)) != 1) {
+        continue;
+      }
+      solid.faces.push_back({
+          .id = make_id<FaceTag>(solid.next_face_id++),
+          .vertices = {second, first,
+                       make_id<VertexTag>(first.index + vertex_offset),
+                       make_id<VertexTag>(second.index + vertex_offset)},
+          .material_slot = 99U,
+      });
+    }
+  }
+  solid.next_vertex_id += vertex_offset;
+  return solid;
+}
+
+TEST(ModelingSdkConsumerTests,
+     UvPeelTouchesOnlyIncidentRoadFacesOnAClosedSolid) {
+  const auto fixture = make_uv_peel_curved_strip();
+  const auto solid = close_uv_peel_strip(fixture.topology, 0.5F);
+  auto document = PolygonDocument::from_authored_topology(solid);
+  ASSERT_TRUE(document.ok()) << document.error_message();
+  const auto original_payload = document.value().authored_payload();
+  ASSERT_TRUE(original_payload.ok());
+  EXPECT_EQ(authored_open_edge_count(original_payload.value()), 0U);
+  const auto edges = uv_peel_rail_edges(fixture.rails[1], false);
+  ASSERT_TRUE(document.value().select_edges(edges).ok());
+  const std::array targets{uv_peel_target(document.value(), 1U, edges, edges.front())};
+  const auto result = prepare_uv_peel(targets, {});
+  ASSERT_TRUE(result.ok()) << result.error_message();
+  const auto *prepared = prepared_uv_peel_document(result.value(), 1U);
+  ASSERT_NE(prepared, nullptr);
+  expect_uv_peel_preserves_document(document.value(), *prepared);
+  const auto after = prepared->document.authored_topology();
+  ASSERT_TRUE(after.ok());
+  for (const auto &face : solid.faces) {
+    const auto *changed = uv_peel_face(after.value(), face.id);
+    ASSERT_NE(changed, nullptr);
+    if (uv_peel_face(fixture.topology, face.id) != nullptr) {
+      EXPECT_EQ(changed->uvs.size(), changed->vertices.size());
+    } else {
+      EXPECT_TRUE(changed->uvs.empty());
+      EXPECT_EQ(changed->vertices, face.vertices);
+      EXPECT_EQ(changed->material_slot, face.material_slot);
+      EXPECT_EQ(changed->texture_transform, face.texture_transform);
+      EXPECT_EQ(std::ranges::find(prepared->receipt.affected.faces, face.id),
+                prepared->receipt.affected.faces.end());
+    }
+  }
+  expect_uv_peel_guide(after.value(), fixture.rails[1], {}, UvPeelAxis::U);
+}
+
+[[nodiscard]] UvPeelStripFixture make_uv_peel_tube() {
+  constexpr int kSides = 8;
+  constexpr double kTau = 6.2831853071795864769;
+  std::vector<std::vector<Vec3>> rails;
+  for (const float y : {-2.0F, 2.0F}) {
+    std::vector<Vec3> ring;
+    for (int side = 0; side < kSides; ++side) {
+      const double angle = kTau * side / kSides;
+      ring.push_back({static_cast<float>(2.0 * std::cos(angle)), y,
+                      static_cast<float>(2.0 * std::sin(angle))});
+    }
+    rails.push_back(std::move(ring));
+  }
+  return make_uv_peel_strip(rails, true);
+}
+
+TEST(ModelingSdkConsumerTests,
+     UvPeelClosedTubeGuideCutsOnlyUvCornersAtOneTransverseSeam) {
+  const auto fixture = make_uv_peel_tube();
+  auto document = PolygonDocument::from_authored_topology(fixture.topology);
+  ASSERT_TRUE(document.ok()) << document.error_message();
+  const auto edges = uv_peel_rail_edges(fixture.rails[0], true);
+  const std::array targets{uv_peel_target(document.value(), 1U, edges, edges.front())};
+  const auto result = prepare_uv_peel(targets, {});
+  ASSERT_TRUE(result.ok()) << result.error_message();
+  const auto *prepared = prepared_uv_peel_document(result.value(), 1U);
+  ASSERT_NE(prepared, nullptr);
+  expect_uv_peel_preserves_document(document.value(), *prepared);
+  const auto topology = prepared->document.authored_topology();
+  ASSERT_TRUE(topology.ok());
+  float circumference = 0.0F;
+  std::optional<float> across;
+  for (const EdgeKey edge : edges) {
+    const auto first_position = uv_peel_position(topology.value(), edge.a);
+    const auto second_position = uv_peel_position(topology.value(), edge.b);
+    ASSERT_TRUE(first_position.has_value());
+    ASSERT_TRUE(second_position.has_value());
+    const float segment = uv_peel_distance(*first_position, *second_position);
+    circumference += segment;
+    std::size_t incident_faces = 0U;
+    for (const auto &face : topology.value().faces) {
+      const auto first = uv_peel_effective_corner(face, edge.a);
+      const auto second = uv_peel_effective_corner(face, edge.b);
+      if (!first.has_value() || !second.has_value()) {
+        continue;
+      }
+      ++incident_faces;
+      EXPECT_NEAR(std::abs(second->x - first->x), segment * 0.5F, 0.002F);
+      EXPECT_NEAR(first->y, second->y, 0.002F);
+      if (across.has_value()) {
+        EXPECT_NEAR(first->y, *across, 0.002F);
+      } else {
+        across = first->y;
+      }
+    }
+    EXPECT_EQ(incident_faces, 1U);
+  }
+  std::size_t seam_vertices = 0U;
+  for (const VertexId vertex : fixture.rails[0]) {
+    const auto samples = uv_peel_effective_vertex_samples(topology.value(), vertex);
+    ASSERT_EQ(samples.size(), 2U);
+    EXPECT_NEAR(samples[0].y, samples[1].y, 0.002F);
+    if (std::abs(samples[0].x - samples[1].x) > 0.002F) {
+      ++seam_vertices;
+      EXPECT_EQ(vertex, fixture.rails[0].front());
+      EXPECT_NEAR(std::abs(samples[0].x - samples[1].x), circumference * 0.5F, 0.002F);
+    }
+  }
+  EXPECT_EQ(seam_vertices, 1U);
+  expect_uv_peel_unfolded_faces(topology.value());
+  const std::array again_targets{
+      uv_peel_target(prepared->document, 1U, edges, edges.front())};
+  const auto again = prepare_uv_peel(again_targets, {});
+  ASSERT_TRUE(again.ok()) << again.error_message();
+  EXPECT_FALSE(again.value().changed);
+  const auto *unchanged = prepared_uv_peel_document(again.value(), 1U);
+  ASSERT_NE(unchanged, nullptr);
+  EXPECT_FALSE(unchanged->receipt.changed);
+  EXPECT_EQ(unchanged->document.content_identity(),
+            prepared->document.content_identity());
+  EXPECT_EQ(unchanged->document.content_revision(),
+            prepared->document.content_revision());
+}
+
+TEST(ModelingSdkConsumerTests,
+     UvPeelOpenTubeGuideKeepsBothIncidentSidesContinuousAndOtherFacesUntouched) {
+  const auto fixture = make_uv_peel_tube();
+  auto document = PolygonDocument::from_authored_topology(fixture.topology);
+  ASSERT_TRUE(document.ok());
+  const std::array guide{fixture.rails[0].front(), fixture.rails[1].front()};
+  const EdgeKey edge = make_edge_key(guide[0], guide[1]);
+  const std::array targets{uv_peel_target(document.value(), 1U, {edge}, edge)};
+  const auto result = prepare_uv_peel(targets, {});
+  ASSERT_TRUE(result.ok()) << result.error_message();
+  const auto *prepared = prepared_uv_peel_document(result.value(), 1U);
+  ASSERT_NE(prepared, nullptr);
+  expect_uv_peel_preserves_document(document.value(), *prepared);
+  const auto topology = prepared->document.authored_topology();
+  ASSERT_TRUE(topology.ok());
+  std::size_t changed_faces = 0U;
+  for (const auto &face : topology.value().faces) {
+    const bool first = std::ranges::find(face.vertices, guide[0]) != face.vertices.end();
+    const bool second = std::ranges::find(face.vertices, guide[1]) != face.vertices.end();
+    if (first && second) {
+      ++changed_faces;
+      EXPECT_EQ(face.uvs.size(), face.vertices.size());
+    } else {
+      EXPECT_TRUE(face.uvs.empty());
+    }
+  }
+  EXPECT_EQ(changed_faces, 2U);
+  expect_uv_peel_guide(topology.value(), guide, {}, UvPeelAxis::U);
+}
+
+TEST(ModelingSdkConsumerTests,
+     UvPeelPreservesOccurrenceCompensationAndBecomesAnExactNoOpOnRepeat) {
+  const auto fixture = make_uv_peel_flat_strip(
+      true, {.scale = {-2.0F, 0.5F}, .shift_uv = {0.25F, -0.75F},
+             .rotation_degrees = 30.0F});
+  auto document = PolygonDocument::from_authored_topology(fixture.topology);
+  ASSERT_TRUE(document.ok());
+  const auto edges = uv_peel_rail_edges(fixture.rails[1], false);
+  const Transform3 world{
+      .x_axis = {0.0F, 0.0F, 2.0F}, .y_axis = {0.0F, 1.5F, 0.0F},
+      .z_axis = {-1.0F, 0.0F, 0.0F}, .origin = {7.0F, 3.0F, -5.0F},
+  };
+  const std::array baseline_targets{
+      uv_peel_target(document.value(), 1U, edges, edges.front(), world)};
+  const auto baseline = prepare_uv_peel(baseline_targets, {});
+  ASSERT_TRUE(baseline.ok()) << baseline.error_message();
+  const auto *baseline_document = prepared_uv_peel_document(baseline.value(), 1U);
+  ASSERT_NE(baseline_document, nullptr);
+  const auto desired = baseline_document->document.authored_topology();
+  ASSERT_TRUE(desired.ok());
+  for (const bool mirrored : {false, true}) {
+    SCOPED_TRACE(mirrored);
+    const Transform3 sampling{
+        .x_axis = {mirrored ? -2.0F : 2.0F, 0.0F, 0.0F},
+        .y_axis = {0.0F, 0.5F, 0.0F}, .z_axis = {0.0F, 0.0F, 1.0F},
+        .origin = {3.0F, -2.0F, 0.0F},
+    };
+    const std::array targets{
+        uv_peel_target(document.value(), 1U, edges, edges.front(), world, sampling)};
+    const auto result = prepare_uv_peel(targets, {});
+    ASSERT_TRUE(result.ok()) << result.error_message();
+    const auto *prepared = prepared_uv_peel_document(result.value(), 1U);
+    ASSERT_NE(prepared, nullptr);
+    expect_uv_peel_preserves_document(document.value(), *prepared);
+    const auto compiled = prepared->document.compile_mesh();
+    ASSERT_TRUE(compiled.ok());
+    for (const auto &vertex : compiled.value().vertices) {
+      const auto samples = uv_peel_effective_vertex_samples(desired.value(), vertex.source_vertex);
+      ASSERT_FALSE(samples.empty());
+      for (const Vec2 sample : samples) {
+        expect_vec2_near(sample, samples.front(), 0.002F);
+      }
+      // The geometric chart is (+x/2,-y/2). A mirrored C flips its normal
+      // to -Z, changing the sign of the translated U correction only.
+      const Vec2 delta{vertex.position.x * 0.5F + (mirrored ? -1.5F : 1.5F),
+                        vertex.position.y * 0.25F + 1.0F};
+      const Vec2 effective{
+          vertex.uv0.x + vertex.uv_carrier[0] * delta.x + vertex.uv_carrier[1] * delta.y,
+          vertex.uv0.y + vertex.uv_carrier[2] * delta.x + vertex.uv_carrier[3] * delta.y};
+      expect_vec2_near(effective, samples.front(), 0.002F);
+    }
+    const std::array again_targets{
+        uv_peel_target(prepared->document, 1U, edges, edges.front(), world, sampling)};
+    const auto again = prepare_uv_peel(again_targets, {});
+    ASSERT_TRUE(again.ok()) << again.error_message();
+    EXPECT_FALSE(again.value().changed);
+    const auto *unchanged = prepared_uv_peel_document(again.value(), 1U);
+    ASSERT_NE(unchanged, nullptr);
+    EXPECT_FALSE(unchanged->receipt.changed);
+    EXPECT_EQ(unchanged->document.content_identity(), prepared->document.content_identity());
+    EXPECT_EQ(unchanged->document.content_revision(), prepared->document.content_revision());
+    EXPECT_TRUE(unchanged->document.shares_selection_with(prepared->document));
+  }
+}
+
+TEST(ModelingSdkConsumerTests,
+     UvPeelThinChartsPreservePerAxisDensityEditsAndRepeatExactly) {
+  for (const UvPeelAxis axis : {UvPeelAxis::U, UvPeelAxis::V}) {
+    SCOPED_TRACE(axis == UvPeelAxis::U ? "U" : "V");
+    std::vector<std::vector<Vec3>> rails;
+    for (const float y : {0.001F, 0.0F, -0.001F}) {
+      rails.push_back({{0.0F, y, 0.0F}, {2048.0F, y, 0.0F},
+                       {4096.0F, y, 0.0F}});
+    }
+    auto fixture = make_uv_peel_strip(rails, false, true);
+    for (auto &face : fixture.topology.faces) {
+      for (std::size_t corner = 0U; corner < face.vertices.size(); ++corner) {
+        const auto position = uv_peel_position(fixture.topology, face.vertices[corner]);
+        ASSERT_TRUE(position.has_value());
+        face.uvs[corner] = axis == UvPeelAxis::U
+                               ? Vec2{0.5F * position->x, 0.25F * position->y}
+                               : Vec2{-0.25F * position->y, 0.5F * position->x};
+      }
+    }
+    auto document = PolygonDocument::from_authored_topology(fixture.topology);
+    ASSERT_TRUE(document.ok()) << document.error_message();
+    const auto edges = uv_peel_rail_edges(fixture.rails[1], false);
+    ASSERT_TRUE(document.value().select_edges(edges).ok());
+    const UvPeelOptions options{.axis = axis};
+    const std::array targets{
+        uv_peel_target(document.value(), 1U, edges, edges.front())};
+    const auto result = prepare_uv_peel(targets, options);
+    ASSERT_TRUE(result.ok()) << result.error_message();
+    ASSERT_TRUE(result.value().changed);
+    const auto *prepared = prepared_uv_peel_document(result.value(), 1U);
+    ASSERT_NE(prepared, nullptr);
+    expect_uv_peel_preserves_document(document.value(), *prepared);
+    const auto topology = prepared->document.authored_topology();
+    ASSERT_TRUE(topology.ok());
+    for (const auto &face : topology.value().faces) {
+      for (const VertexId vertex : face.vertices) {
+        const auto position = uv_peel_position(topology.value(), vertex);
+        const auto uv = uv_peel_effective_corner(face, vertex);
+        ASSERT_TRUE(position.has_value());
+        ASSERT_TRUE(uv.has_value());
+        const float along = axis == UvPeelAxis::U ? uv->x : uv->y;
+        const float across = axis == UvPeelAxis::U ? uv->y : -uv->x;
+        EXPECT_NEAR(along, 0.5F * position->x, 1.0e-4F);
+        EXPECT_NEAR(across, 0.5F * position->y, 1.0e-9F);
+      }
+    }
+    const std::array again_targets{
+        uv_peel_target(prepared->document, 1U, edges, edges.front())};
+    const auto again = prepare_uv_peel(again_targets, options);
+    ASSERT_TRUE(again.ok()) << again.error_message();
+    EXPECT_FALSE(again.value().changed);
+    const auto *unchanged = prepared_uv_peel_document(again.value(), 1U);
+    ASSERT_NE(unchanged, nullptr);
+    EXPECT_FALSE(unchanged->receipt.changed);
+    EXPECT_EQ(unchanged->document.content_identity(),
+              prepared->document.content_identity());
+    EXPECT_EQ(unchanged->document.content_revision(),
+              prepared->document.content_revision());
+    EXPECT_TRUE(unchanged->document.shares_selection_with(prepared->document));
+  }
+}
+
+TEST(ModelingSdkConsumerTests,
+     UvPeelReferenceSelectionAndLargeWorldTranslationDoNotDependOnInputOrder) {
+  const auto fixture = make_uv_peel_curved_strip();
+  auto document = PolygonDocument::from_authored_topology(fixture.topology);
+  ASSERT_TRUE(document.ok());
+  std::vector<EdgeKey> edges;
+  for (auto rail = fixture.rails.rbegin(); rail != fixture.rails.rend(); ++rail) {
+    const auto additions = uv_peel_rail_edges(*rail, false);
+    edges.insert(edges.end(), additions.begin(), additions.end());
+  }
+  const EdgeKey inner = make_edge_key(fixture.rails[0][0], fixture.rails[0][1]);
+  const EdgeKey outer = make_edge_key(fixture.rails[2][0], fixture.rails[2][1]);
+  const std::array fallback_targets{uv_peel_target(document.value(), 1U, edges)};
+  const auto fallback = prepare_uv_peel(fallback_targets, {});
+  ASSERT_TRUE(fallback.ok()) << fallback.error_message();
+  const auto *fallback_document = prepared_uv_peel_document(fallback.value(), 1U);
+  ASSERT_NE(fallback_document, nullptr);
+  const auto fallback_topology = fallback_document->document.authored_topology();
+  ASSERT_TRUE(fallback_topology.ok());
+  expect_uv_peel_guide(fallback_topology.value(), fixture.rails[0], {}, UvPeelAxis::U);
+  std::ranges::reverse(edges);
+  const std::array explicit_targets{uv_peel_target(document.value(), 1U, edges, inner)};
+  const auto explicit_reference = prepare_uv_peel(explicit_targets, {});
+  ASSERT_TRUE(explicit_reference.ok()) << explicit_reference.error_message();
+  const auto *explicit_document = prepared_uv_peel_document(explicit_reference.value(), 1U);
+  ASSERT_NE(explicit_document, nullptr);
+  const auto fallback_bytes = serialize_qdr_authored_topology(fallback_document->document);
+  const auto explicit_bytes = serialize_qdr_authored_topology(explicit_document->document);
+  ASSERT_TRUE(fallback_bytes.ok());
+  ASSERT_TRUE(explicit_bytes.ok());
+  EXPECT_EQ(explicit_bytes.value(), fallback_bytes.value());
+
+  const std::array outer_targets{uv_peel_target(document.value(), 1U, edges, outer)};
+  const auto outer_reference = prepare_uv_peel(outer_targets, {});
+  ASSERT_TRUE(outer_reference.ok()) << outer_reference.error_message();
+  const auto *outer_document = prepared_uv_peel_document(outer_reference.value(), 1U);
+  ASSERT_NE(outer_document, nullptr);
+  const auto outer_topology = outer_document->document.authored_topology();
+  ASSERT_TRUE(outer_topology.ok());
+  expect_uv_peel_guide(outer_topology.value(), fixture.rails[2], {}, UvPeelAxis::U);
+
+  const Transform3 translated{.origin = {1000000.0F, -1000000.0F, 300000.0F}};
+  const std::array translated_targets{
+      uv_peel_target(document.value(), 1U, edges, outer, translated)};
+  const auto translated_result = prepare_uv_peel(translated_targets, {});
+  ASSERT_TRUE(translated_result.ok()) << translated_result.error_message();
+  const auto *translated_document = prepared_uv_peel_document(translated_result.value(), 1U);
+  ASSERT_NE(translated_document, nullptr);
+  expect_uv_peel_relation(outer_document->document, translated_document->document,
+                           1.0F, 0.0F, 0.0F, 1.0F, {}, 0.002F);
+}
+
+TEST(ModelingSdkConsumerTests,
+     UvPeelNormalizesDisconnectedIncidentComponentsIndependently) {
+  UvPeelStripFixture fixture = make_uv_peel_flat_strip();
+  const UvPeelStripFixture second = make_uv_peel_flat_strip();
+  const std::uint32_t vertex_offset = fixture.topology.next_vertex_id - 1U;
+  const std::uint32_t face_offset = fixture.topology.next_face_id - 1U;
+  for (const auto &vertex : second.topology.vertices) {
+    fixture.topology.vertices.push_back({
+        make_id<VertexTag>(vertex.id.index + vertex_offset),
+        {vertex.position.x * 1.5F + 10.0F, vertex.position.y, vertex.position.z}});
+  }
+  for (const auto &face : second.topology.faces) {
+    AuthoredTopologyFace copy = face;
+    copy.id = make_id<FaceTag>(face.id.index + face_offset);
+    for (auto &vertex : copy.vertices) {
+      vertex = make_id<VertexTag>(vertex.index + vertex_offset);
+    }
+    fixture.topology.faces.push_back(std::move(copy));
+  }
+  for (const auto &rail : second.rails) {
+    std::vector<VertexId> copied;
+    for (const VertexId vertex : rail) {
+      copied.push_back(make_id<VertexTag>(vertex.index + vertex_offset));
+    }
+    fixture.rails.push_back(std::move(copied));
+  }
+  fixture.topology.next_vertex_id += second.topology.next_vertex_id - 1U;
+  fixture.topology.next_face_id += second.topology.next_face_id - 1U;
+  auto document = PolygonDocument::from_authored_topology(fixture.topology);
+  ASSERT_TRUE(document.ok());
+  auto edges = uv_peel_rail_edges(fixture.rails[1], false);
+  const auto additional = uv_peel_rail_edges(fixture.rails[4], false);
+  edges.insert(edges.end(), additional.begin(), additional.end());
+  const std::array targets{uv_peel_target(document.value(), 1U, edges, edges.front())};
+  const auto result = prepare_uv_peel(targets, {.world_space = false});
+  ASSERT_TRUE(result.ok()) << result.error_message();
+  const auto *prepared = prepared_uv_peel_document(result.value(), 1U);
+  ASSERT_NE(prepared, nullptr);
+  expect_uv_peel_preserves_document(document.value(), *prepared);
+  const auto topology = prepared->document.authored_topology();
+  ASSERT_TRUE(topology.ok());
+  for (const bool second_component : {false, true}) {
+    Vec2 minimum{std::numeric_limits<float>::infinity(),
+                  std::numeric_limits<float>::infinity()};
+    Vec2 maximum{-std::numeric_limits<float>::infinity(),
+                  -std::numeric_limits<float>::infinity()};
+    for (const auto &face : topology.value().faces) {
+      if ((face.id.index > face_offset) != second_component) {
+        continue;
+      }
+      for (const VertexId vertex : face.vertices) {
+        const auto uv = uv_peel_effective_corner(face, vertex);
+        ASSERT_TRUE(uv.has_value());
+        minimum.x = std::min(minimum.x, uv->x);
+        minimum.y = std::min(minimum.y, uv->y);
+        maximum.x = std::max(maximum.x, uv->x);
+        maximum.y = std::max(maximum.y, uv->y);
+      }
+    }
+    expect_vec2_near(minimum, {0.0F, 0.0F}, 0.002F);
+    expect_vec2_near(maximum, {1.0F, 1.0F}, 0.002F);
+  }
+}
+
+TEST(ModelingSdkConsumerTests,
+     UvPeelMultipleObjectsUseTheirWorldDensityAndPrepareDeterministically) {
+  const auto fixture = make_uv_peel_flat_strip();
+  auto first = PolygonDocument::from_authored_topology(fixture.topology);
+  auto second = PolygonDocument::from_authored_topology(fixture.topology);
+  ASSERT_TRUE(first.ok());
+  ASSERT_TRUE(second.ok());
+  const auto edges = uv_peel_rail_edges(fixture.rails[1], false);
+  const Transform3 second_world{
+      .x_axis = {0.0F, 2.0F, 0.0F}, .y_axis = {-1.0F, 0.0F, 0.0F},
+      .z_axis = {0.0F, 0.0F, 1.0F}, .origin = {17.0F, -3.0F, 0.0F},
+  };
+  std::array targets{
+      uv_peel_target(first.value(), 30U, edges, edges.front()),
+      uv_peel_target(second.value(), 10U, edges, edges.front(), second_world)};
+  const auto baseline = prepare_uv_peel(targets, {});
+  ASSERT_TRUE(baseline.ok()) << baseline.error_message();
+  std::ranges::reverse(targets);
+  for (auto &target : targets) {
+    std::ranges::reverse(target.edges);
+  }
+  const auto reordered = prepare_uv_peel(targets, {});
+  ASSERT_TRUE(reordered.ok()) << reordered.error_message();
+  for (const auto &target : targets) {
+    const auto *before = prepared_uv_peel_document(baseline.value(), target.key);
+    const auto *after = prepared_uv_peel_document(reordered.value(), target.key);
+    ASSERT_NE(before, nullptr);
+    ASSERT_NE(after, nullptr);
+    expect_uv_peel_preserves_document(*target.document, *after);
+    const auto topology = after->document.authored_topology();
+    ASSERT_TRUE(topology.ok());
+    expect_uv_peel_guide(topology.value(), fixture.rails[1], target.world_from_local,
+                          UvPeelAxis::U);
+    const auto before_bytes = serialize_qdr_authored_topology(before->document);
+    const auto after_bytes = serialize_qdr_authored_topology(after->document);
+    ASSERT_TRUE(before_bytes.ok());
+    ASSERT_TRUE(after_bytes.ok());
+    EXPECT_EQ(after_bytes.value(), before_bytes.value());
+  }
+}
+
+TEST(ModelingSdkConsumerTests,
+     UvPeelOptionsRejectInvalidFactorsOffsetsAndAxesWithoutChangingValidValues) {
+  const UvPeelOptions valid{.axis = UvPeelAxis::V, .world_space = false,
+                           .u_repeat = 2.5, .v_repeat = 0.125,
+                           .u_offset = -0.75, .v_offset = 3.125};
+  const auto accepted = validate_uv_peel_options(valid);
+  ASSERT_TRUE(accepted.ok()) << accepted.error_message();
+  EXPECT_EQ(accepted.value().axis, valid.axis);
+  EXPECT_EQ(accepted.value().world_space, valid.world_space);
+  EXPECT_EQ(accepted.value().u_repeat, valid.u_repeat);
+  EXPECT_EQ(accepted.value().v_repeat, valid.v_repeat);
+  EXPECT_EQ(accepted.value().u_offset, valid.u_offset);
+  EXPECT_EQ(accepted.value().v_offset, valid.v_offset);
+  for (const double invalid : {0.0, -1.0, std::numeric_limits<double>::infinity(),
+                               std::numeric_limits<double>::quiet_NaN()}) {
+    auto options = valid;
+    options.u_repeat = invalid;
+    EXPECT_FALSE(validate_uv_peel_options(options).ok());
+    options = valid;
+    options.v_repeat = invalid;
+    EXPECT_FALSE(validate_uv_peel_options(options).ok());
+  }
+  for (const double invalid : {std::numeric_limits<double>::infinity(),
+                               std::numeric_limits<double>::quiet_NaN()}) {
+    auto options = valid;
+    options.u_offset = invalid;
+    EXPECT_FALSE(validate_uv_peel_options(options).ok());
+    options = valid;
+    options.v_offset = invalid;
+    EXPECT_FALSE(validate_uv_peel_options(options).ok());
+  }
+  auto options = valid;
+  options.axis = static_cast<UvPeelAxis>(99);
+  EXPECT_FALSE(validate_uv_peel_options(options).ok());
+}
+
+TEST(ModelingSdkConsumerTests,
+     UvPeelRejectsInvalidOrBranchedBatchesWithoutPublishingAnyObject) {
+  const auto fixture = make_uv_peel_flat_strip();
+  auto first = PolygonDocument::from_authored_topology(fixture.topology);
+  auto second = PolygonDocument::from_authored_topology(fixture.topology);
+  ASSERT_TRUE(first.ok());
+  ASSERT_TRUE(second.ok());
+  const auto edges = uv_peel_rail_edges(fixture.rails[1], false);
+  const auto first_identity = first.value().content_identity();
+  const auto second_identity = second.value().content_identity();
+  const auto first_revision = first.value().content_revision();
+  const auto second_revision = second.value().content_revision();
+  const auto first_before = serialize_qdr_authored_topology(first.value());
+  const auto second_before = serialize_qdr_authored_topology(second.value());
+  ASSERT_TRUE(first_before.ok());
+  ASSERT_TRUE(second_before.ok());
+  for (int invalid_case = 0; invalid_case < 13; ++invalid_case) {
+    SCOPED_TRACE(invalid_case);
+    std::array targets{
+        uv_peel_target(first.value(), 1U, edges, edges.front()),
+        uv_peel_target(second.value(), 2U, edges, edges.front())};
+    UvPeelOptions options;
+    switch (invalid_case) {
+    case 0: targets[1].document = nullptr; break;
+    case 1: targets[1].edges.clear(); break;
+    case 2: targets[1].key = 1U; break;
+    case 3: targets[1].edges.front().a.generation = 2U; break;
+    case 4:
+      targets[1].edges = {make_edge_key(fixture.topology.faces.front().vertices[0],
+                                       fixture.topology.faces.front().vertices[2])};
+      break;
+    case 5:
+      targets[1].edges = {EdgeKey{fixture.rails[1][0], fixture.rails[1][0]}};
+      break;
+    case 6: targets[1].world_from_local.x_axis = {}; break;
+    case 7: targets[1].sampling_from_local.z_axis = {}; break;
+    case 8:
+      targets[1].world_from_local.origin.x = std::numeric_limits<float>::quiet_NaN();
+      break;
+    case 9: options.u_repeat = 0.0; break;
+    case 10: options.u_repeat = 1.0e300; break;
+    case 11: options.v_offset = 1.0e300; break;
+    case 12:
+      targets[1].edges.push_back(make_edge_key(fixture.rails[0][1], fixture.rails[1][1]));
+      targets[1].edges.push_back(make_edge_key(fixture.rails[1][1], fixture.rails[2][1]));
+      break;
+    default: FAIL() << "Unexpected invalid UV peel case";
+    }
+    const auto result = prepare_uv_peel(targets, options);
+    ASSERT_FALSE(result.ok());
+    EXPECT_FALSE(result.error_message().empty());
+    EXPECT_EQ(first.value().content_identity(), first_identity);
+    EXPECT_EQ(second.value().content_identity(), second_identity);
+    EXPECT_EQ(first.value().content_revision(), first_revision);
+    EXPECT_EQ(second.value().content_revision(), second_revision);
+    const auto first_after = serialize_qdr_authored_topology(first.value());
+    const auto second_after = serialize_qdr_authored_topology(second.value());
+    ASSERT_TRUE(first_after.ok());
+    ASSERT_TRUE(second_after.ok());
+    EXPECT_EQ(first_after.value(), first_before.value());
+    EXPECT_EQ(second_after.value(), second_before.value());
+  }
+}
+
+TEST(ModelingSdkConsumerTests,
+     UvPeelRejectsPinchedConnectedPatchesButAcceptsSeparatePointTouchingPatches) {
+  auto pinched = make_uv_peel_strip(
+      {{{0.0F, 0.0F, 0.0F}, {2.0F, 0.0F, 0.0F},
+        {2.0F, 2.0F, 0.0F}, {0.0F, 2.0F, 2.0F}},
+       {{-1.0F, -1.0F, 0.0F}, {3.0F, -1.0F, 0.0F},
+        {3.0F, 2.0F, 1.0F}, {0.0F, 0.0F, 0.0F}}}, false);
+  const VertexId removed = pinched.rails[1].back();
+  const VertexId shared = pinched.rails[0].front();
+  for (auto &face : pinched.topology.faces) {
+    std::ranges::replace(face.vertices, removed, shared);
+  }
+  pinched.topology.vertices.pop_back();
+  auto invalid_document = PolygonDocument::from_authored_topology(pinched.topology);
+  ASSERT_TRUE(invalid_document.ok()) << invalid_document.error_message();
+  const auto identity = invalid_document.value().content_identity();
+  const auto edges = uv_peel_rail_edges(pinched.rails[0], false);
+  const std::array invalid_targets{
+      uv_peel_target(invalid_document.value(), 1U, edges, edges.front())};
+  const auto rejected = prepare_uv_peel(invalid_targets, {});
+  ASSERT_FALSE(rejected.ok());
+  EXPECT_FALSE(rejected.error_message().empty());
+  EXPECT_EQ(invalid_document.value().content_identity(), identity);
+
+  AuthoredTopology disconnected;
+  disconnected.vertices = {
+      {make_id<VertexTag>(1U), {0.0F, 0.0F, 0.0F}},
+      {make_id<VertexTag>(2U), {2.0F, 0.0F, 0.0F}},
+      {make_id<VertexTag>(3U), {2.0F, 2.0F, 0.0F}},
+      {make_id<VertexTag>(4U), {0.0F, 2.0F, 0.0F}},
+      {make_id<VertexTag>(5U), {-2.0F, 0.0F, 0.0F}},
+      {make_id<VertexTag>(6U), {-2.0F, -2.0F, 0.0F}},
+      {make_id<VertexTag>(7U), {0.0F, -2.0F, 0.0F}},
+  };
+  disconnected.faces = {
+      {.id = make_id<FaceTag>(1U),
+       .vertices = {make_id<VertexTag>(1U), make_id<VertexTag>(2U),
+                    make_id<VertexTag>(3U), make_id<VertexTag>(4U)}},
+      {.id = make_id<FaceTag>(2U),
+       .vertices = {make_id<VertexTag>(1U), make_id<VertexTag>(5U),
+                    make_id<VertexTag>(6U), make_id<VertexTag>(7U)}},
+  };
+  disconnected.next_vertex_id = 8U;
+  disconnected.next_face_id = 3U;
+  auto valid_document = PolygonDocument::from_authored_topology(disconnected);
+  ASSERT_TRUE(valid_document.ok());
+  const std::array valid_targets{uv_peel_target(
+      valid_document.value(), 1U,
+      {make_edge_key(make_id<VertexTag>(1U), make_id<VertexTag>(2U)),
+       make_edge_key(make_id<VertexTag>(1U), make_id<VertexTag>(5U))})};
+  const auto accepted = prepare_uv_peel(valid_targets, {});
+  ASSERT_TRUE(accepted.ok()) << accepted.error_message();
+  const auto *prepared = prepared_uv_peel_document(accepted.value(), 1U);
+  ASSERT_NE(prepared, nullptr);
+  expect_uv_peel_preserves_document(valid_document.value(), *prepared);
+  const auto after = prepared->document.authored_topology();
+  ASSERT_TRUE(after.ok());
+  for (const auto &face : after.value().faces) {
+    const auto first = uv_peel_effective_corner(face, face.vertices[0]);
+    const auto second = uv_peel_effective_corner(face, face.vertices[1]);
+    ASSERT_TRUE(first.has_value());
+    ASSERT_TRUE(second.has_value());
+    EXPECT_NEAR(second->x - first->x, 1.0F, 0.002F);
+    EXPECT_NEAR(second->y, first->y, 0.002F);
+  }
+}
+
+TEST(ModelingSdkConsumerTests,
+     UvPeelRejectsClosedDiskGuidesAndBoundarylessPatchesAtomically) {
+  constexpr std::array<Vec3, 4> kSquare{{
+      {0.0F, 0.0F, 0.0F}, {2.0F, 0.0F, 0.0F},
+      {2.0F, 2.0F, 0.0F}, {0.0F, 2.0F, 0.0F}}};
+  auto disk = make_texture_action_face(kSquare);
+  ASSERT_TRUE(disk.ok());
+  const auto disk_identity = disk.value().content_identity();
+  const std::array disk_targets{
+      uv_peel_target(disk.value(), 1U, disk.value().edge_ids())};
+  const auto disk_result = prepare_uv_peel(disk_targets, {});
+  ASSERT_FALSE(disk_result.ok());
+  EXPECT_EQ(disk.value().content_identity(), disk_identity);
+
+  const auto disk_topology = disk.value().authored_topology();
+  ASSERT_TRUE(disk_topology.ok());
+  const auto open_edges =
+      uv_peel_rail_edges(disk_topology.value().faces.front().vertices, false);
+  ASSERT_EQ(open_edges.size(), 3U);
+  const auto disk_revision = disk.value().content_revision();
+  const auto disk_selection_revision = disk.value().selection_revision();
+  const auto disk_before = serialize_qdr_authored_topology(disk.value());
+  ASSERT_TRUE(disk_before.ok());
+  const std::array collapsed_guide_targets{
+      uv_peel_target(disk.value(), 1U, open_edges, open_edges.front())};
+  const auto collapsed_guide = prepare_uv_peel(collapsed_guide_targets, {});
+  ASSERT_FALSE(collapsed_guide.ok());
+  EXPECT_FALSE(collapsed_guide.error_message().empty());
+  EXPECT_EQ(disk.value().content_identity(), disk_identity);
+  EXPECT_EQ(disk.value().content_revision(), disk_revision);
+  EXPECT_EQ(disk.value().selection_revision(), disk_selection_revision);
+
+  const std::array one_edge_targets{
+      uv_peel_target(disk.value(), 1U, {open_edges.front()}, open_edges.front())};
+  const auto representable = prepare_uv_peel(one_edge_targets, {});
+  ASSERT_TRUE(representable.ok()) << representable.error_message();
+  const auto collapsed_float = prepare_uv_peel(
+      one_edge_targets, {.u_offset = 1.0e8, .v_offset = 1.0e8});
+  ASSERT_FALSE(collapsed_float.ok());
+  EXPECT_FALSE(collapsed_float.error_message().empty());
+  EXPECT_EQ(disk.value().content_identity(), disk_identity);
+  EXPECT_EQ(disk.value().content_revision(), disk_revision);
+  EXPECT_EQ(disk.value().selection_revision(), disk_selection_revision);
+  const auto disk_after = serialize_qdr_authored_topology(disk.value());
+  ASSERT_TRUE(disk_after.ok());
+  EXPECT_EQ(disk_after.value(), disk_before.value());
+
+  AuthoredTopology tetrahedron;
+  tetrahedron.vertices = {
+      {make_id<VertexTag>(1U), {0.0F, 0.0F, 0.0F}},
+      {make_id<VertexTag>(2U), {2.0F, 0.0F, 0.0F}},
+      {make_id<VertexTag>(3U), {0.0F, 2.0F, 0.0F}},
+      {make_id<VertexTag>(4U), {0.0F, 0.0F, 2.0F}}};
+  tetrahedron.faces = {
+      {.id = make_id<FaceTag>(1U), .vertices = {
+          make_id<VertexTag>(1U), make_id<VertexTag>(3U), make_id<VertexTag>(2U)}},
+      {.id = make_id<FaceTag>(2U), .vertices = {
+          make_id<VertexTag>(1U), make_id<VertexTag>(2U), make_id<VertexTag>(4U)}},
+      {.id = make_id<FaceTag>(3U), .vertices = {
+          make_id<VertexTag>(1U), make_id<VertexTag>(4U), make_id<VertexTag>(3U)}},
+      {.id = make_id<FaceTag>(4U), .vertices = {
+          make_id<VertexTag>(2U), make_id<VertexTag>(3U), make_id<VertexTag>(4U)}},
+  };
+  tetrahedron.next_vertex_id = 5U;
+  tetrahedron.next_face_id = 5U;
+  auto closed = PolygonDocument::from_authored_topology(tetrahedron);
+  ASSERT_TRUE(closed.ok());
+  const auto closed_identity = closed.value().content_identity();
+  const std::array closed_targets{uv_peel_target(
+      closed.value(), 1U, uv_peel_rail_edges(tetrahedron.faces[0].vertices, true))};
+  const auto closed_result = prepare_uv_peel(closed_targets, {});
+  ASSERT_FALSE(closed_result.ok());
+  EXPECT_FALSE(closed_result.error_message().empty());
+  EXPECT_EQ(closed.value().content_identity(), closed_identity);
+
+  // The central 200-degree pair is straightened to 180 degrees. Its two free
+  // 100-degree wedges then overlap despite individually consistent winding.
+  constexpr double kHundredDegrees = 1.7453292519943295769;
+  AuthoredTopology fan;
+  const VertexId center = make_id<VertexTag>(1U);
+  fan.vertices.push_back({center, {}});
+  for (std::uint32_t outer = 0U; outer < 5U; ++outer) {
+    const double angle = static_cast<double>(outer) * kHundredDegrees;
+    fan.vertices.push_back({
+        make_id<VertexTag>(outer + 2U),
+        {static_cast<float>(std::cos(angle)),
+         static_cast<float>(std::sin(angle)), 0.0F}});
+  }
+  for (std::uint32_t wedge = 0U; wedge < 4U; ++wedge) {
+    fan.faces.push_back({
+        .id = make_id<FaceTag>(wedge + 1U),
+        .vertices = {center, make_id<VertexTag>(wedge + 2U),
+                     make_id<VertexTag>(wedge + 3U)}});
+    const Vec3 first = fan.vertices[wedge + 1U].position;
+    const Vec3 second = fan.vertices[wedge + 2U].position;
+    EXPECT_GT(first.x * second.y - first.y * second.x, 0.98F);
+  }
+  fan.next_vertex_id = 7U;
+  fan.next_face_id = 5U;
+  auto overlapping = PolygonDocument::from_authored_topology(fan);
+  ASSERT_TRUE(overlapping.ok()) << overlapping.error_message();
+  const std::vector fan_edges{
+      make_edge_key(center, make_id<VertexTag>(3U)),
+      make_edge_key(center, make_id<VertexTag>(5U))};
+  ASSERT_TRUE(overlapping.value().select_edges(fan_edges).ok());
+  const auto fan_identity = overlapping.value().content_identity();
+  const auto fan_revision = overlapping.value().content_revision();
+  const auto fan_selection_revision = overlapping.value().selection_revision();
+  const auto fan_before = serialize_qdr_authored_topology(overlapping.value());
+  ASSERT_TRUE(fan_before.ok());
+  const std::array fan_targets{uv_peel_target(
+      overlapping.value(), 1U, fan_edges, fan_edges.front())};
+  const auto fan_result = prepare_uv_peel(fan_targets, {});
+  ASSERT_FALSE(fan_result.ok());
+  EXPECT_NE(fan_result.error_message().find("overlap"), std::string::npos)
+      << fan_result.error_message();
+  EXPECT_EQ(overlapping.value().content_identity(), fan_identity);
+  EXPECT_EQ(overlapping.value().content_revision(), fan_revision);
+  EXPECT_EQ(overlapping.value().selection_revision(), fan_selection_revision);
+  EXPECT_EQ(overlapping.value().selection().edges, fan_edges);
+  const auto fan_after = serialize_qdr_authored_topology(overlapping.value());
+  ASSERT_TRUE(fan_after.ok());
+  EXPECT_EQ(fan_after.value(), fan_before.value());
+}
+
+TEST(ModelingSdkConsumerTests,
+     UvPeelPreparedBatchReplaysExactAuthoredUvsAndSelectionsThroughSdkHistory) {
+  const auto fixture = make_uv_peel_curved_strip(
+      true, {.scale = {-2.0F, 0.5F}, .shift_uv = {0.25F, -0.75F},
+             .rotation_degrees = 30.0F});
+  const auto edges = uv_peel_rail_edges(fixture.rails[1], false);
+  ModelingSession session;
+  std::vector<ObjectId> objects;
+  for (const char *name : {"First peeled road", "Second peeled road"}) {
+    auto document = PolygonDocument::from_authored_topology(fixture.topology);
+    ASSERT_TRUE(document.ok());
+    ASSERT_TRUE(document.value().select_edges(edges).ok());
+    const auto added = session.add_document(std::move(document).value(), name);
+    ASSERT_TRUE(added.ok());
+    objects.push_back(added.value());
+  }
+  ASSERT_TRUE(session.apply_object_selection(objects).ok());
+  std::vector<PolygonDocument> originals;
+  std::vector<std::vector<std::byte>> before;
+  for (const ObjectId object : objects) {
+    auto document = session.document_copy(object);
+    ASSERT_TRUE(document.ok());
+    auto encoded = serialize_qdr_authored_topology(document.value());
+    ASSERT_TRUE(encoded.ok());
+    before.push_back(std::move(encoded).value());
+    originals.push_back(std::move(document).value());
+  }
+  std::vector<UvPeelTarget> targets;
+  for (std::size_t index = 0U; index < objects.size(); ++index) {
+    targets.push_back(uv_peel_target(originals[index], objects[index].index,
+                                      edges, edges.front()));
+  }
+  const auto prepared = prepare_uv_peel(targets, {.u_repeat = 2.0, .v_offset = 0.125});
+  ASSERT_TRUE(prepared.ok()) << prepared.error_message();
+  ASSERT_TRUE(prepared.value().changed);
+  std::vector<SessionDocumentUpdate> updates;
+  std::vector<std::vector<std::byte>> after;
+  for (const ObjectId object : objects) {
+    const auto *replacement = prepared_uv_peel_document(prepared.value(), object.index);
+    ASSERT_NE(replacement, nullptr);
+    const auto encoded = serialize_qdr_authored_topology(replacement->document);
+    ASSERT_TRUE(encoded.ok());
+    after.push_back(encoded.value());
+    updates.push_back({.object = object, .document = replacement->document,
+                       .receipt = replacement->receipt});
+  }
+  const auto revision = session.content_revision();
+  const auto committed = session.commit_documents_batch(std::move(updates), true);
+  ASSERT_TRUE(committed.ok()) << committed.error_message();
+  EXPECT_EQ(session.content_revision(), revision + 1U);
+  ASSERT_TRUE(session.undo().ok());
+  for (std::size_t index = 0U; index < objects.size(); ++index) {
+    const auto document = session.document_copy(objects[index]);
+    ASSERT_TRUE(document.ok());
+    const auto encoded = serialize_qdr_authored_topology(document.value());
+    ASSERT_TRUE(encoded.ok());
+    EXPECT_EQ(encoded.value(), before[index]);
+    EXPECT_EQ(document.value().selection().edges, originals[index].selection().edges);
+    expect_session_object_selected(session, objects[index], true);
+  }
+  ASSERT_TRUE(session.redo().ok());
+  for (std::size_t index = 0U; index < objects.size(); ++index) {
+    const auto document = session.document_copy(objects[index]);
+    ASSERT_TRUE(document.ok());
+    const auto encoded = serialize_qdr_authored_topology(document.value());
+    ASSERT_TRUE(encoded.ok());
+    EXPECT_EQ(encoded.value(), after[index]);
+    EXPECT_EQ(document.value().selection().edges, originals[index].selection().edges);
+    expect_session_object_selected(session, objects[index], true);
+  }
+}
+
 TEST(ModelingSdkConsumerTests,
      UnsupportedSdkPlaceholdersAreDeprecatedAndNotAdvertised) {
   ModelingApi quader = ModelingApi::create({

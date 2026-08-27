@@ -16,6 +16,7 @@
 #include "render/instance_batch_planner.hpp"
 #include "render/instance_renderable_cache.hpp"
 #include "render/material_binding_service.hpp"
+#include "render/mesh_quad_uv_interpolation.hpp"
 #include "render/mesh_renderable_factory.hpp"
 #include "render/mesh_surface_grid_projection.hpp"
 #include "render/render_signature_builder.hpp"
@@ -45,11 +46,13 @@
 
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <cmath>
 #include <cstdint>
 #include <initializer_list>
 #include <memory>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -173,6 +176,163 @@ MeshAsset make_authored_split_quad_mesh() {
   mesh.authored_polygon_document =
       std::make_shared<quader_poly::Document>(std::move(document));
   return mesh;
+}
+
+MeshGeometryPayload make_non_affine_uv_quad_geometry() {
+  MeshGeometryPayload geometry;
+  geometry.vertices = {
+      {.position = {0.0f, 0.0f, 0.0f},
+       .normal = {0.0f, 0.0f, 1.0f},
+       .uv = {-0.25f, 0.125f}},
+      {.position = {3.0f, 0.0f, 0.0f},
+       .normal = {0.0f, 0.0f, 1.0f},
+       .uv = {1.5f, -0.375f}},
+      {.position = {2.0f, 2.0f, 0.0f},
+       .normal = {0.0f, 0.0f, 1.0f},
+       .uv = {1.125f, 1.875f}},
+      {.position = {0.0f, 1.5f, 0.0f},
+       .normal = {0.0f, 0.0f, 1.0f},
+       .uv = {-0.625f, 1.0f}},
+  };
+  std::uint32_t source_vertex_id = 1u;
+  for (MeshVertex &vertex : geometry.vertices) {
+    vertex.source_vertex_id = source_vertex_id++;
+    vertex.uv_carrier = {1.25f, 0.125f, -0.25f, 0.75f};
+    vertex.uv_geometric_normal = {0.0f, 0.0f, 1.0f};
+  }
+  geometry.indices = {0u, 1u, 2u, 0u, 2u, 3u};
+  geometry.primitives = {{.index_offset = 0u, .index_count = 6u}};
+  return geometry;
+}
+
+constexpr std::array<std::array<std::uint32_t, 6>, 2> kQuadDiagonals{{
+    {{0u, 1u, 2u, 0u, 2u, 3u}},
+    {{0u, 1u, 3u, 1u, 2u, 3u}},
+}};
+
+std::array<double, 4> bilinear_weights(double s, double t) {
+  return {(1.0 - s) * (1.0 - t), s * (1.0 - t), s * t,
+          (1.0 - s) * t};
+}
+
+QVec3 bilinear_quad_position(const MeshGeometryPayload &geometry, double s,
+                             double t,
+                             std::span<const QVec3> positions = {}) {
+  const auto weights = bilinear_weights(s, t);
+  std::array<double, 3> result{};
+  for (std::size_t index = 0; index < weights.size(); ++index) {
+    const QVec3 position = positions.empty()
+                              ? geometry.vertices[index].position
+                              : positions[index];
+    result[0] += weights[index] * position.x;
+    result[1] += weights[index] * position.y;
+    result[2] += weights[index] * position.z;
+  }
+  return {static_cast<float>(result[0]), static_cast<float>(result[1]),
+          static_cast<float>(result[2])};
+}
+
+QVec2 bilinear_quad_uv(const MeshGeometryPayload &geometry, double s, double t) {
+  const auto weights = bilinear_weights(s, t);
+  std::array<double, 2> result{};
+  for (std::size_t index = 0; index < weights.size(); ++index) {
+    result[0] += weights[index] * geometry.vertices[index].uv.x;
+    result[1] += weights[index] * geometry.vertices[index].uv.y;
+  }
+  return {static_cast<float>(result[0]), static_cast<float>(result[1])};
+}
+
+/// Captures triangle and corrected UVs at the same raster sample.
+struct QuadUvTriangleSample final {
+  QVec2 triangle_uv;
+  QVec2 corrected_uv;
+};
+
+/// Emulates raster interpolation without using the production inverse solve.
+std::vector<QuadUvTriangleSample> sample_quad_uv_triangles(
+    const MeshGeometryPayload &geometry,
+    std::span<const MeshQuadUvInterpolation> interpolations, QVec3 point,
+    std::span<const QVec3> positions = {}) {
+  std::vector<QuadUvTriangleSample> result;
+  for (std::size_t offset = 0; offset + 2u < geometry.indices.size();
+       offset += 3u) {
+    const std::array<std::uint32_t, 3> indices{
+        geometry.indices[offset], geometry.indices[offset + 1u],
+        geometry.indices[offset + 2u]};
+    std::array<QVec3, 3> triangle;
+    for (std::size_t index = 0; index < indices.size(); ++index) {
+      triangle[index] = positions.empty()
+                            ? geometry.vertices[indices[index]].position
+                            : positions[indices[index]];
+    }
+    const auto difference = [](QVec3 left, QVec3 right) {
+      return std::array<double, 3>{static_cast<double>(left.x) - right.x,
+                                   static_cast<double>(left.y) - right.y,
+                                   static_cast<double>(left.z) - right.z};
+    };
+    const auto dot = [](const auto &left, const auto &right) {
+      return left[0] * right[0] + left[1] * right[1] + left[2] * right[2];
+    };
+    const auto edge0 = difference(triangle[1], triangle[0]);
+    const auto edge1 = difference(triangle[2], triangle[0]);
+    const auto relative = difference(point, triangle[0]);
+    const double a = dot(edge0, edge0);
+    const double b = dot(edge0, edge1);
+    const double c = dot(edge1, edge1);
+    const double d = dot(relative, edge0);
+    const double e = dot(relative, edge1);
+    const double determinant = a * c - b * b;
+    if (determinant <= 0.0) {
+      continue;
+    }
+    const double weight1 = (d * c - e * b) / determinant;
+    const double weight2 = (e * a - d * b) / determinant;
+    const std::array<double, 3> weights{1.0 - weight1 - weight2, weight1,
+                                        weight2};
+    if (std::ranges::any_of(weights, [](double weight) {
+          return weight < -0.000002;
+        })) {
+      continue;
+    }
+    MeshQuadUvInterpolation interpolated = interpolations[indices[0]];
+    interpolated.coordinates = {};
+    QVec2 triangle_uv{};
+    for (std::size_t index = 0; index < indices.size(); ++index) {
+      const auto weight = static_cast<float>(weights[index]);
+      const auto &coordinates = interpolations[indices[index]].coordinates;
+      interpolated.coordinates.x += weight * coordinates.x;
+      interpolated.coordinates.y += weight * coordinates.y;
+      interpolated.coordinates.z += weight * coordinates.z;
+      triangle_uv.x += weight * geometry.vertices[indices[index]].uv.x;
+      triangle_uv.y += weight * geometry.vertices[indices[index]].uv.y;
+    }
+    result.push_back({triangle_uv, evaluate_mesh_quad_uv_interpolation(
+                                       triangle_uv, interpolated)});
+  }
+  return result;
+}
+
+void expect_quad_uv_fallback(const MeshGeometryPayload &geometry) {
+  const auto interpolations = build_mesh_quad_uv_interpolations(
+      geometry.vertices, geometry.indices, geometry.primitives);
+  ASSERT_EQ(interpolations.size(), geometry.vertices.size());
+  const QVec2 unchanged{-0.0f, 1234.625f};
+  for (const auto &interpolation : interpolations) {
+    EXPECT_FALSE(interpolation.enabled);
+    EXPECT_FLOAT_EQ(interpolation.coordinates.x, 0.0f);
+    EXPECT_FLOAT_EQ(interpolation.coordinates.y, 0.0f);
+    EXPECT_FLOAT_EQ(interpolation.coordinates.z, 0.0f);
+    EXPECT_FLOAT_EQ(interpolation.geometry_warp.x, 0.0f);
+    EXPECT_FLOAT_EQ(interpolation.geometry_warp.y, 0.0f);
+    EXPECT_FLOAT_EQ(interpolation.uv_correction.x, 0.0f);
+    EXPECT_FLOAT_EQ(interpolation.uv_correction.y, 0.0f);
+    const auto actual =
+        evaluate_mesh_quad_uv_interpolation(unchanged, interpolation);
+    EXPECT_EQ(std::bit_cast<std::uint32_t>(actual.x),
+              std::bit_cast<std::uint32_t>(unchanged.x));
+    EXPECT_EQ(std::bit_cast<std::uint32_t>(actual.y),
+              std::bit_cast<std::uint32_t>(unchanged.y));
+  }
 }
 
 std::size_t line_count_for(const ViewportOverlayFrame &frame,
@@ -656,6 +816,309 @@ TEST(MeshSurfaceGridProjectionTests,
             face_mesh.geometry_content_id());
   EXPECT_NE(MeshRenderableFactory::mesh_asset_signature(0u, smooth_mesh),
             MeshRenderableFactory::mesh_asset_signature(0u, face_mesh));
+}
+
+TEST(MeshQuadUvInterpolationTests,
+     MatchesBilinearCornersInteriorAndEdgesAcrossEitherDiagonal) {
+  for (const bool parallelogram : {false, true}) {
+    SCOPED_TRACE(parallelogram ? "parallelogram" : "warped quad");
+    for (const auto &diagonal : kQuadDiagonals) {
+      SCOPED_TRACE(diagonal[2]);
+      MeshGeometryPayload geometry = make_non_affine_uv_quad_geometry();
+      if (parallelogram) {
+        geometry.vertices[2].position = {3.0f, 1.5f, 0.0f};
+      }
+      geometry.indices.assign(diagonal.begin(), diagonal.end());
+      const auto interpolations = build_mesh_quad_uv_interpolations(
+          geometry.vertices, geometry.indices, geometry.primitives);
+      ASSERT_EQ(interpolations.size(), 4u);
+      for (const auto &interpolation : interpolations) {
+        ASSERT_TRUE(interpolation.enabled);
+        EXPECT_FLOAT_EQ(interpolation.geometry_warp.x,
+                        interpolations.front().geometry_warp.x);
+        EXPECT_FLOAT_EQ(interpolation.geometry_warp.y,
+                        interpolations.front().geometry_warp.y);
+        EXPECT_FLOAT_EQ(interpolation.uv_correction.x,
+                        interpolations.front().uv_correction.x);
+        EXPECT_FLOAT_EQ(interpolation.uv_correction.y,
+                        interpolations.front().uv_correction.y);
+      }
+      bool observed_triangle_distortion = false;
+      for (int row = 0; row <= 16; ++row) {
+        for (int column = 0; column <= 16; ++column) {
+          SCOPED_TRACE(::testing::Message() << "sample " << column << ","
+                                           << row);
+          const double s = static_cast<double>(column) / 16.0;
+          const double t = static_cast<double>(row) / 16.0;
+          const auto expected = bilinear_quad_uv(geometry, s, t);
+          const auto samples = sample_quad_uv_triangles(
+              geometry, interpolations,
+              bilinear_quad_position(geometry, s, t));
+          ASSERT_FALSE(samples.empty());
+          for (const auto &sample : samples) {
+            EXPECT_NEAR(sample.corrected_uv.x, expected.x, 0.00002f);
+            EXPECT_NEAR(sample.corrected_uv.y, expected.y, 0.00002f);
+            observed_triangle_distortion =
+                observed_triangle_distortion ||
+                std::abs(sample.triangle_uv.x - expected.x) > 0.001f ||
+                std::abs(sample.triangle_uv.y - expected.y) > 0.001f;
+          }
+        }
+      }
+      EXPECT_TRUE(observed_triangle_distortion);
+    }
+  }
+}
+
+TEST(MeshQuadUvInterpolationTests,
+     IndependentAdjacentFacesKeepTheSameLinearUvAlongTheirSharedEdge) {
+  for (const auto &diagonal : kQuadDiagonals) {
+    MeshGeometryPayload left = make_non_affine_uv_quad_geometry();
+    left.indices.assign(diagonal.begin(), diagonal.end());
+    MeshGeometryPayload right = left;
+    right.vertices[0] = left.vertices[1];
+    right.vertices[3] = left.vertices[2];
+    right.vertices[1].position = {5.0f, 0.25f, 0.0f};
+    right.vertices[2].position = {5.0f, 2.5f, 0.0f};
+    right.vertices[1].source_vertex_id = 5u;
+    right.vertices[2].source_vertex_id = 6u;
+    right.vertices[1].uv = {4.0f, -0.625f};
+    right.vertices[2].uv = {3.25f, 2.75f};
+    const auto left_interpolations = build_mesh_quad_uv_interpolations(
+        left.vertices, left.indices, left.primitives);
+    const auto right_interpolations = build_mesh_quad_uv_interpolations(
+        right.vertices, right.indices, right.primitives);
+    ASSERT_EQ(left_interpolations.size(), 4u);
+    ASSERT_EQ(right_interpolations.size(), 4u);
+    ASSERT_TRUE(left_interpolations.front().enabled);
+    ASSERT_TRUE(right_interpolations.front().enabled);
+    for (int step = 0; step <= 32; ++step) {
+      const double t = static_cast<double>(step) / 32.0;
+      const auto position = bilinear_quad_position(left, 1.0, t);
+      const auto expected = bilinear_quad_uv(left, 1.0, t);
+      const auto left_samples =
+          sample_quad_uv_triangles(left, left_interpolations, position);
+      const auto right_samples =
+          sample_quad_uv_triangles(right, right_interpolations, position);
+      ASSERT_FALSE(left_samples.empty());
+      ASSERT_FALSE(right_samples.empty());
+      for (const auto &samples : {left_samples, right_samples}) {
+        for (const auto &sample : samples) {
+          EXPECT_NEAR(sample.corrected_uv.x, expected.x, 0.00002f);
+          EXPECT_NEAR(sample.corrected_uv.y, expected.y, 0.00002f);
+        }
+      }
+    }
+  }
+}
+
+TEST(MeshQuadUvInterpolationTests,
+     AffineGeneratedChartsAndIdentityFallbackKeepTheOriginalUvBits) {
+  for (const auto &diagonal : kQuadDiagonals) {
+    MeshGeometryPayload geometry = make_non_affine_uv_quad_geometry();
+    geometry.indices.assign(diagonal.begin(), diagonal.end());
+    for (MeshVertex &vertex : geometry.vertices) {
+      vertex.uv = {-1.25f * vertex.position.x +
+                       0.5f * vertex.position.y + 0.25f,
+                   0.75f * vertex.position.x +
+                       2.0f * vertex.position.y - 0.125f};
+    }
+    expect_quad_uv_fallback(geometry);
+  }
+  expect_quad_uv_fallback(make_authored_quad_mesh().geometry());
+}
+
+TEST(MeshQuadUvInterpolationTests,
+     UnsafeQuadGeometryKeepsTriangleInterpolationWithoutPartialAttributes) {
+  /// Names an unsupported quad geometry fixture for interpolation fallback checks.
+  struct QuadShapeCase final {
+    std::string_view name;
+    std::array<QVec3, 4> positions;
+  };
+  const std::array<QuadShapeCase, 5> cases{{
+      {"concave", {{{0.0f, 0.0f, 0.0f}, {3.0f, 0.0f, 0.0f},
+                    {0.5f, 0.5f, 0.0f}, {0.0f, 1.5f, 0.0f}}}},
+      {"nonplanar", {{{0.0f, 0.0f, 0.0f}, {3.0f, 0.0f, 0.0f},
+                      {2.0f, 2.0f, 0.25f}, {0.0f, 1.5f, 0.0f}}}},
+      {"collapsed edge", {{{0.0f, 0.0f, 0.0f}, {3.0f, 0.0f, 0.0f},
+                           {3.0f, 0.0f, 0.0f}, {0.0f, 1.5f, 0.0f}}}},
+      {"collinear triangle", {{{0.0f, 0.0f, 0.0f}, {3.0f, 0.0f, 0.0f},
+                               {2.0f, 0.0f, 0.0f}, {0.0f, 1.5f, 0.0f}}}},
+      {"self intersection", {{{0.0f, 0.0f, 0.0f}, {3.0f, 0.0f, 0.0f},
+                              {0.0f, 1.5f, 0.0f}, {2.0f, 2.0f, 0.0f}}}},
+  }};
+  for (const auto &test_case : cases) {
+    SCOPED_TRACE(test_case.name);
+    MeshGeometryPayload geometry = make_non_affine_uv_quad_geometry();
+    for (std::size_t index = 0; index < test_case.positions.size(); ++index) {
+      geometry.vertices[index].position = test_case.positions[index];
+    }
+    expect_quad_uv_fallback(geometry);
+  }
+}
+
+TEST(MeshQuadUvInterpolationTests,
+     TrianglesNgonsAndSharedCompiledVerticesRetainTheirExistingSampling) {
+  MeshGeometryPayload triangle = make_non_affine_uv_quad_geometry();
+  triangle.indices = {0u, 1u, 2u};
+  triangle.primitives.front().index_count = 3u;
+  expect_quad_uv_fallback(triangle);
+
+  MeshGeometryPayload ngon = make_non_affine_uv_quad_geometry();
+  ngon.vertices.push_back({.position = {-0.5f, 0.75f, 0.0f},
+                           .source_vertex_id = 5u});
+  ngon.indices = {0u, 1u, 2u, 0u, 2u, 3u, 0u, 3u, 4u};
+  ngon.primitives.front().index_count = 9u;
+  expect_quad_uv_fallback(ngon);
+
+  MeshGeometryPayload adjacent = make_non_affine_uv_quad_geometry();
+  MeshVertex bottom = adjacent.vertices[1];
+  bottom.position = {5.0f, 0.0f, 0.0f};
+  bottom.source_vertex_id = 5u;
+  MeshVertex top = adjacent.vertices[2];
+  top.position = {4.0f, 2.0f, 0.0f};
+  top.source_vertex_id = 6u;
+  adjacent.vertices.push_back(bottom);
+  adjacent.vertices.push_back(top);
+  adjacent.indices.insert(adjacent.indices.end(), {1u, 4u, 5u, 1u, 5u, 2u});
+  adjacent.primitives.push_back({.index_offset = 6u, .index_count = 6u});
+  expect_quad_uv_fallback(adjacent);
+}
+
+TEST(MeshQuadUvInterpolationTests,
+     NonconstantOccurrenceCarriersAndGeometricNormalsDisableTheFace) {
+  MeshGeometryPayload carrier = make_non_affine_uv_quad_geometry();
+  carrier.vertices[1].uv_carrier[0] += 0.25f;
+  expect_quad_uv_fallback(carrier);
+
+  MeshGeometryPayload normal = make_non_affine_uv_quad_geometry();
+  normal.vertices[2].uv_geometric_normal = {0.0f, 1.0f, 0.0f};
+  expect_quad_uv_fallback(normal);
+}
+
+TEST(MeshQuadUvInterpolationTests,
+     AnonymousOrFoldedUvFacesKeepTheirExistingTriangleMapping) {
+  MeshGeometryPayload anonymous = make_non_affine_uv_quad_geometry();
+  anonymous.vertices[0].source_vertex_id = 0u;
+  expect_quad_uv_fallback(anonymous);
+
+  MeshGeometryPayload repeated_id = make_non_affine_uv_quad_geometry();
+  repeated_id.vertices[1].source_vertex_id =
+      repeated_id.vertices[0].source_vertex_id;
+  expect_quad_uv_fallback(repeated_id);
+
+  MeshGeometryPayload folded = make_non_affine_uv_quad_geometry();
+  std::swap(folded.vertices[2].uv, folded.vertices[3].uv);
+  expect_quad_uv_fallback(folded);
+}
+
+TEST(MeshQuadUvInterpolationTests,
+     OccurrenceAffineUvAdjustmentsReuseTheOriginalCorrectionAttributes) {
+  for (const auto &diagonal : kQuadDiagonals) {
+    MeshGeometryPayload geometry = make_non_affine_uv_quad_geometry();
+    geometry.indices.assign(diagonal.begin(), diagonal.end());
+    const auto interpolations = build_mesh_quad_uv_interpolations(
+        geometry.vertices, geometry.indices, geometry.primitives);
+    ASSERT_EQ(interpolations.size(), 4u);
+    ASSERT_TRUE(interpolations.front().enabled);
+    for (MeshVertex &vertex : geometry.vertices) {
+      vertex.uv.x += 1.5f * vertex.position.x -
+                     0.375f * vertex.position.y +
+                     0.25f * vertex.position.z + 2.0f;
+      vertex.uv.y += -0.25f * vertex.position.x +
+                     2.0f * vertex.position.y -
+                     0.5f * vertex.position.z - 1.0f;
+    }
+    for (int row = 0; row <= 8; ++row) {
+      for (int column = 0; column <= 8; ++column) {
+        const double s = static_cast<double>(column) / 8.0;
+        const double t = static_cast<double>(row) / 8.0;
+        const auto expected = bilinear_quad_uv(geometry, s, t);
+        const auto samples = sample_quad_uv_triangles(
+            geometry, interpolations,
+            bilinear_quad_position(geometry, s, t));
+        ASSERT_FALSE(samples.empty());
+        for (const auto &sample : samples) {
+          EXPECT_NEAR(sample.corrected_uv.x, expected.x, 0.00004f);
+          EXPECT_NEAR(sample.corrected_uv.y, expected.y, 0.00004f);
+        }
+      }
+    }
+  }
+}
+
+TEST(MeshQuadUvInterpolationTests,
+     AffinePlacementAndScaleDoNotChangeTheBilinearUvChart) {
+  for (const float scale : {0.00001f, 1.0f, 100000.0f}) {
+    SCOPED_TRACE(scale);
+    for (const float reflection : {-1.0f, 1.0f}) {
+      SCOPED_TRACE(reflection);
+      for (const auto &diagonal : kQuadDiagonals) {
+        MeshGeometryPayload geometry = make_non_affine_uv_quad_geometry();
+        geometry.indices.assign(diagonal.begin(), diagonal.end());
+        std::vector<QVec3> positions;
+        for (const MeshVertex &vertex : geometry.vertices) {
+          const auto &position = vertex.position;
+          positions.push_back({
+              scale * reflection *
+                  (2.0f * position.x + 0.5f * position.y + 4.0f),
+              scale * (-0.25f * position.x + 1.5f * position.y - 2.0f),
+              scale * (0.75f * position.x - 0.5f * position.y + 1.0f),
+          });
+        }
+        const auto interpolations = build_mesh_quad_uv_interpolations(
+            geometry.vertices, geometry.indices, geometry.primitives,
+            positions);
+        ASSERT_EQ(interpolations.size(), 4u);
+        ASSERT_TRUE(std::ranges::all_of(interpolations, [](const auto &value) {
+          return value.enabled;
+        }));
+        for (int row = 0; row <= 4; ++row) {
+          for (int column = 0; column <= 4; ++column) {
+            const double s = static_cast<double>(column) / 4.0;
+            const double t = static_cast<double>(row) / 4.0;
+            const auto expected = bilinear_quad_uv(geometry, s, t);
+            const auto samples = sample_quad_uv_triangles(
+                geometry, interpolations,
+                bilinear_quad_position(geometry, s, t, positions), positions);
+            ASSERT_FALSE(samples.empty());
+            for (const auto &sample : samples) {
+              EXPECT_NEAR(sample.corrected_uv.x, expected.x, 0.00004f);
+              EXPECT_NEAR(sample.corrected_uv.y, expected.y, 0.00004f);
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+TEST(MeshQuadUvInterpolationTests,
+     PositionOverridesRebuildTheWarpForNonAffinePreviewChanges) {
+  MeshGeometryPayload geometry = make_non_affine_uv_quad_geometry();
+  const std::array<QVec3, 4> positions{{
+      geometry.vertices[0].position, geometry.vertices[1].position,
+      {3.25f, 2.75f, 0.0f}, geometry.vertices[3].position,
+  }};
+  const auto interpolations = build_mesh_quad_uv_interpolations(
+      geometry.vertices, geometry.indices, geometry.primitives, positions);
+  ASSERT_EQ(interpolations.size(), 4u);
+  ASSERT_TRUE(interpolations.front().enabled);
+  for (const QVec2 chart_point : {QVec2{0.125f, 0.25f}, QVec2{0.31f, 0.67f},
+                                 QVec2{0.75f, 0.5f}, QVec2{0.875f, 0.875f}}) {
+    const auto expected =
+        bilinear_quad_uv(geometry, chart_point.x, chart_point.y);
+    const auto samples = sample_quad_uv_triangles(
+        geometry, interpolations,
+        bilinear_quad_position(geometry, chart_point.x, chart_point.y,
+                               positions),
+        positions);
+    ASSERT_FALSE(samples.empty());
+    for (const auto &sample : samples) {
+      EXPECT_NEAR(sample.corrected_uv.x, expected.x, 0.00002f);
+      EXPECT_NEAR(sample.corrected_uv.y, expected.y, 0.00002f);
+    }
+  }
 }
 
 TEST(RenderSceneSnapshotTests, BuildsVisibleMeshLightAndMaterialRecords) {

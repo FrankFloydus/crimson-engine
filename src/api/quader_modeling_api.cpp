@@ -18,6 +18,7 @@
 #include "editor/history/modeling_memento_command.hpp"
 #include "editor/history/face_texture_settings_history_command.hpp"
 #include "editor/history/face_texture_action_history_command.hpp"
+#include "editor/history/uv_peel_history_command.hpp"
 #include "editor/placement/snap_vertices_to_floor_history_command.hpp"
 #include "editor/instances/project_clipboard_service.hpp"
 #include "editor/instances/scene_instance_service.hpp"
@@ -49,6 +50,41 @@ namespace {
 
 SceneSession &scene_session(QuaderApiSession session) {
   return QuaderApiSessionInternalAccess::scene_session(session);
+}
+
+std::optional<ModelingUvPeelOptions>
+to_modeling_uv_peel_options(const QuaderUvPeelOptions &options) {
+  ModelingUvPeelAxis axis;
+  switch (options.axis) {
+  case QuaderUvPeelAxis::U:
+    axis = ModelingUvPeelAxis::U;
+    break;
+  case QuaderUvPeelAxis::V:
+    axis = ModelingUvPeelAxis::V;
+    break;
+  default:
+    return std::nullopt;
+  }
+  return ModelingUvPeelOptions{
+      .axis = axis,
+      .world_space = options.world_space,
+      .u_repeat = options.u_repeat,
+      .v_repeat = options.v_repeat,
+      .u_offset = options.u_offset,
+      .v_offset = options.v_offset,
+  };
+}
+
+QuaderUvPeelOptions to_api_uv_peel_options(const ModelingUvPeelOptions &options) {
+  return {
+      .axis = options.axis == ModelingUvPeelAxis::V ? QuaderUvPeelAxis::V
+                                                   : QuaderUvPeelAxis::U,
+      .world_space = options.world_space,
+      .u_repeat = options.u_repeat,
+      .v_repeat = options.v_repeat,
+      .u_offset = options.u_offset,
+      .v_offset = options.v_offset,
+  };
 }
 
 std::optional<ModelingFaceTextureAction>
@@ -2540,6 +2576,93 @@ QuaderApiVoidResult QuaderModelingApi::set_face_texture_treat_as_one(bool enable
   return mutations_.run_runtime_result(
       modeling_memento_command_result(result),
       "Treat Selected Faces as One");
+}
+
+QuaderUvPeelRevision QuaderModelingApi::uv_peel_settings_revision() const {
+  QuaderUvPeelRevision revision;
+  revision.scene_session_id = mutations_.scene_session_id();
+  if (!mutations_.available()) {
+    return revision;
+  }
+  const SceneSession &session = scene_session(session_);
+  revision.content_revision = session.modeling().content_revision();
+  revision.selection_revision = session.modeling().selection_revision();
+  revision.scene_revision = session.scene().revision();
+  revision.asset_revision = session.assets().revision();
+  revision.interaction_revision =
+      session.modeling().uv_peel_settings_revision() * 2u +
+      (session.native_tools().has_pending_tool() ? 1u : 0u);
+  return revision;
+}
+
+QuaderUvPeelSettings QuaderModelingApi::uv_peel_settings() const {
+  if (!mutations_.available()) {
+    return {};
+  }
+  const SceneSession &session = scene_session(session_);
+  const ModelingUvPeelSettings settings = session.modeling().uv_peel_settings();
+  QuaderUvPeelSettings result{
+      .selected_edge_count = settings.selected_edge_count,
+      .editable = settings.editable,
+      .options = to_api_uv_peel_options(settings.options),
+      .disabled_reason = settings.disabled_reason,
+      .selection_token = settings.selection_token,
+  };
+  switch (settings.block_reason) {
+  case ModelingUvPeelBlockReason::None:
+    result.block_reason = QuaderUvPeelBlockReason::None;
+    break;
+  case ModelingUvPeelBlockReason::NoSelection:
+    result.block_reason = QuaderUvPeelBlockReason::NoSelection;
+    break;
+  case ModelingUvPeelBlockReason::PreviewActive:
+    result.block_reason = QuaderUvPeelBlockReason::PreviewActive;
+    break;
+  case ModelingUvPeelBlockReason::TargetUnavailable:
+    result.block_reason = QuaderUvPeelBlockReason::TargetUnavailable;
+    break;
+  }
+  if (result.selected_edge_count != 0u && session.native_tools().has_pending_tool()) {
+    result.editable = false;
+    result.block_reason = QuaderUvPeelBlockReason::PreviewActive;
+    result.disabled_reason = "Apply or cancel the active tool before UV Peel.";
+  }
+  return result;
+}
+
+QuaderApiVoidResult
+QuaderModelingApi::set_uv_peel_options(const QuaderUvPeelOptions &options) {
+  if (!mutations_.available()) {
+    return invalid_api_status(session_, "No scene is active.");
+  }
+  const auto native = to_modeling_uv_peel_options(options);
+  if (!native.has_value()) {
+    return invalid_api_status(session_, "Unknown UV Peel axis.");
+  }
+  return mutations_.run_runtime_result(
+      modeling_memento_command_result(
+          scene_session(session_).modeling().set_uv_peel_options(*native)),
+      "UV Peel Settings");
+}
+
+QuaderApiVoidResult QuaderModelingApi::peel_uv(const QuaderUvPeelRequest &request) {
+  if (!mutations_.available()) {
+    return invalid_api_status(session_, "No scene is active.");
+  }
+  SceneSession &session = scene_session(session_);
+  if (session.native_tools().has_pending_tool()) {
+    return mutations_.modeling_content_blocked_status("UV Peel.");
+  }
+  const auto options = to_modeling_uv_peel_options(request.options);
+  if (!options.has_value()) {
+    return invalid_api_status(session_, "Unknown UV Peel axis.");
+  }
+  return mutations_.run_modeling_command(
+      std::make_unique<UvPeelHistoryCommand>(
+          session.modeling(), ModelingUvPeelRequest{
+                                  .options = *options,
+                                  .selection_token = request.selection_token}),
+      "UV Peel");
 }
 
 QuaderApiVoidResult

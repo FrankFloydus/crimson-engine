@@ -6,6 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "editor/modeling/services/modeling_session_service.hpp"
 #include "editor/modeling/services/face_texture_edit_context.hpp"
+#include "editor/modeling/services/uv_peel_edit_context.hpp"
 
 #include "editor/modeling/modeling_viewport_camera_adapter.hpp"
 
@@ -1091,8 +1092,8 @@ class ModelingSessionService::Impl : private ModelingTransformDragPort {
     ViewportOverlayFrame frame;
   };
 
-  /// All inputs that can change retained face texture presentation or validity.
-  struct FaceTextureCacheKey final {
+  /// Shared host inputs for retained texture presentation and target validity.
+  struct TextureSettingsCacheKey final {
     std::uint64_t content_revision = 0;
     std::uint64_t selection_revision = 0;
     std::uint64_t scene_revision = 0;
@@ -1104,8 +1105,8 @@ class ModelingSessionService::Impl : private ModelingTransformDragPort {
     ModelingInstanceEditScope instance_scope;
     bool preview_active = false;
 
-    friend bool operator==(const FaceTextureCacheKey &,
-                           const FaceTextureCacheKey &) = default;
+    friend bool operator==(const TextureSettingsCacheKey &,
+                           const TextureSettingsCacheKey &) = default;
   };
 
 public:
@@ -1585,24 +1586,31 @@ public:
     return sdk_projection_adapter_.selection_revision();
   }
 
-  [[nodiscard]] std::uint64_t face_texture_settings_revision() const {
-    const FaceTextureCacheKey key{
+  [[nodiscard]] TextureSettingsCacheKey texture_settings_cache_key(
+      std::uint64_t context_revision, std::uint64_t extent_revision = 0) const {
+    return {
         .content_revision = content_revision(),
         .selection_revision = selection_revision(),
         .scene_revision = scene_.revision(),
         .layer_revision = scene_.layer_revision(),
         .asset_revision = assets_.revision(),
         .visibility_revision = selection_service_.viewport_visibility_revision(),
-        .extent_revision = face_texture_extent_revision_provider_
-                               ? face_texture_extent_revision_provider_()
-                               : 0,
-        .context_revision = face_texture_context_.revision(),
+        .extent_revision = extent_revision,
+        .context_revision = context_revision,
         .instance_scope = instance_edit_scope_provider_
                               ? instance_edit_scope_provider_()
                               : ModelingInstanceEditScope{},
         .preview_active = sdk_projection_adapter_.preview_active() ||
                           transform_drag_active() || modal_tool_owns_viewport(),
     };
+  }
+
+  [[nodiscard]] std::uint64_t face_texture_settings_revision() const {
+    const TextureSettingsCacheKey key = texture_settings_cache_key(
+        face_texture_context_.revision(),
+        face_texture_extent_revision_provider_
+            ? face_texture_extent_revision_provider_()
+            : 0);
     if (!face_texture_cache_key_.has_value() || *face_texture_cache_key_ != key) {
       face_texture_cache_key_ = key;
       ++face_texture_revision_;
@@ -1804,6 +1812,120 @@ public:
 
   [[nodiscard]] bool face_texture_treat_as_one() const {
     return face_texture_context_.treat_as_one();
+  }
+
+  [[nodiscard]] std::uint64_t uv_peel_settings_revision() const {
+    const TextureSettingsCacheKey key =
+        texture_settings_cache_key(uv_peel_context_.revision());
+    if (!uv_peel_cache_key_.has_value() || *uv_peel_cache_key_ != key) {
+      uv_peel_cache_key_ = key;
+      ++uv_peel_revision_;
+    }
+    return uv_peel_revision_;
+  }
+
+  [[nodiscard]] ModelingUvPeelSettings uv_peel_settings() const {
+    const std::uint64_t revision = uv_peel_settings_revision();
+    if (uv_peel_presented_revision_ == revision) {
+      return uv_peel_settings_cache_;
+    }
+    ModelingSelectedUvPeelSnapshot snapshot =
+        sdk_projection_adapter_.selected_uv_peel_edges();
+    std::string target_error;
+    if (!snapshot.command.ok) {
+      target_error = snapshot.command.message.empty()
+                         ? "A selected UV Peel mesh is unavailable."
+                         : snapshot.command.message;
+    } else {
+      for (const auto &object : snapshot.objects) {
+        const FaceTarget target =
+            resolve_face_object_target(object.modeling_object_id);
+        if (!target.command.ok) {
+          target_error = "UV Peel: " + target.command.message;
+          break;
+        }
+      }
+    }
+    ModelingUvPeelSettings settings = uv_peel_context_.synchronize(
+        snapshot, content_revision(), selection_revision(),
+        uv_peel_cache_key_->instance_scope);
+    if (!target_error.empty()) {
+      settings.editable = false;
+      settings.block_reason = ModelingUvPeelBlockReason::TargetUnavailable;
+      settings.disabled_reason = std::move(target_error);
+    } else if (settings.selected_edge_count != 0u &&
+               uv_peel_cache_key_->preview_active) {
+      settings.editable = false;
+      settings.block_reason = ModelingUvPeelBlockReason::PreviewActive;
+      settings.disabled_reason =
+          "Commit or cancel the active tool or preview before UV Peel.";
+    }
+    uv_peel_selection_cache_ = std::move(snapshot);
+    uv_peel_settings_cache_ = std::move(settings);
+    uv_peel_presented_revision_ = uv_peel_settings_revision();
+    return uv_peel_settings_cache_;
+  }
+
+  ModelingCommandResult set_uv_peel_options(const ModelingUvPeelOptions &options) {
+    return uv_peel_context_.set_options(options);
+  }
+
+  void invalidate_uv_peel_selection() {
+    uv_peel_context_.invalidate_selection();
+  }
+
+  ModelingCommandResult peel_uv(const ModelingUvPeelRequest &request) {
+    const ModelingUvPeelSettings settings = uv_peel_settings();
+    if (!settings.editable) {
+      return {.ok = false,
+              .message = settings.disabled_reason.empty()
+                             ? "Select one or more editable edge guides first."
+                             : settings.disabled_reason};
+    }
+    if (request.selection_token == 0 ||
+        request.selection_token != settings.selection_token) {
+      return {.ok = false,
+              .message = "The edge selection or document changed before UV Peel."};
+    }
+    const auto options = modeling::validate_uv_peel_options(request.options);
+    if (!options.ok()) {
+      return {.ok = false, .message = options.error_message()};
+    }
+
+    const ModelingInstanceEditScope scope = uv_peel_cache_key_->instance_scope;
+    std::vector<ModelingUvPeelTarget> targets;
+    targets.reserve(uv_peel_selection_cache_.objects.size());
+    for (const auto &object : uv_peel_selection_cache_.objects) {
+      const auto world = modeling_object_world_transform(object.modeling_object_id);
+      const EntityId occurrence =
+          scope.active() && scene_.containing_instance_definition(object.entity) ==
+                                scope.definition
+              ? scope.occurrence
+              : kInvalidEntityId;
+      const auto sampling =
+          effective_texture_sampling_from_local(scene_, object.entity, occurrence);
+      if (!world.has_value() || !sampling.has_value()) {
+        return {.ok = false,
+                .message = "A selected UV Peel mesh has no usable texture mapping frame."};
+      }
+      targets.push_back({
+          .modeling_object_id = object.modeling_object_id,
+          .edges = object.edges,
+          .active_edge = object.active_edge,
+          .world_from_local = *world,
+          .sampling_from_local = *sampling,
+      });
+    }
+    ModelingCommandResult result =
+        sdk_projection_adapter_.apply_uv_peel(targets, options.value());
+    if (result.ok && result.changed) {
+      auto &repeat = history_bridge_.repeat_last_action();
+      repeat.last_action_kind = quader_editor_core::RepeatableActionKind::UvPeel;
+      repeat.last_uv_peel = options.value();
+      repeat.pending_preview_operation.reset();
+      invalidate_selection_overlay_caches();
+    }
+    return result;
   }
 
   ModelingCommandResult set_face_texture_treat_as_one(bool enabled) {
@@ -2204,6 +2326,7 @@ public:
       };
     }
     face_texture_context_.invalidate();
+    uv_peel_context_.invalidate_selection();
     invalidate_selection_overlay_caches();
     return {
         .ok = true,
@@ -2224,6 +2347,7 @@ public:
 
   void clear_transient_state_for_document_replacement() {
     face_texture_context_.invalidate();
+    uv_peel_context_.invalidate_selection();
     if (sdk_projection_adapter_.preview_active()) {
       (void)sdk_projection_adapter_.cancel_translate_preview();
     }
@@ -2239,6 +2363,7 @@ public:
 
   void reset_from_scene() {
     face_texture_context_.invalidate();
+    uv_peel_context_.invalidate_selection();
     // Group selection is scene-owned even though the polygon runtime represents
     // its mode as Object. Keep that runtime projection empty so reset cannot
     // introduce a second selection source of truth.
@@ -3990,6 +4115,19 @@ public:
   quader_editor_core::CommandResult execute_repeat_last_action_scene_aware() {
     quader_editor_core::RepeatLastActionState &repeat =
         history_bridge_.repeat_last_action();
+    if (repeat.last_action_kind ==
+        quader_editor_core::RepeatableActionKind::UvPeel) {
+      if (!repeat.last_uv_peel.has_value()) {
+        return {false, false, "No repeatable UV Peel action is available."};
+      }
+      const quader_editor_core::RepeatLastActionState repeated_action = repeat;
+      const ModelingCommandResult result = peel_uv({
+          .options = *repeat.last_uv_peel,
+          .selection_token = uv_peel_settings().selection_token,
+      });
+      repeat = repeated_action;
+      return {.ok = result.ok, .changed = result.changed, .message = result.message};
+    }
     if (repeat.last_action_kind ==
         quader_editor_core::RepeatableActionKind::FaceTexture) {
       if (!repeat.last_face_texture.has_value()) {
@@ -7070,12 +7208,18 @@ private:
   ModelingMeshSyncService mesh_sync_service_;
   ModelingSdkProjectionAdapter sdk_projection_adapter_;
   mutable FaceTextureEditContext face_texture_context_;
-  mutable std::optional<FaceTextureCacheKey> face_texture_cache_key_;
+  mutable std::optional<TextureSettingsCacheKey> face_texture_cache_key_;
   mutable std::uint64_t face_texture_revision_ = 0;
   mutable std::uint64_t face_texture_presented_revision_ = 0;
   mutable ModelingSelectedFaceTextureSnapshot face_texture_selection_cache_;
   mutable ModelingFaceTextureSettings face_texture_settings_cache_;
   mutable QVec2 face_texture_extent_cache_{64.0f, 64.0f};
+  mutable UvPeelEditContext uv_peel_context_;
+  mutable std::optional<TextureSettingsCacheKey> uv_peel_cache_key_;
+  mutable std::uint64_t uv_peel_revision_ = 0;
+  mutable std::uint64_t uv_peel_presented_revision_ = 0;
+  mutable ModelingSelectedUvPeelSnapshot uv_peel_selection_cache_;
+  mutable ModelingUvPeelSettings uv_peel_settings_cache_;
   std::function<std::optional<QVec2>(MaterialReference)> face_texture_extent_provider_;
   std::function<std::uint64_t()> face_texture_extent_revision_provider_;
   std::function<double()> face_texture_rotation_step_provider_;
@@ -7225,6 +7369,28 @@ ModelingCommandResult ModelingSessionService::set_face_texture_setting(
 ModelingCommandResult ModelingSessionService::apply_face_texture_action(
     const ModelingFaceTextureActionRequest &request) {
   return impl_->apply_face_texture_action(request);
+}
+
+std::uint64_t ModelingSessionService::uv_peel_settings_revision() const {
+  return impl_->uv_peel_settings_revision();
+}
+
+ModelingUvPeelSettings ModelingSessionService::uv_peel_settings() const {
+  return impl_->uv_peel_settings();
+}
+
+ModelingCommandResult ModelingSessionService::set_uv_peel_options(
+    const ModelingUvPeelOptions &options) {
+  return impl_->set_uv_peel_options(options);
+}
+
+ModelingCommandResult ModelingSessionService::peel_uv(
+    const ModelingUvPeelRequest &request) {
+  return impl_->peel_uv(request);
+}
+
+void ModelingSessionService::invalidate_uv_peel_selection() {
+  impl_->invalidate_uv_peel_selection();
 }
 
 bool ModelingSessionService::face_texture_treat_as_one() const {

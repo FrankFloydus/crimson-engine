@@ -258,6 +258,7 @@ add_library(quader_modeling STATIC
     src/editor/modeling/services/modeling_session_services.cpp
     src/editor/modeling/services/modeling_session_service.cpp
     src/editor/modeling/services/face_texture_edit_context.cpp
+    src/editor/modeling/services/uv_peel_edit_context.cpp
     src/editor/modeling/services/modeling_transform_drag_service.cpp
     src/editor/modeling/runtime_state/modal_tool_runtime.cpp
     src/editor/modeling/runtime_state/transform_drag_controller.cpp
@@ -627,6 +628,10 @@ file(MAKE_DIRECTORY "${QUADER_MATERIAL_OUTPUT_DIR}")
 
 function(quader_compile_material target_name input_file output_name)
     set(output_file "${QUADER_MATERIAL_OUTPUT_DIR}/${output_name}.filamat")
+    set(input_dependencies "${CMAKE_CURRENT_SOURCE_DIR}/${input_file}")
+    foreach(shared_file IN LISTS ARGN)
+        list(APPEND input_dependencies "${CMAKE_CURRENT_SOURCE_DIR}/${shared_file}")
+    endforeach()
     add_custom_command(
         OUTPUT "${output_file}"
         COMMAND "${FILAMENT_SDK_ROOT}/bin/matc.exe"
@@ -634,7 +639,7 @@ function(quader_compile_material target_name input_file output_name)
                 --platform all
                 --output "${output_file}"
                 "${CMAKE_CURRENT_SOURCE_DIR}/${input_file}"
-        DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/${input_file}"
+        DEPENDS ${input_dependencies}
         VERBATIM)
     add_custom_target("${target_name}" DEPENDS "${output_file}")
     set("${target_name}_OUTPUT" "${output_file}" PARENT_SCOPE)
@@ -644,7 +649,7 @@ set(QUADER_FILAMENT_MATERIAL_TARGETS)
 set(QUADER_FILAMENT_MATERIAL_OUTPUTS)
 set(QUADER_FILAMENT_MATERIAL_COPY_COMMANDS)
 macro(quader_register_filament_material target_name input_file output_name)
-    quader_compile_material("${target_name}" "${input_file}" "${output_name}")
+    quader_compile_material("${target_name}" "${input_file}" "${output_name}" ${ARGN})
     list(APPEND QUADER_FILAMENT_MATERIAL_TARGETS "${target_name}")
     list(APPEND QUADER_FILAMENT_MATERIAL_OUTPUTS
         "${${target_name}_OUTPUT}")
@@ -663,8 +668,8 @@ quader_require_existing_path("${QUADER_DEFAULT_ALBEDO_TEXTURE}" "app-owned defau
 quader_require_existing_path("${QUADER_DEFAULT_ROUGHNESS_TEXTURE}" "app-owned default material roughness texture")
 quader_require_existing_path("${QUADER_DEFAULT_PROJECT_MATERIAL_TEMPLATE}" "app-owned default project material template")
 
-quader_register_filament_material(quader_mesh_material resources/materials/quader_mesh.mat quader_mesh)
-quader_register_filament_material(quader_mesh_lit_material resources/materials/quader_mesh_lit.mat quader_mesh_lit)
+quader_register_filament_material(quader_mesh_material resources/materials/quader_mesh.mat quader_mesh resources/materials/mesh_quad_uv.glsl)
+quader_register_filament_material(quader_mesh_lit_material resources/materials/quader_mesh_lit.mat quader_mesh_lit resources/materials/mesh_quad_uv.glsl)
 quader_register_filament_material(vertex_color_overlay_material resources/materials/vertex_color_overlay.mat vertex_color_overlay)
 quader_register_filament_material(quader_instance_selection_fill_material resources/materials/quader_instance_selection_fill.mat quader_instance_selection_fill)
 quader_register_filament_material(quader_overlay_line_material resources/materials/quader_overlay_line.mat quader_overlay_line)
@@ -717,6 +722,7 @@ add_library(quader_render STATIC
     src/render/material_compiler_service.cpp
     src/render/mesh_renderable_cache.cpp
     src/render/mesh_renderable_factory.cpp
+    src/render/mesh_quad_uv_interpolation.cpp
     src/render/mesh_surface_grid_projection.cpp
     src/render/png_texture_loader.cpp
     src/render/overlay/overlay_camera_projector.cpp

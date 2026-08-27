@@ -81,6 +81,8 @@ enum class CanonicalCommandFixture : std::uint8_t {
   ExternalRuntime,
   /// An isolated asymmetric face with authored UVs and signed texture settings.
   TextureFaceSelection,
+  /// One edge of an open, asymmetric authored-UV quad selected in Edge mode.
+  UvPeelEdgeSelection,
 };
 
 /**

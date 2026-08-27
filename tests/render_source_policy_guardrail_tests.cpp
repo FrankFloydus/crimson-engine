@@ -147,8 +147,18 @@ TEST(QuaderMeshMaterialTests,
   for (std::size_t index = 0; index < sources.size(); ++index) {
     const std::string &source = sources[index];
     EXPECT_TRUE(source_contains_compact(source, "flipUV : true"));
-    EXPECT_TRUE(source_contains_compact(
-        source, "requires : [ uv0, tangents, custom0, custom1, custom2 ]"));
+    const std::size_t requires_begin = source.find("requires : [");
+    ASSERT_NE(requires_begin, std::string::npos);
+    const std::size_t requires_end = source.find(']', requires_begin);
+    ASSERT_NE(requires_end, std::string::npos);
+    const std::string_view required_attributes(
+        source.data() + requires_begin, requires_end - requires_begin);
+    for (const std::string_view attribute :
+         {"uv0", "tangents", "custom0", "custom1", "custom2", "custom3",
+          "custom4"}) {
+      EXPECT_NE(required_attributes.find(attribute), std::string_view::npos)
+          << attribute;
+    }
     EXPECT_TRUE(source_contains_compact(
         source, "type : mat4[64], name : textureSamplingFromLocal"));
     EXPECT_TRUE(source_contains_compact(
@@ -208,6 +218,48 @@ TEST(QuaderMeshMaterialTests,
     EXPECT_EQ(vertex.find("inverse(samplingFromLocal)"), std::string::npos);
   }
   EXPECT_EQ(vertex_blocks[0], vertex_blocks[1]);
+}
+
+TEST(QuaderMeshMaterialTests,
+     SharedQuadCorrectionFeedsTheFinalMaterialUvAndNormalDerivativePath) {
+  const std::string quad_source =
+      read_source_file("resources/materials/mesh_quad_uv.glsl");
+  const std::size_t fallback_gate =
+      quad_source.find("if (variable_quadUvCoordinates.w <= 0.5)");
+  const std::size_t coordinate_read =
+      quad_source.find("coordinate = variable_quadUvCoordinates.xyz");
+  ASSERT_NE(fallback_gate, std::string::npos);
+  ASSERT_NE(coordinate_read, std::string::npos);
+  EXPECT_LT(fallback_gate, coordinate_read);
+  EXPECT_NE(quad_source.find("highp vec2 applyQuadUvInterpolation"),
+            std::string::npos);
+  EXPECT_NE(quad_source.find("variable_quadUvCorrection.xy"),
+            std::string::npos);
+  EXPECT_NE(quad_source.find("variable_quadUvCorrection.zw"),
+            std::string::npos);
+  EXPECT_NE(quad_source.find("isnan(discriminant)"), std::string::npos);
+  EXPECT_NE(quad_source.find("isinf(discriminant)"), std::string::npos);
+  EXPECT_NE(quad_source.find("any(isnan(corrected))"), std::string::npos);
+  EXPECT_NE(quad_source.find("any(isinf(corrected))"), std::string::npos);
+
+  for (const std::string_view material : {"quader_mesh.mat",
+                                         "quader_mesh_lit.mat"}) {
+    const std::string source =
+        read_source_file("resources/materials/" + std::string(material));
+    EXPECT_NE(source.find("#include \"mesh_quad_uv.glsl\""),
+              std::string::npos);
+    EXPECT_TRUE(source_contains_compact(
+        source, "material.quadUvCoordinates = getCustom3()"));
+    EXPECT_TRUE(source_contains_compact(
+        source, "material.quadUvCorrection = getCustom4()"));
+    EXPECT_TRUE(source_contains_compact(
+        source, "material.textureSamplingCorrection.x = max("
+                "material.textureSamplingCorrection.x,"
+                "material.quadUvCoordinates.w)"));
+    EXPECT_TRUE(source_contains_compact(
+        source, "vec2 uv = applyTextureTransform(applyQuadUvInterpolation("
+                "vec2(getUV0().x, 1.0 - getUV0().y)))"));
+  }
 }
 
 TEST(QuaderMeshMaterialTests, UsesLitTextureTransformTimesColorAndPbrFactors) {
@@ -585,27 +637,34 @@ TEST(QuaderMeshMaterialTests,
   // isolated material preview: each upload must supply all sampling attributes.
   for (const std::string_view vertex_type :
        {"RenderVertex", "DynamicRenderVertexStatic"}) {
-    EXPECT_NE(factory_source.find("offsetof(" + std::string(vertex_type) +
-                                  ", uv_carrier)"),
-              std::string::npos);
-    EXPECT_NE(factory_source.find("offsetof(" + std::string(vertex_type) +
-                                  ", uv_geometric_normal)"),
+    for (const std::string_view attribute :
+         {"uv_carrier", "uv_geometric_normal", "quad_uv_coordinates",
+          "quad_uv_correction"}) {
+      EXPECT_NE(factory_source.find("offsetof(" + std::string(vertex_type) +
+                                    ", " + std::string(attribute) + ")"),
+                std::string::npos);
+    }
+  }
+  for (const std::string_view attribute : {"CUSTOM1", "CUSTOM2", "CUSTOM3",
+                                          "CUSTOM4"}) {
+    const std::string qualified =
+        "filament::VertexAttribute::" + std::string(attribute);
+    EXPECT_EQ(count_occurrences(factory_source, qualified), 2u);
+    EXPECT_NE(preview_source.find(qualified), std::string::npos);
+  }
+  for (const std::string_view attribute :
+       {"uv_carrier", "uv_geometric_normal", "quad_uv_coordinates",
+        "quad_uv_correction"}) {
+    EXPECT_NE(preview_source.find("offsetof(PreviewGpuVertex, " +
+                                  std::string(attribute) + ")"),
               std::string::npos);
   }
-  EXPECT_EQ(count_occurrences(factory_source,
-                              "filament::VertexAttribute::CUSTOM1"),
+  EXPECT_TRUE(source_contains_compact(
+      factory_source, "build_mesh_quad_uv_interpolations("
+                      "mesh.vertices, mesh.indices, mesh.primitives, positions)"));
+  EXPECT_EQ(count_occurrences(
+                factory_source, "build_render_vertices(mesh, dynamic_positions)"),
             2u);
-  EXPECT_EQ(count_occurrences(factory_source,
-                              "filament::VertexAttribute::CUSTOM2"),
-            2u);
-  EXPECT_NE(preview_source.find("filament::VertexAttribute::CUSTOM1"),
-            std::string::npos);
-  EXPECT_NE(preview_source.find("filament::VertexAttribute::CUSTOM2"),
-            std::string::npos);
-  EXPECT_NE(preview_source.find("offsetof(PreviewGpuVertex, uv_carrier)"),
-            std::string::npos);
-  EXPECT_NE(preview_source.find("offsetof(PreviewGpuVertex, uv_geometric_normal)"),
-            std::string::npos);
   for (const std::string_view instance :
        {"shaded_instance", "rendered_instance", "wire_instance"}) {
     EXPECT_NE(preview_source.find("bind_mesh_texture_mappings(*" +

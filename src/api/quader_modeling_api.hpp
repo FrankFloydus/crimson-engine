@@ -52,6 +52,59 @@ struct QuaderEdgeBevelArgs {
   int segments = 1;
 };
 
+/// Selects the texture axis that follows the selected edge guides.
+enum class QuaderUvPeelAxis { U, V };
+
+/// Scene-local peel settings; changing them does not edit the document.
+struct QuaderUvPeelOptions final {
+  QuaderUvPeelAxis axis = QuaderUvPeelAxis::U;
+  bool world_space = true;
+  double u_repeat = 1.0;
+  double v_repeat = 1.0;
+  double u_offset = 0.0;
+  double v_offset = 0.0;
+
+  friend bool operator==(const QuaderUvPeelOptions &,
+                         const QuaderUvPeelOptions &) = default;
+};
+
+/// Pins captured settings to the edge selection and document that supplied them.
+struct QuaderUvPeelRequest final {
+  QuaderUvPeelOptions options;
+  std::uint64_t selection_token = 0;
+};
+
+/// Localizable causes that disable UV Peel without hiding selected guides.
+enum class QuaderUvPeelBlockReason {
+  None,
+  NoSelection,
+  PreviewActive,
+  TargetUnavailable,
+};
+
+/// Cheap retained-presentation key; querying it never exports mesh geometry.
+struct QuaderUvPeelRevision final {
+  SceneSessionId scene_session_id;
+  std::uint64_t content_revision = 0;
+  std::uint64_t selection_revision = 0;
+  std::uint64_t scene_revision = 0;
+  std::uint64_t asset_revision = 0;
+  std::uint64_t interaction_revision = 0;
+
+  friend bool operator==(const QuaderUvPeelRevision &,
+                         const QuaderUvPeelRevision &) = default;
+};
+
+/// Presents the selected edge guides and retained peel settings together.
+struct QuaderUvPeelSettings final {
+  std::size_t selected_edge_count = 0;
+  bool editable = false;
+  QuaderUvPeelOptions options;
+  QuaderUvPeelBlockReason block_reason = QuaderUvPeelBlockReason::NoSelection;
+  std::string disabled_reason;
+  std::uint64_t selection_token = 0;
+};
+
 /// Carries the project-owned material resolved from one polygon face.
 struct QuaderFaceProjectMaterial {
   ProjectAssetId id;
@@ -579,6 +632,10 @@ public:
   apply_face_texture_action(const QuaderFaceTextureActionRequest &request);
   [[nodiscard]] bool face_texture_treat_as_one() const;
   QuaderApiVoidResult set_face_texture_treat_as_one(bool enabled);
+  [[nodiscard]] QuaderUvPeelRevision uv_peel_settings_revision() const;
+  [[nodiscard]] QuaderUvPeelSettings uv_peel_settings() const;
+  QuaderApiVoidResult set_uv_peel_options(const QuaderUvPeelOptions &options);
+  QuaderApiVoidResult peel_uv(const QuaderUvPeelRequest &request);
   [[nodiscard]] bool can_execute_tool(std::string_view tool_id) const;
   QuaderApiVoidResult execute_tool(std::string_view tool_id);
   QuaderApiVoidResult delete_selection();

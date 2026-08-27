@@ -10,6 +10,7 @@
 #include "api/quader_polygon_document_internal_access.hpp"
 
 #include <gtest/gtest.h>
+#include <quader/modeling/neutral/polygon/document_texture.hpp>
 
 #include <algorithm>
 #include <array>
@@ -134,6 +135,56 @@ quader::QuaderPolygonDocument face_texture_wall_document() {
   };
   return quader::QuaderPolygonDocumentInternalAccess::from_backend(
       std::move(document));
+}
+
+quader::QuaderPolygonDocument uv_peel_strip_document() {
+  quader_poly::Document document;
+  const std::array vertices{
+      quader_poly::add_vertex(document, {-2.0f, -1.0f, 0.0f}),
+      quader_poly::add_vertex(document, {0.0f, -1.0f, 0.0f}),
+      quader_poly::add_vertex(document, {2.0f, -1.0f, 0.0f}),
+      quader_poly::add_vertex(document, {-2.0f, 1.0f, 0.0f}),
+      quader_poly::add_vertex(document, {0.0f, 1.0f, 0.0f}),
+      quader_poly::add_vertex(document, {2.0f, 1.0f, 0.0f}),
+  };
+  (void)quader_poly::add_face(
+      document, std::array{vertices[0], vertices[1], vertices[4], vertices[3]});
+  (void)quader_poly::add_face(
+      document, std::array{vertices[1], vertices[2], vertices[5], vertices[4]});
+  return quader::QuaderPolygonDocumentInternalAccess::from_backend(
+      std::move(document));
+}
+
+quader::QuaderApiVoidResult peel_uv(
+    quader::QuaderApi &api, const quader::QuaderUvPeelOptions &options) {
+  return api.modeling().peel_uv({
+      .options = options,
+      .selection_token = api.modeling().uv_peel_settings().selection_token,
+  });
+}
+
+std::optional<quader::QuaderMeshAsset> effective_texture_mesh(
+    const quader::QuaderApi &api, quader::QuaderModelingObjectRef object) {
+  auto mesh = api.query().compiled_object_mesh(object);
+  const auto entity = api.query().entity(object.entity);
+  if (!mesh.has_value() || !entity.has_value()) {
+    return std::nullopt;
+  }
+  const auto mapping =
+      entity->texture_sampling_from_local.value_or(quader::QMat4{});
+  const auto &matrix = mapping.values;
+  const quader_poly::Transform3 sampling{
+      .x_axis = {matrix[0], matrix[1], matrix[2]},
+      .y_axis = {matrix[4], matrix[5], matrix[6]},
+      .z_axis = {matrix[8], matrix[9], matrix[10]},
+      .origin = {matrix[12], matrix[13], matrix[14]},
+  };
+  for (auto &vertex : mesh->vertices) {
+    vertex.uv = quader_poly::evaluate_texture_mapping(
+        vertex.uv, vertex.position, vertex.uv_geometric_normal,
+        vertex.uv_carrier, sampling);
+  }
+  return mesh;
 }
 
 void expect_texture_uv_bounds(const std::optional<quader::QuaderMeshAsset> &mesh,
@@ -1389,6 +1440,314 @@ TEST(ProgrammaticBehaviorScenarioTests,
         std::abs(actual.y - captured.y) > 0.00001f;
   }
   EXPECT_TRUE(mapping_changed);
+}
+
+TEST(ProgrammaticBehaviorScenarioTests,
+     UvPeelOptionsValidateWithoutChangingDocumentOrHistory) {
+  auto s = quader::test::BehaviorScenario::new_project();
+  auto &api = s.api();
+  const quader::QuaderUvPeelOptions defaults;
+  const auto before = api.revisions();
+  const auto initial_revision = api.modeling().uv_peel_settings_revision();
+  EXPECT_EQ(api.modeling().uv_peel_settings().options, defaults);
+  EXPECT_FALSE(api.modeling().uv_peel_settings().editable);
+  EXPECT_FALSE(s.editor().project().dirty());
+  const quader::QuaderUvPeelOptions options{
+      .axis = quader::QuaderUvPeelAxis::V,
+      .world_space = false,
+      .u_repeat = 2.0,
+      .v_repeat = 3.0,
+      .u_offset = -0.25,
+      .v_offset = 0.5,
+  };
+  const auto changed = api.modeling().set_uv_peel_options(options);
+  ASSERT_TRUE(changed.ok()) << changed.error_message();
+  EXPECT_TRUE(changed.changed());
+  EXPECT_EQ(api.modeling().uv_peel_settings().options, options);
+  EXPECT_NE(api.modeling().uv_peel_settings_revision(), initial_revision);
+  expect_document_revisions_equal(api.revisions(), before);
+  EXPECT_FALSE(s.editor().project().dirty());
+  EXPECT_FALSE(api.history().can_undo());
+  const auto accepted_revision = api.modeling().uv_peel_settings_revision();
+  EXPECT_FALSE(api.modeling().set_uv_peel_options(options).changed());
+  EXPECT_EQ(api.modeling().uv_peel_settings_revision(), accepted_revision);
+
+  std::array invalid{options, options, options, options, options, options};
+  invalid[0].u_repeat = 0.0;
+  invalid[1].v_repeat = -1.0;
+  invalid[2].u_repeat = std::numeric_limits<double>::infinity();
+  invalid[3].u_offset = std::numeric_limits<double>::quiet_NaN();
+  invalid[4].v_offset = std::numeric_limits<double>::infinity();
+  invalid[5].axis = static_cast<quader::QuaderUvPeelAxis>(99);
+  for (const auto &candidate : invalid) {
+    const auto result = api.modeling().set_uv_peel_options(candidate);
+    EXPECT_FALSE(result.ok());
+    EXPECT_FALSE(result.changed());
+    EXPECT_EQ(api.modeling().uv_peel_settings().options, options);
+    EXPECT_EQ(api.modeling().uv_peel_settings_revision(), accepted_revision);
+    expect_document_revisions_equal(api.revisions(), before);
+  }
+  s.given().mesh("strip", uv_peel_strip_document());
+  ASSERT_TRUE(api.selection().select_edge(s.object("strip"), 2, 5).ok());
+  const auto selected = api.modeling().uv_peel_settings();
+  ASSERT_TRUE(selected.editable);
+  ASSERT_EQ(selected.selected_edge_count, 1u);
+  EXPECT_EQ(selected.options, options);
+  ASSERT_TRUE(api.modeling().set_uv_peel_options(defaults).ok());
+  EXPECT_EQ(api.modeling().uv_peel_settings().selection_token,
+            selected.selection_token);
+}
+
+TEST(ProgrammaticBehaviorScenarioTests,
+     UvPeelRejectsChangedDocumentActiveEdgeAndPreviewWithoutDiscardingRedo) {
+  auto s = quader::test::BehaviorScenario::new_project();
+  s.given().mesh("strip", uv_peel_strip_document());
+  auto &api = s.api();
+  const auto strip = s.object("strip");
+  const quader::QuaderUvPeelOptions options{
+      .world_space = false, .u_offset = 0.25,
+  };
+  EXPECT_FALSE(peel_uv(api, options).ok());
+  ASSERT_TRUE(api.selection().select_edge(strip, 2, 5).ok());
+  const auto original_token = api.modeling().uv_peel_settings().selection_token;
+  const auto peeled = peel_uv(api, options);
+  ASSERT_TRUE(peeled.ok()) << peeled.error_message();
+  ASSERT_TRUE(peeled.changed());
+  EXPECT_NE(api.modeling().uv_peel_settings().selection_token, original_token);
+  const auto after_peel = api.revisions();
+  const auto stale_document = api.modeling().peel_uv({
+      .options = options, .selection_token = original_token,
+  });
+  EXPECT_FALSE(stale_document.ok());
+  EXPECT_FALSE(stale_document.changed());
+  expect_document_revisions_equal(api.revisions(), after_peel);
+  ASSERT_TRUE(api.history().undo().ok());
+  ASSERT_TRUE(api.history().can_redo());
+
+  quader::QuaderComponentSelectionArgs selection{
+      .object = strip,
+      .kind = quader::QuaderComponentKind::Edge,
+      .edges = {{1, 4}, {2, 5}},
+      .active = {.object = strip, .kind = quader::QuaderComponentKind::Edge,
+                 .edge_a = 2, .edge_b = 5},
+  };
+  ASSERT_TRUE(api.selection().select_components(selection).ok());
+  const auto prior_active = api.modeling().uv_peel_settings().selection_token;
+  selection.active.edge_a = 1;
+  selection.active.edge_b = 4;
+  ASSERT_TRUE(api.selection().select_components(selection).ok());
+  EXPECT_NE(api.modeling().uv_peel_settings().selection_token, prior_active);
+  const auto before_rejected = api.revisions();
+  const auto before_history = api.history().snapshot();
+  const auto stale_active = api.modeling().peel_uv({
+      .options = options, .selection_token = prior_active,
+  });
+  EXPECT_FALSE(stale_active.ok());
+  EXPECT_FALSE(stale_active.changed());
+  expect_document_revisions_equal(api.revisions(), before_rejected);
+  EXPECT_EQ(api.history().snapshot().redo_label, before_history.redo_label);
+  EXPECT_TRUE(api.history().can_redo());
+
+  ASSERT_TRUE(api.modeling().begin_transform_preview().ok());
+  const auto blocked = api.modeling().uv_peel_settings();
+  EXPECT_FALSE(blocked.editable);
+  EXPECT_FALSE(blocked.disabled_reason.empty());
+  const auto before_preview_action = api.revisions();
+  EXPECT_FALSE(peel_uv(api, options).ok());
+  expect_document_revisions_equal(api.revisions(), before_preview_action);
+  EXPECT_TRUE(api.modeling().can_cancel_active_tool_or_preview());
+  ASSERT_TRUE(api.modeling().cancel_transform_preview().ok());
+  EXPECT_TRUE(api.history().can_redo());
+  ASSERT_TRUE(api.selection().set_mode(quader::QuaderSelectionMode::Face).ok());
+  EXPECT_FALSE(api.modeling().uv_peel_settings().editable);
+  EXPECT_FALSE(peel_uv(api, options).ok());
+}
+
+TEST(ProgrammaticBehaviorScenarioTests,
+     UvPeelPublishesMultipleObjectsInSeparateExactUndoEntries) {
+  auto s = quader::test::BehaviorScenario::new_project();
+  s.given().mesh("first", uv_peel_strip_document())
+      .mesh("second", uv_peel_strip_document());
+  auto &api = s.api();
+  const auto first = s.object("first");
+  const auto second = s.object("second");
+  ASSERT_TRUE(api.selection().select_edge(first, 2, 5).ok());
+  ASSERT_TRUE(api.selection().select_edge(
+      second, 2, 5, quader::QuaderSelectionEdit::Add).ok());
+  const auto original_first = api.query().compiled_object_mesh(first);
+  const auto original_second = api.query().compiled_object_mesh(second);
+  ASSERT_TRUE(original_first.has_value());
+  ASSERT_TRUE(original_second.has_value());
+  const auto selection_revision = api.revisions().modeling_selection_revision;
+  const quader::QuaderUvPeelOptions first_options{
+      .world_space = false, .u_repeat = 2.0, .v_repeat = 3.0,
+      .u_offset = 0.25, .v_offset = -0.5,
+  };
+  const auto first_peel = peel_uv(api, first_options);
+  ASSERT_TRUE(first_peel.ok()) << first_peel.error_message();
+  ASSERT_TRUE(first_peel.changed());
+  EXPECT_EQ(api.revisions().modeling_selection_revision, selection_revision);
+  EXPECT_EQ(api.modeling().uv_peel_settings().selected_edge_count, 2u);
+  EXPECT_EQ(api.history().snapshot().undo_label, "UV Peel");
+  const auto first_result = api.query().compiled_object_mesh(first);
+  const auto second_result = api.query().compiled_object_mesh(second);
+  ASSERT_TRUE(first_result.has_value());
+  ASSERT_TRUE(second_result.has_value());
+  expect_texture_uv_bounds(first_result, 0.25f, 2.25f, -0.5f, 2.5f);
+  expect_texture_uv_bounds(second_result, 0.25f, 2.25f, -0.5f, 2.5f);
+  ASSERT_EQ(first_result->indices.size(), original_first->indices.size());
+  for (std::size_t index = 0; index < first_result->indices.size(); ++index) {
+    const auto actual =
+        first_result->vertices[first_result->indices[index]].position;
+    const auto expected =
+        original_first->vertices[original_first->indices[index]].position;
+    EXPECT_FLOAT_EQ(actual.x, expected.x);
+    EXPECT_FLOAT_EQ(actual.y, expected.y);
+    EXPECT_FLOAT_EQ(actual.z, expected.z);
+  }
+
+  auto second_options = first_options;
+  second_options.u_offset = 0.75;
+  const auto second_peel = peel_uv(api, second_options);
+  ASSERT_TRUE(second_peel.ok()) << second_peel.error_message();
+  ASSERT_TRUE(second_peel.changed());
+  const auto final_first = api.query().compiled_object_mesh(first);
+  const auto final_second = api.query().compiled_object_mesh(second);
+  ASSERT_TRUE(final_first.has_value());
+  ASSERT_TRUE(final_second.has_value());
+  ASSERT_TRUE(api.history().undo().ok());
+  expect_texture_mesh_equal(api.query().compiled_object_mesh(first), *first_result);
+  expect_texture_mesh_equal(api.query().compiled_object_mesh(second), *second_result);
+  const auto before_noop = api.revisions();
+  const auto redo_label = api.history().snapshot().redo_label;
+  const auto noop = peel_uv(api, first_options);
+  ASSERT_TRUE(noop.ok()) << noop.error_message();
+  EXPECT_FALSE(noop.changed());
+  expect_document_revisions_equal(api.revisions(), before_noop);
+  EXPECT_TRUE(api.history().can_redo());
+  EXPECT_EQ(api.history().snapshot().redo_label, redo_label);
+  ASSERT_TRUE(api.history().undo().ok());
+  expect_texture_mesh_equal(api.query().compiled_object_mesh(first), *original_first);
+  expect_texture_mesh_equal(api.query().compiled_object_mesh(second), *original_second);
+  ASSERT_TRUE(api.history().redo().ok());
+  expect_texture_mesh_equal(api.query().compiled_object_mesh(first), *first_result);
+  ASSERT_TRUE(api.history().redo().ok());
+  expect_texture_mesh_equal(api.query().compiled_object_mesh(first), *final_first);
+  expect_texture_mesh_equal(api.query().compiled_object_mesh(second), *final_second);
+}
+
+TEST(ProgrammaticBehaviorScenarioTests,
+     UvPeelRepeatKeepsCapturedOptionsAndResolvesCurrentGuideSelection) {
+  auto s = quader::test::BehaviorScenario::new_project();
+  s.given().mesh("first", uv_peel_strip_document())
+      .mesh("second", uv_peel_strip_document())
+      .transform("second", {.scale = {2.0f, 3.0f, 1.0f}});
+  auto &api = s.api();
+  const auto first = s.object("first");
+  const auto second = s.object("second");
+  const quader::QuaderUvPeelOptions captured{
+      .axis = quader::QuaderUvPeelAxis::V,
+      .world_space = false,
+      .u_repeat = 2.0,
+      .v_repeat = 3.0,
+      .u_offset = 0.25,
+      .v_offset = -0.5,
+  };
+  ASSERT_TRUE(api.selection().select_edge(first, 2, 5).ok());
+  ASSERT_TRUE(peel_uv(api, captured).ok());
+  const auto first_result = api.query().compiled_object_mesh(first);
+  ASSERT_TRUE(first_result.has_value());
+  const quader::QuaderUvPeelOptions displayed{
+      .axis = quader::QuaderUvPeelAxis::U,
+      .world_space = true,
+      .u_repeat = 7.0,
+      .v_repeat = 8.0,
+      .u_offset = 4.0,
+      .v_offset = 5.0,
+  };
+  ASSERT_TRUE(api.modeling().set_uv_peel_options(displayed).ok());
+  ASSERT_TRUE(api.selection().select_edge(second, 2, 5).ok());
+  const auto before_second = api.query().compiled_object_mesh(second);
+  ASSERT_TRUE(before_second.has_value());
+  const auto repeated = api.history().repeat_last_action();
+  ASSERT_TRUE(repeated.ok()) << repeated.error_message();
+  ASSERT_TRUE(repeated.changed());
+  const auto second_result = api.query().compiled_object_mesh(second);
+  ASSERT_TRUE(second_result.has_value());
+  expect_texture_uv_bounds(
+      effective_texture_mesh(api, second), 0.25f, 2.25f, -0.5f, 2.5f);
+  expect_texture_mesh_equal(api.query().compiled_object_mesh(first), *first_result);
+  EXPECT_EQ(api.modeling().uv_peel_settings().options, displayed);
+  ASSERT_TRUE(api.history().undo().ok());
+  expect_texture_mesh_equal(api.query().compiled_object_mesh(second), *before_second);
+  ASSERT_TRUE(api.history().redo().ok());
+  expect_texture_mesh_equal(api.query().compiled_object_mesh(second), *second_result);
+  ASSERT_TRUE(api.history().undo().ok());
+  const auto repeated_after_undo = api.history().repeat_last_action();
+  ASSERT_TRUE(repeated_after_undo.ok()) << repeated_after_undo.error_message();
+  EXPECT_TRUE(repeated_after_undo.changed());
+  expect_texture_mesh_equal(api.query().compiled_object_mesh(second), *second_result);
+  EXPECT_EQ(api.modeling().uv_peel_settings().options, displayed);
+}
+
+TEST(ProgrammaticBehaviorScenarioTests,
+     UvPeelInstanceScopePreservesOccurrenceSamplingAndSharedDefinition) {
+  auto s = quader::test::BehaviorScenario::new_project();
+  s.given().mesh("strip", uv_peel_strip_document()).selected("strip");
+  auto &api = s.api();
+  const auto member = s.object("strip");
+  const auto created = api.modeling().create_instance_from_selection();
+  ASSERT_TRUE(created.ok()) << created.error_message();
+  const auto first_occurrence = created.value().occurrence.root.id;
+  const auto definition = created.value().definition.root.id;
+  ASSERT_TRUE(api.scene().set_transform(first_occurrence, {
+      .position = {5.0f, 2.0f, 0.0f}, .scale = {2.0f, 3.0f, 1.0f},
+  }).ok());
+  const auto first_snapshot = api.query().entity(first_occurrence);
+  ASSERT_TRUE(first_snapshot.has_value());
+  ASSERT_TRUE(first_snapshot->texture_sampling_from_local.has_value());
+  const auto sampling = *first_snapshot->texture_sampling_from_local;
+  const auto duplicate = api.scene().duplicate_selected_hierarchy();
+  ASSERT_TRUE(duplicate.ok()) << duplicate.error_message();
+  ASSERT_EQ(duplicate.value().root_entities.size(), 1u);
+  const auto second_occurrence = duplicate.value().root_entities.front().id;
+  ASSERT_NE(second_occurrence, first_occurrence);
+  ASSERT_TRUE(api.selection().set_mode(quader::QuaderSelectionMode::Edge).ok());
+  EXPECT_FALSE(api.selection().select_edge(member, 2, 5).ok());
+  EXPECT_FALSE(api.modeling().uv_peel_settings().editable);
+
+  ASSERT_TRUE(api.selection().set_mode(quader::QuaderSelectionMode::Object).ok());
+  const auto entered = api.modeling().enter_instance_edit(second_occurrence);
+  ASSERT_TRUE(entered.ok()) << entered.error_message();
+  const auto selected = api.selection().select_edge(member, 2, 5);
+  ASSERT_TRUE(selected.ok()) << selected.error_message();
+  ASSERT_TRUE(api.modeling().uv_peel_settings().editable);
+  const auto before = api.query().compiled_object_mesh(member);
+  ASSERT_TRUE(before.has_value());
+  const quader::QuaderUvPeelOptions options{
+      .world_space = false, .u_offset = 0.5, .v_offset = -0.25,
+  };
+  const auto peeled = peel_uv(api, options);
+  ASSERT_TRUE(peeled.ok()) << peeled.error_message();
+  ASSERT_TRUE(peeled.changed());
+  const auto after = api.query().compiled_object_mesh(member);
+  ASSERT_TRUE(after.has_value());
+  for (const auto occurrence : {first_occurrence, second_occurrence}) {
+    const auto snapshot = api.query().entity(occurrence);
+    ASSERT_TRUE(snapshot.has_value());
+    EXPECT_EQ(snapshot->instance_definition, definition);
+    ASSERT_TRUE(snapshot->texture_sampling_from_local.has_value());
+    EXPECT_EQ(snapshot->texture_sampling_from_local->values, sampling.values);
+  }
+  const auto member_after = api.query().entity(member.entity);
+  ASSERT_TRUE(member_after.has_value());
+  EXPECT_EQ(member_after->parent, definition);
+  ASSERT_TRUE(api.history().undo().ok());
+  expect_texture_mesh_equal(api.query().compiled_object_mesh(member), *before);
+  ASSERT_TRUE(api.history().redo().ok());
+  expect_texture_mesh_equal(api.query().compiled_object_mesh(member), *after);
+  ASSERT_TRUE(api.modeling().exit_instance_edit().ok());
+  EXPECT_FALSE(api.modeling().uv_peel_settings().editable);
 }
 
 TEST(ProgrammaticBehaviorScenarioTests,

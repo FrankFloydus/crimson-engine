@@ -123,6 +123,12 @@ public:
   apply_face_texture_action(const ModelingFaceTextureActionRequest &request);
   [[nodiscard]] bool face_texture_treat_as_one() const;
   ModelingCommandResult set_face_texture_treat_as_one(bool enabled);
+  [[nodiscard]] std::uint64_t uv_peel_settings_revision() const;
+  [[nodiscard]] ModelingUvPeelSettings uv_peel_settings() const;
+  ModelingCommandResult set_uv_peel_options(const ModelingUvPeelOptions &options);
+  ModelingCommandResult peel_uv(const ModelingUvPeelRequest &request);
+  /// Invalidates queued edge requests while retaining scene-local peel options.
+  void invalidate_uv_peel_selection();
   [[nodiscard]] double face_texture_rotation_step() const;
   void set_face_texture_rotation_step_provider(std::function<double()> provider);
   [[nodiscard]] ModelingFaceTextureEditState

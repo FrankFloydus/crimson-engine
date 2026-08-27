@@ -271,6 +271,10 @@ retained Edit Texture buttons call the same public modeling API directly, use th
 keybinding only for tooltip presentation, and never install private Qt shortcuts. Treat as One
 is scene-session state rather than a separate command or a persisted keybinding preference.
 
+UV Peel (`modeling.uv_peel`) is a bindable Edge-scoped command. It is
+deliberately unassigned by default; the retained UV Peel section invokes the
+same public modeling action and does not install a private Qt shortcut.
+
 ## Testing Requirements
 
 Input changes need fast synthetic coverage. Prefer headless tests over manual clicking whenever

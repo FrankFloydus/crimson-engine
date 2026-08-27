@@ -684,6 +684,7 @@ void UISystem::install_runtime_hooks(
   toolbar_refresh_valid_ = false;
   tool_settings_refresh_valid_ = false;
   face_texture_settings_revision_.reset();
+  uv_peel_settings_revision_.reset();
   status_refresh_valid_ = false;
   project_workspace_instance_edit_revision_ = 0;
   project_workspace_instance_edit_revision_valid_ = false;
@@ -2167,6 +2168,7 @@ void UISystem::shutdown() {
   tool_settings_revision_ = 0;
   tool_settings_refresh_valid_ = false;
   face_texture_settings_revision_.reset();
+  uv_peel_settings_revision_.reset();
   status_command_revision_ = 0;
   status_live_count_ = 0;
   status_live_kind_ = 0;
@@ -2409,6 +2411,16 @@ void UISystem::refresh(const FrameTiming &frame_timing,
       face_texture_settings_revision_ = revision;
       face_texture_keybindings_revision_ = keybindings_revision;
       face_texture_rotation_step_ = rotation_step;
+    }
+    const QuaderUvPeelRevision peel_revision =
+        editor_->modeling().uv_peel_settings_revision();
+    if (!uv_peel_settings_revision_.has_value() ||
+        *uv_peel_settings_revision_ != peel_revision ||
+        uv_peel_keybindings_revision_ != keybindings_revision) {
+      QDR_PROFILE_SCOPE("UI refresh UV Peel settings presentation");
+      tool_settings_panel_->refresh_uv_peel_settings();
+      uv_peel_settings_revision_ = peel_revision;
+      uv_peel_keybindings_revision_ = keybindings_revision;
     }
   }
   {

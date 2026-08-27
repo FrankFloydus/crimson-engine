@@ -9,6 +9,7 @@
 #include <editor/modeling/operations/operation_command.hpp>
 #include <editor/interactions/transform_drag.hpp>
 #include <quader/modeling/mesh/face_texture_actions.hpp>
+#include <quader/modeling/mesh/uv_peel.hpp>
 
 #include <optional>
 
@@ -22,6 +23,7 @@ enum class RepeatableActionKind {
   Operation,
   Transform,
   FaceTexture,
+  UvPeel,
 };
 
 /**
@@ -60,6 +62,7 @@ struct RepeatLastActionState {
   std::optional<EditorOperationCommand> pending_preview_operation;
   std::optional<RepeatTransformAction> last_transform;
   std::optional<quader::modeling::FaceTextureActionOptions> last_face_texture;
+  std::optional<quader::modeling::UvPeelOptions> last_uv_peel;
 };
 
 [[nodiscard]] bool operation_is_repeatable(EditorOperationId operation_id);

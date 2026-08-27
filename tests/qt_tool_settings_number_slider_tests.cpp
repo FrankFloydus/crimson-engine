@@ -1245,6 +1245,408 @@ TEST(QtToolSettingsPanelTests,
 }
 
 TEST(QtToolSettingsPanelTests,
+     UvPeelSectionRetainsSceneOptionsFoldsLocaleAndClosedDockState) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  const QLocale previous_locale;
+  const auto restore_locale =
+      qScopeGuard([previous_locale] { QLocale::setDefault(previous_locale); });
+  QLocale::setDefault(QLocale::c());
+  int argc = 1;
+  char executable[] = "quader-uv-peel-section-tests";
+  char *argv[] = {executable, nullptr};
+  QApplication application(argc, argv);
+  QApplication::setStyle(QStringLiteral("Fusion"));
+  auto standalone = quader::create_standalone_editor();
+  auto &editor = standalone.editor();
+  const auto created = create_texture_action_surface(editor);
+  ASSERT_TRUE(created.ok());
+
+  QMainWindow window;
+  window.setAttribute(Qt::WA_DontShowOnScreen, true);
+  window.resize(600, 900);
+  window.setCentralWidget(new QWidget(&window));
+  auto *dock = new QDockWidget(&window);
+  auto *panel = new quader::QtToolSettingsPanel(dock);
+  panel->setFixedWidth(panel->minimumWidth());
+  dock->setWidget(panel);
+  window.addDockWidget(Qt::RightDockWidgetArea, dock);
+  panel->bind(editor);
+  window.show();
+  QCoreApplication::processEvents();
+  auto *section = panel->findChild<QWidget *>(
+      QStringLiteral("tool_settings.section.uv_peel"));
+  auto *header = panel->findChild<QToolButton *>(
+      QStringLiteral("tool_settings.section.uv_peel.header"));
+  auto *content = panel->findChild<QWidget *>(
+      QStringLiteral("tool_settings.section.uv_peel.content"));
+  auto *face_section = panel->findChild<QWidget *>(
+      QStringLiteral("tool_settings.section.texture"));
+  auto *axis = panel->findChild<QComboBox *>(
+      QStringLiteral("tool_settings.uv_peel.axis"));
+  auto *world_space = panel->findChild<QCheckBox *>(
+      QStringLiteral("tool_settings.uv_peel.world_space"));
+  auto *apply = panel->findChild<QPushButton *>(
+      QStringLiteral("tool_settings.uv_peel.apply"));
+  auto *help = panel->findChild<QLabel *>(
+      QStringLiteral("tool_settings.uv_peel.help"));
+  ASSERT_NE(section, nullptr);
+  ASSERT_NE(header, nullptr);
+  ASSERT_NE(content, nullptr);
+  ASSERT_NE(face_section, nullptr);
+  ASSERT_NE(axis, nullptr);
+  ASSERT_NE(world_space, nullptr);
+  ASSERT_NE(apply, nullptr);
+  ASSERT_NE(help, nullptr);
+  EXPECT_TRUE(section->isHidden());
+  EXPECT_TRUE(header->isChecked());
+  ASSERT_TRUE(editor.selection().set_mode(quader::QuaderSelectionMode::Face).ok());
+  ASSERT_TRUE(editor.selection().select_face(created.value(), 1).ok());
+  panel->refresh();
+  EXPECT_TRUE(section->isHidden());
+  EXPECT_FALSE(face_section->isHidden());
+  ASSERT_TRUE(editor.selection().set_mode(quader::QuaderSelectionMode::Edge).ok());
+  ASSERT_TRUE(editor.selection().select_edge(created.value(), 1, 2).ok());
+  panel->refresh();
+  QCoreApplication::processEvents();
+  EXPECT_FALSE(section->isHidden());
+  EXPECT_TRUE(face_section->isHidden());
+  EXPECT_FALSE(panel->has_active_target());
+  EXPECT_EQ(axis->currentIndex(), 0);
+  EXPECT_TRUE(world_space->isChecked());
+  EXPECT_TRUE(apply->isEnabled());
+  EXPECT_FALSE(help->text().isEmpty());
+
+  constexpr std::array<const char *, 4> kFields{
+      "u_repeat", "v_repeat", "u_offset", "v_offset"};
+  constexpr std::array<double, 4> kValues{2.0, 3.0, 0.25, -0.5};
+  std::array<QDoubleSpinBox *, 4> spins{};
+  const auto before = editor.revisions();
+  const auto before_history = editor.history().snapshot();
+  axis->setCurrentIndex(1);
+  world_space->click();
+  for (std::size_t index = 0; index < kFields.size(); ++index) {
+    spins[index] = panel->findChild<QDoubleSpinBox *>(
+        QStringLiteral("tool_settings.uv_peel.%1").arg(
+            QString::fromLatin1(kFields[index])));
+    ASSERT_NE(spins[index], nullptr);
+    EXPECT_DOUBLE_EQ(spins[index]->value(), index < 2 ? 1.0 : 0.0);
+    spins[index]->setValue(kValues[index]);
+  }
+  process_events_for(75);
+  const quader::QuaderUvPeelOptions expected{
+      .axis = quader::QuaderUvPeelAxis::V, .world_space = false,
+      .u_repeat = 2.0, .v_repeat = 3.0, .u_offset = 0.25, .v_offset = -0.5};
+  EXPECT_EQ(editor.modeling().uv_peel_settings().options, expected);
+  EXPECT_EQ(editor.revisions().modeling_content_revision, before.modeling_content_revision);
+  EXPECT_EQ(editor.revisions().scene_revision, before.scene_revision);
+  EXPECT_EQ(editor.revisions().asset_revision, before.asset_revision);
+  EXPECT_EQ(editor.history().snapshot().undo_label, before_history.undo_label);
+  for (QDoubleSpinBox *spin : spins) {
+    finish_spin_edit(*spin);
+  }
+  EXPECT_FALSE(panel->numeric_interaction_active());
+
+  TexturePresentationEvents presentation_events;
+  for (QWidget *widget : section->findChildren<QWidget *>()) {
+    widget->installEventFilter(&presentation_events);
+  }
+  for (int frame = 0; frame < 20; ++frame) {
+    panel->refresh_uv_peel_settings();
+  }
+  EXPECT_EQ(presentation_events.changes, 0);
+  ASSERT_TRUE(editor.preferences().set_shortcut(
+                  quader::quader_command::kModelingUvPeel,
+                  "Ctrl+Alt+Shift+F11").ok());
+  panel->refresh_uv_peel_settings();
+  EXPECT_TRUE(apply->toolTip().contains(QStringLiteral("F11")));
+
+  quader::LocalizationService italian;
+  ASSERT_TRUE(italian.load(
+      std::filesystem::path(QUADER_SOURCE_DIR) / "resources" / "locales", "it-IT"));
+  const QPointer<QDoubleSpinBox> retained_repeat(spins[0]);
+  panel->set_localization(italian);
+  QCoreApplication::processEvents();
+  EXPECT_EQ(header->text(), QStringLiteral("Distendi UV"));
+  EXPECT_EQ(axis->accessibleName(), QStringLiteral("Asse"));
+  EXPECT_EQ(world_space->text(), QStringLiteral("Spazio globale"));
+  EXPECT_EQ(spins[0]->accessibleName(), QStringLiteral("Ripetizioni U"));
+  EXPECT_EQ(apply->accessibleName(), QStringLiteral("Distendi UV"));
+  EXPECT_TRUE(apply->toolTip().contains(QStringLiteral("F11")));
+  EXPECT_EQ(retained_repeat.data(), spins[0]);
+  for (QDoubleSpinBox *spin : spins) {
+    EXPECT_TRUE(content->rect().contains(spin->geometry()));
+    EXPECT_EQ(spin->locale().decimalPoint(), QStringLiteral("."));
+  }
+  EXPECT_TRUE(content->rect().contains(axis->geometry()));
+  EXPECT_GE(apply->width(), apply->fontMetrics().horizontalAdvance(apply->text()) + 12);
+  header->click();
+  dock->close();
+  ASSERT_TRUE(editor.selection().clear().ok());
+  panel->refresh_uv_peel_settings();
+  EXPECT_TRUE(section->isHidden());
+  ASSERT_TRUE(editor.selection().select_edge(created.value(), 2, 3).ok());
+  panel->refresh_uv_peel_settings();
+  EXPECT_TRUE(dock->isHidden());
+  EXPECT_FALSE(section->isHidden());
+  EXPECT_TRUE(content->isHidden());
+  EXPECT_EQ(editor.modeling().uv_peel_settings().options, expected);
+  panel->unbind();
+}
+
+TEST(QtToolSettingsPanelTests,
+     UvPeelButtonFlushesAllStagedOptionsAndMatchesPublicApiWithOneUndo) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char executable[] = "quader-uv-peel-binding-tests";
+  char *argv[] = {executable, nullptr};
+  QApplication application(argc, argv);
+  QApplication::setStyle(QStringLiteral("Fusion"));
+  constexpr std::array<quader::QuaderUvPeelAxis, 2> kAxes{
+      quader::QuaderUvPeelAxis::U, quader::QuaderUvPeelAxis::V};
+  for (const auto selected_axis : kAxes) {
+    for (bool world_space : {false, true}) {
+      SCOPED_TRACE(static_cast<int>(selected_axis));
+      SCOPED_TRACE(world_space);
+      auto standalone = quader::create_standalone_editor();
+      auto reference = quader::create_standalone_editor();
+      auto &editor = standalone.editor();
+      auto &expected_editor = reference.editor();
+      const auto created = create_texture_action_surface(editor);
+      const auto expected_created = create_texture_action_surface(expected_editor);
+      ASSERT_TRUE(created.ok());
+      ASSERT_TRUE(expected_created.ok());
+      ASSERT_TRUE(editor.selection().set_mode(quader::QuaderSelectionMode::Edge).ok());
+      ASSERT_TRUE(editor.selection().select_edge(created.value(), 1, 2).ok());
+      ASSERT_TRUE(expected_editor.selection().set_mode(quader::QuaderSelectionMode::Edge).ok());
+      ASSERT_TRUE(expected_editor.selection().select_edge(expected_created.value(), 1, 2).ok());
+      const auto before = editor.modeling().mesh(created.value()).compiled_mesh();
+      ASSERT_TRUE(before.has_value());
+      quader::QtToolSettingsPanel panel;
+      panel.setAttribute(Qt::WA_DontShowOnScreen, true);
+      panel.bind(editor);
+      panel.show();
+      auto *axis = panel.findChild<QComboBox *>(
+          QStringLiteral("tool_settings.uv_peel.axis"));
+      auto *world = panel.findChild<QCheckBox *>(
+          QStringLiteral("tool_settings.uv_peel.world_space"));
+      auto *apply = panel.findChild<QPushButton *>(
+          QStringLiteral("tool_settings.uv_peel.apply"));
+      ASSERT_NE(axis, nullptr);
+      ASSERT_NE(world, nullptr);
+      ASSERT_NE(apply, nullptr);
+      axis->setCurrentIndex(selected_axis == quader::QuaderUvPeelAxis::U ? 0 : 1);
+      world->setChecked(world_space);
+      constexpr std::array<const char *, 4> kFields{
+          "u_repeat", "v_repeat", "u_offset", "v_offset"};
+      constexpr std::array<double, 4> kValues{1.75, 2.25, 0.3, -0.2};
+      for (std::size_t index = 0; index < kFields.size(); ++index) {
+        auto *spin = panel.findChild<QDoubleSpinBox *>(
+            QStringLiteral("tool_settings.uv_peel.%1").arg(
+                QString::fromLatin1(kFields[index])));
+        ASSERT_NE(spin, nullptr);
+        spin->setValue(kValues[index]);
+      }
+      const quader::QuaderUvPeelOptions options{
+          .axis = selected_axis, .world_space = world_space,
+          .u_repeat = 1.75, .v_repeat = 2.25, .u_offset = 0.3, .v_offset = -0.2};
+      const auto expected_result = expected_editor.modeling().peel_uv(
+          {.options = options,
+           .selection_token = expected_editor.modeling()
+                                  .uv_peel_settings().selection_token});
+      ASSERT_TRUE(expected_result.ok()) << expected_result.error_message();
+      ASSERT_TRUE(expected_result.changed());
+      ASSERT_TRUE(panel.numeric_interaction_active());
+      apply->click();
+      EXPECT_FALSE(panel.numeric_interaction_active());
+      EXPECT_EQ(editor.modeling().uv_peel_settings().options, options);
+      const auto actual = editor.modeling().mesh(created.value()).compiled_mesh();
+      const auto expected = expected_editor.modeling()
+                                .mesh(expected_created.value()).compiled_mesh();
+      ASSERT_TRUE(actual.has_value());
+      ASSERT_TRUE(expected.has_value());
+      expect_same_texture_mesh(*actual, *expected);
+      EXPECT_EQ(editor.history().snapshot().undo_label, "UV Peel");
+      const auto completed_revision = editor.revisions().modeling_content_revision;
+      process_events_for(75);
+      EXPECT_EQ(editor.revisions().modeling_content_revision, completed_revision);
+      ASSERT_TRUE(editor.history().undo().ok());
+      const auto restored = editor.modeling().mesh(created.value()).compiled_mesh();
+      ASSERT_TRUE(restored.has_value());
+      expect_same_texture_mesh(*restored, *before);
+      EXPECT_EQ(editor.modeling().uv_peel_settings().options, options);
+      panel.unbind();
+    }
+  }
+}
+
+TEST(QtToolSettingsPanelTests,
+     UvPeelRejectsInvalidStalePreviewAndUnsupportedChartsWithoutMutation) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  const QLocale previous_locale;
+  const auto restore_locale =
+      qScopeGuard([previous_locale] { QLocale::setDefault(previous_locale); });
+  QLocale::setDefault(QLocale::c());
+  int argc = 1;
+  char executable[] = "quader-uv-peel-validation-tests";
+  char *argv[] = {executable, nullptr};
+  QApplication application(argc, argv);
+  QApplication::setStyle(QStringLiteral("Fusion"));
+  auto standalone = quader::create_standalone_editor();
+  auto &editor = standalone.editor();
+  const auto created = create_texture_action_surface(editor);
+  ASSERT_TRUE(created.ok());
+  ASSERT_TRUE(editor.selection().set_mode(quader::QuaderSelectionMode::Edge).ok());
+  ASSERT_TRUE(editor.selection().select_edge(created.value(), 1, 2).ok());
+  quader::QtToolSettingsPanel panel;
+  panel.setAttribute(Qt::WA_DontShowOnScreen, true);
+  panel.bind(editor);
+  panel.show();
+  auto *repeat = panel.findChild<QDoubleSpinBox *>(
+      QStringLiteral("tool_settings.uv_peel.u_repeat"));
+  auto *world_space = panel.findChild<QCheckBox *>(
+      QStringLiteral("tool_settings.uv_peel.world_space"));
+  auto *apply = panel.findChild<QPushButton *>(
+      QStringLiteral("tool_settings.uv_peel.apply"));
+  auto *section = panel.findChild<QWidget *>(
+      QStringLiteral("tool_settings.section.uv_peel"));
+  auto *message = panel.findChild<QLabel *>(
+      QStringLiteral("tool_settings.uv_peel.message"));
+  ASSERT_NE(repeat, nullptr);
+  ASSERT_NE(world_space, nullptr);
+  ASSERT_NE(apply, nullptr);
+  ASSERT_NE(section, nullptr);
+  ASSERT_NE(message, nullptr);
+  const auto before = editor.revisions().modeling_content_revision;
+  const auto before_history = editor.history().snapshot();
+  for (const QString &invalid : {QStringLiteral("0"), QStringLiteral("-")}) {
+    type_spin_text(*repeat, invalid);
+    send_mouse_event(*apply, QEvent::MouseButtonPress, apply->rect().center(),
+                     Qt::LeftButton, Qt::LeftButton);
+    send_mouse_event(*apply, QEvent::MouseButtonRelease, apply->rect().center(),
+                     Qt::LeftButton, Qt::NoButton);
+    EXPECT_EQ(editor.revisions().modeling_content_revision, before);
+    EXPECT_EQ(editor.modeling().uv_peel_settings().options,
+              quader::QuaderUvPeelOptions{});
+    EXPECT_EQ(editor.history().snapshot().undo_label, before_history.undo_label);
+    EXPECT_FALSE(message->isHidden());
+    EXPECT_TRUE(panel.numeric_interaction_active());
+  }
+  for (int toggle = 0; toggle < 2; ++toggle) {
+    const QPoint indicator(7, world_space->height() / 2);
+    send_mouse_event(*world_space, QEvent::MouseButtonPress, indicator,
+                     Qt::LeftButton, Qt::LeftButton);
+    send_mouse_event(*world_space, QEvent::MouseButtonRelease, indicator,
+                     Qt::LeftButton, Qt::NoButton);
+    EXPECT_EQ(world_space->isChecked(), toggle != 0);
+  }
+  process_events_for(75);
+  auto *repeat_text = repeat->findChild<QLineEdit *>();
+  ASSERT_NE(repeat_text, nullptr);
+  EXPECT_EQ(repeat_text->text(), QStringLiteral("-"));
+  EXPECT_EQ(editor.modeling().uv_peel_settings().options,
+            quader::QuaderUvPeelOptions{});
+  EXPECT_TRUE(panel.numeric_interaction_active());
+  // Accepting a correction to the stored value clears the validation message
+  // even when the owner need not advance its settings revision.
+  type_spin_text(*repeat, QStringLiteral("1"));
+  process_events_for(75);
+  EXPECT_TRUE(message->isHidden());
+  finish_spin_edit(*repeat);
+  repeat->setValue(3.0);
+  ASSERT_TRUE(editor.selection().select_edge(created.value(), 2, 3).ok());
+  apply->click();
+  EXPECT_EQ(editor.revisions().modeling_content_revision, before);
+  EXPECT_EQ(editor.modeling().uv_peel_settings().options,
+            quader::QuaderUvPeelOptions{});
+  EXPECT_FALSE(message->isHidden());
+  EXPECT_FALSE(panel.numeric_interaction_active());
+  process_events_for(75);
+  EXPECT_EQ(editor.modeling().uv_peel_settings().options.u_repeat, 1.0);
+
+  repeat->setValue(2.0);
+  quader::QuaderUvPeelOptions external_options;
+  external_options.u_repeat = 5.0;
+  ASSERT_TRUE(editor.modeling().set_uv_peel_options(external_options).ok());
+  apply->click();
+  EXPECT_EQ(editor.revisions().modeling_content_revision, before);
+  EXPECT_EQ(editor.modeling().uv_peel_settings().options, external_options);
+  EXPECT_DOUBLE_EQ(repeat->value(), 5.0);
+  EXPECT_FALSE(message->isHidden());
+
+  repeat->setValue(3.0);
+  ASSERT_TRUE(editor.modeling().begin_transform_preview().ok());
+  panel.refresh_uv_peel_settings();
+  EXPECT_FALSE(section->isHidden());
+  EXPECT_FALSE(repeat->isEnabled());
+  EXPECT_FALSE(apply->isEnabled());
+  EXPECT_FALSE(panel.numeric_interaction_active());
+  EXPECT_FALSE(message->isHidden());
+  process_events_for(75);
+  EXPECT_EQ(editor.modeling().uv_peel_settings().options, external_options);
+  ASSERT_TRUE(editor.modeling().cancel_transform_preview().ok());
+  panel.refresh_uv_peel_settings();
+  EXPECT_TRUE(apply->isEnabled());
+  EXPECT_TRUE(message->isHidden());
+
+  const auto box = editor.modeling().create_box(
+      {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
+      "Branched UV Guide");
+  ASSERT_TRUE(box.ok());
+  ASSERT_TRUE(editor.selection().set_mode(quader::QuaderSelectionMode::Edge).ok());
+  ASSERT_TRUE(editor.selection().select_edge(box.value(), 1, 2).ok());
+  ASSERT_TRUE(editor.selection().select_edge(
+                  box.value(), 1, 4, quader::QuaderSelectionEdit::Add).ok());
+  ASSERT_TRUE(editor.selection().select_edge(
+                  box.value(), 1, 5, quader::QuaderSelectionEdit::Add).ok());
+  panel.refresh_uv_peel_settings();
+  const auto branched_before = editor.modeling().mesh(box.value()).compiled_mesh();
+  ASSERT_TRUE(branched_before.has_value());
+  const auto branched_revision = editor.revisions().modeling_content_revision;
+  const auto branched_history = editor.history().snapshot();
+  repeat->setValue(7.0);
+  apply->click();
+  quader::QuaderUvPeelOptions accepted_options = external_options;
+  accepted_options.u_repeat = 7.0;
+  EXPECT_EQ(editor.revisions().modeling_content_revision, branched_revision);
+  EXPECT_EQ(editor.history().snapshot().undo_label, branched_history.undo_label);
+  EXPECT_EQ(editor.modeling().uv_peel_settings().options, accepted_options);
+  EXPECT_FALSE(message->isHidden());
+  EXPECT_FALSE(message->text().isEmpty());
+  const auto branched_after = editor.modeling().mesh(box.value()).compiled_mesh();
+  ASSERT_TRUE(branched_after.has_value());
+  expect_same_texture_mesh(*branched_after, *branched_before);
+  repeat->setValue(6.0);
+
+  auto replacement = quader::create_standalone_editor();
+  auto &replacement_editor = replacement.editor();
+  const auto replacement_surface = create_texture_action_surface(replacement_editor);
+  ASSERT_TRUE(replacement_surface.ok());
+  ASSERT_TRUE(replacement_editor.selection()
+                  .set_mode(quader::QuaderSelectionMode::Edge).ok());
+  ASSERT_TRUE(replacement_editor.selection()
+                  .select_edge(replacement_surface.value(), 1, 2).ok());
+  quader::QuaderUvPeelOptions replacement_options;
+  replacement_options.u_repeat = 9.0;
+  ASSERT_TRUE(replacement_editor.modeling()
+                  .set_uv_peel_options(replacement_options).ok());
+  panel.bind(replacement_editor);
+  process_events_for(75);
+  EXPECT_FALSE(panel.numeric_interaction_active());
+  EXPECT_EQ(editor.modeling().uv_peel_settings().options, accepted_options);
+  EXPECT_EQ(replacement_editor.modeling().uv_peel_settings().options,
+            replacement_options);
+  EXPECT_DOUBLE_EQ(repeat->value(), 9.0);
+  finish_spin_edit(*repeat);
+  repeat->setValue(10.0);
+  panel.unbind();
+  process_events_for(75);
+  EXPECT_FALSE(panel.numeric_interaction_active());
+  EXPECT_EQ(editor.modeling().uv_peel_settings().options, accepted_options);
+  EXPECT_EQ(replacement_editor.modeling().uv_peel_settings().options,
+            replacement_options);
+}
+
+TEST(QtToolSettingsPanelTests,
      FaceTextureRotationUsesSelectionBaselineAndCoalescesOneNumericGesture) {
   ASSERT_EQ(QCoreApplication::instance(), nullptr);
   int argc = 1;

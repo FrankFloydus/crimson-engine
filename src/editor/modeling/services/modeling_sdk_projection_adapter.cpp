@@ -3412,6 +3412,30 @@ public:
         "Edit face texture settings failed.", false, false, false, true);
   }
 
+  template <typename PreparedDocument>
+  [[nodiscard]] ModelingCommandResult publish_prepared_documents(
+      std::span<const ObjectId> objects,
+      const std::vector<PreparedDocument> &prepared_documents,
+      std::string_view fallback_message) {
+    return mutate_documents_by_object(
+        objects,
+        [&](ObjectId object, PolygonDocument &document) {
+          const auto native = native_object(object);
+          const auto entry = std::ranges::find(
+              prepared_documents,
+              static_cast<std::uint64_t>(native.value_or(-1)),
+              &PreparedDocument::key);
+          if (entry == prepared_documents.end()) {
+            return Result<OperationResult>::failure(modeling::make_error(
+                modeling::ErrorCode::InvalidId,
+                "A prepared UV target is no longer live."));
+          }
+          document = entry->document;
+          return Result<OperationResult>::success(entry->receipt);
+        },
+        fallback_message, false, false, false, true);
+  }
+
   [[nodiscard]] ModelingCommandResult apply_face_texture_action(
       std::span<const ModelingFaceTextureActionTarget> targets,
       const modeling::FaceTextureActionOptions &options) {
@@ -3457,23 +3481,102 @@ public:
     if (!prepared.value().changed) {
       return {.ok = true, .changed = false};
     }
-    return mutate_documents_by_object(
-        objects,
-        [&](ObjectId object, PolygonDocument &document) {
-          const auto native = native_object(object);
-          const auto entry = std::ranges::find(
-              prepared.value().documents,
-              static_cast<std::uint64_t>(native.value_or(-1)),
-              &modeling::PreparedFaceTextureDocument::key);
-          if (entry == prepared.value().documents.end()) {
-            return Result<OperationResult>::failure(modeling::make_error(
-                modeling::ErrorCode::InvalidId,
-                "A prepared texture target is no longer live."));
-          }
-          document = entry->document;
-          return Result<OperationResult>::success(entry->receipt);
-        },
-        "Edit face texture failed.", false, false, false, true);
+    return publish_prepared_documents(objects, prepared.value().documents,
+                                      "Edit face texture failed.");
+  }
+
+  [[nodiscard]] ModelingSelectedUvPeelSnapshot selected_uv_peel_edges() const {
+    ++stats_.uv_peel_summary_build_count;
+    ModelingSelectedUvPeelSnapshot result;
+    if (selection_mode_ != ModelingSelectionMode::Edge) {
+      return result;
+    }
+    const std::vector<ObjectId> selected = selected_sdk_objects();
+    const Result<std::vector<PolygonDocument>> documents =
+        session_.document_copies(selected);
+    if (!documents.ok()) {
+      result.command = failure(documents.error_message());
+      return result;
+    }
+    for (std::size_t index = 0; index < selected.size(); ++index) {
+      const PolygonSelectionSnapshot selection = documents.value()[index].selection();
+      if (selection.edges.empty()) {
+        continue;
+      }
+      const auto native = native_object(selected[index]);
+      const auto entity = native.has_value()
+                              ? object_map_.entity_for_modeling_object(*native)
+                              : std::nullopt;
+      if (!native.has_value() || !entity.has_value() || !scene_.exists(*entity)) {
+        result.command = failure("A selected UV Peel mesh is no longer live.");
+        return result;
+      }
+      ModelingSelectedUvPeelObject object{
+          .modeling_object_id = *native,
+          .entity = *entity,
+          .edges = selection.edges,
+      };
+      std::ranges::sort(object.edges);
+      if (active_native_object_id_ == *native) {
+        result.active_modeling_object_id = *native;
+        if (selection.active_edge.valid()) {
+          object.active_edge = selection.active_edge;
+        }
+      }
+      result.objects.push_back(std::move(object));
+    }
+    std::ranges::sort(result.objects, {},
+                      &ModelingSelectedUvPeelObject::modeling_object_id);
+    return result;
+  }
+
+  [[nodiscard]] ModelingCommandResult apply_uv_peel(
+      std::span<const ModelingUvPeelTarget> targets,
+      const ModelingUvPeelOptions &options) {
+    if (selection_mode_ != ModelingSelectionMode::Edge) {
+      return failure("UV Peel requires edge selection mode.");
+    }
+    if (targets.empty()) {
+      return failure("Select one or more edge guides first.");
+    }
+    std::vector<ObjectId> objects;
+    objects.reserve(targets.size());
+    for (const auto &target : targets) {
+      const auto object = sdk_object(target.modeling_object_id);
+      if (!object.has_value() || target.edges.empty() ||
+          std::ranges::find(objects, *object) != objects.end()) {
+        return failure("The selected UV Peel targets are no longer valid.");
+      }
+      objects.push_back(*object);
+    }
+    Result<std::vector<PolygonDocument>> documents =
+        session_.document_copies(objects);
+    if (!documents.ok()) {
+      return failure(documents.error_message());
+    }
+    std::vector<modeling::UvPeelTarget> portable_targets;
+    portable_targets.reserve(targets.size());
+    for (std::size_t index = 0; index < targets.size(); ++index) {
+      const auto &target = targets[index];
+      portable_targets.push_back({
+          .key = static_cast<std::uint64_t>(target.modeling_object_id),
+          .document = &documents.value()[index],
+          .edges = target.edges,
+          .active_edge = target.active_edge,
+          .world_from_local = to_sdk(target.world_from_local),
+          .sampling_from_local = to_sdk(target.sampling_from_local),
+      });
+    }
+    Result<modeling::PreparedUvPeel> prepared =
+        modeling::prepare_uv_peel(portable_targets, options);
+    if (!prepared.ok()) {
+      return failure(prepared.error_message());
+    }
+    if (!prepared.value().changed) {
+      return {.ok = true, .changed = false};
+    }
+    return publish_prepared_documents(objects, prepared.value().documents,
+                                      "UV Peel failed.");
   }
 
   [[nodiscard]] ModelingCommandResult assign_material_slot_to_objects(
@@ -8538,6 +8641,17 @@ ModelingCommandResult ModelingSdkProjectionAdapter::apply_face_texture_action(
     std::span<const ModelingFaceTextureActionTarget> targets,
     const modeling::FaceTextureActionOptions &options) {
   return impl_->apply_face_texture_action(targets, options);
+}
+
+ModelingSelectedUvPeelSnapshot
+ModelingSdkProjectionAdapter::selected_uv_peel_edges() const {
+  return impl_->selected_uv_peel_edges();
+}
+
+ModelingCommandResult ModelingSdkProjectionAdapter::apply_uv_peel(
+    std::span<const ModelingUvPeelTarget> targets,
+    const ModelingUvPeelOptions &options) {
+  return impl_->apply_uv_peel(targets, options);
 }
 
 ModelingCommandResult

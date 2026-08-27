@@ -614,9 +614,9 @@ TEST(CommandBehaviorContractTests,
   EXPECT_EQ(contracted, registered)
       << "The registry and explicit behavior-contract catalog diverged.";
 #ifndef NDEBUG
-  EXPECT_EQ(contracted.size(), 187u);
-#else
   EXPECT_EQ(contracted.size(), 188u);
+#else
+  EXPECT_EQ(contracted.size(), 189u);
 #endif
 }
 
@@ -654,6 +654,104 @@ TEST(CommandBehaviorContractTests,
             restored.domain(CommandObservableDomain::Geometry));
   EXPECT_EQ(before.domain(CommandObservableDomain::Selection),
             restored.domain(CommandObservableDomain::Selection));
+}
+
+TEST(CommandBehaviorContractTests,
+     UvPeelPreservesGeometryAndSelectionWithExactHistoryAndStickyRepeat) {
+  const CommandBehaviorContract *contract =
+      find_command_behavior_contract(quader_command::kModelingUvPeel.string());
+  ASSERT_NE(contract, nullptr);
+  EXPECT_EQ(contract->fixture, CanonicalCommandFixture::UvPeelEdgeSelection);
+  EXPECT_EQ(contract->outcome, CommandOutcomePolicy::ChangeRequired);
+  EXPECT_EQ(contract->undo_repeat,
+            CommandUndoRepeatPolicy::UndoableAndRepeatable);
+  std::unique_ptr<CommandBehaviorFixture> fixture =
+      CommandBehaviorFixture::create(*contract);
+  QuaderEditorApi &editor = fixture->editor();
+  const auto records = editor.query().modeling_objects();
+  ASSERT_EQ(records.size(), 1u);
+  const auto object =
+      editor.query().modeling_object_for_id(records.front().modeling_object_id);
+  ASSERT_TRUE(object.has_value());
+  const auto mesh_before = editor.query().compiled_object_mesh(*object);
+  ASSERT_TRUE(mesh_before.has_value());
+  ASSERT_TRUE(mesh_before->has_authored_polygon_document);
+  ASSERT_EQ(mesh_before->face_textures.size(), 1u);
+  ASSERT_EQ(editor.selection().summary().selected_edge_count, 1u);
+
+  const auto descriptor =
+      editor.commands().descriptor(quader_command::kModelingUvPeel);
+  ASSERT_TRUE(descriptor.has_value());
+  ASSERT_TRUE(descriptor->enabled);
+  const auto before = capture_command_observable_state(editor);
+  const auto external_before = fixture->external_call_count();
+  const auto result = editor.commands().execute(quader_command::kModelingUvPeel);
+  ASSERT_TRUE(result.ok()) << result.error_message();
+  ASSERT_TRUE(result.changed());
+  const auto after = capture_command_observable_state(editor);
+  expect_global_command_laws(*contract, *descriptor, before, after,
+                            external_before, fixture->external_call_count(),
+                            result, editor, true);
+  EXPECT_EQ(before.domain(CommandObservableDomain::Selection),
+            after.domain(CommandObservableDomain::Selection));
+  EXPECT_EQ(before.domain(CommandObservableDomain::Scene),
+            after.domain(CommandObservableDomain::Scene));
+  EXPECT_EQ(before.domain(CommandObservableDomain::Preferences),
+            after.domain(CommandObservableDomain::Preferences));
+
+  const auto mesh_after = editor.query().compiled_object_mesh(*object);
+  ASSERT_TRUE(mesh_after.has_value());
+  EXPECT_EQ(mesh_after->indices, mesh_before->indices);
+  ASSERT_EQ(mesh_after->vertices.size(), mesh_before->vertices.size());
+  bool uv_changed = false;
+  for (std::size_t index = 0; index < mesh_before->vertices.size(); ++index) {
+    const auto &original = mesh_before->vertices[index];
+    const auto &peeled = mesh_after->vertices[index];
+    EXPECT_FLOAT_EQ(peeled.position.x, original.position.x);
+    EXPECT_FLOAT_EQ(peeled.position.y, original.position.y);
+    EXPECT_FLOAT_EQ(peeled.position.z, original.position.z);
+    uv_changed = uv_changed || peeled.uv.x != original.uv.x ||
+                 peeled.uv.y != original.uv.y;
+  }
+  EXPECT_TRUE(uv_changed);
+  ASSERT_EQ(mesh_after->primitives.size(), mesh_before->primitives.size());
+  for (std::size_t index = 0; index < mesh_before->primitives.size(); ++index) {
+    const auto &original = mesh_before->primitives[index];
+    const auto &peeled = mesh_after->primitives[index];
+    EXPECT_EQ(peeled.index_offset, original.index_offset);
+    EXPECT_EQ(peeled.index_count, original.index_count);
+    EXPECT_EQ(peeled.material_slot, original.material_slot);
+  }
+
+  const QuaderUvPeelOptions changed_options{
+      .axis = QuaderUvPeelAxis::V,
+      .world_space = false,
+      .u_repeat = 2.0,
+      .v_repeat = 3.0,
+      .u_offset = 0.125,
+      .v_offset = -0.25,
+  };
+  ASSERT_TRUE(editor.modeling().set_uv_peel_options(changed_options).ok());
+  const auto expect_mesh_state = [&](const CommandObservableState &expected) {
+    const auto actual = capture_command_observable_state(editor);
+    for (const auto domain : {CommandObservableDomain::Geometry,
+                             CommandObservableDomain::Selection,
+                             CommandObservableDomain::Assets}) {
+      EXPECT_EQ(expected.domain(domain), actual.domain(domain))
+          << command_observable_domain_name(domain);
+    }
+    EXPECT_EQ(editor.modeling().uv_peel_settings().options, changed_options);
+  };
+  ASSERT_TRUE(editor.history().undo().ok());
+  expect_mesh_state(before);
+  const auto repeated = editor.history().repeat_last_action();
+  ASSERT_TRUE(repeated.ok()) << repeated.error_message();
+  ASSERT_TRUE(repeated.changed());
+  expect_mesh_state(after);
+  ASSERT_TRUE(editor.history().undo().ok());
+  expect_mesh_state(before);
+  ASSERT_TRUE(editor.history().redo().ok());
+  expect_mesh_state(after);
 }
 
 TEST(CommandBehaviorContractTests, ApprovedFingerprintCoversEveryCommand) {

@@ -719,6 +719,9 @@ private:
     case CanonicalCommandFixture::TextureFaceSelection:
       configure_texture_face();
       break;
+    case CanonicalCommandFixture::UvPeelEdgeSelection:
+      configure_uv_peel_edge();
+      break;
     case CanonicalCommandFixture::HiddenObject:
       configure_hidden_object();
       break;
@@ -1071,6 +1074,17 @@ private:
         create_polygon_object(std::move(polygon), "Texture Action Face");
     require_ok(editor().selection().select_face(object, api_element(face)),
                "Select canonical texture face");
+  }
+
+  void configure_uv_peel_edge() {
+    PolygonFixture polygon = make_texture_face();
+    const auto first = polygon.vertices[0];
+    const auto second = polygon.vertices[1];
+    const QuaderModelingObjectRef object =
+        create_polygon_object(std::move(polygon), "UV Peel Open Quad");
+    require_ok(editor().selection().select_edge(
+                   object, api_element(first), api_element(second)),
+               "Select canonical UV Peel guide edge");
   }
 
   void configure_hidden_object() {

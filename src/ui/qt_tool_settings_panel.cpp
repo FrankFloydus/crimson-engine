@@ -249,6 +249,15 @@ void clear_layout(QLayout &layout) {
   }
 }
 
+void present_inline_message(QLabel &label, const QString &message) {
+  if (label.text() != message) {
+    label.setText(message);
+  }
+  if (label.isHidden() == !message.isEmpty()) {
+    label.setVisible(!message.isEmpty());
+  }
+}
+
 /// Keeps one disclosure section expanded/collapsed without rebuilding it.
 class QtToolSettingsSection final : public QWidget {
 public:
@@ -530,6 +539,21 @@ constexpr std::array<TextureActionGroup, 6> kTextureActionGroups{{
     {"justify", "Justify", 5, 2},
 }};
 
+/// Maps retained numeric inputs to scene-owned UV Peel options.
+struct UvPeelControlDescription {
+  double QuaderUvPeelOptions::*value;
+  std::string_view id;
+  std::string_view label;
+  bool positive;
+};
+
+constexpr std::array<UvPeelControlDescription, 4> kUvPeelControls{{
+    {&QuaderUvPeelOptions::u_repeat, "u_repeat", "U Repeat", true},
+    {&QuaderUvPeelOptions::v_repeat, "v_repeat", "V Repeat", true},
+    {&QuaderUvPeelOptions::u_offset, "u_offset", "U Offset", false},
+    {&QuaderUvPeelOptions::v_offset, "v_offset", "V Offset", false},
+}};
+
 } // namespace
 
 /// Owns retained controls for the active tool's descriptor-driven settings.
@@ -578,6 +602,14 @@ struct QtToolSettingsPanel::Impl {
     std::optional<QuaderFaceTextureRevision> gesture_revision;
     std::uint64_t selection_token = 0;
     std::string merge_key;
+    bool editing = false;
+    bool invalid_value = false;
+  };
+
+  /// Retains numeric drafts while the native API owns accepted Peel options.
+  struct UvPeelControlWidget {
+    QLabel *label = nullptr;
+    QtTextureNumberSpinBox *spin = nullptr;
     bool editing = false;
     bool invalid_value = false;
   };
@@ -654,6 +686,11 @@ struct QtToolSettingsPanel::Impl {
     build_texture_actions();
     edit_texture_section_->hide();
     content_layout->addWidget(edit_texture_section_);
+    uv_peel_section_ = new QtToolSettingsSection(
+        QStringLiteral("tool_settings.section.uv_peel"), scroll_content);
+    build_uv_peel_controls();
+    uv_peel_section_->hide();
+    content_layout->addWidget(uv_peel_section_);
     content_layout->addStretch(1);
     scroll_area_->setWidget(scroll_content);
     root_layout->addWidget(scroll_area_, 1);
@@ -741,21 +778,27 @@ struct QtToolSettingsPanel::Impl {
   void bind(QuaderEditorApi &editor) {
     discard_pending_number_dispatches();
     discard_texture_dispatches();
+    discard_uv_peel_dispatch();
     editor_ = &editor;
     last_target_.reset();
     texture_revision_.reset();
     texture_settings_.reset();
     texture_action_error_.clear();
+    uv_peel_revision_.reset();
+    uv_peel_settings_.reset();
+    uv_peel_error_.clear();
     refresh();
   }
 
   void unbind() {
     discard_pending_number_dispatches();
     discard_texture_dispatches();
+    discard_uv_peel_dispatch();
     editor_ = nullptr;
     last_target_.reset();
     present_inactive_target();
     refresh_texture_settings();
+    refresh_uv_peel_settings();
   }
 
   void set_localization(const LocalizationService &localization) {
@@ -765,6 +808,8 @@ struct QtToolSettingsPanel::Impl {
     last_target_.reset();
     texture_revision_.reset();
     texture_action_error_.clear();
+    uv_peel_revision_.reset();
+    uv_peel_error_.clear();
     localized_text_dirty_ = true;
     refresh_localized_text();
     refresh();
@@ -773,6 +818,7 @@ struct QtToolSettingsPanel::Impl {
   void refresh() {
     refresh_localized_text();
     refresh_texture_settings();
+    refresh_uv_peel_settings();
     if (editor_ == nullptr) {
       if (!inactive_presented_) {
         present_inactive_target();
@@ -914,11 +960,113 @@ struct QtToolSettingsPanel::Impl {
     texture_synchronizing_ = false;
   }
 
+  void refresh_uv_peel_settings(bool force = false) {
+    if (editor_ == nullptr) {
+      discard_uv_peel_dispatch();
+      uv_peel_settings_.reset();
+      uv_peel_revision_.reset();
+      uv_peel_error_.clear();
+      if (!uv_peel_section_->isHidden()) {
+        uv_peel_section_->hide();
+      }
+      return;
+    }
+    QuaderUvPeelRevision revision =
+        editor_->modeling().uv_peel_settings_revision();
+    const std::uint64_t keybindings_revision =
+        editor_->preferences().keybindings_revision();
+    // Both the selection summary and all retained setters are event-driven.
+    // A steady viewport frame reads only the owner and keybinding stamps.
+    if (!force && uv_peel_revision_.has_value() &&
+        *uv_peel_revision_ == revision &&
+        uv_peel_keybindings_revision_ == keybindings_revision) {
+      return;
+    }
+    QuaderUvPeelSettings settings = editor_->modeling().uv_peel_settings();
+    revision = editor_->modeling().uv_peel_settings_revision();
+    const bool selection_changed =
+        !uv_peel_settings_.has_value() ||
+        uv_peel_settings_->selection_token != settings.selection_token;
+    if (selection_changed ||
+        (uv_peel_draft_revision_.has_value() &&
+         *uv_peel_draft_revision_ != revision)) {
+      discard_uv_peel_dispatch();
+    }
+    if (selection_changed ||
+        (uv_peel_revision_.has_value() && *uv_peel_revision_ != revision)) {
+      uv_peel_error_.clear();
+    }
+    uv_peel_synchronizing_ = true;
+    const bool visible = settings.selected_edge_count > 0;
+    if (uv_peel_section_->isHidden() == visible) {
+      uv_peel_section_->setVisible(visible);
+    }
+    const QuaderUvPeelOptions &options =
+        uv_peel_draft_.has_value() ? *uv_peel_draft_ : settings.options;
+    const int axis = options.axis == QuaderUvPeelAxis::U ? 0 : 1;
+    if (uv_peel_axis_->currentIndex() != axis) {
+      const QSignalBlocker blocker(uv_peel_axis_);
+      uv_peel_axis_->setCurrentIndex(axis);
+    }
+    if (uv_peel_world_space_->isChecked() != options.world_space) {
+      const QSignalBlocker blocker(uv_peel_world_space_);
+      uv_peel_world_space_->setChecked(options.world_space);
+    }
+    for (QWidget *control : {static_cast<QWidget *>(uv_peel_axis_),
+                             static_cast<QWidget *>(uv_peel_axis_label_),
+                             static_cast<QWidget *>(uv_peel_world_space_),
+                             static_cast<QWidget *>(uv_peel_apply_)}) {
+      if (control->isEnabled() != settings.editable) {
+        control->setEnabled(settings.editable);
+      }
+    }
+    for (std::size_t index = 0; index < kUvPeelControls.size(); ++index) {
+      UvPeelControlWidget &binding = uv_peel_controls_[index];
+      if (binding.spin->isEnabled() != settings.editable) {
+        binding.spin->setEnabled(settings.editable);
+      }
+      if (binding.label->isEnabled() != settings.editable) {
+        binding.label->setEnabled(settings.editable);
+      }
+      if (!binding.editing) {
+        binding.spin->present(options.*kUvPeelControls[index].value);
+      }
+    }
+    QString message = uv_peel_error_;
+    if (visible && !settings.editable) {
+      message = settings.block_reason == QuaderUvPeelBlockReason::PreviewActive
+                    ? localized_text(
+                          localization_, "tool_settings.uv_peel.preview_active",
+                          "Finish or cancel the active preview before UV Peel.")
+                    : localized_text(
+                          localization_, "tool_settings.uv_peel.target_unavailable",
+                          "The selected edges are unavailable, locked, hidden, "
+                          "or outside the instance edit scope.");
+    }
+    present_inline_message(*uv_peel_message_, message);
+    QString tooltip = uv_peel_apply_->accessibleName();
+    const std::string shortcut =
+        editor_->commands().shortcut_for(quader_command::kModelingUvPeel);
+    if (!shortcut.empty()) {
+      tooltip.append(QStringLiteral(" [%1]").arg(qtext(shortcut)));
+    }
+    if (uv_peel_apply_->toolTip() != tooltip) {
+      uv_peel_apply_->setToolTip(tooltip);
+    }
+    uv_peel_settings_ = std::move(settings);
+    uv_peel_revision_ = revision;
+    uv_peel_keybindings_revision_ = keybindings_revision;
+    uv_peel_synchronizing_ = false;
+  }
+
   [[nodiscard]] bool has_active_target() const {
     return last_target_.has_value() && last_target_->active;
   }
 
   [[nodiscard]] bool numeric_interaction_active() const {
+    if (uv_peel_draft_.has_value()) {
+      return true;
+    }
     if (std::any_of(texture_controls_.begin(), texture_controls_.end(),
                     [](const TextureControlWidget &binding) {
                       return binding.editing || binding.pending_value.has_value();
@@ -934,6 +1082,240 @@ struct QtToolSettingsPanel::Impl {
   }
 
 private:
+  void build_uv_peel_controls() {
+    auto *layout = new QGridLayout(uv_peel_section_->content());
+    layout->setContentsMargins(8, 6, 8, 6);
+    layout->setHorizontalSpacing(8);
+    layout->setVerticalSpacing(6);
+    layout->setColumnStretch(1, 1);
+    uv_peel_help_ = new QLabel(uv_peel_section_->content());
+    uv_peel_help_->setObjectName(QStringLiteral("tool_settings.uv_peel.help"));
+    uv_peel_help_->setWordWrap(true);
+    layout->addWidget(uv_peel_help_, 0, 0, 1, 2);
+    uv_peel_axis_label_ = new QLabel(uv_peel_section_->content());
+    uv_peel_axis_label_->setObjectName(
+        QStringLiteral("tool_settings.uv_peel.axis.label"));
+    uv_peel_axis_ = new QComboBox(uv_peel_section_->content());
+    uv_peel_axis_->setObjectName(QStringLiteral("tool_settings.uv_peel.axis"));
+    uv_peel_axis_->addItems({QStringLiteral("U"), QStringLiteral("V")});
+    uv_peel_axis_->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
+    uv_peel_axis_->setMinimumWidth(88);
+    uv_peel_axis_label_->setBuddy(uv_peel_axis_);
+    layout->addWidget(uv_peel_axis_label_, 1, 0);
+    layout->addWidget(uv_peel_axis_, 1, 1);
+    uv_peel_world_space_ = new QCheckBox(uv_peel_section_->content());
+    uv_peel_world_space_->setObjectName(
+        QStringLiteral("tool_settings.uv_peel.world_space"));
+    uv_peel_world_space_->setFocusPolicy(Qt::TabFocus);
+    layout->addWidget(uv_peel_world_space_, 2, 0, 1, 2);
+    for (std::size_t index = 0; index < kUvPeelControls.size(); ++index) {
+      const UvPeelControlDescription &description = kUvPeelControls[index];
+      UvPeelControlWidget &binding = uv_peel_controls_[index];
+      const QString name =
+          QStringLiteral("tool_settings.uv_peel.%1").arg(qtext(description.id));
+      binding.label = new QLabel(uv_peel_section_->content());
+      binding.label->setObjectName(name + QStringLiteral(".label"));
+      binding.label->setWordWrap(true);
+      binding.spin = new QtTextureNumberSpinBox(
+          description.positive ? 1.0 : 0.0, uv_peel_section_->content());
+      binding.spin->setObjectName(name);
+      binding.spin->setSingleStep(0.1);
+      binding.label->setBuddy(binding.spin);
+      layout->addWidget(binding.label, static_cast<int>(index) + 3, 0);
+      layout->addWidget(binding.spin, static_cast<int>(index) + 3, 1);
+      binding.spin->edited = [this, index](std::optional<double> value) {
+        queue_uv_peel_number(index, value);
+      };
+      QObject::connect(binding.spin, &QDoubleSpinBox::editingFinished, &panel_,
+                       [this, index]() {
+                         if (uv_peel_synchronizing_) {
+                           return;
+                         }
+                         if (!flush_uv_peel_options()) {
+                           discard_uv_peel_dispatch();
+                         } else {
+                           uv_peel_controls_[index].editing = false;
+                           if (!uv_peel_number_editing()) {
+                             discard_uv_peel_dispatch();
+                           }
+                         }
+                         refresh_uv_peel_settings(true);
+                       });
+    }
+    uv_peel_apply_ = new QPushButton(uv_peel_section_->content());
+    uv_peel_apply_->setObjectName(QStringLiteral("tool_settings.uv_peel.apply"));
+    uv_peel_apply_->setAutoDefault(false);
+    uv_peel_apply_->setFocusPolicy(Qt::TabFocus);
+    layout->addWidget(uv_peel_apply_, 7, 0, 1, 2);
+    QObject::connect(uv_peel_apply_, &QPushButton::clicked, &panel_,
+                     [this]() { dispatch_uv_peel(); });
+    uv_peel_message_ = new QLabel(uv_peel_section_->content());
+    uv_peel_message_->setObjectName(
+        QStringLiteral("tool_settings.uv_peel.message"));
+    uv_peel_message_->setWordWrap(true);
+    uv_peel_message_->hide();
+    layout->addWidget(uv_peel_message_, 8, 0, 1, 2);
+    uv_peel_dispatch_timer_ = new QTimer(uv_peel_section_);
+    uv_peel_dispatch_timer_->setSingleShot(true);
+    uv_peel_dispatch_timer_->setInterval(kNumberDispatchIntervalMs);
+    QObject::connect(uv_peel_dispatch_timer_, &QTimer::timeout, &panel_,
+                     [this]() { flush_uv_peel_options(); });
+    QObject::connect(uv_peel_axis_, &QComboBox::currentIndexChanged, &panel_,
+                     [this](int index) {
+                       if (begin_uv_peel_draft()) {
+                         uv_peel_draft_->axis =
+                             index == 0 ? QuaderUvPeelAxis::U : QuaderUvPeelAxis::V;
+                         queue_uv_peel_dispatch();
+                       }
+                     });
+    QObject::connect(uv_peel_world_space_, &QCheckBox::toggled, &panel_,
+                     [this](bool checked) {
+                       if (begin_uv_peel_draft()) {
+                         uv_peel_draft_->world_space = checked;
+                         queue_uv_peel_dispatch();
+                       }
+                     });
+  }
+
+  bool begin_uv_peel_draft() {
+    if (editor_ == nullptr || uv_peel_synchronizing_ ||
+        !uv_peel_settings_.has_value() || !uv_peel_settings_->editable ||
+        !uv_peel_revision_.has_value()) {
+      return false;
+    }
+    if (!uv_peel_draft_.has_value()) {
+      uv_peel_draft_ = uv_peel_settings_->options;
+      uv_peel_draft_revision_ = *uv_peel_revision_;
+    }
+    return true;
+  }
+
+  bool uv_peel_number_editing() const {
+    return std::any_of(uv_peel_controls_.begin(), uv_peel_controls_.end(),
+                       [](const UvPeelControlWidget &binding) {
+                         return binding.editing;
+                       });
+  }
+
+  bool uv_peel_invalid_draft() const {
+    return std::any_of(uv_peel_controls_.begin(), uv_peel_controls_.end(),
+                       [](const UvPeelControlWidget &binding) {
+                         return binding.invalid_value;
+                       });
+  }
+
+  void queue_uv_peel_number(std::size_t index, std::optional<double> value) {
+    if (!begin_uv_peel_draft()) {
+      return;
+    }
+    UvPeelControlWidget &binding = uv_peel_controls_[index];
+    binding.editing = true;
+    const UvPeelControlDescription &description = kUvPeelControls[index];
+    binding.invalid_value = !value.has_value() || !std::isfinite(*value) ||
+                            (description.positive && *value <= 0.0);
+    if (!binding.invalid_value) {
+      (*uv_peel_draft_).*description.value = *value;
+    }
+    queue_uv_peel_dispatch();
+  }
+
+  void queue_uv_peel_dispatch() {
+    if (uv_peel_invalid_draft()) {
+      uv_peel_dispatch_timer_->stop();
+    } else {
+      uv_peel_dispatch_timer_->start();
+    }
+  }
+
+  bool flush_uv_peel_options() {
+    if (!uv_peel_draft_.has_value()) {
+      return true;
+    }
+    if (uv_peel_invalid_draft()) {
+      return false;
+    }
+    uv_peel_dispatch_timer_->stop();
+    if (editor_ == nullptr || !uv_peel_draft_revision_.has_value() ||
+        editor_->modeling().uv_peel_settings_revision() !=
+            *uv_peel_draft_revision_) {
+      discard_uv_peel_dispatch();
+      refresh_uv_peel_settings(true);
+      return false;
+    }
+    const QuaderApiVoidResult result =
+        editor_->modeling().set_uv_peel_options(*uv_peel_draft_);
+    log_failure("UV Peel options", result);
+    if (result.ok()) {
+      uv_peel_error_.clear();
+      uv_peel_draft_revision_ =
+          editor_->modeling().uv_peel_settings_revision();
+      if (!uv_peel_number_editing()) {
+        discard_uv_peel_dispatch();
+      }
+    } else {
+      discard_uv_peel_dispatch();
+    }
+    refresh_uv_peel_settings(true);
+    if (!result.ok()) {
+      uv_peel_error_ = qtext(result.error_message());
+      present_inline_message(*uv_peel_message_, uv_peel_error_);
+    }
+    return result.ok();
+  }
+
+  void discard_uv_peel_dispatch() {
+    uv_peel_dispatch_timer_->stop();
+    uv_peel_draft_.reset();
+    uv_peel_draft_revision_.reset();
+    for (UvPeelControlWidget &binding : uv_peel_controls_) {
+      binding.editing = false;
+      binding.invalid_value = false;
+    }
+  }
+
+  void dispatch_uv_peel() {
+    if (editor_ == nullptr || !uv_peel_settings_.has_value() ||
+        !uv_peel_revision_.has_value() || !uv_peel_settings_->editable) {
+      return;
+    }
+    const QuaderUvPeelRevision revision =
+        editor_->modeling().uv_peel_settings_revision();
+    const std::uint64_t selection_token = uv_peel_settings_->selection_token;
+    if (*uv_peel_revision_ != revision && uv_peel_draft_revision_ != revision) {
+      discard_uv_peel_dispatch();
+      refresh_uv_peel_settings(true);
+      uv_peel_error_ = localized_text(
+          localization_, "tool_settings.uv_peel.stale_selection",
+          "The edge selection or UV Peel settings changed. Review the current "
+          "selection and try again.");
+      present_inline_message(*uv_peel_message_, uv_peel_error_);
+      return;
+    }
+    if (uv_peel_invalid_draft()) {
+      uv_peel_error_ = localized_text(
+          localization_, "tool_settings.uv_peel.invalid_edit",
+          "Repeat values must be positive and offsets must be finite.");
+      present_inline_message(*uv_peel_message_, uv_peel_error_);
+      return;
+    }
+    if (!flush_uv_peel_options()) {
+      return;
+    }
+    discard_uv_peel_dispatch();
+    refresh_uv_peel_settings(true);
+    if (uv_peel_settings_->selection_token != selection_token) {
+      return;
+    }
+    const QuaderApiVoidResult result = editor_->modeling().peel_uv(
+        QuaderUvPeelRequest{.options = uv_peel_settings_->options,
+                            .selection_token = uv_peel_settings_->selection_token});
+    log_failure("UV Peel", result);
+    refresh_uv_peel_settings(true);
+    uv_peel_error_ = result.ok() ? QString{} : qtext(result.error_message());
+    present_inline_message(*uv_peel_message_, uv_peel_error_);
+    uv_peel_apply_->setFocus(Qt::MouseFocusReason);
+  }
+
   void build_texture_actions() {
     auto *layout = new QVBoxLayout(edit_texture_section_->content());
     layout->setContentsMargins(8, 6, 8, 6);
@@ -1020,12 +1402,7 @@ private:
   }
 
   void present_texture_action_message(const QString &message) {
-    if (texture_action_message_->text() != message) {
-      texture_action_message_->setText(message);
-    }
-    if (texture_action_message_->isHidden() == !message.isEmpty()) {
-      texture_action_message_->setVisible(!message.isEmpty());
-    }
+    present_inline_message(*texture_action_message_, message);
   }
 
   void refresh_texture_action_tooltips(double rotation_step) {
@@ -1459,6 +1836,54 @@ private:
         localization_, "tool_settings.texture_section", "Texture Settings"));
     edit_texture_section_->set_title(localized_text(
         localization_, "tool_settings.edit_texture_section", "Edit Texture"));
+    uv_peel_section_->set_title(localized_text(
+        localization_, "tool_settings.uv_peel_section", "UV Peel"));
+    const QString peel_help = localized_text(
+        localization_, "tool_settings.uv_peel.help",
+        "Selected edge chains guide texture flow across the faces touching "
+        "those edges. Choose U or V for the flow direction.");
+    if (uv_peel_help_->text() != peel_help) {
+      uv_peel_help_->setText(peel_help);
+    }
+    const QString peel_axis = localized_text(
+        localization_, "tool_settings.uv_peel.axis", "Axis");
+    if (uv_peel_axis_label_->text() != peel_axis) {
+      uv_peel_axis_label_->setText(peel_axis);
+      uv_peel_axis_->setAccessibleName(peel_axis);
+    }
+    const QString world_space = localized_text(
+        localization_, "tool_settings.uv_peel.world_space", "World Space");
+    if (uv_peel_world_space_->text() != world_space) {
+      uv_peel_world_space_->setText(world_space);
+      uv_peel_world_space_->setAccessibleName(world_space);
+    }
+    const QString world_space_tooltip = localized_text(
+        localization_, "tool_settings.uv_peel.world_space_tooltip",
+        "Preserve texture density in world units. Turn off to fit each "
+        "connected patch to one tile before Repeat and Offset.");
+    if (uv_peel_world_space_->toolTip() != world_space_tooltip) {
+      uv_peel_world_space_->setToolTip(world_space_tooltip);
+    }
+    for (std::size_t index = 0; index < kUvPeelControls.size(); ++index) {
+      const UvPeelControlDescription &description = kUvPeelControls[index];
+      const QString label = localized_text(
+          localization_, std::string("tool_settings.uv_peel.") +
+                             std::string(description.id),
+          description.label);
+      UvPeelControlWidget &binding = uv_peel_controls_[index];
+      if (binding.label->text() != label) {
+        binding.label->setText(label);
+      }
+      if (binding.spin->accessibleName() != label) {
+        binding.spin->setAccessibleName(label);
+      }
+    }
+    const QString peel_action = localized_text(
+        localization_, "command.modeling.uv_peel", "UV Peel");
+    if (uv_peel_apply_->text() != peel_action) {
+      uv_peel_apply_->setText(peel_action);
+      uv_peel_apply_->setAccessibleName(peel_action);
+    }
     for (std::size_t index = 0; index < kTextureActionGroups.size(); ++index) {
       const TextureActionGroup &group = kTextureActionGroups[index];
       const QString label = localized_text(
@@ -2058,6 +2483,14 @@ private:
   QtToolSettingsSection *edit_texture_section_ = nullptr;
   QLabel *texture_action_message_ = nullptr;
   QCheckBox *texture_treat_as_one_ = nullptr;
+  QtToolSettingsSection *uv_peel_section_ = nullptr;
+  QLabel *uv_peel_help_ = nullptr;
+  QLabel *uv_peel_axis_label_ = nullptr;
+  QComboBox *uv_peel_axis_ = nullptr;
+  QCheckBox *uv_peel_world_space_ = nullptr;
+  QPushButton *uv_peel_apply_ = nullptr;
+  QLabel *uv_peel_message_ = nullptr;
+  QTimer *uv_peel_dispatch_timer_ = nullptr;
   QWidget *controls_container_ = nullptr;
   QVBoxLayout *controls_layout_ = nullptr;
   QLabel *empty_settings_label_ = nullptr;
@@ -2075,6 +2508,13 @@ private:
   std::uint64_t texture_keybindings_revision_ = 0;
   double texture_rotation_step_ = 0.0;
   QString texture_action_error_;
+  std::array<UvPeelControlWidget, 4> uv_peel_controls_;
+  std::optional<QuaderUvPeelSettings> uv_peel_settings_;
+  std::optional<QuaderUvPeelRevision> uv_peel_revision_;
+  std::optional<QuaderUvPeelOptions> uv_peel_draft_;
+  std::optional<QuaderUvPeelRevision> uv_peel_draft_revision_;
+  std::uint64_t uv_peel_keybindings_revision_ = 0;
+  QString uv_peel_error_;
   std::optional<QuaderToolSettingsTarget> last_target_;
   bool synchronizing_ = false;
   bool refresh_scheduled_ = false;
@@ -2082,6 +2522,7 @@ private:
   bool texture_synchronizing_ = false;
   bool texture_refresh_scheduled_ = false;
   bool localized_text_dirty_ = true;
+  bool uv_peel_synchronizing_ = false;
 };
 
 QtToolSettingsPanel::QtToolSettingsPanel(QWidget *parent)
@@ -2105,6 +2546,10 @@ void QtToolSettingsPanel::refresh() { impl_->refresh(); }
 
 void QtToolSettingsPanel::refresh_texture_settings() {
   impl_->refresh_texture_settings();
+}
+
+void QtToolSettingsPanel::refresh_uv_peel_settings() {
+  impl_->refresh_uv_peel_settings();
 }
 
 bool QtToolSettingsPanel::has_active_target() const {

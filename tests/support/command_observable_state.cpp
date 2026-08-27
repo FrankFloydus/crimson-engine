@@ -1516,6 +1516,19 @@ std::string capture_preferences(const CaptureData &data) {
   writer.line("preferences.navigation_gizmo_visible",
               bool_text(preferences.navigation_gizmo_visible()));
 
+  const auto uv_peel = data.editor.modeling().uv_peel_settings();
+  writer.line("preferences.uv_peel.axis", enum_text(uv_peel.options.axis));
+  writer.line("preferences.uv_peel.world_space",
+              bool_text(uv_peel.options.world_space));
+  writer.line("preferences.uv_peel.u_repeat",
+              double_bits(uv_peel.options.u_repeat));
+  writer.line("preferences.uv_peel.v_repeat",
+              double_bits(uv_peel.options.v_repeat));
+  writer.line("preferences.uv_peel.u_offset",
+              double_bits(uv_peel.options.u_offset));
+  writer.line("preferences.uv_peel.v_offset",
+              double_bits(uv_peel.options.v_offset));
+
   std::vector<QuaderKeybindingCatalogEntry> catalog =
       data.editor.commands().keybinding_catalog();
   std::sort(catalog.begin(), catalog.end(), [](const auto &left,

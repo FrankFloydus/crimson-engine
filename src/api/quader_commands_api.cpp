@@ -558,6 +558,9 @@ std::string command_keybinding_localization_key(std::string_view command_id) {
   if (command_id.starts_with("modeling.texture.")) {
     return "command." + std::string(command_id);
   }
+  if (command_id == quader_command::kModelingUvPeel.string()) {
+    return "command.modeling.uv_peel";
+  }
   if (command_id == quader_command::kEditUndo.string()) {
     return "ui.menu.edit.undo";
   }
@@ -2010,6 +2013,17 @@ void QuaderCommandsApi::Impl::register_commands() {
     set_keybinding_selection_modes(command.command_id.string(),
                                    kSelectionModeFace);
   }
+  register_command(
+      quader_command::kModelingUvPeel, "UV Peel",
+      [this] {
+        const auto settings = api_.modeling().uv_peel_settings();
+        return api_.modeling().peel_uv(
+            {.options = settings.options,
+             .selection_token = settings.selection_token});
+      },
+      {}, [this] { return api_.modeling().uv_peel_settings().editable; });
+  set_keybinding_selection_modes(quader_command::kModelingUvPeel.string(),
+                                 kSelectionModeEdge);
 #ifndef NDEBUG
   register_command(quader_command::kDevCopySelectionJson,
                    "Dev: Copy Selection JSON",

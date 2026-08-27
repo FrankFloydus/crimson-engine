@@ -278,6 +278,7 @@ inline constexpr QuaderCommandId kModelingFlipHorizontal{
     "modeling.flip_horizontal"};
 inline constexpr QuaderCommandId kModelingFlipVertical{
     "modeling.flip_vertical"};
+inline constexpr QuaderCommandId kModelingUvPeel{"modeling.uv_peel"};
 inline constexpr QuaderCommandId kModelingTextureAlignToGrid{
     "modeling.texture.align_to_grid"};
 inline constexpr QuaderCommandId kModelingTextureAlignToFace{
@@ -509,6 +510,7 @@ inline constexpr QuaderCommandId kTypedCommandIds[] = {
     kModelingMergeByDistance,
     kModelingFlipHorizontal,
     kModelingFlipVertical,
+    kModelingUvPeel,
     kModelingTextureAlignToGrid,
     kModelingTextureAlignToFace,
     kModelingTextureAlignToView,

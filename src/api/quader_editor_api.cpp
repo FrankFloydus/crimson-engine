@@ -103,6 +103,7 @@ public:
 
     void install_texture_hooks(SceneSession &scene, QuaderApiSession session) {
       scene.modeling().invalidate_face_texture_edit_state();
+      scene.modeling().invalidate_uv_peel_selection();
       texture_runtime_binding->preferences = &preferences;
       const std::weak_ptr<TextureRuntimeBinding> lifetime =
           texture_runtime_binding;

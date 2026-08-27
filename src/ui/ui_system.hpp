@@ -291,6 +291,8 @@ private:
   std::optional<QuaderFaceTextureRevision> face_texture_settings_revision_;
   std::uint64_t face_texture_keybindings_revision_ = 0;
   double face_texture_rotation_step_ = 0.0;
+  std::optional<QuaderUvPeelRevision> uv_peel_settings_revision_;
+  std::uint64_t uv_peel_keybindings_revision_ = 0;
   bool tool_settings_refresh_valid_ = false;
   QuaderEditorApi *project_workspace_events_editor_ = nullptr;
   std::vector<QuaderEventSubscription>

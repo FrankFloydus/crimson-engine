@@ -4899,7 +4899,8 @@ TEST(BuildGuardrailTests,
       source, "bool MeshRenderableFactory::update_dynamic_geometry(",
       "template <typename Resource>");
 
-  expect_contains(update, "build_render_vertices(mesh)");
+  expect_contains(update, "build_render_vertices(mesh, dynamic_positions)");
+  expect_contains(update, "pack_dynamic_static_vertices(render_vertices)");
   expect_contains(update, "setBufferAt(");
   expect_contains(update, "*engine_, 0");
   expect_contains(update, "*engine_, 1");

@@ -228,6 +228,8 @@ quader_configure_modeling_sdk_target(quader_modeling_sdk_geometry)
 add_library(quader_modeling_sdk_polygon STATIC
     src/sdk/core/modeling/src/face_texture_actions.cpp
     src/sdk/core/modeling/src/obj_mesh_view.cpp
+    src/sdk/core/modeling/src/uv_peel.cpp
+    src/sdk/core/modeling/src/uv_peel_solver.cpp
     src/sdk/core/modeling/src/polygon_document.cpp
     ${QUADER_CANONICAL_POLYGON_SOURCES})
 add_library(quader::modeling_sdk_polygon ALIAS quader_modeling_sdk_polygon)

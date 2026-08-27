@@ -1146,7 +1146,7 @@ TEST(UiLayoutGuardrailTests,
 
   const std::string refresh = std::string(source_slice(
       panel, "  void refresh_texture_settings(bool force = false)",
-      "  [[nodiscard]] bool has_active_target() const"));
+      "  void refresh_uv_peel_settings(bool force = false)"));
   const std::size_t revision = refresh.find("face_texture_settings_revision()");
   const std::size_t gate = refresh.find("*texture_revision_ == revision");
   const std::size_t summary = refresh.find("face_texture_settings()");
@@ -1195,6 +1195,86 @@ TEST(UiLayoutGuardrailTests,
   expect_missing(dispatch, "commands().execute(");
   expect_contains(panel, "button->setFocusPolicy(Qt::TabFocus)");
   expect_contains(panel, "if (!localized_text_dirty_)");
+  expect_missing(panel, "commands().available()");
+}
+
+TEST(UiLayoutGuardrailTests,
+     UvPeelRetainsEdgeControlsBehindOwnerGateAndRejectsStaleDrafts) {
+  const std::string header =
+      read_source_file("src/ui/qt_tool_settings_panel.hpp");
+  const std::string panel =
+      read_source_file("src/ui/qt_tool_settings_panel.cpp");
+  const std::string ui = read_source_file("src/ui/ui_system.cpp");
+  expect_contains(header, "void refresh_uv_peel_settings()");
+  expect_contains(panel, "QStringLiteral(\"tool_settings.section.uv_peel\")");
+  EXPECT_EQ(count_occurrences(panel, "build_uv_peel_controls();"), 1u);
+
+  const std::string refresh = source_slice(
+      panel, "  void refresh_uv_peel_settings(bool force = false)",
+      "  [[nodiscard]] bool has_active_target() const");
+  const std::size_t revision = refresh.find("uv_peel_settings_revision()");
+  const std::size_t gate = refresh.find("*uv_peel_revision_ == revision");
+  const std::size_t summary = refresh.find("uv_peel_settings()");
+  const std::size_t visibility = refresh.find("uv_peel_section_->setVisible");
+  const std::size_t shortcut = refresh.find("commands().shortcut_for(");
+  ASSERT_NE(revision, std::string::npos);
+  ASSERT_NE(gate, std::string::npos);
+  ASSERT_NE(summary, std::string::npos);
+  ASSERT_NE(visibility, std::string::npos);
+  ASSERT_NE(shortcut, std::string::npos);
+  EXPECT_LT(revision, gate);
+  EXPECT_LT(gate, summary);
+  EXPECT_LT(summary, visibility);
+  EXPECT_LT(summary, shortcut);
+  EXPECT_EQ(count_occurrences(refresh, "uv_peel_settings()"), 1u);
+  expect_contains(refresh,
+                  "uv_peel_keybindings_revision_ == keybindings_revision");
+  expect_contains(refresh, "const bool visible = settings.selected_edge_count > 0");
+  expect_contains(refresh, "*uv_peel_draft_revision_ != revision");
+  expect_contains(refresh, "if (!binding.editing)");
+  expect_contains(refresh, "control->isEnabled() != settings.editable");
+  expect_contains(refresh, "uv_peel_apply_->toolTip() != tooltip");
+  expect_missing(refresh, "active_tool");
+  expect_missing(refresh, "commands().available()");
+  expect_missing(refresh, "export_selection()");
+  expect_missing(refresh, "show_panel(");
+  expect_missing(refresh, "raise()");
+
+  const std::string flush = source_slice(
+      panel, "  bool flush_uv_peel_options()",
+      "  void discard_uv_peel_dispatch()");
+  EXPECT_LT(flush.find("uv_peel_settings_revision()"),
+            flush.find("editor_->modeling().set_uv_peel_options("));
+  expect_contains(flush, "uv_peel_invalid_draft()");
+  expect_contains(flush, "*uv_peel_draft_revision_");
+  const std::string dispatch = source_slice(
+      panel, "  void dispatch_uv_peel()", "  void build_texture_actions()");
+  const std::size_t action = dispatch.find("editor_->modeling().peel_uv(");
+  ASSERT_NE(action, std::string::npos);
+  EXPECT_LT(dispatch.find("*uv_peel_revision_ != revision"),
+            dispatch.find("flush_uv_peel_options()"));
+  EXPECT_LT(dispatch.find("flush_uv_peel_options()"), action);
+  EXPECT_LT(dispatch.find("selection_token != selection_token"), action);
+  expect_contains(dispatch, ".options = uv_peel_settings_->options");
+  expect_contains(dispatch,
+                  ".selection_token = uv_peel_settings_->selection_token");
+  expect_missing(dispatch, "commands().execute(");
+  expect_missing(dispatch, "history()");
+  expect_contains(panel, "uv_peel_apply_->setFocusPolicy(Qt::TabFocus)");
+  expect_contains(panel, "uv_peel_world_space_->setFocusPolicy(Qt::TabFocus)");
+  expect_contains(panel, "if (!localized_text_dirty_)");
+
+  const std::string frame = source_slice(
+      ui, "    const QuaderUvPeelRevision peel_revision =",
+      "    QDR_PROFILE_SCOPE(\"UI synchronize status bar\")");
+  EXPECT_LT(frame.find("*uv_peel_settings_revision_ != peel_revision"),
+            frame.find("tool_settings_panel_->refresh_uv_peel_settings()"));
+  expect_contains(frame,
+                  "uv_peel_keybindings_revision_ != keybindings_revision");
+  expect_missing(frame, "numeric_interaction_active");
+  expect_missing(frame, "modeling().uv_peel_settings()");
+  expect_missing(frame, "show_panel(");
+  expect_missing(frame, "raise()");
   expect_missing(panel, "commands().available()");
 }
 
