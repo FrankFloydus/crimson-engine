@@ -43,6 +43,11 @@ struct ViewportSelectionInteractionWorkStats {
 class ViewportSelectionInteraction {
 public:
     void reset();
+    /// Resolves an earlier single click before a new gesture can pick its gizmo.
+    [[nodiscard]] std::optional<ViewportInteractionSelectionState>
+    prepare_frame(QuaderEditorApi &editor,
+                  const ViewportInteractionFrame &frame);
+    void cancel_pending_click();
     void handle_frame(QuaderEditorApi &editor,
                       const ViewportInteractionFrame &frame,
                       const ViewportToolResult &tool_result,
@@ -58,9 +63,67 @@ public:
     }
 
 private:
+  /// Preserves the first click's selection while its native double is pending.
+  struct DepthClickBaseline {
+    QuaderSelectionBoxBaseline selection;
+    const ViewportCameraController *camera = nullptr;
+    QuaderRay ray;
+    QVec2 local = {};
+    QVec2 viewport_size = {};
+    SceneSessionId scene_session_id;
+    ViewportToolId tool = ViewportToolId::Select;
+    std::uint64_t content_revision = 0;
+    std::uint64_t selection_revision = 0;
+    std::uint64_t scene_revision = 0;
+    std::uint64_t asset_revision = 0;
+    std::uint64_t keybindings_revision = 0;
+    bool double_click_pending = false;
+    bool delay_single_click = false;
+    ViewportModifiers click_modifiers = {};
+    double deadline_seconds = 0.0;
+
+    [[nodiscard]] bool matches_context(const ViewportInteractionFrame &frame,
+                                       SceneSessionId current_scene) const;
+    [[nodiscard]] bool matches_frame(const ViewportInteractionFrame &frame,
+                                     SceneSessionId current_scene) const;
+  };
+
+  /// Freezes a completed single pick until native double-click disambiguation.
+  struct PendingFirstPick {
+    QuaderPickSelectRequest request;
+    std::optional<EntityId> billboard_entity;
+    ViewportModifiers modifiers = {};
+    QVec2 local = {};
+    QuaderHoverTarget hovered_before_selection;
+  };
+
+  /// Defers hover invalidation until the after-tool selection phase.
+  struct PendingPickFeedback {
+    QVec2 local = {};
+    QuaderHoverTarget hovered_before_selection;
+  };
+
+  QuaderSelectionSummary commit_pending_pick(
+      QuaderEditorApi &editor, const ViewportInteractionFrame &frame);
+  [[nodiscard]] bool pending_click_matches_context(
+      QuaderEditorApi &editor, const ViewportInteractionFrame &frame) const;
+  std::optional<QuaderSelectionSummary> commit_pick_selection(
+      QuaderEditorApi &editor, const ViewportInteractionFrame &frame,
+      QVec2 local_mouse, int click_count,
+      bool preserve_selection_on_miss = false,
+      bool preserve_selection_on_selected_hit = false,
+      bool preserve_existing_component_selection_on_hit = false,
+      bool cycle_depth = false, ViewportModifiers cycle_modifiers = {},
+      QuaderHoverTarget hovered_before_selection = {});
+
   bool hover_clear_issued_ = false;
   quader_editor_core::SelectionBoxState box_state_;
   QuaderSelectionEdit box_edit_ = QuaderSelectionEdit::Replace;
+  bool box_cycle_depth_ = false;
+  ViewportModifiers box_cycle_modifiers_ = {};
+  std::optional<DepthClickBaseline> depth_click_baseline_;
+  std::optional<PendingFirstPick> pending_first_pick_;
+  std::optional<PendingPickFeedback> pending_pick_feedback_;
   std::optional<QuaderHoverTarget> box_hovered_before_selection_;
   std::optional<QuaderSelectionBoxBaseline> box_baseline_;
   std::optional<ViewportSelectionMarquee> committed_marquee_;

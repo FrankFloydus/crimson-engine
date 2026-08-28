@@ -114,7 +114,10 @@ enum class ViewportTransformSpace {
  */
 struct ViewportWorkspacePaneState {
     ViewportPaneId id = ViewportPaneId::Perspective;
-    ViewportShadingMode shading = ViewportShadingMode::Shaded;
+    // Each projection remembers its display choice only for this workspace's
+    // lifetime. The camera's actual projection selects the active value.
+    ViewportShadingMode perspective_shading = ViewportShadingMode::Shaded;
+    ViewportShadingMode orthographic_shading = ViewportShadingMode::Wireframe;
     ViewportCameraController camera;
     QVec2 render_size = {1.0f, 1.0f};
     bool visible_this_frame = false;

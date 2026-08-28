@@ -514,6 +514,12 @@ struct QuaderPickSelectRequest {
     double vertex_radius = 0.3;
     double edge_radius = 0.2;
     bool select_backfaces = true;
+    /// Explicitly advance through overlapping meshes in Object mode. Other
+    /// selection modes retain their ordinary click and multi-click behavior.
+    bool cycle_depth = false;
+    /// World-space origin tolerance for repeated depth picks. Zero keeps exact
+    /// ray matching; negative or non-finite values are treated as zero.
+    double cycle_origin_tolerance = 0.0;
 };
 
 /**

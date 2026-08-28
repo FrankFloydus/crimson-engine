@@ -258,6 +258,8 @@ struct PickRequest {
   int target_object_id = -1;
 };
 
+struct PickCycleState;
+
 /**
  * Stores the Apply Pick Selection Request data contract used by the modeling
  * runtime domain.
@@ -274,6 +276,9 @@ struct ApplyPickSelectionRequest {
   std::span<const PickObjectBounds> object_bounds;
   std::span<const PickObjectFaceGeometry> face_geometry;
   std::span<const PickObjectTransform> object_transforms;
+  bool cycle_depth = false;
+  /// Borrowed for this call; the host owns persistence across SDK projections.
+  PickCycleState *depth_cycle = nullptr;
 };
 
 /**
@@ -937,6 +942,13 @@ pick_all(const std::vector<PolygonObject> &objects, const PickRequest &request,
          std::span<const PickObjectBounds> object_bounds,
          std::span<const PickObjectFaceGeometry> face_geometry,
          std::span<const PickObjectTransform> object_transforms = {});
+/// Collects one surface or authored boundary hit per mesh without occlusion
+/// by other meshes. Component picking keeps its ordinary facing/depth policy.
+std::vector<PickHitRecord> pick_mesh_depth_hits(
+    const std::vector<PolygonObject> &objects, const PickRequest &request,
+    std::span<const PickObjectBounds> object_bounds = {},
+    std::span<const PickObjectFaceGeometry> face_geometry = {},
+    std::span<const PickObjectTransform> object_transforms = {});
 quader_poly::PickOptions selection_pick_options_from_radii(
     double vertex_radius,
     double edge_radius,
@@ -980,6 +992,10 @@ PickCycleStep advance_pick_cycle(PickCycleState &state, std::string signature,
                                  int candidate_count,
                                  quader::QVec2 screen_position,
                                  float max_screen_distance);
+PickCycleStep advance_depth_pick_cycle(PickCycleState &state,
+                                      std::string signature,
+                                      int candidate_count,
+                                      int active_candidate_index);
 ClickPickPlan plan_click_pick(PickCycleState &state,
                               const PickSelectionState &selection,
                               const std::vector<PickHitRecord> &handle_hits,

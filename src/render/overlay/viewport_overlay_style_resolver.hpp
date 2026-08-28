@@ -52,6 +52,7 @@ struct ViewportOverlayStyleContext {
 };
 
 /// Identifies the first newly appended record of each styled geometry kind.
+/// Style resolution may remove ordinary hover triangles within this range.
 struct ViewportOverlayStyleRange {
   std::size_t triangle_begin = 0u;
   std::size_t line_begin = 0u;

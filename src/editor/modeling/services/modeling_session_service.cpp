@@ -1344,17 +1344,8 @@ public:
   pick_object_entity(const ModelingPickSelectRequest &request) const {
     const quader_editor_core::EditorSession &projected =
         selection_projection_view();
-    const std::optional<int> object_id = selection_service_.pick_object_id(
+    return selection_service_.pick_object_entity(
         projected, scene_, object_registry_, request);
-    if (!object_id.has_value()) {
-      return std::nullopt;
-    }
-    std::optional<EntityId> entity =
-        selection_service_.scene_target_for_picking_participant(*object_id);
-    if (!entity.has_value()) {
-      entity = object_registry_.entity_for_modeling_object(*object_id);
-    }
-    return entity;
   }
 
   [[nodiscard]] std::vector<EntityId>
@@ -2585,6 +2576,7 @@ public:
   }
 
   ModelingCommandResult set_selection_mode(ModelingSelectionMode mode) {
+    const ModelingSelectionMode previous_mode = selection_mode();
     bool canceled_preview = false;
     const auto absorb_cancel = [&canceled_preview](
                                    ModelingCommandResult result) {
@@ -2648,6 +2640,9 @@ public:
           sdk_projection_adapter_.set_selection_mode(mode);
       if (result.ok) {
         app_selection_mode_ = mode;
+        if (previous_mode != mode) {
+          selection_service_.reset_depth_pick_cycle();
+        }
       }
       result.changed = result.changed || canceled_preview ||
                        removed_instance_scope_selection;
@@ -2680,6 +2675,9 @@ public:
 
     ModelingCommandResult result =
         sdk_projection_adapter_.set_selection_mode(mode);
+    if (result.ok && previous_mode != mode) {
+      selection_service_.reset_depth_pick_cycle();
+    }
     result.changed = result.changed || canceled_preview;
     invalidate_selection_overlay_caches();
     if (mode == ModelingSelectionMode::Object &&

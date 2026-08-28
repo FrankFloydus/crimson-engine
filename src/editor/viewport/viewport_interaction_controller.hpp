@@ -50,6 +50,7 @@ public:
   [[nodiscard]] bool cancel_active_drag(QuaderEditorApi &editor);
   [[nodiscard]] bool dragging() const;
   void cancel_pending_material_interaction();
+  void cancel_pending_selection_click();
   void reset(QuaderEditorApi *editor = nullptr);
 
   [[nodiscard]] const quader_editor_core::TransformGizmoFrame *

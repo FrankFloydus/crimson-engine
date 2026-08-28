@@ -27,6 +27,7 @@
 #include "scene/scene_document.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <iterator>
@@ -983,9 +984,16 @@ ModelingSelectionService::scene_target_for_picking_participant(
 
 void ModelingSelectionService::invalidate_picking_cache() const {
   picking_cache_ = {};
+  reset_depth_pick_cycle();
   rectangle_projection_cache_ = {};
   rectangle_universe_cache_ = {};
   rectangle_resolution_cache_ = {};
+}
+
+void ModelingSelectionService::reset_depth_pick_cycle() const {
+  quader_editor_core::reset_pick_cycle(depth_pick_cycle_);
+  depth_pick_context_signature_.clear();
+  depth_pick_origin_ = {};
 }
 
 std::uint64_t
@@ -1445,10 +1453,77 @@ ModelingSelectionService::cached_local_pick_face_geometry(
   return picking_cache_.local_face_geometry;
 }
 
+void ModelingSelectionService::synchronize_depth_pick_cycle(
+    const quader_editor_core::EditorSession &session,
+    const SceneDocument &scene, const ModelingObjectRuntimeMap &object_map,
+    const ModelingPickSelectRequest &request) const {
+  const ModelingSelectionMode current_mode =
+      selection_mode(session, app_selection_mode());
+  if (current_mode != ModelingSelectionMode::Object ||
+      request.click_count == 0 || request.alt_pressed) {
+    reset_depth_pick_cycle();
+    return;
+  }
+  if (!depth_pick_cycle_.active && !request.depth_cycle_requested(current_mode)) {
+    return;
+  }
+  // Selection revisions intentionally do not participate: the first ordinary
+  // click in a subsequent double-click must not restart the depth stack.
+  std::string signature;
+  signature.reserve(160U);
+  const auto append = [&signature](const auto &value) {
+    signature.append(reinterpret_cast<const char *>(&value), sizeof(value));
+  };
+  append(session.state().content_revision);
+  append(scene.content_revision());
+  append(scene.transform_revision());
+  append(scene.visibility_revision());
+  append(scene.layer_revision());
+  append(scene.mesh_binding_revision());
+  append(object_map.revision());
+  append(viewport_visibility_revision());
+  const ModelingInstanceEditScope scope = instance_edit_scope();
+  append(scope.occurrence);
+  append(scope.definition);
+  append(app_selection_mode());
+  append(session.selection_mode());
+  append(request.ray.direction.x);
+  append(request.ray.direction.y);
+  append(request.ray.direction.z);
+  append(request.vertex_radius);
+  append(request.edge_radius);
+  append(request.select_backfaces);
+  const double origin_tolerance =
+      std::isfinite(request.cycle_origin_tolerance) &&
+              request.cycle_origin_tolerance > 0.0
+          ? request.cycle_origin_tolerance
+          : 0.0;
+  append(origin_tolerance);
+  const double dx =
+      static_cast<double>(request.ray.origin.x) - depth_pick_origin_.x;
+  const double dy =
+      static_cast<double>(request.ray.origin.y) - depth_pick_origin_.y;
+  const double dz =
+      static_cast<double>(request.ray.origin.z) - depth_pick_origin_.z;
+  const double origin_distance_squared = dx * dx + dy * dy + dz * dz;
+  if (signature != depth_pick_context_signature_ ||
+      !std::isfinite(origin_distance_squared) ||
+      origin_distance_squared > origin_tolerance * origin_tolerance) {
+    reset_depth_pick_cycle();
+    depth_pick_context_signature_ = std::move(signature);
+    // Keep the anchor fixed until this cycle ends, rather than accumulating
+    // small movements that eventually walk the cursor to a different stack.
+    depth_pick_origin_ = request.ray.origin;
+  }
+}
+
 ModelingSelectionApplyResult ModelingSelectionService::apply_pick_selection(
     quader_editor_core::EditorSession &session, const SceneDocument &scene,
     const ModelingObjectRuntimeMap &object_registry,
     const ModelingPickSelectRequest &request) const {
+  synchronize_depth_pick_cycle(session, scene, object_registry, request);
+  const bool cycle_depth = request.depth_cycle_requested(
+      selection_mode(session, app_selection_mode()));
   const std::uint64_t selection_before = session.state().selection_revision;
   const std::vector<quader_editor_core::PolygonObject> &cached_objects =
       cached_local_picking_objects(session, scene, object_registry);
@@ -1470,7 +1545,9 @@ ModelingSelectionApplyResult ModelingSelectionService::apply_pick_selection(
           quader_editor_core::ApplyPickSelectionRequest{
               .operation =
                   quader_editor_core::selection_edit_operation_from_modifiers(
-                      request.control_pressed, request.shift_pressed),
+                      request.control_pressed ||
+                          (cycle_depth && request.command_pressed),
+                      request.shift_pressed),
               .ray = to_runtime_ray(request.ray),
               .pick_options = pick_options,
               .click_count = request.click_count,
@@ -1483,6 +1560,8 @@ ModelingSelectionApplyResult ModelingSelectionService::apply_pick_selection(
               .object_bounds = pick_bounds,
               .face_geometry = pick_face_geometry,
               .object_transforms = object_transforms,
+              .cycle_depth = cycle_depth,
+              .depth_cycle = &depth_pick_cycle_,
           });
   return {
       .applied = result.applied,
@@ -1494,11 +1573,11 @@ std::optional<int> ModelingSelectionService::pick_object_id(
     const quader_editor_core::EditorSession &session,
     const SceneDocument &scene, const ModelingObjectRuntimeMap &object_registry,
     const ModelingPickSelectRequest &request) const {
+  synchronize_depth_pick_cycle(session, scene, object_registry, request);
   const std::vector<quader_editor_core::PolygonObject> &cached_objects =
       cached_local_picking_objects(session, scene, object_registry);
   quader_poly::PickOptions pick_options = pick_options_from_request(request);
   pick_options.mode = quader_poly::SelectionMode::Face;
-  pick_options.pick_backfaces = true;
   const std::optional<quader_editor_core::PickHitRecord> hit =
       quader_editor_core::pick_nearest(
           cached_objects,
@@ -1514,6 +1593,87 @@ std::optional<int> ModelingSelectionService::pick_object_id(
     return std::nullopt;
   }
   return hit->object_id;
+}
+
+std::optional<EntityId> ModelingSelectionService::pick_object_entity(
+    const quader_editor_core::EditorSession &session,
+    const SceneDocument &scene, const ModelingObjectRuntimeMap &object_registry,
+    const ModelingPickSelectRequest &request) const {
+  const auto entity_for_participant = [&](int object_id) {
+    std::optional<EntityId> entity =
+        scene_target_for_picking_participant(object_id);
+    if (!entity.has_value()) {
+      entity = object_registry.entity_for_modeling_object(object_id);
+    }
+    return entity;
+  };
+  if (!request.depth_cycle_requested(
+          selection_mode(session, app_selection_mode()))) {
+    const std::optional<int> object_id =
+        pick_object_id(session, scene, object_registry, request);
+    return object_id.has_value() ? entity_for_participant(*object_id)
+                                 : std::nullopt;
+  }
+
+  synchronize_depth_pick_cycle(session, scene, object_registry, request);
+  const std::vector<quader_editor_core::PolygonObject> &objects =
+      cached_local_picking_objects(session, scene, object_registry);
+  quader_poly::PickOptions options = pick_options_from_request(request);
+  options.mode = quader_poly::SelectionMode::Face;
+  // Include authored boundaries when an open mesh is edge-on to this ray.
+  // Ordinary component picking retains its facing and occlusion policy.
+  const std::vector<quader_editor_core::PickHitRecord> hits =
+      quader_editor_core::pick_mesh_depth_hits(
+          objects,
+          quader_editor_core::PickRequest{.ray = to_runtime_ray(request.ray),
+                                          .options = options},
+          cached_pick_object_bounds(session, scene, object_registry),
+          cached_local_pick_face_geometry(session, scene, object_registry,
+                                          options),
+          cached_local_picking_transforms(session, scene, object_registry));
+  std::vector<EntityId> candidates;
+  std::unordered_set<EntityId> membership;
+  const quader_editor_core::SelectionEditOperation operation =
+      quader_editor_core::selection_edit_operation_from_modifiers(
+          request.control_pressed || request.command_pressed,
+          request.shift_pressed);
+  std::string signature = "scene:";
+  signature += std::to_string(static_cast<int>(app_selection_mode()));
+  signature += ":" + std::to_string(static_cast<int>(operation));
+  int ordinary_candidate = -1;
+  std::optional<EntityId> ordinary_target;
+  for (const quader_editor_core::PickHitRecord &hit : hits) {
+    const std::optional<EntityId> entity = entity_for_participant(hit.object_id);
+    if (!entity.has_value()) {
+      continue;
+    }
+    const EntityId target = *entity;
+    if (!ordinary_target.has_value() && target != kInvalidEntityId &&
+        hit.kind == quader_poly::ElementKind::Face) {
+      ordinary_target = target;
+    }
+    if (target == kInvalidEntityId || !membership.insert(target).second) {
+      continue;
+    }
+    candidates.push_back(target);
+    signature += "|" + std::to_string(target);
+  }
+  // The first click can remain deferred, so the previous primary is not this
+  // gesture's front target. Seed every fresh cycle from the ordinary surface;
+  // an existing same-operation cursor still advances normally.
+  if (ordinary_target.has_value()) {
+    const auto ordinary =
+        std::find(candidates.begin(), candidates.end(), *ordinary_target);
+    if (ordinary != candidates.end()) {
+      ordinary_candidate = static_cast<int>(ordinary - candidates.begin());
+    }
+  }
+  const quader_editor_core::PickCycleStep step =
+      quader_editor_core::advance_depth_pick_cycle(
+          depth_pick_cycle_, std::move(signature),
+          static_cast<int>(candidates.size()), ordinary_candidate);
+  return step.active ? std::optional<EntityId>(candidates[step.index])
+                     : std::nullopt;
 }
 
 std::optional<quader_editor_core::PickHitRecord>

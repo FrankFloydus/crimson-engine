@@ -112,6 +112,36 @@ struct ViewportInteractionHarness {
               },
       };
     }
+
+    void click_selection(quader::QVec2 hit, int click_count = 1,
+                         bool cycle_depth = false,
+                         quader::ViewportModifiers cycle_modifiers = {}) {
+      input.mouse_local = hit;
+      input.mouse_screen = hit;
+      input.cycle_selection_depth_pressed = cycle_depth;
+      input.cycle_selection_depth_modifiers = cycle_modifiers;
+      quader::ViewportInteractionFrame press = frame(true, true, false, hit);
+      press.left_click_count = click_count;
+      const quader::ViewportBeforeToolInteractionResult before_press =
+          controller.handle_before_active_tool(editor, press);
+      controller.handle_after_active_tool(editor, press, {}, before_press);
+
+      // Native double-click intent is an edge on press, not a held flag.
+      input.cycle_selection_depth_pressed = false;
+      input.cycle_selection_depth_modifiers = {};
+      quader::ViewportInteractionFrame release = frame(false, false, true, hit);
+      release.left_click_count = click_count;
+      const quader::ViewportBeforeToolInteractionResult before_release =
+          controller.handle_before_active_tool(editor, release);
+      controller.handle_after_active_tool(editor, release, {}, before_release);
+    }
+
+    quader::ViewportBeforeToolInteractionResult
+    dispatch_frame(const quader::ViewportInteractionFrame &frame) {
+      const auto before = controller.handle_before_active_tool(editor, frame);
+      controller.handle_after_active_tool(editor, frame, {}, before);
+      return before;
+    }
 };
 
 constexpr std::string_view kGestureProjectMaterialId =
@@ -987,50 +1017,1214 @@ TEST(ViewportInteractionControllerTests,
 }
 
 TEST(ViewportInteractionControllerTests,
-     PlainObjectDoubleClickEntersSelectedInstanceScope) {
+     OrthographicPlainAndModifiedDoubleClicksStillSelectEdgeLoops) {
   ViewportInteractionHarness harness;
-  const quader::QuaderModelingObjectRef box = create_unit_box(harness);
-  ASSERT_NE(box.entity, quader::kInvalidEntityId);
+  const auto box = create_unit_box(harness);
+  ASSERT_TRUE(harness.editor.selection()
+                  .set_mode(quader::QuaderSelectionMode::Edge)
+                  .ok());
+  ASSERT_TRUE(harness.editor.selection().clear().ok());
+  harness.router.set_selection_mode(quader::ViewportSelectionMode::Edge);
+  harness.camera.view_axis(quader::ViewportViewAxis::Z, 1);
+  const auto edge = harness.camera.project_world_point({0.0f, 1.0f, 1.0f});
+  ASSERT_TRUE(edge.visible);
+  harness.click_selection(edge.position);
+  ASSERT_EQ(harness.editor.selection().summary().selected_edge_count, 1u);
+
+  harness.click_selection(edge.position, 2);
+  const auto loop = harness.editor.selection().summary();
+  ASSERT_GT(loop.selected_edge_count, 1u);
+  EXPECT_EQ(loop.active_object_id, box.modeling_object_id);
+  EXPECT_EQ(loop.mode, quader::QuaderSelectionMode::Edge);
+
+  harness.input.modifiers.primary = true;
+  harness.click_selection(edge.position, 2);
+  EXPECT_EQ(harness.editor.selection().summary().selected_edge_count, 0u);
+  harness.input.modifiers = {.shift = true};
+  harness.click_selection(edge.position, 2);
+  EXPECT_EQ(harness.editor.selection().summary().selected_edge_count,
+            loop.selected_edge_count);
+}
+
+TEST(ViewportInteractionControllerTests,
+     CoalescedGizmoDoubleClickStillSelectsAnEdgeLoop) {
+  ViewportInteractionHarness harness;
+  (void)create_unit_box(harness);
+  ASSERT_TRUE(harness.editor.selection()
+                  .set_mode(quader::QuaderSelectionMode::Edge)
+                  .ok());
+  ASSERT_TRUE(harness.editor.selection().clear().ok());
+  harness.router.set_selection_mode(quader::ViewportSelectionMode::Edge);
+  harness.camera.view_axis(quader::ViewportViewAxis::Z, 1);
+  const auto edge = harness.camera.project_world_point({0.0f, 1.0f, 1.0f});
+  ASSERT_TRUE(edge.visible);
+  harness.click_selection(edge.position);
+  ASSERT_EQ(harness.editor.selection().summary().selected_edge_count, 1u);
+  ASSERT_TRUE(harness.editor.tools().activate(quader::ViewportToolId::Move).ok());
+  harness.router.set_active_tool(quader::ViewportToolId::Move);
+  (void)harness.controller.handle_before_active_tool(harness.editor,
+                                                     harness.frame());
+  const auto *gizmo = harness.controller.transform_gizmo_frame();
+  ASSERT_NE(gizmo, nullptr);
+  const auto *axis = find_axis(*gizmo, quader_editor_core::TransformAxis::X);
+  ASSERT_NE(axis, nullptr);
+  const auto hit = axis_screen_point(*axis, 0.25f);
+  harness.input.mouse_local = hit;
+  harness.input.mouse_screen = hit;
+
+  auto press = harness.frame(true, true, false, hit);
+  const auto before_press =
+      harness.controller.handle_before_active_tool(harness.editor, press);
+  ASSERT_TRUE(before_press.gizmo_consumed);
+  harness.controller.handle_after_active_tool(
+      harness.editor, press, {}, before_press);
+  auto combined = harness.frame(true, true, true, hit);
+  combined.left_click_count = 2;
+  const auto before_combined =
+      harness.controller.handle_before_active_tool(harness.editor, combined);
+  ASSERT_TRUE(before_combined.selection_click_requested);
+  EXPECT_FALSE(before_combined.selection_cycle_depth);
+  EXPECT_EQ(before_combined.selection_click_count, 2);
+  harness.controller.handle_after_active_tool(
+      harness.editor, combined, {}, before_combined);
+  const auto loop = harness.editor.selection().summary();
+  EXPECT_GT(loop.selected_edge_count, 1u);
+
+  auto release = harness.frame(false, false, true, hit);
+  release.left_click_count = 2;
+  const auto before_release =
+      harness.controller.handle_before_active_tool(harness.editor, release);
+  harness.controller.handle_after_active_tool(
+      harness.editor, release, {}, before_release);
+  EXPECT_EQ(harness.editor.selection().summary().selected_edge_count,
+            loop.selected_edge_count);
+  EXPECT_FALSE(harness.controller.dragging());
+}
+
+TEST(ViewportInteractionControllerTests,
+     OrthographicDepthCycleSurvivesNativeClickPairsAndWraps) {
+  ViewportInteractionHarness harness;
+  const auto front = create_box_at(harness, {0.0f, 0.0f, 3.0f});
+  const auto middle = create_box_at(harness, {0.0f, 0.0f, 0.0f});
+  const auto back = create_box_at(harness, {0.0f, 0.0f, -3.0f});
   ASSERT_TRUE(harness.editor.selection()
                   .set_mode(quader::QuaderSelectionMode::Object)
                   .ok());
+  ASSERT_TRUE(harness.editor.selection().clear().ok());
   harness.router.set_selection_mode(quader::ViewportSelectionMode::Object);
-  ASSERT_TRUE(harness.editor.modeling().create_instance().ok());
+  harness.camera.view_axis(quader::ViewportViewAxis::Z, 1);
+  harness.input.selection_click_delay_for_double_click = true;
+  const quader::QVec2 hit{400.0f, 300.0f};
 
-  quader::EntityId occurrence = quader::kInvalidEntityId;
-  for (const quader::QuaderEntitySnapshot &entity :
-       harness.editor.query().entities()) {
-    if (entity.kind == quader::QuaderEntityKind::Instance &&
-        entity.has_instance_occurrence) {
-      occurrence = entity.id;
-      break;
+  for (const auto expected : {middle.entity, back.entity, front.entity}) {
+    const auto selected_before = selected_entities(harness);
+    const auto revision_before = harness.session.scene().selection_revision();
+    harness.session.history().clear();
+    harness.click_selection(hit);
+    ASSERT_EQ(selected_entities(harness), selected_before);
+    EXPECT_EQ(harness.session.scene().selection_revision(), revision_before);
+    EXPECT_FALSE(harness.editor.history().can_undo());
+    harness.click_selection(hit, 2, true);
+    EXPECT_EQ(selected_entities(harness),
+              std::vector<quader::EntityId>{expected});
+    EXPECT_EQ(harness.session.scene().selection_revision(), revision_before + 1u);
+    EXPECT_EQ(harness.editor.selection().hover_summary().target.kind,
+              quader::QuaderActiveSelectionKind::None);
+    EXPECT_FALSE(harness.controller.dragging());
+  }
+}
+
+TEST(ViewportInteractionControllerTests,
+     OrthographicDepthCycleToleratesSmallPointerJitter) {
+  ViewportInteractionHarness harness;
+  const auto front = create_box_at(harness, {0.0f, 0.0f, 3.0f});
+  const auto middle = create_box_at(harness, {0.0f, 0.0f, 0.0f});
+  const auto back = create_box_at(harness, {0.0f, 0.0f, -3.0f});
+  ASSERT_TRUE(harness.editor.selection().select_object(front).ok());
+  harness.router.set_selection_mode(quader::ViewportSelectionMode::Object);
+  harness.camera.view_axis(quader::ViewportViewAxis::Z, 1);
+  harness.input.selection_click_delay_for_double_click = true;
+
+  harness.click_selection({400.0f, 300.0f});
+  harness.click_selection({401.0f, 300.0f}, 2, true);
+  ASSERT_EQ(selected_entities(harness),
+            std::vector<quader::EntityId>{middle.entity});
+  harness.click_selection({402.0f, 300.0f});
+  harness.click_selection({402.0f, 301.0f}, 2, true);
+  ASSERT_EQ(selected_entities(harness),
+            std::vector<quader::EntityId>{back.entity});
+
+  harness.click_selection({410.0f, 300.0f});
+  harness.click_selection({410.0f, 300.0f}, 2, true);
+  EXPECT_EQ(selected_entities(harness),
+            std::vector<quader::EntityId>{middle.entity});
+}
+
+TEST(ViewportInteractionControllerTests,
+     DepthCycleIgnoresNonMeshSelectionModesEvenWithExplicitSemanticInput) {
+  for (const auto mode : {quader::QuaderSelectionMode::Vertex,
+                          quader::QuaderSelectionMode::Edge,
+                          quader::QuaderSelectionMode::Face,
+                          quader::QuaderSelectionMode::Group}) {
+    SCOPED_TRACE(static_cast<int>(mode));
+    ViewportInteractionHarness harness;
+    (void)create_unit_box(harness);
+    ASSERT_TRUE(harness.editor.selection().set_mode(mode).ok());
+    ASSERT_TRUE(harness.editor.selection().clear().ok());
+    harness.router.set_selection_mode(
+        mode == quader::QuaderSelectionMode::Vertex
+            ? quader::ViewportSelectionMode::Vertex
+        : mode == quader::QuaderSelectionMode::Edge
+            ? quader::ViewportSelectionMode::Edge
+        : mode == quader::QuaderSelectionMode::Face
+            ? quader::ViewportSelectionMode::Face
+            : quader::ViewportSelectionMode::Group);
+    harness.camera.view_axis(quader::ViewportViewAxis::Z, 1);
+    const auto before = harness.editor.selection().summary();
+    harness.input.cycle_selection_depth_pressed = true;
+    harness.controller.handle_after_active_tool(
+        harness.editor, harness.frame(), {}, {});
+    const auto after = harness.editor.selection().summary();
+    EXPECT_EQ(after.selection_revision, before.selection_revision);
+    EXPECT_FALSE(after.has_selection);
+    EXPECT_EQ(after.mode, mode);
+  }
+}
+
+TEST(ViewportInteractionControllerTests,
+     ReboundDepthCycleUsesCursorAndDoesNotTreatBindingModifiersAsRemoval) {
+  ViewportInteractionHarness harness;
+  const auto front = create_box_at(harness, {0.0f, 0.0f, 2.0f});
+  const auto back = create_box_at(harness, {0.0f, 0.0f, -2.0f});
+  ASSERT_TRUE(harness.editor.selection().select_object(front).ok());
+  harness.router.set_selection_mode(quader::ViewportSelectionMode::Object);
+  harness.camera.view_axis(quader::ViewportViewAxis::Z, 1);
+  harness.input.modifiers.primary = true;
+  harness.input.cycle_selection_depth_pressed = true;
+  harness.controller.handle_after_active_tool(
+      harness.editor, harness.frame(), {}, {});
+  EXPECT_EQ(selected_entities(harness),
+            std::vector<quader::EntityId>{back.entity});
+}
+
+TEST(ViewportInteractionControllerTests,
+     ModifiedDepthDoubleClickDiscardsStaleFirstClickBaselines) {
+  /// Identifies a change that makes the saved first-click selection obsolete.
+  enum class Invalidation {
+    ExternalSelection,
+    CameraPan,
+    ExternalSelectionWhileDoubleHeld,
+    CameraPanWhileDoubleHeld
+  };
+  for (const auto invalidation : {Invalidation::ExternalSelection,
+                                  Invalidation::CameraPan,
+                                  Invalidation::ExternalSelectionWhileDoubleHeld,
+                                  Invalidation::CameraPanWhileDoubleHeld}) {
+    SCOPED_TRACE(static_cast<int>(invalidation));
+    ViewportInteractionHarness harness;
+    (void)create_box_at(harness, {0.0f, 0.0f, 2.0f});
+    const auto back = create_box_at(harness, {0.0f, 0.0f, -2.0f});
+    const auto original = create_box_at(harness, {5.0f, 5.0f, 0.0f});
+    const auto replacement = create_box_at(harness, {-5.0f, 5.0f, 0.0f});
+    ASSERT_TRUE(harness.editor.selection()
+                    .set_mode(quader::QuaderSelectionMode::Object)
+                    .ok());
+    ASSERT_TRUE(harness.editor.selection().select_object(original).ok());
+    harness.router.set_selection_mode(quader::ViewportSelectionMode::Object);
+    harness.camera.view_axis(quader::ViewportViewAxis::Z, 1);
+    harness.input.selection_click_delay_for_double_click = true;
+    harness.monotonic_time_seconds = 10.0;
+    const quader::QVec2 hit{400.0f, 300.0f};
+    harness.click_selection(hit);
+    ASSERT_EQ(selected_entities(harness),
+              std::vector<quader::EntityId>{original.entity});
+
+    harness.monotonic_time_seconds += 0.1;
+    const bool external_selection =
+        invalidation == Invalidation::ExternalSelection ||
+        invalidation == Invalidation::ExternalSelectionWhileDoubleHeld;
+    const bool while_held =
+        invalidation == Invalidation::ExternalSelectionWhileDoubleHeld ||
+        invalidation == Invalidation::CameraPanWhileDoubleHeld;
+    const auto invalidate = [&]() {
+      if (external_selection) {
+        ASSERT_TRUE(harness.editor.selection().select_object(replacement).ok());
+      } else {
+        // A changed camera pose invalidates even without a navigation frame.
+        harness.camera.begin_drag(hit, quader::ViewportDragMode::Pan);
+        harness.camera.update_drag(hit + quader::QVec2{2.0f, 0.0f});
+        harness.camera.end_drag();
+      }
+    };
+    if (while_held) {
+      harness.input.cycle_selection_depth_pressed = true;
+      harness.input.cycle_selection_depth_modifiers = {.shift = true};
+      auto press = harness.frame(true, true, false, hit);
+      press.left_click_count = 2;
+      const auto before_press =
+          harness.controller.handle_before_active_tool(harness.editor, press);
+      harness.controller.handle_after_active_tool(harness.editor, press, {},
+                                                  before_press);
+      invalidate();
+      harness.input.cycle_selection_depth_pressed = false;
+      harness.input.cycle_selection_depth_modifiers = {};
+      auto release = harness.frame(false, false, true, hit);
+      release.left_click_count = 2;
+      const auto before_release =
+          harness.controller.handle_before_active_tool(harness.editor, release);
+      harness.controller.handle_after_active_tool(harness.editor, release, {},
+                                                  before_release);
+    } else {
+      invalidate();
+      harness.click_selection(hit, 2, true, {.shift = true});
+    }
+    auto selected = selected_entities(harness);
+    const quader::EntityId retained =
+        external_selection ? replacement.entity : original.entity;
+    std::vector<quader::EntityId> expected{retained, back.entity};
+    std::sort(selected.begin(), selected.end());
+    std::sort(expected.begin(), expected.end());
+    EXPECT_EQ(selected, expected);
+    EXPECT_FALSE(harness.controller.dragging());
+  }
+}
+
+TEST(ViewportInteractionControllerTests,
+     RecognizedModifiedDoubleClickKeepsBaselineAfterDelayedFrame) {
+  ViewportInteractionHarness harness;
+  (void)create_box_at(harness, {0.0f, 0.0f, 2.0f});
+  const auto back = create_box_at(harness, {0.0f, 0.0f, -2.0f});
+  const auto original = create_box_at(harness, {5.0f, 5.0f, 0.0f});
+  ASSERT_TRUE(harness.editor.selection()
+                  .set_mode(quader::QuaderSelectionMode::Object)
+                  .ok());
+  ASSERT_TRUE(harness.editor.selection().select_object(original).ok());
+  harness.router.set_selection_mode(quader::ViewportSelectionMode::Object);
+  harness.camera.view_axis(quader::ViewportViewAxis::Z, 1);
+  harness.input.selection_click_delay_for_double_click = true;
+  harness.input.selection_click_modifiers = {.shift = true};
+  harness.monotonic_time_seconds = 10.0;
+  harness.session.history().clear();
+  const auto revision_before = harness.session.scene().selection_revision();
+  const quader::QVec2 hit{400.0f, 300.0f};
+  harness.click_selection(hit);
+  ASSERT_EQ(selected_entities(harness),
+            std::vector<quader::EntityId>{original.entity});
+  EXPECT_EQ(harness.session.scene().selection_revision(), revision_before);
+  EXPECT_FALSE(harness.editor.history().can_undo());
+
+  // The native double was recognized before this slow frame consumed it.
+  harness.monotonic_time_seconds = 20.0;
+  harness.click_selection(hit, 2, true, {.shift = true});
+  auto selected = selected_entities(harness);
+  std::vector<quader::EntityId> expected{original.entity, back.entity};
+  std::sort(selected.begin(), selected.end());
+  std::sort(expected.begin(), expected.end());
+  EXPECT_EQ(selected, expected);
+  EXPECT_EQ(harness.session.scene().selection_revision(), revision_before + 1u);
+}
+
+TEST(ViewportInteractionControllerTests,
+     ReboundModifiedDepthActionsIgnoreEarlierMouseSelectionBaselines) {
+  for (const bool remove : {false, true}) {
+    SCOPED_TRACE(remove);
+    ViewportInteractionHarness harness;
+    const auto front = create_box_at(harness, {0.0f, 0.0f, 2.0f});
+    const auto back = create_box_at(harness, {0.0f, 0.0f, -2.0f});
+    const auto original = create_box_at(harness, {5.0f, 5.0f, 0.0f});
+    ASSERT_TRUE(harness.editor.selection()
+                    .set_mode(quader::QuaderSelectionMode::Object)
+                    .ok());
+    ASSERT_TRUE(harness.editor.selection().select_object(original).ok());
+    harness.router.set_selection_mode(quader::ViewportSelectionMode::Object);
+    harness.camera.view_axis(quader::ViewportViewAxis::Z, 1);
+    harness.click_selection({400.0f, 300.0f});
+    ASSERT_EQ(selected_entities(harness),
+              std::vector<quader::EntityId>{front.entity});
+
+    // The resolver chooses the operation; modifiers on a rebound physical key
+    // do not change it or make the key part of the preceding mouse gesture.
+    harness.input.modifiers = {.primary = !remove, .shift = remove};
+    harness.input.cycle_selection_depth_pressed = true;
+    harness.input.cycle_selection_depth_modifiers = {
+        .primary = remove, .shift = !remove};
+    const auto keyboard_frame = harness.frame();
+    const auto before_keyboard =
+        harness.controller.handle_before_active_tool(harness.editor,
+                                                     keyboard_frame);
+    harness.controller.handle_after_active_tool(
+        harness.editor, keyboard_frame, {}, before_keyboard);
+    std::vector<quader::EntityId> expected{front.entity};
+    if (!remove) {
+      expected.push_back(back.entity);
+    }
+    std::sort(expected.begin(), expected.end());
+    harness.input.modifiers = {};
+    harness.input.cycle_selection_depth_pressed = false;
+    harness.input.cycle_selection_depth_modifiers = {};
+    for (int idle_frame = 0; idle_frame < 2; ++idle_frame) {
+      auto selected = selected_entities(harness);
+      std::sort(selected.begin(), selected.end());
+      EXPECT_EQ(selected, expected);
+      const auto frame = harness.frame();
+      const auto before = harness.controller.handle_before_active_tool(
+          harness.editor, frame);
+      harness.controller.handle_after_active_tool(harness.editor, frame, {},
+                                                  before);
     }
   }
-  ASSERT_NE(occurrence, quader::kInvalidEntityId);
+}
+
+TEST(ViewportInteractionControllerTests,
+     DeferredOrthographicSingleUsesCapturedRayAndModifiersExactlyOnce) {
+  for (const auto edit : {quader::QuaderSelectionEdit::Replace,
+                          quader::QuaderSelectionEdit::Add,
+                          quader::QuaderSelectionEdit::Remove}) {
+    SCOPED_TRACE(static_cast<int>(edit));
+    ViewportInteractionHarness harness;
+    const auto front = create_box_at(harness, {0.0f, 0.0f, 2.0f});
+    const auto original = create_box_at(harness, {5.0f, 5.0f, 0.0f});
+    ASSERT_TRUE(harness.editor.selection()
+                    .set_mode(quader::QuaderSelectionMode::Object)
+                    .ok());
+    ASSERT_TRUE(harness.editor.selection().select_object(original).ok());
+    if (edit == quader::QuaderSelectionEdit::Remove) {
+      ASSERT_TRUE(harness.editor.selection()
+                      .select_object(front, quader::QuaderSelectionEdit::Add)
+                      .ok());
+    }
+    ASSERT_TRUE(harness.editor.tools().activate(quader::ViewportToolId::Select)
+                    .ok());
+    harness.router.set_active_tool(quader::ViewportToolId::Select);
+    harness.router.set_selection_mode(quader::ViewportSelectionMode::Object);
+    harness.camera.view_axis(quader::ViewportViewAxis::Z, 1);
+    harness.session.history().clear();
+    const auto selected_before = selected_entities(harness);
+    const auto active_before = harness.session.scene().primary_selection();
+    const auto revision_before = harness.session.scene().selection_revision();
+    const quader::QVec2 hit{400.0f, 300.0f};
+    harness.monotonic_time_seconds = 10.0;
+    harness.input.selection_click_delay_for_double_click = true;
+    harness.input.selection_click_modifiers = {
+        .primary = edit == quader::QuaderSelectionEdit::Remove,
+        .shift = edit == quader::QuaderSelectionEdit::Add};
+    (void)harness.dispatch_frame(harness.frame(true, true, false, hit));
+    harness.input.selection_click_delay_for_double_click = false;
+    harness.input.selection_click_modifiers = {};
+    harness.monotonic_time_seconds = 10.1;
+    (void)harness.dispatch_frame(harness.frame(false, false, true, hit));
+    EXPECT_EQ(selected_entities(harness), selected_before);
+    EXPECT_EQ(harness.session.scene().primary_selection(), active_before);
+    EXPECT_EQ(harness.session.scene().selection_revision(), revision_before);
+    EXPECT_FALSE(harness.editor.history().can_undo());
+
+    // Hover may move and physical modifiers may change while the single waits.
+    harness.input.mouse_local = {20.0f, 20.0f};
+    harness.input.mouse_screen = harness.input.mouse_local;
+    harness.input.modifiers = {
+        .primary = edit != quader::QuaderSelectionEdit::Remove,
+        .shift = edit == quader::QuaderSelectionEdit::Remove};
+    harness.monotonic_time_seconds = 10.499;
+    auto idle = harness.frame();
+    idle.left_click_count = 2; // A stale count without a new edge is not a double.
+    (void)harness.dispatch_frame(idle);
+    EXPECT_EQ(selected_entities(harness), selected_before);
+    EXPECT_EQ(harness.session.scene().selection_revision(), revision_before);
+    EXPECT_FALSE(harness.editor.history().can_undo());
+
+    std::vector<quader::EntityId> expected;
+    if (edit != quader::QuaderSelectionEdit::Remove) {
+      expected.push_back(front.entity);
+    }
+    if (edit != quader::QuaderSelectionEdit::Replace) {
+      expected.push_back(original.entity);
+    }
+    for (const double time : {10.5, 11.0, 20.0}) {
+      harness.monotonic_time_seconds = time;
+      auto tick = harness.frame();
+      tick.left_click_count = 2;
+      (void)harness.dispatch_frame(tick);
+      EXPECT_EQ(selected_entities(harness), expected);
+      EXPECT_EQ(harness.session.scene().selection_revision(), revision_before + 1u);
+      EXPECT_EQ(harness.editor.history().snapshot().undo_label, "Select Entities");
+      EXPECT_FALSE(harness.session.modeling().transform_drag_active());
+    }
+    ASSERT_TRUE(harness.editor.history().undo().ok());
+    EXPECT_EQ(selected_entities(harness), selected_before);
+    EXPECT_EQ(harness.session.scene().primary_selection(), active_before);
+    EXPECT_FALSE(harness.editor.history().can_undo());
+    ASSERT_TRUE(harness.editor.history().redo().ok());
+    EXPECT_EQ(selected_entities(harness), expected);
+  }
+}
+
+TEST(ViewportInteractionControllerTests,
+     HeldOrthographicSingleCommitsOnReleaseWithoutAnotherDelay) {
+  ViewportInteractionHarness harness;
+  const auto front = create_unit_box(harness);
+  ASSERT_TRUE(harness.editor.selection()
+                  .set_mode(quader::QuaderSelectionMode::Object)
+                  .ok());
   ASSERT_TRUE(harness.editor.selection().clear().ok());
-
+  harness.router.set_selection_mode(quader::ViewportSelectionMode::Object);
+  harness.camera.view_axis(quader::ViewportViewAxis::Z, 1);
+  harness.session.history().clear();
+  const auto revision_before = harness.session.scene().selection_revision();
   const quader::QVec2 hit{400.0f, 300.0f};
-  harness.input.mouse_local = hit;
-  harness.input.mouse_screen = hit;
-  const quader::ViewportInteractionFrame press_frame =
-      harness.frame(true, true, false, hit);
-  const quader::ViewportBeforeToolInteractionResult before_tool =
-      harness.controller.handle_before_active_tool(harness.editor, press_frame);
-  harness.controller.handle_after_active_tool(
-      harness.editor, press_frame, quader::ViewportToolResult{}, before_tool);
+  harness.input.selection_click_delay_for_double_click = true;
+  harness.monotonic_time_seconds = 10.0;
+  (void)harness.dispatch_frame(harness.frame(true, true, false, hit));
+  harness.input.selection_click_delay_for_double_click = false;
+  harness.monotonic_time_seconds = 11.0;
+  (void)harness.dispatch_frame(harness.frame(false, true, false, hit));
+  EXPECT_TRUE(selected_entities(harness).empty());
+  EXPECT_FALSE(harness.editor.history().can_undo());
+  (void)harness.dispatch_frame(harness.frame(false, false, true, hit));
+  EXPECT_EQ(selected_entities(harness),
+            std::vector<quader::EntityId>{front.entity});
+  EXPECT_EQ(harness.session.scene().selection_revision(), revision_before + 1u);
+  harness.monotonic_time_seconds = 20.0;
+  (void)harness.dispatch_frame(harness.frame());
+  EXPECT_EQ(harness.session.scene().selection_revision(), revision_before + 1u);
+}
 
-  quader::ViewportInteractionFrame release_frame =
-      harness.frame(false, false, true, hit);
-  release_frame.left_click_count = 2;
-  harness.controller.handle_after_active_tool(
-      harness.editor, release_frame, quader::ViewportToolResult{},
-      quader::ViewportBeforeToolInteractionResult{});
+TEST(ViewportInteractionControllerTests,
+     DeferredOrthographicSingleCancelsOnContextChange) {
+  /// Names events that invalidate a not-yet-published ordinary selection click.
+  enum class Cancellation { CameraPan, Navigation, Mode, Selection, Escape, Leave };
+  for (const auto cancellation : {Cancellation::CameraPan,
+                                  Cancellation::Navigation,
+                                  Cancellation::Mode,
+                                  Cancellation::Selection,
+                                  Cancellation::Escape,
+                                  Cancellation::Leave}) {
+    SCOPED_TRACE(static_cast<int>(cancellation));
+    ViewportInteractionHarness harness;
+    (void)create_unit_box(harness);
+    const auto original = create_box_at(harness, {5.0f, 5.0f, 0.0f});
+    const auto replacement = create_box_at(harness, {-5.0f, 5.0f, 0.0f});
+    ASSERT_TRUE(harness.editor.selection()
+                    .set_mode(quader::QuaderSelectionMode::Object)
+                    .ok());
+    ASSERT_TRUE(harness.editor.selection().select_object(original).ok());
+    harness.router.set_selection_mode(quader::ViewportSelectionMode::Object);
+    harness.camera.view_axis(quader::ViewportViewAxis::Z, 1);
+    harness.session.history().clear();
+    harness.monotonic_time_seconds = 10.0;
+    harness.input.selection_click_delay_for_double_click = true;
+    harness.click_selection({400.0f, 300.0f});
+    ASSERT_EQ(selected_entities(harness),
+              std::vector<quader::EntityId>{original.entity});
+    EXPECT_FALSE(harness.editor.history().can_undo());
+    harness.input.selection_click_delay_for_double_click = false;
+    switch (cancellation) {
+    case Cancellation::CameraPan:
+      harness.camera.begin_drag({400.0f, 300.0f}, quader::ViewportDragMode::Pan);
+      harness.camera.update_drag({402.0f, 300.0f});
+      harness.camera.end_drag();
+      break;
+    case Cancellation::Navigation:
+      harness.input_result.navigation_active = true;
+      break;
+    case Cancellation::Mode:
+      ASSERT_TRUE(harness.editor.selection()
+                      .set_mode(quader::QuaderSelectionMode::Face)
+                      .ok());
+      harness.router.set_selection_mode(quader::ViewportSelectionMode::Face);
+      break;
+    case Cancellation::Selection:
+      ASSERT_TRUE(harness.editor.selection().select_object(replacement).ok());
+      break;
+    case Cancellation::Escape:
+      harness.input_result.cancel_requested = true;
+      break;
+    case Cancellation::Leave:
+      harness.input.viewport_hovered = false;
+      break;
+    }
+    harness.monotonic_time_seconds = 10.2;
+    (void)harness.dispatch_frame(harness.frame());
+    harness.input_result.navigation_active = false;
+    harness.input_result.cancel_requested = false;
+    harness.input.viewport_hovered = true;
+    if (cancellation == Cancellation::Mode) {
+      ASSERT_TRUE(harness.editor.selection()
+                      .set_mode(quader::QuaderSelectionMode::Object)
+                      .ok());
+      harness.router.set_selection_mode(quader::ViewportSelectionMode::Object);
+    }
+    const auto selected = selected_entities(harness);
+    const auto active = harness.session.scene().primary_selection();
+    const auto revision = harness.session.scene().selection_revision();
+    const auto history = harness.editor.history().snapshot();
+    harness.monotonic_time_seconds = 20.0;
+    (void)harness.dispatch_frame(harness.frame());
+    EXPECT_EQ(selected_entities(harness), selected);
+    EXPECT_EQ(harness.session.scene().primary_selection(), active);
+    EXPECT_EQ(harness.session.scene().selection_revision(), revision);
+    EXPECT_EQ(harness.editor.history().snapshot().can_undo, history.can_undo);
+    EXPECT_EQ(harness.editor.history().snapshot().can_redo, history.can_redo);
+    EXPECT_EQ(harness.editor.history().snapshot().undo_label, history.undo_label);
+    EXPECT_EQ(harness.editor.history().snapshot().redo_label, history.redo_label);
+  }
+}
 
-  const quader::QuaderInstanceEditState edit =
-      harness.editor.modeling().instance_edit_state();
-  ASSERT_TRUE(edit.active);
-  EXPECT_EQ(edit.occurrence.id, occurrence);
-  EXPECT_TRUE(harness.session.scene().selected_entities().empty());
+TEST(ViewportInteractionControllerTests,
+     EscapeOrFocusLossDiscardsFirstHeldClickAndPendingGizmo) {
+  for (const auto [tool, focus_loss] : {
+           std::pair{quader::ViewportToolId::Select, false},
+           std::pair{quader::ViewportToolId::Move, false},
+           std::pair{quader::ViewportToolId::Select, true},
+           std::pair{quader::ViewportToolId::Move, true}}) {
+    SCOPED_TRACE(static_cast<int>(tool));
+    SCOPED_TRACE(focus_loss);
+    ViewportInteractionHarness harness;
+    (void)create_box_at(harness, {0.0f, 0.0f, 2.0f});
+    const auto back = create_box_at(harness, {0.0f, 0.0f, -2.0f});
+    ASSERT_TRUE(harness.editor.selection()
+                    .set_mode(quader::QuaderSelectionMode::Object)
+                    .ok());
+    ASSERT_TRUE(harness.editor.selection().select_object(back).ok());
+    ASSERT_TRUE(harness.editor.tools().activate(tool).ok());
+    harness.router.set_active_tool(tool);
+    harness.router.set_selection_mode(quader::ViewportSelectionMode::Object);
+    harness.camera.view_axis(quader::ViewportViewAxis::Z, 1);
+    harness.session.history().clear();
+    const auto revision_before = harness.session.scene().selection_revision();
+    (void)harness.dispatch_frame(harness.frame());
+    quader::QVec2 hit{400.0f, 300.0f};
+    if (tool == quader::ViewportToolId::Move) {
+      const auto *gizmo = harness.controller.transform_gizmo_frame();
+      ASSERT_NE(gizmo, nullptr);
+      const auto *axis = find_axis(*gizmo, quader_editor_core::TransformAxis::X);
+      ASSERT_NE(axis, nullptr);
+      hit = axis_screen_point(*axis, 0.25f);
+    }
+    harness.input.mouse_local = hit;
+    harness.input.mouse_screen = hit;
+    harness.input.selection_click_delay_for_double_click = true;
+    const auto press = harness.dispatch_frame(harness.frame(true, true, false, hit));
+    EXPECT_EQ(press.gizmo_consumed, tool == quader::ViewportToolId::Move);
+    harness.input.selection_click_delay_for_double_click = false;
+    harness.monotonic_time_seconds = 0.1;
+    if (focus_loss) {
+      // Native focus loss can synthesize a release while the pointer remains
+      // over the pane; it must not become an ordinary deferred gizmo click.
+      harness.input.viewport_focused = false;
+      ASSERT_TRUE(harness.input.viewport_hovered);
+      const auto release =
+          harness.dispatch_frame(harness.frame(false, false, true, hit));
+      EXPECT_FALSE(release.selection_click_requested);
+      harness.input.viewport_focused = true;
+    } else {
+      harness.input_result.cancel_requested = true;
+      (void)harness.dispatch_frame(harness.frame(false, true, false, hit));
+      harness.input_result.cancel_requested = false;
+      harness.monotonic_time_seconds = 0.2;
+      (void)harness.dispatch_frame(harness.frame(false, false, true, hit));
+    }
+    for (const double time : {0.2, 1.0}) {
+      harness.monotonic_time_seconds = time;
+      (void)harness.dispatch_frame(harness.frame());
+      EXPECT_EQ(selected_entities(harness),
+                std::vector<quader::EntityId>{back.entity});
+      EXPECT_EQ(harness.session.scene().selection_revision(), revision_before);
+      EXPECT_FALSE(harness.editor.history().can_undo());
+      EXPECT_FALSE(harness.controller.dragging());
+      EXPECT_FALSE(harness.session.modeling().transform_drag_active());
+    }
+  }
+}
+
+TEST(ViewportInteractionControllerTests,
+     DistinctDeferredShiftClicksRefreshGizmoAndBoxSelectionBaselines) {
+  for (const auto tool : {quader::ViewportToolId::Select,
+                          quader::ViewportToolId::Move}) {
+    for (const bool marquee : {false, true}) {
+      SCOPED_TRACE(static_cast<int>(tool));
+      SCOPED_TRACE(marquee);
+      ViewportInteractionHarness harness;
+      const auto first = create_box_at(harness, {-3.0f, 0.0f, 0.0f});
+      const auto second = create_box_at(harness, {3.0f, 0.0f, 0.0f});
+      ASSERT_TRUE(harness.editor.selection()
+                      .set_mode(quader::QuaderSelectionMode::Object)
+                      .ok());
+      ASSERT_TRUE(harness.editor.selection().clear().ok());
+      ASSERT_TRUE(harness.editor.tools().activate(tool).ok());
+      harness.router.set_active_tool(tool);
+      harness.router.set_selection_mode(quader::ViewportSelectionMode::Object);
+      harness.camera.view_axis(quader::ViewportViewAxis::Z, 1);
+      harness.camera.focus_bounds({-5.0f, -3.0f, -1.0f},
+                                  {5.0f, 3.0f, 1.0f});
+      const auto first_hit = harness.camera.project_world_point({-3.0f, 0.0f, 0.0f});
+      const auto second_hit = harness.camera.project_world_point({3.0f, 0.0f, 0.0f});
+      const auto upper_left = harness.camera.project_world_point({1.8f, 1.2f, 0.0f});
+      const auto lower_right = harness.camera.project_world_point({4.2f, -1.2f, 0.0f});
+      ASSERT_TRUE(first_hit.visible);
+      ASSERT_TRUE(second_hit.visible);
+      ASSERT_TRUE(upper_left.visible);
+      ASSERT_TRUE(lower_right.visible);
+      harness.session.history().clear();
+      const auto revision_before = harness.session.scene().selection_revision();
+      harness.input.modifiers = {.shift = true};
+      harness.input.selection_click_delay_for_double_click = true;
+      harness.input.selection_click_modifiers = {.shift = true};
+      harness.monotonic_time_seconds = 10.0;
+      harness.click_selection(first_hit.position);
+      EXPECT_TRUE(selected_entities(harness).empty());
+      EXPECT_FALSE(harness.editor.history().can_undo());
+
+      const auto start = marquee ? upper_left.position : second_hit.position;
+      harness.input.mouse_local = start;
+      harness.input.mouse_screen = start;
+      harness.monotonic_time_seconds = 10.1;
+      const auto press = harness.frame(true, true, false, start);
+      const auto before =
+          harness.controller.handle_before_active_tool(harness.editor, press);
+      ASSERT_TRUE(before.selection_after_pending_pick.has_value());
+      EXPECT_EQ(before.selection_after_pending_pick->summary.active_object_id,
+                first.modeling_object_id);
+      EXPECT_EQ(before.selection_after_pending_pick->summary.selected_object_count,
+                1u);
+      EXPECT_EQ(before.selection_after_pending_pick->scene_revision,
+                harness.session.scene().revision());
+      EXPECT_EQ(selected_entities(harness),
+                std::vector<quader::EntityId>{first.entity});
+      if (tool == quader::ViewportToolId::Move) {
+        const auto *gizmo = harness.controller.transform_gizmo_frame();
+        ASSERT_NE(gizmo, nullptr);
+        EXPECT_NEAR(gizmo->info.pivot.x, -3.0f, 0.001f);
+        EXPECT_NEAR(gizmo->info.pivot.y, 0.0f, 0.001f);
+      }
+      ASSERT_FALSE(before.gizmo_consumed);
+      harness.controller.handle_after_active_tool(harness.editor, press, {}, before);
+      harness.monotonic_time_seconds = 10.2;
+      if (marquee) {
+        harness.input.mouse_local = lower_right.position;
+        harness.input.mouse_screen = lower_right.position;
+        (void)harness.dispatch_frame(harness.frame(false, true, false, start));
+      }
+      (void)harness.dispatch_frame(harness.frame(false, false, true, start));
+      harness.input.modifiers = {};
+      harness.input.selection_click_delay_for_double_click = false;
+      harness.input.selection_click_modifiers = {};
+      if (!marquee) {
+        EXPECT_EQ(selected_entities(harness),
+                  std::vector<quader::EntityId>{first.entity});
+        EXPECT_EQ(harness.session.scene().selection_revision(), revision_before + 1u);
+      }
+      harness.monotonic_time_seconds = 10.7;
+      (void)harness.dispatch_frame(harness.frame());
+      EXPECT_EQ(selected_entities(harness),
+                (std::vector<quader::EntityId>{first.entity, second.entity}));
+      EXPECT_EQ(harness.session.scene().selection_revision(), revision_before + 2u);
+      EXPECT_FALSE(harness.controller.dragging());
+      ASSERT_TRUE(harness.editor.history().undo().ok());
+      EXPECT_EQ(selected_entities(harness),
+                std::vector<quader::EntityId>{first.entity});
+      ASSERT_TRUE(harness.editor.history().undo().ok());
+      EXPECT_TRUE(selected_entities(harness).empty());
+      EXPECT_FALSE(harness.editor.history().can_undo());
+    }
+  }
+}
+
+TEST(ViewportInteractionControllerTests,
+     NativeDoubleWithoutDepthActionCancelsTheDeferredOrdinarySingle) {
+  ViewportInteractionHarness harness;
+  const auto front = create_unit_box(harness);
+  const auto original = create_box_at(harness, {5.0f, 5.0f, 0.0f});
+  ASSERT_TRUE(harness.editor.selection()
+                  .set_mode(quader::QuaderSelectionMode::Object)
+                  .ok());
+  ASSERT_TRUE(harness.editor.selection().select_object(original).ok());
+  harness.router.set_selection_mode(quader::ViewportSelectionMode::Object);
+  harness.camera.view_axis(quader::ViewportViewAxis::Z, 1);
+  harness.session.history().clear();
+  const auto revision_before = harness.session.scene().selection_revision();
+  harness.input.selection_click_delay_for_double_click = true;
+  harness.monotonic_time_seconds = 10.0;
+  harness.click_selection({400.0f, 300.0f});
+  EXPECT_EQ(selected_entities(harness),
+            std::vector<quader::EntityId>{original.entity});
+  EXPECT_FALSE(harness.editor.history().can_undo());
+  harness.monotonic_time_seconds = 20.0;
+  harness.click_selection({400.0f, 300.0f}, 2);
+  EXPECT_EQ(selected_entities(harness),
+            std::vector<quader::EntityId>{front.entity});
+  EXPECT_EQ(harness.session.scene().selection_revision(), revision_before + 1u);
+  harness.monotonic_time_seconds = 30.0;
+  (void)harness.dispatch_frame(harness.frame());
+  EXPECT_EQ(harness.session.scene().selection_revision(), revision_before + 1u);
+  ASSERT_TRUE(harness.editor.history().undo().ok());
+  EXPECT_EQ(selected_entities(harness),
+            std::vector<quader::EntityId>{original.entity});
+  EXPECT_FALSE(harness.editor.history().can_undo());
+}
+
+TEST(ViewportInteractionControllerTests,
+     DepthCycleRejectsPerspectiveNavigationTextToolsAndConsumedInput) {
+  /// Names each input owner or view state that must suppress depth cycling.
+  enum class Guard {
+    Perspective,
+    Unfocused,
+    Text,
+    NavigationInput,
+    NavigationResult,
+    CameraChange,
+    Preview,
+    TransformDrag,
+    ModalTool,
+    OwningTool,
+    ConsumedInput,
+    HandledTool,
+    ConsumedGizmo,
+  };
+  for (const auto guard :
+       {Guard::Perspective, Guard::Unfocused, Guard::Text,
+        Guard::NavigationInput, Guard::NavigationResult, Guard::CameraChange,
+        Guard::Preview, Guard::TransformDrag, Guard::ModalTool,
+        Guard::OwningTool, Guard::ConsumedInput, Guard::HandledTool,
+        Guard::ConsumedGizmo}) {
+    SCOPED_TRACE(static_cast<int>(guard));
+    ViewportInteractionHarness harness;
+    const auto front = create_box_at(harness, {0.0f, 0.0f, 2.0f});
+    (void)create_box_at(harness, {0.0f, 0.0f, -2.0f});
+    ASSERT_TRUE(harness.editor.selection().select_object(front).ok());
+    harness.router.set_selection_mode(quader::ViewportSelectionMode::Object);
+    if (guard != Guard::Perspective) {
+      harness.camera.view_axis(quader::ViewportViewAxis::Z, 1);
+    }
+    harness.input.viewport_focused = guard != Guard::Unfocused;
+    harness.input.text_input_active = guard == Guard::Text;
+    harness.input.navigation_active = guard == Guard::NavigationInput;
+    harness.input.operation_preview_active = guard == Guard::Preview;
+    harness.input.active_transform_drag = guard == Guard::TransformDrag;
+    harness.input.modal_tool_active = guard == Guard::ModalTool;
+    harness.input.active_tool_owns_viewport = guard == Guard::OwningTool;
+    harness.input_result.navigation_active = guard == Guard::NavigationResult;
+    harness.input_result.camera_changed = guard == Guard::CameraChange;
+    harness.input_result.consumed = guard == Guard::ConsumedInput;
+    harness.input.cycle_selection_depth_pressed = true;
+    harness.controller.handle_after_active_tool(
+        harness.editor, harness.frame(),
+        quader::ViewportToolResult{.handled = guard == Guard::HandledTool},
+        quader::ViewportBeforeToolInteractionResult{
+            .gizmo_consumed = guard == Guard::ConsumedGizmo});
+    EXPECT_EQ(selected_entities(harness),
+              std::vector<quader::EntityId>{front.entity});
+  }
+}
+
+TEST(ViewportInteractionControllerTests,
+     DepthCyclePendingClickCancelsWhenNavigationStartsBeforeRelease) {
+  ViewportInteractionHarness harness;
+  const auto front = create_box_at(harness, {0.0f, 0.0f, 2.0f});
+  (void)create_box_at(harness, {0.0f, 0.0f, -2.0f});
+  ASSERT_TRUE(harness.editor.selection().select_object(front).ok());
+  harness.router.set_selection_mode(quader::ViewportSelectionMode::Object);
+  harness.camera.view_axis(quader::ViewportViewAxis::Z, 1);
+  const quader::QVec2 hit{400.0f, 300.0f};
+  harness.input.cycle_selection_depth_pressed = true;
+  harness.controller.handle_after_active_tool(
+      harness.editor, harness.frame(true, true, false, hit), {}, {});
+  harness.input.cycle_selection_depth_pressed = false;
+  harness.input_result.navigation_active = true;
+  harness.controller.handle_after_active_tool(
+      harness.editor, harness.frame(false, true, false, hit), {}, {});
+  harness.input_result.navigation_active = false;
+  auto release = harness.frame(false, false, true, hit);
+  release.left_click_count = 2;
+  harness.controller.handle_after_active_tool(harness.editor, release, {}, {});
+  EXPECT_EQ(selected_entities(harness),
+            std::vector<quader::EntityId>{front.entity});
+}
+
+TEST(ViewportInteractionControllerTests,
+     OrthographicDepthCycleSurvivesDeferredGizmoClicksWithoutTransform) {
+  for (const bool coalesced : {false, true}) {
+    SCOPED_TRACE(coalesced);
+    ViewportInteractionHarness harness;
+    const auto front = create_box_at(harness, {0.0f, 0.0f, 2.0f});
+    const auto back = create_box_at(harness, {0.0f, 0.0f, -2.0f});
+    ASSERT_TRUE(harness.editor.selection().select_object(front).ok());
+    ASSERT_TRUE(harness.editor.tools().activate(quader::ViewportToolId::Move).ok());
+    harness.router.set_active_tool(quader::ViewportToolId::Move);
+    harness.router.set_selection_mode(quader::ViewportSelectionMode::Object);
+    harness.camera.view_axis(quader::ViewportViewAxis::Z, 1);
+    (void)harness.controller.handle_before_active_tool(harness.editor,
+                                                       harness.frame());
+    const auto *gizmo = harness.controller.transform_gizmo_frame();
+    ASSERT_NE(gizmo, nullptr);
+    const auto *axis = find_axis(*gizmo, quader_editor_core::TransformAxis::X);
+    ASSERT_NE(axis, nullptr);
+    const auto hit = axis_screen_point(*axis, 0.25f);
+    const auto before = *harness.session.scene().transform(front.entity);
+
+    if (coalesced) {
+      harness.input.mouse_local = hit;
+      harness.input.mouse_screen = hit;
+      harness.input.cycle_selection_depth_pressed = true;
+      auto click = harness.frame(true, false, true, hit);
+      click.left_click_count = 2;
+      const auto before_tool =
+          harness.controller.handle_before_active_tool(harness.editor, click);
+      ASSERT_TRUE(before_tool.selection_click_requested);
+      ASSERT_TRUE(before_tool.selection_cycle_depth);
+      EXPECT_FALSE(before_tool.gizmo_consumed);
+      harness.controller.handle_after_active_tool(
+          harness.editor, click, {}, before_tool);
+    } else {
+      harness.click_selection(hit, 2, true);
+    }
+    EXPECT_EQ(selected_entities(harness),
+              std::vector<quader::EntityId>{back.entity});
+    EXPECT_FALSE(harness.controller.dragging());
+    expect_transform_near(*harness.session.scene().transform(front.entity), before);
+  }
+}
+
+TEST(ViewportInteractionControllerTests,
+     ModifiedDepthCycleRetainsSelectionAcrossDeferredGizmoRelease) {
+  for (const bool remove : {false, true}) {
+    for (const bool coalesced : {false, true}) {
+      SCOPED_TRACE(remove);
+      SCOPED_TRACE(coalesced);
+      ViewportInteractionHarness harness;
+      const auto front = create_box_at(harness, {0.0f, 0.0f, 2.0f});
+      const auto back = create_box_at(harness, {0.0f, 0.0f, -2.0f});
+      ASSERT_TRUE(harness.editor.selection()
+                      .set_mode(quader::QuaderSelectionMode::Object)
+                      .ok());
+      ASSERT_TRUE(harness.editor.selection().select_object(back).ok());
+      if (remove) {
+        ASSERT_TRUE(harness.editor.selection()
+                        .select_object(front, quader::QuaderSelectionEdit::Add)
+                        .ok());
+      }
+      ASSERT_TRUE(harness.editor.tools().activate(quader::ViewportToolId::Move)
+                      .ok());
+      harness.router.set_active_tool(quader::ViewportToolId::Move);
+      harness.router.set_selection_mode(quader::ViewportSelectionMode::Object);
+      harness.camera.view_axis(quader::ViewportViewAxis::Z, 1);
+      harness.session.history().clear();
+      const auto front_transform =
+          *harness.session.scene().transform(front.entity);
+      const auto back_transform = *harness.session.scene().transform(back.entity);
+      const auto entity_count = harness.session.scene().entities().size();
+      const auto content_revision = harness.session.modeling().content_revision();
+      const auto selected_before = selected_entities(harness);
+      const auto selection_revision_before =
+          harness.session.scene().selection_revision();
+      (void)harness.controller.handle_before_active_tool(harness.editor,
+                                                         harness.frame());
+      const auto *gizmo = harness.controller.transform_gizmo_frame();
+      ASSERT_NE(gizmo, nullptr);
+      const auto *axis = find_axis(*gizmo, quader_editor_core::TransformAxis::X);
+      ASSERT_NE(axis, nullptr);
+      const auto hit = axis_screen_point(*axis, 0.25f);
+      const quader::ViewportModifiers operation{
+          .primary = remove, .shift = !remove};
+      harness.input.mouse_local = hit;
+      harness.input.mouse_screen = hit;
+      harness.input.modifiers = operation;
+      harness.input.selection_click_delay_for_double_click = true;
+      harness.input.selection_click_modifiers = operation;
+      const auto first_press = harness.frame(true, true, false, hit);
+      const auto before_first_press =
+          harness.controller.handle_before_active_tool(harness.editor,
+                                                       first_press);
+      ASSERT_TRUE(before_first_press.gizmo_consumed);
+      ASSERT_FALSE(before_first_press.selection_click_requested);
+      harness.controller.handle_after_active_tool(
+          harness.editor, first_press, {}, before_first_press);
+
+      if (!coalesced) {
+        harness.input.modifiers = {};
+        harness.input.selection_click_delay_for_double_click = false;
+        harness.input.selection_click_modifiers = {};
+        const auto first_release = harness.frame(false, false, true, hit);
+        const auto before_first_release =
+            harness.controller.handle_before_active_tool(harness.editor,
+                                                         first_release);
+        ASSERT_TRUE(before_first_release.selection_click_requested);
+        ASSERT_FALSE(before_first_release.selection_cycle_depth);
+        harness.controller.handle_after_active_tool(
+            harness.editor, first_release, {}, before_first_release);
+        EXPECT_EQ(selected_entities(harness), selected_before);
+        EXPECT_EQ(harness.session.scene().selection_revision(),
+                  selection_revision_before);
+        EXPECT_FALSE(harness.editor.history().can_undo());
+      }
+
+      harness.input.cycle_selection_depth_pressed = true;
+      harness.input.cycle_selection_depth_modifiers = operation;
+      auto double_press = harness.frame(true, true, coalesced, hit);
+      double_press.left_click_count = 2;
+      const auto before_double_press =
+          harness.controller.handle_before_active_tool(harness.editor,
+                                                       double_press);
+      if (coalesced) {
+        ASSERT_TRUE(before_double_press.selection_click_requested);
+        ASSERT_TRUE(before_double_press.selection_cycle_depth);
+        EXPECT_EQ(before_double_press.selection_cycle_depth_modifiers.primary,
+                  operation.primary);
+        EXPECT_EQ(before_double_press.selection_cycle_depth_modifiers.shift,
+                  operation.shift);
+      } else {
+        ASSERT_TRUE(before_double_press.gizmo_consumed);
+        ASSERT_FALSE(before_double_press.selection_click_requested);
+      }
+      harness.controller.handle_after_active_tool(
+          harness.editor, double_press, {}, before_double_press);
+
+      harness.input.modifiers = {};
+      harness.input.selection_click_delay_for_double_click = false;
+      harness.input.selection_click_modifiers = {};
+      harness.input.cycle_selection_depth_pressed = false;
+      harness.input.cycle_selection_depth_modifiers = {};
+      auto release = harness.frame(false, false, true, hit);
+      release.left_click_count = 2;
+      const auto before_release =
+          harness.controller.handle_before_active_tool(harness.editor, release);
+      if (!coalesced) {
+        ASSERT_TRUE(before_release.selection_click_requested);
+        ASSERT_TRUE(before_release.selection_cycle_depth);
+        EXPECT_EQ(before_release.selection_cycle_depth_modifiers.primary,
+                  operation.primary);
+        EXPECT_EQ(before_release.selection_cycle_depth_modifiers.shift,
+                  operation.shift);
+      }
+      harness.controller.handle_after_active_tool(
+          harness.editor, release, {}, before_release);
+      harness.monotonic_time_seconds = 1.0;
+      for (int idle_frame = 0; idle_frame < 2; ++idle_frame) {
+        EXPECT_EQ(selected_entities(harness),
+                  std::vector<quader::EntityId>{remove ? front.entity
+                                                      : back.entity});
+        EXPECT_FALSE(harness.controller.dragging());
+        EXPECT_EQ(harness.session.scene().selection_revision(),
+                  selection_revision_before + (remove ? 1u : 0u));
+        EXPECT_EQ(harness.editor.history().can_undo(), remove);
+        EXPECT_FALSE(harness.session.modeling().transform_drag_active());
+        EXPECT_EQ(harness.session.scene().entities().size(), entity_count);
+        EXPECT_EQ(harness.session.modeling().content_revision(), content_revision);
+        expect_transform_near(
+            *harness.session.scene().transform(front.entity), front_transform);
+        expect_transform_near(*harness.session.scene().transform(back.entity),
+                              back_transform);
+        const auto frame = harness.frame();
+        const auto before = harness.controller.handle_before_active_tool(
+            harness.editor, frame);
+        harness.controller.handle_after_active_tool(harness.editor, frame, {},
+                                                    before);
+      }
+    }
+  }
+}
+
+TEST(ViewportInteractionControllerTests,
+     DepthCycleConsumesDoublePressOrReboundClickWhileFirstClickIsPending) {
+  for (const auto [tool, release_only] : {
+           std::pair{quader::ViewportToolId::Select, false},
+           std::pair{quader::ViewportToolId::Move, false},
+           std::pair{quader::ViewportToolId::Select, true},
+           std::pair{quader::ViewportToolId::Move, true}}) {
+    SCOPED_TRACE(static_cast<int>(tool));
+    SCOPED_TRACE(release_only);
+    ViewportInteractionHarness harness;
+    const auto front = create_box_at(harness, {0.0f, 0.0f, 2.0f});
+    const auto back = create_box_at(harness, {0.0f, 0.0f, -2.0f});
+    ASSERT_TRUE(harness.editor.selection().select_object(front).ok());
+    ASSERT_TRUE(harness.editor.tools().activate(tool).ok());
+    harness.router.set_active_tool(tool);
+    harness.router.set_selection_mode(quader::ViewportSelectionMode::Object);
+    harness.camera.view_axis(quader::ViewportViewAxis::Z, 1);
+    (void)harness.controller.handle_before_active_tool(harness.editor,
+                                                       harness.frame());
+    quader::QVec2 hit{400.0f, 300.0f};
+    if (tool == quader::ViewportToolId::Move) {
+      const auto *gizmo = harness.controller.transform_gizmo_frame();
+      ASSERT_NE(gizmo, nullptr);
+      const auto *axis = find_axis(*gizmo, quader_editor_core::TransformAxis::X);
+      ASSERT_NE(axis, nullptr);
+      hit = axis_screen_point(*axis, 0.25f);
+    }
+    harness.input.mouse_local = hit;
+    harness.input.mouse_screen = hit;
+    const auto before = *harness.session.scene().transform(front.entity);
+    const auto dispatch = [&](quader::ViewportInteractionFrame frame) {
+      const auto before_tool =
+          harness.controller.handle_before_active_tool(harness.editor, frame);
+      harness.controller.handle_after_active_tool(
+          harness.editor, frame, {}, before_tool);
+    };
+    dispatch(harness.frame(true, true, false, hit));
+
+    // Rebound clicks emit intent on release; the default double-click can
+    // arrive in that same frame while the first press is still pending.
+    harness.input.cycle_selection_depth_pressed = true;
+    auto combined = harness.frame(!release_only, !release_only, true, hit);
+    combined.left_click_count = release_only ? 1 : 2;
+    dispatch(combined);
+    EXPECT_EQ(selected_entities(harness),
+              std::vector<quader::EntityId>{back.entity});
+
+    harness.input.cycle_selection_depth_pressed = false;
+    auto release = harness.frame(false, false, true, hit);
+    release.left_click_count = combined.left_click_count;
+    dispatch(release);
+    EXPECT_EQ(selected_entities(harness),
+              std::vector<quader::EntityId>{back.entity});
+    EXPECT_FALSE(harness.controller.dragging());
+    expect_transform_near(*harness.session.scene().transform(front.entity), before);
+  }
+}
+
+TEST(ViewportInteractionControllerTests,
+     DepthCycleCrossingIntoGizmoConsumesPendingSelectionBoxOnce) {
+  ViewportInteractionHarness harness;
+  const auto front = create_box_at(harness, {0.0f, 0.0f, 2.0f});
+  const auto back = create_box_at(harness, {0.0f, 0.0f, -2.0f});
+  ASSERT_TRUE(harness.editor.selection().select_object(front).ok());
+  ASSERT_TRUE(harness.editor.tools().activate(quader::ViewportToolId::Move).ok());
+  harness.router.set_active_tool(quader::ViewportToolId::Move);
+  harness.router.set_selection_mode(quader::ViewportSelectionMode::Object);
+  harness.camera.view_axis(quader::ViewportViewAxis::Z, 1);
+  (void)harness.controller.handle_before_active_tool(harness.editor,
+                                                     harness.frame());
+  const auto *gizmo = harness.controller.transform_gizmo_frame();
+  ASSERT_NE(gizmo, nullptr);
+  const auto *axis = find_axis(*gizmo, quader_editor_core::TransformAxis::X);
+  ASSERT_NE(axis, nullptr);
+  const auto shaft = axis_screen_point(*axis, 0.25f);
+  const auto outside = shaft + quader::QVec2{
+      0.0f, quader::kOverlayTransformGizmoPickRadiusPixels + 0.5f};
+  const auto inside = shaft + quader::QVec2{
+      0.0f, quader::kOverlayTransformGizmoPickRadiusPixels - 0.5f};
+  const auto before = *harness.session.scene().transform(front.entity);
+
+  harness.input.mouse_local = outside;
+  harness.input.mouse_screen = outside;
+  auto press = harness.frame(true, true, false, outside);
+  const auto before_press =
+      harness.controller.handle_before_active_tool(harness.editor, press);
+  ASSERT_FALSE(before_press.gizmo_consumed);
+  harness.controller.handle_after_active_tool(
+      harness.editor, press, {}, before_press);
+
+  // One pixel of jitter transfers the pending click from selection to the
+  // gizmo while the first release and second press share a native frame.
+  harness.input.mouse_local = inside;
+  harness.input.mouse_screen = inside;
+  harness.input.cycle_selection_depth_pressed = true;
+  auto combined = harness.frame(true, true, true, inside);
+  combined.left_click_count = 2;
+  const auto before_combined =
+      harness.controller.handle_before_active_tool(harness.editor, combined);
+  ASSERT_TRUE(before_combined.selection_click_requested);
+  ASSERT_TRUE(before_combined.selection_cycle_depth);
+  harness.controller.handle_after_active_tool(
+      harness.editor, combined, {}, before_combined);
+  EXPECT_EQ(selected_entities(harness),
+            std::vector<quader::EntityId>{back.entity});
+
+  harness.input.cycle_selection_depth_pressed = false;
+  auto release = harness.frame(false, false, true, inside);
+  release.left_click_count = 2;
+  const auto before_release =
+      harness.controller.handle_before_active_tool(harness.editor, release);
+  harness.controller.handle_after_active_tool(
+      harness.editor, release, {}, before_release);
+  EXPECT_EQ(selected_entities(harness),
+            std::vector<quader::EntityId>{back.entity});
+  EXPECT_FALSE(harness.controller.dragging());
+  expect_transform_near(*harness.session.scene().transform(front.entity), before);
+}
+
+TEST(ViewportInteractionControllerTests,
+     CoalescedOrthographicDoubleClickCyclesOnceAndKeepsSelectionOnMiss) {
+  ViewportInteractionHarness harness;
+  (void)create_box_at(harness, {0.0f, 0.0f, 2.0f});
+  const auto back = create_box_at(harness, {0.0f, 0.0f, -2.0f});
+  ASSERT_TRUE(harness.editor.selection()
+                  .set_mode(quader::QuaderSelectionMode::Object)
+                  .ok());
+  ASSERT_TRUE(harness.editor.selection().clear().ok());
+  harness.router.set_selection_mode(quader::ViewportSelectionMode::Object);
+  harness.camera.view_axis(quader::ViewportViewAxis::Z, 1);
+  harness.input.cycle_selection_depth_pressed = true;
+  auto click = harness.frame(true, false, true, harness.input.mouse_local);
+  click.left_click_count = 2;
+  harness.controller.handle_after_active_tool(harness.editor, click, {}, {});
+  EXPECT_EQ(selected_entities(harness),
+            std::vector<quader::EntityId>{back.entity});
+
+  harness.click_selection({20.0f, 20.0f}, 2, true);
+  EXPECT_EQ(selected_entities(harness),
+            std::vector<quader::EntityId>{back.entity});
+}
+
+TEST(ViewportInteractionControllerTests,
+     PlainObjectDoubleClickEntersSelectedInstanceScope) {
+  for (const bool coalesced_gizmo : {false, true}) {
+    SCOPED_TRACE(coalesced_gizmo);
+    ViewportInteractionHarness harness;
+    const quader::QuaderModelingObjectRef box = create_unit_box(harness);
+    ASSERT_NE(box.entity, quader::kInvalidEntityId);
+    ASSERT_TRUE(harness.editor.selection()
+                    .set_mode(quader::QuaderSelectionMode::Object)
+                    .ok());
+    harness.router.set_selection_mode(quader::ViewportSelectionMode::Object);
+    ASSERT_TRUE(harness.editor.modeling().create_instance().ok());
+
+    quader::EntityId occurrence = quader::kInvalidEntityId;
+    for (const quader::QuaderEntitySnapshot &entity :
+         harness.editor.query().entities()) {
+      if (entity.kind == quader::QuaderEntityKind::Instance &&
+          entity.has_instance_occurrence) {
+        occurrence = entity.id;
+        break;
+      }
+    }
+    ASSERT_NE(occurrence, quader::kInvalidEntityId);
+    ASSERT_TRUE(harness.editor.selection().clear().ok());
+
+    quader::QVec2 hit{400.0f, 300.0f};
+    if (coalesced_gizmo) {
+      ASSERT_TRUE(harness.editor.selection().select_object(occurrence).ok());
+      ASSERT_TRUE(harness.editor.tools().activate(quader::ViewportToolId::Move).ok());
+      harness.router.set_active_tool(quader::ViewportToolId::Move);
+      (void)harness.controller.handle_before_active_tool(harness.editor,
+                                                         harness.frame());
+      const auto *gizmo = harness.controller.transform_gizmo_frame();
+      ASSERT_NE(gizmo, nullptr);
+      const auto *axis = find_axis(*gizmo, quader_editor_core::TransformAxis::X);
+      ASSERT_NE(axis, nullptr);
+      hit = axis_screen_point(*axis, 0.25f);
+    }
+    harness.input.mouse_local = hit;
+    harness.input.mouse_screen = hit;
+    const auto press_frame = harness.frame(true, true, false, hit);
+    const auto before_press =
+        harness.controller.handle_before_active_tool(harness.editor, press_frame);
+    EXPECT_EQ(before_press.gizmo_consumed, coalesced_gizmo);
+    harness.controller.handle_after_active_tool(
+        harness.editor, press_frame, {}, before_press);
+
+    auto release_frame =
+        harness.frame(coalesced_gizmo, coalesced_gizmo, true, hit);
+    release_frame.left_click_count = 2;
+    const auto before_release =
+        harness.controller.handle_before_active_tool(harness.editor, release_frame);
+    harness.controller.handle_after_active_tool(
+        harness.editor, release_frame, {}, before_release);
+
+    const auto edit = harness.editor.modeling().instance_edit_state();
+    ASSERT_TRUE(edit.active);
+    EXPECT_EQ(edit.occurrence.id, occurrence);
+    EXPECT_TRUE(harness.session.scene().selected_entities().empty());
+  }
 }
 
 TEST(ViewportInteractionControllerTests,

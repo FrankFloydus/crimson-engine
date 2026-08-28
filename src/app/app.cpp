@@ -21,10 +21,12 @@
 #include <QEvent>
 #include <QGuiApplication>
 #include <QMainWindow>
+#include <QMargins>
 #include <QRect>
 #include <QScreen>
 #include <QTimer>
 #include <QWidget>
+#include <QWindow>
 
 #include <algorithm>
 #include <array>
@@ -572,12 +574,39 @@ void App::apply_window_settings() {
         .height = area.height(),
     });
   }
-  const PlatformWindowChromeFrame frame =
+  const PlatformWindowChromeFrame preliminary =
       platform_window_recover_frame_to_display_work_area(
           placement->normal_frame, work_areas);
+  const QRect preliminary_client_rect(
+      preliminary.x, preliminary.y, preliminary.width, preliminary.height);
+  if (QScreen *target_screen =
+          QGuiApplication::screenAt(preliminary_client_rect.center())) {
+    window->setScreen(target_screen);
+  }
+  window->setGeometry(preliminary_client_rect);
+  (void)window->winId();
+  QWindow *native_window = window->windowHandle();
+  QMargins margins;
+  if (native_window != nullptr) {
+    // Hidden QWidget geometry is deferred. Synchronize the native window first
+    // so its frame margins reflect the saved monitor and its DPI, without
+    // mapping the shell before UISystem::show().
+    native_window->setGeometry(window->geometry());
+    margins = native_window->frameMargins();
+  }
+  const PlatformWindowChromeFrame frame =
+      platform_window_recover_frame_to_display_work_area(
+          preliminary, work_areas,
+          {.left = margins.left(),
+           .top = margins.top(),
+           .right = margins.right(),
+           .bottom = margins.bottom()});
   window->setGeometry(frame.x, frame.y,
                       std::max(kPlatformWindowMinimumWidth, frame.width),
                       std::max(kPlatformWindowMinimumHeight, frame.height));
+  if (native_window != nullptr) {
+    native_window->setGeometry(window->geometry());
+  }
   if (placement->maximized) {
     // Configure placement while hidden so UISystem remains the sole owner of
     // mapping the composed shell and suppresses painting until the native

@@ -1100,6 +1100,8 @@ TEST(ProgrammaticApiGuardrailTests, GroupSelectionPickingUsesModelingSelectionSe
                 "src/editor/modeling/services/modeling_session_services.cpp");
 
   EXPECT_NE(modeling_selection_header.find("pick_object_id("), std::string::npos);
+  EXPECT_NE(modeling_selection_header.find("pick_object_entity("),
+            std::string::npos);
   EXPECT_NE(modeling_selection_header.find("box_pick_object_ids("),
             std::string::npos);
   EXPECT_NE(modeling_selection_source.find(
@@ -1109,7 +1111,7 @@ TEST(ProgrammaticApiGuardrailTests, GroupSelectionPickingUsesModelingSelectionSe
             std::string::npos);
   EXPECT_NE(modeling_session_header.find("box_pick_object_entities("),
             std::string::npos);
-  EXPECT_NE(modeling_session_source.find("selection_service_.pick_object_id("),
+  EXPECT_NE(modeling_session_source.find("selection_service_.pick_object_entity("),
             std::string::npos);
   EXPECT_NE(modeling_session_source.find("selection_service_.box_pick_object_ids("),
             std::string::npos);
@@ -1466,6 +1468,78 @@ TEST(ProgrammaticApiGuardrailTests,
                 "editor.tools().activate(input_router_.state().active_tool)"),
             std::string::npos);
   EXPECT_NE(source.find("find_viewport_tool(editor.tools().active_tool())"),
+            std::string::npos);
+}
+
+TEST(ProgrammaticApiGuardrailTests,
+     EdgeLengthHudBorrowsVolatileHoverAndGatesRetainedPresentation) {
+  const std::string hud =
+      read_file(source_root() / "src/ui/qt_viewport_edge_length_hud.cpp");
+  const std::string presentation = source_slice(
+      hud, "void QtViewportEdgeLengthHud::present(",
+      "void QtViewportEdgeLengthHud::hide()");
+  const auto signature_gate = presentation.find(
+      "if (!frame_signature_valid_ || frame_signature_ != frame_signature)");
+  const auto scan = presentation.find("std::find_if(");
+  const auto geometry_gate =
+      presentation.find("if (!same_edge_geometry(hovered_edge_, edge))");
+  const auto formatting = presentation.find("edge_length_text(*edge)");
+  const auto view_gate = presentation.find("if (view_valid_");
+  const auto projection = presentation.find("camera.project_world_point(");
+  const auto text_setter = presentation.find("label_->setText(");
+  ASSERT_NE(signature_gate, std::string::npos);
+  ASSERT_NE(scan, std::string::npos);
+  ASSERT_NE(geometry_gate, std::string::npos);
+  ASSERT_NE(formatting, std::string::npos);
+  ASSERT_NE(view_gate, std::string::npos);
+  ASSERT_NE(projection, std::string::npos);
+  ASSERT_NE(text_setter, std::string::npos);
+  EXPECT_LT(signature_gate, scan);
+  EXPECT_LT(geometry_gate, formatting);
+  EXPECT_LT(view_gate, projection);
+  EXPECT_LT(view_gate, text_setter);
+  EXPECT_NE(presentation.find("ViewportOverlaySource::ComponentHover"),
+            std::string::npos);
+  EXPECT_NE(presentation.find("ViewportOverlayLayer::HoverEdge"),
+            std::string::npos);
+  EXPECT_NE(hud.find("viewport_host_defaults().map_units_per_world_unit"),
+            std::string::npos);
+  for (const std::string_view forbidden : {
+           "SceneDocument", "AssetRegistry", "selection().summary()",
+           "selection_overlay_frame()", "commands().available()",
+           "overlay_frame_signature(frame)",
+       }) {
+    EXPECT_EQ(hud.find(forbidden), std::string::npos) << forbidden;
+  }
+
+  const std::string panel =
+      read_file(source_root() / "src/ui/qt_viewport_panel.cpp");
+  const std::string prepare = source_slice(
+      panel, "void QtViewportPanel::prepare_viewports(",
+      "void QtViewportPanel::refresh_cached_selection_overlay_frame(");
+  const auto raw_hover = prepare.find("modeling.volatile_overlay_frame()");
+  const auto fresh_frame = prepare.find("ViewportOverlayFrame dynamic_overlay_frame;");
+  const auto hud_call = prepare.find("pane_state.edge_length_hud->present(");
+  const auto style_mutation = prepare.find("ViewportOverlayStyleResolver::apply(");
+  ASSERT_NE(raw_hover, std::string::npos);
+  ASSERT_NE(fresh_frame, std::string::npos);
+  ASSERT_NE(hud_call, std::string::npos);
+  ASSERT_NE(style_mutation, std::string::npos);
+  EXPECT_LT(raw_hover, fresh_frame);
+  EXPECT_LT(fresh_frame, hud_call);
+  EXPECT_LT(hud_call, style_mutation);
+  EXPECT_NE(prepare.find("dynamic_submission_key.frame_signature"),
+            std::string::npos);
+  EXPECT_NE(prepare.find("cached_overlay_mode == ModelingSelectionMode::Edge"),
+            std::string::npos);
+  EXPECT_NE(prepare.find("edge_length_hud_enabled_ && overlays_visible"),
+            std::string::npos);
+  // Backface toggles restyle a fresh semantic stream, never a previously
+  // filtered render frame whose hover triangles have already been removed.
+  const std::string dynamic_key = source_slice(
+      prepare, "const PaneDynamicOverlaySubmissionKey dynamic_submission_key{",
+      "pane_state.edge_length_hud->present(");
+  EXPECT_NE(dynamic_key.find(".style_signature = overlay_style_signature"),
             std::string::npos);
 }
 
@@ -2403,4 +2477,18 @@ TEST(ProgrammaticApiGuardrailTests,
             std::string::npos);
   EXPECT_EQ(italian_locale.find("viewport.tool.extend.label"),
             std::string::npos);
+}
+
+TEST(ProgrammaticApiGuardrailTests,
+     ActiveSceneIdentityDoesNotBuildSceneDescriptionsForViewportPolling) {
+  const std::string source = read_file(
+      source_root() / "src/api/quader_scene_documents_api.cpp");
+  const std::string identity = source_slice(
+      source, "QuaderSceneDocumentsApi::active_scene_id() const",
+      "\n}");
+  ASSERT_FALSE(identity.empty());
+  EXPECT_EQ(identity.find("active_scene()"), std::string::npos);
+  EXPECT_EQ(identity.find("open_scenes()"), std::string::npos);
+  EXPECT_EQ(identity.find("dirty()"), std::string::npos);
+  EXPECT_EQ(identity.find("QuaderSceneDocumentInfo"), std::string::npos);
 }

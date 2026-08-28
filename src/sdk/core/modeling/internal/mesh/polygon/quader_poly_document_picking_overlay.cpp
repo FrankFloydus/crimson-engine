@@ -501,7 +501,8 @@ bool DocumentPickFacts::vertex_has_front_facing_pickable_face(
 
 bool DocumentPickFacts::edge_has_front_facing_pickable_face(
     Edge edge,
-    const Ray& ray) const
+    const Ray& ray,
+    bool include_edge_on) const
 {
     for (const std::size_t face_index : incident_faces(edge)) {
         if (work_counters_ != nullptr) {
@@ -512,8 +513,11 @@ bool DocumentPickFacts::edge_has_front_facing_pickable_face(
         }
         const FaceFact& fact = face_facts_[face_index];
         if (fact.pickable &&
-            face_is_front_facing_from_ray(
-                fact.normal, ray, options_.reverse_face_winding)) {
+            (face_is_front_facing_from_ray(
+                 fact.normal, ray, options_.reverse_face_winding) ||
+             (include_edge_on &&
+              length_squared(fact.normal) > kEpsilon * kEpsilon &&
+              std::abs(dot(fact.normal, ray.direction)) <= kEpsilon))) {
             return true;
         }
     }

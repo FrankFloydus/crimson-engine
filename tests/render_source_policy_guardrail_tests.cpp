@@ -2098,7 +2098,11 @@ TEST(SceneRenderBridgeTests,
   EXPECT_TRUE(source_contains_compact(
       viewport_panel,
       "renderer.set_shadowing_enabled("
-      "viewport_shading_uses_scene_lighting(pane_workspace.shading))"));
+      "viewport_shading_uses_scene_lighting(shading))"));
+  EXPECT_TRUE(source_contains_compact(
+      viewport_panel,
+      "const ViewportShadingMode shading = "
+      "workspace_->shading_mode(pane_state.id)"));
 }
 
 TEST(ViewportRendererTests, OverlayPassUsesNeutralExposureCamera) {
@@ -2697,7 +2701,7 @@ TEST(ViewportRendererTests,
   EXPECT_TRUE(source_contains_compact(
       viewport_panel_source,
       "const bool point_light_gizmos_visible = gizmos_visible && "
-      "viewport_shading_shows_light_gizmos(pane_workspace.shading)"));
+      "viewport_shading_shows_light_gizmos(shading)"));
   EXPECT_TRUE(source_contains_compact(
       viewport_panel_source,
       "scene_overlay_requests[viewport_pane_index(placement.pane_id)] = "

@@ -9,6 +9,46 @@ affected owners/files, resolved approach, and verification. Do not record routin
 private user data, guesses, or unresolved issues. Prefer updating a related existing entry over
 adding a duplicate.
 
+## 2026-08-28 - Session-Only Orthographic Wireframe Defaults
+
+`ViewportWorkspacePaneState` keeps separate transient shading choices for perspective and
+orthographic projection: Shaded and Wireframe respectively on construction. `shading_mode()`
+and `set_shading_mode()` select the slot from the camera's actual projection, including direct
+camera orbit, saved-pose, and local-visibility restores. Do not rely only on the `set_view()`
+route or mirror projection/shading state in Qt. Views within one projection and layout hide/show
+retain the pane's choice; a fresh workspace/app session resets defaults. Neither slot is persisted.
+`QtViewportPanel::prepare_viewports()` uses one active-mode snapshot per pane, and the command
+fingerprint includes both choices so inactive projection state cannot drift unnoticed.
+
+Verification: workspace/API workflows cover default modes, view/projection switches, layouts,
+direct camera changes, visibility camera restoration, and fresh workspace reset. The combined
+focused native and rendering/source guardrails pass; no visual session was launched.
+
+## 2026-08-28 - Keep Native Caption Controls Inside The Restored Work Area
+
+Task/context: a saved normal client rectangle filled a secondary monitor's work area, placing
+the decorated title bar and its controls outside that monitor. The standard caption icons and
+Qt window flags were still present; replacing chrome or icon assets would not correct placement.
+
+`platform_window_recover_frame_to_display_work_area` accepts optional logical frame margins and
+clamps client geometry against the inset work area. Zero-margin callers preserve their existing
+behavior, and repeated restoration must not shrink or move an already valid client rectangle.
+The minimum client-size policy remains unchanged.
+
+`App::apply_window_settings` selects the saved screen while hidden, then synchronizes QWidget
+and QWindow geometry before reading `QWindow::frameMargins()`: hidden QWidget geometry alone
+is deferred and may leave native margins at the previous monitor's DPI. Apply recovered client
+geometry to both objects before setting the saved maximized state. `UISystem::show()` remains the
+sole reveal point; do not add post-show corrections or use QWidget's visibility-gated frame strut.
+
+Verification: all 308 combined selection, input, settings, and window tests plus both window
+guardrails pass headlessly. The work-area regression includes full decorated-frame containment
+and repeated restores; the existing close-boundary fixture verifies standard title/system-menu,
+minimize/maximize/close flags and the absence of frameless mode. Native visual confirmation is
+left to the user when visual sessions are prohibited.
+The 47 additional UI affected checks pass; the final full gate has the same 12 recorded failures
+and five minimal-platform Qt limitations as the selection follow-up, with no new failures.
+
 ## 2026-08-26 - Filament Normal Inputs Precede Material Preparation
 
 Task/context: assigning a Normal texture in the Standard Material editor updated the draft and
@@ -43,8 +83,8 @@ Invariant:
 - Backface selection is only an orientation filter. It does not change render culling, marquee
   contain/crossing rules, or depth/select-through policy. Face candidates require front-facing
   authored winding when disabled; edges and vertices remain eligible when any incident pickable
-  face is front-facing, and loose components remain eligible. Object and Group selection are
-  unchanged.
+  face is front-facing, and loose components remain eligible. The 2026-08-28 correction also
+  applies this policy to Object/Group ray picks and hover; their marquee rules remain unchanged.
 - Click, hover, and marquee requests all carry the same policy. Stationary hover keys include it,
   and rectangle projections retain per-candidate facing so toggling re-resolves hits without
   rebuilding geometry or topology universes.
@@ -68,6 +108,126 @@ regenerated 157-command behavior baseline passes. The mandatory gate still repor
 unrelated six repository guardrails, two Linear Array preview tests, and three source-wire overlay
 tests; its SDK-only wrapper passes the consumer suite and inherits those same guardrail failures.
 Both canonical Debug/Profile and Release app builds succeed.
+
+## 2026-08-28 - Orthographic Mesh Depth Selection And Hover Feedback
+
+- Object/Group ray picking forced `pick_backfaces=true` after constructing the viewport policy.
+  Remove those overrides in runtime picking and `ModelingSelectionService`: a culled near wall
+  of an inverted room must not hide an interior mesh. Authored winding and reflected-transform
+  facing still share the existing picker; independent tools keep their explicit picking policies.
+- `viewport.selection.cycle_depth` defaults to unmodified left double-click in orthographic
+  Mesh/Object mode only. There is no Page Down binding. Component loops, other selection modes,
+  and perspective double-click behavior remain unchanged. In ortho Mesh mode the depth gesture
+  takes precedence over instance entry. The editable binding retains its focus, projection,
+  selection-mode, navigation, modal, preview, and transform ownership guards.
+- `viewport.selection.add_depth` and `viewport.selection.remove_depth` default to Shift/Ctrl
+  left double-click with those same guards. They are separate bindable actions, so overrides,
+  unassignment, and conflict replacement do not overwrite the other depth gestures. Latch the
+  resolved operation independently of live modifiers through both marquee and gizmo releases.
+  A fresh Add/Remove traversal starts after the ordinary surface hit, not after the selected
+  active mesh; otherwise Ctrl can skip the very mesh being removed. Operation changes restart
+  the traversal, while repeated gestures with the same operation continue through the stack.
+- `ModelingSelectionService` owns the persistent depth cursor. Share the native runtime's
+  `pick_mesh_depth_hits` candidate collector and deduplicate scene occurrence targets;
+  do not add all-depth component picking.
+  Selection revisions must not reset the cursor between the first and second clicks. Geometry,
+  visibility, scope, mode, ray direction, and policy changes do reset it. A fixed ray-origin anchor
+  allows the existing four-pixel click tolerance without accumulating cursor drift. Empty stacks
+  preserve selection/history; a single hit obeys Replace/Add/Remove, and repeated gestures wrap.
+- Face hits alone miss open stair treads/risers viewed exactly from the side. Explicit Mesh depth
+  cycling falls back to authored edges for meshes without an eligible surface hit. Reuse neutral
+  `DocumentPickFacts` for hidden-material, incidence, and winding checks; only this path opts into
+  edge-on faces. Ordinary Face/Edge/Vertex picking remains strict. Measure edge tolerance in world
+  space before choosing a winner, expand cached world bounds, and reject negative ray depth.
+  Without cached world bounds, transformed meshes proceed to exact tests. A fresh/coalesced cycle
+  advances from the ordinary face target (which may follow an edge hit in depth order), or starts
+  at the first edge when no face target exists; retain mesh-only cursor signatures. Fresh Replace
+  also anchors after the ordinary face, independently of a previously selected deeper primary;
+  otherwise removing the first-click mutation would change which layer a fresh double selects.
+- The selection/gizmo input owners latch the semantic action across press/release, including
+  coalesced double-clicks and rebound release-click bindings. Consume it exactly once; an existing
+  pending first click must neither swallow the depth request nor apply an extra selection afterward.
+  A deferred gizmo click clears any pending selection box, including a one-pixel boundary handoff.
+  Promote newer click counts independently of depth intent so coalesced Edge doubles still select
+  loops. Both click owners share ordinary instance-entry handling; depth cycling suppresses it.
+- `ViewportSelectionInteraction` captures the existing opaque selection baseline before the
+  first mouse press can be consumed by a gizmo. An eligible ordinary pick now stays pending through
+  the host-provided system double-click interval: publishing it immediately caused a visible front
+  selection/deselection and an extra history entry. The pending request freezes ray, physical
+  modifiers, billboard target, and preserve flags; neither selection nor hover-suppression commits
+  while queued. Native second-click recognition cancels it before timeout handling, including late
+  frames and non-depth doubles after rebinding. A lone click commits once; a distinct first press
+  resolves the earlier single before gizmo picking and forwards the fresh selection summary to
+  after-tool/Qt hover work. No Undo compensation or second double-click recognizer is used.
+  The resolver checks effective left-double mappings for all three depth actions only on first
+  mouse edges, since modifiers can change between clicks. Other modes/perspective and a fully
+  rebound/unassigned depth setup remain immediate. Validate camera ray, viewport, tool, scene,
+  and revisions while pending; pointer motion after release does not retarget or cancel a single.
+  Context changes cancel it. Modified depth picks retain the public baseline route; that baseline
+  checks scene generation and owner identity because standalone API sessions can share a numeric ID.
+  `QuaderSceneDocumentsApi::active_scene_id()` reads the stored owner ID directly: building
+  `open_scenes()` descriptions here would allocate and query dirty state on every pending frame.
+  Escape also discards the still-held ordinary selection box, and focus loss cancels a pending
+  gizmo click before Qt's synthetic release can turn it into a front selection.
+- Render-owned hover styling removes ordinary HoverFace triangles when backface selection is off,
+  preserving the hover outline and all selected-face fills. Keep remove-selection/tool preview
+  roles intact, include the toggle in the style signature, and restore fills from fresh semantic
+  frames when it is enabled again.
+- `QtViewportEdgeLengthHud` presents the hovered world-space edge length in map units at the
+  projected midpoint. Borrow the existing volatile overlay record and reuse its signature; gate
+  scans, formatting, projection, and Qt setters on changed state. Per-pane native labels account
+  for render/logical pixel ratios and disappear outside ordinary Edge hover. The platform-owned
+  `WM_NCHITTEST` response must be `HTTRANSPARENT`: Qt's transparent-mouse widget flag alone does
+  not pass input through a native label to its sibling Filament `QWindow`.
+
+Click-delay follow-up verification: 334 native API/input/controller/Qt/command tests, 119 source
+guardrails, and 35 runtime picking tests pass. Native event batches assert unchanged selection and
+history after the first release and one final depth transition, including Shift/Ctrl and Undo.
+Deterministic controller cases cover timeout, frozen ray/modifiers, rapid separate clicks with
+fresh gizmo/marquee baselines, delayed native doubles, held Escape, and synthetic focus-loss release.
+The affected check passes 157 guardrails and 754 of 760 native tests, retaining one native-HWND
+skip and the same five minimal-platform Qt failures. The full gate passes modeling-domain and SDK
+consumer/parity suites and reproduces exactly the preceding 17 unique failures, including the
+SDK-only wrapper's repeated seven guardrails. No command baseline was regenerated and no editor
+or visual session was launched.
+
+Modifier follow-up verification: all 340 focused native API/input/controller/workspace tests,
+120 source guardrails, 33 runtime picking tests, and five command-contract tests pass headlessly.
+Actual Qt input covers Select/Move, split/coalesced double-clicks, released modifiers, retained
+front/unrelated selection, repeated removal, and undo/redo. Controller cases cover real gizmo
+shafts, delayed frames, and external selection/camera changes before and after the second press.
+Baseline capture is guarded by the mouse-press edge before allocation; idle frames do not copy
+selection or enumerate catalogs. The intentional 189-command baseline update changes only
+preference/viewport fingerprints and their composed lifecycle hashes; results and other domains
+are unchanged from the preceding depth-selection baseline.
+The affected check passes all 161 selected guardrails and 736 of 742 native tests, with one
+native-HWND skip and the five previously recorded minimal-Qt limitations. The complete regression
+gate reports exactly the same 17 distinct failures as the preceding run (12 existing repository/
+behavior failures plus those five headless Qt limitations), with no new failing test names.
+Modeling-domain, SDK consumer, and SDK parity tests pass; the SDK-only wrapper repeats the same
+seven guardrail failures. No editor, visual session, or desktop capture was launched.
+
+Verification: all 305 focused native tests, 65 public-API guardrails, 22 runtime picking tests,
+and five command-contract tests pass. The complete 189-command baseline diff changes only
+keybinding preference fingerprints and their composed before/after lifecycle hashes, plus its
+explicit update reason; command outcomes and every other observable domain remain unchanged.
+The final regression gate reproduces the 12 failures already recorded at HEAD: seven guardrails
+and five Linear Array/source-wire overlay tests. The SDK-only wrapper repeats the same guardrail
+failures; its SDK consumer tests and the native modeling-domain/SDK consumer/parity entries pass.
+The two gizmo handoff regressions fail before their fixes and pass afterward; all 60 controller
+tests also cover the unchanged single-click, drag, modifier, navigation, and instance behaviors.
+
+Follow-up verification: an open L-profile stair inside an inward room reproduces the face-only
+failure before the boundary fix and passes afterward. All 297 focused native input/API/controller
+tests and 28 runtime picking tests pass, including actual Qt press/release/double-click delivery,
+coalesced events, Select/Move, backfaces off, transformed edge tolerance, hidden faces, behind-ray
+rejection, and authored-edge rather than triangulation-diagonal hits. Qt checks use the installed
+`minimal:enable_fonts` platform through `QT_QPA_PLATFORM_PLUGIN_PATH`; no editor or visual session
+is launched when the user requests manual verification only.
+The affected check passes all 1,001 tests. The complete gate retains the 12 recorded repository
+failures and adds five minimal-platform theme/screen/focus failures in unchanged Qt tests; the
+native-HWND HUD test skips under this backend. SDK consumer/parity and modeling-domain entries
+pass. Do not change picking code or command baselines to accommodate these platform limitations.
 
 ## 2026-08-18 - Transform Preview, Knife, Slider, And Shift-Duplicate Continuity
 
@@ -5477,7 +5637,9 @@ Invariant:
 - Each embedded viewport has one top-right display menu. Wireframe, Shaded, and Rendered remain
   top-level mutually exclusive modes; Camera is a checked submenu for the pane's view; Debug View
   is a mutually exclusive submenu containing Diffuse Only, Specular Only, Albedo, Roughness,
-  Metalness, and Normal. Camera selection does not change the active shading/debug mode.
+  Metalness, and Normal. Camera changes within one projection retain its shading/debug choice.
+  Since 2026-08-28, projection transitions restore that projection's session-only mode, with
+  orthographic panes defaulting to Wireframe and perspective panes to Shaded.
 - Debug selection is owned independently by each `ViewportWorkspacePaneState` and exposed through
   `QuaderViewportApi`. Every debug mode consumes the Rendered material proxy layer. Diffuse Only
   and Specular Only retain Rendered scene/IBL lighting and shadows while removing the opposite PBR

@@ -48,7 +48,8 @@ int clamp_origin(int origin, int size, int area_origin, int area_size) {
 
 PlatformWindowChromeFrame platform_window_recover_frame_to_display_work_area(
     PlatformWindowChromeFrame frame,
-    std::span<const PlatformWindowChromeFrame> display_work_areas) {
+    std::span<const PlatformWindowChromeFrame> display_work_areas,
+    PlatformWindowFrameMargins frame_margins) {
   frame.width = std::max(kPlatformWindowMinimumWidth, frame.width);
   frame.height = std::max(kPlatformWindowMinimumHeight, frame.height);
   if (display_work_areas.empty()) {
@@ -68,18 +69,28 @@ PlatformWindowChromeFrame platform_window_recover_frame_to_display_work_area(
     }
   }
 
+  const int left = std::max(0, frame_margins.left);
+  const int top = std::max(0, frame_margins.top);
+  const PlatformWindowChromeFrame client_work_area{
+      .x = target_area->x + left,
+      .y = target_area->y + top,
+      .width = std::max(
+          1, target_area->width - left - std::max(0, frame_margins.right)),
+      .height = std::max(
+          1, target_area->height - top - std::max(0, frame_margins.bottom)),
+  };
   const int maximum_width =
-      std::max(kPlatformWindowMinimumWidth, target_area->width);
+      std::max(kPlatformWindowMinimumWidth, client_work_area.width);
   const int maximum_height =
-      std::max(kPlatformWindowMinimumHeight, target_area->height);
+      std::max(kPlatformWindowMinimumHeight, client_work_area.height);
   frame.width = std::clamp(frame.width, kPlatformWindowMinimumWidth,
                            maximum_width);
   frame.height = std::clamp(frame.height, kPlatformWindowMinimumHeight,
                             maximum_height);
-  frame.x = clamp_origin(frame.x, frame.width, target_area->x,
-                         std::max(1, target_area->width));
-  frame.y = clamp_origin(frame.y, frame.height, target_area->y,
-                         std::max(1, target_area->height));
+  frame.x = clamp_origin(frame.x, frame.width, client_work_area.x,
+                         client_work_area.width);
+  frame.y = clamp_origin(frame.y, frame.height, client_work_area.y,
+                         client_work_area.height);
   return frame;
 }
 

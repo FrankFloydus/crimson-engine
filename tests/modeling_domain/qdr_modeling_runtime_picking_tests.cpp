@@ -139,6 +139,31 @@ quader_editor_core::PolygonObject single_quad_object(int id, bool backfacing)
 	return object;
 }
 
+quader_editor_core::PolygonObject side_on_stair_object(int id)
+{
+  quader_editor_core::PolygonObject object;
+  object.id = id;
+  std::array<quader_poly::ElementId, 6> vertices;
+  const std::array positions{
+      quader::QVec3{-2.0F, 0.0F, 0.1875F},
+      quader::QVec3{2.0F, 0.0F, 0.1875F},
+      quader::QVec3{2.0F, 0.0F, -0.1875F},
+      quader::QVec3{-2.0F, 0.0F, -0.1875F},
+      quader::QVec3{-2.0F, -0.25F, 0.1875F},
+      quader::QVec3{2.0F, -0.25F, 0.1875F},
+  };
+  for (std::size_t index = 0U; index < positions.size(); ++index) {
+    vertices[index] = quader_poly::add_vertex(object.document, positions[index]);
+  }
+  (void)quader_poly::add_face(
+      object.document,
+      std::array{vertices[0], vertices[1], vertices[2], vertices[3]});
+  (void)quader_poly::add_face(
+      object.document,
+      std::array{vertices[1], vertices[0], vertices[4], vertices[5]});
+  return object;
+}
+
 quader_editor_core::PickObjectTransform scaled_pick_transform(
 		int object_id,
 		float x,
@@ -1040,4 +1065,654 @@ TEST(QdrModelingRuntimePickingTests,
 TEST(QdrModelingRuntimePickingTests,
 	ClickAndDragPickPlansStayInEditorCore) {
 	click_and_drag_pick_plans_stay_in_editor_core();
+}
+
+TEST(QdrModelingRuntimePickingTests,
+     ObjectClickAndHoverRespectCulledNearFaces) {
+  auto front = single_quad_object(8, true);
+  for (auto &vertex : front.document.edit().vertices) {
+    vertex.position.z = 2.0F;
+  }
+  const std::vector objects{front, single_quad_object(7, false)};
+  for (const bool select_backfaces : std::array{false, true}) {
+    const auto options = quader_editor_core::selection_pick_options_from_radii(
+        0.05, 0.05, select_backfaces);
+    const int expected = select_backfaces ? 8 : 7;
+    const auto hover = quader_editor_core::update_selection_hover(
+        objects, quader_editor_core::SelectionMode::Object, {},
+        front_center_ray(), false, options);
+    EXPECT_EQ(hover.hover.object_id, expected);
+    quader_editor_core::EditorSession session(objects);
+    const auto selected = quader_editor_core::apply_pick_selection(
+        session, session.objects(),
+        {.ray = front_center_ray(), .pick_options = options});
+    ASSERT_TRUE(selected.hit);
+    EXPECT_EQ(session.active_object_id(), expected);
+  }
+}
+
+TEST(QdrModelingRuntimePickingTests,
+     ObjectDepthCycleSkipsFrontThenWrapsAcrossOrdinaryClicks) {
+  quader_editor_core::EditorSession session(
+      {cube_object(7), cube_object(8, {0.0F, 0.0F, -4.0F}),
+       cube_object(9, {0.0F, 0.0F, -8.0F})});
+  quader_editor_core::PickCycleState cycle;
+  quader_editor_core::ApplyPickSelectionRequest request{
+      .ray = front_center_ray(),
+      .pick_options =
+          quader_editor_core::selection_pick_options_from_radii(0.05, 0.05, false),
+      .click_count = 2,
+      .cycle_depth = true,
+      .depth_cycle = &cycle,
+  };
+  ASSERT_TRUE(quader_editor_core::apply_pick_selection(
+                  session, session.objects(), request)
+                  .hit);
+  EXPECT_EQ(session.active_object_id(), 8);
+  for (const int expected : std::array{9, 7, 8}) {
+    request.click_count = 1;
+    request.cycle_depth = false;
+    ASSERT_TRUE(quader_editor_core::apply_pick_selection(
+                    session, session.objects(), request)
+                    .hit);
+    EXPECT_EQ(session.active_object_id(), 7);
+    request.click_count = 2;
+    request.cycle_depth = true;
+    ASSERT_TRUE(quader_editor_core::apply_pick_selection(
+                    session, session.objects(), request)
+                    .hit);
+    EXPECT_EQ(session.active_object_id(), expected);
+    EXPECT_EQ(session.selected_object_ids().size(), 1U);
+  }
+  const auto revision = session.state().selection_revision;
+  request.ray = miss_ray();
+  const auto missed = quader_editor_core::apply_pick_selection(
+      session, session.objects(), request);
+  EXPECT_FALSE(missed.hit);
+  EXPECT_FALSE(missed.changed);
+  EXPECT_EQ(session.active_object_id(), 8);
+  EXPECT_EQ(session.state().selection_revision, revision);
+}
+
+TEST(QdrModelingRuntimePickingTests,
+     FreshObjectDepthReplaceIgnoresPreviousPrimary) {
+  for (const int previous_primary : std::array{8, 9}) {
+    SCOPED_TRACE(previous_primary);
+    quader_editor_core::EditorSession session(
+        {cube_object(7), cube_object(8, {0.0F, 0.0F, -4.0F}),
+         cube_object(9, {0.0F, 0.0F, -8.0F})});
+    session.set_selected_object_ids({8, 9}, previous_primary);
+    quader_editor_core::PickCycleState cycle;
+    quader_editor_core::ApplyPickSelectionRequest request{
+        .ray = front_center_ray(),
+        .pick_options = quader_editor_core::selection_pick_options_from_radii(
+            0.05, 0.05, false),
+        .click_count = 2,
+        .cycle_depth = true,
+        .depth_cycle = &cycle,
+    };
+    // No front selection is applied first: a deferred single click leaves the
+    // previous primary intact until this depth request chooses its own target.
+    for (const int expected : std::array{8, 9, 7, 8}) {
+      ASSERT_TRUE(quader_editor_core::apply_pick_selection(
+                      session, session.objects(), request)
+                      .hit);
+      EXPECT_EQ(session.selected_object_ids(), (std::vector<int>{expected}));
+      EXPECT_EQ(session.active_object_id(), expected);
+    }
+
+    request.click_count = 1;
+    request.cycle_depth = false;
+    ASSERT_TRUE(quader_editor_core::apply_pick_selection(
+                    session, session.objects(), request)
+                    .hit);
+    EXPECT_EQ(session.selected_object_ids(), (std::vector<int>{7}));
+  }
+}
+
+TEST(QdrModelingRuntimePickingTests,
+     ObjectDepthAddPreservesFrontAndUnrelatedSelection) {
+  for (const bool front_selected : std::array{false, true}) {
+    SCOPED_TRACE(front_selected);
+    quader_editor_core::EditorSession session(
+        {cube_object(7), cube_object(8, {0.0F, 0.0F, -4.0F}),
+         cube_object(9, {0.0F, 0.0F, -8.0F}),
+         cube_object(10, {8.0F, 0.0F, 0.0F})});
+    std::vector<int> selected{9, 10};
+    if (front_selected) {
+      selected.insert(selected.begin(), 7);
+    }
+    // An already active deeper mesh must not move a fresh Add past the first
+    // mesh behind the ordinary surface.
+    session.set_selected_object_ids(selected, 9);
+    quader_editor_core::PickCycleState cycle;
+    quader_editor_core::ApplyPickSelectionRequest request{
+        .operation = quader_editor_core::SelectionEditOperation::Add,
+        .ray = front_center_ray(),
+        .pick_options = quader_editor_core::selection_pick_options_from_radii(
+            0.05, 0.05, false),
+        .click_count = 2,
+        .cycle_depth = true,
+        .depth_cycle = &cycle,
+    };
+    const auto added = quader_editor_core::apply_pick_selection(
+        session, session.objects(), request);
+    ASSERT_TRUE(added.hit);
+    EXPECT_TRUE(added.changed);
+    std::vector<int> expected{8, 9, 10};
+    if (front_selected) {
+      expected.insert(expected.begin(), 7);
+    }
+    EXPECT_EQ(session.selected_object_ids(), expected);
+    EXPECT_EQ(session.active_object_id(), 8);
+
+    // A fresh Add choosing the same active target is an actual no-op.
+    request.depth_cycle = nullptr;
+    const auto revision = session.state().selection_revision;
+    const auto repeated = quader_editor_core::apply_pick_selection(
+        session, session.objects(), request);
+    EXPECT_TRUE(repeated.hit);
+    EXPECT_FALSE(repeated.changed);
+    EXPECT_EQ(session.selected_object_ids(), expected);
+    EXPECT_EQ(session.active_object_id(), 8);
+    EXPECT_EQ(session.state().selection_revision, revision);
+  }
+}
+
+TEST(QdrModelingRuntimePickingTests,
+     ObjectDepthRemoveTraversesWithoutRemovingOtherTargets) {
+  quader_editor_core::EditorSession session(
+      {cube_object(7), cube_object(8, {0.0F, 0.0F, -4.0F}),
+       cube_object(9, {0.0F, 0.0F, -8.0F}),
+       cube_object(10, {8.0F, 0.0F, 0.0F})});
+  session.set_selected_object_ids({7, 8, 9, 10}, 8);
+  quader_editor_core::PickCycleState cycle;
+  quader_editor_core::ApplyPickSelectionRequest request{
+      .operation = quader_editor_core::SelectionEditOperation::Remove,
+      .ray = front_center_ray(),
+      .pick_options = quader_editor_core::selection_pick_options_from_radii(
+          0.05, 0.05, false),
+      .click_count = 2,
+      .cycle_depth = true,
+      .depth_cycle = &cycle,
+  };
+  const auto first = quader_editor_core::apply_pick_selection(
+      session, session.objects(), request);
+  ASSERT_TRUE(first.hit);
+  EXPECT_TRUE(first.changed);
+  EXPECT_EQ(session.selected_object_ids(), (std::vector<int>{7, 9, 10}));
+  EXPECT_EQ(session.active_object_id(), 7);
+
+  ASSERT_TRUE(quader_editor_core::apply_pick_selection(
+                  session, session.objects(), request)
+                  .changed);
+  EXPECT_EQ(session.selected_object_ids(), (std::vector<int>{7, 10}));
+  EXPECT_EQ(session.active_object_id(), 7);
+  // The front target is removed only once traversal explicitly wraps to it.
+  ASSERT_TRUE(quader_editor_core::apply_pick_selection(
+                  session, session.objects(), request)
+                  .changed);
+  EXPECT_EQ(session.selected_object_ids(), (std::vector<int>{10}));
+  EXPECT_EQ(session.active_object_id(), 10);
+
+  const auto revision = session.state().selection_revision;
+  const auto already_removed = quader_editor_core::apply_pick_selection(
+      session, session.objects(), request);
+  EXPECT_TRUE(already_removed.hit);
+  EXPECT_FALSE(already_removed.changed);
+  EXPECT_EQ(session.selected_object_ids(), (std::vector<int>{10}));
+  EXPECT_EQ(session.active_object_id(), 10);
+  EXPECT_EQ(session.state().selection_revision, revision);
+}
+
+TEST(QdrModelingRuntimePickingTests,
+     ObjectDepthEditTransitionsRestartAtOrdinarySurface) {
+  quader_editor_core::EditorSession session(
+      {cube_object(7), cube_object(8, {0.0F, 0.0F, -4.0F}),
+       cube_object(9, {0.0F, 0.0F, -8.0F})});
+  quader_editor_core::PickCycleState cycle;
+  quader_editor_core::ApplyPickSelectionRequest request{
+      .ray = front_center_ray(),
+      .pick_options = quader_editor_core::selection_pick_options_from_radii(
+          0.05, 0.05, false),
+      .click_count = 2,
+      .cycle_depth = true,
+      .depth_cycle = &cycle,
+  };
+  for (const int expected : std::array{8, 9}) {
+    ASSERT_TRUE(quader_editor_core::apply_pick_selection(
+                    session, session.objects(), request)
+                    .hit);
+    EXPECT_EQ(session.active_object_id(), expected);
+  }
+
+  request.operation = quader_editor_core::SelectionEditOperation::Add;
+  for (const int expected : std::array{8, 9}) {
+    ASSERT_TRUE(quader_editor_core::apply_pick_selection(
+                    session, session.objects(), request)
+                    .hit);
+    EXPECT_EQ(session.selected_object_ids(), (std::vector<int>{8, 9}));
+    EXPECT_EQ(session.active_object_id(), expected);
+  }
+
+  request.operation = quader_editor_core::SelectionEditOperation::Remove;
+  ASSERT_TRUE(quader_editor_core::apply_pick_selection(
+                  session, session.objects(), request)
+                  .hit);
+  EXPECT_EQ(session.selected_object_ids(), (std::vector<int>{9}));
+  EXPECT_EQ(session.active_object_id(), 9);
+  ASSERT_TRUE(quader_editor_core::apply_pick_selection(
+                  session, session.objects(), request)
+                  .hit);
+  EXPECT_TRUE(session.selected_object_ids().empty());
+  EXPECT_EQ(session.active_object_id(), -1);
+}
+
+TEST(QdrModelingRuntimePickingTests,
+     ObjectDepthSingleHitAndMissPreserveNoopRevisions) {
+  for (const auto operation :
+       std::array{quader_editor_core::SelectionEditOperation::Add,
+                  quader_editor_core::SelectionEditOperation::Remove}) {
+    SCOPED_TRACE(static_cast<int>(operation));
+    quader_editor_core::EditorSession session(
+        {cube_object(7), cube_object(10, {8.0F, 0.0F, 0.0F})});
+    const bool adding =
+        operation == quader_editor_core::SelectionEditOperation::Add;
+    const std::vector<int> selected =
+        adding ? std::vector<int>{7, 10} : std::vector<int>{10};
+    const int active = adding ? 7 : 10;
+    session.set_selected_object_ids(selected, active);
+    const auto revision = session.state().selection_revision;
+    quader_editor_core::PickCycleState cycle;
+    quader_editor_core::ApplyPickSelectionRequest request{
+        .operation = operation,
+        .ray = front_center_ray(),
+        .pick_options = quader_editor_core::selection_pick_options_from_radii(
+            0.05, 0.05, false),
+        .click_count = 2,
+        .cycle_depth = true,
+        .depth_cycle = &cycle,
+    };
+    const auto single_hit = quader_editor_core::apply_pick_selection(
+        session, session.objects(), request);
+    EXPECT_TRUE(single_hit.hit);
+    EXPECT_FALSE(single_hit.changed);
+    request.ray = miss_ray();
+    const auto missed = quader_editor_core::apply_pick_selection(
+        session, session.objects(), request);
+    EXPECT_FALSE(missed.hit);
+    EXPECT_FALSE(missed.applied);
+    EXPECT_FALSE(missed.changed);
+    EXPECT_EQ(session.selected_object_ids(), selected);
+    EXPECT_EQ(session.active_object_id(), active);
+    EXPECT_EQ(session.state().selection_revision, revision);
+  }
+}
+
+TEST(QdrModelingRuntimePickingTests,
+     OrdinaryObjectRemovalReassignsPrimaryAndPreservesOtherTargets) {
+  quader_editor_core::EditorSession session(
+      {cube_object(7), cube_object(8, {4.0F, 0.0F, 0.0F}),
+       cube_object(9, {8.0F, 0.0F, 0.0F})});
+  session.set_selected_object_ids({7, 8}, 7);
+  quader_editor_core::ApplyPickSelectionRequest request{
+      .operation = quader_editor_core::SelectionEditOperation::Remove,
+      .ray = front_center_ray(),
+  };
+  ASSERT_TRUE(quader_editor_core::apply_pick_selection(
+                  session, session.objects(), request)
+                  .changed);
+  EXPECT_EQ(session.selected_object_ids(), (std::vector<int>{8}));
+  EXPECT_EQ(session.active_object_id(), 8);
+  const auto revision = session.state().selection_revision;
+  const auto repeated = quader_editor_core::apply_pick_selection(
+      session, session.objects(), request);
+  EXPECT_TRUE(repeated.hit);
+  EXPECT_FALSE(repeated.changed);
+  EXPECT_EQ(session.active_object_id(), 8);
+  EXPECT_EQ(session.state().selection_revision, revision);
+
+  request.ray.origin.x = 4.0F;
+  ASSERT_TRUE(quader_editor_core::apply_pick_selection(
+                  session, session.objects(), request)
+                  .changed);
+  EXPECT_TRUE(session.selected_object_ids().empty());
+  EXPECT_EQ(session.active_object_id(), -1);
+}
+
+TEST(QdrModelingRuntimePickingTests,
+     DepthFlagDoesNotReplaceOrdinaryFaceDoubleClick) {
+  quader_editor_core::EditorSession session({cube_object(7)});
+  session.set_selection_mode(quader_editor_core::SelectionMode::Face);
+  const auto result = quader_editor_core::apply_pick_selection(
+      session, session.objects(),
+      {.ray = front_center_ray(),
+       .pick_options =
+           quader_editor_core::selection_pick_options_from_radii(0.05, 0.05, false),
+       .click_count = 2,
+       .cycle_depth = true});
+  ASSERT_TRUE(result.hit);
+  EXPECT_EQ(session.objects().front().selection.faces.size(), 6U);
+}
+
+TEST(QdrModelingRuntimePickingTests,
+     MeshDepthCycleIncludesEdgeOnStairAndUsesOrdinaryFaceAnchor) {
+  auto room = cube_object(7);
+  for (auto &vertex : room.document.edit().vertices) {
+    vertex.position = vertex.position * 5.0F;
+  }
+  for (auto &face : room.document.edit().faces) {
+    std::reverse(face.vertices.begin(), face.vertices.end());
+  }
+  const std::vector objects{room, side_on_stair_object(8)};
+  const std::array bounds{pick_bounds_for_object(objects[0]),
+                          pick_bounds_for_object(objects[1])};
+  auto options = quader_editor_core::selection_pick_options_from_radii(
+      0.05, 0.05, false);
+  options.mode = quader_poly::SelectionMode::Face;
+  const auto face_geometry =
+      quader_editor_core::build_pick_face_geometry(objects, options);
+  const quader_poly::Ray ray{{-64.0F, -0.125F, 0.1875F},
+                            {1.0F, 0.0F, 0.0F}};
+  const auto hits = quader_editor_core::pick_mesh_depth_hits(
+      objects, {.ray = ray, .options = options}, bounds, face_geometry);
+  ASSERT_EQ(hits.size(), 2U);
+  EXPECT_EQ(hits[0].object_id, 8);
+  EXPECT_EQ(hits[0].kind, quader_poly::ElementKind::Edge);
+  EXPECT_FLOAT_EQ(hits[0].ray_distance, 62.0F);
+  EXPECT_EQ(hits[1].object_id, 7);
+  EXPECT_EQ(hits[1].kind, quader_poly::ElementKind::Face);
+  EXPECT_FLOAT_EQ(hits[1].ray_distance, 69.0F);
+
+  for (const bool ordinary_first_click : std::array{false, true}) {
+    SCOPED_TRACE(ordinary_first_click);
+    quader_editor_core::EditorSession session(objects);
+    ASSERT_TRUE(session.selected_object_ids().empty());
+    quader_editor_core::PickCycleState cycle;
+    quader_editor_core::ApplyPickSelectionRequest request{
+        .ray = ray,
+        .pick_options = options,
+        .click_count = 2,
+        .object_bounds = bounds,
+        .face_geometry = face_geometry,
+        .cycle_depth = true,
+        .depth_cycle = &cycle,
+    };
+    if (ordinary_first_click) {
+      request.click_count = 1;
+      request.cycle_depth = false;
+      ASSERT_TRUE(quader_editor_core::apply_pick_selection(
+                      session, session.objects(), request)
+                      .hit);
+      ASSERT_EQ(session.active_object_id(), 7);
+      request.click_count = 2;
+      request.cycle_depth = true;
+    } else {
+      // Retaining a prior stair selection while the first click is deferred
+      // must not anchor a fresh cycle to the edge hit and select the room.
+      session.set_selected_object_ids({8}, 8);
+    }
+    // A coalesced double click may arrive without a separately applied first
+    // click. Its ordinary Face target is the room, after the stair in depth.
+    ASSERT_TRUE(quader_editor_core::apply_pick_selection(
+                    session, session.objects(), request)
+                    .hit);
+    EXPECT_EQ(session.active_object_id(), 8);
+    for (const int expected : std::array{7, 8}) {
+      request.click_count = 1;
+      request.cycle_depth = false;
+      ASSERT_TRUE(quader_editor_core::apply_pick_selection(
+                      session, session.objects(), request)
+                      .hit);
+      ASSERT_EQ(session.active_object_id(), 7);
+      request.click_count = 2;
+      request.cycle_depth = true;
+      ASSERT_TRUE(quader_editor_core::apply_pick_selection(
+                      session, session.objects(), request)
+                      .hit);
+      EXPECT_EQ(session.active_object_id(), expected);
+      EXPECT_EQ(session.selected_object_ids().size(), 1U);
+    }
+  }
+}
+
+TEST(QdrModelingRuntimePickingTests,
+     FreshEdgeOnlyDepthCycleStartsAtFirstBoundaryAndThenWraps) {
+  auto farther_stair = side_on_stair_object(8);
+  for (auto &vertex : farther_stair.document.edit().vertices) {
+    vertex.position.x += 8.0F;
+  }
+  const std::vector objects{side_on_stair_object(7), farther_stair};
+  for (const int previous_primary : std::array{7, 8}) {
+    SCOPED_TRACE(previous_primary);
+    quader_editor_core::EditorSession session(objects);
+    session.set_selected_object_ids({previous_primary}, previous_primary);
+    quader_editor_core::PickCycleState cycle;
+    const quader_editor_core::ApplyPickSelectionRequest request{
+        .ray = {{-64.0F, -0.125F, 0.1875F}, {1.0F, 0.0F, 0.0F}},
+        .pick_options = quader_editor_core::selection_pick_options_from_radii(
+            0.05, 0.05, false),
+        .click_count = 2,
+        .cycle_depth = true,
+        .depth_cycle = &cycle,
+    };
+    for (const int expected : std::array{7, 8, 7}) {
+      ASSERT_TRUE(quader_editor_core::apply_pick_selection(
+                      session, session.objects(), request)
+                      .hit);
+      EXPECT_EQ(session.selected_object_ids(), (std::vector<int>{expected}));
+      EXPECT_EQ(session.active_object_id(), expected);
+    }
+  }
+}
+
+TEST(QdrModelingRuntimePickingTests,
+     MeshDepthFallbackRetainsBackfaceAndHiddenMaterialFilters) {
+  const std::vector backfacing{single_quad_object(7, true)};
+  auto options = quader_editor_core::selection_pick_options_from_radii(
+      0.05, 0.05, false);
+  options.mode = quader_poly::SelectionMode::Face;
+  // Outside the face, but within the authored boundary's world-space radius.
+  const quader_poly::Ray boundary_ray{{0.0F, -1.02F, 5.0F},
+                                     {0.0F, 0.0F, -1.0F}};
+  EXPECT_TRUE(quader_editor_core::pick_mesh_depth_hits(
+                  backfacing, {.ray = boundary_ray, .options = options})
+                  .empty());
+  options.pick_backfaces = true;
+  const auto two_sided = quader_editor_core::pick_mesh_depth_hits(
+      backfacing, {.ray = boundary_ray, .options = options});
+  ASSERT_EQ(two_sided.size(), 1U);
+  EXPECT_EQ(two_sided[0].kind, quader_poly::ElementKind::Edge);
+  options.pick_backfaces = false;
+  const std::array reflected{scaled_pick_transform(7, -1.0F, 1.0F, 1.0F)};
+  ASSERT_EQ(quader_editor_core::pick_mesh_depth_hits(
+                backfacing, {.ray = boundary_ray, .options = options}, {}, {},
+                reflected)
+                .size(),
+            1U);
+
+  auto hidden_stair = side_on_stair_object(8);
+  for (auto &face : hidden_stair.document.edit().faces) {
+    face.material_slot = kHiddenSlot;
+  }
+  const std::vector hidden_objects{hidden_stair};
+  const quader_poly::Ray stair_ray{{-64.0F, -0.125F, 0.1875F},
+                                  {1.0F, 0.0F, 0.0F}};
+  options.has_hidden_material_slot = true;
+  options.hidden_material_slot = kHiddenSlot;
+  const auto hidden_geometry =
+      quader_editor_core::build_pick_face_geometry(hidden_objects, options);
+  for (const bool backfaces : std::array{false, true}) {
+    options.pick_backfaces = backfaces;
+    EXPECT_TRUE(quader_editor_core::pick_mesh_depth_hits(
+                    hidden_objects, {.ray = stair_ray, .options = options}, {},
+                    hidden_geometry)
+                    .empty());
+  }
+  options.has_hidden_material_slot = false;
+  options.pick_backfaces = false;
+  ASSERT_EQ(quader_editor_core::pick_mesh_depth_hits(
+                hidden_objects, {.ray = stair_ray, .options = options})
+                .size(),
+            1U);
+
+  // Including grazing boundaries in the Mesh stack must not loosen ordinary
+  // Edge or Vertex eligibility, including their existing two-sided opt-in.
+  const quader_poly::Ray corner_ray{{-64.0F, 0.0F, 0.1875F},
+                                   {1.0F, 0.0F, 0.0F}};
+  for (const auto mode : std::array{quader_poly::SelectionMode::Edge,
+                                   quader_poly::SelectionMode::Vertex}) {
+    options.mode = mode;
+    options.pick_backfaces = false;
+    EXPECT_FALSE(quader_editor_core::pick_nearest(
+                     hidden_objects, {.ray = corner_ray, .options = options})
+                     .has_value());
+    options.pick_backfaces = true;
+    EXPECT_TRUE(quader_editor_core::pick_nearest(
+                    hidden_objects, {.ray = corner_ray, .options = options})
+                    .has_value());
+  }
+}
+
+TEST(QdrModelingRuntimePickingTests,
+     MeshDepthFallbackDoesNotPickTriangulationDiagonals) {
+  const std::vector objects{single_quad_object(7, false)};
+  const auto &vertices = objects[0].document.faces.front().vertices;
+  const auto boundary = quader_poly::make_edge(vertices[1], vertices[2]);
+  const auto face_geometry = quader_editor_core::build_pick_face_geometry(objects);
+  const auto options = quader_editor_core::selection_pick_options_from_radii(
+      0.05, 0.05, false);
+  // Start within the face plane: a triangulation diagonal crosses the ray
+  // before the authored right boundary, but cannot be a mesh fallback target.
+  const auto hits = quader_editor_core::pick_mesh_depth_hits(
+      objects,
+      {.ray = {{-0.5F, 0.0F, 0.0F}, {1.0F, 0.0F, 0.0F}},
+       .options = options},
+      {}, face_geometry);
+  ASSERT_EQ(hits.size(), 1U);
+  EXPECT_EQ(hits[0].kind, quader_poly::ElementKind::Edge);
+  EXPECT_EQ(hits[0].edge, boundary);
+  EXPECT_FLOAT_EQ(hits[0].ray_distance, 1.5F);
+}
+
+TEST(QdrModelingRuntimePickingTests,
+     MeshDepthFallbackUsesWorldRadiusBeforeChoosingTransformedEdge) {
+  auto object = single_quad_object(7, false);
+  for (auto &vertex : object.document.edit().vertices) {
+    vertex.position = {vertex.position.x, 0.02F, vertex.position.y};
+  }
+  const std::array valid_vertices{
+      quader_poly::add_vertex(object.document, {-1.0F, -1.0F, 0.5F}),
+      quader_poly::add_vertex(object.document, {1.0F, -1.0F, 0.5F}),
+      quader_poly::add_vertex(object.document, {1.0F, 1.0F, 0.5F}),
+      quader_poly::add_vertex(object.document, {-1.0F, 1.0F, 0.5F}),
+  };
+  ASSERT_NE(quader_poly::add_face(object.document, valid_vertices),
+            quader_poly::kInvalidElementId);
+  const std::vector objects{object};
+  const std::array transforms{scaled_pick_transform(7, -2.0F, 10.0F, 0.1F)};
+  const std::array bounds{quader_editor_core::PickObjectBounds{
+      .object_id = 7,
+      .empty = false,
+      .min = {-2.0F, -10.0F, -0.1F},
+      .max = {2.0F, 10.0F, 0.1F},
+  }};
+  const auto face_geometry = quader_editor_core::build_pick_face_geometry(objects);
+  quader_editor_core::PickRequest request{
+      .ray = {{-8.0F, 0.0F, 0.0F}, {1.0F, 0.0F, 0.0F}},
+      .options = quader_editor_core::selection_pick_options_from_radii(
+          0.1, 0.1, false),
+  };
+  // The first quad is closer locally (.02 versus .5), but outside the world
+  // radius (.2 versus .05). Rejecting only a single local winner loses the hit.
+  const auto hits = quader_editor_core::pick_mesh_depth_hits(
+      objects, request, bounds, face_geometry, transforms);
+  ASSERT_EQ(hits.size(), 1U);
+  EXPECT_EQ(hits[0].kind, quader_poly::ElementKind::Edge);
+  EXPECT_EQ(hits[0].edge,
+            quader_poly::make_edge(valid_vertices[1], valid_vertices[2]));
+  EXPECT_NEAR(hits[0].pick_distance, 0.05F, 0.000001F);
+  EXPECT_FLOAT_EQ(hits[0].ray_distance, 6.0F);
+  request.options.edge_radius = 0.01F;
+  EXPECT_TRUE(quader_editor_core::pick_mesh_depth_hits(
+                  objects, request, bounds, face_geometry, transforms)
+                  .empty());
+}
+
+TEST(QdrModelingRuntimePickingTests,
+     MeshDepthFallbackRejectsBoundariesBehindRayOrigin) {
+  auto object = single_quad_object(7, false);
+  for (auto &vertex : object.document.edit().vertices) {
+    vertex.position = {vertex.position.x, 0.0F,
+                       -0.125F + vertex.position.y * 0.025F};
+  }
+  const std::vector objects{object};
+  const std::array bounds{pick_bounds_for_object(object)};
+  const auto face_geometry = quader_editor_core::build_pick_face_geometry(objects);
+  quader_editor_core::PickRequest request{
+      .ray = {{0.0F, 0.0F, 0.0F}, {0.0F, 0.0F, 1.0F}},
+      .options = quader_editor_core::selection_pick_options_from_radii(
+          0.2, 0.2, false),
+  };
+  // The radius reaches this grazing quad behind the ray origin. A closest
+  // ray point clamped to distance zero must not admit a negative-depth edge.
+  EXPECT_TRUE(quader_editor_core::pick_mesh_depth_hits(objects, request).empty());
+  EXPECT_TRUE(quader_editor_core::pick_mesh_depth_hits(
+                  objects, request, bounds, face_geometry)
+                  .empty());
+  request.ray.direction = {0.0F, 0.0F, -1.0F};
+  const auto forward_hits = quader_editor_core::pick_mesh_depth_hits(
+      objects, request, bounds, face_geometry);
+  ASSERT_EQ(forward_hits.size(), 1U);
+  EXPECT_EQ(forward_hits[0].kind, quader_poly::ElementKind::Edge);
+  EXPECT_NEAR(forward_hits[0].ray_distance, 0.1F, 0.000001F);
+}
+
+TEST(QdrModelingRuntimePickingTests,
+     MeshDepthFallbackRotatedNonuniformBoundsMatchWorldSpacePicking) {
+  auto object = single_quad_object(7, false);
+  for (auto &vertex : object.document.edit().vertices) {
+    vertex.position = {0.0F, vertex.position.x, vertex.position.y};
+  }
+  const std::vector objects{object};
+  const auto face_geometry = quader_editor_core::build_pick_face_geometry(objects);
+  const float diagonal = std::sqrt(0.5F);
+  auto transform = scaled_pick_transform(7, 0.1F, 1.0F, 1.0F);
+  // Rz(45 degrees) * Scale(.1, 1, 1), and its matching inverse.
+  transform.world_from_object.values[0] = 0.1F * diagonal;
+  transform.world_from_object.values[1] = 0.1F * diagonal;
+  transform.world_from_object.values[4] = -diagonal;
+  transform.world_from_object.values[5] = diagonal;
+  transform.object_from_world.values[0] = 10.0F * diagonal;
+  transform.object_from_world.values[1] = -diagonal;
+  transform.object_from_world.values[4] = 10.0F * diagonal;
+  transform.object_from_world.values[5] = diagonal;
+  const std::array transforms{transform};
+  const std::array bounds{quader_editor_core::PickObjectBounds{
+      .object_id = 7,
+      .empty = false,
+      .min = {-diagonal, -diagonal, -1.0F},
+      .max = {diagonal, diagonal, 1.0F},
+  }};
+  const quader_editor_core::PickRequest request{
+      .ray = {{0.19F * diagonal, 0.19F * diagonal, -4.0F},
+              {0.0F, 0.0F, 1.0F}},
+      .options = quader_editor_core::selection_pick_options_from_radii(
+          0.2, 0.2, false),
+  };
+  const auto cached_hits = quader_editor_core::pick_mesh_depth_hits(
+      objects, request, bounds, face_geometry, transforms);
+  ASSERT_EQ(cached_hits.size(), 1U);
+  EXPECT_EQ(cached_hits[0].kind, quader_poly::ElementKind::Edge);
+  EXPECT_NEAR(cached_hits[0].pick_distance, 0.19F, 0.000001F);
+  EXPECT_FLOAT_EQ(cached_hits[0].ray_distance, 3.0F);
+  // Local ray X is 1.9: max inverse-column length gives only 1.4213 of
+  // padding, although the world-space boundary is inside the .2 radius.
+  const auto uncached_hits = quader_editor_core::pick_mesh_depth_hits(
+      objects, request, {}, face_geometry, transforms);
+  ASSERT_EQ(uncached_hits.size(), 1U);
+  EXPECT_EQ(uncached_hits[0].edge, cached_hits[0].edge);
+  EXPECT_NEAR(uncached_hits[0].pick_distance, cached_hits[0].pick_distance,
+              0.000001F);
+  EXPECT_FLOAT_EQ(uncached_hits[0].ray_distance, cached_hits[0].ray_distance);
 }

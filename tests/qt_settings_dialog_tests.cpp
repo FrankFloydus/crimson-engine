@@ -2580,6 +2580,13 @@ TEST(QtMainWindowTests, MenuExitAndNativeCloseShareOneRequestBoundary) {
 
   QtMainWindow main_window;
   main_window.setAttribute(Qt::WA_DontShowOnScreen, true);
+  const Qt::WindowFlags window_flags = main_window.windowFlags();
+  EXPECT_TRUE(window_flags.testFlag(Qt::WindowTitleHint));
+  EXPECT_TRUE(window_flags.testFlag(Qt::WindowSystemMenuHint));
+  EXPECT_TRUE(window_flags.testFlag(Qt::WindowMinimizeButtonHint));
+  EXPECT_TRUE(window_flags.testFlag(Qt::WindowMaximizeButtonHint));
+  EXPECT_TRUE(window_flags.testFlag(Qt::WindowCloseButtonHint));
+  EXPECT_FALSE(window_flags.testFlag(Qt::FramelessWindowHint));
   bool allow_close = false;
   int close_requests = 0;
   main_window.set_close_request_handler([&]() {

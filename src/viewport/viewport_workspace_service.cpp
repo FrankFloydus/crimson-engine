@@ -190,7 +190,10 @@ bool ViewportWorkspaceService::set_grid_preset(int preset) {
 
 ViewportShadingMode
 ViewportWorkspaceService::shading_mode(ViewportPaneId pane_id) const {
-  return pane(pane_id).shading;
+  const ViewportWorkspacePaneState &pane_state = pane(pane_id);
+  return pane_state.camera.state().projection == ViewportProjection::Orthographic
+             ? pane_state.orthographic_shading
+             : pane_state.perspective_shading;
 }
 
 bool ViewportWorkspaceService::set_shading_mode(ViewportPaneId pane_id,
@@ -199,10 +202,14 @@ bool ViewportWorkspaceService::set_shading_mode(ViewportPaneId pane_id,
     return false;
   }
   ViewportWorkspacePaneState &pane_state = pane(pane_id);
-  if (pane_state.shading == mode) {
+  ViewportShadingMode &current =
+      pane_state.camera.state().projection == ViewportProjection::Orthographic
+          ? pane_state.orthographic_shading
+          : pane_state.perspective_shading;
+  if (current == mode) {
     return false;
   }
-  pane_state.shading = mode;
+  current = mode;
   return true;
 }
 

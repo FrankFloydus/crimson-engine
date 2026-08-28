@@ -20,8 +20,8 @@ namespace quader {
 class QuaderApiMutationRunner;
 
 /**
- * Stores an opaque selection baseline for one deferred viewport box-selection
- * commit.
+ * Stores an opaque press-time selection baseline for a deferred viewport box
+ * or modified depth-pick commit.
  */
 class QuaderSelectionBoxBaseline final {
 public:
@@ -106,6 +106,10 @@ public:
 
     QuaderApiResult<QuaderSelectionSummary>
     pick_select(const QuaderPickSelectRequest &request);
+    /// Applies a depth pick relative to selection before its first mouse click.
+    QuaderApiResult<QuaderSelectionSummary>
+    pick_select(const QuaderPickSelectRequest &request,
+                const QuaderSelectionBoxBaseline &baseline);
     [[nodiscard]] QuaderSelectionBoxBaseline
     capture_box_selection_baseline() const;
     QuaderApiResult<QuaderSelectionSummary>
@@ -129,6 +133,9 @@ public:
     preview_hover(const QuaderHoverRequest &request) const;
 
   private:
+    QuaderApiResult<QuaderSelectionSummary>
+    pick_select(const QuaderPickSelectRequest &request,
+                const QuaderSelectionBoxBaseline *baseline);
     [[nodiscard]] QuaderApiResult<QuaderHoverSummary>
     direct_hover(QuaderModelingObjectRef object, QuaderActiveSelectionKind kind,
                  QuaderElementId vertex, QuaderElementId edge_a,

@@ -686,8 +686,11 @@ QuaderSceneDocumentsApi::active_scene() const {
 
 std::optional<SceneSessionId>
 QuaderSceneDocumentsApi::active_scene_id() const {
-  const std::optional<QuaderSceneDocumentInfo> active = active_scene();
-  return active.has_value() ? std::optional(active->session_id) : std::nullopt;
+  if (impl_->project_session == nullptr) {
+    return impl_->standalone_session_id;
+  }
+  const SceneSessionId active = impl_->project_session->active_scene_id();
+  return active.valid() ? std::optional(active) : std::nullopt;
 }
 
 bool QuaderSceneDocumentsApi::has_active_scene() const {

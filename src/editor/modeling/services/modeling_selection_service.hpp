@@ -14,6 +14,7 @@
 #include <functional>
 #include <optional>
 #include <span>
+#include <string>
 #include <unordered_map>
 #include <vector>
 
@@ -83,6 +84,8 @@ public:
   }
 
   void invalidate_picking_cache() const;
+  /// Clears only transient depth-click continuity, retaining pick geometry.
+  void reset_depth_pick_cycle() const;
   [[nodiscard]] std::uint64_t
   transformed_picking_projection_build_count() const;
   [[nodiscard]] std::uint64_t
@@ -138,6 +141,12 @@ public:
                  const SceneDocument &scene,
                  const ModelingObjectRuntimeMap &object_map,
                  const ModelingPickSelectRequest &request) const;
+  /// Resolves and deduplicates instance targets before Object-mode depth cycling.
+  [[nodiscard]] std::optional<EntityId> pick_object_entity(
+      const quader_editor_core::EditorSession &session,
+      const SceneDocument &scene,
+      const ModelingObjectRuntimeMap &object_map,
+      const ModelingPickSelectRequest &request) const;
   [[nodiscard]] std::optional<quader_editor_core::PickHitRecord>
   pick_surface_hit(const quader_editor_core::EditorSession &session,
                    const SceneDocument &scene,
@@ -184,6 +193,12 @@ public:
                     const quader_poly::Selection &right);
 
 private:
+  void synchronize_depth_pick_cycle(
+      const quader_editor_core::EditorSession &session,
+      const SceneDocument &scene,
+      const ModelingObjectRuntimeMap &object_map,
+      const ModelingPickSelectRequest &request) const;
+
   /**
    * Caches screen-space rectangle candidates for one geometry/camera key.
    */
@@ -257,6 +272,9 @@ private:
       quader_editor_core::SelectionMode selection_mode) const;
 
   mutable ModelingPickingCache picking_cache_;
+  mutable quader_editor_core::PickCycleState depth_pick_cycle_;
+  mutable std::string depth_pick_context_signature_;
+  mutable QVec3 depth_pick_origin_;
   mutable RectangleProjectionCache rectangle_projection_cache_;
   mutable RectangleUniverseCache rectangle_universe_cache_;
   mutable RectangleResolutionCache rectangle_resolution_cache_;

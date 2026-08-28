@@ -78,9 +78,11 @@ public:
     [[nodiscard]] bool vertex_has_front_facing_pickable_face(
         ElementId vertex_id,
         const Ray& ray) const;
+    /// Optionally admits grazing faces for mesh boundary picks, not components.
     [[nodiscard]] bool edge_has_front_facing_pickable_face(
         Edge edge,
-        const Ray& ray) const;
+        const Ray& ray,
+        bool include_edge_on = false) const;
     [[nodiscard]] ElementId best_edge_context_face_id(
         Edge edge,
         const Ray& ray) const;

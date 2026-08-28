@@ -73,7 +73,20 @@ ViewportBeforeToolInteractionResult
 ViewportInteractionController::handle_before_active_tool(
     QuaderEditorApi &editor, const ViewportInteractionFrame &frame) {
   QDR_PROFILE_FUNCTION();
-  return transform_gizmo_.handle_frame(editor, frame);
+  ViewportInteractionFrame prepared = frame;
+  const std::optional<ViewportInteractionSelectionState> resolved_selection =
+      selection_.prepare_frame(editor, frame);
+  if (resolved_selection.has_value()) {
+    prepared.selection_state = *resolved_selection;
+  }
+  if (frame.input_result.cancel_requested) {
+    (void)transform_gizmo_.cancel_active_drag(editor);
+    return {.gizmo_consumed = true};
+  }
+  ViewportBeforeToolInteractionResult result =
+      transform_gizmo_.handle_frame(editor, prepared);
+  result.selection_after_pending_pick = resolved_selection;
+  return result;
 }
 
 void ViewportInteractionController::handle_after_active_tool(
@@ -82,8 +95,15 @@ void ViewportInteractionController::handle_after_active_tool(
     const ViewportBeforeToolInteractionResult &before_tool,
     ViewportToolHoverPort *tool_hover) {
   QDR_PROFILE_FUNCTION();
-  handle_material_interactions(editor, frame, tool_result, before_tool);
-  selection_.handle_frame(editor, frame, tool_result, before_tool, tool_hover);
+  ViewportInteractionFrame prepared = frame;
+  if (before_tool.selection_after_pending_pick.has_value()) {
+    prepared.selection_state = *before_tool.selection_after_pending_pick;
+  }
+  if (frame.input_result.cancel_requested) {
+    (void)transform_gizmo_.cancel_active_drag(editor);
+  }
+  handle_material_interactions(editor, prepared, tool_result, before_tool);
+  selection_.handle_frame(editor, prepared, tool_result, before_tool, tool_hover);
 }
 
 void ViewportInteractionController::handle_material_interactions(
@@ -244,6 +264,10 @@ void ViewportInteractionController::handle_material_interactions(
 
 void ViewportInteractionController::cancel_pending_material_interaction() {
   pending_apply_active_material_.reset();
+}
+
+void ViewportInteractionController::cancel_pending_selection_click() {
+  selection_.cancel_pending_click();
 }
 
 QuaderSelectionSummary ViewportInteractionController::pick_context_menu_target(

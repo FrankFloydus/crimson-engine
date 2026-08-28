@@ -65,8 +65,7 @@ struct EditorSelectionState {
 };
 
 /**
- * Stores the press-time selection baseline used by one deferred box-selection
- * commit.
+ * Stores the press-time selection baseline used by a deferred box or depth pick.
  */
 struct EditorSelectionBoxBaseline {
     ModelingSelectionMode mode = ModelingSelectionMode::Object;
@@ -133,6 +132,9 @@ public:
   [[nodiscard]] ModelingSelectionSummary
   pick_select(const ModelingPickSelectRequest &request);
   [[nodiscard]] ModelingSelectionSummary
+  pick_select(const ModelingPickSelectRequest &request,
+              const EditorSelectionBoxBaseline &baseline);
+  [[nodiscard]] ModelingSelectionSummary
   box_select(const ModelingBoxSelectRequest &request);
   [[nodiscard]] ModelingSelectionSummary
   box_select(const ModelingBoxSelectRequest &request,
@@ -144,6 +146,9 @@ public:
   ModelingCommandResult clear_hover();
 
 private:
+  [[nodiscard]] ModelingSelectionSummary
+  pick_select(const ModelingPickSelectRequest &request,
+              const EditorSelectionBoxBaseline *baseline);
   [[nodiscard]] bool scene_target_selectable(EntityId entity) const;
   [[nodiscard]] std::vector<EntityId>
   scene_bulk_candidates(ModelingSelectionMode mode) const;
@@ -154,7 +159,8 @@ private:
              const EditorSelectionBoxBaseline *baseline);
   [[nodiscard]] ModelingSelectionSummary
   scene_pick_selection(EntityId target_entity, ModelingSelectionMode mode,
-                       const ModelingPickSelectRequest &request);
+                       const ModelingPickSelectRequest &request,
+                       const EditorSelectionBoxBaseline *baseline = nullptr);
   [[nodiscard]] ModelingSelectionSummary
   scene_box_selection(std::span<const EntityId> target_entities,
                       ModelingSelectionMode mode, ModelingSelectionEdit edit,

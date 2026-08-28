@@ -10,6 +10,7 @@
 #include "editor/input/quader_keybinding_service.hpp"
 #include "editor/input/viewport_keybinding_resolver.hpp"
 #include "editor/input/viewport_input_binding_adapter.hpp"
+#include "editor/session/project_session.hpp"
 #include "math/glm_bridge.hpp"
 #include "editor/viewport/quader_viewport_api_runtime_access.hpp"
 #include "support/behavior_scenario.hpp"
@@ -31,6 +32,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <limits>
 #include <optional>
 #include <span>
 #include <string>
@@ -272,6 +274,17 @@ create_polygon_mesh(quader::QuaderEditorApi &editor, std::size_t side_count,
           quader::QuaderPolygonDocumentInternalAccess::from_backend(
               std::move(document)),
           quader::QuaderCreateMeshArgs{.name = std::move(name)});
+  EXPECT_TRUE(created.ok()) << created.error_message();
+  return created.value();
+}
+
+quader::QuaderModelingObjectRef
+create_depth_pick_box(quader::QuaderEditorApi &editor, float depth,
+                      std::string name) {
+  const auto created = editor.modeling().create_box(
+      quader::QuaderBounds{.min = {-1.0f, -1.0f, depth - 1.0f},
+                           .max = {1.0f, 1.0f, depth + 1.0f}},
+      std::move(name));
   EXPECT_TRUE(created.ok()) << created.error_message();
   return created.value();
 }
@@ -672,6 +685,44 @@ quader::QuaderInputChord single_input_chord(std::string_view shortcut) {
   return parsed->front();
 }
 
+struct SelectionDepthBindingCase {
+  std::string_view target;
+  std::string_view shortcut;
+  std::string_view label;
+  quader::ViewportInputActionKind action;
+  quader::ViewportModifiers modifiers;
+};
+
+constexpr std::array<SelectionDepthBindingCase, 3> kSelectionDepthBindings{{
+    {"viewport.selection.cycle_depth", "LeftMouseDoubleClick",
+     "Cycle Mesh Selection Depth (Orthographic)",
+     quader::ViewportInputActionKind::CycleSelectionDepth, {}},
+    {"viewport.selection.add_depth", "Shift+LeftMouseDoubleClick",
+     "Add Mesh at Selection Depth (Orthographic)",
+     quader::ViewportInputActionKind::AddSelectionDepth, {.shift = true}},
+    {"viewport.selection.remove_depth", "Ctrl+LeftMouseDoubleClick",
+     "Remove Mesh at Selection Depth (Orthographic)",
+     quader::ViewportInputActionKind::RemoveSelectionDepth, {.primary = true}},
+}};
+
+void expect_selection_depth_input(const quader::ViewportInputFrame &input,
+                                  bool pressed,
+                                  quader::ViewportModifiers modifiers = {}) {
+  EXPECT_EQ(input.cycle_selection_depth_pressed, pressed);
+  EXPECT_EQ(input.cycle_selection_depth_modifiers.primary, modifiers.primary);
+  EXPECT_EQ(input.cycle_selection_depth_modifiers.shift, modifiers.shift);
+  EXPECT_EQ(input.cycle_selection_depth_modifiers.alt, modifiers.alt);
+}
+
+void expect_selection_click_delay(const quader::ViewportInputFrame &input,
+                                  bool delayed,
+                                  quader::ViewportModifiers modifiers = {}) {
+  EXPECT_EQ(input.selection_click_delay_for_double_click, delayed);
+  EXPECT_EQ(input.selection_click_modifiers.primary, modifiers.primary);
+  EXPECT_EQ(input.selection_click_modifiers.shift, modifiers.shift);
+  EXPECT_EQ(input.selection_click_modifiers.alt, modifiers.alt);
+}
+
 void expect_same_api_status(const quader::QuaderApiVoidResult &actual,
                             const quader::QuaderApiVoidResult &expected) {
   EXPECT_EQ(actual.ok(), expected.ok());
@@ -1034,6 +1085,31 @@ TEST(EditorApiTests, SceneDocumentCommandsRouteThroughSceneDocumentsApi) {
       [](quader::QuaderEditorApi &editor) {
         return editor.scene_documents().close_active();
       });
+}
+
+TEST(EditorApiTests,
+     ActiveSceneIdPreservesStandaloneIdentityAndEmptyProjectState) {
+  CommandTestHarness standalone;
+  auto &documents = standalone.editor.scene_documents();
+  const auto standalone_id = documents.active_scene_id();
+  ASSERT_TRUE(standalone_id.has_value());
+  ASSERT_TRUE(standalone_id->valid());
+  const auto replacement = documents.new_scene();
+  ASSERT_TRUE(replacement.ok()) << replacement.error_message();
+  EXPECT_EQ(replacement.value(), *standalone_id);
+  EXPECT_EQ(documents.active_scene_id(), standalone_id);
+  EXPECT_FALSE(documents.close_active().ok());
+  EXPECT_EQ(documents.active_scene_id(), standalone_id);
+  EXPECT_TRUE(documents.has_active_scene());
+
+  quader::ProjectSession project;
+  quader::QuaderEditorApi project_editor(project);
+  auto &project_documents = project_editor.scene_documents();
+  EXPECT_FALSE(project_documents.active_scene_id().has_value());
+  EXPECT_FALSE(project_documents.has_active_scene());
+  EXPECT_FALSE(project_documents.close_active().ok());
+  ASSERT_TRUE(project_editor.project().close().ok());
+  EXPECT_FALSE(project_documents.active_scene_id().has_value());
 }
 
 TEST(EditorApiTests,
@@ -4144,11 +4220,562 @@ TEST(EditorApiTests, ViewportNavigationActionCatalogDrivesDefaultsAndResolution)
     if (modal_only_action) {
       input_context.modal_tool_active = true;
     }
+    input_context.orthographic_view =
+        descriptor.when.find("viewport.orthographic") != std::string_view::npos;
     ASSERT_TRUE(editor.commands().resolve_viewport_input_action(
         parsed->front(), state, true, false, resolved_action, input_context))
         << descriptor.target_id;
     EXPECT_EQ(resolved_action, descriptor.action) << descriptor.target_id;
   }
+}
+
+TEST(EditorApiTests,
+     OrthographicSelectionDepthActionsUseFocusedMeshContext) {
+  CommandTestHarness harness;
+  quader::QuaderEditorApi &editor = harness.editor;
+  ASSERT_TRUE(editor.commands()
+                  .set_keybinding_storage_path(
+                      keybinding_test_path("orthographic-selection-depth"))
+                  .ok());
+
+  const auto catalog = editor.commands().keybinding_catalog();
+  const auto *material = find_keybinding_catalog_entry(
+      catalog, "viewport.material.sample_face");
+  const auto *cancel_navigation = find_keybinding_catalog_entry(
+      catalog, "viewport.navigation.cancel");
+  ASSERT_NE(material, nullptr);
+  ASSERT_NE(cancel_navigation, nullptr);
+
+  quader::ViewportToolState state;
+  const quader::QuaderViewportKeybindingContext orthographic{
+      .orthographic_view = true};
+  const auto resolve_action = [&](std::string_view shortcut,
+                                  quader::QuaderViewportKeybindingContext context,
+                                  bool focused = true,
+                                  bool text_input = false) {
+    quader::ViewportInputActionKind action =
+        quader::ViewportInputActionKind::None;
+    const bool matched = editor.commands().resolve_viewport_input_action(
+        single_input_chord(shortcut), state, focused, text_input, action, context);
+    return matched ? action : quader::ViewportInputActionKind::None;
+  };
+  for (const auto &binding : kSelectionDepthBindings) {
+    SCOPED_TRACE(binding.target);
+    const auto *entry = find_keybinding_catalog_entry(catalog, binding.target);
+    ASSERT_NE(entry, nullptr);
+    EXPECT_EQ(entry->shortcut, binding.shortcut);
+    EXPECT_EQ(entry->default_shortcut, binding.shortcut);
+    EXPECT_EQ(entry->action_id, binding.target);
+    EXPECT_EQ(entry->target_ids.size(), 1u);
+    EXPECT_EQ(entry->scope_id, "viewport.selection.object");
+    EXPECT_EQ(entry->label, binding.label);
+    EXPECT_NE(entry->when.find("viewport.orthographic"), std::string::npos);
+    EXPECT_NE(entry->when.find("selectionMode.object"), std::string::npos);
+    EXPECT_FALSE(editor.commands().descriptor(binding.target).has_value());
+
+    for (const auto mode : {quader::ViewportSelectionMode::Vertex,
+                            quader::ViewportSelectionMode::Edge,
+                            quader::ViewportSelectionMode::Face,
+                            quader::ViewportSelectionMode::Object,
+                            quader::ViewportSelectionMode::Group}) {
+      state.selection_mode = mode;
+      EXPECT_EQ(resolve_action(binding.shortcut, orthographic),
+                mode == quader::ViewportSelectionMode::Object
+                    ? binding.action
+                    : quader::ViewportInputActionKind::None);
+      EXPECT_EQ(resolve_action(binding.shortcut, {}),
+                quader::ViewportInputActionKind::None);
+    }
+    state.selection_mode = quader::ViewportSelectionMode::Object;
+    EXPECT_EQ(resolve_action(binding.shortcut, orthographic, false),
+              quader::ViewportInputActionKind::None);
+    EXPECT_EQ(resolve_action(binding.shortcut, orthographic, true, true),
+              quader::ViewportInputActionKind::None);
+    for (const auto blocked_member : {
+             &quader::QuaderViewportKeybindingContext::navigation_active,
+             &quader::QuaderViewportKeybindingContext::modal_tool_active,
+             &quader::QuaderViewportKeybindingContext::active_tool_owns_viewport,
+             &quader::QuaderViewportKeybindingContext::active_transform_drag,
+             &quader::QuaderViewportKeybindingContext::operation_preview_active}) {
+      auto blocked = orthographic;
+      blocked.*blocked_member = true;
+      EXPECT_EQ(resolve_action(binding.shortcut, blocked),
+                quader::ViewportInputActionKind::None);
+    }
+
+    const auto conflict = editor.commands().analyze_shortcut_assignment(
+        material->key, binding.shortcut);
+    ASSERT_TRUE(conflict.ok);
+    ASSERT_EQ(conflict.conflicts.size(), 1u);
+    EXPECT_EQ(conflict.conflicts.front().action, entry->key);
+    EXPECT_EQ(conflict.conflicts.front().kind,
+              quader::QuaderKeybindingCollisionKind::ExactConflict);
+    const auto compatible = editor.commands().analyze_shortcut_assignment(
+        cancel_navigation->key, binding.shortcut);
+    ASSERT_TRUE(compatible.ok);
+    EXPECT_TRUE(compatible.conflicts.empty());
+    ASSERT_EQ(compatible.compatible_reuses.size(), 1u);
+    EXPECT_EQ(compatible.compatible_reuses.front().action, entry->key);
+  }
+  for (const std::string_view shortcut : {
+           "PageDown", "LeftMouse", "LeftMouseClick",
+           "Shift+LeftMouseClick", "Ctrl+LeftMouseClick",
+           "Alt+LeftMouseDoubleClick",
+           "Ctrl+Shift+LeftMouseDoubleClick", "Ctrl+Alt+LeftMouseDoubleClick",
+           "Shift+Alt+LeftMouseDoubleClick",
+           "Ctrl+Shift+Alt+LeftMouseDoubleClick"}) {
+    EXPECT_EQ(resolve_action(shortcut, orthographic),
+              quader::ViewportInputActionKind::None)
+        << shortcut;
+  }
+}
+
+TEST(EditorApiTests,
+     OrthographicSelectionDepthResolverMarksOnlyOneShotFlags) {
+  CommandTestHarness harness;
+  quader::QuaderEditorApi &editor = harness.editor;
+  ASSERT_TRUE(editor.commands()
+                  .set_keybinding_storage_path(
+                      keybinding_test_path("orthographic-depth-input-frame"))
+                  .ok());
+
+  quader::ViewportToolState state;
+  std::vector<quader::QuaderInputChord> suppressed_chords;
+  double linear_array_wheel_remainder = 0.0;
+  double radial_array_wheel_remainder = 0.0;
+  const auto resolve_frame = [&](quader::ViewportInputFrame &input) {
+    quader::ViewportKeybindingResolver::resolve(
+        editor, state, input, suppressed_chords, linear_array_wheel_remainder,
+        radial_array_wheel_remainder);
+  };
+  for (const auto &binding : kSelectionDepthBindings) {
+    SCOPED_TRACE(binding.target);
+    state.selection_mode = quader::ViewportSelectionMode::Object;
+    quader::ViewportInputFrame input;
+    input.viewport_focused = true;
+    input.orthographic_view = true;
+    input.modifiers = {.primary = true, .shift = true, .alt = true};
+    const auto double_click = single_input_chord(binding.shortcut);
+    input.pressed_input_chords.push_back(double_click);
+    resolve_frame(input);
+    expect_selection_depth_input(input, true, binding.modifiers);
+    expect_selection_click_delay(input, false);
+    EXPECT_FALSE(input.sample_face_material_pressed);
+    EXPECT_FALSE(input.apply_active_material_to_selection_pressed);
+    EXPECT_FALSE(input.apply_face_material_to_mesh_pressed);
+    EXPECT_FALSE(input.keybinding_input_consumed);
+    EXPECT_TRUE(input.resolved_shortcuts.empty());
+
+    auto first_press = double_click;
+    first_press.gesture = quader::QuaderInputGesture::Press;
+    auto first_click = double_click;
+    first_click.gesture = quader::QuaderInputGesture::Click;
+    input.pressed_input_chords = {first_press, first_click, double_click};
+    input.modifiers = {};
+    resolve_frame(input);
+    expect_selection_depth_input(input, true, binding.modifiers);
+    expect_selection_click_delay(input, true, binding.modifiers);
+
+    input.pressed_input_chords.clear();
+    input.active_input_chords.push_back(double_click);
+    input.released_input_chords.push_back(double_click);
+    resolve_frame(input);
+    expect_selection_depth_input(input, false);
+    expect_selection_click_delay(input, false);
+
+    input.active_input_chords.clear();
+    input.released_input_chords.clear();
+    input.pressed_input_chords.push_back(double_click);
+    input.orthographic_view = false;
+    resolve_frame(input);
+    expect_selection_depth_input(input, false);
+    input.orthographic_view = true;
+    for (const auto mode : {quader::ViewportSelectionMode::Vertex,
+                            quader::ViewportSelectionMode::Edge,
+                            quader::ViewportSelectionMode::Face,
+                            quader::ViewportSelectionMode::Group}) {
+      state.selection_mode = mode;
+      resolve_frame(input);
+      expect_selection_depth_input(input, false);
+      EXPECT_FALSE(input.keybinding_input_consumed);
+    }
+    state.selection_mode = quader::ViewportSelectionMode::Object;
+    resolve_frame(input);
+    expect_selection_depth_input(input, true, binding.modifiers);
+    for (const auto blocked_member : {
+             &quader::ViewportInputFrame::text_input_active,
+             &quader::ViewportInputFrame::navigation_active,
+             &quader::ViewportInputFrame::modal_tool_active,
+             &quader::ViewportInputFrame::active_tool_owns_viewport,
+             &quader::ViewportInputFrame::active_transform_drag,
+             &quader::ViewportInputFrame::operation_preview_active}) {
+      input.*blocked_member = true;
+      resolve_frame(input);
+      expect_selection_depth_input(input, false);
+      input.*blocked_member = false;
+    }
+    input.viewport_focused = false;
+    resolve_frame(input);
+    expect_selection_depth_input(input, false);
+  }
+
+  quader::ViewportInputFrame input;
+  input.viewport_focused = true;
+  input.orthographic_view = true;
+  input.pressed_input_chords = {
+      single_input_chord("Ctrl+LeftMouseDoubleClick"),
+      single_input_chord("LeftMouseDoubleClick"),
+  };
+  resolve_frame(input);
+  expect_selection_depth_input(input, true);
+}
+
+TEST(EditorApiTests,
+     OrthographicSelectionDepthFirstClickDelayUsesBindingContext) {
+  CommandTestHarness harness;
+  quader::QuaderEditorApi &editor = harness.editor;
+  ASSERT_TRUE(editor.commands()
+                  .set_keybinding_storage_path(
+                      keybinding_test_path("orthographic-depth-click-delay"))
+                  .ok());
+  quader::ViewportToolState state;
+  std::vector<quader::QuaderInputChord> suppressed_chords;
+  double linear_array_wheel_remainder = 0.0;
+  double radial_array_wheel_remainder = 0.0;
+  const auto resolve_frame = [&](quader::ViewportInputFrame &input) {
+    quader::ViewportKeybindingResolver::resolve(
+        editor, state, input, suppressed_chords, linear_array_wheel_remainder,
+        radial_array_wheel_remainder);
+  };
+
+  for (const auto &binding : kSelectionDepthBindings) {
+    SCOPED_TRACE(binding.target);
+    quader::ViewportInputFrame input;
+    input.viewport_focused = true;
+    input.orthographic_view = true;
+    input.modifiers = {.primary = true, .shift = true, .alt = true};
+    auto click = single_input_chord(binding.shortcut);
+    for (const auto gesture : {quader::QuaderInputGesture::Press,
+                               quader::QuaderInputGesture::Click}) {
+      click.gesture = gesture;
+      input.pressed_input_chords = {click};
+      resolve_frame(input);
+      expect_selection_click_delay(input, true, binding.modifiers);
+      expect_selection_depth_input(input, false);
+      EXPECT_FALSE(input.keybinding_input_consumed);
+    }
+
+    input.pressed_input_chords.clear();
+    input.active_input_chords = {click};
+    input.released_input_chords = {click};
+    resolve_frame(input);
+    expect_selection_click_delay(input, false);
+    input.active_input_chords.clear();
+    input.released_input_chords.clear();
+    input.pressed_input_chords = {click};
+    input.modifiers = {};
+    resolve_frame(input);
+    expect_selection_click_delay(input, true, binding.modifiers);
+
+    input.orthographic_view = false;
+    resolve_frame(input);
+    expect_selection_click_delay(input, false);
+    input.orthographic_view = true;
+    for (const auto mode : {quader::ViewportSelectionMode::Vertex,
+                            quader::ViewportSelectionMode::Edge,
+                            quader::ViewportSelectionMode::Face,
+                            quader::ViewportSelectionMode::Group}) {
+      state.selection_mode = mode;
+      resolve_frame(input);
+      expect_selection_click_delay(input, false);
+    }
+    state.selection_mode = quader::ViewportSelectionMode::Object;
+    for (const auto blocked_member : {
+             &quader::ViewportInputFrame::text_input_active,
+             &quader::ViewportInputFrame::navigation_active,
+             &quader::ViewportInputFrame::modal_tool_active,
+             &quader::ViewportInputFrame::active_tool_owns_viewport,
+             &quader::ViewportInputFrame::active_transform_drag,
+             &quader::ViewportInputFrame::operation_preview_active,
+             &quader::ViewportInputFrame::keybinding_input_consumed}) {
+      input.*blocked_member = true;
+      resolve_frame(input);
+      expect_selection_click_delay(input, false);
+      input.*blocked_member = false;
+    }
+    input.viewport_focused = false;
+    resolve_frame(input);
+    expect_selection_click_delay(input, false);
+  }
+}
+
+TEST(EditorApiTests,
+     OrthographicSelectionDepthFirstClickDelayFollowsOverridesAndConsumption) {
+  CommandTestHarness harness;
+  quader::QuaderEditorApi &editor = harness.editor;
+  ASSERT_TRUE(editor.commands()
+                  .set_keybinding_storage_path(
+                      keybinding_test_path("orthographic-depth-delay-overrides"))
+                  .ok());
+  const auto catalog = editor.commands().keybinding_catalog();
+  const auto *add = find_keybinding_catalog_entry(
+      catalog, "viewport.selection.add_depth");
+  const auto *sample = find_keybinding_catalog_entry(
+      catalog, "viewport.material.sample_face");
+  const auto *cycle = find_keybinding_catalog_entry(
+      catalog, "viewport.selection.cycle_depth");
+  const auto *remove = find_keybinding_catalog_entry(
+      catalog, "viewport.selection.remove_depth");
+  ASSERT_NE(add, nullptr);
+  ASSERT_NE(sample, nullptr);
+  ASSERT_NE(cycle, nullptr);
+  ASSERT_NE(remove, nullptr);
+  const auto resolve_chords = [&](std::vector<quader::QuaderInputChord> chords) {
+    quader::ViewportInputFrame input;
+    input.viewport_focused = true;
+    input.orthographic_view = true;
+    input.pressed_input_chords = std::move(chords);
+    std::vector<quader::QuaderInputChord> suppressed_chords;
+    double linear_array_wheel_remainder = 0.0;
+    double radial_array_wheel_remainder = 0.0;
+    quader::ViewportKeybindingResolver::resolve(
+        editor, {}, input, suppressed_chords, linear_array_wheel_remainder,
+        radial_array_wheel_remainder);
+    return input;
+  };
+  const auto resolve = [&](std::string_view shortcut) {
+    return resolve_chords({single_input_chord(shortcut)});
+  };
+
+  ASSERT_TRUE(editor.preferences()
+                  .set_action_shortcut(cycle->key, "F24")
+                  .ok());
+  ASSERT_TRUE(editor.preferences().remove_action_shortcut(remove->key).ok());
+  // A plain first click can become a Shift double-click even when plain depth
+  // cycling has moved elsewhere or is unassigned.
+  for (const auto shortcut : {"LeftMouse", "LeftMouseClick"}) {
+    expect_selection_click_delay(resolve(shortcut), true);
+  }
+  ASSERT_TRUE(editor.preferences().remove_action_shortcut(cycle->key).ok());
+  expect_selection_click_delay(resolve("LeftMouseClick"), true);
+  expect_selection_click_delay(resolve("Ctrl+LeftMouseClick"), true,
+                               {.primary = true});
+  expect_selection_click_delay(resolve("Ctrl+Shift+Alt+LeftMouseClick"), true,
+                               {.primary = true, .shift = true, .alt = true});
+
+  ASSERT_TRUE(editor.preferences()
+                  .set_action_shortcut(add->key, "Alt+LeftMouseDoubleClick")
+                  .ok());
+  for (const auto shortcut : {"Shift+LeftMouse", "Shift+LeftMouseClick"}) {
+    expect_selection_click_delay(resolve(shortcut), true, {.shift = true});
+  }
+  for (const auto shortcut : {"Alt+LeftMouse", "Alt+LeftMouseClick"}) {
+    expect_selection_click_delay(resolve(shortcut), true, {.alt = true});
+  }
+  expect_selection_depth_input(resolve("Alt+LeftMouseDoubleClick"), true,
+                               {.shift = true});
+  for (const auto shortcut : {"Alt+LeftMouseDoubleClick", "Alt+LeftMouseDrag",
+                              "Alt+RightMouseClick", "Alt+Mouse4Click"}) {
+    expect_selection_click_delay(resolve(shortcut), false);
+  }
+
+  ASSERT_TRUE(editor.preferences()
+                  .set_action_shortcut(add->key, "Alt+Mouse4DoubleClick")
+                  .ok());
+  expect_selection_click_delay(resolve("Alt+LeftMouseClick"), false);
+  expect_selection_click_delay(resolve("Alt+Mouse4Click"), false);
+  ASSERT_TRUE(editor.preferences()
+                  .set_action_shortcut(add->key, "Alt+LeftMouseDoubleClick A")
+                  .ok());
+  expect_selection_click_delay(resolve("Alt+LeftMouseClick"), false);
+  ASSERT_TRUE(editor.preferences().remove_action_shortcut(add->key).ok());
+  expect_selection_click_delay(resolve("Shift+LeftMouseClick"), false);
+  expect_selection_click_delay(resolve("LeftMouseClick"), false);
+  ASSERT_TRUE(editor.preferences().reset_action_shortcut(add->key).ok());
+  expect_selection_click_delay(resolve("Shift+LeftMouseClick"), true,
+                               {.shift = true});
+
+  for (const auto shortcut : {"Shift+LeftMouse", "Shift+LeftMouseClick"}) {
+    ASSERT_TRUE(editor.preferences()
+                    .set_action_shortcut(sample->key, shortcut)
+                    .ok());
+    const auto input = resolve(shortcut);
+    EXPECT_TRUE(input.sample_face_material_pressed);
+    expect_selection_click_delay(input, false);
+  }
+  const auto coalesced = resolve_chords(
+      {single_input_chord("Shift+LeftMouse"),
+       single_input_chord("Shift+LeftMouseClick")});
+  EXPECT_TRUE(coalesced.sample_face_material_pressed);
+  expect_selection_click_delay(coalesced, false);
+
+  ASSERT_TRUE(editor.preferences().reset_action_shortcut(sample->key).ok());
+  const auto *grid = find_keybinding_catalog_entry(
+      catalog, quader::quader_command::kViewportToggleGrid.string());
+  ASSERT_NE(grid, nullptr);
+  ASSERT_TRUE(editor.preferences()
+                  .set_action_shortcut(grid->key, "Shift+LeftMouseClick A")
+                  .ok());
+  const auto pending_chord = resolve("Shift+LeftMouseClick");
+  EXPECT_TRUE(editor.commands().has_pending_keybinding_chord());
+  EXPECT_TRUE(pending_chord.keybinding_input_consumed);
+  expect_selection_click_delay(pending_chord, false);
+}
+
+TEST(EditorApiTests,
+     OrthographicSelectionDepthRebindingAndUnassignmentPersistWithContext) {
+  const auto resolve_frame = [](quader::QuaderEditorApi &owner,
+                                std::string_view shortcut,
+                                bool orthographic = true,
+                                quader::ViewportSelectionMode mode =
+                                    quader::ViewportSelectionMode::Object) {
+    quader::ViewportInputFrame input;
+    input.viewport_focused = true;
+    input.orthographic_view = orthographic;
+    input.modifiers = {.primary = true, .shift = true, .alt = true};
+    input.pressed_input_chords.push_back(single_input_chord(shortcut));
+    std::vector<quader::QuaderInputChord> suppressed_chords;
+    double linear_array_wheel_remainder = 0.0;
+    double radial_array_wheel_remainder = 0.0;
+    quader::ViewportToolState state;
+    state.selection_mode = mode;
+    quader::ViewportKeybindingResolver::resolve(
+        owner, state, input, suppressed_chords, linear_array_wheel_remainder,
+        radial_array_wheel_remainder);
+    return input;
+  };
+
+  for (const auto &binding : kSelectionDepthBindings) {
+    SCOPED_TRACE(binding.target);
+    const auto path = keybinding_test_path(
+        "orthographic-depth-rebinding-" + std::string(binding.target));
+    CommandTestHarness harness;
+    quader::QuaderEditorApi &editor = harness.editor;
+    ASSERT_TRUE(editor.commands().set_keybinding_storage_path(path).ok());
+
+    const auto catalog = editor.commands().keybinding_catalog();
+    const auto *entry = find_keybinding_catalog_entry(catalog, binding.target);
+    ASSERT_NE(entry, nullptr);
+    const auto action_key = entry->key;
+    const auto canonical_when = entry->when;
+    ASSERT_TRUE(editor.preferences()
+                    .set_action_shortcut(action_key, "Mouse4DoubleClick")
+                    .ok());
+    expect_selection_depth_input(resolve_frame(editor, binding.shortcut), false);
+    expect_selection_depth_input(resolve_frame(editor, "Mouse4DoubleClick"),
+                                 true, binding.modifiers);
+
+    CommandTestHarness reloaded_harness;
+    quader::QuaderEditorApi &reloaded = reloaded_harness.editor;
+    ASSERT_TRUE(reloaded.commands().set_keybinding_storage_path(path).ok());
+    expect_selection_depth_input(resolve_frame(reloaded, binding.shortcut),
+                                 false);
+    expect_selection_depth_input(resolve_frame(reloaded, "Mouse4DoubleClick"),
+                                 true, binding.modifiers);
+    expect_selection_depth_input(
+        resolve_frame(reloaded, "Mouse4DoubleClick", false), false);
+    const auto loaded_catalog = reloaded.commands().keybinding_catalog();
+    const auto *loaded =
+        find_keybinding_catalog_entry(loaded_catalog, binding.target);
+    ASSERT_NE(loaded, nullptr);
+    EXPECT_EQ(loaded->when, canonical_when);
+    EXPECT_EQ(loaded->scope_id, "viewport.selection.object");
+    EXPECT_EQ(loaded->source, quader::QuaderKeybindingSourceKind::User);
+    for (const auto &other : kSelectionDepthBindings) {
+      if (other.target != binding.target) {
+        expect_selection_depth_input(resolve_frame(reloaded, other.shortcut),
+                                     true, other.modifiers);
+      }
+    }
+
+    ASSERT_TRUE(reloaded.preferences().remove_action_shortcut(action_key).ok());
+    ASSERT_TRUE(editor.commands().set_keybinding_storage_path(path).ok());
+    expect_selection_depth_input(resolve_frame(editor, binding.shortcut), false);
+    expect_selection_depth_input(resolve_frame(editor, "Mouse4DoubleClick"),
+                                 false);
+    ASSERT_TRUE(editor.preferences().reset_action_shortcut(action_key).ok());
+    expect_selection_depth_input(resolve_frame(editor, binding.shortcut), true,
+                                 binding.modifiers);
+    expect_selection_depth_input(resolve_frame(editor, "Mouse4DoubleClick"),
+                                 false);
+
+    {
+      std::ofstream file(path);
+      file << "[{\"command\":\"" << binding.target
+           << "\",\"key\":\"Mouse4DoubleClick\",\"when\":\"true\"}]\n";
+    }
+    ASSERT_TRUE(reloaded.commands().set_keybinding_storage_path(path).ok());
+    expect_selection_depth_input(resolve_frame(reloaded, "Mouse4DoubleClick"),
+                                 true, binding.modifiers);
+    expect_selection_depth_input(
+        resolve_frame(reloaded, "Mouse4DoubleClick", false), false);
+    for (const auto mode : {quader::ViewportSelectionMode::Vertex,
+                            quader::ViewportSelectionMode::Edge,
+                            quader::ViewportSelectionMode::Face,
+                            quader::ViewportSelectionMode::Group}) {
+      expect_selection_depth_input(
+          resolve_frame(reloaded, "Mouse4DoubleClick", true, mode), false);
+    }
+    expect_selection_depth_input(resolve_frame(reloaded, binding.shortcut),
+                                 false);
+  }
+}
+
+TEST(EditorApiTests,
+     OrthographicSelectionDepthConflictReplacementKeepsIndependentActions) {
+  CommandTestHarness harness;
+  quader::QuaderEditorApi &editor = harness.editor;
+  ASSERT_TRUE(editor.commands()
+                  .set_keybinding_storage_path(
+                      keybinding_test_path("orthographic-depth-conflict"))
+                  .ok());
+  const auto catalog = editor.commands().keybinding_catalog();
+  const auto *add = find_keybinding_catalog_entry(
+      catalog, "viewport.selection.add_depth");
+  const auto *remove = find_keybinding_catalog_entry(
+      catalog, "viewport.selection.remove_depth");
+  ASSERT_NE(add, nullptr);
+  ASSERT_NE(remove, nullptr);
+
+  const auto conflict = editor.commands().analyze_shortcut_assignment(
+      add->key, remove->shortcut);
+  ASSERT_TRUE(conflict.ok);
+  ASSERT_EQ(conflict.conflicts.size(), 1u);
+  EXPECT_EQ(conflict.conflicts.front().action, remove->key);
+  EXPECT_FALSE(editor.preferences()
+                   .set_action_shortcut(
+                       add->key, remove->shortcut,
+                       quader::QuaderKeybindingConflictPolicy::Reject)
+                   .ok());
+  EXPECT_EQ(editor.commands().shortcut_for(add->action_id),
+            add->shortcut);
+
+  ASSERT_TRUE(editor.preferences()
+                  .set_action_shortcut(
+                      add->key, remove->shortcut,
+                      quader::QuaderKeybindingConflictPolicy::Replace)
+                  .ok());
+  const auto replaced = editor.commands().keybinding_catalog();
+  const auto *removed = find_keybinding_catalog_entry(
+      replaced, "viewport.selection.remove_depth");
+  ASSERT_NE(removed, nullptr);
+  EXPECT_TRUE(removed->unassigned);
+
+  quader::ViewportInputActionKind action =
+      quader::ViewportInputActionKind::None;
+  const quader::QuaderViewportKeybindingContext context{
+      .orthographic_view = true};
+  ASSERT_TRUE(editor.commands().resolve_viewport_input_action(
+      single_input_chord("Ctrl+LeftMouseDoubleClick"), {}, true, false, action,
+      context));
+  EXPECT_EQ(action, quader::ViewportInputActionKind::AddSelectionDepth);
+  EXPECT_FALSE(editor.commands().resolve_viewport_input_action(
+      single_input_chord("Shift+LeftMouseDoubleClick"), {}, true, false, action,
+      context));
+  ASSERT_TRUE(editor.commands().resolve_viewport_input_action(
+      single_input_chord("LeftMouseDoubleClick"), {}, true, false, action,
+      context));
+  EXPECT_EQ(action, quader::ViewportInputActionKind::CycleSelectionDepth);
 }
 
 TEST(EditorApiTests,
@@ -6065,6 +6692,689 @@ TEST(EditorApiTests, ObjectPickSelectionRoutesThroughDocumentHistory) {
               std::vector<quader::EntityId>{right.value().entity});
 }
 
+TEST(EditorApiTests, ObjectAndGroupPickingIgnoresInwardRoomBackfaces) {
+  for (const auto mode : {quader::QuaderSelectionMode::Object,
+                          quader::QuaderSelectionMode::Group}) {
+    for (const bool reflected : {false, true}) {
+      SCOPED_TRACE(static_cast<int>(mode));
+      SCOPED_TRACE(reflected);
+      CommandTestHarness harness;
+      quader::QuaderEditorApi &editor = harness.editor;
+      const auto room = editor.modeling().create_box(
+          quader::QuaderBounds{.min = {-5.0f, -5.0f, -5.0f},
+                               .max = {5.0f, 5.0f, 5.0f}},
+          "Inward Room");
+      ASSERT_TRUE(room.ok()) << room.error_message();
+      ASSERT_TRUE(editor.selection().select_object(room.value()).ok());
+      ASSERT_TRUE(editor.commands()
+                      .execute(quader::quader_command::kModelingFlipFaceNormals)
+                      .ok());
+      ASSERT_TRUE(editor.scene()
+                      .set_transform(
+                          room.value().entity,
+                          {.scale = {reflected ? -1.5f : 1.5f, 1.25f, 1.0f}})
+                      .ok());
+      const auto interior = create_depth_pick_box(editor, 0.0f, "Room Interior");
+      quader::QuaderPickSelectRequest pick;
+      pick.ray = {.origin = {0.0f, 0.0f, 12.0f},
+                  .direction = {0.0f, 0.0f, -1.0f}};
+
+      if (reflected) {
+        // Reflection reverses world winding. Flip once more so this room is
+        // inward-facing in world space, not merely in its local document.
+        pick.select_backfaces = false;
+        const auto reflected_pick = editor.selection().pick_select(pick);
+        ASSERT_TRUE(reflected_pick.ok()) << reflected_pick.error_message();
+        EXPECT_EQ(selected_entities(editor),
+                  std::vector<quader::EntityId>{room.value().entity});
+        ASSERT_TRUE(editor.selection().select_object(room.value()).ok());
+        ASSERT_TRUE(editor.commands()
+                        .execute(quader::quader_command::kModelingFlipFaceNormals)
+                        .ok());
+      }
+
+      quader::EntityId room_target = room.value().entity;
+      quader::EntityId interior_target = interior.entity;
+      if (mode == quader::QuaderSelectionMode::Group) {
+        ASSERT_TRUE(editor.selection().select_object(room.value()).ok());
+        const auto room_group = editor.scene().group_selection("Room Group");
+        ASSERT_TRUE(room_group.ok()) << room_group.error_message();
+        room_target = room_group.value().id;
+        ASSERT_TRUE(editor.selection().select_object(interior).ok());
+        const auto interior_group =
+            editor.scene().group_selection("Interior Group");
+        ASSERT_TRUE(interior_group.ok()) << interior_group.error_message();
+        interior_target = interior_group.value().id;
+      }
+      ASSERT_TRUE(editor.selection().set_mode(mode).ok());
+      ASSERT_TRUE(editor.selection().clear().ok());
+
+      pick.select_backfaces = true;
+      const auto two_sided = editor.selection().pick_select(pick);
+      ASSERT_TRUE(two_sided.ok()) << two_sided.error_message();
+      EXPECT_EQ(selected_entities(editor),
+                std::vector<quader::EntityId>{room_target});
+
+      // Ordinary Object/Group hover exposes no public component target. A
+      // face-plane preview exposes the hit face without changing the mode.
+      const quader::QuaderHoverRequest hover{
+          .ray = pick.ray,
+          .face_plane_hover = true,
+          .select_backfaces = false};
+      const auto preview = editor.selection().preview_hover(hover);
+      EXPECT_EQ(preview.target.kind, quader::QuaderActiveSelectionKind::Face);
+      EXPECT_EQ(preview.target.object_id, interior.modeling_object_id);
+      const auto hovered = editor.selection().hover(hover);
+      ASSERT_TRUE(hovered.ok()) << hovered.error_message();
+      EXPECT_EQ(hovered.value().target.kind,
+                quader::QuaderActiveSelectionKind::Face);
+      EXPECT_EQ(hovered.value().target.object_id, interior.modeling_object_id);
+
+      pick.select_backfaces = false;
+      const auto front_facing = editor.selection().pick_select(pick);
+      ASSERT_TRUE(front_facing.ok()) << front_facing.error_message();
+      EXPECT_EQ(selected_entities(editor),
+                std::vector<quader::EntityId>{interior_target});
+    }
+  }
+}
+
+TEST(EditorApiTests,
+     ModifiedObjectDepthPicksApplyOnlyTheirTargetToTheFirstClickBaseline) {
+  CommandTestHarness harness;
+  auto &editor = harness.editor;
+  const auto front = editor.modeling().create_box(
+      {.min = {-1.0f, -1.0f, 2.0f}, .max = {1.0f, 1.0f, 4.0f}});
+  const auto behind = editor.modeling().create_box(
+      {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}});
+  const auto other = editor.modeling().create_box(
+      {.min = {5.0f, 5.0f, -1.0f}, .max = {7.0f, 7.0f, 1.0f}});
+  ASSERT_TRUE(front.ok());
+  ASSERT_TRUE(behind.ok());
+  ASSERT_TRUE(other.ok());
+  ASSERT_TRUE(editor.selection().set_mode(quader::QuaderSelectionMode::Object).ok());
+  ASSERT_TRUE(editor.selection().select_object(other.value()).ok());
+
+  quader::QuaderPickSelectRequest pick{
+      .ray = {.origin = {0.0f, 0.0f, 10.0f},
+              .direction = {0.0f, 0.0f, -1.0f}}};
+  const auto add_baseline = editor.selection().capture_box_selection_baseline();
+  ASSERT_TRUE(editor.selection().pick_select(pick).ok());
+  ASSERT_EQ(selected_entities(editor),
+            std::vector<quader::EntityId>{front.value().entity});
+  pick.shift_pressed = true;
+  pick.cycle_depth = true;
+  ASSERT_TRUE(editor.selection().pick_select(pick, add_baseline).ok());
+  EXPECT_EQ(selected_entities(editor),
+            (std::vector<quader::EntityId>{behind.value().entity,
+                                         other.value().entity}));
+
+  ASSERT_TRUE(editor.selection()
+                  .select_object(front.value(), quader::QuaderSelectionEdit::Add)
+                  .ok());
+  const auto remove_baseline = editor.selection().capture_box_selection_baseline();
+  pick.shift_pressed = false;
+  pick.control_pressed = true;
+  pick.command_pressed = true;
+  pick.cycle_depth = false;
+  ASSERT_TRUE(editor.selection().pick_select(pick).ok());
+  pick.cycle_depth = true;
+  ASSERT_TRUE(editor.selection().pick_select(pick, remove_baseline).ok());
+  EXPECT_EQ(selected_entities(editor),
+            (std::vector<quader::EntityId>{front.value().entity,
+                                         other.value().entity}));
+
+  // A missed double must preserve the original selection, including when its
+  // first single had already cleared it before the semantic action arrived.
+  const auto miss_baseline = editor.selection().capture_box_selection_baseline();
+  pick.ray.origin.x = 20.0f;
+  pick.control_pressed = false;
+  pick.command_pressed = false;
+  pick.cycle_depth = false;
+  ASSERT_TRUE(editor.selection().pick_select(pick).ok());
+  ASSERT_TRUE(selected_entities(editor).empty());
+  pick.shift_pressed = true;
+  pick.cycle_depth = true;
+  ASSERT_TRUE(editor.selection().pick_select(pick, miss_baseline).ok());
+  EXPECT_EQ(selected_entities(editor),
+            (std::vector<quader::EntityId>{front.value().entity,
+                                         other.value().entity}));
+}
+
+TEST(EditorApiTests, DepthPickRejectsSelectionBaselineFromAnotherScene) {
+  CommandTestHarness first;
+  CommandTestHarness second;
+  const auto baseline = first.editor.selection().capture_box_selection_baseline();
+  const auto created = second.editor.modeling().create_box(
+      {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}});
+  ASSERT_TRUE(created.ok());
+  const auto before = selected_entities(second.editor);
+  const auto result = second.editor.selection().pick_select(
+      {.ray = {.origin = {0.0f, 0.0f, 10.0f},
+               .direction = {0.0f, 0.0f, -1.0f}},
+       .shift_pressed = true,
+       .cycle_depth = true},
+      baseline);
+  EXPECT_FALSE(result.ok());
+  EXPECT_FALSE(result.changed());
+  EXPECT_EQ(selected_entities(second.editor), before);
+}
+
+TEST(EditorApiTests,
+     ObjectDepthPickingIncludesEdgeOnOpenStairInsideInwardRoom) {
+  CommandTestHarness harness;
+  quader::QuaderEditorApi &editor = harness.editor;
+
+  // The saved room's stairs have only a tread and riser, spanning X. Their
+  // visible side boundaries have no intersecting face when viewed along X.
+  quader_poly::Document topology;
+  std::vector<quader_poly::ElementId> vertices;
+  for (const auto position : std::array<quader::QVec3, 6>{
+           quader::QVec3{-2.0f, 0.0f, 0.1875f},
+           quader::QVec3{2.0f, 0.0f, 0.1875f},
+           quader::QVec3{2.0f, 0.0f, -0.1875f},
+           quader::QVec3{-2.0f, 0.0f, -0.1875f},
+           quader::QVec3{-2.0f, -0.25f, 0.1875f},
+           quader::QVec3{2.0f, -0.25f, 0.1875f}}) {
+    vertices.push_back(quader_poly::add_vertex(topology, position));
+  }
+  const std::vector<quader_poly::ElementId> tread{
+      vertices[0], vertices[1], vertices[2], vertices[3]};
+  const std::vector<quader_poly::ElementId> riser{
+      vertices[1], vertices[0], vertices[4], vertices[5]};
+  ASSERT_NE(quader_poly::add_face(topology, tread),
+            quader_poly::kInvalidElementId);
+  ASSERT_NE(quader_poly::add_face(topology, riser),
+            quader_poly::kInvalidElementId);
+  const auto stair = editor.modeling().create_mesh(
+      quader::QuaderPolygonDocumentInternalAccess::from_backend(
+          std::move(topology)),
+      quader::QuaderCreateMeshArgs{.name = "Open Side-View Stair"});
+  ASSERT_TRUE(stair.ok()) << stair.error_message();
+  ASSERT_TRUE(editor.selection().select_object(stair.value()).ok());
+  ASSERT_TRUE(editor.selection().set_mode(quader::QuaderSelectionMode::Object)
+                  .ok());
+
+  quader::QuaderPickSelectRequest pick;
+  pick.ray = {.origin = {-64.0f, -0.125f, 0.1875f},
+              .direction = {1.0f, 0.0f, 0.0f}};
+  pick.edge_radius = 0.2;
+  pick.select_backfaces = false;
+  for (const bool select_backfaces : {false, true}) {
+    const auto face = editor.selection().preview_hover(
+        {.ray = pick.ray,
+         .face_plane_hover = true,
+         .select_backfaces = select_backfaces});
+    ASSERT_EQ(face.target.kind, quader::QuaderActiveSelectionKind::None);
+  }
+
+  // The same ray lies on the side's vertical boundary; ordinary two-sided
+  // component picking proves this is a real edge hit, not an empty-space pick.
+  ASSERT_TRUE(editor.selection().set_mode(quader::QuaderSelectionMode::Edge)
+                  .ok());
+  const auto boundary = editor.selection().preview_hover(
+      {.ray = pick.ray,
+       .edge_radius = pick.edge_radius,
+       .select_backfaces = true});
+  ASSERT_EQ(boundary.target.kind, quader::QuaderActiveSelectionKind::Edge);
+  ASSERT_EQ(boundary.target.object_id, stair.value().modeling_object_id);
+  ASSERT_TRUE(editor.selection().set_mode(quader::QuaderSelectionMode::Object)
+                  .ok());
+
+  const auto room = editor.modeling().create_box(
+      quader::QuaderBounds{.min = {-5.0f, -5.0f, -5.0f},
+                           .max = {5.0f, 5.0f, 5.0f}},
+      "Inward Stair Room");
+  ASSERT_TRUE(room.ok()) << room.error_message();
+  ASSERT_TRUE(editor.selection().select_object(room.value()).ok());
+  ASSERT_TRUE(editor.commands()
+                  .execute(quader::quader_command::kModelingFlipFaceNormals)
+                  .ok());
+  ASSERT_TRUE(editor.selection().clear().ok());
+
+  for (const auto expected : {stair.value(), room.value(), stair.value()}) {
+    // Keep ordinary face-based Mesh picking unchanged. Only explicit depth
+    // cycling may include the edge-on stair, then wrap back to the room.
+    pick.cycle_depth = false;
+    pick.click_count = 1;
+    const auto ordinary = editor.selection().pick_select(pick);
+    ASSERT_TRUE(ordinary.ok()) << ordinary.error_message();
+    ASSERT_EQ(selected_entities(editor),
+              std::vector<quader::EntityId>{room.value().entity});
+
+    pick.cycle_depth = true;
+    pick.click_count = 2;
+    const auto cycled = editor.selection().pick_select(pick);
+    ASSERT_TRUE(cycled.ok()) << cycled.error_message();
+    EXPECT_EQ(selected_entities(editor),
+              std::vector<quader::EntityId>{expected.entity});
+    EXPECT_EQ(cycled.value().active_object_id, expected.modeling_object_id);
+  }
+}
+
+TEST(EditorApiTests, ObjectDepthPickingSurvivesOrdinaryFirstClicksAndHistory) {
+  CommandTestHarness harness;
+  quader::QuaderEditorApi &editor = harness.editor;
+  const auto near_box = create_depth_pick_box(editor, 4.0f, "Near Depth Box");
+  const auto middle_box = create_depth_pick_box(editor, 0.0f, "Middle Depth Box");
+  const auto far_box = create_depth_pick_box(editor, -4.0f, "Far Depth Box");
+  ASSERT_TRUE(editor.selection().set_mode(quader::QuaderSelectionMode::Object)
+                  .ok());
+  ASSERT_TRUE(editor.selection().clear().ok());
+  quader::QuaderPickSelectRequest pick;
+  pick.ray = {.origin = {0.0f, 0.0f, 12.0f},
+              .direction = {0.0f, 0.0f, -1.0f}};
+
+  for (const auto expected : {middle_box, far_box, near_box,
+                              middle_box, far_box, near_box}) {
+    SCOPED_TRACE(expected.modeling_object_id);
+    pick.cycle_depth = false;
+    pick.click_count = 1;
+    const auto first_click = editor.selection().pick_select(pick);
+    ASSERT_TRUE(first_click.ok()) << first_click.error_message();
+    ASSERT_EQ(selected_entities(editor),
+              std::vector<quader::EntityId>{near_box.entity});
+
+    pick.cycle_depth = true;
+    pick.click_count = 2;
+    const auto cycled = editor.selection().pick_select(pick);
+    ASSERT_TRUE(cycled.ok()) << cycled.error_message();
+    EXPECT_EQ(selected_entities(editor),
+              std::vector<quader::EntityId>{expected.entity});
+    EXPECT_EQ(cycled.value().active_object_id, expected.modeling_object_id);
+    EXPECT_EQ(cycled.value().selected_object_count, 1u);
+    EXPECT_EQ(editor.modeling().selection_summary().active_object_id,
+              expected.modeling_object_id);
+  }
+
+  const auto cycled = editor.selection().pick_select(pick);
+  ASSERT_TRUE(cycled.ok()) << cycled.error_message();
+  ASSERT_TRUE(cycled.changed());
+  EXPECT_EQ(cycled.mutation_kind, quader::QuaderMutationKind::Document);
+  ASSERT_EQ(selected_entities(editor),
+            std::vector<quader::EntityId>{middle_box.entity});
+  EXPECT_EQ(editor.query().history().undo_label, "Select Entities");
+  ASSERT_TRUE(editor.history().undo().ok());
+  EXPECT_EQ(selected_entities(editor),
+            std::vector<quader::EntityId>{near_box.entity});
+  ASSERT_TRUE(editor.history().redo().ok());
+  EXPECT_EQ(selected_entities(editor),
+            std::vector<quader::EntityId>{middle_box.entity});
+}
+
+TEST(EditorApiTests,
+     ObjectDepthPickingStartsBehindFrontWithoutOrdinaryFirstClick) {
+  CommandTestHarness harness;
+  quader::QuaderEditorApi &editor = harness.editor;
+  create_depth_pick_box(editor, 4.0f, "Coalesced Front");
+  const auto middle = create_depth_pick_box(editor, 0.0f, "Coalesced Middle");
+  create_depth_pick_box(editor, -4.0f, "Coalesced Back");
+  ASSERT_TRUE(editor.selection().set_mode(quader::QuaderSelectionMode::Object)
+                  .ok());
+  ASSERT_TRUE(editor.selection().clear().ok());
+  ASSERT_TRUE(selected_entities(editor).empty());
+
+  quader::QuaderPickSelectRequest pick;
+  pick.ray = {.origin = {0.0f, 0.0f, 12.0f},
+              .direction = {0.0f, 0.0f, -1.0f}};
+  pick.click_count = 2;
+  pick.cycle_depth = true;
+  const auto picked = editor.selection().pick_select(pick);
+  ASSERT_TRUE(picked.ok()) << picked.error_message();
+  EXPECT_TRUE(picked.changed());
+  EXPECT_EQ(selected_entities(editor),
+            std::vector<quader::EntityId>{middle.entity});
+  EXPECT_EQ(picked.value().active_object_id, middle.modeling_object_id);
+  EXPECT_EQ(picked.value().selected_object_count, 1u);
+}
+
+TEST(EditorApiTests, ObjectDepthPickingResetsAfterModeRoundTrip) {
+  for (const auto intervening_mode : {
+           quader::QuaderSelectionMode::Group,
+           quader::QuaderSelectionMode::Face,
+           quader::QuaderSelectionMode::Edge,
+           quader::QuaderSelectionMode::Vertex}) {
+    SCOPED_TRACE(static_cast<int>(intervening_mode));
+    CommandTestHarness harness;
+    quader::QuaderEditorApi &editor = harness.editor;
+    const auto near_box = create_depth_pick_box(editor, 4.0f, "Mode Near");
+    const auto middle_box = create_depth_pick_box(editor, 0.0f, "Mode Middle");
+    const auto far_box = create_depth_pick_box(editor, -4.0f, "Mode Far");
+    ASSERT_TRUE(editor.selection().set_mode(quader::QuaderSelectionMode::Object)
+                    .ok());
+    ASSERT_TRUE(editor.selection().clear().ok());
+    quader::QuaderPickSelectRequest pick;
+    pick.ray = {.origin = {0.0f, 0.0f, 12.0f},
+                .direction = {0.0f, 0.0f, -1.0f}};
+    const auto pick_pair = [&]() {
+      pick.cycle_depth = false;
+      const auto ordinary = editor.selection().pick_select(pick);
+      EXPECT_TRUE(ordinary.ok()) << ordinary.error_message();
+      EXPECT_EQ(selected_entities(editor),
+                std::vector<quader::EntityId>{near_box.entity});
+      pick.cycle_depth = true;
+      return editor.selection().pick_select(pick);
+    };
+
+    const auto first_cycle = pick_pair();
+    ASSERT_TRUE(first_cycle.ok()) << first_cycle.error_message();
+    ASSERT_EQ(selected_entities(editor),
+              std::vector<quader::EntityId>{middle_box.entity});
+
+    ASSERT_TRUE(editor.selection().set_mode(intervening_mode).ok());
+    ASSERT_TRUE(editor.selection().set_mode(quader::QuaderSelectionMode::Object)
+                    .ok());
+    const auto restarted = pick_pair();
+    ASSERT_TRUE(restarted.ok()) << restarted.error_message();
+    EXPECT_EQ(selected_entities(editor),
+              std::vector<quader::EntityId>{middle_box.entity});
+
+    // A redundant mode request is not a transition and must retain continuity.
+    ASSERT_TRUE(editor.selection().set_mode(quader::QuaderSelectionMode::Object)
+                    .ok());
+    const auto retained = pick_pair();
+    ASSERT_TRUE(retained.ok()) << retained.error_message();
+    EXPECT_EQ(selected_entities(editor),
+              std::vector<quader::EntityId>{far_box.entity});
+  }
+}
+
+TEST(EditorApiTests, ObjectDepthPickingAllowsBoundedRayOriginJitter) {
+  CommandTestHarness harness;
+  quader::QuaderEditorApi &editor = harness.editor;
+  const auto near_box = create_depth_pick_box(editor, 4.0f, "Jitter Near");
+  const auto middle_box = create_depth_pick_box(editor, 0.0f, "Jitter Middle");
+  const auto far_box = create_depth_pick_box(editor, -4.0f, "Jitter Far");
+  ASSERT_TRUE(editor.selection().set_mode(quader::QuaderSelectionMode::Object)
+                  .ok());
+  ASSERT_TRUE(editor.selection().clear().ok());
+  quader::QuaderPickSelectRequest pick;
+  pick.ray = {.origin = {0.0f, 0.0f, 12.0f},
+              .direction = {0.0f, 0.0f, -1.0f}};
+  pick.cycle_origin_tolerance = 0.25;
+  const auto pair_at = [&](float ordinary_x, float cycle_x) {
+    pick.ray.origin.x = ordinary_x;
+    pick.cycle_depth = false;
+    EXPECT_TRUE(editor.selection().pick_select(pick).ok());
+    EXPECT_EQ(selected_entities(editor),
+              std::vector<quader::EntityId>{near_box.entity});
+    pick.ray.origin.x = cycle_x;
+    pick.cycle_depth = true;
+    return editor.selection().pick_select(pick);
+  };
+
+  const auto middle = pair_at(0.0f, 0.05f);
+  ASSERT_TRUE(middle.ok()) << middle.error_message();
+  EXPECT_EQ(selected_entities(editor),
+            std::vector<quader::EntityId>{middle_box.entity});
+  const auto far_pick = pair_at(0.10f, 0.15f);
+  ASSERT_TRUE(far_pick.ok()) << far_pick.error_message();
+  EXPECT_EQ(selected_entities(editor),
+            std::vector<quader::EntityId>{far_box.entity});
+
+  // The anchor stays fixed at the first pair. Crossing it resets to layer 2.
+  const auto restarted = pair_at(0.32f, 0.37f);
+  ASSERT_TRUE(restarted.ok()) << restarted.error_message();
+  EXPECT_EQ(selected_entities(editor),
+            std::vector<quader::EntityId>{middle_box.entity});
+
+  // Direction remains exact even when the origin is inside the tolerance.
+  pick.ray.origin.x = 0.38f;
+  pick.ray.direction = {0.005f, 0.0f, -1.0f};
+  pick.cycle_depth = false;
+  ASSERT_TRUE(editor.selection().pick_select(pick).ok());
+  pick.cycle_depth = true;
+  const auto direction_reset = editor.selection().pick_select(pick);
+  ASSERT_TRUE(direction_reset.ok()) << direction_reset.error_message();
+  EXPECT_EQ(selected_entities(editor),
+            std::vector<quader::EntityId>{middle_box.entity});
+}
+
+TEST(EditorApiTests, InvalidDepthOriginToleranceKeepsExactMatching) {
+  for (const double invalid_tolerance : {
+           0.0, -1.0, std::numeric_limits<double>::quiet_NaN(),
+           std::numeric_limits<double>::infinity()}) {
+    SCOPED_TRACE(invalid_tolerance);
+    CommandTestHarness harness;
+    quader::QuaderEditorApi &editor = harness.editor;
+    create_depth_pick_box(editor, 4.0f, "Exact Near");
+    const auto middle = create_depth_pick_box(editor, 0.0f, "Exact Middle");
+    const auto far_box = create_depth_pick_box(editor, -4.0f, "Exact Far");
+    ASSERT_TRUE(editor.selection().set_mode(quader::QuaderSelectionMode::Object)
+                    .ok());
+    ASSERT_TRUE(editor.selection().clear().ok());
+    quader::QuaderPickSelectRequest pick;
+    pick.ray = {.origin = {0.0f, 0.0f, 12.0f},
+                .direction = {0.0f, 0.0f, -1.0f}};
+    pick.cycle_origin_tolerance = invalid_tolerance;
+    pick.cycle_depth = true;
+    ASSERT_TRUE(editor.selection().pick_select(pick).ok());
+    EXPECT_EQ(selected_entities(editor),
+              std::vector<quader::EntityId>{middle.entity});
+    pick.ray.origin.x = 0.01f;
+    pick.cycle_depth = false;
+    ASSERT_TRUE(editor.selection().pick_select(pick).ok());
+    pick.cycle_depth = true;
+    ASSERT_TRUE(editor.selection().pick_select(pick).ok());
+    EXPECT_EQ(selected_entities(editor),
+              std::vector<quader::EntityId>{middle.entity});
+    // Exact repeated origins still continue the stack.
+    ASSERT_TRUE(editor.selection().pick_select(pick).ok());
+    EXPECT_EQ(selected_entities(editor),
+              std::vector<quader::EntityId>{far_box.entity});
+  }
+}
+
+TEST(EditorApiTests, DepthRequestsPreserveLegacyGroupAndComponentPicks) {
+  for (const auto mode : {quader::QuaderSelectionMode::Group,
+                          quader::QuaderSelectionMode::Face,
+                          quader::QuaderSelectionMode::Edge,
+                          quader::QuaderSelectionMode::Vertex}) {
+    SCOPED_TRACE(static_cast<int>(mode));
+    std::optional<quader::QuaderSelectionSummary> ordinary_double_click;
+    for (const bool cycle_depth : {false, true}) {
+      SCOPED_TRACE(cycle_depth);
+      CommandTestHarness harness;
+      quader::QuaderEditorApi &editor = harness.editor;
+      const auto near_box = create_depth_pick_box(editor, 4.0f, "Legacy Near");
+      const auto far_box = create_depth_pick_box(editor, 0.0f, "Legacy Far");
+      quader::EntityId expected_entity = near_box.entity;
+      if (mode == quader::QuaderSelectionMode::Group) {
+        ASSERT_TRUE(editor.selection().select_object(near_box).ok());
+        const auto near_group = editor.scene().group_selection("Legacy Near Group");
+        ASSERT_TRUE(near_group.ok()) << near_group.error_message();
+        expected_entity = near_group.value().id;
+        ASSERT_TRUE(editor.selection().select_object(far_box).ok());
+        const auto far_group = editor.scene().group_selection("Legacy Far Group");
+        ASSERT_TRUE(far_group.ok()) << far_group.error_message();
+      }
+      ASSERT_TRUE(editor.selection().set_mode(mode).ok());
+      ASSERT_TRUE(editor.selection().clear().ok());
+      quader::QuaderPickSelectRequest pick;
+      pick.ray = {.origin = {0.0f, 0.0f, 12.0f},
+                  .direction = {0.0f, 0.0f, -1.0f}};
+      if (mode == quader::QuaderSelectionMode::Edge ||
+          mode == quader::QuaderSelectionMode::Vertex) {
+        pick.ray.origin.x = 1.0f;
+      }
+      if (mode == quader::QuaderSelectionMode::Vertex) {
+        pick.ray.origin.y = 1.0f;
+      }
+      const auto first = editor.selection().pick_select(pick);
+      ASSERT_TRUE(first.ok()) << first.error_message();
+      ASSERT_EQ(selected_entities(editor),
+                std::vector<quader::EntityId>{expected_entity});
+
+      pick.cycle_depth = cycle_depth;
+      const auto repeated = editor.selection().pick_select(pick);
+      ASSERT_TRUE(repeated.ok()) << repeated.error_message();
+      EXPECT_EQ(selected_entities(editor),
+                std::vector<quader::EntityId>{expected_entity});
+      EXPECT_EQ(repeated.value().active_face_id, first.value().active_face_id);
+      EXPECT_EQ(repeated.value().active_vertex_id, first.value().active_vertex_id);
+      EXPECT_EQ(repeated.value().active_edge_a, first.value().active_edge_a);
+      EXPECT_EQ(repeated.value().active_edge_b, first.value().active_edge_b);
+
+      pick.click_count = 2;
+      const auto picked = editor.selection().pick_select(pick);
+      ASSERT_TRUE(picked.ok()) << picked.error_message();
+      EXPECT_EQ(selected_entities(editor),
+                std::vector<quader::EntityId>{expected_entity});
+      EXPECT_EQ(picked.value().mode, mode);
+      if (!cycle_depth) {
+        ordinary_double_click = picked.value();
+      } else {
+        ASSERT_TRUE(ordinary_double_click.has_value());
+        EXPECT_EQ(picked.value().selected_object_count,
+                  ordinary_double_click->selected_object_count);
+        EXPECT_EQ(picked.value().selected_face_count,
+                  ordinary_double_click->selected_face_count);
+        EXPECT_EQ(picked.value().selected_edge_count,
+                  ordinary_double_click->selected_edge_count);
+        EXPECT_EQ(picked.value().selected_vertex_count,
+                  ordinary_double_click->selected_vertex_count);
+      }
+    }
+  }
+}
+
+TEST(EditorApiTests, DepthPickingSkipsHiddenLockedAndLayerMaskedMeshes) {
+  CommandTestHarness harness;
+  quader::QuaderEditorApi &editor = harness.editor;
+  const auto near_box = create_depth_pick_box(editor, 8.0f, "Visible Near Box");
+  const auto hidden = create_depth_pick_box(editor, 5.0f, "Hidden Depth Box");
+  const auto locked = create_depth_pick_box(editor, 2.0f, "Locked Depth Box");
+  const auto layered = create_depth_pick_box(editor, -1.0f, "Layered Depth Box");
+  const auto far_box = create_depth_pick_box(editor, -4.0f, "Visible Far Box");
+  ASSERT_TRUE(editor.scene().set_visible(hidden.entity, false).ok());
+  ASSERT_TRUE(editor.scene().set_locked(locked.entity, true).ok());
+  ASSERT_TRUE(editor.selection().select_object(layered).ok());
+  const auto layer = editor.layers().create_from_selection("Masked Depth");
+  ASSERT_TRUE(layer.ok()) << layer.error_message();
+  ASSERT_TRUE(editor.layers().set_locked(layer.value().id, true).ok());
+
+  quader::QuaderPickSelectRequest pick;
+  pick.ray = {.origin = {0.0f, 0.0f, 12.0f},
+              .direction = {0.0f, 0.0f, -1.0f}};
+  ASSERT_TRUE(editor.selection().pick_select(pick).ok());
+  ASSERT_EQ(selected_entities(editor),
+            std::vector<quader::EntityId>{near_box.entity});
+  pick.cycle_depth = true;
+  for (const auto expected : {far_box, near_box}) {
+    const auto cycled = editor.selection().pick_select(pick);
+    ASSERT_TRUE(cycled.ok()) << cycled.error_message();
+    EXPECT_EQ(selected_entities(editor),
+              std::vector<quader::EntityId>{expected.entity});
+  }
+
+  ASSERT_TRUE(editor.layers().set_locked(layer.value().id, false).ok());
+  ASSERT_TRUE(editor.layers().set_visible(layer.value().id, false).ok());
+  const auto hidden_layer = editor.selection().pick_select(pick);
+  ASSERT_TRUE(hidden_layer.ok()) << hidden_layer.error_message();
+  EXPECT_EQ(selected_entities(editor),
+            std::vector<quader::EntityId>{far_box.entity});
+
+  ASSERT_TRUE(editor.layers().set_visible(layer.value().id, true).ok());
+  pick.cycle_depth = false;
+  ASSERT_TRUE(editor.selection().pick_select(pick).ok());
+  pick.cycle_depth = true;
+  const auto restored_layer = editor.selection().pick_select(pick);
+  ASSERT_TRUE(restored_layer.ok()) << restored_layer.error_message();
+  EXPECT_EQ(selected_entities(editor),
+            std::vector<quader::EntityId>{layered.entity});
+}
+
+TEST(EditorApiTests, ObjectDepthPickingDeduplicatesFormalInstanceMembers) {
+  CommandTestHarness harness;
+  quader::QuaderEditorApi &editor = harness.editor;
+  const auto near_member = create_depth_pick_box(editor, 6.0f, "Near Member");
+  const auto behind_member = create_depth_pick_box(editor, 3.0f, "Behind Member");
+  ASSERT_TRUE(editor.selection()
+                  .select_objects({near_member.entity, behind_member.entity},
+                                  near_member.entity)
+                  .ok());
+  ASSERT_TRUE(editor.modeling().create_instance().ok());
+  const auto instance_selection = selected_entities(editor);
+  ASSERT_EQ(instance_selection.size(), 1u);
+  const auto occurrence = instance_selection.front();
+  const auto far_box = create_depth_pick_box(editor, -1.0f, "Behind Instance");
+  quader::QuaderPickSelectRequest pick;
+  pick.ray = {.origin = {0.0f, 0.0f, 12.0f},
+              .direction = {0.0f, 0.0f, -1.0f}};
+  for (const auto expected : {far_box.entity, occurrence, far_box.entity}) {
+    pick.cycle_depth = false;
+    const auto first_click = editor.selection().pick_select(pick);
+    ASSERT_TRUE(first_click.ok()) << first_click.error_message();
+    ASSERT_EQ(selected_entities(editor),
+              std::vector<quader::EntityId>{occurrence});
+    pick.cycle_depth = true;
+    const auto cycled = editor.selection().pick_select(pick);
+    ASSERT_TRUE(cycled.ok()) << cycled.error_message();
+    EXPECT_EQ(selected_entities(editor),
+              std::vector<quader::EntityId>{expected});
+  }
+}
+
+TEST(EditorApiTests, ModifiedDepthRequestsEditBehindWhileAltKeepsOrdinaryPicking) {
+  for (const auto modifier : {&quader::QuaderPickSelectRequest::control_pressed,
+                              &quader::QuaderPickSelectRequest::shift_pressed,
+                              &quader::QuaderPickSelectRequest::command_pressed,
+                              &quader::QuaderPickSelectRequest::alt_pressed}) {
+    CommandTestHarness harness;
+    quader::QuaderEditorApi &editor = harness.editor;
+    const auto near_box = create_depth_pick_box(editor, 4.0f, "Modified Near");
+    const auto far_box = create_depth_pick_box(editor, 0.0f, "Modified Far");
+    const bool removes_depth_target =
+        modifier == &quader::QuaderPickSelectRequest::control_pressed ||
+        modifier == &quader::QuaderPickSelectRequest::command_pressed;
+    if (removes_depth_target) {
+      ASSERT_TRUE(editor.selection()
+                      .select_objects({near_box.entity, far_box.entity},
+                                      near_box.entity)
+                      .ok());
+    } else {
+      ASSERT_TRUE(editor.selection().select_object(near_box).ok());
+    }
+    quader::QuaderPickSelectRequest pick;
+    pick.ray = {.origin = {0.0f, 0.0f, 12.0f},
+                .direction = {0.0f, 0.0f, -1.0f}};
+    pick.click_count = 2;
+    pick.cycle_depth = true;
+    pick.*modifier = true;
+    const auto picked = editor.selection().pick_select(pick);
+    ASSERT_TRUE(picked.ok()) << picked.error_message();
+    std::vector<quader::EntityId> expected{near_box.entity};
+    if (modifier == &quader::QuaderPickSelectRequest::shift_pressed) {
+      expected.push_back(far_box.entity);
+    }
+    EXPECT_EQ(selected_entities(editor), expected);
+  }
+}
+
+TEST(EditorApiTests, EmptyAndSingleTargetDepthPicksPreserveSelectionAndHistory) {
+  CommandTestHarness harness;
+  quader::QuaderEditorApi &editor = harness.editor;
+  const auto box = create_selected_box(editor, "Only Depth Target");
+  const auto before = editor.selection().summary();
+  const auto history = editor.query().history();
+  quader::QuaderPickSelectRequest pick;
+  pick.ray = {.origin = {0.0f, 0.0f, 12.0f},
+              .direction = {0.0f, 0.0f, -1.0f}};
+  pick.cycle_depth = true;
+  for (const float x : {0.0f, 100.0f}) {
+    pick.ray.origin.x = x;
+    const auto cycled = editor.selection().pick_select(pick);
+    ASSERT_TRUE(cycled.ok()) << cycled.error_message();
+    EXPECT_FALSE(cycled.changed());
+    EXPECT_EQ(selected_entities(editor),
+              std::vector<quader::EntityId>{box.entity});
+    EXPECT_EQ(cycled.value().selection_revision, before.selection_revision);
+    EXPECT_EQ(cycled.value().content_revision, before.content_revision);
+    EXPECT_EQ(editor.query().history().undo_label, history.undo_label);
+    EXPECT_EQ(editor.query().history().redo_label, history.redo_label);
+  }
+}
+
 TEST(EditorApiTests, BoxSelectApiSelectsContainedObjectByViewportRectangle) {
     CommandTestHarness harness;
     const quader::QuaderApiResult<quader::QuaderModelingObjectRef> left =
@@ -6545,6 +7855,11 @@ TEST(EditorApiTests, ViewportHandlesUseWorkspaceWithoutRuntimeHooks) {
     CommandTestHarness harness;
     quader::QuaderEditorApi& editor = harness.editor;
 
+    EXPECT_EQ(editor.viewports().shading_mode(quader::ViewportPaneId::Perspective),
+              quader::QuaderShadingMode::Solid);
+    EXPECT_EQ(editor.viewports().shading_mode(quader::ViewportPaneId::Top),
+              quader::QuaderShadingMode::Wireframe);
+
     const quader::QuaderApiVoidResult quad_layout =
         editor.viewports().set_layout(quader::ViewportLayoutId::FourQuad);
     EXPECT_TRUE(quad_layout.ok()) << quad_layout.error_message();
@@ -6619,10 +7934,22 @@ TEST(EditorApiTests, ViewportHandlesUseWorkspaceWithoutRuntimeHooks) {
 
     EXPECT_TRUE(viewport.set_view(quader::ViewportView::Top).ok());
     EXPECT_EQ(editor.viewports().view(quader::ViewportPaneId::Perspective), quader::ViewportView::Top);
+    EXPECT_EQ(editor.viewports().shading_mode(quader::ViewportPaneId::Perspective),
+              quader::QuaderShadingMode::Wireframe);
+    EXPECT_TRUE(viewport.set_shading_mode(quader::QuaderShadingMode::Material).changed());
+    EXPECT_TRUE(viewport.set_view(quader::ViewportView::Front).changed());
+    EXPECT_EQ(editor.viewports().shading_mode(quader::ViewportPaneId::Perspective),
+              quader::QuaderShadingMode::Material);
     EXPECT_TRUE(editor.commands()
                     .execute(quader::quader_command::kViewportViewPerspective)
                     .ok());
     EXPECT_EQ(editor.viewports().view(quader::ViewportPaneId::Perspective), quader::ViewportView::Perspective);
+    EXPECT_EQ(editor.viewports().shading_mode(quader::ViewportPaneId::Perspective),
+              quader::QuaderShadingMode::Normal);
+    EXPECT_TRUE(viewport.set_view(quader::ViewportView::Top).changed());
+    EXPECT_EQ(editor.viewports().shading_mode(quader::ViewportPaneId::Perspective),
+              quader::QuaderShadingMode::Material);
+    EXPECT_TRUE(viewport.set_view(quader::ViewportView::Perspective).changed());
 
     EXPECT_TRUE(viewport.camera().focus_origin().ok());
     EXPECT_FALSE(viewport.camera().frame_selection().ok());
@@ -12817,7 +14144,7 @@ TEST(EditorApiTests,
           [&](const std::string &target_id) {
             return !command_ids.contains(target_id);
           }));
-  EXPECT_EQ(non_command_target_count, 43u);
+  EXPECT_EQ(non_command_target_count, 46u);
 
   for (const std::string &typed_id : typed_command_ids()) {
     EXPECT_TRUE(actual_target_ids.contains(typed_id)) << typed_id;

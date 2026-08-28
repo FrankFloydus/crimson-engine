@@ -46,6 +46,7 @@ struct ViewportNavigationInput {
 struct ViewportInputFrame {
   bool viewport_hovered = false;
   bool viewport_focused = false;
+  bool orthographic_view = false;
   bool text_input_active = false;
   bool navigation_active = false;
   bool fly_navigation_active = false;
@@ -70,6 +71,13 @@ struct ViewportInputFrame {
   bool apply_active_material_to_selection_pressed = false;
   bool apply_active_material_delay_for_double_click = false;
   bool apply_face_material_to_mesh_pressed = false;
+  // An unconsumed first left click can wait for any bound depth double-click.
+  bool selection_click_delay_for_double_click = false;
+  // Physical first-click modifiers, before they can change for the double-click.
+  ViewportModifiers selection_click_modifiers = {};
+  bool cycle_selection_depth_pressed = false;
+  // Carries the resolved selection operation independently of live modifiers.
+  ViewportModifiers cycle_selection_depth_modifiers = {};
   bool middle_pressed = false;
   bool middle_down = false;
   bool middle_released = false;

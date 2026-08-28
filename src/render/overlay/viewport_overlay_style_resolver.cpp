@@ -60,6 +60,8 @@ std::uint64_t ViewportOverlayStyleResolver::style_signature(
     signature.add_float(
         settings.float_value(static_cast<ViewportFloatSettingId>(index)));
   }
+  signature.add_bool(
+      settings.bool_value(ViewportBoolSettingId::BackfaceSelection));
   return signature.value();
 }
 
@@ -89,6 +91,22 @@ void ViewportOverlayStyleResolver::apply_from(
     range.triangle_begin = std::min(range.triangle_begin, frame.triangles.size());
     range.line_begin = std::min(range.line_begin, frame.lines.size());
     range.point_begin = std::min(range.point_begin, frame.points.size());
+    if (!settings.bool_value(ViewportBoolSettingId::BackfaceSelection)) {
+      // Omit ordinary hover fill entirely: transparent triangles would still
+      // stamp overlay depth. Selected faces and tool face-plane previews keep
+      // their authored fills regardless of the picking preference.
+      const auto first = frame.triangles.begin() +
+                         static_cast<std::ptrdiff_t>(range.triangle_begin);
+      frame.triangles.erase(
+          std::remove_if(first, frame.triangles.end(),
+                         [](const ViewportOverlayTriangle &triangle) {
+                           return triangle.layer ==
+                                      ViewportOverlayLayer::HoverFace &&
+                                  role_for(triangle) ==
+                                      ViewportOverlayStyleRole::HoverFace;
+                         }),
+          frame.triangles.end());
+    }
     for (auto it = frame.triangles.begin() +
                    static_cast<std::ptrdiff_t>(range.triangle_begin);
          it != frame.triangles.end(); ++it) {

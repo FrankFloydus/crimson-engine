@@ -274,6 +274,9 @@ TransformGizmoInteraction::release_pending_click() {
     result.selection_click_requested = true;
     result.selection_click_local = pending_drag_->click_local;
     result.selection_click_count = pending_drag_->click_count;
+    result.selection_cycle_depth = pending_drag_->cycle_depth;
+    result.selection_cycle_depth_modifiers =
+        pending_drag_->cycle_depth_modifiers;
   }
   reset_pending_drag();
   return result;
@@ -284,6 +287,14 @@ TransformGizmoInteraction::handle_frame(QuaderEditorApi &editor,
                                         const ViewportInteractionFrame &frame) {
   QDR_PROFILE_FUNCTION();
   ViewportBeforeToolInteractionResult result;
+
+  if (pending_drag_.has_value() && !frame.input.viewport_focused) {
+    // Qt focus loss synthesizes a release while the surface can remain hovered.
+    // Dropping ownership must not turn that release into an ordinary front pick.
+    reset_pending_drag();
+    result.gizmo_consumed = true;
+    return result;
+  }
 
   const ViewportToolId tool = frame.input_router.state().active_tool;
   if (!frame.settings.bool_value(ViewportBoolSettingId::ShowGizmos) ||
@@ -442,12 +453,29 @@ TransformGizmoInteraction::handle_frame(QuaderEditorApi &editor,
           .axis = hit.axis,
           .click_local = frame.left_click_local,
           .click_count = std::max(1, frame.left_click_count),
+          .cycle_depth = frame.input.cycle_selection_depth_pressed,
+          .cycle_depth_modifiers = frame.input.cycle_selection_depth_modifiers,
       };
       result.gizmo_consumed = true;
     }
   }
 
   if (pending_drag_.has_value()) {
+    // Preserve a newer double-click count even outside Mesh depth cycling:
+    // component loops also need the second press coalesced with the first release.
+    if ((frame.left_pressed || frame.left_released) &&
+        (frame.input.cycle_selection_depth_pressed ||
+         frame.left_click_count > pending_drag_->click_count)) {
+      pending_drag_->cycle_depth = pending_drag_->cycle_depth ||
+                                   frame.input.cycle_selection_depth_pressed;
+      if (frame.input.cycle_selection_depth_pressed) {
+        pending_drag_->cycle_depth_modifiers =
+            frame.input.cycle_selection_depth_modifiers;
+      }
+      pending_drag_->click_count =
+          std::max(pending_drag_->click_count, frame.left_click_count);
+      pending_drag_->click_local = frame.left_click_local;
+    }
     result.gizmo_consumed = true;
     const bool release_requested = frame.left_released || !frame.left_down;
     const bool threshold_reached =

@@ -10,6 +10,7 @@
 #include "api/quader_editor_api.hpp"
 #include "core/logger.hpp"
 #include "diagnostics/profile.hpp"
+#include "editor/interactions/transform_gizmo.hpp"
 #include "editor/modeling/services/selection_mode_adapter.hpp"
 #include "editor/selection/box_selection_rules.hpp"
 #include "editor/tools/viewport_tool.hpp"
@@ -89,7 +90,8 @@ QuaderPickSelectRequest make_pick_select_request(
     const ViewportCameraController &camera, const ViewportSettings &settings,
     QVec2 local_mouse, ViewportModifiers modifiers, int click_count,
     bool preserve_selection_on_miss, bool preserve_selection_on_selected_hit,
-    bool preserve_existing_component_selection_on_hit = false) {
+    bool preserve_existing_component_selection_on_hit = false,
+    bool cycle_depth = false) {
   const ViewportRay world_ray = camera.ray_from_viewport_point(local_mouse);
   return {
       .ray =
@@ -112,6 +114,15 @@ QuaderPickSelectRequest make_pick_select_request(
           settings.float_value(ViewportFloatSettingId::PickEdgeRadius),
       .select_backfaces =
           settings.bool_value(ViewportBoolSettingId::BackfaceSelection),
+      .cycle_depth = cycle_depth,
+      .cycle_origin_tolerance =
+          camera.state().projection == ViewportProjection::Orthographic
+              ? quader_editor_core::kSelectionBoxDefaultDragThreshold *
+                    quader_editor_core::viewport_world_units_per_pixel(
+                        ViewportCameraAdapter::runtime_camera(
+                            camera, camera.viewport_size()),
+                        world_ray.origin)
+              : 0.0,
   };
 }
 
@@ -173,8 +184,9 @@ active_selected_instance(const QuaderEditorApi &editor) {
 }
 
 bool plain_instance_edit_double_click(const ViewportInteractionFrame &frame,
-                                      const QuaderSelectionSummary &summary) {
-  return frame.left_click_count >= 2 &&
+                                      const QuaderSelectionSummary &summary,
+                                      int click_count) {
+  return click_count >= 2 &&
          summary.mode == QuaderSelectionMode::Object &&
          !frame.input.modifiers.primary && !frame.input.modifiers.shift &&
          !frame.input.modifiers.alt && !frame.input.text_input_active &&
@@ -182,6 +194,40 @@ bool plain_instance_edit_double_click(const ViewportInteractionFrame &frame,
          !frame.input.operation_preview_active &&
          !frame.input.modal_tool_active &&
          !frame.input.active_tool_owns_viewport &&
+         !frame.input_result.consumed &&
+         !frame.input_result.navigation_active &&
+         !frame.input_result.camera_changed;
+}
+
+void enter_picked_instance(QuaderEditorApi &editor,
+                           const ViewportInteractionFrame &frame,
+                           const QuaderSelectionSummary &summary,
+                           int click_count, bool cycle_depth) {
+  if (cycle_depth ||
+      !plain_instance_edit_double_click(frame, summary, click_count)) {
+    return;
+  }
+  if (const std::optional<EntityId> occurrence = active_selected_instance(editor)) {
+    const QuaderApiVoidResult entered =
+        editor.modeling().enter_instance_edit(*occurrence);
+    if (!entered.ok()) {
+      LOG_ERROR("Instance edit entry failed: {}",
+                entered.error_message().empty() ? "Instance edit entry failed."
+                                                : entered.error_message());
+    }
+  }
+}
+
+bool depth_cycle_context_available(const ViewportInteractionFrame &frame) {
+  return frame.camera.state().projection == ViewportProjection::Orthographic &&
+         frame.input_router.state().selection_mode ==
+             ViewportSelectionMode::Object &&
+         frame.input.viewport_focused && !frame.input.text_input_active &&
+         !frame.input.navigation_active &&
+         !frame.input.operation_preview_active &&
+         !frame.input.active_transform_drag && !frame.input.modal_tool_active &&
+         !frame.input.active_tool_owns_viewport &&
+         !frame.input.keybinding_input_consumed &&
          !frame.input_result.consumed &&
          !frame.input_result.navigation_active &&
          !frame.input_result.camera_changed;
@@ -220,11 +266,11 @@ std::optional<EntityId> pick_scene_billboard_entity(
 
 QuaderSelectionSummary select_billboard_entity(
     QuaderEditorApi &editor, ViewportInputRouter &input_router,
-    const ViewportInteractionFrame &frame, EntityId entity,
+    EntityId entity, ViewportModifiers modifiers,
     bool preserve_selection_on_selected_hit) {
   QDR_PROFILE_FUNCTION();
   const QuaderSelectionEdit edit =
-      selection_edit_from_modifiers(frame.input.modifiers);
+      selection_edit_from_modifiers(modifiers);
   const bool preserves_selected_hit =
       preserve_selection_on_selected_hit &&
       edit == QuaderSelectionEdit::Replace && entity_is_selected(editor, entity);
@@ -242,25 +288,14 @@ QuaderSelectionSummary select_billboard_entity(
   return summary;
 }
 
-QuaderSelectionSummary
-pick_selection(QuaderEditorApi &editor, ViewportInputRouter &input_router,
-               const ViewportInteractionFrame &frame, QVec2 local_mouse,
-               int click_count, bool preserve_selection_on_miss = false,
-               bool preserve_selection_on_selected_hit = false,
-               bool preserve_existing_component_selection_on_hit = false) {
-  QDR_PROFILE_FUNCTION();
-  if (const std::optional<EntityId> billboard_entity =
-          pick_scene_billboard_entity(frame, local_mouse)) {
-    return select_billboard_entity(editor, input_router, frame,
-                                   *billboard_entity,
-                                   preserve_selection_on_selected_hit);
-  }
+QuaderSelectionSummary apply_pick_request(
+    QuaderEditorApi &editor, ViewportInputRouter &input_router,
+    const QuaderPickSelectRequest &request,
+    const QuaderSelectionBoxBaseline *baseline = nullptr) {
   const QuaderApiResult<QuaderSelectionSummary> result =
-      editor.selection().pick_select(make_pick_select_request(
-          frame.camera, frame.settings, local_mouse, frame.input.modifiers,
-          click_count, preserve_selection_on_miss,
-          preserve_selection_on_selected_hit,
-          preserve_existing_component_selection_on_hit));
+      baseline != nullptr && baseline->valid()
+          ? editor.selection().pick_select(request, *baseline)
+          : editor.selection().pick_select(request);
   if (!result.ok) {
     LOG_ERROR("Viewport selection failed: {}",
               result.message.empty() ? "Selection failed." : result.message);
@@ -270,6 +305,33 @@ pick_selection(QuaderEditorApi &editor, ViewportInputRouter &input_router,
   input_router.set_selection_mode(
       app_selection_mode_to_viewport(to_modeling_selection_mode(summary.mode)));
   return summary;
+}
+
+QuaderSelectionSummary
+pick_selection(QuaderEditorApi &editor, ViewportInputRouter &input_router,
+               const ViewportInteractionFrame &frame, QVec2 local_mouse,
+               int click_count, bool preserve_selection_on_miss = false,
+               bool preserve_selection_on_selected_hit = false,
+               bool preserve_existing_component_selection_on_hit = false,
+               bool cycle_depth = false,
+               ViewportModifiers cycle_modifiers = {},
+               const QuaderSelectionBoxBaseline *baseline = nullptr) {
+  QDR_PROFILE_FUNCTION();
+  if (!cycle_depth) {
+    if (const std::optional<EntityId> billboard_entity =
+            pick_scene_billboard_entity(frame, local_mouse)) {
+      return select_billboard_entity(editor, input_router, *billboard_entity,
+                                     frame.input.modifiers,
+                                     preserve_selection_on_selected_hit);
+    }
+  }
+  const QuaderPickSelectRequest request = make_pick_select_request(
+          frame.camera, frame.settings, local_mouse,
+          cycle_depth ? cycle_modifiers : frame.input.modifiers,
+          cycle_depth ? 1 : click_count, preserve_selection_on_miss,
+          preserve_selection_on_selected_hit,
+          preserve_existing_component_selection_on_hit, cycle_depth);
+  return apply_pick_request(editor, input_router, request, baseline);
 }
 
 QuaderSelectionSummary
@@ -303,6 +365,10 @@ void ViewportSelectionInteraction::reset() {
   hover_clear_issued_ = false;
   quader_editor_core::clear_selection_box(box_state_);
   box_edit_ = QuaderSelectionEdit::Replace;
+  box_cycle_depth_ = false;
+  box_cycle_modifiers_ = {};
+  cancel_pending_click();
+  pending_pick_feedback_.reset();
   box_hovered_before_selection_.reset();
   box_baseline_.reset();
   committed_marquee_.reset();
@@ -310,6 +376,232 @@ void ViewportSelectionInteraction::reset() {
   paint_selection_active_ = false;
   viewport_hover_state_initialized_ = false;
   viewport_hovered_last_frame_ = false;
+}
+
+bool ViewportSelectionInteraction::DepthClickBaseline::matches_context(
+    const ViewportInteractionFrame &frame, SceneSessionId current_scene) const {
+  const QuaderSelectionSummary &current = frame.selection_state.summary;
+  if (camera != &frame.camera || scene_session_id != current_scene ||
+      tool != frame.input_router.state().active_tool ||
+      viewport_size.x != frame.input.viewport_size.x ||
+      viewport_size.y != frame.input.viewport_size.y ||
+      content_revision != current.content_revision ||
+      selection_revision != current.selection_revision ||
+      scene_revision != frame.selection_state.scene_revision ||
+      asset_revision != frame.selection_state.asset_revision) {
+    return false;
+  }
+  const ViewportRay current_ray = frame.camera.ray_from_viewport_point(local);
+  const auto same_vector = [](QVec3 left, QVec3 right) {
+    return left.x == right.x && left.y == right.y && left.z == right.z;
+  };
+  return same_vector(ray.origin, current_ray.origin) &&
+         same_vector(ray.direction, current_ray.direction);
+}
+
+bool ViewportSelectionInteraction::DepthClickBaseline::matches_frame(
+    const ViewportInteractionFrame &frame, SceneSessionId current_scene) const {
+  const QVec2 delta = frame.left_click_local - local;
+  constexpr float kClickTolerance =
+      quader_editor_core::kSelectionBoxDefaultDragThreshold;
+  return delta.x * delta.x + delta.y * delta.y <=
+             kClickTolerance * kClickTolerance &&
+         matches_context(frame, current_scene);
+}
+
+void ViewportSelectionInteraction::cancel_pending_click() {
+  if (depth_click_baseline_.has_value() &&
+      depth_click_baseline_->delay_single_click && box_state_.active &&
+      !box_state_.dragging) {
+    quader_editor_core::clear_selection_box(box_state_);
+    box_edit_ = QuaderSelectionEdit::Replace;
+    box_cycle_depth_ = false;
+    box_cycle_modifiers_ = {};
+    box_hovered_before_selection_.reset();
+    box_baseline_.reset();
+  }
+  pending_first_pick_.reset();
+  depth_click_baseline_.reset();
+}
+
+std::optional<ViewportInteractionSelectionState>
+ViewportSelectionInteraction::prepare_frame(
+    QuaderEditorApi &editor, const ViewportInteractionFrame &frame) {
+  pending_pick_feedback_.reset();
+  if (!frame.active_tool_allows_selection_fallback ||
+      !frame.input.viewport_hovered || !depth_cycle_context_available(frame) ||
+      frame.input_result.cancel_requested) {
+    cancel_pending_click();
+    return std::nullopt;
+  }
+  if (!frame.left_pressed && !pending_first_pick_.has_value() &&
+      !frame.input.cycle_selection_depth_pressed) {
+    return std::nullopt;
+  }
+  const SceneSessionId scene_session_id =
+      editor.scene_documents().active_scene_id().value_or(SceneSessionId{});
+  // Recognition wins over timeout even when the event is consumed by a late
+  // frame. Never publish the ordinary pick before a recognized depth action.
+  if (frame.input.cycle_selection_depth_pressed ||
+      (frame.left_pressed && frame.left_click_count > 1)) {
+    pending_first_pick_.reset();
+  }
+  if (pending_first_pick_.has_value() &&
+      !pending_click_matches_context(editor, frame)) {
+    cancel_pending_click();
+  }
+  std::optional<ViewportInteractionSelectionState> resolved_selection;
+  if (pending_first_pick_.has_value() && frame.left_pressed) {
+    // Distinct single clicks must retain their ordering (notably Shift adds).
+    // The controller forwards this fresh summary to gizmo and after-tool work.
+    const QuaderSelectionSummary summary = commit_pending_pick(editor, frame);
+    const QuaderRevisionStamp revisions = editor.query().revisions();
+    resolved_selection = ViewportInteractionSelectionState{
+        .summary = summary,
+        .scene_revision = revisions.scene_revision,
+        .asset_revision = revisions.asset_revision,
+        .pivot_revision = frame.selection_state.pivot_revision,
+    };
+  }
+  if (!frame.left_pressed) {
+    // A keyboard binding is a standalone depth action, not the second half of
+    // an earlier mouse click. Do not apply that earlier click's selection.
+    if (frame.input.cycle_selection_depth_pressed && !frame.left_down) {
+      depth_click_baseline_.reset();
+    }
+    return resolved_selection;
+  }
+
+  const bool double_click = frame.input.cycle_selection_depth_pressed;
+  const ViewportInteractionSelectionState &selection_state =
+      resolved_selection.has_value() ? *resolved_selection
+                                     : frame.selection_state;
+  const QuaderSelectionSummary &selection = selection_state.summary;
+  // Native double-click recognition already owns timing. Frame processing may
+  // be delayed beyond that interval, so never expire a recognized pair here.
+  const bool keep_first_click =
+      double_click && frame.left_click_count > 1 &&
+      depth_click_baseline_.has_value() &&
+      depth_click_baseline_->matches_frame(frame, scene_session_id);
+  if (!keep_first_click) {
+    const ViewportRay ray =
+        frame.camera.ray_from_viewport_point(frame.left_click_local);
+    depth_click_baseline_ = DepthClickBaseline{
+        .selection = editor.selection().capture_box_selection_baseline(),
+        .camera = &frame.camera,
+        .ray = {.origin = ray.origin, .direction = ray.direction},
+        .local = frame.left_click_local,
+        .viewport_size = frame.input.viewport_size,
+        .scene_session_id = scene_session_id,
+        .tool = frame.input_router.state().active_tool,
+        .content_revision = selection.content_revision,
+        .selection_revision = selection.selection_revision,
+        .scene_revision = selection_state.scene_revision,
+        .asset_revision = selection_state.asset_revision,
+        .keybindings_revision = editor.commands().keybindings_revision(),
+        .delay_single_click = frame.input.selection_click_delay_for_double_click,
+        .click_modifiers = frame.input.selection_click_delay_for_double_click
+                               ? frame.input.selection_click_modifiers
+                               : frame.input.modifiers,
+        .deadline_seconds = frame.monotonic_time_seconds +
+                            std::max(frame.double_click_interval_seconds, 0.0),
+    };
+  }
+  depth_click_baseline_->double_click_pending = double_click;
+  return resolved_selection;
+}
+
+bool ViewportSelectionInteraction::pending_click_matches_context(
+    QuaderEditorApi &editor, const ViewportInteractionFrame &frame) const {
+  if (!depth_click_baseline_.has_value() ||
+      !depth_click_baseline_->matches_context(
+          frame, editor.scene_documents().active_scene_id().value_or(
+                     SceneSessionId{})) ||
+      depth_click_baseline_->keybindings_revision !=
+          editor.commands().keybindings_revision()) {
+    return false;
+  }
+  const QuaderPickSelectRequest &request = pending_first_pick_->request;
+  return request.select_backfaces ==
+             frame.settings.bool_value(ViewportBoolSettingId::BackfaceSelection) &&
+         request.vertex_radius ==
+             frame.settings.float_value(ViewportFloatSettingId::PickVertexRadius) &&
+         request.edge_radius ==
+             frame.settings.float_value(ViewportFloatSettingId::PickEdgeRadius);
+}
+
+QuaderSelectionSummary ViewportSelectionInteraction::commit_pending_pick(
+    QuaderEditorApi &editor, const ViewportInteractionFrame &frame) {
+  const PendingFirstPick pending = *pending_first_pick_;
+  cancel_pending_click();
+  pending_pick_feedback_ = PendingPickFeedback{
+      .local = pending.local,
+      .hovered_before_selection = pending.hovered_before_selection,
+  };
+  return pending.billboard_entity.has_value()
+             ? select_billboard_entity(
+                   editor, frame.input_router, *pending.billboard_entity,
+                   pending.modifiers,
+                   pending.request.preserve_selection_on_selected_hit)
+             : apply_pick_request(editor, frame.input_router, pending.request);
+}
+
+std::optional<QuaderSelectionSummary>
+ViewportSelectionInteraction::commit_pick_selection(
+    QuaderEditorApi &editor, const ViewportInteractionFrame &frame,
+    QVec2 local_mouse, int click_count, bool preserve_selection_on_miss,
+    bool preserve_selection_on_selected_hit,
+    bool preserve_existing_component_selection_on_hit, bool cycle_depth,
+    ViewportModifiers cycle_modifiers,
+    QuaderHoverTarget hovered_before_selection) {
+  if (depth_click_baseline_.has_value() &&
+      !depth_click_baseline_->matches_frame(
+          frame, editor.scene_documents().active_scene_id().value_or(
+                     SceneSessionId{}))) {
+    cancel_pending_click();
+  }
+  if (!cycle_depth && click_count == 1 && depth_cycle_context_available(frame) &&
+      depth_click_baseline_.has_value() &&
+      (depth_click_baseline_->delay_single_click ||
+       frame.input.selection_click_delay_for_double_click) &&
+      frame.double_click_interval_seconds > 0.0) {
+    const ViewportModifiers modifiers =
+        frame.input.selection_click_delay_for_double_click
+            ? frame.input.selection_click_modifiers
+            : depth_click_baseline_->click_modifiers;
+    pending_first_pick_ = PendingFirstPick{
+        .request = make_pick_select_request(
+            frame.camera, frame.settings, local_mouse, modifiers, click_count,
+            preserve_selection_on_miss, preserve_selection_on_selected_hit,
+            preserve_existing_component_selection_on_hit),
+        .billboard_entity = pick_scene_billboard_entity(frame, local_mouse),
+        .modifiers = modifiers,
+        .local = local_mouse,
+        .hovered_before_selection = hovered_before_selection,
+    };
+    return std::nullopt;
+  }
+  const bool apply_first_click_baseline =
+      cycle_depth && (cycle_modifiers.primary || cycle_modifiers.shift) &&
+      depth_click_baseline_.has_value() &&
+      depth_click_baseline_->double_click_pending;
+  const QuaderSelectionSummary summary = pick_selection(
+      editor, frame.input_router, frame, local_mouse, click_count,
+      preserve_selection_on_miss, preserve_selection_on_selected_hit,
+      preserve_existing_component_selection_on_hit, cycle_depth, cycle_modifiers,
+      apply_first_click_baseline ? &depth_click_baseline_->selection : nullptr);
+  if (cycle_depth) {
+    cancel_pending_click();
+  } else if (depth_click_baseline_.has_value()) {
+    // A single with no paired depth binding is still immediate. Its own
+    // revision is allowed; unrelated changes invalidate the saved baseline.
+    depth_click_baseline_->selection_revision = summary.selection_revision;
+    depth_click_baseline_->content_revision = summary.content_revision;
+    const QuaderRevisionStamp revisions = editor.query().revisions();
+    depth_click_baseline_->scene_revision = revisions.scene_revision;
+    depth_click_baseline_->asset_revision = revisions.asset_revision;
+  }
+  return summary;
 }
 
 ViewportSelectionMarquee ViewportSelectionInteraction::marquee() const {
@@ -344,6 +636,40 @@ void ViewportSelectionInteraction::handle_frame(
       !tool_result.handled;
   const bool can_pick =
       can_use_selection_fallback && frame.input.viewport_hovered;
+  const bool can_cycle_depth =
+      can_pick && depth_cycle_context_available(frame);
+  if (tool_result.handled ||
+      (before_tool.gizmo_consumed && frame.left_released) ||
+      !depth_cycle_context_available(frame) ||
+      frame.input_result.cancel_requested) {
+    cancel_pending_click();
+  }
+  // Some synthetic callers enter after-tool work directly; recognized depth
+  // must cancel the deferred ordinary pick here as well as in prepare_frame.
+  if (frame.input.cycle_selection_depth_pressed ||
+      ((frame.left_pressed || frame.left_released) &&
+       frame.left_click_count > 1)) {
+    pending_first_pick_.reset();
+  }
+  // The gizmo can take over a pending selection click when the pointer crosses
+  // its pick boundary between clicks. Its deferred request owns this release.
+  if (before_tool.selection_click_requested ||
+      (box_cycle_depth_ && !can_cycle_depth)) {
+    quader_editor_core::clear_selection_box(box_state_);
+    box_edit_ = QuaderSelectionEdit::Replace;
+    box_cycle_depth_ = false;
+    box_cycle_modifiers_ = {};
+    box_hovered_before_selection_.reset();
+    box_baseline_.reset();
+  }
+  // The first release and second double-click press can share a frame while
+  // the ordinary first click still owns the pending selection box.
+  if (box_state_.active && !box_state_.dragging &&
+      (frame.left_pressed || frame.left_released) &&
+      frame.input.cycle_selection_depth_pressed && can_cycle_depth) {
+    box_cycle_depth_ = true;
+    box_cycle_modifiers_ = frame.input.cycle_selection_depth_modifiers;
+  }
 
   auto claim_hover_work = [&]() {
     return tool_hover == nullptr ||
@@ -416,20 +742,55 @@ void ViewportSelectionInteraction::handle_frame(
         clear_hover();
       };
 
-  if (before_tool.selection_click_requested && can_pick) {
+  auto finish_pending_pick_feedback = [&]() {
+    if (!pending_pick_feedback_.has_value()) {
+      return;
+    }
+    const PendingPickFeedback feedback = *pending_pick_feedback_;
+    pending_pick_feedback_.reset();
+    suppress_hover_after_selection(feedback.local,
+                                   feedback.hovered_before_selection);
+    refresh_hover_work_after_selection(feedback.local, false);
+  };
+  finish_pending_pick_feedback();
+
+  if (before_tool.selection_click_requested && can_pick &&
+      (!before_tool.selection_cycle_depth || can_cycle_depth)) {
     QDR_PROFILE_SCOPE("Viewport selection deferred gizmo click");
     const QuaderHoverTarget hovered_before_selection =
         editor.selection().hover_summary().target;
-    const QuaderSelectionSummary summary = pick_selection(
-        editor, frame.input_router, frame, before_tool.selection_click_local,
+    const std::optional<QuaderSelectionSummary> summary = commit_pick_selection(
+        editor, frame, before_tool.selection_click_local,
         std::max(1, before_tool.selection_click_count),
-        true, true, true);
-    paint_selection_active_ =
-        is_component_selection_mode(to_modeling_selection_mode(summary.mode));
-    suppress_hover_after_selection(before_tool.selection_click_local,
+        true, !before_tool.selection_cycle_depth,
+        !before_tool.selection_cycle_depth, before_tool.selection_cycle_depth,
+        before_tool.selection_cycle_depth_modifiers, hovered_before_selection);
+    if (summary.has_value()) {
+      paint_selection_active_ =
+          is_component_selection_mode(to_modeling_selection_mode(summary->mode));
+      enter_picked_instance(editor, frame, *summary,
+                            before_tool.selection_click_count,
+                            before_tool.selection_cycle_depth);
+      suppress_hover_after_selection(before_tool.selection_click_local,
+                                     hovered_before_selection);
+      refresh_hover_work_after_selection(before_tool.selection_click_local,
+                                         false);
+    }
+  }
+
+  // A rebound keyboard gesture has no mouse press/release to carry its intent.
+  // Mouse double-clicks use the normal click-versus-drag lifecycle below.
+  if (frame.input.cycle_selection_depth_pressed && !frame.left_pressed &&
+      !frame.left_down && !box_state_.active &&
+      !before_tool.selection_click_requested && can_cycle_depth) {
+    const QuaderHoverTarget hovered_before_selection =
+        editor.selection().hover_summary().target;
+    (void)commit_pick_selection(
+        editor, frame, frame.input.mouse_local, 1, true, false, false, true,
+        frame.input.cycle_selection_depth_modifiers);
+    suppress_hover_after_selection(frame.input.mouse_local,
                                    hovered_before_selection);
-    refresh_hover_work_after_selection(before_tool.selection_click_local,
-                                       false);
+    refresh_hover_work_after_selection(frame.input.mouse_local, false);
   }
 
   if (!box_state_.active && can_pick && frame.input.modifiers.alt &&
@@ -456,11 +817,20 @@ void ViewportSelectionInteraction::handle_frame(
     return;
   }
 
-  if (!box_state_.active && can_use_selection_fallback && frame.left_pressed) {
+  if (!box_state_.active && can_use_selection_fallback && frame.left_pressed &&
+      !before_tool.selection_click_requested) {
     QDR_PROFILE_SCOPE("Viewport selection begin box");
     box_edit_ = selection_edit_from_modifiers(frame.input.modifiers);
+    box_cycle_depth_ = frame.input.cycle_selection_depth_pressed;
+    box_cycle_modifiers_ = frame.input.cycle_selection_depth_modifiers;
+    if (box_cycle_depth_ && !can_cycle_depth) {
+      box_cycle_depth_ = false;
+      return;
+    }
     box_hovered_before_selection_ = editor.selection().hover_summary().target;
-    box_baseline_ = editor.selection().capture_box_selection_baseline();
+    box_baseline_ = !box_cycle_depth_ && depth_click_baseline_.has_value()
+                        ? depth_click_baseline_->selection
+                        : editor.selection().capture_box_selection_baseline();
     quader_editor_core::begin_selection_box(box_state_, frame.left_click_local,
                                             selection_box_operation(box_edit_));
   }
@@ -489,6 +859,7 @@ void ViewportSelectionInteraction::handle_frame(
         box_hovered_before_selection_.value_or(
             editor.selection().hover_summary().target);
     if (commit.dragged) {
+      cancel_pending_click();
       committed_marquee_ = box_marquee(commit.start, commit.end);
       (void)box_selection(editor, frame.input_router, frame, commit.start,
                           commit.end, box_edit_,
@@ -496,31 +867,35 @@ void ViewportSelectionInteraction::handle_frame(
       suppress_hover_after_selection(commit.end, hovered_before_selection);
       refresh_hover_work_after_selection(commit.end, false);
     } else if (can_pick) {
-      const QuaderSelectionSummary summary = pick_selection(
-          editor, frame.input_router, frame, frame.left_click_local,
-          std::max(1, frame.left_click_count));
-      paint_selection_active_ =
-          is_component_selection_mode(to_modeling_selection_mode(summary.mode));
-      if (plain_instance_edit_double_click(frame, summary)) {
-        if (const std::optional<EntityId> occurrence =
-                active_selected_instance(editor)) {
-          const QuaderApiVoidResult entered =
-              editor.modeling().enter_instance_edit(*occurrence);
-          if (!entered.ok()) {
-            LOG_ERROR("Instance edit entry failed: {}",
-                      entered.error_message().empty()
-                          ? "Instance edit entry failed."
-                          : entered.error_message());
-          }
-        }
+      const std::optional<QuaderSelectionSummary> summary = commit_pick_selection(
+          editor, frame, frame.left_click_local,
+          std::max(1, frame.left_click_count), box_cycle_depth_, false, false,
+          box_cycle_depth_, box_cycle_modifiers_, hovered_before_selection);
+      if (summary.has_value()) {
+        paint_selection_active_ = is_component_selection_mode(
+            to_modeling_selection_mode(summary->mode));
+        enter_picked_instance(editor, frame, *summary, frame.left_click_count,
+                              box_cycle_depth_);
+        suppress_hover_after_selection(frame.left_click_local,
+                                       hovered_before_selection);
+        refresh_hover_work_after_selection(frame.left_click_local, false);
       }
-      suppress_hover_after_selection(frame.left_click_local,
-                                     hovered_before_selection);
-      refresh_hover_work_after_selection(frame.left_click_local, false);
     }
     box_edit_ = QuaderSelectionEdit::Replace;
+    box_cycle_depth_ = false;
+    box_cycle_modifiers_ = {};
     box_hovered_before_selection_.reset();
     box_baseline_.reset();
+  }
+
+  if (pending_first_pick_.has_value() && !frame.left_down) {
+    if (!can_pick || !pending_click_matches_context(editor, frame)) {
+      cancel_pending_click();
+    } else if (frame.monotonic_time_seconds >=
+               depth_click_baseline_->deadline_seconds) {
+      (void)commit_pending_pick(editor, frame);
+      finish_pending_pick_feedback();
+    }
   }
 
   if (frame.left_released || !frame.left_down) {
@@ -638,6 +1013,7 @@ void ViewportSelectionInteraction::handle_frame(
 
 QuaderSelectionSummary ViewportSelectionInteraction::pick_context_menu_target(
     QuaderEditorApi &editor, const ViewportInteractionFrame &frame) {
+  cancel_pending_click();
   const QuaderSelectionSummary summary =
       pick_selection(editor, frame.input_router, frame, frame.input.mouse_local,
                      1, true, true, true);

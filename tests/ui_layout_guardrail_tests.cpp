@@ -3174,6 +3174,34 @@ TEST(UiLayoutGuardrailTests,
                   "locked owner -> activity -> hover -> focus -> workspace focus");
   expect_contains(interaction, "selection_.handle_frame(");
   expect_contains(interaction, "transform_gizmo_.handle_frame(");
+  EXPECT_LT(interaction.find("selection_.prepare_frame("),
+            interaction.find("transform_gizmo_.handle_frame("));
+  const std::string selection_source = read_source_file(
+      "src/editor/viewport/viewport_selection_interaction.cpp");
+  const std::string prepare_selection = source_slice(
+      selection_source, "ViewportSelectionInteraction::prepare_frame(",
+      "QuaderSelectionSummary ViewportSelectionInteraction::commit_pending_pick(");
+  const auto press_gate = prepare_selection.find("if (!frame.left_pressed)");
+  const auto baseline_capture =
+      prepare_selection.find("capture_box_selection_baseline()");
+  ASSERT_NE(press_gate, std::string_view::npos);
+  ASSERT_NE(baseline_capture, std::string_view::npos);
+  EXPECT_LT(press_gate, baseline_capture);
+  expect_contains(prepare_selection.substr(press_gate, baseline_capture - press_gate),
+                  "return resolved_selection;");
+  const auto idle_gate =
+      prepare_selection.find("!pending_first_pick_.has_value()");
+  const auto scene_lookup =
+      prepare_selection.find("scene_documents().active_scene_id()");
+  ASSERT_NE(idle_gate, std::string_view::npos);
+  ASSERT_NE(scene_lookup, std::string_view::npos);
+  EXPECT_LT(idle_gate, scene_lookup);
+  expect_contains(interaction, "prepared.selection_state =");
+  expect_contains(interaction, "result.selection_after_pending_pick");
+  expect_contains(panel, "before_tool.selection_after_pending_pick->summary");
+  expect_contains(panel, "cancel_pending_selection_click()");
+  expect_missing(prepare_selection, "commands().available(");
+  expect_missing(prepare_selection, "query().entities(");
   expect_contains(native_tools, "linear_array_drag_point(");
   expect_contains(native_tools, "pivot_handle_hit(");
   expect_contains(native_tools, "radial_array->lock_center()");

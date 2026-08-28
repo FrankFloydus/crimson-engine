@@ -352,6 +352,57 @@ viewport_input_action_binding_catalog() {
           .action = ViewportInputActionKind::FlyLeft,
       },
       {
+          .target_id = viewport_input_action_target_id("selection.cycle_depth"),
+          .action_id = "viewport.selection.cycle_depth",
+          .label = "Cycle Mesh Selection Depth (Orthographic)",
+          .localization_key =
+              "keybindings.target.viewport.selection.cycle_depth.label",
+          .context = ViewportInputBindingContext::Viewport,
+          .shortcut = "LeftMouseDoubleClick",
+          .when = "viewportFocus && viewport.orthographic && !textInputActive && "
+                  "!navigation.active && !modalTool.active && "
+                  "!activeTool.ownsViewport && !transformDrag.active && "
+                  "!operationPreview.active",
+          .selection_mode_mask =
+              viewport_selection_mode_mask(ViewportSelectionMode::Object),
+          .weight = 30,
+          .action = ViewportInputActionKind::CycleSelectionDepth,
+      },
+      {
+          .target_id = viewport_input_action_target_id("selection.add_depth"),
+          .action_id = "viewport.selection.add_depth",
+          .label = "Add Mesh at Selection Depth (Orthographic)",
+          .localization_key =
+              "keybindings.target.viewport.selection.add_depth.label",
+          .context = ViewportInputBindingContext::Viewport,
+          .shortcut = "Shift+LeftMouseDoubleClick",
+          .when = "viewportFocus && viewport.orthographic && !textInputActive && "
+                  "!navigation.active && !modalTool.active && "
+                  "!activeTool.ownsViewport && !transformDrag.active && "
+                  "!operationPreview.active",
+          .selection_mode_mask =
+              viewport_selection_mode_mask(ViewportSelectionMode::Object),
+          .weight = 30,
+          .action = ViewportInputActionKind::AddSelectionDepth,
+      },
+      {
+          .target_id = viewport_input_action_target_id("selection.remove_depth"),
+          .action_id = "viewport.selection.remove_depth",
+          .label = "Remove Mesh at Selection Depth (Orthographic)",
+          .localization_key =
+              "keybindings.target.viewport.selection.remove_depth.label",
+          .context = ViewportInputBindingContext::Viewport,
+          .shortcut = "Ctrl+LeftMouseDoubleClick",
+          .when = "viewportFocus && viewport.orthographic && !textInputActive && "
+                  "!navigation.active && !modalTool.active && "
+                  "!activeTool.ownsViewport && !transformDrag.active && "
+                  "!operationPreview.active",
+          .selection_mode_mask =
+              viewport_selection_mode_mask(ViewportSelectionMode::Object),
+          .weight = 30,
+          .action = ViewportInputActionKind::RemoveSelectionDepth,
+      },
+      {
           .target_id = viewport_input_action_target_id("material.sample_face"),
           .action_id = "viewport.material.sample_face",
           .label = "Set Active Material from Clicked Face",

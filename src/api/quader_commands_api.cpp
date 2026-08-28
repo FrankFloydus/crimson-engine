@@ -369,6 +369,7 @@ viewport_keybinding_context(const ViewportToolState &state,
   QuaderKeybindingContext context;
   context.set("viewportFocus", viewport_focused);
   context.set("viewport.hovered", input_context.viewport_hovered);
+  context.set("viewport.orthographic", input_context.orthographic_view);
   context.set("textInputActive", text_input_active);
   context.set("editorTextFocus", text_input_active);
   context.set("canUndo", can_undo);

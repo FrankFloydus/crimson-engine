@@ -521,15 +521,37 @@ EditorSelectionService::capture_box_selection_baseline() const {
 
 ModelingSelectionSummary
 EditorSelectionService::pick_select(const ModelingPickSelectRequest &request) {
+  return pick_select(request, nullptr);
+}
+
+ModelingSelectionSummary EditorSelectionService::pick_select(
+    const ModelingPickSelectRequest &request,
+    const EditorSelectionBoxBaseline &baseline) {
+  return pick_select(request, &baseline);
+}
+
+ModelingSelectionSummary EditorSelectionService::pick_select(
+    const ModelingPickSelectRequest &request,
+    const EditorSelectionBoxBaseline *baseline) {
   const ModelingSelectionMode selection_mode = modeling_.selection_mode();
+  if (!request.depth_cycle_requested(selection_mode) ||
+      (baseline != nullptr && baseline->mode != selection_mode)) {
+    baseline = nullptr;
+  }
   if (selection_mode_uses_scene_document(selection_mode)) {
     const std::optional<EntityId> hit_mesh =
         modeling_.pick_object_entity(request);
+    // An empty Object-mode depth stack is a no-op, independent of ordinary
+    // miss policy. Other modes keep their existing single/double-click path.
+    if (!hit_mesh.has_value() && request.depth_cycle_requested(selection_mode) &&
+        baseline == nullptr) {
+      return summary();
+    }
     const EntityId hit_entity = hit_mesh.value_or(kInvalidEntityId);
     return scene_pick_selection(selection_mode == ModelingSelectionMode::Group
                                     ? nearest_group_ancestor(hit_entity)
                                     : hit_entity,
-                                selection_mode, request);
+                                selection_mode, request, baseline);
   }
 
   return modeling_.pick_select(request);
@@ -685,7 +707,8 @@ EditorSelectionTarget EditorSelectionService::target_from_summary(
 
 ModelingSelectionSummary EditorSelectionService::scene_pick_selection(
     EntityId target_entity, ModelingSelectionMode mode,
-    const ModelingPickSelectRequest &request) {
+    const ModelingPickSelectRequest &request,
+    const EditorSelectionBoxBaseline *baseline) {
   if (!scene_target_selectable(target_entity)) {
     target_entity = kInvalidEntityId;
   }
@@ -702,8 +725,10 @@ ModelingSelectionSummary EditorSelectionService::scene_pick_selection(
   const bool preserve_selected_hit =
       request.preserve_selection_on_selected_hit && target_selected &&
       !add_selection && !remove_selection;
-  const std::vector<EntityId> previous_selected = scene_.selected_entities();
-  const EntityId previous_active = scene_.primary_selection();
+  const std::vector<EntityId> previous_selected =
+      baseline != nullptr ? baseline->scene_selection : scene_.selected_entities();
+  const EntityId previous_active =
+      baseline != nullptr ? baseline->active_entity : scene_.primary_selection();
   SceneSelectionState resolved{
       .selected = previous_selected,
       .active = previous_active,
@@ -711,6 +736,7 @@ ModelingSelectionSummary EditorSelectionService::scene_pick_selection(
 
   if (target_entity == kInvalidEntityId) {
     if (edit == SceneSelectionEdit::Replace &&
+        !request.depth_cycle_requested(mode) &&
         !request.preserve_selection_on_miss) {
       resolved.selected.clear();
       resolved.active = kInvalidEntityId;
@@ -721,8 +747,8 @@ ModelingSelectionSummary EditorSelectionService::scene_pick_selection(
                                             edited_entities, edit);
   }
 
-  if (resolved.selected != previous_selected ||
-      resolved.active != previous_active) {
+  if (resolved.selected != scene_.selected_entities() ||
+      resolved.active != scene_.primary_selection()) {
     (void)set_scene_selection(
         std::span<const EntityId>(resolved.selected.data(),
                                   resolved.selected.size()),

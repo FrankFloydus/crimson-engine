@@ -188,6 +188,9 @@ enum class ViewportInputActionKind {
     SampleFaceMaterial,
     ApplyActiveMaterialToSelection,
     ApplyFaceMaterialToMesh,
+    CycleSelectionDepth,
+    AddSelectionDepth,
+    RemoveSelectionDepth,
 };
 
 /**

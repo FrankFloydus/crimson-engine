@@ -681,6 +681,7 @@ quader_register_filament_material(ground_grid_material resources/materials/groun
 
 add_library(quader_platform STATIC
     src/platform/fatal_error_handler.cpp
+    src/platform/native_window_input.cpp
     src/platform/platform_file_dialog.cpp
     src/platform/platform_shell.cpp
     src/platform/raw_mouse_input.cpp
@@ -864,6 +865,7 @@ add_library(quader_ui STATIC
     src/ui/qt_viewport_context_menu.cpp
     src/ui/qt_viewport_delete_popup.cpp
     src/ui/qt_viewport_fly_navigation_hud.cpp
+    src/ui/qt_viewport_edge_length_hud.cpp
     src/ui/qt_viewport_render_submission_policy.hpp
     src/ui/qt_viewport_panel.cpp
     src/ui/qt_viewport_surface.cpp
@@ -1400,6 +1402,7 @@ if(QUADER_BUILD_TESTS)
         tests/qt_viewport_pane_activation_tests.cpp
         tests/qt_viewport_render_submission_policy_tests.cpp
         tests/qt_viewport_fly_navigation_hud_tests.cpp
+        tests/qt_viewport_edge_length_hud_tests.cpp
         tests/qt_viewport_delete_popup_tests.cpp
         tests/qt_viewport_context_menu_tests.cpp
         tests/qstr_tests.cpp

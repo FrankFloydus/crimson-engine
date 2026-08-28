@@ -71,10 +71,14 @@ ModelingSelectionEdit to_modeling_edit(QuaderSelectionEdit edit) {
  */
 class QuaderSelectionBoxBaseline::Impl final {
 public:
-    explicit Impl(EditorSelectionBoxBaseline baseline)
-        : baseline(std::move(baseline)) {}
+    Impl(EditorSelectionBoxBaseline baseline, SceneSessionId scene_session_id,
+         const SceneSession *owner)
+        : baseline(std::move(baseline)), scene_session_id(scene_session_id),
+          owner(owner) {}
 
     EditorSelectionBoxBaseline baseline;
+    SceneSessionId scene_session_id;
+    const SceneSession *owner = nullptr;
 };
 
 QuaderSelectionBoxBaseline::QuaderSelectionBoxBaseline() = default;
@@ -365,13 +369,37 @@ QuaderApiVoidResult QuaderSelectionApi::set_mode(QuaderSelectionMode mode) {
 
 QuaderApiResult<QuaderSelectionSummary>
 QuaderSelectionApi::pick_select(const QuaderPickSelectRequest &request) {
+  return pick_select(request, nullptr);
+}
+
+QuaderApiResult<QuaderSelectionSummary> QuaderSelectionApi::pick_select(
+    const QuaderPickSelectRequest &request,
+    const QuaderSelectionBoxBaseline &baseline) {
+  return pick_select(request, &baseline);
+}
+
+QuaderApiResult<QuaderSelectionSummary> QuaderSelectionApi::pick_select(
+    const QuaderPickSelectRequest &request,
+    const QuaderSelectionBoxBaseline *baseline) {
   QDR_PROFILE_FUNCTION();
+  if (baseline != nullptr && baseline->impl_ != nullptr &&
+      (!mutations_.belongs_to_active_scene(baseline->impl_->scene_session_id) ||
+       baseline->impl_->owner !=
+           QuaderApiSessionInternalAccess::active_scene_session(session_))) {
+    return quader_api_result_from_status<QuaderSelectionSummary>(
+        mutations_.stale_scene_reference_status("Selection baseline"));
+  }
   SceneSession &session = scene_session(session_);
   const bool document_selection_mode =
       selection_mode_uses_scene_document(session.selection().mode());
   const ModelingSelectionSummary before = session.selection().summary();
+  const ModelingPickSelectRequest modeling_request =
+      to_modeling_pick_select_request(request);
   const ModelingSelectionSummary picked =
-      session.selection().pick_select(to_modeling_pick_select_request(request));
+      baseline != nullptr && baseline->impl_ != nullptr
+          ? session.selection().pick_select(modeling_request,
+                                             baseline->impl_->baseline)
+          : session.selection().pick_select(modeling_request);
   const ModelingSelectionSummary after = session.selection().summary();
   const bool changed = before.content_revision != after.content_revision ||
                        before.selection_revision != after.selection_revision;
@@ -394,7 +422,8 @@ QuaderSelectionApi::capture_box_selection_baseline() const {
           new QuaderSelectionBoxBaseline::Impl(
               scene_session(session_)
                   .selection()
-                  .capture_box_selection_baseline())));
+                  .capture_box_selection_baseline(),
+              mutations_.scene_session_id(), &scene_session(session_))));
 }
 
 QuaderApiResult<QuaderSelectionSummary>

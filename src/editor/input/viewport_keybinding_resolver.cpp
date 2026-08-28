@@ -8,6 +8,7 @@
 
 #include "api/quader_editor_api.hpp"
 #include "core/logger.hpp"
+#include "editor/input/quader_input_binding.hpp"
 #include "viewport/viewport_host_interaction_policy.hpp"
 #include "viewport/viewport_input_types.hpp"
 
@@ -104,6 +105,18 @@ void mark_action_pressed(ViewportInputFrame &input,
     break;
   case ViewportInputActionKind::ApplyFaceMaterialToMesh:
     input.apply_face_material_to_mesh_pressed = true;
+    break;
+  case ViewportInputActionKind::CycleSelectionDepth:
+    input.cycle_selection_depth_pressed = true;
+    input.cycle_selection_depth_modifiers = {};
+    break;
+  case ViewportInputActionKind::AddSelectionDepth:
+    input.cycle_selection_depth_pressed = true;
+    input.cycle_selection_depth_modifiers = {.shift = true};
+    break;
+  case ViewportInputActionKind::RemoveSelectionDepth:
+    input.cycle_selection_depth_pressed = true;
+    input.cycle_selection_depth_modifiers = {.primary = true};
     break;
   default:
     mark_navigation_pressed(input.navigation_bindings, action);
@@ -207,6 +220,7 @@ QuaderViewportKeybindingContext
 keybinding_context(const ViewportInputFrame &input) {
   return {
       .viewport_hovered = input.viewport_hovered,
+      .orthographic_view = input.orthographic_view,
       .navigation_active = input.navigation_active,
       .fly_navigation_active = input.fly_navigation_active,
       .orbit_navigation_active = input.orbit_navigation_active,
@@ -255,6 +269,72 @@ std::optional<ViewportInputActionKind> paired_mouse_double_click_action(
     return std::nullopt;
   }
   return paired_action;
+}
+
+bool is_selection_depth_action(ViewportInputActionKind action) {
+  return action == ViewportInputActionKind::CycleSelectionDepth ||
+         action == ViewportInputActionKind::AddSelectionDepth ||
+         action == ViewportInputActionKind::RemoveSelectionDepth;
+}
+
+bool has_left_mouse_depth_double_click_binding(
+    QuaderEditorApi &editor, const ViewportToolState &state,
+    const ViewportInputFrame &input, const QuaderInputChord &click) {
+  const auto paired_action =
+      paired_mouse_double_click_action(editor, state, input, click);
+  if (paired_action && is_selection_depth_action(*paired_action)) {
+    return true;
+  }
+
+  // Modifiers can change between the first click and Qt's recognized double.
+  // These target lookups use the effective-rule cache, not the Settings catalog.
+  for (const std::string_view target : {
+           "viewport.selection.cycle_depth", "viewport.selection.add_depth",
+           "viewport.selection.remove_depth"}) {
+    const auto mapping =
+        quader_input_parse_shortcut(editor.commands().shortcut_for(target));
+    if (!mapping || mapping->size() != 1u) {
+      continue;
+    }
+    const QuaderInputChord &candidate = mapping->front();
+    if (candidate.device != QuaderInputDevice::Mouse ||
+        candidate.mouse_button != QuaderMouseButton::Left ||
+        candidate.gesture != QuaderInputGesture::DoubleClick) {
+      continue;
+    }
+    ViewportInputActionKind action = ViewportInputActionKind::None;
+    if (resolve_action(editor, state, input, candidate, action) &&
+        is_selection_depth_action(action)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+void record_selection_click_provenance(
+    QuaderEditorApi &editor, const ViewportToolState &state,
+    ViewportInputFrame &input, const QuaderInputChord &chord, bool handled) {
+  if (chord.device != QuaderInputDevice::Mouse ||
+      chord.mouse_button != QuaderMouseButton::Left ||
+      (chord.gesture != QuaderInputGesture::Press &&
+       chord.gesture != QuaderInputGesture::Click)) {
+    return;
+  }
+
+  input.selection_click_delay_for_double_click = false;
+  input.selection_click_modifiers = {};
+  if (handled || input.keybinding_input_consumed) {
+    return;
+  }
+
+  QuaderInputChord click = chord;
+  click.gesture = QuaderInputGesture::Click;
+  if (!has_left_mouse_depth_double_click_binding(editor, state, input, click)) {
+    return;
+  }
+  input.selection_click_delay_for_double_click = true;
+  input.selection_click_modifiers = {
+      .primary = chord.primary, .shift = chord.shift, .alt = chord.alt};
 }
 
 bool apply_active_material_needs_double_click_delay(
@@ -360,6 +440,10 @@ void ViewportKeybindingResolver::resolve(QuaderEditorApi &editor,
   input.apply_active_material_to_selection_pressed = false;
   input.apply_active_material_delay_for_double_click = false;
   input.apply_face_material_to_mesh_pressed = false;
+  input.selection_click_delay_for_double_click = false;
+  input.selection_click_modifiers = {};
+  input.cycle_selection_depth_pressed = false;
+  input.cycle_selection_depth_modifiers = {};
   input.mouse_wheel = 0.0f;
   const bool array_wheel_context_active =
       input.viewport_focused && !input.text_input_active &&
@@ -453,6 +537,10 @@ void ViewportKeybindingResolver::resolve(QuaderEditorApi &editor,
             });
         if (pending_before) {
           input.keybinding_input_consumed = true;
+        }
+        if (kind == ViewportInputEdgeKind::Pressed) {
+          record_selection_click_provenance(editor, state, input, chord,
+                                            handled);
         }
         if (kind == ViewportInputEdgeKind::Pressed &&
             (pending_before || stateful_dispatch_handled)) {

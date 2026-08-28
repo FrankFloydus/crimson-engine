@@ -56,6 +56,7 @@ struct QuaderViewportKeybindingDispatch {
  */
 struct QuaderViewportKeybindingContext {
   bool viewport_hovered = false;
+  bool orthographic_view = false;
   bool navigation_active = false;
   bool fly_navigation_active = false;
   bool orbit_navigation_active = false;

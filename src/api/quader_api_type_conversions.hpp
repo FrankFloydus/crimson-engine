@@ -688,6 +688,8 @@ to_modeling_pick_select_request(const QuaderPickSelectRequest &request) {
       .vertex_radius = request.vertex_radius,
       .edge_radius = request.edge_radius,
       .select_backfaces = request.select_backfaces,
+      .cycle_depth = request.cycle_depth,
+      .cycle_origin_tolerance = request.cycle_origin_tolerance,
   };
 }
 

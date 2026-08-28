@@ -4235,6 +4235,18 @@ TEST(WindowGuardrailTests,
   ASSERT_NE(apply_window_settings, std::string::npos);
   ASSERT_NE(reveal_window, std::string::npos);
   EXPECT_LT(apply_window_settings, reveal_window);
+  const std::size_t restore_begin =
+      app_source.find("void App::apply_window_settings()");
+  const std::size_t native_geometry_sync = app_source.find(
+      "native_window->setGeometry(window->geometry())", restore_begin);
+  const std::size_t native_frame_margins =
+      app_source.find("native_window->frameMargins()", restore_begin);
+  ASSERT_NE(native_geometry_sync, std::string::npos);
+  ASSERT_NE(native_frame_margins, std::string::npos);
+  EXPECT_LT(native_geometry_sync, native_frame_margins);
+  expect_contains(app_source, ".top = margins.top()");
+  expect_contains(app_source, ".bottom = margins.bottom()");
+  expect_contains(window_placement_header, "struct PlatformWindowFrameMargins");
   expect_contains(app_source, "window->normalGeometry()");
   expect_contains(app_source, "window->isMaximized()");
   expect_contains(app_source, "window_settings_.set_placement(");

@@ -50,6 +50,7 @@ class PivotToolService;
 class RadialArrayToolService;
 class QuaderEditorApi;
 class RenderOverlaySnapshotCache;
+class QtViewportEdgeLengthHud;
 class QtViewportFlyNavigationHud;
 class SceneDocument;
 class SceneRenderBridge;
@@ -178,6 +179,7 @@ private:
     std::array<QAction *, 6> debug_view_actions = {};
     QLabel *info_overlay = nullptr;
     QtNavigationGizmo *navigation_gizmo = nullptr;
+    QtViewportEdgeLengthHud *edge_length_hud = nullptr;
     QtViewportFlyNavigationHud *fly_navigation_hud = nullptr;
     QtViewportSurface *surface = nullptr;
     QWidget *surface_container = nullptr;
@@ -293,6 +295,7 @@ private:
   double linear_array_wheel_remainder_ = 0.0;
   double radial_array_wheel_remainder_ = 0.0;
   bool last_fly_navigation_active_ = false;
+  bool edge_length_hud_enabled_ = false;
   const SceneDocument *viewport_info_cached_document_ = nullptr;
   const AssetRegistry *viewport_info_cached_assets_ = nullptr;
   std::uint64_t viewport_info_cached_visibility_revision_ = 0;

@@ -61,6 +61,7 @@ Existing important keys include:
 
 - `viewportFocus`
 - `viewport.hovered`
+- `viewport.orthographic`
 - `textInputActive`
 - `editorTextFocus`
 - `navigation.active`
@@ -230,10 +231,34 @@ Current compiled defaults added with the scoped editor are:
   not pretend to hide individual vertices, edges, or faces.
 - `F1`, `F2`, `F3`, and `F4` select Top, Side, Front, and Perspective views.
 - `F5`, `F6`, and `F7` select Wireframe, Shaded, and Rendered presentation.
+  Orthographic panes start in Wireframe. Each pane remembers its orthographic and perspective
+  choices for the current session only; restarting the app restores the defaults.
 - `Ctrl+1`, `Ctrl+2`, `Ctrl+3`, and `Ctrl+4` select Single, Two Vertical, Two Horizontal, and Four
   Quad viewport layouts.
 - `Alt+WheelUp` and `Alt+WheelDown` increase and decrease the grid preset;
   `Alt+MiddleMouseClick` restores the default 32-unit preset.
+- `LeftMouseDoubleClick` cycles mesh selection depth only in orthographic Mesh selection mode
+  (`ViewportSelectionMode::Object`) through `viewport.selection.cycle_depth`.
+  `Shift+LeftMouseDoubleClick` adds the depth target through `viewport.selection.add_depth`;
+  `Ctrl+LeftMouseDoubleClick` removes it through `viewport.selection.remove_depth`. These three
+  independently editable semantic actions require viewport focus and no text input, navigation,
+  modal tool, viewport-owning tool, transform drag, or operation preview. The input frame supplies
+  `viewport.orthographic` from the pane camera projection; the catalog adds `selectionMode.object`
+  and the `viewport.selection.object` scope. Vertex, Edge, Face, and Group modes, perspective
+  views, Alt-modified double-clicks, and combined Shift+Ctrl double-clicks keep their existing
+  selection behavior. The resolver latches Replace, Add, or Remove from the resolved action,
+  independently of live modifier state and the physical binding. Unassigning or rebinding an
+  action removes only its own default double-click mapping while preserving its Mesh-only,
+  orthographic context and selection operation.
+  Add/Remove starts behind the ordinary surface hit; repeating the same action advances through
+  the stack, while changing the action starts a fresh traversal. Modified doubles preserve the
+  selection from before the first click. In orthographic Mesh mode, an ordinary left click remains
+  pending for the system double-click interval whenever any depth action is still bound to a
+  single left double-click. The pending pick freezes its ray and first-click modifiers; a native
+  double cancels it before any selection or history mutation. A lone click commits once when the
+  interval expires, and a distinct first press resolves the preceding single before gizmo work.
+  Context changes cancel pending picks. Other modes, perspective, drags, and configurations with
+  all left-double depth bindings removed retain their existing timing.
 
 The three relative/reset grid gestures dispatch as semantic `SetGridPreset` viewport shortcuts
 using the synchronized current preset. Do not route them only as immediate commands: actual wheel

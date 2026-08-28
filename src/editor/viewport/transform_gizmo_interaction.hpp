@@ -51,6 +51,8 @@ private:
           quader_editor_core::TransformAxis::None;
       quader::QVec2 click_local = {};
       int click_count = 1;
+      bool cycle_depth = false;
+      ViewportModifiers cycle_depth_modifiers = {};
     };
 
     /**

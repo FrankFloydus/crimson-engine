@@ -9,13 +9,18 @@
 #include "editor/input/quader_input_binding.hpp"
 #include "api/quader_api_session_internal_access.hpp"
 #include "api/quader_editor_api.hpp"
+#include "api/quader_polygon_document_internal_access.hpp"
+#include "editor/modeling/services/modeling_session_service.hpp"
 #include "editor/session/scene_session.hpp"
 #include "ui/qt_input_adapter.hpp"
 #include "ui/qt_viewport_panel.hpp"
 #include "ui/qt_viewport_surface.hpp"
+#include "viewport/viewport_settings.hpp"
 
 #include <QApplication>
 #include <QCoreApplication>
+#include <QEnterEvent>
+#include <QFocusEvent>
 #include <QKeyEvent>
 #include <QMouseEvent>
 #include <QPoint>
@@ -25,8 +30,10 @@
 #include <algorithm>
 #include <array>
 #include <cstddef>
+#include <initializer_list>
 #include <optional>
 #include <utility>
+#include <vector>
 
 namespace {
 
@@ -71,6 +78,14 @@ void expect_mouse_chord(const QuaderInputChord &chord,
   EXPECT_EQ(chord.device, QuaderInputDevice::Mouse);
   EXPECT_EQ(chord.mouse_button, button);
   EXPECT_EQ(chord.gesture, gesture);
+}
+
+void expect_history_unchanged(const quader::QuaderHistorySnapshot &actual,
+                              const quader::QuaderHistorySnapshot &before) {
+  EXPECT_EQ(actual.can_undo, before.can_undo);
+  EXPECT_EQ(actual.can_redo, before.can_redo);
+  EXPECT_EQ(actual.undo_label, before.undo_label);
+  EXPECT_EQ(actual.redo_label, before.redo_label);
 }
 
 } // namespace
@@ -562,6 +577,349 @@ TEST(QtViewportSurfaceInputTests,
       surface.take_input_frame(0.0f, false);
   EXPECT_FALSE(has_right_gesture(drag_release_frame,
                                  QuaderInputGesture::Click));
+}
+
+TEST(QtViewportSurfaceInputTests,
+     NativeMeshDoubleClicksCycleDepthThroughTheProductionPanelPath) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-viewport-depth-input-tests";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+
+  quader::SceneSession session;
+  quader::QuaderEditorApi editor(
+      quader::QuaderApiSessionInternalAccess::from_scene_session(session));
+  ASSERT_TRUE(editor.commands().set_keybinding_storage_path({}).ok());
+  ASSERT_TRUE(editor.main_viewport().set_view(quader::ViewportView::Back).ok());
+  ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::Select).ok());
+  std::array<quader::EntityId, 3> objects{};
+  for (std::size_t index = 0; index < objects.size(); ++index) {
+    const float z = 3.0f - 3.0f * static_cast<float>(index);
+    const auto box = editor.modeling().create_box(
+        {.min = {-1.0f, -1.0f, z - 1.0f},
+         .max = {1.0f, 1.0f, z + 1.0f}},
+        "Depth input box");
+    ASSERT_TRUE(box.ok()) << box.error_message();
+    objects[index] = box.value().entity;
+  }
+  ASSERT_TRUE(editor.selection().set_mode(quader::QuaderSelectionMode::Object).ok());
+  ASSERT_TRUE(editor.selection().clear().ok());
+
+  quader::QtViewportPanel panel;
+  panel.attach_workspace(session.viewport_workspace());
+  auto *surface = panel.surface(quader::ViewportPaneId::Perspective);
+  ASSERT_NE(surface, nullptr);
+  surface->resize(800, 600);
+  const QPointF local{400.0, 300.0};
+  const QPointF global{500.0, 400.0};
+  QEnterEvent enter(local, local, global);
+  QApplication::sendEvent(surface, &enter);
+  QFocusEvent focus(QEvent::FocusIn);
+  QApplication::sendEvent(surface, &focus);
+
+  const auto process_input = [&]() {
+    panel.process_input(
+        editor, session.scene(), session.assets(), session.modeling(), {},
+        &session.pivot(), &session.linear_array(), &session.radial_array(),
+        &session.point_placement(), 1.0 / 60.0);
+  };
+  const auto send_mouse = [&](QEvent::Type type, Qt::MouseButtons buttons) {
+    QMouseEvent event(type, local, global, Qt::LeftButton, buttons,
+                       Qt::NoModifier);
+    QApplication::sendEvent(surface, &event);
+    process_input();
+  };
+  process_input();
+  ASSERT_EQ(panel.tool_state().selection_mode,
+            quader::ViewportSelectionMode::Object);
+  ASSERT_EQ(session.viewport_workspace()
+                .camera(quader::ViewportPaneId::Perspective)
+                .state().projection,
+            quader::ViewportProjection::Orthographic);
+
+  for (const auto expected : {objects[1], objects[2], objects[0]}) {
+    const auto selected_before = session.scene().selected_entities();
+    const auto active_before = session.scene().primary_selection();
+    const auto selection_revision_before = session.scene().selection_revision();
+    const auto history_before = editor.history().snapshot();
+    send_mouse(QEvent::MouseButtonPress, Qt::LeftButton);
+    send_mouse(QEvent::MouseButtonRelease, Qt::NoButton);
+    EXPECT_EQ(session.scene().selected_entities(), selected_before);
+    EXPECT_EQ(session.scene().primary_selection(), active_before);
+    EXPECT_EQ(session.scene().selection_revision(), selection_revision_before);
+    expect_history_unchanged(editor.history().snapshot(), history_before);
+    send_mouse(QEvent::MouseButtonDblClick, Qt::LeftButton);
+    send_mouse(QEvent::MouseButtonRelease, Qt::NoButton);
+    EXPECT_EQ(session.scene().primary_selection(), expected);
+    EXPECT_EQ(session.scene().selection_revision(),
+              selection_revision_before + 1u);
+    process_input();
+    EXPECT_EQ(session.scene().primary_selection(), expected);
+    EXPECT_EQ(session.scene().selection_revision(),
+              selection_revision_before + 1u);
+    ASSERT_TRUE(editor.history().undo().ok());
+    EXPECT_EQ(session.scene().selected_entities(), selected_before);
+    EXPECT_EQ(session.scene().primary_selection(), active_before);
+    ASSERT_TRUE(editor.history().redo().ok());
+    EXPECT_EQ(session.scene().selected_entities(),
+              std::vector<quader::EntityId>{expected});
+  }
+}
+
+TEST(QtViewportSurfaceInputTests,
+     NativeMeshDoubleClickCyclesEdgeOnBoundariesWithCoalescedEvents) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-viewport-boundary-depth-tests";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+
+  for (const auto tool : {quader::ViewportToolId::Select,
+                          quader::ViewportToolId::Move}) {
+    for (const bool coalesced : {false, true}) {
+      SCOPED_TRACE(static_cast<int>(tool));
+      SCOPED_TRACE(coalesced);
+      quader::SceneSession session;
+      quader::QuaderEditorApi editor(
+          quader::QuaderApiSessionInternalAccess::from_scene_session(session));
+      ASSERT_TRUE(editor.commands().set_keybinding_storage_path({}).ok());
+      ASSERT_TRUE(editor.main_viewport().set_view(quader::ViewportView::Left).ok());
+      ASSERT_TRUE(editor.tools().activate(tool).ok());
+      quader_poly::Document topology;
+      const std::array vertices{
+          quader_poly::add_vertex(topology, {-2.0F, -1.0F, 0.0F}),
+          quader_poly::add_vertex(topology, {2.0F, -1.0F, 0.0F}),
+          quader_poly::add_vertex(topology, {2.0F, 1.0F, 0.0F}),
+          quader_poly::add_vertex(topology, {-2.0F, 1.0F, 0.0F})};
+      ASSERT_NE(quader_poly::add_face(topology, vertices),
+                quader_poly::kInvalidElementId);
+      const auto profile = editor.modeling().create_mesh(
+          quader::QuaderPolygonDocumentInternalAccess::from_backend(
+              std::move(topology)));
+      ASSERT_TRUE(profile.ok()) << profile.error_message();
+      const auto room = editor.modeling().create_box(
+          {.min = {-5.0F, -5.0F, -5.0F}, .max = {5.0F, 5.0F, 5.0F}});
+      ASSERT_TRUE(room.ok()) << room.error_message();
+      ASSERT_TRUE(editor.selection().set_mode(quader::QuaderSelectionMode::Object)
+                      .ok());
+      ASSERT_TRUE(editor.selection().select_object(room.value()).ok());
+      ASSERT_TRUE(editor.commands()
+                      .execute(quader::quader_command::kModelingFlipFaceNormals)
+                      .ok());
+      ASSERT_TRUE(editor.selection().clear().ok());
+
+      quader::ViewportSettings settings = quader::ViewportSettings::defaults();
+      (void)settings.set_bool_value(
+          quader::ViewportBoolSettingId::BackfaceSelection, false);
+      quader::QtViewportPanel panel;
+      panel.set_viewport_settings(settings);
+      panel.attach_workspace(session.viewport_workspace());
+      auto *surface = panel.surface(quader::ViewportPaneId::Perspective);
+      ASSERT_NE(surface, nullptr);
+      surface->resize(800, 600);
+      const QPointF local{400.0, 300.0};
+      const QPointF global{500.0, 400.0};
+      QEnterEvent enter(local, local, global);
+      QApplication::sendEvent(surface, &enter);
+      const auto process_input = [&]() {
+        panel.process_input(
+            editor, session.scene(), session.assets(), session.modeling(), {},
+            &session.pivot(), &session.linear_array(), &session.radial_array(),
+            &session.point_placement(), 1.0 / 60.0);
+      };
+      const auto send_mouse = [&](QEvent::Type type, Qt::MouseButtons buttons) {
+        QMouseEvent event(type, local, global, Qt::LeftButton, buttons,
+                           Qt::NoModifier);
+        QApplication::sendEvent(surface, &event);
+        if (!coalesced) {
+          process_input();
+        }
+      };
+      process_input();
+      for (const auto expected : {profile.value().entity, room.value().entity,
+                                  profile.value().entity}) {
+        const auto selected_before = session.scene().selected_entities();
+        const auto active_before = session.scene().primary_selection();
+        const auto selection_revision_before = session.scene().selection_revision();
+        const auto history_before = editor.history().snapshot();
+        send_mouse(QEvent::MouseButtonPress, Qt::LeftButton);
+        send_mouse(QEvent::MouseButtonRelease, Qt::NoButton);
+        EXPECT_EQ(session.scene().selected_entities(), selected_before);
+        EXPECT_EQ(session.scene().primary_selection(), active_before);
+        EXPECT_EQ(session.scene().selection_revision(), selection_revision_before);
+        expect_history_unchanged(editor.history().snapshot(), history_before);
+        send_mouse(QEvent::MouseButtonDblClick, Qt::LeftButton);
+        send_mouse(QEvent::MouseButtonRelease, Qt::NoButton);
+        process_input();
+        EXPECT_EQ(session.scene().primary_selection(), expected);
+        EXPECT_EQ(session.scene().selection_revision(),
+                  selection_revision_before + 1u);
+        process_input();
+        EXPECT_EQ(session.scene().primary_selection(), expected);
+        EXPECT_EQ(session.scene().selection_revision(),
+                  selection_revision_before + 1u);
+        EXPECT_FALSE(session.modeling().transform_drag_active());
+      }
+    }
+  }
+}
+
+TEST(QtViewportSurfaceInputTests,
+     ModifiedMeshDoubleClicksEditOnlyTheDepthHitAcrossNativeEventBatches) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-viewport-modified-depth-input-tests";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+
+  // These schedules also exercise a first release queued with the second press.
+  const std::array frame_schedules{
+      std::array{true, true, true, true},
+      std::array{false, false, false, true},
+      std::array{true, false, true, true}};
+  for (const auto tool : {quader::ViewportToolId::Select,
+                          quader::ViewportToolId::Move}) {
+    for (std::size_t schedule = 0; schedule < frame_schedules.size(); ++schedule) {
+      SCOPED_TRACE(static_cast<int>(tool));
+      SCOPED_TRACE(schedule);
+      quader::SceneSession session;
+      quader::QuaderEditorApi editor(
+          quader::QuaderApiSessionInternalAccess::from_scene_session(session));
+      ASSERT_TRUE(editor.commands().set_keybinding_storage_path({}).ok());
+      ASSERT_TRUE(editor.main_viewport().set_view(quader::ViewportView::Back).ok());
+      ASSERT_TRUE(editor.tools().activate(tool).ok());
+      const auto front = editor.modeling().create_box(
+          {.min = {-1.0F, -1.0F, 2.0F}, .max = {1.0F, 1.0F, 4.0F}},
+          "Front depth input box");
+      const auto behind = editor.modeling().create_box(
+          {.min = {-1.0F, -1.0F, -1.0F}, .max = {1.0F, 1.0F, 1.0F}},
+          "Behind depth input box");
+      const auto unrelated = editor.modeling().create_box(
+          {.min = {5.0F, 5.0F, -1.0F}, .max = {7.0F, 7.0F, 1.0F}},
+          "Unrelated selected box");
+      ASSERT_TRUE(front.ok()) << front.error_message();
+      ASSERT_TRUE(behind.ok()) << behind.error_message();
+      ASSERT_TRUE(unrelated.ok()) << unrelated.error_message();
+      ASSERT_TRUE(editor.selection().set_mode(quader::QuaderSelectionMode::Object)
+                      .ok());
+      ASSERT_TRUE(editor.selection().select_object(unrelated.value()).ok());
+      session.history().clear();
+      const auto scene_content_revision = session.scene().content_revision();
+      const auto transform_revision = session.scene().transform_revision();
+      const auto modeling_content_revision = session.modeling().content_revision();
+
+      quader::QtViewportPanel panel;
+      panel.attach_workspace(session.viewport_workspace());
+      auto *surface = panel.surface(quader::ViewportPaneId::Perspective);
+      ASSERT_NE(surface, nullptr);
+      surface->resize(800, 600);
+      const QPointF local{400.0, 300.0};
+      const QPointF global{500.0, 400.0};
+      QEnterEvent enter(local, local, global);
+      QApplication::sendEvent(surface, &enter);
+      QFocusEvent focus(QEvent::FocusIn);
+      QApplication::sendEvent(surface, &focus);
+      const auto process_input = [&]() {
+        panel.process_input(
+            editor, session.scene(), session.assets(), session.modeling(), {},
+            &session.pivot(), &session.linear_array(), &session.radial_array(),
+            &session.point_placement(), 1.0 / 60.0);
+      };
+      const auto double_click = [&](Qt::KeyboardModifiers modifiers,
+                                    bool selection_changes = true) {
+        const auto selected_before = session.scene().selected_entities();
+        const auto active_before = session.scene().primary_selection();
+        const auto selection_revision_before = session.scene().selection_revision();
+        const auto history_before = editor.history().snapshot();
+        constexpr std::array event_types{
+            QEvent::MouseButtonPress, QEvent::MouseButtonRelease,
+            QEvent::MouseButtonDblClick, QEvent::MouseButtonRelease};
+        for (std::size_t index = 0; index < event_types.size(); ++index) {
+          const bool release = event_types[index] == QEvent::MouseButtonRelease;
+          // Selection intent belongs to the double-click event, even when the
+          // modifier has already been released before the next input frame.
+          QMouseEvent event(event_types[index], local, global, Qt::LeftButton,
+                            release ? Qt::NoButton : Qt::LeftButton,
+                            release ? Qt::NoModifier : modifiers);
+          QApplication::sendEvent(surface, &event);
+          if (frame_schedules[schedule][index]) {
+            process_input();
+          }
+          if (index < 2u) {
+            EXPECT_EQ(session.scene().selected_entities(), selected_before);
+            EXPECT_EQ(session.scene().primary_selection(), active_before);
+            EXPECT_EQ(session.scene().selection_revision(),
+                      selection_revision_before);
+            expect_history_unchanged(editor.history().snapshot(), history_before);
+          }
+        }
+        EXPECT_EQ(session.scene().selection_revision(),
+                  selection_revision_before + (selection_changes ? 1u : 0u));
+        if (!selection_changes) {
+          expect_history_unchanged(editor.history().snapshot(), history_before);
+        }
+      };
+      const auto expect_selection =
+          [&](std::initializer_list<quader::EntityId> expected_entities) {
+            std::vector<quader::EntityId> expected(expected_entities);
+            std::sort(expected.begin(), expected.end());
+            const auto selection_revision = session.scene().selection_revision();
+            for (int idle_frame = 0; idle_frame < 2; ++idle_frame) {
+              auto selected = session.scene().selected_entities();
+              std::sort(selected.begin(), selected.end());
+              EXPECT_EQ(selected, expected);
+              EXPECT_EQ(session.scene().selection_revision(), selection_revision);
+              EXPECT_NE(std::find(selected.begin(), selected.end(),
+                                  session.scene().primary_selection()),
+                        selected.end());
+              EXPECT_FALSE(session.modeling().transform_drag_active());
+              EXPECT_EQ(editor.history().snapshot().undo_label, "Select Entities");
+              EXPECT_FALSE(editor.history().can_redo());
+              EXPECT_EQ(session.scene().content_revision(),
+                        scene_content_revision);
+              EXPECT_EQ(session.scene().transform_revision(), transform_revision);
+              EXPECT_EQ(session.modeling().content_revision(),
+                        modeling_content_revision);
+              process_input();
+            }
+          };
+      process_input();
+
+      double_click(Qt::ShiftModifier);
+      expect_selection({unrelated.value().entity, behind.value().entity});
+
+      ASSERT_TRUE(editor.selection()
+                      .select_object(front.value(), quader::QuaderSelectionEdit::Add)
+                      .ok());
+      double_click(Qt::ControlModifier);
+      expect_selection({unrelated.value().entity, front.value().entity});
+
+      // Further Remove gestures advance through the stack. An already removed
+      // mesh stays unselected when the traversal wraps back to it.
+      double_click(Qt::ControlModifier);
+      expect_selection({unrelated.value().entity});
+      double_click(Qt::ControlModifier, false);
+      expect_selection({unrelated.value().entity});
+
+      // Changing the operation restarts at the first mesh behind the front hit.
+      double_click(Qt::ShiftModifier);
+      expect_selection({unrelated.value().entity, behind.value().entity});
+      const auto selected_before_undo = session.scene().selected_entities();
+      const auto active_before_undo = session.scene().primary_selection();
+      ASSERT_TRUE(editor.history().undo().ok());
+      EXPECT_EQ(session.scene().selected_entities(),
+                std::vector<quader::EntityId>{unrelated.value().entity});
+      EXPECT_EQ(session.scene().primary_selection(), unrelated.value().entity);
+      ASSERT_TRUE(editor.history().redo().ok());
+      EXPECT_EQ(session.scene().selected_entities(), selected_before_undo);
+      EXPECT_EQ(session.scene().primary_selection(), active_before_undo);
+      expect_selection({unrelated.value().entity, behind.value().entity});
+    }
+  }
 }
 
 TEST(QtViewportSurfaceInputTests,

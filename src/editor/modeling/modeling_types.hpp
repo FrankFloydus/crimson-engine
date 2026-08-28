@@ -444,6 +444,13 @@ struct ModelingPickSelectRequest {
   double vertex_radius = 0.3;
   double edge_radius = 0.2;
   bool select_backfaces = true;
+  bool cycle_depth = false;
+  double cycle_origin_tolerance = 0.0;
+
+  [[nodiscard]] bool depth_cycle_requested(ModelingSelectionMode mode) const noexcept {
+    return mode == ModelingSelectionMode::Object && cycle_depth &&
+           click_count > 0 && !alt_pressed;
+  }
 };
 
 /// Identifies one live polygon face for a host-coordinated material rewrite.

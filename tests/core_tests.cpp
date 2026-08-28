@@ -60,6 +60,7 @@
 #include "render/mesh_renderable_factory.hpp"
 #include "render/mesh_renderable_proxy.hpp"
 #include "render/overlay/overlay_proxy_factory.hpp"
+#include "render/overlay/overlay_renderable_builder.hpp"
 #include "render/overlay/overlay_renderable_cache.hpp"
 #include "render/overlay/overlay_renderable_proxy.hpp"
 #include "render/overlay/scene_wireframe_overlay_cache.hpp"
@@ -1324,6 +1325,55 @@ TEST(WindowPlacementTests, PreservesMinimumSizeWithoutConnectedWorkAreas) {
   EXPECT_EQ(recovered.height, kPlatformWindowMinimumHeight);
 }
 
+TEST(WindowPlacementTests, RecoversDecoratedFrameInsideSecondaryWorkArea) {
+  const std::array work_areas{
+      PlatformWindowChromeFrame{0, 0, 2560, 1440},
+      PlatformWindowChromeFrame{2560, 486, 1920, 1032},
+  };
+  const PlatformWindowFrameMargins margins{
+      .left = 8, .top = 31, .right = 8, .bottom = 8};
+  const PlatformWindowChromeFrame recovered =
+      platform_window_recover_frame_to_display_work_area(
+          {.x = 2560, .y = 486, .width = 1920, .height = 1032}, work_areas,
+          margins);
+  EXPECT_EQ(recovered.x, 2568);
+  EXPECT_EQ(recovered.y, 517);
+  EXPECT_EQ(recovered.width, 1904);
+  EXPECT_EQ(recovered.height, 993);
+
+  const auto &secondary = work_areas[1];
+  EXPECT_GE(recovered.x - margins.left, secondary.x);
+  EXPECT_GE(recovered.y - margins.top, secondary.y);
+  EXPECT_LE(recovered.x + recovered.width + margins.right,
+            secondary.x + secondary.width);
+  EXPECT_LE(recovered.y + recovered.height + margins.bottom,
+            secondary.y + secondary.height);
+}
+
+TEST(WindowPlacementTests, MarginAwareRecoveryPreservesSafeFramesWithoutDrift) {
+  const std::array work_areas{
+      PlatformWindowChromeFrame{2560, 486, 1920, 1032},
+  };
+  const PlatformWindowFrameMargins margins{
+      .left = 8, .top = 31, .right = 8, .bottom = 8};
+  for (const auto original : std::array{
+           PlatformWindowChromeFrame{2700, 600, 1600, 800},
+           PlatformWindowChromeFrame{2568, 517, 1904, 993},
+       }) {
+    SCOPED_TRACE(original.x);
+    PlatformWindowChromeFrame recovered = original;
+    for (int restore = 0; restore < 3; ++restore) {
+      SCOPED_TRACE(restore);
+      recovered = platform_window_recover_frame_to_display_work_area(
+          recovered, work_areas, margins);
+      EXPECT_EQ(recovered.x, original.x);
+      EXPECT_EQ(recovered.y, original.y);
+      EXPECT_EQ(recovered.width, original.width);
+      EXPECT_EQ(recovered.height, original.height);
+    }
+  }
+}
+
 TEST(ViewportSettingsTests, DefaultsMatchNativeViewportSettingsState) {
   const ViewportSettings settings = ViewportSettings::defaults();
 
@@ -2289,6 +2339,155 @@ TEST(ViewportOverlayStyleResolverTests,
   EXPECT_FLOAT_EQ(frame.points[1].size_pixels, 14.0f);
   ASSERT_TRUE(frame.points[1].outline_growth_pixels.has_value());
   EXPECT_FLOAT_EQ(*frame.points[1].outline_growth_pixels, 3.0f);
+}
+
+TEST(ViewportOverlayStyleResolverTests,
+     BackfaceDisabledOmitsHoverFillWithoutChangingSelectedFacesOrOutline) {
+  ViewportSettings settings = ViewportSettings::defaults();
+  ASSERT_FALSE(settings.bool_value(ViewportBoolSettingId::BackfaceSelection));
+  ASSERT_TRUE(settings.set_color(ViewportColorSettingId::HoverWire,
+                                 {1.0f, 0.25f, 0.0f, 1.0f}));
+  ASSERT_TRUE(settings.set_color(ViewportColorSettingId::SelectionFace,
+                                 {0.0f, 1.0f, 0.0f, 0.5f}));
+  ViewportOverlayFrame frame;
+  for (const ViewportOverlayLayer layer : {
+           ViewportOverlayLayer::SelectedVisibleFace,
+           ViewportOverlayLayer::SelectedXrayFace,
+           ViewportOverlayLayer::SelectedFaceMask,
+           ViewportOverlayLayer::HoverFace,
+       }) {
+    frame.triangles.push_back({
+        .layer = layer,
+        .a = {0.0f, 0.0f, 0.0f},
+        .b = {1.0f, 0.0f, 0.0f},
+        .c = {0.0f, 1.0f, 0.0f},
+    });
+  }
+  frame.triangles.push_back({
+      .layer = ViewportOverlayLayer::HoverFace,
+      .style_role = ViewportOverlayStyleRole::HoverFace,
+  });
+  frame.lines.push_back({
+      .layer = ViewportOverlayLayer::HoverFaceEdge,
+      .start = {0.0f, 0.0f, 0.0f},
+      .end = {1.0f, 0.0f, 0.0f},
+  });
+
+  ViewportOverlayStyleResolver::apply(frame, settings);
+
+  ASSERT_EQ(frame.triangles.size(), 3u);
+  for (const ViewportOverlayTriangle &triangle : frame.triangles) {
+    EXPECT_NE(triangle.layer, ViewportOverlayLayer::HoverFace);
+    EXPECT_EQ(triangle.color, rgba8(0, 255, 0, 128));
+  }
+  ASSERT_EQ(frame.lines.size(), 1u);
+  EXPECT_EQ(frame.lines.front().layer, ViewportOverlayLayer::HoverFaceEdge);
+  EXPECT_EQ(frame.lines.front().color, rgba8(255, 64, 0));
+  EXPECT_TRUE(OverlayRenderableBuilder::build_layer(
+                  frame, {}, ViewportOverlayLayer::HoverFace)
+                  .face_fill_batches.empty());
+}
+
+TEST(ViewportOverlayStyleResolverTests,
+     BackfaceToggleRestoresHoverFromUnmodifiedSemanticFrame) {
+  ViewportSettings settings = ViewportSettings::defaults();
+  ViewportOverlayFrame semantic_frame;
+  semantic_frame.triangles.push_back({.layer = ViewportOverlayLayer::HoverFace});
+  semantic_frame.triangles.push_back({
+      .layer = ViewportOverlayLayer::SelectedVisibleFace,
+  });
+  semantic_frame.lines.push_back({.layer = ViewportOverlayLayer::HoverFaceEdge});
+
+  const ViewportOverlayFrame disabled =
+      ViewportOverlayStyleResolver::resolve(semantic_frame, settings);
+  ASSERT_EQ(disabled.triangles.size(), 1u);
+  EXPECT_EQ(disabled.triangles[0].color, kOverlaySelectionFaceColor);
+  ASSERT_TRUE(settings.set_bool_value(ViewportBoolSettingId::BackfaceSelection,
+                                      true));
+  const ViewportOverlayFrame enabled =
+      ViewportOverlayStyleResolver::resolve(semantic_frame, settings);
+
+  ASSERT_EQ(enabled.triangles.size(), 2u);
+  EXPECT_EQ(enabled.triangles[0].color, kOverlayHoverFaceColor);
+  EXPECT_EQ(enabled.triangles[1].color, kOverlaySelectionFaceColor);
+  ASSERT_EQ(enabled.lines.size(), 1u);
+  EXPECT_EQ(enabled.lines[0].color, kOverlayHoverWireColor);
+  EXPECT_EQ(semantic_frame.triangles.size(), 2u);
+}
+
+TEST(ViewportOverlayStyleResolverTests,
+     BackfaceHoverPolicyPreservesFacePlaneAndOtherAuthoredFills) {
+  const ViewportSettings settings = ViewportSettings::defaults();
+  ViewportOverlayFrame frame;
+  frame.triangles = {
+      {.layer = ViewportOverlayLayer::HoverFace,
+       .style_role = ViewportOverlayStyleRole::FacePlaneHoverFace},
+      {.layer = ViewportOverlayLayer::HoverFace,
+       .style_role = ViewportOverlayStyleRole::RemoveSelectionFace},
+      {.layer = ViewportOverlayLayer::ToolPlane},
+      {.layer = ViewportOverlayLayer::ToolPreviewFill,
+       .color = rgba8(12, 34, 56, 78)},
+      {.layer = ViewportOverlayLayer::HoverFace,
+       .color = rgba8(87, 65, 43, 21),
+       .style_role = ViewportOverlayStyleRole::ExplicitColor},
+  };
+
+  ViewportOverlayStyleResolver::apply(frame, settings);
+
+  ASSERT_EQ(frame.triangles.size(), 5u);
+  EXPECT_EQ(frame.triangles[0].color, kOverlayFacePlaneHoverFaceColor);
+  EXPECT_EQ(frame.triangles[1].color, kOverlayRemoveFaceColor);
+  EXPECT_EQ(frame.triangles[2].color, kOverlayToolPlaneColor);
+  EXPECT_EQ(frame.triangles[3].color, rgba8(12, 34, 56, 78));
+  EXPECT_EQ(frame.triangles[4].color, rgba8(87, 65, 43, 21));
+}
+
+TEST(ViewportOverlayStyleResolverTests,
+     BackfacePolicyRemovesOnlyHoverTrianglesWithinAppendedRange) {
+  ViewportOverlayFrame frame;
+  frame.triangles.push_back({
+      .layer = ViewportOverlayLayer::HoverFace,
+      .color = rgba8(12, 34, 56, 78),
+  });
+  const ViewportOverlayStyleRange range{
+      .triangle_begin = frame.triangles.size(),
+  };
+  frame.triangles.push_back({.layer = ViewportOverlayLayer::HoverFace});
+  frame.triangles.push_back({.layer = ViewportOverlayLayer::SelectedVisibleFace});
+  frame.triangles.push_back({
+      .layer = ViewportOverlayLayer::HoverFace,
+      .style_role = ViewportOverlayStyleRole::FacePlaneHoverFace,
+  });
+
+  ViewportOverlayStyleResolver::apply_from(
+      frame, ViewportSettings::defaults(), {}, range);
+
+  ASSERT_EQ(frame.triangles.size(), 3u);
+  EXPECT_EQ(frame.triangles[0].color, rgba8(12, 34, 56, 78));
+  EXPECT_EQ(frame.triangles[1].layer, ViewportOverlayLayer::SelectedVisibleFace);
+  EXPECT_EQ(frame.triangles[2].style_role,
+            ViewportOverlayStyleRole::FacePlaneHoverFace);
+}
+
+TEST(ViewportOverlayStyleResolverTests,
+     BackfaceToggleInvalidatesStationaryHoverButNotPersistentSelectionStyle) {
+  ViewportSettings settings = ViewportSettings::defaults();
+  const std::uint64_t off_signature =
+      ViewportOverlayStyleResolver::style_signature(settings);
+  const ViewportPersistentOverlayStyleSnapshot off_persistent =
+      ViewportOverlayStyleResolver::persistent_style_snapshot(settings);
+  ASSERT_TRUE(settings.set_bool_value(ViewportBoolSettingId::BackfaceSelection,
+                                      true));
+  EXPECT_NE(ViewportOverlayStyleResolver::style_signature(settings),
+            off_signature);
+  const ViewportPersistentOverlayStyleSnapshot on_persistent =
+      ViewportOverlayStyleResolver::persistent_style_snapshot(settings);
+  EXPECT_EQ(off_persistent.face_signature, on_persistent.face_signature);
+  EXPECT_EQ(off_persistent.wire_signature, on_persistent.wire_signature);
+  ASSERT_TRUE(settings.set_bool_value(ViewportBoolSettingId::BackfaceSelection,
+                                      false));
+  EXPECT_EQ(ViewportOverlayStyleResolver::style_signature(settings),
+            off_signature);
 }
 
 TEST(ViewportOverlayStyleResolverTests,
@@ -5616,6 +5815,129 @@ TEST(ViewportWorkspaceServiceTests,
 
 
 TEST(ViewportWorkspaceServiceTests,
+     ProjectionShadingChoicesSurviveViewAndLayoutChangesOnlyWithinSession) {
+  ViewportWorkspaceService workspace;
+  EXPECT_EQ(workspace.shading_mode(ViewportPaneId::Perspective),
+            ViewportShadingMode::Shaded);
+  for (const ViewportPaneId pane : {ViewportPaneId::Top, ViewportPaneId::Front,
+                                    ViewportPaneId::Side}) {
+    EXPECT_EQ(workspace.shading_mode(pane), ViewportShadingMode::Wireframe);
+  }
+
+  ASSERT_TRUE(workspace.set_shading_mode(ViewportPaneId::Perspective,
+                                        ViewportShadingMode::Normal));
+  ASSERT_TRUE(
+      workspace.set_view(ViewportPaneId::Perspective, ViewportView::Top));
+  EXPECT_EQ(workspace.shading_mode(ViewportPaneId::Perspective),
+            ViewportShadingMode::Wireframe);
+  ASSERT_TRUE(workspace.set_shading_mode(ViewportPaneId::Perspective,
+                                        ViewportShadingMode::Rendered));
+  ASSERT_TRUE(
+      workspace.set_view(ViewportPaneId::Perspective, ViewportView::Front));
+  EXPECT_EQ(workspace.shading_mode(ViewportPaneId::Perspective),
+            ViewportShadingMode::Rendered);
+  ASSERT_TRUE(workspace.set_view(ViewportPaneId::Perspective,
+                                 ViewportView::Perspective));
+  EXPECT_EQ(workspace.shading_mode(ViewportPaneId::Perspective),
+            ViewportShadingMode::Normal);
+  ASSERT_TRUE(
+      workspace.set_view(ViewportPaneId::Perspective, ViewportView::Left));
+  EXPECT_EQ(workspace.shading_mode(ViewportPaneId::Perspective),
+            ViewportShadingMode::Rendered);
+
+  ASSERT_TRUE(workspace.set_layout(ViewportLayoutId::FourQuad));
+  ASSERT_TRUE(workspace.set_shading_mode(ViewportPaneId::Top,
+                                        ViewportShadingMode::Shaded));
+  ASSERT_TRUE(workspace.set_layout(ViewportLayoutId::Single));
+  ASSERT_TRUE(workspace.set_layout(ViewportLayoutId::FourQuad));
+  EXPECT_EQ(workspace.shading_mode(ViewportPaneId::Top),
+            ViewportShadingMode::Shaded);
+  EXPECT_EQ(workspace.shading_mode(ViewportPaneId::Front),
+            ViewportShadingMode::Wireframe);
+  EXPECT_EQ(workspace.shading_mode(ViewportPaneId::Perspective),
+            ViewportShadingMode::Rendered);
+
+  ViewportWorkspaceService reopened;
+  EXPECT_EQ(reopened.shading_mode(ViewportPaneId::Perspective),
+            ViewportShadingMode::Shaded);
+  for (const ViewportPaneId pane : {ViewportPaneId::Top, ViewportPaneId::Front,
+                                    ViewportPaneId::Side}) {
+    EXPECT_EQ(reopened.shading_mode(pane), ViewportShadingMode::Wireframe);
+  }
+  for (const ViewportView view : {ViewportView::Top, ViewportView::Bottom,
+                                  ViewportView::Front, ViewportView::Back,
+                                  ViewportView::Side, ViewportView::Left}) {
+    ASSERT_TRUE(reopened.set_view(ViewportPaneId::Perspective, view));
+    EXPECT_EQ(reopened.shading_mode(ViewportPaneId::Perspective),
+              ViewportShadingMode::Wireframe);
+  }
+}
+
+TEST(ViewportWorkspaceServiceTests,
+     ShadingFollowsDirectCameraProjectionChangesAndPersistedPoseRestore) {
+  ViewportWorkspaceService workspace;
+  ASSERT_TRUE(workspace.set_shading_mode(ViewportPaneId::Perspective,
+                                        ViewportShadingMode::Albedo));
+  ViewportCameraController &camera =
+      workspace.camera(ViewportPaneId::Perspective);
+  const ViewportCameraPose perspective_pose = camera.pose();
+  const ViewportWorkspaceService &const_workspace = workspace;
+
+  camera.view_axis(ViewportViewAxis::X, 1, ViewportAxisLock::Unlocked);
+  EXPECT_EQ(const_workspace.shading_mode(ViewportPaneId::Perspective),
+            ViewportShadingMode::Wireframe);
+  EXPECT_FALSE(workspace.set_shading_mode(ViewportPaneId::Perspective,
+                                         ViewportShadingMode::Wireframe));
+  ASSERT_TRUE(workspace.set_shading_mode(ViewportPaneId::Perspective,
+                                        ViewportShadingMode::Shaded));
+  camera.begin_drag({400.0f, 300.0f}, ViewportDragMode::Orbit);
+  camera.update_drag({420.0f, 310.0f});
+  camera.end_drag();
+  ASSERT_EQ(camera.state().projection, ViewportProjection::Perspective);
+  EXPECT_EQ(const_workspace.shading_mode(ViewportPaneId::Perspective),
+            ViewportShadingMode::Albedo);
+
+  camera.view_axis(ViewportViewAxis::Z, -1);
+  EXPECT_EQ(const_workspace.shading_mode(ViewportPaneId::Perspective),
+            ViewportShadingMode::Shaded);
+  EXPECT_FALSE(workspace.set_shading_mode(
+      ViewportPaneId::Perspective, static_cast<ViewportShadingMode>(999)));
+  EXPECT_EQ(const_workspace.shading_mode(ViewportPaneId::Perspective),
+            ViewportShadingMode::Shaded);
+  ASSERT_TRUE(
+      workspace.restore_persisted_perspective_camera_pose(perspective_pose));
+  EXPECT_EQ(const_workspace.shading_mode(ViewportPaneId::Perspective),
+            ViewportShadingMode::Albedo);
+  camera.view_axis(ViewportViewAxis::Y, 1);
+  EXPECT_EQ(const_workspace.shading_mode(ViewportPaneId::Perspective),
+            ViewportShadingMode::Shaded);
+}
+
+TEST(ViewportWorkspaceServiceTests,
+     LocalVisibilityCameraRestoreKeepsBothProjectionShadingChoices) {
+  ViewportWorkspaceService workspace;
+  ASSERT_TRUE(
+      workspace.set_view(ViewportPaneId::Perspective, ViewportView::Top));
+  ASSERT_TRUE(workspace.set_shading_mode(ViewportPaneId::Perspective,
+                                        ViewportShadingMode::Rendered));
+  constexpr std::array<ViewportLocalVisibilityEntityId, 1> kMembers{{1u}};
+  ASSERT_TRUE(workspace.enter_local_visibility(kMembers, kMembers));
+  ASSERT_TRUE(workspace.set_view(ViewportPaneId::Perspective,
+                                 ViewportView::Perspective));
+  ASSERT_TRUE(workspace.set_shading_mode(ViewportPaneId::Perspective,
+                                        ViewportShadingMode::Normal));
+
+  ASSERT_TRUE(workspace.exit_local_visibility());
+  EXPECT_EQ(workspace.view(ViewportPaneId::Perspective), ViewportView::Top);
+  EXPECT_EQ(workspace.shading_mode(ViewportPaneId::Perspective),
+            ViewportShadingMode::Rendered);
+  ASSERT_TRUE(workspace.set_view(ViewportPaneId::Perspective,
+                                 ViewportView::Perspective));
+  EXPECT_EQ(workspace.shading_mode(ViewportPaneId::Perspective),
+            ViewportShadingMode::Normal);
+}
+
+TEST(ViewportWorkspaceServiceTests,
      DebugShadingModesAreOwnedIndependentlyPerPane) {
   constexpr std::array<ViewportShadingMode, 6> kDebugModes{
       ViewportShadingMode::DiffuseOnly, ViewportShadingMode::SpecularOnly,
@@ -5630,7 +5952,7 @@ TEST(ViewportWorkspaceServiceTests,
     EXPECT_TRUE(workspace.set_shading_mode(ViewportPaneId::Perspective, mode));
     EXPECT_EQ(workspace.shading_mode(ViewportPaneId::Perspective), mode);
     EXPECT_EQ(workspace.shading_mode(ViewportPaneId::Top),
-              ViewportShadingMode::Shaded);
+              ViewportShadingMode::Wireframe);
     EXPECT_FALSE(
         workspace.set_shading_mode(ViewportPaneId::Perspective, mode));
   }
@@ -6848,6 +7170,26 @@ TEST(ViewportHostContractAdapterTests, EmptyShortcutDoesNotMapToCommandTarget) {
   EXPECT_FALSE(
       viewport_command_target_id_for_router_shortcut(ViewportShortcut{})
           .has_value());
+}
+
+TEST(ViewportHostContractAdapterTests,
+     DepthSelectionActionsStaySemanticWithoutCommandShortcuts) {
+  for (const auto &[suffix, expected] : {
+           std::pair{"selection.cycle_depth",
+                     ViewportInputActionKind::CycleSelectionDepth},
+           std::pair{"selection.add_depth",
+                     ViewportInputActionKind::AddSelectionDepth},
+           std::pair{"selection.remove_depth",
+                     ViewportInputActionKind::RemoveSelectionDepth}}) {
+    const std::string target = viewport_input_action_target_id(suffix);
+    SCOPED_TRACE(target);
+    ViewportInputActionKind action = ViewportInputActionKind::None;
+    ASSERT_TRUE(viewport_input_action_for_target_id(target, action));
+    EXPECT_EQ(action, expected);
+    ViewportShortcut shortcut;
+    EXPECT_FALSE(viewport_router_shortcut_for_target_id(target, shortcut));
+    EXPECT_EQ(shortcut.kind, ViewportShortcutKind::None);
+  }
 }
 
 TEST(ViewportInputRouterTests, FocusShortcutsMatchViewportContract) {

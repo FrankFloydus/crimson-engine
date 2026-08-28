@@ -11,6 +11,7 @@
 #include "viewport/viewport_input_router.hpp"
 #include "viewport/viewport_settings.hpp"
 
+#include <optional>
 #include <span>
 
 namespace quader {
@@ -69,10 +70,14 @@ struct ViewportInteractionFrame {
  * Stores pre-tool viewport interaction consumption state.
  */
 struct ViewportBeforeToolInteractionResult {
+  /// A resolved earlier single click can change the selection before gizmo work.
+  std::optional<ViewportInteractionSelectionState> selection_after_pending_pick;
   bool gizmo_consumed = false;
   bool selection_click_requested = false;
   QVec2 selection_click_local = {};
   int selection_click_count = 1;
+  bool selection_cycle_depth = false;
+  ViewportModifiers selection_cycle_depth_modifiers = {};
 };
 
 } // namespace quader

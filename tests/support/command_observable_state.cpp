@@ -1474,8 +1474,12 @@ std::string capture_viewports(const CaptureData &data) {
   for (ViewportPaneId pane : kPanes) {
     const std::string prefix = "viewport.pane[" + enum_text(pane) + "]";
     writer.line(prefix + ".view", enum_text(viewports.view(pane)));
-    writer.line(prefix + ".shading",
-                enum_text(viewports.shading_mode(pane)));
+      writer.line(prefix + ".shading",
+                  enum_text(viewports.shading_mode(pane)));
+      writer.line(prefix + ".shading.perspective",
+                  enum_text(workspace.pane(pane).perspective_shading));
+      writer.line(prefix + ".shading.orthographic",
+                  enum_text(workspace.pane(pane).orthographic_shading));
     const ViewportCameraPose pose = workspace.camera(pane).pose();
     writer.line(prefix + ".camera.eye", vec3_text(pose.eye));
     writer.line(prefix + ".camera.target", vec3_text(pose.target));
