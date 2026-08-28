@@ -62,6 +62,18 @@ struct FaceTextureActionTarget {
   Transform3 sampling_from_local{};
 };
 
+/**
+ * Borrows one face in its displayed occurrence. World placement and texture
+ * sampling may differ; the host retains both transforms after publication.
+ */
+struct FaceTextureTransferFace {
+  std::uint64_t key = 0;
+  const PolygonDocument *document = nullptr;
+  FaceId face{};
+  Transform3 world_from_local{};
+  Transform3 sampling_from_local{};
+};
+
 /// Captured operation context; preparing never queries or changes a host.
 struct FaceTextureActionOptions {
   FaceTextureAction action = FaceTextureAction::AlignToGrid;
@@ -95,5 +107,16 @@ struct PreparedFaceTextureAction {
 [[nodiscard]] Result<PreparedFaceTextureAction> prepare_face_texture_action(
     std::span<const FaceTextureActionTarget> targets,
     const FaceTextureActionOptions &options);
+
+/**
+ * Continues the source's affine texture chart by rotating it onto the target
+ * plane about their intersection. Parallel/opposed planes retain world axes
+ * and phase. Copies the source face settings and the host-resolved material
+ * slot without changing geometry, component IDs, selection, or sampling.
+ * Returns only the immutable target replacement; neither input is modified.
+ */
+[[nodiscard]] Result<PreparedFaceTextureAction> prepare_face_texture_transfer(
+    const FaceTextureTransferFace &source,
+    const FaceTextureTransferFace &target, std::uint32_t target_material_slot);
 
 } // namespace quader::modeling

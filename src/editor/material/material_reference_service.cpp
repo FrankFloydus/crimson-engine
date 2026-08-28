@@ -9,7 +9,7 @@
 #include "assets/asset_registry.hpp"
 #include "editor/commands/document/document_command_scene_helpers.hpp"
 #include "editor/modeling/services/modeling_session_service.hpp"
-#include "scene/scene_document.hpp"
+#include "scene/scene_hierarchy_visibility.hpp"
 
 #include <quader/modeling/neutral/polygon/document.hpp>
 
@@ -100,47 +100,22 @@ void append_scoped_mesh_target(std::vector<ScopedMeshTarget> &targets,
   return false;
 }
 
-/**
- * Tests one hierarchy segment for local read-only/selectability state while
- * deliberately ignoring visibility. The exclusive ancestor form keeps the
- * intentionally unselectable instance-definition root out of canonical-member
- * policy.
- */
-[[nodiscard]] bool hierarchy_segment_is_selectable_ignoring_visibility(
-    const SceneDocument &scene, EntityId entity,
-    EntityId exclusive_ancestor = kInvalidEntityId) {
-  if (!scene.exists(entity) ||
-      (exclusive_ancestor != kInvalidEntityId &&
-       !scene.exists(exclusive_ancestor))) {
-    return false;
-  }
-  EntityId current = entity;
-  while (current != kInvalidEntityId && current != exclusive_ancestor) {
-    const VisibilityComponent *visibility = scene.visibility(current);
-    if (visibility != nullptr && !visibility->selectable) {
-      return false;
-    }
-    current = scene.parent(current);
-  }
-  return current == exclusive_ancestor;
-}
-
 /** Applies read-only/selectability policy to a mesh and every linked path. */
 [[nodiscard]] bool material_target_is_effectively_unselectable(
     const SceneDocument &scene, EntityId entity) {
   const EntityId definition = scene.containing_instance_definition(entity);
   if (definition == kInvalidEntityId || definition == entity) {
-    return !hierarchy_segment_is_selectable_ignoring_visibility(scene,
-                                                                 entity);
+    return !scene_hierarchy_segment_is_selectable_ignoring_visibility(
+        scene, entity);
   }
-  if (!hierarchy_segment_is_selectable_ignoring_visibility(scene, entity,
-                                                            definition)) {
+  if (!scene_hierarchy_segment_is_selectable_ignoring_visibility(
+          scene, entity, definition)) {
     return true;
   }
   for (const EntityId occurrence :
        scene.instance_occurrences_for_definition(definition)) {
-    if (!hierarchy_segment_is_selectable_ignoring_visibility(scene,
-                                                              occurrence)) {
+    if (!scene_hierarchy_segment_is_selectable_ignoring_visibility(
+            scene, occurrence)) {
       return true;
     }
   }

@@ -31,6 +31,7 @@ public:
     std::uint64_t sample_request_count = 0;
     std::uint64_t apply_target_request_count = 0;
     std::uint64_t apply_face_to_mesh_request_count = 0;
+    std::uint64_t transfer_face_texture_request_count = 0;
   };
 
   [[nodiscard]] ViewportBeforeToolInteractionResult
@@ -49,6 +50,10 @@ public:
                             const ViewportInteractionFrame &frame);
   [[nodiscard]] bool cancel_active_drag(QuaderEditorApi &editor);
   [[nodiscard]] bool dragging() const;
+  /// Keeps a texture-transfer press and its release in the initiating pane.
+  [[nodiscard]] bool texture_transfer_pointer_active() const {
+    return transfer_face_texture_pointer_.has_value();
+  }
   void cancel_pending_material_interaction();
   void cancel_pending_selection_click();
   void reset(QuaderEditorApi *editor = nullptr);
@@ -101,10 +106,22 @@ private:
     std::string active_material_id;
   };
 
+  /// Keeps the original scene and selected source for a reserved mouse gesture.
+  struct FaceTextureTransferPointer final {
+    SceneSessionId scene_session_id;
+    std::uint64_t selection_revision = 0;
+  };
+
   void handle_material_interactions(
       QuaderEditorApi &editor, const ViewportInteractionFrame &frame,
       const ViewportToolResult &tool_result,
       const ViewportBeforeToolInteractionResult &before_tool);
+  [[nodiscard]] std::optional<ViewportBeforeToolInteractionResult>
+  reserve_face_texture_transfer(
+      QuaderEditorApi &editor, const ViewportInteractionFrame &frame);
+  [[nodiscard]] std::optional<QuaderHoverTarget> pick_material_face_target(
+      QuaderEditorApi &editor, const ViewportInteractionFrame &frame,
+      QVec2 local_mouse);
   void sync_tool_runtime(ViewportToolId tool);
 
   ViewportToolRuntime tool_runtime_;
@@ -112,6 +129,11 @@ private:
   TransformGizmoInteraction transform_gizmo_;
   ViewportSelectionInteraction selection_;
   std::optional<PendingApplyActiveMaterial> pending_apply_active_material_;
+  // Ownership only: transfer happens on the semantic press, never while held.
+  std::optional<FaceTextureTransferPointer> transfer_face_texture_pointer_;
+  // A reset drops pane ownership, but the old release must not become a click
+  // in the new scene. A fresh press starts a new gesture and clears this bit.
+  bool discard_transfer_pointer_release_ = false;
   MaterialInteractionWorkStats material_interaction_work_stats_;
 };
 

@@ -378,7 +378,8 @@ public:
   [[nodiscard]] ModelingCommandResult
   assign_material_slot_to_selection(std::uint32_t material_slot);
   [[nodiscard]] ModelingCommandResult assign_material_slot_to_objects(
-      std::span<const int> modeling_object_ids, std::uint32_t material_slot);
+      std::span<const int> modeling_object_ids, std::uint32_t material_slot,
+      bool preserve_scene_selection = false);
   [[nodiscard]] ModelingCommandResult assign_material_slot_to_face(
       int modeling_object_id, int face_id, std::uint32_t material_slot);
   [[nodiscard]] ModelingCommandResult assign_material_slots_to_faces(
@@ -428,6 +429,10 @@ public:
   [[nodiscard]] ModelingCommandResult apply_face_texture_action(
       std::span<const ModelingFaceTextureActionTarget> targets,
       const modeling::FaceTextureActionOptions &options);
+  [[nodiscard]] ModelingCommandResult transfer_face_texture(
+      const ModelingFaceTextureTransferTarget &source,
+      const ModelingFaceTextureTransferTarget &target,
+      std::uint32_t target_material_slot);
   [[nodiscard]] ModelingSelectedUvPeelSnapshot selected_uv_peel_edges() const;
   [[nodiscard]] ModelingCommandResult apply_uv_peel(
       std::span<const ModelingUvPeelTarget> targets,

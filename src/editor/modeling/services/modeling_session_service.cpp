@@ -15,6 +15,7 @@
 #include "core/i_undoable_command.hpp"
 #include "diagnostics/profile.hpp"
 #include "editor/commands/document_command_service.hpp"
+#include "editor/commands/document/document_command_scene_helpers.hpp"
 #include "editor/commands/modeling/scene_aware_delete_selection_command.hpp"
 #include "editor/history/editor_history_service.hpp"
 #include "editor/modeling/linear_array_layout.hpp"
@@ -1011,6 +1012,7 @@ struct ModelingSessionMemento::Impl {
       : sdk_projection(std::move(sdk_projection_snapshot)) {}
 
   ModelingSdkProjectionSnapshot sdk_projection;
+  std::optional<DocumentSelectionState> group_selection;
 };
 
 ModelingSessionMemento::ModelingSessionMemento() = default;
@@ -1801,6 +1803,96 @@ public:
     return result;
   }
 
+  ModelingCommandResult transfer_face_texture_to_face(int modeling_object_id,
+                                                      int face_id) {
+    const ModelingFaceTextureSettings settings = face_texture_settings();
+    if (!settings.editable) {
+      return {.ok = false,
+              .message = settings.disabled_reason.empty()
+                             ? "Select exactly one editable source face first."
+                             : settings.disabled_reason};
+    }
+    if (settings.selected_face_count != 1u ||
+        face_texture_selection_cache_.objects.size() != 1u ||
+        face_texture_selection_cache_.objects.front().faces.size() != 1u) {
+      return {.ok = false,
+              .message = "Select exactly one source face before transferring textures."};
+    }
+
+    const auto &selected = face_texture_selection_cache_.objects.front();
+    const modeling::FaceId source_face = selected.faces.front().face;
+    const FaceMaterialTarget source = resolve_face_material(
+        selected.modeling_object_id, static_cast<int>(source_face.index));
+    if (!source.command.ok) {
+      return source.command;
+    }
+    const FaceTarget target = resolve_face_target(modeling_object_id, face_id);
+    if (!target.command.ok) {
+      return target.command;
+    }
+    if (selected.modeling_object_id == modeling_object_id &&
+        source_face.index == static_cast<std::uint32_t>(face_id)) {
+      return {.ok = true, .changed = false};
+    }
+
+    const ModelingInstanceEditScope scope =
+        instance_edit_scope_provider_ ? instance_edit_scope_provider_()
+                                      : ModelingInstanceEditScope{};
+    const auto mapping_target = [&](int object_id, modeling::FaceId face,
+                                    EntityId entity)
+        -> std::optional<ModelingFaceTextureTransferTarget> {
+      const auto world = modeling_object_world_transform(object_id);
+      const EntityId occurrence =
+          scope.active() && scene_.containing_instance_definition(entity) ==
+                                scope.definition
+              ? scope.occurrence
+              : kInvalidEntityId;
+      const auto sampling =
+          effective_texture_sampling_from_local(scene_, entity, occurrence);
+      if (!world.has_value() || !sampling.has_value()) {
+        return std::nullopt;
+      }
+      return ModelingFaceTextureTransferTarget{
+          .modeling_object_id = object_id,
+          .face = face,
+          .world_from_local = *world,
+          .sampling_from_local = *sampling,
+      };
+    };
+    const auto source_mapping = mapping_target(selected.modeling_object_id,
+                                               source_face, source.entity);
+    const auto target_mapping = mapping_target(
+        modeling_object_id,
+        modeling::make_id<modeling::FaceTag>(static_cast<std::uint32_t>(face_id)),
+        target.entity);
+    if (!source_mapping.has_value() || !target_mapping.has_value()) {
+      return {.ok = false,
+              .message = "A texture transfer face has no usable mapping frame."};
+    }
+
+    const MaterialComponent *existing = scene_.material(target.entity);
+    MaterialComponent desired = existing != nullptr ? *existing : MaterialComponent{};
+    // Keep an existing equivalent binding stable, including nonzero face slots.
+    // Otherwise stage the new slot before the SDK prepares any document changes.
+    const std::uint32_t slot =
+        existing != nullptr &&
+                existing->material_for_slot(target.material_slot) == source.material
+            ? target.material_slot
+            : stage_material_slot(desired, source.material);
+    ModelingCommandResult result = sdk_projection_adapter_.transfer_face_texture(
+        *source_mapping, *target_mapping, slot);
+    if (!result.ok) {
+      return result;
+    }
+    const bool material_changed = mesh_sync_service_.set_entity_material(
+        scene_, target.entity, std::move(desired));
+    result.changed = result.changed || material_changed;
+    if (result.changed) {
+      invalidate_selection_overlay_caches();
+    }
+    return result;
+  }
+
   [[nodiscard]] bool face_texture_treat_as_one() const {
     return face_texture_context_.treat_as_one();
   }
@@ -2266,10 +2358,18 @@ public:
     return sdk_projection_adapter_.stats();
   }
 
-  [[nodiscard]] ModelingSessionMemento capture_history_memento() const {
-    return ModelingSessionMemento(
-        std::make_shared<ModelingSessionMemento::Impl>(
-            sdk_projection_adapter_.capture_snapshot()));
+  [[nodiscard]] ModelingSessionMemento capture_history_memento() const override {
+    return capture_history_memento(false);
+  }
+
+  [[nodiscard]] ModelingSessionMemento capture_history_memento(
+      bool preserve_group_selection) const {
+    auto state = std::make_shared<ModelingSessionMemento::Impl>(
+        sdk_projection_adapter_.capture_snapshot());
+    if (preserve_group_selection && selection_mode() == ModelingSelectionMode::Group) {
+      state->group_selection = document_command_capture_selection(scene_);
+    }
+    return ModelingSessionMemento(std::move(state));
   }
 
   [[nodiscard]] ModelingSessionMemento capture_history_memento_without_objects(
@@ -2319,6 +2419,10 @@ public:
                          ? "SDK modeling history state could not be restored."
                          : sdk_restored.message,
       };
+    }
+    if (memento.impl_->group_selection.has_value()) {
+      document_command_apply_selection(scene_, *memento.impl_->group_selection);
+      app_selection_mode_ = ModelingSelectionMode::Group;
     }
     face_texture_context_.invalidate();
     uv_peel_context_.invalidate_selection();
@@ -2944,6 +3048,14 @@ public:
   }
 
   ModelingCommandResult apply_active_material(std::uint32_t material_slot) {
+    if (selection_mode() == ModelingSelectionMode::Group) {
+      const GroupMaterialTargets targets = selected_group_material_targets();
+      if (!targets.command.ok) {
+        return targets.command;
+      }
+      return sdk_projection_adapter_.assign_material_slot_to_objects(
+          targets.objects, material_slot, true);
+    }
     quader_editor_core::AssignMaterialOperationSettings settings;
     settings.material_slot = material_slot;
     return execute_runtime_operation(
@@ -3232,7 +3344,7 @@ public:
 
   static std::uint32_t stage_material_slot(MaterialComponent &component,
                                            MaterialReference material) {
-    if (component.material == material) {
+    if (component.material_for_slot(0u) == material) {
       return 0u;
     }
     const auto bound = std::min_element(
@@ -3257,8 +3369,85 @@ public:
     return slot;
   }
 
+  /// Resolves scene-owned group selection once at execution time. Linked
+  /// definitions require explicit mesh editing and are never traversed here.
+  struct GroupMaterialTargets final {
+    ModelingCommandResult command{.ok = true};
+    std::vector<int> objects;
+  };
+
+  [[nodiscard]] GroupMaterialTargets selected_group_material_targets() const {
+    const auto rejected = [](std::string message) {
+      return GroupMaterialTargets{
+          .command = {.ok = false, .message = std::move(message)}};
+    };
+    if (sdk_projection_adapter_.preview_active() || transform_drag_active() ||
+        modal_tool_owns_viewport()) {
+      return rejected("Commit or cancel the active tool or preview before applying material.");
+    }
+    const ModelingInstanceEditScope scope =
+        instance_edit_scope_provider_ ? instance_edit_scope_provider_()
+                                      : ModelingInstanceEditScope{};
+    if (scope.active()) {
+      return rejected("Select meshes in Object mode when applying material inside an instance.");
+    }
+    const std::vector<EntityId> selected = scene_.selected_entities();
+    if (selected.empty()) {
+      return rejected("Select one or more groups containing editable meshes first.");
+    }
+    // The shared root helper omits locked roots, so validate the entire selected
+    // set first rather than silently applying only to its unlocked remainder.
+    for (const EntityId group : selected) {
+      if (!scene_.exists(group) || scene_.is_scene_root(group) ||
+          scene_.kind(group) != EntityKind::Empty ||
+          scene_.is_instance_definition_entity(group) ||
+          scene_.is_instance_definition_member(group)) {
+        return rejected("Apply Material in Group mode requires ordinary scene groups.");
+      }
+      if (scene_.is_effectively_locked(group)) {
+        return rejected("A selected material group is locked.");
+      }
+      if (!scene_hierarchy_segment_is_selectable_ignoring_visibility(scene_, group)) {
+        return rejected("A selected material group is read-only.");
+      }
+    }
+
+    GroupMaterialTargets result;
+    std::unordered_set<int> visited;
+    for (const EntityId root : document_command_selected_root_entities(scene_)) {
+      for (const EntityId entity : scene_.descendants(root, true)) {
+        if (scene_.instance_occurrence(entity) != nullptr ||
+            scene_.is_instance_definition_entity(entity) ||
+            scene_.is_instance_definition_member(entity)) {
+          return rejected("Enter instance edit and select its meshes before applying material.");
+        }
+        if (scene_.kind(entity) != EntityKind::Mesh) {
+          continue;
+        }
+        if (scene_.is_effectively_locked(entity)) {
+          return rejected("A mesh in the selected material groups is locked.");
+        }
+        if (!scene_hierarchy_segment_is_selectable_ignoring_visibility(scene_, entity)) {
+          return rejected("A mesh in the selected material groups is read-only.");
+        }
+        const ModelingObjectComponent *object = scene_.modeling_object(entity);
+        if (object == nullptr || !sdk_projection_adapter_.owns_object(object->object_id)) {
+          return rejected("A mesh in the selected material groups is not editable.");
+        }
+        if (visited.insert(object->object_id).second) {
+          result.objects.push_back(object->object_id);
+        }
+      }
+    }
+    if (result.objects.empty()) {
+      return rejected("The selected groups contain no editable meshes.");
+    }
+    return result;
+  }
+
   ModelingCommandResult normalize_whole_object_materials(
-      std::span<const int> modeling_object_ids, MaterialReference material) {
+      std::span<const int> modeling_object_ids, MaterialReference material,
+      bool preserve_scene_selection = false) {
     if (!material.valid()) {
       return {
           .ok = false,
@@ -3308,7 +3497,7 @@ public:
 
     ModelingCommandResult modeling_result =
         sdk_projection_adapter_.assign_material_slot_to_objects(
-            normalized_object_ids, 0u);
+            normalized_object_ids, 0u, preserve_scene_selection);
     if (!modeling_result.ok) {
       return modeling_result;
     }
@@ -3498,13 +3687,20 @@ public:
       };
     }
 
+    if (selection_mode() == ModelingSelectionMode::Group) {
+      const GroupMaterialTargets targets = selected_group_material_targets();
+      return targets.command.ok
+                 ? normalize_whole_object_materials(targets.objects, material, true)
+                 : targets.command;
+    }
+
     const ModelingSelectionSummary summary = selection_summary();
     if (summary.mode != ModelingSelectionMode::Object &&
         summary.mode != ModelingSelectionMode::Face) {
       return {
           .ok = false,
           .changed = false,
-          .message = "Apply Material works in object or face mode.",
+          .message = "Apply Material works in object, group, or face mode.",
       };
     }
 
@@ -7393,6 +7589,11 @@ ModelingCommandResult ModelingSessionService::apply_face_texture_action(
   return impl_->apply_face_texture_action(request);
 }
 
+ModelingCommandResult ModelingSessionService::transfer_face_texture_to_face(
+    int modeling_object_id, int face_id) {
+  return impl_->transfer_face_texture_to_face(modeling_object_id, face_id);
+}
+
 std::uint64_t ModelingSessionService::uv_peel_settings_revision() const {
   return impl_->uv_peel_settings_revision();
 }
@@ -7553,8 +7754,9 @@ ModelingSessionService::modeling_sdk_projection_stats_for_tests() const {
   return impl_->modeling_sdk_projection_stats_for_tests();
 }
 
-ModelingSessionMemento ModelingSessionService::capture_history_memento() const {
-  return impl_->capture_history_memento();
+ModelingSessionMemento ModelingSessionService::capture_history_memento(
+    bool preserve_group_selection) const {
+  return impl_->capture_history_memento(preserve_group_selection);
 }
 
 ModelingSessionMemento

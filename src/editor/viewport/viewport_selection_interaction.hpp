@@ -57,6 +57,10 @@ public:
     pick_context_menu_target(QuaderEditorApi &editor,
                              const ViewportInteractionFrame &frame);
     [[nodiscard]] ViewportSelectionMarquee marquee() const;
+    /// Reports ownership of a pending click, marquee, or held paint gesture.
+    [[nodiscard]] bool pointer_interaction_active() const {
+      return box_state_.active || paint_selection_active_;
+    }
     [[nodiscard]] const ViewportSelectionInteractionWorkStats &
     work_stats() const {
       return work_stats_;

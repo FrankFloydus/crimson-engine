@@ -58,6 +58,7 @@ class QtSettingsDialog;
 class QtCommandEventFilter;
 class QtMaterialFindReplaceDialog;
 class QtMaterialBrowserWindow;
+class QtActiveMaterialPanel;
 class QtMaterialPreviewSurface;
 class QtRetainedMessageBox;
 class QtStandardMaterialEditorWindow;
@@ -194,6 +195,7 @@ private:
   void invalidate_material_presentation_cache();
   void observe_material_presentation_events();
   void refresh_material_presentation_cache();
+  void refresh_active_material_panel(QuaderMaterialReference active_reference);
   void synchronize_material_presentation_consumers();
   void refresh_material_picker_presentations();
   void revalidate_material_find_replace_presentations();
@@ -232,6 +234,7 @@ private:
   ConsolePanel *console_panel_ = nullptr;
   QtSettingsDialog *settings_dialog_ = nullptr;
   QtMaterialBrowserWindow *material_browser_window_ = nullptr;
+  QtActiveMaterialPanel *active_material_panel_ = nullptr;
   QtMaterialBrowserWindow *material_picker_window_ = nullptr;
   QtMaterialFindReplaceDialog *material_find_replace_dialog_ = nullptr;
   QtMaterialPreviewSurface *material_preview_surface_ = nullptr;
@@ -308,6 +311,9 @@ private:
   std::uint64_t material_presentation_invalidation_generation_ = 1;
   std::uint64_t material_browser_catalog_signature_ = 0;
   QuaderMaterialReference material_browser_active_reference_;
+  std::uint64_t active_material_panel_catalog_revision_ = 0;
+  QuaderMaterialReference active_material_panel_reference_;
+  bool active_material_panel_refresh_valid_ = false;
 
   struct MaterialPresentationCatalogStamp final {
     const QuaderEditorApi *editor = nullptr;

@@ -38,11 +38,13 @@ ui_panel_visibility_transition(bool current, bool requested) noexcept {
 class UIPanelManager final : public QObject {
 public:
   using VisibilityChangedCallback = std::function<void()>;
+  using PresentationChangedCallback = std::function<void(UIPanelId, bool)>;
 
   UIPanelManager() = default;
 
   void add(UIPanelId id, QDockWidget &dock);
   void set_visibility_changed_callback(VisibilityChangedCallback callback);
+  void set_presentation_changed_callback(PresentationChangedCallback callback);
   void apply_settings(const UISettings &settings);
   void write_settings(UISettings &settings) const;
 
@@ -68,9 +70,11 @@ private:
       ui_panel_default_visible(UIPanelId::Console),
       ui_panel_default_visible(UIPanelId::Layers),
       ui_panel_default_visible(UIPanelId::ToolSettings),
+      ui_panel_default_visible(UIPanelId::ActiveMaterial),
   };
   std::array<bool, kUiPanelCount> presented_{};
   VisibilityChangedCallback visibility_changed_;
+  PresentationChangedCallback presentation_changed_;
 };
 
 } // namespace quader

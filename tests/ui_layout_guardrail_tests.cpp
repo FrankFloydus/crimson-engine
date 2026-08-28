@@ -63,6 +63,8 @@ const std::vector<std::string_view> &qt_shell_source_paths() {
       "src/ui/qt_settings_controller.cpp",
       "src/ui/qt_tool_settings_panel.hpp",
       "src/ui/qt_tool_settings_panel.cpp",
+      "src/ui/qt_active_material_panel.hpp",
+      "src/ui/qt_active_material_panel.cpp",
       "src/ui/qt_viewport_context_menu.hpp",
       "src/ui/qt_viewport_context_menu.cpp",
       "src/ui/qt_navigation_gizmo.hpp",
@@ -372,6 +374,7 @@ TEST(UiLayoutGuardrailTests,
   for (std::string_view panel : {"UIPanelId::Outliner", "UIPanelId::Inspector",
                                  "UIPanelId::Layers",
                                  "UIPanelId::ToolSettings",
+                                 "UIPanelId::ActiveMaterial",
                                  "UIPanelId::Console"}) {
     EXPECT_EQ(count_occurrences(create_docks_body, panel), 1u) << panel;
   }
@@ -2525,6 +2528,30 @@ TEST(UiLayoutGuardrailTests,
 }
 
 TEST(UiLayoutGuardrailTests,
+     FaceTextureTransferPointerStaysWithItsInitiatingViewportPane) {
+  const std::string panel =
+      read_source_file("src/ui/qt_viewport_panel.cpp");
+  const std::string focus_lock = source_slice(
+      panel, "bool QtViewportPanel::pane_interaction_locked() const",
+      "void QtViewportPanel::set_modal_tool_owns_viewport_snapshot(");
+  expect_contains(focus_lock,
+                  "interaction_controller_.texture_transfer_pointer_active()");
+  const std::string input_lock = source_slice(
+      panel, "const bool interaction_locked =",
+      "std::vector<ViewportPaneInputCandidate> pane_candidates;");
+  const auto owner_gate = input_lock.find(
+      "interaction_controller_.texture_transfer_pointer_active()");
+  const auto input_sample = input_lock.find("take_input_frame(");
+  ASSERT_NE(owner_gate, std::string::npos);
+  ASSERT_NE(input_sample, std::string::npos);
+  EXPECT_LT(owner_gate, input_sample);
+  expect_contains(input_lock,
+                  "interaction_locked && pane_state.id == interaction_pane_id_");
+  expect_missing(input_lock, "commands().available()");
+  expect_missing(input_lock, "face_texture_settings()");
+}
+
+TEST(UiLayoutGuardrailTests,
      ViewportWorkspaceReattachCancelsPendingMaterialIntentBeforeIdentityGate) {
   const std::string panel =
       read_source_file("src/ui/qt_viewport_panel.cpp");
@@ -3132,6 +3159,87 @@ TEST(UiLayoutGuardrailTests,
                                                 texture_begin);
   expect_contains(texture, ".set_texture_transform_component(");
   expect_missing(texture, ".current()");
+}
+
+TEST(UiLayoutGuardrailTests,
+     ActiveMaterialDockReusesEventGatedPreviewsAndTheExistingBrowser) {
+  const std::string ui = read_source_file("src/ui/ui_system.cpp");
+  const std::string panel =
+      read_source_file("src/ui/qt_active_material_panel.cpp");
+  const std::string docks = source_slice(
+      ui, "void UISystem::create_docks()", "QDockWidget &UISystem::create_dock(");
+  expect_contains(docks, "UIPanelId::ActiveMaterial, *active_material_panel_");
+  expect_contains(docks, "set_browse_material_callback(");
+  expect_contains(docks, "[this]() { show_material_browser(); }");
+  const auto split = docks.find(
+      "splitDockWidget(&inspector, &active_material, Qt::Vertical)");
+  const auto tabify = docks.find(
+      "tabifyDockWidget(&inspector, &tool_settings)");
+  ASSERT_NE(split, std::string::npos);
+  ASSERT_NE(tabify, std::string::npos);
+  EXPECT_LT(split, tabify)
+      << "split before tabifying so the new dock is below Tool Settings";
+  expect_contains(docks, "panels_.set_presentation_changed_callback(");
+  expect_contains(docks, "project_workspace_refresh_signal_->store(");
+
+  const std::string workspace = source_slice(
+      ui, "void UISystem::refresh_project_workspace(",
+      "void UISystem::refresh_active_material_panel(");
+  const auto event_gate = workspace.find(
+      "project_workspace_refresh_signal_->exchange(");
+  const auto active_query = workspace.find(
+      "editor_->project_assets().active_material()");
+  const auto panel_refresh = workspace.find("refresh_active_material_panel(");
+  ASSERT_NE(event_gate, std::string::npos);
+  ASSERT_NE(active_query, std::string::npos);
+  ASSERT_NE(panel_refresh, std::string::npos);
+  EXPECT_LT(event_gate, active_query);
+  EXPECT_LT(active_query, panel_refresh);
+  expect_contains(workspace,
+                  "active_material_panel_visible || material_browser_visible");
+  EXPECT_EQ(count_occurrences(workspace,
+                             "project_assets().active_material()"), 1u);
+
+  const std::string refresh = source_slice(
+      ui, "void UISystem::refresh_active_material_panel(",
+      "void UISystem::invalidate_material_presentation_cache()");
+  const auto visible_gate = refresh.find("!panel_presented(");
+  const auto revision_gate = refresh.find("active_material_panel_refresh_valid_");
+  const auto presentation = refresh.find("material_presentation_for(");
+  const auto setter = refresh.find("->set_presentation(");
+  ASSERT_NE(visible_gate, std::string::npos);
+  ASSERT_NE(revision_gate, std::string::npos);
+  ASSERT_NE(presentation, std::string::npos);
+  ASSERT_NE(setter, std::string::npos);
+  EXPECT_LT(visible_gate, revision_gate);
+  EXPECT_LT(revision_gate, presentation);
+  EXPECT_LT(revision_gate, setter);
+  expect_contains(refresh, "active_material_panel_reference_ == active_reference");
+  expect_contains(refresh, "material_presentation_catalog_revision_");
+  expect_missing(refresh, ".material_preview(");
+  expect_missing(refresh, "make_qt_material_thumbnail(");
+
+  const std::string frame = source_slice(
+      ui, "void UISystem::refresh(", "void UISystem::process_viewport_input(");
+  expect_missing(frame, "refresh_active_material_panel(");
+  expect_missing(frame, "project_assets().active_material()");
+  expect_missing(frame, "commands().available()");
+  expect_missing(panel, "project_assets()");
+  expect_missing(panel, "commands()");
+  expect_missing(panel, "setWindowFlag(Qt::Tool");
+  expect_contains(panel, "qt_material_preview_pixmap(");
+
+  const std::string cache = source_slice(
+      ui, "void UISystem::refresh_material_presentation_cache(",
+      "void UISystem::revalidate_material_find_replace_presentations()");
+  expect_contains(cache,
+                  "if (editor_ == nullptr || !editor_->project().has_project())");
+  expect_contains(cache, "const bool scene_available = active_scene_id != 0u");
+  expect_contains(cache, "if (scene_available) {");
+  expect_contains(cache, "scene_available ? assets_ : nullptr");
+  expect_contains(cache, "scene_available ? document_ : nullptr");
+  expect_contains(cache, "scene_available ? modeling_ : nullptr");
+  expect_missing(cache, "active_scene_id == 0u) {");
 }
 
 TEST(UiLayoutGuardrailTests,

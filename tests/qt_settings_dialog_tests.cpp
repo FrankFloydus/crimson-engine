@@ -2444,12 +2444,20 @@ TEST(QtMainMenuTests, ToolActionsUseEffectiveKeybindingsAndCommandRouting) {
   QtMainMenu menu;
   int material_browser_requests = 0;
   bool material_browser_available = false;
+  UISettings panel_settings = UISettings::defaults();
   menu.initialize(menu_bar,
                   QtMainMenuContext{
                       .editor = editor,
                       .modeling = session.modeling(),
                       .viewport_settings = viewport_settings,
                       .localization = localization,
+                      .panel_visible = [&panel_settings](UIPanelId id) {
+                        return panel_settings.is_panel_visible(id);
+                      },
+                      .set_panel_visible =
+                          [&panel_settings](UIPanelId id, bool visible) {
+                            panel_settings.set_panel_visible(id, visible);
+                          },
                       .show_material_browser =
                           [&material_browser_requests]() {
                             ++material_browser_requests;
@@ -2490,6 +2498,18 @@ TEST(QtMainMenuTests, ToolActionsUseEffectiveKeybindingsAndCommandRouting) {
             QStringLiteral("Material Browser"));
   material_browser_action->trigger();
   EXPECT_EQ(material_browser_requests, 1);
+  auto *active_material_action = menu_bar.findChild<QAction *>(
+      QStringLiteral("panel_active_material"));
+  ASSERT_NE(active_material_action, nullptr);
+  EXPECT_EQ(active_material_action->text(), QStringLiteral("Active Material"));
+  EXPECT_TRUE(active_material_action->isChecked());
+  EXPECT_TRUE(active_material_action->shortcut().isEmpty());
+  active_material_action->trigger();
+  EXPECT_FALSE(panel_settings.is_panel_visible(UIPanelId::ActiveMaterial));
+  active_material_action->trigger();
+  EXPECT_TRUE(panel_settings.is_panel_visible(UIPanelId::ActiveMaterial));
+  menu.refresh();
+  EXPECT_TRUE(active_material_action->isChecked());
   auto *create_instance_action = menu_bar.findChild<QAction *>(
       QStringLiteral("command_edit_create_instance"));
   auto *flatten_instance_action = menu_bar.findChild<QAction *>(

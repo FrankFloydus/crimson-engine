@@ -30,8 +30,12 @@ void UIPanelManager::add(UIPanelId id, QDockWidget &dock_widget) {
   QObject::connect(&dock_widget, &QDockWidget::visibilityChanged, this,
                    [this, id](bool visible) {
                      const std::size_t presented_slot = index(id);
-                     if (presented_slot < presented_.size()) {
+                     if (presented_slot < presented_.size() &&
+                         presented_[presented_slot] != visible) {
                        presented_[presented_slot] = visible;
+                       if (presentation_changed_) {
+                         presentation_changed_(id, visible);
+                       }
                      }
                    });
   QObject::connect(dock_widget.toggleViewAction(), &QAction::triggered, this,
@@ -43,6 +47,11 @@ void UIPanelManager::add(UIPanelId id, QDockWidget &dock_widget) {
 void UIPanelManager::set_visibility_changed_callback(
     VisibilityChangedCallback callback) {
   visibility_changed_ = std::move(callback);
+}
+
+void UIPanelManager::set_presentation_changed_callback(
+    PresentationChangedCallback callback) {
+  presentation_changed_ = std::move(callback);
 }
 
 void UIPanelManager::apply_settings(const UISettings &settings) {

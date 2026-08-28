@@ -7,6 +7,7 @@
 #include <gtest/gtest.h>
 
 #include "ui/ui_continuous_edit_tracker.hpp"
+#include "ui/qt_active_material_panel.hpp"
 #include "ui/ui_panel_manager.hpp"
 #include "ui/ui_settings.hpp"
 
@@ -18,6 +19,7 @@
 #include <QDockWidget>
 #include <QLineEdit>
 #include <QMainWindow>
+#include <QPushButton>
 #include <QWidget>
 
 namespace quader {
@@ -89,7 +91,7 @@ TEST(UIPanelManagerTests, ToolSettingsUsesTheSharedDockPanelContract) {
   }
 
   EXPECT_TRUE(found_tool_settings);
-  EXPECT_EQ(kUiDockPanelIds.size(), 5U);
+  EXPECT_EQ(kUiDockPanelIds.size(), 6U);
   EXPECT_STREQ(ui_panel_stable_id(UIPanelId::ToolSettings), "tool_settings");
   EXPECT_STREQ(ui_panel_localization_key(UIPanelId::ToolSettings),
                "ui.panel.tool_settings");
@@ -145,6 +147,72 @@ TEST(UIPanelManagerTests, FocusUsesThePanelContentsQtFocusProxy) {
   persisted.set_panel_visible(UIPanelId::ToolSettings, false);
   manager.write_settings(persisted);
   EXPECT_TRUE(persisted.is_panel_visible(UIPanelId::ToolSettings));
+}
+
+TEST(UIPanelManagerTests, ActiveMaterialDockCanCloseReopenFloatAndFocusBrowse) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-active-material-dock-tests";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+  QApplication::setStyle(QStringLiteral("Fusion"));
+
+  QMainWindow window;
+  auto *dock = new QDockWidget(&window);
+  dock->setObjectName(QStringLiteral("dock_active_material"));
+  auto *panel = new QtActiveMaterialPanel(dock);
+  panel->set_presentation(std::nullopt, true);
+  dock->setWidget(panel);
+  window.addDockWidget(Qt::RightDockWidgetArea, dock);
+  window.show();
+  window.activateWindow();
+  QCoreApplication::processEvents();
+
+  UIPanelManager manager;
+  manager.add(UIPanelId::ActiveMaterial, *dock);
+  std::optional<bool> last_presented;
+  int presentation_changes = 0;
+  manager.set_presentation_changed_callback(
+      [&](UIPanelId id, bool presented) {
+        EXPECT_EQ(id, UIPanelId::ActiveMaterial);
+        last_presented = presented;
+        ++presentation_changes;
+      });
+  EXPECT_TRUE(manager.is_presented(UIPanelId::ActiveMaterial));
+  ASSERT_TRUE(manager.focus(UIPanelId::ActiveMaterial));
+  QCoreApplication::processEvents();
+  auto *browse = panel->findChild<QPushButton *>(
+      QStringLiteral("activeMaterial.browse"));
+  ASSERT_NE(browse, nullptr);
+  EXPECT_EQ(window.focusWidget(), browse);
+
+  dock->close();
+  EXPECT_FALSE(manager.is_visible(UIPanelId::ActiveMaterial));
+  EXPECT_EQ(last_presented, std::optional<bool>(false));
+  UISettings settings = UISettings::defaults();
+  manager.write_settings(settings);
+  EXPECT_FALSE(settings.is_panel_visible(UIPanelId::ActiveMaterial));
+  ASSERT_TRUE(manager.set_visible(UIPanelId::ActiveMaterial, true));
+  QCoreApplication::processEvents();
+  EXPECT_TRUE(manager.is_presented(UIPanelId::ActiveMaterial));
+  EXPECT_EQ(last_presented, std::optional<bool>(true));
+  const int stable_presentation_changes = presentation_changes;
+  EXPECT_FALSE(manager.set_visible(UIPanelId::ActiveMaterial, true));
+  QCoreApplication::processEvents();
+  EXPECT_EQ(presentation_changes, stable_presentation_changes);
+
+  dock->setFloating(true);
+  QCoreApplication::processEvents();
+  const QByteArray floating_layout = window.saveState(1);
+  dock->setFloating(false);
+  ASSERT_TRUE(window.restoreState(floating_layout, 1));
+  QCoreApplication::processEvents();
+  EXPECT_TRUE(dock->isFloating());
+  EXPECT_TRUE(manager.is_visible(UIPanelId::ActiveMaterial));
+  manager.apply_settings(settings);
+  EXPECT_FALSE(dock->isVisible());
+  EXPECT_FALSE(manager.is_presented(UIPanelId::ActiveMaterial));
 }
 
 } // namespace

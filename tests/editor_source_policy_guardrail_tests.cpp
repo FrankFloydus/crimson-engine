@@ -446,6 +446,37 @@ TEST(ViewportToolGuardrailTests, TransformGizmoEligibilityLivesInViewportToolMet
 }
 
 TEST(ViewportToolGuardrailTests,
+     FaceTextureTransferDispatchKeepsExpensiveWorkBehindSemanticPress) {
+  const std::string controller = read_source_file(
+      "src/editor/viewport/viewport_interaction_controller.cpp");
+  const std::string transfer = source_slice(
+      controller,
+      "void ViewportInteractionController::handle_material_interactions(",
+      "const bool sample_face = frame.input.sample_face_material_pressed;");
+  const auto input_gate = transfer.find(
+      "if (frame.input.transfer_face_texture_pressed)");
+  const auto target_pick = transfer.find("pick_material_face_target(");
+  const auto mutation = transfer.find(
+      "editor.modeling().transfer_face_texture_to_face(");
+  ASSERT_NE(input_gate, std::string::npos);
+  ASSERT_NE(target_pick, std::string::npos);
+  ASSERT_NE(mutation, std::string::npos);
+  EXPECT_LT(input_gate, target_pick);
+  EXPECT_LT(target_pick, mutation);
+  EXPECT_EQ(controller.find("commands().available()"), std::string::npos);
+  EXPECT_EQ(controller.find("keybinding_catalog()"), std::string::npos);
+  EXPECT_EQ(controller.find("face_texture_settings()"), std::string::npos);
+  const std::string selection = read_source_file(
+      "src/editor/viewport/viewport_selection_interaction.cpp");
+  EXPECT_NE(selection.find("kFacePlaneCutGestureEnabled = false"),
+            std::string::npos);
+  EXPECT_NE(selection.find("if (kFacePlaneCutGestureEnabled &&"),
+            std::string::npos);
+  EXPECT_NE(selection.find("cut_selected_meshes_by_hovered_face_plane()"),
+            std::string::npos);
+}
+
+TEST(ViewportToolGuardrailTests,
      HostViewportAdapterSourceUsesViewportToolDescriptors) {
   const std::filesystem::path root = source_root();
   const std::string adapter = read_source_file(

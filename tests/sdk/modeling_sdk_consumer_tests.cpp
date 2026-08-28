@@ -4079,6 +4079,402 @@ void expect_compiled_texture_uvs(const PolygonDocument &document,
   EXPECT_TRUE(std::ranges::all_of(found, [](bool present) { return present; }));
 }
 
+[[nodiscard]] FaceTextureTransferFace texture_transfer_face(
+    const PolygonDocument &document, std::uint64_t key = 1U) {
+  return {.key = key, .document = &document, .face = document.face_ids().front()};
+}
+
+[[nodiscard]] Vec2 transfer_sheared_uv(float x, float y) {
+  return {0.3F + 0.4F * x + 0.2F * y, -0.7F + 0.1F * x - 0.6F * y};
+}
+
+TEST(ModelingSdkConsumerTests,
+     FaceTextureTransferRotatesAroundTheSeamAndCopiesAttributesOnlyOnTarget) {
+  constexpr std::array<Vec3, 4> kSourcePoints{{
+      {0.0F, 0.0F, 0.0F}, {4.0F, 0.0F, 0.0F},
+      {4.0F, 3.0F, 0.0F}, {0.0F, 3.0F, 0.0F},
+  }};
+  std::array<Vec2, 4> source_uvs;
+  for (std::size_t corner = 0U; corner < source_uvs.size(); ++corner) {
+    source_uvs[corner] = transfer_sheared_uv(kSourcePoints[corner].x,
+                                           kSourcePoints[corner].y);
+  }
+  const FaceTextureTransform settings{
+      .scale = {-2.0F, 0.5F}, .shift_uv = {0.31F, -0.37F},
+      .rotation_degrees = 37.0F};
+  auto source = make_texture_action_face(kSourcePoints, source_uvs, settings);
+  ASSERT_TRUE(source.ok());
+  const auto source_before = serialize_qdr_authored_topology(source.value());
+  ASSERT_TRUE(source_before.ok());
+  const auto source_identity = source.value().content_identity();
+  const auto source_revision = source.value().content_revision();
+  for (const double degrees : {90.0, 37.0, -53.0, 179.999, 0.001,
+                               180.0 - 1.0e-10, 1.0e-10}) {
+    SCOPED_TRACE(degrees);
+    const double angle = degrees * 0.017453292519943295;
+    const float x = static_cast<float>(2.0 * std::cos(angle));
+    const float z = static_cast<float>(-2.0 * std::sin(angle));
+    const std::array<Vec3, 4> target_points{{
+        {4.0F, 0.0F, 0.0F}, {4.0F + x, 0.0F, z},
+        {4.0F + x, 3.0F, z}, {4.0F, 3.0F, 0.0F},
+    }};
+    auto target = make_texture_action_face(target_points);
+    ASSERT_TRUE(target.ok());
+    const auto target_before = serialize_qdr_authored_topology(target.value());
+    const auto original_topology = target.value().authored_topology();
+    ASSERT_TRUE(target_before.ok());
+    ASSERT_TRUE(original_topology.ok());
+    const auto target_identity = target.value().content_identity();
+    const auto result = prepare_face_texture_transfer(
+        texture_transfer_face(source.value()), texture_transfer_face(target.value(), 2U), 42U);
+    ASSERT_TRUE(result.ok()) << result.error_message();
+    ASSERT_TRUE(result.value().changed);
+    ASSERT_EQ(result.value().documents.size(), 1U);
+    const auto *prepared = prepared_texture_document(result.value(), 2U);
+    ASSERT_NE(prepared, nullptr);
+    EXPECT_TRUE(prepared->document.has_same_geometry(target.value()));
+    EXPECT_TRUE(prepared->document.shares_selection_with(target.value()));
+    EXPECT_EQ(prepared->document.selection_revision(), target.value().selection_revision());
+    EXPECT_EQ(prepared->document.vertex_ids(), target.value().vertex_ids());
+    EXPECT_EQ(prepared->document.face_ids(), target.value().face_ids());
+    EXPECT_TRUE(prepared->receipt.dirty.geometry);
+    EXPECT_TRUE(prepared->receipt.dirty.materials);
+    EXPECT_FALSE(prepared->receipt.dirty.topology);
+    EXPECT_FALSE(prepared->receipt.dirty.selection);
+    EXPECT_EQ(prepared->receipt.modified.faces, target.value().face_ids());
+    const auto topology = prepared->document.authored_topology();
+    ASSERT_TRUE(topology.ok());
+    EXPECT_EQ(topology.value().faces.front().texture_transform, settings);
+    EXPECT_EQ(topology.value().faces.front().material_slot, 42U);
+    const std::array<Vec2, 4> expected{{
+        expected_texture_uv(transfer_sheared_uv(4.0F, 0.0F), settings),
+        expected_texture_uv(transfer_sheared_uv(6.0F, 0.0F), settings),
+        expected_texture_uv(transfer_sheared_uv(6.0F, 3.0F), settings),
+        expected_texture_uv(transfer_sheared_uv(4.0F, 3.0F), settings),
+    }};
+    expect_compiled_texture_uvs(prepared->document,
+        original_topology.value().faces.front().vertices, expected);
+    const auto repeated = prepare_face_texture_transfer(texture_transfer_face(source.value()),
+        texture_transfer_face(prepared->document, 2U), 42U);
+    ASSERT_TRUE(repeated.ok()) << repeated.error_message();
+    EXPECT_FALSE(repeated.value().changed);
+    EXPECT_FALSE(repeated.value().documents.front().receipt.changed);
+    EXPECT_TRUE(repeated.value().documents.front().document.shares_topology_with(prepared->document));
+    EXPECT_EQ(target.value().content_identity(), target_identity);
+    EXPECT_EQ(serialize_qdr_authored_topology(target.value()).value(), target_before.value());
+  }
+  EXPECT_EQ(source.value().content_identity(), source_identity);
+  EXPECT_EQ(source.value().content_revision(), source_revision);
+  EXPECT_EQ(serialize_qdr_authored_topology(source.value()).value(), source_before.value());
+}
+
+TEST(ModelingSdkConsumerTests,
+     FaceTextureTransferKeepsWorldPhaseOnParallelAndOpposedPlanes) {
+  constexpr std::array<Vec3, 4> kSourcePoints{{
+      {0.0F, 0.0F, 0.0F}, {4.0F, 0.0F, 0.0F},
+      {4.0F, 3.0F, 0.0F}, {0.0F, 3.0F, 0.0F},
+  }};
+  std::array<Vec2, 4> uvs;
+  for (std::size_t corner = 0U; corner < uvs.size(); ++corner) {
+    uvs[corner] = transfer_sheared_uv(kSourcePoints[corner].x, kSourcePoints[corner].y);
+  }
+  auto source = make_texture_action_face(kSourcePoints, uvs);
+  ASSERT_TRUE(source.ok());
+  for (const bool opposed : {false, true}) {
+    SCOPED_TRACE(opposed);
+    std::array<Vec3, 4> points{{
+        {6.0F, 1.0F, 5.0F}, {8.0F, 1.0F, 5.0F},
+        {8.0F, 3.0F, 5.0F}, {6.0F, 3.0F, 5.0F},
+    }};
+    if (opposed) {
+      std::ranges::reverse(points);
+    }
+    auto target = make_texture_action_face(points);
+    ASSERT_TRUE(target.ok());
+    const auto result = prepare_face_texture_transfer(
+        texture_transfer_face(source.value()), texture_transfer_face(target.value()), 6U);
+    ASSERT_TRUE(result.ok()) << result.error_message();
+    ASSERT_TRUE(result.value().changed);
+    const auto compiled = result.value().documents.front().document.compile_mesh();
+    ASSERT_TRUE(compiled.ok());
+    for (const auto &vertex : compiled.value().vertices) {
+      expect_vec2_near(vertex.uv0, transfer_sheared_uv(vertex.position.x, vertex.position.y));
+    }
+  }
+}
+
+TEST(ModelingSdkConsumerTests,
+     FaceTextureTransferPreservesTransformedMirroredAndDistantOccurrenceSampling) {
+  constexpr std::array<Vec3, 4> kPoints{{
+      {0.0F, 0.0F, 0.0F}, {4.0F, 0.0F, 0.0F},
+      {4.0F, 3.0F, 0.0F}, {0.0F, 3.0F, 0.0F},
+  }};
+  std::array<Vec2, 4> uvs;
+  for (std::size_t corner = 0U; corner < uvs.size(); ++corner) {
+    uvs[corner] = transfer_sheared_uv(kPoints[corner].x, kPoints[corner].y);
+  }
+  const FaceTextureTransform settings{
+      .scale = {-2.0F, 0.5F}, .shift_uv = {0.31F, -0.37F}, .rotation_degrees = 37.0F};
+  auto source = make_texture_action_face(kPoints, uvs, settings);
+  auto target = make_texture_action_face(kPoints);
+  ASSERT_TRUE(source.ok());
+  ASSERT_TRUE(target.ok());
+  for (const float source_direction : {-1.0F, 1.0F}) {
+    for (const float target_direction : {-1.0F, 1.0F}) {
+      for (const bool distant : {false, true}) {
+        SCOPED_TRACE(source_direction);
+        SCOPED_TRACE(target_direction);
+        SCOPED_TRACE(distant);
+        const Vec3 origin = distant ? Vec3{1.0e8F, 1.0e8F, 1.0e8F}
+                                    : Vec3{5.0F, 7.0F, 11.0F};
+        auto from = texture_transfer_face(source.value());
+        from.world_from_local = {
+            .x_axis = {0.0F, 0.0F, 2.0F * source_direction},
+            .y_axis = {0.0F, 3.0F, 0.0F}, .z_axis = {-1.0F, 0.0F, 0.0F},
+            .origin = origin};
+        from.sampling_from_local = {
+            .x_axis = {-2.0F, 0.0F, 0.0F}, .y_axis = {0.5F, 3.0F, 0.0F},
+            .z_axis = {0.0F, 0.0F, 1.0F}, .origin = {1.0F, -2.0F, 1.0F}};
+        auto to = texture_transfer_face(target.value(), 2U);
+        to.world_from_local = {
+            .x_axis = {1.5F * target_direction, 0.0F, 0.0F},
+            .y_axis = {0.0F, 2.0F, 0.0F}, .z_axis = {0.0F, 0.0F, 1.0F},
+            .origin = {origin.x, origin.y, origin.z + 8.0F * source_direction}};
+        to.sampling_from_local = {
+            .x_axis = {-1.5F, 0.0F, 0.0F}, .y_axis = {0.25F, 2.0F, 0.0F},
+            .z_axis = {0.0F, 0.0F, 1.0F}, .origin = {3.0F, -4.0F, 1.0F}};
+        const auto result = prepare_face_texture_transfer(from, to, 6U);
+        ASSERT_TRUE(result.ok()) << result.error_message();
+        ASSERT_TRUE(result.value().changed);
+        const auto &prepared = result.value().documents.front().document;
+        const auto compiled = prepared.compile_mesh();
+        ASSERT_TRUE(compiled.ok());
+        for (const auto &vertex : compiled.value().vertices) {
+          // The target's reflected sampling flips its canonical +Z chart:
+          // q(Cp)-q(p)=(x/4-y/8-1.5, 2-y/2).
+          const Vec2 delta{0.25F * vertex.position.x - 0.125F * vertex.position.y - 1.5F,
+                            2.0F - 0.5F * vertex.position.y};
+          const Vec2 effective{
+              vertex.uv0.x + vertex.uv_carrier[0] * delta.x + vertex.uv_carrier[1] * delta.y,
+              vertex.uv0.y + vertex.uv_carrier[2] * delta.x + vertex.uv_carrier[3] * delta.y};
+          const float unfolded_x = 4.0F + 0.75F * vertex.position.x;
+          const float unfolded_y = (2.0F / 3.0F) * vertex.position.y;
+          const auto expected = expected_texture_uv(transfer_sheared_uv(
+              2.0F * unfolded_x - 0.5F * unfolded_y - 1.0F,
+              3.0F * unfolded_y - 2.0F), settings);
+          expect_vec2_near(effective, expected);
+        }
+        to.document = &prepared;
+        const auto repeated = prepare_face_texture_transfer(from, to, 6U);
+        ASSERT_TRUE(repeated.ok()) << repeated.error_message();
+        EXPECT_FALSE(repeated.value().changed);
+      }
+    }
+  }
+}
+
+TEST(ModelingSdkConsumerTests,
+     FaceTextureTransferDoesNotHideQuarterTileChangesBehindLargeOffsets) {
+  constexpr std::array<Vec3, 4> kPoints{{
+      {0.0F, 0.0F, 0.0F}, {2.0F, 0.0F, 0.0F},
+      {2.0F, 2.0F, 0.0F}, {0.0F, 2.0F, 0.0F},
+  }};
+  constexpr std::array<Vec2, 4> kUvs{{
+      {1.0e6F, 0.0F}, {1.0e6F + 1.0F, 0.0F},
+      {1.0e6F + 1.0F, 1.0F}, {1.0e6F, 1.0F},
+  }};
+  auto shifted = kUvs;
+  for (auto &uv : shifted) {
+    uv.x += 0.25F;
+  }
+  auto source = make_texture_action_face(kPoints, kUvs);
+  auto target = make_texture_action_face(kPoints, shifted);
+  ASSERT_TRUE(source.ok());
+  ASSERT_TRUE(target.ok());
+  const auto result = prepare_face_texture_transfer(texture_transfer_face(source.value()),
+      texture_transfer_face(target.value()), 6U);
+  ASSERT_TRUE(result.ok()) << result.error_message();
+  ASSERT_TRUE(result.value().changed);
+  const auto &prepared = result.value().documents.front();
+  EXPECT_FALSE(prepared.receipt.dirty.materials);
+  expect_compiled_texture_uvs(prepared.document, target.value().vertex_ids(), kUvs);
+  const auto repeated = prepare_face_texture_transfer(texture_transfer_face(source.value()),
+      texture_transfer_face(prepared.document), 6U);
+  ASSERT_TRUE(repeated.ok());
+  EXPECT_FALSE(repeated.value().changed);
+}
+
+TEST(ModelingSdkConsumerTests,
+     FaceTextureTransferSupportsConstantAndRankOneAffineMappings) {
+  constexpr std::array<Vec3, 4> kSourcePoints{{
+      {0.0F, 0.0F, 0.0F}, {2.0F, 0.0F, 0.0F},
+      {2.0F, 2.0F, 0.0F}, {0.0F, 2.0F, 0.0F},
+  }};
+  constexpr std::array<Vec3, 4> kTargetPoints{{
+      {2.0F, 0.0F, 0.0F}, {2.0F, 0.0F, -2.0F},
+      {2.0F, 2.0F, -2.0F}, {2.0F, 2.0F, 0.0F},
+  }};
+  for (const bool constant : {false, true}) {
+    SCOPED_TRACE(constant);
+    const auto mapping = [&](float x, float y) -> Vec2 {
+      const float u = constant ? 0.3F : 0.3F + 0.5F * x - 0.2F * y;
+      return {u, -0.7F + 2.0F * u};
+    };
+    std::array<Vec2, 4> uvs;
+    for (std::size_t corner = 0U; corner < uvs.size(); ++corner) {
+      uvs[corner] = mapping(kSourcePoints[corner].x, kSourcePoints[corner].y);
+    }
+    auto source = make_texture_action_face(kSourcePoints, uvs);
+    auto target = make_texture_action_face(kTargetPoints);
+    ASSERT_TRUE(source.ok());
+    ASSERT_TRUE(target.ok());
+    const auto result = prepare_face_texture_transfer(texture_transfer_face(source.value()),
+        texture_transfer_face(target.value()), 6U);
+    ASSERT_TRUE(result.ok()) << result.error_message();
+    const auto compiled = result.value().documents.front().document.compile_mesh();
+    ASSERT_TRUE(compiled.ok());
+    for (const auto &vertex : compiled.value().vertices) {
+      expect_vec2_near(vertex.uv0, mapping(2.0F - vertex.position.z, vertex.position.y));
+    }
+  }
+}
+
+TEST(ModelingSdkConsumerTests,
+     FaceTextureTransferRejectsNonAffineAndNonplanarInputsAtomically) {
+  constexpr std::array<Vec3, 4> kPoints{{
+      {0.0F, 0.0F, 0.0F}, {2.0F, 0.0F, 0.0F},
+      {2.0F, 2.0F, 0.0F}, {0.0F, 2.0F, 0.0F},
+  }};
+  constexpr std::array<Vec2, 4> kUvs{{
+      {0.0F, 0.0F}, {1.0F, 0.0F}, {1.0F, 1.0F}, {0.0F, 1.0F},
+  }};
+  for (int invalid = 0; invalid < 4; ++invalid) {
+    SCOPED_TRACE(invalid);
+    auto source_points = kPoints;
+    auto target_points = kPoints;
+    auto source_uvs = kUvs;
+    if (invalid < 2) {
+      source_uvs[2].x += 0.5F;
+      if (invalid == 1) {
+        for (auto &uv : source_uvs) {
+          uv.x += 1.0e6F;
+        }
+      }
+    } else if (invalid == 2) {
+      source_points[2].z = 0.25F;
+    } else {
+      target_points[2].z = 0.25F;
+    }
+    auto source = make_texture_action_face(source_points, source_uvs);
+    auto target = make_texture_action_face(target_points);
+    ASSERT_TRUE(source.ok()) << source.error_message();
+    ASSERT_TRUE(target.ok()) << target.error_message();
+    const auto source_before = serialize_qdr_authored_topology(source.value());
+    const auto target_before = serialize_qdr_authored_topology(target.value());
+    ASSERT_TRUE(source_before.ok());
+    ASSERT_TRUE(target_before.ok());
+    const auto source_identity = source.value().content_identity();
+    const auto target_identity = target.value().content_identity();
+    const auto result = prepare_face_texture_transfer(texture_transfer_face(source.value()),
+        texture_transfer_face(target.value()), 42U);
+    ASSERT_FALSE(result.ok());
+    EXPECT_EQ(result.error().code, ErrorCode::ValidationFailed);
+    EXPECT_EQ(source.value().content_identity(), source_identity);
+    EXPECT_EQ(target.value().content_identity(), target_identity);
+    EXPECT_EQ(serialize_qdr_authored_topology(source.value()).value(), source_before.value());
+    EXPECT_EQ(serialize_qdr_authored_topology(target.value()).value(), target_before.value());
+  }
+}
+
+TEST(ModelingSdkConsumerTests,
+     FaceTextureTransferRejectsStaleInvalidAndCollapsedMappingsWithoutPublication) {
+  constexpr std::array<Vec3, 4> kPoints{{
+      {0.0F, 0.0F, 0.0F}, {2.0F, 0.0F, 0.0F},
+      {2.0F, 2.0F, 0.0F}, {0.0F, 2.0F, 0.0F},
+  }};
+  auto source = make_texture_action_face(kPoints);
+  auto target = make_texture_action_face(kPoints);
+  ASSERT_TRUE(source.ok());
+  ASSERT_TRUE(target.ok());
+  const auto source_identity = source.value().content_identity();
+  const auto target_identity = target.value().content_identity();
+  const auto target_revision = target.value().content_revision();
+  for (int invalid = 0; invalid < 7; ++invalid) {
+    SCOPED_TRACE(invalid);
+    auto from = texture_transfer_face(source.value());
+    auto to = texture_transfer_face(target.value(), 2U);
+    switch (invalid) {
+    case 0: from.document = nullptr; break;
+    case 1: from.face = make_id<FaceTag>(from.face.index, 2U); break;
+    case 2: to.face = make_id<FaceTag>(999U); break;
+    case 3: from.world_from_local.origin.y = std::numeric_limits<float>::infinity(); break;
+    case 4: to.world_from_local.z_axis = {}; break;
+    case 5: to.sampling_from_local.z_axis = {}; break;
+    case 6: to.world_from_local.origin.x = 1.0e10F; break;
+    }
+    const auto result = prepare_face_texture_transfer(from, to, 42U);
+    ASSERT_FALSE(result.ok());
+    EXPECT_FALSE(result.error_message().empty());
+    EXPECT_EQ(source.value().content_identity(), source_identity);
+    EXPECT_EQ(target.value().content_identity(), target_identity);
+    EXPECT_EQ(target.value().content_revision(), target_revision);
+  }
+}
+
+TEST(ModelingSdkConsumerTests,
+     FaceTextureTransferRetainsNarrowRepresentableTargetFootprints) {
+  constexpr std::array<Vec3, 4> kPoints{{
+      {0.0F, 0.0F, 0.0F}, {2.0F, 0.0F, 0.0F},
+      {2.0F, 2.0F, 0.0F}, {0.0F, 2.0F, 0.0F},
+  }};
+  auto source = make_texture_action_face(kPoints);
+  auto target = make_texture_action_face(kPoints);
+  ASSERT_TRUE(source.ok());
+  ASSERT_TRUE(target.ok());
+  auto to = texture_transfer_face(target.value(), 2U);
+  to.world_from_local.y_axis = {0.0F, 1.0e-7F, 0.0F};
+  const auto result = prepare_face_texture_transfer(
+      texture_transfer_face(source.value()), to, 6U);
+  ASSERT_TRUE(result.ok()) << result.error_message();
+  ASSERT_TRUE(result.value().changed);
+  const auto compiled = result.value().documents.front().document.compile_mesh();
+  ASSERT_TRUE(compiled.ok());
+  for (const auto &vertex : compiled.value().vertices) {
+    EXPECT_FLOAT_EQ(vertex.uv0.x, vertex.position.x * 0.5F);
+    EXPECT_NEAR(vertex.uv0.y, vertex.position.y * -0.5e-7F, 1.0e-12F);
+  }
+}
+
+TEST(ModelingSdkConsumerTests,
+     FaceTextureTransferSelfAndRepeatAreNoopsButMaterialOnlyTransferChanges) {
+  constexpr std::array<Vec3, 4> kPoints{{
+      {0.0F, 0.0F, 0.0F}, {2.0F, 0.0F, 0.0F},
+      {2.0F, 2.0F, 0.0F}, {0.0F, 2.0F, 0.0F},
+  }};
+  auto source = make_texture_action_face(kPoints);
+  ASSERT_TRUE(source.ok());
+  const auto face = texture_transfer_face(source.value());
+  const auto noop = prepare_face_texture_transfer(face, face, 6U);
+  ASSERT_TRUE(noop.ok()) << noop.error_message();
+  EXPECT_FALSE(noop.value().changed);
+  ASSERT_EQ(noop.value().documents.size(), 1U);
+  const auto &unchanged = noop.value().documents.front();
+  EXPECT_FALSE(unchanged.receipt.changed);
+  EXPECT_TRUE(unchanged.document.shares_topology_with(source.value()));
+  EXPECT_EQ(unchanged.document.content_revision(), source.value().content_revision());
+  const auto material = prepare_face_texture_transfer(face, face, 42U);
+  ASSERT_TRUE(material.ok()) << material.error_message();
+  ASSERT_TRUE(material.value().changed);
+  const auto &prepared = material.value().documents.front();
+  EXPECT_TRUE(prepared.receipt.dirty.materials);
+  EXPECT_FALSE(prepared.receipt.dirty.selection);
+  EXPECT_TRUE(prepared.document.has_same_geometry(source.value()));
+  const auto topology = prepared.document.authored_topology();
+  ASSERT_TRUE(topology.ok());
+  EXPECT_EQ(topology.value().faces.front().material_slot, 42U);
+  EXPECT_TRUE(topology.value().faces.front().uvs.empty());
+}
+
 TEST(ModelingSdkConsumerTests,
      FaceTextureActionsKeepIncrementalEditsRelativeAndRetainEveryBaseCorner) {
   constexpr std::array<Vec3, 4> kPositions{{

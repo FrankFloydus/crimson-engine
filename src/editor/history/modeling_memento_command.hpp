@@ -450,6 +450,14 @@ public:
         material_(material) {}
 
 private:
+  ModelingSessionMemento capture_before_memento() override {
+    return modeling().capture_history_memento(true);
+  }
+
+  ModelingSessionMemento capture_after_memento() override {
+    return modeling().capture_history_memento(true);
+  }
+
   ModelingCommandResult execute_initial() override {
     return material_.valid()
                ? modeling().apply_active_material(material_)

@@ -9,6 +9,8 @@
 #include "editor/modeling/modeling_types.hpp"
 #include "scene/components.hpp"
 
+#include <optional>
+
 namespace quader {
 
 class ProjectSession;
@@ -19,6 +21,14 @@ class ProjectSession;
  */
 class ProjectMaterialFixture final {
 public:
+  /// Selects a deterministic modeling-publication boundary for rollback tests.
+  enum class ProjectionFailurePoint {
+    None,
+    AfterSdkMutation,
+    CommittedSceneNotify,
+    BeforeCommit,
+  };
+
   explicit ProjectMaterialFixture(ProjectSession &project);
 
   [[nodiscard]] bool set_material(EntityId entity,
@@ -27,6 +37,10 @@ public:
   [[nodiscard]] bool set_visible(EntityId entity, bool visible) const;
   [[nodiscard]] bool set_locked(EntityId entity, bool locked) const;
   [[nodiscard]] bool set_selectable(EntityId entity, bool selectable) const;
+  [[nodiscard]] bool bind_shared_mesh(EntityId entity, AssetId mesh) const;
+  [[nodiscard]] bool set_projection_failure(ProjectionFailurePoint point) const;
+  [[nodiscard]] std::optional<QMat4>
+  instance_member_world_transform(EntityId member, EntityId occurrence) const;
   [[nodiscard]] ModelingSelectionExport selection() const;
 
 private:

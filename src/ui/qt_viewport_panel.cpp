@@ -1785,6 +1785,7 @@ bool QtViewportPanel::pane_surface_has_keyboard_focus(
 bool QtViewportPanel::pane_interaction_locked() const {
   if (input_router_.navigating() || interaction_controller_.dragging() ||
       interaction_controller_.native_tool_dragging() ||
+      interaction_controller_.texture_transfer_pointer_active() ||
       modal_tool_dragging_) {
     return true;
   }
@@ -2162,6 +2163,7 @@ void QtViewportPanel::process_viewport_input(
   const bool interaction_locked =
       input_router_.navigating() || interaction_controller_.dragging() ||
       interaction_controller_.native_tool_dragging() ||
+      interaction_controller_.texture_transfer_pointer_active() ||
       modal_dragging || navigation_gizmo_consumed;
   std::array<QtViewportInputFrame, kViewportPaneCount> samples;
   for (Pane &pane_state : panes_) {

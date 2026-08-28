@@ -34,6 +34,10 @@ public:
   void reset(QuaderEditorApi *editor = nullptr);
 
   [[nodiscard]] bool dragging() const { return dragging_; }
+  /// A pending gizmo click owns its release before a drag preview exists.
+  [[nodiscard]] bool pointer_interaction_active() const {
+    return dragging_ || pending_drag_.has_value();
+  }
   [[nodiscard]] const quader_editor_core::TransformGizmoFrame *frame() const;
   [[nodiscard]] const TransformGizmoSelectionCacheStats &
   selection_cache_stats() const {

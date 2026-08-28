@@ -71,6 +71,10 @@ struct ViewportInputFrame {
   bool apply_active_material_to_selection_pressed = false;
   bool apply_active_material_delay_for_double_click = false;
   bool apply_face_material_to_mesh_pressed = false;
+  bool transfer_face_texture_pressed = false;
+  // Canonical left Click/DoubleClick counterparts and Qt's substituted second
+  // press reserve pointer ownership before selection can replace the source.
+  bool transfer_face_texture_pointer_reserved = false;
   // An unconsumed first left click can wait for any bound depth double-click.
   bool selection_click_delay_for_double_click = false;
   // Physical first-click modifiers, before they can change for the double-click.

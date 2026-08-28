@@ -15,10 +15,12 @@
 #include "io/project/qmat_codec.hpp"
 #include "io/qdr/qdr_binary_container.hpp"
 #include "io/qdr/qdr_document_reader.hpp"
+#include "scene/scene_texture_mapping.hpp"
 #include "support/project_material_fixture.hpp"
 
 #include <gtest/gtest.h>
 #include <quader/modeling/neutral/polygon/document.hpp>
+#include <quader/modeling/neutral/polygon/document_texture.hpp>
 
 #include <algorithm>
 #include <array>
@@ -399,6 +401,18 @@ ModelingSelectionExport exact_selection(ProjectSession &project) {
   return ProjectMaterialFixture(project).selection();
 }
 
+std::vector<std::pair<EntityId, bool>>
+scene_selection_identity(QuaderEditorApi &editor) {
+  std::vector<std::pair<EntityId, bool>> result;
+  for (const auto &entity : editor.query().entities()) {
+    if (entity.selected) {
+      result.emplace_back(entity.id, entity.active);
+    }
+  }
+  std::ranges::sort(result);
+  return result;
+}
+
 void expect_same_selection_identity(const ModelingSelectionExport &actual,
                                     const ModelingSelectionExport &expected) {
   EXPECT_EQ(actual.summary.mode, expected.summary.mode);
@@ -450,6 +464,109 @@ void expect_same_history(const QuaderHistorySnapshot &actual,
   EXPECT_EQ(actual.can_redo, expected.can_redo);
   EXPECT_EQ(actual.undo_label, expected.undo_label);
   EXPECT_EQ(actual.redo_label, expected.redo_label);
+}
+
+quader_poly::Document texture_transfer_quad(bool folded = false) {
+  quader_poly::Document document;
+  const std::array<QVec3, 4> positions =
+      folded ? std::array<QVec3, 4>{{
+                   {2.0f, 0.0f, 0.0f}, {2.0f, 0.0f, -2.0f},
+                   {2.0f, 2.0f, -2.0f}, {2.0f, 2.0f, 0.0f}}}
+             : std::array<QVec3, 4>{{
+                   {0.0f, 0.0f, 0.0f}, {2.0f, 0.0f, 0.0f},
+                   {2.0f, 2.0f, 0.0f}, {0.0f, 2.0f, 0.0f}}};
+  std::vector<quader_poly::ElementId> vertices;
+  for (const QVec3 position : positions) {
+    vertices.push_back(quader_poly::add_vertex(document, position));
+  }
+  EXPECT_NE(quader_poly::add_face(document, vertices), quader_poly::kInvalidElementId);
+  document.faces.front().uvs = {
+      {0.0f, 0.0f}, {1.0f, 0.0f}, {1.0f, 1.0f}, {0.0f, 1.0f}};
+  return document;
+}
+
+void expect_same_authored_document(const quader_poly::Document &actual,
+                                   const quader_poly::Document &expected) {
+  ASSERT_EQ(actual.vertices.size(), expected.vertices.size());
+  ASSERT_EQ(actual.faces.size(), expected.faces.size());
+  EXPECT_EQ(actual.next_vertex_id, expected.next_vertex_id);
+  EXPECT_EQ(actual.next_face_id, expected.next_face_id);
+  EXPECT_EQ(actual.hard_normal_edges, expected.hard_normal_edges);
+  for (std::size_t index = 0; index < actual.vertices.size(); ++index) {
+    EXPECT_EQ(actual.vertices[index].id, expected.vertices[index].id);
+    EXPECT_EQ(actual.vertices[index].position.x, expected.vertices[index].position.x);
+    EXPECT_EQ(actual.vertices[index].position.y, expected.vertices[index].position.y);
+    EXPECT_EQ(actual.vertices[index].position.z, expected.vertices[index].position.z);
+  }
+  for (std::size_t index = 0; index < actual.faces.size(); ++index) {
+    const auto &face = actual.faces[index];
+    const auto &baseline = expected.faces[index];
+    EXPECT_EQ(face.id, baseline.id);
+    EXPECT_EQ(face.vertices, baseline.vertices);
+    EXPECT_EQ(face.material_slot, baseline.material_slot);
+    EXPECT_EQ(face.normal_shading, baseline.normal_shading);
+    EXPECT_EQ(face.texture_transform, baseline.texture_transform);
+    ASSERT_EQ(face.uvs.size(), baseline.uvs.size());
+    for (std::size_t corner = 0; corner < face.uvs.size(); ++corner) {
+      EXPECT_EQ(face.uvs[corner].x, baseline.uvs[corner].x);
+      EXPECT_EQ(face.uvs[corner].y, baseline.uvs[corner].y);
+    }
+  }
+}
+
+std::vector<QVec2> effective_face_corner_uvs(
+    ProjectSession &project, EntityId entity, quader_poly::ElementId face_id,
+    EntityId occurrence = kInvalidEntityId) {
+  const auto *document = authored_document(project, entity);
+  EXPECT_NE(document, nullptr);
+  if (document == nullptr) {
+    return {};
+  }
+  const auto *face = quader_poly::find_face(*document, face_id);
+  EXPECT_NE(face, nullptr);
+  if (face == nullptr) {
+    return {};
+  }
+  const auto sampling = effective_texture_sampling_from_local(
+      project.active_scene()->session->scene(), entity, occurrence);
+  EXPECT_TRUE(sampling.has_value());
+  if (!sampling.has_value()) {
+    return {};
+  }
+  const auto &matrix = sampling->values;
+  const quader_poly::Transform3 correction{
+      .x_axis = {matrix[0], matrix[1], matrix[2]},
+      .y_axis = {matrix[4], matrix[5], matrix[6]},
+      .z_axis = {matrix[8], matrix[9], matrix[10]},
+      .origin = {matrix[12], matrix[13], matrix[14]},
+  };
+  const QVec3 normal = quader_poly::face_normal(*document, *face);
+  const auto carrier = quader_poly::face_texture_carrier(*document, *face, normal);
+  std::vector<QVec2> result;
+  for (std::size_t corner = 0; corner < face->vertices.size(); ++corner) {
+    const auto *vertex = quader_poly::find_vertex(*document, face->vertices[corner]);
+    EXPECT_NE(vertex, nullptr);
+    if (vertex == nullptr) {
+      return {};
+    }
+    const QVec2 base = face->uvs.empty()
+                          ? quader_poly::generated_texture_uv(vertex->position, normal)
+                          : face->uvs[corner];
+    result.push_back(quader_poly::evaluate_texture_mapping(
+        quader_poly::apply_face_texture_transform(base, face->texture_transform),
+        vertex->position, normal, carrier, correction));
+  }
+  return result;
+}
+
+void expect_same_revisions(const QuaderRevisionStamp &actual,
+                           const QuaderRevisionStamp &expected) {
+  EXPECT_EQ(actual.project_revision, expected.project_revision);
+  EXPECT_EQ(actual.scene_revision, expected.scene_revision);
+  EXPECT_EQ(actual.scene_layer_revision, expected.scene_layer_revision);
+  EXPECT_EQ(actual.asset_revision, expected.asset_revision);
+  EXPECT_EQ(actual.modeling_content_revision, expected.modeling_content_revision);
+  EXPECT_EQ(actual.modeling_selection_revision, expected.modeling_selection_revision);
 }
 
 TEST(ProjectMaterialPublicApiTests,
@@ -1051,6 +1168,391 @@ TEST(ProjectMaterialBehaviorTests,
 }
 
 TEST(ProjectMaterialBehaviorTests,
+     GroupApplyIncludesNestedHiddenMeshesAndRestoresExactSelection) {
+  // The direct API, public command, and tool-dispatch history routes share the
+  // same group target policy and must restore their scene-owned selection.
+  for (int route = 0; route < 3; ++route) {
+    SCOPED_TRACE(route);
+    ProjectMaterialBehaviorHarness harness("group-apply-history");
+    harness.create();
+    const InstalledMaterial blue{
+        .path = project_path("Materials/blue.qmat"),
+        .material = project_material(kBlueMaterialId, "Blue", {0.1f, 0.2f, 1.0f}),
+    };
+    const std::array installed{blue};
+    harness.install_and_reopen(installed);
+    auto &editor = harness.editor();
+    const auto unrelated = editor.modeling().create_box(
+        {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
+        "Unrelated Mesh");
+    ASSERT_TRUE(unrelated.ok()) << unrelated.error_message();
+    const auto unrelated_before =
+        *authored_document(harness.project(), unrelated.value().entity);
+    auto seed = unrelated_before;
+    for (std::size_t index = 0; index < seed.faces.size(); ++index) {
+      auto &face = seed.faces[index];
+      ASSERT_EQ(face.vertices.size(), 4u);
+      face.material_slot = static_cast<std::uint32_t>(index % 3u + 1u);
+      face.uvs = {{0.1f, 0.2f}, {2.1f, 0.2f}, {2.1f, 1.4f}, {0.1f, 1.4f}};
+      face.texture_transform = {
+          .scale = {-1.25f, 0.75f}, .shift_uv = {0.2f, -0.4f},
+          .rotation_degrees = 23.0f};
+    }
+    const auto first = editor.modeling().create_mesh(
+        QuaderPolygonDocumentInternalAccess::from_backend(seed),
+        {.name = "First Group Mesh"});
+    const auto second = editor.modeling().create_mesh(
+        QuaderPolygonDocumentInternalAccess::from_backend(seed),
+        {.name = "Hidden Group Mesh"});
+    ASSERT_TRUE(first.ok()) << first.error_message();
+    ASSERT_TRUE(second.ok()) << second.error_message();
+    ASSERT_TRUE(editor.selection().select_objects({first.value(), second.value()}).ok());
+    const auto inner = editor.scene().group_selection("Inner Material Group");
+    ASSERT_TRUE(inner.ok()) << inner.error_message();
+    const auto outer = editor.scene().group_selection("Outer Material Group");
+    ASSERT_TRUE(outer.ok()) << outer.error_message();
+    ASSERT_TRUE(editor.selection().clear().ok());
+    const auto third = editor.modeling().create_mesh(
+        QuaderPolygonDocumentInternalAccess::from_backend(seed),
+        {.name = "Second Group Mesh"});
+    ASSERT_TRUE(third.ok()) << third.error_message();
+    const auto other_group = editor.scene().group_selection("Second Material Group");
+    ASSERT_TRUE(other_group.ok()) << other_group.error_message();
+    const ProjectMaterialFixture fixture(harness.project());
+    ASSERT_TRUE(fixture.set_visible(second.value().entity, false));
+    const MaterialComponent initial_material{
+        .material = MaterialReference::project(project_asset_id(kDefaultProjectMaterialId)),
+        .material_slots = {{1u, MaterialReference::project(blue.material.id)}}};
+    for (const auto object : {first.value(), second.value(), third.value()}) {
+      ASSERT_TRUE(fixture.set_material(object.entity, initial_material));
+    }
+
+    ASSERT_TRUE(editor.selection().set_mode(QuaderSelectionMode::Group).ok());
+    const std::vector<EntityId> groups = route == 0
+        ? std::vector<EntityId>{outer.value().id}
+        : (route == 1
+            ? std::vector<EntityId>{outer.value().id, other_group.value().id}
+            : std::vector<EntityId>{inner.value().id, outer.value().id,
+                                    other_group.value().id});
+    const EntityId primary = groups.back();
+    const auto selected = route == 2
+        ? editor.selection().select_objects_for_inspection(groups, primary)
+        : editor.selection().select_objects(groups, primary);
+    ASSERT_TRUE(selected.ok()) << selected.error_message();
+    ASSERT_TRUE(editor.query().entity(primary)->active);
+    ASSERT_EQ(editor.selection().summary().selected_object_count, groups.size());
+    ASSERT_TRUE(editor.project_assets().set_active_material(blue.material.id).ok());
+    const auto selection_before = exact_selection(harness.project());
+    const auto scene_selection_before = scene_selection_identity(editor);
+    const auto selection_revision = editor.selection().summary().selection_revision;
+    const auto history_before = editor.query().history();
+    const auto applied = route == 0 ? editor.modeling().apply_active_material()
+        : (route == 1 ? editor.commands().execute(quader_command::kApplyMaterial)
+                      : editor.modeling().execute_tool("assign_material"));
+    ASSERT_TRUE(applied.ok()) << applied.error_message();
+    ASSERT_TRUE(applied.changed());
+    EXPECT_EQ(editor.query().history().undo_label,
+              route == 0 ? "Apply Material" : "Assign Material");
+    EXPECT_EQ(scene_selection_identity(editor), scene_selection_before);
+    EXPECT_EQ(editor.selection().summary().selection_revision, selection_revision);
+    expect_same_selection_identity(exact_selection(harness.project()), selection_before);
+
+    auto normalized = seed;
+    for (auto &face : normalized.faces) {
+      face.material_slot = 0u;
+    }
+    const auto expect_meshes = [&](bool changed) {
+      for (const auto object : {first.value(), second.value(), third.value()}) {
+        const bool target_changed = changed &&
+            (route != 0 || object.entity != third.value().entity);
+        expect_same_authored_document(
+            *authored_document(harness.project(), object.entity),
+            target_changed ? normalized : seed);
+        EXPECT_EQ(*scene_material(harness.project(), object.entity),
+                  target_changed
+                      ? MaterialComponent{.material = MaterialReference::project(blue.material.id)}
+                      : initial_material);
+      }
+      expect_same_authored_document(
+          *authored_document(harness.project(), unrelated.value().entity), unrelated_before);
+      expect_primary_material(harness.project(), unrelated.value().entity,
+                              project_asset_id(kDefaultProjectMaterialId));
+      EXPECT_FALSE(editor.query().entity(second.value().entity)->visible);
+      EXPECT_EQ(editor.query().entity(first.value().entity)->parent, inner.value().id);
+      EXPECT_EQ(editor.query().entity(inner.value().id)->parent, outer.value().id);
+    };
+    expect_meshes(true);
+
+    ASSERT_TRUE(editor.selection().set_mode(QuaderSelectionMode::Object).ok());
+    ASSERT_TRUE(editor.history().undo().ok());
+    EXPECT_EQ(editor.query().history().undo_label, history_before.undo_label);
+    EXPECT_EQ(editor.selection().summary().mode, QuaderSelectionMode::Group);
+    EXPECT_EQ(scene_selection_identity(editor), scene_selection_before);
+    expect_meshes(false);
+
+    ASSERT_TRUE(editor.project_assets().set_active_material(
+        project_asset_id(kDefaultProjectMaterialId)).ok());
+    ASSERT_TRUE(editor.selection().set_mode(QuaderSelectionMode::Face).ok());
+    ASSERT_TRUE(editor.history().redo().ok());
+    EXPECT_EQ(editor.selection().summary().mode, QuaderSelectionMode::Group);
+    EXPECT_EQ(scene_selection_identity(editor), scene_selection_before);
+    expect_meshes(true);
+    ASSERT_TRUE(editor.project_assets().active_material().ok());
+    EXPECT_EQ(editor.project_assets().active_material().value().id,
+              project_asset_id(kDefaultProjectMaterialId));
+  }
+}
+
+TEST(ProjectMaterialBehaviorTests,
+     GroupApplyNoOpAndProtectedTargetsPreserveRedoAndRevisions) {
+  ProjectMaterialBehaviorHarness harness("group-apply-protected");
+  harness.create();
+  const InstalledMaterial blue{
+      .path = project_path("Materials/blue.qmat"),
+      .material = project_material(kBlueMaterialId, "Blue", {0.1f, 0.2f, 1.0f}),
+  };
+  const std::array installed{blue};
+  harness.install_and_reopen(installed);
+  auto &editor = harness.editor();
+  const auto first = editor.modeling().create_box(
+      {.min = {-3.0f, -1.0f, -1.0f}, .max = {-1.0f, 1.0f, 1.0f}}, "First");
+  ASSERT_TRUE(first.ok()) << first.error_message();
+  const auto first_group = editor.scene().group_selection("First Group");
+  ASSERT_TRUE(first_group.ok()) << first_group.error_message();
+  ASSERT_TRUE(editor.selection().clear().ok());
+  const auto second = editor.modeling().create_box(
+      {.min = {1.0f, -1.0f, -1.0f}, .max = {3.0f, 1.0f, 1.0f}}, "Second");
+  ASSERT_TRUE(second.ok()) << second.error_message();
+  const auto second_group = editor.scene().group_selection("Second Group");
+  ASSERT_TRUE(second_group.ok()) << second_group.error_message();
+  ASSERT_TRUE(editor.selection().set_mode(QuaderSelectionMode::Group).ok());
+  ASSERT_TRUE(editor.selection().select_objects(
+      {first_group.value().id, second_group.value().id}, second_group.value().id).ok());
+  ASSERT_TRUE(editor.project_assets().set_active_material(blue.material.id).ok());
+  const auto applied = editor.commands().execute(quader_command::kApplyMaterial);
+  ASSERT_TRUE(applied.ok()) << applied.error_message();
+  ASSERT_TRUE(applied.changed());
+  ASSERT_TRUE(editor.history().undo().ok());
+  ASSERT_TRUE(editor.query().history().can_redo);
+  ASSERT_TRUE(editor.project_assets().set_active_material(
+      project_asset_id(kDefaultProjectMaterialId)).ok());
+  const auto first_before = *authored_document(harness.project(), first.value().entity);
+  const auto second_before = *authored_document(harness.project(), second.value().entity);
+  const auto expect_unchanged_apply = [&](bool success, bool command) {
+    const auto revisions = editor.query().revisions();
+    const auto history = editor.query().history();
+    const auto selection = exact_selection(harness.project());
+    const auto scene_selection = scene_selection_identity(editor);
+    const auto result = command
+        ? editor.modeling().execute_tool("assign_material")
+        : editor.modeling().apply_active_material();
+    EXPECT_EQ(result.ok(), success) << result.error_message();
+    EXPECT_FALSE(result.changed());
+    expect_same_revisions(editor.query().revisions(), revisions);
+    expect_same_history(editor.query().history(), history);
+    expect_same_selection_identity(exact_selection(harness.project()), selection);
+    EXPECT_EQ(scene_selection_identity(editor), scene_selection);
+    expect_same_authored_document(
+        *authored_document(harness.project(), first.value().entity), first_before);
+    expect_same_authored_document(
+        *authored_document(harness.project(), second.value().entity), second_before);
+    for (const auto object : {first.value(), second.value()}) {
+      expect_primary_material(harness.project(), object.entity,
+                              project_asset_id(kDefaultProjectMaterialId));
+    }
+  };
+  expect_unchanged_apply(true, false);
+  expect_unchanged_apply(true, true);
+
+  ASSERT_TRUE(editor.project_assets().set_active_material(blue.material.id).ok());
+  const ProjectMaterialFixture fixture(harness.project());
+  // Setting flags after selection exercises execution preflight, including a
+  // protected root that the shared selected-root helper would otherwise skip.
+  for (const EntityId target : {first_group.value().id, second.value().entity}) {
+    ASSERT_TRUE(fixture.set_locked(target, true));
+    expect_unchanged_apply(false, false);
+    expect_unchanged_apply(false, true);
+    ASSERT_TRUE(fixture.set_locked(target, false));
+    ASSERT_TRUE(fixture.set_selectable(target, false));
+    expect_unchanged_apply(false, false);
+    expect_unchanged_apply(false, true);
+    ASSERT_TRUE(fixture.set_selectable(target, true));
+  }
+  ASSERT_TRUE(editor.query().history().can_redo);
+
+  const auto entities = editor.query().entities();
+  const auto root = std::ranges::find_if(entities,
+      [](const auto &entity) { return entity.is_scene_root; });
+  ASSERT_NE(root, entities.end());
+  ASSERT_TRUE(editor.selection().select_objects_for_inspection(
+      {root->id, second_group.value().id}, second_group.value().id).ok());
+  expect_unchanged_apply(false, false);
+
+  const auto read_only = editor.scene().create_entity({
+      .name = "Read-only Mesh", .kind = QuaderEntityKind::Mesh,
+      .parent = first_group.value().id});
+  ASSERT_TRUE(read_only.ok()) << read_only.error_message();
+  ASSERT_TRUE(fixture.bind_shared_mesh(read_only.value().id,
+      editor.query().entity(first.value().entity)->mesh));
+  ASSERT_TRUE(editor.selection().select_objects(
+      {first_group.value().id, second_group.value().id}, second_group.value().id).ok());
+  expect_unchanged_apply(false, false);
+
+  const auto empty = editor.scene().create_entity(
+      {.name = "Empty Material Group", .kind = QuaderEntityKind::Empty});
+  ASSERT_TRUE(empty.ok()) << empty.error_message();
+  ASSERT_TRUE(editor.selection().select_object(empty.value().id).ok());
+  expect_unchanged_apply(false, false);
+  ASSERT_TRUE(editor.selection().clear().ok());
+  expect_unchanged_apply(false, false);
+  expect_unchanged_apply(false, true);
+}
+
+TEST(ProjectMaterialBehaviorTests,
+     GroupApplyPublicationFailureRollsBackAllDescendantsAtomically) {
+  ProjectMaterialBehaviorHarness harness("group-apply-rollback");
+  harness.create();
+  auto &editor = harness.editor();
+  auto document = texture_transfer_quad();
+  document.faces.front().material_slot = 3u;
+  const auto first = editor.modeling().create_mesh(
+      QuaderPolygonDocumentInternalAccess::from_backend(document), {.name = "First"});
+  ASSERT_TRUE(first.ok()) << first.error_message();
+  const auto first_group = editor.scene().group_selection("First Group");
+  ASSERT_TRUE(first_group.ok()) << first_group.error_message();
+  ASSERT_TRUE(editor.selection().clear().ok());
+  const auto second = editor.modeling().create_mesh(
+      QuaderPolygonDocumentInternalAccess::from_backend(document), {.name = "Second"});
+  ASSERT_TRUE(second.ok()) << second.error_message();
+  const auto second_group = editor.scene().group_selection("Second Group");
+  ASSERT_TRUE(second_group.ok()) << second_group.error_message();
+  const auto embedded = editor.assets().add_material(QuaderMaterialArgs{.name = "Before"});
+  ASSERT_TRUE(embedded.ok()) << embedded.error_message();
+  const MaterialComponent material_before{
+      .material = embedded.value().id,
+      .material_slots = {{3u, MaterialReference(embedded.value().id)}}};
+  const ProjectMaterialFixture fixture(harness.project());
+  ASSERT_TRUE(fixture.set_material(first.value().entity, material_before));
+  ASSERT_TRUE(fixture.set_material(second.value().entity, material_before));
+  ASSERT_TRUE(editor.selection().set_mode(QuaderSelectionMode::Group).ok());
+  ASSERT_TRUE(editor.selection().select_objects(
+      {first_group.value().id, second_group.value().id}, second_group.value().id).ok());
+  const auto revisions = editor.query().revisions();
+  const auto history = editor.query().history();
+  const auto selection = exact_selection(harness.project());
+  const auto scene_selection = scene_selection_identity(editor);
+  using ProjectionFailurePoint = ProjectMaterialFixture::ProjectionFailurePoint;
+  constexpr std::array failures{
+      ProjectionFailurePoint::AfterSdkMutation,
+      ProjectionFailurePoint::CommittedSceneNotify,
+      ProjectionFailurePoint::BeforeCommit};
+  for (const auto failure : failures) {
+    SCOPED_TRACE(static_cast<int>(failure));
+    ASSERT_TRUE(fixture.set_projection_failure(failure));
+    const auto result = editor.commands().execute(quader_command::kApplyMaterial);
+    EXPECT_FALSE(result.ok());
+    EXPECT_FALSE(result.changed());
+    ASSERT_TRUE(fixture.set_projection_failure(ProjectionFailurePoint::None));
+    expect_same_revisions(editor.query().revisions(), revisions);
+    expect_same_history(editor.query().history(), history);
+    expect_same_selection_identity(exact_selection(harness.project()), selection);
+    EXPECT_EQ(scene_selection_identity(editor), scene_selection);
+    for (const auto object : {first.value(), second.value()}) {
+      expect_same_authored_document(
+          *authored_document(harness.project(), object.entity), document);
+      EXPECT_EQ(*scene_material(harness.project(), object.entity), material_before);
+    }
+  }
+  const auto applied = editor.commands().execute(quader_command::kApplyMaterial);
+  ASSERT_TRUE(applied.ok()) << applied.error_message();
+  ASSERT_TRUE(applied.changed());
+  for (const auto object : {first.value(), second.value()}) {
+    expect_all_face_slots(harness.project(), object.entity, 0u);
+    expect_primary_material(harness.project(), object.entity,
+                            project_asset_id(kDefaultProjectMaterialId));
+  }
+  EXPECT_EQ(scene_selection_identity(editor), scene_selection);
+}
+
+TEST(ProjectMaterialBehaviorTests,
+     GroupApplyRequiresExplicitInstanceMeshEditScope) {
+  ProjectMaterialBehaviorHarness harness("group-apply-instance-scope");
+  harness.create();
+  const InstalledMaterial blue{
+      .path = project_path("Materials/blue.qmat"),
+      .material = project_material(kBlueMaterialId, "Blue", {0.1f, 0.2f, 1.0f}),
+  };
+  const std::array installed{blue};
+  harness.install_and_reopen(installed);
+  auto &editor = harness.editor();
+  const auto member = editor.modeling().create_box(
+      {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}}, "Instance Member");
+  ASSERT_TRUE(member.ok()) << member.error_message();
+  const auto instance = editor.modeling().create_instance_from_selection();
+  ASSERT_TRUE(instance.ok()) << instance.error_message();
+  const EntityId occurrence = instance.value().occurrence.root.id;
+  ASSERT_TRUE(editor.selection().clear().ok());
+  const auto ordinary = editor.modeling().create_box(
+      {.min = {3.0f, -1.0f, -1.0f}, .max = {5.0f, 1.0f, 1.0f}}, "Ordinary Member");
+  ASSERT_TRUE(ordinary.ok()) << ordinary.error_message();
+  ASSERT_TRUE(editor.selection().select_objects(
+      {ordinary.value().entity, occurrence}, ordinary.value().entity).ok());
+  const auto group = editor.scene().group_selection("Mixed Instance Group");
+  ASSERT_TRUE(group.ok()) << group.error_message();
+  ASSERT_TRUE(editor.selection().set_mode(QuaderSelectionMode::Group).ok());
+  ASSERT_TRUE(editor.selection().select_object(group.value().id).ok());
+  ASSERT_TRUE(editor.project_assets().set_active_material(blue.material.id).ok());
+  const auto member_before = *authored_document(harness.project(), member.value().entity);
+  const auto ordinary_before = *authored_document(harness.project(), ordinary.value().entity);
+  const auto revisions = editor.query().revisions();
+  const auto history = editor.query().history();
+  const auto selection = scene_selection_identity(editor);
+  const auto rejected = editor.modeling().apply_active_material();
+  EXPECT_FALSE(rejected.ok());
+  EXPECT_FALSE(rejected.changed());
+  expect_same_revisions(editor.query().revisions(), revisions);
+  expect_same_history(editor.query().history(), history);
+  EXPECT_EQ(scene_selection_identity(editor), selection);
+  expect_same_authored_document(
+      *authored_document(harness.project(), member.value().entity), member_before);
+  expect_same_authored_document(
+      *authored_document(harness.project(), ordinary.value().entity), ordinary_before);
+  for (const auto object : {member.value(), ordinary.value()}) {
+    expect_primary_material(harness.project(), object.entity,
+                            project_asset_id(kDefaultProjectMaterialId));
+  }
+
+  ASSERT_TRUE(editor.selection().set_mode(QuaderSelectionMode::Object).ok());
+  ASSERT_TRUE(editor.selection().select_object(occurrence).ok());
+  const auto entered = editor.modeling().enter_instance_edit(occurrence);
+  ASSERT_TRUE(entered.ok()) << entered.error_message();
+  ASSERT_TRUE(editor.selection().set_mode(QuaderSelectionMode::Group).ok());
+  const auto scope_revisions = editor.query().revisions();
+  const auto scope_history = editor.query().history();
+  const auto scope_selection = scene_selection_identity(editor);
+  const auto in_scope_group = editor.modeling().apply_active_material();
+  EXPECT_FALSE(in_scope_group.ok());
+  EXPECT_FALSE(in_scope_group.changed());
+  expect_same_revisions(editor.query().revisions(), scope_revisions);
+  expect_same_history(editor.query().history(), scope_history);
+  EXPECT_EQ(scene_selection_identity(editor), scope_selection);
+
+  ASSERT_TRUE(editor.selection().set_mode(QuaderSelectionMode::Object).ok());
+  const auto selected = editor.selection().select_object(member.value());
+  ASSERT_TRUE(selected.ok()) << selected.error_message();
+  const auto applied = editor.modeling().apply_active_material();
+  ASSERT_TRUE(applied.ok()) << applied.error_message();
+  ASSERT_TRUE(applied.changed());
+  EXPECT_TRUE(editor.modeling().can_exit_instance_edit());
+  expect_primary_material(harness.project(), member.value().entity, blue.material.id);
+  expect_primary_material(harness.project(), ordinary.value().entity,
+                          project_asset_id(kDefaultProjectMaterialId));
+  expect_same_authored_document(
+      *authored_document(harness.project(), member.value().entity), member_before);
+  ASSERT_TRUE(editor.modeling().exit_instance_edit().ok());
+}
+
+TEST(ProjectMaterialBehaviorTests,
      DirectHoverTargetsAssignFaceOrWholeMeshWithoutChangingSelection) {
   ProjectMaterialBehaviorHarness harness("direct-hover-material-targets");
   harness.create();
@@ -1141,6 +1643,536 @@ TEST(ProjectMaterialBehaviorTests,
                           amber.material.id);
   expect_same_selection_identity(exact_selection(harness.project()),
                                  selection_before);
+}
+
+TEST(ProjectMaterialBehaviorTests,
+     FaceTextureTransferContinuesMaterialAndAttributesWithExactHistory) {
+  ProjectMaterialBehaviorHarness harness("face-texture-transfer");
+  harness.create();
+  const InstalledMaterial amber{
+      .path = project_path("Materials/amber.qmat"),
+      .material = project_material(kAmberMaterialId, "Amber", {1.0f, 0.5f, 0.1f}),
+  };
+  const InstalledMaterial blue{
+      .path = project_path("Materials/blue.qmat"),
+      .material = project_material(kBlueMaterialId, "Blue", {0.1f, 0.2f, 1.0f}),
+  };
+  const std::array installed{amber, blue};
+  harness.install_and_reopen(installed);
+  auto &editor = harness.editor();
+  ASSERT_TRUE(editor.project_assets().set_active_material(blue.material.id).ok());
+  const auto source = editor.modeling().create_mesh(
+      QuaderPolygonDocumentInternalAccess::from_backend(texture_transfer_quad()),
+      {.name = "Texture Source"});
+  auto target_topology = texture_transfer_quad(true);
+  const std::array extra_vertices{
+      quader_poly::add_vertex(target_topology, {5.0f, 0.0f, 0.0f}),
+      quader_poly::add_vertex(target_topology, {6.0f, 0.0f, 0.0f}),
+      quader_poly::add_vertex(target_topology, {5.0f, 1.0f, 0.0f}),
+  };
+  ASSERT_NE(quader_poly::add_face(target_topology, extra_vertices),
+            quader_poly::kInvalidElementId);
+  const auto target = editor.modeling().create_mesh(
+      QuaderPolygonDocumentInternalAccess::from_backend(target_topology),
+      {.name = "Unselected Texture Target"});
+  ASSERT_TRUE(source.ok()) << source.error_message();
+  ASSERT_TRUE(target.ok()) << target.error_message();
+  const QuaderElementId source_face = 1;
+  const QuaderElementId target_face = 1;
+  ASSERT_TRUE(editor.project_assets().set_active_material(amber.material.id).ok());
+  ASSERT_TRUE(editor.modeling().apply_active_material_to_face(
+      source.value().modeling_object_id, source_face).ok());
+  ASSERT_TRUE(editor.project_assets().set_active_material(blue.material.id).ok());
+  ASSERT_TRUE(editor.selection().set_mode(QuaderSelectionMode::Face).ok());
+  ASSERT_TRUE(editor.selection().select_face(source.value(), source_face).ok());
+  ASSERT_TRUE(edit_selected_face_texture(editor, QuaderFaceTextureField::ScaleX, 1.25).ok());
+  ASSERT_TRUE(edit_selected_face_texture(editor, QuaderFaceTextureField::ScaleY, -0.75).ok());
+  ASSERT_TRUE(edit_selected_face_texture(editor, QuaderFaceTextureField::ShiftX, 13).ok());
+  ASSERT_TRUE(edit_selected_face_texture(editor, QuaderFaceTextureField::ShiftY, -7).ok());
+  ASSERT_TRUE(edit_selected_face_texture(editor, QuaderFaceTextureField::Rotate, 31).ok());
+  const auto source_before = *authored_document(harness.project(), source.value().entity);
+  const auto target_before = *authored_document(harness.project(), target.value().entity);
+  const auto material_before = *scene_material(harness.project(), target.value().entity);
+  const auto selection_before = exact_selection(harness.project());
+  const auto history_before = editor.query().history();
+  const auto source_uv = effective_face_corner_uvs(
+      harness.project(), source.value().entity, source_face);
+  ASSERT_EQ(source_uv.size(), 4u);
+
+  const auto applied = editor.modeling().transfer_face_texture_to_face(
+      target.value().modeling_object_id, target_face);
+  ASSERT_TRUE(applied.ok()) << applied.error_message();
+  ASSERT_TRUE(applied.changed());
+  EXPECT_EQ(editor.query().history().undo_label, "Transfer Face Texture");
+  const auto target_after = *authored_document(harness.project(), target.value().entity);
+  const auto material_after = *scene_material(harness.project(), target.value().entity);
+  const auto &transferred = target_after.faces.front();
+  EXPECT_EQ(transferred.texture_transform, source_before.faces.front().texture_transform);
+  EXPECT_EQ(material_after.material_for_slot(transferred.material_slot),
+            MaterialReference::project(amber.material.id));
+  EXPECT_EQ(material_after.material, material_before.material);
+  EXPECT_EQ(editor.project_assets().active_material().value().id, blue.material.id);
+  auto expected_target = target_before;
+  expected_target.faces.front().uvs = transferred.uvs;
+  expected_target.faces.front().texture_transform = transferred.texture_transform;
+  expected_target.faces.front().material_slot = transferred.material_slot;
+  expect_same_authored_document(target_after, expected_target);
+  expect_same_authored_document(
+      *authored_document(harness.project(), source.value().entity), source_before);
+  expect_same_selection_identity(exact_selection(harness.project()), selection_before);
+  EXPECT_EQ(editor.query().revisions().modeling_selection_revision,
+            selection_before.summary.selection_revision);
+  const auto target_uv = effective_face_corner_uvs(
+      harness.project(), target.value().entity, target_face);
+  ASSERT_EQ(target_uv.size(), 4u);
+  const std::array<QVec2, 4> unfolded_base{{
+      {1.0f, 0.0f}, {2.0f, 0.0f}, {2.0f, 1.0f}, {1.0f, 1.0f}}};
+  for (std::size_t corner = 0; corner < target_uv.size(); ++corner) {
+    const QVec2 expected = quader_poly::apply_face_texture_transform(
+        unfolded_base[corner], source_before.faces.front().texture_transform);
+    EXPECT_NEAR(target_uv[corner].x, expected.x, 2.0e-5f);
+    EXPECT_NEAR(target_uv[corner].y, expected.y, 2.0e-5f);
+  }
+  EXPECT_NEAR(target_uv.front().x, source_uv[1].x, 2.0e-5f);
+  EXPECT_NEAR(target_uv.back().y, source_uv[2].y, 2.0e-5f);
+
+  ASSERT_TRUE(editor.history().undo().ok());
+  expect_same_authored_document(
+      *authored_document(harness.project(), target.value().entity), target_before);
+  EXPECT_EQ(*scene_material(harness.project(), target.value().entity), material_before);
+  EXPECT_EQ(editor.query().history().undo_label, history_before.undo_label);
+  expect_same_selection_identity(exact_selection(harness.project()), selection_before);
+  ASSERT_TRUE(editor.project_assets().set_active_material(
+      project_asset_id(kDefaultProjectMaterialId)).ok());
+  ASSERT_TRUE(editor.history().redo().ok());
+  expect_same_authored_document(
+      *authored_document(harness.project(), target.value().entity), target_after);
+  EXPECT_EQ(*scene_material(harness.project(), target.value().entity), material_after);
+  expect_same_selection_identity(exact_selection(harness.project()), selection_before);
+
+  const auto transient = editor.modeling().create_box(
+      {.min = {8.0f, 0.0f, 0.0f}, .max = {9.0f, 1.0f, 1.0f}}, "Redo Guard");
+  ASSERT_TRUE(transient.ok());
+  ASSERT_TRUE(editor.history().undo().ok());
+  const auto history_before_no_op = editor.query().history();
+  const auto revisions_before_no_op = editor.query().revisions();
+  ASSERT_TRUE(history_before_no_op.can_redo);
+  for (const auto &face : std::array{source.value(), target.value()}) {
+    const auto unchanged = editor.modeling().transfer_face_texture_to_face(
+        face.modeling_object_id, source_face);
+    ASSERT_TRUE(unchanged.ok()) << unchanged.error_message();
+    EXPECT_FALSE(unchanged.changed());
+    expect_same_history(editor.query().history(), history_before_no_op);
+    expect_same_revisions(editor.query().revisions(), revisions_before_no_op);
+  }
+  ASSERT_TRUE(editor.history().redo().ok());
+  EXPECT_TRUE(editor.query().entity(transient.value().entity).has_value());
+}
+
+TEST(ProjectMaterialBehaviorTests,
+     FaceTextureTransferCommitsMaterialOnlyAndHonorsSlotZeroOverride) {
+  ProjectMaterialBehaviorHarness harness("face-transfer-material-only");
+  harness.create();
+  auto &editor = harness.editor();
+  const auto embedded = editor.assets().add_material(
+      QuaderMaterialArgs{.name = "Source Material"});
+  ASSERT_TRUE(embedded.ok());
+  const auto source = editor.modeling().create_mesh(
+      QuaderPolygonDocumentInternalAccess::from_backend(texture_transfer_quad()));
+  auto target_document = texture_transfer_quad();
+  target_document.faces.front().material_slot = 1u;
+  const auto target = editor.modeling().create_mesh(
+      QuaderPolygonDocumentInternalAccess::from_backend(target_document));
+  ASSERT_TRUE(source.ok());
+  ASSERT_TRUE(target.ok());
+  const ProjectMaterialFixture fixture(harness.project());
+  const MaterialReference source_reference = embedded.value().id;
+  ASSERT_TRUE(fixture.set_material(
+      source.value().entity, MaterialComponent{.material = source_reference}));
+  ASSERT_TRUE(editor.selection().set_mode(QuaderSelectionMode::Face).ok());
+  ASSERT_TRUE(editor.selection().select_face(source.value(), 1).ok());
+  const auto before = *authored_document(harness.project(), target.value().entity);
+  ASSERT_EQ(before.faces.front().material_slot, 1u);
+  const auto material_before = *scene_material(harness.project(), target.value().entity);
+  const auto content_before = editor.query().revisions().modeling_content_revision;
+  const auto applied = editor.modeling().transfer_face_texture_to_face(
+      target.value().modeling_object_id, 1);
+  ASSERT_TRUE(applied.ok()) << applied.error_message();
+  ASSERT_TRUE(applied.changed());
+  EXPECT_EQ(editor.query().revisions().modeling_content_revision, content_before);
+  expect_same_authored_document(
+      *authored_document(harness.project(), target.value().entity), before);
+  EXPECT_EQ(scene_material(harness.project(), target.value().entity)->material_for_slot(1u),
+            source_reference);
+  ASSERT_TRUE(editor.history().undo().ok());
+  EXPECT_EQ(*scene_material(harness.project(), target.value().entity), material_before);
+  ASSERT_TRUE(editor.history().redo().ok());
+  EXPECT_EQ(scene_material(harness.project(), target.value().entity)->material_for_slot(1u),
+            source_reference);
+
+  MaterialComponent overridden{.material = source_reference};
+  overridden.material_slots.emplace(0u, material_before.material);
+  ASSERT_TRUE(fixture.set_material(target.value().entity, overridden));
+  ASSERT_TRUE(editor.modeling().assign_material_slot_to_face(target.value(), 1, 0u).ok());
+  const auto overridden_before = *authored_document(harness.project(), target.value().entity);
+  const auto assigned = editor.modeling().transfer_face_texture_to_face(
+      target.value().modeling_object_id, 1);
+  ASSERT_TRUE(assigned.ok()) << assigned.error_message();
+  ASSERT_TRUE(assigned.changed());
+  const auto *after = authored_document(harness.project(), target.value().entity);
+  const auto *material = scene_material(harness.project(), target.value().entity);
+  EXPECT_NE(after->faces.front().material_slot, 0u);
+  EXPECT_EQ(material->material_for_slot(after->faces.front().material_slot), source_reference);
+  EXPECT_EQ(material->material_for_slot(0u), material_before.material);
+  ASSERT_TRUE(editor.history().undo().ok());
+  expect_same_authored_document(
+      *authored_document(harness.project(), target.value().entity), overridden_before);
+  EXPECT_EQ(*scene_material(harness.project(), target.value().entity), overridden);
+}
+
+TEST(ProjectMaterialBehaviorTests,
+     FaceTextureTransferRejectsInvalidSourcesTargetsAndPreviewsWithoutHistory) {
+  ProjectMaterialBehaviorHarness harness("face-transfer-validation");
+  harness.create();
+  auto &editor = harness.editor();
+  const auto source = editor.modeling().create_mesh(
+      QuaderPolygonDocumentInternalAccess::from_backend(texture_transfer_quad()));
+  const auto target = editor.modeling().create_mesh(
+      QuaderPolygonDocumentInternalAccess::from_backend(texture_transfer_quad(true)));
+  ASSERT_TRUE(source.ok());
+  ASSERT_TRUE(target.ok());
+  ASSERT_TRUE(editor.selection().set_mode(QuaderSelectionMode::Face).ok());
+  ASSERT_TRUE(editor.selection().select_face(source.value(), 1).ok());
+  const auto transient = editor.modeling().create_box(
+      {.min = {8.0f, 0.0f, 0.0f}, .max = {9.0f, 1.0f, 1.0f}}, "Redo Guard");
+  ASSERT_TRUE(transient.ok());
+  ASSERT_TRUE(editor.history().undo().ok());
+  ASSERT_TRUE(editor.query().history().can_redo);
+  const auto source_before = *authored_document(harness.project(), source.value().entity);
+  const auto target_before = *authored_document(harness.project(), target.value().entity);
+  const auto material_before = *scene_material(harness.project(), target.value().entity);
+  const auto expect_rejected = [&](QuaderModelingObjectId object_id, QuaderElementId face) {
+    const auto revisions = editor.query().revisions();
+    const auto history = editor.query().history();
+    const auto selection = exact_selection(harness.project());
+    const auto result = editor.modeling().transfer_face_texture_to_face(object_id, face);
+    EXPECT_FALSE(result.ok());
+    EXPECT_FALSE(result.changed());
+    EXPECT_FALSE(result.error_message().empty());
+    expect_same_revisions(editor.query().revisions(), revisions);
+    expect_same_history(editor.query().history(), history);
+    expect_same_selection_identity(exact_selection(harness.project()), selection);
+    expect_same_authored_document(
+        *authored_document(harness.project(), source.value().entity), source_before);
+    expect_same_authored_document(
+        *authored_document(harness.project(), target.value().entity), target_before);
+    EXPECT_EQ(*scene_material(harness.project(), target.value().entity), material_before);
+  };
+  expect_rejected(kInvalidQuaderModelingObjectId, 1);
+  expect_rejected(target.value().modeling_object_id, kInvalidQuaderElementId);
+  ASSERT_TRUE(editor.selection().set_mode(QuaderSelectionMode::Object).ok());
+  expect_rejected(target.value().modeling_object_id, 1);
+  ASSERT_TRUE(editor.selection().set_mode(QuaderSelectionMode::Face).ok());
+  ASSERT_TRUE(editor.selection().clear().ok());
+  expect_rejected(target.value().modeling_object_id, 1);
+  ASSERT_TRUE(editor.selection().select_face(source.value(), 1).ok());
+  ASSERT_TRUE(editor.selection().select_face(target.value(), 1, QuaderSelectionEdit::Add).ok());
+  expect_rejected(target.value().modeling_object_id, 1);
+  ASSERT_TRUE(editor.selection().select_face(source.value(), 1).ok());
+
+  const ProjectMaterialFixture fixture(harness.project());
+  ASSERT_TRUE(fixture.set_locked(target.value().entity, true));
+  expect_rejected(target.value().modeling_object_id, 1);
+  ASSERT_TRUE(fixture.set_locked(target.value().entity, false));
+  ASSERT_TRUE(fixture.set_visible(target.value().entity, false));
+  expect_rejected(target.value().modeling_object_id, 1);
+  ASSERT_TRUE(fixture.set_visible(target.value().entity, true));
+  ASSERT_TRUE(fixture.set_selectable(target.value().entity, false));
+  expect_rejected(target.value().modeling_object_id, 1);
+  ASSERT_TRUE(fixture.set_selectable(target.value().entity, true));
+  ASSERT_TRUE(fixture.set_locked(source.value().entity, true));
+  expect_rejected(target.value().modeling_object_id, 1);
+  ASSERT_TRUE(fixture.set_locked(source.value().entity, false));
+  const auto source_material = *scene_material(harness.project(), source.value().entity);
+  ASSERT_TRUE(fixture.clear_material(source.value().entity));
+  expect_rejected(target.value().modeling_object_id, 1);
+  ASSERT_TRUE(fixture.set_material(source.value().entity, source_material));
+
+  ASSERT_TRUE(editor.modeling().begin_transform_preview().ok());
+  expect_rejected(target.value().modeling_object_id, 1);
+  ASSERT_TRUE(editor.modeling().cancel_transform_preview().ok());
+  ASSERT_TRUE(editor.query().history().can_redo);
+}
+
+TEST(ProjectMaterialBehaviorTests,
+     FaceTextureTransferPublicationFailureDoesNotInstallStagedMaterial) {
+  ProjectMaterialBehaviorHarness harness("face-transfer-atomic-failure");
+  harness.create();
+  auto &editor = harness.editor();
+  const auto embedded = editor.assets().add_material(
+      QuaderMaterialArgs{.name = "Staged Source Material"});
+  ASSERT_TRUE(embedded.ok());
+  const auto source = editor.modeling().create_mesh(
+      QuaderPolygonDocumentInternalAccess::from_backend(texture_transfer_quad()));
+  const auto target = editor.modeling().create_mesh(
+      QuaderPolygonDocumentInternalAccess::from_backend(texture_transfer_quad(true)));
+  ASSERT_TRUE(source.ok());
+  ASSERT_TRUE(target.ok());
+  const ProjectMaterialFixture fixture(harness.project());
+  ASSERT_TRUE(fixture.set_material(source.value().entity,
+      MaterialComponent{.material = embedded.value().id}));
+  ASSERT_TRUE(editor.selection().set_mode(QuaderSelectionMode::Face).ok());
+  ASSERT_TRUE(editor.selection().select_face(source.value(), 1).ok());
+  const auto target_before = *authored_document(harness.project(), target.value().entity);
+  const auto material_before = *scene_material(harness.project(), target.value().entity);
+  const auto revisions_before = editor.query().revisions();
+  const auto history_before = editor.query().history();
+  const auto selection_before = exact_selection(harness.project());
+  using ProjectionFailurePoint = ProjectMaterialFixture::ProjectionFailurePoint;
+  constexpr std::array kFailures{
+      ProjectionFailurePoint::AfterSdkMutation,
+      ProjectionFailurePoint::CommittedSceneNotify,
+      ProjectionFailurePoint::BeforeCommit,
+  };
+  for (const auto point : kFailures) {
+    SCOPED_TRACE(static_cast<int>(point));
+    ASSERT_TRUE(fixture.set_projection_failure(point));
+    const auto result = editor.modeling().transfer_face_texture_to_face(
+        target.value().modeling_object_id, 1);
+    EXPECT_FALSE(result.ok());
+    EXPECT_FALSE(result.changed());
+    ASSERT_TRUE(fixture.set_projection_failure(ProjectionFailurePoint::None));
+    expect_same_authored_document(
+        *authored_document(harness.project(), target.value().entity), target_before);
+    EXPECT_EQ(*scene_material(harness.project(), target.value().entity), material_before);
+    expect_same_revisions(editor.query().revisions(), revisions_before);
+    expect_same_history(editor.query().history(), history_before);
+    expect_same_selection_identity(exact_selection(harness.project()), selection_before);
+  }
+}
+
+TEST(ProjectMaterialBehaviorTests,
+     FaceTextureTransferUsesWorldFramesAndDetachesUnrelatedSharedMeshes) {
+  ProjectMaterialBehaviorHarness harness("face-transfer-world-shared");
+  harness.create();
+  auto &editor = harness.editor();
+  const auto source = editor.modeling().create_mesh(
+      QuaderPolygonDocumentInternalAccess::from_backend(texture_transfer_quad()),
+      {.name = "World Source"});
+  const auto target = editor.modeling().create_mesh(
+      QuaderPolygonDocumentInternalAccess::from_backend(texture_transfer_quad()),
+      {.name = "Rotated World Target"});
+  ASSERT_TRUE(source.ok());
+  ASSERT_TRUE(target.ok());
+  constexpr float kQuarterTurn = 1.5707963267948966f;
+  const auto rotated = editor.scene().set_transform(target.value().entity,
+      {.position = {2.0f, 0.0f, 0.0f},
+       .rotation_euler = {0.0f, kQuarterTurn, 0.0f}});
+  ASSERT_TRUE(rotated.ok()) << rotated.error_message();
+  const auto consumer = editor.scene().create_entity(
+      {.name = "Unrelated Shared Consumer", .kind = QuaderEntityKind::Mesh});
+  ASSERT_TRUE(consumer.ok()) << consumer.error_message();
+  const AssetId shared_mesh = editor.query().entity(target.value().entity)->mesh;
+  // A raw nonmodeling consumer is fixture setup. The public component setter
+  // edits an existing component and deliberately cannot install its first one.
+  ASSERT_TRUE(ProjectMaterialFixture(harness.project()).bind_shared_mesh(
+      consumer.value().id, shared_mesh));
+  const auto shared_before = *authored_document(harness.project(), consumer.value().id);
+  ASSERT_TRUE(editor.selection().set_mode(QuaderSelectionMode::Face).ok());
+  ASSERT_TRUE(editor.selection().select_face(source.value(), 1).ok());
+  const auto selection_before = exact_selection(harness.project());
+  const auto source_before = *authored_document(harness.project(), source.value().entity);
+  const auto applied = editor.modeling().transfer_face_texture_to_face(
+      target.value().modeling_object_id, 1);
+  ASSERT_TRUE(applied.ok()) << applied.error_message();
+  ASSERT_TRUE(applied.changed());
+  EXPECT_NE(editor.query().entity(target.value().entity)->mesh, shared_mesh);
+  EXPECT_EQ(editor.query().entity(consumer.value().id)->mesh, shared_mesh);
+  expect_same_authored_document(
+      *authored_document(harness.project(), consumer.value().id), shared_before);
+  expect_same_authored_document(
+      *authored_document(harness.project(), source.value().entity), source_before);
+  const auto actual = effective_face_corner_uvs(
+      harness.project(), target.value().entity, 1);
+  ASSERT_EQ(actual.size(), 4u);
+  constexpr std::array<QVec2, 4> kExpected{{
+      {1.0f, 0.0f}, {2.0f, 0.0f}, {2.0f, 1.0f}, {1.0f, 1.0f}}};
+  for (std::size_t corner = 0; corner < actual.size(); ++corner) {
+    EXPECT_NEAR(actual[corner].x, kExpected[corner].x, 2.0e-5f);
+    EXPECT_NEAR(actual[corner].y, kExpected[corner].y, 2.0e-5f);
+  }
+  expect_same_selection_identity(exact_selection(harness.project()), selection_before);
+  const auto target_after = *authored_document(harness.project(), target.value().entity);
+  ASSERT_TRUE(editor.history().undo().ok());
+  EXPECT_EQ(editor.query().entity(target.value().entity)->mesh, shared_mesh);
+  expect_same_authored_document(
+      *authored_document(harness.project(), consumer.value().id), shared_before);
+  ASSERT_TRUE(editor.history().redo().ok());
+  EXPECT_EQ(editor.query().entity(consumer.value().id)->mesh, shared_mesh);
+  expect_same_authored_document(
+      *authored_document(harness.project(), target.value().entity), target_after);
+}
+
+TEST(ProjectMaterialBehaviorTests,
+     FaceTextureTransferUsesDisplayedOccurrenceSamplingAndExplicitEditScope) {
+  ProjectMaterialBehaviorHarness harness("face-transfer-instance-sampling");
+  harness.create();
+  auto &editor = harness.editor();
+  const auto outside = editor.modeling().create_mesh(
+      QuaderPolygonDocumentInternalAccess::from_backend(texture_transfer_quad()),
+      {.name = "Outside Scope"});
+  auto source_topology = texture_transfer_quad();
+  source_topology.faces.front().texture_transform = {
+      .scale = {1.25f, -0.75f}, .shift_uv = {0.125f, -0.25f},
+      .rotation_degrees = 23.0f};
+  const auto source = editor.modeling().create_mesh(
+      QuaderPolygonDocumentInternalAccess::from_backend(source_topology),
+      {.name = "Occurrence Source"});
+  const auto target = editor.modeling().create_mesh(
+      QuaderPolygonDocumentInternalAccess::from_backend(texture_transfer_quad(true)),
+      {.name = "Occurrence Target"});
+  ASSERT_TRUE(outside.ok());
+  ASSERT_TRUE(source.ok());
+  ASSERT_TRUE(target.ok());
+  ASSERT_TRUE(editor.selection().select_objects({source.value(), target.value()}).ok());
+  const auto instance = editor.modeling().create_instance_from_selection();
+  ASSERT_TRUE(instance.ok()) << instance.error_message();
+  const EntityId occurrence = instance.value().occurrence.root.id;
+  auto transform = editor.query().entity(occurrence)->transform;
+  transform.position = {7.0f, -3.0f, 5.0f};
+  transform.rotation_euler = {0.17f, 0.31f, -0.42f};
+  transform.scale = {2.0f, 3.0f, 4.0f};
+  const auto transformed = editor.scene().set_transform(occurrence, transform);
+  ASSERT_TRUE(transformed.ok()) << transformed.error_message();
+  const auto occurrence_before = editor.query().entity(occurrence);
+  ASSERT_TRUE(occurrence_before->texture_sampling_from_local.has_value());
+  const auto occurrence_sampling = occurrence_before->texture_sampling_from_local->values;
+  ASSERT_NE(occurrence_sampling, QMat4{}.values);
+  const auto entered = editor.modeling().enter_instance_edit(occurrence);
+  ASSERT_TRUE(entered.ok()) << entered.error_message();
+  const auto selected_object = editor.selection().select_object(source.value());
+  ASSERT_TRUE(selected_object.ok()) << selected_object.error_message();
+  ASSERT_TRUE(editor.selection().set_mode(QuaderSelectionMode::Face).ok());
+  // Component picking is the public occurrence-aware route; direct scene-scope
+  // selection deliberately accepts definition members only in Object mode.
+  const ProjectMaterialFixture fixture(harness.project());
+  const auto source_world = fixture.instance_member_world_transform(
+      source.value().entity, occurrence);
+  ASSERT_TRUE(source_world.has_value());
+  const auto selected_face = editor.selection().pick_select({.ray = {
+      .origin = transform_point(*source_world, {1.0f, 1.0f, 4.0f}),
+      .direction = normalize(transform_vector(*source_world, {0.0f, 0.0f, -1.0f}))}});
+  ASSERT_TRUE(selected_face.ok()) << selected_face.error_message();
+  ASSERT_EQ(selected_face.value().selected_face_count, 1u);
+  ASSERT_EQ(selected_face.value().active_object_id, source.value().modeling_object_id);
+  ASSERT_EQ(selected_face.value().active_face_id, 1);
+  const auto source_before = *authored_document(harness.project(), source.value().entity);
+  const auto target_before = *authored_document(harness.project(), target.value().entity);
+  const auto selection_before = exact_selection(harness.project());
+  const auto source_uv = effective_face_corner_uvs(
+      harness.project(), source.value().entity, 1, occurrence);
+  ASSERT_EQ(source_uv.size(), 4u);
+  const auto revisions_before_failure = editor.query().revisions();
+  const auto history_before_failure = editor.query().history();
+  EXPECT_FALSE(editor.modeling().transfer_face_texture_to_face(
+      outside.value().modeling_object_id, 1).ok());
+  expect_same_revisions(editor.query().revisions(), revisions_before_failure);
+  expect_same_history(editor.query().history(), history_before_failure);
+  ASSERT_TRUE(fixture.set_locked(occurrence, true));
+  const auto revisions_while_locked = editor.query().revisions();
+  EXPECT_FALSE(editor.modeling().transfer_face_texture_to_face(
+      target.value().modeling_object_id, 1).ok());
+  expect_same_revisions(editor.query().revisions(), revisions_while_locked);
+  ASSERT_TRUE(fixture.set_locked(occurrence, false));
+
+  const auto applied = editor.modeling().transfer_face_texture_to_face(
+      target.value().modeling_object_id, 1);
+  ASSERT_TRUE(applied.ok()) << applied.error_message();
+  ASSERT_TRUE(applied.changed());
+  const auto target_uv = effective_face_corner_uvs(
+      harness.project(), target.value().entity, 1, occurrence);
+  ASSERT_EQ(target_uv.size(), 4u);
+  // The folded edge is twice as long in displayed world space as the source's
+  // U edge (occurrence Z scale 4 versus X scale 2), including sampling C.
+  const QVec2 continued = (source_uv[1] - source_uv[0]) * 2.0f;
+  const std::array<QVec2, 4> expected{
+      source_uv[1], source_uv[1] + continued,
+      source_uv[2] + continued, source_uv[2]};
+  for (std::size_t corner = 0; corner < expected.size(); ++corner) {
+    EXPECT_NEAR(target_uv[corner].x, expected[corner].x, 2.0e-4f);
+    EXPECT_NEAR(target_uv[corner].y, expected[corner].y, 2.0e-4f);
+  }
+  EXPECT_EQ(editor.query().entity(occurrence)->texture_sampling_from_local->values,
+            occurrence_sampling);
+  expect_same_authored_document(
+      *authored_document(harness.project(), source.value().entity), source_before);
+  expect_same_selection_identity(exact_selection(harness.project()), selection_before);
+  const auto target_after = *authored_document(harness.project(), target.value().entity);
+  const auto history_before_no_op = editor.query().history();
+  const auto revisions_before_no_op = editor.query().revisions();
+  const auto repeated = editor.modeling().transfer_face_texture_to_face(
+      target.value().modeling_object_id, 1);
+  ASSERT_TRUE(repeated.ok()) << repeated.error_message();
+  EXPECT_FALSE(repeated.changed());
+  expect_same_history(editor.query().history(), history_before_no_op);
+  expect_same_revisions(editor.query().revisions(), revisions_before_no_op);
+  ASSERT_TRUE(editor.history().undo().ok());
+  expect_same_authored_document(
+      *authored_document(harness.project(), target.value().entity), target_before);
+  ASSERT_TRUE(editor.history().redo().ok());
+  expect_same_authored_document(
+      *authored_document(harness.project(), target.value().entity), target_after);
+  EXPECT_EQ(editor.query().entity(occurrence)->texture_sampling_from_local->values,
+            occurrence_sampling);
+  ASSERT_TRUE(editor.modeling().exit_instance_edit().ok());
+}
+
+TEST(ProjectMaterialBehaviorTests,
+     FaceTextureTransferWithinOneMeshKeepsSourceAndIndependentClickHistory) {
+  ProjectMaterialBehaviorHarness harness("face-transfer-same-mesh");
+  harness.create();
+  auto &editor = harness.editor();
+  const auto box = editor.modeling().create_box(
+      {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}});
+  ASSERT_TRUE(box.ok());
+  const auto *document = authored_document(harness.project(), box.value().entity);
+  ASSERT_GE(document->faces.size(), 3u);
+  const QuaderElementId source_face = document->faces[0].id;
+  const QuaderElementId first_target = document->faces[1].id;
+  const QuaderElementId second_target = document->faces[2].id;
+  ASSERT_TRUE(editor.selection().set_mode(QuaderSelectionMode::Face).ok());
+  ASSERT_TRUE(editor.selection().select_face(box.value(), source_face).ok());
+  ASSERT_TRUE(edit_selected_face_texture(editor, QuaderFaceTextureField::ScaleX, 1.5).ok());
+  const auto before = *authored_document(harness.project(), box.value().entity);
+  const auto selection_before = exact_selection(harness.project());
+  const auto first = editor.modeling().transfer_face_texture_to_face(
+      box.value().modeling_object_id, first_target);
+  ASSERT_TRUE(first.ok()) << first.error_message();
+  ASSERT_TRUE(first.changed());
+  const auto after_first = *authored_document(harness.project(), box.value().entity);
+  const auto second = editor.modeling().transfer_face_texture_to_face(
+      box.value().modeling_object_id, second_target);
+  ASSERT_TRUE(second.ok()) << second.error_message();
+  ASSERT_TRUE(second.changed());
+  const auto after_second = *authored_document(harness.project(), box.value().entity);
+  auto unchanged_faces = after_second;
+  unchanged_faces.faces[1] = before.faces[1];
+  unchanged_faces.faces[2] = before.faces[2];
+  expect_same_authored_document(unchanged_faces, before);
+  expect_same_selection_identity(exact_selection(harness.project()), selection_before);
+  ASSERT_TRUE(editor.history().undo().ok());
+  expect_same_authored_document(
+      *authored_document(harness.project(), box.value().entity), after_first);
+  ASSERT_TRUE(editor.history().undo().ok());
+  expect_same_authored_document(
+      *authored_document(harness.project(), box.value().entity), before);
+  ASSERT_TRUE(editor.history().redo().ok());
+  expect_same_authored_document(
+      *authored_document(harness.project(), box.value().entity), after_first);
+  ASSERT_TRUE(editor.history().redo().ok());
+  expect_same_authored_document(
+      *authored_document(harness.project(), box.value().entity), after_second);
+  expect_same_selection_identity(exact_selection(harness.project()), selection_before);
 }
 
 TEST(ProjectMaterialBehaviorTests,
@@ -1540,7 +2572,7 @@ TEST(ProjectMaterialBehaviorTests,
   const QuaderApiVoidResult vertex_rejected =
       harness.editor().modeling().apply_active_material();
   EXPECT_FALSE(vertex_rejected.ok());
-  EXPECT_NE(vertex_rejected.error_message().find("object or face"),
+  EXPECT_NE(vertex_rejected.error_message().find("object, group, or face"),
             std::string::npos);
   ASSERT_TRUE(harness.editor()
                   .selection()

@@ -7470,3 +7470,121 @@ Sources, logs, six PNGs, and `gpu-comparison.json` are under
 The full regression gate has the same 12 pre-existing failures as the preceding Mirror-preview
 run, with unchanged diagnostics (including the SDK-only guardrail repeats). Modeling domain,
 SDK consumer/parity, and all command-behavior contracts pass; no baseline was regenerated.
+
+## 2026-08-28 - Alt Face Texture Continuation
+
+- Face mode now binds `viewport.material.transfer_face_texture` to Alt+LeftMouse Press. Exactly
+  one editable selected face supplies the material and mapping; the clicked target may belong to
+  another mesh. The source remains selected. This implements TrenchBroom's Valve 220
+  `WrapStyle::Rotation`, equivalent to its Alt+Shift+LMB, not its projection transfer.
+- Local reference owners are TrenchBroom's `SetBrushFaceAttributesTool.cpp`, `BrushFace.cpp`, and
+  `ParallelUVCoordSystem.cpp`. Rotate the full world-space UV gradients by the shortest rotation
+  between face normals and preserve phase at their infinite plane-intersection seam. Preserve
+  scale, shear, and mirroring. Parallel and opposed planes retain the axes and affine world phase;
+  do not introduce an arbitrary half-turn. No external code or dependency was imported.
+- SDK `prepare_face_texture_transfer()` owns the affine fit, rotation, target carrier inverse,
+  validation, and prepared target document. It copies source face settings while retaining target
+  sampling C, geometry, identities, topology, and selection. Nonplanar/non-affine inputs and lost
+  float UV variation fail atomically; intentional constant and rank-one mappings remain valid.
+  Solve plane geometry in double precision before applying distant world translations. Per-axis
+  span/ULP comparisons must not hide a small real UV edit behind a large tile offset, or reject a
+  narrow but representable target merely because its footprint differs from the source.
+- `QuaderModelingApi::transfer_face_texture_to_face()` is the user-intent boundary. The modeling
+  service resolves the displayed occurrence frame and effective sampling transform, stages the
+  target material slot, and delegates target-only publication to the existing SDK adapter.
+  Unrelated shared mesh consumers detach on write. Material-component-only edits still commit;
+  explicit slot-zero overrides must be checked with `material_for_slot(0)`, not the primary field.
+- `FaceTextureTransferHistoryCommand` captures material and UV changes together in one nonmerged
+  undo item per changed click. Redo restores the captured result without resolving selection again.
+  Self-transfer, repeated transfer, and failures preserve history/redo and observable revisions.
+- The semantic resolver owns the binding, Face scope, exclusions, and rebinding. The controller
+  reserves the whole LMB gesture before gizmo/selection handling, including misses and invalid
+  source counts. Use the accepted press coordinate, not a later cursor sample. Keep held/release
+  routing in the initiating Qt pane, reject outside-pane rays, and consume cancelled releases.
+  Click/DoubleClick rebindings reserve constituent presses; Qt substitutes DoubleClick for the
+  second Press and omits its second Click. Exact competing bindings win. Keyboard rebinding works.
+- `kFacePlaneCutGestureEnabled = false` gates both old Alt hover and Alt+RMB dispatch. The cut
+  service, SDK operation, public API, history, and overlay implementation remain available for
+  deliberate reactivation. Ordinary hover creates no slicing plane. Edge-mode Alt loop selection
+  remains unchanged. Idle frames do not pick faces or query texture state for this action.
+
+Focused verification: all 132 SDK consumer tests, 337 native API/material/viewport tests, 134
+viewport/UI/public-API guardrails, and five command-contract tests pass. The approved baseline update adds
+no command records: all 189 remain, and only preference hashes, their composed state hashes, and
+the explicit approval reason change. Version 0.1.66, dependencies, and file formats are unchanged.
+The final mandatory regression gate reproduces exactly the 12 failures saved before this task:
+seven guardrails and five Linear Array/overlay tests. Complete diagnostics match after normalizing
+source line numbers and addresses; there are no added failures or changed assertions. Modeling
+domain and SDK consumer/parity tests pass. The standalone SDK compiles and its consumers pass;
+its nested guardrails report the same seven existing failures. Logs are under
+`build/vs2026/Testing/alt-face-transfer-*`; no GPU or native-window smoke verdict is claimed.
+
+## 2026-08-28 - Shift+T Mesh and Group Material Assignment
+
+- `edit.apply_material` keeps Shift+T and the existing `assign_material` executor. Its public
+  keybinding scope is Mesh/Face/Group, with viewport focus and tool/preview/navigation exclusions.
+  The legacy Face-only host action remains Face-only; do not derive the public shortcut's scope
+  or label from that host action. The keybinding target catalog owns the new combined scope;
+  saved overrides and removals retain their keys while adopting current app-owned scope.
+- `ModelingSessionService` expands ordinary selected groups recursively at execution time,
+  normalizes overlapping roots, and deduplicates modeling objects. Hidden descendants participate.
+  Locked, unselectable, unowned, or closed instance targets reject the entire action before any
+  mutation. Instance definitions still require explicit instance edit and mesh selection.
+  `scene_hierarchy_segment_is_selectable_ignoring_visibility()` is the shared scene predicate for
+  inherited read-only state; material Find/Replace uses the same helper with its existing policy.
+- Group targets reuse `normalize_whole_object_materials()` and the existing SDK batch publication.
+  All faces use slot zero and the selected material; obsolete per-face material bindings clear,
+  while UVs, geometry, transforms, and hierarchy remain unchanged. Numeric-slot assignment also
+  supports Group mode. Availability stays a cheap selection-summary check, without hierarchy scans.
+- Group selection is scene-owned and absent from the SDK selection snapshot. Material assignment
+  alone opts into preserving scene selection during publication and capturing exact roots/primary
+  in native history mementos. Both direct Apply and dispatched `assign_material` history wrappers
+  opt in, so undo/redo restores Group mode and selection even after a mode switch. Other commands
+  retain default memento semantics. Keep the no-argument `ModelingTransformDragPort` override when
+  adding the optional group-capture overload.
+- Separate pre-existing selection caveat found during testing: Face-to-Group keeps SDK component
+  selection, and clearing scene selection in Group mode can expose that stale SDK count through
+  the selection summary. This task does not change that lifecycle. Empty shortcut availability is
+  tested in fresh Group mode; do not describe the Face-to-Group-to-clear sequence as verified.
+
+Verification: all 283 focused API/material/grouping tests and all five command-contract tests pass.
+The intentional baseline update retains all 189 command records; only 920 preference hashes,
+their 920 composed hashes, and the approval reason change. The affected workflow and final
+mandatory regression gate retain the same 12 existing failures: seven guardrails and five
+Linear Array/overlay tests. Full diagnostic comparison finds no added failures or changed
+assertions; the existing `editor_material -> scene` matrix diagnostic now names the shared
+helper header instead of `scene_document.hpp`. No matrix policy or owner dependency was added.
+Modeling domain and SDK consumer/parity tests pass. The standalone SDK builds and its consumers
+pass, while its nested guardrails repeat the same seven failures. Logs and complete comparison
+reports are under `build/vs2026/Testing/shift-t-material-*`. Version 0.1.66 and formats are unchanged.
+
+## 2026-08-28 - Retained Active Material Dock
+
+- `UIPanelId::ActiveMaterial` / `active_material` is a regular movable, floatable, closable dock.
+  Its default split is below the Inspector/Tool Settings tab stack, before Layers. Split before
+  tabifying, so Qt does not turn the new panel into another tab. Existing saved layouts stay
+  authoritative; visibility uses `UISettings` and geometry uses the existing versioned main-window
+  state. The shared panel registry supplies View > Panels and public show/hide/focus routing.
+- `QtActiveMaterialPanel` presents only an expanding, aspect-preserving material tile and a
+  localized Browse button. It consumes `QtMaterialPresentationItem` and the shared decoded
+  thumbnail, with empty-state, base-color fallback, accessibility, size/DPR, and unchanged-value
+  gates. Hidden previews defer scaling. Browse calls the existing `UISystem::show_material_browser`.
+- `UISystem` queries the active project material once for the browser and dock inside the workspace
+  event gate. Active reference plus catalog revision gate presentation lookup and widget updates;
+  active-material changes do not rebuild the thumbnail catalog. `UIPanelManager` owns physical
+  presentation transitions and notifies consumers only when that state changes. Showing a dock
+  requests workspace refresh without changing logical visibility or adding frame polling.
+- The one shared material presentation cache supports an open project with no active scene.
+  Project previews come from the project-assets API; scene revisions and embedded materials are
+  included only with a complete active scene, never from the host's fallback scene.
+
+Verification: 39 focused behavior tests and 59 UI/ownership guardrails pass. The affected workflow
+and mandatory final regression gate run all six CTest targets and reproduce the same 12 existing
+failures, with identical complete diagnostics after source-line/address normalization: seven
+guardrails and five Linear Array/overlay
+tests. The native suite runs 1602 tests (1594 pass, three skip, five existing failures); modeling
+domain and SDK consumer/parity suites pass. The command baseline and app version are unchanged.
+Vulkan startup smoke succeeds through `tools/boot_smoke.ps1`. The user stopped Computer Use with
+Escape before the interactive dock/browser check completed; no manual placement or Browse verdict
+is claimed. Both canonical Debug/Profile and Release app builds succeed. Verification artifacts
+use `build/vs2026/Testing/active-material-dock-*`.

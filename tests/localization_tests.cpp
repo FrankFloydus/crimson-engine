@@ -252,6 +252,10 @@ TEST(LocalizationResourceTests, ShipsEnglishAndItalianCatalogs) {
     EXPECT_EQ(localization.text("ui.viewport.delete_popup.window_title", "Delete"), "Elimina");
     EXPECT_EQ(localization.text("ui.panel.tool_settings", "Tool Settings"),
               "Impostazioni strumento");
+    EXPECT_EQ(localization.text("ui.panel.active_material", "Active Material"),
+              "Materiale attivo");
+    EXPECT_EQ(localization.text("ui.active_material.browse", "Browse"),
+              "Sfoglia");
     EXPECT_EQ(localization.text("ui.panel.layers", "Layers"), "Livelli");
     EXPECT_EQ(localization.text("ui.layers.add_selection",
                                 "Add Selection to Layer"),
@@ -299,6 +303,10 @@ TEST(LocalizationResourceTests, ShipsEnglishAndItalianCatalogs) {
     EXPECT_EQ(localization.text("ui.viewport.delete_popup.window_title", "Delete"), "Delete");
     EXPECT_EQ(localization.text("ui.panel.tool_settings", "Tool Settings"),
               "Tool Settings");
+    EXPECT_EQ(localization.text("ui.panel.active_material", "Active Material"),
+              "Active Material");
+    EXPECT_EQ(localization.text("ui.active_material.browse", "Browse"),
+              "Browse");
     EXPECT_EQ(localization.text("viewport.tool.radial_array.label",
                                 "Radial Array"),
               "Radial Array");

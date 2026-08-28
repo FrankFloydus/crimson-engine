@@ -26,6 +26,7 @@
 #include "ui/inspector_panel.hpp"
 #include "ui/layer_panel.hpp"
 #include "ui/outliner_panel.hpp"
+#include "ui/qt_active_material_panel.hpp"
 #include "ui/qt_command_event_filter.hpp"
 #include "ui/qt_dock_title_presentation.hpp"
 #include "ui/qt_main_window.hpp"
@@ -683,6 +684,7 @@ void UISystem::install_runtime_hooks(
   inspector_material_query_valid_ = false;
   toolbar_refresh_valid_ = false;
   tool_settings_refresh_valid_ = false;
+  active_material_panel_refresh_valid_ = false;
   face_texture_settings_revision_.reset();
   uv_peel_settings_revision_.reset();
   status_refresh_valid_ = false;
@@ -1283,10 +1285,15 @@ void UISystem::refresh_project_workspace(bool force) {
       scene_workspace_->set_instance_edit_breadcrumb(std::nullopt);
     }
 
+    const bool active_material_panel_visible =
+        panel_presented(UIPanelId::ActiveMaterial);
+    const bool material_browser_visible =
+        material_browser_window_ != nullptr &&
+        material_browser_window_->isVisible();
     const bool material_consumer_visible =
+        active_material_panel_visible ||
         panel_presented(UIPanelId::Inspector) ||
-        (material_browser_window_ != nullptr &&
-         material_browser_window_->isVisible()) ||
+        material_browser_visible ||
         (material_picker_window_ != nullptr &&
          material_picker_window_->isVisible()) ||
         (material_find_replace_dialog_ != nullptr &&
@@ -1295,8 +1302,8 @@ void UISystem::refresh_project_workspace(bool force) {
       refresh_material_presentation_cache();
     }
 
-    if (has_project && material_browser_window_ != nullptr &&
-        material_browser_window_->isVisible()) {
+    if (has_project &&
+        (active_material_panel_visible || material_browser_visible)) {
       QuaderMaterialReference active_reference;
       const QuaderApiResult<QuaderProjectMaterialInfo> active_material =
           editor_->project_assets().active_material();
@@ -1304,7 +1311,10 @@ void UISystem::refresh_project_workspace(bool force) {
         active_reference = QuaderMaterialReference::project(
             active_material.value().id);
       }
-      if (material_browser_catalog_signature_ !=
+      if (active_material_panel_visible) {
+        refresh_active_material_panel(active_reference);
+      }
+      if (material_browser_visible && material_browser_catalog_signature_ !=
           material_presentation_catalog_revision_) {
         std::vector<QtMaterialPresentationItem> project_materials;
         for (const QtMaterialPresentationItem &material :
@@ -1318,13 +1328,34 @@ void UISystem::refresh_project_workspace(bool force) {
         material_browser_catalog_signature_ =
             material_presentation_catalog_revision_;
         material_browser_active_reference_ = active_reference;
-      } else if (active_reference !=
+      } else if (material_browser_visible && active_reference !=
                  material_browser_active_reference_) {
         material_browser_window_->set_active_material(active_reference);
         material_browser_active_reference_ = active_reference;
       }
     }
   }
+}
+
+void UISystem::refresh_active_material_panel(
+    QuaderMaterialReference active_reference) {
+  if (active_material_panel_ == nullptr ||
+      !panel_presented(UIPanelId::ActiveMaterial)) {
+    return;
+  }
+  if (active_material_panel_refresh_valid_ &&
+      active_material_panel_catalog_revision_ ==
+          material_presentation_catalog_revision_ &&
+      active_material_panel_reference_ == active_reference) {
+    return;
+  }
+  active_material_panel_->set_presentation(
+      material_presentation_for(active_reference, false),
+      material_browser_window_ != nullptr);
+  active_material_panel_catalog_revision_ =
+      material_presentation_catalog_revision_;
+  active_material_panel_reference_ = active_reference;
+  active_material_panel_refresh_valid_ = true;
 }
 
 void UISystem::invalidate_material_presentation_cache() {
@@ -1358,9 +1389,7 @@ void UISystem::refresh_material_presentation_cache() {
     return scene_id.has_value() ? scene_id->packed() : std::uint64_t{0};
   }();
 
-  if (editor_ == nullptr || assets_ == nullptr || document_ == nullptr ||
-      modeling_ == nullptr || !editor_->project().has_project() ||
-      active_scene_id == 0u) {
+  if (editor_ == nullptr || !editor_->project().has_project()) {
     const bool presentation_changed =
         material_presentation_cache_valid_ ||
         !material_presentation_items_.empty();
@@ -1379,19 +1408,28 @@ void UISystem::refresh_material_presentation_cache() {
     return;
   }
 
+  // Project materials remain available with no open scene. Do not include the
+  // host's fallback scene or its embedded assets in that project-only state.
+  const bool scene_available = active_scene_id != 0u &&
+                               document_ != nullptr && assets_ != nullptr &&
+                               modeling_ != nullptr;
   const MaterialPresentationContextStamp context_stamp{
-      .document = document_,
-      .modeling = modeling_,
-      .assets = assets_,
-      .active_scene_id = active_scene_id,
-      .material_binding_revision = document_->material_binding_revision(),
-      .mesh_binding_revision = document_->mesh_binding_revision(),
+      .document = scene_available ? document_ : nullptr,
+      .modeling = scene_available ? modeling_ : nullptr,
+      .assets = scene_available ? assets_ : nullptr,
+      .active_scene_id = scene_available ? active_scene_id : 0u,
+      .material_binding_revision =
+          scene_available ? document_->material_binding_revision() : 0u,
+      .mesh_binding_revision =
+          scene_available ? document_->mesh_binding_revision() : 0u,
       .mesh_material_usage_revision =
-          assets_->mesh_material_usage_revision(),
-      .hierarchy_revision = document_->hierarchy_presentation_revision(),
-      .modeling_content_revision = modeling_->content_revision(),
+          scene_available ? assets_->mesh_material_usage_revision() : 0u,
+      .hierarchy_revision =
+          scene_available ? document_->hierarchy_presentation_revision() : 0u,
+      .modeling_content_revision =
+          scene_available ? modeling_->content_revision() : 0u,
       .modeling_object_map_revision =
-          modeling_->modeling_object_map_revision(),
+          scene_available ? modeling_->modeling_object_map_revision() : 0u,
   };
   const bool context_changed =
       !material_presentation_context_observation_.has_value() ||
@@ -1400,10 +1438,11 @@ void UISystem::refresh_material_presentation_cache() {
 
   const MaterialPresentationCatalogStamp catalog_stamp{
       .editor = editor_,
-      .document = document_,
-      .assets = assets_,
-      .active_scene_id = active_scene_id,
-      .material_catalog_revision = assets_->material_catalog_revision(),
+      .document = scene_available ? document_ : nullptr,
+      .assets = scene_available ? assets_ : nullptr,
+      .active_scene_id = scene_available ? active_scene_id : 0u,
+      .material_catalog_revision =
+          scene_available ? assets_->material_catalog_revision() : 0u,
       .event_generation =
           material_presentation_observed_event_generation_,
       .invalidation_generation =
@@ -1445,7 +1484,10 @@ void UISystem::refresh_material_presentation_cache() {
     return;
   }
 
-  std::vector<AssetId> embedded_material_ids = assets_->material_ids();
+  std::vector<AssetId> embedded_material_ids;
+  if (scene_available) {
+    embedded_material_ids = assets_->material_ids();
+  }
   std::ranges::sort(embedded_material_ids);
 
   const auto reuse_or_make_thumbnail =
@@ -1827,6 +1869,10 @@ void UISystem::show_home() {
   }
   if (presentation_changed) {
     close_material_find_replace();
+    if (active_material_panel_ != nullptr) {
+      active_material_panel_->set_presentation(std::nullopt, false);
+    }
+    active_material_panel_refresh_valid_ = false;
     material_presentation_items_.clear();
     material_presentation_signature_ = 0;
     material_presentation_catalog_attempt_.reset();
@@ -2093,6 +2139,7 @@ void UISystem::shutdown() {
     material_preview_surface_->shutdown();
   }
   panels_.set_visibility_changed_callback({});
+  panels_.set_presentation_changed_callback({});
   main_menu_.reset();
   main_window_.reset();
   startup_presentation_ = {};
@@ -2114,6 +2161,7 @@ void UISystem::shutdown() {
   console_panel_ = nullptr;
   settings_dialog_ = nullptr;
   material_browser_window_ = nullptr;
+  active_material_panel_ = nullptr;
   material_picker_window_ = nullptr;
   material_find_replace_dialog_ = nullptr;
   material_preview_surface_ = nullptr;
@@ -2148,6 +2196,9 @@ void UISystem::shutdown() {
   material_presentation_signature_ = 0;
   material_presentation_revision_ = 0;
   material_presentation_catalog_revision_ = 0;
+  active_material_panel_catalog_revision_ = 0;
+  active_material_panel_reference_ = {};
+  active_material_panel_refresh_valid_ = false;
   material_presentation_catalog_attempt_.reset();
   material_presentation_context_observation_.reset();
   material_presentation_cache_valid_ = false;
@@ -2587,12 +2638,20 @@ void UISystem::create_docks() {
       synchronize_settings_surfaces(false);
     }
   });
+  panels_.set_presentation_changed_callback([this](UIPanelId, bool presented) {
+    if (presented) {
+      project_workspace_refresh_signal_->store(true, std::memory_order_relaxed);
+    }
+  });
   outliner_panel_ = new OutlinerPanel(main_window_.get());
   inspector_panel_ = new InspectorPanel(main_window_.get());
   layer_panel_ = new LayerPanel(main_window_.get());
   console_panel_ = new ConsolePanel(main_window_.get());
   tool_settings_panel_ = new QtToolSettingsPanel(main_window_.get());
   tool_settings_panel_->set_localization(localization_);
+  active_material_panel_ = new QtActiveMaterialPanel(main_window_.get());
+  active_material_panel_->set_browse_material_callback(
+      [this]() { show_material_browser(); });
   QDockWidget &outliner = create_dock(
       UIPanelId::Outliner, *outliner_panel_, Qt::LeftDockWidgetArea);
   QDockWidget &inspector = create_dock(
@@ -2604,12 +2663,17 @@ void UISystem::create_docks() {
   QDockWidget &tool_settings = create_dock(
       UIPanelId::ToolSettings, *tool_settings_panel_,
       Qt::RightDockWidgetArea);
+  QDockWidget &active_material = create_dock(
+      UIPanelId::ActiveMaterial, *active_material_panel_,
+      Qt::RightDockWidgetArea);
   main_window_->splitDockWidget(&inspector, &layers, Qt::Vertical);
+  main_window_->splitDockWidget(&inspector, &active_material, Qt::Vertical);
   main_window_->tabifyDockWidget(&inspector, &tool_settings);
   inspector.raise();
   main_window_->resizeDocks({&outliner, &inspector}, {340, 340},
                             Qt::Horizontal);
-  main_window_->resizeDocks({&inspector, &layers}, {420, 260}, Qt::Vertical);
+  main_window_->resizeDocks({&inspector, &active_material, &layers},
+                            {320, 320, 180}, Qt::Vertical);
   main_window_->resizeDocks({&console}, {220}, Qt::Vertical);
 }
 
@@ -3671,7 +3735,16 @@ void UISystem::refresh_localized_chrome() {
   update_title(UIPanelId::Inspector);
   update_title(UIPanelId::Layers);
   update_title(UIPanelId::ToolSettings);
+  update_title(UIPanelId::ActiveMaterial);
   update_title(UIPanelId::Console);
+  if (active_material_panel_ != nullptr) {
+    active_material_panel_->set_labels(QtActiveMaterialPanelLabels{
+        .preview_title = text("ui.active_material.preview",
+                              "Active material preview"),
+        .empty = text("ui.active_material.empty", "No active material"),
+        .browse = text("ui.active_material.browse", "Browse"),
+    });
+  }
   if (selection_toolbar_ != nullptr) {
     selection_toolbar_->set_localization(localization_);
   }

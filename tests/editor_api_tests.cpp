@@ -4222,10 +4222,22 @@ TEST(EditorApiTests, ViewportNavigationActionCatalogDrivesDefaultsAndResolution)
     }
     input_context.orthographic_view =
         descriptor.when.find("viewport.orthographic") != std::string_view::npos;
-    ASSERT_TRUE(editor.commands().resolve_viewport_input_action(
-        parsed->front(), state, true, false, resolved_action, input_context))
-        << descriptor.target_id;
-    EXPECT_EQ(resolved_action, descriptor.action) << descriptor.target_id;
+    bool matched = false;
+    for (const auto mode : {quader::ViewportSelectionMode::Object,
+                            quader::ViewportSelectionMode::Group,
+                            quader::ViewportSelectionMode::Vertex,
+                            quader::ViewportSelectionMode::Edge,
+                            quader::ViewportSelectionMode::Face}) {
+      state.selection_mode = mode;
+      if (editor.commands().resolve_viewport_input_action(
+              parsed->front(), state, true, false, resolved_action,
+              input_context)) {
+        matched = true;
+        EXPECT_EQ(resolved_action, descriptor.action) << descriptor.target_id;
+        break;
+      }
+    }
+    ASSERT_TRUE(matched) << descriptor.target_id;
   }
 }
 
@@ -4779,6 +4791,206 @@ TEST(EditorApiTests,
 }
 
 TEST(EditorApiTests,
+     ApplyMaterialShortcutSupportsMeshFaceAndGroupAndPreservesOverrides) {
+  const auto path = keybinding_test_path("apply-material-selection-modes");
+  CommandTestHarness harness;
+  auto &editor = harness.editor;
+  ASSERT_TRUE(editor.commands().set_keybinding_storage_path(path).ok());
+
+  const auto catalog = editor.commands().keybinding_catalog();
+  const auto *entry = find_keybinding_catalog_entry(
+      catalog, quader::quader_command::kApplyMaterial.string());
+  ASSERT_NE(entry, nullptr);
+  EXPECT_EQ(entry->shortcut, "Shift+T");
+  EXPECT_EQ(entry->default_shortcut, "Shift+T");
+  EXPECT_EQ(entry->label, "Apply Active Material to Selection");
+  EXPECT_EQ(entry->scope_id, "viewport.selection.object_or_face_or_group");
+  for (const std::string_view mode : {"object", "face", "group"}) {
+    EXPECT_NE(entry->when.find("selectionMode." + std::string(mode)),
+              std::string::npos);
+  }
+  EXPECT_EQ(entry->when.find("selectionMode.vertex"), std::string::npos);
+  EXPECT_EQ(entry->when.find("selectionMode.edge"), std::string::npos);
+
+  quader::ViewportToolState state;
+  const auto dispatch = [&](std::string_view shortcut,
+                            quader::QuaderViewportKeybindingContext context = {},
+                            bool focused = true, bool text_input = false) {
+    return editor.commands().dispatch_viewport_input_binding(
+        single_input_chord(shortcut), state, focused, text_input, context);
+  };
+  const auto expect_apply = [&](std::string_view shortcut) {
+    const auto result = dispatch(shortcut);
+    EXPECT_EQ(result.kind,
+              quader::QuaderViewportKeybindingDispatch::Kind::Command);
+    EXPECT_EQ(result.command_id, quader::quader_command::kApplyMaterial.string());
+  };
+  const auto expect_no_match = [&](std::string_view shortcut,
+                                   std::string_view phase) {
+    SCOPED_TRACE(phase);
+    const auto result = dispatch(shortcut);
+    EXPECT_EQ(result.kind,
+              quader::QuaderViewportKeybindingDispatch::Kind::NoMatch)
+        << shortcut << ", mode=" << static_cast<int>(state.selection_mode)
+        << ", selected=" << editor.selection().summary().selected_object_count
+        << ", command=" << result.command_id;
+  };
+
+  ASSERT_TRUE(editor.selection().set_mode(quader::QuaderSelectionMode::Group).ok());
+  state.selection_mode = quader::ViewportSelectionMode::Group;
+  ASSERT_EQ(editor.selection().summary().selected_object_count, 0u);
+  expect_no_match("Shift+T", "empty group selection");
+
+  ASSERT_TRUE(editor.selection().set_mode(quader::QuaderSelectionMode::Object).ok());
+  const auto object = create_selected_box(editor, "Material Shortcut Mesh");
+  const auto group = editor.scene().group_selection("Material Shortcut Group");
+  ASSERT_TRUE(group.ok()) << group.error_message();
+
+  for (const auto mode : {quader::QuaderSelectionMode::Object,
+                          quader::QuaderSelectionMode::Face,
+                          quader::QuaderSelectionMode::Group}) {
+    ASSERT_TRUE(editor.selection().set_mode(mode).ok());
+    if (mode == quader::QuaderSelectionMode::Face) {
+      ASSERT_TRUE(editor.selection().select_face(object, 1).ok());
+      state.selection_mode = quader::ViewportSelectionMode::Face;
+    } else if (mode == quader::QuaderSelectionMode::Group) {
+      ASSERT_TRUE(editor.selection().select_object(group.value().id).ok());
+      state.selection_mode = quader::ViewportSelectionMode::Group;
+    } else {
+      ASSERT_TRUE(editor.selection().select_object(object).ok());
+      state.selection_mode = quader::ViewportSelectionMode::Object;
+    }
+    expect_apply("Shift+T");
+  }
+
+  EXPECT_EQ(dispatch("Shift+T", {}, false).kind,
+            quader::QuaderViewportKeybindingDispatch::Kind::NoMatch);
+  EXPECT_EQ(dispatch("Shift+T", {}, true, true).kind,
+            quader::QuaderViewportKeybindingDispatch::Kind::NoMatch);
+  for (const auto blocked_member : {
+           &quader::QuaderViewportKeybindingContext::navigation_active,
+           &quader::QuaderViewportKeybindingContext::modal_tool_active,
+           &quader::QuaderViewportKeybindingContext::active_tool_owns_viewport,
+           &quader::QuaderViewportKeybindingContext::active_transform_drag,
+           &quader::QuaderViewportKeybindingContext::operation_preview_active}) {
+    quader::QuaderViewportKeybindingContext blocked;
+    blocked.*blocked_member = true;
+    EXPECT_EQ(dispatch("Shift+T", blocked).kind,
+              quader::QuaderViewportKeybindingDispatch::Kind::NoMatch);
+  }
+  for (const auto mode : {quader::ViewportSelectionMode::Vertex,
+                          quader::ViewportSelectionMode::Edge}) {
+    state.selection_mode = mode;
+    expect_no_match("Shift+T", "component scope excludes Vertex and Edge");
+  }
+  state.selection_mode = quader::ViewportSelectionMode::Group;
+
+  const auto *transform = find_keybinding_catalog_entry(
+      catalog, quader::quader_command::kViewportToggleTransformSpace.string());
+  ASSERT_NE(transform, nullptr);
+  const auto collision = editor.commands().analyze_shortcut_assignment(
+      transform->key, "Shift+T");
+  ASSERT_TRUE(collision.ok);
+  EXPECT_TRUE(std::any_of(collision.conflicts.begin(), collision.conflicts.end(),
+                          [&](const auto &item) { return item.action == entry->key; }));
+
+  // Old target-level overrides keep their key while adopting the expanded
+  // app-owned scope. Loading must not rewrite the user's file.
+  {
+    std::ofstream file(path);
+    file << "[{\"command\":\"edit.apply_material\",\"key\":\"Ctrl+Alt+F19\","
+            "\"when\":\"viewportFocus && selectionMode.face\"}]\n";
+  }
+  const auto legacy_file = read_text_file(path);
+  ASSERT_TRUE(editor.commands().set_keybinding_storage_path(path).ok());
+  EXPECT_EQ(read_text_file(path), legacy_file);
+  expect_no_match("Shift+T", "legacy override shadows default");
+  expect_apply("Ctrl+Alt+F19");
+  ASSERT_TRUE(editor.preferences().set_action_shortcut(entry->key, "Ctrl+Alt+F18").ok());
+  ASSERT_TRUE(editor.commands().set_keybinding_storage_path(path).ok());
+  expect_no_match("Ctrl+Alt+F19", "rebind replaces legacy override");
+  expect_apply("Ctrl+Alt+F18");
+  ASSERT_TRUE(editor.preferences().remove_action_shortcut(entry->key).ok());
+  ASSERT_TRUE(editor.commands().set_keybinding_storage_path(path).ok());
+  expect_no_match("Shift+T", "removed binding shadows default");
+  expect_no_match("Ctrl+Alt+F18", "removed binding clears override");
+  ASSERT_TRUE(editor.preferences().reset_action_shortcut(entry->key).ok());
+  expect_apply("Shift+T");
+}
+
+TEST(EditorApiTests, ShiftTInputAppliesEverySelectedMeshOrGroupFaceInOneUndo) {
+  for (const auto mode : {quader::QuaderSelectionMode::Object,
+                          quader::QuaderSelectionMode::Group}) {
+    SCOPED_TRACE(static_cast<int>(mode));
+    CommandTestHarness harness;
+    auto &editor = harness.editor;
+    ASSERT_TRUE(editor.commands().set_keybinding_storage_path(
+        keybinding_test_path("shift-t-material-batch")).ok());
+    const auto first = create_selected_box(editor, "First Material Mesh");
+    const auto second = create_selected_box(editor, "Second Material Mesh");
+    const auto outside = create_selected_box(editor, "Unselected Material Mesh");
+    ASSERT_TRUE(editor.selection().select_objects({first, second, outside}).ok());
+    ASSERT_TRUE(editor.modeling().apply_active_material(9u).ok());
+    ASSERT_TRUE(editor.selection().select_objects({first, second}).ok());
+    if (mode == quader::QuaderSelectionMode::Group) {
+      const auto group = editor.scene().group_selection("Material Batch");
+      ASSERT_TRUE(group.ok()) << group.error_message();
+      ASSERT_TRUE(editor.selection().set_mode(mode).ok());
+      ASSERT_TRUE(editor.selection().select_object(group.value().id).ok());
+    }
+    const auto selection_before = selected_entities(editor);
+    const auto expect_slot = [&](quader::QuaderModelingObjectRef object,
+                                 std::uint32_t slot) {
+      const auto compiled = editor.modeling().mesh(object).compiled_mesh();
+      ASSERT_TRUE(compiled.has_value());
+      ASSERT_FALSE(compiled->primitives.empty());
+      for (const auto &primitive : compiled->primitives) {
+        EXPECT_EQ(primitive.material_slot, slot);
+      }
+    };
+    expect_slot(first, 9u);
+    expect_slot(second, 9u);
+    expect_slot(outside, 9u);
+
+    quader::ViewportToolState state;
+    state.selection_mode = mode == quader::QuaderSelectionMode::Group
+                               ? quader::ViewportSelectionMode::Group
+                               : quader::ViewportSelectionMode::Object;
+    quader::ViewportInputFrame input;
+    input.viewport_focused = true;
+    input.viewport_hovered = true;
+    input.pressed_input_chords = {single_input_chord("Shift+T")};
+    std::vector<quader::QuaderInputChord> suppressed;
+    double linear_remainder = 0.0;
+    double radial_remainder = 0.0;
+    quader::ViewportKeybindingResolver::resolve(
+        editor, state, input, suppressed, linear_remainder, radial_remainder);
+    ASSERT_TRUE(input.keybinding_input_consumed);
+    expect_slot(first, 0u);
+    expect_slot(second, 0u);
+    expect_slot(outside, 9u);
+    EXPECT_EQ(selected_entities(editor), selection_before);
+    EXPECT_EQ(editor.query().selection().mode, mode);
+    EXPECT_EQ(editor.history().snapshot().undo_label, "Assign Material");
+
+    input.pressed_input_chords.clear();
+    input.active_input_chords = {single_input_chord("Shift+T")};
+    quader::ViewportKeybindingResolver::resolve(
+        editor, state, input, suppressed, linear_remainder, radial_remainder);
+    ASSERT_TRUE(editor.history().undo().ok());
+    expect_slot(first, 9u);
+    expect_slot(second, 9u);
+    expect_slot(outside, 9u);
+    EXPECT_EQ(selected_entities(editor), selection_before);
+    ASSERT_TRUE(editor.history().redo().ok());
+    expect_slot(first, 0u);
+    expect_slot(second, 0u);
+    expect_slot(outside, 9u);
+    EXPECT_EQ(selected_entities(editor), selection_before);
+  }
+}
+
+TEST(EditorApiTests,
      MaterialMouseActionsUseDistinctScopedEditableClickBindings) {
   const std::filesystem::path path =
       keybinding_test_path("material-mouse-actions");
@@ -4937,14 +5149,15 @@ TEST(EditorApiTests,
                       keybinding_test_path("material-mouse-reservations"))
                   .ok());
 
-  constexpr std::array<std::string_view, 3> kMaterialTargets{
+  constexpr std::array<std::string_view, 4> kMaterialTargets{
       "viewport.material.sample_face",
       "viewport.material.apply_active_to_selection",
       "viewport.material.apply_face_to_mesh",
+      "viewport.material.transfer_face_texture",
   };
   const std::vector<quader::QuaderKeybindingCatalogEntry> catalog =
       editor.commands().keybinding_catalog();
-  std::array<quader::QuaderKeybindingActionKey, 3> actions;
+  std::array<quader::QuaderKeybindingActionKey, 4> actions;
   for (std::size_t index = 0u; index < kMaterialTargets.size(); ++index) {
     const quader::QuaderKeybindingCatalogEntry *entry =
         find_keybinding_catalog_entry(catalog, kMaterialTargets[index]);
@@ -5107,6 +5320,211 @@ TEST(EditorApiTests, MaterialMouseActionResolverMarksOnlyOneShotFlags) {
   EXPECT_FALSE(input.apply_active_material_to_selection_pressed);
   EXPECT_FALSE(input.apply_active_material_delay_for_double_click);
   EXPECT_FALSE(input.apply_face_material_to_mesh_pressed);
+}
+
+TEST(EditorApiTests,
+     FaceTextureTransferBindingIsFaceScopedEditableAndPersistent) {
+  constexpr std::string_view kTarget =
+      "viewport.material.transfer_face_texture";
+  const auto path = keybinding_test_path("face-texture-transfer");
+  CommandTestHarness harness;
+  auto &editor = harness.editor;
+  ASSERT_TRUE(editor.commands().set_keybinding_storage_path(path).ok());
+  const auto catalog = editor.commands().keybinding_catalog();
+  const auto *entry = find_keybinding_catalog_entry(catalog, kTarget);
+  const auto *sample = find_keybinding_catalog_entry(
+      catalog, "viewport.material.sample_face");
+  ASSERT_NE(entry, nullptr);
+  ASSERT_NE(sample, nullptr);
+  const auto action_key = entry->key;
+  EXPECT_EQ(entry->action_id, kTarget);
+  EXPECT_EQ(entry->shortcut, "Alt+LeftMouse");
+  EXPECT_EQ(entry->default_shortcut, "Alt+LeftMouse");
+  EXPECT_EQ(entry->scope_id, "viewport.selection.face");
+  EXPECT_EQ(entry->label, "Continue Texture from Selected Face");
+  EXPECT_FALSE(editor.commands().descriptor(kTarget).has_value());
+
+  const auto chord = single_input_chord("Alt+LeftMouse");
+  EXPECT_EQ(chord.device, quader::QuaderInputDevice::Mouse);
+  EXPECT_EQ(chord.mouse_button, quader::QuaderMouseButton::Left);
+  EXPECT_EQ(chord.gesture, quader::QuaderInputGesture::Press);
+  EXPECT_TRUE(chord.alt);
+  EXPECT_EQ(editor.commands().format_input_mapping(chord), "Alt+LeftMouse");
+
+  const auto resolves_transfer = [](
+      quader::QuaderEditorApi &owner, std::string_view shortcut,
+      quader::ViewportSelectionMode mode = quader::ViewportSelectionMode::Face,
+      quader::QuaderViewportKeybindingContext context = {},
+      bool focused = true, bool text_input = false) {
+    quader::ViewportToolState state;
+    state.selection_mode = mode;
+    quader::ViewportInputActionKind action =
+        quader::ViewportInputActionKind::None;
+    return owner.commands().resolve_viewport_input_action(
+               single_input_chord(shortcut), state, focused, text_input, action,
+               context) &&
+           action == quader::ViewportInputActionKind::TransferFaceTexture;
+  };
+  EXPECT_TRUE(resolves_transfer(editor, "Alt+LeftMouse"));
+  for (const auto mode : {quader::ViewportSelectionMode::Vertex,
+                          quader::ViewportSelectionMode::Edge,
+                          quader::ViewportSelectionMode::Object,
+                          quader::ViewportSelectionMode::Group}) {
+    EXPECT_FALSE(resolves_transfer(editor, "Alt+LeftMouse", mode));
+  }
+  for (const std::string_view shortcut : {
+           "LeftMouse", "Shift+Alt+LeftMouse", "Ctrl+Alt+LeftMouse",
+           "Alt+LeftMouseClick", "Alt+LeftMouseDoubleClick"}) {
+    EXPECT_FALSE(resolves_transfer(editor, shortcut)) << shortcut;
+  }
+  EXPECT_FALSE(resolves_transfer(editor, "Alt+LeftMouse",
+                                quader::ViewportSelectionMode::Face, {}, false));
+  EXPECT_FALSE(resolves_transfer(editor, "Alt+LeftMouse",
+                                quader::ViewportSelectionMode::Face, {}, true,
+                                true));
+  for (const auto blocked_member : {
+           &quader::QuaderViewportKeybindingContext::navigation_active,
+           &quader::QuaderViewportKeybindingContext::modal_tool_active,
+           &quader::QuaderViewportKeybindingContext::active_tool_owns_viewport,
+           &quader::QuaderViewportKeybindingContext::active_transform_drag,
+           &quader::QuaderViewportKeybindingContext::operation_preview_active}) {
+    quader::QuaderViewportKeybindingContext blocked;
+    blocked.*blocked_member = true;
+    EXPECT_FALSE(resolves_transfer(editor, "Alt+LeftMouse",
+                                  quader::ViewportSelectionMode::Face, blocked));
+  }
+
+  const auto conflict = editor.commands().analyze_shortcut_assignment(
+      sample->key, "Alt+LeftMouse");
+  ASSERT_TRUE(conflict.ok);
+  ASSERT_EQ(conflict.conflicts.size(), 1u);
+  EXPECT_EQ(conflict.conflicts.front().action, action_key);
+  EXPECT_EQ(conflict.conflicts.front().kind,
+            quader::QuaderKeybindingCollisionKind::ExactConflict);
+  ASSERT_TRUE(editor.preferences()
+                  .set_action_shortcut(sample->key, "Alt+RightMouseClick")
+                  .ok());
+  ASSERT_TRUE(editor.preferences()
+                  .set_action_shortcut(action_key, "Ctrl+Alt+F18")
+                  .ok());
+  EXPECT_FALSE(resolves_transfer(editor, "Alt+LeftMouse"));
+  EXPECT_TRUE(resolves_transfer(editor, "Ctrl+Alt+F18"));
+
+  CommandTestHarness reloaded_harness;
+  auto &reloaded = reloaded_harness.editor;
+  ASSERT_TRUE(reloaded.commands().set_keybinding_storage_path(path).ok());
+  EXPECT_FALSE(resolves_transfer(reloaded, "Alt+LeftMouse"));
+  EXPECT_TRUE(resolves_transfer(reloaded, "Ctrl+Alt+F18"));
+  EXPECT_FALSE(resolves_transfer(reloaded, "Ctrl+Alt+F18",
+                                quader::ViewportSelectionMode::Edge));
+  EXPECT_EQ(reloaded.commands().shortcut_for(sample->action_id),
+            "Alt+RightMouseClick");
+  const auto loaded_catalog = reloaded.commands().keybinding_catalog();
+  const auto *loaded = find_keybinding_catalog_entry(loaded_catalog, kTarget);
+  ASSERT_NE(loaded, nullptr);
+  EXPECT_EQ(loaded->when, entry->when);
+  EXPECT_EQ(loaded->source, quader::QuaderKeybindingSourceKind::User);
+
+  ASSERT_TRUE(reloaded.preferences().remove_action_shortcut(action_key).ok());
+  ASSERT_TRUE(editor.commands().set_keybinding_storage_path(path).ok());
+  EXPECT_FALSE(resolves_transfer(editor, "Alt+LeftMouse"));
+  EXPECT_FALSE(resolves_transfer(editor, "Ctrl+Alt+F18"));
+  ASSERT_TRUE(editor.preferences().reset_action_shortcut(action_key).ok());
+  EXPECT_TRUE(resolves_transfer(editor, "Alt+LeftMouse"));
+  EXPECT_FALSE(resolves_transfer(editor, "Ctrl+Alt+F18"));
+  EXPECT_EQ(editor.commands().shortcut_for(sample->action_id),
+            "Alt+RightMouseClick");
+}
+
+TEST(EditorApiTests, FaceTextureTransferResolverIsOneShotAndHonorsContext) {
+  CommandTestHarness harness;
+  auto &editor = harness.editor;
+  ASSERT_TRUE(editor.commands()
+                  .set_keybinding_storage_path(
+                      keybinding_test_path("face-texture-transfer-flags"))
+                  .ok());
+  quader::ViewportToolState state;
+  state.selection_mode = quader::ViewportSelectionMode::Face;
+  std::vector<quader::QuaderInputChord> suppressed_chords;
+  double linear_array_wheel_remainder = 0.0;
+  double radial_array_wheel_remainder = 0.0;
+  auto resolve = [&](quader::ViewportInputFrame &input) {
+    quader::ViewportKeybindingResolver::resolve(
+        editor, state, input, suppressed_chords, linear_array_wheel_remainder,
+        radial_array_wheel_remainder);
+  };
+
+  quader::ViewportInputFrame input;
+  input.viewport_focused = true;
+  input.pressed_input_chords.push_back(single_input_chord("Alt+LeftMouse"));
+  resolve(input);
+  EXPECT_TRUE(input.transfer_face_texture_pressed);
+  EXPECT_FALSE(input.sample_face_material_pressed);
+  EXPECT_FALSE(input.apply_active_material_to_selection_pressed);
+  EXPECT_FALSE(input.apply_face_material_to_mesh_pressed);
+  EXPECT_TRUE(input.resolved_shortcuts.empty());
+  input.active_input_chords = input.pressed_input_chords;
+  input.pressed_input_chords.clear();
+  resolve(input);
+  EXPECT_FALSE(input.transfer_face_texture_pressed);
+  input.released_input_chords = input.active_input_chords;
+  input.active_input_chords.clear();
+  resolve(input);
+  EXPECT_FALSE(input.transfer_face_texture_pressed);
+
+  input.released_input_chords.clear();
+  input.pressed_input_chords = {
+      single_input_chord("Alt+LeftMouseDoubleClick")};
+  resolve(input);
+  EXPECT_TRUE(input.transfer_face_texture_pressed)
+      << "Qt emits DoubleClick, not a second Press, for a rapid second click";
+
+  input.pressed_input_chords = {single_input_chord("Alt+LeftMouse")};
+  state.selection_mode = quader::ViewportSelectionMode::Edge;
+  resolve(input);
+  EXPECT_FALSE(input.transfer_face_texture_pressed);
+  state.selection_mode = quader::ViewportSelectionMode::Face;
+  input.navigation_active = true;
+  resolve(input);
+  EXPECT_FALSE(input.transfer_face_texture_pressed);
+  input.navigation_active = false;
+  input.text_input_active = true;
+  resolve(input);
+  EXPECT_FALSE(input.transfer_face_texture_pressed);
+
+  const auto catalog = editor.commands().keybinding_catalog();
+  const auto *entry = find_keybinding_catalog_entry(
+      catalog, "viewport.material.transfer_face_texture");
+  ASSERT_NE(entry, nullptr);
+  for (const std::string_view mapping : {"Alt+LeftMouseClick",
+                                         "Alt+LeftMouseDoubleClick"}) {
+    SCOPED_TRACE(mapping);
+    ASSERT_TRUE(editor.preferences()
+                    .set_action_shortcut(entry->key, std::string(mapping))
+                    .ok());
+    input = {};
+    input.viewport_focused = true;
+    input.pressed_input_chords = {single_input_chord("Alt+LeftMouse")};
+    resolve(input);
+    EXPECT_FALSE(input.transfer_face_texture_pressed);
+    EXPECT_TRUE(input.transfer_face_texture_pointer_reserved)
+        << "the constituent press must not change the selected source";
+    input.pressed_input_chords.clear();
+    input.active_input_chords = {single_input_chord("Alt+LeftMouse")};
+    resolve(input);
+    EXPECT_FALSE(input.transfer_face_texture_pressed);
+    input.active_input_chords.clear();
+    input.pressed_input_chords = {single_input_chord(mapping)};
+    resolve(input);
+    EXPECT_TRUE(input.transfer_face_texture_pressed);
+  }
+  ASSERT_TRUE(editor.preferences().remove_action_shortcut(entry->key).ok());
+  input = {};
+  input.viewport_focused = true;
+  input.pressed_input_chords = {single_input_chord("Alt+LeftMouse")};
+  resolve(input);
+  EXPECT_FALSE(input.transfer_face_texture_pressed);
+  EXPECT_FALSE(input.transfer_face_texture_pointer_reserved);
 }
 
 TEST(EditorApiTests,
@@ -14144,7 +14562,7 @@ TEST(EditorApiTests,
           [&](const std::string &target_id) {
             return !command_ids.contains(target_id);
           }));
-  EXPECT_EQ(non_command_target_count, 46u);
+  EXPECT_EQ(non_command_target_count, 47u);
 
   for (const std::string &typed_id : typed_command_ids()) {
     EXPECT_TRUE(actual_target_ids.contains(typed_id)) << typed_id;

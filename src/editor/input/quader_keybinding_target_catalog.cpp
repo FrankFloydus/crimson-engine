@@ -102,6 +102,11 @@ scope_for_selection_modes(std::uint32_t mask) {
     return {"viewport.selection.object_or_group", "Viewport › Object / Group",
             "keybindings.scope.viewport.selection.object_or_group",
             QuaderKeybindingContextKind::Viewport};
+  case kSelectionModeObject | kSelectionModeFace | kSelectionModeGroup:
+    return {"viewport.selection.object_or_face_or_group",
+            "Viewport › Mesh / Face / Group",
+            "keybindings.scope.viewport.selection.object_or_face_or_group",
+            QuaderKeybindingContextKind::Viewport};
   case kSelectionModeAny:
     return {"viewport.selection.any", "Viewport › Any Selection Mode",
             "keybindings.scope.viewport.selection.any",

@@ -630,6 +630,10 @@ public:
   set_face_texture_setting(const QuaderFaceTextureEdit &edit);
   QuaderApiVoidResult
   apply_face_texture_action(const QuaderFaceTextureActionRequest &request);
+  /// Continues the sole selected face's material/UV chart onto a target face by
+  /// rotating the chart about the planes' intersection, retaining the selection.
+  QuaderApiVoidResult transfer_face_texture_to_face(
+      QuaderModelingObjectId object_id, QuaderElementId face_id);
   [[nodiscard]] bool face_texture_treat_as_one() const;
   QuaderApiVoidResult set_face_texture_treat_as_one(bool enabled);
   [[nodiscard]] QuaderUvPeelRevision uv_peel_settings_revision() const;

@@ -26,6 +26,7 @@
 #include <set>
 #include <span>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -39,6 +40,7 @@ using NativeFace = quader_poly::Face;
 using NativeTransform = quader_poly::Transform3;
 using NativeTextureTransform = quader_poly::FaceTextureTransform;
 using FaceBasis = quader_poly::document_internal::FaceUvBasis;
+using quader_geometry::QVec3d;
 
 constexpr float kTextureDensity =
     quader_poly::document_internal::kGeneratedUvTilesPerWorldUnit;
@@ -170,6 +172,7 @@ struct TargetWork {
   std::optional<NativeDocument> candidate;
   std::set<quader_poly::ElementId> modified_faces;
   std::set<quader_poly::ElementId> modified_vertices;
+  bool materials_changed = false;
 
   [[nodiscard]] NativeDocument &edit() {
     if (!candidate.has_value()) {
@@ -187,7 +190,8 @@ struct TargetWork {
 
 [[nodiscard]] std::optional<Error> capture_face(
     const TargetWork &target, std::size_t target_index,
-    const FaceTextureActionFace &requested, FaceWork &output) {
+    const FaceTextureActionFace &requested, FaceWork &output,
+    bool capture_world = true) {
   output.target_index = target_index;
   output.requested = requested;
   output.face = quader_poly::find_face(*target.original, requested.face.index);
@@ -195,29 +199,37 @@ struct TargetWork {
     return make_error(ErrorCode::StaleId, "The selected face is unavailable.");
   }
   const NativeFace &face = *output.face;
-  if (!quader_poly::valid_face_texture_transform(face.texture_transform) ||
+  if (face.vertices.size() < 3U ||
+      !quader_poly::valid_face_texture_transform(face.texture_transform) ||
       (!face.uvs.empty() && face.uvs.size() != face.vertices.size())) {
     return face_error(output, "The source texture mapping is invalid.");
   }
   output.local_positions.reserve(face.vertices.size());
-  output.world_positions.reserve(face.vertices.size());
+  if (capture_world) {
+    output.world_positions.reserve(face.vertices.size());
+  }
   for (const auto id : face.vertices) {
     const auto *vertex = quader_poly::find_vertex(*target.original, id);
     if (vertex == nullptr || !finite(vertex->position)) {
       return face_error(output, "The face contains an invalid vertex.");
     }
-    const auto world = quader_poly::document_internal::transform_point(
-        target.world, vertex->position);
-    if (!finite(world)) {
-      return face_error(output, "The world-space face is non-finite.");
+    if (capture_world) {
+      const auto world = quader_poly::document_internal::transform_point(
+          target.world, vertex->position);
+      if (!finite(world)) {
+        return face_error(output, "The world-space face is non-finite.");
+      }
+      output.world_positions.push_back(world);
     }
     output.local_positions.push_back(vertex->position);
-    output.world_positions.push_back(world);
   }
   output.normal = quader_poly::face_normal(*target.original, face);
-  output.world_normal = geometric_normal(output.world_positions);
-  if (!finite(output.normal) || !finite(output.world_normal) ||
-      quader::length_squared(output.world_normal) == 0.0F) {
+  if (capture_world) {
+    output.world_normal = geometric_normal(output.world_positions);
+  }
+  if (!finite(output.normal) || quader::length_squared(output.normal) == 0.0F ||
+      (capture_world && (!finite(output.world_normal) ||
+                        quader::length_squared(output.world_normal) == 0.0F))) {
     return face_error(output, "The face has no usable geometric plane.");
   }
   const auto carrier = quader_poly::face_texture_carrier(
@@ -240,16 +252,23 @@ struct TargetWork {
   return std::nullopt;
 }
 
-[[nodiscard]] FaceBasis geometric_basis(const TargetWork &target,
-                                        const FaceWork &face) {
+[[nodiscard]] FaceBasis geometric_basis(const NativeDocument &document,
+                                        const NativeFace &face, QVec3 normal,
+                                        QVec3 origin) {
   const auto generated = quader_poly::document_internal::generated_face_uv_basis(
-      *target.original, *face.face, face.world_normal);
+      document, face, normal);
   // Axis projection must not lose a unit vector when added to a distant
   // world-space anchor. Project at zero, then attach the chart's real origin.
   auto basis = quader_poly::document_internal::project_uv_basis_to_face_plane(
-      generated, face.world_normal, {});
-  basis.origin = face.world_positions.front();
+      generated, normal, {});
+  basis.origin = origin;
   return basis;
+}
+
+[[nodiscard]] FaceBasis geometric_basis(const TargetWork &target,
+                                        const FaceWork &face) {
+  return geometric_basis(*target.original, *face.face, face.world_normal,
+                          face.world_positions.front());
 }
 
 /// One planar, world-space affine chart inherited from the active face.
@@ -257,6 +276,7 @@ struct SharedChart {
   FaceBasis plane;
   std::array<float, 4> carrier{};
   QVec2 offset;
+  quader_geometry::QVec2d precise_offset;
 
   [[nodiscard]] QVec2 project(QVec3 point) const {
     const auto q = quader_poly::document_internal::generated_face_uv(point,
@@ -278,44 +298,235 @@ struct SharedChart {
                   (matrix[1] / scale) * (matrix[2] / scale)) > 1.0e-10;
 }
 
-[[nodiscard]] std::optional<SharedChart> shared_chart(
-    const TargetWork &target, const FaceWork &reference) {
+[[nodiscard]] std::optional<SharedChart> fit_shared_chart(
+    std::span<const QVec3> positions, std::span<const QVec2> effective_uvs,
+    const FaceBasis &plane, bool allow_collapsed_mapping = false) {
   SharedChart chart;
-  chart.plane = geometric_basis(target, reference);
+  chart.plane = plane;
   if (!chart.plane.valid) {
     return std::nullopt;
   }
   std::vector<QVec3> plane_positions;
-  plane_positions.reserve(reference.world_positions.size());
+  plane_positions.reserve(positions.size());
   double mean_qx = 0.0;
   double mean_qy = 0.0;
   double mean_u = 0.0;
   double mean_v = 0.0;
-  for (std::size_t corner = 0U; corner < reference.world_positions.size();
-       ++corner) {
+  for (std::size_t corner = 0U; corner < positions.size(); ++corner) {
     const auto q = quader_poly::document_internal::generated_face_uv(
-        reference.world_positions[corner], chart.plane);
+        positions[corner], chart.plane);
     // The canonical +Z chart is (x/2,-y/2). These synthetic positions let
     // the existing carrier fit an orthonormal face-plane chart unchanged.
     plane_positions.push_back({q.x / kTextureDensity,
                                 -q.y / kTextureDensity, 0.0F});
     mean_qx += q.x;
     mean_qy += q.y;
-    mean_u += reference.effective_uvs[corner].x;
-    mean_v += reference.effective_uvs[corner].y;
+    mean_u += effective_uvs[corner].x;
+    mean_v += effective_uvs[corner].y;
   }
   chart.carrier = quader_poly::face_texture_carrier(
-      plane_positions, reference.effective_uvs, {0.0F, 0.0F, 1.0F}, {});
-  if (!full_rank(chart.carrier)) {
+      plane_positions, effective_uvs, {0.0F, 0.0F, 1.0F}, {});
+  if (!allow_collapsed_mapping && !full_rank(chart.carrier)) {
     return std::nullopt;
   }
   const double count = static_cast<double>(plane_positions.size());
-  chart.offset = {
-      static_cast<float>((mean_u - chart.carrier[0] * mean_qx -
-                          chart.carrier[1] * mean_qy) / count),
-      static_cast<float>((mean_v - chart.carrier[2] * mean_qx -
-                          chart.carrier[3] * mean_qy) / count)};
+  chart.precise_offset = {
+      (mean_u - chart.carrier[0] * mean_qx - chart.carrier[1] * mean_qy) / count,
+      (mean_v - chart.carrier[2] * mean_qx - chart.carrier[3] * mean_qy) / count};
+  chart.offset = {static_cast<float>(chart.precise_offset.x),
+                  static_cast<float>(chart.precise_offset.y)};
   return finite(chart.offset) ? std::optional{chart} : std::nullopt;
+}
+
+[[nodiscard]] std::optional<SharedChart> shared_chart(
+    const TargetWork &target, const FaceWork &reference) {
+  return fit_shared_chart(reference.world_positions, reference.effective_uvs,
+                          geometric_basis(target, reference));
+}
+
+/// Keeps transformed plane and seam arithmetic out of float world storage.
+struct TransferPlane {
+  std::vector<QVec3d> positions;
+  QVec3d normal;
+  QVec3d center;
+};
+
+[[nodiscard]] std::optional<TransferPlane> transfer_plane(
+    const TargetWork &target, const FaceWork &face) {
+  TransferPlane plane;
+  plane.positions.reserve(face.local_positions.size());
+  for (const auto position : face.local_positions) {
+    plane.positions.push_back(
+        QVec3d{target.world.origin} +
+        QVec3d{target.world.x_axis} * static_cast<double>(position.x) +
+        QVec3d{target.world.y_axis} * static_cast<double>(position.y) +
+        QVec3d{target.world.z_axis} * static_cast<double>(position.z));
+  }
+  const auto origin = plane.positions.front();
+  QVec3d area{};
+  QVec3d center_offset{};
+  double radius_squared = 0.0;
+  for (std::size_t corner = 0U; corner < plane.positions.size(); ++corner) {
+    const auto delta = plane.positions[corner] - origin;
+    center_offset = center_offset + delta;
+    radius_squared = std::max(radius_squared, quader_geometry::dot(delta, delta));
+    if (corner + 1U < plane.positions.size()) {
+      area = area + quader_geometry::cross(
+          delta, plane.positions[corner + 1U] - origin);
+    }
+  }
+  const double area_length = std::sqrt(quader_geometry::dot(area, area));
+  if (!std::isfinite(area_length) || !std::isfinite(radius_squared) ||
+      radius_squared == 0.0 || area_length <= 1.0e-12 * radius_squared) {
+    return std::nullopt;
+  }
+  plane.normal = area / area_length;
+  plane.center = origin + center_offset / static_cast<double>(plane.positions.size());
+  constexpr double kPlanarityTolerance =
+      32.0 * std::numeric_limits<float>::epsilon();
+  for (const auto position : plane.positions) {
+    if (std::abs(quader_geometry::dot(position - origin, plane.normal)) >
+        kPlanarityTolerance * std::sqrt(radius_squared)) {
+      return std::nullopt;
+    }
+  }
+  return plane;
+}
+
+/// Tangential world gradients retain the source chart's shear and handedness.
+struct TransferChart {
+  QVec3d origin;
+  QVec3d u_gradient;
+  QVec3d v_gradient;
+  quader_geometry::QVec2d offset;
+
+  [[nodiscard]] quader_geometry::QVec2d project(QVec3d point) const {
+    const auto delta = point - origin;
+    return {quader_geometry::dot(u_gradient, delta) + offset.x,
+            quader_geometry::dot(v_gradient, delta) + offset.y};
+  }
+};
+
+[[nodiscard]] quader_geometry::QVec2d texture_span(std::span<const QVec2> uvs) {
+  QVec2 minimum = uvs.front();
+  QVec2 maximum = minimum;
+  for (const auto uv : uvs) {
+    minimum.x = std::min(minimum.x, uv.x);
+    minimum.y = std::min(minimum.y, uv.y);
+    maximum.x = std::max(maximum.x, uv.x);
+    maximum.y = std::max(maximum.y, uv.y);
+  }
+  return {static_cast<double>(maximum.x) - minimum.x,
+          static_cast<double>(maximum.y) - minimum.y};
+}
+
+[[nodiscard]] bool transfer_uv_close(double fitted, float stored, double span) {
+  const double lower_step = static_cast<double>(stored) -
+      std::nextafter(stored, -std::numeric_limits<float>::infinity());
+  const double upper_step = static_cast<double>(
+      std::nextafter(stored, std::numeric_limits<float>::infinity())) - stored;
+  // UV offsets must not scale the geometric fit tolerance: a million-tile
+  // shift must not hide a whole tile of non-affine residual or transfer.
+  const double tolerance =
+      8.0 * std::numeric_limits<float>::epsilon() * std::max(1.0, span) +
+      0.5 * std::max(std::isfinite(lower_step) ? lower_step : 0.0,
+                     std::isfinite(upper_step) ? upper_step : 0.0);
+  return std::isfinite(fitted) && std::isfinite(stored) &&
+         std::abs(fitted - stored) <= tolerance;
+}
+
+[[nodiscard]] bool same_transfer_uvs(std::span<const QVec2> left,
+                                    std::span<const QVec2> right) {
+  if (left.size() != right.size() || left.empty()) {
+    return false;
+  }
+  const auto left_span = texture_span(left);
+  const auto right_span = texture_span(right);
+  for (std::size_t corner = 0U; corner < left.size(); ++corner) {
+    if (!transfer_uv_close(left[corner].x, right[corner].x,
+                            std::max(left_span.x, right_span.x)) ||
+        !transfer_uv_close(left[corner].y, right[corner].y,
+                            std::max(left_span.y, right_span.y))) {
+      return false;
+    }
+  }
+  return true;
+}
+
+[[nodiscard]] std::optional<TransferChart> transfer_chart(
+    const TargetWork &source, const FaceWork &face, const TransferPlane &plane) {
+  // Fit in local coordinates so a distant occurrence cannot quantize a valid
+  // affine chart before it is transported through the world transform.
+  const auto basis = geometric_basis(*source.original, *face.face, face.normal,
+                                     face.local_positions.front());
+  const auto local = fit_shared_chart(face.local_positions, face.effective_uvs,
+                                      basis, true);
+  if (!local.has_value()) {
+    return std::nullopt;
+  }
+  const auto span = texture_span(face.effective_uvs);
+  for (std::size_t corner = 0U; corner < face.local_positions.size(); ++corner) {
+    const auto delta = QVec3d{face.local_positions[corner]} - QVec3d{basis.origin};
+    const double u = quader_geometry::dot(delta, QVec3d{basis.u_axis}) * kTextureDensity;
+    const double v = quader_geometry::dot(delta, QVec3d{basis.v_axis}) * kTextureDensity;
+    const quader_geometry::QVec2d fitted{
+        local->carrier[0] * u + local->carrier[1] * v + local->precise_offset.x,
+        local->carrier[2] * u + local->carrier[3] * v + local->precise_offset.y};
+    const auto expected = face.effective_uvs[corner];
+    // A fitted carrier alone would silently discard authored UV residuals.
+    if (!transfer_uv_close(fitted.x, expected.x, span.x) ||
+        !transfer_uv_close(fitted.y, expected.y, span.y)) {
+      return std::nullopt;
+    }
+  }
+  const auto world_gradient = [&](float u, float v) {
+    const auto gradient =
+        (QVec3d{basis.u_axis} * static_cast<double>(u) +
+         QVec3d{basis.v_axis} * static_cast<double>(v)) *
+        static_cast<double>(kTextureDensity);
+    const auto transformed = source.inverse_world.x_row * gradient.x +
+                             source.inverse_world.y_row * gradient.y +
+                             source.inverse_world.z_row * gradient.z;
+    return transformed - plane.normal * quader_geometry::dot(transformed, plane.normal);
+  };
+  return TransferChart{
+      .origin = plane.positions.front(),
+      .u_gradient = world_gradient(local->carrier[0], local->carrier[1]),
+      .v_gradient = world_gradient(local->carrier[2], local->carrier[3]),
+      .offset = local->precise_offset,
+  };
+}
+
+[[nodiscard]] TransferChart rotate_transfer_chart(
+    TransferChart chart, const TransferPlane &source, const TransferPlane &target) {
+  const auto cross = quader_geometry::cross(source.normal, target.normal);
+  const double sine_squared = quader_geometry::dot(cross, cross);
+  // An opposed normal has no unique rotation axis. Like parallel planes it
+  // keeps the world chart and its phase, without an arbitrary half turn.
+  constexpr double kParallelSineTolerance =
+      64.0 * std::numeric_limits<double>::epsilon();
+  if (sine_squared <= kParallelSineTolerance * kParallelSineTolerance) {
+    return chart;
+  }
+  const double sine = std::sqrt(sine_squared);
+  const double cosine = std::clamp(
+      quader_geometry::dot(source.normal, target.normal), -1.0, 1.0);
+  const auto axis = cross / sine;
+  const auto rotate = [&](QVec3d gradient) {
+    return gradient * cosine + quader_geometry::cross(axis, gradient) * sine +
+           axis * (quader_geometry::dot(axis, gradient) * (1.0 - cosine));
+  };
+  // Project the target center onto the planes' intersection line within the
+  // target plane. Every point on this seam retains its source UV exactly.
+  const auto toward_seam = source.normal - target.normal * cosine;
+  const auto anchor = target.center + toward_seam *
+      (quader_geometry::dot(source.normal, source.positions.front() - target.center) /
+       sine_squared);
+  chart.offset = chart.project(anchor);
+  chart.origin = anchor;
+  chart.u_gradient = rotate(chart.u_gradient);
+  chart.v_gradient = rotate(chart.v_gradient);
+  return chart;
 }
 
 [[nodiscard]] bool chart_has_area(std::span<const QVec2> points) {
@@ -347,6 +558,48 @@ struct SharedChart {
   const double trace = xx + yy;
   return std::isfinite(trace) && trace > 0.0 &&
          xx * yy - xy * xy > 1.0e-12 * trace * trace;
+}
+
+template <typename Uv>
+[[nodiscard]] int texture_rank(const std::vector<Uv> &points) {
+  double minimum_x = points.front().x;
+  double minimum_y = points.front().y;
+  double maximum_x = minimum_x;
+  double maximum_y = minimum_y;
+  for (const auto point : points) {
+    minimum_x = std::min(minimum_x, static_cast<double>(point.x));
+    minimum_y = std::min(minimum_y, static_cast<double>(point.y));
+    maximum_x = std::max(maximum_x, static_cast<double>(point.x));
+    maximum_y = std::max(maximum_y, static_cast<double>(point.y));
+  }
+  const double span_x = maximum_x - minimum_x;
+  const double span_y = maximum_y - minimum_y;
+  if (span_x == 0.0 || span_y == 0.0) {
+    return span_x == 0.0 && span_y == 0.0 ? 0 : 1;
+  }
+  // Normalize each UV axis before classifying the same target footprint.
+  // A narrow but representable face must not look like storage rank loss.
+  double mean_x = 0.0;
+  double mean_y = 0.0;
+  for (const auto point : points) {
+    mean_x += (point.x - minimum_x) / span_x;
+    mean_y += (point.y - minimum_y) / span_y;
+  }
+  const double count = static_cast<double>(points.size());
+  mean_x /= count;
+  mean_y /= count;
+  double xx = 0.0;
+  double xy = 0.0;
+  double yy = 0.0;
+  for (const auto point : points) {
+    const double x = (point.x - minimum_x) / span_x - mean_x;
+    const double y = (point.y - minimum_y) / span_y - mean_y;
+    xx += x * x;
+    xy += x * y;
+    yy += y * y;
+  }
+  const double trace = xx + yy;
+  return xx * yy - xy * xy > 1.0e-12 * trace * trace ? 2 : 1;
 }
 
 /// Bounds measured in effective or shared normalized texture coordinates.
@@ -461,9 +714,11 @@ struct TextureAffine {
 
 [[nodiscard]] std::optional<Error> set_effective_uvs(
     TargetWork &target, const FaceWork &face, std::span<const QVec2> desired_uvs,
-    const NativeTextureTransform &desired_transform) {
+    const NativeTextureTransform &desired_transform,
+    bool transfer_comparison = false) {
   if (desired_transform == face.face->texture_transform &&
-      same_uvs(desired_uvs, face.effective_uvs)) {
+      (transfer_comparison ? same_transfer_uvs(desired_uvs, face.effective_uvs)
+                             : same_uvs(desired_uvs, face.effective_uvs))) {
     return std::nullopt;
   }
   auto base = quader_poly::solve_face_texture_base_uvs(
@@ -472,6 +727,12 @@ struct TextureAffine {
   if (!base.has_value()) {
     return face_error(face,
         "This projection cannot preserve the occurrence texture mapping.");
+  }
+  if (desired_transform == face.face->texture_transform &&
+      std::ranges::equal(*base, face.face->uvs, [](QVec2 left, QVec2 right) {
+        return left.x == right.x && left.y == right.y;
+      })) {
+    return std::nullopt;
   }
   auto *candidate = quader_poly::find_face(target.edit(), face.face->id);
   candidate->uvs = std::move(*base);
@@ -893,6 +1154,42 @@ struct TextureAffine {
          action == FaceTextureAction::FlipFaceVertical;
 }
 
+[[nodiscard]] Result<PreparedFaceTextureAction> prepare_texture_documents(
+    std::span<TargetWork> targets, bool changes_topology,
+    std::string_view changed_message) {
+  PreparedFaceTextureAction result;
+  result.documents.reserve(targets.size());
+  for (auto &target : targets) {
+    PreparedFaceTextureDocument prepared{
+        .key = target.target->key, .document = *target.target->document};
+    prepared.receipt.message = "Face texture unchanged.";
+    if (target.candidate.has_value()) {
+      PolygonDocumentNativeAccess::replace_document(prepared.document,
+                                                     std::move(*target.candidate));
+      ++PolygonDocumentNativeAccess::impl(prepared.document).content_revision;
+      const auto validation = prepared.document.validate();
+      if (!validation.ok()) {
+        return Result<PreparedFaceTextureAction>::failure(validation.error());
+      }
+      prepared.receipt.changed = true;
+      prepared.receipt.message = changed_message;
+      prepared.receipt.dirty.geometry = true;
+      prepared.receipt.dirty.topology = changes_topology;
+      prepared.receipt.dirty.materials = target.materials_changed;
+      for (const auto id : target.modified_faces) {
+        prepared.receipt.affected.faces.push_back(make_id<FaceTag>(id));
+      }
+      for (const auto id : target.modified_vertices) {
+        prepared.receipt.affected.vertices.push_back(make_id<VertexTag>(id));
+      }
+      prepared.receipt.modified = prepared.receipt.affected;
+      result.changed = true;
+    }
+    result.documents.push_back(std::move(prepared));
+  }
+  return Result<PreparedFaceTextureAction>::success(std::move(result));
+}
+
 } // namespace
 
 Result<PreparedFaceTextureAction> prepare_face_texture_action(
@@ -995,38 +1292,115 @@ Result<PreparedFaceTextureAction> prepare_face_texture_action(
       }
     }
   }
-  PreparedFaceTextureAction result;
-  result.documents.reserve(targets.size());
-  for (auto &target : targets) {
-    PreparedFaceTextureDocument prepared{
-        .key = target.target->key, .document = *target.target->document};
-    prepared.receipt.message = "Face texture unchanged.";
-    if (target.candidate.has_value()) {
-      PolygonDocumentNativeAccess::replace_document(prepared.document,
-                                                     std::move(*target.candidate));
-      ++PolygonDocumentNativeAccess::impl(prepared.document).content_revision;
-      const auto validation = prepared.document.validate();
-      if (!validation.ok()) {
-        return fail(validation.error());
-      }
-      prepared.receipt.changed = true;
-      prepared.receipt.message = geometry_action(options.action)
-                                    ? "Selected faces reflected."
-                                    : "Face texture changed.";
-      prepared.receipt.dirty.geometry = true;
-      prepared.receipt.dirty.topology = geometry_action(options.action);
-      for (const auto id : target.modified_faces) {
-        prepared.receipt.affected.faces.push_back(make_id<FaceTag>(id));
-      }
-      for (const auto id : target.modified_vertices) {
-        prepared.receipt.affected.vertices.push_back(make_id<VertexTag>(id));
-      }
-      prepared.receipt.modified = prepared.receipt.affected;
-      result.changed = true;
+  return prepare_texture_documents(targets, geometry_action(options.action),
+      geometry_action(options.action) ? "Selected faces reflected."
+                                       : "Face texture changed.");
+}
+
+Result<PreparedFaceTextureAction> prepare_face_texture_transfer(
+    const FaceTextureTransferFace &source,
+    const FaceTextureTransferFace &target, std::uint32_t target_material_slot) {
+  const auto fail = [](Error error) {
+    return Result<PreparedFaceTextureAction>::failure(std::move(error));
+  };
+  const std::array requests{
+      FaceTextureActionTarget{.key = source.key, .document = source.document,
+          .faces = {{.face = source.face}},
+          .world_from_local = source.world_from_local,
+          .sampling_from_local = source.sampling_from_local},
+      FaceTextureActionTarget{.key = target.key, .document = target.document,
+          .faces = {{.face = target.face}},
+          .world_from_local = target.world_from_local,
+          .sampling_from_local = target.sampling_from_local},
+  };
+  std::array<TargetWork, 2> targets;
+  std::array<FaceWork, 2> faces;
+  std::array<TransferPlane, 2> planes;
+  for (std::size_t index = 0U; index < requests.size(); ++index) {
+    const auto &requested = requests[index];
+    if (requested.document == nullptr) {
+      return fail(make_error(ErrorCode::InvalidArgument,
+          "Texture transfer requires live source and target documents."));
     }
-    result.documents.push_back(std::move(prepared));
+    const std::array ids{requested.faces.front().face};
+    const auto settings = requested.document->face_texture_settings(ids);
+    if (!settings.ok()) {
+      return fail(settings.error());
+    }
+    auto &work = targets[index];
+    work.target = &requested;
+    work.original = &PolygonDocumentNativeAccess::document(*requested.document);
+    work.world = native_transform(requested.world_from_local);
+    work.sampling = native_transform(requested.sampling_from_local);
+    const auto inverse = inverse_transform(work.world);
+    if (!inverse.has_value() || !inverse_transform(work.sampling).has_value()) {
+      return fail(make_error(ErrorCode::InvalidArgument,
+          "Texture transfer requires finite, invertible world and sampling transforms."));
+    }
+    work.inverse_world = *inverse;
+    if (auto error = capture_face(work, index, requested.faces.front(), faces[index],
+                                  false)) {
+      return fail(std::move(*error));
+    }
+    auto plane = transfer_plane(work, faces[index]);
+    if (!plane.has_value()) {
+      return fail(face_error(faces[index],
+          "Texture transfer requires a nondegenerate planar face."));
+    }
+    planes[index] = std::move(*plane);
   }
-  return Result<PreparedFaceTextureAction>::success(std::move(result));
+  const auto source_chart = transfer_chart(targets[0], faces[0], planes[0]);
+  if (!source_chart.has_value()) {
+    return fail(face_error(faces[0],
+        "Texture transfer requires an affine source mapping."));
+  }
+  const auto chart = rotate_transfer_chart(*source_chart, planes[0], planes[1]);
+  std::vector<QVec2> desired;
+  std::vector<quader_geometry::QVec2d> ideal_deltas;
+  desired.reserve(planes[1].positions.size());
+  ideal_deltas.reserve(planes[1].positions.size());
+  for (const auto position : planes[1].positions) {
+    const auto projected = chart.project(position);
+    const QVec2 uv{static_cast<float>(projected.x), static_cast<float>(projected.y)};
+    if (!finite(uv)) {
+      return fail(face_error(faces[1], "The transferred texture is non-finite."));
+    }
+    desired.push_back(uv);
+    const auto delta = position - planes[1].positions.front();
+    ideal_deltas.emplace_back(quader_geometry::dot(chart.u_gradient, delta),
+                              quader_geometry::dot(chart.v_gradient, delta));
+  }
+  if (texture_rank(desired) < texture_rank(ideal_deltas)) {
+    return fail(face_error(faces[1],
+        "The transferred texture collapses at the target's stored precision."));
+  }
+  if (auto error = set_effective_uvs(targets[1], faces[1], desired,
+                                    faces[0].face->texture_transform, true)) {
+    return fail(std::move(*error));
+  }
+  if (targets[1].candidate.has_value()) {
+    TargetWork verification;
+    verification.original = &*targets[1].candidate;
+    verification.sampling = targets[1].sampling;
+    FaceWork verified_face;
+    if (auto error = capture_face(verification, 1U, requests[1].faces.front(),
+                                  verified_face, false)) {
+      return fail(std::move(*error));
+    }
+    if (texture_rank(verified_face.effective_uvs) < texture_rank(desired) ||
+        !same_transfer_uvs(desired, verified_face.effective_uvs)) {
+      return fail(face_error(faces[1],
+          "The target cannot represent the transferred texture accurately."));
+    }
+  }
+  if (faces[1].face->material_slot != target_material_slot) {
+    quader_poly::find_face(targets[1].edit(), faces[1].face->id)->material_slot =
+        target_material_slot;
+    targets[1].modified_faces.insert(faces[1].face->id);
+    targets[1].materials_changed = true;
+  }
+  return prepare_texture_documents(std::span<TargetWork>(&targets[1], 1U), false,
+                                    "Face texture transferred.");
 }
 
 } // namespace quader::modeling

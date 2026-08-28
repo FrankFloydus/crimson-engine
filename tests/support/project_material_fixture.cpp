@@ -6,6 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "project_material_fixture.hpp"
 
+#include "editor/instances/scene_instance_service.hpp"
 #include "editor/modeling/services/modeling_session_service.hpp"
 #include "editor/session/project_session.hpp"
 
@@ -54,6 +55,46 @@ bool ProjectMaterialFixture::set_selectable(EntityId entity,
                                             bool selectable) const {
   SceneDocument *scene = active_scene(project_);
   return scene != nullptr && scene->set_selectable(entity, selectable);
+}
+
+bool ProjectMaterialFixture::bind_shared_mesh(EntityId entity, AssetId mesh) const {
+  SceneDocument *scene = active_scene(project_);
+  return scene != nullptr && scene->set_mesh(entity, {.mesh = mesh});
+}
+
+bool ProjectMaterialFixture::set_projection_failure(
+    ProjectionFailurePoint point) const {
+  OpenSceneSession *open_scene =
+      project_ != nullptr ? project_->active_scene() : nullptr;
+  if (open_scene == nullptr || open_scene->session == nullptr) {
+    return false;
+  }
+  ModelingSdkProjectionFailurePoint native = ModelingSdkProjectionFailurePoint::None;
+  switch (point) {
+  case ProjectionFailurePoint::None:
+    break;
+  case ProjectionFailurePoint::AfterSdkMutation:
+    native = ModelingSdkProjectionFailurePoint::AfterSdkMutation;
+    break;
+  case ProjectionFailurePoint::CommittedSceneNotify:
+    native = ModelingSdkProjectionFailurePoint::CommittedSceneNotify;
+    break;
+  case ProjectionFailurePoint::BeforeCommit:
+    native = ModelingSdkProjectionFailurePoint::BeforeCommit;
+    break;
+  }
+  open_scene->session->modeling().set_modeling_sdk_projection_failure_for_tests(native);
+  return true;
+}
+
+std::optional<QMat4> ProjectMaterialFixture::instance_member_world_transform(
+    EntityId member, EntityId occurrence) const {
+  OpenSceneSession *open_scene =
+      project_ != nullptr ? project_->active_scene() : nullptr;
+  return open_scene != nullptr && open_scene->session != nullptr
+             ? open_scene->session->instances().effective_member_world_transform(
+                   member, occurrence)
+             : std::nullopt;
 }
 
 ModelingSelectionExport ProjectMaterialFixture::selection() const {

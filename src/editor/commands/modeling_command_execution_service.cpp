@@ -33,6 +33,14 @@ public:
         tool_id_(std::move(tool_id)), active_material_(active_material) {}
 
 private:
+  ModelingSessionMemento capture_before_memento() override {
+    return modeling().capture_history_memento(tool_id_ == "assign_material");
+  }
+
+  ModelingSessionMemento capture_after_memento() override {
+    return modeling().capture_history_memento(tool_id_ == "assign_material");
+  }
+
   ModelingCommandResult execute_initial() override {
     return dispatcher_.execute(tool_id_, modeling(), &selection_,
                                active_material_);

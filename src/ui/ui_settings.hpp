@@ -53,6 +53,8 @@ public:
     bool layers_visible_ = ui_panel_default_visible(UIPanelId::Layers);
     bool tool_settings_visible_ =
         ui_panel_default_visible(UIPanelId::ToolSettings);
+    bool active_material_visible_ =
+        ui_panel_default_visible(UIPanelId::ActiveMaterial);
     bool navigation_gizmo_visible_ = true;
 };
 

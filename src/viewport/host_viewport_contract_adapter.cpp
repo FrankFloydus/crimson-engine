@@ -450,6 +450,23 @@ viewport_input_action_binding_catalog() {
           .action = ViewportInputActionKind::ApplyFaceMaterialToMesh,
       },
       {
+          .target_id =
+              viewport_input_action_target_id("material.transfer_face_texture"),
+          .action_id = "viewport.material.transfer_face_texture",
+          .label = "Continue Texture from Selected Face",
+          .localization_key = "keybindings.target.viewport.material."
+                              "transfer_face_texture.label",
+          .context = ViewportInputBindingContext::Viewport,
+          .shortcut = "Alt+LeftMouse",
+          .when = "viewportFocus && !textInputActive && !navigation.active && "
+                  "!modalTool.active && !activeTool.ownsViewport && "
+                  "!transformDrag.active && !operationPreview.active",
+          .selection_mode_mask =
+              viewport_selection_mode_mask(ViewportSelectionMode::Face),
+          .weight = 30,
+          .action = ViewportInputActionKind::TransferFaceTexture,
+      },
+      {
           .target_id = viewport_input_action_target_id("modal_tool.finalize"),
           .action_id = "tools.finalize",
           .label = "Finalize Tool",

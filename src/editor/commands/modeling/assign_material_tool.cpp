@@ -15,18 +15,20 @@ ModelingCommandAvailability AssignMaterialTool::custom_availability(
   const ModelingSelectionSummary summary =
       context.modeling.selection_summary();
   if (summary.mode != ModelingSelectionMode::Object &&
+      summary.mode != ModelingSelectionMode::Group &&
       summary.mode != ModelingSelectionMode::Face) {
     return ModelingCommandAvailability::unavailable(
-        "Apply Material works in object or face mode.");
+        "Apply Material works in object, group, or face mode.");
   }
-  if ((summary.mode == ModelingSelectionMode::Object &&
+  if (((summary.mode == ModelingSelectionMode::Object ||
+        summary.mode == ModelingSelectionMode::Group) &&
        summary.selected_object_count == 0u) ||
       (summary.mode == ModelingSelectionMode::Face &&
        summary.selected_face_count == 0u)) {
     return ModelingCommandAvailability::unavailable(
-        summary.mode == ModelingSelectionMode::Object
-            ? "Select one or more meshes before applying material."
-            : "Select one or more faces before applying material.");
+        summary.mode == ModelingSelectionMode::Face
+            ? "Select one or more faces before applying material."
+            : "Select one or more meshes or groups before applying material.");
   }
   return ModelingCommandAvailability::available();
 }

@@ -106,6 +106,9 @@ void mark_action_pressed(ViewportInputFrame &input,
   case ViewportInputActionKind::ApplyFaceMaterialToMesh:
     input.apply_face_material_to_mesh_pressed = true;
     break;
+  case ViewportInputActionKind::TransferFaceTexture:
+    input.transfer_face_texture_pressed = true;
+    break;
   case ViewportInputActionKind::CycleSelectionDepth:
     input.cycle_selection_depth_pressed = true;
     input.cycle_selection_depth_modifiers = {};
@@ -245,7 +248,8 @@ bool is_material_action(ViewportInputActionKind action) {
   return action == ViewportInputActionKind::SampleFaceMaterial ||
          action ==
              ViewportInputActionKind::ApplyActiveMaterialToSelection ||
-         action == ViewportInputActionKind::ApplyFaceMaterialToMesh;
+         action == ViewportInputActionKind::ApplyFaceMaterialToMesh ||
+         action == ViewportInputActionKind::TransferFaceTexture;
 }
 
 bool is_mouse_click(const QuaderInputChord &chord) {
@@ -275,6 +279,49 @@ bool is_selection_depth_action(ViewportInputActionKind action) {
   return action == ViewportInputActionKind::CycleSelectionDepth ||
          action == ViewportInputActionKind::AddSelectionDepth ||
          action == ViewportInputActionKind::RemoveSelectionDepth;
+}
+
+void reserve_face_texture_transfer_pointer(
+    QuaderEditorApi &editor, const ViewportToolState &state,
+    ViewportInputFrame &input, const QuaderInputChord &chord, bool handled) {
+  if (handled || input.keybinding_input_consumed ||
+      chord.device != QuaderInputDevice::Mouse ||
+      chord.mouse_button != QuaderMouseButton::Left ||
+      (chord.gesture != QuaderInputGesture::Press &&
+       chord.gesture != QuaderInputGesture::DoubleClick)) {
+    return;
+  }
+  // Qt substitutes DoubleClick for its second physical Press and omits a
+  // second Click on release. An explicit double binding already won above;
+  // otherwise preserve the transfer's ownership of that constituent press.
+  if (chord.gesture == QuaderInputGesture::DoubleClick) {
+    for (const QuaderInputGesture gesture : {QuaderInputGesture::Press,
+                                           QuaderInputGesture::Click}) {
+      QuaderInputChord candidate = chord;
+      candidate.gesture = gesture;
+      ViewportInputActionKind action = ViewportInputActionKind::None;
+      if (resolve_action(editor, state, input, candidate, action) &&
+          action == ViewportInputActionKind::TransferFaceTexture) {
+        input.transfer_face_texture_pointer_reserved = true;
+        input.transfer_face_texture_pressed =
+            input.transfer_face_texture_pressed ||
+            gesture == QuaderInputGesture::Press;
+        return;
+      }
+    }
+    return;
+  }
+  for (const QuaderInputGesture gesture : {QuaderInputGesture::Click,
+                                         QuaderInputGesture::DoubleClick}) {
+    QuaderInputChord candidate = chord;
+    candidate.gesture = gesture;
+    ViewportInputActionKind action = ViewportInputActionKind::None;
+    if (resolve_action(editor, state, input, candidate, action) &&
+        action == ViewportInputActionKind::TransferFaceTexture) {
+      input.transfer_face_texture_pointer_reserved = true;
+      return;
+    }
+  }
 }
 
 bool has_left_mouse_depth_double_click_binding(
@@ -440,6 +487,8 @@ void ViewportKeybindingResolver::resolve(QuaderEditorApi &editor,
   input.apply_active_material_to_selection_pressed = false;
   input.apply_active_material_delay_for_double_click = false;
   input.apply_face_material_to_mesh_pressed = false;
+  input.transfer_face_texture_pressed = false;
+  input.transfer_face_texture_pointer_reserved = false;
   input.selection_click_delay_for_double_click = false;
   input.selection_click_modifiers = {};
   input.cycle_selection_depth_pressed = false;
@@ -539,6 +588,8 @@ void ViewportKeybindingResolver::resolve(QuaderEditorApi &editor,
           input.keybinding_input_consumed = true;
         }
         if (kind == ViewportInputEdgeKind::Pressed) {
+          reserve_face_texture_transfer_pointer(editor, state, input, chord,
+                                                handled);
           record_selection_click_provenance(editor, state, input, chord,
                                             handled);
         }

@@ -73,6 +73,10 @@ struct ViewportBeforeToolInteractionResult {
   /// A resolved earlier single click can change the selection before gizmo work.
   std::optional<ViewportInteractionSelectionState> selection_after_pending_pick;
   bool gizmo_consumed = false;
+  /// Distinguishes a texture transfer's pointer claim from a transform gizmo.
+  bool transfer_face_texture_consumed = false;
+  /// Only an eligible semantic action may dispatch; cancelled releases cannot.
+  bool transfer_face_texture_requested = false;
   bool selection_click_requested = false;
   QVec2 selection_click_local = {};
   int selection_click_count = 1;

@@ -123,6 +123,8 @@ bool UISettings::is_panel_visible(UIPanelId id) const {
     return layers_visible_;
   case UIPanelId::ToolSettings:
     return tool_settings_visible_;
+  case UIPanelId::ActiveMaterial:
+    return active_material_visible_;
   case UIPanelId::Count:
     break;
   }
@@ -147,6 +149,9 @@ void UISettings::set_panel_visible(UIPanelId id, bool visible) {
     break;
   case UIPanelId::ToolSettings:
     tool_settings_visible_ = visible;
+    break;
+  case UIPanelId::ActiveMaterial:
+    active_material_visible_ = visible;
     break;
   case UIPanelId::Count:
     break;

@@ -25,6 +25,10 @@
 namespace quader {
 namespace {
 
+// The plane-cut API and implementation remain available; its viewport gesture
+// is intentionally dormant while Alt+LMB continues the selected face texture.
+constexpr bool kFacePlaneCutGestureEnabled = false;
+
 quader_editor_core::SelectionEditOperation
 selection_box_operation(QuaderSelectionEdit edit) {
   switch (edit) {
@@ -138,7 +142,7 @@ QuaderHoverRequest make_hover_request(const ViewportCameraController &camera,
               .direction = world_ray.direction,
       },
       .selected_modifier_pressed = modifiers.primary,
-      .face_plane_hover = modifiers.alt,
+      .face_plane_hover = kFacePlaneCutGestureEnabled && modifiers.alt,
       .vertex_radius =
           settings.float_value(ViewportFloatSettingId::PickVertexRadius),
       .edge_radius =
@@ -793,7 +797,8 @@ void ViewportSelectionInteraction::handle_frame(
     refresh_hover_work_after_selection(frame.input.mouse_local, false);
   }
 
-  if (!box_state_.active && can_pick && frame.input.modifiers.alt &&
+  if (kFacePlaneCutGestureEnabled && !box_state_.active && can_pick &&
+      frame.input.modifiers.alt &&
       !frame.input.modifiers.primary && !frame.input.modifiers.shift &&
       frame.right_pressed) {
     QDR_PROFILE_SCOPE("Viewport face plane cut");

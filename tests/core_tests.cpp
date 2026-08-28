@@ -1161,6 +1161,7 @@ TEST(UISettingsTests, DefaultsKeepPanelVisibilityLocaleAndNavigationGizmo) {
   EXPECT_TRUE(settings.is_panel_visible(UIPanelId::Inspector));
   EXPECT_TRUE(settings.is_panel_visible(UIPanelId::Layers));
   EXPECT_TRUE(settings.is_panel_visible(UIPanelId::ToolSettings));
+  EXPECT_TRUE(settings.is_panel_visible(UIPanelId::ActiveMaterial));
   EXPECT_FALSE(settings.is_panel_visible(UIPanelId::Console));
   EXPECT_TRUE(settings.navigation_gizmo_visible());
 }
@@ -1176,6 +1177,7 @@ TEST(UISettingsTests, RoundTripsPanelVisibilityLocaleAndNavigationGizmo) {
   settings.set_panel_visible(UIPanelId::Inspector, false);
   settings.set_panel_visible(UIPanelId::Layers, false);
   settings.set_panel_visible(UIPanelId::ToolSettings, false);
+  settings.set_panel_visible(UIPanelId::ActiveMaterial, false);
   settings.set_panel_visible(UIPanelId::Console, true);
   settings.set_navigation_gizmo_visible(false);
 
@@ -1188,6 +1190,7 @@ TEST(UISettingsTests, RoundTripsPanelVisibilityLocaleAndNavigationGizmo) {
   EXPECT_NE(saved_text.find("inspector=false"), std::string::npos);
   EXPECT_NE(saved_text.find("layers=false"), std::string::npos);
   EXPECT_NE(saved_text.find("tool_settings=false"), std::string::npos);
+  EXPECT_NE(saved_text.find("active_material=false"), std::string::npos);
   EXPECT_NE(saved_text.find("console=true"), std::string::npos);
   EXPECT_EQ(saved_text.find("Outliner="), std::string::npos);
   EXPECT_EQ(saved_text.find("Inspector="), std::string::npos);
@@ -1203,6 +1206,7 @@ TEST(UISettingsTests, RoundTripsPanelVisibilityLocaleAndNavigationGizmo) {
   EXPECT_FALSE(loaded.is_panel_visible(UIPanelId::Inspector));
   EXPECT_FALSE(loaded.is_panel_visible(UIPanelId::Layers));
   EXPECT_FALSE(loaded.is_panel_visible(UIPanelId::ToolSettings));
+  EXPECT_FALSE(loaded.is_panel_visible(UIPanelId::ActiveMaterial));
   EXPECT_TRUE(loaded.is_panel_visible(UIPanelId::Console));
   EXPECT_FALSE(loaded.navigation_gizmo_visible());
 
@@ -1230,6 +1234,8 @@ TEST(UISettingsTests, LoadsLegacyDisplayPanelKeysAndSavesStableKeys) {
   EXPECT_FALSE(loaded.is_panel_visible(UIPanelId::Inspector));
   EXPECT_FALSE(loaded.is_panel_visible(UIPanelId::Layers));
   EXPECT_FALSE(loaded.is_panel_visible(UIPanelId::ToolSettings));
+  EXPECT_TRUE(loaded.is_panel_visible(UIPanelId::ActiveMaterial))
+      << "older settings should show the newly introduced dock";
   EXPECT_TRUE(loaded.is_panel_visible(UIPanelId::Console));
 
   ASSERT_TRUE(loaded.save(path));

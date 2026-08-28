@@ -18,6 +18,7 @@
 #include "editor/history/modeling_memento_command.hpp"
 #include "editor/history/face_texture_settings_history_command.hpp"
 #include "editor/history/face_texture_action_history_command.hpp"
+#include "editor/history/face_texture_transfer_history_command.hpp"
 #include "editor/history/uv_peel_history_command.hpp"
 #include "editor/placement/snap_vertices_to_floor_history_command.hpp"
 #include "editor/instances/project_clipboard_service.hpp"
@@ -2560,6 +2561,21 @@ QuaderApiVoidResult QuaderModelingApi::apply_face_texture_action(
       std::make_unique<FaceTextureActionHistoryCommand>(session.modeling(),
                                                        std::move(native)),
       quader_face_texture_action_label(request.action));
+}
+
+QuaderApiVoidResult QuaderModelingApi::transfer_face_texture_to_face(
+    QuaderModelingObjectId object_id, QuaderElementId face_id) {
+  if (!mutations_.available()) {
+    return invalid_api_status(session_, "No scene is active.");
+  }
+  SceneSession &session = scene_session(session_);
+  if (session.native_tools().has_pending_tool()) {
+    return mutations_.modeling_content_blocked_status("transferring face textures.");
+  }
+  return mutations_.run_modeling_command(
+      std::make_unique<FaceTextureTransferHistoryCommand>(
+          session.modeling(), object_id, face_id),
+      "Transfer Face Texture");
 }
 
 bool QuaderModelingApi::face_texture_treat_as_one() const {

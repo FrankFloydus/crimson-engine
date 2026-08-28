@@ -3510,6 +3510,54 @@ public:
                                       "Edit face texture failed.");
   }
 
+  [[nodiscard]] ModelingCommandResult transfer_face_texture(
+      const ModelingFaceTextureTransferTarget &source,
+      const ModelingFaceTextureTransferTarget &target,
+      std::uint32_t target_material_slot) {
+    if (selection_mode_ != ModelingSelectionMode::Face) {
+      return failure("Texture transfer requires face selection mode.");
+    }
+    const auto source_object = sdk_object(source.modeling_object_id);
+    const auto target_object = sdk_object(target.modeling_object_id);
+    if (!source_object.has_value() || !target_object.has_value() ||
+        !source.face.valid() || !target.face.valid()) {
+      return failure("A texture transfer face is no longer live.");
+    }
+    std::vector<ObjectId> snapshot_objects{*source_object};
+    if (*target_object != *source_object) {
+      snapshot_objects.push_back(*target_object);
+    }
+    auto documents = session_.document_copies(snapshot_objects);
+    if (!documents.ok()) {
+      return failure(documents.error_message());
+    }
+    const modeling::FaceTextureTransferFace source_face{
+        .key = static_cast<std::uint64_t>(source.modeling_object_id),
+        .document = &documents.value().front(),
+        .face = source.face,
+        .world_from_local = to_sdk(source.world_from_local),
+        .sampling_from_local = to_sdk(source.sampling_from_local),
+    };
+    const modeling::FaceTextureTransferFace target_face{
+        .key = static_cast<std::uint64_t>(target.modeling_object_id),
+        .document = &documents.value().back(),
+        .face = target.face,
+        .world_from_local = to_sdk(target.world_from_local),
+        .sampling_from_local = to_sdk(target.sampling_from_local),
+    };
+    auto prepared = modeling::prepare_face_texture_transfer(
+        source_face, target_face, target_material_slot);
+    if (!prepared.ok()) {
+      return failure(prepared.error_message());
+    }
+    if (!prepared.value().changed) {
+      return {.ok = true, .changed = false};
+    }
+    const std::array<ObjectId, 1> targets{*target_object};
+    return publish_prepared_documents(targets, prepared.value().documents,
+                                      "Transfer face texture failed.");
+  }
+
   [[nodiscard]] ModelingSelectedUvPeelSnapshot selected_uv_peel_edges() const {
     ++stats_.uv_peel_summary_build_count;
     ModelingSelectedUvPeelSnapshot result;
@@ -3606,7 +3654,7 @@ public:
 
   [[nodiscard]] ModelingCommandResult assign_material_slot_to_objects(
       std::span<const int> modeling_object_ids,
-      std::uint32_t material_slot) {
+      std::uint32_t material_slot, bool preserve_scene_selection = false) {
     if (modeling_object_ids.empty()) {
       return failure("Select one or more meshes before assigning a material.");
     }
@@ -3626,7 +3674,8 @@ public:
         [material_slot](ObjectId, PolygonDocument &document) {
           return document.assign_all_face_material_slot(material_slot);
         },
-        "Assign material slot failed.", false, false, false, true);
+        "Assign material slot failed.", false, false, false, true,
+        preserve_scene_selection);
   }
 
   [[nodiscard]] ModelingCommandResult assign_material_slot_to_face(
@@ -7394,7 +7443,8 @@ private:
       bool preview_publication = false,
       bool reproject_all_objects = false,
       bool position_only_projection = false,
-      bool preserve_object_selection = false) {
+      bool preserve_object_selection = false,
+      bool preserve_scene_selection = false) {
     if (object_ids.empty()) {
       return failure("Select a modeling mesh or component first.");
     }
@@ -7609,7 +7659,9 @@ private:
     } else {
       active_preview_deleted_vertex_count_ = deleted_vertex_count;
     }
-    add_selection_to_scene();
+    if (!preserve_scene_selection) {
+      add_selection_to_scene();
+    }
     return {.ok = true,
             .changed = changed,
             .message = message.empty() ? std::string(fallback_message)
@@ -8668,6 +8720,13 @@ ModelingCommandResult ModelingSdkProjectionAdapter::apply_face_texture_action(
   return impl_->apply_face_texture_action(targets, options);
 }
 
+ModelingCommandResult ModelingSdkProjectionAdapter::transfer_face_texture(
+    const ModelingFaceTextureTransferTarget &source,
+    const ModelingFaceTextureTransferTarget &target,
+    std::uint32_t target_material_slot) {
+  return impl_->transfer_face_texture(source, target, target_material_slot);
+}
+
 ModelingSelectedUvPeelSnapshot
 ModelingSdkProjectionAdapter::selected_uv_peel_edges() const {
   return impl_->selected_uv_peel_edges();
@@ -8681,9 +8740,11 @@ ModelingCommandResult ModelingSdkProjectionAdapter::apply_uv_peel(
 
 ModelingCommandResult
 ModelingSdkProjectionAdapter::assign_material_slot_to_objects(
-    std::span<const int> modeling_object_ids, std::uint32_t material_slot) {
+    std::span<const int> modeling_object_ids, std::uint32_t material_slot,
+    bool preserve_scene_selection) {
   return impl_->assign_material_slot_to_objects(modeling_object_ids,
-                                                material_slot);
+                                                material_slot,
+                                                preserve_scene_selection);
 }
 
 ModelingCommandResult ModelingSdkProjectionAdapter::assign_material_slot_to_face(

@@ -11,6 +11,32 @@
 namespace quader {
 
 /**
+ * Tests local selectability along a hierarchy segment without excluding hidden
+ * members. An invalid exclusive ancestor tests the entire ancestor chain; an
+ * explicit ancestor can exclude hidden, unselectable instance-definition storage.
+ * Lock policy is checked separately by callers.
+ */
+[[nodiscard]] inline bool
+scene_hierarchy_segment_is_selectable_ignoring_visibility(
+    const SceneDocument &scene, EntityId entity,
+    EntityId exclusive_ancestor = kInvalidEntityId) {
+  if (!scene.exists(entity) ||
+      (exclusive_ancestor != kInvalidEntityId &&
+       !scene.exists(exclusive_ancestor))) {
+    return false;
+  }
+  EntityId current = entity;
+  while (current != kInvalidEntityId && current != exclusive_ancestor) {
+    const VisibilityComponent *visibility = scene.visibility(current);
+    if (visibility != nullptr && !visibility->selectable) {
+      return false;
+    }
+    current = scene.parent(current);
+  }
+  return current == exclusive_ancestor;
+}
+
+/**
  * Tests the hierarchy segment beginning at `entity` and ending immediately
  * before `exclusive_ancestor`. Instance-definition roots are intentionally
  * excluded because they are hidden canonical storage rather than rendered

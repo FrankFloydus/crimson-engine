@@ -833,6 +833,7 @@ add_library(quader_ui STATIC
     src/ui/inspector_panel.cpp
     src/ui/layer_panel.cpp
     src/ui/outliner_panel.cpp
+    src/ui/qt_active_material_panel.cpp
     src/ui/qt_application_theme.cpp
     src/ui/qt_command_event_filter.cpp
     src/ui/qt_color_swatch_button.cpp
@@ -1383,6 +1384,7 @@ if(QUADER_BUILD_TESTS)
         tests/layer_panel_tests.cpp
         tests/outliner_panel_tests.cpp
         tests/ui_panel_manager_tests.cpp
+        tests/qt_active_material_panel_tests.cpp
         tests/qt_auxiliary_window_state_tests.cpp
         tests/qt_application_theme_tests.cpp
         tests/qt_command_event_filter_tests.cpp

@@ -27,23 +27,27 @@ bool material_face_source_gesture_mode(ViewportSelectionMode mode) {
          mode == ViewportSelectionMode::Group;
 }
 
-bool material_interaction_blocked(
-    const ViewportInteractionFrame &frame,
-    const ViewportToolResult &tool_result,
-    const ViewportBeforeToolInteractionResult &before_tool) {
+bool material_input_blocked(const ViewportInteractionFrame &frame) {
   return !frame.input.viewport_focused || frame.input.text_input_active ||
          frame.input.navigation_active || frame.input_result.navigation_active ||
          frame.input.modal_tool_active ||
          frame.input.active_tool_owns_viewport ||
          frame.input.active_transform_drag ||
-         frame.input.operation_preview_active || before_tool.gizmo_consumed ||
+         frame.input.operation_preview_active;
+}
+
+bool material_interaction_blocked(
+    const ViewportInteractionFrame &frame,
+    const ViewportToolResult &tool_result,
+    const ViewportBeforeToolInteractionResult &before_tool) {
+  return material_input_blocked(frame) || before_tool.gizmo_consumed ||
          tool_result.handled;
 }
 
 QuaderHoverRequest material_face_hover_request(
-    const ViewportInteractionFrame &frame) {
+    const ViewportInteractionFrame &frame, QVec2 local_mouse) {
   const ViewportRay ray =
-      frame.camera.ray_from_viewport_point(frame.right_click_local);
+      frame.camera.ray_from_viewport_point(local_mouse);
   return {
       .ray = {.origin = ray.origin, .direction = ray.direction},
       .selected_modifier_pressed = false,
@@ -73,6 +77,9 @@ ViewportBeforeToolInteractionResult
 ViewportInteractionController::handle_before_active_tool(
     QuaderEditorApi &editor, const ViewportInteractionFrame &frame) {
   QDR_PROFILE_FUNCTION();
+  if (const auto transfer = reserve_face_texture_transfer(editor, frame)) {
+    return *transfer;
+  }
   ViewportInteractionFrame prepared = frame;
   const std::optional<ViewportInteractionSelectionState> resolved_selection =
       selection_.prepare_frame(editor, frame);
@@ -87,6 +94,65 @@ ViewportInteractionController::handle_before_active_tool(
       transform_gizmo_.handle_frame(editor, prepared);
   result.selection_after_pending_pick = resolved_selection;
   return result;
+}
+
+std::optional<ViewportBeforeToolInteractionResult>
+ViewportInteractionController::reserve_face_texture_transfer(
+    QuaderEditorApi &editor, const ViewportInteractionFrame &frame) {
+  if (discard_transfer_pointer_release_) {
+    if (frame.left_pressed || (!frame.left_down && !frame.left_released)) {
+      discard_transfer_pointer_release_ = false;
+    } else {
+      discard_transfer_pointer_release_ = frame.left_down;
+      return ViewportBeforeToolInteractionResult{
+          .gizmo_consumed = true, .transfer_face_texture_consumed = true};
+    }
+  }
+  if (transfer_face_texture_pointer_.has_value()) {
+    // Consume the release even if focus, scene, or mode changes. No click was
+    // started for selection or a gizmo, so none may be synthesized on release.
+    const bool source_context_matches =
+        !material_input_blocked(frame) && !frame.input_result.cancel_requested &&
+        !frame.input_result.camera_changed &&
+        frame.input_router.state().selection_mode == ViewportSelectionMode::Face &&
+        frame.selection_state.summary.selection_revision ==
+            transfer_face_texture_pointer_->selection_revision &&
+        editor.scene_documents().active_scene_id().value_or(SceneSessionId{}) ==
+            transfer_face_texture_pointer_->scene_session_id;
+    if (!frame.left_down || !source_context_matches) {
+      discard_transfer_pointer_release_ = frame.left_down;
+      transfer_face_texture_pointer_.reset();
+    }
+    return ViewportBeforeToolInteractionResult{
+        .gizmo_consumed = true,
+        .transfer_face_texture_consumed = true,
+        .transfer_face_texture_requested =
+            source_context_matches && frame.input.transfer_face_texture_pressed};
+  }
+  if ((!frame.input.transfer_face_texture_pressed &&
+       !frame.input.transfer_face_texture_pointer_reserved) ||
+      frame.input_router.state().selection_mode != ViewportSelectionMode::Face ||
+      material_input_blocked(frame) || frame.input_result.cancel_requested ||
+      frame.input_result.camera_changed ||
+      transform_gizmo_.pointer_interaction_active() ||
+      selection_.pointer_interaction_active() || native_tools_.dragging()) {
+    return std::nullopt;
+  }
+
+  // Reserve before gizmo picking and keep the source selection even when the
+  // target misses or the modeling owner rejects the selected source faces.
+  selection_.cancel_pending_click();
+  if (frame.left_down) {
+    transfer_face_texture_pointer_ = FaceTextureTransferPointer{
+        .scene_session_id =
+            editor.scene_documents().active_scene_id().value_or(SceneSessionId{}),
+        .selection_revision = frame.selection_state.summary.selection_revision,
+    };
+  }
+  return ViewportBeforeToolInteractionResult{
+      .gizmo_consumed = true,
+      .transfer_face_texture_consumed = true,
+      .transfer_face_texture_requested = frame.input.transfer_face_texture_pressed};
 }
 
 void ViewportInteractionController::handle_after_active_tool(
@@ -110,6 +176,36 @@ void ViewportInteractionController::handle_material_interactions(
     QuaderEditorApi &editor, const ViewportInteractionFrame &frame,
     const ViewportToolResult &tool_result,
     const ViewportBeforeToolInteractionResult &before_tool) {
+  if (frame.input.transfer_face_texture_pressed) {
+    pending_apply_active_material_.reset();
+    if (!before_tool.transfer_face_texture_requested ||
+        material_input_blocked(frame) || frame.input_result.cancel_requested ||
+        frame.input_result.camera_changed || tool_result.handled ||
+        !frame.input.viewport_hovered ||
+        frame.input_router.state().selection_mode != ViewportSelectionMode::Face) {
+      return;
+    }
+    const QVec2 local_mouse = frame.left_pressed ? frame.left_click_local
+                                                : frame.input.mouse_local;
+    // Routing a held gesture to its original pane can retain logical hover;
+    // a release outside that pane still must not edit through an outside ray.
+    if (!(local_mouse.x >= 0.0f && local_mouse.y >= 0.0f &&
+          local_mouse.x < frame.input.viewport_size.x &&
+          local_mouse.y < frame.input.viewport_size.y)) {
+      return;
+    }
+    if (const std::optional<QuaderHoverTarget> target =
+            pick_material_face_target(editor, frame, local_mouse)) {
+      ++material_interaction_work_stats_.transfer_face_texture_request_count;
+      log_material_interaction_failure(
+          "Continue texture from selected face",
+          editor.modeling().transfer_face_texture_to_face(
+              static_cast<QuaderModelingObjectId>(target->object_id),
+              static_cast<QuaderElementId>(target->face_id)));
+    }
+    return;
+  }
+
   const bool sample_face = frame.input.sample_face_material_pressed;
   const bool apply_target =
       frame.input.apply_active_material_to_selection_pressed &&
@@ -264,6 +360,9 @@ void ViewportInteractionController::handle_material_interactions(
 
 void ViewportInteractionController::cancel_pending_material_interaction() {
   pending_apply_active_material_.reset();
+  discard_transfer_pointer_release_ = discard_transfer_pointer_release_ ||
+                                      transfer_face_texture_pointer_.has_value();
+  transfer_face_texture_pointer_.reset();
 }
 
 void ViewportInteractionController::cancel_pending_selection_click() {
@@ -293,9 +392,16 @@ void ViewportInteractionController::reset(QuaderEditorApi* editor) {
 std::optional<QuaderHoverTarget>
 ViewportInteractionController::pick_material_face_target(
     QuaderEditorApi &editor, const ViewportInteractionFrame &frame) {
+  return pick_material_face_target(editor, frame, frame.right_click_local);
+}
+
+std::optional<QuaderHoverTarget>
+ViewportInteractionController::pick_material_face_target(
+    QuaderEditorApi &editor, const ViewportInteractionFrame &frame,
+    QVec2 local_mouse) {
   ++material_interaction_work_stats_.face_pick_count;
   const QuaderHoverSummary hover =
-      editor.selection().preview_hover(material_face_hover_request(frame));
+      editor.selection().preview_hover(material_face_hover_request(frame, local_mouse));
   if (hover.target.kind != QuaderActiveSelectionKind::Face ||
       hover.target.object_id <= 0 || hover.target.face_id < 0) {
     return std::nullopt;

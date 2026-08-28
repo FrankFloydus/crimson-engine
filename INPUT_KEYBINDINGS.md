@@ -225,7 +225,12 @@ Current compiled defaults added with the scoped editor are:
 - `T` toggles transform tools between global and local orientation while the
   viewport is focused and no navigation, modal tool, transform drag, or
   operation preview owns the interaction. `Shift+T` remains Apply Active
-  Material.
+  Material (`edit.apply_material`) in Mesh, Face, and Group modes. Mesh mode applies
+  it to every face of all selected meshes; Group mode includes all mesh descendants
+  of the selected groups, including nested groups. Face mode still applies it only to
+  selected faces. The entire selection is one undoable action and remains selected.
+  The public binding uses the custom `assign_material` owner, not the Face-only
+  contextual host action. Existing custom mappings and unassignments remain intact.
 - `H` hides selected visible objects/groups and `Alt+H` unhides hidden objects while an object/group
   selection scope is active. Quader does not yet own persistent component-hide state, so these do
   not pretend to hide individual vertices, edges, or faces.
@@ -276,6 +281,24 @@ Grid preset rows no longer own any `F1`-`F10` shortcut. Redo has one compiled ma
 Texture Lock (`viewport.toggle_texture_lock`) and Texture Lock Scale
 (`viewport.toggle_texture_lock_scale`) are separate bindable viewport commands. Both are
 deliberately unassigned by default; the toolbar buttons do not install private Qt shortcuts.
+
+`Alt+LeftMouse` (press) invokes `viewport.material.transfer_face_texture`, shown as
+Continue Texture from Selected Face, only in Face mode. Exactly one selected face supplies
+the material and texture placement; the clicked face can belong to another visible, editable
+mesh. The portable owner rotates the effective UV chart onto the target plane while preserving
+texture continuity along the planes' intersection, matching TrenchBroom's Valve 220 rotation
+transfer. The selected source remains selected, and each changed click is one undo item.
+The default is a press action, not drag painting; held/release frames must not start selection or a
+transform gizmo. A rebound left click or double-click also reserves its constituent press, so
+selection cannot replace the source before transfer fires. A lone click in a rebound double-click
+mapping leaves selection unchanged. Focus, text input, navigation, modal tools, transform drags, and operation
+previews use the same exclusions as other material gestures. Rebinding and unassignment go
+through the canonical action catalog; no private Alt/LMB check may bypass it.
+
+Alt-hover face-plane slicing and its Alt+RMB viewport gesture are temporarily inactive.
+Their modeling API, history, cut implementation, and explicit face-plane query remain available;
+the latter is also used for read-only material picking. Edge-mode Alt+click loop selection is
+unchanged.
 
 The 25 Edit Texture actions are independent bindable commands in `viewport.selection.face`.
 All deliberately have no default mapping; their IDs use the `modeling.texture.` prefix with

@@ -121,6 +121,8 @@ public:
   set_face_texture_setting(const ModelingFaceTextureEdit &edit);
   ModelingCommandResult
   apply_face_texture_action(const ModelingFaceTextureActionRequest &request);
+  ModelingCommandResult transfer_face_texture_to_face(int modeling_object_id,
+                                                      int face_id);
   [[nodiscard]] bool face_texture_treat_as_one() const;
   ModelingCommandResult set_face_texture_treat_as_one(bool enabled);
   [[nodiscard]] std::uint64_t uv_peel_settings_revision() const;
@@ -171,7 +173,10 @@ public:
       ModelingSdkProjectionFailurePoint point);
   [[nodiscard]] ModelingSdkProjectionStats
   modeling_sdk_projection_stats_for_tests() const;
-  [[nodiscard]] ModelingSessionMemento capture_history_memento() const;
+  /// Material batches opt in to retaining exact scene-owned Group selection.
+  /// Other modeling history continues to capture only the SDK projection.
+  [[nodiscard]] ModelingSessionMemento capture_history_memento(
+      bool preserve_group_selection = false) const;
   [[nodiscard]] ModelingSessionMemento capture_history_memento_without_objects(
       const ModelingSessionMemento &selection_baseline,
       std::span<const int> excluded_object_ids) const;

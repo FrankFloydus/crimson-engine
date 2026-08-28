@@ -220,7 +220,8 @@ bool is_material_viewport_action(
   return action.action_id == "viewport.material.sample_face" ||
          action.action_id ==
              "viewport.material.apply_active_to_selection" ||
-         action.action_id == "viewport.material.apply_face_to_mesh";
+         action.action_id == "viewport.material.apply_face_to_mesh" ||
+         action.action_id == "viewport.material.transfer_face_texture";
 }
 
 bool is_reserved_bare_right_mouse_material_chord(
@@ -466,6 +467,9 @@ std::string explicit_keybinding_label(std::string_view command_id,
   if (is(quader_command::kUngroupSelection)) {
     return "Ungroup Selection";
   }
+  if (is(quader_command::kApplyMaterial)) {
+    return "Apply Active Material to Selection";
+  }
   if (is(quader_command::kModelingCopyPivotFromActive)) {
     return "Copy Pivot from Active Object";
   }
@@ -607,7 +611,7 @@ std::string command_keybinding_localization_key(std::string_view command_id) {
     return stable();
   }
   if (command_id == quader_command::kApplyMaterial.string()) {
-    return modeling_command_tool_localization_key("apply_active_material");
+    return stable();
   }
 
   if (command_id == quader_command::kProjectNew.string()) {
@@ -1975,6 +1979,12 @@ void QuaderCommandsApi::Impl::register_commands() {
   register_modeling_tool_public_command(quader_command::kApplyMaterial,
                                         "assign_material",
                                         "Apply Material");
+  // The contextual host action is Face-only; the public assign-material tool
+  // also normalizes every face of selected meshes and group descendants.
+  keybinding_target_catalog_.set_selection_modes(
+      quader_command::kApplyMaterial.string(),
+      kSelectionModeObject | kSelectionModeFace | kSelectionModeGroup,
+      unobstructed_viewport_keybinding_context());
   register_command(
       quader_command::kModelingSnapMeshesToFloor,
       "Snap Meshes to Floor",

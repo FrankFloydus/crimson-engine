@@ -41,6 +41,15 @@ struct ModelingFaceTextureActionTarget final {
   std::vector<modeling::FaceTextureActionFace> faces;
 };
 
+/// A validated face occurrence and its host-owned mapping frames. The portable
+/// SDK resolves the UV chart and prepares the replacement without scene access.
+struct ModelingFaceTextureTransferTarget final {
+  int modeling_object_id = -1;
+  modeling::FaceId face;
+  QMat4 world_from_local;
+  QMat4 sampling_from_local;
+};
+
 /// One canonical fallback label for native history and public command catalogs.
 [[nodiscard]] inline std::string_view
 modeling_face_texture_action_label(ModelingFaceTextureAction action) {
