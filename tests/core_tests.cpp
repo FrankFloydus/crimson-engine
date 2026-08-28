@@ -6074,6 +6074,156 @@ TEST(ViewportCameraTests, ClipPlanesSanitizeAndControlProjectedVisibility) {
   EXPECT_FLOAT_EQ(camera.state().far_plane, 0.002f);
 }
 
+TEST(ViewportCameraTests, ClipsWorldSegmentsToVisiblePixelsInBothProjections) {
+  /// Expected endpoints for a segment laid on the camera's target plane.
+  struct SegmentCase {
+    QVec2 start;
+    QVec2 end;
+    QVec2 visible_start;
+    QVec2 visible_end;
+  };
+  const std::array cases{
+      SegmentCase{{-1600.0f, 300.0f}, {600.0f, 300.0f},
+                  {0.0f, 300.0f}, {600.0f, 300.0f}},
+      SegmentCase{{400.0f, -1500.0f}, {400.0f, 450.0f},
+                  {400.0f, 0.0f}, {400.0f, 450.0f}},
+      SegmentCase{{-800.0f, -600.0f}, {1600.0f, 1200.0f},
+                  {0.0f, 0.0f}, {800.0f, 600.0f}},
+      SegmentCase{{200.0f, 120.0f}, {600.0f, 480.0f},
+                  {200.0f, 120.0f}, {600.0f, 480.0f}},
+  };
+  for (const bool perspective : {false, true}) {
+    SCOPED_TRACE(perspective);
+    ViewportCameraController camera;
+    camera.focus_origin(64.0f);
+    camera.view_axis(ViewportViewAxis::Z, 1);
+    camera.set_viewport_size(800.0f, 600.0f);
+    if (perspective) {
+      camera.unlock_orthographic_view();
+    }
+    const ViewportCameraPose pose = camera.pose();
+    const QVec3 forward = normalize(pose.target - pose.eye);
+    const auto world_point = [&](QVec2 screen) {
+      const ViewportRay ray = camera.ray_from_viewport_point(screen);
+      const float distance = dot(pose.target - ray.origin, forward) /
+                             dot(ray.direction, forward);
+      return ray.origin + ray.direction * distance;
+    };
+    for (const SegmentCase &segment : cases) {
+      SCOPED_TRACE(segment.start.x);
+      SCOPED_TRACE(segment.start.y);
+      for (const bool reverse : {false, true}) {
+        SCOPED_TRACE(reverse);
+        const QVec2 expected_start =
+            reverse ? segment.visible_end : segment.visible_start;
+        const QVec2 expected_end =
+            reverse ? segment.visible_start : segment.visible_end;
+        const auto clipped = camera.project_visible_world_segment(
+            world_point(reverse ? segment.end : segment.start),
+            world_point(reverse ? segment.start : segment.end));
+        ASSERT_TRUE(clipped.has_value());
+        EXPECT_NEAR(clipped->start.x, expected_start.x, 0.01f);
+        EXPECT_NEAR(clipped->start.y, expected_start.y, 0.01f);
+        EXPECT_NEAR(clipped->end.x, expected_end.x, 0.01f);
+        EXPECT_NEAR(clipped->end.y, expected_end.y, 0.01f);
+      }
+    }
+  }
+}
+
+TEST(ViewportCameraTests, ClipsBothDepthPlanesBeforeProjectingWorldSegments) {
+  for (const bool perspective : {false, true}) {
+    SCOPED_TRACE(perspective);
+    ViewportCameraController camera;
+    camera.focus_origin(64.0f);
+    camera.view_axis(ViewportViewAxis::Z, 1);
+    camera.set_viewport_size(800.0f, 600.0f);
+    camera.set_clip_planes(1.0f, 9.0f);
+    if (perspective) {
+      camera.unlock_orthographic_view();
+    }
+    const ViewportCameraBasis basis = ViewportCameraAdapter::basis(camera);
+    const auto world_point = [&](float depth, float horizontal) {
+      return basis.eye + basis.forward * depth + basis.right * horizontal;
+    };
+    const QVec3 behind = world_point(-2.0f, -2.0f);
+    const QVec3 beyond_far = world_point(14.0f, 6.0f);
+    const QVec2 expected_near =
+        camera.project_world_point(world_point(1.0f, -0.5f)).position;
+    const QVec2 expected_far =
+        camera.project_world_point(world_point(9.0f, 3.5f)).position;
+    for (const bool reverse : {false, true}) {
+      const auto clipped = camera.project_visible_world_segment(
+          reverse ? beyond_far : behind, reverse ? behind : beyond_far);
+      ASSERT_TRUE(clipped.has_value());
+      const QVec2 expected_start = reverse ? expected_far : expected_near;
+      const QVec2 expected_end = reverse ? expected_near : expected_far;
+      EXPECT_NEAR(clipped->start.x, expected_start.x, 0.01f);
+      EXPECT_NEAR(clipped->start.y, expected_start.y, 0.01f);
+      EXPECT_NEAR(clipped->end.x, expected_end.x, 0.01f);
+      EXPECT_NEAR(clipped->end.y, expected_end.y, 0.01f);
+    }
+  }
+}
+
+TEST(ViewportCameraTests, NearClippedSegmentsRemainVisibleFarFromWorldOrigin) {
+  ViewportCameraController camera;
+  ASSERT_TRUE(camera.restore_perspective_pose({
+      .eye = {100000.0f, 0.0f, 0.0f},
+      .target = {99999.0f, 0.0f, 0.0f},
+      .up = {0.0f, 1.0f, 0.0f},
+  }));
+  camera.set_viewport_size(800.0f, 600.0f);
+  camera.set_clip_planes(0.001f, 10.0f);
+  const QVec3 end{99999.0f, 0.1f, 0.1f};
+  const ViewportScreenPoint endpoint = camera.project_world_point(end);
+  ASSERT_TRUE(endpoint.visible);
+  const auto clipped = camera.project_visible_world_segment(
+      {100001.0f, 0.1f, -0.1f}, end);
+  ASSERT_TRUE(clipped.has_value());
+  EXPECT_NEAR(clipped->start.x, endpoint.position.x, 0.01f);
+  EXPECT_NEAR(clipped->start.y, 0.0f, 0.01f);
+  EXPECT_NEAR(clipped->end.x, endpoint.position.x, 0.01f);
+  EXPECT_NEAR(clipped->end.y, endpoint.position.y, 0.01f);
+}
+
+TEST(ViewportCameraTests, RejectsExcludedSegmentsButKeepsViewAlignedEdges) {
+  for (const bool perspective : {false, true}) {
+    SCOPED_TRACE(perspective);
+    ViewportCameraController camera;
+    camera.focus_origin(64.0f);
+    camera.view_axis(ViewportViewAxis::Z, 1);
+    camera.set_viewport_size(800.0f, 600.0f);
+    camera.set_clip_planes(1.0f, 9.0f);
+    if (perspective) {
+      camera.unlock_orthographic_view();
+    }
+    const ViewportCameraBasis basis = ViewportCameraAdapter::basis(camera);
+    const auto point_at_depth = [&](float depth) {
+      return basis.eye + basis.forward * depth;
+    };
+    EXPECT_FALSE(camera.project_visible_world_segment(
+        point_at_depth(-2.0f), point_at_depth(0.5f)));
+    EXPECT_FALSE(camera.project_visible_world_segment(
+        point_at_depth(10.0f), point_at_depth(12.0f)));
+    const QVec3 offscreen = point_at_depth(5.0f) + basis.right * 2000.0f;
+    EXPECT_FALSE(camera.project_visible_world_segment(
+        offscreen - basis.up, offscreen + basis.up));
+    for (const float invalid : {std::numeric_limits<float>::quiet_NaN(),
+                                std::numeric_limits<float>::infinity()}) {
+      EXPECT_FALSE(camera.project_visible_world_segment(
+          point_at_depth(5.0f), {invalid, 0.0f, 0.0f}));
+    }
+    const auto aligned = camera.project_visible_world_segment(
+        point_at_depth(2.0f), point_at_depth(8.0f));
+    ASSERT_TRUE(aligned.has_value());
+    EXPECT_NEAR(aligned->start.x, 400.0f, 0.01f);
+    EXPECT_NEAR(aligned->start.y, 300.0f, 0.01f);
+    EXPECT_NEAR(aligned->end.x, 400.0f, 0.01f);
+    EXPECT_NEAR(aligned->end.y, 300.0f, 0.01f);
+  }
+}
+
 TEST(ViewportCameraTests, FocusBoundsFramesDocumentCenter) {
   ViewportCameraController camera;
 

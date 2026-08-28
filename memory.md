@@ -174,11 +174,31 @@ Both canonical Debug/Profile and Release app builds succeed.
   roles intact, include the toggle in the style signature, and restore fills from fresh semantic
   frames when it is enabled again.
 - `QtViewportEdgeLengthHud` presents the hovered world-space edge length in map units at the
-  projected midpoint. Borrow the existing volatile overlay record and reuse its signature; gate
-  scans, formatting, projection, and Qt setters on changed state. Per-pane native labels account
+  midpoint of the visible screen segment, keeping the entire label inside its pane. Never hide
+  the number just because the full edge's geometric midpoint is offscreen, and never measure only
+  the clipped portion. `ViewportCameraController::project_visible_world_segment` clips near/far
+  depth before canonical perspective/orthographic projection, then clips the screen rectangle.
+  Interpolate in eye-relative coordinates so a distant camera cannot round a clipped near-plane
+  point back onto its eye. Fully excluded segments still hide the label. Borrow the existing
+  volatile overlay record and reuse its signature; gate scans, formatting, projection, and Qt
+  setters on changed state. Per-pane native labels account
   for render/logical pixel ratios and disappear outside ordinary Edge hover. The platform-owned
   `WM_NCHITTEST` response must be `HTTRANSPARENT`: Qt's transparent-mouse widget flag alone does
   not pass input through a native label to its sibling Filament `QWindow`.
+
+Visible-label follow-up verification: six HUD cases reproduce the offscreen-midpoint failure
+before the presentation change and pass afterward. All 43 executable camera/HUD checks and 66
+programmatic guardrails pass; the native-HWND check skips under the minimal Qt backend. Coverage
+includes both projections, reversed endpoints, both endpoints outside the screen, near/far
+crossings, distant camera origins, full length preservation, logical pixel conversion, pane
+containment, camera pan/zoom/resize, and stable-frame presentation gates. The affected guardrails
+pass 159 of 160 tests, retaining the known instruction-routing failure; its planned native filter
+passes 780 of 786, with the existing five minimal-Qt failures and one native-HWND skip. The full
+gate passes 1552 native tests (10 existing failures, four skips), 381 guardrails (seven existing
+failures), and modeling-domain/SDK consumer/parity entries. Its 17 unique failing names exactly
+match the preceding click-delay gate; the SDK-only wrapper repeats those same seven guardrails.
+Logs and the comparison are under `build/vs2026/edge-label-visible-*`. No command baseline or
+version was changed, and no editor or visual session was launched.
 
 Click-delay follow-up verification: 334 native API/input/controller/Qt/command tests, 119 source
 guardrails, and 35 runtime picking tests pass. Native event batches assert unchanged selection and

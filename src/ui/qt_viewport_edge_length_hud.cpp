@@ -165,21 +165,22 @@ void QtViewportEdgeLengthHud::present(
   logical_viewport_bounds_ = logical_viewport_bounds;
   view_valid_ = true;
 
-  const QVec3 midpoint =
-      hovered_edge_->start * 0.5f + hovered_edge_->end * 0.5f;
-  const ViewportScreenPoint projected = camera.project_world_point(midpoint);
+  const std::optional<ViewportScreenSegment> visible_segment =
+      camera.project_visible_world_segment(hovered_edge_->start,
+                                            hovered_edge_->end);
   const QVec2 render_size = camera.viewport_size();
-  if (!projected.visible || !std::isfinite(projected.position.x) ||
-      !std::isfinite(projected.position.y) || render_size.x <= 0.0f ||
-      render_size.y <= 0.0f || projected.position.x < 0.0f ||
-      projected.position.y < 0.0f || projected.position.x >= render_size.x ||
-      projected.position.y >= render_size.y ||
+  if (!visible_segment.has_value() || render_size.x <= 0.0f ||
+      render_size.y <= 0.0f ||
       logical_viewport_bounds.isEmpty()) {
     if (!label_->isHidden()) {
       label_->hide();
     }
     return;
   }
+  // Keep the label on the part of the edge the user can see, even when its
+  // geometric midpoint is offscreen. The number still measures the full edge.
+  const QVec2 midpoint =
+      visible_segment->start * 0.5f + visible_segment->end * 0.5f;
 
   if (label_->text() != length_text_) {
     label_->setText(length_text_);
@@ -196,10 +197,10 @@ void QtViewportEdgeLengthHud::present(
   // is logical. Independent axis ratios also cover rounded fractional DPI.
   const QPoint center{
       logical_viewport_bounds.x() +
-          qRound(projected.position.x * logical_viewport_bounds.width() /
+          qRound(midpoint.x * logical_viewport_bounds.width() /
                  render_size.x),
       logical_viewport_bounds.y() +
-          qRound(projected.position.y * logical_viewport_bounds.height() /
+          qRound(midpoint.y * logical_viewport_bounds.height() /
                  render_size.y)};
   const QRect geometry{
       std::clamp(center.x() - (size.width() - 1) / 2, logical_viewport_bounds.x(),

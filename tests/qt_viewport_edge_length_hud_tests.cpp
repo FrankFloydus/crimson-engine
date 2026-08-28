@@ -124,6 +124,31 @@ protected:
         camera_, parent_->rect(), enabled);
   }
 
+  quader::QVec3 point_at_screen(quader::QVec2 screen, float depth = 64.0f) const {
+    const quader::ViewportCameraPose pose = camera_.pose();
+    const quader::QVec3 forward = quader::normalize(pose.target - pose.eye);
+    const quader::ViewportRay ray = camera_.ray_from_viewport_point(screen);
+    return ray.origin +
+           ray.direction *
+               ((depth - quader::dot(ray.origin - pose.eye, forward)) /
+                quader::dot(ray.direction, forward));
+  }
+
+  void expect_label_at(quader::QVec2 render_anchor,
+                       const QRect &logical_bounds) const {
+    ASSERT_FALSE(label_->isHidden());
+    EXPECT_TRUE(logical_bounds.contains(label_->geometry()));
+    const quader::QVec2 render_size = camera_.viewport_size();
+    EXPECT_NEAR(label_->geometry().center().x(),
+                logical_bounds.x() +
+                    render_anchor.x * logical_bounds.width() / render_size.x,
+                1.0f);
+    EXPECT_NEAR(label_->geometry().center().y(),
+                logical_bounds.y() +
+                    render_anchor.y * logical_bounds.height() / render_size.y,
+                1.0f);
+  }
+
   int argc_ = 1;
   char application_name_[33] = "quader-edge-length-hud-tests";
   char *argv_[2] = {application_name_, nullptr};
@@ -287,6 +312,120 @@ TEST_F(QtViewportEdgeLengthHudTests,
 }
 
 TEST_F(QtViewportEdgeLengthHudTests,
+       KeepsFullLengthOnVisibleSegmentWhenWorldMidpointIsOffscreen) {
+  const QRect logical_bounds{17, 29, 351, 197};
+  for (const bool perspective : {false, true}) {
+    SCOPED_TRACE(perspective ? "perspective" : "orthographic");
+    if (perspective) {
+      camera_.unlock_orthographic_view();
+    }
+    const quader::QVec3 start = point_at_screen({200.0f, 300.0f});
+    const quader::QVec3 end = point_at_screen({2200.0f, 300.0f});
+    const quader::ViewportOverlayFrame frame = hover_edge_frame(start, end);
+    ASSERT_GT(camera_.project_world_point((start + end) * 0.5f).position.x,
+              camera_.viewport_size().x);
+
+    hud_->present(frame,
+                  quader::RenderSignatureBuilder::overlay_frame_signature(frame),
+                  camera_, logical_bounds, true);
+
+    // The visible interval is [200, 800], irrespective of the edge's full length.
+    expect_label_at({500.0f, 300.0f}, logical_bounds);
+    EXPECT_NEAR(label_->text().toDouble(),
+                quader::length(end - start) *
+                    quader::viewport_host_defaults().map_units_per_world_unit,
+                0.1);
+  }
+}
+
+TEST_F(QtViewportEdgeLengthHudTests,
+       KeepsLabelOnCrossingSegmentWithBothEndpointsOffscreen) {
+  for (const bool perspective : {false, true}) {
+    SCOPED_TRACE(perspective ? "perspective" : "orthographic");
+    if (perspective) {
+      camera_.unlock_orthographic_view();
+    }
+    // Both endpoints and the world midpoint are outside the image. The visible
+    // diagonal runs from (0, 100) to (800, 500), through its center.
+    present(hover_edge_frame(point_at_screen({-400.0f, -100.0f}),
+                            point_at_screen({2800.0f, 1500.0f})));
+    expect_label_at({400.0f, 300.0f}, parent_->rect());
+  }
+}
+
+TEST_F(QtViewportEdgeLengthHudTests,
+       ClampsFullLabelInsidePaneForVisibleBorderSliver) {
+  const QRect logical_bounds{17, 29, 351, 197};
+  const quader::ViewportOverlayFrame frame =
+      hover_edge_frame(point_at_screen({-400.0f, 4.0f}),
+                       point_at_screen({8.0f, 4.0f}));
+  hud_->present(frame,
+                quader::RenderSignatureBuilder::overlay_frame_signature(frame),
+                camera_, logical_bounds, true);
+
+  ASSERT_FALSE(label_->isHidden());
+  EXPECT_TRUE(logical_bounds.contains(label_->geometry()));
+  EXPECT_LT(label_->geometry().center().x(),
+            logical_bounds.left() + label_->width());
+  EXPECT_LT(label_->geometry().center().y(),
+            logical_bounds.top() + label_->height());
+}
+
+TEST_F(QtViewportEdgeLengthHudTests,
+       ClipsPerspectiveDepthBeforeChoosingVisibleScreenMidpoint) {
+  camera_.unlock_orthographic_view();
+  camera_.set_clip_planes(1.0f, 100.0f);
+
+  const quader::QVec3 front = point_at_screen({200.0f, 300.0f}, 10.0f);
+  const quader::QVec3 behind = point_at_screen({600.0f, 300.0f}, -30.0f);
+  ASSERT_FALSE(camera_.project_world_point((front + behind) * 0.5f).visible);
+  present(hover_edge_frame(front, behind));
+  // This edge reaches the left screen boundary before entering the near plane.
+  expect_label_at({100.0f, 300.0f}, parent_->rect());
+
+  const quader::QVec3 near_end = point_at_screen({200.0f, 300.0f}, 25.0f);
+  const quader::QVec3 far_end = point_at_screen({600.0f, 300.0f}, 225.0f);
+  ASSERT_FALSE(camera_.project_world_point((near_end + far_end) * 0.5f).visible);
+  present(hover_edge_frame(near_end, far_end));
+  // At depth 100 the far-clipped endpoint projects to x=537.5, not x=600.
+  expect_label_at({368.75f, 300.0f}, parent_->rect());
+}
+
+TEST_F(QtViewportEdgeLengthHudTests,
+       ReanchorsClippedLabelOnCameraPanZoomAndPaneResize) {
+  const quader::ViewportOverlayFrame frame =
+      hover_edge_frame(point_at_screen({200.0f, 300.0f}),
+                       point_at_screen({2200.0f, 300.0f}));
+  const std::uint64_t signature =
+      quader::RenderSignatureBuilder::overlay_frame_signature(frame);
+  const auto expect_follows_visible_edge = [&](const QRect &logical_bounds) {
+    const quader::ViewportScreenPoint start =
+        camera_.project_world_point(frame.lines.front().start);
+    const quader::ViewportScreenPoint end =
+        camera_.project_world_point(frame.lines.front().end);
+    ASSERT_GT(start.position.x, 0.0f);
+    ASSERT_LT(start.position.x, camera_.viewport_size().x);
+    ASSERT_GT(end.position.x, camera_.viewport_size().x);
+    hud_->present(frame, signature, camera_, logical_bounds, true);
+    expect_label_at({(start.position.x + camera_.viewport_size().x) * 0.5f,
+                     start.position.y},
+                    logical_bounds);
+  };
+
+  expect_follows_visible_edge(parent_->rect());
+  const QString full_length = label_->text();
+  camera_.begin_drag({400.0f, 300.0f}, quader::ViewportDragMode::Pan);
+  camera_.update_drag({440.0f, 330.0f});
+  camera_.end_drag();
+  expect_follows_visible_edge(parent_->rect());
+  camera_.scroll(1.0f);
+  expect_follows_visible_edge(parent_->rect());
+  camera_.set_viewport_size(987.0f, 743.0f);
+  expect_follows_visible_edge({11, 17, 319, 203});
+  EXPECT_EQ(label_->text(), full_length);
+}
+
+TEST_F(QtViewportEdgeLengthHudTests,
        HidesOffscreenClippedAndInvalidEdgesWithoutStaleText) {
   present(hover_edge_frame({-1.0f, 0.0f, 0.0f}, {1.0f, 0.0f, 0.0f}));
   ASSERT_FALSE(label_->isHidden());
@@ -320,7 +459,8 @@ TEST_F(QtViewportEdgeLengthHudTests,
   EdgeHudWidgetEventCounter events;
   label_->installEventFilter(&events);
   quader::ViewportOverlayFrame frame =
-      hover_edge_frame({-1.0f, 0.0f, 0.0f}, {1.0f, 0.0f, 0.0f});
+      hover_edge_frame(point_at_screen({200.0f, 300.0f}),
+                       point_at_screen({2200.0f, 300.0f}));
   present(frame);
   QCoreApplication::processEvents();
   const EdgeHudWidgetEventCounter::Counts initial = events.counts();

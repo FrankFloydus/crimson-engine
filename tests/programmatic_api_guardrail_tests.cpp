@@ -1485,7 +1485,8 @@ TEST(ProgrammaticApiGuardrailTests,
       presentation.find("if (!same_edge_geometry(hovered_edge_, edge))");
   const auto formatting = presentation.find("edge_length_text(*edge)");
   const auto view_gate = presentation.find("if (view_valid_");
-  const auto projection = presentation.find("camera.project_world_point(");
+  const auto projection =
+      presentation.find("camera.project_visible_world_segment(");
   const auto text_setter = presentation.find("label_->setText(");
   ASSERT_NE(signature_gate, std::string::npos);
   ASSERT_NE(scan, std::string::npos);

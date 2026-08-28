@@ -97,6 +97,12 @@ struct ViewportScreenPoint {
     bool visible = false;
 };
 
+/// Visible segment endpoints in render pixels, with the viewport's top-left as origin.
+struct ViewportScreenSegment {
+    QVec2 start;
+    QVec2 end;
+};
+
 /**
  * Stores renderer- and scene-neutral bounds used by camera framing decisions.
  */
@@ -154,6 +160,9 @@ public:
     ViewportCameraPose pose() const;
     ViewportRay ray_from_viewport_point(QVec2 local_mouse) const;
     ViewportScreenPoint project_world_point(QVec3 world_point) const;
+    /// Clips to the camera depth range and viewport; returns no value if fully outside.
+    std::optional<ViewportScreenSegment>
+    project_visible_world_segment(QVec3 start, QVec3 end) const;
     bool is_dragging() const { return drag_mode_ != ViewportDragMode::None; }
     bool orthographic_view_locked() const { return orthographic_view_locked_; }
 
