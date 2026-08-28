@@ -422,12 +422,25 @@ void append_scene_wireframe_overlay(ViewportOverlayFrame &frame,
                       : ViewportOverlayLayer::WireframeXray;
     constexpr std::uint8_t kWireframeAlpha = static_cast<std::uint8_t>(
         (kOverlayWireframeXrayColor >> 24u) & 0xffu);
-    const std::uint32_t color =
+    std::uint32_t color =
         mesh.selected ? snapshot.style.selection_wire_color
                       : rgba8(normalized_to_byte(mesh.wireframe_tint.x),
                               normalized_to_byte(mesh.wireframe_tint.y),
                               normalized_to_byte(mesh.wireframe_tint.z),
                               kWireframeAlpha);
+    if (is_instance_edit_context(snapshot.instance_edit_scope,
+                                  mesh.occurrence, mesh.selected)) {
+      const ViewportSettingColor context_color =
+          snapshot.style.instance_edit_style.resolve_context_color(
+              {mesh.wireframe_tint.x, mesh.wireframe_tint.y,
+               mesh.wireframe_tint.z,
+               static_cast<float>(kWireframeAlpha) / 255.0f},
+              true);
+      color = rgba8(normalized_to_byte(context_color.r),
+                     normalized_to_byte(context_color.g),
+                     normalized_to_byte(context_color.b),
+                     normalized_to_byte(context_color.a));
+    }
     const float width_pixels =
         mesh.selected ? snapshot.style.selection_edge_line_width_pixels : 0.0f;
     const ViewportOverlayStyleRole style_role =

@@ -7,6 +7,7 @@
 #include "render/material_binding_service.hpp"
 
 #include "core/color_space.hpp"
+#include "render/instance_edit_style.hpp"
 #include "render/render_signature_builder.hpp"
 #include "render/texture_binding_service.hpp"
 #include "viewport/viewport_settings.hpp"
@@ -159,14 +160,28 @@ void bind_default_shaded_lighting(
                                    ViewportSettings::defaults());
 }
 
+void bind_instance_edit_context_style(
+    filament::MaterialInstance &material_instance,
+    const InstanceEditStyle &style) {
+  material_instance.setParameter("instanceEditContextColor",
+                                 setting_color(style.context));
+  material_instance.setParameter("instanceEditContextStrength",
+                                 style.context_strength);
+  material_instance.setParameter("instanceEditContextTintAmount",
+                                 style.context_tint_amount);
+  material_instance.setParameter("instanceEditContextDesaturation",
+                                 style.context_desaturation);
+}
+
 std::uint64_t mesh_surface_grid_signature(
     float grid_world_spacing, const ViewportSettings &settings) {
   const ViewportSettingColor minor =
       settings.color(ViewportColorSettingId::MeshGridMinor);
   const ViewportSettingColor major =
       settings.color(ViewportColorSettingId::MeshGridMajor);
-  const ViewportSettingColor instance_context =
-      settings.color(ViewportColorSettingId::InstanceEditContext);
+  const InstanceEditStyle instance_edit_style =
+      InstanceEditStyle::from_settings(settings);
+  const ViewportSettingColor &instance_context = instance_edit_style.context;
   RenderSignatureBuilder signature;
   signature.add_float(std::max(grid_world_spacing, 0.0001f))
       .add_float(minor.r)
@@ -181,6 +196,9 @@ std::uint64_t mesh_surface_grid_signature(
       .add_float(instance_context.g)
       .add_float(instance_context.b)
       .add_float(instance_context.a)
+      .add_float(instance_edit_style.context_strength)
+      .add_float(instance_edit_style.context_tint_amount)
+      .add_float(instance_edit_style.context_desaturation)
       .add_float(
           settings.float_value(ViewportFloatSettingId::GridMinorLineSize))
       .add_float(
@@ -406,10 +424,8 @@ void MaterialBindingService::apply_mesh_surface_grid(
   material_instance.setParameter(
       "surfaceGridEnabled",
       settings.bool_value(ViewportBoolSettingId::ShowMeshGrid) ? 1.0f : 0.0f);
-  material_instance.setParameter(
-      "instanceEditContextColor",
-      setting_color(
-          settings.color(ViewportColorSettingId::InstanceEditContext)));
+  bind_instance_edit_context_style(
+      material_instance, InstanceEditStyle::from_settings(settings));
 }
 
 void MaterialBindingService::apply_shaded_lighting(

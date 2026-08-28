@@ -102,6 +102,11 @@ enum class ViewportFloatSettingId {
     PickEdgeRadius,
     GizmoSize,
     RotationSnapDegrees,
+    InstanceEditBackgroundBlend,
+    InstanceEditContextStrength,
+    InstanceEditContextTintAmount,
+    InstanceEditContextDesaturation,
+    InstanceEditGridFade,
     Count,
 };
 
@@ -152,6 +157,7 @@ struct ViewportColorSettingDescriptor {
     std::string_view label;
     std::string_view key;
     ViewportSettingColor default_value;
+    std::string_view help = {};
 };
 
 /**
@@ -165,6 +171,7 @@ struct ViewportFloatSettingDescriptor {
     float minimum = 0.0f;
     float maximum = 1.0f;
     float default_value = 0.0f;
+    std::string_view help = {};
 };
 
 /**

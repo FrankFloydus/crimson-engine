@@ -668,12 +668,12 @@ quader_require_existing_path("${QUADER_DEFAULT_ALBEDO_TEXTURE}" "app-owned defau
 quader_require_existing_path("${QUADER_DEFAULT_ROUGHNESS_TEXTURE}" "app-owned default material roughness texture")
 quader_require_existing_path("${QUADER_DEFAULT_PROJECT_MATERIAL_TEMPLATE}" "app-owned default project material template")
 
-quader_register_filament_material(quader_mesh_material resources/materials/quader_mesh.mat quader_mesh resources/materials/mesh_quad_uv.glsl)
-quader_register_filament_material(quader_mesh_lit_material resources/materials/quader_mesh_lit.mat quader_mesh_lit resources/materials/mesh_quad_uv.glsl)
+quader_register_filament_material(quader_mesh_material resources/materials/quader_mesh.mat quader_mesh resources/materials/mesh_quad_uv.glsl resources/materials/instance_edit.glsl)
+quader_register_filament_material(quader_mesh_lit_material resources/materials/quader_mesh_lit.mat quader_mesh_lit resources/materials/mesh_quad_uv.glsl resources/materials/instance_edit.glsl)
 quader_register_filament_material(vertex_color_overlay_material resources/materials/vertex_color_overlay.mat vertex_color_overlay)
 quader_register_filament_material(quader_instance_selection_fill_material resources/materials/quader_instance_selection_fill.mat quader_instance_selection_fill)
 quader_register_filament_material(quader_overlay_line_material resources/materials/quader_overlay_line.mat quader_overlay_line)
-quader_register_filament_material(quader_selected_object_line_material resources/materials/quader_selected_object_line.mat quader_selected_object_line)
+quader_register_filament_material(quader_selected_object_line_material resources/materials/quader_selected_object_line.mat quader_selected_object_line resources/materials/instance_edit.glsl)
 quader_register_filament_material(quader_edit_wire_line_material resources/materials/quader_edit_wire_line.mat quader_edit_wire_line)
 quader_register_filament_material(quader_overlay_point_material resources/materials/quader_overlay_point.mat quader_overlay_point)
 quader_register_filament_material(quader_overlay_icon_material resources/materials/quader_overlay_icon.mat quader_overlay_icon)
@@ -715,6 +715,7 @@ add_library(quader_render STATIC
     src/render/filament_environment_library.cpp
     src/render/filament_material_library.cpp
     src/render/instance_batch_planner.cpp
+    src/render/instance_edit_style.cpp
     src/render/instance_renderable_cache.cpp
     src/render/light_renderable_cache.cpp
     src/render/material_binding_service.cpp

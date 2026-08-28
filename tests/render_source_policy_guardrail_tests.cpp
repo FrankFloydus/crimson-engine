@@ -127,6 +127,43 @@ TEST(GroundGridMaterialTests,
   EXPECT_EQ(axis_line.find("coverage * min(thickness"), std::string::npos);
 }
 
+TEST(GroundGridMaterialTests,
+     InstanceEditGridUsesSettingsFadeWithoutReplacingAuthoredColors) {
+  const std::string source =
+      read_source_file("src/render/viewport_grid_renderer.cpp");
+  EXPECT_EQ(source.find("instance_edit_grid_color("), std::string::npos);
+  EXPECT_TRUE(source_contains_compact(
+      source, "instance_edit_style.resolve_grid_color(settings.color(id), "
+              "instance_edit_context)"));
+  for (const std::string_view color_binding : {
+           "\"gridColor\", grid_color(ViewportColorSettingId::GridMinor)",
+           "\"majorGridColor\", grid_color(ViewportColorSettingId::GridMajor)",
+           "\"originUColor\", grid_color(grid.axes.u_color)",
+           "\"originVColor\", grid_color(grid.axes.v_color)"}) {
+    EXPECT_TRUE(source_contains_compact(source, color_binding)) << color_binding;
+  }
+
+  const std::size_t signature_begin =
+      source.find("std::uint64_t ground_grid_presentation_signature(");
+  const std::size_t signature_end =
+      source.find("filament::math::mat4f ground_grid_transform(", signature_begin);
+  ASSERT_NE(signature_begin, std::string::npos);
+  ASSERT_NE(signature_end, std::string::npos);
+  const std::string signature =
+      source.substr(signature_begin, signature_end - signature_begin);
+  EXPECT_NE(signature.find(".add_bool(instance_edit_context)"),
+            std::string::npos);
+  EXPECT_NE(signature.find("ViewportFloatSettingId::InstanceEditGridFade"),
+            std::string::npos);
+  const std::size_t unchanged_gate =
+      source.find("if (presentation_signature_ == presentation_signature)");
+  const std::size_t resolve_style =
+      source.find("InstanceEditStyle::from_settings(settings)");
+  ASSERT_NE(unchanged_gate, std::string::npos);
+  ASSERT_NE(resolve_style, std::string::npos);
+  EXPECT_LT(unchanged_gate, resolve_style);
+}
+
 TEST(QuaderMeshMaterialTests, UsesOverlaySelectionInsteadOfStandaloneTint) {
   const std::string source =
       read_source_file("resources/materials/quader_mesh.mat");
@@ -135,6 +172,64 @@ TEST(QuaderMeshMaterialTests, UsesOverlaySelectionInsteadOfStandaloneTint) {
   EXPECT_EQ(source.find("getColor()"), std::string::npos);
   EXPECT_EQ(source.find("vertexColor"), std::string::npos);
   EXPECT_EQ(source.find("color,"), std::string::npos);
+}
+
+TEST(QuaderMeshMaterialTests,
+     InstanceEditContextSharesShaderAndUniformContractAcrossMeshesAndWires) {
+  const std::string cmake = read_source_file("CMakeLists.txt");
+  const std::string shared_shader =
+      read_source_file("resources/materials/instance_edit.glsl");
+  const std::string binding =
+      read_source_file("src/render/material_binding_service.cpp");
+  EXPECT_EQ(count_occurrences(shared_shader, "vec4 applyInstanceEditContext("),
+            1u);
+  for (const std::string_view material_name : {
+           "quader_mesh", "quader_mesh_lit", "quader_selected_object_line"}) {
+    SCOPED_TRACE(material_name);
+    const std::string source = read_source_file(
+        "resources/materials/" + std::string(material_name) + ".mat");
+    EXPECT_NE(source.find("#include \"instance_edit.glsl\""),
+              std::string::npos);
+    EXPECT_EQ(source.find("vec4 applyInstanceEditContext("), std::string::npos);
+    EXPECT_EQ(source.find("applyInstanceEditDim("), std::string::npos);
+    EXPECT_NE(source.find("applyInstanceEditContext("), std::string::npos);
+    EXPECT_TRUE(source_contains_compact(
+        source, "materialParams.instanceEditDim * "
+                "materialParams.instanceEditContextStrength"));
+    for (const std::string_view uniform : {
+             "instanceEditContextColor", "instanceEditContextStrength",
+             "instanceEditContextTintAmount", "instanceEditContextDesaturation"}) {
+      EXPECT_TRUE(source_contains_compact(
+          source, "name : " + std::string(uniform))) << uniform;
+      EXPECT_NE(source.find("materialParams." + std::string(uniform)),
+                std::string::npos) << uniform;
+      EXPECT_NE(binding.find("\"" + std::string(uniform) + "\""),
+                std::string::npos) << uniform;
+    }
+
+    const std::size_t material_begin = cmake.find(
+        "quader_register_filament_material(" + std::string(material_name) +
+        "_material ");
+    ASSERT_NE(material_begin, std::string::npos);
+    const std::size_t material_end = cmake.find(')', material_begin);
+    ASSERT_NE(material_end, std::string::npos);
+    EXPECT_NE(cmake.substr(material_begin, material_end - material_begin)
+                  .find("resources/materials/instance_edit.glsl"),
+              std::string::npos);
+  }
+
+  EXPECT_TRUE(source_contains_compact(
+      binding, "bind_instance_edit_context_style(material_instance, "
+               "InstanceEditStyle::from_settings(settings))"));
+  EXPECT_TRUE(source_contains_compact(
+      binding, "setParameter(\"instanceEditContextColor\", "
+               "setting_color(style.context))"));
+  for (const std::string_view member : {
+           "context_strength", "context_tint_amount", "context_desaturation"}) {
+    EXPECT_NE(binding.find("style." + std::string(member)), std::string::npos);
+    EXPECT_TRUE(source_contains_compact(
+        binding, ".add_float(instance_edit_style." + std::string(member) + ")"));
+  }
 }
 
 TEST(QuaderMeshMaterialTests,
@@ -541,7 +636,7 @@ TEST(QuaderMeshMaterialTests, SupportsOptionalWorldSpaceSurfaceGrid) {
   const std::size_t grid_start =
       shaded_source.find("baseColor = applySurfaceGrid(baseColor);");
   const std::size_t context_dim_start =
-      shaded_source.find("vec4 edited = applyInstanceEditDim(");
+      shaded_source.find("vec4 edited = applyInstanceEditContext(");
   ASSERT_NE(lighting_start, std::string::npos);
   ASSERT_NE(grid_start, std::string::npos);
   ASSERT_NE(context_dim_start, std::string::npos);
@@ -872,6 +967,78 @@ TEST(ViewportOverlayPolicyTests,
             std::string::npos);
   EXPECT_EQ(source.find("append_overlay_frame(overlay_frame,"),
             std::string::npos);
+
+  // Projection is a per-pane styling input and must participate in both
+  // retained keys so a stationary hover is rebuilt when its camera switches.
+  for (const std::string_view key_type : {
+           "PaneOverlaySubmissionKey", "PaneDynamicOverlaySubmissionKey"}) {
+    SCOPED_TRACE(key_type);
+    const std::size_t header_begin =
+        header.find("struct " + std::string(key_type));
+    ASSERT_NE(header_begin, std::string::npos);
+    const std::size_t header_end = header.find("};", header_begin);
+    ASSERT_NE(header_end, std::string::npos);
+    const std::string definition =
+        header.substr(header_begin, header_end - header_begin);
+    EXPECT_NE(definition.find("ViewportOverlayProjection projection"),
+              std::string::npos);
+    EXPECT_NE(definition.find("= default;"), std::string::npos);
+
+    const std::size_t source_begin =
+        source.find("const " + std::string(key_type) + " ");
+    ASSERT_NE(source_begin, std::string::npos);
+    const std::size_t source_end = source.find("};", source_begin);
+    ASSERT_NE(source_end, std::string::npos);
+    EXPECT_TRUE(source_contains_compact(
+        source.substr(source_begin, source_end - source_begin),
+        ".projection = overlay_camera.projection"));
+  }
+  EXPECT_TRUE(source_contains_compact(
+      source, "ViewportCameraAdapter::overlay_camera(pane_workspace.camera, "
+              "pane_workspace.render_size)"));
+  EXPECT_TRUE(source_contains_compact(
+      source.substr(style_resolve, submit - style_resolve),
+      ".projection = overlay_camera.projection"));
+  EXPECT_TRUE(source_contains_compact(
+      source.substr(dynamic_style, dynamic_submit - dynamic_style),
+      ".projection = overlay_camera.projection"));
+  EXPECT_TRUE(source_contains_compact(
+      source, "!pane_state.overlay_submission_valid || "
+              "pane_state.overlay_submission_key != submission_key"));
+  EXPECT_TRUE(source_contains_compact(
+      source, "!pane_state.dynamic_overlay_submission_valid || "
+              "pane_state.dynamic_overlay_submission_key != "
+              "dynamic_submission_key"));
+
+  const std::size_t unchanged_gate = source.find(
+      "if (!persistent_overlay_changed && !dynamic_overlay_changed)");
+  ASSERT_NE(unchanged_gate, std::string::npos);
+  const std::size_t persistent_branch =
+      source.find("if (persistent_overlay_changed)", unchanged_gate);
+  ASSERT_NE(persistent_branch, std::string::npos);
+  EXPECT_LT(persistent_branch, cached_selection);
+  EXPECT_NE(source.substr(unchanged_gate, persistent_branch - unchanged_gate)
+                .find("continue;"),
+            std::string::npos);
+
+  // The shared selection cache must remain camera-independent. Only the pane's
+  // appended scene records and volatile hover frame receive projection policy.
+  const std::size_t cache_begin = source.find(
+      "void QtViewportPanel::refresh_cached_selection_overlay_frame(");
+  ASSERT_NE(cache_begin, std::string::npos);
+  const std::size_t cache_end =
+      source.find("QtViewportPanel::render_viewports(", cache_begin);
+  ASSERT_NE(cache_end, std::string::npos);
+  const std::string cache = source.substr(cache_begin, cache_end - cache_begin);
+  EXPECT_EQ(cache.find(".projection"), std::string::npos);
+  EXPECT_EQ(cache.find("overlay_camera"), std::string::npos);
+  const std::size_t cache_gate =
+      cache.find("if (!selection_overlay_cache_.needs_refresh(key))");
+  const std::size_t cache_extract =
+      cache.find("modeling.selection_overlay_frame(overlay_options)");
+  ASSERT_NE(cache_gate, std::string::npos);
+  ASSERT_NE(cache_extract, std::string::npos);
+  EXPECT_LT(cache_gate, cache_extract);
 }
 
 TEST(ViewportOverlayPolicyTests,
@@ -1062,6 +1229,86 @@ TEST(ViewportPersistentOverlayStyleSnapshotTests,
                        ".globalBlendOrderEnabled(0u, true)"));
 }
 
+TEST(ViewportPersistentOverlayStyleSnapshotTests,
+     InstanceEditContextChangesOnlyWireMaterialUniforms) {
+  const std::string source = read_source_file(
+      "src/render/overlay/scene_wireframe_overlay_cache.cpp");
+  const std::size_t sync_begin =
+      source.find("void SceneWireframeOverlayCache::sync(");
+  const std::size_t prepare =
+      source.find("const PreparedPlan prepared = prepare(snapshot);", sync_begin);
+  ASSERT_NE(sync_begin, std::string::npos);
+  ASSERT_NE(prepare, std::string::npos);
+  const std::string unchanged = source.substr(sync_begin, prepare - sync_begin);
+  EXPECT_TRUE(source_contains_compact(
+      unchanged, "synced_instance_edit_scope_ == snapshot.instance_edit_scope"));
+  EXPECT_TRUE(source_contains_compact(
+      unchanged, "synced_instance_edit_context_signature_ != "
+                 "snapshot.style.instance_edit_context_signature"));
+  EXPECT_TRUE(source_contains_compact(unchanged, "!clip_changed && !style_changed"));
+  EXPECT_TRUE(source_contains_compact(
+      unchanged,
+      "if (context_style_changed) { "
+      "update_instance_edit_style(snapshot.style.instance_edit_style); "
+      "synced_instance_edit_context_signature_ = "
+      "snapshot.style.instance_edit_context_signature; } return; }"));
+
+  const std::size_t update_begin =
+      source.find("void SceneWireframeOverlayCache::update_instance_edit_style(");
+  const std::size_t update_end =
+      source.find("void SceneWireframeOverlayCache::set_layer_mask(", update_begin);
+  ASSERT_NE(update_begin, std::string::npos);
+  ASSERT_NE(update_end, std::string::npos);
+  const std::string update = source.substr(update_begin, update_end - update_begin);
+  EXPECT_TRUE(source_contains_compact(
+      update, "if (proxy.material_instance != nullptr && proxy.dimmed) { "
+              "bind_instance_edit_context_style(*proxy.material_instance, style);"));
+  for (const std::string_view geometry_work : {
+           "prepare(", "rebuild(", "setBuffer", "instance_buffer",
+           "getRenderableManager(", "create_batch("}) {
+    EXPECT_EQ(update.find(geometry_work), std::string::npos) << geometry_work;
+  }
+
+  const std::size_t geometry_begin =
+      source.find("std::uint64_t wire_geometry_signature(");
+  const std::size_t key_begin =
+      source.find("RenderInstancePrimitiveKey wire_key(", geometry_begin);
+  const std::size_t key_end = source.find("struct PrimitiveKeyHash", key_begin);
+  ASSERT_NE(geometry_begin, std::string::npos);
+  ASSERT_NE(key_begin, std::string::npos);
+  ASSERT_NE(key_end, std::string::npos);
+  EXPECT_EQ(source.substr(geometry_begin, key_begin - geometry_begin)
+                .find("instance_edit"),
+            std::string::npos);
+  const std::string key = source.substr(key_begin, key_end - key_begin);
+  EXPECT_TRUE(source_contains_compact(
+      key, "is_instance_edit_context(instance_edit_scope, mesh.occurrence, "
+           "mesh.selected)"));
+  EXPECT_NE(key.find("RenderInstancePresentationFlag::Dimmed"),
+            std::string::npos);
+  EXPECT_EQ(key.find("instance_edit_style"), std::string::npos);
+  EXPECT_TRUE(source_contains_compact(
+      source, "setParameter(\"instanceEditDim\", proxy.dimmed ? 1.0f : 0.0f)"));
+  EXPECT_TRUE(source_contains_compact(
+      source, "bind_instance_edit_context_style(*proxy.material_instance, "
+              "style.instance_edit_style)"));
+
+  const std::string selected_source = read_source_file(
+      "src/render/overlay/instance_selection_overlay_cache.cpp");
+  const std::size_t selected_begin =
+      selected_source.find("InstanceSelectionOverlayCache::create_wire_batch(");
+  const std::size_t selected_end = selected_source.find(
+      "bool InstanceSelectionOverlayCache::update_wire_batch(", selected_begin);
+  ASSERT_NE(selected_begin, std::string::npos);
+  ASSERT_NE(selected_end, std::string::npos);
+  const std::string selected =
+      selected_source.substr(selected_begin, selected_end - selected_begin);
+  EXPECT_TRUE(source_contains_compact(
+      selected, "setParameter(\"instanceEditDim\", 0.0f)"));
+  EXPECT_TRUE(source_contains_compact(
+      selected, "bind_instance_edit_context_style(*proxy.material_instance, {})"));
+}
+
 TEST(SceneRenderBridgeTests, UsesDepthStampedFaceFillForOverlayTriangles) {
   const std::string bridge_source =
       read_source_file("src/render/scene_render_bridge.cpp");
@@ -1117,6 +1364,8 @@ TEST(SceneRenderBridgeTests,
      RetainedMaterialUniformsInvalidateAtEachProxyCacheBoundary) {
   const std::string bridge_source =
       read_source_file("src/render/scene_render_bridge.cpp");
+  const std::string mesh_cache_source =
+      read_source_file("src/render/mesh_renderable_cache.cpp");
   const std::string instance_cache_source =
       read_source_file("src/render/instance_renderable_cache.cpp");
   const std::string instance_cache_header =
@@ -1145,7 +1394,21 @@ TEST(SceneRenderBridgeTests,
               std::string::npos);
     EXPECT_NE(source->find("material_uniforms_dirty_ = false;"),
               std::string::npos);
+    const std::size_t unchanged_gate =
+        source->find("if (!material_uniforms_dirty_");
+    const std::size_t material_loop = source->find("for (", unchanged_gate);
+    const std::size_t uniform_apply =
+        source->find("factory_->update_surface_grid(", unchanged_gate);
+    ASSERT_NE(unchanged_gate, std::string::npos);
+    ASSERT_NE(material_loop, std::string::npos);
+    ASSERT_NE(uniform_apply, std::string::npos);
+    EXPECT_LT(unchanged_gate, material_loop);
+    EXPECT_LT(material_loop, uniform_apply);
   }
+  EXPECT_TRUE(source_contains_compact(
+      mesh_cache_source,
+      "if (!surface_grid_dirty_ && surface_grid_signature_ == signature) { "
+      "return; } update_surface_grid_proxy_map("));
   EXPECT_NE(instance_cache_source.find("Instance material uniforms apply"),
             std::string::npos);
   EXPECT_NE(preview_cache_source.find(
@@ -1169,6 +1432,53 @@ TEST(SceneRenderBridgeTests,
   EXPECT_LT(preview_sync, material_sync)
       << "new preview proxies must be marked dirty before current settings "
          "are applied in the same frame";
+}
+
+TEST(SceneRenderBridgeTests,
+     InstanceEditSyncReadsSanitizedScopeWithoutPresentationCopies) {
+  const std::string source = read_source_file("src/api/quader_render_api.cpp");
+  const std::string service =
+      read_source_file("src/editor/instances/scene_instance_service.hpp");
+  const std::size_t scope_begin =
+      source.find("RenderInstanceEditScope instance_edit_render_scope(");
+  const std::size_t scope_end = source.find("\n}", scope_begin);
+  ASSERT_NE(scope_begin, std::string::npos);
+  ASSERT_NE(scope_end, std::string::npos);
+  const std::string scope = source.substr(scope_begin, scope_end - scope_begin);
+  EXPECT_NE(scope.find("session.instances().instance_edit_scope()"),
+            std::string::npos);
+  EXPECT_NE(scope.find("edit_scope.active()"), std::string::npos);
+  EXPECT_NE(scope.find("edit_scope.occurrence()"), std::string::npos);
+  EXPECT_NE(scope.find("edit_scope.definition()"), std::string::npos);
+  EXPECT_EQ(scope.find("instance_edit_state()"), std::string::npos);
+
+  for (const std::string_view method : {"sync_scene", "sync_scene_asset_overlays"}) {
+    const std::size_t begin = source.find(
+        "QuaderRenderApiRuntimeAccess::" + std::string(method) + "(");
+    const std::size_t end = source.find("\n}", begin);
+    ASSERT_NE(begin, std::string::npos) << method;
+    ASSERT_NE(end, std::string::npos) << method;
+    const std::string body = source.substr(begin, end - begin);
+    EXPECT_NE(body.find("instance_edit_render_scope(scene_session)"),
+              std::string::npos) << method;
+    EXPECT_EQ(body.find("instance_edit_state()"), std::string::npos) << method;
+  }
+
+  const std::size_t getter_begin =
+      service.find("InstanceEditContext instance_edit_scope() const");
+  const std::size_t getter_end = service.find("\n  }", getter_begin);
+  ASSERT_NE(getter_begin, std::string::npos);
+  ASSERT_NE(getter_end, std::string::npos);
+  const std::string getter = service.substr(getter_begin, getter_end - getter_begin);
+  EXPECT_TRUE(source_contains_compact(
+      getter, "sanitize_edit_context(); return edit_context_;"));
+  for (const std::string_view presentation_work : {
+           "instance_edit_state(", "name", "std::string"}) {
+    EXPECT_EQ(getter.find(presentation_work), std::string::npos)
+        << presentation_work;
+    EXPECT_EQ(scope.find(presentation_work), std::string::npos)
+        << presentation_work;
+  }
 }
 
 TEST(SceneRenderBridgeTests,

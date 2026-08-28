@@ -145,6 +145,7 @@ private:
     std::uint64_t render_component_revision = 0;
     std::uint64_t style_signature = 0;
     ModelingSelectionMode selection_mode = ModelingSelectionMode::Object;
+    ViewportOverlayProjection projection = ViewportOverlayProjection::Perspective;
     bool selection_overlay_visible = false;
     bool scene_overlay_requested = false;
     bool wireframe_pane = false;
@@ -160,6 +161,7 @@ private:
     std::uint64_t frame_signature = 0;
     std::uint64_t style_signature = 0;
     ModelingSelectionMode selection_mode = ModelingSelectionMode::Object;
+    ViewportOverlayProjection projection = ViewportOverlayProjection::Perspective;
 
     friend bool operator==(const PaneDynamicOverlaySubmissionKey &,
                            const PaneDynamicOverlaySubmissionKey &) = default;

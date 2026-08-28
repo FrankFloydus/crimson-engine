@@ -6,6 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
+#include "render/instance_edit_style.hpp"
 #include "render/viewport_overlay_policy.hpp"
 
 #include <cstdint>
@@ -24,6 +25,9 @@ struct ViewportPersistentOverlayStyleSnapshot {
       kOverlaySelectionWireLineWidthPixels;
   std::uint64_t face_signature = 0u;
   std::uint64_t wire_signature = 0u;
+  InstanceEditStyle instance_edit_style;
+  /** Context uniforms invalidate independently of selected face/wire geometry. */
+  std::uint64_t instance_edit_context_signature = 0u;
 };
 
 } // namespace quader

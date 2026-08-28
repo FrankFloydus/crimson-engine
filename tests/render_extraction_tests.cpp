@@ -14,6 +14,7 @@
 #include "math/glm_bridge.hpp"
 #include "render/light_renderable_cache.hpp"
 #include "render/instance_batch_planner.hpp"
+#include "render/instance_edit_style.hpp"
 #include "render/instance_renderable_cache.hpp"
 #include "render/material_binding_service.hpp"
 #include "render/mesh_quad_uv_interpolation.hpp"
@@ -1714,6 +1715,23 @@ TEST(RenderHotPathTests, MeshSurfaceGridSignatureIsNarrowAndStable) {
   EXPECT_NE(mesh_surface_grid_signature(1.0f, instance_context_recolored),
             initial)
       << "the configurable edit-context tint must invalidate material state";
+
+  for (const auto id : {ViewportFloatSettingId::InstanceEditContextStrength,
+                        ViewportFloatSettingId::InstanceEditContextTintAmount,
+                        ViewportFloatSettingId::InstanceEditContextDesaturation}) {
+    SCOPED_TRACE(static_cast<int>(id));
+    ViewportSettings changed = defaults;
+    ASSERT_TRUE(changed.set_float_value(id, 0.75f));
+    EXPECT_NE(mesh_surface_grid_signature(1.0f, changed), initial);
+  }
+  for (const auto id : {ViewportFloatSettingId::InstanceEditBackgroundBlend,
+                        ViewportFloatSettingId::InstanceEditGridFade}) {
+    SCOPED_TRACE(static_cast<int>(id));
+    ViewportSettings changed = defaults;
+    ASSERT_TRUE(changed.set_float_value(id, 0.75f));
+    EXPECT_EQ(mesh_surface_grid_signature(1.0f, changed), initial)
+        << "background and ground-grid controls must not rewrite mesh uniforms";
+  }
 }
 
 TEST(RenderHotPathTests, SrgbByteLookupPreservesReferenceConversion) {
@@ -2293,6 +2311,30 @@ TEST(RenderOverlaySnapshotCacheTests,
   EXPECT_EQ(cache.stats().selected_object_build_count, 1u);
   EXPECT_EQ(cache.stats().scene_wireframe_build_count, 1u);
   EXPECT_EQ(cache.stats().selection_build_count, 1u);
+
+  const auto *wire_storage = stable.scene_wireframe->meshes.data();
+  const auto wire_geometry =
+      stable.scene_wireframe->meshes.front().wire_geometry_payload;
+  ViewportPersistentOverlayStyleSnapshot context_style = style;
+  context_style.instance_edit_context_signature = 303u;
+  context_style.instance_edit_style.context_strength = 0.7f;
+  const RenderOverlayPersistentSnapshotUpdate recolored =
+      cache.update_persistent(document, assets, true, 0x01u, context_style);
+  EXPECT_FALSE(recolored.selected_object_changed);
+  ASSERT_TRUE(recolored.scene_wireframe_changed);
+  ASSERT_NE(recolored.scene_wireframe, nullptr);
+  EXPECT_EQ(recolored.scene_wireframe->meshes.data(), wire_storage);
+  EXPECT_EQ(recolored.scene_wireframe->meshes.front().wire_geometry_payload,
+            wire_geometry);
+  EXPECT_FLOAT_EQ(recolored.scene_wireframe->style.instance_edit_style
+                      .context_strength,
+                  0.7f);
+  EXPECT_EQ(cache.stats().selected_object_build_count, 1u);
+  EXPECT_EQ(cache.stats().scene_wireframe_build_count, 1u);
+  EXPECT_EQ(cache.stats().selection_build_count, 1u);
+  EXPECT_FALSE(cache.update_persistent(document, assets, true, 0x01u,
+                                      context_style)
+                   .changed());
 
   document.set_transform(
       entity, TransformComponent{.position = {3.0f, 2.0f, 1.0f}});
@@ -6218,6 +6260,131 @@ TEST(RenderSceneWireframeBatchPlannerTests,
 }
 
 TEST(RenderInstanceEditPresentationTests,
+     ContextEffectPreservesMaterialAppearanceAndSupportsZeroToFullStrength) {
+  const ViewportSettingColor source{0.7f, 0.3f, 0.2f, 0.8f};
+  const InstanceEditStyle defaults =
+      InstanceEditStyle::from_settings(ViewportSettings::defaults());
+  EXPECT_GT(defaults.resolve_context_color(source, true).a, source.a * 0.8f)
+      << "the default context treatment should retain most surface opacity";
+
+  ViewportSettings settings = ViewportSettings::defaults();
+  const ViewportSettingColor target{0.2f, 0.8f, 0.4f, 2.0f / 255.0f};
+  ASSERT_TRUE(settings.set_color(ViewportColorSettingId::InstanceEditContext,
+                                target));
+  InstanceEditStyle style = InstanceEditStyle::from_settings(settings);
+  EXPECT_FLOAT_EQ(style.context.a, target.a);
+  EXPECT_TRUE(viewport_setting_colors_approximately(
+      style.resolve_context_color(source, false), source));
+  style.context_strength = 0.0f;
+  EXPECT_TRUE(viewport_setting_colors_approximately(
+      style.resolve_context_color(source, true), source));
+
+  style.context_strength = 1.0f;
+  style.context_tint_amount = 1.0f;
+  const ViewportSettingColor fully_tinted =
+      style.resolve_context_color(source, true);
+  EXPECT_NEAR(fully_tinted.r, target.r, 0.00001f);
+  EXPECT_NEAR(fully_tinted.g, target.g, 0.00001f);
+  EXPECT_NEAR(fully_tinted.b, target.b, 0.00001f);
+  EXPECT_FLOAT_EQ(fully_tinted.a, source.a * target.a);
+  EXPECT_LT(fully_tinted.a, 0.05f)
+      << "saved low-alpha colors must not encounter a hidden opacity floor";
+
+  style.context_tint_amount = 0.0f;
+  style.context_desaturation = 0.0f;
+  const ViewportSettingColor opacity_only =
+      style.resolve_context_color(source, true);
+  EXPECT_NEAR(opacity_only.r, source.r, 0.00001f);
+  EXPECT_NEAR(opacity_only.g, source.g, 0.00001f);
+  EXPECT_NEAR(opacity_only.b, source.b, 0.00001f);
+  EXPECT_FLOAT_EQ(opacity_only.a, source.a * target.a);
+
+  style.context_desaturation = 1.0f;
+  const float gray = linear_to_srgb(srgb_to_linear(source.r) * 0.2126f +
+                                    srgb_to_linear(source.g) * 0.7152f +
+                                    srgb_to_linear(source.b) * 0.0722f);
+  const ViewportSettingColor desaturated =
+      style.resolve_context_color(source, true);
+  EXPECT_NEAR(desaturated.r, gray, 0.00001f);
+  EXPECT_NEAR(desaturated.g, gray, 0.00001f);
+  EXPECT_NEAR(desaturated.b, gray, 0.00001f);
+
+  style.context_strength = 0.25f;
+  style.context_tint_amount = 1.0f;
+  const ViewportSettingColor partial =
+      style.resolve_context_color(source, true);
+  EXPECT_NEAR(partial.r,
+              linear_to_srgb(std::lerp(srgb_to_linear(source.r),
+                                       srgb_to_linear(target.r), 0.25f)),
+              0.00001f);
+  EXPECT_FLOAT_EQ(partial.a, source.a * std::lerp(1.0f, target.a, 0.25f));
+  ViewportSettingColor transparent_source = source;
+  transparent_source.a = 0.0f;
+  EXPECT_FLOAT_EQ(style.resolve_context_color(transparent_source, true).a,
+                  0.0f);
+  style.context_strength = 1.0f;
+  style.context.a = 0.0f;
+  EXPECT_FLOAT_EQ(style.resolve_context_color(source, true).a, 0.0f);
+}
+
+TEST(RenderInstanceEditPresentationTests,
+     BackgroundTintHonorsStrengthAndAlphaAndRestoresOriginalOnExit) {
+  ViewportSettings settings = ViewportSettings::defaults();
+  ASSERT_TRUE(settings.set_color(ViewportColorSettingId::InstanceEditBackground,
+                                {0.8f, 0.6f, 0.4f, 0.5f}));
+  ASSERT_TRUE(settings.set_float_value(
+      ViewportFloatSettingId::InstanceEditBackgroundBlend, 0.4f));
+  InstanceEditStyle style = InstanceEditStyle::from_settings(settings);
+  const ViewportSettingColor source{0.1f, 0.2f, 0.3f, 0.6f};
+  const ViewportSettingColor blended =
+      style.resolve_background_color(source, true);
+  EXPECT_TRUE(viewport_setting_colors_approximately(
+      blended, {0.24f, 0.28f, 0.32f, source.a}));
+  EXPECT_TRUE(viewport_setting_colors_approximately(
+      style.resolve_background_color(source, false), source));
+  style.background_blend = 0.0f;
+  EXPECT_TRUE(viewport_setting_colors_approximately(
+      style.resolve_background_color(source, true), source));
+  style.background_blend = 1.0f;
+  style.background.a = 0.0f;
+  EXPECT_TRUE(viewport_setting_colors_approximately(
+      style.resolve_background_color(source, true), source));
+  style.background.a = 1.0f;
+  EXPECT_TRUE(viewport_setting_colors_approximately(
+      style.resolve_background_color(source, true),
+      {style.background.r, style.background.g, style.background.b, source.a}));
+}
+
+TEST(RenderInstanceEditPresentationTests,
+     GridFadePreservesGridAndAxisColorsAndRestoresTheirOriginalOpacity) {
+  ViewportSettings settings = ViewportSettings::defaults();
+  ASSERT_TRUE(settings.set_float_value(ViewportFloatSettingId::InstanceEditGridFade,
+                                      0.35f));
+  const InstanceEditStyle style = InstanceEditStyle::from_settings(settings);
+  for (const auto id : {ViewportColorSettingId::GridMinor,
+                        ViewportColorSettingId::GridMajor,
+                        ViewportColorSettingId::GridXAxis,
+                        ViewportColorSettingId::GridYAxis,
+                        ViewportColorSettingId::GridZAxis}) {
+    SCOPED_TRACE(static_cast<int>(id));
+    const ViewportSettingColor original = settings.color(id);
+    const ViewportSettingColor faded = style.resolve_grid_color(original, true);
+    EXPECT_FLOAT_EQ(faded.r, original.r);
+    EXPECT_FLOAT_EQ(faded.g, original.g);
+    EXPECT_FLOAT_EQ(faded.b, original.b);
+    EXPECT_FLOAT_EQ(faded.a, original.a * 0.65f);
+    EXPECT_TRUE(viewport_setting_colors_approximately(
+        style.resolve_grid_color(original, false), original));
+    InstanceEditStyle unmodified = style;
+    unmodified.grid_fade = 0.0f;
+    EXPECT_TRUE(viewport_setting_colors_approximately(
+        unmodified.resolve_grid_color(original, true), original));
+    unmodified.grid_fade = 1.0f;
+    EXPECT_FLOAT_EQ(unmodified.resolve_grid_color(original, true).a, 0.0f);
+  }
+}
+
+TEST(RenderInstanceEditPresentationTests,
      ClassifiesActiveOccurrenceAndDimsEveryOtherParticipant) {
   SceneDocument document;
   AssetRegistry assets;
@@ -6272,6 +6439,95 @@ TEST(RenderInstanceEditPresentationTests,
   EXPECT_FALSE(active_record->dimmed);
   EXPECT_FALSE(sibling_record->selected);
   EXPECT_TRUE(sibling_record->dimmed);
+
+  ASSERT_TRUE(document.set_selected(active, false));
+  const EntityId direct =
+      document.create_entity("Direct Context Mesh", EntityKind::Mesh);
+  ASSERT_TRUE(document.set_mesh(direct, MeshComponent{.mesh = mesh}));
+  ViewportSettings settings = ViewportSettings::defaults();
+  const auto style = ViewportOverlayStyleResolver::persistent_style_snapshot(
+      settings);
+  RenderOverlaySnapshotCache cache;
+  const auto initial = cache.update_persistent(
+      document, assets, false, 1u, style, {}, nullptr, false, scope);
+  ASSERT_NE(initial.scene_wireframe, nullptr);
+  const RenderOverlaySceneWireframeSnapshot wireframe = *initial.scene_wireframe;
+  ASSERT_EQ(wireframe.meshes.size(), 3u);
+  EXPECT_EQ(wireframe.instance_edit_scope, scope);
+  for (const auto &record : wireframe.meshes) {
+    EXPECT_EQ(is_instance_edit_context(scope, record.occurrence, record.selected),
+              record.entity != active);
+    EXPECT_FALSE(is_instance_edit_context(scope, record.occurrence, true));
+  }
+  const auto original_plan = plan_scene_wireframe_overlay_batches(wireframe, 64u);
+  EXPECT_EQ(original_plan.unique_geometry_style_count, 1u);
+  ASSERT_EQ(original_plan.batches.chunks.size(), 2u)
+      << "active and context participants share geometry but have separate uniforms";
+
+  RenderOverlaySceneWireframeSnapshot normal = wireframe;
+  normal.instance_edit_scope = {};
+  const auto normal_frame = ViewportSceneOverlayBuilder::build_wireframe_frame(
+      {}, RenderOverlaySelectionMode::Component, normal);
+  const auto edit_frame = ViewportSceneOverlayBuilder::build_wireframe_frame(
+      {}, RenderOverlaySelectionMode::Component, wireframe);
+  ASSERT_EQ(edit_frame.lines.size(), normal_frame.lines.size());
+  std::size_t line_index = 0u;
+  for (const auto &record : wireframe.meshes) {
+    for (std::size_t segment = 0u; segment < record.wire_segments.size();
+         ++segment, ++line_index) {
+      ASSERT_LT(line_index, edit_frame.lines.size());
+      if (record.entity == active) {
+        EXPECT_EQ(edit_frame.lines[line_index].color,
+                  normal_frame.lines[line_index].color);
+      } else {
+        EXPECT_NE(edit_frame.lines[line_index].color,
+                  normal_frame.lines[line_index].color);
+      }
+    }
+  }
+  EXPECT_EQ(line_index, edit_frame.lines.size());
+
+  const auto *retained_meshes = initial.scene_wireframe->meshes.data();
+  ASSERT_TRUE(settings.set_float_value(
+      ViewportFloatSettingId::InstanceEditContextStrength, 0.0f));
+  const auto disabled_style =
+      ViewportOverlayStyleResolver::persistent_style_snapshot(settings);
+  const auto disabled = cache.update_persistent(
+      document, assets, false, 1u, disabled_style, {}, nullptr, false, scope);
+  EXPECT_FALSE(disabled.selected_object_changed);
+  ASSERT_TRUE(disabled.scene_wireframe_changed);
+  ASSERT_NE(disabled.scene_wireframe, nullptr);
+  EXPECT_EQ(disabled.scene_wireframe->meshes.data(), retained_meshes);
+  EXPECT_EQ(cache.stats().scene_wireframe_build_count, 1u);
+  const auto disabled_plan =
+      plan_scene_wireframe_overlay_batches(*disabled.scene_wireframe, 64u);
+  EXPECT_EQ(disabled_plan.unique_geometry_style_count, 1u);
+  ASSERT_EQ(disabled_plan.batches.chunks.size(), original_plan.batches.chunks.size());
+  for (std::size_t index = 0u; index < original_plan.batches.chunks.size(); ++index) {
+    EXPECT_EQ(disabled_plan.batches.chunks[index].key,
+              original_plan.batches.chunks[index].key)
+        << "appearance strength must not alter batch or geometry identity";
+  }
+  const auto disabled_frame = ViewportSceneOverlayBuilder::build_wireframe_frame(
+      {}, RenderOverlaySelectionMode::Component, *disabled.scene_wireframe);
+  ASSERT_EQ(disabled_frame.lines.size(), normal_frame.lines.size());
+  for (std::size_t index = 0u; index < normal_frame.lines.size(); ++index) {
+    EXPECT_EQ(disabled_frame.lines[index].color, normal_frame.lines[index].color);
+  }
+
+  const RenderInstanceEditScope sibling_scope{.occurrence = sibling,
+                                              .definition = definition};
+  const auto switched = cache.update_persistent(
+      document, assets, false, 1u, style, {}, nullptr, false, sibling_scope);
+  EXPECT_FALSE(switched.selected_object_changed);
+  EXPECT_TRUE(switched.scene_wireframe_changed);
+  ASSERT_NE(switched.scene_wireframe, nullptr);
+  EXPECT_EQ(switched.scene_wireframe->instance_edit_scope, sibling_scope);
+  EXPECT_EQ(switched.scene_wireframe->meshes.data(), retained_meshes);
+  EXPECT_EQ(cache.stats().scene_wireframe_build_count, 1u);
+  EXPECT_FALSE(cache.update_persistent(document, assets, false, 1u, style, {},
+                                      nullptr, false, sibling_scope)
+                   .changed());
 }
 
 TEST(RenderInstanceEditPresentationTests,

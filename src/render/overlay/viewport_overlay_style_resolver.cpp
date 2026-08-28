@@ -33,6 +33,7 @@ ViewportOverlayStyleResolver::persistent_style_snapshot(
           setting_color(settings, ViewportColorSettingId::SelectionWire),
       .selection_edge_line_width_pixels = settings.float_value(
           ViewportFloatSettingId::SelectionEdgeLineSize),
+      .instance_edit_style = InstanceEditStyle::from_settings(settings),
   };
   RenderSignatureBuilder face_signature;
   face_signature.add_value(snapshot.selection_face_color);
@@ -42,6 +43,17 @@ ViewportOverlayStyleResolver::persistent_style_snapshot(
   wire_signature.add_value(snapshot.selection_wire_color)
       .add_float(snapshot.selection_edge_line_width_pixels);
   snapshot.wire_signature = wire_signature.value();
+
+  const InstanceEditStyle &instance_edit_style = snapshot.instance_edit_style;
+  RenderSignatureBuilder context_signature;
+  context_signature.add_float(instance_edit_style.context.r)
+      .add_float(instance_edit_style.context.g)
+      .add_float(instance_edit_style.context.b)
+      .add_float(instance_edit_style.context.a)
+      .add_float(instance_edit_style.context_strength)
+      .add_float(instance_edit_style.context_tint_amount)
+      .add_float(instance_edit_style.context_desaturation);
+  snapshot.instance_edit_context_signature = context_signature.value();
   return snapshot;
 }
 
@@ -91,10 +103,11 @@ void ViewportOverlayStyleResolver::apply_from(
     range.triangle_begin = std::min(range.triangle_begin, frame.triangles.size());
     range.line_begin = std::min(range.line_begin, frame.lines.size());
     range.point_begin = std::min(range.point_begin, frame.points.size());
-    if (!settings.bool_value(ViewportBoolSettingId::BackfaceSelection)) {
-      // Omit ordinary hover fill entirely: transparent triangles would still
-      // stamp overlay depth. Selected faces and tool face-plane previews keep
-      // their authored fills regardless of the picking preference.
+    if (context.projection == ViewportOverlayProjection::Orthographic &&
+        !settings.bool_value(ViewportBoolSettingId::BackfaceSelection)) {
+      // Orthographic hover is outline-only here: transparent triangles would
+      // still stamp overlay depth. Perspective hover, selected faces, and tool
+      // face-plane previews keep their fills regardless of the picking preference.
       const auto first = frame.triangles.begin() +
                          static_cast<std::ptrdiff_t>(range.triangle_begin);
       frame.triangles.erase(

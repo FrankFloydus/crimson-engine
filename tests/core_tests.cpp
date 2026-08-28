@@ -1455,7 +1455,7 @@ TEST(ViewportSettingsTests, DefaultsMatchNativeViewportSettingsState) {
       settings.float_value(ViewportFloatSettingId::RotationSnapDegrees),
       15.0f);
   ASSERT_EQ(viewport_color_settings().size(), 23u);
-  ASSERT_EQ(viewport_float_settings().size(), 26u);
+  ASSERT_EQ(viewport_float_settings().size(), 31u);
   ASSERT_EQ(viewport_bool_settings().size(), 12u);
   EXPECT_TRUE(settings.bool_value(ViewportBoolSettingId::ShowGrid));
   EXPECT_FALSE(settings.bool_value(ViewportBoolSettingId::ShowMeshGrid));
@@ -1476,6 +1476,129 @@ TEST(ViewportSettingsTests, DefaultsMatchNativeViewportSettingsState) {
   EXPECT_EQ(backface_selection.section, ViewportSettingsSectionId::Selection);
   EXPECT_EQ(backface_selection.key, "BackfaceSelection");
   EXPECT_FALSE(backface_selection.default_value);
+}
+
+TEST(ViewportSettingsTests,
+     InstanceEditingAddsSubtleDefaultsWithoutReplacingSavedColors) {
+  const std::filesystem::path path =
+      std::filesystem::temp_directory_path() /
+      "quader_instance_edit_legacy_colors.ini";
+  std::filesystem::remove(path);
+  {
+    std::ofstream file(path, std::ios::trunc);
+    ASSERT_TRUE(file.is_open());
+    file << "QVertexWorks.Quader.Viewport.InstanceEditBackgroundColor=3141597F\n"
+            "QVertexWorks.Quader.Viewport.InstanceEditContextColor=0B263F02\n";
+  }
+
+  ViewportSettings loaded = ViewportSettings::load(path);
+  EXPECT_FLOAT_EQ(loaded.float_value(
+                      ViewportFloatSettingId::InstanceEditBackgroundBlend),
+                  0.15f);
+  EXPECT_FLOAT_EQ(loaded.float_value(
+                      ViewportFloatSettingId::InstanceEditContextStrength),
+                  0.25f);
+  EXPECT_FLOAT_EQ(loaded.float_value(
+                      ViewportFloatSettingId::InstanceEditContextTintAmount),
+                  0.25f);
+  EXPECT_FLOAT_EQ(loaded.float_value(
+                      ViewportFloatSettingId::InstanceEditContextDesaturation),
+                  0.25f);
+  EXPECT_FLOAT_EQ(
+      loaded.float_value(ViewportFloatSettingId::InstanceEditGridFade), 0.15f);
+  const ViewportSettingColor background{
+      49.0f / 255.0f, 65.0f / 255.0f, 89.0f / 255.0f, 127.0f / 255.0f};
+  const ViewportSettingColor context{
+      11.0f / 255.0f, 38.0f / 255.0f, 63.0f / 255.0f, 2.0f / 255.0f};
+  expect_color_near(
+      loaded.color(ViewportColorSettingId::InstanceEditBackground), background);
+  expect_color_near(loaded.color(ViewportColorSettingId::InstanceEditContext),
+                    context);
+
+  ASSERT_TRUE(loaded.set_float_value(
+      ViewportFloatSettingId::InstanceEditContextStrength, 0.65f));
+  ASSERT_TRUE(loaded.save(path));
+  const ViewportSettings reloaded = ViewportSettings::load(path);
+  expect_color_near(
+      reloaded.color(ViewportColorSettingId::InstanceEditBackground), background);
+  expect_color_near(reloaded.color(ViewportColorSettingId::InstanceEditContext),
+                    context);
+  EXPECT_FLOAT_EQ(reloaded.float_value(
+                      ViewportFloatSettingId::InstanceEditContextStrength),
+                  0.65f);
+  {
+    std::ifstream file(path);
+    const std::string saved{std::istreambuf_iterator<char>(file),
+                            std::istreambuf_iterator<char>()};
+    EXPECT_NE(saved.find("InstanceEditBackgroundColor=3141597F"),
+              std::string::npos);
+    EXPECT_NE(saved.find("InstanceEditContextColor=0B263F02"),
+              std::string::npos);
+  }
+  std::filesystem::remove(path);
+}
+
+TEST(ViewportSettingsTests,
+     InstanceEditingEffectControlsClampAndPersistIndependently) {
+  const std::filesystem::path path =
+      std::filesystem::temp_directory_path() /
+      "quader_instance_edit_effect_controls.ini";
+  std::filesystem::remove(path);
+  ViewportSettings settings = ViewportSettings::defaults();
+  float edited = 0.35f;
+  for (const ViewportFloatSettingDescriptor &descriptor :
+       viewport_float_settings()) {
+    if (descriptor.section != ViewportSettingsSectionId::InstanceEditing) {
+      continue;
+    }
+    SCOPED_TRACE(descriptor.key);
+    EXPECT_TRUE(settings.set_float_value(descriptor.id, -2.0f));
+    EXPECT_FLOAT_EQ(settings.float_value(descriptor.id), 0.0f);
+    EXPECT_TRUE(settings.set_float_value(descriptor.id, 3.0f));
+    EXPECT_FLOAT_EQ(settings.float_value(descriptor.id), 1.0f);
+    EXPECT_TRUE(settings.set_float_value(
+        descriptor.id, std::numeric_limits<float>::quiet_NaN()));
+    EXPECT_FLOAT_EQ(settings.float_value(descriptor.id),
+                    descriptor.default_value);
+    EXPECT_TRUE(settings.set_float_value(descriptor.id, edited));
+    edited += 0.1f;
+  }
+  ASSERT_TRUE(settings.save(path));
+  const ViewportSettings loaded = ViewportSettings::load(path);
+  for (const ViewportFloatSettingDescriptor &descriptor :
+       viewport_float_settings()) {
+    if (descriptor.section == ViewportSettingsSectionId::InstanceEditing) {
+      EXPECT_NEAR(loaded.float_value(descriptor.id),
+                  settings.float_value(descriptor.id), 0.000001f)
+          << descriptor.key;
+    }
+  }
+
+  {
+    std::ofstream file(path, std::ios::trunc);
+    ASSERT_TRUE(file.is_open());
+    file << "QVertexWorks.Quader.Viewport.InstanceEditBackgroundBlend=-1\n"
+            "QVertexWorks.Quader.Viewport.InstanceEditContextStrength=2\n"
+            "QVertexWorks.Quader.Viewport.InstanceEditContextTintAmount=-4\n"
+            "QVertexWorks.Quader.Viewport.InstanceEditContextDesaturation=6\n"
+            "QVertexWorks.Quader.Viewport.InstanceEditGridFade=nan\n";
+  }
+  const ViewportSettings clamped = ViewportSettings::load(path);
+  EXPECT_FLOAT_EQ(clamped.float_value(
+                      ViewportFloatSettingId::InstanceEditBackgroundBlend),
+                  0.0f);
+  EXPECT_FLOAT_EQ(clamped.float_value(
+                      ViewportFloatSettingId::InstanceEditContextStrength),
+                  1.0f);
+  EXPECT_FLOAT_EQ(clamped.float_value(
+                      ViewportFloatSettingId::InstanceEditContextTintAmount),
+                  0.0f);
+  EXPECT_FLOAT_EQ(clamped.float_value(
+                      ViewportFloatSettingId::InstanceEditContextDesaturation),
+                  1.0f);
+  EXPECT_FLOAT_EQ(
+      clamped.float_value(ViewportFloatSettingId::InstanceEditGridFade), 0.15f);
+  std::filesystem::remove(path);
 }
 
 TEST(ViewportSettingsTests,
@@ -2373,7 +2496,9 @@ TEST(ViewportOverlayStyleResolverTests,
       .end = {1.0f, 0.0f, 0.0f},
   });
 
-  ViewportOverlayStyleResolver::apply(frame, settings);
+  ViewportOverlayStyleResolver::apply(
+      frame, settings,
+      {.projection = ViewportOverlayProjection::Orthographic});
 
   ASSERT_EQ(frame.triangles.size(), 3u);
   for (const ViewportOverlayTriangle &triangle : frame.triangles) {
@@ -2399,13 +2524,17 @@ TEST(ViewportOverlayStyleResolverTests,
   semantic_frame.lines.push_back({.layer = ViewportOverlayLayer::HoverFaceEdge});
 
   const ViewportOverlayFrame disabled =
-      ViewportOverlayStyleResolver::resolve(semantic_frame, settings);
+      ViewportOverlayStyleResolver::resolve(
+          semantic_frame, settings,
+          {.projection = ViewportOverlayProjection::Orthographic});
   ASSERT_EQ(disabled.triangles.size(), 1u);
   EXPECT_EQ(disabled.triangles[0].color, kOverlaySelectionFaceColor);
   ASSERT_TRUE(settings.set_bool_value(ViewportBoolSettingId::BackfaceSelection,
                                       true));
   const ViewportOverlayFrame enabled =
-      ViewportOverlayStyleResolver::resolve(semantic_frame, settings);
+      ViewportOverlayStyleResolver::resolve(
+          semantic_frame, settings,
+          {.projection = ViewportOverlayProjection::Orthographic});
 
   ASSERT_EQ(enabled.triangles.size(), 2u);
   EXPECT_EQ(enabled.triangles[0].color, kOverlayHoverFaceColor);
@@ -2413,6 +2542,106 @@ TEST(ViewportOverlayStyleResolverTests,
   ASSERT_EQ(enabled.lines.size(), 1u);
   EXPECT_EQ(enabled.lines[0].color, kOverlayHoverWireColor);
   EXPECT_EQ(semantic_frame.triangles.size(), 2u);
+}
+
+TEST(ViewportOverlayStyleResolverTests,
+     PerspectivePreservesHoverAndSelectedFillsWithEitherBackfaceSetting) {
+  ViewportSettings settings = ViewportSettings::defaults();
+  ViewportOverlayFrame semantic_frame;
+  for (const ViewportOverlayLayer layer : {
+           ViewportOverlayLayer::SelectedVisibleFace,
+           ViewportOverlayLayer::SelectedXrayFace,
+           ViewportOverlayLayer::SelectedFaceMask,
+           ViewportOverlayLayer::HoverFace,
+       }) {
+    semantic_frame.triangles.push_back({
+        .layer = layer,
+        .a = {0.0f, 0.0f, 0.0f},
+        .b = {1.0f, 0.0f, 0.0f},
+        .c = {0.0f, 1.0f, 0.0f},
+    });
+  }
+  semantic_frame.triangles.push_back({
+      .layer = ViewportOverlayLayer::HoverFace,
+      .style_role = ViewportOverlayStyleRole::HoverFace,
+  });
+  semantic_frame.lines.push_back({.layer = ViewportOverlayLayer::HoverFaceEdge});
+
+  for (const bool backface_selection : {false, true}) {
+    SCOPED_TRACE(backface_selection);
+    (void)settings.set_bool_value(ViewportBoolSettingId::BackfaceSelection,
+                                 backface_selection);
+    // Camera-independent styling defaults to perspective and must not erase
+    // semantic hover fills before the destination pane chooses its projection.
+    const ViewportOverlayFrame styled =
+        ViewportOverlayStyleResolver::resolve(semantic_frame, settings);
+    ASSERT_EQ(styled.triangles.size(), 5u);
+    for (std::size_t index = 0; index < 3u; ++index) {
+      EXPECT_EQ(styled.triangles[index].layer,
+                semantic_frame.triangles[index].layer);
+      EXPECT_EQ(styled.triangles[index].color, kOverlaySelectionFaceColor);
+    }
+    for (std::size_t index = 3u; index < styled.triangles.size(); ++index) {
+      EXPECT_EQ(styled.triangles[index].layer, ViewportOverlayLayer::HoverFace);
+      EXPECT_EQ(styled.triangles[index].color, kOverlayHoverFaceColor);
+    }
+    ASSERT_EQ(styled.lines.size(), 1u);
+    EXPECT_EQ(styled.lines.front().color, kOverlayHoverWireColor);
+  }
+}
+
+TEST(ViewportOverlayStyleResolverTests,
+     PaneProjectionChangesRestyleSharedSemanticHoverIndependently) {
+  ViewportWorkspaceService workspace;
+  ASSERT_TRUE(workspace.set_layout(ViewportLayoutId::FourQuad));
+  const ViewportSettings settings = ViewportSettings::defaults();
+  ViewportOverlayFrame semantic_frame;
+  semantic_frame.triangles.push_back({.layer = ViewportOverlayLayer::HoverFace});
+  semantic_frame.triangles.push_back({
+      .layer = ViewportOverlayLayer::SelectedVisibleFace,
+  });
+  semantic_frame.lines.push_back({.layer = ViewportOverlayLayer::HoverFaceEdge});
+  const std::uint64_t semantic_signature =
+      OverlayRenderableBuilder::frame_signature(semantic_frame);
+
+  const auto expect_pane_fill = [&](ViewportPaneId pane, bool hover_filled) {
+    SCOPED_TRACE(static_cast<int>(pane));
+    const ViewportOverlayCamera camera = ViewportCameraAdapter::overlay_camera(
+        workspace.camera(pane), {640.0f, 480.0f});
+    const ViewportOverlayFrame styled = ViewportOverlayStyleResolver::resolve(
+        semantic_frame, settings,
+        {.selection_mode = ViewportOverlaySelectionContext::Face,
+         .projection = camera.projection});
+    ASSERT_EQ(styled.triangles.size(), hover_filled ? 2u : 1u);
+    if (hover_filled) {
+      EXPECT_EQ(styled.triangles.front().layer, ViewportOverlayLayer::HoverFace);
+      EXPECT_EQ(styled.triangles.front().color, kOverlayHoverFaceColor);
+    }
+    EXPECT_EQ(styled.triangles.back().layer,
+              ViewportOverlayLayer::SelectedVisibleFace);
+    EXPECT_EQ(styled.triangles.back().color, kOverlaySelectionFaceColor);
+    ASSERT_EQ(styled.lines.size(), 1u);
+    EXPECT_EQ(styled.lines.front().layer, ViewportOverlayLayer::HoverFaceEdge);
+    EXPECT_EQ(styled.lines.front().color, kOverlayHoverWireColor);
+  };
+
+  expect_pane_fill(ViewportPaneId::Perspective, true);
+  expect_pane_fill(ViewportPaneId::Top, false);
+
+  // Pane identity is unchanged while each pane's actual projection is swapped.
+  ASSERT_TRUE(workspace.set_view(ViewportPaneId::Perspective, ViewportView::Top));
+  ASSERT_TRUE(workspace.set_view(ViewportPaneId::Top, ViewportView::Perspective));
+  expect_pane_fill(ViewportPaneId::Perspective, false);
+  expect_pane_fill(ViewportPaneId::Top, true);
+
+  // Direct navigation transitions also restore the fill from the same source.
+  workspace.camera(ViewportPaneId::Perspective).unlock_orthographic_view();
+  expect_pane_fill(ViewportPaneId::Perspective, true);
+  workspace.camera(ViewportPaneId::Top).view_axis(ViewportViewAxis::Z, 1);
+  expect_pane_fill(ViewportPaneId::Top, false);
+  expect_pane_fill(ViewportPaneId::Perspective, true);
+  EXPECT_EQ(OverlayRenderableBuilder::frame_signature(semantic_frame),
+            semantic_signature);
 }
 
 TEST(ViewportOverlayStyleResolverTests,
@@ -2432,7 +2661,9 @@ TEST(ViewportOverlayStyleResolverTests,
        .style_role = ViewportOverlayStyleRole::ExplicitColor},
   };
 
-  ViewportOverlayStyleResolver::apply(frame, settings);
+  ViewportOverlayStyleResolver::apply(
+      frame, settings,
+      {.projection = ViewportOverlayProjection::Orthographic});
 
   ASSERT_EQ(frame.triangles.size(), 5u);
   EXPECT_EQ(frame.triangles[0].color, kOverlayFacePlaneHoverFaceColor);
@@ -2460,7 +2691,8 @@ TEST(ViewportOverlayStyleResolverTests,
   });
 
   ViewportOverlayStyleResolver::apply_from(
-      frame, ViewportSettings::defaults(), {}, range);
+      frame, ViewportSettings::defaults(),
+      {.projection = ViewportOverlayProjection::Orthographic}, range);
 
   ASSERT_EQ(frame.triangles.size(), 3u);
   EXPECT_EQ(frame.triangles[0].color, rgba8(12, 34, 56, 78));
@@ -2531,6 +2763,7 @@ TEST(ViewportPersistentOverlayStyleSnapshotTests,
           ViewportSettings::defaults());
   EXPECT_NE(defaults.face_signature, 0u);
   EXPECT_NE(defaults.wire_signature, 0u);
+  EXPECT_NE(defaults.instance_edit_context_signature, 0u);
   EXPECT_FALSE(selected_object_face_style_changed(
       true, defaults.face_signature, defaults));
   EXPECT_FALSE(scene_wireframe_style_changed(
@@ -2548,6 +2781,8 @@ TEST(ViewportPersistentOverlayStyleSnapshotTests,
   EXPECT_EQ(face.selection_face_color, rgba8(255, 0, 0));
   EXPECT_NE(face.face_signature, defaults.face_signature);
   EXPECT_EQ(face.wire_signature, defaults.wire_signature);
+  EXPECT_EQ(face.instance_edit_context_signature,
+            defaults.instance_edit_context_signature);
 
   ViewportSettings wire_settings = ViewportSettings::defaults();
   ASSERT_TRUE(wire_settings.set_color(ViewportColorSettingId::SelectionWire,
@@ -2557,6 +2792,8 @@ TEST(ViewportPersistentOverlayStyleSnapshotTests,
   EXPECT_EQ(wire.selection_wire_color, rgba8(0, 255, 0));
   EXPECT_EQ(wire.face_signature, defaults.face_signature);
   EXPECT_NE(wire.wire_signature, defaults.wire_signature);
+  EXPECT_EQ(wire.instance_edit_context_signature,
+            defaults.instance_edit_context_signature);
 
   ViewportSettings width_settings = ViewportSettings::defaults();
   ASSERT_TRUE(width_settings.set_float_value(
@@ -2566,6 +2803,62 @@ TEST(ViewportPersistentOverlayStyleSnapshotTests,
   EXPECT_FLOAT_EQ(width.selection_edge_line_width_pixels, 5.0f);
   EXPECT_EQ(width.face_signature, defaults.face_signature);
   EXPECT_NE(width.wire_signature, defaults.wire_signature);
+  EXPECT_EQ(width.instance_edit_context_signature,
+            defaults.instance_edit_context_signature);
+
+  ViewportSettings context_color_settings = ViewportSettings::defaults();
+  ASSERT_TRUE(context_color_settings.set_color(
+      ViewportColorSettingId::InstanceEditContext,
+      {0.9f, 0.2f, 0.4f, 0.8f}));
+  const ViewportPersistentOverlayStyleSnapshot context_color =
+      ViewportOverlayStyleResolver::persistent_style_snapshot(
+          context_color_settings);
+  EXPECT_EQ(context_color.face_signature, defaults.face_signature);
+  EXPECT_EQ(context_color.wire_signature, defaults.wire_signature);
+  EXPECT_NE(context_color.instance_edit_context_signature,
+            defaults.instance_edit_context_signature);
+
+  for (const ViewportFloatSettingId id :
+       {ViewportFloatSettingId::InstanceEditContextStrength,
+        ViewportFloatSettingId::InstanceEditContextTintAmount,
+        ViewportFloatSettingId::InstanceEditContextDesaturation}) {
+    SCOPED_TRACE(static_cast<int>(id));
+    ViewportSettings context_settings = ViewportSettings::defaults();
+    ASSERT_TRUE(context_settings.set_float_value(id, 0.8f));
+    const ViewportPersistentOverlayStyleSnapshot context =
+        ViewportOverlayStyleResolver::persistent_style_snapshot(context_settings);
+    EXPECT_EQ(context.face_signature, defaults.face_signature);
+    EXPECT_EQ(context.wire_signature, defaults.wire_signature);
+    EXPECT_NE(context.instance_edit_context_signature,
+              defaults.instance_edit_context_signature);
+  }
+
+  ViewportSettings background_color_settings = ViewportSettings::defaults();
+  ASSERT_TRUE(background_color_settings.set_color(
+      ViewportColorSettingId::InstanceEditBackground,
+      {0.9f, 0.2f, 0.4f, 0.8f}));
+  const ViewportPersistentOverlayStyleSnapshot background_color =
+      ViewportOverlayStyleResolver::persistent_style_snapshot(
+          background_color_settings);
+  EXPECT_EQ(background_color.face_signature, defaults.face_signature);
+  EXPECT_EQ(background_color.wire_signature, defaults.wire_signature);
+  EXPECT_EQ(background_color.instance_edit_context_signature,
+            defaults.instance_edit_context_signature);
+
+  for (const ViewportFloatSettingId id :
+       {ViewportFloatSettingId::InstanceEditBackgroundBlend,
+        ViewportFloatSettingId::InstanceEditGridFade}) {
+    SCOPED_TRACE(static_cast<int>(id));
+    ViewportSettings background_settings = ViewportSettings::defaults();
+    ASSERT_TRUE(background_settings.set_float_value(id, 0.8f));
+    const ViewportPersistentOverlayStyleSnapshot background =
+        ViewportOverlayStyleResolver::persistent_style_snapshot(
+            background_settings);
+    EXPECT_EQ(background.face_signature, defaults.face_signature);
+    EXPECT_EQ(background.wire_signature, defaults.wire_signature);
+    EXPECT_EQ(background.instance_edit_context_signature,
+              defaults.instance_edit_context_signature);
+  }
 
   ViewportSettings unrelated_settings = ViewportSettings::defaults();
   ASSERT_TRUE(unrelated_settings.set_color(ViewportColorSettingId::SourceWire,
@@ -2575,6 +2868,8 @@ TEST(ViewportPersistentOverlayStyleSnapshotTests,
           unrelated_settings);
   EXPECT_EQ(unrelated.face_signature, defaults.face_signature);
   EXPECT_EQ(unrelated.wire_signature, defaults.wire_signature);
+  EXPECT_EQ(unrelated.instance_edit_context_signature,
+            defaults.instance_edit_context_signature);
 }
 
 

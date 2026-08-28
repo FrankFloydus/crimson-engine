@@ -22,6 +22,7 @@ namespace quader {
 
 class TextureBindingService;
 class ViewportSettings;
+struct InstanceEditStyle;
 
 // Matches the shipping Filament instance limit; mappings never split geometry.
 inline constexpr std::size_t kMeshTextureMappingCapacity = 64u;
@@ -40,6 +41,12 @@ void bind_standard_material_texture_transform(
 /** Binds the default shadow-free modeling light used by Shaded mode. */
 void bind_default_shaded_lighting(
     filament::MaterialInstance &material_instance);
+
+/** Binds the shared instance-edit context color and strength controls for mesh
+ * and scene-wire material families. The per-renderable dim flag stays separate. */
+void bind_instance_edit_context_style(
+    filament::MaterialInstance &material_instance,
+    const InstanceEditStyle &style);
 
 /**
  * Builds the narrow signature used to avoid rewriting unchanged viewport mesh

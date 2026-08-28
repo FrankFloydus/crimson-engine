@@ -10,6 +10,7 @@
 #include "diagnostics/profile.hpp"
 #include "math/glm_bridge.hpp"
 #include "render/filament_buffer_descriptor_factory.hpp"
+#include "render/material_binding_service.hpp"
 #include "render/overlay/overlay_mesh_types.hpp"
 #include "render/overlay/overlay_renderable_builder.hpp"
 #include "render/render_layers.hpp"
@@ -170,7 +171,8 @@ std::uint64_t wire_geometry_signature(
 
 RenderInstancePrimitiveKey wire_key(
     const RenderOverlayMeshSnapshot &mesh,
-    const ViewportPersistentOverlayStyleSnapshot &style) {
+    const ViewportPersistentOverlayStyleSnapshot &style,
+    const RenderInstanceEditScope &instance_edit_scope) {
   return {
       // These exact runtime tokens deliberately avoid grouping on a content
       // hash. The remaining exact style fields distinguish the derived VB and
@@ -181,6 +183,11 @@ RenderInstancePrimitiveKey wire_key(
       .index_count = std::bit_cast<std::uint32_t>(wire_width(mesh, style)),
       .layer_mask = static_cast<std::uint8_t>(wire_layer(mesh)),
       .channel = kViewportDefaultRenderableChannel,
+      .presentation_flags = static_cast<std::uint8_t>(
+          is_instance_edit_context(instance_edit_scope, mesh.occurrence,
+                                   mesh.selected)
+              ? RenderInstancePresentationFlag::Dimmed
+              : RenderInstancePresentationFlag::None),
       .double_sided = true,
       .editor_unlit = true,
   };
@@ -254,7 +261,8 @@ SceneWireframeOccurrencePreparation prepare_wire_occurrences(
     if (!mesh.has_wire_geometry()) {
       continue;
     }
-    const RenderInstancePrimitiveKey key = wire_key(mesh, snapshot.style);
+    const RenderInstancePrimitiveKey key =
+        wire_key(mesh, snapshot.style, snapshot.instance_edit_scope);
     prepared.record_by_key.try_emplace(key, &mesh);
     const std::uint64_t participant = participant_token(mesh);
     if (participant == 0u) {
@@ -278,7 +286,11 @@ SceneWireframeOccurrencePreparation prepare_wire_occurrences(
       }
     }
 
-    unique_keys.insert(key);
+    // Context styling separates materials, not the immutable edge buffers.
+    RenderInstancePrimitiveKey geometry_key = key;
+    geometry_key.presentation_flags =
+        static_cast<std::uint8_t>(RenderInstancePresentationFlag::None);
+    unique_keys.insert(geometry_key);
     prepared.occurrences.push_back({
         .key = key,
         .occurrence = participant,
@@ -385,7 +397,8 @@ struct SceneWireframeOverlayCache::WireBatchProxy final {
       : entity(other.entity),
         instance_buffer(std::exchange(other.instance_buffer, nullptr)),
         material_instance(std::exchange(other.material_instance, nullptr)),
-        geometry(std::exchange(other.geometry, nullptr)) {
+        geometry(std::exchange(other.geometry, nullptr)),
+        dimmed(other.dimmed) {
     other.entity.clear();
   }
   WireBatchProxy &operator=(WireBatchProxy &&) = delete;
@@ -394,6 +407,7 @@ struct SceneWireframeOverlayCache::WireBatchProxy final {
   filament::InstanceBuffer *instance_buffer = nullptr;
   filament::MaterialInstance *material_instance = nullptr;
   WireGeometryResource *geometry = nullptr;
+  bool dimmed = false;
 };
 
 SceneWireframeOverlayCache::SceneWireframeOverlayCache() = default;
@@ -432,6 +446,8 @@ void SceneWireframeOverlayCache::shutdown() {
   synced_asset_revision_ = 0u;
   synced_local_visibility_revision_ = 0u;
   synced_wire_style_signature_ = 0u;
+  synced_instance_edit_context_signature_ = 0u;
+  synced_instance_edit_scope_ = {};
   synced_selected_mesh_wire_visible_ = true;
   synced_clip_planes_ = {};
   layer_mask_ = 0u;
@@ -480,6 +496,9 @@ void SceneWireframeOverlayCache::sync(
       !has_synced_ || synced_clip_planes_ != snapshot.clip_planes;
   const bool style_changed = scene_wireframe_style_changed(
       has_synced_, synced_wire_style_signature_, snapshot.style);
+  const bool context_style_changed =
+      !has_synced_ || synced_instance_edit_context_signature_ !=
+                          snapshot.style.instance_edit_context_signature;
   if (has_synced_ && synced_scene_binding_ == snapshot.scene_binding &&
       synced_scene_revision_ == snapshot.scene_revision &&
       synced_asset_revision_ == snapshot.asset_revision &&
@@ -487,8 +506,14 @@ void SceneWireframeOverlayCache::sync(
           snapshot.local_visibility_revision &&
       synced_selected_mesh_wire_visible_ ==
           snapshot.selected_mesh_wire_visible &&
+      synced_instance_edit_scope_ == snapshot.instance_edit_scope &&
       !clip_changed &&
       !style_changed) {
+    if (context_style_changed) {
+      update_instance_edit_style(snapshot.style.instance_edit_style);
+      synced_instance_edit_context_signature_ =
+          snapshot.style.instance_edit_context_signature;
+    }
     return;
   }
 
@@ -516,11 +541,17 @@ void SceneWireframeOverlayCache::sync(
   if (clip_changed) {
     update_clip_planes(snapshot.clip_planes);
   }
+  if (context_style_changed) {
+    update_instance_edit_style(snapshot.style.instance_edit_style);
+  }
   synced_scene_binding_ = snapshot.scene_binding;
   synced_scene_revision_ = snapshot.scene_revision;
   synced_asset_revision_ = snapshot.asset_revision;
   synced_local_visibility_revision_ = snapshot.local_visibility_revision;
   synced_wire_style_signature_ = snapshot.style.wire_signature;
+  synced_instance_edit_context_signature_ =
+      snapshot.style.instance_edit_context_signature;
+  synced_instance_edit_scope_ = snapshot.instance_edit_scope;
   synced_selected_mesh_wire_visible_ =
       snapshot.selected_mesh_wire_visible;
   synced_clip_planes_ = snapshot.clip_planes;
@@ -687,6 +718,13 @@ SceneWireframeOverlayCache::create_batch(
     return proxy;
   }
   configure_overlay_material(*proxy.material_instance, state);
+  proxy.dimmed =
+      (chunk.key.presentation_flags &
+       static_cast<std::uint8_t>(RenderInstancePresentationFlag::Dimmed)) != 0u;
+  proxy.material_instance->setParameter("instanceEditDim",
+                                        proxy.dimmed ? 1.0f : 0.0f);
+  bind_instance_edit_context_style(*proxy.material_instance,
+                                   style.instance_edit_style);
   proxy.material_instance->setParameter("lineWidth", wire_width(mesh, style));
   proxy.material_instance->setParameter("featherPixels",
                                         kOverlayLineFeatherPixels);
@@ -835,6 +873,15 @@ void SceneWireframeOverlayCache::update_clip_planes(
     if (proxy.material_instance != nullptr) {
       proxy.material_instance->setParameter("nearPlane",
                                             clip_planes.near_plane);
+    }
+  }
+}
+
+void SceneWireframeOverlayCache::update_instance_edit_style(
+    const InstanceEditStyle &style) {
+  for (WireBatchProxy &proxy : proxies_) {
+    if (proxy.material_instance != nullptr && proxy.dimmed) {
+      bind_instance_edit_context_style(*proxy.material_instance, style);
     }
   }
 }

@@ -9,6 +9,7 @@
 #include "core/color_space.hpp"
 #include "render/filament_buffer_descriptor_factory.hpp"
 #include "render/filament_utils.hpp"
+#include "render/instance_edit_style.hpp"
 #include "render/render_layers.hpp"
 #include "render/render_signature_builder.hpp"
 #include "viewport/viewport_grid_placement_policy.hpp"
@@ -57,14 +58,6 @@ filament::math::float4 setting_color(ViewportSettingColor color) {
   };
 }
 
-filament::math::float4 instance_edit_grid_color(ViewportSettingColor color) {
-  const float luminance =
-      color.r * 0.2126f + color.g * 0.7152f + color.b * 0.0722f;
-  const float washed = std::clamp(0.48f + luminance * 0.22f, 0.48f, 0.70f);
-  return {srgb_to_linear(washed * 0.84f), srgb_to_linear(washed),
-          srgb_to_linear(washed), color.a * 0.72f};
-}
-
 RenderSignatureBuilder &
 add_setting_color(RenderSignatureBuilder &signature,
                   ViewportSettingColor color) {
@@ -90,7 +83,12 @@ std::uint64_t ground_grid_presentation_signature(
       .add_value(viewport_width)
       .add_value(viewport_height)
       .add_float(std::max(grid_world_spacing, 0.0001f))
-      .add_bool(instance_edit_context);
+      .add_bool(instance_edit_context)
+      .add_float(instance_edit_context
+                     ? std::clamp(settings.float_value(
+                                      ViewportFloatSettingId::InstanceEditGridFade),
+                                  0.0f, 1.0f)
+                     : 0.0f);
   add_setting_color(
       signature, settings.color(ViewportColorSettingId::GridMinor));
   add_setting_color(
@@ -253,28 +251,20 @@ void ViewportGridRenderer::update(const ViewportCameraController &controller,
       controller.state().projection != ViewportProjection::Orthographic);
   const float spacing = std::max(grid_world_spacing, 0.0001f);
   const float parent_spacing = std::max(kParentGridWorldSize, spacing);
+  const InstanceEditStyle instance_edit_style =
+      InstanceEditStyle::from_settings(settings);
+  const auto grid_color = [&](ViewportColorSettingId id) {
+    return setting_color(instance_edit_style.resolve_grid_color(
+        settings.color(id), instance_edit_context));
+  };
   ground_grid_material_instance_->setParameter(
-      "gridColor",
-      instance_edit_context
-          ? instance_edit_grid_color(
-                settings.color(ViewportColorSettingId::GridMinor))
-          : setting_color(settings.color(ViewportColorSettingId::GridMinor)));
+      "gridColor", grid_color(ViewportColorSettingId::GridMinor));
   ground_grid_material_instance_->setParameter(
-      "majorGridColor",
-      instance_edit_context
-          ? instance_edit_grid_color(
-                settings.color(ViewportColorSettingId::GridMajor))
-          : setting_color(settings.color(ViewportColorSettingId::GridMajor)));
+      "majorGridColor", grid_color(ViewportColorSettingId::GridMajor));
   ground_grid_material_instance_->setParameter(
-      "originUColor",
-      instance_edit_context
-          ? instance_edit_grid_color(settings.color(grid.axes.u_color))
-          : setting_color(settings.color(grid.axes.u_color)));
+      "originUColor", grid_color(grid.axes.u_color));
   ground_grid_material_instance_->setParameter(
-      "originVColor",
-      instance_edit_context
-          ? instance_edit_grid_color(settings.color(grid.axes.v_color))
-          : setting_color(settings.color(grid.axes.v_color)));
+      "originVColor", grid_color(grid.axes.v_color));
   ground_grid_material_instance_->setParameter(
       "cameraPosition",
       filament::math::float3{pose.eye.x, pose.eye.y, pose.eye.z});

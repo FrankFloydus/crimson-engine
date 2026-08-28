@@ -11,6 +11,7 @@
 #include "core/types.hpp"
 #include "math/types.hpp"
 #include "render/render_scene_binding.hpp"
+#include "render/render_instance_edit_scope.hpp"
 #include "render/viewport_overlay_frame.hpp"
 #include "render/overlay/viewport_persistent_overlay_style.hpp"
 #include "scene/components.hpp"
@@ -169,6 +170,7 @@ struct RenderOverlaySceneWireframeSnapshot {
   std::uint64_t asset_revision = 0;
   std::uint64_t local_visibility_revision = 0;
   ViewportPersistentOverlayStyleSnapshot style;
+  RenderInstanceEditScope instance_edit_scope;
   ViewportCameraClipPlanes clip_planes;
   std::uint8_t layer_mask = 0u;
   /** Whole-mesh selected wire is an Object-mode presentation only. */
@@ -245,7 +247,8 @@ public:
       ViewportPersistentOverlayStyleSnapshot style,
       RenderSceneBindingKey scene_binding = {},
       const ViewportLocalVisibilitySnapshot *local_visibility = nullptr,
-      bool selected_mesh_wire_visible = true);
+      bool selected_mesh_wire_visible = true,
+      RenderInstanceEditScope instance_edit_scope = {});
   [[nodiscard]] const RenderOverlaySelectionSnapshot &selection_snapshot(
       const SceneDocument &document, const AssetRegistry &assets,
       RenderSceneBindingKey scene_binding = {},
@@ -338,14 +341,17 @@ build_render_overlay_scene_wireframe_snapshot(const SceneDocument &document,
                                               RenderSceneBindingKey
                                                   scene_binding = {},
                                               const ViewportLocalVisibilitySnapshot *
-                                                  local_visibility = nullptr);
+                                                  local_visibility = nullptr,
+                                              RenderInstanceEditScope
+                                                  instance_edit_scope = {});
 [[nodiscard]] RenderOverlaySceneWireframeSnapshot
 build_render_overlay_scene_wireframe_snapshot(
     const SceneDocument &document, const AssetRegistry &assets,
     std::uint8_t layer_mask, ViewportPersistentOverlayStyleSnapshot style,
     RenderSceneBindingKey scene_binding = {},
     const ViewportLocalVisibilitySnapshot *local_visibility = nullptr,
-    bool selected_mesh_wire_visible = true);
+    bool selected_mesh_wire_visible = true,
+    RenderInstanceEditScope instance_edit_scope = {});
 
 [[nodiscard]] RenderOverlaySelectionSnapshot
 build_render_overlay_selection_snapshot(

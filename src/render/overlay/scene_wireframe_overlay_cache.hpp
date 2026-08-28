@@ -124,6 +124,7 @@ private:
   void destroy_geometry_resources();
   void prune_unused_geometry_resources();
   void update_clip_planes(ViewportCameraClipPlanes clip_planes);
+  void update_instance_edit_style(const InstanceEditStyle &style);
   void set_layer_mask(std::uint8_t layer_mask);
 
   filament::Engine *engine_ = nullptr;
@@ -140,6 +141,8 @@ private:
   std::uint64_t synced_asset_revision_ = 0u;
   std::uint64_t synced_local_visibility_revision_ = 0u;
   std::uint64_t synced_wire_style_signature_ = 0u;
+  std::uint64_t synced_instance_edit_context_signature_ = 0u;
+  RenderInstanceEditScope synced_instance_edit_scope_;
   bool synced_selected_mesh_wire_visible_ = true;
   ViewportCameraClipPlanes synced_clip_planes_;
   std::uint8_t layer_mask_ = 0u;

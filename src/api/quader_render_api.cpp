@@ -33,6 +33,15 @@ const SceneSession &read_scene_session(QuaderApiSession session) {
   return QuaderApiSessionInternalAccess::read_scene_session(session);
 }
 
+RenderInstanceEditScope instance_edit_render_scope(const SceneSession &session) {
+  const InstanceEditContext edit_scope =
+      session.instances().instance_edit_scope();
+  return edit_scope.active()
+             ? RenderInstanceEditScope{.occurrence = edit_scope.occurrence(),
+                                       .definition = edit_scope.definition()}
+             : RenderInstanceEditScope{};
+}
+
 bool viewport_overlay_frame_visible(const ViewportOverlayFrame &frame) {
   return !frame.lines.empty() || !frame.triangles.empty() ||
          !frame.points.empty() || !frame.icons.empty();
@@ -163,13 +172,10 @@ QuaderRenderApiRuntimeAccess::sync_scene(QuaderRenderApi &api,
                                          SceneRenderBridge &bridge) {
   const SceneSession &scene_session = read_scene_session(api.session_);
   const SceneSessionReadView session = scene_session.read_view();
-  const SceneInstanceEditState edit_state =
-      scene_session.instances().instance_edit_state();
   const ViewportLocalVisibilitySnapshot local_visibility =
       scene_session.viewport_local_visibility().snapshot();
   bridge.sync(session.scene, session.assets, 0, scene_binding(api),
-              {.occurrence = edit_state.occurrence,
-               .definition = edit_state.definition},
+              instance_edit_render_scope(scene_session),
               &local_visibility);
   return api.runtime_status("Render scene synchronized.");
 }
@@ -374,7 +380,8 @@ QuaderApiVoidResult QuaderRenderApiRuntimeAccess::sync_scene_asset_overlays(
           session.scene, session.assets,
           request.selected_object_overlay_visible,
           request.scene_wireframe_layer_mask, request.style, binding,
-          &local_visibility, request.selected_scene_wire_visible);
+          &local_visibility, request.selected_scene_wire_visible,
+          instance_edit_render_scope(scene_session));
   if (update.changed() || bridge.scene_asset_overlay_sync_pending()) {
     bridge.sync_scene_asset_overlays(*update.selected_object,
                                      *update.scene_wireframe);

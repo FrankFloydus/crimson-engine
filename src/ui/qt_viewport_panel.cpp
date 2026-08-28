@@ -806,8 +806,7 @@ void QtViewportPanel::prepare_viewports(
         workspace_->shading_mode(pane_state.id);
     ViewportRenderer &renderer = pane_state.surface->renderer();
     renderer.set_instance_edit_context_active(
-        instance_edit_context_active,
-        settings.color(ViewportColorSettingId::InstanceEditBackground));
+        instance_edit_context_active, settings);
     renderer.set_material_debug_mode(viewport_material_debug_mode(shading));
 
     if (const EntityId root = document.scene_root(); root != kInvalidEntityId) {
@@ -930,6 +929,7 @@ void QtViewportPanel::prepare_viewports(
                 : 0u,
         .style_signature = overlay_style_signature,
         .selection_mode = cached_overlay_mode,
+        .projection = overlay_camera.projection,
         .selection_overlay_visible = selection_overlay_visible,
         .scene_overlay_requested = scene_overlay_requested,
         .wireframe_pane =
@@ -941,6 +941,7 @@ void QtViewportPanel::prepare_viewports(
             OverlayRenderableBuilder::frame_signature(dynamic_overlay_frame),
         .style_signature = overlay_style_signature,
         .selection_mode = cached_overlay_mode,
+        .projection = overlay_camera.projection,
     };
     pane_state.edge_length_hud->present(
         dynamic_overlay_frame, dynamic_submission_key.frame_signature,
@@ -996,6 +997,7 @@ void QtViewportPanel::prepare_viewports(
           overlay_frame, settings,
           ViewportOverlayStyleContext{
               .selection_mode = overlay_selection_context(cached_overlay_mode),
+              .projection = overlay_camera.projection,
           },
           scene_style_range);
       render_bridge.set_overlay_frame(viewport_index, layer_mask,
@@ -1009,6 +1011,7 @@ void QtViewportPanel::prepare_viewports(
           dynamic_overlay_frame, settings,
           ViewportOverlayStyleContext{
               .selection_mode = overlay_selection_context(cached_overlay_mode),
+              .projection = overlay_camera.projection,
           });
       render_bridge.set_dynamic_overlay_frame(
           viewport_index, layer_mask, std::move(dynamic_overlay_frame),

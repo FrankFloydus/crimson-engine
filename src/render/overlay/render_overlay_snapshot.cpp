@@ -451,10 +451,12 @@ build_render_overlay_scene_wireframe_snapshot(const SceneDocument &document,
                                               RenderSceneBindingKey
                                                   scene_binding,
                                               const ViewportLocalVisibilitySnapshot *
-                                                  local_visibility) {
+                                                  local_visibility,
+                                              RenderInstanceEditScope
+                                                  instance_edit_scope) {
   return build_render_overlay_scene_wireframe_snapshot(
       document, assets, layer_mask, default_persistent_overlay_style(),
-      scene_binding, local_visibility);
+      scene_binding, local_visibility, true, instance_edit_scope);
 }
 
 RenderOverlaySceneWireframeSnapshot
@@ -463,7 +465,8 @@ build_render_overlay_scene_wireframe_snapshot(
     std::uint8_t layer_mask, ViewportPersistentOverlayStyleSnapshot style,
     RenderSceneBindingKey scene_binding,
     const ViewportLocalVisibilitySnapshot *local_visibility,
-    bool selected_mesh_wire_visible) {
+    bool selected_mesh_wire_visible,
+    RenderInstanceEditScope instance_edit_scope) {
   QDR_PROFILE_FUNCTION();
   RenderOverlaySceneWireframeSnapshot snapshot{
       .scene_binding = scene_binding,
@@ -472,6 +475,7 @@ build_render_overlay_scene_wireframe_snapshot(
       .local_visibility_revision =
           local_visibility_revision(local_visibility),
       .style = style,
+      .instance_edit_scope = instance_edit_scope,
       .clip_planes = scene_camera_clip_planes(document),
       .layer_mask = layer_mask,
       .selected_mesh_wire_visible = selected_mesh_wire_visible,
@@ -642,7 +646,8 @@ RenderOverlaySnapshotCache::update_persistent(
     ViewportPersistentOverlayStyleSnapshot style,
     RenderSceneBindingKey scene_binding,
     const ViewportLocalVisibilitySnapshot *local_visibility,
-    bool selected_mesh_wire_visible) {
+    bool selected_mesh_wire_visible,
+    RenderInstanceEditScope instance_edit_scope) {
   QDR_PROFILE_FUNCTION();
   bind_sources(document, assets, scene_binding);
   const std::uint64_t current_local_visibility_revision =
@@ -704,17 +709,26 @@ RenderOverlaySnapshotCache::update_persistent(
         scene_wireframe_snapshot_.asset_revision == assets.revision() &&
         scene_wireframe_snapshot_.style.wire_signature ==
             style.wire_signature));
-  const bool scene_wireframe_changed = !wireframe_snapshot_matches;
-  if (scene_wireframe_changed) {
+  const bool wireframe_context_changed =
+      !has_scene_wireframe_snapshot_ ||
+      scene_wireframe_snapshot_.instance_edit_scope != instance_edit_scope ||
+      scene_wireframe_snapshot_.style.instance_edit_context_signature !=
+          style.instance_edit_context_signature;
+  const bool scene_wireframe_changed =
+      !wireframe_snapshot_matches || wireframe_context_changed;
+  if (!wireframe_snapshot_matches) {
     scene_wireframe_snapshot_ = build_render_overlay_scene_wireframe_snapshot(
         document, assets, scene_wireframe_layer_mask, style, scene_binding,
-        local_visibility, selected_mesh_wire_visible);
+        local_visibility, selected_mesh_wire_visible, instance_edit_scope);
     has_scene_wireframe_snapshot_ = true;
     ++stats_.scene_wireframe_build_count;
-  } else if (!wireframe_sources_are_relevant) {
+  } else {
+    // Context appearance and edit scope are metadata: topology, authored color,
+    // and borrowed mesh spans stay intact until the source revisions change.
     scene_wireframe_snapshot_.scene_revision = document.revision();
     scene_wireframe_snapshot_.asset_revision = assets.revision();
     scene_wireframe_snapshot_.style = style;
+    scene_wireframe_snapshot_.instance_edit_scope = instance_edit_scope;
     scene_wireframe_snapshot_.clip_planes =
         scene_camera_clip_planes(document);
   }

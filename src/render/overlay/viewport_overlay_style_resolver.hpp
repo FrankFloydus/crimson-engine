@@ -48,6 +48,7 @@ struct ViewportOverlayStyleOverride {
 struct ViewportOverlayStyleContext {
   ViewportOverlaySelectionContext selection_mode =
       ViewportOverlaySelectionContext::Any;
+  ViewportOverlayProjection projection = ViewportOverlayProjection::Perspective;
   std::vector<ViewportOverlayStyleOverride> overrides;
 };
 

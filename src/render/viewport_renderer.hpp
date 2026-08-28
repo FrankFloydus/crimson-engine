@@ -6,6 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
+#include "render/instance_edit_style.hpp"
 #include "render/texture_registry.hpp"
 #include "render/viewport_grid_renderer.hpp"
 #include "render/viewport_render_target.hpp"
@@ -77,7 +78,7 @@ public:
                             const ViewportSettings &settings,
                             bool visible = true);
     void set_instance_edit_context_active(bool active,
-                                          ViewportSettingColor background);
+                                          const ViewportSettings &settings);
     void set_overlay_visible(bool visible);
     void set_scene_visible(bool visible);
     void set_scene_layer_mask(std::uint8_t layer_mask);
@@ -126,7 +127,7 @@ public:
     bool instance_edit_context_active_ = false;
     ViewportMaterialDebugMode material_debug_mode_ =
         ViewportMaterialDebugMode::None;
-    ViewportSettingColor instance_edit_background_;
+    InstanceEditStyle instance_edit_style_;
     std::optional<std::uint64_t> camera_presentation_signature_;
     std::optional<std::uint64_t> scene_settings_presentation_signature_;
     std::optional<bool> shadowing_enabled_;

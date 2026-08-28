@@ -10,6 +10,7 @@
 #include "diagnostics/profile.hpp"
 #include "math/glm_bridge.hpp"
 #include "render/filament_buffer_descriptor_factory.hpp"
+#include "render/material_binding_service.hpp"
 #include "render/mesh_renderable_factory.hpp"
 #include "render/overlay/overlay_mesh_types.hpp"
 #include "render/render_layers.hpp"
@@ -731,6 +732,10 @@ InstanceSelectionOverlayCache::create_wire_batch(
   proxy.material_instance->setParameter("featherPixels",
                                         kOverlayLineFeatherPixels);
   proxy.material_instance->setParameter("nearPlane", clip_planes.near_plane);
+  // Selected-occurrence wires share the line material but never receive the
+  // scene context effect, even while instance editing is active.
+  proxy.material_instance->setParameter("instanceEditDim", 0.0f);
+  bind_instance_edit_context_style(*proxy.material_instance, {});
 
   std::vector<filament::math::mat4f> transforms;
   transforms.reserve(chunk.world_transforms.size());

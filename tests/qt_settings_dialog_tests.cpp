@@ -64,6 +64,7 @@
 #include <sstream>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #ifndef QUADER_SOURCE_DIR
@@ -558,6 +559,27 @@ TEST(QtSettingsDialogTests,
       QStringLiteral("viewportSetting_InstanceEditContextColor"));
   auto *bounding_box_swatch = dialog.findChild<QPushButton *>(
       QStringLiteral("viewportSetting_BoundingBoxWireColor"));
+  std::vector<std::pair<ViewportFloatSettingId, QDoubleSpinBox *>>
+      instance_controls;
+  for (const ViewportFloatSettingDescriptor &descriptor :
+       viewport_float_settings()) {
+    if (descriptor.section != ViewportSettingsSectionId::InstanceEditing) {
+      continue;
+    }
+    auto *control = dialog.findChild<QDoubleSpinBox *>(
+        QStringLiteral("viewportSetting_%1")
+            .arg(QString::fromUtf8(descriptor.key.data(),
+                                   static_cast<qsizetype>(descriptor.key.size()))));
+    ASSERT_NE(control, nullptr) << descriptor.key;
+    EXPECT_DOUBLE_EQ(control->minimum(), 0.0) << descriptor.key;
+    EXPECT_DOUBLE_EQ(control->maximum(), 1.0) << descriptor.key;
+    EXPECT_EQ(control->accessibleName(),
+              QString::fromUtf8(descriptor.label.data(),
+                                 static_cast<qsizetype>(descriptor.label.size())));
+    EXPECT_TRUE(control->toolTip().contains(QStringLiteral("Use Apply")));
+    EXPECT_EQ(control->accessibleDescription(), control->toolTip());
+    instance_controls.emplace_back(descriptor.id, control);
+  }
 
   ASSERT_NE(category_list, nullptr);
   ASSERT_NE(button_box, nullptr);
@@ -574,6 +596,13 @@ TEST(QtSettingsDialogTests,
   ASSERT_NE(instance_background_swatch, nullptr);
   ASSERT_NE(instance_context_swatch, nullptr);
   ASSERT_NE(bounding_box_swatch, nullptr);
+  ASSERT_EQ(instance_controls.size(), 5u);
+  EXPECT_TRUE(instance_context_swatch->toolTip().contains(
+      QStringLiteral("target opacity")));
+  for (const auto &[id, control] : instance_controls) {
+    EXPECT_EQ(control->parentWidget(), instance_context_swatch->parentWidget());
+    EXPECT_NEAR(control->value(), viewport_settings.float_value(id), 0.000001);
+  }
   EXPECT_DOUBLE_EQ(default_fly_speed->value(), 25.0);
   EXPECT_DOUBLE_EQ(bounding_box_thickness->value(), 1.5);
   EXPECT_EQ(bounding_box_swatch->accessibleName(),
@@ -637,6 +666,7 @@ TEST(QtSettingsDialogTests,
       viewport_settings.color(ViewportColorSettingId::MeshGridMajor);
   const ViewportSettingColor initial_bounding_box =
       viewport_settings.color(ViewportColorSettingId::BoundingBoxWire);
+  const ViewportSettings initial_instance_settings = viewport_settings;
   const QColor applied_mesh_major = QColor::fromRgb(46, 92, 138, 184);
   ASSERT_TRUE(accept_color_picker(
       dialog, *mesh_major_swatch,
@@ -647,6 +677,22 @@ TEST(QtSettingsDialogTests,
       dialog, *bounding_box_swatch,
       QStringLiteral("viewportSetting_BoundingBoxWireColor_dialog"),
       applied_bounding_box));
+  const QColor applied_instance_background = QColor::fromRgb(33, 73, 113, 63);
+  const QColor applied_instance_context = QColor::fromRgb(170, 50, 90, 2);
+  ASSERT_TRUE(accept_color_picker(
+      dialog, *instance_background_swatch,
+      QStringLiteral("viewportSetting_InstanceEditBackgroundColor_dialog"),
+      applied_instance_background));
+  ASSERT_TRUE(accept_color_picker(
+      dialog, *instance_context_swatch,
+      QStringLiteral("viewportSetting_InstanceEditContextColor_dialog"),
+      applied_instance_context));
+  EXPECT_TRUE(instance_context_swatch->toolTip().contains(
+      QStringLiteral("target opacity")));
+  for (std::size_t index = 0; index < instance_controls.size(); ++index) {
+    instance_controls[index].second->setValue(
+        0.3 + 0.1 * static_cast<double>(index));
+  }
 
   thickness->setValue(1.75);
   default_fly_speed->setValue(35.0);
@@ -672,6 +718,16 @@ TEST(QtSettingsDialogTests,
   EXPECT_TRUE(viewport_setting_colors_approximately(
       viewport_settings.color(ViewportColorSettingId::BoundingBoxWire),
       initial_bounding_box));
+  for (const ViewportColorSettingId id :
+       {ViewportColorSettingId::InstanceEditBackground,
+        ViewportColorSettingId::InstanceEditContext}) {
+    EXPECT_TRUE(viewport_setting_colors_approximately(
+        viewport_settings.color(id), initial_instance_settings.color(id)));
+  }
+  for (const auto &[id, control] : instance_controls) {
+    EXPECT_FLOAT_EQ(viewport_settings.float_value(id),
+                    initial_instance_settings.float_value(id));
+  }
   EXPECT_TRUE(changes.empty());
 
   apply_button->click();
@@ -696,6 +752,20 @@ TEST(QtSettingsDialogTests,
   EXPECT_TRUE(viewport_setting_colors_approximately(
       viewport_settings.color(ViewportColorSettingId::BoundingBoxWire),
       setting_color(applied_bounding_box)));
+  EXPECT_TRUE(viewport_setting_colors_approximately(
+      viewport_settings.color(ViewportColorSettingId::InstanceEditBackground),
+      setting_color(applied_instance_background)));
+  EXPECT_TRUE(viewport_setting_colors_approximately(
+      viewport_settings.color(ViewportColorSettingId::InstanceEditContext),
+      setting_color(applied_instance_context)));
+  for (std::size_t index = 0; index < instance_controls.size(); ++index) {
+    const auto &[id, control] = instance_controls[index];
+    EXPECT_NEAR(viewport_settings.float_value(id),
+                0.3 + 0.1 * static_cast<double>(index), 0.000001);
+    EXPECT_TRUE(control->toolTip().contains(QStringLiteral("Premi Applica")));
+  }
+  EXPECT_TRUE(instance_context_swatch->toolTip().contains(
+      QStringLiteral("opacità finale")));
   EXPECT_EQ(count_changes(changes, QtSettingsChangeKind::ViewportCommit), 1u);
   EXPECT_EQ(count_changes(changes, QtSettingsChangeKind::InterfaceCommit), 1u);
 
@@ -709,6 +779,17 @@ TEST(QtSettingsDialogTests,
       dialog, *mesh_major_swatch,
       QStringLiteral("viewportSetting_MeshGridMajorColor_dialog"),
       discarded_mesh_major));
+  ASSERT_TRUE(accept_color_picker(
+      dialog, *instance_background_swatch,
+      QStringLiteral("viewportSetting_InstanceEditBackgroundColor_dialog"),
+      QColor::fromRgb(213, 77, 32, 105)));
+  ASSERT_TRUE(accept_color_picker(
+      dialog, *instance_context_swatch,
+      QStringLiteral("viewportSetting_InstanceEditContextColor_dialog"),
+      QColor::fromRgb(13, 193, 33, 204)));
+  for (const auto &[id, control] : instance_controls) {
+    control->setValue(0.0);
+  }
   EXPECT_TRUE(apply_button->isEnabled());
   const std::size_t viewport_commits_before_cancel =
       count_changes(changes, QtSettingsChangeKind::ViewportCommit);
@@ -733,6 +814,16 @@ TEST(QtSettingsDialogTests,
   EXPECT_TRUE(viewport_setting_colors_approximately(
       viewport_settings.color(ViewportColorSettingId::MeshGridMajor),
       setting_color(applied_mesh_major)));
+  EXPECT_TRUE(viewport_setting_colors_approximately(
+      viewport_settings.color(ViewportColorSettingId::InstanceEditBackground),
+      setting_color(applied_instance_background)));
+  EXPECT_TRUE(viewport_setting_colors_approximately(
+      viewport_settings.color(ViewportColorSettingId::InstanceEditContext),
+      setting_color(applied_instance_context)));
+  for (std::size_t index = 0; index < instance_controls.size(); ++index) {
+    EXPECT_NEAR(viewport_settings.float_value(instance_controls[index].first),
+                0.3 + 0.1 * static_cast<double>(index), 0.000001);
+  }
   EXPECT_EQ(count_changes(changes, QtSettingsChangeKind::ViewportCommit),
             viewport_commits_before_cancel);
   EXPECT_EQ(count_changes(changes, QtSettingsChangeKind::InterfaceCommit),
@@ -742,6 +833,21 @@ TEST(QtSettingsDialogTests,
   QCoreApplication::processEvents();
   EXPECT_DOUBLE_EQ(thickness->value(), 1.75);
   EXPECT_FALSE(show_grid->isChecked());
+  for (std::size_t index = 0; index < instance_controls.size(); ++index) {
+    EXPECT_NEAR(instance_controls[index].second->value(),
+                0.3 + 0.1 * static_cast<double>(index), 0.000001);
+    instance_controls[index].second->setValue(0.85);
+  }
+  const QColor accepted_instance_background = QColor::fromRgb(73, 123, 173, 102);
+  const QColor accepted_instance_context = QColor::fromRgb(13, 93, 33, 128);
+  ASSERT_TRUE(accept_color_picker(
+      dialog, *instance_background_swatch,
+      QStringLiteral("viewportSetting_InstanceEditBackgroundColor_dialog"),
+      accepted_instance_background));
+  ASSERT_TRUE(accept_color_picker(
+      dialog, *instance_context_swatch,
+      QStringLiteral("viewportSetting_InstanceEditContextColor_dialog"),
+      accepted_instance_context));
 
   ASSERT_TRUE(viewport_settings.set_bool_value(
       ViewportBoolSettingId::ShowInfo, true));
@@ -757,6 +863,15 @@ TEST(QtSettingsDialogTests,
                   3.0f);
   EXPECT_TRUE(viewport_settings.bool_value(ViewportBoolSettingId::ShowInfo));
   EXPECT_EQ(count_changes(changes, QtSettingsChangeKind::ViewportCommit), 2u);
+  for (const auto &[id, control] : instance_controls) {
+    EXPECT_FLOAT_EQ(viewport_settings.float_value(id), 0.85f);
+  }
+  EXPECT_TRUE(viewport_setting_colors_approximately(
+      viewport_settings.color(ViewportColorSettingId::InstanceEditBackground),
+      setting_color(accepted_instance_background)));
+  EXPECT_TRUE(viewport_setting_colors_approximately(
+      viewport_settings.color(ViewportColorSettingId::InstanceEditContext),
+      setting_color(accepted_instance_context)));
 
   dialog.show();
   QCoreApplication::processEvents();

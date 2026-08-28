@@ -28,6 +28,26 @@ material {
         {
             type : float,
             name : nearPlane
+        },
+        {
+            type : float,
+            name : instanceEditDim
+        },
+        {
+            type : float,
+            name : instanceEditContextStrength
+        },
+        {
+            type : float,
+            name : instanceEditContextTintAmount
+        },
+        {
+            type : float,
+            name : instanceEditContextDesaturation
+        },
+        {
+            type : float4,
+            name : instanceEditContextColor
         }
     ]
 }
@@ -92,6 +112,8 @@ vertex {
 }
 
 fragment {
+    #include "instance_edit.glsl"
+
     void material(inout MaterialInputs material) {
         prepareMaterial(material);
 
@@ -104,7 +126,12 @@ fragment {
             alphaScale = saturate((lineWidth + smoothWidth) * 0.5 - abs(variable_lineDistancePixels.x));
         }
 
-        vec4 color = getColor();
+        vec4 color = applyInstanceEditContext(
+            getColor(),
+            materialParams.instanceEditContextColor,
+            materialParams.instanceEditDim * materialParams.instanceEditContextStrength,
+            materialParams.instanceEditContextTintAmount,
+            materialParams.instanceEditContextDesaturation);
         color.a *= alphaScale;
         material.baseColor = vec4(color.rgb * color.a, color.a);
     }

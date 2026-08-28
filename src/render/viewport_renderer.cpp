@@ -123,16 +123,11 @@ std::uint64_t viewport_camera_presentation_signature(
 
 std::uint64_t scene_settings_presentation_signature(
     const SceneSettingsComponent &settings, bool rendered_mode,
-    bool instance_edit_context_active,
-    ViewportSettingColor instance_edit_background) {
+    ViewportSettingColor resolved_background) {
   const bool post_processing_enabled =
       rendered_mode && settings.post_process.enabled;
   RenderSignatureBuilder signature;
-  add_setting_color(
-      signature,
-      instance_edit_context_active
-          ? instance_edit_background
-          : viewport_clear_color(settings.environment, rendered_mode));
+  add_setting_color(signature, resolved_background);
   signature.add_bool(post_processing_enabled)
       .add_float(settings.camera.aperture)
       .add_float(settings.camera.shutter_speed)
@@ -355,10 +350,13 @@ void ViewportRenderer::apply_scene_settings(
     return;
   }
 
+  const ViewportSettingColor resolved_background =
+      instance_edit_style_.resolve_background_color(
+          viewport_clear_color(settings.environment, rendered_mode),
+          instance_edit_context_active_);
   const std::uint64_t presentation_signature =
-      scene_settings_presentation_signature(
-          settings, rendered_mode, instance_edit_context_active_,
-          instance_edit_background_);
+      scene_settings_presentation_signature(settings, rendered_mode,
+                                            resolved_background);
   if (scene_settings_presentation_signature_ == presentation_signature) {
     return;
   }
@@ -387,10 +385,7 @@ void ViewportRenderer::apply_scene_settings(
   }
   apply_tone_mapping(settings.post_process.tone_mapping,
                      post_processing_enabled);
-  render_pass_coordinator_.set_background_color(
-      instance_edit_context_active_
-          ? instance_edit_background_
-          : viewport_clear_color(settings.environment, rendered_mode));
+  render_pass_coordinator_.set_background_color(resolved_background);
 
   filament::View::AmbientOcclusionOptions ao;
   ao.enabled =
@@ -468,9 +463,9 @@ void ViewportRenderer::update_ground_grid(
 }
 
 void ViewportRenderer::set_instance_edit_context_active(
-    bool active, ViewportSettingColor background) {
+    bool active, const ViewportSettings &settings) {
   instance_edit_context_active_ = active;
-  instance_edit_background_ = background;
+  instance_edit_style_ = InstanceEditStyle::from_settings(settings);
 }
 
 void ViewportRenderer::set_overlay_visible(bool visible) {

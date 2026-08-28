@@ -14,6 +14,7 @@
 #include "render/overlay/render_overlay_snapshot.hpp"
 #include "render/project_material_resolver.hpp"
 #include "render/instance_batch_planner.hpp"
+#include "render/render_instance_edit_scope.hpp"
 #include "render/render_scene_binding.hpp"
 #include "scene/components.hpp"
 #include "viewport/viewport_local_visibility.hpp"
@@ -29,19 +30,6 @@
 #include <vector>
 
 namespace quader {
-
-/// Identifies the active occurrence and definition for edit-mode presentation.
-struct RenderInstanceEditScope final {
-  EntityId occurrence = kInvalidEntityId;
-  EntityId definition = kInvalidEntityId;
-
-  [[nodiscard]] bool active() const {
-    return occurrence != kInvalidEntityId && definition != kInvalidEntityId;
-  }
-
-  friend bool operator==(const RenderInstanceEditScope &,
-                         const RenderInstanceEditScope &) = default;
-};
 
 /**
  * Captures one render-visible texture asset dependency for a material snapshot.

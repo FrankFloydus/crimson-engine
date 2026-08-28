@@ -117,6 +117,18 @@ material {
             name : instanceEditDim
         },
         {
+            type : float,
+            name : instanceEditContextStrength
+        },
+        {
+            type : float,
+            name : instanceEditContextTintAmount
+        },
+        {
+            type : float,
+            name : instanceEditContextDesaturation
+        },
+        {
             type : float4,
             name : instanceEditContextColor
         }
@@ -210,6 +222,7 @@ vertex {
 
 fragment {
     #include "mesh_quad_uv.glsl"
+    #include "instance_edit.glsl"
 
     float surfaceGridFloor(float spacing) {
         return exp2(floor(log2(max(spacing, 0.0001))));
@@ -441,18 +454,6 @@ fragment {
                                  normalSample);
     }
 
-    vec4 applyInstanceEditDim(vec3 baseColor, float sourceAlpha) {
-        float amount = clamp(materialParams.instanceEditDim, 0.0, 1.0);
-        float luminance = dot(baseColor, vec3(0.2126, 0.7152, 0.0722));
-        vec3 contextColor = mix(vec3(luminance),
-                                materialParams.instanceEditContextColor.rgb,
-                                0.88);
-        float contextAlpha = clamp(materialParams.instanceEditContextColor.a,
-                                   0.05, 1.0);
-        return vec4(mix(baseColor, contextColor, amount),
-                    mix(sourceAlpha, contextAlpha, amount));
-    }
-
     void material(inout MaterialInputs material) {
         vec2 uv = applyTextureTransform(
                 applyQuadUvInterpolation(vec2(getUV0().x, 1.0 - getUV0().y)));
@@ -478,7 +479,11 @@ fragment {
 
         vec3 baseColor = albedo;
         baseColor = applySurfaceGrid(baseColor);
-        vec4 edited = applyInstanceEditDim(baseColor, sourceAlpha);
+        vec4 edited = applyInstanceEditContext(
+                vec4(baseColor, sourceAlpha), materialParams.instanceEditContextColor,
+                materialParams.instanceEditDim * materialParams.instanceEditContextStrength,
+                materialParams.instanceEditContextTintAmount,
+                materialParams.instanceEditContextDesaturation);
         material.baseColor = vec4(edited.rgb * edited.a, edited.a);
         material.roughness = roughness;
         material.metallic = metallic;

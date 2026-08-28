@@ -666,6 +666,12 @@ public:
     };
   }
 
+  /** Returns the sanitized scope without allocating presentation names. */
+  [[nodiscard]] InstanceEditContext instance_edit_scope() const {
+    sanitize_edit_context();
+    return edit_context_;
+  }
+
   [[nodiscard]] SceneInstanceEditState instance_edit_state() const {
     sanitize_edit_context();
     SceneInstanceEditState state;

@@ -169,10 +169,14 @@ Both canonical Debug/Profile and Release app builds succeed.
   `open_scenes()` descriptions here would allocate and query dirty state on every pending frame.
   Escape also discards the still-held ordinary selection box, and focus loss cancels a pending
   gizmo click before Qt's synthetic release can turn it into a front selection.
-- Render-owned hover styling removes ordinary HoverFace triangles when backface selection is off,
-  preserving the hover outline and all selected-face fills. Keep remove-selection/tool preview
-  roles intact, include the toggle in the style signature, and restore fills from fresh semantic
-  frames when it is enabled again.
+- Render-owned hover styling removes ordinary HoverFace triangles only in actual orthographic
+  projection with backface selection off. Perspective/non-orthographic hover always retains its
+  fill; hover outlines, selected-face fills, and remove-selection/tool preview roles stay intact.
+  Both per-pane style contexts and retained/dynamic submission keys carry the actual camera
+  projection, never a pane name or shading mode. Toggle or projection changes must restyle fresh
+  semantic frames: camera-only cache updates cannot recreate previously removed triangles.
+  Keep the toggle in the settings style signature, computed once outside pane composition; the
+  shared selected-geometry cache and persistent selection style remain projection-independent.
 - `QtViewportEdgeLengthHud` presents the hovered world-space edge length in map units at the
   midpoint of the visible screen segment, keeping the entire label inside its pane. Never hide
   the number just because the full edge's geometric midpoint is offscreen, and never measure only
@@ -185,6 +189,19 @@ Both canonical Debug/Profile and Release app builds succeed.
   for render/logical pixel ratios and disappear outside ordinary Edge hover. The platform-owned
   `WM_NCHITTEST` response must be `HTTRANSPARENT`: Qt's transparent-mouse widget flag alone does
   not pass input through a native label to its sibling Filament `QWindow`.
+
+Projection-scoped hover-fill follow-up verification: two new regressions reproduce the missing
+perspective fill before the condition change and pass afterward. Coverage includes both toggle
+states, mixed panes, swapped pane projections, navigation projection transitions, selected/tool
+fills, shared semantic-frame preservation, and the per-pane unchanged-state gates. All 39 focused
+native tests and 127 source guardrails pass; one native-HWND check skips on the minimal Qt backend.
+The affected check passes 127 of 128 guardrails (the existing instruction-routing failure) and
+831 of 840 planned native tests (eight existing failures and one native-HWND skip). The full gate
+passes 1554 native tests (10 existing failures, four skips), 381 guardrails (seven existing failures),
+and modeling-domain/SDK consumer/parity entries. Its 17 unique failing names exactly match the
+visible-label gate; the SDK-only wrapper repeats the same seven guardrails. Logs and comparison
+are under `build/vs2026/ortho-hover-fill-*`. No command baseline or version changed, and no editor
+or visual session was launched.
 
 Visible-label follow-up verification: six HUD cases reproduce the offscreen-midpoint failure
 before the presentation change and pass afterward. All 43 executable camera/HUD checks and 66
@@ -5238,10 +5255,22 @@ Invariant:
   that new occurrence immediately, and leave the source stationary. Undo restores the source and
   its selection. Scene-aware selection summaries keep an occurrence-only selection actionable so
   the viewport RMB menu exposes Flatten even when no runtime modeling object is selected.
-- Instance edit mode applies a whole-viewport background treatment and renders context geometry
-  with a configurable translucent/desaturated color; the active definition remains normally lit
-  and all regular modeling/component overlays remain available. Both edit background and context
-  colors are user viewport settings.
+- Instance edit mode keeps the edited occurrence normally lit and applies a subtle configurable
+  treatment only to its surroundings. `InstanceEditStyle` and shared `instance_edit.glsl` own the
+  CPU/shader policy: background blend defaults to 0.15; context strength, tint amount, and
+  desaturation to 0.25; grid fade to 0.15. Preserve the existing RGBA preference keys and overrides.
+  Context alpha is a target opacity multiplier, blended by context strength and multiplied by
+  source alpha, with no hidden minimum. Zero strength restores original appearance. Background
+  tint respects its alpha; grid fade only attenuates opacity, preserving grid/axis colors.
+  Settings use their existing Apply/OK/Cancel transaction and explain these controls in tooltips.
+  The context treatment applies to Shaded/Rendered meshes and Wireframe scene wires. Use the
+  actual render edit scope to distinguish the active occurrence, other occurrences, and direct
+  meshes; selected/component/hover/tool overlays remain unchanged. Carry scope/context changes
+  as wire snapshot metadata and a separate context signature, never as baked vertex colors or
+  geometry identity. Update live uniforms before the unchanged-frame return without rebuilding
+  source snapshots or buffers. The shared line material must explicitly disable context treatment
+  for selected-occurrence wires. Render API scope reads use the small sanitized owner context,
+  never the name-copying presentation snapshot on the frame path.
 - A single-root custom name survives Create Instance and final Flatten. Partial flatten transfers
   the occurrence name to its independent result. Inspector instance-name edits commit on Enter or
   focus loss. Linked flatten may temporarily extract only a redundant direct definition member;
@@ -5273,6 +5302,17 @@ Verification:
   SDK consumer/parity, modeling-domain, guardrail, native app, and all three modeling performance
   benchmark targets. The final native v0.1.0 build and Vulkan/Fusion smoke are recorded in the task
   handoff.
+- 2026-08-28 configurable-effect follow-up: 97 focused native tests and 160 source guardrails pass,
+  covering settings persistence and Apply/OK/Cancel, CPU/shader policy, Wireframe scope handling,
+  and material-only cache updates. All three affected Filament materials compile. The final full
+  gate records the same 17 failure names as `ortho-hover-fill-regression-gate.log`: native tests
+  pass 1559/1573 with 10 failures and four skips; guardrails pass 385/392, and the SDK-only wrapper
+  repeats those seven guardrail failures. SDK consumer/parity and modeling-domain suites pass.
+  The first gate also hit the unchanged layer-panel color-dialog selection test; 20 isolated
+  repetitions passed 18 and failed twice, and it passed the final gate. Do not treat that
+  intermittency as resolved. Evidence is under `build/vs2026/instance-edit-style-*`, including
+  `regression-gate-final.log`, `regression-comparison.json`, and `layer-repeat.log`. No app or
+  visual session was launched; pixel verification remains with the user.
 
 ## 2026-07-14 - Standard Material Editing Uses Typed Draft And Render Boundaries
 

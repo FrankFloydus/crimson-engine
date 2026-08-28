@@ -104,11 +104,23 @@ std::string section_localization_key(ViewportSettingsSectionId section) {
   return key;
 }
 
-std::string setting_localization_key(std::string_view descriptor_key) {
+std::string setting_localization_key(std::string_view descriptor_key,
+                                     std::string_view field = "label") {
   std::string key = "viewport.settings.";
   key.append(descriptor_key);
-  key.append(".label");
+  key.push_back('.');
+  key.append(field);
   return key;
+}
+
+QString setting_help_text(const LocalizationService *localization,
+                          std::string_view descriptor_key,
+                          std::string_view fallback) {
+  if (fallback.empty()) {
+    return {};
+  }
+  return qtext(localization, setting_localization_key(descriptor_key, "help"),
+               fallback);
 }
 
 QString setting_object_name(std::string_view descriptor_key) {
@@ -142,13 +154,20 @@ QString color_opacity_text(const LocalizationService *localization,
 
 void set_color_button_presentation(
     QtColorSwatchButton &button, ViewportSettingColor color,
-    const LocalizationService *localization) {
+    const LocalizationService *localization,
+    const ViewportColorSettingDescriptor &descriptor) {
   const QColor swatch_color = to_q_color(color);
   button.set_swatch_color(swatch_color);
   const QString opacity = color_opacity_text(localization, swatch_color);
-  const QString details =
+  QString details =
       QStringLiteral("%1 | %2")
           .arg(swatch_color.name(QColor::HexArgb).toUpper(), opacity);
+  const QString help =
+      setting_help_text(localization, descriptor.key, descriptor.help);
+  if (!help.isEmpty()) {
+    details.append(QLatin1Char('\n'));
+    details.append(help);
+  }
   button.setToolTip(details);
   button.setAccessibleDescription(details);
 }
@@ -1876,23 +1895,32 @@ struct QtSettingsDialog::Impl {
       const std::string key = setting_localization_key(control.descriptor->key);
       const QString label = qtext(localization, key, control.descriptor->label);
       control.label->setText(label);
+      control.label->setToolTip(setting_help_text(
+          localization, control.descriptor->key, control.descriptor->help));
       control.button->setAccessibleName(label);
       control.button->setEnabled(viewport_settings != nullptr);
       if (viewport_settings != nullptr) {
         set_color_button_presentation(
             *control.button,
-            viewport_settings->color(control.descriptor->id), localization);
+            viewport_settings->color(control.descriptor->id), localization,
+            *control.descriptor);
       } else {
         set_color_button_presentation(*control.button,
                                       control.descriptor->default_value,
-                                      localization);
+                                      localization, *control.descriptor);
       }
     }
 
     for (const FloatWidgets &control : float_controls) {
       const std::string key = setting_localization_key(control.descriptor->key);
-      control.label->setText(
-          qtext(localization, key, control.descriptor->label));
+      const QString label = qtext(localization, key, control.descriptor->label);
+      const QString help = setting_help_text(
+          localization, control.descriptor->key, control.descriptor->help);
+      control.label->setText(label);
+      control.label->setToolTip(help);
+      control.spin_box->setAccessibleName(label);
+      control.spin_box->setAccessibleDescription(help);
+      control.spin_box->setToolTip(help);
       control.spin_box->setEnabled(viewport_settings != nullptr);
       const QSignalBlocker blocker(control.spin_box);
       control.spin_box->setValue(
@@ -2067,7 +2095,9 @@ struct QtSettingsDialog::Impl {
     QPointer<QtColorSwatchButton> guarded_button(&button);
     QObject::connect(
         &dialog, &QColorDialog::currentColorChanged, &dialog,
-        [this, id = descriptor.id, guarded_button](const QColor &color) {
+        [this, descriptor_ptr = &descriptor,
+         guarded_button](const QColor &color) {
+          const ViewportColorSettingId id = descriptor_ptr->id;
           if (!color.isValid()) {
             return;
           }
@@ -2076,7 +2106,8 @@ struct QtSettingsDialog::Impl {
           }
           if (guarded_button != nullptr && viewport_settings != nullptr) {
             set_color_button_presentation(
-                *guarded_button, viewport_settings->color(id), localization);
+                *guarded_button, viewport_settings->color(id), localization,
+                *descriptor_ptr);
           }
         });
 
@@ -2097,7 +2128,7 @@ struct QtSettingsDialog::Impl {
     if (guarded_button != nullptr) {
       set_color_button_presentation(
           *guarded_button, viewport_settings->color(descriptor.id),
-          localization);
+          localization, descriptor);
     }
   }
 };
