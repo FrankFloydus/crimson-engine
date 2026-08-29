@@ -8,6 +8,7 @@
 #include "api/quader_command_ids.hpp"
 #include "api/quader_api_session_internal_access.hpp"
 #include "assets/default_material_catalog.hpp"
+#include "assets/curve_asset_payload.hpp"
 #include "assets/mesh_asset.hpp"
 #include "editor/modeling/services/modeling_session_service.hpp"
 #include "editor/input/viewport_keybinding_resolver.hpp"
@@ -18,6 +19,7 @@
 #include "editor/tools/viewport_tool.hpp"
 #include "editor/tools/viewport_tool_ports.hpp"
 #include "editor/viewport/viewport_interaction_controller.hpp"
+#include "editor/viewport/viewport_curve_picking.hpp"
 #include "editor/viewport/viewport_selection_interaction.hpp"
 #include "render/viewport_overlay_policy.hpp"
 #include "editor/session/scene_session.hpp"
@@ -63,6 +65,7 @@ struct ViewportInteractionHarness {
     double monotonic_time_seconds = 0.0;
     std::vector<quader::ViewportSceneBillboardPickCandidate>
         billboard_pick_candidates;
+    quader::ViewportCurvePickCache curve_pick_cache;
 
     ViewportInteractionHarness()
         : editor(quader::QuaderApiSessionInternalAccess::from_scene_session(
@@ -104,6 +107,13 @@ struct ViewportInteractionHarness {
               controller.active_tool_allows_selection_fallback(
                   router.state().active_tool),
           .scene_billboard_pick_candidates = billboard_pick_candidates,
+          .scene_curve_pick_candidates = curve_pick_cache.candidates(
+              session.scene(), session.assets(),
+              session.viewport_workspace().local_visibility_snapshot()),
+          .scene_mesh_surface_distance = [this](const quader::ViewportRay &ray) {
+            return session.modeling().pick_mesh_surface_distance(
+                {ray.origin, ray.direction});
+          },
           .selection_state =
               {
                   .summary = editor.selection().summary(),
@@ -765,6 +775,19 @@ selected_entities(const ViewportInteractionHarness &harness) {
   return harness.session.scene().selected_entities();
 }
 
+quader::QuaderBoxSelectRequest curve_marquee_request(quader::QVec2 start,
+                                                    quader::QVec2 end) {
+  return {
+      .camera = {.orthographic = true,
+                 .origin = {0.0f, 0.0f, 8.0f},
+                 .viewport_size = {800.0f, 600.0f},
+                 .orthographic_size = 12.0},
+      .start = start,
+      .end = end,
+      .rule = quader::QuaderBoxSelectionRule::Contain,
+  };
+}
+
 bool has_snap_target_vertex_point(const quader::QuaderOverlayFrame &frame) {
   return std::any_of(frame.points.begin(), frame.points.end(),
                      [](const quader::QuaderOverlayPoint &point) {
@@ -1100,6 +1123,813 @@ TEST(ViewportInteractionControllerTests,
               quader::QuaderSelectionMode::Object);
     EXPECT_EQ(harness.router.state().selection_mode,
               quader::ViewportSelectionMode::Object);
+}
+
+TEST(ViewportInteractionControllerTests,
+     CurveStrokeClickUsesPixelRadiusSelectionModifiersAndHistory) {
+  ViewportInteractionHarness harness;
+  const auto box = create_unit_box(harness);
+  const auto curve = harness.editor.modeling().create_curve({
+      .points = {{.position = {-2.0f, 0.0f, 0.0f}},
+                 {.position = {2.0f, 0.0f, 0.0f}}},
+  });
+  ASSERT_TRUE(curve.ok()) << curve.error_message();
+  ASSERT_TRUE(harness.editor.selection().set_mode(quader::QuaderSelectionMode::Object).ok());
+  harness.router.set_selection_mode(quader::ViewportSelectionMode::Object);
+  ASSERT_TRUE(harness.editor.selection().select_object(box).ok());
+  const auto projected = harness.camera.project_world_point({1.6f, 0.0f, 0.0f});
+  ASSERT_TRUE(projected.visible);
+  const quader::QVec2 hit = projected.position + quader::QVec2{0.0f, 6.0f};
+
+  harness.input.modifiers.shift = true;
+  harness.click_selection(hit);
+  EXPECT_EQ(selected_entities(harness).size(), 2u);
+  EXPECT_TRUE(harness.editor.query().entity(curve.value().entity)->selected);
+  ASSERT_TRUE(harness.editor.history().undo().ok());
+  EXPECT_EQ(selected_entities(harness), std::vector<quader::EntityId>{box.entity});
+  ASSERT_TRUE(harness.editor.history().redo().ok());
+  EXPECT_EQ(selected_entities(harness).size(), 2u);
+
+  harness.input.modifiers = {.primary = true};
+  harness.click_selection(hit);
+  EXPECT_EQ(selected_entities(harness), std::vector<quader::EntityId>{box.entity});
+  harness.input.modifiers = {};
+  harness.click_selection(hit);
+  EXPECT_EQ(selected_entities(harness),
+            std::vector<quader::EntityId>{curve.value().entity});
+
+  harness.click_selection(projected.position + quader::QVec2{0.0f, 12.0f});
+  EXPECT_TRUE(selected_entities(harness).empty());
+  harness.input_result.navigation_active = true;
+  harness.click_selection(hit);
+  EXPECT_TRUE(selected_entities(harness).empty());
+}
+
+TEST(ViewportInteractionControllerTests,
+     CurveStrokeClickArbitratesMeshDepthAndDefersComponentPickingToMeshes) {
+  ViewportInteractionHarness harness;
+  const auto box = create_unit_box(harness);
+  const auto behind = harness.editor.modeling().create_curve({
+      .points = {{.position = {-2.0f, 0.0f, -2.0f}},
+                 {.position = {2.0f, 0.0f, -2.0f}}},
+  });
+  ASSERT_TRUE(behind.ok()) << behind.error_message();
+  ASSERT_TRUE(harness.editor.selection().set_mode(quader::QuaderSelectionMode::Object).ok());
+  ASSERT_TRUE(harness.editor.selection().clear().ok());
+  harness.router.set_selection_mode(quader::ViewportSelectionMode::Object);
+  harness.click_selection({400.0f, 300.0f});
+  EXPECT_EQ(selected_entities(harness), std::vector<quader::EntityId>{box.entity});
+
+  const auto front = harness.editor.modeling().create_curve({
+      .points = {{.position = {-2.0f, 0.02f, 2.0f}},
+                 {.position = {2.0f, 0.02f, 2.0f}}},
+  });
+  ASSERT_TRUE(front.ok()) << front.error_message();
+  ASSERT_TRUE(harness.editor.selection().clear().ok());
+  // The rear stroke is closer in pixels; depth arbitration must retain the
+  // slightly offset stroke in front of the mesh instead of falling back early.
+  harness.click_selection({400.0f, 300.0f});
+  EXPECT_EQ(selected_entities(harness),
+            std::vector<quader::EntityId>{front.value().entity});
+
+  ASSERT_TRUE(harness.editor.selection().set_mode(quader::QuaderSelectionMode::Face).ok());
+  ASSERT_TRUE(harness.editor.selection().clear().ok());
+  harness.router.set_selection_mode(quader::ViewportSelectionMode::Face);
+  harness.click_selection({400.0f, 300.0f});
+  EXPECT_EQ(harness.editor.selection().summary().selected_face_count, 1u);
+  EXPECT_EQ(harness.editor.selection().summary().mode, quader::QuaderSelectionMode::Face);
+}
+
+TEST(ViewportInteractionControllerTests,
+     CurveStrokeClickPromotesNearestGroup) {
+  ViewportInteractionHarness harness;
+  const auto curve = harness.editor.modeling().create_curve({
+      .points = {{.position = {-2.0f, 0.0f, 0.0f}},
+                 {.position = {2.0f, 0.0f, 0.0f}}},
+  });
+  ASSERT_TRUE(curve.ok()) << curve.error_message();
+  ASSERT_TRUE(harness.editor.selection().select_object(curve.value()).ok());
+  const auto inner = harness.editor.scene().group_selection("Curve Inner");
+  ASSERT_TRUE(inner.ok()) << inner.error_message();
+  const auto outer = harness.editor.scene().group_selection("Curve Outer");
+  ASSERT_TRUE(outer.ok()) << outer.error_message();
+  ASSERT_TRUE(harness.editor.selection().set_mode(quader::QuaderSelectionMode::Group).ok());
+  ASSERT_TRUE(harness.editor.selection().clear().ok());
+  harness.router.set_selection_mode(quader::ViewportSelectionMode::Group);
+  harness.click_selection({400.0f, 300.0f});
+  EXPECT_EQ(selected_entities(harness), std::vector<quader::EntityId>{inner.value().id});
+  EXPECT_EQ(harness.router.state().selection_mode, quader::ViewportSelectionMode::Group);
+}
+
+TEST(ViewportCurvePickingTests,
+     ClippedPerspectiveSegmentsRetainWorldDepthAndRejectOutsidePixels) {
+  ViewportInteractionHarness harness;
+  const auto curve = harness.editor.modeling().create_curve({
+      .points = {{.position = {-2.0f, 0.0f, 10.0f}},
+                 {.position = {2.0f, 0.0f, -2.0f}}},
+  });
+  ASSERT_TRUE(curve.ok()) << curve.error_message();
+  const auto candidates = harness.frame().scene_curve_pick_candidates;
+  ASSERT_EQ(candidates.size(), 1u);
+  const auto hit = quader::pick_viewport_curve(harness.camera, {400.0f, 300.0f}, candidates);
+  ASSERT_TRUE(hit.has_value());
+  EXPECT_EQ(hit->entity, curve.value().entity);
+  EXPECT_NEAR(hit->world_position.x, 0.0f, 1.0e-4f);
+  EXPECT_NEAR(hit->world_position.z, 4.0f, 1.0e-4f);
+  EXPECT_NEAR(hit->ray_distance, 4.0, 1.0e-4);
+  EXPECT_FALSE(quader::pick_viewport_curve(
+      harness.camera, {400.0f, 300.0f}, candidates, 8.0, 3.9).has_value());
+  EXPECT_TRUE(quader::pick_viewport_curve(
+      harness.camera, {400.0f, 300.0f}, candidates, 8.0, 4.1).has_value());
+  EXPECT_FALSE(quader::pick_viewport_curve(
+      harness.camera, {400.0f, 312.0f}, candidates).has_value());
+  EXPECT_FALSE(quader::pick_viewport_curve(
+      harness.camera, {-1.0f, 300.0f}, candidates).has_value());
+  EXPECT_FALSE(quader::pick_viewport_curve(
+      harness.camera, {400.0f, 300.0f}, candidates, 8.0,
+      std::numeric_limits<double>::quiet_NaN()).has_value());
+
+  harness.camera.set_clip_planes(0.05f, 3.0f);
+  EXPECT_FALSE(quader::pick_viewport_curve(
+      harness.camera, {400.0f, 300.0f}, candidates).has_value());
+}
+
+TEST(ViewportCurvePickingTests,
+     CurveIntersectionsChooseNearestDepthInPerspectiveAndOrthographicViews) {
+  ViewportInteractionHarness harness;
+  const auto far = harness.editor.modeling().create_curve({
+      .points = {{.position = {-20.0f, 0.0f, -2.0f}},
+                 {.position = {20.0f, 0.0f, -2.0f}}},
+  });
+  ASSERT_TRUE(far.ok()) << far.error_message();
+  const auto near = harness.editor.modeling().create_curve({
+      .points = {{.position = {-20.0f, 0.0f, 2.0f}},
+                 {.position = {20.0f, 0.0f, 2.0f}}},
+  });
+  ASSERT_TRUE(near.ok()) << near.error_message();
+  const auto candidates = harness.frame().scene_curve_pick_candidates;
+  ASSERT_EQ(candidates.size(), 2u);
+  for (const bool orthographic : {false, true}) {
+    if (orthographic) {
+      harness.camera.view_axis(quader::ViewportViewAxis::Z, 1);
+    }
+    const auto hit = quader::pick_viewport_curve(
+        harness.camera, {400.0f, 300.0f}, candidates);
+    ASSERT_TRUE(hit.has_value());
+    EXPECT_EQ(hit->entity, near.value().entity);
+    EXPECT_NEAR(hit->world_position.z, 2.0f, 1.0e-4f);
+  }
+}
+
+TEST(ViewportCurveAnchorSnapTests,
+     SinglePointDocumentsContributeAnchorsButNeverHandleEndpoints) {
+  const std::array anchor_near_ray{
+      quader::modeling::CurvePointSpec{
+          .position = {0.2f, 0.0f, 4.0f},
+          .incoming_handle = {-0.2f, 0.0f, 0.0f},
+          .outgoing_handle = {2.0f, 0.0f, 0.0f},
+      },
+  };
+  const auto anchor_document =
+      std::make_shared<const quader::modeling::CurveDocument>(
+          quader::modeling::CurveDocument::make_bezier(anchor_near_ray)
+              .or_throw());
+  const std::array anchor_away_from_ray{
+      quader::modeling::CurvePointSpec{
+          .position = {2.0f, 0.0f, 4.0f},
+          .incoming_handle = {-2.0f, 0.0f, 0.0f},
+      },
+  };
+  const auto handle_document =
+      std::make_shared<const quader::modeling::CurveDocument>(
+          quader::modeling::CurveDocument::make_bezier(anchor_away_from_ray)
+              .or_throw());
+  const quader::ViewportRay ray{{0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 1.0f}};
+  const std::array candidates{
+      quader::ViewportSceneCurvePickCandidate{
+          .entity = 7u,
+          .document = anchor_document,
+      },
+  };
+  const auto anchors =
+      quader::collect_viewport_curve_anchor_snap_candidates(candidates);
+  ASSERT_EQ(anchors.size(), 1u);
+
+  const auto hit = quader::resolve_viewport_curve_anchor_snap_target(
+      ray, anchors, 0.3);
+  ASSERT_TRUE(hit.has_value());
+  EXPECT_EQ(hit->entity, 7u);
+  EXPECT_EQ(hit->point, anchor_document->points().front().id);
+  EXPECT_NEAR(hit->world_position.x, 0.2f, 1.0e-6f);
+  EXPECT_NEAR(hit->ray_distance, 4.0, 1.0e-6);
+  EXPECT_NEAR(hit->pick_distance, 0.2, 1.0e-6);
+  EXPECT_FALSE(quader::resolve_viewport_curve_anchor_snap_target(
+      ray, anchors, 0.19).has_value());
+
+  const std::array handle_only_candidate{
+      quader::ViewportSceneCurvePickCandidate{
+          .entity = 8u,
+          .document = handle_document,
+      },
+  };
+  const auto handle_only_anchor =
+      quader::collect_viewport_curve_anchor_snap_candidates(
+          handle_only_candidate);
+  EXPECT_FALSE(quader::resolve_viewport_curve_anchor_snap_target(
+      ray, handle_only_anchor, 0.3).has_value());
+  EXPECT_FALSE(quader::resolve_viewport_curve_anchor_snap_target(
+      {{0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 2.0f}}, anchors, 0.3)
+                   .has_value());
+}
+
+TEST(ViewportCurveAnchorSnapTests,
+     ActiveDraftUsesTypedIdentityAndExcludesSelectedAnchors) {
+  const std::array points{
+      quader::modeling::CurvePointSpec{.position = {0.1f, 0.0f, 3.0f}},
+      quader::modeling::CurvePointSpec{.position = {0.2f, 0.0f, 4.0f}},
+  };
+  quader::CurveToolPreviewState preview{
+      .active = true,
+      .drawing = true,
+      .document =
+          quader::modeling::CurveDocument::make_bezier(points).or_throw(),
+  };
+  const quader::modeling::CurvePointId selected =
+      preview.document->points().front().id;
+  const auto group =
+      quader::collect_viewport_curve_draft_anchor_snap_candidate(
+          preview, [selected](quader::modeling::CurvePointId point) {
+            return point == selected;
+          });
+  ASSERT_TRUE(group.has_value());
+  EXPECT_EQ(group->group.kind,
+            quader::ViewportCurveAnchorSnapGroupKind::ActiveDraft);
+  EXPECT_EQ(group->group.scene_entity, quader::kInvalidEntityId);
+  ASSERT_EQ(group->anchors.size(), 1u);
+
+  const std::array groups{*group};
+  const auto hit = quader::resolve_viewport_curve_anchor_snap_target(
+      {{0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 1.0f}}, groups, 0.3);
+  ASSERT_TRUE(hit.has_value());
+  EXPECT_EQ(hit->group.kind,
+            quader::ViewportCurveAnchorSnapGroupKind::ActiveDraft);
+  EXPECT_EQ(hit->entity, quader::kInvalidEntityId);
+  EXPECT_EQ(hit->point, preview.document->points()[1].id);
+}
+
+TEST(ViewportCurveAnchorSnapTests,
+     DepthIdentityExclusionAndMeshSurfaceOcclusionAreDeterministic) {
+  const std::array near_points{
+      quader::modeling::CurvePointSpec{.position = {0.29f, 0.0f, 3.0f}},
+  };
+  const auto near_document =
+      std::make_shared<const quader::modeling::CurveDocument>(
+          quader::modeling::CurveDocument::make_bezier(near_points).or_throw());
+  const std::array far_points{
+      quader::modeling::CurvePointSpec{.position = {0.0f, 0.0f, 4.0f}},
+  };
+  const auto far_document =
+      std::make_shared<const quader::modeling::CurveDocument>(
+          quader::modeling::CurveDocument::make_bezier(far_points).or_throw());
+  const std::array candidates{
+      quader::ViewportSceneCurvePickCandidate{
+          .entity = 20u,
+          .document = near_document,
+      },
+      quader::ViewportSceneCurvePickCandidate{
+          .entity = 10u,
+          .document = far_document,
+      },
+      quader::ViewportSceneCurvePickCandidate{
+          .entity = 5u,
+          .document = far_document,
+      },
+  };
+  const quader::ViewportRay ray{{0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 1.0f}};
+  const auto anchors =
+      quader::collect_viewport_curve_anchor_snap_candidates(candidates);
+
+  const auto nearest = quader::resolve_viewport_curve_anchor_snap_target(
+      ray, anchors, 0.3);
+  ASSERT_TRUE(nearest.has_value());
+  EXPECT_EQ(nearest->entity, 20u);
+
+  const auto without_near = quader::resolve_viewport_curve_anchor_snap_target(
+      ray, anchors, 0.3,
+      [](quader::EntityId entity, quader::modeling::CurvePointId) {
+        return entity == 20u;
+      });
+  ASSERT_TRUE(without_near.has_value());
+  EXPECT_EQ(without_near->entity, 5u);
+
+  EXPECT_FALSE(quader::resolve_viewport_curve_anchor_snap_target(
+      ray, anchors, 0.3,
+      [](quader::EntityId entity, quader::modeling::CurvePointId) {
+        return entity == 20u;
+      },
+      3.5)
+                   .has_value());
+  EXPECT_TRUE(quader::resolve_viewport_curve_anchor_snap_target(
+      ray, anchors, 0.3, {}, 3.0).has_value());
+
+  const std::array tied_points{
+      quader::modeling::CurvePointSpec{.position = {0.2f, 0.0f, 2.0f}},
+      quader::modeling::CurvePointSpec{.position = {0.1f, 0.0f, 2.0f}},
+      quader::modeling::CurvePointSpec{.position = {-0.1f, 0.0f, 2.0f}},
+  };
+  const auto tied_document =
+      std::make_shared<const quader::modeling::CurveDocument>(
+          quader::modeling::CurveDocument::make_bezier(tied_points).or_throw());
+  const std::array tied_candidate{
+      quader::ViewportSceneCurvePickCandidate{
+          .entity = 3u,
+          .document = tied_document,
+      },
+  };
+  const auto tied_anchors =
+      quader::collect_viewport_curve_anchor_snap_candidates(tied_candidate);
+  const auto point_tie = quader::resolve_viewport_curve_anchor_snap_target(
+      ray, tied_anchors, 0.3);
+  ASSERT_TRUE(point_tie.has_value());
+  EXPECT_EQ(point_tie->point, tied_document->points()[1].id);
+}
+
+TEST(ViewportCurveAnchorSnapTests,
+     PerCurvePickDistanceWinnerCompetesGloballyByDepth) {
+  const std::array first_curve_points{
+      quader::modeling::CurvePointSpec{.position = {0.29f, 0.0f, 2.0f}},
+      quader::modeling::CurvePointSpec{.position = {0.01f, 0.0f, 4.0f}},
+  };
+  const auto first_curve =
+      std::make_shared<const quader::modeling::CurveDocument>(
+          quader::modeling::CurveDocument::make_bezier(first_curve_points)
+              .or_throw());
+  const std::array second_curve_points{
+      quader::modeling::CurvePointSpec{.position = {0.05f, 0.0f, 3.0f}},
+  };
+  const auto second_curve =
+      std::make_shared<const quader::modeling::CurveDocument>(
+          quader::modeling::CurveDocument::make_bezier(second_curve_points)
+              .or_throw());
+  const std::array first_candidate{
+      quader::ViewportSceneCurvePickCandidate{
+          .entity = 42u,
+          .document = first_curve,
+      },
+  };
+  const std::array combined_candidates{
+      first_candidate.front(),
+      quader::ViewportSceneCurvePickCandidate{
+          .entity = 43u,
+          .document = second_curve,
+      },
+  };
+  const quader::ViewportRay ray{{0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 1.0f}};
+
+  const auto first_anchors =
+      quader::collect_viewport_curve_anchor_snap_candidates(first_candidate);
+  const auto local_winner = quader::resolve_viewport_curve_anchor_snap_target(
+      ray, first_anchors, 0.3);
+  ASSERT_TRUE(local_winner.has_value());
+  EXPECT_EQ(local_winner->point, first_curve->points()[1].id);
+  EXPECT_NEAR(local_winner->ray_distance, 4.0, 1.0e-6);
+
+  const auto combined_anchors =
+      quader::collect_viewport_curve_anchor_snap_candidates(
+          combined_candidates);
+  const auto global_winner = quader::resolve_viewport_curve_anchor_snap_target(
+      ray, combined_anchors, 0.3);
+  ASSERT_TRUE(global_winner.has_value());
+  EXPECT_EQ(global_winner->entity, 43u);
+  EXPECT_NEAR(global_winner->ray_distance, 3.0, 1.0e-6);
+}
+
+TEST(ViewportCurveAnchorSnapTests,
+     CrossEntityDepthDifferenceAboveMeshEpsilonKeepsNearerWinner) {
+  const std::array farther_points{
+      quader::modeling::CurvePointSpec{
+          .position = {0.01f, 0.0f, 3.000005f}},
+  };
+  const auto farther =
+      std::make_shared<const quader::modeling::CurveDocument>(
+          quader::modeling::CurveDocument::make_bezier(farther_points)
+              .or_throw());
+  const std::array nearer_points{
+      quader::modeling::CurvePointSpec{.position = {0.2f, 0.0f, 3.0f}},
+  };
+  const auto nearer =
+      std::make_shared<const quader::modeling::CurveDocument>(
+          quader::modeling::CurveDocument::make_bezier(nearer_points)
+              .or_throw());
+  const std::array candidates{
+      quader::ViewportSceneCurvePickCandidate{
+          .entity = 1u,
+          .document = farther,
+      },
+      quader::ViewportSceneCurvePickCandidate{
+          .entity = 2u,
+          .document = nearer,
+      },
+  };
+  const auto groups =
+      quader::collect_viewport_curve_anchor_snap_candidates(candidates);
+  const auto winner = quader::resolve_viewport_curve_anchor_snap_target(
+      {{0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 1.0f}}, groups, 0.3);
+  ASSERT_TRUE(winner.has_value());
+  EXPECT_EQ(winner->entity, 2u);
+}
+
+TEST(ViewportCurveAnchorSnapTests,
+     MeshSurfaceOcclusionUsesComponentToleranceBoundary) {
+  const std::array points{
+      quader::modeling::CurvePointSpec{.position = {0.0f, 0.0f, 4.0f}},
+  };
+  const auto document =
+      std::make_shared<const quader::modeling::CurveDocument>(
+          quader::modeling::CurveDocument::make_bezier(points).or_throw());
+  const std::array candidates{
+      quader::ViewportSceneCurvePickCandidate{
+          .entity = 9u,
+          .document = document,
+      },
+  };
+  const auto anchors =
+      quader::collect_viewport_curve_anchor_snap_candidates(candidates);
+  const quader::ViewportRay ray{{0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 1.0f}};
+
+  EXPECT_TRUE(quader::resolve_viewport_curve_anchor_snap_target(
+      ray, anchors, 0.3, {}, 3.999)
+                  .has_value());
+  EXPECT_FALSE(quader::resolve_viewport_curve_anchor_snap_target(
+      ray, anchors, 0.3, {}, 3.998)
+                   .has_value());
+}
+
+TEST(ViewportCurveAnchorSnapTests,
+     ExpandedEntityBoundsSkipOffRayAnchorGroups) {
+  const std::array near_points{
+      quader::modeling::CurvePointSpec{.position = {0.1f, 0.0f, 3.0f}},
+  };
+  const auto near_document =
+      std::make_shared<const quader::modeling::CurveDocument>(
+          quader::modeling::CurveDocument::make_bezier(near_points).or_throw());
+  const std::array far_points{
+      quader::modeling::CurvePointSpec{.position = {100.0f, 0.0f, 2.0f}},
+      quader::modeling::CurvePointSpec{.position = {101.0f, 0.0f, 4.0f}},
+  };
+  const auto far_document =
+      std::make_shared<const quader::modeling::CurveDocument>(
+          quader::modeling::CurveDocument::make_bezier(far_points).or_throw());
+  const std::array candidates{
+      quader::ViewportSceneCurvePickCandidate{
+          .entity = 1u,
+          .document = far_document,
+      },
+      quader::ViewportSceneCurvePickCandidate{
+          .entity = 2u,
+          .document = near_document,
+      },
+  };
+  const auto groups =
+      quader::collect_viewport_curve_anchor_snap_candidates(candidates);
+  ASSERT_EQ(groups.size(), 2u);
+  quader::ViewportCurveAnchorSnapWorkCounters counters;
+  const auto hit = quader::resolve_viewport_curve_anchor_snap_target(
+      {{0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 1.0f}}, groups, 0.3, {},
+      std::nullopt, &counters);
+  ASSERT_TRUE(hit.has_value());
+  EXPECT_EQ(hit->entity, 2u);
+  EXPECT_EQ(counters.entity_bounds_tested, 2u);
+  EXPECT_EQ(counters.anchors_tested, 1u);
+}
+
+TEST(ViewportCurvePickingTests,
+     CandidateCacheRetainsSamplesAndFiltersHierarchyLayersAndLocalVisibility) {
+  ViewportInteractionHarness harness;
+  const auto first = harness.editor.modeling().create_curve({
+      .points = {{.position = {-2.0f, 0.0f, 0.0f}},
+                 {.position = {2.0f, 0.0f, 0.0f}}},
+  });
+  ASSERT_TRUE(first.ok()) << first.error_message();
+  const auto initial = harness.frame().scene_curve_pick_candidates;
+  ASSERT_EQ(initial.size(), 1u);
+  const auto samples = initial.front().sample_payload;
+  const auto document = initial.front().document;
+  ASSERT_NE(document, nullptr);
+  const auto *storage = initial.data();
+  const auto builds = harness.curve_pick_cache.build_count();
+  for (int frame = 0; frame < 8; ++frame) {
+    EXPECT_EQ(harness.frame().scene_curve_pick_candidates.data(), storage);
+    EXPECT_EQ(harness.curve_pick_cache.build_count(), builds);
+  }
+  ASSERT_TRUE(harness.editor.scene().set_transform(
+      first.value().entity, {.position = {0.0f, 2.0f, 0.0f}}).ok());
+  const auto moved = harness.frame().scene_curve_pick_candidates;
+  ASSERT_EQ(moved.size(), 1u);
+  EXPECT_EQ(moved.front().sample_payload, samples);
+  EXPECT_EQ(moved.front().document, document);
+  const auto moved_hit = quader::pick_viewport_curve(
+      harness.camera, harness.camera.project_world_point({0.0f, 2.0f, 0.0f}).position,
+      moved);
+  ASSERT_TRUE(moved_hit.has_value());
+  EXPECT_NEAR(moved_hit->world_position.y, 2.0f, 1.0e-4f);
+
+  ASSERT_TRUE(harness.editor.selection().select_object(first.value()).ok());
+  const auto group = harness.editor.scene().group_selection("Curve Visibility");
+  ASSERT_TRUE(group.ok()) << group.error_message();
+  ASSERT_TRUE(harness.editor.scene().set_visible(group.value().id, false).ok());
+  EXPECT_TRUE(harness.frame().scene_curve_pick_candidates.empty());
+  ASSERT_TRUE(harness.editor.scene().set_visible(group.value().id, true).ok());
+  ASSERT_TRUE(harness.editor.scene().set_locked(group.value().id, true).ok());
+  EXPECT_TRUE(harness.frame().scene_curve_pick_candidates.empty());
+  ASSERT_TRUE(harness.editor.scene().set_locked(group.value().id, false).ok());
+  ASSERT_TRUE(harness.session.scene().set_selectable(group.value().id, false));
+  EXPECT_TRUE(harness.frame().scene_curve_pick_candidates.empty());
+  ASSERT_TRUE(harness.session.scene().set_selectable(group.value().id, true));
+
+  ASSERT_TRUE(harness.editor.scene().select(group.value().id).ok());
+  const auto layer = harness.editor.layers().create_from_selection("Curve Layer");
+  ASSERT_TRUE(layer.ok()) << layer.error_message();
+  ASSERT_TRUE(harness.editor.layers().set_visible(layer.value().id, false).ok());
+  EXPECT_TRUE(harness.frame().scene_curve_pick_candidates.empty());
+  ASSERT_TRUE(harness.editor.layers().set_visible(layer.value().id, true).ok());
+  ASSERT_TRUE(harness.editor.layers().set_locked(layer.value().id, true).ok());
+  EXPECT_TRUE(harness.frame().scene_curve_pick_candidates.empty());
+  ASSERT_TRUE(harness.editor.layers().set_locked(layer.value().id, false).ok());
+
+  const auto other = harness.editor.modeling().create_curve({
+      .points = {{.position = {-2.0f, 4.0f, 0.0f}},
+                 {.position = {2.0f, 4.0f, 0.0f}}},
+  });
+  ASSERT_TRUE(other.ok()) << other.error_message();
+  ASSERT_TRUE(harness.editor.selection().select_object(first.value()).ok());
+  const auto entered_local = harness.editor.viewports().toggle_local_visibility();
+  ASSERT_TRUE(entered_local.ok()) << entered_local.error_message();
+  const auto local = harness.frame().scene_curve_pick_candidates;
+  ASSERT_EQ(local.size(), 1u);
+  EXPECT_EQ(local.front().entity, first.value().entity);
+  EXPECT_EQ(local.front().sample_payload, samples);
+  EXPECT_EQ(local.front().document, document);
+}
+
+TEST(ViewportCurveMarqueeTests,
+     RectangleChangesReuseProjectionWhileCameraChangesKeepCandidateSamples) {
+  ViewportInteractionHarness harness;
+  const auto curve = harness.editor.modeling().create_curve({
+      .points = {{.position = {-2.0f, 0.0f, 0.0f}},
+                 {.position = {2.0f, 0.0f, 0.0f}}},
+  });
+  ASSERT_TRUE(curve.ok()) << curve.error_message();
+  quader::ViewportCurvePickCache cache;
+  quader::ModelingBoxSelectRequest request{
+      .camera = {.orthographic = true,
+                 .origin = {0.0f, 0.0f, 8.0f},
+                 .viewport_size = {800.0f, 600.0f},
+                 .orthographic_size = 12.0},
+      .start = {290.0f, 290.0f},
+      .end = {510.0f, 310.0f},
+      .rule = quader::ModelingBoxSelectionRule::Contain,
+  };
+  const auto visible = [](quader::EntityId) { return true; };
+  const auto pick = [&] {
+    return cache.box_pick_entities(harness.session.scene(), harness.session.assets(),
+                                   request, 0u, visible);
+  };
+  EXPECT_EQ(pick(), std::vector<quader::EntityId>{curve.value().entity});
+  const auto candidates = cache.candidates(
+      harness.session.scene(), harness.session.assets(), 0u, visible);
+  ASSERT_EQ(candidates.size(), 1u);
+  const auto *storage = candidates.data();
+  const auto samples = candidates.front().sample_payload;
+  EXPECT_EQ(cache.build_count(), 1u);
+  EXPECT_EQ(cache.rectangle_build_count(), 1u);
+
+  request.start = {0.0f, 0.0f};
+  request.end = {10.0f, 10.0f};
+  EXPECT_TRUE(pick().empty());
+  request.start = {390.0f, 290.0f};
+  request.end = {410.0f, 310.0f};
+  request.edit = quader::ModelingSelectionEdit::Add;
+  request.rule = quader::ModelingBoxSelectionRule::Crossing;
+  EXPECT_EQ(pick(), std::vector<quader::EntityId>{curve.value().entity});
+  EXPECT_EQ(cache.build_count(), 1u);
+  EXPECT_EQ(cache.rectangle_build_count(), 1u);
+
+  request.camera.origin.x = 10.0f;
+  EXPECT_TRUE(pick().empty());
+  EXPECT_EQ(cache.build_count(), 1u);
+  EXPECT_EQ(cache.rectangle_build_count(), 2u);
+  const auto retained = cache.candidates(
+      harness.session.scene(), harness.session.assets(), 0u, visible);
+  ASSERT_EQ(retained.size(), 1u);
+  EXPECT_EQ(retained.data(), storage);
+  EXPECT_EQ(retained.front().sample_payload, samples);
+}
+
+TEST(ViewportCurveMarqueeTests,
+     MixedMeshesAndCurvesHonorDirectionModifiersBaselineAndSingleUndo) {
+  ViewportInteractionHarness harness;
+  const auto box = create_unit_box(harness);
+  const auto curve = harness.editor.modeling().create_curve({
+      .points = {{.position = {-3.0f, 0.0f, 0.0f}},
+                 {.position = {3.0f, 0.0f, 0.0f}}},
+  });
+  ASSERT_TRUE(curve.ok()) << curve.error_message();
+  ASSERT_TRUE(harness.editor.selection().set_mode(quader::QuaderSelectionMode::Object).ok());
+  ASSERT_TRUE(harness.editor.selection().clear().ok());
+  auto request = curve_marquee_request({340.0f, 240.0f}, {460.0f, 360.0f});
+  request.rule = quader::QuaderBoxSelectionRule::DragDirection;
+  auto selected = harness.editor.selection().box_select(request);
+  ASSERT_TRUE(selected.ok()) << selected.error_message();
+  EXPECT_EQ(selected_entities(harness), std::vector<quader::EntityId>{box.entity});
+
+  std::swap(request.start, request.end);
+  selected = harness.editor.selection().box_select(request);
+  ASSERT_TRUE(selected.ok()) << selected.error_message();
+  const std::vector<quader::EntityId> both{box.entity, curve.value().entity};
+  EXPECT_EQ(selected_entities(harness), both);
+  const auto undo = harness.editor.history().undo();
+  ASSERT_TRUE(undo.ok()) << undo.error_message();
+  EXPECT_EQ(selected_entities(harness), std::vector<quader::EntityId>{box.entity});
+  const auto redo = harness.editor.history().redo();
+  ASSERT_TRUE(redo.ok()) << redo.error_message();
+  EXPECT_EQ(selected_entities(harness), both);
+
+  request = curve_marquee_request({500.0f, 285.0f}, {540.0f, 315.0f});
+  request.rule = quader::QuaderBoxSelectionRule::Crossing;
+  request.edit = quader::QuaderSelectionEdit::Remove;
+  selected = harness.editor.selection().box_select(request);
+  ASSERT_TRUE(selected.ok()) << selected.error_message();
+  EXPECT_EQ(selected_entities(harness), std::vector<quader::EntityId>{box.entity});
+  const auto baseline = harness.editor.selection().capture_box_selection_baseline();
+  ASSERT_TRUE(harness.editor.selection().select_object(curve.value()).ok());
+  request.edit = quader::QuaderSelectionEdit::Add;
+  selected = harness.editor.selection().box_select(request, baseline);
+  ASSERT_TRUE(selected.ok()) << selected.error_message();
+  EXPECT_EQ(selected_entities(harness), both);
+  request.edit = quader::QuaderSelectionEdit::Toggle;
+  selected = harness.editor.selection().box_select(request, baseline);
+  ASSERT_TRUE(selected.ok()) << selected.error_message();
+  EXPECT_EQ(selected_entities(harness), both)
+      << "repeated drag updates must use the press-time baseline";
+  selected = harness.editor.selection().box_select(request);
+  ASSERT_TRUE(selected.ok()) << selected.error_message();
+  EXPECT_EQ(selected_entities(harness), std::vector<quader::EntityId>{box.entity});
+}
+
+TEST(ViewportCurveMarqueeTests,
+     UsesSampledPathInsteadOfBoundsAndDoesNotClampContainmentToViewport) {
+  ViewportInteractionHarness harness;
+  const auto curve = harness.editor.modeling().create_curve({
+      .points = {{.position = {-2.0f, -1.0f, 0.0f},
+                  .outgoing_handle = {0.0f, 4.0f, 0.0f}},
+                 {.position = {2.0f, -1.0f, 0.0f},
+                  .incoming_handle = {0.0f, 4.0f, 0.0f}}},
+  });
+  ASSERT_TRUE(curve.ok()) << curve.error_message();
+  ASSERT_TRUE(harness.editor.selection().set_mode(quader::QuaderSelectionMode::Object).ok());
+  ASSERT_TRUE(harness.editor.selection().clear().ok());
+  auto request = curve_marquee_request({390.0f, 315.0f}, {410.0f, 335.0f});
+  request.rule = quader::QuaderBoxSelectionRule::Crossing;
+  auto selected = harness.editor.selection().box_select(request);
+  ASSERT_TRUE(selected.ok()) << selected.error_message();
+  EXPECT_TRUE(selected_entities(harness).empty())
+      << "this rectangle is inside the curve bounds but below the actual arch";
+  request.start = {390.0f, 195.0f};
+  request.end = {410.0f, 205.0f};
+  selected = harness.editor.selection().box_select(request);
+  ASSERT_TRUE(selected.ok()) << selected.error_message();
+  EXPECT_EQ(selected_entities(harness), std::vector<quader::EntityId>{curve.value().entity});
+  request = curve_marquee_request({290.0f, 340.0f}, {510.0f, 360.0f});
+  selected = harness.editor.selection().box_select(request);
+  ASSERT_TRUE(selected.ok()) << selected.error_message();
+  EXPECT_TRUE(selected_entities(harness).empty())
+      << "containing the anchors does not contain the arch between them";
+  request = curve_marquee_request({290.0f, 190.0f}, {510.0f, 360.0f});
+  selected = harness.editor.selection().box_select(request);
+  ASSERT_TRUE(selected.ok()) << selected.error_message();
+  EXPECT_EQ(selected_entities(harness), std::vector<quader::EntityId>{curve.value().entity});
+
+  const auto offscreen = harness.editor.modeling().create_curve({
+      .points = {{.position = {-20.0f, 4.0f, 0.0f}},
+                 {.position = {20.0f, 4.0f, 0.0f}}},
+  });
+  ASSERT_TRUE(offscreen.ok()) << offscreen.error_message();
+  request = curve_marquee_request({0.0f, 80.0f}, {800.0f, 120.0f});
+  selected = harness.editor.selection().box_select(request);
+  ASSERT_TRUE(selected.ok()) << selected.error_message();
+  EXPECT_TRUE(selected_entities(harness).empty());
+  request.rule = quader::QuaderBoxSelectionRule::Crossing;
+  selected = harness.editor.selection().box_select(request);
+  ASSERT_TRUE(selected.ok()) << selected.error_message();
+  EXPECT_EQ(selected_entities(harness), std::vector<quader::EntityId>{offscreen.value().entity});
+}
+
+TEST(ViewportCurveMarqueeTests,
+     PromotesNearestGroupAndHonorsAncestorLayerAndLocalVisibility) {
+  ViewportInteractionHarness harness;
+  const auto curve = harness.editor.modeling().create_curve({
+      .points = {{.position = {-2.0f, 0.0f, 0.0f}},
+                 {.position = {2.0f, 0.0f, 0.0f}}},
+  });
+  ASSERT_TRUE(curve.ok()) << curve.error_message();
+  ASSERT_TRUE(harness.editor.selection().select_object(curve.value()).ok());
+  const auto inner = harness.editor.scene().group_selection("Marquee Inner");
+  ASSERT_TRUE(inner.ok()) << inner.error_message();
+  const auto outer = harness.editor.scene().group_selection("Marquee Outer");
+  ASSERT_TRUE(outer.ok()) << outer.error_message();
+  ASSERT_TRUE(harness.editor.selection().set_mode(quader::QuaderSelectionMode::Group).ok());
+  ASSERT_TRUE(harness.editor.selection().clear().ok());
+  const auto request = curve_marquee_request({295.0f, 290.0f}, {505.0f, 310.0f});
+  auto selected = harness.editor.selection().box_select(request);
+  ASSERT_TRUE(selected.ok()) << selected.error_message();
+  EXPECT_EQ(selected_entities(harness), std::vector<quader::EntityId>{inner.value().id});
+
+  ASSERT_TRUE(harness.editor.scene().set_visible(outer.value().id, false).ok());
+  selected = harness.editor.selection().box_select(request);
+  ASSERT_TRUE(selected.ok()) << selected.error_message();
+  EXPECT_TRUE(selected_entities(harness).empty());
+  ASSERT_TRUE(harness.editor.scene().set_visible(outer.value().id, true).ok());
+  ASSERT_TRUE(harness.editor.scene().set_locked(outer.value().id, true).ok());
+  selected = harness.editor.selection().box_select(request);
+  ASSERT_TRUE(selected.ok()) << selected.error_message();
+  EXPECT_TRUE(selected_entities(harness).empty());
+  ASSERT_TRUE(harness.editor.scene().set_locked(outer.value().id, false).ok());
+  ASSERT_TRUE(harness.editor.scene().select(outer.value().id).ok());
+  const auto layer = harness.editor.layers().create_from_selection("Marquee Layer");
+  ASSERT_TRUE(layer.ok()) << layer.error_message();
+  ASSERT_TRUE(harness.editor.layers().set_visible(layer.value().id, false).ok());
+  selected = harness.editor.selection().box_select(request);
+  ASSERT_TRUE(selected.ok()) << selected.error_message();
+  EXPECT_TRUE(selected_entities(harness).empty());
+  ASSERT_TRUE(harness.editor.layers().set_visible(layer.value().id, true).ok());
+  ASSERT_TRUE(harness.editor.layers().set_locked(layer.value().id, true).ok());
+  selected = harness.editor.selection().box_select(request);
+  ASSERT_TRUE(selected.ok()) << selected.error_message();
+  EXPECT_TRUE(selected_entities(harness).empty());
+  ASSERT_TRUE(harness.editor.layers().set_locked(layer.value().id, false).ok());
+
+  ASSERT_TRUE(harness.editor.selection().set_mode(quader::QuaderSelectionMode::Object).ok());
+  const auto other = harness.editor.modeling().create_curve({
+      .points = {{.position = {-2.0f, 4.0f, 0.0f}},
+                 {.position = {2.0f, 4.0f, 0.0f}}},
+  });
+  ASSERT_TRUE(other.ok()) << other.error_message();
+  ASSERT_TRUE(harness.editor.selection().select_object(other.value()).ok());
+  const auto local = harness.editor.viewports().toggle_local_visibility();
+  ASSERT_TRUE(local.ok()) << local.error_message();
+  ASSERT_TRUE(harness.editor.selection().set_mode(quader::QuaderSelectionMode::Group).ok());
+  ASSERT_TRUE(harness.editor.selection().clear().ok());
+  selected = harness.editor.selection().box_select(request);
+  ASSERT_TRUE(selected.ok()) << selected.error_message();
+  EXPECT_TRUE(selected_entities(harness).empty());
+  const auto restored = harness.editor.viewports().toggle_local_visibility();
+  ASSERT_TRUE(restored.ok()) << restored.error_message();
+  selected = harness.editor.selection().box_select(request);
+  ASSERT_TRUE(selected.ok()) << selected.error_message();
+  EXPECT_EQ(selected_entities(harness), std::vector<quader::EntityId>{inner.value().id});
+}
+
+TEST(ViewportCurveMarqueeTests,
+     InstanceEditExcludesOrdinaryCurvesWithoutBreakingMemberMarquee) {
+  ViewportInteractionHarness harness;
+  const auto curve = harness.editor.modeling().create_curve({
+      .points = {{.position = {-2.0f, 3.0f, 0.0f}},
+                 {.position = {2.0f, 3.0f, 0.0f}}},
+  });
+  ASSERT_TRUE(curve.ok()) << curve.error_message();
+  const auto box = create_unit_box(harness);
+  ASSERT_TRUE(harness.editor.selection().set_mode(quader::QuaderSelectionMode::Object).ok());
+  ASSERT_TRUE(harness.editor.selection().select_object(box).ok());
+  const auto instance = harness.editor.modeling().create_instance();
+  ASSERT_TRUE(instance.ok()) << instance.error_message();
+  quader::EntityId occurrence = quader::kInvalidEntityId;
+  for (const auto &entity : harness.editor.query().entities()) {
+    if (entity.has_instance_occurrence) {
+      occurrence = entity.id;
+      break;
+    }
+  }
+  ASSERT_NE(occurrence, quader::kInvalidEntityId);
+  const auto entered = harness.editor.modeling().enter_instance_edit(occurrence);
+  ASSERT_TRUE(entered.ok()) << entered.error_message();
+  ASSERT_TRUE(harness.editor.selection().clear().ok());
+  auto request = curve_marquee_request({290.0f, 140.0f}, {510.0f, 160.0f});
+  auto selected = harness.editor.selection().box_select(request);
+  ASSERT_TRUE(selected.ok()) << selected.error_message();
+  EXPECT_TRUE(selected_entities(harness).empty());
+  request = curve_marquee_request({0.0f, 0.0f}, {800.0f, 600.0f});
+  selected = harness.editor.selection().box_select(request);
+  ASSERT_TRUE(selected.ok()) << selected.error_message();
+  EXPECT_EQ(selected.value().selected_object_count, 1u);
+  ASSERT_TRUE(harness.editor.query().entity(curve.value().entity).has_value());
+  EXPECT_FALSE(harness.editor.query().entity(curve.value().entity)->selected);
+  const auto exited = harness.editor.modeling().exit_instance_edit();
+  ASSERT_TRUE(exited.ok()) << exited.error_message();
+  request = curve_marquee_request({290.0f, 140.0f}, {510.0f, 160.0f});
+  selected = harness.editor.selection().box_select(request);
+  ASSERT_TRUE(selected.ok()) << selected.error_message();
+  EXPECT_EQ(selected_entities(harness), std::vector<quader::EntityId>{curve.value().entity});
 }
 
 TEST(ViewportInteractionControllerTests,

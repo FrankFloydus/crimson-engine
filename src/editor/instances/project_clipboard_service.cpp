@@ -119,6 +119,10 @@ bool collect_snapshot_assets(const DocumentEntitySnapshot &snapshot,
     error = "Lights are not supported inside an instance definition.";
     return false;
   }
+  if (snapshot.kind == EntityKind::Curve || snapshot.curve.has_value()) {
+    error = "Curves are not supported inside an instance definition.";
+    return false;
+  }
   if (snapshot.mesh.has_value()) {
     if (!snapshot.modeling_object.has_value() ||
         snapshot.mesh->mesh == kInvalidAssetId) {

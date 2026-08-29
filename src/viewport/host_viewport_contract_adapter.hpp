@@ -69,6 +69,7 @@ enum class ViewportInputBindingContext {
   ModalTool,
   LinearArrayTool,
   RadialArrayTool,
+  CurveTool,
 };
 
 /**

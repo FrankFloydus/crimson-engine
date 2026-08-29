@@ -15,6 +15,8 @@
 #include "scene/scene_document.hpp"
 #include "scene/scene_entity_naming.hpp"
 
+#include <quader/modeling/curves/curve_document.hpp>
+
 #include <algorithm>
 #include <chrono>
 #include <cstddef>
@@ -482,6 +484,9 @@ void apply_complete_scene_identity_to_entity(
   if (identity.mesh.has_value()) {
     scene.set_mesh(entity, *identity.mesh);
   }
+  if (identity.curve.has_value()) {
+    scene.set_curve(entity, *identity.curve);
+  }
   apply_durable_scene_identity_to_entity(scene, entity, identity);
   if (identity.material.has_value()) {
     scene.set_material(entity, *identity.material);
@@ -744,9 +749,24 @@ bool ModelingMeshSyncService::replace_projected_mesh(
   return assets.replace_mesh(mesh_id, std::move(mesh));
 }
 
+AssetId ModelingMeshSyncService::install_projected_curve(
+    AssetRegistry &assets, CurveAsset curve) const {
+  return assets.add_curve(std::move(curve));
+}
+
+bool ModelingMeshSyncService::replace_projected_curve(
+    AssetRegistry &assets, AssetId curve_id, CurveAsset curve) const {
+  return assets.replace_curve(curve_id, std::move(curve));
+}
+
 EntityId ModelingMeshSyncService::create_projected_mesh_entity(
     SceneDocument &scene, const std::string &name) const {
   return scene.create_entity(name, EntityKind::Mesh);
+}
+
+EntityId ModelingMeshSyncService::create_projected_curve_entity(
+    SceneDocument &scene, const std::string &name) const {
+  return scene.create_entity(name, EntityKind::Curve);
 }
 
 EntityId ModelingMeshSyncService::restore_projected_mesh_entity(
@@ -754,9 +774,10 @@ EntityId ModelingMeshSyncService::restore_projected_mesh_entity(
   if (scene.exists(identity.entity)) {
     return identity.entity;
   }
+  const EntityKind kind =
+      identity.curve.has_value() ? EntityKind::Curve : EntityKind::Mesh;
   const EntityId restored = scene.create_entity_with_id(
-      identity.entity, identity.name, EntityKind::Mesh,
-      identity.editor_object_id);
+      identity.entity, identity.name, kind, identity.editor_object_id);
   if (restored == kInvalidEntityId) {
     return kInvalidEntityId;
   }
@@ -835,6 +856,25 @@ bool ModelingMeshSyncService::bind_projected_object(
          scene.set_mesh(entity, mesh);
 }
 
+bool ModelingMeshSyncService::bind_projected_curve_object(
+    SceneDocument &scene, EntityId entity, int modeling_object_id,
+    AssetId curve_id,
+    std::optional<std::uint32_t> requested_local_frame_version) const {
+  const ModelingObjectComponent *current_modeling_object =
+      scene.modeling_object(entity);
+  const std::uint32_t local_frame_version =
+      requested_local_frame_version.value_or(
+          current_modeling_object != nullptr
+              ? current_modeling_object->local_frame_version
+              : kCanonicalModelingObjectLocalFrameVersion);
+  return scene.set_modeling_object(
+             entity, {.object_id = modeling_object_id,
+                      .material_slot = 0u,
+                      .sdk_owned = true,
+                      .local_frame_version = local_frame_version}) &&
+         scene.set_curve(entity, {.curve = curve_id});
+}
+
 bool ModelingMeshSyncService::mark_projected_object_sdk_owned(
     SceneDocument &scene, EntityId entity) const {
   const ModelingObjectComponent *component = scene.modeling_object(entity);
@@ -854,6 +894,11 @@ bool ModelingMeshSyncService::set_projected_mesh_binding(
   return scene.set_mesh(entity, {.mesh = mesh_id});
 }
 
+bool ModelingMeshSyncService::set_projected_curve_binding(
+    SceneDocument &scene, EntityId entity, AssetId curve_id) const {
+  return scene.set_curve(entity, {.curve = curve_id});
+}
+
 bool ModelingMeshSyncService::set_projected_material(
     SceneDocument &scene, EntityId entity,
     const MaterialComponent *material) const {
@@ -864,6 +909,11 @@ bool ModelingMeshSyncService::set_projected_material(
 bool ModelingMeshSyncService::notify_projected_mesh_changed(
     SceneDocument &scene, EntityId entity) const {
   return scene.notify_mesh_payload_changed(entity);
+}
+
+bool ModelingMeshSyncService::notify_projected_curve_changed(
+    SceneDocument &scene, EntityId entity) const {
+  return scene.notify_curve_payload_changed(entity);
 }
 
 void ModelingMeshSyncService::apply_scene_identity_to_entity(
@@ -957,6 +1007,64 @@ void ModelingMeshSyncService::remove_unreferenced_history_mesh_assets(
   }
 }
 
+bool ModelingMeshSyncService::restore_history_curve_assets(
+    AssetRegistry &assets,
+    const std::unordered_map<AssetId, CurveAsset> &curve_assets) const {
+  std::vector<AssetId> ordered_ids;
+  ordered_ids.reserve(curve_assets.size());
+  for (const auto &[id, curve] : curve_assets) {
+    if (id == kInvalidAssetId || !assets.validate_curve(curve).ok) {
+      return false;
+    }
+    ordered_ids.push_back(id);
+  }
+  std::sort(ordered_ids.begin(), ordered_ids.end());
+
+  for (const AssetId id : ordered_ids) {
+    const CurveAsset &snapshot = curve_assets.at(id);
+    const CurveAsset *current = assets.curve(id);
+    if (current != nullptr && current->name == snapshot.name &&
+        current->document != nullptr &&
+        current->document->identity_high_water() ==
+            snapshot.document->identity_high_water() &&
+        current->document->has_same_geometry(*snapshot.document)) {
+      continue;
+    }
+    const bool restored = current != nullptr
+                              ? assets.replace_curve(id, snapshot)
+                              : assets.add_curve(id, snapshot) == id;
+    if (!restored) {
+      // The projection adapter owns the complete scene/asset checkpoint and
+      // restores it if any part of this publication fails.
+      return false;
+    }
+  }
+  return true;
+}
+
+void ModelingMeshSyncService::remove_unreferenced_history_curve_assets(
+    const SceneDocument &scene, AssetRegistry &assets,
+    std::span<const AssetId> curve_assets) const {
+  std::vector<AssetId> ordered_ids(curve_assets.begin(), curve_assets.end());
+  std::sort(ordered_ids.begin(), ordered_ids.end());
+  ordered_ids.erase(std::unique(ordered_ids.begin(), ordered_ids.end()),
+                    ordered_ids.end());
+  const std::vector<EntityId> scene_entities = scene.entities();
+  std::unordered_set<AssetId> live_curves;
+  live_curves.reserve(scene_entities.size());
+  for (const EntityId entity : scene_entities) {
+    const CurveComponent *component = scene.curve(entity);
+    if (component != nullptr && component->curve != kInvalidAssetId) {
+      live_curves.insert(component->curve);
+    }
+  }
+  for (const AssetId id : ordered_ids) {
+    if (id != kInvalidAssetId && !live_curves.contains(id)) {
+      (void)assets.remove_curve(id);
+    }
+  }
+}
+
 void ModelingMeshSyncService::apply_scene_identity_to_duplicate_entity(
     SceneDocument &scene, EntityId entity,
     const ModelingObjectSceneIdentity &identity) const {
@@ -966,6 +1074,13 @@ void ModelingMeshSyncService::apply_scene_identity_to_duplicate_entity(
       MeshComponent next_mesh = *identity.mesh;
       next_mesh.mesh = duplicate_mesh->mesh;
       scene.set_mesh(entity, next_mesh);
+    }
+  }
+  if (identity.curve.has_value()) {
+    if (const CurveComponent *duplicate_curve = scene.curve(entity)) {
+      CurveComponent next_curve = *identity.curve;
+      next_curve.curve = duplicate_curve->curve;
+      scene.set_curve(entity, next_curve);
     }
   }
   if (identity.material.has_value()) {

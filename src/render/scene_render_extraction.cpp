@@ -227,9 +227,16 @@ void mark_light_dirty(RenderSceneLightRecord &record,
          previous->texture_mapping_revision ==
              snapshot.texture_mapping_revision &&
          previous->mesh_binding_revision == snapshot.mesh_binding_revision &&
+         previous->curve_binding_revision ==
+             snapshot.curve_binding_revision &&
+         previous->material_binding_revision ==
+             snapshot.material_binding_revision &&
          previous->render_component_revision ==
              snapshot.render_component_revision &&
          previous->asset_revision == snapshot.asset_revision &&
+         previous->mesh_asset_revision == snapshot.mesh_asset_revision &&
+         previous->material_asset_revision ==
+             snapshot.material_asset_revision &&
          previous->project_material_revision ==
              snapshot.project_material_revision &&
          previous->instance_edit_scope == snapshot.instance_edit_scope;
@@ -703,8 +710,12 @@ RenderSceneSnapshot build_render_scene_snapshot(
   snapshot.transform_revision = document.transform_revision();
   snapshot.texture_mapping_revision = document.texture_mapping_revision();
   snapshot.mesh_binding_revision = document.mesh_binding_revision();
+  snapshot.curve_binding_revision = document.curve_binding_revision();
+  snapshot.material_binding_revision = document.material_binding_revision();
   snapshot.render_component_revision = document.render_component_revision();
   snapshot.asset_revision = assets.revision();
+  snapshot.mesh_asset_revision = assets.mesh_material_usage_revision();
+  snapshot.material_asset_revision = assets.material_catalog_revision();
   snapshot.project_material_revision =
       options.project_material_revision != 0u
           ? options.project_material_revision
@@ -1141,6 +1152,67 @@ RenderMaterialAssetSnapshot build_render_material_asset_snapshot(
 
 } // namespace
 
+bool try_refresh_render_scene_snapshot_curve_publication(
+    RenderSceneSnapshot &snapshot, const SceneDocument &document,
+    const AssetRegistry &assets, std::uint64_t frame_index,
+    RenderSceneBindingKey scene_binding,
+    std::uint64_t project_material_revision,
+    RenderInstanceEditScope instance_edit_scope,
+    const ViewportLocalVisibilitySnapshot *local_visibility) {
+  const std::uint64_t curve_revision = document.curve_binding_revision();
+  const std::uint64_t render_revision = document.render_component_revision();
+  if (snapshot.scene_binding != scene_binding ||
+      snapshot.local_visibility_revision !=
+          local_visibility_revision(local_visibility) ||
+      snapshot.instance_edit_scope != instance_edit_scope ||
+      snapshot.selection_revision != document.selection_revision() ||
+      snapshot.visibility_revision != document.visibility_revision() ||
+      snapshot.transform_revision != document.transform_revision() ||
+      snapshot.texture_mapping_revision !=
+          document.texture_mapping_revision() ||
+      snapshot.mesh_binding_revision != document.mesh_binding_revision() ||
+      snapshot.material_binding_revision !=
+          document.material_binding_revision() ||
+      snapshot.mesh_asset_revision !=
+          assets.mesh_material_usage_revision() ||
+      snapshot.material_asset_revision != assets.material_catalog_revision() ||
+      snapshot.project_material_revision != project_material_revision ||
+      curve_revision <= snapshot.curve_binding_revision ||
+      render_revision <= snapshot.render_component_revision ||
+      curve_revision - snapshot.curve_binding_revision !=
+          render_revision - snapshot.render_component_revision) {
+    return false;
+  }
+
+  QDR_PROFILE_SCOPE("Render scene curve-only snapshot refresh");
+  const std::uint64_t previous_scene_revision = snapshot.scene_revision;
+  snapshot.frame_index = frame_index;
+  snapshot.scene_revision = document.revision();
+  snapshot.curve_binding_revision = curve_revision;
+  snapshot.render_component_revision = render_revision;
+  snapshot.asset_revision = assets.revision();
+  snapshot.dirty = {
+      .scene_changed = previous_scene_revision != snapshot.scene_revision,
+      .selection_changed = false,
+      .visibility_changed = false,
+      .local_visibility_changed = false,
+      .transforms_changed = false,
+      .texture_mappings_changed = false,
+      .mesh_bindings_changed = false,
+      // Curve records live in RenderOverlaySnapshotCache. Main-scene mesh and
+      // light records remain exact even though these broad public owner stamps
+      // advanced.
+      .render_components_changed = false,
+      .assets_changed = false,
+      .project_materials_changed = false,
+  };
+  // This is an in-place stamp refresh: the record vectors and their immutable
+  // payload pins are deliberately left untouched, including their historical
+  // per-record dirty annotations.
+  snapshot.reused_previous_records = true;
+  return true;
+}
+
 bool try_refresh_render_scene_snapshot_selection(
     RenderSceneSnapshot &snapshot, const SceneDocument &document,
     const AssetRegistry &assets, std::uint64_t frame_index,
@@ -1363,9 +1435,17 @@ bool render_scene_snapshot_matches_sources(
          snapshot.texture_mapping_revision ==
              document.texture_mapping_revision() &&
          snapshot.mesh_binding_revision == document.mesh_binding_revision() &&
+         snapshot.curve_binding_revision ==
+             document.curve_binding_revision() &&
+         snapshot.material_binding_revision ==
+             document.material_binding_revision() &&
          snapshot.render_component_revision ==
              document.render_component_revision() &&
          snapshot.asset_revision == assets.revision() &&
+         snapshot.mesh_asset_revision ==
+             assets.mesh_material_usage_revision() &&
+         snapshot.material_asset_revision ==
+             assets.material_catalog_revision() &&
          snapshot.project_material_revision == project_material_revision &&
          snapshot.instance_edit_scope == instance_edit_scope;
 }

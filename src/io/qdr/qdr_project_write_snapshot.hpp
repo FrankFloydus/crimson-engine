@@ -7,6 +7,7 @@
 #pragma once
 
 #include "assets/material_document.hpp"
+#include "assets/curve_asset.hpp"
 #include "assets/mesh_asset.hpp"
 #include "assets/texture_asset.hpp"
 #include "io/project/project_asset_resolver.hpp"
@@ -35,6 +36,13 @@ struct QdrProjectMeshAssetWriteSnapshot final {
   std::shared_ptr<const quader_poly::Document> authored_polygon_document;
   /** Verified QDR geometry payload retained without decoding/compilation. */
   std::shared_ptr<const std::vector<std::byte>> encoded_geometry;
+};
+
+/// Pins the SDK-authored controls of one curve for background serialization.
+struct QdrProjectCurveAssetWriteSnapshot final {
+  AssetId id = kInvalidAssetId;
+  std::string name;
+  std::shared_ptr<const modeling::CurveDocument> document;
 };
 
 /**
@@ -80,6 +88,7 @@ struct QdrProjectEntityWriteSnapshot final {
   std::optional<LockComponent> lock;
   std::optional<ModelingObjectComponent> modeling_object;
   std::optional<MeshComponent> mesh;
+  std::optional<CurveComponent> curve;
   std::optional<MaterialComponent> material;
   std::optional<LightComponent> light;
   bool scene_root = false;
@@ -98,6 +107,7 @@ struct QdrProjectWriteSnapshot final {
   std::uint64_t project_id = 0;
   std::string project_name;
   std::vector<QdrProjectMeshAssetWriteSnapshot> meshes;
+  std::vector<QdrProjectCurveAssetWriteSnapshot> curves;
   std::vector<QdrProjectMaterialAssetWriteSnapshot> materials;
   std::vector<QdrProjectTextureAssetWriteSnapshot> textures;
   std::vector<QdrProjectEntityWriteSnapshot> entities;

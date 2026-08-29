@@ -345,6 +345,24 @@ struct CaptureData final {
                                           : "unknown-material";
   }
 
+  [[nodiscard]] std::string curve_label(AssetId curve) const {
+    if (curve == kInvalidAssetId) {
+      return "none";
+    }
+    std::vector<std::string> owners;
+    for (const QuaderEntitySnapshot &entity : entities) {
+      if (entity.has_curve && entity.curve == curve) {
+        owners.push_back(semantic_entity_label(entity.id));
+      }
+    }
+    std::sort(owners.begin(), owners.end());
+    std::string label = "curve";
+    for (const std::string &owner : owners) {
+      label += "[" + owner + "]";
+    }
+    return label;
+  }
+
   [[nodiscard]] std::string texture_label(AssetId texture) const {
     if (texture == kInvalidAssetId) {
       return "none";
@@ -795,6 +813,9 @@ std::string capture_scene(const CaptureData &data) {
     writer.line(prefix + ".layer", data.layer_label(entity->layer_id));
     writer.line(prefix + ".has_mesh", bool_text(entity->has_mesh));
     writer.line(prefix + ".mesh", data.mesh_label(entity->mesh));
+    if (entity->has_curve) {
+      writer.line(prefix + ".curve", data.curve_label(entity->curve));
+    }
     writer.line(prefix + ".has_material", bool_text(entity->has_material));
     writer.line(prefix + ".material",
                 data.material_label(entity->material));
@@ -926,6 +947,40 @@ void write_mesh_geometry(CanonicalWriter &writer, std::string_view prefix,
   }
 }
 
+void write_curve_geometry(CanonicalWriter &writer, const CaptureData &data,
+                          const std::string &prefix,
+                          const QuaderEntitySnapshot &entity) {
+  writer.line(prefix + ".curve_asset", data.curve_label(entity.curve));
+  const auto ref = data.editor.query().modeling_object_for_entity(entity.id);
+  if (!ref.has_value()) {
+    writer.line(prefix + ".curve_available", "false");
+    return;
+  }
+  const auto snapshot = data.editor.modeling().curve_snapshot(*ref);
+  writer.line(prefix + ".curve_available", bool_text(snapshot.ok()));
+  if (!snapshot.ok()) {
+    return;
+  }
+  const auto &document = snapshot.value().document;
+  writer.line(prefix + ".closed", bool_text(document.closed()));
+  writer.line(prefix + ".point_count", std::to_string(document.point_count()));
+  for (const auto &point : document.points()) {
+    const std::string key = prefix + ".point[" +
+        std::to_string(point.id.index) + ":" +
+        std::to_string(point.id.generation) + "]";
+    writer.line(key, "position:" +
+        vec3_text({point.position.x, point.position.y, point.position.z}) +
+        ",incoming:" + vec3_text({point.incoming_handle.x,
+            point.incoming_handle.y, point.incoming_handle.z}) +
+        ",outgoing:" + vec3_text({point.outgoing_handle.x,
+            point.outgoing_handle.y, point.outgoing_handle.z}));
+  }
+  for (const auto segment : document.segments()) {
+    writer.line(prefix + ".segment", std::to_string(segment.index) +
+        ":" + std::to_string(segment.generation));
+  }
+}
+
 std::string capture_geometry(const CaptureData &data) {
   CanonicalWriter writer;
   std::vector<const QuaderModelingObjectRecord *> objects;
@@ -949,6 +1004,14 @@ std::string capture_geometry(const CaptureData &data) {
     writer.line(prefix + ".compiled", bool_text(present));
     if (present) {
       write_mesh_geometry(writer, prefix, *found->second);
+    }
+    const auto entity = std::find_if(
+        data.entities.begin(), data.entities.end(),
+        [object](const QuaderEntitySnapshot &value) {
+          return value.id == object->entity && value.has_curve;
+        });
+    if (entity != data.entities.end()) {
+      write_curve_geometry(writer, data, prefix, *entity);
     }
   }
   return std::move(writer).finish();
@@ -1156,6 +1219,10 @@ std::string project_material_text(const QuaderProjectMaterialInfo &material) {
 
 std::string capture_assets(const CaptureData &data) {
   CanonicalWriter writer;
+  if (data.snapshot.assets.curve_count != 0u) {
+    writer.line("assets.curve_count",
+                std::to_string(data.snapshot.assets.curve_count));
+  }
   writer.line("assets.mesh_count",
               std::to_string(data.snapshot.assets.mesh_count));
   writer.line("assets.material_count",

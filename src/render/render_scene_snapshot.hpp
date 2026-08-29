@@ -226,8 +226,16 @@ struct RenderSceneSnapshot {
   std::uint64_t transform_revision = 0;
   std::uint64_t texture_mapping_revision = 0;
   std::uint64_t mesh_binding_revision = 0;
+  std::uint64_t curve_binding_revision = 0;
+  std::uint64_t material_binding_revision = 0;
   std::uint64_t render_component_revision = 0;
   std::uint64_t asset_revision = 0;
+  // Main-scene extraction consumes meshes plus their material/texture
+  // dependencies. These narrow owner revisions let curve-only asset
+  // publications advance the public asset stamp without invalidating those
+  // retained records.
+  std::uint64_t mesh_asset_revision = 0;
+  std::uint64_t material_asset_revision = 0;
   std::uint64_t project_material_revision = 0;
   RenderInstanceEditScope instance_edit_scope;
   RenderSceneSnapshotDirtyState dirty;

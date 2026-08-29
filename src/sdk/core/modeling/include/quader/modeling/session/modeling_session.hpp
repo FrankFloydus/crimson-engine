@@ -7,11 +7,13 @@
 #pragma once
 
 #include <quader/modeling/commands/command.hpp>
+#include <quader/modeling/curves/curve_document.hpp>
 #include <quader/modeling/mesh/polygon_document.hpp>
 #include <quader/modeling/tools/tool_payload.hpp>
 
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <span>
 #include <string>
 #include <vector>
@@ -19,7 +21,14 @@
 namespace quader::modeling {
 
 struct ModelingSessionImpl;
+struct SessionPreviewCheckpointImpl;
 class ModelingSessionTransactionAccess;
+
+/// Identifies the authored document owned by a session object.
+enum class SessionObjectKind {
+  Mesh,
+  Curve,
+};
 
 /**
  * Summarizes one SDK session object without exposing native scene identity.
@@ -30,6 +39,7 @@ struct SessionObjectSummary {
   bool selected = false;
   std::uint64_t content_revision = 0;
   std::uint64_t selection_revision = 0;
+  SessionObjectKind kind = SessionObjectKind::Mesh;
 };
 
 /**
@@ -40,6 +50,7 @@ struct SessionObjectChange {
   std::string name;
   DirtyFlags dirty;
   bool deleted = false;
+  SessionObjectKind kind = SessionObjectKind::Mesh;
 };
 
 /**
@@ -77,6 +88,8 @@ struct SessionWorkspaceDocument {
   PolygonDocument document;
   std::string name;
   bool selected = false;
+  /** When present, supplies a curve instead of the empty polygon document. */
+  std::optional<CurveDocument> curve_document;
 };
 
 /**
@@ -86,6 +99,8 @@ struct SessionDocumentHistoryRestore {
   ObjectId object{};
   PolygonDocument document;
   DirtyFlags dirty;
+  /** When present, restores a curve instead of the empty polygon document. */
+  std::optional<CurveDocument> curve_document;
 };
 
 /**
@@ -99,6 +114,7 @@ struct PreviewTransactionSummary {
   Vec3 delta{};
   std::uint64_t content_revision = 0;
   DirtyFlags dirty;
+  SessionObjectKind kind = SessionObjectKind::Mesh;
 };
 
 /**
@@ -107,6 +123,22 @@ struct PreviewTransactionSummary {
 struct ClipboardPasteResult {
   OperationResult operation;
   std::vector<ObjectId> objects;
+};
+
+/**
+ * Pins one active preview for rollback without copying workspace or history.
+ *
+ * A token belongs to its originating session and active preview. Moving the
+ * session transfers that ownership; copying or replacing session state does
+ * not. Restoring a token never rewinds observed component or preview identities.
+ */
+class SessionPreviewCheckpoint {
+public:
+  [[nodiscard]] bool valid() const noexcept { return impl_ != nullptr; }
+
+private:
+  friend class ModelingSession;
+  std::shared_ptr<const SessionPreviewCheckpointImpl> impl_;
 };
 
 /**
@@ -123,6 +155,8 @@ public:
 
   [[nodiscard]] Result<ObjectId> add_document(PolygonDocument document,
                                               std::string name = "Mesh");
+  [[nodiscard]] Result<ObjectId> add_curve_document(CurveDocument document,
+                                                   std::string name = "Curve");
   [[nodiscard]] Result<OperationResult>
   apply_object_selection(std::span<const ObjectId> objects,
                          SelectionEdit edit = SelectionEdit::Replace);
@@ -190,6 +224,24 @@ public:
   update_document_preview(PreviewId preview_id,
                           PolygonDocument preview_document,
                           OperationResult receipt);
+  /** Begins a curve edit in the same exclusive preview registry as meshes. */
+  [[nodiscard]] Result<PreviewId>
+  begin_curve_document_preview(ObjectId object_id, std::string operation_id,
+                               CurveDocument preview_document,
+                               OperationResult receipt);
+  [[nodiscard]] Result<OperationResult>
+  update_curve_document_preview(PreviewId preview_id,
+                                CurveDocument preview_document,
+                                OperationResult receipt);
+  /** Captures only the active candidate, receipt, and preview payload state. */
+  [[nodiscard]] Result<SessionPreviewCheckpoint>
+  capture_preview_checkpoint(PreviewId preview_id) const;
+  /**
+   * Restores the same active preview without changing durable documents,
+   * selection, clipboard, undo/redo, or allocator high-water marks.
+   */
+  [[nodiscard]] Result<OperationResult>
+  restore_preview_checkpoint(const SessionPreviewCheckpoint &checkpoint);
   [[nodiscard]] Result<OperationResult> commit_preview();
   [[nodiscard]] Result<OperationResult> commit_preview(PreviewId preview_id);
   [[nodiscard]] Result<OperationResult> cancel_preview();
@@ -237,16 +289,25 @@ public:
   [[nodiscard]] Result<std::shared_ptr<const PolygonDocument>>
   document_snapshot(ObjectId object_id) const;
   [[nodiscard]] Result<PolygonDocument> document_copy(ObjectId object_id) const;
+  [[nodiscard]] Result<std::shared_ptr<const CurveDocument>>
+  curve_document_snapshot(ObjectId object_id) const;
+  [[nodiscard]] Result<CurveDocument>
+  curve_document_copy(ObjectId object_id) const;
   [[nodiscard]] Result<std::vector<PolygonDocument>>
   document_copies(std::span<const ObjectId> object_ids) const;
   [[nodiscard]] Result<OperationResult>
   commit_document(ObjectId object_id, PolygonDocument document,
                   OperationResult receipt);
+  [[nodiscard]] Result<OperationResult>
+  commit_curve_document(ObjectId object_id, CurveDocument document,
+                        OperationResult receipt);
   [[nodiscard]] Result<ToolPreviewPayload> preview_payload() const;
   [[nodiscard]] Result<ToolPreviewPayload>
   preview_payload(PreviewId preview_id) const;
   [[nodiscard]] Result<PolygonDocument>
   preview_document_copy(PreviewId preview_id) const;
+  [[nodiscard]] Result<CurveDocument>
+  preview_curve_document_copy(PreviewId preview_id) const;
   [[nodiscard]] PreviewTransactionSummary preview_summary() const;
   [[nodiscard]] Result<SemanticOverlayPayload>
   semantic_overlay(ObjectId object_id) const;

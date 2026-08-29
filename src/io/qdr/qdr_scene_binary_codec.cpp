@@ -13,6 +13,7 @@
 #include "scene/scene_texture_mapping.hpp"
 
 #include <quader/modeling/io/qdr_document.hpp>
+#include <quader/modeling/curves/curve_document.hpp>
 #include <quader/modeling/neutral/polygon/document_validation.hpp>
 
 #include <flatbuffers/flatbuffers.h>
@@ -48,7 +49,7 @@ namespace {
 namespace fb = ::quader::qdr::fb;
 
 constexpr std::uint16_t kMinimumSceneChunkSchemaVersion = 1u;
-constexpr std::uint16_t kSceneChunkSchemaVersion = 7u;
+constexpr std::uint16_t kSceneChunkSchemaVersion = 8u;
 constexpr std::uint16_t kGeometryChunkSchemaVersion = 1u;
 
 [[nodiscard]] fb::Vec2 to_fb(QVec2 value) {
@@ -220,6 +221,8 @@ sdk_authored_topology(const quader_poly::Document &document) {
     return fb::EntityKind::Generic;
   case EntityKind::Instance:
     return fb::EntityKind::Instance;
+  case EntityKind::Curve:
+    return fb::EntityKind::Curve;
   }
   throw std::runtime_error("Cannot encode an unknown scene entity kind.");
 }
@@ -236,6 +239,8 @@ sdk_authored_topology(const quader_poly::Document &document) {
     return EntityKind::Generic;
   case fb::EntityKind::Instance:
     return EntityKind::Instance;
+  case fb::EntityKind::Curve:
+    return EntityKind::Curve;
   default:
     throw std::runtime_error("QDR scene contains an unknown entity kind.");
   }
@@ -825,6 +830,28 @@ encode_scene_settings(flatbuffers::FlatBufferBuilder &builder,
         geometry_chunk_ids.at(index)));
   }
 
+  std::set<AssetId> curve_ids;
+  std::vector<flatbuffers::Offset<fb::CurveAsset>> curves;
+  curves.reserve(snapshot.curves.size());
+  for (const QdrProjectCurveAssetWriteSnapshot &curve : snapshot.curves) {
+    if (curve.id == kInvalidAssetId || !curve.document ||
+        curve.document->point_count() < 2u ||
+        !curve_ids.insert(curve.id).second) {
+      throw std::runtime_error("QDR curve asset is missing or duplicated.");
+    }
+    const auto encoded = modeling::serialize_curve_document(*curve.document);
+    if (!encoded.ok()) {
+      throw std::runtime_error("QDR curve asset is invalid: " +
+                               encoded.error().message);
+    }
+    const auto &bytes = encoded.value();
+    curves.push_back(fb::CreateCurveAsset(
+        builder, curve.id, builder.CreateString(curve.name),
+        builder.CreateVector(
+            reinterpret_cast<const std::uint8_t *>(bytes.data()),
+            bytes.size())));
+  }
+
   std::vector<flatbuffers::Offset<fb::MaterialAsset>> materials;
   materials.reserve(snapshot.materials.size());
   for (const QdrProjectMaterialAssetWriteSnapshot &snapshot_material :
@@ -865,6 +892,21 @@ encode_scene_settings(flatbuffers::FlatBufferBuilder &builder,
   std::vector<flatbuffers::Offset<fb::Entity>> entities;
   entities.reserve(snapshot.entities.size());
   for (const QdrProjectEntityWriteSnapshot &entity : snapshot.entities) {
+    flatbuffers::Offset<fb::CurveComponent> curve;
+    if (entity.curve.has_value()) {
+      if (entity.kind != EntityKind::Curve ||
+          !curve_ids.contains(entity.curve->curve) ||
+          entity.mesh.has_value() || entity.light.has_value() ||
+          entity.instance_definition.has_value() ||
+          entity.instance_occurrence.has_value() || entity.scene_root ||
+          entity.scene_settings.has_value() ||
+          entity.texture_mapping.has_value()) {
+        throw std::runtime_error("QDR entity curve binding is invalid.");
+      }
+      curve = fb::CreateCurveComponent(builder, entity.curve->curve);
+    } else if (entity.kind == EntityKind::Curve) {
+      throw std::runtime_error("QDR curve entity is missing its curve binding.");
+    }
     flatbuffers::Offset<fb::TransformComponent> transform;
     if (entity.transform.has_value()) {
       const fb::Vec3 position = to_fb(entity.transform->position);
@@ -943,7 +985,7 @@ encode_scene_settings(flatbuffers::FlatBufferBuilder &builder,
         to_fb(entity.kind), entity.parent, transform, visibility, lock,
         modeling_object, mesh, material, light, entity.scene_root, settings,
         instance_definition, instance_occurrence, entity.layer_id,
-        texture_mapping));
+        texture_mapping, curve));
   }
 
   std::vector<flatbuffers::Offset<fb::ObjectRecord>> objects;
@@ -1019,7 +1061,8 @@ encode_scene_settings(flatbuffers::FlatBufferBuilder &builder,
       builder.CreateVector(meshes), builder.CreateVector(materials),
       builder.CreateVector(textures), builder.CreateVector(entities),
       builder.CreateVector(objects), builder.CreateVector(dependencies),
-      builder.CreateVector(layers), viewport_camera_pose);
+      builder.CreateVector(layers), viewport_camera_pose,
+      builder.CreateVector(curves));
   fb::FinishScenePayloadBuffer(builder, root);
   return flatbuffer_bytes(builder);
 }
@@ -1736,6 +1779,44 @@ void decode_assets(
   }
 }
 
+void decode_curve_assets(SceneContentDocument &document,
+                         const fb::ScenePayload &payload,
+                         std::uint16_t schema_version) {
+  const auto *curves = payload.curves();
+  if (curves == nullptr || curves->size() == 0u) {
+    return;
+  }
+  if (schema_version < 8u) {
+    throw std::runtime_error("QDR curve assets require scene schema 8.");
+  }
+  std::set<AssetId> ids;
+  for (const fb::CurveAsset *stored : *curves) {
+    if (stored->id() == kInvalidAssetId || !ids.insert(stored->id()).second) {
+      throw std::runtime_error(
+          "QDR scene contains an invalid or duplicate curve asset id.");
+    }
+    const auto *payload_bytes = stored->authored_payload();
+    if (payload_bytes == nullptr || payload_bytes->size() == 0u) {
+      throw std::runtime_error("QDR curve asset has no authored payload.");
+    }
+    auto decoded = modeling::deserialize_curve_document(std::span<const std::byte>(
+        reinterpret_cast<const std::byte *>(payload_bytes->data()),
+        payload_bytes->size()));
+    if (!decoded.ok()) {
+      throw std::runtime_error("QDR curve asset is invalid: " +
+                               decoded.error().message);
+    }
+    CurveAsset curve;
+    curve.name = string_from_fb(stored->name(), "Curve");
+    curve.document = std::make_shared<const modeling::CurveDocument>(
+        std::move(decoded).value());
+    if (document.assets().add_curve(stored->id(), std::move(curve)) ==
+        kInvalidAssetId) {
+      throw std::runtime_error("QDR scene could not install a curve asset.");
+    }
+  }
+}
+
 void decode_scene_layers(SceneContentDocument &document,
                          const fb::ScenePayload &payload,
                          std::uint16_t schema_version) {
@@ -1811,6 +1892,17 @@ void decode_entities(SceneContentDocument &document,
     parent_links.reserve(entities->size());
     for (std::size_t index = 0u; index < entities->size(); ++index) {
       const fb::Entity *stored = entities->Get(index);
+      const bool is_curve = stored->kind() == fb::EntityKind::Curve;
+      if (is_curve || stored->curve() != nullptr) {
+        if (schema_version < 8u || !is_curve || stored->curve() == nullptr ||
+            stored->mesh() != nullptr || stored->light() != nullptr ||
+            stored->instance_definition() != nullptr ||
+            stored->instance_occurrence() != nullptr || stored->scene_root() ||
+            stored->scene_settings() != nullptr ||
+            stored->texture_mapping() != nullptr) {
+          throw std::runtime_error("QDR scene contains an invalid curve entity.");
+        }
+      }
       const bool has_editor_object_id =
           stored->editor_object_id() != kInvalidEditorObjectId;
       const EntityId entity = document.scene().create_entity_with_id(
@@ -1892,6 +1984,12 @@ void decode_entities(SceneContentDocument &document,
         MaterialComponent material = decode_material_component(*value);
         if (material.material.valid()) {
           document.scene().set_material(entity, std::move(material));
+        }
+      }
+      if (const fb::CurveComponent *value = stored->curve()) {
+        if (!document.assets().has_curve(value->curve()) ||
+            !document.scene().set_curve(entity, CurveComponent{.curve = value->curve()})) {
+          throw std::runtime_error("QDR entity references a missing curve asset.");
         }
       }
       if (const fb::LightComponent *value = stored->light()) {
@@ -2154,6 +2252,7 @@ QdrSceneBinaryDecodeResult decode_qdr_scene_binary_with_stats(
       decode_viewport_camera_pose(*payload, metadata.schema_version);
   decode_scene_layers(document, *payload, metadata.schema_version);
   decode_assets(document, *payload, geometry_chunks, stats);
+  decode_curve_assets(document, *payload, metadata.schema_version);
   decode_entities(document, *payload, metadata.schema_version);
 
   const SceneContentDocumentAssetReferenceReport references =

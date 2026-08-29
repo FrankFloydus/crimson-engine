@@ -30,14 +30,70 @@ namespace {
 constexpr const char *kTranslateSelectionOperationId =
     "modeling.translate_selection";
 
+using SessionDocument = std::variant<PolygonDocument, CurveDocument>;
+using SessionContentIdentity =
+    std::variant<PolygonContentIdentity, CurveContentIdentity>;
+
+[[nodiscard]] SessionObjectKind document_kind(
+    const SessionDocument &document) noexcept {
+  return std::holds_alternative<CurveDocument>(document)
+             ? SessionObjectKind::Curve
+             : SessionObjectKind::Mesh;
+}
+
+[[nodiscard]] std::uint64_t document_content_revision(
+    const SessionDocument &document) {
+  return std::visit([](const auto &value) { return value.content_revision(); },
+                    document);
+}
+
+[[nodiscard]] SessionContentIdentity document_content_identity(
+    const SessionDocument &document) {
+  return std::visit(
+      [](const auto &value) -> SessionContentIdentity {
+        return value.content_identity();
+      }, document);
+}
+
+[[nodiscard]] std::uint64_t document_selection_revision(
+    const SessionDocument &document) {
+  const auto *polygon = std::get_if<PolygonDocument>(&document);
+  return polygon != nullptr ? polygon->selection_revision() : 0U;
+}
+
+[[nodiscard]] Error wrong_document_kind_error() {
+  return make_error(ErrorCode::UnsupportedOperation,
+                    "The operation requires a different document kind.");
+}
+
 /**
  * Stores one object in the headless SDK session.
  */
 struct SessionObject {
   ObjectId id{};
   std::string name;
-  PolygonDocument document;
+  SessionDocument document;
   bool selected = false;
+
+  [[nodiscard]] SessionObjectKind kind() const noexcept {
+    return document_kind(document);
+  }
+
+  [[nodiscard]] PolygonDocument &polygon_document() {
+    return std::get<PolygonDocument>(document);
+  }
+
+  [[nodiscard]] const PolygonDocument &polygon_document() const {
+    return std::get<PolygonDocument>(document);
+  }
+
+  [[nodiscard]] CurveDocument &curve_document() {
+    return std::get<CurveDocument>(document);
+  }
+
+  [[nodiscard]] const CurveDocument &curve_document() const {
+    return std::get<CurveDocument>(document);
+  }
 };
 
 /**
@@ -62,6 +118,7 @@ struct ComponentSelectionHistoryObject {
   bool alternate_selected = false;
   bool document_selection_changed = false;
   bool object_selection_changed = false;
+  SessionObjectKind kind = SessionObjectKind::Mesh;
 };
 
 /// Stores one reversible sparse component-selection history entry.
@@ -119,7 +176,7 @@ struct SessionHistoryEntry {
  */
 struct ClipboardObject {
   std::string name;
-  PolygonDocument document;
+  SessionDocument document;
 };
 
 /**
@@ -131,16 +188,35 @@ struct PreviewTransaction {
   ObjectId object_id{};
   std::string operation_id;
   Vec3 delta{};
-  PolygonDocument base_document;
-  PolygonContentIdentity base_content_identity{};
+  SessionDocument base_document;
+  SessionContentIdentity base_content_identity{};
   std::uint64_t base_content_revision = 0;
   std::uint64_t base_session_revision = 0;
-  PolygonDocument preview_document;
+  SessionDocument preview_document;
   OperationResult receipt;
   ToolPreviewPayload payload;
   bool payload_valid = false;
   DirtyFlags dirty;
   std::uint64_t payload_revision = 0;
+};
+
+/// Separates rollback tokens from copies and replacements of a session.
+struct PreviewCheckpointOrigin {};
+
+/// Copying session state starts a new token origin; moving its owner does not.
+struct PreviewCheckpointOwnership {
+  std::shared_ptr<const PreviewCheckpointOrigin> origin =
+      std::make_shared<const PreviewCheckpointOrigin>();
+
+  PreviewCheckpointOwnership() = default;
+  PreviewCheckpointOwnership(const PreviewCheckpointOwnership &)
+      : PreviewCheckpointOwnership() {}
+  PreviewCheckpointOwnership &operator=(const PreviewCheckpointOwnership &other) {
+    if (this != &other) {
+      origin = std::make_shared<const PreviewCheckpointOrigin>();
+    }
+    return *this;
+  }
 };
 
 /**
@@ -156,6 +232,7 @@ struct SessionObjectChangeRecord {
   std::uint64_t materials_revision = 0;
   std::uint64_t overlays_revision = 0;
   bool deleted = false;
+  SessionObjectKind kind = SessionObjectKind::Mesh;
 };
 
 /**
@@ -166,6 +243,7 @@ struct PendingSessionObjectChange {
   std::string name;
   DirtyFlags dirty;
   bool deleted = false;
+  SessionObjectKind kind = SessionObjectKind::Mesh;
 };
 
 /**
@@ -186,6 +264,7 @@ struct SessionObjectDirtyOverride {
 struct TopologyIdentityHighWater {
   std::uint32_t next_vertex_id = 1U;
   std::uint32_t next_face_id = 1U;
+  CurveIdentityHighWater curve{};
 };
 
 [[nodiscard]] constexpr std::uint64_t object_id_key(ObjectId id) noexcept {
@@ -294,6 +373,57 @@ selection_mode_for_kind(SelectionKind kind) {
 [[nodiscard]] bool same_polygon_selection(const PolygonDocument &left,
                                           const PolygonDocument &right) {
   return same_polygon_selection(left.selection(), right.selection());
+}
+
+[[nodiscard]] bool same_document_selection(const SessionDocument &left,
+                                            const SessionDocument &right) {
+  const auto *left_polygon = std::get_if<PolygonDocument>(&left);
+  const auto *right_polygon = std::get_if<PolygonDocument>(&right);
+  if (left_polygon == nullptr || right_polygon == nullptr) {
+    return left_polygon == nullptr && right_polygon == nullptr;
+  }
+  return left_polygon->shares_selection_with(*right_polygon) ||
+         same_polygon_selection(*left_polygon, *right_polygon);
+}
+
+[[nodiscard]] Result<OperationResult> translate_document(
+    SessionDocument &document, Vec3 delta, bool select_all_faces = false) {
+  if (auto *curve = std::get_if<CurveDocument>(&document)) {
+    return curve->transform(Transform3{.origin = delta});
+  }
+  auto &polygon = std::get<PolygonDocument>(document);
+  if (select_all_faces) {
+    Result<OperationResult> selected = polygon.select_all_faces();
+    if (!selected.ok()) {
+      return selected;
+    }
+  }
+  return polygon.translate_selection(delta);
+}
+
+[[nodiscard]] Result<OperationResult> clear_document_selection(
+    SessionDocument &document) {
+  if (auto *polygon = std::get_if<PolygonDocument>(&document)) {
+    return polygon->clear_selection();
+  }
+  return Result<OperationResult>::success(OperationResult{});
+}
+
+[[nodiscard]] Result<SessionDocument> workspace_document(
+    PolygonDocument polygon, std::optional<CurveDocument> curve) {
+  if (!curve.has_value()) {
+    return Result<SessionDocument>::success(std::move(polygon));
+  }
+  if (polygon.vertex_count() != 0U || polygon.face_count() != 0U) {
+    return Result<SessionDocument>::failure(make_error(
+        ErrorCode::InvalidArgument,
+        "A workspace object cannot contain both polygon and curve documents."));
+  }
+  Result<OperationResult> valid = curve->validate();
+  if (!valid.ok()) {
+    return Result<SessionDocument>::failure(valid.error());
+  }
+  return Result<SessionDocument>::success(std::move(*curve));
 }
 
 [[nodiscard]] OperationResult session_result(bool changed,
@@ -464,7 +594,7 @@ void append_native_delta(ElementDelta &target,
         state.objects[object_index.at(object_id_key(change.id))];
     if (change.alternate_selection.has_value()) {
       PolygonDocumentNativeAccess::swap_selection_state(
-          object.document, *change.alternate_selection);
+          object.polygon_document(), *change.alternate_selection);
     }
     std::swap(object.selected, change.alternate_selected);
   }
@@ -546,9 +676,14 @@ build_preview_payload(const PolygonDocument &document) {
 
 [[nodiscard]] Result<ToolPreviewPayload>
 materialize_preview_payload(PreviewTransaction &preview) {
+  const auto *document =
+      std::get_if<PolygonDocument>(&preview.preview_document);
+  if (document == nullptr) {
+    return Result<ToolPreviewPayload>::failure(wrong_document_kind_error());
+  }
   if (!preview.payload_valid) {
     Result<ToolPreviewPayload> payload =
-        build_preview_payload(preview.preview_document);
+        build_preview_payload(*document);
     if (!payload.ok()) {
       return payload;
     }
@@ -561,14 +696,15 @@ materialize_preview_payload(PreviewTransaction &preview) {
 
 [[nodiscard]] Result<OperationResult>
 apply_preview_delta(PreviewTransaction &preview,
-                    const PolygonDocument &base_document, Vec3 delta) {
-  preview.preview_document = base_document;
+                    const SessionDocument &base_document, Vec3 delta) {
+  SessionDocument candidate = base_document;
   Result<OperationResult> operation =
-      preview.preview_document.translate_selection(delta);
+      translate_document(candidate, delta);
   if (!operation.ok()) {
     return operation;
   }
 
+  preview.preview_document = std::move(candidate);
   preview.delta = delta;
   preview.payload = {};
   preview.payload_valid = false;
@@ -580,6 +716,12 @@ apply_preview_delta(PreviewTransaction &preview,
 
 } // namespace
 
+/// Retains only a preview candidate and the origin allowed to restore it.
+struct SessionPreviewCheckpointImpl {
+  std::shared_ptr<const PreviewCheckpointOrigin> origin;
+  PreviewTransaction preview;
+};
+
 /**
  * Stores mutable SDK session implementation details.
  */
@@ -587,6 +729,7 @@ struct ModelingSessionImpl {
   SessionState state;
   std::vector<ClipboardObject> clipboard;
   PreviewTransaction preview;
+  PreviewCheckpointOwnership preview_checkpoint_ownership;
   std::vector<SessionHistoryEntry> undo_stack;
   std::vector<SessionHistoryEntry> redo_stack;
   std::vector<SessionObjectChangeRecord> object_changes;
@@ -667,9 +810,9 @@ struct ModelingSessionImpl {
     }
     const auto object = find_object(state, preview.object_id);
     return object != state.objects.end() &&
-           object->document.content_identity() ==
+           document_content_identity(object->document) ==
                preview.base_content_identity &&
-           object->document.content_revision() ==
+           document_content_revision(object->document) ==
                preview.base_content_revision &&
            content_revision == preview.base_session_revision;
   }
@@ -684,6 +827,24 @@ struct ModelingSessionImpl {
         std::max(high_water.next_vertex_id, native.next_vertex_id);
     high_water.next_face_id =
         std::max(high_water.next_face_id, native.next_face_id);
+  }
+
+  void record_topology_identity(ObjectId object_id,
+                                const CurveDocument &document) {
+    CurveIdentityHighWater &high_water =
+        topology_identity_high_water[object_id.index].curve;
+    const CurveIdentityHighWater observed = document.identity_high_water();
+    high_water.next_point_index =
+        std::max(high_water.next_point_index, observed.next_point_index);
+    high_water.next_segment_index =
+        std::max(high_water.next_segment_index, observed.next_segment_index);
+  }
+
+  void record_topology_identity(ObjectId object_id,
+                                const SessionDocument &document) {
+    std::visit([&](const auto &value) {
+      record_topology_identity(object_id, value);
+    }, document);
   }
 
   void reconcile_topology_identity(ObjectId object_id,
@@ -706,6 +867,21 @@ struct ModelingSessionImpl {
         std::max(reconciled.next_face_id, high_water->second.next_face_id);
     PolygonDocumentNativeAccess::replace_document(document,
                                                   std::move(reconciled));
+  }
+
+  void reconcile_topology_identity(ObjectId object_id,
+                                   CurveDocument &document) const {
+    const auto high_water = topology_identity_high_water.find(object_id.index);
+    if (high_water != topology_identity_high_water.end()) {
+      document.preserve_identity_high_water(high_water->second.curve);
+    }
+  }
+
+  void reconcile_topology_identity(ObjectId object_id,
+                                   SessionDocument &document) const {
+    std::visit([&](auto &value) {
+      reconcile_topology_identity(object_id, value);
+    }, document);
   }
 
   void reconcile_restored_topology_identities() {
@@ -732,6 +908,74 @@ struct ModelingSessionImpl {
           "high-water mark."));
     }
     return Result<OperationResult>::success(OperationResult{});
+  }
+
+  [[nodiscard]] Result<OperationResult>
+  validate_commit_identity(ObjectId object_id,
+                           const CurveDocument &document) const {
+    Result<OperationResult> valid = document.validate();
+    if (!valid.ok()) {
+      return valid;
+    }
+    const auto recorded = topology_identity_high_water.find(object_id.index);
+    if (recorded == topology_identity_high_water.end()) {
+      return valid;
+    }
+    const CurveIdentityHighWater high_water = recorded->second.curve;
+    const CurveIdentityHighWater candidate = document.identity_high_water();
+    const auto stale = [] {
+      return Result<OperationResult>::failure(make_error(
+          ErrorCode::StaleId,
+          "Curve document predates the current component identity high-water "
+          "mark or reuses a retired component identity."));
+    };
+    if (candidate.next_point_index < high_water.next_point_index ||
+        candidate.next_segment_index < high_water.next_segment_index) {
+      return stale();
+    }
+
+    // A stale copy can advance its cursor while still allocating an already
+    // retired ID. Only live or currently previewed IDs below the high-water
+    // mark may survive a normal edit; history restoration is handled separately.
+    const auto live = find_object(state, object_id);
+    if (live == state.objects.end() || live->kind() != SessionObjectKind::Curve) {
+      return Result<OperationResult>::failure(wrong_document_kind_error());
+    }
+    const CurveDocument &live_document = live->curve_document();
+    const CurveDocument *preview_document =
+        preview.active && preview.object_id == object_id
+            ? std::get_if<CurveDocument>(&preview.preview_document)
+            : nullptr;
+    const auto has_point = [](const CurveDocument &source, CurvePointId id) {
+      return std::ranges::any_of(source.points(),
+                                [id](const auto &point) { return point.id == id; });
+    };
+    const auto has_segment = [](const CurveDocument &source, CurveSegmentId id) {
+      return std::ranges::find(source.segments(), id) != source.segments().end();
+    };
+    for (const CurveControlPoint &point : document.points()) {
+      if (point.id.index < high_water.next_point_index &&
+          !has_point(live_document, point.id) &&
+          (preview_document == nullptr || !has_point(*preview_document, point.id))) {
+        return stale();
+      }
+    }
+    for (const CurveSegmentId segment : document.segments()) {
+      if (segment.index < high_water.next_segment_index &&
+          !has_segment(live_document, segment) &&
+          (preview_document == nullptr || !has_segment(*preview_document, segment))) {
+        return stale();
+      }
+    }
+    return valid;
+  }
+
+  [[nodiscard]] Result<OperationResult>
+  validate_commit_identity(ObjectId object_id,
+                           const SessionDocument &document) const {
+    return std::visit([&](const auto &value) {
+      return validate_commit_identity(object_id, value);
+    }, document);
   }
 
   [[nodiscard]] std::uint64_t advance_preview_payload_revision(
@@ -763,6 +1007,7 @@ struct ModelingSessionImpl {
           object_changes[record_entry->second];
 
       record.name = change.name;
+      record.kind = change.kind;
       record.revision = content_revision;
       record.deleted = change.deleted;
       if (change.dirty.topology) {
@@ -797,6 +1042,7 @@ struct ModelingSessionImpl {
           .id = change.id,
           .name = change.name,
           .dirty = {.selection = true, .overlays = true},
+          .kind = change.kind,
       });
     }
 
@@ -813,7 +1059,8 @@ struct ModelingSessionImpl {
         if (object == state.objects.end()) {
           return;
         }
-        pending.push_back({.id = object->id, .name = object->name});
+        pending.push_back({.id = object->id, .name = object->name,
+                           .kind = object->kind()});
         pending_change = std::prev(pending.end());
       }
       pending_change->dirty.selection = true;
@@ -865,6 +1112,7 @@ struct ModelingSessionImpl {
                       .materials = true,
                       .overlays = true},
             .deleted = true,
+            .kind = previous.kind(),
         });
         continue;
       }
@@ -872,20 +1120,19 @@ struct ModelingSessionImpl {
       const auto dirty_override = dirty_by_id.find(object_id_key(current.id));
 
       const bool content_changed =
-          previous.document.content_identity() !=
-              current.document.content_identity() ||
-          previous.document.content_revision() !=
-              current.document.content_revision();
+          document_content_identity(previous.document) !=
+              document_content_identity(current.document) ||
+          document_content_revision(previous.document) !=
+              document_content_revision(current.document);
       const bool document_selection_revision_changed =
-          previous.document.selection_revision() !=
-          current.document.selection_revision();
+          document_selection_revision(previous.document) !=
+          document_selection_revision(current.document);
       const bool exact_selection_dirty =
           dirty_override != dirty_by_id.end() &&
           dirty_override->second.selection;
       const bool component_selection_changed =
           exact_selection_dirty ||
-          (!previous.document.shares_selection_with(current.document) &&
-           !same_polygon_selection(previous.document, current.document));
+          !same_document_selection(previous.document, current.document);
       const bool effective_selection_changed =
           previous.selected != current.selected ||
           component_selection_changed;
@@ -924,6 +1171,7 @@ struct ModelingSessionImpl {
           .id = current.id,
           .name = current.name,
           .dirty = dirty,
+          .kind = current.kind(),
       });
     }
 
@@ -939,6 +1187,7 @@ struct ModelingSessionImpl {
                     .selection = true,
                     .materials = true,
                     .overlays = true},
+          .kind = current.kind(),
       });
     }
 
@@ -954,7 +1203,8 @@ struct ModelingSessionImpl {
         const auto current = current_by_id.find(object_id_key(object_id));
         if (current != current_by_id.end()) {
           pending.push_back(
-              {.id = current->second->id, .name = current->second->name});
+              {.id = current->second->id, .name = current->second->name,
+               .kind = current->second->kind()});
         } else {
           const auto previous = before_by_id.find(object_id_key(object_id));
           if (previous == before_by_id.end()) {
@@ -964,6 +1214,7 @@ struct ModelingSessionImpl {
               .id = previous->second->id,
               .name = previous->second->name,
               .deleted = true,
+              .kind = previous->second->kind(),
           });
         }
         change = std::prev(pending.end());
@@ -1051,6 +1302,41 @@ Result<ObjectId> ModelingSession::add_document(PolygonDocument document,
   impl_->record_topology_identity(id, impl_->state.objects.back().document);
   impl_->publish_state_transition(impl_->undo_stack.back());
   return Result<ObjectId>::success(id);
+}
+
+Result<ObjectId> ModelingSession::add_curve_document(CurveDocument document,
+                                                     std::string name) {
+  if (!impl_->allow_batch_creation()) {
+    return Result<ObjectId>::failure(make_error(
+        ErrorCode::InvalidArgument,
+        "Batch callback cannot create an unrelated document."));
+  }
+  if (impl_->preview.active) {
+    return Result<ObjectId>::failure(make_error(
+        ErrorCode::InvalidArgument,
+        "Commit or cancel the active preview before adding a document."));
+  }
+  Result<OperationResult> valid = document.validate();
+  if (!valid.ok()) {
+    return Result<ObjectId>::failure(valid.error());
+  }
+  Result<ObjectId> allocated_id = impl_->allocate_object_id();
+  if (!allocated_id.ok()) {
+    return allocated_id;
+  }
+
+  impl_->undo_stack.push_back(impl_->state);
+  impl_->redo_stack.clear();
+  const ObjectId id = allocated_id.value();
+  impl_->state.objects.push_back({
+      .id = id,
+      .name = std::move(name),
+      .document = std::move(document),
+      .selected = false,
+  });
+  impl_->record_topology_identity(id, impl_->state.objects.back().document);
+  impl_->publish_state_transition(impl_->undo_stack.back());
+  return allocated_id;
 }
 
 Result<OperationResult> ModelingSession::apply_object_selection(
@@ -1219,6 +1505,9 @@ Result<OperationResult> ModelingSession::commit_component_selection_batch(
             ErrorCode::InvalidArgument,
             "A component selection batch contains a duplicate object."));
       }
+      if (impl_->state.objects[*object_entry].kind() != SessionObjectKind::Mesh) {
+        return Result<OperationResult>::failure(wrong_document_kind_error());
+      }
       updated_by_index[*object_entry] = true;
       if (!selection_mode_for_kind(update.selection.kind).has_value()) {
         return Result<OperationResult>::failure(make_error(
@@ -1312,11 +1601,11 @@ Result<OperationResult> ModelingSession::commit_component_selection_batch(
           reusable != nullptr
               ? PolygonDocumentNativeAccess::
                     prepare_selection_replacement_reusing(
-                        object.document, *reusable->validated_document,
+                        object.polygon_document(), *reusable->validated_document,
                         update.selection,
                         reusable->selection)
               : PolygonDocumentNativeAccess::prepare_selection_replacement(
-                    object.document, update.selection);
+                    object.polygon_document(), update.selection);
       if (!replacement.ok()) {
         return Result<OperationResult>::failure(
             std::move(replacement).error());
@@ -1328,7 +1617,7 @@ Result<OperationResult> ModelingSession::commit_component_selection_batch(
         const std::size_t reusable_index = reusable_selections.size();
         reusable_selections.push_back({
             .snapshot = &update.selection,
-            .validated_document = &object.document,
+            .validated_document = &object.polygon_document(),
             .selection = prepared.selection,
         });
         reusable_selection_by_signature.emplace(selection_signature,
@@ -1374,6 +1663,7 @@ Result<OperationResult> ModelingSession::commit_component_selection_batch(
             .id = object.id,
             .name = object.name,
             .alternate_selected = object.selected,
+            .kind = object.kind(),
         });
       }
       return history.objects[history_index];
@@ -1383,7 +1673,7 @@ Result<OperationResult> ModelingSession::commit_component_selection_batch(
           ensure_history_object(prepared.object_index);
       history_object.alternate_selection.emplace(
           PolygonDocumentNativeAccess::capture_selection_state(
-              impl_->state.objects[prepared.object_index].document));
+              impl_->state.objects[prepared.object_index].polygon_document()));
       history_object.document_selection_changed = true;
     }
     for (std::size_t index = 0; index < impl_->state.objects.size(); ++index) {
@@ -1424,7 +1714,7 @@ Result<OperationResult> ModelingSession::commit_component_selection_batch(
     QDR_PROFILE_SCOPE("SDK component selection mutate payloads");
     for (PreparedComponentSelection &prepared : prepared_selections) {
       PolygonDocumentNativeAccess::apply_selection_replacement(
-          impl_->state.objects[prepared.object_index].document,
+          impl_->state.objects[prepared.object_index].polygon_document(),
           std::move(prepared.replacement));
     }
     for (std::size_t index = 0; index < impl_->state.objects.size(); ++index) {
@@ -1473,6 +1763,9 @@ Result<OperationResult> ModelingSession::commit_documents_batch(
       return Result<OperationResult>::failure(make_error(
           ErrorCode::InvalidArgument,
           "A document batch contains a duplicate object."));
+    }
+    if (impl_->state.objects[object_index.at(key)].kind() != SessionObjectKind::Mesh) {
+      return Result<OperationResult>::failure(wrong_document_kind_error());
     }
     if (!update.receipt.success) {
       return Result<OperationResult>::failure(make_error(
@@ -1653,13 +1946,10 @@ Result<ObjectId> ModelingSession::duplicate_object(ObjectId object_id,
         make_error(ErrorCode::InvalidId, "Object ID is not live."));
   }
 
-  PolygonDocument document = object->document;
+  SessionDocument document = object->document;
   if (offset.x != 0.0F || offset.y != 0.0F || offset.z != 0.0F) {
-    Result<OperationResult> selected = document.select_all_faces();
-    if (!selected.ok()) {
-      return Result<ObjectId>::failure(selected.error());
-    }
-    Result<OperationResult> translated = document.translate_selection(offset);
+    Result<OperationResult> translated =
+        translate_document(document, offset, true);
     if (!translated.ok()) {
       return Result<ObjectId>::failure(translated.error());
     }
@@ -1713,7 +2003,7 @@ Result<std::vector<ObjectId>> ModelingSession::duplicate_objects(
   struct PreparedDuplicate {
     ObjectId id{};
     std::string name;
-    PolygonDocument document;
+    SessionDocument document;
   };
   std::vector<PreparedDuplicate> prepared;
   prepared.reserve(object_ids.size());
@@ -1731,14 +2021,10 @@ Result<std::vector<ObjectId>> ModelingSession::duplicate_objects(
             make_error(ErrorCode::InvalidId, "Object ID is not live."));
       }
 
-      PolygonDocument document = object->second->document;
+      SessionDocument document = object->second->document;
       if (offset.x != 0.0F || offset.y != 0.0F || offset.z != 0.0F) {
-        Result<OperationResult> selected = document.select_all_faces();
-        if (!selected.ok()) {
-          return Result<std::vector<ObjectId>>::failure(selected.error());
-        }
         Result<OperationResult> translated =
-            document.translate_selection(offset);
+            translate_document(document, offset, true);
         if (!translated.ok()) {
           return Result<std::vector<ObjectId>>::failure(translated.error());
         }
@@ -1794,8 +2080,8 @@ Result<OperationResult> ModelingSession::copy_selection_to_clipboard() {
     if (!object.selected) {
       continue;
     }
-    PolygonDocument document = object.document;
-    Result<OperationResult> cleared = document.clear_selection();
+    SessionDocument document = object.document;
+    Result<OperationResult> cleared = clear_document_selection(document);
     if (!cleared.ok()) {
       return cleared;
     }
@@ -1804,12 +2090,12 @@ Result<OperationResult> ModelingSession::copy_selection_to_clipboard() {
   if (copied.empty()) {
     return Result<OperationResult>::failure(make_error(
         ErrorCode::InvalidArgument,
-        "Select one or more meshes before copying."));
+        "Select one or more objects before copying."));
   }
 
   impl_->clipboard = std::move(copied);
   OperationResult result;
-  result.message = "Copied selected meshes.";
+  result.message = "Copied selected objects.";
   return Result<OperationResult>::success(std::move(result));
 }
 
@@ -1828,7 +2114,7 @@ Result<ClipboardPasteResult> ModelingSession::paste_clipboard(Vec3 offset) {
   if (impl_->clipboard.empty()) {
     return Result<ClipboardPasteResult>::failure(make_error(
         ErrorCode::InvalidArgument,
-        "Copy one or more meshes before pasting."));
+        "Copy one or more objects before pasting."));
   }
 
   const ModelingSession before = *this;
@@ -1836,25 +2122,26 @@ Result<ClipboardPasteResult> ModelingSession::paste_clipboard(Vec3 offset) {
   std::vector<ObjectId> pasted;
   pasted.reserve(impl_->clipboard.size());
   for (const ClipboardObject &object : impl_->clipboard) {
-    PolygonDocument document = object.document;
+    SessionDocument document = object.document;
     if (offset.x != 0.0F || offset.y != 0.0F || offset.z != 0.0F) {
-      Result<OperationResult> selected = document.select_all_faces();
-      if (!selected.ok()) {
-        restore_snapshot_preserving_identity_high_water(before);
-        return Result<ClipboardPasteResult>::failure(selected.error());
-      }
-      Result<OperationResult> translated = document.translate_selection(offset);
+      Result<OperationResult> translated =
+          translate_document(document, offset, true);
       if (!translated.ok()) {
         restore_snapshot_preserving_identity_high_water(before);
         return Result<ClipboardPasteResult>::failure(translated.error());
       }
-      Result<OperationResult> cleared = document.clear_selection();
+      Result<OperationResult> cleared = clear_document_selection(document);
       if (!cleared.ok()) {
         restore_snapshot_preserving_identity_high_water(before);
         return Result<ClipboardPasteResult>::failure(cleared.error());
       }
     }
-    Result<ObjectId> added = add_document(std::move(document), object.name);
+    Result<ObjectId> added =
+        std::holds_alternative<CurveDocument>(document)
+            ? add_curve_document(std::get<CurveDocument>(std::move(document)),
+                                 object.name)
+            : add_document(std::get<PolygonDocument>(std::move(document)),
+                           object.name);
     if (!added.ok()) {
       restore_snapshot_preserving_identity_high_water(before);
       return Result<ClipboardPasteResult>::failure(added.error());
@@ -1872,7 +2159,7 @@ Result<ClipboardPasteResult> ModelingSession::paste_clipboard(Vec3 offset) {
 
   OperationResult operation = std::move(selected).value();
   operation.changed = true;
-  operation.message = "Pasted copied meshes.";
+  operation.message = "Pasted copied objects.";
   operation.dirty.topology = true;
   operation.dirty.geometry = true;
   operation.dirty.selection = true;
@@ -1906,6 +2193,11 @@ ModelingSession::replace_workspace_preserving_clipboard(
   std::vector<ObjectId> object_ids;
   object_ids.reserve(documents.size());
   for (SessionWorkspaceDocument &document : documents) {
+    Result<SessionDocument> authored = workspace_document(
+        std::move(document.document), std::move(document.curve_document));
+    if (!authored.ok()) {
+      return Result<std::vector<ObjectId>>::failure(authored.error());
+    }
     Result<ObjectId> allocated = replacement->allocate_object_id();
     if (!allocated.ok()) {
       return Result<std::vector<ObjectId>>::failure(allocated.error());
@@ -1914,7 +2206,7 @@ ModelingSession::replace_workspace_preserving_clipboard(
     replacement->state.objects.push_back({
         .id = object_id,
         .name = std::move(document.name),
-        .document = std::move(document.document),
+        .document = std::move(authored).value(),
         .selected = document.selected,
     });
     replacement->record_topology_identity(
@@ -1957,7 +2249,9 @@ ModelingSession::restore_documents_as_history_transition(
 
   std::unordered_set<std::uint64_t> restored_ids;
   restored_ids.reserve(documents.size());
-  for (const SessionDocumentHistoryRestore &restore : documents) {
+  std::vector<SessionDocument> prepared_documents;
+  prepared_documents.reserve(documents.size());
+  for (SessionDocumentHistoryRestore &restore : documents) {
     const std::uint64_t key = object_id_key(restore.object);
     if (!restore.object.valid() || !object_index.contains(key)) {
       return Result<OperationResult>::failure(
@@ -1968,11 +2262,28 @@ ModelingSession::restore_documents_as_history_transition(
           ErrorCode::InvalidArgument,
           "A document history restore contains a duplicate object."));
     }
-    Result<OperationResult> identity =
-        impl_->validate_commit_identity(restore.object, restore.document);
+    Result<SessionDocument> authored = workspace_document(
+        std::move(restore.document), std::move(restore.curve_document));
+    if (!authored.ok()) {
+      return Result<OperationResult>::failure(authored.error());
+    }
+    SessionDocument prepared = std::move(authored).value();
+    if (document_kind(prepared) != impl_->state.objects[object_index.at(key)].kind()) {
+      return Result<OperationResult>::failure(wrong_document_kind_error());
+    }
+    // Host history can legitimately restore retired IDs. Retain its exact
+    // component data while merging the live allocator cursor before publication.
+    Result<OperationResult> identity;
+    if (auto *curve = std::get_if<CurveDocument>(&prepared)) {
+      impl_->reconcile_topology_identity(restore.object, *curve);
+      identity = curve->validate();
+    } else {
+      identity = impl_->validate_commit_identity(restore.object, prepared);
+    }
     if (!identity.ok()) {
       return identity;
     }
+    prepared_documents.push_back(std::move(prepared));
   }
 
   const auto merge_dirty = [](DirtyFlags &destination,
@@ -1988,16 +2299,18 @@ ModelingSession::restore_documents_as_history_transition(
       session_result(true, "Documents restored from host history.");
   std::vector<PendingSessionObjectChange> pending;
   pending.reserve(documents.size());
-  for (SessionDocumentHistoryRestore &restore : documents) {
+  for (std::size_t index = 0; index < documents.size(); ++index) {
+    const SessionDocumentHistoryRestore &restore = documents[index];
     SessionObject &object = impl_->state.objects[
         object_index.at(object_id_key(restore.object))];
-    object.document = std::move(restore.document);
+    object.document = std::move(prepared_documents[index]);
     impl_->record_topology_identity(restore.object, object.document);
     merge_dirty(result.dirty, restore.dirty);
     pending.push_back({
         .id = object.id,
         .name = object.name,
         .dirty = restore.dirty,
+        .kind = object.kind(),
     });
   }
 
@@ -2040,13 +2353,16 @@ ModelingSession::combine_objects(std::span<const ObjectId> object_ids,
     return Result<OperationResult>::failure(
         make_error(ErrorCode::InvalidId, "Combine Mesh survivor is not live."));
   }
+  if (survivor->kind() != SessionObjectKind::Mesh) {
+    return Result<OperationResult>::failure(wrong_document_kind_error());
+  }
 
   OperationResult result = session_result(true, "Meshes combined.");
   result.dirty.topology = true;
   result.dirty.geometry = true;
   result.dirty.selection = true;
 
-  PolygonDocument survivor_working = survivor->document;
+  PolygonDocument survivor_working = survivor->polygon_document();
   impl_->reconcile_topology_identity(survivor_id, survivor_working);
   quader_poly::Document survivor_document =
       PolygonDocumentNativeAccess::document(survivor_working);
@@ -2059,8 +2375,12 @@ ModelingSession::combine_objects(std::span<const ObjectId> object_ids,
       return Result<OperationResult>::failure(
           make_error(ErrorCode::InvalidId, "Combine Mesh source is not live."));
     }
+    if (source->kind() != SessionObjectKind::Mesh) {
+      return Result<OperationResult>::failure(wrong_document_kind_error());
+    }
     Result<AppendedDocument> appended = append_document_with_remapped_ids(
-        survivor_document, PolygonDocumentNativeAccess::document(source->document));
+        survivor_document,
+        PolygonDocumentNativeAccess::document(source->polygon_document()));
     if (!appended.ok()) {
       return Result<OperationResult>::failure(appended.error());
     }
@@ -2098,14 +2418,14 @@ ModelingSession::combine_objects(std::span<const ObjectId> object_ids,
     survivor->name = std::move(name);
   }
   PolygonDocumentNativeAccess::replace_document(
-      survivor->document, std::move(survivor_document));
+      survivor->polygon_document(), std::move(survivor_document));
   quader_poly::Selection survivor_selection =
-      PolygonDocumentNativeAccess::selection(survivor->document);
+      PolygonDocumentNativeAccess::selection(survivor->polygon_document());
   survivor_selection.clear();
   PolygonDocumentNativeAccess::replace_selection(
-      survivor->document, std::move(survivor_selection));
+      survivor->polygon_document(), std::move(survivor_selection));
   PolygonDocumentImpl &survivor_impl =
-      PolygonDocumentNativeAccess::impl(survivor->document);
+      PolygonDocumentNativeAccess::impl(survivor->polygon_document());
   ++survivor_impl.content_revision;
   ++survivor_impl.selection_revision;
   candidate.active_object = survivor_id;
@@ -2153,11 +2473,15 @@ ModelingSession::bridge_objects(ObjectId survivor_id, ObjectId source_id,
     return Result<OperationResult>::failure(
         make_error(ErrorCode::InvalidId, "Bridge source object is not live."));
   }
+  if (survivor->kind() != SessionObjectKind::Mesh ||
+      source->kind() != SessionObjectKind::Mesh) {
+    return Result<OperationResult>::failure(wrong_document_kind_error());
+  }
 
   const quader_poly::Selection survivor_selection =
-      PolygonDocumentNativeAccess::selection(survivor->document);
+      PolygonDocumentNativeAccess::selection(survivor->polygon_document());
   const quader_poly::Selection source_selection =
-      PolygonDocumentNativeAccess::selection(source->document);
+      PolygonDocumentNativeAccess::selection(source->polygon_document());
   const bool face_bridge = selection_kind == SelectionKind::Face;
   if ((face_bridge && (survivor_selection.faces.empty() ||
                        source_selection.faces.empty())) ||
@@ -2175,12 +2499,12 @@ ModelingSession::bridge_objects(ObjectId survivor_id, ObjectId source_id,
         "Bridge needs equal selected open-edge counts on both objects."));
   }
 
-  PolygonDocument survivor_working = survivor->document;
+  PolygonDocument survivor_working = survivor->polygon_document();
   impl_->reconcile_topology_identity(survivor_id, survivor_working);
   quader_poly::Document survivor_document =
       PolygonDocumentNativeAccess::document(survivor_working);
   quader_poly::Document source_document =
-      PolygonDocumentNativeAccess::document(source->document);
+      PolygonDocumentNativeAccess::document(source->polygon_document());
   for (quader_poly::Vertex &vertex : source_document.vertices) {
     vertex.position = transform_point(survivor_from_source, vertex.position);
   }
@@ -2297,11 +2621,11 @@ ModelingSession::bridge_objects(ObjectId survivor_id, ObjectId source_id,
   result.modified = result.affected;
 
   PolygonDocumentNativeAccess::replace_document(
-      survivor->document, std::move(survivor_document));
+      survivor->polygon_document(), std::move(survivor_document));
   PolygonDocumentNativeAccess::replace_selection(
-      survivor->document, std::move(bridge_selection));
+      survivor->polygon_document(), std::move(bridge_selection));
   PolygonDocumentImpl &survivor_impl =
-      PolygonDocumentNativeAccess::impl(survivor->document);
+      PolygonDocumentNativeAccess::impl(survivor->polygon_document());
   ++survivor_impl.content_revision;
   ++survivor_impl.selection_revision;
 
@@ -2348,7 +2672,10 @@ Result<OperationResult> ModelingSession::select_face(ObjectId object_id,
         make_error(ErrorCode::InvalidId, "Object ID is not live."));
   }
 
-  Result<OperationResult> result = object->document.select_face(face_id);
+  if (object->kind() != SessionObjectKind::Mesh) {
+    return Result<OperationResult>::failure(wrong_document_kind_error());
+  }
+  Result<OperationResult> result = object->polygon_document().select_face(face_id);
   if (!result.ok() || !result.value().success || !result.value().changed) {
     return result;
   }
@@ -2386,7 +2713,7 @@ Result<OperationResult> ModelingSession::translate_selection(Vec3 delta) {
         make_error(ErrorCode::InvalidId, "No active selected object."));
   }
 
-  Result<OperationResult> result = found->document.translate_selection(delta);
+  Result<OperationResult> result = translate_document(found->document, delta);
   if (!result.ok() || !result.value().success || !result.value().changed) {
     return result;
   }
@@ -2430,8 +2757,8 @@ ModelingSession::begin_translate_preview(ObjectId object_id, Vec3 delta) {
   preview.object_id = object_id;
   preview.operation_id = kTranslateSelectionOperationId;
   preview.base_document = object->document;
-  preview.base_content_identity = object->document.content_identity();
-  preview.base_content_revision = object->document.content_revision();
+  preview.base_content_identity = document_content_identity(object->document);
+  preview.base_content_revision = document_content_revision(object->document);
   preview.base_session_revision = impl_->content_revision;
   Result<OperationResult> result =
       apply_preview_delta(preview, object->document, delta);
@@ -2440,7 +2767,7 @@ ModelingSession::begin_translate_preview(ObjectId object_id, Vec3 delta) {
   }
 
   preview.payload_revision = impl_->advance_preview_payload_revision(
-      preview.preview_document.content_revision());
+      document_content_revision(preview.preview_document));
   preview.receipt = result.value();
   impl_->preview = std::move(preview);
   result.value().message = "Translate preview started.";
@@ -2461,7 +2788,7 @@ Result<OperationResult> ModelingSession::update_translate_preview(Vec3 delta) {
       apply_preview_delta(impl_->preview, impl_->preview.base_document, delta);
   if (result.ok()) {
     impl_->preview.payload_revision = impl_->advance_preview_payload_revision(
-        impl_->preview.preview_document.content_revision());
+        document_content_revision(impl_->preview.preview_document));
     impl_->preview.receipt = result.value();
     result.value().message = "Translate preview updated.";
   }
@@ -2486,6 +2813,9 @@ Result<PreviewId> ModelingSession::begin_document_preview(
   if (object == impl_->state.objects.end()) {
     return Result<PreviewId>::failure(
         make_error(ErrorCode::InvalidId, "Preview object ID is not live."));
+  }
+  if (object->kind() != SessionObjectKind::Mesh) {
+    return Result<PreviewId>::failure(wrong_document_kind_error());
   }
   Result<OperationResult> identity =
       impl_->validate_commit_identity(object_id, preview_document);
@@ -2513,8 +2843,8 @@ Result<PreviewId> ModelingSession::begin_document_preview(
   preview.object_id = object_id;
   preview.operation_id = std::move(operation_id);
   preview.base_document = object->document;
-  preview.base_content_identity = object->document.content_identity();
-  preview.base_content_revision = object->document.content_revision();
+  preview.base_content_identity = document_content_identity(object->document);
+  preview.base_content_revision = document_content_revision(object->document);
   preview.base_session_revision = impl_->content_revision;
   preview.preview_document = std::move(preview_document);
   preview.receipt = std::move(receipt);
@@ -2523,7 +2853,7 @@ Result<PreviewId> ModelingSession::begin_document_preview(
   preview.payload = std::move(payload).value();
   preview.payload_valid = true;
   preview.payload_revision = impl_->advance_preview_payload_revision(
-      preview.preview_document.content_revision());
+      document_content_revision(preview.preview_document));
   preview.payload.mesh.content_revision = preview.payload_revision;
   impl_->preview = std::move(preview);
   return allocated;
@@ -2535,6 +2865,9 @@ Result<OperationResult> ModelingSession::update_document_preview(
   if (!impl_->preview.active || impl_->preview.id != preview_id) {
     return Result<OperationResult>::failure(
         make_error(ErrorCode::StaleId, "Preview ID is not active."));
+  }
+  if (document_kind(impl_->preview.preview_document) != SessionObjectKind::Mesh) {
+    return Result<OperationResult>::failure(wrong_document_kind_error());
   }
   if (!impl_->preview_matches_base()) {
     return Result<OperationResult>::failure(make_error(
@@ -2563,10 +2896,172 @@ Result<OperationResult> ModelingSession::update_document_preview(
   impl_->preview.payload = std::move(payload).value();
   impl_->preview.payload_valid = true;
   impl_->preview.payload_revision = impl_->advance_preview_payload_revision(
-      impl_->preview.preview_document.content_revision());
+      document_content_revision(impl_->preview.preview_document));
   impl_->preview.payload.mesh.content_revision =
       impl_->preview.payload_revision;
   return Result<OperationResult>::success(std::move(receipt));
+}
+
+Result<PreviewId> ModelingSession::begin_curve_document_preview(
+    ObjectId object_id, std::string operation_id,
+    CurveDocument preview_document, OperationResult receipt) {
+  if (impl_->batch_transaction_active) {
+    impl_->batch_transaction_violated = true;
+    return Result<PreviewId>::failure(make_error(
+        ErrorCode::InvalidArgument,
+        "Batch callback cannot start a preview transaction."));
+  }
+  if (impl_->preview.active) {
+    return Result<PreviewId>::failure(make_error(
+        ErrorCode::InvalidArgument,
+        "Commit or cancel the active preview before starting another preview."));
+  }
+  const auto object = find_object(impl_->state, object_id);
+  if (object == impl_->state.objects.end()) {
+    return Result<PreviewId>::failure(
+        make_error(ErrorCode::InvalidId, "Preview object ID is not live."));
+  }
+  if (object->kind() != SessionObjectKind::Curve) {
+    return Result<PreviewId>::failure(wrong_document_kind_error());
+  }
+  if (!receipt.success) {
+    return Result<PreviewId>::failure(make_error(
+        receipt.error_code == ErrorCode::Ok ? ErrorCode::ValidationFailed
+                                            : receipt.error_code,
+        receipt.message.empty() ? "Preview operation failed." : receipt.message));
+  }
+  Result<OperationResult> identity =
+      impl_->validate_commit_identity(object_id, preview_document);
+  if (!identity.ok()) {
+    return Result<PreviewId>::failure(identity.error());
+  }
+  Result<PreviewId> allocated = impl_->allocate_preview_id();
+  if (!allocated.ok()) {
+    return allocated;
+  }
+
+  PreviewTransaction preview;
+  preview.id = allocated.value();
+  preview.active = true;
+  preview.object_id = object_id;
+  preview.operation_id = std::move(operation_id);
+  preview.base_document = object->document;
+  preview.base_content_identity = document_content_identity(object->document);
+  preview.base_content_revision = document_content_revision(object->document);
+  preview.base_session_revision = impl_->content_revision;
+  receipt.changed = !object->curve_document().has_same_geometry(preview_document);
+  receipt.dirty.overlays = true;
+  preview.preview_document = std::move(preview_document);
+  preview.receipt = std::move(receipt);
+  preview.dirty = preview.receipt.dirty;
+  preview.payload_revision = impl_->advance_preview_payload_revision(
+      document_content_revision(preview.preview_document));
+  impl_->record_topology_identity(object_id, preview.preview_document);
+  impl_->preview = std::move(preview);
+  return allocated;
+}
+
+Result<OperationResult> ModelingSession::update_curve_document_preview(
+    PreviewId preview_id, CurveDocument preview_document,
+    OperationResult receipt) {
+  if (!impl_->preview.active || impl_->preview.id != preview_id) {
+    return Result<OperationResult>::failure(
+        make_error(ErrorCode::StaleId, "Preview ID is not active."));
+  }
+  if (document_kind(impl_->preview.preview_document) != SessionObjectKind::Curve) {
+    return Result<OperationResult>::failure(wrong_document_kind_error());
+  }
+  if (!impl_->preview_matches_base()) {
+    return Result<OperationResult>::failure(make_error(
+        ErrorCode::StaleId,
+        "Preview base changed before the preview could be updated."));
+  }
+  if (!receipt.success) {
+    return Result<OperationResult>::failure(make_error(
+        receipt.error_code == ErrorCode::Ok ? ErrorCode::ValidationFailed
+                                            : receipt.error_code,
+        receipt.message.empty() ? "Preview operation failed." : receipt.message));
+  }
+  Result<OperationResult> identity = impl_->validate_commit_identity(
+      impl_->preview.object_id, preview_document);
+  if (!identity.ok()) {
+    return identity;
+  }
+  const auto &current =
+      std::get<CurveDocument>(impl_->preview.preview_document);
+  if (current.has_same_geometry(preview_document)) {
+    OperationResult unchanged;
+    unchanged.message = "Curve preview unchanged.";
+    return Result<OperationResult>::success(std::move(unchanged));
+  }
+  const auto &base = std::get<CurveDocument>(impl_->preview.base_document);
+  receipt.changed = !base.has_same_geometry(preview_document);
+  receipt.dirty.overlays = true;
+  impl_->preview.preview_document = std::move(preview_document);
+  impl_->preview.receipt = receipt;
+  impl_->preview.dirty = receipt.dirty;
+  impl_->preview.payload_revision = impl_->advance_preview_payload_revision(
+      document_content_revision(impl_->preview.preview_document));
+  impl_->record_topology_identity(impl_->preview.object_id,
+                                   impl_->preview.preview_document);
+  return Result<OperationResult>::success(std::move(receipt));
+}
+
+Result<SessionPreviewCheckpoint>
+ModelingSession::capture_preview_checkpoint(PreviewId preview_id) const {
+  if (!impl_->preview.active || impl_->preview.id != preview_id ||
+      !impl_->preview_matches_base()) {
+    return Result<SessionPreviewCheckpoint>::failure(make_error(
+        ErrorCode::StaleId, "Preview ID or its base is no longer active."));
+  }
+  SessionPreviewCheckpoint checkpoint;
+  checkpoint.impl_ = std::make_shared<const SessionPreviewCheckpointImpl>(
+      SessionPreviewCheckpointImpl{
+          .origin = impl_->preview_checkpoint_ownership.origin,
+          .preview = impl_->preview});
+  return Result<SessionPreviewCheckpoint>::success(std::move(checkpoint));
+}
+
+Result<OperationResult> ModelingSession::restore_preview_checkpoint(
+    const SessionPreviewCheckpoint &checkpoint) {
+  if (!checkpoint.valid()) {
+    return Result<OperationResult>::failure(make_error(
+        ErrorCode::InvalidArgument, "Preview checkpoint is empty."));
+  }
+  const PreviewTransaction &saved = checkpoint.impl_->preview;
+  const PreviewTransaction &current = impl_->preview;
+  if (checkpoint.impl_->origin != impl_->preview_checkpoint_ownership.origin ||
+      !current.active || current.id != saved.id ||
+      current.object_id != saved.object_id ||
+      current.base_content_identity != saved.base_content_identity ||
+      current.base_content_revision != saved.base_content_revision ||
+      current.base_session_revision != saved.base_session_revision ||
+      !impl_->preview_matches_base()) {
+    return Result<OperationResult>::failure(make_error(
+        ErrorCode::StaleId,
+        "Preview checkpoint does not belong to this active session preview."));
+  }
+  OperationResult restored;
+  // payload_revision is the authored preview publication identity. Restoring
+  // allocator high-water can replace only a polygon backing allocation while
+  // retaining that publication, so content_identity is not a no-op criterion.
+  if (current.payload_revision == saved.payload_revision &&
+      current.payload_valid == saved.payload_valid &&
+      document_selection_revision(current.preview_document) ==
+          document_selection_revision(saved.preview_document)) {
+    restored.message = "Preview checkpoint unchanged.";
+    return Result<OperationResult>::success(std::move(restored));
+  }
+
+  // The candidate may use identities retired by a later failed publication.
+  // Restore it directly, leaving the session's allocator high-water intact.
+  impl_->preview = saved;
+  impl_->reconcile_topology_identity(saved.object_id,
+                                      impl_->preview.preview_document);
+  restored.changed = true;
+  restored.dirty = saved.dirty;
+  restored.message = "Preview checkpoint restored.";
+  return Result<OperationResult>::success(std::move(restored));
 }
 
 Result<OperationResult> ModelingSession::commit_preview() {
@@ -2593,6 +3088,12 @@ Result<OperationResult> ModelingSession::commit_preview() {
   }
 
   OperationResult result = impl_->preview.receipt;
+  if (object->kind() == SessionObjectKind::Curve &&
+      object->curve_document().has_same_geometry(
+          std::get<CurveDocument>(impl_->preview.preview_document))) {
+    result.changed = false;
+    result.dirty = {};
+  }
   result.dirty.overlays = true;
   if (!result.changed) {
     impl_->preview = PreviewTransaction{};
@@ -2606,8 +3107,10 @@ Result<OperationResult> ModelingSession::commit_preview() {
   const DirtyFlags preview_dirty = impl_->preview.dirty;
   object->document = impl_->preview.preview_document;
   impl_->record_topology_identity(object->id, object->document);
-  object->selected = true;
-  impl_->state.active_object = object->id;
+  if (object->kind() == SessionObjectKind::Mesh) {
+    object->selected = true;
+    impl_->state.active_object = object->id;
+  }
   impl_->preview = PreviewTransaction{};
   const SessionObjectDirtyOverride dirty_overrides[] = {
       {.id = preview_object, .dirty = preview_dirty},
@@ -2827,6 +3330,10 @@ void ModelingSession::restore_snapshot_preserving_identity_high_water(
         std::max(restored.next_vertex_id, high_water.next_vertex_id);
     restored.next_face_id =
         std::max(restored.next_face_id, high_water.next_face_id);
+    restored.curve.next_point_index =
+        std::max(restored.curve.next_point_index, high_water.curve.next_point_index);
+    restored.curve.next_segment_index =
+        std::max(restored.curve.next_segment_index, high_water.curve.next_segment_index);
   }
 }
 
@@ -2870,6 +3377,10 @@ void ModelingSession::restore_snapshot_as_history_transition(
         std::max(restored.next_vertex_id, high_water.next_vertex_id);
     restored.next_face_id =
         std::max(restored.next_face_id, high_water.next_face_id);
+    restored.curve.next_point_index =
+        std::max(restored.curve.next_point_index, high_water.curve.next_point_index);
+    restored.curve.next_segment_index =
+        std::max(restored.curve.next_segment_index, high_water.curve.next_segment_index);
   }
   impl_->reconcile_restored_topology_identities();
   impl_->publish_state_transition(before);
@@ -2892,8 +3403,9 @@ std::vector<SessionObjectSummary> ModelingSession::objects() const {
         .id = object.id,
         .name = object.name,
         .selected = object.selected,
-        .content_revision = object.document.content_revision(),
-        .selection_revision = object.document.selection_revision(),
+        .content_revision = document_content_revision(object.document),
+        .selection_revision = document_selection_revision(object.document),
+        .kind = object.kind(),
     });
   }
   return result;
@@ -2933,6 +3445,7 @@ SessionChangeSnapshot ModelingSession::changes_since(
                 record.overlays_revision > previous_content_revision,
         },
         .deleted = record.deleted,
+        .kind = record.kind,
     });
   }
   return snapshot;
@@ -2940,7 +3453,9 @@ SessionChangeSnapshot ModelingSession::changes_since(
 
 const PolygonDocument *ModelingSession::document(ObjectId object_id) const {
   const auto found = find_object(impl_->state, object_id);
-  return found == impl_->state.objects.end() ? nullptr : &found->document;
+  return found == impl_->state.objects.end()
+             ? nullptr
+             : std::get_if<PolygonDocument>(&found->document);
 }
 
 Result<std::shared_ptr<const PolygonDocument>>
@@ -2960,9 +3475,37 @@ ModelingSession::document_copy(ObjectId object_id) const {
     return Result<PolygonDocument>::failure(
         make_error(ErrorCode::InvalidId, "Object ID is not live."));
   }
-  PolygonDocument copy = found->document;
+  if (found->kind() != SessionObjectKind::Mesh) {
+    return Result<PolygonDocument>::failure(wrong_document_kind_error());
+  }
+  PolygonDocument copy = found->polygon_document();
   impl_->reconcile_topology_identity(object_id, copy);
   return Result<PolygonDocument>::success(std::move(copy));
+}
+
+Result<std::shared_ptr<const CurveDocument>>
+ModelingSession::curve_document_snapshot(ObjectId object_id) const {
+  Result<CurveDocument> copy = curve_document_copy(object_id);
+  if (!copy.ok()) {
+    return Result<std::shared_ptr<const CurveDocument>>::failure(copy.error());
+  }
+  return Result<std::shared_ptr<const CurveDocument>>::success(
+      std::make_shared<const CurveDocument>(std::move(copy).value()));
+}
+
+Result<CurveDocument>
+ModelingSession::curve_document_copy(ObjectId object_id) const {
+  const auto found = find_object(impl_->state, object_id);
+  if (found == impl_->state.objects.end()) {
+    return Result<CurveDocument>::failure(
+        make_error(ErrorCode::InvalidId, "Object ID is not live."));
+  }
+  if (found->kind() != SessionObjectKind::Curve) {
+    return Result<CurveDocument>::failure(wrong_document_kind_error());
+  }
+  CurveDocument copy = found->curve_document();
+  impl_->reconcile_topology_identity(object_id, copy);
+  return Result<CurveDocument>::success(std::move(copy));
 }
 
 Result<std::vector<PolygonDocument>>
@@ -2981,7 +3524,10 @@ ModelingSession::document_copies(std::span<const ObjectId> object_ids) const {
       return Result<std::vector<PolygonDocument>>::failure(
           make_error(ErrorCode::InvalidId, "Object ID is not live."));
     }
-    PolygonDocument copy = found->second->document;
+    if (found->second->kind() != SessionObjectKind::Mesh) {
+      return Result<std::vector<PolygonDocument>>::failure(wrong_document_kind_error());
+    }
+    PolygonDocument copy = found->second->polygon_document();
     impl_->reconcile_topology_identity(object_id, copy);
     copies.push_back(std::move(copy));
   }
@@ -3004,6 +3550,9 @@ ModelingSession::commit_document(ObjectId object_id, PolygonDocument document,
     return Result<OperationResult>::failure(
         make_error(ErrorCode::InvalidId, "Object ID is not live."));
   }
+  if (found->kind() != SessionObjectKind::Mesh) {
+    return Result<OperationResult>::failure(wrong_document_kind_error());
+  }
   if (!receipt.success || !receipt.changed) {
     return Result<OperationResult>::success(std::move(receipt));
   }
@@ -3020,6 +3569,50 @@ ModelingSession::commit_document(ObjectId object_id, PolygonDocument document,
   impl_->record_topology_identity(object_id, found->document);
   found->selected = true;
   impl_->state.active_object = found->id;
+  const SessionObjectDirtyOverride dirty_overrides[] = {
+      {.id = object_id, .dirty = receipt.dirty},
+  };
+  impl_->publish_state_transition(impl_->undo_stack.back(), dirty_overrides);
+  return Result<OperationResult>::success(std::move(receipt));
+}
+
+Result<OperationResult> ModelingSession::commit_curve_document(
+    ObjectId object_id, CurveDocument document, OperationResult receipt) {
+  if (!impl_->allow_batch_object(object_id)) {
+    return Result<OperationResult>::failure(make_error(
+        ErrorCode::InvalidArgument,
+        "Batch callback cannot mutate an unrelated document."));
+  }
+  if (impl_->preview.active) {
+    return active_preview_error();
+  }
+  const auto found = find_object(impl_->state, object_id);
+  if (found == impl_->state.objects.end()) {
+    return Result<OperationResult>::failure(
+        make_error(ErrorCode::InvalidId, "Object ID is not live."));
+  }
+  if (found->kind() != SessionObjectKind::Curve) {
+    return Result<OperationResult>::failure(wrong_document_kind_error());
+  }
+  if (!receipt.success || !receipt.changed) {
+    return Result<OperationResult>::success(std::move(receipt));
+  }
+  Result<OperationResult> identity =
+      impl_->validate_commit_identity(object_id, document);
+  if (!identity.ok()) {
+    return identity;
+  }
+  if (found->curve_document().has_same_geometry(document)) {
+    receipt.changed = false;
+    receipt.dirty = {};
+    receipt.message = "Curve unchanged.";
+    return Result<OperationResult>::success(std::move(receipt));
+  }
+
+  impl_->undo_stack.push_back(impl_->state);
+  impl_->redo_stack.clear();
+  found->document = std::move(document);
+  impl_->record_topology_identity(object_id, found->document);
   const SessionObjectDirtyOverride dirty_overrides[] = {
       {.id = object_id, .dirty = receipt.dirty},
   };
@@ -3050,7 +3643,28 @@ ModelingSession::preview_document_copy(PreviewId preview_id) const {
     return Result<PolygonDocument>::failure(
         make_error(ErrorCode::StaleId, "Preview ID is not active."));
   }
-  return Result<PolygonDocument>::success(impl_->preview.preview_document);
+  const auto *document =
+      std::get_if<PolygonDocument>(&impl_->preview.preview_document);
+  if (document == nullptr) {
+    return Result<PolygonDocument>::failure(wrong_document_kind_error());
+  }
+  return Result<PolygonDocument>::success(*document);
+}
+
+Result<CurveDocument>
+ModelingSession::preview_curve_document_copy(PreviewId preview_id) const {
+  if (!impl_->preview.active || impl_->preview.id != preview_id) {
+    return Result<CurveDocument>::failure(
+        make_error(ErrorCode::StaleId, "Preview ID is not active."));
+  }
+  const auto *document =
+      std::get_if<CurveDocument>(&impl_->preview.preview_document);
+  if (document == nullptr) {
+    return Result<CurveDocument>::failure(wrong_document_kind_error());
+  }
+  CurveDocument copy = *document;
+  impl_->reconcile_topology_identity(impl_->preview.object_id, copy);
+  return Result<CurveDocument>::success(std::move(copy));
 }
 
 PreviewTransactionSummary ModelingSession::preview_summary() const {
@@ -3065,6 +3679,7 @@ PreviewTransactionSummary ModelingSession::preview_summary() const {
       .delta = impl_->preview.delta,
       .content_revision = impl_->preview.payload_revision,
       .dirty = impl_->preview.dirty,
+      .kind = document_kind(impl_->preview.preview_document),
   };
 }
 
@@ -3075,7 +3690,10 @@ ModelingSession::semantic_overlay(ObjectId object_id) const {
     return Result<SemanticOverlayPayload>::failure(
         make_error(ErrorCode::InvalidId, "Object ID is not live."));
   }
-  return build_semantic_overlay_payload(object->document);
+  if (object->kind() != SessionObjectKind::Mesh) {
+    return Result<SemanticOverlayPayload>::failure(wrong_document_kind_error());
+  }
+  return build_semantic_overlay_payload(object->polygon_document());
 }
 
 bool ModelingSession::begin_batch_transaction() {

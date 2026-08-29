@@ -49,6 +49,8 @@ struct QuaderEntitySnapshot {
   QuaderModelingObjectId modeling_object_id = kInvalidQuaderModelingObjectId;
   /// Per-occurrence texture placement; absence denotes the identity mapping.
   std::optional<QMat4> texture_sampling_from_local;
+  bool has_curve = false;
+  AssetId curve = kInvalidAssetId;
 };
 
 /**
@@ -85,6 +87,7 @@ struct QuaderAssetSnapshot {
   std::size_t material_count = 0;
   std::size_t texture_count = 0;
   std::uint64_t revision = 0;
+  std::size_t curve_count = 0;
 };
 
 /**

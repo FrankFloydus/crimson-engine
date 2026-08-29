@@ -5,6 +5,7 @@
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
 #include <editor/interactions/viewport_projection.hpp>
+#include "editor/interactions/viewport_segment_projection.hpp"
 
 #include "tool_math_internal.hpp"
 
@@ -224,3 +225,134 @@ CutGridPointResult cut_grid_point_from_ray(const ViewportCameraState& camera, qu
 	return result;
 }
 } // namespace quader_editor_core
+
+namespace quader {
+namespace {
+
+/// Intersects a segment's retained parameter interval with one axis-aligned slab.
+bool clip_segment_axis(double start, double end, double minimum, double maximum,
+                       double &first, double &last) {
+  if (!std::isfinite(start) || !std::isfinite(end)) {
+    return false;
+  }
+  const double delta = end - start;
+  if (delta == 0.0) {
+    return start >= minimum && start <= maximum;
+  }
+  double enter = (minimum - start) / delta;
+  double leave = (maximum - start) / delta;
+  if (enter > leave) {
+    std::swap(enter, leave);
+  }
+  first = std::max(first, enter);
+  last = std::min(last, leave);
+  return first <= last;
+}
+
+} // namespace
+
+std::optional<ViewportScreenSegment> project_visible_viewport_segment(
+    quader_editor_core::ViewportCameraState camera, QVec3 start, QVec3 end,
+    double near_plane, double far_plane, bool clip_to_viewport) {
+  const float viewport_width = camera.viewport_size.x;
+  const float viewport_height = camera.viewport_size.y;
+  if (!std::isfinite(viewport_width) || !std::isfinite(viewport_height) ||
+      !std::isfinite(near_plane) || !std::isfinite(far_plane) ||
+      near_plane > far_plane) {
+    return std::nullopt;
+  }
+  const QVec3 eye = camera.transform.origin;
+  const QVec3 forward = quader_editor_core::camera_axis(
+      camera.transform.z_axis * -1.0f, {0.0f, 0.0f, -1.0f},
+      camera.affine_model_space);
+  const auto depth = [forward, eye](QVec3 point) {
+    return (static_cast<double>(point.x) - eye.x) * forward.x +
+           (static_cast<double>(point.y) - eye.y) * forward.y +
+           (static_cast<double>(point.z) - eye.z) * forward.z;
+  };
+  double first = 0.0;
+  double last = 1.0;
+  if (!clip_segment_axis(depth(start), depth(end), near_plane, far_plane,
+                         first, last)) {
+    return std::nullopt;
+  }
+  const double depth_clipped_first = first;
+  const double depth_clipped_last = last;
+  const double start_depth = depth(start);
+  const double end_depth = depth(end);
+  const double clipped_start_depth = std::lerp(start_depth, end_depth, first);
+  const double clipped_end_depth = std::lerp(start_depth, end_depth, last);
+  // Interpolate relative to the eye: rounding a clipped point back into large
+  // absolute float coordinates can erase its small positive near-plane depth.
+  camera.transform.origin = {};
+  const auto relative_point = [start, end, eye](double parameter) -> QVec3 {
+    return {
+        static_cast<float>(std::lerp(static_cast<double>(start.x) - eye.x,
+                                     static_cast<double>(end.x) - eye.x,
+                                     parameter)),
+        static_cast<float>(std::lerp(static_cast<double>(start.y) - eye.y,
+                                     static_cast<double>(end.y) - eye.y,
+                                     parameter)),
+        static_cast<float>(std::lerp(static_cast<double>(start.z) - eye.z,
+                                     static_cast<double>(end.z) - eye.z,
+                                     parameter)),
+    };
+  };
+  ViewportScreenSegment projected;
+  // Clip depth before perspective division, so an endpoint behind the eye
+  // cannot mirror the line. Exact near/far endpoints still project correctly;
+  // project_world_point().visible deliberately excludes those boundaries.
+  if (!quader_editor_core::project_viewport_point(camera, relative_point(first),
+                                                  projected.start) ||
+      !quader_editor_core::project_viewport_point(camera, relative_point(last),
+                                                  projected.end)) {
+    return std::nullopt;
+  }
+  if (!clip_to_viewport) {
+    projected.start_parameter = depth_clipped_first;
+    projected.end_parameter = depth_clipped_last;
+    projected.start_depth = clipped_start_depth;
+    projected.end_depth = clipped_end_depth;
+    return projected;
+  }
+  first = 0.0;
+  last = 1.0;
+  if (!clip_segment_axis(projected.start.x, projected.end.x, 0.0,
+                         viewport_width, first, last) ||
+      !clip_segment_axis(projected.start.y, projected.end.y, 0.0,
+                         viewport_height, first, last)) {
+    return std::nullopt;
+  }
+  const auto screen_point = [&](double parameter) -> QVec2 {
+    return {
+        static_cast<float>(std::clamp(
+            std::lerp(static_cast<double>(projected.start.x),
+                      static_cast<double>(projected.end.x), parameter),
+            0.0, static_cast<double>(viewport_width))),
+        static_cast<float>(std::clamp(
+            std::lerp(static_cast<double>(projected.start.y),
+                      static_cast<double>(projected.end.y), parameter),
+            0.0, static_cast<double>(viewport_height))),
+    };
+  };
+  const auto world_parameter = [&](double screen_parameter) {
+    const double parameter =
+        camera.projection == quader_editor_core::CameraProjection::Orthographic
+        ? screen_parameter
+        : screen_parameter * clipped_start_depth /
+              std::lerp(clipped_end_depth, clipped_start_depth, screen_parameter);
+    return std::lerp(depth_clipped_first, depth_clipped_last, parameter);
+  };
+  const double world_first = world_parameter(first);
+  const double world_last = world_parameter(last);
+  return ViewportScreenSegment{
+      .start = screen_point(first),
+      .end = screen_point(last),
+      .start_parameter = world_first,
+      .end_parameter = world_last,
+      .start_depth = std::lerp(start_depth, end_depth, world_first),
+      .end_depth = std::lerp(start_depth, end_depth, world_last),
+  };
+}
+
+} // namespace quader

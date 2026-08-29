@@ -486,7 +486,7 @@ bool QuaderApiMutationRunner::can_undo() const {
     return false;
   }
   SceneSession &session = scene_session();
-  if (session.native_tools().has_pending_tool()) {
+  if (session.native_tools().has_pending_history_preview()) {
     return true;
   }
   if (session.modeling().can_cancel_active_preview_for_undo()) {
@@ -500,7 +500,7 @@ bool QuaderApiMutationRunner::can_redo() const {
     return false;
   }
   SceneSession &session = scene_session();
-  if (session.native_tools().has_pending_tool()) {
+  if (session.native_tools().has_pending_history_preview()) {
     return false;
   }
   if (session.modeling().can_cancel_active_preview_for_undo()) {
@@ -514,7 +514,7 @@ QuaderApiVoidResult QuaderApiMutationRunner::undo() {
     return quader_api_failure_status(scene_session(), "No scene is active.");
   }
   SceneSession &session = scene_session();
-  if (session.native_tools().has_pending_tool()) {
+  if (session.native_tools().has_pending_history_preview()) {
     return status_from(session.native_tools().cancel_active(),
                        QuaderMutationKind::Runtime, "Undo");
   }

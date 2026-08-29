@@ -56,6 +56,9 @@ scope_for_context(QuaderKeybindingContextKind context) {
   case QuaderKeybindingContextKind::RadialArrayTool:
     return {"viewport.tool.radial_array", "Viewport › Radial Array",
             "keybindings.scope.viewport.tool.radial_array", context};
+  case QuaderKeybindingContextKind::CurveTool:
+    return {"viewport.tool.curve", "Viewport › Curve",
+            "keybindings.scope.viewport.tool.curve", context};
   case QuaderKeybindingContextKind::Custom:
     return {"custom", "Custom", "keybindings.scope.custom", context};
   }

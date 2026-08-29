@@ -13,6 +13,7 @@
 #include "diagnostics/profile.hpp"
 #include "editor/array/linear_array_tool_service.hpp"
 #include "editor/array/radial_array_tool_service.hpp"
+#include "editor/curve/curve_tool_service.hpp"
 #include "editor/modeling/services/modeling_session_service.hpp"
 #include "editor/pivot/pivot_tool_service.hpp"
 #include "editor/placement/viewport_point_placement_service.hpp"
@@ -666,7 +667,11 @@ void UISystem::install_runtime_hooks(
     ModelingSessionService &modeling, EditorSelectionService &selection,
     PivotToolService &pivot, LinearArrayToolService &linear_array,
     RadialArrayToolService &radial_array,
-    ViewportPointPlacementService &point_placement, AssetId default_material) {
+    ViewportPointPlacementService &point_placement, AssetId default_material,
+    CurveToolService *curve) {
+  if (viewport_panel_ != nullptr) {
+    viewport_panel_->reset_interactions(editor_, curve_);
+  }
   editor_ = &editor;
   document_ = &document;
   assets_ = &assets;
@@ -675,6 +680,7 @@ void UISystem::install_runtime_hooks(
   pivot_ = &pivot;
   linear_array_ = &linear_array;
   radial_array_ = &radial_array;
+  curve_ = curve;
   point_placement_ = &point_placement;
   default_material_ = default_material;
   invalidate_material_presentation_cache();
@@ -2133,6 +2139,7 @@ void UISystem::shutdown() {
     tool_settings_panel_->unbind();
   }
   if (viewport_panel_ != nullptr) {
+    viewport_panel_->reset_interactions(editor_, curve_);
     viewport_panel_->shutdown();
   }
   if (material_preview_surface_ != nullptr) {
@@ -2184,6 +2191,7 @@ void UISystem::shutdown() {
   pivot_ = nullptr;
   linear_array_ = nullptr;
   radial_array_ = nullptr;
+  curve_ = nullptr;
   point_placement_ = nullptr;
   initialized_ = false;
   retained_message_box_prewarm_scheduled_ = false;
@@ -2232,8 +2240,12 @@ void UISystem::refresh(const FrameTiming &frame_timing,
   QDR_PROFILE_SCOPE("UI system refresh");
   frame_timing_ = frame_timing;
   render_performance_ = render_performance;
-  const bool transform_drag_active =
-      modeling_ != nullptr && modeling_->transform_drag_active();
+  // Keep retained property/command presentation stable during a pointer drag.
+  // Curve previews publish geometry each sample just like transform previews;
+  // their final revisions are presented once the gesture ends.
+  const bool edit_drag_active =
+      (modeling_ != nullptr && modeling_->transform_drag_active()) ||
+      (curve_ != nullptr && curve_->dragging());
   const bool numeric_interaction_active =
       tool_settings_panel_ != nullptr &&
       tool_settings_panel_->numeric_interaction_active();
@@ -2260,7 +2272,7 @@ void UISystem::refresh(const FrameTiming &frame_timing,
     refresh_material_presentation_cache();
   }
   if (editor_ != nullptr) {
-    if (!transform_drag_active && !numeric_interaction_active) {
+    if (!edit_drag_active && !numeric_interaction_active) {
       QDR_PROFILE_SCOPE("UI refresh retained toolbars");
       const bool owner_available =
           document_ != nullptr && modeling_ != nullptr;
@@ -2364,7 +2376,7 @@ void UISystem::refresh(const FrameTiming &frame_timing,
   {
     QDR_PROFILE_SCOPE("UI refresh dock panels");
     const std::string &current_locale = localization_.current_locale();
-    if (!transform_drag_active && panel_presented(UIPanelId::Outliner)) {
+    if (!edit_drag_active && panel_presented(UIPanelId::Outliner)) {
       const std::uint64_t hierarchy_presentation_revision =
           document_->hierarchy_presentation_revision();
       const std::uint64_t scene_selection_revision =
@@ -2385,7 +2397,7 @@ void UISystem::refresh(const FrameTiming &frame_timing,
         outliner_refresh_valid_ = true;
       }
     }
-    if (!transform_drag_active && panel_presented(UIPanelId::Layers) &&
+    if (!edit_drag_active && panel_presented(UIPanelId::Layers) &&
         (!layers_refresh_valid_ ||
          layers_scene_revision_ != document_->layer_revision() ||
          layers_scene_selection_revision_ != document_->selection_revision() ||
@@ -2397,7 +2409,7 @@ void UISystem::refresh(const FrameTiming &frame_timing,
       layers_locale_ = current_locale;
       layers_refresh_valid_ = true;
     }
-    if (!transform_drag_active && !numeric_interaction_active &&
+    if (!edit_drag_active && !numeric_interaction_active &&
         panel_presented(UIPanelId::Inspector)) {
       refresh_material_presentation_cache();
       const std::uint64_t modeling_content_revision =
@@ -2503,7 +2515,7 @@ void UISystem::process_viewport_input() {
   viewport_panel_->process_input(*editor_, *document_, *assets_, *modeling_,
                                  default_material_, pivot_, linear_array_,
                                  radial_array_, point_placement_,
-                                 frame_timing_.delta_seconds);
+                                 frame_timing_.delta_seconds, curve_);
 }
 
 void UISystem::prepare_viewports(
@@ -2515,7 +2527,7 @@ void UISystem::prepare_viewports(
   }
   viewport_panel_->prepare_viewports(*editor_, render_bridge, snapshot_cache,
                                      *document_, *assets_, *modeling_, pivot_,
-                                     linear_array_, radial_array_);
+                                     linear_array_, radial_array_, curve_);
 }
 
 std::size_t UISystem::render_viewports() {

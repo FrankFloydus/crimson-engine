@@ -94,6 +94,7 @@ struct QtViewportSurface::InputAccumulator {
 
   bool hovered = false;
   bool focused = false;
+  bool pointer_interaction_canceled = false;
   bool suppress_warp_event = false;
   bool warp_motion_overtook_target = false;
   QPoint warp_target_local;
@@ -117,9 +118,13 @@ struct QtViewportSurface::InputAccumulator {
   QVec2 mouse_delta = {};
   bool has_mouse_position = false;
   std::uint64_t mouse_move_events = 0u;
+  std::uint64_t pointer_event_sequence = 0u;
   ViewportModifiers modifiers = {};
   std::vector<QuaderInputChord> pressed;
   std::vector<QuaderInputChord> released;
+  std::vector<ViewportPointerButtonEdge> pointer_pressed_edges;
+  std::vector<ViewportPointerButtonEdge> pointer_released_edges;
+  std::vector<ViewportPointerButtonEdge> pointer_drag_started_edges;
   std::vector<QuaderWheelInputEdge> wheel;
   std::unordered_map<int, QuaderInputChord> active_keys;
   std::optional<QuaderInputChord> middle_drag;
@@ -273,6 +278,7 @@ QtViewportSurface::take_input_frame(float delta_seconds,
       viewport_modifiers(QGuiApplication::keyboardModifiers());
   frame.input.viewport_hovered = input_->hovered || route_active_navigation;
   frame.input.viewport_focused = input_->focused || route_active_navigation;
+  frame.input.pointer_interaction_canceled = input_->pointer_interaction_canceled;
   frame.input.text_input_active = false;
   frame.input.middle_pressed =
       (input_->hovered || route_active_navigation) && input_->middle_pressed;
@@ -294,6 +300,10 @@ QtViewportSurface::take_input_frame(float delta_seconds,
   frame.input.modifiers = input_->modifiers;
   frame.input.pressed_input_chords = std::move(input_->pressed);
   frame.input.released_input_chords = std::move(input_->released);
+  frame.input.pointer_pressed_edges = std::move(input_->pointer_pressed_edges);
+  frame.input.pointer_released_edges = std::move(input_->pointer_released_edges);
+  frame.input.pointer_drag_started_edges =
+      std::move(input_->pointer_drag_started_edges);
   frame.input.wheel_input_edges = std::move(input_->wheel);
   frame.input.active_input_chords.reserve(input_->active_keys.size() + 2u);
   for (const auto &[key, chord] : input_->active_keys) {
@@ -321,6 +331,7 @@ QtViewportSurface::take_input_frame(float delta_seconds,
 
   input_->left_pressed = false;
   input_->left_released = false;
+  input_->pointer_interaction_canceled = false;
   input_->middle_pressed = false;
   input_->middle_released = false;
   input_->right_pressed = false;
@@ -330,6 +341,9 @@ QtViewportSurface::take_input_frame(float delta_seconds,
   input_->mouse_move_events = 0u;
   input_->pressed.clear();
   input_->released.clear();
+  input_->pointer_pressed_edges.clear();
+  input_->pointer_released_edges.clear();
+  input_->pointer_drag_started_edges.clear();
   input_->wheel.clear();
   if (pointer_captured()) {
     recenter_captured_pointer();
@@ -637,6 +651,10 @@ void QtViewportSurface::record_focus_in() { input_->focused = true; }
 
 void QtViewportSurface::record_focus_out() {
   input_->focused = false;
+  input_->pointer_interaction_canceled =
+      input_->pointer_interaction_canceled || input_->left_down ||
+      input_->middle_down || input_->right_down ||
+      !input_->click_candidates.empty();
   // Native grabs can be dropped by the window manager before the next app
   // frame. Release Quader's logical capture immediately so the cursor cannot
   // remain hidden or be re-centered after focus moves elsewhere.
@@ -655,6 +673,13 @@ void QtViewportSurface::record_focus_out() {
   }
   input_->middle_drag.reset();
   input_->right_drag.reset();
+  for (const auto &[button, candidate] : input_->click_candidates) {
+    (void)candidate;
+    input_->pointer_released_edges.push_back({
+        .button = static_cast<QuaderMouseButton>(button),
+        .local = input_->mouse_local,
+    });
+  }
   input_->click_candidates.clear();
   input_->left_released = input_->left_released || input_->left_down;
   input_->middle_released = input_->middle_released || input_->middle_down;
@@ -708,6 +733,11 @@ void QtViewportSurface::record_mouse_press(QMouseEvent &event,
   if (!button.has_value()) {
     return;
   }
+  input_->pointer_pressed_edges.push_back({
+      .button = *button,
+      .local = input_->mouse_local,
+      .sequence = ++input_->pointer_event_sequence,
+  });
 
   if (double_click) {
     input_->click_candidates.erase(static_cast<int>(*button));
@@ -775,6 +805,11 @@ void QtViewportSurface::record_mouse_release(QMouseEvent &event) {
   if (!button.has_value()) {
     return;
   }
+  input_->pointer_released_edges.push_back({
+      .button = *button,
+      .local = input_->mouse_local,
+      .sequence = ++input_->pointer_event_sequence,
+  });
   const auto click =
       input_->click_candidates.find(static_cast<int>(*button));
   if (click != input_->click_candidates.end()) {
@@ -855,7 +890,6 @@ void QtViewportSurface::record_mouse_move(QMouseEvent &event) {
           ? QGuiApplication::styleHints()->startDragDistance()
           : 10;
   for (auto &[button, candidate] : input_->click_candidates) {
-    (void)button;
     if (candidate.eligible) {
       qreal displacement = 0.0;
       if (pointer_captured()) {
@@ -869,6 +903,10 @@ void QtViewportSurface::record_mouse_move(QMouseEvent &event) {
       }
       if (displacement >= static_cast<qreal>(start_drag_distance)) {
         candidate.eligible = false;
+        input_->pointer_drag_started_edges.push_back({
+            .button = static_cast<QuaderMouseButton>(button),
+            .local = local,
+        });
       }
     }
     candidate.last_local = event.position();
@@ -897,6 +935,11 @@ void QtViewportSurface::record_native_pointer_capture_lost() {
     return;
   }
   const bool capture_was_stolen = native_capture_loss_pending_;
+  input_->pointer_interaction_canceled =
+      input_->pointer_interaction_canceled ||
+      (capture_was_stolen && (input_->left_down || input_->middle_down ||
+                             input_->right_down ||
+                             !input_->click_candidates.empty()));
   set_pointer_capture(false);
   if (input_->right_drag.has_value()) {
     input_->released.push_back(*input_->right_drag);
@@ -905,6 +948,13 @@ void QtViewportSurface::record_native_pointer_capture_lost() {
   // Capture theft cancels fly navigation, but it is not a physical button-up
   // and must not synthesize a click that can open the viewport context menu.
   if (capture_was_stolen) {
+    for (const auto &[button, candidate] : input_->click_candidates) {
+      (void)candidate;
+      input_->pointer_released_edges.push_back({
+          .button = static_cast<QuaderMouseButton>(button),
+          .local = input_->mouse_local,
+      });
+    }
     input_->right_down = false;
     input_->click_candidates.clear();
   }

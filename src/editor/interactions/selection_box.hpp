@@ -154,6 +154,9 @@ void clear_selection_box(SelectionBoxState& state);
 ScreenRect normalized_screen_rect(quader::QVec2 a, quader::QVec2 b);
 bool screen_rect_contains(const ScreenRect& rect, quader::QVec2 point);
 bool screen_rect_intersects_bounds(const ScreenRect& rect, quader::QVec2 min_bounds, quader::QVec2 max_bounds);
+/// Appends one projected point and updates the bounds used by rectangle matching.
+void include_projected_object_point(RectangleProjectedObject &projected,
+                                    quader::QVec2 screen);
 RectangleSelectionHits rectangle_hits_from_projected_candidates(const RectangleProjectedHitsRequest& request);
 SelectionBoxPrimitives build_selection_box_primitives(const SelectionBoxState& state, bool camera_matches);
 

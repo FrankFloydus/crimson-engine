@@ -13,6 +13,24 @@
 
 namespace quader {
 
+/// Compares every projection input before rebuilding cached screen geometry.
+[[nodiscard]] inline bool modeling_viewport_camera_matches(
+    const ModelingViewportCamera &left, const ModelingViewportCamera &right) {
+  const auto same_vector = [](QVec3 a, QVec3 b) {
+    return a.x == b.x && a.y == b.y && a.z == b.z;
+  };
+  return left.orthographic == right.orthographic &&
+         left.affine_model_space == right.affine_model_space &&
+         same_vector(left.origin, right.origin) &&
+         same_vector(left.x_axis, right.x_axis) &&
+         same_vector(left.y_axis, right.y_axis) &&
+         same_vector(left.z_axis, right.z_axis) &&
+         left.viewport_size.x == right.viewport_size.x &&
+         left.viewport_size.y == right.viewport_size.y &&
+         left.orthographic_size == right.orthographic_size &&
+         left.fov_degrees == right.fov_degrees;
+}
+
 /** Converts the native adapter camera into the canonical modeling runtime DTO. */
 [[nodiscard]] inline quader_editor_core::ViewportCameraState
 modeling_runtime_camera(const ModelingViewportCamera &value) {

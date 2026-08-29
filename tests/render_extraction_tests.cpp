@@ -5,6 +5,7 @@
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
 #include "assets/asset_registry.hpp"
+#include "assets/curve_asset_payload.hpp"
 #include "assets/mesh_asset.hpp"
 #include "assets/texture_asset.hpp"
 #include "core/color_space.hpp"
@@ -28,6 +29,7 @@
 #include "render/viewport_overlay_frame.hpp"
 #include "render/viewport_overlay_policy.hpp"
 #include "render/overlay/overlay_camera_projector.hpp"
+#include "render/overlay/curve_tool_overlay_cache.hpp"
 #include "render/overlay/overlay_proxy_factory.hpp"
 #include "render/overlay/render_overlay_snapshot.hpp"
 #include "render/overlay/overlay_renderable_cache.hpp"
@@ -51,6 +53,7 @@
 #include <cmath>
 #include <cstdint>
 #include <initializer_list>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <span>
@@ -130,6 +133,26 @@ MeshAsset make_overlay_triangle_mesh() {
   geometry.primitives = {MeshPrimitiveSpan{
       .index_offset = 0u, .index_count = 3u, .material_slot = 0u}};
   return mesh;
+}
+
+CurveAsset make_overlay_curve_asset() {
+  const std::array<modeling::CurvePointSpec, 2> points{{
+      {.position = {0.0f, 0.0f, 0.0f},
+       .incoming_handle = {-1.0f, 0.0f, 0.0f},
+       .outgoing_handle = {0.0f, 2.0f, 0.0f}},
+      {.position = {4.0f, 0.0f, 0.0f},
+       .incoming_handle = {0.0f, 2.0f, 0.0f},
+       .outgoing_handle = {1.0f, 0.0f, 0.0f}},
+  }};
+  auto document = modeling::CurveDocument::make_bezier(points);
+  EXPECT_TRUE(document.ok());
+  CurveAsset asset;
+  asset.name = "Overlay Curve";
+  if (document.ok()) {
+    asset.document = std::make_shared<const modeling::CurveDocument>(
+        std::move(document).value());
+  }
+  return asset;
 }
 
 MeshAsset make_authored_quad_mesh() {
@@ -1217,6 +1240,166 @@ TEST(RenderSceneSnapshotTests, BuildsVisibleMeshLightAndMaterialRecords) {
 }
 
 TEST(RenderSceneSnapshotTests,
+     CurvePublicationRefreshAdvancesStampsWithoutTouchingMainRecords) {
+  SceneDocument document;
+  AssetRegistry assets;
+  const AssetId mesh_asset = assets.add_mesh(make_overlay_triangle_mesh());
+  const AssetId material_asset =
+      assets.add_material(make_default_quader_material("Curve Gate Material"));
+  const AssetId curve_asset = assets.add_curve(make_overlay_curve_asset());
+  const EntityId mesh = document.create_entity("Retained Mesh", EntityKind::Mesh);
+  ASSERT_TRUE(document.set_mesh(mesh, {.mesh = mesh_asset}));
+  ASSERT_TRUE(document.set_material(mesh, {.material = material_asset}));
+  const EntityId light = document.create_entity("Retained Light", EntityKind::Light);
+  ASSERT_TRUE(document.set_light(light, {.type = LightType::Point}));
+  const EntityId curve = document.create_entity("Edited Curve", EntityKind::Curve);
+  ASSERT_TRUE(document.set_curve(curve, {.curve = curve_asset}));
+  const RenderSceneBindingKey binding{
+      .scene_session_id = 17u,
+      .activation_generation = 19u,
+      .binding_revision = 23u,
+  };
+  RenderSceneSnapshot snapshot = build_render_scene_snapshot(
+      document, assets, {.frame_index = 1u, .scene_binding = binding});
+  ASSERT_EQ(snapshot.meshes.size(), 1u);
+  ASSERT_EQ(snapshot.lights.size(), 1u);
+  const auto *const mesh_records = snapshot.meshes.data();
+  const auto *const light_records = snapshot.lights.data();
+  const auto geometry = snapshot.meshes.front().mesh.geometry_payload;
+  const std::uint64_t old_scene_revision = snapshot.scene_revision;
+  const std::uint64_t old_curve_revision = snapshot.curve_binding_revision;
+  const std::uint64_t old_render_revision = snapshot.render_component_revision;
+  const std::uint64_t old_asset_revision = snapshot.asset_revision;
+
+  CurveAsset replacement = *assets.curve(curve_asset);
+  modeling::CurveDocument edited = *replacement.document;
+  const modeling::CurveControlPoint point = edited.points().front();
+  ASSERT_TRUE(edited.set_point(
+      point.id,
+      {.position = {point.position.x, point.position.y + 1.0f,
+                    point.position.z},
+       .incoming_handle = point.incoming_handle,
+       .outgoing_handle = point.outgoing_handle}).ok());
+  replacement.document =
+      std::make_shared<const modeling::CurveDocument>(std::move(edited));
+  ASSERT_TRUE(assets.replace_curve(curve_asset, std::move(replacement)));
+  ASSERT_TRUE(document.notify_curve_payload_changed(curve));
+
+  ASSERT_TRUE(try_refresh_render_scene_snapshot_curve_publication(
+      snapshot, document, assets, 2u, binding));
+  EXPECT_EQ(snapshot.frame_index, 2u);
+  EXPECT_GT(snapshot.scene_revision, old_scene_revision);
+  EXPECT_GT(snapshot.curve_binding_revision, old_curve_revision);
+  EXPECT_GT(snapshot.render_component_revision, old_render_revision);
+  EXPECT_GT(snapshot.asset_revision, old_asset_revision);
+  EXPECT_EQ(snapshot.meshes.data(), mesh_records);
+  EXPECT_EQ(snapshot.lights.data(), light_records);
+  EXPECT_EQ(snapshot.meshes.front().mesh.geometry_payload, geometry);
+  EXPECT_TRUE(snapshot.reused_previous_records);
+  EXPECT_TRUE(snapshot.dirty.scene_changed);
+  EXPECT_FALSE(snapshot.dirty.render_components_changed);
+  EXPECT_FALSE(snapshot.dirty.assets_changed);
+  EXPECT_TRUE(render_scene_snapshot_matches_sources(
+      snapshot, document, assets, binding));
+}
+
+TEST(RenderSceneSnapshotTests,
+     CurvePublicationRefreshRejectsEveryMainSceneDependencyChange) {
+  SceneDocument document;
+  AssetRegistry assets;
+  const AssetId mesh_asset = assets.add_mesh(make_overlay_triangle_mesh());
+  const AssetId material_asset =
+      assets.add_material(make_default_quader_material("Bound Material"));
+  const AssetId alternate_material =
+      assets.add_material(make_default_quader_material("Alternate Material"));
+  const AssetId curve_asset = assets.add_curve(make_overlay_curve_asset());
+  const EntityId mesh = document.create_entity("Mesh", EntityKind::Mesh);
+  ASSERT_TRUE(document.set_mesh(mesh, {.mesh = mesh_asset}));
+  ASSERT_TRUE(document.set_material(mesh, {.material = material_asset}));
+  const EntityId light = document.create_entity("Light", EntityKind::Light);
+  ASSERT_TRUE(document.set_light(light, {.type = LightType::Point}));
+  const EntityId curve = document.create_entity("Curve", EntityKind::Curve);
+  ASSERT_TRUE(document.set_curve(curve, {.curve = curve_asset}));
+  const RenderSceneBindingKey binding{
+      .scene_session_id = 29u,
+      .activation_generation = 31u,
+      .binding_revision = 37u,
+  };
+  RenderSceneSnapshot snapshot = build_render_scene_snapshot(
+      document, assets, {.frame_index = 1u, .scene_binding = binding});
+
+  float edit_offset = 1.0f;
+  const auto publish_curve = [&]() {
+    CurveAsset replacement = *assets.curve(curve_asset);
+    modeling::CurveDocument edited = *replacement.document;
+    const modeling::CurveControlPoint point = edited.points().front();
+    const auto changed = edited.set_point(
+        point.id,
+        {.position = {point.position.x, edit_offset++, point.position.z},
+         .incoming_handle = point.incoming_handle,
+         .outgoing_handle = point.outgoing_handle});
+    EXPECT_TRUE(changed.ok());
+    replacement.document =
+        std::make_shared<const modeling::CurveDocument>(std::move(edited));
+    EXPECT_TRUE(assets.replace_curve(curve_asset, std::move(replacement)));
+    EXPECT_TRUE(document.notify_curve_payload_changed(curve));
+  };
+  std::uint64_t frame_index = 2u;
+  const auto expect_rejected_and_rebuild = [&](std::string_view cause) {
+    SCOPED_TRACE(std::string(cause));
+    const std::uint64_t retained_scene_revision = snapshot.scene_revision;
+    const auto *const retained_mesh_records = snapshot.meshes.data();
+    EXPECT_FALSE(try_refresh_render_scene_snapshot_curve_publication(
+        snapshot, document, assets, frame_index, binding));
+    EXPECT_EQ(snapshot.scene_revision, retained_scene_revision);
+    EXPECT_EQ(snapshot.meshes.data(), retained_mesh_records);
+    snapshot = build_render_scene_snapshot(
+        document, assets,
+        {.previous = &snapshot,
+         .frame_index = frame_index++,
+         .scene_binding = binding});
+    EXPECT_FALSE(snapshot.reused_previous_records);
+  };
+
+  publish_curve();
+  ASSERT_TRUE(assets.replace_mesh(mesh_asset, make_authored_quad_mesh()));
+  expect_rejected_and_rebuild("mesh payload");
+
+  publish_curve();
+  ASSERT_TRUE(assets.replace_material(
+      material_asset, make_default_quader_material("Edited Material")));
+  expect_rejected_and_rebuild("material payload");
+
+  publish_curve();
+  LightComponent changed_light = *document.light(light);
+  changed_light.intensity += 1.0f;
+  ASSERT_TRUE(document.set_light(light, changed_light));
+  expect_rejected_and_rebuild("light component");
+
+  publish_curve();
+  ASSERT_TRUE(document.set_material(mesh, {.material = alternate_material}));
+  expect_rejected_and_rebuild("material binding");
+
+  publish_curve();
+  ASSERT_TRUE(document.set_visible(mesh, false));
+  expect_rejected_and_rebuild("visibility");
+  ASSERT_TRUE(document.set_visible(mesh, true));
+  snapshot = build_render_scene_snapshot(
+      document, assets, {.frame_index = frame_index++, .scene_binding = binding});
+
+  publish_curve();
+  ASSERT_TRUE(document.set_transform(
+      mesh, {.position = {3.0f, 4.0f, 5.0f}}));
+  expect_rejected_and_rebuild("transform");
+
+  publish_curve();
+  RenderSceneBindingKey replacement_binding = binding;
+  ++replacement_binding.activation_generation;
+  EXPECT_FALSE(try_refresh_render_scene_snapshot_curve_publication(
+      snapshot, document, assets, frame_index, replacement_binding));
+}
+
+TEST(RenderSceneSnapshotTests,
      LocalVisibilityFiltersMeshesLightsAndInvalidatesRecordReuse) {
   SceneDocument document;
   AssetRegistry assets;
@@ -1897,6 +2080,573 @@ TEST(RenderOverlaySnapshotTests,
   EXPECT_FLOAT_EQ(first->segments.front().start.y, pinned_first_segment.start.y);
   EXPECT_FLOAT_EQ(first->segments.front().start.z, pinned_first_segment.start.z)
       << "the old payload remains immutable while a render snapshot pins it";
+}
+
+TEST(CurveSamplePayloadTests,
+     ReusesPinnedSamplesAcrossDocumentWrappersAndAssetReplacement) {
+  CurveAsset asset = make_overlay_curve_asset();
+  ASSERT_NE(asset.document, nullptr);
+  const auto original_document = asset.document;
+  const auto original = curve_sample_payload(asset);
+  ASSERT_NE(original, nullptr);
+  ASSERT_TRUE(original->error_message.empty());
+  ASSERT_GT(original->samples.size(), 2u);
+  EXPECT_EQ(original->content_identity, asset.document->content_identity());
+  EXPECT_EQ(original->content_revision, asset.document->content_revision());
+  EXPECT_EQ(curve_sample_payload(asset), original);
+
+  asset.document =
+      std::make_shared<const modeling::CurveDocument>(*original_document);
+  EXPECT_NE(asset.document, original_document);
+  EXPECT_EQ(curve_sample_payload(asset), original);
+  const CurveAsset copied = asset;
+  EXPECT_EQ(curve_sample_payload(copied), original);
+
+  CurveAsset replacement;
+  replacement.document =
+      std::make_shared<const modeling::CurveDocument>(*original_document);
+  asset = std::move(replacement);
+  EXPECT_EQ(curve_sample_payload(asset), original);
+
+  modeling::CurveDocument edited = *asset.document;
+  ASSERT_TRUE(edited.set_point(edited.points().front().id,
+      {.position = {0.0f, 1.0f, 0.0f},
+       .outgoing_handle = {0.0f, 2.0f, 0.0f}}).ok());
+  asset.document =
+      std::make_shared<const modeling::CurveDocument>(std::move(edited));
+  const auto changed = curve_sample_payload(asset);
+  ASSERT_NE(changed, nullptr);
+  ASSERT_FALSE(changed->samples.empty());
+  EXPECT_NE(changed, original);
+  EXPECT_NE(changed->content_identity, original->content_identity);
+  EXPECT_FLOAT_EQ(changed->samples.front().position.y, 1.0f);
+  EXPECT_FLOAT_EQ(original->samples.front().position.y, 0.0f);
+  EXPECT_EQ(curve_sample_payload(copied), original)
+      << "snapshots retain immutable samples after a different wrapper is edited";
+}
+
+TEST(CurveSamplePayloadTests,
+     RetainsSamplingErrorsAndInvalidatesOnOptionsOrAuthoredChanges) {
+  const CurveAsset asset = make_overlay_curve_asset();
+  ASSERT_NE(asset.document, nullptr);
+  modeling::CurveDocument document = *asset.document;
+  std::shared_ptr<const CurveSamplePayload> cached;
+  modeling::CurveSamplingOptions options;
+  options.max_samples = 1u;
+  const auto budget_error = curve_sample_payload(document, cached, options);
+  ASSERT_NE(budget_error, nullptr);
+  EXPECT_FALSE(budget_error->error_message.empty());
+  EXPECT_TRUE(budget_error->samples.empty());
+  EXPECT_EQ(curve_sample_payload(document, cached, options), budget_error);
+
+  options.max_samples = 1024u;
+  const auto sampled = curve_sample_payload(document, cached, options);
+  ASSERT_TRUE(sampled->error_message.empty());
+  EXPECT_NE(sampled, budget_error);
+  options.tolerance = 0.02;
+  const auto different_tolerance = curve_sample_payload(document, cached, options);
+  ASSERT_TRUE(different_tolerance->error_message.empty());
+  EXPECT_NE(different_tolerance, sampled);
+  options.max_depth = 20u;
+  const auto different_depth = curve_sample_payload(document, cached, options);
+  EXPECT_NE(different_depth, different_tolerance);
+  EXPECT_EQ(curve_sample_payload(document, cached, options), different_depth);
+
+  options.tolerance = std::numeric_limits<double>::quiet_NaN();
+  const auto invalid_options = curve_sample_payload(document, cached, options);
+  EXPECT_FALSE(invalid_options->error_message.empty());
+  EXPECT_TRUE(invalid_options->samples.empty());
+  EXPECT_EQ(curve_sample_payload(document, cached, options), invalid_options);
+  ASSERT_TRUE(document.set_point(document.points().front().id,
+      {.position = {0.0f, 1.0f, 0.0f}}).ok());
+  const auto edited_error = curve_sample_payload(document, cached, options);
+  EXPECT_NE(edited_error, invalid_options);
+  EXPECT_NE(edited_error->content_identity, invalid_options->content_identity);
+  EXPECT_FALSE(edited_error->error_message.empty());
+  EXPECT_EQ(curve_sample_payload(document, cached, options), edited_error);
+  const auto recovered = curve_sample_payload(document, cached);
+  EXPECT_TRUE(recovered->error_message.empty());
+  EXPECT_FALSE(recovered->samples.empty());
+
+  const CurveAsset missing;
+  const auto missing_document = curve_sample_payload(missing);
+  EXPECT_FALSE(missing_document->error_message.empty());
+  EXPECT_TRUE(missing_document->samples.empty());
+  EXPECT_EQ(curve_sample_payload(missing), missing_document);
+}
+
+TEST(RenderOverlaySnapshotTests,
+     AuthoredCurvesRemainDepthTestedWithSelectionGizmoAndToolOverlaysHidden) {
+  SceneDocument document;
+  AssetRegistry assets;
+  const AssetId asset = assets.add_curve(make_overlay_curve_asset());
+  ASSERT_NE(asset, kInvalidAssetId);
+  const EntityId curve = document.create_entity("Visible Curve", EntityKind::Curve);
+  ASSERT_TRUE(document.set_curve(curve, CurveComponent{.curve = asset}));
+  ASSERT_TRUE(document.set_modeling_object(curve, {.object_id = 27}));
+  const EntityId light = document.create_entity("Selected Light", EntityKind::Light);
+  ASSERT_TRUE(document.set_light(light, LightComponent{.type = LightType::Point}));
+  ASSERT_TRUE(document.set_selected(light, true));
+  // Point lights use the billboard bucket even when selected; a directional
+  // light exercises the independently gated selection-marker bucket.
+  const EntityId directional =
+      document.create_entity("Selected Directional", EntityKind::Light);
+  ASSERT_TRUE(document.set_light(
+      directional, LightComponent{.type = LightType::Directional}));
+  ASSERT_TRUE(document.set_selected(directional, true));
+  ViewportOverlayFrame tool_frame;
+  tool_frame.lines.push_back({.layer = ViewportOverlayLayer::ToolHandle,
+                             .start = {0.0f, 0.0f, 0.0f},
+                             .end = {1.0f, 0.0f, 0.0f},
+                             .source = ViewportOverlaySource::Tool});
+  const auto snapshot =
+      build_render_overlay_selection_snapshot(document, assets, tool_frame);
+  ASSERT_EQ(snapshot.curves.size(), 1u);
+  const auto &record = snapshot.curves.front();
+  EXPECT_EQ(record.entity, curve);
+  EXPECT_EQ(record.curve_id, asset);
+  EXPECT_FALSE(record.selected);
+  ASSERT_NE(record.sample_payload, nullptr);
+  ASSERT_GT(record.sample_payload->samples.size(), 2u);
+  ASSERT_FALSE(snapshot.selected_lights.empty());
+  ASSERT_FALSE(snapshot.point_light_gizmos.empty());
+
+  const auto frame = ViewportSceneOverlayBuilder::build_selection_frame(
+      {}, snapshot, false, RenderOverlaySelectionMode::Object, false, false);
+  ASSERT_EQ(frame.lines.size(), record.sample_payload->samples.size() - 1u);
+  EXPECT_TRUE(frame.points.empty());
+  EXPECT_TRUE(frame.triangles.empty());
+  EXPECT_TRUE(frame.icons.empty());
+  for (const auto &line : frame.lines) {
+    EXPECT_EQ(line.layer, ViewportOverlayLayer::WireframeBase);
+    EXPECT_EQ(line.source, ViewportOverlaySource::SceneCurve);
+    EXPECT_EQ(line.element.object_id, 27);
+    EXPECT_EQ(line.color, kOverlayCurveColor);
+    EXPECT_EQ(viewport_overlay_depth_mode(line),
+              ViewportOverlayDepthMode::DepthTested);
+  }
+  EXPECT_FLOAT_EQ(frame.lines.front().start.x, 0.0f);
+  EXPECT_FLOAT_EQ(frame.lines.back().end.x, 4.0f);
+}
+
+TEST(RenderOverlaySnapshotCacheTests,
+     CurveTransformRefreshRetainsSamplesAndUpdatesWorldPlacement) {
+  SceneDocument document;
+  AssetRegistry assets;
+  const AssetId asset = assets.add_curve(make_overlay_curve_asset());
+  ASSERT_NE(asset, kInvalidAssetId);
+  const EntityId group = document.create_entity("Curve Parent", EntityKind::Empty);
+  const EntityId curve = document.create_entity("Moving Curve", EntityKind::Curve);
+  ASSERT_TRUE(document.set_curve(curve, CurveComponent{.curve = asset}));
+  ASSERT_TRUE(document.set_parent(curve, group, false));
+  ASSERT_TRUE(document.set_transform(
+      curve, TransformComponent{.position = {1.0f, 2.0f, 3.0f}}));
+  RenderOverlaySnapshotCache cache;
+  const auto &initial = cache.selection_snapshot(document, assets);
+  ASSERT_EQ(initial.curves.size(), 1u);
+  const auto samples = initial.curves.front().sample_payload;
+  const auto *records = initial.curves.data();
+  ASSERT_NE(samples, nullptr);
+  ASSERT_FALSE(samples->samples.empty());
+  EXPECT_EQ(cache.selection_snapshot(document, assets).curves.data(), records);
+  EXPECT_EQ(cache.stats().selection_build_count, 1u);
+
+  ASSERT_TRUE(document.set_transform(
+      group, TransformComponent{.position = {5.0f, -2.0f, -7.0f}}));
+  const auto &moved = cache.selection_snapshot(document, assets);
+  ASSERT_EQ(moved.curves.size(), 1u);
+  EXPECT_EQ(moved.curves.data(), records);
+  EXPECT_EQ(moved.curves.front().sample_payload, samples);
+  EXPECT_EQ(cache.stats().selection_build_count, 1u);
+  EXPECT_EQ(cache.stats().selection_transform_refresh_count, 1u);
+  EXPECT_FLOAT_EQ(moved.curves.front().world_transform.values[12], 6.0f);
+  EXPECT_FLOAT_EQ(moved.curves.front().world_transform.values[13], 0.0f);
+  EXPECT_FLOAT_EQ(moved.curves.front().world_transform.values[14], -4.0f);
+  EXPECT_FLOAT_EQ(samples->samples.front().position.x, 0.0f);
+  const auto frame = ViewportSceneOverlayBuilder::build_selection_frame(
+      {}, moved, false, RenderOverlaySelectionMode::Object, false, false);
+  ASSERT_FALSE(frame.lines.empty());
+  EXPECT_FLOAT_EQ(frame.lines.front().start.x, 6.0f);
+  EXPECT_FLOAT_EQ(frame.lines.front().start.y, 0.0f);
+  EXPECT_FLOAT_EQ(frame.lines.front().start.z, -4.0f);
+  (void)cache.selection_snapshot(document, assets);
+  EXPECT_EQ(cache.stats().selection_transform_refresh_count, 1u);
+}
+
+TEST(RenderOverlaySnapshotCacheTests,
+     CurveExtractionHonorsAncestorAndViewportLocalVisibility) {
+  SceneDocument document;
+  AssetRegistry assets;
+  const AssetId asset = assets.add_curve(make_overlay_curve_asset());
+  ASSERT_NE(asset, kInvalidAssetId);
+  const EntityId isolated = document.create_entity("Isolated Curve", EntityKind::Curve);
+  const EntityId other = document.create_entity("Other Curve", EntityKind::Curve);
+  const EntityId hidden = document.create_entity("Hidden Curve", EntityKind::Curve);
+  const EntityId group = document.create_entity("Hidden Parent", EntityKind::Empty);
+  for (const EntityId curve : {isolated, other, hidden}) {
+    ASSERT_TRUE(document.set_curve(curve, CurveComponent{.curve = asset}));
+  }
+  ASSERT_TRUE(document.set_parent(hidden, group, false));
+  ASSERT_TRUE(document.set_visible(group, false));
+  RenderOverlaySnapshotCache cache;
+  ASSERT_EQ(cache.selection_snapshot(document, assets).curves.size(), 2u);
+
+  ViewportWorkspaceService workspace;
+  const std::array<ViewportLocalVisibilityEntityId, 3> baseline{isolated, other, hidden};
+  const std::array<ViewportLocalVisibilityEntityId, 2> members{isolated, hidden};
+  ASSERT_TRUE(workspace.enter_local_visibility(baseline, members));
+  const auto local = workspace.local_visibility_snapshot();
+  const auto &filtered = cache.selection_snapshot(document, assets, {}, &local);
+  ASSERT_EQ(filtered.curves.size(), 1u);
+  EXPECT_EQ(filtered.curves.front().entity, isolated);
+  EXPECT_EQ(filtered.local_visibility_revision, local.revision());
+  const auto samples = filtered.curves.front().sample_payload;
+  const auto builds = cache.stats().selection_build_count;
+  EXPECT_EQ(cache.selection_snapshot(document, assets, {}, &local)
+                .curves.front().sample_payload,
+            samples);
+  EXPECT_EQ(cache.stats().selection_build_count, builds);
+
+  ASSERT_TRUE(document.set_visible(isolated, false));
+  EXPECT_TRUE(cache.selection_snapshot(document, assets, {}, &local).curves.empty());
+  ASSERT_TRUE(document.set_visible(isolated, true));
+  ASSERT_EQ(cache.selection_snapshot(document, assets, {}, &local).curves.size(), 1u);
+  ASSERT_TRUE(workspace.exit_local_visibility());
+  const auto restored_local = workspace.local_visibility_snapshot();
+  const auto &restored =
+      cache.selection_snapshot(document, assets, {}, &restored_local);
+  ASSERT_EQ(restored.curves.size(), 2u);
+  EXPECT_TRUE(std::ranges::none_of(restored.curves, [hidden](const auto &curve) {
+    return curve.entity == hidden;
+  }));
+  for (const auto &curve : restored.curves) {
+    EXPECT_EQ(curve.sample_payload, samples);
+  }
+}
+
+TEST(RenderOverlaySnapshotCacheTests,
+     CurvePublicationRetains512MeshAndNonCurveOverlayStorage) {
+  SceneDocument document;
+  AssetRegistry assets;
+  const AssetId mesh_asset = assets.add_mesh(make_overlay_triangle_mesh());
+  ASSERT_NE(mesh_asset, kInvalidAssetId);
+  const EntityId group = document.create_entity("Selected Group", EntityKind::Empty);
+  EntityId direct_mesh = kInvalidEntityId;
+  for (std::size_t index = 0; index < 512u; ++index) {
+    const EntityId mesh =
+        document.create_entity("Unrelated Mesh", EntityKind::Mesh);
+    ASSERT_TRUE(document.set_mesh(mesh, {.mesh = mesh_asset}));
+    if (index == 0u) {
+      ASSERT_TRUE(document.set_parent(mesh, group, false));
+    } else if (index == 1u) {
+      direct_mesh = mesh;
+    }
+  }
+  ASSERT_TRUE(document.set_selected(group, true));
+  ASSERT_TRUE(document.set_selected(direct_mesh, true));
+  const EntityId directional =
+      document.create_entity("Selected Directional", EntityKind::Light);
+  ASSERT_TRUE(document.set_light(
+      directional, LightComponent{.type = LightType::Directional}));
+  ASSERT_TRUE(document.set_selected(directional, true));
+  const EntityId point = document.create_entity("Point", EntityKind::Light);
+  ASSERT_TRUE(
+      document.set_light(point, LightComponent{.type = LightType::Point}));
+  const AssetId curve_asset = assets.add_curve(make_overlay_curve_asset());
+  const EntityId curve = document.create_entity("Edited Curve", EntityKind::Curve);
+  ASSERT_TRUE(document.set_curve(curve, {.curve = curve_asset}));
+
+  RenderOverlaySnapshotCache cache;
+  const auto persistent = cache.update_persistent(document, assets, true, 1u, {});
+  ASSERT_NE(persistent.scene_wireframe, nullptr);
+  ASSERT_EQ(persistent.scene_wireframe->meshes.size(), 512u);
+  const auto *wire_storage = persistent.scene_wireframe->meshes.data();
+  const auto &initial = cache.selection_snapshot(document, assets);
+  ASSERT_EQ(initial.curves.size(), 1u);
+  ASSERT_FALSE(initial.hierarchy_selection_wires.empty());
+  ASSERT_FALSE(initial.group_bounds.empty());
+  ASSERT_FALSE(initial.selected_mesh_bounds.empty());
+  ASSERT_FALSE(initial.selected_lights.empty());
+  ASSERT_FALSE(initial.point_light_gizmos.empty());
+  const auto *hierarchy_storage = initial.hierarchy_selection_wires.data();
+  const auto *group_storage = initial.group_bounds.data();
+  const auto *mesh_bounds_storage = initial.selected_mesh_bounds.data();
+  const auto *selected_light_storage = initial.selected_lights.data();
+  const auto *point_light_storage = initial.point_light_gizmos.data();
+  const auto initial_curve_samples = initial.curves.front().sample_payload;
+
+  CurveAsset replacement = *assets.curve(curve_asset);
+  modeling::CurveDocument edited = *replacement.document;
+  const modeling::CurveControlPoint control = edited.points().front();
+  ASSERT_TRUE(edited.set_point(
+      control.id,
+      {.position = {control.position.x, control.position.y + 1.0f,
+                    control.position.z},
+       .incoming_handle = control.incoming_handle,
+       .outgoing_handle = control.outgoing_handle}).ok());
+  replacement.document =
+      std::make_shared<const modeling::CurveDocument>(std::move(edited));
+  ASSERT_TRUE(assets.replace_curve(curve_asset, std::move(replacement)));
+  ASSERT_TRUE(document.notify_curve_payload_changed(curve));
+
+  const auto refreshed_persistent =
+      cache.update_persistent(document, assets, true, 1u, {});
+  ASSERT_FALSE(refreshed_persistent.scene_wireframe_changed);
+  ASSERT_NE(refreshed_persistent.scene_wireframe, nullptr);
+  EXPECT_EQ(refreshed_persistent.scene_wireframe->meshes.data(), wire_storage);
+  EXPECT_EQ(cache.stats().scene_wireframe_build_count, 1u);
+  EXPECT_EQ(cache.stats().scene_wireframe_curve_publication_reuse_count, 1u);
+  const auto &refreshed = cache.selection_snapshot(document, assets);
+  ASSERT_EQ(refreshed.curves.size(), 1u);
+  EXPECT_NE(refreshed.curves.front().sample_payload, initial_curve_samples);
+  EXPECT_EQ(refreshed.hierarchy_selection_wires.data(), hierarchy_storage);
+  EXPECT_EQ(refreshed.group_bounds.data(), group_storage);
+  EXPECT_EQ(refreshed.selected_mesh_bounds.data(), mesh_bounds_storage);
+  EXPECT_EQ(refreshed.selected_lights.data(), selected_light_storage);
+  EXPECT_EQ(refreshed.point_light_gizmos.data(), point_light_storage);
+  EXPECT_EQ(cache.stats().selection_build_count, 1u);
+  EXPECT_EQ(cache.stats().selection_curve_refresh_count, 1u);
+  EXPECT_EQ(cache.stats().selection_curve_entity_visit_count, 1u)
+      << "curve publication must not visit the 512 unrelated meshes";
+
+  const auto expect_rejected = [&]() {
+    ASSERT_TRUE(document.notify_curve_payload_changed(curve));
+    const auto persistent_update =
+        cache.update_persistent(document, assets, true, 1u, {});
+    EXPECT_TRUE(persistent_update.scene_wireframe_changed);
+    (void)cache.selection_snapshot(document, assets);
+  };
+  ASSERT_TRUE(document.set_transform(
+      direct_mesh, TransformComponent{.position = {3.0f, 0.0f, 0.0f}}));
+  expect_rejected();
+  ASSERT_TRUE(document.set_selected(direct_mesh, false));
+  expect_rejected();
+  ASSERT_TRUE(assets.replace_mesh(mesh_asset, make_authored_quad_mesh()));
+  expect_rejected();
+  EXPECT_EQ(cache.stats().scene_wireframe_build_count, 4u);
+  EXPECT_EQ(cache.stats().selection_build_count, 4u);
+  EXPECT_EQ(cache.stats().selection_curve_refresh_count, 1u)
+      << "non-curve revisions must reject the curve-only refresh";
+}
+
+TEST(RenderOverlaySnapshotCacheTests,
+     CurveRefreshUsesNarrowMembershipQueryAndRejectsStructuralRemoval) {
+  SceneDocument document;
+  AssetRegistry assets;
+  const AssetId curve_asset = assets.add_curve(make_overlay_curve_asset());
+  const EntityId first = document.create_entity("First Curve", EntityKind::Curve);
+  ASSERT_TRUE(document.set_curve(first, {.curve = curve_asset}));
+  // This entity already has Curve kind, so adding its component later does not
+  // advance the hierarchy revision. The narrow query must still discover it.
+  const EntityId latent = document.create_entity("Latent Curve", EntityKind::Curve);
+  RenderOverlaySnapshotCache cache;
+  ASSERT_EQ(cache.selection_snapshot(document, assets).curves.size(), 1u);
+
+  ASSERT_TRUE(document.set_curve(latent, {.curve = curve_asset}));
+  const auto &added = cache.selection_snapshot(document, assets);
+  ASSERT_EQ(added.curves.size(), 2u);
+  EXPECT_EQ(added.curves.back().entity, latent);
+  EXPECT_EQ(cache.stats().selection_build_count, 1u);
+  EXPECT_EQ(cache.stats().selection_curve_refresh_count, 1u);
+  EXPECT_EQ(cache.stats().selection_curve_entity_visit_count, 2u);
+
+  ASSERT_TRUE(document.clear_curve(latent));
+  const auto &removed = cache.selection_snapshot(document, assets);
+  ASSERT_EQ(removed.curves.size(), 1u);
+  EXPECT_EQ(removed.curves.front().entity, first);
+  EXPECT_EQ(cache.stats().selection_build_count, 2u)
+      << "membership removal changes structural revisions and must rebuild";
+  EXPECT_EQ(cache.stats().selection_curve_refresh_count, 1u);
+}
+
+TEST(CurveToolOverlayCacheTests,
+     ReusesUnchangedPreviewAndRefreshesTransformControlAndRevisionChanges) {
+  const CurveAsset asset = make_overlay_curve_asset();
+  ASSERT_NE(asset.document, nullptr);
+  CurveToolPreviewState preview;
+  preview.active = true;
+  preview.document = *asset.document;
+  preview.world_transform.values[12] = 3.0f;
+  preview.revision = 7u;
+  CurveToolOverlayCache cache;
+  const auto &initial = cache.frame(preview);
+  ASSERT_EQ(initial.points.size(), 4u);
+  ASSERT_EQ(initial.lines.size(), 2u);
+  const auto *points = initial.points.data();
+  const auto *lines = initial.lines.data();
+  EXPECT_FLOAT_EQ(initial.points.front().position.x, 3.0f);
+  EXPECT_EQ(cache.build_count(), 1u);
+
+  preview.document = modeling::CurveDocument(*asset.document);
+  EXPECT_EQ(cache.frame(preview).points.data(), points);
+  EXPECT_EQ(cache.frame(preview).lines.data(), lines);
+  EXPECT_EQ(cache.build_count(), 1u);
+  preview.world_transform.values[12] = 8.0f;
+  EXPECT_FLOAT_EQ(cache.frame(preview).points.front().position.x, 8.0f);
+  EXPECT_EQ(cache.build_count(), 2u);
+  preview.control_selection.controls = {
+      CurveControlTarget{preview.document->points().front().id,
+                         CurveControlKind::OutgoingHandle},
+      CurveControlTarget{preview.document->points().back().id,
+                         CurveControlKind::IncomingHandle},
+  };
+  preview.control_selection.active = preview.control_selection.controls.back();
+  EXPECT_EQ(cache.frame(preview).points[1].color, kOverlaySelectedVertexColor);
+  EXPECT_EQ(cache.frame(preview).points[3].color, kOverlaySelectedVertexColor);
+  EXPECT_NE(cache.frame(preview).points[0].color, kOverlaySelectedVertexColor);
+  EXPECT_NE(cache.frame(preview).points[2].color, kOverlaySelectedVertexColor);
+  EXPECT_EQ(cache.build_count(), 3u);
+  ++preview.revision;
+  (void)cache.frame(preview);
+  EXPECT_EQ(cache.build_count(), 4u);
+  (void)cache.frame(preview);
+  EXPECT_EQ(cache.build_count(), 4u);
+
+  preview.active = false;
+  const auto &inactive = cache.frame(preview);
+  EXPECT_TRUE(inactive.lines.empty());
+  EXPECT_TRUE(inactive.points.empty());
+  EXPECT_EQ(cache.build_count(), 5u);
+  (void)cache.frame(preview);
+  EXPECT_EQ(cache.build_count(), 5u);
+}
+
+TEST(CurveToolOverlayCacheTests,
+     SelectedAnchorHighlightsItsTangentAndPreservesHandleSelectionColor) {
+  const CurveAsset asset = make_overlay_curve_asset();
+  ASSERT_NE(asset.document, nullptr);
+  CurveToolPreviewState preview;
+  preview.active = true;
+  preview.document = *asset.document;
+  preview.control_selection.controls = {
+      CurveControlTarget{preview.document->points().front().id,
+                         CurveControlKind::Anchor},
+      CurveControlTarget{preview.document->points().back().id,
+                         CurveControlKind::IncomingHandle},
+  };
+  preview.control_selection.active = preview.control_selection.controls.back();
+
+  CurveToolOverlayCache cache;
+  const auto &frame = cache.frame(preview);
+  ASSERT_EQ(frame.points.size(), 4u);
+  ASSERT_EQ(frame.lines.size(), 2u);
+
+  EXPECT_EQ(frame.lines[0].color, kOverlaySelectedVertexColor);
+  EXPECT_EQ(frame.lines[1].color, kOverlayToolPlaneLineColor);
+  EXPECT_EQ(frame.points[0].color, kOverlaySelectedVertexColor);
+  EXPECT_EQ(frame.points[1].color, kOverlayToolHandleColor);
+  EXPECT_EQ(frame.points[2].color, kOverlayVertexColor);
+  EXPECT_EQ(frame.points[3].color, kOverlaySelectedVertexColor);
+}
+
+TEST(CurveToolOverlayCacheTests,
+     ShowsSnappedHoverBeforeFirstAnchorAndClearsSuppressedPresentation) {
+  CurveToolPreviewState preview;
+  preview.active = true;
+  preview.drawing = true;
+  preview.document.emplace();
+  preview.world_transform.values[12] = 10.0f;
+  preview.hover_world = QVec3{3.0f, 4.0f, -2.0f};
+  CurveToolOverlayCache cache;
+  const auto &hover = cache.frame(preview);
+  ASSERT_EQ(hover.points.size(), 1u);
+  EXPECT_TRUE(hover.lines.empty());
+  const auto &point = hover.points.front();
+  EXPECT_FLOAT_EQ(point.position.x, 3.0f);
+  EXPECT_FLOAT_EQ(point.position.y, 4.0f);
+  EXPECT_FLOAT_EQ(point.position.z, -2.0f);
+  EXPECT_EQ(point.layer, ViewportOverlayLayer::HoverVertex);
+  EXPECT_EQ(point.style_role, ViewportOverlayStyleRole::HoverVertex);
+  EXPECT_EQ(point.color, kOverlayHoverVertexColor);
+  EXPECT_FLOAT_EQ(point.size_pixels, kOverlayDrawnPlanePointSizePixels);
+  EXPECT_EQ(point.source, ViewportOverlaySource::Tool);
+  EXPECT_EQ(viewport_overlay_depth_mode(point), ViewportOverlayDepthMode::DepthTested);
+  const auto *hover_points = hover.points.data();
+  EXPECT_EQ(cache.frame(preview).points.data(), hover_points);
+  EXPECT_EQ(cache.build_count(), 1u);
+
+  // Navigation, leaving the pane and canceled placement clear the neutral hover.
+  preview.hover_world.reset();
+  EXPECT_TRUE(cache.frame(preview).points.empty());
+  EXPECT_TRUE(cache.frame(preview).lines.empty());
+  EXPECT_EQ(cache.build_count(), 2u);
+  preview.hover_world = QVec3{5.0f, 4.0f, -2.0f};
+  ASSERT_EQ(cache.frame(preview).points.size(), 1u);
+  EXPECT_FLOAT_EQ(cache.frame(preview).points.front().position.x, 5.0f);
+
+  // A stale hover must not leak into a drag, existing-curve edit or inactive tool.
+  preview.dragging = true;
+  EXPECT_TRUE(cache.frame(preview).points.empty());
+  preview.dragging = false;
+  preview.drawing = false;
+  EXPECT_TRUE(cache.frame(preview).points.empty());
+  preview.drawing = true;
+  preview.active = false;
+  EXPECT_TRUE(cache.frame(preview).points.empty());
+
+  preview.active = true;
+  ASSERT_TRUE(preview.document->append_point({.position = {1.0f, 0.0f, 0.0f}}).ok());
+  const auto &next_point = cache.frame(preview);
+  ASSERT_EQ(next_point.points.size(), 2u);
+  EXPECT_EQ(point_count_for(next_point, ViewportOverlayLayer::HoverVertex), 1u);
+  ASSERT_EQ(next_point.lines.size(), 1u);
+  EXPECT_FLOAT_EQ(next_point.lines.front().start.x, 11.0f);
+  EXPECT_FLOAT_EQ(next_point.lines.front().end.x, 5.0f);
+  EXPECT_FLOAT_EQ(next_point.points.back().position.x, 5.0f);
+}
+
+TEST(CurveToolOverlayCacheTests,
+     DraftSamplesItsPathWhileExistingCurveEditingAddsOnlyControls) {
+  const CurveAsset asset = make_overlay_curve_asset();
+  ASSERT_NE(asset.document, nullptr);
+  const auto samples = curve_sample_payload(asset);
+  ASSERT_TRUE(samples->error_message.empty());
+  ASSERT_GT(samples->samples.size(), 2u);
+  CurveToolPreviewState preview;
+  preview.active = true;
+  preview.drawing = true;
+  preview.document = *asset.document;
+  preview.hover_world = QVec3{6.0f, 1.0f, 0.0f};
+  CurveToolOverlayCache cache;
+  const auto &draft = cache.frame(preview);
+  EXPECT_EQ(line_count_for(draft, ViewportOverlayLayer::WireframeBase),
+            samples->samples.size() - 1u);
+  EXPECT_EQ(line_count_for(draft, ViewportOverlayLayer::ToolHandle), 3u);
+  EXPECT_EQ(line_count_for(draft, ViewportOverlayLayer::ToolPlaneLine), 1u);
+  ASSERT_EQ(draft.points.size(), 6u);
+  EXPECT_EQ(point_count_for(draft, ViewportOverlayLayer::HoverVertex), 1u);
+  EXPECT_FLOAT_EQ(draft.points.back().position.x, 6.0f);
+  EXPECT_FLOAT_EQ(draft.points.back().position.y, 1.0f);
+  EXPECT_EQ(line_source_count_for(draft, ViewportOverlaySource::Tool),
+            draft.lines.size());
+  EXPECT_FLOAT_EQ(draft.lines.back().end.x, 6.0f);
+  EXPECT_FLOAT_EQ(draft.lines.back().end.y, 1.0f);
+
+  preview.dragging = true;
+  const auto &dragging = cache.frame(preview);
+  EXPECT_EQ(point_count_for(dragging, ViewportOverlayLayer::HoverVertex), 0u);
+  EXPECT_EQ(line_count_for(dragging, ViewportOverlayLayer::ToolPlaneLine), 0u);
+  EXPECT_EQ(line_count_for(dragging, ViewportOverlayLayer::WireframeBase),
+            samples->samples.size() - 1u);
+  preview.dragging = false;
+
+  preview.drawing = false;
+  ++preview.revision;
+  const auto &editing = cache.frame(preview);
+  EXPECT_EQ(line_count_for(editing, ViewportOverlayLayer::WireframeBase), 0u);
+  EXPECT_EQ(line_count_for(editing, ViewportOverlayLayer::ToolPlaneLine), 0u);
+  EXPECT_EQ(line_count_for(editing, ViewportOverlayLayer::ToolHandle), 2u);
+  EXPECT_EQ(editing.points.size(), 4u);
+  RenderOverlaySelectionSnapshot snapshot;
+  snapshot.curves.push_back({.sample_payload = samples});
+  snapshot.tool_overlays = editing;
+  const auto combined =
+      ViewportSceneOverlayBuilder::build_selection_frame({}, snapshot);
+  EXPECT_EQ(line_count_for(combined, ViewportOverlayLayer::WireframeBase),
+            samples->samples.size() - 1u);
+  EXPECT_EQ(line_source_count_for(combined, ViewportOverlaySource::SceneCurve),
+            samples->samples.size() - 1u);
+  EXPECT_EQ(line_source_count_for(combined, ViewportOverlaySource::Tool), 2u);
 }
 
 TEST(RenderOverlaySnapshotTests,
@@ -5527,6 +6277,47 @@ TEST(RenderInstanceBatchPlannerTests,
 }
 
 TEST(RenderInstanceBatchPlannerTests,
+     DistinctPayloadsReserveChunkStorageOnceAndRetainSemanticLayout) {
+  for (const std::size_t count : {128u, 512u}) {
+    SCOPED_TRACE(count);
+    std::vector<RenderInstancePrimitiveOccurrence> occurrences;
+    occurrences.reserve(count);
+    for (std::size_t index = 0u; index < count; ++index) {
+      occurrences.push_back({
+          .key = {.geometry_payload = index + 1u,
+                  .material_payload = 7u,
+                  .index_count = 3u},
+          .occurrence = index + 1u,
+          .local_bounds = {.min = {-1.0f, -1.0f, -1.0f},
+                           .max = {1.0f, 1.0f, 1.0f},
+                           .present = true},
+      });
+    }
+    const RenderInstanceBatchPlan initial =
+        plan_render_instance_batches(occurrences, 64u);
+    ASSERT_EQ(initial.chunks.size(), count);
+    EXPECT_EQ(initial.work.chunk_storage_growth_count, 1u);
+    EXPECT_EQ(initial.work.relocated_chunk_count, 0u)
+        << "distinct meshes must not repeatedly relocate all earlier chunks";
+    EXPECT_EQ(initial.work.morton_ordered_occurrence_count, count);
+    EXPECT_FALSE(initial.work.retained_layout);
+
+    occurrences.front().world_transform.values[12] = 11.0f;
+    const RenderInstanceBatchPlan moved =
+        plan_render_instance_batches(occurrences, 64u, &initial);
+    ASSERT_EQ(moved.chunks.size(), count);
+    EXPECT_EQ(moved.work.chunk_storage_growth_count, 1u);
+    EXPECT_EQ(moved.work.relocated_chunk_count, 0u);
+    EXPECT_EQ(moved.work.morton_ordered_occurrence_count, 0u);
+    EXPECT_TRUE(moved.work.retained_layout);
+    EXPECT_EQ(classify_instance_batch_update(initial, moved),
+              RenderInstanceBatchUpdateKind::TransformsOnly);
+    EXPECT_FLOAT_EQ(moved.chunks.front().world_bounds.min.x, 10.0f);
+    EXPECT_FLOAT_EQ(moved.chunks.front().world_bounds.max.x, 12.0f);
+  }
+}
+
+TEST(RenderInstanceBatchPlannerTests,
      VisibilityDeltaRetainsLayoutAndFiniteSourceTransforms) {
   const RenderInstancePrimitiveKey key{
       .geometry_payload = 71u,
@@ -6066,10 +6857,25 @@ TEST(RenderSceneWireframeBatchPlannerTests,
       record.world_transform.values[13] += 10.0f;
     }
     const SceneWireframeOverlayBatchPlan moved_plan =
-        plan_scene_wireframe_overlay_batches(moved, 64u);
+        plan_scene_wireframe_overlay_batches(moved, 64u, &plan.batches);
+    EXPECT_TRUE(moved_plan.batches.work.retained_layout);
+    EXPECT_EQ(moved_plan.batches.work.morton_ordered_occurrence_count, 0u);
     EXPECT_EQ(classify_instance_batch_update(plan.batches,
                                              moved_plan.batches),
               RenderInstanceBatchUpdateKind::TransformsOnly);
+    if (participant_count > 64u) {
+      moved.meshes.front().world_transform.values[12] = 10'000.0f;
+      const SceneWireframeOverlayBatchPlan crossed =
+          plan_scene_wireframe_overlay_batches(moved, 64u,
+                                                &moved_plan.batches);
+      EXPECT_TRUE(crossed.batches.work.retained_layout);
+      EXPECT_EQ(classify_instance_batch_update(moved_plan.batches,
+                                               crossed.batches),
+                RenderInstanceBatchUpdateKind::TransformsOnly)
+          << "moving past another Morton cell must retain semantic wire slots";
+      EXPECT_EQ(crossed.batches.chunks.front().occurrences,
+                moved_plan.batches.chunks.front().occurrences);
+    }
   }
 
   RenderOverlaySceneWireframeSnapshot styled{.layer_mask = 1u};
@@ -6096,6 +6902,127 @@ TEST(RenderSceneWireframeBatchPlannerTests,
   EXPECT_EQ(split.unique_geometry_style_count, 3u);
   EXPECT_EQ(split.batches.chunks.size(), 5u)
       << "one selected chunk plus two chunks for each layer color";
+}
+
+TEST(RenderSceneWireframeBatchPlannerTests,
+     CurveChangesRetainPinnedMeshInputsButMeshPresentationChangesInvalidate) {
+  SceneDocument document;
+  AssetRegistry assets;
+  const AssetId mesh_asset = assets.add_mesh(make_overlay_triangle_mesh());
+  const EntityId mesh = document.create_entity("Background Mesh", EntityKind::Mesh);
+  ASSERT_TRUE(document.set_mesh(mesh, {.mesh = mesh_asset}));
+  const AssetId curve_asset = assets.add_curve(make_overlay_curve_asset());
+  const EntityId curve = document.create_entity("Edited Curve", EntityKind::Curve);
+  ASSERT_TRUE(document.set_curve(curve, {.curve = curve_asset}));
+  const auto initial =
+      build_render_overlay_scene_wireframe_snapshot(document, assets, 1u);
+  ASSERT_EQ(initial.meshes.size(), 1u);
+  const auto pinned_geometry = initial.meshes.front().geometry_payload;
+  const auto pinned_wires = initial.meshes.front().wire_geometry_payload;
+  ASSERT_NE(pinned_geometry, nullptr);
+  ASSERT_NE(pinned_wires, nullptr);
+
+  ASSERT_TRUE(document.set_transform(
+      curve, {.position = {10.0f, 0.0f, 0.0f}}));
+  ASSERT_TRUE(document.set_selected(curve, true));
+  const auto moved_curve =
+      build_render_overlay_scene_wireframe_snapshot(document, assets, 1u);
+  EXPECT_NE(moved_curve.scene_revision, initial.scene_revision);
+  EXPECT_TRUE(scene_wireframe_overlay_mesh_inputs_match(initial.meshes,
+                                                        moved_curve.meshes));
+
+  CurveAsset edited_asset = *assets.curve(curve_asset);
+  modeling::CurveDocument edited = *edited_asset.document;
+  ASSERT_TRUE(edited.set_point(edited.points().front().id,
+      {.position = {0.0f, 2.0f, 0.0f},
+       .outgoing_handle = {0.0f, 3.0f, 0.0f}}).ok());
+  edited_asset.document =
+      std::make_shared<const modeling::CurveDocument>(std::move(edited));
+  ASSERT_TRUE(assets.replace_curve(curve_asset, std::move(edited_asset)));
+  ASSERT_TRUE(document.notify_curve_payload_changed(curve));
+  const auto edited_curve =
+      build_render_overlay_scene_wireframe_snapshot(document, assets, 1u);
+  EXPECT_NE(edited_curve.asset_revision, initial.asset_revision);
+  EXPECT_TRUE(scene_wireframe_overlay_mesh_inputs_match(initial.meshes,
+                                                        edited_curve.meshes));
+  EXPECT_EQ(edited_curve.meshes.front().geometry_payload, pinned_geometry);
+  EXPECT_EQ(edited_curve.meshes.front().wire_geometry_payload, pinned_wires);
+
+  ASSERT_TRUE(document.set_selected(mesh, true));
+  const auto selected =
+      build_render_overlay_scene_wireframe_snapshot(document, assets, 1u);
+  EXPECT_FALSE(scene_wireframe_overlay_mesh_inputs_match(initial.meshes,
+                                                         selected.meshes));
+  ASSERT_TRUE(document.set_selected(mesh, false));
+  ASSERT_TRUE(document.set_transform(mesh, {.position = {3.0f, 0.0f, 0.0f}}));
+  const auto moved_mesh =
+      build_render_overlay_scene_wireframe_snapshot(document, assets, 1u);
+  EXPECT_FALSE(scene_wireframe_overlay_mesh_inputs_match(initial.meshes,
+                                                         moved_mesh.meshes));
+
+  const SceneLayerId layer = document.create_layer("Tint", {0.2f, 0.5f, 0.8f});
+  ASSERT_NE(layer, kInvalidSceneLayerId);
+  ASSERT_TRUE(document.set_entity_layer(mesh, layer));
+  const auto tinted =
+      build_render_overlay_scene_wireframe_snapshot(document, assets, 1u);
+  EXPECT_FALSE(scene_wireframe_overlay_mesh_inputs_match(moved_mesh.meshes,
+                                                         tinted.meshes));
+  ASSERT_TRUE(document.set_layer_visible(layer, false));
+  const auto hidden =
+      build_render_overlay_scene_wireframe_snapshot(document, assets, 1u);
+  EXPECT_FALSE(scene_wireframe_overlay_mesh_inputs_match(tinted.meshes,
+                                                         hidden.meshes));
+  ASSERT_TRUE(document.set_layer_visible(layer, true));
+  ASSERT_TRUE(assets.replace_mesh(mesh_asset, make_authored_quad_mesh()));
+  const auto replaced =
+      build_render_overlay_scene_wireframe_snapshot(document, assets, 1u);
+  EXPECT_FALSE(scene_wireframe_overlay_mesh_inputs_match(tinted.meshes,
+                                                         replaced.meshes));
+  EXPECT_EQ(initial.meshes.front().vertices.data(), pinned_geometry->vertices.data());
+  EXPECT_EQ(initial.meshes.front().wire_segments.data(), pinned_wires->segments.data());
+  EXPECT_EQ(initial.meshes.front().vertices.size(), 3u)
+      << "cached inputs keep the former payload alive after replacement";
+}
+
+TEST(RenderSceneWireframeBatchPlannerTests,
+     ExactMeshInputGateRejectsPreviewMembershipIdentityAndUnpinnedSpans) {
+  SceneDocument document;
+  AssetRegistry assets;
+  const AssetId asset = assets.add_mesh(make_overlay_triangle_mesh());
+  const EntityId entity = document.create_entity("Wire Input", EntityKind::Mesh);
+  ASSERT_TRUE(document.set_mesh(entity, {.mesh = asset}));
+  const auto snapshot =
+      build_render_overlay_scene_wireframe_snapshot(document, assets, 1u);
+  ASSERT_EQ(snapshot.meshes.size(), 1u);
+  EXPECT_TRUE(scene_wireframe_overlay_mesh_inputs_match(snapshot.meshes,
+                                                        snapshot.meshes));
+  EXPECT_FALSE(scene_wireframe_overlay_mesh_inputs_match(snapshot.meshes, {}));
+
+  auto edited = snapshot.meshes;
+  ++edited.front().participant_token;
+  EXPECT_FALSE(scene_wireframe_overlay_mesh_inputs_match(snapshot.meshes, edited));
+  edited = snapshot.meshes;
+  edited.front().occurrence = entity + 1u;
+  EXPECT_FALSE(scene_wireframe_overlay_mesh_inputs_match(snapshot.meshes, edited));
+  edited = snapshot.meshes;
+  edited.front().member = entity + 1u;
+  EXPECT_FALSE(scene_wireframe_overlay_mesh_inputs_match(snapshot.meshes, edited));
+  edited = snapshot.meshes;
+  ++edited.front().mesh_revision;
+  EXPECT_FALSE(scene_wireframe_overlay_mesh_inputs_match(snapshot.meshes, edited));
+
+  edited = snapshot.meshes;
+  edited.front().geometry_payload.reset();
+  EXPECT_FALSE(scene_wireframe_overlay_mesh_inputs_match(edited, edited));
+  edited = snapshot.meshes;
+  edited.front().wire_geometry_payload.reset();
+  EXPECT_FALSE(scene_wireframe_overlay_mesh_inputs_match(edited, edited));
+  edited = snapshot.meshes;
+  std::vector<MeshVertex> foreign_vertices(edited.front().vertices.begin(),
+                                         edited.front().vertices.end());
+  edited.front().vertices = foreign_vertices;
+  EXPECT_FALSE(scene_wireframe_overlay_mesh_inputs_match(edited, edited))
+      << "an unrelated pin does not make mutable foreign spans immutable";
 }
 
 TEST(RenderSceneWireframeBatchPlannerTests,

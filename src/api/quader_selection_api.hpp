@@ -106,6 +106,9 @@ public:
 
     QuaderApiResult<QuaderSelectionSummary>
     pick_select(const QuaderPickSelectRequest &request);
+    /// Selects a native viewport hit using the normal Mesh/Group pick policy.
+    QuaderApiResult<QuaderSelectionSummary>
+    pick_scene_entity(EntityId entity, const QuaderPickSelectRequest &request);
     /// Applies a depth pick relative to selection before its first mouse click.
     QuaderApiResult<QuaderSelectionSummary>
     pick_select(const QuaderPickSelectRequest &request,

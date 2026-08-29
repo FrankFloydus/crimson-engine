@@ -68,6 +68,7 @@ enum class QuaderEntityKind {
     Light = 2,
     Generic = 3,
     Instance = 4,
+    Curve = 5,
 };
 
 /**
@@ -355,6 +356,7 @@ enum class QuaderViewportTool {
     Poly,
     Mirror,
     Pivot,
+    Curve,
 };
 
 /**
@@ -472,6 +474,26 @@ struct QuaderInteractionSettings {
 struct QuaderRay {
     QVec3 origin;
     QVec3 direction;
+};
+
+/**
+ * Identifies the visible mesh vertex selected by a public snap query.
+ */
+struct QuaderMeshVertexSnapTarget final {
+  QuaderModelingObjectId modeling_object_id = kInvalidQuaderModelingObjectId;
+  QuaderElementId vertex_id = kInvalidQuaderElementId;
+  QVec3 world_position = {};
+  double ray_distance = 0.0;
+  double pick_distance = 0.0;
+};
+
+/**
+ * Returns both the mesh-vertex winner and nearest mesh surface depth from one
+ * side-effect-free viewport query.
+ */
+struct QuaderMeshSnapQueryResult final {
+  std::optional<QuaderMeshVertexSnapTarget> vertex_target;
+  std::optional<double> nearest_surface_ray_distance;
 };
 
 /**
@@ -810,6 +832,8 @@ enum class QuaderOverlaySource {
     Tool,
     Diagnostic,
     External,
+    /// Preserves existing public source tags and matches the renderer curve tag.
+    SceneCurve = 12,
 };
 
 /**

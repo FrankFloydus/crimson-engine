@@ -1110,10 +1110,10 @@ TEST(UiLayoutGuardrailTests,
   expect_contains(ui_source,
                   "tool_settings_panel_->numeric_interaction_active()");
   expect_contains(ui_source,
-                  "if (!transform_drag_active && "
+                  "if (!edit_drag_active && "
                   "!numeric_interaction_active) {");
   expect_contains(ui_source,
-                  "if (!transform_drag_active && !numeric_interaction_active &&");
+                  "if (!edit_drag_active && !numeric_interaction_active &&");
   EXPECT_EQ(count_occurrences(
                 ui_source,
                 "tool_settings_panel_->set_localization(localization_)"),
@@ -1783,7 +1783,11 @@ TEST(UiLayoutGuardrailTests,
   expect_contains(menu, "QStringLiteral(\"toolbar_tools\")");
   expect_missing(toolbar, "setStyleSheet(");
   expect_missing(toolbar, "setPalette(");
-  expect_missing(toolbar, "QPainter");
+  // Only the icon is drawn locally; native button painting remains unchanged.
+  expect_missing(toolbar, "paintEvent(");
+  expect_contains(toolbar, "QIcon curve_tool_icon(const QPalette &palette)");
+  expect_contains(toolbar, "QPainter painter(&pixmap)");
+  expect_contains(toolbar, "palette.color(QPalette::ButtonText)");
 }
 
 TEST(UiLayoutGuardrailTests,
@@ -2062,6 +2066,95 @@ TEST(UiLayoutGuardrailTests,
   expect_contains(refresh, "modeling_->content_revision()");
   expect_contains(refresh, "modeling_->selection_revision()");
   expect_missing(refresh, "commands().available()");
+}
+
+TEST(UiLayoutGuardrailTests,
+     CurvePresentationKeepsSamplingBehindOwnerRevisionGates) {
+  const std::string overlay =
+      read_source_file("src/render/overlay/curve_tool_overlay_cache.cpp");
+  const std::string picking =
+      read_source_file("src/editor/modeling/picking/curve_picking_cache.cpp");
+  const std::string placement = read_source_file(
+      "src/editor/placement/viewport_point_placement_service.cpp");
+  const std::string viewport = read_source_file("src/ui/qt_viewport_panel.cpp");
+  const std::string settings = read_source_file("src/api/quader_tools_api.cpp");
+  const std::string ui = read_source_file("src/ui/ui_system.cpp");
+
+  const std::size_t overlay_gate = overlay.find("if (valid_ && same_preview(");
+  const std::size_t sample = overlay.find("curve_sample_payload(");
+  ASSERT_NE(overlay_gate, std::string::npos);
+  ASSERT_NE(sample, std::string::npos);
+  EXPECT_LT(overlay_gate, sample);
+
+  const std::size_t pick_gate = picking.find("if (valid_ && document_");
+  const std::size_t hierarchy = picking.find("hierarchy_projection_snapshot()");
+  const std::size_t reserve = picking.find("candidates_.reserve(");
+  ASSERT_NE(pick_gate, std::string::npos);
+  ASSERT_NE(hierarchy, std::string::npos);
+  ASSERT_NE(reserve, std::string::npos);
+  EXPECT_LT(pick_gate, hierarchy);
+  EXPECT_LT(pick_gate, reserve);
+
+  const std::size_t projection_gate =
+      placement.find("if (landmark_candidates_enabled) {");
+  const std::size_t geometry_gate =
+      placement.find("if (geometry_candidates_enabled) {");
+  const std::size_t cache_refresh =
+      placement.find("refresh_cache(document, assets);", geometry_gate);
+  ASSERT_NE(geometry_gate, std::string::npos);
+  ASSERT_NE(cache_refresh, std::string::npos);
+  EXPECT_LT(geometry_gate, cache_refresh);
+  ASSERT_NE(projection_gate, std::string::npos);
+  const std::size_t landmark_gate = placement.find(
+      "if (landmark_candidates_enabled) {", projection_gate + 1u);
+  const std::size_t landmark_loop =
+      placement.find("for (std::size_t landmark_index", landmark_gate);
+  ASSERT_NE(landmark_gate, std::string::npos);
+  ASSERT_NE(landmark_loop, std::string::npos);
+  EXPECT_LT(landmark_gate, landmark_loop);
+
+  expect_contains(viewport, "curve_tool_overlay_cache_.frame(curve_preview)");
+  const std::size_t selection_fallback_gate = viewport.find(
+      "(interaction_frame.active_tool_allows_selection_fallback ||");
+  const std::size_t curve_drag_gate =
+      viewport.find("(curve == nullptr || !curve->dragging())",
+                    selection_fallback_gate);
+  const std::size_t curve_candidates =
+      viewport.find("curve_pick_cache_.candidates(", selection_fallback_gate);
+  ASSERT_NE(selection_fallback_gate, std::string::npos);
+  ASSERT_NE(curve_drag_gate, std::string::npos);
+  ASSERT_NE(curve_candidates, std::string::npos);
+  EXPECT_LT(selection_fallback_gate, curve_candidates);
+  EXPECT_LT(curve_drag_gate, curve_candidates)
+      << "Active Curve drags use their frozen snap candidates and must not "
+         "rebuild the scene Curve pick cache per pointer sample.";
+  expect_contains(viewport, "!editor.modeling().can_exit_instance_edit())");
+  expect_contains(viewport,
+                  "viewport_vertex_snap_radius(viewport_settings) > 0.0f");
+  expect_contains(viewport,
+                  ".scene_snap_enabled = resolved_scene_snap_enabled");
+  expect_missing(viewport, "curve_sample_payload(");
+  expect_missing(viewport, "commands().available()");
+  expect_contains(settings, ".revision = curve.tool_settings_revision()");
+
+  const std::size_t refresh = ui.find("void UISystem::refresh(");
+  const std::size_t drag_query = ui.find("curve_->dragging()", refresh);
+  const std::size_t toolbar_gate =
+      ui.find("if (!edit_drag_active && !numeric_interaction_active)", refresh);
+  const std::size_t selection_summary =
+      ui.find("editor_->selection().summary()", refresh);
+  const std::size_t inspector_gate = ui.find(
+      "if (!edit_drag_active && !numeric_interaction_active &&", refresh);
+  const std::size_t inspector_refresh =
+      ui.find("inspector_panel_->refresh(context)", refresh);
+  ASSERT_NE(drag_query, std::string::npos);
+  ASSERT_NE(toolbar_gate, std::string::npos);
+  ASSERT_NE(selection_summary, std::string::npos);
+  ASSERT_NE(inspector_gate, std::string::npos);
+  ASSERT_NE(inspector_refresh, std::string::npos);
+  EXPECT_LT(drag_query, toolbar_gate);
+  EXPECT_LT(toolbar_gate, selection_summary);
+  EXPECT_LT(inspector_gate, inspector_refresh);
 }
 
 TEST(UiLayoutGuardrailTests,
@@ -2571,6 +2664,54 @@ TEST(UiLayoutGuardrailTests,
   ASSERT_NE(identity_gate, std::string::npos);
   EXPECT_LT(cancel, identity_gate)
       << "same-pointer runtime hook rebinds must cancel delayed intent";
+}
+
+TEST(UiLayoutGuardrailTests,
+     CurveControlPreviewResetAlwaysCarriesTheBoundCurveOwnerInQt) {
+  const std::string panel_header =
+      read_source_file("src/ui/qt_viewport_panel.hpp");
+  const std::string panel =
+      read_source_file("src/ui/qt_viewport_panel.cpp");
+  expect_contains(panel_header, "CurveToolService *interaction_curve_");
+  expect_contains(panel_header, "Non-owning runtime pair");
+  expect_missing(panel,
+                 "interaction_controller_.reset(interaction_editor_);");
+
+  const std::string shutdown = source_slice(
+      panel, "void QtViewportPanel::shutdown()",
+      "void QtViewportPanel::reset_interactions(");
+  expect_contains(
+      shutdown,
+      "interaction_controller_.reset(interaction_editor_, interaction_curve_)");
+  expect_contains(shutdown, "interaction_curve_ = nullptr");
+  const std::size_t owner_reset = shutdown.find(
+      "interaction_controller_.reset(interaction_editor_, interaction_curve_)");
+  const std::size_t render_gate =
+      shutdown.find("if (render_system_ == nullptr)");
+  ASSERT_NE(owner_reset, std::string::npos);
+  ASSERT_NE(render_gate, std::string::npos);
+  EXPECT_LT(owner_reset, render_gate)
+      << "Renderer initialization failure must not strand an authored Curve "
+         "control preview.";
+
+  const std::string explicit_reset = source_slice(
+      panel, "void QtViewportPanel::reset_interactions(",
+      "void QtViewportPanel::attach_workspace(");
+  expect_contains(explicit_reset,
+                  "interaction_controller_.reset(editor, curve)");
+  expect_contains(explicit_reset, "interaction_curve_ = nullptr");
+
+  const std::string attach = source_slice(
+      panel, "void QtViewportPanel::attach_workspace(",
+      "void QtViewportPanel::set_viewport_settings(");
+  expect_contains(
+      attach,
+      "interaction_controller_.reset(interaction_editor_, interaction_curve_)");
+
+  const std::string input = source_slice(
+      panel, "void QtViewportPanel::process_viewport_input(",
+      "bool QtViewportPanel::sync_active_tool_from_editor(");
+  expect_contains(input, "interaction_curve_ = curve");
 }
 
 TEST(UiLayoutGuardrailTests,
@@ -3240,6 +3381,28 @@ TEST(UiLayoutGuardrailTests,
   expect_contains(cache, "scene_available ? document_ : nullptr");
   expect_contains(cache, "scene_available ? modeling_ : nullptr");
   expect_missing(cache, "active_scene_id == 0u) {");
+}
+
+TEST(UiLayoutGuardrailTests,
+     CurveRefreshKeepsTheNativePointerWhileTheDraftIsStillDragging) {
+  const std::string panel = read_source_file("src/ui/qt_viewport_panel.cpp");
+  const std::string process = source_slice(
+      panel, "void QtViewportPanel::process_viewport_input(",
+      "sync_active_tool_from_editor(editor, modeling, curve);");
+  const std::size_t curve_refresh = process.find("if (curve != nullptr) {");
+  ASSERT_NE(curve_refresh, std::string::npos);
+  const std::string refresh = process.substr(curve_refresh);
+  expect_contains(refresh, "const CommandResult refresh = curve->refresh();");
+  expect_contains(refresh, "if (refresh.changed) {");
+  const std::size_t not_dragging = refresh.find("if (!curve->dragging()) {");
+  const std::size_t clear_drag =
+      refresh.find("interaction_controller_.clear_native_tool_drag_state();");
+  ASSERT_NE(not_dragging, std::string::npos);
+  ASSERT_NE(clear_drag, std::string::npos);
+  EXPECT_LT(not_dragging, clear_drag);
+  EXPECT_LT(clear_drag, refresh.find('}', not_dragging));
+  EXPECT_EQ(count_occurrences(
+      refresh, "interaction_controller_.clear_native_tool_drag_state();"), 1u);
 }
 
 TEST(UiLayoutGuardrailTests,

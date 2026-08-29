@@ -36,6 +36,9 @@ ModelingObjectSceneIdentity capture_scene_identity(const SceneDocument &scene,
   if (const MeshComponent *mesh = scene.mesh(entity)) {
     identity.mesh = *mesh;
   }
+  if (const CurveComponent *curve = scene.curve(entity)) {
+    identity.curve = *curve;
+  }
   if (const MaterialComponent *material = scene.material(entity)) {
     identity.material = *material;
   }

@@ -146,6 +146,31 @@ bool SceneRenderSyncService::sync(const RenderSceneSnapshot &snapshot) {
           snapshot.project_material_revision;
       return false;
     }
+    if (has_synced_ &&
+        synced_scene_binding_ == snapshot.scene_binding &&
+        synced_instance_edit_scope_ == snapshot.instance_edit_scope &&
+        snapshot.reused_previous_records &&
+        !snapshot.dirty.selection_changed &&
+        !snapshot.dirty.visibility_changed &&
+        !snapshot.dirty.local_visibility_changed &&
+        !snapshot.dirty.transforms_changed &&
+        !snapshot.dirty.texture_mappings_changed &&
+        !snapshot.dirty.mesh_bindings_changed &&
+        !snapshot.dirty.render_components_changed &&
+        !snapshot.dirty.assets_changed &&
+        !snapshot.dirty.project_materials_changed &&
+        instance_cache_->last_sync_succeeded()) {
+      // Extraction proved that only non-main-scene owner stamps advanced.
+      // A curve-only publication reaches its independent overlay cache, while
+      // the exact retained mesh/light records require no Filament work.
+      synced_revision_ = snapshot.scene_revision;
+      synced_local_visibility_revision_ =
+          snapshot.local_visibility_revision;
+      synced_asset_revision_ = snapshot.asset_revision;
+      synced_project_material_revision_ =
+          snapshot.project_material_revision;
+      return false;
+    }
 
     {
         QDR_PROFILE_SCOPE("Scene render rebuild");

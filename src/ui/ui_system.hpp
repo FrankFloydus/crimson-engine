@@ -45,6 +45,7 @@ namespace quader {
 
 class AssetRegistry;
 class ConsolePanel;
+class CurveToolService;
 class EditorSelectionService;
 class InspectorPanel;
 class LayerPanel;
@@ -111,7 +112,8 @@ public:
                              LinearArrayToolService &linear_array,
                              RadialArrayToolService &radial_array,
                              ViewportPointPlacementService &point_placement,
-                             AssetId default_material);
+                             AssetId default_material,
+                             CurveToolService *curve = nullptr);
   void set_default_material(AssetId default_material) {
     default_material_ = default_material;
   }
@@ -264,6 +266,7 @@ private:
   PivotToolService *pivot_ = nullptr;
   LinearArrayToolService *linear_array_ = nullptr;
   RadialArrayToolService *radial_array_ = nullptr;
+  CurveToolService *curve_ = nullptr;
   ViewportPointPlacementService *point_placement_ = nullptr;
   AssetId default_material_ = kInvalidAssetId;
   FrameTiming frame_timing_{};

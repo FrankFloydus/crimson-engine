@@ -131,6 +131,9 @@ public:
   capture_box_selection_baseline() const;
   [[nodiscard]] ModelingSelectionSummary
   pick_select(const ModelingPickSelectRequest &request);
+  /** Applies the ordinary pick policy to an already resolved native entity. */
+  [[nodiscard]] DocumentCommandResult
+  pick_scene_entity(EntityId entity, const ModelingPickSelectRequest &request);
   [[nodiscard]] ModelingSelectionSummary
   pick_select(const ModelingPickSelectRequest &request,
               const EditorSelectionBoxBaseline &baseline);

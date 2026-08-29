@@ -68,6 +68,19 @@ build_render_material_binding_snapshot(const AssetRegistry &assets,
 build_render_scene_snapshot(const SceneDocument &document,
                             const AssetRegistry &assets,
                             RenderSceneSnapshotBuildOptions options = {});
+/**
+ * Advances an existing main-scene snapshot across a curve-only publication.
+ * Authored curves are rendered by the overlay snapshot, so no mesh or light
+ * record changes when the exact curve/render revision pair is the only
+ * render-component change.
+ */
+[[nodiscard]] bool try_refresh_render_scene_snapshot_curve_publication(
+    RenderSceneSnapshot &snapshot, const SceneDocument &document,
+    const AssetRegistry &assets, std::uint64_t frame_index = 0,
+    RenderSceneBindingKey scene_binding = {},
+    std::uint64_t project_material_revision = 0u,
+    RenderInstanceEditScope instance_edit_scope = {},
+    const ViewportLocalVisibilitySnapshot *local_visibility = nullptr);
 [[nodiscard]] bool try_refresh_render_scene_snapshot_selection(
     RenderSceneSnapshot &snapshot, const SceneDocument &document,
     const AssetRegistry &assets, std::uint64_t frame_index = 0,

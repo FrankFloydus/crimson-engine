@@ -28,6 +28,7 @@ enum class ViewportToolId {
     Pivot,
     LinearArray,
     RadialArray,
+    Curve,
 };
 
 /**
@@ -192,6 +193,7 @@ enum class ViewportInputActionKind {
     CycleSelectionDepth,
     AddSelectionDepth,
     RemoveSelectionDepth,
+    ToggleCurvePointSmoothness,
 };
 
 /**

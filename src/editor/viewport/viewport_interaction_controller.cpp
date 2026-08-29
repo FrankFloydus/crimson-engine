@@ -75,7 +75,8 @@ void log_material_interaction_failure(std::string_view label,
 
 ViewportBeforeToolInteractionResult
 ViewportInteractionController::handle_before_active_tool(
-    QuaderEditorApi &editor, const ViewportInteractionFrame &frame) {
+    QuaderEditorApi &editor, const ViewportInteractionFrame &frame,
+    CurveToolService *curve) {
   QDR_PROFILE_FUNCTION();
   if (const auto transfer = reserve_face_texture_transfer(editor, frame)) {
     return *transfer;
@@ -87,11 +88,11 @@ ViewportInteractionController::handle_before_active_tool(
     prepared.selection_state = *resolved_selection;
   }
   if (frame.input_result.cancel_requested) {
-    (void)transform_gizmo_.cancel_active_drag(editor);
+    (void)transform_gizmo_.cancel_active_drag(editor, curve);
     return {.gizmo_consumed = true};
   }
   ViewportBeforeToolInteractionResult result =
-      transform_gizmo_.handle_frame(editor, prepared);
+      transform_gizmo_.handle_frame(editor, prepared, curve);
   result.selection_after_pending_pick = resolved_selection;
   return result;
 }
@@ -159,17 +160,18 @@ void ViewportInteractionController::handle_after_active_tool(
     QuaderEditorApi &editor, const ViewportInteractionFrame &frame,
     const ViewportToolResult &tool_result,
     const ViewportBeforeToolInteractionResult &before_tool,
-    ViewportToolHoverPort *tool_hover) {
+    ViewportToolHoverPort *tool_hover, CurveToolService *curve) {
   QDR_PROFILE_FUNCTION();
   ViewportInteractionFrame prepared = frame;
   if (before_tool.selection_after_pending_pick.has_value()) {
     prepared.selection_state = *before_tool.selection_after_pending_pick;
   }
   if (frame.input_result.cancel_requested) {
-    (void)transform_gizmo_.cancel_active_drag(editor);
+    (void)transform_gizmo_.cancel_active_drag(editor, curve);
   }
   handle_material_interactions(editor, prepared, tool_result, before_tool);
-  selection_.handle_frame(editor, prepared, tool_result, before_tool, tool_hover);
+  selection_.handle_frame(editor, prepared, tool_result, before_tool, tool_hover,
+                          curve);
 }
 
 void ViewportInteractionController::handle_material_interactions(
@@ -375,16 +377,27 @@ QuaderSelectionSummary ViewportInteractionController::pick_context_menu_target(
 }
 
 bool ViewportInteractionController::cancel_active_drag(
-    QuaderEditorApi &editor) {
-  return transform_gizmo_.cancel_active_drag(editor);
+    QuaderEditorApi &editor, CurveToolService *curve) {
+  return transform_gizmo_.cancel_active_drag(editor, curve);
 }
 
 bool ViewportInteractionController::dragging() const {
   return transform_gizmo_.dragging();
 }
 
-void ViewportInteractionController::reset(QuaderEditorApi* editor) {
+bool ViewportInteractionController::transform_gizmo_pointer_active() const {
+  return transform_gizmo_.pointer_interaction_active();
+}
+
+void ViewportInteractionController::reset(QuaderEditorApi *editor) {
   transform_gizmo_.reset(editor);
+  selection_.reset();
+  cancel_pending_material_interaction();
+}
+
+void ViewportInteractionController::reset(QuaderEditorApi *editor,
+                                          CurveToolService *curve) {
+  transform_gizmo_.reset(editor, curve);
   selection_.reset();
   cancel_pending_material_interaction();
 }
@@ -412,6 +425,11 @@ ViewportInteractionController::pick_material_face_target(
 const quader_editor_core::TransformGizmoFrame *
 ViewportInteractionController::transform_gizmo_frame() const {
   return transform_gizmo_.frame();
+}
+
+const std::vector<quader_editor_core::SelectionOverlayPoint> &
+ViewportInteractionController::transform_gizmo_snap_overlay_points() const {
+  return transform_gizmo_.snap_overlay_points();
 }
 
 const TransformGizmoSelectionCacheStats &
@@ -496,10 +514,11 @@ ViewportInteractionController::handle_native_tools(
     RadialArrayToolService *radial_array,
     ViewportPointPlacementService *point_placement,
     ViewportCameraController &camera,
-    const ViewportNativeToolInteractionFrame &frame) {
+    const ViewportNativeToolInteractionFrame &frame,
+    CurveToolService *curve) {
   return native_tools_.handle_frame(editor, document, assets, pivot,
                                     linear_array, radial_array,
-                                    point_placement, camera, frame);
+                                    point_placement, camera, frame, curve);
 }
 
 void ViewportInteractionController::clear_native_tool_drag_state() {

@@ -905,7 +905,8 @@ private:
           !scene_.is_effectively_visible(entity) ||
           scene_.instance_occurrence(entity) != nullptr ||
           scene_.is_instance_definition_entity(entity) ||
-          scene_.is_instance_definition_member(entity)) {
+          scene_.is_instance_definition_member(entity) ||
+          scene_.curve(entity) != nullptr) {
         return false;
       }
       switch (scene_.kind(entity)) {
@@ -924,6 +925,7 @@ private:
       case EntityKind::Light:
       case EntityKind::Generic:
       case EntityKind::Instance:
+      case EntityKind::Curve:
         return false;
       }
     }

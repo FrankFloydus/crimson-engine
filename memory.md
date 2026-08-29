@@ -7588,3 +7588,199 @@ Vulkan startup smoke succeeds through `tools/boot_smoke.ps1`. The user stopped C
 Escape before the interactive dock/browser check completed; no manual placement or Browse verdict
 is claimed. Both canonical Debug/Profile and Release app builds succeed. Verification artifacts
 use `build/vs2026/Testing/active-material-dock-*`.
+
+## 2026-08-29 - Minimal Authored Bezier Curves
+
+- `modeling::CurveDocument` owns one open/closed cubic Bezier path, anchor positions,
+  relative handles, typed point/segment IDs, analytic bounds, evaluation, adaptive sampling,
+  and the portable QCRV codec. Immutable authored publications are separate from display samples.
+  Sampling checks the actual float output against its error budget; splitting rejects locally
+  unrepresentable controls instead of silently deforming large-coordinate curves.
+- Curves are variants in the existing portable `ModelingSession`, sharing object selection,
+  preview transactions, undo/redo, and clipboard state with meshes. Mesh-only operations reject
+  curve targets atomically. There is no parallel curve history or native-owned durable geometry.
+  Allocation high-water marks survive undo, canceled previews, and native scene rehydration;
+  match retained entity UUID/object lineage before merging cursors without publishing geometry.
+- `CurveComponent` binds an immutable `CurveAsset`; native modeling projection publishes those
+  assets from the SDK document and rolls back partial failures. Public curve operations live in
+  `QuaderModelingApi`. Ordinary transforms, hierarchy duplication, selection, and framing include
+  curves. Curves and curve-containing groups are deliberately not valid instance definitions yet.
+- QDR scene schema 8 persists authored curves and bindings; schemas 1-7 remain readable. Missing,
+  inconsistent, or malformed curve data fails explicitly rather than being dropped. Project scene
+  replacement stages reads and durable writes before canceling the outgoing tool and rebinding;
+  failed reads/writes retain the outgoing preview, while successful switches cannot keep stale
+  curve gestures alive.
+- `CurveToolService` owns a transient draft or an edit of one selected curve. Click adds anchors;
+  dragging creates symmetric handles. Existing anchors and handles edit in the frozen object's
+  local frame through a shared SDK preview. Space uses the existing Finalize Tool semantic action;
+  Escape cancels. Activation is deliberately unassigned and exposed through the native tool
+  catalog, menu, and toolbar. Tool Settings adds only Closed, Apply/Cancel, and New Curve.
+- Idle curve editing is not a pending history preview: undo/redo remain usable. Active gestures
+  cancel on navigation, camera/view changes (including wheel zoom), or Qt focus/capture loss.
+  `pointer_interaction_canceled` distinguishes cancellation from a physical release, so synthetic
+  release cleanup cannot commit a curve edit. An unrelated owner revision may retain a draft drag;
+  Qt refresh must not clear its native pointer state while the service still reports dragging.
+- Curve sample payloads, tool overlay frames, click candidates, and retained native controls have
+  early unchanged/revision gates. Existing edited curves draw through their scene asset; the tool
+  contributes controls only. Drafts contribute their temporary stroke as well. Persistent curves
+  remain visible when selection overlays or gizmos are hidden. Curve clicks use clipped sampled
+  segments, a pixel radius, perspective-correct depth, and the existing scene selection policy.
+  Mesh occlusion queries are public read-only queries and cannot alter selection, hover, or history.
+- `editor/modeling/picking/curve_picking_cache.*` owns shared scene/asset candidate acquisition
+  and camera-dependent marquee caches. Keep registry acquisition out of `editor/projection`;
+  the existing projection guard remains unchanged. Pure clipped-segment and rectangle math stays
+  under `editor/interactions`. Marquee selection merges curve entity hits before the existing
+  Object/Group selection publication, preserving modifiers, baselines, and one undo transaction.
+  Containment retains offscreen endpoints and tests the sampled path rather than its bounds;
+  crossing uses the same through-depth policy as mesh marquee. Camera changes rebuild projection
+  while retaining authored samples; rectangle changes reuse both. Instance edit excludes curves.
+- This first slice intentionally adds no sweeps, path distribution, NURBS, procedural stack, or
+  additional curve selection mode. The supplied Blender checkout was not copied or imported.
+
+Verification: 72 focused native checks and all 169 SDK consumer tests pass, including 24 curve
+document tests and 13 curve session tests. The approved command baseline adds only
+`tools.activate.curve` (189 -> 190 commands); all existing command changes are exactly 920
+preference hashes and their 920 composed hashes, plus the approval reason. The complete new
+record and every changed leaf were reviewed. The mandatory final gate runs all six CTest entries:
+native tests run 1671 cases (1663 pass, three skip, five existing failures), and architecture tests
+run 397 (390 pass, seven existing failures). Modeling domain and SDK consumer/parity suites pass.
+The isolated SDK builds and its consumer tests pass; its nested guardrails repeat the same seven
+failures. Complete diagnostics match the preceding Active Material run after source-line/address
+normalization, with no added failures or changed assertions. Logs and baseline review data use
+`build/vs2026/Testing/curve-*`. Version 0.1.66 is unchanged.
+Both canonical Debug/Profile and Release app builds succeed. Release startup smoke through
+`tools/boot_smoke.ps1` opens the native project home, initializes Vulkan/Filament and its native
+swapchain, and logs no errors. This is a startup verdict, not an interactive curve pixel check.
+
+## 2026-08-29 - Curve Editing Feedback And Hot-Path Isolation
+
+- Drawing mode publishes a snapped hover marker before the first point and a retained rubber-band
+  segment after it. Editing and active drags suppress that drawing preview. The curve overlay owns
+  these controls; polygon selection overlays are not invalidated by curve-only preview revisions.
+- `viewport.curve.toggle_point_smoothness` defaults to Alt+LeftMouse Press in Curve tool scope and
+  remains user-rebindable. It toggles an anchor between zero handles and a smooth tangent using
+  one-third neighboring chord lengths; endpoints mirror their one neighbor. Point/segment IDs,
+  selection, schema, and authored anchors remain stable. Draft conversions stay transient, while
+  existing-curve conversions create one undo item per physical trigger.
+- Curve conversion input uses one ordered semantic event list carrying ReservePress/Trigger,
+  semantic chord, and exact raw pointer provenance. Qt button edges have monotonic sequence values,
+  so coalesced Press/Release/Press batches cannot let an old release erase a newer reserve. Resolver
+  cursors advance for unbound same-button chords, Qt DoubleClick-to-Press fallback emits once, and
+  Middle/Right Press or deferred Click rebindings suppress their competing navigation Drag through
+  its matching release. Native processing reacquires the latest preview after every event.
+- SDK preview rollback uses `SessionPreviewCheckpoint` instead of copying the whole modeling
+  session. Native curve edits checkpoint only affected curve asset/scene state. Curve-only
+  publications retain mesh selection projection, persistent wire layout, polygon overlays, and
+  render batches behind exact domain revisions rather than broad document revisions.
+- Point placement refreshes mesh landmarks only when a mesh snap kind is enabled and keys the cache
+  to hierarchy presentation, visibility, transforms, mesh bindings, local visibility, and mesh
+  material usage. Curve scene snapping respects both master Snapping and the independent Vertex
+  Snap setting. Curve picking, wireframe extraction, and curve selection extraction enumerate the
+  narrow owner indexes instead of scanning every scene entity.
+- Before the final source-only isolation fixes, the same 512-mesh runtime scenario improved curve
+  anchor editing from 17.70 ms to 8.425 ms and handle editing to 8.281 ms. The SDK checkpoint
+  microbenchmark improved from 9950.718 us and 11,243,623 bytes per sample to 1.7633 us and 1,428
+  bytes per sample. The remaining scene-scan removals are protected by headless counters and cache
+  retention tests; they were deliberately not remeasured with a visible/GPU run after the user
+  requested no further visual tests.
+
+Verification: all 29 focused Curve/input tests and all six command-contract tests pass. The final
+mandatory regression gate runs all six CTest targets and reproduces exactly the preceding 12 known
+failures, with no added failures or changed diagnostics: native tests run 1703 cases (1695 pass,
+three skip, five known failures), and guardrails run 399 (392 pass, seven known failures). Modeling
+domain and SDK consumer/parity checks pass. Logs use `build/vs2026/Testing/curve-feedback-*`.
+Version 0.1.66 is unchanged. No Quader window, smoke test, screenshot, or GPU benchmark was launched
+for the final pass, following the user's request.
+
+## 2026-08-29 - Curve Control Gizmo Ownership
+
+- Existing Curve anchors and handles are select-only on ordinary left click. The only remaining
+  direct pointer drag inside `ViewportNativeToolInteraction` is construction of a newly appended
+  point's symmetric tangent. Existing control movement is owned by `TransformGizmoInteraction`,
+  which presents the shared Move gizmo while the Curve tool remains active.
+- `CurveToolService` remains the authoritative owner for curve-control selection, validation,
+  preview transactions, undo/redo, and cancellation. Selected controls must be visible under the
+  same endpoint/handle policy used by overlay drawing and picking. Drag cancellation preserves an
+  existing selected control, while canceling a just-appended construction point clears it.
+- Qt viewport processing runs the selected-control gizmo prepass before native Curve handling.
+  A consumed gizmo press must not fall through to control selection or point placement; semantic
+  Alt+LeftMouse conversion events still take priority over the gizmo. A pending or active gizmo
+  press owns its viewport pane, while only an active preview suppresses ordinary selection depth
+  cycling. Deferred non-left conversion reservations are retired on release or cancellation even
+  while the gizmo consumes input.
+- The shared Move gizmo supplies axis and plane constraints, global/local space, grid snapping,
+  precision movement, and one authored history edit per gesture. Navigation, camera/view changes,
+  pointer cancellation, Escape, scene replacement, and UI shutdown roll back pending or active
+  Curve control movement through the exact `CurveToolService` owner while retaining the selection.
+
+Verification: all 32 focused `CurveToolServiceTests`, the Qt focus-loss input test, and the native
+mesh double-click depth-cycle regression pass together (34/34). The mandatory regression gate ran
+all six CTest targets. Modeling-domain and SDK consumer/parity checks passed; the gate remained
+nonzero for seven pre-existing guardrail failures, five pre-existing native behavior failures, and
+one order-sensitive Qt tool-settings failure that passed alone and as its complete 12-test owning
+suite. A subsequent full native run also exposed unrelated harness variability (a fatal-child
+timeout and a different tool-settings test) under load. No Quader window, smoke test, screenshot,
+or GPU benchmark was launched, following the user's request. Version 0.1.66 is unchanged.
+
+## 2026-08-29 - Curve Controls Reuse Canonical Selection Policy
+
+- Curve anchors and visible handles use the same `SelectionEditOperation` algebra, modifier
+  resolver, `SelectionBoxState`, four-pixel drag threshold, rectangle direction rule, press
+  baseline, release publication, and cancellation policy as the app's existing component
+  selection. `ViewportSelectionInteraction` owns click and marquee lifecycle; the native Curve
+  handler owns construction and Alt conversion only. Do not add a Curve-specific modifier or box
+  selection policy.
+- `CurveToolService` owns only the ordered selected-control set, active member, validation, and
+  selection revision. Hidden or stale controls are pruned and the active member is repaired
+  deterministically. Selection edits do not touch authored geometry, dirty state, or history.
+- The Move gizmo operates on the entire selected set from its world AABB-center pivot and produces
+  one preview/history gesture. Point updates publish atomically through `CurveDocument::set_points`;
+  selecting an anchor with either of its handles cannot translate that handle twice.
+- Shared control picking exposes endpoints only, excludes tangent lines and hidden zero-length
+  handles, and uses the same visibility predicate as the overlay. A source guardrail prevents
+  Curve code from reintroducing private modifier mapping or direct native selection mutation.
+
+Verification: 56 focused Curve, Qt-input, and existing marquee tests pass, as do three SDK atomic
+batch-update tests and the Curve selection ownership guardrail. The mandatory regression gate ran
+all six CTest entries from the finalized source: modeling-domain and SDK consumer/parity suites
+pass; native tests run 1717 cases (1708 pass, three intentional skips, six unrelated existing
+failures), and guardrails run 400 cases (393 pass, seven unrelated existing failures). The
+isolated SDK graph builds and its consumer tests pass; its nested guardrail run repeats those same
+seven failures. No Quader window, smoke test, screenshot, or GPU benchmark was launched.
+
+## 2026-08-29 - Passive Curve Editing And Anchor Snap Parity
+
+- In Object/Mesh mode, exactly one selected editable Curve passively exposes its anchors and
+  handles without requiring Curve tool reactivation. `CurveToolService` follows canonical scene
+  and modeling-selection revisions, while a plain click miss falls through the existing scene
+  selection lifecycle and therefore deselects the Curve. Modifier clicks and marquee selection
+  reuse the shared `SelectionEditOperation` policy rather than introducing Curve-only behavior.
+- A passive Curve with no selected controls retains the ordinary object transform gizmo. Selecting
+  one or more controls switches to the shared Move gizmo at their world bounds center. Direct,
+  unoccluded control picks arbitrate against the object/control gizmos deterministically, and every
+  Qt reset path carries the bound `CurveToolService` so pending previews cannot outlive their owner.
+- Selecting an anchor presents its tangent lines in the selected-vertex color and its related,
+  otherwise-unselected handles in cyan; an explicitly selected handle keeps the normal selection
+  color. Overlay visibility and picking continue to share the same endpoint policy.
+- Anchor-only axis movement uses the canonical Move grid, precision, and vertex-snap settings.
+  Eligible targets include mesh vertices, unselected anchors on the same Curve, anchors on other
+  Curves, and active-draft anchors; handles and plane movement never use vertex snapping. Selected
+  anchors are excluded from the frozen candidate set. Cross-domain ranking uses projected group
+  distance, world depth, typed target identity, and point ID with the established mesh-occlusion
+  tolerance. Scene-selected meshes remain eligible because Curve controls are a separate selection
+  domain and those meshes stay stationary during the gesture.
+- Candidate groups and selected-anchor exclusions are frozen once per gesture, Curve broadphase
+  uses cached world bounds, and mesh snap/depth resolution uses one combined query with reusable
+  per-session scratch. Curve previews use atomic `CurveDocument::set_points` updates and mesh
+  projection caches key narrow owner revisions, avoiding allocation and rebuild work during each
+  gizmo sample. These are source-level hot-path protections; no runtime performance measurement was
+  made because the requested verification excluded launching the application.
+
+Verification: all 139 Curve-filtered native tests pass, along with the public mesh-snap query,
+Move-tool boundary double-click, deferred depth-cycle, keybinding-context, command-fingerprint, and
+five focused ownership guardrails. The mandatory regression gate runs all six CTest targets:
+modeling-domain, SDK consumer, and SDK parity tests pass; native tests run 1743 cases (1735 pass,
+three intentional skips, five unrelated known failures), and guardrails run 402 cases (395 pass,
+seven unrelated known failures). The isolated SDK graph builds, its consumer tests pass, and its
+nested guardrail run repeats the same seven failures. Version 0.1.66 remains unchanged. No Quader
+window, smoke test, screenshot, GPU benchmark, or other visual test was launched.

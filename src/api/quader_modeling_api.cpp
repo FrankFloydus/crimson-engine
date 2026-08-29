@@ -16,6 +16,7 @@
 #include "diagnostics/profile.hpp"
 #include "editor/commands/modeling/commit_box_preview_command.hpp"
 #include "editor/history/modeling_memento_command.hpp"
+#include "editor/history/curve_history_commands.hpp"
 #include "editor/history/face_texture_settings_history_command.hpp"
 #include "editor/history/face_texture_action_history_command.hpp"
 #include "editor/history/face_texture_transfer_history_command.hpp"
@@ -1420,6 +1421,152 @@ QuaderModelingApi::create_mesh(QuaderPolygonDocument document,
         to_api_modeling_object_record(create_command->created().object));
   }
   return result_from_create(std::move(status), created);
+}
+
+QuaderApiResult<QuaderModelingObjectRef>
+QuaderModelingApi::create_curve(const QuaderCreateCurveArgs &args) {
+  if (!mutations_.can_mutate_modeling_content()) {
+    return quader_api_result_from_status<QuaderModelingObjectRef>(
+        mutations_.modeling_content_blocked_status("creating a curve."));
+  }
+  auto document = modeling::CurveDocument::make_bezier(args.points, args.closed);
+  if (!document.ok()) {
+    return quader_api_result_from_status<QuaderModelingObjectRef>(
+        invalid_api_status(session_, document.error_message()));
+  }
+  auto command = std::make_unique<CreateCurveHistoryCommand>(
+      scene_session(session_).modeling(), std::move(document).value(), args.name);
+  const auto *created_command = command.get();
+  auto status = mutations_.run_modeling_command(std::move(command), "Create Curve");
+  QuaderModelingObjectRef created;
+  if (status.ok() && status.changed()) {
+    created = ref_from_record(to_api_modeling_object_record(created_command->created().object));
+  }
+  return result_from_create(std::move(status), created);
+}
+
+QuaderApiResult<QuaderCurveSnapshot> QuaderModelingApi::curve_snapshot(
+    QuaderModelingObjectRef object, bool include_preview) const {
+  if (!mutations_.belongs_to_active_scene(object.scene_session_id)) {
+    return quader_api_result_from_status<QuaderCurveSnapshot>(
+        mutations_.stale_scene_reference_status("Curve"));
+  }
+  const auto &session = scene_session(session_);
+  const auto &scene = session.scene();
+  const auto *binding = scene.modeling_object(object.entity);
+  if (!scene.exists(object.entity) || scene.curve(object.entity) == nullptr ||
+      binding == nullptr || binding->object_id != object.modeling_object_id ||
+      (!object.entity_uuid.empty() && scene.uuid(object.entity) != object.entity_uuid) ||
+      (object.editor_object_id != kInvalidQuaderEditorObjectId &&
+       scene.editor_object_id(object.entity) != object.editor_object_id)) {
+    return quader_api_result_from_status<QuaderCurveSnapshot>(
+        invalid_api_status(session_, "Curve reference is not live."));
+  }
+  auto document = session.modeling().curve_document(object.modeling_object_id,
+                                                     include_preview);
+  if (!document.has_value()) {
+    return quader_api_result_from_status<QuaderCurveSnapshot>(
+        invalid_api_status(session_, "Curve document is unavailable."));
+  }
+  return quader_api_result_from_status(
+      QuaderApiStatus{.ok = true, .revisions = mutations_.current_revisions()},
+      QuaderCurveSnapshot{.object = std::move(object), .document = std::move(*document)});
+}
+
+QuaderApiVoidResult QuaderModelingApi::replace_curve(
+    QuaderModelingObjectRef object, modeling::CurveDocument document) {
+  const auto current = curve_snapshot(object, false);
+  if (!current.ok()) {
+    return quader_api_status_from_result(current);
+  }
+  if (!mutations_.can_mutate_modeling_content()) {
+    return mutations_.modeling_content_blocked_status("editing a curve.");
+  }
+  return mutations_.run_modeling_command(
+      std::make_unique<ReplaceCurveHistoryCommand>(scene_session(session_).modeling(),
+                                                  object.modeling_object_id,
+                                                  std::move(document)),
+      "Edit Curve");
+}
+
+QuaderApiVoidResult QuaderModelingApi::set_curve_point(
+    QuaderModelingObjectRef object, modeling::CurvePointId point,
+    const modeling::CurvePointSpec &value) {
+  auto current = curve_snapshot(object, false);
+  if (!current.ok()) {
+    return quader_api_status_from_result(current);
+  }
+  auto edited = current.value().document.set_point(point, value);
+  if (!edited.ok()) {
+    return invalid_api_status(session_, edited.error_message());
+  }
+  return replace_curve(object, std::move(current.value().document));
+}
+
+QuaderApiVoidResult QuaderModelingApi::toggle_curve_point_smoothness(
+    QuaderModelingObjectRef object, modeling::CurvePointId point) {
+  auto current = curve_snapshot(object, false);
+  if (!current.ok()) {
+    return quader_api_status_from_result(current);
+  }
+  const auto edited = current.value().document.toggle_point_smoothness(point);
+  if (!edited.ok()) {
+    return invalid_api_status(session_, edited.error_message());
+  }
+  return replace_curve(object, std::move(current.value().document));
+}
+
+QuaderApiVoidResult QuaderModelingApi::set_curve_closed(
+    QuaderModelingObjectRef object, bool closed) {
+  auto current = curve_snapshot(object, false);
+  if (!current.ok()) {
+    return quader_api_status_from_result(current);
+  }
+  auto edited = current.value().document.set_closed(closed);
+  if (!edited.ok()) {
+    return invalid_api_status(session_, edited.error_message());
+  }
+  return replace_curve(object, std::move(current.value().document));
+}
+
+QuaderApiVoidResult QuaderModelingApi::begin_curve_preview(QuaderModelingObjectRef object) {
+  const auto current = curve_snapshot(object, false);
+  if (!current.ok()) {
+    return quader_api_status_from_result(current);
+  }
+  if (!mutations_.can_mutate_modeling_content()) {
+    return mutations_.modeling_content_blocked_status("starting a curve preview.");
+  }
+  return mutations_.run_modeling_result(
+      scene_session(session_).modeling().begin_curve_document_preview(object.modeling_object_id),
+      "Begin Curve Preview");
+}
+
+QuaderApiVoidResult QuaderModelingApi::update_curve_preview(modeling::CurveDocument document) {
+  if (!mutations_.available()) {
+    return invalid_api_status(session_, "No scene is active.");
+  }
+  return mutations_.run_modeling_result(
+      scene_session(session_).modeling().update_curve_document_preview(std::move(document)),
+      "Update Curve Preview");
+}
+
+QuaderApiVoidResult QuaderModelingApi::commit_curve_preview() {
+  if (!mutations_.available()) {
+    return invalid_api_status(session_, "No scene is active.");
+  }
+  return mutations_.run_modeling_command(
+      std::make_unique<CommitCurvePreviewHistoryCommand>(scene_session(session_).modeling()),
+      "Edit Curve");
+}
+
+QuaderApiVoidResult QuaderModelingApi::cancel_curve_preview() {
+  if (!mutations_.available()) {
+    return invalid_api_status(session_, "No scene is active.");
+  }
+  return mutations_.run_modeling_result(
+      scene_session(session_).modeling().cancel_curve_document_preview(),
+      "Cancel Curve Preview");
 }
 
 QuaderApiResult<QuaderLinearArrayResult>

@@ -36,20 +36,24 @@ public:
 
   [[nodiscard]] ViewportBeforeToolInteractionResult
   handle_before_active_tool(QuaderEditorApi &editor,
-                            const ViewportInteractionFrame &frame);
+                            const ViewportInteractionFrame &frame,
+                            CurveToolService *curve = nullptr);
   void handle_after_active_tool(
       QuaderEditorApi &editor, const ViewportInteractionFrame &frame,
       const ViewportToolResult &tool_result,
       const ViewportBeforeToolInteractionResult &before_tool,
-      ViewportToolHoverPort *tool_hover = nullptr);
+      ViewportToolHoverPort *tool_hover = nullptr,
+      CurveToolService *curve = nullptr);
   [[nodiscard]] QuaderSelectionSummary
   pick_context_menu_target(QuaderEditorApi &editor,
                            const ViewportInteractionFrame &frame);
   [[nodiscard]] std::optional<QuaderHoverTarget>
   pick_material_face_target(QuaderEditorApi &editor,
                             const ViewportInteractionFrame &frame);
-  [[nodiscard]] bool cancel_active_drag(QuaderEditorApi &editor);
+  [[nodiscard]] bool cancel_active_drag(QuaderEditorApi &editor,
+                                        CurveToolService *curve = nullptr);
   [[nodiscard]] bool dragging() const;
+  [[nodiscard]] bool transform_gizmo_pointer_active() const;
   /// Keeps a texture-transfer press and its release in the initiating pane.
   [[nodiscard]] bool texture_transfer_pointer_active() const {
     return transfer_face_texture_pointer_.has_value();
@@ -57,9 +61,12 @@ public:
   void cancel_pending_material_interaction();
   void cancel_pending_selection_click();
   void reset(QuaderEditorApi *editor = nullptr);
+  void reset(QuaderEditorApi *editor, CurveToolService *curve);
 
   [[nodiscard]] const quader_editor_core::TransformGizmoFrame *
   transform_gizmo_frame() const;
+  [[nodiscard]] const std::vector<quader_editor_core::SelectionOverlayPoint> &
+  transform_gizmo_snap_overlay_points() const;
   [[nodiscard]] const TransformGizmoSelectionCacheStats &
   transform_gizmo_selection_cache_stats() const;
   [[nodiscard]] ViewportSelectionMarquee selection_marquee() const;
@@ -91,7 +98,8 @@ public:
       RadialArrayToolService *radial_array,
       ViewportPointPlacementService *point_placement,
       ViewportCameraController &camera,
-      const ViewportNativeToolInteractionFrame &frame);
+      const ViewportNativeToolInteractionFrame &frame,
+      CurveToolService *curve = nullptr);
   void clear_native_tool_drag_state();
   [[nodiscard]] bool native_tool_dragging() const;
 

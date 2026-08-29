@@ -546,7 +546,8 @@ void App::bind_active_scene(SceneSession &scene) {
     ui_.install_runtime_hooks(
         *editor_, scene.scene(), scene.assets(), scene.modeling(),
         scene.selection(), scene.pivot(), scene.linear_array(),
-        scene.radial_array(), scene.point_placement(), default_material_);
+        scene.radial_array(), scene.point_placement(), default_material_,
+        &scene.curve());
   }
 }
 

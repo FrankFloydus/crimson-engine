@@ -237,6 +237,15 @@ void finish_chunk(RenderInstanceBatchChunk &chunk) {
                           chunk.visibility);
 }
 
+void reserve_chunk_storage(RenderInstanceBatchPlan &plan,
+                           std::size_t chunk_count) {
+  if (chunk_count > plan.chunks.capacity()) {
+    ++plan.work.chunk_storage_growth_count;
+    plan.work.relocated_chunk_count += plan.chunks.size();
+    plan.chunks.reserve(chunk_count);
+  }
+}
+
 bool try_retain_layout(const std::vector<PrimitiveGroup> &groups,
                        const RenderInstanceBatchPlan &previous,
                        std::size_t occurrence_count,
@@ -271,7 +280,7 @@ bool try_retain_layout(const std::vector<PrimitiveGroup> &groups,
   RenderInstanceBatchPlan retained;
   retained.max_instances_per_chunk = max_instances_per_chunk;
   retained.occurrence_count = occurrence_count;
-  retained.chunks.reserve(previous.chunks.size());
+  reserve_chunk_storage(retained, previous.chunks.size());
   for (const RenderInstanceBatchChunk &before : previous.chunks) {
     if (before.occurrences.empty() ||
         before.occurrences.size() > max_instances_per_chunk ||
@@ -312,6 +321,7 @@ bool try_retain_layout(const std::vector<PrimitiveGroup> &groups,
   if (!occurrence_by_slot.empty()) {
     return false;
   }
+  retained.work.retained_layout = true;
   plan = std::move(retained);
   return true;
 }
@@ -366,12 +376,19 @@ RenderInstanceBatchPlan plan_render_instance_batches(
 
   {
     QDR_PROFILE_SCOPE("Instance batch rebuild Morton layout");
+    std::size_t total_chunk_count = 0u;
+    for (const PrimitiveGroup &group : groups) {
+      total_chunk_count += group.occurrences.size() /
+                               plan.max_instances_per_chunk +
+                           (group.occurrences.size() %
+                                    plan.max_instances_per_chunk != 0u);
+    }
+    // Reserving after each group repeatedly relocates every prior chunk when
+    // a scene contains many distinct mesh payloads.
+    reserve_chunk_storage(plan, total_chunk_count);
     for (PrimitiveGroup &group : groups) {
+      plan.work.morton_ordered_occurrence_count += group.occurrences.size();
       morton_sort_group(group);
-      const std::size_t chunk_count =
-          (group.occurrences.size() + plan.max_instances_per_chunk - 1u) /
-          plan.max_instances_per_chunk;
-      plan.chunks.reserve(plan.chunks.size() + chunk_count);
       for (std::size_t offset = 0u; offset < group.occurrences.size();
            offset += plan.max_instances_per_chunk) {
         const std::size_t end = std::min(

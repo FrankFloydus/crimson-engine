@@ -385,6 +385,8 @@ viewport_keybinding_context(const ViewportToolState &state,
   context.set("transformDrag.active", input_context.active_transform_drag);
   context.set("operationPreview.active",
               input_context.operation_preview_active);
+  context.set("curveControls.editable",
+              input_context.curve_controls_editable);
   context.set("activeTool." + std::string(viewport_tool_id(state.active_tool)),
               true);
   context.set("selectionMode." +
@@ -770,6 +772,8 @@ QuaderKeybindingContextKind keybinding_context_kind_for_viewport_input(
     return QuaderKeybindingContextKind::LinearArrayTool;
   case ViewportInputBindingContext::RadialArrayTool:
     return QuaderKeybindingContextKind::RadialArrayTool;
+  case ViewportInputBindingContext::CurveTool:
+    return QuaderKeybindingContextKind::CurveTool;
   }
   return QuaderKeybindingContextKind::Custom;
 }

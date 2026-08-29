@@ -6,10 +6,11 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include <editor/modeling/runtime/session.hpp>
 
+#include <editor/interactions/selection_edit.hpp>
+
 #include "diagnostics/profile.hpp"
 
 #include <algorithm>
-#include <iterator>
 #include <limits>
 #include <optional>
 #include <tuple>
@@ -71,13 +72,6 @@ struct RectangleEdgeKeyHash {
 	}
 };
 
-bool rectangle_preserves_existing(SelectionEditOperation operation)
-{
-  return operation == SelectionEditOperation::Add ||
-         operation == SelectionEditOperation::Remove ||
-         operation == SelectionEditOperation::Toggle;
-}
-
 bool rectangle_contains_id(const std::vector<int>& ids, int id)
 {
 	return std::find(ids.begin(), ids.end(), id) != ids.end();
@@ -117,38 +111,6 @@ bool rectangle_vertex_is_valid(RectangleSelectionVertex vertex)
 
 using RectangleElementKey = std::pair<int, int>;
 using RectangleObjectEdgeKey = std::tuple<int, int, int>;
-
-template <typename Key>
-void sort_unique_rectangle_keys(std::vector<Key> &keys) {
-  std::sort(keys.begin(), keys.end());
-  keys.erase(std::unique(keys.begin(), keys.end()), keys.end());
-}
-
-template <typename Key>
-std::vector<Key> apply_rectangle_key_edit(std::vector<Key> baseline,
-                                          std::vector<Key> hits,
-                                          SelectionEditOperation operation) {
-  sort_unique_rectangle_keys(baseline);
-  sort_unique_rectangle_keys(hits);
-  if (operation == SelectionEditOperation::Replace) {
-    return hits;
-  }
-
-  std::vector<Key> selected;
-  selected.reserve(baseline.size() + hits.size());
-  if (operation == SelectionEditOperation::Add) {
-    std::set_union(baseline.begin(), baseline.end(), hits.begin(), hits.end(),
-                   std::back_inserter(selected));
-  } else if (operation == SelectionEditOperation::Remove) {
-    std::set_difference(baseline.begin(), baseline.end(), hits.begin(),
-                        hits.end(), std::back_inserter(selected));
-  } else {
-    std::set_symmetric_difference(
-        baseline.begin(), baseline.end(), hits.begin(), hits.end(),
-        std::back_inserter(selected));
-  }
-  return selected;
-}
 
 RectangleFaceKey rectangle_face_key(RectangleSelectionFace face)
 {
@@ -192,8 +154,14 @@ RectangleSelectionResult rectangle_select_objects(const RectangleSelectionReques
 	QDR_PROFILE_SCOPE("Box selection policy object mode");
 	RectangleSelectionResult result;
         result.selection.mode = SelectionMode::Object;
-        result.selection.selected_object_ids = rectangle_preserves_existing(request.operation) ? request.current_selection.selected_object_ids : std::vector<int>();
-	result.selection.active_object_id = rectangle_preserves_existing(request.operation) ? request.current_selection.active_object_id : -1;
+        result.selection.selected_object_ids =
+            selection_edit_operation_preserves_existing(request.operation)
+                ? request.current_selection.selected_object_ids
+                : std::vector<int>();
+	result.selection.active_object_id =
+            selection_edit_operation_preserves_existing(request.operation)
+                ? request.current_selection.active_object_id
+                : -1;
 
 	for (const int object_id : request.hits.object_ids) {
 		if (object_id < 0) {
@@ -239,7 +207,7 @@ RectangleSelectionResult rectangle_select_faces(const RectangleSelectionRequest&
 	RectangleSelectionResult result;
         result.selection.mode = SelectionMode::Face;
         std::vector<RectangleElementKey> baseline_keys;
-        if (rectangle_preserves_existing(request.operation)) {
+        if (selection_edit_operation_preserves_existing(request.operation)) {
           baseline_keys.reserve(request.current_selection.selected_faces.size());
           for (const RectangleSelectionFace face :
                request.current_selection.selected_faces) {
@@ -256,8 +224,9 @@ RectangleSelectionResult rectangle_select_faces(const RectangleSelectionRequest&
           }
         }
         const std::vector<RectangleElementKey> selected_faces =
-            apply_rectangle_key_edit(std::move(baseline_keys),
-                                     std::move(hit_keys), request.operation);
+            apply_selection_edit_operation(std::move(baseline_keys),
+                                           std::move(hit_keys),
+                                           request.operation);
 	result.selection.selected_faces.reserve(selected_faces.size());
 	for (const RectangleSelectionFace face : universe.faces) {
 		if (rectangle_face_is_valid(face) &&
@@ -288,7 +257,7 @@ RectangleSelectionResult rectangle_select_edges(const RectangleSelectionRequest&
               std::max(edge.a_index, edge.b_index)};
         };
         std::vector<RectangleObjectEdgeKey> baseline_keys;
-	if (rectangle_preserves_existing(request.operation)) {
+	if (selection_edit_operation_preserves_existing(request.operation)) {
           baseline_keys.reserve(
               request.current_selection.selected_edges.size() +
               (request.current_selection.selected_edge_full_object_ids.empty()
@@ -324,8 +293,9 @@ RectangleSelectionResult rectangle_select_edges(const RectangleSelectionRequest&
           }
         }
         const std::vector<RectangleObjectEdgeKey> selected_edges =
-            apply_rectangle_key_edit(std::move(baseline_keys),
-                                     std::move(hit_keys), request.operation);
+            apply_selection_edit_operation(std::move(baseline_keys),
+                                           std::move(hit_keys),
+                                           request.operation);
 
         std::unordered_map<int, std::size_t> edge_count_by_object;
 	edge_count_by_object.reserve(universe.object_ids.size());
@@ -367,7 +337,7 @@ RectangleSelectionResult rectangle_select_edges(const RectangleSelectionRequest&
 		}
 	}
 	const bool preserved_active = [&]() {
-		if (!rectangle_preserves_existing(request.operation) ||
+		if (!selection_edit_operation_preserves_existing(request.operation) ||
 			request.current_selection.active_object_id < 0 ||
 			request.current_selection.active_edge_vertex_indices.size() < 2U) {
 			return false;
@@ -423,7 +393,7 @@ RectangleSelectionResult rectangle_select_vertices(const RectangleSelectionReque
 	RectangleSelectionResult result;
         result.selection.mode = SelectionMode::Vertex;
         std::vector<RectangleElementKey> baseline_keys;
-	if (rectangle_preserves_existing(request.operation)) {
+	if (selection_edit_operation_preserves_existing(request.operation)) {
           baseline_keys.reserve(
               request.current_selection.selected_vertices.size() +
               (request.current_selection.selected_vertex_full_object_ids.empty()
@@ -459,8 +429,9 @@ RectangleSelectionResult rectangle_select_vertices(const RectangleSelectionReque
           }
         }
         const std::vector<RectangleElementKey> selected_vertices =
-            apply_rectangle_key_edit(std::move(baseline_keys),
-                                     std::move(hit_keys), request.operation);
+            apply_selection_edit_operation(std::move(baseline_keys),
+                                           std::move(hit_keys),
+                                           request.operation);
 
 	std::unordered_map<int, std::size_t> vertex_count_by_object;
 	vertex_count_by_object.reserve(universe.object_ids.size());
@@ -504,7 +475,7 @@ RectangleSelectionResult rectangle_select_vertices(const RectangleSelectionReque
 		}
 	}
 	const bool preserved_active = [&]() {
-		if (!rectangle_preserves_existing(request.operation) ||
+		if (!selection_edit_operation_preserves_existing(request.operation) ||
 			request.current_selection.active_object_id < 0 ||
 			request.current_selection.active_vertex_indices.empty()) {
 			return false;
@@ -1391,7 +1362,7 @@ RectangleSelectionResult apply_rectangle_selection(const RectangleSelectionReque
 	}
 	RectangleSelectionResult result;
 	result.selection.mode = request.current_selection.mode;
-	if (rectangle_preserves_existing(request.operation)) {
+	if (selection_edit_operation_preserves_existing(request.operation)) {
 		result.selection = request.current_selection;
 	}
 	return result;

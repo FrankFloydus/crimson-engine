@@ -9,6 +9,8 @@
 #include "api/quader_api_result.hpp"
 #include "api/quader_viewport_layout_types.hpp"
 #include "editor/viewport/viewport_interaction_controller.hpp"
+#include "editor/viewport/viewport_curve_picking.hpp"
+#include "render/overlay/curve_tool_overlay_cache.hpp"
 #include "render/render_system.hpp"
 #include "render/viewport_info_stats.hpp"
 #include "ui/qt_navigation_gizmo.hpp"
@@ -44,6 +46,7 @@ namespace quader {
 
 class AssetRegistry;
 class LinearArrayToolService;
+class CurveToolService;
 class ModelingSessionService;
 class LocalizationService;
 class PivotToolService;
@@ -82,6 +85,9 @@ public:
   bool initialize(RenderSystem &render_system);
   void shutdown();
 
+  void reset_interactions(QuaderEditorApi *editor,
+                          CurveToolService *curve);
+
   void attach_workspace(ViewportWorkspaceService &workspace);
   void set_viewport_settings(const ViewportSettings &settings);
   void set_render_performance_stats(RenderFramePerformanceStats stats);
@@ -101,7 +107,7 @@ public:
                      LinearArrayToolService *linear_array,
                      RadialArrayToolService *radial_array,
                      ViewportPointPlacementService *point_placement,
-                     double delta_seconds);
+                     double delta_seconds, CurveToolService *curve = nullptr);
   void prepare_viewports(QuaderEditorApi &editor,
                          SceneRenderBridge &render_bridge,
                          RenderOverlaySnapshotCache &snapshot_cache,
@@ -109,7 +115,8 @@ public:
                          ModelingSessionService &modeling,
                          PivotToolService *pivot,
                          LinearArrayToolService *linear_array,
-                         RadialArrayToolService *radial_array);
+                         RadialArrayToolService *radial_array,
+                         CurveToolService *curve = nullptr);
   [[nodiscard]] QuaderApiVoidResult frame_all(const SceneDocument &document,
                                               const AssetRegistry &assets,
                                               ViewportPaneId pane_id);
@@ -159,6 +166,7 @@ private:
   /// component selection and scene overlays.
   struct PaneDynamicOverlaySubmissionKey {
     std::uint64_t frame_signature = 0;
+    std::uint64_t curve_overlay_revision = 0;
     std::uint64_t style_signature = 0;
     ModelingSelectionMode selection_mode = ModelingSelectionMode::Object;
     ViewportOverlayProjection projection = ViewportOverlayProjection::Perspective;
@@ -229,14 +237,15 @@ private:
                               LinearArrayToolService *linear_array,
                               RadialArrayToolService *radial_array,
                               ViewportPointPlacementService *point_placement,
-                              double delta_seconds);
+                              double delta_seconds, CurveToolService *curve);
   void observe_persisted_camera_change(QuaderEditorApi &editor);
   void refresh_cached_selection_overlay_frame(ModelingSessionService &modeling,
                                                const SceneDocument &document,
                                                const AssetRegistry &assets,
                                                const ViewportSettings &settings);
   bool sync_active_tool_from_editor(QuaderEditorApi &editor,
-                                    ModelingSessionService &modeling);
+                                    ModelingSessionService &modeling,
+                                    CurveToolService *curve = nullptr);
   [[nodiscard]] const ViewportSettings &active_viewport_settings() const;
   [[nodiscard]] Pane &pane(ViewportPaneId pane_id);
   [[nodiscard]] const Pane &pane(ViewportPaneId pane_id) const;
@@ -284,7 +293,11 @@ private:
       ViewportSplitHandleId::TwoHorizontal;
   bool split_handle_dragging_ = false;
   QFocusFrame *focused_pane_frame_ = nullptr;
+  // Non-owning runtime pair. UISystem explicitly resets and clears it before
+  // replacing or destroying the scene services; Qt-owned workspace and
+  // shutdown resets may use it only while that binding remains installed.
   QuaderEditorApi *interaction_editor_ = nullptr;
+  CurveToolService *interaction_curve_ = nullptr;
   std::uint64_t active_tool_revision_ = 0;
   ModelingBoxPreview active_box_preview_ = {};
   bool modal_tool_dragging_ = false;
@@ -296,6 +309,8 @@ private:
   std::vector<QuaderInputChord> suppressed_keybinding_chords_;
   double linear_array_wheel_remainder_ = 0.0;
   double radial_array_wheel_remainder_ = 0.0;
+  ViewportCurvePickCache curve_pick_cache_;
+  CurveToolOverlayCache curve_tool_overlay_cache_;
   bool last_fly_navigation_active_ = false;
   bool edge_length_hud_enabled_ = false;
   const SceneDocument *viewport_info_cached_document_ = nullptr;

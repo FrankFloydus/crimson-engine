@@ -10,11 +10,16 @@
 #include "api/quader_api_session_internal_access.hpp"
 #include "api/quader_editor_api.hpp"
 #include "api/quader_polygon_document_internal_access.hpp"
+#include "editor/curve/curve_tool_service.hpp"
 #include "editor/modeling/services/modeling_session_service.hpp"
 #include "editor/session/scene_session.hpp"
+#include "editor/viewport/viewport_interaction_controller.hpp"
+#include "editor/viewport/viewport_native_tool_interaction.hpp"
+#include "math/glm_bridge.hpp"
 #include "ui/qt_input_adapter.hpp"
 #include "ui/qt_viewport_panel.hpp"
 #include "ui/qt_viewport_surface.hpp"
+#include "viewport/viewport_input_router.hpp"
 #include "viewport/viewport_settings.hpp"
 
 #include <QApplication>
@@ -493,6 +498,193 @@ TEST(QtViewportSurfaceInputTests,
 }
 
 TEST(QtViewportSurfaceInputTests,
+     FocusLossCancelsDraftCurveConstructionAndLeavesSelectedControlsInert) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-curve-focus-input-tests";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+
+  for (const bool drawing : {false, true}) {
+    SCOPED_TRACE(drawing ? "new draft" : "existing curve");
+    quader::SceneSession session;
+    quader::QuaderEditorApi editor(
+        quader::QuaderApiSessionInternalAccess::from_scene_session(session));
+    const auto created = editor.modeling().create_curve({
+        .points = {{.position = {-2.0f, 0.0f, 0.0f}},
+                   {.position = {2.0f, 0.0f, 0.0f}}},
+    });
+    ASSERT_TRUE(created.ok()) << created.error_message();
+    if (!drawing) {
+      ASSERT_TRUE(editor.modeling().set_curve_closed(created.value(), true).ok());
+    }
+    ASSERT_TRUE(editor.history().undo().ok());
+    ASSERT_TRUE(editor.history().can_redo());
+    ASSERT_TRUE(editor.tools().activate(quader::kCurveToolId).ok());
+    session.mark_clean();
+    quader::CurveToolService &curve = session.curve();
+    const auto before = *curve.preview_state().document;
+    const auto history_before = editor.history().snapshot();
+
+    quader::QtViewportSurface surface(quader::ViewportPaneId::Perspective);
+    surface.resize(800, 600);
+    quader::ViewportCameraController camera;
+    const auto size = surface.render_size_pixels();
+    camera.set_viewport_size(size.x, size.y);
+    camera.focus_origin(16.0f);
+    camera.view_axis(quader::ViewportViewAxis::Y, 1);
+    quader::ViewportInteractionController interaction;
+    quader::ViewportInputRouter input_router;
+    input_router.set_active_tool(quader::ViewportToolId::Curve);
+    quader::ViewportSettings viewport_settings;
+    quader::ViewportInputResult input_result;
+    const auto dispatch = [&](const quader::QtViewportInputFrame &sample) {
+      const auto native = interaction.handle_native_tools(
+          editor, session.scene(), session.assets(), nullptr, nullptr, nullptr,
+          &session.point_placement(), camera,
+          {.input = sample.input,
+           .input_result = input_result,
+           .left_pressed = sample.left_pressed,
+           .left_down = sample.left_down,
+           .left_released = sample.left_released,
+           .left_click_local = sample.left_click_local},
+          &curve);
+      interaction.handle_after_active_tool(
+          editor,
+          {
+              .input_router = input_router,
+              .camera = camera,
+              .settings = viewport_settings,
+              .input = sample.input,
+              .input_result = input_result,
+              .left_click_local = sample.left_click_local,
+              .left_pressed = sample.left_pressed,
+              .left_down = sample.left_down,
+              .left_released = sample.left_released,
+              .active_tool_allows_selection_fallback = false,
+              .selection_state =
+                  {
+                      .summary = editor.selection().summary(),
+                      .scene_revision = session.scene().revision(),
+                      .asset_revision = session.assets().revision(),
+                  },
+          },
+          {}, {}, nullptr, &curve);
+      return native;
+    };
+    const quader::QVec2 press_pixels = drawing
+        ? quader::QVec2{size.x * 0.5f, size.y * 0.5f}
+        : camera.project_world_point(quader::transform_point(
+              curve.preview_state().world_transform,
+              quader::curve_control_local_position(
+                  before.points()[0], quader::CurveControlKind::Anchor)))
+              .position;
+    const qreal scale = surface.devicePixelRatio();
+    const QPointF press_local{press_pixels.x / scale, press_pixels.y / scale};
+    const QPointF press_global = press_local + QPointF{100.0, 100.0};
+    QMouseEvent press(QEvent::MouseButtonPress, press_local, press_global,
+                       Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+    QApplication::sendEvent(&surface, &press);
+    const auto pressed = surface.take_input_frame(0.0f, true);
+    EXPECT_FALSE(pressed.input.pointer_interaction_canceled);
+    const auto press_result = dispatch(pressed);
+    if (drawing) {
+      EXPECT_TRUE(press_result.claim_interaction_pane);
+      ASSERT_TRUE(curve.point_construction_dragging());
+    } else {
+      ASSERT_FALSE(curve.dragging());
+      EXPECT_TRUE(curve.control_selection().empty())
+          << "Curve click selection must publish on release.";
+
+      QMouseEvent click_release(QEvent::MouseButtonRelease, press_local,
+                                press_global, Qt::LeftButton, Qt::NoButton,
+                                Qt::NoModifier);
+      QApplication::sendEvent(&surface, &click_release);
+      const auto clicked = surface.take_input_frame(0.0f, true);
+      ASSERT_TRUE(clicked.left_released);
+      (void)dispatch(clicked);
+      const quader::CurveControlTarget anchor{
+          .point = before.points()[0].id,
+          .kind = quader::CurveControlKind::Anchor,
+      };
+      EXPECT_EQ(curve.control_selection().controls,
+                std::vector<quader::CurveControlTarget>{anchor});
+      EXPECT_EQ(curve.control_selection().active, anchor);
+
+      QMouseEvent drag_press(QEvent::MouseButtonPress, press_local,
+                             press_global, Qt::LeftButton, Qt::LeftButton,
+                             Qt::NoModifier);
+      QApplication::sendEvent(&surface, &drag_press);
+      const auto drag_pressed = surface.take_input_frame(0.0f, true);
+      ASSERT_TRUE(drag_pressed.left_pressed);
+      (void)dispatch(drag_pressed);
+      EXPECT_EQ(curve.control_selection().controls,
+                std::vector<quader::CurveControlTarget>{anchor});
+      EXPECT_EQ(curve.control_selection().active, anchor);
+    }
+
+    const QPointF moved_local = press_local + QPointF{80.0, 0.0};
+    QMouseEvent move(QEvent::MouseMove, moved_local,
+                      press_global + QPointF{80.0, 0.0},
+                      Qt::NoButton, Qt::LeftButton, Qt::NoModifier);
+    QApplication::sendEvent(&surface, &move);
+    (void)dispatch(surface.take_input_frame(0.0f, true));
+    if (drawing) {
+      ASSERT_FALSE(curve.preview_state().document->has_same_geometry(before));
+    } else {
+      ASSERT_TRUE(curve.preview_state().document->has_same_geometry(before));
+      ASSERT_EQ(curve.control_selection().controls.size(), 1u);
+      ASSERT_TRUE(curve.control_selection().active.has_value());
+    }
+
+    QFocusEvent focus_out(QEvent::FocusOut, Qt::ActiveWindowFocusReason);
+    QApplication::sendEvent(&surface, &focus_out);
+    const auto lost_focus = surface.take_input_frame(0.0f, true);
+    // The real Qt path retains its legacy release and forced pane focus. Only
+    // the independent cancellation edge distinguishes this from button-up.
+    EXPECT_TRUE(lost_focus.left_released);
+    EXPECT_FALSE(lost_focus.left_down);
+    EXPECT_TRUE(lost_focus.input.viewport_focused);
+    EXPECT_TRUE(lost_focus.input.viewport_hovered);
+    EXPECT_TRUE(lost_focus.input.pointer_interaction_canceled);
+    EXPECT_TRUE(lost_focus.pointer_activity());
+    EXPECT_TRUE(dispatch(lost_focus).curve_consumed);
+    EXPECT_FALSE(interaction.native_tool_dragging());
+    EXPECT_FALSE(curve.dragging());
+    EXPECT_TRUE(curve.preview_state().document->has_same_geometry(before));
+    if (drawing) {
+      EXPECT_TRUE(curve.control_selection().empty());
+      EXPECT_FALSE(curve.control_selection().active.has_value());
+    } else {
+      const quader::CurveControlTarget anchor{
+          .point = before.points()[0].id,
+          .kind = quader::CurveControlKind::Anchor,
+      };
+      EXPECT_EQ(curve.control_selection().controls,
+                std::vector<quader::CurveControlTarget>{anchor});
+      ASSERT_TRUE(curve.control_selection().active.has_value());
+      EXPECT_EQ(curve.control_selection().active, anchor);
+    }
+    EXPECT_FALSE(session.dirty());
+    expect_history_unchanged(editor.history().snapshot(), history_before);
+
+    const auto next = surface.take_input_frame(0.0f, true);
+    EXPECT_FALSE(next.input.pointer_interaction_canceled);
+    EXPECT_FALSE(next.left_released);
+    QMouseEvent release(QEvent::MouseButtonRelease, moved_local,
+                         press_global + QPointF{80.0, 0.0},
+                         Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+    QApplication::sendEvent(&surface, &release);
+    const auto released = surface.take_input_frame(0.0f, true);
+    EXPECT_FALSE(released.input.pointer_interaction_canceled);
+    (void)dispatch(released);
+    EXPECT_TRUE(curve.preview_state().document->has_same_geometry(before));
+    expect_history_unchanged(editor.history().snapshot(), history_before);
+  }
+}
+
+TEST(QtViewportSurfaceInputTests,
      CtrlRightClickReleaseAndDoubleClickStayDistinctFromDrag) {
   ASSERT_EQ(QCoreApplication::instance(), nullptr);
   int argc = 1;
@@ -523,6 +715,14 @@ TEST(QtViewportSurfaceInputTests,
   QApplication::sendEvent(&surface, &stationary_press);
   const quader::QtViewportInputFrame press_frame =
       surface.take_input_frame(0.0f, false);
+  ASSERT_EQ(press_frame.input.pointer_pressed_edges.size(), 1u);
+  EXPECT_EQ(press_frame.input.pointer_pressed_edges.front().button,
+            QuaderMouseButton::Right);
+  EXPECT_FLOAT_EQ(press_frame.input.pointer_pressed_edges.front().local.x,
+                  static_cast<float>(press_local.x() * surface.devicePixelRatio()));
+  EXPECT_FLOAT_EQ(press_frame.input.pointer_pressed_edges.front().local.y,
+                  static_cast<float>(press_local.y() * surface.devicePixelRatio()));
+  EXPECT_NE(press_frame.input.pointer_pressed_edges.front().sequence, 0u);
   EXPECT_TRUE(has_right_gesture(press_frame, QuaderInputGesture::Drag));
   EXPECT_FALSE(has_right_gesture(press_frame, QuaderInputGesture::Click));
 
@@ -532,6 +732,11 @@ TEST(QtViewportSurfaceInputTests,
   QApplication::sendEvent(&surface, &stationary_release);
   const quader::QtViewportInputFrame click_frame =
       surface.take_input_frame(0.0f, false);
+  ASSERT_EQ(click_frame.input.pointer_released_edges.size(), 1u);
+  EXPECT_EQ(click_frame.input.pointer_released_edges.front().button,
+            QuaderMouseButton::Right);
+  EXPECT_GT(click_frame.input.pointer_released_edges.front().sequence,
+            press_frame.input.pointer_pressed_edges.front().sequence);
   EXPECT_TRUE(has_right_gesture(click_frame, QuaderInputGesture::Click));
   EXPECT_FALSE(
       has_right_gesture(click_frame, QuaderInputGesture::DoubleClick));
@@ -568,7 +773,10 @@ TEST(QtViewportSurfaceInputTests,
   QMouseEvent drag_move(QEvent::MouseMove, drag_local, drag_global,
                         Qt::NoButton, Qt::RightButton, modifiers);
   QApplication::sendEvent(&surface, &drag_move);
-  (void)surface.take_input_frame(0.0f, false);
+  const auto drag_move_frame = surface.take_input_frame(0.0f, false);
+  ASSERT_EQ(drag_move_frame.input.pointer_drag_started_edges.size(), 1u);
+  EXPECT_EQ(drag_move_frame.input.pointer_drag_started_edges.front().button,
+            QuaderMouseButton::Right);
 
   QMouseEvent drag_release(QEvent::MouseButtonRelease, drag_local, drag_global,
                            Qt::RightButton, Qt::NoButton, modifiers);

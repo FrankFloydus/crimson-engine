@@ -29,6 +29,18 @@ namespace quader {
 
 class AssetRegistry;
 class SceneDocument;
+struct CurveSamplePayload;
+
+/// Pins one visible authored curve and its derived local samples for rendering.
+struct RenderOverlayCurveSnapshot {
+  EntityId entity = kInvalidEntityId;
+  AssetId curve_id = kInvalidAssetId;
+  std::uint64_t curve_revision = 0;
+  int modeling_object_id = -1;
+  std::shared_ptr<const CurveSamplePayload> sample_payload;
+  QMat4 world_transform;
+  bool selected = false;
+};
 
 /**
  * Captures a render-bound mesh overlay input without exposing scene/asset owner
@@ -168,6 +180,16 @@ struct RenderOverlaySceneWireframeSnapshot {
   RenderSceneBindingKey scene_binding;
   std::uint64_t scene_revision = 0;
   std::uint64_t asset_revision = 0;
+  /// Asset revision domain that can change borrowed mesh geometry inputs.
+  std::uint64_t mesh_material_usage_revision = 0;
+  std::uint64_t selection_revision = 0;
+  std::uint64_t hierarchy_presentation_revision = 0;
+  std::uint64_t visibility_revision = 0;
+  std::uint64_t transform_revision = 0;
+  std::uint64_t mesh_binding_revision = 0;
+  std::uint64_t curve_binding_revision = 0;
+  std::uint64_t render_component_revision = 0;
+  std::uint64_t layer_revision = 0;
   std::uint64_t local_visibility_revision = 0;
   ViewportPersistentOverlayStyleSnapshot style;
   RenderInstanceEditScope instance_edit_scope;
@@ -186,18 +208,24 @@ struct RenderOverlaySelectionSnapshot {
   RenderSceneBindingKey scene_binding;
   std::uint64_t scene_revision = 0;
   std::uint64_t asset_revision = 0;
+  std::uint64_t mesh_material_usage_revision = 0;
   std::uint64_t selection_revision = 0;
+  std::uint64_t hierarchy_presentation_revision = 0;
   std::uint64_t visibility_revision = 0;
   std::uint64_t local_visibility_revision = 0;
   std::uint64_t transform_revision = 0;
   std::uint64_t mesh_binding_revision = 0;
+  std::uint64_t curve_binding_revision = 0;
   std::uint64_t render_component_revision = 0;
+  std::uint64_t layer_revision = 0;
   std::vector<RenderOverlayMeshSnapshot> hierarchy_selection_wires;
   std::vector<RenderOverlayBoundsSnapshot> group_bounds;
   /// One tight world bound for each selected direct mesh or formal occurrence.
   std::vector<RenderOverlayBoundsSnapshot> selected_mesh_bounds;
   std::vector<RenderOverlayLightMarkerSnapshot> selected_lights;
   std::vector<RenderOverlayLightMarkerSnapshot> point_light_gizmos;
+  /// Scene content, drawn even when selection/tool overlays are hidden.
+  std::vector<RenderOverlayCurveSnapshot> curves;
   ViewportOverlayFrame tool_overlays;
 };
 
@@ -224,7 +252,10 @@ struct RenderOverlayPersistentSnapshotUpdate {
 struct RenderOverlaySnapshotCacheStats {
   std::uint64_t selected_object_build_count = 0;
   std::uint64_t scene_wireframe_build_count = 0;
+  std::uint64_t scene_wireframe_curve_publication_reuse_count = 0;
   std::uint64_t selection_build_count = 0;
+  std::uint64_t selection_curve_refresh_count = 0;
+  std::uint64_t selection_curve_entity_visit_count = 0;
   std::uint64_t selection_local_bounds_build_count = 0;
   std::uint64_t selection_local_bounds_reuse_count = 0;
   std::uint64_t selection_world_bounds_build_count = 0;
@@ -298,6 +329,12 @@ private:
       const SceneDocument &document, const AssetRegistry &assets) const;
   [[nodiscard]] bool refresh_selection_transforms(
       const SceneDocument &document, const AssetRegistry &assets);
+  [[nodiscard]] bool can_refresh_selection_curves(
+      const SceneDocument &document, const AssetRegistry &assets,
+      std::uint64_t local_visibility_revision) const;
+  void refresh_selection_curves(
+      const SceneDocument &document, const AssetRegistry &assets,
+      const ViewportLocalVisibilitySnapshot *local_visibility);
 
   const SceneDocument *source_document_ = nullptr;
   const AssetRegistry *source_assets_ = nullptr;

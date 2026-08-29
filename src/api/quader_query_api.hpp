@@ -37,6 +37,13 @@ public:
     modeling_object_for_id(QuaderModelingObjectId modeling_object_id) const;
     [[nodiscard]] std::optional<QuaderMeshAsset>
     compiled_object_mesh(QuaderModelingObjectRef object) const;
+    /// Returns the nearest pickable mesh depth without changing hover or selection.
+    [[nodiscard]] std::optional<double>
+    mesh_surface_distance(const QuaderRay &ray) const;
+    /// Resolves a mesh vertex landmark and surface depth without changing state.
+    [[nodiscard]] QuaderMeshSnapQueryResult
+    mesh_snap_query(const QuaderRay &ray, double vertex_radius,
+                    bool exclude_current_selection = true) const;
     [[nodiscard]] std::optional<QVec3> selection_center() const;
     [[nodiscard]] std::optional<QVec3> selection_transform_pivot() const;
     [[nodiscard]] std::optional<QuaderTransform3>

@@ -12,6 +12,7 @@
 #include <quader/modeling/api/previews.hpp>
 #include <quader/modeling/api/selection.hpp>
 #include <quader/modeling/api/tools.hpp>
+#include <quader/modeling/curves/curve_document.hpp>
 #include <quader/modeling/ids.hpp>
 #include <quader/modeling/input/viewport_host_input_snapshot.hpp>
 #include <quader/modeling/io/obj_mesh_view.hpp>

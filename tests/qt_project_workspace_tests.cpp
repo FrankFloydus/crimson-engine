@@ -187,7 +187,7 @@ TEST(QtProjectWorkspaceTests,
   EXPECT_EQ(selection_toolbar.iconSize(), QSize(32, 32));
   EXPECT_EQ(tool_toolbar.iconSize(), QSize(32, 32));
   EXPECT_EQ(expect_persistent_button_faces(selection_toolbar, 30), 5);
-  EXPECT_EQ(expect_persistent_button_faces(tool_toolbar, 40), 15);
+  EXPECT_EQ(expect_persistent_button_faces(tool_toolbar, 40), 16);
   for (QToolButton *button :
        selection_toolbar.findChildren<QToolButton *>()) {
     if (button->defaultAction() != nullptr &&

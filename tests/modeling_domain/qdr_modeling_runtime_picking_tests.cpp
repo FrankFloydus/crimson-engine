@@ -6,6 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "test_support.hpp"
 
+#include <editor/interactions/move_tool.hpp>
 #include <editor/modeling/runtime/session.hpp>
 #include <quader/modeling/neutral/polygon/document.hpp>
 
@@ -1065,6 +1066,67 @@ TEST(QdrModelingRuntimePickingTests,
 TEST(QdrModelingRuntimePickingTests,
 	ClickAndDragPickPlansStayInEditorCore) {
 	click_and_drag_pick_plans_stay_in_editor_core();
+}
+
+TEST(QdrModelingRuntimePickingTests,
+     MoveSnapScratchRetainsCapacityAndSelectionSemantics) {
+  std::vector objects{cube_object(11), cube_object(22)};
+  objects.front().selected = true;
+  constexpr double kVertexRadius = 2.0;
+  const quader_poly::PickOptions options =
+      quader_editor_core::move_vertex_snap_pick_options(kVertexRadius);
+  std::vector<quader_editor_core::PickObjectBounds> bounds;
+  bounds.reserve(objects.size());
+  for (const auto &object : objects) {
+    bounds.push_back(pick_bounds_for_object(object));
+  }
+  const auto face_geometry =
+      quader_editor_core::build_pick_face_geometry(objects, options);
+
+  const auto baseline = quader_editor_core::resolve_move_vertex_snap_query(
+      objects, quader_editor_core::SelectionMode::Object, front_center_ray(),
+      kVertexRadius, bounds, face_geometry, {}, true);
+  quader_editor_core::PickAllWithSurfaceScratch scratch;
+  const auto first = quader_editor_core::resolve_move_vertex_snap_query(
+      objects, quader_editor_core::SelectionMode::Object, front_center_ray(),
+      kVertexRadius, bounds, face_geometry, {}, true, &scratch);
+
+  ASSERT_TRUE(baseline.vertex_target.has_value());
+  ASSERT_TRUE(first.vertex_target.has_value());
+  ASSERT_TRUE(baseline.nearest_surface_ray_distance.has_value());
+  ASSERT_TRUE(first.nearest_surface_ray_distance.has_value());
+  EXPECT_EQ(first.vertex_target->object_id, 22);
+  EXPECT_EQ(first.vertex_target->object_id, baseline.vertex_target->object_id);
+  EXPECT_EQ(first.vertex_target->vertex_id, baseline.vertex_target->vertex_id);
+  EXPECT_FLOAT_EQ(first.vertex_target->position.x,
+                  baseline.vertex_target->position.x);
+  EXPECT_FLOAT_EQ(first.vertex_target->position.y,
+                  baseline.vertex_target->position.y);
+  EXPECT_FLOAT_EQ(first.vertex_target->position.z,
+                  baseline.vertex_target->position.z);
+  EXPECT_DOUBLE_EQ(first.vertex_target->ray_distance,
+                   baseline.vertex_target->ray_distance);
+  EXPECT_DOUBLE_EQ(first.vertex_target->pick_distance,
+                   baseline.vertex_target->pick_distance);
+  EXPECT_DOUBLE_EQ(*first.nearest_surface_ray_distance,
+                   *baseline.nearest_surface_ray_distance);
+
+  ASSERT_FALSE(scratch.local_surface_hits.empty());
+  ASSERT_FALSE(scratch.hits.empty());
+  const auto *surface_storage = scratch.local_surface_hits.data();
+  const auto *hit_storage = scratch.hits.data();
+  const std::size_t surface_capacity = scratch.local_surface_hits.capacity();
+  const std::size_t hit_capacity = scratch.hits.capacity();
+  const auto second = quader_editor_core::resolve_move_vertex_snap_query(
+      objects, quader_editor_core::SelectionMode::Object, front_center_ray(),
+      kVertexRadius, bounds, face_geometry, {}, true, &scratch);
+
+  ASSERT_TRUE(second.vertex_target.has_value());
+  EXPECT_EQ(second.vertex_target->object_id, first.vertex_target->object_id);
+  EXPECT_EQ(scratch.local_surface_hits.data(), surface_storage);
+  EXPECT_EQ(scratch.hits.data(), hit_storage);
+  EXPECT_EQ(scratch.local_surface_hits.capacity(), surface_capacity);
+  EXPECT_EQ(scratch.hits.capacity(), hit_capacity);
 }
 
 TEST(QdrModelingRuntimePickingTests,

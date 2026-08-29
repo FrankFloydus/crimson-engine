@@ -499,23 +499,12 @@ ProjectSessionResult ProjectSession::new_scene() {
   });
   std::unique_ptr<OpenSceneSession> scene =
       make_scene(scene_id, name, std::nullopt, std::move(document));
-  const SceneSessionId id = scene->session_id;
-  const SceneSessionId previous_active = active_scene_id_;
-  const std::uint64_t previous_activation_generation = activation_generation_;
-  open_scenes_.push_back(std::move(scene));
-  active_scene_id_ = id;
-  ++activation_generation_;
-  ProjectSessionResult persisted = persist_workspace();
-  if (!persisted.ok) {
-    std::unique_ptr<OpenSceneSession> rejected =
-        std::move(open_scenes_.back());
-    open_scenes_.pop_back();
-    release_session_id(rejected->session_id);
-    active_scene_id_ = previous_active;
-    activation_generation_ = previous_activation_generation;
-    return persisted;
+  ProjectSessionResult installed =
+      install_scene_and_activate(std::move(scene), workspace_->manifest);
+  if (installed.ok) {
+    installed.message = "New scene created.";
   }
-  return success(true, "New scene created.", id);
+  return installed;
 }
 
 ProjectSessionResult ProjectSession::open_scene(ProjectRelativePath path) {
@@ -580,27 +569,12 @@ ProjectSessionResult ProjectSession::open_scene(ProjectRelativePath path) {
   if (reseeded_duplicate || identity_mismatch) {
     scene->identity_dirty = true;
   }
-  const SceneSessionId id = scene->session_id;
-  const SceneSessionId previous_active = active_scene_id_;
-  const std::uint64_t previous_activation_generation = activation_generation_;
-  open_scenes_.push_back(std::move(scene));
-  active_scene_id_ = id;
-  ++activation_generation_;
-  PersistedWorkspaceState state =
-      workspace_state_for(open_scenes_, active_scene_id_);
-  ProjectSessionResult persisted =
-      persist_manifest(*workspace_, std::move(candidate_manifest),
-                       std::move(state.open_paths), std::move(state.active_path));
-  if (!persisted.ok) {
-    std::unique_ptr<OpenSceneSession> rejected =
-        std::move(open_scenes_.back());
-    open_scenes_.pop_back();
-    release_session_id(rejected->session_id);
-    active_scene_id_ = previous_active;
-    activation_generation_ = previous_activation_generation;
-    return persisted;
+  ProjectSessionResult result = install_scene_and_activate(
+      std::move(scene), std::move(candidate_manifest));
+  if (!result.ok) {
+    return result;
   }
-  ProjectSessionResult result = success(true, "Scene opened.", id);
+  result.message = "Scene opened.";
   if (reseeded_duplicate) {
     result.warnings.push_back(
         "The scene UUID duplicated another open scene and was reseeded. Save "
@@ -1365,6 +1339,54 @@ std::unique_ptr<OpenSceneSession> ProjectSession::make_scene(
       .path = std::move(path),
       .session = std::move(session),
   });
+}
+
+ProjectSessionResult ProjectSession::install_scene_and_activate(
+    std::unique_ptr<OpenSceneSession> scene, ProjectManifest manifest) {
+  const SceneSessionId id = scene->session_id;
+  ProjectManifest previous_manifest = workspace_->manifest;
+  open_scenes_.push_back(std::move(scene));
+  const auto reject_candidate = [this]() {
+    std::unique_ptr<OpenSceneSession> rejected =
+        std::move(open_scenes_.back());
+    open_scenes_.pop_back();
+    release_session_id(rejected->session_id);
+  };
+
+  // Keep the outgoing scene bound while candidate persistence can still fail.
+  // A failed create/open must not discard its authored tool draft or SDK preview.
+  PersistedWorkspaceState state = workspace_state_for(open_scenes_, id);
+  ProjectSessionResult persisted = persist_manifest(
+      *workspace_, std::move(manifest), std::move(state.open_paths),
+      std::move(state.active_path));
+  if (!persisted.ok) {
+    reject_candidate();
+    return persisted;
+  }
+
+  if (OpenSceneSession *outgoing = active_scene();
+      outgoing != nullptr && !cancel_transient_state(*outgoing)) {
+    reject_candidate();
+    ProjectSessionResult restored =
+        persist_prepared_manifest(*workspace_, previous_manifest);
+    ProjectSessionResult result =
+        failure("Could not cancel the active scene preview.");
+    if (!restored.ok) {
+      // The old tab remains authoritative even when a second I/O failure stops
+      // its manifest rollback. Report the durable mismatch rather than retaining
+      // a failed candidate in the live workspace.
+      workspace_->manifest = std::move(previous_manifest);
+      result.message += " Could not restore the workspace manifest: " +
+                        restored.message;
+    }
+    return result;
+  }
+
+  active_scene_id_ = id;
+  ++activation_generation_;
+  ProjectSessionResult result = success(true, "Scene activated.", id);
+  result.warnings = std::move(persisted.warnings);
+  return result;
 }
 
 ProjectSessionResult ProjectSession::install_workspace(

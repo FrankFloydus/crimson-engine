@@ -9,6 +9,7 @@
 #include "api/quader_api_result.hpp"
 #include "api/quader_api_session.hpp"
 #include "api/quader_api_types.hpp"
+#include "api/quader_curve_types.hpp"
 
 #include <cstdint>
 #include <initializer_list>
@@ -612,6 +613,24 @@ public:
 
   QuaderApiResult<QuaderModelingObjectRef>
   create_mesh(QuaderPolygonDocument document, QuaderCreateMeshArgs args = {});
+  QuaderApiResult<QuaderModelingObjectRef>
+  create_curve(const QuaderCreateCurveArgs &args);
+  [[nodiscard]] QuaderApiResult<QuaderCurveSnapshot>
+  curve_snapshot(QuaderModelingObjectRef object,
+                 bool include_preview = true) const;
+  QuaderApiVoidResult replace_curve(QuaderModelingObjectRef object,
+                                    modeling::CurveDocument document);
+  QuaderApiVoidResult set_curve_point(QuaderModelingObjectRef object,
+                                      modeling::CurvePointId point,
+                                      const modeling::CurvePointSpec &value);
+  /// Toggles one anchor between corner and aligned handles as one undoable edit.
+  QuaderApiVoidResult toggle_curve_point_smoothness(
+      QuaderModelingObjectRef object, modeling::CurvePointId point);
+  QuaderApiVoidResult set_curve_closed(QuaderModelingObjectRef object, bool closed);
+  QuaderApiVoidResult begin_curve_preview(QuaderModelingObjectRef object);
+  QuaderApiVoidResult update_curve_preview(modeling::CurveDocument document);
+  QuaderApiVoidResult commit_curve_preview();
+  QuaderApiVoidResult cancel_curve_preview();
   QuaderApiResult<QuaderMeshHandle>
   create_mesh_handle(QuaderPolygonDocument document,
                      QuaderCreateMeshArgs args = {});

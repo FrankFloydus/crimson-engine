@@ -139,6 +139,7 @@ enum class EntityKind {
     Light = 2,
     Generic = 3,
     Instance = 4,
+    Curve = 5,
 };
 
 /**
@@ -263,6 +264,13 @@ struct MeshComponent {
   MeshPhysicsBodyType body_type = MeshPhysicsBodyType::StaticBody;
 
   [[nodiscard]] bool operator==(const MeshComponent &) const = default;
+};
+
+/// Binds one native scene entity to an immutable SDK curve asset projection.
+struct CurveComponent {
+  AssetId curve = kInvalidAssetId;
+
+  [[nodiscard]] bool operator==(const CurveComponent &) const = default;
 };
 
 /**

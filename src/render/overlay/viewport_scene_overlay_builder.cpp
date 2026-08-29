@@ -6,6 +6,8 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "render/overlay/viewport_scene_overlay_builder.hpp"
 
+#include "render/overlay/curve_overlay_geometry.hpp"
+
 #include "diagnostics/profile.hpp"
 #include "core/color_space.hpp"
 #include "math/glm_bridge.hpp"
@@ -499,6 +501,23 @@ ViewportOverlayFrame ViewportSceneOverlayBuilder::build_selection_frame(
     bool include_tool_overlays,
     bool selection_overlays_visible) {
   QDR_PROFILE_FUNCTION();
+  for (const RenderOverlayCurveSnapshot &curve : snapshot.curves) {
+    if (curve.sample_payload == nullptr) {
+      continue;
+    }
+    const bool selected = selection_overlays_visible && curve.selected;
+    append_curve_overlay_stroke(base_frame, *curve.sample_payload,
+        curve.world_transform, ViewportOverlayLine{
+            .layer = ViewportOverlayLayer::WireframeBase,
+            .color = selected ? kOverlaySelectionWireColor : kOverlayCurveColor,
+            .width_pixels = selected ? kOverlaySelectionWireLineWidthPixels
+                                     : kOverlayCurveLineWidthPixels,
+            .style_role = selected ? ViewportOverlayStyleRole::SelectionWire
+                                  : ViewportOverlayStyleRole::ExplicitColor,
+            .source = ViewportOverlaySource::SceneCurve,
+            .element = {.object_id = curve.modeling_object_id},
+        });
+  }
   if (selection_overlays_visible) {
     if (selection_mode == RenderOverlaySelectionMode::Object &&
         snapshot.selected_mesh_bounds.size() > 1u) {

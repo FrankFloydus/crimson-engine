@@ -614,10 +614,55 @@ TEST(CommandBehaviorContractTests,
   EXPECT_EQ(contracted, registered)
       << "The registry and explicit behavior-contract catalog diverged.";
 #ifndef NDEBUG
-  EXPECT_EQ(contracted.size(), 188u);
-#else
   EXPECT_EQ(contracted.size(), 189u);
+#else
+  EXPECT_EQ(contracted.size(), 190u);
 #endif
+}
+
+TEST(CommandBehaviorContractTests,
+     CurveFingerprintsCaptureAuthoredHandlesClosureAndLivePreviews) {
+  const auto *contract =
+      find_command_behavior_contract(quader_command::kSelectAll.string());
+  ASSERT_NE(contract, nullptr);
+  auto fixture = CommandBehaviorFixture::create(*contract);
+  QuaderEditorApi &editor = fixture->editor();
+  const auto created = editor.modeling().create_curve({
+      .points = {{.position = {0.0F, 0.0F, 0.0F},
+                  .outgoing_handle = {1.0F, 0.0F, 0.0F}},
+                 {.position = {4.0F, 0.0F, 0.0F},
+                  .incoming_handle = {-1.0F, 0.0F, 0.0F}}},
+      .name = "Fingerprint Curve",
+  });
+  ASSERT_TRUE(created.ok()) << created.error_message();
+  const auto snapshot = editor.modeling().curve_snapshot(created.value());
+  ASSERT_TRUE(snapshot.ok()) << snapshot.error_message();
+  const auto before = capture_command_observable_state(editor);
+  auto candidate = snapshot.value().document;
+  const auto anchor = candidate.points().front();
+  ASSERT_TRUE(candidate.set_point(anchor.id, {
+      .position = anchor.position,
+      .incoming_handle = anchor.incoming_handle,
+      .outgoing_handle = {1.0F, 2.0F, 0.0F},
+  }).ok());
+  ASSERT_TRUE(editor.modeling().begin_curve_preview(created.value()).ok());
+  ASSERT_TRUE(editor.modeling().update_curve_preview(candidate).ok());
+  const auto preview = capture_command_observable_state(editor);
+  EXPECT_NE(before.domain(CommandObservableDomain::Geometry),
+            preview.domain(CommandObservableDomain::Geometry));
+  ASSERT_TRUE(editor.modeling().cancel_curve_preview().ok());
+  EXPECT_EQ(before.domain(CommandObservableDomain::Geometry),
+            capture_command_observable_state(editor).domain(
+                CommandObservableDomain::Geometry));
+
+  ASSERT_TRUE(editor.modeling().set_curve_closed(created.value(), true).ok());
+  const auto closed = capture_command_observable_state(editor);
+  EXPECT_NE(before.domain(CommandObservableDomain::Geometry),
+            closed.domain(CommandObservableDomain::Geometry));
+  ASSERT_TRUE(editor.history().undo().ok());
+  EXPECT_EQ(before.domain(CommandObservableDomain::Geometry),
+            capture_command_observable_state(editor).domain(
+                CommandObservableDomain::Geometry));
 }
 
 TEST(CommandBehaviorContractTests,

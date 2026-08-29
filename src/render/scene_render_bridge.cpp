@@ -169,6 +169,14 @@ void SceneRenderBridge::sync(const SceneDocument &document,
     return;
   }
   if (has_previous_scene_snapshot_ &&
+      try_refresh_render_scene_snapshot_curve_publication(
+          previous_scene_snapshot_, document, assets, frame_index,
+          scene_binding, project_material_revision, instance_edit_scope,
+          local_visibility)) {
+    (void)sync_service_.sync(previous_scene_snapshot_);
+    return;
+  }
+  if (has_previous_scene_snapshot_ &&
       try_refresh_render_scene_snapshot_selection(
           previous_scene_snapshot_, document, assets, frame_index,
           scene_binding, project_material_revision,

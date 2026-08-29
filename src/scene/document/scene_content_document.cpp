@@ -460,6 +460,22 @@ SceneContentDocumentAssetReferenceReport
 SceneContentDocument::validate_asset_references() const {
   SceneContentDocumentAssetReferenceReport report;
   for (const EntityId entity : scene_.entities()) {
+    if (const CurveComponent *curve = scene_.curve(entity);
+        curve != nullptr && (curve->curve == kInvalidAssetId ||
+                             !assets_.has_curve(curve->curve))) {
+      report.issues.push_back(SceneContentDocumentAssetReferenceIssue{
+          .entity = entity,
+          .asset = curve->curve,
+          .message = "entity references a missing curve asset.",
+      });
+    }
+    if (scene_.kind(entity) == EntityKind::Curve &&
+        scene_.curve(entity) == nullptr) {
+      report.issues.push_back(SceneContentDocumentAssetReferenceIssue{
+          .entity = entity,
+          .message = "curve entity is missing its authored curve binding.",
+      });
+    }
     if (const MeshComponent *mesh = scene_.mesh(entity);
         mesh != nullptr && (mesh->mesh == kInvalidAssetId ||
                             !assets_.has_mesh(mesh->mesh))) {

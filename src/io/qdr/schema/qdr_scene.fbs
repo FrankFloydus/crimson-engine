@@ -12,7 +12,8 @@ enum EntityKind : ubyte {
   Mesh = 1,
   Light = 2,
   Generic = 3,
-  Instance = 4
+  Instance = 4,
+  Curve = 5
 }
 
 enum MeshCollisionType : ubyte {
@@ -159,6 +160,12 @@ table MeshAsset {
   geometry_chunk_id:ulong;
 }
 
+table CurveAsset {
+  id:ulong;
+  name:string;
+  authored_payload:[ubyte] (required);
+}
+
 table TextureSlotBinding {
   slot:string;
   texture_id:ulong;
@@ -221,6 +228,10 @@ table MeshComponent {
   collision_type:MeshCollisionType = Box;
   display_collision:bool = false;
   body_type:MeshPhysicsBodyType = StaticBody;
+}
+
+table CurveComponent {
+  curve:ulong;
 }
 
 table MaterialComponent {
@@ -301,6 +312,7 @@ table Entity {
   instance_occurrence:InstanceOccurrenceComponent;
   layer_id:ulong;
   texture_mapping:TextureMappingComponent;
+  curve:CurveComponent;
 }
 
 table SceneLayer {
@@ -346,6 +358,7 @@ table ScenePayload {
   project_asset_dependencies:[ProjectAssetDependency];
   layers:[SceneLayer];
   viewport_camera_pose:ViewportCameraPose;
+  curves:[CurveAsset];
 }
 
 root_type ScenePayload;

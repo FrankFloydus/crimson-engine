@@ -15,6 +15,7 @@
 namespace quader {
 
 class EditorSelectionService;
+class CurveToolService;
 class LinearArrayToolService;
 class MaterialReference;
 class ModelingSessionService;
@@ -32,11 +33,14 @@ public:
                                 RadialArrayToolService &radial_array,
                                 PrimitiveCreationToolService &primitives,
                                 EditorSelectionService &selection,
-                                ModelingSessionService &modeling);
+                                ModelingSessionService &modeling,
+                                CurveToolService &curve);
 
   [[nodiscard]] bool handles(std::string_view tool_id) const;
   [[nodiscard]] bool can_activate(std::string_view tool_id) const;
   [[nodiscard]] bool has_pending_tool() const;
+  /// Distinguishes uncommitted gestures from an idle persistent curve editor.
+  [[nodiscard]] bool has_pending_history_preview() const;
   [[nodiscard]] bool blocks_modeling_content_mutation() const;
   [[nodiscard]] bool blocks_document_mutation(EntityId entity) const;
   [[nodiscard]] std::string_view active_tool_id() const;
@@ -59,6 +63,7 @@ private:
   PrimitiveCreationToolService &primitives_;
   EditorSelectionService &selection_;
   ModelingSessionService &modeling_;
+  CurveToolService &curve_;
 };
 
 } // namespace quader

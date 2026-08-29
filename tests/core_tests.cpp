@@ -100,6 +100,7 @@
 #include "support/viewport_overlay_test_helpers.hpp"
 
 #include <gtest/gtest.h>
+#include <quader/modeling/curves/curve_document.hpp>
 
 #include <editor/interactions/viewport_navigation.hpp>
 #include <editor/interactions/viewport_projection.hpp>
@@ -4185,6 +4186,190 @@ TEST(ViewportContextMenuPolicyTests, PreservesHoverOnlyForClickLikeRightPress) {
 
 
 
+namespace {
+
+CurveAsset curve_owner_test_asset() {
+  const std::array<modeling::CurvePointSpec, 2> points{{
+      {.position = {0.0f, 0.0f, 0.0f}, .outgoing_handle = {0.0f, 4.0f, 0.0f}},
+      {.position = {4.0f, 0.0f, 0.0f}, .incoming_handle = {0.0f, 4.0f, 0.0f}},
+  }};
+  CurveAsset asset;
+  asset.name = "Authored Curve";
+  asset.document = std::make_shared<const modeling::CurveDocument>(
+      modeling::CurveDocument::make_bezier(points).or_throw());
+  return asset;
+}
+
+} // namespace
+
+TEST(ViewportPointPlacementServiceTests,
+     CurvePublicationsRetainCachedMeshPlacementGeometry) {
+  AssetRegistry assets;
+  SceneDocument scene;
+  const AssetId mesh_id =
+      assets.add_mesh(make_test_triangle_mesh("Placement Mesh"));
+  const AssetId alternate_mesh_id =
+      assets.add_mesh(make_test_triangle_mesh("Alternate Placement Mesh"));
+  const AssetId curve_id = assets.add_curve(curve_owner_test_asset());
+  ASSERT_NE(mesh_id, kInvalidAssetId);
+  ASSERT_NE(alternate_mesh_id, kInvalidAssetId);
+  ASSERT_NE(curve_id, kInvalidAssetId);
+
+  std::vector<EntityId> mesh_entities;
+  mesh_entities.reserve(64u);
+  for (std::size_t index = 0; index < 64u; ++index) {
+    const EntityId entity =
+        scene.create_entity("Placement Mesh", EntityKind::Mesh);
+    ASSERT_TRUE(scene.set_mesh(entity, {.mesh = mesh_id}));
+    mesh_entities.push_back(entity);
+  }
+  const EntityId curve_entity =
+      scene.create_entity("Placement Curve", EntityKind::Curve);
+  ASSERT_TRUE(scene.set_curve(curve_entity, {.curve = curve_id}));
+
+  std::uint64_t local_visibility_revision = 1u;
+  std::size_t visibility_filter_calls = 0u;
+  ViewportPointPlacementService placement;
+  placement.set_viewport_visibility_filter(
+      [&](EntityId) {
+        ++visibility_filter_calls;
+        return true;
+      },
+      [&]() { return local_visibility_revision; });
+  ViewportCameraController camera;
+  camera.set_viewport_size(800.0f, 600.0f);
+  camera.view_axis(ViewportViewAxis::Y, 1);
+  const ViewportPointPlacementRequest request{
+      .mouse_local = {400.0f, 300.0f},
+      .active_grid = viewport_active_grid_placement_plane(camera),
+      .grid_size = 1.0f,
+      .policy = ViewportPointPlacementPolicy::radial_array(),
+  };
+  const auto resolve = [&]() {
+    return placement.resolve(scene, assets, camera, request);
+  };
+
+  EXPECT_TRUE(resolve().valid);
+  const std::size_t initial_filter_calls = visibility_filter_calls;
+  EXPECT_GE(initial_filter_calls, mesh_entities.size());
+  const std::uint64_t broad_scene_revision = scene.revision();
+  const std::uint64_t broad_asset_revision = assets.revision();
+  const std::uint64_t hierarchy_revision =
+      scene.hierarchy_presentation_revision();
+  const std::uint64_t visibility_revision = scene.visibility_revision();
+  const std::uint64_t transform_revision = scene.transform_revision();
+  const std::uint64_t mesh_binding_revision = scene.mesh_binding_revision();
+  const std::uint64_t mesh_asset_revision =
+      assets.mesh_material_usage_revision();
+
+  CurveAsset replacement = curve_owner_test_asset();
+  replacement.name = "Published Curve";
+  ASSERT_TRUE(assets.replace_curve(curve_id, std::move(replacement)));
+  ASSERT_TRUE(scene.notify_curve_payload_changed(curve_entity));
+  EXPECT_GT(scene.revision(), broad_scene_revision);
+  EXPECT_GT(assets.revision(), broad_asset_revision);
+  EXPECT_EQ(scene.hierarchy_presentation_revision(), hierarchy_revision);
+  EXPECT_EQ(scene.visibility_revision(), visibility_revision);
+  EXPECT_EQ(scene.transform_revision(), transform_revision);
+  EXPECT_EQ(scene.mesh_binding_revision(), mesh_binding_revision);
+  EXPECT_EQ(assets.mesh_material_usage_revision(), mesh_asset_revision);
+  EXPECT_TRUE(resolve().valid);
+  EXPECT_EQ(visibility_filter_calls, initial_filter_calls);
+
+  ASSERT_TRUE(assets.update_mesh(mesh_id, [](MeshAsset &mesh) {
+    mesh.edit_geometry().vertices.front().position.x -= 1.0f;
+  }));
+  EXPECT_TRUE(resolve().valid);
+  std::size_t previous_calls = visibility_filter_calls;
+  EXPECT_GT(previous_calls, initial_filter_calls);
+
+  ASSERT_TRUE(scene.set_mesh(mesh_entities.front(),
+                             {.mesh = alternate_mesh_id}));
+  EXPECT_TRUE(resolve().valid);
+  EXPECT_GT(visibility_filter_calls, previous_calls);
+  previous_calls = visibility_filter_calls;
+
+  ASSERT_TRUE(scene.set_transform(
+      mesh_entities[1], TransformComponent{.position = {2.0f, 0.0f, 0.0f}}));
+  EXPECT_TRUE(resolve().valid);
+  EXPECT_GT(visibility_filter_calls, previous_calls);
+  previous_calls = visibility_filter_calls;
+
+  ASSERT_TRUE(scene.set_visible(mesh_entities[2], false));
+  EXPECT_TRUE(resolve().valid);
+  EXPECT_GT(visibility_filter_calls, previous_calls);
+  previous_calls = visibility_filter_calls;
+
+  ASSERT_TRUE(scene.set_locked(mesh_entities[3], true));
+  EXPECT_TRUE(resolve().valid);
+  EXPECT_GT(visibility_filter_calls, previous_calls);
+  previous_calls = visibility_filter_calls;
+
+  ++local_visibility_revision;
+  EXPECT_TRUE(resolve().valid);
+  EXPECT_GT(visibility_filter_calls, previous_calls);
+}
+
+TEST(SceneDocumentTests, CurveBindingsPreserveKindAndTrackOwnerRevisions) {
+  SceneDocument scene;
+  const EntityId curve = scene.create_entity("Curve", EntityKind::Curve);
+  ASSERT_TRUE(scene.set_curve(curve, {.curve = 42u}));
+  ASSERT_NE(scene.curve(curve), nullptr);
+  EXPECT_EQ(scene.kind(curve), EntityKind::Curve);
+  const auto revision = scene.revision();
+  const auto binding_revision = scene.curve_binding_revision();
+  const auto render_revision = scene.render_component_revision();
+
+  EXPECT_TRUE(scene.set_curve(curve, {.curve = 42u}));
+  EXPECT_FALSE(scene.set_curve(curve, {}));
+  EXPECT_FALSE(scene.set_mesh(curve, {.mesh = 7u}));
+  EXPECT_FALSE(scene.set_light(curve, {}));
+  EXPECT_FALSE(scene.set_entity_kind(curve, EntityKind::Mesh));
+  EXPECT_FALSE(scene.set_scene_settings(curve, {}));
+  EXPECT_EQ(scene.revision(), revision);
+  EXPECT_EQ(scene.curve_binding_revision(), binding_revision);
+  EXPECT_EQ(scene.render_component_revision(), render_revision);
+
+  ASSERT_TRUE(scene.notify_curve_payload_changed(curve));
+  EXPECT_EQ(scene.curve_binding_revision(), binding_revision + 1u);
+  EXPECT_EQ(scene.render_component_revision(), render_revision + 1u);
+  const auto checkpoint = scene.capture_projection_checkpoint();
+  const auto saved_revision = scene.curve_binding_revision();
+  const EntityId temporary = scene.create_entity("Temporary Curve");
+  ASSERT_TRUE(scene.set_curve(temporary, {.curve = 43u}));
+  ASSERT_TRUE(scene.restore_projection_checkpoint(checkpoint, {&temporary, 1u}));
+  EXPECT_FALSE(scene.exists(temporary));
+  EXPECT_EQ(scene.curve_binding_revision(), saved_revision);
+
+  ASSERT_TRUE(scene.clear_curve(curve));
+  EXPECT_EQ(scene.curve(curve), nullptr);
+  EXPECT_EQ(scene.kind(curve), EntityKind::Generic);
+}
+
+TEST(SceneDocumentTests, CurveSubtreesCannotBecomePartialInstanceDefinitions) {
+  SceneDocument scene;
+  const EntityId group = scene.create_empty("Group");
+  const EntityId mesh = scene.create_entity("Mesh");
+  ASSERT_TRUE(scene.set_mesh(mesh, {.mesh = 5u}));
+  ASSERT_TRUE(scene.set_parent(mesh, group, false));
+  const EntityId curve = scene.create_entity("Curve");
+  ASSERT_TRUE(scene.set_curve(curve, {.curve = 6u}));
+  ASSERT_TRUE(scene.set_parent(curve, group, false));
+  const auto revision = scene.revision();
+  EXPECT_FALSE(scene.set_instance_definition(group));
+  EXPECT_EQ(scene.revision(), revision);
+  EXPECT_EQ(scene.instance_definition(group), nullptr);
+  EXPECT_EQ(scene.parent(curve), group);
+
+  const EntityId definition = scene.create_empty("Definition");
+  ASSERT_TRUE(scene.set_instance_definition(definition));
+  const auto definition_revision = scene.revision();
+  EXPECT_FALSE(scene.set_parent(curve, definition, false));
+  EXPECT_FALSE(scene.set_instance_occurrence(curve, {.definition = definition}));
+  EXPECT_EQ(scene.revision(), definition_revision);
+  EXPECT_EQ(scene.parent(curve), group);
+}
+
 TEST(SceneDocumentTests, CreatesStableEntitiesAndComponents) {
   SceneDocument scene;
   const EntityId sphere = scene.create_entity("Sphere");
@@ -5115,6 +5300,35 @@ TEST(SceneDocumentTests,
   EXPECT_EQ(scene.world_transform_matrix(child).values, world_before.values);
   EXPECT_EQ(scene.revision(), scene_revision_before);
   EXPECT_EQ(scene.transform_revision(), transform_revision_before);
+}
+
+TEST(SceneBoundsTests, CurveHierarchyBoundsUseAuthoredExtremaAndTransforms) {
+  AssetRegistry assets;
+  const AssetId asset_id = assets.add_curve(curve_owner_test_asset());
+  ASSERT_NE(asset_id, kInvalidAssetId);
+  SceneDocument scene;
+  const EntityId group = scene.create_empty("Group");
+  ASSERT_TRUE(scene.set_transform(
+      group, TransformComponent{.position = {10.0f, 2.0f, 0.0f}}));
+  const EntityId curve = scene.create_entity("Curve");
+  ASSERT_TRUE(scene.set_curve(curve, {.curve = asset_id}));
+  ASSERT_TRUE(scene.set_parent(curve, group, false));
+  ASSERT_TRUE(scene.set_transform(
+      curve, TransformComponent{.scale = {2.0f, 3.0f, 1.0f}}));
+  ASSERT_TRUE(scene.set_selected(group, true));
+  const auto bounds = selected_transform_world_bounds(scene, assets);
+  ASSERT_TRUE(bounds.has_value());
+  EXPECT_FLOAT_EQ(bounds->min.x, 10.0f);
+  EXPECT_FLOAT_EQ(bounds->max.x, 18.0f);
+  EXPECT_FLOAT_EQ(bounds->min.y, 2.0f);
+  EXPECT_FLOAT_EQ(bounds->max.y, 11.0f);
+  EXPECT_FLOAT_EQ(bounds->min.z, 0.0f);
+  EXPECT_FLOAT_EQ(bounds->max.z, 0.0f);
+  ASSERT_TRUE(scene.set_visible(curve, false));
+  const auto hidden_bounds = selected_transform_world_bounds(scene, assets);
+  ASSERT_TRUE(hidden_bounds.has_value());
+  EXPECT_FLOAT_EQ(hidden_bounds->min.x, 10.0f);
+  EXPECT_FLOAT_EQ(hidden_bounds->max.y, 2.0f);
 }
 
 TEST(SceneBoundsTests, ComputesSelectedWorldBoundsFromSpatialTransforms) {
@@ -8169,6 +8383,59 @@ TEST(ViewportInputRouterTests, ShiftRightMouseDoesNotStartFlyNavigation) {
   EXPECT_FALSE(router.navigating());
 }
 
+TEST(AssetRegistryTests, CurvePublicationPinsImmutableAuthoredState) {
+  AssetRegistry assets;
+  CurveAsset asset = curve_owner_test_asset();
+  auto mutable_document =
+      std::make_shared<modeling::CurveDocument>(*asset.document);
+  asset.document = mutable_document;
+  const AssetId id = assets.add_curve(asset);
+  ASSERT_NE(id, kInvalidAssetId);
+  const auto pinned = assets.curve(id)->document;
+  const auto revision = assets.curve_revision(id);
+  ASSERT_TRUE(mutable_document->append_point(
+      {.position = {8.0f, 0.0f, 0.0f}}).ok());
+  EXPECT_EQ(pinned->point_count(), 2u);
+  EXPECT_EQ(assets.curve(id)->document->point_count(), 2u);
+  EXPECT_EQ(assets.curve_revision(id), revision);
+  ASSERT_TRUE(assets.replace_curve(id, asset));
+  EXPECT_EQ(assets.curve(id)->document->point_count(), 3u);
+  EXPECT_GT(assets.curve_revision(id), revision);
+  EXPECT_EQ(pinned->point_count(), 2u);
+
+  const auto checkpoint = assets.capture_projection_checkpoint();
+  const auto checkpoint_revision = assets.revision();
+  ASSERT_TRUE(assets.remove_curve(id));
+  EXPECT_FALSE(assets.has_curve(id));
+  ASSERT_TRUE(assets.restore_projection_checkpoint(checkpoint));
+  EXPECT_EQ(assets.revision(), checkpoint_revision);
+  ASSERT_NE(assets.curve(id), nullptr);
+  EXPECT_EQ(assets.curve(id)->document->point_count(), 3u);
+  AssetRegistry copied = assets;
+  AssetRegistry moved = std::move(copied);
+  EXPECT_EQ(moved.curve_count(), 1u);
+  EXPECT_EQ(moved.curve_ids(), std::vector<AssetId>{id});
+  EXPECT_EQ(moved.curve(id)->document, assets.curve(id)->document);
+}
+
+TEST(AssetRegistryTests, InvalidCurvePublicationsPreserveRevisionsAndIds) {
+  AssetRegistry assets;
+  EXPECT_EQ(assets.add_curve(CurveAsset{}), kInvalidAssetId);
+  CurveAsset draft;
+  draft.document = std::make_shared<const modeling::CurveDocument>();
+  EXPECT_EQ(assets.add_curve(draft), kInvalidAssetId);
+  EXPECT_EQ(assets.revision(), 0u);
+  const AssetId id = assets.add_curve(curve_owner_test_asset());
+  EXPECT_EQ(id, 1u);
+  const auto revision = assets.revision();
+  const auto curve_revision = assets.curve_revision(id);
+  EXPECT_FALSE(assets.replace_curve(id, draft));
+  EXPECT_FALSE(assets.remove_curve(id + 1u));
+  EXPECT_EQ(assets.add_curve(id, curve_owner_test_asset()), kInvalidAssetId);
+  EXPECT_EQ(assets.revision(), revision);
+  EXPECT_EQ(assets.curve_revision(id), curve_revision);
+}
+
 TEST(AssetRegistryTests, StoresMaterialMeshAndTextureMetadata) {
   AssetRegistry registry;
   const AssetId mesh = registry.add_mesh(make_test_triangle_mesh());
@@ -9057,6 +9324,20 @@ TEST(AssetProjectArchitectureTests,
   ASSERT_NE(textures.get(texture_id), nullptr);
   EXPECT_EQ(textures.get(texture_id)->revision.value, 1u);
   EXPECT_EQ(textures.get(texture_id)->usage, TextureUsage::Mask);
+}
+
+TEST(SceneContentDocumentTests, CurveBindingsAreValidatedWithoutMeshRecords) {
+  SceneContentDocument document;
+  const AssetId id = document.assets().add_curve(curve_owner_test_asset());
+  const EntityId curve = document.scene().create_entity("Curve");
+  ASSERT_TRUE(document.scene().set_curve(curve, {.curve = id}));
+  EXPECT_TRUE(document.validate_asset_references().ok());
+  EXPECT_TRUE(document.validate_object_identity_invariants().ok());
+  ASSERT_TRUE(document.assets().remove_curve(id));
+  const auto report = document.validate_asset_references();
+  ASSERT_FALSE(report.ok());
+  EXPECT_EQ(report.issues.front().entity, curve);
+  EXPECT_EQ(report.issues.front().asset, id);
 }
 
 TEST(SceneContentDocumentTests, OwnsSceneAssetsAndStableObjectRecords) {
@@ -10342,6 +10623,38 @@ TEST(EditorHistoryServiceTests,
   EXPECT_TRUE(history.can_undo());
   ASSERT_TRUE(history.undo().ok);
   EXPECT_EQ(next, 0);
+}
+
+TEST(DocumentCommandTests, CurveComponentsSurviveDuplicateAndDeleteUndoRedo) {
+  SceneDocument scene;
+  const EntityId curve = scene.create_entity("Curve");
+  ASSERT_TRUE(scene.set_curve(curve, {.curve = 42u}));
+  ASSERT_TRUE(scene.set_transform(
+      curve, TransformComponent{.position = {3.0f, 4.0f, 5.0f}}));
+  ASSERT_TRUE(scene.set_selected(curve, true));
+  UndoRedoManager history;
+  auto duplicate = std::make_unique<DuplicateEntityCommand>(scene, curve);
+  auto *duplicate_command = duplicate.get();
+  ASSERT_TRUE(history.execute(std::move(duplicate)).ok);
+  const EntityId clone = duplicate_command->duplicate_entity();
+  ASSERT_NE(scene.curve(clone), nullptr);
+  EXPECT_EQ(scene.curve(clone)->curve, 42u);
+  EXPECT_EQ(scene.kind(clone), EntityKind::Curve);
+  EXPECT_FLOAT_EQ(scene.transform(clone)->position.x, 3.0f);
+  ASSERT_TRUE(history.undo().ok);
+  EXPECT_FALSE(scene.exists(clone));
+  ASSERT_TRUE(history.redo().ok);
+  ASSERT_NE(scene.curve(clone), nullptr);
+  EXPECT_EQ(scene.curve(clone)->curve, 42u);
+  ASSERT_TRUE(history.execute(
+      std::make_unique<DestroyEntityCommand>(scene, clone)).ok);
+  EXPECT_FALSE(scene.exists(clone));
+  ASSERT_TRUE(history.undo().ok);
+  ASSERT_NE(scene.curve(clone), nullptr);
+  EXPECT_EQ(scene.curve(clone)->curve, 42u);
+  EXPECT_EQ(scene.kind(clone), EntityKind::Curve);
+  ASSERT_TRUE(history.redo().ok);
+  EXPECT_FALSE(scene.exists(clone));
 }
 
 TEST(DocumentCommandTests, TypedCommandsExecuteDirectlyThroughUndoRedoManager) {
@@ -13824,6 +14137,47 @@ TEST(ModelingSessionServiceTests,
     EXPECT_EQ(service.rectangle_picking_projection_build_count(),
               front_only_projection_builds);
   }
+}
+
+TEST(ModelingSessionServiceTests,
+     MeshVertexSnapTargetUsesWorldPickingAndOmitsMovingSelection) {
+  SceneDocument scene;
+  AssetRegistry assets;
+  ModelingSessionService service(scene, assets);
+
+  const ModelingCreateBoxResult box = service.create_box_from_bounds({
+      .bounds = {.min = {-1.0f, -1.0f, -1.0f},
+                 .max = {1.0f, 1.0f, 1.0f}},
+      .name = "Vertex Snap Target",
+  });
+  ASSERT_TRUE(box.ok) << box.message;
+  TransformComponent transform = *scene.transform(box.object.entity);
+  transform.position = {3.0f, 0.0f, 0.0f};
+  ASSERT_TRUE(scene.set_transform(box.object.entity, transform));
+  ASSERT_TRUE(service
+                  .set_object_selection(std::span<const EntityId>{},
+                                        kInvalidEntityId)
+                  .ok);
+
+  const ModelingRay ray{
+      .origin = {4.0f, 1.0f, 5.0f},
+      .direction = {0.0f, 0.0f, -1.0f},
+  };
+  const std::optional<ModelingMeshVertexSnapTarget> target =
+      service.pick_mesh_vertex_snap_target(ray, 0.3);
+  ASSERT_TRUE(target.has_value());
+  EXPECT_EQ(target->modeling_object_id, box.object.modeling_object_id);
+  EXPECT_NE(target->vertex_id, quader_poly::kInvalidElementId);
+  expect_vec3_near(target->world_position, {4.0f, 1.0f, 1.0f});
+  EXPECT_NEAR(target->ray_distance, 4.0, 0.001);
+  EXPECT_NEAR(target->pick_distance, 0.0, 0.001);
+
+  const std::array selected{box.object.entity};
+  ASSERT_TRUE(service.set_object_selection(selected, box.object.entity).ok);
+  EXPECT_FALSE(service.pick_mesh_vertex_snap_target(ray, 0.3).has_value());
+  EXPECT_TRUE(
+      service.pick_mesh_vertex_snap_target(ray, 0.3, false).has_value());
+  EXPECT_FALSE(service.pick_mesh_vertex_snap_target(ray, 0.0).has_value());
 }
 
 TEST(ModelingSessionServiceTests,

@@ -58,6 +58,9 @@ entity_write_snapshot(const SceneDocument &scene, EntityId entity) {
   if (const MeshComponent *mesh = scene.mesh(entity)) {
     snapshot.mesh = *mesh;
   }
+  if (const CurveComponent *curve = scene.curve(entity)) {
+    snapshot.curve = *curve;
+  }
   if (const MaterialComponent *material = scene.material(entity)) {
     snapshot.material = *material;
   }
@@ -104,6 +107,23 @@ qdr_project_write_snapshot_from_document(const SceneContentDocument &document) {
     snapshot.meshes.push_back(mesh_asset_write_snapshot(source.source));
   }
 
+  const std::vector<AssetId> curve_ids = assets.curve_ids();
+  snapshot.curves.reserve(curve_ids.size());
+  for (const AssetId id : curve_ids) {
+    const CurveAsset *curve = assets.curve(id);
+    if (curve == nullptr || !assets.validate_curve(*curve).ok) {
+      return QdrProjectWriteSnapshotResult::failure(
+          ProjectIoErrorCode::IoFailure,
+          "Curve asset " + std::to_string(id) +
+              " could not be captured for save.");
+    }
+    snapshot.curves.push_back(QdrProjectCurveAssetWriteSnapshot{
+        .id = id,
+        .name = curve->name,
+        .document = curve->document,
+    });
+  }
+
   const std::vector<AssetId> material_ids = assets.material_ids();
   snapshot.materials.reserve(material_ids.size());
   for (const AssetId id : material_ids) {
@@ -139,6 +159,14 @@ qdr_project_write_snapshot_from_document(const SceneContentDocument &document) {
   const std::vector<EntityId> entity_ids = scene.entity_tree_order();
   snapshot.entities.reserve(entity_ids.size());
   for (const EntityId entity : entity_ids) {
+    if (const CurveComponent *curve = scene.curve(entity);
+        (curve != nullptr && !assets.has_curve(curve->curve)) ||
+        (scene.kind(entity) == EntityKind::Curve && curve == nullptr)) {
+      return QdrProjectWriteSnapshotResult::failure(
+          ProjectIoErrorCode::IoFailure,
+          "Curve entity " + std::to_string(entity) +
+              " has a missing curve asset binding.");
+    }
     snapshot.entities.push_back(entity_write_snapshot(scene, entity));
   }
 

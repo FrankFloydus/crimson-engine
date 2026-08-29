@@ -1564,20 +1564,30 @@ std::vector<PickHitRecord> pick_all(const std::vector<PolygonObject>& objects, c
         return hits;
 }
 
-std::vector<PickHitRecord> pick_all(
+std::optional<PickHitRecord> pick_all_with_surface_into(
 		const std::vector<PolygonObject>& objects,
 		const PickRequest& request,
 		std::span<const PickObjectBounds> object_bounds,
 		std::span<const PickObjectFaceGeometry> face_geometry,
-		std::span<const PickObjectTransform> object_transforms)
+		std::span<const PickObjectTransform> object_transforms,
+		PickAllWithSurfaceScratch& scratch)
 {
 	QDR_PROFILE_SCOPE("qdr_editor_core.pick_all.cached");
-	std::vector<PickHitRecord> hits;
+	std::vector<PickHitRecord>& hits = scratch.hits;
+	hits.clear();
+	hits.reserve(objects.size());
         const bool component_mode =
             request.options.mode == quader_poly::SelectionMode::Vertex ||
             request.options.mode == quader_poly::SelectionMode::Edge;
-        std::vector<std::optional<quader_poly::PickResult>>
-            local_surface_hits(component_mode ? objects.size() : 0U);
+        std::vector<std::optional<quader_poly::PickResult>>&
+            local_surface_hits = scratch.local_surface_hits;
+        if (component_mode) {
+          local_surface_hits.resize(objects.size());
+          std::fill(local_surface_hits.begin(), local_surface_hits.end(),
+                    std::nullopt);
+        } else {
+          local_surface_hits.clear();
+        }
         const std::optional<PickHitRecord> surface_hit =
             component_mode
                 ? nearest_surface_hit(objects, request.ray, request.options,
@@ -1615,7 +1625,36 @@ std::vector<PickHitRecord> pick_all(
 		}
 	}
         std::sort(hits.begin(), hits.end(), pick_hit_depth_less);
-        return hits;
+        return surface_hit;
+}
+
+PickAllWithSurfaceResult pick_all_with_surface(
+		const std::vector<PolygonObject>& objects,
+		const PickRequest& request,
+		std::span<const PickObjectBounds> object_bounds,
+		std::span<const PickObjectFaceGeometry> face_geometry,
+		std::span<const PickObjectTransform> object_transforms)
+{
+        PickAllWithSurfaceScratch scratch;
+        std::optional<PickHitRecord> surface_hit = pick_all_with_surface_into(
+            objects, request, object_bounds, face_geometry, object_transforms,
+            scratch);
+        return {
+            .hits = std::move(scratch.hits),
+            .nearest_surface_hit = std::move(surface_hit),
+        };
+}
+
+std::vector<PickHitRecord> pick_all(
+    const std::vector<PolygonObject>& objects,
+    const PickRequest& request,
+    std::span<const PickObjectBounds> object_bounds,
+    std::span<const PickObjectFaceGeometry> face_geometry,
+    std::span<const PickObjectTransform> object_transforms)
+{
+  return pick_all_with_surface(objects, request, object_bounds, face_geometry,
+                               object_transforms)
+      .hits;
 }
 
 std::vector<PickHitRecord> pick_mesh_depth_hits(

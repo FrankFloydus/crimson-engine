@@ -7,6 +7,7 @@
 #include "editor/modeling/services/modeling_sdk_projection_adapter.hpp"
 
 #include "assets/asset_registry.hpp"
+#include "assets/curve_asset.hpp"
 #include "assets/mesh_asset_payload.hpp"
 #include "editor/modeling/runtime/modeling_object_runtime_map.hpp"
 #include "editor/modeling/operations/portable_operation_mapping.hpp"
@@ -33,6 +34,7 @@
 #include <memory>
 #include <string>
 #include <thread>
+#include <type_traits>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -93,6 +95,24 @@ struct SdkProjectedObjectSnapshot {
   std::uint32_t material_slot = 0;
   AssetId mesh_id = kInvalidAssetId;
   MeshAsset mesh;
+  AssetId curve_id = kInvalidAssetId;
+  std::optional<CurveAsset> curve;
+};
+
+/// Captures the existing component that a curve publication may detach.
+struct ProjectedCurveBinding {
+  EntityId entity = kInvalidEntityId;
+  AssetId curve = kInvalidAssetId;
+};
+
+/// Caches one exact scene/asset-revision proof for a curve preview binding.
+struct CurvePreviewSharingProof {
+  bool valid = false;
+  EntityId entity = kInvalidEntityId;
+  AssetId curve = kInvalidAssetId;
+  bool shared = false;
+  std::uint64_t scene_revision = 0;
+  std::uint64_t asset_revision = 0;
 };
 
 [[nodiscard]] quader::modeling::Vec3 to_sdk(QVec3 value) {
@@ -561,12 +581,40 @@ public:
 
   void reset_from_scene() {
     ++stats_.full_scene_reset_count;
+    // Workspace replacement allocates fresh SDK objects. Retain only allocation
+    // cursors from still-matching native identities, including canceled preview
+    // IDs, without changing the authored asset or its publication revision.
+    std::map<int, modeling::CurveIdentityHighWater> retained_curve_cursors;
+    for (const auto &[native_id, object_id] : object_ids_) {
+      const auto identity =
+          object_map_.scene_identity_for_modeling_object(native_id);
+      if (!identity.has_value() || !identity->curve.has_value() ||
+          !scene_.exists(identity->entity) ||
+          scene_.uuid(identity->entity) != identity->uuid ||
+          scene_.editor_object_id(identity->entity) != identity->editor_object_id) {
+        continue;
+      }
+      const auto *component = scene_.modeling_object(identity->entity);
+      if (component == nullptr || component->object_id != native_id ||
+          scene_.curve(identity->entity) == nullptr) {
+        continue;
+      }
+      const auto document = session_.curve_document_copy(object_id);
+      if (document.ok()) {
+        retained_curve_cursors.emplace(native_id,
+                                       document.value().identity_high_water());
+      }
+    }
+    object_map_.clear();
     object_ids_.clear();
     preview_base_snapshot_.reset();
     workspace_update_base_snapshot_.reset();
     preview_asset_checkpoint_.reset();
     preview_scene_checkpoint_.reset();
     preview_changed_ = false;
+    curve_preview_external_changes_ = false;
+    curve_preview_asset_id_ = kInvalidAssetId;
+    curve_preview_sharing_proof_ = {};
     workspace_preview_active_ = false;
     workspace_preview_undo_mark_ = 0U;
     workspace_preview_world_from_object_.clear();
@@ -609,6 +657,34 @@ public:
       if (component->object_id < std::numeric_limits<int>::max()) {
         next_native_object_id_ =
             std::max(next_native_object_id_, component->object_id + 1);
+      }
+      if (const CurveComponent *binding = scene_.curve(entity)) {
+        const CurveAsset *curve = assets_.curve(binding->curve);
+        if (curve == nullptr || curve->document == nullptr ||
+            !curve->document->validate().ok()) {
+          continue;
+        }
+        const NameComponent *name = scene_.name(entity);
+        const SelectionComponent *selection = scene_.selection(entity);
+        modeling::CurveDocument document = *curve->document;
+        if (const auto cursor = retained_curve_cursors.find(component->object_id);
+            cursor != retained_curve_cursors.end()) {
+          document.preserve_identity_high_water(cursor->second);
+        }
+        workspace_documents.push_back({
+            .name = name != nullptr && !name->name.empty() ? name->name : "Curve",
+            .selected = selection != nullptr && selection->selected,
+            .curve_document = std::move(document),
+        });
+        workspace_objects.push_back({
+            .native_object_id = component->object_id,
+            .entity = entity,
+            .mark_sdk_owned = !component->sdk_owned,
+        });
+        if (entity == active_entity) {
+          active_native_object_id_ = component->object_id;
+        }
+        continue;
       }
       const MeshComponent *mesh_component = scene_.mesh(entity);
       const MeshAsset *mesh = mesh_component != nullptr
@@ -693,6 +769,21 @@ public:
     for (const EntityId entity : entities) {
       const ModelingObjectComponent *component =
           scene_.modeling_object(entity);
+      if (component != nullptr && scene_.curve(entity) != nullptr) {
+        const auto object = sdk_object(component->object_id);
+        const CurveAsset *curve = assets_.curve(scene_.curve(entity)->curve);
+        if (!object.has_value() || curve == nullptr || curve->document == nullptr) {
+          return failure("Curve modeling document could not be restored.");
+        }
+        if (restored_native_ids.emplace(component->object_id).second) {
+          restores.push_back({
+              .object = *object,
+              .dirty = {.topology = true, .geometry = true, .overlays = true},
+              .curve_document = *curve->document,
+          });
+        }
+        continue;
+      }
       const MeshComponent *mesh_component = scene_.mesh(entity);
       const MeshAsset *mesh =
           mesh_component != nullptr ? assets_.mesh(mesh_component->mesh)
@@ -962,6 +1053,7 @@ public:
   [[nodiscard]] quader_editor_core::EditorSession
   build_native_selection_projection() const {
     QDR_PROFILE_SCOPE("Modeling SDK rebuild native selection projection");
+    ++stats_.native_selection_projection_build_count;
     std::vector<quader_editor_core::PolygonObject> objects;
     objects.reserve(object_ids_.size());
     const std::vector<quader::modeling::SessionObjectSummary> summaries =
@@ -1064,21 +1156,30 @@ public:
     QDR_PROFILE_FUNCTION();
     const quader::modeling::PreviewTransactionSummary preview =
         session_.preview_summary();
+    // Curve previews cannot change the polygon documents represented by this
+    // mesh-only projection. Keep the retained view keyed to mesh owner state
+    // while a curve candidate advances SDK and global asset revisions.
+    const bool curve_preview_active =
+        preview.active && preview.kind == modeling::SessionObjectKind::Curve;
     const NativeSelectionProjectionCacheKey cache_key{
         .persistent_content_revision = persistent_content_revision_,
-        .session_content_revision = session_.content_revision(),
+        .session_content_revision =
+            curve_preview_active ? 0U : session_.content_revision(),
         .session_selection_revision = session_.selection_revision(),
         .mode_revision = mode_revision_,
         .scene_mesh_binding_revision = scene_.mesh_binding_revision(),
-        .asset_revision = assets_.revision(),
+        .asset_revision = curve_preview_active
+                              ? assets_.mesh_material_usage_revision()
+                              : assets_.revision(),
         .object_map_revision = object_map_.revision(),
         .active_native_object_id = active_native_object_id_,
         .mode = selection_mode_,
         .workspace_preview_active = workspace_preview_active_,
-        .sdk_preview_active = preview.active,
-        .preview_id = preview.id,
-        .preview_object_id = preview.object_id,
-        .preview_content_revision = preview.content_revision,
+        .sdk_preview_active = preview.active && !curve_preview_active,
+        .preview_id = curve_preview_active ? PreviewId{} : preview.id,
+        .preview_object_id = curve_preview_active ? ObjectId{} : preview.object_id,
+        .preview_content_revision =
+            curve_preview_active ? 0U : preview.content_revision,
     };
     if (!native_selection_projection_cache_key_.has_value() ||
         *native_selection_projection_cache_key_ != cache_key ||
@@ -1451,12 +1552,15 @@ public:
                            material, frame->transform, true, finalize);
   }
 
+  template <typename Document>
   [[nodiscard]] ModelingCreateBoxResult
-  create_document(PolygonDocument document, std::string_view requested_name,
+  create_document(Document document, std::string_view requested_name,
                   std::uint32_t material_slot, MaterialReference material,
                   const std::optional<ModelingTransform3> &initial_transform,
                   bool world_texture_projection,
                   const CreationFinalizer &finalize) {
+    constexpr bool kCurve =
+        std::is_same_v<Document, modeling::CurveDocument>;
 
     std::optional<TransformComponent> initial_scene_transform;
     if (initial_transform.has_value()) {
@@ -1501,10 +1605,16 @@ public:
       };
     };
 
-    const std::string name =
-        requested_name.empty() ? "Mesh" : std::string(requested_name);
-    Result<ObjectId> added =
-        session_.add_document(std::move(document), name);
+    const std::string name = requested_name.empty()
+                                 ? (kCurve ? "Curve" : "Mesh")
+                                 : std::string(requested_name);
+    Result<ObjectId> added = [&]() {
+      if constexpr (kCurve) {
+        return session_.add_curve_document(std::move(document), name);
+      } else {
+        return session_.add_document(std::move(document), name);
+      }
+    }();
     if (!added.ok()) {
       return rollback(added.error_message());
     }
@@ -1516,36 +1626,56 @@ public:
       return rollback("Injected failure after SDK mesh mutation.");
     }
 
-    Result<PolygonDocument> committed = session_.document_copy(added.value());
-    if (!committed.ok()) {
-      return rollback(committed.error_message());
-    }
-    ++stats_.mesh_compile_count;
-    std::optional<MeshAsset> projected =
-        MeshProjectionService::compile_sdk_document_mesh(committed.value());
-    if (!projected.has_value()) {
-      return rollback("SDK mesh projection failed.");
-    }
-    projected->name = name;
-    const AssetRegistryValidationResult validation =
-        assets_.validate_mesh(*projected);
-    if (!validation.ok) {
-      return rollback(validation.message.empty()
-                          ? "SDK mesh projection is invalid."
-                          : validation.message);
-    }
-    const AssetId mesh_id =
-        mesh_sync_.install_projected_mesh(assets_, std::move(*projected));
+    std::string projection_error;
+    const AssetId mesh_id = [&]() -> AssetId {
+      if constexpr (kCurve) {
+        const auto committed = session_.curve_document_snapshot(added.value());
+        if (!committed.ok()) {
+          projection_error = committed.error_message();
+          return kInvalidAssetId;
+        }
+        CurveAsset projected;
+        projected.name = name;
+        projected.document = committed.value();
+        return mesh_sync_.install_projected_curve(assets_, std::move(projected));
+      } else {
+        const auto committed = session_.document_copy(added.value());
+        if (!committed.ok()) {
+          projection_error = committed.error_message();
+          return kInvalidAssetId;
+        }
+        ++stats_.mesh_compile_count;
+        auto projected =
+            MeshProjectionService::compile_sdk_document_mesh(committed.value());
+        if (!projected.has_value()) {
+          projection_error = "SDK mesh projection failed.";
+          return kInvalidAssetId;
+        }
+        projected->name = name;
+        const auto validation = assets_.validate_mesh(*projected);
+        if (!validation.ok) {
+          projection_error = validation.message.empty()
+                                 ? "SDK mesh projection is invalid."
+                                 : validation.message;
+          return kInvalidAssetId;
+        }
+        return mesh_sync_.install_projected_mesh(assets_, std::move(*projected));
+      }
+    }();
     if (mesh_id == kInvalidAssetId) {
-      return rollback("SDK mesh asset could not be installed.");
+      return rollback(projection_error.empty()
+                          ? (kCurve ? "SDK curve asset could not be installed."
+                                    : "SDK mesh asset could not be installed.")
+                          : std::move(projection_error));
     }
     ++stats_.asset_publication_count;
     if (fails(ModelingSdkProjectionFailurePoint::AfterAssetInstall)) {
       return rollback("Injected failure after SDK mesh asset publication.");
     }
 
-    const EntityId entity =
-        mesh_sync_.create_projected_mesh_entity(scene_, name);
+    const EntityId entity = kCurve
+        ? mesh_sync_.create_projected_curve_entity(scene_, name)
+        : mesh_sync_.create_projected_mesh_entity(scene_, name);
     if (entity == kInvalidEntityId) {
       return rollback("SDK mesh scene entity could not be created.");
     }
@@ -1575,9 +1705,12 @@ public:
         native_object_id == std::numeric_limits<int>::max()) {
       return rollback("Native modeling object IDs are exhausted.");
     }
-    if (!mesh_sync_.bind_projected_object(
-            scene_, entity, native_object_id, material_slot, true,
-            mesh_id)) {
+    const bool bound = kCurve
+        ? mesh_sync_.bind_projected_curve_object(
+              scene_, entity, native_object_id, mesh_id)
+        : mesh_sync_.bind_projected_object(
+              scene_, entity, native_object_id, material_slot, true, mesh_id);
+    if (!bound) {
       return rollback("SDK mesh scene binding could not be installed.");
     }
     if (material.valid()) {
@@ -1606,7 +1739,7 @@ public:
     ModelingObjectRecord record{
         .modeling_object_id = native_object_id,
         .entity = entity,
-        .mesh = mesh_id,
+        .mesh = kCurve ? kInvalidAssetId : mesh_id,
         .name = name,
     };
     if (finalize && !finalize(record)) {
@@ -1624,9 +1757,209 @@ public:
     return {
         .ok = true,
         .changed = true,
-        .message = "Created mesh.",
+        .message = kCurve ? "Created curve." : "Created mesh.",
         .object = std::move(record),
     };
+  }
+
+  [[nodiscard]] ModelingCreateBoxResult create_curve(
+      modeling::CurveDocument document, std::string_view name,
+      const CreationFinalizer &finalize) {
+    if (preview_active()) {
+      return {.ok = false,
+              .message = "Commit or cancel the active preview first."};
+    }
+    const auto validated = document.validate();
+    if (!validated.ok() || document.point_count() < 2U) {
+      return {.ok = false,
+              .message = validated.ok() ? "A curve needs at least two points."
+                                        : validated.error_message()};
+    }
+    return create_document(std::move(document), name, 0U, {}, std::nullopt,
+                           false, finalize);
+  }
+
+  [[nodiscard]] std::optional<modeling::CurveDocument> curve_document(
+      int modeling_object_id, bool include_preview) const {
+    const auto object = sdk_object(modeling_object_id);
+    if (!object.has_value()) {
+      return std::nullopt;
+    }
+    const auto preview = session_.preview_summary();
+    auto document = include_preview && preview.active &&
+                            preview.kind == modeling::SessionObjectKind::Curve &&
+                            preview.object_id == *object
+                        ? session_.preview_curve_document_copy(preview.id)
+                        : session_.curve_document_copy(*object);
+    return document.ok()
+               ? std::optional<modeling::CurveDocument>{std::move(document).value()}
+               : std::nullopt;
+  }
+
+  [[nodiscard]] ModelingCommandResult replace_curve_document(
+      int modeling_object_id, modeling::CurveDocument document) {
+    if (preview_active()) {
+      return failure("Commit or cancel the active preview first.");
+    }
+    const auto object = sdk_object(modeling_object_id);
+    const auto current = curve_document(modeling_object_id, false);
+    if (!object.has_value() || !current.has_value()) {
+      return failure("Curve object does not exist.");
+    }
+    const auto validated = document.validate();
+    if (!validated.ok() || document.point_count() < 2U) {
+      return failure(validated.ok() ? "A curve needs at least two points."
+                                    : validated.error_message());
+    }
+    if (document.has_same_geometry(*current)) {
+      return {.ok = true, .message = "Curve unchanged."};
+    }
+    const auto session_before = session_;
+    const auto assets_before = assets_.capture_projection_checkpoint();
+    const auto scene_before = scene_.capture_projection_checkpoint();
+    const auto binding_before = capture_curve_projection_binding(*object);
+    const auto stats_before = stats_;
+    const auto rollback = [&](std::string message) {
+      session_.restore_snapshot_preserving_identity_high_water(session_before);
+      (void)assets_.restore_projection_checkpoint(assets_before);
+      restore_curve_projection_binding(binding_before);
+      (void)scene_.restore_projection_checkpoint(scene_before);
+      stats_ = stats_before;
+      return failure(std::move(message));
+    };
+    auto committed = session_.commit_curve_document(
+        *object, std::move(document),
+        {.changed = true,
+         .dirty = {.topology = true, .geometry = true, .overlays = true}});
+    if (!committed.ok()) {
+      return rollback(committed.error_message());
+    }
+    if (fails(ModelingSdkProjectionFailurePoint::AfterSdkMutation) ||
+        !project_committed_object(*object) ||
+        fails(ModelingSdkProjectionFailurePoint::BeforeCommit)) {
+      return rollback("Curve projection could not be published.");
+    }
+    ++persistent_content_revision_;
+    return from_sdk(committed, "Edited curve.");
+  }
+
+  [[nodiscard]] bool curve_document_preview_active() const {
+    const auto summary = session_.preview_summary();
+    return summary.active && summary.kind == modeling::SessionObjectKind::Curve;
+  }
+
+  [[nodiscard]] int curve_document_preview_object_id() const {
+    const auto summary = session_.preview_summary();
+    return summary.active && summary.kind == modeling::SessionObjectKind::Curve
+               ? native_object(summary.object_id).value_or(kInvalidModelingObjectId)
+               : kInvalidModelingObjectId;
+  }
+
+  [[nodiscard]] ModelingCommandResult
+  begin_curve_document_preview(int modeling_object_id) {
+    if (preview_active()) {
+      return failure("Commit or cancel the active preview first.");
+    }
+    const auto object = sdk_object(modeling_object_id);
+    auto document = curve_document(modeling_object_id, false);
+    if (!object.has_value() || !document.has_value()) {
+      return failure("Curve object does not exist.");
+    }
+    preview_base_snapshot_ = capture_snapshot(true);
+    preview_asset_checkpoint_ = assets_.capture_projection_checkpoint();
+    preview_scene_checkpoint_ = scene_.capture_projection_checkpoint();
+    auto begun = session_.begin_curve_document_preview(
+        *object, "edit_curve", std::move(*document), {});
+    if (!begun.ok() || fails(ModelingSdkProjectionFailurePoint::AfterSdkMutation)) {
+      session_.restore_snapshot_preserving_identity_high_water(
+          preview_base_snapshot_->impl_->session);
+      clear_preview_checkpoints();
+      return failure(begun.ok() ? "Curve preview could not begin."
+                                : begun.error_message());
+    }
+    preview_changed_ = false;
+    active_preview_operation_id_ = "edit_curve";
+    curve_preview_scene_revision_ = scene_.revision();
+    curve_preview_asset_revision_ = assets_.revision();
+    curve_preview_external_changes_ = false;
+    const auto entity = object_map_.entity_for_modeling_object(modeling_object_id);
+    curve_preview_asset_id_ = entity.has_value() && scene_.curve(*entity) != nullptr
+                                  ? scene_.curve(*entity)->curve : kInvalidAssetId;
+    refresh_curve_preview_sharing_proof(
+        entity.value_or(kInvalidEntityId), curve_preview_asset_id_);
+    return {.ok = true, .changed = true, .message = "Curve preview started."};
+  }
+
+  [[nodiscard]] ModelingCommandResult
+  update_curve_document_preview(modeling::CurveDocument document) {
+    if (!curve_document_preview_active() || !preview_base_snapshot_.has_value()) {
+      return failure("No curve preview is active.");
+    }
+    const auto validated = document.validate();
+    if (!validated.ok() || document.point_count() < 2U) {
+      return failure(validated.ok() ? "A curve needs at least two points."
+                                    : validated.error_message());
+    }
+    const auto preview = session_.preview_summary();
+    const auto current = session_.preview_curve_document_copy(preview.id);
+    if (!current.ok()) {
+      return failure(current.error_message());
+    }
+    if (document.has_same_geometry(current.value())) {
+      return {.ok = true, .message = "Curve preview unchanged."};
+    }
+    const auto base =
+        preview_base_snapshot_->impl_->session.curve_document_copy(preview.object_id);
+    if (!base.ok()) {
+      return failure(base.error_message());
+    }
+    const bool changed_from_base = !document.has_same_geometry(base.value());
+    curve_preview_external_changes_ = curve_preview_external_changes_ ||
+        scene_.revision() != curve_preview_scene_revision_ ||
+        assets_.revision() != curve_preview_asset_revision_;
+    const auto preview_before = session_.capture_preview_checkpoint(preview.id);
+    if (!preview_before.ok()) {
+      return failure(preview_before.error_message());
+    }
+    const auto assets_before = assets_.capture_curve_projection_checkpoint();
+    const auto scene_before = scene_.capture_curve_projection_checkpoint();
+    const auto binding_before = capture_curve_projection_binding(preview.object_id);
+    const CurvePreviewSharingProof sharing_before = curve_preview_sharing_proof_;
+    const auto stats_before = stats_;
+    ++stats_.curve_preview_checkpoint_capture_count;
+    stats_.curve_preview_checkpoint_curve_asset_count +=
+        assets_before.curve_count();
+    const auto rollback = [&](std::string message) {
+      (void)session_.restore_preview_checkpoint(preview_before.value());
+      (void)assets_.restore_curve_projection_checkpoint(assets_before);
+      restore_curve_projection_binding(binding_before);
+      (void)scene_.restore_curve_projection_checkpoint(scene_before);
+      curve_preview_sharing_proof_ = sharing_before;
+      stats_ = stats_before;
+      return failure(std::move(message));
+    };
+    auto updated = session_.update_curve_document_preview(
+        preview.id, std::move(document),
+        {.changed = changed_from_base,
+         .dirty = {.topology = true, .geometry = true, .overlays = true}});
+    if (!updated.ok()) {
+      return rollback(updated.error_message());
+    }
+    if (fails(ModelingSdkProjectionFailurePoint::AfterSdkMutation) ||
+        !project_preview_object()) {
+      return rollback("Curve preview projection could not be published.");
+    }
+    preview_changed_ = changed_from_base;
+    curve_preview_scene_revision_ = scene_.revision();
+    curve_preview_asset_revision_ = assets_.revision();
+    if (const auto native = native_object(preview.object_id)) {
+      const auto entity = object_map_.entity_for_modeling_object(*native);
+      if (entity.has_value() && scene_.curve(*entity) != nullptr) {
+        curve_preview_asset_id_ = scene_.curve(*entity)->curve;
+      }
+    }
+    ++stats_.preview_publication_count;
+    return {.ok = true, .changed = true, .message = "Curve preview updated."};
   }
 
   [[nodiscard]] ModelingCommandResult
@@ -2398,6 +2731,32 @@ public:
       ++mode_revision_;
       return {.ok = true, .changed = true};
     }
+    const auto summaries = session_.objects();
+    if (std::ranges::any_of(summaries, [](const auto &object) {
+          return object.selected && object.kind == modeling::SessionObjectKind::Curve;
+        })) {
+      std::vector<EntityId> meshes;
+      EntityId active_mesh = kInvalidEntityId;
+      for (const auto &object : summaries) {
+        if (!object.selected || object.kind != modeling::SessionObjectKind::Mesh) {
+          continue;
+        }
+        const auto native = native_object(object.id);
+        const auto entity = native.has_value()
+                                ? object_map_.entity_for_modeling_object(*native)
+                                : std::nullopt;
+        if (entity.has_value()) {
+          meshes.push_back(*entity);
+          if (*native == active_native_object_id_) {
+            active_mesh = *entity;
+          }
+        }
+      }
+      auto selected = set_object_selection(meshes, active_mesh);
+      if (!selected.ok) {
+        return selected;
+      }
+    }
     if (active_native_object_id_ == kInvalidModelingObjectId) {
       selection_mode_ = mode;
       ++mode_revision_;
@@ -2844,6 +3203,10 @@ public:
     std::vector<int> targets;
     targets.reserve(object_ids_.size());
     for (const auto &[native_id, object_id] : object_ids_) {
+      const auto entity = object_map_.entity_for_modeling_object(native_id);
+      if (entity.has_value() && scene_.curve(*entity) != nullptr) {
+        continue;
+      }
       Result<PolygonDocument> copied = session_.document_copy(object_id);
       if (!copied.ok()) {
         return failure(copied.error_message());
@@ -2941,6 +3304,10 @@ public:
     std::vector<int> targets;
     targets.reserve(object_ids_.size());
     for (const auto &[native_id, object_id] : object_ids_) {
+      const auto entity = object_map_.entity_for_modeling_object(native_id);
+      if (entity.has_value() && scene_.curve(*entity) != nullptr) {
+        continue;
+      }
       Result<PolygonDocument> copied = session_.document_copy(object_id);
       if (!copied.ok()) {
         return failure(copied.error_message());
@@ -3030,7 +3397,7 @@ public:
     std::vector<ModelingComponentSelectionRequest> requests;
     for (const quader::modeling::SessionObjectSummary &object :
          session_.objects()) {
-      if (!object.selected) {
+      if (!object.selected || object.kind != modeling::SessionObjectKind::Mesh) {
         continue;
       }
       const std::optional<int> native = native_object(object.id);
@@ -3313,6 +3680,14 @@ public:
   transform_selection(const ModelingTransform3 &transform, QVec3 pivot) {
     const quader::modeling::Transform3 sdk_transform = to_sdk(transform, pivot);
     const ModelingSelectionMode mode = selection_mode_;
+    if (mode == ModelingSelectionMode::Object || mode == ModelingSelectionMode::Group) {
+      const auto objects = session_.objects();
+      if (std::ranges::any_of(objects, [](const auto &object) {
+            return object.selected && object.kind == modeling::SessionObjectKind::Curve;
+          })) {
+        return transform_mixed_object_documents(sdk_transform);
+      }
+    }
     return mutate_selected_documents(
         [sdk_transform, mode](PolygonDocument &document) {
           if (mode != ModelingSelectionMode::Object &&
@@ -3336,6 +3711,86 @@ public:
           return transformed;
         },
         "Transform selection failed.");
+  }
+
+  [[nodiscard]] ModelingCommandResult transform_mixed_object_documents(
+      const modeling::Transform3 &transform) {
+    if (preview_active()) {
+      return failure("Commit or cancel the active preview first.");
+    }
+    const auto session_before = session_;
+    const auto assets_before = assets_.capture_projection_checkpoint();
+    const auto scene_before = scene_.capture_projection_checkpoint();
+    const auto stats_before = stats_;
+    const auto undo_mark = session_.undo_depth();
+    const auto rollback = [&](std::string message) {
+      session_.restore_snapshot_preserving_identity_high_water(session_before);
+      (void)assets_.restore_projection_checkpoint(assets_before);
+      (void)scene_.restore_projection_checkpoint(scene_before);
+      stats_ = stats_before;
+      return failure(std::move(message));
+    };
+    std::vector<ObjectId> changed_objects;
+    for (const auto &object : session_.objects()) {
+      if (!object.selected) {
+        continue;
+      }
+      Result<OperationResult> committed;
+      if (object.kind == modeling::SessionObjectKind::Curve) {
+        auto document = session_.curve_document_copy(object.id);
+        if (!document.ok()) {
+          return rollback(document.error_message());
+        }
+        auto transformed = document.value().transform(transform);
+        if (!transformed.ok()) {
+          return rollback(transformed.error_message());
+        }
+        if (!transformed.value().changed) {
+          continue;
+        }
+        committed = session_.commit_curve_document(
+            object.id, std::move(document).value(), std::move(transformed).value());
+      } else {
+        auto document = session_.document_copy(object.id);
+        if (!document.ok()) {
+          return rollback(document.error_message());
+        }
+        auto transformed = apply_with_whole_object_face_selection(
+            selection_mode_, document.value(),
+            [&transform](PolygonDocument &mesh) { return mesh.transform_selection(transform); });
+        if (!transformed.ok()) {
+          return rollback(transformed.error_message());
+        }
+        if (!transformed.value().changed) {
+          continue;
+        }
+        std::vector<SessionDocumentUpdate> updates;
+        updates.push_back({.object = object.id, .document = std::move(document).value(),
+                           .receipt = std::move(transformed).value()});
+        committed = session_.commit_documents_batch(std::move(updates), true);
+      }
+      if (!committed.ok()) {
+        return rollback(committed.error_message());
+      }
+      changed_objects.push_back(object.id);
+    }
+    if (changed_objects.empty()) {
+      return {.ok = true, .changed = false};
+    }
+    if (fails(ModelingSdkProjectionFailurePoint::AfterSdkMutation)) {
+      return rollback("Transform selection could not be committed.");
+    }
+    for (const auto object : changed_objects) {
+      if (!project_committed_object(object)) {
+        return rollback("Transform selection could not be projected.");
+      }
+    }
+    if (fails(ModelingSdkProjectionFailurePoint::BeforeCommit)) {
+      return rollback("Transform selection could not be committed.");
+    }
+    session_.squash_undo_since(undo_mark);
+    ++persistent_content_revision_;
+    return {.ok = true, .changed = true, .message = "Transformed selection."};
   }
 
   [[nodiscard]] ModelingCommandResult
@@ -4746,6 +5201,20 @@ public:
     if (!preview_active()) {
       return failure("No active SDK translate preview.");
     }
+    if (curve_document_preview_active() && !preview_changed_) {
+      ModelingCommandResult canceled = cancel_curve_preview_projection();
+      if (canceled.ok) {
+        canceled.changed = false;
+        canceled.message = "Curve unchanged.";
+      }
+      return canceled;
+    }
+    if (curve_document_preview_active() &&
+        (curve_preview_external_changes_ ||
+         scene_.revision() != curve_preview_scene_revision_ ||
+         assets_.revision() != curve_preview_asset_revision_)) {
+      return failure("Scene changed during the curve edit; cancel this preview first.");
+    }
     if (workspace_preview_active_) {
       if (workspace_transform_transient_active_ &&
           workspace_transform_commit_mutation_) {
@@ -4813,6 +5282,9 @@ public:
     QDR_PROFILE_FUNCTION();
     if (!preview_active()) {
       return failure("No active SDK translate preview.");
+    }
+    if (curve_document_preview_active()) {
+      return cancel_curve_preview_projection();
     }
     if (workspace_preview_active_ && workspace_transform_snapshotless_) {
       QDR_PROFILE_SCOPE("Transform preview cancel transient positions");
@@ -5054,17 +5526,6 @@ public:
            native_id != active_native_object_id_)) {
         continue;
       }
-      Result<PolygonDocument> document = session_.document_copy(object_id);
-      Result<AuthoredTopology> topology =
-          document.ok() ? document.value().authored_topology()
-                        : Result<AuthoredTopology>::failure(
-                              quader::modeling::make_error(
-                                  quader::modeling::ErrorCode::InvalidId,
-                                  "SDK document is unavailable."));
-      if (!document.ok() || !topology.ok()) {
-        continue;
-      }
-      const PolygonSelectionSnapshot selection = document.value().selection();
       ModelingSelectionExportObject object;
       object.modeling_object_id = native_id;
       object.entity = object_map_.entity_for_modeling_object(native_id)
@@ -5076,6 +5537,21 @@ public:
           object.name = name->name;
         }
       }
+      if (summary->second->kind == modeling::SessionObjectKind::Curve) {
+        exported.objects.push_back(std::move(object));
+        continue;
+      }
+      Result<PolygonDocument> document = session_.document_copy(object_id);
+      Result<AuthoredTopology> topology =
+          document.ok() ? document.value().authored_topology()
+                        : Result<AuthoredTopology>::failure(
+                              quader::modeling::make_error(
+                                  quader::modeling::ErrorCode::InvalidId,
+                                  "SDK document is unavailable."));
+      if (!document.ok() || !topology.ok()) {
+        continue;
+      }
+      const PolygonSelectionSnapshot selection = document.value().selection();
       for (const VertexId id : selection.vertices) {
         const auto vertex = std::find_if(
             topology.value().vertices.begin(), topology.value().vertices.end(),
@@ -5359,6 +5835,20 @@ public:
                                   ? assets_.mesh(mesh_component->mesh)
                                   : nullptr;
       const auto identity = live_identities.find(native_id);
+      if (component != nullptr && identity != live_identities.end()) {
+        const CurveComponent *binding = scene_.curve(*entity);
+        const CurveAsset *curve = binding != nullptr
+                                      ? assets_.curve(binding->curve) : nullptr;
+        if (curve != nullptr && curve->document != nullptr) {
+          snapshot->projected_objects.push_back({
+              .modeling_object_id = native_id,
+              .identity = identity->second,
+              .curve_id = binding->curve,
+              .curve = *curve,
+          });
+          continue;
+        }
+      }
       if (component == nullptr || mesh_component == nullptr || mesh == nullptr ||
           identity == live_identities.end()) {
         continue;
@@ -5425,6 +5915,17 @@ public:
           scene_.modeling_object(identity->second.entity);
       const MeshComponent *mesh_component =
           scene_.mesh(identity->second.entity);
+      if (component != nullptr && projected.curve.has_value()) {
+        const CurveComponent *binding = scene_.curve(identity->second.entity);
+        const CurveAsset *curve = binding != nullptr
+                                      ? assets_.curve(binding->curve) : nullptr;
+        if (curve != nullptr && curve->document != nullptr) {
+          projected.identity = identity->second;
+          projected.curve_id = binding->curve;
+          projected.curve = *curve;
+        }
+        continue;
+      }
       const MeshAsset *mesh = mesh_component != nullptr
                                   ? assets_.mesh(mesh_component->mesh)
                                   : nullptr;
@@ -5510,6 +6011,7 @@ public:
                       scene_, restored_ids);
 
     std::vector<AssetId> displaced_meshes;
+    std::vector<AssetId> displaced_curves;
     for (const auto &[native_id, object_id] : object_ids_) {
       (void)object_id;
       if (restored_ids.contains(native_id)) {
@@ -5524,6 +6026,9 @@ public:
           if (const MeshComponent *mesh = scene_.mesh(*entity)) {
             displaced_meshes.push_back(mesh->mesh);
           }
+          if (const CurveComponent *curve = scene_.curve(*entity)) {
+            displaced_curves.push_back(curve->curve);
+          }
           (void)mesh_sync_.destroy_projected_entity(scene_, *entity);
           object_map_.unbind_object(native_id);
         }
@@ -5533,14 +6038,22 @@ public:
     }
 
     std::unordered_map<AssetId, MeshAsset> restored_meshes;
+    std::unordered_map<AssetId, CurveAsset> restored_curves;
     restored_meshes.reserve(snapshot.impl_->projected_objects.size());
     for (const SdkProjectedObjectSnapshot &projected :
          snapshot.impl_->projected_objects) {
-      restored_meshes.emplace(projected.mesh_id,
-                              clone_mesh_asset_payload(projected.mesh));
+      if (projected.curve.has_value()) {
+        restored_curves.emplace(projected.curve_id, *projected.curve);
+      } else {
+        restored_meshes.emplace(projected.mesh_id,
+                                clone_mesh_asset_payload(projected.mesh));
+      }
     }
     if (!mesh_sync_.restore_history_mesh_assets(assets_, restored_meshes)) {
       return rollback("SDK history mesh assets could not be restored.");
+    }
+    if (!mesh_sync_.restore_history_curve_assets(assets_, restored_curves)) {
+      return rollback("SDK history curve assets could not be restored.");
     }
 
     for (const SdkProjectedObjectSnapshot &projected :
@@ -5552,6 +6065,8 @@ public:
         if (live != live_scene_identities.end()) {
           const std::optional<MeshComponent> baseline_mesh =
               restored_identity.mesh;
+          const std::optional<CurveComponent> baseline_curve =
+              restored_identity.curve;
           restored_identity = live->second;
           if (baseline_mesh.has_value()) {
             MeshComponent mesh = restored_identity.mesh.value_or(*baseline_mesh);
@@ -5559,6 +6074,9 @@ public:
             restored_identity.mesh = mesh;
           }
           restored_identity.material_slot = projected.material_slot;
+          if (baseline_curve.has_value()) {
+            restored_identity.curve = CurveComponent{projected.curve_id};
+          }
         }
       }
       const std::optional<EntityId> current_entity =
@@ -5569,6 +6087,11 @@ public:
             current_mesh != nullptr &&
             current_mesh->mesh != projected.mesh_id) {
           displaced_meshes.push_back(current_mesh->mesh);
+        }
+        if (const CurveComponent *current_curve = scene_.curve(*current_entity);
+            current_curve != nullptr &&
+            current_curve->curve != projected.curve_id) {
+          displaced_curves.push_back(current_curve->curve);
         }
       }
       EntityId entity = restored_identity.entity;
@@ -5582,10 +6105,15 @@ public:
       }
       mesh_sync_.apply_scene_identity_to_entity(scene_, entity,
                                                 restored_identity);
-      if (!mesh_sync_.bind_projected_object(
-              scene_, entity, projected.modeling_object_id,
-              projected.material_slot, true, projected.mesh_id,
-              restored_identity.local_frame_version)) {
+      const bool bound = projected.curve.has_value()
+          ? mesh_sync_.bind_projected_curve_object(
+                scene_, entity, projected.modeling_object_id, projected.curve_id,
+                restored_identity.local_frame_version)
+          : mesh_sync_.bind_projected_object(
+                scene_, entity, projected.modeling_object_id,
+                projected.material_slot, true, projected.mesh_id,
+                restored_identity.local_frame_version);
+      if (!bound) {
         return rollback("SDK history scene binding could not be restored.");
       }
       (void)mesh_sync_.set_projected_material(
@@ -5600,6 +6128,8 @@ public:
 
     mesh_sync_.remove_unreferenced_history_mesh_assets(
         scene_, assets_, displaced_meshes);
+    mesh_sync_.remove_unreferenced_history_curve_assets(
+        scene_, assets_, displaced_curves);
     if (history_transition) {
       session_.restore_snapshot_as_history_transition(snapshot.impl_->session);
     } else {
@@ -5696,10 +6226,27 @@ private:
       std::uint32_t material_slot, int &native_id, EntityId &entity,
       bool share_source_mesh = false,
       std::optional<int> reserved_native_id = std::nullopt) {
+    const bool is_curve = source_identity.curve.has_value();
+    AssetId curve_id = share_source_mesh && is_curve
+                           ? source_identity.curve->curve : kInvalidAssetId;
+    if (is_curve && (curve_id == kInvalidAssetId || assets_.curve(curve_id) == nullptr)) {
+      const auto document = session_.curve_document_snapshot(object_id);
+      if (!document.ok()) {
+        return false;
+      }
+      CurveAsset projected;
+      projected.name = source_identity.name;
+      projected.document = document.value();
+      curve_id = mesh_sync_.install_projected_curve(assets_, std::move(projected));
+      if (curve_id == kInvalidAssetId) {
+        return false;
+      }
+      ++stats_.asset_publication_count;
+    }
     AssetId mesh_id = share_source_mesh && source_identity.mesh.has_value()
                           ? source_identity.mesh->mesh
                           : kInvalidAssetId;
-    if (mesh_id == kInvalidAssetId || assets_.mesh(mesh_id) == nullptr) {
+    if (!is_curve && (mesh_id == kInvalidAssetId || assets_.mesh(mesh_id) == nullptr)) {
       Result<PolygonDocument> document = session_.document_copy(object_id);
       if (!document.ok()) {
         return false;
@@ -5722,8 +6269,9 @@ private:
       }
       ++stats_.asset_publication_count;
     }
-    entity =
-        mesh_sync_.create_projected_mesh_entity(scene_, source_identity.name);
+    entity = is_curve
+        ? mesh_sync_.create_projected_curve_entity(scene_, source_identity.name)
+        : mesh_sync_.create_projected_mesh_entity(scene_, source_identity.name);
     if (entity == kInvalidEntityId) {
       return false;
     }
@@ -5736,10 +6284,16 @@ private:
     }
     native_id = *allocated_native_id;
     if (native_id == kInvalidModelingObjectId ||
-        native_id >= std::numeric_limits<int>::max() ||
-        !mesh_sync_.bind_projected_object(
-            scene_, entity, native_id, material_slot, true, mesh_id,
-            source_identity.local_frame_version)) {
+        native_id >= std::numeric_limits<int>::max()) {
+      return false;
+    }
+    const bool bound = is_curve
+        ? mesh_sync_.bind_projected_curve_object(
+              scene_, entity, native_id, curve_id, source_identity.local_frame_version)
+        : mesh_sync_.bind_projected_object(
+              scene_, entity, native_id, material_slot, true, mesh_id,
+              source_identity.local_frame_version);
+    if (!bound) {
       return false;
     }
     mesh_sync_.apply_scene_identity_to_duplicate_entity(scene_, entity,
@@ -8246,6 +8800,218 @@ private:
     return first;
   }
 
+  [[nodiscard]] ModelingCommandResult cancel_curve_preview_projection() {
+    if (!preview_base_snapshot_.has_value() ||
+        !preview_asset_checkpoint_.has_value() ||
+        !preview_scene_checkpoint_.has_value()) {
+      return failure("Curve preview restore point is unavailable.");
+    }
+    const auto base = *preview_base_snapshot_;
+    const bool changed = preview_changed_;
+    const bool external = curve_preview_external_changes_ ||
+        scene_.revision() != curve_preview_scene_revision_ ||
+        assets_.revision() != curve_preview_asset_revision_;
+    const auto preview = session_.preview_summary();
+    const auto native = native_object(preview.object_id);
+    const auto entity = native.has_value()
+                            ? object_map_.entity_for_modeling_object(*native)
+                            : std::nullopt;
+    const auto saved = std::ranges::find_if(base.impl_->projected_objects,
+        [&](const SdkProjectedObjectSnapshot &projected) {
+          return projected.modeling_object_id ==
+                 native.value_or(kInvalidModelingObjectId);
+        });
+    if (!external) {
+      if (!entity.has_value() || !scene_.exists(*entity) ||
+          saved == base.impl_->projected_objects.end() ||
+          !saved->curve.has_value()) {
+        return failure("Curve preview restore binding is unavailable.");
+      }
+      (void)assets_.restore_projection_checkpoint(*preview_asset_checkpoint_);
+      restore_curve_projection_binding(
+          ProjectedCurveBinding{.entity = *entity, .curve = saved->curve_id});
+      (void)scene_.restore_projection_checkpoint(*preview_scene_checkpoint_);
+      session_.restore_snapshot_preserving_identity_high_water(base.impl_->session);
+      clear_preview_checkpoints();
+      return {.ok = true, .changed = changed, .message = "Curve preview canceled."};
+    }
+
+    // Visibility, selection, transforms or deletion may change outside the tool.
+    // Restore only our still-installed preview; never replay the whole old scene.
+    const auto candidate = session_.preview_curve_document_copy(preview.id);
+    const CurveComponent *binding =
+        entity.has_value() && scene_.exists(*entity) ? scene_.curve(*entity) : nullptr;
+    const CurveAsset *current = binding != nullptr ? assets_.curve(binding->curve) : nullptr;
+    const auto assets_before = assets_.capture_projection_checkpoint();
+    const auto scene_before = scene_.capture_projection_checkpoint();
+    if (native.has_value() && current != nullptr && current->document != nullptr &&
+        binding->curve == curve_preview_asset_id_ && candidate.ok() &&
+        current->document->has_same_geometry(candidate.value())) {
+      if (saved != base.impl_->projected_objects.end() && saved->curve.has_value()) {
+        const AssetId displaced = binding->curve;
+        const bool restore_original = displaced == saved->curve_id ||
+                                      assets_.curve(saved->curve_id) == nullptr;
+        if ((restore_original && !mesh_sync_.restore_history_curve_assets(
+                assets_, {{saved->curve_id, *saved->curve}})) ||
+            !mesh_sync_.set_projected_curve_binding(scene_, *entity, saved->curve_id) ||
+            !mesh_sync_.notify_projected_curve_changed(scene_, *entity)) {
+          (void)assets_.restore_projection_checkpoint(assets_before);
+          restore_curve_projection_binding(
+              ProjectedCurveBinding{.entity = *entity, .curve = displaced});
+          (void)scene_.restore_projection_checkpoint(scene_before);
+          return failure("Curve preview could not be canceled.");
+        }
+        mesh_sync_.remove_unreferenced_history_curve_assets(
+            scene_, assets_, std::span<const AssetId>{&displaced, 1U});
+      }
+    }
+    const auto persistent_revision = persistent_content_revision_;
+    reset_from_scene();
+    persistent_content_revision_ = persistent_revision;
+    return {.ok = true, .changed = changed, .message = "Curve preview canceled."};
+  }
+
+  [[nodiscard]] std::optional<ProjectedCurveBinding>
+  capture_curve_projection_binding(ObjectId object_id) const {
+    const auto native = native_object(object_id);
+    const auto entity = native.has_value()
+                            ? object_map_.entity_for_modeling_object(*native)
+                            : std::nullopt;
+    const CurveComponent *binding =
+        entity.has_value() ? scene_.curve(*entity) : nullptr;
+    if (binding == nullptr) {
+      return std::nullopt;
+    }
+    return ProjectedCurveBinding{.entity = *entity, .curve = binding->curve};
+  }
+
+  void restore_curve_projection_binding(
+      const std::optional<ProjectedCurveBinding> &binding) {
+    // Scene checkpoints restore counters and selection, not components on
+    // existing entities. Compensate before restoring their exact counters.
+    if (binding.has_value()) {
+      (void)mesh_sync_.set_projected_curve_binding(
+          scene_, binding->entity, binding->curve);
+    }
+  }
+
+  [[nodiscard]] bool scan_curve_binding_shared(EntityId owner, AssetId curve,
+                                                bool track_preview = true) const {
+    if (track_preview) {
+      ++stats_.curve_preview_shared_binding_scan_count;
+    }
+    if (owner == kInvalidEntityId || curve == kInvalidAssetId) {
+      return false;
+    }
+    for (const EntityId entity : scene_.entities()) {
+      if (track_preview) {
+        ++stats_.curve_preview_shared_binding_entity_visit_count;
+      }
+      const CurveComponent *component = scene_.curve(entity);
+      if (entity != owner && component != nullptr &&
+          component->curve == curve) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  void refresh_curve_preview_sharing_proof(EntityId entity, AssetId curve) {
+    curve_preview_sharing_proof_ = {};
+    if (entity == kInvalidEntityId || curve == kInvalidAssetId ||
+        !scene_.exists(entity) || scene_.curve(entity) == nullptr ||
+        assets_.curve(curve) == nullptr) {
+      return;
+    }
+    curve_preview_sharing_proof_ = {
+        .valid = true,
+        .entity = entity,
+        .curve = curve,
+        .shared = scan_curve_binding_shared(entity, curve),
+        .scene_revision = scene_.revision(),
+        .asset_revision = assets_.revision(),
+    };
+  }
+
+  [[nodiscard]] bool curve_binding_shared_for_preview(EntityId entity,
+                                                       AssetId curve) {
+    if (!curve_preview_sharing_proof_.valid ||
+        curve_preview_sharing_proof_.entity != entity ||
+        curve_preview_sharing_proof_.curve != curve ||
+        curve_preview_sharing_proof_.scene_revision != scene_.revision() ||
+        curve_preview_sharing_proof_.asset_revision != assets_.revision()) {
+      refresh_curve_preview_sharing_proof(entity, curve);
+    }
+    return curve_preview_sharing_proof_.valid &&
+           curve_preview_sharing_proof_.shared;
+  }
+
+  [[nodiscard]] bool project_curve_document(
+      ObjectId object_id, const modeling::CurveDocument &document, bool preview) {
+    const auto native = native_object(object_id);
+    const auto entity = native.has_value()
+                            ? object_map_.entity_for_modeling_object(*native)
+                            : std::nullopt;
+    const CurveComponent *binding =
+        entity.has_value() ? scene_.curve(*entity) : nullptr;
+    const CurveAsset *current =
+        binding != nullptr ? assets_.curve(binding->curve) : nullptr;
+    if (!entity.has_value() || !scene_.exists(*entity) || current == nullptr ||
+        current->document == nullptr) {
+      return false;
+    }
+    if (current->document->has_same_geometry(document)) {
+      return true;
+    }
+    const auto asset_failure = preview
+        ? ModelingSdkProjectionFailurePoint::PreviewAssetReplace
+        : ModelingSdkProjectionFailurePoint::CommittedAssetReplace;
+    if (fails(asset_failure)) {
+      return false;
+    }
+    const AssetId original = binding->curve;
+    const bool shared = preview
+        ? curve_binding_shared_for_preview(*entity, original)
+        : scan_curve_binding_shared(*entity, original, false);
+    CurveAsset projected;
+    projected.name = current->name;
+    projected.document = std::make_shared<const modeling::CurveDocument>(document);
+    if (shared) {
+      const AssetId private_asset =
+          mesh_sync_.install_projected_curve(assets_, std::move(projected));
+      if (private_asset == kInvalidAssetId ||
+          !mesh_sync_.set_projected_curve_binding(scene_, *entity, private_asset)) {
+        return false;
+      }
+    } else if (!mesh_sync_.replace_projected_curve(assets_, original,
+                                                  std::move(projected))) {
+      return false;
+    }
+    ++stats_.asset_publication_count;
+    const auto scene_failure = preview
+        ? ModelingSdkProjectionFailurePoint::PreviewSceneNotify
+        : ModelingSdkProjectionFailurePoint::CommittedSceneNotify;
+    if (fails(scene_failure) ||
+        !mesh_sync_.notify_projected_curve_changed(scene_, *entity)) {
+      return false;
+    }
+    ++stats_.scene_publication_count;
+    if (preview) {
+      const CurveComponent *published = scene_.curve(*entity);
+      if (published != nullptr) {
+        curve_preview_sharing_proof_ = {
+            .valid = true,
+            .entity = *entity,
+            .curve = published->curve,
+            .shared = false,
+            .scene_revision = scene_.revision(),
+            .asset_revision = assets_.revision(),
+        };
+      }
+    }
+    return true;
+  }
+
   [[nodiscard]] bool project_document(ObjectId object_id,
                                       const PolygonDocument &document,
                                       bool preview,
@@ -8321,6 +9087,14 @@ private:
   }
 
   [[nodiscard]] bool project_committed_object(ObjectId object_id) {
+    const auto native = native_object(object_id);
+    const auto entity = native.has_value()
+                            ? object_map_.entity_for_modeling_object(*native)
+                            : std::nullopt;
+    if (entity.has_value() && scene_.curve(*entity) != nullptr) {
+      const auto curve = session_.curve_document_copy(object_id);
+      return curve.ok() && project_curve_document(object_id, curve.value(), false);
+    }
     Result<PolygonDocument> document = session_.document_copy(object_id);
     return document.ok() &&
            project_document(object_id, document.value(), false);
@@ -8331,6 +9105,11 @@ private:
         session_.preview_summary();
     if (!summary.active) {
       return false;
+    }
+    if (summary.kind == modeling::SessionObjectKind::Curve) {
+      const auto curve = session_.preview_curve_document_copy(summary.id);
+      return curve.ok() &&
+             project_curve_document(summary.object_id, curve.value(), true);
     }
     Result<PolygonDocument> document =
         session_.preview_document_copy(summary.id);
@@ -8344,6 +9123,9 @@ private:
     preview_asset_checkpoint_.reset();
     preview_scene_checkpoint_.reset();
     preview_changed_ = false;
+    curve_preview_external_changes_ = false;
+    curve_preview_asset_id_ = kInvalidAssetId;
+    curve_preview_sharing_proof_ = {};
     workspace_preview_active_ = false;
     workspace_preview_undo_mark_ = 0U;
     workspace_preview_world_from_object_.clear();
@@ -8378,6 +9160,11 @@ private:
       workspace_update_base_snapshot_;
   std::optional<AssetRegistryProjectionCheckpoint> preview_asset_checkpoint_;
   std::optional<SceneProjectionCheckpoint> preview_scene_checkpoint_;
+  std::uint64_t curve_preview_scene_revision_ = 0;
+  std::uint64_t curve_preview_asset_revision_ = 0;
+  bool curve_preview_external_changes_ = false;
+  AssetId curve_preview_asset_id_ = kInvalidAssetId;
+  CurvePreviewSharingProof curve_preview_sharing_proof_;
   bool preview_changed_ = false;
   bool workspace_preview_active_ = false;
   std::size_t workspace_preview_undo_mark_ = 0U;
@@ -8511,6 +9298,40 @@ ModelingCreateBoxResult ModelingSdkProjectionAdapter::create_mesh(
     const ModelingCreateMeshRequest &request,
     const CreationFinalizer &finalize) {
   return impl_->create_mesh(request, finalize);
+}
+
+ModelingCreateBoxResult ModelingSdkProjectionAdapter::create_curve(
+    modeling::CurveDocument document, std::string_view name,
+    const CreationFinalizer &finalize) {
+  return impl_->create_curve(std::move(document), name, finalize);
+}
+
+std::optional<modeling::CurveDocument> ModelingSdkProjectionAdapter::curve_document(
+    int modeling_object_id, bool include_preview) const {
+  return impl_->curve_document(modeling_object_id, include_preview);
+}
+
+ModelingCommandResult ModelingSdkProjectionAdapter::replace_curve_document(
+    int modeling_object_id, modeling::CurveDocument document) {
+  return impl_->replace_curve_document(modeling_object_id, std::move(document));
+}
+
+ModelingCommandResult ModelingSdkProjectionAdapter::begin_curve_document_preview(
+    int modeling_object_id) {
+  return impl_->begin_curve_document_preview(modeling_object_id);
+}
+
+ModelingCommandResult ModelingSdkProjectionAdapter::update_curve_document_preview(
+    modeling::CurveDocument document) {
+  return impl_->update_curve_document_preview(std::move(document));
+}
+
+bool ModelingSdkProjectionAdapter::curve_document_preview_active() const {
+  return impl_->curve_document_preview_active();
+}
+
+int ModelingSdkProjectionAdapter::curve_document_preview_object_id() const {
+  return impl_->curve_document_preview_object_id();
 }
 
 ModelingCreateBoxResult ModelingSdkProjectionAdapter::create_face(

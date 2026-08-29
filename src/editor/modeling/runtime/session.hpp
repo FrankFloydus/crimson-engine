@@ -310,6 +310,21 @@ struct PickHitRecord {
   std::string signature;
 };
 
+/// Returns component hits together with the nearest surface depth already
+/// prepared for component occlusion. Consumers that need both must not launch
+/// a second face-picking traversal for the same ray.
+struct PickAllWithSurfaceResult {
+  std::vector<PickHitRecord> hits;
+  std::optional<PickHitRecord> nearest_surface_hit;
+};
+
+/// Retained storage for repeated component picks that need both ordered hits
+/// and the nearest surface. One synchronous owner may reuse this between calls.
+struct PickAllWithSurfaceScratch {
+  std::vector<std::optional<quader_poly::PickResult>> local_surface_hits;
+  std::vector<PickHitRecord> hits;
+};
+
 /**
  * Represents a Pick Selection Group value used by the modeling runtime domain.
  */
@@ -942,6 +957,20 @@ pick_all(const std::vector<PolygonObject> &objects, const PickRequest &request,
          std::span<const PickObjectBounds> object_bounds,
          std::span<const PickObjectFaceGeometry> face_geometry,
          std::span<const PickObjectTransform> object_transforms = {});
+[[nodiscard]] PickAllWithSurfaceResult pick_all_with_surface(
+    const std::vector<PolygonObject> &objects, const PickRequest &request,
+    std::span<const PickObjectBounds> object_bounds,
+    std::span<const PickObjectFaceGeometry> face_geometry,
+    std::span<const PickObjectTransform> object_transforms = {});
+/// Fills retained scratch with the same ordered hits as
+/// `pick_all_with_surface` and returns the nearest surface. Scratch contents
+/// remain valid until its next use by the synchronous owner.
+[[nodiscard]] std::optional<PickHitRecord> pick_all_with_surface_into(
+    const std::vector<PolygonObject> &objects, const PickRequest &request,
+    std::span<const PickObjectBounds> object_bounds,
+    std::span<const PickObjectFaceGeometry> face_geometry,
+    std::span<const PickObjectTransform> object_transforms,
+    PickAllWithSurfaceScratch &scratch);
 /// Collects one surface or authored boundary hit per mesh without occlusion
 /// by other meshes. Component picking keeps its ordinary facing/depth policy.
 std::vector<PickHitRecord> pick_mesh_depth_hits(

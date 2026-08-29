@@ -9,8 +9,10 @@
 #include "api/quader_selection_api.hpp"
 #include "editor/modeling/modeling_types.hpp"
 #include "editor/viewport/viewport_interaction_frame.hpp"
+#include "viewport/curve_tool_preview.hpp"
 
 #include <editor/interactions/selection_box.hpp>
+#include <editor/interactions/selection_edit.hpp>
 
 #include <cstdint>
 #include <optional>
@@ -18,6 +20,7 @@
 namespace quader {
 
 class QuaderEditorApi;
+class CurveToolService;
 class ViewportToolHoverPort;
 struct ViewportToolResult;
 
@@ -52,7 +55,8 @@ public:
                       const ViewportInteractionFrame &frame,
                       const ViewportToolResult &tool_result,
                       const ViewportBeforeToolInteractionResult &before_tool,
-                      ViewportToolHoverPort *tool_hover);
+                      ViewportToolHoverPort *tool_hover,
+                      CurveToolService *curve = nullptr);
     [[nodiscard]] QuaderSelectionSummary
     pick_context_menu_target(QuaderEditorApi &editor,
                              const ViewportInteractionFrame &frame);
@@ -96,6 +100,7 @@ private:
   struct PendingFirstPick {
     QuaderPickSelectRequest request;
     std::optional<EntityId> billboard_entity;
+    std::optional<EntityId> curve_entity;
     ViewportModifiers modifiers = {};
     QVec2 local = {};
     QuaderHoverTarget hovered_before_selection;
@@ -119,10 +124,12 @@ private:
       bool preserve_existing_component_selection_on_hit = false,
       bool cycle_depth = false, ViewportModifiers cycle_modifiers = {},
       QuaderHoverTarget hovered_before_selection = {});
+  void clear_curve_control_box();
 
   bool hover_clear_issued_ = false;
   quader_editor_core::SelectionBoxState box_state_;
-  QuaderSelectionEdit box_edit_ = QuaderSelectionEdit::Replace;
+  quader_editor_core::SelectionEditOperation box_edit_ =
+      quader_editor_core::SelectionEditOperation::Replace;
   bool box_cycle_depth_ = false;
   ViewportModifiers box_cycle_modifiers_ = {};
   std::optional<DepthClickBaseline> depth_click_baseline_;
@@ -130,6 +137,8 @@ private:
   std::optional<PendingPickFeedback> pending_pick_feedback_;
   std::optional<QuaderHoverTarget> box_hovered_before_selection_;
   std::optional<QuaderSelectionBoxBaseline> box_baseline_;
+  std::optional<CurveControlSelection> curve_box_baseline_;
+  bool curve_control_box_active_ = false;
   std::optional<ViewportSelectionMarquee> committed_marquee_;
   std::optional<QuaderHoverTarget> hover_suppressed_target_;
   bool paint_selection_active_ = false;

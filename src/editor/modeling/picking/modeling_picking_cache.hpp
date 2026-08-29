@@ -68,7 +68,7 @@ struct ModelingPickingCache {
   std::uint32_t local_face_geometry_hidden_material_slot = 0;
   std::uint64_t content_revision = 0;
   std::uint64_t selection_revision = 0;
-  std::uint64_t scene_content_revision = 0;
+  std::uint64_t scene_hierarchy_revision = 0;
   std::uint64_t scene_selection_revision = 0;
   std::uint64_t scene_transform_revision = 0;
   std::uint64_t scene_visibility_revision = 0;

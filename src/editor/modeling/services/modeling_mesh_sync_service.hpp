@@ -19,6 +19,7 @@ namespace quader {
 
 class AssetRegistry;
 class AssetRegistryProjectionCheckpoint;
+struct CurveAsset;
 struct MaterialComponent;
 struct MeshComponent;
 struct ModelingObjectComponent;
@@ -45,8 +46,8 @@ struct ModelingMeshSyncStats final {
 /**
  * Owns the modeling runtime to SceneDocument / AssetRegistry synchronization boundary.
  *
- * Modeling runtime code that needs to create, destroy, or update scene mesh
- * entities and projected mesh assets should route through this service instead
+ * Modeling runtime code that needs to create, destroy, or update scene modeling
+ * entities and projected geometry assets should route through this service instead
  * of mutating SceneDocument or AssetRegistry directly.
  */
 class ModelingMeshSyncService {
@@ -65,7 +66,14 @@ public:
   [[nodiscard]] bool replace_projected_mesh(AssetRegistry &assets,
                                             AssetId mesh_id,
                                             MeshAsset mesh) const;
+  [[nodiscard]] AssetId install_projected_curve(AssetRegistry &assets,
+                                               CurveAsset curve) const;
+  [[nodiscard]] bool replace_projected_curve(AssetRegistry &assets,
+                                            AssetId curve_id,
+                                            CurveAsset curve) const;
   [[nodiscard]] EntityId create_projected_mesh_entity(
+      SceneDocument &scene, const std::string &name) const;
+  [[nodiscard]] EntityId create_projected_curve_entity(
       SceneDocument &scene, const std::string &name) const;
   [[nodiscard]] EntityId restore_projected_mesh_entity(
       SceneDocument &scene,
@@ -90,16 +98,25 @@ public:
       SceneDocument &scene, EntityId entity, int modeling_object_id,
       std::uint32_t material_slot, bool sdk_owned, AssetId mesh_id,
       std::optional<std::uint32_t> local_frame_version = std::nullopt) const;
+  [[nodiscard]] bool bind_projected_curve_object(
+      SceneDocument &scene, EntityId entity, int modeling_object_id,
+      AssetId curve_id,
+      std::optional<std::uint32_t> local_frame_version = std::nullopt) const;
   [[nodiscard]] bool mark_projected_object_sdk_owned(
       SceneDocument &scene, EntityId entity) const;
   [[nodiscard]] bool set_projected_mesh_binding(SceneDocument &scene,
                                                 EntityId entity,
                                                 AssetId mesh_id) const;
+  [[nodiscard]] bool set_projected_curve_binding(SceneDocument &scene,
+                                                 EntityId entity,
+                                                 AssetId curve_id) const;
   [[nodiscard]] bool set_projected_material(
       SceneDocument &scene, EntityId entity,
       const MaterialComponent *material) const;
   [[nodiscard]] bool notify_projected_mesh_changed(SceneDocument &scene,
                                                    EntityId entity) const;
+  [[nodiscard]] bool notify_projected_curve_changed(SceneDocument &scene,
+                                                    EntityId entity) const;
   void apply_scene_identity_to_entity(
       SceneDocument &scene, EntityId entity,
       const ModelingObjectSceneIdentity &identity) const;
@@ -112,6 +129,12 @@ public:
   void remove_unreferenced_history_mesh_assets(
       const SceneDocument &scene, AssetRegistry &assets,
       std::span<const AssetId> mesh_assets) const;
+  [[nodiscard]] bool restore_history_curve_assets(
+      AssetRegistry &assets,
+      const std::unordered_map<AssetId, CurveAsset> &curve_assets) const;
+  void remove_unreferenced_history_curve_assets(
+      const SceneDocument &scene, AssetRegistry &assets,
+      std::span<const AssetId> curve_assets) const;
   void apply_scene_identity_to_duplicate_entity(
       SceneDocument &scene, EntityId entity,
       const ModelingObjectSceneIdentity &identity) const;

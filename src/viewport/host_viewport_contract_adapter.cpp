@@ -467,6 +467,23 @@ viewport_input_action_binding_catalog() {
           .action = ViewportInputActionKind::TransferFaceTexture,
       },
       {
+          .target_id =
+              viewport_input_action_target_id("curve.toggle_point_smoothness"),
+          .action_id = "viewport.curve.toggle_point_smoothness",
+          .label = "Toggle Curve Point Corner / Smooth",
+          .localization_key =
+              "keybindings.target.viewport.curve.toggle_point_smoothness.label",
+          .context = ViewportInputBindingContext::CurveTool,
+          .shortcut = "Alt+LeftMouse",
+          .when = "viewportFocus && !textInputActive && !navigation.active && "
+                  "((activeTool.curve && activeTool.ownsViewport) || "
+                  "(curveControls.editable && selectionMode.object && "
+                  "!activeTool.ownsViewport && !modalTool.active)) && "
+                  "!transformDrag.active && !operationPreview.active",
+          .weight = 30,
+          .action = ViewportInputActionKind::ToggleCurvePointSmoothness,
+      },
+      {
           .target_id = viewport_input_action_target_id("modal_tool.finalize"),
           .action_id = "tools.finalize",
           .label = "Finalize Tool",

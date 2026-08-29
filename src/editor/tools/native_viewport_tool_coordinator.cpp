@@ -8,6 +8,7 @@
 
 #include "editor/array/linear_array_tool_service.hpp"
 #include "editor/array/radial_array_tool_service.hpp"
+#include "editor/curve/curve_tool_service.hpp"
 #include "editor/modeling/services/modeling_session_service.hpp"
 #include "editor/pivot/pivot_tool_service.hpp"
 #include "editor/selection/editor_selection_service.hpp"
@@ -19,17 +20,23 @@ NativeViewportToolCoordinator::NativeViewportToolCoordinator(
     PivotToolService &pivot, LinearArrayToolService &linear_array,
     RadialArrayToolService &radial_array,
     PrimitiveCreationToolService &primitives,
-    EditorSelectionService &selection, ModelingSessionService &modeling)
+    EditorSelectionService &selection, ModelingSessionService &modeling,
+    CurveToolService &curve)
     : pivot_(pivot), linear_array_(linear_array), radial_array_(radial_array),
-      primitives_(primitives), selection_(selection), modeling_(modeling) {}
+      primitives_(primitives), selection_(selection), modeling_(modeling),
+      curve_(curve) {}
 
 bool NativeViewportToolCoordinator::handles(std::string_view tool_id) const {
   return tool_id == kPivotToolId || tool_id == kLinearArrayToolId ||
-         tool_id == kRadialArrayToolId || tool_id == kCreatePrimitiveToolId;
+         tool_id == kRadialArrayToolId || tool_id == kCreatePrimitiveToolId ||
+         tool_id == kCurveToolId;
 }
 
 bool NativeViewportToolCoordinator::can_activate(
     std::string_view tool_id) const {
+  if (tool_id == kCurveToolId) {
+    return curve_.can_activate();
+  }
   if (tool_id == kLinearArrayToolId) {
     return linear_array_.can_activate();
   }
@@ -47,15 +54,24 @@ bool NativeViewportToolCoordinator::can_activate(
 
 bool NativeViewportToolCoordinator::has_pending_tool() const {
   return linear_array_.has_session() || radial_array_.has_session() ||
-         primitives_.active() || pivot_.persistent_active();
+         primitives_.active() || pivot_.persistent_active() || curve_.active();
+}
+
+bool NativeViewportToolCoordinator::has_pending_history_preview() const {
+  return linear_array_.has_session() || radial_array_.has_session() ||
+         primitives_.active() || pivot_.persistent_active() ||
+         curve_.dragging() || (curve_.drawing() && curve_.point_count() != 0u);
 }
 
 bool NativeViewportToolCoordinator::blocks_modeling_content_mutation() const {
-  return primitives_.active();
+  return primitives_.active() || curve_.active();
 }
 
 bool NativeViewportToolCoordinator::blocks_document_mutation(
     EntityId entity) const {
+  if (curve_.owns_editing_entity(entity)) {
+    return true;
+  }
   const std::optional<int> modeling_object_id =
       modeling_.modeling_object_for_entity(entity);
   return modeling_object_id.has_value() &&
@@ -63,6 +79,9 @@ bool NativeViewportToolCoordinator::blocks_document_mutation(
 }
 
 std::string_view NativeViewportToolCoordinator::active_tool_id() const {
+  if (curve_.active()) {
+    return kCurveToolId;
+  }
   if (linear_array_.active()) {
     return kLinearArrayToolId;
   }
@@ -95,7 +114,8 @@ CommandResult NativeViewportToolCoordinator::activate(
     if (pivot_.persistent_active()) {
       return command_unchanged_result();
     }
-  } else if (tool_id == kCreatePrimitiveToolId && primitives_.active()) {
+  } else if ((tool_id == kCreatePrimitiveToolId && primitives_.active()) ||
+             (tool_id == kCurveToolId && curve_.active())) {
     return command_unchanged_result();
   }
   if (!can_activate(tool_id)) {
@@ -120,6 +140,8 @@ CommandResult NativeViewportToolCoordinator::activate(
     activated = radial_array_.activate(grid_world_size);
   } else if (tool_id == kCreatePrimitiveToolId) {
     activated = primitives_.activate();
+  } else if (tool_id == kCurveToolId) {
+    activated = curve_.activate();
   } else {
     activated = pivot_.activate_persistent(selection_);
   }
@@ -154,6 +176,9 @@ NativeViewportToolCoordinator::cancel_competing_state_for_tool_activation() {
 }
 
 CommandResult NativeViewportToolCoordinator::commit_active() {
+  if (curve_.active()) {
+    return curve_.apply();
+  }
   if (primitives_.active()) {
     return primitives_.apply();
   }
@@ -194,15 +219,21 @@ CommandResult NativeViewportToolCoordinator::accept_active_primitive(
 }
 
 CommandResult NativeViewportToolCoordinator::cancel_prior_native_state() {
+  const CommandResult curve = curve_.cancel();
+  if (!curve.ok) {
+    return curve;
+  }
   const CommandResult primitives = primitives_.cancel();
   if (!primitives.ok) {
-    return primitives;
+    return {.ok = false,
+            .changed = curve.changed || primitives.changed,
+            .message = primitives.message};
   }
   const CommandResult linear_array = linear_array_.cancel();
   if (!linear_array.ok) {
     return {
         .ok = false,
-        .changed = primitives.changed || linear_array.changed,
+        .changed = curve.changed || primitives.changed || linear_array.changed,
         .message = linear_array.message,
     };
   }
@@ -210,7 +241,7 @@ CommandResult NativeViewportToolCoordinator::cancel_prior_native_state() {
   if (!radial_array.ok) {
     return {
         .ok = false,
-        .changed = primitives.changed || linear_array.changed ||
+        .changed = curve.changed || primitives.changed || linear_array.changed ||
                    radial_array.changed,
         .message = radial_array.message,
     };
@@ -219,19 +250,20 @@ CommandResult NativeViewportToolCoordinator::cancel_prior_native_state() {
   if (!pivot.ok) {
     return {
         .ok = false,
-        .changed = primitives.changed || linear_array.changed ||
+        .changed = curve.changed || primitives.changed || linear_array.changed ||
                    radial_array.changed || pivot.changed,
         .message = pivot.message,
     };
   }
   return {
       .ok = true,
-      .changed = primitives.changed || linear_array.changed ||
+      .changed = curve.changed || primitives.changed || linear_array.changed ||
                  radial_array.changed || pivot.changed,
   };
 }
 
 void NativeViewportToolCoordinator::reset_transient_state() {
+  (void)curve_.cancel();
   (void)primitives_.cancel();
   (void)linear_array_.cancel();
   (void)radial_array_.cancel();

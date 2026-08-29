@@ -539,7 +539,7 @@ TEST(AppStartupTests, DelegatesDefaultAssetsAndUsesSessionReadView) {
       "ui_.install_runtime_hooks(*editor_, scene.scene(), scene.assets(), "
       "scene.modeling(), scene.selection(), scene.pivot(), "
       "scene.linear_array(), scene.radial_array(), "
-      "scene.point_placement(), default_material_)"));
+      "scene.point_placement(), default_material_, &scene.curve())"));
   EXPECT_NE(app_source.find("ui_.prepare_viewports(render_bridge_, "
                             "render_overlay_snapshot_cache_)"),
             std::string::npos);

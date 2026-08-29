@@ -10,14 +10,19 @@
 #include "editor/array/linear_array_tool_service.hpp"
 #include "editor/modeling/modeling_types.hpp"
 #include "editor/pivot/pivot_types.hpp"
+#include "editor/placement/viewport_point_placement_service.hpp"
+#include "viewport/curve_tool_preview.hpp"
 #include "viewport/viewport_input_types.hpp"
 
 #include <array>
+#include <cstdint>
+#include <functional>
 #include <optional>
 
 namespace quader {
 
 class AssetRegistry;
+class CurveToolService;
 class LinearArrayToolService;
 class PivotToolService;
 class QuaderEditorApi;
@@ -25,6 +30,7 @@ class RadialArrayToolService;
 class SceneDocument;
 class ViewportCameraController;
 class ViewportPointPlacementService;
+struct ViewportRay;
 
 /**
  * Carries one sampled frame into the editor-native viewport tool owner.
@@ -33,12 +39,16 @@ struct ViewportNativeToolInteractionFrame final {
   const ViewportInputFrame &input;
   const ViewportInputResult &input_result;
   bool navigation_gizmo_consumed = false;
+  bool transform_gizmo_consumed = false;
   bool suppress_hover_work = false;
   bool left_pressed = false;
   bool left_down = false;
   bool left_released = false;
   QVec2 left_click_local = {};
+  bool scene_snap_enabled = false;
   bool grid_snap_enabled = false;
+  std::function<std::optional<double>(const ViewportRay &)>
+      scene_mesh_surface_distance;
   double *linear_array_wheel_remainder = nullptr;
   double *radial_array_wheel_remainder = nullptr;
 };
@@ -55,6 +65,7 @@ struct ViewportNativeToolInteractionResult final {
   bool sync_active_tool = false;
   bool invalidate_hover = false;
   bool mark_overlay_dirty = false;
+  bool curve_consumed = false;
 };
 
 /**
@@ -68,7 +79,8 @@ public:
       RadialArrayToolService *radial_array,
       ViewportPointPlacementService *point_placement,
       ViewportCameraController &camera,
-      const ViewportNativeToolInteractionFrame &frame);
+      const ViewportNativeToolInteractionFrame &frame,
+      CurveToolService *curve = nullptr);
   void clear_drag_state();
   [[nodiscard]] bool dragging() const;
 
@@ -97,10 +109,32 @@ public:
   [[nodiscard]] static QVec3 linear_array_drag_point(
       const ViewportCameraController &camera, QVec2 mouse_local,
       const LinearArrayHandleState &handle);
+  [[nodiscard]] static std::optional<CurveControlTarget> curve_control_hit(
+      const ViewportCameraController &camera,
+      const CurveToolPreviewState &preview, QVec2 mouse_local,
+      bool anchors_only,
+      const std::function<std::optional<double>(const ViewportRay &)>
+          &mesh_surface_distance);
 
 private:
+  /// Pins a deferred conversion click to the anchor and document it pressed.
+  struct CurveConversionPress {
+    QuaderMouseButton button = QuaderMouseButton::None;
+    std::optional<CurveControlTarget> target;
+    modeling::CurveContentIdentity content;
+    EntityId entity = kInvalidEntityId;
+    std::uint64_t press_sequence = 0u;
+  };
+
   bool pivot_handle_dragging_ = false;
   bool linear_array_handle_dragging_ = false;
+  bool curve_point_construction_dragging_ = false;
+  bool curve_point_construction_moved_ = false;
+  QVec2 curve_point_construction_mouse_origin_;
+  QVec2 curve_point_construction_pointer_offset_;
+  std::optional<ViewportPointPlacementPlane>
+      curve_point_construction_plane_;
+  std::optional<CurveConversionPress> curve_conversion_press_;
 };
 
 } // namespace quader

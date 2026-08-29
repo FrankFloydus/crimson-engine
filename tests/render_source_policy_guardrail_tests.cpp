@@ -950,6 +950,21 @@ TEST(ViewportOverlayPolicyTests,
   EXPECT_LT(submit, dynamic_branch);
   EXPECT_LT(dynamic_branch, dynamic_style);
   EXPECT_LT(dynamic_style, dynamic_submit);
+  const std::size_t curve_append = source.find(
+      "append_overlay_frame(dynamic_overlay_frame, curve_tool_overlay)");
+  ASSERT_NE(curve_append, std::string::npos);
+  EXPECT_LT(dynamic_branch, curve_append);
+  EXPECT_LT(curve_append, dynamic_style);
+  EXPECT_EQ(count_occurrences(source,
+      "append_overlay_frame(dynamic_overlay_frame, curve_tool_overlay)"), 1u);
+  EXPECT_TRUE(source_contains_compact(source,
+      ".curve_overlay_revision = curve_tool_overlay_cache_.build_count()"));
+  EXPECT_NE(header.find("std::uint64_t curve_overlay_revision = 0;"),
+            std::string::npos);
+  EXPECT_EQ(source.find("frame_signature(curve_tool_overlay)"),
+            std::string::npos);
+  EXPECT_NE(source.find("curve_tool_overlay_cache_.reset();"),
+            std::string::npos);
   EXPECT_NE(source.find(".style_signature ="), std::string::npos);
   EXPECT_NE(header.find("PaneDynamicOverlaySubmissionKey"),
             std::string::npos);
@@ -1227,6 +1242,35 @@ TEST(ViewportPersistentOverlayStyleSnapshotTests,
   EXPECT_TRUE(source_contains_compact(
       wireframe_cache, ".blendOrder(0u, state.blend_order)"
                        ".globalBlendOrderEnabled(0u, true)"));
+}
+
+TEST(ViewportOverlayPolicyTests,
+     UnchangedMeshInputsBypassWirePlanningDuringCurveEdits) {
+  const std::string source = read_source_file(
+      "src/render/overlay/scene_wireframe_overlay_cache.cpp");
+  const std::size_t sync_begin =
+      source.find("void SceneWireframeOverlayCache::sync(");
+  const std::size_t prepare =
+      source.find("const PreparedPlan prepared = prepare(snapshot);", sync_begin);
+  ASSERT_NE(sync_begin, std::string::npos);
+  ASSERT_NE(prepare, std::string::npos);
+  const std::string before_prepare =
+      source.substr(sync_begin, prepare - sync_begin);
+  EXPECT_TRUE(source_contains_compact(
+      before_prepare, "scene_wireframe_overlay_mesh_inputs_match("
+                      "synced_meshes_, snapshot.meshes)"));
+  EXPECT_TRUE(source_contains_compact(
+      before_prepare, "++stats_.mesh_input_reuse_count; } else { "
+                      "++stats_.plan_prepare_count;"));
+  EXPECT_TRUE(source_contains_compact(
+      before_prepare, "if (has_synced_ && synced_scene_binding_ != "
+                      "snapshot.scene_binding) { clear();"));
+  EXPECT_TRUE(source_contains_compact(
+      source, "prepare_wire_batches(snapshot, max_instances_per_chunk_, &plan_)"));
+  EXPECT_TRUE(source_contains_compact(
+      source, "synced_meshes_ = snapshot.meshes;"));
+  EXPECT_TRUE(source_contains_compact(
+      source, "synced_meshes_.clear(); has_synced_ = false;"));
 }
 
 TEST(ViewportPersistentOverlayStyleSnapshotTests,

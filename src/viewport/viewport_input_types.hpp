@@ -10,6 +10,8 @@
 #include "api/quader_input_types.hpp"
 #include "math/types.hpp"
 
+#include <cstdint>
+#include <optional>
 #include <vector>
 
 namespace quader {
@@ -40,6 +42,32 @@ struct ViewportNavigationInput {
   bool fly_left_down = false;
 };
 
+/// Carries one canonical mouse-button edge with its event-time pane position.
+struct ViewportPointerButtonEdge {
+  QuaderMouseButton button = QuaderMouseButton::None;
+  QVec2 local = {};
+  // Monotonic at the production Qt boundary. Zero is reserved for synthetic
+  // callers that do not need to distinguish coalesced event ordering.
+  std::uint64_t sequence = 0u;
+};
+
+/// Describes one ordered semantic edge in the Curve point-conversion gesture.
+enum class ViewportCurveConversionEdgeKind {
+  ReservePress,
+  Trigger,
+};
+
+/**
+ * Couples Curve point-conversion intent to the exact raw pointer edge that
+ * produced it. Keyboard bindings intentionally carry no pointer provenance.
+ */
+struct ViewportCurveConversionEdge {
+  ViewportCurveConversionEdgeKind kind =
+      ViewportCurveConversionEdgeKind::Trigger;
+  QuaderInputChord semantic_chord = {};
+  std::optional<ViewportPointerButtonEdge> pointer_edge;
+};
+
 /**
  * Stores the Viewport Input Frame data contract used by the viewport input, layout, and camera layer.
  */
@@ -57,6 +85,9 @@ struct ViewportInputFrame {
   bool active_tool_blocks_focus_shortcuts = false;
   bool active_transform_drag = false;
   bool operation_preview_active = false;
+  // One selected Curve in Object/Mesh mode exposes the same Curve-control
+  // semantic actions without activating the Curve creation tool.
+  bool curve_controls_editable = false;
   bool modal_tool_finalize_pressed = false;
   bool modal_tool_mode_cycle_pressed = false;
   bool quick_pivot_pressed = false;
@@ -100,10 +131,18 @@ struct ViewportInputFrame {
   std::vector<QuaderInputChord> pressed_input_chords;
   std::vector<QuaderInputChord> active_input_chords;
   std::vector<QuaderInputChord> released_input_chords;
+  std::vector<ViewportPointerButtonEdge> pointer_pressed_edges;
+  std::vector<ViewportPointerButtonEdge> pointer_released_edges;
+  std::vector<ViewportPointerButtonEdge> pointer_drag_started_edges;
   std::vector<QuaderWheelInputEdge> wheel_input_edges;
   bool keybinding_input_consumed = false;
   std::vector<ViewportShortcut> resolved_shortcuts;
   ViewportNavigationInput navigation_bindings = {};
+  // A real focus/capture loss remains a cancellation even when the host keeps
+  // routing the captured pane as logically hovered and focused.
+  bool pointer_interaction_canceled = false;
+  // Retains Curve conversion reserves and triggers in physical dispatch order.
+  std::vector<ViewportCurveConversionEdge> curve_conversion_edges;
 };
 
 /**

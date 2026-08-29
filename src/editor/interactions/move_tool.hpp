@@ -10,10 +10,21 @@
 #include <editor/interactions/tool_identity.hpp>
 #include <editor/interactions/viewport_projection.hpp>
 #include <quader/modeling/neutral/polygon/document.hpp>
+#include <quader/modeling/neutral/polygon/document_picking.hpp>
 
+#include <optional>
+#include <span>
 #include <string>
+#include <vector>
 
 namespace quader_editor_core {
+
+struct PolygonObject;
+enum class SelectionMode;
+struct PickObjectBounds;
+struct PickObjectFaceGeometry;
+struct PickObjectTransform;
+struct PickAllWithSurfaceScratch;
 
 /**
  * Stores the Move Tool State data contract used by the modal modeling interaction layer.
@@ -78,7 +89,45 @@ struct MovePreviewResult {
 	quader::QVec3 preview_delta;
 };
 
+/// One stationary mesh landmark resolved by the canonical Move snap picker.
+struct MoveVertexSnapTarget {
+  int object_id = -1;
+  quader_poly::ElementId vertex_id = quader_poly::kInvalidElementId;
+  quader::QVec3 position = {};
+  double ray_distance = 0.0;
+  double pick_distance = 0.0;
+};
+
+/// One prepared Move snap query. Surface depth is produced by the same
+/// component-picking traversal used to resolve the mesh vertex.
+struct MoveVertexSnapQueryResult {
+  std::optional<MoveVertexSnapTarget> vertex_target;
+  std::optional<double> nearest_surface_ray_distance;
+};
+
 MoveBeginResult begin_move_drag(const MoveBeginInput& input);
+[[nodiscard]] bool move_axis_supports_vertex_snap(TransformAxis axis);
+[[nodiscard]] quader_poly::PickOptions
+move_vertex_snap_pick_options(double vertex_radius);
+[[nodiscard]] bool move_selection_contains_vertex(
+    const PolygonObject& object, SelectionMode selection_mode,
+    quader_poly::ElementId vertex_id);
+[[nodiscard]] std::optional<MoveVertexSnapTarget>
+resolve_move_vertex_snap_target(
+    const std::vector<PolygonObject>& objects, SelectionMode selection_mode,
+    const quader_poly::Ray& ray, double vertex_radius,
+    std::span<const PickObjectBounds> object_bounds = {},
+    std::span<const PickObjectFaceGeometry> face_geometry = {},
+    std::span<const PickObjectTransform> object_transforms = {},
+    bool exclude_current_selection = true);
+[[nodiscard]] MoveVertexSnapQueryResult resolve_move_vertex_snap_query(
+    const std::vector<PolygonObject>& objects, SelectionMode selection_mode,
+    const quader_poly::Ray& ray, double vertex_radius,
+    std::span<const PickObjectBounds> object_bounds = {},
+    std::span<const PickObjectFaceGeometry> face_geometry = {},
+    std::span<const PickObjectTransform> object_transforms = {},
+    bool exclude_current_selection = true,
+    PickAllWithSurfaceScratch *picking_scratch = nullptr);
 double move_axis_distance(const MoveToolState& state, const quader_poly::Ray& ray);
 MovePreviewResult preview_move_from_distance(MoveToolState& state, double distance, bool precision, bool grid_enabled, double grid_size);
 MovePreviewResult preview_move_from_drag_pixels(MoveToolState& state, double pixels, bool precision, bool grid_enabled, double grid_size);

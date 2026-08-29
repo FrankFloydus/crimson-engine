@@ -50,6 +50,7 @@ SceneProjectionCheckpoint SceneDocument::capture_projection_checkpoint() const {
   checkpoint.transform_revision_ = transform_revision_;
   checkpoint.texture_mapping_revision_ = texture_mapping_revision_;
   checkpoint.mesh_binding_revision_ = mesh_binding_revision_;
+  checkpoint.curve_binding_revision_ = curve_binding_revision_;
   checkpoint.material_binding_revision_ = material_binding_revision_;
   checkpoint.render_component_revision_ = render_component_revision_;
   checkpoint.layer_revision_ = layer_revision_;
@@ -86,9 +87,37 @@ bool SceneDocument::restore_projection_checkpoint(
   transform_revision_ = checkpoint.transform_revision_;
   texture_mapping_revision_ = checkpoint.texture_mapping_revision_;
   mesh_binding_revision_ = checkpoint.mesh_binding_revision_;
+  curve_binding_revision_ = checkpoint.curve_binding_revision_;
   material_binding_revision_ = checkpoint.material_binding_revision_;
   render_component_revision_ = checkpoint.render_component_revision_;
   layer_revision_ = checkpoint.layer_revision_;
+  return true;
+}
+
+SceneCurveProjectionCheckpoint
+SceneDocument::capture_curve_projection_checkpoint() const {
+  SceneCurveProjectionCheckpoint checkpoint;
+  checkpoint.valid_ = true;
+  checkpoint.revision_ = revision_;
+  checkpoint.content_revision_ = content_revision_;
+  checkpoint.hierarchy_presentation_revision_ =
+      hierarchy_presentation_revision_;
+  checkpoint.curve_binding_revision_ = curve_binding_revision_;
+  checkpoint.render_component_revision_ = render_component_revision_;
+  return checkpoint;
+}
+
+bool SceneDocument::restore_curve_projection_checkpoint(
+    const SceneCurveProjectionCheckpoint &checkpoint) {
+  if (!checkpoint.valid()) {
+    return false;
+  }
+  revision_ = checkpoint.revision_;
+  content_revision_ = checkpoint.content_revision_;
+  hierarchy_presentation_revision_ =
+      checkpoint.hierarchy_presentation_revision_;
+  curve_binding_revision_ = checkpoint.curve_binding_revision_;
+  render_component_revision_ = checkpoint.render_component_revision_;
   return true;
 }
 namespace {
@@ -223,6 +252,7 @@ bool is_supported_instance_member_subtree(const SceneDocument &scene,
   for (const EntityId entity : scene.descendants(root, true)) {
     if (scene.is_instance_definition_entity(entity) ||
         scene.instance_occurrence(entity) != nullptr ||
+        scene.curve(entity) != nullptr ||
         scene.light(entity) != nullptr) {
       return false;
     }
@@ -241,6 +271,7 @@ bool is_supported_instance_member_subtree(const SceneDocument &scene,
     case EntityKind::Light:
     case EntityKind::Generic:
     case EntityKind::Instance:
+    case EntityKind::Curve:
       return false;
     }
   }
@@ -422,6 +453,9 @@ bool SceneDocument::destroy_entities(std::span<const EntityId> ids) {
                   [this](EntityId entity) {
                     return material(entity) != nullptr;
                   });
+  const bool curve_binding_destroyed =
+      std::any_of(to_destroy.begin(), to_destroy.end(),
+                  [this](EntityId entity) { return curve(entity) != nullptr; });
 
   std::unordered_set<EntityId> surviving_parents;
   surviving_parents.reserve(to_destroy.size());
@@ -467,6 +501,9 @@ bool SceneDocument::destroy_entities(std::span<const EntityId> ids) {
   ++visibility_revision_;
   ++transform_revision_;
   ++mesh_binding_revision_;
+  if (curve_binding_destroyed) {
+    ++curve_binding_revision_;
+  }
   if (material_binding_destroyed) {
     ++material_binding_revision_;
   }
@@ -569,6 +606,9 @@ bool SceneDocument::set_editor_object_id(EntityId id,
 }
 
 bool SceneDocument::set_entity_kind(EntityId id, EntityKind kind) {
+  if (curve(id) != nullptr && kind != EntityKind::Curve) {
+    return false;
+  }
   if (texture_mapping(id) != nullptr && kind != EntityKind::Mesh &&
       kind != EntityKind::Instance) {
     return false;
@@ -1102,7 +1142,8 @@ bool SceneDocument::set_instance_definition(EntityId id) {
   if (entity == entt::null || is_scene_root(id) ||
       instance_occurrence(id) != nullptr ||
       containing_instance_definition(parent(id)) != kInvalidEntityId ||
-      mesh(id) != nullptr || modeling_object(id) != nullptr ||
+      mesh(id) != nullptr || curve(id) != nullptr ||
+      modeling_object(id) != nullptr ||
       material(id) != nullptr || light(id) != nullptr ||
       texture_mapping(id) != nullptr) {
     return false;
@@ -1156,7 +1197,8 @@ bool SceneDocument::set_instance_occurrence(
       !is_instance_definition_entity(occurrence.definition) ||
       is_instance_definition_entity(id) || has_children(id) ||
       containing_instance_definition(id) != kInvalidEntityId ||
-      mesh(id) != nullptr || modeling_object(id) != nullptr ||
+      mesh(id) != nullptr || curve(id) != nullptr ||
+      modeling_object(id) != nullptr ||
       material(id) != nullptr || light(id) != nullptr) {
     return false;
   }
@@ -1198,7 +1240,7 @@ bool SceneDocument::clear_instance_occurrence(EntityId id) {
 bool SceneDocument::set_mesh(EntityId id, MeshComponent mesh) {
   const entt::entity entity = require_entity(id);
   if (entity == entt::null || instance_occurrence(id) != nullptr ||
-      is_instance_definition_entity(id)) {
+      is_instance_definition_entity(id) || curve(id) != nullptr) {
     return false;
   }
   if (const MeshComponent *current = registry_.try_get<MeshComponent>(entity);
@@ -1214,6 +1256,57 @@ bool SceneDocument::set_mesh(EntityId id, MeshComponent mesh) {
     ++hierarchy_presentation_revision_;
   }
   ++mesh_binding_revision_;
+  ++render_component_revision_;
+  mark_dirty();
+  return true;
+}
+
+bool SceneDocument::set_curve(EntityId id, CurveComponent value) {
+  const entt::entity entity = require_entity(id);
+  if (entity == entt::null || value.curve == kInvalidAssetId ||
+      is_scene_root(id) || mesh(id) != nullptr || light(id) != nullptr ||
+      texture_mapping(id) != nullptr ||
+      instance_occurrence(id) != nullptr ||
+      containing_instance_definition(id) != kInvalidEntityId) {
+    return false;
+  }
+  if (const CurveComponent *current = curve(id);
+      current != nullptr && *current == value && kind(id) == EntityKind::Curve) {
+    return true;
+  }
+  const bool kind_changed = kind(id) != EntityKind::Curve;
+  registry_.emplace_or_replace<CurveComponent>(entity, value);
+  registry_.emplace_or_replace<EntityKindComponent>(
+      entity, EntityKindComponent{.kind = EntityKind::Curve});
+  if (kind_changed) {
+    ++hierarchy_presentation_revision_;
+  }
+  ++curve_binding_revision_;
+  ++render_component_revision_;
+  mark_dirty();
+  return true;
+}
+
+bool SceneDocument::clear_curve(EntityId id) {
+  const entt::entity entity = require_entity(id);
+  if (entity == entt::null || !registry_.all_of<CurveComponent>(entity)) {
+    return false;
+  }
+  registry_.remove<CurveComponent>(entity);
+  registry_.emplace_or_replace<EntityKindComponent>(
+      entity, EntityKindComponent{.kind = EntityKind::Generic});
+  ++hierarchy_presentation_revision_;
+  ++curve_binding_revision_;
+  ++render_component_revision_;
+  mark_dirty();
+  return true;
+}
+
+bool SceneDocument::notify_curve_payload_changed(EntityId id) {
+  if (curve(id) == nullptr) {
+    return false;
+  }
+  ++curve_binding_revision_;
   ++render_component_revision_;
   mark_dirty();
   return true;
@@ -1283,7 +1376,7 @@ bool SceneDocument::set_light(EntityId id, LightComponent light) {
   const entt::entity entity = require_entity(id);
   if (entity == entt::null || instance_occurrence(id) != nullptr ||
       is_instance_definition_entity(id) ||
-      is_instance_definition_member(id)) {
+      is_instance_definition_member(id) || curve(id) != nullptr) {
     return false;
   }
   const LightComponent *current = registry_.try_get<LightComponent>(entity);
@@ -1311,7 +1404,7 @@ bool SceneDocument::set_light(EntityId id, LightComponent light) {
 bool SceneDocument::set_scene_settings(EntityId id,
                                        SceneSettingsComponent settings) {
   const entt::entity entity = require_entity(id);
-  if (entity == entt::null) {
+  if (entity == entt::null || curve(id) != nullptr) {
     return false;
   }
   const EntityId root = scene_root();
@@ -1868,6 +1961,12 @@ SceneDocument::texture_mapping(EntityId id) const {
              : registry_.try_get<TextureMappingComponent>(entity);
 }
 
+const CurveComponent *SceneDocument::curve(EntityId id) const {
+  const entt::entity entity = require_entity(id);
+  return entity == entt::null ? nullptr
+                            : registry_.try_get<CurveComponent>(entity);
+}
+
 const LightComponent* SceneDocument::light(EntityId id) const {
   const entt::entity entity = require_entity(id);
   return entity == entt::null ? nullptr
@@ -1897,6 +1996,20 @@ std::vector<EntityId> SceneDocument::entities() const {
     }
     std::sort(ids.begin(), ids.end());
     return ids;
+}
+
+std::vector<EntityId> SceneDocument::curve_entities() const {
+  std::vector<EntityId> ids;
+  const auto curves =
+      registry_.view<CurveComponent, EntityIdentityComponent>();
+  ids.reserve(curves.size_hint());
+  for (auto [entity, curve, identity] : curves.each()) {
+    (void)entity;
+    (void)curve;
+    ids.push_back(identity.id);
+  }
+  std::sort(ids.begin(), ids.end());
+  return ids;
 }
 
 EntityId SceneDocument::scene_root() const {
@@ -2341,6 +2454,7 @@ void SceneDocument::advance_revision_for_replacement(
   texture_mapping_revision_ =
       std::max(texture_mapping_revision_ + 1u, revision_);
   mesh_binding_revision_ = std::max(mesh_binding_revision_ + 1u, revision_);
+  curve_binding_revision_ = std::max(curve_binding_revision_ + 1u, revision_);
   material_binding_revision_ =
       std::max(material_binding_revision_ + 1u, revision_);
   render_component_revision_ =
@@ -2460,6 +2574,7 @@ EntityRecord SceneDocument::make_entity_record(EntityId id, int depth,
   record.active = id == active;
   record.has_children = has_children(id);
   record.has_mesh = mesh(id) != nullptr;
+  record.has_curve = curve(id) != nullptr;
   record.has_light = light(id) != nullptr;
   record.is_scene_root = is_scene_root(id);
   record.has_scene_settings = scene_settings(id) != nullptr;

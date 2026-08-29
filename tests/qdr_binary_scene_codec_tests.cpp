@@ -15,6 +15,7 @@
 #include "scene/document/scene_content_document.hpp"
 
 #include <gtest/gtest.h>
+#include <quader/modeling/curves/curve_document.hpp>
 #include <quader/modeling/neutral/polygon/document.hpp>
 
 #include <algorithm>
@@ -100,6 +101,43 @@ namespace {
   const EntityId entity = document.scene().create_entity_with_id(
       100u, "Triangle Entity", EntityKind::Mesh);
   (void)document.scene().set_mesh(entity, MeshComponent{.mesh = 10u});
+  return document;
+}
+
+[[nodiscard]] CurveAsset authored_curve_asset(bool closed = false) {
+  const std::array<modeling::CurvePointSpec, 3> points{{
+      {.position = {0.0f, 1.0f, 2.0f}, .outgoing_handle = {1.0f, 2.0f, 0.0f}},
+      {.position = {4.0f, 3.0f, 1.0f},
+       .incoming_handle = {-2.0f, 1.0f, 0.0f},
+       .outgoing_handle = {2.0f, -1.0f, 1.0f}},
+      {.position = {8.0f, 2.0f, 0.0f}},
+  }};
+  modeling::CurveDocument document =
+      modeling::CurveDocument::make_bezier(points, closed).or_throw();
+  // A removed point leaves durable allocation history that must not be reused.
+  EXPECT_TRUE(document.append_point({.position = {9.0f, 2.0f, 0.0f}})
+                  .or_throw().changed);
+  EXPECT_TRUE(document.remove_point(document.points().back().id)
+                  .or_throw().changed);
+  CurveAsset curve;
+  curve.name = "Authored Path";
+  curve.document =
+      std::make_shared<const modeling::CurveDocument>(std::move(document));
+  return curve;
+}
+
+[[nodiscard]] SceneContentDocument scene_with_curve(bool closed = false) {
+  SceneContentDocument document = simple_scene();
+  const AssetId curve_id =
+      document.assets().add_curve(20u, authored_curve_asset(closed));
+  if (curve_id == kInvalidAssetId) {
+    throw std::runtime_error("Could not create the test curve asset.");
+  }
+  const EntityId entity = document.scene().create_entity_with_id(
+      200u, "Curve Entity", EntityKind::Curve);
+  if (!document.scene().set_curve(entity, {.curve = curve_id})) {
+    throw std::runtime_error("Could not bind the test curve entity.");
+  }
   return document;
 }
 
@@ -194,6 +232,143 @@ TEST(QdrBinarySceneCodecTests, RoundTripPreservesExplicitUuidAndSceneData) {
       << "selection is transient and must not be stored in QDR";
 }
 
+TEST(QdrBinarySceneCodecTests, SchemaEightPreservesAuthoredCurvesAndStableIds) {
+  for (const bool closed : {false, true}) {
+    SceneContentDocument document = scene_with_curve(closed);
+    ASSERT_TRUE(document.scene().set_transform(
+        200u, TransformComponent{.position = {10.0f, -2.0f, 8.0f},
+                                  .scale = {2.0f, 1.0f, 3.0f}}));
+    ASSERT_TRUE(document.scene().set_modeling_object(
+        200u, {.object_id = 81, .sdk_owned = true,
+               .local_frame_version = kCanonicalModelingObjectLocalFrameVersion}));
+    const auto before = modeling::serialize_curve_document(
+        *document.assets().curve(20u)->document).or_throw();
+    const auto bytes = QdrDocumentWriter::serialize_project_document_bytes(
+        required_write_snapshot(document), test_uuid());
+    const auto read = QdrDocumentReader::deserialize_project_document(bytes);
+    ASSERT_TRUE(read.ok) << read.message;
+    EXPECT_EQ(read.document.assets().mesh_count(), 1u);
+    EXPECT_EQ(read.document.assets().curve_count(), 1u);
+    EXPECT_EQ(read.document.scene().kind(200u), EntityKind::Curve);
+    ASSERT_NE(read.document.scene().curve(200u), nullptr);
+    EXPECT_EQ(read.document.scene().curve(200u)->curve, 20u);
+    EXPECT_EQ(read.document.scene().uuid(200u), document.scene().uuid(200u));
+    EXPECT_EQ(read.document.scene().modeling_object(200u)->object_id, 81);
+    EXPECT_FLOAT_EQ(read.document.scene().transform(200u)->position.x, 10.0f);
+    EXPECT_FLOAT_EQ(read.document.scene().transform(200u)->scale.z, 3.0f);
+    const CurveAsset *curve = read.document.assets().curve(20u);
+    ASSERT_NE(curve, nullptr);
+    ASSERT_TRUE(curve->document);
+    EXPECT_EQ(curve->name, "Authored Path");
+    EXPECT_EQ(curve->document->closed(), closed);
+    EXPECT_EQ(modeling::serialize_curve_document(*curve->document).or_throw(),
+              before);
+    EXPECT_TRUE(read.document.validate_asset_references().ok());
+    EXPECT_TRUE(read.document.validate_object_identity_invariants().ok());
+  }
+}
+
+TEST(QdrBinarySceneCodecTests, CurveWriteSnapshotPinsControlsBeforeLaterEdits) {
+  SceneContentDocument document = scene_with_curve();
+  const auto snapshot = required_write_snapshot(document);
+  const auto original = snapshot.curves.front().document;
+  auto edited = std::make_shared<modeling::CurveDocument>(*original);
+  ASSERT_TRUE(edited->set_point(edited->points().front().id,
+                               {.position = {-30.0f, 0.0f, 0.0f}}).ok());
+  CurveAsset replacement = *document.assets().curve(20u);
+  replacement.document = edited;
+  ASSERT_TRUE(document.assets().replace_curve(20u, std::move(replacement)));
+  const auto read = QdrDocumentReader::deserialize_project_document(
+      QdrDocumentWriter::serialize_project_document_bytes(snapshot, test_uuid()));
+  ASSERT_TRUE(read.ok) << read.message;
+  ASSERT_NE(read.document.assets().curve(20u), nullptr);
+  EXPECT_TRUE(read.document.assets().curve(20u)->document->has_same_geometry(*original));
+  EXPECT_FALSE(read.document.assets().curve(20u)->document->has_same_geometry(*edited));
+}
+
+TEST(QdrBinarySceneCodecTests, RejectsMissingOrInconsistentCurveBindingsOnWrite) {
+  SceneContentDocument document = scene_with_curve();
+  auto snapshot = required_write_snapshot(document);
+  const auto serialize_invalid_snapshot = [&snapshot]() {
+    const auto bytes = QdrDocumentWriter::serialize_project_document_bytes(
+        snapshot, test_uuid());
+    ADD_FAILURE() << "Invalid curve snapshot serialized " << bytes.size()
+                  << " bytes instead of being rejected.";
+  };
+  auto entity = std::ranges::find_if(snapshot.entities,
+      [](const auto &value) { return value.id == 200u; });
+  ASSERT_NE(entity, snapshot.entities.end());
+  entity->curve->curve = 404u;
+  EXPECT_THROW(serialize_invalid_snapshot(), std::runtime_error);
+  entity->curve = CurveComponent{.curve = 20u};
+  entity->mesh = MeshComponent{.mesh = 10u};
+  EXPECT_THROW(serialize_invalid_snapshot(), std::runtime_error);
+  entity->mesh.reset();
+  entity->curve.reset();
+  EXPECT_THROW(serialize_invalid_snapshot(), std::runtime_error);
+  ASSERT_TRUE(document.assets().remove_curve(20u));
+  EXPECT_FALSE(qdr_project_write_snapshot_from_document(document).ok());
+}
+
+TEST(QdrBinarySceneCodecTests, RejectsCorruptAuthoredCurveInsteadOfDroppingIt) {
+  SceneContentDocument document = scene_with_curve();
+  const auto encoded_curve = modeling::serialize_curve_document(
+      *document.assets().curve(20u)->document).or_throw();
+  const auto parsed = parse_written_scene(document);
+  ASSERT_TRUE(parsed.ok) << parsed.message;
+  auto chunks = copy_chunks(parsed);
+  auto metadata = std::ranges::find_if(chunks, [](const auto &chunk) {
+    return chunk.type == quader_io::QdrBinaryChunkType::SceneMetadata;
+  });
+  ASSERT_NE(metadata, chunks.end());
+  auto encoded_start = std::search(metadata->bytes.begin(), metadata->bytes.end(),
+                                   encoded_curve.begin(), encoded_curve.end());
+  ASSERT_NE(encoded_start, metadata->bytes.end());
+  *encoded_start = std::byte{0};
+  metadata->content_hash = 0u;
+  const auto read = QdrDocumentReader::deserialize_project_document(
+      quader_io::build_qdr_binary_container(test_uuid(), std::move(chunks)));
+  EXPECT_FALSE(read.ok);
+  EXPECT_NE(read.message.find("curve asset is invalid"), std::string::npos);
+}
+
+TEST(QdrBinarySceneCodecTests, RejectsCurveBindingWithoutStoredAssetVector) {
+  const auto parsed = parse_written_scene(scene_with_curve());
+  ASSERT_TRUE(parsed.ok) << parsed.message;
+  auto chunks = copy_chunks(parsed);
+  auto metadata = std::ranges::find_if(chunks, [](const auto &chunk) {
+    return chunk.type == quader_io::QdrBinaryChunkType::SceneMetadata;
+  });
+  ASSERT_NE(metadata, chunks.end());
+  erase_flatbuffer_root_field(metadata->bytes, 10u);
+  metadata->content_hash = 0u;
+  const auto read = QdrDocumentReader::deserialize_project_document(
+      quader_io::build_qdr_binary_container(test_uuid(), std::move(chunks)));
+  EXPECT_FALSE(read.ok);
+  EXPECT_NE(read.message.find("missing curve asset"), std::string::npos);
+}
+
+TEST(QdrBinarySceneCodecTests, SchemaSevenStillReadsMeshesButRejectsCurvePayloads) {
+  for (const bool includes_curve : {false, true}) {
+    const auto parsed = parse_written_scene(
+        includes_curve ? scene_with_curve() : simple_scene());
+    ASSERT_TRUE(parsed.ok) << parsed.message;
+    auto chunks = copy_chunks(parsed);
+    auto metadata = std::ranges::find_if(chunks, [](const auto &chunk) {
+      return chunk.type == quader_io::QdrBinaryChunkType::SceneMetadata;
+    });
+    ASSERT_NE(metadata, chunks.end());
+    metadata->schema_version = 7u;
+    const auto read = QdrDocumentReader::deserialize_project_document(
+        quader_io::build_qdr_binary_container(test_uuid(), std::move(chunks)));
+    EXPECT_EQ(read.ok, !includes_curve) << read.message;
+    if (!includes_curve) {
+      EXPECT_EQ(read.document.assets().mesh_count(), 1u);
+      EXPECT_EQ(read.document.assets().curve_count(), 0u);
+    }
+  }
+}
+
 TEST(QdrBinarySceneCodecTests,
      SchemaFiveRoundTripPreservesViewportCameraPose) {
   QdrProjectWriteSnapshot snapshot =
@@ -283,7 +458,7 @@ TEST(QdrBinarySceneCodecTests,
                                  quader_io::QdrBinaryChunkType::SceneMetadata);
       });
   ASSERT_NE(metadata, parsed.chunks.end());
-  EXPECT_EQ(metadata->schema_version, 7u);
+  EXPECT_EQ(metadata->schema_version, 8u);
 
   const QdrProjectReadResult read =
       QdrDocumentReader::deserialize_project_document(
@@ -1244,7 +1419,7 @@ TEST(QdrBinarySceneCodecTests, RejectsUnsupportedMetadataSchema) {
   ASSERT_TRUE(parsed.ok) << parsed.message;
   std::vector<quader_io::QdrBinaryChunkInput> chunks = copy_chunks(parsed);
   ASSERT_FALSE(chunks.empty());
-  chunks.front().schema_version = 8u;
+  chunks.front().schema_version = 9u;
 
   const QdrProjectReadResult read =
       QdrDocumentReader::deserialize_project_document(

@@ -10,6 +10,7 @@
 #include "editor/array/linear_array_tool_service.hpp"
 #include "editor/array/radial_array_tool_service.hpp"
 #include "editor/commands/asset_command_service.hpp"
+#include "editor/curve/curve_tool_service.hpp"
 #include "editor/instances/scene_instance_service.hpp"
 #include "editor/modeling/services/modeling_legacy_local_frame_upgrade.hpp"
 #include "editor/modeling/services/modeling_mesh_sync_service.hpp"
@@ -104,6 +105,8 @@ void SceneSession::rebuild_services() {
   radial_array_ = std::make_unique<RadialArrayToolService>(
       document_.scene(), document_.assets(), *history_, *modeling_,
       *selection_, *instances_);
+  curve_ = std::make_unique<CurveToolService>(
+      document_.scene(), document_.assets(), *history_, *modeling_);
   primitive_creation_ = std::make_unique<PrimitiveCreationToolService>(
       *history_, *modeling_, ModelingOperationPreviewCheckpointHooks{
                                   .begin = [this]() {
@@ -126,7 +129,7 @@ void SceneSession::rebuild_services() {
   point_placement_ = std::make_unique<ViewportPointPlacementService>();
   native_tools_ = std::make_unique<NativeViewportToolCoordinator>(
       *pivot_, *linear_array_, *radial_array_, *primitive_creation_,
-      *selection_, *modeling_);
+      *selection_, *modeling_, *curve_);
   viewport_local_visibility_ =
       std::make_unique<ViewportLocalVisibilityService>(
           document_.scene(), document_.assets(), *modeling_, *instances_,

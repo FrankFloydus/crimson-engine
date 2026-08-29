@@ -12,6 +12,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <span>
 #include <unordered_map>
 #include <vector>
 
@@ -52,7 +53,14 @@ struct SceneWireframeOverlayBatchPlan final {
 [[nodiscard]] SceneWireframeOverlayBatchPlan
 plan_scene_wireframe_overlay_batches(
     const RenderOverlaySceneWireframeSnapshot &snapshot,
-    std::size_t max_instances_per_chunk);
+    std::size_t max_instances_per_chunk,
+    const RenderInstanceBatchPlan *retained_layout = nullptr);
+
+/// Compares pinned mesh inputs without allocating or inspecting mesh vertices.
+/// Scene/asset revisions may advance for unrelated curves, lights or materials.
+[[nodiscard]] bool scene_wireframe_overlay_mesh_inputs_match(
+    std::span<const RenderOverlayMeshSnapshot> previous,
+    std::span<const RenderOverlayMeshSnapshot> next);
 
 /// Reports resources and submissions for the persistent full-scene wire path.
 struct SceneWireframeOverlayCacheStats final {
@@ -65,6 +73,8 @@ struct SceneWireframeOverlayCacheStats final {
   std::uint64_t geometry_reuse_count = 0u;
   std::uint64_t rebuild_count = 0u;
   std::uint64_t transform_update_count = 0u;
+  std::uint64_t plan_prepare_count = 0u;
+  std::uint64_t mesh_input_reuse_count = 0u;
 };
 
 /**
@@ -132,6 +142,8 @@ private:
   filament::Material *line_material_ = nullptr;
   std::size_t max_instances_per_chunk_ = 1u;
   RenderInstanceBatchPlan plan_;
+  /// Pins the exact authored inputs from the last successful synchronization.
+  std::vector<RenderOverlayMeshSnapshot> synced_meshes_;
   std::vector<WireBatchProxy> proxies_;
   std::unordered_map<std::uint64_t,
                      std::vector<std::unique_ptr<WireGeometryResource>>>

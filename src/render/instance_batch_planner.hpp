@@ -78,11 +78,20 @@ struct RenderInstanceBatchChunk final {
   std::uint64_t transform_signature = 0u;
 };
 
+/// Records storage growth and spatial ordering for the published batch plan.
+struct RenderInstanceBatchPlanWorkStats final {
+  std::size_t chunk_storage_growth_count = 0u;
+  std::size_t relocated_chunk_count = 0u;
+  std::size_t morton_ordered_occurrence_count = 0u;
+  bool retained_layout = false;
+};
+
 /// Owns the deterministic primitive/chunk plan for one render snapshot.
 struct RenderInstanceBatchPlan final {
   std::size_t max_instances_per_chunk = 1u;
   std::size_t occurrence_count = 0u;
   std::vector<RenderInstanceBatchChunk> chunks;
+  RenderInstanceBatchPlanWorkStats work;
 };
 
 /// Selects the least expensive synchronization path between two plans.

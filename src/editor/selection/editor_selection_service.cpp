@@ -524,6 +524,29 @@ EditorSelectionService::pick_select(const ModelingPickSelectRequest &request) {
   return pick_select(request, nullptr);
 }
 
+DocumentCommandResult EditorSelectionService::pick_scene_entity(
+    EntityId entity, const ModelingPickSelectRequest &request) {
+  const ModelingSelectionMode selection_mode = modeling_.selection_mode();
+  if (!selection_mode_uses_scene_document(selection_mode)) {
+    return document_command_invalid_request_result(
+        "Scene entity picking requires Mesh or Group selection mode.");
+  }
+  if (!scene_target_selectable(entity) ||
+      !scene_.is_effectively_visible(entity)) {
+    return document_command_invalid_request_result(
+        "The picked entity is not visible and editable in the current scene scope.");
+  }
+  const std::uint64_t scene_before = scene_.selection_revision();
+  const std::uint64_t modeling_before = modeling_.selection_revision();
+  const EntityId target = selection_mode == ModelingSelectionMode::Group
+                              ? nearest_group_ancestor(entity)
+                              : entity;
+  (void)scene_pick_selection(target, selection_mode, request);
+  return {.ok = true,
+          .changed = scene_.selection_revision() != scene_before ||
+                     modeling_.selection_revision() != modeling_before};
+}
+
 ModelingSelectionSummary EditorSelectionService::pick_select(
     const ModelingPickSelectRequest &request,
     const EditorSelectionBoxBaseline &baseline) {

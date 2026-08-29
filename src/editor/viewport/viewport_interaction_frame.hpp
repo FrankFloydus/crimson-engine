@@ -8,15 +8,21 @@
 
 #include "api/quader_api_types.hpp"
 #include "core/types.hpp"
+#include "editor/modeling/picking/curve_picking_cache.hpp"
 #include "viewport/viewport_input_router.hpp"
 #include "viewport/viewport_settings.hpp"
 
+#include <functional>
+#include <memory>
 #include <optional>
 #include <span>
+
+#include <quader/modeling/neutral/polygon/document_model.hpp>
 
 namespace quader {
 
 class ViewportCameraController;
+struct ViewportRay;
 
 /**
  * Stores a selectable scene billboard projected by the viewport interaction layer.
@@ -25,6 +31,21 @@ struct ViewportSceneBillboardPickCandidate {
   EntityId entity = kInvalidEntityId;
   QVec3 position = {};
   float size_pixels = 1.0f;
+};
+
+/// Carries one depth-ranked stationary mesh vertex into viewport interaction.
+struct ViewportMeshVertexSnapTarget {
+  int modeling_object_id = -1;
+  quader_poly::ElementId vertex_id = quader_poly::kInvalidElementId;
+  QVec3 world_position = {};
+  double ray_distance = 0.0;
+  double pick_distance = 0.0;
+};
+
+/// Carries one prepared mesh Move snap query into viewport interaction.
+struct ViewportMeshSnapQueryResult {
+  std::optional<ViewportMeshVertexSnapTarget> vertex_target;
+  std::optional<double> nearest_surface_ray_distance;
 };
 
 /**
@@ -63,6 +84,15 @@ struct ViewportInteractionFrame {
   bool active_tool_allows_selection_fallback = false;
   std::span<const ViewportSceneBillboardPickCandidate>
       scene_billboard_pick_candidates;
+  std::span<const ViewportSceneCurvePickCandidate> scene_curve_pick_candidates;
+  /// Existing mesh-surface owner supplies depth only after a curve is hit.
+  std::function<std::optional<double>(const ViewportRay &)>
+      scene_mesh_surface_distance;
+  /// The modeling owner retains mesh picking, occlusion depth, and
+  /// moving-selection exclusion in one prepared query.
+  std::function<ViewportMeshSnapQueryResult(const ViewportRay &,
+                                            double vertex_radius)>
+      scene_mesh_snap_query;
   ViewportInteractionSelectionState selection_state;
 };
 

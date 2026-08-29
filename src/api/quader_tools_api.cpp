@@ -10,6 +10,7 @@
 #include "api/quader_api_status_internal.hpp"
 #include "editor/array/linear_array_tool_service.hpp"
 #include "editor/array/radial_array_tool_service.hpp"
+#include "editor/curve/curve_tool_service.hpp"
 #include "editor/modeling/operations/operation_schema.hpp"
 #include "editor/session/scene_session.hpp"
 #include "editor/modeling/services/modeling_operation_settings.hpp"
@@ -41,6 +42,7 @@ enum class ActiveToolSettingsSourceKind : std::uint8_t {
   RadialArray,
   LinearArray,
   Pivot,
+  Curve,
 };
 
 /// Couples a settings owner identity with its monotonic presentation revision.
@@ -70,6 +72,14 @@ MaterialReference active_project_material(QuaderApiSession session) {
 
 ActiveToolSettingsSource
 active_tool_settings_source(const SceneSession &session) {
+  const CurveToolService &curve = session.curve();
+  if (curve.active()) {
+    return {
+        .identity = &curve,
+        .revision = curve.tool_settings_revision(),
+        .kind = ActiveToolSettingsSourceKind::Curve,
+    };
+  }
   const PrimitiveCreationToolService &primitive =
       session.primitive_creation();
   if (primitive.active()) {
@@ -725,6 +735,31 @@ QuaderToolSettingsTarget modeling_tool_settings_target(
   return result;
 }
 
+QuaderToolSettingsTarget curve_tool_settings_target(
+    const CurveToolService &curve) {
+  QuaderToolSettingsTarget result{
+      .active = true,
+      .preview_active = curve.drawing() || curve.dragging(),
+      .tool_id = std::string(kCurveToolId),
+      .title = "Curve",
+      .description =
+          "Click to add points; drag to shape bends. Use Apply to finish. "
+          "Use the configured point conversion gesture to toggle corner/smooth. "
+          "Select a curve and use this tool to edit its points and handles.",
+      .can_reset = false,
+      .apply_visible = true,
+      .can_apply = curve.can_apply(),
+      .can_cancel = true,
+  };
+  result.controls.push_back(toggle_control(std::string(kCurveClosedSetting),
+                                           "Closed", curve.closed()));
+  if (!curve.drawing()) {
+    result.controls.push_back(action_control(std::string(kCurveNewAction),
+                                             "New Curve"));
+  }
+  return result;
+}
+
 } // namespace
 
 QuaderToolsApi::QuaderToolsApi(QuaderApiSession session)
@@ -806,6 +841,9 @@ bool QuaderToolsApi::can_activate(ViewportToolId tool) const {
 
 QuaderToolSettingsTarget QuaderToolsApi::active_settings() const {
   const SceneSession &session = scene_session(session_);
+  if (session.curve().active()) {
+    return curve_tool_settings_target(session.curve());
+  }
   if (session.primitive_creation().active()) {
     return primitive_tool_settings_target(session.primitive_creation());
   }
@@ -859,6 +897,17 @@ QuaderApiVoidResult QuaderToolsApi::set_setting(std::string_view tool_id,
                                                  std::string_view name,
                                                  double value) {
   SceneSession &session = scene_session(session_);
+  if (session.curve().active()) {
+    if ((!tool_id.empty() && tool_id != kCurveToolId) ||
+        name != kCurveClosedSetting || (value != 0.0 && value != 1.0)) {
+      return quader_api_failure_status(session, "Invalid Curve setting.");
+    }
+    const bool drawing = session.curve().drawing();
+    return api_status_from_command(
+        session, session.curve().set_closed(value != 0.0),
+        drawing ? QuaderMutationKind::Runtime : QuaderMutationKind::Modeling,
+        "Set Curve Closed");
+  }
   if (session.primitive_creation().active()) {
     if (!tool_id.empty() && tool_id != kCreatePrimitiveToolId) {
       return quader_api_failure_status(
@@ -1014,6 +1063,10 @@ QuaderApiVoidResult QuaderToolsApi::set_setting(std::string_view tool_id,
 QuaderApiVoidResult QuaderToolsApi::execute_action(std::string_view tool_id,
                                                     std::string_view action_id) {
   SceneSession &session = scene_session(session_);
+  if (tool_id == kCurveToolId && action_id == kCurveNewAction) {
+    return api_status_from_command(session, session.curve().new_curve(),
+                                    QuaderMutationKind::Runtime, "New Curve");
+  }
   if (tool_id == kPivotToolId) {
     return api_status_from_command(
         session, session.pivot().execute_align_action(action_id),
@@ -1107,7 +1160,8 @@ QuaderApiVoidResult QuaderToolsApi::commit_active_tool_preview() {
     const bool linear_array = session.linear_array().has_session();
     const bool radial_array = session.radial_array().has_session();
     const bool primitive = session.primitive_creation().active();
-    const bool modeling_tool = linear_array || radial_array || primitive;
+    const bool curve = session.curve().has_session();
+    const bool modeling_tool = linear_array || radial_array || primitive || curve;
     return api_status_from_command(
         session, session.native_tools().commit_active(),
         modeling_tool ? QuaderMutationKind::Modeling
@@ -1115,6 +1169,7 @@ QuaderApiVoidResult QuaderToolsApi::commit_active_tool_preview() {
         radial_array ? "Apply Radial Array"
         : linear_array ? "Apply Linear Array"
         : primitive    ? "Apply Primitive Tool"
+        : curve        ? "Apply Curve"
                        : "Apply Pivot");
   }
   if (hooks_.commit_active_tool_preview) {

@@ -3134,8 +3134,9 @@ TEST(BuildGuardrailTests, QtFrameRefreshKeepsExpensiveChromeEventDriven) {
   expect_contains(frame_refresh, "inspector_panel_->refresh(context)");
   expect_contains(frame_refresh, "console_panel_->refresh(context)");
   expect_contains(frame_refresh, "modeling_->transform_drag_active()");
+  expect_contains(frame_refresh, "curve_->dragging()");
   expect_contains(frame_refresh,
-                  "!transform_drag_active && "
+                  "!edit_drag_active && "
                   "panel_presented(UIPanelId::Outliner)");
   expect_contains(frame_refresh,
                   "document_->hierarchy_presentation_revision()");
@@ -3144,13 +3145,13 @@ TEST(BuildGuardrailTests, QtFrameRefreshKeepsExpensiveChromeEventDriven) {
   expect_contains(frame_refresh,
                   "outliner_instance_edit_revision_ !=");
   expect_contains(frame_refresh,
-                  "!transform_drag_active && "
+                  "!edit_drag_active && "
                   "panel_presented(UIPanelId::Layers)");
   expect_contains(frame_refresh,
                   "layers_scene_revision_ != document_->layer_revision()");
   expect_missing(frame_refresh, "editor_->revisions()");
   expect_contains(frame_refresh,
-                  "!transform_drag_active && !numeric_interaction_active &&");
+                  "!edit_drag_active && !numeric_interaction_active &&");
   expect_contains(frame_refresh, "panel_presented(UIPanelId::Inspector)");
   expect_contains(frame_refresh, "panel_presented(UIPanelId::Console)");
   expect_contains(frame_refresh,

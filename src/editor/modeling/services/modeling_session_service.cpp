@@ -27,6 +27,7 @@
 #include "editor/modeling/services/modeling_session_services.hpp"
 #include "editor/modeling/services/modeling_transform_drag_service.hpp"
 #include "editor/modeling/services/selection_mode_adapter.hpp"
+#include "editor/modeling/picking/curve_picking_cache.hpp"
 #include "editor/selection/selection_projection_service.hpp"
 #include "editor/tools/viewport_tool_descriptor_catalog.hpp"
 #include "editor/commands/document/scene_texture_mapping_plan.hpp"
@@ -58,6 +59,7 @@
 #include <editor/interactions/box_tool.hpp>
 #include <editor/interactions/cut_tool.hpp>
 #include <editor/interactions/mirror_tool.hpp>
+#include <editor/interactions/move_tool.hpp>
 #include <editor/interactions/tool_math_internal.hpp>
 #include <editor/interactions/tool_transform_math.hpp>
 #include <editor/interactions/selection_box.hpp>
@@ -1380,6 +1382,13 @@ public:
         entities.push_back(*entity);
       }
     }
+    const auto curves = curve_box_pick_cache_.box_pick_entities(
+        scene_, assets_, request, selection_service_.viewport_visibility_revision(),
+        [this](EntityId entity) {
+          return selection_service_.viewport_entity_visible(entity);
+        },
+        selection_service_.overlay_instance_edit_scope().active());
+    entities.insert(entities.end(), curves.begin(), curves.end());
     return entities;
   }
 
@@ -2339,6 +2348,10 @@ public:
     return selection_service_.world_pick_bounds_build_count();
   }
 
+  [[nodiscard]] std::uint64_t mesh_snap_query_count() const {
+    return mesh_snap_query_count_;
+  }
+
   [[nodiscard]] const void *modeling_sdk_session_identity_for_tests() const {
     return sdk_projection_adapter_.session_identity();
   }
@@ -2472,7 +2485,6 @@ public:
       app_selection_mode_ = ModelingSelectionMode::Object;
     }
 
-    object_registry_.clear();
     sdk_projection_adapter_.reset_from_scene();
     if (preserve_scene_owned_group_selection) {
       (void)sdk_projection_adapter_.set_selection_mode(
@@ -4957,6 +4969,65 @@ public:
                                                object_registry_, ray);
   }
 
+  [[nodiscard]] std::optional<double>
+  pick_mesh_surface_distance(const ModelingRay &ray) const {
+    const auto &projection = sdk_projection_adapter_.native_selection_projection_view();
+    const auto hit = selection_service_.pick_surface_hit(
+        projection, scene_, object_registry_, ray);
+    return hit.has_value() ? std::optional<double>{hit->ray_distance} : std::nullopt;
+  }
+
+  [[nodiscard]] ModelingMeshSnapQueryResult
+  pick_mesh_snap_query(const ModelingRay &ray, double vertex_radius,
+                       bool exclude_current_selection) const {
+    if (!std::isfinite(vertex_radius) || vertex_radius <= 0.0) {
+      return {};
+    }
+
+    ++mesh_snap_query_count_;
+    const quader_poly::PickOptions options =
+        quader_editor_core::move_vertex_snap_pick_options(vertex_radius);
+    const auto &projection =
+        sdk_projection_adapter_.native_selection_projection_view();
+    const std::vector<quader_editor_core::PolygonObject> &objects =
+        selection_service_.cached_local_picking_objects(
+            projection, scene_, object_registry_);
+    const quader_editor_core::MoveVertexSnapQueryResult query =
+        quader_editor_core::resolve_move_vertex_snap_query(
+            objects, projection.selection_mode(), to_runtime(ray),
+            vertex_radius,
+            selection_service_.cached_pick_object_bounds(
+                projection, scene_, object_registry_),
+            selection_service_.cached_local_pick_face_geometry(
+                projection, scene_, object_registry_, options),
+            selection_service_.cached_local_picking_transforms(
+                projection, scene_, object_registry_),
+            exclude_current_selection, &mesh_snap_picking_scratch_);
+
+    ModelingMeshSnapQueryResult result{
+        .nearest_surface_ray_distance =
+            query.nearest_surface_ray_distance,
+    };
+    if (query.vertex_target.has_value()) {
+      result.vertex_target = ModelingMeshVertexSnapTarget{
+          .modeling_object_id = query.vertex_target->object_id,
+          .vertex_id = query.vertex_target->vertex_id,
+          .world_position = query.vertex_target->position,
+          .ray_distance = query.vertex_target->ray_distance,
+          .pick_distance = query.vertex_target->pick_distance,
+      };
+    }
+    return result;
+  }
+
+  [[nodiscard]] std::optional<ModelingMeshVertexSnapTarget>
+  pick_mesh_vertex_snap_target(const ModelingRay &ray, double vertex_radius,
+                               bool exclude_current_selection) const {
+    return pick_mesh_snap_query(ray, vertex_radius,
+                                exclude_current_selection)
+        .vertex_target;
+  }
+
   [[nodiscard]] std::array<
       std::optional<quader_editor_core::PickHitRecord>, 3U>
   knife_pick_targets(const ModelingToolRayEvent &event,
@@ -6265,6 +6336,95 @@ public:
     return created;
   }
 
+  [[nodiscard]] bool curve_target_is_editable(int modeling_object_id) const {
+    const auto entity = object_registry_.entity_for_modeling_object(modeling_object_id);
+    if (!entity.has_value() || !scene_.exists(*entity) ||
+        scene_.curve(*entity) == nullptr ||
+        scene_.is_effectively_locked(*entity) ||
+        !scene_hierarchy_segment_is_selectable_ignoring_visibility(scene_, *entity) ||
+        scene_.is_instance_definition_member(*entity) ||
+        scene_.is_instance_definition_entity(*entity)) {
+      return false;
+    }
+    return sdk_projection_adapter_.owns_object(modeling_object_id);
+  }
+
+  ModelingCreateBoxResult create_curve(modeling::CurveDocument document,
+                                       std::string name) {
+    const ModelingInstanceEditScope scope = instance_edit_scope_provider_
+        ? instance_edit_scope_provider_() : ModelingInstanceEditScope{};
+    if (scope.active()) {
+      return {.ok = false,
+              .message = "Exit instance editing before creating a curve."};
+    }
+    auto created = sdk_projection_adapter_.create_curve(std::move(document), name);
+    if (created.ok && created.changed) {
+      app_selection_mode_ = ModelingSelectionMode::Object;
+      invalidate_selection_overlay_caches();
+    }
+    return created;
+  }
+
+  [[nodiscard]] std::optional<modeling::CurveDocument> curve_document(
+      int modeling_object_id, bool include_preview) const {
+    return sdk_projection_adapter_.curve_document(modeling_object_id, include_preview);
+  }
+
+  ModelingCommandResult replace_curve_document(int modeling_object_id,
+                                                modeling::CurveDocument document) {
+    if (!curve_target_is_editable(modeling_object_id)) {
+      return {.ok = false, .message = "Curve is not editable."};
+    }
+    auto result = sdk_projection_adapter_.replace_curve_document(
+        modeling_object_id, std::move(document));
+    if (result.ok && result.changed) {
+      invalidate_selection_overlay_caches();
+    }
+    return result;
+  }
+
+  ModelingCommandResult begin_curve_document_preview(int modeling_object_id) {
+    if (!curve_target_is_editable(modeling_object_id) || transform_drag_active()) {
+      return {.ok = false, .message = "Curve is not editable."};
+    }
+    auto result = sdk_projection_adapter_.begin_curve_document_preview(modeling_object_id);
+    if (result.ok) {
+      invalidate_selection_overlay_caches();
+    }
+    return result;
+  }
+
+  ModelingCommandResult update_curve_document_preview(modeling::CurveDocument document) {
+    if (!curve_target_is_editable(
+            sdk_projection_adapter_.curve_document_preview_object_id())) {
+      return {.ok = false, .message = "Curve is not editable."};
+    }
+    // Curve previews publish through their own curve-overlay revision. They do
+    // not change polygon topology or selection, so keep the retained polygon
+    // selection overlay hot throughout pointer sampling.
+    return sdk_projection_adapter_.update_curve_document_preview(
+        std::move(document));
+  }
+
+  [[nodiscard]] bool curve_document_preview_active() const {
+    return sdk_projection_adapter_.curve_document_preview_active();
+  }
+
+  ModelingCommandResult commit_curve_document_preview() {
+    if (!curve_document_preview_active() || !curve_target_is_editable(
+            sdk_projection_adapter_.curve_document_preview_object_id())) {
+      return {.ok = false, .message = "No editable curve preview is active."};
+    }
+    return commit_transform_preview();
+  }
+
+  ModelingCommandResult cancel_curve_document_preview() {
+    if (!curve_document_preview_active()) {
+      return {.ok = true, .changed = false};
+    }
+    return cancel_transform_preview();
+  }
+
   ModelingCommandResult replace_mesh_document(
       int modeling_object_id, quader_poly::Document document) {
     ModelingCommandResult result = sdk_projection_adapter_.replace_mesh_document(
@@ -7444,6 +7604,10 @@ private:
   std::function<TextureLockSettings()> texture_lock_settings_provider_;
   ModelingHierarchyDuplicateService hierarchy_duplicate_service_;
   ModelingSelectionService selection_service_;
+  mutable std::uint64_t mesh_snap_query_count_ = 0;
+  mutable quader_editor_core::PickAllWithSurfaceScratch
+      mesh_snap_picking_scratch_;
+  mutable ViewportCurvePickCache curve_box_pick_cache_;
   SelectionProjectionService selection_projection_service_;
   mutable ModelingOverlayService overlay_service_;
   mutable VolatileCutOverlayCache volatile_cut_overlay_cache_;
@@ -7529,6 +7693,26 @@ ModelingSessionService::compile_object_mesh(int modeling_object_id) const {
 std::optional<EntityId> ModelingSessionService::pick_object_entity(
     const ModelingPickSelectRequest &request) const {
   return impl_->pick_object_entity(request);
+}
+
+std::optional<double> ModelingSessionService::pick_mesh_surface_distance(
+    const ModelingRay &ray) const {
+  return impl_->pick_mesh_surface_distance(ray);
+}
+
+ModelingMeshSnapQueryResult ModelingSessionService::pick_mesh_snap_query(
+    const ModelingRay &ray, double vertex_radius,
+    bool exclude_current_selection) const {
+  return impl_->pick_mesh_snap_query(ray, vertex_radius,
+                                     exclude_current_selection);
+}
+
+std::optional<ModelingMeshVertexSnapTarget>
+ModelingSessionService::pick_mesh_vertex_snap_target(
+    const ModelingRay &ray, double vertex_radius,
+    bool exclude_current_selection) const {
+  return impl_->pick_mesh_vertex_snap_target(
+      ray, vertex_radius, exclude_current_selection);
 }
 
 std::vector<EntityId> ModelingSessionService::box_pick_object_entities(
@@ -7733,6 +7917,10 @@ std::uint64_t ModelingSessionService::local_face_geometry_build_count() const {
 
 std::uint64_t ModelingSessionService::world_pick_bounds_build_count() const {
   return impl_->world_pick_bounds_build_count();
+}
+
+std::uint64_t ModelingSessionService::mesh_snap_query_count() const {
+  return impl_->mesh_snap_query_count();
 }
 
 const void *
@@ -8344,6 +8532,43 @@ ModelingCommandResult ModelingSessionService::cancel_box() {
 ModelingCreateBoxResult
 ModelingSessionService::create_mesh(const ModelingCreateMeshRequest &request) {
   return impl_->create_mesh(request);
+}
+
+ModelingCreateBoxResult ModelingSessionService::create_curve(
+    modeling::CurveDocument document, std::string name) {
+  return impl_->create_curve(std::move(document), std::move(name));
+}
+
+std::optional<modeling::CurveDocument> ModelingSessionService::curve_document(
+    int modeling_object_id, bool include_preview) const {
+  return impl_->curve_document(modeling_object_id, include_preview);
+}
+
+ModelingCommandResult ModelingSessionService::replace_curve_document(
+    int modeling_object_id, modeling::CurveDocument document) {
+  return impl_->replace_curve_document(modeling_object_id, std::move(document));
+}
+
+ModelingCommandResult ModelingSessionService::begin_curve_document_preview(
+    int modeling_object_id) {
+  return impl_->begin_curve_document_preview(modeling_object_id);
+}
+
+ModelingCommandResult ModelingSessionService::update_curve_document_preview(
+    modeling::CurveDocument document) {
+  return impl_->update_curve_document_preview(std::move(document));
+}
+
+ModelingCommandResult ModelingSessionService::commit_curve_document_preview() {
+  return impl_->commit_curve_document_preview();
+}
+
+ModelingCommandResult ModelingSessionService::cancel_curve_document_preview() {
+  return impl_->cancel_curve_document_preview();
+}
+
+bool ModelingSessionService::curve_document_preview_active() const {
+  return impl_->curve_document_preview_active();
 }
 
 ModelingCommandResult ModelingSessionService::replace_mesh_document(

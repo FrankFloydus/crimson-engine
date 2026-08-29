@@ -9,6 +9,7 @@
 #include "api/quader_command_ids.hpp"
 #include "api/quader_editor_api.hpp"
 #include "editor/commands/document/document_command_result.hpp"
+#include "editor/curve/curve_tool_service.hpp"
 #include "editor/modeling/services/modeling_session_service.hpp"
 #include "editor/selection/editor_selection_service.hpp"
 #include "io/qdr/qdr_document_reader.hpp"
@@ -170,6 +171,173 @@ private:
   HANDLE handle_ = INVALID_HANDLE_VALUE;
 };
 #endif
+
+QuaderModelingObjectRef create_saved_transition_curve(
+    ProjectSession &project, QuaderEditorApi &editor) {
+  const auto curve = editor.modeling().create_curve({
+      .points = {{.position = {-2.0f, 0.0f, 0.0f}},
+                 {.position = {2.0f, 0.0f, 0.0f}}},
+      .name = "Scene Transition Curve",
+  });
+  EXPECT_TRUE(curve.ok()) << curve.error_message();
+  EXPECT_TRUE(editor.scene_documents().save_as(
+      project.active_scene_id(), project_path("Scenes/Source.qdr")).ok());
+  return curve.value();
+}
+
+ProjectRelativePath create_closed_transition_target(QuaderEditorApi &editor) {
+  const auto target = editor.scene_documents().new_scene();
+  EXPECT_TRUE(target.ok()) << target.error_message();
+  const ProjectRelativePath path = project_path("Scenes/Target.qdr");
+  EXPECT_TRUE(editor.scene_documents().save_as(target.value(), path).ok());
+  EXPECT_TRUE(editor.scene_documents().close(target.value()).ok());
+  return path;
+}
+
+bool select_and_begin_curve_control_drag(CurveToolService &curve,
+                                         CurveControlTarget target) {
+  const std::array hits{target};
+  (void)curve.edit_control_selection(
+      hits, quader_editor_core::SelectionEditOperation::Replace, nullptr,
+      target);
+  const CurveControlSelection &selection = curve.control_selection();
+  return selection.controls.size() == 1u && selection.active == target &&
+         curve.begin_selected_control_drag().ok;
+}
+
+TEST(ProjectSessionWorkspace,
+     NewAndOpenedScenesCancelOutgoingCurveDragsBeforeRebinding) {
+  for (const bool open_existing_file : {false, true}) {
+    SCOPED_TRACE(open_existing_file ? "Open Scene" : "New Scene");
+    ScopedProjectSessionDirectory temporary("curve-transition");
+    ProjectSession project;
+    const auto created = project.create(temporary.make_empty_child("Project"));
+    ASSERT_TRUE(created.ok) << created.message;
+    QuaderEditorApi editor(project);
+    const auto object = create_saved_transition_curve(project, editor);
+    OpenSceneSession *source = project.active_scene();
+    ASSERT_NE(source, nullptr);
+    const auto source_id = source->session_id;
+    const auto target_path = create_closed_transition_target(editor);
+    ASSERT_EQ(project.active_scene(), source);
+    ASSERT_TRUE(editor.tools().activate(kCurveToolId).ok());
+    CurveToolService &curve = source->session->curve();
+    ASSERT_TRUE(curve.preview_state().document.has_value());
+    const auto before = *curve.preview_state().document;
+    const auto source_stamp = source->session->content_revision_stamp();
+    ASSERT_NE(source->session->history().undo_label(), nullptr);
+    const std::string undo_label = *source->session->history().undo_label();
+    ASSERT_TRUE(select_and_begin_curve_control_drag(
+        curve, {.point = before.points()[0].id}));
+    ASSERT_TRUE(curve.update_drag({-5.0f, 1.0f, 2.0f}).ok);
+    ASSERT_TRUE(curve.dragging());
+    ASSERT_TRUE(source->session->modeling().curve_document_preview_active());
+
+    const auto switched = open_existing_file
+        ? editor.scene_documents().open(target_path)
+        : editor.scene_documents().new_scene();
+    ASSERT_TRUE(switched.ok()) << switched.error_message();
+    EXPECT_NE(project.active_scene_id(), source_id);
+    EXPECT_FALSE(curve.active());
+    EXPECT_FALSE(curve.dragging());
+    EXPECT_FALSE(source->session->modeling().curve_document_preview_active());
+    EXPECT_EQ(source->session->content_revision_stamp(), source_stamp);
+    EXPECT_FALSE(source->dirty());
+    ASSERT_NE(source->session->history().undo_label(), nullptr);
+    EXPECT_EQ(*source->session->history().undo_label(), undo_label);
+
+    ASSERT_TRUE(editor.scene_documents().activate(source_id).ok());
+    const auto restored = editor.modeling().curve_snapshot(object);
+    ASSERT_TRUE(restored.ok()) << restored.error_message();
+    EXPECT_TRUE(restored.value().document.has_same_geometry(before));
+    ASSERT_TRUE(editor.tools().activate(kCurveToolId).ok());
+    ASSERT_TRUE(select_and_begin_curve_control_drag(
+        curve, {.point = before.points()[0].id}));
+    EXPECT_TRUE(curve.cancel_drag().ok);
+  }
+}
+
+TEST(ProjectSessionWorkspace,
+     FailedNewAndOpenPersistencePreserveOutgoingCurveDragExactly) {
+  for (const bool open_existing_file : {false, true}) {
+    SCOPED_TRACE(open_existing_file ? "Open Scene" : "New Scene");
+    ScopedProjectSessionDirectory temporary("curve-transition-rollback");
+    ProjectSession project;
+    const auto created = project.create(temporary.make_empty_child("Project"));
+    ASSERT_TRUE(created.ok) << created.message;
+    QuaderEditorApi editor(project);
+    (void)create_saved_transition_curve(project, editor);
+    OpenSceneSession *source = project.active_scene();
+    ASSERT_NE(source, nullptr);
+    const auto target_path = create_closed_transition_target(editor);
+    ASSERT_TRUE(editor.tools().activate(kCurveToolId).ok());
+    CurveToolService &curve = source->session->curve();
+    ASSERT_TRUE(curve.preview_state().document.has_value());
+    const auto point = curve.preview_state().document->points()[0].id;
+    ASSERT_TRUE(select_and_begin_curve_control_drag(curve, {.point = point}));
+    ASSERT_TRUE(curve.update_drag({-5.0f, 1.0f, 2.0f}).ok);
+    const auto preview = *curve.preview_state().document;
+    const auto stamp = source->session->content_revision_stamp();
+    const auto active_id = project.active_scene_id();
+    const auto generation = project.activation_generation();
+    const auto tab_count = project.open_scenes().size();
+    const std::string manifest = ProjectManifestStore::serialize(*project.manifest());
+
+    {
+      ScopedManifestWriteFailure blocked(project.manifest_path());
+      ASSERT_TRUE(blocked.ready()) << blocked.message();
+      const auto failed = open_existing_file
+          ? editor.scene_documents().open(target_path)
+          : editor.scene_documents().new_scene();
+      EXPECT_FALSE(failed.ok());
+    }
+    EXPECT_EQ(project.active_scene_id(), active_id);
+    EXPECT_EQ(project.activation_generation(), generation);
+    EXPECT_EQ(project.open_scenes().size(), tab_count);
+    EXPECT_EQ(ProjectManifestStore::serialize(*project.manifest()), manifest);
+    EXPECT_EQ(source->session->content_revision_stamp(), stamp);
+    EXPECT_TRUE(curve.active());
+    EXPECT_TRUE(curve.dragging());
+    EXPECT_TRUE(source->session->modeling().curve_document_preview_active());
+    EXPECT_TRUE(curve.preview_state().document->has_same_geometry(preview));
+    EXPECT_TRUE(curve.cancel_drag().ok);
+  }
+}
+
+TEST(ProjectSessionWorkspace, InvalidSceneReadDoesNotCancelOutgoingCurveDrag) {
+  ScopedProjectSessionDirectory temporary("curve-read-rollback");
+  ProjectSession project;
+  const auto created = project.create(temporary.make_empty_child("Project"));
+  ASSERT_TRUE(created.ok) << created.message;
+  QuaderEditorApi editor(project);
+  (void)create_saved_transition_curve(project, editor);
+  OpenSceneSession *source = project.active_scene();
+  ASSERT_NE(source, nullptr);
+  ASSERT_TRUE(editor.tools().activate(kCurveToolId).ok());
+  CurveToolService &curve = source->session->curve();
+  ASSERT_TRUE(curve.preview_state().document.has_value());
+  ASSERT_TRUE(select_and_begin_curve_control_drag(
+      curve, {.point = curve.preview_state().document->points()[0].id}));
+  ASSERT_TRUE(curve.update_drag({-5.0f, 1.0f, 2.0f}).ok);
+  const auto preview = *curve.preview_state().document;
+  const auto stamp = source->session->content_revision_stamp();
+  const auto generation = project.activation_generation();
+  const auto invalid_path = project_path("Scenes/Invalid.qdr");
+  {
+    std::ofstream invalid(project.root() / invalid_path.native_path(),
+                           std::ios::binary);
+    ASSERT_TRUE(invalid.is_open());
+    invalid << "Invalid curve scene";
+  }
+  EXPECT_FALSE(editor.scene_documents().open(invalid_path).ok());
+  EXPECT_EQ(project.active_scene(), source);
+  EXPECT_EQ(project.activation_generation(), generation);
+  EXPECT_EQ(source->session->content_revision_stamp(), stamp);
+  EXPECT_TRUE(curve.dragging());
+  EXPECT_TRUE(source->session->modeling().curve_document_preview_active());
+  EXPECT_TRUE(curve.preview_state().document->has_same_geometry(preview));
+  EXPECT_TRUE(curve.cancel_drag().ok);
+}
 
 TEST(ProjectSessionWorkspace, KeepsSceneHistoryAndSelectionIndependent) {
   ScopedProjectSessionDirectory temporary("independent-state");

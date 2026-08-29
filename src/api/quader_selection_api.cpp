@@ -372,6 +372,17 @@ QuaderSelectionApi::pick_select(const QuaderPickSelectRequest &request) {
   return pick_select(request, nullptr);
 }
 
+QuaderApiResult<QuaderSelectionSummary> QuaderSelectionApi::pick_scene_entity(
+    EntityId entity, const QuaderPickSelectRequest &request) {
+  SceneSession &session = scene_session(session_);
+  QuaderApiVoidResult status = mutations_.run_document_result(
+      session.selection().pick_scene_entity(
+          entity, to_modeling_pick_select_request(request)),
+      "Pick Select");
+  return selection_result_from_status(std::move(status),
+                                       session.selection().summary());
+}
+
 QuaderApiResult<QuaderSelectionSummary> QuaderSelectionApi::pick_select(
     const QuaderPickSelectRequest &request,
     const QuaderSelectionBoxBaseline &baseline) {

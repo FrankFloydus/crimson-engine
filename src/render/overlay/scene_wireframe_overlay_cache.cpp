@@ -312,12 +312,13 @@ struct SceneWireframeBatchPreparation final {
 
 SceneWireframeBatchPreparation prepare_wire_batches(
     const RenderOverlaySceneWireframeSnapshot &snapshot,
-    std::size_t max_instances_per_chunk) {
+    std::size_t max_instances_per_chunk,
+    const RenderInstanceBatchPlan *retained_layout) {
   SceneWireframeOccurrencePreparation occurrences =
       prepare_wire_occurrences(snapshot);
   SceneWireframeBatchPreparation prepared;
   prepared.planned.batches = plan_render_instance_batches(
-      occurrences.occurrences, max_instances_per_chunk);
+      occurrences.occurrences, max_instances_per_chunk, retained_layout);
   prepared.planned.participant_count = occurrences.occurrences.size();
   prepared.planned.unique_geometry_style_count =
       occurrences.unique_geometry_style_count;
@@ -414,10 +415,59 @@ SceneWireframeOverlayCache::SceneWireframeOverlayCache() = default;
 
 SceneWireframeOverlayBatchPlan plan_scene_wireframe_overlay_batches(
     const RenderOverlaySceneWireframeSnapshot &snapshot,
-    std::size_t max_instances_per_chunk) {
+    std::size_t max_instances_per_chunk,
+    const RenderInstanceBatchPlan *retained_layout) {
   SceneWireframeBatchPreparation prepared =
-      prepare_wire_batches(snapshot, max_instances_per_chunk);
+      prepare_wire_batches(snapshot, max_instances_per_chunk, retained_layout);
   return std::move(prepared.planned);
+}
+
+bool scene_wireframe_overlay_mesh_inputs_match(
+    std::span<const RenderOverlayMeshSnapshot> previous,
+    std::span<const RenderOverlayMeshSnapshot> next) {
+  if (previous.size() != next.size()) {
+    return false;
+  }
+  for (std::size_t index = 0u; index < previous.size(); ++index) {
+    const RenderOverlayMeshSnapshot &before = previous[index];
+    const RenderOverlayMeshSnapshot &after = next[index];
+    // Pointer equality only proves unchanged content for immutable, pinned
+    // storage. Ownerless legacy spans may have been mutated in place.
+    if ((!before.vertices.empty() &&
+         (before.geometry_payload == nullptr ||
+          before.vertices.data() != before.geometry_payload->vertices.data())) ||
+        (!before.indices.empty() &&
+         (before.geometry_payload == nullptr ||
+          before.indices.data() != before.geometry_payload->indices.data())) ||
+        (!before.wire_segments.empty() &&
+         (before.wire_geometry_payload == nullptr ||
+          before.wire_segments.data() !=
+              before.wire_geometry_payload->segments.data())) ||
+        before.entity != after.entity ||
+        before.occurrence != after.occurrence ||
+        before.definition != after.definition ||
+        before.member != after.member ||
+        before.participant_token != after.participant_token ||
+        before.mesh_id != after.mesh_id ||
+        before.mesh_revision != after.mesh_revision ||
+        before.geometry_payload != after.geometry_payload ||
+        before.geometry_content_id != after.geometry_content_id ||
+        before.wire_geometry_payload != after.wire_geometry_payload ||
+        before.world_transform.values != after.world_transform.values ||
+        before.selected != after.selected ||
+        before.wireframe_tint.x != after.wireframe_tint.x ||
+        before.wireframe_tint.y != after.wireframe_tint.y ||
+        before.wireframe_tint.z != after.wireframe_tint.z ||
+        before.vertices.data() != after.vertices.data() ||
+        before.vertices.size() != after.vertices.size() ||
+        before.indices.data() != after.indices.data() ||
+        before.indices.size() != after.indices.size() ||
+        before.wire_segments.data() != after.wire_segments.data() ||
+        before.wire_segments.size() != after.wire_segments.size()) {
+      return false;
+    }
+  }
+  return true;
 }
 
 SceneWireframeOverlayCache::~SceneWireframeOverlayCache() { shutdown(); }
@@ -461,6 +511,8 @@ void SceneWireframeOverlayCache::clear() {
   }
   proxies_.clear();
   plan_ = {};
+  synced_meshes_.clear();
+  has_synced_ = false;
   stats_.participant_count = 0u;
   stats_.chunk_count = 0u;
 }
@@ -469,7 +521,7 @@ SceneWireframeOverlayCache::PreparedPlan
 SceneWireframeOverlayCache::prepare(
     const RenderOverlaySceneWireframeSnapshot &snapshot) const {
   SceneWireframeBatchPreparation batch_preparation =
-      prepare_wire_batches(snapshot, max_instances_per_chunk_);
+      prepare_wire_batches(snapshot, max_instances_per_chunk_, &plan_);
   PreparedPlan prepared;
   prepared.planned = std::move(batch_preparation.planned);
   prepared.records = std::move(batch_preparation.records);
@@ -517,26 +569,46 @@ void SceneWireframeOverlayCache::sync(
     return;
   }
 
-  const PreparedPlan prepared = prepare(snapshot);
-  const RenderInstanceBatchUpdateKind update =
-      classify_instance_batch_update(plan_, prepared.planned.batches);
-  bool synchronized = false;
-  if (!style_changed &&
-      update == RenderInstanceBatchUpdateKind::TransformsOnly) {
-    synchronized = update_transforms(prepared);
-    if (synchronized) {
-      plan_ = prepared.planned.batches;
-      ++stats_.transform_update_count;
+  const bool mesh_inputs_match =
+      has_synced_ && !style_changed &&
+      synced_selected_mesh_wire_visible_ ==
+          snapshot.selected_mesh_wire_visible &&
+      synced_instance_edit_scope_ == snapshot.instance_edit_scope &&
+      scene_wireframe_overlay_mesh_inputs_match(synced_meshes_,
+                                                snapshot.meshes);
+  if (mesh_inputs_match) {
+    // Global revisions also advance for curve edits and transforms. Their
+    // unchanged mesh inputs must not rebuild a spatial plan or touch buffers.
+    ++stats_.mesh_input_reuse_count;
+  } else {
+    ++stats_.plan_prepare_count;
+    const PreparedPlan prepared = prepare(snapshot);
+    const RenderInstanceBatchUpdateKind update =
+        classify_instance_batch_update(plan_, prepared.planned.batches);
+    bool synchronized = false;
+    if (!style_changed &&
+        update == RenderInstanceBatchUpdateKind::TransformsOnly) {
+      synchronized = update_transforms(prepared);
+      if (synchronized) {
+        plan_ = prepared.planned.batches;
+        ++stats_.transform_update_count;
+      }
+    } else if (!style_changed &&
+               update == RenderInstanceBatchUpdateKind::Unchanged) {
+      synchronized = true;
     }
-  } else if (!style_changed &&
-             update == RenderInstanceBatchUpdateKind::Unchanged) {
-    synchronized = true;
-  }
-  if (!synchronized) {
-    synchronized = rebuild(prepared, snapshot);
-  }
-  if (!synchronized) {
-    return;
+    if (!synchronized) {
+      synchronized = rebuild(prepared, snapshot);
+    }
+    if (!synchronized) {
+      // A failed update can have changed earlier instance buffers already.
+      // Force the next frame to retry rather than reuse the former input key.
+      has_synced_ = false;
+      return;
+    }
+    synced_meshes_ = snapshot.meshes;
+    stats_.participant_count = prepared.planned.participant_count;
+    stats_.chunk_count = prepared.planned.batches.chunks.size();
   }
   if (clip_changed) {
     update_clip_planes(snapshot.clip_planes);
@@ -556,8 +628,6 @@ void SceneWireframeOverlayCache::sync(
       snapshot.selected_mesh_wire_visible;
   synced_clip_planes_ = snapshot.clip_planes;
   has_synced_ = true;
-  stats_.participant_count = prepared.planned.participant_count;
-  stats_.chunk_count = prepared.planned.batches.chunks.size();
 }
 
 bool SceneWireframeOverlayCache::rebuild(

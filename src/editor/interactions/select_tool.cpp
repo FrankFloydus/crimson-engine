@@ -1046,6 +1046,22 @@ bool screen_rect_intersects_bounds(const ScreenRect& rect, quader::QVec2 min_bou
 	return select_tool_impl().rect_intersects_bounds(rect, min_bounds, max_bounds);
 }
 
+void include_projected_object_point(RectangleProjectedObject &projected,
+                                    quader::QVec2 screen)
+{
+  projected.screen_points.push_back(screen);
+  if (!projected.has_screen_bounds) {
+    projected.screen_min = screen;
+    projected.screen_max = screen;
+    projected.has_screen_bounds = true;
+    return;
+  }
+  projected.screen_min.x = std::min(projected.screen_min.x, screen.x);
+  projected.screen_min.y = std::min(projected.screen_min.y, screen.y);
+  projected.screen_max.x = std::max(projected.screen_max.x, screen.x);
+  projected.screen_max.y = std::max(projected.screen_max.y, screen.y);
+}
+
 RectangleSelectionHits rectangle_hits_from_projected_candidates(const RectangleProjectedHitsRequest& request)
 {
 	return select_tool_impl().rectangle_hits_from_projected_candidates(request);

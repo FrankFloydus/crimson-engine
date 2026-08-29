@@ -299,5 +299,12 @@ CommandResult apply_transform_drag_preview(
 std::vector<SelectionOverlayPoint> transform_drag_snap_overlay_points(
 		const TransformDragState& state,
 		const SelectionOverlayStyle& style = {});
+std::vector<SelectionOverlayPoint> transform_snap_target_overlay_points(
+		const TransformSnapTarget& target,
+		const SelectionOverlayStyle& style = {});
+void fill_transform_snap_target_overlay_points(
+		std::vector<SelectionOverlayPoint>& points,
+		const TransformSnapTarget& target,
+		const SelectionOverlayStyle& style = {});
 
 } // namespace quader_editor_core

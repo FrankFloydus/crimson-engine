@@ -15,11 +15,13 @@
 #include "diagnostics/profile.hpp"
 #include "editor/array/linear_array_tool_service.hpp"
 #include "editor/array/radial_array_tool_service.hpp"
+#include "editor/curve/curve_tool_service.hpp"
 #include "editor/input/viewport_keybinding_resolver.hpp"
 #include "editor/modeling/services/modeling_session_service.hpp"
 #include "editor/modeling/services/selection_mode_adapter.hpp"
 #include "editor/pivot/pivot_tool_service.hpp"
 #include "editor/placement/viewport_point_placement_service.hpp"
+#include "editor/projection/selection_overlay_projection.hpp"
 #include "editor/viewport/viewport_scene_projection.hpp"
 #include "editor/viewport/viewport_tool_overlay_projection.hpp"
 #include "editor/render/quader_render_api_runtime_access.hpp"
@@ -49,6 +51,7 @@
 #include "viewport/viewport_camera_adapter.hpp"
 #include "viewport/viewport_input_types.hpp"
 #include "viewport/viewport_layout.hpp"
+#include "viewport/viewport_settings.hpp"
 
 #include <QApplication>
 #include <QAction>
@@ -444,6 +447,10 @@ bool QtViewportPanel::initialize(RenderSystem &render_system) {
 
 void QtViewportPanel::shutdown() {
   set_modal_tool_owns_viewport_snapshot(false);
+  interaction_controller_.reset(interaction_editor_, interaction_curve_);
+  interaction_editor_ = nullptr;
+  interaction_curve_ = nullptr;
+  active_tool_revision_valid_ = false;
   if (render_system_ == nullptr) {
     return;
   }
@@ -455,14 +462,12 @@ void QtViewportPanel::shutdown() {
     pane_state.frame->hide();
     pane_state.frame_presented = false;
     pane_state.overlay_stack_valid = false;
+    pane_state.dynamic_overlay_submission_valid = false;
     if (pane_state.surface != nullptr) {
       pane_state.surface->set_pointer_capture(false);
       pane_state.surface->shutdown();
     }
   }
-  interaction_controller_.reset(interaction_editor_);
-  interaction_editor_ = nullptr;
-  active_tool_revision_valid_ = false;
   input_router_.reset();
   hide_fly_navigation_huds();
   focused_pane_frame_->hide();
@@ -479,6 +484,8 @@ void QtViewportPanel::shutdown() {
   pending_external_pointer_left_release_only_ = true;
   linear_array_wheel_remainder_ = 0.0;
   radial_array_wheel_remainder_ = 0.0;
+  curve_pick_cache_.reset();
+  curve_tool_overlay_cache_.reset();
   native_surface_startup_ = {};
   startup_presentation_blocked_ = true;
   initialized_ = false;
@@ -489,13 +496,28 @@ void QtViewportPanel::shutdown() {
   persisted_camera_signature_valid_ = false;
 }
 
+void QtViewportPanel::reset_interactions(QuaderEditorApi *editor,
+                                         CurveToolService *curve) {
+  interaction_controller_.reset(editor, curve);
+  if (interaction_editor_ == editor) {
+    interaction_editor_ = nullptr;
+    interaction_curve_ = nullptr;
+    active_tool_revision_valid_ = false;
+  }
+}
+
 void QtViewportPanel::attach_workspace(ViewportWorkspaceService &workspace) {
   interaction_controller_.cancel_pending_material_interaction();
   interaction_controller_.cancel_pending_selection_click();
   if (workspace_ != &workspace) {
-    interaction_controller_.reset(interaction_editor_);
+    interaction_controller_.reset(interaction_editor_, interaction_curve_);
     hover_controller_.invalidate();
     selection_overlay_cache_.mark_dirty();
+    curve_pick_cache_.reset();
+    curve_tool_overlay_cache_.reset();
+    for (Pane &pane_state : panes_) {
+      pane_state.dynamic_overlay_submission_valid = false;
+    }
     point_light_pick_cache_valid_ = false;
     viewport_info_scene_snapshot_valid_ = false;
     viewport_info_scene_stats_valid_ = false;
@@ -590,14 +612,15 @@ void QtViewportPanel::process_input(
     ModelingSessionService &modeling, AssetId default_material,
     PivotToolService *pivot, LinearArrayToolService *linear_array,
     RadialArrayToolService *radial_array,
-    ViewportPointPlacementService *point_placement, double delta_seconds) {
+    ViewportPointPlacementService *point_placement, double delta_seconds,
+    CurveToolService *curve) {
   const bool diagnostics_enabled = viewport_frame_diagnostics_enabled();
   const ViewportProbeClock::time_point input_start =
       diagnostics_enabled ? ViewportProbeClock::now()
                           : ViewportProbeClock::time_point{};
   process_viewport_input(editor, document, assets, modeling, default_material,
                          pivot, linear_array, radial_array, point_placement,
-                         delta_seconds);
+                         delta_seconds, curve);
   observe_persisted_camera_change(editor);
   if (diagnostics_enabled) {
     g_viewport_probe.input_ms +=
@@ -637,7 +660,7 @@ void QtViewportPanel::prepare_viewports(
     SceneDocument &document, AssetRegistry &assets,
     ModelingSessionService &modeling, PivotToolService *pivot,
     LinearArrayToolService *linear_array,
-    RadialArrayToolService *radial_array) {
+    RadialArrayToolService *radial_array, CurveToolService *curve) {
   QDR_PROFILE_FUNCTION();
   const bool diagnostics_enabled = viewport_frame_diagnostics_enabled();
   const ViewportProbeClock::time_point prepare_start =
@@ -725,6 +748,11 @@ void QtViewportPanel::prepare_viewports(
   const RadialArrayCenterState radial_array_center =
       radial_array != nullptr ? radial_array->center_state()
                               : RadialArrayCenterState{};
+  const CurveToolPreviewState empty_curve_preview;
+  const CurveToolPreviewState &curve_preview =
+      curve != nullptr ? curve->preview_state() : empty_curve_preview;
+  const ViewportOverlayFrame &curve_tool_overlay =
+      curve_tool_overlay_cache_.frame(curve_preview);
   const bool pivot_handle_editing =
       pivot_handle.visible && pivot_handle.editing;
   render_bridge.update_mesh_surface_grid(grid_world_size, settings);
@@ -774,7 +802,7 @@ void QtViewportPanel::prepare_viewports(
         gizmos_visible && viewport_shading_shows_light_gizmos(shading);
     scene_overlay_requests[viewport_pane_index(placement.pane_id)] =
         (overlays_visible && selection_overlay_cache_.valid()) ||
-        point_light_gizmos_visible;
+        point_light_gizmos_visible || assets.curve_count() != 0u;
   }
   const RenderOverlaySelectionSnapshot *scene_overlay_snapshot = nullptr;
   if (viewport_scene_overlay_snapshot_extraction_count(
@@ -841,7 +869,8 @@ void QtViewportPanel::prepare_viewports(
         .wireframe_pane = shading == ViewportShadingMode::Wireframe,
         .pivot_handle_visible = pivot_handle.visible,
         .native_tool_overlay_visible =
-            linear_array_handle.visible || radial_array_center_visible,
+            linear_array_handle.visible || radial_array_center_visible ||
+            curve_preview.active || assets.curve_count() != 0u,
         .tool_overlay_visible = tool_overlay_visible,
     }));
 
@@ -867,6 +896,9 @@ void QtViewportPanel::prepare_viewports(
         }
       }
       if (overlays_visible) {
+        SelectionOverlayProjection::append_world_space_overlay_points(
+            dynamic_overlay_frame,
+            interaction_controller_.transform_gizmo_snap_overlay_points());
         ViewportToolOverlayProjection::append_selection_marquee(
             dynamic_overlay_frame, overlay_camera,
             interaction_controller_.selection_marquee());
@@ -939,6 +971,7 @@ void QtViewportPanel::prepare_viewports(
     const PaneDynamicOverlaySubmissionKey dynamic_submission_key{
         .frame_signature =
             OverlayRenderableBuilder::frame_signature(dynamic_overlay_frame),
+        .curve_overlay_revision = curve_tool_overlay_cache_.build_count(),
         .style_signature = overlay_style_signature,
         .selection_mode = cached_overlay_mode,
         .projection = overlay_camera.projection,
@@ -1007,6 +1040,9 @@ void QtViewportPanel::prepare_viewports(
     }
 
     if (dynamic_overlay_changed) {
+      // Curves may carry many sampled segments. Compare their cached publication
+      // revision before copying, hashing, or styling any of those vectors.
+      append_overlay_frame(dynamic_overlay_frame, curve_tool_overlay);
       ViewportOverlayStyleResolver::apply(
           dynamic_overlay_frame, settings,
           ViewportOverlayStyleContext{
@@ -1478,6 +1514,7 @@ void QtViewportPanel::refresh_keybinding_presentation(
   interaction_controller_.cancel_pending_selection_click();
   if (interaction_editor_ != &editor) {
     active_tool_revision_valid_ = false;
+    interaction_curve_ = nullptr;
   }
   interaction_editor_ = &editor;
   for (Pane &pane_state : panes_) {
@@ -1783,7 +1820,8 @@ bool QtViewportPanel::pane_surface_has_keyboard_focus(
 }
 
 bool QtViewportPanel::pane_interaction_locked() const {
-  if (input_router_.navigating() || interaction_controller_.dragging() ||
+  if (input_router_.navigating() ||
+      interaction_controller_.transform_gizmo_pointer_active() ||
       interaction_controller_.native_tool_dragging() ||
       interaction_controller_.texture_transfer_pointer_active() ||
       modal_tool_dragging_) {
@@ -2113,7 +2151,7 @@ void QtViewportPanel::process_viewport_input(
     PivotToolService *pivot, LinearArrayToolService *linear_array,
     RadialArrayToolService *radial_array,
     ViewportPointPlacementService *point_placement,
-    double frame_delta_seconds) {
+    double frame_delta_seconds, CurveToolService *curve) {
   edge_length_hud_enabled_ = false;
   if (workspace_ == nullptr) {
     return;
@@ -2121,6 +2159,7 @@ void QtViewportPanel::process_viewport_input(
   if (interaction_editor_ != &editor) {
     refresh_keybinding_presentation(editor);
   }
+  interaction_curve_ = curve;
   if (linear_array != nullptr) {
     const CommandResult refresh = linear_array->refresh();
     if (refresh.changed) {
@@ -2135,7 +2174,17 @@ void QtViewportPanel::process_viewport_input(
       selection_overlay_cache_.mark_dirty();
     }
   }
-  sync_active_tool_from_editor(editor, modeling);
+  if (curve != nullptr) {
+    const CommandResult refresh = curve->refresh();
+    if (refresh.changed) {
+      if (!curve->dragging()) {
+        interaction_controller_.clear_native_tool_drag_state();
+      }
+      hover_controller_.invalidate();
+      selection_overlay_cache_.mark_dirty();
+    }
+  }
+  sync_active_tool_from_editor(editor, modeling, curve);
 
   const float delta_seconds = static_cast<float>(
       std::clamp(frame_delta_seconds, 0.0, 0.1));
@@ -2161,7 +2210,8 @@ void QtViewportPanel::process_viewport_input(
   const bool navigation_gizmo_consumed =
       navigation_gizmo_locked_pane.has_value() || navigation_gizmo_activity;
   const bool interaction_locked =
-      input_router_.navigating() || interaction_controller_.dragging() ||
+      input_router_.navigating() ||
+      interaction_controller_.transform_gizmo_pointer_active() ||
       interaction_controller_.native_tool_dragging() ||
       interaction_controller_.texture_transfer_pointer_active() ||
       modal_dragging || navigation_gizmo_consumed;
@@ -2244,8 +2294,11 @@ void QtViewportPanel::process_viewport_input(
   input.pan_navigation_active = input_router_.pan_navigating();
   ViewportModelingToolPortAdapter preview_port_adapter(modeling);
   const ViewportToolPorts preview_ports = preview_port_adapter.ports();
+  const ViewportSettings &viewport_settings = active_viewport_settings();
+  const bool resolved_scene_snap_enabled =
+      viewport_vertex_snap_radius(viewport_settings) > 0.0f;
   const bool resolved_grid_snap_enabled = viewport_grid_snap_active(
-      active_viewport_settings(), input.modifiers.primary);
+      viewport_settings, input.modifiers.primary);
   input.modal_tool_active =
       interaction_controller_.has_active_modal_preview(
           *preview_ports.preview, resolved_grid_snap_enabled) ||
@@ -2256,10 +2309,21 @@ void QtViewportPanel::process_viewport_input(
   input.active_tool_blocks_focus_shortcuts =
       interaction_controller_.active_tool_blocks_viewport_focus_shortcuts(
           input_router_.state().active_tool);
+  // A pending gizmo click owns pointer routing, but it is not yet an active
+  // transform. Keeping those contexts separate preserves deferred depth picks.
   input.active_transform_drag = interaction_controller_.dragging();
   set_modal_tool_owns_viewport_snapshot(input.active_tool_owns_viewport ||
                                         input.modal_tool_active);
   input.operation_preview_active = modeling.operation_preview_active();
+  const ViewportToolId keybinding_tool = input_router_.state().active_tool;
+  const bool passive_curve_controls_available =
+      interaction_controller_.active_tool_allows_selection_fallback(
+          keybinding_tool) &&
+      !input.active_tool_owns_viewport && !input.modal_tool_active;
+  input.curve_controls_editable =
+      curve != nullptr && curve->controls_editable() &&
+      ((keybinding_tool == ViewportToolId::Curve && curve->active()) ||
+       passive_curve_controls_available);
   input.grid_preset = workspace_->grid_preset();
   ViewportCameraController &camera = workspace_->camera(*input_pane);
   input.orthographic_view =
@@ -2271,7 +2335,7 @@ void QtViewportPanel::process_viewport_input(
       editor, input_router_.state(), input, suppressed_keybinding_chords_,
       linear_array_wheel_remainder_, radial_array_wheel_remainder_);
   if (keybinding_edge_can_change_tool &&
-      sync_active_tool_from_editor(editor, modeling)) {
+      sync_active_tool_from_editor(editor, modeling, curve)) {
     input.modal_tool_active =
         interaction_controller_.has_active_modal_preview(
             *preview_ports.preview, resolved_grid_snap_enabled) ||
@@ -2395,7 +2459,7 @@ void QtViewportPanel::process_viewport_input(
     input_router_.set_selection_mode(app_selection_mode_to_viewport(
         to_modeling_selection_mode(editor.selection().summary().mode)));
     interaction_controller_.clear_modal_drag_state();
-    interaction_controller_.reset(&editor);
+    interaction_controller_.reset(&editor, curve);
     hover_controller_.invalidate();
     selection_overlay_cache_.mark_dirty();
   }
@@ -2425,7 +2489,7 @@ void QtViewportPanel::process_viewport_input(
         (void)editor.tools().activate(ViewportToolId::Select);
       }
       interaction_controller_.clear_modal_tool_state();
-      interaction_controller_.reset(&editor);
+      interaction_controller_.reset(&editor, curve);
     }
   }
 
@@ -2514,6 +2578,40 @@ void QtViewportPanel::process_viewport_input(
               input_router_.state().active_tool),
       .scene_billboard_pick_candidates = billboards,
   };
+  if ((interaction_frame.active_tool_allows_selection_fallback ||
+       (curve != nullptr && curve->controls_editable())) &&
+      (curve == nullptr || !curve->dragging()) &&
+      !editor.modeling().can_exit_instance_edit()) {
+    interaction_frame.scene_curve_pick_candidates =
+        curve_pick_cache_.candidates(document, assets, local_visibility);
+  }
+  interaction_frame.scene_mesh_surface_distance = [&editor](const ViewportRay &ray) {
+    return editor.query().mesh_surface_distance({ray.origin, ray.direction});
+  };
+  interaction_frame.scene_mesh_snap_query =
+      [&editor](const ViewportRay &ray, double vertex_radius)
+          -> ViewportMeshSnapQueryResult {
+    // Curve controls have their own selected-anchor exclusion. Scene-selected
+    // meshes stay stationary during this drag and remain valid landmarks.
+    const QuaderMeshSnapQueryResult query = editor.query().mesh_snap_query(
+        {.origin = ray.origin, .direction = ray.direction}, vertex_radius,
+        false);
+    ViewportMeshSnapQueryResult result{
+        .nearest_surface_ray_distance =
+            query.nearest_surface_ray_distance,
+    };
+    if (query.vertex_target.has_value()) {
+      result.vertex_target = ViewportMeshVertexSnapTarget{
+          .modeling_object_id = query.vertex_target->modeling_object_id,
+          .vertex_id =
+              static_cast<quader_poly::ElementId>(query.vertex_target->vertex_id),
+          .world_position = query.vertex_target->world_position,
+          .ray_distance = query.vertex_target->ray_distance,
+          .pick_distance = query.vertex_target->pick_distance,
+      };
+    }
+    return result;
+  };
 
   auto modal_tool_owns_viewport = [&]() {
     return interaction_controller_.active_tool_owns_viewport(
@@ -2524,11 +2622,21 @@ void QtViewportPanel::process_viewport_input(
   };
   auto cancel_active_modal_tool = [&](bool exit_tool) {
     const ViewportToolId active_tool = input_router_.state().active_tool;
+    if (active_tool == ViewportToolId::Curve) {
+      log_command_failure("Curve cancel",
+                          editor.tools().cancel_active_tool_preview());
+      interaction_controller_.clear_native_tool_drag_state();
+      sync_active_tool_from_editor(editor, modeling, curve);
+      interaction_controller_.reset(&editor, curve);
+      hover_controller_.invalidate();
+      selection_overlay_cache_.mark_dirty();
+      return;
+    }
     if (active_tool == ViewportToolId::CreatePrimitive) {
       log_command_failure("Primitive tool cancel",
                           editor.tools().cancel_active_tool_preview());
-      sync_active_tool_from_editor(editor, modeling);
-      interaction_controller_.reset(&editor);
+      sync_active_tool_from_editor(editor, modeling, curve);
+      interaction_controller_.reset(&editor, curve);
       hover_controller_.invalidate();
       selection_overlay_cache_.mark_dirty();
       return;
@@ -2537,8 +2645,8 @@ void QtViewportPanel::process_viewport_input(
       log_command_failure("Linear Array cancel",
                           editor.tools().cancel_active_tool_preview());
       interaction_controller_.clear_native_tool_drag_state();
-      sync_active_tool_from_editor(editor, modeling);
-      interaction_controller_.reset(&editor);
+      sync_active_tool_from_editor(editor, modeling, curve);
+      interaction_controller_.reset(&editor, curve);
       hover_controller_.invalidate();
       selection_overlay_cache_.mark_dirty();
       return;
@@ -2546,8 +2654,8 @@ void QtViewportPanel::process_viewport_input(
     if (input_router_.state().active_tool == ViewportToolId::RadialArray) {
       log_command_failure("Radial Array cancel",
                           editor.tools().cancel_active_tool_preview());
-      sync_active_tool_from_editor(editor, modeling);
-      interaction_controller_.reset(&editor);
+      sync_active_tool_from_editor(editor, modeling, curve);
+      interaction_controller_.reset(&editor, curve);
       hover_controller_.invalidate();
       selection_overlay_cache_.mark_dirty();
       return;
@@ -2556,8 +2664,8 @@ void QtViewportPanel::process_viewport_input(
       log_command_failure("Pivot cancel",
                           editor.tools().cancel_active_tool_preview());
       interaction_controller_.clear_native_tool_drag_state();
-      sync_active_tool_from_editor(editor, modeling);
-      interaction_controller_.reset(&editor);
+      sync_active_tool_from_editor(editor, modeling, curve);
+      interaction_controller_.reset(&editor, curve);
       hover_controller_.invalidate();
       selection_overlay_cache_.mark_dirty();
       return;
@@ -2582,19 +2690,18 @@ void QtViewportPanel::process_viewport_input(
         ViewportToolEvent{.kind = ViewportToolEventKind::Cancel,
                           .tool = input_router_.state().active_tool,
                           .exit_active_modal_tool = exit_tool});
-    interaction_controller_.reset(&editor);
+    interaction_controller_.reset(&editor, curve);
     hover_controller_.invalidate();
     selection_overlay_cache_.mark_dirty();
   };
 
   bool cancel_consumed = false;
   if (!preview_shortcut_consumed && result.cancel_requested) {
-    if (interaction_controller_.dragging()) {
-      (void)interaction_controller_.cancel_active_drag(editor);
+    if (interaction_controller_.cancel_active_drag(editor, curve)) {
       selection_overlay_cache_.mark_dirty();
       cancel_consumed = true;
     }
-    if (modal_tool_owns_viewport()) {
+    if (!cancel_consumed && modal_tool_owns_viewport()) {
       cancel_active_modal_tool(true);
       cancel_consumed = true;
     }
@@ -2612,6 +2719,7 @@ void QtViewportPanel::process_viewport_input(
                   ViewportToolId::CreatePrimitive ||
               input_router_.state().active_tool == ViewportToolId::LinearArray ||
               input_router_.state().active_tool == ViewportToolId::RadialArray ||
+              input_router_.state().active_tool == ViewportToolId::Curve ||
               input_router_.state().active_tool == ViewportToolId::Pivot,
           .navigation_active = result.navigation_active,
           .left_button_release_only = external_pointer_left_release_only,
@@ -2628,6 +2736,41 @@ void QtViewportPanel::process_viewport_input(
     hover_controller_.invalidate();
   }
 
+  ViewportBeforeToolInteractionResult curve_gizmo_before;
+  std::optional<QuaderSelectionSummary> curve_gizmo_prepass_selection;
+  const bool curve_gizmo_pointer_active =
+      interaction_controller_.transform_gizmo_pointer_active();
+  const bool curve_gizmo_start_allowed =
+      (input_router_.state().active_tool == ViewportToolId::Curve &&
+       curve != nullptr && curve->active()) ||
+      (interaction_frame.active_tool_allows_selection_fallback &&
+       !input.active_tool_owns_viewport && !input.modal_tool_active);
+  // Once Curve controls are selected, their shared Move gizmo gets first
+  // refusal on a new pointer press. Semantic conversion keeps its own press
+  // priority, while an already pending or active gizmo retains ownership
+  // through release.
+  const bool curve_gizmo_prepass =
+      curve != nullptr && curve->controls_editable() && !cancel_consumed &&
+      (!navigation_gizmo_consumed || curve_gizmo_pointer_active) &&
+      (curve_gizmo_pointer_active ||
+        (curve_gizmo_start_allowed &&
+         !interaction_controller_.native_tool_dragging() &&
+         input.curve_conversion_edges.empty() &&
+         !curve->point_construction_dragging() &&
+         curve->has_selected_controls()));
+  if (curve_gizmo_prepass) {
+    curve_gizmo_prepass_selection = editor.selection().summary();
+    interaction_frame.selection_state = {
+        .summary = *curve_gizmo_prepass_selection,
+        .scene_revision = document.revision(),
+        .asset_revision = assets.revision(),
+        .pivot_revision =
+            pivot != nullptr ? pivot->selection_pivot_revision() : 0,
+    };
+    curve_gizmo_before = interaction_controller_.handle_before_active_tool(
+        editor, interaction_frame, curve);
+  }
+
   const ViewportNativeToolInteractionResult native_tool_result =
       interaction_controller_.handle_native_tools(
           editor, document, assets, pivot, linear_array, radial_array,
@@ -2636,19 +2779,24 @@ void QtViewportPanel::process_viewport_input(
               .input = input,
               .input_result = result,
               .navigation_gizmo_consumed = navigation_gizmo_consumed,
+              .transform_gizmo_consumed =
+                  curve_gizmo_prepass && curve_gizmo_before.gizmo_consumed,
               .suppress_hover_work = suppress_hover_work,
               .left_pressed = sample.left_pressed,
               .left_down = sample.left_down,
               .left_released = sample.left_released,
               .left_click_local = sample.left_click_local,
+              .scene_snap_enabled = resolved_scene_snap_enabled,
               .grid_snap_enabled = resolved_grid_snap_enabled,
+              .scene_mesh_surface_distance =
+                  interaction_frame.scene_mesh_surface_distance,
               .linear_array_wheel_remainder =
                   &linear_array_wheel_remainder_,
               .radial_array_wheel_remainder =
                   &radial_array_wheel_remainder_,
-          });
+          }, curve);
   if (native_tool_result.sync_active_tool) {
-    sync_active_tool_from_editor(editor, modeling);
+    sync_active_tool_from_editor(editor, modeling, curve);
   }
   if (native_tool_result.claim_interaction_pane) {
     interaction_pane_id_ = *input_pane;
@@ -2665,10 +2813,13 @@ void QtViewportPanel::process_viewport_input(
   const bool linear_array_consumed =
       native_tool_result.linear_array_consumed;
   const bool pivot_consumed = native_tool_result.pivot_consumed;
+  const bool curve_consumed = native_tool_result.curve_consumed;
   const bool pivot_blocks_gizmo = native_tool_result.pivot_blocks_gizmo;
 
   const QuaderSelectionSummary interaction_selection =
-      editor.selection().summary();
+      curve_gizmo_prepass_selection.has_value()
+          ? *curve_gizmo_prepass_selection
+          : editor.selection().summary();
   interaction_frame.selection_state = {
       .summary = interaction_selection,
       .scene_revision = document.revision(),
@@ -2677,12 +2828,14 @@ void QtViewportPanel::process_viewport_input(
           pivot != nullptr ? pivot->selection_pivot_revision() : 0,
   };
   const ViewportBeforeToolInteractionResult before_tool =
-      (cancel_consumed || navigation_gizmo_consumed ||
-       radial_array_consumed || linear_array_consumed || pivot_blocks_gizmo ||
-       pivot_consumed)
-          ? ViewportBeforeToolInteractionResult{.gizmo_consumed = true}
-          : interaction_controller_.handle_before_active_tool(
-                editor, interaction_frame);
+      curve_gizmo_prepass
+          ? curve_gizmo_before
+          : (cancel_consumed || navigation_gizmo_consumed ||
+             radial_array_consumed || linear_array_consumed ||
+             pivot_blocks_gizmo || pivot_consumed || curve_consumed)
+                ? ViewportBeforeToolInteractionResult{.gizmo_consumed = true}
+                : interaction_controller_.handle_before_active_tool(
+                      editor, interaction_frame, curve);
 
   ModelingSelectionSummary hover_selection =
       to_modeling_selection_summary(
@@ -2869,6 +3022,7 @@ void QtViewportPanel::process_viewport_input(
   const bool gizmo_consumed =
       cancel_consumed || navigation_gizmo_consumed ||
       radial_array_consumed || linear_array_consumed || pivot_consumed ||
+      curve_consumed ||
       before_tool.gizmo_consumed;
   const ViewportToolResult active_tool_result =
       interaction_controller_.handle_active_tool_event(
@@ -2903,7 +3057,7 @@ void QtViewportPanel::process_viewport_input(
       *preview_ports.preview, resolved_grid_snap_enabled);
   interaction_controller_.handle_after_active_tool(
       editor, interaction_frame, active_tool_result, before_tool,
-      tool_context.ports.hover);
+      tool_context.ports.hover, curve);
 
   bool show_context_menu = false;
   QPoint context_menu_global_point;
@@ -2927,6 +3081,10 @@ void QtViewportPanel::process_viewport_input(
         .right_click_local = pending_context_menu_local_mouse,
         .active_tool_allows_selection_fallback = selection_fallback_active,
         .scene_billboard_pick_candidates = billboards,
+        .scene_curve_pick_candidates =
+            interaction_frame.scene_curve_pick_candidates,
+        .scene_mesh_surface_distance =
+            interaction_frame.scene_mesh_surface_distance,
     };
     const std::optional<QuaderHoverTarget> material_face_target =
         interaction_controller_.pick_material_face_target(editor,
@@ -2991,7 +3149,8 @@ void QtViewportPanel::process_viewport_input(
     hover_controller_.invalidate();
     selection_overlay_cache_.mark_dirty();
   }
-  if (interaction_controller_.dragging() || before_tool.gizmo_consumed ||
+  if (interaction_controller_.transform_gizmo_pointer_active() ||
+      before_tool.gizmo_consumed ||
       has_input_activity(sample)) {
     interaction_pane_id_ = *input_pane;
   }
@@ -3024,13 +3183,14 @@ void QtViewportPanel::process_viewport_input(
       input.viewport_hovered && !input.text_input_active &&
       !suppress_hover_work && !gizmo_consumed &&
       !modal_tool_owns_viewport_snapshot_ && !modal_tool_dragging_ &&
-      !interaction_controller_.dragging() &&
+      !interaction_controller_.transform_gizmo_pointer_active() &&
       !interaction_controller_.native_tool_dragging() &&
       !show_context_menu && !show_delete_popup;
 }
 
 bool QtViewportPanel::sync_active_tool_from_editor(
-    QuaderEditorApi &editor, ModelingSessionService &modeling) {
+    QuaderEditorApi &editor, ModelingSessionService &modeling,
+    CurveToolService *curve) {
   input_router_.set_selection_mode(
       app_selection_mode_to_viewport(modeling.selection_mode()));
   input_router_.sync_grid_preset_snapshot(workspace_->grid_preset());
@@ -3060,7 +3220,7 @@ bool QtViewportPanel::sync_active_tool_from_editor(
                     ? "Hover clear failed."
                     : cleared_hover.error_message());
     }
-    interaction_controller_.reset(&editor);
+    interaction_controller_.reset(&editor, curve);
     hover_controller_.invalidate();
     active_box_preview_ = {};
     selection_overlay_cache_.mark_dirty();

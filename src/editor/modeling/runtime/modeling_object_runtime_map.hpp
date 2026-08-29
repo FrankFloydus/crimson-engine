@@ -36,6 +36,7 @@ struct ModelingObjectSceneIdentity {
   VisibilityComponent visibility;
   LockComponent lock;
   std::optional<MeshComponent> mesh;
+  std::optional<CurveComponent> curve;
   std::optional<MaterialComponent> material;
   std::optional<TextureMappingComponent> texture_mapping;
   std::uint32_t material_slot = 0;
@@ -45,7 +46,7 @@ struct ModelingObjectSceneIdentity {
 };
 
 /**
- * Tracks live runtime polygon object bindings and durable scene identity tombstones.
+ * Tracks live runtime modeling object bindings and durable scene identity tombstones.
  */
 class ModelingObjectRuntimeMap {
 public:

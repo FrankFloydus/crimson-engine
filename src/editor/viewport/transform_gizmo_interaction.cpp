@@ -10,9 +10,11 @@
 #include "api/quader_editor_api.hpp"
 #include "core/logger.hpp"
 #include "diagnostics/profile.hpp"
+#include "editor/curve/curve_tool_service.hpp"
 #include "editor/modeling/services/selection_mode_adapter.hpp"
 #include "editor/tools/viewport_tool_catalog.hpp"
 #include "render/viewport_overlay_policy.hpp"
+#include "scene/scene_transform.hpp"
 #include "viewport/viewport_camera_adapter.hpp"
 #include "viewport/viewport_camera_controller.hpp"
 #include "viewport/viewport_settings.hpp"
@@ -22,6 +24,7 @@
 #include <algorithm>
 #include <cmath>
 #include <optional>
+#include <utility>
 
 namespace quader {
 namespace {
@@ -213,7 +216,190 @@ double screen_distance_squared(QVec2 a, QVec2 b) {
   return dx * dx + dy * dy;
 }
 
+struct CurveControlSnapResolution {
+  quader_editor_core::TransformSnapTarget target;
+  double ray_distance = 0.0;
+  double pick_distance = 0.0;
+};
+
+bool snap_depth_precedes(double candidate_ray_distance,
+                         double candidate_pick_distance,
+                         const CurveControlSnapResolution &best) {
+  constexpr double kPickDepthEpsilon = 1.0e-8;
+  if (std::abs(candidate_ray_distance - best.ray_distance) >
+      kPickDepthEpsilon) {
+    return candidate_ray_distance < best.ray_distance;
+  }
+  if (std::abs(candidate_pick_distance - best.pick_distance) >
+      kPickDepthEpsilon) {
+    return candidate_pick_distance < best.pick_distance;
+  }
+  // Mesh vertices retain priority for an exact cross-domain tie. Each source
+  // has already resolved its own stable identity ordering.
+  return false;
+}
+
+std::optional<CurveControlSnapResolution> resolve_curve_control_snap_target(
+    const ViewportInteractionFrame &frame, const ViewportRay &ray,
+    double vertex_radius,
+    std::span<const ViewportCurveAnchorSnapCandidate> curve_candidates) {
+  std::optional<CurveControlSnapResolution> best;
+  ViewportMeshSnapQueryResult mesh_query;
+  if (frame.scene_mesh_snap_query) {
+    mesh_query = frame.scene_mesh_snap_query(ray, vertex_radius);
+    const auto &mesh_target = mesh_query.vertex_target;
+    if (mesh_target.has_value()) {
+      best = CurveControlSnapResolution{
+          .target =
+              {
+                  .kind =
+                      quader_editor_core::TransformSnapLandmarkKind::Vertex,
+                  .object_id = mesh_target->modeling_object_id,
+                  .vertex_id = mesh_target->vertex_id,
+                  .position = mesh_target->world_position,
+              },
+          .ray_distance = mesh_target->ray_distance,
+          .pick_distance = mesh_target->pick_distance,
+      };
+    }
+  }
+
+  if (curve_candidates.empty()) {
+    return best;
+  }
+  const auto curve_target = resolve_viewport_curve_anchor_snap_target(
+      ray, curve_candidates, vertex_radius, {},
+      mesh_query.nearest_surface_ray_distance);
+  if (!curve_target.has_value() ||
+      (best.has_value() &&
+       !snap_depth_precedes(curve_target->ray_distance,
+                            curve_target->pick_distance, *best))) {
+    return best;
+  }
+  return CurveControlSnapResolution{
+      .target =
+          {
+              .kind = quader_editor_core::TransformSnapLandmarkKind::Vertex,
+              // World-space overlay projection does not resolve Curve anchors
+              // through the polygon object registry.
+              .object_id = -1,
+              .vertex_id = quader_poly::kInvalidElementId,
+              .position = curve_target->world_position,
+          },
+      .ray_distance = curve_target->ray_distance,
+      .pick_distance = curve_target->pick_distance,
+  };
+}
+
+QuaderTransform3 curve_control_orientation(
+    const CurveToolPreviewState &preview, QuaderTransformSpace space) {
+  QuaderTransform3 orientation;
+  if (space != QuaderTransformSpace::Local) {
+    return orientation;
+  }
+  const std::optional<glm::mat3> basis =
+      try_scene_pure_world_rotation_basis(preview.world_transform);
+  if (!basis.has_value()) {
+    return orientation;
+  }
+  orientation.x_axis = {(*basis)[0][0], (*basis)[0][1], (*basis)[0][2]};
+  orientation.y_axis = {(*basis)[1][0], (*basis)[1][1], (*basis)[1][2]};
+  orientation.z_axis = {(*basis)[2][0], (*basis)[2][1], (*basis)[2][2]};
+  return orientation;
+}
+
 } // namespace
+
+std::optional<TransformGizmoInteraction::CurveControlSelectionSnapshot>
+TransformGizmoInteraction::selected_curve_controls(
+    CurveToolService *curve_tool, QuaderTransformSpace transform_space) {
+  if (curve_tool == nullptr || !curve_tool->controls_editable() ||
+      curve_tool->point_construction_dragging()) {
+    reset_curve_control_cache();
+    return std::nullopt;
+  }
+  const CurveControlSelection &selection = curve_tool->control_selection();
+  if (selection.empty()) {
+    reset_curve_control_cache();
+    return std::nullopt;
+  }
+  const CurveToolPreviewState &preview = curve_tool->preview_state();
+  if (!preview.active || !preview.document.has_value()) {
+    reset_curve_control_cache();
+    return std::nullopt;
+  }
+  const CurveControlSelectionIdentity identity{
+      .active = selection.active,
+      .selected_count = selection.controls.size(),
+      .selection_revision = curve_tool->control_selection_revision(),
+      .entity = preview.entity,
+      .modeling_object_id = preview.modeling_object_id,
+      .drawing = preview.drawing,
+  };
+  const CurveControlCacheKey key{
+      .identity = identity,
+      .content_identity = preview.document->content_identity().value,
+      .world_transform = preview.world_transform,
+      .transform_space = transform_space,
+  };
+  const auto identity_matches =
+      [](const CurveControlSelectionIdentity &left,
+         const CurveControlSelectionIdentity &right) {
+    return left.active == right.active &&
+           left.selected_count == right.selected_count &&
+           left.selection_revision == right.selection_revision &&
+           left.entity == right.entity &&
+           left.modeling_object_id == right.modeling_object_id &&
+           left.drawing == right.drawing;
+  };
+  if (cached_curve_control_key_.has_value() &&
+      identity_matches(cached_curve_control_key_->identity, key.identity) &&
+      cached_curve_control_key_->content_identity == key.content_identity &&
+      cached_curve_control_key_->world_transform.values ==
+          key.world_transform.values &&
+      cached_curve_control_key_->transform_space == key.transform_space) {
+    ++selection_cache_stats_.curve_control_cache_hit_count;
+    return cached_curve_control_snapshot_;
+  }
+
+  ++selection_cache_stats_.curve_control_pivot_recompute_count;
+  const std::optional<QVec3> world_pivot =
+      curve_tool->selected_controls_world_pivot();
+  if (!world_pivot.has_value()) {
+    // Retain a negative resolution for this exact authored publication. This
+    // prevents a hidden zero-length handle from triggering a point scan every
+    // idle frame while still invalidating on geometry or placement changes.
+    cached_curve_control_key_ = key;
+    cached_curve_control_snapshot_.reset();
+    return std::nullopt;
+  }
+  CurveControlSelectionSnapshot snapshot{
+      .identity = identity,
+      .world_pivot = *world_pivot,
+      .orientation = curve_control_orientation(preview, transform_space),
+  };
+  cached_curve_control_key_ = key;
+  cached_curve_control_snapshot_ = snapshot;
+  return snapshot;
+}
+
+bool TransformGizmoInteraction::curve_control_selection_identity_matches(
+    CurveToolService *curve_tool,
+    const CurveControlSelectionIdentity &identity) {
+  if (curve_tool == nullptr || !curve_tool->controls_editable()) {
+    return false;
+  }
+  const CurveToolPreviewState &preview = curve_tool->preview_state();
+  return preview.active && preview.document.has_value() &&
+         preview.control_selection.active == identity.active &&
+         preview.control_selection.controls.size() ==
+             identity.selected_count &&
+         curve_tool->control_selection_revision() ==
+             identity.selection_revision &&
+         preview.entity == identity.entity &&
+         preview.modeling_object_id == identity.modeling_object_id &&
+         preview.drawing == identity.drawing;
+}
 
 bool TransformGizmoInteraction::pending_drag_threshold_reached(
     QVec2 current) const {
@@ -228,13 +414,121 @@ bool TransformGizmoInteraction::pending_drag_threshold_reached(
 }
 
 bool TransformGizmoInteraction::begin_pending_drag(
-    QuaderEditorApi &editor, const ViewportInteractionFrame &frame) {
+    QuaderEditorApi &editor, const ViewportInteractionFrame &frame,
+    CurveToolService *curve_tool) {
   QDR_PROFILE_FUNCTION();
   if (!pending_drag_.has_value()) {
     return false;
   }
 
   const PendingGizmoDrag pending = *pending_drag_;
+  if (pending.backend == DragBackend::CurveControl) {
+    if (!pending.curve_selection.has_value() ||
+        !curve_control_selection_identity_matches(
+            curve_tool, *pending.curve_selection)) {
+      reset_pending_drag();
+      return false;
+    }
+
+    const ViewportRay start_ray = frame.camera.ray_from_viewport_point(
+        pending.begin_request.screen_position);
+    const quader_editor_core::ViewportCameraState camera =
+        ViewportCameraAdapter::runtime_camera(frame.camera,
+                                              frame.input.viewport_size);
+    quader_editor_core::MoveBeginInput input;
+    input.axis = pending.axis;
+    input.orientation =
+        runtime_orientation(pending.begin_request.orientation);
+    input.has_world_direction =
+        pending.begin_request.has_world_direction;
+    input.world_direction = pending.begin_request.world_direction;
+    input.center_local = pending.begin_request.pivot;
+    input.has_world_center = true;
+    input.world_center = pending.begin_request.pivot;
+    input.has_screen_axis = true;
+    input.screen_pivot = pending.begin_request.screen_pivot;
+    input.screen_tip = pending.begin_request.screen_tip;
+    input.screen_position = pending.begin_request.screen_position;
+    input.has_start_ray = true;
+    input.start_ray = {
+        .origin = start_ray.origin,
+        .direction = start_ray.direction,
+    };
+    input.has_camera = true;
+    input.camera_transform = camera.transform;
+    const quader_editor_core::MoveBeginResult begin =
+        quader_editor_core::begin_move_drag(input);
+    if (!begin.ok) {
+      LOG_ERROR("Curve control move begin failed: {}",
+                begin.message.empty() ? "Begin failed." : begin.message);
+      reset_pending_drag();
+      return false;
+    }
+    const CommandResult authored_begin =
+        curve_tool->begin_selected_control_drag();
+    if (!authored_begin.ok || !curve_tool->dragging()) {
+      LOG_ERROR("Curve control edit begin failed: {}",
+                authored_begin.message.empty() ? "Begin failed."
+                                               : authored_begin.message);
+      quader_editor_core::reset_move(curve_move_state_);
+      reset_pending_drag();
+      return false;
+    }
+
+    const CurveControlSelection &control_selection =
+        curve_tool->control_selection();
+    curve_anchor_snap_eligible_ =
+        !control_selection.empty() &&
+        quader_editor_core::move_axis_supports_vertex_snap(pending.axis) &&
+        std::all_of(control_selection.controls.begin(),
+                    control_selection.controls.end(),
+                    [](CurveControlTarget target) {
+                      return target.kind == CurveControlKind::Anchor;
+                    });
+    curve_anchor_snap_candidates_.clear();
+    if (curve_anchor_snap_eligible_) {
+      std::vector<modeling::CurvePointId> selected_anchors;
+      selected_anchors.reserve(control_selection.controls.size());
+      for (const CurveControlTarget target : control_selection.controls) {
+        selected_anchors.push_back(target.point);
+      }
+      std::sort(selected_anchors.begin(), selected_anchors.end());
+      selected_anchors.erase(
+          std::unique(selected_anchors.begin(), selected_anchors.end()),
+          selected_anchors.end());
+      const EntityId active_entity = pending.curve_selection->entity;
+      curve_anchor_snap_candidates_ =
+          collect_viewport_curve_anchor_snap_candidates(
+              frame.scene_curve_pick_candidates,
+              [active_entity, &selected_anchors](
+                  EntityId entity, modeling::CurvePointId point) {
+                return entity == active_entity &&
+                       std::binary_search(selected_anchors.begin(),
+                                          selected_anchors.end(), point);
+              });
+      if (auto draft = collect_viewport_curve_draft_anchor_snap_candidate(
+              curve_tool->preview_state(),
+              [&selected_anchors](modeling::CurvePointId point) {
+                return std::binary_search(selected_anchors.begin(),
+                                          selected_anchors.end(), point);
+              })) {
+        curve_anchor_snap_candidates_.push_back(std::move(*draft));
+      }
+    }
+
+    curve_move_state_ = begin.state;
+    dragging_ = true;
+    active_backend_ = DragBackend::CurveControl;
+    active_curve_selection_ = pending.curve_selection;
+    active_axis_ = pending.axis;
+    active_drag_pivot_ = pending.begin_request.pivot;
+    active_world_direction_ = pending.begin_request.world_direction;
+    active_orientation_ =
+        runtime_orientation(pending.begin_request.orientation);
+    reset_pending_drag();
+    return true;
+  }
+
   QuaderTransformDragBeginRequest request = pending.begin_request;
   request.vertex_snap_radius = 0.0;
   const QuaderApiResult<QuaderTransformDragPreview> begin =
@@ -247,6 +541,8 @@ bool TransformGizmoInteraction::begin_pending_drag(
   }
 
   dragging_ = begin.value().active;
+  active_backend_ = dragging_ ? DragBackend::EditorTransform
+                              : DragBackend::None;
   active_axis_ =
       dragging_ ? pending.axis : quader_editor_core::TransformAxis::None;
   active_drag_pivot_ = dragging_ ? begin.value().pivot : QVec3{};
@@ -271,12 +567,18 @@ ViewportBeforeToolInteractionResult
 TransformGizmoInteraction::release_pending_click() {
   ViewportBeforeToolInteractionResult result;
   if (pending_drag_.has_value()) {
-    result.selection_click_requested = true;
-    result.selection_click_local = pending_drag_->click_local;
-    result.selection_click_count = pending_drag_->click_count;
-    result.selection_cycle_depth = pending_drag_->cycle_depth;
-    result.selection_cycle_depth_modifiers =
-        pending_drag_->cycle_depth_modifiers;
+    if (pending_drag_->backend == DragBackend::CurveControl) {
+      // The curve control is already selected. Its gizmo click must not fall
+      // through to scene selection when the pointer stays below threshold.
+      result.gizmo_consumed = true;
+    } else {
+      result.selection_click_requested = true;
+      result.selection_click_local = pending_drag_->click_local;
+      result.selection_click_count = pending_drag_->click_count;
+      result.selection_cycle_depth = pending_drag_->cycle_depth;
+      result.selection_cycle_depth_modifiers =
+          pending_drag_->cycle_depth_modifiers;
+    }
   }
   reset_pending_drag();
   return result;
@@ -284,9 +586,41 @@ TransformGizmoInteraction::release_pending_click() {
 
 ViewportBeforeToolInteractionResult
 TransformGizmoInteraction::handle_frame(QuaderEditorApi &editor,
-                                        const ViewportInteractionFrame &frame) {
+                                        const ViewportInteractionFrame &frame,
+                                        CurveToolService *curve_tool) {
   QDR_PROFILE_FUNCTION();
   ViewportBeforeToolInteractionResult result;
+
+  bool curve_refresh_ok = true;
+  if (curve_tool != nullptr) {
+    const CommandResult refreshed = curve_tool->refresh();
+    curve_refresh_ok = refreshed.ok;
+    if (!refreshed.ok) {
+      LOG_ERROR("Curve control refresh failed: {}",
+                refreshed.message.empty() ? "Refresh failed."
+                                          : refreshed.message);
+    }
+  }
+
+  if (frame.input.pointer_interaction_canceled &&
+      (pending_drag_.has_value() || dragging_)) {
+    result.gizmo_consumed = cancel_active_drag(editor, curve_tool);
+    clear_frame();
+    return result;
+  }
+
+  const bool curve_pointer_active =
+      (dragging_ && active_backend_ == DragBackend::CurveControl) ||
+      (pending_drag_.has_value() &&
+       pending_drag_->backend == DragBackend::CurveControl);
+  const bool curve_pointer_invalidated =
+      frame.input.navigation_active || frame.input_result.navigation_active ||
+      frame.input_result.camera_changed || frame.input_result.view_changed;
+  if (curve_pointer_active && curve_pointer_invalidated) {
+    result.gizmo_consumed = cancel_active_drag(editor, curve_tool);
+    clear_frame();
+    return result;
+  }
 
   if (pending_drag_.has_value() && !frame.input.viewport_focused) {
     // Qt focus loss synthesizes a release while the surface can remain hovered.
@@ -296,13 +630,53 @@ TransformGizmoInteraction::handle_frame(QuaderEditorApi &editor,
     return result;
   }
 
-  const ViewportToolId tool = frame.input_router.state().active_tool;
+  if (dragging_ && active_backend_ == DragBackend::CurveControl &&
+      (!curve_refresh_ok || curve_tool == nullptr || !curve_tool->dragging() ||
+       !active_curve_selection_.has_value() ||
+       !curve_control_selection_identity_matches(
+           curve_tool, *active_curve_selection_))) {
+    result.gizmo_consumed = cancel_active_drag(editor, curve_tool);
+    clear_frame();
+    return result;
+  }
+  if (pending_drag_.has_value() &&
+      pending_drag_->backend == DragBackend::CurveControl &&
+      (!curve_refresh_ok || !pending_drag_->curve_selection.has_value() ||
+       !curve_control_selection_identity_matches(
+           curve_tool, *pending_drag_->curve_selection))) {
+    reset_pending_drag();
+    clear_frame();
+    result.gizmo_consumed = true;
+    return result;
+  }
+
+  const ViewportToolId active_tool = frame.input_router.state().active_tool;
+  const bool explicit_curve_route =
+      active_tool == ViewportToolId::Curve && curve_tool != nullptr &&
+      curve_tool->active();
+  const bool passive_curve_route =
+      frame.active_tool_allows_selection_fallback &&
+      !frame.input.active_tool_owns_viewport && !frame.input.modal_tool_active;
+  const bool curve_control_route_available =
+      explicit_curve_route || passive_curve_route;
+  const std::optional<CurveControlSelectionSnapshot> curve_controls =
+      curve_control_route_available && !dragging_ && !pending_drag_.has_value()
+          ? selected_curve_controls(curve_tool,
+                                    editor.viewports().transform_space())
+          : std::nullopt;
+  const bool curve_route =
+      (dragging_ && active_backend_ == DragBackend::CurveControl) ||
+      (pending_drag_.has_value() &&
+       pending_drag_->backend == DragBackend::CurveControl) ||
+      curve_controls.has_value();
+  const ViewportToolId tool =
+      curve_route ? ViewportToolId::Move : active_tool;
   if (!frame.settings.bool_value(ViewportBoolSettingId::ShowGizmos) ||
-      !viewport_tool_supports_transform_gizmo(tool)) {
+      (!curve_route && !viewport_tool_supports_transform_gizmo(tool))) {
     clear_frame();
     reset_pending_drag();
     if (dragging_) {
-      result.gizmo_consumed = cancel_active_drag(editor);
+      result.gizmo_consumed = cancel_active_drag(editor, curve_tool);
     }
     return result;
   }
@@ -310,12 +684,17 @@ TransformGizmoInteraction::handle_frame(QuaderEditorApi &editor,
   std::optional<QuaderSelectionSummary> selection;
   QVec3 pivot = {};
   quader_poly::Transform3 orientation;
+  QuaderTransform3 request_orientation;
   if (dragging_) {
     pivot = active_drag_pivot_;
     orientation = active_orientation_;
   } else if (pending_drag_.has_value()) {
     pivot = pending_drag_->begin_request.pivot;
     orientation = runtime_orientation(pending_drag_->begin_request.orientation);
+  } else if (curve_controls.has_value()) {
+    pivot = curve_controls->world_pivot;
+    request_orientation = curve_controls->orientation;
+    orientation = runtime_orientation(request_orientation);
   } else {
     selection = frame.selection_state.summary;
     const bool selection_changed =
@@ -355,13 +734,42 @@ TransformGizmoInteraction::handle_frame(QuaderEditorApi &editor,
       return result;
     }
     pivot = *cached_selection_pivot_;
-    orientation = runtime_orientation(cached_selection_orientation_);
+    request_orientation = cached_selection_orientation_;
+    orientation = runtime_orientation(request_orientation);
   }
 
   const bool suppress_hover =
       frame.input_result.navigation_active ||
       frame.input_result.camera_changed || frame.input.text_input_active ||
-      frame.input.modal_tool_active || frame.input.active_tool_owns_viewport;
+      frame.input.modal_tool_active ||
+      (!curve_route && frame.input.active_tool_owns_viewport);
+
+  // Passive Curve editing keeps the ordinary object gizmo visible, but an
+  // unselected authored control under this exact press still owns selection.
+  // A semantic conversion press also retains priority on the selected anchor.
+  // Use the same typed, mesh-depth-aware picker as shared selection so an
+  // anchor at the object pivot cannot be stolen by the gizmo.
+  const bool curve_control_press_has_priority = [&]() {
+    if (!curve_control_route_available || curve_tool == nullptr ||
+        !curve_tool->controls_editable() ||
+        dragging_ || pending_drag_.has_value() || !frame.left_pressed ||
+        !frame.input.viewport_hovered || suppress_hover ||
+        frame.input.pointer_interaction_canceled ||
+        frame.input_result.cancel_requested ||
+        frame.input_result.navigation_active ||
+        frame.input_result.camera_changed || frame.input_result.view_changed ||
+        curve_tool->dragging()) {
+      return false;
+    }
+    const bool conversion_press =
+        !frame.input.curve_conversion_edges.empty();
+    const auto hit = pick_unoccluded_viewport_curve_control(
+        frame.camera, curve_tool->preview_state(), frame.left_click_local,
+        frame.scene_mesh_surface_distance, conversion_press);
+    return hit.has_value() &&
+           (conversion_press || curve_tool->control_selection().empty() ||
+            !curve_tool->control_selection().contains(hit->target));
+  }();
 
   quader_editor_core::TransformGizmoFrameInput gizmo_input = make_gizmo_input(
       frame, tool, pivot, orientation,
@@ -398,7 +806,8 @@ TransformGizmoInteraction::handle_frame(QuaderEditorApi &editor,
   // frames. Establish the pending hit before release handling so that a
   // threshold-crossing sample can still become one committed drag.
   if (!dragging_ && !pending_drag_.has_value() && frame.left_pressed &&
-      frame.input.viewport_hovered && !suppress_hover) {
+      frame.input.viewport_hovered && !suppress_hover &&
+      !curve_control_press_has_priority) {
     const quader_editor_core::TransformGizmoPickHit hit = [&]() {
       QDR_PROFILE_SCOPE("Transform gizmo click pick");
       return quader_editor_core::pick_transform_gizmo(gizmo_input,
@@ -407,20 +816,27 @@ TransformGizmoInteraction::handle_frame(QuaderEditorApi &editor,
     if (hit.hit && hit.axis != quader_editor_core::TransformAxis::None) {
       const ViewportRay start_ray =
           frame.camera.ray_from_viewport_point(frame.left_click_local);
+      const bool curve_control_backend = curve_controls.has_value();
       const bool duplicate_selected =
-          selection.has_value() &&
+          !curve_control_backend && selection.has_value() &&
           !is_component_selection_mode(
               to_modeling_selection_mode(selection->mode)) &&
           (frame.input.modifiers.shift || frame.input.modifiers.alt);
+      const QuaderSelectionMode selection_mode =
+          selection.has_value() ? selection->mode : QuaderSelectionMode::Object;
+      const QuaderTransformOperation operation =
+          curve_control_backend
+              ? QuaderTransformOperation::Transform
+              : transform_operation_for(tool, selection_mode,
+                                        frame.input.modifiers);
       pending_drag_ = PendingGizmoDrag{
           .begin_request =
               {
                   .tool = api_transform_tool_for(tool),
-                  .operation = transform_operation_for(
-                      tool, selection->mode, frame.input.modifiers),
+                  .operation = operation,
                   .axis = api_axis_for(hit.axis),
                   .space = editor.viewports().transform_space(),
-                  .orientation = cached_selection_orientation_,
+                  .orientation = request_orientation,
                   .pivot = pivot,
                   .screen_position = frame.left_click_local,
                   .screen_pivot = current_frame_->info.screen_pivot,
@@ -455,6 +871,13 @@ TransformGizmoInteraction::handle_frame(QuaderEditorApi &editor,
           .click_count = std::max(1, frame.left_click_count),
           .cycle_depth = frame.input.cycle_selection_depth_pressed,
           .cycle_depth_modifiers = frame.input.cycle_selection_depth_modifiers,
+          .backend = curve_route ? DragBackend::CurveControl
+                                 : DragBackend::EditorTransform,
+          .curve_selection =
+              curve_controls.has_value()
+                  ? std::optional<CurveControlSelectionIdentity>(
+                        curve_controls->identity)
+                  : std::nullopt,
       };
       result.gizmo_consumed = true;
     }
@@ -496,7 +919,7 @@ TransformGizmoInteraction::handle_frame(QuaderEditorApi &editor,
       reset_pending_drag();
       return result;
     }
-    if (!begin_pending_drag(editor, frame)) {
+    if (!begin_pending_drag(editor, frame, curve_tool)) {
       return result;
     }
     result.gizmo_consumed = true;
@@ -528,67 +951,133 @@ TransformGizmoInteraction::handle_frame(QuaderEditorApi &editor,
         .precision = frame.input.modifiers.primary,
     };
     if (!matches_last_drag_update(update_signature)) {
-      const QuaderApiResult<QuaderTransformDragPreview> preview = [&]() {
-        QDR_PROFILE_SCOPE("Transform gizmo update drag");
-        return editor.modeling().update_transform_drag({
-            .screen_position = frame.input.mouse_local,
-            .ray =
-                {
-                    .origin = drag_ray.origin,
-                    .direction = drag_ray.direction,
-                },
-            .camera =
-                to_api_viewport_camera(ViewportCameraAdapter::modeling_camera(
-                    frame.camera, frame.input.viewport_size)),
-            .grid_size =
-                viewport_grid_world_size_for_preset(frame.input.grid_preset),
-            .vertex_snap_radius = update_signature.vertex_snap_radius,
-            .grid_snap_enabled = grid_snap_active,
-            .rotation_snap_degrees = rotation_snap_degrees,
-            .precision = frame.input.modifiers.primary,
-        });
-      }();
-      if (!preview.ok) {
-        LOG_ERROR(
-            "Transform drag update failed: {}",
-            preview.message.empty() ? "Update failed." : preview.message);
-      }
-      if (preview.ok) {
-        last_drag_update_signature_ = update_signature;
-      }
-      if (preview.ok && preview.value().active) {
-        active_drag_pivot_ = preview.value().pivot;
-        if (viewport_tool_transform_tool(tool) == ModelingTransformTool::Move) {
-          active_drag_pivot_ += preview.value().move_delta;
+      if (active_backend_ == DragBackend::CurveControl) {
+        snap_overlay_points_.clear();
+        std::optional<CurveControlSnapResolution> snap_target;
+        if (curve_anchor_snap_eligible_ &&
+            update_signature.vertex_snap_radius > 0.0f) {
+          ViewportRay snap_ray = drag_ray;
+          const float direction_length = length(snap_ray.direction);
+          if (direction_length > 0.000001f) {
+            snap_ray.direction = snap_ray.direction / direction_length;
+            snap_target = resolve_curve_control_snap_target(
+                frame, snap_ray, update_signature.vertex_snap_radius,
+                curve_anchor_snap_candidates_);
+          }
         }
-      }
-      if (preview.ok && preview.value().active &&
-          viewport_tool_interaction_tool(tool) ==
-              quader_editor_core::ViewportInteractionTool::Rotate &&
-          current_frame_.has_value() &&
-          rotation_indicator_start_direction_.has_value()) {
-        const std::optional<QVec3> mouse_position =
-            rotation_indicator_mouse_position_from_mouse(
-                frame.camera, frame.input.mouse_local,
-                current_frame_->info.pivot, active_world_direction_);
-        active_rotate_indicator_ = {
-            .active = true,
-            .axis = active_axis_,
-            .world_axis = active_world_direction_,
-            .start_direction = *rotation_indicator_start_direction_,
-            .has_mouse_position = mouse_position.has_value(),
-            .mouse_position = mouse_position.value_or(QVec3{}),
-            .angle_degrees = preview.value().rotate_angle_degrees,
-        };
-        current_frame_->info.rotate_indicator = active_rotate_indicator_;
+        const quader_editor_core::MovePreviewResult preview = [&]() {
+          QDR_PROFILE_SCOPE("Curve control gizmo update drag");
+          if (snap_target.has_value()) {
+            return quader_editor_core::preview_move_to_axis_snap_target(
+                curve_move_state_, snap_target->target.position);
+          }
+          return quader_editor_core::preview_move_from_viewport(
+              curve_move_state_, frame.input.mouse_local,
+              {.origin = drag_ray.origin, .direction = drag_ray.direction},
+              ViewportCameraAdapter::runtime_camera(
+                  frame.camera, frame.input.viewport_size),
+              frame.input.modifiers.primary, grid_snap_active,
+              viewport_grid_world_size_for_preset(frame.input.grid_preset),
+              false);
+        }();
+        if (!preview.ok) {
+          LOG_ERROR("Curve control move update failed: {}",
+                    preview.message.empty() ? "Update failed."
+                                            : preview.message);
+        } else {
+          const QVec3 world_pivot =
+              curve_move_state_.center_world + preview.preview_delta;
+          const CommandResult authored_update =
+              curve_tool->update_drag(world_pivot);
+          if (!authored_update.ok) {
+            LOG_ERROR("Curve control edit update failed: {}",
+                      authored_update.message.empty()
+                          ? "Update failed."
+                          : authored_update.message);
+          } else {
+            if (snap_target.has_value()) {
+              quader_editor_core::fill_transform_snap_target_overlay_points(
+                  snap_overlay_points_, snap_target->target);
+            }
+            last_drag_update_signature_ = update_signature;
+            active_drag_pivot_ = world_pivot;
+          }
+        }
+      } else {
+        const QuaderApiResult<QuaderTransformDragPreview> preview = [&]() {
+          QDR_PROFILE_SCOPE("Transform gizmo update drag");
+          return editor.modeling().update_transform_drag({
+              .screen_position = frame.input.mouse_local,
+              .ray =
+                  {
+                      .origin = drag_ray.origin,
+                      .direction = drag_ray.direction,
+                  },
+              .camera = to_api_viewport_camera(
+                  ViewportCameraAdapter::modeling_camera(
+                      frame.camera, frame.input.viewport_size)),
+              .grid_size = viewport_grid_world_size_for_preset(
+                  frame.input.grid_preset),
+              .vertex_snap_radius = update_signature.vertex_snap_radius,
+              .grid_snap_enabled = grid_snap_active,
+              .rotation_snap_degrees = rotation_snap_degrees,
+              .precision = frame.input.modifiers.primary,
+          });
+        }();
+        if (!preview.ok) {
+          LOG_ERROR(
+              "Transform drag update failed: {}",
+              preview.message.empty() ? "Update failed." : preview.message);
+        }
+        if (preview.ok) {
+          last_drag_update_signature_ = update_signature;
+        }
+        if (preview.ok && preview.value().active) {
+          active_drag_pivot_ = preview.value().pivot;
+          if (viewport_tool_transform_tool(tool) ==
+              ModelingTransformTool::Move) {
+            active_drag_pivot_ += preview.value().move_delta;
+          }
+        }
+        if (preview.ok && preview.value().active &&
+            viewport_tool_interaction_tool(tool) ==
+                quader_editor_core::ViewportInteractionTool::Rotate &&
+            current_frame_.has_value() &&
+            rotation_indicator_start_direction_.has_value()) {
+          const std::optional<QVec3> mouse_position =
+              rotation_indicator_mouse_position_from_mouse(
+                  frame.camera, frame.input.mouse_local,
+                  current_frame_->info.pivot, active_world_direction_);
+          active_rotate_indicator_ = {
+              .active = true,
+              .axis = active_axis_,
+              .world_axis = active_world_direction_,
+              .start_direction = *rotation_indicator_start_direction_,
+              .has_mouse_position = mouse_position.has_value(),
+              .mouse_position = mouse_position.value_or(QVec3{}),
+              .angle_degrees = preview.value().rotate_angle_degrees,
+          };
+          current_frame_->info.rotate_indicator = active_rotate_indicator_;
+        }
       }
     }
     if (release_requested) {
-      const QuaderApiResult<QuaderTransformDragPreview> commit =
-          editor.modeling().commit_transform_drag();
-      if (!commit.ok) {
-        LOG_ERROR("Transform drag commit failed: {}",
-                  commit.message.empty() ? "Commit failed." : commit.message);
+      if (active_backend_ == DragBackend::CurveControl) {
+        const CommandResult commit = curve_tool->commit_drag();
+        if (!commit.ok) {
+          LOG_ERROR("Curve control edit commit failed: {}",
+                    commit.message.empty() ? "Commit failed."
+                                           : commit.message);
+          (void)curve_tool->cancel_drag();
+        }
+      } else {
+        const QuaderApiResult<QuaderTransformDragPreview> commit =
+            editor.modeling().commit_transform_drag();
+        if (!commit.ok) {
+          LOG_ERROR(
+              "Transform drag commit failed: {}",
+              commit.message.empty() ? "Commit failed." : commit.message);
+        }
       }
       reset_drag_state();
     }
@@ -615,6 +1104,11 @@ bool TransformGizmoInteraction::matches_last_drag_update(
 }
 
 bool TransformGizmoInteraction::cancel_active_drag(QuaderEditorApi &editor) {
+  return cancel_active_drag(editor, nullptr);
+}
+
+bool TransformGizmoInteraction::cancel_active_drag(
+    QuaderEditorApi &editor, CurveToolService *curve_tool) {
   if (pending_drag_.has_value()) {
     reset_pending_drag();
     return true;
@@ -622,28 +1116,59 @@ bool TransformGizmoInteraction::cancel_active_drag(QuaderEditorApi &editor) {
   if (!dragging_) {
     return false;
   }
-  const QuaderApiVoidResult cancel = editor.modeling().cancel_transform_drag();
-  if (!cancel.ok) {
-    LOG_ERROR("Transform drag cancel failed: {}",
-              cancel.message.empty() ? "Cancel failed." : cancel.message);
+  if (active_backend_ == DragBackend::CurveControl) {
+    if (curve_tool == nullptr) {
+      LOG_ERROR("Curve control drag cancel lost its service owner.");
+    } else {
+      const CommandResult cancel = curve_tool->cancel_drag();
+      if (!cancel.ok) {
+        LOG_ERROR("Curve control edit cancel failed: {}",
+                  cancel.message.empty() ? "Cancel failed."
+                                         : cancel.message);
+      }
+    }
+  } else {
+    const QuaderApiVoidResult cancel =
+        editor.modeling().cancel_transform_drag();
+    if (!cancel.ok) {
+      LOG_ERROR("Transform drag cancel failed: {}",
+                cancel.message.empty() ? "Cancel failed." : cancel.message);
+    }
   }
   reset_drag_state();
   return true;
 }
 
-void TransformGizmoInteraction::reset(QuaderEditorApi* editor) {
-    if (editor != nullptr && dragging_) {
-      (void)cancel_active_drag(*editor);
-    } else {
-      reset_drag_state();
+void TransformGizmoInteraction::reset(QuaderEditorApi *editor) {
+  if (editor != nullptr && dragging_) {
+    (void)cancel_active_drag(*editor);
+  }
+  reset(editor, nullptr);
+}
+
+void TransformGizmoInteraction::reset(QuaderEditorApi *editor,
+                                      CurveToolService *curve_tool) {
+  if (dragging_ && active_backend_ == DragBackend::CurveControl &&
+      curve_tool != nullptr) {
+    const CommandResult cancel = curve_tool->cancel_drag();
+    if (!cancel.ok) {
+      LOG_ERROR("Curve control edit reset failed: {}",
+                cancel.message.empty() ? "Cancel failed." : cancel.message);
     }
-    reset_pending_drag();
-    clear_frame();
-    cached_selection_state_.reset();
-    cached_selection_pivot_.reset();
-    cached_selection_orientation_ = {};
-    cached_transform_space_revision_ = 0;
-    has_cached_transform_space_revision_ = false;
+    reset_drag_state();
+  } else if (editor != nullptr && dragging_) {
+    (void)cancel_active_drag(*editor, curve_tool);
+  } else {
+    reset_drag_state();
+  }
+  reset_pending_drag();
+  clear_frame();
+  cached_selection_state_.reset();
+  cached_selection_pivot_.reset();
+  cached_selection_orientation_ = {};
+  cached_transform_space_revision_ = 0;
+  has_cached_transform_space_revision_ = false;
+  reset_curve_control_cache();
 }
 
 const quader_editor_core::TransformGizmoFrame* TransformGizmoInteraction::frame() const {
@@ -655,6 +1180,12 @@ const quader_editor_core::TransformGizmoFrame* TransformGizmoInteraction::frame(
 
 void TransformGizmoInteraction::reset_drag_state() {
   dragging_ = false;
+  active_backend_ = DragBackend::None;
+  active_curve_selection_.reset();
+  quader_editor_core::reset_move(curve_move_state_);
+  curve_anchor_snap_eligible_ = false;
+  curve_anchor_snap_candidates_.clear();
+  snap_overlay_points_.clear();
   active_axis_ = quader_editor_core::TransformAxis::None;
   active_drag_pivot_ = {};
   active_world_direction_ = {};
@@ -665,6 +1196,11 @@ void TransformGizmoInteraction::reset_drag_state() {
 }
 
 void TransformGizmoInteraction::reset_pending_drag() { pending_drag_.reset(); }
+
+void TransformGizmoInteraction::reset_curve_control_cache() {
+  cached_curve_control_key_.reset();
+  cached_curve_control_snapshot_.reset();
+}
 
 void TransformGizmoInteraction::clear_frame() {
   current_frame_.reset();

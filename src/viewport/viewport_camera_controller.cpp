@@ -221,26 +221,6 @@ make_runtime_camera(const ViewportCameraPose &pose,
   return camera;
 }
 
-/// Intersects a segment's retained parameter interval with one axis-aligned slab.
-bool clip_segment_axis(double start, double end, double minimum, double maximum,
-                       double &first, double &last) {
-  if (!std::isfinite(start) || !std::isfinite(end)) {
-    return false;
-  }
-  const double delta = end - start;
-  if (delta == 0.0) {
-    return start >= minimum && start <= maximum;
-  }
-  double enter = (minimum - start) / delta;
-  double leave = (maximum - start) / delta;
-  if (enter > leave) {
-    std::swap(enter, leave);
-  }
-  first = std::max(first, enter);
-  last = std::min(last, leave);
-  return first <= last;
-}
-
 float distance_along_forward_to_pivot(QVec3 origin, QVec3 forward,
                                       QVec3 pivot) {
   const float forward_distance = dot(pivot - origin, forward);
@@ -702,71 +682,9 @@ ViewportCameraController::project_world_point(QVec3 world_point) const {
 std::optional<ViewportScreenSegment>
 ViewportCameraController::project_visible_world_segment(QVec3 start,
                                                         QVec3 end) const {
-  if (!std::isfinite(viewport_width_) || !std::isfinite(viewport_height_)) {
-    return std::nullopt;
-  }
-  quader_editor_core::ViewportCameraState camera =
-      make_runtime_camera(pose(), state_, viewport_width_, viewport_height_);
-  const QVec3 eye = camera.transform.origin;
-  const auto depth = [&camera, eye](QVec3 point) {
-    const QVec3 forward = camera.transform.z_axis * -1.0f;
-    return (static_cast<double>(point.x) - eye.x) * forward.x +
-           (static_cast<double>(point.y) - eye.y) * forward.y +
-           (static_cast<double>(point.z) - eye.z) * forward.z;
-  };
-  double first = 0.0;
-  double last = 1.0;
-  if (!clip_segment_axis(depth(start), depth(end), state_.near_plane,
-                         state_.far_plane, first, last)) {
-    return std::nullopt;
-  }
-  // Interpolate relative to the eye: rounding a clipped point back into large
-  // absolute float coordinates can erase its small positive near-plane depth.
-  camera.transform.origin = {};
-  const auto relative_point = [start, end, eye](double parameter) -> QVec3 {
-    return {
-        static_cast<float>(std::lerp(static_cast<double>(start.x) - eye.x,
-                                     static_cast<double>(end.x) - eye.x,
-                                     parameter)),
-        static_cast<float>(std::lerp(static_cast<double>(start.y) - eye.y,
-                                     static_cast<double>(end.y) - eye.y,
-                                     parameter)),
-        static_cast<float>(std::lerp(static_cast<double>(start.z) - eye.z,
-                                     static_cast<double>(end.z) - eye.z,
-                                     parameter)),
-    };
-  };
-  ViewportScreenSegment projected;
-  // Clip depth before perspective division, so an endpoint behind the eye
-  // cannot mirror the line. Exact near/far endpoints still project correctly;
-  // project_world_point().visible deliberately excludes those boundaries.
-  if (!quader_editor_core::project_viewport_point(camera, relative_point(first),
-                                                  projected.start) ||
-      !quader_editor_core::project_viewport_point(camera, relative_point(last),
-                                                  projected.end)) {
-    return std::nullopt;
-  }
-  first = 0.0;
-  last = 1.0;
-  if (!clip_segment_axis(projected.start.x, projected.end.x, 0.0,
-                         viewport_width_, first, last) ||
-      !clip_segment_axis(projected.start.y, projected.end.y, 0.0,
-                         viewport_height_, first, last)) {
-    return std::nullopt;
-  }
-  const auto screen_point = [&](double parameter) -> QVec2 {
-    return {
-        static_cast<float>(std::clamp(
-            std::lerp(static_cast<double>(projected.start.x),
-                      static_cast<double>(projected.end.x), parameter),
-            0.0, static_cast<double>(viewport_width_))),
-        static_cast<float>(std::clamp(
-            std::lerp(static_cast<double>(projected.start.y),
-                      static_cast<double>(projected.end.y), parameter),
-            0.0, static_cast<double>(viewport_height_))),
-    };
-  };
-  return ViewportScreenSegment{screen_point(first), screen_point(last)};
+  return project_visible_viewport_segment(
+      make_runtime_camera(pose(), state_, viewport_width_, viewport_height_),
+      start, end, state_.near_plane, state_.far_plane);
 }
 
 float ViewportCameraController::zoomed_distance(float wheel_delta) const {

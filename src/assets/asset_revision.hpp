@@ -33,6 +33,8 @@ next_revision(TypedAssetRevision<Tag> revision) {
  * Stores the Mesh Asset Revision Tag data contract used by the asset document and registry layer.
  */
 struct MeshAssetRevisionTag {};
+/** Identifies revisions of SDK-authored curve asset projections. */
+struct CurveAssetRevisionTag {};
 /**
  * Stores the Material Asset Revision Tag data contract used by the asset document and registry layer.
  */
@@ -43,6 +45,7 @@ struct MaterialAssetRevisionTag {};
 struct TextureAssetRevisionTag {};
 
 using MeshAssetRevision = TypedAssetRevision<MeshAssetRevisionTag>;
+using CurveAssetRevision = TypedAssetRevision<CurveAssetRevisionTag>;
 using MaterialAssetRevision = TypedAssetRevision<MaterialAssetRevisionTag>;
 using TextureAssetRevision = TypedAssetRevision<TextureAssetRevisionTag>;
 

@@ -60,11 +60,20 @@ std::vector<EntityId> source_mesh_entities_in_runtime_order(
       source_meshes.push_back(*entity);
     }
   }
+  // The legacy picking projection deliberately contains polygons only. Curves
+  // remain SDK-owned objects and must participate in the same clone mapping.
+  for (const EntityId entity : tree_order) {
+    if (scene.curve(entity) != nullptr &&
+        object_registry.modeling_object_for_entity(entity).has_value()) {
+      source_meshes.push_back(entity);
+    }
+  }
   return source_meshes;
 }
 
 std::vector<EntityId> selected_duplicate_mesh_entities(
     const quader_editor_core::EditorSession &session,
+    const SceneDocument &scene,
     const ModelingObjectRuntimeMap &object_registry) {
   const std::vector<int> selected_duplicate_object_ids =
       session.selected_object_ids();
@@ -81,6 +90,16 @@ std::vector<EntityId> selected_duplicate_mesh_entities(
         object_registry.entity_for_modeling_object(object.id);
     if (entity.has_value()) {
       duplicate_meshes.push_back(*entity);
+    }
+  }
+  // The adapter allocates clones in source order. Its native IDs therefore
+  // retain the curve order appended above without fabricating polygon objects.
+  for (const auto &[object_id, entity] :
+       object_registry.object_entity_bindings_by_modeling_object()) {
+    (void)object_id;
+    const auto *selection = scene.selection(entity);
+    if (scene.curve(entity) != nullptr && selection != nullptr && selection->selected) {
+      duplicate_meshes.push_back(entity);
     }
   }
   return duplicate_meshes;
@@ -199,7 +218,7 @@ ModelingHierarchyDuplicateService::duplicate_selected_entity_hierarchy(
     {
       QDR_PROFILE_SCOPE("Duplicate collect runtime mesh clones");
       duplicate_meshes =
-          selected_duplicate_mesh_entities(session, object_registry);
+          selected_duplicate_mesh_entities(session, scene, object_registry);
     }
     if (duplicate_meshes.size() != source_meshes.size()) {
       restore_group_selection(document_commands, runtime, roots,

@@ -106,19 +106,6 @@ quader_poly::Transform3 polygon_transform_from_matrix(const QMat4 &matrix) {
   };
 }
 
-bool same_viewport_camera(const ModelingViewportCamera &left,
-                          const ModelingViewportCamera &right) {
-  return left.orthographic == right.orthographic &&
-         left.affine_model_space == right.affine_model_space &&
-         same_vector(left.origin, right.origin) &&
-         same_vector(left.x_axis, right.x_axis) &&
-         same_vector(left.y_axis, right.y_axis) &&
-         same_vector(left.z_axis, right.z_axis) &&
-         same_vector(left.viewport_size, right.viewport_size) &&
-         left.orthographic_size == right.orthographic_size &&
-         left.fov_degrees == right.fov_degrees;
-}
-
 bool same_rectangle_face(const quader_editor_core::RectangleSelectionFace &left,
                          const quader_editor_core::RectangleSelectionFace &right) {
   return left.object_id == right.object_id &&
@@ -734,21 +721,6 @@ rectangle_selection_match(ModelingBoxSelectionRule rule, QVec2 start,
   return quader_editor_core::RectangleSelectionMatch::Crossing;
 }
 
-void include_projected_object_point(
-    quader_editor_core::RectangleProjectedObject &projected, QVec2 screen) {
-  projected.screen_points.push_back(screen);
-  if (!projected.has_screen_bounds) {
-    projected.screen_min = screen;
-    projected.screen_max = screen;
-    projected.has_screen_bounds = true;
-    return;
-  }
-  projected.screen_min.x = std::min(projected.screen_min.x, screen.x);
-  projected.screen_min.y = std::min(projected.screen_min.y, screen.y);
-  projected.screen_max.x = std::max(projected.screen_max.x, screen.x);
-  projected.screen_max.y = std::max(projected.screen_max.y, screen.y);
-}
-
 quader_editor_core::RectangleSelectionState rectangle_selection_state_for(
     std::span<const quader_editor_core::PolygonObject> objects,
     quader_editor_core::SelectionMode mode, int active_object_id) {
@@ -1032,7 +1004,8 @@ ModelingSelectionService::cached_local_picking_objects(
     const ModelingObjectRuntimeMap &object_registry) const {
   const std::uint64_t content_revision = session.state().content_revision;
   const std::uint64_t selection_revision = session.state().selection_revision;
-  const std::uint64_t scene_content_revision = scene.content_revision();
+  const std::uint64_t scene_hierarchy_revision =
+      scene.hierarchy_presentation_revision();
   const std::uint64_t scene_selection_revision = scene.selection_revision();
   const std::uint64_t scene_transform_revision = scene.transform_revision();
   const std::uint64_t scene_visibility_revision = scene.visibility_revision();
@@ -1052,11 +1025,11 @@ ModelingSelectionService::cached_local_picking_objects(
   const bool modeling_content_changed =
       !picking_cache_.objects_valid ||
       picking_cache_.content_revision != content_revision;
-  const bool scene_content_changed =
+  const bool scene_hierarchy_changed =
       !picking_cache_.objects_valid ||
-      picking_cache_.scene_content_revision != scene_content_revision;
+      picking_cache_.scene_hierarchy_revision != scene_hierarchy_revision;
   const bool local_participants_changed =
-      modeling_content_changed || scene_content_changed ||
+      modeling_content_changed || scene_hierarchy_changed ||
       picking_cache_.scene_visibility_revision != scene_visibility_revision ||
       picking_cache_.scene_layer_revision != scene_layer_revision ||
       picking_cache_.scene_mesh_binding_revision !=
@@ -1067,7 +1040,7 @@ ModelingSelectionService::cached_local_picking_objects(
       picking_cache_.instance_edit_scope != edit_scope ||
       picking_cache_.app_selection_mode != participant_mode;
   const bool geometry_changed =
-      modeling_content_changed || scene_content_changed ||
+      modeling_content_changed || scene_hierarchy_changed ||
       picking_cache_.scene_transform_revision != scene_transform_revision ||
       picking_cache_.scene_visibility_revision != scene_visibility_revision ||
       picking_cache_.scene_layer_revision != scene_layer_revision ||
@@ -1136,7 +1109,7 @@ ModelingSelectionService::cached_local_picking_objects(
   }
   picking_cache_.content_revision = content_revision;
   picking_cache_.selection_revision = selection_revision;
-  picking_cache_.scene_content_revision = scene_content_revision;
+  picking_cache_.scene_hierarchy_revision = scene_hierarchy_revision;
   picking_cache_.scene_selection_revision = scene_selection_revision;
   picking_cache_.scene_transform_revision = scene_transform_revision;
   picking_cache_.scene_visibility_revision = scene_visibility_revision;
@@ -2160,17 +2133,25 @@ ModelingSelectionService::rectangle_selection_universe(
     quader_editor_core::SelectionMode selection_mode) const {
   QDR_PROFILE_SCOPE("Box selection rectangle universe");
   const std::uint64_t content_revision = session.state().content_revision;
-  const std::uint64_t scene_content_revision = scene.content_revision();
+  const std::uint64_t scene_hierarchy_revision =
+      scene.hierarchy_presentation_revision();
+  const std::uint64_t scene_visibility_revision = scene.visibility_revision();
   const std::uint64_t scene_layer_revision = scene.layer_revision();
+  const std::uint64_t scene_mesh_binding_revision =
+      scene.mesh_binding_revision();
   const std::uint64_t object_map_revision = object_map.revision();
   const std::uint64_t local_visibility_revision =
       viewport_visibility_revision();
   const ModelingInstanceEditScope edit_scope = instance_edit_scope();
   if (rectangle_universe_cache_.valid &&
       rectangle_universe_cache_.content_revision == content_revision &&
-      rectangle_universe_cache_.scene_content_revision ==
-          scene_content_revision &&
+      rectangle_universe_cache_.scene_hierarchy_revision ==
+          scene_hierarchy_revision &&
+      rectangle_universe_cache_.scene_visibility_revision ==
+          scene_visibility_revision &&
       rectangle_universe_cache_.scene_layer_revision == scene_layer_revision &&
+      rectangle_universe_cache_.scene_mesh_binding_revision ==
+          scene_mesh_binding_revision &&
       rectangle_universe_cache_.object_map_revision == object_map_revision &&
       rectangle_universe_cache_.viewport_visibility_revision ==
           local_visibility_revision &&
@@ -2214,8 +2195,13 @@ ModelingSelectionService::rectangle_selection_universe(
   }
   rectangle_universe_cache_.valid = true;
   rectangle_universe_cache_.content_revision = content_revision;
-  rectangle_universe_cache_.scene_content_revision = scene_content_revision;
+  rectangle_universe_cache_.scene_hierarchy_revision =
+      scene_hierarchy_revision;
+  rectangle_universe_cache_.scene_visibility_revision =
+      scene_visibility_revision;
   rectangle_universe_cache_.scene_layer_revision = scene_layer_revision;
+  rectangle_universe_cache_.scene_mesh_binding_revision =
+      scene_mesh_binding_revision;
   rectangle_universe_cache_.object_map_revision = object_map_revision;
   rectangle_universe_cache_.viewport_visibility_revision =
       local_visibility_revision;
@@ -2535,7 +2521,8 @@ ModelingSelectionService::cached_rectangle_projected_hits_request(
     const ModelingBoxSelectRequest &request) const {
   QDR_PROFILE_SCOPE("Box selection projected candidates cache");
   const std::uint64_t content_revision = session.state().content_revision;
-  const std::uint64_t scene_content_revision = scene.content_revision();
+  const std::uint64_t scene_hierarchy_revision =
+      scene.hierarchy_presentation_revision();
   const std::uint64_t scene_transform_revision = scene.transform_revision();
   const std::uint64_t scene_visibility_revision = scene.visibility_revision();
   const std::uint64_t scene_layer_revision = scene.layer_revision();
@@ -2554,8 +2541,8 @@ ModelingSelectionService::cached_rectangle_projected_hits_request(
   const bool rebuild =
       !rectangle_projection_cache_.valid ||
       rectangle_projection_cache_.content_revision != content_revision ||
-      rectangle_projection_cache_.scene_content_revision !=
-          scene_content_revision ||
+      rectangle_projection_cache_.scene_hierarchy_revision !=
+          scene_hierarchy_revision ||
       rectangle_projection_cache_.scene_transform_revision !=
           scene_transform_revision ||
       rectangle_projection_cache_.scene_visibility_revision !=
@@ -2571,7 +2558,7 @@ ModelingSelectionService::cached_rectangle_projected_hits_request(
       rectangle_projection_cache_.app_selection_mode !=
           participant_mode ||
       rectangle_projection_cache_.selection_mode != selection_mode ||
-      !same_viewport_camera(rectangle_projection_cache_.camera,
+      !modeling_viewport_camera_matches(rectangle_projection_cache_.camera,
                             request.camera);
   if (rebuild) {
     QDR_PROFILE_SCOPE("Box selection build projected candidates cache miss");
@@ -2583,8 +2570,8 @@ ModelingSelectionService::cached_rectangle_projected_hits_request(
         selection_mode, request);
     rectangle_projection_cache_.valid = true;
     rectangle_projection_cache_.content_revision = content_revision;
-    rectangle_projection_cache_.scene_content_revision =
-        scene_content_revision;
+    rectangle_projection_cache_.scene_hierarchy_revision =
+        scene_hierarchy_revision;
     rectangle_projection_cache_.scene_transform_revision =
         scene_transform_revision;
     rectangle_projection_cache_.scene_visibility_revision =

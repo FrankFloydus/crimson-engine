@@ -65,6 +65,7 @@ struct QuaderViewportKeybindingContext {
   bool active_tool_owns_viewport = false;
   bool active_transform_drag = false;
   bool operation_preview_active = false;
+  bool curve_controls_editable = false;
 };
 
 /**

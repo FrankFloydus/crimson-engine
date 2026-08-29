@@ -48,6 +48,25 @@ struct ModelingProjectMaterialQueryResult final {
   ProjectAssetId material;
 };
 
+/// Identifies one mesh vertex resolved by the retained world-space picker.
+struct ModelingMeshVertexSnapTarget final {
+  int modeling_object_id = -1;
+  quader_poly::ElementId vertex_id = quader_poly::kInvalidElementId;
+  QVec3 world_position;
+  double ray_distance = 0.0;
+  double pick_distance = 0.0;
+
+  [[nodiscard]] bool operator==(
+      const ModelingMeshVertexSnapTarget &) const = default;
+};
+
+/// Returns the mesh vertex winner and nearest mesh surface depth from one
+/// prepared Move snap query.
+struct ModelingMeshSnapQueryResult final {
+  std::optional<ModelingMeshVertexSnapTarget> vertex_target;
+  std::optional<double> nearest_surface_ray_distance;
+};
+
 /**
  * Stores an opaque Modeling Session Memento restore point for editor-owned
  * history commands.
@@ -103,6 +122,18 @@ public:
   compile_object_mesh(int modeling_object_id) const;
   [[nodiscard]] std::optional<EntityId>
   pick_object_entity(const ModelingPickSelectRequest &request) const;
+  /// Reuses mesh surface picking for non-mesh hit-depth arbitration.
+  [[nodiscard]] std::optional<double>
+  pick_mesh_surface_distance(const ModelingRay &ray) const;
+  [[nodiscard]] ModelingMeshSnapQueryResult
+  pick_mesh_snap_query(const ModelingRay &ray, double vertex_radius,
+                       bool exclude_current_selection = true) const;
+  /// Resolves the first visible mesh vertex within a world-space ray radius.
+  /// Selected moving mesh components are omitted when requested, matching the
+  /// Move tool's stationary-landmark policy.
+  [[nodiscard]] std::optional<ModelingMeshVertexSnapTarget>
+  pick_mesh_vertex_snap_target(const ModelingRay &ray, double vertex_radius,
+                               bool exclude_current_selection = true) const;
   [[nodiscard]] std::vector<EntityId>
   box_pick_object_entities(const ModelingBoxSelectRequest &request) const;
   [[nodiscard]] std::optional<QVec3> selection_center() const;
@@ -167,6 +198,7 @@ public:
   rectangle_selection_resolution_build_count() const;
   [[nodiscard]] std::uint64_t local_face_geometry_build_count() const;
   [[nodiscard]] std::uint64_t world_pick_bounds_build_count() const;
+  [[nodiscard]] std::uint64_t mesh_snap_query_count() const;
   [[nodiscard]] const void *modeling_sdk_session_identity_for_tests() const;
   [[nodiscard]] std::size_t modeling_sdk_object_count_for_tests() const;
   void set_modeling_sdk_projection_failure_for_tests(
@@ -352,6 +384,19 @@ public:
   ModelingCreateBoxResult commit_box(std::string name);
   ModelingCommandResult cancel_box();
   ModelingCreateBoxResult create_mesh(const ModelingCreateMeshRequest &request);
+  /// Curve content stays in the portable session; scene assets pin projections.
+  ModelingCreateBoxResult create_curve(modeling::CurveDocument document,
+                                       std::string name = "Curve");
+  [[nodiscard]] std::optional<modeling::CurveDocument> curve_document(
+      int modeling_object_id, bool include_preview = true) const;
+  ModelingCommandResult replace_curve_document(
+      int modeling_object_id, modeling::CurveDocument document);
+  ModelingCommandResult begin_curve_document_preview(int modeling_object_id);
+  ModelingCommandResult
+  update_curve_document_preview(modeling::CurveDocument document);
+  ModelingCommandResult commit_curve_document_preview();
+  ModelingCommandResult cancel_curve_document_preview();
+  [[nodiscard]] bool curve_document_preview_active() const;
   ModelingCommandResult replace_mesh_document(
       int modeling_object_id, quader_poly::Document document);
   ModelingLinearArrayResult

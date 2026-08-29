@@ -360,6 +360,7 @@ inline constexpr QuaderCommandId kToolsActivateLinearArray{
     "tools.activate.linear_array"};
 inline constexpr QuaderCommandId kToolsActivateRadialArray{
     "tools.activate.radial_array"};
+inline constexpr QuaderCommandId kToolsActivateCurve{"tools.activate.curve"};
 
 inline constexpr QuaderCommandId kTypedCommandIds[] = {
     kEditUndo,
@@ -554,6 +555,7 @@ inline constexpr QuaderCommandId kTypedCommandIds[] = {
     kToolsActivatePivot,
     kToolsActivateLinearArray,
     kToolsActivateRadialArray,
+    kToolsActivateCurve,
 };
 
 [[nodiscard]] inline constexpr std::span<const QuaderCommandId>

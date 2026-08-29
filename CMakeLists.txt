@@ -246,6 +246,7 @@ add_library(quader_modeling STATIC
     src/editor/projection/tool_preview_mesh_projection.cpp
     src/editor/selection/scene_selection_application.cpp
     src/editor/selection/selection_projection_service.cpp
+    src/editor/modeling/picking/curve_picking_cache.cpp
     src/editor/modeling/runtime/modeling_object_runtime_map.cpp
     src/editor/modeling/services/modeling_action_catalog.cpp
     src/editor/modeling/services/modeling_hierarchy_duplicate_service.cpp
@@ -304,6 +305,7 @@ target_link_libraries(quader_core_utilities PUBLIC spdlog::spdlog)
 
 add_library(quader_assets STATIC
     src/assets/asset_registry.cpp
+    src/assets/curve_asset_payload.cpp
     src/assets/bake_service.cpp
     src/assets/material_document.cpp
     src/assets/mesh_wire_geometry.cpp
@@ -314,7 +316,7 @@ quader_configure_core_module(quader_assets)
 target_include_directories(quader_assets
     PRIVATE "${QUADER_MODELING_SDK_NEUTRAL_INCLUDE_DIR}")
 target_link_libraries(quader_assets
-    PUBLIC quader_core_utilities
+    PUBLIC quader_core_utilities quader_modeling_sdk_curves
     PRIVATE stduuid)
 
 add_library(quader_mesh_io STATIC
@@ -343,6 +345,7 @@ add_library(quader_editor_services STATIC
     ${QUADER_EDITOR_VIEWPORT_TOOL_SOURCES}
     src/editor/array/linear_array_tool_service.cpp
     src/editor/array/radial_array_tool_service.cpp
+    src/editor/curve/curve_tool_service.cpp
     src/editor/commands/asset_command_service.cpp
     src/editor/commands/document_command_service.cpp
     src/editor/commands/editor_command_registry.cpp
@@ -728,6 +731,7 @@ add_library(quader_render STATIC
     src/render/mesh_surface_grid_projection.cpp
     src/render/png_texture_loader.cpp
     src/render/overlay/overlay_camera_projector.cpp
+    src/render/overlay/curve_tool_overlay_cache.cpp
     src/render/overlay/overlay_face_fill_builder.cpp
     src/render/overlay/overlay_line_mesh_builder.cpp
     src/render/overlay/overlay_point_mesh_builder.cpp
@@ -814,6 +818,7 @@ add_library(quader_editor_viewport STATIC
     src/editor/viewport/viewport_interaction_controller.cpp
     src/editor/viewport/viewport_native_tool_interaction.cpp
     src/editor/viewport/viewport_selection_interaction.cpp
+    src/editor/viewport/viewport_curve_picking.cpp
 )
 
 quader_enable_common_pch(quader_editor_viewport)
@@ -951,6 +956,12 @@ if(QUADER_BUILD_PERFORMANCE_BENCHMARKS)
     quader_enable_common_pch(qdr_snap_to_floor_performance)
     target_compile_features(qdr_snap_to_floor_performance PRIVATE cxx_std_20)
     target_link_libraries(qdr_snap_to_floor_performance PRIVATE quader_runtime)
+
+    add_executable(qdr_curve_viewport_performance
+        benchmarks/modeling/qdr_curve_viewport_performance.cpp)
+    quader_enable_common_pch(qdr_curve_viewport_performance)
+    target_compile_features(qdr_curve_viewport_performance PRIVATE cxx_std_20)
+    target_link_libraries(qdr_curve_viewport_performance PRIVATE quader_runtime)
 endif()
 
 if(QUADER_ENABLE_SENTRY AND WIN32)
@@ -1370,6 +1381,8 @@ if(QUADER_BUILD_TESTS)
         tests/app_frame_clock_tests.cpp
         tests/command_behavior_contract_tests.cpp
         tests/core_tests.cpp
+        tests/curve_modeling_behavior_tests.cpp
+        tests/curve_tool_service_tests.cpp
         tests/fatal_error_handler_behavior_tests.cpp
         tests/linear_array_tests.cpp
         tests/local_stress_tests.cpp

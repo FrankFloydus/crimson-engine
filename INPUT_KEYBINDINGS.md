@@ -323,6 +323,34 @@ UV Peel (`modeling.uv_peel`) is a bindable Edge-scoped command. It is
 deliberately unassigned by default; the retained UV Peel section invokes the
 same public modeling action and does not install a private Qt shortcut.
 
+Curve (`tools.activate.curve`) is deliberately unassigned by default and is
+available from the Tools menu and toolbar. Its drawing/editing gesture uses the
+existing semantic viewport pointer frame and shared snapping service. Space uses
+the common Finalize Tool action; Escape uses Cancel Tool. Navigation and text
+input suppress drawing and handle edits. There is no additional curve selection
+mode or private Qt shortcut.
+Focus or capture loss supplies a separate `pointer_interaction_canceled` edge,
+even when Qt also synthesizes a release. Curve control drags roll back on that
+edge or a camera/view change, including wheel zoom; the idle Curve tool stays active.
+
+While Curve is active, or while one Curve is selected for control editing in
+Mesh/Object mode, `Alt+LeftMouse` (press) invokes
+`viewport.curve.toggle_point_smoothness`, shown as Toggle Curve Point Corner / Smooth
+in the `viewport.tool.curve` scope. Only an existing anchor is converted: nonzero
+handles collapse to a corner; a corner receives aligned handles along its neighboring
+chord bisector, with one third of each chord's length. Open endpoints mirror their
+one available side. Coincident sides keep zero length; an isolated or fully coincident
+corner is unchanged. Anchor positions, point IDs, and segment IDs remain unchanged.
+Draft conversions stay in the transient draft; each changed conversion on an existing
+curve is one undo item. The semantic action is inactive without an exposed Curve control
+layer, during text input,
+navigation, transform drags, and operation previews. It does not invoke face texture
+transfer, add a point, or begin a handle drag. Rebinding/unassignment use the canonical
+catalog. A rebound left click/double-click reserves its constituent press and must still
+hit the originally pressed anchor in the same authored document before converting it.
+Held/released frames do not repeat a conversion; focus/capture loss and navigation cancel
+deferred conversion gestures.
+
 ## Testing Requirements
 
 Input changes need fast synthetic coverage. Prefer headless tests over manual clicking whenever

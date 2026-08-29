@@ -43,6 +43,7 @@ struct DocumentEntitySnapshot {
   bool instance_definition = false;
   std::optional<InstanceOccurrenceComponent> instance_occurrence;
   std::optional<MeshComponent> mesh;
+  std::optional<CurveComponent> curve;
   std::optional<MaterialComponent> material;
   std::optional<TextureMappingComponent> texture_mapping;
   std::optional<LightComponent> light;
@@ -166,6 +167,9 @@ document_command_capture_entity_snapshot(const SceneDocument &scene,
   if (const MeshComponent *component = scene.mesh(entity)) {
     snapshot.mesh = *component;
   }
+  if (const CurveComponent *component = scene.curve(entity)) {
+    snapshot.curve = *component;
+  }
   if (const MaterialComponent *component = scene.material(entity)) {
     snapshot.material = *component;
   }
@@ -203,6 +207,9 @@ inline void document_command_apply_entity_snapshot_components(
   }
   if (snapshot.mesh.has_value()) {
     scene.set_mesh(entity, *snapshot.mesh);
+  }
+  if (snapshot.curve.has_value()) {
+    scene.set_curve(entity, *snapshot.curve);
   }
   if (snapshot.material.has_value()) {
     scene.set_material(entity, *snapshot.material);

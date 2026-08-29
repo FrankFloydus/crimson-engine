@@ -10,6 +10,8 @@
 #include "scene/scene_hierarchy_visibility.hpp"
 #include "scene/scene_transform.hpp"
 
+#include <quader/modeling/curves/curve_document.hpp>
+
 #include <algorithm>
 #include <array>
 
@@ -145,6 +147,42 @@ std::optional<SceneBounds> local_mesh_bounds(const MeshAsset &mesh) {
   return bounds;
 }
 
+std::optional<SceneBounds> local_curve_bounds(const CurveAsset &curve) {
+  if (!curve.document) {
+    return std::nullopt;
+  }
+  const modeling::CurveBounds bounds = curve.document->bounds();
+  if (!bounds.valid) {
+    return std::nullopt;
+  }
+  return SceneBounds{.min = {bounds.min.x, bounds.min.y, bounds.min.z},
+                     .max = {bounds.max.x, bounds.max.y, bounds.max.z}};
+}
+
+std::optional<SceneBounds> curve_world_bounds(
+    const CurveAsset &curve, const QMat4 &world_from_local) {
+  if (!curve.document) {
+    return std::nullopt;
+  }
+  const auto &m = world_from_local.values;
+  modeling::CurveDocument transformed = *curve.document;
+  const auto applied = transformed.transform(modeling::Transform3{
+      .x_axis = {m[0], m[1], m[2]},
+      .y_axis = {m[4], m[5], m[6]},
+      .z_axis = {m[8], m[9], m[10]},
+      .origin = {m[12], m[13], m[14]},
+  });
+  if (!applied.ok()) {
+    return std::nullopt;
+  }
+  const modeling::CurveBounds bounds = transformed.bounds();
+  if (!bounds.valid) {
+    return std::nullopt;
+  }
+  return SceneBounds{.min = {bounds.min.x, bounds.min.y, bounds.min.z},
+                     .max = {bounds.max.x, bounds.max.y, bounds.max.z}};
+}
+
 std::optional<SceneBounds> mesh_world_bounds(
     const MeshAsset &mesh, const QMat4 &world_from_local) {
   return transformed_mesh_geometry_bounds(mesh, world_from_local, nullptr);
@@ -213,6 +251,15 @@ std::optional<SceneBounds> entity_world_bounds(const SceneDocument &document,
     }
   }
 
+  if (const CurveComponent *component = document.curve(entity)) {
+    if (const CurveAsset *curve = assets.curve(component->curve)) {
+      if (const std::optional<SceneBounds> bounds = curve_world_bounds(
+              *curve, document.world_transform_matrix(entity))) {
+        return bounds;
+      }
+    }
+  }
+
   const QVec3 world_position =
       transform_point(document.world_transform_matrix(entity), {});
   return SceneBounds{.min = world_position, .max = world_position};
@@ -242,6 +289,7 @@ entity_hierarchy_world_bounds(const SceneDocument &document,
       continue;
     }
     if (document.mesh(descendant) != nullptr ||
+        document.curve(descendant) != nullptr ||
         document.instance_occurrence(descendant) != nullptr) {
       if (const std::optional<SceneBounds> bounds =
               entity_world_bounds(document, assets, descendant)) {

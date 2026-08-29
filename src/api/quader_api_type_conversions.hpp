@@ -27,6 +27,8 @@ inline EntityKind to_scene_entity_kind(QuaderEntityKind kind) {
     return EntityKind::Light;
   case QuaderEntityKind::Instance:
     return EntityKind::Instance;
+  case QuaderEntityKind::Curve:
+    return EntityKind::Curve;
   case QuaderEntityKind::Generic:
     return EntityKind::Generic;
   }
@@ -43,6 +45,8 @@ inline QuaderEntityKind to_api_entity_kind(EntityKind kind) {
     return QuaderEntityKind::Light;
   case EntityKind::Instance:
     return QuaderEntityKind::Instance;
+  case EntityKind::Curve:
+    return QuaderEntityKind::Curve;
   case EntityKind::Generic:
     return QuaderEntityKind::Generic;
   }

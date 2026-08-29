@@ -21,6 +21,7 @@
 namespace quader {
 
 class AssetCommandService;
+class CurveToolService;
 class EditorSelectionService;
 class LinearArrayToolService;
 class ModelingSessionService;
@@ -107,6 +108,8 @@ public:
   const LinearArrayToolService &linear_array() const { return *linear_array_; }
   RadialArrayToolService &radial_array() { return *radial_array_; }
   const RadialArrayToolService &radial_array() const { return *radial_array_; }
+  CurveToolService &curve() { return *curve_; }
+  const CurveToolService &curve() const { return *curve_; }
   PrimitiveCreationToolService &primitive_creation() {
     return *primitive_creation_;
   }
@@ -190,6 +193,7 @@ private:
   std::unique_ptr<PivotToolService> pivot_;
   std::unique_ptr<LinearArrayToolService> linear_array_;
   std::unique_ptr<RadialArrayToolService> radial_array_;
+  std::unique_ptr<CurveToolService> curve_;
   std::unique_ptr<PrimitiveCreationToolService> primitive_creation_;
   std::unique_ptr<ViewportPointPlacementService> point_placement_;
   std::unique_ptr<NativeViewportToolCoordinator> native_tools_;

@@ -8,6 +8,7 @@
 #include "assets/mesh_asset_payload.hpp"
 
 #include <quader/modeling/neutral/polygon/document_texture.hpp>
+#include <quader/modeling/curves/curve_document.hpp>
 
 #include <algorithm>
 #include <cassert>
@@ -28,7 +29,8 @@ AssetRegistry::AssetRegistry(const AssetRegistry &other)
       meshes_(other.meshes_), deferred_meshes_(other.deferred_meshes_),
       mesh_geometry_pool_(other.mesh_geometry_pool_),
       authored_topology_pool_(other.authored_topology_pool_),
-      materials_(other.materials_), textures_(other.textures_),
+      materials_(other.materials_), curves_(other.curves_),
+      textures_(other.textures_),
       owner_thread_(std::this_thread::get_id()) {}
 
 AssetRegistry &AssetRegistry::operator=(const AssetRegistry &other) {
@@ -45,6 +47,7 @@ AssetRegistry &AssetRegistry::operator=(const AssetRegistry &other) {
   mesh_geometry_pool_ = other.mesh_geometry_pool_;
   authored_topology_pool_ = other.authored_topology_pool_;
   materials_ = other.materials_;
+  curves_ = other.curves_;
   textures_ = other.textures_;
   owner_thread_ = std::this_thread::get_id();
   return *this;
@@ -59,6 +62,7 @@ AssetRegistry::AssetRegistry(AssetRegistry &&other) noexcept
       mesh_geometry_pool_(std::move(other.mesh_geometry_pool_)),
       authored_topology_pool_(std::move(other.authored_topology_pool_)),
       materials_(std::move(other.materials_)),
+      curves_(std::move(other.curves_)),
       textures_(std::move(other.textures_)),
       owner_thread_(std::this_thread::get_id()) {}
 
@@ -75,6 +79,7 @@ AssetRegistry &AssetRegistry::operator=(AssetRegistry &&other) noexcept {
   mesh_geometry_pool_ = std::move(other.mesh_geometry_pool_);
   authored_topology_pool_ = std::move(other.authored_topology_pool_);
   materials_ = std::move(other.materials_);
+  curves_ = std::move(other.curves_);
   textures_ = std::move(other.textures_);
   owner_thread_ = std::this_thread::get_id();
   return *this;
@@ -103,6 +108,29 @@ bool AssetRegistry::restore_projection_checkpoint(
     return false;
   }
   *this = *checkpoint.snapshot_;
+  return true;
+}
+
+CurveAssetProjectionCheckpoint
+AssetRegistry::capture_curve_projection_checkpoint() const {
+  assert_owner_thread();
+  CurveAssetProjectionCheckpoint checkpoint;
+  checkpoint.valid_ = true;
+  checkpoint.next_id_ = next_id_;
+  checkpoint.revision_ = revision_;
+  checkpoint.curves_ = curves_;
+  return checkpoint;
+}
+
+bool AssetRegistry::restore_curve_projection_checkpoint(
+    const CurveAssetProjectionCheckpoint &checkpoint) {
+  assert_owner_thread();
+  if (!checkpoint.valid()) {
+    return false;
+  }
+  next_id_ = checkpoint.next_id_;
+  revision_ = checkpoint.revision_;
+  curves_ = checkpoint.curves_;
   return true;
 }
 
@@ -152,6 +180,84 @@ AssetId AssetRegistry::add_mesh(AssetId id, MeshAsset mesh) {
   meshes_.add(id, std::move(mesh));
   mark_mesh_material_usage_dirty();
   return id;
+}
+
+AssetId AssetRegistry::add_curve(CurveAsset curve) {
+  assert_owner_thread();
+  if (next_id_ == kInvalidAssetId) {
+    return kInvalidAssetId;
+  }
+  const AssetId id = next_id_;
+  return add_curve(id, std::move(curve));
+}
+
+AssetId AssetRegistry::add_curve(AssetId id, CurveAsset curve) {
+  assert_owner_thread();
+  if (id == kInvalidAssetId) {
+    return add_curve(std::move(curve));
+  }
+  if (curves_.contains(id) || !validate_curve(curve).ok) {
+    return kInvalidAssetId;
+  }
+  // Pin an independent wrapper: a caller may retain a mutable CurveDocument
+  // alias, while the authored storage itself remains shared and immutable.
+  curve.document =
+      std::make_shared<const modeling::CurveDocument>(*curve.document);
+  if (curves_.add(id, std::move(curve)) == kInvalidAssetId) {
+    return kInvalidAssetId;
+  }
+  next_id_ = std::max(next_id_, id + 1u);
+  mark_dirty();
+  return id;
+}
+
+bool AssetRegistry::remove_curve(AssetId id) {
+  assert_owner_thread();
+  if (!curves_.remove(id)) {
+    return false;
+  }
+  mark_dirty();
+  return true;
+}
+
+bool AssetRegistry::replace_curve(AssetId id, CurveAsset curve) {
+  assert_owner_thread();
+  if (!curves_.contains(id) || !validate_curve(curve).ok) {
+    return false;
+  }
+  curve.document =
+      std::make_shared<const modeling::CurveDocument>(*curve.document);
+  if (!curves_.replace(id, std::move(curve))) {
+    return false;
+  }
+  mark_dirty();
+  return true;
+}
+
+AssetRegistryValidationResult
+AssetRegistry::validate_curve(const CurveAsset &curve) const {
+  if (!curve.document) {
+    return {.ok = false, .message = "Curve asset has no authored document."};
+  }
+  if (curve.document->point_count() < 2u) {
+    return {.ok = false,
+            .message = "A published curve requires at least two anchors."};
+  }
+  const auto validation = curve.document->validate();
+  if (!validation.ok()) {
+    return {.ok = false, .message = validation.error().message};
+  }
+  return {};
+}
+
+const CurveAsset *AssetRegistry::curve(AssetId id) const {
+  return curves_.get(id);
+}
+
+bool AssetRegistry::has_curve(AssetId id) const { return curves_.contains(id); }
+
+CurveAssetRevision AssetRegistry::curve_revision(AssetId id) const {
+  return curves_.revision(id);
 }
 
 AssetId AssetRegistry::add_mesh_payload_alias(
@@ -772,6 +878,7 @@ void AssetRegistry::advance_revision_for_replacement(
     std::uint64_t previous_revision) {
   assert_owner_thread();
   meshes_.restamp_after(MeshAssetRevision{previous_revision});
+  curves_.restamp_after(CurveAssetRevision{previous_revision});
   materials_.restamp_after(MaterialAssetRevision{previous_revision});
   textures_.restamp_after(TextureAssetRevision{previous_revision});
   revision_ = std::max(revision_, previous_revision) + 1u;

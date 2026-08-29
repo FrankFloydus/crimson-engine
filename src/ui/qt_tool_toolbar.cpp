@@ -14,6 +14,9 @@
 #include <QAction>
 #include <QActionGroup>
 #include <QIcon>
+#include <QPainter>
+#include <QPainterPath>
+#include <QPixmap>
 #include <QSignalBlocker>
 #include <QSize>
 #include <QStyle>
@@ -33,7 +36,7 @@ struct ToolIconSpec {
   bool separator_before = false;
 };
 
-constexpr std::array<ToolIconSpec, 14> kToolIconSpecs{{
+constexpr std::array<ToolIconSpec, 15> kToolIconSpecs{{
     {ViewportToolId::Select, ":/quader/icons/tool_select.png"},
     {ViewportToolId::Move, ":/quader/icons/tool_move.png"},
     {ViewportToolId::Rotate, ":/quader/icons/tool_rotate.png"},
@@ -50,7 +53,31 @@ constexpr std::array<ToolIconSpec, 14> kToolIconSpecs{{
     {ViewportToolId::Mirror, ":/quader/icons/tool_mirror.png"},
     {ViewportToolId::LinearArray, ":/quader/icons/tool_linear_array.png"},
     {ViewportToolId::RadialArray, ":/quader/icons/tool_radial_array.png"},
+    {ViewportToolId::Curve, nullptr},
 }};
+
+// Keep the small curve glyph scalable and palette-aware without a bitmap asset.
+QIcon curve_tool_icon(const QPalette &palette) {
+  QPixmap pixmap(64, 64);
+  pixmap.fill(Qt::transparent);
+  QPainter painter(&pixmap);
+  painter.setRenderHint(QPainter::Antialiasing);
+  painter.setPen(QPen(palette.color(QPalette::Mid), 2.0));
+  painter.drawLine(QPointF(10, 48), QPointF(16, 12));
+  painter.drawLine(QPointF(48, 52), QPointF(54, 16));
+  QPainterPath path(QPointF(10, 48));
+  path.cubicTo(16, 12, 48, 52, 54, 16);
+  painter.setPen(QPen(palette.color(QPalette::ButtonText), 3.5));
+  painter.drawPath(path);
+  painter.setBrush(palette.color(QPalette::Button));
+  painter.drawRect(QRectF(6, 44, 8, 8));
+  painter.drawRect(QRectF(50, 12, 8, 8));
+  painter.setBrush(palette.color(QPalette::Highlight));
+  painter.setPen(Qt::NoPen);
+  painter.drawEllipse(QPointF(16, 12), 3.5, 3.5);
+  painter.drawEllipse(QPointF(48, 52), 3.5, 3.5);
+  return QIcon(pixmap);
+}
 
 QString localized_tool_text(const LocalizationService &localization,
                             std::string_view tool_id,
@@ -81,7 +108,10 @@ QtToolToolbar::QtToolToolbar(QWidget *parent) : QToolBar(parent) {
     }
     const std::string_view tool_id = viewport_tool_catalog_id(spec.tool);
     const std::string_view fallback = viewport_tool_label(spec.tool);
-    QAction *action = addAction(QIcon(QString::fromUtf8(spec.icon_path)),
+    const QIcon icon = spec.tool == ViewportToolId::Curve
+                           ? curve_tool_icon(palette())
+                           : QIcon(QString::fromUtf8(spec.icon_path));
+    QAction *action = addAction(icon,
                                 QString::fromUtf8(fallback.data()));
     action->setObjectName(
         QStringLiteral("tool_%1").arg(QString::fromUtf8(tool_id.data())));

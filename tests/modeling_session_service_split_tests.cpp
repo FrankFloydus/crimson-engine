@@ -4,6 +4,9 @@
 // No permission is granted to use, copy, modify, distribute, or sublicense this
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
+#include "api/quader_api_session_internal_access.hpp"
+#include "editor/session/scene_session.hpp"
+#include "support/curve_modeling_test_support.hpp"
 #include "assets/asset_registry.hpp"
 #include "assets/mesh_asset_payload.hpp"
 #include "editor/commands/modeling/scene_aware_delete_selection_command.hpp"
@@ -24,6 +27,8 @@
 
 #include <algorithm>
 #include <array>
+#include <bit>
+#include <cstdint>
 #include <limits>
 #include <memory>
 #include <optional>
@@ -3409,6 +3414,679 @@ TEST(ModelingSessionServiceSplitTests,
   EXPECT_EQ(assets.mesh(shared_mesh)->authored_polygon_document, before_first);
   EXPECT_EQ(service.uv_peel_settings().selected_edge_count, 2u);
 }
+
+
+namespace curve_projection {
+
+using namespace quader::test::curve;
+
+std::uint64_t overlay_frame_fingerprint(const ViewportOverlayFrame &frame) {
+  std::uint64_t hash = 1469598103934665603ULL;
+  const auto mix = [&hash](std::uint64_t value) {
+    hash ^= value;
+    hash *= 1099511628211ULL;
+  };
+  const auto mix_float = [&mix](float value) {
+    mix(std::bit_cast<std::uint32_t>(value));
+  };
+  const auto mix_vec3 = [&mix_float](QVec3 value) {
+    mix_float(value.x);
+    mix_float(value.y);
+    mix_float(value.z);
+  };
+  const auto mix_element = [&mix](const ViewportOverlayElementRef &element) {
+    mix(static_cast<std::uint32_t>(element.object_id));
+    mix(static_cast<std::uint32_t>(element.vertex_id));
+    mix(static_cast<std::uint32_t>(element.edge_a));
+    mix(static_cast<std::uint32_t>(element.edge_b));
+    mix(static_cast<std::uint32_t>(element.face_id));
+  };
+
+  mix(frame.lines.size());
+  for (const ViewportOverlayLine &line : frame.lines) {
+    mix(static_cast<std::uint64_t>(line.layer));
+    mix_vec3(line.start);
+    mix_vec3(line.end);
+    mix(line.color);
+    mix_float(line.width_pixels);
+    mix(static_cast<std::uint64_t>(line.style_role));
+    mix(static_cast<std::uint64_t>(line.source));
+    mix_element(line.element);
+  }
+  mix(frame.triangles.size());
+  for (const ViewportOverlayTriangle &triangle : frame.triangles) {
+    mix(static_cast<std::uint64_t>(triangle.layer));
+    mix_vec3(triangle.a);
+    mix_vec3(triangle.b);
+    mix_vec3(triangle.c);
+    mix(triangle.color);
+    mix(static_cast<std::uint64_t>(triangle.style_role));
+    mix(static_cast<std::uint64_t>(triangle.source));
+    mix_element(triangle.element);
+  }
+  mix(frame.points.size());
+  for (const ViewportOverlayPoint &point : frame.points) {
+    mix(static_cast<std::uint64_t>(point.layer));
+    mix_vec3(point.position);
+    mix(point.color);
+    mix_float(point.size_pixels);
+    mix(static_cast<std::uint64_t>(point.style_role));
+    mix(static_cast<std::uint64_t>(point.source));
+    mix_element(point.element);
+    mix(point.outline_growth_pixels.has_value());
+    if (point.outline_growth_pixels.has_value()) {
+      mix_float(*point.outline_growth_pixels);
+    }
+  }
+  mix(frame.icons.size());
+  for (const ViewportOverlayIcon &icon : frame.icons) {
+    mix(static_cast<std::uint64_t>(icon.layer));
+    mix(static_cast<std::uint64_t>(icon.kind));
+    mix_vec3(icon.position);
+    mix(icon.color);
+    mix_float(icon.size_pixels);
+    mix(static_cast<std::uint64_t>(icon.source));
+    mix_element(icon.element);
+  }
+  mix(frame.hover_target_selected);
+  return hash;
+}
+
+/// Exercises native publication checkpoints, retained asset revisions, workspace
+/// hydration and out-of-band scene changes. Ordinary edit intent still uses the
+/// public API; only native boundary injection and inspection bypass that facade.
+class CurveModelingProjectionTests : public testing::Test {
+protected:
+  CurveModelingProjectionTests()
+      : api_session_(QuaderApiSessionInternalAccess::from_scene_session(session_)),
+        editor_(api_session_) {}
+
+  void inject(ModelingSdkProjectionFailurePoint point) {
+    session_.modeling().set_modeling_sdk_projection_failure_for_tests(point);
+  }
+
+  SceneSession session_;
+  QuaderApiSession api_session_;
+  QuaderEditorApi editor_;
+};
+
+TEST_F(CurveModelingProjectionTests,
+       CancelPreviewRestoresExactProjectionRevisionsAndKeepsRedo) {
+  const auto curve = create_curve(editor_);
+  const auto original = read_curve(editor_, curve);
+  const auto edited = with_middle_height(original, 3.0F);
+  ASSERT_TRUE(editor_.modeling().replace_curve(curve, edited).ok());
+  ASSERT_TRUE(editor_.history().undo().ok());
+  const auto revisions = editor_.revisions();
+  const auto history = editor_.query().history();
+  ASSERT_TRUE(history.can_redo);
+  const auto identity = editor_.query().entity(curve.entity);
+  ASSERT_TRUE(identity.has_value());
+  const auto asset_revision = session_.assets().curve_revision(identity->curve);
+  const auto publication = read_curve(editor_, curve).content_identity();
+
+  ASSERT_TRUE(editor_.modeling().begin_curve_preview(curve).ok());
+  ASSERT_TRUE(editor_.modeling().update_curve_preview(
+      with_middle_height(original, 7.0F)).ok());
+  ASSERT_TRUE(editor_.modeling().cancel_curve_preview().ok());
+  expect_curve(editor_, curve, original);
+  EXPECT_EQ(read_curve(editor_, curve).content_identity(), publication);
+  EXPECT_EQ(session_.assets().curve_revision(identity->curve), asset_revision);
+  expect_same_revisions(editor_.revisions(), revisions);
+  expect_same_history(editor_.query().history(), history);
+  ASSERT_TRUE(editor_.history().redo().ok());
+  expect_curve(editor_, curve, edited);
+}
+
+TEST_F(CurveModelingProjectionTests,
+       CreationFailureBoundariesRestoreSceneAssetsSelectionAndRedo) {
+  const auto mesh = create_box(editor_);
+  ASSERT_TRUE(editor_.scene().rename(mesh.entity, "Renamed Companion").ok());
+  ASSERT_TRUE(editor_.history().undo().ok());
+  constexpr std::array failures{
+      ModelingSdkProjectionFailurePoint::AfterSdkMutation,
+      ModelingSdkProjectionFailurePoint::AfterAssetInstall,
+      ModelingSdkProjectionFailurePoint::AfterEntityCreate,
+      ModelingSdkProjectionFailurePoint::AfterSceneBinding,
+      ModelingSdkProjectionFailurePoint::AfterSelection,
+      ModelingSdkProjectionFailurePoint::BeforeCommit};
+  const auto revisions = editor_.revisions();
+  const auto history = editor_.query().history();
+  const auto entities = session_.scene().entities();
+  const auto selected = session_.scene().selected_entities();
+  const auto active = session_.scene().primary_selection();
+  const auto scene_selection_revision = session_.scene().selection_revision();
+  const auto asset_counts = editor_.query().assets();
+  ASSERT_TRUE(history.can_redo);
+  for (const auto point : failures) {
+    SCOPED_TRACE(static_cast<int>(point));
+    inject(point);
+    const auto failed = editor_.modeling().create_curve(example_curve_args());
+    EXPECT_FALSE(failed.ok());
+    EXPECT_FALSE(failed.changed());
+    inject(ModelingSdkProjectionFailurePoint::None);
+    expect_same_revisions(editor_.revisions(), revisions);
+    expect_same_history(editor_.query().history(), history);
+    EXPECT_EQ(session_.scene().entities(), entities);
+    EXPECT_EQ(session_.scene().selected_entities(), selected);
+    EXPECT_EQ(session_.scene().primary_selection(), active);
+    EXPECT_EQ(session_.scene().selection_revision(), scene_selection_revision);
+    EXPECT_EQ(editor_.query().assets().curve_count, asset_counts.curve_count);
+    EXPECT_EQ(editor_.query().assets().mesh_count, asset_counts.mesh_count);
+    EXPECT_EQ(editor_.query().modeling_objects().size(), 1U);
+  }
+  const auto retry = editor_.modeling().create_curve(example_curve_args());
+  ASSERT_TRUE(retry.ok()) << retry.error_message();
+  EXPECT_EQ(editor_.query().modeling_objects().size(), 2U);
+}
+
+TEST_F(CurveModelingProjectionTests,
+       ReplacementFailureBoundariesRestoreAuthoredAndProjectedCurve) {
+  const auto curve = create_curve(editor_);
+  const auto original = read_curve(editor_, curve);
+  ASSERT_TRUE(editor_.modeling().set_curve_closed(curve, true).ok());
+  ASSERT_TRUE(editor_.history().undo().ok());
+  // Closing and undoing retires a segment ID. Build the candidate from a fresh
+  // snapshot so fault injection reaches publication, not the stale-ID guard.
+  const auto edited = with_middle_height(read_curve(editor_, curve), 4.0F);
+  const auto revisions = editor_.revisions();
+  const auto history = editor_.query().history();
+  const auto identity = editor_.query().entity(curve.entity);
+  ASSERT_TRUE(identity.has_value());
+  const auto asset_revision = session_.assets().curve_revision(identity->curve);
+  constexpr std::array failures{
+      ModelingSdkProjectionFailurePoint::AfterSdkMutation,
+      ModelingSdkProjectionFailurePoint::CommittedAssetReplace,
+      ModelingSdkProjectionFailurePoint::CommittedSceneNotify,
+      ModelingSdkProjectionFailurePoint::BeforeCommit};
+  for (const auto point : failures) {
+    SCOPED_TRACE(static_cast<int>(point));
+    inject(point);
+    const auto failed = editor_.modeling().replace_curve(curve, edited);
+    EXPECT_FALSE(failed.ok());
+    EXPECT_FALSE(failed.changed());
+    EXPECT_EQ(failed.error_message(), "Curve projection could not be published.");
+    inject(ModelingSdkProjectionFailurePoint::None);
+    expect_curve(editor_, curve, original);
+    expect_same_revisions(editor_.revisions(), revisions);
+    expect_same_history(editor_.query().history(), history);
+    EXPECT_EQ(session_.assets().curve_revision(identity->curve), asset_revision);
+    const auto *projected = session_.assets().curve(identity->curve);
+    ASSERT_NE(projected, nullptr);
+    ASSERT_NE(projected->document, nullptr);
+    EXPECT_TRUE(projected->document->has_same_geometry(original));
+  }
+  const auto retry = editor_.modeling().replace_curve(curve, edited);
+  ASSERT_TRUE(retry.ok()) << retry.error_message();
+  expect_curve(editor_, curve, edited);
+}
+
+TEST_F(CurveModelingProjectionTests,
+       PreviewBeginAndUpdateFailuresRemainAtomicAndRetryable) {
+  const auto curve = create_curve(editor_);
+  const auto original = read_curve(editor_, curve);
+  const auto first = with_middle_height(original, 2.0F);
+  const auto second = with_middle_height(original, 4.0F);
+  const auto original_revisions = editor_.revisions();
+  inject(ModelingSdkProjectionFailurePoint::AfterSdkMutation);
+  EXPECT_FALSE(editor_.modeling().begin_curve_preview(curve).ok());
+  inject(ModelingSdkProjectionFailurePoint::None);
+  expect_same_revisions(editor_.revisions(), original_revisions);
+  ASSERT_TRUE(editor_.modeling().begin_curve_preview(curve).ok());
+  ASSERT_TRUE(editor_.modeling().update_curve_preview(first).ok());
+  const auto revisions = editor_.revisions();
+  const auto history = editor_.query().history();
+  constexpr std::array failures{
+      ModelingSdkProjectionFailurePoint::AfterSdkMutation,
+      ModelingSdkProjectionFailurePoint::PreviewAssetReplace,
+      ModelingSdkProjectionFailurePoint::PreviewSceneNotify};
+  for (const auto point : failures) {
+    SCOPED_TRACE(static_cast<int>(point));
+    inject(point);
+    const auto failed = editor_.modeling().update_curve_preview(second);
+    EXPECT_FALSE(failed.ok());
+    EXPECT_FALSE(failed.changed());
+    inject(ModelingSdkProjectionFailurePoint::None);
+    expect_curve(editor_, curve, first);
+    expect_curve(editor_, curve, original, false);
+    expect_same_revisions(editor_.revisions(), revisions);
+    expect_same_history(editor_.query().history(), history);
+  }
+  ASSERT_TRUE(editor_.modeling().update_curve_preview(second).ok());
+  expect_curve(editor_, curve, second);
+  ASSERT_TRUE(editor_.modeling().cancel_curve_preview().ok());
+  expect_curve(editor_, curve, original);
+  expect_same_revisions(editor_.revisions(), original_revisions);
+}
+
+TEST_F(CurveModelingProjectionTests,
+       PreviewUpdatesCheckpointOnlyCurvesAndRetainMeshSelectionProjection) {
+  const auto mesh = create_box(editor_);
+  const auto curve = create_curve(editor_);
+  const auto mesh_identity = editor_.query().entity(mesh.entity);
+  ASSERT_TRUE(mesh_identity.has_value());
+  const MeshAsset *mesh_asset = session_.assets().mesh(mesh_identity->mesh);
+  ASSERT_NE(mesh_asset, nullptr);
+  const MeshAsset shared_payload = *mesh_asset;
+  constexpr std::size_t kUnrelatedMeshCount = 512U;
+  for (std::size_t index = 0; index < kUnrelatedMeshCount; ++index) {
+    ASSERT_NE(session_.assets().add_mesh(shared_payload), kInvalidAssetId);
+    ASSERT_NE(session_.scene().create_empty("Unrelated"), kInvalidEntityId);
+  }
+
+  const auto original = read_curve(editor_, curve);
+  ASSERT_TRUE(editor_.modeling().begin_curve_preview(curve).ok());
+  const ModelingRay ray{
+      .origin = {0.0F, 0.0F, 10.0F},
+      .direction = {0.0F, 0.0F, -1.0F},
+  };
+  (void)session_.modeling().pick_mesh_surface_distance(ray);
+  const ModelingMeshSnapQueryResult warm_snap =
+      session_.modeling().pick_mesh_snap_query(ray, 2.0, false);
+  ASSERT_TRUE(warm_snap.vertex_target.has_value());
+  ASSERT_TRUE(warm_snap.nearest_surface_ray_distance.has_value());
+  const std::uint64_t mesh_snap_queries_before =
+      session_.modeling().mesh_snap_query_count();
+  const std::uint64_t picking_projections_before =
+      session_.modeling().transformed_picking_projection_build_count();
+  const std::uint64_t picking_bounds_before =
+      session_.modeling().world_pick_bounds_build_count();
+  const std::uint64_t picking_face_geometry_before =
+      session_.modeling().local_face_geometry_build_count();
+  const ModelingSdkProjectionStats before =
+      session_.modeling().modeling_sdk_projection_stats_for_tests();
+
+  ASSERT_TRUE(editor_.modeling().update_curve_preview(
+      with_middle_height(original, 3.0F)).ok());
+  (void)session_.modeling().pick_mesh_surface_distance(ray);
+  const ModelingMeshSnapQueryResult first_snap =
+      session_.modeling().pick_mesh_snap_query(ray, 2.0, false);
+  ASSERT_TRUE(first_snap.vertex_target.has_value());
+  ASSERT_TRUE(first_snap.nearest_surface_ray_distance.has_value());
+  const ModelingSdkProjectionStats after_first =
+      session_.modeling().modeling_sdk_projection_stats_for_tests();
+  EXPECT_EQ(after_first.curve_preview_checkpoint_capture_count,
+            before.curve_preview_checkpoint_capture_count + 1U);
+  EXPECT_EQ(after_first.curve_preview_checkpoint_curve_asset_count,
+            before.curve_preview_checkpoint_curve_asset_count +
+                session_.assets().curve_count());
+  EXPECT_EQ(after_first.curve_preview_shared_binding_scan_count,
+            before.curve_preview_shared_binding_scan_count);
+  EXPECT_EQ(after_first.curve_preview_shared_binding_entity_visit_count,
+            before.curve_preview_shared_binding_entity_visit_count);
+  EXPECT_EQ(after_first.native_selection_projection_build_count,
+            before.native_selection_projection_build_count);
+  EXPECT_EQ(session_.modeling().transformed_picking_projection_build_count(),
+            picking_projections_before);
+  EXPECT_EQ(session_.modeling().world_pick_bounds_build_count(),
+            picking_bounds_before);
+  EXPECT_EQ(session_.modeling().local_face_geometry_build_count(),
+            picking_face_geometry_before);
+  EXPECT_EQ(session_.modeling().mesh_snap_query_count(),
+            mesh_snap_queries_before + 1u);
+
+  ASSERT_TRUE(editor_.modeling().update_curve_preview(
+      with_middle_height(original, 5.0F)).ok());
+  (void)session_.modeling().pick_mesh_surface_distance(ray);
+  const ModelingMeshSnapQueryResult second_snap =
+      session_.modeling().pick_mesh_snap_query(ray, 2.0, false);
+  ASSERT_TRUE(second_snap.vertex_target.has_value());
+  ASSERT_TRUE(second_snap.nearest_surface_ray_distance.has_value());
+  const ModelingSdkProjectionStats after_second =
+      session_.modeling().modeling_sdk_projection_stats_for_tests();
+  EXPECT_EQ(after_second.curve_preview_checkpoint_capture_count,
+            after_first.curve_preview_checkpoint_capture_count + 1U);
+  EXPECT_EQ(after_second.curve_preview_checkpoint_curve_asset_count,
+            after_first.curve_preview_checkpoint_curve_asset_count +
+                session_.assets().curve_count());
+  EXPECT_EQ(after_second.native_selection_projection_build_count,
+            after_first.native_selection_projection_build_count);
+  EXPECT_EQ(session_.modeling().transformed_picking_projection_build_count(),
+            picking_projections_before);
+  EXPECT_EQ(session_.modeling().world_pick_bounds_build_count(),
+            picking_bounds_before);
+  EXPECT_EQ(session_.modeling().local_face_geometry_build_count(),
+            picking_face_geometry_before);
+  EXPECT_EQ(session_.modeling().mesh_snap_query_count(),
+            mesh_snap_queries_before + 2u);
+
+  ASSERT_TRUE(session_.assets().update_mesh(
+      mesh_identity->mesh,
+      [](MeshAsset &asset) { asset.name = "Externally Updated Mesh"; }));
+  (void)session_.modeling().pick_mesh_surface_distance(ray);
+  const ModelingSdkProjectionStats after_mesh =
+      session_.modeling().modeling_sdk_projection_stats_for_tests();
+  EXPECT_EQ(after_mesh.native_selection_projection_build_count,
+            after_second.native_selection_projection_build_count + 1U);
+  ASSERT_TRUE(editor_.modeling().cancel_curve_preview().ok());
+
+  const auto before_selection =
+      session_.modeling().modeling_sdk_projection_stats_for_tests();
+  ASSERT_TRUE(editor_.selection().select_object(mesh).ok());
+  (void)session_.modeling().pick_mesh_surface_distance(ray);
+  const auto after_selection =
+      session_.modeling().modeling_sdk_projection_stats_for_tests();
+  EXPECT_GT(after_selection.native_selection_projection_build_count,
+            before_selection.native_selection_projection_build_count);
+}
+
+TEST_F(CurveModelingProjectionTests,
+       RepeatedCurvePreviewUpdatesRetainPolygonSelectionOverlay) {
+  constexpr std::size_t kMeshCount = 64U;
+  std::vector<QuaderModelingObjectRef> meshes;
+  meshes.reserve(kMeshCount);
+  for (std::size_t index = 0; index < kMeshCount; ++index) {
+    meshes.push_back(create_box(editor_));
+  }
+  const auto curve = create_curve(editor_);
+  const auto original = read_curve(editor_, curve, false);
+  ASSERT_TRUE(editor_.selection().select_object(meshes.front()).ok());
+  ASSERT_TRUE(editor_.modeling().begin_curve_preview(curve).ok());
+
+  const ViewportOverlayFrame baseline =
+      session_.modeling().selection_overlay_frame();
+  ASSERT_FALSE(baseline.lines.empty() && baseline.triangles.empty() &&
+               baseline.points.empty());
+  const std::uint64_t baseline_fingerprint =
+      overlay_frame_fingerprint(baseline);
+  const std::uint64_t baseline_signature =
+      session_.modeling().selection_overlay_signature();
+  const auto baseline_stats =
+      session_.modeling().modeling_sdk_projection_stats_for_tests();
+
+  for (const float height : {2.0F, 3.0F, 4.0F}) {
+    ASSERT_TRUE(editor_.modeling().update_curve_preview(
+        with_middle_height(original, height)).ok());
+    const ViewportOverlayFrame after_preview =
+        session_.modeling().selection_overlay_frame();
+    EXPECT_EQ(overlay_frame_fingerprint(after_preview), baseline_fingerprint);
+    EXPECT_EQ(session_.modeling().selection_overlay_signature(),
+              baseline_signature);
+    EXPECT_EQ(session_.modeling()
+                  .modeling_sdk_projection_stats_for_tests()
+                  .native_selection_projection_build_count,
+              baseline_stats.native_selection_projection_build_count);
+  }
+
+  ASSERT_TRUE(
+      editor_.selection().set_mode(QuaderSelectionMode::Face).ok());
+  const ViewportOverlayFrame after_selection =
+      session_.modeling().selection_overlay_frame();
+  EXPECT_NE(overlay_frame_fingerprint(after_selection), baseline_fingerprint);
+  EXPECT_GT(session_.modeling()
+                .modeling_sdk_projection_stats_for_tests()
+                .native_selection_projection_build_count,
+            baseline_stats.native_selection_projection_build_count);
+  ASSERT_TRUE(editor_.modeling().cancel_curve_preview().ok());
+}
+
+TEST_F(CurveModelingProjectionTests,
+       FailedPreviewCommitKeepsTheCandidateForRetryWithoutHistory) {
+  const auto curve = create_curve(editor_);
+  const auto original = read_curve(editor_, curve);
+  const auto edited = with_middle_height(original, 6.0F);
+  ASSERT_TRUE(editor_.modeling().begin_curve_preview(curve).ok());
+  ASSERT_TRUE(editor_.modeling().update_curve_preview(edited).ok());
+  const auto revisions = editor_.revisions();
+  const auto history = editor_.query().history();
+  inject(ModelingSdkProjectionFailurePoint::BeforeCommit);
+  const auto failed = editor_.modeling().commit_curve_preview();
+  EXPECT_FALSE(failed.ok());
+  EXPECT_FALSE(failed.changed());
+  inject(ModelingSdkProjectionFailurePoint::None);
+  expect_curve(editor_, curve, edited);
+  expect_curve(editor_, curve, original, false);
+  expect_same_revisions(editor_.revisions(), revisions);
+  expect_same_history(editor_.query().history(), history);
+  ASSERT_TRUE(editor_.modeling().commit_curve_preview().ok());
+  expect_curve(editor_, curve, edited, false);
+  ASSERT_TRUE(editor_.history().undo().ok());
+  expect_curve(editor_, curve, original);
+}
+
+TEST_F(CurveModelingProjectionTests,
+       RehydrateFromSceneRetainsBothMeshAndCurveDocumentsAndSelection) {
+  const auto mesh = create_box(editor_);
+  const auto curve = create_curve(editor_);
+  const auto document = read_curve(editor_, curve);
+  const auto mesh_before = editor_.query().compiled_object_mesh(mesh);
+  ASSERT_TRUE(mesh_before.has_value());
+  ASSERT_TRUE(editor_.selection().select_objects({mesh, curve}).ok());
+  const auto selected = session_.scene().selected_entities();
+  const auto active = session_.scene().primary_selection();
+  const auto scene_revision = session_.scene().revision();
+  const auto asset_revision = session_.assets().revision();
+
+  session_.modeling().reset_from_scene();
+
+  EXPECT_EQ(editor_.query().modeling_objects().size(), 2U);
+  EXPECT_EQ(session_.scene().selected_entities(), selected);
+  EXPECT_EQ(session_.scene().primary_selection(), active);
+  EXPECT_EQ(session_.scene().revision(), scene_revision);
+  EXPECT_EQ(session_.assets().revision(), asset_revision);
+  expect_curve(editor_, curve, document);
+  const auto mesh_after = editor_.query().compiled_object_mesh(mesh);
+  ASSERT_TRUE(mesh_after.has_value());
+  expect_same_mesh_geometry(*mesh_after, *mesh_before);
+  ASSERT_TRUE(editor_.modeling().set_curve_closed(curve, true).ok());
+  ASSERT_TRUE(editor_.history().undo().ok());
+  expect_curve(editor_, curve, document);
+  EXPECT_EQ(editor_.query().modeling_objects().size(), 2U);
+}
+
+TEST_F(CurveModelingProjectionTests,
+       ExternalCancelAndSceneRehydrateNeverReusePreviewPointIds) {
+  const auto curve = create_curve(editor_);
+  const auto original = read_curve(editor_, curve, false);
+  ASSERT_TRUE(editor_.modeling().begin_curve_preview(curve).ok());
+  auto preview = editor_.modeling().curve_snapshot(curve);
+  ASSERT_TRUE(preview.ok()) << preview.error_message();
+  ASSERT_TRUE(preview.value().document.append_point(
+      {.position = {6.0F, 0.0F, 0.0F}}).ok());
+  const auto canceled_point = preview.value().document.points().back().id;
+  ASSERT_TRUE(editor_.modeling().update_curve_preview(preview.value().document).ok());
+
+  // Inject another scene owner's transform publication while the curve preview
+  // remains active, forcing cancellation to preserve that external scene edit.
+  const auto *current_transform = session_.scene().transform(curve.entity);
+  ASSERT_NE(current_transform, nullptr);
+  auto moved = *current_transform;
+  moved.position = {3.0F, 2.0F, 1.0F};
+  ASSERT_TRUE(session_.scene().set_transform(curve.entity, moved));
+  ASSERT_TRUE(editor_.modeling().cancel_curve_preview().ok());
+  const auto canceled = read_curve(editor_, curve, false);
+  EXPECT_TRUE(canceled.has_same_geometry(original));
+  EXPECT_GT(canceled.identity_high_water().next_point_index, canceled_point.index);
+
+  session_.modeling().reset_from_scene();
+
+  auto next = editor_.modeling().curve_snapshot(curve, false);
+  ASSERT_TRUE(next.ok()) << next.error_message();
+  EXPECT_TRUE(next.value().document.has_same_geometry(original));
+  ASSERT_TRUE(next.value().document.append_point(
+      {.position = {8.0F, 1.0F, 0.0F}}).ok());
+  const auto next_point = next.value().document.points().back().id;
+  EXPECT_GT(next_point.index, canceled_point.index);
+  const auto replaced = editor_.modeling().replace_curve(curve, next.value().document);
+  ASSERT_TRUE(replaced.ok()) << replaced.error_message();
+  EXPECT_TRUE(replaced.changed());
+  expect_curve(editor_, curve, next.value().document, false);
+  const auto entity = editor_.query().entity(curve.entity);
+  ASSERT_TRUE(entity.has_value());
+  EXPECT_FLOAT_EQ(entity->transform.position.x, 3.0F);
+  EXPECT_FLOAT_EQ(entity->transform.position.y, 2.0F);
+  EXPECT_FLOAT_EQ(entity->transform.position.z, 1.0F);
+}
+
+TEST_F(CurveModelingProjectionTests,
+       CancelAfterExternalDeletionDoesNotResurrectTheCurve) {
+  const auto mesh = create_box(editor_);
+  const auto curve = create_curve(editor_);
+  const auto original = read_curve(editor_, curve);
+  ASSERT_TRUE(editor_.modeling().begin_curve_preview(curve).ok());
+  ASSERT_TRUE(editor_.modeling().update_curve_preview(
+      with_middle_height(original, 4.0F)).ok());
+  // Simulate a different scene owner removing the preview source. Cancellation
+  // must not replay its captured scene checkpoint and resurrect that entity.
+  ASSERT_TRUE(session_.scene().destroy_entity(curve.entity));
+  ASSERT_TRUE(editor_.modeling().cancel_curve_preview().ok());
+  EXPECT_FALSE(editor_.query().entity(curve.entity).has_value());
+  EXPECT_FALSE(editor_.modeling().curve_snapshot(curve).ok());
+  EXPECT_TRUE(editor_.query().entity(mesh.entity).has_value());
+  EXPECT_EQ(editor_.query().modeling_objects().size(), 1U);
+}
+
+TEST_F(CurveModelingProjectionTests,
+       SharedCurvePreviewFailureRestoresOriginalBindingAndProjection) {
+  const auto source = create_curve(editor_);
+  const auto peer = create_curve(editor_);
+  const auto source_entity = editor_.query().entity(source.entity);
+  ASSERT_TRUE(source_entity.has_value());
+  const AssetId shared_asset = source_entity->curve;
+  // Simulate a scene owner assigning the same immutable asset to two editable
+  // curve entities, then reconcile the native bindings with the SDK workspace.
+  ASSERT_TRUE(session_.scene().set_curve(peer.entity, {.curve = shared_asset}));
+  session_.modeling().reset_from_scene();
+  ASSERT_TRUE(editor_.selection().select_object(source).ok());
+  const auto original = read_curve(editor_, source, false);
+  const auto edited = with_middle_height(original, 5.0F);
+  ASSERT_TRUE(editor_.modeling().begin_curve_preview(source).ok());
+  const auto revisions = editor_.revisions();
+  const auto history = editor_.query().history();
+  const auto asset_ids = session_.assets().curve_ids();
+  const auto asset_revision = session_.assets().curve_revision(shared_asset);
+  const auto binding_revision = session_.scene().curve_binding_revision();
+  const auto render_revision = session_.scene().render_component_revision();
+
+  inject(ModelingSdkProjectionFailurePoint::PreviewSceneNotify);
+  const auto failed = editor_.modeling().update_curve_preview(edited);
+  EXPECT_FALSE(failed.ok());
+  EXPECT_FALSE(failed.changed());
+  EXPECT_EQ(failed.error_message(), "Curve preview projection could not be published.");
+  inject(ModelingSdkProjectionFailurePoint::None);
+
+  for (const auto object : {source, peer}) {
+    const auto entity = editor_.query().entity(object.entity);
+    ASSERT_TRUE(entity.has_value());
+    EXPECT_EQ(entity->curve, shared_asset);
+    EXPECT_NE(session_.assets().curve(entity->curve), nullptr);
+    expect_curve(editor_, object, original);
+    expect_curve(editor_, object, original, false);
+  }
+  EXPECT_EQ(session_.assets().curve_ids(), asset_ids);
+  EXPECT_EQ(session_.assets().curve_revision(shared_asset), asset_revision);
+  EXPECT_EQ(session_.scene().curve_binding_revision(), binding_revision);
+  EXPECT_EQ(session_.scene().render_component_revision(), render_revision);
+  expect_same_revisions(editor_.revisions(), revisions);
+  expect_same_history(editor_.query().history(), history);
+  const auto *shared = session_.assets().curve(shared_asset);
+  ASSERT_NE(shared, nullptr);
+  ASSERT_NE(shared->document, nullptr);
+  EXPECT_TRUE(shared->document->has_same_geometry(original));
+}
+
+TEST_F(CurveModelingProjectionTests,
+       SharedCurvePreviewCancelRebindsOriginalAndRemovesPrivateAsset) {
+  const auto source = create_curve(editor_);
+  const auto peer = create_curve(editor_);
+  const auto source_entity = editor_.query().entity(source.entity);
+  ASSERT_TRUE(source_entity.has_value());
+  const AssetId shared_asset = source_entity->curve;
+  ASSERT_TRUE(session_.scene().set_curve(peer.entity, {.curve = shared_asset}));
+  session_.modeling().reset_from_scene();
+  ASSERT_TRUE(editor_.selection().select_object(source).ok());
+  const auto original = read_curve(editor_, source, false);
+  const auto edited = with_middle_height(original, 5.0F);
+  const auto revisions = editor_.revisions();
+  const auto history = editor_.query().history();
+  const auto asset_ids = session_.assets().curve_ids();
+  const auto asset_revision = session_.assets().curve_revision(shared_asset);
+  const auto binding_revision = session_.scene().curve_binding_revision();
+  const auto render_revision = session_.scene().render_component_revision();
+  ASSERT_TRUE(editor_.modeling().begin_curve_preview(source).ok());
+  ASSERT_TRUE(editor_.modeling().update_curve_preview(edited).ok());
+  const auto preview_entity = editor_.query().entity(source.entity);
+  ASSERT_TRUE(preview_entity.has_value());
+  const AssetId private_asset = preview_entity->curve;
+  ASSERT_NE(private_asset, shared_asset);
+  ASSERT_NE(session_.assets().curve(private_asset), nullptr);
+  EXPECT_EQ(session_.assets().curve_count(), asset_ids.size() + 1U);
+  expect_curve(editor_, source, edited);
+  expect_curve(editor_, source, original, false);
+  expect_curve(editor_, peer, original);
+
+  const auto canceled = editor_.modeling().cancel_curve_preview();
+  ASSERT_TRUE(canceled.ok()) << canceled.error_message();
+  for (const auto object : {source, peer}) {
+    const auto entity = editor_.query().entity(object.entity);
+    ASSERT_TRUE(entity.has_value());
+    EXPECT_EQ(entity->curve, shared_asset);
+    EXPECT_NE(session_.assets().curve(entity->curve), nullptr);
+    expect_curve(editor_, object, original, false);
+  }
+  EXPECT_EQ(session_.assets().curve_ids(), asset_ids);
+  EXPECT_FALSE(session_.assets().has_curve(private_asset));
+  EXPECT_EQ(session_.assets().curve_revision(shared_asset), asset_revision);
+  EXPECT_EQ(session_.scene().curve_binding_revision(), binding_revision);
+  EXPECT_EQ(session_.scene().render_component_revision(), render_revision);
+  expect_same_revisions(editor_.revisions(), revisions);
+  expect_same_history(editor_.query().history(), history);
+  const auto *shared = session_.assets().curve(shared_asset);
+  ASSERT_NE(shared, nullptr);
+  ASSERT_NE(shared->document, nullptr);
+  EXPECT_TRUE(shared->document->has_same_geometry(original));
+}
+
+TEST_F(CurveModelingProjectionTests,
+       SharedCurveCommittedFailureRestoresOriginalBindingAndProjection) {
+  const auto source = create_curve(editor_);
+  const auto peer = create_curve(editor_);
+  const auto source_entity = editor_.query().entity(source.entity);
+  ASSERT_TRUE(source_entity.has_value());
+  const AssetId shared_asset = source_entity->curve;
+  ASSERT_TRUE(session_.scene().set_curve(peer.entity, {.curve = shared_asset}));
+  session_.modeling().reset_from_scene();
+  ASSERT_TRUE(editor_.selection().select_object(source).ok());
+  const auto original = read_curve(editor_, source, false);
+  const auto edited = with_middle_height(original, 5.0F);
+  const auto revisions = editor_.revisions();
+  const auto history = editor_.query().history();
+  const auto asset_ids = session_.assets().curve_ids();
+  const auto asset_revision = session_.assets().curve_revision(shared_asset);
+  const auto binding_revision = session_.scene().curve_binding_revision();
+  const auto render_revision = session_.scene().render_component_revision();
+
+  for (const auto point : {ModelingSdkProjectionFailurePoint::CommittedSceneNotify,
+                           ModelingSdkProjectionFailurePoint::BeforeCommit}) {
+    SCOPED_TRACE(static_cast<int>(point));
+    inject(point);
+    const auto failed = editor_.modeling().replace_curve(source, edited);
+    EXPECT_FALSE(failed.ok());
+    EXPECT_FALSE(failed.changed());
+    EXPECT_EQ(failed.error_message(), "Curve projection could not be published.");
+    inject(ModelingSdkProjectionFailurePoint::None);
+
+    for (const auto object : {source, peer}) {
+      const auto entity = editor_.query().entity(object.entity);
+      ASSERT_TRUE(entity.has_value());
+      EXPECT_EQ(entity->curve, shared_asset);
+      EXPECT_NE(session_.assets().curve(entity->curve), nullptr);
+      expect_curve(editor_, object, original, false);
+    }
+    EXPECT_EQ(session_.assets().curve_ids(), asset_ids);
+    EXPECT_EQ(session_.assets().curve_revision(shared_asset), asset_revision);
+    EXPECT_EQ(session_.scene().curve_binding_revision(), binding_revision);
+    EXPECT_EQ(session_.scene().render_component_revision(), render_revision);
+    expect_same_revisions(editor_.revisions(), revisions);
+    expect_same_history(editor_.query().history(), history);
+    const auto *shared = session_.assets().curve(shared_asset);
+    ASSERT_NE(shared, nullptr);
+    ASSERT_NE(shared->document, nullptr);
+    EXPECT_TRUE(shared->document->has_same_geometry(original));
+  }
+}
+
+} // namespace curve_projection
 
 } // namespace
 } // namespace quader

@@ -530,7 +530,8 @@ TEST(ViewportToolGuardrailTests,
                    "const bool pivot_consumed",
                    "const ModelingSelectionSummary hover_selection");
   EXPECT_NE(pivot_input.find("pivot_blocks_gizmo ||"), std::string::npos);
-  EXPECT_NE(pivot_input.find("pivot_consumed)"), std::string::npos);
+  EXPECT_NE(pivot_input.find("pivot_consumed || curve_consumed)"),
+            std::string::npos);
   EXPECT_NE(
       pivot_input.find(
           "ViewportBeforeToolInteractionResult{.gizmo_consumed = true}"),
@@ -1399,6 +1400,212 @@ TEST(ConversionMappingGuardrailTests,
             std::string::npos);
   EXPECT_EQ(transform_drag.find("CommandResult command_result("),
             std::string::npos);
+}
+
+TEST(CurveControlSelectionPolicyGuardrailTests,
+     CurveControlsReuseCanonicalSelectionPolicyOwners) {
+  const std::string selection_edit =
+      read_source_file("src/editor/interactions/selection_edit.hpp");
+  const std::string viewport_selection = read_source_file(
+      "src/editor/viewport/viewport_selection_interaction.cpp");
+  const std::string curve_selection = source_slice(
+      viewport_selection,
+      "void ViewportSelectionInteraction::handle_frame(",
+      "QuaderSelectionSummary ViewportSelectionInteraction::pick_context_menu_target(");
+  const std::string native_curve_input = read_source_file(
+      "src/editor/viewport/viewport_native_tool_interaction.cpp");
+  const std::string transform_gizmo = read_source_file(
+      "src/editor/viewport/transform_gizmo_interaction.cpp");
+  const std::string curve_service =
+      read_source_file("src/editor/curve/curve_tool_service.cpp");
+  const std::string curve_service_header =
+      read_source_file("src/editor/curve/curve_tool_service.hpp");
+  const std::string selection_policy = read_source_file(
+      "src/editor/modeling/runtime/selection_policy.cpp");
+
+  ASSERT_FALSE(curve_selection.empty());
+  EXPECT_NE(selection_edit.find("apply_selection_edit_operation("),
+            std::string::npos);
+  EXPECT_NE(selection_edit.find("resolve_selection_edit_operation("),
+            std::string::npos);
+  EXPECT_NE(viewport_selection.find(
+                "#include \"editor/interactions/selection_edit.hpp\""),
+            std::string::npos);
+  EXPECT_NE(
+      curve_selection.find("selection_edit_operation_from_modifiers("),
+      std::string::npos);
+  EXPECT_NE(curve_selection.find("begin_selection_box("), std::string::npos);
+  EXPECT_NE(curve_selection.find("update_selection_box("), std::string::npos);
+  EXPECT_NE(curve_selection.find("finish_selection_box("), std::string::npos);
+  EXPECT_NE(curve_selection.find("curve->edit_control_selection("),
+             std::string::npos);
+  EXPECT_NE(curve_selection.find("commit_pick_selection("), std::string::npos)
+      << "A Curve-control miss must fall through the canonical scene pick.";
+  EXPECT_NE(curve_selection.find("curve->active() || can_use_selection_fallback"),
+            std::string::npos);
+  EXPECT_NE(transform_gizmo.find(
+                "frame.active_tool_allows_selection_fallback"),
+            std::string::npos);
+  EXPECT_NE(transform_gizmo.find("!frame.input.modal_tool_active"),
+            std::string::npos)
+      << "Passive Curve controls must yield to tools that suspend canonical "
+         "selection fallback.";
+
+  EXPECT_EQ(viewport_selection.find("selection_edit_from_modifiers("),
+            std::string::npos)
+      << "Viewport selection must not duplicate the canonical modifier map.";
+  EXPECT_EQ(curve_selection.find("if (frame.input.modifiers.primary"),
+            std::string::npos);
+  EXPECT_EQ(curve_selection.find("if (frame.input.modifiers.shift"),
+            std::string::npos);
+  EXPECT_EQ(curve_selection.find("frame.input.modifiers.primary ?"),
+            std::string::npos);
+  EXPECT_EQ(curve_selection.find("frame.input.modifiers.shift ?"),
+            std::string::npos);
+
+  EXPECT_NE(curve_service_header.find(
+                "quader_editor_core::SelectionEditOperation operation"),
+            std::string::npos);
+  EXPECT_NE(curve_service.find("resolve_selection_edit_operation("),
+            std::string::npos);
+  EXPECT_EQ(curve_service_header.find("CurveControlSelectionEdit"),
+            std::string::npos);
+  EXPECT_EQ(curve_service_header.find("CurveSelectionEditOperation"),
+            std::string::npos);
+  EXPECT_EQ(curve_service.find("CurveControlSelectionEdit"),
+            std::string::npos);
+  EXPECT_EQ(curve_service.find("CurveSelectionEditOperation"),
+            std::string::npos);
+  EXPECT_EQ(curve_service.find("modifiers.primary"), std::string::npos);
+  EXPECT_EQ(curve_service.find("modifiers.shift"), std::string::npos);
+
+  EXPECT_EQ(native_curve_input.find("curve.edit_control_selection("),
+            std::string::npos);
+  EXPECT_EQ(native_curve_input.find("curve.select_control("),
+            std::string::npos)
+      << "Native Curve input must leave click and box edits to the shared "
+         "viewport selection interaction.";
+
+  EXPECT_NE(selection_policy.find("apply_selection_edit_operation("),
+            std::string::npos);
+  EXPECT_EQ(selection_policy.find("apply_rectangle_key_edit("),
+            std::string::npos)
+      << "Rectangle selection and Curve controls must share one set algebra.";
+}
+
+TEST(CurvePreviewPerformanceGuardrailTests,
+     PointerSamplesDoNotInvalidatePolygonSelectionOverlays) {
+  const std::string modeling_session = read_source_file(
+      "src/editor/modeling/services/modeling_session_service.cpp");
+  const std::string update = source_slice(
+      modeling_session,
+      "ModelingCommandResult update_curve_document_preview(",
+      "[[nodiscard]] bool curve_document_preview_active() const");
+
+  ASSERT_FALSE(update.empty());
+  EXPECT_NE(update.find(
+                "sdk_projection_adapter_.update_curve_document_preview("),
+            std::string::npos);
+  EXPECT_EQ(update.find("invalidate_selection_overlay_caches()"),
+            std::string::npos)
+      << "Curve geometry has its own overlay revision; per-sample edits must "
+         "retain the unrelated polygon selection overlay.";
+}
+
+TEST(CurveAnchorSnapPolicyGuardrailTests,
+     CurveAnchorsReuseMoveSnapOwnersAndFreezeCurveCandidatesPerGesture) {
+  const std::string move_header =
+      read_source_file("src/editor/interactions/move_tool.hpp");
+  const std::string move_source =
+      read_source_file("src/editor/interactions/move_tool.cpp");
+  const std::string modeling_session = read_source_file(
+      "src/editor/modeling/services/modeling_session_service.cpp");
+  const std::string mesh_query = source_slice(
+      modeling_session,
+      "pick_mesh_snap_query(const ModelingRay &ray",
+      "pick_mesh_vertex_snap_target(const ModelingRay &ray");
+  const std::string gizmo_snap_query = source_slice(
+      read_source_file("src/editor/viewport/transform_gizmo_interaction.cpp"),
+      "resolve_curve_control_snap_target(",
+      "QuaderTransform3 curve_control_orientation(");
+  const std::string mesh_target_wrapper = source_slice(
+      modeling_session,
+      "pick_mesh_vertex_snap_target(const ModelingRay &ray",
+      "knife_pick_targets(const ModelingToolRayEvent &event");
+  const std::string gizmo = read_source_file(
+      "src/editor/viewport/transform_gizmo_interaction.cpp");
+  const std::string gizmo_update = source_slice(
+      gizmo, "if (dragging_) {", "bool TransformGizmoInteraction::matches_last_drag_update(");
+  const std::string curve_picking = read_source_file(
+      "src/editor/viewport/viewport_curve_picking.cpp");
+  const std::string qt_panel =
+      read_source_file("src/ui/qt_viewport_panel.cpp");
+  const std::string curve_mesh_snap_binding = source_slice(
+      qt_panel, "interaction_frame.scene_mesh_snap_query =",
+      "return result;");
+  const std::string curve_collection = source_slice(
+      curve_picking, "collect_viewport_curve_anchor_snap_candidates(",
+      "resolve_viewport_curve_anchor_snap_target(");
+
+  EXPECT_NE(move_header.find("resolve_move_vertex_snap_target("),
+            std::string::npos);
+  EXPECT_NE(move_header.find("move_axis_supports_vertex_snap("),
+            std::string::npos);
+  EXPECT_NE(mesh_query.find("move_vertex_snap_pick_options("),
+            std::string::npos);
+  EXPECT_NE(mesh_query.find("resolve_move_vertex_snap_query("),
+            std::string::npos);
+  EXPECT_EQ(mesh_query.find("selection_pick_options_from_radii("),
+            std::string::npos);
+  EXPECT_EQ(mesh_query.find("pick_all("), std::string::npos)
+      << "The host mesh query must delegate to the canonical Move picker.";
+  EXPECT_NE(mesh_target_wrapper.find("pick_mesh_snap_query("),
+            std::string::npos)
+      << "The legacy vertex-only facade must retain the combined query owner.";
+  EXPECT_NE(gizmo_snap_query.find("scene_mesh_snap_query"),
+            std::string::npos);
+  EXPECT_NE(curve_mesh_snap_binding.find("editor.query().mesh_snap_query("),
+            std::string::npos)
+      << "Qt must route the read-only mesh landmark query through the public "
+         "editor API.";
+  EXPECT_EQ(curve_mesh_snap_binding.find("modeling.pick_mesh_snap_query("),
+            std::string::npos);
+  EXPECT_NE(curve_mesh_snap_binding.find("vertex_radius,\n        false"),
+            std::string::npos)
+      << "Curve anchors move independently from the scene selection. A "
+         "selected stationary mesh must remain an eligible snap target.";
+  EXPECT_EQ(gizmo_snap_query.find("scene_mesh_surface_distance"),
+            std::string::npos)
+      << "Curve snapping must reuse the mesh surface depth already prepared "
+         "by the combined Move snap query.";
+
+  EXPECT_NE(gizmo.find("move_axis_supports_vertex_snap(pending.axis)"),
+            std::string::npos);
+  EXPECT_NE(gizmo_update.find("preview_move_to_axis_snap_target("),
+            std::string::npos);
+  EXPECT_NE(gizmo_update.find("fill_transform_snap_target_overlay_points("),
+            std::string::npos);
+  EXPECT_EQ(gizmo_update.find("snap_overlay_points_ ="), std::string::npos)
+      << "Snapped pointer samples must reuse the retained two-point overlay ";
+  EXPECT_NE(move_source.find("points.reserve(2u)"), std::string::npos);
+  EXPECT_EQ(gizmo_update.find(
+                "collect_viewport_curve_anchor_snap_candidates("),
+            std::string::npos)
+      << "Curve anchors must be flattened once at drag begin, not per pointer sample.";
+  EXPECT_NE(gizmo.find("std::sort(selected_anchors.begin()"),
+            std::string::npos);
+  EXPECT_NE(gizmo.find("std::binary_search(selected_anchors.begin()"),
+            std::string::npos)
+      << "Large Curve control selections must not linearly rescan every "
+         "selected point for every frozen candidate.";
+  EXPECT_NE(gizmo.find("collect_viewport_curve_draft_anchor_snap_candidate("),
+            std::string::npos)
+      << "An active uncommitted draft needs its own typed frozen anchor group.";
+
+  EXPECT_NE(curve_collection.find("point.position"), std::string::npos);
+  EXPECT_EQ(curve_collection.find("incoming_handle"), std::string::npos);
+  EXPECT_EQ(curve_collection.find("outgoing_handle"), std::string::npos)
+      << "Handles must never enter the anchor snap candidate set.";
 }
 
 } // namespace

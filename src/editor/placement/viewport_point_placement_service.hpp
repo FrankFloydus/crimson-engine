@@ -102,9 +102,10 @@ viewport_active_grid_placement_plane(const ViewportCameraController &camera);
 /**
  * Owns native scene landmark extraction and viewport point placement policy.
  *
- * World-space landmarks and triangles are cached until either the scene or
- * asset registry revision changes. Projection and ray work remain per-query so
- * camera changes cannot reuse stale screen-space data.
+ * World-space landmarks and triangles are cached behind the scene revisions
+ * that can affect mesh placement plus the mesh-asset revision. Curve,
+ * material, selection, and other unrelated publications do not rebuild mesh
+ * placement geometry. Projection and ray work remain camera/query dependent.
  */
 class ViewportPointPlacementService {
 public:
@@ -151,8 +152,11 @@ private:
 
   const SceneDocument *cached_document_ = nullptr;
   const AssetRegistry *cached_assets_ = nullptr;
-  std::uint64_t cached_scene_revision_ = 0;
-  std::uint64_t cached_asset_revision_ = 0;
+  std::uint64_t cached_hierarchy_revision_ = 0;
+  std::uint64_t cached_visibility_revision_ = 0;
+  std::uint64_t cached_transform_revision_ = 0;
+  std::uint64_t cached_mesh_binding_revision_ = 0;
+  std::uint64_t cached_mesh_asset_revision_ = 0;
   std::uint64_t cached_viewport_visibility_revision_ = 0;
   bool cache_valid_ = false;
   std::vector<CachedLandmark> landmarks_;

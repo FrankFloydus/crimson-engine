@@ -7,6 +7,7 @@
 #pragma once
 
 #include "assets/material_document.hpp"
+#include "assets/curve_asset.hpp"
 #include "assets/mesh_asset.hpp"
 #include "assets/texture_asset.hpp"
 #include "assets/typed_asset_store.hpp"
@@ -63,8 +64,34 @@ private:
 };
 
 using MeshAssetStore = TypedAssetStore<MeshAsset, MeshAssetRevision>;
+using CurveAssetStore = TypedAssetStore<CurveAsset, CurveAssetRevision>;
 using MaterialAssetStore = TypedAssetStore<MaterialDocument, MaterialAssetRevision>;
 using TextureAssetStore = TypedAssetStore<TextureAsset, TextureAssetRevision>;
+
+/**
+ * Owns the exact curve-store state needed to compensate one curve publication.
+ *
+ * Unlike AssetRegistryProjectionCheckpoint, this checkpoint never copies mesh,
+ * material, texture, deferred-loader, or payload-interning state. It is valid
+ * only for a synchronous curve-only publication whose other owner mutations
+ * are compensated separately.
+ */
+class CurveAssetProjectionCheckpoint final {
+public:
+  CurveAssetProjectionCheckpoint() = default;
+  [[nodiscard]] bool valid() const noexcept { return valid_; }
+  [[nodiscard]] std::size_t curve_count() const noexcept {
+    return curves_.size();
+  }
+
+private:
+  friend class AssetRegistry;
+
+  bool valid_ = false;
+  AssetId next_id_ = 1;
+  std::uint64_t revision_ = 0;
+  CurveAssetStore curves_;
+};
 
 /**
  * Stores asset-registry validation status for caller-facing asset mutations.
@@ -133,6 +160,8 @@ public:
 
   AssetId add_mesh(MeshAsset mesh);
   AssetId add_mesh(AssetId id, MeshAsset mesh);
+  AssetId add_curve(CurveAsset curve);
+  AssetId add_curve(AssetId id, CurveAsset curve);
   /**
    * Adds one logical mesh by reusing an already validated registry-owned
    * immutable payload. Only logical name/topology metadata may differ.
@@ -151,9 +180,11 @@ public:
   AssetId add_texture(TextureAsset texture);
   AssetId add_texture(AssetId id, TextureAsset texture);
   bool remove_mesh(AssetId id);
+  bool remove_curve(AssetId id);
   bool remove_material(AssetId id);
   bool remove_texture(AssetId id);
   bool replace_mesh(AssetId id, MeshAsset mesh);
+  bool replace_curve(AssetId id, CurveAsset curve);
   /**
    * Atomically validates and replaces existing mesh payloads, then advances
    * the registry owner revision once for the complete publication.
@@ -172,9 +203,13 @@ public:
   [[nodiscard]] AssetRegistryValidationResult
   validate_mesh(const MeshAsset &mesh) const;
   [[nodiscard]] AssetRegistryValidationResult
+  validate_curve(const CurveAsset &curve) const;
+  [[nodiscard]] AssetRegistryValidationResult
   validate_material(const MaterialDocument &material) const;
 
   const MeshAsset *mesh(AssetId id) const;
+  const CurveAsset *curve(AssetId id) const;
+  [[nodiscard]] bool has_curve(AssetId id) const;
   [[nodiscard]] bool has_mesh(AssetId id) const;
   [[nodiscard]] bool mesh_materialized(AssetId id) const;
   [[nodiscard]] std::optional<MeshAssetDescriptor>
@@ -184,13 +219,16 @@ public:
   const MaterialDocument *material(AssetId id) const;
   const TextureAsset *texture(AssetId id) const;
   MeshAssetRevision mesh_revision(AssetId id) const;
+  CurveAssetRevision curve_revision(AssetId id) const;
   MaterialAssetRevision material_revision(AssetId id) const;
   TextureAssetRevision texture_revision(AssetId id) const;
 
   std::size_t mesh_count() const { return meshes_.size(); }
+  std::size_t curve_count() const { return curves_.size(); }
   std::size_t material_count() const { return materials_.size(); }
   std::size_t texture_count() const { return textures_.size(); }
   std::vector<AssetId> mesh_ids() const { return meshes_.ids(); }
+  std::vector<AssetId> curve_ids() const { return curves_.ids(); }
   std::vector<AssetId> material_ids() const { return materials_.ids(); }
   std::vector<AssetId> texture_ids() const { return textures_.ids(); }
   std::uint64_t revision() const { return revision_; }
@@ -210,6 +248,12 @@ public:
   /** Restores a staged editor projection without leaving revision or ID gaps. */
   [[nodiscard]] bool restore_projection_checkpoint(
       const AssetRegistryProjectionCheckpoint &checkpoint);
+  /** Captures only curve assets plus the shared ID and registry revisions. */
+  [[nodiscard]] CurveAssetProjectionCheckpoint
+  capture_curve_projection_checkpoint() const;
+  /** Restores one failed curve-only publication without touching mesh state. */
+  [[nodiscard]] bool restore_curve_projection_checkpoint(
+      const CurveAssetProjectionCheckpoint &checkpoint);
   /** Asset mutation/materialization is confined to this owning thread. */
   [[nodiscard]] bool on_owner_thread() const noexcept;
 
@@ -248,6 +292,7 @@ private:
       std::vector<std::weak_ptr<const quader_poly::Document>>>
       authored_topology_pool_;
   MaterialAssetStore materials_;
+  CurveAssetStore curves_;
   TextureAssetStore textures_;
   std::thread::id owner_thread_;
 };

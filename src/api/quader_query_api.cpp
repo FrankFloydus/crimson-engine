@@ -19,6 +19,7 @@
 #include "editor/modeling/services/primitive_creation_tool_service.hpp"
 #include "editor/modeling/services/modeling_session_service.hpp"
 #include "editor/pivot/pivot_tool_service.hpp"
+#include "editor/curve/curve_tool_service.hpp"
 #include "scene/scene_bounds.hpp"
 #include "scene/scene_transform_pivot.hpp"
 
@@ -138,6 +139,10 @@ QuaderEntitySnapshot entity_snapshot_for(const SceneSession &session,
   if (const MeshComponent *mesh = scene.mesh(entity)) {
     snapshot.has_mesh = true;
     snapshot.mesh = mesh->mesh;
+  }
+  if (const CurveComponent *curve = scene.curve(entity)) {
+    snapshot.has_curve = true;
+    snapshot.curve = curve->curve;
   }
   if (const TextureMappingComponent *mapping = scene.texture_mapping(entity)) {
     snapshot.texture_sampling_from_local = mapping->sampling_from_local;
@@ -323,6 +328,34 @@ QuaderQueryApi::compiled_object_mesh(QuaderModelingObjectRef object) const {
               : std::nullopt;
 }
 
+std::optional<double>
+QuaderQueryApi::mesh_surface_distance(const QuaderRay &ray) const {
+  return read_scene_session(session_).modeling().pick_mesh_surface_distance(
+      to_modeling_ray(ray));
+}
+
+QuaderMeshSnapQueryResult QuaderQueryApi::mesh_snap_query(
+    const QuaderRay &ray, double vertex_radius,
+    bool exclude_current_selection) const {
+  const ModelingMeshSnapQueryResult query =
+      read_scene_session(session_).modeling().pick_mesh_snap_query(
+          to_modeling_ray(ray), vertex_radius, exclude_current_selection);
+  QuaderMeshSnapQueryResult result{
+      .nearest_surface_ray_distance = query.nearest_surface_ray_distance,
+  };
+  if (query.vertex_target.has_value()) {
+    result.vertex_target = QuaderMeshVertexSnapTarget{
+        .modeling_object_id = query.vertex_target->modeling_object_id,
+        .vertex_id =
+            static_cast<QuaderElementId>(query.vertex_target->vertex_id),
+        .world_position = query.vertex_target->world_position,
+        .ray_distance = query.vertex_target->ray_distance,
+        .pick_distance = query.vertex_target->pick_distance,
+    };
+  }
+  return result;
+}
+
 std::optional<QVec3> QuaderQueryApi::selection_center() const {
   const SceneSession &session = read_scene_session(session_);
   if (session.instances().instance_edit_state().active) {
@@ -383,6 +416,10 @@ QuaderToolStatus QuaderQueryApi::tool_status() const {
     status.active_tool = QuaderViewportTool::CreatePrimitive;
     status.modal_tool_owns_viewport = true;
   }
+  if (session.curve().active()) {
+    status.active_tool = QuaderViewportTool::Curve;
+    status.modal_tool_owns_viewport = true;
+  }
   return status;
 }
 
@@ -393,6 +430,7 @@ QuaderAssetSnapshot QuaderQueryApi::assets() const {
       .material_count = assets.material_count(),
       .texture_count = assets.texture_count(),
       .revision = assets.revision(),
+      .curve_count = assets.curve_count(),
   };
 }
 

@@ -32,12 +32,6 @@ bool transform_axis_is_plane(TransformAxis axis)
          axis == TransformAxis::Yz;
 }
 
-bool transform_axis_is_single_axis(TransformAxis axis)
-{
-  return axis == TransformAxis::X || axis == TransformAxis::Y ||
-         axis == TransformAxis::Z;
-}
-
 double axis_coordinate(quader::QVec3 position, TransformAxis axis)
 {
 	switch (axis) {
@@ -172,7 +166,7 @@ bool face_uses_vertex(const quader_poly::Document& document, quader_poly::Elemen
 	return face != nullptr && std::find(face->vertices.begin(), face->vertices.end(), vertex_id) != face->vertices.end();
 }
 
-bool moving_selection_contains_vertex(
+bool moving_selection_contains_vertex_impl(
 		const PolygonObject& object,
 		SelectionMode selection_mode,
 		quader_poly::ElementId vertex_id)
@@ -227,40 +221,27 @@ std::optional<TransformSnapTarget> resolve_transform_vertex_snap_target(
 		const TransformDragState& state,
 		const TransformDragPreviewInput& input)
 {
-	if (!input.vertex_snap_enabled || !state.move.active || !transform_axis_is_single_axis(state.axis)) {
+	if (!input.vertex_snap_enabled || !state.move.active ||
+			!move_axis_supports_vertex_snap(state.axis)) {
 		return std::nullopt;
 	}
 
-	quader_poly::PickOptions options =
-		selection_pick_options_from_radii(input.vertex_snap_radius, input.vertex_snap_radius);
-        options.mode = quader_poly::SelectionMode::Vertex;
 	const std::vector<PolygonObject>& snap_objects = input.snap_objects == nullptr
 		? session.objects()
 		: *input.snap_objects;
-        const std::vector<PickHitRecord> hits = pick_all(
-		snap_objects,
-		{ input.ray, options },
-		input.snap_object_bounds,
-		input.snap_face_geometry,
-		input.snap_object_transforms);
-	const SelectionMode selection_mode = session.selection_mode();
-	for (const PickHitRecord& hit : hits) {
-          if (!hit.hit || hit.kind != quader_poly::ElementKind::Vertex ||
-              hit.vertex_id == quader_poly::kInvalidElementId) {
-            continue;
-          }
-				const PolygonObject* object = object_for_hit(snap_objects, hit);
-		if (object != nullptr && moving_selection_contains_vertex(*object, selection_mode, hit.vertex_id)) {
-			continue;
-		}
-                return TransformSnapTarget{
-                    TransformSnapLandmarkKind::Vertex,
-                    hit.object_id,
-                    hit.vertex_id,
-                    hit.local_position,
-                };
-        }
-	return std::nullopt;
+	const auto target = resolve_move_vertex_snap_target(
+		snap_objects, session.selection_mode(), input.ray,
+		input.vertex_snap_radius, input.snap_object_bounds,
+		input.snap_face_geometry, input.snap_object_transforms);
+	if (!target.has_value()) {
+		return std::nullopt;
+	}
+	return TransformSnapTarget{
+		TransformSnapLandmarkKind::Vertex,
+		target->object_id,
+		target->vertex_id,
+		target->position,
+	};
 }
 
 /**
@@ -346,7 +327,7 @@ public:
 			};
 			state.screen_axis = vec2_normalize_or(state.screen_axis, { 1.0F, 0.0F });
 		}
-		if (transform_axis_is_single_axis(input.axis) && input.has_start_ray) {
+		if (move_axis_supports_vertex_snap(input.axis) && input.has_start_ray) {
                   const DragDistanceResult start_distance =
                       axis_distance_from_ray(state.world_axis,
                                              state.center_world,
@@ -405,7 +386,7 @@ public:
 		if (!state.active) {
 			return { false, "Move tool is not active.", {}, {}, {} };
 		}
-		if (!transform_axis_is_single_axis(state.axis)) {
+		if (!move_axis_supports_vertex_snap(state.axis)) {
 			return { false, "Move snap target requires a single move axis.", {}, {}, {} };
 		}
 		const double distance =
@@ -618,6 +599,91 @@ const MoveTool& move_tool_impl()
 
 } // namespace
 
+bool move_axis_supports_vertex_snap(TransformAxis axis)
+{
+  return axis == TransformAxis::X || axis == TransformAxis::Y ||
+         axis == TransformAxis::Z;
+}
+
+quader_poly::PickOptions move_vertex_snap_pick_options(double vertex_radius)
+{
+  quader_poly::PickOptions options =
+      selection_pick_options_from_radii(vertex_radius, vertex_radius);
+  options.mode = quader_poly::SelectionMode::Vertex;
+  return options;
+}
+
+bool move_selection_contains_vertex(
+    const PolygonObject& object, SelectionMode selection_mode,
+    quader_poly::ElementId vertex_id)
+{
+  return moving_selection_contains_vertex_impl(object, selection_mode,
+                                                vertex_id);
+}
+
+MoveVertexSnapQueryResult resolve_move_vertex_snap_query(
+    const std::vector<PolygonObject>& objects, SelectionMode selection_mode,
+    const quader_poly::Ray& ray, double vertex_radius,
+    std::span<const PickObjectBounds> object_bounds,
+    std::span<const PickObjectFaceGeometry> face_geometry,
+    std::span<const PickObjectTransform> object_transforms,
+    bool exclude_current_selection,
+    PickAllWithSurfaceScratch *picking_scratch)
+{
+  MoveVertexSnapQueryResult result;
+  if (!std::isfinite(vertex_radius) || vertex_radius <= 0.0) {
+    return result;
+  }
+  const quader_poly::PickOptions options =
+      move_vertex_snap_pick_options(vertex_radius);
+  PickAllWithSurfaceScratch local_scratch;
+  PickAllWithSurfaceScratch& scratch =
+      picking_scratch != nullptr ? *picking_scratch : local_scratch;
+  const std::optional<PickHitRecord> nearest_surface_hit =
+      pick_all_with_surface_into(
+      objects, {.ray = ray, .options = options}, object_bounds, face_geometry,
+      object_transforms, scratch);
+  if (nearest_surface_hit.has_value()) {
+    result.nearest_surface_ray_distance =
+        nearest_surface_hit->ray_distance;
+  }
+  for (const PickHitRecord& hit : scratch.hits) {
+    if (!hit.hit || hit.kind != quader_poly::ElementKind::Vertex ||
+        hit.vertex_id == quader_poly::kInvalidElementId) {
+      continue;
+    }
+    const PolygonObject* object = object_for_hit(objects, hit);
+    if (exclude_current_selection && object != nullptr &&
+        move_selection_contains_vertex(*object, selection_mode,
+                                       hit.vertex_id)) {
+      continue;
+    }
+    result.vertex_target = MoveVertexSnapTarget{
+        .object_id = hit.object_id,
+        .vertex_id = hit.vertex_id,
+        .position = hit.local_position,
+        .ray_distance = hit.ray_distance,
+        .pick_distance = hit.pick_distance,
+    };
+    break;
+  }
+  return result;
+}
+
+std::optional<MoveVertexSnapTarget> resolve_move_vertex_snap_target(
+    const std::vector<PolygonObject>& objects, SelectionMode selection_mode,
+    const quader_poly::Ray& ray, double vertex_radius,
+    std::span<const PickObjectBounds> object_bounds,
+    std::span<const PickObjectFaceGeometry> face_geometry,
+    std::span<const PickObjectTransform> object_transforms,
+    bool exclude_current_selection)
+{
+  return resolve_move_vertex_snap_query(
+             objects, selection_mode, ray, vertex_radius, object_bounds,
+             face_geometry, object_transforms, exclude_current_selection)
+      .vertex_target;
+}
+
 const EditorTool& move_tool()
 {
 	return move_tool_impl();
@@ -696,29 +762,52 @@ std::vector<SelectionOverlayPoint> transform_drag_snap_overlay_points(
 		const TransformDragState& state,
 		const SelectionOverlayStyle& style)
 {
-  if (!state.active ||
-      state.snap_target.kind != TransformSnapLandmarkKind::Vertex) {
+  if (!state.active) {
     return {};
   }
-  return {
+  return transform_snap_target_overlay_points(state.snap_target, style);
+}
+
+std::vector<SelectionOverlayPoint> transform_snap_target_overlay_points(
+		const TransformSnapTarget& target,
+		const SelectionOverlayStyle& style)
+{
+  std::vector<SelectionOverlayPoint> points;
+  fill_transform_snap_target_overlay_points(points, target, style);
+  return points;
+}
+
+void fill_transform_snap_target_overlay_points(
+    std::vector<SelectionOverlayPoint>& points,
+    const TransformSnapTarget& target,
+    const SelectionOverlayStyle& style)
+{
+  points.clear();
+  if (target.kind != TransformSnapLandmarkKind::Vertex) {
+    return;
+  }
+  if (points.capacity() < 2u) {
+    points.reserve(2u);
+  }
+  points.push_back(
       SelectionOverlayPoint{
           SelectionOverlayLayer::HoverVertex,
-          state.snap_target.position,
+          target.position,
           style.hover_vertex_color_abgr,
           style.vertex_point_size_pixels +
               style.selected_hover_point_growth_pixels,
-          state.snap_target.object_id,
-          state.snap_target.vertex_id,
-      },
+          target.object_id,
+          target.vertex_id,
+      });
+  points.push_back(
       SelectionOverlayPoint{
           SelectionOverlayLayer::SnapTargetVertex,
-          state.snap_target.position,
+          target.position,
           style.snap_target_vertex_color_abgr,
           style.snap_target_point_size_pixels,
-          state.snap_target.object_id,
-          state.snap_target.vertex_id,
-      },
-  };
+          target.object_id,
+          target.vertex_id,
+      });
 }
 
 ModalMoveDragTool modal_move_drag_tool_from_id(std::string_view tool_id)

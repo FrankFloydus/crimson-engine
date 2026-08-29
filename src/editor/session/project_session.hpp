@@ -158,6 +158,9 @@ private:
              SceneContentDocument document,
              std::optional<ViewportCameraPose> viewport_camera_pose =
                  std::nullopt);
+  /** Stages a new tab, persists it, then cancels the outgoing scene before binding. */
+  [[nodiscard]] ProjectSessionResult install_scene_and_activate(
+      std::unique_ptr<OpenSceneSession> scene, ProjectManifest manifest);
   [[nodiscard]] ProjectSessionResult install_workspace(
       ProjectWorkspaceStorage workspace,
       ProjectMaterialCatalog material_catalog,

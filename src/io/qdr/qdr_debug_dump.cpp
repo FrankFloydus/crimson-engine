@@ -9,6 +9,7 @@
 #include "assets/material_document.hpp"
 #include "io/qdr/qdr_project_write_snapshot.hpp"
 #include "quader/modeling/neutral/polygon/document_topology.hpp"
+#include <quader/modeling/curves/curve_document.hpp>
 
 #include <nlohmann/json.hpp>
 
@@ -113,6 +114,10 @@ authored_polygon_json(const quader_poly::Document &document) {
     return "light";
   case EntityKind::Generic:
     return "generic";
+  case EntityKind::Instance:
+    return "instance";
+  case EntityKind::Curve:
+    return "curve";
   }
   return "unknown";
 }
@@ -483,6 +488,9 @@ chunk_codec_name(quader_io::QdrBinaryChunkCodec codec) {
   if (entity.mesh) {
     value["mesh"] = mesh_component_json(*entity.mesh);
   }
+  if (entity.curve) {
+    value["curve"] = {{"curve", entity.curve->curve}};
+  }
   if (entity.material) {
     value["material"] = material_component_json(*entity.material);
   }
@@ -573,6 +581,36 @@ std::string qdr_scene_debug_json(
     meshes.push_back(mesh_json(mesh));
   }
   Json materials = Json::array();
+  Json curves = Json::array();
+  for (const QdrProjectCurveAssetWriteSnapshot &curve : snapshot.curves) {
+    Json points = Json::array();
+    Json segments = Json::array();
+    if (curve.document) {
+      for (const modeling::CurveControlPoint &point : curve.document->points()) {
+        points.push_back({
+            {"id", point.id.index},
+            {"position", vec3_json({point.position.x, point.position.y,
+                                    point.position.z})},
+            {"incomingHandle", vec3_json({point.incoming_handle.x,
+                                          point.incoming_handle.y,
+                                          point.incoming_handle.z})},
+            {"outgoingHandle", vec3_json({point.outgoing_handle.x,
+                                          point.outgoing_handle.y,
+                                          point.outgoing_handle.z})},
+        });
+      }
+      for (const modeling::CurveSegmentId segment : curve.document->segments()) {
+        segments.push_back(segment.index);
+      }
+    }
+    curves.push_back({
+        {"id", curve.id},
+        {"name", curve.name},
+        {"closed", curve.document && curve.document->closed()},
+        {"points", std::move(points)},
+        {"segments", std::move(segments)},
+    });
+  }
   for (const QdrProjectMaterialAssetWriteSnapshot &material :
        snapshot.materials) {
     materials.push_back(material_json(material));
@@ -609,6 +647,7 @@ std::string qdr_scene_debug_json(
       {"assets",
        {
            {"meshes", std::move(meshes)},
+           {"curves", std::move(curves)},
            {"materials", std::move(materials)},
            {"textures", std::move(textures)},
        }},

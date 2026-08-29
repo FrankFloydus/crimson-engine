@@ -368,8 +368,11 @@ ViewportPointPlacementPlane viewport_active_grid_placement_plane(
 void ViewportPointPlacementService::invalidate() {
   cached_document_ = nullptr;
   cached_assets_ = nullptr;
-  cached_scene_revision_ = 0;
-  cached_asset_revision_ = 0;
+  cached_hierarchy_revision_ = 0;
+  cached_visibility_revision_ = 0;
+  cached_transform_revision_ = 0;
+  cached_mesh_binding_revision_ = 0;
+  cached_mesh_asset_revision_ = 0;
   cached_viewport_visibility_revision_ = 0;
   cache_valid_ = false;
   landmarks_.clear();
@@ -395,8 +398,13 @@ void ViewportPointPlacementService::refresh_cache(
           : 0u;
   if (cache_valid_ && cached_document_ == &document &&
       cached_assets_ == &assets &&
-      cached_scene_revision_ == document.revision() &&
-      cached_asset_revision_ == assets.revision() &&
+      cached_hierarchy_revision_ ==
+          document.hierarchy_presentation_revision() &&
+      cached_visibility_revision_ == document.visibility_revision() &&
+      cached_transform_revision_ == document.transform_revision() &&
+      cached_mesh_binding_revision_ == document.mesh_binding_revision() &&
+      cached_mesh_asset_revision_ ==
+          assets.mesh_material_usage_revision() &&
       cached_viewport_visibility_revision_ ==
           viewport_visibility_revision) {
     return;
@@ -524,8 +532,11 @@ void ViewportPointPlacementService::refresh_cache(
 
   cached_document_ = &document;
   cached_assets_ = &assets;
-  cached_scene_revision_ = document.revision();
-  cached_asset_revision_ = assets.revision();
+  cached_hierarchy_revision_ = document.hierarchy_presentation_revision();
+  cached_visibility_revision_ = document.visibility_revision();
+  cached_transform_revision_ = document.transform_revision();
+  cached_mesh_binding_revision_ = document.mesh_binding_revision();
+  cached_mesh_asset_revision_ = assets.mesh_material_usage_revision();
   cached_viewport_visibility_revision_ = viewport_visibility_revision;
   cache_valid_ = true;
 }
@@ -557,8 +568,18 @@ ViewportPointPlacementResult ViewportPointPlacementService::resolve(
     const SceneDocument &document, const AssetRegistry &assets,
     const ViewportCameraController &camera,
     const ViewportPointPlacementRequest &request) {
-  refresh_cache(document, assets);
-  refresh_projection_cache(camera);
+  const bool landmark_candidates_enabled =
+      request.policy.vertex || request.policy.edge_midpoint ||
+      request.policy.face_center;
+  const bool geometry_candidates_enabled =
+      landmark_candidates_enabled || request.policy.surface ||
+      request.policy.prefer_surface_normal_for_features;
+  if (geometry_candidates_enabled) {
+    refresh_cache(document, assets);
+  }
+  if (landmark_candidates_enabled) {
+    refresh_projection_cache(camera);
+  }
 
   const ViewportRay ray = camera.ray_from_viewport_point(request.mouse_local);
   const QVec3 grid_normal =
@@ -604,52 +625,54 @@ ViewportPointPlacementResult ViewportPointPlacementService::resolve(
 
   std::array<std::optional<ScreenCandidate>, 3> best_by_landmark_kind;
   std::optional<ScreenCandidate> best_by_distance;
-  for (std::size_t landmark_index = 0;
-       landmark_index < landmarks_.size(); ++landmark_index) {
-    const CachedLandmark &landmark = landmarks_[landmark_index];
-    if (!policy_enables(landmark.kind, request.policy) ||
-        (landmark.effectively_locked &&
-         !request.policy.include_effectively_locked_meshes)) {
-      continue;
-    }
-    const std::optional<std::size_t> slot = landmark_slot(landmark.kind);
-    if (!slot.has_value()) {
-      continue;
-    }
-    const CachedProjection &screen = projected_landmarks_[landmark_index];
-    if (!screen.visible) {
-      continue;
-    }
-    const float distance_sq =
-        screen_distance_squared(screen.screen_position, request.mouse_local);
-    if (!std::isfinite(distance_sq) || distance_sq > radius_sq) {
-      continue;
-    }
-
-    QVec3 normal = landmark.incident_world_normal;
-    if (request.policy.prefer_surface_normal_for_features &&
-        (landmark.kind == ViewportPointSnapKind::Vertex ||
-         landmark.kind == ViewportPointSnapKind::EdgeMidpoint)) {
-      const auto surface = surface_hits_by_entity.find(landmark.entity);
-      if (surface != surface_hits_by_entity.end()) {
-        normal = surface->second.world_normal;
+  if (landmark_candidates_enabled) {
+    for (std::size_t landmark_index = 0;
+         landmark_index < landmarks_.size(); ++landmark_index) {
+      const CachedLandmark &landmark = landmarks_[landmark_index];
+      if (!policy_enables(landmark.kind, request.policy) ||
+          (landmark.effectively_locked &&
+           !request.policy.include_effectively_locked_meshes)) {
+        continue;
       }
-    }
-    const ScreenCandidate candidate{
-        .placement = make_placement(
-            landmark.world_position, normal, landmark.kind, landmark.entity,
-            grid_normal),
-        .screen_distance_sq = distance_sq,
-    };
-    std::optional<ScreenCandidate> &kind_best =
-        best_by_landmark_kind[*slot];
-    if (!kind_best.has_value() ||
-        candidate_is_better(candidate, *kind_best, false)) {
-      kind_best = candidate;
-    }
-    if (!best_by_distance.has_value() ||
-        candidate_is_better(candidate, *best_by_distance, true)) {
-      best_by_distance = candidate;
+      const std::optional<std::size_t> slot = landmark_slot(landmark.kind);
+      if (!slot.has_value()) {
+        continue;
+      }
+      const CachedProjection &screen = projected_landmarks_[landmark_index];
+      if (!screen.visible) {
+        continue;
+      }
+      const float distance_sq =
+          screen_distance_squared(screen.screen_position, request.mouse_local);
+      if (!std::isfinite(distance_sq) || distance_sq > radius_sq) {
+        continue;
+      }
+
+      QVec3 normal = landmark.incident_world_normal;
+      if (request.policy.prefer_surface_normal_for_features &&
+          (landmark.kind == ViewportPointSnapKind::Vertex ||
+           landmark.kind == ViewportPointSnapKind::EdgeMidpoint)) {
+        const auto surface = surface_hits_by_entity.find(landmark.entity);
+        if (surface != surface_hits_by_entity.end()) {
+          normal = surface->second.world_normal;
+        }
+      }
+      const ScreenCandidate candidate{
+          .placement = make_placement(
+              landmark.world_position, normal, landmark.kind, landmark.entity,
+              grid_normal),
+          .screen_distance_sq = distance_sq,
+      };
+      std::optional<ScreenCandidate> &kind_best =
+          best_by_landmark_kind[*slot];
+      if (!kind_best.has_value() ||
+          candidate_is_better(candidate, *kind_best, false)) {
+        kind_best = candidate;
+      }
+      if (!best_by_distance.has_value() ||
+          candidate_is_better(candidate, *best_by_distance, true)) {
+        best_by_distance = candidate;
+      }
     }
   }
 

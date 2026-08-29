@@ -42,6 +42,7 @@ struct EntityRecord {
   bool active = false;
   bool has_children = false;
   bool has_mesh = false;
+  bool has_curve = false;
   bool has_light = false;
   bool is_scene_root = false;
   bool has_scene_settings = false;
@@ -150,9 +151,32 @@ private:
   std::uint64_t transform_revision_ = 0;
   std::uint64_t texture_mapping_revision_ = 0;
   std::uint64_t mesh_binding_revision_ = 0;
+  std::uint64_t curve_binding_revision_ = 0;
   std::uint64_t material_binding_revision_ = 0;
   std::uint64_t render_component_revision_ = 0;
   std::uint64_t layer_revision_ = 0;
+};
+
+/**
+ * Stores only the counters a curve payload publication can advance.
+ *
+ * The publishing adapter restores an existing CurveComponent separately.
+ * This scalar checkpoint deliberately performs no entity or selection scan.
+ */
+class SceneCurveProjectionCheckpoint final {
+public:
+  SceneCurveProjectionCheckpoint() = default;
+  [[nodiscard]] bool valid() const noexcept { return valid_; }
+
+private:
+  friend class SceneDocument;
+
+  bool valid_ = false;
+  std::uint64_t revision_ = 0;
+  std::uint64_t content_revision_ = 0;
+  std::uint64_t hierarchy_presentation_revision_ = 0;
+  std::uint64_t curve_binding_revision_ = 0;
+  std::uint64_t render_component_revision_ = 0;
 };
 
 /**
@@ -224,6 +248,9 @@ public:
                                  InstanceOccurrenceComponent occurrence);
     bool clear_instance_occurrence(EntityId id);
     bool set_mesh(EntityId id, MeshComponent mesh);
+    bool set_curve(EntityId id, CurveComponent curve);
+    bool clear_curve(EntityId id);
+    bool notify_curve_payload_changed(EntityId id);
     bool notify_mesh_payload_changed(EntityId id);
     /** Validates a batch without advancing any scene revision. */
     [[nodiscard]] bool can_notify_mesh_payloads_changed(
@@ -280,6 +307,7 @@ public:
     const InstanceDefinitionComponent *instance_definition(EntityId id) const;
     const InstanceOccurrenceComponent *instance_occurrence(EntityId id) const;
     const MeshComponent* mesh(EntityId id) const;
+    const CurveComponent *curve(EntityId id) const;
     const MaterialComponent* material(EntityId id) const;
     const TextureMappingComponent *texture_mapping(EntityId id) const;
     const LightComponent* light(EntityId id) const;
@@ -299,6 +327,8 @@ public:
     layer_eligible_entities(std::span<const EntityId> roots) const;
 
     std::vector<EntityId> entities() const;
+    /** Returns authored-curve entities without visiting unrelated scene nodes. */
+    [[nodiscard]] std::vector<EntityId> curve_entities() const;
     EntityId scene_root() const;
     bool is_scene_root(EntityId id) const;
     std::vector<EntityId> root_entities() const;
@@ -363,6 +393,10 @@ public:
     std::uint64_t mesh_binding_revision() const {
       return mesh_binding_revision_;
     }
+    /// Revision of curve bindings and published authored curve contents.
+    std::uint64_t curve_binding_revision() const {
+      return curve_binding_revision_;
+    }
     /// Revision of entity MaterialComponent bindings only.
     std::uint64_t material_binding_revision() const {
       return material_binding_revision_;
@@ -382,6 +416,12 @@ public:
     [[nodiscard]] bool restore_projection_checkpoint(
         const SceneProjectionCheckpoint &checkpoint,
         std::span<const EntityId> created_entities = {});
+    /** Captures scalar state for a curve-only payload publication. */
+    [[nodiscard]] SceneCurveProjectionCheckpoint
+    capture_curve_projection_checkpoint() const;
+    /** Restores scalar state after the adapter compensates the curve binding. */
+    [[nodiscard]] bool restore_curve_projection_checkpoint(
+        const SceneCurveProjectionCheckpoint &checkpoint);
 
 private:
   NameComponent *mutable_name(EntityId id);
@@ -415,6 +455,7 @@ private:
   std::uint64_t transform_revision_ = 0;
   std::uint64_t texture_mapping_revision_ = 0;
   std::uint64_t mesh_binding_revision_ = 0;
+  std::uint64_t curve_binding_revision_ = 0;
   std::uint64_t material_binding_revision_ = 0;
   std::uint64_t render_component_revision_ = 0;
   std::uint64_t layer_revision_ = 0;

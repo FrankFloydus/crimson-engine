@@ -7,6 +7,7 @@
 #include "render/overlay/render_overlay_snapshot.hpp"
 
 #include "assets/asset_registry.hpp"
+#include "assets/curve_asset_payload.hpp"
 #include "assets/mesh_wire_geometry.hpp"
 #include "diagnostics/profile.hpp"
 #include "render/overlay/viewport_overlay_style_resolver.hpp"
@@ -472,6 +473,16 @@ build_render_overlay_scene_wireframe_snapshot(
       .scene_binding = scene_binding,
       .scene_revision = document.revision(),
       .asset_revision = assets.revision(),
+      .mesh_material_usage_revision = assets.mesh_material_usage_revision(),
+      .selection_revision = document.selection_revision(),
+      .hierarchy_presentation_revision =
+          document.hierarchy_presentation_revision(),
+      .visibility_revision = document.visibility_revision(),
+      .transform_revision = document.transform_revision(),
+      .mesh_binding_revision = document.mesh_binding_revision(),
+      .curve_binding_revision = document.curve_binding_revision(),
+      .render_component_revision = document.render_component_revision(),
+      .layer_revision = document.layer_revision(),
       .local_visibility_revision =
           local_visibility_revision(local_visibility),
       .style = style,
@@ -507,6 +518,41 @@ build_render_overlay_scene_wireframe_snapshot(
 
 namespace {
 
+std::optional<RenderOverlayCurveSnapshot> curve_snapshot_for_entity(
+    const SceneDocument &document, const AssetRegistry &assets,
+    EntityId entity,
+    const ViewportLocalVisibilitySnapshot *local_visibility) {
+  const CurveComponent *binding = document.curve(entity);
+  if (binding == nullptr || !document.is_effectively_visible(entity) ||
+      !local_visibility_allows(local_visibility, entity)) {
+    return std::nullopt;
+  }
+  const CurveAsset *curve = assets.curve(binding->curve);
+  if (curve == nullptr || curve->document == nullptr) {
+    return std::nullopt;
+  }
+
+  bool selected = false;
+  for (EntityId ancestor = entity; ancestor != kInvalidEntityId;
+       ancestor = document.parent(ancestor)) {
+    if (const SelectionComponent *selection = document.selection(ancestor);
+        selection != nullptr && selection->selected) {
+      selected = true;
+      break;
+    }
+  }
+  const ModelingObjectComponent *object = document.modeling_object(entity);
+  return RenderOverlayCurveSnapshot{
+      .entity = entity,
+      .curve_id = binding->curve,
+      .curve_revision = curve->revision.value,
+      .modeling_object_id = object != nullptr ? object->object_id : -1,
+      .sample_payload = curve_sample_payload(*curve),
+      .world_transform = document.world_transform_matrix(entity),
+      .selected = selected,
+  };
+}
+
 template <typename SelectedMeshBoundsResolver>
 RenderOverlaySelectionSnapshot build_render_overlay_selection_snapshot_impl(
     const SceneDocument &document, const AssetRegistry &assets,
@@ -520,13 +566,18 @@ RenderOverlaySelectionSnapshot build_render_overlay_selection_snapshot_impl(
       .scene_binding = scene_binding,
       .scene_revision = document.revision(),
       .asset_revision = assets.revision(),
+      .mesh_material_usage_revision = assets.mesh_material_usage_revision(),
       .selection_revision = document.selection_revision(),
+      .hierarchy_presentation_revision =
+          document.hierarchy_presentation_revision(),
       .visibility_revision = document.visibility_revision(),
       .local_visibility_revision =
           local_visibility_revision(local_visibility),
       .transform_revision = document.transform_revision(),
       .mesh_binding_revision = document.mesh_binding_revision(),
+      .curve_binding_revision = document.curve_binding_revision(),
       .render_component_revision = document.render_component_revision(),
+      .layer_revision = document.layer_revision(),
       .tool_overlays = std::move(tool_overlays),
   };
 
@@ -544,7 +595,13 @@ RenderOverlaySelectionSnapshot build_render_overlay_selection_snapshot_impl(
   snapshot.selected_mesh_bounds.reserve(selected.size());
   snapshot.selected_lights.reserve(selected.size());
   snapshot.point_light_gizmos.reserve(entities.size());
+  snapshot.curves.reserve(assets.curve_count());
   for (const EntityId entity : entities) {
+    if (std::optional<RenderOverlayCurveSnapshot> curve =
+            curve_snapshot_for_entity(document, assets, entity,
+                                      local_visibility)) {
+      snapshot.curves.push_back(std::move(*curve));
+    }
     const LightComponent *scene_light = document.light(entity);
     if (scene_light == nullptr || scene_light->type != LightType::Point ||
         !document.is_effectively_visible(entity) ||
@@ -652,6 +709,8 @@ RenderOverlaySnapshotCache::update_persistent(
   bind_sources(document, assets, scene_binding);
   const std::uint64_t current_local_visibility_revision =
       local_visibility_revision(local_visibility);
+  const ViewportCameraClipPlanes current_clip_planes =
+      scene_camera_clip_planes(document);
 
   const bool selected_transform_is_relevant =
       has_selected_object_snapshot_ && selected_object_snapshot_.visible &&
@@ -705,15 +764,40 @@ RenderOverlaySnapshotCache::update_persistent(
       scene_wireframe_snapshot_.local_visibility_revision ==
           current_local_visibility_revision &&
       (!wireframe_sources_are_relevant ||
-       (scene_wireframe_snapshot_.scene_revision == document.revision() &&
-        scene_wireframe_snapshot_.asset_revision == assets.revision() &&
+       (scene_wireframe_snapshot_.mesh_material_usage_revision ==
+            assets.mesh_material_usage_revision() &&
+        scene_wireframe_snapshot_.selection_revision ==
+            document.selection_revision() &&
+        scene_wireframe_snapshot_.hierarchy_presentation_revision ==
+            document.hierarchy_presentation_revision() &&
+        scene_wireframe_snapshot_.visibility_revision ==
+            document.visibility_revision() &&
+        scene_wireframe_snapshot_.transform_revision ==
+            document.transform_revision() &&
+        scene_wireframe_snapshot_.mesh_binding_revision ==
+            document.mesh_binding_revision() &&
+        scene_wireframe_snapshot_.layer_revision == document.layer_revision() &&
         scene_wireframe_snapshot_.style.wire_signature ==
             style.wire_signature));
   const bool wireframe_context_changed =
       !has_scene_wireframe_snapshot_ ||
       scene_wireframe_snapshot_.instance_edit_scope != instance_edit_scope ||
       scene_wireframe_snapshot_.style.instance_edit_context_signature !=
-          style.instance_edit_context_signature;
+          style.instance_edit_context_signature ||
+      scene_wireframe_snapshot_.clip_planes != current_clip_planes;
+  const bool curve_publication_reused =
+      wireframe_sources_are_relevant && wireframe_snapshot_matches &&
+      document.revision() > scene_wireframe_snapshot_.scene_revision &&
+      document.curve_binding_revision() >
+          scene_wireframe_snapshot_.curve_binding_revision &&
+      document.render_component_revision() >
+          scene_wireframe_snapshot_.render_component_revision &&
+      document.revision() - scene_wireframe_snapshot_.scene_revision ==
+          document.curve_binding_revision() -
+              scene_wireframe_snapshot_.curve_binding_revision &&
+      document.revision() - scene_wireframe_snapshot_.scene_revision ==
+          document.render_component_revision() -
+              scene_wireframe_snapshot_.render_component_revision;
   const bool scene_wireframe_changed =
       !wireframe_snapshot_matches || wireframe_context_changed;
   if (!wireframe_snapshot_matches) {
@@ -727,10 +811,29 @@ RenderOverlaySnapshotCache::update_persistent(
     // and borrowed mesh spans stay intact until the source revisions change.
     scene_wireframe_snapshot_.scene_revision = document.revision();
     scene_wireframe_snapshot_.asset_revision = assets.revision();
+    scene_wireframe_snapshot_.mesh_material_usage_revision =
+        assets.mesh_material_usage_revision();
+    scene_wireframe_snapshot_.selection_revision =
+        document.selection_revision();
+    scene_wireframe_snapshot_.hierarchy_presentation_revision =
+        document.hierarchy_presentation_revision();
+    scene_wireframe_snapshot_.visibility_revision =
+        document.visibility_revision();
+    scene_wireframe_snapshot_.transform_revision =
+        document.transform_revision();
+    scene_wireframe_snapshot_.mesh_binding_revision =
+        document.mesh_binding_revision();
+    scene_wireframe_snapshot_.curve_binding_revision =
+        document.curve_binding_revision();
+    scene_wireframe_snapshot_.render_component_revision =
+        document.render_component_revision();
+    scene_wireframe_snapshot_.layer_revision = document.layer_revision();
     scene_wireframe_snapshot_.style = style;
     scene_wireframe_snapshot_.instance_edit_scope = instance_edit_scope;
-    scene_wireframe_snapshot_.clip_planes =
-        scene_camera_clip_planes(document);
+    scene_wireframe_snapshot_.clip_planes = current_clip_planes;
+    if (curve_publication_reused) {
+      ++stats_.scene_wireframe_curve_publication_reuse_count;
+    }
   }
 
   return {
@@ -756,6 +859,12 @@ RenderOverlaySnapshotCache::selection_snapshot(
       selection_snapshot_.asset_revision == assets.revision() &&
       selection_snapshot_.local_visibility_revision ==
           current_local_visibility_revision;
+  if (!snapshot_matches && can_refresh_selection_curves(
+                               document, assets,
+                               current_local_visibility_revision)) {
+    refresh_selection_curves(document, assets, local_visibility);
+    return selection_snapshot_;
+  }
   if (!snapshot_matches) {
     selection_instance_dependency_signatures_.clear();
   }
@@ -1067,12 +1176,17 @@ bool RenderOverlaySnapshotCache::can_refresh_selection_transforms(
       selection_snapshot_.asset_revision != assets.revision() ||
       selection_snapshot_.selection_revision !=
           document.selection_revision() ||
+      selection_snapshot_.hierarchy_presentation_revision !=
+          document.hierarchy_presentation_revision() ||
       selection_snapshot_.visibility_revision !=
           document.visibility_revision() ||
       selection_snapshot_.mesh_binding_revision !=
           document.mesh_binding_revision() ||
+      selection_snapshot_.curve_binding_revision !=
+          document.curve_binding_revision() ||
       selection_snapshot_.render_component_revision !=
           document.render_component_revision() ||
+      selection_snapshot_.layer_revision != document.layer_revision() ||
       document.revision() <= selection_snapshot_.scene_revision ||
       document.transform_revision() <=
           selection_snapshot_.transform_revision) {
@@ -1141,18 +1255,98 @@ bool RenderOverlaySnapshotCache::refresh_selection_transforms(
        selection_snapshot_.point_light_gizmos) {
     light.world_transform = document.world_transform_matrix(light.entity);
   }
+  for (RenderOverlayCurveSnapshot &curve : selection_snapshot_.curves) {
+    curve.world_transform = document.world_transform_matrix(curve.entity);
+  }
 
   selection_snapshot_.scene_revision = document.revision();
   selection_snapshot_.asset_revision = assets.revision();
+  selection_snapshot_.mesh_material_usage_revision =
+      assets.mesh_material_usage_revision();
   selection_snapshot_.selection_revision = document.selection_revision();
+  selection_snapshot_.hierarchy_presentation_revision =
+      document.hierarchy_presentation_revision();
   selection_snapshot_.visibility_revision = document.visibility_revision();
   selection_snapshot_.transform_revision = document.transform_revision();
   selection_snapshot_.mesh_binding_revision =
       document.mesh_binding_revision();
+  selection_snapshot_.curve_binding_revision =
+      document.curve_binding_revision();
   selection_snapshot_.render_component_revision =
       document.render_component_revision();
+  selection_snapshot_.layer_revision = document.layer_revision();
   ++stats_.selection_transform_refresh_count;
   return true;
+}
+
+bool RenderOverlaySnapshotCache::can_refresh_selection_curves(
+    const SceneDocument &document, const AssetRegistry &assets,
+    std::uint64_t current_local_visibility_revision) const {
+  if (!has_selection_snapshot_ ||
+      selection_snapshot_.local_visibility_revision !=
+          current_local_visibility_revision ||
+      selection_snapshot_.mesh_material_usage_revision !=
+          assets.mesh_material_usage_revision() ||
+      selection_snapshot_.selection_revision !=
+          document.selection_revision() ||
+      selection_snapshot_.hierarchy_presentation_revision !=
+          document.hierarchy_presentation_revision() ||
+      selection_snapshot_.visibility_revision !=
+          document.visibility_revision() ||
+      selection_snapshot_.transform_revision !=
+          document.transform_revision() ||
+      selection_snapshot_.mesh_binding_revision !=
+          document.mesh_binding_revision() ||
+      selection_snapshot_.layer_revision != document.layer_revision() ||
+      document.revision() <= selection_snapshot_.scene_revision ||
+      document.curve_binding_revision() <=
+          selection_snapshot_.curve_binding_revision ||
+      document.render_component_revision() <=
+          selection_snapshot_.render_component_revision) {
+    return false;
+  }
+  const std::uint64_t scene_delta =
+      document.revision() - selection_snapshot_.scene_revision;
+  return scene_delta == document.curve_binding_revision() -
+                            selection_snapshot_.curve_binding_revision &&
+         scene_delta == document.render_component_revision() -
+                            selection_snapshot_.render_component_revision;
+}
+
+void RenderOverlaySnapshotCache::refresh_selection_curves(
+    const SceneDocument &document, const AssetRegistry &assets,
+    const ViewportLocalVisibilitySnapshot *local_visibility) {
+  const std::vector<EntityId> curve_entities = document.curve_entities();
+  std::vector<RenderOverlayCurveSnapshot> curves;
+  curves.reserve(curve_entities.size());
+  for (const EntityId entity : curve_entities) {
+    if (std::optional<RenderOverlayCurveSnapshot> curve =
+            curve_snapshot_for_entity(document, assets, entity,
+                                      local_visibility)) {
+      curves.push_back(std::move(*curve));
+    }
+  }
+  stats_.selection_curve_entity_visit_count += curve_entities.size();
+  selection_snapshot_.curves = std::move(curves);
+  selection_snapshot_.scene_revision = document.revision();
+  selection_snapshot_.asset_revision = assets.revision();
+  selection_snapshot_.mesh_material_usage_revision =
+      assets.mesh_material_usage_revision();
+  selection_snapshot_.selection_revision = document.selection_revision();
+  selection_snapshot_.hierarchy_presentation_revision =
+      document.hierarchy_presentation_revision();
+  selection_snapshot_.visibility_revision = document.visibility_revision();
+  selection_snapshot_.local_visibility_revision =
+      local_visibility_revision(local_visibility);
+  selection_snapshot_.transform_revision = document.transform_revision();
+  selection_snapshot_.mesh_binding_revision =
+      document.mesh_binding_revision();
+  selection_snapshot_.curve_binding_revision =
+      document.curve_binding_revision();
+  selection_snapshot_.render_component_revision =
+      document.render_component_revision();
+  selection_snapshot_.layer_revision = document.layer_revision();
+  ++stats_.selection_curve_refresh_count;
 }
 
 } // namespace quader

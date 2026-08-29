@@ -225,6 +225,13 @@ set_target_properties(quader_modeling_sdk_geometry PROPERTIES
     EXPORT_NAME modeling_sdk_geometry)
 quader_configure_modeling_sdk_target(quader_modeling_sdk_geometry)
 
+add_library(quader_modeling_sdk_curves STATIC
+    src/sdk/core/modeling/src/curve_document.cpp)
+add_library(quader::modeling_sdk_curves ALIAS quader_modeling_sdk_curves)
+set_target_properties(quader_modeling_sdk_curves PROPERTIES
+    EXPORT_NAME modeling_sdk_curves)
+quader_configure_modeling_sdk_target(quader_modeling_sdk_curves)
+
 add_library(quader_modeling_sdk_polygon STATIC
     src/sdk/core/modeling/src/face_texture_actions.cpp
     src/sdk/core/modeling/src/obj_mesh_view.cpp
@@ -271,6 +278,7 @@ set_target_properties(quader_modeling_sdk_runtime PROPERTIES
 quader_configure_modeling_sdk_target(quader_modeling_sdk_runtime)
 target_link_libraries(quader_modeling_sdk_runtime
     PUBLIC
+        quader_modeling_sdk_curves
         quader_modeling_sdk_polygon)
 if(TARGET quader_modeling_profile)
     target_link_libraries(quader_modeling_sdk_runtime
@@ -316,6 +324,7 @@ endforeach()
 
 install(TARGETS
         quader_modeling_sdk_geometry
+        quader_modeling_sdk_curves
         quader_modeling_sdk_polygon
         quader_modeling_sdk_qdr_document
         quader_modeling_sdk_runtime
@@ -599,6 +608,8 @@ if(QUADER_BUILD_TESTS)
         tests/sdk/headers/previews_header_compile.cpp
         tests/sdk/headers/selection_header_compile.cpp
         tests/sdk/headers/tools_header_compile.cpp
+        tests/sdk/modeling_curve_document_tests.cpp
+        tests/sdk/modeling_curve_session_tests.cpp
         tests/sdk/modeling_sdk_consumer_tests.cpp)
     set_source_files_properties(
         tests/sdk/headers/mesh_handle_header_compile.cpp

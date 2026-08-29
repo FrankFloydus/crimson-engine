@@ -13,6 +13,7 @@
 #include "scene/scene_bounds.hpp"
 
 #include <quader/modeling/payloads.hpp>
+#include <quader/modeling/curves/curve_document.hpp>
 
 #include <array>
 #include <cstddef>
@@ -73,6 +74,11 @@ struct ModelingSdkProjectionStats {
   std::uint64_t native_object_id_scene_entity_visit_count = 0;
   std::uint64_t sdk_duplicate_batch_mutation_count = 0;
   std::uint64_t sdk_duplicate_object_count = 0;
+  std::uint64_t native_selection_projection_build_count = 0;
+  std::uint64_t curve_preview_checkpoint_capture_count = 0;
+  std::uint64_t curve_preview_checkpoint_curve_asset_count = 0;
+  std::uint64_t curve_preview_shared_binding_scan_count = 0;
+  std::uint64_t curve_preview_shared_binding_entity_visit_count = 0;
 };
 
 /// Describes one host-decided material slot fact to publish to SDK topology.
@@ -295,6 +301,20 @@ public:
   [[nodiscard]] ModelingCreateBoxResult create_mesh(
       const ModelingCreateMeshRequest &request,
       const CreationFinalizer &finalize = {});
+  /// Publishes an SDK-authored path as a first-class scene curve.
+  [[nodiscard]] ModelingCreateBoxResult create_curve(
+      modeling::CurveDocument document, std::string_view name,
+      const CreationFinalizer &finalize = {});
+  [[nodiscard]] std::optional<modeling::CurveDocument> curve_document(
+      int modeling_object_id, bool include_preview = true) const;
+  [[nodiscard]] ModelingCommandResult replace_curve_document(
+      int modeling_object_id, modeling::CurveDocument document);
+  [[nodiscard]] ModelingCommandResult
+  begin_curve_document_preview(int modeling_object_id);
+  [[nodiscard]] ModelingCommandResult
+  update_curve_document_preview(modeling::CurveDocument document);
+  [[nodiscard]] bool curve_document_preview_active() const;
+  [[nodiscard]] int curve_document_preview_object_id() const;
   /** Localizes world points beneath their deterministic polygon frame. */
   [[nodiscard]] ModelingCreateBoxResult create_face(
       std::span<const QVec3> points, QVec3 requested_normal,

@@ -27,7 +27,15 @@ Chunk schema v1 contains:
   `QDRG` wrapper, so the native container delegates durable polygon semantics
   to the portable modeling core.
 
-Current scene metadata uses schema 7. It appends an optional affine texture
+Current scene metadata uses schema 8. It appends curve assets with SDK-owned
+binary authored controls and an explicit curve component on each curve entity.
+Curve controls, open/closed state, stable point/segment IDs and allocation
+cursors survive a round trip; display samples and edit-tool drafts do not.
+Curve payloads and bindings are validated before a scene is returned. Curves
+require at least two anchors and are not allowed inside instance definitions.
+Schemas 1–7 remain readable as scenes without curves.
+
+Schema 7 appended an optional affine texture
 sampling component to mesh and instance-occurrence entities; schemas 1–6 use
 identity sampling. Face scale, normalized shift, and rotation are owned by
 SDK QGEO 1.1, with identity defaults when reading QGEO 1.0. Compiled fallback

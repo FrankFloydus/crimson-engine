@@ -2168,6 +2168,79 @@ TEST(EditorApiTests,
   std::filesystem::remove(path);
 }
 
+TEST(EditorApiTests, CurveToolUsesUnassignedActivationAndSharedFinalizeBinding) {
+  CommandTestHarness harness;
+  auto &editor = harness.editor;
+  const auto path = keybinding_test_path("curve-activation");
+  ASSERT_TRUE(editor.commands().set_keybinding_storage_path(path).ok());
+  constexpr auto command = quader::quader_command::kToolsActivateCurve;
+  const auto descriptor = editor.commands().descriptor(command);
+  ASSERT_TRUE(descriptor.has_value());
+  EXPECT_EQ(descriptor->label, "Curve");
+  EXPECT_TRUE(descriptor->enabled);
+  const auto catalog = editor.commands().keybinding_catalog();
+  const auto *entry = find_keybinding_catalog_entry(catalog, command.string());
+  ASSERT_NE(entry, nullptr);
+  EXPECT_TRUE(entry->default_shortcut.empty());
+  EXPECT_TRUE(entry->unassigned);
+  EXPECT_EQ(entry->localization_key,
+            "keybindings.target.tools.activate.curve.label");
+
+  ASSERT_TRUE(editor.preferences().set_shortcut(command, "Ctrl+Alt+F22").ok());
+  quader::ViewportToolState state;
+  const auto chord = single_input_chord("Ctrl+Alt+F22");
+  const auto dispatch = editor.commands().dispatch_viewport_input_binding(
+      chord, state, true, false);
+  ASSERT_EQ(dispatch.kind,
+            quader::QuaderViewportKeybindingDispatch::Kind::ViewportShortcut);
+  EXPECT_EQ(dispatch.shortcut.tool, quader::ViewportToolId::Curve);
+  EXPECT_EQ(editor.commands().dispatch_viewport_input_binding(
+                chord, state, true, false, {.navigation_active = true}).kind,
+            quader::QuaderViewportKeybindingDispatch::Kind::NoMatch);
+  EXPECT_EQ(editor.commands().dispatch_viewport_input_binding(
+                chord, state, false, false).kind,
+            quader::QuaderViewportKeybindingDispatch::Kind::NoMatch);
+  EXPECT_EQ(editor.commands().dispatch_viewport_input_binding(
+                chord, state, true, true).kind,
+            quader::QuaderViewportKeybindingDispatch::Kind::NoMatch);
+  ASSERT_TRUE(editor.commands().execute(command).ok());
+  EXPECT_EQ(editor.tools().active_tool(), "curve");
+  EXPECT_EQ(editor.query().tool_status().active_tool,
+            quader::QuaderViewportTool::Curve);
+  EXPECT_FALSE(editor.history().can_undo());
+  const auto settings = editor.tools().active_settings();
+  ASSERT_TRUE(settings.active);
+  EXPECT_FALSE(settings.can_apply);
+  ASSERT_EQ(settings.controls.size(), 1u);
+  EXPECT_EQ(settings.controls.front().id, "curve.closed");
+  const auto revision = editor.tools().active_settings_revision();
+  for (int frame = 0; frame < 32; ++frame) {
+    EXPECT_EQ(editor.tools().active_settings_revision(), revision);
+  }
+  ASSERT_TRUE(editor.tools().set_setting("curve", "curve.closed", true).ok());
+  const auto changed_revision = editor.tools().active_settings_revision();
+  EXPECT_GT(changed_revision, revision);
+  EXPECT_FALSE(editor.tools().set_setting("curve", "curve.closed", true).changed());
+  EXPECT_EQ(editor.tools().active_settings_revision(), changed_revision);
+
+  state.active_tool = quader::ViewportToolId::Curve;
+  quader::ViewportInputActionKind action = quader::ViewportInputActionKind::None;
+  ASSERT_TRUE(editor.commands().resolve_viewport_input_action(
+      single_input_chord("Space"), state, true, false, action,
+      {.active_tool_owns_viewport = true}));
+  EXPECT_EQ(action, quader::ViewportInputActionKind::ModalToolFinalize);
+  const auto escape = editor.commands().dispatch_viewport_input_binding(
+      single_input_chord("Escape"), state, true, false,
+      {.active_tool_owns_viewport = true});
+  ASSERT_EQ(escape.kind,
+            quader::QuaderViewportKeybindingDispatch::Kind::ViewportShortcut);
+  EXPECT_EQ(escape.shortcut.kind, quader::ViewportShortcutKind::CancelActiveTool);
+  ASSERT_TRUE(editor.tools().cancel_active_tool_preview().ok());
+  EXPECT_EQ(editor.tools().active_tool(), "select");
+  EXPECT_FALSE(editor.history().can_undo());
+  std::filesystem::remove(path);
+}
+
 TEST(EditorApiTests, UvPeelCommandUsesTypedEdgeScopeAndUnassignedDefault) {
   CommandTestHarness harness;
   quader::QuaderEditorApi &editor = harness.editor;
@@ -4172,6 +4245,9 @@ TEST(EditorApiTests, ViewportNavigationActionCatalogDrivesDefaultsAndResolution)
   for (const quader::ViewportInputActionBindingDescriptor &descriptor :
        quader::viewport_input_action_binding_catalog()) {
     state = {};
+    const bool requires_editable_curve_controls =
+        descriptor.when.find("curveControls.editable") !=
+        std::string_view::npos;
     if (descriptor.when.find("activeTool.linear_array") !=
         std::string_view::npos) {
       state.active_tool = quader::ViewportToolId::LinearArray;
@@ -4182,6 +4258,10 @@ TEST(EditorApiTests, ViewportNavigationActionCatalogDrivesDefaultsAndResolution)
     }
     if (descriptor.when.find("activeTool.cut") != std::string_view::npos) {
       state.active_tool = quader::ViewportToolId::Cut;
+    }
+    if (descriptor.when.find("activeTool.curve") != std::string_view::npos &&
+        !requires_editable_curve_controls) {
+      state.active_tool = quader::ViewportToolId::Curve;
     }
     EXPECT_TRUE(
         has_keybinding(rules, descriptor.target_id, descriptor.shortcut))
@@ -4220,6 +4300,15 @@ TEST(EditorApiTests, ViewportNavigationActionCatalogDrivesDefaultsAndResolution)
     if (modal_only_action) {
       input_context.modal_tool_active = true;
     }
+    const bool owning_tool_only_action =
+        descriptor.when.find("!activeTool.ownsViewport") ==
+            std::string_view::npos &&
+        descriptor.when.find("activeTool.ownsViewport") !=
+            std::string_view::npos;
+    if (owning_tool_only_action) {
+      input_context.active_tool_owns_viewport = true;
+    }
+    input_context.curve_controls_editable = requires_editable_curve_controls;
     input_context.orthographic_view =
         descriptor.when.find("viewport.orthographic") != std::string_view::npos;
     bool matched = false;
@@ -5326,6 +5415,8 @@ TEST(EditorApiTests,
      FaceTextureTransferBindingIsFaceScopedEditableAndPersistent) {
   constexpr std::string_view kTarget =
       "viewport.material.transfer_face_texture";
+  constexpr std::string_view kCurveConversionTarget =
+      "viewport.curve.toggle_point_smoothness";
   const auto path = keybinding_test_path("face-texture-transfer");
   CommandTestHarness harness;
   auto &editor = harness.editor;
@@ -5334,8 +5425,11 @@ TEST(EditorApiTests,
   const auto *entry = find_keybinding_catalog_entry(catalog, kTarget);
   const auto *sample = find_keybinding_catalog_entry(
       catalog, "viewport.material.sample_face");
+  const auto *curve_conversion =
+      find_keybinding_catalog_entry(catalog, kCurveConversionTarget);
   ASSERT_NE(entry, nullptr);
   ASSERT_NE(sample, nullptr);
+  ASSERT_NE(curve_conversion, nullptr);
   const auto action_key = entry->key;
   EXPECT_EQ(entry->action_id, kTarget);
   EXPECT_EQ(entry->shortcut, "Alt+LeftMouse");
@@ -5397,9 +5491,22 @@ TEST(EditorApiTests,
   const auto conflict = editor.commands().analyze_shortcut_assignment(
       sample->key, "Alt+LeftMouse");
   ASSERT_TRUE(conflict.ok);
-  ASSERT_EQ(conflict.conflicts.size(), 1u);
-  EXPECT_EQ(conflict.conflicts.front().action, action_key);
-  EXPECT_EQ(conflict.conflicts.front().kind,
+  ASSERT_EQ(conflict.conflicts.size(), 2u);
+  const auto find_conflict = [&](const quader::QuaderKeybindingActionKey &key) {
+    return std::find_if(conflict.conflicts.begin(), conflict.conflicts.end(),
+                        [&](const auto &candidate) {
+                          return candidate.action == key;
+                        });
+  };
+  const auto transfer_conflict = find_conflict(action_key);
+  const auto curve_conversion_conflict = find_conflict(curve_conversion->key);
+  ASSERT_NE(transfer_conflict, conflict.conflicts.end());
+  ASSERT_NE(curve_conversion_conflict, conflict.conflicts.end());
+  EXPECT_EQ(transfer_conflict->target_id, kTarget);
+  EXPECT_EQ(transfer_conflict->kind,
+            quader::QuaderKeybindingCollisionKind::ExactConflict);
+  EXPECT_EQ(curve_conversion_conflict->target_id, kCurveConversionTarget);
+  EXPECT_EQ(curve_conversion_conflict->kind,
             quader::QuaderKeybindingCollisionKind::ExactConflict);
   ASSERT_TRUE(editor.preferences()
                   .set_action_shortcut(sample->key, "Alt+RightMouseClick")
@@ -5525,6 +5632,292 @@ TEST(EditorApiTests, FaceTextureTransferResolverIsOneShotAndHonorsContext) {
   resolve(input);
   EXPECT_FALSE(input.transfer_face_texture_pressed);
   EXPECT_FALSE(input.transfer_face_texture_pointer_reserved);
+}
+
+TEST(EditorApiTests,
+     CurvePointConversionBindingSupportsToolAndSelectedCurveContexts) {
+  constexpr std::string_view kTarget = "viewport.curve.toggle_point_smoothness";
+  EXPECT_STREQ(quader::viewport_tool_id(quader::ViewportToolId::Curve),
+               "curve");
+  const auto path = keybinding_test_path("curve-point-conversion");
+  CommandTestHarness harness;
+  auto &editor = harness.editor;
+  ASSERT_TRUE(editor.commands().set_keybinding_storage_path(path).ok());
+  const auto catalog = editor.commands().keybinding_catalog();
+  const auto *entry = find_keybinding_catalog_entry(catalog, kTarget);
+  ASSERT_NE(entry, nullptr);
+  EXPECT_EQ(entry->shortcut, "Alt+LeftMouse");
+  EXPECT_EQ(entry->default_shortcut, "Alt+LeftMouse");
+  EXPECT_EQ(entry->scope_id, "viewport.tool.curve");
+  EXPECT_EQ(entry->context, quader::QuaderKeybindingContextKind::CurveTool);
+  EXPECT_EQ(entry->label, "Toggle Curve Point Corner / Smooth");
+  EXPECT_EQ(entry->scope_localization_key, "keybindings.scope.viewport.tool.curve");
+  EXPECT_FALSE(editor.commands().descriptor(kTarget).has_value());
+  EXPECT_EQ(std::count_if(catalog.begin(), catalog.end(), [&](const auto &candidate) {
+    return candidate.action_id == kTarget;
+  }), 1);
+  const auto action_key = entry->key;
+  quader::ViewportToolState state;
+  state.active_tool = quader::ViewportToolId::Curve;
+  quader::QuaderViewportKeybindingContext context;
+  context.active_tool_owns_viewport = true;
+  const auto resolves_conversion = [](
+      quader::QuaderEditorApi &owner, std::string_view shortcut,
+      const quader::ViewportToolState &tool,
+      quader::QuaderViewportKeybindingContext input_context,
+      bool focused = true, bool text_input = false) {
+    quader::ViewportInputActionKind action = quader::ViewportInputActionKind::None;
+    return owner.commands().resolve_viewport_input_action(
+        single_input_chord(shortcut), tool, focused, text_input, action,
+        input_context) && action == quader::ViewportInputActionKind::ToggleCurvePointSmoothness;
+  };
+  for (const auto mode : {quader::ViewportSelectionMode::Vertex,
+                          quader::ViewportSelectionMode::Edge,
+                          quader::ViewportSelectionMode::Face,
+                          quader::ViewportSelectionMode::Object,
+                          quader::ViewportSelectionMode::Group}) {
+    state.selection_mode = mode;
+    EXPECT_TRUE(resolves_conversion(editor, "Alt+LeftMouse", state, context));
+  }
+  for (const auto tool : {quader::ViewportToolId::Select,
+                          quader::ViewportToolId::Move,
+                          quader::ViewportToolId::Poly,
+                          quader::ViewportToolId::Cut}) {
+    state.active_tool = tool;
+    EXPECT_FALSE(resolves_conversion(editor, "Alt+LeftMouse", state, context));
+  }
+  state.active_tool = quader::ViewportToolId::Select;
+  state.selection_mode = quader::ViewportSelectionMode::Object;
+  context.active_tool_owns_viewport = false;
+  context.curve_controls_editable = true;
+  EXPECT_TRUE(resolves_conversion(editor, "Alt+LeftMouse", state, context));
+  context.active_tool_owns_viewport = true;
+  EXPECT_FALSE(resolves_conversion(editor, "Alt+LeftMouse", state, context));
+  context.active_tool_owns_viewport = false;
+  context.modal_tool_active = true;
+  EXPECT_FALSE(resolves_conversion(editor, "Alt+LeftMouse", state, context));
+  context.modal_tool_active = false;
+  state.selection_mode = quader::ViewportSelectionMode::Face;
+  EXPECT_FALSE(resolves_conversion(editor, "Alt+LeftMouse", state, context));
+  context.curve_controls_editable = false;
+  state.active_tool = quader::ViewportToolId::Curve;
+  context.active_tool_owns_viewport = true;
+  EXPECT_FALSE(resolves_conversion(editor, "Alt+LeftMouse", state, context, false));
+  EXPECT_FALSE(resolves_conversion(editor, "Alt+LeftMouse", state, context, true, true));
+  for (const auto blocked_member : {
+           &quader::QuaderViewportKeybindingContext::navigation_active,
+           &quader::QuaderViewportKeybindingContext::active_transform_drag,
+           &quader::QuaderViewportKeybindingContext::operation_preview_active}) {
+    auto blocked = context;
+    blocked.*blocked_member = true;
+    EXPECT_FALSE(resolves_conversion(editor, "Alt+LeftMouse", state, blocked));
+  }
+  for (const std::string_view shortcut : {"LeftMouse", "Shift+Alt+LeftMouse",
+                                         "Alt+LeftMouseClick", "Alt+LeftMouseDoubleClick"}) {
+    EXPECT_FALSE(resolves_conversion(editor, shortcut, state, context));
+  }
+  const auto reuse = editor.commands().analyze_shortcut_assignment(action_key, "Alt+LeftMouse");
+  ASSERT_TRUE(reuse.ok);
+  EXPECT_TRUE(reuse.conflicts.empty());
+  EXPECT_NE(std::find_if(reuse.compatible_reuses.begin(), reuse.compatible_reuses.end(),
+      [](const auto &candidate) {
+        return candidate.target_id == "viewport.material.transfer_face_texture";
+      }), reuse.compatible_reuses.end());
+
+  ASSERT_TRUE(editor.preferences().set_action_shortcut(action_key, "Ctrl+Alt+F18").ok());
+  EXPECT_FALSE(resolves_conversion(editor, "Alt+LeftMouse", state, context));
+  EXPECT_TRUE(resolves_conversion(editor, "Ctrl+Alt+F18", state, context));
+  CommandTestHarness reloaded_harness;
+  auto &reloaded = reloaded_harness.editor;
+  ASSERT_TRUE(reloaded.commands().set_keybinding_storage_path(path).ok());
+  EXPECT_FALSE(resolves_conversion(reloaded, "Alt+LeftMouse", state, context));
+  EXPECT_TRUE(resolves_conversion(reloaded, "Ctrl+Alt+F18", state, context));
+  const auto loaded_catalog = reloaded.commands().keybinding_catalog();
+  const auto *loaded = find_keybinding_catalog_entry(loaded_catalog, kTarget);
+  ASSERT_NE(loaded, nullptr);
+  EXPECT_EQ(loaded->when, entry->when);
+  EXPECT_EQ(loaded->source, quader::QuaderKeybindingSourceKind::User);
+  ASSERT_TRUE(reloaded.preferences().remove_action_shortcut(action_key).ok());
+  ASSERT_TRUE(editor.commands().set_keybinding_storage_path(path).ok());
+  EXPECT_FALSE(resolves_conversion(editor, "Alt+LeftMouse", state, context));
+  EXPECT_FALSE(resolves_conversion(editor, "Ctrl+Alt+F18", state, context));
+  ASSERT_TRUE(editor.preferences().reset_action_shortcut(action_key).ok());
+  EXPECT_TRUE(resolves_conversion(editor, "Alt+LeftMouse", state, context));
+  EXPECT_EQ(editor.commands().shortcut_for("viewport.material.transfer_face_texture"),
+            "Alt+LeftMouse");
+}
+
+TEST(EditorApiTests, CurvePointConversionResolverIsOneShotAndReservesReboundClicks) {
+  CommandTestHarness harness;
+  auto &editor = harness.editor;
+  ASSERT_TRUE(editor.commands().set_keybinding_storage_path(
+      keybinding_test_path("curve-point-conversion-flags")).ok());
+  quader::ViewportToolState state;
+  state.active_tool = quader::ViewportToolId::Curve;
+  state.selection_mode = quader::ViewportSelectionMode::Face;
+  std::vector<quader::QuaderInputChord> suppressed_chords;
+  double linear_array_wheel_remainder = 0;
+  double radial_array_wheel_remainder = 0;
+  auto resolve = [&](quader::ViewportInputFrame &input) {
+    quader::ViewportKeybindingResolver::resolve(editor, state, input,
+        suppressed_chords, linear_array_wheel_remainder, radial_array_wheel_remainder);
+  };
+  quader::ViewportInputFrame input;
+  input.viewport_focused = true;
+  input.active_tool_owns_viewport = true;
+  input.pressed_input_chords = {single_input_chord("Alt+LeftMouse")};
+  input.pointer_pressed_edges = {
+      {quader::QuaderMouseButton::Left, {11.0f, 13.0f}}};
+  resolve(input);
+  ASSERT_EQ(input.curve_conversion_edges.size(), 1u);
+  EXPECT_EQ(input.curve_conversion_edges[0].kind,
+            quader::ViewportCurveConversionEdgeKind::Trigger);
+  EXPECT_EQ(input.curve_conversion_edges[0].semantic_chord.mouse_button,
+            quader::QuaderMouseButton::Left);
+  EXPECT_EQ(input.curve_conversion_edges[0].semantic_chord.gesture,
+            quader::QuaderInputGesture::Press);
+  ASSERT_TRUE(input.curve_conversion_edges[0].pointer_edge.has_value());
+  EXPECT_FLOAT_EQ(input.curve_conversion_edges[0].pointer_edge->local.x, 11.0f);
+  EXPECT_FLOAT_EQ(input.curve_conversion_edges[0].pointer_edge->local.y, 13.0f);
+  EXPECT_FALSE(input.transfer_face_texture_pressed);
+  EXPECT_FALSE(input.sample_face_material_pressed);
+  EXPECT_FALSE(input.apply_active_material_to_selection_pressed);
+  EXPECT_FALSE(input.apply_face_material_to_mesh_pressed);
+  input.active_input_chords = input.pressed_input_chords;
+  input.pressed_input_chords.clear();
+  resolve(input);
+  EXPECT_TRUE(input.curve_conversion_edges.empty());
+  input.released_input_chords = input.active_input_chords;
+  input.active_input_chords.clear();
+  resolve(input);
+  EXPECT_TRUE(input.curve_conversion_edges.empty());
+  input.released_input_chords.clear();
+  input.pressed_input_chords = {single_input_chord("Alt+LeftMouseDoubleClick")};
+  input.pointer_pressed_edges = {
+      {quader::QuaderMouseButton::Left, {17.0f, 19.0f}}};
+  resolve(input);
+  ASSERT_EQ(input.curve_conversion_edges.size(), 1u);
+  EXPECT_EQ(input.curve_conversion_edges[0].kind,
+            quader::ViewportCurveConversionEdgeKind::Trigger);
+  EXPECT_EQ(input.curve_conversion_edges[0].semantic_chord.gesture,
+            quader::QuaderInputGesture::Press)
+      << "Qt substitutes the second physical press with a double-click event";
+  ASSERT_TRUE(input.curve_conversion_edges[0].pointer_edge.has_value());
+  EXPECT_FLOAT_EQ(input.curve_conversion_edges[0].pointer_edge->local.x, 17.0f);
+
+  input.pressed_input_chords = {single_input_chord("Alt+LeftMouse")};
+  state.active_tool = quader::ViewportToolId::Select;
+  input.active_tool_owns_viewport = false;
+  resolve(input);
+  EXPECT_TRUE(input.curve_conversion_edges.empty());
+  EXPECT_TRUE(input.transfer_face_texture_pressed);
+  state.active_tool = quader::ViewportToolId::Curve;
+  input.active_tool_owns_viewport = true;
+  input.navigation_active = true;
+  resolve(input);
+  EXPECT_TRUE(input.curve_conversion_edges.empty());
+  EXPECT_FALSE(input.transfer_face_texture_pressed);
+  input.navigation_active = false;
+  input.text_input_active = true;
+  resolve(input);
+  EXPECT_TRUE(input.curve_conversion_edges.empty());
+
+  const quader::QuaderKeybindingActionKey action{
+      "viewport.curve.toggle_point_smoothness", "viewport.tool.curve"};
+  for (const std::pair<std::string_view, std::string_view> mapping : {
+           std::pair{"Alt+LeftMouseClick", "Alt+LeftMouse"},
+           std::pair{"Alt+LeftMouseDoubleClick", "Alt+LeftMouse"},
+           std::pair{"Alt+RightMouseClick", "Alt+RightMouse"},
+           std::pair{"Alt+Mouse4Click", "Alt+Mouse4"}}) {
+    const std::string_view binding = mapping.first;
+    SCOPED_TRACE(binding);
+    ASSERT_TRUE(editor.preferences().set_action_shortcut(action, std::string(binding)).ok());
+    input = {};
+    input.viewport_focused = true;
+    input.active_tool_owns_viewport = true;
+    input.pressed_input_chords = {single_input_chord(mapping.second)};
+    input.pointer_pressed_edges = {{single_input_chord(mapping.second).mouse_button,
+                                    {23.0f, 29.0f}}};
+    resolve(input);
+    ASSERT_EQ(input.curve_conversion_edges.size(), 1u);
+    EXPECT_EQ(input.curve_conversion_edges[0].kind,
+              quader::ViewportCurveConversionEdgeKind::ReservePress);
+    ASSERT_TRUE(input.curve_conversion_edges[0].pointer_edge.has_value());
+    EXPECT_EQ(input.curve_conversion_edges[0].pointer_edge->button,
+              single_input_chord(mapping.second).mouse_button);
+    EXPECT_FLOAT_EQ(input.curve_conversion_edges[0].pointer_edge->local.x,
+                    23.0f);
+    EXPECT_FALSE(input.transfer_face_texture_pointer_reserved);
+    input.pressed_input_chords.clear();
+    input.active_input_chords = {single_input_chord(mapping.second)};
+    resolve(input);
+    EXPECT_TRUE(input.curve_conversion_edges.empty());
+    input.active_input_chords.clear();
+    input.pressed_input_chords = {single_input_chord(binding)};
+    input.pointer_pressed_edges.clear();
+    input.pointer_released_edges.clear();
+    if (single_input_chord(binding).gesture ==
+        quader::QuaderInputGesture::Click) {
+      input.pointer_released_edges = {
+          {single_input_chord(binding).mouse_button, {31.0f, 37.0f}}};
+    } else {
+      input.pointer_pressed_edges = {
+          {single_input_chord(binding).mouse_button, {31.0f, 37.0f}}};
+    }
+    resolve(input);
+    ASSERT_EQ(input.curve_conversion_edges.size(), 1u);
+    EXPECT_EQ(input.curve_conversion_edges[0].kind,
+              quader::ViewportCurveConversionEdgeKind::Trigger);
+    EXPECT_EQ(input.curve_conversion_edges[0].semantic_chord.mouse_button,
+              single_input_chord(binding).mouse_button);
+    EXPECT_EQ(input.curve_conversion_edges[0].semantic_chord.gesture,
+              single_input_chord(binding).gesture);
+    ASSERT_TRUE(input.curve_conversion_edges[0].pointer_edge.has_value());
+    EXPECT_FLOAT_EQ(input.curve_conversion_edges[0].pointer_edge->local.x,
+                    31.0f);
+  }
+  ASSERT_TRUE(editor.preferences().remove_action_shortcut(action).ok());
+  input.pressed_input_chords = {single_input_chord("Alt+LeftMouse")};
+  resolve(input);
+  EXPECT_TRUE(input.curve_conversion_edges.empty());
+  EXPECT_FALSE(input.transfer_face_texture_pressed);
+}
+
+TEST(EditorApiTests,
+     CurvePointConversionProvenanceSkipsUnboundSameButtonPresses) {
+  CommandTestHarness harness;
+  auto &editor = harness.editor;
+  ASSERT_TRUE(editor.commands().set_keybinding_storage_path(
+      keybinding_test_path("curve-point-conversion-provenance")).ok());
+  quader::ViewportToolState state;
+  state.active_tool = quader::ViewportToolId::Curve;
+  quader::ViewportInputFrame input;
+  input.viewport_focused = true;
+  input.active_tool_owns_viewport = true;
+  input.pressed_input_chords = {
+      single_input_chord("LeftMouse"),
+      single_input_chord("Alt+LeftMouse"),
+      single_input_chord("Shift+LeftMouse"),
+  };
+  input.pointer_pressed_edges = {
+      {quader::QuaderMouseButton::Left, {10.0f, 20.0f}},
+      {quader::QuaderMouseButton::Left, {30.0f, 40.0f}},
+      {quader::QuaderMouseButton::Left, {50.0f, 60.0f}},
+  };
+  std::vector<quader::QuaderInputChord> suppressed_chords;
+  double linear_array_wheel_remainder = 0.0;
+  double radial_array_wheel_remainder = 0.0;
+  quader::ViewportKeybindingResolver::resolve(
+      editor, state, input, suppressed_chords,
+      linear_array_wheel_remainder, radial_array_wheel_remainder);
+
+  ASSERT_EQ(input.curve_conversion_edges.size(), 1u);
+  const auto &event = input.curve_conversion_edges.front();
+  EXPECT_EQ(event.kind, quader::ViewportCurveConversionEdgeKind::Trigger);
+  EXPECT_EQ(event.semantic_chord, single_input_chord("Alt+LeftMouse"));
+  ASSERT_TRUE(event.pointer_edge.has_value());
+  EXPECT_FLOAT_EQ(event.pointer_edge->local.x, 30.0f);
+  EXPECT_FLOAT_EQ(event.pointer_edge->local.y, 40.0f);
 }
 
 TEST(EditorApiTests,
@@ -8215,6 +8608,174 @@ TEST(EditorApiTests, RightClickPickWithExistingFaceSelectionPreservesComponentSe
         harness.editor.query().compiled_object_mesh(right.value());
     ASSERT_TRUE(right_after.has_value());
     EXPECT_EQ(right_after->indices.size(), right_before->indices.size());
+}
+
+TEST(EditorApiTests, CurveOcclusionQueriesDoNotChangeSelectionHoverOrHistory) {
+  CommandTestHarness harness;
+  auto &editor = harness.editor;
+  const auto box = editor.modeling().create_box(
+      {.min = {-1.0F, -1.0F, -1.0F}, .max = {1.0F, 1.0F, 1.0F}});
+  ASSERT_TRUE(box.ok()) << box.error_message();
+  const auto curve = editor.modeling().create_curve({
+      .points = {{.position = {-2.0F, 0.0F, 3.0F}},
+                 {.position = {2.0F, 0.0F, 3.0F}}},
+  });
+  ASSERT_TRUE(curve.ok()) << curve.error_message();
+  const auto before = quader::test::capture_command_observable_state(editor);
+  for (int repeat = 0; repeat < 32; ++repeat) {
+    const auto depth = editor.query().mesh_surface_distance(
+        {.origin = {0.0F, 0.0F, 10.0F}, .direction = {0.0F, 0.0F, -1.0F}});
+    ASSERT_TRUE(depth.has_value());
+    EXPECT_NEAR(*depth, 9.0, 1.0e-6);
+  }
+  EXPECT_FALSE(editor.query().mesh_surface_distance(
+      {.origin = {5.0F, 5.0F, 10.0F},
+       .direction = {0.0F, 0.0F, -1.0F}}).has_value());
+  const auto difference = quader::test::diff_command_observable_state(
+      before, quader::test::capture_command_observable_state(editor));
+  EXPECT_TRUE(difference.empty()) << difference.summary;
+}
+
+TEST(EditorApiTests,
+     MeshSnapQueryIsReadOnlyAndControlsCurrentSelectionExclusion) {
+  CommandTestHarness harness;
+  auto &editor = harness.editor;
+  const auto box = editor.modeling().create_box(
+      {.min = {-1.0F, -1.0F, -1.0F}, .max = {1.0F, 1.0F, 1.0F}});
+  ASSERT_TRUE(box.ok()) << box.error_message();
+  const auto before = quader::test::capture_command_observable_state(editor);
+  const quader::QuaderRay ray{
+      .origin = {-1.0F, -1.0F, -5.0F},
+      .direction = {0.0F, 0.0F, 1.0F},
+  };
+
+  const quader::QuaderMeshSnapQueryResult excluded =
+      editor.query().mesh_snap_query(ray, 0.25);
+  EXPECT_FALSE(excluded.vertex_target.has_value());
+  ASSERT_TRUE(excluded.nearest_surface_ray_distance.has_value());
+  EXPECT_NEAR(*excluded.nearest_surface_ray_distance, 4.0, 1.0e-6);
+
+  const quader::QuaderMeshSnapQueryResult included =
+      editor.query().mesh_snap_query(ray, 0.25, false);
+  ASSERT_TRUE(included.vertex_target.has_value());
+  EXPECT_EQ(included.vertex_target->modeling_object_id,
+            box.value().modeling_object_id);
+  EXPECT_NEAR(included.vertex_target->world_position.x, -1.0, 1.0e-6);
+  EXPECT_NEAR(included.vertex_target->world_position.y, -1.0, 1.0e-6);
+  EXPECT_NEAR(included.vertex_target->world_position.z, -1.0, 1.0e-6);
+  ASSERT_TRUE(included.nearest_surface_ray_distance.has_value());
+  EXPECT_NEAR(*included.nearest_surface_ray_distance,
+              *excluded.nearest_surface_ray_distance, 1.0e-6);
+
+  const quader::QuaderMeshSnapQueryResult invalid =
+      editor.query().mesh_snap_query(ray, 0.0);
+  EXPECT_FALSE(invalid.vertex_target.has_value());
+  EXPECT_FALSE(invalid.nearest_surface_ray_distance.has_value());
+
+  const auto difference = quader::test::diff_command_observable_state(
+      before, quader::test::capture_command_observable_state(editor));
+  EXPECT_TRUE(difference.empty()) << difference.summary;
+}
+
+TEST(EditorApiTests, NativeCurvePicksReuseModifiersPreservationAndHistory) {
+  CommandTestHarness harness;
+  auto &editor = harness.editor;
+  const auto box = create_selected_box(editor, "Mesh Pick");
+  const auto curve = editor.modeling().create_curve({
+      .points = {{.position = {0.0f, 0.0f, 0.0f}},
+                 {.position = {4.0f, 0.0f, 0.0f}}},
+      .name = "Curve Pick",
+  });
+  ASSERT_TRUE(curve.ok()) << curve.error_message();
+  ASSERT_TRUE(editor.selection().set_mode(quader::QuaderSelectionMode::Object).ok());
+  ASSERT_TRUE(editor.selection().select_object(box).ok());
+  quader::QuaderPickSelectRequest pick;
+  pick.shift_pressed = true;
+  const auto added = editor.selection().pick_scene_entity(curve.value().entity, pick);
+  ASSERT_TRUE(added.ok()) << added.error_message();
+  EXPECT_TRUE(added.changed());
+  EXPECT_EQ(selected_entities(editor).size(), 2u);
+  EXPECT_EQ(editor.query().history().undo_label, "Select Entities");
+  ASSERT_TRUE(editor.history().undo().ok());
+  EXPECT_EQ(selected_entities(editor), std::vector<quader::EntityId>{box.entity});
+  ASSERT_TRUE(editor.history().redo().ok());
+  EXPECT_EQ(selected_entities(editor).size(), 2u);
+
+  pick.shift_pressed = false;
+  pick.preserve_selection_on_selected_hit = true;
+  pick.click_count = 2;
+  const auto retained = editor.selection().pick_scene_entity(curve.value().entity, pick);
+  ASSERT_TRUE(retained.ok()) << retained.error_message();
+  EXPECT_FALSE(retained.changed());
+  EXPECT_EQ(selected_entities(editor).size(), 2u);
+
+  pick.command_pressed = true;
+  const auto removed = editor.selection().pick_scene_entity(curve.value().entity, pick);
+  ASSERT_TRUE(removed.ok()) << removed.error_message();
+  EXPECT_EQ(selected_entities(editor), std::vector<quader::EntityId>{box.entity});
+  pick.command_pressed = false;
+  pick.preserve_selection_on_selected_hit = false;
+  const auto replaced = editor.selection().pick_scene_entity(curve.value().entity, pick);
+  ASSERT_TRUE(replaced.ok()) << replaced.error_message();
+  EXPECT_EQ(selected_entities(editor),
+            std::vector<quader::EntityId>{curve.value().entity});
+}
+
+TEST(EditorApiTests, NativeCurveGroupPicksPromoteNearestGroupAndPreserveMisses) {
+  CommandTestHarness harness;
+  auto &editor = harness.editor;
+  const auto curve = editor.modeling().create_curve({
+      .points = {{.position = {0.0f, 0.0f, 0.0f}},
+                 {.position = {4.0f, 0.0f, 0.0f}}},
+  });
+  ASSERT_TRUE(curve.ok()) << curve.error_message();
+  ASSERT_TRUE(editor.selection().select_object(curve.value()).ok());
+  const auto inner = editor.scene().group_selection("Inner Curve Group");
+  ASSERT_TRUE(inner.ok()) << inner.error_message();
+  const auto outer = editor.scene().group_selection("Outer Curve Group");
+  ASSERT_TRUE(outer.ok()) << outer.error_message();
+  const auto ungrouped = editor.modeling().create_curve({
+      .points = {{.position = {8.0f, 0.0f, 0.0f}},
+                 {.position = {12.0f, 0.0f, 0.0f}}},
+  });
+  ASSERT_TRUE(ungrouped.ok()) << ungrouped.error_message();
+  ASSERT_TRUE(editor.selection().set_mode(quader::QuaderSelectionMode::Group).ok());
+  ASSERT_TRUE(editor.selection().clear().ok());
+  quader::QuaderPickSelectRequest pick;
+  const auto picked = editor.selection().pick_scene_entity(curve.value().entity, pick);
+  ASSERT_TRUE(picked.ok()) << picked.error_message();
+  EXPECT_EQ(selected_entities(editor), std::vector<quader::EntityId>{inner.value().id});
+  pick.preserve_selection_on_miss = true;
+  ASSERT_TRUE(editor.selection().pick_scene_entity(ungrouped.value().entity, pick).ok());
+  EXPECT_EQ(selected_entities(editor), std::vector<quader::EntityId>{inner.value().id});
+  pick.preserve_selection_on_miss = false;
+  ASSERT_TRUE(editor.selection().pick_scene_entity(ungrouped.value().entity, pick).ok());
+  EXPECT_TRUE(selected_entities(editor).empty());
+}
+
+TEST(EditorApiTests, NativeCurvePicksRejectHiddenLockedAndComponentModeTargets) {
+  CommandTestHarness harness;
+  auto &editor = harness.editor;
+  const auto box = create_selected_box(editor);
+  const auto curve = editor.modeling().create_curve({
+      .points = {{.position = {0.0f, 0.0f, 0.0f}},
+                 {.position = {4.0f, 0.0f, 0.0f}}},
+  });
+  ASSERT_TRUE(curve.ok()) << curve.error_message();
+  ASSERT_TRUE(editor.selection().select_object(box).ok());
+  ASSERT_TRUE(editor.scene().set_visible(curve.value().entity, false).ok());
+  EXPECT_FALSE(editor.selection().pick_scene_entity(curve.value().entity, {}).ok());
+  EXPECT_EQ(selected_entities(editor), std::vector<quader::EntityId>{box.entity});
+  ASSERT_TRUE(editor.scene().set_visible(curve.value().entity, true).ok());
+  ASSERT_TRUE(editor.scene().set_locked(curve.value().entity, true).ok());
+  EXPECT_FALSE(editor.selection().pick_scene_entity(curve.value().entity, {}).ok());
+  EXPECT_EQ(selected_entities(editor), std::vector<quader::EntityId>{box.entity});
+  ASSERT_TRUE(editor.scene().set_locked(curve.value().entity, false).ok());
+  ASSERT_TRUE(editor.selection().set_mode(quader::QuaderSelectionMode::Face).ok());
+  const auto before = selected_entities(editor);
+  EXPECT_FALSE(editor.selection().pick_scene_entity(curve.value().entity, {}).ok());
+  EXPECT_EQ(selected_entities(editor), before);
+  EXPECT_FALSE(editor.selection().pick_scene_entity(quader::kInvalidEntityId, {}).ok());
 }
 
 TEST(EditorApiTests, GroupModeRightClickPickSelectsGroupBeforeContextDelete) {
@@ -14494,9 +15055,9 @@ TEST(EditorApiTests,
       editor.commands().keybinding_catalog();
 
 #ifndef NDEBUG
-  EXPECT_EQ(commands.size(), 188u);
-#else
   EXPECT_EQ(commands.size(), 189u);
+#else
+  EXPECT_EQ(commands.size(), 190u);
 #endif
 
   std::unordered_set<std::string> expected_target_ids;
@@ -14562,7 +15123,7 @@ TEST(EditorApiTests,
           [&](const std::string &target_id) {
             return !command_ids.contains(target_id);
           }));
-  EXPECT_EQ(non_command_target_count, 47u);
+  EXPECT_EQ(non_command_target_count, 48u);
 
   for (const std::string &typed_id : typed_command_ids()) {
     EXPECT_TRUE(actual_target_ids.contains(typed_id)) << typed_id;

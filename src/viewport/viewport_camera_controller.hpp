@@ -8,6 +8,7 @@
 
 #include "math/types.hpp"
 #include "viewport/viewport_navigation_defaults.hpp"
+#include "editor/interactions/viewport_segment_projection.hpp"
 
 #include <cstdint>
 #include <optional>
@@ -95,12 +96,6 @@ struct ViewportScreenPoint {
     QVec2 position;
     float depth = 0.0f;
     bool visible = false;
-};
-
-/// Visible segment endpoints in render pixels, with the viewport's top-left as origin.
-struct ViewportScreenSegment {
-    QVec2 start;
-    QVec2 end;
 };
 
 /**
