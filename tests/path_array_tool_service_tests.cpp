@@ -1,0 +1,731 @@
+////////////////////////////////////////////////////////////////////////////////
+// Copyright (c) 2026 Francesco Di Blasi. All rights reserved.
+// This file is part of Quader and is protected proprietary source code.
+// No permission is granted to use, copy, modify, distribute, or sublicense this
+// file except through prior written authorization from Francesco Di Blasi.
+////////////////////////////////////////////////////////////////////////////////
+#include "api/quader_api_session_internal_access.hpp"
+#include "api/quader_editor_api.hpp"
+#include "editor/array/path_array_tool_service.hpp"
+#include "editor/curve/curve_tool_service.hpp"
+#include "editor/interactions/selection_edit.hpp"
+#include "editor/session/scene_session.hpp"
+#include "scene/scene_document.hpp"
+#include "scene/scene_transform.hpp"
+
+#include <gtest/gtest.h>
+
+#include <algorithm>
+#include <array>
+#include <cmath>
+#include <cstddef>
+#include <cstdint>
+#include <memory>
+#include <span>
+#include <string>
+#include <string_view>
+#include <utility>
+#include <vector>
+
+namespace quader {
+namespace {
+
+constexpr float kTestTolerance = 0.0005F;
+
+struct PathArrayHarness final {
+  explicit PathArrayHarness(
+      std::shared_ptr<PathArraySessionDefaults> defaults =
+          std::make_shared<PathArraySessionDefaults>())
+      : session(std::move(defaults)),
+        editor(QuaderApiSessionInternalAccess::from_scene_session(session)) {}
+
+  SceneSession session;
+  QuaderEditorApi editor;
+};
+
+QuaderModelingObjectRef create_path(QuaderEditorApi &editor, QVec3 end,
+                                    std::string name = "Path") {
+  const QuaderApiResult<QuaderModelingObjectRef> created =
+      editor.modeling().create_curve({
+          .points = {{.position = {}},
+                     {.position = {end.x, end.y, end.z}}},
+          .name = std::move(name),
+      });
+  EXPECT_TRUE(created.ok()) << created.error_message();
+  return created.ok() ? created.value() : QuaderModelingObjectRef{};
+}
+
+QuaderModelingObjectRef create_box(QuaderEditorApi &editor,
+                                   std::string name = "Array Source") {
+  const QuaderApiResult<QuaderModelingObjectRef> created =
+      editor.modeling().create_box(
+          QuaderBounds{.min = {-0.5F, -0.5F, -0.5F},
+                       .max = {0.5F, 0.5F, 0.5F}},
+          std::move(name));
+  EXPECT_TRUE(created.ok()) << created.error_message();
+  return created.ok() ? created.value() : QuaderModelingObjectRef{};
+}
+
+QuaderEntityRef create_empty(QuaderEditorApi &editor, std::string name,
+                             EntityId parent = kInvalidEntityId,
+                             QuaderTransform transform = {}) {
+  const QuaderApiResult<QuaderEntityRef> created = editor.scene().create_entity({
+      .name = std::move(name),
+      .kind = QuaderEntityKind::Empty,
+      .parent = parent,
+      .transform = transform,
+  });
+  EXPECT_TRUE(created.ok()) << created.error_message();
+  return created.ok() ? created.value() : QuaderEntityRef{};
+}
+
+void select_path(PathArrayHarness &harness,
+                 QuaderModelingObjectRef path) {
+  ASSERT_TRUE(
+      harness.editor.selection().set_mode(QuaderSelectionMode::Object).ok());
+  ASSERT_TRUE(harness.editor.selection().select_object(path).ok());
+  const CommandResult refreshed = harness.session.curve().refresh();
+  ASSERT_TRUE(refreshed.ok) << refreshed.message;
+}
+
+void expect_matrix_near(const QMat4 &actual, const QMat4 &expected) {
+  for (std::size_t index = 0U; index < actual.values.size(); ++index) {
+    EXPECT_NEAR(actual.values[index], expected.values[index], kTestTolerance)
+        << "matrix component " << index;
+  }
+}
+
+void expect_world_origins_match(std::span<const EntityId> roots,
+                                const SceneDocument &scene,
+                                std::span<const QMat4> expected) {
+  ASSERT_EQ(roots.size(), expected.size());
+  std::vector<bool> matched(expected.size(), false);
+  for (const EntityId root : roots) {
+    const QVec3 origin =
+        transform_point(scene.world_transform_matrix(root), {});
+    bool found = false;
+    for (std::size_t index = 0U; index < expected.size(); ++index) {
+      if (matched[index]) {
+        continue;
+      }
+      const QVec3 candidate = transform_point(expected[index], {});
+      if (std::abs(origin.x - candidate.x) <= kTestTolerance &&
+          std::abs(origin.y - candidate.y) <= kTestTolerance &&
+          std::abs(origin.z - candidate.z) <= kTestTolerance) {
+        matched[index] = true;
+        found = true;
+        break;
+      }
+    }
+    EXPECT_TRUE(found) << "no preview station matched root " << root;
+  }
+  EXPECT_TRUE(std::ranges::all_of(matched, [](bool value) { return value; }));
+}
+
+std::vector<EntityId> hierarchy_roots_named(const SceneDocument &scene,
+                                            std::string_view prefix) {
+  std::vector<EntityId> matches;
+  for (const EntityId entity : scene.entities()) {
+    const NameComponent *name = scene.name(entity);
+    if (!scene.is_scene_root(entity) && name != nullptr &&
+        name->name.starts_with(prefix)) {
+      matches.push_back(entity);
+    }
+  }
+  std::ranges::sort(matches);
+  return matches;
+}
+
+TEST(PathArrayToolServiceTests,
+     ActivationRequiresExactlyOneNondegenerateCurveInObjectMode) {
+  PathArrayHarness harness;
+  PathArrayToolService &tool = harness.session.path_array();
+
+  EXPECT_FALSE(tool.can_activate());
+  const QuaderModelingObjectRef mesh = create_box(harness.editor);
+  ASSERT_TRUE(harness.editor.selection().select_object(mesh).ok());
+  EXPECT_FALSE(tool.can_activate());
+
+  const QuaderApiResult<QuaderModelingObjectRef> degenerate =
+      harness.editor.modeling().create_curve({
+          .points = {{.position = {1.0F, 2.0F, 3.0F}},
+                     {.position = {1.0F, 2.0F, 3.0F}}},
+          .name = "Degenerate Path",
+      });
+  ASSERT_TRUE(degenerate.ok()) << degenerate.error_message();
+  EXPECT_FALSE(tool.can_activate());
+
+  const QuaderModelingObjectRef first =
+      create_path(harness.editor, {6.0F, 0.0F, 0.0F}, "First Path");
+  const QuaderModelingObjectRef second =
+      create_path(harness.editor, {0.0F, 6.0F, 0.0F}, "Second Path");
+  ASSERT_TRUE(harness.editor.selection()
+                  .select_objects({first.entity, second.entity}, first.entity)
+                  .ok());
+  EXPECT_FALSE(tool.can_activate());
+
+  ASSERT_TRUE(harness.editor.selection().select_object(first).ok());
+  ASSERT_TRUE(
+      harness.editor.selection().set_mode(QuaderSelectionMode::Face).ok());
+  EXPECT_FALSE(tool.can_activate());
+  ASSERT_TRUE(
+      harness.editor.selection().set_mode(QuaderSelectionMode::Object).ok());
+  ASSERT_TRUE(harness.editor.selection().select_object(first).ok());
+  EXPECT_TRUE(tool.can_activate());
+  const CommandResult activated = tool.activate();
+  ASSERT_TRUE(activated.ok) << activated.message;
+  EXPECT_EQ(tool.stage(), PathArrayToolStage::AwaitingSource);
+  EXPECT_EQ(tool.path_entity(), first.entity);
+}
+
+TEST(PathArrayToolServiceTests,
+     CancelRestoresExactCurveSelectionModeAndControlSubselection) {
+  PathArrayHarness harness;
+  const QuaderModelingObjectRef path =
+      create_path(harness.editor, {12.0F, 0.0F, 0.0F});
+  const QuaderModelingObjectRef source = create_box(harness.editor);
+  select_path(harness, path);
+
+  CurveToolService &curve = harness.session.curve();
+  const CurveToolPreviewState &curve_preview = curve.preview_state();
+  ASSERT_TRUE(curve_preview.document.has_value());
+  const CurveControlTarget anchor{curve_preview.document->points()[0].id,
+                                  CurveControlKind::Anchor};
+  const std::array selected{anchor};
+  ASSERT_TRUE(curve.edit_control_selection(
+      selected, quader_editor_core::SelectionEditOperation::Replace, nullptr,
+      anchor));
+  const CurveControlSelection selection_before = curve.control_selection();
+
+  PathArrayToolService &tool = harness.session.path_array();
+  ASSERT_TRUE(tool.activate().ok);
+  ASSERT_TRUE(tool.select_source(source.entity).ok);
+  EXPECT_EQ(harness.session.scene().selected_entities(),
+            std::vector<EntityId>{source.entity});
+  EXPECT_TRUE(curve.control_selection().empty());
+
+  const CommandResult canceled = tool.cancel();
+  ASSERT_TRUE(canceled.ok) << canceled.message;
+  EXPECT_FALSE(tool.has_session());
+  EXPECT_EQ(harness.session.selection().mode(), ModelingSelectionMode::Object);
+  EXPECT_EQ(harness.session.scene().selected_entities(),
+            std::vector<EntityId>{path.entity});
+  EXPECT_EQ(harness.session.scene().primary_selection(), path.entity);
+  EXPECT_EQ(curve.control_selection(), selection_before);
+}
+
+TEST(PathArrayToolServiceTests,
+     AncestorMutationsAreBlockedAndInvalidationRestoresActivationBaseline) {
+  PathArrayHarness harness;
+  const QuaderEntityRef path_grandparent =
+      create_empty(harness.editor, "Path Grandparent");
+  const QuaderEntityRef path_parent =
+      create_empty(harness.editor, "Path Parent", path_grandparent.id);
+  const QuaderModelingObjectRef path =
+      create_path(harness.editor, {12.0F, 0.0F, 0.0F});
+  ASSERT_TRUE(
+      harness.editor.scene().reparent(path.entity, path_parent.id, false).ok());
+
+  const QuaderEntityRef source_ancestor =
+      create_empty(harness.editor, "Source Ancestor");
+  const QuaderEntityRef source_root = create_empty(
+      harness.editor, "Source Root", source_ancestor.id);
+  const QuaderModelingObjectRef source = create_box(harness.editor);
+  ASSERT_TRUE(
+      harness.editor.scene().reparent(source.entity, source_root.id, false).ok());
+  select_path(harness, path);
+
+  CurveToolService &curve = harness.session.curve();
+  ASSERT_TRUE(curve.preview_state().document.has_value());
+  const CurveControlTarget anchor{
+      curve.preview_state().document->points()[0].id,
+      CurveControlKind::Anchor};
+  const std::array controls{anchor};
+  ASSERT_TRUE(curve.edit_control_selection(
+      controls, quader_editor_core::SelectionEditOperation::Replace, nullptr,
+      anchor));
+  const CurveControlSelection control_baseline = curve.control_selection();
+
+  PathArrayToolService &tool = harness.session.path_array();
+  ASSERT_TRUE(tool.activate().ok);
+  ASSERT_TRUE(tool.select_source(source_root.id).ok);
+  ASSERT_TRUE(tool.preview_valid());
+  EXPECT_TRUE(curve.control_selection().empty());
+  harness.session.history().clear();
+
+  const QuaderApiVoidResult blocked_path_parent =
+      harness.editor.scene().set_transform(
+          path_grandparent.id,
+          {.position = {3.0F, 0.0F, 0.0F}});
+  EXPECT_FALSE(blocked_path_parent.ok());
+  const QuaderApiVoidResult blocked_source_parent =
+      harness.editor.scene().set_transform(
+          source_ancestor.id,
+          {.position = {0.0F, 4.0F, 0.0F}});
+  EXPECT_FALSE(blocked_source_parent.ok());
+  EXPECT_FALSE(harness.session.history().can_undo());
+  const QVec3 path_parent_position =
+      harness.session.scene().transform(path_grandparent.id)->position;
+  const QVec3 source_parent_position =
+      harness.session.scene().transform(source_ancestor.id)->position;
+  EXPECT_FLOAT_EQ(path_parent_position.x, 0.0F);
+  EXPECT_FLOAT_EQ(path_parent_position.y, 0.0F);
+  EXPECT_FLOAT_EQ(path_parent_position.z, 0.0F);
+  EXPECT_FLOAT_EQ(source_parent_position.x, 0.0F);
+  EXPECT_FLOAT_EQ(source_parent_position.y, 0.0F);
+  EXPECT_FLOAT_EQ(source_parent_position.z, 0.0F);
+  EXPECT_TRUE(tool.has_session());
+  EXPECT_TRUE(tool.preview_valid());
+
+  // Simulate an external document replacement/edit that bypassed the command
+  // blocker. The next lifecycle refresh must cancel the now-invalid session
+  // and restore the exact activation selection memento.
+  ASSERT_TRUE(harness.session.scene().set_transform(
+      path_grandparent.id,
+      TransformComponent{.position = {1.0F, 0.0F, 0.0F}}));
+  EXPECT_FALSE(tool.active());
+  const CommandResult refreshed = tool.refresh();
+  ASSERT_TRUE(refreshed.ok) << refreshed.message;
+  EXPECT_TRUE(refreshed.changed);
+  EXPECT_FALSE(tool.has_session());
+  EXPECT_EQ(harness.session.selection().mode(), ModelingSelectionMode::Object);
+  EXPECT_EQ(harness.session.scene().selected_entities(),
+            std::vector<EntityId>{path.entity});
+  EXPECT_EQ(harness.session.scene().primary_selection(), path.entity);
+  EXPECT_EQ(curve.control_selection(), control_baseline);
+}
+
+TEST(PathArrayToolServiceTests,
+     SessionDefaultsFitFirstPathRememberExactSpacingAndReset) {
+  const auto defaults = std::make_shared<PathArraySessionDefaults>();
+  {
+    PathArrayHarness first(defaults);
+    const QuaderModelingObjectRef path =
+        create_path(first.editor, {12.0F, 0.0F, 0.0F});
+    select_path(first, path);
+    PathArrayToolService &tool = first.session.path_array();
+    ASSERT_TRUE(tool.activate().ok);
+    EXPECT_EQ(tool.count(), 4U);
+    EXPECT_NEAR(tool.distance(), 4.0, 0.0001);
+    ASSERT_TRUE(tool.set_distance(1.5).ok);
+    EXPECT_DOUBLE_EQ(defaults->remembered_distance.value(), 1.5);
+    ASSERT_TRUE(tool.cancel().ok);
+  }
+
+  {
+    PathArrayHarness shorter(defaults);
+    const QuaderModelingObjectRef path =
+        create_path(shorter.editor, {3.0F, 0.0F, 0.0F});
+    select_path(shorter, path);
+    PathArrayToolService &tool = shorter.session.path_array();
+    ASSERT_TRUE(tool.activate().ok);
+    EXPECT_NEAR(tool.maximum_distance(), 3.0, 0.0001);
+    EXPECT_NEAR(tool.distance(), 1.5, 0.0001)
+        << "activation must preserve the exact remembered spacing";
+
+    ASSERT_TRUE(tool.set_count(2U).ok);
+    ASSERT_TRUE(tool.set_distance(0.25).ok);
+    ASSERT_TRUE(tool.set_follow_path(false).ok);
+    ASSERT_TRUE(tool.set_forward_axis(PathArraySignedAxis::NegativeZ).ok);
+    const CommandResult reset = tool.reset_settings();
+    ASSERT_TRUE(reset.ok) << reset.message;
+    EXPECT_EQ(tool.count(), kPathArrayDefaultCount);
+    EXPECT_NEAR(tool.distance(), 1.0, 0.0001);
+    EXPECT_TRUE(tool.follow_path());
+    EXPECT_EQ(tool.forward_axis(), PathArraySignedAxis::PositiveX);
+    EXPECT_NEAR(defaults->remembered_distance.value(), 1.0, 0.0001);
+    ASSERT_TRUE(tool.cancel().ok);
+  }
+
+  PathArrayHarness longer(defaults);
+  const QuaderModelingObjectRef path =
+      create_path(longer.editor, {30.0F, 0.0F, 0.0F});
+  select_path(longer, path);
+  ASSERT_TRUE(longer.session.path_array().activate().ok);
+  EXPECT_NEAR(longer.session.path_array().maximum_distance(), 30.0, 0.0001);
+  EXPECT_NEAR(longer.session.path_array().distance(), 1.0, 0.0001)
+      << "later activations use the session default instead of refitting";
+}
+
+TEST(PathArrayToolServiceTests,
+     CountChangesPreserveExactDistanceRangeAndEveryPrefixPlacement) {
+  const auto defaults = std::make_shared<PathArraySessionDefaults>();
+  PathArrayHarness harness(defaults);
+  const QuaderModelingObjectRef path =
+      create_path(harness.editor, {127.0F, 0.0F, 0.0F});
+  const QuaderModelingObjectRef source = create_box(harness.editor);
+  select_path(harness, path);
+
+  PathArrayToolService &tool = harness.session.path_array();
+  ASSERT_TRUE(tool.activate().ok);
+  constexpr double kDistance = 5.0;
+  ASSERT_TRUE(tool.set_distance(200.0).ok);
+  EXPECT_DOUBLE_EQ(tool.maximum_distance(), 200.0)
+      << "the control range must always contain the stored Distance";
+  ASSERT_TRUE(tool.set_count(kPathArrayMaximumCount).ok);
+  EXPECT_DOUBLE_EQ(tool.distance(), 200.0);
+  EXPECT_DOUBLE_EQ(tool.maximum_distance(), 200.0);
+  ASSERT_TRUE(tool.set_count(kPathArrayDefaultCount).ok);
+  ASSERT_TRUE(tool.set_distance(kDistance).ok);
+  EXPECT_DOUBLE_EQ(tool.distance(), kDistance);
+  EXPECT_DOUBLE_EQ(tool.maximum_distance(), 127.0);
+  ASSERT_TRUE(defaults->remembered_distance.has_value());
+  EXPECT_DOUBLE_EQ(*defaults->remembered_distance, kDistance);
+  ASSERT_TRUE(tool.select_source(source.entity).ok);
+
+  const PathArrayPreviewState initial_preview = tool.preview_state();
+  ASSERT_TRUE(initial_preview.active);
+  ASSERT_EQ(initial_preview.root_world_transforms.size(),
+            kPathArrayDefaultCount);
+  const std::vector<QMat4> initial_prefix =
+      initial_preview.root_world_transforms;
+  const double initial_maximum_distance = tool.maximum_distance();
+
+  ASSERT_TRUE(tool.set_count(kPathArrayMaximumCount).ok);
+  EXPECT_EQ(tool.count(), kPathArrayMaximumCount);
+  EXPECT_DOUBLE_EQ(tool.maximum_distance(), initial_maximum_distance);
+  EXPECT_DOUBLE_EQ(tool.distance(), kDistance);
+  EXPECT_DOUBLE_EQ(*defaults->remembered_distance, kDistance);
+
+  const PathArrayPreviewState &maximum_preview = tool.preview_state();
+  ASSERT_TRUE(maximum_preview.active);
+  EXPECT_DOUBLE_EQ(maximum_preview.effective_distance, kDistance);
+  ASSERT_EQ(maximum_preview.root_world_transforms.size(),
+            kPathArrayMaximumCount);
+  ASSERT_EQ(maximum_preview.scene.meshes.size(), 1U);
+  EXPECT_EQ(maximum_preview.scene.meshes.front().instance_transforms.size(),
+            kPathArrayMaximumCount);
+  EXPECT_EQ(maximum_preview.scene.suppression.entities,
+            std::vector<EntityId>{source.entity});
+  EXPECT_TRUE(maximum_preview.scene.suppression.occurrences.empty());
+  for (std::size_t index = 0U; index < initial_prefix.size(); ++index) {
+    EXPECT_EQ(maximum_preview.root_world_transforms[index].values,
+              initial_prefix[index].values)
+        << "existing prefix placement " << index << " changed with Count";
+  }
+  for (std::size_t index = 0U;
+       index < maximum_preview.root_world_transforms.size(); ++index) {
+    const QVec3 origin =
+        transform_point(maximum_preview.root_world_transforms[index], {});
+    EXPECT_NEAR(origin.x, static_cast<float>(index) * kDistance,
+                kTestTolerance)
+        << "placement " << index;
+    EXPECT_NEAR(origin.y, 0.0F, kTestTolerance);
+    EXPECT_NEAR(origin.z, 0.0F, kTestTolerance);
+  }
+
+  ASSERT_TRUE(tool.set_count(kPathArrayDefaultCount).ok);
+  EXPECT_EQ(tool.count(), kPathArrayDefaultCount);
+  EXPECT_DOUBLE_EQ(tool.maximum_distance(), initial_maximum_distance);
+  EXPECT_DOUBLE_EQ(tool.distance(), kDistance);
+  EXPECT_DOUBLE_EQ(*defaults->remembered_distance, kDistance);
+  const PathArrayPreviewState &restored_preview = tool.preview_state();
+  ASSERT_TRUE(restored_preview.active);
+  EXPECT_DOUBLE_EQ(restored_preview.effective_distance, kDistance);
+  EXPECT_EQ(restored_preview.root_world_transforms.size(),
+            kPathArrayDefaultCount);
+  EXPECT_EQ(restored_preview.scene.meshes.front().instance_transforms.size(),
+            kPathArrayDefaultCount);
+  for (std::size_t index = 0U; index < initial_prefix.size(); ++index) {
+    EXPECT_EQ(restored_preview.root_world_transforms[index].values,
+              initial_prefix[index].values);
+  }
+}
+
+TEST(PathArrayToolServiceTests,
+     InvalidSourcesAreInertAndValidReplacementPublishesWholePreview) {
+  PathArrayHarness harness;
+  const QuaderModelingObjectRef path =
+      create_path(harness.editor, {9.0F, 0.0F, 0.0F});
+  const QuaderModelingObjectRef first =
+      create_box(harness.editor, "First Source");
+  const QuaderModelingObjectRef second =
+      create_box(harness.editor, "Second Source");
+  const QuaderModelingObjectRef other_curve =
+      create_path(harness.editor, {0.0F, 9.0F, 0.0F}, "Not A Source");
+  const QuaderEntityRef empty = create_empty(harness.editor, "Empty Leaf");
+  select_path(harness, path);
+
+  PathArrayToolService &tool = harness.session.path_array();
+  ASSERT_TRUE(tool.activate().ok);
+  ASSERT_TRUE(tool.select_source(first.entity).ok);
+  const PathArrayPreviewState first_preview = tool.preview_state();
+  ASSERT_TRUE(first_preview.active);
+  ASSERT_EQ(first_preview.root_world_transforms.size(), 4U);
+  ASSERT_EQ(first_preview.scene.meshes.size(), 1U);
+  EXPECT_EQ(first_preview.scene.meshes.front().instance_transforms.size(), 4U);
+  EXPECT_EQ(first_preview.scene.suppression.entities,
+            std::vector<EntityId>{first.entity});
+  EXPECT_TRUE(harness.session.scene().visibility(first.entity)->visible)
+      << "preview suppression must not edit SceneDocument visibility";
+
+  for (const EntityId invalid : {path.entity, other_curve.entity, empty.id,
+                                 harness.session.scene().scene_root()}) {
+    const CommandResult rejected = tool.select_source(invalid);
+    EXPECT_FALSE(rejected.ok);
+    EXPECT_EQ(tool.source_root(), first.entity);
+    EXPECT_EQ(tool.preview_state().revision, first_preview.revision);
+    EXPECT_EQ(harness.session.scene().selected_entities(),
+              std::vector<EntityId>{first.entity});
+  }
+
+  const CommandResult replaced = tool.select_source(second.entity);
+  ASSERT_TRUE(replaced.ok) << replaced.message;
+  EXPECT_EQ(tool.source_root(), second.entity);
+  const PathArrayPreviewState &second_preview = tool.preview_state();
+  ASSERT_TRUE(second_preview.active);
+  EXPECT_GT(second_preview.revision, first_preview.revision);
+  EXPECT_EQ(second_preview.scene.suppression.entities,
+            std::vector<EntityId>{second.entity});
+  EXPECT_TRUE(harness.session.scene().visibility(first.entity)->visible);
+  EXPECT_TRUE(harness.session.scene().visibility(second.entity)->visible);
+}
+
+TEST(PathArrayToolServiceTests,
+     ShadowLightBudgetDynamicallyLowersCountWithoutDroppingParticipants) {
+  PathArrayHarness harness;
+  const QuaderModelingObjectRef path =
+      create_path(harness.editor, {12.0F, 0.0F, 0.0F});
+  const QuaderEntityRef group = create_empty(harness.editor, "Light Group");
+  constexpr std::size_t kShadowLightCount = 5U;
+  std::vector<EntityId> lights;
+  for (std::size_t index = 0U; index < kShadowLightCount; ++index) {
+    const QuaderApiResult<QuaderEntityRef> created =
+        harness.editor.scene().create_point_light({
+            .name = "Shadow Light " + std::to_string(index),
+            .parent = group.id,
+            .light = {.type = QuaderLightType::Point,
+                      .casts_shadows = true},
+        });
+    ASSERT_TRUE(created.ok()) << created.error_message();
+    lights.push_back(created.value().id);
+  }
+  select_path(harness, path);
+
+  PathArrayToolService &tool = harness.session.path_array();
+  ASSERT_TRUE(tool.activate().ok);
+  const double distance_before_source = tool.distance();
+  const double maximum_distance_before_source = tool.maximum_distance();
+  ASSERT_TRUE(tool.select_source(group.id).ok);
+  EXPECT_EQ(tool.maximum_count(), 3U)
+      << "16 shadow placements divided by five lights allows three roots";
+  EXPECT_EQ(tool.count(), 3U);
+  EXPECT_DOUBLE_EQ(tool.distance(), distance_before_source);
+  EXPECT_DOUBLE_EQ(tool.maximum_distance(), maximum_distance_before_source);
+  EXPECT_FALSE(tool.set_count(4U).ok);
+
+  const PathArrayPreviewState &preview = tool.preview_state();
+  ASSERT_TRUE(preview.active);
+  ASSERT_EQ(preview.scene.lights.size(), kShadowLightCount);
+  for (const ModelingToolPreviewLight &light : preview.scene.lights) {
+    EXPECT_TRUE(light.light.casts_shadows);
+    EXPECT_EQ(light.instance_transforms.size(), 3U);
+  }
+  ASSERT_EQ(preview.scene.suppression.entities.size(),
+            kShadowLightCount + 1U);
+  EXPECT_NE(std::ranges::find(preview.scene.suppression.entities, group.id),
+            preview.scene.suppression.entities.end());
+  for (const EntityId light : lights) {
+    EXPECT_NE(std::ranges::find(preview.scene.suppression.entities, light),
+              preview.scene.suppression.entities.end());
+  }
+}
+
+TEST(PathArrayToolServiceTests,
+     GroupContainingDrivingCurveIsRejectedWithoutReplacingSelection) {
+  PathArrayHarness harness;
+  const QuaderModelingObjectRef path =
+      create_path(harness.editor, {8.0F, 0.0F, 0.0F});
+  const QuaderEntityRef group = create_empty(harness.editor, "Path Owner");
+  const QuaderModelingObjectRef sibling = create_box(harness.editor);
+  ASSERT_TRUE(harness.editor.scene().reparent(path.entity, group.id, false).ok());
+  ASSERT_TRUE(
+      harness.editor.scene().reparent(sibling.entity, group.id, false).ok());
+  select_path(harness, path);
+
+  PathArrayToolService &tool = harness.session.path_array();
+  ASSERT_TRUE(tool.activate().ok);
+  EXPECT_FALSE(tool.resolve_source_candidate(group.id).has_value());
+  const CommandResult selected = tool.select_source(group.id);
+  EXPECT_FALSE(selected.ok);
+  EXPECT_EQ(tool.stage(), PathArrayToolStage::AwaitingSource);
+  EXPECT_EQ(tool.source_root(), kInvalidEntityId);
+  EXPECT_EQ(harness.session.scene().selected_entities(),
+            std::vector<EntityId>{path.entity});
+}
+
+TEST(PathArrayToolServiceTests,
+     ApplyReusesOriginalDuplicatesFullHierarchyAndUndoRedoExactCurveBaseline) {
+  PathArrayHarness harness;
+  const QuaderModelingObjectRef path =
+      create_path(harness.editor, {10.0F, 0.0F, 0.0F});
+  const QuaderEntityRef source_root =
+      create_empty(harness.editor, "Path Array Hierarchy");
+  const QuaderModelingObjectRef child =
+      create_box(harness.editor, "Hierarchy Mesh");
+  ASSERT_TRUE(
+      harness.editor.scene().reparent(child.entity, source_root.id, false).ok());
+  ASSERT_TRUE(harness.editor.scene()
+                  .set_transform(source_root.id,
+                                 {.position = {3.0F, 2.0F, 0.0F},
+                                  .rotation_euler = {0.0F, 0.0F, 0.25F},
+                                  .scale = {1.25F, 0.75F, 1.0F}})
+                  .ok());
+  select_path(harness, path);
+
+  CurveToolService &curve = harness.session.curve();
+  ASSERT_TRUE(curve.preview_state().document.has_value());
+  const CurveControlTarget anchor{
+      curve.preview_state().document->points()[0].id,
+      CurveControlKind::Anchor};
+  const std::array controls{anchor};
+  ASSERT_TRUE(curve.edit_control_selection(
+      controls, quader_editor_core::SelectionEditOperation::Replace, nullptr,
+      anchor));
+  const CurveControlSelection control_baseline = curve.control_selection();
+  const QMat4 source_world_before =
+      harness.session.scene().world_transform_matrix(source_root.id);
+  const std::size_t entity_count_before =
+      harness.session.scene().entities().size();
+  harness.session.history().clear();
+
+  PathArrayToolService &tool = harness.session.path_array();
+  ASSERT_TRUE(tool.activate().ok);
+  ASSERT_TRUE(tool.select_source(source_root.id).ok);
+  ASSERT_TRUE(tool.set_count(3U).ok);
+  ASSERT_TRUE(tool.set_distance(3.0).ok);
+  ASSERT_TRUE(tool.set_follow_path(false).ok);
+  const PathArrayPreviewState preview = tool.preview_state();
+  ASSERT_TRUE(preview.active);
+  ASSERT_EQ(preview.root_world_transforms.size(), 3U);
+  ASSERT_EQ(preview.scene.meshes.size(), 1U);
+  EXPECT_EQ(preview.scene.meshes.front().instance_transforms.size(), 3U);
+
+  const CommandResult applied = tool.apply();
+  ASSERT_TRUE(applied.ok) << applied.message;
+  ASSERT_TRUE(applied.changed);
+  EXPECT_FALSE(tool.has_session());
+  ASSERT_NE(harness.session.history().undo_label(), nullptr);
+  EXPECT_EQ(*harness.session.history().undo_label(), "Path Array");
+  EXPECT_EQ(harness.session.scene().entities().size(),
+            entity_count_before + 4U);
+  EXPECT_EQ(harness.session.scene().selected_entities(),
+            std::vector<EntityId>{path.entity});
+  EXPECT_EQ(harness.session.selection().mode(), ModelingSelectionMode::Object);
+  EXPECT_EQ(curve.control_selection(), control_baseline);
+
+  const std::vector<EntityId> roots = hierarchy_roots_named(
+      harness.session.scene(), "Path Array Hierarchy");
+  ASSERT_EQ(roots.size(), 3U);
+  EXPECT_NE(std::ranges::find(roots, source_root.id), roots.end());
+  expect_world_origins_match(roots, harness.session.scene(),
+                             preview.root_world_transforms);
+  for (const EntityId root : roots) {
+    const std::vector<EntityId> children =
+        harness.session.scene().children(root);
+    ASSERT_EQ(children.size(), 1U);
+    EXPECT_EQ(harness.session.scene().kind(children.front()),
+              EntityKind::Mesh);
+  }
+
+  std::vector<std::string> uuids;
+  std::vector<std::string> names;
+  for (const EntityId root : roots) {
+    uuids.push_back(harness.session.scene().uuid(root));
+    names.push_back(harness.session.scene().name(root)->name);
+  }
+
+  const CommandResult undone = harness.session.history().undo();
+  ASSERT_TRUE(undone.ok) << undone.message;
+  EXPECT_FALSE(harness.session.history().can_undo());
+  EXPECT_EQ(harness.session.scene().entities().size(), entity_count_before);
+  expect_matrix_near(harness.session.scene().world_transform_matrix(
+                         source_root.id),
+                     source_world_before);
+  for (const EntityId root : roots) {
+    EXPECT_EQ(harness.session.scene().exists(root), root == source_root.id);
+  }
+  EXPECT_EQ(harness.session.scene().selected_entities(),
+            std::vector<EntityId>{path.entity});
+  EXPECT_EQ(harness.session.selection().mode(), ModelingSelectionMode::Object);
+  EXPECT_EQ(curve.control_selection(), control_baseline);
+
+  const CommandResult redone = harness.session.history().redo();
+  ASSERT_TRUE(redone.ok) << redone.message;
+  EXPECT_EQ(harness.session.scene().entities().size(),
+            entity_count_before + 4U);
+  for (std::size_t index = 0U; index < roots.size(); ++index) {
+    ASSERT_TRUE(harness.session.scene().exists(roots[index]));
+    EXPECT_EQ(harness.session.scene().uuid(roots[index]), uuids[index]);
+    ASSERT_NE(harness.session.scene().name(roots[index]), nullptr);
+    EXPECT_EQ(harness.session.scene().name(roots[index])->name, names[index]);
+  }
+  expect_world_origins_match(roots, harness.session.scene(),
+                             preview.root_world_transforms);
+  EXPECT_EQ(harness.session.scene().selected_entities(),
+            std::vector<EntityId>{path.entity});
+  EXPECT_EQ(harness.session.selection().mode(), ModelingSelectionMode::Object);
+  EXPECT_EQ(curve.control_selection(), control_baseline);
+}
+
+TEST(PathArrayToolServiceTests,
+     AtomicPreviewRetainsLastValidSnapshotAfterUnrepresentableSetting) {
+  PathArrayHarness harness;
+  const QuaderModelingObjectRef path =
+      create_path(harness.editor, {8.0F, 8.0F, 0.0F}, "Diagonal Path");
+  QuaderTransform parent_transform;
+  parent_transform.scale = {2.0F, 1.0F, 1.0F};
+  const QuaderEntityRef parent = create_empty(
+      harness.editor, "Nonuniform Parent", kInvalidEntityId, parent_transform);
+  const QuaderModelingObjectRef source = create_box(harness.editor);
+  ASSERT_TRUE(harness.editor.scene().reparent(source.entity, parent.id, false).ok());
+  select_path(harness, path);
+  harness.session.history().clear();
+  const std::size_t entity_count_before =
+      harness.session.scene().entities().size();
+  const QMat4 source_world_before =
+      harness.session.scene().world_transform_matrix(source.entity);
+
+  PathArrayToolService &tool = harness.session.path_array();
+  ASSERT_TRUE(tool.activate().ok);
+  const CommandResult rejected_first = tool.select_source(source.entity);
+  EXPECT_FALSE(rejected_first.ok);
+  EXPECT_FALSE(tool.has_source());
+  EXPECT_FALSE(tool.preview_valid())
+      << "a 45-degree world alignment below nonuniform scale requires shear";
+  EXPECT_FALSE(tool.preview_state().active);
+  EXPECT_TRUE(harness.session.scene().visibility(source.entity)->visible)
+      << "a failed first preview must leave the authored source visible";
+  EXPECT_EQ(harness.session.scene().selected_entities(),
+            std::vector<EntityId>{path.entity});
+
+  ASSERT_TRUE(tool.set_follow_path(false).ok);
+  ASSERT_TRUE(tool.select_source(source.entity).ok);
+  ASSERT_TRUE(tool.preview_valid());
+  const PathArrayPreviewState valid = tool.preview_state();
+  ASSERT_TRUE(valid.active);
+  ASSERT_FALSE(valid.scene.suppression.entities.empty());
+  ASSERT_TRUE(tool.set_follow_path(true).ok);
+  EXPECT_FALSE(tool.preview_valid());
+  const PathArrayPreviewState &retained = tool.preview_state();
+  EXPECT_TRUE(retained.active);
+  EXPECT_EQ(retained.revision, valid.revision);
+  EXPECT_EQ(retained.source_root, valid.source_root);
+  EXPECT_EQ(retained.scene.suppression.entities,
+            valid.scene.suppression.entities);
+  EXPECT_EQ(retained.root_world_transforms.size(),
+            valid.root_world_transforms.size());
+
+  const CommandResult applied = tool.apply();
+  EXPECT_FALSE(applied.ok);
+  EXPECT_EQ(harness.session.scene().entities().size(), entity_count_before);
+  expect_matrix_near(
+      harness.session.scene().world_transform_matrix(source.entity),
+      source_world_before);
+  EXPECT_FALSE(harness.session.history().can_undo());
+  EXPECT_TRUE(tool.has_session());
+  EXPECT_EQ(tool.source_root(), source.entity);
+}
+
+} // namespace
+} // namespace quader

@@ -189,9 +189,36 @@ struct SelectionIdentityKey final {
   return key;
 }
 
+[[nodiscard]] bool entity_is_excluded(
+    std::span<const EntityId> excluded, EntityId entity) {
+  return entity != kInvalidEntityId &&
+         std::binary_search(excluded.begin(), excluded.end(), entity);
+}
+
+[[nodiscard]] bool occurrence_exclusion_less(
+    const ViewportSceneOccurrenceExclusion &left,
+    const ViewportSceneOccurrenceExclusion &right) noexcept {
+  return scene_surface_occurrence_exclusion_less(left, right);
+}
+
+[[nodiscard]] bool occurrence_is_excluded(
+    std::span<const ViewportSceneOccurrenceExclusion> excluded,
+    EntityId source_entity, EntityId occurrence) {
+  const ViewportSceneOccurrenceExclusion key{
+      .source_entity = source_entity,
+      .occurrence = occurrence,
+  };
+  const auto found = std::lower_bound(excluded.begin(), excluded.end(), key,
+                                      occurrence_exclusion_less);
+  return found != excluded.end() && *found == key;
+}
+
 [[nodiscard]] std::optional<double> render_surface_distance(
     const SceneSurfaceQuerySnapshot *scene_surfaces, const ViewportRay &ray,
-    SceneSurfaceQueryScratch *scratch) {
+    SceneSurfaceQueryScratch *scratch,
+    std::span<const EntityId> excluded_entities = {},
+    std::span<const ViewportSceneOccurrenceExclusion>
+        excluded_occurrences = {}) {
   if (scene_surfaces == nullptr) {
     return std::nullopt;
   }
@@ -205,6 +232,8 @@ struct SelectionIdentityKey final {
               .world_direction = ray.direction,
               .include_backfaces = false,
               .eligibility = SceneSurfaceEligibility::RenderVisible,
+              .excluded_entities = excluded_entities,
+              .excluded_occurrences = excluded_occurrences,
           },
           *scratch);
   return hit.has_value() ? std::optional<double>{hit->distance}
@@ -352,6 +381,9 @@ void append_mesh_hits(const SceneSurfaceQuerySnapshot *scene_surfaces,
                       const ViewportRay &ray,
                       std::optional<double> visible_surface_distance,
                       bool collect_all, bool select_backfaces,
+                      std::span<const EntityId> excluded_entities,
+                      std::span<const ViewportSceneOccurrenceExclusion>
+                          excluded_occurrences,
                       SceneSurfaceQueryScratch *scratch,
                       std::vector<ViewportSceneHitCandidate> &hits) {
   if (scene_surfaces == nullptr || scratch == nullptr) {
@@ -362,6 +394,8 @@ void append_mesh_hits(const SceneSurfaceQuerySnapshot *scene_surfaces,
       .world_direction = ray.direction,
       .include_backfaces = select_backfaces,
       .eligibility = SceneSurfaceEligibility::SelectableUnlocked,
+      .excluded_entities = excluded_entities,
+      .excluded_occurrences = excluded_occurrences,
   };
   if (visible_surface_distance.has_value()) {
     request.max_distance = static_cast<float>(
@@ -408,7 +442,8 @@ void append_billboard_hits(const ViewportScenePointHitQuery &query,
   for (const ViewportSceneBillboardPickCandidate &candidate :
        query.billboards) {
     if (candidate.entity == kInvalidEntityId || !candidate.selectable ||
-        candidate.effectively_locked || !finite_vector(candidate.position)) {
+        candidate.effectively_locked || !finite_vector(candidate.position) ||
+        entity_is_excluded(query.excluded_entities, candidate.entity)) {
       continue;
     }
     const ViewportScreenPoint projected =
@@ -446,6 +481,9 @@ void append_curve_entity_hits(
     std::optional<double> visible_surface_distance,
     std::vector<ViewportSceneHitCandidate> &hits) {
   for (const ViewportSceneCurvePickCandidate &candidate : query.curves) {
+    if (entity_is_excluded(query.excluded_entities, candidate.entity)) {
+      continue;
+    }
     const std::array one{candidate};
     const std::optional<ViewportCurvePickHit> hit = pick_viewport_curve(
         query.camera, query.local_mouse, one, query.curve_radius_pixels,
@@ -473,6 +511,10 @@ void append_curve_control_hit(
   if (!query.include_curve_controls || query.curve_controls == nullptr) {
     return;
   }
+  if (entity_is_excluded(query.excluded_entities,
+                         query.curve_controls->entity)) {
+    return;
+  }
   const std::optional<ViewportCurveControlPickHit> hit =
       pick_viewport_curve_control(
           query.camera, *query.curve_controls, query.local_mouse,
@@ -494,9 +536,11 @@ void append_curve_control_hit(
 void append_resolved_selection_hits(
     std::span<const ResolvedSelectionHit> resolved_hits,
     std::optional<double> visible_surface_distance,
-    std::vector<ViewportSceneHitCandidate> &hits) {
+    std::vector<ViewportSceneHitCandidate> &hits,
+    std::span<const EntityId> excluded_entities = {}) {
   for (const ResolvedSelectionHit &hit : resolved_hits) {
-    if (!depth_is_visible(hit.ray_distance, visible_surface_distance)) {
+    if (entity_is_excluded(excluded_entities, hit.target.entity) ||
+        !depth_is_visible(hit.ray_distance, visible_surface_distance)) {
       continue;
     }
     hits.push_back(viewport_scene_hit_candidate(hit));
@@ -648,17 +692,20 @@ collect_viewport_scene_point_hits(const ViewportScenePointHitQuery &query) {
       query.include_occluded
           ? std::nullopt
           : render_surface_distance(query.scene_surfaces, ray,
-                                    surface_scratch);
+                                    surface_scratch, query.excluded_entities,
+                                    query.excluded_occurrences);
   if (query.include_mesh_surfaces) {
     append_mesh_hits(query.scene_surfaces, ray, visible_surface_distance,
                      query.collect_all_mesh_surfaces, query.select_backfaces,
+                     query.excluded_entities, query.excluded_occurrences,
                      surface_scratch, hits);
   }
   append_billboard_hits(query, ray, visible_surface_distance, hits);
   append_curve_entity_hits(query, visible_surface_distance, hits);
   append_curve_control_hit(query, visible_surface_distance, hits);
   append_resolved_selection_hits(query.resolved_selection_hits,
-                                 visible_surface_distance, hits);
+                                 visible_surface_distance, hits,
+                                 query.excluded_entities);
   return hits;
 }
 
@@ -695,7 +742,7 @@ collect_viewport_scene_ray_hits(const ViewportSceneRayHitQuery &query) {
   if (query.include_mesh_surfaces) {
     append_mesh_hits(query.scene_surfaces, ray, visible_surface_distance,
                      query.collect_all_mesh_surfaces, query.select_backfaces,
-                     surface_scratch, hits);
+                     {}, {}, surface_scratch, hits);
   }
   append_resolved_selection_hits(query.resolved_selection_hits,
                                  visible_surface_distance, hits);

@@ -26,6 +26,8 @@ class EditorSelectionService;
 class LinearArrayToolService;
 class ModelingSessionService;
 class NativeViewportToolCoordinator;
+struct PathArraySessionDefaults;
+class PathArrayToolService;
 class PivotToolService;
 class PrimitiveCreationToolService;
 class RadialArrayToolService;
@@ -77,6 +79,10 @@ class SceneSession {
 public:
   SceneSession();
   explicit SceneSession(SceneContentDocument document);
+  explicit SceneSession(
+      std::shared_ptr<PathArraySessionDefaults> path_array_defaults);
+  SceneSession(std::shared_ptr<PathArraySessionDefaults> path_array_defaults,
+               SceneContentDocument document);
   ~SceneSession();
 
   SceneSession(const SceneSession &) = delete;
@@ -116,6 +122,8 @@ public:
   const LinearArrayToolService &linear_array() const { return *linear_array_; }
   RadialArrayToolService &radial_array() { return *radial_array_; }
   const RadialArrayToolService &radial_array() const { return *radial_array_; }
+  PathArrayToolService &path_array() { return *path_array_; }
+  const PathArrayToolService &path_array() const { return *path_array_; }
   CurveToolService &curve() { return *curve_; }
   const CurveToolService &curve() const { return *curve_; }
   PrimitiveCreationToolService &primitive_creation() {
@@ -206,6 +214,8 @@ private:
   std::unique_ptr<PivotToolService> pivot_;
   std::unique_ptr<LinearArrayToolService> linear_array_;
   std::unique_ptr<RadialArrayToolService> radial_array_;
+  std::shared_ptr<PathArraySessionDefaults> path_array_defaults_;
+  std::unique_ptr<PathArrayToolService> path_array_;
   std::unique_ptr<CurveToolService> curve_;
   std::unique_ptr<PrimitiveCreationToolService> primitive_creation_;
   std::unique_ptr<NativeViewportToolCoordinator> native_tools_;
@@ -223,9 +233,14 @@ private:
  */
 class SceneSessionService final {
 public:
+  SceneSessionService();
+
   std::unique_ptr<SceneSession> create_session() const;
   std::unique_ptr<SceneSession> create_session(SceneContentDocumentRecord record) const;
   std::unique_ptr<SceneSession> open_session(SceneContentDocument document) const;
+
+private:
+  std::shared_ptr<PathArraySessionDefaults> path_array_defaults_;
 };
 
 } // namespace quader

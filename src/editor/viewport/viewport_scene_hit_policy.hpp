@@ -92,6 +92,8 @@ struct ViewportResolvedSelectionHit final {
   std::array<std::uint64_t, 4> stable_key{};
 };
 
+using ViewportSceneOccurrenceExclusion = SceneSurfaceOccurrenceExclusion;
+
 using ViewportSceneHitSource =
     std::variant<ViewportSceneCurveControlHit, ViewportSceneBillboardHit,
                  ViewportSceneCurveEntityHit, ViewportSceneMeshHit,
@@ -119,6 +121,12 @@ struct ViewportScenePointHitQuery final {
   const SceneSurfaceQuerySnapshot *scene_surfaces = nullptr;
   const CurveToolPreviewState *curve_controls = nullptr;
   std::span<const ResolvedSelectionHit> resolved_selection_hits;
+  // Both exclusion spans must be sorted, unique, and remain valid for the
+  // query. They remove providers before render-surface occlusion and canonical
+  // hit arbitration, so a transiently suppressed front object cannot mask a
+  // selectable object behind it.
+  std::span<const EntityId> excluded_entities;
+  std::span<const ViewportSceneOccurrenceExclusion> excluded_occurrences;
   bool include_mesh_surfaces = true;
   bool select_backfaces = true;
   bool include_curve_controls = false;

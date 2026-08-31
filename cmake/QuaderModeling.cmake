@@ -608,6 +608,7 @@ if(QUADER_BUILD_TESTS)
         tests/sdk/headers/previews_header_compile.cpp
         tests/sdk/headers/selection_header_compile.cpp
         tests/sdk/headers/tools_header_compile.cpp
+        tests/sdk/modeling_curve_arc_length_path_tests.cpp
         tests/sdk/modeling_curve_document_tests.cpp
         tests/sdk/modeling_curve_session_tests.cpp
         tests/sdk/modeling_sdk_consumer_tests.cpp)

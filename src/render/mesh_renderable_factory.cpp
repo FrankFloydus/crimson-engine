@@ -1162,12 +1162,16 @@ MeshRenderableProxy MeshRenderableFactory::create_explicit_instances(
     const RenderInstanceBounds &world_bounds, bool cast_shadows,
     bool receive_shadows, bool double_sided, std::uint8_t layer_mask,
     bool editor_unlit, bool depth_only, std::uint8_t channel,
-    std::uint8_t presentation_flags) {
+    std::uint8_t presentation_flags, std::size_t instance_capacity) {
   QDR_PROFILE_FUNCTION();
   MeshRenderableProxy proxy;
+  instance_capacity = instance_capacity == 0u
+                          ? world_transforms.size()
+                          : instance_capacity;
   if (!initialized() || world_transforms.empty() ||
-      world_transforms.size() > engine_->getMaxAutomaticInstances() ||
-      world_transforms.size() > kMeshTextureMappingCapacity ||
+      instance_capacity < world_transforms.size() ||
+      instance_capacity > engine_->getMaxAutomaticInstances() ||
+      instance_capacity > kMeshTextureMappingCapacity ||
       primitive.index_count == 0u ||
       static_cast<std::uint64_t>(primitive.index_offset) +
               primitive.index_count >
@@ -1211,12 +1215,13 @@ MeshRenderableProxy MeshRenderableFactory::create_explicit_instances(
   proxy.material_instances.push_back(material_instance);
 
   std::vector<filament::math::mat4f> transforms;
-  transforms.reserve(world_transforms.size());
+  transforms.reserve(instance_capacity);
   for (const QMat4 &transform : world_transforms) {
     transforms.push_back(make_transform(transform));
   }
+  transforms.resize(instance_capacity, make_transform(QMat4{}));
   proxy.instance_buffer =
-      filament::InstanceBuffer::Builder(transforms.size())
+      filament::InstanceBuffer::Builder(instance_capacity)
           .localTransforms(transforms.data())
           .build(*engine_);
 
@@ -1225,7 +1230,7 @@ MeshRenderableProxy MeshRenderableFactory::create_explicit_instances(
                 proxy.vertex_buffer, proxy.index_buffer,
                 primitive.index_offset, primitive.index_count)
       .material(0u, material_instance)
-      .instances(transforms.size(), proxy.instance_buffer)
+      .instances(world_transforms.size(), proxy.instance_buffer)
       .boundingBox(filament_bounds(world_bounds))
       .layerMask(kViewportAllLayerMask, layer_mask)
       .channel(channel)

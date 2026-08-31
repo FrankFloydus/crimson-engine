@@ -1558,10 +1558,10 @@ TEST(SceneRenderBridgeTests, UsesDepthStampedFaceFillForOverlayTriangles) {
   EXPECT_NE(builder_source.find("OverlayCullingMode::None"), std::string::npos);
   EXPECT_NE(builder_source.find("OverlayTransparencyMode::TwoPassesTwoSides"),
             std::string::npos);
+  EXPECT_NE(bridge_source.find("RenderToolPreviewSceneSnapshot preview"),
+            std::string::npos);
   EXPECT_NE(
-      bridge_source.find("std::vector<RenderToolPreviewMeshRecord> meshes"),
-      std::string::npos);
-  EXPECT_NE(bridge_source.find("tool_preview_cache_.set_meshes(meshes)"),
+      bridge_source.find("tool_preview_cache_.set_meshes(preview.meshes)"),
             std::string::npos);
   EXPECT_NE(tool_preview_cache_source.find("current_generation_"),
             std::string::npos);
@@ -1720,24 +1720,33 @@ TEST(SceneRenderBridgeTests,
                 "Tool preview build hidden candidate generation"),
             std::string::npos);
 
-  const std::size_t publish =
-      bridge_source.find("tool_preview_cache_.set_meshes(meshes)");
+  const std::size_t light_prepare =
+      bridge_source.find("tool_preview_light_cache_.prepare(preview.lights)");
+  const std::size_t publish = bridge_source.find(
+      "tool_preview_cache_.set_meshes(preview.meshes)", light_prepare);
   const std::size_t failed = bridge_source.find(
-      "preview_result == ToolPreviewSubmissionResult::Failed", publish);
+      "mesh_result == ToolPreviewSubmissionResult::Failed", publish);
+  const std::size_t light_publish = bridge_source.find(
+      "tool_preview_light_cache_.publish_prepared()", failed);
   const std::size_t overlay = bridge_source.find(
-      "overlay_cache_.set_transform_position_streams(meshes)", failed);
+      "overlay_cache_.set_transform_position_streams(preview.meshes)",
+      light_publish);
   const std::size_t suppression = bridge_source.find(
       "Tool preview update source suppression", overlay);
+  ASSERT_NE(light_prepare, std::string::npos);
   ASSERT_NE(publish, std::string::npos);
   ASSERT_NE(failed, std::string::npos);
+  ASSERT_NE(light_publish, std::string::npos);
   ASSERT_NE(overlay, std::string::npos);
   ASSERT_NE(suppression, std::string::npos);
+  EXPECT_LT(light_prepare, publish);
   EXPECT_LT(publish, failed);
-  EXPECT_LT(failed, overlay);
+  EXPECT_LT(failed, light_publish);
+  EXPECT_LT(light_publish, overlay);
   EXPECT_LT(overlay, suppression);
 
   const std::size_t api_submission = render_api_source.find(
-      "bridge.set_tool_preview_meshes(");
+      "bridge.set_tool_preview_scene(");
   const std::size_t api_failure = render_api_source.find(
       "preview_result == ToolPreviewSubmissionResult::Failed",
       api_submission);
@@ -1838,8 +1847,8 @@ TEST(SceneRenderBridgeTests,
 
   EXPECT_TRUE(source_contains_compact(
       cache_source,
-      "transforms.front(), false, preview_mesh.double_sided, 0u, false, "
-      "false"));
+      "transforms.front(), preview_mesh.cast_shadows, "
+      "preview_mesh.double_sided, 0u, false, false"));
   EXPECT_TRUE(source_contains_compact(
       cache_source,
       "rendered_prototype, transforms.front(), preview_mesh.double_sided, "
@@ -1850,6 +1859,61 @@ TEST(SceneRenderBridgeTests,
       "0u, true, true"));
   EXPECT_EQ(cache_source.find("transforms.front(), false, true, 0u"),
             std::string::npos);
+}
+
+TEST(SceneRenderBridgeTests,
+     StaticArrayPreviewsUseCapacityRetainedExplicitInstanceChunks) {
+  const std::string cache_header =
+      read_source_file("src/render/tool_preview_renderable_cache.hpp");
+  const std::string cache_source =
+      read_source_file("src/render/tool_preview_renderable_cache.cpp");
+  const std::string factory_source =
+      read_source_file("src/render/mesh_renderable_factory.cpp");
+
+  EXPECT_NE(cache_header.find("struct ExplicitInstanceChunk final"),
+            std::string::npos);
+  EXPECT_NE(cache_header.find("explicit_instance_capacities"),
+            std::string::npos);
+  EXPECT_NE(cache_source.find(
+                "plan_tool_preview_instances("),
+            std::string::npos);
+  EXPECT_NE(cache_source.find(
+                "factory_->create_explicit_instances("),
+            std::string::npos);
+  EXPECT_TRUE(source_contains_compact(
+      cache_source,
+      "prepare_generation(*current_generation_, meshes, candidate_indices, "
+      "false)"));
+  EXPECT_TRUE(source_contains_compact(
+      cache_source,
+      "prepare_generation(*warm_generation_, meshes, candidate_indices, "
+      "true)"));
+  EXPECT_TRUE(source_contains_compact(
+      factory_source,
+      "instance_capacity = instance_capacity == 0u ? "
+      "world_transforms.size() : instance_capacity"));
+  EXPECT_NE(factory_source.find(
+                ".instances(world_transforms.size(), proxy.instance_buffer)"),
+            std::string::npos);
+}
+
+TEST(SceneRenderBridgeTests,
+     ToolPreviewLightsRetainHighWaterPoolsAcrossCountChanges) {
+  const std::string cache_header =
+      read_source_file("src/render/tool_preview_renderable_cache.hpp");
+  const std::string cache_source =
+      read_source_file("src/render/tool_preview_renderable_cache.cpp");
+
+  EXPECT_NE(cache_header.find("struct LightPool final"),
+            std::string::npos);
+  EXPECT_NE(cache_header.find("Grow,"), std::string::npos);
+  EXPECT_NE(cache_source.find("build_inert_growth("), std::string::npos);
+  EXPECT_NE(cache_source.find("plan_tool_preview_light_pools("),
+            std::string::npos);
+  EXPECT_NE(cache_source.find(
+                "manager.setIntensity(instance, 0.0f)"),
+            std::string::npos)
+      << "inactive high-water proxies must remain inert";
 }
 
 TEST(SceneRenderBridgeTests,

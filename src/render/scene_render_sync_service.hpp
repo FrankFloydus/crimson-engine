@@ -14,6 +14,8 @@
 #include <filament/Scene.h>
 
 #include <cstdint>
+#include <span>
+#include <unordered_set>
 
 namespace quader {
 
@@ -51,6 +53,9 @@ public:
     bool sync(const RenderSceneSnapshot &snapshot);
     bool render_asset_revisions_changed(
         const RenderSceneSnapshot &snapshot) const;
+    void set_preview_suppressed_lights(
+        std::unordered_set<EntityId> entities,
+        std::span<const RenderSceneLightRecord> retained_lights = {});
 
   private:
     [[nodiscard]] bool

@@ -162,7 +162,7 @@ struct CurveToolHarness {
         camera, scene_surfaces);
     const auto result = interaction.handle_frame(
         lifecycle, session.scene(), session.assets(), nullptr, nullptr, nullptr,
-        &session.point_placement(), camera,
+        nullptr, nullptr, &session.point_placement(), camera,
         {.input = input,
          .input_result = input_result,
          .navigation_gizmo_consumed = gizmo,
@@ -193,7 +193,7 @@ struct CurveToolHarness {
         camera, scene_surfaces);
     return interaction.handle_frame(
         lifecycle, session.scene(), session.assets(), nullptr, nullptr, nullptr,
-        &session.point_placement(), camera,
+        nullptr, nullptr, &session.point_placement(), camera,
         {.input = input,
          .input_result = input_result,
          .transform_gizmo_consumed = transform_gizmo_consumed,

@@ -6683,6 +6683,57 @@ TEST(InstanceRenderableCacheLookupTests,
          "or undersized proxies";
 }
 
+TEST(InstanceRenderableCacheLookupTests,
+     ReusesSameKeyCapacityWhenActiveOccurrenceCountChanges) {
+  RenderInstanceBatchChunk before;
+  before.key = {
+      .geometry_payload = 101u,
+      .material_payload = 103u,
+      .index_count = 3u,
+      .layer_mask = 1u,
+  };
+  before.occurrences = {1u, 2u, 3u, 4u};
+  before.world_transforms.resize(4u);
+  before.visibility.assign(4u, 1u);
+
+  RenderInstanceBatchChunk after = before;
+  after.occurrences.resize(64u);
+  after.world_transforms.resize(64u);
+  after.visibility.assign(64u, 1u);
+  for (std::size_t index = 0u; index < after.occurrences.size(); ++index) {
+    after.occurrences[index] = static_cast<std::uint64_t>(index + 20u);
+  }
+
+  const std::array<RenderInstanceBatchChunk, 1u> old_chunks{{before}};
+  const std::array<RenderInstanceBatchChunk, 1u> next_chunks{{after}};
+  const std::array<
+      instance_renderable_cache_detail::ChunkProxyReuseCandidate, 1u>
+      candidates{{{.instance_capacity = 64u, .valid = true}}};
+  const auto grown =
+      instance_renderable_cache_detail::match_reusable_chunk_proxies(
+          old_chunks, candidates, next_chunks);
+  EXPECT_EQ(grown.old_chunk_by_next_chunk,
+            (std::vector<std::size_t>{0u}));
+  EXPECT_EQ(grown.capacity_key_lookup_count, 1u);
+  EXPECT_EQ(grown.capacity_candidate_probe_count, 1u);
+
+  const auto shrunk =
+      instance_renderable_cache_detail::match_reusable_chunk_proxies(
+          next_chunks, candidates, old_chunks);
+  EXPECT_EQ(shrunk.old_chunk_by_next_chunk,
+            (std::vector<std::size_t>{0u}));
+  EXPECT_EQ(shrunk.capacity_candidate_probe_count, 1u);
+
+  const std::array<
+      instance_renderable_cache_detail::ChunkProxyReuseCandidate, 1u>
+      undersized{{{.instance_capacity = 32u, .valid = true}}};
+  const auto rejected =
+      instance_renderable_cache_detail::match_reusable_chunk_proxies(
+          old_chunks, undersized, next_chunks);
+  EXPECT_EQ(rejected.old_chunk_by_next_chunk,
+            (std::vector<std::size_t>{rejected.no_old_chunk}));
+}
+
 TEST(RenderSceneWireframeBatchPlannerTests,
      TwoHundredOrdinaryLogicalAssetsShareOnePayloadAndFourChunksPerPass) {
   SceneDocument document;

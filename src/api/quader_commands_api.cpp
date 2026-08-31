@@ -2537,6 +2537,11 @@ void QuaderCommandsApi::Impl::register_commands() {
         });
     if (tool->viewport_tool() == ViewportToolId::Knife) {
       set_keybinding_selection_modes(activation_command, kSelectionModeAny);
+    } else if (tool->viewport_tool() == ViewportToolId::PathArray) {
+      // Path Array starts from one selected Curve, which is exposed through
+      // the Mesh/Object selection scope. The command remains user-bindable
+      // while deliberately shipping without a default shortcut.
+      set_keybinding_selection_modes(activation_command, kSelectionModeObject);
     } else {
       set_keybinding_selection_modes_for_modeling_action(activation_command,
                                                          tool->id());

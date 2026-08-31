@@ -6,14 +6,13 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "render/light_renderable_cache.hpp"
 
-#include "math/glm_bridge.hpp"
 #include "render/filament_utils.hpp"
+#include "render/light_render_policy.hpp"
 #include "render/render_signature_builder.hpp"
 
 #include <filament/LightManager.h>
 #include <utils/EntityManager.h>
 
-#include <algorithm>
 #include <utility>
 
 namespace quader {
@@ -22,33 +21,26 @@ namespace {
 constexpr float kGodotPunctualLightLumensPerIntensity = 1000.0f;
 constexpr float kViewportPunctualLightExposureCompensation = 10000.0f;
 constexpr float kGodotDirectionalLightLuxPerIntensity = 100000.0f;
-
+static_assert(kGodotPunctualLightLumensPerIntensity ==
+              kFilamentPunctualLightLumensPerIntensity);
+static_assert(kViewportPunctualLightExposureCompensation ==
+              kFilamentPunctualLightExposureCompensation);
+static_assert(kGodotDirectionalLightLuxPerIntensity ==
+              kFilamentDirectionalLightLuxPerIntensity);
 filament::LightManager::Type to_filament_light_type(LightType type) {
-  switch (type) {
-  case LightType::Directional:
-    return filament::LightManager::Type::DIRECTIONAL;
-  case LightType::Point:
-    return filament::LightManager::Type::POINT;
-  case LightType::Spot:
-    return filament::LightManager::Type::SPOT;
-  }
-  return filament::LightManager::Type::DIRECTIONAL;
-}
-
-filament::math::float3 direction_from_matrix(const QMat4 &transform) {
-  QVec3 direction = transform_vector(transform, {0.0f, -1.0f, 0.0f});
-  if (length(direction) <= 0.000001f) {
-    direction = {0.0f, -1.0f, 0.0f};
-  }
-  return to_filament(normalize(direction));
+  return filament_light_type(type);
 }
 
 filament::math::float3 position_from_matrix(const QMat4 &transform) {
-  return to_filament(transform_point(transform, {}));
+  return filament_light_position(transform);
+}
+
+filament::math::float3 direction_from_matrix(const QMat4 &transform) {
+  return filament_light_direction(transform);
 }
 
 float light_falloff_radius(const LightComponent &light) {
-  return std::max(light.range, 0.001f);
+  return filament_light_falloff(light);
 }
 
 } // namespace
@@ -71,6 +63,7 @@ void LightRenderableCache::shutdown() {
       destroy_light_proxy(proxy);
     }
     light_proxies_.clear();
+    preview_suppressed_entities_.clear();
     engine_ = nullptr;
     scene_ = nullptr;
 }
@@ -88,6 +81,10 @@ bool LightRenderableCache::needs_rebuild(
 
 void LightRenderableCache::sync_light(const RenderSceneLightRecord &light) {
   if (!engine_ || !scene_) {
+    return;
+  }
+  if (preview_suppressed_entities_.contains(light.entity_id)) {
+    remove(light.entity_id);
     return;
   }
 
@@ -130,6 +127,29 @@ void LightRenderableCache::remove_except(
   }
 }
 
+void LightRenderableCache::set_preview_suppressed_entities(
+    std::unordered_set<EntityId> entities,
+    std::span<const RenderSceneLightRecord> retained_lights) {
+  if (preview_suppressed_entities_ == entities) {
+    return;
+  }
+  preview_suppressed_entities_ = std::move(entities);
+  for (auto it = light_proxies_.begin(); it != light_proxies_.end();) {
+    if (preview_suppressed_entities_.contains(it->first)) {
+      destroy_light_proxy(it->second);
+      it = light_proxies_.erase(it);
+    } else {
+      ++it;
+    }
+  }
+  for (const RenderSceneLightRecord &light : retained_lights) {
+    if (!preview_suppressed_entities_.contains(light.entity_id) &&
+        !contains(light.entity_id)) {
+      sync_light(light);
+    }
+  }
+}
+
 std::uint64_t
 LightRenderableCache::light_signature(const LightComponent &light) {
   return RenderSignatureBuilder::light_signature(light);
@@ -141,17 +161,7 @@ LightRenderableCache::light_transform_signature(const QMat4 &world_transform) {
 }
 
 float LightRenderableCache::filament_intensity(const LightComponent &light) {
-  const float energy = std::max(light.intensity, 0.0f);
-  switch (light.type) {
-  case LightType::Directional:
-    return energy * kGodotDirectionalLightLuxPerIntensity;
-  case LightType::Point:
-  case LightType::Spot:
-    return energy * kGodotPunctualLightLumensPerIntensity *
-           kViewportPunctualLightExposureCompensation;
-  }
-  return energy * kGodotPunctualLightLumensPerIntensity *
-         kViewportPunctualLightExposureCompensation;
+  return filament_light_intensity(light);
 }
 
 LightRenderableCache::LightProxy LightRenderableCache::create_light_proxy(

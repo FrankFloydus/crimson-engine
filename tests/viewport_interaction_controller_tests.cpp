@@ -10,6 +10,7 @@
 #include "assets/default_material_catalog.hpp"
 #include "assets/curve_asset_payload.hpp"
 #include "assets/mesh_asset.hpp"
+#include "editor/array/path_array_tool_service.hpp"
 #include "editor/curve/curve_tool_service.hpp"
 #include "editor/modeling/services/modeling_session_service.hpp"
 #include "editor/modeling/runtime/tool_constants.hpp"
@@ -9517,4 +9518,145 @@ TEST(ViewportInteractionControllerMaterialTests,
   EXPECT_EQ(harness.controller.material_interaction_work_stats().face_pick_count, 0u);
   EXPECT_TRUE(harness.editor.modeling().objects().empty());
   EXPECT_FALSE(harness.editor.history().can_undo());
+}
+
+TEST(ViewportInteractionControllerTests,
+     PathArraySourcePointerUsesSharedHitGroupAndGesturePolicy) {
+  ViewportInteractionHarness harness;
+  const quader::QuaderModelingObjectRef grouped_member =
+      create_box_at(harness, {0.0f, 0.0f, 2.0f});
+  const quader::QuaderModelingObjectRef behind_source =
+      create_box_at(harness, {0.0f, 0.0f, -2.0f});
+  const quader::QuaderModelingObjectRef replacement =
+      create_box_at(harness, {3.0f, 0.0f, 0.0f});
+  ASSERT_TRUE(harness.editor.selection()
+                  .set_mode(quader::QuaderSelectionMode::Object)
+                  .ok());
+  ASSERT_TRUE(harness.editor.selection().clear().ok());
+  ASSERT_TRUE(
+      harness.editor.selection().select_object(grouped_member).ok());
+  const auto group =
+      harness.editor.scene().group_selection("Path Array Source Group");
+  ASSERT_TRUE(group.ok()) << group.error_message();
+
+  const auto path = harness.editor.modeling().create_curve({
+      .points = {{.position = {-5.0f, 4.0f, 0.0f},
+                  .outgoing_handle = {1.0f, 0.0f, 0.0f}},
+                 {.position = {5.0f, 4.0f, 0.0f},
+                  .incoming_handle = {-1.0f, 0.0f, 0.0f}}},
+      .name = "Path Array Pointer Driver",
+  });
+  ASSERT_TRUE(path.ok()) << path.error_message();
+  ASSERT_TRUE(harness.editor.selection().select_object(path.value()).ok());
+  ASSERT_TRUE(
+      harness.editor.tools().activate(quader::ViewportToolId::PathArray).ok());
+  harness.router.set_active_tool(quader::ViewportToolId::PathArray);
+  harness.router.set_selection_mode(quader::ViewportSelectionMode::Object);
+  harness.input.active_tool_owns_viewport = true;
+  harness.input.modal_tool_active = true;
+
+  const quader::ViewportScreenPoint grouped_screen =
+      harness.camera.project_world_point({0.0f, 0.0f, 2.0f});
+  const quader::ViewportScreenPoint replacement_screen =
+      harness.camera.project_world_point({3.0f, 0.0f, 0.0f});
+  ASSERT_TRUE(grouped_screen.visible);
+  ASSERT_TRUE(replacement_screen.visible);
+
+  std::uint64_t sequence = 100U;
+  const auto dispatch = [&](bool pressed, bool down, bool released,
+                            quader::QVec2 local,
+                            quader::ViewportModifiers modifiers = {},
+                            bool navigation = false) {
+    harness.input.mouse_local = local;
+    harness.input.mouse_screen = local;
+    harness.input.modifiers = modifiers;
+    harness.input.navigation_active = navigation;
+    harness.input_result.navigation_active = navigation;
+    harness.input_result.camera_changed = navigation;
+    harness.input.pointer_pressed_edges.clear();
+    harness.input.pointer_released_edges.clear();
+    if (pressed) {
+      harness.input.pointer_pressed_edges.push_back({
+          .button = quader::QuaderMouseButton::Left,
+          .local = local,
+          .sequence = sequence++,
+      });
+    }
+    if (released) {
+      harness.input.pointer_released_edges.push_back({
+          .button = quader::QuaderMouseButton::Left,
+          .local = local,
+          .sequence = sequence++,
+      });
+    }
+    const quader::ViewportInteractionFrame interaction =
+        harness.frame(pressed, down, released, local);
+    return harness.controller.handle_tool_pointer_lifecycle(
+        harness.editor, harness.session.scene(), harness.session.assets(),
+        harness.session.native_tools(), &harness.session.point_placement(),
+        harness.camera,
+        quader::ViewportToolPointerLifecycleFrame{
+            .interaction = interaction,
+            .native_tool =
+                {
+                    .input = harness.input,
+                    .input_result = harness.input_result,
+                    .left_pressed = pressed,
+                    .left_down = down,
+                    .left_released = released,
+                    .left_click_local = local,
+                    .pointer_drag_threshold_pixels = 4.0f,
+                },
+        });
+  };
+  const auto click = [&](quader::QVec2 local,
+                         quader::ViewportModifiers modifiers = {}) {
+    (void)dispatch(true, true, false, local, modifiers);
+    return dispatch(false, false, true, local, modifiers);
+  };
+
+  const auto hovered = dispatch(false, false, false, grouped_screen.position);
+  EXPECT_TRUE(hovered.native_tool.path_array_consumed);
+  EXPECT_TRUE(hovered.native_tool.blocks_transform_gizmo);
+  const auto hover_target =
+      harness.session.selection().resolved_hover_target();
+  ASSERT_TRUE(hover_target.has_value());
+  EXPECT_EQ(hover_target->entity, group.value().id);
+
+  const auto selected = click(grouped_screen.position);
+  EXPECT_TRUE(selected.native_tool.path_array_consumed);
+  ASSERT_TRUE(harness.session.path_array().has_source());
+  EXPECT_EQ(harness.session.path_array().source_root(), group.value().id);
+  EXPECT_EQ(harness.session.scene().primary_selection(), group.value().id);
+
+  // The authored source still exists in SceneDocument, but preview
+  // suppression removes it before occlusion and canonical arbitration. The
+  // otherwise hidden object behind it becomes the ordinary winner.
+  (void)dispatch(false, false, false, grouped_screen.position);
+  const auto behind_hover =
+      harness.session.selection().resolved_hover_target();
+  ASSERT_TRUE(behind_hover.has_value());
+  EXPECT_EQ(behind_hover->entity, behind_source.entity);
+
+  (void)click(replacement_screen.position,
+              {.primary = true, .shift = false, .alt = false});
+  EXPECT_EQ(harness.session.path_array().source_root(), group.value().id);
+
+  (void)dispatch(true, true, false, replacement_screen.position);
+  quader::QVec2 dragged_release = replacement_screen.position;
+  dragged_release.x += 12.0f;
+  (void)dispatch(false, false, true, dragged_release);
+  EXPECT_EQ(harness.session.path_array().source_root(), group.value().id);
+
+  (void)dispatch(true, true, false, replacement_screen.position);
+  (void)dispatch(false, true, false, replacement_screen.position, {}, true);
+  (void)dispatch(false, false, true, replacement_screen.position);
+  EXPECT_EQ(harness.session.path_array().source_root(), group.value().id);
+
+  const auto replaced = click(replacement_screen.position);
+  EXPECT_TRUE(replaced.native_tool.path_array_consumed);
+  EXPECT_EQ(harness.session.path_array().source_root(), replacement.entity);
+
+  (void)click({790.0f, 590.0f});
+  EXPECT_EQ(harness.session.path_array().source_root(), replacement.entity);
 }

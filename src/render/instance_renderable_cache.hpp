@@ -67,6 +67,8 @@ struct ChunkProxyReuseResult final {
   std::size_t same_index_probe_count = 0u;
   std::size_t key_lookup_count = 0u;
   std::size_t candidate_probe_count = 0u;
+  std::size_t capacity_key_lookup_count = 0u;
+  std::size_t capacity_candidate_probe_count = 0u;
 };
 
 [[nodiscard]] ChunkProxyReuseResult match_reusable_chunk_proxies(

@@ -7,6 +7,7 @@
 #include "editor/tools/native_viewport_tool_coordinator.hpp"
 
 #include "editor/array/linear_array_tool_service.hpp"
+#include "editor/array/path_array_tool_service.hpp"
 #include "editor/array/radial_array_tool_service.hpp"
 #include "editor/curve/curve_tool_service.hpp"
 #include "editor/modeling/services/modeling_session_service.hpp"
@@ -68,13 +69,13 @@ private:
 
 NativeViewportToolCoordinator::NativeViewportToolCoordinator(
     PivotToolService &pivot, LinearArrayToolService &linear_array,
-    RadialArrayToolService &radial_array,
+    RadialArrayToolService &radial_array, PathArrayToolService &path_array,
     PrimitiveCreationToolService &primitives,
     EditorSelectionService &selection, ModelingSessionService &modeling,
     CurveToolService &curve)
     : pivot_(pivot), linear_array_(linear_array), radial_array_(radial_array),
-      primitives_(primitives), selection_(selection), modeling_(modeling),
-      curve_(curve),
+      path_array_(path_array), primitives_(primitives), selection_(selection),
+      modeling_(modeling), curve_(curve),
       curve_interaction_(
           std::make_unique<CurveViewportInteractionAdapter>(curve_)) {
   // Registration order preserves commit/cancel precedence. active_priority
@@ -102,7 +103,7 @@ NativeViewportToolCoordinator::NativeViewportToolCoordinator(
   });
   (void)runtime_.register_native_lifecycle({
       .tool = ViewportToolId::CreatePrimitive,
-      .active_priority = 3,
+      .active_priority = 4,
       .unavailable_message =
           "Select one visible, unlocked mesh or group in object mode.",
       .commit_label = "Apply Primitive Tool",
@@ -157,8 +158,30 @@ NativeViewportToolCoordinator::NativeViewportToolCoordinator(
       .reset = [&] { (void)radial_array_.cancel(); },
   });
   (void)runtime_.register_native_lifecycle({
+      .tool = ViewportToolId::PathArray,
+      .active_priority = 3,
+      .unavailable_message =
+          "Select exactly one visible, unlocked, nondegenerate Curve.",
+      .commit_label = "Path Array",
+      .commit_domain = ViewportNativeToolCommitDomain::Document,
+      .can_activate = [&] { return path_array_.can_activate(); },
+      .active = [&] { return path_array_.active(); },
+      .pending = [&] { return path_array_.has_session(); },
+      .pending_history_preview = [&] { return path_array_.has_session(); },
+      .blocks_modeling_content_mutation =
+          [&] { return path_array_.blocks_modeling_content_mutation(); },
+      .blocks_document_mutation =
+          [&](EntityId entity) {
+            return path_array_.blocks_document_mutation(entity);
+          },
+      .activate = [&](double) { return path_array_.activate(); },
+      .commit = [&] { return path_array_.apply(); },
+      .cancel = [&] { return path_array_.cancel(); },
+      .reset = [&] { (void)path_array_.cancel(); },
+  });
+  (void)runtime_.register_native_lifecycle({
       .tool = ViewportToolId::Pivot,
-      .active_priority = 4,
+      .active_priority = 5,
       .unavailable_message =
           "Select one visible, unlocked mesh or group in object mode.",
       .commit_label = "Apply Pivot",
@@ -225,14 +248,16 @@ std::string_view NativeViewportToolCoordinator::active_tool_id() const {
 CommandResult NativeViewportToolCoordinator::refresh() {
   const CommandResult linear = linear_array_.refresh();
   const CommandResult radial = radial_array_.refresh();
+  const CommandResult path = path_array_.refresh();
   const CommandResult curve = curve_.refresh();
 
-  if (linear.changed || (curve.changed && !curve_.dragging())) {
+  if (linear.changed || path.changed ||
+      (curve.changed && !curve_.dragging())) {
     interaction_.clear_drag_state();
   }
 
   const auto first_failure = [&]() -> const CommandResult * {
-    for (const CommandResult *candidate : {&linear, &radial, &curve}) {
+    for (const CommandResult *candidate : {&linear, &radial, &path, &curve}) {
       if (!candidate->ok) {
         return candidate;
       }
@@ -241,7 +266,8 @@ CommandResult NativeViewportToolCoordinator::refresh() {
   }();
   return {
       .ok = first_failure == nullptr,
-      .changed = linear.changed || radial.changed || curve.changed,
+      .changed =
+          linear.changed || radial.changed || path.changed || curve.changed,
       .message = first_failure != nullptr ? first_failure->message
                                           : std::string{},
   };
@@ -256,6 +282,7 @@ NativeViewportToolCoordinator::presentation_snapshot() const {
       .curve_preview = &curve_.preview_state(),
       .curve_controls_editable = curve_.controls_editable(),
       .curve_dragging = curve_.dragging(),
+      .path_array_source_picking = path_array_.active(),
       .selection_pivot_revision = pivot_.selection_pivot_revision(),
   };
 }
@@ -267,8 +294,9 @@ NativeViewportToolCoordinator::handle_pointer_frame(
     ViewportCameraController &camera,
     const ViewportNativeToolInteractionFrame &frame) {
   return interaction_.handle_frame(*this, document, assets, &pivot_,
-                                   &linear_array_, &radial_array_,
-                                   point_placement, camera, frame, &curve_);
+                                   &linear_array_, &radial_array_, &path_array_,
+                                   &selection_, point_placement, camera, frame,
+                                   &curve_);
 }
 
 void NativeViewportToolCoordinator::clear_pointer_drag_state() {

@@ -29,6 +29,7 @@ enum class ViewportToolId {
     LinearArray,
     RadialArray,
     Curve,
+    PathArray,
 };
 
 /**

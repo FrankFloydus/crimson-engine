@@ -508,13 +508,24 @@ TEST(ViewportToolRuntimeTests,
     SceneSession session;
     QuaderEditorApi editor(
         QuaderApiSessionInternalAccess::from_scene_session(session));
-    const QuaderApiResult<QuaderModelingObjectRef> created =
-        editor.modeling().create_box(
-            QuaderBounds{.min = {-1.0f, -1.0f, -1.0f},
-                         .max = {1.0f, 1.0f, 1.0f}},
-            "Native lifecycle matrix box");
-    ASSERT_TRUE(created.ok()) << created.error_message();
-    ASSERT_TRUE(editor.selection().select_object(created.value()).ok());
+    if (descriptor.tool == ViewportToolId::PathArray) {
+      const QuaderApiResult<QuaderModelingObjectRef> curve =
+          editor.modeling().create_curve({
+              .points = {{.position = {0.0f, 0.0f, 0.0f}},
+                         {.position = {4.0f, 1.0f, 0.0f}}},
+              .name = "Native lifecycle matrix path",
+          });
+      ASSERT_TRUE(curve.ok()) << curve.error_message();
+      ASSERT_TRUE(editor.selection().select_object(curve.value()).ok());
+    } else {
+      const QuaderApiResult<QuaderModelingObjectRef> created =
+          editor.modeling().create_box(
+              QuaderBounds{.min = {-1.0f, -1.0f, -1.0f},
+                           .max = {1.0f, 1.0f, 1.0f}},
+              "Native lifecycle matrix box");
+      ASSERT_TRUE(created.ok()) << created.error_message();
+      ASSERT_TRUE(editor.selection().select_object(created.value()).ok());
+    }
 
     NativeViewportToolCoordinator &coordinator = session.native_tools();
     ASSERT_TRUE(coordinator.handles(descriptor.id));
@@ -543,7 +554,8 @@ TEST(ViewportToolRuntimeTests,
     ASSERT_TRUE(metadata.has_value());
     EXPECT_FALSE(metadata->label.empty());
     EXPECT_EQ(metadata->domain,
-              descriptor.tool == ViewportToolId::Pivot
+              (descriptor.tool == ViewportToolId::Pivot ||
+               descriptor.tool == ViewportToolId::PathArray)
                   ? ViewportNativeToolCommitDomain::Document
                   : ViewportNativeToolCommitDomain::Modeling);
 
@@ -602,13 +614,24 @@ TEST(ViewportToolRuntimeTests,
       SceneSession session;
       QuaderEditorApi editor(
           QuaderApiSessionInternalAccess::from_scene_session(session));
-      const QuaderApiResult<QuaderModelingObjectRef> created =
-          editor.modeling().create_box(
-              QuaderBounds{.min = {-1.0f, -1.0f, -1.0f},
-                           .max = {1.0f, 1.0f, 1.0f}},
-              "Native interruption matrix box");
-      ASSERT_TRUE(created.ok()) << created.error_message();
-      ASSERT_TRUE(editor.selection().select_object(created.value()).ok());
+      if (descriptor.tool == ViewportToolId::PathArray) {
+        const QuaderApiResult<QuaderModelingObjectRef> curve =
+            editor.modeling().create_curve({
+                .points = {{.position = {0.0f, 0.0f, 0.0f}},
+                           {.position = {4.0f, 1.0f, 0.0f}}},
+                .name = "Native interruption matrix path",
+            });
+        ASSERT_TRUE(curve.ok()) << curve.error_message();
+        ASSERT_TRUE(editor.selection().select_object(curve.value()).ok());
+      } else {
+        const QuaderApiResult<QuaderModelingObjectRef> created =
+            editor.modeling().create_box(
+                QuaderBounds{.min = {-1.0f, -1.0f, -1.0f},
+                             .max = {1.0f, 1.0f, 1.0f}},
+                "Native interruption matrix box");
+        ASSERT_TRUE(created.ok()) << created.error_message();
+        ASSERT_TRUE(editor.selection().select_object(created.value()).ok());
+      }
       ASSERT_TRUE(editor.tools().activate(descriptor.tool).ok());
 
       NativeViewportToolCoordinator &coordinator = session.native_tools();

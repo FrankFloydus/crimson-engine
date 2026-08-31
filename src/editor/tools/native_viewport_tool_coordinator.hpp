@@ -25,6 +25,7 @@ class CurveToolService;
 class LinearArrayToolService;
 class MaterialReference;
 class ModelingSessionService;
+class PathArrayToolService;
 class PivotToolService;
 class PrimitiveCreationToolService;
 class RadialArrayToolService;
@@ -41,6 +42,7 @@ struct NativeViewportToolPresentationSnapshot final {
   const CurveToolPreviewState *curve_preview = nullptr;
   bool curve_controls_editable = false;
   bool curve_dragging = false;
+  bool path_array_source_picking = false;
   std::uint64_t selection_pivot_revision = 0;
 };
 
@@ -54,6 +56,7 @@ public:
   NativeViewportToolCoordinator(PivotToolService &pivot,
                                 LinearArrayToolService &linear_array,
                                 RadialArrayToolService &radial_array,
+                                PathArrayToolService &path_array,
                                 PrimitiveCreationToolService &primitives,
                                 EditorSelectionService &selection,
                                 ModelingSessionService &modeling,
@@ -122,6 +125,7 @@ private:
   PivotToolService &pivot_;
   LinearArrayToolService &linear_array_;
   RadialArrayToolService &radial_array_;
+  PathArrayToolService &path_array_;
   PrimitiveCreationToolService &primitives_;
   EditorSelectionService &selection_;
   ModelingSessionService &modeling_;

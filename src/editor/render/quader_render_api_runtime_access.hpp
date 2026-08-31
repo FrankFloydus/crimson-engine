@@ -10,6 +10,7 @@
 #include "api/quader_render_api.hpp"
 #include "render/overlay/render_overlay_snapshot.hpp"
 #include "render/overlay/viewport_persistent_overlay_style.hpp"
+#include "render/render_scene_snapshot.hpp"
 
 #include <cstdint>
 #include <functional>
@@ -19,7 +20,6 @@ namespace quader {
 
 class SceneRenderBridge;
 enum class ToolPreviewSubmissionResult : std::uint8_t;
-struct RenderToolPreviewMeshRecord;
 
 /**
  * Stores viewport presentation state needed to synchronize persistent
@@ -41,12 +41,16 @@ public:
   /// Headless hosts may retain and acknowledge the same extracted preview payload.
   using ToolPreviewPublisher = std::function<ToolPreviewSubmissionResult(
       std::vector<RenderToolPreviewMeshRecord>)>;
+  /// Compound-aware headless hosts receive the complete candidate atomically.
+  using ToolPreviewScenePublisher = std::function<ToolPreviewSubmissionResult(
+      RenderToolPreviewSceneSnapshot)>;
 
   static QuaderApiVoidResult sync_scene(QuaderRenderApi &api,
                                         SceneRenderBridge &bridge);
   static QuaderApiVoidResult sync_tool_previews(
       QuaderRenderApi &api, SceneRenderBridge &bridge,
-      const ToolPreviewPublisher &publish = {});
+      const ToolPreviewPublisher &publish = {},
+      const ToolPreviewScenePublisher &publish_scene = {});
   static QuaderApiVoidResult sync_scene_asset_overlays(
       QuaderRenderApi &api, SceneRenderBridge &bridge,
       RenderOverlaySnapshotCache &snapshot_cache,

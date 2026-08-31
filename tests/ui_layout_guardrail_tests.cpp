@@ -3437,8 +3437,8 @@ TEST(UiLayoutGuardrailTests,
       coordinator, "CommandResult NativeViewportToolCoordinator::refresh()",
       "NativeViewportToolPresentationSnapshot");
   expect_contains(refresh, "const CommandResult curve = curve_.refresh();");
-  expect_contains(refresh,
-                  "linear.changed || (curve.changed && !curve_.dragging())");
+  expect_contains(refresh, "linear.changed || path.changed ||");
+  expect_contains(refresh, "(curve.changed && !curve_.dragging())");
   expect_contains(refresh, "interaction_.clear_drag_state()");
 }
 

@@ -9,6 +9,7 @@
 #include <QMouseEvent>
 #include <QStyle>
 #include <QStyleOptionSlider>
+#include <QWheelEvent>
 
 #include <algorithm>
 #include <cmath>
@@ -245,6 +246,24 @@ QtToolSettingsNumberSlider::QtToolSettingsNumberSlider(
     Qt::Orientation orientation, QWidget *parent)
     : QSlider(orientation, parent) {}
 
+void QtToolSettingsNumberSlider::set_stepwise_interaction(bool enabled) {
+  stepwise_interaction_ = enabled;
+  setTracking(true);
+  if (enabled) {
+    const int step = std::max(1, singleStep());
+    setPageStep(step);
+    setTickInterval(step);
+    setTickPosition(QSlider::TicksBelow);
+  } else {
+    setTickInterval(0);
+    setTickPosition(QSlider::NoTicks);
+  }
+}
+
+bool QtToolSettingsNumberSlider::stepwise_interaction() const {
+  return stepwise_interaction_;
+}
+
 int QtToolSettingsNumberSlider::handle_center_offset() const {
   QStyleOptionSlider option;
   initStyleOption(&option);
@@ -277,8 +296,28 @@ int QtToolSettingsNumberSlider::value_from_pointer(
       std::max(0, slider_maximum - slider_minimum), option.upsideDown);
 }
 
+void QtToolSettingsNumberSlider::step_once(int direction) {
+  if (direction == 0 || minimum() == maximum()) {
+    return;
+  }
+  const long long delta =
+      static_cast<long long>(direction) * std::max(1, singleStep());
+  const int next = static_cast<int>(std::clamp(
+      static_cast<long long>(value()) + delta,
+      static_cast<long long>(minimum()), static_cast<long long>(maximum())));
+  setValue(next);
+}
+
 void QtToolSettingsNumberSlider::mousePressEvent(QMouseEvent *event) {
   if (event->button() != Qt::LeftButton || minimum() == maximum()) {
+    QSlider::mousePressEvent(event);
+    return;
+  }
+
+  if (stepwise_interaction_) {
+    // Keep the complete pointer interaction native for ticked controls.
+    // QSlider maps handle motion directly to its integral range and applies
+    // pageStep to groove presses without detaching the thumb from the cursor.
     QSlider::mousePressEvent(event);
     return;
   }
@@ -288,6 +327,9 @@ void QtToolSettingsNumberSlider::mousePressEvent(QMouseEvent *event) {
   const QStyle::SubControl control = style()->hitTestComplexControl(
       QStyle::CC_Slider, &option, event->position().toPoint(), this);
   if (control != QStyle::SC_SliderGroove) {
+    // QSlider owns handle capture and motion for both continuous and stepped
+    // controls. Its integral position keeps the value on a native tick while
+    // preserving the pointer-to-thumb offset throughout the drag.
     QSlider::mousePressEvent(event);
     return;
   }
@@ -320,6 +362,26 @@ void QtToolSettingsNumberSlider::mouseReleaseEvent(QMouseEvent *event) {
   }
   setSliderPosition(value_from_pointer(event->position()));
   finish_groove_scrub();
+  event->accept();
+}
+
+void QtToolSettingsNumberSlider::wheelEvent(QWheelEvent *event) {
+  if (!stepwise_interaction_) {
+    QSlider::wheelEvent(event);
+    return;
+  }
+  const QPoint delta = !event->angleDelta().isNull() ? event->angleDelta()
+                                                     : event->pixelDelta();
+  const int primary = delta.y() != 0 ? delta.y() : delta.x();
+  if (primary == 0) {
+    event->ignore();
+    return;
+  }
+  int direction = primary > 0 ? 1 : -1;
+  if (invertedControls() != event->inverted()) {
+    direction = -direction;
+  }
+  step_once(direction);
   event->accept();
 }
 

@@ -8,6 +8,7 @@
 
 #include "diagnostics/profile.hpp"
 #include "editor/array/linear_array_tool_service.hpp"
+#include "editor/array/path_array_tool_service.hpp"
 #include "editor/array/radial_array_tool_service.hpp"
 #include "editor/commands/asset_command_service.hpp"
 #include "editor/commands/scene_structural_lifecycle_service.hpp"
@@ -38,14 +39,32 @@ void upgrade_legacy_modeling_local_frames(SceneContentDocument &document) {
 
 } // namespace
 
-SceneSession::SceneSession() {
+SceneSession::SceneSession()
+    : SceneSession(std::make_shared<PathArraySessionDefaults>()) {}
+
+SceneSession::SceneSession(SceneContentDocument document)
+    : SceneSession(std::make_shared<PathArraySessionDefaults>(),
+                   std::move(document)) {}
+
+SceneSession::SceneSession(
+    std::shared_ptr<PathArraySessionDefaults> path_array_defaults)
+    : path_array_defaults_(std::move(path_array_defaults)) {
+  if (!path_array_defaults_) {
+    path_array_defaults_ = std::make_shared<PathArraySessionDefaults>();
+  }
   (void)document_.ensure_scene_root();
   rebuild_services();
   mark_clean();
 }
 
-SceneSession::SceneSession(SceneContentDocument document)
-    : document_(std::move(document)) {
+SceneSession::SceneSession(
+    std::shared_ptr<PathArraySessionDefaults> path_array_defaults,
+    SceneContentDocument document)
+    : document_(std::move(document)),
+      path_array_defaults_(std::move(path_array_defaults)) {
+  if (!path_array_defaults_) {
+    path_array_defaults_ = std::make_shared<PathArraySessionDefaults>();
+  }
   (void)document_.ensure_scene_root();
   rebuild_services();
   mark_clean();
@@ -124,6 +143,10 @@ void SceneSession::rebuild_services() {
   curve_ = std::make_unique<CurveToolService>(
       document_.scene(), document_.assets(), *history_, *modeling_);
   selection_->set_sub_selection_provider(curve_.get());
+  path_array_ = std::make_unique<PathArrayToolService>(
+      document_.scene(), document_.assets(), *history_, *modeling_,
+      *selection_, *document_commands_, *structural_lifecycle_,
+      *path_array_defaults_);
   primitive_creation_ = std::make_unique<PrimitiveCreationToolService>(
       *history_, *modeling_, ModelingOperationPreviewCheckpointHooks{
                                   .begin = [this]() {
@@ -144,7 +167,8 @@ void SceneSession::rebuild_services() {
     return primitive_creation_ && primitive_creation_->active();
   });
   native_tools_ = std::make_unique<NativeViewportToolCoordinator>(
-      *pivot_, *linear_array_, *radial_array_, *primitive_creation_,
+      *pivot_, *linear_array_, *radial_array_, *path_array_,
+      *primitive_creation_,
       *selection_, *modeling_, *curve_);
   viewport_local_visibility_ =
       std::make_unique<ViewportLocalVisibilityService>(
@@ -347,18 +371,23 @@ void SceneSession::mark_clean_at(SceneContentRevisionStamp stamp) noexcept {
   preview_content_checkpoint_.reset();
 }
 
+SceneSessionService::SceneSessionService()
+    : path_array_defaults_(std::make_shared<PathArraySessionDefaults>()) {}
+
 std::unique_ptr<SceneSession> SceneSessionService::create_session() const {
-  return std::make_unique<SceneSession>();
+  return std::make_unique<SceneSession>(path_array_defaults_);
 }
 
 std::unique_ptr<SceneSession>
 SceneSessionService::create_session(SceneContentDocumentRecord record) const {
-  return std::make_unique<SceneSession>(SceneContentDocument(std::move(record)));
+  return std::make_unique<SceneSession>(
+      path_array_defaults_, SceneContentDocument(std::move(record)));
 }
 
 std::unique_ptr<SceneSession>
 SceneSessionService::open_session(SceneContentDocument document) const {
-  return std::make_unique<SceneSession>(std::move(document));
+  return std::make_unique<SceneSession>(path_array_defaults_,
+                                        std::move(document));
 }
 
 } // namespace quader

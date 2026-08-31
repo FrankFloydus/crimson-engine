@@ -6,16 +6,21 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "render/scene_render_extraction.hpp"
 
+#include "assets/curve_asset_payload.hpp"
+
 #include "assets/asset_registry.hpp"
 #include "diagnostics/profile.hpp"
 #include "render/material_binding_service.hpp"
 #include "render/render_signature_builder.hpp"
+#include "render/overlay/curve_overlay_geometry.hpp"
+#include "render/viewport_overlay_policy.hpp"
 #include "render/tool_preview_renderable_cache.hpp"
 #include "scene/scene_document.hpp"
 #include "scene/scene_mesh_occurrence_projection.hpp"
 #include "scene/scene_texture_mapping.hpp"
 
 #include <algorithm>
+#include <array>
 #include <bit>
 #include <cstdint>
 #include <limits>
@@ -1478,6 +1483,7 @@ std::vector<RenderToolPreviewMeshRecord> build_render_tool_preview_snapshot(
         .instance_sampling_from_local =
             std::move(mesh.instance_sampling_from_local),
         .double_sided = mesh.double_sided,
+        .cast_shadows = mesh.cast_shadows,
         .dynamic_positions = mesh.dynamic_positions,
         .suppress_source = mesh.suppress_source,
         .layout_key = mesh.layout_key,
@@ -1488,6 +1494,285 @@ std::vector<RenderToolPreviewMeshRecord> build_render_tool_preview_snapshot(
     records.back().material_revision = records.back().material.revision;
   }
   return records;
+}
+
+RenderToolPreviewSceneSnapshot build_render_tool_preview_scene_snapshot(
+    ToolPreviewScene preview, const AssetRegistry &assets,
+    const ViewportLocalVisibilitySnapshot *local_visibility,
+    const RenderProjectMaterialResolver *project_material_resolver) {
+  RenderToolPreviewSceneSnapshot snapshot;
+  snapshot.revision = preview.revision;
+  for (const ToolPreviewMesh &mesh : preview.meshes) {
+    const std::size_t transform_count =
+        mesh.instance_transforms.empty() ? 1u
+                                         : mesh.instance_transforms.size();
+    if (!mesh.instance_sampling_from_local.empty() &&
+        mesh.instance_sampling_from_local.size() != transform_count) {
+      snapshot.complete = false;
+    }
+  }
+  snapshot.meshes = build_render_tool_preview_snapshot(
+      std::move(preview.meshes), assets, local_visibility,
+      project_material_resolver);
+
+  snapshot.curves.reserve(preview.curves.size());
+  for (ToolPreviewCurve &curve : preview.curves) {
+    const EntityId visibility_entity =
+        curve.visibility_entity == kInvalidEntityId ? curve.source_entity
+                                                    : curve.visibility_entity;
+    if (curve.source_entity != kInvalidEntityId &&
+        !local_visibility_allows(local_visibility, visibility_entity)) {
+      continue;
+    }
+    const CurveAsset *asset = assets.curve(curve.curve);
+    if (asset == nullptr || asset->document == nullptr ||
+        curve.instance_transforms.empty()) {
+      snapshot.complete = false;
+      continue;
+    }
+    std::shared_ptr<const CurveSamplePayload> samples =
+        curve_sample_payload(*asset);
+    if (samples == nullptr || !samples->error_message.empty()) {
+      snapshot.complete = false;
+      continue;
+    }
+    snapshot.curves.push_back({
+        .source_entity = curve.source_entity,
+        .visibility_entity = visibility_entity,
+        .curve = curve.curve,
+        .curve_revision = asset->revision.value,
+        .sample_payload = std::move(samples),
+        .instance_transforms = std::move(curve.instance_transforms),
+        .suppress_source = curve.suppress_source,
+        .layout_key = curve.layout_key,
+    });
+  }
+
+  snapshot.lights.reserve(preview.lights.size());
+  for (ToolPreviewLight &light : preview.lights) {
+    const EntityId visibility_entity =
+        light.visibility_entity == kInvalidEntityId ? light.source_entity
+                                                    : light.visibility_entity;
+    if (light.source_entity != kInvalidEntityId &&
+        !local_visibility_allows(local_visibility, visibility_entity)) {
+      continue;
+    }
+    if (light.instance_transforms.empty()) {
+      snapshot.complete = false;
+      continue;
+    }
+    snapshot.lights.push_back({
+        .source_entity = light.source_entity,
+        .visibility_entity = visibility_entity,
+        .light = std::move(light.light),
+        .instance_transforms = std::move(light.instance_transforms),
+        .suppress_source = light.suppress_source,
+        .layout_key = light.layout_key,
+    });
+  }
+
+  snapshot.group_markers.reserve(preview.group_markers.size());
+  for (ToolPreviewGroupMarker &marker : preview.group_markers) {
+    if (marker.source_entity != kInvalidEntityId &&
+        !local_visibility_allows(local_visibility, marker.source_entity)) {
+      continue;
+    }
+    if (marker.instance_transforms.empty()) {
+      snapshot.complete = false;
+      continue;
+    }
+    snapshot.group_markers.push_back({
+        .source_entity = marker.source_entity,
+        .local_min = marker.local_min,
+        .local_max = marker.local_max,
+        .instance_transforms = std::move(marker.instance_transforms),
+        .layout_key = marker.layout_key,
+    });
+  }
+
+  std::vector<EntityId> &entities = preview.suppressed_entities;
+  std::vector<RenderInstancePreviewSuppression> &occurrences =
+      preview.occurrence_suppressions;
+  const auto append_suppression = [&](EntityId source, EntityId visibility) {
+    if (source == kInvalidEntityId) {
+      return;
+    }
+    if (visibility != kInvalidEntityId && visibility != source) {
+      occurrences.push_back({.source_entity = source,
+                             .occurrence = visibility});
+    } else {
+      entities.push_back(source);
+    }
+  };
+  for (const RenderToolPreviewMeshRecord &mesh : snapshot.meshes) {
+    if (mesh.suppress_source) {
+      append_suppression(mesh.source_entity, mesh.visibility_entity);
+    }
+  }
+  for (const RenderToolPreviewCurveRecord &curve : snapshot.curves) {
+    if (curve.suppress_source) {
+      append_suppression(curve.source_entity, curve.visibility_entity);
+    }
+  }
+  for (const RenderToolPreviewLightRecord &light : snapshot.lights) {
+    if (light.suppress_source) {
+      append_suppression(light.source_entity, light.visibility_entity);
+    }
+  }
+  std::erase(entities, kInvalidEntityId);
+  std::ranges::sort(entities);
+  entities.erase(std::ranges::unique(entities).begin(), entities.end());
+  std::erase_if(occurrences, [](const auto &suppression) {
+    return suppression.source_entity == kInvalidEntityId ||
+           suppression.occurrence == kInvalidEntityId;
+  });
+  std::ranges::sort(
+      occurrences, {}, [](const RenderInstancePreviewSuppression &value) {
+        return std::pair{value.occurrence, value.source_entity};
+      });
+  occurrences.erase(std::ranges::unique(occurrences).begin(),
+                    occurrences.end());
+  RenderSignatureBuilder suppression_signature;
+  suppression_signature.add_size(entities.size());
+  for (const EntityId entity : entities) {
+    suppression_signature.add_value(entity);
+  }
+  suppression_signature.add_size(occurrences.size());
+  for (const RenderInstancePreviewSuppression &occurrence : occurrences) {
+    suppression_signature.add_value(occurrence.source_entity)
+        .add_value(occurrence.occurrence);
+  }
+  snapshot.suppression = {
+      .entities = std::move(entities),
+      .occurrences = std::move(occurrences),
+      .signature = suppression_signature.value(),
+  };
+  return snapshot;
+}
+
+ViewportOverlayFrame build_render_tool_preview_overlay_frame(
+    const RenderToolPreviewSceneSnapshot &preview) {
+  ViewportOverlayFrame frame;
+  for (const RenderToolPreviewCurveRecord &curve : preview.curves) {
+    if (curve.sample_payload == nullptr) {
+      continue;
+    }
+    for (const QMat4 &world_transform : curve.instance_transforms) {
+      append_curve_overlay_stroke(
+          frame, *curve.sample_payload, world_transform,
+          ViewportOverlayLine{
+              .layer = ViewportOverlayLayer::ToolPreviewLine,
+              .color = kOverlayCurveColor,
+              .width_pixels = kOverlayCurveLineWidthPixels,
+              .style_role = ViewportOverlayStyleRole::ExplicitColor,
+              .source = ViewportOverlaySource::Tool,
+          });
+    }
+  }
+
+  constexpr float kMarkerRadius = 0.28f;
+  constexpr float kDirectionLength = 0.85f;
+  for (const RenderToolPreviewLightRecord &light : preview.lights) {
+    for (const QMat4 &world_transform : light.instance_transforms) {
+      const QVec3 position = transform_point(world_transform, {});
+      if (light.light.type == LightType::Point) {
+        frame.icons.push_back({
+            .layer = ViewportOverlayLayer::PointLightGizmo,
+            .kind = ViewportOverlayIconKind::PointLight,
+            .position = position,
+            .color = rgba8(255, 255, 255, 255),
+            .size_pixels = kOverlayPointLightGizmoSizePixels,
+            .source = ViewportOverlaySource::Tool,
+        });
+        continue;
+      }
+      frame.points.push_back({
+          .layer = ViewportOverlayLayer::ToolHandle,
+          .position = position,
+          .color = kOverlayToolHandleColor,
+          .size_pixels = kOverlayLightMarkerPointSizePixels,
+          .style_role = ViewportOverlayStyleRole::ToolHandle,
+          .source = ViewportOverlaySource::Tool,
+          .outline_growth_pixels = kOverlayLightMarkerOutlineGrowthPixels,
+      });
+      QVec3 direction =
+          transform_vector(world_transform, {0.0f, -1.0f, 0.0f});
+      if (length(direction) <= 0.000001f) {
+        direction = {0.0f, -1.0f, 0.0f};
+      } else {
+        direction = normalize(direction);
+      }
+      const QVec3 tip = position + direction * kDirectionLength;
+      frame.lines.push_back({
+          .layer = ViewportOverlayLayer::ToolPreviewLine,
+          .start = position,
+          .end = tip,
+          .color = kOverlayToolHandleColor,
+          .width_pixels = kOverlayToolPreviewLineWidthPixels,
+          .style_role = ViewportOverlayStyleRole::ToolPreviewLine,
+          .source = ViewportOverlaySource::Tool,
+      });
+      if (light.light.type == LightType::Directional) {
+        QVec3 tick = cross(direction, {0.0f, 1.0f, 0.0f});
+        if (length(tick) <= 0.000001f) {
+          tick = {1.0f, 0.0f, 0.0f};
+        } else {
+          tick = normalize(tick);
+        }
+        tick = tick * kMarkerRadius;
+        frame.lines.push_back({
+            .layer = ViewportOverlayLayer::ToolPreviewLine,
+            .start = tip - tick,
+            .end = tip + tick,
+            .color = kOverlayToolHandleColor,
+            .width_pixels = kOverlayToolPreviewLineWidthPixels,
+            .style_role = ViewportOverlayStyleRole::ToolPreviewLine,
+            .source = ViewportOverlaySource::Tool,
+        });
+      }
+    }
+  }
+
+  constexpr std::array<std::array<std::size_t, 2>, 12> kBoundsEdges{{
+      {{0u, 1u}}, {{1u, 2u}}, {{2u, 3u}}, {{3u, 0u}},
+      {{4u, 5u}}, {{5u, 6u}}, {{6u, 7u}}, {{7u, 4u}},
+      {{0u, 4u}}, {{1u, 5u}}, {{2u, 6u}}, {{3u, 7u}},
+  }};
+  for (const RenderToolPreviewGroupMarkerRecord &marker :
+       preview.group_markers) {
+    const std::array<QVec3, 8> local{{
+        {marker.local_min.x, marker.local_min.y, marker.local_min.z},
+        {marker.local_max.x, marker.local_min.y, marker.local_min.z},
+        {marker.local_max.x, marker.local_max.y, marker.local_min.z},
+        {marker.local_min.x, marker.local_max.y, marker.local_min.z},
+        {marker.local_min.x, marker.local_min.y, marker.local_max.z},
+        {marker.local_max.x, marker.local_min.y, marker.local_max.z},
+        {marker.local_max.x, marker.local_max.y, marker.local_max.z},
+        {marker.local_min.x, marker.local_max.y, marker.local_max.z},
+    }};
+    for (const QMat4 &world_transform : marker.instance_transforms) {
+      frame.points.push_back({
+          .layer = ViewportOverlayLayer::GroupBounds,
+          .position = transform_point(world_transform, {}),
+          .color = kOverlayGroupBoundsColor,
+          .size_pixels = kOverlayDrawnPlanePointSizePixels,
+          .style_role = ViewportOverlayStyleRole::GroupBounds,
+          .source = ViewportOverlaySource::Tool,
+      });
+      for (const auto &edge : kBoundsEdges) {
+        frame.lines.push_back({
+            .layer = ViewportOverlayLayer::GroupBounds,
+            .start = transform_point(world_transform, local[edge[0]]),
+            .end = transform_point(world_transform, local[edge[1]]),
+            .color = kOverlayGroupBoundsColor,
+            .width_pixels = kOverlayGroupBoundsLineWidthPixels,
+            .style_role = ViewportOverlayStyleRole::GroupBounds,
+            .source = ViewportOverlaySource::Tool,
+        });
+      }
+    }
+  }
+  return frame;
 }
 
 } // namespace quader

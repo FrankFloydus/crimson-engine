@@ -658,7 +658,7 @@ std::span<const HostToolGroupDescriptor> tool_group_descriptors()
       "rotate",
       "scale",
   }};
-  static constexpr std::array<std::string_view, 8> kModalModelingTools{{
+  static constexpr std::array<std::string_view, 9> kModalModelingTools{{
       "create_primitive",
       "insert_edge_loop",
       "knife",
@@ -667,6 +667,7 @@ std::span<const HostToolGroupDescriptor> tool_group_descriptors()
       "poly",
       "linear_array",
       "radial_array",
+      "path_array",
   }};
   static constexpr std::array<HostToolGroupDescriptor, 2> kDescriptors{{
       {"transform_tools", "Transform Tools", kTransformTools},

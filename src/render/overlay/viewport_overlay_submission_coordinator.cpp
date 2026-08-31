@@ -175,6 +175,8 @@ ViewportOverlaySubmissionResult ViewportOverlaySubmissionCoordinator::submit(
               request.scene_overlay_snapshot,
               request.overlays_visible && request.scene_overlay_requested),
       .curve = curve_source_stamp,
+      .tool_preview_identity = request.tool_preview_overlay_identity,
+      .tool_preview_revision = request.tool_preview_overlay_revision,
       .style_signature = style_signature,
       .style_selection_context = request.style_selection_context,
       .projection = request.camera.projection,
@@ -187,7 +189,11 @@ ViewportOverlaySubmissionResult ViewportOverlaySubmissionCoordinator::submit(
       !pane.dynamic_valid ||
       pane.dynamic.dynamic_tools != dynamic_stamp.dynamic_tools ||
       pane.dynamic.volatile_modeling != dynamic_stamp.volatile_modeling ||
-      pane.dynamic.scene_tools != dynamic_stamp.scene_tools;
+      pane.dynamic.scene_tools != dynamic_stamp.scene_tools ||
+      pane.dynamic.tool_preview_identity !=
+          dynamic_stamp.tool_preview_identity ||
+      pane.dynamic.tool_preview_revision !=
+          dynamic_stamp.tool_preview_revision;
   bool dynamic_changed = !pane.dynamic_valid || pane.dynamic != dynamic_stamp;
   if (!persistent_changed || !dynamic_changed) {
     const ViewportOverlayCameraUpdate camera_update =
@@ -239,6 +245,10 @@ ViewportOverlaySubmissionResult ViewportOverlaySubmissionCoordinator::submit(
         request.scene_overlay_snapshot != nullptr) {
       append_overlay_frame(pane.dynamic_source_frame,
                            request.scene_overlay_snapshot->tool_overlays);
+    }
+    if (request.tool_preview_overlay_frame != nullptr) {
+      append_overlay_frame(pane.dynamic_source_frame,
+                           *request.tool_preview_overlay_frame);
     }
     pane.dynamic_source_revision = ++dynamic_source_publication_revision_;
     ++work_counters_.dynamic_source_compose_count;

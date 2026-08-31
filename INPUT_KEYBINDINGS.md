@@ -361,6 +361,14 @@ UV Peel (`modeling.uv_peel`) is a bindable Edge-scoped command. It is
 deliberately unassigned by default; the retained UV Peel section invokes the
 same public modeling action and does not install a private Qt shortcut.
 
+Path Array (`tools.activate.path_array`) is deliberately unassigned by default
+and is available beside the other array tools in the Tools menu and toolbar.
+Activation requires one selected Curve in Mesh/Object mode. While active, the
+canonical viewport selection hit resolves one top-level mesh, linked instance
+occurrence, or group as the source; a later valid click replaces that source,
+and an empty click is inert. The native tool lifecycle owns this gesture, so the
+Qt shell does not install a private shortcut or duplicate scene hit policy.
+
 Curve (`tools.activate.curve`) is deliberately unassigned by default and is
 available from the Tools menu and toolbar. Its drawing/editing gesture uses the
 existing semantic viewport pointer frame and shared snapping service. Space uses

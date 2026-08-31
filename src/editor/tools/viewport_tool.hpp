@@ -194,6 +194,7 @@ public:
   static constexpr ViewportToolId kPivot = ViewportToolId::Pivot;
   static constexpr ViewportToolId kLinearArray = ViewportToolId::LinearArray;
   static constexpr ViewportToolId kRadialArray = ViewportToolId::RadialArray;
+  static constexpr ViewportToolId kPathArray = ViewportToolId::PathArray;
 
   explicit ViewportTool(ToolDescriptor descriptor);
   ViewportTool(ViewportToolId tool);

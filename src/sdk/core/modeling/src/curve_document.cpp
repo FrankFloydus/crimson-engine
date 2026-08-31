@@ -4,6 +4,7 @@
 // No permission is granted to use, copy, modify, distribute, or sublicense this
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
+#include <quader/modeling/curves/curve_arc_length_path.hpp>
 #include <quader/modeling/curves/curve_document.hpp>
 
 #include <algorithm>
@@ -29,6 +30,14 @@ struct CurveDocumentData {
   bool closed = false;
   CurveContentIdentity identity{};
   std::uint64_t revision = 0;
+};
+
+/// Pins transformed path geometry and its nondecreasing distance stations.
+struct CurveArcLengthPathData {
+  CurveDocument world_document;
+  std::vector<CurveArcLengthStation> stations;
+  double total_length = 0.0;
+  bool closed = false;
 };
 
 namespace {
@@ -59,6 +68,16 @@ constexpr std::array<std::byte, 4> kCurveMagic{
                                 std::string path = {}) {
   Error error = make_error(code, std::move(message));
   error.diagnostics.push_back({.code = "curve.document",
+                               .severity = DiagnosticSeverity::Error,
+                               .path = std::move(path),
+                               .message = error.message});
+  return error;
+}
+
+[[nodiscard]] Error curve_path_error(ErrorCode code, std::string message,
+                                     std::string path = {}) {
+  Error error = make_error(code, std::move(message));
+  error.diagnostics.push_back({.code = "curve.arc_length_path",
                                .severity = DiagnosticSeverity::Error,
                                .path = std::move(path),
                                .message = error.message});
@@ -434,6 +453,124 @@ struct CurveSampler {
                      middle, end, depth + 1U);
   }
 };
+
+/**
+ * Uses a stronger criterion than display tessellation: every stored control
+ * must approach its linearly parameterized float chord. This also subdivides a
+ * geometrically straight cubic whose speed varies with parameter, which is
+ * required before a distance fraction can be mapped back to parameter.
+ */
+struct CurveArcLengthBuilder {
+  CurveSamplingOptions options;
+  std::vector<CurveSample> stations;
+  std::optional<Error> error;
+
+  bool append(const std::array<Double3, 4> &original,
+              CurveSegmentId segment, double parameter) {
+    if (stations.size() >= options.max_samples) {
+      error = curve_path_error(
+          ErrorCode::ValidationFailed,
+          "Curve arc-length sampling exceeded its sample budget.");
+      return false;
+    }
+    const auto position = evaluate_position(original, parameter);
+    const auto tangent = evaluate_tangent(original, parameter);
+    if (!representable(position) || !representable(tangent)) {
+      error = curve_path_error(
+          ErrorCode::ValidationFailed,
+          "Evaluated Curve path data exceeds the supported numeric range.");
+      return false;
+    }
+    stations.push_back(
+        {narrow(position), narrow(tangent), segment, parameter});
+    return true;
+  }
+
+  bool subdivide(const std::array<Double3, 4> &controls,
+                 const std::array<Double3, 4> &original,
+                 CurveSegmentId segment, double start, double end,
+                 std::uint32_t depth) {
+    const double tolerance_squared = options.tolerance * options.tolerance;
+    const auto chord_start = wide(narrow(evaluate_position(original, start)));
+    const auto chord_end = wide(narrow(evaluate_position(original, end)));
+    const std::array linearly_parameterized_chord{
+        chord_start, interpolate(chord_start, chord_end, 1.0 / 3.0),
+        interpolate(chord_start, chord_end, 2.0 / 3.0), chord_end};
+    double deviation = 0.0;
+    for (std::size_t index = 0; index < controls.size(); ++index) {
+      const auto difference = controls[index] - linearly_parameterized_chord[index];
+      deviation = std::max(deviation, dot(difference, difference));
+    }
+    if (deviation <= tolerance_squared) {
+      return append(original, segment, end);
+    }
+    if (depth >= options.max_depth) {
+      error = curve_path_error(
+          ErrorCode::ValidationFailed,
+          "Curve arc-length sampling could not meet tolerance within its depth or storage precision limit.");
+      return false;
+    }
+    const auto a = interpolate(controls[0], controls[1], 0.5);
+    const auto b = interpolate(controls[1], controls[2], 0.5);
+    const auto c = interpolate(controls[2], controls[3], 0.5);
+    const auto d = interpolate(a, b, 0.5);
+    const auto e = interpolate(b, c, 0.5);
+    const auto point = interpolate(d, e, 0.5);
+    const double middle = (start + end) * 0.5;
+    return subdivide({controls[0], a, d, point}, original, segment,
+                     start, middle, depth + 1U) &&
+           subdivide({point, e, c, controls[3]}, original, segment,
+                     middle, end, depth + 1U);
+  }
+};
+
+[[nodiscard]] double curve_path_distance(Vec3 left, Vec3 right) noexcept {
+  return std::hypot(static_cast<double>(right.x) - left.x,
+                    static_cast<double>(right.y) - left.y,
+                    static_cast<double>(right.z) - left.z);
+}
+
+[[nodiscard]] Vec3 normalized_curve_path_direction(Vec3 value) noexcept {
+  const double length = std::hypot(static_cast<double>(value.x),
+                                   static_cast<double>(value.y),
+                                   static_cast<double>(value.z));
+  if (!std::isfinite(length) || length <= 0.0) {
+    return {};
+  }
+  return {static_cast<float>(value.x / length),
+          static_cast<float>(value.y / length),
+          static_cast<float>(value.z / length)};
+}
+
+[[nodiscard]] bool nonzero_curve_path_direction(Vec3 value) noexcept {
+  return value.x != 0.0F || value.y != 0.0F || value.z != 0.0F;
+}
+
+[[nodiscard]] Vec3 curve_path_direction(
+    std::span<const CurveArcLengthStation> stations, Vec3 position,
+    Vec3 derivative,
+    std::size_t first_at_distance, std::size_t after_distance) noexcept {
+  Vec3 direction = normalized_curve_path_direction(derivative);
+  if (nonzero_curve_path_direction(direction)) {
+    return direction;
+  }
+  if (after_distance < stations.size()) {
+    const Vec3 next = stations[after_distance].evaluation.position;
+    direction = normalized_curve_path_direction(
+        {next.x - position.x, next.y - position.y, next.z - position.z});
+    if (nonzero_curve_path_direction(direction)) {
+      return direction;
+    }
+  }
+  if (first_at_distance > 0U) {
+    const Vec3 previous =
+        stations[first_at_distance - 1U].evaluation.position;
+    direction = normalized_curve_path_direction(
+        {position.x - previous.x, position.y - previous.y,
+         position.z - previous.z});
+  }
+  return direction;
+}
 
 /// Writes fixed-width curve values without native layout or endianness assumptions.
 class CurveByteWriter final {
@@ -959,6 +1096,188 @@ CurveDocument::sample(CurveSamplingOptions options) const {
     }
   }
   return Result<std::vector<CurveSample>>::success(std::move(sampler.samples));
+}
+
+CurveArcLengthPath::CurveArcLengthPath(
+    std::shared_ptr<const CurveArcLengthPathData> data) noexcept
+    : data_(std::move(data)) {}
+
+Result<CurveArcLengthPath>
+CurveArcLengthPath::build(const CurveDocument &document,
+                          Transform3 world_from_curve,
+                          CurveSamplingOptions options) {
+  if (!std::isfinite(options.tolerance) || options.tolerance <= 0.0 ||
+      options.max_depth > 24 || options.max_samples == 0 ||
+      options.max_samples > kMaxPoints) {
+    return Result<CurveArcLengthPath>::failure(curve_path_error(
+        ErrorCode::InvalidArgument,
+        "Curve arc-length sampling options are out of range."));
+  }
+  try {
+    CurveDocument world_document = document;
+    auto transformed = world_document.transform(world_from_curve);
+    if (!transformed.ok()) {
+      return Result<CurveArcLengthPath>::failure(
+          std::move(transformed).error());
+    }
+
+    CurveArcLengthBuilder builder{.options = options};
+    builder.stations.reserve(std::min<std::size_t>(
+        options.max_samples, world_document.segment_count() * 4U + 1U));
+    if (world_document.point_count() == 1U) {
+      builder.stations.push_back(
+          {.position = world_document.points().front().position});
+    }
+    for (std::size_t index = 0; index < world_document.segment_count();
+         ++index) {
+      const auto controls = segment_controls(world_document.points(), index);
+      if (!builder.append(controls, world_document.segments()[index], 0.0) ||
+          !builder.subdivide(controls, controls,
+                             world_document.segments()[index], 0.0, 1.0,
+                             0U)) {
+        return Result<CurveArcLengthPath>::failure(
+            std::move(*builder.error));
+      }
+    }
+
+    auto data = std::make_shared<CurveArcLengthPathData>();
+    data->world_document = std::move(world_document);
+    data->stations.resize(builder.stations.size());
+    for (std::size_t index = 0; index < builder.stations.size(); ++index) {
+      if (index > 0U) {
+        data->total_length += curve_path_distance(
+            builder.stations[index - 1U].position,
+            builder.stations[index].position);
+      }
+      if (!std::isfinite(data->total_length)) {
+        return Result<CurveArcLengthPath>::failure(curve_path_error(
+            ErrorCode::ValidationFailed,
+            "Curve arc length exceeds the supported numeric range."));
+      }
+      const CurveSample &sample = builder.stations[index];
+      data->stations[index] = {
+          .distance = data->total_length,
+          .evaluation = {
+              .position = sample.position,
+              .tangent = sample.tangent,
+              .segment = sample.segment,
+              .parameter = sample.parameter,
+          },
+      };
+    }
+    std::size_t group_start = 0U;
+    while (group_start < data->stations.size()) {
+      std::size_t group_end = group_start + 1U;
+      while (group_end < data->stations.size() &&
+             data->stations[group_end].distance ==
+                 data->stations[group_start].distance) {
+        ++group_end;
+      }
+      for (std::size_t index = group_start; index < group_end; ++index) {
+        CurvePathEvaluation &evaluation = data->stations[index].evaluation;
+        evaluation.tangent = curve_path_direction(
+            data->stations, evaluation.position, evaluation.tangent,
+            group_start, group_end);
+      }
+      group_start = group_end;
+    }
+    data->closed = data->world_document.closed();
+    return Result<CurveArcLengthPath>::success(
+        CurveArcLengthPath{std::move(data)});
+  } catch (const std::bad_alloc &) {
+    return Result<CurveArcLengthPath>::failure(curve_path_error(
+        ErrorCode::InternalError,
+        "Not enough memory to build the Curve arc-length path."));
+  } catch (const std::length_error &) {
+    return Result<CurveArcLengthPath>::failure(curve_path_error(
+        ErrorCode::InternalError,
+        "Curve arc-length path allocation is too large."));
+  }
+}
+
+double CurveArcLengthPath::total_length() const noexcept {
+  return data_->total_length;
+}
+
+bool CurveArcLengthPath::closed() const noexcept { return data_->closed; }
+
+std::span<const CurveArcLengthStation>
+CurveArcLengthPath::stations() const noexcept {
+  return data_->stations;
+}
+
+Result<CurvePathEvaluation>
+CurveArcLengthPath::evaluate_at_distance(double distance) const {
+  if (!std::isfinite(distance) || distance < 0.0 ||
+      distance > data_->total_length) {
+    return Result<CurvePathEvaluation>::failure(curve_path_error(
+        ErrorCode::InvalidArgument,
+        "Curve path distance must be finite and within the path length."));
+  }
+  if (data_->stations.empty()) {
+    return Result<CurvePathEvaluation>::failure(curve_path_error(
+        ErrorCode::ValidationFailed,
+        "An empty Curve has no position to evaluate."));
+  }
+
+  if (distance == 0.0) {
+    return Result<CurvePathEvaluation>::success(
+        data_->stations.front().evaluation);
+  }
+  if (distance == data_->total_length) {
+    return Result<CurvePathEvaluation>::success(
+        data_->stations.back().evaluation);
+  }
+
+  const auto right = std::lower_bound(
+      data_->stations.begin(), data_->stations.end(), distance,
+      [](const CurveArcLengthStation &station, double target) {
+        return station.distance < target;
+      });
+  const std::size_t right_index =
+      static_cast<std::size_t>(right - data_->stations.begin());
+  if (right != data_->stations.end() && right->distance == distance) {
+    return Result<CurvePathEvaluation>::success(
+        right->evaluation);
+  }
+  if (right_index == 0U || right_index >= data_->stations.size()) {
+    return Result<CurvePathEvaluation>::failure(curve_path_error(
+        ErrorCode::InternalError,
+        "Curve arc-length lookup could not resolve a distance bracket."));
+  }
+
+  const std::size_t left_index = right_index - 1U;
+  const CurveArcLengthStation &left = data_->stations[left_index];
+  const CurveArcLengthStation &right_station = data_->stations[right_index];
+  if (!left.evaluation.segment.valid() ||
+      left.evaluation.segment != right_station.evaluation.segment ||
+      right_station.distance <= left.distance) {
+    return Result<CurvePathEvaluation>::failure(curve_path_error(
+        ErrorCode::InternalError,
+        "Curve arc-length lookup encountered invalid segment provenance."));
+  }
+  const double fraction =
+      (distance - left.distance) /
+      (right_station.distance - left.distance);
+  const double parameter =
+      left.evaluation.parameter +
+      (right_station.evaluation.parameter - left.evaluation.parameter) *
+          fraction;
+  auto evaluated = data_->world_document.evaluate(left.evaluation.segment,
+                                                   parameter);
+  if (!evaluated.ok()) {
+    return Result<CurvePathEvaluation>::failure(
+        std::move(evaluated).error());
+  }
+  const CurveEvaluation &value = evaluated.value();
+  return Result<CurvePathEvaluation>::success({
+      .position = value.position,
+      .tangent = curve_path_direction(data_->stations, value.position,
+                                      value.tangent, right_index,
+                                      right_index),
+      .segment = left.evaluation.segment,
+      .parameter = parameter,
+  });
 }
 
 Result<std::vector<std::byte>> serialize_curve_document(const CurveDocument &document) {

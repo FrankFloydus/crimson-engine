@@ -16,6 +16,7 @@
 #include <utils/Entity.h>
 
 #include <cstdint>
+#include <span>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -47,6 +48,9 @@ public:
     void sync_light(const RenderSceneLightRecord &light);
     void remove(EntityId entity_id);
     void remove_except(const std::unordered_set<EntityId> &live_light_entities);
+    void set_preview_suppressed_entities(
+        std::unordered_set<EntityId> entities,
+        std::span<const RenderSceneLightRecord> retained_lights = {});
 
     [[nodiscard]] static std::uint64_t
     light_signature(const LightComponent &light);
@@ -89,6 +93,7 @@ public:
     filament::Engine* engine_ = nullptr;
     filament::Scene* scene_ = nullptr;
     std::unordered_map<EntityId, LightProxy> light_proxies_;
+    std::unordered_set<EntityId> preview_suppressed_entities_;
 };
 
 } // namespace quader

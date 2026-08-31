@@ -210,6 +210,16 @@ private:
                                                         mesh.sampling_from_local)
                                     : mesh.instance_sampling_from_local;
     group.dynamic_positions = mesh.dynamic_positions;
+    group.explicit_instances =
+        !mesh.dynamic_positions && group.transforms.size() > 1u;
+    if (group.explicit_instances) {
+      const ToolPreviewInstancePlan plan = plan_tool_preview_instances(
+          group.transforms.size(), kMeshTextureMappingCapacity);
+      group.explicit_instance_capacities.reserve(plan.chunks.size());
+      for (const ToolPreviewInstanceChunkPlan &chunk : plan.chunks) {
+        group.explicit_instance_capacities.push_back(chunk.capacity);
+      }
+    }
     return group;
   }
 };
@@ -4199,6 +4209,106 @@ TEST(ToolPreviewRenderableCacheTests,
 
   EXPECT_EQ(outcome.kind, ToolPreviewRenderableCacheTestPeer::MatchKind::None);
   EXPECT_TRUE(outcome.candidate_indices.empty());
+}
+
+TEST(ToolPreviewRenderableCacheTests,
+     ExplicitInstancePlanRetainsHighWaterChunksAcrossCountSweeps) {
+  const ToolPreviewInstancePlan maximum =
+      plan_tool_preview_instances(128u, 64u);
+  ASSERT_EQ(maximum.chunks.size(), 2u);
+  EXPECT_EQ(maximum.new_chunk_count, 2u);
+  EXPECT_EQ(maximum.allocated_capacity, 128u);
+  EXPECT_EQ(maximum.chunks[0].transform_offset, 0u);
+  EXPECT_EQ(maximum.chunks[0].active_count, 64u);
+  EXPECT_EQ(maximum.chunks[1].transform_offset, 64u);
+  EXPECT_EQ(maximum.chunks[1].active_count, 64u);
+
+  const std::array<std::size_t, 2u> retained{{64u, 64u}};
+  const ToolPreviewInstancePlan shrunk =
+      plan_tool_preview_instances(4u, 64u, retained);
+  ASSERT_EQ(shrunk.chunks.size(), 2u);
+  EXPECT_EQ(shrunk.new_chunk_count, 0u);
+  EXPECT_EQ(shrunk.allocated_capacity, 128u);
+  EXPECT_EQ(shrunk.chunks[0].transform_offset, 0u);
+  EXPECT_EQ(shrunk.chunks[0].active_count, 4u);
+  EXPECT_EQ(shrunk.chunks[1].transform_offset, 4u);
+  EXPECT_EQ(shrunk.chunks[1].active_count, 0u);
+
+  const ToolPreviewInstancePlan regrown =
+      plan_tool_preview_instances(128u, 64u, retained);
+  ASSERT_EQ(regrown.chunks.size(), 2u);
+  EXPECT_EQ(regrown.new_chunk_count, 0u);
+  EXPECT_EQ(regrown.chunks[0].active_count, 64u);
+  EXPECT_EQ(regrown.chunks[1].active_count, 64u);
+
+  std::vector<std::size_t> capacities;
+  std::size_t total_chunk_creations = 0u;
+  for (std::size_t count = 2u; count <= 128u; ++count) {
+    const ToolPreviewInstancePlan plan =
+        plan_tool_preview_instances(count, 64u, capacities);
+    total_chunk_creations += plan.new_chunk_count;
+    capacities.clear();
+    for (const ToolPreviewInstanceChunkPlan &chunk : plan.chunks) {
+      capacities.push_back(chunk.capacity);
+    }
+  }
+  EXPECT_EQ(total_chunk_creations, 2u)
+      << "count sweeps allocate by device chunks, not by station count";
+}
+
+TEST(ToolPreviewLightCacheTests,
+     LightPoolPlanGrowsOnlyTheHighWaterDelta) {
+  std::vector<std::size_t> retained;
+  std::size_t total_created = 0u;
+  for (std::size_t count = 2u; count <= 128u; ++count) {
+    const std::array<std::size_t, 1u> requested{{count}};
+    const ToolPreviewLightPoolPlan plan =
+        plan_tool_preview_light_pools(requested, retained);
+    total_created += plan.new_proxy_count;
+    retained = plan.retained_capacities;
+  }
+  EXPECT_EQ(total_created, 128u);
+  ASSERT_EQ(retained, (std::vector<std::size_t>{128u}));
+
+  const std::array<std::size_t, 1u> shrunk{{4u}};
+  const ToolPreviewLightPoolPlan shrink_plan =
+      plan_tool_preview_light_pools(shrunk, retained);
+  EXPECT_EQ(shrink_plan.new_proxy_count, 0u);
+  EXPECT_EQ(shrink_plan.retained_capacities, retained);
+
+  const std::array<std::size_t, 1u> regrown{{128u}};
+  const ToolPreviewLightPoolPlan regrow_plan =
+      plan_tool_preview_light_pools(regrown,
+                                    shrink_plan.retained_capacities);
+  EXPECT_EQ(regrow_plan.new_proxy_count, 0u);
+  EXPECT_EQ(regrow_plan.retained_capacities, retained);
+}
+
+TEST(ToolPreviewRenderableCacheTests,
+     ExplicitInstanceCountChangesReuseRetainedChunkCapacity) {
+  RenderToolPreviewMeshRecord retained = preview_match_test_record(false);
+  retained.instance_transforms.assign(4u, QMat4{});
+
+  RenderToolPreviewMeshRecord within_capacity = retained;
+  within_capacity.instance_transforms.assign(kMeshTextureMappingCapacity,
+                                             QMat4{});
+  const auto reused = ToolPreviewRenderableCacheTestPeer::match(
+      std::vector<RenderToolPreviewMeshRecord>{retained},
+      std::vector<RenderToolPreviewMeshRecord>{within_capacity});
+  ASSERT_EQ(reused.kind,
+            ToolPreviewRenderableCacheTestPeer::MatchKind::Exact);
+  EXPECT_EQ(reused.candidate_indices,
+            (std::vector<std::size_t>{0u}));
+
+  RenderToolPreviewMeshRecord beyond_capacity = retained;
+  beyond_capacity.instance_transforms.assign(kMeshTextureMappingCapacity + 1u,
+                                             QMat4{});
+  const auto rejected = ToolPreviewRenderableCacheTestPeer::match(
+      std::vector<RenderToolPreviewMeshRecord>{retained},
+      std::vector<RenderToolPreviewMeshRecord>{beyond_capacity});
+  EXPECT_EQ(rejected.kind,
+            ToolPreviewRenderableCacheTestPeer::MatchKind::None);
+  EXPECT_TRUE(rejected.candidate_indices.empty());
 }
 
 TEST(ToolPreviewRenderableCacheTests,

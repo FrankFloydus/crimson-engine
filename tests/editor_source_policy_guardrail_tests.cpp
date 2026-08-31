@@ -2514,5 +2514,85 @@ TEST(CurveAnchorSnapPolicyGuardrailTests,
       << "Handles must never enter the anchor snap candidate set.";
 }
 
+TEST(PathArraySourcePolicyGuardrailTests,
+     SettingsAndUnchangedRefreshesDoNotRescanTheSourceHierarchy) {
+  const std::string header = read_source_file(
+      "src/editor/array/path_array_tool_service.hpp");
+  const std::string source = read_source_file(
+      "src/editor/array/path_array_tool_service.cpp");
+
+  EXPECT_NE(header.find("std::uint64_t path_generation"), std::string::npos);
+  EXPECT_NE(header.find("std::uint64_t source_generation"),
+            std::string::npos);
+  EXPECT_NE(header.find("std::uint64_t layout_revision"),
+            std::string::npos);
+  EXPECT_NE(header.find("cached_source_generation_"), std::string::npos);
+  EXPECT_NE(header.find("cached_changed_source_"), std::string::npos);
+
+  const std::string refresh = source_slice(
+      source, "CommandResult PathArrayToolService::refresh()",
+      "CommandResult PathArrayToolService::cancel()");
+  const std::size_t validation =
+      refresh.find("source_is_current(*session_->source)");
+  const std::size_t changed_capture =
+      refresh.find("std::move(cached_changed_source_)", validation);
+  ASSERT_NE(validation, std::string::npos);
+  ASSERT_NE(changed_capture, std::string::npos);
+  EXPECT_LT(validation, changed_capture);
+  EXPECT_EQ(refresh.find("capture_source("), std::string::npos)
+      << "The continuously called refresh path must consume the revision-gated "
+         "source validation cache.";
+
+  const std::string validation_owner = source_slice(
+      source, "bool PathArrayToolService::source_is_current(",
+      "bool PathArrayToolService::same_source_snapshot(");
+  const std::size_t generation_gate = validation_owner.find(
+      "cached_source_generation_ == session_->source_generation");
+  const std::size_t hierarchy_capture =
+      validation_owner.find("capture_source(source.root)", generation_gate);
+  ASSERT_NE(generation_gate, std::string::npos);
+  ASSERT_NE(hierarchy_capture, std::string::npos);
+  EXPECT_LT(generation_gate, hierarchy_capture);
+  EXPECT_NE(validation_owner.find("cached_source_scene_revision_ =="),
+            std::string::npos);
+  EXPECT_NE(validation_owner.find("cached_source_asset_revision_ =="),
+            std::string::npos);
+  EXPECT_NE(validation_owner.find("cached_changed_source_ ="),
+            std::string::npos);
+
+  const std::array setting_slices{
+      source_slice(source, "CommandResult PathArrayToolService::set_count(",
+                   "CommandResult PathArrayToolService::set_distance("),
+      source_slice(source, "CommandResult PathArrayToolService::set_distance(",
+                   "CommandResult PathArrayToolService::set_follow_path("),
+      source_slice(source,
+                   "CommandResult PathArrayToolService::set_follow_path(",
+                   "CommandResult\n"
+                   "PathArrayToolService::set_forward_axis("),
+      source_slice(source,
+                   "CommandResult\n"
+                   "PathArrayToolService::set_forward_axis(",
+                   "CommandResult PathArrayToolService::reset_settings()"),
+      source_slice(source,
+                   "CommandResult PathArrayToolService::reset_settings()",
+                   "std::optional<PathArrayToolService::SourceSnapshot>"),
+  };
+  for (const std::string &setting : setting_slices) {
+    EXPECT_NE(setting.find("layout_revision = issue_revision()"),
+              std::string::npos);
+    EXPECT_EQ(setting.find("source_generation ="), std::string::npos)
+        << "Layout settings must not invalidate cached hierarchy participants.";
+    EXPECT_EQ(setting.find("capture_source("), std::string::npos);
+  }
+
+  const std::string texture_plan = source_slice(
+      source, "PathArrayToolService::build_preview_mesh_mappings(",
+      "std::uint64_t PathArrayToolService::issue_revision()");
+  EXPECT_NE(texture_plan.find("cached_texture_plan_source_generation_"),
+            std::string::npos);
+  EXPECT_NE(texture_plan.find("cached_texture_mapping_plan_"),
+            std::string::npos);
+}
+
 } // namespace
 } // namespace quader

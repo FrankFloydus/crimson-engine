@@ -614,10 +614,20 @@ TEST(CommandBehaviorContractTests,
   EXPECT_EQ(contracted, registered)
       << "The registry and explicit behavior-contract catalog diverged.";
 #ifndef NDEBUG
-  EXPECT_EQ(contracted.size(), 189u);
-#else
   EXPECT_EQ(contracted.size(), 190u);
+#else
+  EXPECT_EQ(contracted.size(), 191u);
 #endif
+}
+
+TEST(CommandBehaviorContractTests,
+     PathArrayActivationUsesANondegenerateCurveFixture) {
+  const CommandBehaviorContract *contract = find_command_behavior_contract(
+      quader_command::kToolsActivatePathArray.string());
+  ASSERT_NE(contract, nullptr);
+  EXPECT_EQ(contract->fixture, CanonicalCommandFixture::CurveSelection);
+  EXPECT_EQ(contract->outcome, CommandOutcomePolicy::SuccessRequired);
+  EXPECT_EQ(contract->undo_repeat, CommandUndoRepeatPolicy::None);
 }
 
 TEST(CommandBehaviorContractTests,

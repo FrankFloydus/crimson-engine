@@ -7,6 +7,7 @@
 #include "editor/session/project_session.hpp"
 
 #include "core/qstr.hpp"
+#include "editor/array/path_array_tool_service.hpp"
 #include "editor/session/project_asset_bootstrap_service.hpp"
 #include "editor/session/scene_viewport_camera_persistence.hpp"
 #include "editor/instances/project_clipboard_service.hpp"
@@ -242,7 +243,9 @@ void rollback_new_project(
 
 } // namespace
 
-ProjectSession::ProjectSession() {
+ProjectSession::ProjectSession()
+    : path_array_defaults_(std::make_shared<PathArraySessionDefaults>()),
+      fallback_scene_(path_array_defaults_) {
   resource_root_ = default_runtime_resource_root();
   (void)ProjectAssetBootstrapService{}.bootstrap_default_assets(fallback_scene_);
   fallback_scene_.mark_clean();
@@ -1325,7 +1328,8 @@ std::unique_ptr<OpenSceneSession> ProjectSession::make_scene(
     SceneId scene_id, std::string display_name,
     std::optional<ProjectRelativePath> path, SceneContentDocument document,
     std::optional<ViewportCameraPose> viewport_camera_pose) {
-  auto session = std::make_unique<SceneSession>(std::move(document));
+  auto session = std::make_unique<SceneSession>(path_array_defaults_,
+                                                 std::move(document));
   (void)session->restore_persisted_viewport_camera_pose(
       viewport_camera_pose);
   session->mark_clean();

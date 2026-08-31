@@ -36,7 +36,7 @@ struct ToolIconSpec {
   bool separator_before = false;
 };
 
-constexpr std::array<ToolIconSpec, 15> kToolIconSpecs{{
+constexpr std::array<ToolIconSpec, 16> kToolIconSpecs{{
     {ViewportToolId::Select, ":/quader/icons/tool_select.png"},
     {ViewportToolId::Move, ":/quader/icons/tool_move.png"},
     {ViewportToolId::Rotate, ":/quader/icons/tool_rotate.png"},
@@ -53,6 +53,7 @@ constexpr std::array<ToolIconSpec, 15> kToolIconSpecs{{
     {ViewportToolId::Mirror, ":/quader/icons/tool_mirror.png"},
     {ViewportToolId::LinearArray, ":/quader/icons/tool_linear_array.png"},
     {ViewportToolId::RadialArray, ":/quader/icons/tool_radial_array.png"},
+    {ViewportToolId::PathArray, ":/quader/icons/tool_path_array.png"},
     {ViewportToolId::Curve, nullptr},
 }};
 

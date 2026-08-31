@@ -722,6 +722,9 @@ private:
     case CanonicalCommandFixture::UvPeelEdgeSelection:
       configure_uv_peel_edge();
       break;
+    case CanonicalCommandFixture::CurveSelection:
+      configure_curve_selection();
+      break;
     case CanonicalCommandFixture::HiddenObject:
       configure_hidden_object();
       break;
@@ -1085,6 +1088,22 @@ private:
     require_ok(editor().selection().select_edge(
                    object, api_element(first), api_element(second)),
                "Select canonical UV Peel guide edge");
+  }
+
+  void configure_curve_selection() {
+    const QuaderModelingObjectRef curve = require_value(
+        editor().modeling().create_curve({
+            .points = {{.position = {0.0F, 0.0F, 0.0F},
+                        .outgoing_handle = {1.0F, 0.0F, 0.0F}},
+                       {.position = {4.0F, 1.0F, 0.0F},
+                        .incoming_handle = {-1.0F, 0.0F, 0.0F}}},
+            .name = "Path Array Curve",
+        }),
+        "Create canonical Path Array curve");
+    require_ok(editor().selection().set_mode(QuaderSelectionMode::Object),
+               "Enter Object mode for Path Array curve");
+    require_ok(editor().selection().select_object(curve),
+               "Select canonical Path Array curve");
   }
 
   void configure_hidden_object() {

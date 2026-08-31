@@ -138,6 +138,25 @@ struct PrimitiveBaseKeyHash final {
   }
 };
 
+/// Hashes the full immutable primitive/pass key for capacity-only reuse.
+struct PrimitiveKeyHash final {
+  std::size_t operator()(const RenderInstancePrimitiveKey &key) const noexcept {
+    RenderSignatureBuilder signature;
+    signature.add_value(key.geometry_payload)
+        .add_value(key.material_payload)
+        .add_value(key.index_offset)
+        .add_value(key.index_count)
+        .add_value(key.layer_mask)
+        .add_value(key.channel)
+        .add_value(key.presentation_flags)
+        .add_bool(key.cast_shadows)
+        .add_bool(key.receive_shadows)
+        .add_bool(key.double_sided)
+        .add_bool(key.editor_unlit);
+    return static_cast<std::size_t>(signature.value());
+  }
+};
+
 /// Borrows one stable chunk so the reuse index does not copy occurrence IDs.
 struct PersistentChunkLayoutRef final {
   const RenderInstanceBatchChunk *chunk = nullptr;
@@ -232,7 +251,12 @@ ChunkProxyReuseResult match_reusable_chunk_proxies(
       PersistentChunkLayoutRef, PersistentChunkCandidateBucket,
       PersistentChunkLayoutRefHash, PersistentChunkLayoutRefEqual>;
   CandidateIndex candidates_by_layout;
+  std::unordered_map<RenderInstancePrimitiveKey,
+                     PersistentChunkCandidateBucket, PrimitiveKeyHash>
+      candidates_by_key;
   candidates_by_layout.reserve(
+      std::min(old_chunks.size(), old_candidates.size()));
+  candidates_by_key.reserve(
       std::min(old_chunks.size(), old_candidates.size()));
   for (std::size_t old_index = 0u;
        old_index < old_chunks.size() && old_index < old_candidates.size();
@@ -247,6 +271,7 @@ ChunkProxyReuseResult match_reusable_chunk_proxies(
         PersistentChunkLayoutRef{.chunk = &chunk});
     (void)inserted;
     found->second.old_indices.push_back(old_index);
+    candidates_by_key[chunk.key].old_indices.push_back(old_index);
     ++result.indexed_candidate_count;
   }
 
@@ -273,6 +298,27 @@ ChunkProxyReuseResult match_reusable_chunk_proxies(
     const auto found = candidates_by_layout.find(
         PersistentChunkLayoutRef{.chunk = &next});
     if (found == candidates_by_layout.end()) {
+      ++result.capacity_key_lookup_count;
+      const auto capacity_found = candidates_by_key.find(next.key);
+      if (capacity_found == candidates_by_key.end()) {
+        continue;
+      }
+      PersistentChunkCandidateBucket &capacity_bucket =
+          capacity_found->second;
+      while (capacity_bucket.first_unprobed <
+             capacity_bucket.old_indices.size()) {
+        const std::size_t old_index = capacity_bucket.old_indices[
+            capacity_bucket.first_unprobed++];
+        ++result.capacity_candidate_probe_count;
+        if (old_candidate_reserved[old_index] ||
+            old_candidates[old_index].instance_capacity <
+                next.world_transforms.size()) {
+          continue;
+        }
+        result.old_chunk_by_next_chunk[next_index] = old_index;
+        old_candidate_reserved[old_index] = true;
+        break;
+      }
       continue;
     }
     PersistentChunkCandidateBucket &bucket = found->second;
@@ -486,7 +532,8 @@ MeshRenderableProxy InstanceRenderableCache::create_chunk_proxy(
       record->mesh, &record->material, primitive, chunk.world_transforms,
       chunk.world_bounds, chunk.key.cast_shadows, chunk.key.receive_shadows,
       chunk.key.double_sided, initial_layer_mask, chunk.key.editor_unlit,
-      variant->depth_only, chunk.key.channel, chunk.key.presentation_flags);
+      variant->depth_only, chunk.key.channel, chunk.key.presentation_flags,
+      max_instances_per_chunk_);
   if (!proxy.entity || proxy.instance_buffer == nullptr) {
     factory_->destroy(proxy);
     return {};

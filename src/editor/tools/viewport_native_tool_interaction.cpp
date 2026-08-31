@@ -8,11 +8,13 @@
 
 #include "assets/asset_registry.hpp"
 #include "core/logger.hpp"
+#include "editor/array/path_array_tool_service.hpp"
 #include "editor/array/radial_array_tool_service.hpp"
 #include "editor/curve/curve_tool_service.hpp"
 #include "editor/interactions/tool_drag_math.hpp"
 #include "editor/placement/viewport_point_placement_service.hpp"
 #include "editor/pivot/pivot_tool_service.hpp"
+#include "editor/selection/editor_selection_service.hpp"
 #include "math/glm_bridge.hpp"
 #include "scene/scene_document.hpp"
 #include "viewport/viewport_camera_adapter.hpp"
@@ -105,6 +107,8 @@ ViewportNativeToolInteraction::handle_frame(
     AssetRegistry &assets,
     PivotToolService *pivot, LinearArrayToolService *linear_array,
     RadialArrayToolService *radial_array,
+    PathArrayToolService *path_array,
+    EditorSelectionService *selection,
     ViewportPointPlacementService *point_placement,
     ViewportCameraController &camera,
     const ViewportNativeToolInteractionFrame &frame,
@@ -138,6 +142,207 @@ ViewportNativeToolInteraction::handle_frame(
     output.invalidate_hover = true;
     output.mark_overlay_dirty = true;
   };
+
+  if (path_array != nullptr && path_array->active()) {
+    output.path_array_consumed = true;
+    output.consumed = true;
+    output.blocks_transform_gizmo = true;
+
+    const auto clear_source_hover = [&]() {
+      if (selection == nullptr) {
+        return;
+      }
+      const ModelingCommandResult cleared =
+          selection->preview_resolved_hover(std::nullopt);
+      if (!cleared.ok) {
+        LOG_ERROR("Path Array hover clear failed: {}",
+                  cleared.message.empty() ? "Hover clear failed."
+                                          : cleared.message);
+      }
+      output.mark_overlay_dirty = output.mark_overlay_dirty || cleared.changed;
+    };
+    const auto resolve_source = [&](QVec2 local_mouse)
+        -> std::optional<EntityId> {
+      if (selection == nullptr) {
+        return std::nullopt;
+      }
+      const PathArrayPreviewState &preview = path_array->preview_state();
+      if (path_array_exclusion_owner_ != path_array ||
+          path_array_exclusion_revision_ != preview.scene.revision ||
+          path_array_exclusion_source_ != preview.source_root) {
+        path_array_exclusion_owner_ = path_array;
+        path_array_exclusion_revision_ = preview.scene.revision;
+        path_array_exclusion_source_ = preview.source_root;
+        path_array_excluded_entities_ = preview.scene.suppression.entities;
+        std::ranges::sort(path_array_excluded_entities_);
+        path_array_excluded_entities_.erase(
+            std::ranges::unique(path_array_excluded_entities_).begin(),
+            path_array_excluded_entities_.end());
+        path_array_excluded_occurrences_.clear();
+        path_array_excluded_occurrences_.reserve(
+            preview.scene.suppression.occurrences.size());
+        for (const ModelingToolPreviewOccurrenceSuppression &occurrence :
+             preview.scene.suppression.occurrences) {
+          path_array_excluded_occurrences_.push_back({
+              .source_entity = occurrence.source_entity,
+              .occurrence = occurrence.occurrence,
+          });
+        }
+        std::ranges::sort(
+            path_array_excluded_occurrences_, [](const auto &left,
+                                                 const auto &right) {
+              if (left.occurrence != right.occurrence) {
+                return left.occurrence < right.occurrence;
+              }
+              return left.source_entity < right.source_entity;
+            });
+        path_array_excluded_occurrences_.erase(
+            std::ranges::unique(path_array_excluded_occurrences_).begin(),
+            path_array_excluded_occurrences_.end());
+      }
+      const std::optional<EntityId> picked =
+          frame.path_array_source_picker != nullptr
+              ? frame.path_array_source_picker->pick(
+                    local_mouse, path_array_excluded_entities_,
+                    path_array_excluded_occurrences_, frame.select_backfaces)
+              : std::nullopt;
+      if (!picked.has_value()) {
+        return std::nullopt;
+      }
+
+      const EntityId promoted =
+          selection->group_promoted_scene_target(*picked);
+      if (promoted == kInvalidEntityId) {
+        return std::nullopt;
+      }
+
+      // The source remains authored while renderer-neutral suppression is
+      // active. Exclude its complete hierarchy from CPU picking too. A nested
+      // group could otherwise promote to a different root and be selected
+      // again even though none of its participants are visible.
+      const EntityId current_source = path_array->source_root();
+      if (current_source != kInvalidEntityId &&
+          (promoted == current_source ||
+           document.is_descendant_of(promoted, current_source))) {
+        return std::nullopt;
+      }
+      return path_array->resolve_source_candidate(promoted);
+    };
+
+    if (input.modal_tool_finalize_pressed && path_array->preview_valid()) {
+      record_commit("Path Array apply", lifecycle.commit_active());
+      if (path_array_source_press_) {
+        left_release_suppression_.begin(QuaderMouseButton::Left,
+                                        frame.left_down);
+      }
+      path_array_source_press_.reset();
+      clear_source_hover();
+      return output;
+    }
+
+    if (native_pointer_interrupted(frame)) {
+      if (path_array_source_press_) {
+        left_release_suppression_.begin(QuaderMouseButton::Left,
+                                        frame.left_down);
+      }
+      path_array_source_press_.reset();
+      clear_source_hover();
+      return output;
+    }
+
+    const bool can_hover = selection != nullptr && input.viewport_hovered &&
+                           input.viewport_focused &&
+                           !frame.suppress_hover_work;
+    if (can_hover && !frame.left_down && !path_array_source_press_) {
+      const std::optional<EntityId> candidate =
+          resolve_source(input.mouse_local);
+      const ModelingCommandResult hovered =
+          selection->preview_resolved_hover(
+              candidate.has_value()
+                  ? std::optional<ResolvedSelectionTarget>{
+                        ResolvedSelectionTarget{
+                            .domain = ResolvedSelectionDomain::SceneEntity,
+                            .entity = *candidate,
+                        }}
+                  : std::nullopt);
+      if (!hovered.ok) {
+        LOG_ERROR("Path Array hover failed: {}",
+                  hovered.message.empty() ? "Hover failed."
+                                          : hovered.message);
+      }
+      output.mark_overlay_dirty = output.mark_overlay_dirty || hovered.changed;
+    } else if (!can_hover) {
+      clear_source_hover();
+    }
+
+    const bool plain_left_press =
+        frame.left_pressed && !canceled_left_release &&
+        !input.modifiers.primary && !input.modifiers.shift &&
+        !input.modifiers.alt;
+    if (plain_left_press && !path_array_source_press_ && can_hover) {
+      const std::optional<EntityId> candidate =
+          resolve_source(frame.left_click_local);
+      if (candidate.has_value()) {
+        path_array_source_press_ = PathArraySourcePress{
+            .gesture = viewport_pointer_gesture_from_latest_edge(
+                input.pointer_pressed_edges, QuaderMouseButton::Left,
+                frame.left_click_local, input.mouse_screen, input.modifiers,
+                frame.pointer_drag_threshold_pixels),
+            .candidate = *candidate,
+            .path_entity = path_array->path_entity(),
+        };
+        output.claim_interaction_pane = true;
+      }
+    }
+
+    if (path_array_source_press_) {
+      const ViewportPointerButtonEdge *release = matching_left_release(
+          frame, path_array_source_press_->gesture);
+      const bool matching_release =
+          release != nullptr ||
+          synthetic_left_release_matches(frame,
+                                         path_array_source_press_->gesture);
+      const QVec2 release_local =
+          release != nullptr ? release->local : input.mouse_local;
+      const bool moved = viewport_pointer_drag_threshold_reached(
+          path_array_source_press_->gesture, release_local);
+      const bool stale_path =
+          path_array_source_press_->path_entity != path_array->path_entity();
+      const bool abandoned = !frame.left_down && !frame.left_released;
+      if (stale_path || abandoned) {
+        left_release_suppression_.begin(QuaderMouseButton::Left,
+                                        frame.left_down);
+        path_array_source_press_.reset();
+      } else if (matching_release) {
+        const EntityId pressed_candidate =
+            path_array_source_press_->candidate;
+        const std::optional<EntityId> released_candidate =
+            moved ? std::nullopt : resolve_source(release_local);
+        path_array_source_press_.reset();
+        if (released_candidate.has_value() &&
+            *released_candidate == pressed_candidate) {
+          const CommandResult selected =
+              path_array->select_source(pressed_candidate);
+          if (!selected.ok) {
+            LOG_ERROR("Path Array source selection failed: {}",
+                      selected.message.empty()
+                          ? "Source selection failed."
+                          : selected.message);
+          }
+          if (selected.changed) {
+            output.invalidate_hover = true;
+            output.mark_overlay_dirty = true;
+            clear_source_hover();
+          }
+        }
+      }
+    }
+    return output;
+  }
+  if (path_array_source_press_) {
+    left_release_suppression_.begin(QuaderMouseButton::Left, frame.left_down);
+    path_array_source_press_.reset();
+  }
 
   const bool curve_interaction_requested =
       curve != nullptr && curve->controls_editable() &&
@@ -705,7 +910,7 @@ ViewportNativeToolInteraction::handle_frame(
 
 void ViewportNativeToolInteraction::clear_drag_state() {
   if (pivot_handle_press_ || linear_array_handle_press_ ||
-      curve_point_construction_press_) {
+      curve_point_construction_press_ || path_array_source_press_) {
     // Lifecycle cancellation can run before the next sampled frame. Keep the
     // originating left release reserved so it cannot become a selection click.
     left_release_suppression_.begin(QuaderMouseButton::Left, true);
@@ -714,13 +919,15 @@ void ViewportNativeToolInteraction::clear_drag_state() {
   linear_array_handle_press_.reset();
   curve_point_construction_press_.reset();
   curve_conversion_press_.reset();
+  path_array_source_press_.reset();
 }
 
 bool ViewportNativeToolInteraction::dragging() const {
   return pivot_handle_press_.has_value() ||
          linear_array_handle_press_.has_value() ||
          curve_point_construction_press_.has_value() ||
-         curve_conversion_press_.has_value();
+         curve_conversion_press_.has_value() ||
+         path_array_source_press_.has_value();
 }
 
 std::optional<int> ViewportNativeToolInteraction::hit_drawn_plane_captured_point(

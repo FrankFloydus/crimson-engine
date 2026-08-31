@@ -390,6 +390,8 @@ const char *viewport_tool_id(ViewportToolId tool) {
     return "radial_array";
   case ViewportToolId::Curve:
     return "curve";
+  case ViewportToolId::PathArray:
+    return "path_array";
   }
   return "unknown";
 }

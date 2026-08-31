@@ -115,6 +115,8 @@ struct ViewportOverlayDynamicSubmissionStamp final {
   } volatile_modeling;
   ViewportOverlaySceneSubmissionStamp scene_tools;
   CurveToolOverlaySourceStamp curve;
+  std::uintptr_t tool_preview_identity = 0u;
+  std::uint64_t tool_preview_revision = 0u;
   std::uint64_t style_signature = 0u;
   ViewportOverlaySelectionContext style_selection_context =
       ViewportOverlaySelectionContext::Any;
@@ -164,6 +166,10 @@ struct ViewportOverlaySubmissionRequest final {
   ViewportOverlayVolatileModelingSourceStamp volatile_modeling_source;
   /// Borrowed only for submit(); render owns all retained curve presentation.
   const CurveToolPreviewState *curve_preview = nullptr;
+  /// Borrowed for submit(); SceneRenderBridge retains this compound preview.
+  const ViewportOverlayFrame *tool_preview_overlay_frame = nullptr;
+  std::uintptr_t tool_preview_overlay_identity = 0u;
+  std::uint64_t tool_preview_overlay_revision = 0u;
   ViewportOverlayDynamicToolSourceStamp dynamic_tool_source;
   const ViewportOverlayDynamicToolFrameProvider *dynamic_tool_frame_provider =
       nullptr;

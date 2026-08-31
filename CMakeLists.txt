@@ -349,6 +349,7 @@ target_link_libraries(quader_document
 add_library(quader_editor_services STATIC
     ${QUADER_EDITOR_VIEWPORT_TOOL_SOURCES}
     src/editor/array/linear_array_tool_service.cpp
+    src/editor/array/path_array_tool_service.cpp
     src/editor/array/radial_array_tool_service.cpp
     src/editor/curve/curve_tool_service.cpp
     src/editor/commands/asset_command_service.cpp
@@ -1030,7 +1031,8 @@ set(QUADER_TOOL_TOOLBAR_ICON_FILES
     "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/tool_poly.png"
     "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/tool_mirror.png"
     "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/tool_linear_array.png"
-    "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/tool_radial_array.png")
+    "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/tool_radial_array.png"
+    "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/tool_path_array.png")
 
 set(QUADER_SNAPPING_TOOLBAR_ICON_FILES
     "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/snapping_master.png"
@@ -1402,6 +1404,10 @@ if(QUADER_BUILD_TESTS)
         tests/local_stress_tests.cpp
         tests/local_visibility_tests.cpp
         tests/localization_tests.cpp
+        tests/path_array_compound_preview_tests.cpp
+        tests/path_array_layout_tests.cpp
+        tests/path_array_tool_service_tests.cpp
+        tests/path_array_ui_catalog_tests.cpp
         tests/math_types_tests.cpp
         tests/mesh_arrangement_tests.cpp
         tests/snap_to_floor_tests.cpp

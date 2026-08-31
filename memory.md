@@ -7865,3 +7865,66 @@ passes 6/6. The isolated installed-SDK consumer is locked to the canonical Debug
 canonical app builds pass in required order at `build/vs2026/Debug/quader.exe` and
 `build/vs2026/Release/quader.exe`. No Quader window, smoke test, screenshot, GPU benchmark, or
 visual test was launched, following the user's request. Version 0.1.66 remains unchanged.
+
+## 2026-08-31 - Curve-Driven Path Array Tool
+
+- `quader::modeling::CurveArcLengthPath` is the portable source of truth for transformed Curve
+  length and distance evaluation. It is built from adaptive authored samples and preserves authored
+  direction, one-sided corner/end tangents, repeated-anchor behavior, segment/parameter provenance,
+  and closed-seam identity. Native array layout consumes this path and owns only source pivot and
+  rotation-minimizing frame policy.
+- `PathArrayToolService` owns the modal activation baseline, pinned path/source generations,
+  source-inclusive station transforms, session-only remembered spacing, resource-budget clamping,
+  atomic compound preview, and the single `Path Array` transaction. Count, distance, follow, and
+  axis edits change only layout state; unchanged refreshes and settings edits must not rescan the
+  hierarchy or rebuild source texture plans.
+- Source picking remains a viewport adapter over the canonical scene-hit and group-promotion
+  policies. Native tool lifecycle sees only `ViewportPathArraySourcePickingPort`; it does not own a
+  raycast or scene-surface query. Suppressed source participants are excluded before hit arbitration,
+  and modifiers, marquee gestures, drags, invalid clicks, and interrupted navigation cannot replace
+  the current source.
+- Compound previews are renderer-neutral and published as one generation. They carry ordinary and
+  instanced meshes, pinned Curve samples, Point/Directional/Spot lights, group/generic markers, and
+  complete entity/occurrence suppression. A failed first candidate leaves the source visible; later
+  failures retain the last valid generation. Mesh and transient-light caches reuse resources across
+  transform-only station edits, and all panes consume the same semantic snapshot.
+- Apply reuses the original at station zero, duplicates the complete hierarchy for later stations
+  through `SceneStructuralLifecycleService`, applies checked world-to-local transforms and the
+  canonical texture-lock plan, and appends an exact Curve selection memento. Cancel, Apply, Undo,
+  Redo, and external invalidation restore the activation selection mode plus Curve control
+  subselection. Hierarchy and preview limits clamp count; content and shadow policy are never
+  silently omitted or downgraded.
+
+Verification: all 32 native Path Array tests and seven portable arc-length tests pass. The affected
+matrix passes 253 guardrails, 1,079 native behavior tests, 210 SDK consumer tests, and four parity
+tests. The approved command baseline contains 191 commands with `tools.activate.path_array` as the
+only addition. The mandatory regression gate passes all six CTest targets, including the isolated
+SDK configure/build, and a separate full CTest run also passes 6/6. The Debug/Profile gate build
+passes. Version 0.1.66 remains unchanged, and no application window, GPU smoke check, screenshot,
+or visual test was launched.
+
+### Path Array high-count stability refinement
+
+- Distance is exact authored/session spacing and is independent of Num Copies. Count and resource-
+  budget changes must never rewrite, clamp, or rescale it. First activation and explicit Reset may
+  calculate fit-to-path spacing; after that, only an explicit Distance edit replaces the remembered
+  value. Open-path overflow extrapolates from the terminal endpoint and tangent. Closed-path
+  overflow wraps by path length. This matches Blender's Fixed Count + Constant Offset followed by a
+  Curve modifier with Stretch disabled; do not replace it with Fit Curve, clamped endpoint samples,
+  or count-dependent spacing.
+- Copy-count controls use the generic stepped number interaction in Tool Settings. Linear Count,
+  Radial Copies, and Path Num Copies use native `QSlider` pointer tracking with `singleStep`,
+  `pageStep`, and `tickInterval` set to one descriptor step and visible value-space ticks. Wheel,
+  arrows, Page Up/Down, and groove presses advance by one step. Do not restore pixel-detent drag
+  accumulation: it disconnects the thumb from the pointer and becomes visibly laggy.
+- Static multi-transform previews use retained Filament instance-buffer chunks and publish count
+  changes through a prepared hidden generation. Capacity is retained across shrink/regrow edits,
+  chunk offsets advance by active count, and transient-light pools grow only to their high-water
+  mark. Do not restore one renderable hierarchy per preview station.
+
+Verification: the current Distance/overflow/native-slider refinement passes 39/39 focused tests,
+including exact open and closed prefix preservation plus native pointer-to-thumb tracking. The
+guarded command baseline was intentionally updated and its contract test passes. The mandatory
+regression gate and an independent full CTest pass both report 6/6. Canonical Debug/Profile and
+Release `quader` builds pass in the required order. No app window, GPU smoke check, screenshot, or
+visual test was launched.

@@ -60,9 +60,10 @@ qt_tool_settings_number_slider_mapping(double minimum, double maximum,
     double logical_step);
 
 /**
- * Keeps native handle dragging while making a left press on the slider groove
- * begin an absolute, continuously tracked scrub. Stock QSlider page-steps on
- * many styles when the groove is pressed and ignores subsequent mouse moves.
+ * Makes a left press on the slider groove begin an absolute, continuously
+ * tracked scrub. Handle dragging always remains native so the thumb stays
+ * attached to the pointer. Descriptor-owned stepped controls use QSlider's
+ * integral range, value-space ticks, and native single/page steps.
  */
 class QtToolSettingsNumberSlider final : public QSlider {
 public:
@@ -70,16 +71,22 @@ public:
       Qt::Orientation orientation = Qt::Horizontal,
       QWidget *parent = nullptr);
 
+  void set_stepwise_interaction(bool enabled);
+  [[nodiscard]] bool stepwise_interaction() const;
+
 protected:
   void mousePressEvent(QMouseEvent *event) override;
   void mouseMoveEvent(QMouseEvent *event) override;
   void mouseReleaseEvent(QMouseEvent *event) override;
+  void wheelEvent(QWheelEvent *event) override;
 
 private:
   [[nodiscard]] int value_from_pointer(const QPointF &position) const;
   [[nodiscard]] int handle_center_offset() const;
+  void step_once(int direction);
   void finish_groove_scrub();
 
+  bool stepwise_interaction_ = false;
   bool groove_scrubbing_ = false;
 };
 

@@ -69,14 +69,45 @@ constexpr std::size_t kGeometryCacheCapacity = 64u;
 
 [[nodiscard]] bool excluded_participant(
     SceneSurfaceParticipantId id,
-    std::span<const SceneSurfaceParticipantId> exclusions) {
+    const SceneSurfaceRaycastRequest &request) {
   const auto found = std::ranges::lower_bound(
-      exclusions, id,
+      request.excluded_participants, id,
       [](const SceneSurfaceParticipantId &left,
          const SceneSurfaceParticipantId &right) {
         return scene_surface_participant_id_less(left, right);
       });
-  return found != exclusions.end() && *found == id;
+  if (found != request.excluded_participants.end() && *found == id) {
+    return true;
+  }
+
+  const auto entity_excluded = [&request](EntityId entity) {
+    return entity != kInvalidEntityId &&
+           std::binary_search(request.excluded_entities.begin(),
+                              request.excluded_entities.end(), entity);
+  };
+  if (entity_excluded(id.display_entity) ||
+      entity_excluded(id.geometry_entity) ||
+      entity_excluded(id.definition_entity)) {
+    return true;
+  }
+
+  const auto occurrence_excluded = [&request, id](EntityId source_entity) {
+    if (source_entity == kInvalidEntityId ||
+        id.display_entity == kInvalidEntityId) {
+      return false;
+    }
+    const SceneSurfaceOccurrenceExclusion key{
+        .source_entity = source_entity,
+        .occurrence = id.display_entity,
+    };
+    const auto occurrence = std::ranges::lower_bound(
+        request.excluded_occurrences, key,
+        scene_surface_occurrence_exclusion_less);
+    return occurrence != request.excluded_occurrences.end() &&
+           *occurrence == key;
+  };
+  return occurrence_excluded(id.geometry_entity) ||
+         occurrence_excluded(id.definition_entity);
 }
 
 [[nodiscard]] bool participant_is_eligible(
@@ -623,8 +654,7 @@ std::optional<SceneSurfaceHit> SceneSurfaceQuerySnapshot::nearest_hit(
           float &traversal_max_distance) {
         const FrozenSurfaceParticipant &participant =
             data_->participants[participant_index];
-        if (excluded_participant(participant.public_record.id,
-                                 request.excluded_participants) ||
+        if (excluded_participant(participant.public_record.id, request) ||
             !participant_is_eligible(participant.public_record,
                                      request.eligibility) ||
             participant.geometry->bvh.empty()) {

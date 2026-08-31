@@ -9,6 +9,7 @@
 
 #include "api/quader_api_status_internal.hpp"
 #include "editor/array/linear_array_tool_service.hpp"
+#include "editor/array/path_array_tool_service.hpp"
 #include "editor/array/radial_array_tool_service.hpp"
 #include "editor/curve/curve_tool_service.hpp"
 #include "editor/modeling/operations/operation_schema.hpp"
@@ -39,6 +40,7 @@ namespace {
 enum class ActiveToolSettingsSourceKind : std::uint8_t {
   Modeling,
   Primitive,
+  PathArray,
   RadialArray,
   LinearArray,
   Pivot,
@@ -72,6 +74,14 @@ MaterialReference active_project_material(QuaderApiSession session) {
 
 ActiveToolSettingsSource
 active_tool_settings_source(const SceneSession &session) {
+  const PathArrayToolService &path_array = session.path_array();
+  if (path_array.active()) {
+    return {
+        .identity = &path_array,
+        .revision = path_array.tool_settings_revision(),
+        .kind = ActiveToolSettingsSourceKind::PathArray,
+    };
+  }
   const CurveToolService &curve = session.curve();
   if (curve.active()) {
     return {
@@ -206,7 +216,11 @@ QuaderToolSettingControl toggle_control(std::string id, std::string label,
 
 QuaderToolSettingControl number_control(std::string id, std::string label,
                                         double value, double min_value,
-                                        double max_value, double step) {
+                                        double max_value, double step,
+                                        QuaderToolSettingNumberInteraction
+                                            interaction =
+                                                QuaderToolSettingNumberInteraction::
+                                                    Continuous) {
   return {
       .kind = QuaderToolSettingControlKind::Number,
       .id = std::move(id),
@@ -215,18 +229,22 @@ QuaderToolSettingControl number_control(std::string id, std::string label,
       .min_value = min_value,
       .max_value = max_value,
       .step = step,
+      .number_interaction = interaction,
   };
 }
 
 QuaderToolSettingControl choice_control(
     std::string id, std::string label, std::string choice_value,
-    std::vector<QuaderToolSettingChoiceOption> choices) {
+    std::vector<QuaderToolSettingChoiceOption> choices,
+    QuaderToolSettingChoicePresentation presentation =
+        QuaderToolSettingChoicePresentation::Radio) {
   return {
       .kind = QuaderToolSettingControlKind::Choice,
       .id = std::move(id),
       .label = std::move(label),
       .choice_value = std::move(choice_value),
       .choices = std::move(choices),
+      .choice_presentation = presentation,
   };
 }
 
@@ -294,6 +312,46 @@ primitive_kind_from_setting_value(double value) {
   return std::nullopt;
 }
 
+std::string_view path_array_axis_setting_id(PathArraySignedAxis axis) {
+  switch (axis) {
+  case PathArraySignedAxis::PositiveX:
+    return "positive_x";
+  case PathArraySignedAxis::NegativeX:
+    return "negative_x";
+  case PathArraySignedAxis::PositiveY:
+    return "positive_y";
+  case PathArraySignedAxis::NegativeY:
+    return "negative_y";
+  case PathArraySignedAxis::PositiveZ:
+    return "positive_z";
+  case PathArraySignedAxis::NegativeZ:
+    return "negative_z";
+  }
+  return {};
+}
+
+std::optional<PathArraySignedAxis>
+path_array_axis_from_setting_value(double value) {
+  if (!std::isfinite(value) || std::round(value) != value || value < 0.0 ||
+      value > 5.0) {
+    return std::nullopt;
+  }
+  return static_cast<PathArraySignedAxis>(static_cast<std::uint8_t>(value));
+}
+
+std::optional<PathArraySignedAxis>
+path_array_axis_from_setting_id(std::string_view value) {
+  for (const PathArraySignedAxis axis : {
+           PathArraySignedAxis::PositiveX, PathArraySignedAxis::NegativeX,
+           PathArraySignedAxis::PositiveY, PathArraySignedAxis::NegativeY,
+           PathArraySignedAxis::PositiveZ, PathArraySignedAxis::NegativeZ}) {
+    if (path_array_axis_setting_id(axis) == value) {
+      return axis;
+    }
+  }
+  return std::nullopt;
+}
+
 QuaderToolSettingControl action_control(std::string id, std::string label) {
   return {
       .kind = QuaderToolSettingControlKind::Action,
@@ -349,7 +407,50 @@ QuaderToolSettingsTarget linear_array_tool_settings_target(
   };
   result.controls.push_back(number_control(
       std::string(kLinearArrayCountSetting), "Num Copies", linear_array.count(),
-      kLinearArrayMinimumCount, linear_array.maximum_count(), 1.0));
+      kLinearArrayMinimumCount, linear_array.maximum_count(), 1.0,
+      QuaderToolSettingNumberInteraction::Stepped));
+  return result;
+}
+
+QuaderToolSettingsTarget
+path_array_tool_settings_target(const PathArrayToolService &path_array) {
+  QuaderToolSettingsTarget result{
+      .active = true,
+      .preview_active = path_array.preview_valid(),
+      .tool_id = std::string(kPathArrayToolId),
+      .title = "Path Array",
+      .description =
+          "Pick one mesh, linked instance, or group to preview copies along "
+          "the selected curve.",
+      .can_reset = true,
+      .apply_visible = true,
+      .can_apply = path_array.preview_valid(),
+      .can_cancel = true,
+  };
+  result.controls.push_back(number_control(
+      std::string(kPathArrayCountSetting), "Num Copies", path_array.count(),
+      kPathArrayMinimumCount, path_array.maximum_count(), 1.0,
+      QuaderToolSettingNumberInteraction::Stepped));
+  result.controls.push_back(number_control(
+      std::string(kPathArrayDistanceSetting), "Distance",
+      path_array.distance(), 0.0, path_array.maximum_distance(), 0.001));
+  result.controls.push_back(toggle_control(
+      std::string(kPathArrayFollowPathSetting), "Follow Path",
+      path_array.follow_path()));
+  QuaderToolSettingControl axis = choice_control(
+      std::string(kPathArrayForwardAxisSetting), "Forward Axis",
+      std::string(path_array_axis_setting_id(path_array.forward_axis())),
+      {
+          {.id = "positive_x", .label = "+X", .value = 0.0},
+          {.id = "negative_x", .label = "-X", .value = 1.0},
+          {.id = "positive_y", .label = "+Y", .value = 2.0},
+          {.id = "negative_y", .label = "-Y", .value = 3.0},
+          {.id = "positive_z", .label = "+Z", .value = 4.0},
+          {.id = "negative_z", .label = "-Z", .value = 5.0},
+      },
+      QuaderToolSettingChoicePresentation::Dropdown);
+  axis.enabled = path_array.follow_path();
+  result.controls.push_back(std::move(axis));
   return result;
 }
 
@@ -375,7 +476,8 @@ QuaderToolSettingsTarget radial_array_tool_settings_target(
   result.controls.push_back(number_control(
       std::string(kRadialArrayCopiesSetting), "Number of Copies",
       radial_array.copies(), kRadialArrayMinimumCopies,
-      radial_array.maximum_copies(), 1.0));
+      radial_array.maximum_copies(), 1.0,
+      QuaderToolSettingNumberInteraction::Stepped));
   result.controls.push_back(number_control(
       std::string(kRadialArrayRepeatsSetting), "Repeats",
       radial_array.repeats(), kRadialArrayMinimumRepeats,
@@ -431,7 +533,8 @@ QuaderToolSettingsTarget primitive_tool_settings_target(
            .label = "Torus",
            .value =
                primitive_kind_setting_value(PrimitiveCreationKind::Torus)},
-      }));
+      },
+      QuaderToolSettingChoicePresentation::Dropdown));
   switch (*kind) {
   case PrimitiveCreationKind::Box: {
     const BoxPrimitiveCreationSettings &settings = primitive.box_settings();
@@ -841,6 +944,9 @@ bool QuaderToolsApi::can_activate(ViewportToolId tool) const {
 
 QuaderToolSettingsTarget QuaderToolsApi::active_settings() const {
   const SceneSession &session = scene_session(session_);
+  if (session.path_array().active()) {
+    return path_array_tool_settings_target(session.path_array());
+  }
   if (session.curve().active()) {
     return curve_tool_settings_target(session.curve());
   }
@@ -897,6 +1003,54 @@ QuaderApiVoidResult QuaderToolsApi::set_setting(std::string_view tool_id,
                                                  std::string_view name,
                                                  double value) {
   SceneSession &session = scene_session(session_);
+  if (session.path_array().active()) {
+    if (!tool_id.empty() && tool_id != kPathArrayToolId) {
+      return quader_api_failure_status(
+          session, "Tool setting does not belong to Path Array.");
+    }
+    if (name == kPathArrayCountSetting) {
+      if (!std::isfinite(value) || std::round(value) != value ||
+          value < static_cast<double>(kPathArrayMinimumCount) ||
+          value > static_cast<double>(session.path_array().maximum_count())) {
+        return quader_api_failure_status(session,
+                                         "Invalid Path Array copy count.");
+      }
+      return api_status_from_command(
+          session,
+          session.path_array().set_count(static_cast<std::uint32_t>(value)),
+          QuaderMutationKind::Runtime, "Set Path Array Count");
+    }
+    if (name == kPathArrayDistanceSetting) {
+      if (!std::isfinite(value) || value < 0.0) {
+        return quader_api_failure_status(session,
+                                         "Invalid Path Array distance.");
+      }
+      return api_status_from_command(
+          session, session.path_array().set_distance(value),
+          QuaderMutationKind::Runtime, "Set Path Array Distance");
+    }
+    if (name == kPathArrayFollowPathSetting) {
+      if (value != 0.0 && value != 1.0) {
+        return quader_api_failure_status(session,
+                                         "Invalid Path Array Follow Path.");
+      }
+      return api_status_from_command(
+          session, session.path_array().set_follow_path(value != 0.0),
+          QuaderMutationKind::Runtime, "Set Path Array Follow Path");
+    }
+    if (name == kPathArrayForwardAxisSetting) {
+      const std::optional<PathArraySignedAxis> axis =
+          path_array_axis_from_setting_value(value);
+      if (!axis.has_value()) {
+        return quader_api_failure_status(session,
+                                         "Invalid Path Array forward axis.");
+      }
+      return api_status_from_command(
+          session, session.path_array().set_forward_axis(*axis),
+          QuaderMutationKind::Runtime, "Set Path Array Forward Axis");
+    }
+    return quader_api_failure_status(session, "Unknown Path Array setting.");
+  }
   if (session.curve().active()) {
     if ((!tool_id.empty() && tool_id != kCurveToolId) ||
         name != kCurveClosedSetting || (value != 0.0 && value != 1.0)) {
@@ -1027,6 +1181,22 @@ QuaderApiVoidResult QuaderToolsApi::set_setting(std::string_view tool_id,
                                                  std::string_view name,
                                                  std::string_view value) {
   SceneSession &session = scene_session(session_);
+  if (session.path_array().active() &&
+      name == kPathArrayForwardAxisSetting) {
+    if (!tool_id.empty() && tool_id != kPathArrayToolId) {
+      return quader_api_failure_status(
+          session, "Tool setting does not belong to Path Array.");
+    }
+    const std::optional<PathArraySignedAxis> axis =
+        path_array_axis_from_setting_id(value);
+    if (!axis.has_value()) {
+      return quader_api_failure_status(session,
+                                       "Invalid Path Array forward axis.");
+    }
+    return api_status_from_command(
+        session, session.path_array().set_forward_axis(*axis),
+        QuaderMutationKind::Runtime, "Set Path Array Forward Axis");
+  }
   if (session.primitive_creation().active() &&
       name == kPrimitiveTypeSetting) {
     if (!tool_id.empty() && tool_id != kCreatePrimitiveToolId) {
@@ -1077,6 +1247,11 @@ QuaderApiVoidResult QuaderToolsApi::execute_action(std::string_view tool_id,
 
 QuaderApiVoidResult QuaderToolsApi::reset_active_settings() {
   SceneSession &session = scene_session(session_);
+  if (session.path_array().active()) {
+    return api_status_from_command(
+        session, session.path_array().reset_settings(),
+        QuaderMutationKind::Runtime, "Reset Path Array Settings");
+  }
   if (session.primitive_creation().active()) {
     return api_status_from_command(
         session, session.primitive_creation().reset_settings(),

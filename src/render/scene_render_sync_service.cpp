@@ -88,6 +88,7 @@ void SceneRenderSyncService::bind_scene(
   const std::unordered_set<EntityId> no_scene_entities;
   mesh_cache_->remove_except(no_scene_entities);
   instance_cache_->clear();
+  light_cache_.set_preview_suppressed_entities({});
   light_cache_.remove_except(no_scene_entities);
   // Material instances retain their bound texture pointers even after their
   // renderables leave the Filament scene. A scene switch invalidates the
@@ -188,6 +189,13 @@ bool SceneRenderSyncService::render_asset_revisions_changed(
     return true;
   }
   return false;
+}
+
+void SceneRenderSyncService::set_preview_suppressed_lights(
+    std::unordered_set<EntityId> entities,
+    std::span<const RenderSceneLightRecord> retained_lights) {
+  light_cache_.set_preview_suppressed_entities(std::move(entities),
+                                               retained_lights);
 }
 
 bool SceneRenderSyncService::can_sync_transforms_only(

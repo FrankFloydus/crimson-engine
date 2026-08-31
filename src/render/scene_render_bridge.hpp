@@ -105,6 +105,12 @@ public:
         const RenderOverlaySceneWireframeSnapshot &wireframe_snapshot);
     [[nodiscard]] ToolPreviewSubmissionResult
     set_tool_preview_meshes(std::vector<RenderToolPreviewMeshRecord> meshes);
+    [[nodiscard]] ToolPreviewSubmissionResult set_tool_preview_scene(
+        RenderToolPreviewSceneSnapshot preview);
+    [[nodiscard]] const RenderToolPreviewSuppressionSnapshot &
+    tool_preview_suppression() const noexcept {
+      return tool_preview_suppression_;
+    }
     [[nodiscard]] std::uint64_t tool_preview_submission_revision() const {
       return tool_preview_submission_revision_;
     }
@@ -141,6 +147,7 @@ public:
     MeshRenderableCache mesh_cache_;
     InstanceRenderableCache instance_cache_;
     ToolPreviewRenderableCache tool_preview_cache_;
+    ToolPreviewLightCache tool_preview_light_cache_;
     OverlayProxyFactory overlay_proxy_factory_;
     OverlayRenderableCache overlay_cache_;
     OverlayRenderableCache dynamic_overlay_cache_;
@@ -160,6 +167,12 @@ public:
     std::unordered_set<EntityId> tool_preview_suppressed_entities_;
     std::vector<RenderInstancePreviewSuppression>
         tool_preview_occurrence_suppressions_;
+    RenderToolPreviewSuppressionSnapshot tool_preview_suppression_;
+    ViewportOverlayFrame tool_preview_overlay_frame_;
+    std::uint64_t tool_preview_overlay_revision_ = 0u;
+    RenderOverlaySelectionSnapshot filtered_scene_overlay_snapshot_;
+    std::uint64_t filtered_scene_overlay_signature_ = 0u;
+    bool filtered_scene_overlay_valid_ = false;
     bool tool_preview_overlay_suppression_dirty_ = false;
     std::uint8_t active_overlay_viewport_mask_ =
         static_cast<std::uint8_t>(

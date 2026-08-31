@@ -502,7 +502,9 @@ RenderOverlaySelectionSnapshot build_render_overlay_selection_snapshot_impl(
         document.instance_occurrence(entity) != nullptr) {
       if (const std::optional<RenderOverlayBoundsSnapshot> bounds =
               selected_mesh_bounds(entity)) {
-        snapshot.selected_mesh_bounds.push_back(*bounds);
+        RenderOverlayBoundsSnapshot identified = *bounds;
+        identified.entity = entity;
+        snapshot.selected_mesh_bounds.push_back(identified);
         if (selected_mesh_entities != nullptr) {
           selected_mesh_entities->push_back(entity);
         }
@@ -525,7 +527,9 @@ RenderOverlaySelectionSnapshot build_render_overlay_selection_snapshot_impl(
         document.has_children(entity)) {
       if (const std::optional<SceneBounds> bounds =
               entity_hierarchy_world_bounds(document, assets, entity)) {
-        snapshot.group_bounds.push_back(bounds_snapshot(*bounds));
+        RenderOverlayBoundsSnapshot identified = bounds_snapshot(*bounds);
+        identified.entity = entity;
+        snapshot.group_bounds.push_back(identified);
         if (group_entities != nullptr) {
           group_entities->push_back(entity);
         }
@@ -1039,7 +1043,9 @@ bool RenderOverlaySnapshotCache::refresh_selection_transforms(
     if (!bounds) {
       return false;
     }
-    selected_mesh_bounds.push_back(*bounds);
+    RenderOverlayBoundsSnapshot identified = *bounds;
+    identified.entity = entity;
+    selected_mesh_bounds.push_back(identified);
   }
 
   std::vector<RenderOverlayBoundsSnapshot> group_bounds;
@@ -1050,7 +1056,9 @@ bool RenderOverlaySnapshotCache::refresh_selection_transforms(
     if (!bounds) {
       return false;
     }
-    group_bounds.push_back(bounds_snapshot(*bounds));
+    RenderOverlayBoundsSnapshot identified = bounds_snapshot(*bounds);
+    identified.entity = entity;
+    group_bounds.push_back(identified);
   }
 
   selection_snapshot_.selected_mesh_bounds = std::move(selected_mesh_bounds);

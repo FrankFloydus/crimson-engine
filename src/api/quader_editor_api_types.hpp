@@ -118,6 +118,25 @@ enum class QuaderToolSettingControlKind {
 };
 
 /**
+ * Selects the retained native presentation for a tool setting choice.
+ */
+enum class QuaderToolSettingChoicePresentation {
+  Radio,
+  Dropdown,
+};
+
+/**
+ * Selects how a retained numeric control presents and applies value steps.
+ * Continuous controls map handle travel onto their full descriptor range.
+ * Stepped controls use native integral slider positions and expose one
+ * descriptor step through their tick, single-step, and page-step properties.
+ */
+enum class QuaderToolSettingNumberInteraction {
+  Continuous,
+  Stepped,
+};
+
+/**
  * Represents a selectable value for a tool setting choice control.
  */
 struct QuaderToolSettingChoiceOption {
@@ -133,13 +152,18 @@ struct QuaderToolSettingControl {
   QuaderToolSettingControlKind kind = QuaderToolSettingControlKind::Toggle;
   std::string id;
   std::string label;
+  bool enabled = true;
   bool bool_value = false;
   double number_value = 0.0;
   double min_value = 0.0;
   double max_value = 1.0;
   double step = 1.0;
+  QuaderToolSettingNumberInteraction number_interaction =
+      QuaderToolSettingNumberInteraction::Continuous;
   std::string choice_value;
   std::vector<QuaderToolSettingChoiceOption> choices;
+  QuaderToolSettingChoicePresentation choice_presentation =
+      QuaderToolSettingChoicePresentation::Radio;
 };
 
 /**

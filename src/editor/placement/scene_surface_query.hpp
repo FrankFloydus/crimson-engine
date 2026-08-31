@@ -34,6 +34,25 @@ struct SceneSurfaceParticipantId final {
   operator==(const SceneSurfaceParticipantId &) const = default;
 };
 
+/** Excludes one definition member only inside one public occurrence. */
+struct SceneSurfaceOccurrenceExclusion final {
+  EntityId source_entity = kInvalidEntityId;
+  EntityId occurrence = kInvalidEntityId;
+
+  [[nodiscard]] bool
+  operator==(const SceneSurfaceOccurrenceExclusion &) const = default;
+};
+
+/** Defines the canonical ordering used by occurrence-exclusion spans. */
+[[nodiscard]] inline constexpr bool scene_surface_occurrence_exclusion_less(
+    const SceneSurfaceOccurrenceExclusion &left,
+    const SceneSurfaceOccurrenceExclusion &right) noexcept {
+  if (left.occurrence != right.occurrence) {
+    return left.occurrence < right.occurrence;
+  }
+  return left.source_entity < right.source_entity;
+}
+
 /** Defines the canonical ordering used by participants and exclusions. */
 [[nodiscard]] inline constexpr bool scene_surface_participant_id_less(
     const SceneSurfaceParticipantId &left,
@@ -99,6 +118,11 @@ struct SceneSurfaceRaycastRequest final {
   // duplicates. The query uses binary search and does not revalidate the span
   // on every ray.
   std::span<const SceneSurfaceParticipantId> excluded_participants;
+  // These spans suppress authored scene entities or one exact formal-instance
+  // member before BVH occlusion is resolved. Both must be sorted by their
+  // canonical EntityId/pair ordering and contain no duplicates.
+  std::span<const EntityId> excluded_entities;
+  std::span<const SceneSurfaceOccurrenceExclusion> excluded_occurrences;
 };
 
 /// Reports the closest deterministic triangle hit in one frozen snapshot.

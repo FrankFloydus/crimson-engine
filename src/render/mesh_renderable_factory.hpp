@@ -84,7 +84,8 @@ public:
         bool receive_shadows, bool double_sided, std::uint8_t layer_mask,
         bool editor_unlit = false, bool depth_only = false,
         std::uint8_t channel = kViewportDefaultRenderableChannel,
-        std::uint8_t presentation_flags = 0u);
+        std::uint8_t presentation_flags = 0u,
+        std::size_t instance_capacity = 0u);
     MeshRenderableProxy create_instance_selection_fill(
         const RenderMeshAssetSnapshot &mesh, filament::Material &material,
         std::span<const QMat4> world_transforms,

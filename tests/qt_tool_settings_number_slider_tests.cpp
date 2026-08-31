@@ -46,6 +46,7 @@
 #include <QStyleOptionSlider>
 #include <QTimer>
 #include <QToolButton>
+#include <QWheelEvent>
 #include <QWindow>
 
 #include <algorithm>
@@ -72,6 +73,13 @@ void send_mouse_event(QWidget &target, QEvent::Type type, QPoint position,
 
 void send_key_event(QWidget &target, int key) {
   QKeyEvent event(QEvent::KeyPress, key, Qt::NoModifier);
+  QCoreApplication::sendEvent(&target, &event);
+}
+
+void send_wheel_event(QWidget &target, QPoint position, QPoint angle_delta) {
+  const QPoint global = target.mapToGlobal(position);
+  QWheelEvent event(QPointF(position), QPointF(global), {}, angle_delta,
+                    Qt::NoButton, Qt::NoModifier, Qt::NoScrollPhase, false);
   QCoreApplication::sendEvent(&target, &event);
 }
 
@@ -444,6 +452,90 @@ TEST(QtToolSettingsNumberSliderTests,
 }
 
 TEST(QtToolSettingsNumberSliderTests,
+     StepwiseInteractionUsesNativePointerTrackingAndValueSpaceTicks) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char executable[] = "quader-stepwise-slider-tests";
+  char *argv[] = {executable, nullptr};
+  QApplication application(argc, argv);
+  QApplication::setStyle(QStringLiteral("Fusion"));
+
+  quader::QtToolSettingsNumberSlider slider(Qt::Horizontal);
+  slider.setRange(2, 128);
+  slider.setValue(4);
+  slider.setSingleStep(1);
+  slider.setPageStep(10);
+  slider.set_stepwise_interaction(true);
+  slider.setTracking(true);
+  slider.setAttribute(Qt::WA_DontShowOnScreen, true);
+  slider.resize(240, 32);
+  slider.show();
+  QCoreApplication::processEvents();
+
+  EXPECT_TRUE(slider.stepwise_interaction());
+  EXPECT_TRUE(slider.hasTracking());
+  EXPECT_EQ(slider.singleStep(), 1);
+  EXPECT_EQ(slider.pageStep(), 1);
+  EXPECT_EQ(slider.tickInterval(), 1);
+  EXPECT_EQ(slider.tickPosition(), QSlider::TicksBelow);
+  const QRect handle = slider_handle(slider);
+  ASSERT_FALSE(handle.isEmpty());
+  const QPoint press = handle.center();
+  const QRect groove = slider_groove(slider);
+  ASSERT_FALSE(groove.isEmpty());
+  const QPoint drag_position(
+      groove.left() + (groove.width() * 3) / 4, groove.center().y());
+
+  send_mouse_event(slider, QEvent::MouseButtonPress, press, Qt::LeftButton,
+                   Qt::LeftButton);
+  ASSERT_TRUE(slider.isSliderDown());
+  send_mouse_event(slider, QEvent::MouseMove, drag_position, Qt::NoButton,
+                   Qt::LeftButton);
+  const QRect dragged_handle = slider_handle(slider);
+  EXPECT_NEAR(dragged_handle.center().x(), drag_position.x(), 1);
+  EXPECT_GT(slider.value(), 4);
+  EXPECT_EQ(slider.sliderPosition(), slider.value());
+  EXPECT_EQ((slider.value() - slider.minimum()) % slider.tickInterval(), 0);
+  send_mouse_event(slider, QEvent::MouseButtonRelease, drag_position,
+                   Qt::LeftButton,
+                   Qt::NoButton);
+  EXPECT_FALSE(slider.isSliderDown());
+
+  const int dragged_value = slider.value();
+  send_key_event(slider, Qt::Key_Right);
+  EXPECT_EQ(slider.value(), dragged_value + 1);
+  send_key_event(slider, Qt::Key_PageUp);
+  EXPECT_EQ(slider.value(), dragged_value + 2);
+  send_key_event(slider, Qt::Key_PageDown);
+  EXPECT_EQ(slider.value(), dragged_value + 1);
+  send_key_event(slider, Qt::Key_Left);
+  EXPECT_EQ(slider.value(), dragged_value);
+
+  send_wheel_event(slider, slider.rect().center(), {0, 120});
+  EXPECT_EQ(slider.value(), dragged_value + 1);
+  send_wheel_event(slider, slider.rect().center(), {0, -120});
+  EXPECT_EQ(slider.value(), dragged_value);
+
+  slider.setValue(4);
+  const QPoint stepped_groove_press(groove.right() - 1,
+                                    groove.center().y());
+  send_mouse_event(slider, QEvent::MouseButtonPress, stepped_groove_press,
+                   Qt::LeftButton, Qt::LeftButton);
+  send_mouse_event(slider, QEvent::MouseButtonRelease, stepped_groove_press,
+                   Qt::LeftButton, Qt::NoButton);
+  EXPECT_EQ(slider.value(), 5)
+      << "a native stepped groove press must use pageStep, not absolute scrub";
+
+  slider.set_stepwise_interaction(false);
+  EXPECT_FALSE(slider.stepwise_interaction());
+  EXPECT_EQ(slider.tickInterval(), 0);
+  EXPECT_EQ(slider.tickPosition(), QSlider::NoTicks);
+  EXPECT_TRUE(slider.hasTracking());
+
+  slider.hide();
+}
+
+TEST(QtToolSettingsNumberSliderTests,
      DynamicRadialBoundsUpdateInPlaceWithoutDestroyingActiveEditors) {
   ASSERT_EQ(QCoreApplication::instance(), nullptr);
   int argc = 1;
@@ -480,6 +572,8 @@ TEST(QtToolSettingsNumberSliderTests,
   QPointer<quader::QtToolSettingsNumberSlider> retained_copies(copies);
   QPointer<quader::QtToolSettingsNumberSlider> retained_repeats(repeats);
 
+  const int local_copies_during_drag = copies->value();
+  ASSERT_NE(local_copies_during_drag, 16);
   copies->setSliderDown(true);
   ASSERT_TRUE(editor.tools()
                   .set_setting("radial_array", "radial_array.copies", 16.0)
@@ -492,8 +586,11 @@ TEST(QtToolSettingsNumberSliderTests,
                 "tool_settings.control.radial_array.repeats.slider")),
             retained_repeats.data());
   EXPECT_TRUE(retained_copies->isSliderDown());
+  EXPECT_EQ(retained_copies->value(), local_copies_during_drag);
   EXPECT_EQ(retained_repeats->maximum(), 64);
   retained_copies->setSliderDown(false);
+  window.refresh();
+  EXPECT_EQ(retained_copies->value(), 16);
 
   auto *copies_spin = window.findChild<QSpinBox *>(
       QStringLiteral("tool_settings.control.radial_array.copies"));

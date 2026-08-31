@@ -134,6 +134,7 @@ struct RenderOverlayInstanceSelectionWireRecord final {
  * Stores one selected group or hierarchy bounds cage in world space.
  */
 struct RenderOverlayBoundsSnapshot {
+  EntityId entity = kInvalidEntityId;
   QVec3 min;
   QVec3 max;
 };

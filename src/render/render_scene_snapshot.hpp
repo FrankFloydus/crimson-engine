@@ -30,6 +30,8 @@
 
 namespace quader {
 
+struct CurveSamplePayload;
+
 /**
  * Captures one render-visible texture asset dependency for a material snapshot.
  */
@@ -260,6 +262,7 @@ struct RenderToolPreviewMeshRecord {
   std::vector<QMat4> instance_sampling_from_local;
   // Material-instance culling policy retained with the preview snapshot.
   bool double_sided = true;
+  bool cast_shadows = false;
   bool dynamic_positions = false;
   bool suppress_source = false;
   std::uint64_t layout_key = 0u;
@@ -281,6 +284,61 @@ struct RenderInstancePreviewSuppression final {
 
   friend bool operator==(const RenderInstancePreviewSuppression &,
                          const RenderInstancePreviewSuppression &) = default;
+};
+
+/** Pins one authored Curve sample payload and every preview placement. */
+struct RenderToolPreviewCurveRecord final {
+  EntityId source_entity = kInvalidEntityId;
+  EntityId visibility_entity = kInvalidEntityId;
+  AssetId curve = kInvalidAssetId;
+  std::uint64_t curve_revision = 0u;
+  std::shared_ptr<const CurveSamplePayload> sample_payload;
+  std::vector<QMat4> instance_transforms;
+  bool suppress_source = false;
+  std::uint64_t layout_key = 0u;
+};
+
+/** Owns one transient Light descriptor and every preview placement. */
+struct RenderToolPreviewLightRecord final {
+  EntityId source_entity = kInvalidEntityId;
+  EntityId visibility_entity = kInvalidEntityId;
+  LightComponent light;
+  std::vector<QMat4> instance_transforms;
+  bool suppress_source = false;
+  std::uint64_t layout_key = 0u;
+};
+
+/** Repeats one source-root-local bounds cage at preview placements. */
+struct RenderToolPreviewGroupMarkerRecord final {
+  EntityId source_entity = kInvalidEntityId;
+  QVec3 local_min;
+  QVec3 local_max;
+  std::vector<QMat4> instance_transforms;
+  std::uint64_t layout_key = 0u;
+};
+
+/** Exact preview-only source coverage shared by render and hit-policy adapters. */
+struct RenderToolPreviewSuppressionSnapshot final {
+  std::vector<EntityId> entities;
+  std::vector<RenderInstancePreviewSuppression> occurrences;
+  std::uint64_t signature = 0u;
+
+  [[nodiscard]] bool empty() const noexcept {
+    return entities.empty() && occurrences.empty();
+  }
+};
+
+/** One atomically published compound tool preview generation. */
+struct RenderToolPreviewSceneSnapshot final {
+  // False means extraction could not pin every requested participant. Render
+  // publication rejects the complete candidate and retains the prior scene.
+  bool complete = true;
+  std::uint64_t revision = 0u;
+  std::vector<RenderToolPreviewMeshRecord> meshes;
+  std::vector<RenderToolPreviewCurveRecord> curves;
+  std::vector<RenderToolPreviewLightRecord> lights;
+  std::vector<RenderToolPreviewGroupMarkerRecord> group_markers;
+  RenderToolPreviewSuppressionSnapshot suppression;
 };
 
 } // namespace quader

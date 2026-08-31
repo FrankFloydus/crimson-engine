@@ -1676,6 +1676,21 @@ DocumentCommandResult EditorSelectionService::pick_scene_entity(
           .message = std::move(applied.command.message)};
 }
 
+EntityId
+EditorSelectionService::group_promoted_scene_target(EntityId entity) const {
+  if (scene_target_resolver_) {
+    entity = scene_target_resolver_(entity);
+  }
+  if (entity == kInvalidEntityId || !scene_.exists(entity) ||
+      scene_.is_scene_root(entity) || !scene_target_selectable(entity) ||
+      !scene_.is_effectively_visible(entity) ||
+      scene_.is_effectively_locked(entity)) {
+    return kInvalidEntityId;
+  }
+  const EntityId group = nearest_group_ancestor(entity);
+  return group != kInvalidEntityId ? group : entity;
+}
+
 ModelingSelectionSummary
 EditorSelectionService::box_select(const ModelingBoxSelectRequest &request) {
   return box_select(request, nullptr);

@@ -247,6 +247,13 @@ public:
       std::optional<ResolvedSelectionTarget> target);
   [[nodiscard]] std::optional<ResolvedSelectionTarget>
   resolved_hover_target() const { return resolved_hover_target_; }
+  /**
+   * Resolves one scene hit through the installed occurrence/scope policy and
+   * promotes it to its nearest selectable group when one exists. Tools that
+   * pick hierarchy roots use this owner instead of duplicating group walks.
+   */
+  [[nodiscard]] EntityId
+  group_promoted_scene_target(EntityId entity) const;
   /** Applies the ordinary pick policy to an already resolved native entity. */
   [[nodiscard]] DocumentCommandResult
   pick_scene_entity(EntityId entity, const ModelingPickSelectRequest &request);

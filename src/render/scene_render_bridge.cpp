@@ -7,6 +7,7 @@
 #include "render/scene_render_bridge.hpp"
 
 #include "diagnostics/profile.hpp"
+#include "render/light_render_policy.hpp"
 #include "render/render_signature_builder.hpp"
 #include "render/scene_render_extraction.hpp"
 
@@ -41,7 +42,9 @@ void SceneRenderBridge::initialize(
   mesh_factory_.initialize(engine, scene, material_binding_);
   mesh_cache_.initialize(mesh_factory_);
   instance_cache_.initialize(mesh_factory_, engine.getMaxAutomaticInstances());
-  tool_preview_cache_.initialize(mesh_factory_, material_binding_);
+  tool_preview_cache_.initialize(mesh_factory_, material_binding_,
+                                 engine.getMaxAutomaticInstances());
+  tool_preview_light_cache_.initialize(engine, scene);
   overlay_proxy_factory_.initialize(engine, scene, overlay_material,
                                     overlay_line_material,
                                     edit_wire_line_material,
@@ -67,6 +70,7 @@ void SceneRenderBridge::shutdown() {
   ++tool_preview_submission_revision_;
   overlay_submission_coordinator_.invalidate_all();
   if (engine_) {
+    tool_preview_light_cache_.shutdown();
     tool_preview_cache_.shutdown();
     sync_service_.shutdown();
     selected_object_overlay_cache_.shutdown();
@@ -91,6 +95,12 @@ void SceneRenderBridge::shutdown() {
   tool_preview_suppression_valid_ = false;
   tool_preview_suppressed_entities_.clear();
   tool_preview_occurrence_suppressions_.clear();
+  tool_preview_suppression_ = {};
+  tool_preview_overlay_frame_ = {};
+  ++tool_preview_overlay_revision_;
+  filtered_scene_overlay_snapshot_ = {};
+  filtered_scene_overlay_signature_ = 0u;
+  filtered_scene_overlay_valid_ = false;
   tool_preview_overlay_suppression_dirty_ = false;
   active_overlay_viewport_mask_ = static_cast<std::uint8_t>(
       (1u << OverlayRenderableCache::kMaxViewportOverlaySlots) - 1u);
@@ -122,12 +132,19 @@ void SceneRenderBridge::bind_scene(RenderSceneBindingKey scene_binding) {
   tool_preview_suppression_valid_ = false;
   tool_preview_suppressed_entities_.clear();
   tool_preview_occurrence_suppressions_.clear();
+  tool_preview_suppression_ = {};
+  tool_preview_overlay_frame_ = {};
+  ++tool_preview_overlay_revision_;
+  filtered_scene_overlay_snapshot_ = {};
+  filtered_scene_overlay_signature_ = 0u;
+  filtered_scene_overlay_valid_ = false;
   tool_preview_overlay_suppression_dirty_ = true;
   overlay_submission_coordinator_.invalidate_all();
   // Preview and viewport-overlay proxies may own material instances that
   // still reference the outgoing scene's texture cache. Destroy them before
   // the scene sync service invalidates those textures.
   tool_preview_cache_.clear();
+  tool_preview_light_cache_.clear();
   mesh_cache_.set_preview_suppressed_entities({});
   instance_cache_.set_preview_suppressed_entities({}, {}, {});
   instance_selection_overlay_cache_.clear(true);
@@ -138,6 +155,7 @@ void SceneRenderBridge::bind_scene(RenderSceneBindingKey scene_binding) {
   }
   overlay_cache_.reset_transform_position_streams();
   if (sync_service_.initialized()) {
+    sync_service_.set_preview_suppressed_lights({});
     sync_service_.bind_scene(scene_binding);
   }
 }
@@ -403,59 +421,118 @@ void SceneRenderBridge::sync_scene_asset_overlays(
 
 ToolPreviewSubmissionResult SceneRenderBridge::set_tool_preview_meshes(
     std::vector<RenderToolPreviewMeshRecord> meshes) {
+  RenderToolPreviewSceneSnapshot preview;
+  preview.meshes = std::move(meshes);
+  for (const RenderToolPreviewMeshRecord &mesh : preview.meshes) {
+    if (!mesh.suppress_source || mesh.source_entity == kInvalidEntityId) {
+      continue;
+    }
+    const EntityId visibility =
+        mesh.visibility_entity == kInvalidEntityId ? mesh.source_entity
+                                                  : mesh.visibility_entity;
+    if (visibility != mesh.source_entity) {
+      preview.suppression.occurrences.push_back({
+          .source_entity = mesh.source_entity,
+          .occurrence = visibility,
+      });
+    } else {
+      preview.suppression.entities.push_back(mesh.source_entity);
+    }
+  }
+  std::ranges::sort(preview.suppression.entities);
+  preview.suppression.entities.erase(
+      std::ranges::unique(preview.suppression.entities).begin(),
+      preview.suppression.entities.end());
+  std::ranges::sort(
+      preview.suppression.occurrences, {},
+      [](const RenderInstancePreviewSuppression &suppression) {
+        return std::pair{suppression.occurrence, suppression.source_entity};
+      });
+  preview.suppression.occurrences.erase(
+      std::ranges::unique(preview.suppression.occurrences).begin(),
+      preview.suppression.occurrences.end());
+  RenderSignatureBuilder signature;
+  signature.add_size(preview.suppression.entities.size());
+  for (const EntityId entity : preview.suppression.entities) {
+    signature.add_value(entity);
+  }
+  signature.add_size(preview.suppression.occurrences.size());
+  for (const auto &occurrence : preview.suppression.occurrences) {
+    signature.add_value(occurrence.source_entity)
+        .add_value(occurrence.occurrence);
+  }
+  preview.suppression.signature = signature.value();
+  return set_tool_preview_scene(std::move(preview));
+}
+
+ToolPreviewSubmissionResult SceneRenderBridge::set_tool_preview_scene(
+    RenderToolPreviewSceneSnapshot preview) {
   QDR_PROFILE_FUNCTION();
-  if (!engine_ || !scene_ || !tool_preview_cache_.initialized()) {
+  if (!engine_ || !scene_ || !tool_preview_cache_.initialized() ||
+      !tool_preview_light_cache_.initialized() || !preview.complete) {
     return ToolPreviewSubmissionResult::Failed;
   }
-  const ToolPreviewSubmissionResult preview_result =
-      tool_preview_cache_.set_meshes(meshes);
-  if (preview_result == ToolPreviewSubmissionResult::Failed) {
-    QDR_PROFILE_SCOPE("Tool preview preserve previous source coverage");
-    return preview_result;
-  }
-  ++tool_preview_submission_revision_;
-  (void)overlay_cache_.set_transform_position_streams(meshes);
-
-  RenderSignatureBuilder suppression_signature;
-  suppression_signature.add_size(meshes.size());
-  for (const RenderToolPreviewMeshRecord &mesh : meshes) {
-    suppression_signature.add_value(mesh.source_entity)
-        .add_value(mesh.visibility_entity)
-        .add_value(mesh.suppress_source);
-  }
-  if (!tool_preview_suppression_valid_ ||
-      tool_preview_suppression_signature_ != suppression_signature.value()) {
-    QDR_PROFILE_SCOPE("Tool preview update source suppression");
-    std::unordered_set<EntityId> suppressed_entities;
-    std::vector<RenderInstancePreviewSuppression> occurrence_suppressions;
-    suppressed_entities.reserve(meshes.size());
-    occurrence_suppressions.reserve(meshes.size());
-    for (const RenderToolPreviewMeshRecord &mesh : meshes) {
-      if (mesh.suppress_source && mesh.source_entity != kInvalidEntityId) {
-        const EntityId visibility_entity =
-            mesh.visibility_entity == kInvalidEntityId
-                ? mesh.source_entity
-                : mesh.visibility_entity;
-        if (visibility_entity != kInvalidEntityId &&
-            visibility_entity != mesh.source_entity) {
-          occurrence_suppressions.push_back({
-              .source_entity = mesh.source_entity,
-              .occurrence = visibility_entity,
-          });
-        } else {
-          suppressed_entities.insert(mesh.source_entity);
-        }
-      }
+  std::unordered_set<EntityId> candidate_suppressed_entities(
+      preview.suppression.entities.begin(),
+      preview.suppression.entities.end());
+  std::size_t preview_punctual_light_count = 0u;
+  for (const RenderToolPreviewLightRecord &light : preview.lights) {
+    if (!filament_light_is_punctual(light.light.type)) {
+      continue;
     }
-    std::ranges::sort(
-        occurrence_suppressions, {},
-        [](const RenderInstancePreviewSuppression &suppression) {
-          return std::pair{suppression.occurrence,
-                           suppression.source_entity};
-        });
-    occurrence_suppressions.erase(
-        std::ranges::unique(occurrence_suppressions).begin(),
-        occurrence_suppressions.end());
+    if (light.instance_transforms.size() >
+        kMaximumFilamentPunctualLightCount -
+            preview_punctual_light_count) {
+      return ToolPreviewSubmissionResult::Failed;
+    }
+    preview_punctual_light_count += light.instance_transforms.size();
+  }
+  std::size_t retained_punctual_light_count = 0u;
+  for (const RenderSceneLightRecord &light : previous_scene_snapshot_.lights) {
+    if (!candidate_suppressed_entities.contains(light.entity_id) &&
+        filament_light_is_punctual(light.light.type)) {
+      ++retained_punctual_light_count;
+    }
+  }
+  if (preview_punctual_light_count > 0u &&
+      (retained_punctual_light_count >
+           kMaximumFilamentPunctualLightCount ||
+       preview_punctual_light_count >
+           kMaximumFilamentPunctualLightCount -
+               retained_punctual_light_count)) {
+    return ToolPreviewSubmissionResult::Failed;
+  }
+  ViewportOverlayFrame overlay_candidate =
+      build_render_tool_preview_overlay_frame(preview);
+  const ToolPreviewSubmissionResult light_result =
+      tool_preview_light_cache_.prepare(preview.lights);
+  if (light_result == ToolPreviewSubmissionResult::Failed) {
+    return light_result;
+  }
+  const ToolPreviewSubmissionResult mesh_result =
+      tool_preview_cache_.set_meshes(preview.meshes);
+  if (mesh_result == ToolPreviewSubmissionResult::Failed) {
+    QDR_PROFILE_SCOPE("Tool preview preserve previous source coverage");
+    tool_preview_light_cache_.discard_prepared();
+    return mesh_result;
+  }
+  tool_preview_light_cache_.publish_prepared();
+  ++tool_preview_submission_revision_;
+  (void)overlay_cache_.set_transform_position_streams(preview.meshes);
+  tool_preview_overlay_frame_ = std::move(overlay_candidate);
+  ++tool_preview_overlay_revision_;
+
+  if (!tool_preview_suppression_valid_ ||
+      tool_preview_suppression_signature_ != preview.suppression.signature ||
+      tool_preview_suppression_.entities != preview.suppression.entities ||
+      tool_preview_suppression_.occurrences !=
+          preview.suppression.occurrences) {
+    QDR_PROFILE_SCOPE("Tool preview update source suppression");
+    std::unordered_set<EntityId> suppressed_entities(
+        preview.suppression.entities.begin(),
+        preview.suppression.entities.end());
+    std::vector<RenderInstancePreviewSuppression> occurrence_suppressions =
+        preview.suppression.occurrences;
     mesh_cache_.set_preview_suppressed_entities(suppressed_entities);
     tool_preview_suppressed_entities_ = suppressed_entities;
     tool_preview_occurrence_suppressions_ = occurrence_suppressions;
@@ -465,16 +542,108 @@ ToolPreviewSubmissionResult SceneRenderBridge::set_tool_preview_meshes(
             ? std::span<const RenderSceneInstancePrimitiveRecord>(
                   previous_scene_snapshot_.instance_primitives)
             : std::span<const RenderSceneInstancePrimitiveRecord>{});
-    tool_preview_suppression_signature_ = suppression_signature.value();
+    sync_service_.set_preview_suppressed_lights(
+        tool_preview_suppressed_entities_,
+        has_previous_scene_snapshot_
+            ? std::span<const RenderSceneLightRecord>(
+                  previous_scene_snapshot_.lights)
+            : std::span<const RenderSceneLightRecord>{});
+    tool_preview_suppression_ = preview.suppression;
+    tool_preview_suppression_signature_ = preview.suppression.signature;
     tool_preview_suppression_valid_ = true;
     tool_preview_overlay_suppression_dirty_ = true;
+    filtered_scene_overlay_valid_ = false;
   }
-  return preview_result;
+  return mesh_result == ToolPreviewSubmissionResult::Published ||
+                 light_result == ToolPreviewSubmissionResult::Published
+             ? ToolPreviewSubmissionResult::Published
+             : ToolPreviewSubmissionResult::Unchanged;
 }
 
 ViewportOverlaySubmissionResult SceneRenderBridge::submit_viewport_overlay(
     ViewportOverlaySubmissionRequest request,
     const ViewportSettings &settings) {
+  if (!tool_preview_suppression_.empty() &&
+      request.scene_overlay_snapshot != nullptr) {
+    const RenderOverlaySelectionSnapshot &source =
+        *request.scene_overlay_snapshot;
+    const std::uint64_t filter_signature =
+        RenderSignatureBuilder{}
+            .add_value(tool_preview_suppression_.signature)
+            .add_value(source.scene_revision)
+            .add_value(source.selection_revision)
+            .add_value(source.hierarchy_presentation_revision)
+            .add_value(source.visibility_revision)
+            .add_value(source.local_visibility_revision)
+            .add_value(source.transform_revision)
+            .add_value(source.mesh_binding_revision)
+            .add_value(source.curve_binding_revision)
+            .add_value(source.render_component_revision)
+            .add_value(source.layer_revision)
+            .add_value(source.asset_revision)
+            .value();
+    if (!filtered_scene_overlay_valid_ ||
+        filtered_scene_overlay_signature_ != filter_signature) {
+      filtered_scene_overlay_snapshot_ = source;
+      const auto suppressed = [&](EntityId entity, EntityId occurrence,
+                                  EntityId definition, EntityId member) {
+        if ((entity != kInvalidEntityId &&
+             tool_preview_suppressed_entities_.contains(entity)) ||
+            (occurrence != kInvalidEntityId &&
+             tool_preview_suppressed_entities_.contains(occurrence)) ||
+            (definition != kInvalidEntityId &&
+             tool_preview_suppressed_entities_.contains(definition)) ||
+            (member != kInvalidEntityId &&
+             tool_preview_suppressed_entities_.contains(member))) {
+          return true;
+        }
+        return std::ranges::any_of(
+            tool_preview_occurrence_suppressions_,
+            [&](const RenderInstancePreviewSuppression &suppression) {
+              return suppression.occurrence == occurrence &&
+                     (suppression.source_entity == member ||
+                      suppression.source_entity == definition);
+            });
+      };
+      std::erase_if(filtered_scene_overlay_snapshot_.hierarchy_selection_wires,
+                    [&](const RenderOverlayMeshSnapshot &mesh) {
+                      return suppressed(mesh.entity, mesh.occurrence,
+                                        mesh.definition, mesh.member);
+                    });
+      std::erase_if(filtered_scene_overlay_snapshot_.selected_mesh_bounds,
+                    [&](const RenderOverlayBoundsSnapshot &bounds) {
+                      return suppressed(bounds.entity, kInvalidEntityId,
+                                        kInvalidEntityId, kInvalidEntityId);
+                    });
+      std::erase_if(filtered_scene_overlay_snapshot_.group_bounds,
+                    [&](const RenderOverlayBoundsSnapshot &bounds) {
+                      return suppressed(bounds.entity, kInvalidEntityId,
+                                        kInvalidEntityId, kInvalidEntityId);
+                    });
+      std::erase_if(filtered_scene_overlay_snapshot_.selected_lights,
+                    [&](const RenderOverlayLightMarkerSnapshot &light) {
+                      return suppressed(light.entity, kInvalidEntityId,
+                                        kInvalidEntityId, kInvalidEntityId);
+                    });
+      std::erase_if(filtered_scene_overlay_snapshot_.point_light_gizmos,
+                    [&](const RenderOverlayLightMarkerSnapshot &light) {
+                      return suppressed(light.entity, kInvalidEntityId,
+                                        kInvalidEntityId, kInvalidEntityId);
+                    });
+      std::erase_if(filtered_scene_overlay_snapshot_.curves,
+                    [&](const RenderOverlayCurveSnapshot &curve) {
+                      return suppressed(curve.entity, kInvalidEntityId,
+                                        kInvalidEntityId, kInvalidEntityId);
+                    });
+      filtered_scene_overlay_signature_ = filter_signature;
+      filtered_scene_overlay_valid_ = true;
+    }
+    request.scene_overlay_snapshot = &filtered_scene_overlay_snapshot_;
+  }
+  request.tool_preview_overlay_frame = &tool_preview_overlay_frame_;
+  request.tool_preview_overlay_identity =
+      reinterpret_cast<std::uintptr_t>(this);
+  request.tool_preview_overlay_revision = tool_preview_overlay_revision_;
   return overlay_submission_coordinator_.submit(std::move(request), settings,
                                                 *this);
 }

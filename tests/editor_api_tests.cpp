@@ -2273,6 +2273,67 @@ TEST(EditorApiTests, CurveToolUsesUnassignedActivationAndSharedFinalizeBinding) 
 }
 
 TEST(EditorApiTests,
+     PathArrayCommandRequiresOneCurveAndShipsWithoutADefaultShortcut) {
+  CommandTestHarness harness;
+  auto &editor = harness.editor;
+  const auto path = keybinding_test_path("path-array-activation");
+  ASSERT_TRUE(editor.commands().set_keybinding_storage_path(path).ok());
+  constexpr auto kCommand =
+      quader::quader_command::kToolsActivatePathArray;
+
+  EXPECT_TRUE(typed_command_ids().contains(std::string(kCommand.string())));
+  EXPECT_FALSE(editor.tools().can_activate(quader::ViewportToolId::PathArray));
+  (void)create_selected_box(editor, "Invalid Path Array Driver");
+  EXPECT_FALSE(editor.tools().can_activate(quader::ViewportToolId::PathArray));
+  const auto unavailable = editor.commands().descriptor(kCommand);
+  ASSERT_TRUE(unavailable.has_value());
+  EXPECT_EQ(unavailable->label, "Path Array");
+  EXPECT_FALSE(unavailable->enabled);
+  EXPECT_TRUE(unavailable->shortcut.empty());
+
+  const auto catalog = editor.commands().keybinding_catalog();
+  const auto *entry = find_keybinding_catalog_entry(catalog, kCommand.string());
+  ASSERT_NE(entry, nullptr);
+  EXPECT_TRUE(entry->default_shortcut.empty());
+  EXPECT_TRUE(entry->unassigned);
+  EXPECT_EQ(entry->scope_id, "viewport.selection.object");
+  EXPECT_EQ(entry->localization_key,
+            "keybindings.target.tools.activate.path_array.label");
+
+  const auto curve = editor.modeling().create_curve({
+      .points = {{.position = {0.0F, 0.0F, 0.0F},
+                  .outgoing_handle = {1.0F, 0.0F, 0.0F}},
+                 {.position = {5.0F, 1.0F, 0.0F},
+                  .incoming_handle = {-1.0F, 0.0F, 0.0F}}},
+      .name = "Path Array Driver",
+  });
+  ASSERT_TRUE(curve.ok()) << curve.error_message();
+  ASSERT_TRUE(
+      editor.selection().set_mode(quader::QuaderSelectionMode::Object).ok());
+  ASSERT_TRUE(editor.selection().select_object(curve.value()).ok());
+  ASSERT_TRUE(editor.tools().can_activate(quader::ViewportToolId::PathArray));
+  const auto available = editor.commands().descriptor(kCommand);
+  ASSERT_TRUE(available.has_value());
+  EXPECT_TRUE(available->enabled);
+  const quader::QuaderHistorySnapshot history_before =
+      editor.query().history();
+
+  ASSERT_TRUE(editor.commands().execute(kCommand).ok());
+  EXPECT_EQ(editor.tools().active_tool(), "path_array");
+  EXPECT_EQ(editor.query().history().can_undo, history_before.can_undo);
+  EXPECT_EQ(editor.query().history().can_redo, history_before.can_redo);
+  EXPECT_EQ(editor.query().history().undo_label, history_before.undo_label);
+  EXPECT_EQ(editor.query().history().redo_label, history_before.redo_label);
+  ASSERT_TRUE(editor.tools().cancel_active_tool_preview().ok());
+  EXPECT_EQ(editor.tools().active_tool(), "select");
+  EXPECT_EQ(editor.query().history().can_undo, history_before.can_undo);
+  EXPECT_EQ(editor.query().history().can_redo, history_before.can_redo);
+  EXPECT_EQ(editor.query().history().undo_label, history_before.undo_label);
+  EXPECT_EQ(editor.query().history().redo_label, history_before.redo_label);
+  std::filesystem::remove(path);
+}
+
+TEST(EditorApiTests,
      NativeToolSettingsLifecycleDispatchIsGenericAcrossOwners) {
   CommandTestHarness harness;
   quader::QuaderEditorApi &editor = harness.editor;
@@ -15570,9 +15631,9 @@ TEST(EditorApiTests,
       editor.commands().keybinding_catalog();
 
 #ifndef NDEBUG
-  EXPECT_EQ(commands.size(), 189u);
-#else
   EXPECT_EQ(commands.size(), 190u);
+#else
+  EXPECT_EQ(commands.size(), 191u);
 #endif
 
   std::unordered_set<std::string> expected_target_ids;

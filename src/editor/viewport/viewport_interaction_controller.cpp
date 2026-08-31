@@ -11,6 +11,7 @@
 #include "diagnostics/profile.hpp"
 #include "editor/tools/viewport_tool.hpp"
 #include "editor/viewport/viewport_curve_picking.hpp"
+#include "editor/viewport/viewport_path_array_source_picking.hpp"
 #include "viewport/viewport_camera_controller.hpp"
 
 #include <algorithm>
@@ -983,9 +984,15 @@ ViewportInteractionController::handle_tool_pointer_lifecycle(
   }
 
   ViewportNativeToolInteractionFrame native_frame = frame.native_tool;
+  native_frame.select_backfaces = interaction.settings.bool_value(
+      ViewportBoolSettingId::BackfaceSelection);
   const ViewportCurveControlPickingAdapter curve_control_picker(
       camera, interaction.scene_surfaces);
+  const ViewportPathArraySourcePickingAdapter path_array_source_picker(
+      camera, interaction.scene_billboard_pick_candidates,
+      interaction.scene_curve_pick_candidates, interaction.scene_surfaces);
   native_frame.curve_control_picker = &curve_control_picker;
+  native_frame.path_array_source_picker = &path_array_source_picker;
   native_frame.transform_gizmo_consumed =
       output.curve_gizmo_prepass && output.before_tool.gizmo_consumed;
   output.native_tool = handle_native_tools(

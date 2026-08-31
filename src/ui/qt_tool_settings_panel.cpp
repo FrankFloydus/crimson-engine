@@ -63,7 +63,6 @@ namespace {
 // Pointer drags publish the latest value at this bounded cadence; keyboard,
 // wheel, and spin edits use it as a trailing coalescing window.
 constexpr int kNumberDispatchIntervalMs = 50;
-constexpr std::string_view kPrimitiveTypeSettingId = "primitive.type";
 
 QString qtext(std::string_view text) {
   return QString::fromUtf8(text.data(), static_cast<qsizetype>(text.size()));
@@ -168,6 +167,8 @@ bool same_control_structure(const QuaderToolSettingControl &left,
                             const QuaderToolSettingControl &right) {
   if (left.kind != right.kind || left.id != right.id ||
       left.label != right.label ||
+      left.number_interaction != right.number_interaction ||
+      left.choice_presentation != right.choice_presentation ||
       left.choices.size() != right.choices.size()) {
     return false;
   }
@@ -204,15 +205,24 @@ bool widget_or_descendant_has_focus(const QWidget *widget) {
          (focus == widget || widget->isAncestorOf(focus));
 }
 
-void update_slider_steps(QSlider &slider,
+void update_slider_steps(QtToolSettingsNumberSlider &slider,
                          const QtToolSettingsNumberSliderMapping &mapping,
                          double value, double logical_step) {
   const int single_step = qt_tool_settings_number_slider_step(
       mapping, value, logical_step);
   slider.setSingleStep(single_step);
-  slider.setPageStep(single_step <= std::numeric_limits<int>::max() / 10
-                         ? single_step * 10
-                         : std::numeric_limits<int>::max());
+  if (slider.stepwise_interaction()) {
+    slider.setPageStep(single_step);
+    slider.setTickInterval(single_step);
+    slider.setTickPosition(QSlider::TicksBelow);
+  } else {
+    slider.setPageStep(single_step <= std::numeric_limits<int>::max() / 10
+                           ? single_step * 10
+                           : std::numeric_limits<int>::max());
+    slider.setTickInterval(0);
+    slider.setTickPosition(QSlider::NoTicks);
+  }
+  slider.setTracking(true);
 }
 
 bool choice_matches(std::string_view selected,
@@ -578,10 +588,11 @@ struct QtToolSettingsPanel::Impl {
     QuaderToolSettingControlKind kind =
         QuaderToolSettingControlKind::Toggle;
     std::string id;
+    QWidget *container = nullptr;
     QCheckBox *toggle = nullptr;
     QSpinBox *integer = nullptr;
     QDoubleSpinBox *floating = nullptr;
-    QSlider *number_slider = nullptr;
+    QtToolSettingsNumberSlider *number_slider = nullptr;
     QComboBox *dropdown = nullptr;
     QtToolSettingsNumberSliderMapping number_slider_mapping;
     QTimer *number_dispatch_timer = nullptr;
@@ -2019,6 +2030,7 @@ private:
                          }
                        });
       controls_layout_->addWidget(toggle);
+      binding.container = toggle;
       binding.toggle = toggle;
       break;
     }
@@ -2043,6 +2055,9 @@ private:
       slider->setAccessibleName(label);
       slider->setRange(slider_mapping.slider_minimum,
                        slider_mapping.slider_maximum);
+      slider->set_stepwise_interaction(
+          control.number_interaction ==
+          QuaderToolSettingNumberInteraction::Stepped);
       slider->setTracking(true);
       row_layout->addWidget(slider, 1, 0);
       binding.number_slider = slider;
@@ -2190,10 +2205,12 @@ private:
         binding.floating = spin;
       }
       controls_layout_->addWidget(row);
+      binding.container = row;
       break;
     }
     case QuaderToolSettingControlKind::Choice: {
-      if (control.id == kPrimitiveTypeSettingId) {
+      if (control.choice_presentation ==
+          QuaderToolSettingChoicePresentation::Dropdown) {
         auto *row = new QWidget(controls_container_);
         row->setObjectName(object_name + QStringLiteral(".row"));
         auto *row_layout = new QHBoxLayout(row);
@@ -2235,6 +2252,7 @@ private:
               schedule_refresh();
             });
         controls_layout_->addWidget(row);
+        binding.container = row;
         binding.dropdown = dropdown;
         break;
       }
@@ -2281,6 +2299,7 @@ private:
             ChoiceWidget{radio, option.id, option.value});
       }
       controls_layout_->addWidget(group);
+      binding.container = group;
       break;
     }
     case QuaderToolSettingControlKind::Action: {
@@ -2300,6 +2319,7 @@ private:
                          schedule_refresh();
                        });
       controls_layout_->addWidget(button);
+      binding.container = button;
       break;
     }
     }
@@ -2345,6 +2365,10 @@ private:
     for (std::size_t index = 0; index < count; ++index) {
       const QuaderToolSettingControl &control = target.controls[index];
       ControlWidget &binding = controls_[index];
+      if (binding.container != nullptr &&
+          binding.container->isEnabled() != control.enabled) {
+        binding.container->setEnabled(control.enabled);
+      }
       const bool integer_editing =
           widget_or_descendant_has_focus(binding.integer);
       const bool floating_editing =

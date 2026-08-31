@@ -10,6 +10,7 @@
 #include "core/types.hpp"
 #include "editor/array/linear_array_tool_service.hpp"
 #include "editor/modeling/modeling_types.hpp"
+#include "editor/placement/scene_surface_query.hpp"
 #include "editor/pivot/pivot_types.hpp"
 #include "editor/placement/viewport_point_placement_service.hpp"
 #include "viewport/curve_tool_preview.hpp"
@@ -19,12 +20,16 @@
 #include <array>
 #include <cstdint>
 #include <optional>
+#include <span>
+#include <vector>
 
 namespace quader {
 
 class AssetRegistry;
 class CurveToolService;
+class EditorSelectionService;
 class LinearArrayToolService;
+class PathArrayToolService;
 class PivotToolService;
 class RadialArrayToolService;
 class SceneDocument;
@@ -48,6 +53,16 @@ public:
        bool anchors_only) const = 0;
 };
 
+/** Resolves Path Array source candidates through the viewport query owner. */
+class ViewportPathArraySourcePickingPort {
+public:
+  virtual ~ViewportPathArraySourcePickingPort() = default;
+  [[nodiscard]] virtual std::optional<EntityId> pick(
+      QVec2 mouse_local, std::span<const EntityId> excluded_entities,
+      std::span<const SceneSurfaceOccurrenceExclusion> excluded_occurrences,
+      bool select_backfaces) const = 0;
+};
+
 /**
  * Carries one sampled frame into the editor-native viewport tool owner.
  */
@@ -65,6 +80,8 @@ struct ViewportNativeToolInteractionFrame final {
   bool scene_snap_enabled = false;
   bool grid_snap_enabled = false;
   const ViewportCurveControlPickingPort *curve_control_picker = nullptr;
+  const ViewportPathArraySourcePickingPort *path_array_source_picker = nullptr;
+  bool select_backfaces = true;
   std::optional<QVec3> selection_transform_pivot;
   double *linear_array_wheel_remainder = nullptr;
   double *radial_array_wheel_remainder = nullptr;
@@ -80,6 +97,7 @@ struct ViewportNativeToolInteractionResult final {
   bool blocks_transform_gizmo = false;
   bool radial_array_consumed = false;
   bool linear_array_consumed = false;
+  bool path_array_consumed = false;
   bool pivot_consumed = false;
   bool pivot_blocks_gizmo = false;
   bool claim_interaction_pane = false;
@@ -99,6 +117,8 @@ public:
       AssetRegistry &assets,
       PivotToolService *pivot, LinearArrayToolService *linear_array,
       RadialArrayToolService *radial_array,
+      PathArrayToolService *path_array,
+      EditorSelectionService *selection,
       ViewportPointPlacementService *point_placement,
       ViewportCameraController &camera,
       const ViewportNativeToolInteractionFrame &frame,
@@ -152,6 +172,13 @@ private:
     bool persistent = false;
   };
 
+  /** Retains one exact stationary source-selection gesture. */
+  struct PathArraySourcePress final {
+    ViewportPointerGesture gesture;
+    EntityId candidate = kInvalidEntityId;
+    EntityId path_entity = kInvalidEntityId;
+  };
+
   /// Pins a deferred conversion click to the anchor and document it pressed.
   struct CurveConversionPress {
     ViewportPointerGesture gesture;
@@ -164,6 +191,13 @@ private:
   std::optional<LinearArrayHandlePress> linear_array_handle_press_;
   std::optional<CurvePointConstructionPress> curve_point_construction_press_;
   std::optional<CurveConversionPress> curve_conversion_press_;
+  std::optional<PathArraySourcePress> path_array_source_press_;
+  const PathArrayToolService *path_array_exclusion_owner_ = nullptr;
+  std::uint64_t path_array_exclusion_revision_ = 0u;
+  EntityId path_array_exclusion_source_ = kInvalidEntityId;
+  std::vector<EntityId> path_array_excluded_entities_;
+  std::vector<SceneSurfaceOccurrenceExclusion>
+      path_array_excluded_occurrences_;
   ViewportPointerReleaseSuppression left_release_suppression_;
 };
 

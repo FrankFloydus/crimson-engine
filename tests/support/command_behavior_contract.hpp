@@ -83,6 +83,8 @@ enum class CanonicalCommandFixture : std::uint8_t {
   TextureFaceSelection,
   /// One edge of an open, asymmetric authored-UV quad selected in Edge mode.
   UvPeelEdgeSelection,
+  /// One visible, unlocked, nondegenerate Curve selected in Object mode.
+  CurveSelection,
 };
 
 /**

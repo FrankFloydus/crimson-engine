@@ -446,4 +446,14 @@ render_instance_local_bounds(std::span<const QVec3> positions) {
   return bounds;
 }
 
+RenderInstanceBounds render_instance_world_bounds(
+    const RenderInstanceBounds &local_bounds,
+    std::span<const QMat4> world_transforms) {
+  RenderInstanceBounds bounds;
+  for (const QMat4 &world_transform : world_transforms) {
+    include_transformed_bounds(bounds, local_bounds, world_transform);
+  }
+  return bounds;
+}
+
 } // namespace quader

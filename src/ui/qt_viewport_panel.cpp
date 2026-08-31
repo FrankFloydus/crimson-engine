@@ -2411,7 +2411,8 @@ void QtViewportPanel::process_viewport_input(
   const QVec2 pending_context_menu_local_mouse =
       context_menu_pointer.release_local;
   if ((interaction_frame.active_tool_allows_selection_fallback ||
-       native_presentation.curve_controls_editable) &&
+       native_presentation.curve_controls_editable ||
+       native_presentation.path_array_source_picking) &&
       !native_presentation.curve_dragging &&
       !editor.modeling().can_exit_instance_edit()) {
     interaction_frame.scene_curve_pick_candidates =
@@ -2422,7 +2423,8 @@ void QtViewportPanel::process_viewport_input(
       ((input.viewport_hovered && !suppress_hover_work &&
         (interaction_frame.active_tool_allows_selection_fallback ||
          !interaction_frame.scene_curve_pick_candidates.empty() ||
-         native_presentation.curve_controls_editable)) ||
+         native_presentation.curve_controls_editable ||
+         native_presentation.path_array_source_picking)) ||
        sample.left_pressed || sample.left_down || sample.left_released ||
        pending_context_menu_click || !input.curve_conversion_edges.empty());
   if (scene_surface_pick_requested) {

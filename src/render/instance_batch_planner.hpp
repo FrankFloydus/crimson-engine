@@ -124,4 +124,9 @@ enum class RenderInstanceBatchUpdateKind : std::uint8_t {
 [[nodiscard]] RenderInstanceBounds render_instance_local_bounds(
     std::span<const QVec3> positions);
 
+/** Expands one local box across a compact span of world transforms. */
+[[nodiscard]] RenderInstanceBounds render_instance_world_bounds(
+    const RenderInstanceBounds &local_bounds,
+    std::span<const QMat4> world_transforms);
+
 } // namespace quader

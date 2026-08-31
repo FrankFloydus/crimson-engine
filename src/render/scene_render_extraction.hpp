@@ -39,12 +39,53 @@ struct ToolPreviewMesh {
   // Source-replacing previews carry source culling; generated previews keep
   // the historical two-sided default.
   bool double_sided = true;
+  bool cast_shadows = false;
   bool dynamic_positions = false;
   bool suppress_source = false;
   std::uint64_t layout_key = 0u;
   // Participant-local token preserved from the modeling producer.
   std::uint64_t position_revision = 0u;
   std::shared_ptr<const std::vector<QVec3>> dynamic_position_payload;
+};
+
+/** Captures one Curve binding before its immutable sample payload is pinned. */
+struct ToolPreviewCurve final {
+  EntityId source_entity = kInvalidEntityId;
+  EntityId visibility_entity = kInvalidEntityId;
+  AssetId curve = kInvalidAssetId;
+  std::vector<QMat4> instance_transforms;
+  bool suppress_source = false;
+  std::uint64_t layout_key = 0u;
+};
+
+/** Captures one transient Light participant and all of its placements. */
+struct ToolPreviewLight final {
+  EntityId source_entity = kInvalidEntityId;
+  EntityId visibility_entity = kInvalidEntityId;
+  LightComponent light;
+  std::vector<QMat4> instance_transforms;
+  bool suppress_source = false;
+  std::uint64_t layout_key = 0u;
+};
+
+/** Captures one local bounds cage repeated with a source root. */
+struct ToolPreviewGroupMarker final {
+  EntityId source_entity = kInvalidEntityId;
+  QVec3 local_min;
+  QVec3 local_max;
+  std::vector<QMat4> instance_transforms;
+  std::uint64_t layout_key = 0u;
+};
+
+/** Renderer-neutral compound tool preview input. */
+struct ToolPreviewScene final {
+  std::uint64_t revision = 0u;
+  std::vector<ToolPreviewMesh> meshes;
+  std::vector<ToolPreviewCurve> curves;
+  std::vector<ToolPreviewLight> lights;
+  std::vector<ToolPreviewGroupMarker> group_markers;
+  std::vector<EntityId> suppressed_entities;
+  std::vector<RenderInstancePreviewSuppression> occurrence_suppressions;
 };
 
 using SceneRenderMeshEntry = RenderSceneMeshRecord;
@@ -110,5 +151,15 @@ build_render_tool_preview_snapshot(std::vector<ToolPreviewMesh> meshes,
                                        local_visibility = nullptr,
                                    const RenderProjectMaterialResolver *
                                        project_material_resolver = nullptr);
+
+[[nodiscard]] RenderToolPreviewSceneSnapshot
+build_render_tool_preview_scene_snapshot(
+    ToolPreviewScene preview, const AssetRegistry &assets,
+    const ViewportLocalVisibilitySnapshot *local_visibility = nullptr,
+    const RenderProjectMaterialResolver *project_material_resolver = nullptr);
+
+/** Builds camera-independent Curve, Light-marker, and group-marker geometry. */
+[[nodiscard]] ViewportOverlayFrame build_render_tool_preview_overlay_frame(
+    const RenderToolPreviewSceneSnapshot &preview);
 
 } // namespace quader
